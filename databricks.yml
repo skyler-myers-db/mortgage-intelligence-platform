@@ -1,0 +1,59 @@
+bundle:
+  name: mortgage-intelligence-platform
+
+resources:
+  apps:
+    mip_demo_app:
+      name: mip-demo-app
+
+  sql_warehouses:
+    mip_serverless_sql:
+      name: mip_serverless_sql
+      warehouse_type: PRO
+      enable_serverless_compute: true
+
+  jobs:
+    mip_refresh_demo_data:
+      name: mip_refresh_demo_data
+      tasks: []
+    mip_refresh_scores:
+      name: mip_refresh_scores
+      tasks: []
+    mip_snapshot_dashboards:
+      name: mip_snapshot_dashboards
+      tasks: []
+
+  pipelines:
+    mip_feature_pipeline:
+      name: mip_feature_pipeline
+      libraries: []
+    mip_gold_pipeline:
+      name: mip_gold_pipeline
+      libraries: []
+
+  dashboards:
+    mip_executive_dashboard:
+      display_name: mip_executive_dashboard
+      file_path: dashboards/executive_dashboard.lvdash.json
+    mip_segment_dashboard:
+      display_name: mip_segment_dashboard
+      file_path: dashboards/segment_dashboard.lvdash.json
+
+  genie_spaces:
+    mortgage_lead_intelligence:
+      name: mortgage_lead_intelligence
+      file_path: genie/mortgage_lead_intelligence_space.yml
+
+  lakebase_instances:
+    mip_app_state:
+      name: mip_app_state
+
+  experiments:
+    mip_lead_scoring:
+      name: /Shared/mip/lead-scoring
+
+variables:
+  uc_catalog:
+    default: mip_demo
+  uc_schemas:
+    default: raw,silver,gold,semantics,app,audit
