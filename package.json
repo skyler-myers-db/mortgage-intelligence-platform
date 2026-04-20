@@ -1,0 +1,23 @@
+{
+  "name": "mortgage-intelligence-platform",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --config frontend/vite.config.ts",
+    "build": "vite build --config frontend/vite.config.ts",
+    "preview": "vite preview --config frontend/vite.config.ts"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.30.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.13",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^5.1.0",
+    "typescript": "^5.6.3",
+    "vite": "^7.1.11"
+  }
+}
