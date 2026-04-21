@@ -77,6 +77,14 @@
   --dur-base: 200ms;
   --dur-slow: 360ms;
   --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+
+  /* ---------- Ambient / fx durations ---------- */
+  --dur-ambient-1: 42s;
+  --dur-ambient-2: 63s;
+  --dur-heartbeat: 2.4s;
+  --dur-burst: 720ms;
+  --dur-emanate: 1200ms;
+  --dur-mesh: 60s;
 }
 
 /* ============================================================
@@ -196,6 +204,55 @@ body {
   letter-spacing: var(--tracking-body);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  position: relative;
+}
+
+/* ============================================================
+   Ambient animated background — two radial halos drifting
+   independently behind everything. Barely-conscious motion;
+   reinforces the "workspace is alive" feel without distracting.
+   ============================================================ */
+body::before {
+  content: '';
+  position: fixed;
+  inset: -10%;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(520px 420px at 20% 30%, color-mix(in oklab, var(--entrada-teal) 14%, transparent), transparent 60%),
+    radial-gradient(640px 480px at 80% 70%, color-mix(in oklab, var(--entrada-bright) 12%, transparent), transparent 60%);
+  opacity: 0.55;
+  animation: bg-drift-1 var(--dur-ambient-1) var(--ease) infinite alternate;
+  will-change: transform, opacity;
+}
+body::after {
+  content: '';
+  position: fixed;
+  inset: -10%;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(720px 520px at 70% 20%, color-mix(in oklab, var(--entrada-navy) 22%, transparent), transparent 65%),
+    radial-gradient(540px 420px at 10% 85%, color-mix(in oklab, var(--entrada-teal) 10%, transparent), transparent 60%);
+  opacity: 0.45;
+  animation: bg-drift-2 var(--dur-ambient-2) var(--ease) infinite alternate;
+  will-change: transform, opacity;
+}
+[data-theme="light"] body::before { opacity: 0.35; }
+[data-theme="light"] body::after  { opacity: 0.28; }
+
+@keyframes bg-drift-1 {
+  0%   { transform: translate3d(0, 0, 0) scale(1);      opacity: 0.45; }
+  50%  { transform: translate3d(2%, -1.5%, 0) scale(1.04); opacity: 0.60; }
+  100% { transform: translate3d(-1.5%, 1.5%, 0) scale(1.02); opacity: 0.50; }
+}
+@keyframes bg-drift-2 {
+  0%   { transform: translate3d(0, 0, 0) scale(1);       opacity: 0.35; }
+  50%  { transform: translate3d(-1.8%, 2%, 0) scale(1.05); opacity: 0.50; }
+  100% { transform: translate3d(1.2%, -1%, 0) scale(1.02); opacity: 0.40; }
+}
+@media (prefers-reduced-motion: reduce) {
+  body::before, body::after { animation: none; }
 }
 code, kbd, .mono { font-family: var(--font-mono); }
 a { color: inherit; }

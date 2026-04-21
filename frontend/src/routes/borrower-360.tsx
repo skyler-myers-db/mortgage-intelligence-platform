@@ -10,6 +10,7 @@ import { ConfidenceMeter } from '../components/mortgage/ConfidenceMeter';
 import { Chip, EvidenceChip } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { Skeleton } from '../components/ui/Skeleton';
+import { Reveal } from '../components/fx/Reveal';
 import { DRAWER_SOURCES, mockSegments } from '../mocks/demoData';
 
 /**
@@ -157,15 +158,17 @@ export default function Borrower360() {
             </div>
           </div>
 
-          <div className="surface">
-            <div className="surface__hdr">
-              <Icon name="bolt" size={14} style={{ color: 'var(--accent)' }} />
-              <div className="h-4">Trigger timeline</div>
+          <Reveal>
+            <div className="surface">
+              <div className="surface__hdr">
+                <Icon name="bolt" size={14} style={{ color: 'var(--accent)' }} />
+                <div className="h-4">Trigger timeline</div>
+              </div>
+              <div className="surface__body">
+                <TriggerTimeline events={b.trigger_timeline} segmentColor={segColor} />
+              </div>
             </div>
-            <div className="surface__body">
-              <TriggerTimeline events={b.trigger_timeline} segmentColor={segColor} />
-            </div>
-          </div>
+          </Reveal>
         </div>
 
         {/* Right column — Why-now + NBO + CTA */}

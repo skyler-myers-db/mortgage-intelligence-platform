@@ -7,6 +7,7 @@ import { AgentActivityLog } from '../components/mortgage/AgentActivityLog';
 import { Chip, Button } from '../components/Primitives';
 import { DRAWER_SOURCES } from '../mocks/demoData';
 import { Icon } from '../components/Icon';
+import { Reveal } from '../components/fx/Reveal';
 import { api } from '../lib/api';
 
 const FUTURE_MODULES = [
@@ -112,26 +113,30 @@ export default function Home() {
       </div>
       <div className="layoutA-grid">
         <MapPlaceholder />
-        <AgentActivityLog />
+        <Reveal>
+          <AgentActivityLog />
+        </Reveal>
       </div>
 
-      <div className="section-hdr">
-        <div>
-          <div className="eyebrow">Future modules</div>
-          <div className="h-2">One spine, four extensions</div>
-        </div>
-      </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 'var(--gap-grid)' }}>
-        {FUTURE_MODULES.map((m) => (
-          <div className="surface" key={m.code}>
-            <div className="surface__body">
-              <div className="eyebrow">{m.code} · planned</div>
-              <div className="h-3" style={{ marginTop: 6 }}>{m.title}</div>
-              <p className="body" style={{ marginTop: 6 }}>{m.desc}</p>
-            </div>
+      <Reveal>
+        <div className="section-hdr">
+          <div>
+            <div className="eyebrow">Future modules</div>
+            <div className="h-2">One spine, four extensions</div>
           </div>
-        ))}
-      </div>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 'var(--gap-grid)' }}>
+          {FUTURE_MODULES.map((m) => (
+            <div className="surface" key={m.code}>
+              <div className="surface__body">
+                <div className="eyebrow">{m.code} · planned</div>
+                <div className="h-3" style={{ marginTop: 6 }}>{m.title}</div>
+                <p className="body" style={{ marginTop: 6 }}>{m.desc}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      </Reveal>
 
       <div style={{ marginTop: 'var(--gap-grid)', display: 'flex', gap: 12 }}>
         <Link to="/portfolio-builder" className="btn btn--primary" aria-label="Build a lead portfolio">

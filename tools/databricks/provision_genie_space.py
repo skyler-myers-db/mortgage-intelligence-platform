@@ -4,10 +4,46 @@ Reads ``genie/mortgage_lead_intelligence_space.yml`` as the source of truth
 and creates or updates the corresponding Genie Space in the configured
 Databricks workspace via the ``databricks-sdk`` Python client.
 
+Discovered ``serialized_space`` schema (see docs/genie-sdk-notes.md):
+
+    {
+      "version": 2,
+      "data_sources": {
+        "tables": [
+          {"identifier": "cat.sch.tbl", "description": ["..."]}
+        ]
+      },
+      "config": {
+        "sample_questions": [
+          {"id": "<32-lowercase-hex>", "question": ["..."]}
+        ]
+      },
+      "instructions": {
+        "text_instructions": [
+          {"id": "<32-lowercase-hex>", "content": ["..."]}
+        ]
+      }
+    }
+
+Notes baked into this tool:
+
+* ``id`` fields are mandatory on sample_questions and text_instructions. We
+  derive them deterministically via md5(seed) so re-running with unchanged
+  YAML produces the same ids and the space is truly idempotent.
+* ``description``, ``content``, and ``question`` must be JSON arrays even
+  when they wrap a single string — the server rejects bare strings with
+  "Expected an array".
+* Tables must reference catalogs/schemas that already exist in Unity
+  Catalog. When the target catalog (``mip_demo`` by default) has not yet
+  been created by the Lakeflow pipeline, we create/update the space with
+  ``tables: []`` and print a clear next step. The rest of the curation
+  (questions, instructions, title, description, warehouse) still lands.
+
 Design choices (Module 0 / DAIS booth):
 
-* Idempotent. Re-running with unchanged YAML should be a no-op.
-* No new Python deps beyond ``databricks-sdk`` (already in requirements.txt).
+* Idempotent. Re-running with unchanged YAML is a no-op (at the API level,
+  re-running still PUTs but the payload is byte-identical).
+* No new Python deps beyond ``databricks-sdk`` / ``pyyaml`` / ``python-dotenv``.
 * Auth resolution mirrors ``databricks`` CLI: env vars first
   (``DATABRICKS_HOST`` / ``DATABRICKS_TOKEN``), then the named CLI profile
   (``--profile`` flag or ``DATABRICKS_CONFIG_PROFILE``, default ``DEFAULT``).
@@ -15,14 +51,15 @@ Design choices (Module 0 / DAIS booth):
   bundle picks up via ``BUNDLE_VAR_sql_warehouse_id``).
 * On success, writes the resolved space id to ``genie/space_id.txt``
   (gitignored) and prints an ``export`` line the operator can paste.
-* On partial success (e.g. SDK rejects serialized_space payload), the tool
-  still reports what it found and prints a workspace deep-link so the
-  operator can finish in the UI.
+* Runs a live smoke-test conversation (``--smoke-test``, default on)
+  against the new space so booth operators see that Genie actually
+  answers before the demo.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -57,6 +94,19 @@ except ImportError:  # pragma: no cover — dotenv is pinned in requirements.txt
 
 DEFAULT_SPACE_NAME = "Mortgage Lead Intelligence"
 DEFAULT_PROFILE = "DEFAULT"
+DEFAULT_SMOKE_QUESTION = "How many borrowers are currently in-the-money?"
+SMOKE_TIMEOUT_SECONDS = 60
+
+
+def _hex_id(*parts: str) -> str:
+    """Return a lowercase 32-hex id derived from the given seed parts.
+
+    The Genie backend requires each sample_question and text_instruction to
+    carry a lowercase-hex id without hyphens. We derive it deterministically
+    from the YAML content so re-provisioning is idempotent.
+    """
+    h = hashlib.md5("||".join(parts).encode("utf-8"))
+    return h.hexdigest()
 
 
 @dataclass(frozen=True)
@@ -86,31 +136,66 @@ class SpaceSpec:
             sample_questions=list(raw.get("sample_questions") or []),
         )
 
-    def to_serialized_payload(self) -> str:
-        """Best-effort serialized_space JSON for the SDK create/update calls.
+    def table_identifiers(self) -> list[str]:
+        """Return the `cat.schema.table` identifiers for trusted_assets.
 
-        The Genie ``serialized_space`` format is not documented in the
-        public SDK; this shape carries the curated fields so the backend
-        has everything it needs. If the workspace rejects it, the tool
-        prints a clear fallback message rather than crashing.
+        Metric views (``kind: metric_view``) live under a different schema
+        and are returned just like tables — the Genie schema does not
+        distinguish the two in the ``data_sources.tables`` list. If the
+        Unity Catalog side exposes metric views under their own object
+        type in future SDK versions, promote them to their own bucket here.
         """
-        payload: dict[str, Any] = {
-            "title": self.name,
-            "description": self.description,
-            "instructions": self.instructions,
-            "default_catalog": self.catalog,
-            "default_schema": self.schema,
-            "trusted_assets": [
+        return [str(a["name"]).strip() for a in self.trusted_assets if a.get("name")]
+
+    def to_serialized_payload(self, *, include_tables: bool = True) -> str:
+        """Build the serialized_space JSON the Genie API accepts.
+
+        ``include_tables=False`` drops table bindings but keeps questions,
+        instructions, and version. Used as a fallback when the target
+        catalog has not yet been materialized in Unity Catalog.
+        """
+        tables: list[dict[str, Any]] = []
+        if include_tables:
+            for asset in self.trusted_assets:
+                name = str(asset.get("name", "")).strip()
+                if not name:
+                    continue
+                desc = str(asset.get("description", "")).strip()
+                entry: dict[str, Any] = {"identifier": name}
+                if desc:
+                    entry["description"] = [desc]
+                tables.append(entry)
+
+        sample_questions: list[dict[str, Any]] = []
+        for idx, q in enumerate(self.sample_questions):
+            text = str(q).strip()
+            if not text:
+                continue
+            sample_questions.append(
                 {
-                    "name": asset.get("name", ""),
-                    "kind": asset.get("kind", "table"),
-                    "description": asset.get("description", ""),
+                    "id": _hex_id("sample_question", str(idx), text),
+                    "question": [text],
                 }
-                for asset in self.trusted_assets
-            ],
-            "sample_questions": list(self.sample_questions),
-        }
-        return json.dumps(payload, indent=2, sort_keys=True)
+            )
+
+        text_instructions: list[dict[str, Any]] = []
+        if self.instructions:
+            text_instructions.append(
+                {
+                    "id": _hex_id("text_instruction", self.instructions),
+                    "content": [self.instructions],
+                }
+            )
+
+        payload: dict[str, Any] = {"version": 2, "data_sources": {"tables": tables}}
+        if sample_questions:
+            payload["config"] = {"sample_questions": sample_questions}
+        if text_instructions:
+            payload["instructions"] = {"text_instructions": text_instructions}
+
+        # sort_keys=True keeps the payload byte-stable across runs so an
+        # "update with no YAML change" is deterministically a no-op diff.
+        return json.dumps(payload, sort_keys=True)
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -146,6 +231,19 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--spec",
         default=str(SPACE_YAML),
         help="Path to the space YAML (default: genie/mortgage_lead_intelligence_space.yml).",
+    )
+    parser.add_argument(
+        "--smoke-test",
+        dest="smoke_test",
+        action="store_true",
+        default=True,
+        help="After provisioning, run a live sample conversation (default: on).",
+    )
+    parser.add_argument(
+        "--no-smoke-test",
+        dest="smoke_test",
+        action="store_false",
+        help="Skip the post-provisioning conversation.",
     )
     return parser.parse_args(argv)
 
@@ -194,13 +292,164 @@ def _write_space_id(space_id: str) -> None:
     SPACE_ID_FILE.write_text(space_id + "\n")
 
 
-def _plan(spec: SpaceSpec, existing: Any | None) -> str:
-    if existing is None:
-        return "CREATE"
-    existing_desc = getattr(existing, "description", "") or ""
-    if existing_desc.strip() == spec.description.strip():
-        return "NO-OP"
-    return "UPDATE"
+def _call_create(
+    client: Any,
+    *,
+    warehouse_id: str,
+    serialized: str,
+    title: str,
+    description: str,
+) -> Any:
+    return client.genie.create_space(
+        warehouse_id=warehouse_id,
+        serialized_space=serialized,
+        title=title,
+        description=description,
+    )
+
+
+def _is_missing_catalog_error(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return "catalog" in msg and "does not exist" in msg
+
+
+def _create_with_fallback(
+    client: Any,
+    spec: SpaceSpec,
+    *,
+    warehouse_id: str,
+    title: str,
+) -> tuple[Any, bool]:
+    """Attempt full create; on missing-catalog error, retry with empty tables.
+
+    Returns (created_space, tables_bound_flag).
+    """
+    serialized_full = spec.to_serialized_payload(include_tables=True)
+    try:
+        created = _call_create(
+            client,
+            warehouse_id=warehouse_id,
+            serialized=serialized_full,
+            title=title,
+            description=spec.description,
+        )
+        return created, True
+    except Exception as exc:  # noqa: BLE001
+        if not _is_missing_catalog_error(exc):
+            raise
+        print(
+            f"warning: table bindings rejected ({exc}); "
+            f"creating space without tables so curation (questions, instructions) still lands.",
+            file=sys.stderr,
+        )
+        serialized_empty = spec.to_serialized_payload(include_tables=False)
+        created = _call_create(
+            client,
+            warehouse_id=warehouse_id,
+            serialized=serialized_empty,
+            title=title,
+            description=spec.description,
+        )
+        return created, False
+
+
+def _update_with_fallback(
+    client: Any,
+    spec: SpaceSpec,
+    *,
+    space_id: str,
+    title: str,
+    warehouse_id: str | None,
+) -> bool:
+    """Attempt full update; fall back to empty tables on missing-catalog error.
+
+    Returns tables_bound_flag.
+    """
+    serialized_full = spec.to_serialized_payload(include_tables=True)
+    try:
+        kwargs: dict[str, Any] = {
+            "space_id": space_id,
+            "description": spec.description,
+            "serialized_space": serialized_full,
+            "title": title,
+        }
+        if warehouse_id:
+            kwargs["warehouse_id"] = warehouse_id
+        client.genie.update_space(**kwargs)
+        return True
+    except Exception as exc:  # noqa: BLE001
+        if not _is_missing_catalog_error(exc):
+            raise
+        print(
+            f"warning: table bindings rejected on update ({exc}); "
+            f"updating without tables so questions/instructions still land.",
+            file=sys.stderr,
+        )
+        serialized_empty = spec.to_serialized_payload(include_tables=False)
+        kwargs = {
+            "space_id": space_id,
+            "description": spec.description,
+            "serialized_space": serialized_empty,
+            "title": title,
+        }
+        if warehouse_id:
+            kwargs["warehouse_id"] = warehouse_id
+        client.genie.update_space(**kwargs)
+        return False
+
+
+def _verify_round_trip(client: Any, space_id: str) -> dict[str, Any]:
+    """Re-fetch the space with its serialized payload and return the dict.
+
+    Callers assert structure, not content — e.g. that config.sample_questions
+    echoes the same count we sent.
+    """
+    full = client.genie.get_space(space_id, include_serialized_space=True)
+    d = full.as_dict() if hasattr(full, "as_dict") else {}
+    ss = d.get("serialized_space")
+    if isinstance(ss, str):
+        try:
+            d["_parsed_serialized_space"] = json.loads(ss)
+        except Exception:  # noqa: BLE001
+            d["_parsed_serialized_space"] = {}
+    return d
+
+
+def _run_smoke_test(client: Any, space_id: str) -> None:
+    """Ask the space a deterministic warm-up question.
+
+    If the space is still initializing (common on a freshly-created space
+    with empty tables), we surface a friendly note rather than failing —
+    the space itself is still correctly provisioned.
+    """
+    print()
+    print(f"smoke-test: asking Genie {DEFAULT_SMOKE_QUESTION!r} (timeout {SMOKE_TIMEOUT_SECONDS}s)...")
+    try:
+        # SDK 0.103 start_conversation_and_wait does NOT accept a timeout
+        # kwarg in all versions; pass only the documented positional args.
+        msg = client.genie.start_conversation_and_wait(space_id, DEFAULT_SMOKE_QUESTION)
+    except Exception as exc:  # noqa: BLE001
+        print(
+            f"  Genie is still warming up or no tables are bound yet: {exc}",
+            file=sys.stderr,
+        )
+        return
+    # Genie responses are composed of attachments; print the first text answer
+    # we can find without over-interpreting the shape.
+    printed = False
+    for attr in ("content", "text", "message"):
+        text = getattr(msg, attr, None)
+        if text:
+            print(f"  answer ({attr}): {text}")
+            printed = True
+            break
+    if not printed and hasattr(msg, "as_dict"):
+        d = msg.as_dict()
+        print(f"  response keys: {sorted(d.keys())}")
+        # Best-effort: pull the first attachment text if present
+        atts = d.get("attachments") or []
+        if atts and isinstance(atts, list):
+            print(f"  first attachment: {json.dumps(atts[0], indent=2)[:800]}")
 
 
 def run(args: argparse.Namespace) -> int:
@@ -250,10 +499,11 @@ def run(args: argparse.Namespace) -> int:
         print(f"hint:  open {_workspace_ui_url(host)} to create it manually.", file=sys.stderr)
         return 4
 
-    plan = _plan(spec, existing)
+    plan = "CREATE" if existing is None else "UPDATE"
     print(f"  plan:          {plan}")
 
-    serialized = spec.to_serialized_payload()
+    tables_bound = False
+    space_id = ""
 
     if plan == "CREATE":
         if not args.warehouse_id:
@@ -264,44 +514,48 @@ def run(args: argparse.Namespace) -> int:
             print(f"hint:  open {_workspace_ui_url(host)} to create manually.", file=sys.stderr)
             return 5
         try:
-            created = client.genie.create_space(
+            created, tables_bound = _create_with_fallback(
+                client,
+                spec,
                 warehouse_id=args.warehouse_id,
-                serialized_space=serialized,
                 title=target_name,
-                description=spec.description,
             )
             space_id = getattr(created, "space_id", None) or ""
         except Exception as exc:  # noqa: BLE001
             print(f"error: create_space failed: {exc}", file=sys.stderr)
-            print(
-                "hint:  the SDK's serialized_space schema is not public; "
-                f"create the space manually at {_workspace_ui_url(host)} and "
-                "re-run this tool with the existing space in place (it will "
-                "become a NO-OP / UPDATE path).",
-                file=sys.stderr,
-            )
             return 6
-    elif plan == "UPDATE":
+    else:  # UPDATE
         space_id = getattr(existing, "space_id", "") or ""
         try:
-            client.genie.update_space(
+            tables_bound = _update_with_fallback(
+                client,
+                spec,
                 space_id=space_id,
-                description=spec.description,
-                serialized_space=serialized,
                 title=target_name,
+                warehouse_id=args.warehouse_id or None,
             )
         except Exception as exc:  # noqa: BLE001
             print(f"warning: update_space failed: {exc}", file=sys.stderr)
-            print(
-                "         space already exists; continuing with existing id.",
-                file=sys.stderr,
-            )
-    else:  # NO-OP
-        space_id = getattr(existing, "space_id", "") or ""
+            print("         existing space kept; continuing with existing id.", file=sys.stderr)
 
     if not space_id:
         print("error: could not resolve space_id after provisioning.", file=sys.stderr)
         return 7
+
+    # Verify round-trip: fetch the space and confirm curated fields landed.
+    try:
+        verified = _verify_round_trip(client, space_id)
+        parsed = verified.get("_parsed_serialized_space", {}) or {}
+        questions = (parsed.get("config", {}) or {}).get("sample_questions", []) or []
+        tables = (parsed.get("data_sources", {}) or {}).get("tables", []) or []
+        instructions = (parsed.get("instructions", {}) or {}).get("text_instructions", []) or []
+        print(
+            f"  verified:      title={verified.get('title')!r} "
+            f"questions={len(questions)} instructions={len(instructions)} "
+            f"tables={len(tables)} (bound_in_payload={tables_bound})"
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"warning: verification get_space failed: {exc}", file=sys.stderr)
 
     _write_space_id(space_id)
     print()
@@ -311,6 +565,20 @@ def run(args: argparse.Namespace) -> int:
     print()
     print("Paste into your shell (or .env.local, not committed):")
     print(f"  export BUNDLE_VAR_genie_space_id={space_id}")
+    print(f"  export GENIE_SPACE_ID={space_id}")
+
+    if not tables_bound:
+        print()
+        print(
+            "note: trusted_assets in the YAML reference a catalog not yet "
+            f"materialized ({spec.catalog}). Run `make bundle-deploy-dev` then "
+            "`databricks bundle run refresh_demo_data -t dev` to create the "
+            "gold tables, then re-run this tool to bind them to the space."
+        )
+
+    if args.smoke_test:
+        _run_smoke_test(client, space_id)
+
     return 0
 
 

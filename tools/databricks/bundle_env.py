@@ -40,9 +40,7 @@ def _is_real(value: str | None) -> bool:
         return False
     if v.startswith("<") and v.endswith(">"):
         return False
-    if v == PLACEHOLDER:
-        return False
-    return True
+    return v != PLACEHOLDER
 
 
 def main() -> int:

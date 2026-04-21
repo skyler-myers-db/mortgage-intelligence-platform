@@ -50,7 +50,7 @@ export function Topbar() {
         <span>demo.sandbox</span>
       </div>
       <div className="topbar__pill" title="Databricks warehouse: running">
-        <span className="dot" />
+        <span className="dot is-heartbeat" aria-hidden="true" />
         <span style={{ fontFamily: 'var(--font-mono)' }}>serverless-xl</span>
       </div>
       <button

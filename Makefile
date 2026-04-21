@@ -1,8 +1,12 @@
+# Use the project venv's python by default so `make` works on machines where
+# only `python3` is on PATH. Override by running `make PYTHON=python3 …`.
+PYTHON ?= $(shell [ -x .venv/bin/python ] && echo .venv/bin/python || echo python3)
+
 .PHONY: setup dev-api dev-ui test test-e2e lint build validate bundle-validate bundle-deploy zip \
         provision-genie bundle-validate-env bundle-deploy-dev
 
 setup:
-	python -m venv .venv
+	python3 -m venv .venv
 	. .venv/bin/activate && pip install -r requirements.txt
 	npm --prefix frontend install
 
@@ -30,7 +34,7 @@ build:
 	npm --prefix frontend run build
 
 validate:
-	python tools/verify_scaffold.py
+	$(PYTHON) tools/verify_scaffold.py
 	pytest -q
 	npm --prefix frontend run build
 
@@ -58,7 +62,7 @@ zip:
 # ---------------------------------------------------------------------------
 
 provision-genie:
-	DATABRICKS_CONFIG_PROFILE=DEFAULT python tools/databricks/provision_genie_space.py --profile DEFAULT
+	DATABRICKS_CONFIG_PROFILE=DEFAULT $(PYTHON) tools/databricks/provision_genie_space.py --profile DEFAULT
 
 # The env-wired targets delegate to tools/databricks/bundle_env.py which uses
 # python-dotenv to parse .env.local safely (tolerates unquoted spaces and
@@ -66,9 +70,9 @@ provision-genie:
 # GENIE_SPACE_ID to BUNDLE_VAR_sql_warehouse_id / BUNDLE_VAR_genie_space_id
 # before invoking the Databricks CLI.
 bundle-validate-env:
-	@python tools/databricks/bundle_env.py validate -t dev
+	@$(PYTHON) tools/databricks/bundle_env.py validate -t dev
 
 bundle-deploy-dev:
 	@read -p "About to DEPLOY to your workspace. Continue? [y/N] " ans; \
 	  test "$$ans" = "y" || { echo "aborted."; exit 1; }; \
-	  python tools/databricks/bundle_env.py deploy -t dev
+	  $(PYTHON) tools/databricks/bundle_env.py deploy -t dev

@@ -10,6 +10,7 @@ import { ConfidenceMeter } from '../components/mortgage/ConfidenceMeter';
 import { Chip, EvidenceChip } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { Skeleton } from '../components/ui/Skeleton';
+import { Reveal } from '../components/fx/Reveal';
 import { DRAWER_SOURCES } from '../mocks/demoData';
 import { useApp } from '../components/AppContext';
 
@@ -174,7 +175,7 @@ export default function OfferOrchestrator() {
         </div>
       </div>
 
-      <div className="layoutA-grid" style={{ marginTop: 'var(--gap-grid)' }}>
+      <Reveal className="layoutA-grid" style={{ marginTop: 'var(--gap-grid)' }}>
         <div className="surface">
           <div className="surface__hdr">
             <Icon name="doc" size={14} style={{ color: 'var(--accent)' }} />
@@ -249,7 +250,7 @@ export default function OfferOrchestrator() {
             )}
           </div>
         </div>
-      </div>
+      </Reveal>
 
       <div style={{ marginTop: 'var(--gap-grid)' }}>
         <ApprovalBanner
@@ -263,7 +264,9 @@ export default function OfferOrchestrator() {
       {approval === 'approved' && (
         <div className="surface" style={{ marginTop: 'var(--gap-grid)' }}>
           <div className="surface__body" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <Chip variant="success" icon="check">Approved and logged to audit</Chip>
+            <span className="burst" style={{ display: 'inline-flex' }}>
+              <Chip variant="success" icon="check">Approved and logged to audit</Chip>
+            </span>
             {auditId && <span className="mono muted" style={{ fontSize: 11 }}>audit: {auditId}</span>}
           </div>
         </div>

@@ -43,6 +43,20 @@
 }
 .topbar__pill .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--signal-success); box-shadow: 0 0 8px var(--signal-success); }
 .topbar__pill .dot.amber { background: var(--signal-warning); box-shadow: 0 0 8px var(--signal-warning); }
+/* Slow, steady heartbeat on the "serverless-xl" live-warehouse dot. Signals
+   the workspace is alive without being attention-grabbing. */
+.topbar__pill .dot.is-heartbeat {
+  animation: topbar-heartbeat var(--dur-heartbeat) var(--ease) infinite;
+  will-change: box-shadow, transform;
+}
+@keyframes topbar-heartbeat {
+  0%   { box-shadow: 0 0 0 0 color-mix(in oklab, var(--signal-success) 55%, transparent), 0 0 8px var(--signal-success); transform: scale(1); }
+  55%  { box-shadow: 0 0 0 5px color-mix(in oklab, var(--signal-success) 0%, transparent), 0 0 12px var(--signal-success); transform: scale(1.08); }
+  100% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--signal-success) 0%, transparent), 0 0 8px var(--signal-success); transform: scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .topbar__pill .dot.is-heartbeat { animation: none; }
+}
 .topbar__icon-btn {
   width: 34px; height: 34px; border-radius: var(--r-md);
   display: grid; place-items: center;
@@ -239,7 +253,14 @@
   background: linear-gradient(90deg, transparent, var(--chip-line), transparent);
   opacity: 0.6;
 }
-.kpi:hover { border-color: var(--line-2); }
+.kpi:hover {
+  border-color: var(--chip-line);
+  transform: translateY(-2px);
+  box-shadow: var(--kpi-glow);
+}
+@media (prefers-reduced-motion: reduce) {
+  .kpi:hover { transform: none; }
+}
 .kpi__label {
   font-size: var(--fs-11); font-weight: 500; letter-spacing: var(--tracking-caps);
   text-transform: uppercase; color: var(--text-3); margin-bottom: var(--sp-3);
@@ -903,3 +924,118 @@
   display: flex; flex-wrap: wrap; gap: var(--sp-2);
   margin-top: var(--sp-3);
 }
+
+/* ============================================================
+   DATA MESH — subtle drifting particle field behind app content.
+   Positioned inside AppShell via <DataMesh />, absolute-fill,
+   never interactive. Opacity kept low so it reads as depth.
+   ============================================================ */
+.data-mesh {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  overflow: hidden;
+}
+.data-mesh__svg {
+  width: 100%; height: 100%;
+  display: block;
+  opacity: 0.55;
+  mix-blend-mode: screen;
+}
+[data-theme="light"] .data-mesh__svg {
+  opacity: 0.45;
+  mix-blend-mode: multiply;
+}
+.data-mesh__dot {
+  fill: var(--entrada-teal);
+  animation: mesh-drift var(--dur-mesh) var(--ease) infinite alternate;
+  will-change: transform, opacity;
+}
+.data-mesh__dot--b { fill: var(--entrada-bright); animation-duration: calc(var(--dur-mesh) * 1.2); }
+.data-mesh__dot--c { fill: var(--accent); animation-duration: calc(var(--dur-mesh) * 0.85); }
+@keyframes mesh-drift {
+  0%   { transform: translate3d(0, 0, 0);       opacity: 0.10; }
+  50%  { transform: translate3d(6px, -10px, 0); opacity: 0.18; }
+  100% { transform: translate3d(-4px, 8px, 0);  opacity: 0.12; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .data-mesh__dot { animation: none; opacity: 0.12; }
+}
+/* The AppShell's main pane needs to establish a stacking context so the
+   mesh sits behind content but above the body::before halos. */
+.main { isolation: isolate; }
+.main__inner { position: relative; z-index: 1; }
+
+/* ============================================================
+   SEGMENT CARD emanation — fires once on select. The existing
+   `.is-selected` box-shadow is the steady-state anchor; the
+   `.seg-card__emanate` span is mounted by <SegmentCard/> only
+   when `selected` is true so the animation plays on mount and
+   never again. The existing `.seg-card::after` is the soft hover
+   gradient — we don't override it here.
+   ============================================================ */
+.seg-card__emanate {
+  position: absolute; inset: 0;
+  border-radius: var(--r-lg);
+  pointer-events: none;
+  background: radial-gradient(60% 60% at 50% 30%, color-mix(in oklab, var(--seg-color, var(--accent)) 35%, transparent), transparent 70%);
+  opacity: 0;
+  animation: seg-emanate var(--dur-emanate) var(--ease) 1;
+  z-index: 0;
+}
+@keyframes seg-emanate {
+  0%   { opacity: 0.55; transform: scale(0.92); }
+  60%  { opacity: 0.25; transform: scale(1.02); }
+  100% { opacity: 0;    transform: scale(1.06); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .seg-card__emanate { animation: none; opacity: 0; }
+}
+
+/* ============================================================
+   APPROVE-SUCCESS BURST — the green "Approved and logged to audit"
+   chip gets one radial burst on mount. CSS-only, one-shot.
+   ============================================================ */
+.burst {
+  position: relative;
+  isolation: isolate;
+}
+.burst::before {
+  content: '';
+  position: absolute; inset: -8px;
+  border-radius: var(--r-pill);
+  background: radial-gradient(closest-side, color-mix(in oklab, var(--signal-success) 60%, transparent), transparent 70%);
+  opacity: 0;
+  z-index: -1;
+  pointer-events: none;
+  animation: approve-burst var(--dur-burst) var(--ease) 1;
+}
+@keyframes approve-burst {
+  0%   { opacity: 0;    transform: scale(0.7); }
+  30%  { opacity: 0.85; transform: scale(1.05); }
+  100% { opacity: 0;    transform: scale(1.45); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .burst::before { animation: none; opacity: 0; }
+}
+
+/* ============================================================
+   REVEAL-ON-SCROLL — add .reveal-on-scroll to any block; the
+   IntersectionObserver hook toggles .is-visible when it enters
+   the viewport. One-shot: once visible, stays visible.
+   ============================================================ */
+.reveal-on-scroll {
+  opacity: 0;
+  transform: translateY(12px);
+  transition: opacity var(--dur-slow) var(--ease), transform var(--dur-slow) var(--ease);
+  will-change: opacity, transform;
+}
+.reveal-on-scroll.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+@media (prefers-reduced-motion: reduce) {
+  .reveal-on-scroll { opacity: 1; transform: none; transition: none; }
+}
+
