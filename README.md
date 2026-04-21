@@ -1,14 +1,14 @@
-# Mortgage Intelligence Platform — Module 0 DAIS Demo
+# Mortgage Intelligence Platform — Module 0
 
 Databricks-native application for **Top-of-Funnel Lead Generation & Borrower Segmentation** built for the Entrada × Cotality × Databricks mortgage data estate story.
 
-The DAIS MVP answers the lender's first question before LOS/CRM pipeline optimization matters:
+Module 0 answers the lender's first question before LOS/CRM pipeline optimization matters:
 
 > **Who should we contact, why now, and with what offer?**
 
 The app uses Cotality public-record, lien, ownership, listing, permit, AVM, HPI, and mortgage market intelligence data through Databricks to build lead populations, score borrower opportunity, explain source evidence, draft next-best-offer outreach, and require human approval before action.
 
-## Target demo flow
+## Product flow
 
 1. Open `/` and explain the full platform vision: Module 0 lead generation, Module 1 pipeline, Module 2 LO workbench, Module 3 underwriting, Module 4 risk/retention.
 2. Go to `/portfolio-builder` and build a lead population from geography, occupancy, open lien, lender relationship, target product, and assumptions.
@@ -28,7 +28,7 @@ The app uses Cotality public-record, lien, ownership, listing, permit, AVM, HPI,
 - Semantics: Unity Catalog metric views
 - Conversational analytics: Genie App resource / Genie API wrapper
 - Transactional state: Lakebase Postgres for campaigns, approvals, feedback, audit
-- Agentic workflow: Agent Bricks/Supervisor roadmap + deterministic demo orchestrator
+- Agentic workflow: Agent Bricks/Supervisor roadmap + deterministic orchestrator
 - Deployment: Databricks Declarative Automation Bundles
 - Local mode: `MIP_MOCK_MODE=true`
 
@@ -76,22 +76,22 @@ Start Claude Code from the repo root and run:
 /memory
 /agents
 /mcp
-/plan-sprint Build the Module 0 DAIS demo in vertical slices
+/plan-sprint Build the Module 0 product in vertical slices
 ```
 
 Claude should read `CLAUDE.md`, `AGENTS.md`, `.claude/skills/*/SKILL.md`, and `.claude/commands/*.md`. Keep the master agent focused on orchestration and delegate file-heavy work to the project subagents.
 
 ## Scope guardrails
 
-Build for DAIS first:
+Build for Module 0 first:
 
-- Fast, polished, explainable demo UI.
-- Precomputed gold-table demo path.
+- Fast, polished, explainable UI.
+- Precomputed gold-table runtime path.
 - Deterministic scoring and offer rules.
 - Synthetic borrower PII only.
 - No automatic outreach.
 - No real credit data.
-- No production Encompass/MSP connector implementation before Module 0 is demo-stable.
+- No production Encompass/MSP connector implementation before Module 0 is stable.
 
 ## Repo map
 

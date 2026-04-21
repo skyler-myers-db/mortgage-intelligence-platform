@@ -63,7 +63,7 @@ class LakebaseClient:
     each call opens a fresh connection with ``psycopg.connect(...)``
     and closes it when the context manager exits. That keeps the
     connection count linear with concurrent requests, which is fine
-    for the DAIS-demo traffic shape; Slice 6 will add pooling.
+    for the Module 0 traffic shape; Slice 6 will add pooling.
     """
 
     def __init__(

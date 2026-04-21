@@ -5,7 +5,7 @@ import { PageShell } from '../components/layout/PageShell';
 import { Button, Chip, EvidenceChip } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { GenieAnswer } from '../components/mortgage/GenieAnswer';
-import { DRAWER_SOURCES } from '../mocks/demoData';
+import { DRAWER_SOURCES } from '../mocks/fixtureData';
 
 /**
  * Ask Genie — deep-dive view with trusted-asset list and sample questions.

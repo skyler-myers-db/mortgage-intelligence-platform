@@ -5,7 +5,7 @@ import type {
   PortfolioPreview,
   SegmentSummary,
 } from '../types';
-import { mockBorrowers, mockPortfolio, mockSegments } from '../mocks/demoData';
+import { mockBorrowers, mockPortfolio, mockSegments } from '../mocks/fixtureData';
 
 /** Default thresholds mirror backend OfferEngineConfig — used only in offline fallback. */
 const FALLBACK_THRESHOLDS: Record<string, number> = {
@@ -50,9 +50,9 @@ function fallbackOfferRecommendation(borrower_id: string): OfferRecommendation {
  * "backend is warming up" while these retries run.
  *
  * We deliberately do NOT fall back to mock data on a retryable 503 —
- * that would mix live and synthetic surfaces and a booth demo would
- * silently lie. The `fallback` value below is only reached when the
- * browser itself can't talk to the backend (offline, CORS failure);
+ * that would mix live and synthetic surfaces and the UI would silently
+ * lie. The `fallback` value below is only reached when the browser
+ * itself can't talk to the backend (offline, CORS failure);
  * in that case the DegradedBanner's own fetch also fails and the UI
  * shows warming-up copy regardless.
  */
@@ -140,7 +140,7 @@ export const api = {
       { borrower_id },
       fallbackOfferRecommendation(borrower_id)
     ),
-  approve: async (borrower_id: string, actor = 'demo-user') => {
+  approve: async (borrower_id: string, actor = 'anonymous') => {
     try {
       const res = await fetch('/api/outreach/approve', {
         method: 'POST',

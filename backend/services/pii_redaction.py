@@ -123,7 +123,7 @@ def synthesize_subject_property(
     """Render the city/state/zip-only property label.
 
     Matches the gold-layer CTAS format ``"Synthetic property · {city},
-    {state} {zip5}"``; the booth-demo dossier header concatenates
+    {state} {zip5}"``; the dossier header concatenates
     ``Synthetic property · `` upstream so we emit only the generalised
     tail here -- identical to ``mock_data.subject_property``.
     """

@@ -7,9 +7,10 @@
 --            (is_latest=TRUE).
 --
 -- Grain:     One row per clip.
--- Pattern:   CREATE OR REPLACE TABLE ... AS SELECT. Full rebuild is the demo
---            posture per data-contract §3.2. 5M rows on serverless photon
---            completes in minutes; idempotent on repeat runs.
+-- Pattern:   CREATE OR REPLACE TABLE ... AS SELECT. Full rebuild is the
+--            default refresh posture per data-contract §3.2. 5M rows on
+--            serverless photon completes in minutes; idempotent on repeat
+--            runs.
 -- Slice:     module0-real-data-slice3.
 -- Data contract: docs/data-contract-module0.md §3.2.
 --
@@ -28,7 +29,7 @@
 -- land, the `BLOCKED` literals become real joins and this comment block is
 -- the only place to update.
 --
--- Threshold convention: demo defaults live in data-contract §5 + UDF headers.
+-- Threshold convention: default thresholds live in data-contract §5 + UDF headers.
 -- We apply them here as bound inputs to fn_in_the_money. When admin-config
 -- thresholds land (Slice 5), these literals become a CROSS JOIN against
 -- mip_app.thresholds.
@@ -143,12 +144,12 @@ enriched AS (
   FROM base AS b
   CROSS JOIN market AS m
 ),
--- Scored rows: bring the demo-default thresholds inline and call the frozen
+-- Scored rows: bring the default thresholds inline and call the frozen
 -- UDFs for ITM + next-best-offer.
 scored AS (
   SELECT
     e.*,
-    -- Demo default thresholds (data-contract §5 + frozen fixtures). Hardcoded
+    -- Default thresholds (data-contract §5 + frozen fixtures). Hardcoded
     -- here; when admin-config lands (Slice 5) these become a CROSS JOIN
     -- against mip_app.thresholds.
     75  AS min_spread_bps_applied,

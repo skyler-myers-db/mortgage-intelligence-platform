@@ -1,4 +1,4 @@
--- Deterministic demo seed for the booth -- Summit Mortgage campaigns
+-- Deterministic starter seed -- Summit Mortgage campaigns
 -- and five approval rows. Idempotent via stable UUIDs + ON CONFLICT.
 -- Run after schema.sql.
 
@@ -37,7 +37,7 @@ ON CONFLICT (campaign_id) DO NOTHING;
 
 -- Approvals (5 sample rows) -------------------------------------------
 -- Synthetic borrowers (B-48291 / B-48294 / B-48295) are the canonical
--- trio pinned by the booth narrative; the two extra ids keep the
+-- trio pinned by the product narrative; the two extra ids keep the
 -- approvals list visually interesting without inventing PII.
 INSERT INTO mip_app.approvals (
     approval_id, campaign_id, borrower_id, offer_code, action, actor_email, rationale, decided_at

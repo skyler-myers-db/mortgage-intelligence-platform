@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import type { SegmentSummary } from '../../types';
 import { Icon, type IconName } from '../Icon';
-import { SEGMENT_ICONS } from '../../mocks/demoData';
+import { SEGMENT_ICONS } from '../../mocks/fixtureData';
 
 /**
  * SegmentCard — prototype `.seg-card` BEM: badge + title + count + sub + meta row.

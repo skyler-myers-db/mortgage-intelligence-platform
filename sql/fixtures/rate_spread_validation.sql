@@ -11,7 +11,7 @@
 --   sql/uc_functions/fn_rate_spread.sql first, then this file. The `diff`
 --   column must be 0 on every row and `mismatch` must be empty.
 --
--- Market baseline: the demo's fictional par is 4.875% (0.04875). See the
+-- Market baseline: Module 0's fictional par is 4.875% (0.04875). See the
 --   header of fn_rate_spread.sql and the `market_rate_constant` field in
 --   tests/fixtures/rate_spread_golden.json for the rationale.
 --
@@ -28,8 +28,8 @@ WITH golden (id, current_rate, market_rate, expected_bps) AS (
     ('case_06_null_current_rate',                  CAST(NULL AS DOUBLE), 0.04875, 0),
     ('case_07_null_market_rate',                   0.0575,  CAST(NULL AS DOUBLE), 0),
     ('case_08_null_both',                          CAST(NULL AS DOUBLE), CAST(NULL AS DOUBLE), 0),
-    ('case_09_demo_b48291_rodriguez',              0.0575,  0.04875,   88),
-    ('case_10_demo_b48294_park',                   0.0675,  0.04875,  188),
+    ('case_09_b48291_rodriguez',              0.0575,  0.04875,   88),
+    ('case_10_b48294_park',                   0.0675,  0.04875,  188),
     ('case_11_exact_threshold_75bps',              0.05625, 0.04875,   75)
 )
 SELECT

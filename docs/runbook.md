@@ -1,11 +1,11 @@
 # Module 0 — Operator Runbook
 
-**Who uses this:** the booth operator, the backup presenter, and the
-on-call engineer during a live demo or after a production deploy.
+**Who uses this:** the operator, the backup presenter, and the
+on-call engineer during a live session or after a production deploy.
 **Companion doc:** [`docs/module0-rehearsal-checklist.md`](module0-rehearsal-checklist.md)
-is the proactive pre-demo pass. This runbook is the reactive
+is the proactive pre-session pass. This runbook is the reactive
 incident-response + deploy guide. Run the checklist **before** every
-demo block; reach for this file when something goes sideways.
+session; reach for this file when something goes sideways.
 
 The Module 0 app runs on live Unity Catalog + Lakebase — there is no
 mock fallback in the deployed app. Everything below assumes the
@@ -13,7 +13,7 @@ operator can hit both the app URL and the Databricks workspace CLI.
 
 ---
 
-## 1. Booth morning-of
+## 1. Session morning-of
 
 Run [`docs/module0-rehearsal-checklist.md`](module0-rehearsal-checklist.md)
 end-to-end. It warms the SQL warehouse, probes `/api/health`, cold-starts
@@ -72,12 +72,12 @@ curl -s -X POST "$MIP_APP_URL/api/genie/ask" \
   -H 'content-type: application/json' \
   -d '{"question":"How many borrowers across the 6-state footprint are currently in-the-money?"}' \
   | jq '{source, metric_value}'
-# Once `source == "genie"`, cached and fast for the demo.
+# Once `source == "genie"`, cached and fast for the session.
 ```
 
 ---
 
-## 2. Mid-demo degraded
+## 2. Mid-session degraded
 
 ### 2.1 The DegradedBanner appeared at the top of the page
 
@@ -87,7 +87,7 @@ frontend auto-retries; the banner clears itself when the breaker
 closes (typically 30 s after recovery).
 
 **What to say:** *"You'll see a banner — the warehouse is warming up.
-That's the real-time health probe being honest, not a demo trick.
+That's the real-time health probe being honest, not a stage trick.
 Back in a moment."*
 
 **What to do:**
@@ -250,10 +250,10 @@ databricks bundle run mip_refresh_silver -t dev
 databricks bundle run mip_gold_pipeline -t dev
 ```
 
-For a booth slot where live refresh is impractical, **do not** silently
-fall back to mock data — the no-silent-mock posture is load-bearing.
-Instead: acknowledge on-stage that you're showing "yesterday's live
-data" and continue.
+For a session window where live refresh is impractical, **do not**
+silently fall back to mock data — the no-silent-mock posture is
+load-bearing. Instead: acknowledge on-stage that you're showing
+"yesterday's live data" and continue.
 
 ---
 
@@ -302,5 +302,5 @@ for the full workflow map. Common red jobs:
 ---
 
 *Owner: qa-test-engineer + principal-architect. Review cadence: after
-every incident (post-mortem updates this doc), and before every DAIS
+every incident (post-mortem updates this doc), and before every release
 rehearsal.*

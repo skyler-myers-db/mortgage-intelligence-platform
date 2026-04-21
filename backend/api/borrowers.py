@@ -35,7 +35,7 @@ def _safe_audit_write(store: AuditStore, **kwargs: object) -> None:
     Used by background tasks: the user-facing response already returned
     by the time this runs, so raising here would just orphan the
     connection. We log.warning so operators see the problem in the
-    structured log without disrupting the demo.
+    structured log without disrupting the user-facing flow.
     """
     try:
         store.write(**kwargs)  # type: ignore[arg-type]

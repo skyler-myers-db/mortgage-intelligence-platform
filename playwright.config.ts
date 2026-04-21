@@ -1,9 +1,9 @@
 import { defineConfig, devices } from '@playwright/test';
 
 /**
- * Playwright config for the Module 0 DAIS golden path.
+ * Playwright config for the Module 0 golden path.
  *
- * Pins the booth-demo narrative at 1440×900 (the presenter's viewport). The
+ * Pins the product narrative at 1440×900 (the operator's viewport). The
  * webServer block will boot uvicorn + vite if they aren't already up;
  * `reuseExistingServer: !CI` means locally we reuse whatever you have running,
  * and CI always starts fresh. Both servers must be up simultaneously because

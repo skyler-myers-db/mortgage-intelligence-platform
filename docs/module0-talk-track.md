@@ -1,18 +1,18 @@
-# Module 0 — DAIS 2026 Booth Talk Track
+# Module 0 — Conference Session Talk Track
 
 - **Title:** Mortgage Intelligence Platform — Module 0: Top-of-Funnel Lead Generation & Borrower Segmentation
 - **Audience:** Business (Head of Growth / VP Mortgage Lending / Marketing / Sales Mgmt) + Technical (Databricks FS partner, Cotality product/data, Entrada delivery)
 - **Runtime:** 45s open + 6–8 min main + 30s close (~8 min wall clock)
 - **Presenters:** Entrada delivery lead + Databricks FS partner (co-drive)
-- **Date / Room:** DAIS 2026 — Entrada booth
+- **Venue:** Entrada session, conference 2026
 - **App URL:** deployed Databricks App at 1440×900, dark theme, compact density
 - **Data posture:** live Unity Catalog on the Cotality Delta Share — no mock fallback. Resilience (warehouse warm-start, retries, circuit breakers, degraded-state UI) is how a flaky network is handled, not a mock swap.
 
 ---
 
-## Pre-demo setup — use the rehearsal checklist
+## Pre-session setup — use the rehearsal checklist
 
-Before stepping up, the booth operator runs through
+Before stepping up, the operator runs through
 [docs/module0-rehearsal-checklist.md](module0-rehearsal-checklist.md).
 That checklist warms the serverless warehouse, primes Genie, and confirms
 `/api/health` reports `mode:"live"` with every dependency `up` and every
@@ -38,7 +38,7 @@ circuit breaker `closed`. Do not start the pitch until that page is green.
 
 > "Summit Mortgage's top-of-funnel snapshot against the live share. Every KPI renders from `mip.gold.lead_population` through a short-TTL cache in front of the serverless warehouse. Hover any KPI — an evidence chip cites the source. The ITM count cites `mip.gold.fn_in_the_money`, a real UC SQL function pinned by golden-fixture tests against a Python mirror. Cost per contact cites admin config, not gold; we don't pretend that's derived."
 
-> "Right rail is the **Console**. See the telemetry strip in the footer: *Warehouse up · Genie up · probe 180 ms*. That's a real `/api/health` poll every 30 seconds. If the warehouse is cold, you'll see a subtle warming-up banner — real-time honesty, not a demo trick. Audit events land in Lakebase, streamable to UC for compliance."
+> "Right rail is the **Console**. See the telemetry strip in the footer: *Warehouse up · Genie up · probe 180 ms*. That's a real `/api/health` poll every 30 seconds. If the warehouse is cold, you'll see a subtle warming-up banner — real-time honesty, not a stage trick. Audit events land in Lakebase, streamable to UC for compliance."
 
 **Cite:** `mip.gold.lead_population` · `mip.gold.fn_in_the_money` · live `/api/health` · Cotality public records + Voluntary Lien + Owner Link.
 
@@ -128,7 +128,7 @@ circuit breaker `closed`. Do not start the pitch until that page is green.
 
 > "Structured response: **~1.22M**, per-state table across IL / CA / FL / TX / WA / CO, trusted-asset chips. That's the HELOC and cash-out pool — won't refi, but equity is shoppable."
 
-> "If Genie cold-starts mid-demo, the circuit breaker trips and we fall through to a deterministic safe corpus of 10 canonical answers pinned to the sample questions. Audience sees a correct answer with a provenance chip — not a spinner, not a hallucination."
+> "If Genie cold-starts mid-session, the circuit breaker trips and we fall through to a deterministic safe corpus of 10 canonical answers pinned to the sample questions. Audience sees a correct answer with a provenance chip — not a spinner, not a hallucination."
 
 **Cite:** `mip.semantics.borrower_opportunity_metric_view` · `mip.gold.evidence_events` · Mortgage Lead Intelligence Genie Space (trusted-asset-scoped) · `backend/services/genie_answers.py` safe-corpus fallback.
 
@@ -150,7 +150,7 @@ circuit breaker `closed`. Do not start the pitch until that page is green.
 
 > "**Two.** Two or three design-partner lenders for a thirty-day pilot on the six-state footprint. We'll bring the architecture; you bring the book."
 
-> "**Three.** Come by the Entrada booth for the deep dive — we'll walk the bundle, the metric views, and the Lakebase schema end-to-end."
+> "**Three.** Come find us for the deep dive — we'll walk the bundle, the metric views, and the Lakebase schema end-to-end."
 
 > "Who should we contact, why now, with what offer. Thank you."
 
@@ -160,7 +160,7 @@ circuit breaker `closed`. Do not start the pitch until that page is green.
 
 | Failure | What happens | What the presenter says |
 |---|---|---|
-| Warehouse cold-starts mid-demo | DegradedBanner appears at top of page; the retry/breaker logic re-arms within 30s | *You'll notice the banner — the warehouse is warming up. This is real-time honesty, not a demo trick. Back in a moment.* |
+| Warehouse cold-starts mid-session | DegradedBanner appears at top of page; the retry/breaker logic re-arms within 30s | *You'll notice the banner — the warehouse is warming up. This is real-time honesty, not a stage trick. Back in a moment.* |
 | Genie API times out | Circuit breaker opens; `/api/genie` falls through to the safe corpus in `backend/services/genie_answers.py`; answer still cites a UC table | *Our safe corpus answered this one — ten canonical questions deterministic, even if the Genie space is cold. The provenance chip is real.* |
 | Lakebase unreachable on Approve | Approval banner shows an error toast; the breaker opens; no row written; borrower stays `pending` | *Approval didn't write — the breaker just told us Lakebase is unreachable. That's the audit guarantee doing its job: we'd rather fail visibly than fake success.* |
 | Map tile fails to load | Skip the drill-down, go directly from KPI row to `/segment-intelligence` — story still holds | *Let's go straight to segments — that's where the action is anyway.* |
@@ -215,7 +215,7 @@ All share-level numbers trace to `docs/data-sources-gap-analysis.md §1` (Apr 20
 
 ## Honest-to-the-audience callouts
 
-These are the lines that separate this from a slideware demo. Use them when you're asked "is this real?" — which you will be.
+These are the lines that separate this from a slideware session. Use them when you're asked "is this real?" — which you will be.
 
 - "Zero mock mode in the running app. This is live Unity Catalog. The safe corpus for Genie is a fallback catalog of 10 canonical answers that activates only when the Genie circuit breaker opens."
 - "Two segments — Listed for Sale and Permit Activity — return zero on real data today because Cotality hasn't licensed MLS and Permits to us yet. We show the card, we don't fake the count."

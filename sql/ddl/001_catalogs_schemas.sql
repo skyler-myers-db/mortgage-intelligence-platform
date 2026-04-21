@@ -7,7 +7,7 @@
 --
 --                mip.raw        -- untyped lift from the Cotality share
 --                mip.silver     -- 1:1 typed + state-filtered from raw
---                mip.gold       -- precomputed demo surfaces
+--                mip.gold       -- precomputed product surfaces
 --                mip.semantics  -- Genie-facing metric views
 --                mip.app        -- app-runtime scratch / lookups
 --                mip.audit      -- audit tables (mirrors Lakebase audit)
@@ -29,18 +29,19 @@
 --            RBAC pass does not leak data.
 --
 -- Isolation: The catalog is created with default (OPEN) isolation mode.
---            A production deploy will flip to ISOLATED so metastore-level
---            access does not leak into this demo workspace; we do not do
---            that at booth-deploy time because (a) the demo workspace is
---            single-tenant, and (b) ISOLATED mode requires workspace
---            binding calls that are not part of the bundle contract.
+--            A production tenant deploy will flip to ISOLATED so
+--            metastore-level access does not leak into the workspace; we
+--            do not do that in the default bundle because (a) the default
+--            workspace is single-tenant, and (b) ISOLATED mode requires
+--            workspace binding calls that are not part of the bundle
+--            contract.
 --
 -- Idempotency: Every statement is CREATE ... IF NOT EXISTS. Re-running
 --            this script has zero side effects on existing data.
 -- =============================================================================
 
 CREATE CATALOG IF NOT EXISTS mip
-COMMENT 'Mortgage Intelligence Platform - Module 0 demo catalog. See docs/data-contract-module0.md.';
+COMMENT 'Mortgage Intelligence Platform - Module 0 catalog. See docs/data-contract-module0.md.';
 
 CREATE SCHEMA IF NOT EXISTS mip.raw
 COMMENT 'Untyped lift from the Cotality Delta Share (read-only pass-through).';
@@ -49,7 +50,7 @@ CREATE SCHEMA IF NOT EXISTS mip.silver
 COMMENT '1:1 typed + state-filtered tables. Includes market_rates_weekly from FRED.';
 
 CREATE SCHEMA IF NOT EXISTS mip.gold
-COMMENT 'Precomputed demo surfaces: borrower_360, lead_scores, evidence_events, lead_population.';
+COMMENT 'Precomputed product surfaces: borrower_360, lead_scores, evidence_events, lead_population.';
 
 CREATE SCHEMA IF NOT EXISTS mip.semantics
 COMMENT 'Genie-facing metric views (lead_generation, segment_performance, borrower_opportunity).';

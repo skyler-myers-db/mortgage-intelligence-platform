@@ -1,21 +1,21 @@
 import { useEffect, useState } from 'react';
 import { Icon, type IconName } from '../Icon';
-import { demoAgentActivity } from '../../mocks/demoData';
+import { fallbackAgentActivity } from '../../mocks/fixtureData';
 
 /**
  * AgentActivityLog — prototype `.audit` BEM. Pulls events from
- * GET /api/audit/events (already exists); falls back to demoAgentActivity
- * so the Home page always renders content in booth-mode. Icon + color keyed
- * off action verb so Approvals stand out green, rejects red, Genie asks
- * amber.
+ * GET /api/audit/events (already exists); falls back to
+ * fallbackAgentActivity so the Home page always renders content. Icon +
+ * color keyed off action verb so Approvals stand out green, rejects red,
+ * Genie asks amber.
  *
  * The footer renders a live telemetry strip built from /api/health —
  * warehouse + Genie dependency state and a monotonic wall-clock probe
  * latency. Values are not synthesized: `status`, `dependencies`, and
  * `circuit_breakers` come straight from the health endpoint; the
  * `probe_ms` is the wall-clock cost of the single fetch that produced
- * them. This is the "booth operator honesty" beat the talk track calls
- * out: if the warehouse is warming up, the activity log says so.
+ * them. This is the operator-honesty beat the talk track calls out:
+ * if the warehouse is warming up, the activity log says so.
  */
 
 interface AuditEvent {
@@ -57,7 +57,7 @@ function formatTime(iso: string): string {
 // ---------------------------------------------------------------------
 // Health telemetry — polled from /api/health every 30s. All three values
 // (dep state, breaker state, probe_ms) are real measurements; nothing
-// here is synthesized for demo polish.
+// here is synthesized.
 // ---------------------------------------------------------------------
 
 type DepState = 'up' | 'down' | 'unknown';
@@ -101,10 +101,10 @@ export function AgentActivityLog({ limit = 12 }: { limit?: number }) {
         if (!res.ok) throw new Error(String(res.status));
         const data = (await res.json()) as AuditEvent[];
         if (!cancelled) {
-          setRows(data.length > 0 ? data : demoAgentActivity);
+          setRows(data.length > 0 ? data : fallbackAgentActivity);
         }
       } catch {
-        if (!cancelled) setRows(demoAgentActivity);
+        if (!cancelled) setRows(fallbackAgentActivity);
       }
     })();
     return () => {

@@ -3,7 +3,7 @@
 -- -----------------------------------------------------------------------------
 -- Purpose:   Idempotent MERGE that populates `mip.silver.property_master`
 --            from `cotality_mortgage_data.corelogic.entrada_eval_property_
---            domain_v3`, filtered to the 6-state demo footprint.
+--            domain_v3`, filtered to the 6-state share footprint.
 --
 -- Grain:     One row per CLIP (1:1 with source).
 -- PK (MERGE key): clip.

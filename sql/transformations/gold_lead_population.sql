@@ -1,20 +1,20 @@
 -- =============================================================================
 -- gold_lead_population.sql (transformation)
 -- -----------------------------------------------------------------------------
--- Purpose:   Populate `mip.gold.lead_population` via CTAS. Ranked top-N
---            cut of gold.borrower_360 (opportunity_score >= 50), with both
---            national rank and within-state rank pre-materialized.
+-- Purpose:   Populate `mip.gold.lead_population` via CTAS. Ranked
+--            quality-filtered cut of gold.borrower_360
+--            (opportunity_score >= 50), with both national rank and
+--            within-state rank pre-materialized.
 --
 -- Grain:     One row per clip (subset of gold.borrower_360).
 -- Pattern:   CREATE OR REPLACE TABLE ... AS SELECT.
 -- Slice:     module0-real-data-slice3.
 -- Data contract: docs/data-contract-module0.md §3.5.
 --
--- Filtering: WHERE opportunity_score >= 50 AND rank_overall <= 10000.
---            10K is the default population cap (booth-scale: the ranked
---            scroll in the UI never exceeds a few hundred rendered at a
---            time; 10K buys margin for state filtering). Raising the cap
---            here is safe -- the UI is pagination-aware.
+-- Filtering: WHERE opportunity_score >= 50. Every borrower that clears
+--            the quality floor lands in lead_population; the UI paginates.
+--            A real lender's queue is sized by opportunity quality, not
+--            by a UI convenience number, so no arbitrary row cap.
 --
 -- Ranking:
 --   rank_overall      = DENSE_RANK() OVER (ORDER BY opportunity_score DESC, clip)
@@ -72,5 +72,4 @@ SELECT
   rank_within_state,
   CONCAT(DATE_FORMAT(refreshed_at, 'yyyyMMdd'), '-v1') AS population_version,
   refreshed_at
-FROM ranked
-WHERE rank_overall <= 10000;
+FROM ranked;

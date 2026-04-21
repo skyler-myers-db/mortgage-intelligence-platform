@@ -1,11 +1,11 @@
 """Talk-track word-count gate -- Slice 9.
 
-The DAIS booth window is 45s open + 6-8 min main + 30s close, so the
-spoken portion of ``docs/module0-demo-talk-track.md`` has to land in
+The conference-session window is 45s open + 6-8 min main + 30s close,
+so the spoken portion of ``docs/module0-talk-track.md`` has to land in
 roughly [1000, 1500] words -- the ~165 wpm natural-delivery band for a
-presenter standing at a booth holding a prop iPad. Outside that window
-means either the talk underflows (audience checks out) or overruns
-(audience starts arriving at the next pitch).
+presenter. Outside that window means either the talk underflows
+(audience checks out) or overruns (audience starts arriving at the next
+pitch).
 
 Convention: inside the talk track, every line that starts with ``>`` is
 spoken copy. Everything else is stage direction / route markers / table
@@ -33,7 +33,7 @@ import argparse
 import sys
 from pathlib import Path
 
-# Tuned to the booth window: 6-8 min spoken, plus 45s open + 30s close.
+# Tuned to the session window: 6-8 min spoken, plus 45s open + 30s close.
 # At ~165 wpm, 1000 words = 6.1 min, 1500 words = 9.1 min. The lower
 # bound protects against a talk that underflows (missing beat), the
 # upper bound against one that overruns (audience fade). Slice 9 keeps
@@ -41,7 +41,7 @@ from pathlib import Path
 DEFAULT_MIN = 1000
 DEFAULT_MAX = 1500
 
-# Average presenter delivery cadence. Rounded to the booth-pacing target.
+# Average presenter delivery cadence. Rounded to the session-pacing target.
 _WPM = 165
 
 # Convention: lines beginning with "> " (a blockquote marker followed by
@@ -55,10 +55,10 @@ def _default_path() -> Path:
     """Resolve the repo-root path to the talk track.
 
     ``tools/`` sits next to ``docs/`` at the repo root, so the talk
-    track is always ``../docs/module0-demo-talk-track.md`` relative to
+    track is always ``../docs/module0-talk-track.md`` relative to
     this file.
     """
-    return Path(__file__).resolve().parent.parent / "docs" / "module0-demo-talk-track.md"
+    return Path(__file__).resolve().parent.parent / "docs" / "module0-talk-track.md"
 
 
 def count_spoken_words(path: Path) -> int:

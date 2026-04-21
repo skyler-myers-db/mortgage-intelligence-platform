@@ -8,7 +8,7 @@ module. Slice 4 moved the synthetic fixtures to
 ``tests/fixtures/in_process_repos.py``; nothing under ``backend/`` is
 allowed to reference either. If a future edit re-introduces a direct
 import path, the factory swap to real data silently skips that router
-and the booth demo diverges in one spot nobody notices until
+and the UI diverges in one spot nobody notices until
 production. These tests are the tripwire.
 """
 from __future__ import annotations

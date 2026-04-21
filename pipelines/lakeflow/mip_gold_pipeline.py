@@ -72,7 +72,7 @@ SILVER_OWNER_TRANSFER = "mip.silver.owner_transfer_events"
 SILVER_OWNER_BRIDGE = "mip.silver.owner_property_bridge"
 SILVER_MARKET_RATES = "mip.silver.market_rates_weekly"
 
-# Demo-default thresholds. See docs/data-contract-module0.md §5 + the frozen
+# Default thresholds. See docs/data-contract-module0.md §5 + the frozen
 # UDF headers. When admin-config thresholds land (Slice 5), these become
 # parameters loaded from `mip_app.thresholds`.
 MIN_SPREAD_BPS = 75

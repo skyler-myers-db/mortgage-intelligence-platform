@@ -13,7 +13,7 @@
 --   sql/ddl/gold_borrower_360.sql            -- CLIP-grain projection.
 --   sql/ddl/gold_lead_scores.sql             -- Scoring sub-scores + fn_lead_score.
 --   sql/ddl/gold_evidence_events.sql         -- Per-(CLIP, signal) rows.
---   sql/ddl/gold_lead_population.sql         -- Ranked top-N cut for /leads.
+--   sql/ddl/gold_lead_population.sql         -- Ranked quality-filtered cut for /leads.
 --   sql/ddl/gold_segment_population.sql      -- Segment counts + prior snapshot.
 --
 -- Dependency order (alphabetical is NOT sufficient; respect FK-ish order):
@@ -75,7 +75,7 @@ TBLPROPERTIES (
 -- -----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS mip.gold.borrower_360 (
   clip                      STRING    NOT NULL COMMENT 'CLIP. PK. Router maps to Borrower360.clip_id.',
-  borrower_id               STRING    NOT NULL COMMENT 'Synthetic demo id from CLIP hash.',
+  borrower_id               STRING    NOT NULL COMMENT 'Synthetic id from CLIP hash.',
   display_name              STRING    NOT NULL COMMENT 'Synthesized label; never a real name.',
   city                      STRING             COMMENT 'Situs city.',
   state                     STRING    NOT NULL COMMENT 'Situs state (6-state footprint).',
@@ -192,7 +192,7 @@ TBLPROPERTIES (
 -- -----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS mip.gold.lead_population (
   clip                      STRING    NOT NULL COMMENT 'CLIP. PK.',
-  borrower_id               STRING    NOT NULL COMMENT 'Synthetic demo id.',
+  borrower_id               STRING    NOT NULL COMMENT 'Synthetic id.',
   display_name              STRING    NOT NULL COMMENT 'Synthesized label.',
   city                      STRING             COMMENT 'Situs city.',
   state                     STRING    NOT NULL COMMENT 'Situs state.',
@@ -213,7 +213,7 @@ CREATE TABLE IF NOT EXISTS mip.gold.lead_population (
 )
 USING DELTA
 CLUSTER BY (opportunity_score)
-COMMENT 'Ranked top-N cut; backs /leads. See docs/data-contract-module0.md §3.5.'
+COMMENT 'Ranked quality-filtered cut; backs /leads. See docs/data-contract-module0.md §3.5.'
 TBLPROPERTIES (
   'delta.enableChangeDataFeed' = 'false',
   'delta.autoOptimize.optimizeWrite' = 'true',

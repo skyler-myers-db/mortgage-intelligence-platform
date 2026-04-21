@@ -23,13 +23,13 @@
 -- Thresholds: Taken as explicit inputs, NOT baked as UDF defaults. The
 --            application layer carries thresholds from admin config so a
 --            growth lead can tune aggressiveness without a SQL deploy.
---            Demo defaults (cited here, applied in backend/config and the
---            admin UI):
+--            Default thresholds (cited here, applied in backend/config and
+--            the admin UI):
 --                min_spread_bps  = 75
 --                min_equity_pct  = 15
---            Under these defaults, the three canonical demo borrowers
---            (see fn_rate_spread.sql header) all evaluate TRUE — the demo
---            promise "act on these now" is preserved.
+--            Under these defaults, the three canonical sample borrowers
+--            (see fn_rate_spread.sql header) all evaluate TRUE — the
+--            "act on these now" story is preserved.
 --
 -- NULLs:     Any NULL input -> FALSE. Rationale: for a contact-prioritization
 --            surface, "unknown" must not silently become "go" — treating
@@ -52,7 +52,7 @@ CREATE OR REPLACE FUNCTION mip.gold.fn_in_the_money(
 )
 RETURNS BOOLEAN
 DETERMINISTIC
-COMMENT 'Module 0 canonical In-the-Money flag. TRUE iff rate_spread_bps >= min_spread_bps AND equity_pct >= min_equity_pct. NULL inputs return FALSE. Demo defaults: min_spread_bps=75, min_equity_pct=15 (supplied by application layer, not baked). See tests/fixtures/in_the_money_golden.json for parity fixtures.'
+COMMENT 'Module 0 canonical In-the-Money flag. TRUE iff rate_spread_bps >= min_spread_bps AND equity_pct >= min_equity_pct. NULL inputs return FALSE. Default thresholds: min_spread_bps=75, min_equity_pct=15 (supplied by application layer, not baked). See tests/fixtures/in_the_money_golden.json for parity fixtures.'
 RETURN
   CASE
     WHEN rate_spread_bps IS NULL

@@ -9,7 +9,7 @@
 --
 -- Grain:     One row per (segment_code, state) + one row per (segment_code,
 --            '_ALL') for the national rollup. 6 segments * (6 states + _ALL)
---            = 42 rows maximum in the current demo footprint.
+--            = 42 rows maximum in the current 6-state footprint.
 -- PK:        (segment_code, state).
 -- Clustering: Liquid cluster on (segment_code).
 --

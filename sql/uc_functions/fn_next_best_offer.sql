@@ -87,8 +87,8 @@
 -- Thresholds: Five admin-tunable INT thresholds, all passed explicitly — NONE
 --            are baked into the UDF. Rationale matches fn_in_the_money: a
 --            growth lead should be able to tune aggressiveness through admin
---            config without a SQL deploy. Demo defaults (applied by the
---            application layer):
+--            config without a SQL deploy. Default thresholds (applied by
+--            the application layer):
 --              min_spread_bps       = 75
 --              min_equity_pct       = 15
 --              heloc_equity_min_pct = 35
@@ -105,8 +105,8 @@
 --            label, keeping the `recommended_offer` column NOT NULL for
 --            downstream grouping and counts.
 --
--- Demo borrowers (under default thresholds and the chosen inputs pinned in
--- tests/fixtures/next_best_offer_golden.json):
+-- Sample borrowers (under default thresholds and the chosen inputs pinned
+-- in tests/fixtures/next_best_offer_golden.json):
 --   B-48291 (Rodriguez): spread=88, equity=46, permit=F, listed=F, inv=F,
 --                        cust=F, comp=F
 --                        -> branch 2 fires (88>=75 AND 46>=35)

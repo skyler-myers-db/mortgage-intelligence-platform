@@ -7,9 +7,9 @@
 --            code, and the exact thresholds applied at this refresh.
 --
 -- Grain:     One row per clip.
--- Pattern:   CREATE OR REPLACE TABLE ... AS SELECT. Full rebuild is the demo
---            posture; upstream gold.borrower_360 + gold.evidence_events are
---            both already materialized.
+-- Pattern:   CREATE OR REPLACE TABLE ... AS SELECT. Full rebuild is the
+--            default refresh posture; upstream gold.borrower_360 +
+--            gold.evidence_events are both already materialized.
 -- Slice:     module0-real-data-slice3.
 -- Data contract: docs/data-contract-module0.md §3.3 + §5.
 --
@@ -26,9 +26,9 @@
 --     + 10 * (recent_avm_uplift_flag)                 -- approximated FALSE on real
 --                                                     -- data (no AVM history yet).
 --   )
--- 90-day windows ground out to be tight for the booth: longer windows pick
--- up more events but dilute "recency." We use 90d to match mock behavior;
--- if the booth demo wants more hits, widen to 180d here.
+-- 90-day windows are deliberately tight: longer windows pick up more
+-- events but dilute "recency." We use 90d to match fixture behavior;
+-- tenants wanting a wider net can widen to 180d here.
 --
 -- economic_incentive, fit, relationship formulas: identical to those in
 -- gold_borrower_360's CTAS subscores CTE. They are recomputed here to keep
@@ -38,9 +38,9 @@
 -- evidence sub-score: LEAST(100, 20 * evidence_row_count_for_clip) with
 -- BLOCKED signal types excluded.
 --
--- Threshold convention matches borrower_360.sql: demo defaults are baked
--- here as literals. When admin-config thresholds land (Slice 5), both
--- transformations swap to a CROSS JOIN against mip_app.thresholds
+-- Threshold convention matches borrower_360.sql: default thresholds are
+-- baked here as literals. When admin-config thresholds land (Slice 5),
+-- both transformations swap to a CROSS JOIN against mip_app.thresholds
 -- simultaneously -- drift is a parity test failure by construction.
 -- =============================================================================
 

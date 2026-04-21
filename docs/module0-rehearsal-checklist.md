@@ -1,7 +1,7 @@
-# Module 0 — Pre-Demo Rehearsal Checklist
+# Module 0 — Pre-Session Rehearsal Checklist
 
-**Who runs this:** the booth operator (or backup presenter).
-**When:** 10 minutes before every demo block.
+**Who runs this:** the operator (or backup presenter).
+**When:** 10 minutes before every session.
 **Why:** the app is live Unity Catalog — serverless warehouses cold-start, Genie
 spaces cold-start, Lakebase needs a fresh auth token. Catching these one at a
 time in quiet beats catching all of them on stage.
@@ -103,21 +103,21 @@ can narrate from JSON if the UI goes dark.
 ## 8. Clear the click path
 
 Walk the 13-step click path from the talk track Appendix once, silently, before
-the audience arrives. Muscle memory is the difference between a demo that
+the audience arrives. Muscle memory is the difference between a session that
 takes 7 minutes and one that takes 10.
 
 ---
 
-## If something lights up red mid-demo
+## If something lights up red mid-session
 
 | Signal | What to do | What to say |
 |---|---|---|
-| DegradedBanner appears at top of page | Keep going; the retry + breaker logic re-arms within 30 s | *"The banner tells you the warehouse is warming up — real-time honesty, not a demo trick."* |
+| DegradedBanner appears at top of page | Keep going; the retry + breaker logic re-arms within 30 s | *"The banner tells you the warehouse is warming up — real-time honesty, not a stage trick."* |
 | Genie answer returns `source: "fallback"` | Keep going; safe corpus is the guarantee | *"The circuit breaker opened and our safe corpus took over — you just watched resilience engineering instead of a spinner."* |
 | Approval click shows an error toast | Don't re-click | *"Lakebase write path is flagged; we'd rather fail visibly than fake success. Audit guarantee working as designed."* |
 | Page outright blanks | Swap to the second monitor and narrate from API JSON | *"The UI is the skin, not the substance — here's the same answer from the API."* |
 
 ---
 
-*Owner: demo-storyteller subagent. Review cadence: every Slice PR into
+*Owner: storyteller subagent. Review cadence: every Slice PR into
 `feature/module0-real-data`; always re-run before a customer meeting.*

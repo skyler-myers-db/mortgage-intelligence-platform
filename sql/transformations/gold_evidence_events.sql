@@ -6,14 +6,14 @@
 --
 -- Grain:     One row per (clip, signal_type, timestamp). evidence_id is a
 --            deterministic 12-hex suffix of sha2 over those three.
--- Pattern:   CREATE OR REPLACE TABLE ... AS SELECT. Full rebuild is demo
---            posture; clusters on clip per DDL.
+-- Pattern:   CREATE OR REPLACE TABLE ... AS SELECT. Full rebuild is the
+--            default refresh posture; clusters on clip per DDL.
 -- Slice:     module0-real-data-slice3.
 -- Data contract: docs/data-contract-module0.md §3.4.
 --
 -- BLOCKED signal types (data-contract §9):
 --   - 'permit'  : NEVER emitted. Mock-mode ev-004 remains the only permit
---                 row rendered in the booth demo.
+--                 row rendered.
 --   - 'listing' : NEVER emitted. Mock-mode ev-008 remains the only listing
 --                 row rendered.
 --
@@ -135,7 +135,7 @@ competitor_lien_rows AS (
     'mip.silver.lien_current'                   AS source_table,
     'competitor_lien'                                AS signal_type,
     'competitor servicer'                            AS signal_value,
-    'Current servicer is not the demo lender.'       AS display_text,
+    'Current servicer is not the lender of record.'  AS display_text,
     0.89                                             AS confidence,
     CAST(lc.ingest_ts AS STRING)                     AS `timestamp`,
     5                                                AS signal_rank

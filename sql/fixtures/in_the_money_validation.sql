@@ -11,7 +11,7 @@
 --   sql/uc_functions/fn_in_the_money.sql first, then this file. The
 --   `mismatch` column must be empty on every row.
 --
--- Demo defaults: min_spread_bps=75, min_equity_pct=15. See the header of
+-- Default thresholds: min_spread_bps=75, min_equity_pct=15. See the header of
 --   fn_in_the_money.sql and the `default_thresholds` field in
 --   tests/fixtures/in_the_money_golden.json. Thresholds are passed
 --   explicitly per-call; they are not baked into the UDF.
@@ -28,10 +28,10 @@ WITH golden (id, rate_spread_bps, equity_pct, min_spread_bps, min_equity_pct, ex
     ('case_05_boundary_equity_exact_spread_above_true', 150, 15, 75, 15, TRUE),
     ('case_06_null_spread_false',                  CAST(NULL AS INT), 40,  75, 15, FALSE),
     ('case_07_null_equity_false',                  150, CAST(NULL AS INT), 75, 15, FALSE),
-    ('case_08_stricter_threshold_rejects_demo_spread', 88, 46, 150, 15, FALSE),
-    ('case_09_demo_b48291_rodriguez_itm',           88,  46,  75, 15, TRUE),
-    ('case_10_demo_b48294_park_itm',               188,  39,  75, 15, TRUE),
-    ('case_11_demo_b48295_thompson_itm',           162,  56,  75, 15, TRUE)
+    ('case_08_stricter_threshold_rejects_high_spread', 88, 46, 150, 15, FALSE),
+    ('case_09_b48291_rodriguez_itm',           88,  46,  75, 15, TRUE),
+    ('case_10_b48294_park_itm',               188,  39,  75, 15, TRUE),
+    ('case_11_b48295_thompson_itm',           162,  56,  75, 15, TRUE)
 )
 SELECT
   id,

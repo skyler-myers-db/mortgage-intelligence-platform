@@ -34,7 +34,7 @@ const evidence = [
   { evidence_id: 'ev-003', source_product: 'Mortgage Market Analytics', source_table: 'cotality.mma.refi_activity', signal_type: 'market_trend', signal_value: '+28% QoQ', display_text: 'Local refi activity is up 28% quarter over quarter.', confidence: 0.84, timestamp: '2026-04-20T06:12:00Z' }
 ];
 
-// Slice 9 re-anchored the demo trio to Chicago/IL so this Storybook /
+// Slice 9 re-anchored the sample trio to Chicago/IL so this Storybook /
 // frontend-only fixture agrees with tests/fixtures/mock_population.py
 // (the Python fixture set) and docs/data-contract-module0.md §10. This
 // file is test-only per CLAUDE.md; production routes never import it.
@@ -154,9 +154,9 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
 };
 
 /** Fallback agent-activity events for Home when /api/audit/events is empty.
- *  TODO: wire to /api/audit/events (already exists) — this is only the demo
+ *  TODO: wire to /api/audit/events (already exists) — this is only the
  *  starter feed so the Home page isn't blank before any action runs. */
-export const demoAgentActivity = [
+export const fallbackAgentActivity = [
   { event_id: 'evt-start', actor: 'System',   action: 'Session started on Databricks One',       entity_type: 'session', entity_id: '—',   payload_json: {}, evidence_ids: [],                       created_at: '2026-04-20T10:24:07Z' },
   { event_id: 'evt-load',  actor: 'Pipeline', action: 'Loaded Cotality Public Records via Delta Share', entity_type: 'pipeline', entity_id: 'deed_and_mortgage', payload_json: {}, evidence_ids: [], created_at: '2026-04-20T10:24:31Z' },
   { event_id: 'evt-score', actor: 'Agent · Lead Portfolio', action: 'Scored 89,553 borrowers; 12,840 marked in-the-money', entity_type: 'scoring', entity_id: 'mip.gold.lead_scores', payload_json: {}, evidence_ids: ['ev-001'], created_at: '2026-04-20T10:25:04Z' },

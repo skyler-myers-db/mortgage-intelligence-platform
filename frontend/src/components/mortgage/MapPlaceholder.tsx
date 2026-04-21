@@ -8,13 +8,13 @@ import { Chip } from '../Primitives';
 interface UsaSvgMapLocation { name: string; id: string; path: string }
 interface UsaSvgMap { label: string; viewBox: string; locations: UsaSvgMapLocation[] }
 
-// FIPS state codes that have real county polygons in us-counties-demo.json.
+// FIPS state codes that have real county polygons in us-counties.json.
 // Anything else falls back to the stylized drill (IL_COUNTIES placeholder).
-// Slice 9 re-anchored the demo drill from GA->IL so the map-first narrative
-// matches Summit Mortgage's real 6-state Delta Share footprint (IL / CA /
-// FL / TX / WA / CO) with Chicago as the canonical anchor metro.
-// TODO: expand the trimmed TopoJSON to all six footprint states as demo
-// data rollups land.
+// Slice 9 re-anchored the county drill from GA->IL so the map-first
+// narrative matches Summit Mortgage's real 6-state Delta Share footprint
+// (IL / CA / FL / TX / WA / CO) with Chicago as the canonical anchor metro.
+// TODO: expand the trimmed TopoJSON to all six footprint states as
+// per-county rollups land.
 const SUPPORTED_COUNTY_STATES: Record<string, string> = {
   il: '17',
   ca: '06',
@@ -23,7 +23,7 @@ const SUPPORTED_COUNTY_STATES: Record<string, string> = {
 
 // County FIPS -> synthetic borrower count / avg score. Weighted so Cook
 // County (Chicago anchor), LA County, and Harris County stand out — those
-// are the three demo-story metros. Slice 9 swapped GA/Fulton for IL/Cook;
+// are the three anchor metros. Slice 9 swapped GA/Fulton for IL/Cook;
 // all six footprint states have at least one populated county so the
 // geography drill surfaces real-looking density in any state the presenter
 // clicks into.
@@ -63,7 +63,7 @@ const COUNTY_FACTS: Record<string, { count: number; avgScore: number; lvl: 1 | 2
  *   - .map-wrap chassis with breadcrumbs, drill-hint chip, legend, map-tip.
  *   - map-region lvl-1..4 fills (color-mix with --accent), is-selected accent.
  *   - level state: 'state' → 'county' → 'zip' → borrower deep-link.
- *   - demo drill path: US → Illinois → Cook County → 60611/60614/60647/60657.
+ *   - drill path: US → Illinois → Cook County → 60611/60614/60647/60657.
  *
  * Upgrade vs. prototype: the prototype used hand-drawn stylized polygons. We
  * use @svg-maps/usa (Albers USA pre-projected paths, ~141 KB raw / ~30 KB
@@ -76,7 +76,7 @@ const COUNTY_FACTS: Record<string, { count: number; avgScore: number; lvl: 1 | 2
  * every other state shows hover facts but no county drill.
  *
  * TODO: when the borrower dataset expansion slice lands, derive STATE_FACTS
- * from mocks/demoData.ts instead of hardcoded synthetic counts.
+ * from the API instead of hardcoded synthetic counts.
  */
 
 // ---------- Synthetic per-state facts (preview; see TODO above) ----------
@@ -90,8 +90,8 @@ interface StateFacts {
 
 // lowercase state id (matches @svg-maps/usa) → facts. Slice 9 re-weighted
 // so all six Delta Share footprint states (IL / CA / FL / TX / WA / CO)
-// surface at lvl:4 and anchor the booth narrative of a real multi-state
-// book. Counts are synthetic but proportional to the Apr-2026 share probe
+// surface at lvl:4 and anchor the narrative of a real multi-state book.
+// Counts are synthetic but proportional to the Apr-2026 share probe
 // in docs/data-sources-gap-analysis.md §1 (IL 1.86M · CA 0.90M · FL 0.76M ·
 // TX 0.75M · WA 0.74M · CO 0.16M properties). Non-footprint states render
 // at lvl:1-3 so the presenter's eye lands on the footprint first.
@@ -162,7 +162,7 @@ const SEGMENT_CODE_TO_NAME: Record<string, string> = {
   retention: 'Retention',
 };
 
-// ---------- Stylized county/ZIP drill-downs for the demo path ------------
+// ---------- Stylized county/ZIP drill-downs (fallback rendering) --------
 
 interface DrillRegion {
   id: string;
@@ -174,10 +174,10 @@ interface DrillRegion {
   borrowerId?: string;
 }
 
-// Chicago metro counties (stylized — prototype-style polygons keyed to the IL
-// demo drill). Only rendered when the real TopoJSON hasn't resolved yet or
-// the drill state has no real polygons in us-counties-demo.json. Grid laid
-// out in a 340x310 canvas to match the prototype's county viewBox.
+// Chicago metro counties (stylized — prototype-style polygons keyed to the
+// IL county drill). Only rendered when the real TopoJSON hasn't resolved
+// yet or the drill state has no real polygons in us-counties.json. Grid
+// laid out in a 340x310 canvas to match the prototype's county viewBox.
 // Slice 9 rewrite: GA/Fulton/DeKalb/Cobb/Gwinnett -> IL/Cook/DuPage/Lake/
 // Kane/Will. Cook County is the hero (highest lvl, highest count).
 const IL_COUNTIES: DrillRegion[] = [
@@ -189,9 +189,10 @@ const IL_COUNTIES: DrillRegion[] = [
 ];
 
 // ZIPs within Cook County (Chicago) — 60611 (Streeterville / Gold Coast) is
-// the demo borrower anchor, matching B-48291 in tests/fixtures/mock_population.
-// Slice 9 replaced the Atlanta ZIP set (30305/30309/30324/30339/30308/30318)
-// with Cook County ZIPs so the map drill terminates on the real demo borrower.
+// the sample-borrower anchor, matching B-48291 in
+// tests/fixtures/mock_population. Slice 9 replaced the Atlanta ZIP set
+// (30305/30309/30324/30339/30308/30318) with Cook County ZIPs so the map
+// drill terminates on the real sample borrower.
 const CHI_ZIPS: DrillRegion[] = [
   { id: '60611', name: '60611', d: 'M30,30 L110,30 L110,100 L30,100 Z',   lvl: 4, count: 94, avgScore: 94, borrowerId: 'B-48291' },
   { id: '60647', name: '60647', d: 'M110,30 L200,30 L200,100 L110,100 Z', lvl: 3, count: 72, avgScore: 82, borrowerId: 'B-48294' },
@@ -210,7 +211,7 @@ interface Selected {
 }
 
 // Real-county feature (post-topojson decode). Coordinates are planar Albers
-// pixel space because us-counties-demo.json was trimmed from the "-albers-"
+// pixel space because us-counties.json was trimmed from the "-albers-"
 // variant of us-atlas — so we can build SVG paths directly without d3-geo.
 interface CountyFeature {
   id: string; // 5-digit FIPS, e.g. "17031" (Cook)
@@ -316,7 +317,7 @@ export function MapPlaceholder({ height = 420, segmentFilter }: MapPlaceholderPr
   }, []);
 
   // Lazy-load real county polygons when drilled into a supported state.
-  // us-counties-demo.json is a pre-trimmed TopoJSON (~170KB raw / ~57KB
+  // us-counties.json is a pre-trimmed TopoJSON (~170KB raw / ~57KB
   // gzipped) shipped as a static asset in public/. topojson-client decodes it
   // at runtime; both fetch + import happen only on first county drill.
   useEffect(() => {
@@ -329,7 +330,7 @@ export function MapPlaceholder({ height = 420, segmentFilter }: MapPlaceholderPr
       try {
         const [topoClient, topoRes] = await Promise.all([
           import('topojson-client'),
-          fetch('/us-counties-demo.json'),
+          fetch('/us-counties.json'),
         ]);
         if (!topoRes.ok) throw new Error(`topology fetch ${topoRes.status}`);
         const topology = await topoRes.json();
@@ -386,7 +387,7 @@ export function MapPlaceholder({ height = 420, segmentFilter }: MapPlaceholderPr
         }
       } catch {
         // TODO: surface a real error state when we introduce a shared
-        // ErrorBoundary. For the booth demo path the loading skeleton is OK.
+        // ErrorBoundary. Until then the loading skeleton is the fallback.
       }
     })();
     return () => {
@@ -487,7 +488,7 @@ export function MapPlaceholder({ height = 420, segmentFilter }: MapPlaceholderPr
           />
         );
       })}
-      {/* Pulse beacon over Illinois to telegraph the demo drill */}
+      {/* Pulse beacon over Illinois to telegraph the county drill */}
       <IllinoisBeacon />
     </svg>
     );
@@ -577,7 +578,7 @@ export function MapPlaceholder({ height = 420, segmentFilter }: MapPlaceholderPr
           );
         })}
         {/* Pulse beacon over Cook when drilled into IL — telegraphs the
-             "Chicago drill" demo path. */}
+             "Chicago drill" path. */}
         {payload.cookCentroid && (
           <g pointerEvents="none">
             <circle
@@ -817,8 +818,8 @@ export { MapPlaceholder as USChoroplethMap };
  * Pulse beacon rendered over Illinois at the state level. The x/y coords are
  * in @svg-maps/usa units (viewBox "192 9 1028 746"). IL's path bbox centers
  * around x≈833 y≈300 in that projection — roughly Chicago's pixel position
- * on the Albers map, which doubles as the anchor metro hint for the booth
- * demo. Slice 9 swapped this in for the former GeorgiaBeacon.
+ * on the Albers map, which doubles as the anchor metro hint for the
+ * default drill. Slice 9 swapped this in for the former GeorgiaBeacon.
  */
 function IllinoisBeacon() {
   return (

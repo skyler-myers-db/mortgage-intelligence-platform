@@ -2,9 +2,10 @@ bundle:
   name: mortgage-intelligence-platform
 
 # Target workspace defaults to the DEFAULT CLI profile's host. `dev` is the
-# booth-demo target; `prod` is the same workspace with production-mode
-# guardrails. Run `databricks bundle validate -t dev` before any deploy;
-# run `databricks bundle deploy -t dev` to land the app + resources.
+# default development target; `prod` is the same workspace with
+# production-mode guardrails. Run `databricks bundle validate -t dev` before
+# any deploy; run `databricks bundle deploy -t dev` to land the app +
+# resources.
 workspace:
   host: https://dbc-3aa503a9-4fa8.cloud.databricks.com
 
@@ -42,7 +43,7 @@ resources:
       # name on the Databricks side is `mip-app-state`.
       name: mip-app-state
       # CU_1 is the smallest tier and is appropriate for Module 0's
-      # booth-demo write volume (audit + approvals on the order of a
+      # default write volume (audit + approvals on the order of a
       # few rows per minute). Production lift to CU_2 would be a
       # one-line bundle edit.
       capacity: CU_1
@@ -107,7 +108,7 @@ resources:
       name: mip_snapshot_dashboards
       tasks: []
 
-    # Slice 5 real-data migration: apply Lakebase DDL + seed demo
+    # Slice 5 real-data migration: apply Lakebase DDL + seed sample
     # campaigns. Python task invokes jobs/lakebase_migrate.py which
     # opens a psycopg3 connection to the instance created above and
     # runs lakebase/schema.sql then lakebase/seed_campaigns.sql.

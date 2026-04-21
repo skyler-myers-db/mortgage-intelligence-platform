@@ -55,8 +55,9 @@ def test_get_borrower_emits_view_borrower_audit_row() -> None:
     assert e.entity_id == "B-48291"
     # payload captures score components for governance §4 replay.
     assert "opportunity_score" in e.payload_json
-    # subject_clip is the already-redacted clip_id (synthetic ``clip_demo_*``
-    # for the pinned trio, or the 12-char ``clip_ref`` hash for real rows).
+    # subject_clip is the already-redacted clip_id (synthetic
+    # ``clip_demo_*`` for the pinned trio in fixtures, or the 12-char
+    # ``clip_ref`` hash for real rows).
     # Either way, the raw Cotality CLIP never lands here -- the repository
     # boundary enforces that per docs/governance-real-data-review.md §1.
     assert e.subject_clip is not None
@@ -65,7 +66,7 @@ def test_get_borrower_emits_view_borrower_audit_row() -> None:
 def test_list_leads_emits_view_leads_audit_row() -> None:
     store = _clear_store()
 
-    r = client.get("/api/leads?portfolio_id=demo&segment=itm")
+    r = client.get("/api/leads?portfolio_id=p1&segment=itm")
     assert r.status_code == 200
 
     events = store.list(limit=10)
@@ -119,7 +120,7 @@ def test_approve_outreach_writes_approvals_row_and_audit_event() -> None:
         json={
             "borrower_id": "B-48291",
             "offer_code": "refi",
-            "actor": "demo-user",
+            "actor": "anonymous",
         },
     )
     assert r.status_code == 200

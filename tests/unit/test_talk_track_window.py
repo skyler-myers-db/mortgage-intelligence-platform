@@ -1,4 +1,4 @@
-"""Guard the DAIS talk-track runtime window -- Slice 9.
+"""Guard the talk-track runtime window -- Slice 9.
 
 The talk track has a mechanical runtime bound: 6-8 minutes of spoken
 copy inside a 45s open + 30s close envelope. The
@@ -44,7 +44,7 @@ def test_talk_track_file_exists() -> None:
 def test_talk_track_within_window() -> None:
     """Spoken word count must land in the ``[1000, 1500]`` band.
 
-    This is the mechanical guarantee that the booth pitch doesn't drift
+    This is the mechanical guarantee that the spoken pitch doesn't drift
     to 4 minutes (too short) or 11 minutes (too long). Anyone editing
     the talk track MUST keep it inside this window or explicitly widen
     it (and justify the change in the commit message).

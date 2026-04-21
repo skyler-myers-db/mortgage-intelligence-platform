@@ -12,22 +12,22 @@
     "note": "Ceiling: maxed on every axis yields exactly 100, no clip needed."
   },
   {
-    "id": "case_03_demo_b48291_itm_heavy",
+    "id": "case_03_b48291_itm_heavy",
     "inputs": {"economic_incentive": 98, "intent_trigger": 95, "fit": 90, "relationship": 85, "evidence": 92},
     "expected_score": 94,
-    "note": "Rodriguez (B-48291): ITM + equity, 875 bps spread, Refinance + HELOC. Matches hardcoded demo score of 94."
+    "note": "Rodriguez (B-48291): ITM + equity, 875 bps spread, Refinance + HELOC. Matches hardcoded fixture score of 94."
   },
   {
-    "id": "case_04_demo_b48294_heloc_heavy",
+    "id": "case_04_b48294_heloc_heavy",
     "inputs": {"economic_incentive": 85, "intent_trigger": 92, "fit": 85, "relationship": 80, "evidence": 85},
     "expected_score": 87,
-    "note": "Park (B-48294): permit + equity, 525 bps spread, HELOC. Computes 86.60, bankers-rounds to 87. Matches demo."
+    "note": "Park (B-48294): permit + equity, 525 bps spread, HELOC. Computes 86.60, bankers-rounds to 87. Matches fixture."
   },
   {
-    "id": "case_05_demo_b48295_listed_rounding",
+    "id": "case_05_b48295_listed_rounding",
     "inputs": {"economic_incentive": 70, "intent_trigger": 95, "fit": 80, "relationship": 85, "evidence": 80},
     "expected_score": 82,
-    "note": "Thompson (B-48295): listed + retention, 250 bps, Purchase Mortgage. Computes 81.50; banker's rounding (half-to-even) yields 82. Matches demo AND pins the rounding rule."
+    "note": "Thompson (B-48295): listed + retention, 250 bps, Purchase Mortgage. Computes 81.50; banker's rounding (half-to-even) yields 82. Matches fixture AND pins the rounding rule."
   },
   {
     "id": "case_06_banker_round_half_to_even_down",

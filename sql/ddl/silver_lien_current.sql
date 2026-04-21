@@ -5,7 +5,7 @@
 --            one row per CLIP carrying the current-state lien stack, rates,
 --            AVM, equity, LTV, and servicer. Every gold lead-scoring join
 --            starts here. 1:1 with `entrada_eval_voluntary_lien_status_
---            marketing_v2` on the CLIP key, filtered to the 6-state demo
+--            marketing_v2` on the CLIP key, filtered to the 6-state share
 --            footprint.
 --
 -- Data contract reference: docs/data-contract-module0.md §2.1.
@@ -16,7 +16,7 @@
 -- Geography filter (non-negotiable, CLAUDE.md + data-contract-module0 §2):
 --            WHERE situs_state IN ('IL','CA','FL','TX','WA','CO')
 --            -- Applied in sql/transformations/silver_lien_current.sql.
---            Single-metro demos are explicitly forbidden.
+--            Single-metro footprints are explicitly forbidden.
 --
 -- PII posture (NON-NEGOTIABLE, governance-real-data-review §1):
 --            - `owner_1_full_name`       : NEVER landed in silver. The gold

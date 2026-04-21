@@ -8,7 +8,7 @@ Declares the five silver tables lifted from `cotality_mortgage_data.corelogic`:
     * silver.owner_transfer_events    (event-grain from owner_transfer_domain_v1)
     * silver.owner_property_bridge    (Owner-Link rollup from silver.property_master + lien_current)
 
-All tables are filtered to the 6-state demo footprint
+All tables are filtered to the 6-state share footprint
 (IL / CA / FL / TX / WA / CO) per CLAUDE.md + docs/data-contract-module0.md §2.
 Raw owner names and street addresses are NEVER projected into silver
 (governance-real-data-review §1); the only owner-identity column that lands
@@ -59,7 +59,7 @@ except ImportError:  # pragma: no cover -- local parse-only
 # Constants
 # ---------------------------------------------------------------------------
 
-# The 6-state demo footprint. Hardcoded here -- if we ever need to broaden or
+# The 6-state share footprint. Hardcoded here -- if we ever need to broaden or
 # narrow the footprint, update docs/data-contract-module0.md §2 first, then
 # this tuple, then re-run the slice-2 contract test.
 SIX_STATE_FOOTPRINT: tuple[str, ...] = ("IL", "CA", "FL", "TX", "WA", "CO")

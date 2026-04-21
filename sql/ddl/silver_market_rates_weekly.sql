@@ -25,7 +25,7 @@
 --                             ingest time; `=TRUE` on exactly one row per
 --                             series_id. Metric views MUST join on this
 --                             predicate to keep `fn_rate_spread`
---                             deterministic within a demo session.
+--                             deterministic within a session.
 --            source           'fred' for live FRED fetches; 'seed' for the
 --                             committed bootstrap CSV at
 --                             data/seeds/fred_mortgage30us_seed.csv. Lets
@@ -45,8 +45,8 @@
 -- PK:        Logical PK is (series_id, observation_week). Unity Catalog
 --            supports informational primary keys; we declare them via
 --            ALTER TABLE after the CREATE to remain idempotent.
---            `fn_rate_spread` joining via `is_latest = TRUE` is the demo
---            path; the PK exists for Genie/documentation readability.
+--            `fn_rate_spread` joins via `is_latest = TRUE` at runtime;
+--            the PK exists for Genie/documentation readability.
 --
 -- Idempotency: CREATE TABLE IF NOT EXISTS. ALTER TABLE ... ADD CONSTRAINT
 --            IF NOT EXISTS. Safe to re-run on every deploy.

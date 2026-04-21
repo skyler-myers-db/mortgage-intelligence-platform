@@ -2,16 +2,16 @@ import { test, expect, type ConsoleMessage } from '@playwright/test';
 import { expectKpiValue } from './helpers';
 
 /**
- * Module 0 — DAIS golden path end-to-end spec.
+ * Module 0 — golden path end-to-end spec.
  *
- * Pins the booth narrative: portfolio → segment → lead → borrower → approve
- * → audit, plus floating Genie and theme toggle. Resilient selectors
+ * Pins the product narrative: portfolio → segment → lead → borrower →
+ * approve → audit, plus floating Genie and theme toggle. Resilient selectors
  * (getByRole / getByText / aria labels). Viewport is 1440x900 via
  * playwright.config.ts. Direct-fetch against /api/audit/events verifies the
  * human-approval round-trip actually wrote to the backend.
  */
 
-test.describe('Module 0 — DAIS golden path', () => {
+test.describe('Module 0 — golden path', () => {
   const consoleErrors: string[] = [];
 
   test.beforeEach(async ({ page }) => {
@@ -38,9 +38,9 @@ test.describe('Module 0 — DAIS golden path', () => {
     await expectKpiValue(page, 'Cost per contact (est.)', '$2.18');
     await expectKpiValue(page, 'Projected contact → app', /9\.7/);
 
-    // Slice 9: assert Illinois since it's the anchor metro for the demo drill
-    // (Chicago/Cook County). @svg-maps/usa ships aria-labels for every state;
-    // picking IL aligns the test with the booth narrative.
+    // Slice 9: assert Illinois since it's the anchor metro for the county
+    // drill (Chicago/Cook County). @svg-maps/usa ships aria-labels for every
+    // state; picking IL aligns the test with the product narrative.
     await expect(page.locator('[aria-label="Illinois"]').first()).toBeVisible({ timeout: 5_000 });
     await expect(page.locator('.surface', { hasText: /agent|activity/i }).first()).toBeVisible();
 

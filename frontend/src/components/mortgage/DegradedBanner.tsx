@@ -8,8 +8,8 @@ import { Icon } from '../Icon';
  * (warehouse or lakebase down, or a circuit breaker open). It is the
  * ONLY signal the UI is allowed to show when the real-data path
  * fails; we never silently fall back to mock data. The copy reads as
- * "backend is warming up" so a demo audience sees a calibrated,
- * enterprise-grade message rather than a stack trace.
+ * "backend is warming up" so users see a calibrated, enterprise-grade
+ * message rather than a stack trace.
  *
  * Behavior:
  *  - Polls `/api/health` every `pollIntervalMs` (default 8s in the

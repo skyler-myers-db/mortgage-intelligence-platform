@@ -108,7 +108,7 @@ class Settings(BaseSettings):
 
     # Default actor email used when ``X-Forwarded-Email`` is absent
     # (local dev / test). The audit writer logs a warning every time
-    # the fallback kicks in so the booth operator sees it in the logs.
+    # the fallback kicks in so the operator sees it in the logs.
     default_actor: str = "skyler@entrada.ai"
 
     # Slice-6 TTL cache: short-window memoization on aggregate KPIs that

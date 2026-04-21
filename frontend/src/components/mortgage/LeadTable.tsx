@@ -6,7 +6,7 @@ import { Chip, Button, EvidenceChip } from '../Primitives';
 import { ScoreBadge } from './ScoreBadge';
 import { ConfidenceMeter } from './ConfidenceMeter';
 import { useApp } from '../AppContext';
-import { mockSegments, DRAWER_SOURCES } from '../../mocks/demoData';
+import { mockSegments, DRAWER_SOURCES } from '../../mocks/fixtureData';
 
 /**
  * LeadTable — prototype `.surface` + `.tbl` BEM. Sticky thead, hover, row

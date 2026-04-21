@@ -4,7 +4,7 @@ import { Icon, type IconName } from '../Icon';
 /**
  * Secondary route nav — chip strip matching the prototype's `.filter` /
  * `.layout-tabs` styling. The prototype is a single screen; our app splits
- * Module 0 across eight routes for the linear demo flow (portfolio → segments →
+ * Module 0 across eight routes for the linear user flow (portfolio → segments →
  * leads → borrower → offer → …). This sub-nav is the only deviation from the
  * prototype's composition, and uses prototype-native chip styling so it still
  * reads as part of the same design system.

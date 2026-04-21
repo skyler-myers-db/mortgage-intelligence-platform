@@ -110,7 +110,7 @@ def test_borrower_evidence_has_only_schema_keys() -> None:
 
 
 def test_leads_list_has_only_schema_keys() -> None:
-    resp = client.get("/api/leads?portfolio_id=demo")
+    resp = client.get("/api/leads?portfolio_id=p1")
     assert resp.status_code == 200
     body = resp.json()
     _assert_no_forbidden_keys(body, route="/api/leads")
@@ -127,7 +127,7 @@ def test_leads_list_has_only_schema_keys() -> None:
 
 
 def test_segments_list_has_only_schema_keys() -> None:
-    resp = client.get("/api/segments?portfolio_id=demo")
+    resp = client.get("/api/segments?portfolio_id=p1")
     assert resp.status_code == 200
     body = resp.json()
     _assert_no_forbidden_keys(body, route="/api/segments")

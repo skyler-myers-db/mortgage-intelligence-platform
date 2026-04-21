@@ -18,9 +18,9 @@ WITH golden (id, economic_incentive, intent_trigger, fit, relationship, evidence
   VALUES
     ('case_01_all_zeros',                           0,   0,   0,   0,   0,   0),
     ('case_02_all_hundreds',                      100, 100, 100, 100, 100, 100),
-    ('case_03_demo_b48291_itm_heavy',              98,  95,  90,  85,  92,  94),
-    ('case_04_demo_b48294_heloc_heavy',            85,  92,  85,  80,  85,  87),
-    ('case_05_demo_b48295_listed_rounding',        70,  95,  80,  85,  80,  82),
+    ('case_03_b48291_itm_heavy',              98,  95,  90,  85,  92,  94),
+    ('case_04_b48294_heloc_heavy',            85,  92,  85,  80,  85,  87),
+    ('case_05_b48295_listed_rounding',        70,  95,  80,  85,  80,  82),
     ('case_06_banker_round_half_to_even_down',     49,  50,  50,  50,  50,  50),
     ('case_07_banker_round_half_to_even_pure_half',50,  50,  60,  50,  50,  52),
     ('case_08_clipping_guard_high',               100, 100, 100, 100, 100, 100),

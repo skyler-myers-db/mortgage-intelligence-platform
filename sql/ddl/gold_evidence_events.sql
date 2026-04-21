@@ -32,7 +32,7 @@
 --            NEVER emitted on the real-data path (data-contract §9 + §3.4).
 --            Cotality Permits + MLS Listings are not yet licensed; mock-mode
 --            ev-004 (permit) and ev-008 (listing) remain the only such
---            evidence rendered in the booth.
+--            evidence rendered to the UI.
 --
 -- `confidence` sourcing (per data-contract §3.4):
 --   - AVM-backed signals (equity, equity_delta): upstream confidence_score_mktg

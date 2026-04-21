@@ -21,7 +21,7 @@ def _preflight_credentials() -> None:
 
     Running this at startup (not on first request) means an operator
     sees the misconfiguration in the container log within seconds,
-    rather than as a 500 at demo time.
+    rather than as a 500 at request time.
     """
     try:
         settings.require_databricks_creds()

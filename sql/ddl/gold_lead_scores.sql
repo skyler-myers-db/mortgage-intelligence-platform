@@ -10,8 +10,8 @@
 -- Grain:     One row per CLIP.
 -- PK:        clip.
 -- Clustering: Liquid cluster on (clip). Z-order on opportunity_score DESC is
---            applied after first demo refresh (out-of-band OPTIMIZE ZORDER BY
---            -- not DDL) so that the "top N" Lead Queue scan is cheap.
+--            applied after the first refresh (out-of-band OPTIMIZE ZORDER
+--            BY -- not DDL) so that the "top N" Lead Queue scan is cheap.
 --
 -- Data contract reference: docs/data-contract-module0.md §3.3.
 -- Slice:     module0-real-data-slice3 (gold layer build).
@@ -24,8 +24,8 @@
 --                        listed_for_sale and has_permit are BLOCKED -> 0,
 --                        leaving intent driven purely by real events.
 --   fit                : owner-occupancy + loan_type + size fit (0..100).
---   relationship       : is_current_customer + historical count at demo
---                        lender.
+--   relationship       : is_current_customer + historical count at the
+--                        tenant lender.
 --   evidence           : LEAST(100, 20 * count_of_evidence_rows_for_clip).
 --
 -- opportunity_score = mip.gold.fn_lead_score(economic_incentive,
@@ -35,10 +35,10 @@
 --                                              min_spread, min_equity).
 --
 -- Thresholds: Five admin-tunable INTs come from mip_app.thresholds (Lakebase)
--- at refresh time. The demo posture is: thresholds are baked into the refresh
--- and the columns `min_*_applied` record what was used so WhyPanel can
--- reproduce the decision. The UDFs themselves remain threshold-parameterized
--- (frozen signature), so a future feature flag can recompute per-query.
+-- at refresh time. Thresholds are baked into the refresh and the columns
+-- `min_*_applied` record what was used so WhyPanel can reproduce the
+-- decision. The UDFs themselves remain threshold-parameterized (frozen
+-- signature), so a future feature flag can recompute per-query.
 --
 -- Threshold defaults (per docs/data-contract §5 + frozen UDF headers):
 --   min_spread_bps       = 75
@@ -65,7 +65,7 @@ CREATE TABLE IF NOT EXISTS mip.gold.lead_scores (
   economic_incentive       INT       NOT NULL COMMENT '0..100 sub-score on rate_spread_bps + equity_pct. Weight 0.35 in fn_lead_score.',
   intent_trigger           INT       NOT NULL COMMENT '0..100 sub-score on recent mortgage events + listed/permit (BLOCKED->0) + competitor_lien + recent_avm_uplift. Weight 0.30.',
   fit                      INT       NOT NULL COMMENT '0..100 sub-score on owner-occupancy + loan_type + property size. Weight 0.15.',
-  relationship             INT       NOT NULL COMMENT '0..100 sub-score on customer + historical mortgage count at demo lender. Weight 0.10.',
+  relationship             INT       NOT NULL COMMENT '0..100 sub-score on customer + historical mortgage count at tenant lender. Weight 0.10.',
   evidence                 INT       NOT NULL COMMENT '0..100: LEAST(100, 20 * count_of_evidence_rows_for_clip). Weight 0.10.',
   opportunity_score        INT       NOT NULL COMMENT 'mip.gold.fn_lead_score(...) output. 0..100. Frozen UDF signature; parity test locks it to Python.',
   confidence               INT       NOT NULL COMMENT 'ROUND(mean(5 sub-scores)). Mirrors mock_data._build_borrower for screen parity.',

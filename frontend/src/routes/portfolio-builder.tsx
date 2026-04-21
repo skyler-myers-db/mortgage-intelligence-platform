@@ -8,7 +8,7 @@ import { ApprovalBanner } from '../components/mortgage/ApprovalBanner';
 import { Chip, Button } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { FilterSelect } from '../components/ui/FilterSelect';
-import { DRAWER_SOURCES } from '../mocks/demoData';
+import { DRAWER_SOURCES } from '../mocks/fixtureData';
 
 /**
  * Portfolio Builder — prototype `.surface` + `.filter-row` composition.
@@ -20,7 +20,7 @@ import { DRAWER_SOURCES } from '../mocks/demoData';
 // Slice 9: GEO options refreshed to the 6-state Delta Share footprint
 // (IL / CA / FL / TX / WA / CO) so the filter reads like a real book of
 // business, not a single-metro slice. Chicago MSA is the default since
-// IL is the largest state in the footprint and our demo anchor.
+// IL is the largest state in the footprint and our default anchor.
 const FILTER_GROUPS: Array<{ label: string; key: string; options: string[] }> = [
   { label: 'GEO',          key: 'geo',      options: ['Chicago MSA', 'All 6 states', 'Texas', 'CA + FL + TX', 'IL + CA + WA'] },
   { label: 'OCCUPANCY',    key: 'occ',      options: ['Owner-occupied', 'Non-owner-occupied', 'All'] },

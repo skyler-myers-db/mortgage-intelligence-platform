@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mockSegments } from '../../mocks/demoData';
+import { mockSegments } from '../../mocks/fixtureData';
 
 describe('Segment data', () => {
   it('contains in-the-money segment', () => {

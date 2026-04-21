@@ -160,7 +160,7 @@ def test_split_sql_statements_on_real_ddl_files() -> None:
     The splitter is a naive comment-strip + semicolon-split — it does NOT
     understand string literals, so a COMMENT column that contains a ';'
     inside its quoted text will get broken across two pseudo-statements.
-    This is fine for the booth-demo path because the DDL runs via
+    This is fine for the runtime path because the DDL runs via
     Databricks `sql_task` (native parser), not through this splitter.
     `run_init` using this splitter is a dev-only escape hatch.
 

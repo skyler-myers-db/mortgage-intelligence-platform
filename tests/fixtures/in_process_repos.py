@@ -35,7 +35,7 @@ class InProcessMockPortfolioRepository:
 
     def create(self, payload: PortfolioCreateRequest) -> PortfolioCreateResponse:
         return PortfolioCreateResponse(
-            portfolio_id="demo-portfolio",
+            portfolio_id="module0-portfolio",
             name=payload.name,
             marketable_population=mock_data.PORTFOLIO.marketable_population,
         )

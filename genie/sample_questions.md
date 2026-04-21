@@ -1,6 +1,6 @@
 # Sample Questions — Mortgage Lead Intelligence Genie Space
 
-These questions anchor the Module 0 DAIS talk track and are wired into the
+These questions anchor the Module 0 talk track and are wired into the
 Genie Space's "suggested questions" via `tools/databricks/provision_genie_space.py`.
 Each one is a realistic ask from a Head of Growth, VP Mortgage Lending,
 Marketing Leader, or Sales Manager, and is answerable from the trusted
@@ -17,7 +17,7 @@ sees the real geography surface, not a single-metro filter.
    Source: `mip.gold.lead_scores`, `mip.semantics.lead_generation_metric_view`.
 
 2. **How many borrowers in Chicago are in the money right now, and which ZIPs concentrate them?**
-   Intent: demo-metro drill — Chicago is the recommended anchor per `docs/data-contract-module0.md §10`
+   Intent: metro drill — Chicago is the recommended anchor per `docs/data-contract-module0.md §10`
    (1.86M IL properties, highest avg 1st-position rate at 4.75%).
    Source: `mip.gold.lead_scores`, `mip.gold.borrower_360`.
 

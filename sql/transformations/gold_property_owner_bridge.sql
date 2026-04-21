@@ -9,9 +9,9 @@
 --            Genie questions, not on the gold hot path).
 --
 -- Grain:     One row per owner_link_id.
--- Pattern:   CREATE OR REPLACE TABLE ... AS SELECT. Full rebuild is the demo
---            posture (gold is precomputed). Clustering is declared in the
---            DDL file; the CTAS carries it through.
+-- Pattern:   CREATE OR REPLACE TABLE ... AS SELECT. Full rebuild is the
+--            default refresh posture (gold is precomputed). Clustering is
+--            declared in the DDL file; the CTAS carries it through.
 -- Slice:     module0-real-data-slice3.
 -- Data contract: docs/data-contract-module0.md §3.1.
 -- =============================================================================

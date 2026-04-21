@@ -31,7 +31,7 @@ def _warm_warehouse() -> None:
 
     Slice-6 resilience hook: the serverless warehouse auto-stops after
     15 minutes. The first user-facing query after a cold start eats
-    20-60s, which ruins booth pacing. Triggering the wake-up in
+    20-60s, which ruins request pacing. Triggering the wake-up in
     lifespan means the warehouse is already running by the time the
     first React query fires.
 

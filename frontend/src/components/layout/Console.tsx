@@ -3,7 +3,7 @@ import { Icon } from '../Icon';
 
 /**
  * Console — the right-side tweaks panel from the prototype. Theme, accent,
- * density, evidence / confidence toggles, demo-lender input. Opens from the
+ * density, evidence / confidence toggles, tenant-lender input. Opens from the
  * topbar tweak icon. Uses `.tweaks` BEM from the prototype so a single class
  * controls positioning + animation.
  */

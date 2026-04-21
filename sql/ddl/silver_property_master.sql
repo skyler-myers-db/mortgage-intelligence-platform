@@ -16,7 +16,7 @@
 -- Geography filter (non-negotiable, CLAUDE.md + data-contract-module0 §2):
 --            WHERE situs_state IN ('IL','CA','FL','TX','WA','CO')
 --            -- Applied in sql/transformations/silver_property_master.sql.
---            Single-metro demos are explicitly forbidden.
+--            Single-metro footprints are explicitly forbidden.
 --
 -- PII posture (NON-NEGOTIABLE, governance-real-data-review §1):
 --            - `owner_1_full_name`            : HASHED at ingest to

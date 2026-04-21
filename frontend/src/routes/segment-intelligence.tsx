@@ -36,7 +36,7 @@ const LOCATION_TO_STATES: Record<string, string[]> = {
 
 // Equity thresholds expressed as a minimum equity-to-AVM ratio. We don't
 // have AVM on LeadSummary (it's on Borrower360), so the predicate uses
-// equity_estimate as a lower bound proxy. Good enough for the demo filter.
+// equity_estimate as a lower bound proxy. Good enough for the UI filter.
 const EQUITY_FLOOR_USD: Record<string, number> = {
   Any: 0,
   'Equity ≥ 15%': 50_000,

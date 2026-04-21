@@ -1,20 +1,21 @@
 -- =============================================================================
 -- gold_lead_population.sql
 -- -----------------------------------------------------------------------------
--- Purpose:   DDL for `mip.gold.lead_population` -- the ranked top-N cut
---            of gold.borrower_360 that actually populates the Lead Queue UI.
---            Borrowers with opportunity_score < 50 stay in borrower_360 but
---            do not surface here. Carries two ranking columns so the UI can
---            split "national top 100" vs. "top in my state."
+-- Purpose:   DDL for `mip.gold.lead_population` -- the ranked, quality-
+--            filtered cut of gold.borrower_360 that populates the Lead
+--            Queue UI. Borrowers with opportunity_score < 50 stay in
+--            borrower_360 but do not surface here. Carries two ranking
+--            columns so the UI can split "national top 100" vs. "top in
+--            my state."
 --
--- Grain:     One row per CLIP (filtered by opportunity_score >= 50 and the
---            demo-posture top-N cap, see transformation file). No new PII
---            surfaces beyond what borrower_360 already emits.
+-- Grain:     One row per CLIP (filtered by opportunity_score >= 50; see
+--            the transformation file for ranking). No new PII surfaces
+--            beyond what borrower_360 already emits.
 -- PK:        clip.
 -- Clustering: Liquid cluster on (opportunity_score). The UI always orders
 --            by rank_overall or rank_within_state, both monotone with
---            opportunity_score DESC, so cluster-by-score lets the top-N
---            scan skip aggressively.
+--            opportunity_score DESC, so cluster-by-score lets the
+--            top-of-queue scan skip aggressively.
 --
 -- Data contract reference: docs/data-contract-module0.md §3.5.
 -- Slice:     module0-real-data-slice3 (gold layer build).
@@ -23,17 +24,17 @@
 --            gold.borrower_360 by clip for the super-set columns).
 --
 -- Why a separate table from borrower_360 (vs. a view)? Two reasons:
---   1. The demo uses top-N precomputed rankings so pagination is O(1)
---      index-skip rather than a ROW_NUMBER() OVER computation per request.
+--   1. Precomputed rankings make pagination an O(1) index-skip rather
+--      than a ROW_NUMBER() OVER computation per request.
 --   2. rank_overall + rank_within_state carry a refresh-time snapshot;
 --      inserting a borrower mid-session shouldn't shuffle ranks visible
---      to the booth presenter.
+--      to the operator.
 --
 -- Columns include the exact superset of LeadSummary (to avoid a join-back
 -- on the hot path) PLUS rank_overall + rank_within_state + population_
 -- version. The columns that are also in borrower_360 are redundantly
 -- materialized here on purpose -- single-table reads are cheap and
--- deterministic at booth time.
+-- deterministic at request time.
 --
 -- Idempotency: CREATE TABLE IF NOT EXISTS; populated via CTAS
 --            (CREATE OR REPLACE TABLE ... AS SELECT) in the transformation
@@ -63,7 +64,7 @@ CREATE TABLE IF NOT EXISTS mip.gold.lead_population (
 )
 USING DELTA
 CLUSTER BY (opportunity_score)
-COMMENT 'Ranked top-N cut of gold.borrower_360 (opportunity_score >= 50). Backs the /leads Lead Queue; pagination is O(1) over rank_overall. See docs/data-contract-module0.md §3.5.'
+COMMENT 'Ranked quality-filtered cut of gold.borrower_360 (opportunity_score >= 50). Backs the /leads Lead Queue; pagination is O(1) over rank_overall. See docs/data-contract-module0.md §3.5.'
 TBLPROPERTIES (
   'delta.enableChangeDataFeed' = 'false',
   'delta.autoOptimize.optimizeWrite' = 'true',

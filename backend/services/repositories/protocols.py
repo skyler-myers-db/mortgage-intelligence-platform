@@ -128,10 +128,9 @@ class OutreachRepository(Protocol):
 class GenieAnswerRepository(Protocol):
     """Deterministic Genie answer lookup.
 
-    Slice-4 backing: stays deterministic at the booth (answer catalog
-    still pulls from a population snapshot). In a live-Genie path, the
-    implementation wraps ``backend.services.genie_client`` with a
-    catalog-fallback.
+    Slice-4 backing: stays deterministic (answer catalog pulls from a
+    population snapshot). In a live-Genie path, the implementation wraps
+    ``backend.services.genie_client`` with a catalog-fallback.
     """
 
     def respond(self, question: str) -> object:

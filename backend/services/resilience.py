@@ -1,7 +1,7 @@
 """Resilience primitives for Module 0 Slice 6.
 
-The app runs on live Unity Catalog + Lakebase in every environment,
-including the DAIS booth. Real-world flakiness (warehouse cold-start,
+The app runs on live Unity Catalog + Lakebase in every environment.
+Real-world flakiness (warehouse cold-start,
 transient 5xx from the Statement Execution API, brief Lakebase TCP
 hiccups) must be masked by retry / circuit-break / short-TTL cache, NOT
 by silent mock fallback. When the breaker opens, the router returns
@@ -263,12 +263,13 @@ def with_retry(
 
 
 class TTLCache:
-    """Simple per-key TTL cache. No size bound (booth-scale traffic).
+    """Simple per-key TTL cache. No size bound -- the app's read-mostly
+    traffic shape keeps key cardinality small.
 
     Each entry stores (value, expiry_monotonic). A missed or expired
     lookup returns None; the caller must then compute + ``set`` the
     fresh value. We log at DEBUG on expiry so cache behaviour is
-    inspectable during the booth.
+    inspectable in operator logs.
     """
 
     def __init__(self, now: Callable[[], float] = time.monotonic) -> None:

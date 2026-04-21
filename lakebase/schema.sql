@@ -44,7 +44,7 @@ CREATE INDEX IF NOT EXISTS idx_campaigns_owner
 
 -- Approvals -----------------------------------------------------------
 -- One row per human-in-the-loop decision on an outreach draft.
--- `borrower_id` is the synthetic `B-#####` demo id today; production
+-- `borrower_id` is the synthetic `B-#####` stable id today; production
 -- can swap to `clip_ref`. `action` is the approve / reject / hold verb.
 CREATE TABLE IF NOT EXISTS mip_app.approvals (
     approval_id   UUID PRIMARY KEY DEFAULT gen_random_uuid(),

@@ -9,10 +9,10 @@ No silent fallback: when Lakebase is unreachable, ``LakebaseAuditStore``
 methods raise ``LakebaseError`` (from ``backend.services.lakebase``).
 The audit router catches that and surfaces HTTP 503; Slice 6 adds the
 retry / circuit-breaker layer so transient network hiccups don't panic
-the demo.
+the UI.
 
 Actor attribution: governance §4 requires the real authenticated user,
-not ``"demo-user"``. Databricks Apps forwards the workspace user in
+not ``"service-user"``. Databricks Apps forwards the workspace user in
 ``X-Forwarded-Email``; ``resolve_actor(request)`` extracts it and falls
 back to ``settings.default_actor`` with a logged warning so operators
 can spot dev/test paths in production logs. The router chain is:
@@ -137,7 +137,7 @@ def resolve_actor(request: Request | None) -> str:
     Logs a WARNING when the header is absent so operators can spot
     dev/test traffic in production logs. The fallback value is
     ``settings.default_actor`` so audit rows are never written with
-    ``"demo-user"`` or NULL in the authenticated actor column.
+    a placeholder string or NULL in the authenticated actor column.
     """
     if request is not None:
         email = request.headers.get("X-Forwarded-Email")

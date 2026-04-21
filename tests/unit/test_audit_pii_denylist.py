@@ -62,7 +62,7 @@ def test_assert_no_pii_permits_allowlist_adjacent_keys() -> None:
             "owner_link_id": "ol-123",
             "display_lender": "Summit Mortgage",
             "action": "view_borrower_360",
-            "clip": "demo-clip",
+            "clip": "clip-ref-abc",
             "score": 92,
         }
     )
@@ -103,7 +103,7 @@ def test_in_memory_store_accepts_clean_payload() -> None:
         action="view_borrower_360",
         entity_type="borrower",
         entity_id="B-1",
-        payload_json={"score": 92, "clip": "demo-clip"},
+        payload_json={"score": 92, "clip": "clip-ref-abc"},
     )
     assert event.entity_id == "B-1"
 

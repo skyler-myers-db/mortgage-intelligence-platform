@@ -111,8 +111,8 @@ class GenieClient:
 
     # Conservative poll schedule: starts fast (so a warm Genie returns
     # snappily) and grows slowly (so a cold-start Genie doesn't get
-    # hammered). Values tuned against the Slice-7 scope -- a single
-    # booth demo question; not a bulk workload.
+    # hammered). Values tuned against the Slice-7 scope -- single
+    # interactive questions; not a bulk workload.
     _POLL_INITIAL_S: float = 0.5
     _POLL_MAX_S: float = 2.0
     _POLL_BACKOFF: float = 1.35

@@ -108,7 +108,7 @@ def approve_outreach(
     # authenticated workspace user from X-Forwarded-Email; fall back
     # to the caller-supplied ``actor`` only when we're running in a
     # test/dev path without the header.
-    actor = payload.actor if payload.actor != "demo-user" else resolve_actor(request)
+    actor = payload.actor if payload.actor != "anonymous" else resolve_actor(request)
     approval_id = f"apr-{uuid4().hex[:12]}"
     # Governance §4: approvals live in both the ``approvals`` table
     # (durable decision record, queryable by campaign) AND the

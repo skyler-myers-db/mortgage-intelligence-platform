@@ -10,21 +10,21 @@ fixtures below via FastAPI ``dependency_overrides`` (see
 ``tests/conftest.py``).
 
 ALL names, addresses, CLIP/Owner-Link ids, and rates in this module are
-synthetic. No real PII exists here -- this is the booth-demo path, not a
-fallback. The three canonical demo borrowers (B-48291, B-48294, B-48295)
-are pinned by golden fixtures in ``tests/fixtures/`` (lead_score,
-rate_spread, in_the_money, next_best_offer); their inputs MUST NOT change
-without updating those fixtures. New borrowers are built from a compact
-spec table and scored through the same primitives that UC functions
-mirror, so every ``opportunity_score``, ``rate_spread_bps``,
-``equity_pct``, and ``recommended_offer`` is derived — never hardcoded.
+synthetic. No real PII exists here. The three canonical sample
+borrowers (B-48291, B-48294, B-48295) are pinned by golden fixtures in
+``tests/fixtures/`` (lead_score, rate_spread, in_the_money,
+next_best_offer); their inputs MUST NOT change without updating those
+fixtures. New borrowers are built from a compact spec table and scored
+through the same primitives that UC functions mirror, so every
+``opportunity_score``, ``rate_spread_bps``, ``equity_pct``, and
+``recommended_offer`` is derived — never hardcoded.
 
 The population is designed so every branch of ``fn_next_best_offer``
 fires on at least two borrowers, geography spans the 6-state Delta
 Share footprint (IL/CA/FL/TX/WA/CO per docs/data-sources-gap-analysis
 §1) with Chicago as the anchor metro per data-contract §10, and
 ``opportunity_score`` spreads from ~45 to ~96 — the ranked-borrower
-table and segment counts look like a real book of business at DAIS.
+table and segment counts look like a real book of business.
 ``SEGMENTS`` aggregate counts (e.g. 12,840 ITM) remain population-level
 estimates of Summit Mortgage's marketable book — the 25 rows here are
 the ranked sample the orchestrator surfaces first.
@@ -79,7 +79,7 @@ def _pick_evidence(ids: list[str]) -> list[EvidenceEvent]:
 # ---------------------------------------------------------------------------
 # Segment aggregates. Counts are Summit Mortgage book-level estimates, NOT
 # the 25-row sample — the ranked table on /leads is a triaged slice of
-# these populations. Keep aligned with frontend/src/mocks/demoData.ts.
+# these populations. Keep aligned with frontend/src/mocks/fixtureData.ts.
 # ---------------------------------------------------------------------------
 SEGMENTS = [
     SegmentSummary(code="itm", name="In the Money", count=12840, delta="+18%", avg_score=82, description="Lien rate >= 75 bps above par and equity >= 15%.", color="#5CE1E6"),
@@ -117,7 +117,7 @@ _BORROWER_SPECS: list[dict] = [
     # --- Pinned canonical trio (DO NOT modify numeric inputs; golden fixtures pin them) ---
     # Geography re-anchored from Atlanta/GA to Chicago/IL in Slice 8 so the synthetic
     # trio lives inside the real Delta Share footprint (IL/CA/FL/TX/WA/CO). Per
-    # docs/data-contract-module0.md §10, Chicago is the recommended demo metro
+    # docs/data-contract-module0.md §10, Chicago is the recommended anchor metro
     # (1.86M properties in-share, highest avg rate at 4.75%, broadest cohort mix).
     # Cook County ZIPs: 60611 (Streeterville / Gold Coast), 60647 (Logan Square),
     # 60613 (Lakeview). IDs, names, rates, AVM, lien, components, evidence,

@@ -6,7 +6,7 @@ name: nightly (live UC)
 #   - SQL<->Python parity drift (tests/integration/test_sql_python_parity.py)
 #   - Genie space regression (tests/integration/test_genie_live.py)
 #   - Lakebase schema/auth drift (tests/integration/test_lakebase_round_trip.py)
-#   - End-to-end live demo path (tests/e2e/real_data.spec.ts)
+#   - End-to-end live product path (tests/e2e/real_data.spec.ts)
 #
 # All jobs require repo secrets (see .github/workflows/README.md). A
 # manual `workflow_dispatch` trigger is wired so an engineer can re-run
@@ -18,8 +18,8 @@ name: nightly (live UC)
 
 on:
   schedule:
-    # 10:00 UTC = 05:00 CT (CDT) / 04:00 CT (CST). DAIS is in Dallas;
-    # early-morning run catches regressions before anyone arrives.
+    # 10:00 UTC = 05:00 CT (CDT) / 04:00 CT (CST). Early-morning run
+    # catches regressions before the workday starts.
     - cron: '0 10 * * *'
   workflow_dispatch:
 

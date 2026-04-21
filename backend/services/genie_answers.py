@@ -12,7 +12,7 @@ What lives here:
 - ``GenieMessageResponse`` -- the wire contract the router returns.
 - A curated in-module catalog keyed by intent, scored against a weighted
   phrase / keyword / regex matcher. This is the hand-tuned corpus that
-  powered the demo before Slice 7.
+  was the primary path before Slice 7.
 - A loader over ``genie/sample_questions.md`` so the canonical space
   questions stay in lockstep between the space config and the
   fallback. Loader results are merged into the in-memory intent map;
@@ -34,15 +34,15 @@ from typing import Any
 from pydantic import BaseModel
 
 # ---------------------------------------------------------------------------
-# Demo-narrative roster (synthetic, pinned). Slice-4 inlined from what was
-# previously ``mock_data.BORROWERS``/``SEGMENTS`` projections. The catalog
-# below consumes these helpers -- no module-global list, so adding or
-# retiring a demo row is a one-line edit here. Slice 7 replaces this with
-# Genie-grounded results against the semantic layer.
+# Canonical-narrative roster (synthetic, pinned). Slice-4 inlined from what
+# was previously ``mock_data.BORROWERS``/``SEGMENTS`` projections. The
+# catalog below consumes these helpers -- no module-global list, so adding
+# or retiring a sample row is a one-line edit here. Slice 7 replaces this
+# with Genie-grounded results against the semantic layer.
 # ---------------------------------------------------------------------------
 
-_DEMO_TOP_BORROWERS: list[dict[str, Any]] = [
-    # Slice 9: demo trio re-anchored to Chicago/IL so the safe-corpus
+_SAFE_CORPUS_TOP_BORROWERS: list[dict[str, Any]] = [
+    # Slice 9: sample trio re-anchored to Chicago/IL so the safe-corpus
     # fallback agrees with tests/fixtures/mock_population.py (the
     # golden-fixture population) and docs/module0-talk-track.md.
     {"borrower_id": "B-48291", "name": "James & Maria Rodriguez", "geo": "Chicago, IL",         "score": 94, "offer": "Refinance + HELOC"},
@@ -57,13 +57,13 @@ _DEMO_TOP_BORROWERS: list[dict[str, Any]] = [
     {"borrower_id": "B-66541", "name": "Steven & Joanne Hayashi", "geo": "Chicago, IL",         "score": 71, "offer": "Retention"},
 ]
 
-_DEMO_AUSTIN_ROWS: list[dict[str, Any]] = [
+_SAFE_CORPUS_AUSTIN_ROWS: list[dict[str, Any]] = [
     {"borrower_id": "B-51872", "name": "Thomas Chen",      "zip": "78704", "spread_bps": 138, "score": 85, "offer": "Refinance + HELOC"},
     {"borrower_id": "B-55328", "name": "Kevin Nakamura",   "zip": "78745", "spread_bps": 162, "score": 72, "offer": "Refinance"},
     {"borrower_id": "B-60284", "name": "Alicia Greenberg", "zip": "78702", "spread_bps":  62, "score": 75, "offer": "Purchase Mortgage"},
 ]
 
-_DEMO_SEGMENT_ROWS: dict[str, dict[str, Any]] = {
+_SAFE_CORPUS_SEGMENT_ROWS: dict[str, dict[str, Any]] = {
     "itm":       {"segment": "In the Money",              "count": 12840, "avg_score": 82, "delta": "+18%"},
     "listed":    {"segment": "Listed for Sale",           "count":  2614, "avg_score": 74, "delta":  "+9%"},
     "permit":    {"segment": "Permit Activity",           "count":  4108, "avg_score": 71, "delta": "+11%"},
@@ -92,21 +92,21 @@ class GenieMessageResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Helpers over the pinned demo roster. Deterministic, no external deps.
+# Helpers over the pinned safe-corpus roster. Deterministic, no external deps.
 # ---------------------------------------------------------------------------
 
 
 def _top_n_rows(n: int) -> list[dict[str, Any]]:
-    ranked = sorted(_DEMO_TOP_BORROWERS, key=lambda r: r["score"], reverse=True)
+    ranked = sorted(_SAFE_CORPUS_TOP_BORROWERS, key=lambda r: r["score"], reverse=True)
     return [dict(r) for r in ranked[:n]]
 
 
 def _austin_rows() -> list[dict[str, Any]]:
-    return [dict(r) for r in _DEMO_AUSTIN_ROWS]
+    return [dict(r) for r in _SAFE_CORPUS_AUSTIN_ROWS]
 
 
 def _segment_row(code: str) -> dict[str, Any]:
-    return dict(_DEMO_SEGMENT_ROWS[code])
+    return dict(_SAFE_CORPUS_SEGMENT_ROWS[code])
 
 
 # ---------------------------------------------------------------------------
@@ -127,7 +127,7 @@ class Intent:
 
 def _answers() -> dict[str, GenieMessageResponse]:
     """Built lazily so tests that touch the catalog get the current
-    demo roster. Returns a dict keyed by intent name.
+    safe-corpus roster. Returns a dict keyed by intent name.
     """
     top10 = _top_n_rows(10)
     austin = _austin_rows()
@@ -145,7 +145,7 @@ def _answers() -> dict[str, GenieMessageResponse]:
     return {
         # --- Existing canonical three (unchanged wording) -----------------
         "in_the_money": GenieMessageResponse(
-            conversation_id="demo-conv", question="",
+            conversation_id="fallback-conv", question="",
             answer=(
                 "Across the 6-state Delta Share footprint (IL / CA / FL / TX / WA / CO), "
                 "12,840 borrowers are currently in the money with an average rate spread of "
@@ -166,7 +166,7 @@ def _answers() -> dict[str, GenieMessageResponse]:
             ],
         ),
         "heloc": GenieMessageResponse(
-            conversation_id="demo-conv", question="",
+            conversation_id="fallback-conv", question="",
             answer=(
                 "4,108 properties show a recent permit trigger paired with HELOC-qualifying equity. "
                 "Average estimated equity is $228K; top ZIPs are 60614 Chicago and 78704 Austin."
@@ -184,7 +184,7 @@ def _answers() -> dict[str, GenieMessageResponse]:
             ],
         ),
         "retention": GenieMessageResponse(
-            conversation_id="demo-conv", question="",
+            conversation_id="fallback-conv", question="",
             answer=(
                 "3,471 current customers show refinance, listing, or competitor-lien signals in the "
                 "last 30 days. Retention risk average score is 88."
@@ -204,7 +204,7 @@ def _answers() -> dict[str, GenieMessageResponse]:
 
         # --- Geography ---------------------------------------------------
         "itm_zips": GenieMessageResponse(
-            conversation_id="demo-conv", question="",
+            conversation_id="fallback-conv", question="",
             answer=(
                 "The top in-the-money ZIPs are 60611 Chicago (~1,420 borrowers), 78704 Austin "
                 "(~1,180), 94110 San Francisco (~960), 98103 Seattle (~720), and 33132 Miami "
@@ -223,7 +223,7 @@ def _answers() -> dict[str, GenieMessageResponse]:
             ],
         ),
         "travis_county": GenieMessageResponse(
-            conversation_id="demo-conv", question="",
+            conversation_id="fallback-conv", question="",
             answer=(
                 "Travis County (Austin metro) holds ~1,620 in-the-money borrowers across 78704, "
                 "78745, and 78702 — about 12.6% of the national ITM pool. Sample top rows include "
@@ -242,7 +242,7 @@ def _answers() -> dict[str, GenieMessageResponse]:
             ],
         ),
         "heloc_by_state": GenieMessageResponse(
-            conversation_id="demo-conv", question="",
+            conversation_id="fallback-conv", question="",
             # Slice 9: per-state table re-scoped to the 6-state Delta Share
             # footprint (IL / CA / FL / TX / WA / CO). California still leads.
             answer=(
@@ -273,7 +273,7 @@ def _answers() -> dict[str, GenieMessageResponse]:
 
         # --- Offer / branch ---------------------------------------------
         "purchase": GenieMessageResponse(
-            conversation_id="demo-conv", question="",
+            conversation_id="fallback-conv", question="",
             answer=(
                 "2,614 borrowers fall into the Listed for Sale segment — purchase-mortgage "
                 "candidates. The top three in the ranked sample are Lisa Thompson (Chicago, "
@@ -298,7 +298,7 @@ def _answers() -> dict[str, GenieMessageResponse]:
             ],
         ),
         "refi_plus_heloc": GenieMessageResponse(
-            conversation_id="demo-conv", question="",
+            conversation_id="fallback-conv", question="",
             answer=(
                 "1,842 borrowers clear both the refi spread floor (>= 75 bps) and the HELOC equity "
                 "cushion (>= 35%) — the highest-revenue cross-sell branch. James & Maria Rodriguez "
@@ -321,7 +321,7 @@ def _answers() -> dict[str, GenieMessageResponse]:
 
         # --- Segment comparisons ----------------------------------------
         "best_converting": GenieMessageResponse(
-            conversation_id="demo-conv", question="",
+            conversation_id="fallback-conv", question="",
             answer=(
                 "Retention Risk converts best at ~14.8% (avg score 88), driven by existing "
                 "relationships. In the Money follows at ~11.2% (avg 82), Home Equity Candidate at "
@@ -346,7 +346,7 @@ def _answers() -> dict[str, GenieMessageResponse]:
             ],
         ),
         "listed_vs_permit": GenieMessageResponse(
-            conversation_id="demo-conv", question="",
+            conversation_id="fallback-conv", question="",
             answer=(
                 "Listed for Sale (2,614 borrowers, avg score 74, +9% QoQ) runs just above Permit "
                 "Activity (4,108 borrowers, avg score 71, +11%). Permit has more volume; Listed "
@@ -370,7 +370,7 @@ def _answers() -> dict[str, GenieMessageResponse]:
 
         # --- Borrower lookups -------------------------------------------
         "top_borrowers": GenieMessageResponse(
-            conversation_id="demo-conv", question="",
+            conversation_id="fallback-conv", question="",
             answer=(
                 "Top 10 highest-scoring borrowers in the ranked sample: "
                 + ", ".join(
@@ -393,7 +393,7 @@ def _answers() -> dict[str, GenieMessageResponse]:
             ],
         ),
         "austin_itm": GenieMessageResponse(
-            conversation_id="demo-conv", question="",
+            conversation_id="fallback-conv", question="",
             answer=(
                 "Three Austin borrowers appear in the ranked sample. "
                 + ", ".join(
@@ -419,7 +419,7 @@ def _answers() -> dict[str, GenieMessageResponse]:
 
         # --- Trend / pipeline -------------------------------------------
         "cost_per_contact": GenieMessageResponse(
-            conversation_id="demo-conv", question="",
+            conversation_id="fallback-conv", question="",
             answer=(
                 "Cost per contact is trending down: $2.71 six months ago, $2.42 a quarter ago, "
                 "$2.18 today — a 19.6% reduction. The driver is tighter segment targeting: "
@@ -438,7 +438,7 @@ def _answers() -> dict[str, GenieMessageResponse]:
             ],
         ),
         "permit_lift": GenieMessageResponse(
-            conversation_id="demo-conv", question="",
+            conversation_id="fallback-conv", question="",
             answer=(
                 "Adding Cotality Permits lifts the Permit Activity segment's avg score from 62 to "
                 "71 (+14%) and surfaces 4,108 HELOC/cash-out candidates that the rate-spread-only "
@@ -459,7 +459,7 @@ def _answers() -> dict[str, GenieMessageResponse]:
 
         # --- Policy / threshold -----------------------------------------
         "heloc_floor_50": GenieMessageResponse(
-            conversation_id="demo-conv", question="",
+            conversation_id="fallback-conv", question="",
             answer=(
                 "Raising the HELOC equity floor from 35% to 50% tightens the Permit Activity "
                 "segment from 4,108 to ~1,640 borrowers (-60%), lifts avg score from 71 to 78, and "
@@ -478,9 +478,9 @@ def _answers() -> dict[str, GenieMessageResponse]:
             ],
         ),
         "approvals_today": GenieMessageResponse(
-            conversation_id="demo-conv", question="",
+            conversation_id="fallback-conv", question="",
             answer=(
-                "47 outreach drafts were approved today across the demo cohort — all logged to "
+                "47 outreach drafts were approved today across the active cohort — all logged to "
                 "mip_app.action_audit with actor, timestamp, and borrower_id. Queue still holds "
                 "118 pending drafts awaiting human review."
             ),
@@ -650,7 +650,7 @@ def match_intent(question: str) -> str | None:
 
 def _warm_fallback(question: str) -> GenieMessageResponse:
     return GenieMessageResponse(
-        conversation_id="demo-conv",
+        conversation_id="fallback-conv",
         question=question,
         answer=(
             "I can answer questions about segments, in-the-money borrowers, Owner Link "

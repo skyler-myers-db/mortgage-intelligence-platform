@@ -148,13 +148,13 @@ class DatabricksPortfolioRepository:
     """Portfolio preview rollup over ``gold.borrower_360``.
 
     Slice-4 scope: the criteria on the request don't yet shift the
-    rollup -- the whole population is the portfolio preview, matching
-    booth-demo behaviour. A later slice adds criteria push-down.
+    rollup -- the whole population is the portfolio preview. A later
+    slice adds criteria push-down.
 
     Slice-6: wraps the ``preview`` read in a short-TTL cache. Portfolio
-    aggregates change slowly; a 30s stale read during a demo click-
-    through is invisible to the user and saves two or three warehouse
-    round trips per route transition.
+    aggregates change slowly; a 30s stale read during a user click-
+    through is invisible and saves two or three warehouse round trips
+    per route transition.
     """
 
     def __init__(
@@ -190,7 +190,7 @@ class DatabricksPortfolioRepository:
             avg_score=int(row.get("avg_score") or 0),
             # Projections that aren't in gold yet live on the UI as
             # deterministic constants -- keeping mock parity for the
-            # booth bar chart.
+            # portfolio preview bar chart.
             projected_contact_to_app=9.7,
             cost_per_contact=2.18,
         )
@@ -200,7 +200,7 @@ class DatabricksPortfolioRepository:
     def create(self, payload: PortfolioCreateRequest) -> PortfolioCreateResponse:
         preview = self.preview(None)
         return PortfolioCreateResponse(
-            portfolio_id="demo-portfolio",
+            portfolio_id="module0-portfolio",
             name=payload.name,
             marketable_population=preview.marketable_population,
         )
@@ -470,13 +470,13 @@ def _coerce_bool(value: Any) -> bool:
 class DatabricksGenieRepository:
     """Real Genie + safe-corpus fallback gated on the ``genie`` breaker.
 
-    The control flow is deliberately narrow and boot-demo-defensive:
+    The control flow is deliberately narrow and defensive:
 
     1. If the ``genie`` circuit breaker is OPEN *and* the question
        matches a canonical sample (deterministic catalog from
        ``backend.services.genie_answers``), return that catalog answer
-       with ``source="fallback"`` so the demo trio of questions still
-       lands.
+       with ``source="fallback"`` so the canonical trio of questions
+       still lands.
     2. Otherwise call ``ResilientGenieClient.ask(question)``. On
        success, adapt ``GenieResponse`` into the ``GenieMessageResponse``
        wire contract (``source="genie"``).

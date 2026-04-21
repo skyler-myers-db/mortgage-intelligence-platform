@@ -11,7 +11,7 @@
 #      unset, then waits for /api/health to return ok. If MIP_APP_URL is
 #      set, targets that URL directly (no local boot).
 #   2. Asserts /api/health is `status:"ok"` with every dependency `up`.
-#   3. Plays through the 5 canonical API calls in booth-demo order:
+#   3. Plays through the 5 canonical API calls in user-flow order:
 #        portfolio preview -> leads -> borrower dossier -> evidence -> genie
 #   4. Tears down the local servers cleanly on exit (trap on SIGINT/SIGTERM
 #      too).
