@@ -2,62 +2,150 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../lib/api';
 import type { PortfolioPreview } from '../types';
+import { PageShell } from '../components/layout/PageShell';
 import { KpiCard } from '../components/mortgage/KpiCard';
+import { ApprovalBanner } from '../components/mortgage/ApprovalBanner';
+import { Chip, Button } from '../components/Primitives';
+import { Icon } from '../components/Icon';
+import { DRAWER_SOURCES } from '../mocks/demoData';
 
-const FILTERS = [
-  'Georgia / Atlanta MSA / 30309',
-  'Owner-occupied',
-  'Open first lien',
-  'All lender relationships',
-  'Refi + HELOC',
-  'Equity ≥ 15%',
+/**
+ * Portfolio Builder — prototype `.surface` + `.filter-row` composition.
+ * Filter chips drive a population estimate; KPI grid reads from
+ * /api/portfolio/preview. "Generate Approval Required Outreach" is the
+ * primary forward motion into segment intelligence.
+ */
+
+const FILTER_GROUPS: Array<{ label: string; key: string; options: string[] }> = [
+  { label: 'GEO',          key: 'geo',      options: ['Atlanta MSA', 'All US', 'Texas', 'CA + TX + FL', 'Top 20 MSAs'] },
+  { label: 'OCCUPANCY',    key: 'occ',      options: ['Owner-occupied', 'Non-owner-occupied', 'All'] },
+  { label: 'LIEN STATUS',  key: 'lien',     options: ['Open 1st lien', 'Open HELOC', 'Free & clear', 'Any'] },
+  { label: 'RELATIONSHIP', key: 'rel',      options: ['All', 'Current customer', 'Former customer', 'Competitor customer'] },
+  { label: 'PRODUCT',      key: 'product',  options: ['All products', 'Refi', 'HELOC', 'Cash-out', 'Purchase', 'Retention'] },
+  { label: 'EQUITY',       key: 'equity',   options: ['≥ 15%', '≥ 25%', '≥ 40%', 'Any'] },
 ];
 
 export default function PortfolioBuilder() {
   const [preview, setPreview] = useState<PortfolioPreview | null>(null);
+  const [filters, setFilters] = useState<Record<string, string>>({
+    geo: 'Atlanta MSA',
+    occ: 'Owner-occupied',
+    lien: 'Open 1st lien',
+    rel: 'All',
+    product: 'All products',
+    equity: '≥ 15%',
+  });
 
   useEffect(() => {
     api.portfolioPreview().then(setPreview);
   }, []);
 
+  const cycle = (key: string, options: string[]) => {
+    const cur = filters[key];
+    const next = options[(options.indexOf(cur) + 1) % options.length];
+    setFilters((f) => ({ ...f, [key]: next }));
+  };
+
   return (
-    <section className="page grid" style={{ gap: 20 }}>
-      <div>
-        <div className="eyebrow">Module 0 / Lead Portfolio Builder</div>
-        <h1 className="h1">Build a high-intent borrower population</h1>
-        <p className="muted">
-          Start with public-record property and lien data. Add ownership, market, listing, permit, and lender
-          relationship filters.
-        </p>
+    <PageShell
+      eyebrow="Module 0 / Lead Portfolio Builder"
+      title="Build a high-intent borrower population"
+      lede="Start with public-record property and lien data. Layer ownership, market, listing, permit, and lender relationship filters. Every KPI traces to a Cotality source."
+      heroRight={<Chip variant="neutral" icon="db">Unity Catalog · metric view</Chip>}
+    >
+      <div className="surface">
+        <div className="surface__hdr" style={{ justifyContent: 'space-between' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div
+              style={{
+                width: 28,
+                height: 28,
+                borderRadius: 8,
+                background: 'var(--accent-soft)',
+                color: 'var(--accent)',
+                display: 'grid',
+                placeItems: 'center',
+              }}
+            >
+              <Icon name="target" size={14} />
+            </div>
+            <div>
+              <div className="h-4">Lead Portfolio Builder</div>
+              <div className="muted" style={{ fontSize: 12 }}>
+                Construct a marketable population from Cotality public records before outreach.
+              </div>
+            </div>
+          </div>
+          <Chip variant="neutral" icon="db">mip_demo.gold.lead_population</Chip>
+        </div>
+        <div className="surface__body">
+          <div className="filter-row">
+            {FILTER_GROUPS.map((g) => {
+              const active = filters[g.key] !== g.options[0];
+              return (
+                <button
+                  key={g.key}
+                  type="button"
+                  className={`filter ${active ? 'is-active' : ''}`}
+                  onClick={() => cycle(g.key, g.options)}
+                  title="Click to cycle through options"
+                >
+                  <span className="filter__label">{g.label}</span>
+                  <span className="filter__value">{filters[g.key]}</span>
+                  <Icon name="chevdown" size={11} />
+                </button>
+              );
+            })}
+            <div style={{ flex: 1 }} />
+            <Button variant="primary" icon="play">Run build</Button>
+          </div>
+
+          <div className="kpi-row" style={{ marginTop: 20 }}>
+            <KpiCard
+              label="Marketable population"
+              value={(preview?.marketable_population ?? 89553).toLocaleString()}
+              delta="+4.8% vs. last run"
+              source={DRAWER_SOURCES.population}
+            />
+            <KpiCard
+              label="Avg. borrower score"
+              value={`${preview?.avg_score ?? 81}`}
+              delta="+2"
+              source={DRAWER_SOURCES.nbo}
+            />
+            <KpiCard
+              label="Cost per contact (est.)"
+              value={`$${preview?.cost_per_contact ?? 2.18}`}
+              delta="-$0.11"
+              deltaDir="down"
+              source={DRAWER_SOURCES.config}
+            />
+            <KpiCard
+              label="Projected contact → app"
+              value={`${preview?.projected_contact_to_app ?? 9.7}`}
+              unit="%"
+              delta="+1.2 pp"
+              source={DRAWER_SOURCES.nbo}
+            />
+          </div>
+        </div>
       </div>
-      <div className="card card-body grid grid-3">
-        {FILTERS.map((x) => (
-          <button className="button" key={x}>{x}</button>
-        ))}
-      </div>
-      <div className="grid grid-4">
-        <KpiCard
-          label="Marketable population"
-          value={(preview?.marketable_population ?? 0).toLocaleString()}
-          delta="4.8% vs. last run"
-        />
-        <KpiCard
-          label="High-intent leads"
-          value={(preview?.high_intent_leads ?? 0).toLocaleString()}
-          delta="18%"
-        />
-        <KpiCard
-          label="Cost/contact"
-          value={`$${preview?.cost_per_contact ?? 0}`}
-          delta="0.11 lower"
-        />
-        <KpiCard
-          label="Contact → app"
-          value={`${preview?.projected_contact_to_app ?? 0}%`}
-          delta="1.2 pp"
+
+      <div style={{ marginTop: 'var(--gap-grid)' }}>
+        <ApprovalBanner
+          count={preview?.high_intent_leads ?? 12840}
+          text="Portfolio build will queue approvals downstream. No outreach is sent until a human approves each recommendation."
+          approveLabel="Generate approval-required outreach"
         />
       </div>
-      <Link className="button primary" to="/segment-intelligence">Generate Portfolio</Link>
-    </section>
+
+      <div style={{ marginTop: 'var(--gap-grid)', display: 'flex', gap: 12 }}>
+        <Link to="/segment-intelligence" className="btn btn--primary">
+          Next: segment intelligence
+          <Icon name="chevright" size={14} />
+        </Link>
+        <Link to="/lead-queue" className="btn">Jump to lead queue</Link>
+      </div>
+    </PageShell>
   );
 }

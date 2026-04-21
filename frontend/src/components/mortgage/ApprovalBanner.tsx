@@ -1,11 +1,44 @@
-export function ApprovalBanner({ onApprove }: { onApprove?: () => void }) {
+import { Icon } from '../Icon';
+import { Button } from '../Primitives';
+
+/**
+ * ApprovalBanner — prototype `.approval` BEM. Gradient amber banner with
+ * shield icon, title + sub copy, Approve + Reject buttons. Nothing is ever
+ * sent without the operator clicking Approve.
+ */
+
+interface ApprovalBannerProps {
+  text?: string;
+  count?: number;
+  onApprove?: () => void;
+  onReject?: () => void;
+  approveLabel?: string;
+  rejectLabel?: string;
+  disabled?: boolean;
+}
+
+export function ApprovalBanner({
+  text,
+  count = 1,
+  onApprove,
+  onReject,
+  approveLabel = 'Approve outreach',
+  rejectLabel = 'Reject',
+  disabled,
+}: ApprovalBannerProps) {
+  const sub =
+    text ?? `${count} borrower${count === 1 ? '' : 's'} queued — nothing is sent until you approve.`;
   return (
-    <div className="approval">
-      <div>
-        <strong>Human approval required before outreach</strong>
-        <div className="muted">No email, SMS, CRM task, or export happens until a human approves and the action is audited.</div>
+    <div className="approval" role="region" aria-label="Human approval required">
+      <div className="approval__ico"><Icon name="shield" size={16} /></div>
+      <div className="approval__body">
+        <div className="approval__title">Human approval required before outreach</div>
+        <div className="approval__sub">{sub}</div>
       </div>
-      <button className="button primary" onClick={onApprove}>Approve outreach</button>
+      <div className="approval__actions">
+        <Button variant="ghost" size="sm" onClick={onReject} icon="cross" disabled={disabled}>{rejectLabel}</Button>
+        <Button variant="primary" size="sm" onClick={onApprove} icon="check" disabled={disabled}>{approveLabel}</Button>
+      </div>
     </div>
   );
 }

@@ -1,35 +1,221 @@
+/* ============================================================
+   Entrada × Cotality × Databricks — Mortgage Intelligence Platform
+   Design Tokens — verbatim port from design_files/index.html
+   ============================================================ */
+
+@import url('https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap');
+
 :root {
-  --entrada-navy: #025080;
+  /* ---------- Brand (Entrada AI) ---------- */
+  --entrada-navy:   #025080;
+  --entrada-navy-900: #013354;
+  --entrada-navy-800: #023F69;
+  --entrada-navy-700: #025080;
   --entrada-bright: #66C5FF;
-  --entrada-teal: #5CE1E6;
-  --bg-0: #04101F;
-  --bg-1: #071A2F;
-  --bg-2: #0C2340;
-  --bg-3: #123052;
-  --line-1: rgba(178, 189, 194, 0.12);
-  --line-2: rgba(178, 189, 194, 0.22);
-  --text-1: #EAF3FA;
-  --text-2: #BACBD8;
-  --text-3: #7F96A7;
-  --success: #10B981;
-  --warning: #F59E0B;
-  --danger: #EF4444;
-  --accent: #66C5FF;
-  --radius: 12px;
-  --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --entrada-light:  #CFEFFF;
+  --entrada-grey:   #B2BDC2;
+  --entrada-teal:   #5CE1E6;
+
+  /* ---------- Signal colors ---------- */
+  --signal-success: #10B981;
+  --signal-warning: #F59E0B;
+  --signal-danger:  #EF4444;
+  --signal-info:    #66C5FF;
+
+  /* ---------- Segment palette (chips, map fills) ---------- */
+  --seg-itm:        #5CE1E6;  /* In the Money — teal */
+  --seg-listed:     #F59E0B;  /* Listed for Sale — amber */
+  --seg-permit:     #A78BFA;  /* Permit Activity — violet */
+  --seg-investor:   #F472B6;  /* Investor / Multi-Property — rose */
+  --seg-equity:     #66C5FF;  /* Home Equity Candidate — bright blue */
+  --seg-retention:  #34D399;  /* Retention — green */
+
+  /* ---------- Typography ---------- */
+  --font-sans: 'Geist', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+
+  --fs-11: 11px;
+  --fs-12: 12px;
+  --fs-13: 13px;
+  --fs-14: 14px;
+  --fs-16: 16px;
+  --fs-18: 18px;
+  --fs-22: 22px;
+  --fs-28: 28px;
+  --fs-36: 36px;
+  --fs-48: 48px;
+
+  --lh-tight: 1.15;
+  --lh-snug:  1.35;
+  --lh-body:  1.5;
+
+  --tracking-tight: -0.02em;
+  --tracking-body:  -0.005em;
+  --tracking-caps:  0.08em;
+
+  /* ---------- Spacing (4px base) ---------- */
+  --sp-1:  4px;
+  --sp-2:  8px;
+  --sp-3:  12px;
+  --sp-4:  16px;
+  --sp-5:  20px;
+  --sp-6:  24px;
+  --sp-8:  32px;
+  --sp-10: 40px;
+  --sp-12: 48px;
+  --sp-16: 64px;
+
+  /* ---------- Radii ---------- */
+  --r-sm: 4px;
+  --r-md: 6px;
+  --r-lg: 10px;
+  --r-xl: 14px;
+  --r-pill: 999px;
+
+  /* ---------- Durations ---------- */
+  --dur-fast: 120ms;
+  --dur-base: 200ms;
+  --dur-slow: 360ms;
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
+/* ============================================================
+   Theme: DARK (default — demo stage impact)
+   ============================================================ */
+:root, [data-theme="dark"] {
+  --bg-0: #04101F;   /* page — deepest */
+  --bg-1: #071A2F;   /* surface */
+  --bg-2: #0C2340;   /* raised card */
+  --bg-3: #123052;   /* hover / well */
+  --bg-4: #1A3E68;   /* active */
+
+  --bg-gradient: radial-gradient(1200px 800px at 15% -10%, rgba(2,80,128,0.55), transparent 60%),
+                 radial-gradient(900px 700px at 110% 10%, rgba(92,225,230,0.10), transparent 55%),
+                 linear-gradient(180deg, #04101F 0%, #061624 100%);
+
+  --line-1: rgba(178,189,194,0.10);
+  --line-2: rgba(178,189,194,0.18);
+  --line-3: rgba(102,197,255,0.28);
+
+  --text-1: #EAF3FA;  /* primary */
+  --text-2: #BACBD8;  /* secondary */
+  --text-3: #7F96A7;  /* tertiary */
+  --text-4: #4E6578;  /* disabled */
+
+  --chip-bg:   rgba(102,197,255,0.10);
+  --chip-line: rgba(102,197,255,0.28);
+  --chip-text: #CFEFFF;
+
+  --accent:        #66C5FF;
+  --accent-hover:  #8AD5FF;
+  --accent-soft:   rgba(102,197,255,0.14);
+  --accent-contrast: #02263F;
+
+  --kpi-glow: 0 0 0 1px rgba(102,197,255,0.22), 0 12px 40px -12px rgba(92,225,230,0.25);
+  --shadow-sm: 0 1px 0 rgba(255,255,255,0.03) inset, 0 1px 2px rgba(0,0,0,0.5);
+  --shadow-md: 0 8px 24px -12px rgba(0,0,0,0.65);
+  --shadow-lg: 0 24px 60px -20px rgba(0,0,0,0.7);
+}
+
+[data-theme="light"] {
+  --bg-0: #F4F7FA;
+  --bg-1: #FFFFFF;
+  --bg-2: #FFFFFF;
+  --bg-3: #F0F5F9;
+  --bg-4: #E4EDF4;
+
+  --bg-gradient: radial-gradient(1000px 700px at 10% -10%, rgba(2,80,128,0.06), transparent 55%),
+                 radial-gradient(800px 600px at 110% 0%, rgba(92,225,230,0.08), transparent 55%),
+                 linear-gradient(180deg, #F4F7FA 0%, #ECF2F7 100%);
+
+  --line-1: rgba(2,80,128,0.08);
+  --line-2: rgba(2,80,128,0.14);
+  --line-3: rgba(2,80,128,0.28);
+
+  --text-1: #021F34;
+  --text-2: #254A66;
+  --text-3: #5A7890;
+  --text-4: #96ADBF;
+
+  --chip-bg:   rgba(2,80,128,0.06);
+  --chip-line: rgba(2,80,128,0.18);
+  --chip-text: #025080;
+
+  --accent:        #025080;
+  --accent-hover:  #013354;
+  --accent-soft:   rgba(2,80,128,0.08);
+  --accent-contrast: #FFFFFF;
+
+  --kpi-glow: 0 0 0 1px rgba(2,80,128,0.12), 0 12px 40px -16px rgba(2,80,128,0.25);
+  --shadow-sm: 0 1px 2px rgba(2,31,52,0.06);
+  --shadow-md: 0 8px 24px -12px rgba(2,31,52,0.14);
+  --shadow-lg: 0 24px 60px -20px rgba(2,31,52,0.18);
+}
+
+/* ---------- Accent overrides applied at runtime ---------- */
+[data-accent="red"] {
+  --accent: #FF3621; --accent-hover: #FF5A47; --accent-soft: rgba(255,54,33,0.14); --accent-contrast: #FFF;
+  --chip-bg: rgba(255,54,33,0.10); --chip-line: rgba(255,54,33,0.32); --chip-text: #FFB4A8;
+}
+[data-accent="teal"] {
+  --accent: #5CE1E6; --accent-hover: #8CEEF2; --accent-soft: rgba(92,225,230,0.14); --accent-contrast: #02263F;
+  --chip-bg: rgba(92,225,230,0.10); --chip-line: rgba(92,225,230,0.32); --chip-text: #BEF4F6;
+}
+[data-accent="bright"] {
+  --accent: #66C5FF; --accent-hover: #8AD5FF; --accent-soft: rgba(102,197,255,0.14); --accent-contrast: #02263F;
+}
+[data-accent="navy"] {
+  --accent: #025080; --accent-hover: #013354; --accent-soft: rgba(2,80,128,0.14); --accent-contrast: #FFF;
+}
+
+/* ---------- Density ---------- */
+[data-density="compact"] {
+  --row-h: 36px;
+  --pad-card: 16px;
+  --gap-grid: 14px;
+}
+[data-density="comfortable"], :root {
+  --row-h: 44px;
+  --pad-card: 20px;
+  --gap-grid: 18px;
+}
+
+/* ============================================================
+   Base element styles
+   ============================================================ */
 * { box-sizing: border-box; }
-html, body, #root { height: 100%; }
+html, body, #root { margin: 0; padding: 0; height: 100%; }
 body {
-  margin: 0;
   font-family: var(--font-sans);
   color: var(--text-1);
-  background: radial-gradient(1000px 600px at 10% -10%, rgba(2,80,128,.55), transparent), var(--bg-0);
+  background: var(--bg-0);
+  background-image: var(--bg-gradient);
+  background-attachment: fixed;
+  font-size: var(--fs-14);
+  line-height: var(--lh-body);
+  letter-spacing: var(--tracking-body);
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
-button, input, select, textarea { font: inherit; }
-.mono { font-family: var(--font-mono); }
-.num { font-variant-numeric: tabular-nums; }
+code, kbd, .mono { font-family: var(--font-mono); }
 a { color: inherit; }
+button, input, select, textarea { font: inherit; }
+
+/* ---------- Focus ---------- */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--r-sm);
+}
+
+/* ---------- Scrollbar (subtle) ---------- */
+* { scrollbar-width: thin; scrollbar-color: var(--line-2) transparent; }
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: 999px; }
+*::-webkit-scrollbar-track { background: transparent; }
+
+/* ---------- Helpers ---------- */
+.caps { text-transform: uppercase; letter-spacing: var(--tracking-caps); font-size: var(--fs-11); font-weight: 500; color: var(--text-3); }
+.num  { font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; }
+.divider { height: 1px; background: var(--line-1); }
+.vdivider { width: 1px; background: var(--line-1); }
