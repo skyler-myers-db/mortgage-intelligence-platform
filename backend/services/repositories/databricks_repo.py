@@ -45,6 +45,7 @@ from backend.services.pii_redaction import (
     redact_evidence_row,
     redact_lead_row,
 )
+from backend.services.resilience import TTLCache
 from backend.services.scoring import (
     NBO_PRODUCT_LABELS,
     in_the_money,
@@ -133,10 +134,23 @@ class DatabricksPortfolioRepository:
     Slice-4 scope: the criteria on the request don't yet shift the
     rollup -- the whole population is the portfolio preview, matching
     booth-demo behaviour. A later slice adds criteria push-down.
+
+    Slice-6: wraps the ``preview`` read in a short-TTL cache. Portfolio
+    aggregates change slowly; a 30s stale read during a demo click-
+    through is invisible to the user and saves two or three warehouse
+    round trips per route transition.
     """
 
-    def __init__(self, client: DatabricksSqlClient) -> None:
+    def __init__(
+        self,
+        client: DatabricksSqlClient,
+        *,
+        cache: TTLCache | None = None,
+        cache_ttl_s: float = 30.0,
+    ) -> None:
         self._client = client
+        self._cache = cache if cache is not None else TTLCache()
+        self._cache_ttl_s = cache_ttl_s
 
     _PREVIEW_SQL = (
         "SELECT "
@@ -146,10 +160,15 @@ class DatabricksPortfolioRepository:
         "FROM mip_demo.gold.borrower_360"
     )
 
+    _PREVIEW_CACHE_KEY = "portfolio.preview.all"
+
     def preview(self, request: PortfolioPreviewRequest | None) -> PortfolioPreview:
         _ = request
+        cached = self._cache.get(self._PREVIEW_CACHE_KEY)
+        if cached is not None:
+            return cached
         row = self._client.execute_one(self._PREVIEW_SQL) or {}
-        return PortfolioPreview(
+        preview = PortfolioPreview(
             marketable_population=int(row.get("marketable_population") or 0),
             high_intent_leads=int(row.get("high_intent_leads") or 0),
             avg_score=int(row.get("avg_score") or 0),
@@ -159,6 +178,8 @@ class DatabricksPortfolioRepository:
             projected_contact_to_app=9.7,
             cost_per_contact=2.18,
         )
+        self._cache.set(self._PREVIEW_CACHE_KEY, preview, self._cache_ttl_s)
+        return preview
 
     def create(self, payload: PortfolioCreateRequest) -> PortfolioCreateResponse:
         preview = self.preview(None)
@@ -178,10 +199,25 @@ class DatabricksPortfolioRepository:
 
 
 class DatabricksSegmentRepository:
-    """Segment rollup serves the national ``state='_ALL'`` row."""
+    """Segment rollup serves the national ``state='_ALL'`` row.
 
-    def __init__(self, client: DatabricksSqlClient) -> None:
+    Slice-6: wraps the ``list`` read in a short-TTL cache. Segment
+    counts are a national aggregate recomputed by the gold pipeline on
+    a fixed cadence; a 30s stale read is fine and removes a
+    per-request warehouse round-trip from the segment-intelligence
+    route.
+    """
+
+    def __init__(
+        self,
+        client: DatabricksSqlClient,
+        *,
+        cache: TTLCache | None = None,
+        cache_ttl_s: float = 30.0,
+    ) -> None:
         self._client = client
+        self._cache = cache if cache is not None else TTLCache()
+        self._cache_ttl_s = cache_ttl_s
 
     _LIST_SQL = (
         f"SELECT {_SEGMENT_COLUMNS} "
@@ -190,10 +226,16 @@ class DatabricksSegmentRepository:
         "ORDER BY count DESC"
     )
 
+    def _list_cache_key(self, portfolio_id: str | None) -> str:
+        return f"segments.list.{portfolio_id or '_ALL'}"
+
     def list(self, portfolio_id: str | None) -> list[SegmentSummary]:
-        _ = portfolio_id
+        key = self._list_cache_key(portfolio_id)
+        cached = self._cache.get(key)
+        if cached is not None:
+            return cached
         rows = self._client.execute(self._LIST_SQL)
-        return [
+        segments = [
             SegmentSummary(
                 code=row["segment_code"],
                 name=row["name"],
@@ -206,6 +248,8 @@ class DatabricksSegmentRepository:
             )
             for row in rows
         ]
+        self._cache.set(key, segments, self._cache_ttl_s)
+        return segments
 
 
 class DatabricksLeadRepository:

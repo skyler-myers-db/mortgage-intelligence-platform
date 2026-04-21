@@ -37,6 +37,67 @@ log = logging.getLogger(__name__)
 
 
 # ----------------------------------------------------------------------
+# PII denylist -- Slice 6 governance follow-up. The audit ledger is
+# append-only and read-heavy; once a raw name or address lands there,
+# we cannot scrub it without disturbing the chain. The denylist blocks
+# at *write* time rather than at read time so PII never reaches the
+# JSONB column in the first place.
+#
+# Keys are lower-cased and compared case-insensitively. We match on the
+# whole key, not substrings, to avoid false positives against
+# legitimate keys like ``owner_link_id`` or ``display_lender``.
+# ----------------------------------------------------------------------
+
+
+_PII_DENYLIST_KEYS: frozenset[str] = frozenset(
+    {
+        "owner_name",
+        "owner_full_name",
+        "display_name",
+        "street_address",
+        "mailing_street",
+        "borrower_name",
+        "email",
+        "phone",
+    }
+)
+
+
+class AuditPIIError(RuntimeError):
+    """Raised when audit metadata would contain raw PII.
+
+    Surfaces as a 500 in dev so the offending route gets fixed; in
+    production the router's ``except`` still lets this propagate so the
+    ledger never gets poisoned. This is louder than silently dropping
+    the row -- governance needs to know when write-paths try to log
+    names.
+    """
+
+    def __init__(self, forbidden_keys: list[str]) -> None:
+        self.forbidden_keys = forbidden_keys
+        super().__init__(
+            "Audit metadata contains forbidden PII-adjacent keys: "
+            + ", ".join(sorted(forbidden_keys))
+        )
+
+
+def _assert_no_pii(metadata: dict[str, Any]) -> None:
+    """Raise ``AuditPIIError`` if ``metadata`` has any denylist keys.
+
+    Top-level only: callers nest structured payload under
+    ``payload_json``, but no router currently stuffs borrower names into
+    nested objects. If that changes we deepen the check; for now a
+    top-level scan is the least-surprising contract.
+    """
+    if not metadata:
+        return
+    lowered = {k.lower() for k in metadata}
+    hits = lowered & _PII_DENYLIST_KEYS
+    if hits:
+        raise AuditPIIError(sorted(hits))
+
+
+# ----------------------------------------------------------------------
 # Protocol -- routers depend on this, not on a concrete class.
 # ----------------------------------------------------------------------
 
@@ -133,13 +194,18 @@ class InMemoryAuditStore:
         subject_segment: str | None = None,
         request_id: str | None = None,
     ) -> AuditEvent:
+        payload = payload_json or {}
+        # Governance: denylist PII keys at write time, not read time.
+        # Applies equally to the in-memory store so unit tests exercise
+        # the guard without needing Lakebase.
+        _assert_no_pii({"action": action, **payload})
         event = AuditEvent(
             event_id=f"evt-{uuid4().hex[:12]}",
             actor=actor,
             action=action,
             entity_type=entity_type,
             entity_id=entity_id,
-            payload_json=payload_json or {},
+            payload_json=payload,
             evidence_ids=evidence_ids or [],
             created_at=datetime.now(UTC).isoformat(),
             event_type=_coerce_event_type(event_type, action),
@@ -216,6 +282,11 @@ class LakebaseAuditStore:
         # already stripped borrower names / addresses. Callers who pass
         # a score + thresholds bundle are safe.
         metadata = {"action": action, **payload}
+        # Slice-6 denylist: block at write. Raises ``AuditPIIError``
+        # which the router surfaces as 500 in dev; production routers
+        # never pass denylist keys, so hitting this branch means a
+        # regression a reviewer should see immediately.
+        _assert_no_pii(metadata)
         params: dict[str, Any] = {
             "event_type": _coerce_event_type(event_type, action),
             "actor_email": actor,

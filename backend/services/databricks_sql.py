@@ -20,8 +20,9 @@ Design notes:
   ``get_sql_client()`` so connection/socket reuse happens at the
   urllib level and the HTTPS keep-alive pool stays warm.
 - Non-``SUCCEEDED`` responses raise ``DatabricksSqlError`` carrying the
-  statement id + error. Slice 6 will translate that at the router into
-  503 + degraded-state UI. For now the exception propagates.
+  statement id + error. Slice 6 wraps every ``execute`` in
+  ``ResilientSqlClient`` (retry + circuit breaker) so these failures
+  translate at the router into HTTP 503 + degraded-state UI.
 """
 from __future__ import annotations
 
@@ -261,6 +262,11 @@ def get_sql_client() -> DatabricksSqlClient:
     paths that need the warehouse always call through the factory in
     ``backend/services/repositories/factory.py`` which in turn calls
     this helper.
+
+    Slice-6: the returned object is a ``ResilientSqlClient`` that wraps
+    the bare stdlib client with circuit-breaker + retry. Repositories
+    see the same ``execute`` / ``execute_one`` surface so no call-site
+    change is required.
     """
     global _CLIENT
     if _CLIENT is not None:
@@ -269,17 +275,30 @@ def get_sql_client() -> DatabricksSqlClient:
     # settings module reads env once at import and we don't want that
     # cost paid at import of ``databricks_sql``.
     from backend.config.settings import settings
+    from backend.services.resilience import Resilient, get_breaker
 
     with _CLIENT_LOCK:
         if _CLIENT is not None:
             return _CLIENT
         host, token, warehouse_id = settings.require_databricks_creds()
-        _CLIENT = DatabricksSqlClient(
+        bare = DatabricksSqlClient(
             host=host,
             token=token.get_secret_value(),
             warehouse_id=warehouse_id,
             timeout_s=settings.databricks_timeout_s,
         )
+        resilient = Resilient[Any](
+            breaker=get_breaker("warehouse"),
+            dependency_name="warehouse",
+            attempts=3,
+            backoff_base=0.25,
+            backoff_max=2.0,
+            # Retry any Databricks-side failure including URLError;
+            # ``DependencyDownError`` is never wrapped (breaker-open
+            # already short-circuits).
+            retry_on=(DatabricksSqlError, OSError),
+        )
+        _CLIENT = ResilientSqlClient(bare, resilient)
         return _CLIENT
 
 
@@ -289,3 +308,47 @@ def _reset_sql_client_for_tests() -> None:
     global _CLIENT
     with _CLIENT_LOCK:
         _CLIENT = None
+
+
+# ---------------------------------------------------------------------------
+# Slice-6 resilience wrapper. Keeps the same ``execute``/``execute_one``
+# surface the repositories already depend on; breaker-open raises
+# ``DependencyDownError`` which routers translate to HTTP 503.
+# ---------------------------------------------------------------------------
+
+
+class ResilientSqlClient:
+    """Thin adapter: breaker + retry around ``DatabricksSqlClient``.
+
+    Intentionally narrow -- only ``execute`` and ``execute_one`` are
+    exposed. Deliberately duck-types the bare client rather than
+    subclassing, so the wrapper can't accidentally invoke the inner
+    methods without going through the breaker.
+    """
+
+    def __init__(self, client: DatabricksSqlClient, resilient: Any) -> None:
+        # ``resilient`` is ``Resilient[Any]`` but we keep it untyped here
+        # to avoid a tight import coupling back on ``backend.services.
+        # resilience`` at the top of this module; the generic narrows
+        # nothing at runtime.
+        self._client = client
+        self._resilient = resilient
+
+    @property
+    def resilient(self) -> Any:
+        """Expose the underlying Resilient wrapper (breaker reference)."""
+        return self._resilient
+
+    def execute(
+        self,
+        statement: str,
+        parameters: dict[str, Any] | list[Any] | tuple[Any, ...] | None = None,
+    ) -> list[dict[str, Any]]:
+        return self._resilient.call(lambda: self._client.execute(statement, parameters))
+
+    def execute_one(
+        self,
+        statement: str,
+        parameters: dict[str, Any] | list[Any] | tuple[Any, ...] | None = None,
+    ) -> dict[str, Any] | None:
+        return self._resilient.call(lambda: self._client.execute_one(statement, parameters))

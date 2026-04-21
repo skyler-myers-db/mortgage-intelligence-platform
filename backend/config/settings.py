@@ -106,6 +106,12 @@ class Settings(BaseSettings):
     # the fallback kicks in so the booth operator sees it in the logs.
     default_actor: str = "skyler@entrada.ai"
 
+    # Slice-6 TTL cache: short-window memoization on aggregate KPIs that
+    # tolerate staleness (segments count, portfolio preview). Fresh-only
+    # endpoints (audit, outreach, borrower dossier) never consult the
+    # cache. Set to 0 to disable caching entirely (tests do this).
+    mip_cache_ttl_s: float = 30.0
+
     def require_databricks_creds(self) -> tuple[str, SecretStr, str]:
         """Return ``(host, token, warehouse_id)`` or raise at startup.
 

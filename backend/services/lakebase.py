@@ -206,15 +206,24 @@ def get_lakebase_client() -> LakebaseClient:
     ``.env.local`` + workspace environment). Missing host / user / db
     raise ``LakebaseError`` -- the audit router catches this and
     returns HTTP 503, preserving the no-silent-fallback invariant.
+
+    Slice-6: the returned object is a ``ResilientLakebaseClient`` that
+    wraps the raw psycopg client with a circuit breaker + retry. When
+    the breaker is open, calls raise ``DependencyDownError`` instead
+    of spending 30s stalling on a dead socket.
     """
     global _CLIENT
     if _CLIENT is not None:
         return _CLIENT
+    # Local import to avoid import cycle: resilience imports nothing
+    # application-specific, so this direction is safe.
+    from backend.services.resilience import Resilient, get_breaker
+
     with _LOCK:
         if _CLIENT is None:
             password_secret = settings.lakebase_password
             password = password_secret.get_secret_value() if password_secret else ""
-            _CLIENT = LakebaseClient(
+            bare = LakebaseClient(
                 host=settings.lakebase_host or "",
                 port=settings.lakebase_port,
                 database=settings.lakebase_database,
@@ -222,6 +231,15 @@ def get_lakebase_client() -> LakebaseClient:
                 password=password,
                 sslmode=settings.lakebase_sslmode,
             )
+            resilient = Resilient[Any](
+                breaker=get_breaker("lakebase"),
+                dependency_name="lakebase",
+                attempts=3,
+                backoff_base=0.2,
+                backoff_max=1.5,
+                retry_on=(LakebaseError, OSError),
+            )
+            _CLIENT = ResilientLakebaseClient(bare, resilient)
         return _CLIENT
 
 
@@ -230,3 +248,49 @@ def _reset_client_for_tests() -> None:
     global _CLIENT
     with _LOCK:
         _CLIENT = None
+
+
+# ---------------------------------------------------------------------------
+# Slice-6 resilience wrapper -- keeps the LakebaseClient surface the audit
+# store depends on (``execute`` / ``executemany`` / ``fetchone`` /
+# ``fetchall``) but routes each call through the breaker+retry composition.
+# ---------------------------------------------------------------------------
+
+
+class ResilientLakebaseClient:
+    """Thin adapter that adds breaker + retry to the Lakebase client.
+
+    Duck-types ``LakebaseClient`` -- the audit store already holds a
+    ``LakebaseClient``-typed attribute, and the wrapper exposes the
+    same four read/write methods so no call-site changes are required.
+    Transactions aren't wrapped (they'd need to be idempotent across
+    retries; we don't currently have any multi-statement audit writes
+    that would benefit).
+    """
+
+    def __init__(self, client: LakebaseClient, resilient: Any) -> None:
+        self._client = client
+        self._resilient = resilient
+
+    @property
+    def resilient(self) -> Any:
+        return self._resilient
+
+    def execute(self, sql: str, params: dict[str, Any] | None = None) -> None:
+        self._resilient.call(lambda: self._client.execute(sql, params))
+
+    def executemany(self, sql: str, params_list: list[dict[str, Any]]) -> None:
+        self._resilient.call(lambda: self._client.executemany(sql, params_list))
+
+    def fetchone(
+        self, sql: str, params: dict[str, Any] | None = None
+    ) -> dict[str, Any] | None:
+        return self._resilient.call(lambda: self._client.fetchone(sql, params))
+
+    def fetchall(
+        self,
+        sql: str,
+        params: dict[str, Any] | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        return self._resilient.call(lambda: self._client.fetchall(sql, params, limit))

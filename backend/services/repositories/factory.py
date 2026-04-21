@@ -56,6 +56,7 @@ def get_portfolio_repository() -> PortfolioRepository:
     global _PORTFOLIO_REPO
     if _PORTFOLIO_REPO is not None:
         return _PORTFOLIO_REPO
+    from backend.config.settings import settings
     from backend.services.databricks_sql import get_sql_client
     from backend.services.repositories.databricks_repo import (
         DatabricksPortfolioRepository,
@@ -63,7 +64,10 @@ def get_portfolio_repository() -> PortfolioRepository:
 
     with _LOCK:
         if _PORTFOLIO_REPO is None:
-            _PORTFOLIO_REPO = DatabricksPortfolioRepository(get_sql_client())
+            _PORTFOLIO_REPO = DatabricksPortfolioRepository(
+                get_sql_client(),
+                cache_ttl_s=settings.mip_cache_ttl_s,
+            )
         return _PORTFOLIO_REPO
 
 
@@ -71,6 +75,7 @@ def get_segment_repository() -> SegmentRepository:
     global _SEGMENT_REPO
     if _SEGMENT_REPO is not None:
         return _SEGMENT_REPO
+    from backend.config.settings import settings
     from backend.services.databricks_sql import get_sql_client
     from backend.services.repositories.databricks_repo import (
         DatabricksSegmentRepository,
@@ -78,7 +83,10 @@ def get_segment_repository() -> SegmentRepository:
 
     with _LOCK:
         if _SEGMENT_REPO is None:
-            _SEGMENT_REPO = DatabricksSegmentRepository(get_sql_client())
+            _SEGMENT_REPO = DatabricksSegmentRepository(
+                get_sql_client(),
+                cache_ttl_s=settings.mip_cache_ttl_s,
+            )
         return _SEGMENT_REPO
 
 
