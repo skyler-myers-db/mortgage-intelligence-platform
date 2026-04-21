@@ -30,6 +30,7 @@ Design notes:
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import time
@@ -40,7 +41,20 @@ from dataclasses import dataclass, field
 from threading import Lock
 from typing import Any, Literal
 
+from backend.services.observability import emit
+
 log = logging.getLogger(__name__)
+
+
+def _question_hash(q: str) -> str:
+    """SHA1 prefix of the question text.
+
+    Genie questions are user-authored natural language and may contain
+    borrower or property details; we log the hash, not the text, so
+    operators can group "all instances of the same question" for
+    latency analysis without leaking content.
+    """
+    return hashlib.sha1(q.encode("utf-8")).hexdigest()[:16]  # noqa: S324 -- not a secret
 
 # Terminal Genie message states. The API docs list COMPLETED as the
 # happy path; FAILED / CANCELED / EXPIRED are terminal errors; SUBMITTED
@@ -153,20 +167,55 @@ class GenieClient:
         response contains the initial/new message id which we poll for
         completion.
         """
+        q_hash = _question_hash(question)
+        emit(
+            log,
+            "genie_query_start",
+            dependency="genie",
+            operation="ask",
+            statement_hash=q_hash,
+            conversation_id=conversation_id,
+        )
         start = time.monotonic()
-        if conversation_id is None:
-            conv_id, msg_id = self._start_conversation(question)
-        else:
-            conv_id = conversation_id
-            msg_id = self._append_message(conv_id, question)
+        try:
+            if conversation_id is None:
+                conv_id, msg_id = self._start_conversation(question)
+            else:
+                conv_id = conversation_id
+                msg_id = self._append_message(conv_id, question)
 
-        message = self._poll_message(conv_id, msg_id)
-        answer_text, sql_query = self._extract_text_and_sql(message)
-        sql_rows: list[dict[str, Any]] | None = None
-        if sql_query:
-            sql_rows = self._fetch_query_result(conv_id, msg_id)
+            message = self._poll_message(conv_id, msg_id)
+            answer_text, sql_query = self._extract_text_and_sql(message)
+            sql_rows: list[dict[str, Any]] | None = None
+            if sql_query:
+                sql_rows = self._fetch_query_result(conv_id, msg_id)
+        except BaseException as exc:
+            emit(
+                log,
+                "genie_query_error",
+                level=logging.WARNING,
+                dependency="genie",
+                operation="ask",
+                statement_hash=q_hash,
+                duration_ms=round((time.monotonic() - start) * 1000.0, 2),
+                outcome="error",
+                exc_type=type(exc).__name__,
+                exc_msg=str(exc)[:500],
+            )
+            raise
 
         elapsed_ms = int((time.monotonic() - start) * 1000)
+        emit(
+            log,
+            "genie_query_end",
+            dependency="genie",
+            operation="ask",
+            statement_hash=q_hash,
+            duration_ms=elapsed_ms,
+            outcome="ok",
+            has_sql=sql_query is not None,
+            rows_returned=len(sql_rows) if sql_rows else 0,
+        )
         return GenieResponse(
             answer_text=answer_text,
             sql_query=sql_query,

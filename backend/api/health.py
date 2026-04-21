@@ -39,6 +39,10 @@ from typing import Any
 from fastapi import APIRouter
 
 from backend.config.settings import settings
+from backend.services.observability import (
+    recent_breaker_state_changes,
+    recent_error_count,
+)
 from backend.services.resilience import all_breakers
 
 log = logging.getLogger(__name__)
@@ -180,4 +184,12 @@ def health() -> dict[str, Any]:
         "warehouse_id": settings.databricks_warehouse_id,
         "dependencies": deps,
         "circuit_breakers": _breaker_states(),
+        # Slice-13 observability counters. Values reflect the last
+        # rolling hour. A non-zero ``breaker_state_changes_last_hour``
+        # is the earliest signal that a dependency is flapping; a
+        # non-zero ``recent_errors_count`` with ``status=="ok"`` means
+        # the breaker caught transient failures without user-facing
+        # degradation.
+        "breaker_state_changes_last_hour": recent_breaker_state_changes(),
+        "recent_errors_count": recent_error_count(),
     }

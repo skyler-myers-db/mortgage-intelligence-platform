@@ -33,6 +33,12 @@ from collections.abc import Callable
 from threading import Lock
 from typing import Any, Generic, TypeVar
 
+from backend.services.observability import (
+    emit,
+    record_breaker_state_change,
+    timed_dependency,
+)
+
 log = logging.getLogger(__name__)
 
 
@@ -136,6 +142,20 @@ class CircuitBreaker:
         if (self._now() - self._opened_at) >= self._cooldown_s:
             self._state = self.HALF_OPEN
             self._probes_in_flight = 0
+            # Slice-13: structured event for ops dashboards / grep.
+            emit(
+                log,
+                "circuit_breaker_state_change",
+                dependency=self._name,
+                from_state=self.OPEN,
+                to_state=self.HALF_OPEN,
+                name=self._name,
+                failure_count=self._failure_count,
+                cooldown_s=self._cooldown_s,
+            )
+            record_breaker_state_change(
+                name=self._name, from_state=self.OPEN, to_state=self.HALF_OPEN
+            )
 
     def allow(self) -> bool:
         """Return True when a call is permitted.
@@ -161,6 +181,21 @@ class CircuitBreaker:
         with self._lock:
             if self._state == self.HALF_OPEN:
                 log.info("circuit_breaker[%s]: HALF_OPEN -> CLOSED on success", self._name)
+                emit(
+                    log,
+                    "circuit_breaker_state_change",
+                    dependency=self._name,
+                    from_state=self.HALF_OPEN,
+                    to_state=self.CLOSED,
+                    name=self._name,
+                    failure_count=self._failure_count,
+                    cooldown_s=self._cooldown_s,
+                )
+                record_breaker_state_change(
+                    name=self._name,
+                    from_state=self.HALF_OPEN,
+                    to_state=self.CLOSED,
+                )
                 self._state = self.CLOSED
                 self._failure_count = 0
                 self._opened_at = None
@@ -179,6 +214,22 @@ class CircuitBreaker:
                     self._name,
                     self._cooldown_s,
                 )
+                emit(
+                    log,
+                    "circuit_breaker_state_change",
+                    level=logging.WARNING,
+                    dependency=self._name,
+                    from_state=self.HALF_OPEN,
+                    to_state=self.OPEN,
+                    name=self._name,
+                    failure_count=self._failure_count,
+                    cooldown_s=self._cooldown_s,
+                )
+                record_breaker_state_change(
+                    name=self._name,
+                    from_state=self.HALF_OPEN,
+                    to_state=self.OPEN,
+                )
                 self._state = self.OPEN
                 self._opened_at = self._now()
                 self._probes_in_flight = 0
@@ -193,6 +244,22 @@ class CircuitBreaker:
                     "circuit_breaker[%s]: CLOSED -> OPEN after %d failures",
                     self._name,
                     self._failure_count,
+                )
+                emit(
+                    log,
+                    "circuit_breaker_state_change",
+                    level=logging.WARNING,
+                    dependency=self._name,
+                    from_state=self.CLOSED,
+                    to_state=self.OPEN,
+                    name=self._name,
+                    failure_count=self._failure_count,
+                    cooldown_s=self._cooldown_s,
+                )
+                record_breaker_state_change(
+                    name=self._name,
+                    from_state=self.CLOSED,
+                    to_state=self.OPEN,
                 )
                 self._state = self.OPEN
                 self._opened_at = self._now()
@@ -360,14 +427,20 @@ class Resilient(Generic[T]):
                 self._name,
                 reason="circuit breaker is open",
             )
+        # Slice-13: wrap every dependency call in a structured span so
+        # operators can correlate a request with every downstream SQL /
+        # Genie / Lakebase call it fanned out into. timed_dependency is
+        # a cheap no-op when the root logger is at WARN and no handler
+        # is attached, so this costs nothing in unit tests.
         try:
-            result = with_retry(
-                fn,
-                attempts=self._attempts,
-                backoff_base=self._backoff_base,
-                backoff_max=self._backoff_max,
-                retry_on=self._retry_on,
-            )
+            with timed_dependency(self._name, "call"):
+                result = with_retry(
+                    fn,
+                    attempts=self._attempts,
+                    backoff_base=self._backoff_base,
+                    backoff_max=self._backoff_max,
+                    retry_on=self._retry_on,
+                )
         except BaseException as exc:
             self._breaker.record_failure()
             if isinstance(exc, DependencyDownError):

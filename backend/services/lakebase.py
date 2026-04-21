@@ -32,7 +32,9 @@ factory override so no real network call is ever attempted in pytest.
 """
 from __future__ import annotations
 
+import hashlib
 import logging
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from threading import Lock
@@ -43,8 +45,51 @@ from psycopg import Connection
 from psycopg.rows import dict_row
 
 from backend.config.settings import settings
+from backend.services.observability import emit
 
 log = logging.getLogger(__name__)
+
+
+def _stmt_hash(sql: str) -> str:
+    return hashlib.sha1(sql.encode("utf-8")).hexdigest()[:16]  # noqa: S324 -- not a secret
+
+
+def _emit_start(op: str, sql: str) -> tuple[str, float]:
+    stmt_hash = _stmt_hash(sql)
+    emit(log, "lakebase_query_start", dependency="lakebase",
+         operation=op, statement_hash=stmt_hash)
+    return stmt_hash, time.monotonic()
+
+
+def _emit_end(op: str, stmt_hash: str, start: float, *,
+              rows_returned: int | None = None) -> None:
+    kwargs: dict[str, Any] = {
+        "dependency": "lakebase",
+        "operation": op,
+        "statement_hash": stmt_hash,
+        "duration_ms": round((time.monotonic() - start) * 1000.0, 2),
+        "outcome": "ok",
+    }
+    if rows_returned is not None:
+        kwargs["rows_returned"] = rows_returned
+    emit(log, "lakebase_query_end", **kwargs)
+
+
+def _emit_err(op: str, stmt_hash: str, start: float, exc: BaseException,
+              attempt: int | None = None) -> None:
+    kwargs: dict[str, Any] = {
+        "level": logging.WARNING,
+        "dependency": "lakebase",
+        "operation": op,
+        "statement_hash": stmt_hash,
+        "duration_ms": round((time.monotonic() - start) * 1000.0, 2),
+        "outcome": "error",
+        "exc_type": type(exc).__name__,
+        "exc_msg": str(exc)[:500],
+    }
+    if attempt is not None:
+        kwargs["attempt"] = attempt
+    emit(log, "lakebase_query_error", **kwargs)
 
 
 class LakebaseError(RuntimeError):
@@ -142,36 +187,47 @@ class LakebaseClient:
 
     def execute(self, sql: str, params: dict[str, Any] | None = None) -> None:
         """Execute a write statement. Returns None on success, raises otherwise."""
+        stmt_hash, start = _emit_start("execute", sql)
         try:
             with self.transaction() as conn, conn.cursor() as cur:
                 cur.execute(sql, params or {})
         except psycopg.Error as exc:
+            _emit_err("execute", stmt_hash, start, exc)
             raise LakebaseError(f"Lakebase execute failed: {exc}") from exc
+        _emit_end("execute", stmt_hash, start)
 
     def executemany(self, sql: str, params_list: list[dict[str, Any]]) -> None:
         """Batch-execute a write. All rows run inside one transaction."""
         if not params_list:
             return
+        stmt_hash, start = _emit_start("executemany", sql)
         try:
             with self.transaction() as conn, conn.cursor() as cur:
                 cur.executemany(sql, params_list)
         except psycopg.Error as exc:
+            _emit_err("executemany", stmt_hash, start, exc)
             raise LakebaseError(f"Lakebase executemany failed: {exc}") from exc
+        _emit_end("executemany", stmt_hash, start, rows_returned=len(params_list))
 
     def fetchone(
         self, sql: str, params: dict[str, Any] | None = None
     ) -> dict[str, Any] | None:
         """Return the first row as a dict, or None if the query produced no rows."""
+        stmt_hash, start = _emit_start("fetchone", sql)
         try:
             with self.transaction() as conn, conn.cursor() as cur:
                 cur.execute(sql, params or {})
                 row = cur.fetchone()
                 if row is None:
+                    _emit_end("fetchone", stmt_hash, start, rows_returned=0)
                     return None
                 # dict_row factory gives us a dict already; cast for mypy.
-                return dict(row)
+                result = dict(row)
         except psycopg.Error as exc:
+            _emit_err("fetchone", stmt_hash, start, exc)
             raise LakebaseError(f"Lakebase fetchone failed: {exc}") from exc
+        _emit_end("fetchone", stmt_hash, start, rows_returned=1)
+        return result
 
     def fetchall(
         self,
@@ -186,13 +242,17 @@ class LakebaseClient:
         guard against an unbounded SELECT accidentally streaming the
         whole audit table into memory.
         """
+        stmt_hash, start = _emit_start("fetchall", sql)
         try:
             with self.transaction() as conn, conn.cursor() as cur:
                 cur.execute(sql, params or {})
                 rows = cur.fetchmany(size=limit)
-                return [dict(r) for r in rows]
+                result = [dict(r) for r in rows]
         except psycopg.Error as exc:
+            _emit_err("fetchall", stmt_hash, start, exc)
             raise LakebaseError(f"Lakebase fetchall failed: {exc}") from exc
+        _emit_end("fetchall", stmt_hash, start, rows_returned=len(result))
+        return result
 
 
 _CLIENT: LakebaseClient | None = None
