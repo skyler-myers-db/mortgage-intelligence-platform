@@ -37,7 +37,10 @@ resources:
   # instance so the audit store has a live target on first deploy.
   database_instances:
     mip_app_state:
-      name: mip_app_state
+      # DNS-compliant: alphanumeric + hyphens only. The bundle resource key
+      # stays `mip_app_state` for internal references; the actual instance
+      # name on the Databricks side is `mip-app-state`.
+      name: mip-app-state
       # CU_1 is the smallest tier and is appropriate for Module 0's
       # booth-demo write volume (audit + approvals on the order of a
       # few rows per minute). Production lift to CU_2 would be a
@@ -87,7 +90,7 @@ resources:
         - task_key: init_catalog_schemas
           description: "Idempotent CREATE CATALOG mip + schemas raw/silver/gold/semantics/app/audit."
           sql_task:
-            warehouse_id: ${var.sql_warehouse_id}
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
               path: sql/ddl/001_catalogs_schemas.sql
         - task_key: refresh_silver_pipeline
@@ -124,9 +127,12 @@ resources:
             client: "2"
             dependencies:
               - psycopg[binary]==3.2.10
+              # Needed by jobs/lakebase_migrate.py to fetch a fresh
+              # short-lived Postgres credential via workspace identity.
+              - databricks-sdk>=0.30.0
       tasks:
         - task_key: apply_schema_and_seed
-          description: "Apply lakebase/schema.sql + lakebase/seed_campaigns.sql against mip_app_state."
+          description: "Apply lakebase/schema.sql + lakebase/seed_campaigns.sql against mip-app-state."
           environment_key: py_default
           spark_python_task:
             python_file: jobs/lakebase_migrate.py
@@ -164,7 +170,7 @@ resources:
         - task_key: init_ddl
           description: "Idempotent CREATE CATALOG/SCHEMA + silver.market_rates_weekly DDL."
           sql_task:
-            warehouse_id: ${var.sql_warehouse_id}
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
               path: sql/ddl/001_catalogs_schemas.sql
         - task_key: init_silver_ddl
@@ -172,7 +178,7 @@ resources:
           depends_on:
             - task_key: init_ddl
           sql_task:
-            warehouse_id: ${var.sql_warehouse_id}
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
               path: sql/ddl/silver_market_rates_weekly.sql
         - task_key: seed_if_empty
@@ -231,11 +237,11 @@ resources:
     mip_executive_dashboard:
       display_name: mip_executive_dashboard
       file_path: dashboards/executive_dashboard.lvdash.json
-      warehouse_id: ${var.sql_warehouse_id}
+      warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
     mip_segment_dashboard:
       display_name: mip_segment_dashboard
       file_path: dashboards/segment_dashboard.lvdash.json
-      warehouse_id: ${var.sql_warehouse_id}
+      warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
 
   # Canonical experiment path is /Shared/mip/lead-scoring; the parent
   # /Shared/mip directory must exist in the workspace before this bundle

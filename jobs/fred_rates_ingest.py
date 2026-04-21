@@ -500,6 +500,26 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _repo_root() -> Path:
+    """Return the repo root.
+
+    Tolerates Databricks ipykernel exec contexts where ``__file__`` is
+    not defined (the exec() path strips the module's ``__file__`` attr).
+    Fallback: search for ``data/seeds/fred_mortgage30us_seed.csv``
+    starting at cwd.
+    """
+    try:
+        return Path(__file__).resolve().parents[1]
+    except NameError as exc:
+        for base in (Path.cwd(), Path.cwd() / "..", Path("/Workspace/Users")):
+            for probe in base.rglob("data/seeds/fred_mortgage30us_seed.csv"):
+                return probe.parents[2]
+        raise RuntimeError(
+            "Cannot locate repo root — __file__ undefined and no data/"
+            "seeds/fred_mortgage30us_seed.csv found under cwd."
+        ) from exc
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     logging.basicConfig(
@@ -507,7 +527,7 @@ def main(argv: list[str] | None = None) -> int:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
-    repo_root = Path(__file__).resolve().parents[1]
+    repo_root = _repo_root()
     seed_path = Path(args.seed_path) if args.seed_path else repo_root / DEFAULT_SEED_PATH
     batch_id = os.environ.get(
         "DATABRICKS_JOB_RUN_ID",
@@ -526,4 +546,9 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # Only raise SystemExit on a non-zero return. Databricks ipykernel
+    # exec wrappers treat *any* SystemExit (including SystemExit(0)) as
+    # a task failure, so a successful run must fall through cleanly.
+    _rc = main()
+    if _rc != 0:
+        sys.exit(_rc)
