@@ -1,15 +1,50 @@
+from backend.config.settings import settings
 from backend.schemas.common import EvidenceEvent
 from backend.schemas.lead import Borrower360, SegmentSummary
 from backend.schemas.portfolio import PortfolioPreview
-from backend.services.scoring import lead_score
+from backend.schemas.why import WhyPanel
+from backend.services.scoring import in_the_money, lead_score, rate_spread_bps
 
 # components per tests/fixtures/lead_score_golden.json (case_03/04/05)
 _B48291_COMPONENTS = {"economic_incentive": 98, "intent_trigger": 95, "fit": 90, "relationship": 85, "evidence": 92}
 _B48294_COMPONENTS = {"economic_incentive": 85, "intent_trigger": 92, "fit": 85, "relationship": 80, "evidence": 85}
 _B48295_COMPONENTS = {"economic_incentive": 70, "intent_trigger": 95, "fit": 80, "relationship": 85, "evidence": 80}
 
+_WHY_SOURCES = ["mip_demo.gold.fn_rate_spread", "mip_demo.gold.fn_in_the_money"]
+_MKT = settings.mip_market_rate
+_MIN_SP = settings.mip_min_spread_bps
+_MIN_EQ = settings.mip_min_equity_pct
+
+# current_rate on the Borrower schema is a percent (5.75); the rate_spread
+# contract takes fractional rates (0.0575) — divide by 100 at the boundary.
+_B48291_SPREAD = rate_spread_bps(5.75 / 100, _MKT)
+_B48294_SPREAD = rate_spread_bps(6.75 / 100, _MKT)
+_B48295_SPREAD = rate_spread_bps(6.50 / 100, _MKT)
+_B48291_EQUITY = round(100 * (1 - 340000 / 625000))
+_B48294_EQUITY = round(100 * (1 - 342000 / 560000))
+_B48295_EQUITY = round(100 * (1 - 320000 / 725000))
+
+_B48291_WHY = WhyPanel(
+    rate_spread_bps=_B48291_SPREAD, market_rate=_MKT, equity_pct=_B48291_EQUITY,
+    in_the_money=in_the_money(_B48291_SPREAD, _B48291_EQUITY, _MIN_SP, _MIN_EQ),
+    in_the_money_reason=f"+{_B48291_SPREAD} bps spread (>= {_MIN_SP}) AND {_B48291_EQUITY}% equity (>= {_MIN_EQ}%)",
+    min_spread_bps=_MIN_SP, min_equity_pct=_MIN_EQ, sources=_WHY_SOURCES,
+)
+_B48294_WHY = WhyPanel(
+    rate_spread_bps=_B48294_SPREAD, market_rate=_MKT, equity_pct=_B48294_EQUITY,
+    in_the_money=in_the_money(_B48294_SPREAD, _B48294_EQUITY, _MIN_SP, _MIN_EQ),
+    in_the_money_reason=f"+{_B48294_SPREAD} bps spread (>= {_MIN_SP}) AND {_B48294_EQUITY}% equity (>= {_MIN_EQ}%)",
+    min_spread_bps=_MIN_SP, min_equity_pct=_MIN_EQ, sources=_WHY_SOURCES,
+)
+_B48295_WHY = WhyPanel(
+    rate_spread_bps=_B48295_SPREAD, market_rate=_MKT, equity_pct=_B48295_EQUITY,
+    in_the_money=in_the_money(_B48295_SPREAD, _B48295_EQUITY, _MIN_SP, _MIN_EQ),
+    in_the_money_reason=f"+{_B48295_SPREAD} bps spread (>= {_MIN_SP}) AND {_B48295_EQUITY}% equity (>= {_MIN_EQ}%)",
+    min_spread_bps=_MIN_SP, min_equity_pct=_MIN_EQ, sources=_WHY_SOURCES,
+)
+
 EVIDENCE = [
-    EvidenceEvent(evidence_id="ev-001", source_product="Voluntary Lien", source_table="cotality.liens.voluntary_lien", signal_type="rate_spread", signal_value="+87.5 bps", display_text="Current lien rate is 87.5 bps above par.", confidence=0.92, timestamp="2026-04-20T06:12:00Z"),
+    EvidenceEvent(evidence_id="ev-001", source_product="Voluntary Lien", source_table="cotality.liens.voluntary_lien", signal_type="rate_spread", signal_value="+88 bps", display_text="Current lien rate is 87.5 bps above par.", confidence=0.92, timestamp="2026-04-20T06:12:00Z"),
     EvidenceEvent(evidence_id="ev-002", source_product="AVM", source_table="cotality.avm.current", signal_type="equity", signal_value="$285K", display_text="Estimated equity is above HELOC threshold.", confidence=0.88, timestamp="2026-04-20T06:12:00Z"),
     EvidenceEvent(evidence_id="ev-003", source_product="Mortgage Market Analytics", source_table="cotality.mma.refi_activity", signal_type="market_trend", signal_value="+28% QoQ", display_text="Local refi activity is up 28% quarter over quarter.", confidence=0.84, timestamp="2026-04-20T06:12:00Z"),
 ]
@@ -26,24 +61,24 @@ SEGMENTS = [
 BORROWERS = [
     Borrower360(
         borrower_id="B-48291", display_name="James & Maria Rodriguez", city="Atlanta", state="GA", zip="30309",
-        segment_codes=["itm", "equity"], equity_estimate=285000, rate_spread_bps=875, opportunity_score=lead_score(**_B48291_COMPONENTS), confidence=88,
+        segment_codes=["itm", "equity"], equity_estimate=285000, rate_spread_bps=_B48291_SPREAD, opportunity_score=lead_score(**_B48291_COMPONENTS), confidence=88,
         recommended_offer="Refinance + HELOC", why_now="Lien matures in 4 months, strong equity, and local refi activity is rising.", evidence_ids=["ev-001", "ev-002", "ev-003"], approval_status="pending",
         clip_id="clip_demo_48291", owner_link_id="ol_demo_48291", subject_property="Synthetic property · Atlanta, GA 30309", avm_value=625000, current_lien_balance=340000, current_rate=5.75, ltv=54, related_property_count=1,
-        trigger_timeline=EVIDENCE, evidence_events=EVIDENCE,
+        trigger_timeline=EVIDENCE, evidence_events=EVIDENCE, why_panel=_B48291_WHY,
     ),
     Borrower360(
         borrower_id="B-48294", display_name="David Park", city="Atlanta", state="GA", zip="30305",
-        segment_codes=["permit", "equity"], equity_estimate=218000, rate_spread_bps=525, opportunity_score=lead_score(**_B48294_COMPONENTS), confidence=82,
+        segment_codes=["permit", "equity"], equity_estimate=218000, rate_spread_bps=_B48294_SPREAD, opportunity_score=lead_score(**_B48294_COMPONENTS), confidence=82,
         recommended_offer="HELOC", why_now="Recent high-value permit and strong equity indicate renovation financing need.", evidence_ids=["ev-002"], approval_status="pending",
         clip_id="clip_demo_48294", owner_link_id="ol_demo_48294", subject_property="Synthetic property · Atlanta, GA 30305", avm_value=560000, current_lien_balance=342000, current_rate=6.75, ltv=61, related_property_count=1,
-        trigger_timeline=EVIDENCE[1:], evidence_events=EVIDENCE[1:],
+        trigger_timeline=EVIDENCE[1:], evidence_events=EVIDENCE[1:], why_panel=_B48294_WHY,
     ),
     Borrower360(
         borrower_id="B-48295", display_name="Lisa Thompson", city="Atlanta", state="GA", zip="30324",
-        segment_codes=["listed", "retention"], equity_estimate=405000, rate_spread_bps=250, opportunity_score=lead_score(**_B48295_COMPONENTS), confidence=79,
+        segment_codes=["listed", "retention"], equity_estimate=405000, rate_spread_bps=_B48295_SPREAD, opportunity_score=lead_score(**_B48295_COMPONENTS), confidence=79,
         recommended_offer="Purchase Mortgage", why_now="Listed-for-sale trigger suggests a purchase mortgage opportunity.", evidence_ids=["ev-003"], approval_status="pending",
         clip_id="clip_demo_48295", owner_link_id="ol_demo_48295", subject_property="Synthetic property · Atlanta, GA 30324", avm_value=725000, current_lien_balance=320000, current_rate=6.50, ltv=44, related_property_count=1,
-        trigger_timeline=EVIDENCE[2:], evidence_events=EVIDENCE[2:],
+        trigger_timeline=EVIDENCE[2:], evidence_events=EVIDENCE[2:], why_panel=_B48295_WHY,
     ),
 ]
 

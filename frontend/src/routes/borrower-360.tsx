@@ -48,6 +48,26 @@ export default function Borrower360() {
           <p>Recommended offer: <strong>{b.recommended_offer}</strong></p>
         </div>
       </div>
+      <div className="card card-body">
+        <div className="eyebrow">Why we recommend this</div>
+        <h2 className="h2">
+          <span className={`chip ${b.why_panel.in_the_money ? 'success' : 'warning'}`}>
+            {b.why_panel.in_the_money ? 'In-the-money' : 'Not in the money'}
+          </span>
+        </h2>
+        <p>
+          <span className="mono">+{b.why_panel.rate_spread_bps} bps</span> vs. market par {(b.why_panel.market_rate * 100).toFixed(3)}%
+        </p>
+        <p>
+          <span className="mono">{b.why_panel.equity_pct}%</span> equity vs. {b.why_panel.min_equity_pct}% threshold
+        </p>
+        <p className="muted">{b.why_panel.in_the_money_reason}</p>
+        <p>
+          {b.why_panel.sources.map((s) => (
+            <button className="evidence-chip" key={s} style={{ marginRight: 4 }}>{s}</button>
+          ))}
+        </p>
+      </div>
       <div className="grid grid-2">
         <div className="card card-body">
           <h2 className="h2">Trigger timeline</h2>

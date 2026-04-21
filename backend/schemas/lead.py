@@ -3,6 +3,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from backend.schemas.common import EvidenceEvent
+from backend.schemas.why import WhyPanel
 
 SegmentCode = Literal["itm", "listed", "permit", "investor", "equity", "retention"]
 ApprovalStatus = Literal["pending", "approved", "rejected"]
@@ -46,3 +47,4 @@ class Borrower360(LeadSummary):
     related_property_count: int
     trigger_timeline: list[EvidenceEvent]
     evidence_events: list[EvidenceEvent]
+    why_panel: WhyPanel

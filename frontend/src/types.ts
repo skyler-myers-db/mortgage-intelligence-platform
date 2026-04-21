@@ -40,6 +40,17 @@ export interface LeadSummary {
   approval_status: ApprovalStatus;
 }
 
+export interface WhyPanel {
+  rate_spread_bps: number;
+  market_rate: number;
+  equity_pct: number;
+  in_the_money: boolean;
+  in_the_money_reason: string;
+  min_spread_bps: number;
+  min_equity_pct: number;
+  sources: string[];
+}
+
 export interface Borrower360 extends LeadSummary {
   clip_id: string;
   owner_link_id: string;
@@ -51,6 +62,7 @@ export interface Borrower360 extends LeadSummary {
   related_property_count: number;
   trigger_timeline: EvidenceEvent[];
   evidence_events: EvidenceEvent[];
+  why_panel: WhyPanel;
 }
 
 export interface PortfolioPreview {
