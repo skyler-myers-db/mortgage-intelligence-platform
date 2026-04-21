@@ -304,3 +304,46 @@ for the full workflow map. Common red jobs:
 *Owner: qa-test-engineer + principal-architect. Review cadence: after
 every incident (post-mortem updates this doc), and before every release
 rehearsal.*
+
+---
+
+## 9. Credential-kill drill
+
+**When to run:** before every release rehearsal, and after any change
+to `backend/services/resilience.py`, `backend/api/health.py`, the
+warehouse / Lakebase / Genie client modules, or
+`frontend/src/components/mortgage/DegradedBanner.tsx`.
+
+**What it proves:** the Module 0 app surfaces a visible degraded state
+when any of its four upstream dependencies fails, and never silently
+returns fake data.
+
+**How to run (summary):**
+
+```bash
+# Warehouse: operator stops the SQL warehouse; script observes degraded
+./tools/kill_drill/run_drill.sh --target warehouse
+
+# Lakebase: operator stops the database instance (or rotates password)
+./tools/kill_drill/run_drill.sh --target lakebase
+
+# Genie: simulated -- script forks a private backend with a bogus space id
+./tools/kill_drill/run_drill.sh --target genie
+
+# Token: simulated -- script unsets DATABRICKS_TOKEN in a subshell
+./tools/kill_drill/run_drill.sh --target token
+
+# While any drill is in flight, verify the UI in another terminal:
+./tools/kill_drill/verify_degraded_ui.py
+```
+
+Each drill writes an evidence log to `tools/kill_drill/evidence/`. The
+full procedure, expected signals, and sign-off template live in
+[`docs/credential-kill-drill.md`](credential-kill-drill.md). Attach the
+four evidence logs (one per target) to the governance record for every
+release PR.
+
+A drill FAIL means the resilience posture is broken and the app is
+serving fake data during an outage — treat it as a release blocker
+and route it to governance-security-reviewer + principal-architect.
+

@@ -1,0 +1,66 @@
+# gitleaks configuration for the Mortgage Intelligence Platform.
+#
+# Policy:
+#   * Everything in the default gitleaks rule set runs.
+#   * Allowlisted strings below are provably non-secret placeholders used
+#     in CI fixtures and docs. Each entry MUST be accompanied by a
+#     comment explaining why it is safe.
+#   * Never add real tokens to this allowlist. If a real token is ever
+#     committed, rotate first (revoke + reissue) then purge git history
+#     -- do not try to allowlist the committed value.
+#
+# Inherit the default ruleset rather than redefine it; we only add
+# allowlist exceptions.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Known-safe placeholders in CI config and docs"
+
+# Regexes that match strings unquestionably NOT secrets.
+regexes = [
+  # CI placeholder warehouse id in .github/workflows/ci.yml -- intentional
+  # 16-char repeating `f`. The real warehouse id is injected by nightly.yml
+  # from a repo secret.
+  '''ffffffffffffffff''',
+  # CI placeholder Genie space id -- all-zero UUID, never a real space.
+  '''00000000-0000-0000-0000-000000000000''',
+  # CI placeholder Lakebase instance name.
+  '''mip-placeholder''',
+  # Synthetic borrower ids used throughout fixtures + docs (`B-48291`
+  # etc). These are not credentials but the default gitleaks rule for
+  # "generic api key" sometimes flags short capitalized+digit strings.
+  '''B-\d{5}''',
+]
+
+# Paths where noisy-but-safe strings live. The design_files/ prototypes
+# contain inline style snippets that occasionally trip generic rules.
+paths = [
+  # Interactive HTML prototypes + screenshots (no secrets by policy).
+  '''design_files/.*\.html$''',
+  # Documentation sometimes quotes command-line flags / env names
+  # (not values) that look like tokens.
+  '''docs/.*\.md$''',
+  # Rehearsal and implementation-plan artifacts.
+  '''docs/implementation-plan\.md$''',
+  '''docs/module0-rehearsal-checklist\.md$''',
+  # Bundle validation fixtures.
+  '''\.github/workflows/ci\.yml$''',
+  # Lockfiles -- dependency hashes look like secrets to generic rules.
+  '''package-lock\.json$''',
+  '''frontend/package-lock\.json$''',
+  '''uv\.lock$''',
+  # Test fixtures (synthetic data by design).
+  '''tests/fixtures/.*''',
+  '''frontend/src/mocks/.*''',
+]
+
+# Explicit stopwords: strings the rule engine should never flag.
+stopwords = [
+  "EXAMPLE",
+  "PLACEHOLDER",
+  "REDACTED",
+  "CHANGEME",
+  "your-token-here",
+  "xxxxxxxxxxxxxxxx",
+]
