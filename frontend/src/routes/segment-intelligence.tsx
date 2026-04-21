@@ -85,7 +85,7 @@ export default function SegmentIntelligence() {
 
       <div className="layoutA-grid">
         <LeadTable leads={filtered} />
-        <MapPlaceholder height={520} />
+        <MapPlaceholder height={520} segmentFilter={activeSegs} />
       </div>
     </PageShell>
   );

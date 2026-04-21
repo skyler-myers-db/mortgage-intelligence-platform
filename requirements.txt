@@ -4,7 +4,7 @@ pydantic==2.10.4
 pydantic-settings==2.7.1
 python-dotenv==1.0.1
 httpx==0.28.1
-databricks-sdk==0.45.0
+databricks-sdk==0.103.0
 databricks-sql-connector==3.7.0
 psycopg[binary]>=3.2.10,<3.4
 pytest==8.3.4

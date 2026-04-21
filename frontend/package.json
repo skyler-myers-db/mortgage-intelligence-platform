@@ -11,20 +11,21 @@
     "lint": "eslint . --max-warnings 0"
   },
   "dependencies": {
+    "@svg-maps/usa": "^2.0.0",
     "@vitejs/plugin-react": "latest",
-    "vite": "latest",
-    "typescript": "latest",
     "react": "latest",
     "react-dom": "latest",
-    "react-router-dom": "latest"
+    "react-router-dom": "latest",
+    "typescript": "latest",
+    "vite": "latest"
   },
   "devDependencies": {
     "@types/react": "latest",
     "@types/react-dom": "latest",
-    "vitest": "latest",
-    "eslint": "latest",
-    "@typescript-eslint/parser": "latest",
     "@typescript-eslint/eslint-plugin": "latest",
-    "eslint-plugin-react-hooks": "latest"
+    "@typescript-eslint/parser": "latest",
+    "eslint": "latest",
+    "eslint-plugin-react-hooks": "latest",
+    "vitest": "latest"
   }
 }
