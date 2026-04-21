@@ -222,7 +222,21 @@ def _coerce(value: Any, type_name: str | None) -> Any:
         if isinstance(value, bool):
             return value
         return str(value).lower() in ("true", "1", "t")
-    # ARRAY / STRUCT / STRING / TIMESTAMP / DATE pass through as emitted.
+    # ARRAY / STRUCT arrive as JSON-encoded strings under the JSON_ARRAY
+    # disposition. Parse them so downstream Pydantic validators get the
+    # list/dict shapes they declared, not a string.
+    if t.startswith("ARRAY") or t.startswith("STRUCT") or t == "MAP":
+        if isinstance(value, list | dict):
+            return value
+        if isinstance(value, str):
+            s = value.strip()
+            if s.startswith("[") or s.startswith("{"):
+                try:
+                    return json.loads(s)
+                except json.JSONDecodeError:
+                    return value
+        return value
+    # STRING / TIMESTAMP / DATE pass through as emitted.
     return value
 
 

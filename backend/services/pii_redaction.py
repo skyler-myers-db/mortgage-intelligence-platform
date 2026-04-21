@@ -188,7 +188,10 @@ def redact_borrower_row(row: dict[str, Any]) -> dict[str, Any]:
         "approval_status": row.get("approval_status") or "pending",
         # Borrower360 additions:
         "clip_id": row["clip"],  # <-- rename at boundary
-        "owner_link_id": row.get("owner_link_id") or "",
+        # Cotality owner_1_identifier arrives as BIGINT from silver; the
+        # schema is STRING so we coerce at the boundary. Empty-string on
+        # NULL keeps the Pydantic contract tight.
+        "owner_link_id": str(row.get("owner_link_id") or ""),
         "subject_property": synthesize_subject_property(city, state, zip5),
         "avm_value": int(row.get("avm_value") or 0),
         "current_lien_balance": int(row.get("current_lien_balance") or 0),
