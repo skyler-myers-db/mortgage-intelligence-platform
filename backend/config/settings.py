@@ -88,6 +88,24 @@ class Settings(BaseSettings):
 
     genie_space_id: str | None = None
 
+    # Lakebase Postgres credentials -- required for the durable audit
+    # trail introduced in Slice 5. Missing values make the audit write
+    # path raise ``LakebaseError`` (audit router returns 503); they do
+    # NOT gate FastAPI startup because Slice 6 adds resilience. For now
+    # the audit router's 503 is a visible, non-silent failure -- which
+    # is the desired posture per the no-mock-fallback feedback memory.
+    lakebase_host: str | None = None
+    lakebase_port: int = 5432
+    lakebase_database: str = "mip_app_state"
+    lakebase_user: str | None = None
+    lakebase_password: SecretStr | None = Field(default=None, repr=False)
+    lakebase_sslmode: str = "require"
+
+    # Default actor email used when ``X-Forwarded-Email`` is absent
+    # (local dev / test). The audit writer logs a warning every time
+    # the fallback kicks in so the booth operator sees it in the logs.
+    default_actor: str = "skyler@entrada.ai"
+
     def require_databricks_creds(self) -> tuple[str, SecretStr, str]:
         """Return ``(host, token, warehouse_id)`` or raise at startup.
 

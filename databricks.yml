@@ -27,6 +27,33 @@ targets:
       user_name: ${workspace.current_user.userName}
 
 resources:
+  # Slice 5 real-data migration: self-contained Lakebase provisioning.
+  # ``databricks bundle deploy -t dev`` creates the Postgres instance +
+  # registers the database catalog in Unity Catalog. Bundle schema
+  # ``resources.database_instances`` + ``resources.database_catalogs``
+  # confirmed via ``databricks bundle schema`` on CLI 0.297.x. The
+  # migration job below (``mip_lakebase_migrate``) applies ``lakebase/
+  # schema.sql`` + ``lakebase/seed_demo_campaigns.sql`` against the
+  # instance so the audit store has a live target on first deploy.
+  database_instances:
+    mip_app_state:
+      name: mip_app_state
+      # CU_1 is the smallest tier and is appropriate for Module 0's
+      # booth-demo write volume (audit + approvals on the order of a
+      # few rows per minute). Production lift to CU_2 would be a
+      # one-line bundle edit.
+      capacity: CU_1
+      node_count: 1
+      retention_window_in_days: 7
+      enable_readable_secondaries: false
+
+  database_catalogs:
+    mip_app_state_catalog:
+      name: mip_app_state
+      database_instance_name: ${resources.database_instances.mip_app_state.name}
+      database_name: ${var.lakebase_database_name}
+      create_database_if_not_exists: true
+
   apps:
     mip_demo_app:
       name: mip-demo-app
@@ -76,6 +103,35 @@ resources:
     mip_snapshot_dashboards:
       name: mip_snapshot_dashboards
       tasks: []
+
+    # Slice 5 real-data migration: apply Lakebase DDL + seed demo
+    # campaigns. Python task invokes jobs/lakebase_migrate.py which
+    # opens a psycopg3 connection to the instance created above and
+    # runs lakebase/schema.sql then lakebase/seed_demo_campaigns.sql.
+    # Both files are idempotent (CREATE ... IF NOT EXISTS + ON
+    # CONFLICT DO NOTHING) so re-running the job is a no-op.
+    mip_lakebase_migrate:
+      name: mip_lakebase_migrate
+      tags:
+        solution: mortgage-intelligence-platform
+        module: module0
+        owner: entrada
+        slice: module0-real-data-slice5
+      max_concurrent_runs: 1
+      environments:
+        - environment_key: py_default
+          spec:
+            client: "2"
+            dependencies:
+              - psycopg[binary]==3.2.10
+      tasks:
+        - task_key: apply_schema_and_seed
+          description: "Apply lakebase/schema.sql + lakebase/seed_demo_campaigns.sql against mip_app_state."
+          environment_key: py_default
+          spark_python_task:
+            python_file: jobs/lakebase_migrate.py
+          max_retries: 2
+          retry_on_timeout: true
 
     # Slice 1 real-data migration: FRED MORTGAGE30US -> silver.market_rates_weekly.
     # Self-contained deploy: task `init` applies DDL, `seed` loads the committed
@@ -190,14 +246,11 @@ resources:
     mip_lead_scoring:
       name: /Users/${workspace.current_user.userName}/mip-lead-scoring
 
-# Genie spaces (mortgage_lead_intelligence) and Lakebase instances
-# (mip_app_state) are not yet managed resource types in the Databricks CLI
-# bundle schema at v0.297.2; they are provisioned once per workspace and
-# referenced from the app via `resources:` entries in `resources/apps.yml`
-# (see `genie_space.id` and `database.database_name` there). This comment
-# block keeps their logical names visible to string-contract tests.
-# resources.genie_spaces.mortgage_lead_intelligence
-# resources.lakebase_instances.mip_app_state
+# Genie spaces (mortgage_lead_intelligence) are still provisioned out-of-
+# bundle via tools/databricks/provision_genie_space.py (see AGENTS.md).
+# Lakebase instances are declared above under resources.database_instances
+# as of Slice 5; a matching database_catalog block registers the app-state
+# database in UC so SQL warehouses can query it alongside mip_demo.gold.
 
 variables:
   uc_catalog:

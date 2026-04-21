@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import logging
 from typing import Annotated, cast
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 
 from backend.config.settings import settings
 from backend.schemas.offer import (
@@ -11,6 +12,8 @@ from backend.schemas.offer import (
     OfferRecommendRequest,
     OfferType,
 )
+from backend.services.audit_store import AuditStore, get_audit_store, resolve_actor
+from backend.services.lakebase import LakebaseError
 from backend.services.repositories import (
     BorrowerRepository,
     OfferRepository,
@@ -19,10 +22,20 @@ from backend.services.repositories import (
 )
 from backend.services.scoring import NBO_PRODUCT_LABELS
 
+log = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/offers", tags=["offers"])
 
 BorrowerRepoDep = Annotated[BorrowerRepository, Depends(get_borrower_repository)]
 OfferRepoDep = Annotated[OfferRepository, Depends(get_offer_repository)]
+AuditStoreDep = Annotated[AuditStore, Depends(get_audit_store)]
+
+
+def _safe_audit_write(store: AuditStore, **kwargs: object) -> None:
+    try:
+        store.write(**kwargs)  # type: ignore[arg-type]
+    except LakebaseError as exc:
+        log.warning("audit.write dropped: %s", exc)
 
 # The eight codes ``fn_next_best_offer`` returns are all valid OfferType
 # literals. This cast is safe because NBO_PRODUCT_LABELS is the contract.
@@ -189,8 +202,11 @@ def _alternatives_for(
 @router.post("/recommend", response_model=OfferRecommendation)
 def recommend_offer(
     payload: OfferRecommendRequest,
+    request: Request,
+    background: BackgroundTasks,
     borrower_repo: BorrowerRepoDep,
     offer_repo: OfferRepoDep,
+    audit: AuditStoreDep,
 ) -> OfferRecommendation:
     borrower = borrower_repo.get(payload.borrower_id)
     if borrower is None:
@@ -212,6 +228,23 @@ def recommend_offer(
         "cashout_equity_min_pct": settings.mip_cashout_equity_min_pct,
         "retention_min_spread_bps": settings.mip_retention_min_spread_bps,
     }
+
+    background.add_task(
+        _safe_audit_write,
+        audit,
+        actor=resolve_actor(request),
+        action="recommend_offer",
+        entity_type="borrower",
+        entity_id=borrower.borrower_id,
+        payload_json={
+            "offer_code": code,
+            "confidence": borrower.confidence,
+            "thresholds_applied": thresholds_applied,
+        },
+        evidence_ids=list(borrower.evidence_ids),
+        event_type="RECOMMEND_OFFER",
+        subject_clip=borrower.clip_id,
+    )
 
     return OfferRecommendation(
         borrower_id=borrower.borrower_id,
