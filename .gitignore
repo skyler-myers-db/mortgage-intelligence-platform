@@ -31,6 +31,7 @@ genie/space_id.txt
 
 # Claude local
 .claude/settings.local.json
+.claude/scheduled_tasks.lock
 .mcp.json
 
 # OS/editor

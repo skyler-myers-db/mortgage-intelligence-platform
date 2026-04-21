@@ -1,0 +1,6 @@
+- [Genie serialized_space schema](project_genie_schema.md) — canonical JSON shape + server-enforced rules for SDK create/update
+- [No MIP_MOCK_MODE runtime toggle](feedback_no_mock_runtime.md) — Slice 4 retired the mock runtime; future edits must not reintroduce silent fallback
+- [Lakebase bundle schema](project_lakebase_bundle_schema.md) — database_instances / database_catalogs are first-class bundle resources as of CLI 0.297.x
+- [Slice 6 resilience primitives](project_slice6_resilience.md) — breaker, retry, TTL cache, degraded banner, PII denylist; shared singletons via get_breaker / get_sql_client / get_lakebase_client
+- [Slice 7 Genie wiring](project_slice7_genie.md) — real Genie client + safe-corpus fallback only when breaker OPEN; degraded message never fabricates data
+- [Slice 10 catalog rename](project_slice10_catalog_rename.md) — mip_demo → mip; mip-app bundle rename; file renames via git mv; mip_demo_lender intentionally kept

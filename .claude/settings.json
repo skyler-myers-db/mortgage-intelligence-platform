@@ -1,0 +1,43 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Read(./secrets/**)",
+      "Read(./config/credentials.json)",
+      "Read(./frontend/dist/**)",
+      "Bash(rm -rf:*)",
+      "Bash(git push:*)",
+      "Bash(databricks workspace delete:*)"
+    ],
+    "allow": [
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(npm --prefix frontend run lint:*)",
+      "Bash(npm --prefix frontend run test:*)",
+      "Bash(npm --prefix frontend run build:*)",
+      "Bash(pytest:*)",
+      "Bash(ruff check:*)",
+      "Bash(python tools/verify_scaffold.py:*)",
+      "Bash(databricks bundle validate:*)"
+    ]
+  },
+  "env": {
+    "MAX_MCP_OUTPUT_TOKENS": "50000",
+    "MCP_TIMEOUT": "15000"
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python .claude/hooks/post_write_reminder.py"
+          }
+        ]
+      }
+    ]
+  }
+}

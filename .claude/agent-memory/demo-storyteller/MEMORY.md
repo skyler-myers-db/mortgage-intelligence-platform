@@ -1,0 +1,2 @@
+- [Chicago anchor metro](project_chicago_anchor.md) — DAIS talk track + canonical trio live in Chicago/IL, NOT Atlanta/GA (Atlanta is not in the Cotality share).
+- [Talk-track 6-8 min window](project_talk_track_window.md) — count spoken blockquote words; target 1050-1400 at ~170 wpm.
