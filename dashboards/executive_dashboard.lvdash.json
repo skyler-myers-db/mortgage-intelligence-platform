@@ -1,1 +1,591 @@
-{}
+{
+  "datasets": [
+    {
+      "name": "ds_funnel_totals",
+      "displayName": "Lead funnel totals",
+      "queryLines": [
+        "SELECT",
+        "  COUNT(*)                                                                 AS addressable_borrowers,",
+        "  SUM(CASE WHEN in_the_money THEN 1 ELSE 0 END)                             AS in_the_money_borrowers,",
+        "  SUM(CASE WHEN opportunity_score >= 75 THEN 1 ELSE 0 END)                  AS high_opportunity_borrowers,",
+        "  SUM(CASE WHEN recommended_offer_code IS NOT NULL",
+        "            AND recommended_offer_code <> 'nurture' THEN 1 ELSE 0 END)     AS offer_recommended_borrowers,",
+        "  SUM(CASE WHEN approval_status = 'approved' THEN 1 ELSE 0 END)             AS approved_borrowers,",
+        "  SUM(CASE WHEN approval_status = 'actioned' THEN 1 ELSE 0 END)             AS actioned_borrowers",
+        "FROM mip.gold.borrower_360"
+      ]
+    },
+    {
+      "name": "ds_funnel_stages",
+      "displayName": "Lead funnel stages",
+      "queryLines": [
+        "SELECT stage, stage_order, borrower_count FROM (",
+        "  SELECT 'Addressable'           AS stage, 1 AS stage_order, COUNT(*) AS borrower_count FROM mip.gold.borrower_360",
+        "  UNION ALL",
+        "  SELECT 'In the Money',              2, SUM(CASE WHEN in_the_money THEN 1 ELSE 0 END)                                                                 FROM mip.gold.borrower_360",
+        "  UNION ALL",
+        "  SELECT 'High Opportunity (>= 75)',  3, SUM(CASE WHEN opportunity_score >= 75 THEN 1 ELSE 0 END)                                                      FROM mip.gold.borrower_360",
+        "  UNION ALL",
+        "  SELECT 'Offer Recommended',         4, SUM(CASE WHEN recommended_offer_code IS NOT NULL AND recommended_offer_code <> 'nurture' THEN 1 ELSE 0 END)    FROM mip.gold.borrower_360",
+        "  UNION ALL",
+        "  SELECT 'Approved',                  5, SUM(CASE WHEN approval_status = 'approved' THEN 1 ELSE 0 END)                                                 FROM mip.gold.borrower_360",
+        "  UNION ALL",
+        "  SELECT 'Actioned',                  6, SUM(CASE WHEN approval_status = 'actioned' THEN 1 ELSE 0 END)                                                 FROM mip.gold.borrower_360",
+        ") ORDER BY stage_order"
+      ]
+    },
+    {
+      "name": "ds_score_distribution",
+      "displayName": "Opportunity score distribution",
+      "queryLines": [
+        "SELECT",
+        "  CAST(FLOOR(opportunity_score / 5) * 5 AS INT) AS score_bucket,",
+        "  COUNT(*)                                      AS borrower_count",
+        "FROM mip.gold.borrower_360",
+        "GROUP BY CAST(FLOOR(opportunity_score / 5) * 5 AS INT)",
+        "ORDER BY score_bucket"
+      ]
+    },
+    {
+      "name": "ds_state_opportunity",
+      "displayName": "Mean opportunity score by state",
+      "queryLines": [
+        "SELECT",
+        "  state                                         AS state,",
+        "  COUNT(DISTINCT clip)                          AS borrower_count,",
+        "  CAST(ROUND(AVG(opportunity_score)) AS INT)    AS mean_opportunity_score,",
+        "  SUM(CASE WHEN in_the_money THEN 1 ELSE 0 END) AS in_the_money_borrowers",
+        "FROM mip.semantics.borrower_opportunity_metric_view",
+        "GROUP BY state",
+        "ORDER BY mean_opportunity_score DESC"
+      ]
+    },
+    {
+      "name": "ds_state_avm_value",
+      "displayName": "Total AVM value by state",
+      "queryLines": [
+        "SELECT",
+        "  state                               AS state,",
+        "  SUM(avm_value)                      AS total_avm_value_usd,",
+        "  SUM(current_lien_balance)           AS total_lien_balance_usd,",
+        "  SUM(equity_estimate)                AS total_equity_usd",
+        "FROM mip.gold.borrower_360",
+        "GROUP BY state",
+        "ORDER BY total_avm_value_usd DESC"
+      ]
+    },
+    {
+      "name": "ds_top_zips_itm",
+      "displayName": "Top 20 ZIPs by in-the-money borrowers",
+      "queryLines": [
+        "SELECT",
+        "  state                                                     AS state,",
+        "  zip                                                       AS zip,",
+        "  city                                                      AS city,",
+        "  COUNT(*)                                                  AS borrower_count,",
+        "  SUM(CASE WHEN in_the_money THEN 1 ELSE 0 END)              AS in_the_money_borrowers,",
+        "  CAST(ROUND(AVG(opportunity_score)) AS INT)                AS mean_opportunity_score,",
+        "  CAST(ROUND(AVG(rate_spread_bps))  AS INT)                 AS mean_rate_spread_bps",
+        "FROM mip.gold.borrower_360",
+        "WHERE zip IS NOT NULL",
+        "GROUP BY state, zip, city",
+        "HAVING SUM(CASE WHEN in_the_money THEN 1 ELSE 0 END) > 0",
+        "ORDER BY in_the_money_borrowers DESC",
+        "LIMIT 20"
+      ]
+    },
+    {
+      "name": "ds_rate_spread_hist",
+      "displayName": "Rate spread distribution (bps)",
+      "queryLines": [
+        "SELECT",
+        "  CAST(FLOOR(rate_spread_bps / 25) * 25 AS INT) AS spread_bucket_bps,",
+        "  COUNT(*)                                      AS borrower_count",
+        "FROM mip.gold.borrower_360",
+        "WHERE rate_spread_bps BETWEEN -100 AND 400",
+        "GROUP BY CAST(FLOOR(rate_spread_bps / 25) * 25 AS INT)",
+        "ORDER BY spread_bucket_bps"
+      ]
+    },
+    {
+      "name": "ds_equity_vs_spread",
+      "displayName": "Equity percent vs rate spread by segment",
+      "queryLines": [
+        "SELECT",
+        "  segment                AS segment,",
+        "  state                  AS state,",
+        "  equity_pct             AS equity_pct,",
+        "  rate_spread_bps        AS rate_spread_bps,",
+        "  opportunity_score      AS opportunity_score",
+        "FROM mip.semantics.borrower_opportunity_metric_view",
+        "WHERE rate_spread_bps BETWEEN -100 AND 400",
+        "  AND equity_pct       BETWEEN    0 AND 100",
+        "LIMIT 5000"
+      ]
+    },
+    {
+      "name": "ds_top_borrowers",
+      "displayName": "Top 10 borrowers by opportunity score",
+      "queryLines": [
+        "SELECT",
+        "  borrower_id             AS borrower_id,",
+        "  display_name            AS display_name,",
+        "  state                   AS state,",
+        "  city                    AS city,",
+        "  opportunity_score       AS opportunity_score,",
+        "  rate_spread_bps         AS rate_spread_bps,",
+        "  equity_pct              AS equity_pct,",
+        "  recommended_offer       AS recommended_offer,",
+        "  rank_overall            AS rank_overall",
+        "FROM mip.gold.lead_population",
+        "ORDER BY opportunity_score DESC, rank_overall ASC",
+        "LIMIT 10"
+      ]
+    }
+  ],
+  "pages": [
+    {
+      "name": "page_funnel",
+      "displayName": "Funnel",
+      "layout": [
+        {
+          "widget": {
+            "name": "kpi_addressable",
+            "textbox_spec": null,
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_funnel_totals",
+                  "fields": [
+                    { "name": "addressable_borrowers", "expression": "`addressable_borrowers`" }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": { "fieldName": "addressable_borrowers", "displayName": "Addressable Borrowers" }
+              },
+              "frame": {
+                "title": "Addressable Borrowers",
+                "description": "Unique CLIPs in the 6-state Cotality share with an open lien",
+                "showTitle": true,
+                "showDescription": true
+              }
+            }
+          },
+          "position": { "x": 0, "y": 0, "width": 2, "height": 3 }
+        },
+        {
+          "widget": {
+            "name": "kpi_itm",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_funnel_totals",
+                  "fields": [
+                    { "name": "in_the_money_borrowers", "expression": "`in_the_money_borrowers`" }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": { "fieldName": "in_the_money_borrowers", "displayName": "In-the-Money Borrowers" }
+              },
+              "frame": {
+                "title": "In-the-Money Borrowers",
+                "description": "Rate spread >= 75 bps and equity >= 15 percent",
+                "showTitle": true,
+                "showDescription": true
+              }
+            }
+          },
+          "position": { "x": 2, "y": 0, "width": 2, "height": 3 }
+        },
+        {
+          "widget": {
+            "name": "kpi_offers",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_funnel_totals",
+                  "fields": [
+                    { "name": "offer_recommended_borrowers", "expression": "`offer_recommended_borrowers`" }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": { "fieldName": "offer_recommended_borrowers", "displayName": "Offers Recommended" }
+              },
+              "frame": {
+                "title": "Offers Recommended",
+                "description": "Borrowers with a next-best-offer other than nurture",
+                "showTitle": true,
+                "showDescription": true
+              }
+            }
+          },
+          "position": { "x": 4, "y": 0, "width": 2, "height": 3 }
+        },
+        {
+          "widget": {
+            "name": "kpi_actioned",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_funnel_totals",
+                  "fields": [
+                    { "name": "actioned_borrowers", "expression": "`actioned_borrowers`" }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": { "fieldName": "actioned_borrowers", "displayName": "Outreach Actioned" }
+              },
+              "frame": {
+                "title": "Outreach Actioned",
+                "description": "Approved and sent by a human loan officer (authoritative state lives in Lakebase; mirrored into gold on refresh)",
+                "showTitle": true,
+                "showDescription": true
+              }
+            }
+          },
+          "position": { "x": 0, "y": 3, "width": 2, "height": 3 }
+        },
+        {
+          "widget": {
+            "name": "chart_funnel_stages",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_funnel_stages",
+                  "fields": [
+                    { "name": "stage", "expression": "`stage`" },
+                    { "name": "borrower_count", "expression": "`borrower_count`" },
+                    { "name": "stage_order", "expression": "`stage_order`" }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": { "fieldName": "borrower_count", "scale": { "type": "quantitative" }, "displayName": "Borrowers" },
+                "y": { "fieldName": "stage", "scale": { "type": "categorical", "sort": { "by": "stage_order", "direction": "ascending" } }, "displayName": "Funnel Stage" }
+              },
+              "frame": {
+                "title": "Lead Funnel - Addressable to Actioned",
+                "description": "Volume at each step from raw population to human-approved outreach",
+                "showTitle": true,
+                "showDescription": true
+              }
+            }
+          },
+          "position": { "x": 2, "y": 3, "width": 4, "height": 5 }
+        },
+        {
+          "widget": {
+            "name": "chart_score_distribution",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_score_distribution",
+                  "fields": [
+                    { "name": "score_bucket", "expression": "`score_bucket`" },
+                    { "name": "borrower_count", "expression": "`borrower_count`" }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "line",
+              "encodings": {
+                "x": { "fieldName": "score_bucket", "scale": { "type": "quantitative" }, "displayName": "Opportunity Score (bucket, 5-point bins)" },
+                "y": { "fieldName": "borrower_count", "scale": { "type": "quantitative" }, "displayName": "Borrowers" }
+              },
+              "frame": {
+                "title": "Opportunity Score Distribution",
+                "description": "Count of borrowers at each 5-point opportunity score bucket (0 to 100)",
+                "showTitle": true,
+                "showDescription": true
+              }
+            }
+          },
+          "position": { "x": 0, "y": 6, "width": 6, "height": 5 }
+        }
+      ]
+    },
+    {
+      "name": "page_geography",
+      "displayName": "Geography",
+      "layout": [
+        {
+          "widget": {
+            "name": "map_state_opportunity",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_state_opportunity",
+                  "fields": [
+                    { "name": "state", "expression": "`state`" },
+                    { "name": "mean_opportunity_score", "expression": "`mean_opportunity_score`" },
+                    { "name": "borrower_count", "expression": "`borrower_count`" },
+                    { "name": "in_the_money_borrowers", "expression": "`in_the_money_borrowers`" }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "symbol-map",
+              "encodings": {
+                "region": { "fieldName": "state", "scale": { "type": "categorical" }, "displayName": "State" },
+                "color":  { "fieldName": "mean_opportunity_score", "scale": { "type": "quantitative" }, "displayName": "Mean Opportunity Score" },
+                "size":   { "fieldName": "borrower_count", "scale": { "type": "quantitative" }, "displayName": "Borrowers" }
+              },
+              "frame": {
+                "title": "Opportunity by State",
+                "description": "Mean opportunity score across the 6-state Cotality share footprint (IL, CA, FL, TX, WA, CO)",
+                "showTitle": true,
+                "showDescription": true
+              }
+            }
+          },
+          "position": { "x": 0, "y": 0, "width": 4, "height": 6 }
+        },
+        {
+          "widget": {
+            "name": "chart_state_avm_value",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_state_avm_value",
+                  "fields": [
+                    { "name": "state", "expression": "`state`" },
+                    { "name": "total_avm_value_usd", "expression": "`total_avm_value_usd`" }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": { "fieldName": "state", "scale": { "type": "categorical", "sort": { "by": "total_avm_value_usd", "direction": "descending" } }, "displayName": "State" },
+                "y": { "fieldName": "total_avm_value_usd", "scale": { "type": "quantitative" }, "displayName": "Total AVM Value (USD)" }
+              },
+              "frame": {
+                "title": "Total AVM Value by State",
+                "description": "Aggregate addressable property value (marketing AVM) in the footprint",
+                "showTitle": true,
+                "showDescription": true
+              }
+            }
+          },
+          "position": { "x": 4, "y": 0, "width": 2, "height": 6 }
+        },
+        {
+          "widget": {
+            "name": "table_top_zips",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_top_zips_itm",
+                  "fields": [
+                    { "name": "state", "expression": "`state`" },
+                    { "name": "zip", "expression": "`zip`" },
+                    { "name": "city", "expression": "`city`" },
+                    { "name": "borrower_count", "expression": "`borrower_count`" },
+                    { "name": "in_the_money_borrowers", "expression": "`in_the_money_borrowers`" },
+                    { "name": "mean_opportunity_score", "expression": "`mean_opportunity_score`" },
+                    { "name": "mean_rate_spread_bps", "expression": "`mean_rate_spread_bps`" }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 1,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  { "fieldName": "state", "displayName": "State" },
+                  { "fieldName": "zip", "displayName": "ZIP" },
+                  { "fieldName": "city", "displayName": "City" },
+                  { "fieldName": "borrower_count", "displayName": "Borrowers" },
+                  { "fieldName": "in_the_money_borrowers", "displayName": "In-the-Money Borrowers" },
+                  { "fieldName": "mean_opportunity_score", "displayName": "Mean Opportunity Score" },
+                  { "fieldName": "mean_rate_spread_bps", "displayName": "Mean Rate Spread (bps)" }
+                ]
+              },
+              "frame": {
+                "title": "Top 20 ZIPs by In-the-Money Borrowers",
+                "description": "ZIPs with the densest rate-refi opportunity - use for territory planning",
+                "showTitle": true,
+                "showDescription": true
+              }
+            }
+          },
+          "position": { "x": 0, "y": 6, "width": 6, "height": 7 }
+        }
+      ]
+    },
+    {
+      "name": "page_economics",
+      "displayName": "Economic incentive",
+      "layout": [
+        {
+          "widget": {
+            "name": "chart_rate_spread_hist",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_rate_spread_hist",
+                  "fields": [
+                    { "name": "spread_bucket_bps", "expression": "`spread_bucket_bps`" },
+                    { "name": "borrower_count", "expression": "`borrower_count`" }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": { "fieldName": "spread_bucket_bps", "scale": { "type": "quantitative" }, "displayName": "Rate Spread vs Market (bps, 25-bp bins)" },
+                "y": { "fieldName": "borrower_count", "scale": { "type": "quantitative" }, "displayName": "Borrowers" }
+              },
+              "frame": {
+                "title": "Rate Spread Distribution",
+                "description": "Borrowers by rate spread versus the current 30-year FRED rate - positive = above market = refi opportunity",
+                "showTitle": true,
+                "showDescription": true
+              }
+            }
+          },
+          "position": { "x": 0, "y": 0, "width": 6, "height": 5 }
+        },
+        {
+          "widget": {
+            "name": "chart_equity_vs_spread",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_equity_vs_spread",
+                  "fields": [
+                    { "name": "equity_pct", "expression": "`equity_pct`" },
+                    { "name": "rate_spread_bps", "expression": "`rate_spread_bps`" },
+                    { "name": "segment", "expression": "`segment`" },
+                    { "name": "state", "expression": "`state`" },
+                    { "name": "opportunity_score", "expression": "`opportunity_score`" }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "scatter",
+              "encodings": {
+                "x":     { "fieldName": "equity_pct", "scale": { "type": "quantitative" }, "displayName": "Equity (%)" },
+                "y":     { "fieldName": "rate_spread_bps", "scale": { "type": "quantitative" }, "displayName": "Rate Spread (bps)" },
+                "color": { "fieldName": "segment", "scale": { "type": "categorical" }, "displayName": "Segment" }
+              },
+              "frame": {
+                "title": "Equity vs Rate Spread by Segment",
+                "description": "Upper-right quadrant is the in-the-money cohort: high equity and high rate spread",
+                "showTitle": true,
+                "showDescription": true
+              }
+            }
+          },
+          "position": { "x": 0, "y": 5, "width": 6, "height": 6 }
+        },
+        {
+          "widget": {
+            "name": "table_top_borrowers",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_top_borrowers",
+                  "fields": [
+                    { "name": "borrower_id", "expression": "`borrower_id`" },
+                    { "name": "display_name", "expression": "`display_name`" },
+                    { "name": "state", "expression": "`state`" },
+                    { "name": "city", "expression": "`city`" },
+                    { "name": "opportunity_score", "expression": "`opportunity_score`" },
+                    { "name": "rate_spread_bps", "expression": "`rate_spread_bps`" },
+                    { "name": "equity_pct", "expression": "`equity_pct`" },
+                    { "name": "recommended_offer", "expression": "`recommended_offer`" },
+                    { "name": "rank_overall", "expression": "`rank_overall`" }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 1,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  { "fieldName": "rank_overall", "displayName": "Rank" },
+                  { "fieldName": "borrower_id", "displayName": "Borrower" },
+                  { "fieldName": "display_name", "displayName": "Label" },
+                  { "fieldName": "state", "displayName": "State" },
+                  { "fieldName": "city", "displayName": "City" },
+                  { "fieldName": "opportunity_score", "displayName": "Opportunity Score" },
+                  { "fieldName": "rate_spread_bps", "displayName": "Rate Spread (bps)" },
+                  { "fieldName": "equity_pct", "displayName": "Equity (%)" },
+                  { "fieldName": "recommended_offer", "displayName": "Recommended Offer" }
+                ]
+              },
+              "frame": {
+                "title": "Top 10 Borrowers by Opportunity Score",
+                "description": "Top of the lead queue - synthetic display labels only, no real PII",
+                "showTitle": true,
+                "showDescription": true
+              }
+            }
+          },
+          "position": { "x": 0, "y": 11, "width": 6, "height": 5 }
+        }
+      ]
+    }
+  ]
+}
