@@ -256,7 +256,7 @@ subscores AS (
         AND w.first_pos_loan_type IN ('CONV','FHA','VA')
         THEN 85 - (55 - LEAST(55, COALESCE(w.bedrooms, 0) * 10 + CAST(COALESCE(w.bathrooms, 0) AS INT) * 5))
       WHEN w.is_owner_occupied   THEN 75
-      WHEN w.is_corporate_owner  THEN 65
+      WHEN w.owner_is_corporate  THEN 65
       ELSE 58
     END AS fit,
     -- relationship (data-contract §5):
@@ -271,7 +271,7 @@ subscores AS (
 )
 SELECT
   w.clip,
-  CONCAT('B-', LPAD(CAST(ABS(XXHASH64(w.clip)) MOD 99999 + 10000 AS STRING), 5, '0')) AS borrower_id,
+  CONCAT('B-', LPAD(CAST((ABS(XXHASH64(w.clip)) % 99999) + 10000 AS STRING), 5, '0')) AS borrower_id,
   CONCAT('Owner ', SUBSTR(w.owner_name_hash, 1, 8))                                   AS display_name,
   w.city,
   w.state,

@@ -108,13 +108,18 @@ def _read_share_table(name: str, streaming: bool = True):  # pragma: no cover
 def _pii_salt_expr():  # pragma: no cover -- Databricks-runtime only
     """Return a Spark column expression carrying the PII salt.
 
-    Uses `dbutils.secrets.get` via `F.expr` so pipeline refreshes pick up
-    salt rotations without a redeploy. The fallback literal matches
-    silver_property_master.sql's transformation variant.
+    DLT's analyzer enforces SECRET_FUNCTION_SCOPE_NOT_CONSTANT, which
+    rejects the scope/key args unless they're parsed as bare string
+    literals at analyze time. The earlier ``try_cast(secret(...))``
+    form defeated that check. Pass the literals directly and rely on
+    the pipeline's secret-scope preflight (scope `mip`, key
+    `pii-salt-v1`) to guarantee the secret exists at runtime. If the
+    scope / secret is ever missing, the @dlt.expect_or_fail on CLIP
+    will still surface a hard failure — there is no silent fallback
+    on the data path.
     """
     return F.expr(
-        f"coalesce(try_cast(secret('{_PII_SALT_SCOPE}','{_PII_SALT_KEY}') "
-        f"as string), '{_PII_SALT_FALLBACK}')"
+        f"secret('{_PII_SALT_SCOPE}', '{_PII_SALT_KEY}')"
     )
 
 
