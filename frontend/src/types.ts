@@ -1,0 +1,62 @@
+export type SegmentCode = 'itm' | 'listed' | 'permit' | 'investor' | 'equity' | 'retention';
+export type OfferType = 'refi' | 'heloc' | 'cash_out' | 'purchase' | 'retention' | 'recapture';
+export type ApprovalStatus = 'pending' | 'approved' | 'rejected';
+
+export interface EvidenceEvent {
+  evidence_id: string;
+  source_product: string;
+  source_table: string;
+  signal_type: string;
+  signal_value: string;
+  display_text: string;
+  confidence: number;
+  timestamp: string;
+}
+
+export interface SegmentSummary {
+  code: SegmentCode;
+  name: string;
+  count: number;
+  delta: string;
+  avg_score: number;
+  description: string;
+  color: string;
+}
+
+export interface LeadSummary {
+  borrower_id: string;
+  display_name: string;
+  city: string;
+  state: string;
+  zip: string;
+  segment_codes: SegmentCode[];
+  equity_estimate: number;
+  rate_spread_bps: number;
+  opportunity_score: number;
+  confidence: number;
+  recommended_offer: string;
+  why_now: string;
+  evidence_ids: string[];
+  approval_status: ApprovalStatus;
+}
+
+export interface Borrower360 extends LeadSummary {
+  clip_id: string;
+  owner_link_id: string;
+  subject_property: string;
+  avm_value: number;
+  current_lien_balance: number;
+  current_rate: number;
+  ltv: number;
+  related_property_count: number;
+  trigger_timeline: EvidenceEvent[];
+  evidence_events: EvidenceEvent[];
+}
+
+export interface PortfolioPreview {
+  marketable_population: number;
+  high_intent_leads: number;
+  avg_score: number;
+  projected_contact_to_app: number;
+  cost_per_contact: number;
+}
