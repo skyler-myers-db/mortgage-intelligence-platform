@@ -60,16 +60,15 @@ zip:
 provision-genie:
 	DATABRICKS_CONFIG_PROFILE=DEFAULT python tools/databricks/provision_genie_space.py --profile DEFAULT
 
+# The env-wired targets delegate to tools/databricks/bundle_env.py which uses
+# python-dotenv to parse .env.local safely (tolerates unquoted spaces and
+# angle-bracket placeholder values). It maps DATABRICKS_WAREHOUSE_ID and
+# GENIE_SPACE_ID to BUNDLE_VAR_sql_warehouse_id / BUNDLE_VAR_genie_space_id
+# before invoking the Databricks CLI.
 bundle-validate-env:
-	@set -a; [ -f .env.local ] && . ./.env.local; set +a; \
-	  BUNDLE_VAR_sql_warehouse_id="$${DATABRICKS_WAREHOUSE_ID:-00000000PLACEHOLDER}" \
-	  BUNDLE_VAR_genie_space_id="$${GENIE_SPACE_ID:-00000000PLACEHOLDER}" \
-	  databricks bundle validate -t dev
+	@python tools/databricks/bundle_env.py validate -t dev
 
 bundle-deploy-dev:
-	@set -a; [ -f .env.local ] && . ./.env.local; set +a; \
-	  read -p "About to DEPLOY to your workspace. Continue? [y/N] " ans; \
+	@read -p "About to DEPLOY to your workspace. Continue? [y/N] " ans; \
 	  test "$$ans" = "y" || { echo "aborted."; exit 1; }; \
-	  BUNDLE_VAR_sql_warehouse_id="$${DATABRICKS_WAREHOUSE_ID:-00000000PLACEHOLDER}" \
-	  BUNDLE_VAR_genie_space_id="$${GENIE_SPACE_ID:-00000000PLACEHOLDER}" \
-	  databricks bundle deploy -t dev
+	  python tools/databricks/bundle_env.py deploy -t dev

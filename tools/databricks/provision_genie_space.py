@@ -43,6 +43,18 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SPACE_YAML = REPO_ROOT / "genie" / "mortgage_lead_intelligence_space.yml"
 SPACE_ID_FILE = REPO_ROOT / "genie" / "space_id.txt"
 
+# Load .env.local (if present) so DATABRICKS_HOST / DATABRICKS_WAREHOUSE_ID /
+# GENIE_SPACE_ID flow through to the SDK. python-dotenv tolerates unquoted
+# spaces and angle-bracket placeholders that plain bash sourcing chokes on.
+try:
+    from dotenv import load_dotenv
+
+    _env_local = REPO_ROOT / ".env.local"
+    if _env_local.exists():
+        load_dotenv(_env_local, override=False)
+except ImportError:  # pragma: no cover — dotenv is pinned in requirements.txt
+    pass
+
 DEFAULT_SPACE_NAME = "Mortgage Lead Intelligence"
 DEFAULT_PROFILE = "DEFAULT"
 

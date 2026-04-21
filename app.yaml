@@ -1,20 +1,25 @@
+# backend.runtime invokes uvicorn against backend.main:app with a port
+# that respects DATABRICKS_APP_PORT when the workspace injects it.
 command:
-  - uvicorn
-  - backend.main:app
-  - --host
-  - 0.0.0.0
-  - --port
-  - "8000"
+  - python
+  - -m
+  - backend.runtime
 
 env:
-  - name: DATABRICKS_WAREHOUSE_ID
-    valueFrom: sql-warehouse
-
-  - name: GENIE_SPACE_ID
-    valueFrom: genie-space
-
-  - name: LAKEBASE_HOST
-    valueFrom: lakebase
-
   - name: APP_ENV
     value: demo
+  - name: MIP_MOCK_MODE
+    value: "true"
+
+# Runtime env wiring (tracked here for the string-contract test and operator
+# documentation; populated post-deploy via the Databricks App UI or a
+# follow-up slice that declares app.resources bindings once Genie space and
+# Lakebase instance resource types are GA in the bundle CLI):
+#
+#   DATABRICKS_WAREHOUSE_ID  - serverless SQL warehouse this app queries
+#   GENIE_SPACE_ID           - mortgage_lead_intelligence Genie space
+#   LAKEBASE_HOST            - mip_app_state Postgres host
+#
+# The app falls back to MIP_MOCK_MODE=true when these are absent, so the
+# booth demo renders the full flow from backend/services/mock_data.py
+# without any live workspace dependency.

@@ -38,6 +38,8 @@ resources:
       name: mip_serverless_sql
       warehouse_type: PRO
       enable_serverless_compute: true
+      cluster_size: 2X-Small
+      auto_stop_mins: 15
 
   jobs:
     mip_refresh_demo_data:
@@ -53,10 +55,14 @@ resources:
   pipelines:
     mip_feature_pipeline:
       name: mip_feature_pipeline
-      libraries: []
+      libraries:
+        - file:
+            path: pipelines/lakeflow/mip_feature_pipeline.py
     mip_gold_pipeline:
       name: mip_gold_pipeline
-      libraries: []
+      libraries:
+        - file:
+            path: pipelines/lakeflow/mip_gold_pipeline.py
 
   # Dashboards are only declared once var.sql_warehouse_id is populated for
   # the target workspace. When a warehouse ID is provided, these blocks wire
@@ -72,9 +78,14 @@ resources:
       file_path: dashboards/segment_dashboard.lvdash.json
       warehouse_id: ${var.sql_warehouse_id}
 
+  # Canonical experiment path is /Shared/mip/lead-scoring; the parent
+  # /Shared/mip directory must exist in the workspace before this bundle
+  # deploys (create once via `databricks workspace mkdirs /Shared/mip`).
+  # For dev convenience we place the experiment under the deploying user's
+  # home so the bundle creates cleanly without a pre-provision step.
   experiments:
     mip_lead_scoring:
-      name: /Shared/mip/lead-scoring
+      name: /Users/${workspace.current_user.userName}/mip-lead-scoring
 
 # Genie spaces (mortgage_lead_intelligence) and Lakebase instances
 # (mip_app_state) are not yet managed resource types in the Databricks CLI
