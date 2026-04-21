@@ -1,0 +1,75 @@
+[
+  {
+    "id": "case_01_all_zeros",
+    "inputs": {"economic_incentive": 0, "intent_trigger": 0, "fit": 0, "relationship": 0, "evidence": 0},
+    "expected_score": 0,
+    "note": "Floor: no signal on any axis yields 0."
+  },
+  {
+    "id": "case_02_all_hundreds",
+    "inputs": {"economic_incentive": 100, "intent_trigger": 100, "fit": 100, "relationship": 100, "evidence": 100},
+    "expected_score": 100,
+    "note": "Ceiling: maxed on every axis yields exactly 100, no clip needed."
+  },
+  {
+    "id": "case_03_demo_b48291_itm_heavy",
+    "inputs": {"economic_incentive": 98, "intent_trigger": 95, "fit": 90, "relationship": 85, "evidence": 92},
+    "expected_score": 94,
+    "note": "Rodriguez (B-48291): ITM + equity, 875 bps spread, Refinance + HELOC. Matches hardcoded demo score of 94."
+  },
+  {
+    "id": "case_04_demo_b48294_heloc_heavy",
+    "inputs": {"economic_incentive": 85, "intent_trigger": 92, "fit": 85, "relationship": 80, "evidence": 85},
+    "expected_score": 87,
+    "note": "Park (B-48294): permit + equity, 525 bps spread, HELOC. Computes 86.60, bankers-rounds to 87. Matches demo."
+  },
+  {
+    "id": "case_05_demo_b48295_listed_rounding",
+    "inputs": {"economic_incentive": 70, "intent_trigger": 95, "fit": 80, "relationship": 85, "evidence": 80},
+    "expected_score": 82,
+    "note": "Thompson (B-48295): listed + retention, 250 bps, Purchase Mortgage. Computes 81.50; banker's rounding (half-to-even) yields 82. Matches demo AND pins the rounding rule."
+  },
+  {
+    "id": "case_06_banker_round_half_to_even_down",
+    "inputs": {"economic_incentive": 49, "intent_trigger": 50, "fit": 50, "relationship": 50, "evidence": 50},
+    "expected_score": 50,
+    "note": "Banker's-rounding anchor: 49.65 rounds to 50 normally. Kept as a near-half sanity case; paired with case_05 (81.5 -> 82) and case_07 (50.5 -> 50) to fully pin round-half-to-even."
+  },
+  {
+    "id": "case_07_banker_round_half_to_even_pure_half",
+    "inputs": {"economic_incentive": 50, "intent_trigger": 50, "fit": 60, "relationship": 50, "evidence": 50},
+    "expected_score": 52,
+    "note": "Exact: 17.5 + 15 + 9 + 5 + 5 = 51.5, a pure half. Banker's rounding picks the even neighbor (52). This is THE test that locks round-half-to-even vs. round-half-away-from-zero.",
+    "weight_check": true
+  },
+  {
+    "id": "case_08_clipping_guard_high",
+    "inputs": {"economic_incentive": 100, "intent_trigger": 100, "fit": 100, "relationship": 100, "evidence": 100},
+    "expected_score": 100,
+    "note": "Clip guard at the ceiling. In-range inputs can never exceed 100, but this pins the GREATEST/LEAST behavior. (Dup of case_02 by construction; kept as an explicit clip-intent test.)"
+  },
+  {
+    "id": "case_09_null_component_coerced_to_zero",
+    "inputs": {"economic_incentive": 100, "intent_trigger": 100, "fit": null, "relationship": 100, "evidence": 100},
+    "expected_score": 85,
+    "note": "NULL fit -> 0. Expected = 0.35*100 + 0.30*100 + 0.15*0 + 0.10*100 + 0.10*100 = 85. Pins the COALESCE(.,0) contract."
+  },
+  {
+    "id": "case_10_all_nulls_return_zero_not_null",
+    "inputs": {"economic_incentive": null, "intent_trigger": null, "fit": null, "relationship": null, "evidence": null},
+    "expected_score": 0,
+    "note": "Totally-NULL row returns 0, not NULL. Keeps opportunity_score NOT NULL for downstream ORDER BY."
+  },
+  {
+    "id": "case_11_mid_itm_realistic",
+    "inputs": {"economic_incentive": 78, "intent_trigger": 62, "fit": 70, "relationship": 55, "evidence": 65},
+    "expected_score": 68,
+    "note": "Realistic mid-tier ITM borrower: decent rate spread, moderate trigger. Exact: 27.3 + 18.6 + 10.5 + 5.5 + 6.5 = 68.4 -> 68. Protects against off-by-one drift in the common-case band."
+  },
+  {
+    "id": "case_12_mid_heloc_realistic",
+    "inputs": {"economic_incentive": 55, "intent_trigger": 88, "fit": 72, "relationship": 60, "evidence": 70},
+    "expected_score": 69,
+    "note": "Realistic HELOC candidate: recent permit + strong equity drives a high intent trigger despite modest rate economics. Exact: 19.25 + 26.4 + 10.8 + 6.0 + 7.0 = 69.45 -> 69."
+  }
+]
