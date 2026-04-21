@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from typing import cast
+from typing import Annotated, cast
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
 from backend.config.settings import settings
 from backend.schemas.offer import (
@@ -11,10 +11,18 @@ from backend.schemas.offer import (
     OfferRecommendRequest,
     OfferType,
 )
-from backend.services import mock_data
+from backend.services.repositories import (
+    BorrowerRepository,
+    OfferRepository,
+    get_borrower_repository,
+    get_offer_repository,
+)
 from backend.services.scoring import NBO_PRODUCT_LABELS
 
 router = APIRouter(prefix="/api/offers", tags=["offers"])
+
+BorrowerRepoDep = Annotated[BorrowerRepository, Depends(get_borrower_repository)]
+OfferRepoDep = Annotated[OfferRepository, Depends(get_offer_repository)]
 
 # The eight codes ``fn_next_best_offer`` returns are all valid OfferType
 # literals. This cast is safe because NBO_PRODUCT_LABELS is the contract.
@@ -179,16 +187,20 @@ def _alternatives_for(
 
 
 @router.post("/recommend", response_model=OfferRecommendation)
-def recommend_offer(payload: OfferRecommendRequest) -> OfferRecommendation:
-    borrower = next(
-        (b for b in mock_data.BORROWERS if b.borrower_id == payload.borrower_id),
-        None,
-    )
+def recommend_offer(
+    payload: OfferRecommendRequest,
+    borrower_repo: BorrowerRepoDep,
+    offer_repo: OfferRepoDep,
+) -> OfferRecommendation:
+    borrower = borrower_repo.get(payload.borrower_id)
     if borrower is None:
         raise HTTPException(status_code=404, detail=f"Borrower {payload.borrower_id} not found")
 
-    inputs = mock_data.BORROWER_OFFER_INPUTS[borrower.borrower_id]
-    code = inputs["offer_code"]
+    inputs = offer_repo.get_offer_inputs(borrower.borrower_id)
+    if inputs is None:
+        # Defense in depth: every borrower in the population has offer inputs.
+        raise HTTPException(status_code=404, detail=f"Borrower {payload.borrower_id} not found")
+    code = cast(str, inputs["offer_code"])
     if code not in _VALID_OFFER_TYPES:
         # Defense in depth: scoring contract violation would surface here.
         raise HTTPException(status_code=500, detail=f"Invalid offer_code '{code}' from next_best_offer")
@@ -209,13 +221,13 @@ def recommend_offer(payload: OfferRecommendRequest) -> OfferRecommendation:
         confidence=borrower.confidence,
         rationale=_rationale_for(
             code,
-            spread=inputs["rate_spread_bps"],
-            equity=inputs["equity_pct"],
-            permit=inputs["has_permit"],
-            listed=inputs["listed_for_sale"],
-            investor=inputs["is_investor"],
-            customer=inputs["is_current_customer"],
-            competitor_lien=inputs["is_competitor_lien"],
+            spread=cast(int, inputs["rate_spread_bps"]),
+            equity=cast(int, inputs["equity_pct"]),
+            permit=cast(bool, inputs["has_permit"]),
+            listed=cast(bool, inputs["listed_for_sale"]),
+            investor=cast(bool, inputs["is_investor"]),
+            customer=cast(bool, inputs["is_current_customer"]),
+            competitor_lien=cast(bool, inputs["is_competitor_lien"]),
             min_sp=settings.mip_min_spread_bps,
             min_eq=settings.mip_min_equity_pct,
             heloc_min=settings.mip_heloc_equity_min_pct,
@@ -226,8 +238,8 @@ def recommend_offer(payload: OfferRecommendRequest) -> OfferRecommendation:
         sources=_sources_for(code),
         alternatives=_alternatives_for(
             code,
-            equity=inputs["equity_pct"],
-            permit=inputs["has_permit"],
+            equity=cast(int, inputs["equity_pct"]),
+            permit=cast(bool, inputs["has_permit"]),
             heloc_min=settings.mip_heloc_equity_min_pct,
         ),
         thresholds_applied=thresholds_applied,
