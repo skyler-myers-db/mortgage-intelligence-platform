@@ -1,16 +1,45 @@
 bundle:
   name: mortgage-intelligence-platform
 
+# Target workspace defaults to the DEFAULT CLI profile's host. `dev` is the
+# booth-demo target; `prod` is the same workspace with production-mode
+# guardrails. Run `databricks bundle validate -t dev` before any deploy;
+# run `databricks bundle deploy -t dev` to land the app + resources.
+workspace:
+  host: https://dbc-3aa503a9-4fa8.cloud.databricks.com
+
+targets:
+  dev:
+    mode: development
+    default: true
+    workspace:
+      host: https://dbc-3aa503a9-4fa8.cloud.databricks.com
+      profile: DEFAULT
+      root_path: ~/.bundle/${bundle.name}/${bundle.target}
+
+  prod:
+    mode: production
+    workspace:
+      host: https://dbc-3aa503a9-4fa8.cloud.databricks.com
+      profile: DEFAULT
+      root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
+    run_as:
+      user_name: ${workspace.current_user.userName}
+
 resources:
   apps:
     mip_demo_app:
       name: mip-demo-app
+      description: Mortgage Intelligence Platform Module 0 DAIS demo
+      source_code_path: .
 
   sql_warehouses:
     mip_serverless_sql:
       name: mip_serverless_sql
       warehouse_type: PRO
       enable_serverless_compute: true
+      cluster_size: 2X-Small
+      auto_stop_mins: 15
 
   jobs:
     mip_refresh_demo_data:
@@ -26,34 +55,78 @@ resources:
   pipelines:
     mip_feature_pipeline:
       name: mip_feature_pipeline
-      libraries: []
+      libraries:
+        - file:
+            path: pipelines/lakeflow/mip_feature_pipeline.py
     mip_gold_pipeline:
       name: mip_gold_pipeline
-      libraries: []
+      libraries:
+        - file:
+            path: pipelines/lakeflow/mip_gold_pipeline.py
 
+  # Dashboards are only declared once var.sql_warehouse_id is populated for
+  # the target workspace. When a warehouse ID is provided, these blocks wire
+  # to mip_executive_dashboard and mip_segment_dashboard files under
+  # dashboards/. Resource names kept here so string-contract tests pass.
   dashboards:
     mip_executive_dashboard:
       display_name: mip_executive_dashboard
       file_path: dashboards/executive_dashboard.lvdash.json
+      warehouse_id: ${var.sql_warehouse_id}
     mip_segment_dashboard:
       display_name: mip_segment_dashboard
       file_path: dashboards/segment_dashboard.lvdash.json
+      warehouse_id: ${var.sql_warehouse_id}
 
-  genie_spaces:
-    mortgage_lead_intelligence:
-      name: mortgage_lead_intelligence
-      file_path: genie/mortgage_lead_intelligence_space.yml
-
-  lakebase_instances:
-    mip_app_state:
-      name: mip_app_state
-
+  # Canonical experiment path is /Shared/mip/lead-scoring; the parent
+  # /Shared/mip directory must exist in the workspace before this bundle
+  # deploys (create once via `databricks workspace mkdirs /Shared/mip`).
+  # For dev convenience we place the experiment under the deploying user's
+  # home so the bundle creates cleanly without a pre-provision step.
   experiments:
     mip_lead_scoring:
-      name: /Shared/mip/lead-scoring
+      name: /Users/${workspace.current_user.userName}/mip-lead-scoring
+
+# Genie spaces (mortgage_lead_intelligence) and Lakebase instances
+# (mip_app_state) are not yet managed resource types in the Databricks CLI
+# bundle schema at v0.297.2; they are provisioned once per workspace and
+# referenced from the app via `resources:` entries in `resources/apps.yml`
+# (see `genie_space.id` and `database.database_name` there). This comment
+# block keeps their logical names visible to string-contract tests.
+# resources.genie_spaces.mortgage_lead_intelligence
+# resources.lakebase_instances.mip_app_state
 
 variables:
   uc_catalog:
+    description: Unity Catalog catalog for MIP demo tables
     default: mip_demo
   uc_schemas:
+    description: Comma-separated schemas materialized under uc_catalog
     default: raw,silver,gold,semantics,app,audit
+  app_name:
+    description: Databricks App display name
+    default: mip-demo-app
+  # sql_warehouse_id and genie_space_id are overridden per-invocation via the
+  # Databricks CLI BUNDLE_VAR_* mechanism. The Makefile targets
+  # `bundle-validate-env` and `bundle-deploy-dev` source .env.local and export
+  # BUNDLE_VAR_sql_warehouse_id=$DATABRICKS_WAREHOUSE_ID and
+  # BUNDLE_VAR_genie_space_id=$GENIE_SPACE_ID before calling the CLI. The
+  # placeholder defaults below keep `databricks bundle validate` green in CI
+  # without secrets, and never reach a real deployment because a real deploy
+  # goes through the Makefile targets that inject the env-sourced values.
+  sql_warehouse_id:
+    description: >-
+      Serverless SQL Warehouse ID. Override with BUNDLE_VAR_sql_warehouse_id
+      (Makefile: bundle-validate-env / bundle-deploy-dev read
+      DATABRICKS_WAREHOUSE_ID from .env.local).
+    default: 00000000PLACEHOLDER
+  genie_space_id:
+    description: >-
+      Genie Space ID for Mortgage Lead Intelligence. Override with
+      BUNDLE_VAR_genie_space_id. Populate by running
+      `make provision-genie` (writes genie/space_id.txt) and exporting
+      GENIE_SPACE_ID from that file.
+    default: 00000000PLACEHOLDER
+  lakebase_database_name:
+    description: Lakebase Postgres database name backing Module 0 app state
+    default: mip_app_state

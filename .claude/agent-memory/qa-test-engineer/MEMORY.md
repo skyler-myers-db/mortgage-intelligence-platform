@@ -1,0 +1,1 @@
+- [Module 0 real-data migration complete](project_real_data_migration_complete.md) — 10-slice migration landed 2026-04-21; CI + nightly + runbook + talk-track gate future edits.

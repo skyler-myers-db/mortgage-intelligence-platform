@@ -1,1 +1,113 @@
-# Placeholder
+---
+# Single source of truth for the "Mortgage Lead Intelligence" Genie Space.
+# Consumed by tools/databricks/provision_genie_space.py to create or update
+# the space in the workspace. Keep this file in lockstep with
+# genie/trusted_assets.md (prose) and genie/sample_questions.md (talk track).
+#
+# The space sits on top of Module 0 gold tables + semantic models. Every
+# answer must cite the Unity Catalog table or metric view it drew from.
+
+name: Mortgage Lead Intelligence
+description: >-
+  Conversational analytics over Module 0 gold tables and semantic models for
+  the Mortgage Intelligence Platform. Backed by Cotality public records,
+  liens, listings, permits, AVM, and mortgage market data. Every answer must
+  cite the UC table or metric view it drew from so Growth, Lending, and
+  Sales leaders can trust the recommendation before outreach.
+
+catalog: mip_demo
+schema: gold
+
+owner: entrada
+
+instructions: |
+  You are the analyst for a mortgage lender using the Mortgage Intelligence
+  Platform. Answer top-of-funnel questions: who should we contact, why now,
+  and with what offer. Ground every answer in the trusted assets below.
+  Always return a short rationale plus the source table or metric view.
+  Never invent borrowers, property addresses, or loan numbers. Never write
+  outreach copy -- route that to the Outreach Writer agent.
+  Prefer metric views over raw gold tables for aggregated questions.
+  Prefer gold tables for row-level drill-downs to borrower or property.
+
+trusted_assets:
+  - name: mip_demo.gold.lead_population
+    kind: table
+    description: >-
+      One row per eligible borrower in the lender's addressable market for
+      Module 0. Joins Cotality-mastered property (CLIP) and owner (Owner
+      Link) identifiers with current mortgage state (rate, balance, term,
+      origination date) and property economics (AVM, LTV, equity).
+
+  - name: mip_demo.gold.lead_segment_membership
+    kind: table
+    description: >-
+      Maps each borrower to one or more segments (In-the-Money, HELOC/
+      Cash-Out Candidate, Listed for Sale, Investor/Multi-Property,
+      Retention/Recapture). Segment logic is defined in
+      sql/transformations/gold_lead_segment_membership.sql and mirrors
+      the canonical rules in sql/uc_functions/fn_in_the_money.sql.
+
+  - name: mip_demo.gold.lead_scores
+    kind: table
+    description: >-
+      Per-borrower lead score produced by sql/uc_functions/fn_lead_score.sql
+      (0-100). Components include rate spread, equity, recency, tenure,
+      permit/listing/lien triggers. Pinned to Python parity in
+      backend/services/scoring.py with golden fixtures.
+
+  - name: mip_demo.gold.borrower_360
+    kind: table
+    description: >-
+      Unified borrower profile joining property, mortgage, owner, and
+      behavioral signals. Feeds the Borrower 360 route and the Evidence
+      Drawer. Every field traces back to a Cotality source table.
+
+  - name: mip_demo.gold.evidence_events
+    kind: table
+    description: >-
+      Append-only ledger of trigger events (rate-drop, equity-crossed,
+      permit-filed, listed-for-sale, lien-change) per borrower with a
+      UTC timestamp, confidence, and source-table citation. Drives the
+      "why now" rationale on every score and recommendation.
+
+  - name: mip_demo.gold.recommended_offers
+    kind: table
+    description: >-
+      Next-best-offer per borrower from sql/uc_functions/fn_next_best_offer.sql.
+      Includes offer type (Rate-Term Refi, Cash-Out, HELOC, Purchase,
+      Retention) plus projected monthly savings and confidence band. Human
+      approval is required before any outreach is sent.
+
+  - name: mip_demo.semantics.lead_generation_metric_view
+    kind: metric_view
+    description: >-
+      Funnel metrics for lead generation: addressable market size,
+      eligible population, scored leads, approved recommendations,
+      actioned outreach. Use for executive and Head-of-Growth questions.
+
+  - name: mip_demo.semantics.segment_performance_metric_view
+    kind: metric_view
+    description: >-
+      Segment-level KPIs: count, mean lead score, mean rate spread,
+      mean equity, approval rate, outreach rate. Use for segment
+      strategy and A/B decisions.
+
+  - name: mip_demo.semantics.borrower_opportunity_metric_view
+    kind: metric_view
+    description: >-
+      Borrower-level opportunity scoring aggregated by region, product,
+      and trigger type. Use for "where should I spend my next campaign
+      dollar" and territory-planning questions.
+
+sample_questions:
+  - How many borrowers are currently in-the-money and what is the average rate spread?
+  - Which five ZIP codes have the highest count of HELOC/cash-out candidates?
+  - Show me the top 20 borrowers by lead score who have also had a permit filed in the last 90 days.
+  - What is the conversion rate from recommended-offer to approved-offer by segment this quarter?
+  - Which borrowers on our retention list have a competitor lien filed in the last 30 days?
+  - Break down the Listed-for-Sale segment by loan product and average current rate.
+  - For investors with three or more properties, which have the strongest cash-out potential?
+  - Compare mean lead score by MSA for our top five markets.
+  - How many evidence events were recorded yesterday, grouped by trigger type?
+  - Of the offers approved last week, what was the average projected monthly savings?

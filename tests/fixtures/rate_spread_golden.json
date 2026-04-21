@@ -1,0 +1,72 @@
+{
+  "market_rate_constant": 0.04875,
+  "market_rate_constant_note": "Module 0 demo baseline. Fictional par of 4.875% chosen so the three canonical demo borrowers in backend/services/mock_data.py produce defensible, all-ITM spreads under default thresholds (min_spread_bps=75). Production deployments will source this from a rate-feed table. The mock_data `rate_spread_bps` fields (currently hardcoded 875/525/250) will be rewired by the next agent to derive from fn_rate_spread against this constant — expect the demo numbers to shift to 88/188/162.",
+  "cases": [
+    {
+      "id": "case_01_zero_spread",
+      "inputs": {"current_rate": 0.04875, "market_rate": 0.04875},
+      "expected_bps": 0,
+      "note": "Par: current rate exactly equals market. Zero spread, no refi economic signal."
+    },
+    {
+      "id": "case_02_positive_100bps",
+      "inputs": {"current_rate": 0.05, "market_rate": 0.04},
+      "expected_bps": 100,
+      "note": "Clean positive: borrower 100 bps above market. Directional sanity case."
+    },
+    {
+      "id": "case_03_negative_100bps_below_market",
+      "inputs": {"current_rate": 0.04, "market_rate": 0.05},
+      "expected_bps": -100,
+      "note": "Negative spread: borrower already below market. No refi opportunity; downstream fn_in_the_money will evaluate FALSE against positive thresholds."
+    },
+    {
+      "id": "case_04_large_positive_500bps",
+      "inputs": {"current_rate": 0.10, "market_rate": 0.05},
+      "expected_bps": 500,
+      "note": "Large positive: 500 bps (5%) above market. Extreme but within realistic bounds for an old-vintage lien vs current offers. No overflow in INT."
+    },
+    {
+      "id": "case_05_banker_round_half_to_even_down",
+      "inputs": {"current_rate": 0.0650, "market_rate": 0.04875},
+      "expected_bps": 162,
+      "note": "Demo borrower B-48295 (Thompson). Raw (0.0650-0.04875)*10000 = 162.5 exact. Banker's rounding picks the EVEN neighbor -> 162, not 163. This is THE test that pins round-half-to-even vs. round-half-away-from-zero for fn_rate_spread."
+    },
+    {
+      "id": "case_06_null_current_rate",
+      "inputs": {"current_rate": null, "market_rate": 0.04875},
+      "expected_bps": 0,
+      "note": "NULL current rate -> 0. 'No signal == no opportunity.' Keeps downstream rate_spread_bps NOT NULL so fn_in_the_money's >= does not short-circuit."
+    },
+    {
+      "id": "case_07_null_market_rate",
+      "inputs": {"current_rate": 0.0575, "market_rate": null},
+      "expected_bps": 0,
+      "note": "NULL market rate -> 0. Same rationale; also guards against a missing rate-feed row in production."
+    },
+    {
+      "id": "case_08_null_both",
+      "inputs": {"current_rate": null, "market_rate": null},
+      "expected_bps": 0,
+      "note": "Both NULL -> 0. Explicit total-NULL pin."
+    },
+    {
+      "id": "case_09_demo_b48291_rodriguez",
+      "inputs": {"current_rate": 0.0575, "market_rate": 0.04875},
+      "expected_bps": 88,
+      "note": "Demo borrower B-48291 (Rodriguez). Raw (0.0575-0.04875)*10000 = 87.5 (IEEE754 noise pushes to 87.50000000000001). Rounds to 88. Preserves demo promise: B-48291 remains ITM at default min_spread_bps=75 (88 >= 75)."
+    },
+    {
+      "id": "case_10_demo_b48294_park",
+      "inputs": {"current_rate": 0.0675, "market_rate": 0.04875},
+      "expected_bps": 188,
+      "note": "Demo borrower B-48294 (Park). Raw (0.0675-0.04875)*10000 = 187.5 (IEEE754 noise pushes to 187.50000000000003). Rounds to 188. B-48294 remains ITM at default min_spread_bps=75."
+    },
+    {
+      "id": "case_11_exact_threshold_75bps",
+      "inputs": {"current_rate": 0.05625, "market_rate": 0.04875},
+      "expected_bps": 75,
+      "note": "Exactly at the Module 0 default min_spread_bps threshold (75). Clean integer, no rounding ambiguity. Paired with in_the_money_golden.json boundary cases to pin the >= inclusive contract."
+    }
+  ]
+}

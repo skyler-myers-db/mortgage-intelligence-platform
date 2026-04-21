@@ -1,0 +1,3 @@
+- [Project TS/JSX quirk](project_ts_jsx.md) — this repo's TS config has no global JSX namespace; use ReactElement instead of JSX.Element.
+- [Design contract discipline](feedback_design_contract.md) — the HTML prototypes in design_files/ are the spec; copy verbatim, then compose.
+- [US choropleth map dependency](project_map_choropleth.md) — @svg-maps/usa, lazy-loaded, lowercase state ids, Albers viewBox 192 9 1028 746.

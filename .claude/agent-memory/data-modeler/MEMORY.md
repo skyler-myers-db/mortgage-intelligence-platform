@@ -1,0 +1,5 @@
+- [Bundle resources are inline in databricks.yml](project_bundle_resources_are_inline.md) — resources/*.yml files are NOT auto-included; declare inline in databricks.yml.
+- [silver.market_rates_weekly column contract](project_silver_market_rates_contract.md) — data-contract §2.5 is authoritative: observation_week DATE (Monday), rate_pct DOUBLE, is_latest, etc.
+- [DLT pipelines use `schema`, not `target`](project_dlt_pipeline_schema_field.md) — in databricks.yml pipeline resources, `target:` is deprecated; use `catalog:` + `schema:`.
+- [venv binaries for ruff/pytest](reference_venv_binaries.md) — use .venv/bin/ruff and .venv/bin/pytest; they're not on PATH.
+- [Gold Lakeflow pipeline delegates to SQL](project_gold_pipeline_delegates_to_sql.md) — @dlt.table functions SELECT * from the CTAS-produced warehouse table; logic stays in sql/transformations/.

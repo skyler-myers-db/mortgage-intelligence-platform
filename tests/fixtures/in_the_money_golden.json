@@ -1,0 +1,75 @@
+{
+  "default_thresholds": {
+    "min_spread_bps": 75,
+    "min_equity_pct": 15
+  },
+  "default_thresholds_note": "Module 0 demo defaults. Applied by the application layer from admin config, NOT baked as UDF defaults (the UDF takes thresholds explicitly so a growth lead can tune aggressiveness without a SQL deploy). Under these defaults, the three canonical demo borrowers B-48291/B-48294/B-48295 all evaluate TRUE — preserving the demo promise of 'act on these now.'",
+  "cases": [
+    {
+      "id": "case_01_spread_above_equity_above_true",
+      "inputs": {"rate_spread_bps": 150, "equity_pct": 40, "min_spread_bps": 75, "min_equity_pct": 15},
+      "expected_itm": true,
+      "note": "Happy path: both axes well above threshold. TRUE."
+    },
+    {
+      "id": "case_02_spread_above_equity_below_false",
+      "inputs": {"rate_spread_bps": 150, "equity_pct": 10, "min_spread_bps": 75, "min_equity_pct": 15},
+      "expected_itm": false,
+      "note": "Strong spread but insufficient equity. ITM requires BOTH conditions; one FALSE collapses the flag to FALSE."
+    },
+    {
+      "id": "case_03_spread_below_equity_above_false",
+      "inputs": {"rate_spread_bps": 50, "equity_pct": 40, "min_spread_bps": 75, "min_equity_pct": 15},
+      "expected_itm": false,
+      "note": "Strong equity but insufficient rate spread. Mirror of case_02; pins the AND."
+    },
+    {
+      "id": "case_04_boundary_spread_exact_equity_above_true",
+      "inputs": {"rate_spread_bps": 75, "equity_pct": 40, "min_spread_bps": 75, "min_equity_pct": 15},
+      "expected_itm": true,
+      "note": "Boundary: spread EXACTLY equals threshold. The >= contract means exact equality is IN. Flipping to strict > would fail this case loudly."
+    },
+    {
+      "id": "case_05_boundary_equity_exact_spread_above_true",
+      "inputs": {"rate_spread_bps": 150, "equity_pct": 15, "min_spread_bps": 75, "min_equity_pct": 15},
+      "expected_itm": true,
+      "note": "Boundary: equity EXACTLY equals threshold. Same >= pin on the equity axis."
+    },
+    {
+      "id": "case_06_null_spread_false",
+      "inputs": {"rate_spread_bps": null, "equity_pct": 40, "min_spread_bps": 75, "min_equity_pct": 15},
+      "expected_itm": false,
+      "note": "NULL spread -> FALSE. Unknown must not silently become GO for outreach."
+    },
+    {
+      "id": "case_07_null_equity_false",
+      "inputs": {"rate_spread_bps": 150, "equity_pct": null, "min_spread_bps": 75, "min_equity_pct": 15},
+      "expected_itm": false,
+      "note": "NULL equity -> FALSE. Symmetric safety pin."
+    },
+    {
+      "id": "case_08_stricter_threshold_rejects_demo_spread",
+      "inputs": {"rate_spread_bps": 88, "equity_pct": 46, "min_spread_bps": 150, "min_equity_pct": 15},
+      "expected_itm": false,
+      "note": "Custom (stricter) threshold. Same inputs as B-48291 (88 bps, 46% equity) but admin has raised min_spread_bps to 150 -> FALSE. Proves thresholds come from the caller, not baked constants."
+    },
+    {
+      "id": "case_09_demo_b48291_rodriguez_itm",
+      "inputs": {"rate_spread_bps": 88, "equity_pct": 46, "min_spread_bps": 75, "min_equity_pct": 15},
+      "expected_itm": true,
+      "note": "Demo borrower B-48291 under default thresholds + fn_rate_spread output. 88 >= 75 AND 46 >= 15 -> TRUE. Equity = round(100 * (1 - 340000/625000)) = 46. Preserves 'act on these now' demo promise."
+    },
+    {
+      "id": "case_10_demo_b48294_park_itm",
+      "inputs": {"rate_spread_bps": 188, "equity_pct": 39, "min_spread_bps": 75, "min_equity_pct": 15},
+      "expected_itm": true,
+      "note": "Demo borrower B-48294 under default thresholds. 188 >= 75 AND 39 >= 15 -> TRUE. Equity = round(100 * (1 - 342000/560000)) = 39."
+    },
+    {
+      "id": "case_11_demo_b48295_thompson_itm",
+      "inputs": {"rate_spread_bps": 162, "equity_pct": 56, "min_spread_bps": 75, "min_equity_pct": 15},
+      "expected_itm": true,
+      "note": "Demo borrower B-48295 under default thresholds. 162 >= 75 AND 56 >= 15 -> TRUE. Equity = round(100 * (1 - 320000/725000)) = 56. All three demo borrowers remain ITM -- demo promise intact."
+    }
+  ]
+}
