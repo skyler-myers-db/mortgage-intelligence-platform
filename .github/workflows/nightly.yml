@@ -145,15 +145,14 @@ jobs:
         working-directory: frontend
         run: npx playwright install --with-deps chromium
       - name: Run real-UC Playwright spec
-        # The config lives in `frontend/` post-hotfix so `@playwright/test`
-        # resolves against frontend/node_modules; the spec stays at the
-        # repo root under `tests/e2e/`. Reference it with a relative path
-        # from the frontend/ cwd. E2E_LIVE-gated so this spec is nightly-
-        # only; the PR ci runs a --list parse check.
+        # Config + specs both live under `frontend/` so `@playwright/test`
+        # imports resolve against frontend/node_modules. E2E_LIVE-gated
+        # so this spec is nightly-only; the PR CI runs a --list parse
+        # check.
         working-directory: frontend
         run: |
           npx playwright test \
-            ../tests/e2e/real_data.spec.ts \
+            tests/e2e/real_data.spec.ts \
             --reporter=list --workers=1
       - name: Upload Playwright report + traces on failure
         if: failure()

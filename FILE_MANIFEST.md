@@ -159,7 +159,7 @@
 - `sql/uc_functions/fn_lead_score.sql`
 - `sql/uc_functions/fn_next_best_offer.sql`
 - `sql/uc_functions/fn_rate_spread.sql`
-- `tests/e2e/module0.spec.ts`
+- `frontend/tests/e2e/module0.spec.ts`
 - `tests/integration/test_api.py`
 - `tests/unit/test_evidence.py`
 - `tests/unit/test_scoring.py`

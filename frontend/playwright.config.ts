@@ -3,11 +3,15 @@ import { defineConfig, devices } from '@playwright/test';
 /**
  * Playwright config for the Module 0 product golden path.
  *
- * Lives under `frontend/` so that `@playwright/test` resolves against
- * `frontend/node_modules/` (Node ESM package resolution walks up from
- * the config file's directory, not the cwd). Test specs stay at the
- * repo root under `tests/e2e/` so backend + e2e suites sit next to each
- * other — `testDir: '../tests/e2e'` bridges the two.
+ * Both the config and the test specs live under `frontend/` so that
+ * `@playwright/test` imports — from the config AND from every spec
+ * file — resolve against `frontend/node_modules/`. Node ESM package
+ * resolution walks up from the importing file's directory; if the
+ * specs lived at the repo root, their imports would miss the frontend
+ * node_modules entirely.
+ *
+ * Python test suites (`tests/unit/`, `tests/integration/`,
+ * `tests/fixtures/`) stay at the repo root for pytest.
  *
  * The webServer block boots a real uvicorn + vite pair when not already
  * up. `cwd: '..'` on the uvicorn entry runs the Python process from the
@@ -24,7 +28,7 @@ import { defineConfig, devices } from '@playwright/test';
  * the full spec with real credentials against the deployed app.
  */
 export default defineConfig({
-  testDir: '../tests/e2e',
+  testDir: './tests/e2e',
   testMatch: /.*\.spec\.ts$/,
   fullyParallel: false,
   workers: 1,
