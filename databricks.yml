@@ -95,11 +95,26 @@ variables:
   app_name:
     description: Databricks App display name
     default: mip-demo-app
+  # sql_warehouse_id and genie_space_id are overridden per-invocation via the
+  # Databricks CLI BUNDLE_VAR_* mechanism. The Makefile targets
+  # `bundle-validate-env` and `bundle-deploy-dev` source .env.local and export
+  # BUNDLE_VAR_sql_warehouse_id=$DATABRICKS_WAREHOUSE_ID and
+  # BUNDLE_VAR_genie_space_id=$GENIE_SPACE_ID before calling the CLI. The
+  # placeholder defaults below keep `databricks bundle validate` green in CI
+  # without secrets, and never reach a real deployment because a real deploy
+  # goes through the Makefile targets that inject the env-sourced values.
   sql_warehouse_id:
-    description: Serverless SQL Warehouse ID (required before dashboards / app deploy)
+    description: >-
+      Serverless SQL Warehouse ID. Override with BUNDLE_VAR_sql_warehouse_id
+      (Makefile: bundle-validate-env / bundle-deploy-dev read
+      DATABRICKS_WAREHOUSE_ID from .env.local).
     default: 00000000PLACEHOLDER
   genie_space_id:
-    description: Genie Space ID (populate once the space is created in the workspace)
+    description: >-
+      Genie Space ID for Mortgage Lead Intelligence. Override with
+      BUNDLE_VAR_genie_space_id. Populate by running
+      `make provision-genie` (writes genie/space_id.txt) and exporting
+      GENIE_SPACE_ID from that file.
     default: 00000000PLACEHOLDER
   lakebase_database_name:
     description: Lakebase Postgres database name backing Module 0 app state
