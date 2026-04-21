@@ -15,13 +15,14 @@ Remember these exact product anchors:
 5. **Demo posture:** polished enterprise product, not a notebook, not a toy Streamlit app.
 6. **Data posture:** all recommendations trace to Cotality source signals through Unity Catalog evidence.
 7. **Safety posture:** synthetic borrower contact fields only, no automatic outreach, human approval always required.
-8. **Implementation posture:** precomputed gold tables for DAIS speed; production architecture shown but not overbuilt.
+8. **Implementation posture:** real Unity Catalog data end-to-end, no mock fallback in the running app. Precomputed gold tables for DAIS speed. Resilience engineering (warm-start, retry, cache, circuit breaker, graceful degraded-state UI) is how the booth survives a flaky network — not silent mock substitution.
 
 ## What to optimize for
 
 - Enterprise demo polish at 1440×900.
-- Fast page loads, stable interactions, deterministic fallback data.
-- Source evidence visible on every score/recommendation.
+- Fast page loads, stable interactions, real data under the hood.
+- Source evidence visible on every score/recommendation — traced to live Unity Catalog rows.
+- **Self-contained, zero-click deploy.** `databricks bundle deploy -t dev` must provision every resource the app needs — UC catalog + schemas, silver/gold tables, Lakeflow pipelines, Lakebase instance + migrations, FRED ingest job, Genie Space, Databricks App — with no manual UI steps, no "now go click this" setup docs, no secret dances beyond one `.env.local` fill-in. Customers should see a working app on first deploy.
 - Clear separation of frontend, backend, SQL, Databricks resources, and agent docs.
 - Small files, strong types, easy-to-review commits.
 - Repeatable validation after every slice.
@@ -85,7 +86,7 @@ If a command fails, fix the root cause before moving to another feature. Do not 
   - `backend/schemas/*` — Pydantic contracts shared between routers and services.
 - **Data plane (Unity Catalog, default catalog `mip_demo`):** raw share → `sql/transformations/silver_*.sql` → `sql/transformations/gold_*.sql` → `sql/metric_views/*` consumed by the app and Genie. UC SQL functions in `sql/uc_functions/` (`fn_in_the_money`, `fn_lead_score`, `fn_next_best_offer`, `fn_rate_spread`) are the canonical scoring primitives — keep Python scoring in `backend/services/scoring.py` consistent with them.
 - **App state:** Lakebase Postgres (`lakebase/schema.sql`) holds campaigns, approvals, agent sessions, audit, feedback. Demo seed in `lakebase/seed_demo_campaigns.sql`.
-- **Mock mode:** `MIP_MOCK_MODE=true` serves deterministic fixtures from `backend/services/mock_data.py` and `frontend/src/mocks/demoData.ts`. This is the booth-demo path, not a fallback — treat fixtures as a first-class surface.
+- **Test fixtures (not a runtime mode):** `tests/fixtures/mock_population.py` and `frontend/src/mocks/demoData.ts` exist for unit tests and Storybook only. Production routers do NOT import them. There is no `MIP_MOCK_MODE` runtime toggle — the app runs on live Unity Catalog + Lakebase in every environment, including the DAIS booth. Real-world flakiness is handled by `backend/services/resilience.py` (retry, warm-start, short-TTL cache, circuit breaker) and by explicit degraded-state UI, never by silent mock fallback.
 - **Frontend:** Vite + React Router. Eight routes in `frontend/src/routes/` map 1:1 to the demo flow; shared UI in `components/mortgage/` (EvidenceDrawer, KpiCard, LeadTable, SegmentCard, ApprovalBanner, TriggerTimeline). Design tokens live in `design-system/tokens.css` — don't inline colors.
 - **Databricks bundle:** `databricks.yml` declares app, serverless SQL warehouse, jobs, pipelines, dashboards, Genie space, Lakebase instance, MLflow experiment. Per-resource YAML lives in `resources/`, `jobs/`, `pipelines/lakeflow/`.
 
@@ -94,7 +95,7 @@ If a command fails, fix the root cause before moving to another feature. Do not 
 - Nav + routes:        `frontend/src/app.tsx`
 - API surface:         `backend/main.py` (router registry)
 - Scoring truth:       `sql/uc_functions/fn_lead_score.sql` + `backend/services/scoring.py`
-- Demo fixtures:       `backend/services/mock_data.py`, `frontend/src/mocks/demoData.ts`
+- Test fixtures:       `tests/fixtures/mock_population.py`, `frontend/src/mocks/demoData.ts` (test-only; not imported by production routers)
 - **Design truth:**    `design_files/` (see "Design source of truth" below — load before any UI work)
 - Build plan:          `docs/implementation-plan.md`
 - Talk track:          `docs/module0-demo-talk-track.md`
@@ -122,7 +123,10 @@ Hard rules for UI work:
 - Do not remove evidence chips, approval gates, audit logs, or confidence/rationale UI.
 - Do not invent real borrower PII or real customer names.
 - Do not wire automatic email/SMS sending.
-- Do not depend on live Cotality data for the booth demo path; support mock/gold precomputed mode.
+- Do not introduce a mock fallback in the running app. The demo runs on real Unity Catalog data or it fails visibly. Handle flakiness with resilience engineering (retries, warm-start, cache, circuit breaker, degraded-state UI) — never with silent mock substitution.
+- Do not filter real data to a single metro. The booth demo spans the full 6-state share footprint (IL/CA/FL/TX/WA/CO); geography drill-down is a hero surface, not a nice-to-have.
+- Do not add out-of-band setup steps. Any new infrastructure (UC object, secret scope, job, pipeline, Lakebase migration, seed file) must be provisionable from `databricks bundle deploy -t dev` plus a documented `.env.local` template. Manual click-ops in the Databricks UI are a packaging bug.
+- Do not rely on external APIs being reachable at deploy-time. FRED and any future public-data sources must have a repo-committed seed file so the first app boot has data even before the first scheduled refresh runs.
 - Do not put secrets in source, `.env`, `app.yaml`, screenshots, notebooks, or logs.
 - Do not change the app to Streamlit unless the user explicitly chooses the emergency fallback.
 - Do not create a huge monolithic file; split components/services by responsibility.
@@ -170,12 +174,14 @@ Every commit should be explainable in one sentence. Prefer vertical slices:
 The demo is ready when:
 
 - All eight routes are navigable.
-- The primary demo path works in mock mode without network dependencies.
-- Evidence drawer opens from every KPI/score/recommendation.
-- Human approval creates an audit event.
-- `/ask-genie` has deterministic fallback and optional Genie API integration.
-- Backend health, portfolio, leads, borrower, offers, outreach, and audit endpoints work.
+- Every route queries live Unity Catalog / Lakebase; there is no mock runtime path.
+- Evidence drawer opens from every KPI/score/recommendation and cites real Cotality source rows.
+- Human approval writes a row to the Lakebase audit table.
+- `/ask-genie` is grounded in the real `mortgage_lead_intelligence` Genie Space with deterministic prompt-answer guards.
+- Resilience is demonstrable: warehouse warm-start hook, retry + circuit breaker around SQL + Genie calls, short-TTL cache for hot KPIs, explicit degraded-state UI when a dependency is down.
+- Backend health, portfolio, leads, borrower, offers, outreach, and audit endpoints return data from real tables.
 - Frontend build passes.
-- Python tests pass.
-- `databricks bundle validate` passes after environment variables are filled.
-- `docs/module0-demo-talk-track.md` supports a 6–8 minute booth pitch.
+- Unit tests pass (scoring primitives pinned by golden fixtures) AND integration tests pass against real UC (nightly parity run green).
+- Playwright e2e passes against the live app, exercising the full demo path on real data.
+- `databricks bundle validate` passes with the real `sql_warehouse_id` and `genie_space_id`.
+- `docs/module0-demo-talk-track.md` supports a 6–8 minute booth pitch grounded in the multi-state real-data story.
