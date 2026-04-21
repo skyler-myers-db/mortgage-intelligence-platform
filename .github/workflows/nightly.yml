@@ -97,6 +97,12 @@ jobs:
         run: pytest -q tests/integration/test_lakebase_round_trip.py
       - name: Genie live
         run: pytest -q tests/integration/test_genie_live.py
+      - name: Genie regression + adversarial
+        # 29 checks total: 22 live-gated Genie space queries (wired to the
+        # same secrets as the step above) + 7 credential-free graders that
+        # lint space instructions and adversarial prompt contracts. Runs
+        # after `Genie live` so a broken space surfaces there first.
+        run: pytest -q tests/integration/test_genie_regression.py
 
   playwright-e2e-live:
     name: Playwright (real-UC golden path)
