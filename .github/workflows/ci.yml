@@ -1,0 +1,167 @@
+name: ci
+
+# Slice 9 CI -- PR + push workflow. Six jobs run in parallel; in-progress
+# runs on the same ref are cancelled by `concurrency` so rapid pushes only
+# burn one runner per branch. Everything here is credential-free; the
+# nightly workflow (nightly.yml) handles live-UC checks with secrets.
+#
+# Secret policy: this workflow MUST NOT reference any repo secrets. Anyone
+# opening a PR from a fork gets the same green bar as a maintainer.
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - 'feature/**'
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Mirror of pyproject.toml requires-python pin. Bump both in lockstep.
+  PYTHON_VERSION: '3.11'
+  # frontend/package.json doesn't pin an engines.node; keep Node 22 LTS to
+  # match the local Vite + Playwright dev posture.
+  NODE_VERSION: '22'
+  # Placeholder BUNDLE_VARs so `databricks bundle validate` can resolve
+  # variable references without any real workspace secrets. The nightly
+  # workflow swaps these for real values.
+  BUNDLE_VAR_sql_warehouse_id: 'ffffffffffffffff'
+  BUNDLE_VAR_genie_space_id: '00000000-0000-0000-0000-000000000000'
+  BUNDLE_VAR_lakebase_instance: 'mip-placeholder'
+
+jobs:
+  backend-tests:
+    name: backend (ruff + pytest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: ruff
+        run: ruff check backend tests tools jobs pipelines
+      - name: pytest
+        # Unit + integration under the default pytest config; integration
+        # tests that require workspace creds skip themselves when env is
+        # absent. Set MIP_MOCK_MODE=true so the repository-seam unit tests
+        # pick the in-process mock implementations explicitly.
+        env:
+          MIP_MOCK_MODE: 'true'
+        run: pytest -q
+
+  frontend-tests:
+    name: frontend (lint + test + build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: npm ci
+        # frontend/package-lock.json may not exist; fall back to npm install
+        # to match the local dev path.
+        run: |
+          if [ -f frontend/package-lock.json ]; then
+            npm --prefix frontend ci
+          else
+            npm --prefix frontend install --no-audit --no-fund
+          fi
+      - run: npm --prefix frontend run lint
+      - run: npm --prefix frontend run test
+      - run: npm --prefix frontend run build
+
+  bundle-validate:
+    name: databricks bundle validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Databricks CLI (v2)
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
+          databricks --version
+      - name: databricks bundle validate
+        # Use a dummy host + token so the CLI initializes; validate itself is
+        # purely local + does not reach out. Placeholder BUNDLE_VARs come
+        # from env at the top of this file.
+        env:
+          DATABRICKS_HOST: https://example.cloud.databricks.com
+          DATABRICKS_TOKEN: dapi-ci-placeholder-token
+        run: databricks bundle validate -t dev
+
+  talk-track-lint:
+    name: talk-track word-count gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Enforce 1000-1500 spoken-word window
+        # pytest unit test covers the same gate; the CLI invocation here is
+        # redundant coverage so the failure message in CI output points
+        # directly at the file + count.
+        run: python tools/talk_track_wc.py
+
+  playwright-e2e-offline:
+    name: e2e (offline, in-process repos)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install backend deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Install frontend deps
+        run: |
+          if [ -f frontend/package-lock.json ]; then
+            npm --prefix frontend ci
+          else
+            npm --prefix frontend install --no-audit --no-fund
+          fi
+      - name: Install Playwright browsers (chromium only)
+        # Playwright's Chromium download is ~140 MB; we skip WebKit +
+        # Firefox because the config only defines `chromium` as a project.
+        run: npx --prefix frontend playwright install --with-deps chromium
+      - name: Run Playwright e2e (offline)
+        # E2E_LIVE stays unset, so tests/e2e/real_data.spec.ts self-skips.
+        # The module0.spec.ts suite runs against a uvicorn + vite pair that
+        # Playwright webServer in playwright.config.ts boots with the
+        # in-process repositories from tests/fixtures/in_process_repos.py.
+        env:
+          MIP_MOCK_MODE: 'true'
+          CI: 'true'
+        run: npx --prefix frontend playwright test -c playwright.config.ts --reporter=list --workers=1
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-offline
+          path: |
+            frontend/playwright-report
+            test-results
+          if-no-files-found: ignore
+          retention-days: 7

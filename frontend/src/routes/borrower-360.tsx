@@ -11,7 +11,7 @@ import { Chip, EvidenceChip } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { Skeleton } from '../components/ui/Skeleton';
 import { Reveal } from '../components/fx/Reveal';
-import { DRAWER_SOURCES, mockSegments } from '../mocks/demoData';
+import { DRAWER_SOURCES, mockSegments } from '../mocks/fixtureData';
 
 /**
  * Borrower 360 — public-record dossier composed in `.surface` blocks.

@@ -23,7 +23,7 @@ class PortfolioPreviewRequest(BaseModel):
 
 
 class PortfolioCreateRequest(BaseModel):
-    name: str = "Demo Portfolio"
+    name: str = "My Portfolio"
     criteria: PortfolioCriteria = PortfolioCriteria()
 
 

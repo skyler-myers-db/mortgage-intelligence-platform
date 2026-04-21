@@ -2,7 +2,7 @@
 -- next_best_offer_validation.sql
 -- -----------------------------------------------------------------------------
 -- Purpose:  Cross-platform parity check. Asserts that
---           mip_demo.gold.fn_next_best_offer(...) produces the same product
+--           mip.gold.fn_next_best_offer(...) produces the same product
 --           codes as tests/fixtures/next_best_offer_golden.json (which is
 --           also the contract for backend/services/scoring.py in the next
 --           slice, and the contract backing OfferRecommendation).
@@ -12,7 +12,7 @@
 --   sql/uc_functions/fn_next_best_offer.sql first, then this file. The
 --   `mismatch` column must be empty on every row.
 --
--- Demo defaults: min_spread_bps=75, min_equity_pct=15, heloc_equity_min_pct=35,
+-- Default thresholds: min_spread_bps=75, min_equity_pct=15, heloc_equity_min_pct=35,
 --   cashout_equity_min=25, retention_min_spread=50. See the header of
 --   fn_next_best_offer.sql and the `default_thresholds` field in
 --   tests/fixtures/next_best_offer_golden.json. All five thresholds are
@@ -69,15 +69,15 @@ WITH golden (
         100,  35, FALSE, FALSE, FALSE, FALSE, FALSE,
         75, 15, 35, 25, 50,
         'refi_plus_heloc'),
-    ('case_11_demo_b48291_rodriguez_refi_plus_heloc',
+    ('case_11_b48291_rodriguez_refi_plus_heloc',
          88,  46, FALSE, FALSE, FALSE, FALSE, FALSE,
         75, 15, 35, 25, 50,
         'refi_plus_heloc'),
-    ('case_12_demo_b48294_park_label_shift_to_refi_plus_heloc',
+    ('case_12_b48294_park_label_shift_to_refi_plus_heloc',
         188,  39, TRUE,  FALSE, FALSE, FALSE, FALSE,
         75, 15, 35, 25, 50,
         'refi_plus_heloc'),
-    ('case_13_demo_b48295_thompson_purchase',
+    ('case_13_b48295_thompson_purchase',
         162,  56, FALSE, TRUE,  FALSE, FALSE, FALSE,
         75, 15, 35, 25, 50,
         'purchase'),
@@ -95,13 +95,13 @@ WITH golden (
 SELECT
   id,
   expected_offer,
-  mip_demo.gold.fn_next_best_offer(
+  mip.gold.fn_next_best_offer(
     rate_spread_bps, equity_pct,
     has_permit, listed_for_sale, is_investor, is_current_customer, is_competitor_lien,
     min_spread_bps, min_equity_pct, heloc_equity_min_pct, cashout_equity_min, retention_min_spread
   ) AS actual_offer,
   CASE
-    WHEN mip_demo.gold.fn_next_best_offer(
+    WHEN mip.gold.fn_next_best_offer(
       rate_spread_bps, equity_pct,
       has_permit, listed_for_sale, is_investor, is_current_customer, is_competitor_lien,
       min_spread_bps, min_equity_pct, heloc_equity_min_pct, cashout_equity_min, retention_min_spread

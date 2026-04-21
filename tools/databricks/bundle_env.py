@@ -1,7 +1,7 @@
 """Run a Databricks CLI command with `.env.local` sourced via python-dotenv.
 
 The Makefile target that sources `.env.local` directly in bash broke on
-unquoted spaces (e.g. `MIP_DEMO_LENDER=Summit Mortgage`) and angle-bracket
+unquoted spaces (e.g. `MIP_LENDER_NAME=Summit Mortgage`) and angle-bracket
 placeholder values (`GENIE_SPACE_ID=<genie-space-id>`). This helper uses
 python-dotenv's parser, which handles both correctly, and then launches the
 Databricks CLI in a subprocess with the resolved env so operator workflow

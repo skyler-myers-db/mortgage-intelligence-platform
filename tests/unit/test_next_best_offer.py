@@ -1,7 +1,7 @@
 """Parity tests for backend.services.scoring.next_best_offer.
 
 Fixtures in tests/fixtures/next_best_offer_golden.json are the contract;
-the SQL UDF mip_demo.gold.fn_next_best_offer is validated against the
+the SQL UDF mip.gold.fn_next_best_offer is validated against the
 same set by sql/fixtures/next_best_offer_validation.sql.
 """
 

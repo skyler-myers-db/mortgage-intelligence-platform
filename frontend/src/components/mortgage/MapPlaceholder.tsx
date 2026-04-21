@@ -8,28 +8,35 @@ import { Chip } from '../Primitives';
 interface UsaSvgMapLocation { name: string; id: string; path: string }
 interface UsaSvgMap { label: string; viewBox: string; locations: UsaSvgMapLocation[] }
 
-// FIPS state codes that have real county polygons in us-counties-demo.json.
-// Anything else falls back to the stylized drill (GA_COUNTIES placeholder).
-// TODO: expand the trimmed TopoJSON to more states as demo data grows.
+// FIPS state codes that have real county polygons in us-counties.json.
+// Anything else falls back to the stylized drill (IL_COUNTIES placeholder).
+// Slice 9 re-anchored the county drill from GA->IL so the map-first
+// narrative matches Summit Mortgage's real 6-state Delta Share footprint
+// (IL / CA / FL / TX / WA / CO) with Chicago as the canonical anchor metro.
+// TODO: expand the trimmed TopoJSON to all six footprint states as
+// per-county rollups land.
 const SUPPORTED_COUNTY_STATES: Record<string, string> = {
-  ga: '13',
+  il: '17',
   ca: '06',
   tx: '48',
 };
 
-// County FIPS -> synthetic borrower count / avg score. Weighted so Atlanta
-// metro (Fulton/DeKalb/Cobb/Gwinnett), LA County, and Travis County stand
-// out — the demo narrative references these.
+// County FIPS -> synthetic borrower count / avg score. Weighted so Cook
+// County (Chicago anchor), LA County, and Harris County stand out — those
+// are the three anchor metros. Slice 9 swapped GA/Fulton for IL/Cook;
+// all six footprint states have at least one populated county so the
+// geography drill surfaces real-looking density in any state the presenter
+// clicks into.
 // TODO: derive from backend when county rollups land.
 const COUNTY_FACTS: Record<string, { count: number; avgScore: number; lvl: 1 | 2 | 3 | 4 }> = {
-  // Georgia
-  '13121': { count: 520, avgScore: 86, lvl: 4 }, // Fulton (Atlanta anchor)
-  '13089': { count: 310, avgScore: 81, lvl: 3 }, // DeKalb
-  '13067': { count: 285, avgScore: 80, lvl: 3 }, // Cobb
-  '13135': { count: 260, avgScore: 79, lvl: 3 }, // Gwinnett
-  '13063': { count: 180, avgScore: 76, lvl: 2 }, // Clayton
-  '13117': { count: 150, avgScore: 75, lvl: 2 }, // Forsyth
-  // California
+  // Illinois (Chicago metro anchor — Cook County is the hero)
+  '17031': { count: 620, avgScore: 86, lvl: 4 }, // Cook (Chicago anchor)
+  '17043': { count: 310, avgScore: 82, lvl: 3 }, // DuPage
+  '17089': { count: 245, avgScore: 80, lvl: 3 }, // Kane
+  '17097': { count: 265, avgScore: 80, lvl: 3 }, // Lake
+  '17197': { count: 210, avgScore: 78, lvl: 2 }, // Will
+  '17111': { count: 145, avgScore: 75, lvl: 2 }, // McHenry
+  // California (LA / SF / Silicon Valley)
   '06037': { count: 720, avgScore: 85, lvl: 4 }, // Los Angeles
   '06059': { count: 380, avgScore: 82, lvl: 3 }, // Orange
   '06073': { count: 340, avgScore: 81, lvl: 3 }, // San Diego
@@ -38,7 +45,7 @@ const COUNTY_FACTS: Record<string, { count: number; avgScore: number; lvl: 1 | 2
   '06075': { count: 210, avgScore: 80, lvl: 3 }, // San Francisco
   '06065': { count: 260, avgScore: 78, lvl: 2 }, // Riverside
   '06067': { count: 230, avgScore: 77, lvl: 2 }, // Sacramento
-  // Texas
+  // Texas (Houston / Dallas / Austin / San Antonio)
   '48201': { count: 540, avgScore: 83, lvl: 4 }, // Harris (Houston)
   '48113': { count: 420, avgScore: 82, lvl: 3 }, // Dallas
   '48453': { count: 360, avgScore: 82, lvl: 3 }, // Travis (Austin)
@@ -56,17 +63,23 @@ const COUNTY_FACTS: Record<string, { count: number; avgScore: number; lvl: 1 | 2
  *   - .map-wrap chassis with breadcrumbs, drill-hint chip, legend, map-tip.
  *   - map-region lvl-1..4 fills (color-mix with --accent), is-selected accent.
  *   - level state: 'state' → 'county' → 'zip' → borrower deep-link.
- *   - demo drill path: US → Georgia → Atlanta MSA → 30305/30309/30324/30339.
+ *   - drill path: US → Illinois → Cook County → 60611/60614/60647/60657.
  *
  * Upgrade vs. prototype: the prototype used hand-drawn stylized polygons. We
  * use @svg-maps/usa (Albers USA pre-projected paths, ~141 KB raw / ~30 KB
  * gzipped) for real US geography so it reads as a product, not a sketch.
  *
+ * Slice 9 notes: hotspots across all six Delta Share states (IL / CA / FL /
+ * TX / WA / CO) are populated so the geography drill is a genuine hero
+ * surface — not a Chicago-only filter. Click IL to drill through real Cook
+ * County polygons; clicking CA or TX also drills (same supported set);
+ * every other state shows hover facts but no county drill.
+ *
  * TODO: when the borrower dataset expansion slice lands, derive STATE_FACTS
- * from mocks/demoData.ts instead of hardcoded synthetic counts.
+ * from the API instead of hardcoded synthetic counts.
  */
 
-// ---------- Synthetic per-state facts (demo-only; see TODO above) ----------
+// ---------- Synthetic per-state facts (preview; see TODO above) ----------
 
 interface StateFacts {
   count: number;
@@ -75,22 +88,29 @@ interface StateFacts {
   topSegment: string;
 }
 
-// lowercase state id (matches @svg-maps/usa) → facts. Weighted so GA, CA, TX,
-// FL stand out — GA/30309 is the canonical demo borrower.
+// lowercase state id (matches @svg-maps/usa) → facts. Slice 9 re-weighted
+// so all six Delta Share footprint states (IL / CA / FL / TX / WA / CO)
+// surface at lvl:4 and anchor the narrative of a real multi-state book.
+// Counts are synthetic but proportional to the Apr-2026 share probe
+// in docs/data-sources-gap-analysis.md §1 (IL 1.86M · CA 0.90M · FL 0.76M ·
+// TX 0.75M · WA 0.74M · CO 0.16M properties). Non-footprint states render
+// at lvl:1-3 so the presenter's eye lands on the footprint first.
 const STATE_FACTS: Record<string, StateFacts> = {
-  ga: { count: 1200, avgScore: 84, lvl: 4, topSegment: 'In the Money' },
-  ca: { count: 2140, avgScore: 83, lvl: 4, topSegment: 'In the Money' },
-  tx: { count: 1810, avgScore: 82, lvl: 4, topSegment: 'Home Equity' },
-  fl: { count: 1505, avgScore: 81, lvl: 4, topSegment: 'Investor' },
+  // --- Cotality Delta Share footprint (hero tier) --------------------------
+  il: { count: 1860, avgScore: 84, lvl: 4, topSegment: 'In the Money' }, // Chicago anchor
+  ca: { count: 900,  avgScore: 83, lvl: 4, topSegment: 'Home Equity' },
+  fl: { count: 760,  avgScore: 81, lvl: 4, topSegment: 'Investor' },
+  tx: { count: 750,  avgScore: 82, lvl: 4, topSegment: 'Home Equity' },
+  wa: { count: 740,  avgScore: 81, lvl: 4, topSegment: 'In the Money' },
+  co: { count: 160,  avgScore: 80, lvl: 4, topSegment: 'Listed' },
+  // --- Non-footprint (muted tier) ----------------------------------------
+  ga: { count: 540,  avgScore: 76, lvl: 3, topSegment: 'In the Money' },
   ny: { count: 820,  avgScore: 79, lvl: 3, topSegment: 'Retention' },
-  il: { count: 690,  avgScore: 76, lvl: 3, topSegment: 'In the Money' },
   nc: { count: 710,  avgScore: 78, lvl: 3, topSegment: 'Permit Activity' },
   va: { count: 640,  avgScore: 77, lvl: 3, topSegment: 'In the Money' },
   oh: { count: 620,  avgScore: 76, lvl: 3, topSegment: 'In the Money' },
   pa: { count: 540,  avgScore: 76, lvl: 3, topSegment: 'Retention' },
   mi: { count: 540,  avgScore: 75, lvl: 3, topSegment: 'Home Equity' },
-  co: { count: 520,  avgScore: 80, lvl: 3, topSegment: 'Listed' },
-  wa: { count: 500,  avgScore: 79, lvl: 3, topSegment: 'In the Money' },
   ma: { count: 480,  avgScore: 78, lvl: 3, topSegment: 'Retention' },
   az: { count: 470,  avgScore: 77, lvl: 3, topSegment: 'Permit Activity' },
   nj: { count: 410,  avgScore: 77, lvl: 3, topSegment: 'Retention' },
@@ -142,7 +162,7 @@ const SEGMENT_CODE_TO_NAME: Record<string, string> = {
   retention: 'Retention',
 };
 
-// ---------- Stylized county/ZIP drill-downs for the demo path ------------
+// ---------- Stylized county/ZIP drill-downs (fallback rendering) --------
 
 interface DrillRegion {
   id: string;
@@ -154,25 +174,32 @@ interface DrillRegion {
   borrowerId?: string;
 }
 
-// Atlanta MSA counties (stylized — prototype-style polygons keyed to the GA
-// demo drill). Grid laid out in a 340x310 canvas to match the prototype's
-// county viewBox.
-const GA_COUNTIES: DrillRegion[] = [
-  { id: 'cobb',     name: 'Cobb',     d: 'M40,40 L160,35 L165,115 L45,120 Z',   lvl: 3, count: 285, avgScore: 80 },
-  { id: 'gwinnett', name: 'Gwinnett', d: 'M165,35 L300,40 L305,115 L165,115 Z', lvl: 3, count: 260, avgScore: 79 },
-  { id: 'fulton',   name: 'Fulton',   d: 'M40,120 L165,115 L170,220 L45,225 Z', lvl: 4, count: 520, avgScore: 86 },
-  { id: 'dekalb',   name: 'DeKalb',   d: 'M170,115 L305,115 L310,220 L170,220 Z', lvl: 3, count: 310, avgScore: 81 },
-  { id: 'other',    name: 'Other GA', d: 'M40,225 L310,225 L310,280 L40,280 Z', lvl: 1, count: 180, avgScore: 68 },
+// Chicago metro counties (stylized — prototype-style polygons keyed to the
+// IL county drill). Only rendered when the real TopoJSON hasn't resolved
+// yet or the drill state has no real polygons in us-counties.json. Grid
+// laid out in a 340x310 canvas to match the prototype's county viewBox.
+// Slice 9 rewrite: GA/Fulton/DeKalb/Cobb/Gwinnett -> IL/Cook/DuPage/Lake/
+// Kane/Will. Cook County is the hero (highest lvl, highest count).
+const IL_COUNTIES: DrillRegion[] = [
+  { id: 'lake',    name: 'Lake',    d: 'M40,40 L160,35 L165,115 L45,120 Z',   lvl: 3, count: 265, avgScore: 80 },
+  { id: 'mchenry', name: 'McHenry', d: 'M165,35 L300,40 L305,115 L165,115 Z', lvl: 2, count: 145, avgScore: 75 },
+  { id: 'cook',    name: 'Cook',    d: 'M40,120 L165,115 L170,220 L45,225 Z', lvl: 4, count: 620, avgScore: 86 },
+  { id: 'dupage',  name: 'DuPage',  d: 'M170,115 L305,115 L310,220 L170,220 Z', lvl: 3, count: 310, avgScore: 82 },
+  { id: 'other',   name: 'Other IL', d: 'M40,225 L310,225 L310,280 L40,280 Z', lvl: 1, count: 210, avgScore: 70 },
 ];
 
-// ZIPs within Fulton County (Atlanta) — 30309 is the demo borrower anchor.
-const ATL_ZIPS: DrillRegion[] = [
-  { id: '30305', name: '30305', d: 'M30,30 L110,30 L110,100 L30,100 Z',   lvl: 3, count: 68, avgScore: 82 },
-  { id: '30309', name: '30309', d: 'M110,30 L200,30 L200,100 L110,100 Z', lvl: 4, count: 94, avgScore: 94, borrowerId: 'B-48291' },
-  { id: '30324', name: '30324', d: 'M200,30 L280,30 L280,100 L200,100 Z', lvl: 3, count: 58, avgScore: 80 },
-  { id: '30339', name: '30339', d: 'M30,100 L110,100 L110,180 L30,180 Z', lvl: 3, count: 72, avgScore: 81 },
-  { id: '30308', name: '30308', d: 'M110,100 L200,100 L200,180 L110,180 Z', lvl: 2, count: 46, avgScore: 75 },
-  { id: '30318', name: '30318', d: 'M200,100 L280,100 L280,180 L200,180 Z', lvl: 2, count: 52, avgScore: 76 },
+// ZIPs within Cook County (Chicago) — 60611 (Streeterville / Gold Coast) is
+// the sample-borrower anchor, matching B-48291 in
+// tests/fixtures/mock_population. Slice 9 replaced the Atlanta ZIP set
+// (30305/30309/30324/30339/30308/30318) with Cook County ZIPs so the map
+// drill terminates on the real sample borrower.
+const CHI_ZIPS: DrillRegion[] = [
+  { id: '60611', name: '60611', d: 'M30,30 L110,30 L110,100 L30,100 Z',   lvl: 4, count: 94, avgScore: 94, borrowerId: 'B-48291' },
+  { id: '60647', name: '60647', d: 'M110,30 L200,30 L200,100 L110,100 Z', lvl: 3, count: 72, avgScore: 82, borrowerId: 'B-48294' },
+  { id: '60613', name: '60613', d: 'M200,30 L280,30 L280,100 L200,100 Z', lvl: 3, count: 58, avgScore: 80, borrowerId: 'B-48295' },
+  { id: '60614', name: '60614', d: 'M30,100 L110,100 L110,180 L30,180 Z', lvl: 3, count: 68, avgScore: 81 },
+  { id: '60610', name: '60610', d: 'M110,100 L200,100 L200,180 L110,180 Z', lvl: 2, count: 46, avgScore: 76 },
+  { id: '60657', name: '60657', d: 'M200,100 L280,100 L280,180 L200,180 Z', lvl: 2, count: 52, avgScore: 77 },
 ];
 
 type Level = 'state' | 'county' | 'zip';
@@ -184,10 +211,10 @@ interface Selected {
 }
 
 // Real-county feature (post-topojson decode). Coordinates are planar Albers
-// pixel space because us-counties-demo.json was trimmed from the "-albers-"
+// pixel space because us-counties.json was trimmed from the "-albers-"
 // variant of us-atlas — so we can build SVG paths directly without d3-geo.
 interface CountyFeature {
-  id: string; // 5-digit FIPS, e.g. "13121" (Fulton)
+  id: string; // 5-digit FIPS, e.g. "17031" (Cook)
   name: string;
   paths: string; // compound SVG path `d` built from rings
   cx: number;
@@ -195,10 +222,10 @@ interface CountyFeature {
 }
 
 interface CountiesPayload {
-  state: string;      // ucode ("ga" | "ca" | "tx")
+  state: string;      // ucode ("il" | "ca" | "tx")
   features: CountyFeature[];
   viewBox: string;    // pre-computed bbox margin applied
-  fultonCentroid?: { x: number; y: number }; // only set for GA
+  cookCentroid?: { x: number; y: number }; // only set for IL
 }
 
 /**
@@ -290,7 +317,7 @@ export function MapPlaceholder({ height = 420, segmentFilter }: MapPlaceholderPr
   }, []);
 
   // Lazy-load real county polygons when drilled into a supported state.
-  // us-counties-demo.json is a pre-trimmed TopoJSON (~170KB raw / ~57KB
+  // us-counties.json is a pre-trimmed TopoJSON (~170KB raw / ~57KB
   // gzipped) shipped as a static asset in public/. topojson-client decodes it
   // at runtime; both fetch + import happen only on first county drill.
   useEffect(() => {
@@ -303,7 +330,7 @@ export function MapPlaceholder({ height = 420, segmentFilter }: MapPlaceholderPr
       try {
         const [topoClient, topoRes] = await Promise.all([
           import('topojson-client'),
-          fetch('/us-counties-demo.json'),
+          fetch('/us-counties.json'),
         ]);
         if (!topoRes.ok) throw new Error(`topology fetch ${topoRes.status}`);
         const topology = await topoRes.json();
@@ -347,20 +374,20 @@ export function MapPlaceholder({ height = 420, segmentFilter }: MapPlaceholderPr
             cy: (y0 + y1) / 2,
           };
         });
-        // For GA, remember Fulton's centroid so we can pulse over it.
-        const fulton = features.find((f) => f.id === '13121');
+        // For IL, remember Cook County's centroid so we can pulse over it.
+        const cook = features.find((f) => f.id === '17031');
         const payload: CountiesPayload = {
           state: countyStateId,
           features,
           viewBox,
-          fultonCentroid: fulton ? { x: fulton.cx, y: fulton.cy } : undefined,
+          cookCentroid: cook ? { x: cook.cx, y: cook.cy } : undefined,
         };
         if (!cancelled) {
           setCountiesByState((cur) => ({ ...cur, [countyStateId]: payload }));
         }
       } catch {
         // TODO: surface a real error state when we introduce a shared
-        // ErrorBoundary. For the booth demo path the loading skeleton is OK.
+        // ErrorBoundary. Until then the loading skeleton is the fallback.
       }
     })();
     return () => {
@@ -387,9 +414,9 @@ export function MapPlaceholder({ height = 420, segmentFilter }: MapPlaceholderPr
           0,
         );
       }
-      return GA_COUNTIES.reduce((a, b) => a + b.count, 0);
+      return IL_COUNTIES.reduce((a, b) => a + b.count, 0);
     }
-    return ATL_ZIPS.reduce((a, b) => a + b.count, 0);
+    return CHI_ZIPS.reduce((a, b) => a + b.count, 0);
   }, [level, countyStateId, countiesByState]);
 
   // ----- STATE level: real US paths via @svg-maps/usa ----------------------
@@ -461,14 +488,14 @@ export function MapPlaceholder({ height = 420, segmentFilter }: MapPlaceholderPr
           />
         );
       })}
-      {/* Pulse beacon over Georgia to telegraph the demo drill */}
-      <GeorgiaBeacon />
+      {/* Pulse beacon over Illinois to telegraph the county drill */}
+      <IllinoisBeacon />
     </svg>
     );
   };
 
   // ----- COUNTY level: real county polygons from the trimmed TopoJSON -----
-  // Falls back to the stylized GA_COUNTIES rectangles only if the drill state
+  // Falls back to the stylized IL_COUNTIES rectangles only if the drill state
   // isn't in SUPPORTED_COUNTY_STATES or the fetch hasn't resolved yet.
   const renderCountyLevel = () => {
     const payload = countyStateId ? countiesByState[countyStateId] : null;
@@ -481,7 +508,7 @@ export function MapPlaceholder({ height = 420, segmentFilter }: MapPlaceholderPr
           preserveAspectRatio="xMidYMid meet"
           style={{ marginTop: 36, height: 'calc(100% - 36px)' }}
         >
-          {GA_COUNTIES.map((c) => {
+          {IL_COUNTIES.map((c) => {
             const classes = ['map-region', `lvl-${c.lvl}`].join(' ');
             return <path key={c.id} d={c.d} className={classes} />;
           })}
@@ -512,7 +539,7 @@ export function MapPlaceholder({ height = 420, segmentFilter }: MapPlaceholderPr
         {payload.features.map((f) => {
           const facts = COUNTY_FACTS[f.id];
           const lvl = facts?.lvl ?? 1;
-          const isFulton = f.id === '13121';
+          const isCook = f.id === '17031';
           const classes = [
             'map-region',
             `lvl-${lvl}`,
@@ -540,9 +567,9 @@ export function MapPlaceholder({ height = 420, segmentFilter }: MapPlaceholderPr
               }
               onMouseLeave={() => setHover(null)}
               onClick={() => {
-                if (isFulton) {
+                if (isCook) {
                   setLevel('zip');
-                  setSelected({ level: 'county', id: '13121', name: 'Fulton County' });
+                  setSelected({ level: 'county', id: '17031', name: 'Cook County' });
                 } else {
                   setSelected({ level: 'county', id: f.id, name: f.name });
                 }
@@ -550,13 +577,13 @@ export function MapPlaceholder({ height = 420, segmentFilter }: MapPlaceholderPr
             />
           );
         })}
-        {/* Pulse beacon over Fulton when drilled into GA — telegraphs the
-             "Atlanta drill" demo path. */}
-        {payload.fultonCentroid && (
+        {/* Pulse beacon over Cook when drilled into IL — telegraphs the
+             "Chicago drill" path. */}
+        {payload.cookCentroid && (
           <g pointerEvents="none">
             <circle
-              cx={payload.fultonCentroid.x}
-              cy={payload.fultonCentroid.y}
+              cx={payload.cookCentroid.x}
+              cy={payload.cookCentroid.y}
               r="6"
               fill="var(--accent)"
               fillOpacity="0.25"
@@ -571,8 +598,8 @@ export function MapPlaceholder({ height = 420, segmentFilter }: MapPlaceholderPr
               />
             </circle>
             <circle
-              cx={payload.fultonCentroid.x}
-              cy={payload.fultonCentroid.y}
+              cx={payload.cookCentroid.x}
+              cy={payload.cookCentroid.y}
               r="3"
               fill="var(--accent)"
             />
@@ -582,14 +609,14 @@ export function MapPlaceholder({ height = 420, segmentFilter }: MapPlaceholderPr
     );
   };
 
-  // ----- ZIP level: Atlanta ZIPs; click drills to borrower 360 --------------
+  // ----- ZIP level: Chicago ZIPs; click drills to borrower 360 --------------
   const renderZipLevel = () => (
     <svg
       viewBox="0 0 310 210"
       preserveAspectRatio="xMidYMid meet"
       style={{ marginTop: 36, height: 'calc(100% - 36px)' }}
     >
-      {ATL_ZIPS.map((z) => {
+      {CHI_ZIPS.map((z) => {
         const classes = [
           'map-region',
           `lvl-${z.lvl}`,
@@ -606,7 +633,7 @@ export function MapPlaceholder({ height = 420, segmentFilter }: MapPlaceholderPr
                 setHover({
                   x: e.clientX,
                   y: e.clientY,
-                  name: `ZIP ${z.name}, Atlanta GA`,
+                  name: `ZIP ${z.name}, Chicago IL`,
                   count: z.count,
                   avgScore: z.avgScore,
                 })
@@ -676,15 +703,15 @@ export function MapPlaceholder({ height = 420, segmentFilter }: MapPlaceholderPr
                 style={{ padding: '3px 8px' }}
                 onClick={() => {
                   setLevel('county');
-                  const st = countyStateId ?? 'ga';
-                  const stName = usaMap?.locations.find((l) => l.id === st)?.name ?? 'Georgia';
+                  const st = countyStateId ?? 'il';
+                  const stName = usaMap?.locations.find((l) => l.id === st)?.name ?? 'Illinois';
                   setSelected({ level: 'state', id: st, name: stName });
                 }}
               >
                 <span className="filter__value">
                   {countyStateId
-                    ? usaMap?.locations.find((l) => l.id === countyStateId)?.name ?? 'Georgia'
-                    : 'Georgia'}
+                    ? usaMap?.locations.find((l) => l.id === countyStateId)?.name ?? 'Illinois'
+                    : 'Illinois'}
                 </span>
               </button>
             </>
@@ -693,7 +720,7 @@ export function MapPlaceholder({ height = 420, segmentFilter }: MapPlaceholderPr
             <>
               <Icon name="chevright" size={11} />
               <span className="filter is-active" style={{ padding: '3px 8px' }}>
-                <span className="filter__value">Atlanta MSA</span>
+                <span className="filter__value">Chicago Metro</span>
               </span>
             </>
           )}
@@ -704,10 +731,10 @@ export function MapPlaceholder({ height = 420, segmentFilter }: MapPlaceholderPr
       <div style={{ position: 'absolute', top: 12, right: 14, zIndex: 2 }}>
         <Chip variant="neutral" icon="pin">
           {level === 'state'
-            ? 'Click GA, CA, or TX to drill'
+            ? 'Click IL, CA, or TX to drill'
             : level === 'county'
-              ? countyStateId === 'ga'
-                ? 'Click Fulton to drill'
+              ? countyStateId === 'il'
+                ? 'Click Cook to drill'
                 : 'Hover a county for detail'
               : 'Click a ZIP to open borrower'}
         </Chip>
@@ -788,14 +815,16 @@ export { MapPlaceholder as USChoroplethMap };
 // ---------- Helpers -------------------------------------------------------
 
 /**
- * Pulse beacon rendered over Georgia at the state level. The x/y coords are
- * in @svg-maps/usa units (viewBox "192 9 1028 746"). GA's path bbox centers
- * around x≈1004 y≈415 in that projection (verified at runtime).
+ * Pulse beacon rendered over Illinois at the state level. The x/y coords are
+ * in @svg-maps/usa units (viewBox "192 9 1028 746"). IL's path bbox centers
+ * around x≈833 y≈300 in that projection — roughly Chicago's pixel position
+ * on the Albers map, which doubles as the anchor metro hint for the
+ * default drill. Slice 9 swapped this in for the former GeorgiaBeacon.
  */
-function GeorgiaBeacon() {
+function IllinoisBeacon() {
   return (
     <g pointerEvents="none">
-      <circle cx="1004" cy="415" r="10" fill="var(--accent)" fillOpacity="0.2">
+      <circle cx="833" cy="300" r="10" fill="var(--accent)" fillOpacity="0.2">
         <animate attributeName="r" from="6" to="24" dur="1.8s" repeatCount="indefinite" />
         <animate
           attributeName="fill-opacity"
@@ -805,7 +834,7 @@ function GeorgiaBeacon() {
           repeatCount="indefinite"
         />
       </circle>
-      <circle cx="1004" cy="415" r="4" fill="var(--accent)" />
+      <circle cx="833" cy="300" r="4" fill="var(--accent)" />
     </g>
   );
 }

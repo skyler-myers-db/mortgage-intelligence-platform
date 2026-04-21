@@ -8,12 +8,15 @@ router = APIRouter(prefix="/api/config", tags=["config"])
 @router.get("/options")
 def get_config_options() -> dict[str, object]:
     return {
-        "demo_lender": settings.mip_demo_lender,
-        "mock_mode": settings.mip_mock_mode,
+        "lender_name": settings.mip_lender_name,
         "geographies": [
-            "Georgia / Atlanta MSA / 30309",
-            "California / Orange County / 92602",
+            # Slice 9: anchor to the 6-state Delta Share footprint.
+            "Illinois / Cook County / 60611",
+            "California / Los Angeles County / 90038",
             "Texas / Travis County / 78704",
+            "Washington / King County / 98103",
+            "Florida / Miami-Dade County / 33132",
+            "Colorado / Denver County / 80202",
         ],
         "occupancy": ["Owner-occupied", "Second home", "Investor"],
         "lien_status": ["Open first lien", "Free and clear", "Multiple liens"],

@@ -5,9 +5,9 @@ import { Chip } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 
 /**
- * Admin / Config — presenter-facing controls for theme / density / accent
- * (the same Console controls, surfaced as a proper settings page so a demo
- * presenter can flex visuals without opening the right-rail panel), plus
+ * Admin / Config — operator-facing controls for theme / density / accent
+ * (the same Console controls, surfaced as a proper settings page so an
+ * operator can flex visuals without opening the right-rail panel), plus
  * placeholders for offer rules and audit settings.
  */
 
@@ -31,8 +31,8 @@ export default function AdminConfig() {
   return (
     <PageShell
       eyebrow="Admin Config"
-      title="Rules, thresholds, and demo assumptions"
-      lede="Presenter controls at the top; rule and audit configuration placeholders below. Everything here is a demo-safe mutation of UI state."
+      title="Rules, thresholds, and presentation"
+      lede="Presenter controls at the top; rule and audit configuration placeholders below. Everything here is a safe mutation of UI state."
     >
       <div className="layoutA-grid">
         <div className="surface">
@@ -89,7 +89,7 @@ export default function AdminConfig() {
                 </div>
               </div>
             </Row>
-            <Row label="Demo lender">
+            <Row label="Lender">
               <input
                 type="text"
                 value={lender}

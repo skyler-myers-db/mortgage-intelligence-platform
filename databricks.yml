@@ -2,9 +2,10 @@ bundle:
   name: mortgage-intelligence-platform
 
 # Target workspace defaults to the DEFAULT CLI profile's host. `dev` is the
-# booth-demo target; `prod` is the same workspace with production-mode
-# guardrails. Run `databricks bundle validate -t dev` before any deploy;
-# run `databricks bundle deploy -t dev` to land the app + resources.
+# default development target; `prod` is the same workspace with
+# production-mode guardrails. Run `databricks bundle validate -t dev` before
+# any deploy; run `databricks bundle deploy -t dev` to land the app +
+# resources.
 workspace:
   host: https://dbc-3aa503a9-4fa8.cloud.databricks.com
 
@@ -27,10 +28,40 @@ targets:
       user_name: ${workspace.current_user.userName}
 
 resources:
+  # Slice 5 real-data migration: self-contained Lakebase provisioning.
+  # ``databricks bundle deploy -t dev`` creates the Postgres instance +
+  # registers the database catalog in Unity Catalog. Bundle schema
+  # ``resources.database_instances`` + ``resources.database_catalogs``
+  # confirmed via ``databricks bundle schema`` on CLI 0.297.x. The
+  # migration job below (``mip_lakebase_migrate``) applies ``lakebase/
+  # schema.sql`` + ``lakebase/seed_campaigns.sql`` against the
+  # instance so the audit store has a live target on first deploy.
+  database_instances:
+    mip_app_state:
+      # DNS-compliant: alphanumeric + hyphens only. The bundle resource key
+      # stays `mip_app_state` for internal references; the actual instance
+      # name on the Databricks side is `mip-app-state`.
+      name: mip-app-state
+      # CU_1 is the smallest tier and is appropriate for Module 0's
+      # default write volume (audit + approvals on the order of a
+      # few rows per minute). Production lift to CU_2 would be a
+      # one-line bundle edit.
+      capacity: CU_1
+      node_count: 1
+      retention_window_in_days: 7
+      enable_readable_secondaries: false
+
+  database_catalogs:
+    mip_app_state_catalog:
+      name: mip_app_state
+      database_instance_name: ${resources.database_instances.mip_app_state.name}
+      database_name: ${var.lakebase_database_name}
+      create_database_if_not_exists: true
+
   apps:
-    mip_demo_app:
-      name: mip-demo-app
-      description: Mortgage Intelligence Platform Module 0 DAIS demo
+    mip_app:
+      name: mip-app
+      description: Mortgage Intelligence Platform — Module 0 (Top-of-Funnel Lead Generation & Borrower Segmentation).
       source_code_path: .
 
   sql_warehouses:
@@ -42,9 +73,34 @@ resources:
       auto_stop_mins: 15
 
   jobs:
-    mip_refresh_demo_data:
-      name: mip_refresh_demo_data
-      tasks: []
+    # Slice 2 real-data migration: refresh silver by running the Lakeflow
+    # (DLT) feature pipeline. Step 1 applies the idempotent DDL (catalog +
+    # schemas) via SQL task against the serverless warehouse; Step 2 kicks
+    # the pipeline. Daily on-demand in dev (no schedule); production can
+    # enable a schedule_quartz_cron_expression once governance signs off on
+    # the full silver→gold chain.
+    mip_refresh_silver:
+      name: mip_refresh_silver
+      tags:
+        solution: mortgage-intelligence-platform
+        module: module0
+        owner: entrada
+        slice: module0-real-data-slice2
+      max_concurrent_runs: 1
+      tasks:
+        - task_key: init_catalog_schemas
+          description: "Idempotent CREATE CATALOG mip + schemas raw/silver/gold/semantics/app/audit."
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/ddl/001_catalogs_schemas.sql
+        - task_key: refresh_silver_pipeline
+          description: "Run the Lakeflow feature pipeline to materialize mip.silver.* from the Cotality share."
+          depends_on:
+            - task_key: init_catalog_schemas
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.mip_feature_pipeline.id}
+            full_refresh: false
     mip_refresh_scores:
       name: mip_refresh_scores
       tasks: []
@@ -52,14 +108,124 @@ resources:
       name: mip_snapshot_dashboards
       tasks: []
 
+    # Slice 5 real-data migration: apply Lakebase DDL + seed sample
+    # campaigns. Python task invokes jobs/lakebase_migrate.py which
+    # opens a psycopg3 connection to the instance created above and
+    # runs lakebase/schema.sql then lakebase/seed_campaigns.sql.
+    # Both files are idempotent (CREATE ... IF NOT EXISTS + ON
+    # CONFLICT DO NOTHING) so re-running the job is a no-op.
+    mip_lakebase_migrate:
+      name: mip_lakebase_migrate
+      tags:
+        solution: mortgage-intelligence-platform
+        module: module0
+        owner: entrada
+        slice: module0-real-data-slice5
+      max_concurrent_runs: 1
+      environments:
+        - environment_key: py_default
+          spec:
+            client: "2"
+            dependencies:
+              - psycopg[binary]==3.2.10
+              # Needed by jobs/lakebase_migrate.py to fetch a fresh
+              # short-lived Postgres credential via workspace identity.
+              - databricks-sdk>=0.30.0
+      tasks:
+        - task_key: apply_schema_and_seed
+          description: "Apply lakebase/schema.sql + lakebase/seed_campaigns.sql against mip-app-state."
+          environment_key: py_default
+          spark_python_task:
+            python_file: jobs/lakebase_migrate.py
+          max_retries: 2
+          retry_on_timeout: true
+
+    # Slice 1 real-data migration: FRED MORTGAGE30US -> silver.market_rates_weekly.
+    # Self-contained deploy: task `init` applies DDL, `seed` loads the committed
+    # CSV IF the table is empty, `refresh` pulls FRED + MERGEs. Re-running the
+    # whole job on the same day is a no-op (seed short-circuits, MERGE is
+    # idempotent). See jobs/fred_rates_ingest.py for resilience on FRED outage.
+    mip_fred_rates_ingest:
+      name: mip_fred_rates_ingest
+      tags:
+        solution: mortgage-intelligence-platform
+        module: module0
+        owner: entrada
+        slice: module0-real-data-slice1
+      max_concurrent_runs: 1
+      # Serverless Python task environment. Spark is attached automatically
+      # for spark_python_task. Only stdlib is used by jobs/fred_rates_ingest.py
+      # (urllib + csv), so no extra wheel dependencies are declared here.
+      environments:
+        - environment_key: py_default
+          spec:
+            client: "2"
+      # FRED publishes Thursdays; we run Fridays 06:00 America/Chicago so the
+      # refresh lands before any Monday business readout. Disable pause on the
+      # per-target cron; dev stays manual-trigger by default via targets.dev.
+      schedule:
+        quartz_cron_expression: "0 0 6 ? * FRI *"
+        timezone_id: America/Chicago
+        pause_status: UNPAUSED
+      tasks:
+        - task_key: init_ddl
+          description: "Idempotent CREATE CATALOG/SCHEMA + silver.market_rates_weekly DDL."
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/ddl/001_catalogs_schemas.sql
+        - task_key: init_silver_ddl
+          description: "CREATE TABLE IF NOT EXISTS for silver.market_rates_weekly."
+          depends_on:
+            - task_key: init_ddl
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/ddl/silver_market_rates_weekly.sql
+        - task_key: seed_if_empty
+          description: "Load data/seeds/fred_mortgage30us_seed.csv iff silver table is empty."
+          depends_on:
+            - task_key: init_silver_ddl
+          environment_key: py_default
+          spark_python_task:
+            python_file: jobs/fred_rates_ingest.py
+            parameters: ["--mode=seed"]
+          max_retries: 2
+          retry_on_timeout: true
+        - task_key: refresh_from_fred
+          description: "Pull FRED MORTGAGE30US and MERGE into silver.market_rates_weekly."
+          depends_on:
+            - task_key: seed_if_empty
+          environment_key: py_default
+          spark_python_task:
+            python_file: jobs/fred_rates_ingest.py
+            parameters: ["--mode=fred"]
+          max_retries: 2
+          retry_on_timeout: true
+
   pipelines:
+    # Slice 2 real-data migration: silver lift from cotality_mortgage_data.
+    # corelogic into mip.silver.* (5 tables). State-filtered to IL/CA/
+    # FL/TX/WA/CO at source. See pipelines/lakeflow/mip_feature_pipeline.py
+    # and sql/ddl/silver_*.sql for column contracts; docs/data-contract-
+    # module0.md §2 is authoritative.
     mip_feature_pipeline:
       name: mip_feature_pipeline
+      catalog: ${var.uc_catalog}
+      schema: silver
+      photon: true
+      development: true
+      continuous: false
       libraries:
         - file:
             path: pipelines/lakeflow/mip_feature_pipeline.py
     mip_gold_pipeline:
       name: mip_gold_pipeline
+      catalog: ${var.uc_catalog}
+      schema: gold
+      photon: true
+      development: true
+      continuous: false
       libraries:
         - file:
             path: pipelines/lakeflow/mip_gold_pipeline.py
@@ -72,11 +238,11 @@ resources:
     mip_executive_dashboard:
       display_name: mip_executive_dashboard
       file_path: dashboards/executive_dashboard.lvdash.json
-      warehouse_id: ${var.sql_warehouse_id}
+      warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
     mip_segment_dashboard:
       display_name: mip_segment_dashboard
       file_path: dashboards/segment_dashboard.lvdash.json
-      warehouse_id: ${var.sql_warehouse_id}
+      warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
 
   # Canonical experiment path is /Shared/mip/lead-scoring; the parent
   # /Shared/mip directory must exist in the workspace before this bundle
@@ -87,25 +253,22 @@ resources:
     mip_lead_scoring:
       name: /Users/${workspace.current_user.userName}/mip-lead-scoring
 
-# Genie spaces (mortgage_lead_intelligence) and Lakebase instances
-# (mip_app_state) are not yet managed resource types in the Databricks CLI
-# bundle schema at v0.297.2; they are provisioned once per workspace and
-# referenced from the app via `resources:` entries in `resources/apps.yml`
-# (see `genie_space.id` and `database.database_name` there). This comment
-# block keeps their logical names visible to string-contract tests.
-# resources.genie_spaces.mortgage_lead_intelligence
-# resources.lakebase_instances.mip_app_state
+# Genie spaces (mortgage_lead_intelligence) are still provisioned out-of-
+# bundle via tools/databricks/provision_genie_space.py (see AGENTS.md).
+# Lakebase instances are declared above under resources.database_instances
+# as of Slice 5; a matching database_catalog block registers the app-state
+# database in UC so SQL warehouses can query it alongside mip.gold.
 
 variables:
   uc_catalog:
-    description: Unity Catalog catalog for MIP demo tables
-    default: mip_demo
+    description: Unity Catalog catalog for Mortgage Intelligence Platform tables
+    default: mip
   uc_schemas:
     description: Comma-separated schemas materialized under uc_catalog
     default: raw,silver,gold,semantics,app,audit
   app_name:
     description: Databricks App display name
-    default: mip-demo-app
+    default: mip-app
   # sql_warehouse_id and genie_space_id are overridden per-invocation via the
   # Databricks CLI BUNDLE_VAR_* mechanism. The Makefile targets
   # `bundle-validate-env` and `bundle-deploy-dev` source .env.local and export

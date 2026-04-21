@@ -82,10 +82,10 @@ HLS Interop, Tishman Speyer) and a successful create+verify round-trip.
    > for description but found "One row per eligible borrower."`
 
 3. **Table identifiers must reference existing catalogs/schemas.** Passing
-   `mip_demo.gold.lead_population` when that catalog has not yet been
+   `mip.gold.lead_population` when that catalog has not yet been
    created fails with:
    > `PermissionDenied: An error occurred accessing the schema. Failed to
-   > fetch tables for the space. ... Catalog 'mip_demo.gold.lead_population'
+   > fetch tables for the space. ... Catalog 'mip.gold.lead_population'
    > does not exist`
 
    The error message confusingly quotes the full identifier as "Catalog"

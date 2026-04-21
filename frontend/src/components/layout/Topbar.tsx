@@ -34,20 +34,20 @@ export function Topbar() {
     <header className="topbar" role="banner">
       <div className="topbar__crumbs">
         <span className="mono" style={{ color: 'var(--text-3)', fontSize: 11, letterSpacing: '0.06em' }}>WORKSPACE /</span>
-        <span>mip-demo-app</span>
+        <span>mip-app</span>
         <span className="sep">/</span>
         <span>Module 0: Top of Funnel</span>
         <span className="sep">/</span>
         <span className="cur">{crumb}</span>
       </div>
       <div className="topbar__spacer" />
-      <div className="topbar__pill" title="Demo lender">
+      <div className="topbar__pill" title="Lender">
         <Icon name="building" size={12} />
         <span>{lender}</span>
       </div>
       <div className="topbar__pill" title="Environment: sandbox">
         <span className="dot amber" />
-        <span>demo.sandbox</span>
+        <span>sandbox</span>
       </div>
       <div className="topbar__pill" title="Databricks warehouse: running">
         <span className="dot is-heartbeat" aria-hidden="true" />

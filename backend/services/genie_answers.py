@@ -1,19 +1,25 @@
-"""Deterministic Genie answer catalog + matcher for Module 0 (DAIS demo).
+"""Deterministic Genie answer catalog -- SAFE-CORPUS FALLBACK (Slice 7).
 
-The booth-demo Genie path is *not* a fallback — it's the main stage. Any
-question the audience throws within the Module 0 narrative should return
-a polished, evidence-cited answer, not a generic "Genie unavailable"
-line. This module holds the curated answer catalog (currently 12 canned
-answers covering geography, offer branches, segment comparisons,
-borrower lookups, trends, and policy questions) and the scoring-based
-matcher.
+Slice 7 flipped the primary Genie path onto the real Databricks Genie
+space (``backend.services.genie_client`` + ``DatabricksGenieRepository``).
+This module NO LONGER serves the happy path; it is the safe-corpus
+fallback that only activates when the ``genie`` circuit breaker is
+OPEN. That keeps the canonical-question trio landing deterministically
+even if the space is cold-starting or rate-limited.
 
-All responses cite at least one Unity Catalog asset under ``mip_demo``.
-Borrower-level answers pull real names and scores from the synthetic
-``mock_data.BORROWERS`` population — no fabricated PII. The generic
-fallback is the warm last resort and nudges the presenter back onto the
-Module 0 narrative rails.
+What lives here:
 
+- ``GenieMessageResponse`` -- the wire contract the router returns.
+- A curated in-module catalog keyed by intent, scored against a weighted
+  phrase / keyword / regex matcher. This is the hand-tuned corpus that
+  was the primary path before Slice 7.
+- A loader over ``genie/sample_questions.md`` so the canonical space
+  questions stay in lockstep between the space config and the
+  fallback. Loader results are merged into the in-memory intent map;
+  the hand-tuned entries take precedence on collision because they
+  carry richer ``table_rows`` / ``follow_up_questions`` metadata.
+
+All responses cite at least one Unity Catalog asset under ``mip``.
 The matcher is intentionally simple and pure (no deps): per-answer
 keyword and phrase lists with weighted scoring, optional regex patterns
 for high-signal phrases, and a threshold that falls through to the warm
@@ -27,7 +33,44 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from backend.services.mock_data import BORROWERS, SEGMENTS
+# ---------------------------------------------------------------------------
+# Canonical-narrative roster (synthetic, pinned). Slice-4 inlined from what
+# was previously ``mock_data.BORROWERS``/``SEGMENTS`` projections. The
+# catalog below consumes these helpers -- no module-global list, so adding
+# or retiring a sample row is a one-line edit here. Slice 7 replaces this
+# with Genie-grounded results against the semantic layer.
+# ---------------------------------------------------------------------------
+
+_SAFE_CORPUS_TOP_BORROWERS: list[dict[str, Any]] = [
+    # Slice 9: sample trio re-anchored to Chicago/IL so the safe-corpus
+    # fallback agrees with tests/fixtures/mock_population.py (the
+    # golden-fixture population) and docs/module0-talk-track.md.
+    {"borrower_id": "B-48291", "name": "James & Maria Rodriguez", "geo": "Chicago, IL",         "score": 94, "offer": "Refinance + HELOC"},
+    {"borrower_id": "B-48294", "name": "David Park",              "geo": "Chicago, IL",         "score": 87, "offer": "Refinance + HELOC"},
+    {"borrower_id": "B-51872", "name": "Thomas Chen",             "geo": "Austin, TX",          "score": 85, "offer": "Refinance + HELOC"},
+    {"borrower_id": "B-54103", "name": "Maria & Carlos Rivera",   "geo": "San Francisco, CA",   "score": 85, "offer": "Refinance + HELOC"},
+    {"borrower_id": "B-56219", "name": "Priya Natarajan",         "geo": "Seattle, WA",         "score": 83, "offer": "Refinance + HELOC"},
+    {"borrower_id": "B-48295", "name": "Lisa Thompson",           "geo": "Chicago, IL",         "score": 82, "offer": "Purchase Mortgage"},
+    {"borrower_id": "B-52418", "name": "Daniel O'Connor",         "geo": "Denver, CO",          "score": 73, "offer": "HELOC"},
+    {"borrower_id": "B-55328", "name": "Kevin Nakamura",          "geo": "Austin, TX",          "score": 72, "offer": "Refinance"},
+    {"borrower_id": "B-60284", "name": "Alicia Greenberg",        "geo": "Austin, TX",          "score": 75, "offer": "Purchase Mortgage"},
+    {"borrower_id": "B-66541", "name": "Steven & Joanne Hayashi", "geo": "Chicago, IL",         "score": 71, "offer": "Retention"},
+]
+
+_SAFE_CORPUS_AUSTIN_ROWS: list[dict[str, Any]] = [
+    {"borrower_id": "B-51872", "name": "Thomas Chen",      "zip": "78704", "spread_bps": 138, "score": 85, "offer": "Refinance + HELOC"},
+    {"borrower_id": "B-55328", "name": "Kevin Nakamura",   "zip": "78745", "spread_bps": 162, "score": 72, "offer": "Refinance"},
+    {"borrower_id": "B-60284", "name": "Alicia Greenberg", "zip": "78702", "spread_bps":  62, "score": 75, "offer": "Purchase Mortgage"},
+]
+
+_SAFE_CORPUS_SEGMENT_ROWS: dict[str, dict[str, Any]] = {
+    "itm":       {"segment": "In the Money",              "count": 12840, "avg_score": 82, "delta": "+18%"},
+    "listed":    {"segment": "Listed for Sale",           "count":  2614, "avg_score": 74, "delta":  "+9%"},
+    "permit":    {"segment": "Permit Activity",           "count":  4108, "avg_score": 71, "delta": "+11%"},
+    "investor":  {"segment": "Investor / Multi-Property", "count":  1892, "avg_score": 79, "delta":  "+6%"},
+    "equity":    {"segment": "Home Equity Candidate",     "count":  6320, "avg_score": 76, "delta": "+14%"},
+    "retention": {"segment": "Retention Risk",            "count":  3471, "avg_score": 88, "delta":  "+4%"},
+}
 
 
 class GenieMessageResponse(BaseModel):
@@ -49,48 +92,21 @@ class GenieMessageResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Helpers that read the live synthetic population so borrower-level
-# answers cite real rows (never fabricated).
+# Helpers over the pinned safe-corpus roster. Deterministic, no external deps.
 # ---------------------------------------------------------------------------
 
 
 def _top_n_rows(n: int) -> list[dict[str, Any]]:
-    ranked = sorted(BORROWERS, key=lambda b: b.opportunity_score, reverse=True)
-    return [
-        {
-            "borrower_id": b.borrower_id,
-            "name": b.display_name,
-            "geo": f"{b.city}, {b.state}",
-            "score": b.opportunity_score,
-            "offer": b.recommended_offer,
-        }
-        for b in ranked[:n]
-    ]
+    ranked = sorted(_SAFE_CORPUS_TOP_BORROWERS, key=lambda r: r["score"], reverse=True)
+    return [dict(r) for r in ranked[:n]]
 
 
 def _austin_rows() -> list[dict[str, Any]]:
-    return [
-        {
-            "borrower_id": b.borrower_id,
-            "name": b.display_name,
-            "zip": b.zip,
-            "spread_bps": b.rate_spread_bps,
-            "score": b.opportunity_score,
-            "offer": b.recommended_offer,
-        }
-        for b in BORROWERS
-        if b.city == "Austin"
-    ]
+    return [dict(r) for r in _SAFE_CORPUS_AUSTIN_ROWS]
 
 
 def _segment_row(code: str) -> dict[str, Any]:
-    seg = next(s for s in SEGMENTS if s.code == code)
-    return {
-        "segment": seg.name,
-        "count": seg.count,
-        "avg_score": seg.avg_score,
-        "delta": seg.delta,
-    }
+    return dict(_SAFE_CORPUS_SEGMENT_ROWS[code])
 
 
 # ---------------------------------------------------------------------------
@@ -111,32 +127,36 @@ class Intent:
 
 def _answers() -> dict[str, GenieMessageResponse]:
     """Built lazily so tests that touch the catalog get the current
-    BORROWERS snapshot. Returns a dict keyed by intent name.
+    safe-corpus roster. Returns a dict keyed by intent name.
     """
     top10 = _top_n_rows(10)
     austin = _austin_rows()
+    # Slice 9: top ITM ZIPs re-anchored to the 6-state footprint.
+    # Chicago 60611 (Streeterville / Gold Coast) leads; Austin, SF, Seattle,
+    # Miami follow — one representative ZIP per footprint state.
     itm_zip_rows = [
-        {"zip": "30309", "city": "Atlanta, GA", "itm_borrowers": "~1,420"},
-        {"zip": "78704", "city": "Austin, TX", "itm_borrowers": "~1,180"},
+        {"zip": "60611", "city": "Chicago, IL",       "itm_borrowers": "~1,420"},
+        {"zip": "78704", "city": "Austin, TX",        "itm_borrowers": "~1,180"},
         {"zip": "94110", "city": "San Francisco, CA", "itm_borrowers": "~960"},
-        {"zip": "98103", "city": "Seattle, WA", "itm_borrowers": "~720"},
-        {"zip": "30305", "city": "Atlanta, GA", "itm_borrowers": "~640"},
+        {"zip": "98103", "city": "Seattle, WA",       "itm_borrowers": "~720"},
+        {"zip": "33132", "city": "Miami, FL",         "itm_borrowers": "~640"},
     ]
 
     return {
         # --- Existing canonical three (unchanged wording) -----------------
         "in_the_money": GenieMessageResponse(
-            conversation_id="demo-conv", question="",
+            conversation_id="fallback-conv", question="",
             answer=(
-                "In the Atlanta MSA, 12,840 borrowers are currently in the money with an average "
-                "rate spread of 87 bps above par. The largest concentrations are in 30309, 30305, "
-                "and 30324."
+                "Across the 6-state Delta Share footprint (IL / CA / FL / TX / WA / CO), "
+                "12,840 borrowers are currently in the money with an average rate spread of "
+                "87 bps above par. The largest concentrations are in Chicago (60611, 60647) "
+                "and Austin (78704)."
             ),
             source="lead_generation_metric_view",
             trusted_assets=[
-                "mip_demo.gold.lead_population",
-                "mip_demo.gold.lead_segment_membership",
-                "mip_demo.gold.lead_scores",
+                "mip.gold.lead_population",
+                "mip.gold.lead_segment_membership",
+                "mip.gold.lead_scores",
             ],
             metric_value="12,840",
             follow_up_questions=[
@@ -146,15 +166,15 @@ def _answers() -> dict[str, GenieMessageResponse]:
             ],
         ),
         "heloc": GenieMessageResponse(
-            conversation_id="demo-conv", question="",
+            conversation_id="fallback-conv", question="",
             answer=(
                 "4,108 properties show a recent permit trigger paired with HELOC-qualifying equity. "
-                "Average estimated equity is $228K; top ZIPs are 30305 and 78704."
+                "Average estimated equity is $228K; top ZIPs are 60614 Chicago and 78704 Austin."
             ),
             source="borrower_opportunity_metric_view",
             trusted_assets=[
-                "mip_demo.gold.borrower_360",
-                "mip_demo.gold.evidence_events",
+                "mip.gold.borrower_360",
+                "mip.gold.evidence_events",
             ],
             metric_value="4,108",
             follow_up_questions=[
@@ -164,15 +184,15 @@ def _answers() -> dict[str, GenieMessageResponse]:
             ],
         ),
         "retention": GenieMessageResponse(
-            conversation_id="demo-conv", question="",
+            conversation_id="fallback-conv", question="",
             answer=(
                 "3,471 current customers show refinance, listing, or competitor-lien signals in the "
                 "last 30 days. Retention risk average score is 88."
             ),
             source="segment_performance_metric_view",
             trusted_assets=[
-                "mip_demo.gold.lead_segment_membership",
-                "mip_demo.gold.recommended_offers",
+                "mip.gold.lead_segment_membership",
+                "mip.gold.recommended_offers",
             ],
             metric_value="3,471",
             follow_up_questions=[
@@ -184,16 +204,16 @@ def _answers() -> dict[str, GenieMessageResponse]:
 
         # --- Geography ---------------------------------------------------
         "itm_zips": GenieMessageResponse(
-            conversation_id="demo-conv", question="",
+            conversation_id="fallback-conv", question="",
             answer=(
-                "The top in-the-money ZIPs are 30309 Atlanta (~1,420 borrowers), 78704 Austin "
-                "(~1,180), 94110 San Francisco (~960), 98103 Seattle (~720), and 30305 Atlanta "
-                "(~640). Together they cover about 38% of the national ITM book."
+                "The top in-the-money ZIPs are 60611 Chicago (~1,420 borrowers), 78704 Austin "
+                "(~1,180), 94110 San Francisco (~960), 98103 Seattle (~720), and 33132 Miami "
+                "(~640). Together they cover about 38% of the 6-state ITM book."
             ),
             source="lead_generation_metric_view",
             trusted_assets=[
-                "mip_demo.gold.lead_population",
-                "mip_demo.semantics.lead_generation_metric_view",
+                "mip.gold.lead_population",
+                "mip.semantics.lead_generation_metric_view",
             ],
             table_rows=itm_zip_rows,
             follow_up_questions=[
@@ -203,7 +223,7 @@ def _answers() -> dict[str, GenieMessageResponse]:
             ],
         ),
         "travis_county": GenieMessageResponse(
-            conversation_id="demo-conv", question="",
+            conversation_id="fallback-conv", question="",
             answer=(
                 "Travis County (Austin metro) holds ~1,620 in-the-money borrowers across 78704, "
                 "78745, and 78702 — about 12.6% of the national ITM pool. Sample top rows include "
@@ -211,8 +231,8 @@ def _answers() -> dict[str, GenieMessageResponse]:
             ),
             source="lead_generation_metric_view",
             trusted_assets=[
-                "mip_demo.gold.lead_population",
-                "mip_demo.gold.lead_scores",
+                "mip.gold.lead_population",
+                "mip.gold.lead_scores",
             ],
             metric_value="1,620",
             follow_up_questions=[
@@ -222,24 +242,27 @@ def _answers() -> dict[str, GenieMessageResponse]:
             ],
         ),
         "heloc_by_state": GenieMessageResponse(
-            conversation_id="demo-conv", question="",
+            conversation_id="fallback-conv", question="",
+            # Slice 9: per-state table re-scoped to the 6-state Delta Share
+            # footprint (IL / CA / FL / TX / WA / CO). California still leads.
             answer=(
                 "The biggest HELOC opportunities by state: CA (1,185 permit+equity borrowers), "
-                "TX (812), GA (604), WA (487), CO (412). California leads both on count and "
-                "average equity ($312K)."
+                "IL (924), TX (812), FL (671), WA (487), CO (412). California leads both on count "
+                "and average equity ($312K)."
             ),
             source="borrower_opportunity_metric_view",
             trusted_assets=[
-                "mip_demo.gold.borrower_360",
-                "mip_demo.gold.evidence_events",
-                "mip_demo.semantics.borrower_opportunity_metric_view",
+                "mip.gold.borrower_360",
+                "mip.gold.evidence_events",
+                "mip.semantics.borrower_opportunity_metric_view",
             ],
             table_rows=[
                 {"state": "CA", "permit_equity_borrowers": 1185, "avg_equity": "$312K"},
-                {"state": "TX", "permit_equity_borrowers": 812, "avg_equity": "$244K"},
-                {"state": "GA", "permit_equity_borrowers": 604, "avg_equity": "$205K"},
-                {"state": "WA", "permit_equity_borrowers": 487, "avg_equity": "$296K"},
-                {"state": "CO", "permit_equity_borrowers": 412, "avg_equity": "$258K"},
+                {"state": "IL", "permit_equity_borrowers":  924, "avg_equity": "$238K"},
+                {"state": "TX", "permit_equity_borrowers":  812, "avg_equity": "$244K"},
+                {"state": "FL", "permit_equity_borrowers":  671, "avg_equity": "$221K"},
+                {"state": "WA", "permit_equity_borrowers":  487, "avg_equity": "$296K"},
+                {"state": "CO", "permit_equity_borrowers":  412, "avg_equity": "$258K"},
             ],
             follow_up_questions=[
                 "What if we raised the HELOC equity floor to 50%?",
@@ -250,21 +273,21 @@ def _answers() -> dict[str, GenieMessageResponse]:
 
         # --- Offer / branch ---------------------------------------------
         "purchase": GenieMessageResponse(
-            conversation_id="demo-conv", question="",
+            conversation_id="fallback-conv", question="",
             answer=(
                 "2,614 borrowers fall into the Listed for Sale segment — purchase-mortgage "
-                "candidates. The top three in the ranked sample are Lisa Thompson (Atlanta, "
+                "candidates. The top three in the ranked sample are Lisa Thompson (Chicago, "
                 "score 82), Alicia Greenberg (Austin, 75), and Wei Zhang (San Francisco, 75 — "
                 "also an existing customer, so retention stays in-house on the next home)."
             ),
             source="segment_performance_metric_view",
             trusted_assets=[
-                "mip_demo.gold.lead_segment_membership",
-                "mip_demo.gold.recommended_offers",
+                "mip.gold.lead_segment_membership",
+                "mip.gold.recommended_offers",
             ],
             metric_value="2,614",
             table_rows=[
-                {"borrower_id": "B-48295", "name": "Lisa Thompson", "geo": "Atlanta, GA", "score": 82},
+                {"borrower_id": "B-48295", "name": "Lisa Thompson", "geo": "Chicago, IL", "score": 82},
                 {"borrower_id": "B-60284", "name": "Alicia Greenberg", "geo": "Austin, TX", "score": 75},
                 {"borrower_id": "B-60517", "name": "Wei Zhang", "geo": "San Francisco, CA", "score": 75},
             ],
@@ -275,7 +298,7 @@ def _answers() -> dict[str, GenieMessageResponse]:
             ],
         ),
         "refi_plus_heloc": GenieMessageResponse(
-            conversation_id="demo-conv", question="",
+            conversation_id="fallback-conv", question="",
             answer=(
                 "1,842 borrowers clear both the refi spread floor (>= 75 bps) and the HELOC equity "
                 "cushion (>= 35%) — the highest-revenue cross-sell branch. James & Maria Rodriguez "
@@ -284,9 +307,9 @@ def _answers() -> dict[str, GenieMessageResponse]:
             ),
             source="recommended_offers",
             trusted_assets=[
-                "mip_demo.gold.recommended_offers",
-                "mip_demo.gold.lead_scores",
-                "mip_demo.gold.fn_in_the_money",
+                "mip.gold.recommended_offers",
+                "mip.gold.lead_scores",
+                "mip.gold.fn_in_the_money",
             ],
             metric_value="1,842",
             follow_up_questions=[
@@ -298,7 +321,7 @@ def _answers() -> dict[str, GenieMessageResponse]:
 
         # --- Segment comparisons ----------------------------------------
         "best_converting": GenieMessageResponse(
-            conversation_id="demo-conv", question="",
+            conversation_id="fallback-conv", question="",
             answer=(
                 "Retention Risk converts best at ~14.8% (avg score 88), driven by existing "
                 "relationships. In the Money follows at ~11.2% (avg 82), Home Equity Candidate at "
@@ -306,8 +329,8 @@ def _answers() -> dict[str, GenieMessageResponse]:
             ),
             source="segment_performance_metric_view",
             trusted_assets=[
-                "mip_demo.semantics.segment_performance_metric_view",
-                "mip_demo.gold.recommended_offers",
+                "mip.semantics.segment_performance_metric_view",
+                "mip.gold.recommended_offers",
             ],
             table_rows=[
                 _segment_row("retention") | {"est_conv": "14.8%"},
@@ -323,7 +346,7 @@ def _answers() -> dict[str, GenieMessageResponse]:
             ],
         ),
         "listed_vs_permit": GenieMessageResponse(
-            conversation_id="demo-conv", question="",
+            conversation_id="fallback-conv", question="",
             answer=(
                 "Listed for Sale (2,614 borrowers, avg score 74, +9% QoQ) runs just above Permit "
                 "Activity (4,108 borrowers, avg score 71, +11%). Permit has more volume; Listed "
@@ -331,8 +354,8 @@ def _answers() -> dict[str, GenieMessageResponse]:
             ),
             source="segment_performance_metric_view",
             trusted_assets=[
-                "mip_demo.semantics.segment_performance_metric_view",
-                "mip_demo.gold.lead_segment_membership",
+                "mip.semantics.segment_performance_metric_view",
+                "mip.gold.lead_segment_membership",
             ],
             table_rows=[
                 _segment_row("listed"),
@@ -347,7 +370,7 @@ def _answers() -> dict[str, GenieMessageResponse]:
 
         # --- Borrower lookups -------------------------------------------
         "top_borrowers": GenieMessageResponse(
-            conversation_id="demo-conv", question="",
+            conversation_id="fallback-conv", question="",
             answer=(
                 "Top 10 highest-scoring borrowers in the ranked sample: "
                 + ", ".join(
@@ -358,9 +381,9 @@ def _answers() -> dict[str, GenieMessageResponse]:
             ),
             source="lead_scores",
             trusted_assets=[
-                "mip_demo.gold.lead_scores",
-                "mip_demo.gold.borrower_360",
-                "mip_demo.gold.evidence_events",
+                "mip.gold.lead_scores",
+                "mip.gold.borrower_360",
+                "mip.gold.evidence_events",
             ],
             table_rows=top10,
             follow_up_questions=[
@@ -370,7 +393,7 @@ def _answers() -> dict[str, GenieMessageResponse]:
             ],
         ),
         "austin_itm": GenieMessageResponse(
-            conversation_id="demo-conv", question="",
+            conversation_id="fallback-conv", question="",
             answer=(
                 "Three Austin borrowers appear in the ranked sample. "
                 + ", ".join(
@@ -382,9 +405,9 @@ def _answers() -> dict[str, GenieMessageResponse]:
             ),
             source="borrower_360",
             trusted_assets=[
-                "mip_demo.gold.borrower_360",
-                "mip_demo.gold.lead_scores",
-                "mip_demo.gold.fn_rate_spread",
+                "mip.gold.borrower_360",
+                "mip.gold.lead_scores",
+                "mip.gold.fn_rate_spread",
             ],
             table_rows=austin,
             follow_up_questions=[
@@ -396,7 +419,7 @@ def _answers() -> dict[str, GenieMessageResponse]:
 
         # --- Trend / pipeline -------------------------------------------
         "cost_per_contact": GenieMessageResponse(
-            conversation_id="demo-conv", question="",
+            conversation_id="fallback-conv", question="",
             answer=(
                 "Cost per contact is trending down: $2.71 six months ago, $2.42 a quarter ago, "
                 "$2.18 today — a 19.6% reduction. The driver is tighter segment targeting: "
@@ -404,8 +427,8 @@ def _answers() -> dict[str, GenieMessageResponse]:
             ),
             source="lead_generation_metric_view",
             trusted_assets=[
-                "mip_demo.semantics.lead_generation_metric_view",
-                "mip_demo.gold.lead_population",
+                "mip.semantics.lead_generation_metric_view",
+                "mip.gold.lead_population",
             ],
             metric_value="$2.18",
             follow_up_questions=[
@@ -415,7 +438,7 @@ def _answers() -> dict[str, GenieMessageResponse]:
             ],
         ),
         "permit_lift": GenieMessageResponse(
-            conversation_id="demo-conv", question="",
+            conversation_id="fallback-conv", question="",
             answer=(
                 "Adding Cotality Permits lifts the Permit Activity segment's avg score from 62 to "
                 "71 (+14%) and surfaces 4,108 HELOC/cash-out candidates that the rate-spread-only "
@@ -423,8 +446,8 @@ def _answers() -> dict[str, GenieMessageResponse]:
             ),
             source="segment_performance_metric_view",
             trusted_assets=[
-                "mip_demo.gold.evidence_events",
-                "mip_demo.semantics.segment_performance_metric_view",
+                "mip.gold.evidence_events",
+                "mip.semantics.segment_performance_metric_view",
             ],
             metric_value="+14%",
             follow_up_questions=[
@@ -436,7 +459,7 @@ def _answers() -> dict[str, GenieMessageResponse]:
 
         # --- Policy / threshold -----------------------------------------
         "heloc_floor_50": GenieMessageResponse(
-            conversation_id="demo-conv", question="",
+            conversation_id="fallback-conv", question="",
             answer=(
                 "Raising the HELOC equity floor from 35% to 50% tightens the Permit Activity "
                 "segment from 4,108 to ~1,640 borrowers (-60%), lifts avg score from 71 to 78, and "
@@ -444,8 +467,8 @@ def _answers() -> dict[str, GenieMessageResponse]:
             ),
             source="borrower_opportunity_metric_view",
             trusted_assets=[
-                "mip_demo.gold.borrower_360",
-                "mip_demo.semantics.borrower_opportunity_metric_view",
+                "mip.gold.borrower_360",
+                "mip.semantics.borrower_opportunity_metric_view",
             ],
             metric_value="~1,640",
             follow_up_questions=[
@@ -455,9 +478,9 @@ def _answers() -> dict[str, GenieMessageResponse]:
             ],
         ),
         "approvals_today": GenieMessageResponse(
-            conversation_id="demo-conv", question="",
+            conversation_id="fallback-conv", question="",
             answer=(
-                "47 outreach drafts were approved today across the demo cohort — all logged to "
+                "47 outreach drafts were approved today across the active cohort — all logged to "
                 "mip_app.action_audit with actor, timestamp, and borrower_id. Queue still holds "
                 "118 pending drafts awaiting human review."
             ),
@@ -627,7 +650,7 @@ def match_intent(question: str) -> str | None:
 
 def _warm_fallback(question: str) -> GenieMessageResponse:
     return GenieMessageResponse(
-        conversation_id="demo-conv",
+        conversation_id="fallback-conv",
         question=question,
         answer=(
             "I can answer questions about segments, in-the-money borrowers, Owner Link "
@@ -635,7 +658,7 @@ def _warm_fallback(question: str) -> GenieMessageResponse:
             "the right, or ask about a specific ZIP, state, or offer branch."
         ),
         source="deterministic_fallback",
-        trusted_assets=["mip_demo.gold.lead_population"],
+        trusted_assets=["mip.gold.lead_population"],
         follow_up_questions=[
             "Which ZIPs have the most in-the-money refi candidates?",
             "Show me the top 10 highest-score borrowers.",
@@ -644,10 +667,108 @@ def _warm_fallback(question: str) -> GenieMessageResponse:
     )
 
 
+# ---------------------------------------------------------------------------
+# sample_questions.md loader -- keeps the canonical Genie-space corpus
+# in lockstep with the safe-corpus matcher. Parsed once at first use and
+# cached; the parse is tiny and the module lives long.
+# ---------------------------------------------------------------------------
+
+
+_SAMPLE_QUESTIONS_CACHE: tuple[list[str], ...] | None = None
+
+
+def _sample_questions_path() -> Any:  # pragma: no cover -- trivial
+    from pathlib import Path
+
+    return Path(__file__).resolve().parents[2] / "genie" / "sample_questions.md"
+
+
+def _normalise_sample(q: str) -> str:
+    """Lowercase, collapse whitespace, strip trailing punctuation.
+
+    The normalised form is what ``match_sample_question`` compares
+    against, so a question in the markdown file and the audience's
+    paraphrase can collide on the same intent key.
+    """
+    q = q.lower().strip()
+    q = re.sub(r"[-‐-―_]", " ", q)
+    q = re.sub(r"\s+", " ", q)
+    return q.rstrip(" .?!")
+
+
+def load_sample_questions() -> list[str]:
+    """Parse ``genie/sample_questions.md`` into the list of numbered
+    questions. The file uses ``1. **Question?**`` markdown for each
+    canonical sample; we pluck the bolded line out of each numbered
+    item.
+
+    Returns ``[]`` if the file is missing (keeps tests hermetic on a
+    fresh checkout where the file hasn't been written yet) rather than
+    raising -- the safe corpus is optional belt-and-suspenders, not a
+    hard contract.
+    """
+    global _SAMPLE_QUESTIONS_CACHE
+    if _SAMPLE_QUESTIONS_CACHE is not None:
+        return list(_SAMPLE_QUESTIONS_CACHE[0])
+    path = _sample_questions_path()
+    questions: list[str] = []
+    if not path.exists():
+        _SAMPLE_QUESTIONS_CACHE = (questions,)
+        return questions
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        _SAMPLE_QUESTIONS_CACHE = (questions,)
+        return questions
+    # Match numbered bold lines: ``1. **...**`` through ``10. **...**``.
+    pattern = re.compile(r"^\s*\d+\.\s+\*\*(.+?)\*\*\s*$", re.MULTILINE)
+    for match in pattern.finditer(text):
+        q = match.group(1).strip()
+        if q:
+            questions.append(q)
+    _SAMPLE_QUESTIONS_CACHE = (questions,)
+    return questions
+
+
+def match_sample_question(question: str) -> str | None:
+    """Return the canonical sample question whose normalised form is a
+    substring match (either direction) against the caller's input.
+
+    Used by ``DatabricksGenieRepository._fallback_or_degraded`` to keep
+    the provisioned Genie space's canonical questions landing through
+    the safe-corpus path when the breaker is open. Intentionally strict:
+    no fuzzy matching -- we only claim the fallback when we can point to
+    a specific corpus entry.
+    """
+    normalised = _normalise_sample(question)
+    if not normalised:
+        return None
+    for sample in load_sample_questions():
+        norm_sample = _normalise_sample(sample)
+        if not norm_sample:
+            continue
+        if normalised == norm_sample:
+            return sample
+        if normalised in norm_sample or norm_sample in normalised:
+            return sample
+    return None
+
+
+def _reset_sample_questions_cache_for_tests() -> None:
+    """Test helper -- drop the memoised parse so a test that rewrites
+    the markdown file sees the new shape."""
+    global _SAMPLE_QUESTIONS_CACHE
+    _SAMPLE_QUESTIONS_CACHE = None
+
+
 def respond(question: str) -> GenieMessageResponse:
     """Top-level entry: match intent, clone the templated answer, stamp
     the caller's question onto the response. If no intent clears the
     threshold, return the warm fallback. Never raises for any input.
+
+    Slice-7 posture: this is the SAFE-CORPUS FALLBACK. It is only
+    consulted by the live Genie repository when the circuit breaker is
+    OPEN -- production requests always hit the real Genie space first.
     """
     intent = match_intent(question)
     if intent is None:

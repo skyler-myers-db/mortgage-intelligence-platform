@@ -11,7 +11,7 @@ import { Chip, EvidenceChip } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { Skeleton } from '../components/ui/Skeleton';
 import { Reveal } from '../components/fx/Reveal';
-import { DRAWER_SOURCES } from '../mocks/demoData';
+import { DRAWER_SOURCES } from '../mocks/fixtureData';
 import { useApp } from '../components/AppContext';
 
 /** Map a backend source table → DrawerSource. Falls back to a neutral descriptor

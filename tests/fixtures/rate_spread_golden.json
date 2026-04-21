@@ -1,6 +1,6 @@
 {
   "market_rate_constant": 0.04875,
-  "market_rate_constant_note": "Module 0 demo baseline. Fictional par of 4.875% chosen so the three canonical demo borrowers in backend/services/mock_data.py produce defensible, all-ITM spreads under default thresholds (min_spread_bps=75). Production deployments will source this from a rate-feed table. The mock_data `rate_spread_bps` fields (currently hardcoded 875/525/250) will be rewired by the next agent to derive from fn_rate_spread against this constant — expect the demo numbers to shift to 88/188/162.",
+  "market_rate_constant_note": "Module 0 fixture baseline. Fictional par of 4.875% chosen so the three canonical fixture borrowers in tests/fixtures/mock_population.py produce defensible, all-ITM spreads under default thresholds (min_spread_bps=75). Production deployments source this from silver.market_rates_weekly (FRED MORTGAGE30US). The mock_population `rate_spread_bps` fields derive from fn_rate_spread against this constant — 88/188/162 under default thresholds.",
   "cases": [
     {
       "id": "case_01_zero_spread",
@@ -30,7 +30,7 @@
       "id": "case_05_banker_round_half_to_even_down",
       "inputs": {"current_rate": 0.0650, "market_rate": 0.04875},
       "expected_bps": 162,
-      "note": "Demo borrower B-48295 (Thompson). Raw (0.0650-0.04875)*10000 = 162.5 exact. Banker's rounding picks the EVEN neighbor -> 162, not 163. This is THE test that pins round-half-to-even vs. round-half-away-from-zero for fn_rate_spread."
+      "note": "Fixture borrower B-48295 (Thompson). Raw (0.0650-0.04875)*10000 = 162.5 exact. Banker's rounding picks the EVEN neighbor -> 162, not 163. This is THE test that pins round-half-to-even vs. round-half-away-from-zero for fn_rate_spread."
     },
     {
       "id": "case_06_null_current_rate",
@@ -51,16 +51,16 @@
       "note": "Both NULL -> 0. Explicit total-NULL pin."
     },
     {
-      "id": "case_09_demo_b48291_rodriguez",
+      "id": "case_09_b48291_rodriguez",
       "inputs": {"current_rate": 0.0575, "market_rate": 0.04875},
       "expected_bps": 88,
-      "note": "Demo borrower B-48291 (Rodriguez). Raw (0.0575-0.04875)*10000 = 87.5 (IEEE754 noise pushes to 87.50000000000001). Rounds to 88. Preserves demo promise: B-48291 remains ITM at default min_spread_bps=75 (88 >= 75)."
+      "note": "Fixture borrower B-48291 (Rodriguez). Raw (0.0575-0.04875)*10000 = 87.5 (IEEE754 noise pushes to 87.50000000000001). Rounds to 88. Preserves system contract: B-48291 remains ITM at default min_spread_bps=75 (88 >= 75)."
     },
     {
-      "id": "case_10_demo_b48294_park",
+      "id": "case_10_b48294_park",
       "inputs": {"current_rate": 0.0675, "market_rate": 0.04875},
       "expected_bps": 188,
-      "note": "Demo borrower B-48294 (Park). Raw (0.0675-0.04875)*10000 = 187.5 (IEEE754 noise pushes to 187.50000000000003). Rounds to 188. B-48294 remains ITM at default min_spread_bps=75."
+      "note": "Fixture borrower B-48294 (Park). Raw (0.0675-0.04875)*10000 = 187.5 (IEEE754 noise pushes to 187.50000000000003). Rounds to 188. B-48294 remains ITM at default min_spread_bps=75."
     },
     {
       "id": "case_11_exact_threshold_75bps",

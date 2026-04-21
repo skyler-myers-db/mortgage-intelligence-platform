@@ -34,12 +34,12 @@ Notes baked into this tool:
   when they wrap a single string — the server rejects bare strings with
   "Expected an array".
 * Tables must reference catalogs/schemas that already exist in Unity
-  Catalog. When the target catalog (``mip_demo`` by default) has not yet
+  Catalog. When the target catalog (``mip`` by default) has not yet
   been created by the Lakeflow pipeline, we create/update the space with
   ``tables: []`` and print a clear next step. The rest of the curation
   (questions, instructions, title, description, warehouse) still lands.
 
-Design choices (Module 0 / DAIS booth):
+Design choices (Module 0):
 
 * Idempotent. Re-running with unchanged YAML is a no-op (at the API level,
   re-running still PUTs but the payload is byte-identical).
@@ -52,8 +52,8 @@ Design choices (Module 0 / DAIS booth):
 * On success, writes the resolved space id to ``genie/space_id.txt``
   (gitignored) and prints an ``export`` line the operator can paste.
 * Runs a live smoke-test conversation (``--smoke-test``, default on)
-  against the new space so booth operators see that Genie actually
-  answers before the demo.
+  against the new space so operators see that Genie actually
+  answers before serving real traffic.
 """
 
 from __future__ import annotations
@@ -129,7 +129,7 @@ class SpaceSpec:
         return cls(
             name=str(raw.get("name", DEFAULT_SPACE_NAME)).strip(),
             description=str(raw.get("description", "")).strip(),
-            catalog=str(raw.get("catalog", "mip_demo")).strip(),
+            catalog=str(raw.get("catalog", "mip")).strip(),
             schema=str(raw.get("schema", "gold")).strip(),
             instructions=str(raw.get("instructions", "")).strip(),
             trusted_assets=list(raw.get("trusted_assets") or []),
@@ -572,7 +572,7 @@ def run(args: argparse.Namespace) -> int:
         print(
             "note: trusted_assets in the YAML reference a catalog not yet "
             f"materialized ({spec.catalog}). Run `make bundle-deploy-dev` then "
-            "`databricks bundle run refresh_demo_data -t dev` to create the "
+            "`databricks bundle run refresh_silver -t dev` to create the "
             "gold tables, then re-run this tool to bind them to the space."
         )
 

@@ -1,8 +1,16 @@
-"""Matcher tests for the widened Genie deterministic catalog.
+"""Matcher tests for the Genie SAFE-CORPUS fallback (Slice 7).
+
+After the Slice-7 cutover, ``genie_answers.respond`` is no longer the
+primary Genie path -- it is the fallback that only fires when the
+``genie`` circuit breaker is open. These tests still exercise the
+matcher directly because intent resolution is what determines whether
+the fallback claims a curated answer (``source="fallback"``) or cedes
+to the honest degraded message (``source="degraded"``, applied by
+``DatabricksGenieRepository``).
 
 Each case is an audience-realistic question paired with the intent we
-expect the scored matcher to pick — a mix of direct hits and near-misses
-that would have collided in the naive ``if token in q`` matcher.
+expect the scored matcher to pick -- a mix of direct hits and near-
+misses that would have collided in a naive ``if token in q`` matcher.
 Off-topic questions must fall through to the warm generic fallback.
 """
 from __future__ import annotations
@@ -72,16 +80,22 @@ def test_offtopic_falls_through_to_warm_fallback(question: str) -> None:
 def test_response_carries_question_and_uc_sources() -> None:
     r = respond("Which ZIPs have the most in-the-money refi candidates?")
     assert r.question == "Which ZIPs have the most in-the-money refi candidates?"
-    assert any(a.startswith("mip_demo.") for a in r.trusted_assets)
+    assert any(a.startswith("mip.") for a in r.trusted_assets)
     assert r.table_rows and len(r.table_rows) >= 3
 
 
-def test_top_borrowers_cites_real_population() -> None:
-    from backend.services.mock_data import BORROWERS
+def test_top_borrowers_cites_pinned_safe_corpus_roster() -> None:
+    """The Genie catalog's top-borrowers answer is served from the pinned
+    safe-corpus roster inlined in
+    ``genie_answers._SAFE_CORPUS_TOP_BORROWERS``. This test asserts every
+    row in the response refers to an id that exists in that roster --
+    nothing fabricated, nothing stale.
+    """
+    from backend.services.genie_answers import _SAFE_CORPUS_TOP_BORROWERS
 
     r = respond("top 10 borrowers by score")
     assert r.table_rows is not None
-    assert len(r.table_rows) == 10
-    real_ids = {b.borrower_id for b in BORROWERS}
+    assert len(r.table_rows) == len(_SAFE_CORPUS_TOP_BORROWERS)
+    roster_ids = {row["borrower_id"] for row in _SAFE_CORPUS_TOP_BORROWERS}
     for row in r.table_rows:
-        assert row["borrower_id"] in real_ids, row
+        assert row["borrower_id"] in roster_ids, row

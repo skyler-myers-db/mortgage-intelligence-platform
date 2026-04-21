@@ -54,7 +54,7 @@ def lead_score(
 ) -> int:
     """Return the integer opportunity score in [0, 100].
 
-    Mirrors ``mip_demo.gold.fn_lead_score``. Uses Python's built-in
+    Mirrors ``mip.gold.fn_lead_score``. Uses Python's built-in
     ``round()`` which applies banker's rounding, matching Databricks
     ``BROUND``. Any ``None`` component is treated as 0 to match the
     SQL ``COALESCE(..., 0)`` contract.
@@ -75,7 +75,7 @@ def rate_spread_bps(
 ) -> int:
     """Return basis-point spread of ``current_rate`` over ``market_rate``.
 
-    Mirrors ``mip_demo.gold.fn_rate_spread``. Rates are expressed as
+    Mirrors ``mip.gold.fn_rate_spread``. Rates are expressed as
     fractions (0.0575 == 5.75%), matching the SQL signature. A ``None``
     on either side returns 0 ("no signal == no opportunity", keeps
     downstream columns NOT NULL so ``fn_in_the_money``'s ``>=`` does not
@@ -96,7 +96,7 @@ def in_the_money(
 ) -> bool:
     """Return True iff borrower clears BOTH the spread and equity thresholds.
 
-    Mirrors ``mip_demo.gold.fn_in_the_money``. Any ``None`` argument
+    Mirrors ``mip.gold.fn_in_the_money``. Any ``None`` argument
     returns ``False`` (unknown must not silently become GO for outreach).
     The ``>=`` comparison is inclusive — a borrower exactly at the
     threshold IS in the money (golden cases 04/05).
@@ -127,7 +127,7 @@ def next_best_offer(
 ) -> str:
     """Return the lowercase offer code for the winning branch.
 
-    Mirrors ``mip_demo.gold.fn_next_best_offer``. First match wins across
+    Mirrors ``mip.gold.fn_next_best_offer``. First match wins across
     the priority-ordered decision tree documented in the SQL header:
     listed -> refi_plus_heloc -> heloc -> refi -> cash_out -> investor
     -> retention -> nurture. Numeric ``None`` coerces to 0 and boolean

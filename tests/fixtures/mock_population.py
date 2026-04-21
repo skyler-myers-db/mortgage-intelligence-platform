@@ -1,19 +1,30 @@
-"""Deterministic mock borrower population for Module 0 (DAIS demo).
+"""Deterministic synthetic borrower population -- TEST FIXTURE ONLY.
+
+Moved in Slice 4 from ``backend/services/mock_data.py`` to
+``tests/fixtures/mock_population.py`` to make the "this is not the
+runtime path" posture clear at the import site. Production routers do
+NOT import this module -- they read live Unity Catalog rows through
+the ``Databricks*Repository`` classes in
+``backend.services.repositories.databricks_repo``. Tests inject the
+fixtures below via FastAPI ``dependency_overrides`` (see
+``tests/conftest.py``).
 
 ALL names, addresses, CLIP/Owner-Link ids, and rates in this module are
-synthetic. No real PII exists here — this is the booth-demo path, not a
-fallback. The three canonical demo borrowers (B-48291, B-48294, B-48295)
-are pinned by golden fixtures in ``tests/fixtures/`` (lead_score,
-rate_spread, in_the_money, next_best_offer); their inputs MUST NOT change
-without updating those fixtures. New borrowers are built from a compact
-spec table and scored through the same primitives that UC functions
-mirror, so every ``opportunity_score``, ``rate_spread_bps``,
-``equity_pct``, and ``recommended_offer`` is derived — never hardcoded.
+synthetic. No real PII exists here. The three canonical sample
+borrowers (B-48291, B-48294, B-48295) are pinned by golden fixtures in
+``tests/fixtures/`` (lead_score, rate_spread, in_the_money,
+next_best_offer); their inputs MUST NOT change without updating those
+fixtures. New borrowers are built from a compact spec table and scored
+through the same primitives that UC functions mirror, so every
+``opportunity_score``, ``rate_spread_bps``, ``equity_pct``, and
+``recommended_offer`` is derived — never hardcoded.
 
 The population is designed so every branch of ``fn_next_best_offer``
-fires on at least two borrowers, geography spans eight cities, and
+fires on at least two borrowers, geography spans the 6-state Delta
+Share footprint (IL/CA/FL/TX/WA/CO per docs/data-sources-gap-analysis
+§1) with Chicago as the anchor metro per data-contract §10, and
 ``opportunity_score`` spreads from ~45 to ~96 — the ranked-borrower
-table and segment counts look like a real book of business at DAIS.
+table and segment counts look like a real book of business.
 ``SEGMENTS`` aggregate counts (e.g. 12,840 ITM) remain population-level
 estimates of Summit Mortgage's marketable book — the 25 rows here are
 the ranked sample the orchestrator surfaces first.
@@ -40,7 +51,7 @@ _HELOC_MIN = settings.mip_heloc_equity_min_pct
 _CASHOUT_MIN = settings.mip_cashout_equity_min_pct
 _RETENTION_MIN = settings.mip_retention_min_spread_bps
 
-_WHY_SOURCES = ["mip_demo.gold.fn_rate_spread", "mip_demo.gold.fn_in_the_money"]
+_WHY_SOURCES = ["mip.gold.fn_rate_spread", "mip.gold.fn_in_the_money"]
 
 
 # ---------------------------------------------------------------------------
@@ -68,7 +79,7 @@ def _pick_evidence(ids: list[str]) -> list[EvidenceEvent]:
 # ---------------------------------------------------------------------------
 # Segment aggregates. Counts are Summit Mortgage book-level estimates, NOT
 # the 25-row sample — the ranked table on /leads is a triaged slice of
-# these populations. Keep aligned with frontend/src/mocks/demoData.ts.
+# these populations. Keep aligned with frontend/src/mocks/fixtureData.ts.
 # ---------------------------------------------------------------------------
 SEGMENTS = [
     SegmentSummary(code="itm", name="In the Money", count=12840, delta="+18%", avg_score=82, description="Lien rate >= 75 bps above par and equity >= 15%.", color="#5CE1E6"),
@@ -103,20 +114,27 @@ SEGMENTS = [
 BorrowerSpec = tuple
 
 _BORROWER_SPECS: list[dict] = [
-    # --- Pinned canonical trio (DO NOT modify inputs; golden fixtures pin them) ---
-    {"bid": "B-48291", "name": "James & Maria Rodriguez", "city": "Atlanta", "state": "GA", "zip": "30309",
+    # --- Pinned canonical trio (DO NOT modify numeric inputs; golden fixtures pin them) ---
+    # Geography re-anchored from Atlanta/GA to Chicago/IL in Slice 8 so the synthetic
+    # trio lives inside the real Delta Share footprint (IL/CA/FL/TX/WA/CO). Per
+    # docs/data-contract-module0.md §10, Chicago is the recommended anchor metro
+    # (1.86M properties in-share, highest avg rate at 4.75%, broadest cohort mix).
+    # Cook County ZIPs: 60611 (Streeterville / Gold Coast), 60647 (Logan Square),
+    # 60613 (Lakeview). IDs, names, rates, AVM, lien, components, evidence,
+    # segment codes — all unchanged; the golden fixtures key on inputs, not city.
+    {"bid": "B-48291", "name": "James & Maria Rodriguez", "city": "Chicago", "state": "IL", "zip": "60611",
      "segs": ["itm", "equity"], "current_rate": 5.75, "avm": 625000, "lien": 340000,
      "permit": False, "listed": False, "investor": False, "customer": False, "comp_lien": False,
      "components": {"economic_incentive": 98, "intent_trigger": 95, "fit": 90, "relationship": 85, "evidence": 92},
      "why_now": "Lien matures in 4 months, strong equity, and local refi activity is rising.",
      "evidence_ids": ["ev-001", "ev-002", "ev-003"], "related_props": 1},
-    {"bid": "B-48294", "name": "David Park", "city": "Atlanta", "state": "GA", "zip": "30305",
+    {"bid": "B-48294", "name": "David Park", "city": "Chicago", "state": "IL", "zip": "60647",
      "segs": ["permit", "equity"], "current_rate": 6.75, "avm": 560000, "lien": 342000,
      "permit": True, "listed": False, "investor": False, "customer": False, "comp_lien": False,
      "components": {"economic_incentive": 85, "intent_trigger": 92, "fit": 85, "relationship": 80, "evidence": 85},
      "why_now": "Rate spread clears par and equity clears the HELOC threshold — refi + HELOC cross-sell.",
      "evidence_ids": ["ev-002", "ev-004"], "related_props": 1},
-    {"bid": "B-48295", "name": "Lisa Thompson", "city": "Atlanta", "state": "GA", "zip": "30324",
+    {"bid": "B-48295", "name": "Lisa Thompson", "city": "Chicago", "state": "IL", "zip": "60613",
      "segs": ["listed", "retention"], "current_rate": 6.50, "avm": 725000, "lien": 320000,
      "permit": False, "listed": True, "investor": False, "customer": False, "comp_lien": False,
      "components": {"economic_incentive": 70, "intent_trigger": 95, "fit": 80, "relationship": 85, "evidence": 80},
@@ -150,7 +168,7 @@ _BORROWER_SPECS: list[dict] = [
      "components": {"economic_incentive": 60, "intent_trigger": 85, "fit": 78, "relationship": 60, "evidence": 80},
      "why_now": "$72K remodel permit plus 48% equity — permit-driven HELOC opportunity.",
      "evidence_ids": ["ev-002", "ev-004"], "related_props": 1},
-    {"bid": "B-57041", "name": "Jennifer Walsh", "city": "Nashville", "state": "TN", "zip": "37215",
+    {"bid": "B-57041", "name": "Jennifer Walsh", "city": "Seattle", "state": "WA", "zip": "98115",
      "segs": ["permit", "equity"], "current_rate": 5.00, "avm": 675000, "lien": 325000,
      "permit": True, "listed": False, "investor": False, "customer": False, "comp_lien": False,
      "components": {"economic_incentive": 55, "intent_trigger": 82, "fit": 76, "relationship": 60, "evidence": 78},
@@ -212,7 +230,7 @@ _BORROWER_SPECS: list[dict] = [
      "evidence_ids": ["ev-008"], "related_props": 1},
 
     # --- investor (multi-property, owner-occupant branches fail): 2 total ---
-    {"bid": "B-63258", "name": "Marcus Delgado", "city": "Nashville", "state": "TN", "zip": "37203",
+    {"bid": "B-63258", "name": "Marcus Delgado", "city": "Miami", "state": "FL", "zip": "33130",
      "segs": ["investor"], "current_rate": 5.00, "avm": 325000, "lien": 265000,
      "permit": False, "listed": False, "investor": True, "customer": False, "comp_lien": False,
      "components": {"economic_incentive": 40, "intent_trigger": 60, "fit": 70, "relationship": 50, "evidence": 65},
@@ -238,7 +256,7 @@ _BORROWER_SPECS: list[dict] = [
      "components": {"economic_incentive": 35, "intent_trigger": 78, "fit": 68, "relationship": 92, "evidence": 75},
      "why_now": "Competitor lien recorded on Owner Link — retention outreach before recapture.",
      "evidence_ids": ["ev-007"], "related_props": 1},
-    {"bid": "B-67219", "name": "Tasha Williams", "city": "Nashville", "state": "TN", "zip": "37211",
+    {"bid": "B-67219", "name": "Tasha Williams", "city": "Los Angeles", "state": "CA", "zip": "90042",
      "segs": ["retention"], "current_rate": 5.50, "avm": 365000, "lien": 295000,
      "permit": False, "listed": False, "investor": False, "customer": True, "comp_lien": False,
      "components": {"economic_incentive": 52, "intent_trigger": 60, "fit": 68, "relationship": 90, "evidence": 68},

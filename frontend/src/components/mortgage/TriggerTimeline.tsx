@@ -1,7 +1,7 @@
 import type { EvidenceEvent } from '../../types';
 import type { CSSProperties } from 'react';
 import { EvidenceChip } from '../Primitives';
-import { DRAWER_SOURCES } from '../../mocks/demoData';
+import { DRAWER_SOURCES } from '../../mocks/fixtureData';
 
 /**
  * TriggerTimeline — prototype `.trig` BEM. Vertical rail with dot markers

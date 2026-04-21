@@ -1,6 +1,52 @@
+"""App settings for the Mortgage Intelligence Platform backend.
+
+CLAUDE.md / Slice 4 invariant: there is no ``MIP_MOCK_MODE`` runtime
+toggle. The running app always reads live Unity Catalog data through
+the Databricks SQL warehouse. Missing warehouse credentials are a
+fail-fast startup error -- they do NOT silently fall back to fixtures.
+
+The ``Databricks*`` fields below are required at import time EXCEPT in
+test processes (detected via ``PYTEST_CURRENT_TEST``), which inject
+stub repositories through FastAPI dependency overrides and therefore
+never open a warehouse connection.
+"""
+from __future__ import annotations
+
+import os
 from functools import lru_cache
 
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Documented, shared error message so every fail-fast site reads the
+# same -- helps operators who see it in a container log.
+_MISSING_CREDS_MSG = (
+    "Mortgage Intelligence Platform refuses to start without live "
+    "Databricks warehouse credentials. Set DATABRICKS_HOST, "
+    "DATABRICKS_TOKEN, and DATABRICKS_WAREHOUSE_ID in .env.local "
+    "(see .env.example). There is no mock-mode fallback: the app runs "
+    "on real Unity Catalog data or it fails visibly."
+)
+
+
+def _running_under_pytest() -> bool:
+    """True when the current process was launched by pytest.
+
+    Pytest exports ``PYTEST_CURRENT_TEST`` for the duration of each
+    test item; it's also set during collection in recent pytest
+    versions. We additionally honour ``MIP_BYPASS_STARTUP_CHECKS=1`` as
+    an explicit escape hatch for CI phases (lint / type-check /
+    schema-only) that import ``backend.config.settings`` without ever
+    hitting the warehouse.
+    """
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return True
+    if os.environ.get("MIP_BYPASS_STARTUP_CHECKS") == "1":
+        return True
+    # Fallback: the pytest runner imports ``pytest`` before any user
+    # code; if it's in sys.modules we're in a test process.
+    import sys
+    return "pytest" in sys.modules
 
 
 class Settings(BaseSettings):
@@ -11,9 +57,8 @@ class Settings(BaseSettings):
     )
 
     app_env: str = "local"
-    mip_mock_mode: bool = True
-    mip_demo_lender: str = "Summit Mortgage"
-    mip_default_catalog: str = "mip_demo"
+    mip_lender_name: str = "Summit Mortgage"
+    mip_default_catalog: str = "mip"
     mip_default_schema: str = "gold"
     mip_lakebase_schema: str = "mip_app"
 
@@ -26,17 +71,70 @@ class Settings(BaseSettings):
 
     # Next-best-offer thresholds: matches
     # tests/fixtures/next_best_offer_golden.json (default_thresholds).
-    # `heloc_equity_min_pct > min_equity_pct` is intentional — HELOC
+    # `heloc_equity_min_pct > min_equity_pct` is intentional -- HELOC
     # underwriting demands more equity cushion than plain refi.
-    # `retention_min_spread < min_spread_bps` is intentional — we reach
+    # `retention_min_spread < min_spread_bps` is intentional -- we reach
     # out earlier on existing relationships.
     mip_heloc_equity_min_pct: int = 35
     mip_cashout_equity_min_pct: int = 25
     mip_retention_min_spread_bps: int = 50
 
+    # Databricks SQL warehouse credentials -- required for every
+    # non-test process. Validated by ``require_databricks_creds()``.
     databricks_host: str | None = None
+    databricks_token: SecretStr | None = Field(default=None, repr=False)
     databricks_warehouse_id: str | None = None
+    databricks_timeout_s: int = 30
+
+    # Genie space id -- loaded by ``backend.services.genie_client`` with
+    # a repo-committed fallback at ``genie/space_id.txt`` so a fresh
+    # checkout has a working Genie target without env plumbing. The env
+    # var always overrides the file so deploy-time wiring picks up a
+    # per-environment space id.
     genie_space_id: str | None = None
+
+    # Lakebase Postgres credentials -- required for the durable audit
+    # trail introduced in Slice 5. Missing values make the audit write
+    # path raise ``LakebaseError`` (audit router returns 503); they do
+    # NOT gate FastAPI startup because Slice 6 adds resilience. For now
+    # the audit router's 503 is a visible, non-silent failure -- which
+    # is the desired posture per the no-mock-fallback feedback memory.
+    lakebase_host: str | None = None
+    lakebase_port: int = 5432
+    lakebase_database: str = "mip_app_state"
+    lakebase_user: str | None = None
+    lakebase_password: SecretStr | None = Field(default=None, repr=False)
+    lakebase_sslmode: str = "require"
+
+    # Default actor email used when ``X-Forwarded-Email`` is absent
+    # (local dev / test). The audit writer logs a warning every time
+    # the fallback kicks in so the operator sees it in the logs.
+    default_actor: str = "skyler@entrada.ai"
+
+    # Slice-6 TTL cache: short-window memoization on aggregate KPIs that
+    # tolerate staleness (segments count, portfolio preview). Fresh-only
+    # endpoints (audit, outreach, borrower dossier) never consult the
+    # cache. Set to 0 to disable caching entirely (tests do this).
+    mip_cache_ttl_s: float = 30.0
+
+    def require_databricks_creds(self) -> tuple[str, SecretStr, str]:
+        """Return ``(host, token, warehouse_id)`` or raise at startup.
+
+        Never call this from a path that imports ``settings`` at module-
+        import time unless you want the process to refuse to boot on a
+        missing env var -- that is the intended behavior for the live
+        SQL client and its factory, but not for simple utility imports.
+        """
+        host = self.databricks_host
+        token = self.databricks_token
+        warehouse = self.databricks_warehouse_id
+        if not host or token is None or not warehouse:
+            raise RuntimeError(_MISSING_CREDS_MSG)
+        # Normalise host shape: strip trailing slash, ensure scheme.
+        if not host.startswith("http"):
+            host = "https://" + host
+        host = host.rstrip("/")
+        return host, token, warehouse
 
 
 @lru_cache

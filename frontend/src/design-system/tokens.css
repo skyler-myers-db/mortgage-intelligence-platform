@@ -88,7 +88,7 @@
 }
 
 /* ============================================================
-   Theme: DARK (default — demo stage impact)
+   Theme: DARK (default — stage/projector impact)
    ============================================================ */
 :root, [data-theme="dark"] {
   --bg-0: #04101F;   /* page — deepest */

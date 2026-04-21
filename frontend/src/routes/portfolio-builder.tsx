@@ -8,7 +8,7 @@ import { ApprovalBanner } from '../components/mortgage/ApprovalBanner';
 import { Chip, Button } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { FilterSelect } from '../components/ui/FilterSelect';
-import { DRAWER_SOURCES } from '../mocks/demoData';
+import { DRAWER_SOURCES } from '../mocks/fixtureData';
 
 /**
  * Portfolio Builder — prototype `.surface` + `.filter-row` composition.
@@ -17,8 +17,12 @@ import { DRAWER_SOURCES } from '../mocks/demoData';
  * primary forward motion into segment intelligence.
  */
 
+// Slice 9: GEO options refreshed to the 6-state Delta Share footprint
+// (IL / CA / FL / TX / WA / CO) so the filter reads like a real book of
+// business, not a single-metro slice. Chicago MSA is the default since
+// IL is the largest state in the footprint and our default anchor.
 const FILTER_GROUPS: Array<{ label: string; key: string; options: string[] }> = [
-  { label: 'GEO',          key: 'geo',      options: ['Atlanta MSA', 'All US', 'Texas', 'CA + TX + FL', 'Top 20 MSAs'] },
+  { label: 'GEO',          key: 'geo',      options: ['Chicago MSA', 'All 6 states', 'Texas', 'CA + FL + TX', 'IL + CA + WA'] },
   { label: 'OCCUPANCY',    key: 'occ',      options: ['Owner-occupied', 'Non-owner-occupied', 'All'] },
   { label: 'LIEN STATUS',  key: 'lien',     options: ['Open 1st lien', 'Open HELOC', 'Free & clear', 'Any'] },
   { label: 'RELATIONSHIP', key: 'rel',      options: ['All', 'Current customer', 'Former customer', 'Competitor customer'] },
@@ -29,7 +33,7 @@ const FILTER_GROUPS: Array<{ label: string; key: string; options: string[] }> = 
 export default function PortfolioBuilder() {
   const [preview, setPreview] = useState<PortfolioPreview | null>(null);
   const [filters, setFilters] = useState<Record<string, string>>({
-    geo: 'Atlanta MSA',
+    geo: 'Chicago MSA',
     occ: 'Owner-occupied',
     lien: 'Open 1st lien',
     rel: 'All',
@@ -73,7 +77,7 @@ export default function PortfolioBuilder() {
               </div>
             </div>
           </div>
-          <Chip variant="neutral" icon="db">mip_demo.gold.lead_population</Chip>
+          <Chip variant="neutral" icon="db">mip.gold.lead_population</Chip>
         </div>
         <div className="surface__body">
           <div className="filter-row">

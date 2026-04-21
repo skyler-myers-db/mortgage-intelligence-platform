@@ -6,7 +6,7 @@ import { Chip, Button, EvidenceChip } from '../Primitives';
 import { ScoreBadge } from './ScoreBadge';
 import { ConfidenceMeter } from './ConfidenceMeter';
 import { useApp } from '../AppContext';
-import { mockSegments, DRAWER_SOURCES } from '../../mocks/demoData';
+import { mockSegments, DRAWER_SOURCES } from '../../mocks/fixtureData';
 
 /**
  * LeadTable — prototype `.surface` + `.tbl` BEM. Sticky thead, hover, row
@@ -107,7 +107,7 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
           </div>
           <div>
             <div className="h-4">Named borrowers · drill to evidence</div>
-            <div className="muted" style={{ fontSize: 12 }}>Synthetic demo names · CLIP-MCP on-demand drill-down</div>
+            <div className="muted" style={{ fontSize: 12 }}>Synthetic names · CLIP-MCP on-demand drill-down</div>
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
@@ -212,7 +212,7 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
         </table>
       </div>
       <div className="surface__ft">
-        Showing {leads.length} borrowers · <span className="mono">SELECT * FROM mip_demo.gold.lead_scores WHERE segment IN (…)</span>
+        Showing {leads.length} borrowers · <span className="mono">SELECT * FROM mip.gold.lead_scores WHERE segment IN (…)</span>
       </div>
     </div>
   );

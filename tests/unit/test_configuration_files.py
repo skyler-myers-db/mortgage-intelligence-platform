@@ -18,9 +18,9 @@ def test_app_yaml_contains_required_runtime_bindings():
 def test_databricks_yml_contains_required_resource_names():
     content = (REPO / "databricks.yml").read_text(encoding="utf-8")
     for token in [
-        "mip-demo-app",
+        "mip-app",
         "mip_serverless_sql",
-        "mip_refresh_demo_data",
+        "mip_refresh_silver",
         "mip_refresh_scores",
         "mip_snapshot_dashboards",
         "mip_feature_pipeline",
@@ -30,7 +30,7 @@ def test_databricks_yml_contains_required_resource_names():
         "mortgage_lead_intelligence",
         "mip_app_state",
         "/Shared/mip/lead-scoring",
-        "mip_demo",
+        "mip",
         "raw,silver,gold,semantics,app,audit",
     ]:
         assert token in content

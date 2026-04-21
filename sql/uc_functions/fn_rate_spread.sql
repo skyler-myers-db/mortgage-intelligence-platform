@@ -30,10 +30,11 @@
 --            boolean from fn_in_the_money stable (rate_spread_bps is never
 --            NULL, so the >= comparison never short-circuits on NULL).
 --
--- Market baseline (Module 0 demo convention):
---            The demo fixes market_rate at 4.875% (0.04875). This is a
---            fictional par rate chosen so the three canonical demo borrowers
---            in backend/services/mock_data.py produce defensible spreads:
+-- Market baseline (Module 0 convention):
+--            Module 0 fixes market_rate at 4.875% (0.04875). This is a
+--            fictional par rate chosen so the three canonical sample
+--            borrowers in backend/services/mock_data.py produce defensible
+--            spreads:
 --                B-48291 (current 5.75%): +88 bps  (raw 87.5, bankers-rounds up)
 --                B-48294 (current 6.75%): +188 bps (raw 187.5, bankers-rounds up)
 --                B-48295 (current 6.50%): +162 bps (raw 162.5, bankers-rounds DOWN to even)
@@ -47,7 +48,7 @@
 --            gold materializations and metric views.
 -- =============================================================================
 
-CREATE OR REPLACE FUNCTION mip_demo.gold.fn_rate_spread(
+CREATE OR REPLACE FUNCTION mip.gold.fn_rate_spread(
   current_rate DOUBLE,
   market_rate  DOUBLE
 )

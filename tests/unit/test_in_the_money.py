@@ -1,7 +1,7 @@
 """Parity tests for backend.services.scoring.in_the_money.
 
 Fixtures in tests/fixtures/in_the_money_golden.json are the contract;
-the SQL UDF mip_demo.gold.fn_in_the_money is validated against the same
+the SQL UDF mip.gold.fn_in_the_money is validated against the same
 set by sql/fixtures/in_the_money_validation.sql.
 """
 

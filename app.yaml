@@ -7,19 +7,20 @@ command:
 
 env:
   - name: APP_ENV
-    value: demo
-  - name: MIP_MOCK_MODE
-    value: "true"
+    value: sandbox
 
 # Runtime env wiring (tracked here for the string-contract test and operator
 # documentation; populated post-deploy via the Databricks App UI or a
 # follow-up slice that declares app.resources bindings once Genie space and
 # Lakebase instance resource types are GA in the bundle CLI):
 #
+#   DATABRICKS_HOST          - workspace host (https://<workspace>.cloud.databricks.com)
+#   DATABRICKS_TOKEN         - PAT or workspace-identity-derived token
 #   DATABRICKS_WAREHOUSE_ID  - serverless SQL warehouse this app queries
 #   GENIE_SPACE_ID           - mortgage_lead_intelligence Genie space
 #   LAKEBASE_HOST            - mip_app_state Postgres host
 #
-# The app falls back to MIP_MOCK_MODE=true when these are absent, so the
-# booth demo renders the full flow from backend/services/mock_data.py
-# without any live workspace dependency.
+# Slice-4 invariant: there is no MIP_MOCK_MODE runtime toggle. The app runs
+# against the live Unity Catalog / Lakebase path in every environment and
+# fails visibly at process startup if DATABRICKS_HOST, DATABRICKS_TOKEN, or
+# DATABRICKS_WAREHOUSE_ID is missing (see backend/config/settings.py).

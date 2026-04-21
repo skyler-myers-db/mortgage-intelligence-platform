@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from typing import cast
+import logging
+from typing import Annotated, cast
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 
 from backend.config.settings import settings
 from backend.schemas.offer import (
@@ -11,10 +12,30 @@ from backend.schemas.offer import (
     OfferRecommendRequest,
     OfferType,
 )
-from backend.services import mock_data
+from backend.services.audit_store import AuditStore, get_audit_store, resolve_actor
+from backend.services.lakebase import LakebaseError
+from backend.services.repositories import (
+    BorrowerRepository,
+    OfferRepository,
+    get_borrower_repository,
+    get_offer_repository,
+)
 from backend.services.scoring import NBO_PRODUCT_LABELS
 
+log = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/offers", tags=["offers"])
+
+BorrowerRepoDep = Annotated[BorrowerRepository, Depends(get_borrower_repository)]
+OfferRepoDep = Annotated[OfferRepository, Depends(get_offer_repository)]
+AuditStoreDep = Annotated[AuditStore, Depends(get_audit_store)]
+
+
+def _safe_audit_write(store: AuditStore, **kwargs: object) -> None:
+    try:
+        store.write(**kwargs)  # type: ignore[arg-type]
+    except LakebaseError as exc:
+        log.warning("audit.write dropped: %s", exc)
 
 # The eight codes ``fn_next_best_offer`` returns are all valid OfferType
 # literals. This cast is safe because NBO_PRODUCT_LABELS is the contract.
@@ -76,16 +97,16 @@ def _rationale_for(
 def _sources_for(code: str) -> list[str]:
     """Unity Catalog tables consulted for this branch. Drives the
     'Source evidence' chips the Offer Orchestrator renders."""
-    base = ["mip_demo.gold.fn_next_best_offer"]
+    base = ["mip.gold.fn_next_best_offer"]
     if code in {"refi_plus_heloc", "refi", "retention"}:
-        base.append("mip_demo.gold.fn_rate_spread")
-        base.append("mip_demo.gold.fn_in_the_money")
+        base.append("mip.gold.fn_rate_spread")
+        base.append("mip.gold.fn_in_the_money")
     if code in {"heloc", "cash_out", "refi_plus_heloc"}:
-        base.append("mip_demo.gold.fn_rate_spread")
+        base.append("mip.gold.fn_rate_spread")
     # fn_lead_score is always cited — the orchestrator shows confidence
     # on every recommendation and that confidence rolls up from the
     # lead_score weighted bundle.
-    base.append("mip_demo.gold.fn_lead_score")
+    base.append("mip.gold.fn_lead_score")
     # Dedupe while preserving order.
     seen: set[str] = set()
     ordered: list[str] = []
@@ -179,16 +200,23 @@ def _alternatives_for(
 
 
 @router.post("/recommend", response_model=OfferRecommendation)
-def recommend_offer(payload: OfferRecommendRequest) -> OfferRecommendation:
-    borrower = next(
-        (b for b in mock_data.BORROWERS if b.borrower_id == payload.borrower_id),
-        None,
-    )
+def recommend_offer(
+    payload: OfferRecommendRequest,
+    request: Request,
+    background: BackgroundTasks,
+    borrower_repo: BorrowerRepoDep,
+    offer_repo: OfferRepoDep,
+    audit: AuditStoreDep,
+) -> OfferRecommendation:
+    borrower = borrower_repo.get(payload.borrower_id)
     if borrower is None:
         raise HTTPException(status_code=404, detail=f"Borrower {payload.borrower_id} not found")
 
-    inputs = mock_data.BORROWER_OFFER_INPUTS[borrower.borrower_id]
-    code = inputs["offer_code"]
+    inputs = offer_repo.get_offer_inputs(borrower.borrower_id)
+    if inputs is None:
+        # Defense in depth: every borrower in the population has offer inputs.
+        raise HTTPException(status_code=404, detail=f"Borrower {payload.borrower_id} not found")
+    code = cast(str, inputs["offer_code"])
     if code not in _VALID_OFFER_TYPES:
         # Defense in depth: scoring contract violation would surface here.
         raise HTTPException(status_code=500, detail=f"Invalid offer_code '{code}' from next_best_offer")
@@ -201,6 +229,23 @@ def recommend_offer(payload: OfferRecommendRequest) -> OfferRecommendation:
         "retention_min_spread_bps": settings.mip_retention_min_spread_bps,
     }
 
+    background.add_task(
+        _safe_audit_write,
+        audit,
+        actor=resolve_actor(request),
+        action="recommend_offer",
+        entity_type="borrower",
+        entity_id=borrower.borrower_id,
+        payload_json={
+            "offer_code": code,
+            "confidence": borrower.confidence,
+            "thresholds_applied": thresholds_applied,
+        },
+        evidence_ids=list(borrower.evidence_ids),
+        event_type="RECOMMEND_OFFER",
+        subject_clip=borrower.clip_id,
+    )
+
     return OfferRecommendation(
         borrower_id=borrower.borrower_id,
         offer_code=code,
@@ -209,13 +254,13 @@ def recommend_offer(payload: OfferRecommendRequest) -> OfferRecommendation:
         confidence=borrower.confidence,
         rationale=_rationale_for(
             code,
-            spread=inputs["rate_spread_bps"],
-            equity=inputs["equity_pct"],
-            permit=inputs["has_permit"],
-            listed=inputs["listed_for_sale"],
-            investor=inputs["is_investor"],
-            customer=inputs["is_current_customer"],
-            competitor_lien=inputs["is_competitor_lien"],
+            spread=cast(int, inputs["rate_spread_bps"]),
+            equity=cast(int, inputs["equity_pct"]),
+            permit=cast(bool, inputs["has_permit"]),
+            listed=cast(bool, inputs["listed_for_sale"]),
+            investor=cast(bool, inputs["is_investor"]),
+            customer=cast(bool, inputs["is_current_customer"]),
+            competitor_lien=cast(bool, inputs["is_competitor_lien"]),
             min_sp=settings.mip_min_spread_bps,
             min_eq=settings.mip_min_equity_pct,
             heloc_min=settings.mip_heloc_equity_min_pct,
@@ -226,8 +271,8 @@ def recommend_offer(payload: OfferRecommendRequest) -> OfferRecommendation:
         sources=_sources_for(code),
         alternatives=_alternatives_for(
             code,
-            equity=inputs["equity_pct"],
-            permit=inputs["has_permit"],
+            equity=cast(int, inputs["equity_pct"]),
+            permit=cast(bool, inputs["has_permit"]),
             heloc_min=settings.mip_heloc_equity_min_pct,
         ),
         thresholds_applied=thresholds_applied,

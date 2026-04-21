@@ -64,7 +64,7 @@ class OutreachDraftRequest(BaseModel):
 class OutreachApproveRequest(BaseModel):
     borrower_id: str
     offer_code: str | None = None
-    actor: str = "demo-user"
+    actor: str = "anonymous"
     evidence_ids: list[str] = []
 
 

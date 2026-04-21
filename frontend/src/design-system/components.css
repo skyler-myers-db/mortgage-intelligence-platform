@@ -463,6 +463,45 @@
 .approval__actions { display: flex; gap: var(--sp-2); }
 
 /* ============================================================
+   DEGRADED BANNER (Dependency warm-up / circuit-breaker open)
+   ============================================================
+   Slice-6 surface. Visual shape mirrors `.approval` because it's the
+   same "something needs attention but isn't broken" posture; we keep
+   the amber token family and the left-aligned icon + title + sub
+   layout. Placed at the top of the main content area by AppShell so
+   it slots in above any page without layout shift.
+*/
+.degraded-banner {
+  display: flex; align-items: center; gap: var(--sp-4);
+  padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--r-lg);
+  background: linear-gradient(90deg, rgba(245,158,11,0.10), rgba(245,158,11,0.02));
+  border: 1px solid rgba(245,158,11,0.30);
+  color: var(--text-1);
+  margin: 0 var(--sp-6) var(--sp-4);
+}
+.degraded-banner__ico {
+  width: 32px; height: 32px; border-radius: 8px;
+  background: rgba(245,158,11,0.18); color: var(--signal-warning);
+  display: grid; place-items: center; font-size: 16px;
+  flex: 0 0 auto;
+}
+.degraded-banner__body { flex: 1; min-width: 0; }
+.degraded-banner__title { font-size: var(--fs-13); font-weight: 600; }
+.degraded-banner__sub { font-size: var(--fs-12); color: var(--text-2); margin-top: 2px; }
+.degraded-banner__dot {
+  display: inline-block;
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--signal-warning); box-shadow: 0 0 8px var(--signal-warning);
+  margin-right: var(--sp-2);
+  animation: mip-degraded-pulse 1.6s ease-in-out infinite;
+}
+@keyframes mip-degraded-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.35; }
+}
+
+/* ============================================================
    DATA SOURCE DRAWER
    ============================================================ */
 .drawer-scrim {

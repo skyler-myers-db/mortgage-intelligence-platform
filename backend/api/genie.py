@@ -2,7 +2,7 @@
 
 All intent matching and the curated answer catalog live in
 ``backend.services.genie_answers``. This module stays a thin FastAPI
-surface so the demo-day API contract is a one-line delegation and
+surface so the API contract is a one-line delegation and
 ``/ask-genie`` + the floating chat keep a stable wire shape.
 """
 from fastapi import APIRouter
@@ -22,11 +22,11 @@ class GenieMessageRequest(BaseModel):
 def genie_start(payload: dict[str, object] | None = None) -> dict[str, object]:
     _ = payload
     return {
-        "conversation_id": "demo-conv",
+        "conversation_id": "session-conv",
         "trusted_assets": [
-            "mip_demo.gold.lead_population",
-            "mip_demo.gold.lead_segment_membership",
-            "mip_demo.semantics.lead_generation_metric_view",
+            "mip.gold.lead_population",
+            "mip.gold.lead_segment_membership",
+            "mip.semantics.lead_generation_metric_view",
         ],
     }
 

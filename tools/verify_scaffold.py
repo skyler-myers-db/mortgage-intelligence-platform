@@ -1,6 +1,6 @@
 """Scaffold sanity check.
 
-Validates that the repository has the structural files the demo relies on and
+Validates that the repository has the structural files the app relies on and
 that no forbidden secret files are committed to git. Local-only files like
 `.env.local` are expected to exist on a developer machine, so this script
 inspects git's tracked set rather than the filesystem.

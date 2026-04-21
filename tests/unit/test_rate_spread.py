@@ -1,7 +1,7 @@
 """Parity tests for backend.services.scoring.rate_spread_bps.
 
 Fixtures in tests/fixtures/rate_spread_golden.json are the contract;
-the SQL UDF mip_demo.gold.fn_rate_spread is validated against the same
+the SQL UDF mip.gold.fn_rate_spread is validated against the same
 set by sql/fixtures/rate_spread_validation.sql.
 """
 

@@ -5,7 +5,7 @@ import { KpiCard } from '../components/mortgage/KpiCard';
 import { MapPlaceholder } from '../components/mortgage/MapPlaceholder';
 import { AgentActivityLog } from '../components/mortgage/AgentActivityLog';
 import { Chip, Button } from '../components/Primitives';
-import { DRAWER_SOURCES } from '../mocks/demoData';
+import { DRAWER_SOURCES } from '../mocks/fixtureData';
 import { Icon } from '../components/Icon';
 import { Reveal } from '../components/fx/Reveal';
 import { api } from '../lib/api';
@@ -19,8 +19,8 @@ const FUTURE_MODULES = [
 
 export default function Home() {
   // Pull the live high-intent count so the approval notice stays in sync with
-  // the KPI above it. Falls back to the demo-canon 12,840 while loading / on
-  // error — this is the booth demo path, not a live count we must defend.
+  // the KPI above it. Falls back to the canon 12,840 while loading / on
+  // error — this is the UI fallback path, not a live count we must defend.
   const [queued, setQueued] = useState<number>(12840);
   useEffect(() => {
     let cancelled = false;
