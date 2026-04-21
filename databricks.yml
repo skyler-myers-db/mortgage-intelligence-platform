@@ -42,9 +42,34 @@ resources:
       auto_stop_mins: 15
 
   jobs:
+    # Slice 2 real-data migration: refresh silver by running the Lakeflow
+    # (DLT) feature pipeline. Step 1 applies the idempotent DDL (catalog +
+    # schemas) via SQL task against the serverless warehouse; Step 2 kicks
+    # the pipeline. Daily on-demand in dev (no schedule); production can
+    # enable a schedule_quartz_cron_expression once governance signs off on
+    # the full silver→gold chain.
     mip_refresh_demo_data:
       name: mip_refresh_demo_data
-      tasks: []
+      tags:
+        solution: mortgage-intelligence-platform
+        module: module0
+        owner: entrada
+        slice: module0-real-data-slice2
+      max_concurrent_runs: 1
+      tasks:
+        - task_key: init_catalog_schemas
+          description: "Idempotent CREATE CATALOG mip_demo + schemas raw/silver/gold/semantics/app/audit."
+          sql_task:
+            warehouse_id: ${var.sql_warehouse_id}
+            file:
+              path: sql/ddl/001_catalogs_schemas.sql
+        - task_key: refresh_silver_pipeline
+          description: "Run the Lakeflow feature pipeline to materialize mip_demo.silver.* from the Cotality share."
+          depends_on:
+            - task_key: init_catalog_schemas
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.mip_feature_pipeline.id}
+            full_refresh: false
     mip_refresh_scores:
       name: mip_refresh_scores
       tasks: []
@@ -116,13 +141,28 @@ resources:
           retry_on_timeout: true
 
   pipelines:
+    # Slice 2 real-data migration: silver lift from cotality_mortgage_data.
+    # corelogic into mip_demo.silver.* (5 tables). State-filtered to IL/CA/
+    # FL/TX/WA/CO at source. See pipelines/lakeflow/mip_feature_pipeline.py
+    # and sql/ddl/silver_*.sql for column contracts; docs/data-contract-
+    # module0.md §2 is authoritative.
     mip_feature_pipeline:
       name: mip_feature_pipeline
+      catalog: ${var.uc_catalog}
+      schema: silver
+      photon: true
+      development: true
+      continuous: false
       libraries:
         - file:
             path: pipelines/lakeflow/mip_feature_pipeline.py
     mip_gold_pipeline:
       name: mip_gold_pipeline
+      catalog: ${var.uc_catalog}
+      schema: gold
+      photon: true
+      development: true
+      continuous: false
       libraries:
         - file:
             path: pipelines/lakeflow/mip_gold_pipeline.py
