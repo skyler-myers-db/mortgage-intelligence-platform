@@ -13,7 +13,7 @@
 ## Pre-demo setup — use the rehearsal checklist
 
 Before stepping up, the booth operator runs through
-[docs/module0-demo-rehearsal-checklist.md](module0-demo-rehearsal-checklist.md).
+[docs/module0-rehearsal-checklist.md](module0-rehearsal-checklist.md).
 That checklist warms the serverless warehouse, primes Genie, and confirms
 `/api/health` reports `mode:"live"` with every dependency `up` and every
 circuit breaker `closed`. Do not start the pitch until that page is green.
@@ -36,11 +36,11 @@ circuit breaker `closed`. Do not start the pitch until that page is green.
 
 **Route:** `/` **Clicks:** land on Home; hover each KPI to surface the evidence chip; glance at the right-rail Console.
 
-> "Summit Mortgage's top-of-funnel snapshot against the live share. Every KPI renders from `mip_demo.gold.lead_population` through a short-TTL cache in front of the serverless warehouse. Hover any KPI — an evidence chip cites the source. The ITM count cites `mip_demo.gold.fn_in_the_money`, a real UC SQL function pinned by golden-fixture tests against a Python mirror. Cost per contact cites admin config, not gold; we don't pretend that's derived."
+> "Summit Mortgage's top-of-funnel snapshot against the live share. Every KPI renders from `mip.gold.lead_population` through a short-TTL cache in front of the serverless warehouse. Hover any KPI — an evidence chip cites the source. The ITM count cites `mip.gold.fn_in_the_money`, a real UC SQL function pinned by golden-fixture tests against a Python mirror. Cost per contact cites admin config, not gold; we don't pretend that's derived."
 
 > "Right rail is the **Console**. See the telemetry strip in the footer: *Warehouse up · Genie up · probe 180 ms*. That's a real `/api/health` poll every 30 seconds. If the warehouse is cold, you'll see a subtle warming-up banner — real-time honesty, not a demo trick. Audit events land in Lakebase, streamable to UC for compliance."
 
-**Cite:** `mip_demo.gold.lead_population` · `mip_demo.gold.fn_in_the_money` · live `/api/health` · Cotality public records + Voluntary Lien + Owner Link.
+**Cite:** `mip.gold.lead_population` · `mip.gold.fn_in_the_money` · live `/api/health` · Cotality public records + Voluntary Lien + Owner Link.
 
 ---
 
@@ -48,11 +48,11 @@ circuit breaker `closed`. Do not start the pitch until that page is green.
 
 **Route:** `/` (map component) → pan across the six states → click **Illinois** → drill into Cook County → into Chicago ZIPs.
 
-> "The choropleth is fed from `mip_demo.semantics.lead_generation_metric_view`, aggregated by state and CBSA. Six states light up because that's the real share — IL 1.86M, CA 0.90M, FL 0.76M, TX 0.75M, WA 0.74M, CO 0.16M properties. No synthetic shading."
+> "The choropleth is fed from `mip.semantics.lead_generation_metric_view`, aggregated by state and CBSA. Six states light up because that's the real share — IL 1.86M, CA 0.90M, FL 0.76M, TX 0.75M, WA 0.74M, CO 0.16M properties. No synthetic shading."
 
 > "Illinois leads on every dimension that matters here: 1.13M properties with open liens, the **highest average 1st-position rate in the share at 4.75%**, and the broadest cohort mix. That's why Chicago is our anchor metro — we get both stories: the 565K-strong post-2023 cohort at 6–6.7% that needs a refi *right now*, and the 1.22M locked-in 2020–2022 cohort at sub-3% that won't refi but is wide open for HELOC and cash-out. Drill Cook County, drill a Chicago ZIP — same sub-second query path whether you're national or a single ZIP."
 
-**Cite:** `mip_demo.semantics.lead_generation_metric_view` · Cotality **Voluntary Lien** + **Property Domain** + **Owner Link**; state/cohort counts from `docs/data-sources-gap-analysis.md §1`.
+**Cite:** `mip.semantics.lead_generation_metric_view` · Cotality **Voluntary Lien** + **Property Domain** + **Owner Link**; state/cohort counts from `docs/data-sources-gap-analysis.md §1`.
 
 ---
 
@@ -60,11 +60,11 @@ circuit breaker `closed`. Do not start the pitch until that page is green.
 
 **Route:** `/portfolio-builder`. **Clicks:** change one filter in GEO, one in EQUITY; watch KPI grid update; point at the approval-required chip.
 
-> "Six filter dimensions — geography, occupancy, lien characteristics, Owner Link, product fit, equity bands. Every change re-queries `mip_demo.semantics.lead_generation_metric_view`. Chips are parameterized enums, not free text — SQL-injection and prompt-injection off the table before we even talk about agents."
+> "Six filter dimensions — geography, occupancy, lien characteristics, Owner Link, product fit, equity bands. Every change re-queries `mip.semantics.lead_generation_metric_view`. Chips are parameterized enums, not free text — SQL-injection and prompt-injection off the table before we even talk about agents."
 
 > "Watch the *Generate approval-required outreach* chip — every downstream outreach lands in a human queue. Explicit product promise, not a setting."
 
-**Cite:** `mip_demo.semantics.lead_generation_metric_view` · Cotality **Voluntary Lien + AVM + Property Domain**.
+**Cite:** `mip.semantics.lead_generation_metric_view` · Cotality **Voluntary Lien + AVM + Property Domain**.
 
 ---
 
@@ -72,13 +72,13 @@ circuit breaker `closed`. Do not start the pitch until that page is green.
 
 **Route:** `/segment-intelligence`. **Clicks:** click the **In the Money** card; let the ranked table populate; point at the compliance chip.
 
-> "Five shippable segments, each defined by a UC rule — not a vague ML cluster. **In the Money** fires when `fn_in_the_money(rate_spread_bps, equity_pct, 75, 15)` is true: lien rate ≥ 75 bps above par AND equity ≥ 15%. Counts come straight from `mip_demo.gold.segment_population` with a state-level breakdown."
+> "Five shippable segments, each defined by a UC rule — not a vague ML cluster. **In the Money** fires when `fn_in_the_money(rate_spread_bps, equity_pct, 75, 15)` is true: lien rate ≥ 75 bps above par AND equity ≥ 15%. Counts come straight from `mip.gold.segment_population` with a state-level breakdown."
 
 > "**Retention / Recapture** is the sleeper — 263K borrowers where the current servicer ≠ the originator. **Investor / Multi-Property** — 833K corporate owners + 1.80M absentee mailings. **Home Equity** — the 1.22M locked-in 2020–2022 cohort; they won't refi, but their equity is shoppable."
 
 > "Two segments are honestly stubbed. **Listed for Sale** needs MLS data; on the Cotality roadmap, shows zero today. **Permit Activity** — needs the Permits product. We show the card, we tell you it's blocked, we do not fake the count. Top-right: *PII suppressed · CLIP-MCP drill-down*. Real owner names never cross the gold boundary."
 
-**Cite:** `mip_demo.gold.segment_population` · `mip_demo.gold.fn_in_the_money` · Cotality **Voluntary Lien + Property Domain + Owner Link + Mortgage Domain**; cohort sizes from gap-analysis §1.
+**Cite:** `mip.gold.segment_population` · `mip.gold.fn_in_the_money` · Cotality **Voluntary Lien + Property Domain + Owner Link + Mortgage Domain**; cohort sizes from gap-analysis §1.
 
 ---
 
@@ -86,17 +86,17 @@ circuit breaker `closed`. Do not start the pitch until that page is green.
 
 **Route:** `/lead-queue` → expand top row → `/borrower-360/B-48291`.
 
-> "Ranked-borrower table, sorted by opportunity score against the live top-N in `mip_demo.gold.lead_population`. Top row is our canonical example — borrower ID **B-48291**, Chicago 60611, opportunity score **94**, segments *In the Money + Home Equity*. Score decomposes into five weighted components — economic incentive 0.35, intent trigger 0.30, fit 0.15, relationship 0.10, evidence 0.10. That's `fn_lead_score`, golden-fixture tested, banker's-rounding pinned."
+> "Ranked-borrower table, sorted by opportunity score against the live top-N in `mip.gold.lead_population`. Top row is our canonical example — borrower ID **B-48291**, Chicago 60611, opportunity score **94**, segments *In the Money + Home Equity*. Score decomposes into five weighted components — economic incentive 0.35, intent trigger 0.30, fit 0.15, relationship 0.10, evidence 0.10. That's `fn_lead_score`, golden-fixture tested, banker's-rounding pinned."
 
 > *(Click through to Borrower 360.)*
 
-> "Borrower 360: AVM **$625K**, lien **$340K**, equity **$285K**, LTV **54%**, rate 5.75%. CLIP and Owner Link are live fields from `mip_demo.silver.property_master` — Compliance can join back to the share row."
+> "Borrower 360: AVM **$625K**, lien **$340K**, equity **$285K**, LTV **54%**, rate 5.75%. CLIP and Owner Link are live fields from `mip.silver.property_master` — Compliance can join back to the share row."
 
-> "Why panel — the explainability surface. **+88 bps spread** (par comes from the weekly FRED MORTGAGE30US pull into `mip_demo.silver.market_rates_weekly`, not a magic constant), **46% equity**. Both clear threshold, In the Money is true. Source chips: `fn_rate_spread`, `fn_in_the_money`. The Python mirror in `backend/services/scoring.py` is pinned to the UDFs by golden JSON — drift breaks CI."
+> "Why panel — the explainability surface. **+88 bps spread** (par comes from the weekly FRED MORTGAGE30US pull into `mip.silver.market_rates_weekly`, not a magic constant), **46% equity**. Both clear threshold, In the Money is true. Source chips: `fn_rate_spread`, `fn_in_the_money`. The Python mirror in `backend/services/scoring.py` is pinned to the UDFs by golden JSON — drift breaks CI."
 
 > "Trigger timeline — voluntary lien update, AVM refresh, local refi-activity signal. Every event has a Cotality source and an ISO timestamp. Permit and listing events are stubbed until Cotality ships those products."
 
-**Cite:** `mip_demo.gold.fn_lead_score` · `mip_demo.gold.fn_rate_spread` · `mip_demo.gold.fn_in_the_money` · `mip_demo.gold.borrower_360` · `mip_demo.silver.market_rates_weekly` · Cotality **Voluntary Lien + AVM + Mortgage Domain**.
+**Cite:** `mip.gold.fn_lead_score` · `mip.gold.fn_rate_spread` · `mip.gold.fn_in_the_money` · `mip.gold.borrower_360` · `mip.silver.market_rates_weekly` · Cotality **Voluntary Lien + AVM + Mortgage Domain**.
 
 ---
 
@@ -114,7 +114,7 @@ circuit breaker `closed`. Do not start the pitch until that page is green.
 
 > "Green chip flips, audit event ID surfaces. Row just landed in `mip_app.action_audit` in Lakebase — actor, action, entity, evidence ids, timestamp, request id. Compliance asks three months from now, the answer is one SQL query."
 
-**Cite:** `mip_demo.gold.fn_next_best_offer` · `mip_demo.gold.recommended_offers` · `mip_app.action_audit` · Lakebase.
+**Cite:** `mip.gold.fn_next_best_offer` · `mip.gold.recommended_offers` · `mip_app.action_audit` · Lakebase.
 
 ---
 
@@ -122,7 +122,7 @@ circuit breaker `closed`. Do not start the pitch until that page is green.
 
 **Action:** click the floating Genie FAB (bottom-right, persistent across every route). Ask a canonical question from `genie/sample_questions.md`.
 
-> "Genie is one click from every page. Our space is grounded on `mip_demo.semantics.*` metric views — not raw gold, not arbitrary SQL. Config, trusted-asset list, sample questions all live in `genie/` in the repo."
+> "Genie is one click from every page. Our space is grounded on `mip.semantics.*` metric views — not raw gold, not arbitrary SQL. Config, trusted-asset list, sample questions all live in `genie/` in the repo."
 
 > *(Ask: "How big is the 2020–2022 sub-3% lock-in cohort across all six states?")*
 
@@ -130,7 +130,7 @@ circuit breaker `closed`. Do not start the pitch until that page is green.
 
 > "If Genie cold-starts mid-demo, the circuit breaker trips and we fall through to a deterministic safe corpus of 10 canonical answers pinned to the sample questions. Audience sees a correct answer with a provenance chip — not a spinner, not a hallucination."
 
-**Cite:** `mip_demo.semantics.borrower_opportunity_metric_view` · `mip_demo.gold.evidence_events` · Mortgage Lead Intelligence Genie Space (trusted-asset-scoped) · `backend/services/genie_answers.py` safe-corpus fallback.
+**Cite:** `mip.semantics.borrower_opportunity_metric_view` · `mip.gold.evidence_events` · Mortgage Lead Intelligence Genie Space (trusted-asset-scoped) · `backend/services/genie_answers.py` safe-corpus fallback.
 
 ---
 
@@ -170,7 +170,7 @@ circuit breaker `closed`. Do not start the pitch until that page is green.
 
 ## Appendix — canonical click path (muscle memory)
 
-1. Run the [rehearsal checklist](module0-demo-rehearsal-checklist.md) — confirm `/api/health` is fully green.
+1. Run the [rehearsal checklist](module0-rehearsal-checklist.md) — confirm `/api/health` is fully green.
 2. Open `/` — verify KPI row animates; glance at the telemetry strip in the Console footer.
 3. Hover *In-the-money* KPI — evidence chip renders.
 4. Click **Illinois** on the map → Cook County → a Chicago ZIP.
@@ -188,7 +188,7 @@ circuit breaker `closed`. Do not start the pitch until that page is green.
 
 ## Appendix — key numbers to remember
 
-All share-level numbers trace to `docs/data-sources-gap-analysis.md §1` (Apr 2026 point-in-time probe against `cotality_mortgage_data.corelogic`). Borrower-level numbers trace to `mip_demo.gold.*` live queries + golden fixtures.
+All share-level numbers trace to `docs/data-sources-gap-analysis.md §1` (Apr 2026 point-in-time probe against `cotality_mortgage_data.corelogic`). Borrower-level numbers trace to `mip.gold.*` live queries + golden fixtures.
 
 | Number | Where it comes from |
 |---|---|

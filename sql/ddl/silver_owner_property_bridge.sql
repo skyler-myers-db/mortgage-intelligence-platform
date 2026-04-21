@@ -1,7 +1,7 @@
 -- =============================================================================
 -- silver_owner_property_bridge.sql
 -- -----------------------------------------------------------------------------
--- Purpose:   DDL for `mip_demo.silver.owner_property_bridge`, a
+-- Purpose:   DDL for `mip.silver.owner_property_bridge`, a
 --            silver-layer Owner-Link rollup. One row per distinct
 --            `owner_link_id` (from property_master) carrying portfolio-level
 --            aggregates: property count, total AVM, total equity, open-lien
@@ -53,7 +53,7 @@
 --            `owner_link_id`.
 -- =============================================================================
 
-CREATE TABLE IF NOT EXISTS mip_demo.silver.owner_property_bridge (
+CREATE TABLE IF NOT EXISTS mip.silver.owner_property_bridge (
   owner_link_id              STRING    NOT NULL COMMENT 'Cotality Owner Link (property_master.owner_link_id). PK.',
   related_property_count     INT       NOT NULL COMMENT 'Count of distinct CLIPs tied to this Owner Link in the 6-state footprint.',
   corporate_property_count   INT       NOT NULL COMMENT 'Number of related properties with owner_is_corporate=TRUE.',

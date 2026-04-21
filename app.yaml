@@ -7,7 +7,7 @@ command:
 
 env:
   - name: APP_ENV
-    value: demo
+    value: sandbox
 
 # Runtime env wiring (tracked here for the string-contract test and operator
 # documentation; populated post-deploy via the Databricks App UI or a

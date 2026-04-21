@@ -2,7 +2,7 @@
 -- lead_score_golden_validation.sql
 -- -----------------------------------------------------------------------------
 -- Purpose:  Cross-platform parity check. Asserts that
---           mip_demo.gold.fn_lead_score(...) produces the same integers as
+--           mip.gold.fn_lead_score(...) produces the same integers as
 --           tests/fixtures/lead_score_golden.json (which is also the contract
 --           for backend/services/scoring.py).
 --
@@ -32,10 +32,10 @@ WITH golden (id, economic_incentive, intent_trigger, fit, relationship, evidence
 SELECT
   id,
   expected_score,
-  mip_demo.gold.fn_lead_score(economic_incentive, intent_trigger, fit, relationship, evidence) AS actual_score,
-  mip_demo.gold.fn_lead_score(economic_incentive, intent_trigger, fit, relationship, evidence) - expected_score AS diff,
+  mip.gold.fn_lead_score(economic_incentive, intent_trigger, fit, relationship, evidence) AS actual_score,
+  mip.gold.fn_lead_score(economic_incentive, intent_trigger, fit, relationship, evidence) - expected_score AS diff,
   CASE
-    WHEN mip_demo.gold.fn_lead_score(economic_incentive, intent_trigger, fit, relationship, evidence) = expected_score
+    WHEN mip.gold.fn_lead_score(economic_incentive, intent_trigger, fit, relationship, evidence) = expected_score
       THEN ''
     ELSE 'MISMATCH'
   END AS mismatch

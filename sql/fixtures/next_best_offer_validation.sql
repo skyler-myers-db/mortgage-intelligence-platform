@@ -2,7 +2,7 @@
 -- next_best_offer_validation.sql
 -- -----------------------------------------------------------------------------
 -- Purpose:  Cross-platform parity check. Asserts that
---           mip_demo.gold.fn_next_best_offer(...) produces the same product
+--           mip.gold.fn_next_best_offer(...) produces the same product
 --           codes as tests/fixtures/next_best_offer_golden.json (which is
 --           also the contract for backend/services/scoring.py in the next
 --           slice, and the contract backing OfferRecommendation).
@@ -95,13 +95,13 @@ WITH golden (
 SELECT
   id,
   expected_offer,
-  mip_demo.gold.fn_next_best_offer(
+  mip.gold.fn_next_best_offer(
     rate_spread_bps, equity_pct,
     has_permit, listed_for_sale, is_investor, is_current_customer, is_competitor_lien,
     min_spread_bps, min_equity_pct, heloc_equity_min_pct, cashout_equity_min, retention_min_spread
   ) AS actual_offer,
   CASE
-    WHEN mip_demo.gold.fn_next_best_offer(
+    WHEN mip.gold.fn_next_best_offer(
       rate_spread_bps, equity_pct,
       has_permit, listed_for_sale, is_investor, is_current_customer, is_competitor_lien,
       min_spread_bps, min_equity_pct, heloc_equity_min_pct, cashout_equity_min, retention_min_spread

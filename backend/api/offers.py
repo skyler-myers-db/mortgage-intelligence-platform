@@ -97,16 +97,16 @@ def _rationale_for(
 def _sources_for(code: str) -> list[str]:
     """Unity Catalog tables consulted for this branch. Drives the
     'Source evidence' chips the Offer Orchestrator renders."""
-    base = ["mip_demo.gold.fn_next_best_offer"]
+    base = ["mip.gold.fn_next_best_offer"]
     if code in {"refi_plus_heloc", "refi", "retention"}:
-        base.append("mip_demo.gold.fn_rate_spread")
-        base.append("mip_demo.gold.fn_in_the_money")
+        base.append("mip.gold.fn_rate_spread")
+        base.append("mip.gold.fn_in_the_money")
     if code in {"heloc", "cash_out", "refi_plus_heloc"}:
-        base.append("mip_demo.gold.fn_rate_spread")
+        base.append("mip.gold.fn_rate_spread")
     # fn_lead_score is always cited — the orchestrator shows confidence
     # on every recommendation and that confidence rolls up from the
     # lead_score weighted bundle.
-    base.append("mip_demo.gold.fn_lead_score")
+    base.append("mip.gold.fn_lead_score")
     # Dedupe while preserving order.
     seen: set[str] = set()
     ordered: list[str] = []

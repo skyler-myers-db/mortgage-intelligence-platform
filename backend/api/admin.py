@@ -4,7 +4,7 @@ from backend.config.settings import settings
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
-_RULES: dict[str, str] = {"offer_rules_version": "demo-v1"}
+_RULES: dict[str, str] = {"offer_rules_version": "v1"}
 
 
 @router.get("/rules")
@@ -22,7 +22,7 @@ def put_rules(payload: dict[str, str]) -> dict[str, object]:
 def get_settings() -> dict[str, object]:
     return {
         "app_env": settings.app_env,
-        "demo_lender": settings.mip_demo_lender,
+        "lender_name": settings.mip_lender_name,
         "catalog": settings.mip_default_catalog,
         "gold_schema": settings.mip_default_schema,
         "lakebase_schema": settings.mip_lakebase_schema,

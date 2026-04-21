@@ -7,7 +7,7 @@ Runs as a Databricks Jobs Python task (``mip_lakebase_migrate`` in
     1. ``lakebase/schema.sql`` -- idempotent DDL (CREATE ... IF NOT
        EXISTS, CREATE INDEX IF NOT EXISTS) for campaigns, approvals,
        action_audit, agent_sessions, feedback.
-    2. ``lakebase/seed_demo_campaigns.sql`` -- idempotent seed (stable
+    2. ``lakebase/seed_campaigns.sql`` -- idempotent seed (stable
        UUIDs + ON CONFLICT DO NOTHING) for the Summit Mortgage
        campaigns + five sample approvals.
 
@@ -83,7 +83,7 @@ def main() -> None:
 
     repo_root = Path(__file__).resolve().parents[1]
     schema_sql = (repo_root / "lakebase" / "schema.sql").read_text(encoding="utf-8")
-    seed_sql = (repo_root / "lakebase" / "seed_demo_campaigns.sql").read_text(
+    seed_sql = (repo_root / "lakebase" / "seed_campaigns.sql").read_text(
         encoding="utf-8"
     )
 

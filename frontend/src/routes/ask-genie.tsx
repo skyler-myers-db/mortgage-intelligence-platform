@@ -24,11 +24,11 @@ const SAMPLE_QUESTIONS = [
 ];
 
 const TRUSTED_ASSETS = [
-  'mip_demo.gold.lead_population',
-  'mip_demo.gold.lead_segment_membership',
-  'mip_demo.gold.lead_scores',
-  'mip_demo.gold.evidence_events',
-  'mip_demo.semantics.lead_generation_metric_view',
+  'mip.gold.lead_population',
+  'mip.gold.lead_segment_membership',
+  'mip.gold.lead_scores',
+  'mip.gold.evidence_events',
+  'mip.semantics.lead_generation_metric_view',
 ];
 
 export default function AskGenie() {

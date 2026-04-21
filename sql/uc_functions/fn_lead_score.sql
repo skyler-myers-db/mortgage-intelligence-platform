@@ -35,7 +35,7 @@
 --            in gold materializations and metric views.
 -- =============================================================================
 
-CREATE OR REPLACE FUNCTION mip_demo.gold.fn_lead_score(
+CREATE OR REPLACE FUNCTION mip.gold.fn_lead_score(
   economic_incentive INT,
   intent_trigger     INT,
   fit                INT,

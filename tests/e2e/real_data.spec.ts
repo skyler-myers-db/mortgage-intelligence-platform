@@ -11,7 +11,7 @@
  *   1. Dashboard renders a non-zero segment count from live gold tables.
  *   2. A ranked borrower row (from /api/leads) opens the Borrower 360,
  *      Evidence Drawer shows ≥ 2 real evidence rows from
- *      mip_demo.gold.evidence_events.
+ *      mip.gold.evidence_events.
  *   3. The Genie floating FAB returns a non-empty natural-language answer
  *      within 20s (first cold call can be 10-15s; we allow headroom).
  *   4. Approving an outreach produces a new row in /api/audit within 5s,
@@ -23,7 +23,7 @@
  * Non-negotiables per CLAUDE.md:
  *   * No mock fallback. If the app can't reach UC, the spec fails — that is
  *     correct behaviour (the nightly workflow gets paged).
- *   * No real PII asserted; we assert on synthetic demo borrower IDs (B-*).
+ *   * No real PII asserted; we assert on synthetic borrower IDs (B-*).
  *   * Resilient selectors (getByRole, getByText, aria-label) matching the
  *     prototype's BEM class names; no brittle xpath.
  */

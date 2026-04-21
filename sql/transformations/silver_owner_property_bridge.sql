@@ -2,7 +2,7 @@
 -- silver_owner_property_bridge.sql (transformation)
 -- -----------------------------------------------------------------------------
 -- Purpose:   Idempotent MERGE that populates
---            `mip_demo.silver.owner_property_bridge` from
+--            `mip.silver.owner_property_bridge` from
 --            silver.property_master ⟕ silver.lien_current. One row per
 --            distinct Owner-Link id.
 --
@@ -22,7 +22,7 @@
 -- Idempotency: MERGE on owner_link_id.
 -- =============================================================================
 
-MERGE INTO mip_demo.silver.owner_property_bridge AS t
+MERGE INTO mip.silver.owner_property_bridge AS t
 USING (
   WITH props AS (
     SELECT
@@ -36,8 +36,8 @@ USING (
       lc.avm_value,
       lc.total_open_lien_balance,
       lc.estimated_equity
-    FROM mip_demo.silver.property_master     AS pm
-    LEFT JOIN mip_demo.silver.lien_current   AS lc
+    FROM mip.silver.property_master     AS pm
+    LEFT JOIN mip.silver.lien_current   AS lc
       ON lc.clip = pm.clip
     WHERE pm.owner_link_id IS NOT NULL
       -- Defense-in-depth: upstream already enforces the 6-state filter, but

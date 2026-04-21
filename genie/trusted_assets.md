@@ -1,27 +1,27 @@
 # Trusted Assets — Mortgage Lead Intelligence Genie Space
 
 The Mortgage Lead Intelligence Genie Space is grounded on a curated set of
-Unity Catalog assets from the `mip_demo` catalog. Every answer Genie
+Unity Catalog assets from the `mip` catalog. Every answer Genie
 returns must cite one of the tables or metric views below. Nothing else
 is in scope for this space.
 
 These assets are authored and refreshed by the Databricks bundle:
-raw Cotality shares land in `mip_demo.raw.*`, silver features in
-`mip_demo.silver.*`, and the trusted gold + semantic assets below are
+raw Cotality shares land in `mip.raw.*`, silver features in
+`mip.silver.*`, and the trusted gold + semantic assets below are
 materialized by `pipelines/lakeflow/*` and exposed to the app via the
 serverless SQL warehouse referenced in `databricks.yml`.
 
 | Asset | Kind | Grain | Why Module 0 cares |
 |---|---|---|---|
-| `mip_demo.gold.lead_population` | table | one row per eligible borrower | Defines the addressable market; the denominator for every funnel metric. |
-| `mip_demo.gold.lead_segment_membership` | table | borrower × segment | Powers the Segment Intelligence route and the "which segment is this borrower in" drill-down. |
-| `mip_demo.gold.lead_scores` | table | one row per borrower | Canonical lead score — parity-pinned between `fn_lead_score.sql` and `backend/services/scoring.py`. |
-| `mip_demo.gold.borrower_360` | table | one row per borrower | Feeds the Borrower 360 route, the Evidence Drawer, and the dossier preview rail. |
-| `mip_demo.gold.evidence_events` | table | append-only event ledger | The "why now" signal — trigger events with UTC timestamps, confidence, and source citations. |
-| `mip_demo.gold.recommended_offers` | table | one row per borrower × current offer | Next-best-offer output; the recommendation that a human approves before outreach. |
-| `mip_demo.semantics.lead_generation_metric_view` | metric view | funnel-wide | Executive + Head-of-Growth funnel KPIs: addressable → eligible → scored → approved → actioned. |
-| `mip_demo.semantics.segment_performance_metric_view` | metric view | segment | Segment strategy and A/B decisions: mean score, rate spread, equity, approval rate, outreach rate. |
-| `mip_demo.semantics.borrower_opportunity_metric_view` | metric view | region × product × trigger | Territory planning and campaign-budget allocation. |
+| `mip.gold.lead_population` | table | one row per eligible borrower | Defines the addressable market; the denominator for every funnel metric. |
+| `mip.gold.lead_segment_membership` | table | borrower × segment | Powers the Segment Intelligence route and the "which segment is this borrower in" drill-down. |
+| `mip.gold.lead_scores` | table | one row per borrower | Canonical lead score — parity-pinned between `fn_lead_score.sql` and `backend/services/scoring.py`. |
+| `mip.gold.borrower_360` | table | one row per borrower | Feeds the Borrower 360 route, the Evidence Drawer, and the dossier preview rail. |
+| `mip.gold.evidence_events` | table | append-only event ledger | The "why now" signal — trigger events with UTC timestamps, confidence, and source citations. |
+| `mip.gold.recommended_offers` | table | one row per borrower × current offer | Next-best-offer output; the recommendation that a human approves before outreach. |
+| `mip.semantics.lead_generation_metric_view` | metric view | funnel-wide | Executive + Head-of-Growth funnel KPIs: addressable → eligible → scored → approved → actioned. |
+| `mip.semantics.segment_performance_metric_view` | metric view | segment | Segment strategy and A/B decisions: mean score, rate spread, equity, approval rate, outreach rate. |
+| `mip.semantics.borrower_opportunity_metric_view` | metric view | region × product × trigger | Territory planning and campaign-budget allocation. |
 
 ## Why each asset matters for Module 0
 
@@ -80,12 +80,12 @@ questions.
 
 ## Out of scope for this space
 
-Anything outside `mip_demo.gold.*` and `mip_demo.semantics.*` is
+Anything outside `mip.gold.*` and `mip.semantics.*` is
 **not** trusted for this space, specifically:
 
-- `mip_demo.raw.*` — Cotality-share raw tables. Too wide, too noisy for
+- `mip.raw.*` — Cotality-share raw tables. Too wide, too noisy for
   conversational Q&A.
-- `mip_demo.silver.*` — intermediate features. Mixed grain and not
+- `mip.silver.*` — intermediate features. Mixed grain and not
   governed with the same care as gold.
 - `mip_app.*` (Lakebase) — operational state (approvals, audit, sessions).
   Routed through the backend, not Genie.

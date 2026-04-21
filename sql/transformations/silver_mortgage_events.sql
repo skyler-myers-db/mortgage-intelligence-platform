@@ -1,7 +1,7 @@
 -- =============================================================================
 -- silver_mortgage_events.sql (transformation)
 -- -----------------------------------------------------------------------------
--- Purpose:   Idempotent MERGE that populates `mip_demo.silver.mortgage_events`
+-- Purpose:   Idempotent MERGE that populates `mip.silver.mortgage_events`
 --            from `cotality_mortgage_data.corelogic.entrada_eval_mortgage_
 --            domain_v1`, filtered to the 6-state footprint via the share's
 --            `deed_situs_state_static` column.
@@ -28,7 +28,7 @@
 -- Idempotency: MERGE on mortgage_txn_id.
 -- =============================================================================
 
-MERGE INTO mip_demo.silver.mortgage_events AS t
+MERGE INTO mip.silver.mortgage_events AS t
 USING (
   SELECT
     mortgage_composite_transaction_id                                AS mortgage_txn_id,

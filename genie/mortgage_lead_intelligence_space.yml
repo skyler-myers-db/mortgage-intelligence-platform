@@ -15,7 +15,7 @@ description: >-
   cite the UC table or metric view it drew from so Growth, Lending, and
   Sales leaders can trust the recommendation before outreach.
 
-catalog: mip_demo
+catalog: mip
 schema: gold
 
 owner: entrada
@@ -31,7 +31,7 @@ instructions: |
   Prefer gold tables for row-level drill-downs to borrower or property.
 
 trusted_assets:
-  - name: mip_demo.gold.lead_population
+  - name: mip.gold.lead_population
     kind: table
     description: >-
       One row per eligible borrower in the lender's addressable market for
@@ -39,7 +39,7 @@ trusted_assets:
       Link) identifiers with current mortgage state (rate, balance, term,
       origination date) and property economics (AVM, LTV, equity).
 
-  - name: mip_demo.gold.lead_segment_membership
+  - name: mip.gold.lead_segment_membership
     kind: table
     description: >-
       Maps each borrower to one or more segments (In-the-Money, HELOC/
@@ -48,7 +48,7 @@ trusted_assets:
       sql/transformations/gold_lead_segment_membership.sql and mirrors
       the canonical rules in sql/uc_functions/fn_in_the_money.sql.
 
-  - name: mip_demo.gold.lead_scores
+  - name: mip.gold.lead_scores
     kind: table
     description: >-
       Per-borrower lead score produced by sql/uc_functions/fn_lead_score.sql
@@ -56,14 +56,14 @@ trusted_assets:
       permit/listing/lien triggers. Pinned to Python parity in
       backend/services/scoring.py with golden fixtures.
 
-  - name: mip_demo.gold.borrower_360
+  - name: mip.gold.borrower_360
     kind: table
     description: >-
       Unified borrower profile joining property, mortgage, owner, and
       behavioral signals. Feeds the Borrower 360 route and the Evidence
       Drawer. Every field traces back to a Cotality source table.
 
-  - name: mip_demo.gold.evidence_events
+  - name: mip.gold.evidence_events
     kind: table
     description: >-
       Append-only ledger of trigger events (rate-drop, equity-crossed,
@@ -71,7 +71,7 @@ trusted_assets:
       UTC timestamp, confidence, and source-table citation. Drives the
       "why now" rationale on every score and recommendation.
 
-  - name: mip_demo.gold.recommended_offers
+  - name: mip.gold.recommended_offers
     kind: table
     description: >-
       Next-best-offer per borrower from sql/uc_functions/fn_next_best_offer.sql.
@@ -79,21 +79,21 @@ trusted_assets:
       Retention) plus projected monthly savings and confidence band. Human
       approval is required before any outreach is sent.
 
-  - name: mip_demo.semantics.lead_generation_metric_view
+  - name: mip.semantics.lead_generation_metric_view
     kind: metric_view
     description: >-
       Funnel metrics for lead generation: addressable market size,
       eligible population, scored leads, approved recommendations,
       actioned outreach. Use for executive and Head-of-Growth questions.
 
-  - name: mip_demo.semantics.segment_performance_metric_view
+  - name: mip.semantics.segment_performance_metric_view
     kind: metric_view
     description: >-
       Segment-level KPIs: count, mean lead score, mean rate spread,
       mean equity, approval rate, outreach rate. Use for segment
       strategy and A/B decisions.
 
-  - name: mip_demo.semantics.borrower_opportunity_metric_view
+  - name: mip.semantics.borrower_opportunity_metric_view
     kind: metric_view
     description: >-
       Borrower-level opportunity scoring aggregated by region, product,

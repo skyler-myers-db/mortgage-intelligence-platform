@@ -1,7 +1,7 @@
 """Parity tests for backend.services.scoring.lead_score.
 
 Fixtures in tests/fixtures/lead_score_golden.json are the contract;
-the SQL UDF mip_demo.gold.fn_lead_score is validated against the same
+the SQL UDF mip.gold.fn_lead_score is validated against the same
 set by sql/fixtures/lead_score_golden_validation.sql.
 """
 

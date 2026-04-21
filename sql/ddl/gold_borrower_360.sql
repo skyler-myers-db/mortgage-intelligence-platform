@@ -1,7 +1,7 @@
 -- =============================================================================
 -- gold_borrower_360.sql
 -- -----------------------------------------------------------------------------
--- Purpose:   DDL for `mip_demo.gold.borrower_360` -- the single CLIP-grain
+-- Purpose:   DDL for `mip.gold.borrower_360` -- the single CLIP-grain
 --            projection that backs every Module 0 UI surface (Lead Queue,
 --            Segment Intelligence, Borrower 360 dossier, Offer Orchestrator,
 --            Approval rail). Super-set of `backend.schemas.lead.LeadSummary`
@@ -61,7 +61,7 @@
 --            previous schema versions.
 -- =============================================================================
 
-CREATE TABLE IF NOT EXISTS mip_demo.gold.borrower_360 (
+CREATE TABLE IF NOT EXISTS mip.gold.borrower_360 (
   clip                      STRING    NOT NULL COMMENT 'Cotality CLIP. PK. Router maps to Borrower360.clip_id.',
   borrower_id               STRING    NOT NULL COMMENT 'Synthetic stable demo id from CLIP: CONCAT("B-", LPAD(xxhash64(clip) MOD 99999 + 10000, 5, "0")). No PII.',
   display_name              STRING    NOT NULL COMMENT 'Synthesized label "Owner " || SUBSTR(owner_name_hash, 1, 8). Never a real name.',

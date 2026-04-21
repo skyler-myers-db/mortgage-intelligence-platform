@@ -1,7 +1,7 @@
 -- =============================================================================
 -- gold_lead_population.sql (transformation)
 -- -----------------------------------------------------------------------------
--- Purpose:   Populate `mip_demo.gold.lead_population` via CTAS. Ranked top-N
+-- Purpose:   Populate `mip.gold.lead_population` via CTAS. Ranked top-N
 --            cut of gold.borrower_360 (opportunity_score >= 50), with both
 --            national rank and within-state rank pre-materialized.
 --
@@ -27,7 +27,7 @@
 --   When the gold schema bumps, bump '-v1' to '-v2' etc. in one place here.
 -- =============================================================================
 
-CREATE OR REPLACE TABLE mip_demo.gold.lead_population AS
+CREATE OR REPLACE TABLE mip.gold.lead_population AS
 WITH ranked AS (
   SELECT
     b.clip,
@@ -49,7 +49,7 @@ WITH ranked AS (
     DENSE_RANK() OVER (PARTITION BY b.state
                        ORDER BY b.opportunity_score DESC, b.clip) AS rank_within_state,
     b.refreshed_at
-  FROM mip_demo.gold.borrower_360 AS b
+  FROM mip.gold.borrower_360 AS b
   WHERE b.opportunity_score >= 50
 )
 SELECT

@@ -1,7 +1,7 @@
 -- =============================================================================
 -- gold_segment_population.sql
 -- -----------------------------------------------------------------------------
--- Purpose:   DDL for `mip_demo.gold.segment_population` -- per-segment
+-- Purpose:   DDL for `mip.gold.segment_population` -- per-segment
 --            aggregate counts backing the Segment Intelligence route and the
 --            Executive Dashboard. Two rows per segment per state (by state
 --            and by '_ALL'), so the UI can filter to a state or render the
@@ -39,7 +39,7 @@
 --                 data (data-contract §9).
 --
 -- `delta_vs_prior` requires a prior-period snapshot. The transformation
--- file maintains a mip_demo.gold.segment_population_prior Delta table
+-- file maintains a mip.gold.segment_population_prior Delta table
 -- (daily partition-rollup). On first refresh, delta_vs_prior is emitted
 -- as '+0%' as a safe default.
 --
@@ -47,7 +47,7 @@
 --            the transformation file.
 -- =============================================================================
 
-CREATE TABLE IF NOT EXISTS mip_demo.gold.segment_population (
+CREATE TABLE IF NOT EXISTS mip.gold.segment_population (
   segment_code    STRING    NOT NULL COMMENT 'itm / listed / permit / investor / equity / retention. Matches SegmentCode Literal exactly.',
   state           STRING    NOT NULL COMMENT '2-char state code (IL/CA/FL/TX/WA/CO) or "_ALL" for national rollup.',
   name            STRING    NOT NULL COMMENT 'Static label per segment_code (e.g., "In the Money").',
@@ -71,7 +71,7 @@ TBLPROPERTIES (
 -- pre-step so delta_vs_prior has something to compare against. One row per
 -- (segment_code, state, snapshot_date).
 
-CREATE TABLE IF NOT EXISTS mip_demo.gold.segment_population_prior (
+CREATE TABLE IF NOT EXISTS mip.gold.segment_population_prior (
   segment_code    STRING    NOT NULL COMMENT 'Matches segment_population.segment_code.',
   state           STRING    NOT NULL COMMENT 'Matches segment_population.state.',
   snapshot_date   DATE      NOT NULL COMMENT 'Date the count was snapshotted (daily granularity).',

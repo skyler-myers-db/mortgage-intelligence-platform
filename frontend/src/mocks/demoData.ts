@@ -45,7 +45,7 @@ export const mockBorrowers: Borrower360[] = [
     recommended_offer: 'Refinance + HELOC', why_now: 'Lien matures in 4 months, strong equity, and local refi activity is rising.', evidence_ids: ['ev-001', 'ev-002', 'ev-003'], approval_status: 'pending',
     clip_id: 'clip_demo_48291', owner_link_id: 'ol_demo_48291', subject_property: 'Synthetic property · Chicago, IL 60611', avm_value: 625000, current_lien_balance: 340000, current_rate: 5.75, ltv: 54, related_property_count: 1,
     trigger_timeline: evidence, evidence_events: evidence,
-    why_panel: { rate_spread_bps: 88, market_rate: 0.04875, equity_pct: 46, in_the_money: true, in_the_money_reason: '+88 bps spread (>= 75) AND 46% equity (>= 15%)', min_spread_bps: 75, min_equity_pct: 15, sources: ['mip_demo.gold.fn_rate_spread', 'mip_demo.gold.fn_in_the_money'] }
+    why_panel: { rate_spread_bps: 88, market_rate: 0.04875, equity_pct: 46, in_the_money: true, in_the_money_reason: '+88 bps spread (>= 75) AND 46% equity (>= 15%)', min_spread_bps: 75, min_equity_pct: 15, sources: ['mip.gold.fn_rate_spread', 'mip.gold.fn_in_the_money'] }
   },
   {
     borrower_id: 'B-48294', display_name: 'David Park', city: 'Chicago', state: 'IL', zip: '60647',
@@ -53,7 +53,7 @@ export const mockBorrowers: Borrower360[] = [
     recommended_offer: 'HELOC', why_now: 'Recent high-value permit and strong equity position indicate renovation financing need.', evidence_ids: ['ev-002'], approval_status: 'pending',
     clip_id: 'clip_demo_48294', owner_link_id: 'ol_demo_48294', subject_property: 'Synthetic property · Chicago, IL 60647', avm_value: 560000, current_lien_balance: 342000, current_rate: 6.75, ltv: 61, related_property_count: 1,
     trigger_timeline: evidence.slice(1), evidence_events: evidence.slice(1),
-    why_panel: { rate_spread_bps: 188, market_rate: 0.04875, equity_pct: 39, in_the_money: true, in_the_money_reason: '+188 bps spread (>= 75) AND 39% equity (>= 15%)', min_spread_bps: 75, min_equity_pct: 15, sources: ['mip_demo.gold.fn_rate_spread', 'mip_demo.gold.fn_in_the_money'] }
+    why_panel: { rate_spread_bps: 188, market_rate: 0.04875, equity_pct: 39, in_the_money: true, in_the_money_reason: '+188 bps spread (>= 75) AND 39% equity (>= 15%)', min_spread_bps: 75, min_equity_pct: 15, sources: ['mip.gold.fn_rate_spread', 'mip.gold.fn_in_the_money'] }
   },
   {
     borrower_id: 'B-48295', display_name: 'Lisa Thompson', city: 'Chicago', state: 'IL', zip: '60613',
@@ -61,7 +61,7 @@ export const mockBorrowers: Borrower360[] = [
     recommended_offer: 'Purchase Mortgage', why_now: 'Listed-for-sale trigger suggests a purchase mortgage opportunity.', evidence_ids: ['ev-003'], approval_status: 'pending',
     clip_id: 'clip_demo_48295', owner_link_id: 'ol_demo_48295', subject_property: 'Synthetic property · Chicago, IL 60613', avm_value: 725000, current_lien_balance: 320000, current_rate: 6.50, ltv: 44, related_property_count: 1,
     trigger_timeline: evidence.slice(2), evidence_events: evidence.slice(2),
-    why_panel: { rate_spread_bps: 162, market_rate: 0.04875, equity_pct: 56, in_the_money: true, in_the_money_reason: '+162 bps spread (>= 75) AND 56% equity (>= 15%)', min_spread_bps: 75, min_equity_pct: 15, sources: ['mip_demo.gold.fn_rate_spread', 'mip_demo.gold.fn_in_the_money'] }
+    why_panel: { rate_spread_bps: 162, market_rate: 0.04875, equity_pct: 56, in_the_money: true, in_the_money_reason: '+162 bps spread (>= 75) AND 56% equity (>= 15%)', min_spread_bps: 75, min_equity_pct: 15, sources: ['mip.gold.fn_rate_spread', 'mip.gold.fn_in_the_money'] }
   }
 ];
 
@@ -159,5 +159,5 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
 export const demoAgentActivity = [
   { event_id: 'evt-start', actor: 'System',   action: 'Session started on Databricks One',       entity_type: 'session', entity_id: '—',   payload_json: {}, evidence_ids: [],                       created_at: '2026-04-20T10:24:07Z' },
   { event_id: 'evt-load',  actor: 'Pipeline', action: 'Loaded Cotality Public Records via Delta Share', entity_type: 'pipeline', entity_id: 'deed_and_mortgage', payload_json: {}, evidence_ids: [], created_at: '2026-04-20T10:24:31Z' },
-  { event_id: 'evt-score', actor: 'Agent · Lead Portfolio', action: 'Scored 89,553 borrowers; 12,840 marked in-the-money', entity_type: 'scoring', entity_id: 'mip_demo.gold.lead_scores', payload_json: {}, evidence_ids: ['ev-001'], created_at: '2026-04-20T10:25:04Z' },
+  { event_id: 'evt-score', actor: 'Agent · Lead Portfolio', action: 'Scored 89,553 borrowers; 12,840 marked in-the-money', entity_type: 'scoring', entity_id: 'mip.gold.lead_scores', payload_json: {}, evidence_ids: ['ev-001'], created_at: '2026-04-20T10:25:04Z' },
 ];

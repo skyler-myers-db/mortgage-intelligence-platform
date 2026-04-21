@@ -1,7 +1,7 @@
 -- =============================================================================
 -- gold_evidence_events.sql (transformation)
 -- -----------------------------------------------------------------------------
--- Purpose:   Populate `mip_demo.gold.evidence_events` as a UNION of all
+-- Purpose:   Populate `mip.gold.evidence_events` as a UNION of all
 --            LIVE (non-BLOCKED) signal sources, per CLIP.
 --
 -- Grain:     One row per (clip, signal_type, timestamp). evidence_id is a
@@ -44,18 +44,18 @@
 -- dates cast to STRING (Pydantic declares `timestamp: str`).
 --
 -- Real UC path in source_table (EvidenceDrawer renders this verbatim):
---   mip_demo.silver.lien_current
---   mip_demo.silver.property_master
---   mip_demo.silver.mortgage_events
---   mip_demo.silver.owner_transfer_events
---   mip_demo.silver.market_rates_weekly
---   mip_demo.gold.property_owner_bridge
+--   mip.silver.lien_current
+--   mip.silver.property_master
+--   mip.silver.mortgage_events
+--   mip.silver.owner_transfer_events
+--   mip.silver.market_rates_weekly
+--   mip.gold.property_owner_bridge
 -- =============================================================================
 
-CREATE OR REPLACE TABLE mip_demo.gold.evidence_events AS
+CREATE OR REPLACE TABLE mip.gold.evidence_events AS
 WITH market AS (
   SELECT rate_fraction AS market_rate_fraction
-  FROM mip_demo.silver.market_rates_weekly
+  FROM mip.silver.market_rates_weekly
   WHERE series_id = 'MORTGAGE30US' AND is_latest = TRUE
   LIMIT 1
 ),
@@ -64,21 +64,21 @@ rate_spread_rows AS (
   SELECT
     lc.clip,
     'Voluntary Lien'                                 AS source_product,
-    'mip_demo.silver.lien_current'                   AS source_table,
+    'mip.silver.lien_current'                   AS source_table,
     'rate_spread'                                    AS signal_type,
     CONCAT(
-      CASE WHEN mip_demo.gold.fn_rate_spread(lc.first_pos_rate, m.market_rate_fraction) >= 0
+      CASE WHEN mip.gold.fn_rate_spread(lc.first_pos_rate, m.market_rate_fraction) >= 0
            THEN '+' ELSE '' END,
-      CAST(mip_demo.gold.fn_rate_spread(lc.first_pos_rate, m.market_rate_fraction) AS STRING),
+      CAST(mip.gold.fn_rate_spread(lc.first_pos_rate, m.market_rate_fraction) AS STRING),
       ' bps'
     )                                                AS signal_value,
     CONCAT('Current lien rate is ',
-           CAST(mip_demo.gold.fn_rate_spread(lc.first_pos_rate, m.market_rate_fraction) AS STRING),
+           CAST(mip.gold.fn_rate_spread(lc.first_pos_rate, m.market_rate_fraction) AS STRING),
            ' bps vs. par.')                          AS display_text,
     0.92                                             AS confidence,
     CAST(lc.ingest_ts AS STRING)                     AS `timestamp`,
     1                                                AS signal_rank
-  FROM mip_demo.silver.lien_current AS lc
+  FROM mip.silver.lien_current AS lc
   CROSS JOIN market AS m
   WHERE lc.first_pos_rate IS NOT NULL
     AND lc.situs_state IN ('IL','CA','FL','TX','WA','CO')
@@ -89,7 +89,7 @@ equity_rows AS (
   SELECT
     lc.clip,
     'AVM'                                            AS source_product,
-    'mip_demo.silver.lien_current'                   AS source_table,
+    'mip.silver.lien_current'                   AS source_table,
     'equity'                                         AS signal_type,
     CONCAT('$',
            CAST(ROUND(
@@ -105,7 +105,7 @@ equity_rows AS (
     ))                                               AS confidence,
     CAST(COALESCE(lc.avm_as_of_date, DATE(lc.ingest_ts)) AS STRING) AS `timestamp`,
     2                                                AS signal_rank
-  FROM mip_demo.silver.lien_current AS lc
+  FROM mip.silver.lien_current AS lc
   WHERE lc.avm_value IS NOT NULL
     AND lc.avm_value > 0
     AND (COALESCE(lc.avm_value, 0) - COALESCE(lc.total_open_lien_balance, 0)) > 0
@@ -116,14 +116,14 @@ market_trend_rows AS (
   SELECT
     lc.clip,
     'Market Rates'                                   AS source_product,
-    'mip_demo.silver.market_rates_weekly'            AS source_table,
+    'mip.silver.market_rates_weekly'            AS source_table,
     'market_trend'                                   AS signal_type,
     CONCAT(CAST(ROUND(m.market_rate_fraction * 100, 2) AS STRING), '% par') AS signal_value,
     'Latest MORTGAGE30US market rate (FRED).'        AS display_text,
     0.92                                             AS confidence,
     CAST(CURRENT_DATE() AS STRING)                   AS `timestamp`,
     3                                                AS signal_rank
-  FROM mip_demo.silver.lien_current AS lc
+  FROM mip.silver.lien_current AS lc
   CROSS JOIN market AS m
   WHERE lc.situs_state IN ('IL','CA','FL','TX','WA','CO')
 ),
@@ -132,14 +132,14 @@ competitor_lien_rows AS (
   SELECT
     lc.clip,
     'Voluntary Lien'                                 AS source_product,
-    'mip_demo.silver.lien_current'                   AS source_table,
+    'mip.silver.lien_current'                   AS source_table,
     'competitor_lien'                                AS signal_type,
     'competitor servicer'                            AS signal_value,
     'Current servicer is not the demo lender.'       AS display_text,
     0.89                                             AS confidence,
     CAST(lc.ingest_ts AS STRING)                     AS `timestamp`,
     5                                                AS signal_rank
-  FROM mip_demo.silver.lien_current AS lc
+  FROM mip.silver.lien_current AS lc
   WHERE lc.first_pos_lender_current IS NOT NULL
     AND NOT (UPPER(lc.first_pos_lender_current) LIKE '%SUMMIT%')
     AND lc.situs_state IN ('IL','CA','FL','TX','WA','CO')
@@ -149,15 +149,15 @@ multi_property_rows AS (
   SELECT
     pm.clip,
     'Owner Link'                                     AS source_product,
-    'mip_demo.gold.property_owner_bridge'            AS source_table,
+    'mip.gold.property_owner_bridge'            AS source_table,
     'multi_property'                                 AS signal_type,
     CONCAT(CAST(pob.related_property_count AS STRING), ' properties') AS signal_value,
     'Owner Link identifies related properties under the same entity.' AS display_text,
     0.85                                             AS confidence,
     CAST(pob.refreshed_at AS STRING)                 AS `timestamp`,
     6                                                AS signal_rank
-  FROM mip_demo.silver.property_master AS pm
-  JOIN mip_demo.gold.property_owner_bridge AS pob
+  FROM mip.silver.property_master AS pm
+  JOIN mip.gold.property_owner_bridge AS pob
     ON pob.owner_link_id = pm.owner_link_id
   WHERE pob.related_property_count >= 2
     AND pm.situs_state IN ('IL','CA','FL','TX','WA','CO')
@@ -167,14 +167,14 @@ absentee_rows AS (
   SELECT
     pm.clip,
     'Property'                                       AS source_product,
-    'mip_demo.silver.property_master'                AS source_table,
+    'mip.silver.property_master'                AS source_table,
     'absentee_mailing'                               AS signal_type,
     CONCAT('mails to ', COALESCE(pm.mailing_state, 'unknown'))        AS signal_value,
     'Owner mailing address is out of state from situs.'               AS display_text,
     0.85                                             AS confidence,
     CAST(pm.ingest_ts AS STRING)                     AS `timestamp`,
     7                                                AS signal_rank
-  FROM mip_demo.silver.property_master AS pm
+  FROM mip.silver.property_master AS pm
   WHERE pm.is_absentee = TRUE
     AND pm.situs_state IN ('IL','CA','FL','TX','WA','CO')
 ),
@@ -183,14 +183,14 @@ corporate_owner_rows AS (
   SELECT
     pm.clip,
     'Property'                                       AS source_product,
-    'mip_demo.silver.property_master'                AS source_table,
+    'mip.silver.property_master'                AS source_table,
     'corporate_owner'                                AS signal_type,
     'corporate ownership'                            AS signal_value,
     'Owner of record is a corporate entity.'         AS display_text,
     0.85                                             AS confidence,
     CAST(pm.ingest_ts AS STRING)                     AS `timestamp`,
     8                                                AS signal_rank
-  FROM mip_demo.silver.property_master AS pm
+  FROM mip.silver.property_master AS pm
   WHERE pm.owner_is_corporate = TRUE
     AND pm.situs_state IN ('IL','CA','FL','TX','WA','CO')
 ),
@@ -199,7 +199,7 @@ recent_refi_rows AS (
   SELECT
     me.clip,
     'Mortgage Domain'                                AS source_product,
-    'mip_demo.silver.mortgage_events'                AS source_table,
+    'mip.silver.mortgage_events'                AS source_table,
     'recent_refi'                                    AS signal_type,
     CAST(me.event_date AS STRING)                    AS signal_value,
     'Refi event recorded within the last 12 months.' AS display_text,
@@ -210,7 +210,7 @@ recent_refi_rows AS (
     SELECT
       clip, event_date,
       ROW_NUMBER() OVER (PARTITION BY clip ORDER BY event_date DESC) AS rn
-    FROM mip_demo.silver.mortgage_events
+    FROM mip.silver.mortgage_events
     WHERE is_refinance = TRUE
       AND event_date IS NOT NULL
       AND event_date >= DATE_SUB(CURRENT_DATE(), 365)
@@ -223,7 +223,7 @@ recent_payoff_rows AS (
   SELECT
     me.clip,
     'Mortgage Domain'                                AS source_product,
-    'mip_demo.silver.mortgage_events'                AS source_table,
+    'mip.silver.mortgage_events'                AS source_table,
     'recent_payoff'                                  AS signal_type,
     CAST(me.release_date AS STRING)                  AS signal_value,
     'Mortgage release recorded within the last 12 months.' AS display_text,
@@ -234,7 +234,7 @@ recent_payoff_rows AS (
     SELECT
       clip, release_date,
       ROW_NUMBER() OVER (PARTITION BY clip ORDER BY release_date DESC) AS rn
-    FROM mip_demo.silver.mortgage_events
+    FROM mip.silver.mortgage_events
     WHERE release_date IS NOT NULL
       AND release_date >= DATE_SUB(CURRENT_DATE(), 365)
       AND situs_state IN ('IL','CA','FL','TX','WA','CO')
@@ -246,7 +246,7 @@ recent_sale_rows AS (
   SELECT
     ot.clip,
     'Owner Transfer'                                 AS source_product,
-    'mip_demo.silver.owner_transfer_events'          AS source_table,
+    'mip.silver.owner_transfer_events'          AS source_table,
     'recent_sale'                                    AS signal_type,
     CAST(ot.sale_date AS STRING)                     AS signal_value,
     'Transfer of ownership recorded within the last 12 months.' AS display_text,
@@ -257,7 +257,7 @@ recent_sale_rows AS (
     SELECT
       clip, sale_date,
       ROW_NUMBER() OVER (PARTITION BY clip ORDER BY sale_date DESC) AS rn
-    FROM mip_demo.silver.owner_transfer_events
+    FROM mip.silver.owner_transfer_events
     WHERE sale_date IS NOT NULL
       AND sale_date >= DATE_SUB(CURRENT_DATE(), 365)
       AND situs_state IN ('IL','CA','FL','TX','WA','CO')
@@ -269,14 +269,14 @@ foreclosure_stage_rows AS (
   SELECT
     pm.clip,
     'Property'                                       AS source_product,
-    'mip_demo.silver.property_master'                AS source_table,
+    'mip.silver.property_master'                AS source_table,
     'foreclosure_stage'                              AS signal_type,
     COALESCE(pm.foreclosure_stage_code, 'unknown')   AS signal_value,
     'Foreclosure stage snapshot from property master.' AS display_text,
     0.89                                             AS confidence,
     CAST(COALESCE(pm.last_foreclosure_date, DATE(pm.ingest_ts)) AS STRING) AS `timestamp`,
     12                                               AS signal_rank
-  FROM mip_demo.silver.property_master AS pm
+  FROM mip.silver.property_master AS pm
   WHERE pm.foreclosure_stage_code IS NOT NULL
     AND pm.situs_state IN ('IL','CA','FL','TX','WA','CO')
 ),

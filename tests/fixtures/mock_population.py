@@ -51,7 +51,7 @@ _HELOC_MIN = settings.mip_heloc_equity_min_pct
 _CASHOUT_MIN = settings.mip_cashout_equity_min_pct
 _RETENTION_MIN = settings.mip_retention_min_spread_bps
 
-_WHY_SOURCES = ["mip_demo.gold.fn_rate_spread", "mip_demo.gold.fn_in_the_money"]
+_WHY_SOURCES = ["mip.gold.fn_rate_spread", "mip.gold.fn_in_the_money"]
 
 
 # ---------------------------------------------------------------------------

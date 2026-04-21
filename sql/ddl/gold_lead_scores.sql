@@ -1,7 +1,7 @@
 -- =============================================================================
 -- gold_lead_scores.sql
 -- -----------------------------------------------------------------------------
--- Purpose:   DDL for `mip_demo.gold.lead_scores` -- one row per CLIP carrying
+-- Purpose:   DDL for `mip.gold.lead_scores` -- one row per CLIP carrying
 --            the five 0..100 component sub-scores, the fn_lead_score blended
 --            opportunity_score, and the fn_next_best_offer recommendation.
 --            This is where scoring happens; gold.borrower_360 JOINs against
@@ -28,10 +28,10 @@
 --                        lender.
 --   evidence           : LEAST(100, 20 * count_of_evidence_rows_for_clip).
 --
--- opportunity_score = mip_demo.gold.fn_lead_score(economic_incentive,
+-- opportunity_score = mip.gold.fn_lead_score(economic_incentive,
 --                     intent_trigger, fit, relationship, evidence).
--- recommended_offer_code = mip_demo.gold.fn_next_best_offer(...).
--- in_the_money = mip_demo.gold.fn_in_the_money(rate_spread_bps, equity_pct,
+-- recommended_offer_code = mip.gold.fn_next_best_offer(...).
+-- in_the_money = mip.gold.fn_in_the_money(rate_spread_bps, equity_pct,
 --                                              min_spread, min_equity).
 --
 -- Thresholds: Five admin-tunable INTs come from mip_app.thresholds (Lakebase)
@@ -60,17 +60,17 @@
 --            transformation file (CREATE OR REPLACE TABLE ... AS SELECT).
 -- =============================================================================
 
-CREATE TABLE IF NOT EXISTS mip_demo.gold.lead_scores (
+CREATE TABLE IF NOT EXISTS mip.gold.lead_scores (
   clip                     STRING    NOT NULL COMMENT 'Cotality CLIP. PK. FK to gold.borrower_360.clip.',
   economic_incentive       INT       NOT NULL COMMENT '0..100 sub-score on rate_spread_bps + equity_pct. Weight 0.35 in fn_lead_score.',
   intent_trigger           INT       NOT NULL COMMENT '0..100 sub-score on recent mortgage events + listed/permit (BLOCKED->0) + competitor_lien + recent_avm_uplift. Weight 0.30.',
   fit                      INT       NOT NULL COMMENT '0..100 sub-score on owner-occupancy + loan_type + property size. Weight 0.15.',
   relationship             INT       NOT NULL COMMENT '0..100 sub-score on customer + historical mortgage count at demo lender. Weight 0.10.',
   evidence                 INT       NOT NULL COMMENT '0..100: LEAST(100, 20 * count_of_evidence_rows_for_clip). Weight 0.10.',
-  opportunity_score        INT       NOT NULL COMMENT 'mip_demo.gold.fn_lead_score(...) output. 0..100. Frozen UDF signature; parity test locks it to Python.',
+  opportunity_score        INT       NOT NULL COMMENT 'mip.gold.fn_lead_score(...) output. 0..100. Frozen UDF signature; parity test locks it to Python.',
   confidence               INT       NOT NULL COMMENT 'ROUND(mean(5 sub-scores)). Mirrors mock_data._build_borrower for screen parity.',
-  in_the_money             BOOLEAN   NOT NULL COMMENT 'mip_demo.gold.fn_in_the_money(rate_spread_bps, equity_pct, min_spread_bps_applied, min_equity_pct_applied).',
-  recommended_offer_code   STRING    NOT NULL COMMENT 'mip_demo.gold.fn_next_best_offer(...) lowercase code.',
+  in_the_money             BOOLEAN   NOT NULL COMMENT 'mip.gold.fn_in_the_money(rate_spread_bps, equity_pct, min_spread_bps_applied, min_equity_pct_applied).',
+  recommended_offer_code   STRING    NOT NULL COMMENT 'mip.gold.fn_next_best_offer(...) lowercase code.',
   rate_spread_bps          INT       NOT NULL COMMENT 'Input to fn_in_the_money / fn_next_best_offer. Carried here so the table is self-contained for parity testing.',
   equity_pct               INT       NOT NULL COMMENT 'Input to fn_in_the_money / fn_next_best_offer.',
   has_permit               BOOLEAN   NOT NULL COMMENT 'BLOCKED -> FALSE; carried for parity test transparency.',

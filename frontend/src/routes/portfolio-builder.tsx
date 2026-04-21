@@ -77,7 +77,7 @@ export default function PortfolioBuilder() {
               </div>
             </div>
           </div>
-          <Chip variant="neutral" icon="db">mip_demo.gold.lead_population</Chip>
+          <Chip variant="neutral" icon="db">mip.gold.lead_population</Chip>
         </div>
         <div className="surface__body">
           <div className="filter-row">

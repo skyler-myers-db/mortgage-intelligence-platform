@@ -1,7 +1,7 @@
 -- =============================================================================
 -- gold_lead_scores.sql (transformation)
 -- -----------------------------------------------------------------------------
--- Purpose:   Populate `mip_demo.gold.lead_scores` via CTAS. One row per CLIP
+-- Purpose:   Populate `mip.gold.lead_scores` via CTAS. One row per CLIP
 --            carrying the five 0..100 component sub-scores, fn_lead_score
 --            opportunity_score, fn_in_the_money flag, fn_next_best_offer
 --            code, and the exact thresholds applied at this refresh.
@@ -44,10 +44,10 @@
 -- simultaneously -- drift is a parity test failure by construction.
 -- =============================================================================
 
-CREATE OR REPLACE TABLE mip_demo.gold.lead_scores AS
+CREATE OR REPLACE TABLE mip.gold.lead_scores AS
 WITH market AS (
   SELECT rate_fraction AS market_rate_fraction
-  FROM mip_demo.silver.market_rates_weekly
+  FROM mip.silver.market_rates_weekly
   WHERE series_id = 'MORTGAGE30US' AND is_latest = TRUE
   LIMIT 1
 ),
@@ -58,13 +58,13 @@ recent_events AS (
     clip,
     SUM(CASE WHEN is_refinance AND event_date >= DATE_SUB(CURRENT_DATE(), 90) THEN 1 ELSE 0 END) AS recent_refi_count_90d,
     SUM(CASE WHEN release_date IS NOT NULL AND release_date >= DATE_SUB(CURRENT_DATE(), 90) THEN 1 ELSE 0 END) AS recent_payoff_count_90d
-  FROM mip_demo.silver.mortgage_events
+  FROM mip.silver.mortgage_events
   WHERE situs_state IN ('IL','CA','FL','TX','WA','CO')
   GROUP BY clip
 ),
 evidence_counts AS (
   SELECT clip, COUNT(*) AS evidence_event_count
-  FROM mip_demo.gold.evidence_events
+  FROM mip.gold.evidence_events
   WHERE signal_type NOT IN ('permit', 'listing')
   GROUP BY clip
 ),
@@ -73,8 +73,8 @@ evidence_counts AS (
 historical_summit AS (
   SELECT
     clip,
-    COUNT(*) AS historical_mortgage_count_at_demo_lender
-  FROM mip_demo.silver.mortgage_events
+    COUNT(*) AS historical_mortgage_count_at_lender
+  FROM mip.silver.mortgage_events
   WHERE lender_name IS NOT NULL
     AND UPPER(lender_name) LIKE '%SUMMIT%'
     AND situs_state IN ('IL','CA','FL','TX','WA','CO')
@@ -98,10 +98,10 @@ base AS (
     COALESCE(re.recent_refi_count_90d,   0) AS recent_refi_count_90d,
     COALESCE(re.recent_payoff_count_90d, 0) AS recent_payoff_count_90d,
     COALESCE(ec.evidence_event_count,    0) AS evidence_event_count,
-    COALESCE(hs.historical_mortgage_count_at_demo_lender, 0) AS historical_summit_count,
+    COALESCE(hs.historical_mortgage_count_at_lender, 0) AS historical_summit_count,
     b.min_spread_bps_applied,
     b.min_equity_pct_applied
-  FROM mip_demo.gold.borrower_360 AS b
+  FROM mip.gold.borrower_360 AS b
   LEFT JOIN recent_events     AS re ON re.clip = b.clip
   LEFT JOIN evidence_counts   AS ec ON ec.clip = b.clip
   LEFT JOIN historical_summit AS hs ON hs.clip = b.clip
@@ -153,16 +153,16 @@ SELECT
   s.fit,
   s.relationship,
   s.evidence,
-  mip_demo.gold.fn_lead_score(
+  mip.gold.fn_lead_score(
     s.economic_incentive, s.intent_trigger, s.fit, s.relationship, s.evidence
   ) AS opportunity_score,
   CAST(ROUND(
     (s.economic_incentive + s.intent_trigger + s.fit + s.relationship + s.evidence) / 5.0
   ) AS INT) AS confidence,
-  mip_demo.gold.fn_in_the_money(
+  mip.gold.fn_in_the_money(
     s.rate_spread_bps, s.equity_pct, s.min_spread_bps_applied, s.min_equity_pct_applied
   ) AS in_the_money,
-  mip_demo.gold.fn_next_best_offer(
+  mip.gold.fn_next_best_offer(
     s.rate_spread_bps,
     s.equity_pct,
     s.has_permit,

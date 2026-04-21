@@ -1,7 +1,7 @@
 """Live Databricks-backed repository implementations.
 
 Each class below implements one Protocol from
-``backend.services.repositories.protocols`` against the ``mip_demo.gold.*``
+``backend.services.repositories.protocols`` against the ``mip.gold.*``
 tables materialised by the Slice-3 Lakeflow pipeline. The constructor
 takes a ``DatabricksSqlClient`` so the same pool/keep-alive is reused
 across every repository in the process.
@@ -173,7 +173,7 @@ class DatabricksPortfolioRepository:
         "  COUNT(*)                                               AS marketable_population, "
         "  SUM(CASE WHEN in_the_money THEN 1 ELSE 0 END)          AS high_intent_leads, "
         "  CAST(ROUND(AVG(opportunity_score)) AS INT)             AS avg_score "
-        "FROM mip_demo.gold.borrower_360"
+        "FROM mip.gold.borrower_360"
     )
 
     _PREVIEW_CACHE_KEY = "portfolio.preview.all"
@@ -237,7 +237,7 @@ class DatabricksSegmentRepository:
 
     _LIST_SQL = (
         f"SELECT {_SEGMENT_COLUMNS} "
-        "FROM mip_demo.gold.segment_population "
+        "FROM mip.gold.segment_population "
         "WHERE state = '_ALL' "
         "ORDER BY count DESC"
     )
@@ -276,14 +276,14 @@ class DatabricksLeadRepository:
 
     _LIST_BASE_SQL = (
         f"SELECT {_LEAD_POPULATION_COLUMNS} "
-        "FROM mip_demo.gold.lead_population "
+        "FROM mip.gold.lead_population "
         "ORDER BY opportunity_score DESC, borrower_id ASC "
         "LIMIT 500"
     )
 
     _LIST_BY_SEGMENT_SQL = (
         f"SELECT {_LEAD_POPULATION_COLUMNS} "
-        "FROM mip_demo.gold.lead_population "
+        "FROM mip.gold.lead_population "
         "WHERE array_contains(segment_codes, :segment) "
         "ORDER BY opportunity_score DESC, borrower_id ASC "
         "LIMIT 500"
@@ -306,16 +306,16 @@ class DatabricksBorrowerRepository:
 
     _GET_SQL = (
         f"SELECT {_BORROWER_360_COLUMNS}, trigger_timeline_json "
-        "FROM mip_demo.gold.borrower_360 "
+        "FROM mip.gold.borrower_360 "
         "WHERE borrower_id = :borrower_id "
         "LIMIT 1"
     )
 
     _EVIDENCE_SQL = (
         f"SELECT {_EVIDENCE_COLUMNS} "
-        "FROM mip_demo.gold.evidence_events "
+        "FROM mip.gold.evidence_events "
         "WHERE clip = ("
-        "  SELECT clip FROM mip_demo.gold.borrower_360 "
+        "  SELECT clip FROM mip.gold.borrower_360 "
         "  WHERE borrower_id = :borrower_id LIMIT 1"
         ") "
         "ORDER BY signal_rank ASC"
@@ -354,9 +354,9 @@ class DatabricksBorrowerRepository:
             min_spread_bps=int(row.get("min_spread_bps_applied") or 75),
             min_equity_pct=int(row.get("min_equity_pct_applied") or 15),
             sources=[
-                "mip_demo.gold.fn_rate_spread",
-                "mip_demo.gold.fn_in_the_money",
-                "mip_demo.gold.borrower_360",
+                "mip.gold.fn_rate_spread",
+                "mip.gold.fn_in_the_money",
+                "mip.gold.borrower_360",
             ],
         )
 
@@ -388,7 +388,7 @@ class DatabricksBorrowerRepository:
             # missing evidence on a real borrower -> []. This matches
             # the in-process mock's semantics.
             probe = self._client.execute_one(
-                "SELECT 1 AS present FROM mip_demo.gold.borrower_360 "
+                "SELECT 1 AS present FROM mip.gold.borrower_360 "
                 "WHERE borrower_id = :borrower_id LIMIT 1",
                 {"borrower_id": borrower_id},
             )
@@ -409,7 +409,7 @@ class DatabricksOfferRepository:
         "  rate_spread_bps, equity_pct, has_permit, listed_for_sale, "
         "  is_investor, is_current_customer, is_competitor_lien, "
         "  recommended_offer_code "
-        "FROM mip_demo.gold.borrower_360 "
+        "FROM mip.gold.borrower_360 "
         "WHERE borrower_id = :borrower_id "
         "LIMIT 1"
     )
@@ -548,7 +548,7 @@ def _adapt_genie_response(
 ) -> GenieMessageResponse:
     """Wrap a live ``GenieResponse`` into the wire contract the UI
     already consumes. We derive ``trusted_assets`` from the SQL query
-    when one is available (best-effort regex for ``mip_demo.*``
+    when one is available (best-effort regex for ``mip.*``
     references); empty otherwise -- the UI tolerates an empty list.
     """
     trusted_assets = _extract_asset_refs(result.sql_query)
@@ -563,7 +563,7 @@ def _adapt_genie_response(
 
 
 def _extract_asset_refs(sql: str | None) -> list[str]:
-    """Pull ``mip_demo.<schema>.<table>`` references out of a SQL
+    """Pull ``mip.<schema>.<table>`` references out of a SQL
     string. Best-effort; returns the first three unique references so
     the evidence chip row stays readable.
     """
@@ -571,7 +571,7 @@ def _extract_asset_refs(sql: str | None) -> list[str]:
         return []
     import re
 
-    pattern = re.compile(r"\bmip_demo\.[a-zA-Z_][a-zA-Z0-9_]*\.[a-zA-Z_][a-zA-Z0-9_]*\b")
+    pattern = re.compile(r"\bmip\.[a-zA-Z_][a-zA-Z0-9_]*\.[a-zA-Z_][a-zA-Z0-9_]*\b")
     seen: list[str] = []
     for match in pattern.findall(sql):
         if match not in seen:

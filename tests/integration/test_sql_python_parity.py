@@ -14,7 +14,7 @@ Four functions are checked:
 
 For each of 60+ golden cases across those four functions:
     1. Run the Python primitive in-process.
-    2. Issue a SELECT against ``mip_demo.gold.fn_*`` on the Databricks SQL
+    2. Issue a SELECT against ``mip.gold.fn_*`` on the Databricks SQL
        warehouse via the Statement Execution API (stdlib-only -- `urllib` +
        `json`, no additional wheel dependencies).
     3. Assert byte-identical output across all inputs.
@@ -214,7 +214,7 @@ def test_rate_spread_parity(warehouse: tuple[str, str, str], case: dict[str, Any
         host,
         token,
         wh,
-        f"SELECT mip_demo.gold.fn_rate_spread("
+        f"SELECT mip.gold.fn_rate_spread("
         f"{_sql_double(inputs['current_rate'])}, "
         f"{_sql_double(inputs['market_rate'])})",
     )
@@ -239,7 +239,7 @@ def test_in_the_money_parity(warehouse: tuple[str, str, str], case: dict[str, An
         host,
         token,
         wh,
-        f"SELECT mip_demo.gold.fn_in_the_money("
+        f"SELECT mip.gold.fn_in_the_money("
         f"{_sql_int(inputs['rate_spread_bps'])}, "
         f"{_sql_int(inputs['equity_pct'])}, "
         f"{_sql_int(inputs['min_spread_bps'])}, "
@@ -271,7 +271,7 @@ def test_lead_score_parity(warehouse: tuple[str, str, str], case: dict[str, Any]
         host,
         token,
         wh,
-        f"SELECT mip_demo.gold.fn_lead_score("
+        f"SELECT mip.gold.fn_lead_score("
         f"{_sql_int(inputs['economic_incentive'])}, "
         f"{_sql_int(inputs['intent_trigger'])}, "
         f"{_sql_int(inputs['fit'])}, "
@@ -316,7 +316,7 @@ def test_next_best_offer_parity(
         host,
         token,
         wh,
-        f"SELECT mip_demo.gold.fn_next_best_offer("
+        f"SELECT mip.gold.fn_next_best_offer("
         f"{_sql_int(inputs['rate_spread_bps'])}, "
         f"{_sql_int(inputs['equity_pct'])}, "
         f"{_sql_bool(inputs['has_permit'])}, "

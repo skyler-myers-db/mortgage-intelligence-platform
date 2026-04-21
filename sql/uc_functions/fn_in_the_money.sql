@@ -44,7 +44,7 @@
 --            for use in gold materializations and metric views.
 -- =============================================================================
 
-CREATE OR REPLACE FUNCTION mip_demo.gold.fn_in_the_money(
+CREATE OR REPLACE FUNCTION mip.gold.fn_in_the_money(
   rate_spread_bps INT,
   equity_pct      INT,
   min_spread_bps  INT,

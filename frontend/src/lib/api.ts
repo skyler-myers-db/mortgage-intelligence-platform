@@ -28,10 +28,10 @@ function fallbackOfferRecommendation(borrower_id: string): OfferRecommendation {
     rationale: b.why_now ?? 'Fallback rationale — backend unavailable.',
     evidence_ids: b.evidence_ids ?? [],
     sources: [
-      'mip_demo.gold.fn_next_best_offer',
-      'mip_demo.gold.fn_rate_spread',
-      'mip_demo.gold.fn_in_the_money',
-      'mip_demo.gold.fn_lead_score',
+      'mip.gold.fn_next_best_offer',
+      'mip.gold.fn_rate_spread',
+      'mip.gold.fn_in_the_money',
+      'mip.gold.fn_lead_score',
     ],
     alternatives: [],
     thresholds_applied: FALLBACK_THRESHOLDS,
@@ -167,7 +167,7 @@ export const api = {
         answer:
           'Fallback: Genie is unavailable, but the curated Module 0 metric views show In-the-Money and Home Equity candidates as the highest-value segments.',
         source: 'deterministic_fallback',
-        trusted_assets: ['mip_demo.gold.lead_population'],
+        trusted_assets: ['mip.gold.lead_population'],
       };
     }
   },

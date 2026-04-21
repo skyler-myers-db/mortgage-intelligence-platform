@@ -1,7 +1,7 @@
 -- =============================================================================
 -- gold_borrower_360.sql (transformation)
 -- -----------------------------------------------------------------------------
--- Purpose:   Populate `mip_demo.gold.borrower_360` via CTAS. One row per CLIP
+-- Purpose:   Populate `mip.gold.borrower_360` via CTAS. One row per CLIP
 --            joining silver.lien_current (SPINE) + silver.property_master +
 --            gold.property_owner_bridge + silver.market_rates_weekly
 --            (is_latest=TRUE).
@@ -50,14 +50,14 @@
 -- into the one-sentence template.
 -- =============================================================================
 
-CREATE OR REPLACE TABLE mip_demo.gold.borrower_360 AS
+CREATE OR REPLACE TABLE mip.gold.borrower_360 AS
 WITH market AS (
   -- Exactly one row: the latest MORTGAGE30US market rate. A missing row here
   -- is a hard failure -- gold cannot compute rate_spread without a par
   -- rate -- so the Lakeflow pipeline should ensure market_rates_weekly has
   -- is_latest data before this CTAS runs.
   SELECT rate_fraction AS market_rate_fraction
-  FROM mip_demo.silver.market_rates_weekly
+  FROM mip.silver.market_rates_weekly
   WHERE series_id = 'MORTGAGE30US' AND is_latest = TRUE
   LIMIT 1
 ),
@@ -88,10 +88,10 @@ base AS (
     lc.first_pos_lender_current,
     lc.second_pos_amount,
     COALESCE(pob.related_property_count, 1) AS related_property_count
-  FROM mip_demo.silver.lien_current AS lc
-  LEFT JOIN mip_demo.silver.property_master AS pm
+  FROM mip.silver.lien_current AS lc
+  LEFT JOIN mip.silver.property_master AS pm
     ON pm.clip = lc.clip
-  LEFT JOIN mip_demo.gold.property_owner_bridge AS pob
+  LEFT JOIN mip.gold.property_owner_bridge AS pob
     ON pob.owner_link_id = pm.owner_link_id
   WHERE lc.situs_state IN ('IL','CA','FL','TX','WA','CO')
     AND lc.clip IS NOT NULL
@@ -101,7 +101,7 @@ enriched AS (
     b.*,
     m.market_rate_fraction,
     -- Rate spread via frozen UDF. Both sides fractional.
-    mip_demo.gold.fn_rate_spread(b.first_pos_rate, m.market_rate_fraction) AS rate_spread_bps,
+    mip.gold.fn_rate_spread(b.first_pos_rate, m.market_rate_fraction) AS rate_spread_bps,
     -- Equity % derived preferentially from estimated_cltv (Cotality-computed
     -- CLTV is authoritative when present), with fallback to avm / lien math.
     -- Result clipped to [0, 100].
@@ -156,10 +156,10 @@ scored AS (
     35  AS heloc_equity_min_applied,
     25  AS cashout_equity_min_applied,
     50  AS retention_min_spread_applied,
-    mip_demo.gold.fn_in_the_money(
+    mip.gold.fn_in_the_money(
       e.rate_spread_bps, e.equity_pct, 75, 15
     ) AS in_the_money,
-    mip_demo.gold.fn_next_best_offer(
+    mip.gold.fn_next_best_offer(
       e.rate_spread_bps,
       e.equity_pct,
       e.has_permit,
@@ -197,7 +197,7 @@ with_segments AS (
 -- LIVE signal_types (no 'permit' / 'listing') are counted.
 evidence_counts AS (
   SELECT clip, COUNT(*) AS evidence_event_count
-  FROM mip_demo.gold.evidence_events
+  FROM mip.gold.evidence_events
   WHERE signal_type NOT IN ('permit', 'listing')
   GROUP BY clip
 ),
@@ -223,7 +223,7 @@ timeline AS (
         `timestamp`
       ) AS ev,
       ROW_NUMBER() OVER (PARTITION BY clip ORDER BY signal_rank, evidence_id) AS rn
-    FROM mip_demo.gold.evidence_events
+    FROM mip.gold.evidence_events
     WHERE signal_type NOT IN ('permit', 'listing')
   ) ranked
   WHERE rn <= 3
@@ -282,7 +282,7 @@ SELECT
   w.equity_pct,
   w.rate_spread_bps,
   w.market_rate_fraction,
-  mip_demo.gold.fn_lead_score(
+  mip.gold.fn_lead_score(
     ss.economic_incentive, ss.intent_trigger, ss.fit, ss.relationship, ss.evidence
   )                                                                                  AS opportunity_score,
   CAST(ROUND((ss.economic_incentive + ss.intent_trigger + ss.fit

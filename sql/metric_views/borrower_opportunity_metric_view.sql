@@ -2,7 +2,7 @@
 -- borrower_opportunity_metric_view.sql
 -- -----------------------------------------------------------------------------
 -- Purpose:   Genie-reachable and dashboard-reachable semantic view of
---            `mip_demo.gold.borrower_360`. Exposes the borrower opportunity
+--            `mip.gold.borrower_360`. Exposes the borrower opportunity
 --            surface with typed dimensions and measures so Genie can answer
 --            questions like "how many ITM borrowers in Texas" without
 --            inventing SQL against the raw gold table.
@@ -40,7 +40,7 @@
 --     COUNT DISTINCT on clip.
 -- =============================================================================
 
-CREATE OR REPLACE VIEW mip_demo.semantics.borrower_opportunity_metric_view AS
+CREATE OR REPLACE VIEW mip.semantics.borrower_opportunity_metric_view AS
 SELECT
   b.clip,
   b.state,
@@ -53,8 +53,8 @@ SELECT
   b.in_the_money,
   b.current_lien_balance,
   b.opportunity_score
-FROM mip_demo.gold.borrower_360 AS b
+FROM mip.gold.borrower_360 AS b
 LATERAL VIEW EXPLODE(b.segment_codes) seg AS segment;
 
-COMMENT ON VIEW mip_demo.semantics.borrower_opportunity_metric_view IS
+COMMENT ON VIEW mip.semantics.borrower_opportunity_metric_view IS
   'Genie + dashboard metric view over gold.borrower_360. Dimensions: state, segment, loan_purpose, is_investor, is_current_customer. Measures: avg_rate_spread_bps, avg_equity_pct, count_itm, sum_loan_amount, count_total, avg_opportunity_score. See docs/data-contract-module0.md §3.2.';

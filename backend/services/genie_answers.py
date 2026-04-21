@@ -4,8 +4,8 @@ Slice 7 flipped the primary Genie path onto the real Databricks Genie
 space (``backend.services.genie_client`` + ``DatabricksGenieRepository``).
 This module NO LONGER serves the happy path; it is the safe-corpus
 fallback that only activates when the ``genie`` circuit breaker is
-OPEN. That keeps the DAIS demo trio of canonical questions landing
-deterministically even if the space is cold-starting or rate-limited.
+OPEN. That keeps the canonical-question trio landing deterministically
+even if the space is cold-starting or rate-limited.
 
 What lives here:
 
@@ -19,7 +19,7 @@ What lives here:
   the hand-tuned entries take precedence on collision because they
   carry richer ``table_rows`` / ``follow_up_questions`` metadata.
 
-All responses cite at least one Unity Catalog asset under ``mip_demo``.
+All responses cite at least one Unity Catalog asset under ``mip``.
 The matcher is intentionally simple and pure (no deps): per-answer
 keyword and phrase lists with weighted scoring, optional regex patterns
 for high-signal phrases, and a threshold that falls through to the warm
@@ -44,7 +44,7 @@ from pydantic import BaseModel
 _DEMO_TOP_BORROWERS: list[dict[str, Any]] = [
     # Slice 9: demo trio re-anchored to Chicago/IL so the safe-corpus
     # fallback agrees with tests/fixtures/mock_population.py (the
-    # golden-fixture population) and docs/module0-demo-talk-track.md.
+    # golden-fixture population) and docs/module0-talk-track.md.
     {"borrower_id": "B-48291", "name": "James & Maria Rodriguez", "geo": "Chicago, IL",         "score": 94, "offer": "Refinance + HELOC"},
     {"borrower_id": "B-48294", "name": "David Park",              "geo": "Chicago, IL",         "score": 87, "offer": "Refinance + HELOC"},
     {"borrower_id": "B-51872", "name": "Thomas Chen",             "geo": "Austin, TX",          "score": 85, "offer": "Refinance + HELOC"},
@@ -154,9 +154,9 @@ def _answers() -> dict[str, GenieMessageResponse]:
             ),
             source="lead_generation_metric_view",
             trusted_assets=[
-                "mip_demo.gold.lead_population",
-                "mip_demo.gold.lead_segment_membership",
-                "mip_demo.gold.lead_scores",
+                "mip.gold.lead_population",
+                "mip.gold.lead_segment_membership",
+                "mip.gold.lead_scores",
             ],
             metric_value="12,840",
             follow_up_questions=[
@@ -173,8 +173,8 @@ def _answers() -> dict[str, GenieMessageResponse]:
             ),
             source="borrower_opportunity_metric_view",
             trusted_assets=[
-                "mip_demo.gold.borrower_360",
-                "mip_demo.gold.evidence_events",
+                "mip.gold.borrower_360",
+                "mip.gold.evidence_events",
             ],
             metric_value="4,108",
             follow_up_questions=[
@@ -191,8 +191,8 @@ def _answers() -> dict[str, GenieMessageResponse]:
             ),
             source="segment_performance_metric_view",
             trusted_assets=[
-                "mip_demo.gold.lead_segment_membership",
-                "mip_demo.gold.recommended_offers",
+                "mip.gold.lead_segment_membership",
+                "mip.gold.recommended_offers",
             ],
             metric_value="3,471",
             follow_up_questions=[
@@ -212,8 +212,8 @@ def _answers() -> dict[str, GenieMessageResponse]:
             ),
             source="lead_generation_metric_view",
             trusted_assets=[
-                "mip_demo.gold.lead_population",
-                "mip_demo.semantics.lead_generation_metric_view",
+                "mip.gold.lead_population",
+                "mip.semantics.lead_generation_metric_view",
             ],
             table_rows=itm_zip_rows,
             follow_up_questions=[
@@ -231,8 +231,8 @@ def _answers() -> dict[str, GenieMessageResponse]:
             ),
             source="lead_generation_metric_view",
             trusted_assets=[
-                "mip_demo.gold.lead_population",
-                "mip_demo.gold.lead_scores",
+                "mip.gold.lead_population",
+                "mip.gold.lead_scores",
             ],
             metric_value="1,620",
             follow_up_questions=[
@@ -252,9 +252,9 @@ def _answers() -> dict[str, GenieMessageResponse]:
             ),
             source="borrower_opportunity_metric_view",
             trusted_assets=[
-                "mip_demo.gold.borrower_360",
-                "mip_demo.gold.evidence_events",
-                "mip_demo.semantics.borrower_opportunity_metric_view",
+                "mip.gold.borrower_360",
+                "mip.gold.evidence_events",
+                "mip.semantics.borrower_opportunity_metric_view",
             ],
             table_rows=[
                 {"state": "CA", "permit_equity_borrowers": 1185, "avg_equity": "$312K"},
@@ -282,8 +282,8 @@ def _answers() -> dict[str, GenieMessageResponse]:
             ),
             source="segment_performance_metric_view",
             trusted_assets=[
-                "mip_demo.gold.lead_segment_membership",
-                "mip_demo.gold.recommended_offers",
+                "mip.gold.lead_segment_membership",
+                "mip.gold.recommended_offers",
             ],
             metric_value="2,614",
             table_rows=[
@@ -307,9 +307,9 @@ def _answers() -> dict[str, GenieMessageResponse]:
             ),
             source="recommended_offers",
             trusted_assets=[
-                "mip_demo.gold.recommended_offers",
-                "mip_demo.gold.lead_scores",
-                "mip_demo.gold.fn_in_the_money",
+                "mip.gold.recommended_offers",
+                "mip.gold.lead_scores",
+                "mip.gold.fn_in_the_money",
             ],
             metric_value="1,842",
             follow_up_questions=[
@@ -329,8 +329,8 @@ def _answers() -> dict[str, GenieMessageResponse]:
             ),
             source="segment_performance_metric_view",
             trusted_assets=[
-                "mip_demo.semantics.segment_performance_metric_view",
-                "mip_demo.gold.recommended_offers",
+                "mip.semantics.segment_performance_metric_view",
+                "mip.gold.recommended_offers",
             ],
             table_rows=[
                 _segment_row("retention") | {"est_conv": "14.8%"},
@@ -354,8 +354,8 @@ def _answers() -> dict[str, GenieMessageResponse]:
             ),
             source="segment_performance_metric_view",
             trusted_assets=[
-                "mip_demo.semantics.segment_performance_metric_view",
-                "mip_demo.gold.lead_segment_membership",
+                "mip.semantics.segment_performance_metric_view",
+                "mip.gold.lead_segment_membership",
             ],
             table_rows=[
                 _segment_row("listed"),
@@ -381,9 +381,9 @@ def _answers() -> dict[str, GenieMessageResponse]:
             ),
             source="lead_scores",
             trusted_assets=[
-                "mip_demo.gold.lead_scores",
-                "mip_demo.gold.borrower_360",
-                "mip_demo.gold.evidence_events",
+                "mip.gold.lead_scores",
+                "mip.gold.borrower_360",
+                "mip.gold.evidence_events",
             ],
             table_rows=top10,
             follow_up_questions=[
@@ -405,9 +405,9 @@ def _answers() -> dict[str, GenieMessageResponse]:
             ),
             source="borrower_360",
             trusted_assets=[
-                "mip_demo.gold.borrower_360",
-                "mip_demo.gold.lead_scores",
-                "mip_demo.gold.fn_rate_spread",
+                "mip.gold.borrower_360",
+                "mip.gold.lead_scores",
+                "mip.gold.fn_rate_spread",
             ],
             table_rows=austin,
             follow_up_questions=[
@@ -427,8 +427,8 @@ def _answers() -> dict[str, GenieMessageResponse]:
             ),
             source="lead_generation_metric_view",
             trusted_assets=[
-                "mip_demo.semantics.lead_generation_metric_view",
-                "mip_demo.gold.lead_population",
+                "mip.semantics.lead_generation_metric_view",
+                "mip.gold.lead_population",
             ],
             metric_value="$2.18",
             follow_up_questions=[
@@ -446,8 +446,8 @@ def _answers() -> dict[str, GenieMessageResponse]:
             ),
             source="segment_performance_metric_view",
             trusted_assets=[
-                "mip_demo.gold.evidence_events",
-                "mip_demo.semantics.segment_performance_metric_view",
+                "mip.gold.evidence_events",
+                "mip.semantics.segment_performance_metric_view",
             ],
             metric_value="+14%",
             follow_up_questions=[
@@ -467,8 +467,8 @@ def _answers() -> dict[str, GenieMessageResponse]:
             ),
             source="borrower_opportunity_metric_view",
             trusted_assets=[
-                "mip_demo.gold.borrower_360",
-                "mip_demo.semantics.borrower_opportunity_metric_view",
+                "mip.gold.borrower_360",
+                "mip.semantics.borrower_opportunity_metric_view",
             ],
             metric_value="~1,640",
             follow_up_questions=[
@@ -658,7 +658,7 @@ def _warm_fallback(question: str) -> GenieMessageResponse:
             "the right, or ask about a specific ZIP, state, or offer branch."
         ),
         source="deterministic_fallback",
-        trusted_assets=["mip_demo.gold.lead_population"],
+        trusted_assets=["mip.gold.lead_population"],
         follow_up_questions=[
             "Which ZIPs have the most in-the-money refi candidates?",
             "Show me the top 10 highest-score borrowers.",

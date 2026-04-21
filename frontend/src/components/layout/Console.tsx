@@ -89,7 +89,7 @@ export function Console() {
           </div>
         </div>
         <div className="tweak-row">
-          <label>Demo lender</label>
+          <label>Lender</label>
           <input type="text" value={lender} onChange={(e) => setLender(e.target.value)} />
         </div>
         <div className="tweak-row">

@@ -1,7 +1,7 @@
 -- =============================================================================
 -- gold_evidence_events.sql
 -- -----------------------------------------------------------------------------
--- Purpose:   DDL for `mip_demo.gold.evidence_events` -- one row per
+-- Purpose:   DDL for `mip.gold.evidence_events` -- one row per
 --            (CLIP, signal_type) carrying the source Cotality signal that
 --            backed a given lead score contribution. THIS is what the
 --            EvidenceDrawer renders in the UI, and what gold.borrower_360
@@ -47,9 +47,9 @@
 -- 0.85-0.92 keeps the UI stable and the ordering deterministic.
 --
 -- `source_table` MUST be a REAL UC path (EvidenceDrawer shows it). Allowed
--- values (only): 'mip_demo.silver.lien_current', 'mip_demo.silver.property_
--- master', 'mip_demo.silver.mortgage_events', 'mip_demo.silver.owner_
--- transfer_events', 'mip_demo.silver.market_rates_weekly', 'mip_demo.gold.
+-- values (only): 'mip.silver.lien_current', 'mip.silver.property_
+-- master', 'mip.silver.mortgage_events', 'mip.silver.owner_
+-- transfer_events', 'mip.silver.market_rates_weekly', 'mip.gold.
 -- property_owner_bridge'.
 --
 -- `timestamp` is a STRING (ISO-8601) to match the Pydantic EvidenceEvent
@@ -60,11 +60,11 @@
 --            transformation file.
 -- =============================================================================
 
-CREATE TABLE IF NOT EXISTS mip_demo.gold.evidence_events (
+CREATE TABLE IF NOT EXISTS mip.gold.evidence_events (
   clip           STRING NOT NULL COMMENT 'Cotality CLIP. Not in Pydantic EvidenceEvent (router strips); used for join / filter.',
   evidence_id    STRING NOT NULL COMMENT 'Deterministic: "ev-" || substr(sha2(clip || signal_type || timestamp, 256), 1, 12). Stable across refreshes so Borrower360.evidence_ids stays consistent.',
   source_product STRING NOT NULL COMMENT 'Human label: Voluntary Lien / AVM / Owner Link / Mortgage Domain / Owner Transfer / Market Rates.',
-  source_table   STRING NOT NULL COMMENT 'Real UC path. Shown verbatim in EvidenceDrawer -- must be a resolvable mip_demo.silver.* or mip_demo.gold.* path.',
+  source_table   STRING NOT NULL COMMENT 'Real UC path. Shown verbatim in EvidenceDrawer -- must be a resolvable mip.silver.* or mip.gold.* path.',
   signal_type    STRING NOT NULL COMMENT 'Controlled vocab: rate_spread / equity / equity_delta / competitor_lien / multi_property / absentee_mailing / corporate_owner / foreclosure_stage / recent_refi / recent_payoff / recent_sale / market_trend. BLOCKED vocab (permit, listing) NEVER emitted.',
   signal_value   STRING NOT NULL COMMENT 'Human-readable value: "+88 bps", "$285K", "3 properties", "competitor refi".',
   display_text   STRING NOT NULL COMMENT 'One-sentence deterministic template per signal_type. No PII.',

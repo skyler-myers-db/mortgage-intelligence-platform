@@ -140,9 +140,9 @@ def test_seed_csv_rate_fraction_matches_pct() -> None:
 def test_split_sql_statements_strips_comments_and_splits() -> None:
     sql = (
         "-- header comment\n"
-        "CREATE CATALOG IF NOT EXISTS mip_demo;\n"
+        "CREATE CATALOG IF NOT EXISTS mip;\n"
         "-- another comment\n"
-        "CREATE SCHEMA IF NOT EXISTS mip_demo.silver;\n"
+        "CREATE SCHEMA IF NOT EXISTS mip.silver;\n"
     )
     stmts = fred_ingest._split_sql_statements(sql)
     assert len(stmts) == 2

@@ -57,8 +57,8 @@ class Settings(BaseSettings):
     )
 
     app_env: str = "local"
-    mip_demo_lender: str = "Summit Mortgage"
-    mip_default_catalog: str = "mip_demo"
+    mip_lender_name: str = "Summit Mortgage"
+    mip_default_catalog: str = "mip"
     mip_default_schema: str = "gold"
     mip_lakebase_schema: str = "mip_app"
 

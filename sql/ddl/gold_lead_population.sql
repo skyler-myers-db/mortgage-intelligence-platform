@@ -1,7 +1,7 @@
 -- =============================================================================
 -- gold_lead_population.sql
 -- -----------------------------------------------------------------------------
--- Purpose:   DDL for `mip_demo.gold.lead_population` -- the ranked top-N cut
+-- Purpose:   DDL for `mip.gold.lead_population` -- the ranked top-N cut
 --            of gold.borrower_360 that actually populates the Lead Queue UI.
 --            Borrowers with opportunity_score < 50 stay in borrower_360 but
 --            do not surface here. Carries two ranking columns so the UI can
@@ -40,7 +40,7 @@
 --            file.
 -- =============================================================================
 
-CREATE TABLE IF NOT EXISTS mip_demo.gold.lead_population (
+CREATE TABLE IF NOT EXISTS mip.gold.lead_population (
   clip                      STRING    NOT NULL COMMENT 'Cotality CLIP. PK.',
   borrower_id               STRING    NOT NULL COMMENT 'From gold.borrower_360.borrower_id.',
   display_name              STRING    NOT NULL COMMENT 'Synthesized label. No PII.',

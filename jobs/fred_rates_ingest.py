@@ -1,4 +1,4 @@
-"""FRED MORTGAGE30US ingest for mip_demo.silver.market_rates_weekly.
+"""FRED MORTGAGE30US ingest for mip.silver.market_rates_weekly.
 
 This file is executed as a Databricks Jobs Python task in three modes, each
 a separate task in the `mip_fred_rates_ingest` bundle job:
@@ -9,7 +9,7 @@ a separate task in the `mip_fred_rates_ingest` bundle job:
                     self-sufficient when run locally.
 
     --mode=seed     Loads data/seeds/fred_mortgage30us_seed.csv INTO
-                    mip_demo.silver.market_rates_weekly IF the table is
+                    mip.silver.market_rates_weekly IF the table is
                     empty. This is the "first boot works offline" guarantee
                     -- the committed seed ships with the repo so
                     `databricks bundle deploy -t dev` lands a populated
@@ -38,7 +38,7 @@ Contract references:
 Runtime assumptions:
     - Databricks Runtime with PySpark + `spark` session in scope.
     - For local `--dry-run` execution, only stdlib + urllib.request is used.
-    - `--table` defaults to `mip_demo.silver.market_rates_weekly`; override
+    - `--table` defaults to `mip.silver.market_rates_weekly`; override
       in a non-default catalog by passing `--table <catalog>.<schema>.<name>`.
     - `--seed-path` defaults to the repo-relative
       `data/seeds/fred_mortgage30us_seed.csv`.
@@ -63,7 +63,7 @@ FRED_CSV_URL = (
     "https://fred.stlouisfed.org/graph/fredgraph.csv"
     "?id=MORTGAGE30US&cosd=2021-01-01"
 )
-DEFAULT_TABLE = "mip_demo.silver.market_rates_weekly"
+DEFAULT_TABLE = "mip.silver.market_rates_weekly"
 DEFAULT_SEED_PATH = "data/seeds/fred_mortgage30us_seed.csv"
 DEFAULT_SERIES = "MORTGAGE30US"
 STALENESS_DAYS = 21  # FRED publishes weekly; two missed weeks -> fail loud.
@@ -182,7 +182,7 @@ def parse_seed_csv(path: Path) -> list[RateRow]:
 
 def fetch_fred_csv(url: str = FRED_CSV_URL, timeout: int = 30) -> str:
     """Fetch the FRED graph CSV. Raises urllib.error.URLError on network failure."""
-    req = urllib.request.Request(url, headers={"User-Agent": "mip-demo-ingest/0.1"})
+    req = urllib.request.Request(url, headers={"User-Agent": "mip-ingest/0.1"})
     with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
         return resp.read().decode("utf-8")
 
@@ -463,7 +463,7 @@ def run_fred(table: str, batch_id: str, dry_run: bool, staleness_days: int) -> i
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="fred_rates_ingest",
-        description="Ingest FRED MORTGAGE30US into mip_demo.silver.market_rates_weekly.",
+        description="Ingest FRED MORTGAGE30US into mip.silver.market_rates_weekly.",
     )
     p.add_argument(
         "--mode",

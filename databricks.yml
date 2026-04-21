@@ -33,7 +33,7 @@ resources:
   # ``resources.database_instances`` + ``resources.database_catalogs``
   # confirmed via ``databricks bundle schema`` on CLI 0.297.x. The
   # migration job below (``mip_lakebase_migrate``) applies ``lakebase/
-  # schema.sql`` + ``lakebase/seed_demo_campaigns.sql`` against the
+  # schema.sql`` + ``lakebase/seed_campaigns.sql`` against the
   # instance so the audit store has a live target on first deploy.
   database_instances:
     mip_app_state:
@@ -55,9 +55,9 @@ resources:
       create_database_if_not_exists: true
 
   apps:
-    mip_demo_app:
-      name: mip-demo-app
-      description: Mortgage Intelligence Platform Module 0 DAIS demo
+    mip_app:
+      name: mip-app
+      description: Mortgage Intelligence Platform — Module 0 (Top-of-Funnel Lead Generation & Borrower Segmentation).
       source_code_path: .
 
   sql_warehouses:
@@ -75,8 +75,8 @@ resources:
     # the pipeline. Daily on-demand in dev (no schedule); production can
     # enable a schedule_quartz_cron_expression once governance signs off on
     # the full silver→gold chain.
-    mip_refresh_demo_data:
-      name: mip_refresh_demo_data
+    mip_refresh_silver:
+      name: mip_refresh_silver
       tags:
         solution: mortgage-intelligence-platform
         module: module0
@@ -85,13 +85,13 @@ resources:
       max_concurrent_runs: 1
       tasks:
         - task_key: init_catalog_schemas
-          description: "Idempotent CREATE CATALOG mip_demo + schemas raw/silver/gold/semantics/app/audit."
+          description: "Idempotent CREATE CATALOG mip + schemas raw/silver/gold/semantics/app/audit."
           sql_task:
             warehouse_id: ${var.sql_warehouse_id}
             file:
               path: sql/ddl/001_catalogs_schemas.sql
         - task_key: refresh_silver_pipeline
-          description: "Run the Lakeflow feature pipeline to materialize mip_demo.silver.* from the Cotality share."
+          description: "Run the Lakeflow feature pipeline to materialize mip.silver.* from the Cotality share."
           depends_on:
             - task_key: init_catalog_schemas
           pipeline_task:
@@ -107,7 +107,7 @@ resources:
     # Slice 5 real-data migration: apply Lakebase DDL + seed demo
     # campaigns. Python task invokes jobs/lakebase_migrate.py which
     # opens a psycopg3 connection to the instance created above and
-    # runs lakebase/schema.sql then lakebase/seed_demo_campaigns.sql.
+    # runs lakebase/schema.sql then lakebase/seed_campaigns.sql.
     # Both files are idempotent (CREATE ... IF NOT EXISTS + ON
     # CONFLICT DO NOTHING) so re-running the job is a no-op.
     mip_lakebase_migrate:
@@ -126,7 +126,7 @@ resources:
               - psycopg[binary]==3.2.10
       tasks:
         - task_key: apply_schema_and_seed
-          description: "Apply lakebase/schema.sql + lakebase/seed_demo_campaigns.sql against mip_app_state."
+          description: "Apply lakebase/schema.sql + lakebase/seed_campaigns.sql against mip_app_state."
           environment_key: py_default
           spark_python_task:
             python_file: jobs/lakebase_migrate.py
@@ -198,7 +198,7 @@ resources:
 
   pipelines:
     # Slice 2 real-data migration: silver lift from cotality_mortgage_data.
-    # corelogic into mip_demo.silver.* (5 tables). State-filtered to IL/CA/
+    # corelogic into mip.silver.* (5 tables). State-filtered to IL/CA/
     # FL/TX/WA/CO at source. See pipelines/lakeflow/mip_feature_pipeline.py
     # and sql/ddl/silver_*.sql for column contracts; docs/data-contract-
     # module0.md §2 is authoritative.
@@ -250,18 +250,18 @@ resources:
 # bundle via tools/databricks/provision_genie_space.py (see AGENTS.md).
 # Lakebase instances are declared above under resources.database_instances
 # as of Slice 5; a matching database_catalog block registers the app-state
-# database in UC so SQL warehouses can query it alongside mip_demo.gold.
+# database in UC so SQL warehouses can query it alongside mip.gold.
 
 variables:
   uc_catalog:
-    description: Unity Catalog catalog for MIP demo tables
-    default: mip_demo
+    description: Unity Catalog catalog for Mortgage Intelligence Platform tables
+    default: mip
   uc_schemas:
     description: Comma-separated schemas materialized under uc_catalog
     default: raw,silver,gold,semantics,app,audit
   app_name:
     description: Databricks App display name
-    default: mip-demo-app
+    default: mip-app
   # sql_warehouse_id and genie_space_id are overridden per-invocation via the
   # Databricks CLI BUNDLE_VAR_* mechanism. The Makefile targets
   # `bundle-validate-env` and `bundle-deploy-dev` source .env.local and export

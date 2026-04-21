@@ -1,7 +1,7 @@
 -- =============================================================================
 -- silver_owner_transfer_events.sql
 -- -----------------------------------------------------------------------------
--- Purpose:   DDL for `mip_demo.silver.owner_transfer_events`, the historical
+-- Purpose:   DDL for `mip.silver.owner_transfer_events`, the historical
 --            deed/sale event grain. One row per sale/transfer per CLIP.
 --            Feeds the gold evidence timeline (recent sale, REO, short-sale)
 --            and the investor-segment signals (cash purchase, investor
@@ -59,7 +59,7 @@
 --            `transfer_txn_id`.
 -- =============================================================================
 
-CREATE TABLE IF NOT EXISTS mip_demo.silver.owner_transfer_events (
+CREATE TABLE IF NOT EXISTS mip.silver.owner_transfer_events (
   transfer_txn_id        STRING    NOT NULL COMMENT 'Composite transfer transaction ID from share. PK.',
   clip                   STRING    NOT NULL COMMENT 'Cotality mastered property ID. FK to silver.lien_current / property_master.',
   situs_state            STRING    NOT NULL COMMENT '2-char state code (renamed from deed_situs_state_static). Filter: IN (IL, CA, FL, TX, WA, CO).',

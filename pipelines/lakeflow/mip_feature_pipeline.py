@@ -17,7 +17,7 @@ is `owner_name_hash` on property_master, computed inside this pipeline from
 returns.
 
 Runtime contract:
-- Target `target = "silver"`, `catalog = "mip_demo"` are set on the pipeline
+- Target `target = "silver"`, `catalog = "mip"` are set on the pipeline
   resource in databricks.yml.
 - Source `cotality_mortgage_data.corelogic.*` is attached to the DEFAULT
   workspace; the pipeline principal needs SELECT on those share tables.
@@ -65,11 +65,11 @@ except ImportError:  # pragma: no cover -- local parse-only
 SIX_STATE_FOOTPRINT: tuple[str, ...] = ("IL", "CA", "FL", "TX", "WA", "CO")
 
 # PII salt. In the deployed workspace this is read from the Databricks secret
-# scope `mip-demo`, key `pii-salt-v1` (per governance-real-data-review §1 and
+# scope `mip`, key `pii-salt-v1` (per governance-real-data-review §1 and
 # data-contract §7). The literal fallback keeps the pipeline runnable on a
 # fresh workspace before the secret is provisioned; the fallback value is
 # also documented in the data-contract so rotations stay auditable.
-_PII_SALT_SCOPE = "mip-demo"
+_PII_SALT_SCOPE = "mip"
 _PII_SALT_KEY = "pii-salt-v1"
 _PII_SALT_FALLBACK = "mip_pii_salt_v1"
 

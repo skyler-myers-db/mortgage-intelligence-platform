@@ -1,11 +1,11 @@
 -- =============================================================================
 -- silver_property_master.sql
 -- -----------------------------------------------------------------------------
--- Purpose:   DDL for `mip_demo.silver.property_master`, the CLIP-grain property
+-- Purpose:   DDL for `mip.silver.property_master`, the CLIP-grain property
 --            snapshot table for Module 0. One row per CLIP, 1:1 with the
 --            share's `entrada_eval_property_domain_v3`. Carries property
 --            characteristics, owner IDs, geography, and derived flags that
---            the gold layer (`mip_demo.gold.borrower_360`,
+--            the gold layer (`mip.gold.borrower_360`,
 --            `gold.property_owner_bridge`) joins against.
 --
 -- Data contract reference: docs/data-contract-module0.md §2.2.
@@ -79,7 +79,7 @@
 --            declared PK (`clip`). No DROP+CREATE anywhere.
 -- =============================================================================
 
-CREATE TABLE IF NOT EXISTS mip_demo.silver.property_master (
+CREATE TABLE IF NOT EXISTS mip.silver.property_master (
   clip                    STRING    NOT NULL COMMENT 'Cotality mastered property ID. PK, 1:1 with lien_current.',
   fips_county_code        STRING             COMMENT '5-char FIPS county code for geo rollups.',
   situs_state             STRING    NOT NULL COMMENT '2-char state code. Filter guarantees IN (IL, CA, FL, TX, WA, CO).',

@@ -1,7 +1,7 @@
 -- =============================================================================
 -- gold_segment_population.sql (transformation)
 -- -----------------------------------------------------------------------------
--- Purpose:   Populate `mip_demo.gold.segment_population` via CTAS. One row
+-- Purpose:   Populate `mip.gold.segment_population` via CTAS. One row
 --            per (segment_code, state) + one row per (segment_code, '_ALL')
 --            national rollup. Also APPENDS today's snapshot to
 --            gold.segment_population_prior for the next refresh's delta.
@@ -31,14 +31,14 @@
 -- 1) Append today's snapshot to the prior-period table, idempotent on
 --    (segment_code, state, snapshot_date). Runs BEFORE the main CTAS so the
 --    main CTAS's delta calculation reads yesterday's row, not today's.
-MERGE INTO mip_demo.gold.segment_population_prior AS t
+MERGE INTO mip.gold.segment_population_prior AS t
 USING (
   WITH exploded AS (
     SELECT
       b.state,
       sc AS segment_code,
       b.opportunity_score
-    FROM mip_demo.gold.borrower_360 AS b
+    FROM mip.gold.borrower_360 AS b
     LATERAL VIEW EXPLODE(b.segment_codes) s AS sc
   ),
   per_state AS (
@@ -78,13 +78,13 @@ WHEN NOT MATCHED THEN INSERT (
 );
 
 -- 2) Rebuild segment_population with the current-day counts + derived delta.
-CREATE OR REPLACE TABLE mip_demo.gold.segment_population AS
+CREATE OR REPLACE TABLE mip.gold.segment_population AS
 WITH exploded AS (
   SELECT
     b.state,
     sc AS segment_code,
     b.opportunity_score
-  FROM mip_demo.gold.borrower_360 AS b
+  FROM mip.gold.borrower_360 AS b
   LATERAL VIEW EXPLODE(b.segment_codes) s AS sc
 ),
 per_state AS (
@@ -122,7 +122,7 @@ prior AS (
       segment_code, state, count,
       ROW_NUMBER() OVER (PARTITION BY segment_code, state
                          ORDER BY snapshot_date DESC)          AS rn
-    FROM mip_demo.gold.segment_population_prior
+    FROM mip.gold.segment_population_prior
     WHERE snapshot_date < CURRENT_DATE()
   ) q
   WHERE rn = 1

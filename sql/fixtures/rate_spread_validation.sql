@@ -2,7 +2,7 @@
 -- rate_spread_validation.sql
 -- -----------------------------------------------------------------------------
 -- Purpose:  Cross-platform parity check. Asserts that
---           mip_demo.gold.fn_rate_spread(...) produces the same integers as
+--           mip.gold.fn_rate_spread(...) produces the same integers as
 --           tests/fixtures/rate_spread_golden.json (which is also the
 --           contract for backend/services/scoring.py in the next slice).
 --
@@ -35,10 +35,10 @@ WITH golden (id, current_rate, market_rate, expected_bps) AS (
 SELECT
   id,
   expected_bps,
-  mip_demo.gold.fn_rate_spread(current_rate, market_rate) AS actual_bps,
-  mip_demo.gold.fn_rate_spread(current_rate, market_rate) - expected_bps AS diff,
+  mip.gold.fn_rate_spread(current_rate, market_rate) AS actual_bps,
+  mip.gold.fn_rate_spread(current_rate, market_rate) - expected_bps AS diff,
   CASE
-    WHEN mip_demo.gold.fn_rate_spread(current_rate, market_rate) = expected_bps
+    WHEN mip.gold.fn_rate_spread(current_rate, market_rate) = expected_bps
       THEN ''
     ELSE 'MISMATCH'
   END AS mismatch

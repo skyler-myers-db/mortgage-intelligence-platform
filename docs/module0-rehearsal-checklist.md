@@ -18,7 +18,7 @@ databricks warehouses start $DATABRICKS_WAREHOUSE_ID
 
 Expect `RUNNING` within ~30 seconds. If it's already running, the command is
 a no-op. First query after warmup is fastest if you run a trivial `SELECT 1`
-against `mip_demo.gold.borrower_360` immediately after.
+against `mip.gold.borrower_360` immediately after.
 
 ## 2. Probe app health — expect full green
 

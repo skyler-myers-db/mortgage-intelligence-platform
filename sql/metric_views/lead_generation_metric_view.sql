@@ -2,7 +2,7 @@
 -- lead_generation_metric_view.sql
 -- -----------------------------------------------------------------------------
 -- Purpose:   Genie-reachable and dashboard-reachable semantic view of
---            `mip_demo.gold.lead_population`. Dimensions the ranked lead
+--            `mip.gold.lead_population`. Dimensions the ranked lead
 --            queue by segment + state + a simple rank_bucket, so questions
 --            like "top 100 leads in California in the ITM segment" answer
 --            cleanly.
@@ -25,7 +25,7 @@
 --   sum_marketable_population  — COUNT(*) (size of the ranked population).
 -- =============================================================================
 
-CREATE OR REPLACE VIEW mip_demo.semantics.lead_generation_metric_view AS
+CREATE OR REPLACE VIEW mip.semantics.lead_generation_metric_view AS
 SELECT
   lp.clip,
   lp.state,
@@ -43,8 +43,8 @@ SELECT
   lp.rate_spread_bps,
   lp.population_version,
   lp.refreshed_at
-FROM mip_demo.gold.lead_population AS lp
+FROM mip.gold.lead_population AS lp
 LATERAL VIEW EXPLODE(lp.segment_codes) seg AS segment;
 
-COMMENT ON VIEW mip_demo.semantics.lead_generation_metric_view IS
+COMMENT ON VIEW mip.semantics.lead_generation_metric_view IS
   'Genie + dashboard metric view over gold.lead_population. Dimensions: segment, state, rank_bucket. Measures: count_top10, count_top100, sum_marketable_population. See docs/data-contract-module0.md §3.5.';

@@ -237,7 +237,7 @@ def test_redact_evidence_row_strips_forbidden_keys() -> None:
     row = {
         "evidence_id": "ev-abc",
         "source_product": "Voluntary Lien",
-        "source_table": "mip_demo.silver.lien_current",
+        "source_table": "mip.silver.lien_current",
         "signal_type": "rate_spread",
         "signal_value": "+88 bps",
         "display_text": "spread",
@@ -255,7 +255,7 @@ def test_redact_evidence_row_generalizes_lender_string_for_competitor_lien() -> 
     row = {
         "evidence_id": "ev-abc",
         "source_product": "Voluntary Lien",
-        "source_table": "mip_demo.silver.lien_current",
+        "source_table": "mip.silver.lien_current",
         "signal_type": "competitor_lien",
         "signal_value": "WELLS FARGO BK NA",  # raw lender string
         "display_text": "competitor",
@@ -270,7 +270,7 @@ def test_redact_evidence_row_passthrough_for_non_lender_signals() -> None:
     row = {
         "evidence_id": "ev-abc",
         "source_product": "AVM",
-        "source_table": "mip_demo.silver.lien_current",
+        "source_table": "mip.silver.lien_current",
         "signal_type": "equity",
         "signal_value": "$285K",
         "display_text": "equity",

@@ -35,21 +35,21 @@ Slices are ordered so each is (a) PR-worthy on its own, (b) reversible in one re
 ### Slice 1 — Ingest FRED MORTGAGE30US into silver
 - **Intent:** Stand up the only required public dataset so `fn_rate_spread` has a market-rate denominator for real borrowers.
 - **Files touched (exact):**
-  - `sql/ddl/001_catalogs_schemas.sql` (replace placeholder — create `mip_demo` + schemas `raw,silver,gold,semantics,app,audit`)
-  - `sql/transformations/silver_market_rates_weekly.sql` (new — target `mip_demo.silver.market_rates_weekly`)
+  - `sql/ddl/001_catalogs_schemas.sql` (replace placeholder — create `mip` + schemas `raw,silver,gold,semantics,app,audit`)
+  - `sql/transformations/silver_market_rates_weekly.sql` (new — target `mip.silver.market_rates_weekly`)
   - `pipelines/lakeflow/mip_market_rates_pipeline.py` (new — small Python task: fetch FRED CSV, upsert to silver table; idempotent on `observation_date`)
   - `resources/jobs.yml` (add `mip_refresh_market_rates` task, daily schedule off, manual-trigger in dev)
   - `tools/fred_fetch.py` (new — deterministic offline fetcher with cached CSV under `tests/fixtures/fred_mortgage30us.csv` so tests don't hit the network)
   - `tests/integration/test_market_rates_pipeline.py` (new — runs pipeline against cached CSV, asserts row count + schema)
 - **Owner:** data-modeler (SQL + pipeline), backend-databricks-engineer (job wiring)
-- **Acceptance:** `mip_demo.silver.market_rates_weekly` is materialized in workspace with ≥260 weekly rows back to 2021-01-01; repeat runs are idempotent; unit test seeds from cached CSV and passes offline.
+- **Acceptance:** `mip.silver.market_rates_weekly` is materialized in workspace with ≥260 weekly rows back to 2021-01-01; repeat runs are idempotent; unit test seeds from cached CSV and passes offline.
 - **Validation:** `ruff check backend tests tools && pytest tests/integration/test_market_rates_pipeline.py -q && databricks bundle validate -t dev`
 - **Blast radius:** Workspace (writes one silver table). External on first fetch (FRED HTTPS); cached thereafter.
-- **Rollback:** `DROP TABLE mip_demo.silver.market_rates_weekly` + `git revert`.
+- **Rollback:** `DROP TABLE mip.silver.market_rates_weekly` + `git revert`.
 - **Depends on:** Slice 0 (not strictly, but merges cleanly after it).
 
 ### Slice 2 — Silver transformations for lien + property + mortgage events
-- **Intent:** 1:1 typed lift from the share into `mip_demo.silver.*`, state-filtered to the real 6-state footprint.
+- **Intent:** 1:1 typed lift from the share into `mip.silver.*`, state-filtered to the real 6-state footprint.
 - **Files touched (exact):**
   - `sql/transformations/silver_property_master.sql` (replace placeholder — from `entrada_eval_property_domain_v3`)
   - `sql/transformations/silver_lien_current.sql` (replace placeholder — from `entrada_eval_voluntary_lien_status_marketing_v2`)
@@ -61,9 +61,9 @@ Slices are ordered so each is (a) PR-worthy on its own, (b) reversible in one re
   - `tests/integration/test_sql_queries.py` (add schema-shape assertions for each silver table using `information_schema`)
 - **Owner:** data-modeler
 - **Acceptance:** All 5 silver tables materialized. Row counts match gap-analysis §1 within ±5%. State filter is exactly `('IL','CA','FL','TX','WA','CO')`. Validation notebook passes without manual intervention.
-- **Validation:** `databricks bundle run mip_refresh_demo_data -t dev` then `pytest tests/integration/test_sql_queries.py -q`
+- **Validation:** `databricks bundle run mip_refresh_silver -t dev` then `pytest tests/integration/test_sql_queries.py -q`
 - **Blast radius:** Workspace (writes 5 silver tables, ~10M rows total after state filter). No PII surfaces to app yet.
-- **Rollback:** `DROP SCHEMA mip_demo.silver CASCADE` + `git revert`.
+- **Rollback:** `DROP SCHEMA mip.silver CASCADE` + `git revert`.
 - **Depends on:** Slice 1.
 
 ### Slice 3 — Gold tables: borrower_360, evidence_events, lead_scores, lead_population
@@ -72,23 +72,23 @@ Slices are ordered so each is (a) PR-worthy on its own, (b) reversible in one re
   - `sql/ddl/003_gold_tables.sql` (replace placeholder — gold table DDL with NOT NULL constraints on score columns)
   - `sql/transformations/gold_borrower_360.sql` (replace placeholder — join silver_lien_current + silver_property_master + owner bridge + latest mortgage event per CLIP)
   - `sql/transformations/gold_evidence_events.sql` (replace placeholder — timeline view per CLIP from silver_mortgage_events + silver_owner_transfer_events + foreclosure_stage)
-  - `sql/transformations/gold_lead_scores.sql` (replace placeholder — computes 5 component sub-scores per gap-analysis §6, then invokes `mip_demo.gold.fn_lead_score`)
+  - `sql/transformations/gold_lead_scores.sql` (replace placeholder — computes 5 component sub-scores per gap-analysis §6, then invokes `mip.gold.fn_lead_score`)
   - `sql/transformations/gold_lead_population.sql` (replace placeholder — top-N ranked cut for the demo surface; default N=500 per metro)
   - `pipelines/lakeflow/mip_gold_pipeline.py` (replace placeholder — orchestrate the 4 gold SQLs, depends_on silver)
   - `sql/metric_views/lead_generation_metric_view.sql`, `segment_performance_metric_view.sql`, `borrower_opportunity_metric_view.sql` (replace placeholders)
   - `tests/integration/test_gold_parity.py` (new — **contract test**: run `fn_lead_score` against `tests/fixtures/lead_score_golden.json` on the warehouse, assert exact integer equality with Python `scoring.lead_score`; repeat for all four primitives)
 - **Owner:** data-modeler (SQL), qa-test-engineer (parity test)
-- **Acceptance:** Gold tables materialize without cross-catalog reads (only read `mip_demo.silver.*`). All four SQL primitives produce identical output to Python primitives on all golden fixtures. `gold_lead_population` has ≤500 rows per metro for demo responsiveness.
-- **Validation:** `databricks bundle run mip_refresh_demo_data -t dev && pytest tests/integration/test_gold_parity.py -q && pytest tests/unit -q`
+- **Acceptance:** Gold tables materialize without cross-catalog reads (only read `mip.silver.*`). All four SQL primitives produce identical output to Python primitives on all golden fixtures. `gold_lead_population` has ≤500 rows per metro for demo responsiveness.
+- **Validation:** `databricks bundle run mip_refresh_silver -t dev && pytest tests/integration/test_gold_parity.py -q && pytest tests/unit -q`
 - **Blast radius:** Workspace (writes 4 gold tables + 3 metric views). **No PII surfaces yet — app still on mocks.**
-- **Rollback:** `DROP SCHEMA mip_demo.gold CASCADE; DROP SCHEMA mip_demo.semantics CASCADE` + `git revert`.
+- **Rollback:** `DROP SCHEMA mip.gold CASCADE; DROP SCHEMA mip.semantics CASCADE` + `git revert`.
 - **Depends on:** Slice 2.
 
 ### Slice 4 — Live `DatabricksBorrowerRepository` + `DatabricksPortfolioRepository`
-- **Intent:** Wire the `BorrowerRepository` / `PortfolioRepository` Protocols from Slice 0 to `mip_demo.gold.*` via the Databricks SQL connector. **Opt-in via `MIP_MOCK_MODE=false`; mock stays the default for booth.**
+- **Intent:** Wire the `BorrowerRepository` / `PortfolioRepository` Protocols from Slice 0 to `mip.gold.*` via the Databricks SQL connector. **Opt-in via `MIP_MOCK_MODE=false`; mock stays the default for booth.**
 - **Files touched (exact):**
   - `backend/services/databricks_sql.py` (replace placeholder — connection helper using `databricks-sql-connector`, reads `DATABRICKS_SERVER_HOSTNAME`, `DATABRICKS_HTTP_PATH`, `DATABRICKS_TOKEN`, warehouse from `DATABRICKS_WAREHOUSE_ID`)
-  - `backend/services/repositories.py` (add `DatabricksBorrowerRepository`, `DatabricksPortfolioRepository` implementing the Protocols; queries only `mip_demo.gold.*`)
+  - `backend/services/repositories.py` (add `DatabricksBorrowerRepository`, `DatabricksPortfolioRepository` implementing the Protocols; queries only `mip.gold.*`)
   - `backend/services/__init__.py` (factory dispatches by `MIP_MOCK_MODE`)
   - `backend/services/pii_redaction.py` (new — owner-name → initials, street-number truncation to block-level; enforced at repository boundary, not router)
   - `backend/schemas/*.py` (add `source_evidence_count: int` to borrower/lead schemas so evidence drawer parity is preserved)
@@ -104,11 +104,11 @@ Slices are ordered so each is (a) PR-worthy on its own, (b) reversible in one re
 ### Slice 5 — Live evidence + audit plumbing
 - **Intent:** Evidence drawer and audit surfaces read from real silver/gold + Lakebase.
 - **Files touched (exact):**
-  - `backend/services/evidence.py` (replace placeholder — query `mip_demo.gold.evidence_events` for a CLIP, return chronological timeline)
+  - `backend/services/evidence.py` (replace placeholder — query `mip.gold.evidence_events` for a CLIP, return chronological timeline)
   - `backend/services/lakebase.py` (replace placeholder — `psycopg` client with connection pooling; reads `LAKEBASE_DATABASE_NAME`, workspace identity auth)
   - `backend/services/audit_store.py` (extend to write approvals + agent sessions to Lakebase instead of in-memory)
   - `lakebase/schema.sql` (replace 1-line placeholder — tables: `campaigns`, `approvals`, `agent_sessions`, `audit_events`, `feedback`)
-  - `lakebase/seed_demo_campaigns.sql` (new — deterministic Summit Mortgage seed rows for demo)
+  - `lakebase/seed_campaigns.sql` (new — deterministic Summit Mortgage seed rows for demo)
   - `tests/integration/test_lakebase_round_trip.py` (new — ephemeral schema + round-trip per table)
 - **Owner:** backend-databricks-engineer
 - **Acceptance:** Evidence drawer opens on real CLIPs and shows 3–7 real events with dates. Approving an offer writes a row to `audit_events` visible in `/api/audit`. `MIP_MOCK_MODE=true` path uses in-memory store still (unchanged).
@@ -122,7 +122,7 @@ Slices are ordered so each is (a) PR-worthy on its own, (b) reversible in one re
 - **Files touched (exact):**
   - `backend/services/mock_data.py` (reshape `PORTFOLIO`, `BORROWERS` to sit inside chosen metro; keep borrower IDs `demo-borrower-*`)
   - `frontend/src/mocks/demoData.ts` (mirror the reshape)
-  - `docs/module0-demo-talk-track.md` (rewrite geography paragraphs)
+  - `docs/module0-talk-track.md` (rewrite geography paragraphs)
   - `tests/unit/test_scoring.py`, `tests/e2e/module0.spec.ts` (update metro-specific assertions)
 - **Owner:** demo-storyteller (narrative), backend-databricks-engineer (fixture reshape)
 - **Acceptance:** Booth demo uses one consistent metro across mock and real paths. Talk track references that metro. Playwright e2e still passes.
@@ -132,7 +132,7 @@ Slices are ordered so each is (a) PR-worthy on its own, (b) reversible in one re
 - **Depends on:** Slice 4 (so the decision is informed by what the real data shows).
 
 ### Slice 7 — Real-data Genie space grounding
-- **Intent:** Point the existing Genie space at `mip_demo.semantics.*` metric views instead of the current mock SQL. Deterministic fallback (`genie_answers.py`) stays the booth path.
+- **Intent:** Point the existing Genie space at `mip.semantics.*` metric views instead of the current mock SQL. Deterministic fallback (`genie_answers.py`) stays the booth path.
 - **Files touched (exact):**
   - `resources/apps.yml` (no change — genie_space_id var stays)
   - `genie/space_config.yml` (if present; otherwise the provisioner in `tools/mcp/`) — refresh table grants to include the 3 metric views
@@ -163,7 +163,7 @@ Slices are ordered so each is (a) PR-worthy on its own, (b) reversible in one re
 
 **The seam is `backend/services/repositories.py` (introduced in Slice 0).** It defines three `typing.Protocol`s — `BorrowerRepository`, `PortfolioRepository`, `EvidenceRepository` — each with a narrow set of methods that maps 1:1 to a frontend concern. `backend/services/__init__.py` exposes `get_borrower_repo()` etc. as factory callables that dispatch on `settings.mock_mode` (read from env once at process start).
 
-Routers ONLY depend on the Protocols, never on concrete classes. `mock_data.py` is adapted (not rewritten) by a `MockBorrowerRepository` class that returns the existing Pydantic objects. `DatabricksBorrowerRepository` (Slice 4) executes parameterized SQL against `mip_demo.gold.*` and passes every result through `pii_redaction.py` before returning.
+Routers ONLY depend on the Protocols, never on concrete classes. `mock_data.py` is adapted (not rewritten) by a `MockBorrowerRepository` class that returns the existing Pydantic objects. `DatabricksBorrowerRepository` (Slice 4) executes parameterized SQL against `mip.gold.*` and passes every result through `pii_redaction.py` before returning.
 
 **Invariant:** the booth demo path is `MIP_MOCK_MODE=true`, which is the `.env.example` default. No network calls fire. No warehouse queries fire. No Lakebase connection opens. The mock path continues to be golden-fixture-pinned via the existing `scoring.py` primitives, which do NOT change.
 
@@ -237,7 +237,7 @@ Routers ONLY depend on the Protocols, never on concrete classes. `mock_data.py` 
   2. Governance-reviewer sign-off on PII redaction (Slice 4).
   3. Booth demo rehearsed end-to-end with `MIP_MOCK_MODE=true` (no regression).
   4. Sit-down demo rehearsed end-to-end with `MIP_MOCK_MODE=false` against dev workspace.
-  5. `docs/module0-demo-talk-track.md` updated to reference real metro + real numbers.
+  5. `docs/module0-talk-track.md` updated to reference real metro + real numbers.
   6. Rollback runbook in `docs/runbook.md` tested by flipping `MIP_MOCK_MODE` live.
 
 ---

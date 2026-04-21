@@ -47,7 +47,7 @@
 --            gold materializations and metric views.
 -- =============================================================================
 
-CREATE OR REPLACE FUNCTION mip_demo.gold.fn_rate_spread(
+CREATE OR REPLACE FUNCTION mip.gold.fn_rate_spread(
   current_rate DOUBLE,
   market_rate  DOUBLE
 )

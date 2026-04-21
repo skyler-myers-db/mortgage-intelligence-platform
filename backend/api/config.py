@@ -8,7 +8,7 @@ router = APIRouter(prefix="/api/config", tags=["config"])
 @router.get("/options")
 def get_config_options() -> dict[str, object]:
     return {
-        "demo_lender": settings.mip_demo_lender,
+        "lender_name": settings.mip_lender_name,
         "geographies": [
             # Slice 9: anchor to the 6-state Delta Share footprint.
             "Illinois / Cook County / 60611",

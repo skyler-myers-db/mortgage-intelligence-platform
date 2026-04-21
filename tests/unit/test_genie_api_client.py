@@ -118,7 +118,7 @@ def test_ask_drives_start_poll_query_and_returns_structured_response(
             {"text": {"content": "12,840 borrowers are in the money."}},
             {
                 "query": {
-                    "query": "SELECT count(*) FROM mip_demo.gold.lead_scores",
+                    "query": "SELECT count(*) FROM mip.gold.lead_scores",
                     "description": "count of ITM borrowers",
                 }
             },
@@ -144,7 +144,7 @@ def test_ask_drives_start_poll_query_and_returns_structured_response(
     assert result.message_id == "msg-456"
     assert "in the money" in result.answer_text
     assert result.sql_query is not None
-    assert "mip_demo.gold.lead_scores" in result.sql_query
+    assert "mip.gold.lead_scores" in result.sql_query
     assert result.sql_result_rows == [{"count": 12840}]
     # Call shape: start, poll (IN_PROGRESS), poll (COMPLETED), query-result.
     assert len(calls) == 4

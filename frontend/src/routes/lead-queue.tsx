@@ -27,7 +27,7 @@ export default function LeadQueue() {
       lede="Every row carries an opportunity score, confidence meter, and evidence chip. Click a row to expand a borrower dossier preview; open the full Borrower 360 for the Why panel and trigger timeline."
       heroRight={
         <>
-          <Chip variant="neutral" icon="db">mip_demo.gold.lead_scores</Chip>
+          <Chip variant="neutral" icon="db">mip.gold.lead_scores</Chip>
           {segment && <Chip variant="neutral">segment = {segment}</Chip>}
         </>
       }

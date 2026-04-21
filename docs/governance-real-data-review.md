@@ -11,7 +11,7 @@
 ## Executive summary
 
 - **Verdict: CONDITIONAL-GO.** The share is safe to use as a *signal source* for Module 0 at the booth, but **not safe to redisplay raw at the browser**. The three canonical demo borrowers (B-48291, B-48294, B-48295) must remain the synthetic trio seen on stage. Real-data power is exposed via **segment counts, score distributions, geography rollups, and redacted/masked detail** — not via real owner names or real street addresses.
-- **Three hard pre-implementation blockers** (see "Top 3 must-fixes" below): (1) a gold-layer PII redaction contract before any `/api/*` response is wired to real data; (2) a Unity Catalog column-mask + row-filter policy on `silver.*` tables that hold names/addresses; (3) a Databricks secret scope (`mip_demo`) that replaces every `.env`-resident token and kills the current `profile: DEFAULT` pathway for app runtime.
+- **Three hard pre-implementation blockers** (see "Top 3 must-fixes" below): (1) a gold-layer PII redaction contract before any `/api/*` response is wired to real data; (2) a Unity Catalog column-mask + row-filter policy on `silver.*` tables that hold names/addresses; (3) a Databricks secret scope (`mip`) that replaces every `.env`-resident token and kills the current `profile: DEFAULT` pathway for app runtime.
 - **Licensing stance:** treat the booth as an **external redisplay surface** under Cotality's licensing posture. Assume property/borrower-level detail is **not** licensed for DAIS attendee redisplay. The demo stays on the synthetic trio for dossier-level screens; real-data surfaces are limited to cohort counts, aggregates, and already-obfuscated fields. This is a booth risk decision that needs legal sign-off from Entrada before turning the silver→gold pipeline on against the share.
 
 ---
@@ -22,7 +22,7 @@ The share carries real owner and borrower identity. The UI renders dossier cards
 
 | Field (source table) | Sensitivity | Ruling | How to enforce |
 |---|---|---|---|
-| `owner_1_full_name` (property_v3) | **PII (direct identifier)** | **Never in any `/api/*` response.** Hash to `owner_hash = SHA-256(lower(trim(value)) \|\| daily_salt)` for join keys only. Dossier `display_name` must remain the synthetic trio (B-48291/4/5). | Gold DDL: `owner_hash` column only; drop `owner_1_full_name` before writing `gold.borrower_360`. UC column mask `mip_demo.silver.mask_name(x)` returning NULL for non-privileged readers. |
+| `owner_1_full_name` (property_v3) | **PII (direct identifier)** | **Never in any `/api/*` response.** Hash to `owner_hash = SHA-256(lower(trim(value)) \|\| daily_salt)` for join keys only. Dossier `display_name` must remain the synthetic trio (B-48291/4/5). | Gold DDL: `owner_hash` column only; drop `owner_1_full_name` before writing `gold.borrower_360`. UC column mask `mip.silver.mask_name(x)` returning NULL for non-privileged readers. |
 | `owner_2_full_name`, `buyer_1_full_name`, `buyer_2_full_name`, seller names (owner_transfer) | **PII** | Same as above. Hash for join, never surface. | Same column-mask UDF applied at silver. |
 | `situs_street_address`, `situs_city`, `situs_zip_code` (property_v3, voluntary_lien) | **Quasi-identifier** (street-level is re-identifying; ZIP + city is not) | **Street not in `/api/*`.** `city`, `state`, `zip` are fine at cohort granularity. `Borrower360.subject_property` must be generalized to `"{city}, {state} {zip}"` — drop the street. | Gold: `gold.borrower_360` selects city/state/zip only; no `situs_street_address` column. Mask at silver for non-privileged. |
 | `mailing_street_address`, `mailing_city`, `mailing_state` (property_v3) | **PII (direct mail)** | **Silver-only.** Use for absentee/investor flag derivation (`is_absentee = mailing_zip != situs_zip`), then drop. | Boolean derived column in `gold.borrower_360`; mailing fields never leave silver. |
@@ -95,13 +95,13 @@ Fields currently on `Borrower360` in `backend/schemas/lead.py` that need policy:
 
 ## 3. Unity Catalog governance
 
-Target catalog is `mip_demo` with schemas `raw`, `silver`, `gold`, `semantics`, `app`, `audit` per `databricks.yml` (`variables.uc_schemas`).
+Target catalog is `mip` with schemas `raw`, `silver`, `gold`, `semantics`, `app`, `audit` per `databricks.yml` (`variables.uc_schemas`).
 
 ### Grant model
 
 | Principal | `raw` | `silver` | `gold` | `semantics` | `app` | `audit` |
 |---|---|---|---|---|---|---|
-| App service principal (`sp-mip-demo-app`) | — | — | `SELECT` | `SELECT` | — | `SELECT` (read-back for audit UI) |
+| App service principal (`sp-mip-app`) | — | — | `SELECT` | `SELECT` | — | `SELECT` (read-back for audit UI) |
 | Data engineers (humans) | `SELECT` | `SELECT`, `MODIFY` | `SELECT`, `MODIFY` | `SELECT`, `MODIFY` | — | `SELECT` |
 | Demo operators (humans, read-only at booth) | — | — | `SELECT` | `SELECT` | — | `SELECT` |
 | Pipeline job service principal (`sp-mip-etl`) | `SELECT` | `SELECT`, `MODIFY` | `SELECT`, `MODIFY` | `SELECT`, `MODIFY` | — | `MODIFY` |
@@ -113,9 +113,9 @@ Target catalog is `mip_demo` with schemas `raw`, `silver`, `gold`, `semantics`, 
 
 Create UC column-mask UDFs and apply to silver columns that hold PII. Mask returns NULL for anyone not in the `data_engineers` group.
 
-- `mip_demo.silver.mask_name(s STRING)` applied to: `silver.property_master.owner_1_full_name`, `silver.owner_transfer_events.buyer_1_full_name`, `silver.mortgage_events.borrower_1_full_name`.
-- `mip_demo.silver.mask_address(s STRING)` applied to: `silver.property_master.situs_street_address`, `silver.property_master.mailing_street_address`.
-- `mip_demo.silver.mask_identifier(s STRING)` applied to: `silver.property_master.owner_1_identifier` (returns `SHA-256 hex[:12]`, not NULL — needed for joins by non-privileged readers).
+- `mip.silver.mask_name(s STRING)` applied to: `silver.property_master.owner_1_full_name`, `silver.owner_transfer_events.buyer_1_full_name`, `silver.mortgage_events.borrower_1_full_name`.
+- `mip.silver.mask_address(s STRING)` applied to: `silver.property_master.situs_street_address`, `silver.property_master.mailing_street_address`.
+- `mip.silver.mask_identifier(s STRING)` applied to: `silver.property_master.owner_1_identifier` (returns `SHA-256 hex[:12]`, not NULL — needed for joins by non-privileged readers).
 
 ### Row filters
 
@@ -127,7 +127,7 @@ Create UC column-mask UDFs and apply to silver columns that hold PII. Mask retur
 Belt-and-suspenders: instead of relying only on column masks at read, the gold DDL **never selects** the masked columns in the first place:
 
 ```sql
-CREATE OR REPLACE TABLE mip_demo.gold.borrower_360 AS
+CREATE OR REPLACE TABLE mip.gold.borrower_360 AS
 SELECT
   substring(sha2(concat(clip, current_date()), 256), 1, 12) AS clip_ref,
   substring(sha2(concat(owner_1_identifier, current_date()), 256), 1, 12) AS owner_link_ref,
@@ -142,8 +142,8 @@ SELECT
   -- lender redacted via ref dictionary
   coalesce(ld.ref_label, 'Competitor X') AS current_servicer_ref,
   ...
-FROM mip_demo.silver.lien_current l
-LEFT JOIN mip_demo.semantics.lender_dictionary ld
+FROM mip.silver.lien_current l
+LEFT JOIN mip.semantics.lender_dictionary ld
   ON ld.real_name = l.first_position_currently_assigned_lender_company_name
 WHERE l.situs_state IN ('IL','CA','FL','TX','WA','CO')
 ```
@@ -233,14 +233,14 @@ In non-mock mode, add middleware or an explicit call in these routers:
 
 **All live-data tokens go in a Databricks secret scope — never in `.env`, `app.yaml`, logs, or screenshots.**
 
-Create scope `mip_demo` and populate:
-- `mip_demo/workspace_host` — workspace URL (not technically a secret, but colocated for discoverability)
-- `mip_demo/sql_warehouse_id` — warehouse id
-- `mip_demo/genie_space_id` — genie space id
-- `mip_demo/lakebase_host` + `/lakebase_user` + `/lakebase_password` — Lakebase connection
-- `mip_demo/fred_api_key` — optional FRED key (ingestion job only, not app)
+Create scope `mip` and populate:
+- `mip/workspace_host` — workspace URL (not technically a secret, but colocated for discoverability)
+- `mip/sql_warehouse_id` — warehouse id
+- `mip/genie_space_id` — genie space id
+- `mip/lakebase_host` + `/lakebase_user` + `/lakebase_password` — Lakebase connection
+- `mip/fred_api_key` — optional FRED key (ingestion job only, not app)
 
-**App runtime** picks these up via the Databricks App resource binding in `resources/apps.yml` (`sql_warehouse`, `genie_space`, `database` blocks already wired — no PAT needed for these, the App platform issues on-behalf-of tokens). For anything that still needs a PAT (e.g., the FRED ingestion job), read from the secret scope via `dbutils.secrets.get("mip_demo", "fred_api_key")` — never from env.
+**App runtime** picks these up via the Databricks App resource binding in `resources/apps.yml` (`sql_warehouse`, `genie_space`, `database` blocks already wired — no PAT needed for these, the App platform issues on-behalf-of tokens). For anything that still needs a PAT (e.g., the FRED ingestion job), read from the secret scope via `dbutils.secrets.get("mip", "fred_api_key")` — never from env.
 
 **Gitignore + pre-commit:**
 - Verify `.env`, `.env.local` are in `.gitignore`.
@@ -305,9 +305,9 @@ These block the first real-data slice until resolved. Nothing against the share 
 
 1. **Gold-layer PII redaction contract — implemented and tested.** `gold.borrower_360` DDL never references `owner_1_full_name`, `situs_street_address`, raw `clip`, raw `owner_1_identifier`, or real lender names. `Borrower360` Pydantic model grows a validator rejecting non-synthetic `display_name` / non-generalized `subject_property` in non-mock mode. Unit test asserts that a hand-crafted real-data row fails validation, and a hand-crafted generalized row passes. Files: `sql/transformations/gold_borrower_360.sql` (new), `backend/schemas/lead.py`, `tests/unit/test_pii_redaction.py` (new).
 
-2. **Unity Catalog governance applied before the service principal reads.** Column masks on silver (`mask_name`, `mask_address`, `mask_identifier`), row filters (`situs_state IN (...)`), and grants: app SP gets `SELECT` on `gold` + `semantics` + `audit` **only**. Verify with a `ruff`-style policy test: a GRANT audit script lists every privilege on `mip_demo` and compares against a checked-in allow-list. Files: `sql/uc_governance/grants.sql` (new), `sql/uc_governance/column_masks.sql` (new), `tests/integration/test_uc_grants.py` (new).
+2. **Unity Catalog governance applied before the service principal reads.** Column masks on silver (`mask_name`, `mask_address`, `mask_identifier`), row filters (`situs_state IN (...)`), and grants: app SP gets `SELECT` on `gold` + `semantics` + `audit` **only**. Verify with a `ruff`-style policy test: a GRANT audit script lists every privilege on `mip` and compares against a checked-in allow-list. Files: `sql/uc_governance/grants.sql` (new), `sql/uc_governance/column_masks.sql` (new), `tests/integration/test_uc_grants.py` (new).
 
-3. **Secret scope `mip_demo` exists and `.env`-resident PATs are purged.** Pre-commit secret-scanner hook blocks `dapi*` patterns. `backend/config/settings.py` reads secrets via the Databricks SDK `WorkspaceClient.secrets` in non-mock mode, never via `.env`. `.env.example` contains **no** sample PAT (redacted to `DATABRICKS_TOKEN=<set-in-secret-scope-not-here>`). Files: `.pre-commit-config.yaml` (new or updated), `backend/config/settings.py`, `.env.example`.
+3. **Secret scope `mip` exists and `.env`-resident PATs are purged.** Pre-commit secret-scanner hook blocks `dapi*` patterns. `backend/config/settings.py` reads secrets via the Databricks SDK `WorkspaceClient.secrets` in non-mock mode, never via `.env`. `.env.example` contains **no** sample PAT (redacted to `DATABRICKS_TOKEN=<set-in-secret-scope-not-here>`). Files: `.pre-commit-config.yaml` (new or updated), `backend/config/settings.py`, `.env.example`.
 
 ---
 
@@ -346,6 +346,6 @@ pytest tests/unit/test_pii_redaction.py -q
 pytest tests/integration/test_uc_grants.py -q
 ruff check backend
 databricks bundle validate -t dev
-# manual: operator runs `databricks secrets list-scopes` and confirms `mip_demo` exists
+# manual: operator runs `databricks secrets list-scopes` and confirms `mip` exists
 # manual: operator runs `git log --all -S 'dapi' --source --remotes` and confirms no PAT ever committed
 ```

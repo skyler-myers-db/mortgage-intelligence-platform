@@ -24,9 +24,9 @@ def genie_start(payload: dict[str, object] | None = None) -> dict[str, object]:
     return {
         "conversation_id": "demo-conv",
         "trusted_assets": [
-            "mip_demo.gold.lead_population",
-            "mip_demo.gold.lead_segment_membership",
-            "mip_demo.semantics.lead_generation_metric_view",
+            "mip.gold.lead_population",
+            "mip.gold.lead_segment_membership",
+            "mip.semantics.lead_generation_metric_view",
         ],
     }
 

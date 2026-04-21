@@ -1,7 +1,7 @@
 -- =============================================================================
 -- silver_property_master.sql (transformation)
 -- -----------------------------------------------------------------------------
--- Purpose:   Idempotent MERGE that populates `mip_demo.silver.property_master`
+-- Purpose:   Idempotent MERGE that populates `mip.silver.property_master`
 --            from `cotality_mortgage_data.corelogic.entrada_eval_property_
 --            domain_v3`, filtered to the 6-state demo footprint.
 --
@@ -14,7 +14,7 @@
 -- PII posture:
 --   - `owner_1_full_name` is HASHED at INSERT/UPDATE time into
 --     `owner_name_hash` using sha2(LOWER(TRIM(name)) || ':' || salt, 256).
---     The salt is read from secret scope `mip-demo`, key `pii-salt-v1`
+--     The salt is read from secret scope `mip`, key `pii-salt-v1`
 --     (governance-real-data-review §1 + data-contract §7). If the secret
 --     is not configured, the MERGE uses the literal sentinel
 --     `mip_pii_salt_v1` which is documented in the contract; rotating the
@@ -34,7 +34,7 @@
 --              columns; `ingest_ts` and `_meta_batch_id` are refreshed.
 -- =============================================================================
 
-MERGE INTO mip_demo.silver.property_master AS t
+MERGE INTO mip.silver.property_master AS t
 USING (
   SELECT
     clip,
@@ -55,7 +55,7 @@ USING (
         LOWER(TRIM(COALESCE(owner_1_full_name, ''))),
         ':',
         COALESCE(
-          TRY_CAST(secret('mip-demo', 'pii-salt-v1') AS STRING),
+          TRY_CAST(secret('mip', 'pii-salt-v1') AS STRING),
           'mip_pii_salt_v1'
         )
       ),

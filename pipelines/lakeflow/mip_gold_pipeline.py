@@ -11,7 +11,7 @@ Declares the six gold tables that Module 0's UI reads from:
 
 The pipeline is downstream of `mip_feature_pipeline` (the Slice 2 silver
 pipeline) and reads its tables via the Unity-Catalog-qualified path
-`mip_demo.silver.<name>`. That means this pipeline can be declared as a
+`mip.silver.<name>`. That means this pipeline can be declared as a
 SEPARATE pipeline resource (same workspace) and still honor the implicit
 dependency at query time — the gold @dlt.table definitions simply SELECT
 from the silver tables that were produced by the silver pipeline's last
@@ -65,12 +65,12 @@ SIX_STATE_FOOTPRINT: tuple[str, ...] = ("IL", "CA", "FL", "TX", "WA", "CO")
 # dependency wiring). Deliberately resolved by full path rather than
 # `dlt.read("...")` -- `dlt.read` only crosses tables declared IN THE SAME
 # pipeline.
-SILVER_LIEN_CURRENT = "mip_demo.silver.lien_current"
-SILVER_PROPERTY_MASTER = "mip_demo.silver.property_master"
-SILVER_MORTGAGE_EVENTS = "mip_demo.silver.mortgage_events"
-SILVER_OWNER_TRANSFER = "mip_demo.silver.owner_transfer_events"
-SILVER_OWNER_BRIDGE = "mip_demo.silver.owner_property_bridge"
-SILVER_MARKET_RATES = "mip_demo.silver.market_rates_weekly"
+SILVER_LIEN_CURRENT = "mip.silver.lien_current"
+SILVER_PROPERTY_MASTER = "mip.silver.property_master"
+SILVER_MORTGAGE_EVENTS = "mip.silver.mortgage_events"
+SILVER_OWNER_TRANSFER = "mip.silver.owner_transfer_events"
+SILVER_OWNER_BRIDGE = "mip.silver.owner_property_bridge"
+SILVER_MARKET_RATES = "mip.silver.market_rates_weekly"
 
 # Demo-default thresholds. See docs/data-contract-module0.md §5 + the frozen
 # UDF headers. When admin-config thresholds land (Slice 5), these become
@@ -165,7 +165,7 @@ def gold_borrower_360() -> DataFrame:  # pragma: no cover
     spark = F.col("_").sparkSession  # type: ignore[attr-defined]
     return spark.sql(  # pragma: no cover
         """
-        SELECT * FROM mip_demo.gold.borrower_360
+        SELECT * FROM mip.gold.borrower_360
         """
     )
 
@@ -195,7 +195,7 @@ def gold_borrower_360() -> DataFrame:  # pragma: no cover
 @dlt.expect("confidence_range", "confidence BETWEEN 0.0 AND 1.0")
 def gold_evidence_events() -> DataFrame:  # pragma: no cover
     spark = F.col("_").sparkSession  # type: ignore[attr-defined]
-    return spark.sql("SELECT * FROM mip_demo.gold.evidence_events")
+    return spark.sql("SELECT * FROM mip.gold.evidence_events")
 
 
 # ---------------------------------------------------------------------------
@@ -230,7 +230,7 @@ def gold_evidence_events() -> DataFrame:  # pragma: no cover
             "AND evidence        BETWEEN 0 AND 100")
 def gold_lead_scores() -> DataFrame:  # pragma: no cover
     spark = F.col("_").sparkSession  # type: ignore[attr-defined]
-    return spark.sql("SELECT * FROM mip_demo.gold.lead_scores")
+    return spark.sql("SELECT * FROM mip.gold.lead_scores")
 
 
 # ---------------------------------------------------------------------------
@@ -257,7 +257,7 @@ def gold_lead_scores() -> DataFrame:  # pragma: no cover
 @dlt.expect("rank_positive", "rank_overall >= 1 AND rank_within_state >= 1")
 def gold_lead_population() -> DataFrame:  # pragma: no cover
     spark = F.col("_").sparkSession  # type: ignore[attr-defined]
-    return spark.sql("SELECT * FROM mip_demo.gold.lead_population")
+    return spark.sql("SELECT * FROM mip.gold.lead_population")
 
 
 # ---------------------------------------------------------------------------
@@ -287,4 +287,4 @@ def gold_lead_population() -> DataFrame:  # pragma: no cover
 @dlt.expect("state_or_all", "state = '_ALL' OR state IN ('IL','CA','FL','TX','WA','CO')")
 def gold_segment_population() -> DataFrame:  # pragma: no cover
     spark = F.col("_").sparkSession  # type: ignore[attr-defined]
-    return spark.sql("SELECT * FROM mip_demo.gold.segment_population")
+    return spark.sql("SELECT * FROM mip.gold.segment_population")

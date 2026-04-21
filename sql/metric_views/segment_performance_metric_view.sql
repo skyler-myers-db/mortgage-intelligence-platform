@@ -2,7 +2,7 @@
 -- segment_performance_metric_view.sql
 -- -----------------------------------------------------------------------------
 -- Purpose:   Genie-reachable and dashboard-reachable semantic view of
---            `mip_demo.gold.segment_population`. Exposes per-segment counts
+--            `mip.gold.segment_population`. Exposes per-segment counts
 --            and averages with the "_ALL" national rollup as first-class
 --            data.
 --
@@ -23,7 +23,7 @@
 --                     pre-formatted.
 -- =============================================================================
 
-CREATE OR REPLACE VIEW mip_demo.semantics.segment_performance_metric_view AS
+CREATE OR REPLACE VIEW mip.semantics.segment_performance_metric_view AS
 SELECT
   sp.segment_code,
   sp.state,
@@ -34,7 +34,7 @@ SELECT
   sp.description,
   sp.color,
   sp.refreshed_at
-FROM mip_demo.gold.segment_population AS sp;
+FROM mip.gold.segment_population AS sp;
 
-COMMENT ON VIEW mip_demo.semantics.segment_performance_metric_view IS
+COMMENT ON VIEW mip.semantics.segment_performance_metric_view IS
   'Genie + dashboard metric view over gold.segment_population. Dimensions: segment_code, state. Measures: count, avg_score. Pre-formatted delta_vs_prior exposed for dashboard chips. See docs/data-contract-module0.md §3.6.';

@@ -1,9 +1,9 @@
 -- =============================================================================
 -- silver_market_rates_weekly.sql
 -- -----------------------------------------------------------------------------
--- Purpose:   DDL for `mip_demo.silver.market_rates_weekly`. This table is the
+-- Purpose:   DDL for `mip.silver.market_rates_weekly`. This table is the
 --            market-rate denominator for Module 0's rate-spread math
---            (`mip_demo.gold.fn_rate_spread` + `backend.services.scoring.
+--            (`mip.gold.fn_rate_spread` + `backend.services.scoring.
 --            rate_spread_bps`). Populated from FRED series MORTGAGE30US
 --            (and optionally MORTGAGE15US) by `jobs/fred_rates_ingest.py`,
 --            with a committed seed CSV backing the first-ever boot.
@@ -52,7 +52,7 @@
 --            IF NOT EXISTS. Safe to re-run on every deploy.
 -- =============================================================================
 
-CREATE TABLE IF NOT EXISTS mip_demo.silver.market_rates_weekly (
+CREATE TABLE IF NOT EXISTS mip.silver.market_rates_weekly (
   series_id        STRING    NOT NULL COMMENT 'FRED series code, e.g. MORTGAGE30US.',
   observation_week DATE      NOT NULL COMMENT 'Week-starting Monday; date_trunc(week, FRED date).',
   rate_pct         DOUBLE    NOT NULL COMMENT 'Rate in percent (6.40 == 6.40%). FRED value.',

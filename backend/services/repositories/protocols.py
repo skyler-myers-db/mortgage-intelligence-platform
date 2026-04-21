@@ -3,7 +3,7 @@
 Routers under ``backend/api/*`` depend on these Protocols, never on
 concrete classes. This decouples the FastAPI surface from the data
 backend so the Slice-4 Databricks implementations (``DatabricksBorrower
-Repository`` etc.) can drop in against ``mip_demo.gold.*`` without
+Repository`` etc.) can drop in against ``mip.gold.*`` without
 reshaping any router contract.
 
 Method signatures return the exact Pydantic shapes the routers emit
@@ -35,7 +35,7 @@ from backend.schemas.portfolio import (
 class PortfolioRepository(Protocol):
     """Portfolio preview / create / read.
 
-    Slice-4 backing: ``mip_demo.gold.borrower_360`` rolled up to portfolio
+    Slice-4 backing: ``mip.gold.borrower_360`` rolled up to portfolio
     aggregates via ``sql/metric_views/lead_generation_metric_view.sql``.
     """
 
@@ -53,7 +53,7 @@ class PortfolioRepository(Protocol):
 class SegmentRepository(Protocol):
     """Segment summaries for the segment-intelligence row.
 
-    Slice-4 backing: ``mip_demo.gold.segment_population`` filtered to
+    Slice-4 backing: ``mip.gold.segment_population`` filtered to
     ``state='_ALL'`` per data-contract §3.6, projected to
     ``SegmentSummary``.
     """
@@ -66,7 +66,7 @@ class SegmentRepository(Protocol):
 class LeadRepository(Protocol):
     """Ranked leads for the queue view.
 
-    Slice-4 backing: ``mip_demo.gold.lead_population`` projected to
+    Slice-4 backing: ``mip.gold.lead_population`` projected to
     ``LeadSummary`` per data-contract §3.5. ``segment`` filters against
     ``segment_codes``; ``portfolio_id`` is accepted for forward-compat.
     """
@@ -79,9 +79,9 @@ class LeadRepository(Protocol):
 class BorrowerRepository(Protocol):
     """Borrower-360 and evidence lookups.
 
-    Slice-4 backing: ``mip_demo.gold.borrower_360`` projected to
+    Slice-4 backing: ``mip.gold.borrower_360`` projected to
     ``Borrower360`` per data-contract §3.2; ``evidence`` reads from
-    ``mip_demo.gold.evidence_events`` per §3.4. Returns ``None`` for a
+    ``mip.gold.evidence_events`` per §3.4. Returns ``None`` for a
     missing ``borrower_id`` so the router can raise its own 404 with
     context.
     """

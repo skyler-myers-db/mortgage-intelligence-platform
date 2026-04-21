@@ -51,12 +51,12 @@ test.describe('Module 0 — DAIS golden path', () => {
     await page.goto('/');
     const banner = page.getByRole('banner');
 
-    await expect(banner.getByText('mip-demo-app', { exact: true })).toBeVisible();
+    await expect(banner.getByText('mip-app', { exact: true })).toBeVisible();
     await expect(banner.getByText('Module 0: Top of Funnel', { exact: true })).toBeVisible();
     await expect(banner.locator('.cur')).toHaveText('Home');
 
     await expect(banner.getByText('Summit Mortgage', { exact: true })).toBeVisible();
-    await expect(banner.getByText('demo.sandbox', { exact: true })).toBeVisible();
+    await expect(banner.getByText('sandbox', { exact: true })).toBeVisible();
     await expect(banner.getByText('serverless-xl', { exact: true })).toBeVisible();
 
     const html = page.locator('html');

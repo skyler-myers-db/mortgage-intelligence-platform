@@ -47,10 +47,10 @@
 -- =============================================================================
 
 -- -----------------------------------------------------------------------------
--- 1. mip_demo.gold.property_owner_bridge
+-- 1. mip.gold.property_owner_bridge
 --    (see sql/ddl/gold_property_owner_bridge.sql for column comments)
 -- -----------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS mip_demo.gold.property_owner_bridge (
+CREATE TABLE IF NOT EXISTS mip.gold.property_owner_bridge (
   owner_link_id             STRING    NOT NULL COMMENT 'Cotality Owner Link. PK.',
   related_property_count    INT       NOT NULL COMMENT 'Count of distinct CLIPs tied to this Owner Link.',
   corporate_property_count  INT       NOT NULL COMMENT 'Number of related properties with owner_is_corporate = TRUE.',
@@ -70,10 +70,10 @@ TBLPROPERTIES (
 );
 
 -- -----------------------------------------------------------------------------
--- 2. mip_demo.gold.borrower_360
+-- 2. mip.gold.borrower_360
 --    (see sql/ddl/gold_borrower_360.sql for column comments + PII posture)
 -- -----------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS mip_demo.gold.borrower_360 (
+CREATE TABLE IF NOT EXISTS mip.gold.borrower_360 (
   clip                      STRING    NOT NULL COMMENT 'CLIP. PK. Router maps to Borrower360.clip_id.',
   borrower_id               STRING    NOT NULL COMMENT 'Synthetic demo id from CLIP hash.',
   display_name              STRING    NOT NULL COMMENT 'Synthesized label; never a real name.',
@@ -127,9 +127,9 @@ TBLPROPERTIES (
 );
 
 -- -----------------------------------------------------------------------------
--- 3. mip_demo.gold.evidence_events
+-- 3. mip.gold.evidence_events
 -- -----------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS mip_demo.gold.evidence_events (
+CREATE TABLE IF NOT EXISTS mip.gold.evidence_events (
   clip           STRING NOT NULL COMMENT 'CLIP; router strips.',
   evidence_id    STRING NOT NULL COMMENT 'Deterministic ev-<12hex>.',
   source_product STRING NOT NULL COMMENT 'Voluntary Lien / AVM / etc.',
@@ -151,9 +151,9 @@ TBLPROPERTIES (
 );
 
 -- -----------------------------------------------------------------------------
--- 4. mip_demo.gold.lead_scores
+-- 4. mip.gold.lead_scores
 -- -----------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS mip_demo.gold.lead_scores (
+CREATE TABLE IF NOT EXISTS mip.gold.lead_scores (
   clip                     STRING    NOT NULL COMMENT 'CLIP. PK.',
   economic_incentive       INT       NOT NULL COMMENT '0..100 sub-score; weight 0.35.',
   intent_trigger           INT       NOT NULL COMMENT '0..100 sub-score; weight 0.30.',
@@ -188,9 +188,9 @@ TBLPROPERTIES (
 );
 
 -- -----------------------------------------------------------------------------
--- 5. mip_demo.gold.lead_population
+-- 5. mip.gold.lead_population
 -- -----------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS mip_demo.gold.lead_population (
+CREATE TABLE IF NOT EXISTS mip.gold.lead_population (
   clip                      STRING    NOT NULL COMMENT 'CLIP. PK.',
   borrower_id               STRING    NOT NULL COMMENT 'Synthetic demo id.',
   display_name              STRING    NOT NULL COMMENT 'Synthesized label.',
@@ -221,9 +221,9 @@ TBLPROPERTIES (
 );
 
 -- -----------------------------------------------------------------------------
--- 6. mip_demo.gold.segment_population (+ segment_population_prior)
+-- 6. mip.gold.segment_population (+ segment_population_prior)
 -- -----------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS mip_demo.gold.segment_population (
+CREATE TABLE IF NOT EXISTS mip.gold.segment_population (
   segment_code    STRING    NOT NULL COMMENT 'itm/listed/permit/investor/equity/retention.',
   state           STRING    NOT NULL COMMENT '2-char state or "_ALL".',
   name            STRING    NOT NULL COMMENT 'Static label.',
@@ -243,7 +243,7 @@ TBLPROPERTIES (
   'delta.autoOptimize.autoCompact'   = 'true'
 );
 
-CREATE TABLE IF NOT EXISTS mip_demo.gold.segment_population_prior (
+CREATE TABLE IF NOT EXISTS mip.gold.segment_population_prior (
   segment_code    STRING    NOT NULL COMMENT 'Matches segment_population.segment_code.',
   state           STRING    NOT NULL COMMENT 'Matches segment_population.state.',
   snapshot_date   DATE      NOT NULL COMMENT 'Daily snapshot date.',

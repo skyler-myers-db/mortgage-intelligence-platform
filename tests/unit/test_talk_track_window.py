@@ -31,7 +31,7 @@ from pathlib import Path
 from tools.talk_track_wc import count_spoken_words
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-TALK_TRACK = REPO_ROOT / "docs" / "module0-demo-talk-track.md"
+TALK_TRACK = REPO_ROOT / "docs" / "module0-talk-track.md"
 TOOL = REPO_ROOT / "tools" / "talk_track_wc.py"
 
 

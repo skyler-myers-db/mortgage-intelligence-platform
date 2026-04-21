@@ -1,7 +1,7 @@
 -- =============================================================================
 -- silver_lien_current.sql (transformation)
 -- -----------------------------------------------------------------------------
--- Purpose:   Idempotent MERGE that populates `mip_demo.silver.lien_current`
+-- Purpose:   Idempotent MERGE that populates `mip.silver.lien_current`
 --            from `cotality_mortgage_data.corelogic.entrada_eval_voluntary_
 --            lien_status_marketing_v2`, filtered to the 6-state footprint.
 --            THE SPINE of Module 0.
@@ -35,7 +35,7 @@
 -- Idempotency: MERGE on clip.
 -- =============================================================================
 
-MERGE INTO mip_demo.silver.lien_current AS t
+MERGE INTO mip.silver.lien_current AS t
 USING (
   SELECT
     clip,

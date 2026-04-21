@@ -1,7 +1,7 @@
 -- =============================================================================
 -- silver_lien_current.sql
 -- -----------------------------------------------------------------------------
--- Purpose:   DDL for `mip_demo.silver.lien_current`. THE SPINE of Module 0:
+-- Purpose:   DDL for `mip.silver.lien_current`. THE SPINE of Module 0:
 --            one row per CLIP carrying the current-state lien stack, rates,
 --            AVM, equity, LTV, and servicer. Every gold lead-scoring join
 --            starts here. 1:1 with `entrada_eval_voluntary_lien_status_
@@ -86,7 +86,7 @@
 --            on `clip` only (CLIP is 1:1 per share).
 -- =============================================================================
 
-CREATE TABLE IF NOT EXISTS mip_demo.silver.lien_current (
+CREATE TABLE IF NOT EXISTS mip.silver.lien_current (
   clip                       STRING    NOT NULL COMMENT 'Cotality mastered property ID. PK.',
   situs_state                STRING    NOT NULL COMMENT '2-char state code. Filter: IN (IL, CA, FL, TX, WA, CO).',
   situs_zip_code             STRING             COMMENT '5-digit situs ZIP (STRING preserves leading zeros).',

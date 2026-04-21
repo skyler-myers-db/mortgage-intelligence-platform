@@ -69,7 +69,7 @@ npm --prefix frontend run build                                # tsc -b && vite 
 python tools/verify_scaffold.py
 databricks bundle validate -t dev
 databricks bundle deploy -t dev
-databricks bundle run refresh_demo_data -t dev
+databricks bundle run refresh_silver -t dev
 
 # Makefile aggregates: make setup | dev-api | dev-ui | test | lint | build | validate
 ```
@@ -84,8 +84,8 @@ If a command fails, fix the root cause before moving to another feature. Do not 
   - `backend/services/*` — Databricks SQL, Lakebase, Genie, Cotality MCP, evidence, scoring, mock data. Routers call services, not each other.
   - `backend/agents/*` — deterministic orchestrator plus per-task agents (lead portfolio, borrower dossier, offer strategy, outreach writer, supervisor).
   - `backend/schemas/*` — Pydantic contracts shared between routers and services.
-- **Data plane (Unity Catalog, default catalog `mip_demo`):** raw share → `sql/transformations/silver_*.sql` → `sql/transformations/gold_*.sql` → `sql/metric_views/*` consumed by the app and Genie. UC SQL functions in `sql/uc_functions/` (`fn_in_the_money`, `fn_lead_score`, `fn_next_best_offer`, `fn_rate_spread`) are the canonical scoring primitives — keep Python scoring in `backend/services/scoring.py` consistent with them.
-- **App state:** Lakebase Postgres (`lakebase/schema.sql`) holds campaigns, approvals, agent sessions, audit, feedback. Demo seed in `lakebase/seed_demo_campaigns.sql`.
+- **Data plane (Unity Catalog, default catalog `mip`):** raw share → `sql/transformations/silver_*.sql` → `sql/transformations/gold_*.sql` → `sql/metric_views/*` consumed by the app and Genie. UC SQL functions in `sql/uc_functions/` (`fn_in_the_money`, `fn_lead_score`, `fn_next_best_offer`, `fn_rate_spread`) are the canonical scoring primitives — keep Python scoring in `backend/services/scoring.py` consistent with them.
+- **App state:** Lakebase Postgres (`lakebase/schema.sql`) holds campaigns, approvals, agent sessions, audit, feedback. Demo seed in `lakebase/seed_campaigns.sql`.
 - **Test fixtures (not a runtime mode):** `tests/fixtures/mock_population.py` and `frontend/src/mocks/demoData.ts` exist for unit tests and Storybook only. Production routers do NOT import them. There is no `MIP_MOCK_MODE` runtime toggle — the app runs on live Unity Catalog + Lakebase in every environment, including the DAIS booth. Real-world flakiness is handled by `backend/services/resilience.py` (retry, warm-start, short-TTL cache, circuit breaker) and by explicit degraded-state UI, never by silent mock fallback.
 - **Frontend:** Vite + React Router. Eight routes in `frontend/src/routes/` map 1:1 to the demo flow; shared UI in `components/mortgage/` (EvidenceDrawer, KpiCard, LeadTable, SegmentCard, ApprovalBanner, TriggerTimeline). Design tokens live in `design-system/tokens.css` — don't inline colors.
 - **Databricks bundle:** `databricks.yml` declares app, serverless SQL warehouse, jobs, pipelines, dashboards, Genie space, Lakebase instance, MLflow experiment. Per-resource YAML lives in `resources/`, `jobs/`, `pipelines/lakeflow/`.
@@ -98,7 +98,7 @@ If a command fails, fix the root cause before moving to another feature. Do not 
 - Test fixtures:       `tests/fixtures/mock_population.py`, `frontend/src/mocks/demoData.ts` (test-only; not imported by production routers)
 - **Design truth:**    `design_files/` (see "Design source of truth" below — load before any UI work)
 - Build plan:          `docs/implementation-plan.md`
-- Talk track:          `docs/module0-demo-talk-track.md`
+- Talk track:          `docs/module0-talk-track.md`
 
 ## Design source of truth — non-negotiable
 
@@ -141,8 +141,8 @@ Hard rules for UI work:
 - Internal app prefix: `mip`.
 - Demo lender default: `Summit Mortgage` unless the user changes it.
 - Synthetic borrower IDs: `demo-borrower-*` or `B-#####`.
-- Catalog default: `mip_demo`.
-- Gold schema default: `mip_demo.gold`.
+- Catalog default: `mip`.
+- Gold schema default: `mip.gold`.
 - Lakebase app schema default: `mip_app`.
 
 ## Domain rules
@@ -184,4 +184,4 @@ The demo is ready when:
 - Unit tests pass (scoring primitives pinned by golden fixtures) AND integration tests pass against real UC (nightly parity run green).
 - Playwright e2e passes against the live app, exercising the full demo path on real data.
 - `databricks bundle validate` passes with the real `sql_warehouse_id` and `genie_space_id`.
-- `docs/module0-demo-talk-track.md` supports a 6–8 minute booth pitch grounded in the multi-state real-data story.
+- `docs/module0-talk-track.md` supports a 6–8 minute booth pitch grounded in the multi-state real-data story.

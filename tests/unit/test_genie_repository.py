@@ -78,7 +78,7 @@ def _make_breaker(state: str = "closed") -> CircuitBreaker:
 def test_breaker_closed_calls_live_genie_and_stamps_source() -> None:
     live = GenieResponse(
         answer_text="12,840 borrowers are currently in the money.",
-        sql_query="SELECT count(*) FROM mip_demo.gold.lead_scores WHERE in_the_money",
+        sql_query="SELECT count(*) FROM mip.gold.lead_scores WHERE in_the_money",
         sql_result_rows=[{"count": 12840}],
         conversation_id="conv-abc",
         message_id="msg-1",
@@ -93,7 +93,7 @@ def test_breaker_closed_calls_live_genie_and_stamps_source() -> None:
     assert result.question == "How many borrowers are in the money?"
     assert "12,840" in result.answer
     assert result.table_rows == [{"count": 12840}]
-    assert "mip_demo.gold.lead_scores" in result.trusted_assets
+    assert "mip.gold.lead_scores" in result.trusted_assets
     # Live call must have been made.
     assert stub.ask_calls == ["How many borrowers are in the money?"]
 

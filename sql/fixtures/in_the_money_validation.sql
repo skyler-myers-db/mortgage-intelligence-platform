@@ -2,7 +2,7 @@
 -- in_the_money_validation.sql
 -- -----------------------------------------------------------------------------
 -- Purpose:  Cross-platform parity check. Asserts that
---           mip_demo.gold.fn_in_the_money(...) produces the same booleans as
+--           mip.gold.fn_in_the_money(...) produces the same booleans as
 --           tests/fixtures/in_the_money_golden.json (which is also the
 --           contract for backend/services/scoring.py in the next slice).
 --
@@ -36,9 +36,9 @@ WITH golden (id, rate_spread_bps, equity_pct, min_spread_bps, min_equity_pct, ex
 SELECT
   id,
   expected_itm,
-  mip_demo.gold.fn_in_the_money(rate_spread_bps, equity_pct, min_spread_bps, min_equity_pct) AS actual_itm,
+  mip.gold.fn_in_the_money(rate_spread_bps, equity_pct, min_spread_bps, min_equity_pct) AS actual_itm,
   CASE
-    WHEN mip_demo.gold.fn_in_the_money(rate_spread_bps, equity_pct, min_spread_bps, min_equity_pct) <=> expected_itm
+    WHEN mip.gold.fn_in_the_money(rate_spread_bps, equity_pct, min_spread_bps, min_equity_pct) <=> expected_itm
       THEN ''
     ELSE 'MISMATCH'
   END AS mismatch

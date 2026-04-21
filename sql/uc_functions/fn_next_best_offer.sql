@@ -129,7 +129,7 @@
 --            Safe for gold materializations and metric views.
 -- =============================================================================
 
-CREATE OR REPLACE FUNCTION mip_demo.gold.fn_next_best_offer(
+CREATE OR REPLACE FUNCTION mip.gold.fn_next_best_offer(
   rate_spread_bps      INT,
   equity_pct           INT,
   has_permit           BOOLEAN,

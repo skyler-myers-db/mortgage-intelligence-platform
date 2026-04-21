@@ -79,7 +79,7 @@ const COUNTY_FACTS: Record<string, { count: number; avgScore: number; lvl: 1 | 2
  * from mocks/demoData.ts instead of hardcoded synthetic counts.
  */
 
-// ---------- Synthetic per-state facts (demo-only; see TODO above) ----------
+// ---------- Synthetic per-state facts (preview; see TODO above) ----------
 
 interface StateFacts {
   count: number;

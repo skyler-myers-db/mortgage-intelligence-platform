@@ -2,7 +2,7 @@
 -- silver_owner_transfer_events.sql (transformation)
 -- -----------------------------------------------------------------------------
 -- Purpose:   Idempotent MERGE that populates
---            `mip_demo.silver.owner_transfer_events` from
+--            `mip.silver.owner_transfer_events` from
 --            `cotality_mortgage_data.corelogic.entrada_eval_owner_transfer_
 --            domain_v1`, filtered to the 6-state footprint via
 --            `deed_situs_state_static`.
@@ -35,7 +35,7 @@
 -- Idempotency: MERGE on transfer_txn_id.
 -- =============================================================================
 
-MERGE INTO mip_demo.silver.owner_transfer_events AS t
+MERGE INTO mip.silver.owner_transfer_events AS t
 USING (
   SELECT
     owner_transfer_composite_transaction_id                                         AS transfer_txn_id,

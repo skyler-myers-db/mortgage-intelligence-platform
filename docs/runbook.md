@@ -2,7 +2,7 @@
 
 **Who uses this:** the booth operator, the backup presenter, and the
 on-call engineer during a live demo or after a production deploy.
-**Companion doc:** [`docs/module0-demo-rehearsal-checklist.md`](module0-demo-rehearsal-checklist.md)
+**Companion doc:** [`docs/module0-rehearsal-checklist.md`](module0-rehearsal-checklist.md)
 is the proactive pre-demo pass. This runbook is the reactive
 incident-response + deploy guide. Run the checklist **before** every
 demo block; reach for this file when something goes sideways.
@@ -15,7 +15,7 @@ operator can hit both the app URL and the Databricks workspace CLI.
 
 ## 1. Booth morning-of
 
-Run [`docs/module0-demo-rehearsal-checklist.md`](module0-demo-rehearsal-checklist.md)
+Run [`docs/module0-rehearsal-checklist.md`](module0-rehearsal-checklist.md)
 end-to-end. It warms the SQL warehouse, probes `/api/health`, cold-starts
 Genie, verifies a Lakebase write, and walks the click path. If the
 checklist returns all-green, skip to §4 (deploy-from-scratch is only for
@@ -39,7 +39,7 @@ Then prime the first query so the audience doesn't see the cold tax:
 
 ```bash
 databricks api post /api/2.0/sql/statements \
-  --json '{"statement":"SELECT 1 FROM mip_demo.gold.borrower_360 LIMIT 1","warehouse_id":"'"$DATABRICKS_WAREHOUSE_ID"'"}' | jq
+  --json '{"statement":"SELECT 1 FROM mip.gold.borrower_360 LIMIT 1","warehouse_id":"'"$DATABRICKS_WAREHOUSE_ID"'"}' | jq
 ```
 
 ### 1.2 Lakebase cold / auth token expired
@@ -158,14 +158,14 @@ scoring-adjacent code.
 
    ```bash
    databricks api post /api/2.0/sql/statements \
-     --json '{"statement":"SELECT mip_demo.gold.fn_lead_score(0.35, 0.30, 0.15, 0.10, 0.10) AS score","warehouse_id":"'"$DATABRICKS_WAREHOUSE_ID"'"}' | jq
+     --json '{"statement":"SELECT mip.gold.fn_lead_score(0.35, 0.30, 0.15, 0.10, 0.10) AS score","warehouse_id":"'"$DATABRICKS_WAREHOUSE_ID"'"}' | jq
    ```
 
 ### Common causes + fixes
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| UDF returns NULL | `fn_*` not deployed to `mip_demo.gold.*` | `databricks bundle run mip_refresh_demo_data -t dev` |
+| UDF returns NULL | `fn_*` not deployed to `mip.gold.*` | `databricks bundle run mip_refresh_silver -t dev` |
 | Python says 82, UDF says 83 | Rate coerced to percent (`5.75`) instead of fraction (`0.0575`) on one side | Check the fixture input schema; rate_spread expects fraction |
 | Python says 81, UDF says 82 | Banker's rounding (HALF_EVEN) vs half-up drift | `backend/services/scoring.py::_round_half_even` must match UDF `round(..., 0)` which is HALF_EVEN in Spark |
 | Both say different ints | True scoring drift — primitive changed without fixture update | **STOP.** Revert the primitive edit, update the golden JSON in a separate PR with governance review |
@@ -193,7 +193,7 @@ databricks bundle deploy -t dev
 databricks bundle run mip_fred_rates_ingest -t dev
 
 # 3. Silver lift from Cotality Delta Share (6-state filter; ~10M rows)
-databricks bundle run mip_refresh_demo_data -t dev
+databricks bundle run mip_refresh_silver -t dev
 
 # 4. Lakebase schema migration + seed campaigns
 databricks bundle run mip_lakebase_migrate -t dev
@@ -243,10 +243,10 @@ off silver) but cohort counts drift. Detect + fix:
 ```bash
 # Detect
 databricks api post /api/2.0/sql/statements \
-  --json '{"statement":"SELECT MAX(_ingested_at) FROM mip_demo.silver.lien_current","warehouse_id":"'"$DATABRICKS_WAREHOUSE_ID"'"}' | jq
+  --json '{"statement":"SELECT MAX(_ingested_at) FROM mip.silver.lien_current","warehouse_id":"'"$DATABRICKS_WAREHOUSE_ID"'"}' | jq
 
 # If that timestamp is > 24h old, re-run silver + gold in sequence:
-databricks bundle run mip_refresh_demo_data -t dev
+databricks bundle run mip_refresh_silver -t dev
 databricks bundle run mip_gold_pipeline -t dev
 ```
 
@@ -288,7 +288,7 @@ for the full workflow map. Common red jobs:
 - `backend-tests` / `frontend-tests`: local repro with `pytest -q` or
   `npm --prefix frontend run lint && npm run test && npm run build`.
 - `talk-track-lint`: spoken word count out of `[1000, 1500]`. Trim or
-  expand `docs/module0-demo-talk-track.md` spoken copy (lines starting
+  expand `docs/module0-talk-track.md` spoken copy (lines starting
   `> `). See `tools/talk_track_wc.py`.
 - `bundle-validate`: `databricks bundle validate -t dev` locally with
   placeholder BUNDLE_VARs set (see workflow YAML).

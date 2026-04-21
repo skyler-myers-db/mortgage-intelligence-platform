@@ -129,7 +129,7 @@ Per `CLAUDE.md` negative prompting ("Do not overbuild Modules 1–4 before Modul
 - **Freddie Mac PMMS 30-year fixed rate** via FRED series `MORTGAGE30US`.
   - Why: `fn_in_the_money` needs `rate_spread_bps = borrower_rate - market_rate`. Without a market rate series we cannot compute the spread.
   - Cadence: weekly, small CSV.
-  - Integration: small Databricks job writes the FRED CSV to a `mip_demo.silver.market_rates_weekly` table, lagged by one day.
+  - Integration: small Databricks job writes the FRED CSV to a `mip.silver.market_rates_weekly` table, lagged by one day.
   - License: FRED is free for redistribution.
 
 ### Optional / nice-to-have for polish
@@ -145,11 +145,11 @@ Per `CLAUDE.md` negative prompting ("Do not overbuild Modules 1–4 before Modul
 
 ## 6. Mapping — share → silver → gold
 
-This is the bridge from today's empty transformation files to real data. Target catalog: `mip_demo` (per `CLAUDE.md`).
+This is the bridge from today's empty transformation files to real data. Target catalog: `mip` (per `CLAUDE.md`).
 
 ### Silver (1:1 typed lift with minimal filtering)
 ```
-mip_demo.silver.property_master
+mip.silver.property_master
   <- SELECT clip, fips_county_code, situs_street_address, situs_city, situs_state, situs_zip_code,
            situs_core_based_statistical_area_cbsa, block_level_latitude, block_level_longitude,
            owner_1_full_name, owner_1_identifier, owner_1_corporate_indicator, owner_occupancy_code,
@@ -161,7 +161,7 @@ mip_demo.silver.property_master
      FROM cotality_mortgage_data.corelogic.entrada_eval_property_domain_v3
      WHERE situs_state IN ('IL','CA','FL','TX','WA','CO')     -- match real footprint
 
-mip_demo.silver.lien_current
+mip.silver.lien_current
   <- SELECT clip, owner_1_full_name, owner_occupancy_code,
            situs_street_address, situs_state, situs_zip_code,
            total_number_of_open_mortgage_liens, total_amount_of_open_mortgage_liens,
@@ -181,7 +181,7 @@ mip_demo.silver.lien_current
      FROM cotality_mortgage_data.corelogic.entrada_eval_voluntary_lien_status_marketing_v2
      WHERE situs_state IN ('IL','CA','FL','TX','WA','CO')
 
-mip_demo.silver.mortgage_events
+mip.silver.mortgage_events
   <- SELECT clip, mortgage_composite_transaction_id, mortgage_derived_date, mortgage_amount,
            mortgage_interest_rate_cascade, mortgage_purpose_code, mortgage_loan_type_code,
            refinance_loan_indicator, equity_loan_indicator, reverse_mortgage_indicator,
@@ -190,7 +190,7 @@ mip_demo.silver.mortgage_events
      FROM cotality_mortgage_data.corelogic.entrada_eval_mortgage_domain_v1
      WHERE deed_situs_state_static IN ('IL','CA','FL','TX','WA','CO')
 
-mip_demo.silver.owner_transfer_events
+mip.silver.owner_transfer_events
   <- SELECT clip, sale_derived_date, sale_amount, sale_type_code,
            cash_purchase_indicator, investor_purchase_indicator, foreclosure_reo_indicator,
            short_sale_indicator, new_construction_indicator, resale_indicator, interfamily_related_indicator,
@@ -199,17 +199,17 @@ mip_demo.silver.owner_transfer_events
      FROM cotality_mortgage_data.corelogic.entrada_eval_owner_transfer_domain_v1
      WHERE deed_situs_state_static IN ('IL','CA','FL','TX','WA','CO')
 
-mip_demo.silver.market_rates_weekly
+mip.silver.market_rates_weekly
   <- FRED MORTGAGE30US CSV (weekly job)
 ```
 
 ### Gold (scoring-ready, matches existing UDF signatures)
 ```
-mip_demo.gold.property_owner_bridge   -- Owner Link rollup (count properties per owner_1_identifier)
-mip_demo.gold.borrower_360            -- one row per CLIP: joined lien_current + property + owner + latest retention signal
-mip_demo.gold.lead_scores             -- fn_lead_score(economic, intent, fit, relationship, evidence) per CLIP
-mip_demo.gold.evidence_events         -- timeline per CLIP: refis, payoffs, sales, foreclosure stage, rate changes
-mip_demo.gold.lead_population         -- filtered ranked top-N for demo surface
+mip.gold.property_owner_bridge   -- Owner Link rollup (count properties per owner_1_identifier)
+mip.gold.borrower_360            -- one row per CLIP: joined lien_current + property + owner + latest retention signal
+mip.gold.lead_scores             -- fn_lead_score(economic, intent, fit, relationship, evidence) per CLIP
+mip.gold.evidence_events         -- timeline per CLIP: refis, payoffs, sales, foreclosure stage, rate changes
+mip.gold.lead_population         -- filtered ranked top-N for demo surface
 ```
 
 ### Component score definitions (feeds `fn_lead_score`)
@@ -226,7 +226,7 @@ mip_demo.gold.lead_population         -- filtered ranked top-N for demo surface
 1. **Add FRED `MORTGAGE30US` ingestion** (1 small job, 1 silver table). Unblocks in-the-money math.
 2. **Populate silver transformations** per §6. No cross-domain joins yet — plain SELECT-with-WHERE on the share.
 3. **Populate gold** `borrower_360` + `lead_scores` + `evidence_events`. Join lien_current + property_v3 + mortgage_events aggregates.
-4. **Wire `backend/services/databricks_sql.py`** (currently a stub) to point at `mip_demo.gold.*`. Keep mock mode in parallel via `MIP_MOCK_MODE=true` so demo fallback survives.
+4. **Wire `backend/services/databricks_sql.py`** (currently a stub) to point at `mip.gold.*`. Keep mock mode in parallel via `MIP_MOCK_MODE=true` so demo fallback survives.
 5. **Reconcile demo lender footprint** with real state coverage (pick one of IL/CA/FL/TX/WA/CO as Summit Mortgage's book, or a metro like Chicago/Seattle/Denver).
 6. **Request MLS Listings + Building Permits from Cotality** in parallel with the above — these unblock segment 6 and upgrade segment 3 but don't block the other 5 segments from shipping.
 

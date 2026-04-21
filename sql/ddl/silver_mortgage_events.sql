@@ -1,7 +1,7 @@
 -- =============================================================================
 -- silver_mortgage_events.sql
 -- -----------------------------------------------------------------------------
--- Purpose:   DDL for `mip_demo.silver.mortgage_events`, the historical
+-- Purpose:   DDL for `mip.silver.mortgage_events`, the historical
 --            mortgage-event grain table. One row per originated/refinanced/
 --            released mortgage event per CLIP. Consumed by gold to
 --            reconstruct per-borrower timelines (`gold.evidence_events`),
@@ -73,7 +73,7 @@
 --            `mortgage_txn_id` (composite txn id is a PK on the share).
 -- =============================================================================
 
-CREATE TABLE IF NOT EXISTS mip_demo.silver.mortgage_events (
+CREATE TABLE IF NOT EXISTS mip.silver.mortgage_events (
   mortgage_txn_id        STRING    NOT NULL COMMENT 'Composite transaction ID from share (mortgage_composite_transaction_id). PK.',
   clip                   STRING    NOT NULL COMMENT 'Cotality mastered property ID. FK to silver.lien_current + silver.property_master.',
   situs_state            STRING    NOT NULL COMMENT '2-char state code (renamed from deed_situs_state_static). Filter: IN (IL, CA, FL, TX, WA, CO).',

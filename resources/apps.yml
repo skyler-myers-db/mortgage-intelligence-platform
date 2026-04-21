@@ -2,7 +2,7 @@ resources:
   apps:
     mip_module0_app:
       name: ${var.app_name}
-      description: "Mortgage Intelligence Platform Module 0 DAIS demo"
+      description: "Mortgage Intelligence Platform — Module 0 (Top-of-Funnel Lead Generation & Borrower Segmentation)"
       source_code_path: .
       resources:
         - name: sql_warehouse

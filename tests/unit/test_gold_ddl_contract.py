@@ -50,12 +50,12 @@ GOLD_TRANSFORMATION_FILES: tuple[str, ...] = (
 
 # Target UC paths. The manifest (003_gold_tables.sql) must reference each.
 GOLD_TABLE_PATHS: tuple[str, ...] = (
-    "mip_demo.gold.property_owner_bridge",
-    "mip_demo.gold.borrower_360",
-    "mip_demo.gold.lead_scores",
-    "mip_demo.gold.evidence_events",
-    "mip_demo.gold.lead_population",
-    "mip_demo.gold.segment_population",
+    "mip.gold.property_owner_bridge",
+    "mip.gold.borrower_360",
+    "mip.gold.lead_scores",
+    "mip.gold.evidence_events",
+    "mip.gold.lead_population",
+    "mip.gold.segment_population",
 )
 
 FORBIDDEN_PII_COLUMNS: tuple[str, ...] = (

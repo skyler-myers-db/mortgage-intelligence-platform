@@ -1,7 +1,7 @@
 -- =============================================================================
 -- gold_property_owner_bridge.sql
 -- -----------------------------------------------------------------------------
--- Purpose:   DDL for `mip_demo.gold.property_owner_bridge`. One row per
+-- Purpose:   DDL for `mip.gold.property_owner_bridge`. One row per
 --            `owner_link_id` carrying the Owner-Link rollup that gold.
 --            borrower_360 stamps onto each CLIP for investor / multi-property
 --            signals. Direct projection of silver.owner_property_bridge
@@ -15,7 +15,7 @@
 --
 -- Data contract reference: docs/data-contract-module0.md §3.1.
 -- Slice:     module0-real-data-slice3 (gold layer build).
--- Source:    mip_demo.silver.owner_property_bridge (silver rollup produced by
+-- Source:    mip.silver.owner_property_bridge (silver rollup produced by
 --            pipelines/lakeflow/mip_feature_pipeline.py in slice 2).
 --
 -- PII posture: owner_link_id is a Cotality-mastered opaque identifier -- NOT
@@ -29,7 +29,7 @@
 --            worth preserving between refreshes.
 -- =============================================================================
 
-CREATE TABLE IF NOT EXISTS mip_demo.gold.property_owner_bridge (
+CREATE TABLE IF NOT EXISTS mip.gold.property_owner_bridge (
   owner_link_id             STRING    NOT NULL COMMENT 'Cotality Owner Link. PK.',
   related_property_count    INT       NOT NULL COMMENT 'Count of distinct CLIPs tied to this Owner Link across the 6-state footprint. Drives Borrower360.related_property_count and the investor branch of fn_next_best_offer.',
   corporate_property_count  INT       NOT NULL COMMENT 'Number of related properties with owner_is_corporate = TRUE.',

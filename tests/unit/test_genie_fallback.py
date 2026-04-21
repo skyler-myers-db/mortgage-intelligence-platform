@@ -80,7 +80,7 @@ def test_offtopic_falls_through_to_warm_fallback(question: str) -> None:
 def test_response_carries_question_and_uc_sources() -> None:
     r = respond("Which ZIPs have the most in-the-money refi candidates?")
     assert r.question == "Which ZIPs have the most in-the-money refi candidates?"
-    assert any(a.startswith("mip_demo.") for a in r.trusted_assets)
+    assert any(a.startswith("mip.") for a in r.trusted_assets)
     assert r.table_rows and len(r.table_rows) >= 3
 
 
