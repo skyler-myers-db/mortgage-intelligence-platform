@@ -4,6 +4,7 @@ from backend.api import (
     admin,
     audit,
     borrowers,
+    config,
     genie,
     health,
     leads,
@@ -17,6 +18,7 @@ app = FastAPI(title="Mortgage Intelligence Platform API")
 
 for router in [
     health.router,
+    config.router,
     admin.router,
     portfolio.router,
     segments.router,
