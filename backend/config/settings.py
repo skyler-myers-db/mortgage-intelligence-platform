@@ -24,6 +24,16 @@ class Settings(BaseSettings):
     mip_min_spread_bps: int = 75
     mip_min_equity_pct: int = 15
 
+    # Next-best-offer thresholds: matches
+    # tests/fixtures/next_best_offer_golden.json (default_thresholds).
+    # `heloc_equity_min_pct > min_equity_pct` is intentional — HELOC
+    # underwriting demands more equity cushion than plain refi.
+    # `retention_min_spread < min_spread_bps` is intentional — we reach
+    # out earlier on existing relationships.
+    mip_heloc_equity_min_pct: int = 35
+    mip_cashout_equity_min_pct: int = 25
+    mip_retention_min_spread_bps: int = 50
+
     databricks_host: str | None = None
     databricks_warehouse_id: str | None = None
     genie_space_id: str | None = None

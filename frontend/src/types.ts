@@ -72,3 +72,22 @@ export interface PortfolioPreview {
   projected_contact_to_app: number;
   cost_per_contact: number;
 }
+
+export interface OfferAlternative {
+  offer_code: string;
+  product_label: string;
+  reason_not_chosen: string;
+}
+
+export interface OfferRecommendation {
+  borrower_id: string;
+  offer_code: string;
+  offer_type: string;
+  product_label: string;
+  confidence: number;
+  rationale: string;
+  evidence_ids: string[];
+  sources: string[];
+  alternatives: OfferAlternative[];
+  thresholds_applied: Record<string, number>;
+}

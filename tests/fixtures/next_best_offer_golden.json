@@ -1,0 +1,114 @@
+{
+  "default_thresholds": {
+    "min_spread_bps": 75,
+    "min_equity_pct": 15,
+    "heloc_equity_min_pct": 35,
+    "cashout_equity_min": 25,
+    "retention_min_spread": 50
+  },
+  "default_thresholds_note": "Module 0 demo defaults. Applied by the application layer from admin config, NOT baked as UDF defaults (the UDF takes all five thresholds explicitly so a growth lead can tune aggressiveness without a SQL deploy). `heloc_equity_min_pct > min_equity_pct` is intentional — HELOC underwriting demands more equity cushion than plain refi. `retention_min_spread < min_spread_bps` is intentional — we reach out earlier on existing relationships.",
+  "product_labels": {
+    "purchase": "Purchase Mortgage",
+    "refi_plus_heloc": "Refinance + HELOC",
+    "heloc": "HELOC",
+    "refi": "Refinance",
+    "cash_out": "Cash-out Refi",
+    "investor": "Investor Product",
+    "retention": "Retention",
+    "nurture": "Nurture"
+  },
+  "product_labels_note": "Contract for backend rendering. The UDF returns the lowercase code; the human label shown on Lead Queue, Borrower 360, and Offer Orchestrator surfaces comes from this map. The next slice (backend-databricks-engineer) should import this JSON and expose the label via OfferRecommendation.product_label.",
+  "demo_label_shift_note": "Previously mock_data.py hardcoded B-48294 (Park) as 'HELOC'. Under this decision tree, Park lands in 'refi_plus_heloc' (Refinance + HELOC) because a 188 bps spread AND 39% equity both clear their respective bars — a pure HELOC would leave refi revenue on the table. This is the honest output of the tree; the backend engineer will update mock_data.py to match. B-48291 (Rodriguez, 'Refinance + HELOC') and B-48295 (Thompson, 'Purchase Mortgage') are preserved.",
+  "cases": [
+    {
+      "id": "case_01_listed_purchase_dominates",
+      "inputs": {"rate_spread_bps": 200, "equity_pct": 80, "has_permit": true, "listed_for_sale": true, "is_investor": true, "is_current_customer": true, "is_competitor_lien": true, "min_spread_bps": 75, "min_equity_pct": 15, "heloc_equity_min_pct": 35, "cashout_equity_min": 25, "retention_min_spread": 50},
+      "expected_offer": "purchase",
+      "note": "Listing dominates every other signal. Every other branch WOULD fire under these inputs (strong spread, strong equity, permit, investor, customer, competitor lien) — yet branch 1 wins because the active listing means the current lien is about to be paid off anyway. Pins the priority order."
+    },
+    {
+      "id": "case_02_refi_plus_heloc_clean",
+      "inputs": {"rate_spread_bps": 120, "equity_pct": 45, "has_permit": false, "listed_for_sale": false, "is_investor": false, "is_current_customer": false, "is_competitor_lien": false, "min_spread_bps": 75, "min_equity_pct": 15, "heloc_equity_min_pct": 35, "cashout_equity_min": 25, "retention_min_spread": 50},
+      "expected_offer": "refi_plus_heloc",
+      "note": "Clean refi+HELOC cross-sell. Spread 120>=75 AND equity 45>=35 — no permit needed. Branch 2 fires above branch 3 because the refi economics drive the conversation regardless of permit."
+    },
+    {
+      "id": "case_03_heloc_permit_driven",
+      "inputs": {"rate_spread_bps": 30, "equity_pct": 45, "has_permit": true, "listed_for_sale": false, "is_investor": false, "is_current_customer": false, "is_competitor_lien": false, "min_spread_bps": 75, "min_equity_pct": 15, "heloc_equity_min_pct": 35, "cashout_equity_min": 25, "retention_min_spread": 50},
+      "expected_offer": "heloc",
+      "note": "Pure HELOC lane. Spread 30<75 so branch 2 fails; permit=TRUE AND equity 45>=35 so branch 3 fires. This is the 'permit, no refi need' story — renovation financing on an existing low-rate lien."
+    },
+    {
+      "id": "case_04_refi_only_equity_below_heloc_min",
+      "inputs": {"rate_spread_bps": 100, "equity_pct": 20, "has_permit": false, "listed_for_sale": false, "is_investor": false, "is_current_customer": false, "is_competitor_lien": false, "min_spread_bps": 75, "min_equity_pct": 15, "heloc_equity_min_pct": 35, "cashout_equity_min": 25, "retention_min_spread": 50},
+      "expected_offer": "refi",
+      "note": "Plain refi. Economics 100>=75, but equity 20 is below heloc_equity_min=35, so branch 2 fails. No permit so branch 3 fails. Branch 4 fires: 100>=75 AND 20>=15. Lead with refi; leave HELOC cross-sell for later cycles."
+    },
+    {
+      "id": "case_05_cash_out_no_rate_no_permit",
+      "inputs": {"rate_spread_bps": 20, "equity_pct": 30, "has_permit": false, "listed_for_sale": false, "is_investor": false, "is_current_customer": false, "is_competitor_lien": false, "min_spread_bps": 75, "min_equity_pct": 15, "heloc_equity_min_pct": 35, "cashout_equity_min": 25, "retention_min_spread": 50},
+      "expected_offer": "cash_out",
+      "note": "Cash-out refi lane. No refi rate economics (20<75), no permit, equity 30 is below HELOC threshold (35) but above cashout threshold (25). Branch 5 fires."
+    },
+    {
+      "id": "case_06_investor_below_equity_branches",
+      "inputs": {"rate_spread_bps": 0, "equity_pct": 10, "has_permit": false, "listed_for_sale": false, "is_investor": true, "is_current_customer": false, "is_competitor_lien": false, "min_spread_bps": 75, "min_equity_pct": 15, "heloc_equity_min_pct": 35, "cashout_equity_min": 25, "retention_min_spread": 50},
+      "expected_offer": "investor",
+      "note": "Investor branch. Equity 10 is below every equity bar (refi min 15, cashout 25, HELOC 35) and no rate spread, so branches 2-5 all fail. Branch 6 fires on is_investor=TRUE. Pins that investor sits BELOW the owner-occupant equity branches."
+    },
+    {
+      "id": "case_07_retention_competitor_lien",
+      "inputs": {"rate_spread_bps": 0, "equity_pct": 10, "has_permit": false, "listed_for_sale": false, "is_investor": false, "is_current_customer": true, "is_competitor_lien": true, "min_spread_bps": 75, "min_equity_pct": 15, "heloc_equity_min_pct": 35, "cashout_equity_min": 25, "retention_min_spread": 50},
+      "expected_offer": "retention",
+      "note": "Retention via competitor-lien recapture. No rate spread and low equity, but customer=TRUE AND competitor_lien=TRUE triggers branch 7 directly — a competitor lien on the Owner Link is a recapture signal even without rate economics."
+    },
+    {
+      "id": "case_08_nurture_customer_no_trigger",
+      "inputs": {"rate_spread_bps": 30, "equity_pct": 10, "has_permit": false, "listed_for_sale": false, "is_investor": false, "is_current_customer": true, "is_competitor_lien": false, "min_spread_bps": 75, "min_equity_pct": 15, "heloc_equity_min_pct": 35, "cashout_equity_min": 25, "retention_min_spread": 50},
+      "expected_offer": "nurture",
+      "note": "Customer without strong rate OR competitor lien falls to nurture. Branch 7 requires customer=TRUE AND (spread 30>=50 OR competitor_lien) — 30<50 AND competitor=FALSE, so branch 7 fails. Keep in funnel, do not surface to approval queue."
+    },
+    {
+      "id": "case_09_boundary_heloc_equity_one_below_falls_to_refi",
+      "inputs": {"rate_spread_bps": 100, "equity_pct": 34, "has_permit": false, "listed_for_sale": false, "is_investor": false, "is_current_customer": false, "is_competitor_lien": false, "min_spread_bps": 75, "min_equity_pct": 15, "heloc_equity_min_pct": 35, "cashout_equity_min": 25, "retention_min_spread": 50},
+      "expected_offer": "refi",
+      "note": "Boundary: equity one below heloc_equity_min_pct (34 vs 35). Branch 2 fails on 34<35, branch 3 fails (no permit), branch 4 fires: 100>=75 AND 34>=15. Paired with case_10; flipping equity 34->35 shifts refi -> refi_plus_heloc."
+    },
+    {
+      "id": "case_10_boundary_heloc_equity_exact_fires_cross_sell",
+      "inputs": {"rate_spread_bps": 100, "equity_pct": 35, "has_permit": false, "listed_for_sale": false, "is_investor": false, "is_current_customer": false, "is_competitor_lien": false, "min_spread_bps": 75, "min_equity_pct": 15, "heloc_equity_min_pct": 35, "cashout_equity_min": 25, "retention_min_spread": 50},
+      "expected_offer": "refi_plus_heloc",
+      "note": "Boundary: equity EXACTLY at heloc_equity_min_pct (35). The >= contract means exact equality is IN. Flipping to strict > would fail this case loudly. Paired with case_09 to pin the HELOC equity boundary on both sides."
+    },
+    {
+      "id": "case_11_demo_b48291_rodriguez_refi_plus_heloc",
+      "inputs": {"rate_spread_bps": 88, "equity_pct": 46, "has_permit": false, "listed_for_sale": false, "is_investor": false, "is_current_customer": false, "is_competitor_lien": false, "min_spread_bps": 75, "min_equity_pct": 15, "heloc_equity_min_pct": 35, "cashout_equity_min": 25, "retention_min_spread": 50},
+      "expected_offer": "refi_plus_heloc",
+      "note": "Demo borrower B-48291 (Rodriguez). Spread 88 and equity 46 come from fn_rate_spread and the LTV calc pinned in rate_spread/in_the_money fixtures. Branch 2 fires (88>=75 AND 46>=35) -> 'refi_plus_heloc' -> 'Refinance + HELOC'. PRESERVES the hardcoded demo label."
+    },
+    {
+      "id": "case_12_demo_b48294_park_label_shift_to_refi_plus_heloc",
+      "inputs": {"rate_spread_bps": 188, "equity_pct": 39, "has_permit": true, "listed_for_sale": false, "is_investor": false, "is_current_customer": false, "is_competitor_lien": false, "min_spread_bps": 75, "min_equity_pct": 15, "heloc_equity_min_pct": 35, "cashout_equity_min": 25, "retention_min_spread": 50},
+      "expected_offer": "refi_plus_heloc",
+      "note": "Demo borrower B-48294 (Park). LABEL SHIFT from previously hardcoded 'HELOC'. Under the tree: spread 188>=75 AND equity 39>=35 so branch 2 fires BEFORE the pure-HELOC branch 3, returning 'refi_plus_heloc' -> 'Refinance + HELOC'. This is the honest output of the decision tree — when rate economics also qualify, the cross-sell is the correct product, not pure HELOC. Backend engineer will update mock_data.py to match."
+    },
+    {
+      "id": "case_13_demo_b48295_thompson_purchase",
+      "inputs": {"rate_spread_bps": 162, "equity_pct": 56, "has_permit": false, "listed_for_sale": true, "is_investor": false, "is_current_customer": false, "is_competitor_lien": false, "min_spread_bps": 75, "min_equity_pct": 15, "heloc_equity_min_pct": 35, "cashout_equity_min": 25, "retention_min_spread": 50},
+      "expected_offer": "purchase",
+      "note": "Demo borrower B-48295 (Thompson). listed_for_sale=TRUE so branch 1 fires immediately -> 'purchase' -> 'Purchase Mortgage'. PRESERVES the hardcoded demo label. Even though spread 162 and equity 56 would otherwise qualify for refi_plus_heloc, the listing dominates."
+    },
+    {
+      "id": "case_14_all_null_numerics_boolean_nulls_return_nurture",
+      "inputs": {"rate_spread_bps": null, "equity_pct": null, "has_permit": null, "listed_for_sale": null, "is_investor": null, "is_current_customer": null, "is_competitor_lien": null, "min_spread_bps": 75, "min_equity_pct": 15, "heloc_equity_min_pct": 35, "cashout_equity_min": 25, "retention_min_spread": 50},
+      "expected_offer": "nurture",
+      "note": "All-NULL row. Numerics coerce to 0, booleans coerce to FALSE. Branch 1 FALSE; branch 2: 0>=75 FALSE; branch 3: FALSE; branch 4: 0>=75 FALSE; branch 5: 0>=25 FALSE; branch 6: FALSE; branch 7: FALSE. Falls through to 'nurture' — the safe lane. Pins NULL policy and keeps recommended_offer NOT NULL downstream."
+    },
+    {
+      "id": "case_15_custom_threshold_shifts_branch_refi_plus_heloc_to_cash_out",
+      "inputs": {"rate_spread_bps": 120, "equity_pct": 45, "has_permit": false, "listed_for_sale": false, "is_investor": false, "is_current_customer": false, "is_competitor_lien": false, "min_spread_bps": 150, "min_equity_pct": 15, "heloc_equity_min_pct": 35, "cashout_equity_min": 25, "retention_min_spread": 50},
+      "expected_offer": "cash_out",
+      "note": "Same inputs as case_02 but min_spread_bps raised from 75 to 150. Branch 2 fails (120<150), branch 3 fails (no permit), branch 4 fails (120<150), branch 5 fires (45>=25) -> 'cash_out'. Proves thresholds come from the caller, not baked constants — a stricter admin config demotes a refi_plus_heloc lead to cash_out."
+    }
+  ]
+}

@@ -1,5 +1,42 @@
-import type { Borrower360, LeadSummary, PortfolioPreview, SegmentSummary } from '../types';
+import type {
+  Borrower360,
+  LeadSummary,
+  OfferRecommendation,
+  PortfolioPreview,
+  SegmentSummary,
+} from '../types';
 import { mockBorrowers, mockPortfolio, mockSegments } from '../mocks/demoData';
+
+/** Default thresholds mirror backend OfferEngineConfig — used only in offline fallback. */
+const FALLBACK_THRESHOLDS: Record<string, number> = {
+  min_spread_bps: 75,
+  min_equity_pct: 15,
+  heloc_equity_min_pct: 35,
+  cashout_equity_min_pct: 25,
+  retention_min_spread_bps: 50,
+};
+
+function fallbackOfferRecommendation(borrower_id: string): OfferRecommendation {
+  const b = mockBorrowers.find((x) => x.borrower_id === borrower_id) ?? mockBorrowers[0];
+  const offer_code = (b.recommended_offer ?? 'nurture').toLowerCase().replace(/[^a-z]+/g, '_').replace(/^_+|_+$/g, '') || 'nurture';
+  return {
+    borrower_id: b.borrower_id,
+    offer_code,
+    offer_type: offer_code,
+    product_label: b.recommended_offer ?? 'Nurture',
+    confidence: b.confidence,
+    rationale: b.why_now ?? 'Fallback rationale — backend unavailable.',
+    evidence_ids: b.evidence_ids ?? [],
+    sources: [
+      'mip_demo.gold.fn_next_best_offer',
+      'mip_demo.gold.fn_rate_spread',
+      'mip_demo.gold.fn_in_the_money',
+      'mip_demo.gold.fn_lead_score',
+    ],
+    alternatives: [],
+    thresholds_applied: FALLBACK_THRESHOLDS,
+  };
+}
 
 async function getJson<T>(path: string, fallback: T): Promise<T> {
   try {
@@ -43,6 +80,12 @@ export const api = {
     getJson<Borrower360>(
       `/api/borrowers/${id}`,
       (mockBorrowers.find((b) => b.borrower_id === id) ?? mockBorrowers[0]) as Borrower360
+    ),
+  recommendOffer: (borrower_id: string) =>
+    postJson<OfferRecommendation, { borrower_id: string }>(
+      '/api/offers/recommend',
+      { borrower_id },
+      fallbackOfferRecommendation(borrower_id)
     ),
   approve: async (borrower_id: string, actor = 'demo-user') => {
     try {
