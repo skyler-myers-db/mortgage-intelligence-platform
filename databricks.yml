@@ -52,6 +52,69 @@ resources:
       name: mip_snapshot_dashboards
       tasks: []
 
+    # Slice 1 real-data migration: FRED MORTGAGE30US -> silver.market_rates_weekly.
+    # Self-contained deploy: task `init` applies DDL, `seed` loads the committed
+    # CSV IF the table is empty, `refresh` pulls FRED + MERGEs. Re-running the
+    # whole job on the same day is a no-op (seed short-circuits, MERGE is
+    # idempotent). See jobs/fred_rates_ingest.py for resilience on FRED outage.
+    mip_fred_rates_ingest:
+      name: mip_fred_rates_ingest
+      tags:
+        solution: mortgage-intelligence-platform
+        module: module0
+        owner: entrada
+        slice: module0-real-data-slice1
+      max_concurrent_runs: 1
+      # Serverless Python task environment. Spark is attached automatically
+      # for spark_python_task. Only stdlib is used by jobs/fred_rates_ingest.py
+      # (urllib + csv), so no extra wheel dependencies are declared here.
+      environments:
+        - environment_key: py_default
+          spec:
+            client: "2"
+      # FRED publishes Thursdays; we run Fridays 06:00 America/Chicago so the
+      # refresh lands before any Monday business readout. Disable pause on the
+      # per-target cron; dev stays manual-trigger by default via targets.dev.
+      schedule:
+        quartz_cron_expression: "0 0 6 ? * FRI *"
+        timezone_id: America/Chicago
+        pause_status: UNPAUSED
+      tasks:
+        - task_key: init_ddl
+          description: "Idempotent CREATE CATALOG/SCHEMA + silver.market_rates_weekly DDL."
+          sql_task:
+            warehouse_id: ${var.sql_warehouse_id}
+            file:
+              path: sql/ddl/001_catalogs_schemas.sql
+        - task_key: init_silver_ddl
+          description: "CREATE TABLE IF NOT EXISTS for silver.market_rates_weekly."
+          depends_on:
+            - task_key: init_ddl
+          sql_task:
+            warehouse_id: ${var.sql_warehouse_id}
+            file:
+              path: sql/ddl/silver_market_rates_weekly.sql
+        - task_key: seed_if_empty
+          description: "Load data/seeds/fred_mortgage30us_seed.csv iff silver table is empty."
+          depends_on:
+            - task_key: init_silver_ddl
+          environment_key: py_default
+          spark_python_task:
+            python_file: jobs/fred_rates_ingest.py
+            parameters: ["--mode=seed"]
+          max_retries: 2
+          retry_on_timeout: true
+        - task_key: refresh_from_fred
+          description: "Pull FRED MORTGAGE30US and MERGE into silver.market_rates_weekly."
+          depends_on:
+            - task_key: seed_if_empty
+          environment_key: py_default
+          spark_python_task:
+            python_file: jobs/fred_rates_ingest.py
+            parameters: ["--mode=fred"]
+          max_retries: 2
+          retry_on_timeout: true
+
   pipelines:
     mip_feature_pipeline:
       name: mip_feature_pipeline
