@@ -108,10 +108,18 @@
   grid-area: main;
   overflow-y: auto;
   position: relative;
+  transition: padding-right var(--dur-base) var(--ease);
 }
 .main__inner {
   padding: var(--sp-6) var(--sp-6) var(--sp-12);
   max-width: 1440px;
+}
+/* When the Console is docked open at top-right (fixed 300px card), reserve
+   a right gutter on .main so long rows do not slide under it. The Console is
+   position:fixed, so we can't rely on flow; an explicit gutter is the fix. */
+[data-console="open"] .main { padding-right: 324px; }
+@media (prefers-reduced-motion: reduce) {
+  .main { transition: none; }
 }
 
 /* ============================================================

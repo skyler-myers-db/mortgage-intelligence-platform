@@ -18,6 +18,7 @@
     "react": "latest",
     "react-dom": "latest",
     "react-router-dom": "latest",
+    "topojson-client": "^3.1.0",
     "typescript": "latest",
     "vite": "latest"
   },
@@ -25,6 +26,7 @@
     "@playwright/test": "^1.59.1",
     "@types/react": "latest",
     "@types/react-dom": "latest",
+    "@types/topojson-client": "^3.1.5",
     "@typescript-eslint/eslint-plugin": "latest",
     "@typescript-eslint/parser": "latest",
     "eslint": "latest",

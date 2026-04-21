@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { PageShell } from '../components/layout/PageShell';
 import { KpiCard } from '../components/mortgage/KpiCard';
@@ -6,6 +7,7 @@ import { AgentActivityLog } from '../components/mortgage/AgentActivityLog';
 import { Chip, Button } from '../components/Primitives';
 import { DRAWER_SOURCES } from '../mocks/demoData';
 import { Icon } from '../components/Icon';
+import { api } from '../lib/api';
 
 const FUTURE_MODULES = [
   { code: 'M1', title: 'Pipeline Optimization', desc: 'Lead → app → approval throughput and stalls.' },
@@ -15,6 +17,25 @@ const FUTURE_MODULES = [
 ];
 
 export default function Home() {
+  // Pull the live high-intent count so the approval notice stays in sync with
+  // the KPI above it. Falls back to the demo-canon 12,840 while loading / on
+  // error — this is the booth demo path, not a live count we must defend.
+  const [queued, setQueued] = useState<number>(12840);
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .portfolioPreview()
+      .then((p) => {
+        if (!cancelled && p.high_intent_leads) setQueued(p.high_intent_leads);
+      })
+      .catch(() => {
+        // ignore — fallback value already set.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   return (
     <PageShell
       eyebrow="Module 0 · Top-of-Funnel Lead Generation & Borrower Segmentation"
@@ -66,6 +87,21 @@ export default function Home() {
           source={DRAWER_SOURCES.nbo}
           trend={[8.3, 8.6, 8.9, 9.1, 9.3, 9.5, 9.7]}
         />
+      </div>
+
+      <div
+        className="approval"
+        role="region"
+        aria-label="Human approval required before outreach"
+        style={{ marginTop: 'var(--gap-grid)' }}
+      >
+        <div className="approval__ico"><Icon name="shield" size={16} /></div>
+        <div className="approval__body">
+          <div className="approval__title">Review approval required before outreach</div>
+          <div className="approval__sub">
+            {queued.toLocaleString()} borrowers queued. Nothing is sent until an officer approves each draft.
+          </div>
+        </div>
       </div>
 
       <div className="section-hdr">

@@ -63,6 +63,18 @@ function readStored<T extends string>(key: string, fallback: T, allowed: readonl
   return fallback;
 }
 
+function readStoredBool(key: string, fallback: boolean): boolean {
+  if (typeof window === 'undefined') return fallback;
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (raw === 'true') return true;
+    if (raw === 'false') return false;
+  } catch {
+    // ignore
+  }
+  return fallback;
+}
+
 const THEMES: readonly Theme[] = ['dark', 'light'];
 const ACCENTS: readonly Accent[] = ['bright', 'teal', 'navy', 'red'];
 const DENSITIES: readonly Density[] = ['comfortable', 'compact'];
@@ -74,7 +86,12 @@ export function AppProvider({ children }: PropsWithChildren) {
   const [lender, setLender] = useState<string>('Summit Mortgage');
   const [showEvidence, setShowEvidence] = useState(true);
   const [showConfidence, setShowConfidence] = useState(true);
-  const [consoleOpen, setConsoleOpen] = useState(false);
+  // Console is visible by default so presenters see the workspace controls
+  // without hunting for the topbar tweak icon. Preference persists across
+  // reloads via localStorage (same pattern as theme/accent/density).
+  const [consoleOpen, setConsoleOpenState] = useState<boolean>(() =>
+    readStoredBool('mip.consoleOpen', true),
+  );
   const [drawer, setDrawer] = useState<DrawerSource | null>(null);
   const [genieOpen, setGenieOpen] = useState(false);
   const [approvals, setApprovals] = useState<Record<string, 'approved' | 'rejected'>>({});
@@ -93,9 +110,21 @@ export function AppProvider({ children }: PropsWithChildren) {
     }
   }, [theme, accent, density]);
 
+  // Reflect console-open state on <html> (so .app-shell can pad .main when the
+  // Console overlays the right edge) and persist the presenter's preference.
+  useEffect(() => {
+    document.documentElement.setAttribute('data-console', consoleOpen ? 'open' : 'closed');
+    try {
+      window.localStorage.setItem('mip.consoleOpen', consoleOpen ? 'true' : 'false');
+    } catch {
+      // ignore
+    }
+  }, [consoleOpen]);
+
   const setTheme = useCallback((t: Theme) => setThemeState(t), []);
   const setAccent = useCallback((a: Accent) => setAccentState(a), []);
   const setDensity = useCallback((d: Density) => setDensityState(d), []);
+  const setConsoleOpen = useCallback((v: boolean) => setConsoleOpenState(v), []);
   const setApproval = useCallback((borrowerId: string, state: 'approved' | 'rejected') => {
     setApprovals((cur) => ({ ...cur, [borrowerId]: state }));
   }, []);
@@ -115,8 +144,8 @@ export function AppProvider({ children }: PropsWithChildren) {
     }),
     [
       theme, setTheme, accent, setAccent, density, setDensity,
-      lender, showEvidence, showConfidence, consoleOpen, drawer,
-      genieOpen, approvals, setApproval,
+      lender, showEvidence, showConfidence, consoleOpen, setConsoleOpen,
+      drawer, genieOpen, approvals, setApproval,
     ]
   );
 

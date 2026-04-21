@@ -1,11 +1,53 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import type { Feature, FeatureCollection, Geometry } from 'geojson';
 import { Icon } from '../Icon';
 import { Chip } from '../Primitives';
 
 // Shape of the @svg-maps/usa default export (see vite-env.d.ts).
 interface UsaSvgMapLocation { name: string; id: string; path: string }
 interface UsaSvgMap { label: string; viewBox: string; locations: UsaSvgMapLocation[] }
+
+// FIPS state codes that have real county polygons in us-counties-demo.json.
+// Anything else falls back to the stylized drill (GA_COUNTIES placeholder).
+// TODO: expand the trimmed TopoJSON to more states as demo data grows.
+const SUPPORTED_COUNTY_STATES: Record<string, string> = {
+  ga: '13',
+  ca: '06',
+  tx: '48',
+};
+
+// County FIPS -> synthetic borrower count / avg score. Weighted so Atlanta
+// metro (Fulton/DeKalb/Cobb/Gwinnett), LA County, and Travis County stand
+// out — the demo narrative references these.
+// TODO: derive from backend when county rollups land.
+const COUNTY_FACTS: Record<string, { count: number; avgScore: number; lvl: 1 | 2 | 3 | 4 }> = {
+  // Georgia
+  '13121': { count: 520, avgScore: 86, lvl: 4 }, // Fulton (Atlanta anchor)
+  '13089': { count: 310, avgScore: 81, lvl: 3 }, // DeKalb
+  '13067': { count: 285, avgScore: 80, lvl: 3 }, // Cobb
+  '13135': { count: 260, avgScore: 79, lvl: 3 }, // Gwinnett
+  '13063': { count: 180, avgScore: 76, lvl: 2 }, // Clayton
+  '13117': { count: 150, avgScore: 75, lvl: 2 }, // Forsyth
+  // California
+  '06037': { count: 720, avgScore: 85, lvl: 4 }, // Los Angeles
+  '06059': { count: 380, avgScore: 82, lvl: 3 }, // Orange
+  '06073': { count: 340, avgScore: 81, lvl: 3 }, // San Diego
+  '06085': { count: 420, avgScore: 84, lvl: 3 }, // Santa Clara
+  '06001': { count: 290, avgScore: 81, lvl: 3 }, // Alameda
+  '06075': { count: 210, avgScore: 80, lvl: 3 }, // San Francisco
+  '06065': { count: 260, avgScore: 78, lvl: 2 }, // Riverside
+  '06067': { count: 230, avgScore: 77, lvl: 2 }, // Sacramento
+  // Texas
+  '48201': { count: 540, avgScore: 83, lvl: 4 }, // Harris (Houston)
+  '48113': { count: 420, avgScore: 82, lvl: 3 }, // Dallas
+  '48453': { count: 360, avgScore: 82, lvl: 3 }, // Travis (Austin)
+  '48439': { count: 340, avgScore: 81, lvl: 3 }, // Tarrant (Fort Worth)
+  '48029': { count: 300, avgScore: 80, lvl: 3 }, // Bexar (San Antonio)
+  '48085': { count: 230, avgScore: 77, lvl: 2 }, // Collin
+  '48157': { count: 210, avgScore: 76, lvl: 2 }, // Fort Bend
+  '48491': { count: 180, avgScore: 75, lvl: 2 }, // Williamson
+};
 
 /**
  * USChoroplethMap — real interactive US state map with click-to-drill.
@@ -141,6 +183,71 @@ interface Selected {
   name: string;
 }
 
+// Real-county feature (post-topojson decode). Coordinates are planar Albers
+// pixel space because us-counties-demo.json was trimmed from the "-albers-"
+// variant of us-atlas — so we can build SVG paths directly without d3-geo.
+interface CountyFeature {
+  id: string; // 5-digit FIPS, e.g. "13121" (Fulton)
+  name: string;
+  paths: string; // compound SVG path `d` built from rings
+  cx: number;
+  cy: number;
+}
+
+interface CountiesPayload {
+  state: string;      // ucode ("ga" | "ca" | "tx")
+  features: CountyFeature[];
+  viewBox: string;    // pre-computed bbox margin applied
+  fultonCentroid?: { x: number; y: number }; // only set for GA
+}
+
+/**
+ * Walk a GeoJSON Polygon / MultiPolygon and produce an SVG compound path `d`
+ * string. Handles MultiPolygon by concatenating with a space between sub-
+ * polygons — each sub-polygon is M-L-...-Z.
+ */
+function geometryToPath(geom: Geometry): string {
+  if (geom.type === 'Polygon') {
+    return geom.coordinates.map(ringToPath).join(' ');
+  }
+  if (geom.type === 'MultiPolygon') {
+    return geom.coordinates
+      .map((poly) => poly.map(ringToPath).join(' '))
+      .join(' ');
+  }
+  return '';
+}
+function ringToPath(ring: number[][]): string {
+  if (ring.length === 0) return '';
+  const [x0, y0] = ring[0];
+  let d = `M${x0.toFixed(1)},${y0.toFixed(1)}`;
+  for (let i = 1; i < ring.length; i += 1) {
+    const [x, y] = ring[i];
+    d += `L${x.toFixed(1)},${y.toFixed(1)}`;
+  }
+  return `${d}Z`;
+}
+function featureBBox(f: Feature): [number, number, number, number] {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  const visit = (ring: number[][]) => {
+    for (const [x, y] of ring) {
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (x > maxX) maxX = x;
+      if (y > maxY) maxY = y;
+    }
+  };
+  if (f.geometry.type === 'Polygon') {
+    f.geometry.coordinates.forEach(visit);
+  } else if (f.geometry.type === 'MultiPolygon') {
+    f.geometry.coordinates.forEach((poly) => poly.forEach(visit));
+  }
+  return [minX, minY, maxX, maxY];
+}
+
 interface MapPlaceholderProps {
   height?: number;
   /** Optional segment-code filter. Non-matching states dim. */
@@ -165,6 +272,9 @@ export function MapPlaceholder({ height = 420, segmentFilter }: MapPlaceholderPr
   const [selected, setSelected] = useState<Selected | null>(null);
   const [hover, setHover] = useState<HoverState | null>(null);
   const [usaMap, setUsaMap] = useState<UsaSvgMap | null>(null);
+  // Which supported state we drilled into (for county rendering).
+  const [countyStateId, setCountyStateId] = useState<string | null>(null);
+  const [countiesByState, setCountiesByState] = useState<Record<string, CountiesPayload>>({});
   const navigate = useNavigate();
 
   // Lazy-load the @svg-maps/usa data so the ~140 KB of path strings lands
@@ -179,6 +289,85 @@ export function MapPlaceholder({ height = 420, segmentFilter }: MapPlaceholderPr
     };
   }, []);
 
+  // Lazy-load real county polygons when drilled into a supported state.
+  // us-counties-demo.json is a pre-trimmed TopoJSON (~170KB raw / ~57KB
+  // gzipped) shipped as a static asset in public/. topojson-client decodes it
+  // at runtime; both fetch + import happen only on first county drill.
+  useEffect(() => {
+    if (level !== 'county' || !countyStateId) return;
+    if (countiesByState[countyStateId]) return;
+    const fips = SUPPORTED_COUNTY_STATES[countyStateId];
+    if (!fips) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const [topoClient, topoRes] = await Promise.all([
+          import('topojson-client'),
+          fetch('/us-counties-demo.json'),
+        ]);
+        if (!topoRes.ok) throw new Error(`topology fetch ${topoRes.status}`);
+        const topology = await topoRes.json();
+        // topojson-client's feature() returns a GeoJSON FeatureCollection when
+        // the object is a GeometryCollection.
+        // topojson-client's `feature()` typing narrows to Feature for a
+        // single Geometry and FeatureCollection for a GeometryCollection; our
+        // payload is the latter. Cast via `unknown` to bypass the union.
+        const fc = topoClient.feature(
+          topology,
+          topology.objects.counties,
+        ) as unknown as FeatureCollection;
+        const stateFeatures = fc.features.filter(
+          (f) => typeof f.id === 'string' && f.id.startsWith(fips),
+        );
+        // Aggregate bbox across the state's counties → viewBox with 12px pad.
+        let minX = Infinity;
+        let minY = Infinity;
+        let maxX = -Infinity;
+        let maxY = -Infinity;
+        for (const f of stateFeatures) {
+          const [x0, y0, x1, y1] = featureBBox(f);
+          if (x0 < minX) minX = x0;
+          if (y0 < minY) minY = y0;
+          if (x1 > maxX) maxX = x1;
+          if (y1 > maxY) maxY = y1;
+        }
+        const pad = 12;
+        const vx = minX - pad;
+        const vy = minY - pad;
+        const vw = maxX - minX + pad * 2;
+        const vh = maxY - minY + pad * 2;
+        const viewBox = `${vx.toFixed(1)} ${vy.toFixed(1)} ${vw.toFixed(1)} ${vh.toFixed(1)}`;
+        const features: CountyFeature[] = stateFeatures.map((f) => {
+          const [x0, y0, x1, y1] = featureBBox(f);
+          return {
+            id: String(f.id),
+            name: (f.properties as { name?: string } | null)?.name ?? '',
+            paths: geometryToPath(f.geometry),
+            cx: (x0 + x1) / 2,
+            cy: (y0 + y1) / 2,
+          };
+        });
+        // For GA, remember Fulton's centroid so we can pulse over it.
+        const fulton = features.find((f) => f.id === '13121');
+        const payload: CountiesPayload = {
+          state: countyStateId,
+          features,
+          viewBox,
+          fultonCentroid: fulton ? { x: fulton.cx, y: fulton.cy } : undefined,
+        };
+        if (!cancelled) {
+          setCountiesByState((cur) => ({ ...cur, [countyStateId]: payload }));
+        }
+      } catch {
+        // TODO: surface a real error state when we introduce a shared
+        // ErrorBoundary. For the booth demo path the loading skeleton is OK.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [level, countyStateId, countiesByState]);
+
   const activeSegNames = useMemo(() => {
     if (!segmentFilter || segmentFilter.length === 0) return null;
     return new Set(
@@ -191,10 +380,17 @@ export function MapPlaceholder({ height = 420, segmentFilter }: MapPlaceholderPr
       return Object.values(STATE_FACTS).reduce((a, b) => a + b.count, 0);
     }
     if (level === 'county') {
+      const payload = countyStateId ? countiesByState[countyStateId] : null;
+      if (payload) {
+        return payload.features.reduce(
+          (a, f) => a + (COUNTY_FACTS[f.id]?.count ?? 40),
+          0,
+        );
+      }
       return GA_COUNTIES.reduce((a, b) => a + b.count, 0);
     }
     return ATL_ZIPS.reduce((a, b) => a + b.count, 0);
-  }, [level]);
+  }, [level, countyStateId, countiesByState]);
 
   // ----- STATE level: real US paths via @svg-maps/usa ----------------------
   const renderStateLevel = () => {
@@ -254,9 +450,10 @@ export function MapPlaceholder({ height = 420, segmentFilter }: MapPlaceholderPr
             }
             onMouseLeave={() => setHover(null)}
             onClick={() => {
-              if (loc.id === 'ga') {
+              if (SUPPORTED_COUNTY_STATES[loc.id]) {
                 setLevel('county');
-                setSelected({ level: 'state', id: 'ga', name: 'Georgia' });
+                setCountyStateId(loc.id);
+                setSelected({ level: 'state', id: loc.id, name: loc.name });
               } else if (facts) {
                 setSelected({ level: 'state', id: loc.id, name: loc.name });
               }
@@ -270,34 +467,72 @@ export function MapPlaceholder({ height = 420, segmentFilter }: MapPlaceholderPr
     );
   };
 
-  // ----- COUNTY level: Atlanta MSA counties --------------------------------
-  const renderCountyLevel = () => (
-    <svg
-      viewBox="0 0 340 310"
-      preserveAspectRatio="xMidYMid meet"
-      style={{ marginTop: 36, height: 'calc(100% - 36px)' }}
-    >
-      {GA_COUNTIES.map((c) => {
-        const isFulton = c.id === 'fulton';
-        const classes = [
-          'map-region',
-          `lvl-${c.lvl}`,
-          selected?.level === 'county' && selected.id === c.id ? 'is-selected' : '',
-        ]
-          .filter(Boolean)
-          .join(' ');
-        return (
-          <g key={c.id}>
+  // ----- COUNTY level: real county polygons from the trimmed TopoJSON -----
+  // Falls back to the stylized GA_COUNTIES rectangles only if the drill state
+  // isn't in SUPPORTED_COUNTY_STATES or the fetch hasn't resolved yet.
+  const renderCountyLevel = () => {
+    const payload = countyStateId ? countiesByState[countyStateId] : null;
+    if (!payload) {
+      // Loading or unsupported-state fallback — keep the old stylized polys.
+      // TODO: expand SUPPORTED_COUNTY_STATES to remove this fallback.
+      return (
+        <svg
+          viewBox="0 0 340 310"
+          preserveAspectRatio="xMidYMid meet"
+          style={{ marginTop: 36, height: 'calc(100% - 36px)' }}
+        >
+          {GA_COUNTIES.map((c) => {
+            const classes = ['map-region', `lvl-${c.lvl}`].join(' ');
+            return <path key={c.id} d={c.d} className={classes} />;
+          })}
+          <text
+            x="170"
+            y="160"
+            textAnchor="middle"
+            fontSize="11"
+            fill="var(--text-3)"
+            pointerEvents="none"
+          >
+            Loading counties…
+          </text>
+        </svg>
+      );
+    }
+
+    const stateName = countyStateId
+      ? usaMap?.locations.find((l) => l.id === countyStateId)?.name ?? ''
+      : '';
+
+    return (
+      <svg
+        viewBox={payload.viewBox}
+        preserveAspectRatio="xMidYMid meet"
+        style={{ marginTop: 36, height: 'calc(100% - 36px)' }}
+      >
+        {payload.features.map((f) => {
+          const facts = COUNTY_FACTS[f.id];
+          const lvl = facts?.lvl ?? 1;
+          const isFulton = f.id === '13121';
+          const classes = [
+            'map-region',
+            `lvl-${lvl}`,
+            selected?.level === 'county' && selected.id === f.id ? 'is-selected' : '',
+          ]
+            .filter(Boolean)
+            .join(' ');
+          return (
             <path
-              d={c.d}
+              key={f.id}
+              d={f.paths}
               className={classes}
+              aria-label={`${f.name} County`}
               onMouseEnter={(e) =>
                 setHover({
                   x: e.clientX,
                   y: e.clientY,
-                  name: `${c.name} County, GA`,
-                  count: c.count,
-                  avgScore: c.avgScore,
+                  name: `${f.name} County, ${stateName}`,
+                  count: facts?.count ?? 40,
+                  avgScore: facts?.avgScore ?? 68,
                 })
               }
               onMouseMove={(e) =>
@@ -305,40 +540,47 @@ export function MapPlaceholder({ height = 420, segmentFilter }: MapPlaceholderPr
               }
               onMouseLeave={() => setHover(null)}
               onClick={() => {
-                if (c.id === 'fulton') {
+                if (isFulton) {
                   setLevel('zip');
-                  setSelected({ level: 'county', id: 'fulton', name: 'Fulton County' });
+                  setSelected({ level: 'county', id: '13121', name: 'Fulton County' });
                 } else {
-                  setSelected({ level: 'county', id: c.id, name: c.name });
+                  setSelected({ level: 'county', id: f.id, name: f.name });
                 }
               }}
             />
-            {isFulton && (
-              <g pointerEvents="none">
-                <circle cx="105" cy="170" r="6" fill="var(--accent)" fillOpacity="0.25">
-                  <animate
-                    attributeName="r"
-                    from="4"
-                    to="18"
-                    dur="1.8s"
-                    repeatCount="indefinite"
-                  />
-                  <animate
-                    attributeName="fill-opacity"
-                    from="0.35"
-                    to="0"
-                    dur="1.8s"
-                    repeatCount="indefinite"
-                  />
-                </circle>
-                <circle cx="105" cy="170" r="3" fill="var(--accent)" />
-              </g>
-            )}
+          );
+        })}
+        {/* Pulse beacon over Fulton when drilled into GA — telegraphs the
+             "Atlanta drill" demo path. */}
+        {payload.fultonCentroid && (
+          <g pointerEvents="none">
+            <circle
+              cx={payload.fultonCentroid.x}
+              cy={payload.fultonCentroid.y}
+              r="6"
+              fill="var(--accent)"
+              fillOpacity="0.25"
+            >
+              <animate attributeName="r" from="4" to="18" dur="1.8s" repeatCount="indefinite" />
+              <animate
+                attributeName="fill-opacity"
+                from="0.35"
+                to="0"
+                dur="1.8s"
+                repeatCount="indefinite"
+              />
+            </circle>
+            <circle
+              cx={payload.fultonCentroid.x}
+              cy={payload.fultonCentroid.y}
+              r="3"
+              fill="var(--accent)"
+            />
           </g>
-        );
-      })}
-    </svg>
-  );
+        )}
+      </svg>
+    );
+  };
 
   // ----- ZIP level: Atlanta ZIPs; click drills to borrower 360 --------------
   const renderZipLevel = () => (
@@ -419,6 +661,7 @@ export function MapPlaceholder({ height = 420, segmentFilter }: MapPlaceholderPr
             style={{ padding: '3px 8px' }}
             onClick={() => {
               setLevel('state');
+              setCountyStateId(null);
               setSelected(null);
             }}
           >
@@ -433,10 +676,16 @@ export function MapPlaceholder({ height = 420, segmentFilter }: MapPlaceholderPr
                 style={{ padding: '3px 8px' }}
                 onClick={() => {
                   setLevel('county');
-                  setSelected({ level: 'state', id: 'ga', name: 'Georgia' });
+                  const st = countyStateId ?? 'ga';
+                  const stName = usaMap?.locations.find((l) => l.id === st)?.name ?? 'Georgia';
+                  setSelected({ level: 'state', id: st, name: stName });
                 }}
               >
-                <span className="filter__value">Georgia</span>
+                <span className="filter__value">
+                  {countyStateId
+                    ? usaMap?.locations.find((l) => l.id === countyStateId)?.name ?? 'Georgia'
+                    : 'Georgia'}
+                </span>
               </button>
             </>
           )}
@@ -455,9 +704,11 @@ export function MapPlaceholder({ height = 420, segmentFilter }: MapPlaceholderPr
       <div style={{ position: 'absolute', top: 12, right: 14, zIndex: 2 }}>
         <Chip variant="neutral" icon="pin">
           {level === 'state'
-            ? 'Click Georgia to drill'
+            ? 'Click GA, CA, or TX to drill'
             : level === 'county'
-              ? 'Click Fulton to drill'
+              ? countyStateId === 'ga'
+                ? 'Click Fulton to drill'
+                : 'Hover a county for detail'
               : 'Click a ZIP to open borrower'}
         </Chip>
       </div>

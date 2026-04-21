@@ -209,7 +209,10 @@ test.describe('Module 0 — DAIS golden path', () => {
   test('floating Genie: FAB, metric answer, evidence chip, follow-up round-trip', async ({ page }) => {
     await page.goto('/');
 
-    await page.getByRole('button', { name: 'Open Genie' }).click();
+    // The floating Genie FAB is the canonical entry from every page; the
+    // Console right rail (visible by default) also exposes an "Open Genie"
+    // button, so scope to the FAB explicitly to avoid strict-mode conflict.
+    await page.locator('.genie__fab').click();
 
     const panel = page.getByRole('dialog', { name: 'Genie chat' });
     await expect(panel).toBeVisible();
