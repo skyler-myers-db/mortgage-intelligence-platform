@@ -331,8 +331,14 @@ SELECT
   COALESCE(tl.evidence_ids, ARRAY())                                                 AS evidence_ids,
   'pending'                                                                          AS approval_status,
   w.owner_link_id,
+  -- Truncate ZIP to 5 digits to match the api-boundary redaction
+  -- (`pii_redaction.synthesize_subject_property` uses `zip[:5]`). ~89% of
+  -- live share rows carry a 9-digit ZIP+4 in `situs_zip_code`; without
+  -- this truncation, the gold-emitted `subject_property` string disagrees
+  -- with the redacted /api/* payload for those rows. Tracked by
+  -- docs/validation/borrower-e2e-audit.md.
   CONCAT('Synthetic property · ', COALESCE(w.city, 'Unknown'), ', ',
-         w.state, ' ', COALESCE(w.zip, '00000'))                                     AS subject_property,
+         w.state, ' ', SUBSTR(COALESCE(w.zip, '00000'), 1, 5))                        AS subject_property,
   CAST(COALESCE(w.avm_value, 0) AS BIGINT)                                           AS avm_value,
   CAST(COALESCE(w.total_open_lien_balance, 0) AS BIGINT)                             AS current_lien_balance,
   -- current_rate in PERCENT form (5.75), matches Pydantic + mock_data.
