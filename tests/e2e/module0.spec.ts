@@ -38,7 +38,10 @@ test.describe('Module 0 — DAIS golden path', () => {
     await expectKpiValue(page, 'Cost per contact (est.)', '$2.18');
     await expectKpiValue(page, 'Projected contact → app', /9\.7/);
 
-    await expect(page.locator('[aria-label="Georgia"]').first()).toBeVisible({ timeout: 5_000 });
+    // Slice 9: assert Illinois since it's the anchor metro for the demo drill
+    // (Chicago/Cook County). @svg-maps/usa ships aria-labels for every state;
+    // picking IL aligns the test with the booth narrative.
+    await expect(page.locator('[aria-label="Illinois"]').first()).toBeVisible({ timeout: 5_000 });
     await expect(page.locator('.surface', { hasText: /agent|activity/i }).first()).toBeVisible();
 
     expect(consoleErrors, `unexpected console errors: ${consoleErrors.join(' | ')}`).toEqual([]);

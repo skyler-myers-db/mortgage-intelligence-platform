@@ -42,12 +42,15 @@ from pydantic import BaseModel
 # ---------------------------------------------------------------------------
 
 _DEMO_TOP_BORROWERS: list[dict[str, Any]] = [
-    {"borrower_id": "B-48291", "name": "James & Maria Rodriguez", "geo": "Atlanta, GA", "score": 94, "offer": "Refinance + HELOC"},
-    {"borrower_id": "B-48294", "name": "David Park",              "geo": "Atlanta, GA",         "score": 87, "offer": "Refinance + HELOC"},
+    # Slice 9: demo trio re-anchored to Chicago/IL so the safe-corpus
+    # fallback agrees with tests/fixtures/mock_population.py (the
+    # golden-fixture population) and docs/module0-demo-talk-track.md.
+    {"borrower_id": "B-48291", "name": "James & Maria Rodriguez", "geo": "Chicago, IL",         "score": 94, "offer": "Refinance + HELOC"},
+    {"borrower_id": "B-48294", "name": "David Park",              "geo": "Chicago, IL",         "score": 87, "offer": "Refinance + HELOC"},
     {"borrower_id": "B-51872", "name": "Thomas Chen",             "geo": "Austin, TX",          "score": 85, "offer": "Refinance + HELOC"},
     {"borrower_id": "B-54103", "name": "Maria & Carlos Rivera",   "geo": "San Francisco, CA",   "score": 85, "offer": "Refinance + HELOC"},
     {"borrower_id": "B-56219", "name": "Priya Natarajan",         "geo": "Seattle, WA",         "score": 83, "offer": "Refinance + HELOC"},
-    {"borrower_id": "B-48295", "name": "Lisa Thompson",           "geo": "Atlanta, GA",         "score": 82, "offer": "Purchase Mortgage"},
+    {"borrower_id": "B-48295", "name": "Lisa Thompson",           "geo": "Chicago, IL",         "score": 82, "offer": "Purchase Mortgage"},
     {"borrower_id": "B-52418", "name": "Daniel O'Connor",         "geo": "Denver, CO",          "score": 73, "offer": "HELOC"},
     {"borrower_id": "B-55328", "name": "Kevin Nakamura",          "geo": "Austin, TX",          "score": 72, "offer": "Refinance"},
     {"borrower_id": "B-60284", "name": "Alicia Greenberg",        "geo": "Austin, TX",          "score": 75, "offer": "Purchase Mortgage"},
@@ -128,12 +131,15 @@ def _answers() -> dict[str, GenieMessageResponse]:
     """
     top10 = _top_n_rows(10)
     austin = _austin_rows()
+    # Slice 9: top ITM ZIPs re-anchored to the 6-state footprint.
+    # Chicago 60611 (Streeterville / Gold Coast) leads; Austin, SF, Seattle,
+    # Miami follow — one representative ZIP per footprint state.
     itm_zip_rows = [
-        {"zip": "30309", "city": "Atlanta, GA", "itm_borrowers": "~1,420"},
-        {"zip": "78704", "city": "Austin, TX", "itm_borrowers": "~1,180"},
+        {"zip": "60611", "city": "Chicago, IL",       "itm_borrowers": "~1,420"},
+        {"zip": "78704", "city": "Austin, TX",        "itm_borrowers": "~1,180"},
         {"zip": "94110", "city": "San Francisco, CA", "itm_borrowers": "~960"},
-        {"zip": "98103", "city": "Seattle, WA", "itm_borrowers": "~720"},
-        {"zip": "30305", "city": "Atlanta, GA", "itm_borrowers": "~640"},
+        {"zip": "98103", "city": "Seattle, WA",       "itm_borrowers": "~720"},
+        {"zip": "33132", "city": "Miami, FL",         "itm_borrowers": "~640"},
     ]
 
     return {
@@ -141,9 +147,10 @@ def _answers() -> dict[str, GenieMessageResponse]:
         "in_the_money": GenieMessageResponse(
             conversation_id="demo-conv", question="",
             answer=(
-                "In the Atlanta MSA, 12,840 borrowers are currently in the money with an average "
-                "rate spread of 87 bps above par. The largest concentrations are in 30309, 30305, "
-                "and 30324."
+                "Across the 6-state Delta Share footprint (IL / CA / FL / TX / WA / CO), "
+                "12,840 borrowers are currently in the money with an average rate spread of "
+                "87 bps above par. The largest concentrations are in Chicago (60611, 60647) "
+                "and Austin (78704)."
             ),
             source="lead_generation_metric_view",
             trusted_assets=[
@@ -162,7 +169,7 @@ def _answers() -> dict[str, GenieMessageResponse]:
             conversation_id="demo-conv", question="",
             answer=(
                 "4,108 properties show a recent permit trigger paired with HELOC-qualifying equity. "
-                "Average estimated equity is $228K; top ZIPs are 30305 and 78704."
+                "Average estimated equity is $228K; top ZIPs are 60614 Chicago and 78704 Austin."
             ),
             source="borrower_opportunity_metric_view",
             trusted_assets=[
@@ -199,9 +206,9 @@ def _answers() -> dict[str, GenieMessageResponse]:
         "itm_zips": GenieMessageResponse(
             conversation_id="demo-conv", question="",
             answer=(
-                "The top in-the-money ZIPs are 30309 Atlanta (~1,420 borrowers), 78704 Austin "
-                "(~1,180), 94110 San Francisco (~960), 98103 Seattle (~720), and 30305 Atlanta "
-                "(~640). Together they cover about 38% of the national ITM book."
+                "The top in-the-money ZIPs are 60611 Chicago (~1,420 borrowers), 78704 Austin "
+                "(~1,180), 94110 San Francisco (~960), 98103 Seattle (~720), and 33132 Miami "
+                "(~640). Together they cover about 38% of the 6-state ITM book."
             ),
             source="lead_generation_metric_view",
             trusted_assets=[
@@ -236,10 +243,12 @@ def _answers() -> dict[str, GenieMessageResponse]:
         ),
         "heloc_by_state": GenieMessageResponse(
             conversation_id="demo-conv", question="",
+            # Slice 9: per-state table re-scoped to the 6-state Delta Share
+            # footprint (IL / CA / FL / TX / WA / CO). California still leads.
             answer=(
                 "The biggest HELOC opportunities by state: CA (1,185 permit+equity borrowers), "
-                "TX (812), GA (604), WA (487), CO (412). California leads both on count and "
-                "average equity ($312K)."
+                "IL (924), TX (812), FL (671), WA (487), CO (412). California leads both on count "
+                "and average equity ($312K)."
             ),
             source="borrower_opportunity_metric_view",
             trusted_assets=[
@@ -249,10 +258,11 @@ def _answers() -> dict[str, GenieMessageResponse]:
             ],
             table_rows=[
                 {"state": "CA", "permit_equity_borrowers": 1185, "avg_equity": "$312K"},
-                {"state": "TX", "permit_equity_borrowers": 812, "avg_equity": "$244K"},
-                {"state": "GA", "permit_equity_borrowers": 604, "avg_equity": "$205K"},
-                {"state": "WA", "permit_equity_borrowers": 487, "avg_equity": "$296K"},
-                {"state": "CO", "permit_equity_borrowers": 412, "avg_equity": "$258K"},
+                {"state": "IL", "permit_equity_borrowers":  924, "avg_equity": "$238K"},
+                {"state": "TX", "permit_equity_borrowers":  812, "avg_equity": "$244K"},
+                {"state": "FL", "permit_equity_borrowers":  671, "avg_equity": "$221K"},
+                {"state": "WA", "permit_equity_borrowers":  487, "avg_equity": "$296K"},
+                {"state": "CO", "permit_equity_borrowers":  412, "avg_equity": "$258K"},
             ],
             follow_up_questions=[
                 "What if we raised the HELOC equity floor to 50%?",
@@ -266,7 +276,7 @@ def _answers() -> dict[str, GenieMessageResponse]:
             conversation_id="demo-conv", question="",
             answer=(
                 "2,614 borrowers fall into the Listed for Sale segment — purchase-mortgage "
-                "candidates. The top three in the ranked sample are Lisa Thompson (Atlanta, "
+                "candidates. The top three in the ranked sample are Lisa Thompson (Chicago, "
                 "score 82), Alicia Greenberg (Austin, 75), and Wei Zhang (San Francisco, 75 — "
                 "also an existing customer, so retention stays in-house on the next home)."
             ),
@@ -277,7 +287,7 @@ def _answers() -> dict[str, GenieMessageResponse]:
             ],
             metric_value="2,614",
             table_rows=[
-                {"borrower_id": "B-48295", "name": "Lisa Thompson", "geo": "Atlanta, GA", "score": 82},
+                {"borrower_id": "B-48295", "name": "Lisa Thompson", "geo": "Chicago, IL", "score": 82},
                 {"borrower_id": "B-60284", "name": "Alicia Greenberg", "geo": "Austin, TX", "score": 75},
                 {"borrower_id": "B-60517", "name": "Wei Zhang", "geo": "San Francisco, CA", "score": 75},
             ],

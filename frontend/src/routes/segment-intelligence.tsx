@@ -18,20 +18,20 @@ import { FilterSelect } from '../components/ui/FilterSelect';
  */
 
 // Map display-label -> US state code (matches LeadSummary.state). Keeps the
-// options list readable ("Atlanta MSA") while the predicate logic works on
+// options list readable ("Chicago MSA") while the predicate logic works on
 // 2-letter state codes. The "MSA" entries are approximations — presenters
 // call out a metro; the filter drops to state-level for now.
+// Slice 9: dropped Atlanta / Nashville and promoted Chicago MSA to match
+// the 6-state Delta Share footprint (IL / CA / FL / TX / WA / CO).
 // TODO: wire to backend when MSA / county rollups land.
 const LOCATION_TO_STATES: Record<string, string[]> = {
   All: [],
-  'Atlanta MSA': ['GA'],
+  'Chicago MSA': ['IL'],
   Austin: ['TX'],
   'SF Bay': ['CA'],
   Denver: ['CO'],
-  Chicago: ['IL'],
   Orlando: ['FL'],
   Seattle: ['WA'],
-  Nashville: ['TN'],
 };
 
 // Equity thresholds expressed as a minimum equity-to-AVM ratio. We don't
