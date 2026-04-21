@@ -166,6 +166,65 @@ resources:
     mip_refresh_scores:
       name: mip_refresh_scores
       tasks: []
+
+    # Slice13-accuracy: hourly sync of Lakebase approval + outreach state
+    # into mip.gold.borrower_lifecycle_state. Metric views (segment_
+    # performance + lead_generation) JOIN this so `approval_rate` and
+    # `outreach_rate` resolve without a runtime federated query. Runs
+    # AFTER mip_refresh_scores (which lands gold.borrower_360) so the
+    # sync has a full borrower_id universe to seed the 'pending' default
+    # against. Lakebase remains authoritative; this job is a strictly
+    # one-directional mirror.
+    #
+    # The funnel snapshot task (gold_funnel_snapshot_daily.sql) runs
+    # after the sync so it reads the freshly-mirrored lifecycle_state
+    # when computing approved_borrowers / actioned_borrowers.
+    mip_sync_lifecycle_state:
+      name: mip_sync_lifecycle_state
+      tags:
+        solution: mortgage-intelligence-platform
+        module: module0
+        owner: entrada
+        slice: slice13-accuracy
+      max_concurrent_runs: 1
+      # Hourly cadence. Dev target leaves the schedule paused; prod
+      # target lets it run.
+      schedule:
+        quartz_cron_expression: "0 15 * ? * * *"
+        timezone_id: America/Chicago
+        pause_status: UNPAUSED
+      environments:
+        - environment_key: py_default
+          spec:
+            client: "2"
+            dependencies:
+              - psycopg[binary]==3.2.10
+              - databricks-sdk>=0.30.0
+      tasks:
+        - task_key: seed_default_state
+          description: "Seed mip.gold.borrower_lifecycle_state with 'pending' defaults so metric views resolve on a cold Lakebase."
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/transformations/gold_borrower_lifecycle_state.sql
+        - task_key: sync_from_lakebase
+          description: "Read mip_app.approvals + outreach events from Lakebase and overwrite mip.gold.borrower_lifecycle_state."
+          depends_on:
+            - task_key: seed_default_state
+          environment_key: py_default
+          spark_python_task:
+            python_file: jobs/sync_lifecycle_state.py
+          max_retries: 2
+          retry_on_timeout: true
+        - task_key: record_funnel_snapshot
+          description: "MERGE today's per-(state, segment) counts into mip.gold.funnel_snapshot_daily."
+          depends_on:
+            - task_key: sync_from_lakebase
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/transformations/gold_funnel_snapshot_daily.sql
+
     mip_snapshot_dashboards:
       name: mip_snapshot_dashboards
       tasks: []

@@ -258,3 +258,61 @@ TBLPROPERTIES (
   'delta.autoOptimize.optimizeWrite' = 'true',
   'delta.autoOptimize.autoCompact'   = 'true'
 );
+
+-- -----------------------------------------------------------------------------
+-- 7. mip.gold.borrower_lifecycle_state
+--    Mirror of the Lakebase mip_app.approvals + outreach state, keyed by
+--    borrower_id, so UC metric views can surface per-segment approval_rate
+--    and outreach_rate without a runtime federated join. Authoritative state
+--    still lives in Lakebase; this table is a scheduled sync (hourly) written
+--    by jobs/sync_lifecycle_state.py. Metric views JOIN this, not Lakebase.
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS mip.gold.borrower_lifecycle_state (
+  borrower_id       STRING    NOT NULL COMMENT 'Synthetic B-##### id; matches borrower_360.borrower_id.',
+  approval_status   STRING    NOT NULL COMMENT 'pending / approved / rejected / hold. Derived from latest decided_at row in mip_app.approvals.',
+  outreach_status   STRING    NOT NULL COMMENT 'queued / actioned / none. Derived from latest outreach state.',
+  offer_code        STRING             COMMENT 'Latest offer_code associated with the approval decision.',
+  approved_at       TIMESTAMP          COMMENT 'decided_at for the latest approve action; NULL when not approved.',
+  outreach_at       TIMESTAMP          COMMENT 'Timestamp of latest outreach action.',
+  synced_at         TIMESTAMP NOT NULL COMMENT 'Last sync run that touched this row.'
+)
+USING DELTA
+CLUSTER BY (borrower_id)
+COMMENT 'Hourly sync of Lakebase mip_app.approvals + outreach into gold for metric-view joins. Lakebase remains authoritative. Sync job: jobs/sync_lifecycle_state.py.'
+TBLPROPERTIES (
+  'delta.enableChangeDataFeed' = 'false',
+  'delta.autoOptimize.optimizeWrite' = 'true',
+  'delta.autoOptimize.autoCompact'   = 'true'
+);
+
+-- -----------------------------------------------------------------------------
+-- 8. mip.gold.funnel_snapshot_daily
+--    One row per (snapshot_date, state, segment_code) recorded by every
+--    scoring refresh. Powers delta_vs_prior_* (WoW / QoQ / YoY) on dashboard
+--    KPIs + metric views without recomputing against cold data. Idempotent
+--    on (snapshot_date, state, segment_code) via MERGE in the transformation.
+--    state='_ALL' is the national rollup; segment_code='_ALL' is the full
+--    cross-segment population so the executive-funnel KPIs can read a single
+--    row per day.
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS mip.gold.funnel_snapshot_daily (
+  snapshot_date                 DATE      NOT NULL COMMENT 'Refresh date; daily grain.',
+  state                         STRING    NOT NULL COMMENT '2-char state or "_ALL" national rollup.',
+  segment_code                  STRING    NOT NULL COMMENT 'Segment code or "_ALL" for the full population.',
+  addressable_borrowers         INT       NOT NULL COMMENT 'Population count for this (state, segment) cell.',
+  in_the_money_borrowers        INT       NOT NULL COMMENT 'COUNT where in_the_money = TRUE.',
+  high_opportunity_borrowers    INT       NOT NULL COMMENT 'COUNT where opportunity_score >= 75.',
+  offer_recommended_borrowers   INT       NOT NULL COMMENT 'COUNT where recommended_offer_code <> "nurture".',
+  approved_borrowers            INT       NOT NULL COMMENT 'COUNT of approved lifecycle states at snapshot time.',
+  actioned_borrowers            INT       NOT NULL COMMENT 'COUNT of outreach_status = "actioned" at snapshot time.',
+  avg_opportunity_score         INT       NOT NULL COMMENT 'AVG(opportunity_score) for the cell.',
+  snapshot_at                   TIMESTAMP NOT NULL COMMENT 'Precise refresh timestamp.'
+)
+USING DELTA
+CLUSTER BY (snapshot_date, state)
+COMMENT 'Daily funnel snapshot for delta_vs_prior (WoW/QoQ/YoY) on dashboards and metric views.'
+TBLPROPERTIES (
+  'delta.enableChangeDataFeed' = 'false',
+  'delta.autoOptimize.optimizeWrite' = 'true',
+  'delta.autoOptimize.autoCompact'   = 'true'
+);
