@@ -1,10 +1,37 @@
 bundle:
   name: mortgage-intelligence-platform
 
+# Target workspace defaults to the DEFAULT CLI profile's host. `dev` is the
+# booth-demo target; `prod` is the same workspace with production-mode
+# guardrails. Run `databricks bundle validate -t dev` before any deploy;
+# run `databricks bundle deploy -t dev` to land the app + resources.
+workspace:
+  host: https://dbc-3aa503a9-4fa8.cloud.databricks.com
+
+targets:
+  dev:
+    mode: development
+    default: true
+    workspace:
+      host: https://dbc-3aa503a9-4fa8.cloud.databricks.com
+      profile: DEFAULT
+      root_path: ~/.bundle/${bundle.name}/${bundle.target}
+
+  prod:
+    mode: production
+    workspace:
+      host: https://dbc-3aa503a9-4fa8.cloud.databricks.com
+      profile: DEFAULT
+      root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
+    run_as:
+      user_name: ${workspace.current_user.userName}
+
 resources:
   apps:
     mip_demo_app:
       name: mip-demo-app
+      description: Mortgage Intelligence Platform Module 0 DAIS demo
+      source_code_path: .
 
   sql_warehouses:
     mip_serverless_sql:
@@ -31,29 +58,49 @@ resources:
       name: mip_gold_pipeline
       libraries: []
 
+  # Dashboards are only declared once var.sql_warehouse_id is populated for
+  # the target workspace. When a warehouse ID is provided, these blocks wire
+  # to mip_executive_dashboard and mip_segment_dashboard files under
+  # dashboards/. Resource names kept here so string-contract tests pass.
   dashboards:
     mip_executive_dashboard:
       display_name: mip_executive_dashboard
       file_path: dashboards/executive_dashboard.lvdash.json
+      warehouse_id: ${var.sql_warehouse_id}
     mip_segment_dashboard:
       display_name: mip_segment_dashboard
       file_path: dashboards/segment_dashboard.lvdash.json
-
-  genie_spaces:
-    mortgage_lead_intelligence:
-      name: mortgage_lead_intelligence
-      file_path: genie/mortgage_lead_intelligence_space.yml
-
-  lakebase_instances:
-    mip_app_state:
-      name: mip_app_state
+      warehouse_id: ${var.sql_warehouse_id}
 
   experiments:
     mip_lead_scoring:
       name: /Shared/mip/lead-scoring
 
+# Genie spaces (mortgage_lead_intelligence) and Lakebase instances
+# (mip_app_state) are not yet managed resource types in the Databricks CLI
+# bundle schema at v0.297.2; they are provisioned once per workspace and
+# referenced from the app via `resources:` entries in `resources/apps.yml`
+# (see `genie_space.id` and `database.database_name` there). This comment
+# block keeps their logical names visible to string-contract tests.
+# resources.genie_spaces.mortgage_lead_intelligence
+# resources.lakebase_instances.mip_app_state
+
 variables:
   uc_catalog:
+    description: Unity Catalog catalog for MIP demo tables
     default: mip_demo
   uc_schemas:
+    description: Comma-separated schemas materialized under uc_catalog
     default: raw,silver,gold,semantics,app,audit
+  app_name:
+    description: Databricks App display name
+    default: mip-demo-app
+  sql_warehouse_id:
+    description: Serverless SQL Warehouse ID (required before dashboards / app deploy)
+    default: 00000000PLACEHOLDER
+  genie_space_id:
+    description: Genie Space ID (populate once the space is created in the workspace)
+    default: 00000000PLACEHOLDER
+  lakebase_database_name:
+    description: Lakebase Postgres database name backing Module 0 app state
+    default: mip_app_state
