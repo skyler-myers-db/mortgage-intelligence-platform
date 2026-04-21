@@ -148,29 +148,28 @@ def get_outreach_repository() -> OutreachRepository:
 
 
 def get_genie_answer_repository() -> GenieAnswerRepository:
-    """Return the deterministic Genie catalog -- not Databricks-backed yet.
+    """Return the live Genie repository backed by the real Mortgage
+    Lead Intelligence space.
 
-    Slice 7 replaces this with a real Genie API client grounded against
-    ``mip_demo.semantics.*``. The current in-memory catalog stays the
-    booth path because it's zero-latency and evidence-cited.
+    Slice 7 swap: hits the Databricks Genie Conversation API through
+    ``ResilientGenieClient`` (breaker key ``"genie"``). The curated
+    catalog in ``backend.services.genie_answers`` degrades to a safe-
+    corpus fallback only when the breaker is OPEN -- happy path always
+    queries the real space. Unknown questions with an open breaker
+    return a honest "warming up" degraded message; they do NOT
+    fabricate data.
     """
     global _GENIE_REPO
     if _GENIE_REPO is not None:
         return _GENIE_REPO
-    # Inline a tiny Protocol-compliant adapter that delegates to the
-    # deterministic responder. This replaces the old
-    # ``InProcessMockGenieAnswerRepository`` living under tests/fixtures;
-    # production code cannot import from tests/.
-    from backend.services.genie_answers import GenieMessageResponse as _GMR
-    from backend.services.genie_answers import respond as _respond
-
-    class _GenieAnswerAdapter:
-        def respond(self, question: str) -> _GMR:  # pragma: no cover -- trivial
-            return _respond(question)
+    from backend.services.genie_client import get_genie_client
+    from backend.services.repositories.databricks_repo import (
+        DatabricksGenieRepository,
+    )
 
     with _LOCK:
         if _GENIE_REPO is None:
-            _GENIE_REPO = _GenieAnswerAdapter()
+            _GENIE_REPO = DatabricksGenieRepository(get_genie_client())
         return _GENIE_REPO
 
 

@@ -1,8 +1,16 @@
-"""Matcher tests for the widened Genie deterministic catalog.
+"""Matcher tests for the Genie SAFE-CORPUS fallback (Slice 7).
+
+After the Slice-7 cutover, ``genie_answers.respond`` is no longer the
+primary Genie path -- it is the fallback that only fires when the
+``genie`` circuit breaker is open. These tests still exercise the
+matcher directly because intent resolution is what determines whether
+the fallback claims a curated answer (``source="fallback"``) or cedes
+to the honest degraded message (``source="degraded"``, applied by
+``DatabricksGenieRepository``).
 
 Each case is an audience-realistic question paired with the intent we
-expect the scored matcher to pick — a mix of direct hits and near-misses
-that would have collided in the naive ``if token in q`` matcher.
+expect the scored matcher to pick -- a mix of direct hits and near-
+misses that would have collided in a naive ``if token in q`` matcher.
 Off-topic questions must fall through to the warm generic fallback.
 """
 from __future__ import annotations

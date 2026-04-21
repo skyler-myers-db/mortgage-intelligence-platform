@@ -37,14 +37,15 @@ def _reset_breakers() -> None:
 def test_health_returns_ok_when_both_deps_up(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(health_mod, "_probe_warehouse", lambda: True)
     monkeypatch.setattr(health_mod, "_probe_lakebase", lambda: True)
+    monkeypatch.setattr(health_mod, "_probe_genie", lambda: True)
 
     res = client.get("/api/health")
     assert res.status_code == 200
     payload: dict[str, Any] = res.json()
     assert payload["status"] == "ok"
     assert payload["mode"] == "live"
-    assert payload["dependencies"] == {"warehouse": "up", "lakebase": "up"}
-    assert set(payload["circuit_breakers"].keys()) >= {"warehouse", "lakebase"}
+    assert payload["dependencies"] == {"warehouse": "up", "lakebase": "up", "genie": "up"}
+    assert set(payload["circuit_breakers"].keys()) >= {"warehouse", "lakebase", "genie"}
 
 
 def test_health_returns_degraded_when_warehouse_down(
@@ -52,6 +53,7 @@ def test_health_returns_degraded_when_warehouse_down(
 ) -> None:
     monkeypatch.setattr(health_mod, "_probe_warehouse", lambda: False)
     monkeypatch.setattr(health_mod, "_probe_lakebase", lambda: True)
+    monkeypatch.setattr(health_mod, "_probe_genie", lambda: True)
 
     res = client.get("/api/health")
     # Degraded state STILL returns 200 so load balancers don't pull
@@ -59,12 +61,17 @@ def test_health_returns_degraded_when_warehouse_down(
     assert res.status_code == 200
     payload = res.json()
     assert payload["status"] == "degraded"
-    assert payload["dependencies"] == {"warehouse": "down", "lakebase": "up"}
+    assert payload["dependencies"] == {
+        "warehouse": "down",
+        "lakebase": "up",
+        "genie": "up",
+    }
 
 
 def test_health_reports_open_breaker_state(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(health_mod, "_probe_warehouse", lambda: True)
     monkeypatch.setattr(health_mod, "_probe_lakebase", lambda: True)
+    monkeypatch.setattr(health_mod, "_probe_genie", lambda: True)
 
     # Register the warehouse breaker and force it open.
     cb = resilience.get_breaker("warehouse", failure_threshold=1, cooldown_s=60)
@@ -74,6 +81,23 @@ def test_health_reports_open_breaker_state(monkeypatch: pytest.MonkeyPatch) -> N
     res = client.get("/api/health")
     payload = res.json()
     assert payload["circuit_breakers"]["warehouse"] == "open"
+
+
+def test_health_reports_genie_down_and_degrades_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Slice-7: Genie is the third dependency. When its ping fails the
+    body flips to degraded even if warehouse + Lakebase are up. Status
+    is still HTTP 200 so the LB doesn't pull the container."""
+    monkeypatch.setattr(health_mod, "_probe_warehouse", lambda: True)
+    monkeypatch.setattr(health_mod, "_probe_lakebase", lambda: True)
+    monkeypatch.setattr(health_mod, "_probe_genie", lambda: False)
+
+    res = client.get("/api/health")
+    assert res.status_code == 200
+    payload = res.json()
+    assert payload["status"] == "degraded"
+    assert payload["dependencies"]["genie"] == "down"
 
 
 def test_dependency_down_exception_translates_to_structured_503(

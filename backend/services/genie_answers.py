@@ -1,21 +1,25 @@
-"""Deterministic Genie answer catalog + matcher for Module 0 (DAIS demo).
+"""Deterministic Genie answer catalog -- SAFE-CORPUS FALLBACK (Slice 7).
 
-The booth-demo Genie path is *not* a fallback -- it's the main stage. Any
-question the audience throws within the Module 0 narrative should return
-a polished, evidence-cited answer, not a generic "Genie unavailable"
-line. This module holds the curated answer catalog (currently 12 canned
-answers covering geography, offer branches, segment comparisons,
-borrower lookups, trends, and policy questions) and the scoring-based
-matcher.
+Slice 7 flipped the primary Genie path onto the real Databricks Genie
+space (``backend.services.genie_client`` + ``DatabricksGenieRepository``).
+This module NO LONGER serves the happy path; it is the safe-corpus
+fallback that only activates when the ``genie`` circuit breaker is
+OPEN. That keeps the DAIS demo trio of canonical questions landing
+deterministically even if the space is cold-starting or rate-limited.
+
+What lives here:
+
+- ``GenieMessageResponse`` -- the wire contract the router returns.
+- A curated in-module catalog keyed by intent, scored against a weighted
+  phrase / keyword / regex matcher. This is the hand-tuned corpus that
+  powered the demo before Slice 7.
+- A loader over ``genie/sample_questions.md`` so the canonical space
+  questions stay in lockstep between the space config and the
+  fallback. Loader results are merged into the in-memory intent map;
+  the hand-tuned entries take precedence on collision because they
+  carry richer ``table_rows`` / ``follow_up_questions`` metadata.
 
 All responses cite at least one Unity Catalog asset under ``mip_demo``.
-Borrower-level rows in the catalog use a pinned synthetic demo roster
-below -- inlined in Slice 4 so this module has no runtime import
-dependency on the test-fixture population. Slice 7 rewrites this to
-ground against the real ``mip_demo.semantics.*`` metric views; until
-then the roster below is the canonical demo narrative and is what
-shows on screen for deterministic Q&A.
-
 The matcher is intentionally simple and pure (no deps): per-answer
 keyword and phrase lists with weighted scoring, optional regex patterns
 for high-signal phrases, and a threshold that falls through to the warm
@@ -653,10 +657,108 @@ def _warm_fallback(question: str) -> GenieMessageResponse:
     )
 
 
+# ---------------------------------------------------------------------------
+# sample_questions.md loader -- keeps the canonical Genie-space corpus
+# in lockstep with the safe-corpus matcher. Parsed once at first use and
+# cached; the parse is tiny and the module lives long.
+# ---------------------------------------------------------------------------
+
+
+_SAMPLE_QUESTIONS_CACHE: tuple[list[str], ...] | None = None
+
+
+def _sample_questions_path() -> Any:  # pragma: no cover -- trivial
+    from pathlib import Path
+
+    return Path(__file__).resolve().parents[2] / "genie" / "sample_questions.md"
+
+
+def _normalise_sample(q: str) -> str:
+    """Lowercase, collapse whitespace, strip trailing punctuation.
+
+    The normalised form is what ``match_sample_question`` compares
+    against, so a question in the markdown file and the audience's
+    paraphrase can collide on the same intent key.
+    """
+    q = q.lower().strip()
+    q = re.sub(r"[-‐-―_]", " ", q)
+    q = re.sub(r"\s+", " ", q)
+    return q.rstrip(" .?!")
+
+
+def load_sample_questions() -> list[str]:
+    """Parse ``genie/sample_questions.md`` into the list of numbered
+    questions. The file uses ``1. **Question?**`` markdown for each
+    canonical sample; we pluck the bolded line out of each numbered
+    item.
+
+    Returns ``[]`` if the file is missing (keeps tests hermetic on a
+    fresh checkout where the file hasn't been written yet) rather than
+    raising -- the safe corpus is optional belt-and-suspenders, not a
+    hard contract.
+    """
+    global _SAMPLE_QUESTIONS_CACHE
+    if _SAMPLE_QUESTIONS_CACHE is not None:
+        return list(_SAMPLE_QUESTIONS_CACHE[0])
+    path = _sample_questions_path()
+    questions: list[str] = []
+    if not path.exists():
+        _SAMPLE_QUESTIONS_CACHE = (questions,)
+        return questions
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        _SAMPLE_QUESTIONS_CACHE = (questions,)
+        return questions
+    # Match numbered bold lines: ``1. **...**`` through ``10. **...**``.
+    pattern = re.compile(r"^\s*\d+\.\s+\*\*(.+?)\*\*\s*$", re.MULTILINE)
+    for match in pattern.finditer(text):
+        q = match.group(1).strip()
+        if q:
+            questions.append(q)
+    _SAMPLE_QUESTIONS_CACHE = (questions,)
+    return questions
+
+
+def match_sample_question(question: str) -> str | None:
+    """Return the canonical sample question whose normalised form is a
+    substring match (either direction) against the caller's input.
+
+    Used by ``DatabricksGenieRepository._fallback_or_degraded`` to keep
+    the provisioned Genie space's canonical questions landing through
+    the safe-corpus path when the breaker is open. Intentionally strict:
+    no fuzzy matching -- we only claim the fallback when we can point to
+    a specific corpus entry.
+    """
+    normalised = _normalise_sample(question)
+    if not normalised:
+        return None
+    for sample in load_sample_questions():
+        norm_sample = _normalise_sample(sample)
+        if not norm_sample:
+            continue
+        if normalised == norm_sample:
+            return sample
+        if normalised in norm_sample or norm_sample in normalised:
+            return sample
+    return None
+
+
+def _reset_sample_questions_cache_for_tests() -> None:
+    """Test helper -- drop the memoised parse so a test that rewrites
+    the markdown file sees the new shape."""
+    global _SAMPLE_QUESTIONS_CACHE
+    _SAMPLE_QUESTIONS_CACHE = None
+
+
 def respond(question: str) -> GenieMessageResponse:
     """Top-level entry: match intent, clone the templated answer, stamp
     the caller's question onto the response. If no intent clears the
     threshold, return the warm fallback. Never raises for any input.
+
+    Slice-7 posture: this is the SAFE-CORPUS FALLBACK. It is only
+    consulted by the live Genie repository when the circuit breaker is
+    OPEN -- production requests always hit the real Genie space first.
     """
     intent = match_intent(question)
     if intent is None:

@@ -22,8 +22,13 @@ Evidence ordering: ``ORDER BY signal_rank ASC`` per the data-contract
 §3.4. Chronological order is a display concern handled in the UI; the
 canonical order for the evidence drawer is the gold-defined priority.
 
-Not yet backed by Databricks (Slice 7 territory): Genie grounding stays
-on the in-process deterministic catalog.
+Slice-7: ``DatabricksGenieRepository`` flips ``/api/genie`` onto the
+real Mortgage Lead Intelligence Genie space. A deterministic safe
+corpus (parsed from ``genie/sample_questions.md`` + the curated catalog
+in ``backend.services.genie_answers``) only fires when the ``genie``
+circuit breaker is OPEN -- otherwise every answer comes from the live
+space. An open breaker on an unknown question returns a honest
+"warming up" message rather than fabricating data.
 """
 from __future__ import annotations
 
@@ -40,12 +45,23 @@ from backend.schemas.portfolio import (
 )
 from backend.schemas.why import WhyPanel
 from backend.services.databricks_sql import DatabricksSqlClient
+from backend.services.genie_answers import (
+    GenieMessageResponse,
+)
+from backend.services.genie_answers import (
+    respond as genie_catalog_respond,
+)
+from backend.services.genie_client import (
+    GenieClientError,
+    GenieResponse,
+    ResilientGenieClient,
+)
 from backend.services.pii_redaction import (
     redact_borrower_row,
     redact_evidence_row,
     redact_lead_row,
 )
-from backend.services.resilience import TTLCache
+from backend.services.resilience import DependencyDownError, TTLCache
 from backend.services.scoring import (
     NBO_PRODUCT_LABELS,
     in_the_money,
@@ -451,8 +467,123 @@ def _coerce_bool(value: Any) -> bool:
     return str(value).strip().lower() in ("true", "1", "t", "yes")
 
 
+class DatabricksGenieRepository:
+    """Real Genie + safe-corpus fallback gated on the ``genie`` breaker.
+
+    The control flow is deliberately narrow and boot-demo-defensive:
+
+    1. If the ``genie`` circuit breaker is OPEN *and* the question
+       matches a canonical sample (deterministic catalog from
+       ``backend.services.genie_answers``), return that catalog answer
+       with ``source="fallback"`` so the demo trio of questions still
+       lands.
+    2. Otherwise call ``ResilientGenieClient.ask(question)``. On
+       success, adapt ``GenieResponse`` into the ``GenieMessageResponse``
+       wire contract (``source="genie"``).
+    3. If the call fails with ``DependencyDownError`` (breaker just
+       opened on us), fall back to the safe corpus; if the question
+       isn't in the corpus, return a honest "warming up" message --
+       never fabricate data.
+    4. On any other exception, re-raise so the router's 503 translation
+       engages -- we never swallow to a mock answer.
+    """
+
+    _WARMING_MESSAGE = (
+        "The Genie service is warming up - please try that question again "
+        "in a few seconds."
+    )
+
+    def __init__(self, genie: ResilientGenieClient) -> None:
+        self._genie = genie
+
+    def respond(self, question: str) -> GenieMessageResponse:
+        breaker_state = self._genie.resilient.breaker.state
+        if breaker_state == "open":
+            return self._fallback_or_degraded(question)
+        try:
+            result = self._genie.ask(question)
+        except DependencyDownError:
+            # Breaker opened during this call; serve safe corpus if we
+            # can, otherwise honest degraded message.
+            return self._fallback_or_degraded(question)
+        except GenieClientError:
+            # Underlying Genie surfaced an unrecoverable response (401,
+            # 500, malformed JSON). Re-raise so the router translates
+            # to 503 + degraded UI. No silent mock fallback.
+            raise
+        return _adapt_genie_response(question, result)
+
+    # ------------------------------------------------------------------
+    # Internals
+    # ------------------------------------------------------------------
+
+    def _fallback_or_degraded(self, question: str) -> GenieMessageResponse:
+        """Return a curated safe-corpus answer, or an honest degraded
+        message if the question has no match.
+
+        ``genie_catalog_respond`` returns its own deterministic warm
+        fallback when no intent matches -- we detect that and replace
+        it with the "warming up" message so the user sees a resilience
+        signal, not a generic catch-all answer dressed up as real data.
+        """
+        catalog_answer = genie_catalog_respond(question)
+        if catalog_answer.source == "deterministic_fallback":
+            # Unknown question + breaker open -> honest degraded state.
+            return GenieMessageResponse(
+                conversation_id=catalog_answer.conversation_id,
+                question=question,
+                answer=self._WARMING_MESSAGE,
+                source="degraded",
+                trusted_assets=[],
+                follow_up_questions=catalog_answer.follow_up_questions,
+            )
+        # Rewrite the source marker so the UI can style the fallback
+        # banner / the caller can tell catalog vs live apart.
+        return catalog_answer.model_copy(update={"source": "fallback"})
+
+
+def _adapt_genie_response(
+    question: str,
+    result: GenieResponse,
+) -> GenieMessageResponse:
+    """Wrap a live ``GenieResponse`` into the wire contract the UI
+    already consumes. We derive ``trusted_assets`` from the SQL query
+    when one is available (best-effort regex for ``mip_demo.*``
+    references); empty otherwise -- the UI tolerates an empty list.
+    """
+    trusted_assets = _extract_asset_refs(result.sql_query)
+    return GenieMessageResponse(
+        conversation_id=result.conversation_id,
+        question=question,
+        answer=result.answer_text or "",
+        source="genie",
+        trusted_assets=trusted_assets,
+        table_rows=result.sql_result_rows,
+    )
+
+
+def _extract_asset_refs(sql: str | None) -> list[str]:
+    """Pull ``mip_demo.<schema>.<table>`` references out of a SQL
+    string. Best-effort; returns the first three unique references so
+    the evidence chip row stays readable.
+    """
+    if not sql:
+        return []
+    import re
+
+    pattern = re.compile(r"\bmip_demo\.[a-zA-Z_][a-zA-Z0-9_]*\.[a-zA-Z_][a-zA-Z0-9_]*\b")
+    seen: list[str] = []
+    for match in pattern.findall(sql):
+        if match not in seen:
+            seen.append(match)
+        if len(seen) >= 3:
+            break
+    return seen
+
+
 __all__ = [
     "DatabricksBorrowerRepository",
+    "DatabricksGenieRepository",
     "DatabricksLeadRepository",
     "DatabricksOfferRepository",
     "DatabricksOutreachRepository",

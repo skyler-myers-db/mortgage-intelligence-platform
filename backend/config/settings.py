@@ -86,6 +86,11 @@ class Settings(BaseSettings):
     databricks_warehouse_id: str | None = None
     databricks_timeout_s: int = 30
 
+    # Genie space id -- loaded by ``backend.services.genie_client`` with
+    # a repo-committed fallback at ``genie/space_id.txt`` so a fresh
+    # checkout has a working Genie target without env plumbing. The env
+    # var always overrides the file so deploy-time wiring picks up a
+    # per-environment space id.
     genie_space_id: str | None = None
 
     # Lakebase Postgres credentials -- required for the durable audit
