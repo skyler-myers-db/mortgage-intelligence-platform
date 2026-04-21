@@ -1,4 +1,4 @@
-.PHONY: setup dev-api dev-ui test lint build validate bundle-validate bundle-deploy zip \
+.PHONY: setup dev-api dev-ui test test-e2e lint build validate bundle-validate bundle-deploy zip \
         provision-genie bundle-validate-env bundle-deploy-dev
 
 setup:
@@ -15,6 +15,12 @@ dev-ui:
 test:
 	pytest -q
 	npm --prefix frontend run test
+
+# End-to-end Playwright — pins the Module 0 DAIS golden path.
+# Assumes uvicorn + vite are already running (or Playwright's `webServer`
+# block in playwright.config.ts will boot them). Run from the repo root.
+test-e2e:
+	npx playwright test -c playwright.config.ts
 
 lint:
 	ruff check backend tests tools
