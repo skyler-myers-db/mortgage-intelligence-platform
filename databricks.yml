@@ -27,6 +27,19 @@ targets:
     run_as:
       user_name: ${workspace.current_user.userName}
 
+  # `ci` target is for PR validation ONLY — never deploy against it. The
+  # `dev` + `prod` targets both carry `mode:` + `${workspace.current_user
+  # .userName}` templates that force the CLI to call
+  # /api/2.0/preview/scim/v2/Me to resolve the deploying user's name,
+  # which is impossible in PR CI (no real token, by design). This target
+  # has no mode and no user templates, so `bundle validate -t ci` does
+  # not reach out and never performs an auth preflight. The PR workflow
+  # uses this target; deploys use `dev` / `prod`.
+  ci:
+    workspace:
+      host: https://dbc-3aa503a9-4fa8.cloud.databricks.com
+      root_path: /Workspace/ci-placeholder/.bundle/${bundle.name}/${bundle.target}
+
 resources:
   # Slice 5 real-data migration: self-contained Lakebase provisioning.
   # ``databricks bundle deploy -t dev`` creates the Postgres instance +
@@ -245,13 +258,16 @@ resources:
       warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
 
   # Canonical experiment path is /Shared/mip/lead-scoring; the parent
-  # /Shared/mip directory must exist in the workspace before this bundle
-  # deploys (create once via `databricks workspace mkdirs /Shared/mip`).
-  # For dev convenience we place the experiment under the deploying user's
-  # home so the bundle creates cleanly without a pre-provision step.
+  # /Shared/mip directory is auto-created by the bundle deploy. Under
+  # `mode: development` (the dev target), Databricks Asset Bundles
+  # automatically prefixes the experiment name with `[dev <username>]`
+  # to sandbox per-user experiments — so we don't need a manual
+  # `${workspace.current_user.userName}` template that would force
+  # `bundle validate` to authenticate against the workspace just to
+  # resolve the path (making PR CI impossible without real secrets).
   experiments:
     mip_lead_scoring:
-      name: /Users/${workspace.current_user.userName}/mip-lead-scoring
+      name: /Shared/mip/lead-scoring
 
 # Genie spaces (mortgage_lead_intelligence) are still provisioned out-of-
 # bundle via tools/databricks/provision_genie_space.py (see AGENTS.md).
