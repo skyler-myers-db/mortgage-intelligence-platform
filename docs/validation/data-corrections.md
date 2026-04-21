@@ -145,3 +145,173 @@ API surface.
 - Future slice: add a unit test that parses
   `sql/ref/lender_dictionary_seed.sql` and asserts its row count matches
   `len(_LENDER_REF_MAP) + 12`, mechanically enforcing fallback/UC sync.
+
+## Wave 2 — data-accuracy P0s (2026-04-21)
+
+Three P0 bugs surfaced by Wave 1 spot-checks. None of these change the
+Pydantic schema or the `/api/*` surface — they only fix the data-plane
+transformation. All three require a silver + gold refresh because the
+live tables were produced under the old definitions.
+
+### Wave-2 GAP 1 — `borrower_id` collisions in `mip.gold.borrower_360`
+
+#### Bug
+
+The formula
+`CONCAT('B-', LPAD(CAST((ABS(XXHASH64(clip)) % 99999) + 10000 AS STRING), 5, '0'))`
+collapsed ~5.16M CLIPs into ~90K synthetic `B-#####` ids (avg 57
+collisions per id, worst observed 688). The router's
+`get(borrower_id)` path in
+`backend/services/repositories/databricks_repo.py` queries
+`WHERE borrower_id = :id LIMIT 1` and returned a non-deterministic CLIP
+per request. Clicking a borrower from the Lead Queue into the Borrower
+360 page showed different borrowers to different users for the same id.
+
+#### Fix
+
+Widen to base36 of the absolute 64-bit hash, padded to 13 chars:
+
+```sql
+CONCAT('B-', LPAD(CONV(CAST(ABS(XXHASH64(clip)) AS STRING), 10, 36), 13, '0'))
+```
+
+Slot count: `36^13 ≈ 1.7e20` for 5.16M rows — collision probability
+negligible. `CONV(..., 10, 36)` is Spark's standard base converter;
+`LPAD(..., 13, '0')` stabilises the string length so the `B-` + 13-char
+format is consistent across the population.
+
+#### Files touched
+
+- `sql/transformations/gold_borrower_360.sql` — the formula, plus a
+  long comment explaining the collision history.
+- `sql/ddl/gold_borrower_360.sql` — updated the `borrower_id` column
+  comment to describe the base36 / width-13 formula.
+- `tests/integration/test_borrower_id_uniqueness.py` — new; gated
+  regression that asserts
+  `COUNT(*) == COUNT(DISTINCT borrower_id)` and a format RLIKE check
+  for `B-[13-char base36]`.
+
+Everything else keeps working: the router, the
+`_BORROWER_360_COLUMNS` projection, the `LeadSummary` / `Borrower360`
+Pydantic schemas, and `gold.lead_population` all already treat
+`borrower_id` as an opaque `str`. The Python test fixture IDs
+(`B-48291` etc.) are hand-authored golden fixtures — they are NOT
+derived from CLIP hashing and are deliberately left alone to preserve
+`tests/fixtures/*_golden.json` pinning.
+
+### Wave-2 GAP 2 — `owner_is_corporate` BOOLEAN cast collapsed to NULL
+
+#### Bug
+
+`sql/transformations/silver_property_master.sql` had
+`CAST(COALESCE(owner_1_corporate_indicator, 0) AS BOOLEAN)`. An earlier
+share probe saw BIGINT 1/0; the current share emits STRING `'Y'` / `'N'`.
+`CAST('Y' AS BOOLEAN)` returns NULL in Spark (not TRUE), so
+`owner_is_corporate` was NULL on every row and the `is_investor`
+segment predicate lost its corporate-owner leg.
+
+#### Fix
+
+Explicit string match with normalisation:
+
+```sql
+(UPPER(TRIM(COALESCE(CAST(owner_1_corporate_indicator AS STRING), ''))) = 'Y')
+  AS owner_is_corporate
+```
+
+`CAST(... AS STRING)` defends against the column ever drifting back to
+BIGINT — `CAST(1 AS STRING)` yields `'1'` which compares `!= 'Y'` and
+gives FALSE, so the legacy BIGINT path at least doesn't produce a false
+TRUE; the share-level fix has to happen upstream if the type flips
+again.
+
+#### Files touched
+
+- `sql/transformations/silver_property_master.sql` — the coercion, plus
+  an updated header-comment block explaining the Spark BOOLEAN-cast
+  trap.
+- `tests/integration/test_silver_coercion.py` — new; gated regression
+  that asserts at least one row in `mip.silver.property_master` has
+  `owner_is_corporate = TRUE` (a floor the 6-state footprint easily
+  clears when the coercion works).
+
+### Wave-2 GAP 3 — silver `situs_zip_code` was 9-digit (ZIP+4)
+
+#### Bug
+
+Data contract §2.1 / §2.2 specify 5-digit STRING. The share emits
+9-digit ZIP+4 (with or without a dash) on ~89% of rows.
+`gold_borrower_360.sql` had added a defensive `SUBSTR(..., 1, 5)` in
+`subject_property`, but silver itself was still non-contract — so any
+consumer reading silver directly (the forthcoming geography drill-down
+queries + Genie joins) would see 9-digit codes. Silver should be
+authoritative, not gold.
+
+#### Fix
+
+Truncate at silver, strip non-digits first to tolerate the dashed
+variant:
+
+```sql
+SUBSTR(REGEXP_REPLACE(CAST(situs_zip_code AS STRING), '[^0-9]', ''), 1, 5)
+  AS situs_zip_code
+```
+
+Applied in both `silver_property_master.sql` and
+`silver_lien_current.sql`. The defensive SUBSTR in
+`gold_borrower_360.sql` was then simplified to a plain `COALESCE` —
+redundant once silver is clean.
+
+#### Files touched
+
+- `sql/transformations/silver_property_master.sql` — truncation on
+  `situs_zip_code`.
+- `sql/transformations/silver_lien_current.sql` — truncation on
+  `situs_zip_code`.
+- `sql/transformations/gold_borrower_360.sql` — removed the now-
+  redundant `SUBSTR(w.zip, 1, 5)` in `subject_property`; updated the
+  associated comment.
+- `tests/integration/test_silver_zip_5_digit.py` — new; gated
+  regression that parameterises over both silver tables and asserts
+  `MAX(LENGTH(situs_zip_code)) <= 5`.
+
+### §REFRESH-AFTER-WAVE-2 — operator rebuild commands
+
+The live silver + gold tables are stale after these edits. An operator
+must run the two bundle jobs in order; they must not run from the
+subagent session. `lead_population` in particular is stale and the
+second job rebuilds it from the newly-widened `borrower_id`.
+
+```bash
+# 1. Silver refresh: picks up the BOOLEAN-cast and ZIP truncation fixes.
+databricks bundle run mip_refresh_silver -t dev
+
+# 2. Score / gold refresh: picks up the widened borrower_id in
+#    mip.gold.borrower_360 and re-materialises mip.gold.lead_population
+#    from it.
+databricks bundle run mip_refresh_scores -t dev
+```
+
+Post-rebuild verification: run the three new integration tests
+against the refreshed tables (set `DATABRICKS_HOST`, `DATABRICKS_TOKEN`,
+`DATABRICKS_WAREHOUSE_ID`):
+
+```bash
+pytest -q tests/integration/test_borrower_id_uniqueness.py \
+          tests/integration/test_silver_coercion.py \
+          tests/integration/test_silver_zip_5_digit.py
+```
+
+All three should pass. A failure on the uniqueness test means the gold
+job ran against a stale DDL — redeploy the bundle. A failure on the
+coercion test means the share type flipped again — upstream probe
+required. A failure on the ZIP test means silver was not rebuilt.
+
+### Wave-2 validation (subagent edit cycle)
+
+- `pytest -q tests/unit/` — passes (no unit-test surface changed;
+  Python fixtures hold their pinned ids).
+- `ruff check backend tests tools jobs pipelines` — clean.
+- Frontend: no `.ts/.tsx` touched; no lint/test run required.
+- `databricks bundle validate -t dev` — NOT run in this cycle; edits
+  are SQL-only and the bundle YAML is unchanged.

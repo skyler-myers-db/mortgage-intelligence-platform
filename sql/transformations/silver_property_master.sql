@@ -25,7 +25,10 @@
 --     `mailing_state` are kept so `is_absentee` is computable here.
 --
 -- Type coercion notes (from share probe, Apr 2026):
---   - `owner_1_corporate_indicator` is BIGINT (1/0) -> CAST AS BOOLEAN.
+--   - `owner_1_corporate_indicator` is STRING 'Y'/'N' (not BIGINT as first
+--     probed). `CAST('Y' AS BOOLEAN)` silently returns NULL in Spark, so the
+--     pre-slice13-Wave2 column collapsed to all NULL. We now match on
+--     UPPER(TRIM(...)) = 'Y' so every true row is preserved.
 --   - `last_foreclosure_transaction_date` is BIGINT yyyyMMdd ->
 --     TO_DATE(CAST(... AS STRING), 'yyyyMMdd'). Zero / bad values -> NULL.
 --   - `block_level_latitude` / `block_level_longitude` are DOUBLE in share.
@@ -41,7 +44,12 @@ USING (
     fips_county_code,
     situs_state,
     situs_city,
-    situs_zip_code,
+    -- Data contract §2.2 says situs_zip_code is 5-digit; ~89% of share rows
+    -- actually ship ZIP+4 (9-digit with or without dash). Truncate at silver
+    -- so downstream gold/api no longer need to defensively SUBSTR
+    -- (slice13 Wave-2 fix).
+    SUBSTR(REGEXP_REPLACE(CAST(situs_zip_code AS STRING), '[^0-9]', ''), 1, 5)
+                                                                    AS situs_zip_code,
     situs_core_based_statistical_area_cbsa                          AS situs_cbsa_code,
     CAST(block_level_latitude  AS DOUBLE)                            AS situs_lat,
     CAST(block_level_longitude AS DOUBLE)                            AS situs_lon,
@@ -61,7 +69,10 @@ USING (
       ),
       256
     )                                                                 AS owner_name_hash,
-    CAST(COALESCE(owner_1_corporate_indicator, 0) AS BOOLEAN)        AS owner_is_corporate,
+    -- Share emits STRING 'Y'/'N'; CAST('Y' AS BOOLEAN) is NULL in Spark,
+    -- so we coerce explicitly. See header comment (slice13 Wave-2 fix).
+    (UPPER(TRIM(COALESCE(CAST(owner_1_corporate_indicator AS STRING), ''))) = 'Y')
+                                                                     AS owner_is_corporate,
     owner_occupancy_code,
     mailing_city,
     mailing_state,

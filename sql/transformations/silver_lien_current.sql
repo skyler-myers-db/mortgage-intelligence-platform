@@ -40,7 +40,11 @@ USING (
   SELECT
     clip,
     situs_state,
-    situs_zip_code,
+    -- Data contract §2.1 says situs_zip_code is 5-digit; share frequently
+    -- emits ZIP+4. Truncate at silver so gold/api stay contract-clean
+    -- (slice13 Wave-2 fix).
+    SUBSTR(REGEXP_REPLACE(CAST(situs_zip_code AS STRING), '[^0-9]', ''), 1, 5)
+                                                                    AS situs_zip_code,
     owner_occupancy_code,
     CAST(total_number_of_open_mortgage_liens AS INT)                 AS total_open_liens,
     CAST(total_amount_of_open_mortgage_liens AS BIGINT)              AS total_open_lien_balance,

@@ -272,7 +272,14 @@ subscores AS (
 )
 SELECT
   w.clip,
-  CONCAT('B-', LPAD(CAST((ABS(XXHASH64(w.clip)) % 99999) + 10000 AS STRING), 5, '0')) AS borrower_id,
+  -- Borrower ID derivation (slice13 Wave-2 fix):
+  --   Prior formula `LPAD(ABS(XXHASH64(clip)) % 99999 + 10000, 5, '0')` collapsed
+  --   5.16M CLIPs into ~90K synthetic IDs (avg 57 collisions per id, worst 688),
+  --   so `SELECT ... WHERE borrower_id = :id LIMIT 1` returned a non-deterministic
+  --   CLIP. We now widen to base36(ABS(XXHASH64(clip))) padded to 13 chars,
+  --   giving 36^13 = ~1.7e20 slots for 5.16M rows -- collision probability negligible.
+  --   CONV(..., 10, 36) is Spark's base converter; LPAD stabilises the string length.
+  CONCAT('B-', LPAD(CONV(CAST(ABS(XXHASH64(w.clip)) AS STRING), 10, 36), 13, '0')) AS borrower_id,
   CONCAT('Owner ', SUBSTR(w.owner_name_hash, 1, 8))                                   AS display_name,
   w.city,
   w.state,
@@ -332,13 +339,13 @@ SELECT
   'pending'                                                                          AS approval_status,
   w.owner_link_id,
   -- Truncate ZIP to 5 digits to match the api-boundary redaction
-  -- (`pii_redaction.synthesize_subject_property` uses `zip[:5]`). ~89% of
-  -- live share rows carry a 9-digit ZIP+4 in `situs_zip_code`; without
-  -- this truncation, the gold-emitted `subject_property` string disagrees
-  -- with the redacted /api/* payload for those rows. Tracked by
-  -- docs/validation/borrower-e2e-audit.md.
+  -- (`pii_redaction.synthesize_subject_property` uses `zip[:5]`). As of
+  -- slice13 Wave-2, silver.property_master + silver.lien_current emit a
+  -- 5-digit situs_zip_code, so this is now a COALESCE (not a SUBSTR)
+  -- guard. Tracked by docs/validation/borrower-e2e-audit.md +
+  -- docs/validation/data-corrections.md §REFRESH-AFTER-WAVE-2.
   CONCAT('Synthetic property · ', COALESCE(w.city, 'Unknown'), ', ',
-         w.state, ' ', SUBSTR(COALESCE(w.zip, '00000'), 1, 5))                        AS subject_property,
+         w.state, ' ', COALESCE(w.zip, '00000'))                                      AS subject_property,
   CAST(COALESCE(w.avm_value, 0) AS BIGINT)                                           AS avm_value,
   CAST(COALESCE(w.total_open_lien_balance, 0) AS BIGINT)                             AS current_lien_balance,
   -- current_rate in PERCENT form (5.75), matches Pydantic + mock_data.

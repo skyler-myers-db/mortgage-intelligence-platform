@@ -63,7 +63,7 @@
 
 CREATE TABLE IF NOT EXISTS mip.gold.borrower_360 (
   clip                      STRING    NOT NULL COMMENT 'Cotality CLIP. PK. Router maps to Borrower360.clip_id.',
-  borrower_id               STRING    NOT NULL COMMENT 'Synthetic stable id from CLIP: CONCAT("B-", LPAD(xxhash64(clip) MOD 99999 + 10000, 5, "0")). No PII.',
+  borrower_id               STRING    NOT NULL COMMENT 'Synthetic stable id from CLIP: CONCAT("B-", LPAD(CONV(ABS(xxhash64(clip)), 10, 36), 13, "0")). Base36 encoding of the 64-bit hash, width 13 => 36^13 slots. No PII.',
   display_name              STRING    NOT NULL COMMENT 'Synthesized label "Owner " || SUBSTR(owner_name_hash, 1, 8). Never a real name.',
   city                      STRING             COMMENT 'Situs city from property_master.',
   state                     STRING    NOT NULL COMMENT 'Situs state (6-state footprint).',
