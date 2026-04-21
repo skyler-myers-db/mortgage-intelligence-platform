@@ -3,3 +3,4 @@
 - [DLT pipelines use `schema`, not `target`](project_dlt_pipeline_schema_field.md) — in databricks.yml pipeline resources, `target:` is deprecated; use `catalog:` + `schema:`.
 - [venv binaries for ruff/pytest](reference_venv_binaries.md) — use .venv/bin/ruff and .venv/bin/pytest; they're not on PATH.
 - [Gold Lakeflow pipeline delegates to SQL](project_gold_pipeline_delegates_to_sql.md) — @dlt.table functions SELECT * from the CTAS-produced warehouse table; logic stays in sql/transformations/.
+- [Slice13 accuracy — two data gaps](project_slice13_accuracy.md) — historical-lender dedup fix + mip.ref.lender_dictionary promotion on 2026-04-21.

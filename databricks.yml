@@ -107,13 +107,62 @@ resources:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
               path: sql/ddl/001_catalogs_schemas.sql
+        # Slice13-accuracy: create the mip.ref schema + lender_dictionary
+        # table and seed the canonical lender vocabulary. Runs AFTER catalog
+        # init (the schema lives under `mip`) and BEFORE the silver pipeline
+        # so any silver/gold transformation that eventually joins against
+        # ref.lender_dictionary sees a populated table on first deploy.
+        - task_key: init_ref_tables
+          description: "Create mip.ref schema + ref.lender_dictionary table."
+          depends_on:
+            - task_key: init_catalog_schemas
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/ddl/004_ref_tables.sql
+        - task_key: seed_ref_lender_dictionary
+          description: "MERGE canonical lender vocabulary into mip.ref.lender_dictionary (idempotent)."
+          depends_on:
+            - task_key: init_ref_tables
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/ref/lender_dictionary_seed.sql
         - task_key: refresh_silver_pipeline
           description: "Run the Lakeflow feature pipeline to materialize mip.silver.* from the Cotality share."
           depends_on:
-            - task_key: init_catalog_schemas
+            - task_key: seed_ref_lender_dictionary
           pipeline_task:
             pipeline_id: ${resources.pipelines.mip_feature_pipeline.id}
             full_refresh: false
+    # Slice13-accuracy: standalone ref-data seed job. Mirrors the two
+    # tasks baked into mip_refresh_silver so analysts / ops can re-run
+    # the lender-dictionary seed without kicking the full silver pipeline.
+    # Also the source of truth for `make` targets that only want to
+    # refresh reference data.
+    mip_ref_seed:
+      name: mip_ref_seed
+      tags:
+        solution: mortgage-intelligence-platform
+        module: module0
+        owner: entrada
+        slice: slice13-accuracy
+      max_concurrent_runs: 1
+      tasks:
+        - task_key: init_ref_tables
+          description: "Create mip.ref schema + ref.lender_dictionary table (idempotent)."
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/ddl/004_ref_tables.sql
+        - task_key: seed_lender_dictionary
+          description: "MERGE canonical lender vocabulary into mip.ref.lender_dictionary."
+          depends_on:
+            - task_key: init_ref_tables
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/ref/lender_dictionary_seed.sql
     mip_refresh_scores:
       name: mip_refresh_scores
       tasks: []

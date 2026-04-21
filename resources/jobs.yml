@@ -27,6 +27,32 @@ resources:
         module: module0
         owner: entrada
 
+    # Slice13-accuracy mirror: canonical definition lives in `databricks.yml`
+    # as `mip_ref_seed`. This block is the same rationale as
+    # `fred_rates_ingest` below -- keep sibling jobs co-located so a future
+    # `include: [resources/*.yml]` wiring makes per-resource files the single
+    # source of truth. Keep both blocks in sync.
+    mip_ref_seed:
+      name: mip-ref-seed-${bundle.target}
+      tags:
+        solution: mortgage-intelligence-platform
+        module: module0
+        owner: entrada
+        slice: slice13-accuracy
+      tasks:
+        - task_key: init_ref_tables
+          sql_task:
+            warehouse_id: ${var.sql_warehouse_id}
+            file:
+              path: ../sql/ddl/004_ref_tables.sql
+        - task_key: seed_lender_dictionary
+          depends_on:
+            - task_key: init_ref_tables
+          sql_task:
+            warehouse_id: ${var.sql_warehouse_id}
+            file:
+              path: ../sql/ref/lender_dictionary_seed.sql
+
     # Slice 1 mirror: the canonical definition lives in `databricks.yml` as
     # `mip_fred_rates_ingest` (that file is what the bundle actually
     # materializes -- see `databricks bundle validate -o json`). This block

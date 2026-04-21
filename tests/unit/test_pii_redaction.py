@@ -16,6 +16,9 @@ import pytest
 
 from backend.services.pii_redaction import (
     _FORBIDDEN_OUTPUT_KEYS,
+    _LENDER_REF_MAP,
+    LenderRefResolver,
+    _reset_lender_resolver_for_tests,
     generalize_lender,
     redact_borrower_row,
     redact_evidence_row,
@@ -279,3 +282,123 @@ def test_redact_evidence_row_passthrough_for_non_lender_signals() -> None:
     }
     out = redact_evidence_row(row)
     assert out["signal_value"] == "$285K"
+
+
+# ---------------------------------------------------------------------------
+# LenderRefResolver -- UC load happy path + fallback path + cache behavior.
+# The resolver reads `mip.ref.lender_dictionary` via the Databricks SQL
+# client, caches for 15 min, and falls back to `_LENDER_REF_MAP` on failure.
+# Tests monkey-patch the internal `_load_from_uc` to avoid touching any
+# real warehouse; the fallback dict is swappable via constructor.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _isolate_resolver_singleton() -> None:
+    """Ensure each test starts with no process-wide resolver cached.
+
+    `generalize_lender` lazily constructs a singleton; tests that stub a
+    new resolver must be able to install it without leaking state between
+    cases.
+    """
+    _reset_lender_resolver_for_tests(None)
+    yield
+    _reset_lender_resolver_for_tests(None)
+
+
+def _resolver_with_uc_dict(
+    uc_dict: dict[str, str] | None,
+    fallback: dict[str, str] | None = None,
+) -> LenderRefResolver:
+    """Build a LenderRefResolver whose UC load is replaced with `uc_dict`.
+
+    Pass `None` as `uc_dict` to simulate a UC outage (the resolver falls
+    back to `fallback` or the default `_LENDER_REF_MAP`).
+    """
+    resolver = LenderRefResolver(ttl_s=60.0, fallback=fallback)
+    resolver._load_from_uc = lambda: uc_dict  # type: ignore[method-assign]
+    return resolver
+
+
+def test_resolver_loads_from_uc_on_first_call() -> None:
+    # UC carries a LARGER vocabulary than the fallback; we prove the
+    # resolver prefers it over the in-process constant.
+    uc_dict = {
+        "WELLS FARGO BK NA": "Wells Fargo Bank",
+        "PENNYMAC LOAN SVCS LLC": "PennyMac Loan Services",  # NOT in fallback
+    }
+    resolver = _resolver_with_uc_dict(uc_dict)
+    # Known-to-UC-only entry resolves.
+    assert resolver.resolve("PENNYMAC LOAN SVCS LLC") == "PennyMac Loan Services"
+    # Known-to-both resolves to UC value (identical here).
+    assert resolver.resolve("WELLS FARGO BK NA") == "Wells Fargo Bank"
+
+
+def test_resolver_falls_back_to_ref_map_when_uc_unavailable() -> None:
+    # `_load_from_uc` returns None == "UC load failed"; resolver uses the
+    # fallback dict (defaults to _LENDER_REF_MAP).
+    resolver = _resolver_with_uc_dict(None)
+    assert resolver.resolve("WELLS FARGO BK NA") == "Wells Fargo Bank"
+    assert resolver.resolve("SUMMIT MTG") == "Summit Mortgage"
+
+
+def test_resolver_caches_uc_result_until_ttl() -> None:
+    # Counting-load: prove the resolver does not re-call `_load_from_uc`
+    # for every `resolve()` hit.
+    call_count = {"n": 0}
+
+    def counted_load() -> dict[str, str]:
+        call_count["n"] += 1
+        return {"WELLS FARGO BK NA": "Wells Fargo Bank"}
+
+    resolver = LenderRefResolver(ttl_s=60.0)
+    resolver._load_from_uc = counted_load  # type: ignore[method-assign]
+    for _ in range(5):
+        assert resolver.resolve("WELLS FARGO BK NA") == "Wells Fargo Bank"
+    assert call_count["n"] == 1, "UC should be queried at most once within TTL"
+
+
+def test_resolver_invalidate_forces_reload() -> None:
+    call_count = {"n": 0}
+
+    def counted_load() -> dict[str, str]:
+        call_count["n"] += 1
+        return {"WELLS FARGO BK NA": "Wells Fargo Bank"}
+
+    resolver = LenderRefResolver(ttl_s=60.0)
+    resolver._load_from_uc = counted_load  # type: ignore[method-assign]
+    resolver.resolve("WELLS FARGO BK NA")
+    resolver.invalidate()
+    resolver.resolve("WELLS FARGO BK NA")
+    assert call_count["n"] == 2
+
+
+def test_resolver_unknown_key_titlecases() -> None:
+    resolver = _resolver_with_uc_dict({})  # empty UC dict; empty fallback
+    resolver._fallback = {}  # type: ignore[attr-defined]
+    resolver.invalidate()
+    resolver._load_from_uc = lambda: {}  # type: ignore[method-assign]
+    assert resolver.resolve("PENNYMAC LOAN SERVICES LLC") == "Pennymac Loan Services Llc"
+
+
+def test_resolver_handles_none_and_empty() -> None:
+    resolver = _resolver_with_uc_dict({})
+    assert resolver.resolve(None) is None
+    assert resolver.resolve("") is None
+    assert resolver.resolve("   ") is None
+
+
+def test_generalize_lender_uses_process_resolver_when_set() -> None:
+    # Install a stub resolver with a custom vocabulary; prove the module-
+    # level `generalize_lender` delegates to it.
+    stub = _resolver_with_uc_dict({"FICTIONAL BK NA": "Fictional Bank"})
+    _reset_lender_resolver_for_tests(stub)
+    assert generalize_lender("FICTIONAL BK NA") == "Fictional Bank"
+    # Clean-up happens via autouse fixture.
+
+
+def test_fallback_ref_map_still_covers_canonical_11() -> None:
+    # The in-process fallback must not shrink below the canonical 11 rows
+    # (so dev/tests without UC creds still get the expected labels).
+    assert _LENDER_REF_MAP["SUMMIT MTG"] == "Summit Mortgage"
+    assert len(_LENDER_REF_MAP) >= 11

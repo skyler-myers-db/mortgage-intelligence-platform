@@ -461,10 +461,16 @@ END
 
 **relationship** (weight 0.10):
 ```
+-- historical_summit_distinct_clips := COUNT(DISTINCT me.clip)
+-- per owner_link_id across mip.silver.mortgage_events WHERE the lender
+-- is Summit. Counts *distinct properties previously financed by Summit*
+-- for this owner, not lien events (slice13-accuracy fix: prior impl
+-- counted events, inflating the score for owners with multiple events
+-- on the same CLIP).
 CASE
-  WHEN is_current_customer AND historical_mortgage_count_at_lender >= 2 THEN 95
-  WHEN is_current_customer                                                    THEN 88
-  WHEN is_competitor_lien                                                     THEN 60
+  WHEN is_current_customer AND historical_summit_distinct_clips >= 2 THEN 95
+  WHEN is_current_customer                                            THEN 88
+  WHEN is_competitor_lien                                             THEN 60
   ELSE 45
 END
 ```
