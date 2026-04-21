@@ -33,32 +33,38 @@ export default function Home() {
       <div className="kpi-row">
         <KpiCard
           label="Marketable population"
-          value="89,553"
+          valueAnimated={89553}
           delta="+4.8% vs. last run"
           deltaDir="up"
           source={DRAWER_SOURCES.population}
+          trend={[85200, 85900, 86800, 87400, 88100, 89000, 89553]}
         />
         <KpiCard
           label="High-intent leads"
-          value="12,840"
+          valueAnimated={12840}
           delta="+18%"
           deltaDir="up"
           source={DRAWER_SOURCES.itm}
+          trend={[10200, 10600, 10900, 11400, 12000, 12500, 12840]}
         />
         <KpiCard
           label="Cost per contact (est.)"
-          value="$2.18"
+          valueAnimated={2.18}
+          format={(n) => `$${n.toFixed(2)}`}
           delta="-$0.11"
           deltaDir="down"
           source={DRAWER_SOURCES.config}
+          trend={[2.42, 2.36, 2.32, 2.28, 2.24, 2.21, 2.18]}
         />
         <KpiCard
           label="Projected contact → app"
-          value="9.7"
+          valueAnimated={9.7}
+          format={(n) => n.toFixed(1)}
           unit="%"
           delta="+1.2 pp"
           deltaDir="up"
           source={DRAWER_SOURCES.nbo}
+          trend={[8.3, 8.6, 8.9, 9.1, 9.3, 9.5, 9.7]}
         />
       </div>
 

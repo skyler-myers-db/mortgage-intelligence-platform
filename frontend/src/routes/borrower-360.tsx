@@ -9,6 +9,7 @@ import { ScoreBadge } from '../components/mortgage/ScoreBadge';
 import { ConfidenceMeter } from '../components/mortgage/ConfidenceMeter';
 import { Chip, EvidenceChip } from '../components/Primitives';
 import { Icon } from '../components/Icon';
+import { Skeleton } from '../components/ui/Skeleton';
 import { DRAWER_SOURCES, mockSegments } from '../mocks/demoData';
 
 /**
@@ -28,8 +29,59 @@ export default function Borrower360() {
 
   if (!b) {
     return (
-      <PageShell eyebrow="Borrower 360" title="Loading dossier…">
-        <div className="muted">Fetching public-record Customer 360 for {id}…</div>
+      <PageShell
+        eyebrow="Borrower 360 · Public-Record Dossier"
+        title={<Skeleton width={280} height={30} rounded="md" />}
+        lede={`Fetching public-record Customer 360 for ${id}…`}
+      >
+        <div className="layoutA-grid">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--gap-grid)' }}>
+            <div className="surface">
+              <div className="surface__hdr">
+                <Skeleton width={28} height={28} rounded="md" />
+                <Skeleton width={140} height={14} rounded="sm" />
+              </div>
+              <div className="surface__body" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+                {Array.from({ length: 8 }).map((_, i) => (
+                  <div key={i}>
+                    <Skeleton width={80} height={11} rounded="sm" style={{ marginBottom: 6 }} />
+                    <Skeleton width="85%" height={14} rounded="sm" />
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="surface">
+              <div className="surface__hdr">
+                <Skeleton width={16} height={16} rounded="sm" />
+                <Skeleton width={140} height={14} rounded="sm" />
+              </div>
+              <div className="surface__body" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                {Array.from({ length: 4 }).map((_, i) => (
+                  <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <Skeleton width={90} height={10} rounded="sm" />
+                    <Skeleton width="70%" height={13} rounded="sm" />
+                    <Skeleton width="55%" height={12} rounded="sm" />
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--gap-grid)' }}>
+            {Array.from({ length: 3 }).map((_, i) => (
+              <div key={i} className="surface">
+                <div className="surface__hdr">
+                  <Skeleton width={16} height={16} rounded="sm" />
+                  <Skeleton width={160} height={14} rounded="sm" />
+                </div>
+                <div className="surface__body" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <Skeleton width="90%" height={14} rounded="sm" />
+                  <Skeleton width="80%" height={12} rounded="sm" />
+                  <Skeleton width="65%" height={12} rounded="sm" />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
       </PageShell>
     );
   }

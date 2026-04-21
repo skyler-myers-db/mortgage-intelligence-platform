@@ -9,6 +9,7 @@ import { ScoreBadge } from '../components/mortgage/ScoreBadge';
 import { ConfidenceMeter } from '../components/mortgage/ConfidenceMeter';
 import { Chip, EvidenceChip } from '../components/Primitives';
 import { Icon } from '../components/Icon';
+import { Skeleton } from '../components/ui/Skeleton';
 import { DRAWER_SOURCES } from '../mocks/demoData';
 import { useApp } from '../components/AppContext';
 
@@ -117,16 +118,28 @@ export default function OfferOrchestrator() {
               </div>
               {b && <ScoreBadge value={b.opportunity_score} />}
             </div>
-            <p className="body" style={{ marginTop: 'var(--sp-2)' }}>
-              {rec?.rationale ?? b?.why_now ?? 'Loading rationale…'}
-            </p>
+            {rec ? (
+              <p className="body" style={{ marginTop: 'var(--sp-2)' }}>
+                {rec.rationale ?? b?.why_now}
+              </p>
+            ) : (
+              <div style={{ marginTop: 'var(--sp-2)', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <Skeleton width="100%" height={14} rounded="sm" />
+                <Skeleton width="92%" height={14} rounded="sm" />
+                <Skeleton width="78%" height={14} rounded="sm" />
+              </div>
+            )}
             <div style={{ marginTop: 'var(--sp-3)', display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
               <span className="muted" style={{ fontSize: 11 }}>Sources:</span>
-              {(rec?.sources ?? []).map((s) => (
-                <EvidenceChip key={s} source={sourceDescriptor(s)}>
-                  {shortSourceLabel(s)}
-                </EvidenceChip>
-              ))}
+              {rec
+                ? rec.sources.map((s) => (
+                    <EvidenceChip key={s} source={sourceDescriptor(s)}>
+                      {shortSourceLabel(s)}
+                    </EvidenceChip>
+                  ))
+                : Array.from({ length: 3 }).map((_, i) => (
+                    <Skeleton key={i} width={96} height={18} rounded="sm" />
+                  ))}
             </div>
           </div>
         </div>

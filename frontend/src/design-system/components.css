@@ -767,3 +767,131 @@
   padding: var(--sp-8);
 }
 .map-placeholder__inner { display: flex; flex-direction: column; align-items: center; gap: var(--sp-3); }
+
+/* ============================================================
+   SKELETON (token-driven shimmer)
+   ============================================================ */
+.skeleton {
+  display: block;
+  background-color: var(--bg-3);
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    color-mix(in oklab, var(--line-2) 55%, transparent) 50%,
+    transparent 100%
+  );
+  background-size: 220% 100%;
+  background-repeat: no-repeat;
+  background-position: 120% 0;
+  animation: skeleton-shimmer 1.4s ease-in-out infinite;
+  will-change: background-position;
+}
+@keyframes skeleton-shimmer {
+  0%   { background-position: 120% 0; }
+  100% { background-position: -120% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .skeleton { animation: none; background-image: none; }
+}
+
+/* ============================================================
+   FILTER MENU (portal-free anchored dropdown for FilterSelect)
+   ============================================================ */
+.filter-menu {
+  position: absolute;
+  top: calc(100% + var(--sp-1));
+  left: 0;
+  z-index: 20;
+  min-width: 180px;
+  max-height: 280px;
+  overflow-y: auto;
+  background: var(--bg-1);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-md);
+  padding: var(--sp-1);
+  margin: 0;
+  list-style: none;
+  animation: filter-menu-in var(--dur-fast) var(--ease);
+}
+@media (prefers-reduced-motion: reduce) {
+  .filter-menu { animation: none; }
+}
+@keyframes filter-menu-in {
+  from { opacity: 0; transform: translateY(-3px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.filter-menu__item {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: var(--sp-2) var(--sp-3);
+  font-size: var(--fs-12);
+  color: var(--text-2);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  font-family: var(--font-sans);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+  white-space: nowrap;
+}
+.filter-menu__item:hover,
+.filter-menu__item.is-focused { background: var(--bg-3); color: var(--text-1); }
+.filter-menu__item.is-selected { color: var(--accent); }
+
+/* ============================================================
+   ROUTE TRANSITION (fade between routes; only the inner .main content)
+   ============================================================ */
+.route-transition {
+  animation: route-in var(--dur-base) var(--ease);
+}
+@keyframes route-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .route-transition { animation: none; }
+}
+
+/* ============================================================
+   GENIE ANSWER — metric_value, table_rows, follow_up_questions
+   ============================================================ */
+.genie-answer__metric {
+  font-family: var(--font-sans);
+  font-weight: 600;
+  font-size: var(--fs-28);
+  letter-spacing: var(--tracking-tight);
+  color: var(--text-1);
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  margin-bottom: var(--sp-2);
+}
+.genie-answer__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-12);
+  margin-top: var(--sp-3);
+  font-variant-numeric: tabular-nums;
+}
+.genie-answer__table th,
+.genie-answer__table td {
+  text-align: left;
+  padding: 6px var(--sp-3) 6px 0;
+  border-bottom: 1px solid var(--line-1);
+}
+.genie-answer__table th {
+  font-size: var(--fs-11);
+  font-weight: 500;
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+.genie-answer__table td { color: var(--text-1); }
+.genie-answer__table td.num { font-family: var(--font-mono); }
+.genie-answer__more {
+  font-size: var(--fs-11);
+  color: var(--text-3);
+  margin-top: var(--sp-2);
+  font-family: var(--font-mono);
+}
+.genie-answer__followups {
+  display: flex; flex-wrap: wrap; gap: var(--sp-2);
+  margin-top: var(--sp-3);
+}

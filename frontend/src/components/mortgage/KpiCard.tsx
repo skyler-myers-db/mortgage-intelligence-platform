@@ -2,29 +2,64 @@ import type { ReactNode } from 'react';
 import { Icon } from '../Icon';
 import { EvidenceChip } from '../Primitives';
 import type { DrawerSource } from '../AppContext';
+import { Sparkline } from './Sparkline';
+import { useCountUp } from '../../lib/useCountUp';
 
 /**
  * KpiCard — prototype `.kpi` BEM: label / value / unit / delta / source.
- * Source renders as a small dashed-border line at the bottom; tapping the
- * evidence chip opens the DataSourceDrawer with the lineage for that KPI.
+ * Two display paths:
+ *   - `value: string` → static rendering (for "$2.18" / "9.7" / non-numeric)
+ *   - `valueAnimated: number` + optional `format` → counts up from 0 on mount,
+ *     formatter is called per frame so currency/percent/locale formatting
+ *     stays outside the hook.
+ *
+ * `trend` renders a micro-sparkline in the top-right corner using the
+ * prototype's `.kpi__spark` slot; color direction honors `deltaDir`.
  */
 
 interface KpiCardProps {
   label: string;
-  value: string;
+  /** Static pre-formatted value. Used when `valueAnimated` is absent. */
+  value?: string;
+  /** Target numeric value to animate on mount. Formatter applied per frame. */
+  valueAnimated?: number;
+  /** Formatter for animated values. Default: .toLocaleString() rounded to int. */
+  format?: (n: number) => string;
   unit?: string;
   delta?: string;
   deltaDir?: 'up' | 'down' | 'flat';
   source?: DrawerSource;
+  /** Override the rendered spark. Prefer `trend` — only override for custom viz. */
   spark?: ReactNode;
+  /** Numeric series (typically 7 points) to render as a sparkline. */
+  trend?: number[];
 }
 
-export function KpiCard({ label, value, unit, delta, deltaDir = 'up', source, spark }: KpiCardProps) {
+const defaultFormat = (n: number): string => Math.round(n).toLocaleString();
+
+export function KpiCard({
+  label,
+  value,
+  valueAnimated,
+  format = defaultFormat,
+  unit,
+  delta,
+  deltaDir = 'up',
+  source,
+  spark,
+  trend,
+}: KpiCardProps) {
+  // Hooks must run unconditionally — pass 0 when valueAnimated is undefined.
+  const animated = useCountUp(valueAnimated ?? 0);
+  const display = valueAnimated !== undefined ? format(animated) : (value ?? '');
+
+  const sparkNode = spark ?? (trend && trend.length >= 2 ? <Sparkline points={trend} direction={deltaDir} /> : null);
+
   return (
     <div className="kpi">
       <div className="kpi__label">{label}</div>
       <div className="kpi__value num">
-        {value}
+        {display}
         {unit && <span className="kpi__unit">{unit}</span>}
       </div>
       {delta && (
@@ -33,7 +68,7 @@ export function KpiCard({ label, value, unit, delta, deltaDir = 'up', source, sp
           {delta}
         </div>
       )}
-      {spark && <div className="kpi__spark">{spark}</div>}
+      {sparkNode && <div className="kpi__spark">{sparkNode}</div>}
       {source && (
         <div className="kpi__source">
           <Icon name="db" size={11} />

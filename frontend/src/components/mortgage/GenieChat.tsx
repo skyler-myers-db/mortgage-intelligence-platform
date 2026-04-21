@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { useApp } from '../AppContext';
 import { api } from '../../lib/api';
+import type { GenieAnswer as GenieAnswerShape } from '../../types';
 import { Icon } from '../Icon';
 import { Button } from '../Primitives';
+import { GenieAnswer } from './GenieAnswer';
 
 /**
  * Floating Genie chat panel — `.genie` BEM from the prototype. Fixed
@@ -10,14 +12,20 @@ import { Button } from '../Primitives';
  * already has a deterministic fallback wired. A floating `.genie__fab` is
  * shown when the panel is closed (bottom-right sparkle) so one click anywhere
  * in the app reaches Genie.
+ *
+ * The AI message shape now holds the full GenieAnswer payload so
+ * metric_value / table_rows / follow_up_questions all render in the bubble
+ * via the shared <GenieAnswer> subcomponent.
  */
 
-interface ChatMsg { who: 'ai' | 'user'; text: string; sources?: string[] }
+type ChatMsg =
+  | { who: 'user'; text: string }
+  | { who: 'ai'; payload: GenieAnswerShape; sources?: string[] };
 
 const SAMPLE_QUESTIONS = [
   'How many in-the-money borrowers in Travis County?',
-  'Which segment has the highest conversion propensity?',
-  'Show owners with 2+ properties where any lien is in the money.',
+  'Top 10 borrowers by score',
+  'Show HELOC candidates by state.',
 ];
 
 export function GenieChat() {
@@ -25,7 +33,10 @@ export function GenieChat() {
   const [msgs, setMsgs] = useState<ChatMsg[]>([
     {
       who: 'ai',
-      text: `Hi — I'm Genie, grounded on ${lender}'s Unity Catalog metric views + Cotality semantic models. Ask about borrower segments, triggers, or evidence.`,
+      payload: {
+        answer: `Hi — I'm Genie, grounded on ${lender}'s Unity Catalog metric views + Cotality semantic models. Ask about borrower segments, triggers, or evidence.`,
+        trusted_assets: ['UC.metrics'],
+      },
       sources: ['UC.metrics'],
     },
   ]);
@@ -43,10 +54,9 @@ export function GenieChat() {
     setInput('');
     setTyping(true);
     try {
-      const res = await api.genie(q);
-      const answer = (res as { answer?: string }).answer ?? '';
-      const trusted = (res as { trusted_assets?: string[] }).trusted_assets ?? [];
-      setMsgs((m) => [...m, { who: 'ai', text: answer, sources: trusted.slice(0, 4) }]);
+      const res = (await api.genie(q)) as GenieAnswerShape;
+      const trusted = res.trusted_assets ?? [];
+      setMsgs((m) => [...m, { who: 'ai', payload: res, sources: trusted.slice(0, 4) }]);
     } finally {
       setTyping(false);
     }
@@ -84,7 +94,9 @@ export function GenieChat() {
               <div key={i} className="genie__msg genie__msg--user">{m.text}</div>
             ) : (
               <div key={i} className="genie__msg genie__msg--ai">
-                <div className="bubble">{m.text}</div>
+                <div className="bubble">
+                  <GenieAnswer payload={m.payload} onFollowUp={ask} dense />
+                </div>
                 {m.sources && m.sources.length > 0 && (
                   <div className="sources">
                     {m.sources.map((s, j) => (
@@ -126,7 +138,7 @@ export function GenieChat() {
             placeholder="Ask about borrowers, segments, triggers…"
             aria-label="Ask Genie"
           />
-          <Button variant="primary" size="sm" type="submit" icon="send">Ask</Button>
+          <Button variant="primary" size="sm" type="submit" icon="send" aria-label="Ask">Ask</Button>
         </form>
       </div>
     </>

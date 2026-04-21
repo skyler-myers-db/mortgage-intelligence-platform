@@ -7,11 +7,12 @@ import { KpiCard } from '../components/mortgage/KpiCard';
 import { ApprovalBanner } from '../components/mortgage/ApprovalBanner';
 import { Chip, Button } from '../components/Primitives';
 import { Icon } from '../components/Icon';
+import { FilterSelect } from '../components/ui/FilterSelect';
 import { DRAWER_SOURCES } from '../mocks/demoData';
 
 /**
  * Portfolio Builder — prototype `.surface` + `.filter-row` composition.
- * Filter chips drive a population estimate; KPI grid reads from
+ * Filter dropdowns drive a population estimate; KPI grid reads from
  * /api/portfolio/preview. "Generate Approval Required Outreach" is the
  * primary forward motion into segment intelligence.
  */
@@ -40,11 +41,7 @@ export default function PortfolioBuilder() {
     api.portfolioPreview().then(setPreview);
   }, []);
 
-  const cycle = (key: string, options: string[]) => {
-    const cur = filters[key];
-    const next = options[(options.indexOf(cur) + 1) % options.length];
-    setFilters((f) => ({ ...f, [key]: next }));
-  };
+  const setFilter = (key: string) => (next: string) => setFilters((f) => ({ ...f, [key]: next }));
 
   return (
     <PageShell
@@ -80,22 +77,15 @@ export default function PortfolioBuilder() {
         </div>
         <div className="surface__body">
           <div className="filter-row">
-            {FILTER_GROUPS.map((g) => {
-              const active = filters[g.key] !== g.options[0];
-              return (
-                <button
-                  key={g.key}
-                  type="button"
-                  className={`filter ${active ? 'is-active' : ''}`}
-                  onClick={() => cycle(g.key, g.options)}
-                  title="Click to cycle through options"
-                >
-                  <span className="filter__label">{g.label}</span>
-                  <span className="filter__value">{filters[g.key]}</span>
-                  <Icon name="chevdown" size={11} />
-                </button>
-              );
-            })}
+            {FILTER_GROUPS.map((g) => (
+              <FilterSelect
+                key={g.key}
+                label={g.label}
+                value={filters[g.key]}
+                options={g.options}
+                onChange={setFilter(g.key)}
+              />
+            ))}
             <div style={{ flex: 1 }} />
             <Button variant="primary" icon="play">Run build</Button>
           </div>
@@ -103,29 +93,35 @@ export default function PortfolioBuilder() {
           <div className="kpi-row" style={{ marginTop: 20 }}>
             <KpiCard
               label="Marketable population"
-              value={(preview?.marketable_population ?? 89553).toLocaleString()}
+              valueAnimated={preview?.marketable_population ?? 89553}
               delta="+4.8% vs. last run"
               source={DRAWER_SOURCES.population}
+              trend={[85200, 85900, 86800, 87400, 88100, 89000, preview?.marketable_population ?? 89553]}
             />
             <KpiCard
               label="Avg. borrower score"
-              value={`${preview?.avg_score ?? 81}`}
+              valueAnimated={preview?.avg_score ?? 81}
               delta="+2"
               source={DRAWER_SOURCES.nbo}
+              trend={[74, 76, 77, 78, 79, 80, preview?.avg_score ?? 81]}
             />
             <KpiCard
               label="Cost per contact (est.)"
-              value={`$${preview?.cost_per_contact ?? 2.18}`}
+              valueAnimated={preview?.cost_per_contact ?? 2.18}
+              format={(n) => `$${n.toFixed(2)}`}
               delta="-$0.11"
               deltaDir="down"
               source={DRAWER_SOURCES.config}
+              trend={[2.42, 2.36, 2.32, 2.28, 2.24, 2.21, preview?.cost_per_contact ?? 2.18]}
             />
             <KpiCard
               label="Projected contact → app"
-              value={`${preview?.projected_contact_to_app ?? 9.7}`}
+              valueAnimated={preview?.projected_contact_to_app ?? 9.7}
+              format={(n) => n.toFixed(1)}
               unit="%"
               delta="+1.2 pp"
               source={DRAWER_SOURCES.nbo}
+              trend={[8.3, 8.6, 8.9, 9.1, 9.3, 9.5, preview?.projected_contact_to_app ?? 9.7]}
             />
           </div>
         </div>

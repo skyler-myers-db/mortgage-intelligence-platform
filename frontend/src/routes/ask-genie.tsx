@@ -1,15 +1,19 @@
 import { useState } from 'react';
 import { api } from '../lib/api';
+import type { GenieAnswer as GenieAnswerShape } from '../types';
 import { PageShell } from '../components/layout/PageShell';
 import { Button, Chip, EvidenceChip } from '../components/Primitives';
 import { Icon } from '../components/Icon';
+import { GenieAnswer } from '../components/mortgage/GenieAnswer';
 import { DRAWER_SOURCES } from '../mocks/demoData';
 
 /**
  * Ask Genie — deep-dive view with trusted-asset list and sample questions.
  * The floating GenieChat in the AppShell is the "ask anywhere" entry point;
  * this route is the curated walkthrough for stakeholders who want to see
- * which UC metric views Genie is grounded on.
+ * which UC metric views Genie is grounded on. Answer rendering is delegated
+ * to the shared <GenieAnswer> so metric_value / table_rows / follow_ups
+ * surface identically here and in the floating chat.
  */
 
 const SAMPLE_QUESTIONS = [
@@ -29,21 +33,22 @@ const TRUSTED_ASSETS = [
 
 export default function AskGenie() {
   const [question, setQuestion] = useState(SAMPLE_QUESTIONS[0]);
-  const [answer, setAnswer] = useState('');
-  const [source, setSource] = useState('');
+  const [payload, setPayload] = useState<GenieAnswerShape | null>(null);
   const [loading, setLoading] = useState(false);
 
   async function ask(q: string) {
     setQuestion(q);
     setLoading(true);
     try {
-      const res = await api.genie(q);
-      setAnswer((res as { answer?: string }).answer ?? '');
-      setSource((res as { source?: string }).source ?? '');
+      const res = (await api.genie(q)) as GenieAnswerShape;
+      setPayload(res);
     } finally {
       setLoading(false);
     }
   }
+
+  const sourceLabel = payload?.source ?? '';
+  const sourceChip = sourceLabel || (payload?.trusted_assets?.[0] ?? '');
 
   return (
     <PageShell
@@ -80,17 +85,17 @@ export default function AskGenie() {
                 {loading ? 'Asking…' : 'Ask Genie'}
               </Button>
             </div>
-            {answer && (
+            {payload && (
               <div
                 className="surface"
                 style={{ marginTop: 16, background: 'var(--bg-1)' }}
               >
                 <div className="surface__body">
-                  <p style={{ margin: 0, fontSize: 14, color: 'var(--text-1)' }}>{answer}</p>
-                  {source && (
-                    <div style={{ marginTop: 10, display: 'flex', gap: 6, alignItems: 'center' }}>
+                  <GenieAnswer payload={payload} onFollowUp={ask} />
+                  {sourceChip && (
+                    <div style={{ marginTop: 12, display: 'flex', gap: 6, alignItems: 'center' }}>
                       <span className="muted" style={{ fontSize: 11 }}>Source:</span>
-                      <EvidenceChip source={DRAWER_SOURCES.nbo}>{source}</EvidenceChip>
+                      <EvidenceChip source={DRAWER_SOURCES.nbo}>{sourceChip}</EvidenceChip>
                     </div>
                   )}
                 </div>

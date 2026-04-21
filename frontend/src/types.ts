@@ -91,3 +91,18 @@ export interface OfferRecommendation {
   alternatives: OfferAlternative[];
   thresholds_applied: Record<string, number>;
 }
+
+/**
+ * GenieAnswer — the widened response shape from /api/genie/message.
+ * `answer` + `source` + `trusted_assets` are the original fields; the
+ * optional ones (metric_value, table_rows, follow_up_questions) arrived in
+ * slice 8 and drive the richer presenter UX.
+ */
+export interface GenieAnswer {
+  answer: string;
+  source?: string;
+  trusted_assets?: string[];
+  metric_value?: string | null;
+  table_rows?: Record<string, unknown>[] | null;
+  follow_up_questions?: string[];
+}
