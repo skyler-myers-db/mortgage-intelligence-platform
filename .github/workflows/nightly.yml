@@ -78,6 +78,19 @@ jobs:
             echo "::error::Missing required secrets:$missing"
             exit 1
           fi
+      - name: Install Databricks CLI (v2)
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
+          databricks --version
+      - name: databricks bundle validate (dev target, real creds)
+        # The real validate moved here from PR CI because it unavoidably
+        # calls /api/2.0/preview/scim/v2/Me which requires a real token.
+        # With the secrets block above, auth resolves from env vars.
+        env:
+          BUNDLE_VAR_sql_warehouse_id: ${{ secrets.DATABRICKS_WAREHOUSE_ID }}
+          BUNDLE_VAR_genie_space_id: ${{ secrets.GENIE_SPACE_ID }}
+          BUNDLE_VAR_lakebase_instance: mip-app-state
+        run: databricks bundle validate -t dev
       - name: SQL <-> Python parity
         run: pytest -q tests/integration/test_sql_python_parity.py
       - name: Lakebase round-trip
@@ -129,15 +142,18 @@ jobs:
             npm --prefix frontend install --no-audit --no-fund
           fi
       - name: Install Playwright browsers
-        run: npx --prefix frontend playwright install --with-deps chromium
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
       - name: Run real-UC Playwright spec
-        # --grep-invert "real-UC" would skip our new spec; instead point
-        # Playwright at the single spec that is E2E_LIVE-gated so the
-        # nightly run is scoped. The offline spec continues to run on PRs.
+        # The config lives in `frontend/` post-hotfix so `@playwright/test`
+        # resolves against frontend/node_modules; the spec stays at the
+        # repo root under `tests/e2e/`. Reference it with a relative path
+        # from the frontend/ cwd. E2E_LIVE-gated so this spec is nightly-
+        # only; the PR ci runs a --list parse check.
+        working-directory: frontend
         run: |
-          npx --prefix frontend playwright test \
-            -c playwright.config.ts \
-            tests/e2e/real_data.spec.ts \
+          npx playwright test \
+            ../tests/e2e/real_data.spec.ts \
             --reporter=list --workers=1
       - name: Upload Playwright report + traces on failure
         if: failure()
