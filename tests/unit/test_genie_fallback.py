@@ -76,12 +76,17 @@ def test_response_carries_question_and_uc_sources() -> None:
     assert r.table_rows and len(r.table_rows) >= 3
 
 
-def test_top_borrowers_cites_real_population() -> None:
-    from backend.services.mock_data import BORROWERS
+def test_top_borrowers_cites_pinned_demo_roster() -> None:
+    """The Genie catalog's top-borrowers answer is served from the pinned
+    demo roster inlined in ``genie_answers._DEMO_TOP_BORROWERS``. This
+    test asserts every row in the response refers to an id that exists
+    in that roster -- nothing fabricated, nothing stale.
+    """
+    from backend.services.genie_answers import _DEMO_TOP_BORROWERS
 
     r = respond("top 10 borrowers by score")
     assert r.table_rows is not None
-    assert len(r.table_rows) == 10
-    real_ids = {b.borrower_id for b in BORROWERS}
+    assert len(r.table_rows) == len(_DEMO_TOP_BORROWERS)
+    roster_ids = {row["borrower_id"] for row in _DEMO_TOP_BORROWERS}
     for row in r.table_rows:
-        assert row["borrower_id"] in real_ids, row
+        assert row["borrower_id"] in roster_ids, row

@@ -1,7 +1,16 @@
-"""Deterministic mock borrower population for Module 0 (DAIS demo).
+"""Deterministic synthetic borrower population -- TEST FIXTURE ONLY.
+
+Moved in Slice 4 from ``backend/services/mock_data.py`` to
+``tests/fixtures/mock_population.py`` to make the "this is not the
+runtime path" posture clear at the import site. Production routers do
+NOT import this module -- they read live Unity Catalog rows through
+the ``Databricks*Repository`` classes in
+``backend.services.repositories.databricks_repo``. Tests inject the
+fixtures below via FastAPI ``dependency_overrides`` (see
+``tests/conftest.py``).
 
 ALL names, addresses, CLIP/Owner-Link ids, and rates in this module are
-synthetic. No real PII exists here — this is the booth-demo path, not a
+synthetic. No real PII exists here -- this is the booth-demo path, not a
 fallback. The three canonical demo borrowers (B-48291, B-48294, B-48295)
 are pinned by golden fixtures in ``tests/fixtures/`` (lead_score,
 rate_spread, in_the_money, next_best_offer); their inputs MUST NOT change

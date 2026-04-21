@@ -9,7 +9,6 @@ router = APIRouter(prefix="/api/config", tags=["config"])
 def get_config_options() -> dict[str, object]:
     return {
         "demo_lender": settings.mip_demo_lender,
-        "mock_mode": settings.mip_mock_mode,
         "geographies": [
             "Georgia / Atlanta MSA / 30309",
             "California / Orange County / 92602",

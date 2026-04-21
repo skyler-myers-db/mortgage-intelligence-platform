@@ -1,17 +1,15 @@
-"""In-process mock repository implementations.
+"""In-process synthetic repositories -- TEST FIXTURE ONLY.
 
-TEMPORARY — retired by Slice 4, replaced by ``Databricks<Domain>Repository``
-that reads from ``mip_demo.gold.*`` via
-``backend.services.databricks_sql``.
+Moved in Slice 4 from ``backend/services/repositories/in_process.py``
+to ``tests/fixtures/in_process_repos.py`` so nothing under
+``backend/`` can accidentally import a mock-backed repo. Tests inject
+these via FastAPI ``dependency_overrides`` in ``tests/conftest.py``;
+production code paths are served by the ``Databricks*Repository``
+classes in ``backend.services.repositories.databricks_repo``.
 
-Do not extend these classes; add new behavior to the Protocol in
-``backend.services.repositories.protocols`` first, then implement on
-the Databricks side. Routers depend on the Protocol, not the concrete
-class — that is the seam that lets Slice 4 swap these out cleanly.
-
-Every method here is a thin delegation to
-``backend.services.mock_data`` so Slice 0 is a pure refactor with zero
-behavior change.
+Each class below implements one Protocol from
+``backend.services.repositories.protocols`` and delegates to the
+synthetic population in ``tests/fixtures/mock_population.py``.
 """
 from __future__ import annotations
 
@@ -23,15 +21,13 @@ from backend.schemas.portfolio import (
     PortfolioPreview,
     PortfolioPreviewRequest,
 )
-from backend.services import mock_data
 from backend.services.genie_answers import GenieMessageResponse
 from backend.services.genie_answers import respond as _genie_respond
+from tests.fixtures import mock_population as mock_data
 
 
 class InProcessMockPortfolioRepository:
-    """TEMPORARY — retired by Slice 4, replaced by
-    ``DatabricksPortfolioRepository``. Do not extend this class; add
-    new behavior to ``PortfolioRepository`` Protocol first."""
+    """Test fixture implementing ``PortfolioRepository`` from the synthetic population."""
 
     def preview(self, request: PortfolioPreviewRequest | None) -> PortfolioPreview:
         _ = request  # criteria don't shift the preview numbers yet; deterministic payload.
@@ -53,20 +49,15 @@ class InProcessMockPortfolioRepository:
 
 
 class InProcessMockSegmentRepository:
-    """TEMPORARY — retired by Slice 4, replaced by
-    ``DatabricksSegmentRepository``. Do not extend this class; add new
-    behavior to ``SegmentRepository`` Protocol first."""
+    """Test fixture implementing ``SegmentRepository`` from the synthetic population."""
 
     def list(self, portfolio_id: str | None) -> list[SegmentSummary]:
-        # portfolio_id is accepted for forward-compat; mock mode ignores it.
         _ = portfolio_id
         return mock_data.SEGMENTS
 
 
 class InProcessMockLeadRepository:
-    """TEMPORARY — retired by Slice 4, replaced by
-    ``DatabricksLeadRepository``. Do not extend this class; add new
-    behavior to ``LeadRepository`` Protocol first."""
+    """Test fixture implementing ``LeadRepository`` from the synthetic population."""
 
     def list(self, segment: str | None, portfolio_id: str | None) -> list[LeadSummary]:
         _ = portfolio_id
@@ -77,9 +68,7 @@ class InProcessMockLeadRepository:
 
 
 class InProcessMockBorrowerRepository:
-    """TEMPORARY — retired by Slice 4, replaced by
-    ``DatabricksBorrowerRepository``. Do not extend this class; add new
-    behavior to ``BorrowerRepository`` Protocol first."""
+    """Test fixture implementing ``BorrowerRepository`` from the synthetic population."""
 
     def get(self, borrower_id: str) -> Borrower360 | None:
         for b in mock_data.BORROWERS:
@@ -95,18 +84,14 @@ class InProcessMockBorrowerRepository:
 
 
 class InProcessMockOfferRepository:
-    """TEMPORARY — retired by Slice 4, replaced by
-    ``DatabricksOfferRepository``. Do not extend this class; add new
-    behavior to ``OfferRepository`` Protocol first."""
+    """Test fixture implementing ``OfferRepository`` from the synthetic population."""
 
     def get_offer_inputs(self, borrower_id: str) -> dict[str, object] | None:
         return mock_data.BORROWER_OFFER_INPUTS.get(borrower_id)
 
 
 class InProcessMockOutreachRepository:
-    """TEMPORARY — retired by Slice 4, replaced by
-    ``DatabricksOutreachRepository``. Do not extend this class; add new
-    behavior to ``OutreachRepository`` Protocol first."""
+    """Test fixture implementing ``OutreachRepository`` from the synthetic population."""
 
     def find_borrower(self, borrower_id: str) -> Borrower360 | None:
         for b in mock_data.BORROWERS:
@@ -116,14 +101,7 @@ class InProcessMockOutreachRepository:
 
 
 class InProcessMockGenieAnswerRepository:
-    """TEMPORARY — retired by Slice 4, replaced by
-    ``DatabricksGenieAnswerRepository``. Do not extend this class; add
-    new behavior to ``GenieAnswerRepository`` Protocol first.
-
-    Delegates to the existing deterministic catalog matcher in
-    ``backend.services.genie_answers`` so the booth-demo behavior is
-    byte-identical to before the seam was introduced.
-    """
+    """Test fixture wrapping the deterministic Genie answer catalog."""
 
     def respond(self, question: str) -> GenieMessageResponse:
         return _genie_respond(question)

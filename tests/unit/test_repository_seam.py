@@ -1,12 +1,15 @@
-"""Guards the Protocol seam introduced in Slice 0.
+"""Guards the Protocol seam introduced in Slice 0, hardened in Slice 4.
 
 The invariant these tests protect: FastAPI routers under
 ``backend/api/`` depend on ``backend.services.repositories`` Protocols
-via ``Depends(get_*_repository)``, never on ``backend.services.mock_data``
-directly. When Slice 4 lands, the factory swaps in
-``Databricks<Domain>Repository`` without touching router code — but
-only if the routers have not quietly re-grown a direct mock_data
-import in the meantime. These tests are the tripwire.
+via ``Depends(get_*_repository)``, never on any synthetic-population
+module. Slice 4 moved the synthetic fixtures to
+``tests/fixtures/mock_population.py`` and
+``tests/fixtures/in_process_repos.py``; nothing under ``backend/`` is
+allowed to reference either. If a future edit re-introduces a direct
+import path, the factory swap to real data silently skips that router
+and the booth demo diverges in one spot nobody notices until
+production. These tests are the tripwire.
 """
 from __future__ import annotations
 
@@ -15,6 +18,7 @@ from pathlib import Path
 
 import pytest
 
+from backend.main import app
 from backend.services.repositories import (
     BorrowerRepository,
     GenieAnswerRepository,
@@ -51,20 +55,29 @@ def _router_source(name: str) -> str:
 
 @pytest.mark.parametrize("router_file", REWIRED_ROUTERS)
 def test_rewired_routers_do_not_import_mock_data(router_file: str) -> None:
-    """Slice-0 acceptance: no rewired router imports ``mock_data``
-    directly. If this fails, the Slice-4 swap to Databricks repos will
-    silently skip the offending router and the booth demo will diverge
-    from real-data in one spot nobody notices until production.
+    """No rewired router imports a synthetic-population module.
+
+    Slice 4 moved the synthetic data out of ``backend/`` entirely, so
+    the forbidden patterns are:
+      - ``backend.services.mock_data``          (Slice-0 legacy path)
+      - ``tests.fixtures.mock_population``      (Slice-4 test fixture)
+      - ``tests.fixtures.in_process_repos``     (Slice-4 test fixture)
+
+    If a router re-grows any of these, the production path is
+    contaminated by synthetic data and the parity between warehouse
+    rows and what the UI renders is broken.
     """
     source = _router_source(router_file)
-    # Accept neither `from backend.services import mock_data` nor a
-    # sneaky `import backend.services.mock_data`.
-    assert "from backend.services import mock_data" not in source, (
-        f"{router_file} still imports mock_data directly — should use repositories."
+    forbidden = (
+        "backend.services.mock_data",
+        "tests.fixtures.mock_population",
+        "tests.fixtures.in_process_repos",
     )
-    assert "backend.services.mock_data" not in source, (
-        f"{router_file} references backend.services.mock_data — should use repositories."
-    )
+    for token in forbidden:
+        assert token not in source, (
+            f"{router_file} imports forbidden synthetic path {token!r} -- "
+            f"routers must depend only on the Protocol seam."
+        )
 
 
 @pytest.mark.parametrize("router_file", REWIRED_ROUTERS)
@@ -84,26 +97,41 @@ def test_rewired_routers_use_depends_on_repositories(router_file: str) -> None:
     )
 
 
-def test_factories_return_protocol_compliant_implementations() -> None:
-    """The in-process mocks must satisfy their Protocols structurally.
-    ``@runtime_checkable`` means ``isinstance`` checks the method names
-    only (not their signatures) — a weaker guarantee than static typing
-    but still catches dropped methods during a future refactor.
+def test_dependency_overrides_satisfy_protocols() -> None:
+    """Under the test harness every factory resolves via FastAPI's
+    ``dependency_overrides`` to an in-process stub. Each stub must be
+    structurally Protocol-compliant -- ``@runtime_checkable`` means
+    ``isinstance`` checks method names only (not signatures), a weaker
+    guarantee than static typing but still catches dropped methods.
     """
-    assert isinstance(get_portfolio_repository(), PortfolioRepository)
-    assert isinstance(get_segment_repository(), SegmentRepository)
-    assert isinstance(get_lead_repository(), LeadRepository)
-    assert isinstance(get_borrower_repository(), BorrowerRepository)
-    assert isinstance(get_offer_repository(), OfferRepository)
-    assert isinstance(get_outreach_repository(), OutreachRepository)
-    assert isinstance(get_genie_answer_repository(), GenieAnswerRepository)
+    overrides = app.dependency_overrides
+    assert isinstance(overrides[get_portfolio_repository](), PortfolioRepository)
+    assert isinstance(overrides[get_segment_repository](), SegmentRepository)
+    assert isinstance(overrides[get_lead_repository](), LeadRepository)
+    assert isinstance(overrides[get_borrower_repository](), BorrowerRepository)
+    assert isinstance(overrides[get_offer_repository](), OfferRepository)
+    assert isinstance(overrides[get_outreach_repository](), OutreachRepository)
+    assert isinstance(overrides[get_genie_answer_repository](), GenieAnswerRepository)
 
 
-def test_factories_are_process_singletons() -> None:
-    """Calling a factory twice returns the same instance — the Slice-4
-    Databricks repos will own connection pools, and the factory is the
-    right place to own the single-process lifetime.
+def test_every_factory_is_overridden_under_pytest() -> None:
+    """Slice-4 guarantee: no unit test ever hits the warehouse. The
+    conftest must install an override for every live factory. If a new
+    factory is added, this test fails until it's wired into the
+    dependency-override session fixture.
     """
-    assert get_portfolio_repository() is get_portfolio_repository()
-    assert get_borrower_repository() is get_borrower_repository()
-    assert get_lead_repository() is get_lead_repository()
+    overrides = app.dependency_overrides
+    required = [
+        get_portfolio_repository,
+        get_segment_repository,
+        get_lead_repository,
+        get_borrower_repository,
+        get_offer_repository,
+        get_outreach_repository,
+        get_genie_answer_repository,
+    ]
+    missing = [fn.__name__ for fn in required if fn not in overrides]
+    assert not missing, (
+        f"conftest is missing dependency overrides for: {missing}. "
+        "Every production factory MUST be stubbed for unit tests."
+    )

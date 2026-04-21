@@ -1,6 +1,6 @@
 """Deterministic Genie answer catalog + matcher for Module 0 (DAIS demo).
 
-The booth-demo Genie path is *not* a fallback — it's the main stage. Any
+The booth-demo Genie path is *not* a fallback -- it's the main stage. Any
 question the audience throws within the Module 0 narrative should return
 a polished, evidence-cited answer, not a generic "Genie unavailable"
 line. This module holds the curated answer catalog (currently 12 canned
@@ -9,10 +9,12 @@ borrower lookups, trends, and policy questions) and the scoring-based
 matcher.
 
 All responses cite at least one Unity Catalog asset under ``mip_demo``.
-Borrower-level answers pull real names and scores from the synthetic
-``mock_data.BORROWERS`` population — no fabricated PII. The generic
-fallback is the warm last resort and nudges the presenter back onto the
-Module 0 narrative rails.
+Borrower-level rows in the catalog use a pinned synthetic demo roster
+below -- inlined in Slice 4 so this module has no runtime import
+dependency on the test-fixture population. Slice 7 rewrites this to
+ground against the real ``mip_demo.semantics.*`` metric views; until
+then the roster below is the canonical demo narrative and is what
+shows on screen for deterministic Q&A.
 
 The matcher is intentionally simple and pure (no deps): per-answer
 keyword and phrase lists with weighted scoring, optional regex patterns
@@ -27,7 +29,41 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from backend.services.mock_data import BORROWERS, SEGMENTS
+# ---------------------------------------------------------------------------
+# Demo-narrative roster (synthetic, pinned). Slice-4 inlined from what was
+# previously ``mock_data.BORROWERS``/``SEGMENTS`` projections. The catalog
+# below consumes these helpers -- no module-global list, so adding or
+# retiring a demo row is a one-line edit here. Slice 7 replaces this with
+# Genie-grounded results against the semantic layer.
+# ---------------------------------------------------------------------------
+
+_DEMO_TOP_BORROWERS: list[dict[str, Any]] = [
+    {"borrower_id": "B-48291", "name": "James & Maria Rodriguez", "geo": "Atlanta, GA", "score": 94, "offer": "Refinance + HELOC"},
+    {"borrower_id": "B-48294", "name": "David Park",              "geo": "Atlanta, GA",         "score": 87, "offer": "Refinance + HELOC"},
+    {"borrower_id": "B-51872", "name": "Thomas Chen",             "geo": "Austin, TX",          "score": 85, "offer": "Refinance + HELOC"},
+    {"borrower_id": "B-54103", "name": "Maria & Carlos Rivera",   "geo": "San Francisco, CA",   "score": 85, "offer": "Refinance + HELOC"},
+    {"borrower_id": "B-56219", "name": "Priya Natarajan",         "geo": "Seattle, WA",         "score": 83, "offer": "Refinance + HELOC"},
+    {"borrower_id": "B-48295", "name": "Lisa Thompson",           "geo": "Atlanta, GA",         "score": 82, "offer": "Purchase Mortgage"},
+    {"borrower_id": "B-52418", "name": "Daniel O'Connor",         "geo": "Denver, CO",          "score": 73, "offer": "HELOC"},
+    {"borrower_id": "B-55328", "name": "Kevin Nakamura",          "geo": "Austin, TX",          "score": 72, "offer": "Refinance"},
+    {"borrower_id": "B-60284", "name": "Alicia Greenberg",        "geo": "Austin, TX",          "score": 75, "offer": "Purchase Mortgage"},
+    {"borrower_id": "B-66541", "name": "Steven & Joanne Hayashi", "geo": "Chicago, IL",         "score": 71, "offer": "Retention"},
+]
+
+_DEMO_AUSTIN_ROWS: list[dict[str, Any]] = [
+    {"borrower_id": "B-51872", "name": "Thomas Chen",      "zip": "78704", "spread_bps": 138, "score": 85, "offer": "Refinance + HELOC"},
+    {"borrower_id": "B-55328", "name": "Kevin Nakamura",   "zip": "78745", "spread_bps": 162, "score": 72, "offer": "Refinance"},
+    {"borrower_id": "B-60284", "name": "Alicia Greenberg", "zip": "78702", "spread_bps":  62, "score": 75, "offer": "Purchase Mortgage"},
+]
+
+_DEMO_SEGMENT_ROWS: dict[str, dict[str, Any]] = {
+    "itm":       {"segment": "In the Money",              "count": 12840, "avg_score": 82, "delta": "+18%"},
+    "listed":    {"segment": "Listed for Sale",           "count":  2614, "avg_score": 74, "delta":  "+9%"},
+    "permit":    {"segment": "Permit Activity",           "count":  4108, "avg_score": 71, "delta": "+11%"},
+    "investor":  {"segment": "Investor / Multi-Property", "count":  1892, "avg_score": 79, "delta":  "+6%"},
+    "equity":    {"segment": "Home Equity Candidate",     "count":  6320, "avg_score": 76, "delta": "+14%"},
+    "retention": {"segment": "Retention Risk",            "count":  3471, "avg_score": 88, "delta":  "+4%"},
+}
 
 
 class GenieMessageResponse(BaseModel):
@@ -49,48 +85,21 @@ class GenieMessageResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Helpers that read the live synthetic population so borrower-level
-# answers cite real rows (never fabricated).
+# Helpers over the pinned demo roster. Deterministic, no external deps.
 # ---------------------------------------------------------------------------
 
 
 def _top_n_rows(n: int) -> list[dict[str, Any]]:
-    ranked = sorted(BORROWERS, key=lambda b: b.opportunity_score, reverse=True)
-    return [
-        {
-            "borrower_id": b.borrower_id,
-            "name": b.display_name,
-            "geo": f"{b.city}, {b.state}",
-            "score": b.opportunity_score,
-            "offer": b.recommended_offer,
-        }
-        for b in ranked[:n]
-    ]
+    ranked = sorted(_DEMO_TOP_BORROWERS, key=lambda r: r["score"], reverse=True)
+    return [dict(r) for r in ranked[:n]]
 
 
 def _austin_rows() -> list[dict[str, Any]]:
-    return [
-        {
-            "borrower_id": b.borrower_id,
-            "name": b.display_name,
-            "zip": b.zip,
-            "spread_bps": b.rate_spread_bps,
-            "score": b.opportunity_score,
-            "offer": b.recommended_offer,
-        }
-        for b in BORROWERS
-        if b.city == "Austin"
-    ]
+    return [dict(r) for r in _DEMO_AUSTIN_ROWS]
 
 
 def _segment_row(code: str) -> dict[str, Any]:
-    seg = next(s for s in SEGMENTS if s.code == code)
-    return {
-        "segment": seg.name,
-        "count": seg.count,
-        "avg_score": seg.avg_score,
-        "delta": seg.delta,
-    }
+    return dict(_DEMO_SEGMENT_ROWS[code])
 
 
 # ---------------------------------------------------------------------------
@@ -111,7 +120,7 @@ class Intent:
 
 def _answers() -> dict[str, GenieMessageResponse]:
     """Built lazily so tests that touch the catalog get the current
-    BORROWERS snapshot. Returns a dict keyed by intent name.
+    demo roster. Returns a dict keyed by intent name.
     """
     top10 = _top_n_rows(10)
     austin = _austin_rows()

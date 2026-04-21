@@ -1,3 +1,5 @@
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -17,8 +19,30 @@ from backend.api import (
     portfolio,
     segments,
 )
+from backend.config.settings import _running_under_pytest, settings
 
-app = FastAPI(title="Mortgage Intelligence Platform API")
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    """Validate warehouse credentials before serving traffic.
+
+    Slice-4 invariant: the app runs on real Unity Catalog data in
+    every environment. A startup that succeeds without DATABRICKS_*
+    credentials would be a latent misconfiguration -- the first /api
+    request would 500 on lazy factory init. We fail loudly here
+    instead. Pytest runs bypass the check because dependency_overrides
+    inject stubs and nothing under tests/ needs live creds.
+    """
+    if not _running_under_pytest():
+        # ``require_databricks_creds`` raises RuntimeError with a
+        # clear operator-facing message when any of the three env
+        # vars is missing. The exception propagates through FastAPI
+        # lifespan and terminates the uvicorn process.
+        settings.require_databricks_creds()
+    yield
+
+
+app = FastAPI(title="Mortgage Intelligence Platform API", lifespan=_lifespan)
 
 for router in [
     health.router,
