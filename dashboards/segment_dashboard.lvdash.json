@@ -1,1 +1,397 @@
-{}
+{
+  "datasets": [
+    {
+      "name": "ds_segment_overview",
+      "displayName": "Segment overview (national rollup)",
+      "queryLines": [
+        "SELECT",
+        "  sp.segment_code                        AS segment_code,",
+        "  sp.name                                AS name,",
+        "  sp.count                               AS borrower_count,",
+        "  sp.avg_score                           AS mean_opportunity_score,",
+        "  sp.delta_vs_prior                      AS delta_vs_prior_label,",
+        "  sp.description                         AS description,",
+        "  agg.mean_rate_spread_bps               AS mean_rate_spread_bps,",
+        "  agg.mean_equity_pct                    AS mean_equity_pct,",
+        "  agg.in_the_money_borrowers             AS in_the_money_borrowers",
+        "FROM mip.semantics.segment_performance_metric_view AS sp",
+        "LEFT JOIN (",
+        "  SELECT",
+        "    segment                              AS segment_code,",
+        "    CAST(ROUND(AVG(rate_spread_bps)) AS INT) AS mean_rate_spread_bps,",
+        "    CAST(ROUND(AVG(equity_pct))     AS INT)  AS mean_equity_pct,",
+        "    SUM(CASE WHEN in_the_money THEN 1 ELSE 0 END) AS in_the_money_borrowers",
+        "  FROM mip.semantics.borrower_opportunity_metric_view",
+        "  GROUP BY segment",
+        ") AS agg",
+        "  ON sp.segment_code = agg.segment_code",
+        "WHERE sp.state = '_ALL'",
+        "ORDER BY sp.count DESC"
+      ]
+    },
+    {
+      "name": "ds_segment_counts",
+      "displayName": "Segment counts (national rollup)",
+      "queryLines": [
+        "SELECT",
+        "  segment_code                     AS segment_code,",
+        "  name                             AS segment_name,",
+        "  count                            AS borrower_count",
+        "FROM mip.semantics.segment_performance_metric_view",
+        "WHERE state = '_ALL'",
+        "ORDER BY count DESC"
+      ]
+    },
+    {
+      "name": "ds_segment_avg_score",
+      "displayName": "Segment mean opportunity score",
+      "queryLines": [
+        "SELECT",
+        "  segment_code                     AS segment_code,",
+        "  name                             AS segment_name,",
+        "  avg_score                        AS mean_opportunity_score",
+        "FROM mip.semantics.segment_performance_metric_view",
+        "WHERE state = '_ALL'",
+        "ORDER BY avg_score DESC"
+      ]
+    },
+    {
+      "name": "ds_segment_by_state",
+      "displayName": "Segment counts by state",
+      "queryLines": [
+        "SELECT",
+        "  state                            AS state,",
+        "  segment_code                     AS segment_code,",
+        "  name                             AS segment_name,",
+        "  count                            AS borrower_count",
+        "FROM mip.semantics.segment_performance_metric_view",
+        "WHERE state <> '_ALL'",
+        "ORDER BY state, count DESC"
+      ]
+    },
+    {
+      "name": "ds_top_segments_per_state",
+      "displayName": "Top 3 segments per state",
+      "queryLines": [
+        "WITH ranked AS (",
+        "  SELECT",
+        "    state,",
+        "    segment_code,",
+        "    name                              AS segment_name,",
+        "    count                             AS borrower_count,",
+        "    ROW_NUMBER() OVER (PARTITION BY state ORDER BY count DESC) AS state_rank",
+        "  FROM mip.semantics.segment_performance_metric_view",
+        "  WHERE state <> '_ALL'",
+        ")",
+        "SELECT state, segment_code, segment_name, borrower_count, state_rank",
+        "FROM ranked",
+        "WHERE state_rank <= 3",
+        "ORDER BY state, state_rank"
+      ]
+    },
+    {
+      "name": "ds_evidence_daily",
+      "displayName": "Evidence events per day (last 30 days)",
+      "queryLines": [
+        "SELECT",
+        "  SUBSTRING(`timestamp`, 1, 10)    AS event_date,",
+        "  signal_type                      AS signal_type,",
+        "  COUNT(*)                         AS event_count",
+        "FROM mip.gold.evidence_events",
+        "WHERE `timestamp` >= DATE_FORMAT(CURRENT_DATE() - INTERVAL 30 DAYS, 'yyyy-MM-dd')",
+        "GROUP BY SUBSTRING(`timestamp`, 1, 10), signal_type",
+        "ORDER BY event_date, signal_type"
+      ]
+    },
+    {
+      "name": "ds_evidence_by_signal",
+      "displayName": "Evidence events by signal type",
+      "queryLines": [
+        "SELECT",
+        "  signal_type                      AS signal_type,",
+        "  source_product                   AS source_product,",
+        "  COUNT(*)                         AS event_count,",
+        "  CAST(ROUND(AVG(confidence), 3) AS DOUBLE) AS mean_confidence",
+        "FROM mip.gold.evidence_events",
+        "GROUP BY signal_type, source_product",
+        "ORDER BY event_count DESC"
+      ]
+    }
+  ],
+  "pages": [
+    {
+      "name": "page_segment_performance",
+      "displayName": "Segment performance",
+      "layout": [
+        {
+          "widget": {
+            "name": "table_segment_overview",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_segment_overview",
+                  "fields": [
+                    { "name": "segment_code", "expression": "`segment_code`" },
+                    { "name": "name", "expression": "`name`" },
+                    { "name": "borrower_count", "expression": "`borrower_count`" },
+                    { "name": "mean_opportunity_score", "expression": "`mean_opportunity_score`" },
+                    { "name": "mean_rate_spread_bps", "expression": "`mean_rate_spread_bps`" },
+                    { "name": "mean_equity_pct", "expression": "`mean_equity_pct`" },
+                    { "name": "in_the_money_borrowers", "expression": "`in_the_money_borrowers`" },
+                    { "name": "delta_vs_prior_label", "expression": "`delta_vs_prior_label`" },
+                    { "name": "description", "expression": "`description`" }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 1,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  { "fieldName": "name", "displayName": "Segment" },
+                  { "fieldName": "borrower_count", "displayName": "Borrowers" },
+                  { "fieldName": "mean_opportunity_score", "displayName": "Mean Opportunity Score" },
+                  { "fieldName": "mean_rate_spread_bps", "displayName": "Mean Rate Spread (bps)" },
+                  { "fieldName": "mean_equity_pct", "displayName": "Mean Equity (%)" },
+                  { "fieldName": "in_the_money_borrowers", "displayName": "In-the-Money Borrowers" },
+                  { "fieldName": "delta_vs_prior_label", "displayName": "Quarter-over-Quarter Change" },
+                  { "fieldName": "description", "displayName": "Description" }
+                ]
+              },
+              "frame": {
+                "title": "Segment Performance - National Rollup",
+                "description": "Per-segment size and economics. Approval rate and outreach rate are authoritative in Lakebase and are not joined here; see Approvals dashboard in the app for those measures.",
+                "showTitle": true,
+                "showDescription": true
+              }
+            }
+          },
+          "position": { "x": 0, "y": 0, "width": 6, "height": 6 }
+        },
+        {
+          "widget": {
+            "name": "chart_segment_counts",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_segment_counts",
+                  "fields": [
+                    { "name": "segment_name", "expression": "`segment_name`" },
+                    { "name": "borrower_count", "expression": "`borrower_count`" }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": { "fieldName": "segment_name", "scale": { "type": "categorical", "sort": { "by": "borrower_count", "direction": "descending" } }, "displayName": "Segment" },
+                "y": { "fieldName": "borrower_count", "scale": { "type": "quantitative" }, "displayName": "Borrowers" }
+              },
+              "frame": {
+                "title": "Segment Size",
+                "description": "Borrower count per segment across the 6-state footprint",
+                "showTitle": true,
+                "showDescription": true
+              }
+            }
+          },
+          "position": { "x": 0, "y": 6, "width": 3, "height": 5 }
+        },
+        {
+          "widget": {
+            "name": "chart_segment_avg_score",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_segment_avg_score",
+                  "fields": [
+                    { "name": "segment_name", "expression": "`segment_name`" },
+                    { "name": "mean_opportunity_score", "expression": "`mean_opportunity_score`" }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": { "fieldName": "segment_name", "scale": { "type": "categorical", "sort": { "by": "mean_opportunity_score", "direction": "descending" } }, "displayName": "Segment" },
+                "y": { "fieldName": "mean_opportunity_score", "scale": { "type": "quantitative" }, "displayName": "Mean Opportunity Score" }
+              },
+              "frame": {
+                "title": "Mean Opportunity Score by Segment",
+                "description": "Which segments carry the highest-scoring borrowers on average",
+                "showTitle": true,
+                "showDescription": true
+              }
+            }
+          },
+          "position": { "x": 3, "y": 6, "width": 3, "height": 5 }
+        }
+      ]
+    },
+    {
+      "name": "page_segment_geography",
+      "displayName": "Segment by geography",
+      "layout": [
+        {
+          "widget": {
+            "name": "pivot_segment_by_state",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_segment_by_state",
+                  "fields": [
+                    { "name": "state", "expression": "`state`" },
+                    { "name": "segment_name", "expression": "`segment_name`" },
+                    { "name": "borrower_count", "expression": "`borrower_count`" }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 1,
+              "widgetType": "pivot",
+              "encodings": {
+                "rows":    [{ "fieldName": "state",        "displayName": "State" }],
+                "columns": [{ "fieldName": "segment_name", "displayName": "Segment" }],
+                "cell":     { "fieldName": "borrower_count", "displayName": "Borrowers", "aggregation": "sum" }
+              },
+              "frame": {
+                "title": "Segment by State",
+                "description": "Borrower count pivot - states as rows, segments as columns",
+                "showTitle": true,
+                "showDescription": true
+              }
+            }
+          },
+          "position": { "x": 0, "y": 0, "width": 6, "height": 6 }
+        },
+        {
+          "widget": {
+            "name": "chart_top_segments_per_state",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_top_segments_per_state",
+                  "fields": [
+                    { "name": "state", "expression": "`state`" },
+                    { "name": "segment_name", "expression": "`segment_name`" },
+                    { "name": "borrower_count", "expression": "`borrower_count`" },
+                    { "name": "state_rank", "expression": "`state_rank`" }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x":     { "fieldName": "state", "scale": { "type": "categorical" }, "displayName": "State" },
+                "y":     { "fieldName": "borrower_count", "scale": { "type": "quantitative" }, "displayName": "Borrowers" },
+                "color": { "fieldName": "segment_name", "scale": { "type": "categorical" }, "displayName": "Segment" }
+              },
+              "frame": {
+                "title": "Top 3 Segments per State",
+                "description": "Which three segments carry the largest borrower pools in each state",
+                "showTitle": true,
+                "showDescription": true
+              }
+            }
+          },
+          "position": { "x": 0, "y": 6, "width": 6, "height": 6 }
+        }
+      ]
+    },
+    {
+      "name": "page_triggers",
+      "displayName": "Triggers",
+      "layout": [
+        {
+          "widget": {
+            "name": "chart_evidence_daily",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_evidence_daily",
+                  "fields": [
+                    { "name": "event_date", "expression": "`event_date`" },
+                    { "name": "signal_type", "expression": "`signal_type`" },
+                    { "name": "event_count", "expression": "`event_count`" }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "line",
+              "encodings": {
+                "x":     { "fieldName": "event_date", "scale": { "type": "temporal" }, "displayName": "Date" },
+                "y":     { "fieldName": "event_count", "scale": { "type": "quantitative" }, "displayName": "Evidence Events" },
+                "color": { "fieldName": "signal_type", "scale": { "type": "categorical" }, "displayName": "Signal Type" }
+              },
+              "frame": {
+                "title": "Evidence Events per Day by Signal Type",
+                "description": "Daily volume of evidence events over the last 30 days - operational freshness check",
+                "showTitle": true,
+                "showDescription": true
+              }
+            }
+          },
+          "position": { "x": 0, "y": 0, "width": 6, "height": 6 }
+        },
+        {
+          "widget": {
+            "name": "chart_evidence_by_signal",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_evidence_by_signal",
+                  "fields": [
+                    { "name": "signal_type", "expression": "`signal_type`" },
+                    { "name": "event_count", "expression": "`event_count`" },
+                    { "name": "mean_confidence", "expression": "`mean_confidence`" },
+                    { "name": "source_product", "expression": "`source_product`" }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x":     { "fieldName": "signal_type", "scale": { "type": "categorical", "sort": { "by": "event_count", "direction": "descending" } }, "displayName": "Signal Type" },
+                "y":     { "fieldName": "event_count", "scale": { "type": "quantitative" }, "displayName": "Evidence Events" },
+                "color": { "fieldName": "source_product", "scale": { "type": "categorical" }, "displayName": "Cotality Source" }
+              },
+              "frame": {
+                "title": "Evidence Events by Signal Type",
+                "description": "Mix of Cotality signals backing the segmentation - rate_spread / equity / multi_property / competitor_lien / recent_refi / market_trend / foreclosure_stage. permit and listing are BLOCKED until those Cotality products are licensed.",
+                "showTitle": true,
+                "showDescription": true
+              }
+            }
+          },
+          "position": { "x": 0, "y": 6, "width": 6, "height": 6 }
+        }
+      ]
+    }
+  ]
+}

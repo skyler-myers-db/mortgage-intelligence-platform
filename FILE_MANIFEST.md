@@ -134,7 +134,6 @@
 - `notebooks/03_scoring_debug.py`
 - `package.json`
 - `pipelines/lakeflow/mip_feature_pipeline.py`
-- `pipelines/lakeflow/mip_gold_pipeline.py`
 - `prompts/master-claude-opus-implementation-prompt.md`
 - `prompts/subagent-task-templates.md`
 - `pyproject.toml`

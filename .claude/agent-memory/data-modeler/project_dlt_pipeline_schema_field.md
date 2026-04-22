@@ -8,7 +8,7 @@ In `databricks.yml` under `resources.pipelines.*`, the `target:` field is deprec
 
 **Why:** Databricks CLI bundle schema diagnostic flags `target:` as deprecated (observed at v0.297.2+). `databricks bundle validate` still passes with `target:`, but IDE diagnostics complain, and future CLI versions may reject it.
 
-**How to apply:** When wiring a DLT pipeline resource (e.g. `mip_feature_pipeline`, `mip_gold_pipeline`), declare:
+**How to apply:** When wiring a DLT pipeline resource (e.g. `mip_feature_pipeline`), declare:
 
     catalog: ${var.uc_catalog}
     schema: silver     # or gold, semantics, etc.

@@ -13,8 +13,9 @@
 -- Slice:     module0-real-data-slice3.
 -- Data contract: docs/data-contract-module0.md §3.3 + §5.
 --
--- Sub-score formulas live in data-contract §5 and in the SQL header of each
--- @dlt.table equivalent in mip_gold_pipeline.py.
+-- Sub-score formulas live in data-contract §5. (The historical DLT mirror
+-- was retired in slice13-accuracy; the authoritative materialisation path
+-- is this CTAS chain under `mip_refresh_scores`.)
 --
 -- intent_trigger formula on the real-data path (BLOCKED terms = 0):
 --   LEAST(100,
@@ -68,17 +69,32 @@ evidence_counts AS (
   WHERE signal_type NOT IN ('permit', 'listing')
   GROUP BY clip
 ),
--- Historical mortgage count at Summit for the relationship sub-score boost
--- (data-contract §5 branch 1).
+-- Historical Summit *relationships* per owner_link_id for the relationship
+-- sub-score boost (data-contract §5 branch 1).
+--
+-- BUG FIX (slice13-accuracy): previous implementation counted mortgage-
+-- event rows per CLIP, so a CLIP with 3 Summit lien events (e.g. purchase
+-- + refi + release) reported `historical_mortgage_count_at_lender = 3`
+-- and triggered the >= 2 branch on a single property. The relationship
+-- score branch is meant to reward owners with MULTIPLE DISTINCT PROPERTIES
+-- previously financed by Summit, not repeat events on one property.
+--
+-- Fix: group by owner_link_id and COUNT(DISTINCT clip) among CLIPs that
+-- ever had a Summit lender event. Each borrower row then picks up the
+-- owner-level count via property_master. CLIPs lacking an owner_link_id
+-- fall through to 0 (LEFT JOIN in `base`), which is correct -- we cannot
+-- attribute ownership of multiple properties without the link.
 historical_summit AS (
   SELECT
-    clip,
-    COUNT(*) AS historical_mortgage_count_at_lender
-  FROM mip.silver.mortgage_events
-  WHERE lender_name IS NOT NULL
-    AND UPPER(lender_name) LIKE '%SUMMIT%'
-    AND situs_state IN ('IL','CA','FL','TX','WA','CO')
-  GROUP BY clip
+    pm.owner_link_id,
+    COUNT(DISTINCT me.clip) AS historical_distinct_clips_at_lender
+  FROM mip.silver.mortgage_events AS me
+  JOIN mip.silver.property_master AS pm ON pm.clip = me.clip
+  WHERE me.lender_name IS NOT NULL
+    AND UPPER(me.lender_name) LIKE '%SUMMIT%'
+    AND me.situs_state IN ('IL','CA','FL','TX','WA','CO')
+    AND pm.owner_link_id IS NOT NULL
+  GROUP BY pm.owner_link_id
 ),
 base AS (
   SELECT
@@ -98,13 +114,14 @@ base AS (
     COALESCE(re.recent_refi_count_90d,   0) AS recent_refi_count_90d,
     COALESCE(re.recent_payoff_count_90d, 0) AS recent_payoff_count_90d,
     COALESCE(ec.evidence_event_count,    0) AS evidence_event_count,
-    COALESCE(hs.historical_mortgage_count_at_lender, 0) AS historical_summit_count,
+    -- owner-level DISTINCT-CLIP count at Summit (post-slice13 semantics).
+    COALESCE(hs.historical_distinct_clips_at_lender, 0) AS historical_summit_distinct_clips,
     b.min_spread_bps_applied,
     b.min_equity_pct_applied
   FROM mip.gold.borrower_360 AS b
   LEFT JOIN recent_events     AS re ON re.clip = b.clip
   LEFT JOIN evidence_counts   AS ec ON ec.clip = b.clip
-  LEFT JOIN historical_summit AS hs ON hs.clip = b.clip
+  LEFT JOIN historical_summit AS hs ON hs.owner_link_id = b.owner_link_id
 ),
 subscores AS (
   SELECT
@@ -135,9 +152,12 @@ subscores AS (
       ELSE 58
     END AS fit,
     -- relationship (data-contract §5):
+    -- Threshold (>= 2) is "two or more distinct properties ever financed
+    -- by Summit at this owner" post slice13-accuracy. Repeat events on a
+    -- single property no longer clear the bar.
     CASE
       WHEN b.is_current_customer
-        AND b.historical_summit_count >= 2              THEN 95
+        AND b.historical_summit_distinct_clips >= 2     THEN 95
       WHEN b.is_current_customer                        THEN 88
       WHEN b.is_competitor_lien                         THEN 60
       ELSE 45

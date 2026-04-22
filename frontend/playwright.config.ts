@@ -50,19 +50,24 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 900 } },
     },
   ],
-  webServer: [
-    {
-      command: 'uvicorn backend.main:app --host 0.0.0.0 --port 8000',
-      cwd: '..',
-      url: 'http://localhost:8000/api/health',
-      reuseExistingServer: !process.env.CI,
-      timeout: 120_000,
-    },
-    {
-      command: 'npm run dev',
-      url: 'http://localhost:5173',
-      reuseExistingServer: !process.env.CI,
-      timeout: 120_000,
-    },
-  ],
+  // Only boot local uvicorn + vite when the spec isn't already pointing
+  // at a deployed origin. A Playwright run against a Databricks App URL
+  // doesn't need (and can't use) a local backend.
+  webServer: process.env.MIP_APP_URL
+    ? undefined
+    : [
+        {
+          command: 'uvicorn backend.main:app --host 0.0.0.0 --port 8000',
+          cwd: '..',
+          url: 'http://localhost:8000/api/health',
+          reuseExistingServer: !process.env.CI,
+          timeout: 120_000,
+        },
+        {
+          command: 'npm run dev',
+          url: 'http://localhost:5173',
+          reuseExistingServer: !process.env.CI,
+          timeout: 120_000,
+        },
+      ],
 });

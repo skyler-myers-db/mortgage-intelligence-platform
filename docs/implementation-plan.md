@@ -88,9 +88,9 @@ POST /api/audit/event
 Implementation rules:
 - Routers call services; services own data access.
 - API schemas are Pydantic and mirrored by TS types.
-- Mock mode is default.
+- Live Unity Catalog is the only runtime path — there is no mock-mode toggle in the running app (see `CLAUDE.md` "Implementation posture"). Fixtures in `tests/fixtures/` / `frontend/src/mocks/` are unit-test-only.
 - SQL mode uses parameterized queries or validated enum filters.
-- Approval endpoint writes to Lakebase if configured, mock memory otherwise.
+- Approval endpoint writes to Lakebase; a degraded-state banner surfaces if the breaker opens, but no mock-memory fallback.
 
 Validation:
 ```bash
@@ -180,8 +180,8 @@ CI:
 - Bundle validate when Databricks env vars exist.
 
 Deployment:
-- Dev target: mock mode true, small SQL warehouse.
-- Prod/demo target: gold tables, Lakebase, Genie resource, telemetry.
+- Dev target: live UC + Lakebase + Genie space, small serverless SQL warehouse. Every target is live; there is no mock-mode target.
+- Prod target: same bundle, larger warehouse, production Genie space. Deployed today at `https://mip-app-2543889327043640.aws.databricksapps.com` via workspace-identity Bearer.
 - Use branch protection and PR reviews.
 
 ## Phase 8 — Rehearsal
@@ -200,7 +200,7 @@ Run the talk track:
 10. Close with Module 1–4 expansion story.
 
 Backup path:
-- If Genie fails, use deterministic Q&A panel.
-- If Databricks SQL is slow, switch mock mode on.
+- If Genie fails, the circuit breaker trips and the safe-corpus in `backend/services/genie_answers.py` answers the 10 canonical sample questions deterministically.
+- If Databricks SQL is slow, the SWR-cached health probe keeps the Console footer honest, the degraded-state banner shows at the top of the page, and the talk track names it as resilience in action. No mock swap.
 - If map fails, use table-first layout.
-- If Lakebase fails, use in-memory audit and state it is a fallback.
+- If Lakebase fails, approval shows an error toast and no audit row is written — fail visibly rather than fake success.

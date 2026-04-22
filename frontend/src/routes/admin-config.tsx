@@ -92,6 +92,7 @@ export default function AdminConfig() {
             <Row label="Lender">
               <input
                 type="text"
+                aria-label="Lender"
                 value={lender}
                 onChange={(e) => setLender(e.target.value)}
                 style={{

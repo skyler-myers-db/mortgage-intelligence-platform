@@ -8,7 +8,7 @@ import { ApprovalBanner } from '../components/mortgage/ApprovalBanner';
 import { Chip, Button } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { FilterSelect } from '../components/ui/FilterSelect';
-import { DRAWER_SOURCES } from '../mocks/fixtureData';
+import { DRAWER_SOURCES } from '../lib/drawerSources';
 
 /**
  * Portfolio Builder — prototype `.surface` + `.filter-row` composition.
@@ -32,6 +32,8 @@ const FILTER_GROUPS: Array<{ label: string; key: string; options: string[] }> = 
 
 export default function PortfolioBuilder() {
   const [preview, setPreview] = useState<PortfolioPreview | null>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [building, setBuilding] = useState<boolean>(false);
   const [filters, setFilters] = useState<Record<string, string>>({
     geo: 'Chicago MSA',
     occ: 'Owner-occupied',
@@ -41,8 +43,37 @@ export default function PortfolioBuilder() {
     equity: '≥ 15%',
   });
 
+  const runBuild = (criteria: Record<string, string>, signal?: { cancelled: boolean }) => {
+    setBuilding(true);
+    setPreviewError(null);
+    api
+      .portfolioPreview(criteria)
+      .then((p) => {
+        if (signal?.cancelled) return;
+        setPreview(p);
+      })
+      .catch((err: unknown) => {
+        if (signal?.cancelled) return;
+        setPreview(null);
+        setPreviewError(
+          err instanceof Error
+            ? `Couldn't load portfolio preview: ${err.message}`
+            : "Couldn't load portfolio preview.",
+        );
+      })
+      .finally(() => {
+        if (!signal?.cancelled) setBuilding(false);
+      });
+  };
+
   useEffect(() => {
-    api.portfolioPreview().then(setPreview);
+    const signal = { cancelled: false };
+    runBuild(filters, signal);
+    return () => {
+      signal.cancelled = true;
+    };
+    // Intentionally runs once on mount; user drives subsequent runs via "Run build".
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const setFilter = (key: string) => (next: string) => setFilters((f) => ({ ...f, [key]: next }));
@@ -91,53 +122,70 @@ export default function PortfolioBuilder() {
               />
             ))}
             <div style={{ flex: 1 }} />
-            <Button variant="primary" icon="play">Run build</Button>
+            <Button
+              variant="primary"
+              icon="play"
+              onClick={() => runBuild(filters)}
+              disabled={building}
+              aria-busy={building}
+            >
+              {building ? 'Running…' : 'Run build'}
+            </Button>
           </div>
+
+          {previewError && (
+            <div
+              role="alert"
+              style={{
+                marginTop: 14,
+                padding: '10px 12px',
+                border: '1px solid var(--signal-error, #EF4444)',
+                borderRadius: 'var(--r-md)',
+                color: 'var(--signal-error, #EF4444)',
+                fontSize: 12,
+              }}
+            >
+              {previewError}
+            </div>
+          )}
 
           <div className="kpi-row" style={{ marginTop: 20 }}>
             <KpiCard
               label="Marketable population"
-              valueAnimated={preview?.marketable_population ?? 89553}
-              delta="+4.8% vs. last run"
+              valueAnimated={preview?.marketable_population ?? null}
               source={DRAWER_SOURCES.population}
-              trend={[85200, 85900, 86800, 87400, 88100, 89000, preview?.marketable_population ?? 89553]}
             />
             <KpiCard
               label="Avg. borrower score"
-              valueAnimated={preview?.avg_score ?? 81}
-              delta="+2"
+              valueAnimated={preview?.avg_score ?? null}
               source={DRAWER_SOURCES.nbo}
-              trend={[74, 76, 77, 78, 79, 80, preview?.avg_score ?? 81]}
             />
             <KpiCard
               label="Cost per contact (est.)"
-              valueAnimated={preview?.cost_per_contact ?? 2.18}
+              valueAnimated={preview?.cost_per_contact ?? null}
               format={(n) => `$${n.toFixed(2)}`}
-              delta="-$0.11"
-              deltaDir="down"
               source={DRAWER_SOURCES.config}
-              trend={[2.42, 2.36, 2.32, 2.28, 2.24, 2.21, preview?.cost_per_contact ?? 2.18]}
             />
             <KpiCard
               label="Projected contact → app"
-              valueAnimated={preview?.projected_contact_to_app ?? 9.7}
+              valueAnimated={preview?.projected_contact_to_app ?? null}
               format={(n) => n.toFixed(1)}
               unit="%"
-              delta="+1.2 pp"
               source={DRAWER_SOURCES.nbo}
-              trend={[8.3, 8.6, 8.9, 9.1, 9.3, 9.5, preview?.projected_contact_to_app ?? 9.7]}
             />
           </div>
         </div>
       </div>
 
-      <div style={{ marginTop: 'var(--gap-grid)' }}>
-        <ApprovalBanner
-          count={preview?.high_intent_leads ?? 12840}
-          text="Portfolio build will queue approvals downstream. No outreach is sent until a human approves each recommendation."
-          approveLabel="Generate approval-required outreach"
-        />
-      </div>
+      {preview?.high_intent_leads !== undefined && (
+        <div style={{ marginTop: 'var(--gap-grid)' }}>
+          <ApprovalBanner
+            count={preview.high_intent_leads}
+            text="Portfolio build will queue approvals downstream. No outreach is sent until a human approves each recommendation."
+            approveLabel="Generate approval-required outreach"
+          />
+        </div>
+      )}
 
       <div style={{ marginTop: 'var(--gap-grid)', display: 'flex', gap: 12 }}>
         <Link to="/segment-intelligence" className="btn btn--primary">

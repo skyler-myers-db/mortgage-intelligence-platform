@@ -32,7 +32,9 @@ factory override so no real network call is ever attempted in pytest.
 """
 from __future__ import annotations
 
+import hashlib
 import logging
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from threading import Lock
@@ -43,8 +45,51 @@ from psycopg import Connection
 from psycopg.rows import dict_row
 
 from backend.config.settings import settings
+from backend.services.observability import emit
 
 log = logging.getLogger(__name__)
+
+
+def _stmt_hash(sql: str) -> str:
+    return hashlib.sha1(sql.encode("utf-8")).hexdigest()[:16]  # noqa: S324 -- not a secret
+
+
+def _emit_start(op: str, sql: str) -> tuple[str, float]:
+    stmt_hash = _stmt_hash(sql)
+    emit(log, "lakebase_query_start", dependency="lakebase",
+         operation=op, statement_hash=stmt_hash)
+    return stmt_hash, time.monotonic()
+
+
+def _emit_end(op: str, stmt_hash: str, start: float, *,
+              rows_returned: int | None = None) -> None:
+    kwargs: dict[str, Any] = {
+        "dependency": "lakebase",
+        "operation": op,
+        "statement_hash": stmt_hash,
+        "duration_ms": round((time.monotonic() - start) * 1000.0, 2),
+        "outcome": "ok",
+    }
+    if rows_returned is not None:
+        kwargs["rows_returned"] = rows_returned
+    emit(log, "lakebase_query_end", **kwargs)
+
+
+def _emit_err(op: str, stmt_hash: str, start: float, exc: BaseException,
+              attempt: int | None = None) -> None:
+    kwargs: dict[str, Any] = {
+        "level": logging.WARNING,
+        "dependency": "lakebase",
+        "operation": op,
+        "statement_hash": stmt_hash,
+        "duration_ms": round((time.monotonic() - start) * 1000.0, 2),
+        "outcome": "error",
+        "exc_type": type(exc).__name__,
+        "exc_msg": str(exc)[:500],
+    }
+    if attempt is not None:
+        kwargs["attempt"] = attempt
+    emit(log, "lakebase_query_error", **kwargs)
 
 
 class LakebaseError(RuntimeError):
@@ -142,36 +187,47 @@ class LakebaseClient:
 
     def execute(self, sql: str, params: dict[str, Any] | None = None) -> None:
         """Execute a write statement. Returns None on success, raises otherwise."""
+        stmt_hash, start = _emit_start("execute", sql)
         try:
             with self.transaction() as conn, conn.cursor() as cur:
                 cur.execute(sql, params or {})
         except psycopg.Error as exc:
+            _emit_err("execute", stmt_hash, start, exc)
             raise LakebaseError(f"Lakebase execute failed: {exc}") from exc
+        _emit_end("execute", stmt_hash, start)
 
     def executemany(self, sql: str, params_list: list[dict[str, Any]]) -> None:
         """Batch-execute a write. All rows run inside one transaction."""
         if not params_list:
             return
+        stmt_hash, start = _emit_start("executemany", sql)
         try:
             with self.transaction() as conn, conn.cursor() as cur:
                 cur.executemany(sql, params_list)
         except psycopg.Error as exc:
+            _emit_err("executemany", stmt_hash, start, exc)
             raise LakebaseError(f"Lakebase executemany failed: {exc}") from exc
+        _emit_end("executemany", stmt_hash, start, rows_returned=len(params_list))
 
     def fetchone(
         self, sql: str, params: dict[str, Any] | None = None
     ) -> dict[str, Any] | None:
         """Return the first row as a dict, or None if the query produced no rows."""
+        stmt_hash, start = _emit_start("fetchone", sql)
         try:
             with self.transaction() as conn, conn.cursor() as cur:
                 cur.execute(sql, params or {})
                 row = cur.fetchone()
                 if row is None:
+                    _emit_end("fetchone", stmt_hash, start, rows_returned=0)
                     return None
                 # dict_row factory gives us a dict already; cast for mypy.
-                return dict(row)
+                result = dict(row)
         except psycopg.Error as exc:
+            _emit_err("fetchone", stmt_hash, start, exc)
             raise LakebaseError(f"Lakebase fetchone failed: {exc}") from exc
+        _emit_end("fetchone", stmt_hash, start, rows_returned=1)
+        return result
 
     def fetchall(
         self,
@@ -186,26 +242,102 @@ class LakebaseClient:
         guard against an unbounded SELECT accidentally streaming the
         whole audit table into memory.
         """
+        stmt_hash, start = _emit_start("fetchall", sql)
         try:
             with self.transaction() as conn, conn.cursor() as cur:
                 cur.execute(sql, params or {})
                 rows = cur.fetchmany(size=limit)
-                return [dict(r) for r in rows]
+                result = [dict(r) for r in rows]
         except psycopg.Error as exc:
+            _emit_err("fetchall", stmt_hash, start, exc)
             raise LakebaseError(f"Lakebase fetchall failed: {exc}") from exc
+        _emit_end("fetchall", stmt_hash, start, rows_returned=len(result))
+        return result
 
 
 _CLIENT: LakebaseClient | None = None
 _LOCK = Lock()
 
 
+def _resolve_lakebase_connection_params() -> tuple[str, int, str, str, str, str]:
+    """Return ``(host, port, database, user, password, sslmode)``.
+
+    Three supported pathways:
+
+    1. **Local / CI with full LAKEBASE_* env vars** -- return them as-is.
+    2. **Databricks Apps (``database`` resource binding)** -- the runtime
+       injects ``PGHOST``, ``PGUSER``, ``PGPORT``, ``PGDATABASE`` but
+       NOT ``PGPASSWORD`` (that's meant to be a short-lived OAuth
+       token minted on demand). Fall through to the SDK credential
+       minter below.
+    3. **Databricks workspace identity** -- call
+       ``/api/2.0/database/credentials`` via ``databricks-sdk`` to
+       obtain a short-lived Postgres token; resolve the host via
+       ``GET /api/2.0/database/instances/{instance}`` when it isn't
+       already set.
+
+    The shape mirrors ``jobs/lakebase_migrate.py::_resolve_connection``
+    so both the backend and the migrate job share a single auth story;
+    any update here should be mirrored there (and vice versa).
+    """
+    import os as _os
+
+    host = (settings.lakebase_host or _os.environ.get("PGHOST") or "").strip()
+    port_raw = _os.environ.get("PGPORT") or str(settings.lakebase_port)
+    port = int(port_raw) if port_raw else 5432
+    database = (settings.lakebase_database or _os.environ.get("PGDATABASE") or "mip_app_state").strip()
+    user = (settings.lakebase_user or _os.environ.get("PGUSER") or "").strip()
+    password_secret = settings.lakebase_password
+    password = password_secret.get_secret_value() if password_secret else ""
+    if not password:
+        password = _os.environ.get("PGPASSWORD") or ""
+    sslmode = settings.lakebase_sslmode or "require"
+
+    if host and user and password:
+        return host, port, database, user, password, sslmode
+
+    instance_name = _os.environ.get("LAKEBASE_INSTANCE_NAME", "mip-app-state")
+
+    try:  # pragma: no cover -- exercised on deployed Databricks Apps only
+        from databricks.sdk import WorkspaceClient
+
+        workspace = WorkspaceClient()
+        if not host:
+            inst = workspace.api_client.do(
+                "GET", f"/api/2.0/database/instances/{instance_name}"
+            )
+            host = inst.get("read_write_dns") or ""
+        if not user:
+            me = workspace.current_user.me()
+            user = me.user_name or me.display_name or ""
+        if not password:
+            cred = workspace.api_client.do(
+                "POST",
+                "/api/2.0/database/credentials",
+                body={
+                    "request_id": (
+                        f"mip-backend-"
+                        f"{_os.environ.get('DATABRICKS_JOB_RUN_ID','app')}"
+                    ),
+                    "instance_names": [instance_name],
+                },
+            )
+            password = cred.get("token") or ""
+    except Exception as exc:  # noqa: BLE001 -- surface reason on first call
+        raise LakebaseError(f"Lakebase credential resolution failed: {exc}") from exc
+
+    return host, port, database, user, password, sslmode
+
+
 def get_lakebase_client() -> LakebaseClient:
     """Lazy process-singleton accessor.
 
-    Reads credentials from ``settings`` (which reads them from
-    ``.env.local`` + workspace environment). Missing host / user / db
-    raise ``LakebaseError`` -- the audit router catches this and
-    returns HTTP 503, preserving the no-silent-fallback invariant.
+    Reads credentials via ``_resolve_lakebase_connection_params``, which
+    honours the full LAKEBASE_* env-var set on laptops / CI and falls
+    through to Databricks Apps' ``PG*`` + workspace-identity token
+    minting for in-workspace deploys. Missing host / user / db raise
+    ``LakebaseError`` -- the audit router catches this and returns HTTP
+    503, preserving the no-silent-fallback invariant.
 
     Slice-6: the returned object is a ``ResilientLakebaseClient`` that
     wraps the raw psycopg client with a circuit breaker + retry. When
@@ -221,15 +353,14 @@ def get_lakebase_client() -> LakebaseClient:
 
     with _LOCK:
         if _CLIENT is None:
-            password_secret = settings.lakebase_password
-            password = password_secret.get_secret_value() if password_secret else ""
+            host, port, database, user, password, sslmode = _resolve_lakebase_connection_params()
             bare = LakebaseClient(
-                host=settings.lakebase_host or "",
-                port=settings.lakebase_port,
-                database=settings.lakebase_database,
-                user=settings.lakebase_user or "",
+                host=host,
+                port=port,
+                database=database,
+                user=user,
                 password=password,
-                sslmode=settings.lakebase_sslmode,
+                sslmode=sslmode,
             )
             resilient = Resilient[Any](
                 breaker=get_breaker("lakebase"),

@@ -23,6 +23,33 @@ def _preflight_credentials() -> None:
     sees the misconfiguration in the container log within seconds,
     rather than as a 500 at request time.
     """
+    # Diagnostic: on Databricks Apps the runtime injects env vars whose
+    # names may differ from what the backend reads. Dump presence (not
+    # values) of every credential-shaped var so operator triage can
+    # see which names the host set without touching any secret string.
+    _interesting = [
+        "DATABRICKS_HOST",
+        "DATABRICKS_TOKEN",
+        "DATABRICKS_WAREHOUSE_ID",
+        "DATABRICKS_SQL_WAREHOUSE_ID",
+        "DATABRICKS_CLIENT_ID",
+        "DATABRICKS_CLIENT_SECRET",
+        "GENIE_SPACE_ID",
+        "DATABRICKS_GENIE_SPACE_ID",
+        "PGHOST",
+        "PGUSER",
+        "PGPASSWORD",
+        "PGDATABASE",
+        "PGPORT",
+        "LAKEBASE_HOST",
+        "LAKEBASE_USER",
+        "LAKEBASE_PASSWORD",
+        "LAKEBASE_DATABASE",
+        "DATABRICKS_APP_PORT",
+    ]
+    presence = {k: ("set" if os.environ.get(k) else "unset") for k in _interesting}
+    print(f"[mip-runtime] env-presence: {presence}", file=sys.stderr)
+
     try:
         settings.require_databricks_creds()
     except RuntimeError as exc:

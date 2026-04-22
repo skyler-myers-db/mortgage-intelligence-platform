@@ -172,3 +172,68 @@ jobs:
         # No browsers installed; --list does not launch them.
         working-directory: frontend
         run: npx playwright test --list
+
+  security-scan:
+    # SAST + secret-scan gate. This job is credential-free like the rest
+    # of ci.yml: no repo secrets, runs identically on fork PRs and
+    # maintainer branches. Three rails:
+    #   1. gitleaks  -- secret scan on committed files (diff on PR,
+    #      full-history on push-to-main). Allowlist lives in
+    #      `.gitleaks.toml` at repo root.
+    #   2. bandit    -- Python SAST across backend/tools/jobs/pipelines
+    #      at medium+ severity. `.bandit` silences test-only noise.
+    #   3. npm audit -- frontend dependency CVE scan at high+ severity.
+    # Each step has a single responsibility and runs independently so
+    # CI output points directly at the failing rail.
+    name: security (gitleaks + bandit + npm audit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # gitleaks needs full history on push-to-main so the
+          # full-history scan is meaningful. On PRs the action only
+          # scans the diff regardless.
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: gitleaks (secret scan)
+        # v2 uses GITLEAKS_LICENSE for orgs; public repos don't need it.
+        # The action reads `.gitleaks.toml` automatically if present.
+        uses: zricethezav/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install bandit
+        run: |
+          python -m pip install --upgrade pip
+          pip install 'bandit[toml]==1.7.9'
+
+      - name: bandit (Python SAST)
+        # Two-step: a wide-net informational run (medium+ severity,
+        # high confidence) that always prints findings, then a strict
+        # gate (high severity, high confidence) that fails the build.
+        # `.bandit` config silences explicitly-justified skips (see
+        # the file's header comment). Medium findings are visible in
+        # the log but do not block; high findings do.
+        run: |
+          bandit -c .bandit -r backend tools jobs pipelines -x tests -ll -ii -f txt || true
+          bandit -c .bandit -r backend tools jobs pipelines -x tests --severity-level high --confidence-level high -q
+
+      - name: npm audit (frontend deps)
+        # `--audit-level=high` means only high/critical CVEs fail the
+        # job; moderate/low findings print but don't block. npm audit
+        # is notoriously noisy on transitive dev deps; tighten later
+        # once baseline is clean.
+        run: npm --prefix frontend audit --audit-level=high --omit=dev
+        continue-on-error: false

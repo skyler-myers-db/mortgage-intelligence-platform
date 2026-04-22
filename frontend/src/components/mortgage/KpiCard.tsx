@@ -21,8 +21,12 @@ interface KpiCardProps {
   label: string;
   /** Static pre-formatted value. Used when `valueAnimated` is absent. */
   value?: string;
-  /** Target numeric value to animate on mount. Formatter applied per frame. */
-  valueAnimated?: number;
+  /**
+   * Target numeric value to animate on mount. Formatter applied per frame.
+   * ``null`` renders an em-dash placeholder so the card never shows a
+   * plausible-looking value while the underlying API is loading/errored.
+   */
+  valueAnimated?: number | null;
   /** Formatter for animated values. Default: .toLocaleString() rounded to int. */
   format?: (n: number) => string;
   unit?: string;
@@ -49,9 +53,16 @@ export function KpiCard({
   spark,
   trend,
 }: KpiCardProps) {
-  // Hooks must run unconditionally — pass 0 when valueAnimated is undefined.
+  // Hooks must run unconditionally — pass 0 when valueAnimated is null/undefined.
   const animated = useCountUp(valueAnimated ?? 0);
-  const display = valueAnimated !== undefined ? format(animated) : (value ?? '');
+  let display: string;
+  if (valueAnimated === null) {
+    display = '—';
+  } else if (valueAnimated !== undefined) {
+    display = format(animated);
+  } else {
+    display = value ?? '';
+  }
 
   const sparkNode = spark ?? (trend && trend.length >= 2 ? <Sparkline points={trend} direction={deltaDir} /> : null);
 

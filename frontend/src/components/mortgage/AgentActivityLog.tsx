@@ -1,13 +1,13 @@
 import { useEffect, useState } from 'react';
 import { Icon, type IconName } from '../Icon';
-import { fallbackAgentActivity } from '../../mocks/fixtureData';
 
 /**
  * AgentActivityLog — prototype `.audit` BEM. Pulls events from
- * GET /api/audit/events (already exists); falls back to
- * fallbackAgentActivity so the Home page always renders content. Icon +
- * color keyed off action verb so Approvals stand out green, rejects red,
- * Genie asks amber.
+ * GET /api/audit/events (already exists). When the feed is empty or the
+ * fetch fails, we render an honest empty state rather than mock-data
+ * filler so presenters never mistake a dead backend for a live run.
+ * Icon + color keyed off action verb so Approvals stand out green,
+ * rejects red, Genie asks amber.
  *
  * The footer renders a live telemetry strip built from /api/health —
  * warehouse + Genie dependency state and a monotonic wall-clock probe
@@ -89,8 +89,11 @@ function breakerLabel(b: BreakerState): string | null {
   return null;
 }
 
+type FeedState = 'loading' | 'empty' | 'error' | 'ok';
+
 export function AgentActivityLog({ limit = 12 }: { limit?: number }) {
   const [rows, setRows] = useState<AuditEvent[]>([]);
+  const [feedState, setFeedState] = useState<FeedState>('loading');
   const [health, setHealth] = useState<HealthSnapshot>(EMPTY_HEALTH);
 
   useEffect(() => {
@@ -100,11 +103,13 @@ export function AgentActivityLog({ limit = 12 }: { limit?: number }) {
         const res = await fetch(`/api/audit/events?limit=${limit}`);
         if (!res.ok) throw new Error(String(res.status));
         const data = (await res.json()) as AuditEvent[];
-        if (!cancelled) {
-          setRows(data.length > 0 ? data : fallbackAgentActivity);
-        }
+        if (cancelled) return;
+        setRows(data);
+        setFeedState(data.length > 0 ? 'ok' : 'empty');
       } catch {
-        if (!cancelled) setRows(fallbackAgentActivity);
+        if (cancelled) return;
+        setRows([]);
+        setFeedState('error');
       }
     })();
     return () => {
@@ -158,7 +163,24 @@ export function AgentActivityLog({ limit = 12 }: { limit?: number }) {
         <div className="h-4">Agent action audit log</div>
       </div>
       <div className="audit-panel">
-        {rows.map((r) => {
+        {feedState === 'loading' && (
+          <div className="muted body" style={{ padding: 'var(--sp-3)' }}>
+            Loading audit events…
+          </div>
+        )}
+        {feedState === 'empty' && (
+          <div className="muted body" style={{ padding: 'var(--sp-3)' }}>
+            No activity yet — run a segment build or approve an offer to see
+            events here.
+          </div>
+        )}
+        {feedState === 'error' && (
+          <div className="body" style={{ padding: 'var(--sp-3)', color: 'var(--signal-error, #EF4444)' }}>
+            Couldn&rsquo;t reach the audit feed (/api/audit/events). Retry will
+            happen on the next page load; dependency state is shown below.
+          </div>
+        )}
+        {feedState === 'ok' && rows.map((r) => {
           const cls = classify(r.action, r.entity_type);
           return (
             <div className="audit" key={r.event_id}>

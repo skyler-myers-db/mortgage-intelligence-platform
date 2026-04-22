@@ -5,7 +5,7 @@ import { PageShell } from '../components/layout/PageShell';
 import { Button, Chip, EvidenceChip } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { GenieAnswer } from '../components/mortgage/GenieAnswer';
-import { DRAWER_SOURCES } from '../mocks/fixtureData';
+import { DRAWER_SOURCES } from '../lib/drawerSources';
 
 /**
  * Ask Genie — deep-dive view with trusted-asset list and sample questions.
@@ -34,14 +34,23 @@ const TRUSTED_ASSETS = [
 export default function AskGenie() {
   const [question, setQuestion] = useState(SAMPLE_QUESTIONS[0]);
   const [payload, setPayload] = useState<GenieAnswerShape | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
   async function ask(q: string) {
     setQuestion(q);
     setLoading(true);
+    setErrorMsg(null);
     try {
       const res = (await api.genie(q)) as GenieAnswerShape;
       setPayload(res);
+    } catch (err) {
+      setPayload(null);
+      setErrorMsg(
+        err instanceof Error
+          ? `Couldn't reach Genie: ${err.message}`
+          : "Couldn't reach Genie.",
+      );
     } finally {
       setLoading(false);
     }
@@ -65,6 +74,7 @@ export default function AskGenie() {
           </div>
           <div className="surface__body">
             <textarea
+              aria-label="Ask Genie — question"
               value={question}
               onChange={(e) => setQuestion(e.target.value)}
               style={{
@@ -85,6 +95,17 @@ export default function AskGenie() {
                 {loading ? 'Asking…' : 'Ask Genie'}
               </Button>
             </div>
+            {errorMsg && (
+              <div
+                className="surface"
+                role="alert"
+                style={{ marginTop: 16, background: 'var(--bg-1)', borderColor: 'var(--signal-error, #EF4444)' }}
+              >
+                <div className="surface__body" style={{ color: 'var(--signal-error, #EF4444)' }}>
+                  {errorMsg}
+                </div>
+              </div>
+            )}
             {payload && (
               <div
                 className="surface"

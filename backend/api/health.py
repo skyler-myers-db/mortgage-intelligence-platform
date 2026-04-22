@@ -39,13 +39,46 @@ from typing import Any
 from fastapi import APIRouter
 
 from backend.config.settings import settings
-from backend.services.resilience import all_breakers
+from backend.services.observability import (
+    get_otel_handler,
+    recent_breaker_state_changes,
+    recent_error_count,
+)
+from backend.services.resilience import StaleWhileRevalidateCache, all_breakers
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api")
 
 
 _PROBE_TIMEOUT_S = 1.0
+
+# Slice-13 performance follow-up (v2): stale-while-revalidate cache
+# around each dependency probe.
+#
+# v1 used a plain 3 s TTLCache and cut p95 from 1.8 s to 1.1 s at 20
+# VUs, but the 3 s TTL window expired mid-burst and the next requester
+# still ate a real probe (dominated by the ~1 s Genie HTTP round-trip).
+#
+# v2 keeps a 10 s HARD TTL with a 2 s SOFT TTL. Inside the soft window,
+# callers get a cache-hit latency response (<5 ms). Between the soft and
+# hard TTLs, callers still get the cached value immediately AND a
+# background refresh is kicked on a shared ThreadPoolExecutor so the
+# next burst doesn't fall off the hard TTL cliff. Only when the hard
+# TTL has blown (cache has been cold for >= 10 s) does any request
+# thread block on a real probe.
+#
+# Outage semantics: a genuine dependency failure is surfaced within the
+# hard-TTL window (<=10 s). The frontend's degraded banner polls every
+# 5-10 s, so operators still see flipped state within one poll cycle.
+# Background refreshes emit a structured log
+# (event=health_probe_background_refresh) so operators can correlate
+# freshness of the cached value with the underlying dependency state.
+_HEALTH_PROBE_SOFT_TTL_S = 2.0
+_HEALTH_PROBE_HARD_TTL_S = 10.0
+_probe_cache: StaleWhileRevalidateCache = StaleWhileRevalidateCache(
+    soft_ttl_s=_HEALTH_PROBE_SOFT_TTL_S,
+    hard_ttl_s=_HEALTH_PROBE_HARD_TTL_S,
+)
 
 
 def _probe_warehouse() -> bool:
@@ -162,11 +195,24 @@ def _breaker_states() -> dict[str, str]:
     return out
 
 
+def _cached_probe(name: str, probe: Any) -> bool:
+    """Return the probe's result from cache, re-probing only when stale.
+
+    Signature preserved from the v1 plain-TTL implementation so the
+    three call sites below don't change. Under the hood this is now a
+    stale-while-revalidate cache: the caller's request thread only
+    blocks on a real probe when the hard TTL has blown; between soft
+    and hard TTL the caller gets the cached value instantly and a
+    background refresh runs on a shared executor.
+    """
+    return bool(_probe_cache.get_or_refresh(name, probe))
+
+
 @router.get("/health")
 def health() -> dict[str, Any]:
-    warehouse_up = _probe_warehouse()
-    lakebase_up = _probe_lakebase()
-    genie_up = _probe_genie()
+    warehouse_up = _cached_probe("warehouse", _probe_warehouse)
+    lakebase_up = _cached_probe("lakebase", _probe_lakebase)
+    genie_up = _cached_probe("genie", _probe_genie)
     deps = {
         "warehouse": "up" if warehouse_up else "down",
         "lakebase": "up" if lakebase_up else "down",
@@ -180,4 +226,23 @@ def health() -> dict[str, Any]:
         "warehouse_id": settings.databricks_warehouse_id,
         "dependencies": deps,
         "circuit_breakers": _breaker_states(),
+        # Slice-13 observability counters. Values reflect the last
+        # rolling hour. A non-zero ``breaker_state_changes_last_hour``
+        # is the earliest signal that a dependency is flapping; a
+        # non-zero ``recent_errors_count`` with ``status=="ok"`` means
+        # the breaker caught transient failures without user-facing
+        # degradation.
+        "breaker_state_changes_last_hour": recent_breaker_state_changes(),
+        "recent_errors_count": recent_error_count(),
+        # Slice-13 follow-up: the two counters above are process-local
+        # and reset on every container restart. That is intentional --
+        # the durable path is the OTLP log exporter (set
+        # ``MIP_OTEL_ENDPOINT`` to enable; see docs/observability.md).
+        # Surfacing the posture in the health body means operators can
+        # tell at a glance whether to trust the counters for trend
+        # analysis (they should not) vs. use them for "right now" signal
+        # (they should). ``log_export`` tells them whether the durable
+        # path is active.
+        "counters_persistence": "process-local",
+        "log_export": "otlp" if get_otel_handler() is not None else "stdout-only",
     }

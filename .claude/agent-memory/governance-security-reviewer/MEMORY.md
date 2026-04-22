@@ -1,0 +1,1 @@
+- [CI OAuth mint failure must not fall through to localhost](feedback_ci_oauth_fallback.md) — deployed-path mint failure is hard-fail, not silent fallback

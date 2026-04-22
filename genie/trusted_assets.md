@@ -19,6 +19,7 @@ serverless SQL warehouse referenced in `databricks.yml`.
 | `mip.gold.borrower_360` | table | one row per borrower | Feeds the Borrower 360 route, the Evidence Drawer, and the dossier preview rail. |
 | `mip.gold.evidence_events` | table | append-only event ledger | The "why now" signal — trigger events with UTC timestamps, confidence, and source citations. |
 | `mip.gold.recommended_offers` | table | one row per borrower × current offer | Next-best-offer output; the recommendation that a human approves before outreach. |
+| `mip.gold.lockin_cohort` | table | one row per borrower in the sub-3% 2020–2022 cohort | Size + composition of the rate-lock-in cohort that is retention / HELOC / cash-out addressable but will not rate-and-term refi. |
 | `mip.semantics.lead_generation_metric_view` | metric view | funnel-wide | Executive + Head-of-Growth funnel KPIs: addressable → eligible → scored → approved → actioned. |
 | `mip.semantics.segment_performance_metric_view` | metric view | segment | Segment strategy and A/B decisions: mean score, rate spread, equity, approval rate, outreach rate. |
 | `mip.semantics.borrower_opportunity_metric_view` | metric view | region × product × trigger | Territory planning and campaign-budget allocation. |
@@ -62,6 +63,17 @@ Rate-Term Refi, Cash-Out, HELOC, Purchase, Retention. Each row includes
 projected monthly savings and a confidence band. Human approval is
 **required** before any outreach is queued — enforced by the approval
 flow in Lakebase (`lakebase/schema.sql`) and the ApprovalBanner component.
+
+### `gold.lockin_cohort`
+Pre-materialised cohort of borrowers who originated (or last refinanced
+into) a sub-3 % first-position mortgage between 2020-01-01 and 2022-12-31.
+One row per CLIP with origination date / rate / loan type / current equity
+and rate spread alongside. The purpose is to let Genie answer lock-in
+sizing questions (sample question 5) without touching silver — the
+`first_pos_rate`, `first_pos_date` fields on silver.lien_current are the
+source, but silver is out-of-scope for this space per the rules below.
+Refreshed by `mip_refresh_scores` from
+`sql/transformations/gold_lockin_cohort.sql`.
 
 ### `semantics.lead_generation_metric_view`
 The funnel metric view the Executive Dashboard and Head-of-Growth questions

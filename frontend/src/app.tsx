@@ -1,4 +1,4 @@
-import { Route, Routes, useLocation } from 'react-router-dom';
+import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { AppShell } from './components/layout/AppShell';
 import { RouteNav } from './components/layout/RouteNav';
 import HomeRoute from './routes/home';
@@ -31,6 +31,14 @@ function RouteTransition() {
         <Route path="/offer-orchestrator/:id" element={<OfferOrchestratorRoute />} />
         <Route path="/ask-genie" element={<AskGenieRoute />} />
         <Route path="/admin-config" element={<AdminConfigRoute />} />
+        {/* Outreach drafting lives inside /offer-orchestrator; any
+            legacy /outreach-composer link redirects to the lead queue
+            so a visitor never lands on a blank shell. */}
+        <Route path="/outreach-composer" element={<Navigate to="/lead-queue" replace />} />
+        <Route path="/outreach-composer/:id" element={<Navigate to="/lead-queue" replace />} />
+        {/* Catch-all: unknown paths redirect to Home instead of rendering
+            an empty <main>. */}
+        <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </div>
   );

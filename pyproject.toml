@@ -4,6 +4,21 @@ version = "0.1.0"
 description = "Databricks-native Mortgage Intelligence Platform Module 0 demo"
 requires-python = ">=3.11"
 
+# Optional extras. Keep ``otel`` strictly optional: the app must boot
+# without these wheels even when ``MIP_OTEL_ENDPOINT`` is set
+# (backend/services/observability.py logs a warning and falls back to
+# stdout). See docs/observability.md for enablement.
+[project.optional-dependencies]
+otel = [
+    "opentelemetry-sdk>=1.27,<2",
+    "opentelemetry-exporter-otlp>=1.27,<2",
+]
+# Hypothesis powers tests/integration/test_genie_fuzz.py. Pinned in
+# requirements.txt for CI; listed here so ``pip install .[fuzz]`` works.
+fuzz = [
+    "hypothesis>=6.123,<7",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests/unit", "tests/integration"]
 pythonpath = ["."]

@@ -5,8 +5,8 @@
 - **Runtime:** 45s open + 6–8 min main + 30s close (~8 min wall clock)
 - **Presenters:** Entrada delivery lead + Databricks FS partner (co-drive)
 - **Venue:** Entrada session, conference 2026
-- **App URL:** deployed Databricks App at 1440×900, dark theme, compact density
-- **Data posture:** live Unity Catalog on the Cotality Delta Share — no mock fallback. Resilience (warehouse warm-start, retries, circuit breakers, degraded-state UI) is how a flaky network is handled, not a mock swap.
+- **App URL:** deployed Databricks App at `https://mip-app-2543889327043640.aws.databricksapps.com`, 1440×900, dark theme, compact density. Auth is workspace-identity Bearer (the App mints short-lived creds via `databricks.sdk.core.Config` — no PAT baked into the runtime).
+- **Data posture:** live Unity Catalog on the Cotality Delta Share — no mock fallback. Resilience (warehouse warm-start, retries, circuit breakers, SWR-cached health probe, pre-joined gold for hot read paths, degraded-state UI) is how a flaky network is handled, not a mock swap.
 
 ---
 
@@ -38,9 +38,9 @@ circuit breaker `closed`. Do not start the pitch until that page is green.
 
 > "Summit Mortgage's top-of-funnel snapshot against the live share. Every KPI renders from `mip.gold.lead_population` through a short-TTL cache in front of the serverless warehouse. Hover any KPI — an evidence chip cites the source. The ITM count cites `mip.gold.fn_in_the_money`, a real UC SQL function pinned by golden-fixture tests against a Python mirror. Cost per contact cites admin config, not gold; we don't pretend that's derived."
 
-> "Right rail is the **Console**. See the telemetry strip in the footer: *Warehouse up · Genie up · probe 180 ms*. That's a real `/api/health` poll every 30 seconds. If the warehouse is cold, you'll see a subtle warming-up banner — real-time honesty, not a stage trick. Audit events land in Lakebase, streamable to UC for compliance."
+> "Right rail is the **Console**. See the telemetry strip in the footer: *Warehouse up · Genie up · probe 130 ms*. That's a real `/api/health` poll backed by a stale-while-revalidate cache — 2-second soft TTL, 10-second hard TTL, background refresh on a shared executor. A burst of callers shares one probe per dependency, so the banner stays snappy even when Genie takes a full second to reply upstream (p95 on `/api/health` dropped from 1,100 ms to 130 ms, see [docs/load-baseline.md](load-baseline.md)). If the warehouse is cold, you'll see a subtle warming-up banner — real-time honesty, not a stage trick. Audit events land in Lakebase, streamable to UC for compliance."
 
-**Cite:** `mip.gold.lead_population` · `mip.gold.fn_in_the_money` · live `/api/health` · Cotality public records + Voluntary Lien + Owner Link.
+**Cite:** `mip.gold.lead_population` · `mip.gold.fn_in_the_money` · live `/api/health` (SWR-cached) · Cotality public records + Voluntary Lien + Owner Link.
 
 ---
 
@@ -50,7 +50,7 @@ circuit breaker `closed`. Do not start the pitch until that page is green.
 
 > "The choropleth is fed from `mip.semantics.lead_generation_metric_view`, aggregated by state and CBSA. Six states light up because that's the real share — IL 1.86M, CA 0.90M, FL 0.76M, TX 0.75M, WA 0.74M, CO 0.16M properties. No synthetic shading."
 
-> "Illinois leads on every dimension that matters here: 1.13M properties with open liens, the **highest average 1st-position rate in the share at 4.75%**, and the broadest cohort mix. That's why Chicago is our anchor metro — we get both stories: the 565K-strong post-2023 cohort at 6–6.7% that needs a refi *right now*, and the 1.22M locked-in 2020–2022 cohort at sub-3% that won't refi but is wide open for HELOC and cash-out. Drill Cook County, drill a Chicago ZIP — same sub-second query path whether you're national or a single ZIP."
+> "Illinois leads on every dimension that matters here: 1.13M properties with open liens, the **highest average 1st-position rate in the share at 4.75%**, and the broadest cohort mix. That's why Chicago is our anchor metro — we get both stories: the 565K-strong post-2023 cohort at 6–6.7% that needs a refi *right now*, and the **669,320-borrower sub-3% lock-in cohort** from 2020–2022 that won't refi but is wide open for HELOC and cash-out. Drill Cook County, drill a Chicago ZIP — same sub-second query path whether you're national or a single ZIP."
 
 **Cite:** `mip.semantics.lead_generation_metric_view` · Cotality **Voluntary Lien** + **Property Domain** + **Owner Link**; state/cohort counts from `docs/data-sources-gap-analysis.md §1`.
 
@@ -74,7 +74,7 @@ circuit breaker `closed`. Do not start the pitch until that page is green.
 
 > "Five shippable segments, each defined by a UC rule — not a vague ML cluster. **In the Money** fires when `fn_in_the_money(rate_spread_bps, equity_pct, 75, 15)` is true: lien rate ≥ 75 bps above par AND equity ≥ 15%. Counts come straight from `mip.gold.segment_population` with a state-level breakdown."
 
-> "**Retention / Recapture** is the sleeper — 263K borrowers where the current servicer ≠ the originator. **Investor / Multi-Property** — 833K corporate owners + 1.80M absentee mailings. **Home Equity** — the 1.22M locked-in 2020–2022 cohort; they won't refi, but their equity is shoppable."
+> "**Retention / Recapture** is the sleeper — 263K borrowers where the current servicer ≠ the originator. **Investor / Multi-Property** — 833K corporate owners + 1.80M absentee mailings. **Home Equity** — anchored on the 669,320-borrower sub-3% lock-in cohort materialized in `mip.gold.lockin_cohort`; they won't refi, but their equity is shoppable."
 
 > "Two segments are honestly stubbed. **Listed for Sale** needs MLS data; on the Cotality roadmap, shows zero today. **Permit Activity** — needs the Permits product. We show the card, we tell you it's blocked, we do not fake the count. Top-right: *PII suppressed · CLIP-MCP drill-down*. Real owner names never cross the gold boundary."
 
@@ -90,13 +90,13 @@ circuit breaker `closed`. Do not start the pitch until that page is green.
 
 > *(Click through to Borrower 360.)*
 
-> "Borrower 360: AVM **$625K**, lien **$340K**, equity **$285K**, LTV **54%**, rate 5.75%. CLIP and Owner Link are live fields from `mip.silver.property_master` — Compliance can join back to the share row."
+> "Borrower 360: AVM **$625K**, lien **$340K**, equity **$285K**, LTV **54%**, rate 5.75%. CLIP and Owner Link are live fields from `mip.silver.property_master` — Compliance can join back to the share row. This page used to fan out into two serialized warehouse queries; it now reads a single row from `mip.gold.borrower_dossier`, a pre-join CTAS (borrower_360 × top-20 evidence events per CLIP, 5.16M rows) that dropped the dossier p95 from 3,300 ms to 1,200 ms."
 
 > "Why panel — the explainability surface. **+88 bps spread** (par comes from the weekly FRED MORTGAGE30US pull into `mip.silver.market_rates_weekly`, not a magic constant), **46% equity**. Both clear threshold, In the Money is true. Source chips: `fn_rate_spread`, `fn_in_the_money`. The Python mirror in `backend/services/scoring.py` is pinned to the UDFs by golden JSON — drift breaks CI."
 
 > "Trigger timeline — voluntary lien update, AVM refresh, local refi-activity signal. Every event has a Cotality source and an ISO timestamp. Permit and listing events are stubbed until Cotality ships those products."
 
-**Cite:** `mip.gold.fn_lead_score` · `mip.gold.fn_rate_spread` · `mip.gold.fn_in_the_money` · `mip.gold.borrower_360` · `mip.silver.market_rates_weekly` · Cotality **Voluntary Lien + AVM + Mortgage Domain**.
+**Cite:** `mip.gold.fn_lead_score` · `mip.gold.fn_rate_spread` · `mip.gold.fn_in_the_money` · `mip.gold.borrower_dossier` (pre-join CTAS over `borrower_360` + top-20 `evidence_events`) · `mip.silver.market_rates_weekly` · Cotality **Voluntary Lien + AVM + Mortgage Domain**.
 
 ---
 
@@ -124,13 +124,13 @@ circuit breaker `closed`. Do not start the pitch until that page is green.
 
 > "Genie is one click from every page. Our space is grounded on `mip.semantics.*` metric views — not raw gold, not arbitrary SQL. Config, trusted-asset list, sample questions all live in `genie/` in the repo."
 
-> *(Ask: "How big is the 2020–2022 sub-3% lock-in cohort across all six states?")*
+> *(Ask sample question 5 from [genie/sample_questions.md](../genie/sample_questions.md): "How big is the 2020–2022 sub-3% lock-in cohort across all six states?")*
 
-> "Structured response: **~1.22M**, per-state table across IL / CA / FL / TX / WA / CO, trusted-asset chips. That's the HELOC and cash-out pool — won't refi, but equity is shoppable."
+> "Structured response: **669,320 borrowers**, per-state table across IL / CA / FL / TX / WA / CO, trusted-asset chip pointing at `mip.gold.lockin_cohort` — a purpose-built gold table added this slice so the single hottest retention question answers from a pre-materialized rollup instead of scanning silver. Independent raw-share reference query came back Δ=0 against that table. That's the HELOC and cash-out pool the lender will *never* win back on rate alone — won't refi, but equity is shoppable."
 
 > "If Genie cold-starts mid-session, the circuit breaker trips and we fall through to a deterministic safe corpus of 10 canonical answers pinned to the sample questions. Audience sees a correct answer with a provenance chip — not a spinner, not a hallucination."
 
-**Cite:** `mip.semantics.borrower_opportunity_metric_view` · `mip.gold.evidence_events` · Mortgage Lead Intelligence Genie Space (trusted-asset-scoped) · `backend/services/genie_answers.py` safe-corpus fallback.
+**Cite:** `mip.gold.lockin_cohort` · `mip.semantics.borrower_opportunity_metric_view` · `mip.gold.evidence_events` · Mortgage Lead Intelligence Genie Space (trusted-asset-scoped) · `backend/services/genie_answers.py` safe-corpus fallback.
 
 ---
 
@@ -180,7 +180,7 @@ circuit breaker `closed`. Do not start the pitch until that page is green.
 8. Click into **Borrower 360** (`/borrower-360/B-48291`). Scroll to Why panel.
 9. Click *Build outreach draft* → **Offer Orchestrator** (`/offer-orchestrator/B-48291`).
 10. Review Primary → Alternatives → Thresholds. Click **Approve outreach**.
-11. Click **Genie FAB** (bottom-right). Ask *"How big is the 2020–2022 sub-3% lock-in cohort across all six states?"*.
+11. Click **Genie FAB** (bottom-right). Ask *"How big is the 2020–2022 sub-3% lock-in cohort across all six states?"* — expect **669,320** from `mip.gold.lockin_cohort`.
 12. Nav → **Home** (`/`). Scroll to Future Modules row.
 13. Close.
 
@@ -188,7 +188,7 @@ circuit breaker `closed`. Do not start the pitch until that page is green.
 
 ## Appendix — key numbers to remember
 
-All share-level numbers trace to `docs/data-sources-gap-analysis.md §1` (Apr 2026 point-in-time probe against `cotality_mortgage_data.corelogic`). Borrower-level numbers trace to `mip.gold.*` live queries + golden fixtures.
+All share-level numbers trace to `docs/data-sources-gap-analysis.md §1` (Apr 2026 point-in-time probe against `cotality_mortgage_data.corelogic`). Borrower-level numbers trace to `mip.gold.*` live queries + golden fixtures. Perf numbers trace to [docs/load-baseline.md](load-baseline.md) (2026-04-22 warm-UC run against the deployed app).
 
 | Number | Where it comes from |
 |---|---|
@@ -197,7 +197,7 @@ All share-level numbers trace to `docs/data-sources-gap-analysis.md §1` (Apr 20
 | **6 states** | IL 1.86M · CA 0.90M · FL 0.76M · TX 0.75M · WA 0.74M · CO 0.16M |
 | **4.75%** | Avg IL 1st-position rate — the highest in the share, anchors the Chicago story |
 | **565K** | 2023–2026 cohort at 6.0–6.7% (active in-the-money refi pool) |
-| **1.22M** | 2020–2022 cohort at sub-3% (locked-in; retention + cash-out pool) |
+| **669,320** | Sub-3% lock-in cohort (2020–2022 originations under 3%), materialized as `mip.gold.lockin_cohort`; answer to Genie sample question 5. This is the slice of the 2020–2022 origination window that won't rate-and-term refi (see gap-analysis §1 for the full origination-window breakdown). |
 | **263K** | Servicer-transferred loans (recapture universe) |
 | **833K** | Corporate-owned properties (investor segment input) |
 | **1.80M** | Absentee mailings, mailing-state ≠ situs-state (investor signal) |
@@ -210,6 +210,7 @@ All share-level numbers trace to `docs/data-sources-gap-analysis.md §1` (Apr 20
 | **4 UC SQL UDFs** | `fn_rate_spread`, `fn_in_the_money`, `fn_lead_score`, `fn_next_best_offer` |
 | **3 metric views** | `lead_generation_metric_view`, `segment_performance_metric_view`, `borrower_opportunity_metric_view` |
 | **10 Genie sample questions** | `genie/sample_questions.md` — drives space suggestions + safe-corpus fallback |
+| **5/5 p95 under threshold** | `/api/health` 130 ms · `/api/portfolio/preview` 110 ms · `/api/segments` 190 ms · `/api/leads` 1,300 ms · `/api/borrowers/{id}` 1,200 ms. Aggregate 7.93 req/s, 0 failures on 714 requests. From [docs/load-baseline.md](load-baseline.md). |
 
 ---
 

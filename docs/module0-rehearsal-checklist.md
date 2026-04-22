@@ -23,8 +23,12 @@ against `mip.gold.borrower_360` immediately after.
 ## 2. Probe app health — expect full green
 
 ```bash
-curl -s https://<databricks-app-host>/api/health | jq
+curl -s https://mip-app-2543889327043640.aws.databricksapps.com/api/health | jq
 ```
+
+(The deployed App authenticates via workspace-identity Bearer — no PAT
+needed in the runtime. If you're probing from a workstation, the `curl`
+above just hits the public Databricks App URL.)
 
 Expect:
 - `"status": "ok"`
@@ -33,7 +37,15 @@ Expect:
 - `"circuit_breakers": { "warehouse": "closed", "lakebase": "closed", "genie": "closed" }`
 
 Any `down` dependency or non-`closed` breaker means do not go on stage yet.
-The probe itself runs in under 250 ms when everything is warm.
+The probe is fronted by a stale-while-revalidate cache (2 s soft TTL,
+10 s hard TTL, background refresh on a shared ThreadPoolExecutor). A
+cold first request may take ~1 s while it spins up the dependency probes;
+every subsequent call in the next 2 s returns instantly from the cache
+while a background refresh runs off the request thread. Warm p95 is
+**130 ms** against the deployed app (see [docs/load-baseline.md](load-baseline.md) —
+the full Module 0 perf arc dropped `/api/health` p95 from 1,100 ms to
+130 ms, -93 % from baseline). If the probe is returning >500 ms on a
+second call, something's off — investigate before going on stage.
 
 ## 3. Cold-start probe the Genie space
 
@@ -66,9 +78,15 @@ compact density**. Expect:
 
 - KPI row animates in; hero renders without a `DegradedBanner` strip.
 - Right-rail Console footer shows *Warehouse up · Genie up* with a probe
-  latency under 500 ms.
+  latency near **130 ms** (warm path through the SWR cache — see
+  [docs/load-baseline.md](load-baseline.md) for the full endpoint p95 table).
 - Floating Genie FAB is visible bottom-right.
 - Map choropleth shades all six real states (IL, CA, FL, TX, WA, CO).
+- Opening a borrower dossier (e.g. `/borrower-360/B-48291`) returns in
+  ~1.2 s — that's the `mip.gold.borrower_dossier` CTAS (pre-joined
+  borrower_360 × top-20 evidence events) replacing the old two-query
+  fan-out. If you're seeing 3-second-plus dossier loads, the CTAS may
+  not have refreshed; re-run `databricks bundle run mip_refresh_scores -t dev`.
 
 If the DegradedBanner is showing, something upstream failed the `/api/health`
 probe — step back to (2) and do not start the pitch.
@@ -82,6 +100,8 @@ in `backend/services/genie_answers.py`:
 - "How many borrowers across the 6-state footprint are currently in-the-money?"
 - "Show the top 10 cash-out candidates in Florida by estimated equity."
 - "How big is the 2020–2022 sub-3% lock-in cohort across the 6-state footprint?"
+  — expect **669,320**, materialized as `mip.gold.lockin_cohort` (new this
+  slice, independent raw-share reference Δ=0).
 
 Ask one verbatim, confirm you get a structured answer (metric, table, follow-ups,
 trusted-asset chips). If the answer returns with `source: "fallback"`, that's

@@ -2,10 +2,15 @@
 
 **Who uses this:** the operator, the backup presenter, and the
 on-call engineer during a live session or after a production deploy.
-**Companion doc:** [`docs/module0-rehearsal-checklist.md`](module0-rehearsal-checklist.md)
-is the proactive pre-session pass. This runbook is the reactive
-incident-response + deploy guide. Run the checklist **before** every
-session; reach for this file when something goes sideways.
+**Companion docs:**
+- [`docs/module0-rehearsal-checklist.md`](module0-rehearsal-checklist.md)
+  is the proactive pre-session pass. This runbook is the reactive
+  incident-response + deploy guide. Run the checklist **before** every
+  session; reach for this file when something goes sideways.
+- [`docs/dashboards.md`](dashboards.md) — dashboard cold-start &
+  pending-state behaviour. Read this before explaining to a partner
+  why a `delta_vs_prior_*` column is blank or an approval-rate cell is
+  `0` on a first-day deploy.
 
 The Module 0 app runs on live Unity Catalog + Lakebase — there is no
 mock fallback in the deployed app. Everything below assumes the
@@ -198,8 +203,10 @@ databricks bundle run mip_refresh_silver -t dev
 # 4. Lakebase schema migration + seed campaigns
 databricks bundle run mip_lakebase_migrate -t dev
 
-# 5. Gold pipeline — computes borrower_360, lead_scores, evidence_events, lead_population
-databricks bundle run mip_gold_pipeline -t dev
+# 5. Gold refresh — CTAS chain computes borrower_360, lead_scores,
+#    evidence_events, lead_population, segment_population, lockin_cohort,
+#    borrower_dossier. Replaces the retired `mip_gold_pipeline` DLT.
+databricks bundle run mip_refresh_scores -t dev
 
 # 6. Verify: warehouse running, app live, all deps up
 curl -s "$MIP_APP_URL/api/health" | jq
@@ -212,6 +219,14 @@ curl -s "$MIP_APP_URL/api/health" | jq
 After step 3 the silver tables are queryable but the app still returns
 503 because the gold layer isn't populated. Step 5 is what makes the
 UI render real borrowers.
+
+On a brand-new deploy, the dashboards render but a handful of widgets
+will show `0` / `NULL` / "pending" by design — specifically the
+`delta_vs_prior_*` WoW measures (need ≥ 2 daily snapshots separated by
+≥ 7 days) and the approval / outreach / actioned counters (populate
+as operators use the app). This is documented in
+[`docs/dashboards.md`](dashboards.md) — read it before explaining the
+blanks to a reviewer.
 
 ---
 
@@ -247,7 +262,7 @@ databricks api post /api/2.0/sql/statements \
 
 # If that timestamp is > 24h old, re-run silver + gold in sequence:
 databricks bundle run mip_refresh_silver -t dev
-databricks bundle run mip_gold_pipeline -t dev
+databricks bundle run mip_refresh_scores -t dev
 ```
 
 For a session window where live refresh is impractical, **do not**
@@ -304,3 +319,88 @@ for the full workflow map. Common red jobs:
 *Owner: qa-test-engineer + principal-architect. Review cadence: after
 every incident (post-mortem updates this doc), and before every release
 rehearsal.*
+
+---
+
+## 9. Credential-kill drill
+
+**When to run:** before every release rehearsal, and after any change
+to `backend/services/resilience.py`, `backend/api/health.py`, the
+warehouse / Lakebase / Genie client modules, or
+`frontend/src/components/mortgage/DegradedBanner.tsx`.
+
+**What it proves:** the Module 0 app surfaces a visible degraded state
+when any of its four upstream dependencies fails, and never silently
+returns fake data.
+
+**How to run (summary):**
+
+```bash
+# Warehouse: operator stops the SQL warehouse; script observes degraded
+./tools/kill_drill/run_drill.sh --target warehouse
+
+# Lakebase: operator stops the database instance (or rotates password)
+./tools/kill_drill/run_drill.sh --target lakebase
+
+# Genie: simulated -- script forks a private backend with a bogus space id
+./tools/kill_drill/run_drill.sh --target genie
+
+# Token: simulated -- script unsets DATABRICKS_TOKEN in a subshell
+./tools/kill_drill/run_drill.sh --target token
+
+# While any drill is in flight, verify the UI in another terminal:
+./tools/kill_drill/verify_degraded_ui.py
+```
+
+Each drill writes an evidence log to `tools/kill_drill/evidence/`. The
+full procedure, expected signals, and sign-off template live in
+[`docs/credential-kill-drill.md`](credential-kill-drill.md). Attach the
+four evidence logs (one per target) to the governance record for every
+release PR.
+
+A drill FAIL means the resilience posture is broken and the app is
+serving fake data during an outage — treat it as a release blocker
+and route it to governance-security-reviewer + principal-architect.
+
+---
+
+## 10. Accuracy evidence (Slice 13)
+
+**Where to look** when a customer or a partner asks "prove that the
+number on the screen is right":
+
+| Claim | Evidence |
+|---|---|
+| Segment counts match the raw share | [`tests/integration/test_segment_count_parity.py`](../tests/integration/test_segment_count_parity.py), [`docs/validation/segment-count-parity.md`](validation/segment-count-parity.md) |
+| Every borrower page arithmetic reproduces from raw | [`tools/e2e_borrower_audit.py`](../tools/e2e_borrower_audit.py), [`docs/validation/borrower-e2e-audit.md`](validation/borrower-e2e-audit.md) |
+| SQL ↔ Python scoring parity | [`tests/integration/test_sql_python_parity.py`](../tests/integration/test_sql_python_parity.py) (nightly) |
+| No PII on `/api/*` | [`tests/integration/test_api_pii_boundary.py`](../tests/integration/test_api_pii_boundary.py) |
+| Genie grounded + guarded | [`tests/integration/test_genie_regression.py`](../tests/integration/test_genie_regression.py) (nightly), [`genie/regression_suite.md`](../genie/regression_suite.md) |
+| Dashboards only hit trusted assets | [`tests/unit/test_lakeview_dashboards.py`](../tests/unit/test_lakeview_dashboards.py) |
+| Dependency outage ⇒ visible degraded UI | [`tools/kill_drill/run_drill.sh`](../tools/kill_drill/run_drill.sh), drill evidence logs in `tools/kill_drill/evidence/` |
+| Supply-chain + secret hygiene | `.github/workflows/ci.yml` §`security-scan` + `.gitleaks.toml` + `.bandit` |
+
+The full report is [`docs/slice13-accuracy-report.md`](slice13-accuracy-report.md).
+
+**After any SQL-plane change** (silver, gold, UDF, metric view) the
+evidence above is only as fresh as the last warehouse refresh. Run:
+
+```bash
+databricks bundle run mip_refresh_silver        -t dev
+databricks bundle run mip_refresh_scores        -t dev
+databricks bundle run mip_sync_lifecycle_state  -t dev
+```
+
+Then re-run the gated integration tests with workspace creds exported:
+
+```bash
+set -a && source .env.local && set +a
+pytest -q tests/integration/test_segment_count_parity.py \
+          tests/integration/test_borrower_id_uniqueness.py \
+          tests/integration/test_silver_coercion.py \
+          tests/integration/test_silver_zip_5_digit.py \
+          tests/integration/test_sql_python_parity.py
+```
+
+If any fail, route to data-modeler + principal-architect before release.
+

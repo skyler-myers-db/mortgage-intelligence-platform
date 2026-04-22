@@ -87,6 +87,14 @@ base AS (
     lc.first_pos_rate,                  -- fractional
     lc.first_pos_loan_type,
     lc.first_pos_lender_current,
+    -- Normalised lender raw_key for the JOIN to mip.ref.lender_dictionary.
+    -- Both sides are normalised with UPPER(TRIM(...)) so the match is case +
+    -- trailing-whitespace insensitive. See sql/ref/lender_dictionary_seed.sql
+    -- for the canonical raw_key set (11 seeded entries incl. 'SUMMIT MTG').
+    CASE
+      WHEN lc.first_pos_lender_current IS NULL THEN NULL
+      ELSE UPPER(TRIM(lc.first_pos_lender_current))
+    END                                 AS lender_raw_key,
     lc.second_pos_amount,
     COALESCE(pob.related_property_count, 1) AS related_property_count
   FROM mip.silver.lien_current AS lc
@@ -96,6 +104,28 @@ base AS (
     ON pob.owner_link_id = pm.owner_link_id
   WHERE lc.situs_state IN ('IL','CA','FL','TX','WA','CO')
     AND lc.clip IS NOT NULL
+),
+-- Slice13-accuracy: promote current-customer detection from an inline
+-- UPPER(...) LIKE '%SUMMIT%' to a governed JOIN against
+-- mip.ref.lender_dictionary. The dictionary carries `is_competitor` per
+-- lender (FALSE iff the row IS the tenant, e.g. SUMMIT MTG for Summit
+-- Mortgage); `is_current_customer` is its inverse. Running as a CTE so
+-- the JOIN happens once and the projected boolean flows through
+-- enriched / scored / with_segments like the old literal.
+--
+-- Behaviour vs prior inline LIKE:
+--   - Known tenant lender (raw_key = 'SUMMIT MTG'): is_current_customer = TRUE.
+--   - Known third-party lender (is_competitor = TRUE in ref): FALSE.
+--   - Lender string not in ref.lender_dictionary: COALESCE -> FALSE, matching
+--     the fallback posture (no known customer relationship). Third-party
+--     lenders not yet seeded still land in `is_competitor_lien` because of
+--     the `lender IS NOT NULL AND NOT is_current_customer` fallback below.
+--   - Lender string NULL: FALSE for both flags.
+lender_ref AS (
+  SELECT
+    UPPER(TRIM(raw_key)) AS raw_key,
+    is_competitor
+  FROM mip.ref.lender_dictionary
 ),
 enriched AS (
   SELECT
@@ -130,19 +160,28 @@ enriched AS (
     (b.related_property_count >= 2
      OR COALESCE(b.owner_is_corporate, FALSE)
      OR COALESCE(b.is_absentee, FALSE)) AS is_investor,
-    -- Current-customer detection: case-insensitive match on "summit" in the
-    -- current lender name. Production swaps to a ref.lender_dictionary join.
+    -- Current-customer detection: governed JOIN against
+    -- mip.ref.lender_dictionary (slice13-accuracy). Previously an inline
+    -- UPPER(...) LIKE '%SUMMIT%'. `is_current_customer` = NOT is_competitor
+    -- when the lender is known; FALSE otherwise.
+    COALESCE(NOT lr.is_competitor, FALSE) AS is_current_customer,
+    -- Competitor lien: servicer known AND is NOT our tenant. If the raw
+    -- lender string lands in the ref dictionary with is_competitor = TRUE,
+    -- that's authoritative. If the raw lender string is missing from the
+    -- dictionary (unseeded third-party), treat the presence of any non-null
+    -- lender string as evidence of a competitor lien -- matches the prior
+    -- "servicer known and != Summit" semantic so unknown third-party lenders
+    -- keep lighting up the retention + competitor-lien paths.
     (b.first_pos_lender_current IS NOT NULL
-     AND UPPER(b.first_pos_lender_current) LIKE '%SUMMIT%') AS is_current_customer,
-    -- Competitor lien: servicer known and != Summit.
-    (b.first_pos_lender_current IS NOT NULL
-     AND NOT (UPPER(b.first_pos_lender_current) LIKE '%SUMMIT%')) AS is_competitor_lien,
+     AND NOT COALESCE(NOT lr.is_competitor, FALSE)) AS is_competitor_lien,
     (COALESCE(b.owner_occupancy_code, '') = 'O') AS is_owner_occupied,
     -- BLOCKED columns -- hardcoded FALSE until Cotality Permits + MLS land.
     CAST(FALSE AS BOOLEAN) AS has_permit,
     CAST(FALSE AS BOOLEAN) AS listed_for_sale
   FROM base AS b
   CROSS JOIN market AS m
+  LEFT JOIN lender_ref AS lr
+    ON lr.raw_key = b.lender_raw_key
 ),
 -- Scored rows: bring the default thresholds inline and call the frozen
 -- UDFs for ITM + next-best-offer.
@@ -272,7 +311,18 @@ subscores AS (
 )
 SELECT
   w.clip,
-  CONCAT('B-', LPAD(CAST((ABS(XXHASH64(w.clip)) % 99999) + 10000 AS STRING), 5, '0')) AS borrower_id,
+  -- Borrower ID derivation (slice13 Wave-2 fix):
+  --   Prior formula `LPAD(ABS(XXHASH64(clip)) % 99999 + 10000, 5, '0')` collapsed
+  --   5.16M CLIPs into ~90K synthetic IDs (avg 57 collisions per id, worst 688),
+  --   so `SELECT ... WHERE borrower_id = :id LIMIT 1` returned a non-deterministic
+  --   CLIP. We now widen to base36(ABS(XXHASH64(clip))) padded to 13 chars,
+  --   giving 36^13 = ~1.7e20 slots for 5.16M rows -- collision probability negligible.
+  --   CONV(..., 10, 36) is Spark's base converter; LPAD stabilises the string length.
+  --   UPPER() normalises the base-36 output to 0-9A-Z so the
+  --   `B-[0-9A-Z]{13}` contract the parity test pins is deterministic
+  --   across engines (raised by Copilot 2026-04-22 — some SQL engines
+  --   return lowercase base-36 digits).
+  CONCAT('B-', LPAD(UPPER(CONV(CAST(ABS(XXHASH64(w.clip)) AS STRING), 10, 36)), 13, '0')) AS borrower_id,
   CONCAT('Owner ', SUBSTR(w.owner_name_hash, 1, 8))                                   AS display_name,
   w.city,
   w.state,
@@ -331,8 +381,14 @@ SELECT
   COALESCE(tl.evidence_ids, ARRAY())                                                 AS evidence_ids,
   'pending'                                                                          AS approval_status,
   w.owner_link_id,
+  -- Truncate ZIP to 5 digits to match the api-boundary redaction
+  -- (`pii_redaction.synthesize_subject_property` uses `zip[:5]`). As of
+  -- slice13 Wave-2, silver.property_master + silver.lien_current emit a
+  -- 5-digit situs_zip_code, so this is now a COALESCE (not a SUBSTR)
+  -- guard. Tracked by docs/validation/borrower-e2e-audit.md +
+  -- docs/validation/data-corrections.md §REFRESH-AFTER-WAVE-2.
   CONCAT('Synthetic property · ', COALESCE(w.city, 'Unknown'), ', ',
-         w.state, ' ', COALESCE(w.zip, '00000'))                                     AS subject_property,
+         w.state, ' ', COALESCE(w.zip, '00000'))                                      AS subject_property,
   CAST(COALESCE(w.avm_value, 0) AS BIGINT)                                           AS avm_value,
   CAST(COALESCE(w.total_open_lien_balance, 0) AS BIGINT)                             AS current_lien_balance,
   -- current_rate in PERCENT form (5.75), matches Pydantic + mock_data.

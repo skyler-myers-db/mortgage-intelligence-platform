@@ -1,0 +1,62 @@
+# Bandit configuration for the Mortgage Intelligence Platform.
+#
+# Paths are already excluded at the CLI level in
+# `.github/workflows/ci.yml` (`-x tests`); this file adds the test of
+# record for the noisy / false-positive-prone checks that we have
+# deliberate reasons to silence.
+#
+# Skipped checks:
+#   B101  assert_used    -- test files use assert heavily. Redundant
+#                          with the CLI `-x tests` exclusion but kept
+#                          here so a contributor running `bandit` at
+#                          repo root without flags also gets clean
+#                          output for test-shape asserts.
+#   B104  hardcoded_bind_all_interfaces -- scripts/smoke_live.sh and
+#                          tools/kill_drill/*.sh bind 127.0.0.1 only;
+#                          the Python probes that hit them use
+#                          urllib.request against localhost which
+#                          bandit cannot statically know is local.
+#   B404  import_subprocess -- tools/kill_drill/run_drill.sh is a bash
+#                          script; Python tools in tools/ use
+#                          subprocess to shell out intentionally and
+#                          the callees are all static literals
+#                          (warehouse_id, etc., not user input).
+#   B324  hashlib_weak_hash -- SHA1/MD5 are used in four documented
+#                          places (`backend/services/databricks_sql.py`,
+#                          `backend/services/genie_client.py`,
+#                          `backend/services/lakebase.py`,
+#                          `tools/databricks/provision_genie_space.py`)
+#                          purely as log fingerprints / cache keys /
+#                          stable id derivation from static inputs.
+#                          They are NOT used for authentication,
+#                          signing, password storage, HMAC, or any
+#                          cryptographic boundary. Each call site has
+#                          a `# noqa: S324 -- not a secret` comment
+#                          explaining the justification in-line. If a
+#                          new caller uses hashlib for security, the
+#                          reviewer must (a) switch to sha256 or (b)
+#                          update this justification. Do not expand
+#                          the skip silently.
+#
+# Do NOT add B105 (hardcoded_password_string) or B106
+# (hardcoded_password_funcarg) to this skip list -- those are exactly
+# the checks we want running against this codebase.
+
+skips:
+  - B101
+  - B104
+  - B324
+  - B404
+
+# Paths excluded from the recursive scan. Keep in sync with the `-x`
+# flag in `.github/workflows/ci.yml::security-scan`.
+exclude_dirs:
+  - tests
+  - .venv
+  - node_modules
+  - .git
+  - .playwright-mcp
+  - .pytest_cache
+  - .ruff_cache
+  - design_files
+  - frontend/node_modules

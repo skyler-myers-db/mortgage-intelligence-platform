@@ -74,7 +74,7 @@ Slices are ordered so each is (a) PR-worthy on its own, (b) reversible in one re
   - `sql/transformations/gold_evidence_events.sql` (replace placeholder — timeline view per CLIP from silver_mortgage_events + silver_owner_transfer_events + foreclosure_stage)
   - `sql/transformations/gold_lead_scores.sql` (replace placeholder — computes 5 component sub-scores per gap-analysis §6, then invokes `mip.gold.fn_lead_score`)
   - `sql/transformations/gold_lead_population.sql` (replace placeholder — top-N ranked cut for the demo surface; default N=500 per metro)
-  - `pipelines/lakeflow/mip_gold_pipeline.py` (replace placeholder — orchestrate the 4 gold SQLs, depends_on silver)
+  - ~~`pipelines/lakeflow/mip_gold_pipeline.py`~~ (RETIRED slice13-accuracy: the DLT was a dual-write mirror of the CTAS chain; authoritative gold materialisation is now the `mip_refresh_scores` job in `databricks.yml`.)
   - `sql/metric_views/lead_generation_metric_view.sql`, `segment_performance_metric_view.sql`, `borrower_opportunity_metric_view.sql` (replace placeholders)
   - `tests/integration/test_gold_parity.py` (new — **contract test**: run `fn_lead_score` against `tests/fixtures/lead_score_golden.json` on the warehouse, assert exact integer equality with Python `scoring.lead_score`; repeat for all four primitives)
 - **Owner:** data-modeler (SQL), qa-test-engineer (parity test)

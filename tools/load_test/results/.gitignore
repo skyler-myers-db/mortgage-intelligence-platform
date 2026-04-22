@@ -1,0 +1,5 @@
+# Locust writes timestamped CSV/HTML output into this directory every
+# run. Keep the dir tracked (so `run.sh` can mkdir into a known path)
+# but don't commit the artefacts themselves.
+*
+!.gitignore

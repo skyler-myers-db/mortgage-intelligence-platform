@@ -4,6 +4,7 @@ Covers:
 * CircuitBreaker CLOSED/OPEN/HALF_OPEN transitions
 * with_retry exponential-backoff behavior
 * TTLCache get/set/invalidate + expiry
+* StaleWhileRevalidateCache soft/hard TTL + background refresh
 * Resilient composition breaker + retry
 * DependencyDownError typing
 
@@ -12,12 +13,16 @@ the suite runs in milliseconds with no flakiness.
 """
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event, Lock
+
 import pytest
 
 from backend.services.resilience import (
     CircuitBreaker,
     DependencyDownError,
     Resilient,
+    StaleWhileRevalidateCache,
     TTLCache,
     with_retry,
 )
@@ -280,3 +285,219 @@ def test_resilient_wraps_underlying_error_as_dependency_down() -> None:
     # Underlying exception is preserved for debugging.
     assert isinstance(info.value.last_error, ConnectionBoom)
     assert "socket-reset" in info.value.reason
+
+
+# ---------------------------------------------------------------------------
+# StaleWhileRevalidateCache
+#
+# The SWR cache wraps /api/health's three dependency probes and is the
+# tip of the spear for the slice-13 p95 latency work. These tests use a
+# fake clock plus a single-worker executor so refresh scheduling is
+# deterministic (no time.sleep, no concurrency racing on real threads).
+# ---------------------------------------------------------------------------
+
+
+class _InlineExecutor:
+    """ThreadPoolExecutor-shaped shim that runs submitted work in the
+    caller's thread. Lets us assert refresh behaviour without juggling
+    real thread-scheduling timing. Used only where the test explicitly
+    does NOT care whether the refresh ran async."""
+
+    def submit(self, fn, *args, **kwargs):  # type: ignore[no-untyped-def]
+        fn(*args, **kwargs)
+        # Return a dummy future-shaped object -- SWR code only calls
+        # .submit() and never inspects the return value.
+        class _Done:
+            def result(self) -> None:
+                return None
+
+        return _Done()
+
+
+def test_swr_cache_miss_runs_sync_probe_and_stores() -> None:
+    clock = _FakeClock()
+    cache = StaleWhileRevalidateCache(
+        soft_ttl_s=2.0, hard_ttl_s=10.0, executor=_InlineExecutor(), now=clock
+    )
+    calls = {"n": 0}
+
+    def probe() -> str:
+        calls["n"] += 1
+        return "fresh"
+
+    assert cache.get_or_refresh("warehouse", probe) == "fresh"
+    assert calls["n"] == 1
+    # Second call well under soft TTL -- no probe.
+    clock.advance(0.5)
+    assert cache.get_or_refresh("warehouse", probe) == "fresh"
+    assert calls["n"] == 1
+
+
+def test_swr_cache_under_soft_ttl_does_not_refresh() -> None:
+    clock = _FakeClock()
+    cache = StaleWhileRevalidateCache(
+        soft_ttl_s=2.0, hard_ttl_s=10.0, executor=_InlineExecutor(), now=clock
+    )
+    calls = {"n": 0}
+
+    def probe() -> str:
+        calls["n"] += 1
+        return "v"
+
+    cache.get_or_refresh("warehouse", probe)
+    # Three hits inside the soft window should share one probe.
+    clock.advance(0.5)
+    cache.get_or_refresh("warehouse", probe)
+    clock.advance(0.5)
+    cache.get_or_refresh("warehouse", probe)
+    clock.advance(0.5)
+    cache.get_or_refresh("warehouse", probe)
+    assert calls["n"] == 1
+
+
+def test_swr_cache_between_soft_and_hard_kicks_background_refresh() -> None:
+    clock = _FakeClock()
+    cache = StaleWhileRevalidateCache(
+        soft_ttl_s=2.0, hard_ttl_s=10.0, executor=_InlineExecutor(), now=clock
+    )
+    values = iter(["v1", "v2"])
+
+    def probe() -> str:
+        return next(values)
+
+    # First call stores "v1".
+    assert cache.get_or_refresh("warehouse", probe) == "v1"
+    # Advance past soft TTL but before hard TTL. Next call must return
+    # the cached v1 AND schedule a refresh (inline executor runs it
+    # synchronously, so "v2" is already stored by the time we return).
+    clock.advance(3.0)
+    assert cache.get_or_refresh("warehouse", probe) == "v1"
+    # Subsequent call inside the new soft window sees the refreshed value.
+    assert cache.get_or_refresh("warehouse", probe) == "v2"
+
+
+def test_swr_cache_above_hard_ttl_forces_sync_refresh() -> None:
+    clock = _FakeClock()
+    cache = StaleWhileRevalidateCache(
+        soft_ttl_s=2.0, hard_ttl_s=10.0, executor=_InlineExecutor(), now=clock
+    )
+    values = iter(["v1", "v2"])
+
+    def probe() -> str:
+        return next(values)
+
+    assert cache.get_or_refresh("warehouse", probe) == "v1"
+    # Past hard TTL -- cached entry is evicted and the caller must get
+    # the freshly probed value on THIS call (not a stale one).
+    clock.advance(10.1)
+    assert cache.get_or_refresh("warehouse", probe) == "v2"
+
+
+def test_swr_cache_concurrent_stale_callers_only_kick_one_refresh() -> None:
+    """Between soft and hard TTL, N concurrent callers must only
+    enqueue ONE background refresh -- not N. The refresh_in_flight
+    flag is the mechanism; this test validates it under real threading
+    with a blocking probe."""
+    clock = _FakeClock()
+    release = Event()
+    probe_calls = {"n": 0}
+    probe_lock = Lock()
+
+    def slow_probe() -> str:
+        with probe_lock:
+            probe_calls["n"] += 1
+        # Block until the test thread releases us; this keeps the
+        # refresh "in flight" long enough for the other callers to race.
+        release.wait(timeout=2.0)
+        return "fresh"
+
+    pool = ThreadPoolExecutor(max_workers=4)
+    try:
+        cache = StaleWhileRevalidateCache(
+            soft_ttl_s=2.0, hard_ttl_s=10.0, executor=pool, now=clock
+        )
+        # Seed with a cached value; use a separate fast probe so seeding
+        # doesn't block and doesn't count toward the assertion.
+        cache.get_or_refresh("warehouse", lambda: "seed")
+        # Advance into the stale-but-fresh window.
+        clock.advance(3.0)
+
+        # Fan out several concurrent callers against the SLOW probe.
+        caller_pool = ThreadPoolExecutor(max_workers=8)
+        try:
+            futs = [
+                caller_pool.submit(cache.get_or_refresh, "warehouse", slow_probe)
+                for _ in range(8)
+            ]
+            # All callers must see the cached seed value immediately,
+            # never block on the slow probe themselves.
+            for f in futs:
+                assert f.result(timeout=1.0) == "seed"
+        finally:
+            caller_pool.shutdown(wait=True)
+
+        # Exactly one refresh is in flight. Release it and let the
+        # worker finish before we assert.
+        release.set()
+    finally:
+        pool.shutdown(wait=True)
+
+    assert probe_calls["n"] == 1
+
+
+def test_swr_cache_clear_resets_state() -> None:
+    clock = _FakeClock()
+    cache = StaleWhileRevalidateCache(
+        soft_ttl_s=2.0, hard_ttl_s=10.0, executor=_InlineExecutor(), now=clock
+    )
+    calls = {"n": 0}
+
+    def probe() -> int:
+        calls["n"] += 1
+        return calls["n"]
+
+    assert cache.get_or_refresh("warehouse", probe) == 1
+    cache.clear()
+    # After clear(), the next call is a sync miss -- another probe runs.
+    assert cache.get_or_refresh("warehouse", probe) == 2
+    assert calls["n"] == 2
+
+
+def test_swr_cache_background_refresh_failure_keeps_last_good_value() -> None:
+    """A probe that raises during a background refresh must not wedge
+    the cache. The caller still gets the last-good cached value; the
+    refresh_in_flight flag is cleared so the NEXT caller can retry."""
+    clock = _FakeClock()
+    cache = StaleWhileRevalidateCache(
+        soft_ttl_s=2.0, hard_ttl_s=10.0, executor=_InlineExecutor(), now=clock
+    )
+    calls = {"ok": 0, "boom": 0}
+
+    def ok_probe() -> str:
+        calls["ok"] += 1
+        return "v1"
+
+    def boom_probe() -> str:
+        calls["boom"] += 1
+        raise RuntimeError("transient")
+
+    # Seed with a good value.
+    assert cache.get_or_refresh("warehouse", ok_probe) == "v1"
+    # Advance into the stale-but-fresh window; kick a refresh that blows
+    # up. Caller must still receive the seeded value.
+    clock.advance(3.0)
+    assert cache.get_or_refresh("warehouse", boom_probe) == "v1"
+    assert calls["boom"] == 1
+    # Next stale-but-fresh call should kick ANOTHER refresh (flag was
+    # cleared even though the last attempt errored).
+    assert cache.get_or_refresh("warehouse", boom_probe) == "v1"
+    assert calls["boom"] == 2
+
+
+def test_swr_cache_rejects_bad_ttls() -> None:
+    with pytest.raises(ValueError, match="soft_ttl_s"):
+        StaleWhileRevalidateCache(soft_ttl_s=0.0, hard_ttl_s=10.0)
+    with pytest.raises(ValueError, match="hard_ttl_s"):
+        StaleWhileRevalidateCache(soft_ttl_s=5.0, hard_ttl_s=5.0)
+    with pytest.raises(ValueError, match="hard_ttl_s"):
+        StaleWhileRevalidateCache(soft_ttl_s=5.0, hard_ttl_s=1.0)

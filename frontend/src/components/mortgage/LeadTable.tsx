@@ -6,7 +6,8 @@ import { Chip, Button, EvidenceChip } from '../Primitives';
 import { ScoreBadge } from './ScoreBadge';
 import { ConfidenceMeter } from './ConfidenceMeter';
 import { useApp } from '../AppContext';
-import { mockSegments, DRAWER_SOURCES } from '../../mocks/fixtureData';
+import { DRAWER_SOURCES } from '../../lib/drawerSources';
+import { segmentColor, segmentName } from '../../lib/segmentMetadata';
 
 /**
  * LeadTable — prototype `.surface` + `.tbl` BEM. Sticky thead, hover, row
@@ -14,14 +15,6 @@ import { mockSegments, DRAWER_SOURCES } from '../../mocks/fixtureData';
  * AppContext; a chip on the rightmost column shows Pending / Approved /
  * Rejected.
  */
-
-function segmentColor(code: string): string {
-  return mockSegments.find((s) => s.code === code)?.color ?? 'var(--accent)';
-}
-
-function segmentName(code: string): string {
-  return mockSegments.find((s) => s.code === code)?.name ?? code;
-}
 
 function RowPreview({ lead }: { lead: LeadSummary }) {
   return (

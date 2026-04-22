@@ -43,3 +43,8 @@ genie/space_id.txt
 .playwright-mcp/
 /*.png
 frontend/tsconfig.tsbuildinfo
+
+# Credential-kill-drill evidence logs -- one file per drill run, may embed
+# partial dependency state + stack traces. Untracked so operator-laptop
+# and CI evidence stays local; attach to release PRs manually.
+tools/kill_drill/evidence/

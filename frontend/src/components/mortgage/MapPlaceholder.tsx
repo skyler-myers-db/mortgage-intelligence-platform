@@ -460,6 +460,8 @@ export function MapPlaceholder({ height = 420, segmentFilter }: MapPlaceholderPr
             d={loc.path}
             className={classes}
             style={dim ? { opacity: 0.3 } : undefined}
+            role="button"
+            tabIndex={0}
             aria-label={loc.name}
             onMouseEnter={(e) =>
               facts &&
@@ -552,6 +554,8 @@ export function MapPlaceholder({ height = 420, segmentFilter }: MapPlaceholderPr
               key={f.id}
               d={f.paths}
               className={classes}
+              role="button"
+              tabIndex={0}
               aria-label={`${f.name} County`}
               onMouseEnter={(e) =>
                 setHover({

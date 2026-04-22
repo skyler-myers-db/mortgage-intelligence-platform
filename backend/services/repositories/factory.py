@@ -66,7 +66,11 @@ def get_portfolio_repository() -> PortfolioRepository:
         if _PORTFOLIO_REPO is None:
             _PORTFOLIO_REPO = DatabricksPortfolioRepository(
                 get_sql_client(),
-                cache_ttl_s=settings.mip_cache_ttl_s,
+                # Portfolio preview is a 5.16M-row aggregate. Use the
+                # longer Slice-13 preview TTL (default 120s) instead of
+                # the stock 30s so burst-traffic cache misses don't
+                # dominate /api/portfolio/preview p95.
+                cache_ttl_s=settings.mip_portfolio_preview_ttl_s,
             )
         return _PORTFOLIO_REPO
 

@@ -1,12 +1,18 @@
 import logging
+import re
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request as StarletteRequest
+from starlette.responses import Response as StarletteResponse
+from starlette.types import ASGIApp
 
 from backend.api import (
     admin,
@@ -22,8 +28,21 @@ from backend.api import (
     segments,
 )
 from backend.config.settings import _running_under_pytest, settings
+from backend.services.observability import (
+    configure_logging,
+    emit,
+    get_correlation_id,
+    reset_correlation_id,
+    set_correlation_id,
+)
 
 log = logging.getLogger("mip-runtime")
+
+# Slice-13: install structured logging on import so every module that
+# logs during startup (warehouse warm, Lakebase warm) produces JSON
+# lines. configure_logging() is idempotent so a second call during tests
+# is a safe no-op.
+configure_logging()
 
 
 def _warm_warehouse() -> None:
@@ -106,6 +125,77 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="Mortgage Intelligence Platform API", lifespan=_lifespan)
+
+
+# ---------------------------------------------------------------------------
+# Slice-13: Correlation-ID middleware
+# ---------------------------------------------------------------------------
+
+
+class CorrelationIdMiddleware(BaseHTTPMiddleware):
+    """Attach a correlation ID to every inbound request.
+
+    Reads ``X-Correlation-ID`` from the client (so a browser fetch or a
+    load-test harness can propagate its own trace), mints a fresh UUID
+    when the header is absent, binds the value to the ContextVar so
+    every downstream ``emit(...)`` call carries the same ID, and echoes
+    it back on the response. Emits one ``http_request`` log line per
+    request with method / path / status / duration_ms.
+    """
+
+    HEADER = "X-Correlation-ID"
+
+    # Client-supplied correlation ids get sanitised before we log or echo
+    # them. Without this the header would be echoed verbatim into logs
+    # and audit trails — a classic log-injection / header-poisoning vector
+    # (flagged by Copilot 2026-04-22). Policy:
+    #   * charset: [A-Za-z0-9._-] only (matches RFC 4122 UUIDs + common
+    #     trace ids without admitting control characters / whitespace)
+    #   * length: 1..128 so a burst of huge headers can't bloat log lines
+    #   * anything that fails either check is dropped silently and we
+    #     mint a fresh correlation id, keeping the middleware invariant
+    #     that every request has exactly one id.
+    _CID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
+
+    def __init__(self, app: ASGIApp) -> None:
+        super().__init__(app)
+
+    @classmethod
+    def _sanitize_correlation_id(cls, raw: str | None) -> str | None:
+        if raw is None:
+            return None
+        trimmed = raw.strip()
+        if cls._CID_PATTERN.match(trimmed):
+            return trimmed
+        return None
+
+    async def dispatch(  # type: ignore[override]
+        self, request: StarletteRequest, call_next: Any
+    ) -> StarletteResponse:
+        incoming = self._sanitize_correlation_id(request.headers.get(self.HEADER))
+        cid = incoming if incoming else get_correlation_id()
+        token = set_correlation_id(cid)
+        start = time.monotonic()
+        status_code = 500
+        try:
+            response = await call_next(request)
+            status_code = response.status_code
+            response.headers[self.HEADER] = cid
+            return response
+        finally:
+            duration_ms = round((time.monotonic() - start) * 1000.0, 2)
+            emit(
+                logging.getLogger("mip.http"),
+                "http_request",
+                method=request.method,
+                path=request.url.path,
+                status=status_code,
+                duration_ms=duration_ms,
+            )
+            reset_correlation_id(token)
+
+
+app.add_middleware(CorrelationIdMiddleware)
 
 
 # Slice-6: translate ``DependencyDownError`` (breaker open or all retries

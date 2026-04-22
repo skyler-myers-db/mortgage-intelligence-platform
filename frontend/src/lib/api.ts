@@ -5,37 +5,66 @@ import type {
   PortfolioPreview,
   SegmentSummary,
 } from '../types';
-import { mockBorrowers, mockPortfolio, mockSegments } from '../mocks/fixtureData';
 
-/** Default thresholds mirror backend OfferEngineConfig — used only in offline fallback. */
-const FALLBACK_THRESHOLDS: Record<string, number> = {
-  min_spread_bps: 75,
-  min_equity_pct: 15,
-  heloc_equity_min_pct: 35,
-  cashout_equity_min_pct: 25,
-  retention_min_spread_bps: 50,
-};
+/**
+ * API client — calls the FastAPI backend and surfaces errors honestly.
+ *
+ * Per CLAUDE.md: the app runs on real Unity Catalog data or it fails
+ * visibly. This module does NOT silently fall back to mock fixtures on
+ * error. Every failure throws a structured `ApiError` that callers
+ * render as an explicit empty/error state (e.g. "Couldn't load
+ * segments"). Transient 503s are handled by the built-in retry loop
+ * that mirrors the backend's Resilient wrapper cadence; the
+ * <DegradedBanner> polls /api/health in parallel and surfaces the
+ * "backend is warming up" messaging while retries are in flight.
+ *
+ * The only method that tolerates failure is `health()`: an unreachable
+ * /api/health returns `{ status: 'unreachable', mode: 'unknown',
+ * dependencies: {} }`. That's honest status, not synthetic data.
+ */
 
-function fallbackOfferRecommendation(borrower_id: string): OfferRecommendation {
-  const b = mockBorrowers.find((x) => x.borrower_id === borrower_id) ?? mockBorrowers[0];
-  const offer_code = (b.recommended_offer ?? 'nurture').toLowerCase().replace(/[^a-z]+/g, '_').replace(/^_+|_+$/g, '') || 'nurture';
-  return {
-    borrower_id: b.borrower_id,
-    offer_code,
-    offer_type: offer_code,
-    product_label: b.recommended_offer ?? 'Nurture',
-    confidence: b.confidence,
-    rationale: b.why_now ?? 'Fallback rationale — backend unavailable.',
-    evidence_ids: b.evidence_ids ?? [],
-    sources: [
-      'mip.gold.fn_next_best_offer',
-      'mip.gold.fn_rate_spread',
-      'mip.gold.fn_in_the_money',
-      'mip.gold.fn_lead_score',
-    ],
-    alternatives: [],
-    thresholds_applied: FALLBACK_THRESHOLDS,
-  };
+export interface HealthPayload {
+  status: string;
+  mode: string;
+  warehouse_id?: string | null;
+  app_env?: string;
+  dependencies?: Record<string, string>;
+  circuit_breakers?: Record<string, string>;
+}
+
+export interface ApproveResult {
+  approved: boolean;
+  approval_id?: string | null;
+  audit_event_id?: string | null;
+}
+
+export interface GenieResult {
+  answer: string;
+  source?: string;
+  trusted_assets?: string[];
+  metric_value?: string | null;
+  table_rows?: Record<string, unknown>[] | null;
+  follow_up_questions?: string[];
+}
+
+/** Structured error thrown by every api.* method on non-2xx or network failure. */
+export class ApiError extends Error {
+  readonly path: string;
+  readonly status: number | null;
+  readonly retryable: boolean;
+  readonly dependency: string | null;
+
+  constructor(
+    message: string,
+    opts: { path: string; status?: number | null; retryable?: boolean; dependency?: string | null } = { path: '' },
+  ) {
+    super(message);
+    this.name = 'ApiError';
+    this.path = opts.path;
+    this.status = opts.status ?? null;
+    this.retryable = Boolean(opts.retryable);
+    this.dependency = opts.dependency ?? null;
+  }
 }
 
 /**
@@ -48,27 +77,33 @@ function fallbackOfferRecommendation(borrower_id: string): OfferRecommendation {
  * (mirroring the backend's 0.2s/0.4s/0.8s cadence). The DegradedBanner
  * is powered by `/api/health` polling in parallel so the user sees
  * "backend is warming up" while these retries run.
- *
- * We deliberately do NOT fall back to mock data on a retryable 503 —
- * that would mix live and synthetic surfaces and the UI would silently
- * lie. The `fallback` value below is only reached when the browser
- * itself can't talk to the backend (offline, CORS failure);
- * in that case the DegradedBanner's own fetch also fails and the UI
- * shows warming-up copy regardless.
  */
 
 async function _sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function _isRetryable503(res: Response): Promise<boolean> {
-  if (res.status !== 503) return false;
-  // Clone before reading so the caller can still read the body.
+interface Retryable503Parsed {
+  retryable: boolean;
+  dependency: string | null;
+  detail: string | null;
+}
+
+async function _parseRetryableBody(res: Response): Promise<Retryable503Parsed> {
+  if (res.status !== 503) return { retryable: false, dependency: null, detail: null };
   try {
-    const body = await res.clone().json();
-    return body?.retryable === true;
+    const body = (await res.clone().json()) as {
+      retryable?: boolean;
+      dependency?: string;
+      detail?: string;
+    };
+    return {
+      retryable: body?.retryable === true,
+      dependency: body?.dependency ?? null,
+      detail: body?.detail ?? null,
+    };
   } catch {
-    return false;
+    return { retryable: false, dependency: null, detail: null };
   }
 }
 
@@ -80,95 +115,99 @@ async function _fetchWithRetry(
   let lastRes: Response | null = null;
   for (let i = 0; i < attempts; i++) {
     const res = await fetch(path, init);
-    if (res.ok || !(await _isRetryable503(res))) return res;
+    if (res.ok) return res;
+    const parsed = await _parseRetryableBody(res);
+    if (!parsed.retryable) return res;
     lastRes = res;
     if (i === attempts - 1) break;
     const delay = Math.min(2000, 200 * 2 ** i);
     const jittered = delay * (0.5 + Math.random());
     await _sleep(jittered);
   }
-  // Exhausted -- return the last 503 so the caller can decide.
   return lastRes as Response;
 }
 
-async function getJson<T>(path: string, fallback: T): Promise<T> {
-  try {
-    const res = await _fetchWithRetry(path);
-    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-    return (await res.json()) as T;
-  } catch {
-    return fallback;
-  }
+async function _throwFromResponse(res: Response, path: string): Promise<never> {
+  const parsed = await _parseRetryableBody(res);
+  const msg = parsed.detail ?? `${res.status} ${res.statusText}`;
+  throw new ApiError(msg, {
+    path,
+    status: res.status,
+    retryable: parsed.retryable,
+    dependency: parsed.dependency,
+  });
 }
 
-async function postJson<T, B>(path: string, body: B, fallback: T): Promise<T> {
+async function getJson<T>(path: string): Promise<T> {
+  let res: Response;
   try {
-    const res = await _fetchWithRetry(path, {
+    res = await _fetchWithRetry(path);
+  } catch (err) {
+    // Network-level failure (offline, DNS, CORS preflight, etc.)
+    const message = err instanceof Error ? err.message : 'network error';
+    throw new ApiError(message, { path, status: null, retryable: false });
+  }
+  if (!res.ok) await _throwFromResponse(res, path);
+  return (await res.json()) as T;
+}
+
+async function postJson<T, B>(path: string, body: B): Promise<T> {
+  let res: Response;
+  try {
+    res = await _fetchWithRetry(path, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body ?? {}),
     });
-    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-    return (await res.json()) as T;
-  } catch {
-    return fallback;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'network error';
+    throw new ApiError(message, { path, status: null, retryable: false });
   }
+  if (!res.ok) await _throwFromResponse(res, path);
+  return (await res.json()) as T;
 }
 
 export const api = {
-  health: () => getJson('/api/health', { status: 'mock-fallback', mode: 'mock' }),
+  /**
+   * Honest health probe. A dead backend returns an "unreachable" status
+   * object instead of throwing — callers render dependency state as
+   * `unknown`, never as synthesized "up".
+   */
+  health: async (): Promise<HealthPayload> => {
+    try {
+      return await getJson<HealthPayload>('/api/health');
+    } catch {
+      return { status: 'unreachable', mode: 'unknown', dependencies: {} };
+    }
+  },
+
   portfolioPreview: (criteria: Record<string, unknown> = {}) =>
     postJson<PortfolioPreview, { criteria: Record<string, unknown> }>(
       '/api/portfolio/preview',
       { criteria },
-      mockPortfolio
     ),
-  segments: () => getJson<SegmentSummary[]>('/api/segments', mockSegments),
+
+  segments: () => getJson<SegmentSummary[]>('/api/segments'),
+
   leads: (segment?: string) =>
     getJson<LeadSummary[]>(
       segment ? `/api/leads?segment=${encodeURIComponent(segment)}` : '/api/leads',
-      segment ? mockBorrowers.filter((b) => b.segment_codes.includes(segment as never)) : mockBorrowers
     ),
-  borrower: (id: string) =>
-    getJson<Borrower360>(
-      `/api/borrowers/${id}`,
-      (mockBorrowers.find((b) => b.borrower_id === id) ?? mockBorrowers[0]) as Borrower360
-    ),
+
+  borrower: (id: string) => getJson<Borrower360>(`/api/borrowers/${id}`),
+
   recommendOffer: (borrower_id: string) =>
     postJson<OfferRecommendation, { borrower_id: string }>(
       '/api/offers/recommend',
       { borrower_id },
-      fallbackOfferRecommendation(borrower_id)
     ),
-  approve: async (borrower_id: string, actor = 'anonymous') => {
-    try {
-      const res = await fetch('/api/outreach/approve', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ borrower_id, actor }),
-      });
-      if (!res.ok) return { approved: false, approval_id: 'mock-fallback', audit_event_id: 'mock-fallback' };
-      return res.json();
-    } catch {
-      return { approved: false, approval_id: 'mock-fallback', audit_event_id: 'mock-fallback' };
-    }
-  },
-  genie: async (question: string) => {
-    try {
-      const res = await fetch('/api/genie/message', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question }),
-      });
-      if (!res.ok) throw new Error(`${res.status}`);
-      return res.json();
-    } catch {
-      return {
-        answer:
-          'Fallback: Genie is unavailable, but the curated Module 0 metric views show In-the-Money and Home Equity candidates as the highest-value segments.',
-        source: 'deterministic_fallback',
-        trusted_assets: ['mip.gold.lead_population'],
-      };
-    }
-  },
+
+  approve: (borrower_id: string, actor = 'anonymous') =>
+    postJson<ApproveResult, { borrower_id: string; actor: string }>(
+      '/api/outreach/approve',
+      { borrower_id, actor },
+    ),
+
+  genie: (question: string) =>
+    postJson<GenieResult, { question: string }>('/api/genie/message', { question }),
 };

@@ -49,6 +49,10 @@ GOLD_TRANSFORMATION_FILES: tuple[str, ...] = (
 )
 
 # Target UC paths. The manifest (003_gold_tables.sql) must reference each.
+# Slice13-accuracy perf: `mip.gold.borrower_dossier` is a pre-joined superset
+# of borrower_360 + top-20 evidence events per CLIP, backing the
+# /api/borrowers/{id} read path. The DDL manifest must declare it so
+# `bundle deploy -t dev` provisions it for every client.
 GOLD_TABLE_PATHS: tuple[str, ...] = (
     "mip.gold.property_owner_bridge",
     "mip.gold.borrower_360",
@@ -56,6 +60,7 @@ GOLD_TABLE_PATHS: tuple[str, ...] = (
     "mip.gold.evidence_events",
     "mip.gold.lead_population",
     "mip.gold.segment_population",
+    "mip.gold.borrower_dossier",
 )
 
 FORBIDDEN_PII_COLUMNS: tuple[str, ...] = (

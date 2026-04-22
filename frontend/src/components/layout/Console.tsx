@@ -89,8 +89,13 @@ export function Console() {
           </div>
         </div>
         <div className="tweak-row">
-          <label>Lender</label>
-          <input type="text" value={lender} onChange={(e) => setLender(e.target.value)} />
+          <label htmlFor="console-lender-input">Lender</label>
+          <input
+            id="console-lender-input"
+            type="text"
+            value={lender}
+            onChange={(e) => setLender(e.target.value)}
+          />
         </div>
         <div className="tweak-row">
           <div className="row">
