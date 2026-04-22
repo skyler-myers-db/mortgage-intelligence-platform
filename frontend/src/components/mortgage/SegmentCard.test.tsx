@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { mockSegments } from '../../mocks/fixtureData';
+import { SEGMENT_DEFINITIONS } from '../../lib/segmentMetadata';
 
-describe('Segment data', () => {
+describe('Segment definitions', () => {
   it('contains in-the-money segment', () => {
-    expect(mockSegments.some((s) => s.code === 'itm')).toBe(true);
+    expect(SEGMENT_DEFINITIONS.some((s) => s.code === 'itm')).toBe(true);
   });
 });

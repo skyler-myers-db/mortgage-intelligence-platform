@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactElement } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, Navigate, useParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import type { Borrower360 as Borrower360Type } from '../types';
 import { currency } from '../lib/formatters';
@@ -11,7 +11,8 @@ import { Chip, EvidenceChip } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { Skeleton } from '../components/ui/Skeleton';
 import { Reveal } from '../components/fx/Reveal';
-import { DRAWER_SOURCES, mockSegments } from '../mocks/fixtureData';
+import { DRAWER_SOURCES } from '../lib/drawerSources';
+import { segmentByCode } from '../lib/segmentMetadata';
 
 /**
  * Borrower 360 — public-record dossier composed in `.surface` blocks.
@@ -21,12 +22,59 @@ import { DRAWER_SOURCES, mockSegments } from '../mocks/fixtureData';
  */
 
 export default function Borrower360() {
-  const { id = 'B-48291' } = useParams();
+  const { id } = useParams();
   const [b, setB] = useState<Borrower360Type | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   useEffect(() => {
-    api.borrower(id).then(setB);
+    if (!id) return;
+    let cancelled = false;
+    setB(null);
+    setErrorMsg(null);
+    api
+      .borrower(id)
+      .then((data) => {
+        if (!cancelled) setB(data);
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setErrorMsg(
+          err instanceof Error
+            ? `Couldn't load borrower ${id}: ${err.message}`
+            : `Couldn't load borrower ${id}.`,
+        );
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [id]);
+
+  // Borrower 360 is a per-borrower detail page; without an id in the URL
+  // there is no borrower to show. Send the user to the lead queue, which
+  // is the source-of-truth index they can drill from. Matches the
+  // product flow: portfolio → segment → lead → borrower.
+  if (!id) {
+    return <Navigate to="/lead-queue" replace />;
+  }
+
+  if (errorMsg) {
+    return (
+      <PageShell
+        eyebrow="Borrower 360 · Public-Record Dossier"
+        title={`Couldn't load ${id}`}
+        lede={errorMsg}
+      >
+        <div className="surface">
+          <div className="surface__body" style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+            <Chip variant="danger" icon="cross">Backend unavailable</Chip>
+            <Link className="btn" to="/lead-queue">
+              Back to lead queue
+            </Link>
+          </div>
+        </div>
+      </PageShell>
+    );
+  }
 
   if (!b) {
     return (
@@ -87,7 +135,7 @@ export default function Borrower360() {
     );
   }
 
-  const segColor = mockSegments.find((s) => s.code === b.segment_codes[0])?.color ?? 'var(--accent)';
+  const segColor = segmentByCode(b.segment_codes[0])?.color ?? 'var(--accent)';
 
   return (
     <PageShell
@@ -136,7 +184,7 @@ export default function Borrower360() {
                 childEl={
                   <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
                     {b.segment_codes.map((sid) => {
-                      const s = mockSegments.find((x) => x.code === sid);
+                      const s = segmentByCode(sid);
                       const color = s?.color ?? 'var(--accent)';
                       return (
                         <span

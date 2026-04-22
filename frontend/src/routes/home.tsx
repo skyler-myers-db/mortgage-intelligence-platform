@@ -5,10 +5,11 @@ import { KpiCard } from '../components/mortgage/KpiCard';
 import { MapPlaceholder } from '../components/mortgage/MapPlaceholder';
 import { AgentActivityLog } from '../components/mortgage/AgentActivityLog';
 import { Chip, Button } from '../components/Primitives';
-import { DRAWER_SOURCES } from '../mocks/fixtureData';
+import { DRAWER_SOURCES } from '../lib/drawerSources';
 import { Icon } from '../components/Icon';
 import { Reveal } from '../components/fx/Reveal';
 import { api } from '../lib/api';
+import type { PortfolioPreview } from '../types';
 
 const FUTURE_MODULES = [
   { code: 'M1', title: 'Pipeline Optimization', desc: 'Lead → app → approval throughput and stalls.' },
@@ -18,24 +19,35 @@ const FUTURE_MODULES = [
 ];
 
 export default function Home() {
-  // Pull the live high-intent count so the approval notice stays in sync with
-  // the KPI above it. Falls back to the canon 12,840 while loading / on
-  // error — this is the UI fallback path, not a live count we must defend.
-  const [queued, setQueued] = useState<number>(12840);
+  // Home KPIs read straight from /api/portfolio/preview. While the request is
+  // in flight we show an em-dash placeholder rather than design-time numbers
+  // so the surface never presents a plausible-but-fake value. The KpiCard
+  // component interprets a null `valueAnimated` as "render em-dash".
+  const [preview, setPreview] = useState<PortfolioPreview | null>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
   useEffect(() => {
     let cancelled = false;
     api
       .portfolioPreview()
       .then((p) => {
-        if (!cancelled && p.high_intent_leads) setQueued(p.high_intent_leads);
+        if (!cancelled) {
+          setPreview(p);
+          setPreviewError(null);
+        }
       })
-      .catch(() => {
-        // ignore — fallback value already set.
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setPreview(null);
+        setPreviewError(
+          err instanceof Error ? err.message : "Couldn't reach /api/portfolio/preview.",
+        );
       });
     return () => {
       cancelled = true;
     };
   }, []);
+
+  const queued = preview?.high_intent_leads ?? null;
 
   return (
     <PageShell
@@ -52,41 +64,44 @@ export default function Home() {
         </>
       }
     >
+      {previewError && (
+        <div
+          role="alert"
+          style={{
+            marginBottom: 'var(--gap-grid)',
+            padding: '10px 12px',
+            border: '1px solid var(--signal-danger)',
+            borderRadius: 'var(--r-md)',
+            color: 'var(--signal-danger)',
+            fontSize: 12,
+          }}
+        >
+          Couldn&apos;t load portfolio KPIs: {previewError}
+        </div>
+      )}
       <div className="kpi-row">
         <KpiCard
           label="Marketable population"
-          valueAnimated={89553}
-          delta="+4.8% vs. last run"
-          deltaDir="up"
+          valueAnimated={preview?.marketable_population ?? null}
           source={DRAWER_SOURCES.population}
-          trend={[85200, 85900, 86800, 87400, 88100, 89000, 89553]}
         />
         <KpiCard
           label="High-intent leads"
-          valueAnimated={12840}
-          delta="+18%"
-          deltaDir="up"
+          valueAnimated={preview?.high_intent_leads ?? null}
           source={DRAWER_SOURCES.itm}
-          trend={[10200, 10600, 10900, 11400, 12000, 12500, 12840]}
         />
         <KpiCard
           label="Cost per contact (est.)"
-          valueAnimated={2.18}
+          valueAnimated={preview?.cost_per_contact ?? null}
           format={(n) => `$${n.toFixed(2)}`}
-          delta="-$0.11"
-          deltaDir="down"
           source={DRAWER_SOURCES.config}
-          trend={[2.42, 2.36, 2.32, 2.28, 2.24, 2.21, 2.18]}
         />
         <KpiCard
           label="Projected contact → app"
-          valueAnimated={9.7}
+          valueAnimated={preview?.projected_contact_to_app ?? null}
           format={(n) => n.toFixed(1)}
           unit="%"
-          delta="+1.2 pp"
-          deltaDir="up"
           source={DRAWER_SOURCES.nbo}
-          trend={[8.3, 8.6, 8.9, 9.1, 9.3, 9.5, 9.7]}
         />
       </div>
 
@@ -100,7 +115,9 @@ export default function Home() {
         <div className="approval__body">
           <div className="approval__title">Review approval required before outreach</div>
           <div className="approval__sub">
-            {queued.toLocaleString()} borrowers queued. Nothing is sent until an officer approves each draft.
+            {queued !== null
+              ? `${queued.toLocaleString()} borrowers queued. Nothing is sent until an officer approves each draft.`
+              : 'Nothing is sent until an officer approves each draft.'}
           </div>
         </div>
       </div>

@@ -15,9 +15,34 @@ export default function LeadQueue() {
   const [searchParams] = useSearchParams();
   const segment = searchParams.get('segment') ?? undefined;
   const [leads, setLeads] = useState<LeadSummary[]>([]);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loading, setLoading] = useState<boolean>(true);
 
   useEffect(() => {
-    api.leads(segment).then(setLeads);
+    let cancelled = false;
+    setLoading(true);
+    setLoadError(null);
+    api
+      .leads(segment)
+      .then((data) => {
+        if (!cancelled) {
+          setLeads(data);
+          setLoading(false);
+        }
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setLeads([]);
+        setLoading(false);
+        setLoadError(
+          err instanceof Error
+            ? `Couldn't load leads: ${err.message}`
+            : "Couldn't load leads.",
+        );
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [segment]);
 
   return (
@@ -32,6 +57,31 @@ export default function LeadQueue() {
         </>
       }
     >
+      {loadError && (
+        <div
+          role="alert"
+          style={{
+            marginBottom: 'var(--gap-grid)',
+            padding: '10px 12px',
+            border: '1px solid var(--signal-error, #EF4444)',
+            borderRadius: 'var(--r-md)',
+            color: 'var(--signal-error, #EF4444)',
+            fontSize: 12,
+          }}
+        >
+          {loadError}
+        </div>
+      )}
+      {loading && !loadError && (
+        <div className="muted body" style={{ marginBottom: 'var(--gap-grid)' }}>
+          Loading leads…
+        </div>
+      )}
+      {!loading && !loadError && leads.length === 0 && (
+        <div className="muted body" style={{ marginBottom: 'var(--gap-grid)' }}>
+          No leads match this filter.
+        </div>
+      )}
       <LeadTable leads={leads} />
     </PageShell>
   );

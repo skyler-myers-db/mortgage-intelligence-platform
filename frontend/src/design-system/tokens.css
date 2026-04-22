@@ -16,7 +16,11 @@
   --entrada-grey:   #B2BDC2;
   --entrada-teal:   #5CE1E6;
 
-  /* ---------- Signal colors ---------- */
+  /* ---------- Signal colors ----------
+   * Dark-theme defaults. The `[data-theme="light"]` block below darkens
+   * --signal-danger so the `.kpi__delta.down` text clears WCAG AA (4.5:1)
+   * against the white surface. axe-core flagged 4.19 on the light theme.
+   */
   --signal-success: #10B981;
   --signal-warning: #F59E0B;
   --signal-danger:  #EF4444;
@@ -149,6 +153,10 @@
   --chip-line: rgba(2,80,128,0.18);
   --chip-text: #025080;
 
+  /* Darker danger so .kpi__delta.down clears 4.5:1 AA against the
+   * white surface (--bg-1 = #FFFFFF). #DC2626 reads at ~4.83:1. */
+  --signal-danger: #DC2626;
+
   --accent:        #025080;
   --accent-hover:  #013354;
   --accent-soft:   rgba(2,80,128,0.08);
@@ -176,13 +184,24 @@
   --accent: #025080; --accent-hover: #013354; --accent-soft: rgba(2,80,128,0.14); --accent-contrast: #FFF;
 }
 
-/* ---------- Density ---------- */
-[data-density="compact"] {
+/* ---------- Density ----------
+ * Comfortable is the default (carried on :root).
+ * [data-density="compact"] overrides via higher specificity (:root[...]) to
+ * avoid the pseudo-class/attribute-selector specificity tie that would
+ * otherwise let source order pick the comfortable values even when the
+ * user toggled to compact.
+ */
+:root {
+  --row-h: 44px;
+  --pad-card: 20px;
+  --gap-grid: 18px;
+}
+:root[data-density="compact"] {
   --row-h: 36px;
   --pad-card: 16px;
   --gap-grid: 14px;
 }
-[data-density="comfortable"], :root {
+:root[data-density="comfortable"] {
   --row-h: 44px;
   --pad-card: 20px;
   --gap-grid: 18px;

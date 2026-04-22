@@ -65,15 +65,52 @@ const INITIAL_FILTERS: ChipFilters = {
 export default function SegmentIntelligence() {
   const [segments, setSegments] = useState<SegmentSummary[]>([]);
   const [leads, setLeads] = useState<LeadSummary[]>([]);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [activeSegs, setActiveSegs] = useState<string[]>(['itm']);
   const [chipFilters, setChipFilters] = useState<ChipFilters>(INITIAL_FILTERS);
 
   useEffect(() => {
-    api.segments().then(setSegments);
+    let cancelled = false;
+    api
+      .segments()
+      .then((s) => {
+        if (!cancelled) setSegments(s);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setLoadError(
+            err instanceof Error
+              ? `Couldn't load segments: ${err.message}`
+              : "Couldn't load segments.",
+          );
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
-    api.leads().then(setLeads);
+    let cancelled = false;
+    api
+      .leads()
+      .then((l) => {
+        if (!cancelled) setLeads(l);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setLoadError(
+            (prev) =>
+              prev ??
+              (err instanceof Error
+                ? `Couldn't load leads: ${err.message}`
+                : "Couldn't load leads."),
+          );
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Filters that have no matching borrower signal (demographics, owner-link,
@@ -120,7 +157,11 @@ export default function SegmentIntelligence() {
   return (
     <PageShell
       eyebrow="Segment Intelligence"
-      title="Six borrower segments · select to filter"
+      title={
+        segments.length > 0
+          ? `${segments.length} borrower ${segments.length === 1 ? 'segment' : 'segments'} · select to filter`
+          : 'Borrower segments · select to filter'
+      }
       lede="Every segment is defined by a rule in Unity Catalog. Counts refresh nightly from Cotality public records + lien + market + listing + permit + AVM feeds."
       heroRight={
         <>
@@ -133,6 +174,26 @@ export default function SegmentIntelligence() {
         </>
       }
     >
+      {loadError && (
+        <div
+          role="alert"
+          style={{
+            marginBottom: 'var(--gap-grid)',
+            padding: '10px 12px',
+            border: '1px solid var(--signal-error, #EF4444)',
+            borderRadius: 'var(--r-md)',
+            color: 'var(--signal-error, #EF4444)',
+            fontSize: 12,
+          }}
+        >
+          {loadError}
+        </div>
+      )}
+      {segments.length === 0 && !loadError && (
+        <div className="muted body" style={{ marginBottom: 'var(--gap-grid)' }}>
+          Loading segments…
+        </div>
+      )}
       <div className="seg-grid">
         {segments.map((s) => (
           <SegmentCard

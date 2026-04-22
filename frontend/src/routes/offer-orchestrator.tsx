@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { Link, Navigate, useParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import type { Borrower360 as Borrower360Type, OfferRecommendation } from '../types';
 import type { DrawerSource } from '../components/AppContext';
@@ -11,7 +11,7 @@ import { Chip, EvidenceChip } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { Skeleton } from '../components/ui/Skeleton';
 import { Reveal } from '../components/fx/Reveal';
-import { DRAWER_SOURCES } from '../mocks/fixtureData';
+import { DRAWER_SOURCES } from '../lib/drawerSources';
 import { useApp } from '../components/AppContext';
 
 /** Map a backend source table → DrawerSource. Falls back to a neutral descriptor
@@ -60,19 +60,45 @@ function humanizeThresholdKey(k: string): string {
  */
 
 export default function OfferOrchestrator() {
-  const { id = 'B-48291' } = useParams();
+  const { id } = useParams();
   const [b, setB] = useState<Borrower360Type | null>(null);
   const [rec, setRec] = useState<OfferRecommendation | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [approveError, setApproveError] = useState<string | null>(null);
   const [auditId, setAuditId] = useState<string | null>(null);
   const { setApproval, approvals, lender } = useApp();
-  const approval = approvals[id];
+  const approval = id ? approvals[id] : undefined;
 
   useEffect(() => {
+    if (!id) return;
+    let cancelled = false;
     setB(null);
     setRec(null);
-    api.borrower(id).then(setB);
-    api.recommendOffer(id).then(setRec);
+    setLoadError(null);
+    Promise.all([api.borrower(id), api.recommendOffer(id)])
+      .then(([borrower, recommendation]) => {
+        if (cancelled) return;
+        setB(borrower);
+        setRec(recommendation);
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setLoadError(
+          err instanceof Error
+            ? `Couldn't load borrower or offer: ${err.message}`
+            : "Couldn't load borrower or offer.",
+        );
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [id]);
+
+  // Offer Orchestrator is a per-borrower action page; without an id
+  // there's nothing to draft an outreach for. Redirect to lead queue.
+  if (!id) {
+    return <Navigate to="/lead-queue" replace />;
+  }
 
   const primaryName = b?.display_name.split(' & ')[0] ?? 'there';
   const productLabel = rec?.product_label ?? b?.recommended_offer ?? '…';
@@ -81,16 +107,46 @@ export default function OfferOrchestrator() {
     : '';
 
   const onApprove = async () => {
-    const res = await api.approve(id);
-    if (res.approved) {
-      setApproval(id, 'approved');
-      setAuditId(res.audit_event_id ?? null);
+    setApproveError(null);
+    try {
+      const res = await api.approve(id);
+      if (res.approved) {
+        setApproval(id, 'approved');
+        setAuditId(res.audit_event_id ?? null);
+      } else {
+        setApproveError('Approval endpoint returned approved=false.');
+      }
+    } catch (err: unknown) {
+      setApproveError(
+        err instanceof Error
+          ? `Couldn't write approval: ${err.message}`
+          : "Couldn't write approval.",
+      );
     }
   };
 
   const onReject = () => {
     setApproval(id, 'rejected');
   };
+
+  if (loadError) {
+    return (
+      <PageShell
+        eyebrow="Next-Best-Offer + Outreach"
+        title={`Couldn't load ${id}`}
+        lede={loadError}
+      >
+        <div className="surface">
+          <div className="surface__body" style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+            <Chip variant="danger" icon="cross">Backend unavailable</Chip>
+            <Link className="btn" to="/lead-queue">
+              Back to lead queue
+            </Link>
+          </div>
+        </div>
+      </PageShell>
+    );
+  }
 
   return (
     <PageShell
@@ -152,6 +208,7 @@ export default function OfferOrchestrator() {
           <div className="surface__body">
             <textarea
               key={b?.borrower_id ?? 'empty'}
+              aria-label="Outreach draft — review only"
               defaultValue={defaultDraft}
               style={{
                 width: '100%',
@@ -275,6 +332,17 @@ export default function OfferOrchestrator() {
         <div className="surface" style={{ marginTop: 'var(--gap-grid)' }}>
           <div className="surface__body">
             <Chip variant="danger" icon="cross">Rejected — no outreach queued</Chip>
+          </div>
+        </div>
+      )}
+      {approveError && (
+        <div
+          className="surface"
+          role="alert"
+          style={{ marginTop: 'var(--gap-grid)', borderColor: 'var(--signal-error, #EF4444)' }}
+        >
+          <div className="surface__body" style={{ color: 'var(--signal-error, #EF4444)' }}>
+            {approveError}
           </div>
         </div>
       )}

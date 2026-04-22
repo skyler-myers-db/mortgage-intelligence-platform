@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import type { SegmentSummary } from '../../types';
-import { Icon, type IconName } from '../Icon';
-import { SEGMENT_ICONS } from '../../mocks/fixtureData';
+import { Icon } from '../Icon';
+import { segmentIcon } from '../../lib/segmentMetadata';
 
 /**
  * SegmentCard — prototype `.seg-card` BEM: badge + title + count + sub + meta row.
@@ -22,7 +22,7 @@ interface SegmentCardProps {
 }
 
 export function SegmentCard({ segment, selected, onClick }: SegmentCardProps) {
-  const icon = (SEGMENT_ICONS[segment.code] ?? 'layers') as IconName;
+  const icon = segmentIcon(segment.code);
   const prev = useRef<boolean | undefined>(selected);
   const [emanateKey, setEmanateKey] = useState<number>(selected ? 1 : 0);
 
