@@ -457,21 +457,34 @@ def _pace_genie_requests() -> Any:
 def _ask_with_backoff(
     client: GenieClient, question: str, *, pid: str
 ) -> GenieResponse:
-    """Fire a Genie question; on `HTTP 429` retry once after the window.
+    """Fire a Genie question with transient-error retry.
 
-    Calls are paced by the autouse fixture, but a cold-start or an
-    unrelated spike can still push us over the limit. Re-raising a 429
-    is an environmental signal, not a regression — one retry after the
-    published 60-second window is what an operator would do by hand.
+    Two retryable failure modes observed on live runs against the
+    deployed space:
+
+    - ``HTTP 429 REQUEST_LIMIT_EXCEEDED`` — rate limit; wait the
+      published 60 s window then retry.
+    - ``Genie message terminated in state 'FAILED'`` — a per-message
+      backend error that clears on re-ask (cold warehouse, transient
+      compiler, etc.). One retry after a short pause is enough.
+
+    Any GenieClientError outside those two categories, OR a second
+    failure on the same question, re-raises so the test surfaces the
+    real regression.
     """
     import time as _time
     try:
         return client.ask(question)
     except GenieClientError as exc:
+        msg = str(exc)
         status = getattr(exc, "status_code", None)
-        if status != 429:
+        if status == 429:
+            _time.sleep(_GENIE_429_RETRY_WAIT_S)
+        elif "terminated in state 'FAILED'" in msg or "state='FAILED'" in msg:
+            # Transient per-message failure; short pause and retry.
+            _time.sleep(8.0)
+        else:
             raise
-        _time.sleep(_GENIE_429_RETRY_WAIT_S)
         return client.ask(question)
 
 
