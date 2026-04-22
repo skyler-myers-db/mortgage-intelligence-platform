@@ -282,19 +282,40 @@ assert_data_endpoint_degraded() {
 start_drill_backend() {
   log "starting private drill backend on $DRILL_APP_URL (env below)"
 
-  # Fail fast if something else is bound to :8001 -- otherwise our
-  # child uvicorn will exit on bind-failure, its PID will be reaped,
-  # and the health probe will hit the stale backend and mislead us
-  # into thinking the drill booted. (Observed in an earlier evidence
-  # run: genie drill's cleanup missed its child, token drill probed
-  # the genie leftover.)
+  # If :8001 is already bound, it's a leftover uvicorn from a prior
+  # drill step in the same CI job (the trap cleanup can't cross
+  # sub-process boundaries between sequential CI steps). Kill it and
+  # retry binding rather than hard-failing -- the drill owns :8001
+  # exclusively on the runner and killing a stale drill backend is
+  # safer than refusing to proceed. If lsof is unavailable, fall
+  # through and let the bind error handle it.
   if command -v lsof >/dev/null 2>&1; then
     local prior_pid
     prior_pid="$(lsof -ti :8001 2>/dev/null || true)"
     if [[ -n "$prior_pid" ]]; then
-      log "FAIL: port 8001 already bound by pid(s): $prior_pid -- refusing to start"
-      log "  hint: leftover uvicorn from a prior drill; \`kill $prior_pid\` and retry"
-      return 1
+      log "found leftover process(es) bound to :8001 (pid=$prior_pid); terminating for clean start."
+      # Graceful TERM first, then KILL if still alive after 2s.
+      # shellcheck disable=SC2086  # intentional word-split for multi-PID
+      kill $prior_pid 2>/dev/null || true
+      for _i in 1 2; do
+        sleep 1
+        if [[ -z "$(lsof -ti :8001 2>/dev/null || true)" ]]; then
+          break
+        fi
+      done
+      # Force-kill anything still bound.
+      local still_bound
+      still_bound="$(lsof -ti :8001 2>/dev/null || true)"
+      if [[ -n "$still_bound" ]]; then
+        # shellcheck disable=SC2086
+        kill -9 $still_bound 2>/dev/null || true
+        sleep 1
+      fi
+      if [[ -n "$(lsof -ti :8001 2>/dev/null || true)" ]]; then
+        log "FAIL: could not free :8001; leftover pid(s) refused TERM+KILL"
+        return 1
+      fi
+      log "cleared :8001; continuing with clean start."
     fi
   fi
 
