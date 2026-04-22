@@ -85,12 +85,19 @@ jobs:
       - name: databricks bundle validate (dev target, real creds)
         # The real validate moved here from PR CI because it unavoidably
         # calls /api/2.0/preview/scim/v2/Me which requires a real token.
-        # With the secrets block above, auth resolves from env vars.
+        # With the secrets block above, auth resolves from env vars --
+        # but the newer CLI (v0.297+) probes ~/.databrickscfg first and
+        # errors out if the file is absent. Two-line fix: force PAT auth
+        # via DATABRICKS_AUTH_TYPE and write an empty config file so the
+        # config-file probe short-circuits cleanly.
         env:
+          DATABRICKS_AUTH_TYPE: pat
           BUNDLE_VAR_sql_warehouse_id: ${{ secrets.DATABRICKS_WAREHOUSE_ID }}
           BUNDLE_VAR_genie_space_id: ${{ secrets.GENIE_SPACE_ID }}
           BUNDLE_VAR_lakebase_instance: mip-app-state
-        run: databricks bundle validate -t dev
+        run: |
+          : > "$HOME/.databrickscfg"
+          databricks bundle validate -t dev
       - name: SQL <-> Python parity
         run: pytest -q tests/integration/test_sql_python_parity.py
       - name: Lakebase round-trip
