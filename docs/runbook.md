@@ -347,3 +347,45 @@ A drill FAIL means the resilience posture is broken and the app is
 serving fake data during an outage — treat it as a release blocker
 and route it to governance-security-reviewer + principal-architect.
 
+---
+
+## 10. Accuracy evidence (Slice 13)
+
+**Where to look** when a customer or a partner asks "prove that the
+number on the screen is right":
+
+| Claim | Evidence |
+|---|---|
+| Segment counts match the raw share | [`tests/integration/test_segment_count_parity.py`](../tests/integration/test_segment_count_parity.py), [`docs/validation/segment-count-parity.md`](validation/segment-count-parity.md) |
+| Every borrower page arithmetic reproduces from raw | [`tools/e2e_borrower_audit.py`](../tools/e2e_borrower_audit.py), [`docs/validation/borrower-e2e-audit.md`](validation/borrower-e2e-audit.md) |
+| SQL ↔ Python scoring parity | [`tests/integration/test_sql_python_parity.py`](../tests/integration/test_sql_python_parity.py) (nightly) |
+| No PII on `/api/*` | [`tests/integration/test_api_pii_boundary.py`](../tests/integration/test_api_pii_boundary.py) |
+| Genie grounded + guarded | [`tests/integration/test_genie_regression.py`](../tests/integration/test_genie_regression.py) (nightly), [`genie/regression_suite.md`](../genie/regression_suite.md) |
+| Dashboards only hit trusted assets | [`tests/unit/test_lakeview_dashboards.py`](../tests/unit/test_lakeview_dashboards.py) |
+| Dependency outage ⇒ visible degraded UI | [`tools/kill_drill/run_drill.sh`](../tools/kill_drill/run_drill.sh), drill evidence logs in `tools/kill_drill/evidence/` |
+| Supply-chain + secret hygiene | `.github/workflows/ci.yml` §`security-scan` + `.gitleaks.toml` + `.bandit` |
+
+The full report is [`docs/slice13-accuracy-report.md`](slice13-accuracy-report.md).
+
+**After any SQL-plane change** (silver, gold, UDF, metric view) the
+evidence above is only as fresh as the last warehouse refresh. Run:
+
+```bash
+databricks bundle run mip_refresh_silver        -t dev
+databricks bundle run mip_refresh_scores        -t dev
+databricks bundle run mip_sync_lifecycle_state  -t dev
+```
+
+Then re-run the gated integration tests with workspace creds exported:
+
+```bash
+set -a && source .env.local && set +a
+pytest -q tests/integration/test_segment_count_parity.py \
+          tests/integration/test_borrower_id_uniqueness.py \
+          tests/integration/test_silver_coercion.py \
+          tests/integration/test_silver_zip_5_digit.py \
+          tests/integration/test_sql_python_parity.py
+```
+
+If any fail, route to data-modeler + principal-architect before release.
+
