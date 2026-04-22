@@ -244,7 +244,11 @@ Each entry has:
     Expected skeleton: N rows of `borrower_id` matching `^B-\d{5}$`; no
     PII columns; every row must have a matching evidence event with
     `signal_type='competitor_lien'`.
-    SQL hint: ``SELECT DISTINCT b.borrower_id FROM mip.gold.borrower_360 b JOIN mip.gold.evidence_events e USING (clip) WHERE array_contains(b.segment_codes, 'retention') AND e.signal_type='competitor_lien' AND e.`timestamp` >= CAST(current_date - interval 30 days AS STRING)``.
+    SQL hint: ``SELECT DISTINCT b.borrower_id FROM mip.gold.borrower_360 b JOIN mip.gold.evidence_events e USING (clip) WHERE array_contains(b.segment_codes, 'retention') AND e.signal_type='competitor_lien' AND to_timestamp(e.`timestamp`) >= current_timestamp() - interval 30 days``.
+    (`evidence_events.timestamp` is an ISO-8601 STRING per the DDL, not a
+    TIMESTAMP. `to_timestamp(...)` parses it before comparing; otherwise
+    Spark implicitly casts the STRING to DATE and yields NULL on any
+    `YYYY-MM-DDTHH:MM:SSZ` value, silently returning zero rows.)
     Source: `mip.gold.borrower_360`, `mip.gold.evidence_events`.
 
 25. **Which borrowers have both a permit signal and an equity-crossing event in the last 30 days?**

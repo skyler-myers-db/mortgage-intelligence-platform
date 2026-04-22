@@ -187,7 +187,7 @@ at e.g. `S17` maps to "offer mix for In-the-Money segment".
 ## S24 — Retention list × competitor lien in last 30 days
 
 **Prompt:** "Which borrowers on our retention list have a competitor lien filed in the last 30 days?"
-**Expected:** `B-#####` rows, cites `mip.gold.borrower_360` (filter `array_contains(segment_codes, 'retention')`) JOIN `mip.gold.evidence_events` on `clip` with `signal_type='competitor_lien'` and `` `timestamp` >= current_date - interval 30 days `` (backtick-quoted; `timestamp` is a SQL keyword on most engines).
+**Expected:** `B-#####` rows, cites `mip.gold.borrower_360` (filter `array_contains(segment_codes, 'retention')`) JOIN `mip.gold.evidence_events` on `clip` with `signal_type='competitor_lien'` and `` to_timestamp(`timestamp`) >= current_timestamp() - interval 30 days ``. The column stays backtick-quoted whenever referenced directly (`timestamp` is a SQL keyword on most engines) and must be `to_timestamp(...)` - wrapped: `evidence_events.timestamp` is ISO-8601 STRING (see DDL), so comparing it to a bare DATE expression in Spark/Databricks implicitly casts the STRING to DATE and yields NULL for any `YYYY-MM-DDTHH:MM:SSZ` value, filtering out all rows.
 **Why it matters:** Recapture — catch a competitor refi before it closes.
 
 ## S25 — Permit × equity-crossing double signal
