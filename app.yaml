@@ -31,10 +31,11 @@ env:
   # corresponding value into the app's process env.
   # --------------------------------------------------------------------
 
-  # Workspace host is auto-populated by the Apps runtime as
-  # DATABRICKS_HOST. Re-export so every code path sees it.
-  - name: DATABRICKS_HOST
-    value: https://dbc-3aa503a9-4fa8.cloud.databricks.com
+  # Workspace host is auto-populated by the Databricks Apps runtime as
+  # DATABRICKS_HOST. Do NOT set it here — hardcoding binds this bundle
+  # to a specific workspace and breaks portability across targets
+  # (raised by Copilot 2026-04-22). Backend reads the runtime value
+  # via pydantic-settings + os.environ in backend/config/settings.py.
 
   # SQL warehouse id is surfaced from the `sql_warehouse` resource
   # binding. Our backend reads DATABRICKS_WAREHOUSE_ID (not the SDK's

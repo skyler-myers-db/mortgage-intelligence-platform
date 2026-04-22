@@ -318,7 +318,11 @@ SELECT
   --   CLIP. We now widen to base36(ABS(XXHASH64(clip))) padded to 13 chars,
   --   giving 36^13 = ~1.7e20 slots for 5.16M rows -- collision probability negligible.
   --   CONV(..., 10, 36) is Spark's base converter; LPAD stabilises the string length.
-  CONCAT('B-', LPAD(CONV(CAST(ABS(XXHASH64(w.clip)) AS STRING), 10, 36), 13, '0')) AS borrower_id,
+  --   UPPER() normalises the base-36 output to 0-9A-Z so the
+  --   `B-[0-9A-Z]{13}` contract the parity test pins is deterministic
+  --   across engines (raised by Copilot 2026-04-22 — some SQL engines
+  --   return lowercase base-36 digits).
+  CONCAT('B-', LPAD(UPPER(CONV(CAST(ABS(XXHASH64(w.clip)) AS STRING), 10, 36)), 13, '0')) AS borrower_id,
   CONCAT('Owner ', SUBSTR(w.owner_name_hash, 1, 8))                                   AS display_name,
   w.city,
   w.state,

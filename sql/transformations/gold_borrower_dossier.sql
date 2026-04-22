@@ -54,9 +54,26 @@ WITH evidence_full AS (
   -- Capped at 20 rows — see header for rationale. Collect in priority
   -- order so when the repository slices [:3] for trigger_timeline the
   -- head of the array IS the top-3.
+  --
+  -- Ordering contract: array_sort() after collect_list() is the
+  -- Spark-guaranteed deterministic path. collect_list() itself does NOT
+  -- preserve row order, even when the input subquery uses ROW_NUMBER()
+  -- with an explicit ORDER BY (raised by Copilot 2026-04-22).
+  -- Sorting by (signal_rank, evidence_id) locally via array_sort gives
+  -- the same ordering the subquery window intended and matches the
+  -- contract the Python repo + UI depend on.
   SELECT
     clip,
-    collect_list(ev) AS evidence_events
+    array_sort(
+      collect_list(ev),
+      (a, b) -> CASE
+        WHEN a.signal_rank  < b.signal_rank  THEN -1
+        WHEN a.signal_rank  > b.signal_rank  THEN  1
+        WHEN a.evidence_id  < b.evidence_id  THEN -1
+        WHEN a.evidence_id  > b.evidence_id  THEN  1
+        ELSE 0
+      END
+    ) AS evidence_events
   FROM (
     SELECT
       clip,
@@ -80,11 +97,20 @@ WITH evidence_full AS (
 ),
 evidence_top3 AS (
   -- Top-3 slice materialised separately so /api/borrowers/{id} can render
-  -- the trigger timeline without touching the full array. Same ordering
-  -- guarantee as evidence_full so the head slice agrees with the top-3.
+  -- the trigger timeline without touching the full array. Same
+  -- array_sort-after-collect_list guarantee as evidence_full.
   SELECT
     clip,
-    collect_list(ev) AS trigger_timeline
+    array_sort(
+      collect_list(ev),
+      (a, b) -> CASE
+        WHEN a.signal_rank  < b.signal_rank  THEN -1
+        WHEN a.signal_rank  > b.signal_rank  THEN  1
+        WHEN a.evidence_id  < b.evidence_id  THEN -1
+        WHEN a.evidence_id  > b.evidence_id  THEN  1
+        ELSE 0
+      END
+    ) AS trigger_timeline
   FROM (
     SELECT
       clip,

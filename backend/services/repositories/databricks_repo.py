@@ -397,14 +397,15 @@ class DatabricksBorrowerRepository:
 
         # Trigger timeline: dossier pre-materialised the top-3 as its own
         # ARRAY<STRUCT>. Prefer that; fall back to the JSON string form
-        # (old borrower_360 path) then to the first full-evidence entry
-        # so the dossier stays defensible against an empty-array column.
+        # (old borrower_360 path) then to the top-3 of full-evidence so
+        # the dossier stays defensible against an empty-array column
+        # (raised by Copilot 2026-04-22 — [:1] under-populated the UI).
         raw_timeline = row.get("trigger_timeline") or []
         timeline_events = _redact_evidence_list(raw_timeline)
         if not timeline_events:
             timeline_events = _parse_timeline(row.get("trigger_timeline_json"))
         if not timeline_events and evidence_events:
-            timeline_events = evidence_events[:1]
+            timeline_events = evidence_events[:3]
 
         why = WhyPanel(
             rate_spread_bps=int(row.get("rate_spread_bps") or 0),

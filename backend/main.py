@@ -1,4 +1,5 @@
 import logging
+import re
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -144,13 +145,34 @@ class CorrelationIdMiddleware(BaseHTTPMiddleware):
 
     HEADER = "X-Correlation-ID"
 
+    # Client-supplied correlation ids get sanitised before we log or echo
+    # them. Without this the header would be echoed verbatim into logs
+    # and audit trails — a classic log-injection / header-poisoning vector
+    # (flagged by Copilot 2026-04-22). Policy:
+    #   * charset: [A-Za-z0-9._-] only (matches RFC 4122 UUIDs + common
+    #     trace ids without admitting control characters / whitespace)
+    #   * length: 1..128 so a burst of huge headers can't bloat log lines
+    #   * anything that fails either check is dropped silently and we
+    #     mint a fresh correlation id, keeping the middleware invariant
+    #     that every request has exactly one id.
+    _CID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
+
     def __init__(self, app: ASGIApp) -> None:
         super().__init__(app)
+
+    @classmethod
+    def _sanitize_correlation_id(cls, raw: str | None) -> str | None:
+        if raw is None:
+            return None
+        trimmed = raw.strip()
+        if cls._CID_PATTERN.match(trimmed):
+            return trimmed
+        return None
 
     async def dispatch(  # type: ignore[override]
         self, request: StarletteRequest, call_next: Any
     ) -> StarletteResponse:
-        incoming = request.headers.get(self.HEADER)
+        incoming = self._sanitize_correlation_id(request.headers.get(self.HEADER))
         cid = incoming if incoming else get_correlation_id()
         token = set_correlation_id(cid)
         start = time.monotonic()
