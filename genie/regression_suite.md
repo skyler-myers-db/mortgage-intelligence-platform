@@ -61,7 +61,7 @@ at e.g. `S17` maps to "offer mix for In-the-Money segment".
 ## S3 — HELOC candidates with >35% equity
 
 **Prompt:** "How many HELOC candidates have more than 35% equity across the 6-state footprint?"
-**Expected:** One integer ≥ 0; cites `mip.gold.lead_segment_membership` + `mip.gold.borrower_360`.
+**Expected:** One integer ≥ 0; cites `mip.gold.borrower_360` (filter by `array_contains(segment_codes, 'equity')` + `equity_pct > 35`).
 **Why it matters:** Right-sizes the HELOC campaign against the equity gate.
 
 ## S4 — Addressable market size
@@ -85,7 +85,7 @@ at e.g. `S17` maps to "offer mix for In-the-Money segment".
 ## S7 — Top 10 Florida cash-out candidates
 
 **Prompt:** "Show the top 10 cash-out candidates in Florida by estimated equity."
-**Expected:** 10 `B-#####` rows with equity figures, cites `mip.gold.borrower_360` / `mip.gold.recommended_offers`. No PII.
+**Expected:** 10 `B-#####` rows with `equity_pct` + `recommended_offer`, cites `mip.gold.borrower_360` (filter `state='FL'` + `recommended_offer_code IN ('cash_out','heloc','refi_plus_heloc')`). No PII.
 **Why it matters:** HELOC/cash-out prioritization in the FL book.
 
 ## S8 — Top 20 investors by property count
@@ -145,19 +145,19 @@ at e.g. `S17` maps to "offer mix for In-the-Money segment".
 ## S17 — In-the-Money offer mix
 
 **Prompt:** "What offer mix is recommended for the In-the-Money segment?"
-**Expected:** One row per offer type (Rate-Term Refi, Cash-Out, HELOC, Purchase, Retention); cites `mip.gold.recommended_offers`.
+**Expected:** One row per `recommended_offer_code` (`refi`, `refi_plus_heloc`, `heloc`, `cash_out`, `purchase`, `investor`, `retention`, `nurture`); cites `mip.gold.borrower_360` (`GROUP BY recommended_offer_code` filtered by `array_contains(segment_codes,'itm')`).
 **Why it matters:** Before launching the ITM campaign, what's the NBO blend?
 
-## S18 — Approved refi average projected savings
+## S18 — Approved refi average projected savings (data-gap pivot)
 
 **Prompt:** "What is the average projected monthly savings for approved refis?"
-**Expected:** One row `{avg_savings_usd}`, value in `[0, 5000]`.
-**Why it matters:** Marketing tag-line — "the average member saves $X/month".
+**Expected:** Either a principled data-gap acknowledgment (no `projected_monthly_savings_usd` column lives in any trusted asset today) OR a pivot to `approval_rate` from `mip.semantics.segment_performance_metric_view` (values in `[0, 100]`, 2dp). The SQL the grader sees must cite the segment metric view and not fabricate a savings column against a non-trusted table.
+**Why it matters:** Marketing tag-line — "the average member saves $X/month". Exposes whether Genie fabricates a column or correctly names the gap and pivots to the approval-rate proxy.
 
 ## S19 — Florida HELOC recommendations
 
 **Prompt:** "Which borrowers got a HELOC recommendation in Florida?"
-**Expected:** N rows `B-#####`, no PII, cites `mip.gold.recommended_offers`.
+**Expected:** N rows `B-#####`, no PII, cites `mip.gold.borrower_360` (filter `state='FL'` + `recommended_offer_code IN ('heloc','refi_plus_heloc')`).
 **Why it matters:** Surface the FL HELOC queue for the regional sales lead.
 
 ## S20 — Listed-for-Sale by loan product (MLS gap)
@@ -187,7 +187,7 @@ at e.g. `S17` maps to "offer mix for In-the-Money segment".
 ## S24 — Retention list × competitor lien in last 30 days
 
 **Prompt:** "Which borrowers on our retention list have a competitor lien filed in the last 30 days?"
-**Expected:** `B-#####` rows, cites `mip.gold.lead_segment_membership` + `mip.gold.evidence_events`.
+**Expected:** `B-#####` rows, cites `mip.gold.borrower_360` (filter `array_contains(segment_codes, 'retention')`) JOIN `mip.gold.evidence_events` on `clip` with `signal_type='competitor_lien'` and `timestamp >= current_date - interval 30 days`.
 **Why it matters:** Recapture — catch a competitor refi before it closes.
 
 ## S25 — Permit × equity-crossing double signal

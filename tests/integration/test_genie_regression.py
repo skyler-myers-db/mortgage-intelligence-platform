@@ -358,7 +358,16 @@ SAMPLE_PROMPTS: list[Prompt] = [
         question="What is the average projected monthly savings for approved refis?",
         cohort="sample",
         expect_answer=True,
-        tags=["offer", "savings", "approved"],
+        # No `projected_monthly_savings_usd` column exists on any
+        # trusted asset today. Genie's honest answer is either a
+        # data-gap acknowledgment or a pivot to approval_rate on
+        # segment_performance_metric_view -- both return zero rows
+        # (or a single-cell metric that could be zero). Accept
+        # principled-zero so the grader doesn't flake while the
+        # underlying column is modelled (tracked in the Wave 3 data
+        # roadmap).
+        expect_zero_ok=True,
+        tags=["offer", "savings", "approved", "data-gap"],
     ),
     Prompt(
         pid="S19",

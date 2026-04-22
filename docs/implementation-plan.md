@@ -106,12 +106,13 @@ Create SQL models:
 2. `owner_property_bridge`: Owner Link to properties.
 3. `lien_current`: open lien summary.
 4. `property_trigger_features`: listing, permit, equity, HPI, AVM features.
-5. `lead_population`: filtered universe.
-6. `lead_segment_membership`: segment flags and evidence ids.
+5. `lead_population`: ranked filtered universe.
+6. `segment_population`: segment rollups (one row per segment_code/state + national `_ALL`).
 7. `lead_scores`: deterministic score components.
-8. `borrower_360`: joined borrower story.
-9. `recommended_offers`: next-best-offer and alternatives.
+8. `borrower_360`: joined borrower story; carries `segment_codes` (ARRAY<STRING>), `recommended_offer_code`, `recommended_offer` inline — next-best-offer is a column, not its own table.
+9. `borrower_dossier`: 1:1 with `borrower_360`; pre-joins evidence_events as ARRAY<STRUCT> for single-row `/api/borrowers/{id}` reads.
 10. `evidence_events`: traceable source evidence.
+11. `lockin_cohort`: 2020-2022 sub-3% originations — retention/HELOC/cash-out addressable cohort.
 
 Data-source request to Cotality:
 - Customer 360 sample.
@@ -123,7 +124,8 @@ Data-source request to Cotality:
 Validation SQL examples:
 ```sql
 select count(*) from mip.gold.lead_population;
-select segment_code, count(*) from mip.gold.lead_segment_membership group by 1;
+select segment_code, count(*) from mip.gold.segment_population where state = '_ALL' group by 1;
+select recommended_offer_code, count(*) from mip.gold.borrower_360 group by 1;
 select * from mip.gold.evidence_events where borrower_id is null limit 10;
 ```
 

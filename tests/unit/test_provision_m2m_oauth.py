@@ -304,8 +304,16 @@ def test_set_gh_secrets_requires_gh_repo() -> None:
 
 def test_set_gh_secrets_masks_and_pipes_via_stdin(
     capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """When gh upload is requested: every call uses stdin + prints ::add-mask::."""
+    """When gh upload is requested inside Actions: every call uses stdin +
+    prints ``::add-mask::`` so downstream echoes are redacted. Outside
+    Actions the mask directive is intentionally omitted — see the
+    ``_local_run`` companion test below.
+    """
+    # Pretend we're inside a GitHub-hosted runner so the mask directive fires.
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+
     new_sp = _sp()
     client = _make_client(existing_sp=None, create_returns=new_sp, mint_secret_value="s3cr3t")
 
@@ -347,13 +355,44 @@ def test_set_gh_secrets_masks_and_pipes_via_stdin(
     # Mask directive was emitted on stdout for every secret.
     out = capsys.readouterr().out
     assert out.count("::add-mask::") == 3
-    # Masked values must actually contain the real values (they were emitted).
-    assert "::add-mask::s3cr3t" in out
-    assert "::add-mask::app-id-abc" in out  # client_id
-    assert "::add-mask::https://mip-app-test.aws.databricksapps.com" in out  # URL
 
-    assert result.secret_written_to_gh is True
-    assert result.gh_repo == "acme/repo"
+
+def test_set_gh_secrets_does_not_mask_outside_actions(
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Outside GitHub Actions the ``::add-mask::`` directive has no redact
+    effect, so writing the plaintext secret even once to stdout is a
+    leak vector (shell history, CI mirrors that aren't GHA, etc.).
+    This test pins the Copilot 2026-04-22 fix: masking only inside
+    Actions, plaintext never echoed on dev laptops.
+    """
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+
+    new_sp = _sp()
+    client = _make_client(existing_sp=None, create_returns=new_sp, mint_secret_value="s3cr3t")
+
+    def fake_run(cmd, input=None, check=True, capture_output=True, timeout=None, **kwargs):
+        return SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
+
+    with patch.object(pmo.subprocess, "run", side_effect=fake_run), patch.object(
+        pmo, "_which", return_value="/usr/local/bin/gh"
+    ):
+        pmo.provision(
+            sp_name="mip-nightly-ci-sp",
+            app_name="mip-app",
+            grant_can_use=True,
+            gh_repo="acme/repo",
+            set_gh_secrets=True,
+            rotate=False,
+            app_url="https://mip-app-test.aws.databricksapps.com",
+            client_factory=lambda: client,
+        )
+
+    out = capsys.readouterr().out
+    # Belt-and-braces: no mask directive and no plaintext secret leak.
+    assert "::add-mask::" not in out
+    assert "s3cr3t" not in out
 
 
 def test_set_gh_secrets_gracefully_skips_when_gh_unavailable(

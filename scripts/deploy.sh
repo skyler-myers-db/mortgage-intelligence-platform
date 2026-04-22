@@ -60,20 +60,31 @@ SKIP_SMOKE=0
 NO_CONFIRM=0
 TARGET="dev"
 
-for arg in "$@"; do
-  case "$arg" in
-    --dry-run)      DRY_RUN=1 ;;
-    --skip-silver)  SKIP_SILVER=1 ;;
-    --skip-smoke)   SKIP_SMOKE=1 ;;
-    --no-confirm)   NO_CONFIRM=1 ;;
-    -t)             shift; TARGET="${1:-dev}" ;;
-    --target=*)     TARGET="${arg#--target=}" ;;
+# `for arg in "$@"` iterates a pre-expanded snapshot, so an inner
+# `shift` to grab `-t <target>`'s value doesn't actually consume the
+# next argument from the loop -- it advances `$1..` but the `for`
+# variable is already pointing past it. Use an explicit `while` loop
+# on `$1` so `-t <target>` (and any future two-arg flag) parses
+# reliably (raised by Copilot 2026-04-22).
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dry-run)      DRY_RUN=1;       shift ;;
+    --skip-silver)  SKIP_SILVER=1;   shift ;;
+    --skip-smoke)   SKIP_SMOKE=1;    shift ;;
+    --no-confirm)   NO_CONFIRM=1;    shift ;;
+    -t|--target)
+      if [[ $# -lt 2 ]]; then
+        echo "[deploy] missing value for $1 (expected target name, e.g. dev)" >&2
+        exit 2
+      fi
+      TARGET="$2"; shift 2 ;;
+    --target=*)     TARGET="${1#--target=}"; shift ;;
     -h|--help)
       sed -n '2,60p' "$0"
       exit 0
       ;;
     *)
-      echo "[deploy] unknown arg: $arg (run with --help)" >&2
+      echo "[deploy] unknown arg: $1 (run with --help)" >&2
       exit 2
       ;;
   esac
