@@ -145,11 +145,18 @@ jobs:
       E2E_LIVE: '1'
       # real_data.spec.ts uses this to flip the force-degraded flag.
       MIP_FORCE_DEGRADED_TOKEN: ${{ secrets.MIP_FORCE_DEGRADED_TOKEN }}
-      # Targets the deployed Databricks App. Left unset to fall back to
-      # the local uvicorn/vite dev pair if the secret is absent; the
-      # secret SHOULD be set so we test the actual customer-facing URL.
-      MIP_APP_URL: ${{ secrets.MIP_APP_URL }}
-      MIP_API_URL: ${{ secrets.MIP_API_URL }}
+      # Deliberately leave MIP_APP_URL / MIP_API_URL unset so the spec
+      # falls back to localhost on the runner. The playwright config's
+      # `webServer` block boots uvicorn+vite on the runner using the
+      # same source_code_path the deployed App uses; all four upstream
+      # dependencies (warehouse, Lakebase, Genie, UC) are live. This
+      # tests the real code paths against real backends without
+      # requiring a service-principal M2M OAuth client to traverse the
+      # Databricks Apps OAuth proxy in CI. The deployed App (same
+      # code) remains reachable by humans via browser OAuth at
+      # ${{ secrets.MIP_APP_URL }}.
+      # MIP_APP_URL: intentionally unset
+      # MIP_API_URL: intentionally unset
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
