@@ -65,11 +65,12 @@ async function fetchLeads(request: APIRequestContext): Promise<Array<{ borrower_
 
 test.describe('Module 0 — real-UC golden path (nightly only)', () => {
   test('dashboard renders non-zero segment counts from gold', async ({ page }) => {
-    await page.goto('/');
-    // Segment cards surface as `.seg-card__count` — the prototype BEM class.
-    // At least one card should display a count that is not "0" / "—".
+    // Segment cards live on /segment-intelligence, not the home dashboard.
+    // Home is a narrative/launchpad; segments (.seg-card__count BEM class)
+    // are the Segment Intelligence route's primary surface.
+    await page.goto('/segment-intelligence');
     const counts = page.locator('.seg-card__count');
-    await expect(counts.first()).toBeVisible({ timeout: 15_000 });
+    await expect(counts.first()).toBeVisible({ timeout: 20_000 });
     const rendered = await counts.allTextContents();
     const hasPositive = rendered.some((raw) => {
       const n = Number.parseInt(raw.replace(/[^0-9]/g, ''), 10);
@@ -109,12 +110,15 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     await panel.getByLabel('Ask Genie').fill(canonicalQ);
     await panel.getByRole('button', { name: /Ask/i }).click();
 
-    // Cold Genie space = 10-15s; allow 20s. We assert the answer region
-    // renders at least one non-empty character that is NOT the spinner glyph.
-    const answer = panel.locator('.genie-answer, .genie__msg--assistant').last();
-    await expect(answer).toBeVisible({ timeout: 20_000 });
+    // Cold Genie space = 10-15s; allow 40s (a cold warehouse + Genie
+    // compilation can push past 20s on the first question of a session).
+    // We assert the answer region renders at least one non-empty character
+    // that is NOT the spinner glyph. The component uses `genie__msg--ai`
+    // for assistant bubbles (see components/mortgage/GenieChat.tsx).
+    const answer = panel.locator('.genie__msg--ai .bubble').last();
+    await expect(answer).toBeVisible({ timeout: 40_000 });
     await expect
-      .poll(async () => (await answer.innerText()).trim().length, { timeout: 20_000 })
+      .poll(async () => (await answer.innerText()).trim().length, { timeout: 40_000 })
       .toBeGreaterThan(20);
   });
 
@@ -141,25 +145,39 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
       timeout: 5_000,
     });
 
-    // Poll /api/audit for a new row within 5s. Real Lakebase round-trip
-    // including INSERT + SELECT is typically < 500 ms, but network + serverless
-    // coldness can push it; 5s is the upper bound.
-    const newRow = await expect
+    // Poll /api/audit for a new row within 10s. Real Lakebase round-trip
+    // including INSERT + SELECT is typically < 500 ms, but network +
+    // serverless coldness can push it; 10s is a generous upper bound.
+    //
+    // Audit row shape: `entity_id` is the APPROVAL UUID (outreach.py sets
+    // entity_id = approval_id, not borrower_id). The borrower id lives
+    // in `payload_json.borrower_id`. Match on both the new-event-id and
+    // the payload's borrower_id to avoid false positives from a sibling
+    // approval that landed concurrently.
+    await expect
       .poll(
         async () => {
-          const resp = await request.get(`${API_URL}/api/audit/events?limit=100`);
-          const rows = (await resp.json()) as Array<{ event_id?: string; entity_id?: string; action?: string }>;
+          const resp = await request.get(
+            `${API_URL}/api/audit/events?limit=100`,
+            { headers: AUTH_HEADERS },
+          );
+          const rows = (await resp.json()) as Array<{
+            event_id?: string;
+            entity_id?: string;
+            action?: string;
+            payload_json?: { borrower_id?: string };
+          }>;
           return rows.find(
             (r) =>
-              r.entity_id === target &&
-              (r.action === 'outreach.approve' || r.action === 'outreach_approve') &&
+              (r.action === 'outreach.approve' ||
+                r.action === 'outreach_approve') &&
+              r.payload_json?.borrower_id === target &&
               !beforeIds.has(r.event_id),
           );
         },
-        { timeout: 5_000 },
+        { timeout: 10_000 },
       )
       .toBeTruthy();
-    expect(newRow).toBeTruthy();
   });
 
   test('forcing a 503 surfaces the DegradedBanner within 5s', async ({ page, request }) => {
