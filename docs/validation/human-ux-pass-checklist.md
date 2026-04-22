@@ -24,6 +24,13 @@ Target time budget: **15 minutes, end-to-end, unhurried.**
 
 ## Route-by-route click-through (8 min)
 
+Module 0 ships **8 routes**: `/`, `/portfolio-builder`,
+`/segment-intelligence`, `/lead-queue`, `/borrower-360/:id`,
+`/offer-orchestrator/:id`, `/ask-genie`, `/admin-config`. Outreach
+drafting is part of Offer Orchestrator — there is no separate
+`/outreach-composer` page. Any direct-typed legacy link to that path
+redirects to `/lead-queue`; any unknown path redirects to Home.
+
 Work through each route exactly once. For every route, ask three
 questions out loud: **What am I looking at? Why should I care? What
 would I do next?** If any answer is vague or requires context the UI
@@ -107,13 +114,7 @@ didn't provide, flag it.
 - [ ] Navigate directly to `/offer-orchestrator` (no id) — redirects
       to `/lead-queue`.
 
-### 7. Outreach Composer (`/outreach-composer`)
-
-- [ ] Table of recent draft outreach items renders.
-- [ ] Status chips (pending / approved / rejected) match what the
-      Lakebase `action_audit` table says.
-
-### 8. Ask Genie standalone (`/ask-genie`)
+### 7. Ask Genie standalone (`/ask-genie`)
 
 - [ ] Textarea labeled ("Ask Genie — question" accessible name).
 - [ ] Type one of the 10 curated questions from
@@ -122,6 +123,16 @@ didn't provide, flag it.
       tables. Evidence drawer opens from the evidence chips.
 - [ ] Ask an out-of-scope question ("Weather in NYC?"). Genie
       politely declines — it doesn't hallucinate.
+
+### 8. Admin Config (`/admin-config`)
+
+- [ ] Threshold values render editable (min spread bps, min equity %,
+      HELOC / cash-out equity floors). Changing a value persists via
+      localStorage and is echoed on Offer Orchestrator's "Thresholds
+      applied" panel.
+- [ ] Observability counters render from `/api/health` — breaker
+      state changes + recent errors + counters_persistence +
+      log_export keys.
 
 ## Floating Genie FAB (1 min)
 
