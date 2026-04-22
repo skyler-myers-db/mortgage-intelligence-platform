@@ -354,3 +354,75 @@ TBLPROPERTIES (
   'delta.autoOptimize.optimizeWrite' = 'true',
   'delta.autoOptimize.autoCompact'   = 'true'
 );
+
+-- -----------------------------------------------------------------------------
+-- 10. mip.gold.borrower_dossier
+--     Pre-joined dossier surface keyed by borrower_id. One row per borrower,
+--     carrying every column the `/api/borrowers/{id}` response needs plus the
+--     full evidence array (capped at 20) and the top-3 trigger timeline —
+--     so the repository read path collapses to a single indexed row lookup
+--     on the cluster key.
+--
+--     Slice13-accuracy perf fix: the serial borrower_360 + evidence_events
+--     fetch cost ~3300 ms p95; a pre-joined single-statement read targets
+--     < 2000 ms (ideally < 1000 ms warm). Populated by the CTAS at
+--     sql/transformations/gold_borrower_dossier.sql. Mirror schema (column
+--     order + types) with that SELECT list; liquid clustering on
+--     borrower_id so the indexed-row lookup hits the cluster key.
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS mip.gold.borrower_dossier (
+  clip                      STRING    NOT NULL COMMENT 'CLIP. 1:1 with borrower_360.clip.',
+  borrower_id               STRING    NOT NULL COMMENT 'Synthetic id; cluster key. Matches borrower_360.borrower_id.',
+  display_name              STRING    NOT NULL COMMENT 'Synthesized label; never a real name.',
+  city                      STRING             COMMENT 'Situs city.',
+  state                     STRING    NOT NULL COMMENT 'Situs state (6-state footprint).',
+  zip                       STRING             COMMENT '5-digit situs ZIP.',
+  situs_cbsa_code           STRING             COMMENT 'CBSA metro code.',
+  segment_codes             ARRAY<STRING> NOT NULL COMMENT 'Ordered SegmentCode list.',
+  equity_estimate           BIGINT    NOT NULL COMMENT 'USD.',
+  equity_pct                INT       NOT NULL COMMENT '0..100.',
+  rate_spread_bps           INT       NOT NULL COMMENT 'fn_rate_spread output.',
+  market_rate_fraction      DOUBLE    NOT NULL COMMENT 'Fractional market rate.',
+  opportunity_score         INT       NOT NULL COMMENT 'fn_lead_score output 0..100.',
+  confidence                INT       NOT NULL COMMENT 'Mean of 5 sub-scores.',
+  recommended_offer_code    STRING    NOT NULL COMMENT 'fn_next_best_offer code.',
+  recommended_offer         STRING    NOT NULL COMMENT 'Human label.',
+  why_now                   STRING    NOT NULL COMMENT 'Deterministic template per offer code.',
+  evidence_ids              ARRAY<STRING> NOT NULL COMMENT 'Ordered evidence ids.',
+  approval_status           STRING    NOT NULL COMMENT 'Default "pending"; Lakebase authoritative.',
+  owner_link_id             STRING             COMMENT 'Cotality Owner Link id.',
+  subject_property          STRING    NOT NULL COMMENT 'Synthetic city/state/ZIP5 string.',
+  avm_value                 BIGINT    NOT NULL COMMENT 'AVM value; 0 when missing.',
+  current_lien_balance      BIGINT    NOT NULL COMMENT 'Total open lien balance.',
+  current_rate              DOUBLE    NOT NULL COMMENT 'Percent form (5.75).',
+  ltv                       INT       NOT NULL COMMENT '0..100.',
+  related_property_count    INT       NOT NULL COMMENT 'From gold.property_owner_bridge.',
+  is_owner_occupied         BOOLEAN   NOT NULL COMMENT 'owner_occupancy_code = "O".',
+  is_absentee               BOOLEAN   NOT NULL COMMENT 'From silver.property_master.',
+  is_corporate_owner        BOOLEAN   NOT NULL COMMENT 'From silver.property_master.',
+  has_permit                BOOLEAN   NOT NULL COMMENT 'BLOCKED: FALSE until Cotality Building Permits lands.',
+  listed_for_sale           BOOLEAN   NOT NULL COMMENT 'BLOCKED: FALSE until Cotality MLS Listings lands.',
+  is_investor               BOOLEAN   NOT NULL COMMENT 'Derived: multi-property OR corporate OR absentee.',
+  is_current_customer       BOOLEAN   NOT NULL COMMENT 'Lender name contains Summit.',
+  is_competitor_lien        BOOLEAN   NOT NULL COMMENT 'Current lender != Summit.',
+  second_pos_amount         BIGINT             COMMENT 'For "equity" segment predicate.',
+  first_pos_loan_type       STRING             COMMENT 'For fit sub-score.',
+  owner_name_hash           STRING    NOT NULL COMMENT 'sha2 hash from silver; internal only, router strips.',
+  min_spread_bps_applied    INT       NOT NULL COMMENT 'Threshold this refresh.',
+  min_equity_pct_applied    INT       NOT NULL COMMENT 'Threshold this refresh.',
+  in_the_money              BOOLEAN   NOT NULL COMMENT 'fn_in_the_money output.',
+  trigger_timeline_json     STRING    NOT NULL COMMENT 'JSON-encoded top-3 evidence rows (carried from borrower_360 for parity).',
+  evidence_events           ARRAY<STRUCT<evidence_id: STRING, source_product: STRING, source_table: STRING, signal_type: STRING, signal_value: STRING, display_text: STRING, confidence: DOUBLE, `timestamp`: STRING, signal_rank: INT>>
+                                      NOT NULL COMMENT 'Full evidence array (capped at 20 per CLIP) sorted by signal_rank.',
+  trigger_timeline          ARRAY<STRUCT<evidence_id: STRING, source_product: STRING, source_table: STRING, signal_type: STRING, signal_value: STRING, display_text: STRING, confidence: DOUBLE, `timestamp`: STRING, signal_rank: INT>>
+                                      NOT NULL COMMENT 'Top-3 slice of evidence_events for the trigger timeline.',
+  refreshed_at              TIMESTAMP NOT NULL COMMENT 'Refresh timestamp.'
+)
+USING DELTA
+CLUSTER BY (borrower_id)
+COMMENT 'Pre-joined dossier surface for /api/borrowers/{id}. Superset of borrower_360 + top-20 evidence events per CLIP. Slice13-accuracy perf optimisation — collapses a 2-statement read into one indexed row lookup.'
+TBLPROPERTIES (
+  'delta.enableChangeDataFeed' = 'false',
+  'delta.autoOptimize.optimizeWrite' = 'true',
+  'delta.autoOptimize.autoCompact'   = 'true'
+);

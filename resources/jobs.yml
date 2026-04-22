@@ -84,6 +84,14 @@ resources:
             warehouse_id: ${var.sql_warehouse_id}
             file:
               path: ../sql/transformations/gold_lockin_cohort.sql
+        - task_key: ctas_borrower_dossier
+          depends_on:
+            - task_key: ctas_borrower_360
+            - task_key: ctas_evidence_events
+          sql_task:
+            warehouse_id: ${var.sql_warehouse_id}
+            file:
+              path: ../sql/transformations/gold_borrower_dossier.sql
 
     # Slice13-accuracy mirror: canonical definition lives in `databricks.yml`
     # as `mip_sync_lifecycle_state`. Same rationale as `fred_rates_ingest`

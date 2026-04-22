@@ -216,6 +216,7 @@ resources:
     #   5. lead_population               (needs borrower_360)
     #   6. segment_population            (needs borrower_360 + lead_scores)
     #   7. lockin_cohort                 (needs borrower_360 + silver.lien_current)
+    #   8. borrower_dossier              (needs borrower_360 + evidence_events)
     #
     # The DDL manifest (003_gold_tables.sql) is CREATE TABLE IF NOT EXISTS,
     # so running it on every refresh is safe and picks up any newly-added
@@ -292,6 +293,15 @@ resources:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
               path: sql/transformations/gold_lockin_cohort.sql
+        - task_key: ctas_borrower_dossier
+          description: "Rebuild mip.gold.borrower_dossier via CTAS (slice13-accuracy perf)."
+          depends_on:
+            - task_key: ctas_borrower_360
+            - task_key: ctas_evidence_events
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/transformations/gold_borrower_dossier.sql
 
     # Slice13-accuracy: hourly sync of Lakebase approval + outreach state
     # into mip.gold.borrower_lifecycle_state. Metric views (segment_

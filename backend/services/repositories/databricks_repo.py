@@ -81,6 +81,17 @@ _BORROWER_360_COLUMNS: str = (
     "min_spread_bps_applied, min_equity_pct_applied, in_the_money"
 )
 
+# Slice13-accuracy perf: mip.gold.borrower_dossier is a pre-joined superset
+# of borrower_360 + top-20 evidence events per CLIP. /api/borrowers/{id}
+# reads one indexed row here instead of fanning out to two warehouse
+# statements (borrower_360 + evidence_events). Keep this list in sync with
+# sql/transformations/gold_borrower_dossier.sql's SELECT and with the DDL
+# in sql/ddl/003_gold_tables.sql §10.
+_BORROWER_DOSSIER_COLUMNS: str = (
+    _BORROWER_360_COLUMNS
+    + ", trigger_timeline_json, evidence_events, trigger_timeline"
+)
+
 _LEAD_POPULATION_COLUMNS: str = (
     "clip, borrower_id, display_name, city, state, zip, segment_codes, "
     "equity_estimate, rate_spread_bps, opportunity_score, confidence, "
@@ -136,6 +147,35 @@ def _parse_timeline(raw: Any) -> list[EvidenceEvent]:
                 timestamp=str(r.get("timestamp") or ""),
             )
         )
+    return events
+
+
+def _redact_evidence_list(raw: Any) -> list[EvidenceEvent]:
+    """Redact + hydrate an ARRAY<STRUCT<...>> evidence column.
+
+    The dossier carries ``evidence_events`` + ``trigger_timeline`` as
+    pre-joined struct arrays. ``databricks_sql._coerce`` decodes them
+    from the JSON_ARRAY disposition into Python ``list[dict]``. Each
+    struct dict needs the same redaction pipeline the standalone
+    ``/api/borrowers/{id}/evidence`` path runs so lender strings stay
+    generalised.
+    """
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        # Defensive fallback: if a future disposition change emits the
+        # array as JSON text, still parse it.
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            return []
+    if not isinstance(raw, list):
+        return []
+    events: list[EvidenceEvent] = []
+    for r in raw:
+        if not isinstance(r, dict):
+            continue
+        events.append(EvidenceEvent(**redact_evidence_row(r)))
     return events
 
 
@@ -299,59 +339,72 @@ class DatabricksLeadRepository:
 
 
 class DatabricksBorrowerRepository:
-    """Borrower-360 + evidence reads from ``gold.borrower_360`` / ``gold.evidence_events``."""
+    """Borrower-360 + evidence reads from ``gold.borrower_dossier``.
+
+    Slice13-accuracy perf: the dossier table pre-joins ``borrower_360`` +
+    the top-20 ``evidence_events`` per CLIP into a single row keyed on
+    ``borrower_id`` (Delta liquid cluster). The prior implementation fanned
+    two warehouse statements out on a ``ThreadPoolExecutor`` to drop the
+    p95 from ~4.6 s to ~3.3 s; folding them into one indexed row read
+    collapses the warehouse round-trip count from 2 to 1 and pushes the
+    p95 toward the 2-s load-test target.
+    """
 
     def __init__(self, client: DatabricksSqlClient) -> None:
         self._client = client
 
     _GET_SQL = (
-        f"SELECT {_BORROWER_360_COLUMNS}, trigger_timeline_json "
-        "FROM mip.gold.borrower_360 "
+        f"SELECT {_BORROWER_DOSSIER_COLUMNS} "
+        "FROM mip.gold.borrower_dossier "
         "WHERE borrower_id = :borrower_id "
         "LIMIT 1"
     )
 
+    # Fallback evidence fetch — preserved so /api/borrowers/{id}/evidence
+    # can still serve a borrower whose dossier row was rebuilt between
+    # refreshes AND whose evidence_events array is somehow empty (schema
+    # drift, upstream outage). The primary path reads from the dossier's
+    # evidence array below.
     _EVIDENCE_SQL = (
         f"SELECT {_EVIDENCE_COLUMNS} "
         "FROM mip.gold.evidence_events "
         "WHERE clip = ("
-        "  SELECT clip FROM mip.gold.borrower_360 "
+        "  SELECT clip FROM mip.gold.borrower_dossier "
         "  WHERE borrower_id = :borrower_id LIMIT 1"
         ") "
         "ORDER BY signal_rank ASC"
     )
 
     def get(self, borrower_id: str) -> Borrower360 | None:
-        # Slice-13 perf: the dossier needs borrower_360 + evidence_events;
-        # both key by the same (borrower_id -> clip) lookup and neither
-        # depends on the other's result. Fan them out on a 2-worker
-        # ThreadPoolExecutor so the /api/borrowers/{id} p95 drops from
-        # ~4.6 s (serial) to ~max(t_borrower, t_evidence) + hydrate. If
-        # the borrower isn't found, the evidence query's inner subselect
-        # returns zero rows, which we drop before hydrating.
-        from concurrent.futures import ThreadPoolExecutor
-
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            row_fut = pool.submit(
-                self._client.execute_one, self._GET_SQL, {"borrower_id": borrower_id}
-            )
-            evidence_fut = pool.submit(
-                self._client.execute, self._EVIDENCE_SQL, {"borrower_id": borrower_id}
-            )
-            row = row_fut.result()
-            evidence_rows = evidence_fut.result()
-
+        # Single-statement indexed lookup on the dossier cluster key
+        # (borrower_id). Evidence + trigger timeline are both pre-joined
+        # as ARRAY<STRUCT> columns, so no fan-out is needed.
+        row = self._client.execute_one(
+            self._GET_SQL, {"borrower_id": borrower_id}
+        )
         if row is None:
             return None
 
         redacted = redact_borrower_row(row)
 
-        # Evidence + trigger timeline: trigger_timeline_json is the
-        # pre-materialised top-3; evidence_events is the full list.
-        timeline_events = _parse_timeline(row.get("trigger_timeline_json"))
-        evidence_events = [
-            EvidenceEvent(**redact_evidence_row(r)) for r in (evidence_rows or [])
-        ]
+        # Evidence: dossier carries up to 20 rows per CLIP as a parsed
+        # ARRAY<STRUCT> (``_coerce`` in databricks_sql.py decodes JSON
+        # arrays into list-of-dict). Apply the same redaction pipeline
+        # used by the standalone evidence() endpoint so PII posture is
+        # preserved.
+        raw_evidence = row.get("evidence_events") or []
+        evidence_events = _redact_evidence_list(raw_evidence)
+
+        # Trigger timeline: dossier pre-materialised the top-3 as its own
+        # ARRAY<STRUCT>. Prefer that; fall back to the JSON string form
+        # (old borrower_360 path) then to the first full-evidence entry
+        # so the dossier stays defensible against an empty-array column.
+        raw_timeline = row.get("trigger_timeline") or []
+        timeline_events = _redact_evidence_list(raw_timeline)
+        if not timeline_events:
+            timeline_events = _parse_timeline(row.get("trigger_timeline_json"))
+        if not timeline_events and evidence_events:
+            timeline_events = evidence_events[:1]
 
         why = WhyPanel(
             rate_spread_bps=int(row.get("rate_spread_bps") or 0),
@@ -376,7 +429,7 @@ class DatabricksBorrowerRepository:
             sources=[
                 "mip.gold.fn_rate_spread",
                 "mip.gold.fn_in_the_money",
-                "mip.gold.borrower_360",
+                "mip.gold.borrower_dossier",
             ],
         )
 
@@ -385,7 +438,7 @@ class DatabricksBorrowerRepository:
         # dict -- no raw PII is ever composed into the Pydantic object.
         borrower = Borrower360(
             **redacted,
-            trigger_timeline=timeline_events or evidence_events[:1],
+            trigger_timeline=timeline_events,
             evidence_events=evidence_events,
             why_panel=why,
         )
@@ -401,19 +454,27 @@ class DatabricksBorrowerRepository:
         return borrower
 
     def evidence(self, borrower_id: str) -> list[EvidenceEvent] | None:
+        # Prefer reading from the dossier's pre-joined evidence array —
+        # one round-trip instead of two. If the dossier row carries
+        # evidence (it almost always will; the CTAS emits an empty
+        # ARRAY() only when a CLIP has zero live signals), serve it
+        # directly. Otherwise fall back to the standalone gold.evidence_
+        # events query so an empty-array dossier row (brand-new CLIP,
+        # schema drift) still resolves.
+        dossier_row = self._client.execute_one(
+            "SELECT clip, evidence_events FROM mip.gold.borrower_dossier "
+            "WHERE borrower_id = :borrower_id LIMIT 1",
+            {"borrower_id": borrower_id},
+        )
+        if dossier_row is None:
+            return None  # router 404s for unknown borrower
+        raw = dossier_row.get("evidence_events") or []
+        if raw:
+            return _redact_evidence_list(raw)
+        # Dossier row present but evidence empty — fall back to direct
+        # evidence_events lookup (belt-and-suspenders for upstream drift).
         rows = self._client.execute(self._EVIDENCE_SQL, {"borrower_id": borrower_id})
         if not rows:
-            # Distinguish "no such borrower" from "no evidence rows" by
-            # cheap probe. Missing borrower -> None so the router 404s;
-            # missing evidence on a real borrower -> []. This matches
-            # the in-process mock's semantics.
-            probe = self._client.execute_one(
-                "SELECT 1 AS present FROM mip.gold.borrower_360 "
-                "WHERE borrower_id = :borrower_id LIMIT 1",
-                {"borrower_id": borrower_id},
-            )
-            if probe is None:
-                return None
             return []
         return [EvidenceEvent(**redact_evidence_row(r)) for r in rows]
 
