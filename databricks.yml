@@ -9,6 +9,16 @@ bundle:
 workspace:
   host: https://dbc-3aa503a9-4fa8.cloud.databricks.com
 
+# Sync: explicitly include the built frontend bundle in the uploaded
+# source tree. `frontend/dist/` is in .gitignore (we don't commit built
+# artifacts) but the Databricks App runtime needs those files at `/` so
+# the FastAPI SPA fallback serves the React bundle. The operator runs
+# `npm --prefix frontend run build` before `bundle deploy` — a one-line
+# wrapper in Makefile's `bundle-deploy-dev` guards this.
+sync:
+  include:
+    - frontend/dist/**
+
 targets:
   dev:
     mode: development
@@ -76,6 +86,32 @@ resources:
       name: mip-app
       description: Mortgage Intelligence Platform — Module 0 (Top-of-Funnel Lead Generation & Borrower Segmentation).
       source_code_path: .
+      # App resource bindings. On deploy, Databricks Apps injects env
+      # vars for each binding so the backend has everything it needs
+      # without a PAT: DATABRICKS_HOST (auto), DATABRICKS_WAREHOUSE_ID
+      # (from sql_warehouse binding), plus a service-principal-based
+      # OAuth flow the backend mints a bearer token from at startup
+      # (see backend/config/settings.py::_mint_workspace_identity_token).
+      # The Genie + database bindings surface GENIE_SPACE_ID and the
+      # Lakebase DSN/password through the app's env, same pattern.
+      resources:
+        - name: sql_warehouse
+          description: "Serverless SQL Warehouse for gold-table queries."
+          sql_warehouse:
+            id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            permission: CAN_USE
+        - name: genie_space
+          description: "Mortgage Lead Intelligence Genie Space."
+          genie_space:
+            name: mortgage_lead_intelligence
+            space_id: ${var.genie_space_id}
+            permission: CAN_RUN
+        - name: database
+          description: "Lakebase/Postgres app-state database."
+          database:
+            database_name: ${var.lakebase_database_name}
+            instance_name: ${resources.database_instances.mip_app_state.name}
+            permission: CAN_CONNECT_AND_CREATE
 
   sql_warehouses:
     mip_serverless_sql:

@@ -259,13 +259,85 @@ _CLIENT: LakebaseClient | None = None
 _LOCK = Lock()
 
 
+def _resolve_lakebase_connection_params() -> tuple[str, int, str, str, str, str]:
+    """Return ``(host, port, database, user, password, sslmode)``.
+
+    Three supported pathways:
+
+    1. **Local / CI with full LAKEBASE_* env vars** -- return them as-is.
+    2. **Databricks Apps (``database`` resource binding)** -- the runtime
+       injects ``PGHOST``, ``PGUSER``, ``PGPORT``, ``PGDATABASE`` but
+       NOT ``PGPASSWORD`` (that's meant to be a short-lived OAuth
+       token minted on demand). Fall through to the SDK credential
+       minter below.
+    3. **Databricks workspace identity** -- call
+       ``/api/2.0/database/credentials`` via ``databricks-sdk`` to
+       obtain a short-lived Postgres token; resolve the host via
+       ``GET /api/2.0/database/instances/{instance}`` when it isn't
+       already set.
+
+    The shape mirrors ``jobs/lakebase_migrate.py::_resolve_connection``
+    so both the backend and the migrate job share a single auth story;
+    any update here should be mirrored there (and vice versa).
+    """
+    import os as _os
+
+    host = (settings.lakebase_host or _os.environ.get("PGHOST") or "").strip()
+    port_raw = _os.environ.get("PGPORT") or str(settings.lakebase_port)
+    port = int(port_raw) if port_raw else 5432
+    database = (settings.lakebase_database or _os.environ.get("PGDATABASE") or "mip_app_state").strip()
+    user = (settings.lakebase_user or _os.environ.get("PGUSER") or "").strip()
+    password_secret = settings.lakebase_password
+    password = password_secret.get_secret_value() if password_secret else ""
+    if not password:
+        password = _os.environ.get("PGPASSWORD") or ""
+    sslmode = settings.lakebase_sslmode or "require"
+
+    if host and user and password:
+        return host, port, database, user, password, sslmode
+
+    instance_name = _os.environ.get("LAKEBASE_INSTANCE_NAME", "mip-app-state")
+
+    try:  # pragma: no cover -- exercised on deployed Databricks Apps only
+        from databricks.sdk import WorkspaceClient
+
+        workspace = WorkspaceClient()
+        if not host:
+            inst = workspace.api_client.do(
+                "GET", f"/api/2.0/database/instances/{instance_name}"
+            )
+            host = inst.get("read_write_dns") or ""
+        if not user:
+            me = workspace.current_user.me()
+            user = me.user_name or me.display_name or ""
+        if not password:
+            cred = workspace.api_client.do(
+                "POST",
+                "/api/2.0/database/credentials",
+                body={
+                    "request_id": (
+                        f"mip-backend-"
+                        f"{_os.environ.get('DATABRICKS_JOB_RUN_ID','app')}"
+                    ),
+                    "instance_names": [instance_name],
+                },
+            )
+            password = cred.get("token") or ""
+    except Exception as exc:  # noqa: BLE001 -- surface reason on first call
+        raise LakebaseError(f"Lakebase credential resolution failed: {exc}") from exc
+
+    return host, port, database, user, password, sslmode
+
+
 def get_lakebase_client() -> LakebaseClient:
     """Lazy process-singleton accessor.
 
-    Reads credentials from ``settings`` (which reads them from
-    ``.env.local`` + workspace environment). Missing host / user / db
-    raise ``LakebaseError`` -- the audit router catches this and
-    returns HTTP 503, preserving the no-silent-fallback invariant.
+    Reads credentials via ``_resolve_lakebase_connection_params``, which
+    honours the full LAKEBASE_* env-var set on laptops / CI and falls
+    through to Databricks Apps' ``PG*`` + workspace-identity token
+    minting for in-workspace deploys. Missing host / user / db raise
+    ``LakebaseError`` -- the audit router catches this and returns HTTP
+    503, preserving the no-silent-fallback invariant.
 
     Slice-6: the returned object is a ``ResilientLakebaseClient`` that
     wraps the raw psycopg client with a circuit breaker + retry. When
@@ -281,15 +353,14 @@ def get_lakebase_client() -> LakebaseClient:
 
     with _LOCK:
         if _CLIENT is None:
-            password_secret = settings.lakebase_password
-            password = password_secret.get_secret_value() if password_secret else ""
+            host, port, database, user, password, sslmode = _resolve_lakebase_connection_params()
             bare = LakebaseClient(
-                host=settings.lakebase_host or "",
-                port=settings.lakebase_port,
-                database=settings.lakebase_database,
-                user=settings.lakebase_user or "",
+                host=host,
+                port=port,
+                database=database,
+                user=user,
                 password=password,
-                sslmode=settings.lakebase_sslmode,
+                sslmode=sslmode,
             )
             resilient = Resilient[Any](
                 breaker=get_breaker("lakebase"),

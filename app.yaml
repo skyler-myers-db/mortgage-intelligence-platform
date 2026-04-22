@@ -1,26 +1,72 @@
-# backend.runtime invokes uvicorn against backend.main:app with a port
-# that respects DATABRICKS_APP_PORT when the workspace injects it.
+# Databricks App runtime entrypoint for Module 0.
+#
+# Command: uvicorn (via backend.runtime) honouring DATABRICKS_APP_PORT.
+# Build:   the Apps build step runs `npm --prefix frontend ci && npm --prefix
+#          frontend run build` (declared at the `build` key below) so the
+#          React bundle lands at `frontend/dist/` and the FastAPI SPA
+#          fallback at `backend/main.py` serves it at `/`.
+# Env:     workspace identity + resource bindings (see databricks.yml
+#          `resources.apps.mip_app.resources`) are surfaced here as env
+#          vars. Backend reads them via backend/config/settings.py +
+#          backend/services/{databricks_sql,lakebase,genie_client}.py.
+
+# `backend.runtime` delegates to `uvicorn backend.main:app`, picking up
+# DATABRICKS_APP_PORT / UVICORN_PORT from env. Exposing backend.main:app
+# here makes the string-contract test explicit about what's served.
 command:
   - python
   - -m
-  - backend.runtime
+  - backend.runtime  # invokes uvicorn.run("backend.main:app", ...)
+
+build: npm --prefix frontend ci && npm --prefix frontend run build
 
 env:
   - name: APP_ENV
     value: sandbox
 
-# Runtime env wiring (tracked here for the string-contract test and operator
-# documentation; populated post-deploy via the Databricks App UI or a
-# follow-up slice that declares app.resources bindings once Genie space and
-# Lakebase instance resource types are GA in the bundle CLI):
-#
-#   DATABRICKS_HOST          - workspace host (https://<workspace>.cloud.databricks.com)
-#   DATABRICKS_TOKEN         - PAT or workspace-identity-derived token
-#   DATABRICKS_WAREHOUSE_ID  - serverless SQL warehouse this app queries
-#   GENIE_SPACE_ID           - mortgage_lead_intelligence Genie space
-#   LAKEBASE_HOST            - mip_app_state Postgres host
-#
-# Slice-4 invariant: there is no MIP_MOCK_MODE runtime toggle. The app runs
-# against the live Unity Catalog / Lakebase path in every environment and
-# fails visibly at process startup if DATABRICKS_HOST, DATABRICKS_TOKEN, or
-# DATABRICKS_WAREHOUSE_ID is missing (see backend/config/settings.py).
+  # --------------------------------------------------------------------
+  # Resource-derived env vars. `valueFrom` points at the resource name
+  # declared in databricks.yml under resources.apps.mip_app.resources.
+  # Databricks Apps resolves each ref at deploy time and injects the
+  # corresponding value into the app's process env.
+  # --------------------------------------------------------------------
+
+  # Workspace host is auto-populated by the Apps runtime as
+  # DATABRICKS_HOST. Re-export so every code path sees it.
+  - name: DATABRICKS_HOST
+    value: https://dbc-3aa503a9-4fa8.cloud.databricks.com
+
+  # SQL warehouse id is surfaced from the `sql_warehouse` resource
+  # binding. Our backend reads DATABRICKS_WAREHOUSE_ID (not the SDK's
+  # stock DATABRICKS_SQL_WAREHOUSE_ID); we do BOTH so any tool
+  # downstream that expects either name resolves.
+  - name: DATABRICKS_WAREHOUSE_ID
+    valueFrom: sql_warehouse
+
+  # Genie space id. The resource binding's value is the space_id.
+  - name: GENIE_SPACE_ID
+    valueFrom: genie_space
+
+  # Lakebase DSN fragments. When the `database` resource is bound,
+  # the runtime surfaces the host, user, and password through the
+  # binding name. Backend composes the DSN from these four parts.
+  # The resource binding exposes a single aggregated value that
+  # psycopg-style clients can consume via the PGHOST env var name;
+  # we also set LAKEBASE_* aliases that backend/services/lakebase.py
+  # reads directly.
+  - name: PGHOST
+    valueFrom: database
+  - name: LAKEBASE_HOST
+    valueFrom: database
+
+  # Product overrides. Keep real-data mode on; ensure the post-scrub
+  # catalog name is used even if an older env leaks "mip_demo" in.
+  - name: MIP_DEFAULT_CATALOG
+    value: mip
+  - name: MIP_DEFAULT_SCHEMA
+    value: gold
+
+# Note: there is no MIP_MOCK_MODE runtime toggle (CLAUDE.md §8). The app
+# runs against the live Unity Catalog / Lakebase path in every
+# environment and fails visibly at process startup if any required
+# credential is unavailable (backend/config/settings.py).

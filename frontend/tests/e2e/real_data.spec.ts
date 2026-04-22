@@ -34,14 +34,31 @@ const LIVE = process.env.E2E_LIVE === '1';
 test.skip(!LIVE, 'Set E2E_LIVE=1 in the nightly workflow to run real-UC e2e.');
 
 // Target URL — nightly workflow sets MIP_APP_URL to the deployed app; local
-// ad-hoc runs fall back to the local dev stack.
-const APP_URL = process.env.MIP_APP_URL ?? 'http://127.0.0.1:5173';
-const API_URL = process.env.MIP_API_URL ?? APP_URL.replace(':5173', ':8000');
+// ad-hoc runs fall back to the local dev stack. Use `||` (not `??`) so that
+// an EMPTY STRING (the GitHub Actions default when a secret isn't set) also
+// falls through to the localhost default. Without this, `page.goto('/')`
+// sees an empty baseURL and emits `Cannot navigate to invalid URL`.
+const APP_URL = process.env.MIP_APP_URL || 'http://127.0.0.1:5173';
+const API_URL =
+  process.env.MIP_API_URL || APP_URL.replace(':5173', ':8000');
 
-test.use({ baseURL: APP_URL });
+// Deployed Databricks Apps sit behind OAuth — a fresh browser hit to `/`
+// 302-redirects to a consent page. Pass a workspace Bearer token on every
+// request so the Apps auth middleware short-circuits the redirect. The
+// nightly workflow wires DATABRICKS_TOKEN into the env; local ad-hoc runs
+// against a localhost uvicorn don't need it (FastAPI accepts the unauth
+// request).
+const BEARER = process.env.MIP_BEARER_TOKEN || process.env.DATABRICKS_TOKEN || '';
+const AUTH_HEADERS: Record<string, string> = BEARER
+  ? { Authorization: `Bearer ${BEARER}` }
+  : {};
+
+test.use({ baseURL: APP_URL, extraHTTPHeaders: AUTH_HEADERS });
 
 async function fetchLeads(request: APIRequestContext): Promise<Array<{ borrower_id: string }>> {
-  const resp = await request.get(`${API_URL}/api/leads?limit=10`);
+  const resp = await request.get(`${API_URL}/api/leads?limit=10`, {
+    headers: AUTH_HEADERS,
+  });
   expect(resp.status(), 'GET /api/leads returned non-200').toBe(200);
   return (await resp.json()) as Array<{ borrower_id: string }>;
 }
