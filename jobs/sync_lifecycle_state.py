@@ -230,9 +230,16 @@ def _write_gold(rows: list[dict[str, Any]]) -> None:
         for r in rows
         if r.get("borrower_id")
     ]
-    lb_df = (
-        spark.createDataFrame(lakebase_rows) if lakebase_rows else spark.createDataFrame([], schema="borrower_id STRING, approval_status STRING, outreach_status STRING, offer_code STRING, approved_at TIMESTAMP, outreach_at TIMESTAMP, synced_at TIMESTAMP")
+    # Always pass an explicit schema: Spark Connect cannot infer types when
+    # rows contain None values (offer_code/approved_at/outreach_at are
+    # optional), which surfaces as CANNOT_DETERMINE_TYPE. The schema string
+    # is the same for empty-input and populated-input cases.
+    _LIFECYCLE_SCHEMA = (
+        "borrower_id STRING, approval_status STRING, outreach_status STRING, "
+        "offer_code STRING, approved_at TIMESTAMP, outreach_at TIMESTAMP, "
+        "synced_at TIMESTAMP"
     )
+    lb_df = spark.createDataFrame(lakebase_rows, schema=_LIFECYCLE_SCHEMA)
     lb_df.createOrReplaceTempView("_mip_lifecycle_lakebase")
 
     # Seed every known borrower to the default. A LEFT ANTI against the
