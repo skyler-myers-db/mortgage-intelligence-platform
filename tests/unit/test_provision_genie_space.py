@@ -37,11 +37,11 @@ from databricks import provision_genie_space as pgs  # noqa: E402
 
 EXPECTED_ASSETS = {
     "mip.gold.lead_population",
-    "mip.gold.lead_segment_membership",
+    "mip.gold.segment_population",
     "mip.gold.lead_scores",
     "mip.gold.borrower_360",
+    "mip.gold.borrower_dossier",
     "mip.gold.evidence_events",
-    "mip.gold.recommended_offers",
     "mip.gold.lockin_cohort",
     "mip.semantics.lead_generation_metric_view",
     "mip.semantics.segment_performance_metric_view",

@@ -1,0 +1,4 @@
+# Failure artefacts from tests/integration/test_genie_fuzz.py runs.
+# These are run-local — operators replay from CI artefacts, not from
+# checked-in JSONL. Keep the directory but ignore its contents.
+*.jsonl

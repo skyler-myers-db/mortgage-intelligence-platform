@@ -217,10 +217,19 @@ resources:
     #   6. segment_population            (needs borrower_360 + lead_scores)
     #   7. lockin_cohort                 (needs borrower_360 + silver.lien_current)
     #   8. borrower_dossier              (needs borrower_360 + evidence_events)
+    #   9. refresh_semantics_views       (needs lead_population + segment_population + borrower_dossier)
     #
     # The DDL manifest (003_gold_tables.sql) is CREATE TABLE IF NOT EXISTS,
     # so running it on every refresh is safe and picks up any newly-added
     # gold table on subsequent bundle deploys.
+    #
+    # Semantics views (sql/ddl/005_semantics_views.sql) are CREATE OR REPLACE
+    # VIEW, so they rebind cheaply on every refresh. They read from both the
+    # gold tables this job populates and from gold.funnel_snapshot_daily /
+    # gold.borrower_lifecycle_state (populated by the sibling
+    # `mip_sync_lifecycle_state` job) — the views tolerate an empty snapshot
+    # table on first boot because each CTE falls back to NULL snapshot_date,
+    # and the outer SELECTs LEFT JOIN with COALESCE for the rate columns.
     mip_refresh_scores:
       name: mip_refresh_scores
       tags:
@@ -302,6 +311,22 @@ resources:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
               path: sql/transformations/gold_borrower_dossier.sql
+        # Zero-click Genie provisioning — publish the three mip.semantics.*
+        # views so the Genie trusted_assets list in
+        # genie/mortgage_lead_intelligence_space.yml binds on first deploy.
+        # Runs AFTER every gold table the views read from is built.
+        # The DDL file is idempotent (CREATE OR REPLACE VIEW); re-running
+        # this task is a byte-stable no-op at the view definition level.
+        - task_key: refresh_semantics_views
+          description: "CREATE OR REPLACE the three mip.semantics.* metric views (Genie + dashboards)."
+          depends_on:
+            - task_key: ctas_lead_population
+            - task_key: ctas_segment_population
+            - task_key: ctas_borrower_dossier
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/ddl/005_semantics_views.sql
 
     # Slice13-accuracy: hourly sync of Lakebase approval + outreach state
     # into mip.gold.borrower_lifecycle_state. Metric views (segment_

@@ -84,6 +84,19 @@ resources:
             warehouse_id: ${var.sql_warehouse_id}
             file:
               path: ../sql/transformations/gold_borrower_dossier.sql
+        # Zero-click Genie provisioning: rebuild the three mip.semantics.*
+        # metric views on every refresh so Genie's trusted_assets bind
+        # without a manual UI step. See databricks.yml for the canonical
+        # definition and rationale. Keep this block in sync with that file.
+        - task_key: refresh_semantics_views
+          depends_on:
+            - task_key: ctas_lead_population
+            - task_key: ctas_segment_population
+            - task_key: ctas_borrower_dossier
+          sql_task:
+            warehouse_id: ${var.sql_warehouse_id}
+            file:
+              path: ../sql/ddl/005_semantics_views.sql
 
     # Slice13-accuracy mirror: canonical definition lives in `databricks.yml`
     # as `mip_sync_lifecycle_state`. Same rationale as `fred_rates_ingest`

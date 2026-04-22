@@ -23,6 +23,13 @@ fuzz = [
 testpaths = ["tests/unit", "tests/integration"]
 pythonpath = ["."]
 addopts = "-q"
+# Custom pytest markers. Registered so `-m genie_fuzz_deep` selects the
+# heavy Hypothesis run and PR CI's `pytest` doesn't emit
+# PytestUnknownMarkWarning. See tests/integration/test_genie_fuzz.py.
+markers = [
+    "integration: live-infra tests gated on workspace creds",
+    "genie_fuzz_deep: 200-example deep Hypothesis fuzz run (workflow_dispatch only)",
+]
 
 [tool.ruff]
 line-length = 100

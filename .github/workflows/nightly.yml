@@ -22,6 +22,11 @@ on:
     # catches regressions before the workday starts.
     - cron: '0 10 * * *'
   workflow_dispatch:
+    inputs:
+      run_real_drills:
+        description: "Run the real-infra kill drills (stops + restarts warehouse/Lakebase)"
+        type: boolean
+        default: false
 
 concurrency:
   group: nightly-${{ github.ref }}
@@ -328,6 +333,152 @@ jobs:
           name: kill-drill-evidence
           path: tools/kill_drill/evidence/
           if-no-files-found: warn
+          retention-days: 30
+
+  kill-drill-real-infra:
+    name: Credential-kill drill (REAL infra -- opt-in)
+    # Opt-in rehearsal. Only runs on manual workflow_dispatch WITH the
+    # run_real_drills input set to true. NEVER runs on the nightly cron
+    # -- stopping the real warehouse + Lakebase is too disruptive to be
+    # a scheduled event. Rehearse before rehearsals, not daily.
+    #
+    # continue-on-error is true because this is a rehearsal, not a
+    # release gate: a red drill signals a real regression that an
+    # operator must follow up on, but it should not block the other
+    # nightly jobs from reporting green.
+    if: github.event_name == 'workflow_dispatch' && inputs.run_real_drills == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    continue-on-error: true
+    env:
+      DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+      DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+      DATABRICKS_WAREHOUSE_ID: ${{ secrets.DATABRICKS_WAREHOUSE_ID }}
+      LAKEBASE_INSTANCE_NAME: mip-app-state
+      # Explicit allow-flag. The run_drill.sh script refuses to stop
+      # real infra unless this is set OR --i-really-mean-it is passed.
+      # Scope it to this job only; do NOT promote to workflow-env.
+      MIP_KILL_DRILL_ALLOW_REAL: '1'
+      MIP_APP_URL: ${{ secrets.MIP_APP_URL }}
+      MIP_MOCK_MODE: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Install jq + lsof
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq jq lsof
+      - name: Fail fast on missing inputs
+        run: |
+          missing=""
+          for v in DATABRICKS_HOST DATABRICKS_TOKEN DATABRICKS_WAREHOUSE_ID MIP_APP_URL; do
+            if [ -z "${!v}" ]; then
+              missing="$missing $v"
+            fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Missing required secrets for real-infra drill:$missing"
+            exit 1
+          fi
+      # Each real-infra drill must complete stop+restart before the next
+      # starts so we don't overlap outages. Sequential, not matrix.
+      - name: Drill - warehouse-real (SDK stop/start)
+        run: |
+          bash tools/kill_drill/run_drill.sh \
+            --target warehouse-real \
+            --i-really-mean-it \
+            --app-url "$MIP_APP_URL" \
+            --await-seconds 180
+      - name: Drill - lakebase-real (SDK stop/start)
+        if: always()
+        run: |
+          bash tools/kill_drill/run_drill.sh \
+            --target lakebase-real \
+            --i-really-mean-it \
+            --app-url "$MIP_APP_URL" \
+            --await-seconds 180
+      - name: Upload real-infra evidence logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kill-drill-real-infra-evidence
+          path: tools/kill_drill/evidence/
+          if-no-files-found: warn
+          retention-days: 90
+
+  genie-fuzz-deep:
+    name: Genie deep fuzz (200 examples/family)
+    # Workflow-dispatch only: this burns ~90 min of real Genie quota
+    # (3 families × 200 examples × ~5s avg response + 4s pacing). Kept
+    # off the standard nightly cron so it never runs unexpectedly and
+    # never eats into the primary live-UC budget. Release-engineer
+    # fires it from the Actions UI ahead of a major release, or on an
+    # incident re-run. The 45-min timeout is deliberate: one family at
+    # 200 × ~9s ≈ 30 min, so the budget fits one family per run plus
+    # the coverage assertion. The deep tests share the
+    # `_ADVERSARIAL_TEMPLATE_HITS` counter in-process, so a single
+    # pytest invocation collects coverage for all three families.
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+      DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+      DATABRICKS_WAREHOUSE_ID: ${{ secrets.DATABRICKS_WAREHOUSE_ID }}
+      GENIE_SPACE_ID: ${{ secrets.GENIE_SPACE_ID }}
+      MIP_MOCK_MODE: 'false'
+      # 200 examples/family is the spec. An operator who wants a
+      # smaller targeted rerun can override this via the Actions UI's
+      # "Run workflow" dialog (after wiring up an input), or by forking
+      # the workflow. The _resolve_examples helper clamps to [1, 1000].
+      MIP_GENIE_FUZZ_EXAMPLES: '200'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          # Hypothesis is a `.[fuzz]` extra; install it explicitly here
+          # in case requirements.txt drops the pin.
+          pip install "hypothesis>=6.123,<7"
+      - name: Fail fast if required secrets are missing
+        run: |
+          missing=""
+          for v in DATABRICKS_HOST DATABRICKS_TOKEN GENIE_SPACE_ID; do
+            if [ -z "${!v}" ]; then
+              missing="$missing $v"
+            fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Missing required secrets:$missing"
+            exit 1
+          fi
+      - name: Run deep Genie fuzz
+        # `-m genie_fuzz_deep` selects only the 200-example variants
+        # plus the template-coverage assertion. The standard 15-example
+        # tests stay in the `integration` mark and are not re-run here.
+        run: pytest -m genie_fuzz_deep tests/integration/test_genie_fuzz.py -q
+      - name: Upload fuzz failure artefacts
+        # `if: always()` so the artefacts upload even when the fuzz
+        # run fails -- those are exactly the runs whose JSONL payload
+        # the operator needs to replay.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: genie-fuzz-failures
+          path: tests/integration/genie_fuzz_failures/
+          if-no-files-found: ignore
           retention-days: 30
 
   notify-on-failure:

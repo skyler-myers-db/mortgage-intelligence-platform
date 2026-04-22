@@ -38,6 +38,12 @@ WITH ranked AS (
     b.zip,
     b.segment_codes,
     b.equity_estimate,
+    -- equity_pct is carried through from borrower_360 so the executive
+    -- dashboard's top-borrowers widget can read percent equity without
+    -- joining back. Nightly "Lakeview widgets resolve" test asserts the
+    -- column exists on lead_population; adding it here is the canonical
+    -- fix to CI failures on 2026-04-22 (UNRESOLVED_COLUMN equity_pct).
+    b.equity_pct,
     b.rate_spread_bps,
     b.opportunity_score,
     b.confidence,
@@ -61,6 +67,7 @@ SELECT
   zip,
   segment_codes,
   equity_estimate,
+  equity_pct,
   rate_spread_bps,
   opportunity_score,
   confidence,

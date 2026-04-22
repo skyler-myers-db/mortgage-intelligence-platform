@@ -165,6 +165,11 @@ class SpaceSpec:
                 if desc:
                     entry["description"] = [desc]
                 tables.append(entry)
+            # Genie's proto validator rejects unsorted `data_sources.tables`
+            # with "Invalid export proto: data_sources.tables must be sorted
+            # by identifier". Sort here so whatever order the YAML puts
+            # trusted_assets in, the serialised payload is always valid.
+            tables.sort(key=lambda e: str(e.get("identifier", "")))
 
         sample_questions: list[dict[str, Any]] = []
         for idx, q in enumerate(self.sample_questions):

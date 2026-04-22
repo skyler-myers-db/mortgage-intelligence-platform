@@ -183,42 +183,65 @@ governance + qa-test-engineer sign-off. The fixtures are the contract.
 ## 4. Deploy from scratch
 
 Use this when setting up a new dev/prod workspace, or when the
-workspace has been rebuilt. Run commands in order; each is idempotent
-but depends on its predecessor.
+workspace has been rebuilt. **The one command is `./scripts/deploy.sh`
+(or `make deploy-dev`).** Everything below is what that script runs,
+in order, idempotently. You shouldn't need to invoke the steps
+manually unless something failed and you want to resume from a
+specific step.
 
 ```bash
-# 0. Prereqs
-export DATABRICKS_CONFIG_PROFILE=DEFAULT   # or whichever profile
-databricks bundle validate -t dev          # expect no errors
+# 0. Prereqs: .env.local populated with DATABRICKS_HOST + DATABRICKS_WAREHOUSE_ID.
+#    The Genie space id is written by step 8 on first run.
 
-# 1. Deploy the bundle (SQL warehouse, app, jobs, pipelines, Genie space, Lakebase)
-databricks bundle deploy -t dev
-
-# 2. Seed silver.market_rates_weekly from FRED MORTGAGE30US
-databricks bundle run mip_fred_rates_ingest -t dev
-
-# 3. Silver lift from Cotality Delta Share (6-state filter; ~10M rows)
-databricks bundle run mip_refresh_silver -t dev
-
-# 4. Lakebase schema migration + seed campaigns
-databricks bundle run mip_lakebase_migrate -t dev
-
-# 5. Gold refresh — CTAS chain computes borrower_360, lead_scores,
-#    evidence_events, lead_population, segment_population, lockin_cohort,
-#    borrower_dossier. Replaces the retired `mip_gold_pipeline` DLT.
-databricks bundle run mip_refresh_scores -t dev
-
-# 6. Verify: warehouse running, app live, all deps up
-curl -s "$MIP_APP_URL/api/health" | jq
-# Expect: status=ok, dependencies.{warehouse,lakebase,genie}=up, circuit_breakers all closed.
-
-# 7. Smoke-run the real-UC golden path
-./scripts/smoke_live.sh
+# One command:
+./scripts/deploy.sh
+# or equivalently:
+make deploy-dev
 ```
 
-After step 3 the silver tables are queryable but the app still returns
-503 because the gold layer isn't populated. Step 5 is what makes the
-UI render real borrowers.
+That single invocation executes:
+
+1. `npm --prefix frontend run build` — the bundle sync uploads
+   `frontend/dist/**` so the FastAPI runtime can serve the SPA.
+2. `databricks bundle validate -t dev` (via `tools/databricks/bundle_env.py`
+   so `.env.local` maps to `BUNDLE_VAR_sql_warehouse_id` / `BUNDLE_VAR_genie_space_id`).
+3. `databricks bundle deploy -t dev` — SQL warehouse, app, jobs,
+   pipelines, Lakebase instance, MLflow experiment, dashboards.
+4. `databricks bundle run mip_fred_rates_ingest -t dev` — FRED
+   MORTGAGE30US into `silver.market_rates_weekly`.
+5. `databricks bundle run mip_refresh_silver -t dev` — Cotality Delta
+   Share → `mip.silver.*`, 6-state filtered.
+6. `databricks bundle run mip_lakebase_migrate -t dev` — Postgres
+   `schema.sql` + `seed_campaigns.sql` (both idempotent).
+7. `databricks bundle run mip_refresh_scores -t dev` — CTAS chain:
+   `property_owner_bridge` → `evidence_events` → `borrower_360` →
+   `lead_scores` → `lead_population` → `segment_population` →
+   `lockin_cohort` → `borrower_dossier` → **`refresh_semantics_views`**
+   (the three `mip.semantics.*` metric views Genie binds to).
+8. `databricks bundle run mip_sync_lifecycle_state -t dev` — hourly
+   sync target plus initial seed so `delta_vs_prior_*` columns resolve.
+9. `python tools/databricks/provision_genie_space.py` — reads
+   `genie/mortgage_lead_intelligence_space.yml`, creates or updates
+   the Genie Space, binds trusted assets, writes `genie/space_id.txt`.
+10. `./scripts/smoke_live.sh` — verify the app and all four deps up.
+
+Flags on `scripts/deploy.sh` for partial re-runs:
+
+| Flag | Effect |
+|---|---|
+| `--dry-run` | print the plan, make no changes |
+| `--skip-silver` | skip steps 4–5 (fast path when silver is already fresh) |
+| `--skip-smoke` | skip step 10 |
+| `--no-confirm` | skip the interactive `y/N` prompt |
+
+Every step is idempotent — re-running `./scripts/deploy.sh` is safe
+and picks up where a previous run stopped.
+
+**No manual UI step anywhere.** The previous runbook called for
+opening the Databricks UI to rebind the Genie space's trusted assets
+after a metric view rename; that is no longer required. Step 7
+publishes the views, step 9 binds them, and re-running `deploy.sh`
+re-runs both.
 
 On a brand-new deploy, the dashboards render but a handful of widgets
 will show `0` / `NULL` / "pending" by design — specifically the

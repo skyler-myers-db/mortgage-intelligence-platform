@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS mip.gold.lead_population (
   zip                       STRING             COMMENT '5-digit situs ZIP.',
   segment_codes             ARRAY<STRING> NOT NULL COMMENT 'Ordered SegmentCode list.',
   equity_estimate           BIGINT    NOT NULL COMMENT 'From gold.borrower_360.',
+  equity_pct                INT       NOT NULL COMMENT 'From gold.borrower_360 [0..100]. Used by executive dashboard top-borrower widget.',
   rate_spread_bps           INT       NOT NULL COMMENT 'From gold.borrower_360.',
   opportunity_score         INT       NOT NULL COMMENT 'fn_lead_score output 0..100.',
   confidence                INT       NOT NULL COMMENT 'Mean of 5 sub-scores 0..100.',

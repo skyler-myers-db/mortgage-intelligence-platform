@@ -1,0 +1,241 @@
+-- =============================================================================
+-- 005_semantics_views.sql
+-- -----------------------------------------------------------------------------
+-- Purpose:   Idempotent CREATE OR REPLACE VIEW manifest for the three
+--            Genie-facing + dashboard-facing semantic views under
+--            mip.semantics. A single file so a single bundle task can
+--            materialise them AFTER the gold tables they read from are
+--            built. This is the file `mip_refresh_scores` executes at
+--            the end of its CTAS chain to guarantee Genie's trusted
+--            assets bind on the first `databricks bundle deploy -t dev`.
+--
+-- Sources of truth (these files stay the authored copy for code review;
+-- 005_semantics_views.sql is the deploy surface and must stay a
+-- byte-equivalent concatenation):
+--     sql/metric_views/lead_generation_metric_view.sql
+--     sql/metric_views/segment_performance_metric_view.sql
+--     sql/metric_views/borrower_opportunity_metric_view.sql
+--
+-- Idempotency: every statement below is CREATE OR REPLACE VIEW; re-running
+-- this file any number of times is safe and byte-stable. No DDL against
+-- any catalog/schema other than mip.semantics.* is emitted here — the
+-- mip.semantics schema itself is created by 001_catalogs_schemas.sql.
+--
+-- Grounding contract: Genie's trusted_assets list in
+-- genie/mortgage_lead_intelligence_space.yml references each of these
+-- three fully qualified names. If a view name drifts, provision_genie_
+-- space.py will fail to bind tables on create/update. Keep this file
+-- in lockstep with the YAML.
+--
+-- Slice:     slice13-accuracy (zero-click semantics provisioning).
+-- Data contract: docs/data-contract-module0.md §3.5, §3.6 + per-file
+--            docstring in sql/metric_views/*.sql.
+-- =============================================================================
+
+-- -----------------------------------------------------------------------------
+-- 1. mip.semantics.lead_generation_metric_view
+-- -----------------------------------------------------------------------------
+-- See sql/metric_views/lead_generation_metric_view.sql for the authored
+-- copy + per-column rationale.
+CREATE OR REPLACE VIEW mip.semantics.lead_generation_metric_view AS
+WITH latest_snapshot AS (
+  SELECT MAX(snapshot_date) AS snapshot_date
+  FROM mip.gold.funnel_snapshot_daily
+),
+prior_snapshot AS (
+  SELECT MAX(snapshot_date) AS snapshot_date
+  FROM mip.gold.funnel_snapshot_daily
+  WHERE snapshot_date <= (SELECT snapshot_date FROM latest_snapshot) - INTERVAL 7 DAYS
+),
+today AS (
+  SELECT state, segment_code, addressable_borrowers
+  FROM mip.gold.funnel_snapshot_daily
+  WHERE snapshot_date = (SELECT snapshot_date FROM latest_snapshot)
+),
+prior AS (
+  SELECT state, segment_code,
+         addressable_borrowers AS addressable_borrowers_prior
+  FROM mip.gold.funnel_snapshot_daily
+  WHERE snapshot_date = (SELECT snapshot_date FROM prior_snapshot)
+),
+exploded AS (
+  SELECT
+    lp.clip,
+    lp.state,
+    segment                                 AS segment,
+    CASE
+      WHEN lp.rank_overall <= 10    THEN 'top_10'
+      WHEN lp.rank_overall <= 100   THEN 'top_100'
+      WHEN lp.rank_overall <= 1000  THEN 'top_1000'
+      ELSE                               'top_10000'
+    END                                     AS rank_bucket,
+    lp.rank_overall,
+    lp.rank_within_state,
+    lp.opportunity_score,
+    lp.equity_estimate,
+    lp.rate_spread_bps,
+    lp.population_version,
+    lp.refreshed_at,
+    COALESCE(ls.approval_status, 'pending') AS approval_status,
+    COALESCE(ls.outreach_status, 'none')    AS outreach_status,
+    lp.borrower_id
+  FROM mip.gold.lead_population AS lp
+  LEFT JOIN mip.gold.borrower_lifecycle_state AS ls
+    ON ls.borrower_id = lp.borrower_id
+  LATERAL VIEW EXPLODE(lp.segment_codes) seg AS segment
+)
+SELECT
+  e.clip,
+  e.state,
+  e.segment,
+  e.rank_bucket,
+  e.rank_overall,
+  e.rank_within_state,
+  e.opportunity_score,
+  e.equity_estimate,
+  e.rate_spread_bps,
+  e.population_version,
+  e.refreshed_at,
+  e.approval_status,
+  e.outreach_status,
+  CAST(
+    ROUND(
+      100.0 * COUNT(CASE WHEN e.approval_status = 'approved' THEN 1 END)
+        OVER (PARTITION BY e.state, e.segment)
+        / NULLIF(COUNT(*) OVER (PARTITION BY e.state, e.segment), 0),
+      2
+    ) AS DOUBLE
+  )                                           AS approval_rate,
+  CAST(
+    ROUND(
+      100.0 * COUNT(CASE WHEN e.outreach_status = 'actioned' THEN 1 END)
+        OVER (PARTITION BY e.state, e.segment)
+        / NULLIF(COUNT(*) OVER (PARTITION BY e.state, e.segment), 0),
+      2
+    ) AS DOUBLE
+  )                                           AS outreach_rate,
+  CAST(
+    ROUND(
+      100.0 * (COALESCE(t.addressable_borrowers, 0) - COALESCE(p.addressable_borrowers_prior, 0))
+        / NULLIF(p.addressable_borrowers_prior, 0),
+      2
+    ) AS DOUBLE
+  )                                           AS delta_vs_prior_count
+FROM exploded AS e
+LEFT JOIN today AS t ON t.state = e.state AND t.segment_code = e.segment
+LEFT JOIN prior AS p ON p.state = e.state AND p.segment_code = e.segment;
+
+COMMENT ON VIEW mip.semantics.lead_generation_metric_view IS
+  'Genie + dashboard metric view over gold.lead_population + gold.borrower_lifecycle_state + gold.funnel_snapshot_daily. Dimensions: segment, state, rank_bucket. Row measures: approval_status, outreach_status. Aggregate measures: count_top10, count_top100, sum_marketable_population, approval_rate, outreach_rate, delta_vs_prior_count. See docs/data-contract-module0.md §3.5 + docs/validation/metric-views.md.';
+
+
+-- -----------------------------------------------------------------------------
+-- 2. mip.semantics.segment_performance_metric_view
+-- -----------------------------------------------------------------------------
+-- See sql/metric_views/segment_performance_metric_view.sql for the authored
+-- copy + per-column rationale.
+CREATE OR REPLACE VIEW mip.semantics.segment_performance_metric_view AS
+WITH latest_snapshot AS (
+  SELECT MAX(snapshot_date) AS snapshot_date
+  FROM mip.gold.funnel_snapshot_daily
+),
+prior_snapshot AS (
+  SELECT MAX(snapshot_date) AS snapshot_date
+  FROM mip.gold.funnel_snapshot_daily
+  WHERE snapshot_date <= (SELECT snapshot_date FROM latest_snapshot) - INTERVAL 7 DAYS
+),
+today AS (
+  SELECT
+    f.state,
+    f.segment_code,
+    f.addressable_borrowers,
+    f.in_the_money_borrowers,
+    f.approved_borrowers,
+    f.actioned_borrowers
+  FROM mip.gold.funnel_snapshot_daily f
+  WHERE f.snapshot_date = (SELECT snapshot_date FROM latest_snapshot)
+),
+prior AS (
+  SELECT
+    f.state,
+    f.segment_code,
+    f.addressable_borrowers        AS addressable_borrowers_prior,
+    f.in_the_money_borrowers       AS in_the_money_borrowers_prior,
+    f.approved_borrowers           AS approved_borrowers_prior
+  FROM mip.gold.funnel_snapshot_daily f
+  WHERE f.snapshot_date = (SELECT snapshot_date FROM prior_snapshot)
+)
+SELECT
+  sp.segment_code,
+  sp.state,
+  sp.name,
+  sp.count,
+  sp.avg_score,
+  sp.delta_vs_prior,
+  sp.description,
+  sp.color,
+  sp.refreshed_at,
+  CAST(
+    ROUND(
+      100.0 * COALESCE(t.approved_borrowers, 0) / NULLIF(sp.count, 0),
+      2
+    ) AS DOUBLE
+  )                                                                            AS approval_rate,
+  CAST(
+    ROUND(
+      100.0 * COALESCE(t.actioned_borrowers, 0) / NULLIF(sp.count, 0),
+      2
+    ) AS DOUBLE
+  )                                                                            AS outreach_rate,
+  CAST(
+    ROUND(
+      100.0 * (sp.count - COALESCE(p.addressable_borrowers_prior, 0))
+        / NULLIF(p.addressable_borrowers_prior, 0),
+      2
+    ) AS DOUBLE
+  )                                                                            AS delta_vs_prior_count,
+  CAST(
+    ROUND(
+      100.0 * (COALESCE(t.approved_borrowers, 0) - COALESCE(p.approved_borrowers_prior, 0))
+        / NULLIF(p.approved_borrowers_prior, 0),
+      2
+    ) AS DOUBLE
+  )                                                                            AS delta_vs_prior_approved,
+  CAST(
+    ROUND(
+      100.0 * (COALESCE(t.in_the_money_borrowers, 0) - COALESCE(p.in_the_money_borrowers_prior, 0))
+        / NULLIF(p.in_the_money_borrowers_prior, 0),
+      2
+    ) AS DOUBLE
+  )                                                                            AS delta_vs_prior_in_the_money
+FROM mip.gold.segment_population AS sp
+LEFT JOIN today  AS t ON t.state = sp.state AND t.segment_code = sp.segment_code
+LEFT JOIN prior  AS p ON p.state = sp.state AND p.segment_code = sp.segment_code;
+
+COMMENT ON VIEW mip.semantics.segment_performance_metric_view IS
+  'Genie + dashboard metric view over gold.segment_population + gold.funnel_snapshot_daily. Dimensions: segment_code, state. Measures: count, avg_score, approval_rate, outreach_rate, delta_vs_prior, delta_vs_prior_count, delta_vs_prior_approved, delta_vs_prior_in_the_money. See docs/data-contract-module0.md §3.6 + docs/validation/metric-views.md.';
+
+
+-- -----------------------------------------------------------------------------
+-- 3. mip.semantics.borrower_opportunity_metric_view
+-- -----------------------------------------------------------------------------
+-- See sql/metric_views/borrower_opportunity_metric_view.sql for the authored
+-- copy + per-column rationale.
+CREATE OR REPLACE VIEW mip.semantics.borrower_opportunity_metric_view AS
+SELECT
+  b.clip,
+  b.state,
+  segment                                           AS segment,
+  b.first_pos_loan_type                             AS loan_purpose,
+  b.is_investor,
+  b.is_current_customer,
+  b.rate_spread_bps,
+  b.equity_pct,
+  b.in_the_money,
+  b.current_lien_balance,
+  b.opportunity_score
+FROM mip.gold.borrower_360 AS b
+LATERAL VIEW EXPLODE(b.segment_codes) seg AS segment;
+
+COMMENT ON VIEW mip.semantics.borrower_opportunity_metric_view IS
+  'Genie + dashboard metric view over gold.borrower_360. Dimensions: state, segment, loan_purpose, is_investor, is_current_customer. Measures: avg_rate_spread_bps, avg_equity_pct, count_itm, sum_loan_amount, count_total, avg_opportunity_score. See docs/data-contract-module0.md §3.2.';

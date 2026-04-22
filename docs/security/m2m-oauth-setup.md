@@ -27,7 +27,97 @@ landing page — the flow and API surface have been stable since 2024.
 
 ---
 
-## 1. Create the service principal
+## Setup path selector
+
+Two paths exist for running this setup. Pick one:
+
+- **SDK-scripted (canonical — zero click-ops).** Recommended. Creates
+  the service principal, grants `CAN USE`, mints the OAuth secret, and
+  pushes the three GitHub Actions secrets — all from one Python
+  invocation. See §0 below.
+- **Manual UI (appendix).** Click-through in the workspace admin
+  console. Retained for workspaces whose policy disallows scripted SP
+  creation. See §A in the appendix.
+
+The remainder of this doc mirrors the same numbered-steps structure for
+both paths, so the SDK flow and the UI flow are step-by-step comparable.
+
+---
+
+## 0. Zero-click SDK provisioning (canonical path)
+
+The entire procedure — create the service principal, grant `CAN USE` on
+the deployed App, mint the OAuth client_id + client_secret, write the
+three secrets to the GitHub repo — runs from a single Python tool:
+
+```bash
+# Pre-reqs (one-time):
+#   1. `databricks auth login` as a workspace admin (or set DATABRICKS_HOST +
+#      an admin PAT in ~/.databrickscfg DEFAULT profile).
+#   2. `gh auth login` against the repo owner. Used to push the three
+#      GitHub secrets via stdin.
+#   3. `databricks bundle deploy -t dev` has been run at least once so
+#      the deployed App resource (`mip-app`) exists in the workspace.
+
+python tools/databricks/provision_m2m_oauth.py \
+    --sp-name mip-nightly-ci-sp \
+    --app-name mip-app \
+    --gh-repo skyler-myers-db/mortgage-intelligence-platform \
+    --set-gh-secrets
+```
+
+What this runs (in order, all via `databricks-sdk`):
+
+1. `w.service_principals.list(filter="displayName eq 'mip-nightly-ci-sp'")`
+   — idempotent lookup. If the SP exists, re-use it; else create it via
+   `w.service_principals.create(...)`.
+2. `w.apps.set_permissions("mip-app", access_control_list=[...CAN_USE...])`
+   — grants the SP `CAN USE` on the deployed App resource.
+3. `w.service_principal_secrets_proxy.create(service_principal_id=...)`
+   — mints a one-shot OAuth client_secret. The secret is returned in
+   the response's `.secret` field and cannot be retrieved later.
+4. `gh secret set DATABRICKS_CLIENT_ID --repo ... <stdin>` (+ the
+   secret and `MIP_APP_URL`) — piped via stdin so the value never
+   appears in argv/ps. Each call is preceded by a GitHub Actions
+   `::add-mask::` directive so any accidental echo downstream is
+   redacted.
+
+Flags of note:
+
+| Flag                    | Default                                          | Purpose                                                                                           |
+| ----------------------- | ------------------------------------------------ | ------------------------------------------------------------------------------------------------- |
+| `--sp-name`             | `mip-nightly-ci-sp`                              | SCIM `displayName` for the SP.                                                                    |
+| `--app-name`            | resolved from `databricks.yml`                   | Deployed App to grant on.                                                                         |
+| `--gh-repo`             | inferred from `git remote get-url origin`        | Target GitHub repo for secret upload.                                                             |
+| `--set-gh-secrets`      | off (explicit opt-in)                            | Required for secret upload. Without it, the tool prints the client_secret to stdout once.         |
+| `--rotate`              | off                                              | If the SP exists, mint a fresh secret. Old secret remains valid until revoked in Accounts Console. |
+| `--no-grant-can-use`    | grant is on                                      | Skip the CAN_USE grant (use when an admin grants it separately).                                  |
+| `--dry-run`             | off                                              | Resolve defaults and validate arguments without touching the workspace.                           |
+
+Rotation (replaces the "Rotation cadence" section below when you use
+the SDK path): re-run with `--rotate --set-gh-secrets`. The old secret
+is still valid until revoked in the Accounts Console — same zero-
+downtime order as the UI flow (new secret first, revoke second).
+
+Tests: `.venv/bin/pytest tests/unit/test_provision_m2m_oauth.py -q`
+mocks the full SDK surface to pin the call-order contract; a future
+SDK rename will break this test before it breaks production setup.
+
+**If the SDK path fails with "403 Forbidden" / "PermissionDenied":**
+your current workspace auth is not a workspace admin. Either run this
+tool from an admin profile, or fall back to the manual UI path (§A).
+
+---
+
+## Appendix A — Manual UI setup (fallback)
+
+Use this path when `tools/databricks/provision_m2m_oauth.py` cannot be
+run (workspace policy, no admin shell access, emergency rotation
+without local tooling, etc.). The end state is identical to the
+SDK-scripted path; you are just performing the same four API calls
+through the workspace admin console.
+
+### A.1. Create the service principal
 
 From the workspace admin console:
 
@@ -43,7 +133,7 @@ From the workspace admin console:
 > independently revokable credential, (b) a clean audit trail, and
 > (c) a surface that's easy to scope to exactly `CAN USE` on one app.
 
-## 2. Mint a client_id + client_secret
+### A.2. Mint a client_id + client_secret
 
 With the SP selected in the admin console:
 
@@ -62,7 +152,7 @@ DATABRICKS_CLIENT_ID     = dbc-m2m-<opaque>
 DATABRICKS_CLIENT_SECRET = dose_<opaque>
 ```
 
-## 3. Grant `CAN USE` on the deployed app
+### A.3. Grant `CAN USE` on the deployed app
 
 The App is a first-class resource in Unity Catalog / Apps permissions.
 From the Databricks UI:
@@ -84,7 +174,7 @@ If the SP also needs direct Unity Catalog reads for the parity job
 / `SELECT` in SQL — but the Playwright job in this doc only needs
 `CAN USE` on the app.
 
-## 4. Store the secrets in GitHub
+### A.4. Store the secrets in GitHub
 
 From the GitHub repo:
 
@@ -106,7 +196,9 @@ the gap between admin setup and the first scheduled run.
 parity-live job (`${{ secrets.DATABRICKS_HOST }}`); the mint helper
 reuses it. You do not need to add it a second time.
 
-## 5. Verify from your laptop first
+## 1. Verify from your laptop first
+
+Applies to both paths (SDK-scripted and manual UI).
 
 Before touching CI, confirm the mint works with a local dry-run:
 
@@ -127,7 +219,7 @@ curl -sSf \
 If `curl` prints an HTML login page instead of JSON, the SP does not
 have `CAN USE` on the app — go back to step 3.
 
-## 6. Enable the CI path
+## 2. Enable the CI path
 
 Once the secrets are in place, the next nightly run (or a manual
 `workflow_dispatch`) will automatically pick them up. The

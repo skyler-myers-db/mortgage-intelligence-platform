@@ -14,11 +14,11 @@ serverless SQL warehouse referenced in `databricks.yml`.
 | Asset | Kind | Grain | Why Module 0 cares |
 |---|---|---|---|
 | `mip.gold.lead_population` | table | one row per eligible borrower | Defines the addressable market; the denominator for every funnel metric. |
-| `mip.gold.lead_segment_membership` | table | borrower × segment | Powers the Segment Intelligence route and the "which segment is this borrower in" drill-down. |
+| `mip.gold.segment_population` | table | (segment_code, state) + '_ALL' national rollup | Powers the Segment Intelligence route's segment rows — count + mean score per (segment, state). |
 | `mip.gold.lead_scores` | table | one row per borrower | Canonical lead score — parity-pinned between `fn_lead_score.sql` and `backend/services/scoring.py`. |
 | `mip.gold.borrower_360` | table | one row per borrower | Feeds the Borrower 360 route, the Evidence Drawer, and the dossier preview rail. |
+| `mip.gold.borrower_dossier` | table | one row per borrower (denormalised) | Pre-joined single-row payload for `/api/borrowers/{id}`; carries an ARRAY<STRUCT> of up to 20 recent evidence events + top-3 trigger timeline. |
 | `mip.gold.evidence_events` | table | append-only event ledger | The "why now" signal — trigger events with UTC timestamps, confidence, and source citations. |
-| `mip.gold.recommended_offers` | table | one row per borrower × current offer | Next-best-offer output; the recommendation that a human approves before outreach. |
 | `mip.gold.lockin_cohort` | table | one row per borrower in the sub-3% 2020–2022 cohort | Size + composition of the rate-lock-in cohort that is retention / HELOC / cash-out addressable but will not rate-and-term refi. |
 | `mip.semantics.lead_generation_metric_view` | metric view | funnel-wide | Executive + Head-of-Growth funnel KPIs: addressable → eligible → scored → approved → actioned. |
 | `mip.semantics.segment_performance_metric_view` | metric view | segment | Segment strategy and A/B decisions: mean score, rate spread, equity, approval rate, outreach rate. |
@@ -31,12 +31,17 @@ The addressable market. Every other gold asset joins back to this row set
 on `borrower_id`. Without it, the funnel has no denominator and the
 executive dashboard has no "how big is the pond" KPI.
 
-### `gold.lead_segment_membership`
-Segment membership is the primary lever a Head of Growth pulls when
-deciding where to spend the next marketing dollar. The rules (In-the-Money,
-HELOC/Cash-Out, Listed-for-Sale, Investor/Multi-Property, Retention/
-Recapture) live in `sql/transformations/gold_lead_segment_membership.sql`
-and are parity-pinned to the UC scalar functions under `sql/uc_functions/`.
+### `gold.segment_population`
+Per-(segment_code, state) rollup of borrower counts + mean lead score +
+QoQ delta, plus a per-segment national `_ALL` row. Segment codes:
+`itm`, `listed`, `permit`, `investor`, `equity`, `retention`. Segment
+membership is evaluated once in `gold.borrower_360.segment_codes` (the
+`BLOCKED` predicates for listed/permit are forced false there); this
+table is a straight aggregate over the resulting array so a Head of
+Growth can answer "how big is each segment in Texas" without a runtime
+EXPLODE. The rules themselves live in
+`sql/transformations/gold_borrower_360.sql` and
+`sql/uc_functions/fn_in_the_money.sql`.
 
 ### `gold.lead_scores`
 The 0–100 lead score is the ranking used by the Lead Queue and Borrower 360
@@ -57,12 +62,16 @@ include rate-drop, equity-crossed, permit-filed, listed-for-sale,
 lien-change. Each row carries a `source_table` citation back to the
 Cotality silver layer.
 
-### `gold.recommended_offers`
-Next-best-offer per borrower from `fn_next_best_offer.sql`. Offer types:
-Rate-Term Refi, Cash-Out, HELOC, Purchase, Retention. Each row includes
-projected monthly savings and a confidence band. Human approval is
-**required** before any outreach is queued — enforced by the approval
-flow in Lakebase (`lakebase/schema.sql`) and the ApprovalBanner component.
+### `gold.borrower_dossier`
+One row per `borrower_id` pre-joined with everything the
+`/api/borrowers/{id}` dossier payload needs: property + mortgage state,
+segment membership, lead score, and an `ARRAY<STRUCT>` of up to 20
+recent evidence events (with the top-3 trigger timeline called out
+separately). Built by `sql/transformations/gold_borrower_dossier.sql`
+in lockstep with `gold.borrower_360` on every `mip_refresh_scores`
+run. Single-borrower reads hit this table for a one-round-trip indexed
+lookup; aggregate questions should prefer `gold.borrower_360` or the
+`borrower_opportunity` metric view.
 
 ### `gold.lockin_cohort`
 Pre-materialised cohort of borrowers who originated (or last refinanced

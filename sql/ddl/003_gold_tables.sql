@@ -199,6 +199,7 @@ CREATE TABLE IF NOT EXISTS mip.gold.lead_population (
   zip                       STRING             COMMENT '5-digit ZIP.',
   segment_codes             ARRAY<STRING> NOT NULL COMMENT 'Ordered SegmentCode list.',
   equity_estimate           BIGINT    NOT NULL COMMENT 'USD.',
+  equity_pct                INT       NOT NULL COMMENT '0..100; carried from borrower_360 for dashboard top-borrower widgets.',
   rate_spread_bps           INT       NOT NULL COMMENT 'bps.',
   opportunity_score         INT       NOT NULL COMMENT '0..100.',
   confidence                INT       NOT NULL COMMENT '0..100.',
