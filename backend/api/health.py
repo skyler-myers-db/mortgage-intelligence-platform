@@ -40,6 +40,7 @@ from fastapi import APIRouter
 
 from backend.config.settings import settings
 from backend.services.observability import (
+    get_otel_handler,
     recent_breaker_state_changes,
     recent_error_count,
 )
@@ -233,4 +234,15 @@ def health() -> dict[str, Any]:
         # degradation.
         "breaker_state_changes_last_hour": recent_breaker_state_changes(),
         "recent_errors_count": recent_error_count(),
+        # Slice-13 follow-up: the two counters above are process-local
+        # and reset on every container restart. That is intentional --
+        # the durable path is the OTLP log exporter (set
+        # ``MIP_OTEL_ENDPOINT`` to enable; see docs/observability.md).
+        # Surfacing the posture in the health body means operators can
+        # tell at a glance whether to trust the counters for trend
+        # analysis (they should not) vs. use them for "right now" signal
+        # (they should). ``log_export`` tells them whether the durable
+        # path is active.
+        "counters_persistence": "process-local",
+        "log_export": "otlp" if get_otel_handler() is not None else "stdout-only",
     }

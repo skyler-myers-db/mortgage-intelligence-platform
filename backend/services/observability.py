@@ -358,6 +358,11 @@ def timed_dependency(
 _CONFIGURED = False
 _CONFIGURE_LOCK = threading.Lock()
 
+# Slice-13 follow-up: we remember the OTLP handler we installed (if any)
+# so tests can inspect / detach it without touching the root logger's
+# full handler list. ``None`` means "no exporter wired this process".
+_OTEL_HANDLER: logging.Handler | None = None
+
 
 def configure_logging(level: str | int = "INFO") -> None:
     """Install :class:`StructuredFormatter` on the root handler.
@@ -365,6 +370,11 @@ def configure_logging(level: str | int = "INFO") -> None:
     Idempotent: a second call is a no-op. Also wires ``uvicorn.access``
     and ``uvicorn.error`` so request logs share the JSON shape; those
     loggers normally carry their own formatter.
+
+    Slice-13 follow-up: when ``MIP_OTEL_ENDPOINT`` is set we additionally
+    attach an OTLP log exporter handler so every structured JSON line
+    is shipped to a durable workspace-external sink. See
+    :func:`_install_otel_handler_if_configured` for the failure posture.
     """
     global _CONFIGURED
     with _CONFIGURE_LOCK:
@@ -393,13 +403,124 @@ def configure_logging(level: str | int = "INFO") -> None:
             for handler in lg.handlers:
                 handler.setFormatter(StructuredFormatter())
 
+        _install_otel_handler_if_configured(root, level_value)
+
         _CONFIGURED = True
 
 
+def _install_otel_handler_if_configured(
+    root: logging.Logger, level_value: int
+) -> None:
+    """Attach an OTLP log-exporter handler when ``MIP_OTEL_ENDPOINT`` is set.
+
+    This is a best-effort hook. When the env var is unset we do nothing
+    (the default stdout JSON stream is the only sink, same as Slice-13).
+
+    When the env var IS set:
+
+    * If ``opentelemetry-sdk`` + ``opentelemetry-exporter-otlp`` aren't
+      importable we log a ``WARNING`` (via the stdlib root, which is
+      already wired with :class:`StructuredFormatter`) and keep serving
+      traffic. A missing-but-optional exporter must NOT crash the app.
+    * On success we register the handler at module scope so tests can
+      introspect it.
+
+    We deliberately avoid importing the ``opentelemetry`` packages at
+    module import time -- importing them is the expensive part on cold
+    start, and the common case (no env var) should not pay for it.
+    """
+    global _OTEL_HANDLER
+    # Late import to avoid a circular dep at module import time.
+    from backend.config.settings import settings as _settings
+
+    endpoint = _settings.mip_otel_endpoint
+    if not endpoint:
+        return
+
+    try:
+        from opentelemetry._logs import set_logger_provider
+        from opentelemetry.exporter.otlp.proto.http._log_exporter import (
+            OTLPLogExporter,
+        )
+        from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
+        from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
+        from opentelemetry.sdk.resources import Resource
+    except ImportError as exc:
+        # Optional dep absent. Warn loudly and keep going -- the caller
+        # turned OTEL on intentionally, but the runtime isn't allowed to
+        # crash because of a missing wheel.
+        logging.getLogger("mip.observability").warning(
+            "MIP_OTEL_ENDPOINT=%s is set but opentelemetry packages are "
+            "not importable (%s). Falling back to stdout-only logs. "
+            "Install `opentelemetry-sdk` and `opentelemetry-exporter-otlp` "
+            "to enable durable log export.",
+            endpoint,
+            exc,
+        )
+        return
+
+    # Compose headers from the SecretStr env var (``k=v,k2=v2``). The
+    # raw value never touches a log line -- we hand it straight to the
+    # exporter.
+    headers: dict[str, str] = {}
+    raw_headers = (
+        _settings.mip_otel_headers.get_secret_value()
+        if _settings.mip_otel_headers is not None
+        else ""
+    )
+    if raw_headers:
+        for part in raw_headers.split(","):
+            if "=" in part:
+                k, _, v = part.partition("=")
+                k = k.strip()
+                v = v.strip()
+                if k:
+                    headers[k] = v
+
+    try:
+        resource = Resource.create(
+            {
+                "service.name": "mortgage-intelligence-platform",
+                "service.namespace": "mip",
+                "deployment.environment": _settings.app_env,
+            }
+        )
+        provider = LoggerProvider(resource=resource)
+        exporter = OTLPLogExporter(endpoint=endpoint, headers=headers or None)
+        provider.add_log_record_processor(BatchLogRecordProcessor(exporter))
+        set_logger_provider(provider)
+        handler = LoggingHandler(level=level_value, logger_provider=provider)
+        handler.setFormatter(StructuredFormatter())
+        root.addHandler(handler)
+        _OTEL_HANDLER = handler
+        logging.getLogger("mip.observability").info(
+            "OTLP log exporter installed (endpoint=%s, header_keys=%s)",
+            endpoint,
+            sorted(headers.keys()),
+        )
+    except Exception as exc:  # noqa: BLE001 -- see comment above
+        logging.getLogger("mip.observability").warning(
+            "OTLP exporter wiring failed (non-fatal): %s: %s",
+            type(exc).__name__,
+            exc,
+        )
+
+
+def get_otel_handler() -> logging.Handler | None:
+    """Return the installed OTLP handler, or ``None`` when not wired.
+
+    Test helper plus operator-facing introspection from the admin route.
+    """
+    return _OTEL_HANDLER
+
+
 def _reset_configured_for_tests() -> None:
-    """Test helper -- reset the idempotency latch."""
-    global _CONFIGURED
+    """Test helper -- reset the idempotency latch and detach OTLP handler."""
+    global _CONFIGURED, _OTEL_HANDLER
     with _CONFIGURE_LOCK:
+        if _OTEL_HANDLER is not None:
+            logging.getLogger().removeHandler(_OTEL_HANDLER)
+            _OTEL_HANDLER = None
         _CONFIGURED = False
 
 
@@ -464,6 +585,7 @@ __all__ = [
     "correlation_id_var",
     "emit",
     "get_correlation_id",
+    "get_otel_handler",
     "record_breaker_state_change",
     "record_error",
     "recent_breaker_state_changes",

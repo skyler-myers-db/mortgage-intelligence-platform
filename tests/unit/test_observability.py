@@ -255,3 +255,261 @@ def test_structured_formatter_handles_adhoc_log_call() -> None:
     finally:
         log.handlers.clear()
         log.propagate = True
+
+
+# ---------------------------------------------------------------------------
+# Slice-13 follow-up: optional OTLP log exporter (env-gated)
+# ---------------------------------------------------------------------------
+
+
+def test_health_exposes_counters_persistence_and_log_export(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The durable-path posture must be visible in /api/health.
+
+    Operators look at the body to tell (a) whether the rolling-hour
+    counters are trustworthy across a restart (they're not; the label is
+    ``process-local``) and (b) whether a durable sink is wired (``otlp``
+    vs ``stdout-only``). If either key disappears we've broken the
+    contract documented in docs/observability.md.
+    """
+    monkeypatch.setattr(health_mod, "_probe_warehouse", lambda: True)
+    monkeypatch.setattr(health_mod, "_probe_lakebase", lambda: True)
+    monkeypatch.setattr(health_mod, "_probe_genie", lambda: True)
+    res = client.get("/api/health")
+    assert res.status_code == 200
+    payload = res.json()
+    assert payload["counters_persistence"] == "process-local"
+    # Default test env has no OTEL endpoint set, so the sink is stdout.
+    assert payload["log_export"] == "stdout-only"
+    # The two pre-existing counter keys MUST still be present -- any
+    # frontend or dashboard reading them would break otherwise.
+    assert "breaker_state_changes_last_hour" in payload
+    assert "recent_errors_count" in payload
+
+
+def test_configure_logging_skips_otel_when_env_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No env var -> no OTLP handler -> no imports attempted."""
+    from backend.config.settings import settings
+
+    monkeypatch.setattr(settings, "mip_otel_endpoint", None, raising=False)
+    obs._reset_configured_for_tests()
+    try:
+        obs.configure_logging()
+        assert obs.get_otel_handler() is None
+    finally:
+        obs._reset_configured_for_tests()
+        # Re-install default logging so later tests keep working.
+        obs.configure_logging()
+
+
+def test_configure_logging_logs_warning_when_otel_dep_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the env var IS set but the opentelemetry packages aren't
+    importable, ``configure_logging`` must log a warning and NOT crash.
+
+    We simulate the missing wheel by patching the import hook: any
+    ``opentelemetry.*`` import raises ImportError. The app boots, the
+    handler stays None, and a ``WARNING`` line hits
+    ``mip.observability``.
+    """
+    import builtins
+
+    from backend.config.settings import settings
+
+    monkeypatch.setattr(
+        settings, "mip_otel_endpoint", "http://127.0.0.1:9999", raising=False
+    )
+    monkeypatch.setattr(settings, "mip_otel_headers", None, raising=False)
+
+    real_import = builtins.__import__
+
+    def _blocking_import(name: str, *args: Any, **kwargs: Any) -> Any:
+        if name.startswith("opentelemetry"):
+            raise ImportError(f"simulated missing wheel for {name}")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _blocking_import)
+
+    warn_log = logging.getLogger("mip.observability")
+    buf = _capture(warn_log)
+    obs._reset_configured_for_tests()
+    try:
+        # Must not raise even though the env var is set + packages missing.
+        obs.configure_logging()
+        assert obs.get_otel_handler() is None
+        lines = [ln for ln in buf.getvalue().splitlines() if ln]
+        # At least one WARNING-level line referencing the endpoint.
+        warning_lines = [
+            json.loads(ln) for ln in lines if '"level":"WARNING"' in ln
+        ]
+        assert any(
+            "127.0.0.1:9999" in (rec.get("message", "") or "")
+            for rec in warning_lines
+        ), f"expected warning about missing opentelemetry wheel; saw {lines}"
+    finally:
+        warn_log.handlers.clear()
+        warn_log.propagate = True
+        obs._reset_configured_for_tests()
+        obs.configure_logging()
+
+
+def test_otel_handler_attached_when_exporter_mocked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Happy path: env var set + exporter mocked out at import level.
+
+    We don't actually hit a real OTLP endpoint (the task's hard
+    constraint forbids it). Instead we install fake
+    ``opentelemetry.*`` modules in ``sys.modules`` so the late import
+    inside :func:`_install_otel_handler_if_configured` resolves to our
+    stubs. The handler attached to the root logger must be the
+    ``LoggingHandler`` stub we provide, and ``get_otel_handler()`` must
+    return it.
+    """
+    import sys
+
+    from backend.config.settings import settings
+
+    monkeypatch.setattr(
+        settings, "mip_otel_endpoint", "http://127.0.0.1:4318/v1/logs", raising=False
+    )
+    from pydantic import SecretStr
+
+    monkeypatch.setattr(
+        settings,
+        "mip_otel_headers",
+        SecretStr("x-api-key=fake,team=mip"),
+        raising=False,
+    )
+
+    # Build fake OTEL modules. The handler must be a real logging.Handler
+    # so the stdlib attach flow works; everything else is a stub that
+    # records how it was called.
+    import types
+
+    calls: dict[str, Any] = {"headers": None, "endpoint": None}
+
+    class _FakeExporter:
+        def __init__(self, *, endpoint: str, headers: Any = None) -> None:
+            calls["endpoint"] = endpoint
+            calls["headers"] = headers
+
+    class _FakeProcessor:
+        def __init__(self, _exporter: Any) -> None:
+            pass
+
+    class _FakeProvider:
+        def __init__(self, *, resource: Any = None) -> None:
+            self._resource = resource
+
+        def add_log_record_processor(self, _p: Any) -> None:
+            pass
+
+    class _FakeResource:
+        @staticmethod
+        def create(attrs: dict[str, Any]) -> Any:
+            return attrs
+
+    class _FakeLoggingHandler(logging.Handler):
+        def __init__(self, *, level: int, logger_provider: Any) -> None:
+            super().__init__(level=level)
+            self._provider = logger_provider
+
+        def emit(self, _record: logging.LogRecord) -> None:
+            pass
+
+    def _set_logger_provider(_p: Any) -> None:
+        pass
+
+    otel_logs = types.ModuleType("opentelemetry._logs")
+    otel_logs.set_logger_provider = _set_logger_provider  # type: ignore[attr-defined]
+
+    exporter_mod = types.ModuleType(
+        "opentelemetry.exporter.otlp.proto.http._log_exporter"
+    )
+    exporter_mod.OTLPLogExporter = _FakeExporter  # type: ignore[attr-defined]
+
+    sdk_logs = types.ModuleType("opentelemetry.sdk._logs")
+    sdk_logs.LoggerProvider = _FakeProvider  # type: ignore[attr-defined]
+    sdk_logs.LoggingHandler = _FakeLoggingHandler  # type: ignore[attr-defined]
+
+    sdk_logs_export = types.ModuleType("opentelemetry.sdk._logs.export")
+    sdk_logs_export.BatchLogRecordProcessor = _FakeProcessor  # type: ignore[attr-defined]
+
+    sdk_resources = types.ModuleType("opentelemetry.sdk.resources")
+    sdk_resources.Resource = _FakeResource  # type: ignore[attr-defined]
+
+    # Place the fakes in sys.modules so late ``from opentelemetry... import``
+    # calls resolve to them without hitting the real wheel.
+    inserted = {
+        "opentelemetry._logs": otel_logs,
+        "opentelemetry.exporter.otlp.proto.http._log_exporter": exporter_mod,
+        "opentelemetry.sdk._logs": sdk_logs,
+        "opentelemetry.sdk._logs.export": sdk_logs_export,
+        "opentelemetry.sdk.resources": sdk_resources,
+    }
+    for k, v in inserted.items():
+        monkeypatch.setitem(sys.modules, k, v)
+
+    obs._reset_configured_for_tests()
+    try:
+        obs.configure_logging()
+        handler = obs.get_otel_handler()
+        assert isinstance(handler, _FakeLoggingHandler)
+        # Endpoint passed through verbatim.
+        assert calls["endpoint"] == "http://127.0.0.1:4318/v1/logs"
+        # Headers parsed from ``k=v,k2=v2`` into a dict.
+        assert calls["headers"] == {"x-api-key": "fake", "team": "mip"}
+        # Handler actually sits on the root logger.
+        assert handler in logging.getLogger().handlers
+    finally:
+        obs._reset_configured_for_tests()
+        obs.configure_logging()
+
+
+def test_boot_smoke_with_otel_env_and_missing_wheel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Repro of the operator scenario: env is set, wheel isn't.
+
+    The task's verification gate includes::
+
+        MIP_OTEL_ENDPOINT=http://127.0.0.1:9999 \\
+            python -c "from backend.main import app; print('boot OK with OTEL env')"
+
+    This test asserts the same invariant inside pytest so regressions
+    surface in CI rather than only in the ad-hoc shell run.
+    """
+    import builtins
+
+    from backend.config.settings import settings
+
+    monkeypatch.setattr(
+        settings, "mip_otel_endpoint", "http://127.0.0.1:9999", raising=False
+    )
+    real_import = builtins.__import__
+
+    def _blocking_import(name: str, *args: Any, **kwargs: Any) -> Any:
+        if name.startswith("opentelemetry"):
+            raise ImportError(f"simulated missing wheel for {name}")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _blocking_import)
+    obs._reset_configured_for_tests()
+    try:
+        # Must not raise.
+        obs.configure_logging()
+        # And the app's TestClient must still answer /api/health.
+        monkeypatch.setattr(health_mod, "_probe_warehouse", lambda: True)
+        monkeypatch.setattr(health_mod, "_probe_lakebase", lambda: True)
+        monkeypatch.setattr(health_mod, "_probe_genie", lambda: True)
+        res = client.get("/api/health")
+        assert res.status_code == 200
+        assert res.json()["log_export"] == "stdout-only"
+    finally:
+        obs._reset_configured_for_tests()
+        obs.configure_logging()

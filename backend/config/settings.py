@@ -116,6 +116,27 @@ class Settings(BaseSettings):
     # endpoints (audit, outreach, borrower dossier) never consult the
     # cache. Set to 0 to disable caching entirely (tests do this).
     mip_cache_ttl_s: float = 30.0
+
+    # Slice-13 follow-up: optional OTLP log exporter.
+    #
+    # When ``MIP_OTEL_ENDPOINT`` is set at boot we ship every JSON log
+    # line through the OpenTelemetry OTLP *logs* exporter so a workspace-
+    # external sink (Splunk HEC, Datadog, Grafana Loki, etc.) receives a
+    # durable copy. Docs/observability.md walks through the common sinks.
+    #
+    # When unset, the app behaves exactly as before -- stdout JSON only.
+    # The extra dependencies (``opentelemetry-sdk`` +
+    # ``opentelemetry-exporter-otlp``) are intentionally OPTIONAL: if the
+    # env var is set but the packages are not importable the runtime
+    # logs a warning and keeps serving traffic. This keeps the zero-
+    # dependency-on-wheels promise on Databricks Apps while giving
+    # operators a single-env-var switch to turn on durable logs.
+    #
+    # ``MIP_OTEL_HEADERS`` is a comma-separated ``k=v,k2=v2`` string the
+    # exporter passes as OTLP metadata (typically the Splunk HEC token
+    # or the Datadog API key). We never log the value.
+    mip_otel_endpoint: str | None = None
+    mip_otel_headers: SecretStr | None = Field(default=None, repr=False)
     # Slice-13 performance follow-up: portfolio preview is an expensive
     # aggregate over 5.16M rows; its cache-miss cost shows up as a
     # p95 ~1.1 s tail on /api/portfolio/preview (load-baseline.md). The
