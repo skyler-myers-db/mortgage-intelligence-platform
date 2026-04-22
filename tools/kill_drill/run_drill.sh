@@ -317,14 +317,20 @@ start_drill_backend() {
         log "  If this really is a leftover drill backend: \`kill $prior_pid\` and retry."
         return 1
       fi
-      # Verify every leftover pid is actually a uvicorn serving our
-      # backend on :8001. If any pid doesn't match, refuse to kill.
+      # Verify every leftover pid is actually the uvicorn drill backend
+      # we expect on :8001. If any pid doesn't match, refuse to kill.
+      # The regex is ERE (grep -Eq) with literal dots + the full
+      # `backend.main:app` module spec + `--port 8001` -- basic regex's
+      # `.` would match any char, so the previous `backend.main` could
+      # match `backendxmain`. This tighter form only fires for the exact
+      # command `start_drill_backend` launches below (raised by Copilot
+      # 2026-04-22).
       local unsafe_pid
       unsafe_pid=""
       for pid in $prior_pid; do
         local cmdline
         cmdline="$(ps -o args= -p "$pid" 2>/dev/null || true)"
-        if ! echo "$cmdline" | grep -q "uvicorn.*backend.main.*--port 8001"; then
+        if ! echo "$cmdline" | grep -Eq '(^|[[:space:]])uvicorn([[:space:]].*)?[[:space:]]backend\.main:app([[:space:]].*)?([[:space:]]--port[[:space:]]8001)([[:space:]]|$)'; then
           unsafe_pid="$pid"
           log "cowardly refusing to kill pid=$pid on :8001 -- cmdline does not match our expected uvicorn backend:"
           log "  $cmdline"
