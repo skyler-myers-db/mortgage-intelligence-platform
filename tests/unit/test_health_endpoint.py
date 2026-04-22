@@ -32,10 +32,12 @@ client = TestClient(app)
 @pytest.fixture(autouse=True)
 def _reset_breakers() -> None:
     resilience._reset_breakers_for_tests()
-    # Slice-13 perf cache: /api/health now caches each probe result for
-    # 3s. That cache leaks across tests and would make the second-
-    # test-onward see stale results (all "up"/all "down"). Drop between
-    # tests so every monkeypatched probe is exercised cleanly.
+    # Slice-13 perf cache: /api/health caches each probe result with a
+    # stale-while-revalidate policy (2 s soft TTL, 10 s hard TTL). That
+    # cache leaks across tests and would make the second-test-onward
+    # see stale results (all "up"/all "down") because the v1 cached
+    # booleans stay valid under the hard TTL. Drop between tests so
+    # every monkeypatched probe is exercised cleanly.
     health_mod._probe_cache.clear()
 
 
@@ -140,3 +142,114 @@ def test_dependency_down_exception_translates_to_structured_503(
             del app.dependency_overrides[get_segment_repository]
         else:
             app.dependency_overrides[get_segment_repository] = previous
+
+
+# ---------------------------------------------------------------------------
+# SWR cache behaviour at the /api/health seam
+#
+# These tests exist because the v1 TTLCache → v2 StaleWhileRevalidateCache
+# swap is a behaviour change, not just an implementation detail: bursts of
+# health hits must now share a single probe-per-dependency under the soft
+# TTL, and a probe-result swap inside that window must NOT be visible to
+# the caller. The suite above stays focused on "what does the JSON look
+# like"; these three check "how often does the underlying probe run".
+# ---------------------------------------------------------------------------
+
+
+def test_health_bursts_share_one_probe_per_dependency(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Five back-to-back /api/health hits must fan out to exactly one
+    probe call per dependency. This is the whole reason the SWR cache
+    exists -- the v1 plain TTL had the same guarantee inside the 3 s
+    window, so we'd regress silently if it broke."""
+    counts = {"warehouse": 0, "lakebase": 0, "genie": 0}
+
+    def _probe(name: str) -> bool:
+        counts[name] += 1
+        return True
+
+    monkeypatch.setattr(health_mod, "_probe_warehouse", lambda: _probe("warehouse"))
+    monkeypatch.setattr(health_mod, "_probe_lakebase", lambda: _probe("lakebase"))
+    monkeypatch.setattr(health_mod, "_probe_genie", lambda: _probe("genie"))
+
+    for _ in range(5):
+        res = client.get("/api/health")
+        assert res.status_code == 200
+        assert res.json()["status"] == "ok"
+
+    # First hit is a sync miss; the other four are cache hits under the
+    # 2 s soft TTL. None of those follow-ons may run the probe.
+    assert counts == {"warehouse": 1, "lakebase": 1, "genie": 1}
+
+
+def test_health_returns_cached_value_during_stale_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When a probe's soft TTL has elapsed but hard TTL has not, /api/health
+    returns the CACHED value (up=True here) even though the freshly-flipped
+    probe now returns down. The next-generation value only materialises
+    after the background refresh stores it."""
+    # First hit seeds the cache with up=True.
+    monkeypatch.setattr(health_mod, "_probe_warehouse", lambda: True)
+    monkeypatch.setattr(health_mod, "_probe_lakebase", lambda: True)
+    monkeypatch.setattr(health_mod, "_probe_genie", lambda: True)
+    res = client.get("/api/health")
+    assert res.json()["status"] == "ok"
+
+    # Manually poke the cache so the warehouse entry is past the soft
+    # TTL but not the hard TTL. This simulates "2.5 seconds later"
+    # without time.sleep(). We cheat by rewriting the tuple directly
+    # under the cache's lock -- the public API doesn't expose time
+    # travel.
+    cache = health_mod._probe_cache
+    with cache._lock:
+        value, hard_expiry, _soft_expiry, in_flight = cache._entries["warehouse"]
+        # Soft expiry in the past, hard expiry in the future.
+        cache._entries["warehouse"] = (value, hard_expiry, 0.0, in_flight)
+
+    # Flip the probe to return down. The IN-THREAD response must still
+    # report up (the cached value); the background refresh happens on
+    # a worker thread so it may or may not be done when we check -- but
+    # the contract is "the request thread sees the cached value", which
+    # is up=True.
+    monkeypatch.setattr(health_mod, "_probe_warehouse", lambda: False)
+    res = client.get("/api/health")
+    # Cached value wins for this call.
+    assert res.json()["dependencies"]["warehouse"] == "up"
+
+
+def test_health_forces_sync_reprobe_after_hard_ttl(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Past the hard TTL, the cache is evicted and the request thread
+    MUST run the probe synchronously. This is the "a real outage
+    surfaces within ~10 s" guarantee -- the hard TTL is the worst-case
+    time before a cached 'up' flips to 'down' on a genuine failure."""
+    counts = {"n": 0}
+
+    def probe_up() -> bool:
+        counts["n"] += 1
+        return True
+
+    monkeypatch.setattr(health_mod, "_probe_warehouse", probe_up)
+    monkeypatch.setattr(health_mod, "_probe_lakebase", lambda: True)
+    monkeypatch.setattr(health_mod, "_probe_genie", lambda: True)
+
+    # Seed the cache.
+    client.get("/api/health")
+    assert counts["n"] == 1
+
+    # Force hard-TTL expiry by setting both expiries into the past.
+    cache = health_mod._probe_cache
+    with cache._lock:
+        value, _hard, _soft, in_flight = cache._entries["warehouse"]
+        cache._entries["warehouse"] = (value, 0.0, 0.0, in_flight)
+
+    # Flip the probe to return down. Because the cache is past the hard
+    # TTL, this request must re-probe synchronously and see the new
+    # value.
+    monkeypatch.setattr(health_mod, "_probe_warehouse", lambda: False)
+    res = client.get("/api/health")
+    assert res.json()["dependencies"]["warehouse"] == "down"
+    assert res.json()["status"] == "degraded"

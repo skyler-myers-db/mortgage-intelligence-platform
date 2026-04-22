@@ -43,7 +43,7 @@ from backend.services.observability import (
     recent_breaker_state_changes,
     recent_error_count,
 )
-from backend.services.resilience import TTLCache, all_breakers
+from backend.services.resilience import StaleWhileRevalidateCache, all_breakers
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api")
@@ -51,17 +51,33 @@ router = APIRouter(prefix="/api")
 
 _PROBE_TIMEOUT_S = 1.0
 
-# Slice-13 performance follow-up: cache each dependency probe's last
-# result for 3 s. Under the 20-VU warm-UC load baseline (see
-# docs/load-baseline.md), `/api/health` p95 was 1.8 s — dominated by
-# the Genie probe's real HTTP round-trip. A 3-second TTL means a burst
-# of health hits fans out at most one probe per dependency per 3 s,
-# cutting p95 from ~1.8 s to the cache-hit latency (<5 ms). The TTL is
-# short enough that a genuine dependency outage is surfaced within
-# three seconds — well under the frontend's degraded-banner polling
-# cadence — so resilience semantics are unchanged.
-_HEALTH_PROBE_TTL_S = 3.0
-_probe_cache: TTLCache = TTLCache()
+# Slice-13 performance follow-up (v2): stale-while-revalidate cache
+# around each dependency probe.
+#
+# v1 used a plain 3 s TTLCache and cut p95 from 1.8 s to 1.1 s at 20
+# VUs, but the 3 s TTL window expired mid-burst and the next requester
+# still ate a real probe (dominated by the ~1 s Genie HTTP round-trip).
+#
+# v2 keeps a 10 s HARD TTL with a 2 s SOFT TTL. Inside the soft window,
+# callers get a cache-hit latency response (<5 ms). Between the soft and
+# hard TTLs, callers still get the cached value immediately AND a
+# background refresh is kicked on a shared ThreadPoolExecutor so the
+# next burst doesn't fall off the hard TTL cliff. Only when the hard
+# TTL has blown (cache has been cold for >= 10 s) does any request
+# thread block on a real probe.
+#
+# Outage semantics: a genuine dependency failure is surfaced within the
+# hard-TTL window (<=10 s). The frontend's degraded banner polls every
+# 5-10 s, so operators still see flipped state within one poll cycle.
+# Background refreshes emit a structured log
+# (event=health_probe_background_refresh) so operators can correlate
+# freshness of the cached value with the underlying dependency state.
+_HEALTH_PROBE_SOFT_TTL_S = 2.0
+_HEALTH_PROBE_HARD_TTL_S = 10.0
+_probe_cache: StaleWhileRevalidateCache = StaleWhileRevalidateCache(
+    soft_ttl_s=_HEALTH_PROBE_SOFT_TTL_S,
+    hard_ttl_s=_HEALTH_PROBE_HARD_TTL_S,
+)
 
 
 def _probe_warehouse() -> bool:
@@ -181,17 +197,14 @@ def _breaker_states() -> dict[str, str]:
 def _cached_probe(name: str, probe: Any) -> bool:
     """Return the probe's result from cache, re-probing only when stale.
 
-    Wraps a zero-argument probe callable with the 3-second TTLCache.
-    On cache miss, runs the probe and stores the boolean. The cache is
-    process-local; operator-triggered restarts always see a fresh
-    probe on the next request.
+    Signature preserved from the v1 plain-TTL implementation so the
+    three call sites below don't change. Under the hood this is now a
+    stale-while-revalidate cache: the caller's request thread only
+    blocks on a real probe when the hard TTL has blown; between soft
+    and hard TTL the caller gets the cached value instantly and a
+    background refresh runs on a shared executor.
     """
-    cached = _probe_cache.get(name)
-    if cached is not None:
-        return bool(cached)
-    result = probe()
-    _probe_cache.set(name, result, _HEALTH_PROBE_TTL_S)
-    return bool(result)
+    return bool(_probe_cache.get_or_refresh(name, probe))
 
 
 @router.get("/health")
