@@ -59,14 +59,21 @@ DRILL_BACKEND_PID=""
 EVIDENCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/evidence"
 TS="$(date -u +%Y%m%dT%H%M%SZ)"
 I_REALLY_MEAN_IT=0
-REAL_INFRA_RECOVERY_TIMEOUT=300   # seconds to wait for RUNNING/AVAILABLE post-drill
+# Recovery timeout for the warehouse-real / lakebase-real targets: how
+# long to poll for RUNNING/AVAILABLE after the drill restarts the
+# infrastructure. Configurable via --real-recovery-seconds (explicit)
+# or MIP_KILL_DRILL_REAL_RECOVERY_SECONDS. Defaults to 300s -- warehouse
+# cold-starts can take 2-3 minutes on a freshly-stopped cluster, and
+# Lakebase AVAILABLE transitions are typically under 60s but can spike.
+REAL_INFRA_RECOVERY_TIMEOUT="${MIP_KILL_DRILL_REAL_RECOVERY_SECONDS:-300}"
 
 usage() {
   sed -n '3,40p' "${BASH_SOURCE[0]}"
   cat <<EOF
 
 Usage:
-  tools/kill_drill/run_drill.sh --target <target> [--app-url URL] [--await-seconds N] [--i-really-mean-it]
+  tools/kill_drill/run_drill.sh --target <target> [--app-url URL] [--await-seconds N]
+                                [--real-recovery-seconds N] [--i-really-mean-it]
 
 Targets:
   warehouse | lakebase                   human-in-the-loop (operator runs stop)
@@ -84,17 +91,41 @@ Env:
   MIP_APP_URL                            Target URL for the already-running backend
                                          (default http://127.0.0.1:8000). Used for
                                          warehouse/lakebase targets.
+  MIP_KILL_DRILL_REAL_RECOVERY_SECONDS   Default for --real-recovery-seconds (300).
   DATABRICKS_WAREHOUSE_ID                required for warehouse-real.
   LAKEBASE_INSTANCE_NAME                 required for lakebase-real (defaults to
                                          'mip-app-state' to match databricks.yml).
 EOF
 }
 
+# Helper: `set -u` makes a bare `$2` reference throw "unbound variable"
+# if the caller forgot to pass a value (or put the flag last). Guard
+# every two-arg flag with an explicit `$# < 2 || empty` check so the
+# error message is useful instead of a stacktrace.
+# (Raised by Copilot 2026-04-22.)
+_require_value() {
+  # $1 = flag name (for the error message), $2 = remaining argc, $3 = value.
+  local flag="$1"; local remaining="$2"; local value="${3-}"
+  if (( remaining < 2 )) || [[ -z "$value" ]]; then
+    echo "[drill] missing value for $flag (expected a non-empty argument)" >&2
+    exit 2
+  fi
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --target) TARGET="$2"; shift 2 ;;
-    --app-url) APP_URL="$2"; shift 2 ;;
-    --await-seconds) AWAIT_SECONDS="$2"; shift 2 ;;
+    --target)
+      _require_value "$1" "$#" "${2-}"
+      TARGET="$2"; shift 2 ;;
+    --app-url)
+      _require_value "$1" "$#" "${2-}"
+      APP_URL="$2"; shift 2 ;;
+    --await-seconds)
+      _require_value "$1" "$#" "${2-}"
+      AWAIT_SECONDS="$2"; shift 2 ;;
+    --real-recovery-seconds)
+      _require_value "$1" "$#" "${2-}"
+      REAL_INFRA_RECOVERY_TIMEOUT="$2"; shift 2 ;;
     --i-really-mean-it) I_REALLY_MEAN_IT=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown flag: $1" >&2; usage >&2; exit 2 ;;
@@ -282,18 +313,57 @@ assert_data_endpoint_degraded() {
 start_drill_backend() {
   log "starting private drill backend on $DRILL_APP_URL (env below)"
 
-  # If :8001 is already bound, it's a leftover uvicorn from a prior
-  # drill step in the same CI job (the trap cleanup can't cross
-  # sub-process boundaries between sequential CI steps). Kill it and
-  # retry binding rather than hard-failing -- the drill owns :8001
-  # exclusively on the runner and killing a stale drill backend is
-  # safer than refusing to proceed. If lsof is unavailable, fall
-  # through and let the bind error handle it.
+  # If :8001 is already bound, it's a leftover drill backend from a
+  # prior step -- the trap cleanup can't cross sub-process boundaries
+  # between sequential CI steps. We'd like to auto-heal by killing it
+  # and retrying, but only when we can verify two things first:
+  #
+  #   (a) We're running in CI (CI=true or GITHUB_ACTIONS=true) -- a
+  #       local dev who happens to have something else on :8001 should
+  #       NOT have that process killed silently.
+  #   (b) The bound process's cmdline matches ``uvicorn ... --port 8001``
+  #       -- belt-and-braces so even in CI we never kill an unrelated
+  #       process that happened to grab the port.
+  #
+  # Both guardrails added 2026-04-22 (raised by Copilot); the original
+  # auto-heal was correct behaviour for CI but too broad for a dev
+  # laptop where a coworker's dev server could be on :8001.
   if command -v lsof >/dev/null 2>&1; then
     local prior_pid
     prior_pid="$(lsof -ti :8001 2>/dev/null || true)"
     if [[ -n "$prior_pid" ]]; then
-      log "found leftover process(es) bound to :8001 (pid=$prior_pid); terminating for clean start."
+      local in_ci="${CI:-false}"
+      if [[ "$in_ci" != "true" && "${GITHUB_ACTIONS:-false}" != "true" ]]; then
+        log "FAIL: port 8001 already bound by pid(s): $prior_pid"
+        log "  hint: not running in CI -- refusing to auto-kill unrelated local processes."
+        log "  If this really is a leftover drill backend: \`kill $prior_pid\` and retry."
+        return 1
+      fi
+      # Verify every leftover pid is actually the uvicorn drill backend
+      # we expect on :8001. If any pid doesn't match, refuse to kill.
+      # The regex is ERE (grep -Eq) with literal dots + the full
+      # `backend.main:app` module spec + `--port 8001` -- basic regex's
+      # `.` would match any char, so the previous `backend.main` could
+      # match `backendxmain`. This tighter form only fires for the exact
+      # command `start_drill_backend` launches below (raised by Copilot
+      # 2026-04-22).
+      local unsafe_pid
+      unsafe_pid=""
+      for pid in $prior_pid; do
+        local cmdline
+        cmdline="$(ps -o args= -p "$pid" 2>/dev/null || true)"
+        if ! echo "$cmdline" | grep -Eq '(^|[[:space:]])uvicorn([[:space:]].*)?[[:space:]]backend\.main:app([[:space:]].*)?([[:space:]]--port[[:space:]]8001)([[:space:]]|$)'; then
+          unsafe_pid="$pid"
+          log "cowardly refusing to kill pid=$pid on :8001 -- cmdline does not match our expected uvicorn backend:"
+          log "  $cmdline"
+          break
+        fi
+      done
+      if [[ -n "$unsafe_pid" ]]; then
+        log "FAIL: :8001 is bound by a process we cannot prove is a drill backend. See cmdline above."
+        return 1
+      fi
+      log "found leftover drill backend(s) on :8001 (pid=$prior_pid); CI-mode + cmdline match verified; terminating."
       # Graceful TERM first, then KILL if still alive after 2s.
       # shellcheck disable=SC2086  # intentional word-split for multi-PID
       kill $prior_pid 2>/dev/null || true

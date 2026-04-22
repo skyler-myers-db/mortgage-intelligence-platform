@@ -304,9 +304,14 @@ def _set_gh_secret(repo: str, name: str, value: str) -> None:
     listings. ``gh`` redacts the value server-side; the local process is
     the only place it's ever in plaintext.
     """
-    # Emit the GitHub Actions masking directive FIRST so any accidental
-    # echo downstream is redacted. Harmless when run outside Actions.
-    print(f"::add-mask::{value}")
+    # Emit the GitHub Actions masking directive inside Actions only.
+    # Outside Actions the ``::add-mask::`` prefix has no effect, and
+    # writing the plaintext secret to stdout (even once) is a leak
+    # vector in local terminals / shell history (raised by Copilot
+    # 2026-04-22). ``GITHUB_ACTIONS == "true"`` is the canonical
+    # marker that a step is running on a GitHub-hosted runner.
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        print(f"::add-mask::{value}")
     _diag(f"uploading gh secret {name!r} to {repo}")
     try:
         subprocess.run(

@@ -49,9 +49,12 @@ Each entry has:
 
 3. **How many HELOC candidates have more than 35% equity across the 6-state footprint?**
    Intent: right-size the HELOC campaign based on equity gate.
-   Expected skeleton: one integer ≥ 0, ≤ `lead_population` row count.
-   SQL hint: `FROM mip.gold.lead_segment_membership s JOIN mip.gold.borrower_360 b ON s.borrower_id=b.borrower_id WHERE s.segment='HELOC/Cash-Out' AND b.equity_pct > 0.35`.
-   Source: `mip.gold.lead_segment_membership`, `mip.gold.borrower_360`.
+   Expected skeleton: one integer ≥ 0, ≤ `borrower_360` row count.
+   (The count is over the full footprint — `borrower_360` — not the
+   score-filtered `lead_population` subset. Equity-segment membership
+   is orthogonal to the `opportunity_score >= 50` gate.)
+   SQL hint: `SELECT count(*) FROM mip.gold.borrower_360 WHERE array_contains(segment_codes, 'equity') AND equity_pct > 35`.
+   Source: `mip.gold.borrower_360`.
 
 4. **What is the addressable market size — how many eligible borrowers across all six states?**
    Intent: denominator for every funnel metric.
@@ -78,16 +81,19 @@ Each entry has:
 
 7. **Show the top 10 cash-out candidates in Florida by estimated equity.**
    Intent: HELOC / cash-out prioritization in the FL book (0.76M properties, avg rate 4.71%).
-   Expected skeleton: 10 rows with `borrower_id` and equity figures.
-   SQL hint: `WHERE state='FL' AND segment='HELOC/Cash-Out' ORDER BY equity_usd DESC LIMIT 10`.
-   Source: `mip.gold.borrower_360`, `mip.gold.recommended_offers`.
+   Expected skeleton: 10 rows with `borrower_id` and `equity_estimate` (USD); ordered by `equity_estimate DESC`.
+   (Uses the USD column — `equity_estimate` — to match "estimated
+   equity" in the prompt. `equity_pct` is the percent alternative and
+   would produce a different top-10 ranking.)
+   SQL hint: `SELECT borrower_id, equity_estimate, recommended_offer FROM mip.gold.borrower_360 WHERE state='FL' AND recommended_offer_code IN ('cash_out','heloc','refi_plus_heloc') ORDER BY equity_estimate DESC LIMIT 10`.
+   Source: `mip.gold.borrower_360`.
 
 8. **Top 20 investors by property count in the Investor/Multi-Property segment.**
    Intent: investor / multi-property prioritization (Owner Link surfaces multi-property).
-   Expected skeleton: 20 rows `{borrower_id, property_count}`,
-   property_count ≥ 2.
-   SQL hint: `JOIN lead_segment_membership USING (borrower_id) WHERE segment='Investor/Multi-Property' ORDER BY property_count DESC LIMIT 20`.
-   Source: `mip.gold.borrower_360`, `mip.gold.lead_segment_membership`.
+   Expected skeleton: 20 rows `{borrower_id, related_property_count}`,
+   related_property_count ≥ 2.
+   SQL hint: `SELECT borrower_id, related_property_count FROM mip.gold.borrower_360 WHERE array_contains(segment_codes, 'investor') ORDER BY related_property_count DESC LIMIT 20`.
+   Source: `mip.gold.borrower_360`.
 
 ---
 
@@ -162,33 +168,41 @@ Each entry has:
 
 17. **What offer mix is recommended for the In-the-Money segment?**
     Intent: before we launch the ITM campaign, what's the NBO blend?
-    Expected skeleton: one row per offer type (Rate-Term Refi, Cash-Out,
-    HELOC, Purchase, Retention); counts ≥ 0; sum ≤ ITM segment size.
-    SQL hint: `SELECT offer_type, count(*) FROM mip.gold.recommended_offers r JOIN mip.gold.lead_segment_membership s USING (borrower_id) WHERE s.segment='In-the-Money' GROUP BY offer_type`.
-    Source: `mip.gold.recommended_offers`, `mip.gold.lead_segment_membership`.
+    Expected skeleton: one row per `recommended_offer_code`
+    (`refi`, `refi_plus_heloc`, `heloc`, `cash_out`, `purchase`,
+    `investor`, `retention`, `nurture`); counts ≥ 0; sum ≤ ITM segment size.
+    SQL hint: `SELECT recommended_offer_code, count(*) FROM mip.gold.borrower_360 WHERE array_contains(segment_codes, 'itm') GROUP BY recommended_offer_code`.
+    Source: `mip.gold.borrower_360`.
 
 18. **What is the average projected monthly savings for approved refis?**
     Intent: marketing tag-line — "average member saves $X/month on the
-    refi we recommended and they approved".
-    Expected skeleton: one row with `{avg_savings_usd}`; value a positive
-    float in `[0, 5000]` (monthly savings, not lifetime).
-    SQL hint: `SELECT avg(projected_monthly_savings_usd) FROM mip.gold.recommended_offers WHERE offer_type='Rate-Term Refi' AND status='approved'`.
-    Source: `mip.gold.recommended_offers`.
+    refi we recommended and they approved". Note: a projected-savings
+    column is on the roadmap and NOT in any trusted asset today, so the
+    honest answer surface is the approval-rate KPI on the segment metric
+    view (the "how many of our refi recs turned into approvals?" half of
+    the same question). Genie should acknowledge the missing measure and
+    pivot to approval_rate, or return principled zero.
+    Expected skeleton: either (a) an acknowledgment that
+    `projected_monthly_savings_usd` is not a trusted column today, OR
+    (b) one row `{approval_rate}` in `[0, 100]` (percent, 2dp per the
+    metric view definition) from `segment_performance_metric_view`.
+    SQL hint: `SELECT approval_rate FROM mip.semantics.segment_performance_metric_view WHERE segment_code IN ('itm','equity') AND state='_ALL'`.
+    Source: `mip.semantics.segment_performance_metric_view`.
 
 19. **Which borrowers got a HELOC recommendation in Florida?**
     Intent: surface the FL HELOC queue for the regional sales lead.
     Expected skeleton: N rows with `borrower_id` matching `^B-\d{5}$`.
     No PII columns. Count bounded by FL HELOC segment size.
-    SQL hint: `WHERE offer_type='HELOC' AND state='FL'`.
-    Source: `mip.gold.recommended_offers`, `mip.gold.borrower_360`.
+    SQL hint: `SELECT borrower_id, recommended_offer FROM mip.gold.borrower_360 WHERE state='FL' AND recommended_offer_code IN ('heloc','refi_plus_heloc')`.
+    Source: `mip.gold.borrower_360`.
 
 20. **Break down the Listed-for-Sale segment by loan product and average current rate.**
     Intent: purchase-mortgage opportunity sizing by product mix. Note: MLS data is on
     the Cotality roadmap — this segment returns zero on real data until the MLS product lands.
     Expected skeleton: zero or near-zero rows OR an explicit
     acknowledgment that MLS data is not yet live.
-    SQL hint: `WHERE segment='Listed-for-Sale' GROUP BY loan_product`.
-    Source: `mip.gold.lead_population`, `mip.gold.lead_segment_membership`.
+    SQL hint: `SELECT recommended_offer_code, avg(current_rate) FROM mip.gold.borrower_360 WHERE array_contains(segment_codes, 'listed') GROUP BY recommended_offer_code`.
+    Source: `mip.gold.borrower_360`, `mip.gold.lead_population`.
 
 ---
 
@@ -229,9 +243,13 @@ Each entry has:
     pool is 263K across the share per gap-analysis §1.
     Expected skeleton: N rows of `borrower_id` matching `^B-\d{5}$`; no
     PII columns; every row must have a matching evidence event with
-    `trigger_type='lien-change'`.
-    SQL hint: `FROM mip.gold.lead_segment_membership s JOIN mip.gold.evidence_events e USING (borrower_id) WHERE s.segment='Retention/Recapture' AND e.trigger_type='lien-change' AND e.event_ts >= current_date - interval '30 days'`.
-    Source: `mip.gold.lead_segment_membership`, `mip.gold.evidence_events`.
+    `signal_type='competitor_lien'`.
+    SQL hint: ``SELECT DISTINCT b.borrower_id FROM mip.gold.borrower_360 b JOIN mip.gold.evidence_events e USING (clip) WHERE array_contains(b.segment_codes, 'retention') AND e.signal_type='competitor_lien' AND to_timestamp(e.`timestamp`) >= current_timestamp() - interval 30 days``.
+    (`evidence_events.timestamp` is an ISO-8601 STRING per the DDL, not a
+    TIMESTAMP. `to_timestamp(...)` parses it before comparing; otherwise
+    Spark implicitly casts the STRING to DATE and yields NULL on any
+    `YYYY-MM-DDTHH:MM:SSZ` value, silently returning zero rows.)
+    Source: `mip.gold.borrower_360`, `mip.gold.evidence_events`.
 
 25. **Which borrowers have both a permit signal and an equity-crossing event in the last 30 days?**
     Intent: "intent + ability" double-signal cohort — permit filed says

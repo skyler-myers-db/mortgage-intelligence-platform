@@ -9,7 +9,7 @@ fallback" posture documented in `CLAUDE.md` and `backend/services/resilience.py`
 signing off on the evidence log, and the on-call engineer who needs a
 canonical recovery procedure.
 
-**Target matrix.** Six drills in two tiers:
+**Target matrix.** Eight drills across three tiers:
 
 | Target            | Tier       | Touches real infra? | CI-safe? | Gated behind                              |
 | ----------------- | ---------- | ------------------- | -------- | ----------------------------------------- |

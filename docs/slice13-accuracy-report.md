@@ -292,8 +292,10 @@ documented in [docs/load-baseline.md](load-baseline.md) as
   endpoint OR pre-compute the aggregate into a gold table refreshed
   with `mip_refresh_scores`.
 - `/api/borrowers/{id}`: pre-join borrower_360 × evidence_events (top 3)
-  × recommended_offers into a `mip.gold.borrower_dossier` CTAS,
-  refreshed with scoring. Portable, bundle-native.
+  into a `mip.gold.borrower_dossier` CTAS, refreshed with scoring.
+  Recommended-offer data rides on `borrower_360.recommended_offer_code`
+  + `recommended_offer` columns — no separate offers table. Portable,
+  bundle-native.
 
 Artefacts in `tools/load_test/results/20260422T004739Z_*.csv` + `.html`.
 

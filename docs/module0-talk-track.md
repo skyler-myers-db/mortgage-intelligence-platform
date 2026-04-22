@@ -114,7 +114,7 @@ circuit breaker `closed`. Do not start the pitch until that page is green.
 
 > "Green chip flips, audit event ID surfaces. Row just landed in `mip_app.action_audit` in Lakebase — actor, action, entity, evidence ids, timestamp, request id. Compliance asks three months from now, the answer is one SQL query."
 
-**Cite:** `mip.gold.fn_next_best_offer` · `mip.gold.recommended_offers` · `mip_app.action_audit` · Lakebase.
+**Cite:** `mip.gold.fn_next_best_offer` · `mip.gold.borrower_360.recommended_offer` · `mip_app.action_audit` · Lakebase.
 
 ---
 

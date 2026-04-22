@@ -129,7 +129,7 @@ already known to the team from `accessibility.spec.ts`.
 ### 7. Ask Genie (`/ask-genie`)
 
 - **Primary CTAs per prototype:** `Ask Genie` submit, suggested-question quick chips, trusted-asset chips.
-- **Renders:** pass. Panel title "Conversational analytics over curated Module 0 gold tables", 5 real UC gold table chips listed (`mip.gold.lead_population`, `mip.gold.lead_segment_membership`, `mip.gold.lead_scores`, `mip.gold.evidence_events`, `mip.semantics.lead_generation_metric_view`). 3 suggested prompts rendered.
+- **Renders:** pass. Panel title "Conversational analytics over curated Module 0 gold tables", 5 real UC gold/semantic trusted-asset chips listed (`mip.gold.lead_population`, `mip.gold.segment_population`, `mip.gold.lead_scores`, `mip.gold.evidence_events`, `mip.semantics.lead_generation_metric_view`). 3 suggested prompts rendered.
 - **Console errors:** none.
 - **Screenshot:** `ask-genie.png`.
 - **axe:** 1 violation.
