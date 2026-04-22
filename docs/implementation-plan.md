@@ -124,7 +124,15 @@ Data-source request to Cotality:
 Validation SQL examples:
 ```sql
 select count(*) from mip.gold.lead_population;
-select segment_code, count(*) from mip.gold.segment_population where state = '_ALL' group by 1;
+-- segment_population already stores member counts on its `count`
+-- column; read that directly (filtering to the '_ALL' national
+-- rollup). A COUNT(*) ... GROUP BY segment_code would return 1 per
+-- segment (= number of (segment, '_ALL') rows) which validates
+-- nothing.
+select segment_code, count
+  from mip.gold.segment_population
+  where state = '_ALL'
+  order by count desc;
 select recommended_offer_code, count(*) from mip.gold.borrower_360 group by 1;
 select * from mip.gold.evidence_events where borrower_id is null limit 10;
 ```

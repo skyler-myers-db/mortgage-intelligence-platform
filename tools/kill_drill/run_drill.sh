@@ -98,12 +98,34 @@ Env:
 EOF
 }
 
+# Helper: `set -u` makes a bare `$2` reference throw "unbound variable"
+# if the caller forgot to pass a value (or put the flag last). Guard
+# every two-arg flag with an explicit `$# < 2 || empty` check so the
+# error message is useful instead of a stacktrace.
+# (Raised by Copilot 2026-04-22.)
+_require_value() {
+  # $1 = flag name (for the error message), $2 = remaining argc, $3 = value.
+  local flag="$1"; local remaining="$2"; local value="${3-}"
+  if (( remaining < 2 )) || [[ -z "$value" ]]; then
+    echo "[drill] missing value for $flag (expected a non-empty argument)" >&2
+    exit 2
+  fi
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --target) TARGET="$2"; shift 2 ;;
-    --app-url) APP_URL="$2"; shift 2 ;;
-    --await-seconds) AWAIT_SECONDS="$2"; shift 2 ;;
-    --real-recovery-seconds) REAL_INFRA_RECOVERY_TIMEOUT="$2"; shift 2 ;;
+    --target)
+      _require_value "$1" "$#" "${2-}"
+      TARGET="$2"; shift 2 ;;
+    --app-url)
+      _require_value "$1" "$#" "${2-}"
+      APP_URL="$2"; shift 2 ;;
+    --await-seconds)
+      _require_value "$1" "$#" "${2-}"
+      AWAIT_SECONDS="$2"; shift 2 ;;
+    --real-recovery-seconds)
+      _require_value "$1" "$#" "${2-}"
+      REAL_INFRA_RECOVERY_TIMEOUT="$2"; shift 2 ;;
     --i-really-mean-it) I_REALLY_MEAN_IT=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown flag: $1" >&2; usage >&2; exit 2 ;;

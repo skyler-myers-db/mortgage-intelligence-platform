@@ -49,7 +49,10 @@ Each entry has:
 
 3. **How many HELOC candidates have more than 35% equity across the 6-state footprint?**
    Intent: right-size the HELOC campaign based on equity gate.
-   Expected skeleton: one integer ≥ 0, ≤ `lead_population` row count.
+   Expected skeleton: one integer ≥ 0, ≤ `borrower_360` row count.
+   (The count is over the full footprint — `borrower_360` — not the
+   score-filtered `lead_population` subset. Equity-segment membership
+   is orthogonal to the `opportunity_score >= 50` gate.)
    SQL hint: `SELECT count(*) FROM mip.gold.borrower_360 WHERE array_contains(segment_codes, 'equity') AND equity_pct > 35`.
    Source: `mip.gold.borrower_360`.
 
@@ -78,8 +81,11 @@ Each entry has:
 
 7. **Show the top 10 cash-out candidates in Florida by estimated equity.**
    Intent: HELOC / cash-out prioritization in the FL book (0.76M properties, avg rate 4.71%).
-   Expected skeleton: 10 rows with `borrower_id` and equity figures.
-   SQL hint: `SELECT borrower_id, equity_pct, recommended_offer FROM mip.gold.borrower_360 WHERE state='FL' AND recommended_offer_code IN ('cash_out','heloc','refi_plus_heloc') ORDER BY equity_pct DESC LIMIT 10`.
+   Expected skeleton: 10 rows with `borrower_id` and `equity_estimate` (USD); ordered by `equity_estimate DESC`.
+   (Uses the USD column — `equity_estimate` — to match "estimated
+   equity" in the prompt. `equity_pct` is the percent alternative and
+   would produce a different top-10 ranking.)
+   SQL hint: `SELECT borrower_id, equity_estimate, recommended_offer FROM mip.gold.borrower_360 WHERE state='FL' AND recommended_offer_code IN ('cash_out','heloc','refi_plus_heloc') ORDER BY equity_estimate DESC LIMIT 10`.
    Source: `mip.gold.borrower_360`.
 
 8. **Top 20 investors by property count in the Investor/Multi-Property segment.**

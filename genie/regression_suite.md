@@ -85,7 +85,7 @@ at e.g. `S17` maps to "offer mix for In-the-Money segment".
 ## S7 — Top 10 Florida cash-out candidates
 
 **Prompt:** "Show the top 10 cash-out candidates in Florida by estimated equity."
-**Expected:** 10 `B-#####` rows with `equity_pct` + `recommended_offer`, cites `mip.gold.borrower_360` (filter `state='FL'` + `recommended_offer_code IN ('cash_out','heloc','refi_plus_heloc')`). No PII.
+**Expected:** 10 `B-#####` rows with `equity_estimate` (USD) + `recommended_offer`, sorted by `equity_estimate DESC`, cites `mip.gold.borrower_360` (filter `state='FL'` + `recommended_offer_code IN ('cash_out','heloc','refi_plus_heloc')`). No PII. The prompt says "estimated equity" → dollars, not percent; don't accept `ORDER BY equity_pct`.
 **Why it matters:** HELOC/cash-out prioritization in the FL book.
 
 ## S8 — Top 20 investors by property count
