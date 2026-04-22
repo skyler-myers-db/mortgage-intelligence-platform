@@ -1,1 +1,2 @@
 - [Module 0 real-data migration complete](project_real_data_migration_complete.md) — 10-slice migration landed 2026-04-21; CI + nightly + runbook + talk-track gate future edits.
+- [Genie regression registry format is verification-gated on ## heading count](project_genie_regression_contract.md) — regression_suite.md must be one `## ` heading per prompt (≥50), not a table; Python list sizes pinned by a cred-free test.
