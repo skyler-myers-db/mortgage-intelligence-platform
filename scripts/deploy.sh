@@ -73,12 +73,22 @@ while [[ $# -gt 0 ]]; do
     --skip-smoke)   SKIP_SMOKE=1;    shift ;;
     --no-confirm)   NO_CONFIRM=1;    shift ;;
     -t|--target)
-      if [[ $# -lt 2 ]]; then
+      if [[ $# -lt 2 || -z "$2" ]]; then
         echo "[deploy] missing value for $1 (expected target name, e.g. dev)" >&2
         exit 2
       fi
       TARGET="$2"; shift 2 ;;
-    --target=*)     TARGET="${1#--target=}"; shift ;;
+    --target=*)
+      # The `--target=` form can take an empty value (e.g. user typed
+      # `--target=` with nothing after the equals sign). Validate and
+      # fail fast so we never pass `-t ""` to `databricks bundle ...`
+      # downstream (raised by Copilot 2026-04-22).
+      TARGET="${1#--target=}"
+      if [[ -z "$TARGET" ]]; then
+        echo "[deploy] missing value for --target= (expected target name, e.g. dev)" >&2
+        exit 2
+      fi
+      shift ;;
     -h|--help)
       sed -n '2,60p' "$0"
       exit 0

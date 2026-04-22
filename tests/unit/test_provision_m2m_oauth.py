@@ -330,7 +330,7 @@ def test_set_gh_secrets_masks_and_pipes_via_stdin(
     with patch.object(pmo.subprocess, "run", side_effect=fake_run), patch.object(
         pmo, "_which", return_value="/usr/local/bin/gh"
     ):
-        result = pmo.provision(
+        pmo.provision(
             sp_name="mip-nightly-ci-sp",
             app_name="mip-app",
             grant_can_use=True,
