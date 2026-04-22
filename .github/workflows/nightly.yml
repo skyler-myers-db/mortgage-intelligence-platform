@@ -137,10 +137,17 @@ jobs:
       DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
       DATABRICKS_WAREHOUSE_ID: ${{ secrets.DATABRICKS_WAREHOUSE_ID }}
       GENIE_SPACE_ID: ${{ secrets.GENIE_SPACE_ID }}
-      LAKEBASE_HOST: ${{ secrets.LAKEBASE_HOST }}
-      LAKEBASE_USER: ${{ secrets.LAKEBASE_USER }}
-      LAKEBASE_PASSWORD: ${{ secrets.LAKEBASE_PASSWORD }}
-      LAKEBASE_DATABASE_NAME: ${{ secrets.LAKEBASE_DATABASE_NAME }}
+      # Deliberately omit LAKEBASE_HOST / _USER / _PASSWORD here so the
+      # backend's `_resolve_lakebase_connection_params` takes the SDK
+      # workspace-identity path: it calls `/api/2.0/database/instances/
+      # mip-app-state` to resolve the real `read_write_dns`, uses the
+      # PAT-identity's `user_name` as the Postgres user, and mints a
+      # fresh short-lived Postgres password via
+      # `/api/2.0/database/credentials`. This mirrors the pattern in
+      # jobs/lakebase_migrate.py and what the deployed App does at
+      # startup — one auth story for every environment, and no stale
+      # LAKEBASE_PASSWORD secret to rotate.
+      LAKEBASE_INTEGRATION: '1'
       MIP_MOCK_MODE: 'false'
       E2E_LIVE: '1'
       # real_data.spec.ts uses this to flip the force-degraded flag.
