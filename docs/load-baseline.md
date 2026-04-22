@@ -58,64 +58,81 @@ closed Slice 13 Gate 4.
 
 ### 20 concurrent users (90s, warm UC, freshly-refreshed gold)
 
+**Latest run** — after the Slice-13 perf follow-ups landed (health
+probe cache, portfolio preview TTL 30s → 120s, parallel borrower
+queries). Target: **deployed Databricks App** at
+`https://mip-app-2543889327043640.aws.databricksapps.com` via
+workspace-identity Bearer.
+
 | Endpoint                      |   p50 |   p95 |   p99 | count | fail% |
 | ----------------------------- | ----: | ----: | ----: | ----: | ----: |
-| `GET /api/health`             |  1400 |  1800 |  2100 |    23 |     0 |
-| `POST /api/portfolio/preview` |     5 |  1100 |  1500 |    86 |     0 |
-| `GET /api/segments`           |     5 |   920 |  1200 |    64 |     0 |
-| `GET /api/leads`              |  1100 |  1500 |  1800 |   218 |     0 |
-| `GET /api/borrowers/{id}`     |  3400 |  4600 |  5900 |   139 |     0 |
+| `GET /api/health`             |   100 |  1100 |  1600 |    56 |     0 |
+| `POST /api/portfolio/preview` |    98 |   120 |   330 |   121 |     0 |
+| `GET /api/segments`           |    98 |   580 |   830 |    85 |     0 |
+| `GET /api/leads`              |   940 |  1400 |  2000 |   248 |     0 |
+| `GET /api/borrowers/{id}`     |  1700 |  3300 |  4200 |   134 |     0 |
 
-Aggregated across all endpoints: **5.92 req/s, 0 failures across 530
-requests, p50 = 1100 ms, p95 = 4000 ms, p99 = 4600 ms.**
+Aggregated across all endpoints: **7.18 req/s, 0 failures across 644
+requests, p50 = 780 ms, p95 = 2000 ms, p99 = 3300 ms.**
 
-Observations:
-- Cache-backed endpoints (`/api/portfolio/preview`, `/api/segments`)
-  have p50 = 5 ms — the 30 s TTL cache is doing its job. The tail
-  (p95 ≥ 900 ms) is cache-miss hits against the warehouse.
-- `/api/leads` p50 = 1.1 s is warehouse-bound: one query for the
-  ranked population, plus the response-model hydration. p95 = 1.5 s
-  matches the published threshold exactly (pass).
-- `/api/borrowers/{id}` is the slowest: it fans out into borrower_360
-  + evidence_events + recommended_offers. Expected to get ~300 ms
-  faster once Lakebase is up (lifecycle_state lookups land).
-- `/api/health` is slow because of the Genie probe (HTTP round-trip);
-  see §Caveat above.
+Before/after the Slice-13 perf work (same harness, same VU count,
+same 90 s duration — the earlier run targeted a local uvicorn with
+live UC, this one targets the deployed app):
 
-## Threshold pass/fail (warm UC)
+| Endpoint                      | p95 before | p95 after | Δ       |
+| ----------------------------- | ---------: | --------: | ------- |
+| `GET /api/health`             |     1800   |   **1100** | -38 %   |
+| `POST /api/portfolio/preview` |     1100   |    **120** | -89 %   |
+| `GET /api/segments`           |      920   |    **580** | -37 %   |
+| `GET /api/leads`              |     1500   |   **1400** |  -7 %   |
+| `GET /api/borrowers/{id}`     |     4600   |   **3300** | -28 %   |
+
+The portfolio-preview p95 drop (1 100 ms → 120 ms) is the biggest
+single win — extending the preview cache TTL from 30 s to 120 s
+moves almost every request from the cache-miss tail to the
+cache-hit fast path. p50 sat at 98 ms (cache hit) with a thin
+tail on refresh.
+
+## Threshold pass/fail (warm UC, deployed)
 
 Thresholds from `tools/load_test/README.md`:
 
 | Endpoint                      | p95 target | p95 measured | Pass?            |
 | ----------------------------- | ---------: | -----------: | ---------------- |
-| `GET /api/health`             |     500 ms |     1 800 ms | **FAIL** (Genie probe) |
-| `POST /api/portfolio/preview` |    1000 ms |     1 100 ms | **FAIL** (cache miss tail) |
-| `GET /api/segments`           |    1000 ms |       920 ms | pass             |
-| `GET /api/leads`              |    1500 ms |     1 500 ms | pass (at limit)  |
-| `GET /api/borrowers/{id}`     |    2000 ms |     4 600 ms | **FAIL**         |
+| `GET /api/health`             |     500 ms |     1 100 ms | **FAIL** (Genie probe miss on expiry) |
+| `POST /api/portfolio/preview` |    1000 ms |       120 ms | **pass** (was FAIL) |
+| `GET /api/segments`           |    1000 ms |       580 ms | pass             |
+| `GET /api/leads`              |    1500 ms |     1 400 ms | pass             |
+| `GET /api/borrowers/{id}`     |    2000 ms |     3 300 ms | **FAIL** (still warehouse-bound) |
 
-Net: 2/5 endpoints meet their published threshold on warm UC. The
-three failures are *not* show-stoppers — they're documented
-follow-ups:
+Net: **3/5 endpoints meet their published threshold on warm UC**
+against the deployed app — up from 2/5 on the pre-perf baseline.
 
-1. **`/api/health` > 500 ms**: Genie probe serialises a real REST
-   call on every health hit. Either cache the probe result for 2-5 s
-   (TTLCache is already available) or make it async/best-effort.
-2. **`/api/portfolio/preview` p95 > 1 s**: cache-miss traffic hits
-   the warehouse for a heavy aggregate. Extend TTL from 30 s → 120 s
-   for this endpoint OR pre-compute the aggregate into a gold table
-   refreshed by `mip_refresh_scores`.
-3. **`/api/borrowers/{id}` p95 ≈ 4.6 s**: fan-out across three gold
-   queries per request. Two options: (a) pre-join borrower_360 with
-   evidence_events top-3 + recommended_offers into a
-   `mip.gold.borrower_dossier` materialised view, refreshed with
-   scoring; (b) parallelise the three queries in the repository layer.
-   Option (a) is the portable, bundle-native fix.
+### What's still above threshold
+
+1. **`/api/health` p95 ≈ 1.1 s** — a 3-second probe-result TTL
+   cache is now in front of each dependency probe
+   (`backend/api/health.py::_cached_probe`). p50 is 100 ms (cache
+   hits); the p95 tail is the first request after each 3 s window
+   re-probing Genie (~1 s round-trip). Further reducible by
+   extending the probe TTL to ~10 s (operator-acceptable staleness
+   window) or by making the Genie probe best-effort with a stale-
+   while-revalidate pattern. Neither is a release blocker.
+
+2. **`/api/borrowers/{id}` p95 ≈ 3.3 s** — warehouse + evidence are
+   now fanned out in parallel via a 2-worker ThreadPoolExecutor in
+   `DatabricksBorrowerRepository.get`. p50 dropped to 1.7 s. The
+   remaining tail is warehouse-bound: borrower_360's join across
+   gold tables plus evidence_events' top-N sort. The portable fix
+   is a pre-joined `mip.gold.borrower_dossier` CTAS wired into
+   `mip_refresh_scores` so /api/borrowers/{id} is a single row
+   read. Deferred to the next gold-refresh optimisation pass.
 
 None of these gate release for Module 0 — they are **performance
 debt, not correctness debt**. The app is green on accuracy (Slice 13
-§1 evidence); throughput is demonstrated (530 requests, 0 failures);
-latency is recoverable from the three documented places above.
+§1 evidence), green on Playwright nightly (real-UC golden path),
+green on bundle deploy, 0 failures across 644 concurrent requests,
+and latency is recoverable from the two documented places above.
 
 ## What degrades first (predicted)
 

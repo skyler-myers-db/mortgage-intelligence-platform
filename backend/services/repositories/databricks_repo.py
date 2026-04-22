@@ -322,7 +322,25 @@ class DatabricksBorrowerRepository:
     )
 
     def get(self, borrower_id: str) -> Borrower360 | None:
-        row = self._client.execute_one(self._GET_SQL, {"borrower_id": borrower_id})
+        # Slice-13 perf: the dossier needs borrower_360 + evidence_events;
+        # both key by the same (borrower_id -> clip) lookup and neither
+        # depends on the other's result. Fan them out on a 2-worker
+        # ThreadPoolExecutor so the /api/borrowers/{id} p95 drops from
+        # ~4.6 s (serial) to ~max(t_borrower, t_evidence) + hydrate. If
+        # the borrower isn't found, the evidence query's inner subselect
+        # returns zero rows, which we drop before hydrating.
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            row_fut = pool.submit(
+                self._client.execute_one, self._GET_SQL, {"borrower_id": borrower_id}
+            )
+            evidence_fut = pool.submit(
+                self._client.execute, self._EVIDENCE_SQL, {"borrower_id": borrower_id}
+            )
+            row = row_fut.result()
+            evidence_rows = evidence_fut.result()
+
         if row is None:
             return None
 
@@ -331,7 +349,9 @@ class DatabricksBorrowerRepository:
         # Evidence + trigger timeline: trigger_timeline_json is the
         # pre-materialised top-3; evidence_events is the full list.
         timeline_events = _parse_timeline(row.get("trigger_timeline_json"))
-        evidence_events = self.evidence(borrower_id) or []
+        evidence_events = [
+            EvidenceEvent(**redact_evidence_row(r)) for r in (evidence_rows or [])
+        ]
 
         why = WhyPanel(
             rate_spread_bps=int(row.get("rate_spread_bps") or 0),

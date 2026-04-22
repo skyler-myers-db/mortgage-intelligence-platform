@@ -64,6 +64,15 @@ class MipUser(HttpUser):
 
     def on_start(self) -> None:
         self._last_borrower_ids = []
+        # Attach the bearer token for every request if one is present in
+        # the env. Databricks Apps traverses an OAuth proxy; a workspace
+        # Bearer token short-circuits the redirect. Local runs against a
+        # naked uvicorn don't need this header — Locust sends an empty
+        # header rather than skipping if the env var isn't set.
+        import os as _os
+        bearer = _os.environ.get("MIP_BEARER_TOKEN", "").strip()
+        if bearer:
+            self.client.headers.update({"Authorization": f"Bearer {bearer}"})
         # Prime the pump: one leads call per user so the borrower task
         # has IDs on its first tick. Without this the first borrower
         # hit of every user either 404s or is skipped.

@@ -32,6 +32,11 @@ client = TestClient(app)
 @pytest.fixture(autouse=True)
 def _reset_breakers() -> None:
     resilience._reset_breakers_for_tests()
+    # Slice-13 perf cache: /api/health now caches each probe result for
+    # 3s. That cache leaks across tests and would make the second-
+    # test-onward see stale results (all "up"/all "down"). Drop between
+    # tests so every monkeypatched probe is exercised cleanly.
+    health_mod._probe_cache.clear()
 
 
 def test_health_returns_ok_when_both_deps_up(monkeypatch: pytest.MonkeyPatch) -> None:

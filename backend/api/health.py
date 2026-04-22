@@ -43,13 +43,25 @@ from backend.services.observability import (
     recent_breaker_state_changes,
     recent_error_count,
 )
-from backend.services.resilience import all_breakers
+from backend.services.resilience import TTLCache, all_breakers
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api")
 
 
 _PROBE_TIMEOUT_S = 1.0
+
+# Slice-13 performance follow-up: cache each dependency probe's last
+# result for 3 s. Under the 20-VU warm-UC load baseline (see
+# docs/load-baseline.md), `/api/health` p95 was 1.8 s — dominated by
+# the Genie probe's real HTTP round-trip. A 3-second TTL means a burst
+# of health hits fans out at most one probe per dependency per 3 s,
+# cutting p95 from ~1.8 s to the cache-hit latency (<5 ms). The TTL is
+# short enough that a genuine dependency outage is surfaced within
+# three seconds — well under the frontend's degraded-banner polling
+# cadence — so resilience semantics are unchanged.
+_HEALTH_PROBE_TTL_S = 3.0
+_probe_cache: TTLCache = TTLCache()
 
 
 def _probe_warehouse() -> bool:
@@ -166,11 +178,27 @@ def _breaker_states() -> dict[str, str]:
     return out
 
 
+def _cached_probe(name: str, probe: Any) -> bool:
+    """Return the probe's result from cache, re-probing only when stale.
+
+    Wraps a zero-argument probe callable with the 3-second TTLCache.
+    On cache miss, runs the probe and stores the boolean. The cache is
+    process-local; operator-triggered restarts always see a fresh
+    probe on the next request.
+    """
+    cached = _probe_cache.get(name)
+    if cached is not None:
+        return bool(cached)
+    result = probe()
+    _probe_cache.set(name, result, _HEALTH_PROBE_TTL_S)
+    return bool(result)
+
+
 @router.get("/health")
 def health() -> dict[str, Any]:
-    warehouse_up = _probe_warehouse()
-    lakebase_up = _probe_lakebase()
-    genie_up = _probe_genie()
+    warehouse_up = _cached_probe("warehouse", _probe_warehouse)
+    lakebase_up = _cached_probe("lakebase", _probe_lakebase)
+    genie_up = _cached_probe("genie", _probe_genie)
     deps = {
         "warehouse": "up" if warehouse_up else "down",
         "lakebase": "up" if lakebase_up else "down",

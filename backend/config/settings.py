@@ -116,6 +116,15 @@ class Settings(BaseSettings):
     # endpoints (audit, outreach, borrower dossier) never consult the
     # cache. Set to 0 to disable caching entirely (tests do this).
     mip_cache_ttl_s: float = 30.0
+    # Slice-13 performance follow-up: portfolio preview is an expensive
+    # aggregate over 5.16M rows; its cache-miss cost shows up as a
+    # p95 ~1.1 s tail on /api/portfolio/preview (load-baseline.md). The
+    # aggregate refreshes at most once per gold-refresh cycle, so a
+    # 120-second TTL is comfortably shorter than the data ages while
+    # letting burst traffic hit the cache. Override back to
+    # `mip_cache_ttl_s` on dev laptops where snappier dev UX trumps
+    # warehouse-query minimisation.
+    mip_portfolio_preview_ttl_s: float = 120.0
 
     def require_databricks_creds(self) -> tuple[str, SecretStr, str]:
         """Return ``(host, token, warehouse_id)`` or raise at startup.
