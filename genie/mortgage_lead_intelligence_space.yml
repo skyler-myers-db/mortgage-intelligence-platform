@@ -31,9 +31,9 @@ instructions: |
 
   ALWAYS:
     - Query ONLY these assets: mip.gold.lead_population,
-      mip.gold.lead_segment_membership, mip.gold.lead_scores,
-      mip.gold.borrower_360, mip.gold.evidence_events,
-      mip.gold.recommended_offers, mip.gold.lockin_cohort,
+      mip.gold.segment_population, mip.gold.lead_scores,
+      mip.gold.borrower_360, mip.gold.borrower_dossier,
+      mip.gold.evidence_events, mip.gold.lockin_cohort,
       mip.semantics.lead_generation_metric_view,
       mip.semantics.segment_performance_metric_view,
       mip.semantics.borrower_opportunity_metric_view.
@@ -85,14 +85,18 @@ trusted_assets:
       Link) identifiers with current mortgage state (rate, balance, term,
       origination date) and property economics (AVM, LTV, equity).
 
-  - name: mip.gold.lead_segment_membership
+  - name: mip.gold.segment_population
     kind: table
     description: >-
-      Maps each borrower to one or more segments (In-the-Money, HELOC/
-      Cash-Out Candidate, Listed for Sale, Investor/Multi-Property,
-      Retention/Recapture). Segment logic is defined in
-      sql/transformations/gold_lead_segment_membership.sql and mirrors
-      the canonical rules in sql/uc_functions/fn_in_the_money.sql.
+      Per-(segment_code, state) rollup of borrower counts and mean lead
+      score, plus a per-segment national '_ALL' row. 6 segments × (6 states
+      + _ALL) = 42 rows. Segment codes: itm, listed, permit, investor,
+      equity, retention. Segment membership is derived from
+      gold.borrower_360.segment_codes (already evaluated there with the
+      listed/permit BLOCKED columns forced false). Materialised by
+      sql/transformations/gold_segment_population.sql. Use this table for
+      any question that slices or rolls up by segment; prefer the
+      segment_performance_metric_view for aggregate KPIs.
 
   - name: mip.gold.lead_scores
     kind: table
@@ -117,13 +121,18 @@ trusted_assets:
       UTC timestamp, confidence, and source-table citation. Drives the
       "why now" rationale on every score and recommendation.
 
-  - name: mip.gold.recommended_offers
+  - name: mip.gold.borrower_dossier
     kind: table
     description: >-
-      Next-best-offer per borrower from sql/uc_functions/fn_next_best_offer.sql.
-      Includes offer type (Rate-Term Refi, Cash-Out, HELOC, Purchase,
-      Retention) plus projected monthly savings and confidence band. Human
-      approval is required before any outreach is sent.
+      One row per borrower_id carrying every field the /api/borrowers/{id}
+      dossier payload needs, pre-joined for a single-statement indexed read.
+      Includes an ARRAY<STRUCT> of up to 20 recent evidence events per
+      borrower and the top-3 trigger timeline entries used by the
+      Borrower 360 route. Materialised by
+      sql/transformations/gold_borrower_dossier.sql in lockstep with
+      borrower_360 on every mip_refresh_scores run. Use this table for
+      any single-borrower lookup; aggregate questions should prefer
+      gold.borrower_360 or the borrower_opportunity metric view.
 
   - name: mip.gold.lockin_cohort
     kind: table

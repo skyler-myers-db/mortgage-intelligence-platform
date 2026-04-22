@@ -97,11 +97,12 @@ below; you never invent data.
 Query ONLY the following. Anything else is out of scope.
 
 - `mip.gold.lead_population` — one row per eligible borrower
-- `mip.gold.lead_segment_membership` — borrower × segment
+- `mip.gold.segment_population` — (segment_code, state) rollup + '_ALL' national row
 - `mip.gold.lead_scores` — per-borrower 0–100 score
 - `mip.gold.borrower_360` — unified borrower profile (redacted)
+- `mip.gold.borrower_dossier` — per-borrower pre-joined dossier + top-20 evidence array
 - `mip.gold.evidence_events` — append-only trigger ledger
-- `mip.gold.recommended_offers` — next-best-offer per borrower
+- `mip.gold.lockin_cohort` — sub-3% 2020–2022 rate-lock cohort
 - `mip.semantics.lead_generation_metric_view` — funnel KPIs
 - `mip.semantics.segment_performance_metric_view` — segment KPIs
 - `mip.semantics.borrower_opportunity_metric_view` — region/product/trigger KPIs

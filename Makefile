@@ -3,7 +3,7 @@
 PYTHON ?= $(shell [ -x .venv/bin/python ] && echo .venv/bin/python || echo python3)
 
 .PHONY: setup dev-api dev-ui test test-e2e lint build validate bundle-validate bundle-deploy zip \
-        provision-genie bundle-validate-env bundle-deploy-dev
+        provision-genie bundle-validate-env bundle-deploy-dev deploy-dev
 
 setup:
 	python3 -m venv .venv
@@ -76,3 +76,27 @@ bundle-deploy-dev:
 	@read -p "About to DEPLOY to your workspace. Continue? [y/N] " ans; \
 	  test "$$ans" = "y" || { echo "aborted."; exit 1; }; \
 	  $(PYTHON) tools/databricks/bundle_env.py deploy -t dev
+
+# ---------------------------------------------------------------------------
+# `deploy-dev` — single-command zero-click dev deploy.
+#
+# Delegates to scripts/deploy.sh, which chains bundle validate + deploy +
+# silver refresh + Lakebase migrate + gold refresh + lifecycle sync +
+# Genie provisioning + live smoke, all idempotent. This is the one
+# command an operator runs to stand a workspace up from scratch or to
+# roll forward after a code change. Every step fails loudly and the
+# script can be safely re-run.
+#
+# For finer-grained control, scripts/deploy.sh accepts:
+#     --dry-run       # print the plan, make no changes
+#     --skip-silver   # skip the FRED + share refresh (fast path)
+#     --skip-smoke    # skip the post-deploy curl smoke test
+#     --no-confirm    # skip the interactive y/N prompt
+#
+# `provision-genie` above is kept as a separate target for operators who
+# want to rebind only the Genie space (e.g. after editing
+# genie/mortgage_lead_intelligence_space.yml) without re-deploying the
+# bundle. Running `deploy-dev` is a strict superset.
+# ---------------------------------------------------------------------------
+deploy-dev:
+	./scripts/deploy.sh
