@@ -32,7 +32,9 @@ sees the real geography surface, not a single-metro filter.
 5. **How big is the 2020–2022 sub-3% lock-in cohort across all six states?**
    Intent: size the retention + cash-out pool (1.22M borrowers per gap-analysis §1),
    the cohort that will *not* refi but is highly HELOC-shoppable.
-   Source: `mip.silver.lien_current`, `mip.semantics.borrower_opportunity_metric_view`.
+   Source: `mip.gold.lockin_cohort` (pre-materialised from `silver.lien_current`
+   by `sql/transformations/gold_lockin_cohort.sql`; keeps Genie inside the
+   trusted `mip.gold.*` / `mip.semantics.*` boundary).
 
 6. **Which borrowers on our retention list have a competitor lien filed in the last 30 days?**
    Intent: recapture — catch refinance-to-competitor before it closes. Servicer-transferred

@@ -316,3 +316,41 @@ TBLPROPERTIES (
   'delta.autoOptimize.optimizeWrite' = 'true',
   'delta.autoOptimize.autoCompact'   = 'true'
 );
+
+-- -----------------------------------------------------------------------------
+-- 9. mip.gold.lockin_cohort
+--    Borrowers who originated (or most-recently refinanced into) a sub-3 %
+--    first-position mortgage between 2020-01-01 and 2022-12-31. Addresses
+--    sample question 5 inside the trusted gold boundary (silver would be
+--    out-of-scope for Genie). One row per CLIP; refreshed by the
+--    mip_refresh_scores job via sql/transformations/gold_lockin_cohort.sql.
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS mip.gold.lockin_cohort (
+  clip                  STRING    NOT NULL COMMENT 'Cotality property identifier.',
+  borrower_id           STRING    NOT NULL COMMENT 'Synthetic B-###… id; matches borrower_360.borrower_id.',
+  state                 STRING             COMMENT '2-char state; always in the 6-state footprint.',
+  zip                   STRING             COMMENT '5-digit ZIP.',
+  situs_cbsa_code       STRING             COMMENT 'CBSA code for the property.',
+  city                  STRING             COMMENT 'Property city.',
+  segment_codes         ARRAY<STRING>      COMMENT 'Segment tags from borrower_360.',
+  opportunity_score     INT                COMMENT '0-100 opportunity score at refresh time.',
+  equity_estimate       BIGINT             COMMENT 'AVM - total open liens, floored at 0.',
+  equity_pct            INT                COMMENT 'Equity %, [0,100].',
+  rate_spread_bps       INT                COMMENT 'First-position rate vs MORTGAGE30US, bps.',
+  recommended_offer     STRING             COMMENT 'Human-readable next-best-offer label.',
+  origination_date      DATE      NOT NULL COMMENT 'first_pos_date from silver.lien_current.',
+  origination_rate      DOUBLE    NOT NULL COMMENT 'first_pos_rate (fractional; < 0.03).',
+  first_pos_loan_type   STRING             COMMENT 'CONV / FHA / VA / other; from silver.',
+  first_pos_term_months INT                COMMENT 'Loan term in months; from silver.',
+  origination_year      INT                COMMENT 'YEAR(origination_date) for fast GROUP BY.',
+  cohort_tag            STRING    NOT NULL COMMENT 'Stable tag for GROUP BY; today always "sub3_2020_2022".',
+  refreshed_at          TIMESTAMP NOT NULL COMMENT 'CTAS refresh timestamp.'
+)
+USING DELTA
+CLUSTER BY (state, origination_year)
+COMMENT 'Sub-3% 2020-2022 lock-in cohort. Gold-layer alternative to silver.lien_current for sample question 5.'
+TBLPROPERTIES (
+  'delta.enableChangeDataFeed' = 'false',
+  'delta.autoOptimize.optimizeWrite' = 'true',
+  'delta.autoOptimize.autoCompact'   = 'true'
+);

@@ -42,6 +42,7 @@ EXPECTED_ASSETS = {
     "mip.gold.borrower_360",
     "mip.gold.evidence_events",
     "mip.gold.recommended_offers",
+    "mip.gold.lockin_cohort",
     "mip.semantics.lead_generation_metric_view",
     "mip.semantics.segment_performance_metric_view",
     "mip.semantics.borrower_opportunity_metric_view",
