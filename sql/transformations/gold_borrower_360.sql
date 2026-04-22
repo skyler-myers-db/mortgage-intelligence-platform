@@ -87,6 +87,14 @@ base AS (
     lc.first_pos_rate,                  -- fractional
     lc.first_pos_loan_type,
     lc.first_pos_lender_current,
+    -- Normalised lender raw_key for the JOIN to mip.ref.lender_dictionary.
+    -- Both sides are normalised with UPPER(TRIM(...)) so the match is case +
+    -- trailing-whitespace insensitive. See sql/ref/lender_dictionary_seed.sql
+    -- for the canonical raw_key set (11 seeded entries incl. 'SUMMIT MTG').
+    CASE
+      WHEN lc.first_pos_lender_current IS NULL THEN NULL
+      ELSE UPPER(TRIM(lc.first_pos_lender_current))
+    END                                 AS lender_raw_key,
     lc.second_pos_amount,
     COALESCE(pob.related_property_count, 1) AS related_property_count
   FROM mip.silver.lien_current AS lc
@@ -96,6 +104,28 @@ base AS (
     ON pob.owner_link_id = pm.owner_link_id
   WHERE lc.situs_state IN ('IL','CA','FL','TX','WA','CO')
     AND lc.clip IS NOT NULL
+),
+-- Slice13-accuracy: promote current-customer detection from an inline
+-- UPPER(...) LIKE '%SUMMIT%' to a governed JOIN against
+-- mip.ref.lender_dictionary. The dictionary carries `is_competitor` per
+-- lender (FALSE iff the row IS the tenant, e.g. SUMMIT MTG for Summit
+-- Mortgage); `is_current_customer` is its inverse. Running as a CTE so
+-- the JOIN happens once and the projected boolean flows through
+-- enriched / scored / with_segments like the old literal.
+--
+-- Behaviour vs prior inline LIKE:
+--   - Known tenant lender (raw_key = 'SUMMIT MTG'): is_current_customer = TRUE.
+--   - Known third-party lender (is_competitor = TRUE in ref): FALSE.
+--   - Lender string not in ref.lender_dictionary: COALESCE -> FALSE, matching
+--     the fallback posture (no known customer relationship). Third-party
+--     lenders not yet seeded still land in `is_competitor_lien` because of
+--     the `lender IS NOT NULL AND NOT is_current_customer` fallback below.
+--   - Lender string NULL: FALSE for both flags.
+lender_ref AS (
+  SELECT
+    UPPER(TRIM(raw_key)) AS raw_key,
+    is_competitor
+  FROM mip.ref.lender_dictionary
 ),
 enriched AS (
   SELECT
@@ -130,19 +160,28 @@ enriched AS (
     (b.related_property_count >= 2
      OR COALESCE(b.owner_is_corporate, FALSE)
      OR COALESCE(b.is_absentee, FALSE)) AS is_investor,
-    -- Current-customer detection: case-insensitive match on "summit" in the
-    -- current lender name. Production swaps to a ref.lender_dictionary join.
+    -- Current-customer detection: governed JOIN against
+    -- mip.ref.lender_dictionary (slice13-accuracy). Previously an inline
+    -- UPPER(...) LIKE '%SUMMIT%'. `is_current_customer` = NOT is_competitor
+    -- when the lender is known; FALSE otherwise.
+    COALESCE(NOT lr.is_competitor, FALSE) AS is_current_customer,
+    -- Competitor lien: servicer known AND is NOT our tenant. If the raw
+    -- lender string lands in the ref dictionary with is_competitor = TRUE,
+    -- that's authoritative. If the raw lender string is missing from the
+    -- dictionary (unseeded third-party), treat the presence of any non-null
+    -- lender string as evidence of a competitor lien -- matches the prior
+    -- "servicer known and != Summit" semantic so unknown third-party lenders
+    -- keep lighting up the retention + competitor-lien paths.
     (b.first_pos_lender_current IS NOT NULL
-     AND UPPER(b.first_pos_lender_current) LIKE '%SUMMIT%') AS is_current_customer,
-    -- Competitor lien: servicer known and != Summit.
-    (b.first_pos_lender_current IS NOT NULL
-     AND NOT (UPPER(b.first_pos_lender_current) LIKE '%SUMMIT%')) AS is_competitor_lien,
+     AND NOT COALESCE(NOT lr.is_competitor, FALSE)) AS is_competitor_lien,
     (COALESCE(b.owner_occupancy_code, '') = 'O') AS is_owner_occupied,
     -- BLOCKED columns -- hardcoded FALSE until Cotality Permits + MLS land.
     CAST(FALSE AS BOOLEAN) AS has_permit,
     CAST(FALSE AS BOOLEAN) AS listed_for_sale
   FROM base AS b
   CROSS JOIN market AS m
+  LEFT JOIN lender_ref AS lr
+    ON lr.raw_key = b.lender_raw_key
 ),
 -- Scored rows: bring the default thresholds inline and call the frozen
 -- UDFs for ITM + next-best-offer.

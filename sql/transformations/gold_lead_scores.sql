@@ -13,8 +13,9 @@
 -- Slice:     module0-real-data-slice3.
 -- Data contract: docs/data-contract-module0.md §3.3 + §5.
 --
--- Sub-score formulas live in data-contract §5 and in the SQL header of each
--- @dlt.table equivalent in mip_gold_pipeline.py.
+-- Sub-score formulas live in data-contract §5. (The historical DLT mirror
+-- was retired in slice13-accuracy; the authoritative materialisation path
+-- is this CTAS chain under `mip_refresh_scores`.)
 --
 -- intent_trigger formula on the real-data path (BLOCKED terms = 0):
 --   LEAST(100,

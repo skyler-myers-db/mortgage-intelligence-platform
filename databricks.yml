@@ -201,12 +201,12 @@ resources:
               path: sql/ref/lender_dictionary_seed.sql
     # Gold-layer materialization. Runs the idempotent DDL manifest (adds
     # any new tables -- e.g. lockin_cohort -- on a bundle deploy), then
-    # executes each gold CTAS file in dependency order. The DLT
-    # mip_gold_pipeline mirrors these tables for streaming consumers, but
-    # this CTAS-via-warehouse job is the authoritative populator: the
-    # warehouse-executed files under `sql/transformations/gold_*.sql`
-    # materialize the same rows the app reads. Running this job is what
-    # "refresh the gold layer" means operationally.
+    # executes each gold CTAS file in dependency order. This CTAS-via-
+    # warehouse job is the authoritative populator: the warehouse-executed
+    # files under `sql/transformations/gold_*.sql` materialize the same
+    # rows the app reads. Running this job is what "refresh the gold layer"
+    # means operationally. (A prior DLT mirror was retired in slice13-
+    # accuracy -- CTAS is the single source of truth now.)
     #
     # Dependency order (respected by the depends_on chain below):
     #   1. property_owner_bridge         (owner-link rollup; no deps)
@@ -476,16 +476,12 @@ resources:
       libraries:
         - file:
             path: pipelines/lakeflow/mip_feature_pipeline.py
-    mip_gold_pipeline:
-      name: mip_gold_pipeline
-      catalog: ${var.uc_catalog}
-      schema: gold
-      photon: true
-      development: true
-      continuous: false
-      libraries:
-        - file:
-            path: pipelines/lakeflow/mip_gold_pipeline.py
+    # NOTE: the gold DLT was removed (slice13-accuracy cleanup). It
+    # previously declared the gold tables and delegated to
+    # `spark.sql("SELECT * FROM mip.gold.<name>")`, which was a dual-write
+    # mirror of the authoritative CTAS chain in the `mip_refresh_scores`
+    # job (see above). The gold materialisation path is now exclusively the
+    # warehouse-executed CTAS files under `sql/transformations/gold_*.sql`.
 
   # Dashboards are only declared once var.sql_warehouse_id is populated for
   # the target workspace. When a warehouse ID is provided, these blocks wire

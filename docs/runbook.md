@@ -2,10 +2,15 @@
 
 **Who uses this:** the operator, the backup presenter, and the
 on-call engineer during a live session or after a production deploy.
-**Companion doc:** [`docs/module0-rehearsal-checklist.md`](module0-rehearsal-checklist.md)
-is the proactive pre-session pass. This runbook is the reactive
-incident-response + deploy guide. Run the checklist **before** every
-session; reach for this file when something goes sideways.
+**Companion docs:**
+- [`docs/module0-rehearsal-checklist.md`](module0-rehearsal-checklist.md)
+  is the proactive pre-session pass. This runbook is the reactive
+  incident-response + deploy guide. Run the checklist **before** every
+  session; reach for this file when something goes sideways.
+- [`docs/dashboards.md`](dashboards.md) — dashboard cold-start &
+  pending-state behaviour. Read this before explaining to a partner
+  why a `delta_vs_prior_*` column is blank or an approval-rate cell is
+  `0` on a first-day deploy.
 
 The Module 0 app runs on live Unity Catalog + Lakebase — there is no
 mock fallback in the deployed app. Everything below assumes the
@@ -198,8 +203,10 @@ databricks bundle run mip_refresh_silver -t dev
 # 4. Lakebase schema migration + seed campaigns
 databricks bundle run mip_lakebase_migrate -t dev
 
-# 5. Gold pipeline — computes borrower_360, lead_scores, evidence_events, lead_population
-databricks bundle run mip_gold_pipeline -t dev
+# 5. Gold refresh — CTAS chain computes borrower_360, lead_scores,
+#    evidence_events, lead_population, segment_population, lockin_cohort,
+#    borrower_dossier. Replaces the retired `mip_gold_pipeline` DLT.
+databricks bundle run mip_refresh_scores -t dev
 
 # 6. Verify: warehouse running, app live, all deps up
 curl -s "$MIP_APP_URL/api/health" | jq
@@ -212,6 +219,14 @@ curl -s "$MIP_APP_URL/api/health" | jq
 After step 3 the silver tables are queryable but the app still returns
 503 because the gold layer isn't populated. Step 5 is what makes the
 UI render real borrowers.
+
+On a brand-new deploy, the dashboards render but a handful of widgets
+will show `0` / `NULL` / "pending" by design — specifically the
+`delta_vs_prior_*` WoW measures (need ≥ 2 daily snapshots separated by
+≥ 7 days) and the approval / outreach / actioned counters (populate
+as operators use the app). This is documented in
+[`docs/dashboards.md`](dashboards.md) — read it before explaining the
+blanks to a reviewer.
 
 ---
 
@@ -247,7 +262,7 @@ databricks api post /api/2.0/sql/statements \
 
 # If that timestamp is > 24h old, re-run silver + gold in sequence:
 databricks bundle run mip_refresh_silver -t dev
-databricks bundle run mip_gold_pipeline -t dev
+databricks bundle run mip_refresh_scores -t dev
 ```
 
 For a session window where live refresh is impractical, **do not**

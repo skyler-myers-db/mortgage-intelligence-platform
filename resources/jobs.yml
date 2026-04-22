@@ -1,20 +1,12 @@
 resources:
   jobs:
-    refresh_silver:
-      name: mip-refresh-silver-${bundle.target}
-      tasks:
-        - task_key: validate_share
-          notebook_task:
-            notebook_path: ../notebooks/00_validate_cotality_share.py
-        - task_key: build_gold
-          depends_on:
-            - task_key: validate_share
-          spark_python_task:
-            python_file: ../pipelines/lakeflow/mip_gold_pipeline.py
-      tags:
-        solution: mortgage-intelligence-platform
-        module: module0
-        owner: entrada
+    # NOTE: `refresh_silver` is the canonical silver-refresh job and lives
+    # in `databricks.yml` as `mip_refresh_silver`. The stub previously here
+    # referenced a retired gold DLT file; the gold materialisation path is
+    # the CTAS chain in `mip_refresh_scores`, not a DLT. Kept as a comment
+    # marker in case a future slice wires `include: [resources/*.yml]` and
+    # wants a sibling block here; in that case, re-author it against the
+    # canonical silver pipeline (`mip_feature_pipeline`).
 
     # Slice13-accuracy mirror: canonical definition lives in `databricks.yml`
     # as `mip_refresh_scores`. Runs the gold CTAS chain (idempotent DDL +

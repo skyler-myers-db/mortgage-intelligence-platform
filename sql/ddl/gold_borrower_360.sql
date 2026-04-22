@@ -94,7 +94,7 @@ CREATE TABLE IF NOT EXISTS mip.gold.borrower_360 (
   has_permit                BOOLEAN   NOT NULL COMMENT 'BLOCKED (data-contract §9) -- hardcoded FALSE until Cotality Building Permits product lands. intent_trigger permit term is 0.',
   listed_for_sale           BOOLEAN   NOT NULL COMMENT 'BLOCKED (data-contract §9) -- hardcoded FALSE until Cotality MLS Listings lands. fn_next_best_offer purchase branch never fires on real data.',
   is_investor               BOOLEAN   NOT NULL COMMENT 'Derived: related_property_count >= 2 OR is_corporate_owner OR is_absentee.',
-  is_current_customer       BOOLEAN   NOT NULL COMMENT 'UPPER(first_pos_lender_current) LIKE "%SUMMIT%". Default tenant lender per CLAUDE.md. Production swaps to ref.lender_dictionary join.',
+  is_current_customer       BOOLEAN   NOT NULL COMMENT 'COALESCE(NOT lender_dictionary.is_competitor, FALSE) via JOIN on UPPER(TRIM(first_pos_lender_current)) = mip.ref.lender_dictionary.raw_key (slice13-accuracy).',
   is_competitor_lien        BOOLEAN   NOT NULL COMMENT 'first_pos_lender_current IS NOT NULL AND NOT is_current_customer. 263K-row recapture universe.',
   second_pos_amount         BIGINT             COMMENT '2nd-lien balance passthrough; NULL / 0 when no 2nd-lien. Feeds "equity" segment predicate (HELOC-clean only).',
   first_pos_loan_type       STRING             COMMENT '1st-lien loan type code (CONV / FHA / VA / etc). Feeds fit sub-score.',

@@ -24,7 +24,6 @@ def test_databricks_yml_contains_required_resource_names():
         "mip_refresh_scores",
         "mip_snapshot_dashboards",
         "mip_feature_pipeline",
-        "mip_gold_pipeline",
         "mip_executive_dashboard",
         "mip_segment_dashboard",
         "mortgage_lead_intelligence",

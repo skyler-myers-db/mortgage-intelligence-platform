@@ -297,11 +297,10 @@ agent can route them.
 - **Cause:** commit `b0ad03c` ("drop lead_population row cap") removed
   the `rank_overall <= 10000` predicate from
   `sql/transformations/gold_lead_population.sql`, but the live table
-  was last CTAS-refreshed by the Lakeflow pipeline running an older
-  `mip_gold_pipeline.py` or warehouse job definition. The DLT
-  pipeline's `gold_lead_population` function delegates via
-  `SELECT * FROM mip.gold.lead_population`, so the source of the cap
-  is the standalone CTAS job, not the DLT pipeline itself.
+  was last CTAS-refreshed by an older warehouse job definition. The
+  authoritative gold materialisation path is the CTAS chain in the
+  `mip_refresh_scores` job (the retired `mip_gold_pipeline` DLT was a
+  dual-write mirror and has been removed).
 - **Impact:** the Leads page shows 10k rows when ~195k should qualify;
   real "top borrowers by opportunity" views truncate at an arbitrary
   row count. The SCORE floor is still enforced (all 10k rows ≥ 50), so
