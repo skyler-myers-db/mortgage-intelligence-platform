@@ -46,6 +46,16 @@ paths = [
   '''docs/module0-rehearsal-checklist\.md$''',
   # Bundle validation fixtures.
   '''\.github/workflows/ci\.yml$''',
+  # Databricks Asset Bundle manifests -- by convention, never contain
+  # inline secrets. Credentials resolve via `valueFrom:` resource bindings
+  # or `${secrets.scope.name}` / `${workspace.*}` references. Bundle YAML
+  # contains many high-entropy strings (task_key values like
+  # `ctas_property_owner_bridge`, workspace paths, resource ids,
+  # bundle interpolation tokens) that trigger the generic-api-key rule
+  # on entropy heuristics. Bundle validate + human PR review remain
+  # the source of truth for these files.
+  '''^databricks\.yml$''',
+  '''^resources/.*\.yml$''',
   # Lockfiles -- dependency hashes look like secrets to generic rules.
   '''package-lock\.json$''',
   '''frontend/package-lock\.json$''',

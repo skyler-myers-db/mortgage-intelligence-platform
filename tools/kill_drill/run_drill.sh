@@ -8,17 +8,22 @@
 # (health payload shape + HTTP 503 on data endpoints with
 # `retryable: true`) and NEVER silently falls back to fake data.
 #
-# The drill has four targets:
+# The drill has six targets:
 #
-#   warehouse  Requires a human to stop the SQL warehouse in the
-#              workspace -- the script prints the exact command, waits
-#              for operator ack, then probes and verifies.
-#   lakebase   Requires a human to stop the Lakebase database instance
-#              in the workspace; same ack-and-probe pattern.
-#   genie      Simulated locally by exporting a bogus GENIE_SPACE_ID and
-#              restarting the backend in a private subshell.
-#   token      Simulated locally by unsetting DATABRICKS_TOKEN for the
-#              backend subshell.
+#   warehouse      Requires a human to stop the SQL warehouse in the
+#                  workspace -- the script prints the exact command,
+#                  waits for operator ack, then probes and verifies.
+#   lakebase       Requires a human to stop the Lakebase database
+#                  instance; same ack-and-probe pattern.
+#   genie          Simulated: exports a bogus GENIE_SPACE_ID and starts
+#                  a private backend on port 8001.
+#   token          Simulated: clears DATABRICKS_TOKEN + OAuth client
+#                  creds + pins auth_type=pat so the SDK cannot silently
+#                  mint from ~/.databrickscfg or workspace identity.
+#   warehouse-sim  Simulated: exports an invalid DATABRICKS_WAREHOUSE_ID
+#                  so Statement Execution API calls 4xx. CI-runnable.
+#   lakebase-sim   Simulated: exports an unreachable LAKEBASE_HOST so
+#                  libpq connect fails. CI-runnable.
 #
 # Safety posture:
 #   - The script NEVER stops real workspace infrastructure itself. The
@@ -50,7 +55,7 @@ usage() {
   cat <<EOF
 
 Usage:
-  tools/kill_drill/run_drill.sh --target <warehouse|lakebase|genie|token> [--app-url URL] [--await-seconds N]
+  tools/kill_drill/run_drill.sh --target <warehouse|lakebase|genie|token|warehouse-sim|lakebase-sim> [--app-url URL] [--await-seconds N]
 
 Env:
   MIP_APP_URL   Target URL for the already-running backend (default http://127.0.0.1:8000).
@@ -69,8 +74,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$TARGET" in
-  warehouse|lakebase|genie|token) ;;
-  *) echo "--target must be one of: warehouse | lakebase | genie | token" >&2; exit 2 ;;
+  warehouse|lakebase|genie|token|warehouse-sim|lakebase-sim) ;;
+  *) echo "--target must be one of: warehouse | lakebase | genie | token | warehouse-sim | lakebase-sim" >&2; exit 2 ;;
 esac
 
 command -v curl >/dev/null || { echo "curl required" >&2; exit 2; }
@@ -176,7 +181,15 @@ assert_data_endpoint_degraded() {
   log "body (head): $(echo "$body" | head -c 400)"
   case "$code" in
     503)
-      if echo "$body" | jq -e '.detail.retryable == true or .retryable == true' >/dev/null 2>&1; then
+      # Accept retryable=true at either the top level or nested inside
+      # the FastAPI `detail` object. Guard the nested probe with
+      # `(.detail|type)=="object"` so jq doesn't error-exit when
+      # `detail` is a plain string (which happens when the router
+      # raises HTTPException(detail=str)).
+      if echo "$body" | jq -e '
+        (.retryable == true)
+        or ((.detail|type) == "object" and .detail.retryable == true)
+      ' >/dev/null 2>&1; then
         log "PASS: $path returned 503 with retryable=true"
         return 0
       fi
@@ -195,8 +208,15 @@ assert_data_endpoint_degraded() {
         log "PASS: $path returned 200 but self-declared degraded"
         return 0
       fi
-      if echo "$body" | jq -e '(type == "array" and length == 0) or (.items? // [] | length == 0)' >/dev/null 2>&1; then
-        log "PASS: $path returned 200 with empty payload (acceptable degraded shape)"
+      # Empty-array OR empty-items-object check. Split the two cases so a
+      # populated array is NOT accidentally matched by a null-coalesced
+      # `.items? // [] | length == 0` (which evaluates true for arrays).
+      if echo "$body" | jq -e '(type == "array" and length == 0)' >/dev/null 2>&1; then
+        log "PASS: $path returned 200 with empty array (acceptable degraded shape)"
+        return 0
+      fi
+      if echo "$body" | jq -e '(type == "object" and (.items? // null) != null and (.items | length) == 0)' >/dev/null 2>&1; then
+        log "PASS: $path returned 200 with empty items[] (acceptable degraded shape)"
         return 0
       fi
       log "FAIL: $path returned 200 with non-empty payload -- looks like mock fallback"
@@ -211,6 +231,23 @@ assert_data_endpoint_degraded() {
 
 start_drill_backend() {
   log "starting private drill backend on $DRILL_APP_URL (env below)"
+
+  # Fail fast if something else is bound to :8001 -- otherwise our
+  # child uvicorn will exit on bind-failure, its PID will be reaped,
+  # and the health probe will hit the stale backend and mislead us
+  # into thinking the drill booted. (Observed in an earlier evidence
+  # run: genie drill's cleanup missed its child, token drill probed
+  # the genie leftover.)
+  if command -v lsof >/dev/null 2>&1; then
+    local prior_pid
+    prior_pid="$(lsof -ti :8001 2>/dev/null || true)"
+    if [[ -n "$prior_pid" ]]; then
+      log "FAIL: port 8001 already bound by pid(s): $prior_pid -- refusing to start"
+      log "  hint: leftover uvicorn from a prior drill; \`kill $prior_pid\` and retry"
+      return 1
+    fi
+  fi
+
   local env_dump_file
   env_dump_file="$(mktemp)"
   {
@@ -240,6 +277,14 @@ start_drill_backend() {
   # designed to degrade visibly, not refuse to start).
   local waited=0
   until curl -sf --max-time 2 "$DRILL_APP_URL/api/health" > /dev/null 2>&1; do
+    # If the child died, stop waiting -- tail of its log is the best
+    # diagnostic we can surface.
+    if ! kill -0 "$DRILL_BACKEND_PID" 2>/dev/null; then
+      log "drill backend pid=$DRILL_BACKEND_PID exited before health came up"
+      log "tail of backend log:"
+      tail -n 40 "$EVIDENCE_DIR/drill_${TARGET}_${TS}_backend.log" 2>/dev/null | tee -a "$LOG" >/dev/null || true
+      return 1
+    fi
     sleep 1
     waited=$((waited + 1))
     if (( waited >= AWAIT_SECONDS )); then
@@ -249,7 +294,7 @@ start_drill_backend() {
       return 1
     fi
   done
-  log "drill backend healthy-port up after ${waited}s"
+  log "drill backend healthy-port up after ${waited}s (pid=$DRILL_BACKEND_PID)"
 }
 
 # ---------------------------------------------------------------------------
@@ -413,12 +458,18 @@ drill_genie() {
 
 drill_token() {
   log "Target: Databricks token (simulated)"
-  # Unset the token in the subshell env. Depending on backend posture
-  # it may refuse to boot (preflight credential gate) or boot and
-  # degrade. Both are acceptable evidence -- the bug we're guarding
-  # against is 'boots and returns fake data'.
+  # Unset the token in the subshell env AND pin auth_type=pat so the
+  # Databricks SDK does NOT silently fall back to mint a token from
+  # ~/.databrickscfg, environment SPN creds, or the workspace-identity
+  # resolver chain. Without this guard the drill reports a green /api/
+  # endpoint because the SDK successfully mints a token from the
+  # operator's local config -- i.e. the drill proves nothing.
   unset DATABRICKS_TOKEN
   export DATABRICKS_TOKEN=""
+  export DATABRICKS_AUTH_TYPE=pat
+  # Belt & braces: clear OAuth client creds too so the SDK cannot find
+  # an alternate identity and mint a bearer under the hood.
+  unset DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET
 
   if ! start_drill_backend; then
     # Refusing to boot on missing credentials IS the desired posture
@@ -436,6 +487,57 @@ drill_token() {
   return 0
 }
 
+drill_warehouse_sim() {
+  log "Target: warehouse (simulated via bogus DATABRICKS_WAREHOUSE_ID)"
+  # Env-manipulation equivalent of stopping the real SQL warehouse:
+  # point the backend at a warehouse id that does not exist in the
+  # workspace. The Statement Execution API returns 404/400, retries
+  # exhaust, the breaker opens, /api/health flips warehouse=down.
+  # Does NOT touch real infra; safe to run in CI.
+  export DATABRICKS_WAREHOUSE_ID="0000000000000000"
+
+  if ! start_drill_backend; then
+    log "FAIL: backend failed to boot; warehouse-sim needs the app up to probe"
+    return 1
+  fi
+
+  log "Probing /api/health for warehouse=down or breaker=open..."
+  # Kick a real read so the breaker sees a failure -- warm-start may
+  # have already done this, but an explicit probe costs nothing.
+  probe_endpoint "$DRILL_APP_URL" "/api/leads?limit=5" > /dev/null 2>&1 || true
+  assert_degraded_health "$DRILL_APP_URL" warehouse 15 || return 1
+  log "Probing data endpoints..."
+  assert_data_endpoint_degraded "$DRILL_APP_URL" "/api/leads?limit=5" || return 1
+  log "PASS: simulated warehouse drill produced visible degraded state"
+  return 0
+}
+
+drill_lakebase_sim() {
+  log "Target: lakebase (simulated via unreachable LAKEBASE_HOST)"
+  # Env-manipulation equivalent of stopping the Lakebase database
+  # instance: point the backend at a hostname that cannot be resolved
+  # / connected to. libpq raises, resilience records failure, the
+  # audit endpoint returns 503. Safe for CI.
+  export LAKEBASE_HOST="invalid.host.example.com"
+  # Prevent any ambient password from accidentally hitting real infra
+  # on a DNS success (shouldn't happen with .example.com, but belt &
+  # braces).
+  export LAKEBASE_PASSWORD="drill-invalid-password"
+
+  if ! start_drill_backend; then
+    log "FAIL: backend failed to boot; lakebase-sim needs the app up to probe"
+    return 1
+  fi
+
+  log "Probing /api/health for lakebase=down or breaker=open..."
+  probe_endpoint "$DRILL_APP_URL" "/api/audit/events?limit=5" > /dev/null 2>&1 || true
+  assert_degraded_health "$DRILL_APP_URL" lakebase 15 || return 1
+  log "Probing Lakebase-backed endpoints..."
+  assert_data_endpoint_degraded "$DRILL_APP_URL" "/api/audit/events?limit=5" || return 1
+  log "PASS: simulated lakebase drill produced visible degraded state"
+  return 0
+}
+
 # ---------------------------------------------------------------------------
 # Dispatch
 # ---------------------------------------------------------------------------
@@ -444,10 +546,12 @@ log "drill started at $TS against app_url=$APP_URL"
 
 rc=0
 case "$TARGET" in
-  warehouse) drill_warehouse || rc=$? ;;
-  lakebase)  drill_lakebase  || rc=$? ;;
-  genie)     drill_genie     || rc=$? ;;
-  token)     drill_token     || rc=$? ;;
+  warehouse)      drill_warehouse     || rc=$? ;;
+  lakebase)       drill_lakebase      || rc=$? ;;
+  genie)          drill_genie         || rc=$? ;;
+  token)          drill_token         || rc=$? ;;
+  warehouse-sim)  drill_warehouse_sim || rc=$? ;;
+  lakebase-sim)   drill_lakebase_sim  || rc=$? ;;
 esac
 
 if (( rc == 0 )); then

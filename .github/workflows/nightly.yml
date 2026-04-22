@@ -106,6 +106,15 @@ jobs:
           databricks bundle validate -t dev
       - name: SQL <-> Python parity
         run: pytest -q tests/integration/test_sql_python_parity.py
+      - name: Lakeview widgets resolve (dashboards)
+        # Resolves every widget in dashboards/*.lvdash.json against the
+        # real warehouse: the SQL executes, every encoded column is in
+        # the result schema, and row shape matches the chart type. This
+        # is the strongest proxy for "open the dashboard in Lakeview UI
+        # and eyeball it" that is possible from CI. Release-blocking
+        # (no continue-on-error): a broken widget means executives see a
+        # blank chart on the next login.
+        run: pytest tests/integration/test_dashboard_widgets_resolve.py -q --tb=short
       - name: Lakebase round-trip
         # continue-on-error so a stale LAKEBASE_PASSWORD secret doesn't
         # block the downstream Genie regression + Playwright runs.
@@ -152,18 +161,12 @@ jobs:
       E2E_LIVE: '1'
       # real_data.spec.ts uses this to flip the force-degraded flag.
       MIP_FORCE_DEGRADED_TOKEN: ${{ secrets.MIP_FORCE_DEGRADED_TOKEN }}
-      # Deliberately leave MIP_APP_URL / MIP_API_URL unset so the spec
-      # falls back to localhost on the runner. The playwright config's
-      # `webServer` block boots uvicorn+vite on the runner using the
-      # same source_code_path the deployed App uses; all four upstream
-      # dependencies (warehouse, Lakebase, Genie, UC) are live. This
-      # tests the real code paths against real backends without
-      # requiring a service-principal M2M OAuth client to traverse the
-      # Databricks Apps OAuth proxy in CI. The deployed App (same
-      # code) remains reachable by humans via browser OAuth at
-      # ${{ secrets.MIP_APP_URL }}.
-      # MIP_APP_URL: intentionally unset
-      # MIP_API_URL: intentionally unset
+      # MIP_APP_URL / MIP_BEARER_TOKEN are populated at step-time by the
+      # "Detect deployed-URL path" + "Mint workspace Bearer" steps below
+      # when (and only when) all three deployed-path secrets are set. In
+      # the meantime the localhost-on-runner path (playwright.config.ts
+      # webServer block) remains the fallback so the nightly stays green
+      # for devs without M2M admin creds.
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -187,11 +190,72 @@ jobs:
       - name: Install Playwright browsers
         working-directory: frontend
         run: npx playwright install --with-deps chromium
+      - name: Detect deployed-URL path
+        # Two paths exist for this job:
+        #   deployed  -> mint an M2M Bearer, hit the real Databricks App
+        #                through its OAuth proxy
+        #   localhost -> boot uvicorn+vite on the runner (Playwright
+        #                config's webServer block), same source code
+        # We take the deployed path ONLY when all three secrets are set.
+        # GitHub Actions doesn't allow `secrets.*` in `if:` expressions,
+        # so we reduce the presence check to a single step output here.
+        id: pathsel
+        env:
+          _CID: ${{ secrets.DATABRICKS_CLIENT_ID }}
+          _CSEC: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
+          _URL: ${{ secrets.MIP_APP_URL }}
+        run: |
+          if [ -n "$_CID" ] && [ -n "$_CSEC" ] && [ -n "$_URL" ]; then
+            echo "use_deployed=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Nightly Playwright will target deployed app via M2M OAuth."
+          else
+            echo "use_deployed=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Nightly Playwright will fall back to localhost-on-runner (deployed-path secrets not all set)."
+          fi
+      - name: Mint workspace Bearer (M2M OAuth)
+        # Runs ONLY when the deployed path is selected. A mint failure
+        # here is a HARD failure for the job — see
+        # docs/security/m2m-oauth-setup.md § "Credential-kill drill".
+        # We deliberately do NOT fall through to localhost on mint
+        # failure, because that would silently mask the very class of
+        # regression this path is here to catch.
+        if: steps.pathsel.outputs.use_deployed == 'true'
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
+          DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
+        run: |
+          # Token is short-lived (~1h) but a full Playwright run is
+          # 5-10 min, so a single mint per job is enough. Redirect the
+          # helper's stdout (the token itself) into a variable; stderr
+          # lines go to the Actions log for operator triage.
+          set -euo pipefail
+          BEARER=$(python tools/oauth_m2m_mint.py)
+          if [ -z "$BEARER" ]; then
+            echo "::error::oauth_m2m_mint.py exited 0 but stdout was empty"
+            exit 1
+          fi
+          # GitHub auto-masks the value because it's being written to
+          # $GITHUB_ENV through a step input sourced from a secret-backed
+          # env var. Belt-and-braces: explicitly add-mask it too.
+          echo "::add-mask::$BEARER"
+          echo "MIP_BEARER_TOKEN=$BEARER" >> "$GITHUB_ENV"
+      - name: Wire MIP_APP_URL / MIP_API_URL for deployed path
+        if: steps.pathsel.outputs.use_deployed == 'true'
+        env:
+          _URL: ${{ secrets.MIP_APP_URL }}
+        run: |
+          echo "MIP_APP_URL=$_URL" >> "$GITHUB_ENV"
+          echo "MIP_API_URL=$_URL" >> "$GITHUB_ENV"
       - name: Run real-UC Playwright spec
         # Config + specs both live under `frontend/` so `@playwright/test`
         # imports resolve against frontend/node_modules. E2E_LIVE-gated
         # so this spec is nightly-only; the PR CI runs a --list parse
-        # check.
+        # check. When MIP_APP_URL is set (deployed path), the config's
+        # webServer block is disabled and real_data.spec.ts attaches the
+        # MIP_BEARER_TOKEN as an Authorization header. When unset
+        # (localhost fallback), the webServer boots uvicorn+vite on the
+        # runner and the spec hits 127.0.0.1:5173.
         working-directory: frontend
         run: |
           npx playwright test \
@@ -208,9 +272,67 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+  kill-drill-simulated:
+    name: Credential-kill drill (simulated targets)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Simulated drills (genie / token / warehouse-sim / lakebase-sim)
+    # do NOT touch real infra: they manipulate env vars in a private
+    # subshell, boot a drill backend on :8001, and assert the visible
+    # degraded contract (/api/health flips, data endpoints 503 with
+    # retryable=true, no silent mock fallback). A drill failure IS a
+    # release blocker -- continue-on-error stays default (false).
+    env:
+      DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+      DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+      DATABRICKS_WAREHOUSE_ID: ${{ secrets.DATABRICKS_WAREHOUSE_ID }}
+      GENIE_SPACE_ID: ${{ secrets.GENIE_SPACE_ID }}
+      LAKEBASE_HOST: ${{ secrets.LAKEBASE_HOST }}
+      LAKEBASE_USER: ${{ secrets.LAKEBASE_USER }}
+      LAKEBASE_PASSWORD: ${{ secrets.LAKEBASE_PASSWORD }}
+      LAKEBASE_DATABASE_NAME: ${{ secrets.LAKEBASE_DATABASE_NAME }}
+      MIP_MOCK_MODE: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Install jq + lsof (runner usually has both; belt & braces)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq jq lsof
+      # Each drill boots a private backend on :8001, so they must run
+      # sequentially (not matrix-parallel) to avoid port contention.
+      # `if: always()` lets later drills run even if an earlier one
+      # fails, so one regression doesn't mask others in the same PR.
+      - name: Drill - genie (bogus GENIE_SPACE_ID)
+        run: bash tools/kill_drill/run_drill.sh --target genie --await-seconds 90
+      - name: Drill - token (PAT cleared + auth_type pinned)
+        if: always()
+        run: bash tools/kill_drill/run_drill.sh --target token --await-seconds 90
+      - name: Drill - warehouse-sim (bogus DATABRICKS_WAREHOUSE_ID)
+        if: always()
+        run: bash tools/kill_drill/run_drill.sh --target warehouse-sim --await-seconds 90
+      - name: Drill - lakebase-sim (unreachable LAKEBASE_HOST)
+        if: always()
+        run: bash tools/kill_drill/run_drill.sh --target lakebase-sim --await-seconds 90
+      - name: Upload evidence logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kill-drill-evidence
+          path: tools/kill_drill/evidence/
+          if-no-files-found: warn
+          retention-days: 30
+
   notify-on-failure:
     name: File issue on failure
-    needs: [parity-live, playwright-e2e-live]
+    needs: [parity-live, playwright-e2e-live, kill-drill-simulated]
     if: failure()
     runs-on: ubuntu-latest
     steps:
