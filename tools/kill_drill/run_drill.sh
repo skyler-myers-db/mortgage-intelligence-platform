@@ -8,29 +8,38 @@
 # (health payload shape + HTTP 503 on data endpoints with
 # `retryable: true`) and NEVER silently falls back to fake data.
 #
-# The drill has six targets:
+# The drill has eight targets:
 #
-#   warehouse      Requires a human to stop the SQL warehouse in the
-#                  workspace -- the script prints the exact command,
-#                  waits for operator ack, then probes and verifies.
-#   lakebase       Requires a human to stop the Lakebase database
-#                  instance; same ack-and-probe pattern.
-#   genie          Simulated: exports a bogus GENIE_SPACE_ID and starts
-#                  a private backend on port 8001.
-#   token          Simulated: clears DATABRICKS_TOKEN + OAuth client
-#                  creds + pins auth_type=pat so the SDK cannot silently
-#                  mint from ~/.databrickscfg or workspace identity.
-#   warehouse-sim  Simulated: exports an invalid DATABRICKS_WAREHOUSE_ID
-#                  so Statement Execution API calls 4xx. CI-runnable.
-#   lakebase-sim   Simulated: exports an unreachable LAKEBASE_HOST so
-#                  libpq connect fails. CI-runnable.
+#   warehouse         Requires a human to stop the SQL warehouse in the
+#                     workspace -- the script prints the exact command,
+#                     waits for operator ack, then probes and verifies.
+#   lakebase          Requires a human to stop the Lakebase database
+#                     instance; same ack-and-probe pattern.
+#   genie             Simulated: exports a bogus GENIE_SPACE_ID and starts
+#                     a private backend on port 8001.
+#   token             Simulated: clears DATABRICKS_TOKEN + OAuth client
+#                     creds + pins auth_type=pat so the SDK cannot silently
+#                     mint from ~/.databrickscfg or workspace identity.
+#   warehouse-sim     Simulated: exports an invalid DATABRICKS_WAREHOUSE_ID
+#                     so Statement Execution API calls 4xx. CI-runnable.
+#   lakebase-sim      Simulated: exports an unreachable LAKEBASE_HOST so
+#                     libpq connect fails. CI-runnable.
+#   warehouse-real    ACTUALLY stops the SQL warehouse via the SDK, probes
+#                     the already-running backend, then restarts it. Gated
+#                     behind --i-really-mean-it / MIP_KILL_DRILL_ALLOW_REAL=1.
+#   lakebase-real     Same idea for the Lakebase database instance.
 #
 # Safety posture:
-#   - The script NEVER stops real workspace infrastructure itself. The
-#     destructive step always happens in the operator's hands.
-#   - The simulated drills (genie, token) operate on a private backend
-#     started by this script on port 8001 -- they do not touch the
-#     operator's running uvicorn on port 8000.
+#   - Real-infra targets (warehouse-real, lakebase-real) stop production
+#     dependencies. They refuse to run without explicit confirmation
+#     (--i-really-mean-it OR MIP_KILL_DRILL_ALLOW_REAL=1) and NEVER run
+#     from `schedule`-triggered workflows (only manual workflow_dispatch).
+#   - The simulated drills (genie, token, *-sim) operate on a private
+#     backend started by this script on port 8001 -- they do not touch
+#     the operator's running uvicorn on port 8000.
+#   - The classic `warehouse` / `lakebase` targets still prompt the
+#     operator to run the destructive command themselves; they do not
+#     invoke the SDK from this script.
 #   - The script records every probe to an evidence log at
 #     `tools/kill_drill/evidence/drill_<target>_<timestamp>.log`.
 #
@@ -49,17 +58,35 @@ AWAIT_SECONDS=90
 DRILL_BACKEND_PID=""
 EVIDENCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/evidence"
 TS="$(date -u +%Y%m%dT%H%M%SZ)"
+I_REALLY_MEAN_IT=0
+REAL_INFRA_RECOVERY_TIMEOUT=300   # seconds to wait for RUNNING/AVAILABLE post-drill
 
 usage() {
-  sed -n '3,32p' "${BASH_SOURCE[0]}"
+  sed -n '3,40p' "${BASH_SOURCE[0]}"
   cat <<EOF
 
 Usage:
-  tools/kill_drill/run_drill.sh --target <warehouse|lakebase|genie|token|warehouse-sim|lakebase-sim> [--app-url URL] [--await-seconds N]
+  tools/kill_drill/run_drill.sh --target <target> [--app-url URL] [--await-seconds N] [--i-really-mean-it]
+
+Targets:
+  warehouse | lakebase                   human-in-the-loop (operator runs stop)
+  genie | token                          simulated via env poisoning + private backend
+  warehouse-sim | lakebase-sim           CI-safe env poisoning (no real infra touched)
+  warehouse-real | lakebase-real         ACTUALLY stops real infra via the SDK
+
+Safety:
+  warehouse-real and lakebase-real REQUIRE one of:
+    --i-really-mean-it                   on the command line, OR
+    MIP_KILL_DRILL_ALLOW_REAL=1          in the environment
+  Without either, the target hard-errors before any SDK call.
 
 Env:
-  MIP_APP_URL   Target URL for the already-running backend (default http://127.0.0.1:8000).
-                Used for warehouse + lakebase drills where the operator stops real infra.
+  MIP_APP_URL                            Target URL for the already-running backend
+                                         (default http://127.0.0.1:8000). Used for
+                                         warehouse/lakebase targets.
+  DATABRICKS_WAREHOUSE_ID                required for warehouse-real.
+  LAKEBASE_INSTANCE_NAME                 required for lakebase-real (defaults to
+                                         'mip-app-state' to match databricks.yml).
 EOF
 }
 
@@ -68,15 +95,38 @@ while [[ $# -gt 0 ]]; do
     --target) TARGET="$2"; shift 2 ;;
     --app-url) APP_URL="$2"; shift 2 ;;
     --await-seconds) AWAIT_SECONDS="$2"; shift 2 ;;
+    --i-really-mean-it) I_REALLY_MEAN_IT=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown flag: $1" >&2; usage >&2; exit 2 ;;
   esac
 done
 
 case "$TARGET" in
-  warehouse|lakebase|genie|token|warehouse-sim|lakebase-sim) ;;
-  *) echo "--target must be one of: warehouse | lakebase | genie | token | warehouse-sim | lakebase-sim" >&2; exit 2 ;;
+  warehouse|lakebase|genie|token|warehouse-sim|lakebase-sim|warehouse-real|lakebase-real) ;;
+  *) echo "--target must be one of: warehouse | lakebase | genie | token | warehouse-sim | lakebase-sim | warehouse-real | lakebase-real" >&2; exit 2 ;;
 esac
+
+# Real-infra safety gate. Must be tripped BEFORE any SDK import so a
+# misconfigured env never gets close to calling stop().
+if [[ "$TARGET" == "warehouse-real" || "$TARGET" == "lakebase-real" ]]; then
+  if [[ "$I_REALLY_MEAN_IT" != "1" && "${MIP_KILL_DRILL_ALLOW_REAL:-0}" != "1" ]]; then
+    cat >&2 <<'EOF'
+REFUSED: target stops real workspace infrastructure.
+  This drill will ACTUALLY stop the SQL warehouse or Lakebase instance
+  backing this workspace -- real users will see a visible outage while
+  the drill runs.
+
+  To proceed, re-run with ONE of:
+    --i-really-mean-it                   on the command line, or
+    MIP_KILL_DRILL_ALLOW_REAL=1          in the environment
+
+  For CI-safe equivalents that never touch real infra, use:
+    --target warehouse-sim               env-poisoning equivalent
+    --target lakebase-sim                env-poisoning equivalent
+EOF
+    exit 2
+  fi
+fi
 
 command -v curl >/dev/null || { echo "curl required" >&2; exit 2; }
 command -v jq   >/dev/null || { echo "jq required"   >&2; exit 2; }
@@ -539,6 +589,172 @@ drill_lakebase_sim() {
 }
 
 # ---------------------------------------------------------------------------
+# Real-infra drills. Safety-gated above; if we reach these functions the
+# operator has explicitly opted in.
+# ---------------------------------------------------------------------------
+
+real_infra() {
+  # Wrapper around tools/kill_drill/real_infra.py so we pick the venv
+  # python when present (matches start_drill_backend's resolution).
+  local pybin
+  if [[ -x "$REPO_ROOT/.venv/bin/python" ]]; then
+    pybin="$REPO_ROOT/.venv/bin/python"
+  else
+    pybin="$(command -v python3)"
+  fi
+  "$pybin" "$REPO_ROOT/tools/kill_drill/real_infra.py" "$@"
+}
+
+drill_warehouse_real() {
+  log "Target: SQL warehouse (REAL -- SDK-driven stop/start)"
+
+  local whid="${DATABRICKS_WAREHOUSE_ID:-}"
+  if [[ -z "$whid" ]]; then
+    log "FAIL: DATABRICKS_WAREHOUSE_ID is not set; cannot identify the warehouse"
+    return 1
+  fi
+
+  local impact_paragraph
+  impact_paragraph=$(cat <<'EOF'
+REAL-INFRA DRILL NOTICE
+  This will stop the live SQL warehouse backing Module 0. Downstream
+  effects during the drill window:
+    - /api/leads, /api/portfolio/*, /api/segments return 503.
+    - /ask-genie answers lose their SQL-backed context.
+    - Every user currently interacting with the app sees the degraded
+      banner until the warehouse reaches RUNNING again.
+  Expected user-visible impact: 30-90 seconds during stop + probe.
+  Estimated recovery time to RUNNING state: 60-180 seconds (serverless
+  warmup). The drill will abort with exit 1 if recovery does not
+  complete within ${REAL_INFRA_RECOVERY_TIMEOUT}s.
+EOF
+  )
+  log "$impact_paragraph"
+  log "Pre-state probe (expecting all 'up' before the drill)"
+  probe_health "$APP_URL" | tee -a "$LOG" >/dev/null
+  log "drill start_ts=$TS warehouse_id=$whid timeout_s=$REAL_INFRA_RECOVERY_TIMEOUT"
+
+  log "Stopping warehouse $whid via SDK..."
+  if ! real_infra stop warehouse "$whid" --timeout "$REAL_INFRA_RECOVERY_TIMEOUT"; then
+    log "FAIL: real_infra stop warehouse returned non-zero"
+    return 1
+  fi
+
+  log "Probing /api/health for degraded signal..."
+  if ! assert_degraded_health "$APP_URL" warehouse 30; then
+    log "FAIL: warehouse stopped but backend never reported degraded state"
+    # Try to restart anyway so we don't leave real infra down.
+    real_infra start warehouse "$whid" --timeout "$REAL_INFRA_RECOVERY_TIMEOUT" || true
+    return 1
+  fi
+
+  log "Probing data endpoints (expect 503 or empty/degraded 200)..."
+  local data_ok=0
+  assert_data_endpoint_degraded "$APP_URL" "/api/leads?limit=5" && data_ok=1
+
+  log "Restarting warehouse $whid via SDK..."
+  if ! real_infra start warehouse "$whid" --timeout "$REAL_INFRA_RECOVERY_TIMEOUT"; then
+    log "FAIL: warehouse did not return to RUNNING within ${REAL_INFRA_RECOVERY_TIMEOUT}s"
+    log "  !!! real infra may still be stopped -- investigate immediately !!!"
+    return 1
+  fi
+
+  log "Waiting up to 60s for /api/health to close the breaker..."
+  local i=0
+  while (( i < 30 )); do
+    local body status dep
+    body="$(probe_health "$APP_URL")"
+    status=$(echo "$body" | jq -r '.status // empty' 2>/dev/null || true)
+    dep=$(echo "$body" | jq -r '.dependencies.warehouse // empty' 2>/dev/null || true)
+    if [[ "$status" == "ok" && "$dep" == "up" ]]; then
+      log "RECOVERED: warehouse=up, status=ok after $((i*2))s"
+      break
+    fi
+    sleep 2
+    i=$((i+1))
+  done
+
+  if (( data_ok == 1 )); then
+    log "PASS: warehouse-real drill observed degraded + recovered cleanly"
+    return 0
+  fi
+  log "PARTIAL: warehouse recovered but data endpoint probe did not confirm degraded"
+  return 1
+}
+
+drill_lakebase_real() {
+  log "Target: Lakebase (REAL -- SDK-driven stop/start)"
+
+  local instance="${LAKEBASE_INSTANCE_NAME:-mip-app-state}"
+
+  local impact_paragraph
+  impact_paragraph=$(cat <<'EOF'
+REAL-INFRA DRILL NOTICE
+  This will stop the live Lakebase database instance backing Module 0
+  app-state. Downstream effects during the drill window:
+    - /api/audit/events and /api/approvals return 503.
+    - UI approvals panel shows the degraded state.
+    - Every user currently interacting with the app sees a degraded
+      banner until the instance reaches AVAILABLE again.
+  Expected user-visible impact: 60-180 seconds during stop + probe.
+  Estimated recovery time to AVAILABLE state: 60-180 seconds.
+  The drill will abort with exit 1 if recovery does not complete within
+  ${REAL_INFRA_RECOVERY_TIMEOUT}s.
+EOF
+  )
+  log "$impact_paragraph"
+  log "Pre-state probe"
+  probe_health "$APP_URL" | tee -a "$LOG" >/dev/null
+  log "drill start_ts=$TS lakebase_instance=$instance timeout_s=$REAL_INFRA_RECOVERY_TIMEOUT"
+
+  log "Stopping Lakebase instance $instance via SDK (PATCH stopped=true)..."
+  if ! real_infra stop lakebase "$instance" --timeout "$REAL_INFRA_RECOVERY_TIMEOUT"; then
+    log "FAIL: real_infra stop lakebase returned non-zero"
+    return 1
+  fi
+
+  log "Probing /api/health for degraded signal..."
+  if ! assert_degraded_health "$APP_URL" lakebase 30; then
+    log "FAIL: Lakebase stopped but backend never reported degraded state"
+    real_infra start lakebase "$instance" --timeout "$REAL_INFRA_RECOVERY_TIMEOUT" || true
+    return 1
+  fi
+
+  log "Probing Lakebase-backed endpoints..."
+  local data_ok=0
+  assert_data_endpoint_degraded "$APP_URL" "/api/audit/events?limit=5" && data_ok=1
+
+  log "Restarting Lakebase instance $instance via SDK..."
+  if ! real_infra start lakebase "$instance" --timeout "$REAL_INFRA_RECOVERY_TIMEOUT"; then
+    log "FAIL: Lakebase did not return to AVAILABLE within ${REAL_INFRA_RECOVERY_TIMEOUT}s"
+    log "  !!! real infra may still be stopped -- investigate immediately !!!"
+    return 1
+  fi
+
+  log "Waiting up to 60s for /api/health to close the breaker..."
+  local i=0
+  while (( i < 30 )); do
+    local body status dep
+    body="$(probe_health "$APP_URL")"
+    status=$(echo "$body" | jq -r '.status // empty' 2>/dev/null || true)
+    dep=$(echo "$body" | jq -r '.dependencies.lakebase // empty' 2>/dev/null || true)
+    if [[ "$status" == "ok" && "$dep" == "up" ]]; then
+      log "RECOVERED: lakebase=up, status=ok after $((i*2))s"
+      break
+    fi
+    sleep 2
+    i=$((i+1))
+  done
+
+  if (( data_ok == 1 )); then
+    log "PASS: lakebase-real drill observed degraded + recovered cleanly"
+    return 0
+  fi
+  log "PARTIAL: lakebase recovered but data endpoint probe did not confirm degraded"
+  return 1
+}
+
+# ---------------------------------------------------------------------------
 # Dispatch
 # ---------------------------------------------------------------------------
 
@@ -546,12 +762,14 @@ log "drill started at $TS against app_url=$APP_URL"
 
 rc=0
 case "$TARGET" in
-  warehouse)      drill_warehouse     || rc=$? ;;
-  lakebase)       drill_lakebase      || rc=$? ;;
-  genie)          drill_genie         || rc=$? ;;
-  token)          drill_token         || rc=$? ;;
-  warehouse-sim)  drill_warehouse_sim || rc=$? ;;
-  lakebase-sim)   drill_lakebase_sim  || rc=$? ;;
+  warehouse)       drill_warehouse      || rc=$? ;;
+  lakebase)        drill_lakebase       || rc=$? ;;
+  genie)           drill_genie          || rc=$? ;;
+  token)           drill_token          || rc=$? ;;
+  warehouse-sim)   drill_warehouse_sim  || rc=$? ;;
+  lakebase-sim)    drill_lakebase_sim   || rc=$? ;;
+  warehouse-real)  drill_warehouse_real || rc=$? ;;
+  lakebase-real)   drill_lakebase_real  || rc=$? ;;
 esac
 
 if (( rc == 0 )); then

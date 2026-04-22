@@ -9,8 +9,29 @@ fallback" posture documented in `CLAUDE.md` and `backend/services/resilience.py`
 signing off on the evidence log, and the on-call engineer who needs a
 canonical recovery procedure.
 
-**Cadence.** Run the full four-target sweep before every major release
-rehearsal and immediately after any change to:
+**Target matrix.** Six drills in two tiers:
+
+| Target            | Tier       | Touches real infra? | CI-safe? | Gated behind                              |
+| ----------------- | ---------- | ------------------- | -------- | ----------------------------------------- |
+| `warehouse`       | human      | Yes (operator stops) | No       | interactive ack                           |
+| `lakebase`        | human      | Yes (operator stops) | No       | interactive ack                           |
+| `genie`           | simulated  | No (env poisoning)   | Yes      | —                                         |
+| `token`           | simulated  | No (env poisoning)   | Yes      | —                                         |
+| `warehouse-sim`   | simulated  | No (env poisoning)   | Yes      | —                                         |
+| `lakebase-sim`    | simulated  | No (env poisoning)   | Yes      | —                                         |
+| `warehouse-real`  | real-infra | Yes (SDK-driven)     | No       | `--i-really-mean-it` OR `MIP_KILL_DRILL_ALLOW_REAL=1` |
+| `lakebase-real`   | real-infra | Yes (SDK-driven)     | No       | `--i-really-mean-it` OR `MIP_KILL_DRILL_ALLOW_REAL=1` |
+
+The **simulated** tier runs in the nightly `kill-drill-simulated`
+GitHub Actions job and is a release gate. The **real-infra** tier is
+opt-in only: either the manual `workflow_dispatch` path with
+`run_real_drills=true`, or a deliberate local rehearsal. It is **never**
+on the nightly cron.
+
+**Cadence.** Run the full four-target simulated sweep before every
+major release rehearsal. Run the real-infra pair before major release
+rehearsals **only** — stopping real infra in production hours is a
+user-visible outage. Run immediately after any change to:
 - `backend/services/resilience.py`
 - `backend/api/health.py`
 - `backend/services/databricks_sql.py` / `backend/services/lakebase.py` / `backend/services/genie_client.py`
@@ -198,6 +219,108 @@ Two outcomes — both are PASSES:
 **Never acceptable:** backend boots and serves 200s with real-looking
 rows. That is a mock-fallback regression and must be fixed before
 merge.
+
+---
+
+## Drill E — warehouse-real (SDK-driven, opt-in)
+
+Stops the real SQL warehouse via `w.warehouses.stop(id)`, asserts the
+degraded contract on the already-running backend, then restarts via
+`w.warehouses.start_and_wait(id)` and waits for `/api/health` to close
+the breaker. This is the strongest real-world evidence the degraded
+path works end-to-end — but it causes a 30–90 s user-visible outage
+during the drill window.
+
+```bash
+# Local rehearsal (operator already has DATABRICKS_WAREHOUSE_ID set):
+./tools/kill_drill/run_drill.sh --target warehouse-real --i-really-mean-it
+```
+
+Without the `--i-really-mean-it` flag (or `MIP_KILL_DRILL_ALLOW_REAL=1`
+in the environment) the script **hard-errors with exit 2** before any
+SDK call. This is the safety rail that keeps an accidental invocation
+from taking production down.
+
+**Expected signals**
+
+| Signal                                               | Expected value |
+| ---------------------------------------------------- | -------------- |
+| Pre-probe `/api/health`                              | `status: "ok"` |
+| During drill `/api/health`                           | `status: "degraded"`, `dependencies.warehouse: "down"` |
+| During drill `/api/leads?limit=5`                    | HTTP 503 with `retryable: true` |
+| After SDK `start_and_wait(...)` returns              | warehouse state `RUNNING` |
+| Post-probe `/api/health` (within 60 s)               | `status: "ok"`, `dependencies.warehouse: "up"` |
+| Evidence log                                         | `tools/kill_drill/evidence/drill_warehouse-real_<ts>.log` |
+
+**Failure modes that exit 1 (real regression)**
+
+- Warehouse stopped but `/api/health` never reported degraded → the
+  resilience contract is broken.
+- Warehouse restart timed out (default 300 s) → **real infra may still
+  be stopped**. The operator must investigate immediately; the script
+  logs the last known state.
+
+**Running from GitHub Actions**
+
+The `kill-drill-real-infra` job on the nightly workflow runs this drill
+when and only when an operator triggers `workflow_dispatch` with
+`run_real_drills=true`. The job env sets `MIP_KILL_DRILL_ALLOW_REAL=1`
+scoped to that job only; the scheduled cron path never satisfies the
+`if:` guard.
+
+---
+
+## Drill F — lakebase-real (SDK-driven, opt-in)
+
+Stops the Lakebase database instance via PATCH `stopped=true` on the
+`mip-app-state` instance (see `tools/kill_drill/real_infra.py` for the
+exact SDK surface — the SDK does not expose dedicated stop/start verbs
+for database instances; `update_database_instance` with an explicit
+`update_mask="stopped"` is the canonical pattern).
+
+```bash
+./tools/kill_drill/run_drill.sh --target lakebase-real --i-really-mean-it
+```
+
+Same safety rail as warehouse-real. Same exit-2 refusal without the
+flag.
+
+**Expected signals**
+
+| Signal                                               | Expected value |
+| ---------------------------------------------------- | -------------- |
+| During drill `/api/health`                           | `dependencies.lakebase: "down"` |
+| During drill `/api/audit/events?limit=5`             | HTTP 503 |
+| Post-probe Lakebase state                            | `DatabaseInstanceState.AVAILABLE` |
+| Post-probe `/api/health`                             | `status: "ok"`, `dependencies.lakebase: "up"` |
+| Evidence log                                         | `tools/kill_drill/evidence/drill_lakebase-real_<ts>.log` |
+
+**Recovery SLA**
+
+The drill script waits up to 300 s (override with `--await-seconds`)
+for the instance to return to `AVAILABLE`. If recovery exceeds that
+window the drill exits 1 with a loud alert. In practice Lakebase
+restarts in 60–180 s.
+
+---
+
+## Safety rails summary
+
+Every real-infra invocation has to clear all of these gates:
+
+1. **Flag gate** at the CLI layer (`run_drill.sh` refuses without
+   `--i-really-mean-it` or `MIP_KILL_DRILL_ALLOW_REAL=1`). Exit 2.
+2. **Impact notice** logged to stderr + the evidence log before any
+   SDK call, stating the expected user-visible impact window.
+3. **Idempotent stop** — a warehouse already STOPPED / a Lakebase
+   already `stopped=true` skips the stop API call (no double-stop).
+4. **Guaranteed restart** — on every failure path (degraded signal
+   missing, data endpoint 200, operator interrupt), the recovery
+   `start` call runs before the drill exits. If that restart fails the
+   operator gets a loud alert and a non-zero exit.
+5. **Never on cron** — the `kill-drill-real-infra` job is
+   `if: github.event_name == 'workflow_dispatch' && inputs.run_real_drills == true`.
+   A scheduled nightly can never trigger it.
 
 ---
 
