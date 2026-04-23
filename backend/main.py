@@ -142,6 +142,20 @@ class CorrelationIdMiddleware(BaseHTTPMiddleware):
     every downstream ``emit(...)`` call carries the same ID, and echoes
     it back on the response. Emits one ``http_request`` log line per
     request with method / path / status / duration_ms.
+
+    R5-17: the ``path`` field logged on every request is the
+    **templated** route (``/api/borrowers/{id}``), not the concrete URL
+    path (``/api/borrowers/B-00042``). Borrower-level routes put IDs in
+    the path segment -- synthetic today, but the roadmap replaces them
+    with real Cotality CLIPs, at which point a verbatim-path log line
+    becomes a CLIP trail keyed to the correlation id. We match the
+    template off the resolved Starlette ``Route`` (populated by
+    FastAPI's router in ``request.scope["route"]`` after ``call_next``
+    returns) and fall back to a simple segment-stripping regex for any
+    paths that slipped through routing (static files, unresolved 404s,
+    SPA fallback). This mirrors ``_statement_hash`` in
+    ``backend/services/databricks_sql.py`` -- log the shape, not the
+    value.
     """
 
     HEADER = "X-Correlation-ID"
@@ -158,6 +172,14 @@ class CorrelationIdMiddleware(BaseHTTPMiddleware):
     #     that every request has exactly one id.
     _CID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 
+    # Fallback path normaliser for unrouted paths. Matches the two
+    # borrower-id shapes the product currently emits -- B-##### synthetic
+    # IDs and Cotality CLIP strings (numeric, >= 6 digits per the
+    # Cotality data contract). Conservative on purpose: we would rather
+    # under-normalise an unknown path than over-normalise a real UC
+    # object name that happens to match a loose pattern.
+    _ID_SEGMENT_PATTERN = re.compile(r"/(?:B-\d{3,}|CL-[A-Za-z0-9]+|\d{6,})(?=/|$)")
+
     def __init__(self, app: ASGIApp) -> None:
         super().__init__(app)
 
@@ -169,6 +191,25 @@ class CorrelationIdMiddleware(BaseHTTPMiddleware):
         if cls._CID_PATTERN.match(trimmed):
             return trimmed
         return None
+
+    @classmethod
+    def _templated_path(cls, request: StarletteRequest) -> str:
+        """Return the route template for logging.
+
+        Prefer the resolved Starlette ``Route`` parked on
+        ``request.scope["route"]`` by FastAPI's router -- that's the
+        literal ``@router.get("/{borrower_id}")`` string the developer
+        typed, so ID-bearing segments are already parameterised. Falls
+        back to a regex-normalised form of the concrete URL path when
+        no route was matched (pre-routing exceptions, 404s, the SPA
+        catch-all). Never returns the raw URL path verbatim for
+        ID-bearing segments.
+        """
+        route = request.scope.get("route") if request.scope else None
+        template = getattr(route, "path", None)
+        if isinstance(template, str) and template:
+            return template
+        return cls._ID_SEGMENT_PATTERN.sub("/{id}", request.url.path)
 
     async def dispatch(  # type: ignore[override]
         self, request: StarletteRequest, call_next: Any
@@ -189,7 +230,7 @@ class CorrelationIdMiddleware(BaseHTTPMiddleware):
                 logging.getLogger("mip.http"),
                 "http_request",
                 method=request.method,
-                path=request.url.path,
+                path=self._templated_path(request),
                 status=status_code,
                 duration_ms=duration_ms,
             )

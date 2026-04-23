@@ -168,8 +168,18 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
   // backend (ApiError.status === null) — these rows never reached the
   // audit table and the approver should retry them explicitly.
   // Hole-finder finding #2, 2026-04-23.
+  //
+  // `aborted` rows fall in an ambiguous state: the client cancelled the
+  // POST mid-flight on unmount, but the server may have already
+  // committed the audit row. We surface these as a distinct "check the
+  // audit log" message rather than pushing retry language, because a
+  // blind retry can produce a duplicate audit row. R5-21 (2026-04-23).
+  //
+  // TODO: once R5-01 (server-side idempotency keys on /api/outreach/
+  // approve) lands, aborted becomes safe to retry and this branch can
+  // collapse back into the network-retry path.
   const [bulkToast, setBulkToast] = useState<
-    { ok: number; fail: number; network: number } | null
+    { ok: number; fail: number; network: number; aborted: number } | null
   >(null);
 
   /**
@@ -350,11 +360,16 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
     let fail = 0;
     let network = 0;
     let aborted = 0;
+    // `failedIds` is only the subset safe to retry (backend/network
+    // rejections — the server definitely did not commit). Aborted ids
+    // stay out of this list because the server may have committed and
+    // a retry would duplicate the audit row. R5-21.
     const failedIds: string[] = [];
+    const abortedIds: string[] = [];
     for (const group of chunk(ids, BULK_APPROVE_CONCURRENCY)) {
       if (ctrl.signal.aborted) {
         aborted += group.length;
-        failedIds.push(...group);
+        abortedIds.push(...group);
         continue;
       }
       const results = await Promise.all(group.map((id) => approveLead(id, ctrl.signal)));
@@ -363,7 +378,7 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
           ok += 1;
         } else if (outcome === 'aborted') {
           aborted += 1;
-          failedIds.push(group[i]);
+          abortedIds.push(group[i]);
         } else {
           fail += 1;
           if (outcome === 'network') network += 1;
@@ -386,10 +401,16 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
       bulkInFlightRef.current = false;
       return;
     }
-    // Replace selection with the failed subset so retries are trivial.
+    // Quieten unused-var lint: abortedIds is tracked for future reuse
+    // (R5-01 idempotency can retry by id) but not needed in this frame.
+    void abortedIds;
+    // Replace selection with the retryable subset so retries are
+    // trivial. Aborted ids are deliberately NOT re-selected — the
+    // server may have committed them and a blind re-click would
+    // duplicate the audit row. R5-21 (2026-04-23).
     setSelectedIds(new Set(failedIds));
     setBulkApproving(false);
-    setBulkToast({ ok, fail: fail + aborted, network });
+    setBulkToast({ ok, fail, network, aborted });
     bulkAbortRef.current = null;
     bulkInFlightRef.current = false;
   }, [bulkApproving, selectedIds, approvals, approveLead]);
@@ -409,7 +430,10 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
       const ok = parsed.ok ?? 0;
       const aborted = parsed.aborted ?? 0;
       if (ok + aborted === 0) return;
-      setBulkToast({ ok, fail: aborted, network: 0 });
+      // R5-21: route unmounted mid-loop. Aborted ids are in ambiguous
+      // state (server may have committed). Surface a "check audit log"
+      // message rather than mixing them into the retryable `fail` count.
+      setBulkToast({ ok, fail: 0, network: 0, aborted });
     } catch {
       // malformed payload — ignore
     }
@@ -782,16 +806,27 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
                 style={{
                   fontSize: 12,
                   color:
-                    bulkToast.network > 0
+                    bulkToast.aborted > 0 || bulkToast.network > 0
                       ? 'var(--signal-danger)'
                       : bulkToast.fail > 0
                       ? 'var(--signal-warning)'
                       : 'var(--signal-success)',
                 }}
               >
-                {bulkToast.ok} approved, {bulkToast.fail} failed
+                {bulkToast.ok} approved
+                {bulkToast.fail > 0 ? `, ${bulkToast.fail} failed` : ''}
                 {bulkToast.network > 0
                   ? ` (${bulkToast.network} network dropped — retry)`
+                  : ''}
+                {/*
+                  R5-21: aborted rows are in an ambiguous state — the
+                  client cancelled the POST but the server may have
+                  committed. Do NOT encourage retry; direct the user to
+                  the audit log instead. TODO: once R5-01 (server-side
+                  idempotency) lands, retry becomes safe.
+                */}
+                {bulkToast.aborted > 0
+                  ? ` · ${bulkToast.aborted} cancelled in flight — unknown state, check the audit log`
                   : ''}
               </span>
             )}

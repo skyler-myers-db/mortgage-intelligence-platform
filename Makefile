@@ -3,7 +3,7 @@
 PYTHON ?= $(shell [ -x .venv/bin/python ] && echo .venv/bin/python || echo python3)
 
 .PHONY: setup dev-api dev-ui test test-e2e lint build validate bundle-validate bundle-deploy zip \
-        provision-genie bundle-validate-env bundle-deploy-dev deploy-dev
+        provision-genie bundle-validate-env bundle-deploy-dev deploy-dev check-workspace-host
 
 setup:
 	python3 -m venv .venv
@@ -100,3 +100,30 @@ bundle-deploy-dev:
 # ---------------------------------------------------------------------------
 deploy-dev:
 	./scripts/deploy.sh
+
+# ---------------------------------------------------------------------------
+# Forkability safeguard (audit R5-24, 2026-04-23).
+#
+# All four `workspace.host:` values in databricks.yml dereference the
+# root-level `&default_host` YAML anchor — a customer forking the repo
+# edits EXACTLY ONE line to rebind the host. This target greps for the
+# Entrada hostname outside the anchor's declaration line (the `&default_host`
+# line is the one legitimate occurrence). Fails the build if any other
+# line in databricks.yml still contains the literal — which would mean an
+# SE has edited the file and re-introduced a duplicate string, or future
+# code has added a new host reference that bypassed the anchor.
+#
+# Usage:
+#   make check-workspace-host         # fails if stray hostname found
+#
+# Wire into CI before any customer-fork deploy.
+# ---------------------------------------------------------------------------
+check-workspace-host:
+	@STRAY=$$(grep -n "dbc-3aa503a9-4fa8.cloud.databricks.com" databricks.yml | grep -v "&default_host" || true); \
+	  if [ -n "$$STRAY" ]; then \
+	    echo "[check-workspace-host] FAIL: stray Entrada hostname found outside the anchor:"; \
+	    echo "$$STRAY"; \
+	    echo "[check-workspace-host] fix: replace with '*default_host' and keep the single &default_host declaration."; \
+	    exit 1; \
+	  fi; \
+	  echo "[check-workspace-host] OK: workspace.host is anchored."

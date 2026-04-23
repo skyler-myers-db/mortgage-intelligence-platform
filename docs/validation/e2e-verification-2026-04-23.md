@@ -8,22 +8,24 @@ Synthetic test-id prefix: `B-TEST-*`
 
 | Endpoint | Method+Path | Status | Latency (ms) | Payload OK? | Notes |
 | --- | --- | ---: | ---: | :---: | --- |
-| health | `GET /api/health` | 200 | 687 | yes | keys/len: app_env, breaker_state_changes_last_hour, circuit_breakers, counters_persistence, dependencies, fallback_identity_fallbacks_total, log_export, mode |
-| portfolio.unfiltered | `POST /api/portfolio/preview` | 200 | 415 | yes | keys/len: approved_count, avg_score, cost_per_contact, data_refreshed_at, high_intent_leads, in_outreach_count, marketable_population, offers_recommended |
-| portfolio.chicago | `POST /api/portfolio/preview` | 200 | 412 | yes | keys/len: approved_count, avg_score, cost_per_contact, data_refreshed_at, high_intent_leads, in_outreach_count, marketable_population, offers_recommended |
-| portfolio.chicago.owner.25pct | `POST /api/portfolio/preview` | 200 | 426 | yes | keys/len: approved_count, avg_score, cost_per_contact, data_refreshed_at, high_intent_leads, in_outreach_count, marketable_population, offers_recommended |
-| segments | `GET /api/segments` | 503 | 460 | NO | ERROR: {"detail":"warehouse dependency is down: circuit breaker is open","retryable":true,"dependency":"warehouse","correlation_id":"8ee572c329b1437983726f08d4c30e55"} |
-| leads.all | `GET /api/leads` | 503 | 487 | NO | ERROR: {"detail":"warehouse dependency is down: circuit breaker is open","retryable":true,"dependency":"warehouse","correlation_id":"34721e2c71974c24a0318d90138b706c"} |
-| leads.itm | `GET /api/leads?segment=itm` | 503 | 438 | NO | ERROR: {"detail":"warehouse dependency is down: circuit breaker is open","retryable":true,"dependency":"warehouse","correlation_id":"51fc62adfb244417850056301b804d62"} |
-| borrower.pick | `INFO /api/leads` | 0 | 0 | yes | ERROR: no real borrower_id available from /api/leads; skipping borrower-dependent probes |
-| outreach.approve.synthetic | `POST /api/outreach/approve` | 200 | 657 | yes | keys/len: approval_id, approved, audit_event_id |
-| outreach.reject.synthetic | `POST /api/outreach/reject` | 200 | 661 | yes | keys/len: approval_id, audit_event_id, rejected |
-| audit.events | `GET /api/audit/events?limit=10` | 200 | 711 | yes | keys/len: [array len=10] |
-| genie.message | `POST /api/genie/message` | 200 | 866 | yes | keys/len: answer, conversation_id, follow_up_questions, metric_value, question, source, table_rows, trusted_assets |
-| admin.rules | `GET /api/admin/rules` | 200 | 391 | yes | keys/len: legacy_override, offer_rules_version, rules_edited_at, thresholds |
-| admin.sources | `GET /api/admin/sources` | 200 | 399 | yes | keys/len: [array len=8] |
-| admin.rules.no_admin_header | `GET /api/admin/rules` | 200 | 424 | yes | keys/len: legacy_override, offer_rules_version, rules_edited_at, thresholds |
-| geo.state_rollups | `GET /api/geo/state-rollups` | 503 | 452 | NO | ERROR: {"detail":"warehouse dependency is down: circuit breaker is open","retryable":true,"dependency":"warehouse","correlation_id":"c6ec92562c2649e3b70ca46c49423654"} |
+| health | `GET /api/health` | 200 | 1188 | yes | keys/len: app_env, breaker_state_changes_last_hour, circuit_breakers, counters_persistence, dependencies, fallback_identity_fallbacks_total, log_export, mode |
+| portfolio.unfiltered | `POST /api/portfolio/preview` | 200 | 422 | yes | keys/len: approved_count, avg_score, cost_per_contact, data_refreshed_at, high_intent_leads, in_outreach_count, marketable_population, offers_recommended |
+| portfolio.chicago | `POST /api/portfolio/preview` | 200 | 399 | yes | keys/len: approved_count, avg_score, cost_per_contact, data_refreshed_at, high_intent_leads, in_outreach_count, marketable_population, offers_recommended |
+| portfolio.chicago.owner.25pct | `POST /api/portfolio/preview` | 200 | 432 | yes | keys/len: approved_count, avg_score, cost_per_contact, data_refreshed_at, high_intent_leads, in_outreach_count, marketable_population, offers_recommended |
+| segments | `GET /api/segments` | 200 | 1044 | yes | keys/len: [array len=4] |
+| leads.all | `GET /api/leads` | 200 | 1355 | yes | keys/len: [array len=500] |
+| leads.itm | `GET /api/leads?segment=itm` | 200 | 1379 | yes | keys/len: [array len=500] |
+| borrower.detail | `GET /api/borrowers/B-102FL7THC6Q3L` | 200 | 1006 | yes | keys/len: approval_status, avm_value, borrower_id, city, clip, clip_id, confidence, current_lien_balance |
+| borrower.evidence | `GET /api/borrowers/B-102FL7THC6Q3L/evidence` | 200 | 984 | yes | keys/len: [array len=8] |
+| offers.recommend | `POST /api/offers/recommend` | 200 | 1381 | yes | keys/len: alternatives, borrower_id, confidence, evidence_ids, offer_code, offer_type, product_label, rationale |
+| outreach.draft | `POST /api/outreach/draft` | 200 | 910 | yes | keys/len: body, borrower_id, channel, offer_code, status, subject |
+| outreach.approve.synthetic | `POST /api/outreach/approve` | 200 | 640 | yes | keys/len: approval_id, approved, audit_event_id |
+| outreach.reject.synthetic | `POST /api/outreach/reject` | 200 | 614 | yes | keys/len: approval_id, audit_event_id, rejected |
+| audit.events | `GET /api/audit/events?limit=10` | 200 | 648 | yes | keys/len: [array len=10] |
+| genie.message | `POST /api/genie/message` | 200 | 944 | yes | keys/len: answer, conversation_id, follow_up_questions, metric_value, question, source, table_rows, trusted_assets |
+| admin.rules | `GET /api/admin/rules` | 200 | 936 | yes | keys/len: legacy_override, offer_rules_version, rules_edited_at, thresholds |
+| admin.sources | `GET /api/admin/sources` | 200 | 2267 | yes | keys/len: [array len=8] |
+| geo.state_rollups | `GET /api/geo/state-rollups` | 503 | 411 | NO | ERROR: {"detail":"warehouse is temporarily unavailable","retryable":true,"dependency":"warehouse","correlation_id":"8b9f2e7cad42465a8b494df9930a883b"} |
 
 ## Clean payload samples
 
@@ -36,13 +38,13 @@ Synthetic test-id prefix: `B-TEST-*`
   "app_env": "sandbox",
   "warehouse_id": "81d08d4fa2d799e9",
   "dependencies": {
-    "warehouse": "down",
+    "warehouse": "up",
     "lakebase": "down",
     "genie": "up"
   },
   "circuit_breakers": {
-    "warehouse": "open",
-    "genie": "closed",
+    "warehouse": "closed",
+    "genie": "half_open",
     "lakebase": "closed"
   }
 }
@@ -258,13 +260,155 @@ Synthetic test-id prefix: `B-TEST-*`
 }
 ```
 
+### segments — `GET /api/segments`
+
+```json
+{
+  "code": "equity",
+  "name": "Home Equity Candidate",
+  "count": 3141667,
+  "delta": "+0%",
+  "avg_score": 40,
+  "description": "Strong equity and prior cash-out/HELOC propensity.",
+  "color": "#66C5FF"
+}
+```
+
+### leads.all — `GET /api/leads`
+
+```json
+{
+  "borrower_id": "B-102FL7THC6Q3L",
+  "display_name": "Owner 3b3ba2e0",
+  "city": "CALUMET CITY",
+  "state": "IL",
+  "zip": "604092222",
+  "clip": "9154364327",
+  "segment_codes": [
+    "itm",
+    "investor",
+    "equity"
+  ],
+  "equity_estimate": 153163,
+  "rate_spread_bps": 397,
+  "opportunity_score": 86,
+  "confidence": 81,
+  "recommended_offer": "Refinance + HELOC",
+  "why_now": "Current rate sits meaningfully above market and the home carries strong equity -- a refinance with a HELOC cross-sell fits.",
+  "evidence_ids": [
+    "ev-b4fba688be13",
+    "ev-ae027341e9f1",
+    "ev-d3356f99ea2e"
+  ],
+  "approval_status": "pending",
+  "is_owner_occupied": false,
+  "is_investor": true,
+  "related_property_count": 346,
+  "current_lien_balance": 15000,
+  "second_pos_amount": 0,
+  "has_permit": false,
+  "listed_for_sale": false
+}
+```
+
+### leads.itm — `GET /api/leads?segment=itm`
+
+```json
+{
+  "borrower_id": "B-102FL7THC6Q3L",
+  "display_name": "Owner 3b3ba2e0",
+  "city": "CALUMET CITY",
+  "state": "IL",
+  "zip": "604092222",
+  "clip": "9154364327",
+  "segment_codes": [
+    "itm",
+    "investor",
+    "equity"
+  ],
+  "equity_estimate": 153163,
+  "rate_spread_bps": 397,
+  "opportunity_score": 86,
+  "confidence": 81,
+  "recommended_offer": "Refinance + HELOC",
+  "why_now": "Current rate sits meaningfully above market and the home carries strong equity -- a refinance with a HELOC cross-sell fits.",
+  "evidence_ids": [
+    "ev-b4fba688be13",
+    "ev-ae027341e9f1",
+    "ev-d3356f99ea2e"
+  ],
+  "approval_status": "pending",
+  "is_owner_occupied": false,
+  "is_investor": true,
+  "related_property_count": 346,
+  "current_lien_balance": 15000,
+  "second_pos_amount": 0,
+  "has_permit": false,
+  "listed_for_sale": false
+}
+```
+
+### borrower.detail — `GET /api/borrowers/B-102FL7THC6Q3L`
+
+```json
+{
+  "borrower_id": "B-102FL7THC6Q3L",
+  "display_name": "Owner 3b3ba2e0",
+  "city": "CALUMET CITY",
+  "state": "IL",
+  "zip": "604092222",
+  "clip": ""
+}
+```
+
+### borrower.evidence — `GET /api/borrowers/B-102FL7THC6Q3L/evidence`
+
+```json
+{
+  "evidence_id": "ev-b4fba688be13",
+  "source_product": "Voluntary Lien",
+  "source_table": "mip.silver.lien_current",
+  "signal_type": "rate_spread",
+  "signal_value": "+397 bps",
+  "display_text": "Current lien rate is 397 bps vs. par.",
+  "confidence": 0.92,
+  "timestamp": "2026-04-21 20:37:48.869"
+}
+```
+
+### offers.recommend — `POST /api/offers/recommend`
+
+```json
+{
+  "borrower_id": "B-102FL7THC6Q3L",
+  "offer_code": "refi_plus_heloc",
+  "offer_type": "refi_plus_heloc",
+  "product_label": "Refinance + HELOC",
+  "confidence": 81,
+  "rationale": "Rate is well above current market rates and the home has very strong home equity -- a strong candidate for a refinance with a HELOC alongside it."
+}
+```
+
+### outreach.draft — `POST /api/outreach/draft`
+
+```json
+{
+  "borrower_id": "B-102FL7THC6Q3L",
+  "offer_code": "OFFER-B-102FL7THC6Q3L",
+  "channel": "email",
+  "subject": "Refinance + HELOC opportunity for Owner 3b3ba2e0",
+  "body": "Hi Owner 3b3ba2e0,\n\nBased on recent public-record signals in CALUMET CITY, IL, you may qualify for Refinance + HELOC. Current rate sits meaningfully above market and the home carries strong equity -- a refinance with a HELOC cross-sell fits.\n\nReply to this note and a licensed officer will follow up. This draft is for human review only; no outreach has been sent.",
+  "status": "draft"
+}
+```
+
 ### outreach.approve.synthetic — `POST /api/outreach/approve`
 
 ```json
 {
   "approved": true,
-  "approval_id": "7049fafa-08da-40fd-807f-401b31be30c7",
-  "audit_event_id": "258e2ec6-6b0f-404c-a5b4-13c2ad29a3e2"
+  "approval_id": "b6813871-a794-4a8b-a9e7-614ed56ccf7c",
+  "audit_event_id": "5eaf8369-31a1-48da-b35f-08f6a5aabe65"
 }
 ```
 
@@ -273,8 +417,8 @@ Synthetic test-id prefix: `B-TEST-*`
 ```json
 {
   "rejected": true,
-  "approval_id": "95deafdd-2841-4942-94ca-4e0047849e35",
-  "audit_event_id": "e813da33-5deb-426b-a581-a698b1fadda5"
+  "approval_id": "a3e6a8de-cabd-47df-a34d-62d810dd94a4",
+  "audit_event_id": "ad83f4de-3287-4133-83c1-d244a0b18535"
 }
 ```
 
@@ -282,18 +426,18 @@ Synthetic test-id prefix: `B-TEST-*`
 
 ```json
 {
-  "event_id": "e813da33-5deb-426b-a581-a698b1fadda5",
+  "event_id": "ad83f4de-3287-4133-83c1-d244a0b18535",
   "actor": "skyler@entrada.ai",
   "action": "outreach.reject",
   "entity_type": "approval",
-  "entity_id": "95deafdd-2841-4942-94ca-4e0047849e35",
+  "entity_id": "a3e6a8de-cabd-47df-a34d-62d810dd94a4",
   "payload_json": {
     "offer_code": "refi",
-    "approval_id": "95deafdd-2841-4942-94ca-4e0047849e35",
-    "borrower_id": "B-TEST-C5C984A5"
+    "approval_id": "a3e6a8de-cabd-47df-a34d-62d810dd94a4",
+    "borrower_id": "B-TEST-E45B2EDF"
   },
   "evidence_ids": [],
-  "created_at": "2026-04-23T14:36:30.630954+00:00",
+  "created_at": "2026-04-23T15:22:44.217500+00:00",
   "event_type": "OUTREACH_REJECT",
   "subject_clip": null,
   "subject_segment": null,
@@ -380,63 +524,9 @@ Synthetic test-id prefix: `B-TEST-*`
 }
 ```
 
-### admin.rules.no_admin_header — `GET /api/admin/rules`
-
-```json
-{
-  "offer_rules_version": "itm_77eddaa7d767",
-  "rules_edited_at": "2026-04-23 14:27:52.06284",
-  "thresholds": [
-    {
-      "key": "mip_min_spread_bps",
-      "value": 75.0,
-      "unit": "bps",
-      "label": "Min spread (bps)",
-      "description": "Minimum rate spread vs. market before a borrower is considered in the money.",
-      "sort_order": 1,
-      "last_updated": "2026-04-23 14:27:52.06284"
-    },
-    {
-      "key": "mip_min_equity_pct",
-      "value": 15.0,
-      "unit": "pct",
-      "label": "Min equity (%)",
-      "description": "Minimum equity percentage required to qualify as in the money.",
-      "sort_order": 2,
-      "last_updated": "2026-04-23 14:27:52.06284"
-    },
-    {
-      "key": "mip_heloc_equity_min_pct",
-      "value": 35.0,
-      "unit": "pct",
-      "label": "HELOC equity floor (%)",
-      "description": "Equity floor required for HELOC eligibility and refi+HELOC cross-sell.",
-      "sort_order": 3,
-      "last_updated": "2026-04-23 14:27:52.06284"
-    },
-    {
-      "key": "mip_cashout_equity_min_pct",
-      "value": 25.0,
-      "unit": "pct",
-      "label": "Cash-out equity floor (%)",
-      "description": "Equity floor required for cash-out refi eligibility when rate economics are absent.",
-      "sort_order": 4,
-      "last_updated": "2026-04-23 14:27:52.06284"
-    },
-    {
-      "key": "mip_retention_min_spread_bps",
-      "value": 50.0,
-      "unit": "bps",
-      "label": "Retention min spread (bps)",
-      "description": "Lowered spread 
-```
-
 ## Red flags
 
-- segments: status=503 error={"detail":"warehouse dependency is down: circuit breaker is open","retryable":true,"dependency":"warehouse","correlation_id":"8ee572c329b1437983726f08d4c30e55"}
-- leads.all: status=503 error={"detail":"warehouse dependency is down: circuit breaker is open","retryable":true,"dependency":"warehouse","correlation_id":"34721e2c71974c24a0318d90138b706c"}
-- leads.itm: status=503 error={"detail":"warehouse dependency is down: circuit breaker is open","retryable":true,"dependency":"warehouse","correlation_id":"51fc62adfb244417850056301b804d62"}
-- geo.state_rollups: status=503 error={"detail":"warehouse dependency is down: circuit breaker is open","retryable":true,"dependency":"warehouse","correlation_id":"c6ec92562c2649e3b70ca46c49423654"}
+- geo.state_rollups: status=503 error={"detail":"warehouse is temporarily unavailable","retryable":true,"dependency":"warehouse","correlation_id":"8b9f2e7cad42465a8b494df9930a883b"}
 
 ## Teardown
 

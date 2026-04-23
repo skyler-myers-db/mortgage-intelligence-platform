@@ -162,6 +162,9 @@ class AuditStore(Protocol):
 # ----------------------------------------------------------------------
 
 
+_UNTRUSTED_EDGE_ACTOR: str = "unknown-actor@untrusted-edge"
+
+
 def resolve_actor(request: Request | None) -> str:
     """Read the workspace identity forwarded by Databricks Apps.
 
@@ -169,14 +172,28 @@ def resolve_actor(request: Request | None) -> str:
     dev/test traffic in production logs. The fallback value is
     ``settings.default_actor`` so audit rows are never written with
     a placeholder string or NULL in the authenticated actor column.
+
+    R5-09 trust boundary: when ``settings.trust_forwarded_headers`` is
+    False we ignore ``X-Forwarded-Email`` / ``X-Forwarded-User`` entirely
+    and attribute the row to a distinct marker string so an operator
+    grepping audit rows can spot "this deploy does not trust the edge,
+    actor is unknowable" at a glance. The default stays True because the
+    Databricks Apps edge IS the authoritative identity stripper; the
+    flag exists for unusual reverse-proxy deploys.
     """
-    if request is not None:
+    if request is not None and settings.trust_forwarded_headers:
         email = request.headers.get("X-Forwarded-Email")
         if email:
             return email
         user = request.headers.get("X-Forwarded-User")
         if user:
             return user
+    if request is not None and not settings.trust_forwarded_headers:
+        # Trust disabled: don't even read the headers. Return the
+        # untrusted-edge marker so audit attribution stays honest.
+        # Do NOT bump the fallback-identity counter -- this is an
+        # intentional deploy posture, not an identity-header miss.
+        return _UNTRUSTED_EDGE_ACTOR
     # Fallback path: bump the counter and emit a structured WARNING so
     # the event is observable in stdout JSON logs AND surfaced through
     # ``/api/health`` as ``fallback_identity_fallbacks_total``.

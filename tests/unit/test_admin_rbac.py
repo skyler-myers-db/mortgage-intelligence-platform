@@ -81,6 +81,34 @@ def test_admin_custom_group_name_from_settings(
     assert denied.status_code == 403
 
 
+def test_admin_respects_trust_forwarded_headers_flag(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R5-09: when ``settings.trust_forwarded_headers`` is False, the
+    admin gate IGNORES ``X-Forwarded-Groups`` even if it names the
+    admin group -- the forwarded header is untrustable in that posture,
+    so fail-closed (403) is the correct answer.
+
+    Flipping the flag back to True with the same header restores the
+    existing admit path -- pinning the default-True posture that
+    matches the Databricks Apps edge.
+    """
+    # Trust disabled -- even a well-formed mip-admin header denies.
+    monkeypatch.setattr(settings, "trust_forwarded_headers", False)
+    denied = client.get(
+        "/api/admin/rules", headers={"X-Forwarded-Groups": "mip-admin"}
+    )
+    assert denied.status_code == 403
+    assert denied.json() == {"detail": "forbidden"}
+
+    # Trust re-enabled -- same header admits again.
+    monkeypatch.setattr(settings, "trust_forwarded_headers", True)
+    admitted = client.get(
+        "/api/admin/rules", headers={"X-Forwarded-Groups": "mip-admin"}
+    )
+    assert admitted.status_code == 200, admitted.text
+
+
 def test_admin_fallback_group_always_admitted(client: TestClient) -> None:
     """The ``admins`` literal is a belt-and-suspenders admit path so an
     operator can't accidentally strip all admin access by zeroing the

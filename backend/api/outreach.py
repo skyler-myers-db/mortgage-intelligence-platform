@@ -30,6 +30,8 @@ from backend.services.audit_store import AuditStore, get_audit_store, resolve_ac
 from backend.services.error_sanitizer import safe_dependency_detail
 from backend.services.job_trigger import enqueue_lifecycle_trigger
 from backend.services.lakebase import LakebaseClient, LakebaseError, get_lakebase_client
+from backend.services.lakebase_bootstrap import ensure_approval_idempotency_column
+from backend.services.observability import emit
 from backend.services.pii_redaction import scrub_free_text
 from backend.services.repositories import OutreachRepository, get_outreach_repository
 
@@ -43,20 +45,79 @@ LakebaseDep = Annotated[LakebaseClient, Depends(get_lakebase_client)]
 
 
 def _safe_audit_write(store: AuditStore, **kwargs: Any) -> None:
+    """Background-task audit writer -- never let an audit failure bubble.
+
+    R5-18 widened the exception net from ``LakebaseError`` to ``Exception``
+    because the background-task context has no caller to surface an error
+    to; an unhandled exception here orphans the BackgroundTasks runner
+    and FastAPI silently drops it. We emit a structured
+    ``event=audit.dropped`` carrying only the exception CLASS NAME (never
+    ``str(exc)``, which could echo payload data back into logs) so
+    operators can spot the pattern without us widening the log-based PII
+    surface.
+    """
     try:
         store.write(**kwargs)
-    except LakebaseError as exc:
-        log.warning("audit.write dropped: %s", exc)
+    except Exception as exc:  # noqa: BLE001 -- background path must not raise
+        emit(
+            log,
+            "audit.dropped",
+            dependency="lakebase",
+            exc_type=type(exc).__name__,
+            outcome="error",
+        )
 
 
 _APPROVAL_INSERT = """
 INSERT INTO mip_app.approvals (
-    approval_id, borrower_id, offer_code, action, actor_email, rationale
+    approval_id, borrower_id, offer_code, action,
+    actor_email, rationale, request_id
 ) VALUES (
     %(approval_id)s, %(borrower_id)s, %(offer_code)s, %(action)s,
-    %(actor_email)s, %(rationale)s
+    %(actor_email)s, %(rationale)s, %(request_id)s
 )
+ON CONFLICT (request_id) WHERE request_id IS NOT NULL DO NOTHING
 """
+
+
+_APPROVAL_LOOKUP_BY_REQUEST_ID = """
+SELECT approval_id
+FROM mip_app.approvals
+WHERE request_id = %(request_id)s
+LIMIT 1
+"""
+
+
+def _lookup_existing_approval(
+    lakebase: LakebaseClient, request_id: str | None
+) -> str | None:
+    """Return an existing approval_id for this request_id, or None.
+
+    R5-01: the idempotency contract is "same request_id => same
+    approval_id, no duplicate write". Callers that want the retry-safe
+    guarantee pass a ``request_id``; when they do and we already have a
+    row in ``mip_app.approvals``, we return its approval_id without
+    issuing a second INSERT or a second audit write.
+
+    Safe to short-circuit with None when ``request_id`` is falsy --
+    legacy callers keep their pre-R5-01 behaviour.
+    """
+    if not request_id:
+        return None
+    try:
+        row = lakebase.fetchone(
+            _APPROVAL_LOOKUP_BY_REQUEST_ID, {"request_id": request_id}
+        )
+    except LakebaseError:
+        # Don't paper over the outage -- let the subsequent INSERT raise
+        # and surface the real error as 503. Returning None here means
+        # "we don't know if there's a duplicate"; the INSERT's ON
+        # CONFLICT clause is the second line of defence.
+        return None
+    if row is None:
+        return None
+    approval_id = row.get("approval_id")
+    return str(approval_id) if approval_id else None
 
 
 @router.post("/draft", response_model=OutreachDraft)
@@ -115,6 +176,21 @@ def approve_outreach(
     # to the caller-supplied ``actor`` only when we're running in a
     # test/dev path without the header.
     actor = payload.actor if payload.actor != "anonymous" else resolve_actor(request)
+    # R5-01 idempotency pre-check: if the caller sent a request_id and
+    # we already wrote a row for it (the previous attempt succeeded
+    # server-side but its 200 response was lost in flight), return the
+    # existing approval_id and skip both the INSERT and the audit write.
+    # The partial unique index on ``mip_app.approvals.request_id`` is
+    # the backstop; this SELECT is the fast path that avoids emitting
+    # a duplicate audit event for a retry.
+    ensure_approval_idempotency_column(lakebase)
+    existing = _lookup_existing_approval(lakebase, payload.request_id)
+    if existing is not None:
+        return OutreachApproveResponse(
+            approved=True,
+            approval_id=existing,
+            audit_event_id="",
+        )
     # lakebase/schema.sql §approvals: approval_id is UUID, not an
     # `apr-<hex12>` synthetic. Passing the raw UUID string satisfies
     # Postgres's UUID cast; truncating it to 12 hex chars produced
@@ -135,6 +211,7 @@ def approve_outreach(
                 "action": "approve",
                 "actor_email": actor,
                 "rationale": None,
+                "request_id": payload.request_id,
             },
         )
         # Governance §4: the audit metadata mirrors what the approver
@@ -148,6 +225,12 @@ def approve_outreach(
             "offer_code": payload.offer_code,
             "borrower_id": payload.borrower_id,
         }
+        if payload.request_id:
+            # Persist the idempotency key in the audit metadata too --
+            # retrospective auditors can then correlate "same client
+            # request, same approval_id" across the decision ledger and
+            # the append-only audit log.
+            audit_payload["request_id"] = payload.request_id
         if payload.draft_body:
             # Defence-in-depth: scrub obvious PII markers (SSN / phone / email /
             # street address) before the free-text body lands in the append-only
@@ -163,6 +246,7 @@ def approve_outreach(
             payload_json=audit_payload,
             evidence_ids=payload.evidence_ids,
             event_type="APPROVE",
+            request_id=payload.request_id,
         )
     except LakebaseError as exc:
         # No silent fallback. The UI surfaces 503 as a retry banner;
@@ -222,6 +306,17 @@ def reject_outreach(
     banner + resilience layer get to act; no silent fallback.
     """
     actor = payload.actor if payload.actor != "anonymous" else resolve_actor(request)
+    # R5-01 idempotency: same contract as /approve. A re-POSTed reject
+    # with the same ``request_id`` returns the existing approval_id
+    # instead of writing a second decision row + duplicate audit event.
+    ensure_approval_idempotency_column(lakebase)
+    existing = _lookup_existing_approval(lakebase, payload.request_id)
+    if existing is not None:
+        return OutreachRejectResponse(
+            rejected=True,
+            approval_id=existing,
+            audit_event_id="",
+        )
     approval_id = str(uuid4())
     try:
         lakebase.execute(
@@ -233,6 +328,7 @@ def reject_outreach(
                 "action": "reject",
                 "actor_email": actor,
                 "rationale": payload.rationale,
+                "request_id": payload.request_id,
             },
         )
         audit_payload: dict[str, Any] = {
@@ -240,6 +336,8 @@ def reject_outreach(
             "offer_code": payload.offer_code,
             "borrower_id": payload.borrower_id,
         }
+        if payload.request_id:
+            audit_payload["request_id"] = payload.request_id
         if payload.rationale:
             audit_payload["rationale"] = payload.rationale
         event = audit.write(
@@ -250,6 +348,7 @@ def reject_outreach(
             payload_json=audit_payload,
             evidence_ids=payload.evidence_ids,
             event_type="OUTREACH_REJECT",
+            request_id=payload.request_id,
         )
     except LakebaseError as exc:
         raise HTTPException(

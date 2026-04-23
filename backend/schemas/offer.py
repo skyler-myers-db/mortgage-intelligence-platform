@@ -96,6 +96,15 @@ class OutreachApproveRequest(BaseModel):
     # not just the borrower + offer code. Optional for back-compat with
     # callers that haven't been updated yet.
     draft_body: str | None = None
+    # R5-01 idempotency key. When present, the router short-circuits a
+    # retry that arrived after a successful INSERT whose response was
+    # lost: the partial unique index on ``mip_app.approvals.request_id``
+    # catches the collision and we return the existing decision row.
+    # Clients generate this with ``crypto.randomUUID()`` and reuse the
+    # same value across retries of the same user action. Bounded at 64
+    # chars to match the DDL column width; None keeps legacy callers
+    # working at pre-R5-01 semantics (no duplicate protection).
+    request_id: str | None = Field(default=None, max_length=64)
 
 
 class OutreachApproveResponse(BaseModel):
@@ -119,6 +128,9 @@ class OutreachRejectRequest(BaseModel):
     actor: str = "anonymous"
     evidence_ids: list[str] = []
     rationale: str | None = None
+    # R5-01 idempotency key -- see ``OutreachApproveRequest.request_id``.
+    # Reject carries the same retry-safety contract as approve.
+    request_id: str | None = Field(default=None, max_length=64)
 
 
 class OutreachRejectResponse(BaseModel):

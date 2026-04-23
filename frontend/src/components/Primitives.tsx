@@ -8,10 +8,21 @@ export function Chip({
   variant,
   icon,
   className,
-}: PropsWithChildren<{ variant?: 'success' | 'warning' | 'danger' | 'neutral'; icon?: IconName; className?: string }>) {
+  title,
+}: PropsWithChildren<{
+  variant?: 'success' | 'warning' | 'danger' | 'neutral';
+  icon?: IconName;
+  className?: string;
+  /**
+   * Optional native `title` tooltip. Used by the "Refreshed …" chip to
+   * surface the unambiguous ISO-UTC form on hover so operators in
+   * different timezones can disambiguate a Slack screenshot. R5-19.
+   */
+  title?: string;
+}>) {
   const cls = ['chip', variant ? `chip--${variant}` : '', className ?? ''].filter(Boolean).join(' ');
   return (
-    <span className={cls}>
+    <span className={cls} title={title}>
       {icon && <Icon name={icon} size={10} />}
       {children}
     </span>

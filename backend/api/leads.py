@@ -16,7 +16,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, Query, Request, Respons
 
 from backend.schemas.lead import LeadSummary
 from backend.services.audit_store import AuditStore, get_audit_store, resolve_actor
-from backend.services.lakebase import LakebaseError
+from backend.services.observability import emit
 from backend.services.repositories import LeadRepository, get_lead_repository
 
 log = logging.getLogger(__name__)
@@ -34,10 +34,25 @@ StoreDep = Annotated[AuditStore, Depends(get_audit_store)]
 
 
 def _safe_audit_write(store: AuditStore, **kwargs: object) -> None:
+    """Background-task audit writer -- swallow + log every failure.
+
+    R5-18: broaden from ``LakebaseError`` to ``Exception`` because this
+    runs in BackgroundTasks and an unhandled exception is silently
+    swallowed by FastAPI's runner. Emit only the exception class name
+    (never ``str(exc)``, which can leak payload content) so operators
+    see the pattern in structured logs without widening the PII
+    surface.
+    """
     try:
         store.write(**kwargs)  # type: ignore[arg-type]
-    except LakebaseError as exc:
-        log.warning("audit.write dropped: %s", exc)
+    except Exception as exc:  # noqa: BLE001 -- background path must not raise
+        emit(
+            log,
+            "audit.dropped",
+            dependency="lakebase",
+            exc_type=type(exc).__name__,
+            outcome="error",
+        )
 
 
 @router.get("/leads", response_model=list[LeadSummary])

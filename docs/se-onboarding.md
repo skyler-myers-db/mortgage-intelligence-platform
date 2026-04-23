@@ -37,6 +37,13 @@ On the customer workspace, before you start the clock:
       do from the CLI.
 - [ ] The customer has billing enabled for Lakebase (Postgres instances
       bill independently of the warehouse).
+- [ ] (Optional) FRED API key. The FRED ingest job (`jobs/fred_rates_ingest
+      .py`) currently uses the **public unauthenticated** `fredgraph.csv`
+      endpoint, so no key is required for first deploy. If the customer wants
+      authenticated FRED access later (higher rate limits, private series),
+      the key lands in `.env.local` as `FRED_API_KEY=` and is wired through
+      the bundle's `fred_api_key` variable. Absent key = log-at-warn, never
+      crash — deploy-day is safe without one.
 
 ---
 

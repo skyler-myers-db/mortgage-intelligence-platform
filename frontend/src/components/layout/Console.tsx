@@ -28,7 +28,13 @@ export function Console() {
   } = useApp();
 
   return (
-    <aside className={`tweaks ${consoleOpen ? 'is-open' : ''}`} role="dialog" aria-label="Console" aria-hidden={!consoleOpen}>
+    <aside
+      id="workspace-console"
+      className={`tweaks ${consoleOpen ? 'is-open' : ''}`}
+      role="complementary"
+      aria-label="Workspace console"
+      aria-hidden={!consoleOpen}
+    >
       <div className="tweaks__hdr">
         <Icon name="tweak" size={14} style={{ marginRight: 8, color: 'var(--accent)' }} />
         <div className="tweaks__title">Console</div>

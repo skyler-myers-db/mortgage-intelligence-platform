@@ -91,11 +91,27 @@ def require_admin(request: Request) -> str:
     ``Request`` headers. On failure, raises ``HTTPException(403,
     detail="forbidden")`` — the exact body string is load-bearing for
     the frontend's admin 403 banner copy.
+
+    R5-09 trust boundary: when ``settings.trust_forwarded_headers`` is
+    False, path 1 is disabled -- we DO NOT read ``X-Forwarded-Groups``
+    at all, because an untrusted edge means a caller could inject any
+    group string into the header. Path 2 (email allowlist) is still
+    honoured because the allowlist is a server-side secret (env var),
+    not a caller-supplied value; the email comparison is against the
+    forwarded email only when ``resolve_actor`` returns a real address,
+    which with trust disabled it does not -- so the overall posture
+    with trust disabled is fail-closed: nobody admitted via header,
+    only explicit server-side configuration paths work.
     """
-    groups = _parse_groups(request.headers.get("X-Forwarded-Groups"))
-    allowed_groups = {settings.admin_group_name.lower(), _FALLBACK_ADMIN_GROUP}
-    if groups & allowed_groups:
-        return resolve_actor(request)
+    if settings.trust_forwarded_headers:
+        groups = _parse_groups(request.headers.get("X-Forwarded-Groups"))
+        allowed_groups = {settings.admin_group_name.lower(), _FALLBACK_ADMIN_GROUP}
+        if groups & allowed_groups:
+            return resolve_actor(request)
+    else:
+        # Trust disabled: pretend the header doesn't exist for log
+        # forensics below.
+        groups = set()
 
     # Path 2: email allowlist.
     actor = resolve_actor(request)

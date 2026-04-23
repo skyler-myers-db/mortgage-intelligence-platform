@@ -127,6 +127,28 @@ class Settings(BaseSettings):
     admin_group_name: str = "mip-admin"
     admin_emails: str = "skyler@entrada.ai"
 
+    # R5-09 trust boundary. Databricks Apps is the authoritative
+    # identity edge: it strips inbound ``X-Forwarded-*`` headers and
+    # injects its own based on the authenticated workspace user. That's
+    # the posture the default (True) assumes -- matching production.
+    #
+    # Flip to False for unusual deploys where an intermediate proxy
+    # does NOT strip client-supplied ``X-Forwarded-Email`` /
+    # ``X-Forwarded-Groups`` headers. With trust disabled:
+    #
+    # * ``backend.services.rbac.require_admin`` ignores the forwarded
+    #   group list and denies unless the email allowlist admits the
+    #   caller (fail-closed).
+    # * ``backend.services.audit_store.resolve_actor`` ignores the
+    #   forwarded email/user and returns a marker string
+    #   (``"unknown-actor@untrusted-edge"``) so every audit row is
+    #   attributable to "we don't know who did this", not to a caller-
+    #   spoofed identity.
+    #
+    # See ``docs/security/GRANTS.md`` §Trust boundary for the
+    # deployment shapes where flipping this matters.
+    trust_forwarded_headers: bool = True
+
     # Slice-6 TTL cache: short-window memoization on aggregate KPIs that
     # tolerate staleness (segments count, portfolio preview). Fresh-only
     # endpoints (audit, outreach, borrower dossier) never consult the

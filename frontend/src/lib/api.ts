@@ -163,6 +163,18 @@ function _abortError(): DOMException {
   }
 }
 
+function _newRequestId(): string {
+  // Prefer the standard crypto.randomUUID() (available in all modern
+  // browsers + jsdom >= 22). Fall back to a time-based random for test
+  // environments where crypto is stubbed. The backend only requires
+  // uniqueness within its own unique-index window, not RFC4122
+  // compliance — uniqueness is what matters for idempotency.
+  const c: Crypto | undefined =
+    typeof globalThis !== 'undefined' ? globalThis.crypto : undefined;
+  if (c && typeof c.randomUUID === 'function') return c.randomUUID();
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+}
+
 interface Retryable503Parsed {
   retryable: boolean;
   dependency: string | null;
@@ -335,6 +347,7 @@ export const api = {
       offer_code?: string | null;
       evidence_ids?: string[];
       draft_body?: string | null;
+      request_id?: string;
     } = {},
     signal?: AbortSignal,
   ) =>
@@ -346,21 +359,23 @@ export const api = {
         offer_code?: string | null;
         evidence_ids?: string[];
         draft_body?: string | null;
+        request_id: string;
       }
     >(
       '/api/outreach/approve',
       {
         borrower_id,
         actor: opts.actor ?? 'anonymous',
-        // Forward the chosen offer_code + evidence_ids so the audit row
-        // captures what the approver actually saw. Default to [] / null
-        // so callers that don't have the recommendation hydrated still work.
         offer_code: opts.offer_code ?? null,
         evidence_ids: opts.evidence_ids ?? [],
-        // 2026-04-22: the approver can edit the draft body inline before
-        // approving. Send the final text so compliance can reconstruct
-        // exactly what was released from the audit ledger.
         draft_body: opts.draft_body ?? null,
+        // R5-01 idempotency: generate one UUID per user action and reuse
+        // across any transparent retries inside _fetchWithRetry. The
+        // backend has a unique index on mip_app.approvals(request_id)
+        // and ON CONFLICT DO NOTHING so a duplicate POST (e.g. after a
+        // 503 that the server actually committed before losing the
+        // response) does not write a second audit row.
+        request_id: opts.request_id ?? _newRequestId(),
       },
       signal,
     ),
@@ -379,6 +394,7 @@ export const api = {
       offer_code?: string | null;
       evidence_ids?: string[];
       rationale?: string | null;
+      request_id?: string;
     } = {},
     signal?: AbortSignal,
   ) =>
@@ -390,6 +406,7 @@ export const api = {
         offer_code?: string | null;
         evidence_ids?: string[];
         rationale?: string | null;
+        request_id: string;
       }
     >(
       '/api/outreach/reject',
@@ -399,6 +416,7 @@ export const api = {
         offer_code: opts.offer_code ?? null,
         evidence_ids: opts.evidence_ids ?? [],
         rationale: opts.rationale ?? null,
+        request_id: opts.request_id ?? _newRequestId(),
       },
       signal,
     ),

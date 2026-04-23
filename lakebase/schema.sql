@@ -54,8 +54,19 @@ CREATE TABLE IF NOT EXISTS mip_app.approvals (
     action        TEXT NOT NULL CHECK (action IN ('approve','reject','hold')),
     actor_email   TEXT NOT NULL,
     rationale     TEXT,
+    request_id    TEXT,
     decided_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- R5-01 idempotency key: when the backend retries an approve/reject after
+-- a lost 503 response, the re-POSTed ``request_id`` collides on this
+-- partial unique index so we don't write a duplicate decision row. The
+-- NULL-exempt filter preserves back-compat with legacy callers that
+-- don't pass a request_id yet (they still insert, they just don't get
+-- the retry-safe guarantee).
+ALTER TABLE mip_app.approvals
+    ADD COLUMN IF NOT EXISTS request_id TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_approvals_request_id
+    ON mip_app.approvals (request_id) WHERE request_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_approvals_campaign
     ON mip_app.approvals (campaign_id, decided_at DESC);
 CREATE INDEX IF NOT EXISTS idx_approvals_borrower

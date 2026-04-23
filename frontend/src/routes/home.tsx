@@ -73,10 +73,22 @@ export default function Home() {
   // and looks like honest-but-sad real data. Catch that exact shape and
   // show an empty-state banner so the presenter knows to run the bundle,
   // not explain why the pipeline says nothing.
+  //
+  // R5-20: prefer the server-authoritative ``day_zero`` flag, which
+  // keys off ``COUNT(*) FROM mip.gold.lead_population`` and is immune
+  // to the partial-CTAS-roll window where snapshot_at lags behind
+  // borrower_360. Fall back to the two-field inference for pre-R5-20
+  // servers that don't emit the flag.
   const isDayZero =
     preview !== null
-    && preview.marketable_population === 0
-    && preview.data_refreshed_at === null;
+    && (
+      preview.day_zero === true
+      || (
+        preview.day_zero === undefined
+        && preview.marketable_population === 0
+        && preview.data_refreshed_at === null
+      )
+    );
 
   return (
     <PageShell
@@ -86,9 +98,18 @@ export default function Home() {
       wideMap
       heroRight={
         <>
-          {formatRefreshed(preview?.data_refreshed_at) && (
-            <Chip variant="neutral" icon="db">{formatRefreshed(preview?.data_refreshed_at)}</Chip>
-          )}
+          {(() => {
+            // R5-19: render viewer-local display text + ISO-UTC title so
+            // two operators in different timezones can disambiguate the
+            // same screenshot on hover.
+            const refreshed = formatRefreshed(preview?.data_refreshed_at);
+            if (!refreshed) return null;
+            return (
+              <Chip variant="neutral" icon="db" title={refreshed.iso}>
+                {refreshed.display}
+              </Chip>
+            );
+          })()}
           <Link to="/portfolio-builder" className="btn btn--primary">
             Build a portfolio
             <Icon name="chevright" size={14} />

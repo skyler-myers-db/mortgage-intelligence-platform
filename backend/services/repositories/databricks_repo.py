@@ -32,6 +32,7 @@ space. An open breaker on an unknown question returns a honest
 """
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import UTC, datetime
 from typing import Any
@@ -397,6 +398,20 @@ class DatabricksPortfolioRepository:
     )
 
     _PREVIEW_CACHE_KEY = "portfolio.preview.all"
+    _DAY_ZERO_CACHE_KEY = "portfolio.day_zero"
+
+    # Authoritative "this workspace has never had a gold refresh" signal
+    # (R5-20). Unfiltered population count on mip.gold.lead_population,
+    # because the day-zero state is workspace-wide and must not shift
+    # with the caller's PortfolioCriteria (a criteria that happens to
+    # match zero borrowers is NOT day-zero). LIMIT 1 + EXISTS-style CASE
+    # so the warehouse returns one row no matter how large the table
+    # becomes. The result is cached longer than the preview -- day-zero
+    # flips at most once in a workspace's lifetime.
+    _DAY_ZERO_SQL = (
+        "SELECT CASE WHEN COUNT(*) = 0 THEN TRUE ELSE FALSE END AS day_zero "
+        f"FROM {qualify('gold', 'lead_population')}"
+    )
 
     @staticmethod
     def _build_trend(series: list[float]) -> KpiTrend:
@@ -471,12 +486,58 @@ class DatabricksPortfolioRepository:
         except (TypeError, ValueError):
             return None
 
+    @classmethod
+    def _preview_cache_key(cls, where_clause: str, params: dict[str, Any]) -> str:
+        """Deterministic cache key for ``preview`` results.
+
+        R5-08: the prior key embedded ``str(sorted(params.items()))``,
+        which produced semantically-equivalent-but-different strings
+        depending on dict iteration order, Python version, and repr of
+        edge-case values. That was a minor cache-miss waste today and a
+        500-risk if a non-hashable value ever slipped in. We now hash
+        the canonical JSON form of ``(where_clause, params)`` -- stable
+        regardless of insertion order (``sort_keys=True``), string-safe
+        for everything pydantic emits (``default=str``), and bounded in
+        length via SHA-256.
+        """
+        canonical = json.dumps(
+            {"where": where_clause, "params": params},
+            sort_keys=True,
+            default=str,
+            separators=(",", ":"),
+        )
+        digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:32]  # noqa: S324 -- not a secret
+        return f"{cls._PREVIEW_CACHE_KEY}:{digest}"
+
+    def _load_day_zero(self) -> bool:
+        """Return True when ``mip.gold.lead_population`` is empty.
+
+        R5-20: authoritative day-zero signal. Cached under its own key
+        so it's shared across every criteria variant (day-zero doesn't
+        depend on the filter). Resilient-by-default: any failure means
+        we can't prove the gold table is empty, so we return ``False``
+        and let the preview render whatever row counts the warehouse
+        returns. An incorrect ``True`` would hide real data; ``False``
+        is the safe default.
+        """
+        cached = self._cache.get(self._DAY_ZERO_CACHE_KEY)
+        if cached is not None:
+            return bool(cached)
+        try:
+            row = self._client.execute_one(self._DAY_ZERO_SQL) or {}
+        except Exception:  # noqa: BLE001 -- see docstring
+            return False
+        day_zero = bool(row.get("day_zero"))
+        self._cache.set(self._DAY_ZERO_CACHE_KEY, day_zero, self._cache_ttl_s)
+        return day_zero
+
     def preview(self, request: PortfolioPreviewRequest | None) -> PortfolioPreview:
         criteria = request.criteria if request is not None else None
         where_clause, params = self._build_preview_predicates(criteria)
         # Include the clause + params in the cache key so distinct criteria
-        # sets don't collide on a single cached entry.
-        cache_key = f"{self._PREVIEW_CACHE_KEY}:{where_clause}:{sorted(params.items())}"
+        # sets don't collide on a single cached entry. See _preview_cache_key
+        # for the R5-08 fix that pins insertion-order independence.
+        cache_key = self._preview_cache_key(where_clause, params)
         cached = self._cache.get(cache_key)
         if cached is not None:
             return cached
@@ -509,6 +570,7 @@ class DatabricksPortfolioRepository:
             ),
             data_refreshed_at=self._coerce_datetime(latest.get("snapshot_at")),
             trends=trends,
+            day_zero=self._load_day_zero(),
         )
         self._cache.set(cache_key, preview, self._cache_ttl_s)
         return preview

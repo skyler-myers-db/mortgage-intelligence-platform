@@ -254,7 +254,49 @@ SELECT COUNT(*) FROM mip.silver.property_master; -- optional; §4 gate
 
 ---
 
-## 10. Negative grants (things you should NOT give the app SP)
+## 10. Trust boundary — X-Forwarded-* headers
+
+Databricks Apps is the authoritative identity edge. The platform strips
+every inbound `X-Forwarded-Email`, `X-Forwarded-User`, and
+`X-Forwarded-Groups` header from customer traffic and injects its own
+values based on the authenticated workspace user. The FastAPI backend
+reads those headers to attribute audit rows
+([`backend/services/audit_store.py::resolve_actor`](../../backend/services/audit_store.py))
+and to gate the admin surface
+([`backend/services/rbac.py::require_admin`](../../backend/services/rbac.py)).
+
+The setting `MIP_TRUST_FORWARDED_HEADERS` (default `True`) controls this
+behavior:
+
+- **`True` — Databricks Apps posture (default).** The backend trusts
+  `X-Forwarded-*` values because the Databricks Apps edge has already
+  validated the caller. This matches every Entrada-shipped deploy.
+- **`False` — fail-closed for unusual deploys.** If the customer fronts
+  the FastAPI process with a reverse proxy that does NOT strip inbound
+  `X-Forwarded-*` headers (a misconfigured NGINX, an Envoy sidecar
+  without `use_remote_address`, a load-balancer in legacy mode), a
+  caller could forge headers and claim any identity. Flipping to `False`
+  makes the backend:
+
+  * Ignore `X-Forwarded-Email` / `X-Forwarded-User` in `resolve_actor`
+    and write audit rows attributed to `unknown-actor@untrusted-edge` —
+    a distinct marker string that is trivially greppable and will never
+    collide with a real workspace email.
+  * Ignore `X-Forwarded-Groups` in `require_admin`, which means the
+    group-membership admit path is disabled entirely. Only the email
+    allowlist (`MIP_ADMIN_EMAILS`, a server-side env var) can admit to
+    admin routes — and with the email header untrusted, even that path
+    fails. Effective posture: admin surface is closed until the deploy
+    is corrected.
+
+Flip this flag only if you cannot guarantee the edge strips
+`X-Forwarded-*`. The default is correct for Databricks Apps; changing
+it for an Apps-hosted deploy will make the product unusable without
+gaining any real safety.
+
+---
+
+## 11. Negative grants (things you should NOT give the app SP)
 
 - **`MANAGE` or `ALL PRIVILEGES`** on `mip` catalog. The app only reads
   gold/ref/silver and writes to `mip_app` — never DDL. A leaked app

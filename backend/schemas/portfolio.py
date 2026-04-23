@@ -39,6 +39,17 @@ class PortfolioPreview(BaseModel):
     approved_count: int | None = None
     in_outreach_count: int | None = None
 
+    # R5-20: server-authoritative "this workspace has never had a gold
+    # refresh" flag. Frontend used to infer day-0 from
+    # ``data_refreshed_at is None`` + ``marketable_population == 0``, but
+    # during a partial CTAS roll those two facts desynchronise (row in
+    # borrower_360 with no snapshot row yet, or vice versa) and the UI
+    # renders a mixed state -- KPI cards for a population that isn't
+    # really there. Authoritative signal is ``COUNT(*) FROM
+    # mip.gold.lead_population == 0``. Additive on the wire; default
+    # ``False`` keeps pre-R5-20 clients parsing.
+    day_zero: bool = False
+
     # ---- DEPRECATED -------------------------------------------------------
     # Hardcoded 2.18 / 9.7 constants in a previous slice; not Cotality data;
     # always None now. Kept to keep older clients parsing.

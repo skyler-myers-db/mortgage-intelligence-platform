@@ -108,6 +108,11 @@ export interface PortfolioPreview {
   avg_score: number;
   data_refreshed_at: string | null; // ISO timestamp
   trends?: Record<string, KpiTrend>;
+  // R5-20: server-authoritative day-zero flag. Optional so older servers
+  // that don't emit it still parse; consumers must fall back to
+  // `marketable_population === 0 && data_refreshed_at === null` when
+  // absent.
+  day_zero?: boolean;
   // Deprecated — always null. Kept for schema back-compat with older clients.
   projected_contact_to_app: number | null;
   cost_per_contact: number | null;

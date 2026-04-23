@@ -114,15 +114,20 @@ function formatDelta(pct: number | null | undefined): string | undefined {
  * `null` so KpiCard renders an em-dash and the banner explains why.
  * Hole-finder round 2 #13, 2026-04-23.
  */
+function isDayZero(preview: PortfolioPreview | null): boolean {
+  if (preview === null) return false;
+  // R5-20: prefer the server flag; fall back to the two-field inference
+  // only when the server didn't emit ``day_zero`` (pre-R5-20 clients).
+  if (preview.day_zero === true) return true;
+  if (preview.day_zero === false) return false;
+  return preview.marketable_population === 0 && preview.data_refreshed_at === null;
+}
+
 function dayZeroSafe(
   preview: PortfolioPreview | null,
   value: number | null | undefined,
 ): number | null {
-  if (
-    preview !== null
-    && preview.marketable_population === 0
-    && preview.data_refreshed_at === null
-  ) {
+  if (isDayZero(preview)) {
     return null;
   }
   return value ?? null;
@@ -344,10 +349,10 @@ export default function PortfolioBuilder() {
               On a fresh customer workspace the funnel snapshot table is
               empty and borrower_360 has no rows — the preview returns 0s
               with a null timestamp, which would otherwise render as a
-              plausible-but-misleading all-zero KPI row. */}
-          {preview !== null
-            && preview.marketable_population === 0
-            && preview.data_refreshed_at === null && (
+              plausible-but-misleading all-zero KPI row.
+              R5-20: keyed off ``isDayZero`` so the server flag wins when
+              present and the two-field inference is only the fallback. */}
+          {isDayZero(preview) && (
             <div
               role="status"
               style={{

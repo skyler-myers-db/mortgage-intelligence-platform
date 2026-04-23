@@ -30,6 +30,16 @@ export function AppShell({ children }: PropsWithChildren) {
       <HealthProvider>
         <FootprintProvider>
           <div className="app-shell">
+            {/*
+              Keyboard-only skip-link. Tabbing into the page from the browser
+              chrome would otherwise land in the Rail and require ~30 Tab
+              presses to reach the right-rail Console. Visually hidden until
+              focused, per the standard a11y pattern in
+              frontend/src/design-system/components.css.
+            */}
+            <a href="#workspace-console" className="sr-skip-link">
+              Skip to workspace console
+            </a>
             <Rail />
             <Topbar />
             <main className="main">

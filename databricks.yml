@@ -11,8 +11,17 @@ bundle:
 # .env.local" story in docs/runbook.md §2. Audit 2026-04-23: flagged as a
 # packaging footgun for non-Entrada customers; resolution ratified with
 # explicit comment + SE checklist on the `prod` target below.
+#
+# DRY-up (audit R5-24, 2026-04-23): a YAML anchor on this root-level host
+# is the single source of truth. All four `workspace.host:` fields across
+# targets dereference `*default_host`. Variables cannot be used here (see
+# above), so an anchor is the correct primitive. A customer forking the
+# repo now edits EXACTLY ONE line to rebind the host. `make
+# check-workspace-host` (Makefile) greps for the literal outside this
+# anchor and fails if it finds one — a forkability safeguard so an SE
+# cannot ship a customer deploy still pointing at Entrada's workspace.
 workspace:
-  host: https://dbc-3aa503a9-4fa8.cloud.databricks.com
+  host: &default_host https://dbc-3aa503a9-4fa8.cloud.databricks.com
 
 # Sync: explicitly include the built frontend bundle in the uploaded
 # source tree. `frontend/dist/` is in .gitignore (we don't commit built
@@ -29,7 +38,7 @@ targets:
     mode: development
     default: true
     workspace:
-      host: https://dbc-3aa503a9-4fa8.cloud.databricks.com
+      host: *default_host
       profile: DEFAULT
       root_path: ~/.bundle/${bundle.name}/${bundle.target}
 
@@ -48,7 +57,7 @@ targets:
     #      via UC; if you need a prod-only instance, override the resource
     #      block under `database_instances`.
     workspace:
-      host: https://dbc-3aa503a9-4fa8.cloud.databricks.com
+      host: *default_host
       profile: DEFAULT
       root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
     run_as:
@@ -64,7 +73,7 @@ targets:
   # uses this target; deploys use `dev` / `prod`.
   ci:
     workspace:
-      host: https://dbc-3aa503a9-4fa8.cloud.databricks.com
+      host: *default_host
       root_path: /Workspace/ci-placeholder/.bundle/${bundle.name}/${bundle.target}
 
 resources:
@@ -729,3 +738,27 @@ variables:
   lakebase_database_name:
     description: Lakebase Postgres database name backing Module 0 app state
     default: mip_app_state
+  # ---------------------------------------------------------------------------
+  # FRED API key (audit R5-16, 2026-04-23)
+  # ---------------------------------------------------------------------------
+  # OPTIONAL. The current `jobs/fred_rates_ingest.py` hits
+  # https://fred.stlouisfed.org/graph/fredgraph.csv?id=MORTGAGE30US — the
+  # public unauthenticated FRED graph CSV endpoint — so no key is needed
+  # today. The variable is declared here so (a) SEs know where the key
+  # would land if we later upgrade to the authenticated REST endpoint
+  # (api.stlouisfed.org/fred/series/observations, which requires
+  # api_key=...), and (b) the zero-click-deploy story documented in
+  # CLAUDE.md is honoured: any future secret is reachable from
+  # `databricks bundle deploy -t dev` + a `.env.local` fill-in, never
+  # from click-ops in the Databricks UI. When that upgrade happens, the
+  # ingest script will read `os.environ.get("FRED_API_KEY", "")` and
+  # log-at-warn when missing (fall back to fredgraph.csv), so an empty
+  # default here is correct. Override via `BUNDLE_VAR_fred_api_key` or
+  # set `FRED_API_KEY=` in `.env.local` (wired through
+  # tools/databricks/bundle_env.py, same pattern as DATABRICKS_WAREHOUSE_ID).
+  fred_api_key:
+    description: >-
+      Optional FRED API key (public fredgraph.csv endpoint works without it).
+      When set, future authenticated ingest paths will use it; missing/empty
+      is the expected default and should log-at-warn, never crash.
+    default: ""

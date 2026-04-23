@@ -29,9 +29,10 @@ from fastapi.testclient import TestClient
 
 from backend.api import outreach as outreach_mod
 from backend.main import app
-from backend.services import job_trigger
+from backend.services import job_trigger, lakebase_bootstrap
 from backend.services.audit_store import InMemoryAuditStore, get_audit_store
 from backend.services.lakebase import LakebaseError, get_lakebase_client
+from backend.services.lakebase_bootstrap import _reset_bootstrap_for_tests
 from backend.services.resilience import _reset_breakers_for_tests
 
 
@@ -44,11 +45,25 @@ def _reset_trigger_state():
     failures to exercise the no-silent-fallback path; without this
     reset the 'lakebase' breaker stays OPEN and poisons every later
     test in the session that touches Lakebase.
+
+    R5-01 addendum: also reset the per-process lakebase-bootstrap
+    flag so each test gets a predictable execute-call count. The
+    bootstrap runs once per process and issues 2 ALTER/CREATE
+    statements on the Lakebase client the first time a test hits
+    approve/reject -- zeroing the flag ahead of each test makes call-
+    count assertions stable across test ordering.
     """
     _reset_breakers_for_tests()
+    # Mark the R5-01 DDL bootstrap as "already done" for this test so the
+    # approve/reject path doesn't emit the two ALTER/CREATE statements
+    # that would throw off execute-call-count assertions. The tests that
+    # want to exercise the bootstrap itself call _reset_bootstrap_for_tests()
+    # explicitly before their action.
+    lakebase_bootstrap._APPROVAL_REQUEST_ID_BOOTSTRAPPED = True
     job_trigger._reset_for_tests()
     yield
     _reset_breakers_for_tests()
+    _reset_bootstrap_for_tests()
 
 
 @pytest.fixture
@@ -213,3 +228,271 @@ def test_approve_forwards_draft_body_into_audit_metadata(
     events = audit.list(limit=5)
     assert len(events) == 1
     assert events[0].payload_json.get("draft_body") == draft
+
+
+# ---------------------------------------------------------------------------
+# R5-01 idempotency contract
+# ---------------------------------------------------------------------------
+
+
+def test_approve_idempotent_on_retry_with_same_request_id(
+    override_deps, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R5-01: a second /approve with the same ``request_id`` must NOT
+    write a second row. The first call inserts; the second looks up the
+    existing approval via the partial unique index and short-circuits
+    before INSERT + before emitting a duplicate audit event.
+    """
+    audit = InMemoryAuditStore()
+
+    # A stateful fake: track what was "inserted" so fetchone can return
+    # the existing approval_id on the second call, the way the real
+    # Postgres lookup would.
+    inserted: dict[str, str] = {}
+
+    def _execute(sql: str, params: dict[str, Any]) -> None:
+        if "INSERT INTO mip_app.approvals" in sql and params.get("request_id"):
+            inserted[params["request_id"]] = params["approval_id"]
+
+    def _fetchone(sql: str, params: dict[str, Any]) -> dict[str, Any] | None:
+        if "WHERE request_id" in sql:
+            rid = params.get("request_id")
+            if rid and rid in inserted:
+                return {"approval_id": inserted[rid]}
+            return None
+        return None
+
+    fake_lakebase = MagicMock()
+    fake_lakebase.execute.side_effect = _execute
+    fake_lakebase.fetchone.side_effect = _fetchone
+
+    monkeypatch.setattr(
+        outreach_mod,
+        "enqueue_lifecycle_trigger",
+        lambda background, *, reason="approval": None,
+    )
+    override_deps(audit=audit, lakebase=fake_lakebase)
+
+    client = TestClient(app)
+    body = {
+        "borrower_id": "B-48291",
+        "actor": "anonymous",
+        "request_id": "req-abc-123",
+    }
+    first = client.post("/api/outreach/approve", json=body)
+    second = client.post("/api/outreach/approve", json=body)
+
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, second.text
+    # Same approval_id returned on both calls -- the idempotency
+    # contract's observable guarantee.
+    assert first.json()["approval_id"] == second.json()["approval_id"]
+
+    # Exactly one INSERT -- the second call short-circuited.
+    approval_inserts = [
+        call for call in fake_lakebase.execute.call_args_list
+        if "INSERT INTO mip_app.approvals" in call.args[0]
+    ]
+    assert len(approval_inserts) == 1
+
+    # Exactly one audit event -- the second call must not emit a
+    # duplicate APPROVE row into the ledger.
+    events = audit.list(limit=5)
+    assert len([e for e in events if e.event_type == "APPROVE"]) == 1
+
+
+def test_reject_idempotent_on_retry_with_same_request_id(
+    override_deps, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reject-path twin of the approve idempotency test above."""
+    audit = InMemoryAuditStore()
+    inserted: dict[str, str] = {}
+
+    def _execute(sql: str, params: dict[str, Any]) -> None:
+        if "INSERT INTO mip_app.approvals" in sql and params.get("request_id"):
+            inserted[params["request_id"]] = params["approval_id"]
+
+    def _fetchone(sql: str, params: dict[str, Any]) -> dict[str, Any] | None:
+        if "WHERE request_id" in sql:
+            rid = params.get("request_id")
+            if rid and rid in inserted:
+                return {"approval_id": inserted[rid]}
+        return None
+
+    fake_lakebase = MagicMock()
+    fake_lakebase.execute.side_effect = _execute
+    fake_lakebase.fetchone.side_effect = _fetchone
+
+    monkeypatch.setattr(
+        outreach_mod,
+        "enqueue_lifecycle_trigger",
+        lambda background, *, reason="rejection": None,
+    )
+    override_deps(audit=audit, lakebase=fake_lakebase)
+
+    client = TestClient(app)
+    body = {
+        "borrower_id": "B-48291",
+        "actor": "anonymous",
+        "request_id": "req-reject-xyz",
+    }
+    first = client.post("/api/outreach/reject", json=body)
+    second = client.post("/api/outreach/reject", json=body)
+
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, second.text
+    assert first.json()["approval_id"] == second.json()["approval_id"]
+
+    approval_inserts = [
+        call for call in fake_lakebase.execute.call_args_list
+        if "INSERT INTO mip_app.approvals" in call.args[0]
+    ]
+    assert len(approval_inserts) == 1
+    assert len([e for e in audit.list(limit=5) if e.event_type == "OUTREACH_REJECT"]) == 1
+
+
+def test_approve_without_request_id_keeps_legacy_behavior(
+    override_deps, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Legacy callers that omit ``request_id`` get a fresh approval on
+    every call -- the idempotency check is keyed on request_id, so None
+    never matches. Two calls without request_id == two rows (the caller
+    accepts the risk of duplicate on retry).
+    """
+    audit = InMemoryAuditStore()
+    fake_lakebase = MagicMock()
+    fake_lakebase.fetchone.return_value = None
+
+    monkeypatch.setattr(
+        outreach_mod,
+        "enqueue_lifecycle_trigger",
+        lambda background, *, reason="approval": None,
+    )
+    override_deps(audit=audit, lakebase=fake_lakebase)
+
+    client = TestClient(app)
+    body = {"borrower_id": "B-48291", "actor": "anonymous"}
+    first = client.post("/api/outreach/approve", json=body)
+    second = client.post("/api/outreach/approve", json=body)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["approval_id"] != second.json()["approval_id"]
+    # fetchone SHOULD NOT have been called when request_id is None --
+    # the helper short-circuits.
+    assert fake_lakebase.fetchone.call_count == 0
+
+
+# ---------------------------------------------------------------------------
+# R5-23 -- request bodies must never leak into logs
+# ---------------------------------------------------------------------------
+
+
+def test_approve_body_not_in_logs(
+    override_deps, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """R5-23: if anyone ever cranks log level to DEBUG, request bodies
+    must not leak to stdout / log fixtures. We POST a draft_body
+    carrying a distinctive marker and assert NO captured log record
+    contains it.
+
+    Covers: the audit write accepts the body (via scrub_free_text) and
+    structured logs carry the event metadata, but neither the request
+    body nor ``str(exc)`` from a LakebaseError should ever emit the raw
+    marker string.
+    """
+    audit = InMemoryAuditStore()
+    fake_lakebase = MagicMock()
+    fake_lakebase.fetchone.return_value = None
+
+    monkeypatch.setattr(
+        outreach_mod,
+        "enqueue_lifecycle_trigger",
+        lambda background, *, reason="approval": None,
+    )
+    override_deps(audit=audit, lakebase=fake_lakebase)
+
+    # Distinctive sentinel that could not appear in any legitimate log
+    # line -- if it does, a log path is echoing the request body.
+    sentinel = "test-secret-leak-canary-r5-23"
+    client = TestClient(app)
+
+    import logging as _logging
+    caplog.set_level(_logging.DEBUG)
+    resp = client.post(
+        "/api/outreach/approve",
+        json={
+            "borrower_id": "B-48291",
+            "actor": f"{sentinel}@example.com",
+            "draft_body": sentinel,
+        },
+    )
+    assert resp.status_code == 200, resp.text
+
+    # No captured log record's raw message or formatted text may
+    # contain the sentinel. The sentinel DOES land in the audit
+    # ledger (by design -- that's governance-reconstructable copy),
+    # but the ledger is not a log fixture.
+    for record in caplog.records:
+        assert sentinel not in record.getMessage(), (
+            f"leaked request body into log: {record.name} {record.levelname} "
+            f"{record.getMessage()!r}"
+        )
+        # Also check the structured extras the emit() helper attaches.
+        for key, value in record.__dict__.items():
+            if isinstance(value, str):
+                assert sentinel not in value, (
+                    f"leaked request body into log extra {key!r}: {value!r}"
+                )
+
+
+def test_safe_audit_write_broadened_exception_scope(
+    override_deps, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """R5-18: ``_safe_audit_write`` must catch ANY exception (not just
+    LakebaseError) and emit ``event=audit.dropped`` with the exception
+    class name -- never ``str(exc)``.
+    """
+    # Build a lakebase + audit store that lets approve write succeed,
+    # but patch the shared resolver for the DRAFT path's audit write
+    # to raise a non-LakebaseError. The draft endpoint's
+    # _safe_audit_write runs on BackgroundTasks and must swallow the
+    # failure + emit the structured event.
+    class _ExplodingAuditStore:
+        def write(self, **kwargs: Any) -> Any:
+            raise RuntimeError("shouldnt-leak-this-message-r5-18")
+
+        def list(self, limit: int = 50) -> list[Any]:
+            return []
+
+    override_deps(audit=_ExplodingAuditStore(), lakebase=MagicMock())
+
+    import logging as _logging
+    # emit() logs at INFO by default; caplog must be at INFO or
+    # below to observe it. The R5-23 concern is "operator cranks to
+    # DEBUG and PII leaks" -- INFO is a fortiori covered.
+    caplog.set_level(_logging.DEBUG)
+    client = TestClient(app)
+    resp = client.post(
+        "/api/outreach/draft",
+        json={"borrower_id": "B-48291", "channel": "email"},
+    )
+    # Draft path still returns 200 -- the broken audit is a
+    # background-task failure that must not break the user path.
+    assert resp.status_code == 200
+
+    # The audit.dropped event WAS emitted with the exception class name.
+    # ``emit`` attaches the structured payload under ``mip_event`` +
+    # ``mip_extras`` -- see backend/services/observability.py::emit.
+    dropped = [
+        r for r in caplog.records
+        if getattr(r, "mip_event", "") == "audit.dropped"
+    ]
+    assert dropped, "expected an audit.dropped structured log record"
+    extras = getattr(dropped[0], "mip_extras", {}) or {}
+    assert extras.get("exc_type") == "RuntimeError"
+
+    # The exception MESSAGE must NOT appear anywhere in captured logs
+    # -- only the class name. This is the PII-safety contract.
+    for record in caplog.records:
+        assert "shouldnt-leak-this-message-r5-18" not in record.getMessage()

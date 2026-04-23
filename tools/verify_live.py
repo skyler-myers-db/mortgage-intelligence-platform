@@ -144,10 +144,11 @@ def probe(
     # with expect_status=403 that actually returned 200 would silently
     # pass (the 2xx-default branch didn't consult expect_status), masking
     # a real RBAC regression.
-    if expect_status is not None:
-        ok = status == expect_status
-    else:
-        ok = 200 <= status < 300
+    ok = (
+        status == expect_status
+        if expect_status is not None
+        else 200 <= status < 300
+    )
     return ProbeResult(
         name=name,
         method=method,
