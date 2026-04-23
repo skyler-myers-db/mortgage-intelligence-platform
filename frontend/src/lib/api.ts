@@ -1,10 +1,12 @@
 import type {
   Borrower360,
+  CountyRollupResponse,
   LeadSummary,
   OfferRecommendation,
   PortfolioPreview,
   SegmentSummary,
   StateRollupResponse,
+  ZipRollupResponse,
 } from '../types';
 
 /**
@@ -61,6 +63,17 @@ export interface GenieResult {
   metric_value?: string | null;
   table_rows?: Record<string, unknown>[] | null;
   follow_up_questions?: string[];
+}
+
+export interface AuditEventRow {
+  event_id: string;
+  actor: string;
+  action: string;
+  entity_type: string;
+  entity_id: string;
+  payload_json: Record<string, unknown>;
+  evidence_ids: string[];
+  created_at: string;
 }
 
 /** Structured error thrown by every api.* method on non-2xx or network failure. */
@@ -207,6 +220,16 @@ export const api = {
 
   stateRollups: () => getJson<StateRollupResponse>('/api/geo/state-rollups'),
 
+  countyRollups: (state: string) =>
+    getJson<CountyRollupResponse>(
+      `/api/geo/county-rollups?state=${encodeURIComponent(state.toUpperCase())}`,
+    ),
+
+  zipRollups: (fips: string) =>
+    getJson<ZipRollupResponse>(
+      `/api/geo/zip-rollups?fips=${encodeURIComponent(fips)}`,
+    ),
+
   leads: (segment?: string) =>
     getJson<LeadSummary[]>(
       segment ? `/api/leads?segment=${encodeURIComponent(segment)}` : '/api/leads',
@@ -300,4 +323,14 @@ export const api = {
 
   genie: (question: string) =>
     postJson<GenieResult, { question: string }>('/api/genie/message', { question }),
+
+  /**
+   * Recent audit events for the Agent Activity Log. Routes through the
+   * same retry/backoff loop as every other read so a transient 503 on
+   * Lakebase doesn't immediately render "feed unavailable" — callers
+   * get the same cadence the backend's Resilient wrapper runs at.
+   * Hole-finder finding #4, 2026-04-23.
+   */
+  auditEvents: (limit = 12) =>
+    getJson<AuditEventRow[]>(`/api/audit/events?limit=${limit}`),
 };

@@ -5,6 +5,7 @@ import { PageShell } from '../components/layout/PageShell';
 import { Chip } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { EntradaWordmark } from '../components/brand/Entrada';
+import { api } from '../lib/api';
 
 /**
  * Administration — operator-facing configuration for Module 0.
@@ -151,18 +152,18 @@ export default function AdminConfig() {
         setSourcesLoading(false);
       });
 
-    // Audit probe — if Lakebase is down, the router returns 503. We
-    // surface that honestly rather than claim audit is healthy.
-    fetch('/api/audit/events?limit=1')
-      .then(async (r) => {
-        if (!r.ok) {
-          throw new Error(`status ${r.status}`);
-        }
-        return (await r.json()) as AuditProbeShape[];
-      })
+    // Audit probe — routes through api.auditEvents so 503s follow the
+    // shared retry/backoff loop before reporting "unreachable".
+    // Hole-finder finding #4, 2026-04-23.
+    api
+      .auditEvents(1)
       .then((events) => {
         if (cancelled) return;
-        setAuditLatest(events.length > 0 ? events[0] : null);
+        const first = events.length > 0 ? events[0] : null;
+        // The admin probe only needs a subset of the AuditEventRow
+        // shape (event_id/actor/action/created_at). Cast to the local
+        // AuditProbeShape so the state contract stays narrow.
+        setAuditLatest(first as AuditProbeShape | null);
         setAuditLoading(false);
       })
       .catch((err: unknown) => {

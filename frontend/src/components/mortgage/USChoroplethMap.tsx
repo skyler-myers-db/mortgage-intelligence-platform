@@ -4,7 +4,8 @@ import type { Feature, FeatureCollection, Geometry } from 'geojson';
 import { Icon } from '../Icon';
 import { Chip } from '../Primitives';
 import { api } from '../../lib/api';
-import type { StateRollup } from '../../types';
+import { usePrefersReducedMotion } from '../../lib/usePrefersReducedMotion';
+import type { CountyRollup, StateRollup, ZipRollup } from '../../types';
 
 // Shape of the @svg-maps/usa default export (see vite-env.d.ts).
 interface UsaSvgMapLocation { name: string; id: string; path: string }
@@ -26,40 +27,26 @@ const SUPPORTED_COUNTY_STATES: Record<string, string> = {
   co: '08',
 };
 
-// County FIPS -> synthetic borrower count / avg score. Weighted so Cook
-// County (Chicago anchor), LA County, and Harris County stand out — those
-// are the three anchor metros. Slice 9 swapped GA/Fulton for IL/Cook;
-// all six footprint states have at least one populated county so the
-// geography drill surfaces real-looking density in any state the presenter
-// clicks into.
-// TODO: derive from backend when county rollups land.
-const COUNTY_FACTS: Record<string, { count: number; avgScore: number; lvl: 1 | 2 | 3 | 4 }> = {
-  // Illinois (Chicago metro anchor — Cook County is the hero)
-  '17031': { count: 620, avgScore: 86, lvl: 4 }, // Cook (Chicago anchor)
-  '17043': { count: 310, avgScore: 82, lvl: 3 }, // DuPage
-  '17089': { count: 245, avgScore: 80, lvl: 3 }, // Kane
-  '17097': { count: 265, avgScore: 80, lvl: 3 }, // Lake
-  '17197': { count: 210, avgScore: 78, lvl: 2 }, // Will
-  '17111': { count: 145, avgScore: 75, lvl: 2 }, // McHenry
-  // California (LA / SF / Silicon Valley)
-  '06037': { count: 720, avgScore: 85, lvl: 4 }, // Los Angeles
-  '06059': { count: 380, avgScore: 82, lvl: 3 }, // Orange
-  '06073': { count: 340, avgScore: 81, lvl: 3 }, // San Diego
-  '06085': { count: 420, avgScore: 84, lvl: 3 }, // Santa Clara
-  '06001': { count: 290, avgScore: 81, lvl: 3 }, // Alameda
-  '06075': { count: 210, avgScore: 80, lvl: 3 }, // San Francisco
-  '06065': { count: 260, avgScore: 78, lvl: 2 }, // Riverside
-  '06067': { count: 230, avgScore: 77, lvl: 2 }, // Sacramento
-  // Texas (Houston / Dallas / Austin / San Antonio)
-  '48201': { count: 540, avgScore: 83, lvl: 4 }, // Harris (Houston)
-  '48113': { count: 420, avgScore: 82, lvl: 3 }, // Dallas
-  '48453': { count: 360, avgScore: 82, lvl: 3 }, // Travis (Austin)
-  '48439': { count: 340, avgScore: 81, lvl: 3 }, // Tarrant (Fort Worth)
-  '48029': { count: 300, avgScore: 80, lvl: 3 }, // Bexar (San Antonio)
-  '48085': { count: 230, avgScore: 77, lvl: 2 }, // Collin
-  '48157': { count: 210, avgScore: 76, lvl: 2 }, // Fort Bend
-  '48491': { count: 180, avgScore: 75, lvl: 2 }, // Williamson
-};
+// Slice13-accuracy-validation: county + ZIP hover numbers now come from
+// /api/geo/county-rollups + /api/geo/zip-rollups (backed by
+// mip.gold.county_rollup + mip.gold.zip_rollup respectively). The prior
+// hardcoded COUNTY_FACTS + CHI_ZIP_TILES literals are gone -- any county /
+// ZIP not returned in the payload renders "—" on hover (honest null).
+// The fill-level bucket is derived from addressable_borrowers below.
+
+/** Map an addressable_borrower count to one of the four lvl fill tiers.
+ *  Thresholds tuned against the 6-state-footprint county distribution so
+ *  the visual contrast on the choropleth reads the way the prototype
+ *  intended (Cook / LA / Harris land at lvl-4; mid-density counties at
+ *  lvl-3; long tail at lvl-1/2). Deterministic so the map never
+ *  re-tints between identical refreshes. */
+function lvlFromCount(count: number | null | undefined): 1 | 2 | 3 | 4 {
+  if (count === null || count === undefined || count <= 0) return 1;
+  if (count >= 500) return 4;
+  if (count >= 250) return 3;
+  if (count >= 100) return 2;
+  return 1;
+}
 
 /**
  * USChoroplethMap — real interactive US state map with click-to-drill.
@@ -169,45 +156,53 @@ const SEGMENT_CODE_TO_NAME: Record<string, string> = {
 
 // ---------- Stylized county/ZIP drill-downs (fallback rendering) --------
 
+/** Stylized fallback polygon geometry for the county + ZIP drills. Only
+ *  the geometry (id, name, path `d`, optional ZIP deep-link anchor) is
+ *  baked in -- count + avgScore now come from /api/geo/county-rollups +
+ *  /api/geo/zip-rollups. A `lvl` default is provided for the county
+ *  fallback renderer (used when the TopoJSON hasn't resolved yet); the
+ *  live renderer computes lvl from the real borrower count. */
 interface DrillRegion {
   id: string;
   name: string;
   d: string;
-  lvl: 1 | 2 | 3 | 4;
-  count: number;
-  avgScore: number;
+  lvl?: 1 | 2 | 3 | 4;
+  // Optional visual-fallback fields kept on the stylized IL/ZIP tiles.
+  // The live render ignores these; they're consumed only when the
+  // TopoJSON / rollup API hasn't resolved yet.
+  count?: number;
+  avgScore?: number;
+  /** Sample borrower deep-link for ZIP tiles (ZIP rollup agent may swap
+   *  this for a backend-sourced sample_borrower_id). */
   borrowerId?: string;
 }
 
 // Chicago metro counties (stylized — prototype-style polygons keyed to the
 // IL county drill). Only rendered when the real TopoJSON hasn't resolved
-// yet or the drill state has no real polygons in us-counties.json. Grid
-// laid out in a 340x310 canvas to match the prototype's county viewBox.
-// Slice 9 rewrite: GA/Fulton/DeKalb/Cobb/Gwinnett -> IL/Cook/DuPage/Lake/
-// Kane/Will. Cook County is the hero (highest lvl, highest count).
+// yet. Grid laid out in a 340x310 canvas to match the prototype's county
+// viewBox. lvl is a visual fallback; the live renderer reads real counts.
 const IL_COUNTIES: DrillRegion[] = [
-  { id: 'lake',    name: 'Lake',    d: 'M40,40 L160,35 L165,115 L45,120 Z',   lvl: 3, count: 265, avgScore: 80 },
-  { id: 'mchenry', name: 'McHenry', d: 'M165,35 L300,40 L305,115 L165,115 Z', lvl: 2, count: 145, avgScore: 75 },
-  { id: 'cook',    name: 'Cook',    d: 'M40,120 L165,115 L170,220 L45,225 Z', lvl: 4, count: 620, avgScore: 86 },
-  { id: 'dupage',  name: 'DuPage',  d: 'M170,115 L305,115 L310,220 L170,220 Z', lvl: 3, count: 310, avgScore: 82 },
-  { id: 'other',   name: 'Other IL', d: 'M40,225 L310,225 L310,280 L40,280 Z', lvl: 1, count: 210, avgScore: 70 },
+  { id: 'lake',    name: 'Lake',    d: 'M40,40 L160,35 L165,115 L45,120 Z',     lvl: 3 },
+  { id: 'mchenry', name: 'McHenry', d: 'M165,35 L300,40 L305,115 L165,115 Z',   lvl: 2 },
+  { id: 'cook',    name: 'Cook',    d: 'M40,120 L165,115 L170,220 L45,225 Z',   lvl: 4 },
+  { id: 'dupage',  name: 'DuPage',  d: 'M170,115 L305,115 L310,220 L170,220 Z', lvl: 3 },
+  { id: 'other',   name: 'Other IL', d: 'M40,225 L310,225 L310,280 L40,280 Z',  lvl: 1 },
 ];
 
-// ZIPs within Cook County (Chicago) — 60611 (Streeterville / Gold Coast) is
-// the sample-borrower anchor, matching B-48291 in
-// tests/fixtures/mock_population. Slice 9 replaced the Atlanta ZIP set
-// (30305/30309/30324/30339/30308/30318) with Cook County ZIPs so the map
-// drill terminates on the real sample borrower.
+// ZIP tiles within Cook County (Chicago). Slice13-accuracy-validation:
+// count + avgScore literals are gone -- those come from
+// /api/geo/zip-rollups?fips=17031. `sample_borrower_id` is also pulled
+// from the payload, not baked in here. The tile geometry (x/y/width/
+// height/label) is kept as a purely visual layout hint.
 //
-// 2026-04-23 audit: dropped 60614 / 60610 / 60657 from the rendered tile
-// set. They lacked a `borrowerId` and silently no-opped on click, which
-// broke the drill promise ("click a ZIP to open borrower"). Re-add them
-// once the borrower dataset expansion slice lands sample borrowers in
-// those ZIPs.
-const CHI_ZIPS: DrillRegion[] = [
-  { id: '60611', name: '60611', d: 'M30,30 L110,30 L110,100 L30,100 Z',   lvl: 4, count: 94, avgScore: 94, borrowerId: 'B-48291' },
-  { id: '60647', name: '60647', d: 'M110,30 L200,30 L200,100 L110,100 Z', lvl: 3, count: 72, avgScore: 82, borrowerId: 'B-48294' },
-  { id: '60613', name: '60613', d: 'M200,30 L280,30 L280,100 L200,100 Z', lvl: 3, count: 58, avgScore: 80, borrowerId: 'B-48295' },
+// 2026-04-23 audit note: the three tiles below (60611/60647/60613) are
+// the ones the CTAS currently returns a sample_borrower_id for. If the
+// gold CTAS later lands a sample for 60614/60610/60657, add tiles for
+// them here -- the live fetch will resolve the rest.
+const CHI_ZIP_TILES: DrillRegion[] = [
+  { id: '60611', name: '60611', d: 'M30,30 L110,30 L110,100 L30,100 Z'   },
+  { id: '60647', name: '60647', d: 'M110,30 L200,30 L200,100 L110,100 Z' },
+  { id: '60613', name: '60613', d: 'M200,30 L280,30 L280,100 L200,100 Z' },
 ];
 
 type Level = 'state' | 'county' | 'zip';
@@ -336,6 +331,11 @@ export function USChoroplethMap({
   const [selected, setSelected] = useState<Selected | null>(null);
   const [hover, setHover] = useState<HoverState | null>(null);
   const [usaMap, setUsaMap] = useState<UsaSvgMap | null>(null);
+  // Reduced-motion guard for SVG SMIL pulses (IllinoisBeacon + Cook
+  // centroid). CSS `prefers-reduced-motion` doesn't cover <animate>;
+  // we conditionally render the animating child when the user prefers
+  // reduced motion. Hole-finder finding #18, 2026-04-23.
+  const reduceMotion = usePrefersReducedMotion();
   // Which supported state we drilled into (for county rendering).
   const [countyStateId, setCountyStateId] = useState<string | null>(null);
   const [countiesByState, setCountiesByState] = useState<Record<string, CountiesPayload>>({});
@@ -344,6 +344,13 @@ export function USChoroplethMap({
   // = API unreachable (fall back to STATE_FACTS literal). Keyed by
   // lowercase state code to match @svg-maps/usa location ids.
   const [liveStateFacts, setLiveStateFacts] = useState<Record<string, StateRollup> | null>(null);
+  // Per-state county rollups lazy-loaded on drill. Keyed by uppercase
+  // state code. Each value is a dict keyed by 5-char FIPS so the map's
+  // county renderer can O(1) look up a county's live count / avg score.
+  const [liveCountyFacts, setLiveCountyFacts] = useState<Record<string, Record<string, CountyRollup>>>({});
+  // Per-county ZIP rollups lazy-loaded on county drill. Keyed by 5-char
+  // county FIPS. Value is a dict keyed by 5-digit ZIP.
+  const [liveZipFacts, setLiveZipFacts] = useState<Record<string, Record<string, ZipRollup>>>({});
   const navigate = useNavigate();
 
   // Lazy-load the @svg-maps/usa data so the ~140 KB of path strings lands
@@ -388,6 +395,61 @@ export function USChoroplethMap({
       cancelled = true;
     };
   }, []);
+
+  // Lazy-fetch county rollups on drill. /api/geo/county-rollups?state=XX
+  // returns real counts / avg_score / top_segment_code per FIPS from
+  // mip.gold.county_rollup. Missing counties render "—" (honest null).
+  useEffect(() => {
+    if (level !== 'county' || !countyStateId) return;
+    const stateUC = countyStateId.toUpperCase();
+    if (liveCountyFacts[stateUC]) return;
+    let cancelled = false;
+    api
+      .countyRollups(stateUC)
+      .then((payload) => {
+        if (cancelled) return;
+        const byFips: Record<string, CountyRollup> = {};
+        for (const r of payload.rollups) byFips[r.fips_5] = r;
+        setLiveCountyFacts((cur) => ({ ...cur, [stateUC]: byFips }));
+      })
+      .catch(() => {
+        if (!cancelled) {
+          // Empty dict means "we tried, nothing came back" -- hover falls
+          // back to "—" instead of blocking re-fetches on every render.
+          setLiveCountyFacts((cur) => ({ ...cur, [stateUC]: {} }));
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [level, countyStateId, liveCountyFacts]);
+
+  // Lazy-fetch ZIP rollups when the user drills into Cook (17031). The
+  // CTAS only populates ZIPs for counties with borrower rows, so other
+  // counties resolve to an empty list; the UI tolerates that.
+  useEffect(() => {
+    if (level !== 'zip') return;
+    // Cook is the only county that drills to ZIP level today; a future
+    // slice can drive this from `selected.id` when other counties get
+    // ZIP tile sets.
+    const fips = '17031';
+    if (liveZipFacts[fips]) return;
+    let cancelled = false;
+    api
+      .zipRollups(fips)
+      .then((payload) => {
+        if (cancelled) return;
+        const byZip: Record<string, ZipRollup> = {};
+        for (const r of payload.rollups) byZip[r.zip] = r;
+        setLiveZipFacts((cur) => ({ ...cur, [fips]: byZip }));
+      })
+      .catch(() => {
+        if (!cancelled) setLiveZipFacts((cur) => ({ ...cur, [fips]: {} }));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [level, liveZipFacts]);
 
   // Lazy-load real county polygons when drilled into a supported state.
   // us-counties.json is a pre-trimmed TopoJSON (~170KB raw / ~57KB
@@ -480,31 +542,38 @@ export function USChoroplethMap({
     );
   }, [segmentFilter]);
 
-  /** Merge the live state rollup (count/avgScore from
-   *  /api/geo/state-rollups) with the static STATE_FACTS metadata
-   *  (lvl/topSegment). Prefers live counts when present; falls back to
-   *  the static literal so the map stays usable when the API is down. */
+  /** Merge the live state rollup (count / avg_score / top_segment_code
+   *  from /api/geo/state-rollups) with the static STATE_FACTS metadata
+   *  (lvl). Prefers the live top_segment_code when the backend returns
+   *  one; falls back to the hardcoded STATE_FACTS[*].topSegment only
+   *  when the endpoint errored (slice13-accuracy-validation). */
   const factsFor = useMemo(() => {
     return (uscode: string): StateFacts | undefined => {
       const live = liveStateFacts?.[uscode];
       const stat = STATE_FACTS[uscode];
+      const liveTopSegment = live?.top_segment_code
+        ? (SEGMENT_CODE_TO_NAME[live.top_segment_code] ?? '')
+        : '';
       if (live && stat) {
         return {
           count: live.addressable,
           avgScore: live.avg_score || stat.avgScore,
           lvl: stat.lvl,
-          topSegment: stat.topSegment,
+          // Prefer the live segment label; only fall back to the static
+          // literal when the API did not return a segment code.
+          topSegment: liveTopSegment || stat.topSegment,
         };
       }
       if (live) {
         // State not in STATE_FACTS literal — synthesize minimal facts so
         // the hover still shows the real count. lvl defaults to 2 (mid
-        // tier); topSegment blank so the tooltip row hides.
+        // tier); topSegment uses the live value when present else blank
+        // so the tooltip row hides.
         return {
           count: live.addressable,
           avgScore: live.avg_score,
           lvl: 2,
-          topSegment: '',
+          topSegment: liveTopSegment,
         };
       }
       return stat;
@@ -535,17 +604,28 @@ export function USChoroplethMap({
       return Object.values(STATE_FACTS).reduce((a, b) => a + b.count, 0);
     }
     if (level === 'county') {
-      const payload = countyStateId ? countiesByState[countyStateId] : null;
-      if (payload) {
-        return payload.features.reduce(
-          (a, f) => a + (COUNTY_FACTS[f.id]?.count ?? 40),
+      const stateUC = countyStateId?.toUpperCase() ?? '';
+      const liveByFips = liveCountyFacts[stateUC];
+      if (liveByFips) {
+        return Object.values(liveByFips).reduce(
+          (a, r) => a + (r.addressable_borrowers ?? 0),
           0,
         );
       }
-      return IL_COUNTIES.reduce((a, b) => a + b.count, 0);
+      // Pre-fetch placeholder: show the state-level count so the legend
+      // doesn't flash 0 while the county payload is in flight.
+      return liveStateFacts?.[countyStateId ?? '']?.addressable ?? 0;
     }
-    return CHI_ZIPS.reduce((a, b) => a + b.count, 0);
-  }, [level, countyStateId, countiesByState, liveStateFacts]);
+    // ZIP level
+    const liveByZip = liveZipFacts['17031'];
+    if (liveByZip) {
+      return Object.values(liveByZip).reduce(
+        (a, r) => a + (r.addressable_borrowers ?? 0),
+        0,
+      );
+    }
+    return 0;
+  }, [level, countyStateId, liveStateFacts, liveCountyFacts, liveZipFacts]);
 
   // ----- STATE level: real US paths via @svg-maps/usa ----------------------
   const renderStateLevel = () => {
@@ -646,8 +726,10 @@ export function USChoroplethMap({
           />
         );
       })}
-      {/* Pulse beacon over Illinois to telegraph the county drill */}
-      <IllinoisBeacon />
+      {/* Pulse beacon over Illinois to telegraph the county drill. The
+          animated rings are suppressed when the user prefers reduced
+          motion; a static dot renders instead. */}
+      <IllinoisBeacon reduceMotion={reduceMotion} />
     </svg>
     );
   };
@@ -667,7 +749,7 @@ export function USChoroplethMap({
           style={{ marginTop: 36, height: 'calc(100% - 36px)' }}
         >
           {IL_COUNTIES.map((c) => {
-            const classes = ['map-region', `lvl-${c.lvl}`].join(' ');
+            const classes = ['map-region', `lvl-${c.lvl ?? 1}`].join(' ');
             return <path key={c.id} d={c.d} className={classes} />;
           })}
           <text
@@ -716,8 +798,11 @@ export function USChoroplethMap({
         style={{ marginTop: 36, height: 'calc(100% - 36px)' }}
       >
         {payload.features.map((f) => {
-          const facts = COUNTY_FACTS[f.id];
-          const lvl = facts?.lvl ?? 1;
+          const stateUC = countyStateId?.toUpperCase() ?? '';
+          const liveFacts = liveCountyFacts[stateUC]?.[f.id];
+          const count = liveFacts?.addressable_borrowers ?? null;
+          const avgScore = liveFacts?.avg_opportunity_score ?? null;
+          const lvl = lvlFromCount(count);
           const isCook = f.id === '17031';
           const classes = [
             'map-region',
@@ -739,11 +824,11 @@ export function USChoroplethMap({
                   x: e.clientX,
                   y: e.clientY,
                   name: `${f.name} County, ${stateName}`,
-                  // Honest null when we don't have a county-level
-                  // rollup in gold. 2026-04-23 audit: the prior `?? 40`
-                  // fabrication was called out — render "—" instead.
-                  count: facts?.count ?? null,
-                  avgScore: facts?.avgScore ?? null,
+                  // Honest null when the live payload hasn't returned a
+                  // row for this county (either pre-fetch or the CTAS
+                  // excluded it as out-of-footprint). Tooltip renders "—".
+                  count,
+                  avgScore,
                 })
               }
               onMouseMove={(e) =>
@@ -772,25 +857,29 @@ export function USChoroplethMap({
           );
         })}
         {/* Pulse beacon over Cook when drilled into IL — telegraphs the
-             "Chicago drill" path. */}
+             "Chicago drill" path. Animated rings are suppressed when the
+             user prefers reduced motion; a static dot renders instead.
+             Hole-finder finding #18, 2026-04-23. */}
         {payload.cookCentroid && (
           <g pointerEvents="none">
-            <circle
-              cx={payload.cookCentroid.x}
-              cy={payload.cookCentroid.y}
-              r="6"
-              fill="var(--accent)"
-              fillOpacity="0.25"
-            >
-              <animate attributeName="r" from="4" to="18" dur="1.8s" repeatCount="indefinite" />
-              <animate
-                attributeName="fill-opacity"
-                from="0.35"
-                to="0"
-                dur="1.8s"
-                repeatCount="indefinite"
-              />
-            </circle>
+            {!reduceMotion && (
+              <circle
+                cx={payload.cookCentroid.x}
+                cy={payload.cookCentroid.y}
+                r="6"
+                fill="var(--accent)"
+                fillOpacity="0.25"
+              >
+                <animate attributeName="r" from="4" to="18" dur="1.8s" repeatCount="indefinite" />
+                <animate
+                  attributeName="fill-opacity"
+                  from="0.35"
+                  to="0"
+                  dur="1.8s"
+                  repeatCount="indefinite"
+                />
+              </circle>
+            )}
             <circle
               cx={payload.cookCentroid.x}
               cy={payload.cookCentroid.y}
@@ -810,10 +899,18 @@ export function USChoroplethMap({
       preserveAspectRatio="xMidYMid meet"
       style={{ marginTop: 36, height: 'calc(100% - 36px)' }}
     >
-      {CHI_ZIPS.map((z) => {
+      {CHI_ZIP_TILES.map((z) => {
+        // Live ZIP facts from /api/geo/zip-rollups?fips=17031. Count /
+        // avg_score / sample_borrower_id all come from the payload.
+        // Pre-fetch renders count=null (tooltip shows "—") and a no-op
+        // click (no sample_borrower_id yet).
+        const liveFacts = liveZipFacts['17031']?.[z.id];
+        const count = liveFacts?.addressable_borrowers ?? null;
+        const avgScore = liveFacts?.avg_opportunity_score ?? null;
+        const sampleBorrowerId = liveFacts?.sample_borrower_id ?? null;
         const classes = [
           'map-region',
-          `lvl-${z.lvl}`,
+          `lvl-${lvlFromCount(count)}`,
           selected?.level === 'zip' && selected.id === z.id ? 'is-selected' : '',
         ]
           .filter(Boolean)
@@ -828,13 +925,8 @@ export function USChoroplethMap({
                   x: e.clientX,
                   y: e.clientY,
                   name: `ZIP ${z.name}, Chicago IL`,
-                  // 2026-04-23 audit: ZIP-level rollups do not exist in
-                  // mip.gold yet. The synthetic z.count / z.avgScore
-                  // were honest enough at demo scale but still a fib —
-                  // render "—" until ZIP gold lands. Click-through to
-                  // the sample borrower is what matters at this level.
-                  count: null,
-                  avgScore: null,
+                  count,
+                  avgScore,
                 })
               }
               onMouseMove={(e) =>
@@ -843,8 +935,8 @@ export function USChoroplethMap({
               onMouseLeave={() => setHover(null)}
               onClick={() => {
                 setSelected({ level: 'zip', id: z.id, name: z.name });
-                if (z.borrowerId) {
-                  navigate(`/borrower-360/${z.borrowerId}`);
+                if (sampleBorrowerId) {
+                  navigate(`/borrower-360/${sampleBorrowerId}`);
                 }
               }}
             />
@@ -1023,20 +1115,28 @@ export { USChoroplethMap as MapPlaceholder };
  * around x≈833 y≈300 in that projection — roughly Chicago's pixel position
  * on the Albers map, which doubles as the anchor metro hint for the
  * default drill. Slice 9 swapped this in for the former GeorgiaBeacon.
+ *
+ * When `reduceMotion` is `true` (user OS opt-out via
+ * `prefers-reduced-motion: reduce`) we render only the static dot and
+ * omit the SMIL `<animate>` children. CSS reduced-motion rules don't
+ * cover SVG SMIL, so this guard has to live in the JSX. Hole-finder
+ * finding #18, 2026-04-23.
  */
-function IllinoisBeacon() {
+function IllinoisBeacon({ reduceMotion }: { reduceMotion: boolean }) {
   return (
     <g pointerEvents="none">
-      <circle cx="833" cy="300" r="10" fill="var(--accent)" fillOpacity="0.2">
-        <animate attributeName="r" from="6" to="24" dur="1.8s" repeatCount="indefinite" />
-        <animate
-          attributeName="fill-opacity"
-          from="0.35"
-          to="0"
-          dur="1.8s"
-          repeatCount="indefinite"
-        />
-      </circle>
+      {!reduceMotion && (
+        <circle cx="833" cy="300" r="10" fill="var(--accent)" fillOpacity="0.2">
+          <animate attributeName="r" from="6" to="24" dur="1.8s" repeatCount="indefinite" />
+          <animate
+            attributeName="fill-opacity"
+            from="0.35"
+            to="0"
+            dur="1.8s"
+            repeatCount="indefinite"
+          />
+        </circle>
+      )}
       <circle cx="833" cy="300" r="4" fill="var(--accent)" />
     </g>
   );

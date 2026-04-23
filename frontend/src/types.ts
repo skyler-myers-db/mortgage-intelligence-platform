@@ -155,16 +155,55 @@ export interface GenieAnswer {
 
 /** Per-state aggregate row from `/api/geo/state-rollups` (see
  *  backend/schemas/geo.py). `state` is the uppercase USPS code. Consumed
- *  by the USChoroplethMap when the API wiring lands. */
+ *  by the USChoroplethMap state level. `top_segment_code` was added in
+ *  slice13-accuracy-validation so the map can drop the hardcoded
+ *  STATE_FACTS[*].topSegment literal. */
 export interface StateRollup {
   state: string;
   addressable: number;
   in_the_money: number;
   top_tier_opportunities: number;
   avg_score: number;
+  top_segment_code?: string | null;
 }
 
 export interface StateRollupResponse {
   rollups: StateRollup[];
+  snapshot_date?: string | null;
+}
+
+/** Per-county aggregate row from `/api/geo/county-rollups?state=XX`. */
+export interface CountyRollup {
+  fips_5: string;
+  state: string;
+  county_name?: string | null;
+  addressable_borrowers: number;
+  in_the_money_borrowers: number;
+  high_opportunity_borrowers: number;
+  avg_opportunity_score: number;
+  top_segment_code?: string | null;
+}
+
+export interface CountyRollupResponse {
+  state: string;
+  rollups: CountyRollup[];
+  snapshot_date?: string | null;
+}
+
+/** Per-ZIP aggregate row from `/api/geo/zip-rollups?fips=NNNNN`.
+ *  `sample_borrower_id` is the stable-ranked top borrower for deep-link. */
+export interface ZipRollup {
+  zip: string;
+  state: string;
+  county_fips_5?: string | null;
+  addressable_borrowers: number;
+  avg_opportunity_score: number;
+  top_segment_code?: string | null;
+  sample_borrower_id?: string | null;
+}
+
+export interface ZipRollupResponse {
+  fips_5: string;
+  rollups: ZipRollup[];
   snapshot_date?: string | null;
 }

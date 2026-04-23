@@ -37,6 +37,10 @@ export default function Home() {
   const { lender } = useApp();
   const [preview, setPreview] = useState<PortfolioPreview | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
+  // Reload token — incrementing it via the Retry button re-runs the
+  // portfolio-preview fetch without a full route reload. Hole-finder
+  // finding #1, 2026-04-23.
+  const [reloadToken, setReloadToken] = useState<number>(0);
   useEffect(() => {
     let cancelled = false;
     api
@@ -57,7 +61,7 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [reloadToken]);
 
   const queued = preview?.high_intent_leads ?? null;
 
@@ -89,9 +93,21 @@ export default function Home() {
             borderRadius: 'var(--r-md)',
             color: 'var(--signal-danger)',
             fontSize: 12,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 12,
           }}
         >
-          Couldn&apos;t load portfolio KPIs: {previewError}
+          <span>Couldn&apos;t load portfolio KPIs: {previewError}</span>
+          <button
+            type="button"
+            className="btn btn--ghost btn--sm"
+            onClick={() => setReloadToken((n) => n + 1)}
+            aria-label="Retry loading portfolio KPIs"
+          >
+            Retry
+          </button>
         </div>
       )}
       <div className="kpi-row">

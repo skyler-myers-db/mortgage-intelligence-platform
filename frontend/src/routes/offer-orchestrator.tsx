@@ -18,6 +18,37 @@ function shortSourceLabel(source: string): string {
   return source.split('.').pop() ?? source;
 }
 
+/**
+ * Module-scoped stale-while-revalidate cache for the three per-borrower
+ * fetches (`api.borrower`, `api.recommendOffer`, `api.draftOutreach`).
+ *
+ * The backend's resilience layer already caches the portfolio preview,
+ * but the per-borrower dossier path was unbuffered — navigating
+ * back/forward between borrowers re-fired three API calls each trip.
+ * This cache keeps a 5-minute TTL snapshot in memory so the user sees
+ * instant hydration on revisit; the effect still re-fetches in the
+ * background when the token increments so the data stays live.
+ *
+ * Hole-finder finding #23, 2026-04-23.
+ */
+interface BorrowerCacheEntry {
+  borrower: Borrower360Type;
+  recommendation: OfferRecommendation;
+  draftBody: string | null;
+  fetched: number;
+}
+const BORROWER_CACHE = new Map<string, BorrowerCacheEntry>();
+const BORROWER_CACHE_TTL_MS = 5 * 60 * 1000;
+function readBorrowerCache(id: string): BorrowerCacheEntry | null {
+  const hit = BORROWER_CACHE.get(id);
+  if (!hit) return null;
+  if (Date.now() - hit.fetched > BORROWER_CACHE_TTL_MS) {
+    BORROWER_CACHE.delete(id);
+    return null;
+  }
+  return hit;
+}
+
 /** Human-readable threshold labels. Keeps the "if you raised X here" story tangible. */
 const THRESHOLD_LABELS: Record<string, string> = {
   min_spread_bps: 'Min spread (bps)',
@@ -47,6 +78,9 @@ export default function OfferOrchestrator() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [approveError, setApproveError] = useState<string | null>(null);
   const [auditId, setAuditId] = useState<string | null>(null);
+  // Reload token re-runs the borrower + recommend + draft fetches.
+  // Hole-finder finding #1, 2026-04-23.
+  const [reloadToken, setReloadToken] = useState<number>(0);
   // 2026-04-22: the draft textarea is now controlled and hydrated from
   // /api/outreach/draft so edits persist through approve (they were
   // being dropped on a JSX string literal before). `draftLoaded` tracks
@@ -60,16 +94,42 @@ export default function OfferOrchestrator() {
   useEffect(() => {
     if (!id) return;
     let cancelled = false;
-    setB(null);
-    setRec(null);
-    setLoadError(null);
-    setDraftBody('');
-    setDraftLoaded(false);
+    // SWR: if we have a cached snapshot that's still fresh, hydrate
+    // from it immediately so navigating back to a borrower is instant.
+    // We still refetch in the background so the data stays live.
+    const cached = readBorrowerCache(id);
+    if (cached && reloadToken === 0) {
+      setB(cached.borrower);
+      setRec(cached.recommendation);
+      setLoadError(null);
+      if (cached.draftBody && cached.draftBody.trim().length > 0) {
+        setDraftBody(cached.draftBody);
+        setDraftLoaded(true);
+      } else {
+        setDraftBody('');
+        setDraftLoaded(false);
+      }
+    } else {
+      setB(null);
+      setRec(null);
+      setLoadError(null);
+      setDraftBody('');
+      setDraftLoaded(false);
+    }
     Promise.all([api.borrower(id), api.recommendOffer(id)])
       .then(([borrower, recommendation]) => {
         if (cancelled) return;
         setB(borrower);
         setRec(recommendation);
+        // Merge into cache; draftBody gets updated by the parallel
+        // fetch below.
+        const prev = BORROWER_CACHE.get(id);
+        BORROWER_CACHE.set(id, {
+          borrower,
+          recommendation,
+          draftBody: prev?.draftBody ?? null,
+          fetched: Date.now(),
+        });
       })
       .catch((err: unknown) => {
         if (cancelled) return;
@@ -91,6 +151,14 @@ export default function OfferOrchestrator() {
         if (draft?.body && draft.body.trim().length > 0) {
           setDraftBody(draft.body);
           setDraftLoaded(true);
+          const prev = BORROWER_CACHE.get(id);
+          if (prev) {
+            BORROWER_CACHE.set(id, {
+              ...prev,
+              draftBody: draft.body,
+              fetched: Date.now(),
+            });
+          }
         }
       })
       .catch(() => {
@@ -99,7 +167,7 @@ export default function OfferOrchestrator() {
     return () => {
       cancelled = true;
     };
-  }, [id]);
+  }, [id, reloadToken]);
 
   // Offer Orchestrator is a per-borrower action page; without an id
   // there's nothing to draft an outreach for. Redirect to lead queue.
@@ -193,6 +261,14 @@ Reply or call 1-800-XXX-XXXX.`
         <div className="surface">
           <div className="surface__body" style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
             <Chip variant="danger" icon="cross">Backend unavailable</Chip>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => setReloadToken((n) => n + 1)}
+              aria-label="Retry loading borrower and offer"
+            >
+              Retry
+            </button>
             <Link className="btn" to="/lead-queue">
               Back to lead queue
             </Link>

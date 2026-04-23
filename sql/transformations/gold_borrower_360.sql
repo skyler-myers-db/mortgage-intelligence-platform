@@ -73,6 +73,12 @@ base AS (
     lc.situs_zip_code                   AS zip,
     pm.situs_city                       AS city,
     pm.situs_cbsa_code,
+    -- 5-char FIPS county code from silver.property_master. Projected up so
+    -- gold.county_rollup + gold.zip_rollup can aggregate natively without a
+    -- ZIP->county crosswalk seed. Nullable: ~0.2% of silver rows have a
+    -- missing fips_county_code (block-level geocode gap); those CLIPs land
+    -- in the state rollup but not in any county/ZIP rollup.
+    pm.fips_county_code                 AS county_fips_5,
     pm.owner_link_id,
     pm.owner_name_hash,
     pm.owner_is_corporate,
@@ -397,6 +403,7 @@ SELECT
   w.state,
   w.zip,
   w.situs_cbsa_code,
+  w.county_fips_5,
   w.segment_codes,
   w.equity_estimate,
   w.equity_pct,

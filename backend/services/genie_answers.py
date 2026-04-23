@@ -155,7 +155,7 @@ def _answers() -> dict[str, GenieMessageResponse]:
             source="lead_generation_metric_view",
             trusted_assets=[
                 "mip.gold.lead_population",
-                "mip.gold.lead_segment_membership",
+                "mip.gold.segment_population",
                 "mip.gold.lead_scores",
             ],
             metric_value="12,840",
@@ -191,8 +191,8 @@ def _answers() -> dict[str, GenieMessageResponse]:
             ),
             source="segment_performance_metric_view",
             trusted_assets=[
-                "mip.gold.lead_segment_membership",
-                "mip.gold.recommended_offers",
+                "mip.gold.segment_population",
+                "mip.gold.borrower_360",
             ],
             metric_value="3,471",
             follow_up_questions=[
@@ -282,8 +282,8 @@ def _answers() -> dict[str, GenieMessageResponse]:
             ),
             source="segment_performance_metric_view",
             trusted_assets=[
-                "mip.gold.lead_segment_membership",
-                "mip.gold.recommended_offers",
+                "mip.gold.segment_population",
+                "mip.gold.borrower_360",
             ],
             metric_value="2,614",
             table_rows=[
@@ -307,9 +307,9 @@ def _answers() -> dict[str, GenieMessageResponse]:
             ),
             source="recommended_offers",
             trusted_assets=[
-                "mip.gold.recommended_offers",
+                "mip.gold.borrower_360",
                 "mip.gold.lead_scores",
-                "mip.gold.fn_in_the_money",
+                "mip.semantics.borrower_opportunity_metric_view",
             ],
             metric_value="1,842",
             follow_up_questions=[
@@ -330,7 +330,7 @@ def _answers() -> dict[str, GenieMessageResponse]:
             source="segment_performance_metric_view",
             trusted_assets=[
                 "mip.semantics.segment_performance_metric_view",
-                "mip.gold.recommended_offers",
+                "mip.gold.borrower_360",
             ],
             table_rows=[
                 _segment_row("retention") | {"est_conv": "14.8%"},
@@ -355,7 +355,7 @@ def _answers() -> dict[str, GenieMessageResponse]:
             source="segment_performance_metric_view",
             trusted_assets=[
                 "mip.semantics.segment_performance_metric_view",
-                "mip.gold.lead_segment_membership",
+                "mip.gold.segment_population",
             ],
             table_rows=[
                 _segment_row("listed"),
@@ -407,7 +407,7 @@ def _answers() -> dict[str, GenieMessageResponse]:
             trusted_assets=[
                 "mip.gold.borrower_360",
                 "mip.gold.lead_scores",
-                "mip.gold.fn_rate_spread",
+                "mip.semantics.borrower_opportunity_metric_view",
             ],
             table_rows=austin,
             follow_up_questions=[

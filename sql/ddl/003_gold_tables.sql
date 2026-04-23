@@ -81,6 +81,7 @@ CREATE TABLE IF NOT EXISTS mip.gold.borrower_360 (
   state                     STRING    NOT NULL COMMENT 'Situs state (6-state footprint).',
   zip                       STRING             COMMENT '5-digit situs ZIP.',
   situs_cbsa_code           STRING             COMMENT 'CBSA metro code.',
+  county_fips_5             STRING             COMMENT '5-char FIPS county code from silver.property_master.fips_county_code. Feeds gold.county_rollup + gold.zip_rollup.',
   segment_codes             ARRAY<STRING> NOT NULL COMMENT 'Ordered SegmentCode list.',
   equity_estimate           BIGINT    NOT NULL COMMENT 'USD.',
   equity_pct                INT       NOT NULL COMMENT '0..100.',
@@ -371,6 +372,80 @@ TBLPROPERTIES (
 --     order + types) with that SELECT list; liquid clustering on
 --     borrower_id so the indexed-row lookup hits the cluster key.
 -- -----------------------------------------------------------------------------
+-- -----------------------------------------------------------------------------
+-- 11. mip.gold.county_rollup
+--     Per-county aggregate keyed on 5-char FIPS + snapshot_date. Backs
+--     /api/geo/county-rollups for the USChoroplethMap county drill.
+--     See sql/ddl/gold_county_rollup.sql for column comments.
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS mip.gold.county_rollup (
+  fips_5                       STRING    NOT NULL COMMENT '5-char FIPS: 2-char state + 3-char county.',
+  state                        STRING    NOT NULL COMMENT '2-char USPS state code.',
+  county_name                  STRING             COMMENT 'Human county name; NULL until crosswalk seed lands.',
+  addressable_borrowers        INT       NOT NULL COMMENT 'Population count for this county.',
+  in_the_money_borrowers       INT       NOT NULL COMMENT 'COUNT where in_the_money = TRUE.',
+  high_opportunity_borrowers   INT       NOT NULL COMMENT 'COUNT where opportunity_score >= 75.',
+  avg_opportunity_score        INT       NOT NULL COMMENT 'AVG(opportunity_score) rounded to int.',
+  top_segment_code             STRING             COMMENT 'Dominant segment_code by count.',
+  snapshot_date                DATE      NOT NULL COMMENT 'Refresh date; daily grain.',
+  snapshot_at                  TIMESTAMP NOT NULL COMMENT 'Precise refresh timestamp.'
+)
+USING DELTA
+CLUSTER BY (state, fips_5)
+COMMENT 'Per-county aggregate from gold.borrower_360.county_fips_5.'
+TBLPROPERTIES (
+  'delta.enableChangeDataFeed' = 'false',
+  'delta.autoOptimize.optimizeWrite' = 'true',
+  'delta.autoOptimize.autoCompact'   = 'true'
+);
+
+-- -----------------------------------------------------------------------------
+-- 12. mip.gold.zip_rollup
+--     Per-ZIP aggregate with county FIPS + a stable-ranked sample_borrower_id
+--     so the USChoroplethMap's ZIP-tile deep-link lands on a real dossier.
+--     See sql/ddl/gold_zip_rollup.sql for column comments.
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS mip.gold.zip_rollup (
+  zip                       STRING    NOT NULL COMMENT '5-digit ZIP.',
+  state                     STRING    NOT NULL COMMENT '2-char USPS state code.',
+  county_fips_5             STRING             COMMENT '5-char county FIPS (nullable).',
+  addressable_borrowers     INT       NOT NULL COMMENT 'Population count for this ZIP.',
+  avg_opportunity_score     INT       NOT NULL COMMENT 'AVG(opportunity_score) rounded to int.',
+  top_segment_code          STRING             COMMENT 'Dominant segment_code by count.',
+  sample_borrower_id        STRING             COMMENT 'Stable-ranked top borrower_id in the ZIP.',
+  snapshot_date             DATE      NOT NULL COMMENT 'Refresh date; daily grain.',
+  snapshot_at               TIMESTAMP NOT NULL COMMENT 'Precise refresh timestamp.'
+)
+USING DELTA
+CLUSTER BY (state, zip)
+COMMENT 'Per-ZIP aggregate from gold.borrower_360 + stable sample_borrower_id for UI deep-link.'
+TBLPROPERTIES (
+  'delta.enableChangeDataFeed' = 'false',
+  'delta.autoOptimize.optimizeWrite' = 'true',
+  'delta.autoOptimize.autoCompact'   = 'true'
+);
+
+-- -----------------------------------------------------------------------------
+-- 13. mip.gold.state_top_segment
+--     Per-state dominant segment + share %. Feeds top_segment_code extension
+--     on /api/geo/state-rollups so the map reads gold, not STATE_FACTS.
+--     See sql/ddl/gold_state_top_segment.sql for column comments.
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS mip.gold.state_top_segment (
+  state                    STRING    NOT NULL COMMENT '2-char USPS state code.',
+  top_segment_code         STRING    NOT NULL COMMENT 'Dominant SegmentCode; "none" when empty.',
+  top_segment_share_pct    INT       NOT NULL COMMENT 'Share of state population in the top segment, 0..100.',
+  snapshot_date            DATE      NOT NULL COMMENT 'Refresh date; daily grain.'
+)
+USING DELTA
+CLUSTER BY (state)
+COMMENT 'Per-state top-segment rollup from gold.borrower_360.segment_codes exploded.'
+TBLPROPERTIES (
+  'delta.enableChangeDataFeed' = 'false',
+  'delta.autoOptimize.optimizeWrite' = 'true',
+  'delta.autoOptimize.autoCompact'   = 'true'
+);
+
 CREATE TABLE IF NOT EXISTS mip.gold.borrower_dossier (
   clip                      STRING    NOT NULL COMMENT 'CLIP. 1:1 with borrower_360.clip.',
   borrower_id               STRING    NOT NULL COMMENT 'Synthetic id; cluster key. Matches borrower_360.borrower_id.',

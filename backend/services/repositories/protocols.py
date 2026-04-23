@@ -22,7 +22,11 @@ from __future__ import annotations
 from typing import Protocol, runtime_checkable
 
 from backend.schemas.common import EvidenceEvent
-from backend.schemas.geo import StateRollupResponse
+from backend.schemas.geo import (
+    CountyRollupResponse,
+    StateRollupResponse,
+    ZipRollupResponse,
+)
 from backend.schemas.lead import Borrower360, LeadSummary, SegmentSummary
 from backend.schemas.portfolio import (
     PortfolioCreateRequest,
@@ -127,18 +131,31 @@ class OutreachRepository(Protocol):
 
 @runtime_checkable
 class GeoRepository(Protocol):
-    """Per-state geography rollups.
+    """Geography rollups for the USChoroplethMap drill.
 
-    Drives the USChoroplethMap hover tooltip + state-fill levels on
-    ``segment-intelligence`` and ``home`` without fabricating numbers.
-    Backing: the latest ``mip.gold.funnel_snapshot_daily`` snapshot,
-    filtered to ``state != '_ALL' AND segment_code = '_ALL'`` — the
-    per-state national rollup for that day. Counties + ZIPs do NOT have
-    gold rollups yet, so this Protocol intentionally scopes to state
-    grain — the UI renders county/ZIP tooltips blank rather than lying.
+    Drives the hover tooltip + fill levels on ``segment-intelligence``
+    and ``home`` without fabricating numbers.
+
+    Backings (slice13-accuracy-validation):
+    * ``state_rollups`` — ``mip.gold.funnel_snapshot_daily`` (latest
+      snapshot, state rows) LEFT JOIN ``mip.gold.state_top_segment``
+      for the ``top_segment_code`` extension.
+    * ``county_rollups`` — ``mip.gold.county_rollup`` filtered to the
+      given state at the latest snapshot_date.
+    * ``zip_rollups`` — ``mip.gold.zip_rollup`` filtered to the given
+      5-char county FIPS at the latest snapshot_date.
+
+    Every method returns a structured response with ``snapshot_date``
+    so the UI can show a "data as of YYYY-MM-DD" provenance chip.
     """
 
     def state_rollups(self) -> StateRollupResponse:
+        ...
+
+    def county_rollups(self, state: str) -> CountyRollupResponse:
+        ...
+
+    def zip_rollups(self, fips_5: str) -> ZipRollupResponse:
         ...
 
 

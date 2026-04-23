@@ -36,7 +36,14 @@ import json
 from typing import Any
 
 from backend.schemas.common import EvidenceEvent
-from backend.schemas.geo import StateRollup, StateRollupResponse
+from backend.schemas.geo import (
+    CountyRollup,
+    CountyRollupResponse,
+    StateRollup,
+    StateRollupResponse,
+    ZipRollup,
+    ZipRollupResponse,
+)
 from backend.schemas.lead import Borrower360, LeadSummary, SegmentSummary
 from backend.schemas.portfolio import (
     KpiTrend,
@@ -769,17 +776,26 @@ class DatabricksOutreachRepository:
 
 
 class DatabricksGeoRepository:
-    """Per-state rollups for the USChoroplethMap.
+    """Geography rollups for the USChoroplethMap.
 
-    Reads the latest ``mip.gold.funnel_snapshot_daily`` snapshot,
-    filtered to state-grain national-cross-segment rows. Powers the
-    hover tooltip (addressable / in-the-money / top-tier / avg_score)
-    plus the state-fill level on the choropleth.
+    Reads three gold tables:
 
-    Short-TTL cached (60s default) so a presenter clicking between
-    segment-intelligence and home pays one warehouse round-trip per
-    minute, not per navigation. The data refreshes daily upstream so
-    60s is a non-issue for correctness.
+    * ``mip.gold.funnel_snapshot_daily`` (state rollup) -- latest
+      snapshot, per-state ``_ALL`` segment row. Powers the hover
+      tooltip (addressable / in-the-money / top-tier / avg_score) plus
+      the state-fill level on the choropleth.
+    * ``mip.gold.state_top_segment`` -- LEFT JOIN on state, latest
+      snapshot, to surface the dominant SegmentCode per state on the
+      ``StateRollup.top_segment_code`` extension.
+    * ``mip.gold.county_rollup`` -- filtered to the given state at the
+      latest snapshot.
+    * ``mip.gold.zip_rollup`` -- filtered to the given county FIPS at
+      the latest snapshot.
+
+    Short-TTL cached (60s default) per-method so a presenter clicking
+    between segment-intelligence and home pays one warehouse round-trip
+    per minute, not per navigation. The data refreshes daily upstream
+    so 60s is a non-issue for correctness.
     """
 
     def __init__(
@@ -793,28 +809,71 @@ class DatabricksGeoRepository:
         self._cache = cache if cache is not None else TTLCache()
         self._cache_ttl_s = cache_ttl_s
 
-    _SQL = (
+    # State rollup: join the funnel snapshot (counts) with the top-segment
+    # table (dominant SegmentCode). LEFT JOIN on state so an empty
+    # state_top_segment (first deploy before the CTAS has run) still
+    # returns state counts -- top_segment_code just stays NULL.
+    _STATE_SQL = (
         "SELECT "
+        "  f.state                         AS state, "
+        "  f.addressable_borrowers         AS addressable, "
+        "  f.in_the_money_borrowers        AS in_the_money, "
+        "  f.high_opportunity_borrowers    AS top_tier_opportunities, "
+        "  f.avg_opportunity_score         AS avg_score, "
+        "  f.snapshot_date                 AS snapshot_date, "
+        "  ts.top_segment_code             AS top_segment_code "
+        "FROM mip.gold.funnel_snapshot_daily AS f "
+        "LEFT JOIN ( "
+        "  SELECT state, top_segment_code "
+        "  FROM mip.gold.state_top_segment "
+        "  WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM mip.gold.state_top_segment) "
+        ") AS ts ON ts.state = f.state "
+        "WHERE f.state <> '_ALL' "
+        "  AND f.segment_code = '_ALL' "
+        "  AND f.snapshot_date = (SELECT MAX(snapshot_date) FROM mip.gold.funnel_snapshot_daily) "
+        "ORDER BY f.addressable_borrowers DESC"
+    )
+
+    _COUNTY_SQL = (
+        "SELECT "
+        "  fips_5, "
         "  state, "
-        "  addressable_borrowers         AS addressable, "
-        "  in_the_money_borrowers        AS in_the_money, "
-        "  high_opportunity_borrowers    AS top_tier_opportunities, "
-        "  avg_opportunity_score         AS avg_score, "
+        "  county_name, "
+        "  addressable_borrowers, "
+        "  in_the_money_borrowers, "
+        "  high_opportunity_borrowers, "
+        "  avg_opportunity_score, "
+        "  top_segment_code, "
         "  snapshot_date "
-        "FROM mip.gold.funnel_snapshot_daily "
-        "WHERE state <> '_ALL' "
-        "  AND segment_code = '_ALL' "
-        "  AND snapshot_date = (SELECT MAX(snapshot_date) FROM mip.gold.funnel_snapshot_daily) "
+        "FROM mip.gold.county_rollup "
+        "WHERE state = :state "
+        "  AND snapshot_date = (SELECT MAX(snapshot_date) FROM mip.gold.county_rollup) "
         "ORDER BY addressable_borrowers DESC"
     )
 
-    _CACHE_KEY = "geo.state_rollups"
+    _ZIP_SQL = (
+        "SELECT "
+        "  zip, "
+        "  state, "
+        "  county_fips_5, "
+        "  addressable_borrowers, "
+        "  avg_opportunity_score, "
+        "  top_segment_code, "
+        "  sample_borrower_id, "
+        "  snapshot_date "
+        "FROM mip.gold.zip_rollup "
+        "WHERE county_fips_5 = :fips_5 "
+        "  AND snapshot_date = (SELECT MAX(snapshot_date) FROM mip.gold.zip_rollup) "
+        "ORDER BY addressable_borrowers DESC"
+    )
+
+    _STATE_CACHE_KEY = "geo.state_rollups"
 
     def state_rollups(self) -> StateRollupResponse:
-        cached = self._cache.get(self._CACHE_KEY)
+        cached = self._cache.get(self._STATE_CACHE_KEY)
         if cached is not None:
             return cached
-        rows = self._client.execute(self._SQL) or []
+        rows = self._client.execute(self._STATE_SQL) or []
         rollups = [
             StateRollup(
                 state=str(r.get("state") or "").upper()[:2],
@@ -822,6 +881,9 @@ class DatabricksGeoRepository:
                 in_the_money=int(r.get("in_the_money") or 0),
                 top_tier_opportunities=int(r.get("top_tier_opportunities") or 0),
                 avg_score=int(r.get("avg_score") or 0),
+                top_segment_code=(
+                    str(r["top_segment_code"]) if r.get("top_segment_code") else None
+                ),
             )
             for r in rows
             if r.get("state") and str(r.get("state")) != "_ALL"
@@ -831,7 +893,90 @@ class DatabricksGeoRepository:
             raw = rows[0].get("snapshot_date")
             snapshot_date = str(raw) if raw is not None else None
         response = StateRollupResponse(rollups=rollups, snapshot_date=snapshot_date)
-        self._cache.set(self._CACHE_KEY, response, self._cache_ttl_s)
+        self._cache.set(self._STATE_CACHE_KEY, response, self._cache_ttl_s)
+        return response
+
+    def county_rollups(self, state: str) -> CountyRollupResponse:
+        """Fetch per-county rollups for the given state.
+
+        ``state`` is normalised to 2-char uppercase before the warehouse
+        call so the response is stable regardless of UI casing. Returns
+        an empty list + ``snapshot_date=None`` when the state is outside
+        the 6-state footprint or the CTAS hasn't run yet.
+        """
+        normalised = str(state or "").upper()[:2]
+        cache_key = f"geo.county_rollups:{normalised}"
+        cached = self._cache.get(cache_key)
+        if cached is not None:
+            return cached
+        rows = self._client.execute(self._COUNTY_SQL, {"state": normalised}) or []
+        rollups = [
+            CountyRollup(
+                fips_5=str(r.get("fips_5") or "")[:5],
+                state=str(r.get("state") or "").upper()[:2] or normalised,
+                county_name=(
+                    str(r["county_name"]) if r.get("county_name") else None
+                ),
+                addressable_borrowers=int(r.get("addressable_borrowers") or 0),
+                in_the_money_borrowers=int(r.get("in_the_money_borrowers") or 0),
+                high_opportunity_borrowers=int(r.get("high_opportunity_borrowers") or 0),
+                avg_opportunity_score=int(r.get("avg_opportunity_score") or 0),
+                top_segment_code=(
+                    str(r["top_segment_code"]) if r.get("top_segment_code") else None
+                ),
+            )
+            for r in rows
+            if r.get("fips_5") and len(str(r.get("fips_5"))) == 5
+        ]
+        snapshot_date: str | None = None
+        if rows:
+            raw = rows[0].get("snapshot_date")
+            snapshot_date = str(raw) if raw is not None else None
+        response = CountyRollupResponse(
+            state=normalised,
+            rollups=rollups,
+            snapshot_date=snapshot_date,
+        )
+        self._cache.set(cache_key, response, self._cache_ttl_s)
+        return response
+
+    def zip_rollups(self, fips_5: str) -> ZipRollupResponse:
+        """Fetch per-ZIP rollups for the given 5-char county FIPS."""
+        normalised = str(fips_5 or "")[:5]
+        cache_key = f"geo.zip_rollups:{normalised}"
+        cached = self._cache.get(cache_key)
+        if cached is not None:
+            return cached
+        rows = self._client.execute(self._ZIP_SQL, {"fips_5": normalised}) or []
+        rollups = [
+            ZipRollup(
+                zip=str(r.get("zip") or "")[:5],
+                state=str(r.get("state") or "").upper()[:2],
+                county_fips_5=(
+                    str(r["county_fips_5"]) if r.get("county_fips_5") else None
+                ),
+                addressable_borrowers=int(r.get("addressable_borrowers") or 0),
+                avg_opportunity_score=int(r.get("avg_opportunity_score") or 0),
+                top_segment_code=(
+                    str(r["top_segment_code"]) if r.get("top_segment_code") else None
+                ),
+                sample_borrower_id=(
+                    str(r["sample_borrower_id"]) if r.get("sample_borrower_id") else None
+                ),
+            )
+            for r in rows
+            if r.get("zip") and len(str(r.get("zip"))) == 5
+        ]
+        snapshot_date: str | None = None
+        if rows:
+            raw = rows[0].get("snapshot_date")
+            snapshot_date = str(raw) if raw is not None else None
+        response = ZipRollupResponse(
+            fips_5=normalised,
+            rollups=rollups,
+            snapshot_date=snapshot_date,
+        )
+        self._cache.set(cache_key, response, self._cache_ttl_s)
         return response
 
 
@@ -935,6 +1080,14 @@ def _adapt_genie_response(
     already consumes. We derive ``trusted_assets`` from the SQL query
     when one is available (best-effort regex for ``mip.*``
     references); empty otherwise -- the UI tolerates an empty list.
+
+    PII posture (Genie audit finding, 2026-04-23): Genie's Space ``instructions``
+    block forbids returning PII columns, but that's model-compliance, not a
+    guaranteed output-side filter. The repository boundary enforces defence-
+    in-depth by stripping any row keys that match the governance denylist
+    (owner names, raw CLIP, owner_link_id, owner_name_hash, street addresses)
+    regardless of what the model decided to select. Customers see zero PII
+    columns in Ask Genie results even if the Space drifts.
     """
     trusted_assets = _extract_asset_refs(result.sql_query)
     return GenieMessageResponse(
@@ -943,8 +1096,50 @@ def _adapt_genie_response(
         answer=result.answer_text or "",
         source="genie",
         trusted_assets=trusted_assets,
-        table_rows=result.sql_result_rows,
+        table_rows=_redact_genie_rows(result.sql_result_rows),
     )
+
+
+# Governance denylist applied to every Genie table-row before the response
+# leaves the repository boundary. Matches the ``_FORBIDDEN_OUTPUT_KEYS`` set
+# in ``backend/services/pii_redaction`` (keep in sync). These keys are PII
+# per the governance contract and must never ship to the frontend.
+_GENIE_PII_KEYS: frozenset[str] = frozenset({
+    "owner_name",
+    "owner_names",
+    "owner_full_name",
+    "primary_owner",
+    "owner_name_hash",      # hashed, but still a stable identifier — not exported
+    "owner_link_id",        # raw Cotality identifier — replaced with a display surrogate elsewhere
+    "clip",                 # raw CLIP — evidence drawer surfaces a short form only
+    "raw_clip",
+    "street_address",
+    "site_address",
+    "mailing_address",
+    "tax_mailing_address",
+    "subject_property",     # carries synthesized city + ZIP; synthesized upstream, but redacted here too
+    "borrower_email",
+    "email",
+    "phone",
+    "phone_number",
+    "ssn",
+})
+
+
+def _redact_genie_rows(rows: list[dict[str, Any]] | None) -> list[dict[str, Any]] | None:
+    """Strip PII keys from Genie's result set before returning to the UI.
+
+    Never raises; if ``rows`` is falsy we pass it through. Applied to every
+    response path that sets ``table_rows`` on ``GenieMessageResponse``.
+    """
+    if not rows:
+        return rows
+    redacted: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        redacted.append({k: v for k, v in row.items() if k not in _GENIE_PII_KEYS})
+    return redacted
 
 
 def _extract_asset_refs(sql: str | None) -> list[str]:

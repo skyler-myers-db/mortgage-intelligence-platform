@@ -91,6 +91,9 @@ export default function SegmentIntelligence() {
   const [segments, setSegments] = useState<SegmentSummary[]>([]);
   const [leads, setLeads] = useState<LeadSummary[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
+  // Reload token re-runs both /api/segments and /api/leads fetches.
+  // Hole-finder finding #1, 2026-04-23.
+  const [reloadToken, setReloadToken] = useState<number>(0);
   const [activeSegs, setActiveSegs] = useState<string[]>(['itm']);
   const [chipFilters, setChipFilters] = useState<ChipFilters>(INITIAL_FILTERS);
   // Geography drill state emitted by USChoroplethMap. State is the 2-char
@@ -109,6 +112,9 @@ export default function SegmentIntelligence() {
 
   useEffect(() => {
     let cancelled = false;
+    // Reset error on retry so stale error copy doesn't linger through
+    // a successful reload.
+    if (reloadToken > 0) setLoadError(null);
     api
       .segments()
       .then((s) => {
@@ -126,7 +132,7 @@ export default function SegmentIntelligence() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [reloadToken]);
 
   useEffect(() => {
     let cancelled = false;
@@ -149,7 +155,7 @@ export default function SegmentIntelligence() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [reloadToken]);
 
   const filtered = useMemo(() => {
     let out = leads;
@@ -261,9 +267,21 @@ export default function SegmentIntelligence() {
             borderRadius: 'var(--r-md)',
             color: 'var(--signal-danger)',
             fontSize: 12,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 12,
           }}
         >
-          {loadError}
+          <span>{loadError}</span>
+          <button
+            type="button"
+            className="btn btn--ghost btn--sm"
+            onClick={() => setReloadToken((n) => n + 1)}
+            aria-label="Retry loading segments and leads"
+          >
+            Retry
+          </button>
         </div>
       )}
       {segments.length === 0 && !loadError && (

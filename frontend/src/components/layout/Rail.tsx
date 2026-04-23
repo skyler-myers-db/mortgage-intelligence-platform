@@ -3,12 +3,17 @@ import { Icon, type IconName } from '../Icon';
 import { EntradaMark } from '../brand/Entrada';
 
 /**
- * Left module rail. Vertical strip, 72px wide. M0 is live today; M1–M4
+ * Left module rail. Vertical strip, 72px wide. M0 ships today; M1–M4
  * are modules on the published roadmap and render as inactive, non-
  * interactive rail items (persona review 2026-04-22 blocker #5: M1-M4
  * previously linked to /admin-config which was an unrelated dead link).
  * The active M0 rail item lights up whenever the user is on any
  * Module 0 route.
+ *
+ * Copy note (2026-04-23 hole-finder round 2): avoid the word "live" on
+ * the rail since Module 0 data refreshes nightly via Delta Share, not
+ * in real time. "Ships today" keeps the roadmap cue without implying a
+ * streaming-data posture.
  */
 
 interface ModuleItem {
@@ -19,7 +24,7 @@ interface ModuleItem {
 }
 
 const MODULES: ModuleItem[] = [
-  { id: 0, name: 'Top-of-Funnel',        icon: 'target', desc: 'Lead generation + borrower segmentation (live).' },
+  { id: 0, name: 'Top-of-Funnel',        icon: 'target', desc: 'Lead generation + borrower segmentation (ships today).' },
   { id: 1, name: 'Pipeline Optimization', icon: 'flow',   desc: 'Lead → app → approval throughput and stalls (on roadmap).' },
   { id: 2, name: 'LO Workbench',          icon: 'money',  desc: 'Officer assist with explainable next-best-action (on roadmap).' },
   { id: 3, name: 'Underwriting Copilot',  icon: 'shield', desc: 'Condition handling and exception triage (on roadmap).' },

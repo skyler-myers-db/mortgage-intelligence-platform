@@ -251,7 +251,10 @@ resources:
     #   6. segment_population            (needs borrower_360 + lead_scores)
     #   7. lockin_cohort                 (needs borrower_360 + silver.lien_current)
     #   8. borrower_dossier              (needs borrower_360 + evidence_events)
-    #   9. refresh_semantics_views       (needs lead_population + segment_population + borrower_dossier)
+    #   9. county_rollup                 (needs borrower_360 -- geography rollup)
+    #  10. zip_rollup                    (needs borrower_360 -- geography rollup)
+    #  11. state_top_segment             (needs borrower_360 -- geography rollup)
+    #  12. refresh_semantics_views       (needs lead_population + segment_population + borrower_dossier)
     #
     # The DDL manifest (003_gold_tables.sql) is CREATE TABLE IF NOT EXISTS,
     # so running it on every refresh is safe and picks up any newly-added
@@ -345,6 +348,37 @@ resources:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
               path: sql/transformations/gold_borrower_dossier.sql
+        # slice13-accuracy-validation: three geography rollup tables feed the
+        # USChoroplethMap drill (state -> county -> ZIP). All three aggregate
+        # from gold.borrower_360 directly -- no ZIP->county crosswalk seed
+        # needed because silver.property_master.fips_county_code is projected
+        # up into gold.borrower_360.county_fips_5. Safe to run in parallel
+        # because they read from gold.borrower_360 and write to their own
+        # sibling tables.
+        - task_key: ctas_county_rollup
+          description: "Rebuild mip.gold.county_rollup via CTAS (per-county aggregate for the map county drill)."
+          depends_on:
+            - task_key: ctas_borrower_360
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/transformations/gold_county_rollup.sql
+        - task_key: ctas_zip_rollup
+          description: "Rebuild mip.gold.zip_rollup via CTAS (per-ZIP aggregate + stable sample_borrower_id)."
+          depends_on:
+            - task_key: ctas_borrower_360
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/transformations/gold_zip_rollup.sql
+        - task_key: ctas_state_top_segment
+          description: "Rebuild mip.gold.state_top_segment via CTAS (per-state dominant SegmentCode + share %)."
+          depends_on:
+            - task_key: ctas_borrower_360
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/transformations/gold_state_top_segment.sql
         # Zero-click Genie provisioning — publish the three mip.semantics.*
         # views so the Genie trusted_assets list in
         # genie/mortgage_lead_intelligence_space.yml binds on first deploy.

@@ -6,7 +6,7 @@ import { Chip, Button, EvidenceChip } from '../Primitives';
 import { ScoreBadge } from './ScoreBadge';
 import { ConfidenceMeter } from './ConfidenceMeter';
 import { useApp } from '../AppContext';
-import { api } from '../../lib/api';
+import { api, ApiError } from '../../lib/api';
 import { DRAWER_SOURCES } from '../../lib/drawerSources';
 import { segmentColor, segmentName } from '../../lib/segmentMetadata';
 
@@ -137,7 +137,14 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
   const [bulkApproving, setBulkApproving] = useState<boolean>(false);
   // Last bulk result surfaced as a compact toast. Clears on the next bulk
   // run or when the user dismisses it (auto-dismiss after 4s).
-  const [bulkToast, setBulkToast] = useState<{ ok: number; fail: number } | null>(null);
+  //
+  // `network` is the subset of `fail` that failed with an unreachable
+  // backend (ApiError.status === null) — these rows never reached the
+  // audit table and the approver should retry them explicitly.
+  // Hole-finder finding #2, 2026-04-23.
+  const [bulkToast, setBulkToast] = useState<
+    { ok: number; fail: number; network: number } | null
+  >(null);
 
   /**
    * Approve from the queue without leaving the page. Uses the same
@@ -145,28 +152,30 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
    * the row as 'approved' in AppContext optimistically on success so the
    * chip flips immediately and stays flipped on route change.
    *
-   * Returns `true` on success and `false` on failure so the bulk-approve
-   * caller can tally ok/fail without threading the error string through.
+   * Returns a tagged outcome so bulk-approve can distinguish a network
+   * drop ("request never reached the audit table") from a backend
+   * rejection ("server said no"). Hole-finder finding #2, 2026-04-23.
    */
   const approveLead = useCallback(
-    async (borrowerId: string): Promise<boolean> => {
+    async (borrowerId: string): Promise<'ok' | 'network' | 'backend'> => {
       setApprovalError(null);
       setPendingApproval((p) => ({ ...p, [borrowerId]: true }));
       try {
         const res = await api.approve(borrowerId);
         if (res.approved) {
           setApproval(borrowerId, 'approved');
-          return true;
+          return 'ok';
         }
         setApprovalError(`Approve failed for ${borrowerId}: endpoint returned approved=false.`);
-        return false;
+        return 'backend';
       } catch (err: unknown) {
+        const isNetwork = err instanceof ApiError && err.status === null;
         setApprovalError(
           err instanceof Error
             ? `Couldn't approve ${borrowerId}: ${err.message}`
             : `Couldn't approve ${borrowerId}.`,
         );
-        return false;
+        return isNetwork ? 'network' : 'backend';
       } finally {
         setPendingApproval((p) => {
           const { [borrowerId]: _discard, ...rest } = p;
@@ -237,7 +246,13 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
   // or rejected. The "select all" header checkbox targets this subset so
   // already-decided rows don't get bulk-approved again.
   const eligibleIds = useMemo(
-    () => leads.map((l) => l.borrower_id).filter((id) => !approvals[id]),
+    () =>
+      leads
+        .filter((l) => {
+          const serverDecided = l.approval_status === 'approved' || l.approval_status === 'rejected';
+          return !approvals[l.borrower_id] && !serverDecided;
+        })
+        .map((l) => l.borrower_id),
     [leads, approvals],
   );
 
@@ -280,13 +295,16 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
     setBulkToast(null);
     let ok = 0;
     let fail = 0;
+    let network = 0;
     const failedIds: string[] = [];
     for (const group of chunk(ids, BULK_APPROVE_CONCURRENCY)) {
       const results = await Promise.all(group.map((id) => approveLead(id)));
-      results.forEach((success, i) => {
-        if (success) ok += 1;
-        else {
+      results.forEach((outcome, i) => {
+        if (outcome === 'ok') {
+          ok += 1;
+        } else {
           fail += 1;
+          if (outcome === 'network') network += 1;
           failedIds.push(group[i]);
         }
       });
@@ -294,7 +312,7 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
     // Replace selection with the failed subset so retries are trivial.
     setSelectedIds(new Set(failedIds));
     setBulkApproving(false);
-    setBulkToast({ ok, fail });
+    setBulkToast({ ok, fail, network });
   }, [bulkApproving, selectedIds, approvals, approveLead]);
 
   // Auto-dismiss the toast after 4s so it doesn't pile up next to the
@@ -467,7 +485,15 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
           <tbody>
             {leads.map((lead) => {
               const isOpen = expanded === lead.borrower_id;
-              const approval = approvals[lead.borrower_id];
+              // Prefer in-session AppContext override (set optimistically on
+              // approve/reject); fall back to the server-projected
+              // approval_status so a page reload doesn't make approved
+              // borrowers look pending. Round-2 hole-finder #12, 2026-04-23.
+              const serverStatus = lead.approval_status;
+              const approval = approvals[lead.borrower_id]
+                ?? (serverStatus === 'approved' || serverStatus === 'rejected'
+                    ? serverStatus
+                    : undefined);
               const isSelected = selectedIds.has(lead.borrower_id);
               const isEligible = !approval;
               return (
@@ -628,10 +654,18 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
                 data-testid="lead-bulk-toast"
                 style={{
                   fontSize: 12,
-                  color: bulkToast.fail > 0 ? 'var(--signal-warning)' : 'var(--signal-success)',
+                  color:
+                    bulkToast.network > 0
+                      ? 'var(--signal-danger)'
+                      : bulkToast.fail > 0
+                      ? 'var(--signal-warning)'
+                      : 'var(--signal-success)',
                 }}
               >
                 {bulkToast.ok} approved, {bulkToast.fail} failed
+                {bulkToast.network > 0
+                  ? ` (${bulkToast.network} network dropped — retry)`
+                  : ''}
               </span>
             )}
             <Button

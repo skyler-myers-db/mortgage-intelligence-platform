@@ -37,6 +37,10 @@ GOLD_DDL_FILES: tuple[str, ...] = (
     "gold_evidence_events.sql",
     "gold_lead_population.sql",
     "gold_segment_population.sql",
+    # slice13-accuracy-validation: geography rollups for the USChoroplethMap drill.
+    "gold_county_rollup.sql",
+    "gold_zip_rollup.sql",
+    "gold_state_top_segment.sql",
 )
 
 GOLD_TRANSFORMATION_FILES: tuple[str, ...] = (
@@ -46,6 +50,9 @@ GOLD_TRANSFORMATION_FILES: tuple[str, ...] = (
     "gold_evidence_events.sql",
     "gold_lead_population.sql",
     "gold_segment_population.sql",
+    "gold_county_rollup.sql",
+    "gold_zip_rollup.sql",
+    "gold_state_top_segment.sql",
 )
 
 # Target UC paths. The manifest (003_gold_tables.sql) must reference each.
@@ -61,6 +68,9 @@ GOLD_TABLE_PATHS: tuple[str, ...] = (
     "mip.gold.lead_population",
     "mip.gold.segment_population",
     "mip.gold.borrower_dossier",
+    "mip.gold.county_rollup",
+    "mip.gold.zip_rollup",
+    "mip.gold.state_top_segment",
 )
 
 FORBIDDEN_PII_COLUMNS: tuple[str, ...] = (

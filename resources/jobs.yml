@@ -84,6 +84,29 @@ resources:
             warehouse_id: ${var.sql_warehouse_id}
             file:
               path: ../sql/transformations/gold_borrower_dossier.sql
+        # slice13-accuracy-validation: three geography rollup tables feed
+        # the USChoroplethMap drill. Keep in sync with databricks.yml.
+        - task_key: ctas_county_rollup
+          depends_on:
+            - task_key: ctas_borrower_360
+          sql_task:
+            warehouse_id: ${var.sql_warehouse_id}
+            file:
+              path: ../sql/transformations/gold_county_rollup.sql
+        - task_key: ctas_zip_rollup
+          depends_on:
+            - task_key: ctas_borrower_360
+          sql_task:
+            warehouse_id: ${var.sql_warehouse_id}
+            file:
+              path: ../sql/transformations/gold_zip_rollup.sql
+        - task_key: ctas_state_top_segment
+          depends_on:
+            - task_key: ctas_borrower_360
+          sql_task:
+            warehouse_id: ${var.sql_warehouse_id}
+            file:
+              path: ../sql/transformations/gold_state_top_segment.sql
         # Zero-click Genie provisioning: rebuild the three mip.semantics.*
         # metric views on every refresh so Genie's trusted_assets bind
         # without a manual UI step. See databricks.yml for the canonical

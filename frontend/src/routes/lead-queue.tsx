@@ -24,6 +24,8 @@ export default function LeadQueue() {
   const [leads, setLeads] = useState<LeadSummary[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
+  // Reload token for the Retry button. Hole-finder finding #1, 2026-04-23.
+  const [reloadToken, setReloadToken] = useState<number>(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -50,7 +52,7 @@ export default function LeadQueue() {
     return () => {
       cancelled = true;
     };
-  }, [segment]);
+  }, [segment, reloadToken]);
 
   const visibleLeads = useMemo(
     () => (stateFilter ? leads.filter((l) => l.state === stateFilter) : leads),
@@ -81,9 +83,21 @@ export default function LeadQueue() {
             borderRadius: 'var(--r-md)',
             color: 'var(--signal-danger)',
             fontSize: 12,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 12,
           }}
         >
-          {loadError}
+          <span>{loadError}</span>
+          <button
+            type="button"
+            className="btn btn--ghost btn--sm"
+            onClick={() => setReloadToken((n) => n + 1)}
+            aria-label="Retry loading leads"
+          >
+            Retry
+          </button>
         </div>
       )}
       {loading && !loadError && (

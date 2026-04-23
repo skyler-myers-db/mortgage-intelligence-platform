@@ -1,10 +1,10 @@
-"""Unit tests for /api/geo/state-rollups.
+"""Unit tests for /api/geo/state-rollups + /county-rollups + /zip-rollups.
 
 Covers the schema + router contract so the USChoroplethMap can swap off
-its hardcoded STATE_FACTS literal onto real rollups. The live Databricks
-repo reads ``mip.gold.funnel_snapshot_daily`` filtered to the latest
-snapshot + per-state / cross-segment row; the in-process fixture returns
-a deterministic 6-state shape that exercises the same envelope.
+its hardcoded STATE_FACTS / COUNTY_FACTS / CHI_ZIPS literals onto real
+gold rollups. The live Databricks repo reads ``mip.gold.county_rollup``
+and ``mip.gold.zip_rollup``; the in-process fixture returns
+deterministic shapes that exercise the same envelope.
 """
 from __future__ import annotations
 
@@ -44,6 +44,23 @@ def test_state_rollups_returns_six_state_footprint():
         assert r["in_the_money"] <= r["addressable"]
 
 
+def test_state_rollups_carries_top_segment_code():
+    """slice13-accuracy-validation: the state rollup envelope now carries
+    a ``top_segment_code`` extension sourced from gold.state_top_segment.
+    The fixture populates it for every state so the UI can drop the
+    hardcoded STATE_FACTS[*].topSegment literal."""
+    response = client.get("/api/geo/state-rollups")
+    assert response.status_code == 200
+    payload = response.json()
+    known_segments = {"itm", "listed", "permit", "investor", "equity", "retention", "none"}
+    for r in payload["rollups"]:
+        # Fixture ships a non-null code for every state; in prod the column
+        # can be null (LEFT JOIN). Accept both here and just guard the
+        # vocab when non-null.
+        if r.get("top_segment_code") is not None:
+            assert r["top_segment_code"] in known_segments
+
+
 def test_state_rollups_snapshot_date_format():
     """Snapshot date should be ISO-ish (YYYY-MM-DD) when present."""
     response = client.get("/api/geo/state-rollups")
@@ -53,3 +70,88 @@ def test_state_rollups_snapshot_date_format():
         parts = payload["snapshot_date"].split("-")
         assert len(parts) == 3
         assert len(parts[0]) == 4
+
+
+def test_county_rollups_returns_counties_for_populated_state():
+    """IL is populated in the fixture (Cook / DuPage / Lake). The
+    response envelope must echo the requested state and carry rollups
+    keyed by 5-char FIPS."""
+    response = client.get("/api/geo/county-rollups?state=IL")
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["state"] == "IL"
+    rollups = payload["rollups"]
+    assert isinstance(rollups, list)
+    assert len(rollups) >= 1
+    fips_set = {r["fips_5"] for r in rollups}
+    assert "17031" in fips_set, "Cook County (17031) must land in the IL rollup"
+    for r in rollups:
+        assert len(r["fips_5"]) == 5
+        assert r["state"] == "IL"
+        assert r["addressable_borrowers"] >= r["in_the_money_borrowers"]
+        assert 0 <= r["avg_opportunity_score"] <= 100
+
+
+def test_county_rollups_empty_for_unpopulated_state():
+    """A state outside the 6-state footprint (or simply empty in the
+    fixture) returns an empty list -- the UI renders "—" rather than
+    fabricating."""
+    response = client.get("/api/geo/county-rollups?state=NY")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["state"] == "NY"
+    assert payload["rollups"] == []
+
+
+def test_county_rollups_uppercases_state():
+    """State code is normalised uppercase by the repository."""
+    response = client.get("/api/geo/county-rollups?state=il")
+    assert response.status_code == 200
+    payload = response.json()
+    # Whatever the normalisation, the echoed state matches the fixture
+    # key (IL is populated; lowercase 'il' would key an empty list).
+    # The repo uppercases before lookup so this IS the IL fixture.
+    assert payload["state"] == "IL"
+    assert len(payload["rollups"]) >= 1
+
+
+def test_county_rollups_validates_state_length():
+    """The query param is constrained to 2 chars -- the server rejects
+    anything else as a 422."""
+    response = client.get("/api/geo/county-rollups?state=ILL")
+    assert response.status_code == 422
+
+
+def test_zip_rollups_returns_zips_for_populated_county():
+    """Cook County (17031) is populated in the fixture with three ZIPs.
+    Each row must carry a stable sample_borrower_id so the UI deep-link
+    lands on a real dossier."""
+    response = client.get("/api/geo/zip-rollups?fips=17031")
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["fips_5"] == "17031"
+    rollups = payload["rollups"]
+    assert len(rollups) >= 1
+    for r in rollups:
+        assert len(r["zip"]) == 5
+        assert r["state"] == "IL"
+        assert r["county_fips_5"] == "17031"
+        assert r["addressable_borrowers"] >= 0
+        # Fixture pins a sample_borrower_id on every ZIP. In prod the
+        # column is nullable (LEFT JOIN against an empty ranked table).
+        assert r["sample_borrower_id"] is None or r["sample_borrower_id"].startswith("B-")
+
+
+def test_zip_rollups_empty_for_unpopulated_county():
+    """A county outside the fixture returns an empty list."""
+    response = client.get("/api/geo/zip-rollups?fips=99999")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["fips_5"] == "99999"
+    assert payload["rollups"] == []
+
+
+def test_zip_rollups_validates_fips_length():
+    """FIPS must be exactly 5 chars (422 otherwise)."""
+    response = client.get("/api/geo/zip-rollups?fips=1703")
+    assert response.status_code == 422

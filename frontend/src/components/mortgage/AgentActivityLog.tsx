@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Icon, type IconName } from '../Icon';
+import { api, type AuditEventRow } from '../../lib/api';
 
 /**
  * AgentActivityLog — prototype `.audit` BEM. Pulls events from
@@ -18,16 +19,7 @@ import { Icon, type IconName } from '../Icon';
  * if the warehouse is warming up, the activity log says so.
  */
 
-interface AuditEvent {
-  event_id: string;
-  actor: string;
-  action: string;
-  entity_type: string;
-  entity_id: string;
-  payload_json: Record<string, unknown>;
-  evidence_ids: string[];
-  created_at: string;
-}
+type AuditEvent = AuditEventRow;
 
 type IconColor = '' | 'green' | 'amber' | 'red';
 
@@ -102,9 +94,11 @@ export function AgentActivityLog({ limit = 12 }: { limit?: number }) {
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch(`/api/audit/events?limit=${limit}`);
-        if (!res.ok) throw new Error(String(res.status));
-        const data = (await res.json()) as AuditEvent[];
+        // Route through api.ts so 503s with `retryable: true` follow
+        // the shared exponential-backoff cadence rather than falling
+        // straight into the "unavailable" state. Hole-finder #4,
+        // 2026-04-23.
+        const data = await api.auditEvents(limit);
         if (cancelled) return;
         setRows(data);
         setFeedState(data.length > 0 ? 'ok' : 'empty');
@@ -123,28 +117,22 @@ export function AgentActivityLog({ limit = 12 }: { limit?: number }) {
     let cancelled = false;
     const poll = async () => {
       const t0 = performance.now();
-      try {
-        const res = await fetch('/api/health');
-        const elapsed = Math.round(performance.now() - t0);
-        if (!res.ok) throw new Error(String(res.status));
-        const body = (await res.json()) as {
-          dependencies?: Record<string, DepState>;
-          circuit_breakers?: Record<string, BreakerState>;
-        };
-        if (cancelled) return;
-        setHealth({
-          warehouse: body.dependencies?.warehouse ?? 'unknown',
-          genie: body.dependencies?.genie ?? 'unknown',
-          warehouse_breaker: body.circuit_breakers?.warehouse ?? 'unknown',
-          genie_breaker: body.circuit_breakers?.genie ?? 'unknown',
-          probe_ms: elapsed,
-          fetched_at: new Date().toISOString(),
-        });
-      } catch {
-        // /api/health unreachable — surface as unknown; do NOT invent
-        // "up" status. DegradedBanner renders separately for hard fails.
-        if (!cancelled) setHealth({ ...EMPTY_HEALTH, fetched_at: new Date().toISOString() });
-      }
+      // api.health() never throws — it returns `{ status:
+      // 'unreachable', mode: 'unknown', dependencies: {} }` on failure
+      // so "unknown" flows through the UI without `catch` bookkeeping.
+      const body = await api.health();
+      const elapsed = Math.round(performance.now() - t0);
+      if (cancelled) return;
+      setHealth({
+        warehouse: (body.dependencies?.warehouse as DepState) ?? 'unknown',
+        genie: (body.dependencies?.genie as DepState) ?? 'unknown',
+        warehouse_breaker:
+          (body.circuit_breakers?.warehouse as BreakerState) ?? 'unknown',
+        genie_breaker:
+          (body.circuit_breakers?.genie as BreakerState) ?? 'unknown',
+        probe_ms: elapsed,
+        fetched_at: new Date().toISOString(),
+      });
     };
     void poll();
     const id = window.setInterval(poll, 30_000);

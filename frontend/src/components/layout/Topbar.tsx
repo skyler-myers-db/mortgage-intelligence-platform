@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { useApp } from '../AppContext';
 import { Icon } from '../Icon';
+import { api } from '../../lib/api';
 import type { HealthPayload } from '../mortgage/DegradedBanner';
 
 /**
@@ -40,16 +41,12 @@ export function Topbar() {
   useEffect(() => {
     let cancelled = false;
     const tick = async () => {
-      try {
-        const res = await fetch('/api/health');
-        if (res.ok) {
-          const json = (await res.json()) as HealthPayload;
-          if (!cancelled) setHealth(json);
-        }
-      } catch {
-        // Swallow — DegradedBanner surfaces outright failures; the pills
-        // just display last-known state.
-      }
+      // api.health() is total — it returns an "unreachable" snapshot
+      // on failure rather than throwing, so the pill shows honest
+      // "loading" state instead of last-known-good. Hole-finder
+      // finding #4, 2026-04-23.
+      const json = (await api.health()) as HealthPayload;
+      if (!cancelled) setHealth(json);
     };
     void tick();
     const id = window.setInterval(tick, 30_000);

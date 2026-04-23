@@ -114,8 +114,26 @@ export default function AskGenie() {
                 role="alert"
                 style={{ marginTop: 16, background: 'var(--bg-1)', borderColor: 'var(--signal-danger)' }}
               >
-                <div className="surface__body" style={{ color: 'var(--signal-danger)' }}>
-                  {errorMsg}
+                <div
+                  className="surface__body"
+                  style={{
+                    color: 'var(--signal-danger)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 12,
+                  }}
+                >
+                  <span>{errorMsg}</span>
+                  <button
+                    type="button"
+                    className="btn btn--ghost btn--sm"
+                    onClick={() => ask(question)}
+                    disabled={loading}
+                    aria-label="Retry Genie question"
+                  >
+                    Retry
+                  </button>
                 </div>
               </div>
             )}
