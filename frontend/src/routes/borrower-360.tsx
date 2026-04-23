@@ -136,11 +136,17 @@ export default function Borrower360() {
   }
 
   const segColor = segmentByCode(b.segment_codes[0])?.color ?? 'var(--accent)';
+  // Strip the "Synthetic property · " legacy artifact so the UI reads as
+  // enterprise, not demo-fixture. The backend's subject_property field
+  // sometimes ships with this prefix; we render the location only.
+  const propertyAddress = b.subject_property
+    .replace(/^Synthetic property\s*·\s*/i, '')
+    .trim() || `${b.city}, ${b.state} ${b.zip}`;
 
   return (
     <PageShell
       eyebrow="Borrower 360 · Public-Record Dossier"
-      title={b.display_name}
+      title={`Borrower ${b.borrower_id}`}
       lede={`${b.city}, ${b.state} ${b.zip} · ${b.recommended_offer}`}
       heroRight={
         <>
@@ -173,7 +179,18 @@ export default function Borrower360() {
             <div className="surface__body" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
               <Field k="CLIP" v={b.clip_id} mono />
               <Field k="Owner Link" v={b.owner_link_id} mono />
-              <Field k="Subject property" v={b.subject_property} />
+              <Field
+                k="Property address"
+                v=""
+                childEl={
+                  <div>
+                    <div style={{ fontSize: 13, color: 'var(--text-1)' }}>{propertyAddress}</div>
+                    <div className="muted" style={{ fontSize: 10, marginTop: 2 }}>
+                      Street-level address redacted for compliance; city + ZIP shown.
+                    </div>
+                  </div>
+                }
+              />
               <Field k="AVM" v={currency(b.avm_value)} mono />
               <Field k="Current lien" v={`${currency(b.current_lien_balance)} · ${b.current_rate}%`} mono />
               <Field k="LTV / Equity" v={`${b.ltv}% · ${currency(b.equity_estimate)}`} mono />
@@ -244,13 +261,20 @@ export default function Borrower360() {
               </div>
               <div style={{ marginTop: 10, display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
                 <span className="muted" style={{ fontSize: 11 }}>Evidence:</span>
-                {b.why_panel.sources.map((s) => (
-                  <EvidenceChip key={s} source={DRAWER_SOURCES.itm}>
-                    {s.split('.').slice(-1)[0]}
-                  </EvidenceChip>
-                ))}
-                <EvidenceChip source={DRAWER_SOURCES.nbo}>mlflow.mtg_nbo_v3</EvidenceChip>
-                <EvidenceChip source={DRAWER_SOURCES.permit}>permits.building</EvidenceChip>
+                {b.why_panel.sources.map((s, idx) => {
+                  // Prefer the backend-supplied human-readable label (added
+                  // 2026-04-22). Fall back to the trailing UC segment so
+                  // anything that hasn't been mapped still reads sensibly.
+                  const label = b.why_panel.source_labels?.[idx]?.display_label
+                    ?? s.split('.').slice(-1)[0];
+                  return (
+                    <EvidenceChip key={s} source={DRAWER_SOURCES.itm}>
+                      {label}
+                    </EvidenceChip>
+                  );
+                })}
+                <EvidenceChip source={DRAWER_SOURCES.nbo}>Next-best-offer model</EvidenceChip>
+                <EvidenceChip source={DRAWER_SOURCES.permit}>Building permit signal</EvidenceChip>
               </div>
             </div>
           </div>

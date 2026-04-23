@@ -43,7 +43,7 @@ from backend.schemas.portfolio import (
     PortfolioPreview,
     PortfolioPreviewRequest,
 )
-from backend.schemas.why import WhyPanel
+from backend.schemas.why import WhyPanel, WhyPanelSource
 from backend.services.databricks_sql import DatabricksSqlClient
 from backend.services.genie_answers import (
     GenieMessageResponse,
@@ -65,6 +65,7 @@ from backend.services.resilience import DependencyDownError, TTLCache
 from backend.services.scoring import (
     NBO_PRODUCT_LABELS,
     in_the_money,
+    source_display_label,
 )
 
 # ---------------------------------------------------------------------------
@@ -93,6 +94,10 @@ _BORROWER_DOSSIER_COLUMNS: str = (
 )
 
 _LEAD_POPULATION_COLUMNS: str = (
+    # `clip` is projected first so the repository boundary can surface the
+    # real Cotality CLIP on LeadSummary (fix for the cross-route CLIP
+    # inconsistency blocker 2026-04-22). `redact_lead_row` passes it
+    # through under the same key.
     "clip, borrower_id, display_name, city, state, zip, segment_codes, "
     "equity_estimate, rate_spread_bps, opportunity_score, confidence, "
     "recommended_offer, why_now, evidence_ids, approval_status"
@@ -407,30 +412,53 @@ class DatabricksBorrowerRepository:
         if not timeline_events and evidence_events:
             timeline_events = evidence_events[:3]
 
+        # Plain-English "why now" string for the dossier rationale box.
+        # Updated 2026-04-22 (fix/copilot-batch-post-merge) to drop
+        # rule-engine phrasing like "+246 bps spread (>= 75) AND 79%
+        # equity (>= 15%)" in favour of language a VP of Lending or
+        # compliance reviewer reads fluidly. The numbers still ground
+        # the claim (an approver wants concrete detail) but without bps
+        # or ">=" syntax.
+        itm_flag = _coerce_bool(row.get("in_the_money"))
+        spread_bps = int(row.get("rate_spread_bps") or 0)
+        equity_pct = int(row.get("equity_pct") or 0)
+        if itm_flag:
+            # Translate bps to a qualitative phrase that still carries
+            # the magnitude signal. Keeping the literal percentage for
+            # equity because LOs / analysts naturally read "79% equity".
+            if spread_bps >= 200:
+                spread_descriptor = "well above market rates"
+            elif spread_bps >= 100:
+                spread_descriptor = "meaningfully above market rates"
+            else:
+                spread_descriptor = "above market rates"
+            itm_reason = (
+                f"Current rate sits {spread_descriptor} and the home has "
+                f"{equity_pct}% equity -- both refinance triggers are met."
+            )
+        else:
+            itm_reason = (
+                f"Rate and equity (currently {equity_pct}%) have not yet "
+                "cleared the refinance trigger; keep in nurture."
+            )
+
+        why_sources = [
+            "mip.gold.fn_rate_spread",
+            "mip.gold.fn_in_the_money",
+            "mip.gold.borrower_dossier",
+        ]
         why = WhyPanel(
-            rate_spread_bps=int(row.get("rate_spread_bps") or 0),
+            rate_spread_bps=spread_bps,
             market_rate=float(row.get("market_rate_fraction") or 0.0),
-            equity_pct=int(row.get("equity_pct") or 0),
-            in_the_money=bool(row.get("in_the_money")),
-            in_the_money_reason=(
-                f"+{row.get('rate_spread_bps')} bps spread "
-                f"(>= {row.get('min_spread_bps_applied')}) AND "
-                f"{row.get('equity_pct')}% equity "
-                f"(>= {row.get('min_equity_pct_applied')}%)"
-                if _coerce_bool(row.get("in_the_money"))
-                else (
-                    f"{row.get('rate_spread_bps')} bps or "
-                    f"{row.get('equity_pct')}% equity does not clear "
-                    f"({row.get('min_spread_bps_applied')} / "
-                    f"{row.get('min_equity_pct_applied')}%)"
-                )
-            ),
+            equity_pct=equity_pct,
+            in_the_money=itm_flag,
+            in_the_money_reason=itm_reason,
             min_spread_bps=int(row.get("min_spread_bps_applied") or 75),
             min_equity_pct=int(row.get("min_equity_pct_applied") or 15),
-            sources=[
-                "mip.gold.fn_rate_spread",
-                "mip.gold.fn_in_the_money",
-                "mip.gold.borrower_dossier",
+            sources=why_sources,
+            source_labels=[
+                WhyPanelSource(name=s, display_label=source_display_label(s))
+                for s in why_sources
             ],
         )
 

@@ -25,6 +25,13 @@ class LeadSummary(BaseModel):
     city: str
     state: str
     zip: str
+    # Cotality CLIP (10-digit property identifier). Added 2026-04-22 to fix
+    # the "two different CLIP formats across routes" blocker -- the
+    # segment-row preview + lead table must show the SAME CLIP that
+    # Borrower 360 shows. Frontend previously derived a fake CLIP via
+    # `clip_${borrower_id.toLowerCase().replace('-', '')}`; that derivation
+    # is retired in favour of this real field.
+    clip: str = ""
     segment_codes: list[SegmentCode]
     equity_estimate: int
     rate_spread_bps: int

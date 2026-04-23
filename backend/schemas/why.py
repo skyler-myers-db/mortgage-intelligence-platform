@@ -12,6 +12,19 @@ from __future__ import annotations
 from pydantic import BaseModel
 
 
+class WhyPanelSource(BaseModel):
+    """Parallel business-friendly label for a WhyPanel source.
+
+    Added 2026-04-22 so Borrower 360's rationale chips render
+    ``"In-the-money rule"`` instead of ``mip.gold.fn_in_the_money``.
+    ``name`` stays the authoritative UC FQN so the evidence drawer
+    lineage link still works.
+    """
+
+    name: str
+    display_label: str
+
+
 class WhyPanel(BaseModel):
     rate_spread_bps: int
     market_rate: float
@@ -21,3 +34,5 @@ class WhyPanel(BaseModel):
     min_spread_bps: int
     min_equity_pct: int
     sources: list[str]
+    # 2026-04-22 additive field; same index alignment as `sources`.
+    source_labels: list[WhyPanelSource] = []

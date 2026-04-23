@@ -322,10 +322,14 @@ def _build_borrower(spec: dict) -> tuple[Borrower360, dict]:
     evidence_events = _pick_evidence(spec["evidence_ids"])
     equity_estimate = max(0, avm - lien)
 
+    clip_demo = f"clip_demo_{spec['bid'].replace('B-', '')}"
     borrower = Borrower360(
         borrower_id=spec["bid"],
         display_name=spec["name"],
         city=spec["city"], state=spec["state"], zip=spec["zip"],
+        # LeadSummary.clip (added 2026-04-22) must match clip_id so tests
+        # and in-process fixtures surface the same CLIP across routes.
+        clip=clip_demo,
         segment_codes=spec["segs"],
         equity_estimate=equity_estimate,
         rate_spread_bps=spread,
@@ -335,7 +339,7 @@ def _build_borrower(spec: dict) -> tuple[Borrower360, dict]:
         why_now=spec["why_now"],
         evidence_ids=spec["evidence_ids"],
         approval_status="pending",
-        clip_id=f"clip_demo_{spec['bid'].replace('B-', '')}",
+        clip_id=clip_demo,
         owner_link_id=f"ol_demo_{spec['bid'].replace('B-', '')}",
         subject_property=f"Synthetic property · {spec['city']}, {spec['state']} {spec['zip']}",
         avm_value=avm,

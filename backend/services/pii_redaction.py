@@ -404,6 +404,12 @@ def redact_lead_row(row: dict[str, Any]) -> dict[str, Any]:
         "city": city,
         "state": state,
         "zip": zip5,
+        # Real Cotality CLIP on the list row (2026-04-22). Previously
+        # the frontend derived a fake CLIP from the synthetic borrower_id;
+        # the segment-row preview and the borrower dossier now agree.
+        # Empty string keeps the Pydantic contract tight when `clip` is
+        # missing from an older gold row.
+        "clip": str(row.get("clip") or ""),
         "segment_codes": row.get("segment_codes") or [],
         "equity_estimate": int(row.get("equity_estimate") or 0),
         "rate_spread_bps": int(row.get("rate_spread_bps") or 0),

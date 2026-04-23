@@ -100,10 +100,20 @@ export default function OfferOrchestrator() {
     return <Navigate to="/lead-queue" replace />;
   }
 
-  const primaryName = b?.display_name.split(' & ')[0] ?? 'there';
+  // Marketing-approved outreach copy. The "[first name]" placeholder is
+  // intentionally left for the CRM to fill at send-time — we never store
+  // or expose borrower PII in the UI. The body references the borrower's
+  // city/state for local relevance but avoids internal thresholds or
+  // engineering jargon ("bps", "cross-sell", etc.).
   const productLabel = rec?.product_label ?? b?.recommended_offer ?? '…';
   const defaultDraft = b
-    ? `Hi ${primaryName} — based on recent public-record signals in ${b.city}, ${b.state}, ${lender} may be able to help you evaluate ${productLabel.toLowerCase()} options. ${rec?.rationale ?? b.why_now} Reply if you'd like a licensed officer to follow up.`
+    ? `Hi [first name],
+
+Our records show you may have a strong opportunity to reduce your monthly payment or access equity through a refinance or home equity line of credit. Based on current rates and your home's estimated value in ${b.city}, ${b.state}, your loan is a strong candidate for a ${productLabel.toLowerCase()}.
+
+If you'd like to explore, a licensed ${lender} loan officer can walk you through the numbers — no obligation.
+
+Reply or call 1-800-XXX-XXXX.`
     : '';
 
   const onApprove = async () => {
@@ -189,11 +199,19 @@ export default function OfferOrchestrator() {
             <div style={{ marginTop: 'var(--sp-3)', display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
               <span className="muted" style={{ fontSize: 11 }}>Sources:</span>
               {rec
-                ? rec.sources.map((s) => (
-                    <EvidenceChip key={s} source={sourceDescriptor(s)}>
-                      {shortSourceLabel(s)}
-                    </EvidenceChip>
-                  ))
+                ? rec.sources.map((s, idx) => {
+                    // Prefer the backend-supplied human-readable label
+                    // (added 2026-04-22). Fall back to the trailing UC
+                    // segment so anything that hasn't been mapped still
+                    // reads sensibly.
+                    const label = rec.source_labels?.[idx]?.display_label
+                      ?? shortSourceLabel(s);
+                    return (
+                      <EvidenceChip key={s} source={sourceDescriptor(s)}>
+                        {label}
+                      </EvidenceChip>
+                    );
+                  })
                 : Array.from({ length: 3 }).map((_, i) => (
                     <Skeleton key={i} width={96} height={18} rounded="sm" />
                   ))}
@@ -224,6 +242,9 @@ export default function OfferOrchestrator() {
                 resize: 'vertical',
               }}
             />
+            <div className="muted" style={{ marginTop: 6, fontSize: 11 }}>
+              First-name placeholder fills from CRM at send time. Phone number is a lender default — replace with the campaign&apos;s tracking number.
+            </div>
             <div style={{ marginTop: 10, display: 'flex', gap: 8, alignItems: 'center' }}>
               <Chip variant="neutral" icon="shield">Email channel</Chip>
               <Chip variant="neutral">LO call follow-up within 5 days</Chip>
@@ -311,7 +332,7 @@ export default function OfferOrchestrator() {
 
       <div style={{ marginTop: 'var(--gap-grid)' }}>
         <ApprovalBanner
-          text={`${b?.display_name ?? 'Borrower'} queued — approve to write an audit event and queue for outreach. Nothing is sent until you approve.`}
+          text={`${b ? `Borrower ${b.borrower_id}` : 'Borrower'} queued — approve to write an audit event and queue for outreach. Nothing is sent until you approve.`}
           onApprove={onApprove}
           onReject={onReject}
           disabled={approval === 'approved'}

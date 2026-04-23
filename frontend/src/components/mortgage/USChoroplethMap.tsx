@@ -737,7 +737,7 @@ export function USChoroplethMap({ height = 420, segmentFilter }: USChoroplethMap
       <div style={{ position: 'absolute', top: 12, right: 14, zIndex: 2 }}>
         <Chip variant="neutral" icon="pin">
           {level === 'state'
-            ? 'Click IL, CA, or TX to drill'
+            ? `Click ${Object.keys(SUPPORTED_COUNTY_STATES).map((s) => s.toUpperCase()).join(', ')} to drill`
             : level === 'county'
               ? countyStateId === 'il'
                 ? 'Click Cook to drill'

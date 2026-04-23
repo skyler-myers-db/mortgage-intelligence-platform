@@ -79,4 +79,10 @@ SELECT
   rank_within_state,
   CONCAT(DATE_FORMAT(refreshed_at, 'yyyyMMdd'), '-v1') AS population_version,
   refreshed_at
+-- (clip is already in the SELECT above as column 1; the LeadSummary
+-- repository reads `clip` from this table directly -- no second
+-- projection needed. 2026-04-22: the FE-boundary LeadSummary now
+-- carries a `clip` field that previously the frontend derived as
+-- `clip_${borrower_id.toLowerCase()...}`. Surfaces the real Cotality
+-- CLIP so the segment-row preview and Borrower 360 agree.)
 FROM ranked;

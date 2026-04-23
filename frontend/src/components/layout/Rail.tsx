@@ -3,8 +3,10 @@ import { Icon, type IconName } from '../Icon';
 
 /**
  * Left module rail. Vertical strip, 72px wide. M0 is live today; M1–M4
- * are modules on the published roadmap and render as inactive rail
- * items. The active M0 rail item lights up whenever the user is on any
+ * are modules on the published roadmap and render as inactive, non-
+ * interactive rail items (persona review 2026-04-22 blocker #5: M1-M4
+ * previously linked to /admin-config which was an unrelated dead link).
+ * The active M0 rail item lights up whenever the user is on any
  * Module 0 route.
  */
 
@@ -12,14 +14,15 @@ interface ModuleItem {
   id: number;
   name: string;
   icon: IconName;
+  desc: string;
 }
 
 const MODULES: ModuleItem[] = [
-  { id: 0, name: 'Top-of-Funnel', icon: 'target' },
-  { id: 1, name: 'Pipeline',      icon: 'flow' },
-  { id: 2, name: 'Pricing',       icon: 'money' },
-  { id: 3, name: 'Retention',     icon: 'shield' },
-  { id: 4, name: 'Servicing',     icon: 'audit' },
+  { id: 0, name: 'Top-of-Funnel',        icon: 'target', desc: 'Lead generation + borrower segmentation (live).' },
+  { id: 1, name: 'Pipeline Optimization', icon: 'flow',   desc: 'Lead → app → approval throughput and stalls (on roadmap).' },
+  { id: 2, name: 'LO Workbench',          icon: 'money',  desc: 'Officer assist with explainable next-best-action (on roadmap).' },
+  { id: 3, name: 'Underwriting Copilot',  icon: 'shield', desc: 'Condition handling and exception triage (on roadmap).' },
+  { id: 4, name: 'Risk & Retention',      icon: 'audit',  desc: 'Portfolio-level retention and recapture (on roadmap).' },
 ];
 
 export function Rail() {
@@ -31,21 +34,36 @@ export function Rail() {
     <nav className="rail" aria-label="Modules">
       <Link to="/" className="rail__brand" title="Entrada Mortgage Intelligence Platform"><span>ENT</span></Link>
       {MODULES.map((m) => {
-        const active = m.id === 0 ? isM0 : false;
-        const cls = `rail__item ${active ? 'is-active' : ''}`;
-        // M0 links home; M1+ point at the roadmap panel on Admin.
-        const href = m.id === 0 ? '/' : '/admin-config';
+        if (m.id === 0) {
+          const active = isM0;
+          const cls = `rail__item ${active ? 'is-active' : ''}`;
+          return (
+            <Link
+              key={m.id}
+              to="/"
+              className={cls}
+              title={`Module ${m.id}: ${m.name} — ${m.desc}`}
+              aria-current={active ? 'page' : undefined}
+            >
+              <Icon name={m.icon} size={18} className="ico" />
+              <span className="mod">M{m.id}</span>
+            </Link>
+          );
+        }
+        // M1-M4: inactive, non-interactive. Render as <span> with
+        // tooltip + reduced-opacity visual cue. Not navigable.
         return (
-          <Link
+          <span
             key={m.id}
-            to={href}
-            className={cls}
-            title={`Module ${m.id}: ${m.name}${m.id === 0 ? '' : ' — on roadmap'}`}
-            aria-current={active ? 'page' : undefined}
+            className="rail__item rail__item--disabled"
+            role="presentation"
+            aria-disabled="true"
+            title={`Module ${m.id}: ${m.name} — ${m.desc}`}
+            style={{ opacity: 0.45, cursor: 'default' }}
           >
             <Icon name={m.icon} size={18} className="ico" />
             <span className="mod">M{m.id}</span>
-          </Link>
+          </span>
         );
       })}
       <div className="rail__spacer" />

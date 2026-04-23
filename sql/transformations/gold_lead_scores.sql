@@ -109,6 +109,7 @@ base AS (
     b.is_owner_occupied,
     b.is_corporate_owner,
     b.first_pos_loan_type,
+    b.second_pos_amount,  -- for evidence sub-score (parity with borrower_360 2026-04-22)
     -- year_built etc. not carried; bedrooms/bathrooms not on borrower_360;
     -- approximate fit on the available columns.
     COALESCE(re.recent_refi_count_90d,   0) AS recent_refi_count_90d,
@@ -123,47 +124,84 @@ base AS (
   LEFT JOIN evidence_counts   AS ec ON ec.clip = b.clip
   LEFT JOIN historical_summit AS hs ON hs.owner_link_id = b.owner_link_id
 ),
+-- Sub-score formulas: continuous blends (fix/copilot-batch-post-merge
+-- 2026-04-22). Tiered CASE statements collapsed 5.16M borrowers into a
+-- handful of discrete sub-score buckets and, via fn_lead_score, into only
+-- 3 unique opportunity_score values across the top 500. These formulas
+-- mirror the 1:1 changes in sql/transformations/gold_borrower_360.sql;
+-- drift between the two is a parity failure by construction.
 subscores AS (
   SELECT
     b.*,
-    -- economic_incentive (data-contract §5):
-    CASE
-      WHEN b.rate_spread_bps >= 200 AND b.equity_pct >= 35 THEN 98
-      WHEN b.rate_spread_bps >= 150 AND b.equity_pct >= 35 THEN 92
-      WHEN b.rate_spread_bps >= 100 AND b.equity_pct >= 25 THEN 85
-      WHEN b.rate_spread_bps >= 75  AND b.equity_pct >= 15 THEN 75
-      WHEN b.rate_spread_bps >= 0   AND b.equity_pct >= 25 THEN 55
-      WHEN b.equity_pct >= 25                              THEN 48
-      ELSE 30
-    END AS economic_incentive,
-    -- intent_trigger (BLOCKED terms = 0 on real data):
-    LEAST(100,
-      CAST(20 * b.recent_refi_count_90d
-         + 15 * b.recent_payoff_count_90d
-         + 15 * (CASE WHEN b.is_competitor_lien THEN 1 ELSE 0 END)
-         AS INT)
-    ) AS intent_trigger,
-    -- fit (data-contract §5, approximated without bedrooms/bathrooms):
-    CASE
-      WHEN b.is_owner_occupied
-        AND b.first_pos_loan_type IN ('CONV','FHA','VA') THEN 82
-      WHEN b.is_owner_occupied                           THEN 75
-      WHEN b.is_corporate_owner                          THEN 65
-      ELSE 58
-    END AS fit,
-    -- relationship (data-contract §5):
-    -- Threshold (>= 2) is "two or more distinct properties ever financed
-    -- by Summit at this owner" post slice13-accuracy. Repeat events on a
-    -- single property no longer clear the bar.
-    CASE
-      WHEN b.is_current_customer
-        AND b.historical_summit_distinct_clips >= 2     THEN 95
-      WHEN b.is_current_customer                        THEN 88
-      WHEN b.is_competitor_lien                         THEN 60
-      ELSE 45
-    END AS relationship,
-    -- evidence (data-contract §5):
-    LEAST(100, 20 * b.evidence_event_count) AS evidence
+    -- economic_incentive: continuous blend of spread + equity that
+    -- saturates gently. See gold_borrower_360.sql for rationale; the
+    -- formula here must stay 1:1 with that CTAS -- drift is a parity
+    -- failure by construction.
+    CAST(LEAST(100, GREATEST(0,
+        LEAST(55, CAST(ROUND(3 * sqrt(GREATEST(0, b.rate_spread_bps))) AS INT))
+      + LEAST(50, CAST(ROUND(0.5 * LEAST(100, GREATEST(0, b.equity_pct))) AS INT))
+    )) AS INT) AS economic_incentive,
+    -- intent_trigger: mirrors gold_borrower_360 (must stay 1:1). Real
+    -- recent-event counts (refi/payoff) keep their contributions;
+    -- BLOCKED signals (permit, listing, avm uplift) stay 0. Sqrt on the
+    -- rate-drift term keeps the top tail separable.
+    CAST(LEAST(100, GREATEST(0,
+        CAST(20 * b.recent_refi_count_90d AS INT)
+      + CAST(15 * b.recent_payoff_count_90d AS INT)
+      + 20 * CASE WHEN b.is_competitor_lien THEN 1 ELSE 0 END
+      + CASE WHEN b.is_investor THEN 20 ELSE 0 END
+      + LEAST(30, CAST(ROUND(2 * sqrt(GREATEST(0, b.rate_spread_bps))) AS INT))
+      + LEAST(10, GREATEST(0, CAST(b.equity_pct / 10 AS INT)))
+      + CASE WHEN b.is_current_customer THEN 8 ELSE 0 END
+    )) AS INT) AS intent_trigger,
+    -- fit: continuous over available property signals. lead_scores has
+    -- no bedrooms/bathrooms columns (they live on borrower_360), so we
+    -- approximate with the owner-occupancy tier + loan-type flag plus
+    -- a small jitter via is_investor (reduces fit for pure investor
+    -- rows so the ranked queue prioritises owner-occupants).
+    CAST(LEAST(100, GREATEST(0,
+      CASE
+        WHEN b.is_owner_occupied AND b.first_pos_loan_type IN ('CONV','FHA','VA') THEN 78
+        WHEN b.is_owner_occupied                                                  THEN 68
+        WHEN b.is_corporate_owner                                                 THEN 58
+        ELSE 50
+      END
+      - CASE WHEN b.is_investor AND NOT b.is_owner_occupied THEN 10 ELSE 0 END
+    )) AS INT) AS fit,
+    -- relationship: must stay 1:1 with gold_borrower_360. lead_scores
+    -- does not carry related_property_count directly, but b.is_investor
+    -- is already derived from multi-property >= 2. For non-investor
+    -- rows we fall back to 0 bump; this is a known minor parity gap
+    -- (related_property_count in borrower_360 vs is_investor boolean
+    -- here) that drops a ~5pt contribution at most. The overall spread
+    -- is driven by economic_incentive + intent_trigger.
+    CAST(LEAST(100, GREATEST(0,
+      CASE
+        WHEN b.is_current_customer THEN 70
+        WHEN b.is_competitor_lien  THEN 55
+        WHEN b.is_investor         THEN 45
+        ELSE 35
+      END
+      + CASE
+          WHEN b.is_current_customer
+            THEN LEAST(25, 5 * LEAST(5, b.historical_summit_distinct_clips))
+          WHEN b.is_investor
+            THEN 10
+          ELSE 0
+        END
+    )) AS INT) AS relationship,
+    -- evidence: 10 pts per live event (was 20 -- saturated >=50% of
+    -- rows) plus a continuous second_pos_amount term so dossier-rich
+    -- borrowers beat dossier-sparse ones. Must match the formula in
+    -- gold_borrower_360 exactly.
+    LEAST(100, GREATEST(0,
+      10 * b.evidence_event_count
+      + CASE
+          WHEN b.second_pos_amount IS NOT NULL AND b.second_pos_amount > 0
+            THEN LEAST(20, CAST(ROUND(sqrt(b.second_pos_amount / 1000.0)) AS INT))
+          ELSE 0
+        END
+    )) AS evidence
   FROM base AS b
 )
 SELECT

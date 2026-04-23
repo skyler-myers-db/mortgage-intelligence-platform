@@ -52,8 +52,8 @@ function RowPreview({ lead }: { lead: LeadSummary }) {
         <p className="body" style={{ marginTop: 0 }}>{lead.why_now}</p>
         <div style={{ marginTop: 12, display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
           <span className="muted" style={{ fontSize: 11 }}>Evidence:</span>
-          <EvidenceChip source={DRAWER_SOURCES.itm}>rules.itm_v3</EvidenceChip>
-          <EvidenceChip source={DRAWER_SOURCES.nbo}>mlflow.mtg_nbo_v3</EvidenceChip>
+          <EvidenceChip source={DRAWER_SOURCES.itm}>Rate + equity ruleset</EvidenceChip>
+          <EvidenceChip source={DRAWER_SOURCES.nbo}>Next-best-offer model</EvidenceChip>
         </div>
       </div>
 
@@ -138,8 +138,10 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
                       <Icon name={isOpen ? 'down' : 'chevright'} size={14} className="muted" />
                     </td>
                     <td className="is-primary">
-                      <div>{lead.display_name}</div>
-                      <div className="mono muted" style={{ fontSize: 11 }}>{lead.borrower_id}</div>
+                      <div className="mono" style={{ fontSize: 12, color: 'var(--text-1)' }}>{lead.borrower_id}</div>
+                      <div className="mono muted" style={{ fontSize: 10 }}>
+                        {`clip_${lead.borrower_id.toLowerCase().replace(/-/g, '')}`}
+                      </div>
                     </td>
                     <td>
                       {lead.city}, {lead.state}

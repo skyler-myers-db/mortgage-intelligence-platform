@@ -52,6 +52,23 @@ async function defaultFetchHealth(): Promise<HealthPayload> {
   return (await res.json()) as HealthPayload;
 }
 
+/**
+ * Map internal Databricks product names → buyer-friendly dependency names.
+ * The degraded banner is surfaced to the business buyer (Head of Growth,
+ * VP Lending), who doesn't know what "lakebase" or "genie" are. Keep the
+ * internal name in `data-degraded-dependency` for ops telemetry; show
+ * the friendly name in the visible title.
+ */
+const FRIENDLY_DEP_NAMES: Record<string, string> = {
+  warehouse: 'analytics warehouse',
+  lakebase: 'operational database',
+  genie: 'AI assistant',
+};
+
+function friendlyDependencyName(dep: string): string {
+  return FRIENDLY_DEP_NAMES[dep] ?? dep;
+}
+
 function degradedDependency(health: HealthPayload | null): string | null {
   if (!health) return null;
   const deps = health.dependencies ?? {};
@@ -112,7 +129,7 @@ export function DegradedBanner({
   const downDep = degradedDependency(health);
   if (!downDep) return null;
 
-  const title = `Reconnecting to ${downDep}`;
+  const title = `Reconnecting to ${friendlyDependencyName(downDep)}`;
   const sub = `Live data will resume automatically. This page refreshes every ${Math.round(pollIntervalDegradedMs / 1000)} seconds.`;
 
   return (

@@ -29,6 +29,11 @@ export interface LeadSummary {
   city: string;
   state: string;
   zip: string;
+  /** Real Cotality CLIP (2026-04-22 contract addition). Present on the
+   *  lead-queue row and matches Borrower360.clip_id exactly. Empty string
+   *  if the upstream gold row predates this projection; callers should
+   *  prefer this field over deriving a fake CLIP from borrower_id. */
+  clip: string;
   segment_codes: SegmentCode[];
   equity_estimate: number;
   rate_spread_bps: number;
@@ -40,6 +45,14 @@ export interface LeadSummary {
   approval_status: ApprovalStatus;
 }
 
+/** Business-friendly label for a UC source (2026-04-22). `name` is the
+ *  raw UC object name (drives drawer lineage); `display_label` is the
+ *  human-readable chip text (e.g. "In-the-money rule"). */
+export interface SourceLabel {
+  name: string;
+  display_label: string;
+}
+
 export interface WhyPanel {
   rate_spread_bps: number;
   market_rate: number;
@@ -49,6 +62,8 @@ export interface WhyPanel {
   min_spread_bps: number;
   min_equity_pct: number;
   sources: string[];
+  /** Index-aligned with `sources`. Added 2026-04-22. */
+  source_labels?: SourceLabel[];
 }
 
 export interface Borrower360 extends LeadSummary {
@@ -88,6 +103,10 @@ export interface OfferRecommendation {
   rationale: string;
   evidence_ids: string[];
   sources: string[];
+  /** Index-aligned with `sources`. Added 2026-04-22 so chip text renders
+   *  business-friendly labels (e.g. "In-the-money rule") instead of raw
+   *  UC object names. Optional for back-compat with cached responses. */
+  source_labels?: SourceLabel[];
   alternatives: OfferAlternative[];
   thresholds_applied: Record<string, number>;
 }
