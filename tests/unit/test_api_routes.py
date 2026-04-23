@@ -44,7 +44,8 @@ def test_required_routes_exist_and_respond():
             200,
         ),
         ("get", "/api/admin/rules", None, 200),
-        ("put", "/api/admin/rules", {"x": "y"}, 200),
+        # Round-3 hole-finder #17: PUT body is now Pydantic-validated.
+        ("put", "/api/admin/rules", {"overrides": {"x": "y"}}, 200),
     ]
 
     for method, path, payload, expected in checks:

@@ -8,7 +8,7 @@ import { Button, Chip } from '../components/Primitives';
 import { DRAWER_SOURCES } from '../lib/drawerSources';
 import { Icon } from '../components/Icon';
 import { Reveal } from '../components/fx/Reveal';
-import { api } from '../lib/api';
+import { api, isAbortError } from '../lib/api';
 import { useApp } from '../components/AppContext';
 import { EntradaWordmark } from '../components/brand/Entrada';
 import { formatRefreshed } from '../lib/formatRefreshed';
@@ -42,28 +42,41 @@ export default function Home() {
   // finding #1, 2026-04-23.
   const [reloadToken, setReloadToken] = useState<number>(0);
   useEffect(() => {
-    let cancelled = false;
+    // AbortController replaces the legacy `cancelled` guard so an unmount
+    // or filter change actually cancels the in-flight fetch (not just the
+    // setState). Round-2 hole-finder #10/#11, 2026-04-23.
+    const ctrl = new AbortController();
     api
-      .portfolioPreview()
+      .portfolioPreview({}, ctrl.signal)
       .then((p) => {
-        if (!cancelled) {
-          setPreview(p);
-          setPreviewError(null);
-        }
+        setPreview(p);
+        setPreviewError(null);
       })
       .catch((err: unknown) => {
-        if (cancelled) return;
+        if (isAbortError(err)) return;
         setPreview(null);
         setPreviewError(
           err instanceof Error ? err.message : "Couldn't load portfolio KPIs.",
         );
       });
     return () => {
-      cancelled = true;
+      ctrl.abort();
     };
   }, [reloadToken]);
 
   const queued = preview?.high_intent_leads ?? null;
+
+  // Day-0 detection (hole-finder round 2 #13, 2026-04-23): on a fresh
+  // customer workspace `mip.gold.funnel_snapshot_daily` is empty and
+  // `mip.gold.borrower_360` has no rows yet. The preview then comes back
+  // as zeroes with a null timestamp — which renders as "0 / 0 / 0 / 0"
+  // and looks like honest-but-sad real data. Catch that exact shape and
+  // show an empty-state banner so the presenter knows to run the bundle,
+  // not explain why the pipeline says nothing.
+  const isDayZero =
+    preview !== null
+    && preview.marketable_population === 0
+    && preview.data_refreshed_at === null;
 
   return (
     <PageShell
@@ -110,40 +123,71 @@ export default function Home() {
           </button>
         </div>
       )}
-      <div className="kpi-row">
-        <KpiCard
-          label="Marketable population"
-          valueAnimated={preview?.marketable_population ?? null}
-          trend={preview?.trends?.marketable_population?.series}
-          delta={formatDelta(preview?.trends?.marketable_population?.delta_pct)}
-          deltaDir={preview?.trends?.marketable_population?.direction}
-          source={DRAWER_SOURCES.population}
-        />
-        <KpiCard
-          label="High-intent leads"
-          valueAnimated={preview?.high_intent_leads ?? null}
-          trend={preview?.trends?.high_intent_leads?.series}
-          delta={formatDelta(preview?.trends?.high_intent_leads?.delta_pct)}
-          deltaDir={preview?.trends?.high_intent_leads?.direction}
-          source={DRAWER_SOURCES.itm}
-        />
-        <KpiCard
-          label="Top-tier opportunities"
-          valueAnimated={preview?.top_tier_opportunities ?? null}
-          trend={preview?.trends?.top_tier_opportunities?.series}
-          delta={formatDelta(preview?.trends?.top_tier_opportunities?.delta_pct)}
-          deltaDir={preview?.trends?.top_tier_opportunities?.direction}
-          source={DRAWER_SOURCES.nbo}
-        />
-        <KpiCard
-          label="Offers recommended"
-          valueAnimated={preview?.offers_recommended ?? null}
-          trend={preview?.trends?.offers_recommended?.series}
-          delta={formatDelta(preview?.trends?.offers_recommended?.delta_pct)}
-          deltaDir={preview?.trends?.offers_recommended?.direction}
-          source={DRAWER_SOURCES.nbo}
-        />
-      </div>
+      {isDayZero && (
+        <div
+          role="status"
+          style={{
+            marginBottom: 'var(--gap-grid)',
+            padding: '12px 14px',
+            border: '1px solid var(--line-2)',
+            borderRadius: 'var(--r-md)',
+            background: 'var(--bg-1)',
+            fontSize: 13,
+            color: 'var(--text-1)',
+          }}
+        >
+          <strong>First data refresh pending.</strong>{' '}
+          Unity Catalog gold tables are empty. Run{' '}
+          <code
+            style={{
+              fontFamily: 'var(--font-mono)',
+              fontSize: 12,
+              padding: '1px 6px',
+              borderRadius: 4,
+              background: 'var(--bg-2)',
+            }}
+          >
+            databricks bundle run mip_refresh_scores -t dev
+          </code>{' '}
+          to populate them.
+        </div>
+      )}
+      {!isDayZero && (
+        <div className="kpi-row">
+          <KpiCard
+            label="Marketable population"
+            valueAnimated={preview?.marketable_population ?? null}
+            trend={preview?.trends?.marketable_population?.series}
+            delta={formatDelta(preview?.trends?.marketable_population?.delta_pct)}
+            deltaDir={preview?.trends?.marketable_population?.direction}
+            source={DRAWER_SOURCES.population}
+          />
+          <KpiCard
+            label="High-intent leads"
+            valueAnimated={preview?.high_intent_leads ?? null}
+            trend={preview?.trends?.high_intent_leads?.series}
+            delta={formatDelta(preview?.trends?.high_intent_leads?.delta_pct)}
+            deltaDir={preview?.trends?.high_intent_leads?.direction}
+            source={DRAWER_SOURCES.itm}
+          />
+          <KpiCard
+            label="Top-tier opportunities"
+            valueAnimated={preview?.top_tier_opportunities ?? null}
+            trend={preview?.trends?.top_tier_opportunities?.series}
+            delta={formatDelta(preview?.trends?.top_tier_opportunities?.delta_pct)}
+            deltaDir={preview?.trends?.top_tier_opportunities?.direction}
+            source={DRAWER_SOURCES.nbo}
+          />
+          <KpiCard
+            label="Offers recommended"
+            valueAnimated={preview?.offers_recommended ?? null}
+            trend={preview?.trends?.offers_recommended?.series}
+            delta={formatDelta(preview?.trends?.offers_recommended?.delta_pct)}
+            deltaDir={preview?.trends?.offers_recommended?.direction}
+            source={DRAWER_SOURCES.nbo}
+          />
+        </div>
+      )}
 
       <div
         className="approval"

@@ -398,7 +398,14 @@ SELECT
   --   across engines (raised by Copilot 2026-04-22 — some SQL engines
   --   return lowercase base-36 digits).
   CONCAT('B-', LPAD(UPPER(CONV(CAST(ABS(XXHASH64(w.clip)) AS STRING), 10, 36)), 13, '0')) AS borrower_id,
-  CONCAT('Owner ', SUBSTR(w.owner_name_hash, 1, 8))                                   AS display_name,
+  -- Round-3 hole-finder #6: NULL owner_name_hash used to render "Owner "
+  -- (trailing space). Coalesce to the short borrower_id suffix so the
+  -- rendered label is always readable.
+  CASE
+    WHEN w.owner_name_hash IS NULL OR LENGTH(TRIM(w.owner_name_hash)) = 0
+      THEN CONCAT('Borrower ', LPAD(UPPER(CONV(CAST(ABS(XXHASH64(w.clip)) AS STRING), 10, 36)), 6, '0'))
+    ELSE CONCAT('Owner ', SUBSTR(w.owner_name_hash, 1, 8))
+  END                                                                                   AS display_name,
   w.city,
   w.state,
   w.zip,

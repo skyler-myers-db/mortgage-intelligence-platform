@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Icon, type IconName } from '../Icon';
-import { api, type AuditEventRow } from '../../lib/api';
+import { api, isAbortError, type AuditEventRow } from '../../lib/api';
+import { useOptionalHealth } from '../HealthProvider';
 
 /**
  * AgentActivityLog — prototype `.audit` BEM. Pulls events from
@@ -10,13 +11,14 @@ import { api, type AuditEventRow } from '../../lib/api';
  * Icon + color keyed off action verb so Approvals stand out green,
  * rejects red, Genie asks amber.
  *
- * The footer renders a live telemetry strip built from /api/health —
- * warehouse + Genie dependency state and a monotonic wall-clock probe
- * latency. Values are not synthesized: `status`, `dependencies`, and
+ * The footer renders a live telemetry strip built from the shared
+ * HealthProvider (round-2 hole-finder #21, 2026-04-23) — warehouse +
+ * Genie dependency state and a monotonic wall-clock probe latency.
+ * Values are not synthesized: `status`, `dependencies`, and
  * `circuit_breakers` come straight from the health endpoint; the
- * `probe_ms` is the wall-clock cost of the single fetch that produced
- * them. This is the operator-honesty beat the talk track calls out:
- * if the warehouse is warming up, the activity log says so.
+ * `probe_ms` is the wall-clock cost of the most recent probe that
+ * produced them. This is the operator-honesty beat the talk track
+ * calls out: if the warehouse is warming up, the activity log says so.
  */
 
 type AuditEvent = AuditEventRow;
@@ -47,31 +49,13 @@ function formatTime(iso: string): string {
 }
 
 // ---------------------------------------------------------------------
-// Health telemetry — polled from /api/health every 30s. All three values
-// (dep state, breaker state, probe_ms) are real measurements; nothing
-// here is synthesized.
+// Health telemetry — consumed from the shared HealthProvider. All three
+// values (dep state, breaker state, probe_ms) are real measurements;
+// nothing here is synthesized.
 // ---------------------------------------------------------------------
 
 type DepState = 'up' | 'down' | 'unknown';
 type BreakerState = 'closed' | 'open' | 'half_open' | 'unknown';
-
-interface HealthSnapshot {
-  warehouse: DepState;
-  genie: DepState;
-  warehouse_breaker: BreakerState;
-  genie_breaker: BreakerState;
-  probe_ms: number | null;
-  fetched_at: string;
-}
-
-const EMPTY_HEALTH: HealthSnapshot = {
-  warehouse: 'unknown',
-  genie: 'unknown',
-  warehouse_breaker: 'unknown',
-  genie_breaker: 'unknown',
-  probe_ms: null,
-  fetched_at: '',
-};
 
 function breakerLabel(b: BreakerState): string | null {
   // A closed breaker is the happy path; we only surface a friendly
@@ -88,63 +72,41 @@ type FeedState = 'loading' | 'empty' | 'error' | 'ok';
 export function AgentActivityLog({ limit = 12 }: { limit?: number }) {
   const [rows, setRows] = useState<AuditEvent[]>([]);
   const [feedState, setFeedState] = useState<FeedState>('loading');
-  const [health, setHealth] = useState<HealthSnapshot>(EMPTY_HEALTH);
+  const healthCtx = useOptionalHealth();
+  const health = healthCtx?.health ?? null;
+  const probeMs = healthCtx?.probeMs ?? null;
+  const warehouse = (health?.dependencies?.warehouse as DepState) ?? 'unknown';
+  const genie = (health?.dependencies?.genie as DepState) ?? 'unknown';
+  const warehouseBreakerState =
+    (health?.circuit_breakers?.warehouse as BreakerState) ?? 'unknown';
+  const genieBreakerState =
+    (health?.circuit_breakers?.genie as BreakerState) ?? 'unknown';
 
   useEffect(() => {
-    let cancelled = false;
+    const ctrl = new AbortController();
     (async () => {
       try {
         // Route through api.ts so 503s with `retryable: true` follow
         // the shared exponential-backoff cadence rather than falling
         // straight into the "unavailable" state. Hole-finder #4,
         // 2026-04-23.
-        const data = await api.auditEvents(limit);
-        if (cancelled) return;
+        const data = await api.auditEvents(limit, ctrl.signal);
         setRows(data);
         setFeedState(data.length > 0 ? 'ok' : 'empty');
-      } catch {
-        if (cancelled) return;
+      } catch (err) {
+        if (isAbortError(err)) return;
         setRows([]);
         setFeedState('error');
       }
     })();
     return () => {
-      cancelled = true;
+      ctrl.abort();
     };
   }, [limit]);
 
-  useEffect(() => {
-    let cancelled = false;
-    const poll = async () => {
-      const t0 = performance.now();
-      // api.health() never throws — it returns `{ status:
-      // 'unreachable', mode: 'unknown', dependencies: {} }` on failure
-      // so "unknown" flows through the UI without `catch` bookkeeping.
-      const body = await api.health();
-      const elapsed = Math.round(performance.now() - t0);
-      if (cancelled) return;
-      setHealth({
-        warehouse: (body.dependencies?.warehouse as DepState) ?? 'unknown',
-        genie: (body.dependencies?.genie as DepState) ?? 'unknown',
-        warehouse_breaker:
-          (body.circuit_breakers?.warehouse as BreakerState) ?? 'unknown',
-        genie_breaker:
-          (body.circuit_breakers?.genie as BreakerState) ?? 'unknown',
-        probe_ms: elapsed,
-        fetched_at: new Date().toISOString(),
-      });
-    };
-    void poll();
-    const id = window.setInterval(poll, 30_000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(id);
-    };
-  }, []);
-
-  const warehouseBreaker = breakerLabel(health.warehouse_breaker);
-  const genieBreaker = breakerLabel(health.genie_breaker);
-  const probeSuffix = health.probe_ms != null ? ` · ${health.probe_ms} ms` : '';
+  const warehouseBreaker = breakerLabel(warehouseBreakerState);
+  const genieBreaker = breakerLabel(genieBreakerState);
+  const probeSuffix = probeMs != null ? ` · ${probeMs} ms` : '';
 
   return (
     <div className="surface">
@@ -195,14 +157,14 @@ export function AgentActivityLog({ limit = 12 }: { limit?: number }) {
             style={{
               width: 6, height: 6, borderRadius: '50%',
               background:
-                health.warehouse === 'up'
+                warehouse === 'up'
                   ? 'var(--signal-success)'
-                  : health.warehouse === 'down'
+                  : warehouse === 'down'
                     ? 'var(--signal-danger)'
                     : 'var(--text-3)',
             }}
           />
-          Analytics warehouse {health.warehouse}
+          Analytics warehouse {warehouse}
           {warehouseBreaker ? ` · ${warehouseBreaker}` : ''}
         </span>
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
@@ -211,14 +173,14 @@ export function AgentActivityLog({ limit = 12 }: { limit?: number }) {
             style={{
               width: 6, height: 6, borderRadius: '50%',
               background:
-                health.genie === 'up'
+                genie === 'up'
                   ? 'var(--signal-success)'
-                  : health.genie === 'down'
+                  : genie === 'down'
                     ? 'var(--signal-danger)'
                     : 'var(--text-3)',
             }}
           />
-          AI assistant {health.genie}
+          AI assistant {genie}
           {genieBreaker ? ` · ${genieBreaker}` : ''}
         </span>
         <span className="mono" style={{ marginLeft: 'auto' }}>

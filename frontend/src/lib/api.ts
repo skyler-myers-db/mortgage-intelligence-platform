@@ -24,6 +24,15 @@ import type {
  * The only method that tolerates failure is `health()`: an unreachable
  * /api/health returns `{ status: 'unreachable', mode: 'unknown',
  * dependencies: {} }`. That's honest status, not synthetic data.
+ *
+ * Cancellation (round-2 hole-finder #10/#11, 2026-04-23): every method
+ * accepts an optional `AbortSignal`. Callers pass a controller's
+ * signal in the effect body and call `controller.abort()` from the
+ * cleanup function so an unmount / rapid-refilter actually cancels
+ * the in-flight request. An aborted fetch throws a DOMException with
+ * name === 'AbortError'; we re-throw it as an ApiError with
+ * `retryable: false` so call sites can `if (err.name === 'AbortError')`
+ * cheaply, or inspect `.aborted` on the ApiError.
  */
 
 export interface HealthPayload {
@@ -82,18 +91,34 @@ export class ApiError extends Error {
   readonly status: number | null;
   readonly retryable: boolean;
   readonly dependency: string | null;
+  readonly aborted: boolean;
 
   constructor(
     message: string,
-    opts: { path: string; status?: number | null; retryable?: boolean; dependency?: string | null } = { path: '' },
+    opts: {
+      path: string;
+      status?: number | null;
+      retryable?: boolean;
+      dependency?: string | null;
+      aborted?: boolean;
+    } = { path: '' },
   ) {
     super(message);
-    this.name = 'ApiError';
+    this.name = opts.aborted ? 'AbortError' : 'ApiError';
     this.path = opts.path;
     this.status = opts.status ?? null;
     this.retryable = Boolean(opts.retryable);
     this.dependency = opts.dependency ?? null;
+    this.aborted = Boolean(opts.aborted);
   }
+}
+
+/** True when the error was caused by a caller-driven AbortController abort. */
+export function isAbortError(err: unknown): boolean {
+  if (!err) return false;
+  if (err instanceof ApiError) return err.aborted;
+  if (err instanceof Error && err.name === 'AbortError') return true;
+  return false;
 }
 
 /**
@@ -108,8 +133,34 @@ export class ApiError extends Error {
  * "backend is warming up" while these retries run.
  */
 
-async function _sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function _sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(_abortError());
+      return;
+    }
+    const t = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(t);
+      reject(_abortError());
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+function _abortError(): DOMException {
+  // DOMException exists in browsers + jsdom + recent Node. Fall back to
+  // a plain Error with name='AbortError' in ancient runtimes.
+  try {
+    return new DOMException('The operation was aborted.', 'AbortError');
+  } catch {
+    const err = new Error('The operation was aborted.');
+    err.name = 'AbortError';
+    return err as unknown as DOMException;
+  }
 }
 
 interface Retryable503Parsed {
@@ -140,10 +191,12 @@ async function _fetchWithRetry(
   path: string,
   init?: RequestInit,
   attempts = 3,
+  signal?: AbortSignal,
 ): Promise<Response> {
   let lastRes: Response | null = null;
   for (let i = 0; i < attempts; i++) {
-    const res = await fetch(path, init);
+    if (signal?.aborted) throw _abortError();
+    const res = await fetch(path, { ...init, signal });
     if (res.ok) return res;
     const parsed = await _parseRetryableBody(res);
     if (!parsed.retryable) return res;
@@ -151,7 +204,7 @@ async function _fetchWithRetry(
     if (i === attempts - 1) break;
     const delay = Math.min(2000, 200 * 2 ** i);
     const jittered = delay * (0.5 + Math.random());
-    await _sleep(jittered);
+    await _sleep(jittered, signal);
   }
   return lastRes as Response;
 }
@@ -167,30 +220,48 @@ async function _throwFromResponse(res: Response, path: string): Promise<never> {
   });
 }
 
-async function getJson<T>(path: string): Promise<T> {
+function _wrapFetchError(err: unknown, path: string): ApiError {
+  // A caller-triggered abort surfaces as a DOMException with name ===
+  // 'AbortError'. Preserve that signal so consumers can short-circuit
+  // without spamming the user with a red error banner.
+  if (err instanceof Error && err.name === 'AbortError') {
+    return new ApiError('request aborted', {
+      path,
+      status: null,
+      retryable: false,
+      aborted: true,
+    });
+  }
+  const message = err instanceof Error ? err.message : 'network error';
+  return new ApiError(message, { path, status: null, retryable: false });
+}
+
+async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
   let res: Response;
   try {
-    res = await _fetchWithRetry(path);
+    res = await _fetchWithRetry(path, undefined, 3, signal);
   } catch (err) {
-    // Network-level failure (offline, DNS, CORS preflight, etc.)
-    const message = err instanceof Error ? err.message : 'network error';
-    throw new ApiError(message, { path, status: null, retryable: false });
+    throw _wrapFetchError(err, path);
   }
   if (!res.ok) await _throwFromResponse(res, path);
   return (await res.json()) as T;
 }
 
-async function postJson<T, B>(path: string, body: B): Promise<T> {
+async function postJson<T, B>(path: string, body: B, signal?: AbortSignal): Promise<T> {
   let res: Response;
   try {
-    res = await _fetchWithRetry(path, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body ?? {}),
-    });
+    res = await _fetchWithRetry(
+      path,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body ?? {}),
+      },
+      3,
+      signal,
+    );
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'network error';
-    throw new ApiError(message, { path, status: null, retryable: false });
+    throw _wrapFetchError(err, path);
   }
   if (!res.ok) await _throwFromResponse(res, path);
   return (await res.json()) as T;
@@ -200,47 +271,61 @@ export const api = {
   /**
    * Honest health probe. A dead backend returns an "unreachable" status
    * object instead of throwing — callers render dependency state as
-   * `unknown`, never as synthesized "up".
+   * `unknown`, never as synthesized "up". A caller-triggered abort
+   * re-throws so `HealthProvider` can cancel in-flight polls on
+   * unmount.
    */
-  health: async (): Promise<HealthPayload> => {
+  health: async (signal?: AbortSignal): Promise<HealthPayload> => {
     try {
-      return await getJson<HealthPayload>('/api/health');
-    } catch {
+      return await getJson<HealthPayload>('/api/health', signal);
+    } catch (err) {
+      if (isAbortError(err)) throw err;
       return { status: 'unreachable', mode: 'unknown', dependencies: {} };
     }
   },
 
-  portfolioPreview: (criteria: Record<string, unknown> = {}) =>
+  portfolioPreview: (
+    criteria: Record<string, unknown> = {},
+    signal?: AbortSignal,
+  ) =>
     postJson<PortfolioPreview, { criteria: Record<string, unknown> }>(
       '/api/portfolio/preview',
       { criteria },
+      signal,
     ),
 
-  segments: () => getJson<SegmentSummary[]>('/api/segments'),
+  segments: (signal?: AbortSignal) =>
+    getJson<SegmentSummary[]>('/api/segments', signal),
 
-  stateRollups: () => getJson<StateRollupResponse>('/api/geo/state-rollups'),
+  stateRollups: (signal?: AbortSignal) =>
+    getJson<StateRollupResponse>('/api/geo/state-rollups', signal),
 
-  countyRollups: (state: string) =>
+  countyRollups: (state: string, signal?: AbortSignal) =>
     getJson<CountyRollupResponse>(
       `/api/geo/county-rollups?state=${encodeURIComponent(state.toUpperCase())}`,
+      signal,
     ),
 
-  zipRollups: (fips: string) =>
+  zipRollups: (fips: string, signal?: AbortSignal) =>
     getJson<ZipRollupResponse>(
       `/api/geo/zip-rollups?fips=${encodeURIComponent(fips)}`,
+      signal,
     ),
 
-  leads: (segment?: string) =>
+  leads: (segment?: string, signal?: AbortSignal) =>
     getJson<LeadSummary[]>(
       segment ? `/api/leads?segment=${encodeURIComponent(segment)}` : '/api/leads',
+      signal,
     ),
 
-  borrower: (id: string) => getJson<Borrower360>(`/api/borrowers/${id}`),
+  borrower: (id: string, signal?: AbortSignal) =>
+    getJson<Borrower360>(`/api/borrowers/${id}`, signal),
 
-  recommendOffer: (borrower_id: string) =>
+  recommendOffer: (borrower_id: string, signal?: AbortSignal) =>
     postJson<OfferRecommendation, { borrower_id: string }>(
       '/api/offers/recommend',
       { borrower_id },
+      signal,
     ),
 
   approve: (
@@ -251,6 +336,7 @@ export const api = {
       evidence_ids?: string[];
       draft_body?: string | null;
     } = {},
+    signal?: AbortSignal,
   ) =>
     postJson<
       ApproveResult,
@@ -261,19 +347,23 @@ export const api = {
         evidence_ids?: string[];
         draft_body?: string | null;
       }
-    >('/api/outreach/approve', {
-      borrower_id,
-      actor: opts.actor ?? 'anonymous',
-      // Forward the chosen offer_code + evidence_ids so the audit row
-      // captures what the approver actually saw. Default to [] / null
-      // so callers that don't have the recommendation hydrated still work.
-      offer_code: opts.offer_code ?? null,
-      evidence_ids: opts.evidence_ids ?? [],
-      // 2026-04-22: the approver can edit the draft body inline before
-      // approving. Send the final text so compliance can reconstruct
-      // exactly what was released from the audit ledger.
-      draft_body: opts.draft_body ?? null,
-    }),
+    >(
+      '/api/outreach/approve',
+      {
+        borrower_id,
+        actor: opts.actor ?? 'anonymous',
+        // Forward the chosen offer_code + evidence_ids so the audit row
+        // captures what the approver actually saw. Default to [] / null
+        // so callers that don't have the recommendation hydrated still work.
+        offer_code: opts.offer_code ?? null,
+        evidence_ids: opts.evidence_ids ?? [],
+        // 2026-04-22: the approver can edit the draft body inline before
+        // approving. Send the final text so compliance can reconstruct
+        // exactly what was released from the audit ledger.
+        draft_body: opts.draft_body ?? null,
+      },
+      signal,
+    ),
 
   /**
    * Reject a borrower from outreach. Structural twin of `approve` —
@@ -290,6 +380,7 @@ export const api = {
       evidence_ids?: string[];
       rationale?: string | null;
     } = {},
+    signal?: AbortSignal,
   ) =>
     postJson<
       RejectResult,
@@ -300,13 +391,17 @@ export const api = {
         evidence_ids?: string[];
         rationale?: string | null;
       }
-    >('/api/outreach/reject', {
-      borrower_id,
-      actor: opts.actor ?? 'anonymous',
-      offer_code: opts.offer_code ?? null,
-      evidence_ids: opts.evidence_ids ?? [],
-      rationale: opts.rationale ?? null,
-    }),
+    >(
+      '/api/outreach/reject',
+      {
+        borrower_id,
+        actor: opts.actor ?? 'anonymous',
+        offer_code: opts.offer_code ?? null,
+        evidence_ids: opts.evidence_ids ?? [],
+        rationale: opts.rationale ?? null,
+      },
+      signal,
+    ),
 
   /**
    * Fetch the backend-generated outreach draft for a borrower. The
@@ -315,14 +410,23 @@ export const api = {
    * fall back to a local template string if this rejects so the
    * Offer Orchestrator stays usable when the endpoint is degraded.
    */
-  draftOutreach: (borrower_id: string, channel: 'email' | 'sms' = 'email') =>
+  draftOutreach: (
+    borrower_id: string,
+    channel: 'email' | 'sms' = 'email',
+    signal?: AbortSignal,
+  ) =>
     postJson<OutreachDraftResult, { borrower_id: string; channel: 'email' | 'sms' }>(
       '/api/outreach/draft',
       { borrower_id, channel },
+      signal,
     ),
 
-  genie: (question: string) =>
-    postJson<GenieResult, { question: string }>('/api/genie/message', { question }),
+  genie: (question: string, signal?: AbortSignal) =>
+    postJson<GenieResult, { question: string }>(
+      '/api/genie/message',
+      { question },
+      signal,
+    ),
 
   /**
    * Recent audit events for the Agent Activity Log. Routes through the
@@ -331,6 +435,6 @@ export const api = {
    * get the same cadence the backend's Resilient wrapper runs at.
    * Hole-finder finding #4, 2026-04-23.
    */
-  auditEvents: (limit = 12) =>
-    getJson<AuditEventRow[]>(`/api/audit/events?limit=${limit}`),
+  auditEvents: (limit = 12, signal?: AbortSignal) =>
+    getJson<AuditEventRow[]>(`/api/audit/events?limit=${limit}`, signal),
 };

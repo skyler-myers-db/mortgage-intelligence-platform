@@ -211,13 +211,18 @@ from backend.services.resilience import DependencyDownError  # noqa: E402
 
 @app.exception_handler(DependencyDownError)
 async def _dependency_down_handler(_request: Request, exc: DependencyDownError) -> JSONResponse:
-    """Return 503 with ``{detail, retryable, dependency}`` body.
+    """Return 503 with ``{detail, retryable, dependency, correlation_id}`` body.
 
     The frontend keys on ``retryable: true`` to turn on the
     DegradedBanner and start exponential-backoff re-fetch. We surface
     the dependency name so the banner copy can be specific
     ("warehouse is warming up" vs "lakebase is warming up") without
     parsing the free-text detail.
+
+    Round-3 hole-finder #10: include ``correlation_id`` in the body (it's
+    also in the ``X-Correlation-ID`` header, but operators pasting errors
+    into incident channels lose the header; the body copy survives the
+    paste). Clients can cite one trace id from either source.
     """
     return JSONResponse(
         status_code=503,
@@ -225,6 +230,7 @@ async def _dependency_down_handler(_request: Request, exc: DependencyDownError) 
             "detail": str(exc),
             "retryable": True,
             "dependency": exc.dependency,
+            "correlation_id": get_correlation_id(),
         },
     )
 

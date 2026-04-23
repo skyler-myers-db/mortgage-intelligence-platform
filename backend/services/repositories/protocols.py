@@ -76,7 +76,12 @@ class LeadRepository(Protocol):
     ``segment_codes``; ``portfolio_id`` is accepted for forward-compat.
     """
 
-    def list(self, segment: str | None, portfolio_id: str | None) -> list[LeadSummary]:
+    def list(
+        self,
+        segment: str | None,
+        portfolio_id: str | None,
+        limit: int | None = None,
+    ) -> list[LeadSummary]:
         ...
 
 

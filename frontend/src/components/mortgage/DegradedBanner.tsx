@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Icon } from '../Icon';
+import { useOptionalHealth } from '../HealthProvider';
 
 /**
  * DegradedBanner — Slice-6 resilience surface.
@@ -11,11 +12,12 @@ import { Icon } from '../Icon';
  * "reconnecting to <dep>" so users see a factual status rather than a
  * stack trace.
  *
- * Behavior:
- *  - Polls `/api/health` every `pollIntervalMs` (default 8s in the
- *    ok state, 3s while degraded so the UI recovers quickly).
- *  - Renders only when `status !== 'ok'` or any dependency is down.
- *  - A small live-dot communicates the retry heartbeat.
+ * By default the banner consumes the shared `HealthProvider` snapshot
+ * (round-2 hole-finder #21, 2026-04-23) so there's one `/api/health`
+ * poll per document, not three. Tests that want to exercise the
+ * banner in isolation can still inject `fetchHealth` to opt into the
+ * legacy standalone poll — this keeps the existing vitest suites
+ * green without forcing them to spin up a provider tree.
  *
  * BEM class names (`degraded-banner`, `__ico`, `__body`, `__title`,
  * `__sub`, `__dot`) live in `design-system/components.css` and mirror
@@ -82,14 +84,22 @@ function degradedDependency(health: HealthPayload | null): string | null {
   return null;
 }
 
-export function DegradedBanner({
-  pollIntervalOkMs = 8000,
-  pollIntervalDegradedMs = 3000,
-  fetchHealth = defaultFetchHealth,
-}: DegradedBannerProps = {}) {
+/**
+ * Legacy standalone fetcher. Preserved so unit tests that pass
+ * `fetchHealth` can keep exercising the banner without wiring up a
+ * HealthProvider. Production mounts ignore this path and read the
+ * shared provider snapshot instead.
+ */
+function useStandaloneHealth({
+  pollIntervalOkMs,
+  pollIntervalDegradedMs,
+  fetchHealth,
+}: {
+  pollIntervalOkMs: number;
+  pollIntervalDegradedMs: number;
+  fetchHealth: () => Promise<HealthPayload>;
+}): HealthPayload | null {
   const [health, setHealth] = useState<HealthPayload | null>(null);
-  // Keep the latest degraded flag in a ref so the effect's interval
-  // can read it without needing to re-register when the state flips.
   const degradedRef = useRef(false);
 
   useEffect(() => {
@@ -106,8 +116,6 @@ export function DegradedBanner({
         degradedRef.current = isDegraded;
       } catch {
         if (cancelled) return;
-        // Fetch itself failed -- treat as degraded so the banner
-        // shows and the next tick retries faster.
         setHealth({
           status: 'degraded',
           dependencies: { warehouse: 'down', lakebase: 'down' },
@@ -125,6 +133,27 @@ export function DegradedBanner({
       if (timer !== null) clearTimeout(timer);
     };
   }, [fetchHealth, pollIntervalDegradedMs, pollIntervalOkMs]);
+
+  return health;
+}
+
+export function DegradedBanner({
+  pollIntervalOkMs = 8000,
+  pollIntervalDegradedMs = 3000,
+  fetchHealth,
+}: DegradedBannerProps = {}) {
+  // When a caller injects a fetcher, run the legacy standalone loop so
+  // existing unit tests keep exercising the banner. Otherwise read the
+  // shared HealthProvider snapshot.
+  const isStandalone = fetchHealth !== undefined;
+  const standaloneHealth = useStandaloneHealth({
+    pollIntervalOkMs,
+    pollIntervalDegradedMs,
+    fetchHealth: fetchHealth ?? defaultFetchHealth,
+  });
+  const providerCtx = useOptionalHealth();
+  const providerHealth = (providerCtx?.health as HealthPayload | null) ?? null;
+  const health = isStandalone ? standaloneHealth : providerHealth;
 
   const downDep = degradedDependency(health);
   if (!downDep) return null;

@@ -509,6 +509,24 @@ def _load_space_id_from_file() -> str | None:
     return content or None
 
 
+# Placeholder values defined by the bundle's default var (docs/runbook §2).
+# When the space id is still one of these strings we deliberately trip the
+# breaker at boot so the safe-corpus fallback answers /api/genie/message
+# instead of the live client 500-ing on the first request (hole-finder
+# round 3 #18, 2026-04-23).
+_PLACEHOLDER_SPACE_IDS: frozenset[str] = frozenset({
+    "00000000PLACEHOLDER",
+    "PLACEHOLDER",
+    "REPLACE_ME",
+})
+
+
+def is_placeholder_space_id(space_id: str | None) -> bool:
+    if not space_id:
+        return True
+    return space_id.strip().upper() in _PLACEHOLDER_SPACE_IDS
+
+
 def _resolve_space_id() -> str:
     from backend.config.settings import settings
 
@@ -546,8 +564,16 @@ def get_genie_client() -> ResilientGenieClient:
             space_id=space_id,
             timeout_s=settings.databricks_timeout_s + 15,
         )
+        breaker = get_breaker("genie", failure_threshold=3, cooldown_s=20.0)
+        # Round-3 hole-finder #18: when GENIE_SPACE_ID is still one of the
+        # bundle-default placeholder strings, the upstream Databricks call
+        # will 500 on the first query. Trip the breaker open at boot so the
+        # repository's safe-corpus fallback answers immediately; no user-
+        # visible "warming up" message on day 0 of a fresh customer deploy.
+        if is_placeholder_space_id(space_id):
+            breaker.force_open_for_placeholder_config()
         resilient = Resilient[Any](
-            breaker=get_breaker("genie", failure_threshold=3, cooldown_s=20.0),
+            breaker=breaker,
             dependency_name="genie",
             attempts=2,
             backoff_base=0.2,

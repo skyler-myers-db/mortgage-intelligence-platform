@@ -67,11 +67,18 @@ class InProcessMockSegmentRepository:
 class InProcessMockLeadRepository:
     """Test fixture implementing ``LeadRepository`` from the synthetic population."""
 
-    def list(self, segment: str | None, portfolio_id: str | None) -> list[LeadSummary]:
+    def list(
+        self,
+        segment: str | None,
+        portfolio_id: str | None,
+        limit: int | None = None,
+    ) -> list[LeadSummary]:
         _ = portfolio_id
         leads = [LeadSummary(**b.model_dump()) for b in mock_data.BORROWERS]
         if segment:
             leads = [lead for lead in leads if segment in lead.segment_codes]
+        if limit is not None and limit > 0:
+            return leads[:limit]
         return leads
 
 

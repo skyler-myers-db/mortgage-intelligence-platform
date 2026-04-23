@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, Navigate, useParams } from 'react-router-dom';
-import { api } from '../lib/api';
+import { api, isAbortError } from '../lib/api';
 import type { Borrower360 as Borrower360Type, OfferRecommendation } from '../types';
 import { PageShell } from '../components/layout/PageShell';
 import { ApprovalBanner } from '../components/mortgage/ApprovalBanner';
@@ -93,7 +93,10 @@ export default function OfferOrchestrator() {
 
   useEffect(() => {
     if (!id) return;
-    let cancelled = false;
+    // AbortController cancels all three per-borrower fetches when the
+    // id changes or the route unmounts. Round-2 hole-finder #10/#11,
+    // 2026-04-23.
+    const ctrl = new AbortController();
     // SWR: if we have a cached snapshot that's still fresh, hydrate
     // from it immediately so navigating back to a borrower is instant.
     // We still refetch in the background so the data stays live.
@@ -116,9 +119,11 @@ export default function OfferOrchestrator() {
       setDraftBody('');
       setDraftLoaded(false);
     }
-    Promise.all([api.borrower(id), api.recommendOffer(id)])
+    Promise.all([
+      api.borrower(id, ctrl.signal),
+      api.recommendOffer(id, ctrl.signal),
+    ])
       .then(([borrower, recommendation]) => {
-        if (cancelled) return;
         setB(borrower);
         setRec(recommendation);
         // Merge into cache; draftBody gets updated by the parallel
@@ -132,7 +137,7 @@ export default function OfferOrchestrator() {
         });
       })
       .catch((err: unknown) => {
-        if (cancelled) return;
+        if (isAbortError(err)) return;
         setLoadError(
           err instanceof Error
             ? `Couldn't load borrower or offer: ${err.message}`
@@ -145,9 +150,8 @@ export default function OfferOrchestrator() {
     // knows the endpoint was unavailable. This matches the degraded-UI
     // posture in CLAUDE.md -- fail visible, never substitute silently.
     api
-      .draftOutreach(id)
+      .draftOutreach(id, 'email', ctrl.signal)
       .then((draft) => {
-        if (cancelled) return;
         if (draft?.body && draft.body.trim().length > 0) {
           setDraftBody(draft.body);
           setDraftLoaded(true);
@@ -161,11 +165,12 @@ export default function OfferOrchestrator() {
           }
         }
       })
-      .catch(() => {
-        // swallow; fall back to defaultDraft below
+      .catch((err: unknown) => {
+        if (isAbortError(err)) return;
+        // swallow non-abort errors; fall back to defaultDraft below
       });
     return () => {
-      cancelled = true;
+      ctrl.abort();
     };
   }, [id, reloadToken]);
 

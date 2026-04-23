@@ -1,6 +1,6 @@
 import { useEffect, useState, type CSSProperties, type ReactElement } from 'react';
 import { Link, Navigate, useParams } from 'react-router-dom';
-import { api } from '../lib/api';
+import { api, isAbortError } from '../lib/api';
 import type { Borrower360 as Borrower360Type } from '../types';
 import { currency } from '../lib/formatters';
 import { PageShell } from '../components/layout/PageShell';
@@ -28,16 +28,14 @@ export default function Borrower360() {
 
   useEffect(() => {
     if (!id) return;
-    let cancelled = false;
+    const ctrl = new AbortController();
     setB(null);
     setErrorMsg(null);
     api
-      .borrower(id)
-      .then((data) => {
-        if (!cancelled) setB(data);
-      })
+      .borrower(id, ctrl.signal)
+      .then((data) => setB(data))
       .catch((err: unknown) => {
-        if (cancelled) return;
+        if (isAbortError(err)) return;
         setErrorMsg(
           err instanceof Error
             ? `Couldn't load borrower ${id}: ${err.message}`
@@ -45,7 +43,7 @@ export default function Borrower360() {
         );
       });
     return () => {
-      cancelled = true;
+      ctrl.abort();
     };
   }, [id]);
 

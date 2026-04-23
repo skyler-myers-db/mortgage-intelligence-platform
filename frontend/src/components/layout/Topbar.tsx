@@ -1,14 +1,17 @@
-import { useEffect, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { useApp } from '../AppContext';
 import { Icon } from '../Icon';
-import { api } from '../../lib/api';
-import type { HealthPayload } from '../mortgage/DegradedBanner';
+import { useHealth } from '../HealthProvider';
 
 /**
  * Topbar — breadcrumbs, lender pill, environment pill, warehouse-status pill,
  * theme toggle, Genie toggle, Console toggle. Matches the prototype's BEM
  * (`topbar__crumbs`, `topbar__pill`, `topbar__icon-btn`).
+ *
+ * Topbar reads the shared `HealthProvider` snapshot (round-2 hole-finder
+ * #21, 2026-04-23) instead of running its own `/api/health` poll. Cadence
+ * (8s healthy / 3s degraded) lives in the provider so pills can't drift
+ * from the DegradedBanner.
  */
 
 const ROUTE_CRUMBS: Record<string, string> = {
@@ -32,29 +35,7 @@ export function Topbar() {
   const { lender, theme, setTheme, genieOpen, setGenieOpen, consoleOpen, setConsoleOpen } = useApp();
   const { pathname } = useLocation();
   const crumb = currentCrumb(pathname);
-
-  // Live health state for the environment + warehouse pills. Pulled from
-  // /api/health every 30s; the DegradedBanner uses the same endpoint but
-  // polls more aggressively when degraded. No auth header required — the
-  // Databricks App runtime injects the workspace identity.
-  const [health, setHealth] = useState<HealthPayload | null>(null);
-  useEffect(() => {
-    let cancelled = false;
-    const tick = async () => {
-      // api.health() is total — it returns an "unreachable" snapshot
-      // on failure rather than throwing, so the pill shows honest
-      // "loading" state instead of last-known-good. Hole-finder
-      // finding #4, 2026-04-23.
-      const json = (await api.health()) as HealthPayload;
-      if (!cancelled) setHealth(json);
-    };
-    void tick();
-    const id = window.setInterval(tick, 30_000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(id);
-    };
-  }, []);
+  const { health } = useHealth();
 
   const envLabel = (health?.app_env ?? 'loading').toLowerCase();
   const warehouseUp = health?.dependencies?.warehouse === 'up';

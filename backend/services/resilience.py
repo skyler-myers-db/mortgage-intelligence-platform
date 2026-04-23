@@ -273,6 +273,22 @@ class CircuitBreaker:
             self._opened_at = None
             self._probes_in_flight = 0
 
+    def force_open_for_placeholder_config(self) -> None:
+        """Jam the breaker OPEN because the dependency was configured with a
+        placeholder value that will guaranteed-fail. Used at boot for the
+        Genie client when GENIE_SPACE_ID is still a bundle-default placeholder
+        (``00000000PLACEHOLDER``). Holds the state until reset/cooldown is
+        consumed; the cooldown will re-probe and the placeholder check will
+        trip the next boot.
+
+        Round-3 hole-finder #18, 2026-04-23.
+        """
+        with self._lock:
+            self._state = self.OPEN
+            self._failure_count = self._failure_threshold
+            self._opened_at = self._now()
+            self._probes_in_flight = 0
+
 
 # ---------------------------------------------------------------------------
 # Retry with exponential backoff + decorrelated jitter.

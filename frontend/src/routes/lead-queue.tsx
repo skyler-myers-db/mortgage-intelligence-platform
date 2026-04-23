@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { api } from '../lib/api';
+import { api, isAbortError } from '../lib/api';
 import type { LeadSummary } from '../types';
 import { PageShell } from '../components/layout/PageShell';
 import { LeadTable } from '../components/mortgage/LeadTable';
@@ -28,19 +28,20 @@ export default function LeadQueue() {
   const [reloadToken, setReloadToken] = useState<number>(0);
 
   useEffect(() => {
-    let cancelled = false;
+    // AbortController cancels the stale /api/leads fetch when segment
+    // changes or the route unmounts. Round-2 hole-finder #10/#11,
+    // 2026-04-23.
+    const ctrl = new AbortController();
     setLoading(true);
     setLoadError(null);
     api
-      .leads(segment)
+      .leads(segment, ctrl.signal)
       .then((data) => {
-        if (!cancelled) {
-          setLeads(data);
-          setLoading(false);
-        }
+        setLeads(data);
+        setLoading(false);
       })
       .catch((err: unknown) => {
-        if (cancelled) return;
+        if (isAbortError(err)) return;
         setLeads([]);
         setLoading(false);
         setLoadError(
@@ -50,7 +51,7 @@ export default function LeadQueue() {
         );
       });
     return () => {
-      cancelled = true;
+      ctrl.abort();
     };
   }, [segment, reloadToken]);
 

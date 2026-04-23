@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { api } from '../lib/api';
+import { api, isAbortError } from '../lib/api';
 import type { LeadSummary, SegmentSummary } from '../types';
 import { PageShell } from '../components/layout/PageShell';
 import { SegmentCard } from '../components/mortgage/SegmentCard';
@@ -111,49 +111,45 @@ export default function SegmentIntelligence() {
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
+    // AbortController cancels the in-flight /api/segments request on
+    // unmount or Retry. Round-2 hole-finder #10/#11, 2026-04-23.
+    const ctrl = new AbortController();
     // Reset error on retry so stale error copy doesn't linger through
     // a successful reload.
     if (reloadToken > 0) setLoadError(null);
     api
-      .segments()
-      .then((s) => {
-        if (!cancelled) setSegments(s);
-      })
+      .segments(ctrl.signal)
+      .then((s) => setSegments(s))
       .catch((err: unknown) => {
-        if (!cancelled) {
-          setLoadError(
-            err instanceof Error
-              ? `Couldn't load segments: ${err.message}`
-              : "Couldn't load segments.",
-          );
-        }
+        if (isAbortError(err)) return;
+        setLoadError(
+          err instanceof Error
+            ? `Couldn't load segments: ${err.message}`
+            : "Couldn't load segments.",
+        );
       });
     return () => {
-      cancelled = true;
+      ctrl.abort();
     };
   }, [reloadToken]);
 
   useEffect(() => {
-    let cancelled = false;
+    const ctrl = new AbortController();
     api
-      .leads()
-      .then((l) => {
-        if (!cancelled) setLeads(l);
-      })
+      .leads(undefined, ctrl.signal)
+      .then((l) => setLeads(l))
       .catch((err: unknown) => {
-        if (!cancelled) {
-          setLoadError(
-            (prev) =>
-              prev ??
-              (err instanceof Error
-                ? `Couldn't load leads: ${err.message}`
-                : "Couldn't load leads."),
-          );
-        }
+        if (isAbortError(err)) return;
+        setLoadError(
+          (prev) =>
+            prev ??
+            (err instanceof Error
+              ? `Couldn't load leads: ${err.message}`
+              : "Couldn't load leads."),
+        );
       });
     return () => {
-      cancelled = true;
+      ctrl.abort();
     };
   }, [reloadToken]);
 

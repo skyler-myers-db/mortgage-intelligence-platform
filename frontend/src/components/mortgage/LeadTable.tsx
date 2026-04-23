@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { Link } from 'react-router-dom';
 import type { LeadSummary } from '../../types';
 import { Icon } from '../Icon';
@@ -6,7 +6,7 @@ import { Chip, Button, EvidenceChip } from '../Primitives';
 import { ScoreBadge } from './ScoreBadge';
 import { ConfidenceMeter } from './ConfidenceMeter';
 import { useApp } from '../AppContext';
-import { api, ApiError } from '../../lib/api';
+import { api, ApiError, isAbortError } from '../../lib/api';
 import { DRAWER_SOURCES } from '../../lib/drawerSources';
 import { segmentColor, segmentName } from '../../lib/segmentMetadata';
 
@@ -135,6 +135,10 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
   // copy-on-write when updating to keep React's reference check happy.
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const [bulkApproving, setBulkApproving] = useState<boolean>(false);
+  // Tracks the bulk-approve loop's AbortController so unmount can
+  // cancel the remaining in-flight POSTs. Round-2 hole-finder #10/#11,
+  // 2026-04-23.
+  const bulkAbortRef = useRef<AbortController | null>(null);
   // Last bulk result surfaced as a compact toast. Clears on the next bulk
   // run or when the user dismisses it (auto-dismiss after 4s).
   //
@@ -157,11 +161,11 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
    * rejection ("server said no"). Hole-finder finding #2, 2026-04-23.
    */
   const approveLead = useCallback(
-    async (borrowerId: string): Promise<'ok' | 'network' | 'backend'> => {
+    async (borrowerId: string, signal?: AbortSignal): Promise<'ok' | 'network' | 'backend' | 'aborted'> => {
       setApprovalError(null);
       setPendingApproval((p) => ({ ...p, [borrowerId]: true }));
       try {
-        const res = await api.approve(borrowerId);
+        const res = await api.approve(borrowerId, {}, signal);
         if (res.approved) {
           setApproval(borrowerId, 'approved');
           return 'ok';
@@ -169,6 +173,7 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
         setApprovalError(`Approve failed for ${borrowerId}: endpoint returned approved=false.`);
         return 'backend';
       } catch (err: unknown) {
+        if (isAbortError(err)) return 'aborted';
         const isNetwork = err instanceof ApiError && err.status === null;
         setApprovalError(
           err instanceof Error
@@ -209,6 +214,7 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
           setApprovalError(`Reject failed for ${borrowerId}: endpoint returned rejected=false.`);
         }
       } catch (err: unknown) {
+        if (isAbortError(err)) return;
         setApprovalError(
           err instanceof Error
             ? `Couldn't reject ${borrowerId}: ${err.message}`
@@ -291,17 +297,32 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
     // Snapshot which ids to run: skip already-decided rows silently.
     const ids = [...selectedIds].filter((id) => !approvals[id]);
     if (ids.length === 0) return;
+    // One controller for the whole bulk loop; unmount aborts every
+    // still-inflight POST. sessionStorage stashes the partial result so
+    // the next mount can flash "N landed, rest aborted" — otherwise
+    // the user sees no feedback that their bulk action got cut short.
+    const ctrl = new AbortController();
+    bulkAbortRef.current = ctrl;
     setBulkApproving(true);
     setBulkToast(null);
     let ok = 0;
     let fail = 0;
     let network = 0;
+    let aborted = 0;
     const failedIds: string[] = [];
     for (const group of chunk(ids, BULK_APPROVE_CONCURRENCY)) {
-      const results = await Promise.all(group.map((id) => approveLead(id)));
+      if (ctrl.signal.aborted) {
+        aborted += group.length;
+        failedIds.push(...group);
+        continue;
+      }
+      const results = await Promise.all(group.map((id) => approveLead(id, ctrl.signal)));
       results.forEach((outcome, i) => {
         if (outcome === 'ok') {
           ok += 1;
+        } else if (outcome === 'aborted') {
+          aborted += 1;
+          failedIds.push(group[i]);
         } else {
           fail += 1;
           if (outcome === 'network') network += 1;
@@ -309,11 +330,55 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
         }
       });
     }
+    if (ctrl.signal.aborted) {
+      // Stash the partial result so the next mount can flash it. We
+      // accept that the user may never come back to this page; the
+      // alternative (loud toast on unmount) wouldn't render anyway.
+      try {
+        sessionStorage.setItem(
+          'mip.bulkApprove.lastCancelled',
+          JSON.stringify({ ok, aborted, ts: Date.now() }),
+        );
+      } catch {
+        // private mode or quota — ignore
+      }
+      return;
+    }
     // Replace selection with the failed subset so retries are trivial.
     setSelectedIds(new Set(failedIds));
     setBulkApproving(false);
-    setBulkToast({ ok, fail, network });
+    setBulkToast({ ok, fail: fail + aborted, network });
+    bulkAbortRef.current = null;
   }, [bulkApproving, selectedIds, approvals, approveLead]);
+
+  // On mount: if the previous mount left a partial bulk-approve snapshot
+  // in sessionStorage (user navigated away mid-loop), flash a compact
+  // toast so the operator knows how many landed.
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem('mip.bulkApprove.lastCancelled');
+      if (!raw) return;
+      sessionStorage.removeItem('mip.bulkApprove.lastCancelled');
+      const parsed = JSON.parse(raw) as { ok?: number; aborted?: number; ts?: number };
+      // Drop stale messages (older than 10 minutes) — they're probably
+      // from a much-earlier session.
+      if (parsed?.ts && Date.now() - parsed.ts > 10 * 60 * 1000) return;
+      const ok = parsed.ok ?? 0;
+      const aborted = parsed.aborted ?? 0;
+      if (ok + aborted === 0) return;
+      setBulkToast({ ok, fail: aborted, network: 0 });
+    } catch {
+      // malformed payload — ignore
+    }
+  }, []);
+
+  // Abort the bulk-approve loop on unmount so the remaining POSTs
+  // cancel cleanly.
+  useEffect(() => {
+    return () => {
+      bulkAbortRef.current?.abort();
+    };
+  }, []);
 
   // Auto-dismiss the toast after 4s so it doesn't pile up next to the
   // action bar.

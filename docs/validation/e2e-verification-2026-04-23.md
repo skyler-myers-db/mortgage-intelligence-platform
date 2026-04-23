@@ -1,99 +1,56 @@
 # E2E live verification — 2026-04-23
 
-Base URL: `https://mip-app-2543889327043640.aws.databricksapps.com`
-Auth: `databricks auth token -p DEFAULT` (OAuth bearer, `skyler@entrada.ai`)
-Verifier: `python3 tools/verify_live.py`
-Synthetic test-id prefix used for approvals / rejections: `B-TEST-*`
-
-## Headline verdict
-
-**BLOCKER — `/api/leads` is broken in production.** The deployed repo selects
-seven new secondary-filter columns (`is_owner_occupied`, `is_investor`,
-`related_property_count`, `current_lien_balance`, `second_pos_amount`,
-`has_permit`, `listed_for_sale`) from `mip.gold.lead_population`, but those
-columns do **not** exist in the live table. Every `/api/leads` request returns
-`UNRESOLVED_COLUMN.WITH_SUGGESTION … is_owner_occupied`, which trips the
-warehouse circuit breaker. Once the breaker opens, it cascades 503s across the
-**entire warehouse read surface**: borrower detail, borrower evidence, offer
-recommend, outreach draft, admin rules, admin sources, and geo state rollups
-all fail with `circuit breaker is open`. The only warehouse-backed routes that
-survive are `/api/portfolio/preview` (served from a separate metric-view path)
-and `/api/segments` (served from a different table). Lakebase writes (approve,
-reject, audit) are unaffected.
+Base URL: `https://mip-app-2543889327043640.aws.databricksapps.com`  
+Auth: `databricks auth token -p DEFAULT` (OAuth bearer, skyler@entrada.ai)  
+Synthetic test-id prefix: `B-TEST-*`
 
 ## Endpoint results
 
 | Endpoint | Method+Path | Status | Latency (ms) | Payload OK? | Notes |
 | --- | --- | ---: | ---: | :---: | --- |
-| health | `GET /api/health` | 200 | 2851 | yes | app_env, circuit_breakers, dependencies, recent_errors_count |
-| portfolio.unfiltered | `POST /api/portfolio/preview` | 200 | 6483 | yes | marketable=5,156,184 high_intent=147,742 top_tier=3,081 offers=4,468,007 |
-| portfolio.chicago | `POST /api/portfolio/preview` | 200 | 2878 | yes | marketable=1,851,040 high_intent=70,939 top_tier=1,163 offers=1,504,616 |
-| portfolio.chicago+owner+25pct | `POST /api/portfolio/preview` | 200 | 2371 | yes | marketable=924,898 high_intent=48,342 top_tier=876 offers=924,898 |
-| segments | `GET /api/segments` | 200 | 1480 | yes | array len=4 |
-| leads.all | `GET /api/leads` | 503 | 7103 | **NO** | `UNRESOLVED_COLUMN … is_owner_occupied cannot be resolved. Did you mean [borrower_id, confidence, rank_overall, segment_codes, clip]` |
-| leads.itm | `GET /api/leads?segment=itm` | 503 | 4201 | **NO** | circuit breaker open (cascade) |
-| borrower.detail | `GET /api/borrowers/B-00001` | 503 | 506 | **NO** | circuit breaker open (cascade) |
-| borrower.evidence | `GET /api/borrowers/B-00001/evidence` | 503 | 451 | **NO** | circuit breaker open (cascade) |
-| offers.recommend | `POST /api/offers/recommend` | 503 | 457 | **NO** | circuit breaker open (cascade) |
-| outreach.draft | `POST /api/outreach/draft` | 503 | 442 | **NO** | circuit breaker open (cascade) |
-| outreach.approve.synthetic | `POST /api/outreach/approve` | 200 | 1071 | yes | `approval_id`, `audit_event_id` returned; Lakebase write succeeded |
-| outreach.reject.synthetic | `POST /api/outreach/reject` | 200 | 767 | yes | `approval_id`, `audit_event_id` returned; Lakebase write succeeded |
-| audit.events | `GET /api/audit/events?limit=10` | 200 | 806 | yes | array len=10; includes the two B-TEST synthetic rows I just wrote plus real view events |
-| genie.message | `POST /api/genie/message` | 200 | 1225 | yes | `answer`, `conversation_id`, `metric_value`, `table_rows`, `trusted_assets`, `source` |
-| admin.rules | `GET /api/admin/rules` | 503 | 451 | **NO** | circuit breaker open (cascade) |
-| admin.sources | `GET /api/admin/sources` | 503 | 450 | **NO** | circuit breaker open (cascade) |
-| geo.state_rollups | `GET /api/geo/state-rollups` | 503 | 412 | **NO** | circuit breaker open (cascade) |
-
-A follow-up probe after the initial round returned the same `circuit breaker
-is open` on `/api/leads`, confirming this is not a transient upstream hiccup —
-the schema drift reliably reproduces on every request.
-
-## Red flags
-
-1. **`/api/leads` UNRESOLVED_COLUMN.** Root cause:
-   `backend/services/repositories/databricks_repo.py:112` adds seven columns to
-   `_LEAD_POPULATION_COLUMNS` that are not present in the live
-   `mip.gold.lead_population` table. Live `DESCRIBE TABLE mip.gold.lead_population`
-   returns 20 columns: `clip, borrower_id, display_name, city, state, zip,
-   segment_codes, equity_estimate, equity_pct, rate_spread_bps,
-   opportunity_score, confidence, recommended_offer, why_now, evidence_ids,
-   approval_status, rank_overall, rank_within_state, population_version,
-   refreshed_at`. None of the new secondary-filter columns are there. The DDL
-   file (`sql/ddl/gold_lead_population.sql`) and CTAS
-   (`sql/transformations/gold_lead_population.sql`) both declare the new
-   columns, but the materialized table in UC was not rebuilt.
-
-2. **Circuit breaker cascade.** One bad SQL wiped out every other warehouse
-   read in the app. The resilience layer is doing what it's supposed to
-   (failing closed to protect the warehouse) but a single schema drift grounds
-   roughly 60% of the API surface. Consider either (a) shipping the table
-   migration with the code change (bundle-level gate), or (b) splitting the
-   breaker so `/api/leads` failures don't black out unrelated routes.
-
-3. **Portfolio KPI trend sparklines are not filter-aware.** The `trends.*`
-   series in filtered responses show the exact same historical values as the
-   unfiltered response (e.g. `marketable_population.series = [5156184.0,
-   5156184.0]` for all three variants). The current-period numbers DO filter
-   correctly (5.1M → 1.85M → 925K), but the 7-day history in the trend
-   sparkline is always the national rollup row
-   (`state='_ALL' AND segment_code='_ALL'` in `mip.gold.funnel_snapshot_daily`).
-   Users will see "Chicago owner-occupied ≥25% = 924,898 (flat vs 7 days ago:
-   5,156,184)" which is misleading. Not a new regression from this cycle, but
-   worth flagging.
-
-4. **Static top-tier baseline.** `top_tier_opportunities.series` shows
-   `[0.0, 3081.0]` with `delta_pct: null` — the earlier day of the 7-day
-   snapshot history has no value, so the sparkline reads as "brand new metric."
-   Cosmetic.
-
-5. **Portfolio latency.** Unfiltered preview took **6.5 s** on a cold first
-   hit; subsequent filtered hits were ~2.4–2.9 s. The 6 s first-hit is above
-   the user-visible "instant" threshold for a landing-page KPI tile; consider
-   priming the cache during warehouse warm-start.
+| health | `GET /api/health` | 200 | 1245 | yes | keys/len: app_env, breaker_state_changes_last_hour, circuit_breakers, counters_persistence, dependencies, log_export, mode, recent_errors_count |
+| portfolio.unfiltered | `POST /api/portfolio/preview` | 200 | 1445 | yes | keys/len: approved_count, avg_score, cost_per_contact, data_refreshed_at, high_intent_leads, in_outreach_count, marketable_population, offers_recommended |
+| portfolio.chicago | `POST /api/portfolio/preview` | 200 | 1443 | yes | keys/len: approved_count, avg_score, cost_per_contact, data_refreshed_at, high_intent_leads, in_outreach_count, marketable_population, offers_recommended |
+| portfolio.chicago.owner.25pct | `POST /api/portfolio/preview` | 200 | 1387 | yes | keys/len: approved_count, avg_score, cost_per_contact, data_refreshed_at, high_intent_leads, in_outreach_count, marketable_population, offers_recommended |
+| segments | `GET /api/segments` | 200 | 908 | yes | keys/len: [array len=4] |
+| leads.all | `GET /api/leads` | 200 | 1297 | yes | keys/len: [array len=500] |
+| leads.itm | `GET /api/leads?segment=itm` | 200 | 1372 | yes | keys/len: [array len=500] |
+| borrower.detail | `GET /api/borrowers/B-00001` | 404 | 791 | NO | ERROR: {"detail":"Borrower B-00001 not found"} |
+| borrower.evidence | `GET /api/borrowers/B-00001/evidence` | 404 | 785 | NO | ERROR: {"detail":"Borrower B-00001 not found"} |
+| offers.recommend | `POST /api/offers/recommend` | 404 | 766 | NO | ERROR: {"detail":"Borrower B-00001 not found"} |
+| outreach.draft | `POST /api/outreach/draft` | 404 | 769 | NO | ERROR: {"detail":"Borrower B-00001 not found"} |
+| outreach.approve.synthetic | `POST /api/outreach/approve` | 200 | 646 | yes | keys/len: approval_id, approved, audit_event_id |
+| outreach.reject.synthetic | `POST /api/outreach/reject` | 200 | 874 | yes | keys/len: approval_id, audit_event_id, rejected |
+| audit.events | `GET /api/audit/events?limit=10` | 200 | 614 | yes | keys/len: [array len=10] |
+| genie.message | `POST /api/genie/message` | 200 | 920 | yes | keys/len: answer, conversation_id, follow_up_questions, metric_value, question, source, table_rows, trusted_assets |
+| admin.rules | `GET /api/admin/rules` | 200 | 1374 | yes | keys/len: legacy_override, offer_rules_version, rules_edited_at, thresholds |
+| admin.sources | `GET /api/admin/sources` | 503 | 4992 | NO | ERROR: {"detail":"warehouse dependency is down: DatabricksSqlError: Databricks SQL statement did not succeed (state='FAILED' statement_id='01f13ee3-d33c-14e5-b291-e16b |
+| geo.state_rollups | `GET /api/geo/state-rollups` | 200 | 2400 | yes | keys/len: rollups, snapshot_date |
 
 ## Clean payload samples
 
-### `POST /api/portfolio/preview` — unfiltered
+### health — `GET /api/health`
+
+```json
+{
+  "status": "ok",
+  "mode": "live",
+  "app_env": "sandbox",
+  "warehouse_id": "81d08d4fa2d799e9",
+  "dependencies": {
+    "warehouse": "up",
+    "lakebase": "up",
+    "genie": "up"
+  },
+  "circuit_breakers": {
+    "warehouse": "closed",
+    "genie": "closed",
+    "lakebase": "closed"
+  }
+}
+```
+
+### portfolio.unfiltered — `POST /api/portfolio/preview`
 
 ```json
 {
@@ -102,15 +59,138 @@ the schema drift reliably reproduces on every request.
   "top_tier_opportunities": 3081,
   "offers_recommended": 4468007,
   "avg_score": 36,
-  "data_refreshed_at": "2026-04-23T06:08:23.409000Z",
-  "approved_count": 1,
-  "in_outreach_count": 0,
-  "projected_contact_to_app": null,
-  "cost_per_contact": null
+  "trends": {
+    "marketable_population": {
+      "series": [
+        5156184.0,
+        5156184.0
+      ],
+      "delta_pct": 0.0,
+      "direction": "flat"
+    },
+    "high_intent_leads": {
+      "series": [
+        147742.0,
+        147742.0
+      ],
+      "delta_pct": 0.0,
+      "direction": "flat"
+    },
+    "top_tier_opportunities": {
+      "series": [
+        0.0,
+        3081.0
+      ],
+      "delta_pct": null,
+      "direction": "flat"
+    },
+    "offers_recommended": {
+      "series": [
+        4468137.0,
+        4468007.0
+      ],
+      "delta_pct": -0.0,
+      "direction": "flat"
+    },
+    "avg_score": {
+      "series": [
+        42.0,
+        36.0
+      ],
+      "delta_pct": -14.3,
+      "direction": "down"
+    },
+    "approved_count": {
+      "series": [
+        1.0,
+        1.0
+      ],
+      "delta_pct": 0.0,
+      "direction": "flat"
+    },
+    "in_outreach_count": {
+      "series": [
+        0.0,
+        0.0
+      ],
+      "delta_pct": null,
+      "direction": "flat"
+    }
+  }
 }
 ```
 
-### `POST /api/portfolio/preview` — Chicago MSA + Owner-occupied + ≥ 25% equity
+### portfolio.chicago — `POST /api/portfolio/preview`
+
+```json
+{
+  "marketable_population": 1851040,
+  "high_intent_leads": 70939,
+  "top_tier_opportunities": 1163,
+  "offers_recommended": 1504616,
+  "avg_score": 35,
+  "trends": {
+    "marketable_population": {
+      "series": [
+        5156184.0,
+        5156184.0
+      ],
+      "delta_pct": 0.0,
+      "direction": "flat"
+    },
+    "high_intent_leads": {
+      "series": [
+        147742.0,
+        147742.0
+      ],
+      "delta_pct": 0.0,
+      "direction": "flat"
+    },
+    "top_tier_opportunities": {
+      "series": [
+        0.0,
+        3081.0
+      ],
+      "delta_pct": null,
+      "direction": "flat"
+    },
+    "offers_recommended": {
+      "series": [
+        4468137.0,
+        4468007.0
+      ],
+      "delta_pct": -0.0,
+      "direction": "flat"
+    },
+    "avg_score": {
+      "series": [
+        42.0,
+        36.0
+      ],
+      "delta_pct": -14.3,
+      "direction": "down"
+    },
+    "approved_count": {
+      "series": [
+        1.0,
+        1.0
+      ],
+      "delta_pct": 0.0,
+      "direction": "flat"
+    },
+    "in_outreach_count": {
+      "series": [
+        0.0,
+        0.0
+      ],
+      "delta_pct": null,
+      "direction": "flat"
+    }
+  }
+}
+```
+
+### portfolio.chicago.owner.25pct — `POST /api/portfolio/preview`
 
 ```json
 {
@@ -118,89 +198,337 @@ the schema drift reliably reproduces on every request.
   "high_intent_leads": 48342,
   "top_tier_opportunities": 876,
   "offers_recommended": 924898,
-  "avg_score": 39
+  "avg_score": 39,
+  "trends": {
+    "marketable_population": {
+      "series": [
+        5156184.0,
+        5156184.0
+      ],
+      "delta_pct": 0.0,
+      "direction": "flat"
+    },
+    "high_intent_leads": {
+      "series": [
+        147742.0,
+        147742.0
+      ],
+      "delta_pct": 0.0,
+      "direction": "flat"
+    },
+    "top_tier_opportunities": {
+      "series": [
+        0.0,
+        3081.0
+      ],
+      "delta_pct": null,
+      "direction": "flat"
+    },
+    "offers_recommended": {
+      "series": [
+        4468137.0,
+        4468007.0
+      ],
+      "delta_pct": -0.0,
+      "direction": "flat"
+    },
+    "avg_score": {
+      "series": [
+        42.0,
+        36.0
+      ],
+      "delta_pct": -14.3,
+      "direction": "down"
+    },
+    "approved_count": {
+      "series": [
+        1.0,
+        1.0
+      ],
+      "delta_pct": 0.0,
+      "direction": "flat"
+    },
+    "in_outreach_count": {
+      "series": [
+        0.0,
+        0.0
+      ],
+      "delta_pct": null,
+      "direction": "flat"
+    }
+  }
 }
 ```
 
-Filter predicate IS being applied (5,156,184 → 1,851,040 → 924,898) — the
-portfolio-preview filter bug fixed in the prior cycle is confirmed fixed in
-prod.
-
-### `GET /api/audit/events?limit=10` — first row
+### segments — `GET /api/segments`
 
 ```json
 {
-  "event_id": "b6ee3f1c-df45-485b-993c-fc194f7b0ff6",
+  "code": "equity",
+  "name": "Home Equity Candidate",
+  "count": 3141667,
+  "delta": "+0%",
+  "avg_score": 40,
+  "description": "Strong equity and prior cash-out/HELOC propensity.",
+  "color": "#66C5FF"
+}
+```
+
+### leads.all — `GET /api/leads`
+
+```json
+{
+  "borrower_id": "B-102FL7THC6Q3L",
+  "display_name": "Owner 3b3ba2e0",
+  "city": "CALUMET CITY",
+  "state": "IL",
+  "zip": "604092222",
+  "clip": "9154364327",
+  "segment_codes": [
+    "itm",
+    "investor",
+    "equity"
+  ],
+  "equity_estimate": 153163,
+  "rate_spread_bps": 397,
+  "opportunity_score": 86,
+  "confidence": 81,
+  "recommended_offer": "Refinance + HELOC",
+  "why_now": "Current rate sits meaningfully above market and the home carries strong equity -- a refinance with a HELOC cross-sell fits.",
+  "evidence_ids": [
+    "ev-b4fba688be13",
+    "ev-ae027341e9f1",
+    "ev-d3356f99ea2e"
+  ],
+  "approval_status": "pending",
+  "is_owner_occupied": false,
+  "is_investor": true,
+  "related_property_count": 346,
+  "current_lien_balance": 15000,
+  "second_pos_amount": 0,
+  "has_permit": false,
+  "listed_for_sale": false
+}
+```
+
+### leads.itm — `GET /api/leads?segment=itm`
+
+```json
+{
+  "borrower_id": "B-102FL7THC6Q3L",
+  "display_name": "Owner 3b3ba2e0",
+  "city": "CALUMET CITY",
+  "state": "IL",
+  "zip": "604092222",
+  "clip": "9154364327",
+  "segment_codes": [
+    "itm",
+    "investor",
+    "equity"
+  ],
+  "equity_estimate": 153163,
+  "rate_spread_bps": 397,
+  "opportunity_score": 86,
+  "confidence": 81,
+  "recommended_offer": "Refinance + HELOC",
+  "why_now": "Current rate sits meaningfully above market and the home carries strong equity -- a refinance with a HELOC cross-sell fits.",
+  "evidence_ids": [
+    "ev-b4fba688be13",
+    "ev-ae027341e9f1",
+    "ev-d3356f99ea2e"
+  ],
+  "approval_status": "pending",
+  "is_owner_occupied": false,
+  "is_investor": true,
+  "related_property_count": 346,
+  "current_lien_balance": 15000,
+  "second_pos_amount": 0,
+  "has_permit": false,
+  "listed_for_sale": false
+}
+```
+
+### outreach.approve.synthetic — `POST /api/outreach/approve`
+
+```json
+{
+  "approved": true,
+  "approval_id": "9591a833-940f-43e5-b0c0-3c271a441280",
+  "audit_event_id": "d8e628a0-c12d-4753-bf9b-2c15e4b1d60d"
+}
+```
+
+### outreach.reject.synthetic — `POST /api/outreach/reject`
+
+```json
+{
+  "rejected": true,
+  "approval_id": "4d7fb568-06e8-4b67-baf5-9383062dec89",
+  "audit_event_id": "21950ba1-b593-4109-8a03-375f7999b0c6"
+}
+```
+
+### audit.events — `GET /api/audit/events?limit=10`
+
+```json
+{
+  "event_id": "21950ba1-b593-4109-8a03-375f7999b0c6",
   "actor": "skyler@entrada.ai",
   "action": "outreach.reject",
   "entity_type": "approval",
-  "entity_id": "8dde10a1-bdf0-4388-a981-dc618e638ad3",
+  "entity_id": "4d7fb568-06e8-4b67-baf5-9383062dec89",
   "payload_json": {
     "offer_code": "refi",
-    "approval_id": "8dde10a1-bdf0-4388-a981-dc618e638ad3",
-    "borrower_id": "B-TEST-A5BD2F99"
+    "approval_id": "4d7fb568-06e8-4b67-baf5-9383062dec89",
+    "borrower_id": "B-TEST-F73E5564"
   },
   "evidence_ids": [],
-  "created_at": "2026-04-23T06:45:12.348588+00:00",
-  "event_type": "OUTREACH_REJECT"
+  "created_at": "2026-04-23T07:12:36.881457+00:00",
+  "event_type": "OUTREACH_REJECT",
+  "subject_clip": null,
+  "subject_segment": null,
+  "request_id": null
 }
 ```
 
-Real borrower view events also land in the audit log with real Cotality CLIPs
-(e.g. `subject_clip: "9154364327"`, `entity_id: "B-102FL7THC6Q3L"`), and the
-synthetic approve/reject writes from this run show up at the top. Audit write
-path is healthy.
-
-### `GET /api/leads` — error payload
+### genie.message — `POST /api/genie/message`
 
 ```json
 {
-  "detail": "warehouse dependency is down: DatabricksSqlError: Databricks SQL statement did not succeed (state='FAILED' statement_id='01f13edf-f569-1216-8ecb-ad97766de1f4'): [UNRESOLVED_COLUMN.WITH_SUGGESTION] A column, variable, or function parameter with name `is_owner_occupied` cannot be resolved. Did you mean one of the following? [`borrower_id`, `confidence`, `rank_overall`, `segment_codes`, `clip`]. SQLSTATE: 42703; line 1 pos 197",
-  "retryable": true,
-  "dependency": "warehouse"
+  "conversation_id": "fallback-conv",
+  "question": "Which zips have the most in-the-money refi candidates?",
+  "answer": "The top in-the-money ZIPs are 60611 Chicago (~1,420 borrowers), 78704 Austin (~1,180), 94110 San Francisco (~960), 98103 Seattle (~720), and 33132 Miami (~640). Together they cover about 38% of the 6-state ITM book.",
+  "source": "fallback",
+  "trusted_assets": [
+    "mip.gold.lead_population",
+    "mip.semantics.lead_generation_metric_view"
+  ],
+  "metric_value": null
 }
 ```
 
-## Remediation
+### admin.rules — `GET /api/admin/rules`
 
-Run the gold.lead_population DDL + CTAS against the dev catalog so the
-secondary-filter columns exist, then let the breaker half-open probe re-close
-it. Commands:
-
-```bash
-# Verify drift locally before anything else.
-databricks sql query --warehouse-id 81d08d4fa2d799e9 \
-  "DESCRIBE TABLE mip.gold.lead_population"
-
-# Re-create the table with the new DDL and CTAS. Pick whichever path your
-# bundle wires to — the refresh_silver job should cascade gold, but you can
-# also run the DDL + CTAS directly if time-critical.
-databricks bundle run refresh_silver -t dev
-# OR, explicit:
-databricks sql query --warehouse-id 81d08d4fa2d799e9 --file sql/ddl/gold_lead_population.sql
-databricks sql query --warehouse-id 81d08d4fa2d799e9 --file sql/transformations/gold_lead_population.sql
+```json
+{
+  "offer_rules_version": "itm_77eddaa7d767",
+  "rules_edited_at": "2026-04-23 07:09:52.711438",
+  "thresholds": [
+    {
+      "key": "mip_min_spread_bps",
+      "value": 75.0,
+      "unit": "bps",
+      "label": "Min spread (bps)",
+      "description": "Minimum rate spread vs. market before a borrower is considered in the money.",
+      "sort_order": 1,
+      "last_updated": "2026-04-23 07:09:52.711438"
+    },
+    {
+      "key": "mip_min_equity_pct",
+      "value": 15.0,
+      "unit": "pct",
+      "label": "Min equity (%)",
+      "description": "Minimum equity percentage required to qualify as in the money.",
+      "sort_order": 2,
+      "last_updated": "2026-04-23 07:09:52.711438"
+    },
+    {
+      "key": "mip_heloc_equity_min_pct",
+      "value": 35.0,
+      "unit": "pct",
+      "label": "HELOC equity floor (%)",
+      "description": "Equity floor required for HELOC eligibility and refi+HELOC cross-sell.",
+      "sort_order": 3,
+      "last_updated": "2026-04-23 07:09:52.711438"
+    },
+    {
+      "key": "mip_cashout_equity_min_pct",
+      "value": 25.0,
+      "unit": "pct",
+      "label": "Cash-out equity floor (%)",
+      "description": "Equity floor required for cash-out refi eligibility when rate economics are absent.",
+      "sort_order": 4,
+      "last_updated": "2026-04-23 07:09:52.711438"
+    },
+    {
+      "key": "mip_retention_min_spread_bps",
+      "value": 50.0,
+      "unit": "bps",
+      "label": "Retention min spread (bps)",
+      "description": "Lowered sp
 ```
 
-Then close the breaker (or just wait for the half-open window):
+### geo.state_rollups — `GET /api/geo/state-rollups`
 
-```bash
-TOKEN=$(databricks auth token -p DEFAULT | python3 -c "import sys,json;print(json.load(sys.stdin)['access_token'])")
-curl -s -H "Authorization: Bearer $TOKEN" -X POST \
-  "https://mip-app-2543889327043640.aws.databricksapps.com/api/admin/resilience/reset"
+```json
+{
+  "rollups": [
+    {
+      "state": "IL",
+      "addressable": 1851040,
+      "in_the_money": 70939,
+      "top_tier_opportunities": 1163,
+      "avg_score": 35,
+      "top_segment_code": "equity"
+    },
+    {
+      "state": "CA",
+      "addressable": 900371,
+      "in_the_money": 18724,
+      "top_tier_opportunities": 308,
+      "avg_score": 38,
+      "top_segment_code": "equity"
+    },
+    {
+      "state": "FL",
+      "addressable": 752572,
+      "in_the_money": 21528,
+      "top_tier_opportunities": 283,
+      "avg_score": 38,
+      "top_segment_code": "equity"
+    },
+    {
+      "state": "TX",
+      "addressable": 750962,
+      "in_the_money": 19323,
+      "top_tier_opportunities": 331,
+      "avg_score": 37,
+      "top_segment_code": "equity"
+    },
+    {
+      "state": "WA",
+      "addressable": 737682,
+      "in_the_money": 15646,
+      "top_tier_opportunities": 977,
+      "avg_score": 36,
+      "top_segment_code": "equity"
+    },
+    {
+      "state": "CO",
+      "addressable": 163557,
+      "in_the_money": 1582,
+      "top_tier_opportunities": 19,
+      "avg_score": 35,
+      "top_segment_code": "equity"
+    }
+  ],
+  "snapshot_date": "2026-04-23"
+}
 ```
 
-After the table is migrated, re-run `python3 tools/verify_live.py` — the 503
-cascade should collapse and all seven cascaded endpoints should flip green.
+## Red flags
+
+- borrower.detail: status=404 error={"detail":"Borrower B-00001 not found"}
+- borrower.evidence: status=404 error={"detail":"Borrower B-00001 not found"}
+- offers.recommend: status=404 error={"detail":"Borrower B-00001 not found"}
+- outreach.draft: status=404 error={"detail":"Borrower B-00001 not found"}
+- admin.sources: status=503 error={"detail":"warehouse dependency is down: DatabricksSqlError: Databricks SQL statement did not succeed (state='FAILED' statement_id='01f13ee3-d33c-14e5-b291-e16b
 
 ## Teardown
 
-Synthetic approvals/rejections were written with `B-TEST-*` IDs. Clean up via:
+Synthetic approvals/rejections written with `B-TEST-*` IDs. Clean up via:
 
 ```sql
-DELETE FROM mip_app.approvals    WHERE borrower_id LIKE 'B-TEST-%';
-DELETE FROM mip_app.audit_events WHERE payload_json:borrower_id LIKE 'B-TEST-%';
+DELETE FROM mip_app.approvals WHERE borrower_id LIKE 'B-TEST-%';
+DELETE FROM mip_app.audit_events WHERE borrower_id LIKE 'B-TEST-%';
 ```
-
-Synthetic IDs written this run (for easy grep):
-`B-TEST-A5BD2F99` (reject), `B-TEST-46E0A905` (approve). Both visible at the
-top of `/api/audit/events?limit=10`.

@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { api } from '../lib/api';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
+import { api, isAbortError } from '../lib/api';
 import type { PortfolioPreview } from '../types';
 import { PageShell } from '../components/layout/PageShell';
 import { KpiCard } from '../components/mortgage/KpiCard';
@@ -32,59 +32,190 @@ const FILTER_GROUPS: Array<{ label: string; key: string; options: string[] }> = 
   { label: 'EQUITY',       key: 'min_equity_pct_label', options: ['≥ 15%', '≥ 25%', '≥ 40%', 'Any'] },
 ];
 
+// Default filter values keyed by the short codes the existing local
+// state uses. Keeping these keys stable is a guardrail from the
+// round-2 audit — the backend schema already ignores unknown fields,
+// and renaming them mid-slice would be a scope creep.
+const DEFAULT_FILTERS: Record<string, string> = {
+  geo: 'Chicago MSA',
+  occ: 'Owner-occupied',
+  lien: 'Open 1st lien',
+  rel: 'All',
+  product: 'All products',
+  equity: '≥ 15%',
+};
+
+/**
+ * URL search-param keys we round-trip. One per filter + the reload
+ * token so the "Run build" commit is reproducible from a deep link.
+ * These match the field names in DEFAULT_FILTERS so the URL reads
+ * naturally ("?geo=Chicago+MSA&occ=Owner-occupied&..."). Unknown
+ * params are ignored on parse; defaults fill in the rest.
+ */
+const URL_FILTER_KEYS = ['geo', 'occ', 'lien', 'rel', 'product', 'equity'] as const;
+
+function parseFiltersFromUrl(sp: URLSearchParams): Record<string, string> {
+  const out: Record<string, string> = { ...DEFAULT_FILTERS };
+  for (const k of URL_FILTER_KEYS) {
+    const v = sp.get(k);
+    if (v !== null && v.length > 0) out[k] = v;
+  }
+  return out;
+}
+
+function buildUrlFromFilters(filters: Record<string, string>): URLSearchParams {
+  const sp = new URLSearchParams();
+  for (const k of URL_FILTER_KEYS) {
+    const v = filters[k];
+    // Skip defaults so the URL stays compact and shareable — a user
+    // who hasn't touched a filter won't have 6 redundant params in
+    // their address bar.
+    if (v !== undefined && v !== DEFAULT_FILTERS[k]) {
+      sp.set(k, v);
+    }
+  }
+  return sp;
+}
+
 function formatDelta(pct: number | null | undefined): string | undefined {
   if (pct === null || pct === undefined) return undefined;
   const sign = pct > 0 ? '+' : '';
   return `${sign}${pct.toFixed(1)}% vs 7d ago`;
 }
 
+/**
+ * When the preview is Day-0 (zero population + no refresh timestamp) the
+ * raw value would be `0` — a plausible-but-wrong signal. Swap it for
+ * `null` so KpiCard renders an em-dash and the banner explains why.
+ * Hole-finder round 2 #13, 2026-04-23.
+ */
+function dayZeroSafe(
+  preview: PortfolioPreview | null,
+  value: number | null | undefined,
+): number | null {
+  if (
+    preview !== null
+    && preview.marketable_population === 0
+    && preview.data_refreshed_at === null
+  ) {
+    return null;
+  }
+  return value ?? null;
+}
+
 export default function PortfolioBuilder() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  // Initialize from URL so deep-links and browser back/forward work. On
+  // mount we also trigger a build, so a shared link reproduces the
+  // exact KPI grid the sender saw. Round-2 hole-finder #16, 2026-04-23.
+  const [filters, setFilters] = useState<Record<string, string>>(() =>
+    parseFiltersFromUrl(searchParams),
+  );
   const [preview, setPreview] = useState<PortfolioPreview | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [building, setBuilding] = useState<boolean>(false);
-  const [filters, setFilters] = useState<Record<string, string>>({
-    geo: 'Chicago MSA',
-    occ: 'Owner-occupied',
-    lien: 'Open 1st lien',
-    rel: 'All',
-    product: 'All products',
-    equity: '≥ 15%',
-  });
+  const [copyHint, setCopyHint] = useState<'idle' | 'copied' | 'failed'>('idle');
 
-  const runBuild = (criteria: Record<string, string>, signal?: { cancelled: boolean }) => {
-    setBuilding(true);
-    setPreviewError(null);
-    api
-      .portfolioPreview(criteria)
-      .then((p) => {
-        if (signal?.cancelled) return;
-        setPreview(p);
-      })
-      .catch((err: unknown) => {
-        if (signal?.cancelled) return;
-        setPreview(null);
-        setPreviewError(
-          err instanceof Error
-            ? `Couldn't load portfolio preview: ${err.message}`
-            : "Couldn't load portfolio preview.",
-        );
-      })
-      .finally(() => {
-        if (!signal?.cancelled) setBuilding(false);
-      });
-  };
+  // Keep an AbortController live across calls so a rapid second click on
+  // "Run build" cancels the first request instead of letting it
+  // race-write stale data into state. Round-2 hole-finder #10/#11,
+  // 2026-04-23.
+  const inflightRef = useRef<AbortController | null>(null);
 
+  const runBuild = useCallback(
+    (criteria: Record<string, string>) => {
+      inflightRef.current?.abort();
+      const ctrl = new AbortController();
+      inflightRef.current = ctrl;
+      setBuilding(true);
+      setPreviewError(null);
+      api
+        .portfolioPreview(criteria, ctrl.signal)
+        .then((p) => {
+          if (ctrl.signal.aborted) return;
+          setPreview(p);
+        })
+        .catch((err: unknown) => {
+          if (isAbortError(err) || ctrl.signal.aborted) return;
+          setPreview(null);
+          setPreviewError(
+            err instanceof Error
+              ? `Couldn't load portfolio preview: ${err.message}`
+              : "Couldn't load portfolio preview.",
+          );
+        })
+        .finally(() => {
+          if (ctrl.signal.aborted) return;
+          setBuilding(false);
+        });
+    },
+    [],
+  );
+
+  // Initial build on mount using whatever filters came in from the URL.
   useEffect(() => {
-    const signal = { cancelled: false };
-    runBuild(filters, signal);
+    runBuild(filters);
     return () => {
-      signal.cancelled = true;
+      inflightRef.current?.abort();
     };
-    // Intentionally runs once on mount; user drives subsequent runs via "Run build".
+    // Intentionally runs once on mount; user drives subsequent runs via
+    // "Run build" (which also pushes to the URL). We don't refetch on
+    // every filter dropdown change — the "Run build" button is the
+    // explicit commit point per the prototype UX.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const setFilter = (key: string) => (next: string) => setFilters((f) => ({ ...f, [key]: next }));
+
+  /**
+   * Commit the current filter state: push to URL, then refetch. The
+   * URL is the source of truth for a shareable build so we update it
+   * on the explicit "Run build" click rather than on every dropdown
+   * change (which would pollute browser history with every keystroke).
+   */
+  const onRunBuild = useCallback(() => {
+    setSearchParams(buildUrlFromFilters(filters), { replace: false });
+    runBuild(filters);
+  }, [filters, runBuild, setSearchParams]);
+
+  /**
+   * Copy the current URL to the clipboard. Falls back to a failed
+   * hint if the Clipboard API is unavailable (Safari private mode,
+   * old browsers). The URL already reflects the last committed build
+   * because onRunBuild wrote to it.
+   */
+  const onCopyLink = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(window.location.href);
+      setCopyHint('copied');
+    } catch {
+      setCopyHint('failed');
+    }
+  }, []);
+
+  useEffect(() => {
+    if (copyHint === 'idle') return;
+    const t = window.setTimeout(() => setCopyHint('idle'), 1800);
+    return () => window.clearTimeout(t);
+  }, [copyHint]);
+
+  // When the URL changes (browser back/forward), reconcile local state
+  // and refetch so the KPI grid reflects the navigation. We only
+  // refetch if the URL-derived filters actually differ from local
+  // state — otherwise setState from onRunBuild would cause an
+  // unnecessary second fetch.
+  const urlFilters = useMemo(
+    () => parseFiltersFromUrl(searchParams),
+    [searchParams],
+  );
+  useEffect(() => {
+    const differs = URL_FILTER_KEYS.some((k) => urlFilters[k] !== filters[k]);
+    if (differs) {
+      setFilters(urlFilters);
+      runBuild(urlFilters);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [urlFilters]);
 
   return (
     <PageShell
@@ -129,9 +260,23 @@ export default function PortfolioBuilder() {
             ))}
             <div style={{ flex: 1 }} />
             <Button
+              variant="ghost"
+              size="default"
+              icon="link"
+              onClick={() => void onCopyLink()}
+              aria-label="Copy shareable URL for the current build"
+              data-testid="portfolio-copy-link"
+            >
+              {copyHint === 'copied'
+                ? 'Link copied'
+                : copyHint === 'failed'
+                ? 'Copy failed'
+                : 'Share this build'}
+            </Button>
+            <Button
               variant="primary"
               icon="play"
-              onClick={() => runBuild(filters)}
+              onClick={onRunBuild}
               disabled={building}
               aria-busy={building}
             >
@@ -155,10 +300,47 @@ export default function PortfolioBuilder() {
             </div>
           )}
 
+          {/* Day-0 empty-state banner (hole-finder round 2 #13, 2026-04-23).
+              On a fresh customer workspace the funnel snapshot table is
+              empty and borrower_360 has no rows — the preview returns 0s
+              with a null timestamp, which would otherwise render as a
+              plausible-but-misleading all-zero KPI row. */}
+          {preview !== null
+            && preview.marketable_population === 0
+            && preview.data_refreshed_at === null && (
+            <div
+              role="status"
+              style={{
+                marginTop: 14,
+                padding: '12px 14px',
+                border: '1px solid var(--line-2)',
+                borderRadius: 'var(--r-md)',
+                background: 'var(--bg-1)',
+                fontSize: 13,
+                color: 'var(--text-1)',
+              }}
+            >
+              <strong>First data refresh pending.</strong>{' '}
+              Unity Catalog gold tables are empty. Run{' '}
+              <code
+                style={{
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: 12,
+                  padding: '1px 6px',
+                  borderRadius: 4,
+                  background: 'var(--bg-2)',
+                }}
+              >
+                databricks bundle run mip_refresh_scores -t dev
+              </code>{' '}
+              to populate them.
+            </div>
+          )}
+
           <div className="kpi-row" style={{ marginTop: 20 }}>
             <KpiCard
               label="Marketable population"
-              valueAnimated={preview?.marketable_population ?? null}
+              valueAnimated={dayZeroSafe(preview, preview?.marketable_population)}
               trend={preview?.trends?.marketable_population?.series}
               delta={formatDelta(preview?.trends?.marketable_population?.delta_pct)}
               deltaDir={preview?.trends?.marketable_population?.direction}
@@ -166,7 +348,7 @@ export default function PortfolioBuilder() {
             />
             <KpiCard
               label="Avg. borrower score"
-              valueAnimated={preview?.avg_score ?? null}
+              valueAnimated={dayZeroSafe(preview, preview?.avg_score)}
               trend={preview?.trends?.avg_score?.series}
               delta={formatDelta(preview?.trends?.avg_score?.delta_pct)}
               deltaDir={preview?.trends?.avg_score?.direction}
@@ -174,7 +356,7 @@ export default function PortfolioBuilder() {
             />
             <KpiCard
               label="Top-tier opportunities"
-              valueAnimated={preview?.top_tier_opportunities ?? null}
+              valueAnimated={dayZeroSafe(preview, preview?.top_tier_opportunities)}
               trend={preview?.trends?.top_tier_opportunities?.series}
               delta={formatDelta(preview?.trends?.top_tier_opportunities?.delta_pct)}
               deltaDir={preview?.trends?.top_tier_opportunities?.direction}
@@ -182,7 +364,7 @@ export default function PortfolioBuilder() {
             />
             <KpiCard
               label="Offers recommended"
-              valueAnimated={preview?.offers_recommended ?? null}
+              valueAnimated={dayZeroSafe(preview, preview?.offers_recommended)}
               trend={preview?.trends?.offers_recommended?.series}
               delta={formatDelta(preview?.trends?.offers_recommended?.delta_pct)}
               deltaDir={preview?.trends?.offers_recommended?.direction}

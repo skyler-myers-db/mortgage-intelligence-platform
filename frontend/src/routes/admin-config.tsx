@@ -5,7 +5,7 @@ import { PageShell } from '../components/layout/PageShell';
 import { Chip } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { EntradaWordmark } from '../components/brand/Entrada';
-import { api } from '../lib/api';
+import { api, isAbortError } from '../lib/api';
 
 /**
  * Administration — operator-facing configuration for Module 0.
@@ -121,33 +121,34 @@ export default function AdminConfig() {
   const [auditLoading, setAuditLoading] = useState<boolean>(true);
 
   useEffect(() => {
-    let cancelled = false;
+    // Single AbortController shared by the three admin probes. All three
+    // requests cancel on unmount instead of racing stale setState.
+    // Round-2 hole-finder #10/#11, 2026-04-23.
+    const ctrl = new AbortController();
     // Offer rules (UC-backed) — /api/admin/rules reads
     // mip.ref.offer_rules_config.
-    fetch('/api/admin/rules')
+    fetch('/api/admin/rules', { signal: ctrl.signal })
       .then((r) => (r.ok ? (r.json() as Promise<RulesResponse>) : Promise.reject(r.status)))
       .then((json) => {
-        if (cancelled) return;
         setRules(json);
         setRulesLoading(false);
       })
-      .catch(() => {
-        if (cancelled) return;
+      .catch((err: unknown) => {
+        if (isAbortError(err)) return;
         setRulesError('Rules endpoint unreachable');
         setRulesLoading(false);
       });
 
     // Data source readiness (UC-backed) — /api/admin/sources returns
     // per-source rows with status / rows / last_updated.
-    fetch('/api/admin/sources')
+    fetch('/api/admin/sources', { signal: ctrl.signal })
       .then((r) => (r.ok ? (r.json() as Promise<SourceRow[]>) : Promise.reject(r.status)))
       .then((rows) => {
-        if (cancelled) return;
         setSources(rows);
         setSourcesLoading(false);
       })
-      .catch(() => {
-        if (cancelled) return;
+      .catch((err: unknown) => {
+        if (isAbortError(err)) return;
         setSourcesError('Data source readiness temporarily unavailable');
         setSourcesLoading(false);
       });
@@ -156,9 +157,8 @@ export default function AdminConfig() {
     // shared retry/backoff loop before reporting "unreachable".
     // Hole-finder finding #4, 2026-04-23.
     api
-      .auditEvents(1)
+      .auditEvents(1, ctrl.signal)
       .then((events) => {
-        if (cancelled) return;
         const first = events.length > 0 ? events[0] : null;
         // The admin probe only needs a subset of the AuditEventRow
         // shape (event_id/actor/action/created_at). Cast to the local
@@ -167,13 +167,13 @@ export default function AdminConfig() {
         setAuditLoading(false);
       })
       .catch((err: unknown) => {
-        if (cancelled) return;
+        if (isAbortError(err)) return;
         setAuditError(err instanceof Error ? err.message : 'unreachable');
         setAuditLoading(false);
       });
 
     return () => {
-      cancelled = true;
+      ctrl.abort();
     };
   }, []);
 

@@ -25,6 +25,7 @@ from __future__ import annotations
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 
 from backend.config.settings import settings
 from backend.services.admin_rules import AdminRulesService, get_admin_rules_service
@@ -65,16 +66,31 @@ def get_rules(service: ServiceDep) -> dict[str, Any]:
     return payload
 
 
+class AdminRulesUpdateRequest(BaseModel):
+    """Request shape for the legacy PUT /rules in-memory override.
+
+    Locking the shape (`overrides: dict[str, str]`) means a stray
+    `{"x": "y"}` PUT gets a 422 instead of silently landing in the
+    override dict — the prior contract allowed arbitrary top-level keys.
+    Round-3 hole-finder #17.
+    """
+
+    overrides: dict[str, str] = Field(default_factory=dict)
+
+    model_config = {"extra": "forbid"}
+
+
 @router.put("/rules")
-def put_rules(payload: dict[str, str]) -> dict[str, object]:
+def put_rules(payload: AdminRulesUpdateRequest) -> dict[str, object]:
     """Legacy in-memory knob.
 
     Retained so existing ops tooling can push a hint value without a UC
     deploy. Writes are NOT persisted to Unity Catalog; the real ruleset
     is seeded via ``sql/ref/offer_rules_config_seed.sql`` and is the
-    source of truth for GET.
+    source of truth for GET. Schema now requires an explicit ``overrides``
+    key — arbitrary top-level JSON is rejected with 422.
     """
-    _RULES_OVERRIDE.update(payload)
+    _RULES_OVERRIDE.update(payload.overrides)
     return {"status": "updated", "rules": dict(_RULES_OVERRIDE)}
 
 

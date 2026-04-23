@@ -33,6 +33,7 @@ space. An open breaker on an unknown question returns a honest
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from typing import Any
 
 from backend.schemas.common import EvidenceEvent
@@ -409,11 +410,32 @@ class DatabricksPortfolioRepository:
         return trends, latest
 
     @staticmethod
-    def _coerce_datetime(value: Any) -> Any:
-        """MAX(snapshot_at) may come back as a datetime, a str (TIMESTAMP),
-        or None depending on the driver. Pydantic coerces strings natively,
-        so we just pass through."""
-        return value
+    def _coerce_datetime(value: Any) -> datetime | None:
+        """Normalise ``MAX(snapshot_at)`` into a tz-aware UTC ``datetime``.
+
+        The Databricks SQL connector returns TIMESTAMP as a tz-naive Python
+        ``datetime`` (no ``tzinfo``). Pydantic would serialise that without
+        a ``Z`` / ``+00:00`` suffix, so ``new Date(...)`` in the browser
+        interprets it as local time — and a European viewer sees the wrong
+        hour on ``data_refreshed_at``. Stamp UTC on the way out so the wire
+        contract is unambiguous (hole-finder round 2 #4, 2026-04-23).
+        """
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            if value.tzinfo is None:
+                return value.replace(tzinfo=UTC)
+            return value.astimezone(UTC)
+        # Defensive: a future connector change may emit an ISO string.
+        try:
+            # Accept the "...Z" suffix that some drivers emit.
+            raw = str(value).replace("Z", "+00:00")
+            parsed = datetime.fromisoformat(raw)
+            if parsed.tzinfo is None:
+                return parsed.replace(tzinfo=UTC)
+            return parsed.astimezone(UTC)
+        except (TypeError, ValueError):
+            return None
 
     def preview(self, request: PortfolioPreviewRequest | None) -> PortfolioPreview:
         criteria = request.criteria if request is not None else None
@@ -529,33 +551,63 @@ class DatabricksSegmentRepository:
 
 
 class DatabricksLeadRepository:
-    """Ranked leads from ``gold.lead_population``."""
+    """Ranked leads from ``gold.lead_population``.
+
+    The per-request ``limit`` is bounded by ``MAX_LIMIT`` (5000) so a
+    pathological caller can't pull the whole gold table onto one page.
+    Default is 500 — the size a VP of Lending can scroll in one sitting
+    and the threshold the LeadTable footer renders "Showing N of M" at.
+    Hole-finder round 2 #24, 2026-04-23.
+    """
+
+    DEFAULT_LIMIT: int = 500
+    MAX_LIMIT: int = 5000
 
     def __init__(self, client: DatabricksSqlClient) -> None:
         self._client = client
 
-    _LIST_BASE_SQL = (
+    _LIST_BASE_SQL_TEMPLATE = (
         f"SELECT {_LEAD_POPULATION_COLUMNS} "
         "FROM mip.gold.lead_population "
         "ORDER BY opportunity_score DESC, borrower_id ASC "
-        "LIMIT 500"
+        "LIMIT {limit}"
     )
 
-    _LIST_BY_SEGMENT_SQL = (
+    _LIST_BY_SEGMENT_SQL_TEMPLATE = (
         f"SELECT {_LEAD_POPULATION_COLUMNS} "
         "FROM mip.gold.lead_population "
         "WHERE array_contains(segment_codes, :segment) "
         "ORDER BY opportunity_score DESC, borrower_id ASC "
-        "LIMIT 500"
+        "LIMIT {limit}"
     )
 
-    def list(self, segment: str | None, portfolio_id: str | None) -> list[LeadSummary]:
+    def list(
+        self,
+        segment: str | None,
+        portfolio_id: str | None,
+        limit: int | None = None,
+    ) -> list[LeadSummary]:
         _ = portfolio_id
+        bounded = self._bound_limit(limit)
         if segment:
-            rows = self._client.execute(self._LIST_BY_SEGMENT_SQL, {"segment": segment})
+            sql = self._LIST_BY_SEGMENT_SQL_TEMPLATE.format(limit=bounded)
+            rows = self._client.execute(sql, {"segment": segment})
         else:
-            rows = self._client.execute(self._LIST_BASE_SQL)
+            sql = self._LIST_BASE_SQL_TEMPLATE.format(limit=bounded)
+            rows = self._client.execute(sql)
         return [LeadSummary(**redact_lead_row(r)) for r in rows]
+
+    @classmethod
+    def _bound_limit(cls, limit: int | None) -> int:
+        """Clamp a caller-supplied ``limit`` to [1, MAX_LIMIT].
+
+        ``None`` / 0 / negative values collapse to ``DEFAULT_LIMIT`` so the
+        SQL stays a literal integer (no binding for LIMIT) and can't be
+        spoofed into pulling the whole table.
+        """
+        if limit is None or limit <= 0:
+            return cls.DEFAULT_LIMIT
+        return min(int(limit), cls.MAX_LIMIT)
 
 
 class DatabricksBorrowerRepository:
