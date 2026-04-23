@@ -47,8 +47,8 @@ export default function LeadQueue() {
 
   return (
     <PageShell
-      eyebrow="Prioritized Lead Queue"
-      title="Ranked borrower queue"
+      eyebrow="Lead Queue"
+      title="Ranked borrowers"
       lede="Click a row to expand the borrower preview. Approve or reject inline, or open Borrower 360 for the full dossier. Keyboard: A approves, R rejects the expanded row."
       heroRight={
         <>

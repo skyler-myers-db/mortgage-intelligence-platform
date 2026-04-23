@@ -30,7 +30,7 @@ const ITEMS: NavItem[] = [
 export function RouteNav() {
   return (
     <nav
-      aria-label="Module 0 routes"
+      aria-label="Main navigation"
       style={{
         display: 'flex',
         gap: 6,

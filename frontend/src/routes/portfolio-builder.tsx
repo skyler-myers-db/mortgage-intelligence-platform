@@ -80,7 +80,7 @@ export default function PortfolioBuilder() {
 
   return (
     <PageShell
-      eyebrow="Module 0 / Lead Portfolio Builder"
+      eyebrow="Portfolio Builder"
       title="Build a borrower population"
       lede="Apply geography, occupancy, lien, relationship, product, and equity filters, then run the build. The KPI grid shows size, average score, and projected conversion."
       heroRight={<Chip variant="neutral" icon="db">Unity Catalog · metric view</Chip>}
@@ -102,7 +102,7 @@ export default function PortfolioBuilder() {
               <Icon name="target" size={14} />
             </div>
             <div>
-              <div className="h-4">Lead Portfolio Builder</div>
+              <div className="h-4">Filters</div>
               <div className="muted" style={{ fontSize: 12 }}>
                 Filter the population, run the build, review KPIs.
               </div>
@@ -189,7 +189,7 @@ export default function PortfolioBuilder() {
 
       <div style={{ marginTop: 'var(--gap-grid)', display: 'flex', gap: 12 }}>
         <Link to="/segment-intelligence" className="btn btn--primary">
-          Next: segment intelligence
+          Next: segments
           <Icon name="chevright" size={14} />
         </Link>
         <Link to="/lead-queue" className="btn">Jump to lead queue</Link>

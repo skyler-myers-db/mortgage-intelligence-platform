@@ -9,6 +9,7 @@ import { DRAWER_SOURCES } from '../lib/drawerSources';
 import { Icon } from '../components/Icon';
 import { Reveal } from '../components/fx/Reveal';
 import { api } from '../lib/api';
+import { useApp } from '../components/AppContext';
 import type { PortfolioPreview } from '../types';
 
 const FUTURE_MODULES = [
@@ -23,6 +24,7 @@ export default function Home() {
   // in flight we show an em-dash placeholder rather than design-time numbers
   // so the surface never presents a plausible-but-fake value. The KpiCard
   // component interprets a null `valueAnimated` as "render em-dash".
+  const { lender } = useApp();
   const [preview, setPreview] = useState<PortfolioPreview | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   useEffect(() => {
@@ -51,15 +53,15 @@ export default function Home() {
 
   return (
     <PageShell
-      eyebrow="Module 0 · Top-of-Funnel Lead Generation & Borrower Segmentation"
-      title="Who should we contact, why now, and with what offer?"
-      lede="Portfolio KPIs, geography drill-down, and today's approval queue. Start a new build, jump to segments, or open a borrower dossier from the map."
+      eyebrow={lender}
+      title="Today"
+      lede="Portfolio KPIs, geography drill-down, and the approval queue. Build a new portfolio, jump to segments, or open a borrower dossier from the map."
       wideMap
       heroRight={
         <>
-          <Chip variant="neutral" icon="db">Refreshed 06:12 UTC · Delta Share</Chip>
+          <Chip variant="neutral" icon="db">Refreshed 06:12 UTC</Chip>
           <Link to="/portfolio-builder" className="btn btn--primary">
-            Start: build a portfolio
+            Build a portfolio
             <Icon name="chevright" size={14} />
           </Link>
         </>
@@ -139,8 +141,8 @@ export default function Home() {
       <Reveal>
         <div className="section-hdr">
           <div>
-            <div className="eyebrow">Future modules</div>
-            <div className="h-2">Planned extensions on the Module 0 data spine</div>
+            <div className="eyebrow">Roadmap</div>
+            <div className="h-2">Planned modules</div>
           </div>
         </div>
         <div

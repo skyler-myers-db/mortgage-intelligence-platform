@@ -156,7 +156,7 @@ export default function SegmentIntelligence() {
 
   return (
     <PageShell
-      eyebrow="Segment Intelligence"
+      eyebrow="Segments"
       title={
         segments.length > 0
           ? `${segments.length} borrower ${segments.length === 1 ? 'segment' : 'segments'} · select to filter`

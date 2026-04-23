@@ -394,13 +394,12 @@ resources:
       environments:
         - environment_key: py_default
           spec:
-            # Serverless Python env version 3 (Python 3.12 + curated
-            # pandas/pyarrow) is the latest stable for Jobs as of
-            # 2026-04. Previous setting `client: "2"` used the
-            # deprecated `client` field (the bundle schema now marks
-            # that field deprecated in favour of `environment_version`).
-            # Verified by `databricks bundle validate -t ci`.
-            environment_version: "3"
+            # Serverless Python env version 5 (latest as of 2026-04).
+            # See https://docs.databricks.com/aws/en/release-notes/serverless/environment-version/
+            # for current release notes. Previous setting `client: "2"` used
+            # the deprecated `client` field; the bundle schema now marks
+            # that field deprecated in favour of `environment_version`.
+            environment_version: "5"
             dependencies:
               - psycopg[binary]==3.2.10
               - databricks-sdk>=0.30.0
@@ -450,9 +449,9 @@ resources:
       environments:
         - environment_key: py_default
           spec:
-            # Serverless Python env version 3 -- see comment on the
+            # Serverless Python env version 5 -- see comment on the
             # mip_sync_lifecycle_state job for the upgrade rationale.
-            environment_version: "3"
+            environment_version: "5"
             dependencies:
               - psycopg[binary]==3.2.10
               # Needed by jobs/lakebase_migrate.py to fetch a fresh
@@ -486,9 +485,9 @@ resources:
       environments:
         - environment_key: py_default
           spec:
-            # Serverless Python env version 3 -- see comment on the
+            # Serverless Python env version 5 -- see comment on the
             # mip_sync_lifecycle_state job for the upgrade rationale.
-            environment_version: "3"
+            environment_version: "5"
       # FRED publishes Thursdays; we run Fridays 06:00 America/Chicago so the
       # refresh lands before any Monday business readout. Do NOT hardcode
       # `pause_status: UNPAUSED` -- it overrides the `mode: development`

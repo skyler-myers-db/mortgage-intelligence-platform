@@ -142,7 +142,7 @@ Reply or call 1-800-XXX-XXXX.`
   if (loadError) {
     return (
       <PageShell
-        eyebrow="Next-Best-Offer + Outreach"
+        eyebrow="Offer & Outreach"
         title={`Couldn't load ${id}`}
         lede={loadError}
       >
