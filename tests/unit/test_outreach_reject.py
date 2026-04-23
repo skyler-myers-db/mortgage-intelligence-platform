@@ -101,6 +101,11 @@ def test_reject_writes_approval_and_audit_rows(override_deps) -> None:
     audit = InMemoryAuditStore()
     fake_lakebase = MagicMock()
     fake_lakebase.execute = MagicMock()
+    # R6-19: the server derives a fallback ``request_id`` for legacy
+    # clients (no body field), so the idempotency lookup runs on every
+    # request. Pin fetchone to None so this first call sees no prior
+    # approval and proceeds with the INSERT + audit write.
+    fake_lakebase.fetchone.return_value = None
     override_deps(audit=audit, lakebase=fake_lakebase)
 
     client = TestClient(app)
@@ -159,6 +164,9 @@ def test_reject_schedules_lifecycle_sync_trigger(
     rejected-borrower counts without waiting on the daily cron."""
     audit = InMemoryAuditStore()
     fake_lakebase = MagicMock()
+    # R6-19: fetchone runs on every request now (server-derived fallback
+    # key), so pin it to None for the no-prior-approval path.
+    fake_lakebase.fetchone.return_value = None
 
     calls: list[dict[str, Any]] = []
 
@@ -186,6 +194,9 @@ def test_reject_surfaces_503_on_lakebase_failure(override_deps) -> None:
     audit = InMemoryAuditStore()
     fake_lakebase = MagicMock()
     fake_lakebase.execute.side_effect = LakebaseError("simulated postgres outage")
+    # R6-19: server-derived fallback request_id always triggers lookup;
+    # pin fetchone to None so the INSERT path is the one that fails.
+    fake_lakebase.fetchone.return_value = None
     override_deps(audit=audit, lakebase=fake_lakebase)
 
     client = TestClient(app)
@@ -207,6 +218,8 @@ def test_approve_forwards_draft_body_into_audit_metadata(
     audit metadata so compliance can reconstruct the released copy."""
     audit = InMemoryAuditStore()
     fake_lakebase = MagicMock()
+    # R6-19: server-derived fallback request_id path now runs the lookup.
+    fake_lakebase.fetchone.return_value = None
 
     # Silence the lifecycle-sync trigger so this test doesn't import
     # the real SDK.
@@ -354,18 +367,91 @@ def test_reject_idempotent_on_retry_with_same_request_id(
     assert len([e for e in audit.list(limit=5) if e.event_type == "OUTREACH_REJECT"]) == 1
 
 
-def test_approve_without_request_id_keeps_legacy_behavior(
+def test_approve_without_request_id_same_minute_collapses_to_one_row(
     override_deps, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Legacy callers that omit ``request_id`` get a fresh approval on
-    every call -- the idempotency check is keyed on request_id, so None
-    never matches. Two calls without request_id == two rows (the caller
-    accepts the risk of duplicate on retry).
+    """R6-19: legacy callers that omit ``request_id`` get a server-derived
+    deterministic fallback keyed on (actor, borrower, action, minute).
+
+    Two same-minute POSTs from the same actor for the same borrower now
+    collapse to one row (matches operator intent: a double-click should
+    not double-book). Cross-minute retries stay distinct -- the test
+    below covers that.
     """
     audit = InMemoryAuditStore()
-    fake_lakebase = MagicMock()
-    fake_lakebase.fetchone.return_value = None
+    inserted: dict[str, str] = {}
 
+    def _execute(sql: str, params: dict[str, Any]) -> None:
+        if "INSERT INTO mip_app.approvals" in sql and params.get("request_id"):
+            inserted[params["request_id"]] = params["approval_id"]
+
+    def _fetchone(sql: str, params: dict[str, Any]) -> dict[str, Any] | None:
+        if "WHERE request_id" in sql:
+            rid = params.get("request_id")
+            if rid and rid in inserted:
+                return {"approval_id": inserted[rid]}
+        return None
+
+    fake_lakebase = MagicMock()
+    fake_lakebase.execute.side_effect = _execute
+    fake_lakebase.fetchone.side_effect = _fetchone
+
+    monkeypatch.setattr(
+        outreach_mod,
+        "enqueue_lifecycle_trigger",
+        lambda background, *, reason="approval": None,
+    )
+    # Pin the clock so both POSTs land in the same minute-bucket.
+    monkeypatch.setattr(outreach_mod.time, "time", lambda: 1_700_000_000.0)
+    override_deps(audit=audit, lakebase=fake_lakebase)
+
+    client = TestClient(app)
+    body = {"borrower_id": "B-48291"}
+    headers = {"X-Forwarded-Email": "lo@example.com"}
+    first = client.post("/api/outreach/approve", json=body, headers=headers)
+    second = client.post("/api/outreach/approve", json=body, headers=headers)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    # Same-minute duplicates collapse to one approval_id.
+    assert first.json()["approval_id"] == second.json()["approval_id"]
+    # Exactly one INSERT -- the second call short-circuited via the
+    # server-derived fallback key.
+    approval_inserts = [
+        call for call in fake_lakebase.execute.call_args_list
+        if "INSERT INTO mip_app.approvals" in call.args[0]
+    ]
+    assert len(approval_inserts) == 1
+
+
+def test_approve_without_request_id_cross_minute_produces_two_rows(
+    override_deps, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R6-19 cross-minute contract: an explicit re-submit ~60s later
+    intentionally opens a new decision -- the fallback key changes
+    bucket so the second POST writes a distinct row.
+    """
+    audit = InMemoryAuditStore()
+    inserted: dict[str, str] = {}
+
+    def _execute(sql: str, params: dict[str, Any]) -> None:
+        if "INSERT INTO mip_app.approvals" in sql and params.get("request_id"):
+            inserted[params["request_id"]] = params["approval_id"]
+
+    def _fetchone(sql: str, params: dict[str, Any]) -> dict[str, Any] | None:
+        if "WHERE request_id" in sql:
+            rid = params.get("request_id")
+            if rid and rid in inserted:
+                return {"approval_id": inserted[rid]}
+        return None
+
+    fake_lakebase = MagicMock()
+    fake_lakebase.execute.side_effect = _execute
+    fake_lakebase.fetchone.side_effect = _fetchone
+
+    # Start clock, bump 61s between calls.
+    clock = {"t": 1_700_000_000.0}
+    monkeypatch.setattr(outreach_mod.time, "time", lambda: clock["t"])
     monkeypatch.setattr(
         outreach_mod,
         "enqueue_lifecycle_trigger",
@@ -374,16 +460,20 @@ def test_approve_without_request_id_keeps_legacy_behavior(
     override_deps(audit=audit, lakebase=fake_lakebase)
 
     client = TestClient(app)
-    body = {"borrower_id": "B-48291", "actor": "anonymous"}
-    first = client.post("/api/outreach/approve", json=body)
-    second = client.post("/api/outreach/approve", json=body)
+    body = {"borrower_id": "B-48291"}
+    headers = {"X-Forwarded-Email": "lo@example.com"}
+    first = client.post("/api/outreach/approve", json=body, headers=headers)
+    clock["t"] += 61.0  # bump to the next minute bucket
+    second = client.post("/api/outreach/approve", json=body, headers=headers)
 
     assert first.status_code == 200
     assert second.status_code == 200
     assert first.json()["approval_id"] != second.json()["approval_id"]
-    # fetchone SHOULD NOT have been called when request_id is None --
-    # the helper short-circuits.
-    assert fake_lakebase.fetchone.call_count == 0
+    approval_inserts = [
+        call for call in fake_lakebase.execute.call_args_list
+        if "INSERT INTO mip_app.approvals" in call.args[0]
+    ]
+    assert len(approval_inserts) == 2
 
 
 # ---------------------------------------------------------------------------

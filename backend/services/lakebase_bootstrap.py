@@ -23,6 +23,28 @@ Design rules:
 * **Never silently papers over a deeper outage.** If the DDL itself
   raises ``LakebaseError`` we log and move on -- the calling INSERT
   will surface the real failure as 503.
+
+R6-04 cross-process serialisation
+---------------------------------
+
+The ``mip_lakebase_migrate`` Databricks Job ALSO applies
+``lakebase/schema.sql`` post-deploy. When the app boots immediately
+after ``databricks bundle deploy -t dev`` the first approve/reject can
+race the migrate job -- both run the same IF-NOT-EXISTS / partial
+unique index DDL concurrently. Postgres serialises CREATE INDEX via
+AccessExclusiveLock, but the ``ADD COLUMN IF NOT EXISTS`` + ``CREATE
+UNIQUE INDEX IF NOT EXISTS`` sequence can still interleave in ways
+that surface as ``duplicate_column`` / ``duplicate_object`` on some
+psycopg+PG combinations.
+
+We wrap the DDL in ``pg_advisory_lock(hashtext('<migration-key>'))``
+so only one process holds the migration lock at a time; the second
+waits its turn and then sees the idempotent DDL as a no-op. Lock is
+released via ``pg_advisory_unlock`` in a ``finally`` block so an
+aborted statement can't hold it past the transaction. The lock key
+is a deterministic 64-bit integer derived from the migration name,
+so future bootstrap DDLs each get their own key (register a new
+``_advisory_key_for`` entry -- see ``_APPROVAL_REQUEST_ID_KEY``).
 """
 from __future__ import annotations
 
@@ -47,6 +69,14 @@ _APPROVAL_REQUEST_ID_DDL: tuple[str, ...] = (
     ),
 )
 
+# R6-04 advisory-lock key -- deterministic 64-bit integer derived from a
+# migration-specific string so we don't collide with other advisory locks
+# the customer might run. ``pg_advisory_lock`` takes a ``bigint`` key; we
+# let Postgres hash the stable migration name via ``hashtext(...)``.
+# Document additional bootstraps here as they're added so the lock-key
+# namespace stays auditable.
+_APPROVAL_REQUEST_ID_KEY: str = "mip_bootstrap_approvals_request_id"
+
 
 _LOCK = Lock()
 _APPROVAL_REQUEST_ID_BOOTSTRAPPED: bool = False
@@ -59,6 +89,14 @@ def ensure_approval_idempotency_column(client: LakebaseClient) -> None:
     second and every subsequent call a pure no-op (no Lakebase round-
     trip). Failures are logged at WARNING and swallowed: the caller's
     INSERT is the next thing to run and will report any real outage.
+
+    R6-04: the DDL block is serialised across processes via
+    ``pg_advisory_lock(hashtext(_APPROVAL_REQUEST_ID_KEY))`` so the app
+    bootstrap and the ``mip_lakebase_migrate`` job can't interleave
+    ``ADD COLUMN IF NOT EXISTS`` + ``CREATE UNIQUE INDEX IF NOT EXISTS``
+    on some psycopg+PG combinations. The unlock is issued in a
+    ``finally`` branch regardless of outcome; an aborted statement
+    therefore cannot hold the lock past the request path.
     """
     global _APPROVAL_REQUEST_ID_BOOTSTRAPPED
     if _APPROVAL_REQUEST_ID_BOOTSTRAPPED:
@@ -66,7 +104,16 @@ def ensure_approval_idempotency_column(client: LakebaseClient) -> None:
     with _LOCK:
         if _APPROVAL_REQUEST_ID_BOOTSTRAPPED:
             return
+        lock_acquired = False
         try:
+            # R6-04: take the advisory lock first so a racing mip_lakebase_
+            # migrate job waits its turn on the DDL block instead of
+            # interleaving statements.
+            client.execute(
+                "SELECT pg_advisory_lock(hashtext(%(key)s))",
+                {"key": _APPROVAL_REQUEST_ID_KEY},
+            )
+            lock_acquired = True
             for stmt in _APPROVAL_REQUEST_ID_DDL:
                 client.execute(stmt)
         except LakebaseError as exc:
@@ -83,6 +130,7 @@ def ensure_approval_idempotency_column(client: LakebaseClient) -> None:
                 "exc=%s",
                 type(exc).__name__,
             )
+            _release_advisory_lock(client, lock_acquired)
             return
         except Exception as exc:  # noqa: BLE001 -- bootstrap must never crash request path
             # R6-02: same posture -- leave flag False for retry on the
@@ -94,8 +142,13 @@ def ensure_approval_idempotency_column(client: LakebaseClient) -> None:
                 "exc=%s",
                 type(exc).__name__,
             )
+            _release_advisory_lock(client, lock_acquired)
             return
-        # Success path only.
+        # Success path: release the lock, then emit the structured event
+        # and latch the flag. Release order matches the "lock first,
+        # unlock last" pattern; a failure during the unlock itself is
+        # logged but cannot regress the migration (DDL already applied).
+        _release_advisory_lock(client, lock_acquired)
         emit(
             log,
             "lakebase_bootstrap_applied",
@@ -103,6 +156,30 @@ def ensure_approval_idempotency_column(client: LakebaseClient) -> None:
             statements=len(_APPROVAL_REQUEST_ID_DDL),
         )
         _APPROVAL_REQUEST_ID_BOOTSTRAPPED = True
+
+
+def _release_advisory_lock(client: LakebaseClient, acquired: bool) -> None:
+    """Best-effort ``pg_advisory_unlock`` of the bootstrap key.
+
+    Callable from both success and failure paths. When the lock was
+    never acquired (the SELECT itself raised) this is a no-op. A
+    failure during the unlock is logged at WARNING but does not raise
+    -- advisory locks auto-release on session end so a stuck lock
+    heals after the next Lakebase connection cycle anyway.
+    """
+    if not acquired:
+        return
+    try:
+        client.execute(
+            "SELECT pg_advisory_unlock(hashtext(%(key)s))",
+            {"key": _APPROVAL_REQUEST_ID_KEY},
+        )
+    except Exception as exc:  # noqa: BLE001 -- unlock failure is informational
+        log.warning(
+            "lakebase_bootstrap advisory_unlock failed: migration=r5_01_approvals_request_id "
+            "exc=%s",
+            type(exc).__name__,
+        )
 
 
 def _reset_bootstrap_for_tests() -> None:

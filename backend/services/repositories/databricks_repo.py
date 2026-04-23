@@ -532,7 +532,15 @@ class DatabricksPortfolioRepository:
         schema drift) is also a legitimate 503 signal -- we are not
         in the business of quietly rendering zeros for unknown
         failure modes.
+
+        R6-17: skip the cache get/set when ``_cache_ttl_s`` is 0.
+        ``TTLCache.set`` already short-circuits on ttl<=0 but the ``get``
+        acquires a lock for no benefit; bypassing both keeps the
+        tests-with-caching-disabled path allocation-free.
         """
+        if self._cache_ttl_s <= 0:
+            row = self._client.execute_one(self._DAY_ZERO_SQL) or {}
+            return bool(row.get("day_zero"))
         cached = self._cache.get(self._DAY_ZERO_CACHE_KEY)
         if cached is not None:
             return bool(cached)
@@ -544,13 +552,21 @@ class DatabricksPortfolioRepository:
     def preview(self, request: PortfolioPreviewRequest | None) -> PortfolioPreview:
         criteria = request.criteria if request is not None else None
         where_clause, params = self._build_preview_predicates(criteria)
-        # Include the clause + params in the cache key so distinct criteria
-        # sets don't collide on a single cached entry. See _preview_cache_key
-        # for the R5-08 fix that pins insertion-order independence.
-        cache_key = self._preview_cache_key(where_clause, params)
-        cached = self._cache.get(cache_key)
-        if cached is not None:
-            return cached
+        # R6-17: when caching is disabled (MIP_CACHE_TTL_S=0, test
+        # defaults, some dev loops), skip the SHA-256 hash + dict
+        # serialisation that build the cache key. Saves one hashlib
+        # invocation per request on the hottest route without changing
+        # the caller contract.
+        caching_enabled = self._cache_ttl_s > 0
+        cache_key = (
+            self._preview_cache_key(where_clause, params)
+            if caching_enabled
+            else ""
+        )
+        if caching_enabled:
+            cached = self._cache.get(cache_key)
+            if cached is not None:
+                return cached
         sql = self._PREVIEW_SQL_TEMPLATE.format(where=where_clause)
         row = self._client.execute_one(sql, params) or {}
         trends, latest = self._load_funnel()
@@ -582,7 +598,8 @@ class DatabricksPortfolioRepository:
             trends=trends,
             day_zero=self._load_day_zero(),
         )
-        self._cache.set(cache_key, preview, self._cache_ttl_s)
+        if caching_enabled:
+            self._cache.set(cache_key, preview, self._cache_ttl_s)
         return preview
 
     def create(self, payload: PortfolioCreateRequest) -> PortfolioCreateResponse:

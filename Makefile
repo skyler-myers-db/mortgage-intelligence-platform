@@ -3,7 +3,8 @@
 PYTHON ?= $(shell [ -x .venv/bin/python ] && echo .venv/bin/python || echo python3)
 
 .PHONY: setup dev-api dev-ui test test-e2e lint build validate bundle-validate bundle-deploy zip \
-        provision-genie bundle-validate-env bundle-deploy-dev deploy-dev check-workspace-host
+        provision-genie bundle-validate-env bundle-deploy-dev deploy-dev check-workspace-host \
+        render-sql
 
 setup:
 	python3 -m venv .venv
@@ -38,10 +39,17 @@ validate:
 	pytest -q
 	npm --prefix frontend run build
 
-bundle-validate:
+# `render-sql` materializes sql/_rendered/** from sql/** for the target UC
+# catalog. The bundle's SQL tasks read from sql/_rendered/** so a customer
+# who sets MIP_DEFAULT_CATALOG=<their_catalog> gets CTAS statements that
+# write to the right place without any manual sed step. Idempotent.
+render-sql:
+	$(PYTHON) tools/render_sql.py --catalog "$${MIP_DEFAULT_CATALOG:-mip}"
+
+bundle-validate: render-sql
 	databricks bundle validate -t dev
 
-bundle-deploy:
+bundle-deploy: render-sql
 	databricks bundle deploy -t dev
 
 zip:
@@ -69,10 +77,10 @@ provision-genie:
 # angle-bracket placeholder values). It maps DATABRICKS_WAREHOUSE_ID and
 # GENIE_SPACE_ID to BUNDLE_VAR_sql_warehouse_id / BUNDLE_VAR_genie_space_id
 # before invoking the Databricks CLI.
-bundle-validate-env:
+bundle-validate-env: render-sql
 	@$(PYTHON) tools/databricks/bundle_env.py validate -t dev
 
-bundle-deploy-dev:
+bundle-deploy-dev: render-sql
 	@read -p "About to DEPLOY to your workspace. Continue? [y/N] " ans; \
 	  test "$$ans" = "y" || { echo "aborted."; exit 1; }; \
 	  $(PYTHON) tools/databricks/bundle_env.py deploy -t dev

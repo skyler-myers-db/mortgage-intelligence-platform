@@ -12,7 +12,9 @@ Slice 5 landmarks:
 """
 from __future__ import annotations
 
+import hashlib
 import logging
+import time
 from typing import Annotated, Any
 from uuid import uuid4
 
@@ -86,6 +88,43 @@ FROM mip_app.approvals
 WHERE request_id = %(request_id)s
 LIMIT 1
 """
+
+
+def _derive_fallback_request_id(
+    *,
+    actor: str,
+    borrower_id: str,
+    action: str,
+    now_s: float | None = None,
+) -> str:
+    """Generate a deterministic fallback ``request_id`` for legacy clients.
+
+    R6-19: the partial unique index on ``mip_app.approvals.request_id``
+    only covers rows WHERE ``request_id IS NOT NULL``. A legacy caller
+    that POSTs ``/approve`` or ``/reject`` without a ``request_id`` (no
+    Idempotency-Key header plumbing, older mobile build, retry storm
+    from a watchdog) therefore bypasses the idempotency contract
+    completely: a double-submit writes two approvals.
+
+    We close the loop by deriving a deterministic key from
+    ``(actor, borrower_id, action, minute-bucket)`` and hashing to a
+    stable 32-hex-char digest. Two requests from the same actor for the
+    same borrower + action within the SAME minute collapse to one row
+    (matches operator intent: a user who double-clicks Approve wants
+    one approval). Two requests 61 seconds apart are treated as
+    distinct (matches operator intent: a user who explicitly re-submits
+    after waiting wants a new decision).
+
+    ``now_s`` is injectable so tests can pin the minute bucket; in
+    production it defaults to ``time.time()``.
+    """
+    t = now_s if now_s is not None else time.time()
+    minute_bucket = int(t // 60)
+    material = f"{actor}|{borrower_id}|{action}|{minute_bucket}"
+    digest = hashlib.sha256(material.encode("utf-8")).hexdigest()[:32]  # noqa: S324 -- not a secret
+    # Prefix so audit review can tell server-derived keys apart from
+    # client-sent ones (which are typically UUIDs / opaque tokens).
+    return f"auto-{digest}"
 
 
 def _lookup_existing_approval(
@@ -187,7 +226,16 @@ def approve_outreach(
     # the backstop; this SELECT is the fast path that avoids emitting
     # a duplicate audit event for a retry.
     ensure_approval_idempotency_column(lakebase)
-    existing = _lookup_existing_approval(lakebase, payload.request_id)
+    # R6-19: legacy callers that omit ``request_id`` used to bypass the
+    # idempotency index entirely, so a retry storm from a watchdog that
+    # never learned Idempotency-Key would double-book an approval. We
+    # derive a deterministic fallback from (actor, borrower_id, action,
+    # minute-bucket) so same-minute duplicates collapse; cross-minute
+    # retries are treated as distinct (see helper docstring).
+    effective_request_id = payload.request_id or _derive_fallback_request_id(
+        actor=actor, borrower_id=payload.borrower_id, action="approve",
+    )
+    existing = _lookup_existing_approval(lakebase, effective_request_id)
     if existing is not None:
         return OutreachApproveResponse(
             approved=True,
@@ -214,7 +262,7 @@ def approve_outreach(
                 "action": "approve",
                 "actor_email": actor,
                 "rationale": None,
-                "request_id": payload.request_id,
+                "request_id": effective_request_id,
             },
         )
         # Governance §4: the audit metadata mirrors what the approver
@@ -232,7 +280,11 @@ def approve_outreach(
             # Persist the idempotency key in the audit metadata too --
             # retrospective auditors can then correlate "same client
             # request, same approval_id" across the decision ledger and
-            # the append-only audit log.
+            # the append-only audit log. Note: when ``payload.request_id``
+            # is None we still wrote the server-derived fallback to the
+            # approvals row (R6-19), but we don't expose that derived key
+            # in the audit metadata -- it's an implementation detail, and
+            # the audit row already has the approval_id pointer.
             audit_payload["request_id"] = payload.request_id
         if payload.draft_body:
             # Defence-in-depth: scrub obvious PII markers (SSN / phone / email /
@@ -316,7 +368,12 @@ def reject_outreach(
     # with the same ``request_id`` returns the existing approval_id
     # instead of writing a second decision row + duplicate audit event.
     ensure_approval_idempotency_column(lakebase)
-    existing = _lookup_existing_approval(lakebase, payload.request_id)
+    # R6-19: server-derived fallback for legacy clients that omit
+    # ``request_id`` (see /approve for the full rationale).
+    effective_request_id = payload.request_id or _derive_fallback_request_id(
+        actor=actor, borrower_id=payload.borrower_id, action="reject",
+    )
+    existing = _lookup_existing_approval(lakebase, effective_request_id)
     if existing is not None:
         return OutreachRejectResponse(
             rejected=True,
@@ -334,7 +391,7 @@ def reject_outreach(
                 "action": "reject",
                 "actor_email": actor,
                 "rationale": payload.rationale,
-                "request_id": payload.request_id,
+                "request_id": effective_request_id,
             },
         )
         audit_payload: dict[str, Any] = {

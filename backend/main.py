@@ -386,6 +386,27 @@ if _FRONTEND_DIST.is_dir() and (_FRONTEND_DIST / "index.html").is_file():
             # Path-traversal guard: candidate must stay inside dist/.
             candidate.relative_to(_FRONTEND_DIST.resolve())
         except ValueError:
+            # R6-14: a candidate outside dist/ means a traversal attempt
+            # (``../../etc/passwd``-style). Serving index.html is still
+            # the correct SPA behaviour -- React Router will resolve the
+            # client route, or show its own 404 for a bogus path -- but
+            # we MUST surface the probe to ops. Without this log line an
+            # attacker's recon of the static surface is completely silent
+            # in the structured log trail. We log the attempted path at
+            # WARNING + emit ``event=spa_path_traversal_blocked`` with
+            # the original raw path so SOC/SIEM dashboards can pattern-
+            # match. The path is capped at 256 chars to bound log line
+            # size; longer probe strings are truncated with an ellipsis.
+            attempted = full_path if len(full_path) <= 256 else full_path[:256] + "..."
+            log.warning(
+                "spa_fallback: path_traversal_blocked path=%s", attempted
+            )
+            emit(
+                log,
+                "spa_path_traversal_blocked",
+                level=logging.WARNING,
+                path=attempted,
+            )
             candidate = _FRONTEND_DIST / "index.html"
         if candidate.is_file() and candidate.name != "index.html":
             return FileResponse(candidate)

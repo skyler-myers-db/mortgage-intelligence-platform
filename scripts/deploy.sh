@@ -171,6 +171,20 @@ if [[ "$DRY_RUN" -eq 0 && "$NO_CONFIRM" -eq 0 ]]; then
 fi
 
 # -----------------------------------------------------------------------------
+# Step 1a: render SQL for the target UC catalog
+# -----------------------------------------------------------------------------
+# The bundle's SQL tasks read from sql/_rendered/**/*.sql. The canonical
+# sources under sql/** hardcode the default `mip.*` catalog prefix for
+# readability + code review; tools/render_sql.py substitutes the five
+# documented UC prefixes (mip.gold., mip.silver., mip.ref., mip.semantics.,
+# mip.raw.) for the target catalog before bundle validate/deploy read the
+# rendered tree. This is the automated replacement for the old manual
+# `sed` workaround documented in docs/runbook-multi-catalog.md. Honours
+# `MIP_DEFAULT_CATALOG` from .env.local; defaults to `mip`.
+step "render SQL for target UC catalog (MIP_DEFAULT_CATALOG=${MIP_DEFAULT_CATALOG:-mip})"
+run "$PYTHON" tools/render_sql.py --catalog "${MIP_DEFAULT_CATALOG:-mip}"
+
+# -----------------------------------------------------------------------------
 # Step 1: build the frontend
 # -----------------------------------------------------------------------------
 step "build frontend (frontend/dist/** is uploaded by the bundle sync.include)"

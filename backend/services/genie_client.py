@@ -473,6 +473,17 @@ class ResilientGenieClient:
         question: str,
         conversation_id: str | None = None,
     ) -> GenieResponse:
+        # R6-18: when the breaker was force-opened at boot because
+        # GENIE_SPACE_ID was a placeholder string, we give ourselves a
+        # chance to notice a runtime config rotation (Databricks Apps
+        # supports env-var rotation without a restart). If the placeholder
+        # is gone, close the breaker and let the next probe through --
+        # otherwise the breaker flip-flops on placeholder probes until
+        # the process dies. Predicate is a cheap module-local read, so
+        # this costs almost nothing per request.
+        self._resilient.breaker.force_close_if_config_changed(
+            lambda: not is_placeholder_space_id(self._client.space_id)
+        )
         return self._resilient.call(
             lambda: self._client.ask(question, conversation_id=conversation_id)
         )

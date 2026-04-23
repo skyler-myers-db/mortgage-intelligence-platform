@@ -104,7 +104,8 @@ def test_bootstrap_flag_flips_on_successful_retry_after_failure() -> None:
     clean = _FakeClient()
     ensure_approval_idempotency_column(clean)  # type: ignore[arg-type]
     assert _bootstrap_state_for_tests()["request_id_bootstrapped"] is True
-    assert len(clean.calls) == 2  # ALTER + CREATE INDEX
+    # R6-04: lock + ALTER + CREATE INDEX + unlock = 4 calls.
+    assert len(clean.calls) == 4
 
 
 def test_bootstrap_successful_call_flips_flag_and_runs_all_statements() -> None:
@@ -115,8 +116,11 @@ def test_bootstrap_successful_call_flips_flag_and_runs_all_statements() -> None:
     ensure_approval_idempotency_column(client)  # type: ignore[arg-type]
 
     assert _bootstrap_state_for_tests()["request_id_bootstrapped"] is True
-    # Matches lakebase_bootstrap._APPROVAL_REQUEST_ID_DDL tuple length.
-    assert len(client.calls) == len(lakebase_bootstrap._APPROVAL_REQUEST_ID_DDL)
+    # R6-04: call count is DDL tuple length + 2 (advisory lock + unlock
+    # bracket the DDL block). Assert the DDL statements still ran by
+    # matching the sub-sequence rather than an exact count.
+    ddl_calls = [c for c in client.calls if "pg_advisory" not in c]
+    assert len(ddl_calls) == len(lakebase_bootstrap._APPROVAL_REQUEST_ID_DDL)
 
 
 def test_bootstrap_second_call_after_success_is_noop() -> None:
@@ -131,3 +135,49 @@ def test_bootstrap_second_call_after_success_is_noop() -> None:
     # Flag still True, but the second client never saw an execute call.
     assert _bootstrap_state_for_tests()["request_id_bootstrapped"] is True
     assert second.calls == []
+
+
+# ---------------------------------------------------------------------------
+# R6-04: advisory-lock serialisation across the app bootstrap + migrate job
+# ---------------------------------------------------------------------------
+
+
+def test_bootstrap_acquires_and_releases_advisory_lock_on_success() -> None:
+    """R6-04: the happy-path bootstrap wraps the idempotent DDL in a
+    ``pg_advisory_lock(hashtext(...))`` / ``pg_advisory_unlock(...)``
+    pair so a racing ``mip_lakebase_migrate`` job serialises behind it.
+
+    We observe the order of execute calls: first SELECT is the lock
+    acquire, last is the matching unlock, and the DDL statements live
+    between them.
+    """
+    client = _FakeClient()
+    ensure_approval_idempotency_column(client)  # type: ignore[arg-type]
+
+    assert _bootstrap_state_for_tests()["request_id_bootstrapped"] is True
+    # 1 lock + 2 DDL + 1 unlock = 4 calls total
+    assert len(client.calls) == 4
+    assert "pg_advisory_lock" in client.calls[0]
+    assert "pg_advisory_unlock" in client.calls[-1]
+    # Both DDL statements must sit INSIDE the locked region.
+    assert "ALTER TABLE" in client.calls[1]
+    assert "CREATE UNIQUE INDEX" in client.calls[2]
+
+
+def test_bootstrap_releases_advisory_lock_on_ddl_failure() -> None:
+    """R6-04: when a DDL statement raises between the lock and unlock,
+    the ``finally``-style release path must still run. Otherwise a
+    stuck advisory lock would block the next call (and the migrate
+    job) until the Lakebase session ends.
+    """
+    # Sequence: acquire lock OK, first DDL fails. Release must still be
+    # attempted (the fake records a 3rd call to pg_advisory_unlock).
+    client = _FakeClient(raise_on_call=[False, True])
+    ensure_approval_idempotency_column(client)  # type: ignore[arg-type]
+
+    # Flag stays False (R6-02: failed bootstrap re-runs on next call).
+    assert _bootstrap_state_for_tests()["request_id_bootstrapped"] is False
+    # 1 lock + 1 failed DDL + 1 unlock attempt = 3 calls
+    assert len(client.calls) == 3
+    assert "pg_advisory_lock" in client.calls[0]
+    assert "pg_advisory_unlock" in client.calls[-1]

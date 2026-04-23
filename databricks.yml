@@ -168,7 +168,7 @@ resources:
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
-              path: sql/ddl/001_catalogs_schemas.sql
+              path: sql/_rendered/ddl/001_catalogs_schemas.sql
         # Slice13-accuracy: create the mip.ref schema + lender_dictionary
         # table and seed the canonical lender vocabulary. Runs AFTER catalog
         # init (the schema lives under `mip`) and BEFORE the silver pipeline
@@ -181,7 +181,7 @@ resources:
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
-              path: sql/ddl/004_ref_tables.sql
+              path: sql/_rendered/ddl/004_ref_tables.sql
         - task_key: seed_ref_lender_dictionary
           description: "MERGE canonical lender vocabulary into mip.ref.lender_dictionary (idempotent)."
           depends_on:
@@ -189,7 +189,7 @@ resources:
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
-              path: sql/ref/lender_dictionary_seed.sql
+              path: sql/_rendered/ref/lender_dictionary_seed.sql
         - task_key: seed_ref_offer_rules_config
           description: "MERGE canonical offer-rule thresholds into mip.ref.offer_rules_config (idempotent)."
           depends_on:
@@ -197,7 +197,7 @@ resources:
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
-              path: sql/ref/offer_rules_config_seed.sql
+              path: sql/_rendered/ref/offer_rules_config_seed.sql
         - task_key: seed_ref_state_footprint
           description: "MERGE canonical state footprint into mip.ref.state_footprint (idempotent). Hole-finder #20."
           depends_on:
@@ -205,7 +205,7 @@ resources:
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
-              path: sql/ref/state_footprint_seed.sql
+              path: sql/_rendered/ref/state_footprint_seed.sql
         - task_key: refresh_silver_pipeline
           description: "Run the Lakeflow feature pipeline to materialize mip.silver.* from the Cotality share."
           depends_on:
@@ -234,7 +234,7 @@ resources:
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
-              path: sql/ddl/004_ref_tables.sql
+              path: sql/_rendered/ddl/004_ref_tables.sql
         - task_key: seed_lender_dictionary
           description: "MERGE canonical lender vocabulary into mip.ref.lender_dictionary."
           depends_on:
@@ -242,7 +242,7 @@ resources:
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
-              path: sql/ref/lender_dictionary_seed.sql
+              path: sql/_rendered/ref/lender_dictionary_seed.sql
         - task_key: seed_offer_rules_config
           description: "MERGE canonical offer-rule thresholds into mip.ref.offer_rules_config."
           depends_on:
@@ -250,7 +250,7 @@ resources:
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
-              path: sql/ref/offer_rules_config_seed.sql
+              path: sql/_rendered/ref/offer_rules_config_seed.sql
         - task_key: seed_state_footprint
           description: "MERGE canonical state footprint into mip.ref.state_footprint. Hole-finder #20."
           depends_on:
@@ -258,7 +258,7 @@ resources:
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
-              path: sql/ref/state_footprint_seed.sql
+              path: sql/_rendered/ref/state_footprint_seed.sql
     # Gold-layer materialization. Runs the idempotent DDL manifest (adds
     # any new tables -- e.g. lockin_cohort -- on a bundle deploy), then
     # executes each gold CTAS file in dependency order. This CTAS-via-
@@ -307,7 +307,7 @@ resources:
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
-              path: sql/ddl/003_gold_tables.sql
+              path: sql/_rendered/ddl/003_gold_tables.sql
         # audit-holes-round-3 #7 fix: capture ONE deterministic refresh_at
         # timestamp at the top of the DAG. Every downstream CTAS reads
         # mip.ref.refresh_run_state to replace its own CURRENT_TIMESTAMP()
@@ -322,7 +322,7 @@ resources:
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
-              path: sql/transformations/capture_refresh_timestamp.sql
+              path: sql/_rendered/transformations/capture_refresh_timestamp.sql
         - task_key: ctas_property_owner_bridge
           description: "Rebuild mip.gold.property_owner_bridge via CTAS."
           depends_on:
@@ -330,7 +330,7 @@ resources:
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
-              path: sql/transformations/gold_property_owner_bridge.sql
+              path: sql/_rendered/transformations/gold_property_owner_bridge.sql
         - task_key: ctas_evidence_events
           description: "Rebuild mip.gold.evidence_events via CTAS."
           depends_on:
@@ -338,7 +338,7 @@ resources:
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
-              path: sql/transformations/gold_evidence_events.sql
+              path: sql/_rendered/transformations/gold_evidence_events.sql
         - task_key: ctas_borrower_360
           description: "Rebuild mip.gold.borrower_360 via CTAS."
           depends_on:
@@ -347,7 +347,7 @@ resources:
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
-              path: sql/transformations/gold_borrower_360.sql
+              path: sql/_rendered/transformations/gold_borrower_360.sql
         # audit-holes-round-3 #8 fix: integrity gate between borrower_360
         # and every task that reads from it. Asserts the population is both
         # non-empty and freshly rebuilt in THIS run (within 30 minutes of
@@ -362,7 +362,7 @@ resources:
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
-              path: sql/transformations/assert_borrower_360_fresh.sql
+              path: sql/_rendered/transformations/assert_borrower_360_fresh.sql
         - task_key: ctas_lead_scores
           description: "Rebuild mip.gold.lead_scores via CTAS."
           depends_on:
@@ -370,7 +370,7 @@ resources:
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
-              path: sql/transformations/gold_lead_scores.sql
+              path: sql/_rendered/transformations/gold_lead_scores.sql
         - task_key: ctas_lead_population
           description: "Rebuild mip.gold.lead_population via CTAS."
           depends_on:
@@ -378,7 +378,7 @@ resources:
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
-              path: sql/transformations/gold_lead_population.sql
+              path: sql/_rendered/transformations/gold_lead_population.sql
         - task_key: ctas_segment_population
           description: "Rebuild mip.gold.segment_population via CTAS."
           depends_on:
@@ -386,7 +386,7 @@ resources:
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
-              path: sql/transformations/gold_segment_population.sql
+              path: sql/_rendered/transformations/gold_segment_population.sql
         - task_key: ctas_lockin_cohort
           description: "Rebuild mip.gold.lockin_cohort via CTAS (slice13-accuracy)."
           depends_on:
@@ -394,7 +394,7 @@ resources:
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
-              path: sql/transformations/gold_lockin_cohort.sql
+              path: sql/_rendered/transformations/gold_lockin_cohort.sql
         - task_key: ctas_borrower_dossier
           description: "Rebuild mip.gold.borrower_dossier via CTAS (slice13-accuracy perf)."
           depends_on:
@@ -403,7 +403,7 @@ resources:
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
-              path: sql/transformations/gold_borrower_dossier.sql
+              path: sql/_rendered/transformations/gold_borrower_dossier.sql
         # slice13-accuracy-validation: three geography rollup tables feed the
         # USChoroplethMap drill (state -> county -> ZIP). All three aggregate
         # from gold.borrower_360 directly -- no ZIP->county crosswalk seed
@@ -418,7 +418,7 @@ resources:
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
-              path: sql/transformations/gold_county_rollup.sql
+              path: sql/_rendered/transformations/gold_county_rollup.sql
         - task_key: ctas_zip_rollup
           description: "Rebuild mip.gold.zip_rollup via CTAS (per-ZIP aggregate + stable sample_borrower_id)."
           depends_on:
@@ -426,7 +426,7 @@ resources:
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
-              path: sql/transformations/gold_zip_rollup.sql
+              path: sql/_rendered/transformations/gold_zip_rollup.sql
         - task_key: ctas_state_top_segment
           description: "Rebuild mip.gold.state_top_segment via CTAS (per-state dominant SegmentCode + share %)."
           depends_on:
@@ -434,7 +434,7 @@ resources:
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
-              path: sql/transformations/gold_state_top_segment.sql
+              path: sql/_rendered/transformations/gold_state_top_segment.sql
         # Zero-click Genie provisioning — publish the three mip.semantics.*
         # views so the Genie trusted_assets list in
         # genie/mortgage_lead_intelligence_space.yml binds on first deploy.
@@ -450,7 +450,7 @@ resources:
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
-              path: sql/ddl/005_semantics_views.sql
+              path: sql/_rendered/ddl/005_semantics_views.sql
 
     # Event-triggered sync of Lakebase approval + outreach state into
     # mip.gold.borrower_lifecycle_state. Metric views (segment_
@@ -522,7 +522,7 @@ resources:
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
-              path: sql/transformations/gold_borrower_lifecycle_state.sql
+              path: sql/_rendered/transformations/gold_borrower_lifecycle_state.sql
         - task_key: sync_from_lakebase
           description: "Read mip_app.approvals + outreach events from Lakebase and overwrite mip.gold.borrower_lifecycle_state."
           depends_on:
@@ -539,7 +539,7 @@ resources:
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
-              path: sql/transformations/gold_funnel_snapshot_daily.sql
+              path: sql/_rendered/transformations/gold_funnel_snapshot_daily.sql
 
     mip_snapshot_dashboards:
       name: mip_snapshot_dashboards
@@ -616,7 +616,7 @@ resources:
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
-              path: sql/ddl/001_catalogs_schemas.sql
+              path: sql/_rendered/ddl/001_catalogs_schemas.sql
         - task_key: init_silver_ddl
           description: "CREATE TABLE IF NOT EXISTS for silver.market_rates_weekly."
           depends_on:
@@ -624,7 +624,7 @@ resources:
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
-              path: sql/ddl/silver_market_rates_weekly.sql
+              path: sql/_rendered/ddl/silver_market_rates_weekly.sql
         - task_key: seed_if_empty
           description: "Load data/seeds/fred_mortgage30us_seed.csv iff silver table is empty."
           depends_on:

@@ -310,6 +310,60 @@ class CircuitBreaker:
             self._opened_at = self._now()
             self._probes_in_flight = 0
 
+    def force_close_if_config_changed(self, predicate: Callable[[], bool]) -> bool:
+        """Force CLOSED when ``predicate()`` returns True.
+
+        R6-18 escape hatch. ``force_open_for_placeholder_config`` jams the
+        breaker OPEN at boot when a placeholder config value (e.g.
+        ``GENIE_SPACE_ID=00000000PLACEHOLDER``) would guaranteed-fail. The
+        cooldown is irrelevant: every half-open probe will still fail on
+        the same placeholder, so the breaker flip-flops until the process
+        restarts.
+
+        But Databricks Apps supports env-var rotation WITHOUT a restart.
+        When the operator fixes the config at runtime, the breaker has no
+        way to notice unless we probe it. This method lets the Genie
+        client (or any other caller) evaluate a cheap predicate before
+        ``allow()`` and, if the predicate now returns True, close the
+        breaker and let the next real probe through.
+
+        ``predicate`` should be a pure read of the current config (e.g.
+        ``lambda: not is_placeholder_space_id(settings.genie_space_id)``).
+        Returns True when the breaker was actually closed -- callers can
+        use that to emit a structured recovery log.
+        """
+        if not predicate():
+            return False
+        with self._lock:
+            if self._state == self.CLOSED:
+                return False
+            log.info(
+                "circuit_breaker[%s]: config-changed close (was %s)",
+                self._name,
+                self._state,
+            )
+            emit(
+                log,
+                "circuit_breaker_state_change",
+                dependency=self._name,
+                from_state=self._state,
+                to_state=self.CLOSED,
+                name=self._name,
+                failure_count=self._failure_count,
+                cooldown_s=self._cooldown_s,
+                reason="config_changed",
+            )
+            record_breaker_state_change(
+                name=self._name,
+                from_state=self._state,
+                to_state=self.CLOSED,
+            )
+            self._state = self.CLOSED
+            self._failure_count = 0
+            self._opened_at = None
+            self._probes_in_flight = 0
+            return True
+
 
 # ---------------------------------------------------------------------------
 # Retry with exponential backoff + decorrelated jitter.

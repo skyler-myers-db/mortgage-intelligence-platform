@@ -59,6 +59,11 @@ DATABRICKS_TOKEN=<PAT from workspace User Settings -> Developer -> Access Tokens
 DATABRICKS_WAREHOUSE_ID=<serverless warehouse id from Compute -> SQL warehouses>
 # GENIE_SPACE_ID is written by step 4; leave blank on first deploy.
 GENIE_SPACE_ID=
+# OPTIONAL: set the UC catalog name if the customer uses a non-default name
+# (default is "mip"). scripts/deploy.sh step 1a renders sql/_rendered/**
+# for this catalog before the bundle runs, so CTAS lands in the right place
+# on first deploy. See docs/runbook-multi-catalog.md for details.
+# MIP_DEFAULT_CATALOG=summit_mortgage
 EOF
 ```
 

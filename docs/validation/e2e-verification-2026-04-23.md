@@ -8,24 +8,24 @@ Synthetic test-id prefix: `B-TEST-*`
 
 | Endpoint | Method+Path | Status | Latency (ms) | Payload OK? | Notes |
 | --- | --- | ---: | ---: | :---: | --- |
-| health | `GET /api/health` | 200 | 1775 | yes | keys/len: app_env, breaker_state_changes_last_hour, circuit_breakers, counters_persistence, dependencies, fallback_identity_fallbacks_total, log_export, mode |
-| portfolio.unfiltered | `POST /api/portfolio/preview` | 200 | 2108 | yes | keys/len: approved_count, avg_score, cost_per_contact, data_refreshed_at, day_zero, high_intent_leads, in_outreach_count, marketable_population |
-| portfolio.chicago | `POST /api/portfolio/preview` | 200 | 2000 | yes | keys/len: approved_count, avg_score, cost_per_contact, data_refreshed_at, day_zero, high_intent_leads, in_outreach_count, marketable_population |
-| portfolio.chicago.owner.25pct | `POST /api/portfolio/preview` | 200 | 1485 | yes | keys/len: approved_count, avg_score, cost_per_contact, data_refreshed_at, day_zero, high_intent_leads, in_outreach_count, marketable_population |
-| segments | `GET /api/segments` | 200 | 1027 | yes | keys/len: [array len=4] |
-| leads.all | `GET /api/leads` | 200 | 1844 | yes | keys/len: [array len=500] |
-| leads.itm | `GET /api/leads?segment=itm` | 200 | 1505 | yes | keys/len: [array len=500] |
-| borrower.detail | `GET /api/borrowers/B-102FL7THC6Q3L` | 200 | 1677 | yes | keys/len: approval_status, avm_value, borrower_id, city, clip, clip_id, confidence, current_lien_balance |
-| borrower.evidence | `GET /api/borrowers/B-102FL7THC6Q3L/evidence` | 200 | 999 | yes | keys/len: [array len=8] |
-| offers.recommend | `POST /api/offers/recommend` | 200 | 1402 | yes | keys/len: alternatives, borrower_id, confidence, evidence_ids, offer_code, offer_type, product_label, rationale |
-| outreach.draft | `POST /api/outreach/draft` | 200 | 925 | yes | keys/len: body, borrower_id, channel, offer_code, status, subject |
-| outreach.approve.synthetic | `POST /api/outreach/approve` | 200 | 1799 | yes | keys/len: approval_id, approved, audit_event_id |
-| outreach.reject.synthetic | `POST /api/outreach/reject` | 200 | 730 | yes | keys/len: approval_id, audit_event_id, rejected |
-| audit.events | `GET /api/audit/events?limit=10` | 200 | 769 | yes | keys/len: [array len=10] |
-| genie.message | `POST /api/genie/message` | 200 | 918 | yes | keys/len: answer, conversation_id, follow_up_questions, metric_value, question, source, table_rows, trusted_assets |
-| admin.rules | `GET /api/admin/rules` | 200 | 945 | yes | keys/len: legacy_override, offer_rules_version, rules_edited_at, thresholds |
-| admin.sources | `GET /api/admin/sources` | 200 | 2168 | yes | keys/len: [array len=8] |
-| geo.state_rollups | `GET /api/geo/state-rollups` | 503 | 445 | NO | ERROR: {"detail":"warehouse is temporarily unavailable","retryable":true,"dependency":"warehouse","correlation_id":"98805ec78f08451cb15245c5d666cc28"} |
+| health | `GET /api/health` | 200 | 1794 | yes | keys/len: app_env, breaker_state_changes_last_hour, circuit_breakers, counters_persistence, dependencies, fallback_identity_fallbacks_process_total, fallback_identity_fallbacks_total, log_export |
+| portfolio.unfiltered | `POST /api/portfolio/preview` | 200 | 3113 | yes | keys/len: approved_count, avg_score, cost_per_contact, data_refreshed_at, day_zero, high_intent_leads, in_outreach_count, marketable_population |
+| portfolio.chicago | `POST /api/portfolio/preview` | 200 | 2625 | yes | keys/len: approved_count, avg_score, cost_per_contact, data_refreshed_at, day_zero, high_intent_leads, in_outreach_count, marketable_population |
+| portfolio.chicago.owner.25pct | `POST /api/portfolio/preview` | 200 | 1878 | yes | keys/len: approved_count, avg_score, cost_per_contact, data_refreshed_at, day_zero, high_intent_leads, in_outreach_count, marketable_population |
+| segments | `GET /api/segments` | 200 | 1263 | yes | keys/len: [array len=4] |
+| leads.all | `GET /api/leads` | 200 | 2525 | yes | keys/len: [array len=500] |
+| leads.itm | `GET /api/leads?segment=itm` | 200 | 1649 | yes | keys/len: [array len=500] |
+| borrower.detail | `GET /api/borrowers/B-102FL7THC6Q3L` | 200 | 3833 | yes | keys/len: approval_status, avm_value, borrower_id, city, clip, clip_id, confidence, current_lien_balance |
+| borrower.evidence | `GET /api/borrowers/B-102FL7THC6Q3L/evidence` | 200 | 1347 | yes | keys/len: [array len=8] |
+| offers.recommend | `POST /api/offers/recommend` | 200 | 1842 | yes | keys/len: alternatives, borrower_id, confidence, evidence_ids, offer_code, offer_type, product_label, rationale |
+| outreach.draft | `POST /api/outreach/draft` | 200 | 963 | yes | keys/len: body, borrower_id, channel, offer_code, status, subject |
+| outreach.approve.synthetic | `POST /api/outreach/approve` | 200 | 1731 | yes | keys/len: approval_id, approved, audit_event_id |
+| outreach.reject.synthetic | `POST /api/outreach/reject` | 200 | 1519 | yes | keys/len: approval_id, audit_event_id, rejected |
+| audit.events | `GET /api/audit/events?limit=10` | 200 | 707 | yes | keys/len: [array len=10] |
+| genie.message | `POST /api/genie/message` | 200 | 1082 | yes | keys/len: answer, conversation_id, follow_up_questions, metric_value, question, source, table_rows, trusted_assets |
+| admin.rules | `GET /api/admin/rules` | 200 | 1063 | yes | keys/len: legacy_override, offer_rules_version, rules_edited_at, thresholds |
+| admin.sources | `GET /api/admin/sources` | 200 | 2394 | yes | keys/len: [array len=8] |
+| geo.state_rollups | `GET /api/geo/state-rollups` | 503 | 438 | NO | ERROR: {"detail":"warehouse is temporarily unavailable","retryable":true,"dependency":"warehouse","reason":"breaker_open","correlation_id":"3f10fe2d7a2f4caba61bf34ffa4 |
 
 ## Clean payload samples
 
@@ -56,8 +56,8 @@ Synthetic test-id prefix: `B-TEST-*`
 {
   "marketable_population": 5156184,
   "high_intent_leads": 147742,
-  "top_tier_opportunities": 3081,
-  "offers_recommended": 4468007,
+  "top_tier_opportunities": 3080,
+  "offers_recommended": 4468137,
   "avg_score": 36,
   "trends": {
     "marketable_population": {
@@ -126,8 +126,8 @@ Synthetic test-id prefix: `B-TEST-*`
 {
   "marketable_population": 1851040,
   "high_intent_leads": 70939,
-  "top_tier_opportunities": 1163,
-  "offers_recommended": 1504616,
+  "top_tier_opportunities": 1162,
+  "offers_recommended": 1504711,
   "avg_score": 35,
   "trends": {
     "marketable_population": {
@@ -407,8 +407,8 @@ Synthetic test-id prefix: `B-TEST-*`
 ```json
 {
   "approved": true,
-  "approval_id": "4822342d-0046-4b8b-af01-901985c87928",
-  "audit_event_id": "815328de-4c61-47e9-930e-0bb69ea7c956"
+  "approval_id": "cbec1e3a-0b64-47a7-bbf4-c9015253f067",
+  "audit_event_id": "37a40565-2166-47c8-99ec-df5272f13401"
 }
 ```
 
@@ -417,8 +417,8 @@ Synthetic test-id prefix: `B-TEST-*`
 ```json
 {
   "rejected": true,
-  "approval_id": "4bfbd543-3cb5-4296-a070-250f82e21ba5",
-  "audit_event_id": "b0b610d0-e198-4e6f-b8bc-77b716115bf8"
+  "approval_id": "c6981cf8-0a60-47d9-a980-2790a49e7178",
+  "audit_event_id": "aebebcee-cb17-4518-9b22-0dd07f34d712"
 }
 ```
 
@@ -426,18 +426,18 @@ Synthetic test-id prefix: `B-TEST-*`
 
 ```json
 {
-  "event_id": "b0b610d0-e198-4e6f-b8bc-77b716115bf8",
+  "event_id": "aebebcee-cb17-4518-9b22-0dd07f34d712",
   "actor": "skyler@entrada.ai",
   "action": "outreach.reject",
   "entity_type": "approval",
-  "entity_id": "4bfbd543-3cb5-4296-a070-250f82e21ba5",
+  "entity_id": "c6981cf8-0a60-47d9-a980-2790a49e7178",
   "payload_json": {
     "offer_code": "refi",
-    "approval_id": "4bfbd543-3cb5-4296-a070-250f82e21ba5",
-    "borrower_id": "B-TEST-4946521F"
+    "approval_id": "c6981cf8-0a60-47d9-a980-2790a49e7178",
+    "borrower_id": "B-TEST-93676512"
   },
   "evidence_ids": [],
-  "created_at": "2026-04-23T17:37:47.438508+00:00",
+  "created_at": "2026-04-23T18:41:00.096714+00:00",
   "event_type": "OUTREACH_REJECT",
   "subject_clip": null,
   "subject_segment": null,
@@ -526,7 +526,7 @@ Synthetic test-id prefix: `B-TEST-*`
 
 ## Red flags
 
-- geo.state_rollups: status=503 error={"detail":"warehouse is temporarily unavailable","retryable":true,"dependency":"warehouse","correlation_id":"98805ec78f08451cb15245c5d666cc28"}
+- geo.state_rollups: status=503 error={"detail":"warehouse is temporarily unavailable","retryable":true,"dependency":"warehouse","reason":"breaker_open","correlation_id":"3f10fe2d7a2f4caba61bf34ffa4
 
 ## Teardown
 

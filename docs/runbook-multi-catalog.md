@@ -2,28 +2,32 @@
 
 ## TL;DR
 
-Module 0 defaults its UC catalog to `mip`. Customers who require a
-different catalog name (`mip_prod`, `lender_uc`, `cotality_mip`, …)
-deploy with a bundle variable:
+Module 0 defaults its UC catalog to `mip`. Customers who require a different catalog name (`mip_prod`, `lender_uc`, `cotality_mip`, …) set one variable and deploy. Both the Python API layer and the SQL transformation layer are now multi-catalog safe — there is no manual preprocessing step.
 
 ```bash
+# In .env.local on the SE's laptop:
+MIP_DEFAULT_CATALOG=summit_mortgage
+
+# Then deploy:
+./scripts/deploy.sh           # or: make deploy-dev
+```
+
+That is the entire operator contract. `scripts/deploy.sh` (step 1a) runs `tools/render_sql.py --catalog "${MIP_DEFAULT_CATALOG:-mip}"` before the bundle validate/deploy phase, which materializes `sql/_rendered/**` with the target catalog substituted into the five documented UC prefixes. The bundle's SQL tasks all read from `sql/_rendered/**`, so every CTAS / DDL / metric view / UC function lands in the right catalog on first deploy.
+
+For the bundle-variable path (non-default workspace target), keep the two-var form:
+
+```bash
+MIP_DEFAULT_CATALOG=mip_prod \
 databricks bundle deploy -t prod \
     --var="uc_catalog=mip_prod" \
     --var="lakebase_instance=mip-prod-lakebase"
 ```
 
-The Python API layer reads the catalog from
-`settings.mip_default_catalog` (env var `MIP_DEFAULT_CATALOG`) at
-runtime via `backend.services.databricks_sql_helpers.qualify(schema,
-table)`, so every backend query routes against the configured catalog
-automatically. **The SQL transformation + DDL files still hardcode
-`mip.*` and need one of the workarounds below for catalogs other than
-`mip`.**
+(`uc_catalog` is the bundle-side variable consumed by `pipelines.mip_feature_pipeline.catalog`; `MIP_DEFAULT_CATALOG` drives the SQL renderer and the Python runtime. Keep them equal.)
 
-## Python layer — already multi-catalog safe
+## Python layer — multi-catalog safe since hole-finder R2 #19
 
-As of hole-finder round-2 #19 (2026-04-23) every production Python
-caller names UC objects through `qualify()`:
+As of 2026-04-23 every production Python caller names UC objects through `qualify()`:
 
 ```python
 from backend.services.databricks_sql_helpers import qualify
@@ -42,70 +46,41 @@ Refactored call-sites:
 - `backend/api/offers.py` (offer-evidence citation)
 - `backend/api/genie.py` (trusted-asset list on /start)
 
-`backend/services/scoring.py` keeps `SOURCE_DISPLAY_LABELS` keyed on the
-default `mip.*` prefix for back-compat, but `source_display_label()`
-now falls back to a `schema.object` lookup so business labels still
-resolve when the catalog is renamed.
+`backend/services/scoring.py` keeps `SOURCE_DISPLAY_LABELS` keyed on the default `mip.*` prefix for back-compat, but `source_display_label()` falls back to a `schema.object` lookup so business labels still resolve when the catalog is renamed.
 
-## SQL layer — KNOWN LIMITATION
+## SQL layer — multi-catalog safe since R6-01 rollout
 
-`sql/transformations/gold_*.sql` and `sql/ddl/*.sql` still hardcode
-`mip.<schema>.<table>`. These files run from Databricks Jobs / Lakeflow
-pipelines, not through the FastAPI service; the `qualify()` helper
-does not reach them.
+The `sql/transformations/gold_*.sql`, `sql/ddl/*.sql`, `sql/ref/*.sql`, `sql/metric_views/*.sql`, and `sql/uc_functions/*.sql` files keep `mip.<schema>.<table>` as the canonical prefix for readability. `tools/render_sql.py` rewrites those prefixes for the target catalog into `sql/_rendered/**` at deploy time, and the bundle's SQL tasks read from the rendered tree.
 
-Two workarounds, pick whichever fits your release process:
+Substitutions applied (regex-anchored; `mip_app.*` is NEVER matched because the word boundary + trailing dot + known-schema list rule out the Lakebase schema):
 
-### Option A — bundle pre-processor (recommended for CI/CD)
-
-Add a pre-deploy step that substitutes `${var.uc_catalog}` for each
-occurrence of `mip.` (limited to `mip.gold.`, `mip.silver.`,
-`mip.semantics.`, `mip.ref.`, `mip.raw.`) inside `sql/**/*.sql` before
-`databricks bundle deploy`. Example shell step:
-
-```bash
-CATALOG="${UC_CATALOG:-mip}"
-if [[ "$CATALOG" != "mip" ]]; then
-    find sql -name '*.sql' -print0 | xargs -0 sed -i \
-        -e "s|\\bmip\\.gold\\.|${CATALOG}.gold.|g" \
-        -e "s|\\bmip\\.silver\\.|${CATALOG}.silver.|g" \
-        -e "s|\\bmip\\.semantics\\.|${CATALOG}.semantics.|g" \
-        -e "s|\\bmip\\.ref\\.|${CATALOG}.ref.|g" \
-        -e "s|\\bmip\\.raw\\.|${CATALOG}.raw.|g"
-fi
-databricks bundle deploy -t prod --var="uc_catalog=$CATALOG"
+```
+mip.gold.      -> {catalog}.gold.
+mip.silver.    -> {catalog}.silver.
+mip.ref.       -> {catalog}.ref.
+mip.semantics. -> {catalog}.semantics.
+mip.raw.       -> {catalog}.raw.
 ```
 
-Run the step only from CI, never against your working tree — the edits
-are deploy-time substitutions, not committed changes.
+Wiring:
 
-### Option B — one-time `sed` across the tree (for a hard fork)
+- **`Makefile` targets** (`render-sql`, `bundle-validate`, `bundle-deploy`, `bundle-validate-env`, `bundle-deploy-dev`) all depend on `render-sql`. The `render-sql` target runs `tools/render_sql.py --catalog "$${MIP_DEFAULT_CATALOG:-mip}"` — idempotent, fast, zero dependencies.
+- **`scripts/deploy.sh`** (step 1a) runs the renderer before the frontend build, so the rendered tree is present before the bundle is touched.
+- **`databricks.yml`** declares every `sql_task.file.path` under `sql/_rendered/...` rather than `sql/...`. The canonical sources under `sql/**/*.sql` stay committed; the rendered copies under `sql/_rendered/**` are gitignored.
+- **Identity when `--catalog mip`:** every substitution is a byte-identical rewrite on the default catalog, so customers who keep the default name pay nothing.
 
-If you maintain a vendored fork with a permanent catalog name, you can
-do a single `sed -i` run and commit the result:
+Operators never run the renderer by hand. If for some reason you want to inspect the rendered output manually:
 
 ```bash
-NEW="mip_prod"
-find sql -name '*.sql' -print0 | xargs -0 sed -i \
-    -e "s|\\bmip\\.gold\\.|${NEW}.gold.|g" \
-    -e "s|\\bmip\\.silver\\.|${NEW}.silver.|g" \
-    -e "s|\\bmip\\.semantics\\.|${NEW}.semantics.|g" \
-    -e "s|\\bmip\\.ref\\.|${NEW}.ref.|g" \
-    -e "s|\\bmip\\.raw\\.|${NEW}.raw.|g"
-git add sql && git commit -m "chore(sql): vendor for uc_catalog=${NEW}"
+make render-sql                                # honours MIP_DEFAULT_CATALOG
+python tools/render_sql.py --catalog <name>    # ad-hoc one-off
 ```
 
 ## Out-of-scope names that still hold
 
-- **Lakebase schema (`mip_app`)** lives in Postgres, not Unity Catalog.
-  It has its own name and is governed by `settings.mip_lakebase_schema`.
-  Do not rename via the UC workarounds above.
-- **Bundle resource blocks in `databricks.yml`** already reference
-  `${var.uc_catalog}`; no change needed.
-- **Admin rules seed (`ref.offer_rules_config`)** — the Python reader
-  qualifies through `qualify('ref', 'offer_rules_config')`, but the seed
-  SQL in `sql/ref/` hardcodes `mip.ref.`. Use Option A or B above if
-  the tenant catalog is non-default.
+- **Lakebase schema (`mip_app`)** lives in Postgres, not Unity Catalog. It has its own name and is governed by `settings.mip_lakebase_schema`. The renderer's word-boundary + known-schema regex deliberately does NOT match it.
+- **Bundle resource blocks in `databricks.yml`** already reference `${var.uc_catalog}` for pipeline `catalog:` fields; no change needed.
+- **Admin rules seed (`ref.offer_rules_config`)** — the Python reader qualifies through `qualify('ref', 'offer_rules_config')` and the seed SQL in `sql/ref/` is now covered by the renderer.
 
 ## Validation
 
@@ -118,11 +93,23 @@ assert qualify('gold', 'borrower_360') == 'mip_prod.gold.borrower_360'
 print('OK')
 "
 
-# Confirm admin /settings reports the right catalog:
+# Smoke-test the SQL renderer — output is byte-identical when --catalog mip.
+python tools/render_sql.py --catalog mip
+diff -r sql/transformations sql/_rendered/transformations  # empty output
+
+# Non-default catalog swaps the prefix in every file.
+python tools/render_sql.py --catalog summit_mortgage
+grep 'CREATE OR REPLACE TABLE' sql/_rendered/transformations/gold_borrower_360.sql
+# -> CREATE OR REPLACE TABLE summit_mortgage.gold.borrower_360 AS ...
+
+# Bundle validate reads from the rendered tree.
+databricks bundle validate -t ci   # Validation OK!
+
+# Confirm admin /settings reports the right catalog at runtime:
 curl -s http://localhost:8000/api/admin/settings | jq .catalog
 ```
 
 ## Changelog
 
-- 2026-04-23 — hole-finder round-2 #19: introduced `qualify()` helper;
-  refactored the Python API layer; documented the SQL-layer gap.
+- 2026-04-23 — hole-finder round-2 #19: introduced `qualify()` helper; refactored the Python API layer; documented the SQL-layer gap.
+- 2026-04-23 — R6-01 rollout: shipped `tools/render_sql.py`; `databricks.yml` and `Makefile` now consume `sql/_rendered/**`; retired the manual `sed` workaround.
