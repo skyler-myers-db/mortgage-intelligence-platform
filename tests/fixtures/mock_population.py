@@ -376,4 +376,4 @@ B48294_OFFER_CODE = BORROWER_OFFER_INPUTS["B-48294"]["offer_code"]
 B48295_OFFER_CODE = BORROWER_OFFER_INPUTS["B-48295"]["offer_code"]
 
 
-PORTFOLIO = PortfolioPreview(marketable_population=89553, high_intent_leads=12840, avg_score=81, projected_contact_to_app=9.7, cost_per_contact=2.18)
+PORTFOLIO = PortfolioPreview(marketable_population=89553, high_intent_leads=12840, avg_score=81)

@@ -50,12 +50,6 @@ class PortfolioPreview(BaseModel):
     # ``False`` keeps pre-R5-20 clients parsing.
     day_zero: bool = False
 
-    # ---- DEPRECATED -------------------------------------------------------
-    # Hardcoded 2.18 / 9.7 constants in a previous slice; not Cotality data;
-    # always None now. Kept to keep older clients parsing.
-    projected_contact_to_app: float | None = None
-    cost_per_contact: float | None = None
-
 
 class PortfolioCriteria(BaseModel):
     geography: str | None = None

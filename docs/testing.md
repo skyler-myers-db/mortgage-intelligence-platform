@@ -33,8 +33,11 @@ Playwright path:
 
 ## Acceptance tests
 
-- Evidence visible.
-- Human approval visible.
-- Synthetic data only.
-- Route performance acceptable under live load.
-- Table-first backup layout works.
+The app runs on live Unity Catalog + Lakebase; there is no mock-mode runtime path (see [CLAUDE.md](../CLAUDE.md) "Negative prompting"). Test criteria pin the live-data resilience contract instead.
+
+- Evidence drawer opens from every KPI/score/recommendation and cites a real UC row.
+- Human approval writes a real row to `mip_app.action_audit` in Lakebase.
+- Borrower display fields pass PII redaction (initials only; generalized `{city}, {state} {zip}`).
+- Degraded-state banner renders when warehouse / Genie / Lakebase drops, and clears on recovery — no silent mock fallback.
+- Circuit breaker opens on SQL timeout; routes return 503 with `retry-after`, not stale mock data.
+- Route p95 under live load stays inside the thresholds in [docs/load-baseline.md](load-baseline.md).

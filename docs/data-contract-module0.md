@@ -589,7 +589,7 @@ This gives us the same contract stability as the input-space fixtures, with a "t
 | `gold.lead_population` | Daily | Step 5. |
 | `gold.segment_population` | Daily + prior-day snapshot for `delta` | Step 6. |
 
-Walkthrough posture: all gold is precomputed. The backend never triggers a refresh; mock-mode (`MIP_MOCK_MODE=true`) remains the zero-dependency fallback for offline evaluation.
+Walkthrough posture: all gold is precomputed. The backend never triggers a refresh. The app runs on live Unity Catalog — there is no mock-mode runtime fallback (see [CLAUDE.md](../CLAUDE.md) "Negative prompting"). Flakiness is handled by the resilience layer (retry, warm-start, SWR cache, circuit breaker, degraded-state banner).
 
 ---
 

@@ -1,5 +1,7 @@
 # Source-tree copy audit — 2026-04-22
 
+> **Note:** This document records a past state. `MIP_MOCK_MODE` has since been removed in the live-data cutover (commit `2f09424`). The text below is preserved for audit traceability.
+
 **Branch:** `fix/copilot-batch-post-merge`
 **Scope:** every `frontend/src/**`, `backend/**/*.py`, `docs/**/*.md`, plus
 public repo surface (`README.md`, `package.json`, `pyproject.toml`,

@@ -54,8 +54,8 @@ Implementation steps:
 1. Build app shell: top bar, module rail, content container.
 2. Add design tokens and reusable components.
 3. Add route-level data loading through `frontend/src/lib/api.ts`.
-4. Keep mocks in `frontend/src/mocks` and backend fixture data in `backend/services/mock_data.py`.
-5. Ensure every route can render without backend by using API fallback.
+4. Stub repositories live under `tests/fixtures/` and are wired via FastAPI `dependency_overrides` in unit tests — they never ship in the production app. Frontend fixtures under `frontend/src/mocks/fixtureData.ts` are Vitest/Storybook-only and are not imported by production routes.
+5. Every route queries live Unity Catalog through `backend/services/repositories/databricks_repo.py`. When a dependency is down the route returns 503 and the frontend renders the degraded-state banner — there is no silent mock fallback (see [CLAUDE.md](../CLAUDE.md) "Negative prompting").
 
 Validation:
 ```bash
@@ -88,7 +88,7 @@ POST /api/audit/event
 Implementation rules:
 - Routers call services; services own data access.
 - API schemas are Pydantic and mirrored by TS types.
-- Live Unity Catalog is the only runtime path — there is no mock-mode toggle in the running app (see `CLAUDE.md` "Implementation posture"). Fixtures in `tests/fixtures/` / `frontend/src/mocks/` are unit-test-only.
+- Live Unity Catalog is the only runtime path — there is no mock-mode toggle in the running app (see [CLAUDE.md](../CLAUDE.md) "Implementation posture"). Fixtures under `tests/fixtures/` and `frontend/src/mocks/` are unit-test/Storybook-only and are never imported by production routers.
 - SQL mode uses parameterized queries or validated enum filters.
 - Approval endpoint writes to Lakebase; a degraded-state banner surfaces if the breaker opens, but no mock-memory fallback.
 

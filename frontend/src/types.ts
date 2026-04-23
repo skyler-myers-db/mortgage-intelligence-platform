@@ -113,9 +113,6 @@ export interface PortfolioPreview {
   // `marketable_population === 0 && data_refreshed_at === null` when
   // absent.
   day_zero?: boolean;
-  // Deprecated — always null. Kept for schema back-compat with older clients.
-  projected_contact_to_app: number | null;
-  cost_per_contact: number | null;
   approved_count: number | null;
   in_outreach_count: number | null;
 }

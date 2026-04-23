@@ -1,5 +1,7 @@
 # UX Walkthrough + Accessibility Validation
 
+> **Note:** This document records a past state. `MIP_MOCK_MODE` has since been removed in the live-data cutover (commit `2f09424`). The text below is preserved for audit traceability.
+
 **Date:** 2026-04-22
 **Branch:** `fix/ci-bundle-auth-and-playwright`
 **Run context:** Localhost (Option A)

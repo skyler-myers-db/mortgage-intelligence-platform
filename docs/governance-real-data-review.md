@@ -1,5 +1,7 @@
 # Module 0 — Governance & Security Review: Real-Data Migration
 
+> **Note:** This review predates the live-data cutover (commit `2f09424`). `MIP_MOCK_MODE` has since been removed; the app runs on live Unity Catalog + Lakebase unconditionally, with no mock-mode runtime fallback. PII redaction, UC governance, audit, and resilience guidance below are still authoritative — the only retired mechanism is the `MIP_MOCK_MODE` env seam itself. See [CLAUDE.md](../CLAUDE.md) "Negative prompting" for the current posture.
+
 **Scope:** Pre-implementation risk review for swapping the Module 0 customer walkthrough off synthetic fixtures onto live `cotality_mortgage_data.corelogic` Delta Share.
 **Reviewer:** governance-security-reviewer subagent
 **Date:** 2026-04-21
@@ -263,7 +265,7 @@ Create scope `mip` and populate:
 
 ## 6. Walkthrough-failure posture
 
-`MIP_MOCK_MODE=true` is the fallback. `app.yaml` defaults it to `"true"`. `backend/services/mock_data.py` is the ground truth in that mode. The question is: **what triggers the flip from real to mock mid-demo, and where does the flip logic live?**
+**Superseded by the cutover.** There is no mock fallback. The app runs on live Unity Catalog + Lakebase, and failures are surfaced via the resilience layer (retry, warehouse warm-start, SWR-cached health probe, per-dependency circuit breakers, degraded-state banner) rather than by swapping in synthetic data. The question this section originally asked — "what triggers the flip from real to mock mid-demo" — no longer applies. The current contract: a failed dependency returns 503 with `retry-after`, the banner surfaces the degraded state, and the operator calls it out. The original design below is preserved as a record of the pre-cutover plan.
 
 ### Failure modes to detect
 
@@ -286,7 +288,7 @@ Put the decision in a single **service-level decorator** `@with_mock_fallback` t
 
 **Where it lives:** a new `backend/services/resilience.py` wrapping every data-tier service method. This keeps routers ignorant of fallback logic — they always call the service, the service decides whether to hit the warehouse or the in-memory fixtures.
 
-**Emergency kill switch:** the operator can send `POST /api/admin/mock-mode` (already stubbed at `backend/api/admin.py`) to force `MIP_MOCK_MODE=true` for the process without redeploying. This is the ops-console escape hatch.
+**Emergency kill switch (retired).** The pre-cutover plan proposed `POST /api/admin/mock-mode` as a process-level force-to-mock escape hatch. That endpoint was never shipped; the cutover replaced it with per-dependency circuit breakers that the operator can observe on `/api/health`, plus the degraded-state banner. There is no in-app switch back to synthetic data.
 
 **Parity contract:** every real-data endpoint must return a response shape **byte-compatible** with its mock counterpart — if the real-data path produces a field the mock path doesn't (or vice-versa), the frontend breaks on fallback. Enforce with a pytest parametrization: each endpoint runs twice (mock + real-mocked-via-fixture), and responses must match schema.
 

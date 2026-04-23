@@ -41,11 +41,14 @@ Databricks App resources expected by `app.yaml`:
 
 ## Release checklist
 
-- Mock mode works.
-- Prod mode has warehouse ID.
-- Lakebase schema exists.
-- Genie space is curated.
-- Bundle validates.
-- Frontend build passes.
-- Python tests pass.
+The app runs on live Unity Catalog + Lakebase in every environment — there is no mock-mode runtime toggle (see [CLAUDE.md](../CLAUDE.md) "Negative prompting"). Flakiness is handled by the resilience layer (retry, warehouse warm-start, SWR cache, circuit breaker, degraded-state banner), never by silent mock fallback.
+
+- Warehouse ID + Genie space ID are set (`BUNDLE_VAR_sql_warehouse_id`, `BUNDLE_VAR_genie_space_id`).
+- Lakebase schema + `mip_app.action_audit` table exist.
+- Genie space is curated against `mip.semantics.*` metric views only.
+- `/api/health` reports `warehouse: up`, `genie: up`, `lakebase: up`, all circuits `closed`.
+- Resilience is observable: degraded banner renders when a dependency drops; Approve writes a real row to `mip_app.action_audit`.
+- `databricks bundle validate -t dev` passes.
+- Frontend build passes (`npm --prefix frontend run build`).
+- Python tests pass (`pytest -q`).
 - Talk track rehearsed.

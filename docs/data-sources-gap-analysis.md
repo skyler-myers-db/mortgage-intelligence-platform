@@ -226,7 +226,7 @@ mip.gold.lead_population         -- filtered ranked top-N for demo surface
 1. **Add FRED `MORTGAGE30US` ingestion** (1 small job, 1 silver table). Unblocks in-the-money math.
 2. **Populate silver transformations** per §6. No cross-domain joins yet — plain SELECT-with-WHERE on the share.
 3. **Populate gold** `borrower_360` + `lead_scores` + `evidence_events`. Join lien_current + property_v3 + mortgage_events aggregates.
-4. **Wire `backend/services/databricks_sql.py`** (currently a stub) to point at `mip.gold.*`. Keep mock mode in parallel via `MIP_MOCK_MODE=true` so demo fallback survives.
+4. **Wire `backend/services/databricks_sql.py`** to point at `mip.gold.*`. Live UC is the only runtime path; resilience (retry, warm-start, SWR cache, circuit breaker, degraded banner) handles flakiness — no silent mock fallback (see [CLAUDE.md](../CLAUDE.md) "Negative prompting").
 5. **Reconcile demo lender footprint** with real state coverage (pick one of IL/CA/FL/TX/WA/CO as Summit Mortgage's book, or a metro like Chicago/Seattle/Denver).
 6. **Request MLS Listings + Building Permits from Cotality** in parallel with the above — these unblock segment 6 and upgrade segment 3 but don't block the other 5 segments from shipping.
 

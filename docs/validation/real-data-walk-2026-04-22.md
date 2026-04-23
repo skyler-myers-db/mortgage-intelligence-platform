@@ -1,5 +1,7 @@
 # Real-data walkthrough — 2026-04-22
 
+> **Note:** This document records a past state. `MIP_MOCK_MODE` has since been removed in the live-data cutover (commit `2f09424`). The text below is preserved for audit traceability.
+
 Evidence for the "app runs on real Unity Catalog data end to end" claim
 after the Slice-13 exhaustive validation work landed.
 

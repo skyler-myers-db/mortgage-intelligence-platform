@@ -1,5 +1,7 @@
 # Module 0 — Real Data Migration Plan
 
+> **Note:** This plan describes the migration from mock fixtures to live Unity Catalog. The migration completed in the live-data cutover (commit `2f09424`), and `MIP_MOCK_MODE` has been removed — the app now runs on live UC + Lakebase unconditionally. The nine-slice sequence below is preserved as a historical design record. For the current runtime contract see [CLAUDE.md](../CLAUDE.md) "Implementation posture" and [docs/data-contract-module0.md](data-contract-module0.md).
+
 **Author:** principal-architect subagent
 **Date:** 2026-04-21
 **Branch:** `feature/module0-agentic-scaffold` (source) → `feature/module0-real-data` (child)
