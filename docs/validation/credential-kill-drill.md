@@ -63,7 +63,7 @@ A FAIL on any target blocks release. Canonical fail modes:
 
 ## Frequency
 
-- Before every release rehearsal (4 targets × ~5 min = 20 min total).
+- Before every release dry-run (4 targets × ~5 min = 20 min total).
 - After any diff that touches the files listed in
   `docs/credential-kill-drill.md` § "Cadence".
 - After any production incident involving a dependency outage, to

@@ -1,10 +1,15 @@
 /**
  * Module 0 — accessibility smoke test.
  *
- * Runs axe-core against the Home route (the highest-traffic surface + the
- * one stakeholders land on first). Asserts zero `serious` or `critical`
- * violations; `moderate` / `minor` are logged as TODOs but do not fail
- * the test (out of scope for this pass — surfacing is the value).
+ * Runs axe-core against every public route in BOTH dark and light themes.
+ * Asserts zero `serious` or `critical` violations; `moderate` / `minor`
+ * are logged as TODOs but do not fail the test.
+ *
+ * Why both themes: a prior audit (2026-04-22) found 5 light-theme-only
+ * contrast blockers that dark-only runs would never catch. The
+ * contrast-regression guard recommended in that audit lives here. Flip
+ * `data-theme` by setting localStorage + document root attribute before
+ * each axe scan; AppContext reads the same keys on boot.
  *
  * Gated on `E2E_LIVE=1` to mirror real_data.spec.ts: the backend requires
  * live Databricks credentials to boot post-cutover (backend/runtime.py
@@ -46,6 +51,26 @@ const ROUTES: Array<{ path: string; readySelector?: RegExp | string }> = [
   { path: '/outreach-composer',      readySelector: /Outreach/i },
   { path: '/admin-config',           readySelector: /Lender|Admin|Config/i },
 ];
+
+type Theme = 'dark' | 'light';
+const THEMES: Theme[] = ['dark', 'light'];
+
+/**
+ * Flip the app's theme in-place without a full reload. AppContext reads
+ * `mip.theme` from localStorage on boot and mirrors it into
+ * <html data-theme="…">. We set both so tokens flip immediately AND the
+ * next route navigation hydrates with the same theme.
+ */
+async function setTheme(page: import('@playwright/test').Page, theme: Theme) {
+  await page.evaluate((t: Theme) => {
+    try {
+      window.localStorage.setItem('mip.theme', t);
+    } catch {
+      // ignore (SSR / private mode) — attribute fallback below
+    }
+    document.documentElement.setAttribute('data-theme', t);
+  }, theme);
+}
 
 async function runAxeAndAssertClean(page: import('@playwright/test').Page, label: string) {
   const results = await new AxeBuilder({ page })
@@ -89,40 +114,72 @@ async function runAxeAndAssertClean(page: import('@playwright/test').Page, label
 }
 
 test.describe('Module 0 — accessibility (nightly)', () => {
-  for (const route of ROUTES) {
-    test(`${route.path} has zero serious/critical axe violations`, async ({ page }) => {
-      await page.goto(route.path);
-      if (route.readySelector) {
-        await expect(
-          page.getByText(route.readySelector).first(),
-        ).toBeVisible({ timeout: 20_000 });
+  for (const theme of THEMES) {
+    test.describe(`theme=${theme}`, () => {
+      for (const route of ROUTES) {
+        test(`${route.path} has zero serious/critical axe violations (${theme})`, async ({ page }) => {
+          // Seed the theme in localStorage BEFORE the first paint so
+          // AppContext boots into the right palette and no flash occurs.
+          await page.addInitScript((t) => {
+            try {
+              window.localStorage.setItem('mip.theme', t as string);
+            } catch {
+              // ignore
+            }
+          }, theme);
+          await page.goto(route.path);
+          // Defensive: also flip the attribute post-load in case the
+          // init script raced a browser-specific storage quirk.
+          await setTheme(page, theme);
+          if (route.readySelector) {
+            await expect(
+              page.getByText(route.readySelector).first(),
+            ).toBeVisible({ timeout: 20_000 });
+          }
+          await runAxeAndAssertClean(page, `${route.path} [${theme}]`);
+        });
       }
-      await runAxeAndAssertClean(page, route.path);
+
+      test(`borrower-360 (deep-linked real id) has zero serious/critical violations (${theme})`, async ({ page }) => {
+        await page.addInitScript((t) => {
+          try {
+            window.localStorage.setItem('mip.theme', t as string);
+          } catch {
+            // ignore
+          }
+        }, theme);
+        await page.goto('/lead-queue');
+        await setTheme(page, theme);
+        const firstRow = page.locator('tbody tr').first();
+        await expect(firstRow).toBeVisible({ timeout: 30_000 });
+        const href = await firstRow.locator('a[href*="/borrower-360/"]').first().getAttribute('href');
+        if (!href) test.skip(true, 'No borrower id available to deep-link.');
+        await page.goto(href!);
+        await setTheme(page, theme);
+        await expect(page.getByText(/Customer 360|Why we recommend/i)).toBeVisible({ timeout: 20_000 });
+        await runAxeAndAssertClean(page, `/borrower-360/:id [${theme}]`);
+      });
+
+      test(`offer-orchestrator (deep-linked real id) has zero serious/critical violations (${theme})`, async ({ page }) => {
+        await page.addInitScript((t) => {
+          try {
+            window.localStorage.setItem('mip.theme', t as string);
+          } catch {
+            // ignore
+          }
+        }, theme);
+        await page.goto('/lead-queue');
+        await setTheme(page, theme);
+        const firstRow = page.locator('tbody tr').first();
+        await expect(firstRow).toBeVisible({ timeout: 30_000 });
+        const href = await firstRow.locator('a[href*="/borrower-360/"]').first().getAttribute('href');
+        if (!href) test.skip(true, 'No borrower id available to deep-link.');
+        const id = href!.split('/').pop();
+        await page.goto(`/offer-orchestrator/${id}`);
+        await setTheme(page, theme);
+        await expect(page.getByText(/Draft outreach|Recommended offer/i)).toBeVisible({ timeout: 30_000 });
+        await runAxeAndAssertClean(page, `/offer-orchestrator/:id [${theme}]`);
+      });
     });
   }
-
-  test('borrower-360 (deep-linked real id) has zero serious/critical violations', async ({ page }) => {
-    await page.goto('/lead-queue');
-    // Grab the first real borrower id from the queue so the deep-link test
-    // never falls back to a fixture id.
-    const firstRow = page.locator('tbody tr').first();
-    await expect(firstRow).toBeVisible({ timeout: 30_000 });
-    const href = await firstRow.locator('a[href*="/borrower-360/"]').first().getAttribute('href');
-    if (!href) test.skip(true, 'No borrower id available to deep-link.');
-    await page.goto(href!);
-    await expect(page.getByText(/Customer 360|Why we recommend/i)).toBeVisible({ timeout: 20_000 });
-    await runAxeAndAssertClean(page, '/borrower-360/:id');
-  });
-
-  test('offer-orchestrator (deep-linked real id) has zero serious/critical violations', async ({ page }) => {
-    await page.goto('/lead-queue');
-    const firstRow = page.locator('tbody tr').first();
-    await expect(firstRow).toBeVisible({ timeout: 30_000 });
-    const href = await firstRow.locator('a[href*="/borrower-360/"]').first().getAttribute('href');
-    if (!href) test.skip(true, 'No borrower id available to deep-link.');
-    const id = href!.split('/').pop();
-    await page.goto(`/offer-orchestrator/${id}`);
-    await expect(page.getByText(/Draft outreach|Recommended offer/i)).toBeVisible({ timeout: 30_000 });
-    await runAxeAndAssertClean(page, '/offer-orchestrator/:id');
-  });
 });

@@ -272,7 +272,7 @@ All gold tables: Delta, managed, partition/cluster tuned for the Module 0 querie
 - **Source:** `silver.lien_current` (spine) ⟕ `silver.property_master` ⟕ `gold.property_owner_bridge` ⟕ `silver.market_rates_weekly(is_latest)`.
 - **PK:** `clip`.
 - **Clustering:** liquid on `(situs_state, clip)`; Z-order on `opportunity_score` after first demo refresh.
-- **Refresh:** daily full rebuild (5.16M rows ≈ minutes on a serverless warehouse; precomputed gold is the booth-demo posture, not recompute-on-read).
+- **Refresh:** daily full rebuild (5.16M rows ≈ minutes on a serverless warehouse; precomputed gold is the production-read posture, not recompute-on-read).
 - **Pydantic target:** `backend.schemas.lead.Borrower360` (super-set of `LeadSummary`).
 
 | Column | Type | Null | Source expression | Pydantic field | Definition |
@@ -416,7 +416,7 @@ Segment codes match `Literal["itm", "listed", "permit", "investor", "equity", "r
 | `listed` | `listed_for_sale = TRUE` | **BLOCKED — needs MLS** (§9) |
 | `permit` | `has_permit = TRUE` | **BLOCKED — needs Permits** (§9) |
 
-Under the current share, `listed` and `permit` segments materialize as zero-count rows. The demo either (a) runs blocked segments via mock-mode for the booth, or (b) hides them behind a feature flag until MLS + Permits land.
+Under the current share, `listed` and `permit` segments materialize as zero-count rows. The walkthrough either (a) runs blocked segments via mock-mode as a fallback, or (b) hides them behind a feature flag until MLS + Permits land.
 
 ---
 
@@ -559,9 +559,9 @@ This gives us the same contract stability as the input-space fixtures, with a "t
 |---|---|---|
 | `borrower_360.has_permit` | Cotality **Building Permits** product not yet licensed (P0 request per gap analysis §8). | Hardcoded `FALSE`. `permit` segment returns zero count. `intent_trigger.permit` term always 0. |
 | `borrower_360.listed_for_sale` | Cotality **MLS Listings** product not yet licensed (P0 request). | Hardcoded `FALSE`. `listed` segment returns zero count. `purchase` branch of `fn_next_best_offer` never fires on real data. |
-| `evidence_events` rows of `signal_type='permit'` | Permits blocker. | Never emitted. Mock-mode `ev-004` remains the only permit evidence rendered in the booth. |
-| `evidence_events` rows of `signal_type='listing'` | MLS blocker. | Never emitted. Mock-mode `ev-008` remains the only listing evidence rendered in the booth. |
-| Pre-foreclosure leading indicators (NOD/NTS) | Cotality **Pre-Foreclosure** product (P2 ask, not a booth blocker). | Fall back to `property_master.foreclosure_stage_code` snapshot. Adequate for the demo per gap analysis §2 segment 7. |
+| `evidence_events` rows of `signal_type='permit'` | Permits blocker. | Never emitted. Mock-mode `ev-004` remains the only permit evidence rendered in the walkthrough. |
+| `evidence_events` rows of `signal_type='listing'` | MLS blocker. | Never emitted. Mock-mode `ev-008` remains the only listing evidence rendered in the walkthrough. |
+| Pre-foreclosure leading indicators (NOD/NTS) | Cotality **Pre-Foreclosure** product (P2 ask, not a walkthrough blocker). | Fall back to `property_master.foreclosure_stage_code` snapshot. Adequate per gap analysis §2 segment 7. |
 | 15-year offer lane (`fn_next_best_offer` refinement) | Public `MORTGAGE15US` ingestion not yet wired (optional per gap analysis §5). | Single 30-year market rate is good enough for Module 0. |
 
 ---
@@ -589,7 +589,7 @@ This gives us the same contract stability as the input-space fixtures, with a "t
 | `gold.lead_population` | Daily | Step 5. |
 | `gold.segment_population` | Daily + prior-day snapshot for `delta` | Step 6. |
 
-Booth-demo posture: all gold is precomputed. The demo backend never triggers a refresh; mock-mode (`MIP_MOCK_MODE=true`) remains the zero-dependency fallback.
+Walkthrough posture: all gold is precomputed. The backend never triggers a refresh; mock-mode (`MIP_MOCK_MODE=true`) remains the zero-dependency fallback for offline evaluation.
 
 ---
 

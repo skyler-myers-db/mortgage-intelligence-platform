@@ -4,10 +4,10 @@ Hand-off checklist for a human evaluator (LO, marketing lead, Databricks
 FS reviewer, or exec sponsor) walking Module 0 front-to-back the way a
 prospective customer would. This is the bar Playwright can't reach:
 how does the product *feel*, does the evidence story land, does the
-approval gate read as credible, does nothing look "demo-y."
+approval gate read as credible, does nothing look prototype-like.
 
 Run this after every substantive UI change, before every customer
-preview, and as the last gate before a release rehearsal.
+preview, and as the last gate before a release dry-run.
 
 Target time budget: **15 minutes, end-to-end, unhurried.**
 
@@ -167,7 +167,7 @@ didn't provide, flag it.
 
 ## Things a customer evaluator WILL notice
 
-These failed past rehearsals and are worth double-checking:
+These failed past dry-runs and are worth double-checking:
 
 - **Fixture borrower IDs**: `B-48291` / `B-48294` / `B-48295` are
   test-only. They should never appear in production UI.

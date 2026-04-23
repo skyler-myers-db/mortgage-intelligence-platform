@@ -58,8 +58,17 @@ export function EvidenceChip({
     if (onClick) onClick();
     else if (source) setDrawer(source);
   };
+  // Default tooltip: Source title + refresh timestamp when present.
+  // Marketing Leaders asked for "when was this data last refreshed?" in
+  // the LO walk 2026-04-22; surfacing updatedAt via native title keeps
+  // the chip visually uncluttered.
+  const defaultTitle = source
+    ? source.updatedAt
+      ? `Source: ${source.title} · Refreshed ${source.updatedAt}`
+      : `Source: ${source.title}`
+    : undefined;
   return (
-    <button type="button" className="evidence-chip" onClick={handle} title={title ?? (source ? `Source: ${source.title}` : undefined)}>
+    <button type="button" className="evidence-chip" onClick={handle} title={title ?? defaultTitle}>
       <Icon name="link" size={9} className="e-ico" />
       {children}
     </button>

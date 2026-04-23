@@ -9,11 +9,11 @@
 
 ## 1. Executive summary
 
-We are migrating the Module 0 DAIS demo from end-to-end mock fixtures to a Unity-Catalog-backed real data path sourced from the provisioned Cotality Delta Share (`cotality_mortgage_data.corelogic`, 5 tables, 103M rows, 6-state footprint). The work is structured as nine independently committable vertical slices that each leave `MIP_MOCK_MODE=true` fully functional, preserving the booth-demo's zero-network-dependency property. The single largest risk is parity drift between the frozen SQL scoring primitives (`fn_lead_score`, `fn_in_the_money`, `fn_rate_spread`, `fn_next_best_offer`) and the Python mirrors in `backend/services/scoring.py` — if real-data plumbing silently changes rounding, thresholding, or NULL semantics, the golden fixtures stop protecting us and every downstream screen goes wrong at once. The second-largest risk is PII leakage: the share contains real owner names and situs addresses, and the current `backend/api/*` routers unconditionally import `mock_data` with no `MIP_MOCK_MODE` seam, so an unreviewed wiring change could surface real names in the UI. We therefore introduce the mock-vs-live seam (Slice 0) *before* any SQL or service wiring changes.
+We are migrating the Module 0 customer walkthrough from end-to-end mock fixtures to a Unity-Catalog-backed real data path sourced from the provisioned Cotality Delta Share (`cotality_mortgage_data.corelogic`, 5 tables, 103M rows, 6-state footprint). The work is structured as nine independently committable vertical slices that each leave `MIP_MOCK_MODE=true` fully functional, preserving the walkthrough's zero-network-dependency property. The single largest risk is parity drift between the frozen SQL scoring primitives (`fn_lead_score`, `fn_in_the_money`, `fn_rate_spread`, `fn_next_best_offer`) and the Python mirrors in `backend/services/scoring.py` — if real-data plumbing silently changes rounding, thresholding, or NULL semantics, the golden fixtures stop protecting us and every downstream screen goes wrong at once. The second-largest risk is PII leakage: the share contains real owner names and situs addresses, and the current `backend/api/*` routers unconditionally import `mock_data` with no `MIP_MOCK_MODE` seam, so an unreviewed wiring change could surface real names in the UI. We therefore introduce the mock-vs-live seam (Slice 0) *before* any SQL or service wiring changes.
 
 ## 2. Vertical-slice sequence
 
-Slices are ordered so each is (a) PR-worthy on its own, (b) reversible in one revert, (c) leaves the booth demo intact, and (d) unblocks the next slice. Target one commit per slice; target one PR per slice except where explicitly bundled.
+Slices are ordered so each is (a) PR-worthy on its own, (b) reversible in one revert, (c) leaves the walkthrough intact, and (d) unblocks the next slice. Target one commit per slice; target one PR per slice except where explicitly bundled.
 
 ### Slice 0 — Introduce the mock/live service seam
 - **Intent:** Add the `MIP_MOCK_MODE` boundary to routers so later slices can wire real data without a big-bang switch.
@@ -85,7 +85,7 @@ Slices are ordered so each is (a) PR-worthy on its own, (b) reversible in one re
 - **Depends on:** Slice 2.
 
 ### Slice 4 — Live `DatabricksBorrowerRepository` + `DatabricksPortfolioRepository`
-- **Intent:** Wire the `BorrowerRepository` / `PortfolioRepository` Protocols from Slice 0 to `mip.gold.*` via the Databricks SQL connector. **Opt-in via `MIP_MOCK_MODE=false`; mock stays the default for booth.**
+- **Intent:** Wire the `BorrowerRepository` / `PortfolioRepository` Protocols from Slice 0 to `mip.gold.*` via the Databricks SQL connector. **Opt-in via `MIP_MOCK_MODE=false`; mock stays the default for walkthrough.**
 - **Files touched (exact):**
   - `backend/services/databricks_sql.py` (replace placeholder — connection helper using `databricks-sql-connector`, reads `DATABRICKS_SERVER_HOSTNAME`, `DATABRICKS_HTTP_PATH`, `DATABRICKS_TOKEN`, warehouse from `DATABRICKS_WAREHOUSE_ID`)
   - `backend/services/repositories.py` (add `DatabricksBorrowerRepository`, `DatabricksPortfolioRepository` implementing the Protocols; queries only `mip.gold.*`)
@@ -125,21 +125,21 @@ Slices are ordered so each is (a) PR-worthy on its own, (b) reversible in one re
   - `docs/module0-talk-track.md` (rewrite geography paragraphs)
   - `tests/unit/test_scoring.py`, `tests/e2e/module0.spec.ts` (update metro-specific assertions)
 - **Owner:** demo-storyteller (narrative), backend-databricks-engineer (fixture reshape)
-- **Acceptance:** Booth demo uses one consistent metro across mock and real paths. Talk track references that metro. Playwright e2e still passes.
+- **Acceptance:** Walkthrough uses one consistent metro across mock and real paths. Talk track references that metro. Playwright e2e still passes.
 - **Validation:** `pytest -q && npx playwright test tests/e2e/module0.spec.ts`
 - **Blast radius:** Local.
 - **Rollback:** `git revert`.
 - **Depends on:** Slice 4 (so the decision is informed by what the real data shows).
 
 ### Slice 7 — Real-data Genie space grounding
-- **Intent:** Point the existing Genie space at `mip.semantics.*` metric views instead of the current mock SQL. Deterministic fallback (`genie_answers.py`) stays the booth path.
+- **Intent:** Point the existing Genie space at `mip.semantics.*` metric views instead of the current mock SQL. Deterministic fallback (`genie_answers.py`) stays the walkthrough path.
 - **Files touched (exact):**
   - `resources/apps.yml` (no change — genie_space_id var stays)
   - `genie/space_config.yml` (if present; otherwise the provisioner in `tools/mcp/`) — refresh table grants to include the 3 metric views
   - `backend/services/genie_client.py` (replace placeholder — thin wrapper over Databricks Genie API; timeout 5s, fallback to `genie_answers.py`)
   - `tests/integration/test_genie_client.py` (extend — real-API test skipped without creds; offline fallback test always runs)
 - **Owner:** backend-databricks-engineer
-- **Acceptance:** With Genie creds present, `/ask-genie` calls the real API. Without creds or on 5s timeout, falls back to deterministic answers (unchanged behavior). Booth demo path does NOT require live Genie.
+- **Acceptance:** With Genie creds present, `/ask-genie` calls the real API. Without creds or on 5s timeout, falls back to deterministic answers (unchanged behavior). Walkthrough path does NOT require live Genie.
 - **Validation:** `pytest tests/integration/test_genie_client.py -q`
 - **Blast radius:** Workspace (Genie grants only).
 - **Rollback:** `git revert`; Genie space grants restored from prior snapshot.
@@ -150,7 +150,7 @@ Slices are ordered so each is (a) PR-worthy on its own, (b) reversible in one re
 - **Files touched (exact):**
   - `.github/workflows/ci.yml` (add `scoring-parity` job that runs `pytest tests/integration/test_gold_parity.py -q` against a nightly workspace; and a `bundle-validate` job that runs `databricks bundle validate -t dev`)
   - `databricks.yml` (no structural change; confirm `sql_warehouse_id` / `genie_space_id` BUNDLE_VAR mechanism works end-to-end)
-  - `docs/runbook.md` (add "booth-day checklist": warehouse warm-start, mock fallback toggle, rollback steps)
+  - `docs/runbook.md` (add "walkthrough-day checklist": warehouse warm-start, mock fallback toggle, rollback steps)
   - `docs/testing.md` (document the mock vs real test matrix)
 - **Owner:** qa-test-engineer (CI), principal-architect (runbook)
 - **Acceptance:** Pushing to `feature/module0-real-data` runs unit + integration (mock) + bundle-validate; nightly runs add the parity test against the workspace.
@@ -165,7 +165,7 @@ Slices are ordered so each is (a) PR-worthy on its own, (b) reversible in one re
 
 Routers ONLY depend on the Protocols, never on concrete classes. `mock_data.py` is adapted (not rewritten) by a `MockBorrowerRepository` class that returns the existing Pydantic objects. `DatabricksBorrowerRepository` (Slice 4) executes parameterized SQL against `mip.gold.*` and passes every result through `pii_redaction.py` before returning.
 
-**Invariant:** the booth demo path is `MIP_MOCK_MODE=true`, which is the `.env.example` default. No network calls fire. No warehouse queries fire. No Lakebase connection opens. The mock path continues to be golden-fixture-pinned via the existing `scoring.py` primitives, which do NOT change.
+**Invariant:** the offline walkthrough path is `MIP_MOCK_MODE=true`, which is the `.env.example` default. No network calls fire. No warehouse queries fire. No Lakebase connection opens. The mock path continues to be golden-fixture-pinned via the existing `scoring.py` primitives, which do NOT change.
 
 **Invariant:** `MIP_MOCK_MODE=false` is opt-in. Toggling it requires `DATABRICKS_TOKEN` (or workspace identity), `DATABRICKS_WAREHOUSE_ID`, `DATABRICKS_SERVER_HOSTNAME`, `DATABRICKS_HTTP_PATH`, and (for audit) `LAKEBASE_DATABASE_NAME`. Missing creds fail fast at startup with a clear error, not silently at first request.
 
@@ -176,17 +176,17 @@ Routers ONLY depend on the Protocols, never on concrete classes. `mock_data.py` 
 | # | Risk | Owner | Mitigation |
 |---|---|---|---|
 | R1 | **Scoring parity drift.** Someone edits `fn_lead_score.sql` or `scoring.py` without regenerating the fixture, and real-data path diverges from mock. | qa-test-engineer | Slice 3 adds `test_gold_parity.py` which runs all four golden fixtures through both the SQL UDF (via warehouse) and the Python primitive, asserting integer equality. Nightly CI (Slice 8) catches drift within 24h. Governance-reviewer gate on any PR touching `sql/uc_functions/` or `backend/services/scoring.py`. |
-| R2 | **Real PII leak.** Share contains real owner names + situs addresses. Current routers import `mock_data` directly — a careless Slice-4 shortcut could push raw names into the UI. | governance-security-reviewer | `pii_redaction.py` (Slice 4) enforced at the repository boundary, not the router. Unit tests pin exact redaction rules (initials for names, block-level lat/lon, street-number masked). Governance-reviewer sign-off is blocking on Slice 4 PR. `MIP_MOCK_MODE=true` default keeps booth demo on synthetic data. |
+| R2 | **Real PII leak.** Share contains real owner names + situs addresses. Current routers import `mock_data` directly — a careless Slice-4 shortcut could push raw names into the UI. | governance-security-reviewer | `pii_redaction.py` (Slice 4) enforced at the repository boundary, not the router. Unit tests pin exact redaction rules (initials for names, block-level lat/lon, street-number masked). Governance-reviewer sign-off is blocking on Slice 4 PR. `MIP_MOCK_MODE=true` default keeps offline walkthroughs on synthetic data. |
 | R3 | **Lakeflow pipeline cost runaway.** Full-fat silver builds scan 103M source rows; gold joins multiply that. Unbounded re-runs on a large warehouse become expensive fast. | backend-databricks-engineer | 2X-Small serverless warehouse with `auto_stop_mins: 15` (already set in `databricks.yml`). Silver filters to 6 states at the source. `gold_lead_population` capped at 500 rows per metro. Bundle-declared jobs run on manual trigger only in dev (no schedule). Monitor first full run; set a workspace budget alert before enabling any schedule. |
-| R4 | **Warehouse auto-stop during demo.** 15-min auto-stop means first query after intermission is a 30–60s cold start; ruins the booth pacing. | demo-storyteller + performance-optimizer | Runbook (Slice 8) adds "warm-start 5 minutes before each demo block" step. Additionally: keep booth demo on `MIP_MOCK_MODE=true` by default; use real-data toggle only in sit-down meetings where a 30s cold start is acceptable. Frontend shows a "loading real data…" skeleton, not a blank state. |
-| R5 | **Genie API flakiness at booth.** Real Genie can return 500s or rate-limit. Switching to the fallback mid-answer is visible. | backend-databricks-engineer | `genie_client.py` (Slice 7) always tries deterministic `genie_answers.py` first when `MIP_MOCK_MODE=true`. In sit-down mode, 5s timeout + pre-cached answers for the three demo questions from the talk track. A failed real-API call silently uses the cached answer; a failed cache lookup returns a deterministic "Let me connect you to a specialist" response (never an exception bubble). |
+| R4 | **Warehouse auto-stop during walkthrough.** 15-min auto-stop means first query after intermission is a 30–60s cold start; ruins the walkthrough pacing. | demo-storyteller + performance-optimizer | Runbook (Slice 8) adds "warm-start 5 minutes before each walkthrough block" step. Additionally: keep offline walkthroughs on `MIP_MOCK_MODE=true` by default; use real-data toggle only in sit-down meetings where a 30s cold start is acceptable. Frontend shows a "loading real data…" skeleton, not a blank state. |
+| R5 | **Genie API flakiness during walkthrough.** Real Genie can return 500s or rate-limit. Switching to the fallback mid-answer is visible. | backend-databricks-engineer | `genie_client.py` (Slice 7) always tries deterministic `genie_answers.py` first when `MIP_MOCK_MODE=true`. In sit-down mode, 5s timeout + pre-cached answers for the three canonical questions from the talk track. A failed real-API call silently uses the cached answer; a failed cache lookup returns a deterministic "Let me connect you to a specialist" response (never an exception bubble). |
 
 ## 5. Open decisions requiring user input
 
 ### D1. Which metro anchors Summit Mortgage's book?
-- **Options:** Chicago (largest share), Seattle (wealthy + high equity — great HELOC story), Denver (smallest but tightest data — easy to rehearse).
+- **Options:** Chicago (largest share), Seattle (wealthy + high equity — great HELOC story), Denver (smallest but tightest data — easy to walk through).
 - **Recommendation:** **Seattle (WA).** 0.74M properties, 0.49M with open liens, avg 4.16% first-position rate → strong in-the-money pool; 47% avg C-LTV → strong HELOC pool. The appreciation narrative (WA home prices vs. refi economics) is the cleanest demo story.
-- **Tradeoff:** Chicago has more raw volume; Denver rehearses faster. Picking Seattle costs one day of fixture re-anchoring but gives the best screen-time story.
+- **Tradeoff:** Chicago has more raw volume; Denver walks through faster. Picking Seattle costs one day of fixture re-anchoring but gives the best screen-time story.
 
 ### D2. Confirm dual-path (`MIP_MOCK_MODE`) as the seam?
 - **Recommendation:** **Confirm, exactly as described in §3.** Any alternative (factory-by-config-file, runtime hot-swap, per-request header) adds surface area without demo value.
@@ -230,13 +230,13 @@ Routers ONLY depend on the Protocols, never on concrete classes. `mock_data.py` 
 - **Source branch:** `feature/module0-agentic-scaffold` (current).
 - **Child branch for this work:** `feature/module0-real-data`, created off the current HEAD.
 - **Commit cadence:** one commit per slice, signed message following the established style (`feat(services): introduce mock/live repository seam`, `feat(sql): land silver lift for voluntary_lien + property`, etc.).
-- **PR cadence:** one PR per slice, merged into `feature/module0-real-data`. The parent branch gets a single rollup PR into `main` once Slices 0–8 are green and demo-rehearsed.
-- **Why not PR each slice straight to `main`:** the child branch lets `main` stay booth-ready at any hour; the rollup PR gives governance-security-reviewer one final checkpoint before the real-data path can be opened in a workspace anyone watches.
+- **PR cadence:** one PR per slice, merged into `feature/module0-real-data`. The parent branch gets a single rollup PR into `main` once Slices 0–8 are green and walkthrough dry-run passes.
+- **Why not PR each slice straight to `main`:** the child branch lets `main` stay walkthrough-ready at any hour; the rollup PR gives governance-security-reviewer one final checkpoint before the real-data path can be opened in a workspace anyone watches.
 - **Hard gates before the rollup PR merges:**
   1. All slice PRs merged and CI green.
   2. Governance-reviewer sign-off on PII redaction (Slice 4).
-  3. Booth demo rehearsed end-to-end with `MIP_MOCK_MODE=true` (no regression).
-  4. Sit-down demo rehearsed end-to-end with `MIP_MOCK_MODE=false` against dev workspace.
+  3. Offline walkthrough dry-run end-to-end with `MIP_MOCK_MODE=true` (no regression).
+  4. Sit-down walkthrough dry-run end-to-end with `MIP_MOCK_MODE=false` against dev workspace.
   5. `docs/module0-talk-track.md` updated to reference real metro + real numbers.
   6. Rollback runbook in `docs/runbook.md` tested by flipping `MIP_MOCK_MODE` live.
 

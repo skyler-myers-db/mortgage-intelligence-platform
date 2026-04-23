@@ -7,7 +7,7 @@ import { PageShell } from '../components/layout/PageShell';
 import { ApprovalBanner } from '../components/mortgage/ApprovalBanner';
 import { ScoreBadge } from '../components/mortgage/ScoreBadge';
 import { ConfidenceMeter } from '../components/mortgage/ConfidenceMeter';
-import { Chip, EvidenceChip } from '../components/Primitives';
+import { Button, Chip, EvidenceChip } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { Skeleton } from '../components/ui/Skeleton';
 import { Reveal } from '../components/fx/Reveal';
@@ -168,6 +168,24 @@ Reply or call 1-800-XXX-XXXX.`
           <>
             <ScoreBadge value={b.opportunity_score} />
             <ConfidenceMeter value={b.confidence} />
+            {/* LO friction fix (2026-04-22): surface Approve in the hero so
+                it is visible on 1366x768 laptops without scrolling. The
+                row-detail Approve button further down is preserved. */}
+            <Button
+              variant="primary"
+              size="sm"
+              icon="check"
+              onClick={() => void onApprove()}
+              disabled={!rec || approval === 'approved'}
+              aria-label={
+                approval === 'approved'
+                  ? `Borrower ${b.borrower_id} already approved`
+                  : `Approve borrower ${b.borrower_id}`
+              }
+              data-testid="hero-approve"
+            >
+              {approval === 'approved' ? 'Approved' : 'Approve'}
+            </Button>
           </>
         )
       }

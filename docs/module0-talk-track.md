@@ -9,10 +9,11 @@
 
 ---
 
-## Pre-session setup — use the rehearsal checklist
+## Pre-session setup — use the dry-run checklist
 
 Before stepping up, the operator runs through
-[docs/module0-rehearsal-checklist.md](module0-rehearsal-checklist.md).
+[docs/module0-rehearsal-checklist.md](module0-rehearsal-checklist.md)
+(the pre-walkthrough dry-run checklist; filename retained).
 That checklist warms the serverless warehouse, primes Genie, and confirms
 `/api/health` reports `mode:"live"` with every dependency `up` and every
 circuit breaker `closed`. Do not start the pitch until that page is green.
@@ -157,7 +158,7 @@ circuit breaker `closed`. Do not start the pitch until that page is green.
 
 ## Backup path — "if something breaks"
 
-| Failure | What happens | What the presenter says |
+| Failure | What happens | What the operator says |
 |---|---|---|
 | Warehouse cold-starts mid-session | DegradedBanner appears at top of page; the retry/breaker logic re-arms within 30s | *You'll notice the banner — the warehouse is warming up. This is real-time honesty, not a stage trick. Back in a moment.* |
 | Genie API times out | Circuit breaker opens; `/api/genie` falls through to the safe corpus in `backend/services/genie_answers.py`; answer still cites a UC table | *Our safe corpus answered this one — ten canonical questions deterministic, even if the Genie space is cold. The provenance chip is real.* |
@@ -169,7 +170,7 @@ circuit breaker `closed`. Do not start the pitch until that page is green.
 
 ## Appendix — canonical click path (muscle memory)
 
-1. Run the [rehearsal checklist](module0-rehearsal-checklist.md) — confirm `/api/health` is fully green.
+1. Run the [dry-run checklist](module0-rehearsal-checklist.md) — confirm `/api/health` is fully green.
 2. Open `/` — verify KPI row animates; glance at the telemetry strip in the Console footer.
 3. Hover *In-the-money* KPI — evidence chip renders.
 4. Click **Illinois** on the map → Cook County → a Chicago ZIP.
@@ -224,4 +225,4 @@ These are the lines that separate this from a slideware session. Use them when y
 
 ---
 
-*End of talk track. Dress rehearsal: read aloud twice, walk the click path once, run the rehearsal checklist end-to-end — then present.*
+*End of talk track. Dry-run: read aloud twice, walk the click path once, run the dry-run checklist end-to-end — then present.*

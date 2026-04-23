@@ -1,12 +1,13 @@
 # Module 0 — Operator Runbook
 
-**Who uses this:** the operator, the backup presenter, and the
+**Who uses this:** the operator, the backup walkthrough lead, and the
 on-call engineer during a live session or after a production deploy.
 **Companion docs:**
 - [`docs/module0-rehearsal-checklist.md`](module0-rehearsal-checklist.md)
-  is the proactive pre-session pass. This runbook is the reactive
-  incident-response + deploy guide. Run the checklist **before** every
-  session; reach for this file when something goes sideways.
+  is the proactive pre-session pass (dry-run / pre-walkthrough checklist;
+  filename retained to preserve external links). This runbook is the
+  reactive incident-response + deploy guide. Run the checklist **before**
+  every session; reach for this file when something goes sideways.
 - [`docs/dashboards.md`](dashboards.md) — dashboard cold-start &
   pending-state behaviour. Read this before explaining to a partner
   why a `delta_vs_prior_*` column is blank or an approval-rate cell is
@@ -341,13 +342,13 @@ for the full workflow map. Common red jobs:
 
 *Owner: qa-test-engineer + principal-architect. Review cadence: after
 every incident (post-mortem updates this doc), and before every release
-rehearsal.*
+dry-run.*
 
 ---
 
 ## 9. Credential-kill drill
 
-**When to run:** before every release rehearsal, and after any change
+**When to run:** before every release dry-run, and after any change
 to `backend/services/resilience.py`, `backend/api/health.py`, the
 warehouse / Lakebase / Genie client modules, or
 `frontend/src/components/mortgage/DegradedBanner.tsx`.

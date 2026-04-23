@@ -348,12 +348,16 @@ resources:
         owner: entrada
         slice: slice13-accuracy
       max_concurrent_runs: 1
-      # Hourly cadence. Dev target leaves the schedule paused; prod
-      # target lets it run.
+      # Hourly cadence (15 min past the hour). The `dev` target's
+      # `mode: development` auto-pauses the schedule so dev deploys
+      # don't burn compute every hour on a workspace that's usually
+      # empty of real approvals. `mode: production` auto-UNPAUSES.
+      # Do NOT hardcode `pause_status: UNPAUSED` here — that override
+      # also fires in dev and runs the job hourly against an empty
+      # Lakebase, which was observed and fixed 2026-04-22.
       schedule:
         quartz_cron_expression: "0 15 * ? * * *"
         timezone_id: America/Chicago
-        pause_status: UNPAUSED
       environments:
         - environment_key: py_default
           spec:

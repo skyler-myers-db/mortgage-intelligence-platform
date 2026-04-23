@@ -1,6 +1,6 @@
 # Module 0 — Governance & Security Review: Real-Data Migration
 
-**Scope:** Pre-implementation risk review for swapping the Module 0 booth demo off synthetic fixtures onto live `cotality_mortgage_data.corelogic` Delta Share.
+**Scope:** Pre-implementation risk review for swapping the Module 0 customer walkthrough off synthetic fixtures onto live `cotality_mortgage_data.corelogic` Delta Share.
 **Reviewer:** governance-security-reviewer subagent
 **Date:** 2026-04-21
 **Paired with:** `docs/data-sources-gap-analysis.md` (the migration plan this review gates)
@@ -10,9 +10,9 @@
 
 ## Executive summary
 
-- **Verdict: CONDITIONAL-GO.** The share is safe to use as a *signal source* for Module 0 at the booth, but **not safe to redisplay raw at the browser**. The three canonical demo borrowers (B-48291, B-48294, B-48295) must remain the synthetic trio seen on stage. Real-data power is exposed via **segment counts, score distributions, geography rollups, and redacted/masked detail** — not via real owner names or real street addresses.
+- **Verdict: CONDITIONAL-GO.** The share is safe to use as a *signal source* for Module 0 during a customer walkthrough, but **not safe to redisplay raw at the browser**. The three canonical walkthrough borrowers (B-48291, B-48294, B-48295) must remain the synthetic trio shown to reviewers. Real-data power is exposed via **segment counts, score distributions, geography rollups, and redacted/masked detail** — not via real owner names or real street addresses.
 - **Three hard pre-implementation blockers** (see "Top 3 must-fixes" below): (1) a gold-layer PII redaction contract before any `/api/*` response is wired to real data; (2) a Unity Catalog column-mask + row-filter policy on `silver.*` tables that hold names/addresses; (3) a Databricks secret scope (`mip`) that replaces every `.env`-resident token and kills the current `profile: DEFAULT` pathway for app runtime.
-- **Licensing stance:** treat the booth as an **external redisplay surface** under Cotality's licensing posture. Assume property/borrower-level detail is **not** licensed for DAIS attendee redisplay. The demo stays on the synthetic trio for dossier-level screens; real-data surfaces are limited to cohort counts, aggregates, and already-obfuscated fields. This is a booth risk decision that needs legal sign-off from Entrada before turning the silver→gold pipeline on against the share.
+- **Licensing stance:** treat the customer walkthrough as an **external redisplay surface** under Cotality's licensing posture. Assume property/borrower-level detail is **not** licensed for external redisplay. The walkthrough stays on the synthetic trio for dossier-level screens; real-data surfaces are limited to cohort counts, aggregates, and already-obfuscated fields. This is a risk decision that needs legal sign-off from Entrada before turning the silver→gold pipeline on against the share.
 
 ---
 
@@ -33,14 +33,14 @@ The share carries real owner and borrower identity. The UI renders dossier cards
 | Lender NMLS IDs (mortgage_domain) | **Sensitive** | Silver-only. | Drop from gold projection. |
 | Loan amount, interest rate, origination date, term, purpose code (voluntary_lien + mortgage_domain) | **Non-PII in isolation; quasi-identifying at street+amount combo** | **Safe for `/api/*` once address is generalized.** `avm_value`, `current_lien_balance`, `current_rate`, `ltv`, `rate_spread_bps` already in the wire model. | Keep as-is; generalize address per the row above is the mitigation. |
 | AVM (`estimated_value_mktg`, equity, LTV) | **Non-PII** | Safe for `/api/*`. | No masking needed. |
-| Foreclosure stage, REO indicator (property_v3, owner_transfer) | **Sensitive (distress signal on a real person)** | **Never display distress at the dossier layer for real records.** Aggregate-only at cohort level. Segment 7 (Distress) in the booth stays on the synthetic trio. | Gold: `segment.distress_count` yes; `gold.borrower_360.foreclosure_stage` no for real rows. |
+| Foreclosure stage, REO indicator (property_v3, owner_transfer) | **Sensitive (distress signal on a real person)** | **Never display distress at the dossier layer for real records.** Aggregate-only at cohort level. Segment 7 (Distress) in the walkthrough stays on the synthetic trio. | Gold: `segment.distress_count` yes; `gold.borrower_360.foreclosure_stage` no for real rows. |
 | Tax amount, year, exempt status | Non-PII in isolation | Safe at cohort/geography; not on dossier for real records. | Drop from gold projection on real rows. |
 | `block_level_latitude`, `block_level_longitude` | Quasi-identifier at block resolution | **Snap to CBSA or ZIP centroid** before rendering on the map. Never render the raw block-level coords. | Gold: `geo_point = st_centroid(zip_polygon)`; raw lat/lon stays silver. |
 | `borrower_1_identifier` hashes across mortgage_domain | Non-PII after hashing | Safe | Use `borrower_hash` consistently across gold tables. |
 
 ### The "display trio stays synthetic" rule
 
-`Borrower360.display_name` MUST remain `{"James & Maria Rodriguez", "David Park", "Lisa Thompson"}` for the canonical demo path. Rationale: the dossier view is the screen where a leak would be most damaging, the synthetic trio is pinned by golden fixtures, and there is no demo benefit from swapping these three to real names. Real-data power is shown through **counts, distributions, geography, and evidence timelines** — not through "this is Jane Doe's actual mortgage".
+`Borrower360.display_name` MUST remain `{"James & Maria Rodriguez", "David Park", "Lisa Thompson"}` for the canonical walkthrough path. Rationale: the dossier view is the screen where a leak would be most damaging, the synthetic trio is pinned by golden fixtures, and there is no walkthrough benefit from swapping these three to real names. Real-data power is shown through **counts, distributions, geography, and evidence timelines** — not through "this is Jane Doe's actual mortgage".
 
 Concretely: `gold.borrower_360` on the real-data path emits two kinds of rows — three **pinned synthetic dossiers** (display_name = trio) merged from `backend/services/mock_data.py`, plus the **real-data cohort** where `display_name` is `f"Borrower {clip_ref[:6]}"` (never the real name). The ranked-borrower table is safe to render for the real cohort because no real name or street is exposed.
 
@@ -58,7 +58,7 @@ Fields currently on `Borrower360` in `backend/schemas/lead.py` that need policy:
 
 **Risk:** High — every `/api/*` route that returns a `Borrower360` is a potential leak point.
 **Likelihood:** Near-certain if no explicit redaction layer is introduced (current code would happily plumb whatever a real-data query returns).
-**Impact:** Severe — direct PII exposure to DAIS attendees over a public network; Cotality license breach; reputational damage.
+**Impact:** Severe — direct PII exposure to customer-walkthrough attendees over an external network; Cotality license breach; reputational damage.
 **Mitigation:** Gold-layer redaction contract + Pydantic validator on `Borrower360` that **rejects** any `display_name` not matching `^(Borrower [a-f0-9]{6}|James & Maria Rodriguez|David Park|Lisa Thompson)$` in non-mock mode. Ditto for `subject_property` not matching the generalized shape. Fail closed, loudly.
 **Owner:** backend + data-modeler.
 **Pre-implementation blocker:** **YES.**
@@ -67,22 +67,22 @@ Fields currently on `Borrower360` in `backend/schemas/lead.py` that need policy:
 
 ## 2. Licensing / redistribution
 
-**Posture assumption (needs Entrada legal confirmation):** Cotality's licensing to Entrada is for evaluation/product-development use, not external redisplay at property-or-borrower resolution. A DAIS booth with attendees filming screens is an external redisplay surface.
+**Posture assumption (needs Entrada legal confirmation):** Cotality's licensing to Entrada is for evaluation/product-development use, not external redisplay at property-or-borrower resolution. A live customer walkthrough with attendees capturing screens is an external redisplay surface.
 
 **Specific risks:**
 
-1. **Real owner names on a demo screen** — The share carries `owner_1_full_name`. Displaying it at the booth is redisplay of licensed PII. Mitigation: per §1, display the synthetic trio only at dossier level.
+1. **Real owner names on a walkthrough screen** — The share carries `owner_1_full_name`. Displaying it during an external walkthrough is redisplay of licensed PII. Mitigation: per §1, display the synthetic trio only at dossier level.
 2. **Real lender names on a competitor-refi narrative** — Showing "Wells Fargo refinanced this borrower away" to an audience that includes Wells Fargo competitors (and possibly Wells Fargo themselves) is a redisplay issue *and* a competitor-intelligence leak. Mitigation: `ref.lender_dictionary` maps real lenders to `Summit Mortgage / Competitor A / Competitor B` before `/api/*`.
 3. **Real street addresses on the map** — Block-level lat/lon rendered at zoom-in is property-level identification. Mitigation: snap to ZIP centroid or CBSA polygon only.
 4. **Aggregate redistribution** — Segment counts ("12,840 In the Money borrowers in our footprint") are fine. Per-borrower detail is not.
-5. **Screenshots and the recording** — The booth will be photographed. Any screenshot containing a real name/address is an after-the-fact redisplay artifact. Mitigation: nothing below the generalization line should ever appear on screen, so screenshots are safe by construction.
+5. **Screenshots and recordings** — Walkthroughs will be captured. Any screenshot containing a real name/address is an after-the-fact redisplay artifact. Mitigation: nothing below the generalization line should ever appear on screen, so screenshots are safe by construction.
 
 **Mitigation bundle:**
 - Synthetic overlay for dossier-level screens (trio stays pinned).
 - Lender-name redaction vocabulary.
 - ZIP-centroid geography on the map.
 - One licensed entity (Summit Mortgage, synthetic) is the lens — never "a real lender's real book".
-- Mock-mode screenshot parity: every dashboard that's demoed live must be renderable in `MIP_MOCK_MODE=true` with visually identical output, so any publication material is pulled from mock mode.
+- Mock-mode screenshot parity: every dashboard shown live must be renderable in `MIP_MOCK_MODE=true` with visually identical output, so any publication material is pulled from mock mode.
 
 **Risk:** High.
 **Likelihood:** Certain if the raw share fields reach the browser.
@@ -103,7 +103,7 @@ Target catalog is `mip` with schemas `raw`, `silver`, `gold`, `semantics`, `app`
 |---|---|---|---|---|---|---|
 | App service principal (`sp-mip-app`) | — | — | `SELECT` | `SELECT` | — | `SELECT` (read-back for audit UI) |
 | Data engineers (humans) | `SELECT` | `SELECT`, `MODIFY` | `SELECT`, `MODIFY` | `SELECT`, `MODIFY` | — | `SELECT` |
-| Demo operators (humans, read-only at booth) | — | — | `SELECT` | `SELECT` | — | `SELECT` |
+| Walkthrough operators (humans, read-only) | — | — | `SELECT` | `SELECT` | — | `SELECT` |
 | Pipeline job service principal (`sp-mip-etl`) | `SELECT` | `SELECT`, `MODIFY` | `SELECT`, `MODIFY` | `SELECT`, `MODIFY` | — | `MODIFY` |
 | Lakebase app writer (audit/approvals) | — | — | — | — | `SELECT`, `MODIFY` | `MODIFY` |
 
@@ -178,7 +178,7 @@ Today's audit surface:
 | Durable across restart | No — in-memory | **Gap:** must move to Lakebase. |
 | Immutable (append-only) | No — Python list, mutable | **Gap:** Lakebase table with no DELETE grant for app writer. |
 | Timestamped (UTC) | Yes | OK. |
-| Actor identity (real, not `demo-user`) | No — `OutreachApproveRequest.actor` defaults to `"demo-user"` | **Gap:** in the booth this is fine, but for real data we need the authenticated user (Databricks Apps passes `X-Forwarded-Email` / `X-Forwarded-User` headers — plumb them into `actor`). |
+| Actor identity (real, not `demo-user`) | No — `OutreachApproveRequest.actor` defaults to `"demo-user"` | **Gap:** for walkthrough-only this is fine, but for real data we need the authenticated user (Databricks Apps passes `X-Forwarded-Email` / `X-Forwarded-User` headers — plumb them into `actor`). |
 
 ### Required Lakebase schema (populate `lakebase/schema.sql`)
 
@@ -213,7 +213,7 @@ In non-mock mode, add middleware or an explicit call in these routers:
 
 **Risk:** Medium.
 **Likelihood:** Medium — without this we lose the "who saw what" answer if an incident happens.
-**Impact:** Moderate for the booth demo; severe for any post-demo customer evaluation.
+**Impact:** Moderate for an initial walkthrough; severe for any post-walkthrough customer evaluation.
 **Mitigation:** Lakebase schema + view-event emission + `actor` from header.
 **Owner:** backend + data-modeler.
 **Pre-implementation blocker:** No (can ship in the slice that flips mock→real, not before).
@@ -261,7 +261,7 @@ Create scope `mip` and populate:
 
 ---
 
-## 6. Booth-failure posture
+## 6. Walkthrough-failure posture
 
 `MIP_MOCK_MODE=true` is the fallback. `app.yaml` defaults it to `"true"`. `backend/services/mock_data.py` is the ground truth in that mode. The question is: **what triggers the flip from real to mock mid-demo, and where does the flip logic live?**
 
@@ -279,7 +279,7 @@ Create scope `mip` and populate:
 
 Put the decision in a single **service-level decorator** `@with_mock_fallback` that wraps each real-data service call. On first failure per-request, it:
 
-1. Logs a structured warning (`booth_fallback_activated`, failure mode, service name) — redacted.
+1. Logs a structured warning (`walkthrough_fallback_activated`, failure mode, service name) — redacted.
 2. Sets a process-wide `circuit_open=true` flag with a 30s cooldown for that service (so we don't thrash).
 3. Returns the mock-mode equivalent from `backend/services/mock_data.py`.
 4. The `/api/health` endpoint surfaces `{"mode": "real" | "degraded" | "mock", "circuits": {...}}` so the operator knows without leaving the demo.
@@ -291,11 +291,11 @@ Put the decision in a single **service-level decorator** `@with_mock_fallback` t
 **Parity contract:** every real-data endpoint must return a response shape **byte-compatible** with its mock counterpart — if the real-data path produces a field the mock path doesn't (or vice-versa), the frontend breaks on fallback. Enforce with a pytest parametrization: each endpoint runs twice (mock + real-mocked-via-fixture), and responses must match schema.
 
 **Risk:** Medium.
-**Likelihood:** Medium — Databricks SQL cold starts at 2X-Small are a known DAIS-floor risk.
-**Impact:** Severe if unhandled (dead demo); minor if the fallback pattern works (audience sees nothing change).
+**Likelihood:** Medium — Databricks SQL cold starts at 2X-Small are a known live-walkthrough risk.
+**Impact:** Severe if unhandled (dead walkthrough); minor if the fallback pattern works (reviewer sees nothing change).
 **Mitigation:** `@with_mock_fallback` decorator + health endpoint mode indicator + admin kill switch.
 **Owner:** backend.
-**Pre-implementation blocker:** No — can be built as part of the first real-data slice, but must exist before the first booth rehearsal.
+**Pre-implementation blocker:** No — can be built as part of the first real-data slice, but must exist before the first customer walkthrough dry-run.
 
 ---
 
@@ -315,11 +315,11 @@ These block the first real-data slice until resolved. Nothing against the share 
 
 Only the minimum — things the user must decide; everything else I've decided internally above.
 
-1. **Legal sign-off on Cotality licensing posture.** Can Entrada confirm (in writing, even a Slack message from legal is fine) that the booth-level redisplay policy in §2 — synthetic trio for dossiers, redacted lender names, ZIP-centroid geography, aggregate-only real data — is within the current Cotality license? If legal is stricter ("no real counts displayed"), we fall back to 100% mock mode for the booth and use real data only in private follow-up demos.
+1. **Legal sign-off on Cotality licensing posture.** Can Entrada confirm (in writing, even a Slack message from legal is fine) that the walkthrough-level redisplay policy in §2 — synthetic trio for dossiers, redacted lender names, ZIP-centroid geography, aggregate-only real data — is within the current Cotality license? If legal is stricter ("no real counts displayed"), we fall back to 100% mock mode for public walkthroughs and use real data only in private follow-up evaluations.
 
 2. **Demo lender footprint.** The real share covers IL/CA/FL/TX/WA/CO. The mock trio lives in Atlanta (GA), which **is not in the footprint**. For the real-data cohort rollups to be geographically coherent with the dossier trio, either: (a) move the synthetic trio to a real-footprint metro (recommend Chicago/IL, largest cohort), or (b) keep trio in GA and explicitly frame them as "here's how it looks for one Summit customer" alongside "here's the real market in the Midwest". Which is the talk track?
 
-3. **Authenticated actor identity at the booth.** Databricks Apps will pass the workspace user in `X-Forwarded-Email`. Is the booth going to run under a single shared demo account, or under each presenter's account? This changes whether `actor` in audit events is meaningful for attribution.
+3. **Authenticated actor identity in live walkthroughs.** Databricks Apps will pass the workspace user in `X-Forwarded-Email`. Will live walkthroughs run under a single shared service account, or under each operator's account? This changes whether `actor` in audit events is meaningful for attribution.
 
 ---
 

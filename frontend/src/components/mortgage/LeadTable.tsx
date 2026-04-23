@@ -1,4 +1,4 @@
-import { Fragment, useState, type CSSProperties } from 'react';
+import { Fragment, useCallback, useEffect, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { Link } from 'react-router-dom';
 import type { LeadSummary } from '../../types';
 import { Icon } from '../Icon';
@@ -6,6 +6,7 @@ import { Chip, Button, EvidenceChip } from '../Primitives';
 import { ScoreBadge } from './ScoreBadge';
 import { ConfidenceMeter } from './ConfidenceMeter';
 import { useApp } from '../AppContext';
+import { api } from '../../lib/api';
 import { DRAWER_SOURCES } from '../../lib/drawerSources';
 import { segmentColor, segmentName } from '../../lib/segmentMetadata';
 
@@ -14,6 +15,13 @@ import { segmentColor, segmentName } from '../../lib/segmentMetadata';
  * expand into a mini borrower-detail preview. Approvals track per-row via
  * AppContext; a chip on the rightmost column shows Pending / Approved /
  * Rejected.
+ *
+ * LO friction fix (2026-04-22): the Approval column is now an inline
+ * control, not a read-only chip. Pending rows expose an "Approve" primary
+ * button + a reject icon so loan officers can burn through the queue in
+ * one click per lead instead of navigating to Offer Orchestrator. Once
+ * approved/rejected, the column reverts to the chip shape. Keyboard
+ * shortcuts (A / R) act on the expanded row.
  */
 
 function RowPreview({ lead }: { lead: LeadSummary }) {
@@ -89,7 +97,83 @@ function Cell({ k, v, mono }: { k: string; v: string; mono?: boolean }) {
 
 export function LeadTable({ leads }: { leads: LeadSummary[] }) {
   const [expanded, setExpanded] = useState<string | null>(leads[0]?.borrower_id ?? null);
-  const { approvals } = useApp();
+  const { approvals, setApproval } = useApp();
+  const [pendingApproval, setPendingApproval] = useState<Record<string, boolean>>({});
+  const [approvalError, setApprovalError] = useState<string | null>(null);
+
+  /**
+   * Approve from the queue without leaving the page. Uses the same
+   * `/api/outreach/approve` endpoint Offer Orchestrator calls. We mark
+   * the row as 'approved' in AppContext optimistically on success so the
+   * chip flips immediately and stays flipped on route change.
+   */
+  const approveLead = useCallback(
+    async (borrowerId: string) => {
+      setApprovalError(null);
+      setPendingApproval((p) => ({ ...p, [borrowerId]: true }));
+      try {
+        const res = await api.approve(borrowerId);
+        if (res.approved) {
+          setApproval(borrowerId, 'approved');
+        } else {
+          setApprovalError(`Approve failed for ${borrowerId}: endpoint returned approved=false.`);
+        }
+      } catch (err: unknown) {
+        setApprovalError(
+          err instanceof Error
+            ? `Couldn't approve ${borrowerId}: ${err.message}`
+            : `Couldn't approve ${borrowerId}.`,
+        );
+      } finally {
+        setPendingApproval((p) => {
+          const { [borrowerId]: _discard, ...rest } = p;
+          return rest;
+        });
+      }
+    },
+    [setApproval],
+  );
+
+  const rejectLead = useCallback(
+    (borrowerId: string) => {
+      setApprovalError(null);
+      setApproval(borrowerId, 'rejected');
+    },
+    [setApproval],
+  );
+
+  /**
+   * Keyboard: A approves / R rejects the expanded row. We listen at the
+   * window level but bail out if focus is inside an editable element so
+   * typing in the Genie chat or a filter input never triggers approval.
+   */
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!expanded) return;
+      const target = e.target as HTMLElement | null;
+      if (target) {
+        const tag = target.tagName;
+        if (target.isContentEditable || tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') {
+          return;
+        }
+      }
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const key = e.key.toLowerCase();
+      if (key === 'a') {
+        if (approvals[expanded] === 'approved') return;
+        e.preventDefault();
+        void approveLead(expanded);
+      } else if (key === 'r') {
+        if (approvals[expanded] === 'rejected') return;
+        e.preventDefault();
+        rejectLead(expanded);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [expanded, approvals, approveLead, rejectLead]);
+
+  const stop = (e: ReactKeyboardEvent | React.MouseEvent) => e.stopPropagation();
 
   return (
     <div className="surface" style={{ overflow: 'hidden' }}>
@@ -100,7 +184,10 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
           </div>
           <div>
             <div className="h-4">Ranked borrowers · drill to evidence</div>
-            <div className="muted" style={{ fontSize: 12 }}>Click any row for the Cotality evidence trail — CLIP, Owner Link, and lien history.</div>
+            <div className="muted" style={{ fontSize: 12 }}>
+              Click any row for the Cotality evidence trail — CLIP, Owner Link, and lien history.
+              {' '}Keyboard: <span className="mono">A</span> to approve, <span className="mono">R</span> to reject the expanded row.
+            </div>
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
@@ -187,10 +274,47 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
                     </td>
                     <td style={{ textAlign: 'right' }}><ScoreBadge value={lead.opportunity_score} /></td>
                     <td><ConfidenceMeter value={lead.confidence} compact /></td>
-                    <td style={{ paddingRight: 16 }}>
+                    <td
+                      style={{ paddingRight: 16 }}
+                      data-testid={`lead-approval-cell-${lead.borrower_id}`}
+                    >
                       {approval === 'approved' && <Chip variant="success" icon="check">Approved</Chip>}
                       {approval === 'rejected' && <Chip variant="danger" icon="cross">Rejected</Chip>}
-                      {!approval && <Chip variant="warning">Pending</Chip>}
+                      {!approval && (
+                        <div
+                          style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+                          onClick={stop}
+                        >
+                          <Button
+                            variant="primary"
+                            size="sm"
+                            icon="check"
+                            disabled={Boolean(pendingApproval[lead.borrower_id])}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void approveLead(lead.borrower_id);
+                            }}
+                            aria-label={`Approve ${lead.borrower_id}`}
+                            data-testid={`lead-approve-${lead.borrower_id}`}
+                          >
+                            {pendingApproval[lead.borrower_id] ? 'Approving…' : 'Approve'}
+                          </Button>
+                          <button
+                            type="button"
+                            className="btn btn--sm"
+                            aria-label={`Reject ${lead.borrower_id}`}
+                            title="Reject"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              rejectLead(lead.borrower_id);
+                            }}
+                            data-testid={`lead-reject-${lead.borrower_id}`}
+                            style={{ padding: '4px 8px' }}
+                          >
+                            <Icon name="cross" size={12} />
+                          </button>
+                        </div>
+                      )}
                     </td>
                   </tr>
                   {isOpen && (
@@ -206,6 +330,19 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
           </tbody>
         </table>
       </div>
+      {approvalError && (
+        <div
+          role="alert"
+          style={{
+            padding: '8px 16px',
+            color: 'var(--signal-danger)',
+            fontSize: 12,
+            borderTop: '1px solid var(--line-1)',
+          }}
+        >
+          {approvalError}
+        </div>
+      )}
       <div className="surface__ft">
         Showing {leads.length} borrowers · <span className="mono">SELECT * FROM mip.gold.lead_scores WHERE segment IN (…)</span>
       </div>
