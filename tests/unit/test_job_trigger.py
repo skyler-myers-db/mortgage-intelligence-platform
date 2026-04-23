@@ -107,13 +107,15 @@ def test_trigger_refires_after_debounce(monkeypatch: pytest.MonkeyPatch) -> None
     ws = _stub_workspace()
     _install_fake_sdk(monkeypatch, ws)
 
-    # Fake monotonic clock: first call at t=0, second at t=120 (past
-    # the 60-s debounce). We patch ``time.monotonic`` *inside* the
-    # job_trigger module so other imports keep the real clock.
-    clock = iter([0.0, 120.0])
-    monkeypatch.setattr(job_trigger.time, "monotonic", lambda: next(clock))
+    # Fake monotonic clock. ``_resolve_job_id`` also samples the clock
+    # for TTL bookkeeping so a bounded iterator overflows; use a
+    # mutable reference instead so every sample returns the current
+    # "now" until the test advances it.
+    now = [0.0]
+    monkeypatch.setattr(job_trigger.time, "monotonic", lambda: now[0])
 
     job_trigger.trigger_lifecycle_sync(reason="approval")
+    now[0] = 120.0  # past the 60-s debounce
     job_trigger.trigger_lifecycle_sync(reason="approval")
 
     assert ws.jobs.run_now.call_count == 2
@@ -167,19 +169,19 @@ def test_trigger_unresolved_job_name(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_approval_endpoint_schedules_trigger(monkeypatch: pytest.MonkeyPatch) -> None:
     """POST /api/outreach/approve adds the trigger to BackgroundTasks.
 
-    We spy on ``trigger_lifecycle_sync`` at the import site the router
-    uses (``backend.api.outreach``). BackgroundTasks runs after the
-    response is committed but inside TestClient it runs synchronously,
-    so asserting ``called`` is safe.
+    We spy on ``enqueue_lifecycle_trigger`` at the import site the
+    router uses (``backend.api.outreach``). BackgroundTasks runs after
+    the response is committed but inside TestClient it runs
+    synchronously, so asserting ``called`` is safe.
     """
     from backend.api import outreach as outreach_mod
 
     calls: list[dict[str, Any]] = []
 
-    def _spy(*, reason: str = "approval") -> None:
+    def _spy(background: Any, *, reason: str = "approval") -> None:
         calls.append({"reason": reason})
 
-    monkeypatch.setattr(outreach_mod, "trigger_lifecycle_sync", _spy)
+    monkeypatch.setattr(outreach_mod, "enqueue_lifecycle_trigger", _spy)
 
     client = TestClient(app)
     resp = client.post(
@@ -193,3 +195,75 @@ def test_approval_endpoint_schedules_trigger(monkeypatch: pytest.MonkeyPatch) ->
     assert resp.status_code == 200, resp.text
     assert len(calls) == 1
     assert calls[0]["reason"] == "approval"
+
+
+def test_job_id_cache_expires_after_ttl(monkeypatch: pytest.MonkeyPatch) -> None:
+    """R5-05: cached job_id must re-resolve after ``_JOB_ID_TTL_SECONDS``.
+
+    Without the TTL, a bundle redeploy that changes ``job_id`` would
+    leave the process hitting the old id forever and the error path is
+    swallowed silently. We fire three triggers across the TTL boundary
+    and assert ``jobs.list`` was called twice (fresh resolve + post-TTL
+    re-resolve), not once.
+    """
+    ws = _stub_workspace(job_id=42)
+    _install_fake_sdk(monkeypatch, ws)
+
+    # Shared mutable clock: ``trigger_lifecycle_sync`` samples
+    # ``time.monotonic`` for the debounce AND ``_resolve_job_id``
+    # samples it for the TTL, so we need a callable (not an iterator).
+    now = [0.0]
+    monkeypatch.setattr(job_trigger.time, "monotonic", lambda: now[0])
+    ttl = job_trigger._JOB_ID_TTL_SECONDS
+
+    job_trigger.trigger_lifecycle_sync(reason="approval")
+    # Advance past BOTH the debounce window AND the job-id TTL.
+    now[0] = ttl + 1.0
+    job_trigger.trigger_lifecycle_sync(reason="approval")
+
+    # run_now fired twice (one per trigger call) AND ``jobs.list`` was
+    # consulted twice because the cache expired between calls.
+    assert ws.jobs.run_now.call_count == 2
+    assert ws.jobs.list.call_count == 2
+
+
+def test_run_now_404_invalidates_job_id_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    """R5-05: a 404 / not-found from ``run_now`` must drop the cached
+    job_id so the next trigger re-resolves by name.
+
+    Scenario: operator redeploys the bundle, the old job_id no longer
+    exists. Without invalidation every subsequent approval would hit
+    the dead id forever (404 swallowed by the outer except).
+    """
+    # First call: resolve returns job_id=42 but run_now raises a
+    # 404-shaped error. Cache must be cleared.
+    ws = _stub_workspace(job_id=42)
+
+    class _ResourceDoesNotExist(Exception):
+        pass
+
+    # Spoof a 404 error class whose name matches the stale-detector.
+    _ResourceDoesNotExist.__name__ = "ResourceDoesNotExist"
+    ws.jobs.run_now.side_effect = _ResourceDoesNotExist("job 42 not found")
+    _install_fake_sdk(monkeypatch, ws)
+
+    # Drive two calls past the debounce window so both reach run_now.
+    # Callable clock so resolver + trigger share one "now".
+    now = [0.0]
+    monkeypatch.setattr(job_trigger.time, "monotonic", lambda: now[0])
+
+    job_trigger.trigger_lifecycle_sync(reason="approval")
+    # Cache cleared by _invalidate_cached_job_id -- the second call must
+    # re-list. Swap run_now to succeed this time to confirm the flow.
+    ws.jobs.run_now.side_effect = None
+    run = MagicMock()
+    run.run_id = 777
+    ws.jobs.run_now.return_value = run
+    now[0] = 120.0  # past the debounce window
+
+    job_trigger.trigger_lifecycle_sync(reason="approval")
+
+    # Two run_now attempts (first failed, second succeeded) AND two
+    # list calls because the cache was invalidated by the 404.
+    assert ws.jobs.run_now.call_count == 2
+    assert ws.jobs.list.call_count == 2

@@ -78,6 +78,10 @@ export default function OfferOrchestrator() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [approveError, setApproveError] = useState<string | null>(null);
   const [auditId, setAuditId] = useState<string | null>(null);
+  // R5-11 (2026-04-23): in-flight flag forwarded to ApprovalBanner so
+  // the buttons disable while a POST is pending. Prevents a double
+  // click from writing two audit rows.
+  const [approving, setApproving] = useState<boolean>(false);
   // Reload token re-runs the borrower + recommend + draft fetches.
   // Hole-finder finding #1, 2026-04-23.
   const [reloadToken, setReloadToken] = useState<number>(0);
@@ -197,7 +201,9 @@ Reply or call 1-800-XXX-XXXX.`
     : '';
 
   const onApprove = async () => {
+    if (approving) return;
     setApproveError(null);
+    setApproving(true);
     try {
       // Forward the chosen offer_code + evidence_ids so the audit row
       // captures what the approver actually saw — not just the borrower
@@ -225,11 +231,15 @@ Reply or call 1-800-XXX-XXXX.`
           ? `Couldn't write approval: ${err.message}`
           : "Couldn't write approval.",
       );
+    } finally {
+      setApproving(false);
     }
   };
 
   const onReject = async () => {
+    if (approving) return;
     setApproveError(null);
+    setApproving(true);
     try {
       // Audit finding 2026-04-22: reject used to be a local-state-only
       // mutation. Now it writes the same governed pair of rows the
@@ -253,6 +263,8 @@ Reply or call 1-800-XXX-XXXX.`
           ? `Couldn't record rejection: ${err.message}`
           : "Couldn't record rejection.",
       );
+    } finally {
+      setApproving(false);
     }
   };
 
@@ -496,6 +508,7 @@ Reply or call 1-800-XXX-XXXX.`
           onApprove={() => void onApprove()}
           onReject={() => void onReject()}
           disabled={approval === 'approved' || approval === 'rejected'}
+          isSubmitting={approving}
         />
       </div>
 

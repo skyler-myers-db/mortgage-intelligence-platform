@@ -31,6 +31,7 @@ from backend.config.settings import settings
 from backend.services.admin_rules import AdminRulesService, get_admin_rules_service
 from backend.services.audit_store import AuditStore, get_audit_store
 from backend.services.databricks_sql import DatabricksSqlError
+from backend.services.error_sanitizer import safe_dependency_detail
 from backend.services.rbac import AdminDep
 from backend.services.resilience import DependencyDownError
 
@@ -59,9 +60,15 @@ def get_rules(service: ServiceDep, _actor: AdminDep) -> dict[str, Any]:
     try:
         payload = service.get_rules().to_dict()
     except DependencyDownError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        # R5-03: constant per-dependency detail; full ``str(exc)`` stays
+        # in the structured log via ``from exc`` chaining.
+        raise HTTPException(
+            status_code=503, detail=safe_dependency_detail(exc.dependency)
+        ) from exc
     except DatabricksSqlError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=503, detail=safe_dependency_detail("warehouse")
+        ) from exc
     # Legacy shim: expose any PUT-set override + preserve the v1 wire
     # shape expected by older clients (the frontend reads
     # ``offer_rules_version`` to label the panel chip).
@@ -143,9 +150,13 @@ def get_sources(service: ServiceDep, _actor: AdminDep) -> list[dict[str, Any]]:
     try:
         rows = service.get_sources()
     except DependencyDownError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=503, detail=safe_dependency_detail(exc.dependency)
+        ) from exc
     except DatabricksSqlError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=503, detail=safe_dependency_detail("warehouse")
+        ) from exc
     return [r.to_dict() for r in rows]
 
 

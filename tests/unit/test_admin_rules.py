@@ -263,3 +263,132 @@ def test_put_rules_rejects_arbitrary_top_level_keys() -> None:
     ``{"x": "y"}``. Now it's 422."""
     put = client.put("/api/admin/rules", json={"x": "y"})
     assert put.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Parallel probe behavior (perf HIGH, 2026-04-23)
+# ---------------------------------------------------------------------------
+
+
+def test_get_sources_two_failing_sources_do_not_cascade() -> None:
+    """One or more failing probes must not block the other sources.
+
+    The service now fans the per-source DESCRIBE DETAIL + COUNT(*) probes
+    out on a ThreadPoolExecutor. The degrade-per-source contract is that
+    a single (or multi-source) failure still returns a populated payload
+    for every other source. This test wires a client that fails only on
+    two specific silver tables and asserts the remaining six rows still
+    land with ``status='live'`` (or ``'roadmap'`` for MLS / Permits).
+    """
+
+    FAILING_TABLES = ("silver.lien_current", "silver.mortgage_events")
+
+    class _SelectivelyFailingClient:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def execute(
+            self, statement: str, parameters: Any = None
+        ) -> list[dict[str, Any]]:
+            self.calls.append(statement)
+            # Match the failing tables by suffix so catalog overrides
+            # (mip_demo/mip_prod) don't break the test.
+            for failing in FAILING_TABLES:
+                if failing in statement:
+                    raise DatabricksSqlError(
+                        f"simulated warehouse error on {failing}"
+                    )
+            s = statement.strip().upper()
+            if s.startswith("DESCRIBE DETAIL"):
+                return [
+                    {
+                        "lastModified": "2026-04-22T12:00:00.000Z",
+                        "numRecords": 4242,
+                    }
+                ]
+            if "COUNT(*)" in s and "FROM" in s:
+                return [{"row_count": 4242}]
+            return []
+
+    previous = app.dependency_overrides.get(get_admin_rules_service)
+    app.dependency_overrides[get_admin_rules_service] = lambda: AdminRulesService(
+        _SelectivelyFailingClient()
+    )
+    try:
+        response = client.get("/api/admin/sources")
+        assert response.status_code == 200, response.text
+        rows = response.json()
+        by_name = {r["name"]: r for r in rows}
+        # The two failing tables degrade independently. Both back
+        # "MMA Mortgage Analytics" (mortgage_events) and "Voluntary Lien"
+        # (lien_current) per the _SOURCES descriptor table.
+        assert by_name["Voluntary Lien"]["status"] == "error"
+        assert by_name["MMA Mortgage Analytics"]["status"] == "error"
+        # The other live sources still render with row counts.
+        for still_live in ("Cotality Public Records", "CLIP", "Owner Link", "AVM"):
+            r = by_name[still_live]
+            assert r["status"] == "live", r
+            assert r["rows"] == 4242, r
+        # Roadmap rows pass through untouched.
+        assert by_name["MLS"]["status"] == "roadmap"
+        assert by_name["Building Permits"]["status"] == "roadmap"
+    finally:
+        if previous is None:
+            del app.dependency_overrides[get_admin_rules_service]
+        else:
+            app.dependency_overrides[get_admin_rules_service] = previous
+
+
+def test_get_sources_prefers_numrecords_over_count_when_both_available() -> None:
+    """When DESCRIBE DETAIL returns ``numRecords``, the service must use
+    that value and skip the follow-up ``SELECT COUNT(*)`` round-trip.
+
+    Delta's writer publishes ``numRecords`` on most write paths
+    (Lakeflow, MERGE, optimized writes), so the common production path
+    should be one warehouse call per source instead of two. We verify
+    both the returned row count and that no COUNT(*) statement was
+    issued.
+    """
+
+    class _NumRecordsClient:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def execute(
+            self, statement: str, parameters: Any = None
+        ) -> list[dict[str, Any]]:
+            self.calls.append(statement)
+            s = statement.strip().upper()
+            if s.startswith("DESCRIBE DETAIL"):
+                return [
+                    {
+                        "lastModified": "2026-04-22T12:00:00.000Z",
+                        # numRecords present AND distinct from any
+                        # fallback so a preference bug surfaces clearly.
+                        "numRecords": 9191,
+                    }
+                ]
+            # If the service incorrectly falls back, return a different
+            # value so the assertion can tell which path won.
+            if "COUNT(*)" in s and "FROM" in s:
+                return [{"row_count": 1}]
+            return []
+
+    fake = _NumRecordsClient()
+    previous = app.dependency_overrides.get(get_admin_rules_service)
+    app.dependency_overrides[get_admin_rules_service] = lambda: AdminRulesService(fake)
+    try:
+        response = client.get("/api/admin/sources")
+        assert response.status_code == 200, response.text
+        rows = response.json()
+        live_rows = [r for r in rows if r["status"] == "live"]
+        assert live_rows, "expected at least one live source"
+        for r in live_rows:
+            assert r["rows"] == 9191, r
+        # No COUNT(*) should have been issued — numRecords was available.
+        assert not any("COUNT(*)" in call.upper() for call in fake.calls), fake.calls
+    finally:
+        if previous is None:
+            del app.dependency_overrides[get_admin_rules_service]
+        else:
+            app.dependency_overrides[get_admin_rules_service] = previous

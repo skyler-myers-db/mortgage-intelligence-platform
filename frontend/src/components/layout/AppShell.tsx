@@ -1,6 +1,7 @@
 import type { PropsWithChildren } from 'react';
 import { AppProvider } from '../AppContext';
 import { HealthProvider } from '../HealthProvider';
+import { FootprintProvider } from '../FootprintProvider';
 import { Rail } from './Rail';
 import { Topbar } from './Topbar';
 import { Console } from './Console';
@@ -27,17 +28,19 @@ export function AppShell({ children }: PropsWithChildren) {
   return (
     <AppProvider>
       <HealthProvider>
-        <div className="app-shell">
-          <Rail />
-          <Topbar />
-          <main className="main">
-            <DegradedBanner />
-            {children}
-          </main>
-          <EvidenceDrawer />
-          <Console />
-          <GenieChat />
-        </div>
+        <FootprintProvider>
+          <div className="app-shell">
+            <Rail />
+            <Topbar />
+            <main className="main">
+              <DegradedBanner />
+              {children}
+            </main>
+            <EvidenceDrawer />
+            <Console />
+            <GenieChat />
+          </div>
+        </FootprintProvider>
       </HealthProvider>
     </AppProvider>
   );

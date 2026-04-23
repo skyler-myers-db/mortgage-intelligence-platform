@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any
 
@@ -246,81 +247,112 @@ class AdminRulesService:
         return payload
 
     def _load_sources(self) -> tuple[SourceRow, ...]:
-        out: list[SourceRow] = []
-        for desc in _SOURCES:
+        # Parallelise the per-source probes. Each live source issues up
+        # to two warehouse round-trips (DESCRIBE DETAIL, optional COUNT)
+        # and the serial version paid 8 * (describe + count) ~= 16 round
+        # trips on every cache miss, which dominated the admin page's
+        # p95. A thread pool collapses the wall-clock to roughly the
+        # slowest single source. The "degrade per-source" contract is
+        # preserved by catching exceptions inside the worker so one
+        # failing table never aborts the batch.
+        #
+        # ``max_workers=8`` matches ``len(_SOURCES)``; roadmap entries
+        # return inline without issuing a future, so the pool is only
+        # sized for the live probes.
+        results: dict[int, SourceRow] = {}
+        live_indices: list[int] = []
+        for idx, desc in enumerate(_SOURCES):
             if desc.uc_table is None:
-                out.append(
-                    SourceRow(
-                        name=desc.name,
-                        status="roadmap",
-                        rows=None,
-                        last_updated=None,
-                        note=desc.note,
-                    )
+                results[idx] = SourceRow(
+                    name=desc.name,
+                    status="roadmap",
+                    rows=None,
+                    last_updated=None,
+                    note=desc.note,
                 )
-                continue
-            # Per-source try/except: if the app identity doesn't have
-            # USE SCHEMA / SELECT on a specific table (e.g. silver) we
-            # surface that source as "permission_denied" rather than
-            # 503-ing the entire /api/admin/sources call. A customer's
-            # app identity may only have GRANTs on gold; admin sources
-            # should degrade gracefully. (E2E verifier 2026-04-23 caught
-            # this — `mip.silver.*` denied to workspace identity.)
-            try:
-                rows, last_mod = self._describe_detail(desc.uc_table)
-                out.append(
-                    SourceRow(
-                        name=desc.name,
-                        status="live",
-                        rows=rows,
-                        last_updated=last_mod,
-                        note=desc.note,
-                    )
-                )
-            except Exception as exc:  # noqa: BLE001 -- degrade-per-source contract
-                msg = str(exc)
-                # Detect permission denial vs. other SQL errors distinctly so
-                # the admin UI can show a clear "grant needed" vs. "transient
-                # error" banner per source. Everything else surfaces as an
-                # unknown status with the raw error clipped to 200 chars.
-                is_permission = "PERMISSION_DENIED" in msg or "does not have" in msg
-                out.append(
-                    SourceRow(
-                        name=desc.name,
-                        status="permission_denied" if is_permission else "error",
-                        rows=None,
-                        last_updated=None,
-                        note=(
-                            "App identity lacks USE SCHEMA/SELECT on "
-                            f"{desc.uc_table}"
-                            if is_permission
-                            else f"{desc.note} (read error: {msg[:200]})"
-                        ),
-                    )
-                )
-        return tuple(out)
+            else:
+                live_indices.append(idx)
+
+        if live_indices:
+            with ThreadPoolExecutor(max_workers=8) as executor:
+                future_by_idx = {
+                    idx: executor.submit(self._probe_source, _SOURCES[idx])
+                    for idx in live_indices
+                }
+                for idx, future in future_by_idx.items():
+                    results[idx] = future.result()
+
+        return tuple(results[i] for i in range(len(_SOURCES)))
+
+    def _probe_source(self, desc: _SourceDescriptor) -> SourceRow:
+        """Probe a single live source. Never raises -- returns a
+        degraded SourceRow on failure so one slow/denied table cannot
+        block the others when called from the thread pool."""
+        assert desc.uc_table is not None  # enforced by caller
+        # Per-source try/except: if the app identity doesn't have
+        # USE SCHEMA / SELECT on a specific table (e.g. silver) we
+        # surface that source as "permission_denied" rather than
+        # 503-ing the entire /api/admin/sources call. A customer's
+        # app identity may only have GRANTs on gold; admin sources
+        # should degrade gracefully. (E2E verifier 2026-04-23 caught
+        # this — `mip.silver.*` denied to workspace identity.)
+        try:
+            rows, last_mod = self._describe_detail(desc.uc_table)
+            return SourceRow(
+                name=desc.name,
+                status="live",
+                rows=rows,
+                last_updated=last_mod,
+                note=desc.note,
+            )
+        except Exception as exc:  # noqa: BLE001 -- degrade-per-source contract
+            msg = str(exc)
+            # Detect permission denial vs. other SQL errors distinctly so
+            # the admin UI can show a clear "grant needed" vs. "transient
+            # error" banner per source. Everything else surfaces as an
+            # unknown status with the raw error clipped to 200 chars.
+            is_permission = "PERMISSION_DENIED" in msg or "does not have" in msg
+            return SourceRow(
+                name=desc.name,
+                status="permission_denied" if is_permission else "error",
+                rows=None,
+                last_updated=None,
+                note=(
+                    "App identity lacks USE SCHEMA/SELECT on "
+                    f"{desc.uc_table}"
+                    if is_permission
+                    else f"{desc.note} (read error: {msg[:200]})"
+                ),
+            )
 
     def _describe_detail(self, fqtn: str) -> tuple[int | None, str | None]:
         """Cheap metadata read for a single table.
 
         ``DESCRIBE DETAIL`` returns one row with columns including
-        ``numFiles``, ``sizeInBytes``, ``lastModified``. For row counts
-        we issue a follow-up ``SELECT COUNT(*)`` because ``numRecords``
-        is not reliably populated across Delta versions. Both calls are
-        metadata-only (the count is pushed down on unpartitioned tables)
-        so total warehouse cost is small. The results are cached for
-        ``self._ttl`` seconds.
+        ``numFiles``, ``sizeInBytes``, ``lastModified``, and -- when the
+        Delta writer populated it -- ``numRecords``. We prefer
+        ``numRecords`` from the detail row because it avoids a second
+        warehouse round-trip entirely; many Delta writers (Lakeflow,
+        MERGE, optimized writes) publish an accurate count there.
+        ``SELECT COUNT(*)`` is used only as a fallback when
+        ``numRecords`` is absent or NULL -- which still forces a table
+        scan if Delta stats are stale, but that's the corner case, not
+        the common path. Results are cached for ``self._ttl`` seconds.
         """
         # DESCRIBE DETAIL is a table function; the canonical form works
         # with the fully-qualified name directly.
         detail_rows = self._sql.execute(f"DESCRIBE DETAIL {fqtn}")
         last_mod: str | None = None
+        row_count: int | None = None
         if detail_rows:
             last_mod = _opt_str(detail_rows[0].get("lastModified"))
-        # COUNT(*) is cheap on Delta; Parquet row-group summaries push it
-        # down without a full scan in the common case.
-        count_rows = self._sql.execute(f"SELECT COUNT(*) AS row_count FROM {fqtn}")
-        row_count = _opt_int(count_rows[0].get("row_count")) if count_rows else None
+            row_count = _opt_int(detail_rows[0].get("numRecords"))
+        if row_count is None:
+            # Fallback: Delta writer didn't publish numRecords. COUNT(*)
+            # is still pushed down to Parquet row-group summaries on
+            # unpartitioned tables, so cost stays bounded.
+            count_rows = self._sql.execute(f"SELECT COUNT(*) AS row_count FROM {fqtn}")
+            row_count = _opt_int(count_rows[0].get("row_count")) if count_rows else None
         return row_count, last_mod
 
 

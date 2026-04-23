@@ -27,7 +27,8 @@ from backend.schemas.offer import (
     OutreachRejectResponse,
 )
 from backend.services.audit_store import AuditStore, get_audit_store, resolve_actor
-from backend.services.job_trigger import trigger_lifecycle_sync
+from backend.services.error_sanitizer import safe_dependency_detail
+from backend.services.job_trigger import enqueue_lifecycle_trigger
 from backend.services.lakebase import LakebaseClient, LakebaseError, get_lakebase_client
 from backend.services.pii_redaction import scrub_free_text
 from backend.services.repositories import OutreachRepository, get_outreach_repository
@@ -166,16 +167,22 @@ def approve_outreach(
     except LakebaseError as exc:
         # No silent fallback. The UI surfaces 503 as a retry banner;
         # the operator's next move is to check Lakebase status.
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        # R5-03: constant string; structured log keeps the full ``str(exc)``
+        # via ``from exc`` + the underlying LakebaseError WARNING.
+        raise HTTPException(
+            status_code=503, detail=safe_dependency_detail("lakebase")
+        ) from exc
     # The approval row is now committed in Lakebase. Kick the
     # ``mip_sync_lifecycle_state`` job to mirror it into
     # ``mip.gold.borrower_lifecycle_state`` so metric views + Genie
     # see the new state within minutes instead of waiting for the
-    # 04:00 daily fallback cron. Scheduled via BackgroundTasks so the
-    # HTTP response ships first; ``trigger_lifecycle_sync`` is itself
-    # debounced + swallows every error class so a transient SDK/auth
-    # failure never breaks an approval.
-    background.add_task(trigger_lifecycle_sync, reason="approval")
+    # 04:00 daily fallback cron. ``enqueue_lifecycle_trigger`` logs
+    # ``event=lifecycle_trigger_enqueued`` then schedules the trigger
+    # on BackgroundTasks so the HTTP response ships first; a SIGTERM
+    # between response commit and task execution drops the call
+    # silently (BackgroundTasks has no drain) -- the enqueue log is
+    # the breadcrumb and the daily 04:00 cron is the safety net.
+    enqueue_lifecycle_trigger(background, reason="approval")
     return OutreachApproveResponse(
         approved=True,
         approval_id=approval_id,
@@ -245,11 +252,13 @@ def reject_outreach(
             event_type="OUTREACH_REJECT",
         )
     except LakebaseError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=503, detail=safe_dependency_detail("lakebase")
+        ) from exc
     # Same debounced fire-and-forget sync the approve path uses -- the
     # funnel / lifecycle views need to reflect rejected-borrower counts
     # without waiting on the daily cron.
-    background.add_task(trigger_lifecycle_sync, reason="rejection")
+    enqueue_lifecycle_trigger(background, reason="rejection")
     return OutreachRejectResponse(
         rejected=True,
         approval_id=approval_id,

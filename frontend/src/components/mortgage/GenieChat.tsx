@@ -57,10 +57,61 @@ export function GenieChat() {
   const [input, setInput] = useState('');
   const [typing, setTyping] = useState(false);
   const bodyRef = useRef<HTMLDivElement>(null);
+  // R5-12 (2026-04-23): dialog a11y. Mirrors the EvidenceDrawer pattern
+  // — initial focus lands on the input, ESC closes, focus restores to
+  // the FAB (or whatever opened the panel) on close. Without these
+  // screen-reader + keyboard users are stranded.
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const lastFocusedRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     if (bodyRef.current) bodyRef.current.scrollTop = bodyRef.current.scrollHeight;
   }, [msgs, typing, genieOpen]);
+
+  // R5-12: ESC closes + initial focus + focus restore + lightweight
+  // focus trap via Tab cycling within the panel.
+  useEffect(() => {
+    if (genieOpen) {
+      lastFocusedRef.current = document.activeElement as HTMLElement | null;
+      queueMicrotask(() => inputRef.current?.focus());
+      const onKey = (e: KeyboardEvent) => {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          setGenieOpen(false);
+          return;
+        }
+        if (e.key === 'Tab' && panelRef.current) {
+          // Trap focus inside the panel. Query focusable descendants
+          // fresh on every Tab so late-rendered sample question
+          // buttons are part of the cycle.
+          const focusables = panelRef.current.querySelectorAll<HTMLElement>(
+            'button:not([disabled]), [href], input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+          );
+          if (focusables.length === 0) return;
+          const first = focusables[0];
+          const last = focusables[focusables.length - 1];
+          const active = document.activeElement as HTMLElement | null;
+          if (e.shiftKey && active === first) {
+            e.preventDefault();
+            last.focus();
+          } else if (!e.shiftKey && active === last) {
+            e.preventDefault();
+            first.focus();
+          }
+        }
+      };
+      window.addEventListener('keydown', onKey);
+      return () => window.removeEventListener('keydown', onKey);
+    }
+    // On close, return focus to whatever opened the panel (the FAB or
+    // the topbar Genie toggle). Guard against the element being gone.
+    if (lastFocusedRef.current && typeof lastFocusedRef.current.focus === 'function') {
+      lastFocusedRef.current.focus();
+      lastFocusedRef.current = null;
+    }
+    return undefined;
+  }, [genieOpen, setGenieOpen]);
 
   const ask = async (q: string) => {
     if (!q.trim()) return;
@@ -86,7 +137,14 @@ export function GenieChat() {
       >
         <Icon name="sparkle" size={22} />
       </button>
-      <div className={`genie ${genieOpen ? 'is-open' : ''}`} role="dialog" aria-label="Genie chat" aria-hidden={!genieOpen}>
+      <div
+        ref={panelRef}
+        className={`genie ${genieOpen ? 'is-open' : ''}`}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Genie chat"
+        aria-hidden={!genieOpen}
+      >
         <div className="genie__hdr">
           <div className="genie__avatar" />
           <div style={{ flex: 1 }}>
@@ -146,6 +204,7 @@ export function GenieChat() {
           }}
         >
           <input
+            ref={inputRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             placeholder="Ask about borrowers, segments, triggers…"

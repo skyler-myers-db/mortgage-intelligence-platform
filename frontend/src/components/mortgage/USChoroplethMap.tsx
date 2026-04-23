@@ -5,20 +5,26 @@ import { Icon } from '../Icon';
 import { Chip } from '../Primitives';
 import { api } from '../../lib/api';
 import { usePrefersReducedMotion } from '../../lib/usePrefersReducedMotion';
+import { useOptionalFootprint } from '../FootprintProvider';
 import type { CountyRollup, StateRollup, ZipRollup } from '../../types';
 
 // Shape of the @svg-maps/usa default export (see vite-env.d.ts).
 interface UsaSvgMapLocation { name: string; id: string; path: string }
 interface UsaSvgMap { label: string; viewBox: string; locations: UsaSvgMapLocation[] }
 
-// FIPS state codes that have real county polygons in the shipped
-// us-counties.json (trimmed to the 6-state Delta Share footprint in
-// 2026-04-22 audit follow-up). Each entry is lowercase uscode -> FIPS-2.
-// The TopoJSON was regenerated from us-atlas@3 counties-albers-10m and
-// trimmed to 584 counties across IL / CA / FL / TX / WA / CO so every
-// state in the footprint drills cleanly rather than "IL listed but dead"
-// that shipped before.
-const SUPPORTED_COUNTY_STATES: Record<string, string> = {
+// USPS (lowercase) -> FIPS-2 map. Values are intrinsic per-state constants,
+// NOT tenant-configurable — a state's FIPS code is an act of Congress, not a
+// customer setting. The *set of active* entries is filtered at render time
+// by the `FootprintProvider` so each tenant sees only their footprint's
+// counties light up as drillable.
+//
+// The shipped us-counties.json TopoJSON (public/us-counties.json) is trimmed
+// to the 6-state Summit footprint (IL/CA/FL/TX/WA/CO). A tenant whose
+// footprint extends outside this set will still get that state's state-level
+// hover + summary, but county drill for the extra state will show the
+// "Loading counties…" / fallback state until the TopoJSON is regenerated
+// with that state's counties included.
+const USCODE_TO_FIPS: Record<string, string> = {
   il: '17',
   ca: '06',
   fl: '12',
@@ -352,6 +358,22 @@ export function USChoroplethMap({
   // county FIPS. Value is a dict keyed by 5-digit ZIP.
   const [liveZipFacts, setLiveZipFacts] = useState<Record<string, Record<string, ZipRollup>>>({});
   const navigate = useNavigate();
+  const footprint = useOptionalFootprint();
+
+  // Footprint-aware drill allowlist. Intersects the tenant's footprint
+  // (lowercased USPS codes) with USCODE_TO_FIPS so only states that (a)
+  // are in the tenant's footprint AND (b) have polygons in the shipped
+  // TopoJSON drill. Memoised so render-only state flips don't recompute
+  // the set per frame.
+  const supportedCountyStates = useMemo<Record<string, string>>(() => {
+    const out: Record<string, string> = {};
+    for (const code of footprint.stateCodes) {
+      const lc = code.toLowerCase();
+      const fips = USCODE_TO_FIPS[lc];
+      if (fips) out[lc] = fips;
+    }
+    return out;
+  }, [footprint.stateCodes]);
 
   // Lazy-load the @svg-maps/usa data so the ~140 KB of path strings lands
   // in its own code-split chunk instead of the main bundle.
@@ -458,7 +480,7 @@ export function USChoroplethMap({
   useEffect(() => {
     if (level !== 'county' || !countyStateId) return;
     if (countiesByState[countyStateId]) return;
-    const fips = SUPPORTED_COUNTY_STATES[countyStateId];
+    const fips = supportedCountyStates[countyStateId];
     if (!fips) return;
     let cancelled = false;
     (async () => {
@@ -533,7 +555,7 @@ export function USChoroplethMap({
     return () => {
       cancelled = true;
     };
-  }, [level, countyStateId, countiesByState]);
+  }, [level, countyStateId, countiesByState, supportedCountyStates]);
 
   const activeSegNames = useMemo(() => {
     if (!segmentFilter || segmentFilter.length === 0) return null;
@@ -697,7 +719,7 @@ export function USChoroplethMap({
                 }
                 return;
               }
-              if (SUPPORTED_COUNTY_STATES[loc.id]) {
+              if (supportedCountyStates[loc.id]) {
                 setLevel('county');
                 setCountyStateId(loc.id);
                 setSelected({ level: 'state', id: loc.id, name: loc.name });
@@ -715,7 +737,7 @@ export function USChoroplethMap({
                 if (facts) navigate(`/lead-queue?state=${loc.id.toUpperCase()}`);
                 return;
               }
-              if (SUPPORTED_COUNTY_STATES[loc.id]) {
+              if (supportedCountyStates[loc.id]) {
                 setLevel('county');
                 setCountyStateId(loc.id);
                 setSelected({ level: 'state', id: loc.id, name: loc.name });
@@ -1022,7 +1044,7 @@ export function USChoroplethMap({
       <div style={{ position: 'absolute', top: 12, right: 14, zIndex: 2 }}>
         <Chip variant="neutral" icon="pin">
           {level === 'state'
-            ? `Click ${Object.keys(SUPPORTED_COUNTY_STATES).map((s) => s.toUpperCase()).join(', ')} to drill`
+            ? `Click ${Object.keys(supportedCountyStates).map((s) => s.toUpperCase()).join(', ')} to drill`
             : level === 'county'
               ? countyStateId === 'il'
                 ? 'Click Cook to drill'

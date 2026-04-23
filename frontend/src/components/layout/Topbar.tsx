@@ -2,6 +2,7 @@ import { useLocation } from 'react-router-dom';
 import { useApp } from '../AppContext';
 import { Icon } from '../Icon';
 import { useHealth } from '../HealthProvider';
+import { useFootprint } from '../FootprintProvider';
 
 /**
  * Topbar — breadcrumbs, lender pill, environment pill, warehouse-status pill,
@@ -36,6 +37,12 @@ export function Topbar() {
   const { pathname } = useLocation();
   const crumb = currentCrumb(pathname);
   const { health } = useHealth();
+  // R5-07 (2026-04-23): surface the footprint fallback as a muted chip
+  // so operators aren't silently pinned to the 6-state default when
+  // /api/config/footprint failed on cold-start. This is a separate
+  // signal from /api/health (which drives DegradedBanner) — the
+  // warehouse can be up while the footprint fetch is stale.
+  const { usingFallback: footprintFallback } = useFootprint();
 
   const envLabel = (health?.app_env ?? 'loading').toLowerCase();
   const warehouseUp = health?.dependencies?.warehouse === 'up';
@@ -84,6 +91,16 @@ export function Topbar() {
           {warehouseUp ? 'warehouse' : health ? 'offline' : '…'}
         </span>
       </div>
+      {footprintFallback && (
+        <span
+          className="chip chip--warning"
+          title="The /api/config/footprint fetch failed — showing the canonical 6-state fallback. The warehouse may still be cold-starting."
+          data-testid="footprint-fallback-chip"
+        >
+          <Icon name="shield" size={10} />
+          Footprint: fallback
+        </span>
+      )}
       <button
         className="topbar__icon-btn"
         onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}

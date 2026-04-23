@@ -12,6 +12,7 @@ import {
 import { Button, Chip } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { FilterSelect } from '../components/ui/FilterSelect';
+import { useFootprint } from '../components/FootprintProvider';
 
 /**
  * Segment Intelligence — prototype composition: segment cards across the top
@@ -20,21 +21,21 @@ import { FilterSelect } from '../components/ui/FilterSelect';
  * with the prototype's "segment-first" layout.
  */
 
-// Map display-label -> US state code (matches LeadSummary.state). Keeps the
-// options list readable ("Chicago MSA") while the predicate logic works on
-// 2-letter state codes. The "MSA" entries are approximations — presenters
-// call out a metro; the filter drops to state-level for now.
-// Slice 9: dropped Atlanta / Nashville and promoted Chicago MSA to match
-// the 6-state Delta Share footprint (IL / CA / FL / TX / WA / CO).
-// TODO: wire to backend when MSA / county rollups land.
-const LOCATION_TO_STATES: Record<string, string[]> = {
-  All: [],
-  'Chicago MSA': ['IL'],
-  Austin: ['TX'],
-  'SF Bay': ['CA'],
-  Denver: ['CO'],
-  Orlando: ['FL'],
-  Seattle: ['WA'],
+// Display-label -> US state code map (matches LeadSummary.state). The set
+// of entries is derived from the tenant's footprint via FootprintProvider
+// at render time (see `buildLocationToStates` below); this static table
+// holds only the display label for each state code we know how to name.
+// States not in this table fall through to their state_name from the
+// footprint payload, so a tenant adding a new state still gets a
+// readable dropdown option even before we curate a metro label for it.
+// Keys are 2-letter USPS codes.
+const STATE_CODE_TO_METRO_LABEL: Record<string, string> = {
+  IL: 'Chicago MSA',
+  TX: 'Austin',
+  CA: 'SF Bay',
+  CO: 'Denver',
+  FL: 'Orlando',
+  WA: 'Seattle',
 };
 
 // Equity thresholds expressed as a minimum equity-to-AVM ratio. We don't
@@ -87,10 +88,38 @@ const INITIAL_FILTERS: ChipFilters = {
   cashout: 'Any',
 };
 
+/**
+ * Build the LOCATION-dropdown map for the current tenant footprint.
+ *
+ * Keeps the "All" entry first (no state filter), then one entry per
+ * footprint state. Each state's display label prefers the curated metro
+ * name from `STATE_CODE_TO_METRO_LABEL` (e.g. "Chicago MSA" for IL),
+ * falling back to the backend's `state_name` (e.g. "Georgia") when we
+ * haven't hand-curated a label yet. This makes the dropdown resilient
+ * to a new tenant whose footprint includes a state we haven't picked
+ * a metro for.
+ */
+function buildLocationToStates(
+  states: ReadonlyArray<{ state_code: string; state_name: string }>,
+): Record<string, string[]> {
+  const out: Record<string, string[]> = { All: [] };
+  for (const s of states) {
+    const code = s.state_code.toUpperCase();
+    const label = STATE_CODE_TO_METRO_LABEL[code] ?? s.state_name;
+    out[label] = [code];
+  }
+  return out;
+}
+
 export default function SegmentIntelligence() {
   const [segments, setSegments] = useState<SegmentSummary[]>([]);
   const [leads, setLeads] = useState<LeadSummary[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const footprint = useFootprint();
+  const locationToStates = useMemo(
+    () => buildLocationToStates(footprint.states),
+    [footprint.states],
+  );
   // Reload token re-runs both /api/segments and /api/leads fetches.
   // Hole-finder finding #1, 2026-04-23.
   const [reloadToken, setReloadToken] = useState<number>(0);
@@ -159,7 +188,7 @@ export default function SegmentIntelligence() {
       out = out.filter((l) => l.segment_codes.some((s) => activeSegs.includes(s)));
     }
     // Location: restrict to selected states (if any).
-    const locStates = LOCATION_TO_STATES[chipFilters.location] ?? [];
+    const locStates = locationToStates[chipFilters.location] ?? [];
     if (locStates.length > 0) {
       out = out.filter((l) => locStates.includes(l.state));
     }
@@ -218,7 +247,7 @@ export default function SegmentIntelligence() {
       out = out.filter((l) => l.zip === mapSelection.zip);
     }
     return out;
-  }, [leads, activeSegs, chipFilters, mapSelection]);
+  }, [leads, activeSegs, chipFilters, mapSelection, locationToStates]);
 
   const toggleSeg = (code: string) => {
     setActiveSegs((cur) => (cur.includes(code) ? cur.filter((s) => s !== code) : [...cur, code]));
@@ -304,7 +333,7 @@ export default function SegmentIntelligence() {
         <FilterSelect
           label="LOCATION"
           value={chipFilters.location}
-          options={Object.keys(LOCATION_TO_STATES)}
+          options={Object.keys(locationToStates)}
           onChange={(v) => setChipFilters((f) => ({ ...f, location: v }))}
         />
         <FilterSelect

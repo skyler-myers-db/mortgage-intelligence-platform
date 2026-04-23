@@ -144,10 +144,10 @@ def test_reject_schedules_lifecycle_sync_trigger(
 
     calls: list[dict[str, Any]] = []
 
-    def _spy(*, reason: str = "approval") -> None:
+    def _spy(background: Any, *, reason: str = "approval") -> None:
         calls.append({"reason": reason})
 
-    monkeypatch.setattr(outreach_mod, "trigger_lifecycle_sync", _spy)
+    monkeypatch.setattr(outreach_mod, "enqueue_lifecycle_trigger", _spy)
     override_deps(audit=audit, lakebase=fake_lakebase)
 
     client = TestClient(app)
@@ -192,7 +192,11 @@ def test_approve_forwards_draft_body_into_audit_metadata(
 
     # Silence the lifecycle-sync trigger so this test doesn't import
     # the real SDK.
-    monkeypatch.setattr(outreach_mod, "trigger_lifecycle_sync", lambda *, reason="approval": None)
+    monkeypatch.setattr(
+        outreach_mod,
+        "enqueue_lifecycle_trigger",
+        lambda background, *, reason="approval": None,
+    )
     override_deps(audit=audit, lakebase=fake_lakebase)
 
     client = TestClient(app)

@@ -206,6 +206,7 @@ app.add_middleware(CorrelationIdMiddleware)
 from fastapi import Request  # noqa: E402 -- handler below needs it
 from fastapi.responses import JSONResponse  # noqa: E402
 
+from backend.services.error_sanitizer import safe_dependency_detail  # noqa: E402
 from backend.services.resilience import DependencyDownError  # noqa: E402
 
 
@@ -223,11 +224,33 @@ async def _dependency_down_handler(_request: Request, exc: DependencyDownError) 
     also in the ``X-Correlation-ID`` header, but operators pasting errors
     into incident channels lose the header; the body copy survives the
     paste). Clients can cite one trace id from either source.
+
+    Round-5 R5-02: the ``detail`` field is a constant per-dependency
+    string derived from ``safe_dependency_detail``; it MUST NOT echo
+    ``str(exc)``. The underlying exception text (which for
+    ``DatabricksSqlError`` contains ``state=``, ``statement_id=``, and
+    warehouse-authored error text that routinely quotes column names and
+    predicate values) is logged at WARNING with structured fields so
+    operators retain full visibility without exposing the text on the
+    wire.
     """
+    emit(
+        log,
+        "dependency_down_handled",
+        level=logging.WARNING,
+        dependency=exc.dependency,
+        reason=exc.reason,
+        # ``last_error_str`` is the full upstream message; kept in the
+        # structured log line so ops can still pull state=/statement_id=/
+        # err_msg from Splunk/Datadog/etc. without the browser seeing it.
+        last_error_str=str(exc.last_error) if exc.last_error is not None else None,
+        last_error_type=type(exc.last_error).__name__ if exc.last_error is not None else None,
+        correlation_id=get_correlation_id(),
+    )
     return JSONResponse(
         status_code=503,
         content={
-            "detail": str(exc),
+            "detail": safe_dependency_detail(exc.dependency),
             "retryable": True,
             "dependency": exc.dependency,
             "correlation_id": get_correlation_id(),
@@ -274,8 +297,18 @@ if _FRONTEND_DIST.is_dir() and (_FRONTEND_DIST / "index.html").is_file():
     #
     # `no-store` on the SPA shell so browsers don't keep a stale
     # index.html that points at an old hashed-asset bundle after a deploy.
-    @app.get("/{full_path:path}")
-    def _spa_fallback(full_path: str) -> FileResponse:
+    @app.get("/{full_path:path}", response_model=None)
+    def _spa_fallback(full_path: str) -> FileResponse | JSONResponse:
+        # R5-15: API paths that don't match a registered route must 404,
+        # not fall through to index.html. The prior behavior silently
+        # returned HTML for typos / trailing-slash edge cases, which
+        # suppressed monitoring signal (clients parsing JSON would see
+        # a parse error, logs would show 200 OK) and masked real
+        # routing bugs. FastAPI strips the leading slash into
+        # ``full_path``, so an inbound ``/api/xxx`` arrives here as
+        # ``api/xxx``.
+        if full_path == "api" or full_path.startswith("api/"):
+            return JSONResponse(status_code=404, content={"detail": "not found"})
         candidate = (_FRONTEND_DIST / full_path).resolve()
         try:
             # Path-traversal guard: candidate must stay inside dist/.

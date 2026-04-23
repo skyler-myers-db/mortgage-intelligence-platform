@@ -36,6 +36,20 @@ import { segmentColor, segmentName } from '../../lib/segmentMetadata';
 const BULK_APPROVE_CONCURRENCY = 3;
 
 /**
+ * Return true when `el` is an editable element that the window-level
+ * hotkey handler must skip over. Exported for unit tests — the
+ * actual hotkey listener uses both this and `document.activeElement`
+ * so typing "a" into a text field can never trigger bulk-approve.
+ * R5-12 (2026-04-23).
+ */
+export function isEditableTarget(el: Element | null | undefined): boolean {
+  if (!el) return false;
+  const tag = (el as HTMLElement).tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
+  return (el as HTMLElement).isContentEditable === true;
+}
+
+/**
  * Chunk a list into groups of `size`. Used by the bulk-approve loop to
  * bound in-flight POSTs to the approve endpoint without inventing a
  * server-side bulk API.
@@ -135,6 +149,14 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
   // copy-on-write when updating to keep React's reference check happy.
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const [bulkApproving, setBulkApproving] = useState<boolean>(false);
+  // R5-04 (2026-04-23): synchronous in-flight latches. `setState` is
+  // async so two rapid clicks can both read `bulkApproving=false` before
+  // either commit schedules, producing two parallel approve loops that
+  // each write an audit row per borrower. `useRef` gives us a
+  // synchronous read/write we can flip before returning from the click
+  // handler; the existing React state still drives the disabled UI.
+  const bulkInFlightRef = useRef<boolean>(false);
+  const rowInFlightRef = useRef<Record<string, boolean>>({});
   // Tracks the bulk-approve loop's AbortController so unmount can
   // cancel the remaining in-flight POSTs. Round-2 hole-finder #10/#11,
   // 2026-04-23.
@@ -161,7 +183,13 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
    * rejection ("server said no"). Hole-finder finding #2, 2026-04-23.
    */
   const approveLead = useCallback(
-    async (borrowerId: string, signal?: AbortSignal): Promise<'ok' | 'network' | 'backend' | 'aborted'> => {
+    async (borrowerId: string, signal?: AbortSignal): Promise<'ok' | 'network' | 'backend' | 'aborted' | 'duplicate'> => {
+      // R5-04: synchronous latch check. setState is async, so a rapid
+      // second click could slip in before `pendingApproval[id]` flips
+      // to true and produce a second audit row. The ref flips
+      // immediately.
+      if (rowInFlightRef.current[borrowerId]) return 'duplicate';
+      rowInFlightRef.current[borrowerId] = true;
       setApprovalError(null);
       setPendingApproval((p) => ({ ...p, [borrowerId]: true }));
       try {
@@ -182,6 +210,7 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
         );
         return isNetwork ? 'network' : 'backend';
       } finally {
+        rowInFlightRef.current[borrowerId] = false;
         setPendingApproval((p) => {
           const { [borrowerId]: _discard, ...rest } = p;
           return rest;
@@ -204,6 +233,9 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
    */
   const rejectLead = useCallback(
     async (borrowerId: string) => {
+      // R5-04: synchronous latch — see approveLead above.
+      if (rowInFlightRef.current[borrowerId]) return;
+      rowInFlightRef.current[borrowerId] = true;
       setApprovalError(null);
       setPendingApproval((p) => ({ ...p, [borrowerId]: true }));
       try {
@@ -221,6 +253,7 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
             : `Couldn't reject ${borrowerId}.`,
         );
       } finally {
+        rowInFlightRef.current[borrowerId] = false;
         setPendingApproval((p) => {
           const { [borrowerId]: _discard, ...rest } = p;
           return rest;
@@ -293,10 +326,18 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
    * the operator can retry. A compact toast summarizes ok/fail counts.
    */
   const bulkApprove = useCallback(async () => {
-    if (bulkApproving) return;
+    // R5-04: synchronous latch. React setState is async, so two rapid
+    // clicks can both read `bulkApproving=false` before either commit
+    // schedules — producing two parallel loops with the same selection
+    // and two audit rows per borrower. Flip the ref before any await.
+    if (bulkInFlightRef.current || bulkApproving) return;
+    bulkInFlightRef.current = true;
     // Snapshot which ids to run: skip already-decided rows silently.
     const ids = [...selectedIds].filter((id) => !approvals[id]);
-    if (ids.length === 0) return;
+    if (ids.length === 0) {
+      bulkInFlightRef.current = false;
+      return;
+    }
     // One controller for the whole bulk loop; unmount aborts every
     // still-inflight POST. sessionStorage stashes the partial result so
     // the next mount can flash "N landed, rest aborted" — otherwise
@@ -342,6 +383,7 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
       } catch {
         // private mode or quota — ignore
       }
+      bulkInFlightRef.current = false;
       return;
     }
     // Replace selection with the failed subset so retries are trivial.
@@ -349,6 +391,7 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
     setBulkApproving(false);
     setBulkToast({ ok, fail: fail + aborted, network });
     bulkAbortRef.current = null;
+    bulkInFlightRef.current = false;
   }, [bulkApproving, selectedIds, approvals, approveLead]);
 
   // On mount: if the previous mount left a partial bulk-approve snapshot
@@ -396,13 +439,15 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
    */
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement | null;
-      if (target) {
-        const tag = target.tagName;
-        if (target.isContentEditable || tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') {
-          return;
-        }
-      }
+      // R5-12 (2026-04-23): belt-and-suspenders check against both the
+      // event target AND document.activeElement. For window-level
+      // keydowns `e.target` is usually the focused element, but when
+      // nothing is focused it falls back to `document.body` — which
+      // would bypass an input check. Checking `activeElement` too
+      // means typing "a" in the Genie textarea can never trigger the
+      // approve hotkey.
+      if (isEditableTarget(e.target as Element | null)) return;
+      if (isEditableTarget(document.activeElement)) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const key = e.key.toLowerCase();
       // Shift+A: bulk approve. Takes precedence over single-row A when
@@ -565,7 +610,24 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
                 <Fragment key={lead.borrower_id}>
                   <tr
                     className={isOpen ? 'is-expanded' : ''}
+                    tabIndex={0}
+                    role="button"
+                    aria-expanded={isOpen}
+                    aria-label={`Lead ${lead.borrower_id}, ${isOpen ? 'expanded' : 'collapsed'}. Press Enter or Space to toggle preview; A to approve, R to reject.`}
                     onClick={() => setExpanded(isOpen ? null : lead.borrower_id)}
+                    onKeyDown={(e) => {
+                      // R5-10 (2026-04-23): make rows toggleable from
+                      // the keyboard so A/R hotkeys work without a
+                      // prior mouse click. We only intercept when the
+                      // focus target is the row itself — if focus is
+                      // on the nested checkbox or approve button,
+                      // their own handlers run and we bail.
+                      if (e.target !== e.currentTarget) return;
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        setExpanded(isOpen ? null : lead.borrower_id);
+                      }
+                    }}
                   >
                     <td style={{ paddingLeft: 20 }} onClick={stop}>
                       <input

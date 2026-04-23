@@ -8,6 +8,7 @@ import { Button } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { FilterSelect } from '../components/ui/FilterSelect';
 import { DRAWER_SOURCES } from '../lib/drawerSources';
+import { useFootprint } from '../components/FootprintProvider';
 
 /**
  * Portfolio Builder — prototype `.surface` + `.filter-row` composition.
@@ -16,21 +17,45 @@ import { DRAWER_SOURCES } from '../lib/drawerSources';
  * primary forward motion into segment intelligence.
  */
 
-// Slice 9: GEO options refreshed to the 6-state Delta Share footprint
-// (IL / CA / FL / TX / WA / CO) so the filter reads like a real book of
-// business, not a single-metro slice. Chicago MSA is the default since
-// IL is the largest state in the footprint and our default anchor.
+// Non-GEO filter groups are tenant-invariant. The GEO group is built at
+// render time from the FootprintProvider (see `buildGeoOptions` below) so
+// the "All N states" label and the state-triple presets reflect the
+// tenant's real footprint rather than a hardcoded 6-state literal.
 // Keys MUST match PortfolioCriteria in backend/schemas/portfolio.py. The
 // earlier mismatch (`geo` vs `geography`, `occ` vs `occupancy`, etc.) made
 // every filter a no-op because Pydantic silently ignored unknown fields.
-const FILTER_GROUPS: Array<{ label: string; key: string; options: string[] }> = [
-  { label: 'GEO',          key: 'geography',            options: ['Chicago MSA', 'All 6 states', 'Texas', 'CA + FL + TX', 'IL + CA + WA'] },
+const NON_GEO_FILTER_GROUPS: Array<{ label: string; key: string; options: string[] }> = [
   { label: 'OCCUPANCY',    key: 'occupancy',            options: ['Owner-occupied', 'Non-owner-occupied', 'All'] },
   { label: 'LIEN STATUS',  key: 'lien_status',          options: ['Open 1st lien', 'Open HELOC', 'Free & clear', 'Any'] },
   { label: 'RELATIONSHIP', key: 'lender_relationship',  options: ['All', 'Current customer', 'Former customer', 'Competitor customer'] },
   { label: 'PRODUCT',      key: 'product',              options: ['All products', 'Refi', 'HELOC', 'Cash-out', 'Purchase', 'Retention'] },
   { label: 'EQUITY',       key: 'min_equity_pct_label', options: ['≥ 15%', '≥ 25%', '≥ 40%', 'Any'] },
 ];
+
+/**
+ * Build the GEO-dropdown options for the current tenant footprint.
+ *
+ * Emits (in order):
+ *   1. The curated "Chicago MSA" anchor (only if IL is in the footprint;
+ *      Summit's default tenant leads with Chicago so this entry preserves
+ *      the established UX).
+ *   2. "All N states" — the whole-footprint option, where N is the live
+ *      count (so a 4-state tenant sees "All 4 states", not "All 6").
+ *   3. Each state by its backend-provided state_name (so TX is "Texas",
+ *      CA is "California", etc.). This replaces the prior hardcoded
+ *      per-state entries ("Texas") + ad-hoc triples ("CA + FL + TX",
+ *      "IL + CA + WA") that were only meaningful for Summit.
+ */
+function buildGeoOptions(
+  states: ReadonlyArray<{ state_code: string; state_name: string }>,
+): string[] {
+  const opts: string[] = [];
+  const hasIllinois = states.some((s) => s.state_code.toUpperCase() === 'IL');
+  if (hasIllinois) opts.push('Chicago MSA');
+  opts.push(`All ${states.length} states`);
+  for (const s of states) opts.push(s.state_name);
+  return opts;
+}
 
 // Default filter values keyed by the short codes the existing local
 // state uses. Keeping these keys stable is a guardrail from the
@@ -105,6 +130,21 @@ function dayZeroSafe(
 
 export default function PortfolioBuilder() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const footprint = useFootprint();
+  // Build the GEO dropdown from the tenant footprint. Memoised so the
+  // FilterSelect doesn't get a fresh options array on every render (it
+  // would be identity-stable for same-footprint re-renders).
+  const geoOptions = useMemo(
+    () => buildGeoOptions(footprint.states),
+    [footprint.states],
+  );
+  const filterGroups = useMemo(
+    () => [
+      { label: 'GEO', key: 'geography', options: geoOptions },
+      ...NON_GEO_FILTER_GROUPS,
+    ],
+    [geoOptions],
+  );
   // Initialize from URL so deep-links and browser back/forward work. On
   // mount we also trigger a build, so a shared link reproduces the
   // exact KPI grid the sender saw. Round-2 hole-finder #16, 2026-04-23.
@@ -249,7 +289,7 @@ export default function PortfolioBuilder() {
         </div>
         <div className="surface__body">
           <div className="filter-row">
-            {FILTER_GROUPS.map((g) => (
+            {filterGroups.map((g) => (
               <FilterSelect
                 key={g.key}
                 label={g.label}
