@@ -91,6 +91,7 @@ export class ApiError extends Error {
   readonly status: number | null;
   readonly retryable: boolean;
   readonly dependency: string | null;
+  readonly correlationId: string | null;
   readonly aborted: boolean;
 
   constructor(
@@ -100,6 +101,7 @@ export class ApiError extends Error {
       status?: number | null;
       retryable?: boolean;
       dependency?: string | null;
+      correlationId?: string | null;
       aborted?: boolean;
     } = { path: '' },
   ) {
@@ -109,8 +111,37 @@ export class ApiError extends Error {
     this.status = opts.status ?? null;
     this.retryable = Boolean(opts.retryable);
     this.dependency = opts.dependency ?? null;
+    this.correlationId = opts.correlationId ?? null;
     this.aborted = Boolean(opts.aborted);
   }
+}
+
+/**
+ * Helper for cold-start UX: true when the error is a 503 with
+ * `retryable: true` and a named dependency (warehouse or lakebase
+ * warming up after idle auto-suspend). Call sites use this to switch
+ * to "warming up — attempt N of M" messaging instead of the red
+ * "Backend unavailable" banner. The backend ships these fields in the
+ * 503 body via `_dependency_down_handler`; mirrored into `ApiError`
+ * here so UI code doesn't need to parse the error message string.
+ */
+export function isWarmingUpError(err: unknown): err is ApiError {
+  if (!(err instanceof ApiError)) return false;
+  if (err.aborted) return false;
+  if (err.status !== 503) return false;
+  if (!err.retryable) return false;
+  return true;
+}
+
+/** Human label for the dependency name in the warming-up copy. */
+export function dependencyLabel(dep: string | null | undefined): string {
+  if (!dep) return 'Backend';
+  const normalized = dep.toLowerCase();
+  if (normalized === 'warehouse' || normalized.includes('warehouse')) return 'Warehouse';
+  if (normalized === 'lakebase' || normalized.includes('lakebase')) return 'Lakebase';
+  if (normalized === 'genie') return 'Genie';
+  // Fallback: title-case the dependency string.
+  return normalized.charAt(0).toUpperCase() + normalized.slice(1);
 }
 
 /** True when the error was caused by a caller-driven AbortController abort. */
@@ -179,23 +210,27 @@ interface Retryable503Parsed {
   retryable: boolean;
   dependency: string | null;
   detail: string | null;
+  correlationId: string | null;
 }
 
 async function _parseRetryableBody(res: Response): Promise<Retryable503Parsed> {
-  if (res.status !== 503) return { retryable: false, dependency: null, detail: null };
+  if (res.status !== 503)
+    return { retryable: false, dependency: null, detail: null, correlationId: null };
   try {
     const body = (await res.clone().json()) as {
       retryable?: boolean;
       dependency?: string;
       detail?: string;
+      correlation_id?: string;
     };
     return {
       retryable: body?.retryable === true,
       dependency: body?.dependency ?? null,
       detail: body?.detail ?? null,
+      correlationId: body?.correlation_id ?? null,
     };
   } catch {
-    return { retryable: false, dependency: null, detail: null };
+    return { retryable: false, dependency: null, detail: null, correlationId: null };
   }
 }
 
@@ -229,6 +264,7 @@ async function _throwFromResponse(res: Response, path: string): Promise<never> {
     status: res.status,
     retryable: parsed.retryable,
     dependency: parsed.dependency,
+    correlationId: parsed.correlationId,
   });
 }
 

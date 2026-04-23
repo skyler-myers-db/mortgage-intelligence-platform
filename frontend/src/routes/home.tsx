@@ -8,7 +8,9 @@ import { Button, Chip } from '../components/Primitives';
 import { DRAWER_SOURCES } from '../lib/drawerSources';
 import { Icon } from '../components/Icon';
 import { Reveal } from '../components/fx/Reveal';
-import { api, isAbortError } from '../lib/api';
+import { api, isAbortError, isWarmingUpError, dependencyLabel } from '../lib/api';
+import type { WarmingUpState } from '../lib/useWarmingUpRetry';
+import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 import { useApp } from '../components/AppContext';
 import { EntradaWordmark } from '../components/brand/Entrada';
 import { formatRefreshed } from '../lib/formatRefreshed';
@@ -37,6 +39,12 @@ export default function Home() {
   const { lender } = useApp();
   const [preview, setPreview] = useState<PortfolioPreview | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
+  // Cold-start retry state for the portfolio-preview tile. Non-null =
+  // we're in a 503 retry loop driven by warehouse/lakebase auto-suspend.
+  // Rendered as an inline "Portfolio KPIs — warehouse warming up
+  // (attempt N of 6)…" block in place of the KPI row so the rest of the
+  // page (map, activity log) stays reactive. 2026-04-23 UX fix.
+  const [previewWarming, setPreviewWarming] = useState<WarmingUpState | null>(null);
   // Reload token — incrementing it via the Retry button re-runs the
   // portfolio-preview fetch without a full route reload. Hole-finder
   // finding #1, 2026-04-23.
@@ -46,20 +54,49 @@ export default function Home() {
     // or filter change actually cancels the in-flight fetch (not just the
     // setState). Round-2 hole-finder #10/#11, 2026-04-23.
     const ctrl = new AbortController();
-    api
-      .portfolioPreview({}, ctrl.signal)
-      .then((p) => {
+    let cancelled = false;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    const MAX_ATTEMPTS = 6;
+    const INTERVAL_MS = 5000;
+
+    const runAttempt = async (attempt: number): Promise<void> => {
+      if (cancelled) return;
+      try {
+        const p = await api.portfolioPreview({}, ctrl.signal);
+        if (cancelled) return;
         setPreview(p);
         setPreviewError(null);
-      })
-      .catch((err: unknown) => {
-        if (isAbortError(err)) return;
+        setPreviewWarming(null);
+      } catch (err: unknown) {
+        if (cancelled || isAbortError(err)) return;
+        if (isWarmingUpError(err) && attempt < MAX_ATTEMPTS) {
+          setPreviewWarming({
+            dependency: err.dependency,
+            label: `${dependencyLabel(err.dependency)} warming up`,
+            attempt: attempt + 1,
+            maxAttempts: MAX_ATTEMPTS,
+            correlationId: err.correlationId,
+          });
+          setPreview(null);
+          setPreviewError(null);
+          timeoutId = setTimeout(() => {
+            void runAttempt(attempt + 1);
+          }, INTERVAL_MS);
+          return;
+        }
         setPreview(null);
+        setPreviewWarming(null);
         setPreviewError(
           err instanceof Error ? err.message : "Couldn't load portfolio KPIs.",
         );
-      });
+      }
+    };
+
+    void runAttempt(1);
+
     return () => {
+      cancelled = true;
+      if (timeoutId !== null) clearTimeout(timeoutId);
       ctrl.abort();
     };
   }, [reloadToken]);
@@ -117,7 +154,14 @@ export default function Home() {
         </>
       }
     >
-      {previewError && (
+      {previewWarming && (
+        <WarmingUpBlock
+          state={previewWarming}
+          title="Portfolio KPIs loading"
+          compact
+        />
+      )}
+      {previewError && !previewWarming && (
         <div
           role="alert"
           style={{
@@ -173,7 +217,7 @@ export default function Home() {
           to populate them.
         </div>
       )}
-      {!isDayZero && (
+      {!isDayZero && !previewWarming && (
         <div className="kpi-row">
           <KpiCard
             label="Marketable population"
@@ -234,7 +278,12 @@ export default function Home() {
         </div>
       </div>
       <div className="layoutA-grid">
-        <USChoroplethMap drillBehavior="navigate" />
+        {/* Home map drills in-place (state → county → ZIP → borrower deep
+            link) rather than bouncing to /lead-queue. Matches the
+            prototype's hero-map behavior; the Lead Queue remains the
+            source-of-truth index and is one click away via the CTAs
+            below. Fix D, 2026-04-23. */}
+        <USChoroplethMap drillBehavior="filter" />
         <Reveal>
           <AgentActivityLog />
         </Reveal>

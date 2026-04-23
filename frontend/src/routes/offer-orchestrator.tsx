@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
-import { Link, Navigate, useParams } from 'react-router-dom';
-import { api, isAbortError } from '../lib/api';
+import { Link, useParams } from 'react-router-dom';
+import { api, isAbortError, isWarmingUpError, dependencyLabel } from '../lib/api';
+import type { WarmingUpState } from '../lib/useWarmingUpRetry';
 import type { Borrower360 as Borrower360Type, OfferRecommendation } from '../types';
 import { PageShell } from '../components/layout/PageShell';
 import { ApprovalBanner } from '../components/mortgage/ApprovalBanner';
@@ -9,6 +10,7 @@ import { ConfidenceMeter } from '../components/mortgage/ConfidenceMeter';
 import { Button, Chip, EvidenceChip } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { Skeleton } from '../components/ui/Skeleton';
+import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 import { Reveal } from '../components/fx/Reveal';
 import { descriptorFor } from '../lib/drawerSources';
 import { useApp } from '../components/AppContext';
@@ -76,6 +78,11 @@ export default function OfferOrchestrator() {
   const [b, setB] = useState<Borrower360Type | null>(null);
   const [rec, setRec] = useState<OfferRecommendation | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  // Cold-start warming-up state for the borrower + recommend fetch pair.
+  // Shape matches WarmingUpBlock's contract. Non-null means we're in a
+  // 503 retry loop and the UI should show "Warehouse warming up
+  // (attempt N of 6)…" instead of the red error banner.
+  const [warmingUp, setWarmingUp] = useState<WarmingUpState | null>(null);
   const [approveError, setApproveError] = useState<string | null>(null);
   const [auditId, setAuditId] = useState<string | null>(null);
   // R5-11 (2026-04-23): in-flight flag forwarded to ApprovalBanner so
@@ -97,10 +104,18 @@ export default function OfferOrchestrator() {
 
   useEffect(() => {
     if (!id) return;
-    // AbortController cancels all three per-borrower fetches when the
-    // id changes or the route unmounts. Round-2 hole-finder #10/#11,
-    // 2026-04-23.
+    // AbortController cancels all per-borrower fetches when the id
+    // changes or the route unmounts. Round-2 hole-finder #10/#11,
+    // 2026-04-23. Warming-up handling (2026-04-23 UX fix) retries the
+    // borrower + recommend pair up to 6 times at 5s intervals when the
+    // warehouse is cold-starting; non-retryable errors fall through to
+    // the loadError path.
     const ctrl = new AbortController();
+    let cancelled = false;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    const MAX_ATTEMPTS = 6;
+    const INTERVAL_MS = 5000;
+
     // SWR: if we have a cached snapshot that's still fresh, hydrate
     // from it immediately so navigating back to a borrower is instant.
     // We still refetch in the background so the data stays live.
@@ -109,6 +124,7 @@ export default function OfferOrchestrator() {
       setB(cached.borrower);
       setRec(cached.recommendation);
       setLoadError(null);
+      setWarmingUp(null);
       if (cached.draftBody && cached.draftBody.trim().length > 0) {
         setDraftBody(cached.draftBody);
         setDraftLoaded(true);
@@ -120,18 +136,23 @@ export default function OfferOrchestrator() {
       setB(null);
       setRec(null);
       setLoadError(null);
+      setWarmingUp(null);
       setDraftBody('');
       setDraftLoaded(false);
     }
-    Promise.all([
-      api.borrower(id, ctrl.signal),
-      api.recommendOffer(id, ctrl.signal),
-    ])
-      .then(([borrower, recommendation]) => {
+
+    const runAttempt = async (attempt: number): Promise<void> => {
+      if (cancelled) return;
+      try {
+        const [borrower, recommendation] = await Promise.all([
+          api.borrower(id, ctrl.signal),
+          api.recommendOffer(id, ctrl.signal),
+        ]);
+        if (cancelled) return;
         setB(borrower);
         setRec(recommendation);
-        // Merge into cache; draftBody gets updated by the parallel
-        // fetch below.
+        setWarmingUp(null);
+        setLoadError(null);
         const prev = BORROWER_CACHE.get(id);
         BORROWER_CACHE.set(id, {
           borrower,
@@ -139,15 +160,33 @@ export default function OfferOrchestrator() {
           draftBody: prev?.draftBody ?? null,
           fetched: Date.now(),
         });
-      })
-      .catch((err: unknown) => {
-        if (isAbortError(err)) return;
+      } catch (err: unknown) {
+        if (cancelled || isAbortError(err)) return;
+        if (isWarmingUpError(err) && attempt < MAX_ATTEMPTS) {
+          setWarmingUp({
+            dependency: err.dependency,
+            label: `${dependencyLabel(err.dependency)} warming up`,
+            attempt: attempt + 1,
+            maxAttempts: MAX_ATTEMPTS,
+            correlationId: err.correlationId,
+          });
+          setLoadError(null);
+          timeoutId = setTimeout(() => {
+            void runAttempt(attempt + 1);
+          }, INTERVAL_MS);
+          return;
+        }
+        setWarmingUp(null);
         setLoadError(
           err instanceof Error
             ? `Couldn't load borrower or offer: ${err.message}`
             : "Couldn't load borrower or offer.",
         );
-      });
+      }
+    };
+
+    void runAttempt(1);
+
     // Fetch the backend-generated draft in parallel. On any failure we
     // silently keep `draftLoaded=false`; the render path falls back to
     // the hardcoded template and shows a muted note so the approver
@@ -174,14 +213,48 @@ export default function OfferOrchestrator() {
         // swallow non-abort errors; fall back to defaultDraft below
       });
     return () => {
+      cancelled = true;
+      if (timeoutId !== null) clearTimeout(timeoutId);
       ctrl.abort();
     };
   }, [id, reloadToken]);
 
   // Offer Orchestrator is a per-borrower action page; without an id
-  // there's nothing to draft an outreach for. Redirect to lead queue.
+  // render an empty-state landing page so the tab click isn't a silent
+  // redirect. 2026-04-23 UX fix.
   if (!id) {
-    return <Navigate to="/lead-queue" replace />;
+    return (
+      <PageShell
+        eyebrow="Offer Orchestrator"
+        title="Choose a borrower to compose an offer"
+        lede="Offer Orchestrator drafts a tailored recommendation — HELOC / Cash-Out / Rate-Term Refi / Retention — from the borrower's score + equity + rate spread, then routes through human approval before any outreach goes out. Pick a borrower to begin."
+        heroRight={
+          <Link className="btn btn--primary" to="/lead-queue">
+            Browse lead queue
+            <Icon name="chevright" size={14} />
+          </Link>
+        }
+      >
+        <div className="surface">
+          <div className="surface__hdr">
+            <Icon name="bolt" size={14} style={{ color: 'var(--accent)' }} />
+            <div className="h-4">What you'll see</div>
+          </div>
+          <div className="surface__body" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)' }}>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+              <Chip variant="neutral" icon="bolt">Primary offer</Chip>
+              <Chip variant="neutral" icon="doc">Considered alternatives</Chip>
+              <Chip variant="neutral" icon="shield">Thresholds applied</Chip>
+              <Chip variant="neutral" icon="check">Human approval gate</Chip>
+            </div>
+            <p className="body muted" style={{ margin: 0 }}>
+              Every draft writes an audit row before it enters the outreach
+              queue. No outreach sends automatically.
+            </p>
+          </div>
+        </div>
+      </PageShell>
+    );
   }
 
   // Marketing-approved outreach copy. The "[first name]" placeholder is
@@ -268,6 +341,18 @@ Reply or call 1-800-XXX-XXXX.`
     }
   };
 
+  if (warmingUp) {
+    return (
+      <PageShell
+        eyebrow={warmingUp.label}
+        title={`Loading ${id}…`}
+        lede="Databricks SQL warehouses auto-suspend when idle. It takes ~30 seconds to warm up. Retrying automatically…"
+      >
+        <WarmingUpBlock state={warmingUp} title={`Loading offer for ${id}`} />
+      </PageShell>
+    );
+  }
+
   if (loadError) {
     return (
       <PageShell
@@ -276,7 +361,7 @@ Reply or call 1-800-XXX-XXXX.`
         lede={loadError}
       >
         <div className="surface">
-          <div className="surface__body" style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+          <div className="surface__body" style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
             <Chip variant="danger" icon="cross">Backend unavailable</Chip>
             <button
               type="button"

@@ -1,18 +1,20 @@
-import { useEffect, useState, type CSSProperties, type ReactElement } from 'react';
-import { Link, Navigate, useParams } from 'react-router-dom';
-import { api, isAbortError } from '../lib/api';
+import { type CSSProperties, type ReactElement } from 'react';
+import { Link, useParams } from 'react-router-dom';
+import { api } from '../lib/api';
 import type { Borrower360 as Borrower360Type } from '../types';
 import { currency } from '../lib/formatters';
 import { PageShell } from '../components/layout/PageShell';
 import { TriggerTimeline } from '../components/mortgage/TriggerTimeline';
 import { ScoreBadge } from '../components/mortgage/ScoreBadge';
 import { ConfidenceMeter } from '../components/mortgage/ConfidenceMeter';
-import { Chip, EvidenceChip } from '../components/Primitives';
+import { Button, Chip, EvidenceChip } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { Skeleton } from '../components/ui/Skeleton';
+import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 import { Reveal } from '../components/fx/Reveal';
 import { descriptorFor } from '../lib/drawerSources';
 import { segmentByCode } from '../lib/segmentMetadata';
+import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
 
 /**
  * Borrower 360 — per-borrower dossier composed in `.surface` blocks.
@@ -23,48 +25,87 @@ import { segmentByCode } from '../lib/segmentMetadata';
 
 export default function Borrower360() {
   const { id } = useParams();
-  const [b, setB] = useState<Borrower360Type | null>(null);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (!id) return;
-    const ctrl = new AbortController();
-    setB(null);
-    setErrorMsg(null);
-    api
-      .borrower(id, ctrl.signal)
-      .then((data) => setB(data))
-      .catch((err: unknown) => {
-        if (isAbortError(err)) return;
-        setErrorMsg(
-          err instanceof Error
-            ? `Couldn't load borrower ${id}: ${err.message}`
-            : `Couldn't load borrower ${id}.`,
-        );
-      });
-    return () => {
-      ctrl.abort();
-    };
-  }, [id]);
+  // Cold-start posture (2026-04-23 UX fix): a fresh Databricks warehouse
+  // auto-suspends, so the first nav to /borrower-360/{id} commonly
+  // returns 503 {retryable:true, dependency:"warehouse"} while it warms
+  // up. Instead of flashing a red "Backend unavailable" banner, the
+  // warming-up retry hook retries up to 6× over 30s and drives the
+  // WarmingUpBlock "Warehouse warming up (attempt N of 6)…" copy. Any
+  // non-retryable error (404, 500) falls through to the persistent
+  // error path with the existing "Back to lead queue" CTA.
+  const { data: b, warmingUp, error, manualRetry } = useWarmingUpRetry<Borrower360Type>(
+    (signal) => api.borrower(id!, signal),
+    [id],
+    { enabled: Boolean(id) },
+  );
 
   // Borrower 360 is a per-borrower detail page; without an id in the URL
-  // there is no borrower to show. Send the user to the lead queue, which
-  // is the source-of-truth index they can drill from. Matches the
-  // product flow: portfolio → segment → lead → borrower.
+  // there is no borrower to show. Render a proper empty-state landing
+  // page instead of silently redirecting — clicking the tab should not
+  // feel like a broken link.
   if (!id) {
-    return <Navigate to="/lead-queue" replace />;
+    return (
+      <PageShell
+        eyebrow="Borrower 360"
+        title="Choose a borrower to inspect"
+        lede="Borrower 360 shows a single borrower's full dossier — CLIP, equity estimate, rate spread, trigger timeline, recommended offer, and every evidence chip that justifies the score. Pick a borrower from the Lead Queue to open it here."
+        heroRight={
+          <Link className="btn btn--primary" to="/lead-queue">
+            Browse lead queue
+            <Icon name="chevright" size={14} />
+          </Link>
+        }
+      >
+        <div className="surface">
+          <div className="surface__hdr">
+            <Icon name="user" size={14} style={{ color: 'var(--accent)' }} />
+            <div className="h-4">What you'll see</div>
+          </div>
+          <div className="surface__body" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)' }}>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+              <Chip variant="neutral" icon="user">Customer 360</Chip>
+              <Chip variant="neutral" icon="bolt">Trigger timeline</Chip>
+              <Chip variant="neutral" icon="shield">Why-now rationale</Chip>
+              <Chip variant="neutral" icon="layers">Supporting evidence</Chip>
+            </div>
+            <p className="body muted" style={{ margin: 0 }}>
+              Every score traces back to a Cotality source row via the evidence
+              chips. Open a borrower to see the full dossier.
+            </p>
+          </div>
+        </div>
+      </PageShell>
+    );
   }
 
-  if (errorMsg) {
+  // Warming-up takes priority over `error` — `useWarmingUpRetry` never
+  // sets both at once, but this ordering makes the intent explicit.
+  if (warmingUp) {
+    return (
+      <PageShell
+        eyebrow={warmingUp.label}
+        title={`Loading ${id}…`}
+        lede="Databricks SQL warehouses auto-suspend when idle. It takes ~30 seconds to warm up. Retrying automatically…"
+      >
+        <WarmingUpBlock state={warmingUp} title={`Loading borrower ${id}`} />
+      </PageShell>
+    );
+  }
+
+  if (error) {
     return (
       <PageShell
         eyebrow="Borrower 360"
         title={`Couldn't load ${id}`}
-        lede={errorMsg}
+        lede={`Couldn't load borrower ${id}: ${error.message}`}
       >
         <div className="surface">
-          <div className="surface__body" style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+          <div className="surface__body" style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
             <Chip variant="danger" icon="cross">Backend unavailable</Chip>
+            <Button onClick={manualRetry} aria-label={`Retry loading borrower ${id}`}>
+              Retry
+            </Button>
             <Link className="btn" to="/lead-queue">
               Back to lead queue
             </Link>
