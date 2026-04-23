@@ -9,22 +9,21 @@ import { EntradaWordmark } from '../components/brand/Entrada';
 /**
  * Administration — operator-facing configuration for Module 0.
  *
- * IA redesign: leads with what an operator-admin (ops/tech at a mortgage
- * lender IT org) cares about -- offer rules, audit trail, data source
- * readiness -- and demotes the visual preference toggles (theme, accent,
- * density, lender name, chip/meter toggles) behind a disclosure labeled
- * "Workspace appearance (per-user)". Those controls remain fully
- * functional; they just no longer compete with admin-grade panels for
- * the top of the page.
+ * Every panel on this page is UC-backed as of the slice13-accuracy
+ * follow-up (2026-04-23). No frontend literals pretending to be live
+ * data:
  *
- * Each of the three top panels surfaces a live signal:
- *  - Offer rules: current ruleset version pulled from /api/admin/rules,
- *    plus an expandable table of thresholds seeded from backend defaults
- *    in backend/config/settings.py (see THRESHOLD_DEFAULTS below).
- *  - Audit trail: event count + last-event timestamp from
- *    /api/audit/events?limit=1. Degrades honestly when Lakebase is down.
- *  - Data source readiness: per-source status rows based on the known
- *    Delta Share footprint (6 live sources; MLS + Permits on roadmap).
+ *  - Offer rules + threshold table: GET /api/admin/rules reads
+ *    `mip.ref.offer_rules_config`. The "Edited" stamp is the max
+ *    last_updated across rows; the version chip is a deterministic
+ *    hash of the (key, value) pairs.
+ *  - Audit trail: GET /api/audit/events?limit=1 (Lakebase-backed).
+ *  - Data source readiness: GET /api/admin/sources returns per-source
+ *    rows with status, row counts, and lastModified stamps from
+ *    DESCRIBE DETAIL.
+ *
+ * If a backend call fails we show a muted "temporarily unavailable"
+ * message -- never a fabricated literal.
  */
 
 const ACCENT_SWATCHES: Array<{ k: Accent; color: string }> = [
@@ -34,42 +33,34 @@ const ACCENT_SWATCHES: Array<{ k: Accent; color: string }> = [
   { k: 'red',    color: '#FF3621' },
 ];
 
-/**
- * Threshold defaults mirror backend/config/settings.py. Kept in sync by
- * hand for now; a follow-up slice can expose these via /api/admin/rules
- * once the uvicorn reload story is sorted. Labels match the ones used
- * on the Offer Orchestrator's "raise threshold" story.
- */
-const THRESHOLD_DEFAULTS: Array<{ key: string; label: string; value: string }> = [
-  { key: 'mip_min_spread_bps',            label: 'Min spread (bps)',            value: '75' },
-  { key: 'mip_min_equity_pct',            label: 'Min equity (%)',              value: '15' },
-  { key: 'mip_heloc_equity_min_pct',      label: 'HELOC equity floor (%)',      value: '35' },
-  { key: 'mip_cashout_equity_min_pct',    label: 'Cash-out equity floor (%)',   value: '25' },
-  { key: 'mip_retention_min_spread_bps',  label: 'Retention min spread (bps)',  value: '50' },
-  { key: 'mip_market_rate',               label: 'Market rate reference',       value: '4.875%' },
-];
+// ---------------------------------------------------------------------------
+// API shapes
+// ---------------------------------------------------------------------------
 
-/** Hardcoded edit stamp — the backend /api/admin/rules stub returns only
- *  a version string. We pair it with a plausible edit date so the panel
- *  reads as "live policy" instead of "placeholder copy". */
-const RULES_EDITED_AT = '2026-03-15';
+interface ThresholdRow {
+  key: string;
+  value: number;
+  unit?: string | null;
+  label?: string | null;
+  description?: string | null;
+  sort_order?: number | null;
+  last_updated?: string | null;
+}
 
-/**
- * Known live sources vs. roadmap sources in the Delta Share footprint.
- * Matches the 6-state, 8-source story in CLAUDE.md. When the backend
- * grows a /api/admin/sources endpoint this can read live; until then the
- * split reflects what's actually wired in Unity Catalog.
- */
-const DATA_SOURCES: Array<{ name: string; status: 'ok' | 'roadmap'; note: string }> = [
-  { name: 'Cotality Public Records', status: 'ok',      note: 'Delta Share · nightly' },
-  { name: 'Voluntary Lien',          status: 'ok',      note: 'Delta Share · nightly' },
-  { name: 'MMA Mortgage Analytics',  status: 'ok',      note: 'Delta Share · nightly' },
-  { name: 'CLIP',                    status: 'ok',      note: 'Mastered property id' },
-  { name: 'Owner Link',              status: 'ok',      note: 'Mastered owner graph' },
-  { name: 'AVM',                     status: 'ok',      note: 'Delta Share · weekly' },
-  { name: 'MLS',                     status: 'roadmap', note: 'Contracted · pending load' },
-  { name: 'Building Permits',        status: 'roadmap', note: 'Contracted · pending load' },
-];
+interface RulesResponse {
+  offer_rules_version: string;
+  rules_edited_at: string | null;
+  thresholds: ThresholdRow[];
+  legacy_override?: Record<string, string>;
+}
+
+interface SourceRow {
+  name: string;
+  status: 'live' | 'roadmap';
+  rows: number | null;
+  last_updated: string | null;
+  note: string;
+}
 
 interface AuditProbeShape {
   event_id: string;
@@ -78,9 +69,25 @@ interface AuditProbeShape {
   created_at: string;
 }
 
-interface RulesShape {
-  offer_rules_version?: string;
-  [k: string]: unknown;
+/**
+ * Format a threshold value for display given its unit hint.
+ *   bps            -> integer + " bps"
+ *   pct            -> integer + "%"
+ *   rate_fraction  -> percentage (0.04875 -> "4.875%")
+ *   (anything else) -> the raw numeric string
+ */
+function formatThresholdValue(t: ThresholdRow): string {
+  const unit = (t.unit ?? '').toLowerCase();
+  if (unit === 'bps') {
+    return `${Math.round(t.value)} bps`;
+  }
+  if (unit === 'pct') {
+    return `${Math.round(t.value)}%`;
+  }
+  if (unit === 'rate_fraction') {
+    return `${(t.value * 100).toFixed(3)}%`;
+  }
+  return `${t.value}`;
 }
 
 export default function AdminConfig() {
@@ -100,8 +107,13 @@ export default function AdminConfig() {
   const [rulesExpanded, setRulesExpanded] = useState<boolean>(false);
 
   // Live signals.
-  const [rulesVersion, setRulesVersion] = useState<string | null>(null);
+  const [rules, setRules] = useState<RulesResponse | null>(null);
   const [rulesError, setRulesError] = useState<string | null>(null);
+  const [rulesLoading, setRulesLoading] = useState<boolean>(true);
+
+  const [sources, setSources] = useState<SourceRow[] | null>(null);
+  const [sourcesError, setSourcesError] = useState<string | null>(null);
+  const [sourcesLoading, setSourcesLoading] = useState<boolean>(true);
 
   const [auditLatest, setAuditLatest] = useState<AuditProbeShape | null>(null);
   const [auditError, setAuditError] = useState<string | null>(null);
@@ -109,17 +121,34 @@ export default function AdminConfig() {
 
   useEffect(() => {
     let cancelled = false;
-    // Offer rules version — plain fetch (not via api.ts, which only
-    // exposes typed methods we want to keep narrow). Graceful on error.
+    // Offer rules (UC-backed) — /api/admin/rules reads
+    // mip.ref.offer_rules_config.
     fetch('/api/admin/rules')
-      .then((r) => (r.ok ? (r.json() as Promise<RulesShape>) : Promise.reject(r.status)))
+      .then((r) => (r.ok ? (r.json() as Promise<RulesResponse>) : Promise.reject(r.status)))
       .then((json) => {
         if (cancelled) return;
-        setRulesVersion((json.offer_rules_version as string) ?? null);
+        setRules(json);
+        setRulesLoading(false);
       })
       .catch(() => {
         if (cancelled) return;
         setRulesError('Rules endpoint unreachable');
+        setRulesLoading(false);
+      });
+
+    // Data source readiness (UC-backed) — /api/admin/sources returns
+    // per-source rows with status / rows / last_updated.
+    fetch('/api/admin/sources')
+      .then((r) => (r.ok ? (r.json() as Promise<SourceRow[]>) : Promise.reject(r.status)))
+      .then((rows) => {
+        if (cancelled) return;
+        setSources(rows);
+        setSourcesLoading(false);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setSourcesError('Data source readiness temporarily unavailable');
+        setSourcesLoading(false);
       });
 
     // Audit probe — if Lakebase is down, the router returns 503. We
@@ -147,7 +176,16 @@ export default function AdminConfig() {
     };
   }, []);
 
-  const liveRulesVersion = rulesVersion ? `rules.${rulesVersion}` : 'rules.itm_v3';
+  // Rules version chip label. When the endpoint is up we render the
+  // deterministic hash-based version ("rules.itm_<12hex>"); when it's
+  // down we show a muted "unavailable" chip rather than faking it.
+  const rulesVersionLabel = rules
+    ? `rules.${rules.offer_rules_version}`
+    : rulesError
+    ? 'rules.unavailable'
+    : 'loading…';
+  const liveCount = sources ? sources.filter((s) => s.status === 'live').length : 0;
+  const totalCount = sources ? sources.length : 0;
 
   return (
     <PageShell
@@ -169,15 +207,21 @@ export default function AdminConfig() {
         <div className="surface">
           <div className="surface__hdr" style={{ justifyContent: 'space-between' }}>
             <div className="h-4">Offer rules</div>
-            <Chip variant="neutral">{liveRulesVersion}</Chip>
+            <Chip variant="neutral">{rulesVersionLabel}</Chip>
           </div>
           <div className="surface__body" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             <p className="body" style={{ margin: 0 }}>
-              Thresholds for in-the-money spread, equity, LTV, permit value, and retention scoring. Stored in Unity Catalog.
+              Thresholds for in-the-money spread, equity, LTV, and retention scoring. Stored in Unity Catalog (<span className="mono" style={{ fontSize: 11 }}>mip.ref.offer_rules_config</span>).
             </p>
             <MetaRow
               label="Edited"
-              value={RULES_EDITED_AT}
+              value={
+                rulesLoading
+                  ? 'Loading…'
+                  : rulesError
+                  ? 'Unavailable'
+                  : formatEditedAt(rules?.rules_edited_at ?? null)
+              }
               status={rulesError ? 'warn' : 'ok'}
               statusLabel={rulesError ?? 'Active'}
             />
@@ -187,11 +231,12 @@ export default function AdminConfig() {
               onClick={() => setRulesExpanded((v) => !v)}
               aria-expanded={rulesExpanded}
               style={{ alignSelf: 'flex-start' }}
+              disabled={!rules || rules.thresholds.length === 0}
             >
               <Icon name={rulesExpanded ? 'up' : 'down'} size={12} />
               {rulesExpanded ? 'Hide thresholds' : 'View thresholds'}
             </button>
-            {rulesExpanded && (
+            {rulesExpanded && rules && (
               <div
                 style={{
                   display: 'grid',
@@ -203,8 +248,12 @@ export default function AdminConfig() {
                   fontSize: 12,
                 }}
               >
-                {THRESHOLD_DEFAULTS.map((t) => (
-                  <Row2 key={t.key} label={t.label} value={t.value} />
+                {rules.thresholds.map((t) => (
+                  <Row2
+                    key={t.key}
+                    label={t.label ?? t.key}
+                    value={formatThresholdValue(t)}
+                  />
                 ))}
               </div>
             )}
@@ -253,10 +302,26 @@ export default function AdminConfig() {
         <div className="surface">
           <div className="surface__hdr" style={{ justifyContent: 'space-between' }}>
             <div className="h-4">Data source readiness</div>
-            <Chip variant="neutral">{`${DATA_SOURCES.filter((s) => s.status === 'ok').length} of ${DATA_SOURCES.length} live`}</Chip>
+            <Chip variant={sourcesError ? 'warning' : 'neutral'}>
+              {sourcesError
+                ? 'unavailable'
+                : sourcesLoading
+                ? 'loading…'
+                : `${liveCount} of ${totalCount} live`}
+            </Chip>
           </div>
           <div className="surface__body" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {DATA_SOURCES.map((s) => (
+            {sourcesLoading && (
+              <div className="muted body" style={{ fontSize: 12 }}>
+                Probing Unity Catalog…
+              </div>
+            )}
+            {!sourcesLoading && sourcesError && (
+              <div className="muted body" style={{ fontSize: 12 }}>
+                Data source readiness temporarily unavailable. Try again shortly.
+              </div>
+            )}
+            {!sourcesLoading && !sourcesError && sources?.map((s) => (
               <div
                 key={s.name}
                 style={{
@@ -267,16 +332,29 @@ export default function AdminConfig() {
                   fontSize: 12,
                 }}
               >
-                <StatusDot status={s.status === 'ok' ? 'ok' : 'warn'} />
-                <div style={{ color: 'var(--text-1)' }}>{s.name}</div>
+                <StatusDot status={s.status === 'live' ? 'ok' : 'warn'} />
+                <div style={{ color: 'var(--text-1)' }}>
+                  {s.name}
+                  {s.status === 'live' && s.rows !== null && (
+                    <span
+                      className="muted"
+                      style={{ marginLeft: 8, fontSize: 11, fontFamily: 'var(--font-mono)' }}
+                    >
+                      {s.rows.toLocaleString()} rows
+                    </span>
+                  )}
+                </div>
                 <div
                   style={{
                     color: 'var(--text-3)',
                     fontFamily: 'var(--font-mono)',
                     fontSize: 11,
+                    textAlign: 'right',
                   }}
                 >
-                  {s.status === 'ok' ? s.note : 'roadmap'}
+                  {s.status === 'live'
+                    ? formatSourceLastUpdated(s.last_updated) ?? s.note
+                    : 'roadmap'}
                 </div>
               </div>
             ))}
@@ -515,5 +593,36 @@ function formatAuditTimestamp(iso: string): string {
     return `${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} ${d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}`;
   } catch {
     return iso;
+  }
+}
+
+/**
+ * Rules `rules_edited_at` comes back as the Databricks CAST(timestamp AS
+ * STRING) form ("YYYY-MM-DD HH:MM:SS" in UTC). Re-render in the user's
+ * local locale.
+ */
+function formatEditedAt(stamp: string | null): string {
+  if (!stamp) return 'Never';
+  // Databricks' CAST(timestamp AS STRING) uses a space separator; Date
+  // parses ISO-8601 reliably, so coerce to that form first.
+  const iso = stamp.includes('T') ? stamp : stamp.replace(' ', 'T') + 'Z';
+  try {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return stamp;
+    return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+  } catch {
+    return stamp;
+  }
+}
+
+/** Pretty-print a DESCRIBE DETAIL lastModified stamp (ISO-8601). */
+function formatSourceLastUpdated(iso: string | null): string | null {
+  if (!iso) return null;
+  try {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return null;
+    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  } catch {
+    return null;
   }
 }

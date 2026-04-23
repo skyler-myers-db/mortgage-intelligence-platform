@@ -23,10 +23,13 @@ from backend.schemas.offer import (
     OutreachApproveResponse,
     OutreachDraft,
     OutreachDraftRequest,
+    OutreachRejectRequest,
+    OutreachRejectResponse,
 )
 from backend.services.audit_store import AuditStore, get_audit_store, resolve_actor
 from backend.services.job_trigger import trigger_lifecycle_sync
 from backend.services.lakebase import LakebaseClient, LakebaseError, get_lakebase_client
+from backend.services.pii_redaction import scrub_free_text
 from backend.services.repositories import OutreachRepository, get_outreach_repository
 
 log = logging.getLogger(__name__)
@@ -133,16 +136,30 @@ def approve_outreach(
                 "rationale": None,
             },
         )
+        # Governance §4: the audit metadata mirrors what the approver
+        # saw + what they committed to. ``draft_body`` (when supplied)
+        # lets compliance reconstruct the exact outreach copy that was
+        # released; we keep it out of the ``approvals`` table to avoid
+        # bloating the decision ledger and because action_audit is the
+        # append-only surface governance queries against.
+        audit_payload: dict[str, Any] = {
+            "approval_id": approval_id,
+            "offer_code": payload.offer_code,
+            "borrower_id": payload.borrower_id,
+        }
+        if payload.draft_body:
+            # Defence-in-depth: scrub obvious PII markers (SSN / phone / email /
+            # street address) before the free-text body lands in the append-only
+            # audit ledger. Governance posture says approvers shouldn't paste PII
+            # into the draft in the first place, but an accidental paste
+            # shouldn't become a durable PII leak.
+            audit_payload["draft_body"] = scrub_free_text(payload.draft_body)
         event = audit.write(
             actor=actor,
             action="outreach.approve",
             entity_type="approval",
             entity_id=approval_id,
-            payload_json={
-                "approval_id": approval_id,
-                "offer_code": payload.offer_code,
-                "borrower_id": payload.borrower_id,
-            },
+            payload_json=audit_payload,
             evidence_ids=payload.evidence_ids,
             event_type="APPROVE",
         )
@@ -161,6 +178,80 @@ def approve_outreach(
     background.add_task(trigger_lifecycle_sync, reason="approval")
     return OutreachApproveResponse(
         approved=True,
+        approval_id=approval_id,
+        audit_event_id=event.event_id,
+    )
+
+
+@router.post("/reject", response_model=OutreachRejectResponse)
+def reject_outreach(
+    payload: OutreachRejectRequest,
+    request: Request,
+    background: BackgroundTasks,
+    audit: AuditDep,
+    lakebase: LakebaseDep,
+) -> OutreachRejectResponse:
+    """Governed borrower rejection — audit twin of ``/approve``.
+
+    Audit finding 2026-04-22: the UI's "Reject" controls (Offer
+    Orchestrator banner + LeadTable inline button) only mutated
+    AppContext, so dropped borrowers left no durable trace. Compliance
+    reviewers asking "who rejected this borrower and when" got silence.
+
+    This endpoint closes that gap with the same two-write pattern the
+    approve path uses:
+
+    1. ``mip_app.approvals`` (action='reject') -- the decision record,
+       queryable by campaign / borrower.
+    2. ``mip_app.action_audit`` (event_type='OUTREACH_REJECT') -- the
+       append-only ledger governance §4 queries against.
+
+    The lifecycle-sync trigger fires on reject too so the funnel /
+    lifecycle metric views reflect rejected-borrower counts without
+    waiting for the 04:00 cron. The same debounce applies: clustered
+    rejects coalesce into a single run_now call.
+
+    Failures raise 503 (same contract as approve) so the UI's retry
+    banner + resilience layer get to act; no silent fallback.
+    """
+    actor = payload.actor if payload.actor != "anonymous" else resolve_actor(request)
+    approval_id = str(uuid4())
+    try:
+        lakebase.execute(
+            _APPROVAL_INSERT,
+            {
+                "approval_id": approval_id,
+                "borrower_id": payload.borrower_id,
+                "offer_code": payload.offer_code,
+                "action": "reject",
+                "actor_email": actor,
+                "rationale": payload.rationale,
+            },
+        )
+        audit_payload: dict[str, Any] = {
+            "approval_id": approval_id,
+            "offer_code": payload.offer_code,
+            "borrower_id": payload.borrower_id,
+        }
+        if payload.rationale:
+            audit_payload["rationale"] = payload.rationale
+        event = audit.write(
+            actor=actor,
+            action="outreach.reject",
+            entity_type="approval",
+            entity_id=approval_id,
+            payload_json=audit_payload,
+            evidence_ids=payload.evidence_ids,
+            event_type="OUTREACH_REJECT",
+        )
+    except LakebaseError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    # Same debounced fire-and-forget sync the approve path uses -- the
+    # funnel / lifecycle views need to reflect rejected-borrower counts
+    # without waiting on the daily cron.
+    background.add_task(trigger_lifecycle_sync, reason="rejection")
+    return OutreachRejectResponse(
+        rejected=True,
         approval_id=approval_id,
         audit_event_id=event.event_id,
     )

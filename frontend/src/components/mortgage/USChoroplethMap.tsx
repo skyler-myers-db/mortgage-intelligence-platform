@@ -3,22 +3,27 @@ import { useNavigate } from 'react-router-dom';
 import type { Feature, FeatureCollection, Geometry } from 'geojson';
 import { Icon } from '../Icon';
 import { Chip } from '../Primitives';
+import { api } from '../../lib/api';
+import type { StateRollup } from '../../types';
 
 // Shape of the @svg-maps/usa default export (see vite-env.d.ts).
 interface UsaSvgMapLocation { name: string; id: string; path: string }
 interface UsaSvgMap { label: string; viewBox: string; locations: UsaSvgMapLocation[] }
 
-// FIPS state codes that have real county polygons in us-counties.json.
-// Anything else falls back to the stylized drill (IL_COUNTIES placeholder).
-// Slice 9 re-anchored the county drill from GA->IL so the map-first
-// narrative matches Summit Mortgage's real 6-state Delta Share footprint
-// (IL / CA / FL / TX / WA / CO) with Chicago as the canonical anchor metro.
-// TODO: expand the trimmed TopoJSON to all six footprint states as
-// per-county rollups land.
+// FIPS state codes that have real county polygons in the shipped
+// us-counties.json (trimmed to the 6-state Delta Share footprint in
+// 2026-04-22 audit follow-up). Each entry is lowercase uscode -> FIPS-2.
+// The TopoJSON was regenerated from us-atlas@3 counties-albers-10m and
+// trimmed to 584 counties across IL / CA / FL / TX / WA / CO so every
+// state in the footprint drills cleanly rather than "IL listed but dead"
+// that shipped before.
 const SUPPORTED_COUNTY_STATES: Record<string, string> = {
   il: '17',
   ca: '06',
+  fl: '12',
   tx: '48',
+  wa: '53',
+  co: '08',
 };
 
 // County FIPS -> synthetic borrower count / avg score. Weighted so Cook
@@ -193,13 +198,16 @@ const IL_COUNTIES: DrillRegion[] = [
 // tests/fixtures/mock_population. Slice 9 replaced the Atlanta ZIP set
 // (30305/30309/30324/30339/30308/30318) with Cook County ZIPs so the map
 // drill terminates on the real sample borrower.
+//
+// 2026-04-23 audit: dropped 60614 / 60610 / 60657 from the rendered tile
+// set. They lacked a `borrowerId` and silently no-opped on click, which
+// broke the drill promise ("click a ZIP to open borrower"). Re-add them
+// once the borrower dataset expansion slice lands sample borrowers in
+// those ZIPs.
 const CHI_ZIPS: DrillRegion[] = [
   { id: '60611', name: '60611', d: 'M30,30 L110,30 L110,100 L30,100 Z',   lvl: 4, count: 94, avgScore: 94, borrowerId: 'B-48291' },
   { id: '60647', name: '60647', d: 'M110,30 L200,30 L200,100 L110,100 Z', lvl: 3, count: 72, avgScore: 82, borrowerId: 'B-48294' },
   { id: '60613', name: '60613', d: 'M200,30 L280,30 L280,100 L200,100 Z', lvl: 3, count: 58, avgScore: 80, borrowerId: 'B-48295' },
-  { id: '60614', name: '60614', d: 'M30,100 L110,100 L110,180 L30,180 Z', lvl: 3, count: 68, avgScore: 81 },
-  { id: '60610', name: '60610', d: 'M110,100 L200,100 L200,180 L110,180 Z', lvl: 2, count: 46, avgScore: 76 },
-  { id: '60657', name: '60657', d: 'M200,100 L280,100 L280,180 L200,180 Z', lvl: 2, count: 52, avgScore: 77 },
 ];
 
 type Level = 'state' | 'county' | 'zip';
@@ -275,18 +283,40 @@ function featureBBox(f: Feature): [number, number, number, number] {
   return [minX, minY, maxX, maxY];
 }
 
+/** Selection payload emitted on every state/county/ZIP click. State is
+ *  2-char uppercase USPS code so consumers can run predicates against
+ *  `LeadSummary.state` directly. `county` is the 5-digit FIPS; `zip` is
+ *  the 5-digit string. `null` means the user navigated back to US level. */
+export interface MapSelection {
+  state: string | null;
+  county: string | null;
+  zip: string | null;
+}
+
 interface USChoroplethMapProps {
   height?: number;
   /** Optional segment-code filter. Non-matching states dim. */
   segmentFilter?: string[];
+  /** Fires every time the user drills or navigates back. Always fires
+   *  with the current selection — an empty selection (all nulls) when
+   *  the user returns to US level. */
+  onSelectionChange?: (selection: MapSelection) => void;
+  /** State-level drill behavior. `"filter"` keeps the drill in-place and
+   *  relies on `onSelectionChange` (used by segment-intelligence to
+   *  filter the LeadTable). `"navigate"` deep-links to
+   *  `/lead-queue?state=XX` so the home-page map acts as a teaser. */
+  drillBehavior?: 'filter' | 'navigate';
 }
 
 interface HoverState {
   x: number;
   y: number;
   name: string;
-  count: number;
-  avgScore: number;
+  /** `null` means "we don't have a rollup for this geometry". The
+   *  tooltip renders "—" instead of fabricating a number. Used at the
+   *  county + ZIP levels where we don't have gold-backed rollups. */
+  count: number | null;
+  avgScore: number | null;
   topSegment?: string;
 }
 
@@ -296,7 +326,12 @@ interface HoverState {
  * `MapPlaceholder` (deprecated alias kept for any lingering external
  * imports; remove after the next slice).
  */
-export function USChoroplethMap({ height = 420, segmentFilter }: USChoroplethMapProps) {
+export function USChoroplethMap({
+  height = 420,
+  segmentFilter,
+  onSelectionChange,
+  drillBehavior = 'filter',
+}: USChoroplethMapProps) {
   const [level, setLevel] = useState<Level>('state');
   const [selected, setSelected] = useState<Selected | null>(null);
   const [hover, setHover] = useState<HoverState | null>(null);
@@ -305,6 +340,10 @@ export function USChoroplethMap({ height = 420, segmentFilter }: USChoroplethMap
   const [countyStateId, setCountyStateId] = useState<string | null>(null);
   const [countiesByState, setCountiesByState] = useState<Record<string, CountiesPayload>>({});
   const [countyLoadError, setCountyLoadError] = useState<string | null>(null);
+  // Per-state rollups from /api/geo/state-rollups. `null` = loading; `{}`
+  // = API unreachable (fall back to STATE_FACTS literal). Keyed by
+  // lowercase state code to match @svg-maps/usa location ids.
+  const [liveStateFacts, setLiveStateFacts] = useState<Record<string, StateRollup> | null>(null);
   const navigate = useNavigate();
 
   // Lazy-load the @svg-maps/usa data so the ~140 KB of path strings lands
@@ -314,6 +353,37 @@ export function USChoroplethMap({ height = 420, segmentFilter }: USChoroplethMap
     import('@svg-maps/usa').then((mod) => {
       if (!cancelled) setUsaMap(mod.default as UsaSvgMap);
     });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Fetch per-state rollups from the backend once on mount. The repo
+  // response replaces the `count` + `avgScore` pair in STATE_FACTS with
+  // real rollups; the `lvl` / `topSegment` metadata stays synthetic
+  // because those aren't in gold. On error we silently fall back to the
+  // hardcoded STATE_FACTS so the map still renders rather than going
+  // blank — the honest UX trade-off when the backend is down.
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .stateRollups()
+      .then((payload) => {
+        if (cancelled) return;
+        const byCode: Record<string, StateRollup> = {};
+        for (const r of payload.rollups) {
+          byCode[r.state.toLowerCase()] = r;
+        }
+        setLiveStateFacts(byCode);
+      })
+      .catch(() => {
+        // Silent fallback to STATE_FACTS. This is the one place in the
+        // map where we prefer "synthetic but static" over "degraded
+        // banner" — the map is an ambient surface and a failing hover
+        // shouldn't block the whole page. Everything else on the page
+        // that uses the same /api/* path DOES surface an error banner.
+        if (!cancelled) setLiveStateFacts({});
+      });
     return () => {
       cancelled = true;
     };
@@ -410,8 +480,58 @@ export function USChoroplethMap({ height = 420, segmentFilter }: USChoroplethMap
     );
   }, [segmentFilter]);
 
+  /** Merge the live state rollup (count/avgScore from
+   *  /api/geo/state-rollups) with the static STATE_FACTS metadata
+   *  (lvl/topSegment). Prefers live counts when present; falls back to
+   *  the static literal so the map stays usable when the API is down. */
+  const factsFor = useMemo(() => {
+    return (uscode: string): StateFacts | undefined => {
+      const live = liveStateFacts?.[uscode];
+      const stat = STATE_FACTS[uscode];
+      if (live && stat) {
+        return {
+          count: live.addressable,
+          avgScore: live.avg_score || stat.avgScore,
+          lvl: stat.lvl,
+          topSegment: stat.topSegment,
+        };
+      }
+      if (live) {
+        // State not in STATE_FACTS literal — synthesize minimal facts so
+        // the hover still shows the real count. lvl defaults to 2 (mid
+        // tier); topSegment blank so the tooltip row hides.
+        return {
+          count: live.addressable,
+          avgScore: live.avg_score,
+          lvl: 2,
+          topSegment: '',
+        };
+      }
+      return stat;
+    };
+  }, [liveStateFacts]);
+
+  // Fire the selection callback when the user drills into / out of a
+  // level. Collecting into a single effect keeps the producer logic in
+  // the click handlers pure (they just call setState).
+  useEffect(() => {
+    if (!onSelectionChange) return;
+    const stateCode =
+      selected?.level === 'state'
+        ? selected.id.toUpperCase()
+        : countyStateId
+          ? countyStateId.toUpperCase()
+          : null;
+    const countyFips = selected?.level === 'county' ? selected.id : null;
+    const zip = selected?.level === 'zip' ? selected.id : null;
+    onSelectionChange({ state: stateCode, county: countyFips, zip });
+  }, [selected, countyStateId, onSelectionChange]);
+
   const totalCount = useMemo(() => {
     if (level === 'state') {
+      if (liveStateFacts && Object.keys(liveStateFacts).length > 0) {
+        return Object.values(liveStateFacts).reduce((a, b) => a + b.addressable, 0);
+      }
       return Object.values(STATE_FACTS).reduce((a, b) => a + b.count, 0);
     }
     if (level === 'county') {
@@ -425,7 +545,7 @@ export function USChoroplethMap({ height = 420, segmentFilter }: USChoroplethMap
       return IL_COUNTIES.reduce((a, b) => a + b.count, 0);
     }
     return CHI_ZIPS.reduce((a, b) => a + b.count, 0);
-  }, [level, countyStateId, countiesByState]);
+  }, [level, countyStateId, countiesByState, liveStateFacts]);
 
   // ----- STATE level: real US paths via @svg-maps/usa ----------------------
   const renderStateLevel = () => {
@@ -452,9 +572,10 @@ export function USChoroplethMap({ height = 420, segmentFilter }: USChoroplethMap
       style={{ marginTop: 36, height: 'calc(100% - 36px)' }}
     >
       {usaMap.locations.map((loc) => {
-        const facts = STATE_FACTS[loc.id];
+        const facts = factsFor(loc.id);
         const lvl = facts?.lvl ?? 1;
-        const dim = activeSegNames !== null && facts && !activeSegNames.has(facts.topSegment);
+        const dim =
+          activeSegNames !== null && facts && facts.topSegment && !activeSegNames.has(facts.topSegment);
         const classes = [
           'map-region',
           facts ? `lvl-${lvl}` : '',
@@ -479,7 +600,7 @@ export function USChoroplethMap({ height = 420, segmentFilter }: USChoroplethMap
                 name: loc.name,
                 count: facts.count,
                 avgScore: facts.avgScore,
-                topSegment: facts.topSegment,
+                topSegment: facts.topSegment || undefined,
               })
             }
             onMouseMove={(e) =>
@@ -487,6 +608,33 @@ export function USChoroplethMap({ height = 420, segmentFilter }: USChoroplethMap
             }
             onMouseLeave={() => setHover(null)}
             onClick={() => {
+              if (drillBehavior === 'navigate') {
+                // Home-page teaser → deep-link to the filtered queue. Only
+                // navigate when we actually have data for the state; clicking
+                // an unsupported state is a no-op.
+                if (facts) {
+                  navigate(`/lead-queue?state=${loc.id.toUpperCase()}`);
+                }
+                return;
+              }
+              if (SUPPORTED_COUNTY_STATES[loc.id]) {
+                setLevel('county');
+                setCountyStateId(loc.id);
+                setSelected({ level: 'state', id: loc.id, name: loc.name });
+              } else if (facts) {
+                setSelected({ level: 'state', id: loc.id, name: loc.name });
+              }
+            }}
+            onKeyDown={(e) => {
+              // A11y: role="button" + tabIndex=0 require Enter/Space to
+              // behave like a click for keyboard users. Without this the
+              // map was reachable via Tab but drill-only via mouse.
+              if (e.key !== 'Enter' && e.key !== ' ') return;
+              e.preventDefault();
+              if (drillBehavior === 'navigate') {
+                if (facts) navigate(`/lead-queue?state=${loc.id.toUpperCase()}`);
+                return;
+              }
               if (SUPPORTED_COUNTY_STATES[loc.id]) {
                 setLevel('county');
                 setCountyStateId(loc.id);
@@ -591,8 +739,11 @@ export function USChoroplethMap({ height = 420, segmentFilter }: USChoroplethMap
                   x: e.clientX,
                   y: e.clientY,
                   name: `${f.name} County, ${stateName}`,
-                  count: facts?.count ?? 40,
-                  avgScore: facts?.avgScore ?? 68,
+                  // Honest null when we don't have a county-level
+                  // rollup in gold. 2026-04-23 audit: the prior `?? 40`
+                  // fabrication was called out — render "—" instead.
+                  count: facts?.count ?? null,
+                  avgScore: facts?.avgScore ?? null,
                 })
               }
               onMouseMove={(e) =>
@@ -600,6 +751,16 @@ export function USChoroplethMap({ height = 420, segmentFilter }: USChoroplethMap
               }
               onMouseLeave={() => setHover(null)}
               onClick={() => {
+                if (isCook) {
+                  setLevel('zip');
+                  setSelected({ level: 'county', id: '17031', name: 'Cook County' });
+                } else {
+                  setSelected({ level: 'county', id: f.id, name: f.name });
+                }
+              }}
+              onKeyDown={(e) => {
+                if (e.key !== 'Enter' && e.key !== ' ') return;
+                e.preventDefault();
                 if (isCook) {
                   setLevel('zip');
                   setSelected({ level: 'county', id: '17031', name: 'Cook County' });
@@ -667,8 +828,13 @@ export function USChoroplethMap({ height = 420, segmentFilter }: USChoroplethMap
                   x: e.clientX,
                   y: e.clientY,
                   name: `ZIP ${z.name}, Chicago IL`,
-                  count: z.count,
-                  avgScore: z.avgScore,
+                  // 2026-04-23 audit: ZIP-level rollups do not exist in
+                  // mip.gold yet. The synthetic z.count / z.avgScore
+                  // were honest enough at demo scale but still a fib —
+                  // render "—" until ZIP gold lands. Click-through to
+                  // the sample borrower is what matters at this level.
+                  count: null,
+                  avgScore: null,
                 })
               }
               onMouseMove={(e) =>
@@ -816,11 +982,13 @@ export function USChoroplethMap({ height = 420, segmentFilter }: USChoroplethMap
           <div className="map-tip__name">{hover.name}</div>
           <div className="map-tip__row">
             <span>Borrowers</span>
-            <span className="v num">{hover.count.toLocaleString()}</span>
+            <span className="v num">
+              {hover.count !== null ? hover.count.toLocaleString() : '—'}
+            </span>
           </div>
           <div className="map-tip__row">
             <span>Avg. score</span>
-            <span className="v num">{hover.avgScore}</span>
+            <span className="v num">{hover.avgScore !== null ? hover.avgScore : '—'}</span>
           </div>
           {hover.topSegment && (
             <div className="map-tip__row">

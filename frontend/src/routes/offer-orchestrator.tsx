@@ -47,6 +47,13 @@ export default function OfferOrchestrator() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [approveError, setApproveError] = useState<string | null>(null);
   const [auditId, setAuditId] = useState<string | null>(null);
+  // 2026-04-22: the draft textarea is now controlled and hydrated from
+  // /api/outreach/draft so edits persist through approve (they were
+  // being dropped on a JSX string literal before). `draftLoaded` tracks
+  // whether the backend fetch succeeded so we can render the "default
+  // template used" muted note when we fall back to the local string.
+  const [draftBody, setDraftBody] = useState<string>('');
+  const [draftLoaded, setDraftLoaded] = useState<boolean>(false);
   const { setApproval, approvals, lender } = useApp();
   const approval = id ? approvals[id] : undefined;
 
@@ -56,6 +63,8 @@ export default function OfferOrchestrator() {
     setB(null);
     setRec(null);
     setLoadError(null);
+    setDraftBody('');
+    setDraftLoaded(false);
     Promise.all([api.borrower(id), api.recommendOffer(id)])
       .then(([borrower, recommendation]) => {
         if (cancelled) return;
@@ -69,6 +78,23 @@ export default function OfferOrchestrator() {
             ? `Couldn't load borrower or offer: ${err.message}`
             : "Couldn't load borrower or offer.",
         );
+      });
+    // Fetch the backend-generated draft in parallel. On any failure we
+    // silently keep `draftLoaded=false`; the render path falls back to
+    // the hardcoded template and shows a muted note so the approver
+    // knows the endpoint was unavailable. This matches the degraded-UI
+    // posture in CLAUDE.md -- fail visible, never substitute silently.
+    api
+      .draftOutreach(id)
+      .then((draft) => {
+        if (cancelled) return;
+        if (draft?.body && draft.body.trim().length > 0) {
+          setDraftBody(draft.body);
+          setDraftLoaded(true);
+        }
+      })
+      .catch(() => {
+        // swallow; fall back to defaultDraft below
       });
     return () => {
       cancelled = true;
@@ -106,7 +132,14 @@ Reply or call 1-800-XXX-XXXX.`
       // recommendation hasn't hydrated yet.
       const offer_code = rec?.offer_code ?? b?.recommended_offer ?? null;
       const evidence_ids = rec?.evidence_ids ?? b?.evidence_ids ?? [];
-      const res = await api.approve(id, { offer_code, evidence_ids });
+      // Prefer whatever the approver actually has in front of them:
+      // the controlled textarea's current value. Fall back to the
+      // rendered default template so callers that approved without
+      // touching the textarea still write durable copy into the audit
+      // metadata.
+      const draft_body =
+        (draftLoaded ? draftBody : draftBody) || defaultDraft || null;
+      const res = await api.approve(id, { offer_code, evidence_ids, draft_body });
       if (res.approved) {
         setApproval(id, 'approved');
         setAuditId(res.audit_event_id ?? null);
@@ -122,8 +155,32 @@ Reply or call 1-800-XXX-XXXX.`
     }
   };
 
-  const onReject = () => {
-    setApproval(id, 'rejected');
+  const onReject = async () => {
+    setApproveError(null);
+    try {
+      // Audit finding 2026-04-22: reject used to be a local-state-only
+      // mutation. Now it writes the same governed pair of rows the
+      // approve path does (mip_app.approvals action='reject' +
+      // mip_app.action_audit event_type='OUTREACH_REJECT') and fires
+      // the same lifecycle-sync trigger so the funnel view reflects
+      // the drop. Failures surface as a banner; state flips only on
+      // confirmed success.
+      const offer_code = rec?.offer_code ?? b?.recommended_offer ?? null;
+      const evidence_ids = rec?.evidence_ids ?? b?.evidence_ids ?? [];
+      const res = await api.reject(id, { offer_code, evidence_ids });
+      if (res.rejected) {
+        setApproval(id, 'rejected');
+        setAuditId(res.audit_event_id ?? null);
+      } else {
+        setApproveError('Reject endpoint returned rejected=false.');
+      }
+    } catch (err: unknown) {
+      setApproveError(
+        err instanceof Error
+          ? `Couldn't record rejection: ${err.message}`
+          : "Couldn't record rejection.",
+      );
+    }
   };
 
   if (loadError) {
@@ -229,10 +286,27 @@ Reply or call 1-800-XXX-XXXX.`
             <div className="h-4">Draft outreach · review only</div>
           </div>
           <div className="surface__body">
+            {!draftLoaded && b && (
+              <div
+                className="muted"
+                data-testid="draft-fallback-note"
+                style={{ marginBottom: 6, fontSize: 11 }}
+              >
+                Default template used — offer-draft endpoint unavailable.
+              </div>
+            )}
             <textarea
               key={b?.borrower_id ?? 'empty'}
               aria-label="Outreach draft — review only"
-              defaultValue={defaultDraft}
+              value={draftLoaded ? draftBody : defaultDraft}
+              onChange={(e) => {
+                // Hydrate draftBody on first edit when the backend
+                // draft never loaded, so subsequent edits accumulate
+                // on top of the default template rather than reverting.
+                if (!draftLoaded) setDraftLoaded(true);
+                setDraftBody(e.target.value);
+              }}
+              data-testid="outreach-draft"
               style={{
                 width: '100%',
                 minHeight: 180,
@@ -338,9 +412,9 @@ Reply or call 1-800-XXX-XXXX.`
       <div style={{ marginTop: 'var(--gap-grid)' }}>
         <ApprovalBanner
           text={`${b ? `Borrower ${b.borrower_id}` : 'Borrower'} pending review. Approve writes an audit event and releases the draft into the outreach queue.`}
-          onApprove={onApprove}
-          onReject={onReject}
-          disabled={approval === 'approved'}
+          onApprove={() => void onApprove()}
+          onReject={() => void onReject()}
+          disabled={approval === 'approved' || approval === 'rejected'}
         />
       </div>
 

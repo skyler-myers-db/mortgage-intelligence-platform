@@ -18,30 +18,30 @@ class KpiTrend(BaseModel):
 
 
 class PortfolioPreview(BaseModel):
-    # Real counts from the gold layer.
+    # Headline KPIs — ALL from mip.gold.borrower_360 / funnel_snapshot_daily,
+    # which are derived from Cotality Delta Share + public FRED data. No
+    # lender CRM / campaign / app-activity signal contributes to these.
     marketable_population: int
     high_intent_leads: int
+    top_tier_opportunities: int | None = None  # opportunity_score >= 75
+    offers_recommended: int | None = None       # recommended_offer_code != 'nurture'
     avg_score: int = Field(ge=0, le=100)
-    # Real lifecycle counts from ``mip.gold.funnel_snapshot_daily``: how many
-    # borrowers have been approved and how many have had at least one
-    # outreach action recorded. ``None`` if the snapshot table is empty
-    # (first-boot of a workspace before the sync job has run).
-    approved_count: int | None = None
-    in_outreach_count: int | None = None
     # Optional trend histories keyed by KPI field name. When absent, the UI
     # renders the KPI without a sparkline.
     trends: dict[str, KpiTrend] = Field(default_factory=dict)
     # MAX(snapshot_at) from funnel_snapshot_daily — the most recent time the
-    # gold mirror was refreshed. Rendered in the user's local timezone. None
-    # when no snapshot rows exist yet.
+    # gold mirror was refreshed. Rendered in the user's local timezone.
     data_refreshed_at: datetime | None = None
+    # Lakebase-sourced lifecycle counts (your team's activity in the app).
+    # Not Cotality-derived — hidden from the headline strip but exposed here
+    # for panels that explicitly surface operator activity (e.g. admin
+    # audit trail summary).
+    approved_count: int | None = None
+    in_outreach_count: int | None = None
 
-    # ---- DEPRECATED fields kept to keep older clients rendering cleanly --
-    # `projected_contact_to_app` and `cost_per_contact` were hardcoded
-    # constants (9.7 / 2.18) in a previous slice. They do NOT map to any
-    # real source table (Cotality never provided them; they're lender-side
-    # CRM / campaign data). Left here as always-None so the old client
-    # deserializes without error, but the updated UI ignores them.
+    # ---- DEPRECATED -------------------------------------------------------
+    # Hardcoded 2.18 / 9.7 constants in a previous slice; not Cotality data;
+    # always None now. Kept to keep older clients parsing.
     projected_contact_to_app: float | None = None
     cost_per_contact: float | None = None
 

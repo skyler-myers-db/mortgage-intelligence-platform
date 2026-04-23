@@ -43,6 +43,20 @@ export interface LeadSummary {
   why_now: string;
   evidence_ids: string[];
   approval_status: ApprovalStatus;
+  /** Secondary-filter fields (2026-04-23). Carried from gold.borrower_360
+   *  through gold.lead_population so /segment-intelligence can run real
+   *  client-side predicates against occupancy, owner-link, lien state,
+   *  and purchase intent. All optional with safe defaults so older cached
+   *  payloads still parse. `has_permit` / `listed_for_sale` are BLOCKED
+   *  FALSE in gold until Cotality Building Permits + MLS Delta shares
+   *  land — the UI surfaces a "data-dependency pending" note. */
+  is_owner_occupied?: boolean;
+  is_investor?: boolean;
+  related_property_count?: number;
+  current_lien_balance?: number;
+  second_pos_amount?: number;
+  has_permit?: boolean;
+  listed_for_sale?: boolean;
 }
 
 /** Business-friendly label for a UC source (2026-04-22). `name` is the
@@ -89,14 +103,16 @@ export interface KpiTrend {
 export interface PortfolioPreview {
   marketable_population: number;
   high_intent_leads: number;
+  top_tier_opportunities: number | null;
+  offers_recommended: number | null;
   avg_score: number;
-  approved_count: number | null;
-  in_outreach_count: number | null;
   data_refreshed_at: string | null; // ISO timestamp
   trends?: Record<string, KpiTrend>;
-  // Deprecated — kept for schema compatibility; always null now.
+  // Deprecated — always null. Kept for schema back-compat with older clients.
   projected_contact_to_app: number | null;
   cost_per_contact: number | null;
+  approved_count: number | null;
+  in_outreach_count: number | null;
 }
 
 export interface OfferAlternative {
@@ -135,4 +151,20 @@ export interface GenieAnswer {
   metric_value?: string | null;
   table_rows?: Record<string, unknown>[] | null;
   follow_up_questions?: string[];
+}
+
+/** Per-state aggregate row from `/api/geo/state-rollups` (see
+ *  backend/schemas/geo.py). `state` is the uppercase USPS code. Consumed
+ *  by the USChoroplethMap when the API wiring lands. */
+export interface StateRollup {
+  state: string;
+  addressable: number;
+  in_the_money: number;
+  top_tier_opportunities: number;
+  avg_score: number;
+}
+
+export interface StateRollupResponse {
+  rollups: StateRollup[];
+  snapshot_date?: string | null;
 }

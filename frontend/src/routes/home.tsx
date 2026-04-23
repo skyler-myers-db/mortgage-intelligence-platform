@@ -112,19 +112,19 @@ export default function Home() {
           source={DRAWER_SOURCES.itm}
         />
         <KpiCard
-          label="Approved"
-          valueAnimated={preview?.approved_count ?? null}
-          trend={preview?.trends?.approved_count?.series}
-          delta={formatDelta(preview?.trends?.approved_count?.delta_pct)}
-          deltaDir={preview?.trends?.approved_count?.direction}
+          label="Top-tier opportunities"
+          valueAnimated={preview?.top_tier_opportunities ?? null}
+          trend={preview?.trends?.top_tier_opportunities?.series}
+          delta={formatDelta(preview?.trends?.top_tier_opportunities?.delta_pct)}
+          deltaDir={preview?.trends?.top_tier_opportunities?.direction}
           source={DRAWER_SOURCES.nbo}
         />
         <KpiCard
-          label="In outreach"
-          valueAnimated={preview?.in_outreach_count ?? null}
-          trend={preview?.trends?.in_outreach_count?.series}
-          delta={formatDelta(preview?.trends?.in_outreach_count?.delta_pct)}
-          deltaDir={preview?.trends?.in_outreach_count?.direction}
+          label="Offers recommended"
+          valueAnimated={preview?.offers_recommended ?? null}
+          trend={preview?.trends?.offers_recommended?.series}
+          delta={formatDelta(preview?.trends?.offers_recommended?.delta_pct)}
+          deltaDir={preview?.trends?.offers_recommended?.direction}
           source={DRAWER_SOURCES.nbo}
         />
       </div>
@@ -153,7 +153,7 @@ export default function Home() {
         </div>
       </div>
       <div className="layoutA-grid">
-        <USChoroplethMap />
+        <USChoroplethMap drillBehavior="navigate" />
         <Reveal>
           <AgentActivityLog />
         </Reveal>

@@ -177,10 +177,40 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
     [setApproval],
   );
 
+  /**
+   * Reject from the queue without leaving the page. Audit finding
+   * 2026-04-22: this used to only mutate AppContext, so rejected
+   * borrowers left no durable trace. Now calls `/api/outreach/reject`
+   * which writes `mip_app.approvals` (action='reject') +
+   * `mip_app.action_audit` (OUTREACH_REJECT) and fires the same
+   * lifecycle-sync debounce the approve path uses.
+   *
+   * On failure we surface the error but do NOT flip the local state,
+   * so the user can retry. Matches the approve flow's error posture.
+   */
   const rejectLead = useCallback(
-    (borrowerId: string) => {
+    async (borrowerId: string) => {
       setApprovalError(null);
-      setApproval(borrowerId, 'rejected');
+      setPendingApproval((p) => ({ ...p, [borrowerId]: true }));
+      try {
+        const res = await api.reject(borrowerId);
+        if (res.rejected) {
+          setApproval(borrowerId, 'rejected');
+        } else {
+          setApprovalError(`Reject failed for ${borrowerId}: endpoint returned rejected=false.`);
+        }
+      } catch (err: unknown) {
+        setApprovalError(
+          err instanceof Error
+            ? `Couldn't reject ${borrowerId}: ${err.message}`
+            : `Couldn't reject ${borrowerId}.`,
+        );
+      } finally {
+        setPendingApproval((p) => {
+          const { [borrowerId]: _discard, ...rest } = p;
+          return rest;
+        });
+      }
     },
     [setApproval],
   );
@@ -308,7 +338,7 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
       } else if (key === 'r') {
         if (approvals[expanded] === 'rejected') return;
         e.preventDefault();
-        rejectLead(expanded);
+        void rejectLead(expanded);
       }
     };
     window.addEventListener('keydown', onKey);
@@ -542,9 +572,10 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
                             className="btn btn--sm"
                             aria-label={`Reject ${lead.borrower_id}`}
                             title="Reject"
+                            disabled={Boolean(pendingApproval[lead.borrower_id])}
                             onClick={(e) => {
                               e.stopPropagation();
-                              rejectLead(lead.borrower_id);
+                              void rejectLead(lead.borrower_id);
                             }}
                             data-testid={`lead-reject-${lead.borrower_id}`}
                             style={{ padding: '4px 8px' }}

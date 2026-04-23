@@ -90,9 +90,38 @@ class OutreachApproveRequest(BaseModel):
     offer_code: str | None = None
     actor: str = "anonymous"
     evidence_ids: list[str] = []
+    # 2026-04-22 governance follow-up: the approver may edit the draft
+    # body before approving. We forward the final text into the audit
+    # metadata so compliance can reconstruct exactly what was approved,
+    # not just the borrower + offer code. Optional for back-compat with
+    # callers that haven't been updated yet.
+    draft_body: str | None = None
 
 
 class OutreachApproveResponse(BaseModel):
     approved: bool
+    approval_id: str
+    audit_event_id: str
+
+
+class OutreachRejectRequest(BaseModel):
+    """Payload for ``POST /api/outreach/reject``.
+
+    Mirrors ``OutreachApproveRequest`` so the UI can treat reject as the
+    structural twin of approve. Rejection still writes into
+    ``mip_app.approvals`` (action='reject') + ``mip_app.action_audit``
+    (event_type='OUTREACH_REJECT'), giving compliance the "who / when"
+    answer for every dropped borrower.
+    """
+
+    borrower_id: str
+    offer_code: str | None = None
+    actor: str = "anonymous"
+    evidence_ids: list[str] = []
+    rationale: str | None = None
+
+
+class OutreachRejectResponse(BaseModel):
+    rejected: bool
     approval_id: str
     audit_event_id: str

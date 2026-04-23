@@ -161,6 +161,13 @@ resources:
             warehouse_id: ${var.sql_warehouse_id}
             file:
               path: ../sql/ref/lender_dictionary_seed.sql
+        - task_key: seed_offer_rules_config
+          depends_on:
+            - task_key: init_ref_tables
+          sql_task:
+            warehouse_id: ${var.sql_warehouse_id}
+            file:
+              path: ../sql/ref/offer_rules_config_seed.sql
 
     # Slice 1 mirror: the canonical definition lives in `databricks.yml` as
     # `mip_fred_rates_ingest` (that file is what the bundle actually

@@ -16,6 +16,7 @@ from threading import Lock
 from backend.services.repositories.protocols import (
     BorrowerRepository,
     GenieAnswerRepository,
+    GeoRepository,
     LeadRepository,
     OfferRepository,
     OutreachRepository,
@@ -33,6 +34,7 @@ _BORROWER_REPO: BorrowerRepository | None = None
 _OFFER_REPO: OfferRepository | None = None
 _OUTREACH_REPO: OutreachRepository | None = None
 _GENIE_REPO: GenieAnswerRepository | None = None
+_GEO_REPO: GeoRepository | None = None
 _LOCK = Lock()
 
 
@@ -151,6 +153,28 @@ def get_outreach_repository() -> OutreachRepository:
         return _OUTREACH_REPO
 
 
+def get_geo_repository() -> GeoRepository:
+    """Return the Databricks-backed per-state rollup repository.
+
+    Used by ``/api/geo/state-rollups`` to feed the USChoroplethMap
+    hover/fill with real numbers from ``mip.gold.funnel_snapshot_daily``
+    instead of the hardcoded STATE_FACTS literal the component shipped
+    with in Slice 9.
+    """
+    global _GEO_REPO
+    if _GEO_REPO is not None:
+        return _GEO_REPO
+    from backend.services.databricks_sql import get_sql_client
+    from backend.services.repositories.databricks_repo import (
+        DatabricksGeoRepository,
+    )
+
+    with _LOCK:
+        if _GEO_REPO is None:
+            _GEO_REPO = DatabricksGeoRepository(get_sql_client())
+        return _GEO_REPO
+
+
 def get_genie_answer_repository() -> GenieAnswerRepository:
     """Return the live Genie repository backed by the real Mortgage
     Lead Intelligence space.
@@ -183,7 +207,7 @@ def _reset_singletons_for_tests() -> None:
     NOT for production use.
     """
     global _PORTFOLIO_REPO, _SEGMENT_REPO, _LEAD_REPO, _BORROWER_REPO
-    global _OFFER_REPO, _OUTREACH_REPO, _GENIE_REPO
+    global _OFFER_REPO, _OUTREACH_REPO, _GENIE_REPO, _GEO_REPO
     with _LOCK:
         _PORTFOLIO_REPO = None
         _SEGMENT_REPO = None
@@ -192,3 +216,4 @@ def _reset_singletons_for_tests() -> None:
         _OFFER_REPO = None
         _OUTREACH_REPO = None
         _GENIE_REPO = None
+        _GEO_REPO = None

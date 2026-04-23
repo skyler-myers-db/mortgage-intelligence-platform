@@ -22,6 +22,7 @@ from __future__ import annotations
 from typing import Protocol, runtime_checkable
 
 from backend.schemas.common import EvidenceEvent
+from backend.schemas.geo import StateRollupResponse
 from backend.schemas.lead import Borrower360, LeadSummary, SegmentSummary
 from backend.schemas.portfolio import (
     PortfolioCreateRequest,
@@ -121,6 +122,23 @@ class OutreachRepository(Protocol):
     """
 
     def find_borrower(self, borrower_id: str) -> Borrower360 | None:
+        ...
+
+
+@runtime_checkable
+class GeoRepository(Protocol):
+    """Per-state geography rollups.
+
+    Drives the USChoroplethMap hover tooltip + state-fill levels on
+    ``segment-intelligence`` and ``home`` without fabricating numbers.
+    Backing: the latest ``mip.gold.funnel_snapshot_daily`` snapshot,
+    filtered to ``state != '_ALL' AND segment_code = '_ALL'`` — the
+    per-state national rollup for that day. Counties + ZIPs do NOT have
+    gold rollups yet, so this Protocol intentionally scopes to state
+    grain — the UI renders county/ZIP tooltips blank rather than lying.
+    """
+
+    def state_rollups(self) -> StateRollupResponse:
         ...
 
 

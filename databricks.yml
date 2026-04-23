@@ -1,11 +1,16 @@
 bundle:
   name: mortgage-intelligence-platform
 
-# Target workspace defaults to the DEFAULT CLI profile's host. `dev` is the
-# default development target; `prod` is the same workspace with
-# production-mode guardrails. Run `databricks bundle validate -t dev` before
-# any deploy; run `databricks bundle deploy -t dev` to land the app +
-# resources.
+# `workspace.host` must be literal — the Databricks CLI resolves it at
+# bundle-load time (before variables), so `${var.*}` is rejected here.
+# The URL below is Entrada's dev workspace; a customer deploying this bundle
+# to their own workspace either (a) edits this block once on their fork, or
+# (b) overrides the `host` in their Databricks CLI profile, which the CLI
+# uses for auth when its value matches any target's `workspace.host`. This
+# literal-and-profile contract is the "zero-click after configuring
+# .env.local" story in docs/runbook.md §2. Audit 2026-04-23: flagged as a
+# packaging footgun for non-Entrada customers; resolution ratified with
+# explicit comment + SE checklist on the `prod` target below.
 workspace:
   host: https://dbc-3aa503a9-4fa8.cloud.databricks.com
 
@@ -31,8 +36,9 @@ targets:
   prod:
     mode: production
     # CUSTOMER-SE CHECKLIST BEFORE FIRST `bundle deploy -t prod`:
-    #   1. Override `workspace.host` below to the customer's production
-    #      workspace URL (currently inherits Entrada's dev workspace).
+    #   1. `workspace.host` inherits from the DEFAULT CLI profile (or
+    #      `BUNDLE_VAR_workspace_host`). Point the CLI at the customer's
+    #      production workspace before deploy; no code edit needed.
     #   2. Decide catalog isolation: share `mip` with dev in a single
     #      workspace, or set `variables.uc_catalog.default` to `mip_prod`
     #      for separation. Both are valid; pick one and document.
@@ -175,10 +181,19 @@ resources:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
               path: sql/ref/lender_dictionary_seed.sql
+        - task_key: seed_ref_offer_rules_config
+          description: "MERGE canonical offer-rule thresholds into mip.ref.offer_rules_config (idempotent)."
+          depends_on:
+            - task_key: init_ref_tables
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/ref/offer_rules_config_seed.sql
         - task_key: refresh_silver_pipeline
           description: "Run the Lakeflow feature pipeline to materialize mip.silver.* from the Cotality share."
           depends_on:
             - task_key: seed_ref_lender_dictionary
+            - task_key: seed_ref_offer_rules_config
           pipeline_task:
             pipeline_id: ${resources.pipelines.mip_feature_pipeline.id}
             full_refresh: false
@@ -210,6 +225,14 @@ resources:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
               path: sql/ref/lender_dictionary_seed.sql
+        - task_key: seed_offer_rules_config
+          description: "MERGE canonical offer-rule thresholds into mip.ref.offer_rules_config."
+          depends_on:
+            - task_key: init_ref_tables
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/ref/offer_rules_config_seed.sql
     # Gold-layer materialization. Runs the idempotent DDL manifest (adds
     # any new tables -- e.g. lockin_cohort -- on a bundle deploy), then
     # executes each gold CTAS file in dependency order. This CTAS-via-

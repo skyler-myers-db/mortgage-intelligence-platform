@@ -426,6 +426,18 @@ def redact_lead_row(row: dict[str, Any]) -> dict[str, Any]:
         "why_now": row.get("why_now") or "",
         "evidence_ids": row.get("evidence_ids") or [],
         "approval_status": row.get("approval_status") or "pending",
+        # Secondary-filter fields (2026-04-23). Optional in the schema and
+        # safely-defaulted here so older gold rows (pre-DDL-extension) and
+        # the in-process test fixtures (which build LeadSummary from a
+        # Borrower360 model_dump) both validate. Booleans go through the
+        # same None-tolerant coercion used elsewhere in redaction.
+        "is_owner_occupied": bool(row.get("is_owner_occupied") or False),
+        "is_investor": bool(row.get("is_investor") or False),
+        "related_property_count": int(row.get("related_property_count") or 1),
+        "current_lien_balance": int(row.get("current_lien_balance") or 0),
+        "second_pos_amount": int(row.get("second_pos_amount") or 0),
+        "has_permit": bool(row.get("has_permit") or False),
+        "listed_for_sale": bool(row.get("listed_for_sale") or False),
     }
     _enforce_no_forbidden_keys(output)
     return output
@@ -460,6 +472,58 @@ def redact_evidence_row(row: dict[str, Any]) -> dict[str, Any]:
     return output
 
 
+# Match a US SSN (strict): 3-2-4 digits with dashes.
+_SSN_PATTERN = re.compile(r"\b\d{3}-\d{2}-\d{4}\b")
+# Match a US phone number in common separator forms. Keep conservative — we
+# WILL capture a sales-line follow-up instruction ("call 1-800-XXX-XXXX") if
+# the approver typed one, and that's fine; the draft should never contain a
+# real individual borrower phone number either way. Covers +1, parens,
+# dots, dashes, spaces.
+_PHONE_PATTERN = re.compile(
+    r"(?:\+?1[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?)\d{3}[-.\s]?\d{4}"
+)
+# Match an email address.
+_EMAIL_PATTERN = re.compile(
+    r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"
+)
+# Match a street address like "123 Main St" or "4567 North Oak Ave".
+_STREET_ADDRESS_PATTERN = re.compile(
+    r"\b\d{1,6}\s+[A-Z][A-Za-z0-9.\s]{1,40}\b"
+    r"(?:\s+(?:St|Street|Ave|Avenue|Rd|Road|Blvd|Boulevard|Dr|Drive|Ln|Lane|Way|Ct|Court|Place|Pl|Terrace|Ter|Circle|Cir|Hwy|Highway))\b",
+    re.IGNORECASE,
+)
+
+
+def scrub_free_text(text: str) -> str:
+    """Redact obvious PII markers from free-text drafts before they're
+    persisted to the append-only audit ledger.
+
+    Catches SSN, phone numbers, email addresses, and obvious US street
+    addresses. Leaves the `[first name]` CRM placeholder + `1-800-XXX-XXXX`
+    style tracking numbers intact (the X-string doesn't match the digits-
+    only phone regex).
+
+    This is a defence-in-depth pass, not a comprehensive DLP — the audit
+    governance contract (CLAUDE.md §7) is that approvers don't paste PII
+    into the draft in the first place. The intent of this scrub is to
+    blunt an accidental paste; a determined leak still requires reviewer
+    attention.
+
+    Returns the redacted string. Token replacements:
+        SSN:       [SSN-REDACTED]
+        phone:     [PHONE-REDACTED]
+        email:     [EMAIL-REDACTED]
+        address:   [ADDRESS-REDACTED]
+    """
+    if not text:
+        return text
+    out = _SSN_PATTERN.sub("[SSN-REDACTED]", text)
+    out = _PHONE_PATTERN.sub("[PHONE-REDACTED]", out)
+    out = _EMAIL_PATTERN.sub("[EMAIL-REDACTED]", out)
+    out = _STREET_ADDRESS_PATTERN.sub("[ADDRESS-REDACTED]", out)
+    return out
+
+
 __all__ = [
     "LenderRefResolver",
     "generalize_lender",
@@ -467,6 +531,7 @@ __all__ = [
     "redact_borrower_row",
     "redact_evidence_row",
     "redact_lead_row",
+    "scrub_free_text",
     "synthesize_display_name",
     "synthesize_subject_property",
     # Exposed for test assertions:

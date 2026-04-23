@@ -14,6 +14,7 @@ synthetic population in ``tests/fixtures/mock_population.py``.
 from __future__ import annotations
 
 from backend.schemas.common import EvidenceEvent
+from backend.schemas.geo import StateRollup, StateRollupResponse
 from backend.schemas.lead import Borrower360, LeadSummary, SegmentSummary
 from backend.schemas.portfolio import (
     PortfolioCreateRequest,
@@ -105,3 +106,28 @@ class InProcessMockGenieAnswerRepository:
 
     def respond(self, question: str) -> GenieMessageResponse:
         return _genie_respond(question)
+
+
+# Fixture per-state rollups — covers the 6-state Delta Share footprint
+# so /api/geo/state-rollups returns realistic shapes under test and
+# exercises the same code path the UI hits in prod (no secondary code
+# branch for "no data"). Numbers are proportional to the Apr-2026 share
+# probe in docs/data-sources-gap-analysis.md §1.
+_FIXTURE_STATE_ROLLUPS: list[StateRollup] = [
+    StateRollup(state="IL", addressable=1860, in_the_money=720, top_tier_opportunities=420, avg_score=84),
+    StateRollup(state="CA", addressable=900,  in_the_money=420, top_tier_opportunities=260, avg_score=83),
+    StateRollup(state="FL", addressable=760,  in_the_money=320, top_tier_opportunities=200, avg_score=81),
+    StateRollup(state="TX", addressable=750,  in_the_money=340, top_tier_opportunities=220, avg_score=82),
+    StateRollup(state="WA", addressable=740,  in_the_money=300, top_tier_opportunities=190, avg_score=81),
+    StateRollup(state="CO", addressable=160,  in_the_money=62,  top_tier_opportunities=42,  avg_score=80),
+]
+
+
+class InProcessMockGeoRepository:
+    """Test fixture implementing ``GeoRepository`` from the synthetic rollups."""
+
+    def state_rollups(self) -> StateRollupResponse:
+        return StateRollupResponse(
+            rollups=list(_FIXTURE_STATE_ROLLUPS),
+            snapshot_date="2026-04-22",
+        )

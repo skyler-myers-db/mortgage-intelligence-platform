@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import type { LeadSummary } from '../types';
@@ -9,11 +9,18 @@ import { Chip } from '../components/Primitives';
 /**
  * Lead Queue — deep-dive table route. Full borrower list (filtered by segment
  * URL param if present). Row expand opens the inline dossier preview.
+ *
+ * Also honors `?state=XX` for the home-page map drill-through. The predicate
+ * is applied client-side on the already-loaded lead list so the same fetch
+ * powers both filtered and unfiltered views.
  */
 
 export default function LeadQueue() {
   const [searchParams] = useSearchParams();
   const segment = searchParams.get('segment') ?? undefined;
+  // 2-char state code (e.g. `?state=IL`) from the home-map deep-link.
+  // Uppercased defensively so `/lead-queue?state=il` still works.
+  const stateFilter = (searchParams.get('state') ?? '').toUpperCase() || undefined;
   const [leads, setLeads] = useState<LeadSummary[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
@@ -45,12 +52,24 @@ export default function LeadQueue() {
     };
   }, [segment]);
 
+  const visibleLeads = useMemo(
+    () => (stateFilter ? leads.filter((l) => l.state === stateFilter) : leads),
+    [leads, stateFilter],
+  );
+
   return (
     <PageShell
       eyebrow="Lead Queue"
       title="Ranked borrowers"
       lede="Click a row to expand the borrower preview. Approve or reject inline, or open Borrower 360 for the full dossier. Keyboard: A approves, R rejects the expanded row."
-      heroRight={segment ? <Chip variant="neutral">segment = {segment}</Chip> : undefined}
+      heroRight={
+        segment || stateFilter ? (
+          <>
+            {segment && <Chip variant="neutral">segment = {segment}</Chip>}
+            {stateFilter && <Chip variant="neutral">state = {stateFilter}</Chip>}
+          </>
+        ) : undefined
+      }
     >
       {loadError && (
         <div
@@ -72,12 +91,12 @@ export default function LeadQueue() {
           Loading leads…
         </div>
       )}
-      {!loading && !loadError && leads.length === 0 && (
+      {!loading && !loadError && visibleLeads.length === 0 && (
         <div className="muted body" style={{ marginBottom: 'var(--gap-grid)' }}>
           No leads match this filter.
         </div>
       )}
-      <LeadTable leads={leads} />
+      <LeadTable leads={visibleLeads} />
     </PageShell>
   );
 }

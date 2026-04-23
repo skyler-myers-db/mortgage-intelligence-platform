@@ -4,6 +4,7 @@ import type {
   OfferRecommendation,
   PortfolioPreview,
   SegmentSummary,
+  StateRollupResponse,
 } from '../types';
 
 /**
@@ -36,6 +37,21 @@ export interface ApproveResult {
   approved: boolean;
   approval_id?: string | null;
   audit_event_id?: string | null;
+}
+
+export interface RejectResult {
+  rejected: boolean;
+  approval_id?: string | null;
+  audit_event_id?: string | null;
+}
+
+export interface OutreachDraftResult {
+  borrower_id: string;
+  offer_code: string;
+  channel: 'email' | 'sms';
+  subject?: string | null;
+  body: string;
+  status: 'draft';
 }
 
 export interface GenieResult {
@@ -189,6 +205,8 @@ export const api = {
 
   segments: () => getJson<SegmentSummary[]>('/api/segments'),
 
+  stateRollups: () => getJson<StateRollupResponse>('/api/geo/state-rollups'),
+
   leads: (segment?: string) =>
     getJson<LeadSummary[]>(
       segment ? `/api/leads?segment=${encodeURIComponent(segment)}` : '/api/leads',
@@ -204,7 +222,12 @@ export const api = {
 
   approve: (
     borrower_id: string,
-    opts: { actor?: string; offer_code?: string | null; evidence_ids?: string[] } = {},
+    opts: {
+      actor?: string;
+      offer_code?: string | null;
+      evidence_ids?: string[];
+      draft_body?: string | null;
+    } = {},
   ) =>
     postJson<
       ApproveResult,
@@ -213,6 +236,7 @@ export const api = {
         actor: string;
         offer_code?: string | null;
         evidence_ids?: string[];
+        draft_body?: string | null;
       }
     >('/api/outreach/approve', {
       borrower_id,
@@ -222,7 +246,57 @@ export const api = {
       // so callers that don't have the recommendation hydrated still work.
       offer_code: opts.offer_code ?? null,
       evidence_ids: opts.evidence_ids ?? [],
+      // 2026-04-22: the approver can edit the draft body inline before
+      // approving. Send the final text so compliance can reconstruct
+      // exactly what was released from the audit ledger.
+      draft_body: opts.draft_body ?? null,
     }),
+
+  /**
+   * Reject a borrower from outreach. Structural twin of `approve` —
+   * writes one row to `mip_app.approvals` (action='reject') + one to
+   * `mip_app.action_audit` (event_type='OUTREACH_REJECT'). Fires the
+   * same debounced lifecycle-sync trigger so the funnel snapshot
+   * reflects rejected counts without waiting on the daily cron.
+   */
+  reject: (
+    borrower_id: string,
+    opts: {
+      actor?: string;
+      offer_code?: string | null;
+      evidence_ids?: string[];
+      rationale?: string | null;
+    } = {},
+  ) =>
+    postJson<
+      RejectResult,
+      {
+        borrower_id: string;
+        actor: string;
+        offer_code?: string | null;
+        evidence_ids?: string[];
+        rationale?: string | null;
+      }
+    >('/api/outreach/reject', {
+      borrower_id,
+      actor: opts.actor ?? 'anonymous',
+      offer_code: opts.offer_code ?? null,
+      evidence_ids: opts.evidence_ids ?? [],
+      rationale: opts.rationale ?? null,
+    }),
+
+  /**
+   * Fetch the backend-generated outreach draft for a borrower. The
+   * backend emits a DRAFT_OUTREACH audit row as a side effect so we
+   * know which draft copy was shown to the approver. Callers should
+   * fall back to a local template string if this rejects so the
+   * Offer Orchestrator stays usable when the endpoint is degraded.
+   */
+  draftOutreach: (borrower_id: string, channel: 'email' | 'sms' = 'email') =>
+    postJson<OutreachDraftResult, { borrower_id: string; channel: 'email' | 'sms' }>(
+      '/api/outreach/draft',
+      { borrower_id, channel },
+    ),
 
   genie: (question: string) =>
     postJson<GenieResult, { question: string }>('/api/genie/message', { question }),

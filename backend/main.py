@@ -20,6 +20,7 @@ from backend.api import (
     borrowers,
     config,
     genie,
+    geo,
     health,
     leads,
     offers,
@@ -237,6 +238,7 @@ for router in [
     borrowers.router,
     offers.router,
     outreach.router,
+    geo.router,
     genie.router,
     audit.router,
 ]:

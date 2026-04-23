@@ -36,6 +36,7 @@ import json
 from typing import Any
 
 from backend.schemas.common import EvidenceEvent
+from backend.schemas.geo import StateRollup, StateRollupResponse
 from backend.schemas.lead import Borrower360, LeadSummary, SegmentSummary
 from backend.schemas.portfolio import (
     KpiTrend,
@@ -102,7 +103,14 @@ _LEAD_POPULATION_COLUMNS: str = (
     # through under the same key.
     "clip, borrower_id, display_name, city, state, zip, segment_codes, "
     "equity_estimate, rate_spread_bps, opportunity_score, confidence, "
-    "recommended_offer, why_now, evidence_ids, approval_status"
+    "recommended_offer, why_now, evidence_ids, approval_status, "
+    # Secondary-filter fields (2026-04-23) -- carried through from
+    # gold.borrower_360 into gold.lead_population so /segment-intelligence
+    # can run real client-side predicates against occupancy, owner-link
+    # (related properties), lien state, and purchase intent. Ordering
+    # matches the gold DDL + CTAS (see sql/ddl/gold_lead_population.sql).
+    "is_owner_occupied, is_investor, related_property_count, "
+    "current_lien_balance, second_pos_amount, has_permit, listed_for_sale"
 )
 
 _EVIDENCE_COLUMNS: str = (
@@ -217,9 +225,11 @@ class DatabricksPortfolioRepository:
 
     _PREVIEW_SQL_TEMPLATE = (
         "SELECT "
-        "  COUNT(*)                                               AS marketable_population, "
-        "  SUM(CASE WHEN in_the_money THEN 1 ELSE 0 END)          AS high_intent_leads, "
-        "  CAST(COALESCE(ROUND(AVG(opportunity_score)), 0) AS INT) AS avg_score "
+        "  COUNT(*)                                                              AS marketable_population, "
+        "  SUM(CASE WHEN in_the_money THEN 1 ELSE 0 END)                         AS high_intent_leads, "
+        "  SUM(CASE WHEN opportunity_score >= 75 THEN 1 ELSE 0 END)              AS top_tier_opportunities, "
+        "  SUM(CASE WHEN recommended_offer_code <> 'nurture' THEN 1 ELSE 0 END)  AS offers_recommended, "
+        "  CAST(COALESCE(ROUND(AVG(opportunity_score)), 0) AS INT)               AS avg_score "
         "FROM mip.gold.borrower_360 "
         "{where}"
     )
@@ -333,6 +343,8 @@ class DatabricksPortfolioRepository:
         "  snapshot_at, "
         "  addressable_borrowers          AS marketable_population, "
         "  in_the_money_borrowers         AS high_intent_leads, "
+        "  high_opportunity_borrowers     AS top_tier_opportunities, "
+        "  offer_recommended_borrowers    AS offers_recommended, "
         "  avg_opportunity_score          AS avg_score, "
         "  approved_borrowers             AS approved_count, "
         "  actioned_borrowers             AS in_outreach_count "
@@ -379,6 +391,8 @@ class DatabricksPortfolioRepository:
         for key in (
             "marketable_population",
             "high_intent_leads",
+            "top_tier_opportunities",
+            "offers_recommended",
             "avg_score",
             "approved_count",
             "in_outreach_count",
@@ -409,6 +423,16 @@ class DatabricksPortfolioRepository:
         preview = PortfolioPreview(
             marketable_population=int(row.get("marketable_population") or 0),
             high_intent_leads=int(row.get("high_intent_leads") or 0),
+            top_tier_opportunities=(
+                int(row["top_tier_opportunities"])
+                if row.get("top_tier_opportunities") is not None
+                else None
+            ),
+            offers_recommended=(
+                int(row["offers_recommended"])
+                if row.get("offers_recommended") is not None
+                else None
+            ),
             avg_score=int(row.get("avg_score") or 0),
             approved_count=(
                 int(latest["approved_count"])
@@ -744,6 +768,73 @@ class DatabricksOutreachRepository:
         return self._borrower_repo.get(borrower_id)
 
 
+class DatabricksGeoRepository:
+    """Per-state rollups for the USChoroplethMap.
+
+    Reads the latest ``mip.gold.funnel_snapshot_daily`` snapshot,
+    filtered to state-grain national-cross-segment rows. Powers the
+    hover tooltip (addressable / in-the-money / top-tier / avg_score)
+    plus the state-fill level on the choropleth.
+
+    Short-TTL cached (60s default) so a presenter clicking between
+    segment-intelligence and home pays one warehouse round-trip per
+    minute, not per navigation. The data refreshes daily upstream so
+    60s is a non-issue for correctness.
+    """
+
+    def __init__(
+        self,
+        client: DatabricksSqlClient,
+        *,
+        cache: TTLCache | None = None,
+        cache_ttl_s: float = 60.0,
+    ) -> None:
+        self._client = client
+        self._cache = cache if cache is not None else TTLCache()
+        self._cache_ttl_s = cache_ttl_s
+
+    _SQL = (
+        "SELECT "
+        "  state, "
+        "  addressable_borrowers         AS addressable, "
+        "  in_the_money_borrowers        AS in_the_money, "
+        "  high_opportunity_borrowers    AS top_tier_opportunities, "
+        "  avg_opportunity_score         AS avg_score, "
+        "  snapshot_date "
+        "FROM mip.gold.funnel_snapshot_daily "
+        "WHERE state <> '_ALL' "
+        "  AND segment_code = '_ALL' "
+        "  AND snapshot_date = (SELECT MAX(snapshot_date) FROM mip.gold.funnel_snapshot_daily) "
+        "ORDER BY addressable_borrowers DESC"
+    )
+
+    _CACHE_KEY = "geo.state_rollups"
+
+    def state_rollups(self) -> StateRollupResponse:
+        cached = self._cache.get(self._CACHE_KEY)
+        if cached is not None:
+            return cached
+        rows = self._client.execute(self._SQL) or []
+        rollups = [
+            StateRollup(
+                state=str(r.get("state") or "").upper()[:2],
+                addressable=int(r.get("addressable") or 0),
+                in_the_money=int(r.get("in_the_money") or 0),
+                top_tier_opportunities=int(r.get("top_tier_opportunities") or 0),
+                avg_score=int(r.get("avg_score") or 0),
+            )
+            for r in rows
+            if r.get("state") and str(r.get("state")) != "_ALL"
+        ]
+        snapshot_date: str | None = None
+        if rows:
+            raw = rows[0].get("snapshot_date")
+            snapshot_date = str(raw) if raw is not None else None
+        response = StateRollupResponse(rollups=rollups, snapshot_date=snapshot_date)
+        self._cache.set(self._CACHE_KEY, response, self._cache_ttl_s)
+        return response
+
+
 # ---------------------------------------------------------------------------
 # Private helpers
 # ---------------------------------------------------------------------------
@@ -878,6 +969,7 @@ def _extract_asset_refs(sql: str | None) -> list[str]:
 __all__ = [
     "DatabricksBorrowerRepository",
     "DatabricksGenieRepository",
+    "DatabricksGeoRepository",
     "DatabricksLeadRepository",
     "DatabricksOfferRepository",
     "DatabricksOutreachRepository",

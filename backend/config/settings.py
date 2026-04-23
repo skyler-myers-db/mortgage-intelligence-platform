@@ -106,10 +106,13 @@ class Settings(BaseSettings):
     lakebase_password: SecretStr | None = Field(default=None, repr=False)
     lakebase_sslmode: str = "require"
 
-    # Default actor email used when ``X-Forwarded-Email`` is absent
-    # (local dev / test). The audit writer logs a warning every time
-    # the fallback kicks in so the operator sees it in the logs.
-    default_actor: str = "skyler@entrada.ai"
+    # Default actor identifier used when ``X-Forwarded-Email`` is absent
+    # (local dev / test / broken identity header). Generic, non-customer-
+    # specific so a non-Entrada workspace doesn't surface an Entrada email
+    # address in its own audit rows. The audit writer logs a warning every
+    # time the fallback kicks in so operators see it in structured logs.
+    # Overrideable via the MIP_DEFAULT_ACTOR env var.
+    default_actor: str = "unknown-actor@local"
 
     # Slice-6 TTL cache: short-window memoization on aggregate KPIs that
     # tolerate staleness (segments count, portfolio preview). Fresh-only

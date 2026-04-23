@@ -53,3 +53,45 @@ TBLPROPERTIES (
   'delta.autoOptimize.optimizeWrite' = 'true',
   'delta.autoOptimize.autoCompact'   = 'true'
 );
+
+-- ---------------------------------------------------------------------------
+-- offer_rules_config
+-- ---------------------------------------------------------------------------
+-- Purpose:   Governed threshold vocabulary consumed by the Offer Orchestrator
+--            decision tree (`fn_next_best_offer`), the In-the-Money flag
+--            (`fn_in_the_money`), and the Admin surface (/api/admin/rules).
+--            One row per tunable knob. Values mirror the defaults baked into
+--            the UC functions' headers -- changing a row here does NOT retune
+--            UC compute (the thresholds are passed as explicit args by the
+--            application layer); the row is the single canonical source the
+--            admin UI reads + the product of record for "what is the active
+--            ruleset" on a given day.
+--
+-- Grain:     One row per knob `key`. `key` is the stable identifier the
+--            backend uses (e.g. `mip_min_spread_bps`); labels / descriptions
+--            are copy the admin UI renders directly.
+--
+-- Posture:   CREATE ... IF NOT EXISTS. Idempotent; safe to run on every
+--            bundle deploy. The companion seed SQL
+--            (`sql/ref/offer_rules_config_seed.sql`) MERGEs so re-runs do
+--            not duplicate rows and do refresh `last_updated` when a value
+--            changes.
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS mip.ref.offer_rules_config (
+  key          STRING    NOT NULL COMMENT 'Stable knob id used by the backend, e.g. ''mip_min_spread_bps''. PK.',
+  value        DOUBLE    NOT NULL COMMENT 'Numeric threshold value. bps knobs store an integer in DOUBLE; percentage knobs store the percent (15.0 = 15%); rates store the fractional form (0.04875 = 4.875%).',
+  unit         STRING             COMMENT 'One of: bps | pct | rate_fraction. Informs display formatting.',
+  label        STRING             COMMENT 'Human-readable label rendered in the admin UI threshold table.',
+  description  STRING             COMMENT 'One-line description of what the knob controls.',
+  sort_order   INT                COMMENT 'Display order in the admin UI (1 = first row).',
+  last_updated TIMESTAMP          COMMENT 'CURRENT_TIMESTAMP() on seed/MERGE; changes when the row value changes.',
+  CONSTRAINT offer_rules_config_pk PRIMARY KEY (key)
+)
+USING DELTA
+COMMENT 'Governed threshold vocabulary for offer decisioning. Single source of truth for /api/admin/rules.'
+TBLPROPERTIES (
+  'delta.enableChangeDataFeed'      = 'false',
+  'delta.autoOptimize.optimizeWrite' = 'true',
+  'delta.autoOptimize.autoCompact'   = 'true'
+);

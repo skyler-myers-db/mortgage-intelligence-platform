@@ -41,6 +41,22 @@ class LeadSummary(BaseModel):
     why_now: str
     evidence_ids: list[str]
     approval_status: ApprovalStatus = "pending"
+    # Secondary-filter fields (2026-04-23) -- carried from
+    # gold.borrower_360 through gold.lead_population so the
+    # /segment-intelligence page can run real client-side predicates
+    # against occupancy, owner-link (related properties), lien state, and
+    # purchase intent. All default to safe "unknown" values so older
+    # cached rows + the Borrower360-driven in-process test fixture keep
+    # validating. `has_permit` / `listed_for_sale` are BLOCKED FALSE in
+    # gold until Cotality Building Permits + MLS Delta shares land --
+    # the UI surfaces a "data-dependency pending" note for that filter.
+    is_owner_occupied: bool = False
+    is_investor: bool = False
+    related_property_count: int = 1
+    current_lien_balance: int = 0
+    second_pos_amount: int = 0
+    has_permit: bool = False
+    listed_for_sale: bool = False
 
 
 class Borrower360(LeadSummary):

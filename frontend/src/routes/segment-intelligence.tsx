@@ -1,12 +1,15 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../lib/api';
 import type { LeadSummary, SegmentSummary } from '../types';
 import { PageShell } from '../components/layout/PageShell';
 import { SegmentCard } from '../components/mortgage/SegmentCard';
 import { LeadTable } from '../components/mortgage/LeadTable';
-import { USChoroplethMap } from '../components/mortgage/USChoroplethMap';
-import { Button } from '../components/Primitives';
+import {
+  USChoroplethMap,
+  type MapSelection,
+} from '../components/mortgage/USChoroplethMap';
+import { Button, Chip } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { FilterSelect } from '../components/ui/FilterSelect';
 
@@ -44,6 +47,28 @@ const EQUITY_FLOOR_USD: Record<string, number> = {
   'Equity ≥ 40%': 300_000,
 };
 
+// DEMOGRAPHICS replaced "Homeowner / First-time buyer / Age 55+" (no
+// predicate available) with a real occupancy predicate against
+// `is_owner_occupied`. Options re-phrased to match the signal we actually
+// carry from gold.borrower_360.
+const OCCUPANCY_OPTIONS = ['All', 'Owner-occupied', 'Non-owner-occupied'] as const;
+
+// LIEN (secondary filter) operates on the open-lien state of the subject
+// property. Distinct from the portfolio-builder's primary lien-status
+// filter (which discriminates at the population level). Maps to
+// `current_lien_balance` + `second_pos_amount` from gold.borrower_360.
+const LIEN_OPTIONS = ['Any', 'Open 1st lien only', 'Open 2nd lien / HELOC', 'Free & clear'] as const;
+
+// OWNER LINK buckets use `related_property_count` from the Owner Link
+// bridge. Bucket thresholds match how LOs typically think about borrower
+// portfolios (single / small / large).
+const OWNER_LINK_OPTIONS = ['All', 'Single-property owner', 'Multi-property (2-4)', 'Portfolio investor (5+)'] as const;
+
+// PURCHASE INTENT: wired predicates that will return zero rows until
+// Cotality Building Permits + MLS Delta shares land. Copy on the filter
+// calls this out to the presenter.
+const PURCHASE_OPTIONS = ['All', 'Listed for sale', 'Recent permit activity', 'Both'] as const;
+
 interface ChipFilters {
   location: string;
   demographics: string;
@@ -68,6 +93,19 @@ export default function SegmentIntelligence() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [activeSegs, setActiveSegs] = useState<string[]>(['itm']);
   const [chipFilters, setChipFilters] = useState<ChipFilters>(INITIAL_FILTERS);
+  // Geography drill state emitted by USChoroplethMap. State is the 2-char
+  // USPS code; null = US level (no geography filter). County/ZIP aren't
+  // wired as predicates here yet (LeadSummary carries zip + city but not
+  // county FIPS), but the map still exposes them on selectionChange for
+  // the selection-chip UX.
+  const [mapSelection, setMapSelection] = useState<MapSelection>({
+    state: null,
+    county: null,
+    zip: null,
+  });
+  const handleMapSelection = useCallback((sel: MapSelection) => {
+    setMapSelection(sel);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -113,15 +151,6 @@ export default function SegmentIntelligence() {
     };
   }, []);
 
-  // Filters that have no matching borrower signal (demographics, owner-link,
-  // purchase intent) — used to dim the table so the presenter can signal
-  // intent without hiding rows.
-  const hasSoftFilter =
-    chipFilters.demographics !== 'All' ||
-    chipFilters.ownerLink !== 'All' ||
-    chipFilters.purchase !== 'All' ||
-    chipFilters.lien !== 'Any';
-
   const filtered = useMemo(() => {
     let out = leads;
     if (activeSegs.length > 0) {
@@ -132,26 +161,77 @@ export default function SegmentIntelligence() {
     if (locStates.length > 0) {
       out = out.filter((l) => locStates.includes(l.state));
     }
+    // DEMOGRAPHICS -> occupancy predicate (is_owner_occupied).
+    if (chipFilters.demographics === 'Owner-occupied') {
+      out = out.filter((l) => l.is_owner_occupied === true);
+    } else if (chipFilters.demographics === 'Non-owner-occupied') {
+      out = out.filter((l) => l.is_owner_occupied === false);
+    }
+    // LIEN (secondary) -> current_lien_balance + second_pos_amount.
+    if (chipFilters.lien === 'Open 1st lien only') {
+      out = out.filter(
+        (l) =>
+          (l.current_lien_balance ?? 0) > 0 &&
+          (l.second_pos_amount == null || l.second_pos_amount === 0),
+      );
+    } else if (chipFilters.lien === 'Open 2nd lien / HELOC') {
+      out = out.filter((l) => (l.second_pos_amount ?? 0) > 0);
+    } else if (chipFilters.lien === 'Free & clear') {
+      out = out.filter((l) => (l.current_lien_balance ?? 0) === 0);
+    }
+    // OWNER LINK -> related_property_count buckets.
+    if (chipFilters.ownerLink === 'Single-property owner') {
+      out = out.filter((l) => (l.related_property_count ?? 1) <= 1);
+    } else if (chipFilters.ownerLink === 'Multi-property (2-4)') {
+      const c = (l: LeadSummary) => l.related_property_count ?? 1;
+      out = out.filter((l) => c(l) >= 2 && c(l) <= 4);
+    } else if (chipFilters.ownerLink === 'Portfolio investor (5+)') {
+      out = out.filter((l) => (l.related_property_count ?? 1) >= 5);
+    }
+    // PURCHASE INTENT -> listed_for_sale + has_permit. Both flags are
+    // BLOCKED FALSE in gold until Cotality Building Permits + MLS Delta
+    // shares land, so these predicates will return 0 rows today. The
+    // filter label carries a muted note explaining the data dependency.
+    if (chipFilters.purchase === 'Listed for sale') {
+      out = out.filter((l) => l.listed_for_sale === true);
+    } else if (chipFilters.purchase === 'Recent permit activity') {
+      out = out.filter((l) => l.has_permit === true);
+    } else if (chipFilters.purchase === 'Both') {
+      out = out.filter((l) => l.listed_for_sale === true && l.has_permit === true);
+    }
     // Cash-out equity floor.
     const floor = EQUITY_FLOOR_USD[chipFilters.cashout] ?? 0;
     if (floor > 0) {
       out = out.filter((l) => l.equity_estimate >= floor);
     }
-    // TODO: wire to backend when richer borrower signals land
-    // (demographics / owner-link / purchase-intent / lien-status).
+    // Geography drill: if the user picked a state on the map, restrict
+    // the table to that state. ZIP is a stricter predicate so it runs
+    // next when present. County isn't applied (LeadSummary doesn't carry
+    // county FIPS yet); the selection chip still shows it so the user
+    // sees the drill feedback.
+    if (mapSelection.state) {
+      out = out.filter((l) => l.state === mapSelection.state);
+    }
+    if (mapSelection.zip) {
+      out = out.filter((l) => l.zip === mapSelection.zip);
+    }
     return out;
-  }, [leads, activeSegs, chipFilters]);
+  }, [leads, activeSegs, chipFilters, mapSelection]);
 
   const toggleSeg = (code: string) => {
     setActiveSegs((cur) => (cur.includes(code) ? cur.filter((s) => s !== code) : [...cur, code]));
   };
 
   const filtersDirty =
-    activeSegs.length > 0 || JSON.stringify(chipFilters) !== JSON.stringify(INITIAL_FILTERS);
+    activeSegs.length > 0 ||
+    JSON.stringify(chipFilters) !== JSON.stringify(INITIAL_FILTERS) ||
+    mapSelection.state !== null ||
+    mapSelection.zip !== null;
 
   const clearAll = () => {
     setActiveSegs([]);
     setChipFilters(INITIAL_FILTERS);
+    setMapSelection({ state: null, county: null, zip: null });
   };
 
   return (
@@ -216,27 +296,41 @@ export default function SegmentIntelligence() {
         <FilterSelect
           label="DEMOGRAPHICS"
           value={chipFilters.demographics}
-          options={['All', 'Owner-occupied', 'Investor', 'Second home']}
+          options={[...OCCUPANCY_OPTIONS]}
           onChange={(v) => setChipFilters((f) => ({ ...f, demographics: v }))}
         />
         <FilterSelect
           label="LIEN"
           value={chipFilters.lien}
-          options={['Any', 'Open 1st lien', 'Open HELOC', 'Free & clear']}
+          options={[...LIEN_OPTIONS]}
           onChange={(v) => setChipFilters((f) => ({ ...f, lien: v }))}
         />
         <FilterSelect
           label="OWNER LINK"
           value={chipFilters.ownerLink}
-          options={['All', 'Single property', 'Multi-property']}
+          options={[...OWNER_LINK_OPTIONS]}
           onChange={(v) => setChipFilters((f) => ({ ...f, ownerLink: v }))}
         />
-        <FilterSelect
-          label="PURCHASE INTENT"
-          value={chipFilters.purchase}
-          options={['All', 'Listed for sale', 'Permit activity']}
-          onChange={(v) => setChipFilters((f) => ({ ...f, purchase: v }))}
-        />
+        <div>
+          <FilterSelect
+            label="PURCHASE INTENT"
+            value={chipFilters.purchase}
+            options={[...PURCHASE_OPTIONS]}
+            onChange={(v) => setChipFilters((f) => ({ ...f, purchase: v }))}
+          />
+          <div
+            className="filter-row__hint muted"
+            style={{
+              fontSize: 11,
+              marginTop: 4,
+              maxWidth: 220,
+              lineHeight: 1.35,
+            }}
+          >
+            Cotality MLS + Building Permits Delta shares pending — will
+            return 0 until those feeds land.
+          </div>
+        </div>
         <FilterSelect
           label="CASH-OUT"
           value={chipFilters.cashout}
@@ -256,6 +350,28 @@ export default function SegmentIntelligence() {
               </span>
             )}
           </div>
+          {(mapSelection.state || mapSelection.zip) && (
+            <div style={{ marginTop: 6, display: 'flex', gap: 6 }}>
+              {mapSelection.state && (
+                <Chip variant="neutral" icon="pin">
+                  state: {mapSelection.state}
+                </Chip>
+              )}
+              {mapSelection.zip && (
+                <Chip variant="neutral" icon="pin">
+                  zip: {mapSelection.zip}
+                </Chip>
+              )}
+              <Button
+                size="sm"
+                variant="ghost"
+                icon="cross"
+                onClick={() => setMapSelection({ state: null, county: null, zip: null })}
+              >
+                Clear geography
+              </Button>
+            </div>
+          )}
         </div>
         <Link to="/lead-queue" className="btn">
           Deep-dive lead queue
@@ -263,12 +379,13 @@ export default function SegmentIntelligence() {
         </Link>
       </div>
 
-      <div
-        className="layoutA-grid"
-        style={hasSoftFilter ? { opacity: 0.72, transition: 'opacity var(--dur-fast) var(--ease)' } : undefined}
-      >
+      <div className="layoutA-grid">
         <LeadTable leads={filtered} />
-        <USChoroplethMap height={520} segmentFilter={activeSegs} />
+        <USChoroplethMap
+          height={520}
+          segmentFilter={activeSegs}
+          onSelectionChange={handleMapSelection}
+        />
       </div>
     </PageShell>
   );
