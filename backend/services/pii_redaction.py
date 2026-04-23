@@ -390,9 +390,16 @@ def redact_lead_row(row: dict[str, Any]) -> dict[str, Any]:
     present; otherwise lead_population already carries the synthesized
     ``display_name`` column from gold.
     """
-    city = row.get("city")
-    state = row.get("state")
-    zip5 = row.get("zip")
+    # Coerce None -> "" so the LeadSummary string contract holds even when
+    # a gold.lead_population row has a null location (seen in the real UC
+    # data 2026-04-22: rural / PO-box-only borrowers land with city=NULL,
+    # zip=NULL). Previously this raised a Pydantic ValidationError and the
+    # entire /api/leads call 500'd, which blocked the loan-officer flow on
+    # Segment Intelligence + Lead Queue. Empty string degrades gracefully
+    # in the UI (the location chip just hides).
+    city = row.get("city") or ""
+    state = row.get("state") or ""
+    zip5 = row.get("zip") or ""
     display_name = (
         synthesize_display_name(row["owner_name_hash"])
         if row.get("owner_name_hash")

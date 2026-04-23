@@ -1,7 +1,6 @@
 """App settings for the Mortgage Intelligence Platform backend.
 
-CLAUDE.md / Slice 4 invariant: there is no ``MIP_MOCK_MODE`` runtime
-toggle. The running app always reads live Unity Catalog data through
+Invariant: the running app always reads live Unity Catalog data through
 the Databricks SQL warehouse. Missing warehouse credentials are a
 fail-fast startup error -- they do NOT silently fall back to fixtures.
 
@@ -24,8 +23,9 @@ _MISSING_CREDS_MSG = (
     "Mortgage Intelligence Platform refuses to start without live "
     "Databricks warehouse credentials. Set DATABRICKS_HOST, "
     "DATABRICKS_TOKEN, and DATABRICKS_WAREHOUSE_ID in .env.local "
-    "(see .env.example). There is no mock-mode fallback: the app runs "
-    "on real Unity Catalog data or it fails visibly."
+    "(see .env.example). The app runs on real Unity Catalog data in "
+    "every environment; it fails visibly when a credential is missing "
+    "rather than substituting synthesized data."
 )
 
 

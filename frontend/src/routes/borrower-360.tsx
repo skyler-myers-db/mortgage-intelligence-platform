@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactElement } from 'react';
+import { useEffect, useState, type CSSProperties, type ReactElement } from 'react';
 import { Link, Navigate, useParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import type { Borrower360 as Borrower360Type } from '../types';
@@ -136,9 +136,10 @@ export default function Borrower360() {
   }
 
   const segColor = segmentByCode(b.segment_codes[0])?.color ?? 'var(--accent)';
-  // Strip the "Synthetic property · " legacy artifact so the UI reads as
-  // enterprise, not demo-fixture. The backend's subject_property field
-  // sometimes ships with this prefix; we render the location only.
+  // Strip any "Synthetic property · " legacy prefix so the UI reads as
+  // production, not as a synthesized record. The backend's
+  // subject_property field sometimes ships with this prefix; we render
+  // the location only.
   const propertyAddress = b.subject_property
     .replace(/^Synthetic property\s*·\s*/i, '')
     .trim() || `${b.city}, ${b.state} ${b.zip}`;
@@ -203,15 +204,23 @@ export default function Borrower360() {
                     {b.segment_codes.map((sid) => {
                       const s = segmentByCode(sid);
                       const color = s?.color ?? 'var(--accent)';
+                      // Expose the segment hue via a CSS var so the stylesheet
+                      // can pick the right text color per theme. Dark theme:
+                      // segment hue is the text. Light theme: darker navy text
+                      // (the segment hue is still visible in border + fill).
+                      // Fixes WCAG 1.57/1.91/2.65:1 contrast failures flagged
+                      // in the 2026-04-22 light-theme audit.
                       return (
                         <span
                           key={sid}
-                          className="chip"
-                          style={{
-                            color,
-                            background: `color-mix(in oklab, ${color} 14%, transparent)`,
-                            borderColor: `color-mix(in oklab, ${color} 35%, transparent)`,
-                          }}
+                          className="chip chip--segment"
+                          style={
+                            {
+                              '--chip-hue': color,
+                              background: `color-mix(in oklab, ${color} 14%, transparent)`,
+                              borderColor: `color-mix(in oklab, ${color} 35%, transparent)`,
+                            } as CSSProperties
+                          }
                         >
                           {s?.name ?? sid}
                         </span>

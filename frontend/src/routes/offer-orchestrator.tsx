@@ -360,9 +360,9 @@ Reply or call 1-800-XXX-XXXX.`
         <div
           className="surface"
           role="alert"
-          style={{ marginTop: 'var(--gap-grid)', borderColor: 'var(--signal-error, #EF4444)' }}
+          style={{ marginTop: 'var(--gap-grid)', borderColor: 'var(--signal-danger)' }}
         >
-          <div className="surface__body" style={{ color: 'var(--signal-error, #EF4444)' }}>
+          <div className="surface__body" style={{ color: 'var(--signal-danger)' }}>
             {approveError}
           </div>
         </div>

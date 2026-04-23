@@ -1,7 +1,7 @@
 [project]
 name = "mortgage-intelligence-platform"
 version = "0.1.0"
-description = "Databricks-native Mortgage Intelligence Platform Module 0 demo"
+description = "Databricks-native Mortgage Intelligence Platform — Module 0"
 requires-python = ">=3.11"
 
 # Optional extras. Keep ``otel`` strictly optional: the app must boot

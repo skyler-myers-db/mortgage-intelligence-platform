@@ -99,9 +99,9 @@ export default function AskGenie() {
               <div
                 className="surface"
                 role="alert"
-                style={{ marginTop: 16, background: 'var(--bg-1)', borderColor: 'var(--signal-error, #EF4444)' }}
+                style={{ marginTop: 16, background: 'var(--bg-1)', borderColor: 'var(--signal-danger)' }}
               >
-                <div className="surface__body" style={{ color: 'var(--signal-error, #EF4444)' }}>
+                <div className="surface__body" style={{ color: 'var(--signal-danger)' }}>
                   {errorMsg}
                 </div>
               </div>

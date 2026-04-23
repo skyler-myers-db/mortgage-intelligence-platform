@@ -23,7 +23,9 @@ def preview_portfolio(
     repo: RepoDep,
     payload: PortfolioPreviewRequest | None = None,
 ) -> PortfolioPreview:
-    # Mock mode: criteria don't shift the preview numbers yet; deterministic payload.
+    # Portfolio preview is a deterministic projection of the requested
+    # criteria against the live gold-layer counts in Unity Catalog; the
+    # repository contract returns a stable payload for a stable request.
     return repo.preview(payload)
 
 

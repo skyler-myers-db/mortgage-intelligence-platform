@@ -236,6 +236,16 @@
 [data-theme="light"] .chip--warning { color: #B45309; }
 [data-theme="light"] .chip--danger { color: #B91C1C; }
 
+/* Segment-hued chip. Component sets --chip-hue as an inline var (segment
+ * palette entry) and leaves border + fill to color-mix. Text color is
+ * driven from --chip-hue in dark (readable on navy), and from --text-1
+ * navy in light (the 2026-04-22 light-theme audit flagged bright
+ * teal/pink/blue chip text on white at 1.57/2.65/1.91:1 -- below AA).
+ * Border + fill keep the segment hue so the color semantics are
+ * preserved in both themes. */
+.chip--segment { color: var(--chip-hue, var(--accent)); }
+[data-theme="light"] .chip--segment { color: var(--text-1); }
+
 .chip .src-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }
 
 /* Evidence chip — clickable, opens data source drawer */
@@ -718,6 +728,14 @@
 .filter__label { color: var(--text-3); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; margin-right: 2px; }
 .filter__value { font-weight: 500; color: var(--text-1); font-family: var(--font-mono); font-size: var(--fs-12); }
 .filter.is-active .filter__value { color: var(--accent); }
+/* Light theme: --accent for bright/teal is washed out on white (~1.8:1 /
+ * ~1.6:1, below WCAG AA 4.5:1). Flagged in the 2026-04-22 light-theme
+ * audit on every route (active nav tab, active map filter, active
+ * density/theme toggle, active density chip). --accent-ink resolves to
+ * the accent hue in dark and to a darker navy in light-with-bright/teal
+ * accent so text clears AA while the border/fill (drawn from --accent
+ * and --accent-soft) keeps the "active" color affordance. */
+[data-theme="light"] .filter.is-active .filter__value { color: var(--accent-ink); }
 
 /* ============================================================
    MAP
@@ -814,7 +832,7 @@
   font-size: var(--fs-12); color: var(--text-2); cursor: pointer;
   border-radius: 4px; font-family: var(--font-sans);
 }
-.tweak-row .segmented button.is-active { background: var(--accent-soft); color: var(--accent); }
+.tweak-row .segmented button.is-active { background: var(--accent-soft); color: var(--accent-ink); }
 .tweak-row .row { display: flex; align-items: center; justify-content: space-between; }
 .tweak-row .switch {
   position: relative; width: 32px; height: 18px; border-radius: 999px;

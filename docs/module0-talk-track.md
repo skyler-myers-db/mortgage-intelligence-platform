@@ -1,10 +1,9 @@
-# Module 0 — Conference Session Talk Track
+# Module 0 — Executive Walkthrough
 
 - **Title:** Mortgage Intelligence Platform — Module 0: Top-of-Funnel Lead Generation & Borrower Segmentation
 - **Audience:** Business (Head of Growth / VP Mortgage Lending / Marketing / Sales Mgmt) + Technical (Databricks FS partner, Cotality product/data, Entrada delivery)
 - **Runtime:** 45s open + 6–8 min main + 30s close (~8 min wall clock)
-- **Presenters:** Entrada delivery lead + Databricks FS partner (co-drive)
-- **Venue:** Entrada session, conference 2026
+- **Walkthrough team:** Entrada delivery lead + Databricks FS partner (co-drive)
 - **App URL:** deployed Databricks App at `https://mip-app-2543889327043640.aws.databricksapps.com`, 1440×900, dark theme, compact density. Auth is workspace-identity Bearer (the App mints short-lived creds via `databricks.sdk.core.Config` — no PAT baked into the runtime).
 - **Data posture:** live Unity Catalog on the Cotality Delta Share — never synthesized. Resilience (warehouse warm-start, retries, circuit breakers, SWR-cached health probe, pre-joined gold for hot read paths, degraded-state UI) is how a flaky network is handled; the app fails visibly rather than silently substituting fake data.
 

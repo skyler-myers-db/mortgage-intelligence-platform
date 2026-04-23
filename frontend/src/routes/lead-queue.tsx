@@ -63,9 +63,9 @@ export default function LeadQueue() {
           style={{
             marginBottom: 'var(--gap-grid)',
             padding: '10px 12px',
-            border: '1px solid var(--signal-error, #EF4444)',
+            border: '1px solid var(--signal-danger)',
             borderRadius: 'var(--r-md)',
-            color: 'var(--signal-error, #EF4444)',
+            color: 'var(--signal-danger)',
             fontSize: 12,
           }}
         >

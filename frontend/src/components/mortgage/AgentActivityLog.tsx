@@ -82,10 +82,12 @@ const EMPTY_HEALTH: HealthSnapshot = {
 };
 
 function breakerLabel(b: BreakerState): string | null {
-  // A closed breaker is the happy path; we only surface breaker state
-  // when it's degraded, so the strip stays quiet at rest.
-  if (b === 'open') return 'tripped';
-  if (b === 'half_open') return 'recovering';
+  // A closed breaker is the happy path; we only surface a friendly
+  // status suffix when the dependency is degraded, so the strip stays
+  // quiet at rest. Copy is buyer-facing — we avoid infra jargon like
+  // "tripped" / "open breaker" in favor of plain English.
+  if (b === 'open') return 'reconnecting';
+  if (b === 'half_open') return 'reconnecting';
   return null;
 }
 
@@ -154,7 +156,7 @@ export function AgentActivityLog({ limit = 12 }: { limit?: number }) {
 
   const warehouseBreaker = breakerLabel(health.warehouse_breaker);
   const genieBreaker = breakerLabel(health.genie_breaker);
-  const probeSuffix = health.probe_ms != null ? ` · probe ${health.probe_ms}ms` : '';
+  const probeSuffix = health.probe_ms != null ? ` · ${health.probe_ms} ms` : '';
 
   return (
     <div className="surface">
@@ -175,7 +177,7 @@ export function AgentActivityLog({ limit = 12 }: { limit?: number }) {
           </div>
         )}
         {feedState === 'error' && (
-          <div className="body" style={{ padding: 'var(--sp-3)', color: 'var(--signal-error, #EF4444)' }}>
+          <div className="body" style={{ padding: 'var(--sp-3)', color: 'var(--signal-danger)' }}>
             Audit feed is briefly unavailable. This page will retry on the
             next refresh; live dependency state is shown below.
           </div>
@@ -206,13 +208,13 @@ export function AgentActivityLog({ limit = 12 }: { limit?: number }) {
               width: 6, height: 6, borderRadius: '50%',
               background:
                 health.warehouse === 'up'
-                  ? 'var(--signal-success, #10B981)'
+                  ? 'var(--signal-success)'
                   : health.warehouse === 'down'
-                    ? 'var(--signal-error, #EF4444)'
+                    ? 'var(--signal-danger)'
                     : 'var(--text-3)',
             }}
           />
-          Warehouse {health.warehouse}
+          Analytics warehouse {health.warehouse}
           {warehouseBreaker ? ` · ${warehouseBreaker}` : ''}
         </span>
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
@@ -222,20 +224,20 @@ export function AgentActivityLog({ limit = 12 }: { limit?: number }) {
               width: 6, height: 6, borderRadius: '50%',
               background:
                 health.genie === 'up'
-                  ? 'var(--signal-success, #10B981)'
+                  ? 'var(--signal-success)'
                   : health.genie === 'down'
-                    ? 'var(--signal-error, #EF4444)'
+                    ? 'var(--signal-danger)'
                     : 'var(--text-3)',
             }}
           />
-          Genie {health.genie}
+          AI assistant {health.genie}
           {genieBreaker ? ` · ${genieBreaker}` : ''}
         </span>
         <span className="mono" style={{ marginLeft: 'auto' }}>
-          Last health probe{probeSuffix}
+          Last health check{probeSuffix}
         </span>
       </div>
-      <div className="surface__ft">Written to Lakebase · immutable · exportable to Unity Catalog</div>
+      <div className="surface__ft">Immutable audit · exportable for compliance review</div>
     </div>
   );
 }

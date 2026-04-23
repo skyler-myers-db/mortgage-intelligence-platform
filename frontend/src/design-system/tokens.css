@@ -167,6 +167,12 @@
   /* Darker danger so .kpi__delta.down clears 4.5:1 AA against the
    * white surface (--bg-1 = #FFFFFF). #DC2626 reads at ~4.83:1. */
   --signal-danger: #DC2626;
+  /* Darker success so .kpi__delta.up (the +%/-% text on KPI cards) and
+   * .seg-card__meta .up clear AA against white. The default #10B981 reads
+   * at ~2.54:1 and axe-core flagged it on the 2026-04-22 light-theme
+   * audit. #047857 (same shade already used for .chip--success in light)
+   * reads at ~5.1:1. */
+  --signal-success: #047857;
 
   --accent:        #025080;
   --accent-hover:  #013354;
@@ -194,6 +200,21 @@
 [data-accent="navy"] {
   --accent: #025080; --accent-hover: #013354; --accent-soft: rgba(2,80,128,0.14); --accent-contrast: #FFF;
 }
+
+/* ---------- Theme + accent combinations ----------
+ * The bright-blue (#66C5FF) and teal (#5CE1E6) accents are designed for
+ * impact on a dark surface. On the light theme's white surface they read
+ * at ~1.8:1 / ~1.6:1 -- well under WCAG AA 4.5:1 for normal text. Axe-core
+ * flagged these on active nav tabs, active filter chips, KPI source chips,
+ * and primary-CTA halos across every route in the 2026-04-22 light-theme
+ * audit. Expose a new --accent-ink token that is the accent hue WHEN
+ * readable against the background and a darker navy WHEN not, so the
+ * component CSS can opt into a legible-in-both-themes text color without
+ * losing the "active" accent affordance on the chip/border (which is
+ * still drawn from --accent and --accent-soft). */
+:root { --accent-ink: var(--accent); }
+[data-theme="light"][data-accent="bright"] { --accent-ink: #014E80; }
+[data-theme="light"][data-accent="teal"]   { --accent-ink: #045D62; }
 
 /* ---------- Density ----------
  * Comfortable is the default (carried on :root).
