@@ -40,18 +40,51 @@ const USCODE_TO_FIPS: Record<string, string> = {
 // ZIP not returned in the payload renders "—" on hover (honest null).
 // The fill-level bucket is derived from addressable_borrowers below.
 
-/** Map an addressable_borrower count to one of the four lvl fill tiers.
- *  Thresholds tuned against the 6-state-footprint county distribution so
- *  the visual contrast on the choropleth reads the way the prototype
- *  intended (Cook / LA / Harris land at lvl-4; mid-density counties at
- *  lvl-3; long tail at lvl-1/2). Deterministic so the map never
- *  re-tints between identical refreshes. */
+/** Fixed-threshold fallback (used only when no distribution is available
+ *  -- e.g. the synthetic IL_COUNTIES rectangles before the TopoJSON
+ *  resolves). The real map uses `buildQuantileBucketer` below so the
+ *  gradient reads visually regardless of the absolute count range
+ *  (Cotality TX counties are in the tens of thousands; synthetic demo
+ *  counties are in the hundreds). */
 function lvlFromCount(count: number | null | undefined): 1 | 2 | 3 | 4 {
   if (count === null || count === undefined || count <= 0) return 1;
   if (count >= 500) return 4;
   if (count >= 250) return 3;
   if (count >= 100) return 2;
   return 1;
+}
+
+/** Build a quantile-based bucketer from the live count distribution for
+ *  the currently-drilled layer (counties of the active state, or ZIPs
+ *  of the active county). Splits non-zero counts into 4 equal-size
+ *  buckets: top 25% → lvl-4, next 25% → lvl-3, next 25% → lvl-2,
+ *  bottom 25% → lvl-1. Zero / missing stays at lvl-1 (the CSS floor)
+ *  but those regions render "—" in the hover card, so the visual still
+ *  distinguishes "no data" from "low density."
+ *
+ *  Rationale: the synthetic-demo thresholds (>=500, >=250, >=100) bucket
+ *  every real Cotality TX county into lvl-4 because every county has
+ *  10k+ marketable borrowers. A quantile bucketer keeps the gradient
+ *  readable whether the underlying numbers are in the hundreds or the
+ *  hundred-thousands. */
+function buildQuantileBucketer(counts: number[]): (count: number | null | undefined) => 1 | 2 | 3 | 4 {
+  const nonZero = counts.filter((c) => c > 0).sort((a, b) => a - b);
+  if (nonZero.length < 4) {
+    // Too few data points for meaningful quantiles — fall back to the
+    // fixed scale.
+    return lvlFromCount;
+  }
+  const q = (p: number) => nonZero[Math.min(nonZero.length - 1, Math.floor(nonZero.length * p))];
+  const q25 = q(0.25);
+  const q50 = q(0.5);
+  const q75 = q(0.75);
+  return (count) => {
+    if (count === null || count === undefined || count <= 0) return 1;
+    if (count >= q75) return 4;
+    if (count >= q50) return 3;
+    if (count >= q25) return 2;
+    return 1;
+  };
 }
 
 /**
@@ -319,6 +352,8 @@ interface HoverState {
   count: number | null;
   avgScore: number | null;
   topSegment?: string;
+  /** Source label displayed in the hover card footer. */
+  sourceHint?: string;
 }
 
 /**
@@ -446,15 +481,14 @@ export function USChoroplethMap({
     };
   }, [level, countyStateId, liveCountyFacts]);
 
-  // Lazy-fetch ZIP rollups when the user drills into Cook (17031). The
-  // CTAS only populates ZIPs for counties with borrower rows, so other
-  // counties resolve to an empty list; the UI tolerates that.
+  // Lazy-fetch ZIP rollups when the user drills into any county. The
+  // CTAS only populates ZIPs for counties with borrower rows, so
+  // out-of-footprint counties resolve to an empty list; the UI renders
+  // an "—" hover + no-op click for those.
   useEffect(() => {
     if (level !== 'zip') return;
-    // Cook is the only county that drills to ZIP level today; a future
-    // slice can drive this from `selected.id` when other counties get
-    // ZIP tile sets.
-    const fips = '17031';
+    const fips = selected?.level === 'county' ? selected.id : null;
+    if (!fips) return;
     if (liveZipFacts[fips]) return;
     let cancelled = false;
     api
@@ -471,7 +505,7 @@ export function USChoroplethMap({
     return () => {
       cancelled = true;
     };
-  }, [level, liveZipFacts]);
+  }, [level, selected, liveZipFacts]);
 
   // Lazy-load real county polygons when drilled into a supported state.
   // us-counties.json is a pre-trimmed TopoJSON (~170KB raw / ~57KB
@@ -602,6 +636,27 @@ export function USChoroplethMap({
     };
   }, [liveStateFacts]);
 
+  // Quantile bucketer for the county layer of the currently-drilled
+  // state. Computed per-payload so the gradient reads whether the real
+  // counts are in the hundreds or the hundred-thousands (see
+  // `buildQuantileBucketer` docstring).
+  const countyBucketer = useMemo(() => {
+    const stateUC = countyStateId?.toUpperCase() ?? '';
+    const byFips = liveCountyFacts[stateUC];
+    if (!byFips) return lvlFromCount;
+    const counts = Object.values(byFips).map((r) => r.addressable_borrowers ?? 0);
+    return buildQuantileBucketer(counts);
+  }, [countyStateId, liveCountyFacts]);
+
+  // Quantile bucketer for the ZIP layer of the currently-drilled county.
+  const zipBucketer = useMemo(() => {
+    const fips = selected?.level === 'county' ? selected.id : '';
+    const byZip = liveZipFacts[fips];
+    if (!byZip) return lvlFromCount;
+    const counts = Object.values(byZip).map((r) => r.addressable_borrowers ?? 0);
+    return buildQuantileBucketer(counts);
+  }, [selected, liveZipFacts]);
+
   // Fire the selection callback when the user drills into / out of a
   // level. Collecting into a single effect keeps the producer logic in
   // the click handlers pure (they just call setState).
@@ -638,8 +693,9 @@ export function USChoroplethMap({
       // doesn't flash 0 while the county payload is in flight.
       return liveStateFacts?.[countyStateId ?? '']?.addressable ?? 0;
     }
-    // ZIP level
-    const liveByZip = liveZipFacts['17031'];
+    // ZIP level — key off the selected county, not a hardcoded FIPS.
+    const fips = selected?.level === 'county' ? selected.id : null;
+    const liveByZip = fips ? liveZipFacts[fips] : undefined;
     if (liveByZip) {
       return Object.values(liveByZip).reduce(
         (a, r) => a + (r.addressable_borrowers ?? 0),
@@ -647,7 +703,7 @@ export function USChoroplethMap({
       );
     }
     return 0;
-  }, [level, countyStateId, liveStateFacts, liveCountyFacts, liveZipFacts]);
+  }, [level, countyStateId, selected, liveStateFacts, liveCountyFacts, liveZipFacts]);
 
   // ----- STATE level: real US paths via @svg-maps/usa ----------------------
   const renderStateLevel = () => {
@@ -703,6 +759,7 @@ export function USChoroplethMap({
                 count: facts.count,
                 avgScore: facts.avgScore,
                 topSegment: facts.topSegment || undefined,
+                sourceHint: 'mip.gold.state_rollup',
               })
             }
             onMouseMove={(e) =>
@@ -824,8 +881,9 @@ export function USChoroplethMap({
           const liveFacts = liveCountyFacts[stateUC]?.[f.id];
           const count = liveFacts?.addressable_borrowers ?? null;
           const avgScore = liveFacts?.avg_opportunity_score ?? null;
-          const lvl = lvlFromCount(count);
-          const isCook = f.id === '17031';
+          const topSegCode = liveFacts?.top_segment_code ?? null;
+          const topSegment = topSegCode ? (SEGMENT_CODE_TO_NAME[topSegCode] ?? undefined) : undefined;
+          const lvl = countyBucketer(count);
           const classes = [
             'map-region',
             `lvl-${lvl}`,
@@ -851,6 +909,8 @@ export function USChoroplethMap({
                   // excluded it as out-of-footprint). Tooltip renders "—".
                   count,
                   avgScore,
+                  topSegment,
+                  sourceHint: 'mip.gold.county_rollup',
                 })
               }
               onMouseMove={(e) =>
@@ -858,22 +918,18 @@ export function USChoroplethMap({
               }
               onMouseLeave={() => setHover(null)}
               onClick={() => {
-                if (isCook) {
-                  setLevel('zip');
-                  setSelected({ level: 'county', id: '17031', name: 'Cook County' });
-                } else {
-                  setSelected({ level: 'county', id: f.id, name: f.name });
-                }
+                // Every county drills to ZIP level. The /api/geo/zip-rollups
+                // fetch may return an empty list for out-of-footprint
+                // counties -- the ZIP render handles that with an empty
+                // state + "open in Lead Queue" fallback.
+                setLevel('zip');
+                setSelected({ level: 'county', id: f.id, name: `${f.name} County` });
               }}
               onKeyDown={(e) => {
                 if (e.key !== 'Enter' && e.key !== ' ') return;
                 e.preventDefault();
-                if (isCook) {
-                  setLevel('zip');
-                  setSelected({ level: 'county', id: '17031', name: 'Cook County' });
-                } else {
-                  setSelected({ level: 'county', id: f.id, name: f.name });
-                }
+                setLevel('zip');
+                setSelected({ level: 'county', id: f.id, name: `${f.name} County` });
               }}
             />
           );
@@ -914,70 +970,235 @@ export function USChoroplethMap({
     );
   };
 
-  // ----- ZIP level: Chicago ZIPs; click drills to borrower 360 --------------
-  const renderZipLevel = () => (
-    <svg
-      viewBox="0 0 310 210"
-      preserveAspectRatio="xMidYMid meet"
-      style={{ marginTop: 36, height: 'calc(100% - 36px)' }}
-    >
-      {CHI_ZIP_TILES.map((z) => {
-        // Live ZIP facts from /api/geo/zip-rollups?fips=17031. Count /
-        // avg_score / sample_borrower_id all come from the payload.
-        // Pre-fetch renders count=null (tooltip shows "—") and a no-op
-        // click (no sample_borrower_id yet).
-        const liveFacts = liveZipFacts['17031']?.[z.id];
-        const count = liveFacts?.addressable_borrowers ?? null;
-        const avgScore = liveFacts?.avg_opportunity_score ?? null;
-        const sampleBorrowerId = liveFacts?.sample_borrower_id ?? null;
-        const classes = [
-          'map-region',
-          `lvl-${lvlFromCount(count)}`,
-          selected?.level === 'zip' && selected.id === z.id ? 'is-selected' : '',
-        ]
-          .filter(Boolean)
-          .join(' ');
-        return (
-          <g key={z.id}>
-            <path
-              d={z.d}
-              className={classes}
-              onMouseEnter={(e) =>
-                setHover({
-                  x: e.clientX,
-                  y: e.clientY,
-                  name: `ZIP ${z.name}, Chicago IL`,
-                  count,
-                  avgScore,
-                })
-              }
-              onMouseMove={(e) =>
-                setHover((h) => (h ? { ...h, x: e.clientX, y: e.clientY } : h))
-              }
-              onMouseLeave={() => setHover(null)}
-              onClick={() => {
-                setSelected({ level: 'zip', id: z.id, name: z.name });
-                if (sampleBorrowerId) {
-                  navigate(`/borrower-360/${sampleBorrowerId}`);
-                }
-              }}
-            />
-            {/* ZIP label */}
-            <text
-              x={extractX(z.d) + 35}
-              y={extractY(z.d) + 38}
-              fontSize="12"
-              fontFamily="var(--font-mono)"
-              fill="var(--text-1)"
-              pointerEvents="none"
+  // ----- ZIP level: tile grid for the active county. -----------------------
+  // Cook County retains its stylized 3-tile layout from the prototype; every
+  // other county auto-generates a responsive tile grid from the live ZIP
+  // rollup payload so the drill works for the whole footprint.
+  const renderZipLevel = () => {
+    const countyFips = selected?.level === 'county' ? selected.id : null;
+    const countyName = selected?.level === 'county' ? selected.name : '';
+    const stateUC =
+      countyStateId?.toUpperCase() ??
+      (countyFips ? Object.entries(USCODE_TO_FIPS).find(([, v]) => countyFips.startsWith(v))?.[0].toUpperCase() ?? '' : '');
+    if (!countyFips) return null;
+    const byZip = liveZipFacts[countyFips];
+    const zipsFromApi = byZip ? Object.values(byZip) : [];
+
+    // Cook County keeps its prototype stylized geometry when the API
+    // returned ZIPs for the three Chicago anchors; otherwise we auto-tile.
+    const useStyled = countyFips === '17031' && zipsFromApi.length > 0;
+    const styledTiles = CHI_ZIP_TILES.filter((t) => byZip?.[t.id]);
+    const useStyledRender = useStyled && styledTiles.length >= 3;
+
+    if (byZip && zipsFromApi.length === 0) {
+      // API returned empty — county outside footprint or CTAS hasn't
+      // populated ZIPs for it. Give the user a graceful fallback path.
+      return (
+        <div
+          style={{
+            marginTop: 36,
+            height: 'calc(100% - 36px)',
+            display: 'grid',
+            placeItems: 'center',
+            padding: 'var(--sp-4)',
+          }}
+        >
+          <div style={{ textAlign: 'center', color: 'var(--text-3)', fontSize: 12, maxWidth: 300 }}>
+            <div style={{ color: 'var(--text-2)', marginBottom: 'var(--sp-2)' }}>
+              No ZIP-level rollup for {countyName}.
+            </div>
+            <button
+              type="button"
+              className="btn btn--ghost"
+              style={{ fontSize: 12 }}
+              onClick={() => navigate(`/lead-queue?state=${stateUC}&county=${countyFips}`)}
             >
-              {z.name}
-            </text>
-          </g>
-        );
-      })}
-    </svg>
-  );
+              Open Lead Queue for this county
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    if (!byZip) {
+      return (
+        <div
+          style={{
+            marginTop: 36,
+            height: 'calc(100% - 36px)',
+            display: 'grid',
+            placeItems: 'center',
+            color: 'var(--text-3)',
+            fontSize: 12,
+          }}
+        >
+          Loading ZIPs…
+        </div>
+      );
+    }
+
+    if (useStyledRender) {
+      // Prototype-style Chicago ZIP layout.
+      return (
+        <svg viewBox="0 0 310 210" preserveAspectRatio="xMidYMid meet" style={{ marginTop: 36, height: 'calc(100% - 36px)' }}>
+          {styledTiles.map((z) => {
+            const liveFacts = byZip[z.id];
+            const count = liveFacts?.addressable_borrowers ?? null;
+            const avgScore = liveFacts?.avg_opportunity_score ?? null;
+            const topSegCode = liveFacts?.top_segment_code ?? null;
+            const topSegment = topSegCode ? SEGMENT_CODE_TO_NAME[topSegCode] : undefined;
+            const sampleBorrowerId = liveFacts?.sample_borrower_id ?? null;
+            const classes = [
+              'map-region',
+              `lvl-${zipBucketer(count)}`,
+              selected?.level === 'zip' && selected.id === z.id ? 'is-selected' : '',
+            ]
+              .filter(Boolean)
+              .join(' ');
+            return (
+              <g key={z.id}>
+                <path
+                  d={z.d}
+                  className={classes}
+                  onMouseEnter={(e) =>
+                    setHover({
+                      x: e.clientX,
+                      y: e.clientY,
+                      name: `ZIP ${z.name}, ${countyName}`,
+                      count,
+                      avgScore,
+                      topSegment,
+                      sourceHint: 'mip.gold.zip_rollup',
+                    })
+                  }
+                  onMouseMove={(e) =>
+                    setHover((h) => (h ? { ...h, x: e.clientX, y: e.clientY } : h))
+                  }
+                  onMouseLeave={() => setHover(null)}
+                  onClick={() => {
+                    setSelected({ level: 'zip', id: z.id, name: z.name });
+                    if (sampleBorrowerId) {
+                      navigate(`/borrower-360/${sampleBorrowerId}`);
+                    }
+                  }}
+                />
+                <text
+                  x={extractX(z.d) + 35}
+                  y={extractY(z.d) + 38}
+                  fontSize="12"
+                  fontFamily="var(--font-mono)"
+                  fill="var(--text-1)"
+                  pointerEvents="none"
+                >
+                  {z.name}
+                </text>
+              </g>
+            );
+          })}
+        </svg>
+      );
+    }
+
+    // Auto-tiled grid for every other county. Sort descending by count so
+    // the densest ZIPs land in the top-left -- reads like a Pareto.
+    const sorted = [...zipsFromApi].sort(
+      (a, b) => (b.addressable_borrowers ?? 0) - (a.addressable_borrowers ?? 0),
+    );
+    const visible = sorted.slice(0, 24);
+    const cols = Math.min(6, Math.ceil(Math.sqrt(Math.max(1, visible.length))));
+    const rows = Math.ceil(visible.length / cols);
+    const tileW = 80;
+    const tileH = 56;
+    const gap = 6;
+    const vbW = cols * tileW + (cols + 1) * gap;
+    const vbH = rows * tileH + (rows + 1) * gap;
+
+    return (
+      <svg
+        viewBox={`0 0 ${vbW} ${vbH}`}
+        preserveAspectRatio="xMidYMid meet"
+        style={{ marginTop: 36, height: 'calc(100% - 36px)' }}
+      >
+        {visible.map((rollup, i) => {
+          const col = i % cols;
+          const row = Math.floor(i / cols);
+          const x = gap + col * (tileW + gap);
+          const y = gap + row * (tileH + gap);
+          const count = rollup.addressable_borrowers ?? null;
+          const avgScore = rollup.avg_opportunity_score ?? null;
+          const topSegCode = rollup.top_segment_code ?? null;
+          const topSegment = topSegCode ? SEGMENT_CODE_TO_NAME[topSegCode] : undefined;
+          const sampleBorrowerId = rollup.sample_borrower_id ?? null;
+          const classes = [
+            'map-region',
+            `lvl-${zipBucketer(count)}`,
+            selected?.level === 'zip' && selected.id === rollup.zip ? 'is-selected' : '',
+          ]
+            .filter(Boolean)
+            .join(' ');
+          return (
+            <g key={rollup.zip}>
+              <rect
+                x={x}
+                y={y}
+                width={tileW}
+                height={tileH}
+                rx={6}
+                ry={6}
+                className={classes}
+                role="button"
+                tabIndex={0}
+                aria-label={`ZIP ${rollup.zip}`}
+                onMouseEnter={(e) =>
+                  setHover({
+                    x: e.clientX,
+                    y: e.clientY,
+                    name: `ZIP ${rollup.zip}, ${countyName}`,
+                    count,
+                    avgScore,
+                    topSegment,
+                    sourceHint: 'mip.gold.zip_rollup',
+                  })
+                }
+                onMouseMove={(e) =>
+                  setHover((h) => (h ? { ...h, x: e.clientX, y: e.clientY } : h))
+                }
+                onMouseLeave={() => setHover(null)}
+                onClick={() => {
+                  setSelected({ level: 'zip', id: rollup.zip, name: rollup.zip });
+                  if (sampleBorrowerId) {
+                    navigate(`/borrower-360/${sampleBorrowerId}`);
+                  }
+                }}
+              />
+              <text
+                x={x + tileW / 2}
+                y={y + tileH / 2 - 2}
+                textAnchor="middle"
+                fontSize="11"
+                fontFamily="var(--font-mono)"
+                fill="var(--text-1)"
+                pointerEvents="none"
+              >
+                {rollup.zip}
+              </text>
+              <text
+                x={x + tileW / 2}
+                y={y + tileH / 2 + 14}
+                textAnchor="middle"
+                fontSize="9"
+                fontFamily="var(--font-mono)"
+                fill="var(--text-3)"
+                pointerEvents="none"
+              >
+                {count !== null ? count.toLocaleString() : '—'}
+              </text>
+            </g>
+          );
+        })}
+      </svg>
+    );
+  };
 
   return (
     <div className="map-wrap" style={{ height }}>
@@ -1029,11 +1250,11 @@ export function USChoroplethMap({
               </button>
             </>
           )}
-          {level === 'zip' && (
+          {level === 'zip' && selected?.level === 'county' && (
             <>
               <Icon name="chevright" size={11} />
               <span className="filter is-active" style={{ padding: '3px 8px' }}>
-                <span className="filter__value">Chicago Metro</span>
+                <span className="filter__value">{selected.name}</span>
               </span>
             </>
           )}
@@ -1046,9 +1267,7 @@ export function USChoroplethMap({
           {level === 'state'
             ? `Click ${Object.keys(supportedCountyStates).map((s) => s.toUpperCase()).join(', ')} to drill`
             : level === 'county'
-              ? countyStateId === 'il'
-                ? 'Click Cook to drill'
-                : 'Hover a county for detail'
+              ? 'Click any county to drill'
               : 'Click a ZIP to open borrower'}
         </Chip>
       </div>
@@ -1084,39 +1303,46 @@ export function USChoroplethMap({
         </div>
       </div>
 
-      {/* Hover tooltip */}
+      {/* Hover tooltip — infographic-style card. Wider layout (280px) with
+          a dual-KPI grid (marketable population + avg score) + a top-segment
+          callout + source lineage footer. Slice: hover-infographic-richness,
+          2026-04-23. */}
       {hover && (
         <div
           className="map-tip"
           style={{
-            left: Math.max(120, Math.min(window.innerWidth - 200, hover.x)),
+            left: Math.max(160, Math.min(window.innerWidth - 160, hover.x)),
             top: hover.y - 4,
           }}
         >
           <div className="map-tip__name">{hover.name}</div>
-          <div className="map-tip__row">
-            <span>Borrowers</span>
-            <span className="v num">
-              {hover.count !== null ? hover.count.toLocaleString() : '—'}
-            </span>
-          </div>
-          <div className="map-tip__row">
-            <span>Avg. score</span>
-            <span className="v num">{hover.avgScore !== null ? hover.avgScore : '—'}</span>
+          <div className="map-tip__kpis">
+            <div className="map-tip__kpi">
+              <div className="map-tip__kpi-label">Marketable</div>
+              <div className="map-tip__kpi-value">
+                {hover.count !== null ? hover.count.toLocaleString() : '—'}
+              </div>
+            </div>
+            <div className="map-tip__kpi">
+              <div className="map-tip__kpi-label">Avg. score</div>
+              <div className="map-tip__kpi-value">
+                {hover.avgScore !== null ? hover.avgScore : '—'}
+              </div>
+            </div>
           </div>
           {hover.topSegment && (
-            <div className="map-tip__row">
-              <span>Top segment</span>
-              <span className="v">{hover.topSegment}</span>
+            <div className="map-tip__seg">
+              <span className="map-tip__seg-label">Top segment</span>
+              <span className="map-tip__seg-value">{hover.topSegment}</span>
             </div>
           )}
           <div
             className="map-tip__row"
-            style={{ marginTop: 4, borderTop: '1px dashed var(--line-1)', paddingTop: 4 }}
+            style={{ marginTop: 0, borderTop: '1px dashed var(--line-1)', paddingTop: 'var(--sp-2)' }}
           >
             <span>Source</span>
             <span className="v mono" style={{ fontSize: 10 }}>
-              CLIP + MMA
+              {hover.sourceHint ?? 'mip.gold'}
             </span>
           </div>
         </div>

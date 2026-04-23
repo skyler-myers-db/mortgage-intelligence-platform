@@ -50,8 +50,8 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
     description:
       'Deed & mortgage records joined to voluntary liens and the Owner Link graph, filtered by the lender configuration.',
     lineage: [
-      { layer: 'SOURCE', name: 'cotality.public_records.deed_and_mortgage', meta: 'Delta Share · 142M rows' },
-      { layer: 'SOURCE', name: 'cotality.liens.voluntary_lien', meta: 'Delta Share · 98M rows' },
+      { layer: 'SOURCE', name: 'cotality.public_records.deed_and_mortgage', meta: 'Delta Share · nationwide' },
+      { layer: 'SOURCE', name: 'cotality.liens.voluntary_lien', meta: 'Delta Share · nationwide' },
       { layer: 'ENTITY', name: 'entity.property_clip', meta: 'Mastered via CLIP' },
       { layer: 'ENTITY', name: 'entity.owner_link', meta: 'Mastered via Owner Link' },
       { layer: 'SEMANTIC', name: 'metrics.borrower_universe', meta: 'UC metric view' },
@@ -65,14 +65,14 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
   },
   itm: {
     title: 'In-the-Money logic',
-    short: 'rules.itm_v3',
+    short: 'UC function · fn_in_the_money',
     description:
-      'Flags a borrower when lien rate ≥ par refi rate + 75 bps and equity ≥ 15% on the latest AVM. Ruleset stored in Unity Catalog.',
+      'Flags a borrower when lien rate ≥ par refi rate + 75 bps and equity ≥ 15% on the latest AVM. Deterministic UC SQL function, parity-pinned to backend/services/scoring.py.',
     lineage: [
       { layer: 'SOURCE', name: 'cotality.mma.origination_refi', meta: 'Par rate feed (daily)' },
       { layer: 'SOURCE', name: 'cotality.avm.current', meta: 'Property value (monthly)' },
       { layer: 'SOURCE', name: 'cotality.liens.voluntary_lien', meta: 'Current lien rate' },
-      { layer: 'RULESET', name: 'rules.itm_v3', meta: 'reviewed 2026-03-15' },
+      { layer: 'PRIMITIVE', name: 'mip.gold.fn_in_the_money', meta: 'UC SQL · parity-pinned' },
       { layer: 'SEMANTIC', name: 'metrics.itm_flag', meta: 'UC metric view' },
     ],
     signals: [
@@ -84,19 +84,23 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
     updatedAt: '2026-04-20 06:12 UTC',
   },
   nbo: {
-    title: 'Next-Best-Offer model',
-    short: 'mlflow · mtg_nbo_v3',
+    title: 'Next-Best-Offer logic',
+    short: 'UC function · fn_next_best_offer',
     description:
-      'Gradient-boosted tree (mtg_nbo_v3) that outputs a product ∈ {refi, heloc, cashout, purchase, retention} with calibrated propensity.',
+      'Deterministic decision tree over Cotality-derived signals. Output is a categorical product code (refi, heloc, cashout, purchase, retention, or nurture). No ML model — the logic is transparent and auditable in sql/uc_functions/fn_next_best_offer.sql, and parity-pinned to backend/services/scoring.py.',
     lineage: [
-      { layer: 'FEATURES', name: 'features.borrower_360', meta: 'Owner Link + property + lien history' },
-      { layer: 'MODEL', name: 'mlflow.mtg_nbo_v3', meta: 'AUROC 0.81 · brier 0.09' },
-      { layer: 'GOVERNANCE', name: 'compliance.nbo_review_board', meta: 'Approved 2026-03-02' },
+      { layer: 'FEATURES', name: 'mip.gold.borrower_360', meta: 'Cotality public records + Owner Link + lien history' },
+      { layer: 'PRIMITIVE', name: 'mip.gold.fn_next_best_offer', meta: 'UC SQL decision tree' },
+      { layer: 'PARITY', name: 'backend/services/scoring.py', meta: 'Pinned to 60+ golden cases' },
     ],
     signals: [
-      { label: 'Top feature', source: 'SHAP', value: 'rate_spread_bps' },
-      { label: '#2 feature', source: 'SHAP', value: 'avm_equity_pct' },
-      { label: '#3 feature', source: 'SHAP', value: 'prior_heloc_flag' },
+      { label: 'Input', source: 'borrower_360.rate_spread_bps', value: 'rate_spread_bps' },
+      { label: 'Input', source: 'borrower_360.equity_pct', value: 'equity_pct' },
+      { label: 'Input', source: 'borrower_360.has_permit', value: 'has_permit' },
+      { label: 'Input', source: 'borrower_360.listed_for_sale', value: 'listed_for_sale' },
+      { label: 'Input', source: 'borrower_360.is_investor', value: 'is_investor' },
+      { label: 'Input', source: 'borrower_360.is_current_customer', value: 'is_current_customer' },
+      { label: 'Input', source: 'borrower_360.is_competitor_lien', value: 'is_competitor_lien' },
     ],
     updatedAt: '2026-04-20 06:12 UTC',
   },
@@ -106,7 +110,7 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
     description:
       'Building permit records joined to CLIP. Signal fires when permit value ≥ $25k within the last 180 days.',
     lineage: [
-      { layer: 'SOURCE', name: 'cotality.permits.building', meta: '4.8M active records' },
+      { layer: 'SOURCE', name: 'cotality.permits.building', meta: 'Delta Share · rolling 24 months' },
       { layer: 'JOIN', name: 'join.permit_to_clip', meta: 'via address canonicalization' },
       { layer: 'SEMANTIC', name: 'metrics.permit_signal', meta: 'UC metric view' },
     ],

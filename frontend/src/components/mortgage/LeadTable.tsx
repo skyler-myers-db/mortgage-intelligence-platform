@@ -715,7 +715,7 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
                     </td>
                     <td>
                       <span className="mono" style={{ fontSize: 12, color: 'var(--text-1)' }}>{lead.recommended_offer}</span>{' '}
-                      <EvidenceChip source={DRAWER_SOURCES.nbo}>nbo_v3</EvidenceChip>
+                      <EvidenceChip source={DRAWER_SOURCES.nbo}>{DRAWER_SOURCES.nbo.short}</EvidenceChip>
                     </td>
                     <td style={{ textAlign: 'right' }}><ScoreBadge value={lead.opportunity_score} /></td>
                     <td><ConfidenceMeter value={lead.confidence} compact /></td>

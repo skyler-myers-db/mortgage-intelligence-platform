@@ -1,19 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Entrada">
   <title>Entrada</title>
-  <!-- Square favicon: navy rounded-square background + Entrada 3-bar mark
-       centered. The three rows are equal-length horizontal bars with the
-       accent (light blue) peeking on the top-left + bottom-right corners,
-       matching frontend/public/brand/entrada-mark.svg at smaller scale. -->
-  <rect width="32" height="32" rx="7" ry="7" fill="#013354"/>
-  <!-- Bar geometry: x-range 5..27 (22 wide), 3 bars at y=9, y=15, y=21.
-       Each bar 22 wide, 3 tall; gap 3 between rows. -->
-  <!-- Row 1: accent segment (6) + navy-accent segment (16) -->
+  <!-- Legacy favicon path — kept in sync with favicon-v2.svg so any cached or
+       third-party reference still renders the correct mark. Prefer
+       /favicon-v2.svg for new links. -->
+  <rect width="32" height="32" rx="7" ry="7" fill="#F4F7FA"/>
   <rect x="5"  y="9"  width="6"  height="3" fill="#66C5FF"/>
-  <rect x="13" y="9"  width="14" height="3" fill="#FFFFFF"/>
-  <!-- Row 2: full white -->
-  <rect x="5"  y="15" width="22" height="3" fill="#FFFFFF"/>
-  <!-- Row 3: navy-accent (14) + accent (6) -->
-  <rect x="5"  y="21" width="14" height="3" fill="#FFFFFF"/>
+  <rect x="13" y="9"  width="14" height="3" fill="#025080"/>
+  <rect x="5"  y="15" width="22" height="3" fill="#025080"/>
+  <rect x="5"  y="21" width="14" height="3" fill="#025080"/>
   <rect x="21" y="21" width="6"  height="3" fill="#66C5FF"/>
 </svg>
