@@ -1139,45 +1139,8 @@
   margin-top: var(--sp-3);
 }
 
-/* ============================================================
-   DATA MESH — subtle drifting particle field behind app content.
-   Positioned inside AppShell via <DataMesh />, absolute-fill,
-   never interactive. Opacity kept low so it reads as depth.
-   ============================================================ */
-.data-mesh {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  z-index: 0;
-  overflow: hidden;
-}
-.data-mesh__svg {
-  width: 100%; height: 100%;
-  display: block;
-  opacity: 0.55;
-  mix-blend-mode: screen;
-}
-[data-theme="light"] .data-mesh__svg {
-  opacity: 0.45;
-  mix-blend-mode: multiply;
-}
-.data-mesh__dot {
-  fill: var(--entrada-teal);
-  animation: mesh-drift var(--dur-mesh) var(--ease) infinite alternate;
-  will-change: transform, opacity;
-}
-.data-mesh__dot--b { fill: var(--entrada-bright); animation-duration: calc(var(--dur-mesh) * 1.2); }
-.data-mesh__dot--c { fill: var(--accent); animation-duration: calc(var(--dur-mesh) * 0.85); }
-@keyframes mesh-drift {
-  0%   { transform: translate3d(0, 0, 0);       opacity: 0.10; }
-  50%  { transform: translate3d(6px, -10px, 0); opacity: 0.18; }
-  100% { transform: translate3d(-4px, 8px, 0);  opacity: 0.12; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .data-mesh__dot { animation: none; opacity: 0.12; }
-}
-/* The AppShell's main pane needs to establish a stacking context so the
-   mesh sits behind content but above the body::before halos. */
+/* Stacking context preserved for route-level z-index use. DataMesh
+   (36 animated SVG circles) removed 2026-04-23 — see AppShell.tsx. */
 .main { isolation: isolate; }
 .main__inner { position: relative; z-index: 1; }
 

@@ -6,24 +6,17 @@ import { Console } from './Console';
 import { EvidenceDrawer } from '../mortgage/EvidenceDrawer';
 import { GenieChat } from '../mortgage/GenieChat';
 import { DegradedBanner } from '../mortgage/DegradedBanner';
-import { DataMesh } from '../fx/DataMesh';
 
 /**
- * Module 0 AppShell — rail + topbar + main grid (matches the prototype's
- * `grid-template-areas: "rail topbar" "rail main"`). A single AppProvider
- * wraps the whole tree so Topbar, Console, GenieChat, EvidenceDrawer and
- * every page share theme / accent / density / drawer / genie state.
+ * AppShell — rail + topbar + main grid.
  *
- * DataMesh sits inside `.main` (pointer-events none, z-index 0) as the
- * always-on subtle depth layer; `.main__inner` already owns z-index 1 so
- * page content stays on top.
+ * DataMesh (a 36-circle CSS-animated SVG layer behind every page) was
+ * removed 2026-04-23: combined with the body::before/::after ambient
+ * radial-halo animations it was causing mouse-lag on ultra-wide and
+ * high-DPI displays. Enterprise workspace UIs don't need ambient motion.
  *
- * Slice-6: the DegradedBanner sits at the top of `.main`, above the
- * page content. It renders nothing while /api/health returns "ok"
- * (no layout shift in the happy path) and auto-retries the health
- * probe on a short interval while any dependency is down. This is
- * the ONLY signal the UI gives when the real-data path is
- * unavailable — the app never falls back to fake data.
+ * The DegradedBanner renders nothing while /api/health is ok (no layout
+ * shift in the happy path) and auto-retries while any dependency is down.
  */
 export function AppShell({ children }: PropsWithChildren) {
   return (
@@ -32,7 +25,6 @@ export function AppShell({ children }: PropsWithChildren) {
         <Rail />
         <Topbar />
         <main className="main">
-          <DataMesh />
           <DegradedBanner />
           {children}
         </main>
