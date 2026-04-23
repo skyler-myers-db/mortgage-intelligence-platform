@@ -3,8 +3,22 @@ import { useApp } from '../AppContext';
 import { api } from '../../lib/api';
 import type { GenieAnswer as GenieAnswerShape } from '../../types';
 import { Icon } from '../Icon';
-import { Button } from '../Primitives';
+import { Button, EvidenceChip } from '../Primitives';
 import { GenieAnswer } from './GenieAnswer';
+import { DRAWER_SOURCES } from '../../lib/drawerSources';
+
+/**
+ * Map a free-form trusted-asset string (UC path or ruleset id) to the
+ * best-fitting drawer entry. Falls through to NBO as a "something is
+ * better than nothing" default so a chip click always opens a drawer.
+ */
+function drawerForAsset(asset: string) {
+  if (/itm|rules/i.test(asset)) return DRAWER_SOURCES.itm;
+  if (/permit/i.test(asset)) return DRAWER_SOURCES.permit;
+  if (/lead_population|population/i.test(asset)) return DRAWER_SOURCES.population;
+  if (/config/i.test(asset)) return DRAWER_SOURCES.config;
+  return DRAWER_SOURCES.nbo;
+}
 
 /**
  * Floating Genie chat panel — `.genie` BEM from the prototype. Fixed
@@ -100,10 +114,9 @@ export function GenieChat() {
                 {m.sources && m.sources.length > 0 && (
                   <div className="sources">
                     {m.sources.map((s, j) => (
-                      <span key={j} className="evidence-chip" title={`Source: ${s}`}>
-                        <Icon name="link" size={9} className="e-ico" />
+                      <EvidenceChip key={j} source={drawerForAsset(s)} title={`Source: ${s}`}>
                         {s}
-                      </span>
+                      </EvidenceChip>
                     ))}
                   </div>
                 )}

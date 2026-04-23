@@ -202,11 +202,27 @@ export const api = {
       { borrower_id },
     ),
 
-  approve: (borrower_id: string, actor = 'anonymous') =>
-    postJson<ApproveResult, { borrower_id: string; actor: string }>(
-      '/api/outreach/approve',
-      { borrower_id, actor },
-    ),
+  approve: (
+    borrower_id: string,
+    opts: { actor?: string; offer_code?: string | null; evidence_ids?: string[] } = {},
+  ) =>
+    postJson<
+      ApproveResult,
+      {
+        borrower_id: string;
+        actor: string;
+        offer_code?: string | null;
+        evidence_ids?: string[];
+      }
+    >('/api/outreach/approve', {
+      borrower_id,
+      actor: opts.actor ?? 'anonymous',
+      // Forward the chosen offer_code + evidence_ids so the audit row
+      // captures what the approver actually saw. Default to [] / null
+      // so callers that don't have the recommendation hydrated still work.
+      offer_code: opts.offer_code ?? null,
+      evidence_ids: opts.evidence_ids ?? [],
+    }),
 
   genie: (question: string) =>
     postJson<GenieResult, { question: string }>('/api/genie/message', { question }),

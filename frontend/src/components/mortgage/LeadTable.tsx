@@ -50,12 +50,18 @@ function chunk<T>(items: T[], size: number): T[][] {
 }
 
 function RowPreview({ lead }: { lead: LeadSummary }) {
+  // Prefer the real Cotality CLIP projected by the backend (2026-04-22
+  // contract addition). Fall back to a borrower-id derived placeholder
+  // only for rows predating that projection (empty string).
+  const clipValue = lead.clip && lead.clip.length > 0
+    ? lead.clip
+    : `clip_${lead.borrower_id.toLowerCase().replace('-', '')}`;
   return (
     <div className="tbl__expand-inner" style={{ display: 'grid', gridTemplateColumns: '1.1fr 1fr 1fr', gap: 20 }}>
       <div>
         <div className="eyebrow" style={{ marginBottom: 8 }}>Customer 360 preview</div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-          <Cell k="CLIP"          v={`clip_${lead.borrower_id.toLowerCase().replace('-', '')}`} mono />
+          <Cell k="CLIP"          v={clipValue} mono />
           <Cell k="Location"      v={`${lead.city}, ${lead.state} · ${lead.zip}`} />
           <Cell k="Equity"        v={`$${(lead.equity_estimate / 1000).toFixed(0)}k`} mono />
           <Cell k="Rate spread"   v={`+${lead.rate_spread_bps} bps`} mono />
@@ -313,6 +319,63 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
 
   const selectionCount = selectedIds.size;
 
+  /**
+   * Export the currently-visible leads as CSV. Client-side only: the
+   * bytes come straight from the `leads` prop the caller already passed
+   * in (which is the real /api/leads payload after any segment/filter
+   * narrowing the parent route applied). We do NOT invent a server-side
+   * export endpoint or synthesize fields the payload doesn't carry — so
+   * PII stays suppressed by construction.
+   */
+  const exportCsv = useCallback(() => {
+    if (leads.length === 0) return;
+    const header = [
+      'borrower_id',
+      'clip',
+      'city',
+      'state',
+      'zip',
+      'segments',
+      'equity_estimate',
+      'rate_spread_bps',
+      'opportunity_score',
+      'confidence',
+      'recommended_offer',
+      'approval_status',
+    ];
+    const escape = (v: string): string =>
+      /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
+    const rows = leads.map((l) =>
+      [
+        l.borrower_id,
+        l.clip ?? '',
+        l.city,
+        l.state,
+        l.zip,
+        l.segment_codes.join('|'),
+        String(l.equity_estimate),
+        String(l.rate_spread_bps),
+        String(l.opportunity_score),
+        String(l.confidence),
+        l.recommended_offer,
+        approvals[l.borrower_id] ?? l.approval_status ?? 'pending',
+      ]
+        .map(escape)
+        .join(','),
+    );
+    const csv = [header.join(','), ...rows].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const stamp = new Date().toISOString().slice(0, 10);
+    a.download = `mip-leads-${stamp}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, [leads, approvals]);
+
   return (
     <div className="surface" style={{ overflow: 'hidden' }}>
       <div className="surface__hdr" style={{ justifyContent: 'space-between' }}>
@@ -329,7 +392,16 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           <Chip variant="neutral" icon="shield">PII suppressed</Chip>
-          <Button size="sm" icon="export">Export list</Button>
+          <Button
+            size="sm"
+            icon="export"
+            onClick={exportCsv}
+            disabled={leads.length === 0}
+            data-testid="lead-export"
+            aria-label={`Export ${leads.length} leads as CSV`}
+          >
+            Export list
+          </Button>
         </div>
       </div>
       <div style={{ maxHeight: 520, overflowY: 'auto', position: 'relative' }}>
@@ -391,7 +463,9 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
                     <td className="is-primary">
                       <div className="mono" style={{ fontSize: 12, color: 'var(--text-1)' }}>{lead.borrower_id}</div>
                       <div className="mono muted" style={{ fontSize: 10 }}>
-                        {`clip_${lead.borrower_id.toLowerCase().replace(/-/g, '')}`}
+                        {lead.clip && lead.clip.length > 0
+                          ? lead.clip
+                          : `clip_${lead.borrower_id.toLowerCase().replace(/-/g, '')}`}
                       </div>
                     </td>
                     <td>

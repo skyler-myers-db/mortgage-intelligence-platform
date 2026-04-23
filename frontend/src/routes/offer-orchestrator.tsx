@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react';
 import { Link, Navigate, useParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import type { Borrower360 as Borrower360Type, OfferRecommendation } from '../types';
-import type { DrawerSource } from '../components/AppContext';
 import { PageShell } from '../components/layout/PageShell';
 import { ApprovalBanner } from '../components/mortgage/ApprovalBanner';
 import { ScoreBadge } from '../components/mortgage/ScoreBadge';
@@ -11,26 +10,8 @@ import { Button, Chip, EvidenceChip } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { Skeleton } from '../components/ui/Skeleton';
 import { Reveal } from '../components/fx/Reveal';
-import { DRAWER_SOURCES } from '../lib/drawerSources';
+import { descriptorFor } from '../lib/drawerSources';
 import { useApp } from '../components/AppContext';
-
-/** Map a backend source table → DrawerSource. Falls back to a neutral descriptor
- *  so presenter can still click through and see the raw UC path. */
-function sourceDescriptor(source: string): DrawerSource {
-  const key = source.toLowerCase();
-  if (key.includes('fn_in_the_money') || key.includes('itm')) return DRAWER_SOURCES.itm;
-  if (key.includes('fn_next_best_offer') || key.includes('nbo')) return DRAWER_SOURCES.nbo;
-  if (key.includes('permit')) return DRAWER_SOURCES.permit;
-  if (key.includes('population') || key.includes('public_records')) return DRAWER_SOURCES.population;
-  // Neutral fallback for fn_rate_spread, fn_lead_score, etc. — still clickable.
-  return {
-    title: source,
-    short: source.split('.').pop() ?? source,
-    description: `Unity Catalog object: ${source}. Click through for lineage once wired.`,
-    lineage: [{ layer: 'UC', name: source }],
-    signals: [],
-  };
-}
 
 /** Short, presenter-friendly label that fits in a chip. */
 function shortSourceLabel(source: string): string {
@@ -119,7 +100,13 @@ Reply or call 1-800-XXX-XXXX.`
   const onApprove = async () => {
     setApproveError(null);
     try {
-      const res = await api.approve(id);
+      // Forward the chosen offer_code + evidence_ids so the audit row
+      // captures what the approver actually saw — not just the borrower
+      // id. Falls back to the borrower's recommended_offer when the
+      // recommendation hasn't hydrated yet.
+      const offer_code = rec?.offer_code ?? b?.recommended_offer ?? null;
+      const evidence_ids = rec?.evidence_ids ?? b?.evidence_ids ?? [];
+      const res = await api.approve(id, { offer_code, evidence_ids });
       if (res.approved) {
         setApproval(id, 'approved');
         setAuditId(res.audit_event_id ?? null);
@@ -160,7 +147,7 @@ Reply or call 1-800-XXX-XXXX.`
 
   return (
     <PageShell
-      eyebrow="Next-Best-Offer + Outreach"
+      eyebrow="Offer & Outreach"
       title="Review and approve outreach"
       lede="Review the recommended offer, alternatives considered, thresholds applied, and the draft message. Approve to release the draft into the outreach queue; reject to drop the borrower."
       heroRight={
@@ -225,7 +212,7 @@ Reply or call 1-800-XXX-XXXX.`
                     const label = rec.source_labels?.[idx]?.display_label
                       ?? shortSourceLabel(s);
                     return (
-                      <EvidenceChip key={s} source={sourceDescriptor(s)}>
+                      <EvidenceChip key={s} source={descriptorFor(s)}>
                         {label}
                       </EvidenceChip>
                     );

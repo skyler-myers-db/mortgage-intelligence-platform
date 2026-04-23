@@ -1,6 +1,35 @@
 import type { DrawerSource } from '../components/AppContext';
 
 /**
+ * Route a raw UC source (e.g. `mip.gold.fn_in_the_money`, `cotality.permits.building`)
+ * to the matching DRAWER_SOURCES entry. Falls back to a neutral descriptor that
+ * still opens the drawer with the raw path so presenters see lineage rather
+ * than a silently-mismatched chip.
+ *
+ * Keep this in sync with backend/services/scoring.source_display_label and
+ * backend/api/offers._sources_for — the two must agree on which UC object
+ * maps to which drawer entry.
+ */
+export function descriptorFor(rawSource: string): DrawerSource {
+  const key = rawSource.toLowerCase();
+  if (key.includes('fn_in_the_money') || key.includes('itm') || key.includes('rate_spread')) {
+    return DRAWER_SOURCES.itm;
+  }
+  if (key.includes('fn_next_best_offer') || key.includes('fn_lead_score') || key.includes('nbo')) {
+    return DRAWER_SOURCES.nbo;
+  }
+  if (key.includes('permit')) return DRAWER_SOURCES.permit;
+  if (key.includes('population') || key.includes('public_records')) return DRAWER_SOURCES.population;
+  return {
+    title: rawSource,
+    short: rawSource.split('.').pop() ?? rawSource,
+    description: `Unity Catalog object: ${rawSource}. Click through for lineage once wired.`,
+    lineage: [{ layer: 'UC', name: rawSource }],
+    signals: [],
+  };
+}
+
+/**
  * DRAWER_SOURCES — UI metadata describing each evidence-drawer entry
  * (title, description, UC lineage, signals).
  *

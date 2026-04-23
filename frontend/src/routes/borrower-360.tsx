@@ -11,7 +11,7 @@ import { Chip, EvidenceChip } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { Skeleton } from '../components/ui/Skeleton';
 import { Reveal } from '../components/fx/Reveal';
-import { DRAWER_SOURCES } from '../lib/drawerSources';
+import { descriptorFor } from '../lib/drawerSources';
 import { segmentByCode } from '../lib/segmentMetadata';
 
 /**
@@ -276,14 +276,16 @@ export default function Borrower360() {
                   // anything that hasn't been mapped still reads sensibly.
                   const label = b.why_panel.source_labels?.[idx]?.display_label
                     ?? s.split('.').slice(-1)[0];
+                  // Route each chip to the drawer entry matching its UC
+                  // source. Previously every why-panel chip opened the
+                  // in-the-money drawer, which was a parity bug when the
+                  // source was NBO/permit/population.
                   return (
-                    <EvidenceChip key={s} source={DRAWER_SOURCES.itm}>
+                    <EvidenceChip key={s} source={descriptorFor(s)}>
                       {label}
                     </EvidenceChip>
                   );
                 })}
-                <EvidenceChip source={DRAWER_SOURCES.nbo}>Next-best-offer model</EvidenceChip>
-                <EvidenceChip source={DRAWER_SOURCES.permit}>Building permit signal</EvidenceChip>
               </div>
             </div>
           </div>
@@ -316,7 +318,7 @@ export default function Borrower360() {
             <div className="surface__body" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               {b.evidence_events.map((e) => (
                 <div key={e.evidence_id} style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
-                  <EvidenceChip source={DRAWER_SOURCES.itm}>{e.source_product}</EvidenceChip>
+                  <EvidenceChip source={descriptorFor(e.source_table)}>{e.source_product}</EvidenceChip>
                   <span style={{ color: 'var(--text-2)', fontSize: 13 }}>{e.display_text}</span>
                 </div>
               ))}

@@ -41,6 +41,7 @@ from backend.schemas.portfolio import (
     KpiTrend,
     PortfolioCreateRequest,
     PortfolioCreateResponse,
+    PortfolioCriteria,
     PortfolioPreview,
     PortfolioPreviewRequest,
 )
@@ -214,25 +215,127 @@ class DatabricksPortfolioRepository:
         self._cache = cache if cache is not None else TTLCache()
         self._cache_ttl_s = cache_ttl_s
 
-    _PREVIEW_SQL = (
+    _PREVIEW_SQL_TEMPLATE = (
         "SELECT "
         "  COUNT(*)                                               AS marketable_population, "
         "  SUM(CASE WHEN in_the_money THEN 1 ELSE 0 END)          AS high_intent_leads, "
-        "  CAST(ROUND(AVG(opportunity_score)) AS INT)             AS avg_score "
-        "FROM mip.gold.borrower_360"
+        "  CAST(COALESCE(ROUND(AVG(opportunity_score)), 0) AS INT) AS avg_score "
+        "FROM mip.gold.borrower_360 "
+        "{where}"
     )
 
-    # 7-day history for KPI sparklines. Reads the national rollup row
-    # (state='_ALL', segment_code='_ALL') from the daily funnel snapshot.
-    # Returns 0-7 rows ordered oldest-first; the caller tolerates a short
-    # series (the sync job has to run on a few days before the trend is
-    # dense).
+    # Translate display labels from the portfolio-builder UI into
+    # mip.gold.borrower_360 predicates. Every value is a short enum the
+    # frontend emits verbatim; we keep the mapping here rather than ship
+    # the strings to SQL so a typo in a dropdown can't open a SQL-injection
+    # vector.
+    _STATE_SETS: dict[str, list[str]] = {
+        "chicago msa":     ["IL"],
+        "all 6 states":    ["IL", "CA", "FL", "TX", "WA", "CO"],
+        "texas":           ["TX"],
+        "ca + fl + tx":    ["CA", "FL", "TX"],
+        "il + ca + wa":    ["IL", "CA", "WA"],
+    }
+
+    # Canonical `recommended_offer_code` values emitted by fn_next_best_offer
+    # (see sql/uc_functions/fn_next_best_offer.sql). Keep in sync.
+    _PRODUCT_CODES: dict[str, list[str]] = {
+        "refi":       ["refi"],
+        "heloc":      ["heloc"],
+        "cash-out":   ["cashout"],
+        "purchase":   ["purchase"],
+        "retention":  ["retention"],
+    }
+
+    _EQUITY_THRESHOLDS: dict[str, int] = {
+        "≥ 15%": 15,
+        "≥ 25%": 25,
+        "≥ 40%": 40,
+    }
+
+    @classmethod
+    def _build_preview_predicates(
+        cls, criteria: PortfolioCriteria | None,
+    ) -> tuple[str, dict[str, Any]]:
+        """Convert validated PortfolioCriteria into a (WHERE clause, params)
+        pair. Returns `("", {})` when no predicates apply so the caller can
+        run the criteria-free SELECT."""
+        if criteria is None:
+            return "", {}
+
+        clauses: list[str] = []
+        params: dict[str, Any] = {}
+
+        # Geography — map display label to a list of state codes.
+        if criteria.geography:
+            key = criteria.geography.lower()
+            states = cls._STATE_SETS.get(key)
+            if states:
+                placeholders = ", ".join(f":geo_state_{i}" for i in range(len(states)))
+                clauses.append(f"state IN ({placeholders})")
+                for i, s in enumerate(states):
+                    params[f"geo_state_{i}"] = s
+
+        # Occupancy.
+        if criteria.occupancy == "Owner-occupied":
+            clauses.append("is_owner_occupied = TRUE")
+        elif criteria.occupancy == "Non-owner-occupied":
+            clauses.append("is_owner_occupied = FALSE")
+
+        # Lien status. We can cleanly discriminate "Free & clear"; the other
+        # values map to "has an open lien" until we land richer lien_type
+        # columns in gold (flagged in audit as STUB).
+        if criteria.lien_status == "Free & clear":
+            clauses.append("current_lien_balance = 0")
+        elif criteria.lien_status in ("Open 1st lien", "Open HELOC"):
+            clauses.append("current_lien_balance > 0")
+
+        # Lender relationship.
+        if criteria.lender_relationship == "Current customer":
+            clauses.append("is_current_customer = TRUE")
+        elif criteria.lender_relationship == "Former customer":
+            clauses.append("is_current_customer = FALSE AND is_competitor_lien = FALSE")
+        elif criteria.lender_relationship == "Competitor customer":
+            clauses.append("is_competitor_lien = TRUE")
+
+        # Product. "All products" / missing = no predicate.
+        if criteria.product and criteria.product != "All products":
+            codes = cls._PRODUCT_CODES.get(criteria.product.lower())
+            if codes:
+                placeholders = ", ".join(f":product_{i}" for i in range(len(codes)))
+                clauses.append(f"recommended_offer_code IN ({placeholders})")
+                for i, code in enumerate(codes):
+                    params[f"product_{i}"] = code
+
+        # Equity threshold. Prefer explicit float; fall back to the label.
+        equity_floor: int | None = None
+        if criteria.min_equity_pct is not None:
+            equity_floor = int(criteria.min_equity_pct)
+        elif criteria.min_equity_pct_label:
+            equity_floor = cls._EQUITY_THRESHOLDS.get(criteria.min_equity_pct_label)
+        if equity_floor is not None and equity_floor > 0:
+            clauses.append("equity_pct >= :equity_floor")
+            params["equity_floor"] = equity_floor
+
+        if not clauses:
+            return "", {}
+        return "WHERE " + " AND ".join(clauses), params
+
+    # 7-day history for KPI sparklines + the two real funnel counts that
+    # replaced the old hardcoded cost_per_contact / projected_contact_to_app
+    # placeholders. Reads the national rollup row (state='_ALL',
+    # segment_code='_ALL') from the daily funnel snapshot. Returns 0-7 rows
+    # ordered newest-first (repository reverses to oldest-first before
+    # sparkline rendering).
     _TREND_SQL = (
         "SELECT "
         "  snapshot_date, "
+        "  snapshot_at, "
         "  addressable_borrowers          AS marketable_population, "
         "  in_the_money_borrowers         AS high_intent_leads, "
-        "  avg_opportunity_score          AS avg_score "
+        "  avg_opportunity_score          AS avg_score, "
+        "  approved_borrowers             AS approved_count, "
+        "  actioned_borrowers             AS in_outreach_count "
         "FROM mip.gold.funnel_snapshot_daily "
         "WHERE state = '_ALL' AND segment_code = '_ALL' "
         "ORDER BY snapshot_date DESC "
@@ -251,45 +354,76 @@ class DatabricksPortfolioRepository:
         direction = "up" if delta_pct > 0.5 else "down" if delta_pct < -0.5 else "flat"
         return KpiTrend(series=series, delta_pct=round(delta_pct, 1), direction=direction)
 
-    def _load_trends(self) -> dict[str, KpiTrend]:
-        """Query the 7-day funnel snapshot and pivot into per-KPI histories.
+    def _load_funnel(self) -> tuple[dict[str, KpiTrend], dict[str, Any]]:
+        """Query the 7-day funnel snapshot and return (trends, latest).
 
-        Never raises — if the funnel table is empty (fresh workspace before
-        the sync job has run) we return an empty dict and the UI shows KPIs
-        without sparklines.
+        `trends` is a dict keyed by KPI field; series are oldest-first.
+        `latest` is the newest row (keys include `approved_count`,
+        `in_outreach_count`, `snapshot_at`) — used by the preview to
+        surface the real current counts + data_refreshed_at timestamp.
+
+        Never raises — if the funnel table is empty (first deploy before
+        any snapshot has been written) we return empty dict + {}.
         """
         try:
             rows = self._client.execute(self._TREND_SQL) or []
         except Exception:  # noqa: BLE001 -- resilience: empty trend is an acceptable fallback
-            return {}
+            return {}, {}
         if not rows:
-            return {}
-        # Query is DESC; flip to oldest-first for sparkline rendering.
+            return {}, {}
+        # Query is DESC; the FIRST row is newest. Reverse for oldest-first
+        # sparkline rendering.
+        latest = rows[0]
         ordered = list(reversed(rows))
         trends: dict[str, KpiTrend] = {}
-        for key in ("marketable_population", "high_intent_leads", "avg_score"):
+        for key in (
+            "marketable_population",
+            "high_intent_leads",
+            "avg_score",
+            "approved_count",
+            "in_outreach_count",
+        ):
             series = [float(r.get(key) or 0) for r in ordered]
             trends[key] = self._build_trend(series)
-        return trends
+        return trends, latest
+
+    @staticmethod
+    def _coerce_datetime(value: Any) -> Any:
+        """MAX(snapshot_at) may come back as a datetime, a str (TIMESTAMP),
+        or None depending on the driver. Pydantic coerces strings natively,
+        so we just pass through."""
+        return value
 
     def preview(self, request: PortfolioPreviewRequest | None) -> PortfolioPreview:
-        _ = request
-        cached = self._cache.get(self._PREVIEW_CACHE_KEY)
+        criteria = request.criteria if request is not None else None
+        where_clause, params = self._build_preview_predicates(criteria)
+        # Include the clause + params in the cache key so distinct criteria
+        # sets don't collide on a single cached entry.
+        cache_key = f"{self._PREVIEW_CACHE_KEY}:{where_clause}:{sorted(params.items())}"
+        cached = self._cache.get(cache_key)
         if cached is not None:
             return cached
-        row = self._client.execute_one(self._PREVIEW_SQL) or {}
-        trends = self._load_trends()
+        sql = self._PREVIEW_SQL_TEMPLATE.format(where=where_clause)
+        row = self._client.execute_one(sql, params) or {}
+        trends, latest = self._load_funnel()
         preview = PortfolioPreview(
             marketable_population=int(row.get("marketable_population") or 0),
             high_intent_leads=int(row.get("high_intent_leads") or 0),
             avg_score=int(row.get("avg_score") or 0),
-            # Cost-per-contact + contact→app are not in gold yet. We return
-            # None so the UI renders an em-dash instead of a fabricated value.
-            projected_contact_to_app=None,
-            cost_per_contact=None,
+            approved_count=(
+                int(latest["approved_count"])
+                if latest.get("approved_count") is not None
+                else None
+            ),
+            in_outreach_count=(
+                int(latest["in_outreach_count"])
+                if latest.get("in_outreach_count") is not None
+                else None
+            ),
+            data_refreshed_at=self._coerce_datetime(latest.get("snapshot_at")),
             trends=trends,
         )
-        self._cache.set(self._PREVIEW_CACHE_KEY, preview, self._cache_ttl_s)
+        self._cache.set(cache_key, preview, self._cache_ttl_s)
         return preview
 
     def create(self, payload: PortfolioCreateRequest) -> PortfolioCreateResponse:

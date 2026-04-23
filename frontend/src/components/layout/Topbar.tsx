@@ -1,6 +1,8 @@
+import { useEffect, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { useApp } from '../AppContext';
 import { Icon } from '../Icon';
+import type { HealthPayload } from '../mortgage/DegradedBanner';
 
 /**
  * Topbar — breadcrumbs, lender pill, environment pill, warehouse-status pill,
@@ -30,6 +32,46 @@ export function Topbar() {
   const { pathname } = useLocation();
   const crumb = currentCrumb(pathname);
 
+  // Live health state for the environment + warehouse pills. Pulled from
+  // /api/health every 30s; the DegradedBanner uses the same endpoint but
+  // polls more aggressively when degraded. No auth header required — the
+  // Databricks App runtime injects the workspace identity.
+  const [health, setHealth] = useState<HealthPayload | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const res = await fetch('/api/health');
+        if (res.ok) {
+          const json = (await res.json()) as HealthPayload;
+          if (!cancelled) setHealth(json);
+        }
+      } catch {
+        // Swallow — DegradedBanner surfaces outright failures; the pills
+        // just display last-known state.
+      }
+    };
+    void tick();
+    const id = window.setInterval(tick, 30_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, []);
+
+  const envLabel = (health?.app_env ?? 'loading').toLowerCase();
+  const warehouseUp = health?.dependencies?.warehouse === 'up';
+  const warehouseDot = !health
+    ? 'dot amber'
+    : warehouseUp
+      ? 'dot is-heartbeat'
+      : 'dot';
+  const warehouseColor = !health
+    ? undefined
+    : warehouseUp
+      ? undefined
+      : { background: 'var(--signal-danger)' };
+
   return (
     <header className="topbar" role="banner">
       <div className="topbar__crumbs">
@@ -42,13 +84,27 @@ export function Topbar() {
         <Icon name="building" size={12} />
         <span>{lender}</span>
       </div>
-      <div className="topbar__pill" title="Environment: sandbox">
-        <span className="dot amber" />
-        <span>sandbox</span>
+      <div
+        className="topbar__pill"
+        title={`Environment: ${envLabel}`}
+      >
+        <span className={`dot ${envLabel === 'production' ? 'green' : 'amber'}`} />
+        <span>{envLabel}</span>
       </div>
-      <div className="topbar__pill" title="Databricks warehouse: running">
-        <span className="dot is-heartbeat" aria-hidden="true" />
-        <span style={{ fontFamily: 'var(--font-mono)' }}>serverless-xl</span>
+      <div
+        className="topbar__pill"
+        title={
+          health
+            ? `Warehouse: ${warehouseUp ? 'up' : 'down'} · breaker ${
+                health.circuit_breakers?.warehouse ?? 'unknown'
+              }`
+            : 'Warehouse: probing'
+        }
+      >
+        <span className={warehouseDot} aria-hidden="true" style={warehouseColor} />
+        <span style={{ fontFamily: 'var(--font-mono)' }}>
+          {warehouseUp ? 'warehouse' : health ? 'offline' : '…'}
+        </span>
       </div>
       <button
         className="topbar__icon-btn"

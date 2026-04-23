@@ -4,7 +4,6 @@ import { api } from '../lib/api';
 import type { PortfolioPreview } from '../types';
 import { PageShell } from '../components/layout/PageShell';
 import { KpiCard } from '../components/mortgage/KpiCard';
-import { ApprovalBanner } from '../components/mortgage/ApprovalBanner';
 import { Button } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { FilterSelect } from '../components/ui/FilterSelect';
@@ -21,13 +20,16 @@ import { DRAWER_SOURCES } from '../lib/drawerSources';
 // (IL / CA / FL / TX / WA / CO) so the filter reads like a real book of
 // business, not a single-metro slice. Chicago MSA is the default since
 // IL is the largest state in the footprint and our default anchor.
+// Keys MUST match PortfolioCriteria in backend/schemas/portfolio.py. The
+// earlier mismatch (`geo` vs `geography`, `occ` vs `occupancy`, etc.) made
+// every filter a no-op because Pydantic silently ignored unknown fields.
 const FILTER_GROUPS: Array<{ label: string; key: string; options: string[] }> = [
-  { label: 'GEO',          key: 'geo',      options: ['Chicago MSA', 'All 6 states', 'Texas', 'CA + FL + TX', 'IL + CA + WA'] },
-  { label: 'OCCUPANCY',    key: 'occ',      options: ['Owner-occupied', 'Non-owner-occupied', 'All'] },
-  { label: 'LIEN STATUS',  key: 'lien',     options: ['Open 1st lien', 'Open HELOC', 'Free & clear', 'Any'] },
-  { label: 'RELATIONSHIP', key: 'rel',      options: ['All', 'Current customer', 'Former customer', 'Competitor customer'] },
-  { label: 'PRODUCT',      key: 'product',  options: ['All products', 'Refi', 'HELOC', 'Cash-out', 'Purchase', 'Retention'] },
-  { label: 'EQUITY',       key: 'equity',   options: ['≥ 15%', '≥ 25%', '≥ 40%', 'Any'] },
+  { label: 'GEO',          key: 'geography',            options: ['Chicago MSA', 'All 6 states', 'Texas', 'CA + FL + TX', 'IL + CA + WA'] },
+  { label: 'OCCUPANCY',    key: 'occupancy',            options: ['Owner-occupied', 'Non-owner-occupied', 'All'] },
+  { label: 'LIEN STATUS',  key: 'lien_status',          options: ['Open 1st lien', 'Open HELOC', 'Free & clear', 'Any'] },
+  { label: 'RELATIONSHIP', key: 'lender_relationship',  options: ['All', 'Current customer', 'Former customer', 'Competitor customer'] },
+  { label: 'PRODUCT',      key: 'product',              options: ['All products', 'Refi', 'HELOC', 'Cash-out', 'Purchase', 'Retention'] },
+  { label: 'EQUITY',       key: 'min_equity_pct_label', options: ['≥ 15%', '≥ 25%', '≥ 40%', 'Any'] },
 ];
 
 function formatDelta(pct: number | null | undefined): string | undefined {
@@ -171,38 +173,59 @@ export default function PortfolioBuilder() {
               source={DRAWER_SOURCES.nbo}
             />
             <KpiCard
-              label="Cost per contact (est.)"
-              valueAnimated={preview?.cost_per_contact ?? null}
-              format={(n) => `$${n.toFixed(2)}`}
-              source={DRAWER_SOURCES.config}
+              label="Approved"
+              valueAnimated={preview?.approved_count ?? null}
+              trend={preview?.trends?.approved_count?.series}
+              delta={formatDelta(preview?.trends?.approved_count?.delta_pct)}
+              deltaDir={preview?.trends?.approved_count?.direction}
+              source={DRAWER_SOURCES.nbo}
             />
             <KpiCard
-              label="Projected contact → app"
-              valueAnimated={preview?.projected_contact_to_app ?? null}
-              format={(n) => n.toFixed(1)}
-              unit="%"
+              label="In outreach"
+              valueAnimated={preview?.in_outreach_count ?? null}
+              trend={preview?.trends?.in_outreach_count?.series}
+              delta={formatDelta(preview?.trends?.in_outreach_count?.delta_pct)}
+              deltaDir={preview?.trends?.in_outreach_count?.direction}
               source={DRAWER_SOURCES.nbo}
             />
           </div>
         </div>
       </div>
 
-      {preview?.high_intent_leads !== undefined && (
-        <div style={{ marginTop: 'var(--gap-grid)' }}>
-          <ApprovalBanner
-            count={preview.high_intent_leads}
-            text={`${preview.high_intent_leads.toLocaleString()} borrowers will enter the lead queue for loan-officer review.`}
-            approveLabel="Send to loan officers"
-          />
+      {preview?.high_intent_leads !== undefined && preview.high_intent_leads > 0 && (
+        <div
+          style={{
+            marginTop: 'var(--gap-grid)',
+            padding: '14px 16px',
+            border: '1px solid var(--line-1)',
+            borderRadius: 'var(--r-md)',
+            background: 'var(--bg-1)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 14,
+          }}
+        >
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 13, color: 'var(--text-1)' }}>
+              {preview.high_intent_leads.toLocaleString()} high-intent borrower
+              {preview.high_intent_leads === 1 ? '' : 's'} match the current filters.
+            </div>
+            <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
+              Open the lead queue to review evidence and approve outreach per borrower.
+            </div>
+          </div>
+          <Link to="/lead-queue" className="btn btn--primary">
+            Open lead queue
+            <Icon name="chevright" size={14} />
+          </Link>
         </div>
       )}
 
       <div style={{ marginTop: 'var(--gap-grid)', display: 'flex', gap: 12 }}>
-        <Link to="/segment-intelligence" className="btn btn--primary">
+        <Link to="/segment-intelligence" className="btn">
           Next: segments
           <Icon name="chevright" size={14} />
         </Link>
-        <Link to="/lead-queue" className="btn">Jump to lead queue</Link>
       </div>
     </PageShell>
   );

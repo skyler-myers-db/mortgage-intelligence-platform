@@ -60,6 +60,17 @@ export default function AskGenie() {
 
   const sourceLabel = payload?.source ?? '';
   const sourceChip = sourceLabel || (payload?.trusted_assets?.[0] ?? '');
+  // Map the Genie-provided source label to the best matching drawer entry.
+  // Previously the chip always opened DRAWER_SOURCES.nbo regardless of the
+  // actual source -- a parity bug on the evidence path. Fallback is `nbo`
+  // so unrecognized sources still open a meaningful drawer rather than
+  // silently dropping the click.
+  const drawerForSource =
+    /itm|rules/i.test(sourceChip) ? DRAWER_SOURCES.itm
+      : /permit/i.test(sourceChip) ? DRAWER_SOURCES.permit
+      : /lead_population|population/i.test(sourceChip) ? DRAWER_SOURCES.population
+      : /config/i.test(sourceChip) ? DRAWER_SOURCES.config
+      : DRAWER_SOURCES.nbo;
 
   return (
     <PageShell
@@ -118,7 +129,7 @@ export default function AskGenie() {
                   {sourceChip && (
                     <div style={{ marginTop: 12, display: 'flex', gap: 6, alignItems: 'center' }}>
                       <span className="muted" style={{ fontSize: 11 }}>Source:</span>
-                      <EvidenceChip source={DRAWER_SOURCES.nbo}>{sourceChip}</EvidenceChip>
+                      <EvidenceChip source={drawerForSource}>{sourceChip}</EvidenceChip>
                     </div>
                   )}
                 </div>

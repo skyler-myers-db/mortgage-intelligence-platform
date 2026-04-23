@@ -5,8 +5,11 @@ export const mockPortfolio: PortfolioPreview = {
   marketable_population: 89553,
   high_intent_leads: 12840,
   avg_score: 81,
-  projected_contact_to_app: 9.7,
-  cost_per_contact: 2.18
+  approved_count: 432,
+  in_outreach_count: 318,
+  data_refreshed_at: '2026-04-23T12:00:00Z',
+  projected_contact_to_app: null,
+  cost_per_contact: null,
 };
 
 export const mockSegments: SegmentSummary[] = [

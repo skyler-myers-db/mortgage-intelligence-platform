@@ -90,9 +90,13 @@ export interface PortfolioPreview {
   marketable_population: number;
   high_intent_leads: number;
   avg_score: number;
+  approved_count: number | null;
+  in_outreach_count: number | null;
+  data_refreshed_at: string | null; // ISO timestamp
+  trends?: Record<string, KpiTrend>;
+  // Deprecated — kept for schema compatibility; always null now.
   projected_contact_to_app: number | null;
   cost_per_contact: number | null;
-  trends?: Record<string, KpiTrend>;
 }
 
 export interface OfferAlternative {

@@ -4,13 +4,14 @@ import { PageShell } from '../components/layout/PageShell';
 import { KpiCard } from '../components/mortgage/KpiCard';
 import { USChoroplethMap } from '../components/mortgage/USChoroplethMap';
 import { AgentActivityLog } from '../components/mortgage/AgentActivityLog';
-import { Button } from '../components/Primitives';
+import { Button, Chip } from '../components/Primitives';
 import { DRAWER_SOURCES } from '../lib/drawerSources';
 import { Icon } from '../components/Icon';
 import { Reveal } from '../components/fx/Reveal';
 import { api } from '../lib/api';
 import { useApp } from '../components/AppContext';
 import { EntradaWordmark } from '../components/brand/Entrada';
+import { formatRefreshed } from '../lib/formatRefreshed';
 import type { PortfolioPreview } from '../types';
 
 const FUTURE_MODULES = [
@@ -67,10 +68,15 @@ export default function Home() {
       lede="Portfolio KPIs, geography drill-down, and the approval queue. Build a new portfolio, jump to segments, or open a borrower dossier from the map."
       wideMap
       heroRight={
-        <Link to="/portfolio-builder" className="btn btn--primary">
-          Build a portfolio
-          <Icon name="chevright" size={14} />
-        </Link>
+        <>
+          {formatRefreshed(preview?.data_refreshed_at) && (
+            <Chip variant="neutral" icon="db">{formatRefreshed(preview?.data_refreshed_at)}</Chip>
+          )}
+          <Link to="/portfolio-builder" className="btn btn--primary">
+            Build a portfolio
+            <Icon name="chevright" size={14} />
+          </Link>
+        </>
       }
     >
       {previewError && (
@@ -106,16 +112,19 @@ export default function Home() {
           source={DRAWER_SOURCES.itm}
         />
         <KpiCard
-          label="Cost per contact (est.)"
-          valueAnimated={preview?.cost_per_contact ?? null}
-          format={(n) => `$${n.toFixed(2)}`}
-          source={DRAWER_SOURCES.config}
+          label="Approved"
+          valueAnimated={preview?.approved_count ?? null}
+          trend={preview?.trends?.approved_count?.series}
+          delta={formatDelta(preview?.trends?.approved_count?.delta_pct)}
+          deltaDir={preview?.trends?.approved_count?.direction}
+          source={DRAWER_SOURCES.nbo}
         />
         <KpiCard
-          label="Projected contact → app"
-          valueAnimated={preview?.projected_contact_to_app ?? null}
-          format={(n) => n.toFixed(1)}
-          unit="%"
+          label="In outreach"
+          valueAnimated={preview?.in_outreach_count ?? null}
+          trend={preview?.trends?.in_outreach_count?.series}
+          delta={formatDelta(preview?.trends?.in_outreach_count?.delta_pct)}
+          deltaDir={preview?.trends?.in_outreach_count?.direction}
           source={DRAWER_SOURCES.nbo}
         />
       </div>

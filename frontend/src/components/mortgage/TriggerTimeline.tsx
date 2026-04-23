@@ -1,7 +1,7 @@
 import type { EvidenceEvent } from '../../types';
 import type { CSSProperties } from 'react';
 import { EvidenceChip } from '../Primitives';
-import { DRAWER_SOURCES } from '../../lib/drawerSources';
+import { descriptorFor } from '../../lib/drawerSources';
 
 /**
  * TriggerTimeline — prototype `.trig` BEM. Vertical rail with dot markers
@@ -40,7 +40,7 @@ export function TriggerTimeline({ events, segmentColor }: TriggerTimelineProps) 
           <div className="trig__what">{e.display_text}</div>
           <div className="trig__why">
             {e.source_product} · {e.signal_value}{' '}
-            <EvidenceChip source={DRAWER_SOURCES.itm}>{e.source_table.split('.')[0]}</EvidenceChip>
+            <EvidenceChip source={descriptorFor(e.source_table)}>{e.source_table.split('.')[0]}</EvidenceChip>
           </div>
         </div>
       ))}
