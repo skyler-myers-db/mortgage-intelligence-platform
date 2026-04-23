@@ -253,11 +253,25 @@ _FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
 if _FRONTEND_DIST.is_dir() and (_FRONTEND_DIST / "index.html").is_file():
     # Mount the hashed assets under /assets.
     app.mount("/assets", StaticFiles(directory=_FRONTEND_DIST / "assets"), name="assets")
+    # Mount brand assets (Entrada mark SVG + future brand artwork) under /brand.
+    # Without this mount the files in frontend/public/brand/ fall through the
+    # SPA catch-all below and return index.html, which breaks <img src="/brand/…">.
+    _BRAND_DIR = _FRONTEND_DIST / "brand"
+    if _BRAND_DIR.is_dir():
+        app.mount("/brand", StaticFiles(directory=_BRAND_DIR), name="brand")
+
+    # Favicon (lives at dist root, not under /assets).
+    @app.get("/favicon.svg", include_in_schema=False)
+    def _favicon() -> FileResponse:
+        return FileResponse(_FRONTEND_DIST / "favicon.svg")
 
     # Any other non-/api path returns index.html so React Router handles the
-    # client-side route. FastAPI evaluates routes in registration order and
-    # the `/api` routers are already in, so this catch-all doesn't collide.
+    # client-side route. Explicit no-store header so browsers don't keep a
+    # stale shell pointing at old hashed-asset URLs after a redeploy.
     @app.get("/{full_path:path}")
     def _spa_fallback(full_path: str) -> FileResponse:
         _ = full_path  # router acts as SPA catch-all
-        return FileResponse(_FRONTEND_DIST / "index.html")
+        return FileResponse(
+            _FRONTEND_DIST / "index.html",
+            headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+        )
