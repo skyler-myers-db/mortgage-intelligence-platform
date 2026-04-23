@@ -10,6 +10,7 @@ import { Icon } from '../components/Icon';
 import { Reveal } from '../components/fx/Reveal';
 import { api } from '../lib/api';
 import { useApp } from '../components/AppContext';
+import { EntradaWordmark } from '../components/brand/Entrada';
 import type { PortfolioPreview } from '../types';
 
 const FUTURE_MODULES = [
@@ -175,6 +176,12 @@ export default function Home() {
           Ask Genie
         </Button>
       </div>
+
+      <Reveal>
+        <div className="brand-signature" aria-hidden="true">
+          <EntradaWordmark height={42} />
+        </div>
+      </Reveal>
     </PageShell>
   );
 }

@@ -1,4 +1,5 @@
 import type { PropsWithChildren, ReactNode } from 'react';
+import { EntradaWordmark } from '../brand/Entrada';
 
 /**
  * PageShell — wraps a route's content in the prototype's `.main__inner` with
@@ -51,6 +52,11 @@ export function PageShell({
           </div>
         )}
         {children}
+        <footer className="page-footer" aria-label="Product footer">
+          <EntradaWordmark height={18} monochrome />
+          <span className="page-footer__sep" aria-hidden="true">·</span>
+          <span className="page-footer__name">Mortgage Intelligence Platform</span>
+        </footer>
       </div>
     </div>
   );

@@ -1,5 +1,6 @@
 import { Link, useLocation } from 'react-router-dom';
 import { Icon, type IconName } from '../Icon';
+import { EntradaMark } from '../brand/Entrada';
 
 /**
  * Left module rail. Vertical strip, 72px wide. M0 is live today; M1–M4
@@ -32,7 +33,9 @@ export function Rail() {
   const isM0 = activeModuleId === 0 && pathname !== '/__unused';
   return (
     <nav className="rail" aria-label="Modules">
-      <Link to="/" className="rail__brand" title="Entrada Mortgage Intelligence Platform"><span>ENT</span></Link>
+      <Link to="/" className="rail__brand" title="Entrada — Mortgage Intelligence Platform" aria-label="Entrada home">
+        <EntradaMark size={32} />
+      </Link>
       {MODULES.map((m) => {
         if (m.id === 0) {
           const active = isM0;

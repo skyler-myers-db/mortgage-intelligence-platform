@@ -4,6 +4,7 @@ import { useApp, type Accent, type Density, type Theme } from '../components/App
 import { PageShell } from '../components/layout/PageShell';
 import { Chip } from '../components/Primitives';
 import { Icon } from '../components/Icon';
+import { EntradaWordmark } from '../components/brand/Entrada';
 
 /**
  * Administration — operator-facing configuration for Module 0.
@@ -153,6 +154,7 @@ export default function AdminConfig() {
       eyebrow="Administration"
       title="Rules, data sources, and audit"
       lede="View the active offer ruleset, data source status, and recent audit activity. Per-user workspace appearance is in the Console panel."
+      heroRight={<EntradaWordmark height={26} />}
     >
       {/* First row — the three operator-grade panels */}
       <div
