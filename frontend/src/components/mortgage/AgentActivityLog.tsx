@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
 import { Icon, type IconName } from '../Icon';
-import { api, isAbortError, type AuditEventRow } from '../../lib/api';
+import { api, type AuditEventRow } from '../../lib/api';
+import { useWarmingUpRetry } from '../../lib/useWarmingUpRetry';
+import { WarmingUpBlock } from '../ui/WarmingUpBlock';
 import { useOptionalHealth } from '../HealthProvider';
 
 /**
@@ -67,11 +68,9 @@ function breakerLabel(b: BreakerState): string | null {
   return null;
 }
 
-type FeedState = 'loading' | 'empty' | 'error' | 'ok';
+type FeedState = 'loading' | 'empty' | 'error' | 'ok' | 'warming';
 
 export function AgentActivityLog({ limit = 12 }: { limit?: number }) {
-  const [rows, setRows] = useState<AuditEvent[]>([]);
-  const [feedState, setFeedState] = useState<FeedState>('loading');
   const healthCtx = useOptionalHealth();
   const health = healthCtx?.health ?? null;
   const probeMs = healthCtx?.probeMs ?? null;
@@ -82,27 +81,26 @@ export function AgentActivityLog({ limit = 12 }: { limit?: number }) {
   const genieBreakerState =
     (health?.circuit_breakers?.genie as BreakerState) ?? 'unknown';
 
-  useEffect(() => {
-    const ctrl = new AbortController();
-    (async () => {
-      try {
-        // Route through api.ts so 503s with `retryable: true` follow
-        // the shared exponential-backoff cadence rather than falling
-        // straight into the "unavailable" state. Hole-finder #4,
-        // 2026-04-23.
-        const data = await api.auditEvents(limit, ctrl.signal);
-        setRows(data);
-        setFeedState(data.length > 0 ? 'ok' : 'empty');
-      } catch (err) {
-        if (isAbortError(err)) return;
-        setRows([]);
-        setFeedState('error');
-      }
-    })();
-    return () => {
-      ctrl.abort();
-    };
-  }, [limit]);
+  // Cold-start warming-up — 6 retries / 5s apart on the first fetch.
+  // Only the initial fetch runs today (single-mount, no steady poll);
+  // if we add a polling cadence later, it should NOT route through this
+  // hook — use a separate in-place refresh so a transient 503 on tick N
+  // doesn't flip the whole feed to "warming" for 30s.
+  const {
+    data: auditData,
+    warmingUp,
+    error,
+  } = useWarmingUpRetry<AuditEvent[]>((signal) => api.auditEvents(limit, signal), [limit]);
+  const rows: AuditEvent[] = auditData ?? [];
+  const feedState: FeedState = warmingUp
+    ? 'warming'
+    : error
+      ? 'error'
+      : auditData === null
+        ? 'loading'
+        : rows.length > 0
+          ? 'ok'
+          : 'empty';
 
   const warehouseBreaker = breakerLabel(warehouseBreakerState);
   const genieBreaker = breakerLabel(genieBreakerState);
@@ -115,6 +113,15 @@ export function AgentActivityLog({ limit = 12 }: { limit?: number }) {
         <div className="h-4">Agent action audit log</div>
       </div>
       <div className="audit-panel">
+        {feedState === 'warming' && warmingUp && (
+          <div style={{ padding: 'var(--sp-3)' }}>
+            <WarmingUpBlock
+              state={warmingUp}
+              title="Agent activity loading"
+              compact
+            />
+          </div>
+        )}
         {feedState === 'loading' && (
           <div className="muted body" style={{ padding: 'var(--sp-3)' }}>
             Loading audit events…

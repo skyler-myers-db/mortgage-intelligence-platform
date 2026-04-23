@@ -470,11 +470,15 @@ string is what the frontend's admin 403 banner keys off of.
 
 Signals to watch in `/api/health` response:
 
-- `fallback_identity_fallbacks_total` — non-zero in a production
-  deploy means Databricks Apps is not forwarding `X-Forwarded-Email`
-  on some path, and audit rows are landing under `settings.default_actor`
-  instead of the real user. Treat as a governance regression and route
-  to governance-security-reviewer.
+- `fallback_identity_fallbacks_process_total` (canonical as of R6-08;
+  the legacy `fallback_identity_fallbacks_total` key is still emitted
+  for one cycle for dashboard compatibility) — non-zero in a
+  production deploy means Databricks Apps is not forwarding
+  `X-Forwarded-Email` on some path, and audit rows are landing under
+  `settings.default_actor` instead of the real user. Treat as a
+  governance regression and route to governance-security-reviewer.
+  The `_process_` infix signals per-replica scope: on a multi-replica
+  deploy each replica emits its own count, not a global total.
 
 ---
 
@@ -585,9 +589,11 @@ row.
    psql "host=$LAKEBASE_HOST user=$LAKEBASE_USER dbname=$LAKEBASE_DATABASE sslmode=require" \
      -c "SELECT actor_email, action, borrower_id, created_at FROM mip_app.audit_events ORDER BY created_at DESC LIMIT 5"
    ```
-   Then check the identity-fallback counter:
+   Then check the identity-fallback counter (canonical key as of R6-08
+   is `fallback_identity_fallbacks_process_total`; the legacy
+   `_total` key is still emitted for one cycle):
    ```bash
-   curl -s "$MIP_APP_URL/api/health" | jq .fallback_identity_fallbacks_total
+   curl -s "$MIP_APP_URL/api/health" | jq .fallback_identity_fallbacks_process_total
    ```
    A non-zero value means Databricks Apps dropped the header on one of
    the two paths. Fix: see §11's identity-fallback note — governance

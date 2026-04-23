@@ -274,7 +274,13 @@ def test_health_exposes_observability_counters(
         name="warehouse", from_state="closed", to_state="open"
     )
     obs.record_error(dependency="warehouse", exc_type="DatabricksSqlError")
-    res = client.get("/api/health")
+    # R6-09: the diagnostic counters are gated behind X-Forwarded-Email;
+    # anonymous callers only see {status, mode}. Operators reading these
+    # counters always come in as an authenticated workspace user, so the
+    # test simulates that with the forwarded-email header.
+    res = client.get(
+        "/api/health", headers={"X-Forwarded-Email": "ops@example.com"}
+    )
     payload: dict[str, Any] = res.json()
     assert payload["breaker_state_changes_last_hour"] >= 1
     assert payload["recent_errors_count"] >= 1
@@ -329,7 +335,12 @@ def test_health_exposes_counters_persistence_and_log_export(
     monkeypatch.setattr(health_mod, "_probe_warehouse", lambda: True)
     monkeypatch.setattr(health_mod, "_probe_lakebase", lambda: True)
     monkeypatch.setattr(health_mod, "_probe_genie", lambda: True)
-    res = client.get("/api/health")
+    # R6-09: the `counters_persistence` + `log_export` diagnostic fields
+    # are now gated behind X-Forwarded-Email. This is the ops-facing path
+    # anyway -- operators come in through the logged-in workspace browser.
+    res = client.get(
+        "/api/health", headers={"X-Forwarded-Email": "ops@example.com"}
+    )
     assert res.status_code == 200
     payload = res.json()
     assert payload["counters_persistence"] == "process-local"
@@ -560,7 +571,10 @@ def test_boot_smoke_with_otel_env_and_missing_wheel(
         monkeypatch.setattr(health_mod, "_probe_warehouse", lambda: True)
         monkeypatch.setattr(health_mod, "_probe_lakebase", lambda: True)
         monkeypatch.setattr(health_mod, "_probe_genie", lambda: True)
-        res = client.get("/api/health")
+        # R6-09: `log_export` is only surfaced to authenticated callers.
+        res = client.get(
+            "/api/health", headers={"X-Forwarded-Email": "ops@example.com"}
+        )
         assert res.status_code == 200
         assert res.json()["log_export"] == "stdout-only"
     finally:

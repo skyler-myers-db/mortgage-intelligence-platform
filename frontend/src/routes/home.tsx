@@ -103,29 +103,18 @@ export default function Home() {
 
   const queued = preview?.high_intent_leads ?? null;
 
-  // Day-0 detection (hole-finder round 2 #13, 2026-04-23): on a fresh
-  // customer workspace `mip.gold.funnel_snapshot_daily` is empty and
-  // `mip.gold.borrower_360` has no rows yet. The preview then comes back
-  // as zeroes with a null timestamp — which renders as "0 / 0 / 0 / 0"
-  // and looks like honest-but-sad real data. Catch that exact shape and
-  // show an empty-state banner so the presenter knows to run the bundle,
-  // not explain why the pipeline says nothing.
+  // Day-0 detection (R5-20): trust the server-authoritative
+  // ``day_zero`` flag on PortfolioPreview, which keys off
+  // ``COUNT(*) FROM mip.gold.lead_population``.
   //
-  // R5-20: prefer the server-authoritative ``day_zero`` flag, which
-  // keys off ``COUNT(*) FROM mip.gold.lead_population`` and is immune
-  // to the partial-CTAS-roll window where snapshot_at lags behind
-  // borrower_360. Fall back to the two-field inference for pre-R5-20
-  // servers that don't emit the flag.
-  const isDayZero =
-    preview !== null
-    && (
-      preview.day_zero === true
-      || (
-        preview.day_zero === undefined
-        && preview.marketable_population === 0
-        && preview.data_refreshed_at === null
-      )
-    );
+  // R6-06: the two-field fallback inference (marketable_population ===
+  // 0 && data_refreshed_at === null) was dead code -- the backend
+  // default is ``day_zero: false`` so the "older server" case cannot
+  // exist in practice. Dead code that returned a wrong answer when
+  // the server said False but the count happened to be 0 (e.g. a
+  // criteria that matched zero borrowers on a populated workspace),
+  // so the banner could lie. Removed; we trust the server.
+  const isDayZero = preview?.day_zero === true;
 
   return (
     <PageShell

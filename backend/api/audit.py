@@ -51,11 +51,14 @@ def log_event(
     request: Request,
     store: StoreDep,
 ) -> AuditEvent:
-    # If the caller passed an actor (legacy path), respect it; otherwise
-    # resolve from the X-Forwarded-Email header Databricks Apps plumbs
-    # through. ``resolve_actor`` logs a warning on fallback so we can
-    # spot non-authenticated calls in production logs.
-    actor = payload.actor or resolve_actor(request)
+    # R6 actor-spoof fix: never trust `payload.actor` from the request
+    # body. The audit ledger must reflect the edge-authenticated identity,
+    # not a client-supplied string — a caller passing `actor: "ceo@..."`
+    # would otherwise have every row attributed to them. `resolve_actor`
+    # reads `X-Forwarded-Email` (which the Databricks Apps edge strips +
+    # re-injects from the bearer) and logs a WARNING on fallback so ops
+    # sees non-authenticated calls.
+    actor = resolve_actor(request)
     try:
         return store.write(
             actor=actor,

@@ -6,6 +6,20 @@
 --            gold.property_owner_bridge + silver.market_rates_weekly
 --            (is_latest=TRUE).
 --
+-- Multi-catalog note (R6-01 prototype, 2026-04-23):
+--            Every `mip.<schema>.<object>` identifier in this file is a
+--            three-part name against the default tenant catalog `mip`. For
+--            customers deploying with `--var="uc_catalog=<other>"`, the
+--            intended substitution pattern is a bundle-deploy Jinja / sed
+--            preprocessor that rewrites `mip.gold.`, `mip.silver.`,
+--            `mip.ref.`, `mip.semantics.`, `mip.raw.` to the target catalog
+--            (see docs/multi-catalog-plan.md for the full design). A
+--            Databricks SQL-task can already interpolate bundle variables
+--            via `${bundle.variables.uc_catalog}`, but that only works for
+--            files listed under a `sql_task.parameters` block -- not for
+--            inline three-part names inside the statement body. Templating
+--            strategy is a packaging change, not a per-file edit.
+--
 -- Grain:     One row per clip.
 -- Pattern:   CREATE OR REPLACE TABLE ... AS SELECT. Full rebuild is the
 --            default refresh posture per data-contract §3.2. 5M rows on
@@ -172,19 +186,50 @@ enriched AS (
      OR COALESCE(b.owner_is_corporate, FALSE)
      OR COALESCE(b.is_absentee, FALSE)) AS is_investor,
     -- Current-customer detection: governed JOIN against
-    -- mip.ref.lender_dictionary (slice13-accuracy). Previously an inline
-    -- UPPER(...) LIKE '%SUMMIT%'. `is_current_customer` = NOT is_competitor
-    -- when the lender is known; FALSE otherwise.
-    COALESCE(NOT lr.is_competitor, FALSE) AS is_current_customer,
-    -- Competitor lien: servicer known AND is NOT our tenant. If the raw
-    -- lender string lands in the ref dictionary with is_competitor = TRUE,
-    -- that's authoritative. If the raw lender string is missing from the
-    -- dictionary (unseeded third-party), treat the presence of any non-null
-    -- lender string as evidence of a competitor lien -- matches the prior
-    -- "servicer known and != Summit" semantic so unknown third-party lenders
-    -- keep lighting up the retention + competitor-lien paths.
+    -- mip.ref.lender_dictionary (slice13-accuracy) with a LIKE fallback
+    -- for tenant-name variants.
+    --
+    -- R6-12 fix (2026-04-23): prior impl relied solely on an exact
+    -- equi-JOIN against `raw_key = 'SUMMIT MTG'`. Cotality's raw lender
+    -- strings carry multiple variants for the same tenant
+    -- ('SUMMIT MTG', 'SUMMIT MORTGAGE', 'SUMMIT MTG CORP', ...) so the
+    -- exact JOIN missed every non-seeded variant and collapsed the
+    -- retention segment to 0 rows across all 6 states. The integration
+    -- test `test_segment_count_parity.py::_retention_reference_sql` uses
+    -- `UPPER(lender) LIKE '%SUMMIT%'` as its authoritative check, which
+    -- is the data-contract §3.2 intent ("tenant customer, string match")
+    -- -- this CTAS now mirrors that semantic.
+    --
+    -- Order of precedence:
+    --   1. If ref.lender_dictionary has a row for this lender_raw_key:
+    --      trust the governed `is_competitor` flag (FALSE -> customer).
+    --      This keeps the Summit rebrand path governed -- admins edit
+    --      ref.lender_dictionary, not this SQL.
+    --   2. Else if the raw lender string contains the tenant token
+    --      (`%SUMMIT%`): treat as current customer. Catches seeding gaps
+    --      for unseeded tenant variants.
+    --   3. Else: FALSE (not a known customer).
+    --
+    -- The tenant token is hardcoded 'SUMMIT' here to match the
+    -- sample-lender naming rule in CLAUDE.md. When admin-config lands
+    -- (Slice 5) this becomes a `settings.tenant_lender_token` binding
+    -- passed in via the refresh job -- see mip_app.thresholds pattern.
+    (
+      COALESCE(NOT lr.is_competitor, FALSE)
+      OR (b.first_pos_lender_current IS NOT NULL
+          AND UPPER(b.first_pos_lender_current) LIKE '%SUMMIT%')
+    ) AS is_current_customer,
+    -- Competitor lien: servicer known AND is NOT our tenant. Mirrors the
+    -- customer detection above -- any row that lands as is_current_customer
+    -- (either via ref or LIKE fallback) is NOT a competitor lien; everything
+    -- else with a non-null lender string is. Preserves the "servicer known
+    -- and != tenant" semantic so unknown third-party lenders keep lighting
+    -- up the retention + competitor-lien paths.
     (b.first_pos_lender_current IS NOT NULL
-     AND NOT COALESCE(NOT lr.is_competitor, FALSE)) AS is_competitor_lien,
+     AND NOT (
+       COALESCE(NOT lr.is_competitor, FALSE)
+       OR UPPER(b.first_pos_lender_current) LIKE '%SUMMIT%'
+     )) AS is_competitor_lien,
     (COALESCE(b.owner_occupancy_code, '') = 'O') AS is_owner_occupied,
     -- BLOCKED columns -- hardcoded FALSE until Cotality Permits + MLS land.
     CAST(FALSE AS BOOLEAN) AS has_permit,

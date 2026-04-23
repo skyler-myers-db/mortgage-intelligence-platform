@@ -4,3 +4,4 @@
 - [venv binaries for ruff/pytest](reference_venv_binaries.md) — use .venv/bin/ruff and .venv/bin/pytest; they're not on PATH.
 - [Gold Lakeflow DLT retired](project_gold_pipeline_delegates_to_sql.md) — mip_gold_pipeline.py deleted in slice13-accuracy; CTAS chain in mip_refresh_scores is authoritative.
 - [Slice13 accuracy — two data gaps](project_slice13_accuracy.md) — historical-lender dedup fix + mip.ref.lender_dictionary promotion on 2026-04-21.
+- [R6-12 retention fix](project_r612_retention_fix.md) — lender dict equi-JOIN missed Summit variants; LIKE fallback restored 2026-04-23.

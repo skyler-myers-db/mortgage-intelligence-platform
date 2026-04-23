@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { api, isAbortError } from '../lib/api';
+import { api } from '../lib/api';
+import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
 import type { LeadSummary } from '../types';
 import { PageShell } from '../components/layout/PageShell';
 import { LeadTable } from '../components/mortgage/LeadTable';
 import { Chip } from '../components/Primitives';
+import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 
 /**
  * Lead Queue — deep-dive table route. Full borrower list (filtered by segment
@@ -21,44 +23,29 @@ export default function LeadQueue() {
   // 2-char state code (e.g. `?state=IL`) from the home-map deep-link.
   // Uppercased defensively so `/lead-queue?state=il` still works.
   const stateFilter = (searchParams.get('state') ?? '').toUpperCase() || undefined;
-  const [leads, setLeads] = useState<LeadSummary[]>([]);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [loading, setLoading] = useState<boolean>(true);
-  // Reload token for the Retry button. Hole-finder finding #1, 2026-04-23.
-  const [reloadToken, setReloadToken] = useState<number>(0);
 
-  useEffect(() => {
-    // AbortController cancels the stale /api/leads fetch when segment
-    // changes or the route unmounts. Round-2 hole-finder #10/#11,
-    // 2026-04-23.
-    const ctrl = new AbortController();
-    setLoading(true);
-    setLoadError(null);
-    api
-      .leads(segment, ctrl.signal)
-      .then((data) => {
-        setLeads(data);
-        setLoading(false);
-      })
-      .catch((err: unknown) => {
-        if (isAbortError(err)) return;
-        setLeads([]);
-        setLoading(false);
-        setLoadError(
-          err instanceof Error
-            ? `Couldn't load leads: ${err.message}`
-            : "Couldn't load leads.",
-        );
-      });
-    return () => {
-      ctrl.abort();
-    };
-  }, [segment, reloadToken]);
-
-  const visibleLeads = useMemo(
-    () => (stateFilter ? leads.filter((l) => l.state === stateFilter) : leads),
-    [leads, stateFilter],
+  // Cold-start warming-up loop — 6 retries / 5s apart. Re-runs when
+  // `segment` changes (deep-link from /segment-intelligence).
+  const {
+    data: leadsData,
+    warmingUp,
+    error,
+    manualRetry,
+  } = useWarmingUpRetry<LeadSummary[]>(
+    (signal) => api.leads(segment, signal),
+    [segment],
   );
+  const loading = leadsData === null && warmingUp === null && error === null;
+  const loadError = error
+    ? error instanceof Error
+      ? `Couldn't load leads: ${error.message}`
+      : "Couldn't load leads."
+    : null;
+
+  const visibleLeads = useMemo(() => {
+    const leads = leadsData ?? [];
+    return stateFilter ? leads.filter((l) => l.state === stateFilter) : leads;
+  }, [leadsData, stateFilter]);
 
   return (
     <PageShell
@@ -74,7 +61,10 @@ export default function LeadQueue() {
         ) : undefined
       }
     >
-      {loadError && (
+      {warmingUp && (
+        <WarmingUpBlock state={warmingUp} title="Ranked borrowers loading" compact />
+      )}
+      {loadError && !warmingUp && (
         <div
           role="alert"
           style={{
@@ -94,19 +84,19 @@ export default function LeadQueue() {
           <button
             type="button"
             className="btn btn--ghost btn--sm"
-            onClick={() => setReloadToken((n) => n + 1)}
+            onClick={manualRetry}
             aria-label="Retry loading leads"
           >
             Retry
           </button>
         </div>
       )}
-      {loading && !loadError && (
+      {loading && !loadError && !warmingUp && (
         <div className="muted body" style={{ marginBottom: 'var(--gap-grid)' }}>
           Loading leads…
         </div>
       )}
-      {!loading && !loadError && visibleLeads.length === 0 && (
+      {!loading && !loadError && !warmingUp && visibleLeads.length === 0 && (
         <div className="muted body" style={{ marginBottom: 'var(--gap-grid)' }}>
           No leads match this filter.
         </div>

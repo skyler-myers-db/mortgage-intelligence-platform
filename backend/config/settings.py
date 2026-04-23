@@ -270,6 +270,74 @@ def _mint_workspace_identity_token(host: str) -> SecretStr | None:
         return None
 
 
+def looks_like_databricks_app_deploy() -> bool:
+    """Return True when the runtime environment looks like Databricks Apps.
+
+    R6-10 trust boundary guard. ``trust_forwarded_headers`` defaults to
+    True because Databricks Apps is the identity edge that strips
+    inbound client headers and injects its own. On a non-Apps deploy
+    (Azure App Service, GKE, plain uvicorn behind nginx, a local laptop)
+    the default is a trivial RBAC / audit-attribution bypass: any
+    caller can forge ``X-Forwarded-Email``.
+
+    Databricks Apps injects ``DATABRICKS_APP_PORT`` into the container
+    environment before uvicorn binds (see ``backend/runtime.py`` line
+    65 which uses the same env var to choose the listen port). That's
+    the most reliable single marker; we also accept
+    ``DATABRICKS_APP_URL`` (set on newer Apps images) as a secondary
+    signal so a future platform rename doesn't silently disable the
+    guard. The check is intentionally forgiving -- a false positive
+    (we say "Apps" when we're not) is a silent warning miss; a false
+    negative (we say "not Apps" when we are) is a noisy but harmless
+    log line. We bias toward false positives to avoid log spam on the
+    real production path.
+    """
+    return bool(
+        os.environ.get("DATABRICKS_APP_PORT")
+        or os.environ.get("DATABRICKS_APP_URL")
+    )
+
+
+def check_trust_boundary_at_startup() -> None:
+    """Emit a structured WARNING when trust is enabled outside Apps.
+
+    Called from the FastAPI lifespan. The warning is non-fatal because
+    some unusual deploys (a reverse proxy that DOES strip inbound
+    X-Forwarded-* headers) are legitimate with trust=True even without
+    the Apps marker. Operators see the WARNING in stdout JSON logs and
+    decide whether to flip the flag; the audit ledger separately tracks
+    ``fallback_identity_fallbacks_total`` which a non-Apps trusted deploy
+    would still pin at zero under legitimate authenticated traffic, so
+    the two signals reinforce each other.
+
+    See ``docs/security/GRANTS.md`` §10 Trust boundary for the
+    deployment-shape matrix this guards.
+    """
+    import logging
+
+    log = logging.getLogger("mip-runtime")
+    # Re-read settings here rather than using the module-level
+    # ``settings`` constant, because tests monkeypatch the flag and want
+    # the current value.
+    trust = get_settings().trust_forwarded_headers
+    if trust and not looks_like_databricks_app_deploy():
+        log.warning(
+            "rbac_trust_boundary_unclear: trust_forwarded_headers=True "
+            "but runtime does not look like a Databricks Apps deploy "
+            "(no DATABRICKS_APP_PORT / DATABRICKS_APP_URL env var). "
+            "Client-supplied X-Forwarded-Email / X-Forwarded-Groups "
+            "headers will be trusted as identity; if no upstream proxy "
+            "strips them, a caller can forge any identity. Set "
+            "MIP_TRUST_FORWARDED_HEADERS=false to fail closed on this "
+            "deploy shape. See docs/security/GRANTS.md #10.",
+            extra={
+                "event": "rbac_trust_boundary_unclear",
+                "trust_forwarded_headers": trust,
+                "databricks_app_marker": False,
+            },
+        )
+
+
 @lru_cache
 def get_settings() -> Settings:
     return Settings()

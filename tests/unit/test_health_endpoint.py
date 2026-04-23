@@ -46,7 +46,7 @@ def test_health_returns_ok_when_both_deps_up(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr(health_mod, "_probe_lakebase", lambda: True)
     monkeypatch.setattr(health_mod, "_probe_genie", lambda: True)
 
-    res = client.get("/api/health")
+    res = client.get("/api/health", headers={"X-Forwarded-Email": "ops@example.com"})
     assert res.status_code == 200
     payload: dict[str, Any] = res.json()
     assert payload["status"] == "ok"
@@ -62,7 +62,7 @@ def test_health_returns_degraded_when_warehouse_down(
     monkeypatch.setattr(health_mod, "_probe_lakebase", lambda: True)
     monkeypatch.setattr(health_mod, "_probe_genie", lambda: True)
 
-    res = client.get("/api/health")
+    res = client.get("/api/health", headers={"X-Forwarded-Email": "ops@example.com"})
     # Degraded state STILL returns 200 so load balancers don't pull
     # the container.
     assert res.status_code == 200
@@ -85,7 +85,7 @@ def test_health_reports_open_breaker_state(monkeypatch: pytest.MonkeyPatch) -> N
     cb.record_failure()
     assert cb.state == "open"
 
-    res = client.get("/api/health")
+    res = client.get("/api/health", headers={"X-Forwarded-Email": "ops@example.com"})
     payload = res.json()
     assert payload["circuit_breakers"]["warehouse"] == "open"
 
@@ -100,7 +100,7 @@ def test_health_reports_genie_down_and_degrades_status(
     monkeypatch.setattr(health_mod, "_probe_lakebase", lambda: True)
     monkeypatch.setattr(health_mod, "_probe_genie", lambda: False)
 
-    res = client.get("/api/health")
+    res = client.get("/api/health", headers={"X-Forwarded-Email": "ops@example.com"})
     assert res.status_code == 200
     payload = res.json()
     assert payload["status"] == "degraded"
@@ -174,7 +174,7 @@ def test_health_bursts_share_one_probe_per_dependency(
     monkeypatch.setattr(health_mod, "_probe_genie", lambda: _probe("genie"))
 
     for _ in range(5):
-        res = client.get("/api/health")
+        res = client.get("/api/health", headers={"X-Forwarded-Email": "ops@example.com"})
         assert res.status_code == 200
         assert res.json()["status"] == "ok"
 
@@ -194,7 +194,7 @@ def test_health_returns_cached_value_during_stale_window(
     monkeypatch.setattr(health_mod, "_probe_warehouse", lambda: True)
     monkeypatch.setattr(health_mod, "_probe_lakebase", lambda: True)
     monkeypatch.setattr(health_mod, "_probe_genie", lambda: True)
-    res = client.get("/api/health")
+    res = client.get("/api/health", headers={"X-Forwarded-Email": "ops@example.com"})
     assert res.json()["status"] == "ok"
 
     # Manually poke the cache so the warehouse entry is past the soft
@@ -214,9 +214,77 @@ def test_health_returns_cached_value_during_stale_window(
     # the contract is "the request thread sees the cached value", which
     # is up=True.
     monkeypatch.setattr(health_mod, "_probe_warehouse", lambda: False)
-    res = client.get("/api/health")
+    res = client.get("/api/health", headers={"X-Forwarded-Email": "ops@example.com"})
     # Cached value wins for this call.
     assert res.json()["dependencies"]["warehouse"] == "up"
+
+
+# ---------------------------------------------------------------------------
+# R6-09: anonymous callers get a minimal probe-friendly body; authenticated
+# callers get the full diagnostic body. The LB probe path stays 200 in both.
+# ---------------------------------------------------------------------------
+
+
+def test_health_anonymous_returns_minimal_body(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An unauthenticated caller (no X-Forwarded-Email) must only see
+    ``{status, mode}`` so an attacker probing the public Databricks Apps
+    URL doesn't get breaker state, app_env, or identity-fallback counters
+    for free."""
+    monkeypatch.setattr(health_mod, "_probe_warehouse", lambda: True)
+    monkeypatch.setattr(health_mod, "_probe_lakebase", lambda: True)
+    monkeypatch.setattr(health_mod, "_probe_genie", lambda: True)
+
+    res = client.get("/api/health")
+    assert res.status_code == 200
+    body = res.json()
+    # Exactly these two keys, nothing more. Anything additional is a
+    # reconnaissance regression.
+    assert set(body.keys()) == {"status", "mode"}
+    assert body["status"] == "ok"
+    assert body["mode"] == "live"
+
+
+def test_health_anonymous_degraded_still_minimal(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Degraded anonymous probes stay 200 with the minimal body. The LB
+    contract is preserved (degraded != unhealthy)."""
+    monkeypatch.setattr(health_mod, "_probe_warehouse", lambda: False)
+    monkeypatch.setattr(health_mod, "_probe_lakebase", lambda: True)
+    monkeypatch.setattr(health_mod, "_probe_genie", lambda: True)
+
+    res = client.get("/api/health")
+    assert res.status_code == 200
+    body = res.json()
+    assert set(body.keys()) == {"status", "mode"}
+    assert body["status"] == "degraded"
+
+
+def test_health_authenticated_returns_full_diagnostics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A request with ``X-Forwarded-Email`` set gets the full diagnostic
+    body: dependencies, circuit_breakers, counters, log_export posture."""
+    monkeypatch.setattr(health_mod, "_probe_warehouse", lambda: True)
+    monkeypatch.setattr(health_mod, "_probe_lakebase", lambda: True)
+    monkeypatch.setattr(health_mod, "_probe_genie", lambda: True)
+
+    res = client.get("/api/health", headers={"X-Forwarded-Email": "skyler@entrada.ai"})
+    assert res.status_code == 200
+    body = res.json()
+    # Contract: every diagnostic field is present for authenticated callers.
+    for key in [
+        "status",
+        "mode",
+        "app_env",
+        "warehouse_id",
+        "dependencies",
+        "circuit_breakers",
+        "breaker_state_changes_last_hour",
+        "recent_errors_count",
+        "counters_persistence",
+        "log_export",
+        "fallback_identity_fallbacks_total",
+    ]:
+        assert key in body, f"authenticated body must surface {key}"
 
 
 def test_health_forces_sync_reprobe_after_hard_ttl(
@@ -250,6 +318,6 @@ def test_health_forces_sync_reprobe_after_hard_ttl(
     # TTL, this request must re-probe synchronously and see the new
     # value.
     monkeypatch.setattr(health_mod, "_probe_warehouse", lambda: False)
-    res = client.get("/api/health")
+    res = client.get("/api/health", headers={"X-Forwarded-Email": "ops@example.com"})
     assert res.json()["dependencies"]["warehouse"] == "down"
     assert res.json()["status"] == "degraded"

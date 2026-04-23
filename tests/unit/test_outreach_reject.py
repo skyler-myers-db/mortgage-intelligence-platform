@@ -104,15 +104,18 @@ def test_reject_writes_approval_and_audit_rows(override_deps) -> None:
     override_deps(audit=audit, lakebase=fake_lakebase)
 
     client = TestClient(app)
+    # R6 actor-spoof fix: actor attribution is the edge-authenticated
+    # identity (X-Forwarded-Email), not the request body. Body ``actor``
+    # is retained for backcompat but ignored for audit writes.
     resp = client.post(
         "/api/outreach/reject",
         json={
             "borrower_id": "B-48291",
             "offer_code": "HELOC-STD",
-            "actor": "lo@example.com",
             "evidence_ids": ["ev-1", "ev-2"],
             "rationale": "Borrower opted out",
         },
+        headers={"X-Forwarded-Email": "lo@example.com"},
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()

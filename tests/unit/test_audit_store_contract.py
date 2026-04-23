@@ -64,7 +64,11 @@ def test_write_issues_insert_with_named_params() -> None:
         action="view_borrower_360",
         entity_type="borrower",
         entity_id="B-48291",
-        payload_json={"score": 92},
+        # R6-20 allowlist: ``opportunity_score`` is an approved metadata
+        # key; ``score`` (used previously here) is not -- the allowlist
+        # is deliberately narrow so reviewers explicitly sign off on
+        # every new key. See ``_ALLOWED_METADATA_KEYS`` in audit_store.py.
+        payload_json={"opportunity_score": 92},
         evidence_ids=["ev-1", "ev-2"],
         event_type="VIEW_BORROWER",
         subject_clip="abc123def456",
@@ -92,7 +96,7 @@ def test_write_issues_insert_with_named_params() -> None:
     assert params["event_type"] == "VIEW_BORROWER"
     assert params["subject_clip"] == "abc123def456"
     assert params["evidence_ids"] == ["ev-1", "ev-2"]
-    assert "score" in params["metadata"]  # JSON-serialized
+    assert "opportunity_score" in params["metadata"]  # JSON-serialized
     # Round-tripped AuditEvent.
     assert event.actor == "skyler@entrada.ai"
     assert event.event_type == "VIEW_BORROWER"
@@ -237,8 +241,13 @@ def test_default_actor_increments_counter() -> None:
 
 def test_health_reports_fallback_counter() -> None:
     """``/api/health`` exposes the counter as
-    ``fallback_identity_fallbacks_total`` so operators can surface it
-    in dashboards without an extra scrape target.
+    ``fallback_identity_fallbacks_process_total`` (R6-08 rename; legacy
+    ``fallback_identity_fallbacks_total`` still emitted for one cycle)
+    so operators can surface it in dashboards without an extra scrape
+    target.
+
+    R6-09: the diagnostic body is gated behind ``X-Forwarded-Email``,
+    so we send the header to exercise the authenticated branch.
     """
     _reset_fallback_counter_for_tests()
     # Bump it twice via the service-level API so the test doesn't depend
@@ -246,9 +255,16 @@ def test_health_reports_fallback_counter() -> None:
     resolve_actor(None)
     resolve_actor(None)
     client = TestClient(app)
-    response = client.get("/api/health")
+    response = client.get(
+        "/api/health",
+        headers={"X-Forwarded-Email": "ops@example.com"},
+    )
     assert response.status_code == 200, response.text
     body = response.json()
+    # R6-08 canonical key.
+    assert "fallback_identity_fallbacks_process_total" in body
+    assert body["fallback_identity_fallbacks_process_total"] >= 2
+    # Legacy key still emitted for one cycle.
     assert "fallback_identity_fallbacks_total" in body
     assert body["fallback_identity_fallbacks_total"] >= 2
 

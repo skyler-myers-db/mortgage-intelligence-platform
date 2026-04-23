@@ -198,10 +198,15 @@ def test_day_zero_false_when_lead_population_has_rows():
     assert preview.day_zero is False
 
 
-def test_day_zero_defaults_false_when_probe_raises():
-    """Safe default: an incorrect ``True`` would hide real data, so on
-    any failure probing ``lead_population`` we return ``False`` and let
-    the caller see whatever row counts came back from the warehouse."""
+def test_day_zero_probe_failure_propagates():
+    """R6-07: a warehouse failure on the day-zero probe must propagate.
+
+    The prior implementation silently returned ``False`` on exception,
+    which surfaced a misleading preview -- a degraded banner on top of
+    a "there IS data, it's just 0" KPI grid. Now the exception bubbles
+    to the router so the caller sees one honest 503 and the warming-up
+    banner instead of a half-rendered page.
+    """
 
     class _FailingClient(_StubClient):
         def execute_one(
@@ -213,8 +218,8 @@ def test_day_zero_defaults_false_when_probe_raises():
 
     client = _FailingClient(_preview_row(), [_trend_row("2026-04-22T18:30:00")])
     repo = DatabricksPortfolioRepository(client)  # type: ignore[arg-type]
-    preview = repo.preview(None)
-    assert preview.day_zero is False
+    with pytest.raises(RuntimeError, match="warehouse probe failed"):
+        repo.preview(None)
 
 
 # ---------------------------------------------------------------------------

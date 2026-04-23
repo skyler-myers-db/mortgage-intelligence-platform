@@ -514,19 +514,29 @@ class DatabricksPortfolioRepository:
 
         R5-20: authoritative day-zero signal. Cached under its own key
         so it's shared across every criteria variant (day-zero doesn't
-        depend on the filter). Resilient-by-default: any failure means
-        we can't prove the gold table is empty, so we return ``False``
-        and let the preview render whatever row counts the warehouse
-        returns. An incorrect ``True`` would hide real data; ``False``
-        is the safe default.
+        depend on the filter).
+
+        R6-06/R6-07: exceptions propagate. The prior implementation
+        swallowed any failure into ``return False``, which yielded a
+        misleading preview -- the frontend would say "there IS data"
+        (day_zero=False) alongside KPIs of 0 (because the preview
+        execute_one ALSO failed, but differently) and show a degraded
+        banner on top. Letting the exception bubble out means the
+        preview route's surrounding ``DependencyDownError`` -> 503
+        path fires cleanly and the UI shows a single honest "warming
+        up" message instead of a misleading empty grid.
+
+        The ``execute_one`` here runs through ``ResilientSqlClient``,
+        so transient warehouse failures already surface as
+        ``DependencyDownError``. Any non-resilience exception (e.g.
+        schema drift) is also a legitimate 503 signal -- we are not
+        in the business of quietly rendering zeros for unknown
+        failure modes.
         """
         cached = self._cache.get(self._DAY_ZERO_CACHE_KEY)
         if cached is not None:
             return bool(cached)
-        try:
-            row = self._client.execute_one(self._DAY_ZERO_SQL) or {}
-        except Exception:  # noqa: BLE001 -- see docstring
-            return False
+        row = self._client.execute_one(self._DAY_ZERO_SQL) or {}
         day_zero = bool(row.get("day_zero"))
         self._cache.set(self._DAY_ZERO_CACHE_KEY, day_zero, self._cache_ttl_s)
         return day_zero

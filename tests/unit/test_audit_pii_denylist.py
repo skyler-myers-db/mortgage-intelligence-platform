@@ -14,9 +14,11 @@ from unittest.mock import MagicMock
 import pytest
 
 from backend.services.audit_store import (
+    AuditMetadataViolation,
     AuditPIIError,
     InMemoryAuditStore,
     LakebaseAuditStore,
+    _assert_allowlisted,
     _assert_no_pii,
 )
 
@@ -103,7 +105,11 @@ def test_in_memory_store_accepts_clean_payload() -> None:
         action="view_borrower_360",
         entity_type="borrower",
         entity_id="B-1",
-        payload_json={"score": 92, "clip": "clip-ref-abc"},
+        # Use allowlist-approved keys (``opportunity_score`` + ``confidence``
+        # are on the reviewed R6-20 allowlist; raw ``score`` / ``clip`` are
+        # not, because they shadow PII-adjacent vocabulary we deliberately
+        # excluded).
+        payload_json={"opportunity_score": 92, "confidence": 0.87},
     )
     assert event.entity_id == "B-1"
 
@@ -128,3 +134,151 @@ def test_lakebase_store_rejects_pii_payload_before_insert() -> None:
     # Critically: no INSERT was issued.
     client.fetchone.assert_not_called()
     client.execute.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# R6-20 allowlist -- complement to the denylist. Unknown keys raise
+# AuditMetadataViolation so a router accidentally adding an unreviewed
+# field fails loudly before the row hits the append-only ledger.
+# ---------------------------------------------------------------------------
+
+
+def test_allowlist_rejects_unknown_key() -> None:
+    """A payload with a key outside ``_ALLOWED_METADATA_KEYS`` must raise.
+
+    Canonical trigger: a dev adds a new field to an approve/reject
+    payload without auditing whether it's PII-adjacent. The denylist
+    wouldn't catch ``contact_preference`` (not a PII name), but the
+    allowlist does.
+    """
+    with pytest.raises(AuditMetadataViolation) as info:
+        _assert_allowlisted({"action": "outreach.approve", "contact_preference": "sms"})
+    assert "contact_preference" in info.value.unexpected_keys
+
+
+def test_allowlist_permits_known_keys() -> None:
+    """A payload made entirely of reviewed keys passes cleanly."""
+    _assert_allowlisted(
+        {
+            "action": "outreach.approve",
+            "approval_id": "uuid-123",
+            "offer_code": "RATE_REFI",
+            "borrower_id": "B-00042",
+            "request_id": "req-abc",
+            "opportunity_score": 92,
+            "confidence": 0.87,
+            "thresholds_applied": {"min_spread_bps": 75},
+        }
+    )
+
+
+def test_allowlist_is_case_insensitive() -> None:
+    """Upper-cased known keys still pass -- matches the denylist policy."""
+    _assert_allowlisted({"OFFER_CODE": "RATE_REFI"})
+
+
+def test_in_memory_store_rejects_unlisted_metadata_key() -> None:
+    """The InMemoryAuditStore must run the allowlist check. ``owner_address``
+    is NOT on the denylist (not one of the classic name/phone/email keys)
+    but is also NOT on the allowlist -- the exact gap R6-20 closes."""
+    store = InMemoryAuditStore()
+    with pytest.raises(AuditMetadataViolation):
+        store.write(
+            actor="skyler@entrada.ai",
+            action="outreach.approve",
+            entity_type="approval",
+            entity_id="uuid-123",
+            payload_json={"owner_address": "123 Main St"},
+        )
+
+
+def test_lakebase_store_rejects_unlisted_key_before_insert() -> None:
+    """Allowlist runs before the INSERT so poisoned payloads never
+    reach Postgres."""
+    client = MagicMock()
+    store = LakebaseAuditStore(client=client)
+    with pytest.raises(AuditMetadataViolation):
+        store.write(
+            actor="skyler@entrada.ai",
+            action="outreach.approve",
+            entity_type="approval",
+            entity_id="uuid-123",
+            payload_json={"owner_address": "123 Main St"},
+        )
+    client.fetchone.assert_not_called()
+    client.execute.assert_not_called()
+
+
+def test_historical_payload_shapes_all_pass_allowlist() -> None:
+    """Regression test: every audit.write() call site in backend/api/*
+    as of 2026-04-23 must pass the allowlist cleanly. If this test
+    breaks, the allowlist inventory drifted from the call sites."""
+    store = InMemoryAuditStore()
+    # borrowers.py::read_borrower_360
+    store.write(
+        actor="a@b.com", action="view_borrower_360",
+        entity_type="borrower", entity_id="B-1",
+        payload_json={
+            "opportunity_score": 92,
+            "confidence": 0.87,
+            "segment_codes": ["itm"],
+            "recommended_offer": "RATE_REFI",
+        },
+    )
+    # outreach.py::draft_outreach
+    store.write(
+        actor="a@b.com", action="draft_outreach",
+        entity_type="outreach_draft", entity_id="B-1",
+        payload_json={"channel": "email", "offer_code": "RATE_REFI"},
+    )
+    # outreach.py::approve_outreach
+    store.write(
+        actor="a@b.com", action="outreach.approve",
+        entity_type="approval", entity_id="uuid-1",
+        payload_json={
+            "approval_id": "uuid-1",
+            "offer_code": "RATE_REFI",
+            "borrower_id": "B-1",
+            "request_id": "req-1",
+            "draft_body": "Hi there...",
+        },
+    )
+    # outreach.py::reject_outreach
+    store.write(
+        actor="a@b.com", action="outreach.reject",
+        entity_type="approval", entity_id="uuid-2",
+        payload_json={
+            "approval_id": "uuid-2",
+            "offer_code": "RATE_REFI",
+            "borrower_id": "B-1",
+            "request_id": "req-2",
+            "rationale": "not a fit",
+        },
+    )
+    # leads.py::list_leads_ranked
+    store.write(
+        actor="a@b.com", action="view_leads_ranked",
+        entity_type="lead_queue", entity_id="itm",
+        payload_json={
+            "rendered_borrower_ids": ["B-1", "B-2"],
+            "portfolio_id": "p-1",
+            "segment": "itm",
+            "limit": 50,
+        },
+    )
+    # offers.py::recommend_offer
+    store.write(
+        actor="a@b.com", action="recommend_offer",
+        entity_type="borrower", entity_id="B-1",
+        payload_json={
+            "offer_code": "RATE_REFI",
+            "confidence": 0.87,
+            "thresholds_applied": {"min_spread_bps": 75},
+        },
+    )
+    # admin.py::set_rules
+    store.write(
+        actor="a@b.com", action="admin.rules.override_set",
+        entity_type="admin_rules", entity_id="legacy_override",
+        payload_json={"overrides": {"min_spread_bps": 80}},
+    )

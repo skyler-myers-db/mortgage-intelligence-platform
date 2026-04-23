@@ -36,7 +36,7 @@ from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 
 from backend.config.settings import settings
 from backend.services.audit_store import get_fallback_identity_count
@@ -214,16 +214,50 @@ def _cached_probe(name: str, probe: Any) -> bool:
 
 
 @router.get("/health")
-def health() -> dict[str, Any]:
+def health(request: Request) -> dict[str, Any]:
+    """Return a probe-friendly body to anonymous callers and the full
+    diagnostic body to authenticated callers.
+
+    R6-09 (governance/security): the endpoint is publicly reachable via
+    the Databricks Apps URL, which is how the platform's load balancer
+    does liveness/readiness checks. The LB sends anonymous requests, so
+    we MUST keep returning a 200 with a minimal body shape
+    (``{status, mode}``) for that path. What changed: an external
+    attacker probing the same URL used to get circuit-breaker state,
+    app_env, flap-history counts, and the identity-fallback counter --
+    which is free reconnaissance. That data is now gated behind
+    ``X-Forwarded-Email``: any authenticated workspace user sees it,
+    anonymous callers do not. We deliberately do NOT require admin
+    here; the diagnostic body is ops-grade, not admin-grade, and every
+    authenticated user can already see the degraded banner's reasoning.
+
+    HTTP status stays 200 in both shapes even when ``status=="degraded"``
+    so the LB probe contract (degraded != unhealthy) is preserved.
+    """
     warehouse_up = _cached_probe("warehouse", _probe_warehouse)
     lakebase_up = _cached_probe("lakebase", _probe_lakebase)
     genie_up = _cached_probe("genie", _probe_genie)
+    status = "ok" if (warehouse_up and lakebase_up and genie_up) else "degraded"
+
+    # Anonymous caller (LB / external probe): minimal body only. We
+    # check the forwarded-email header rather than running resolve_actor
+    # so this endpoint never bumps the identity-fallback counter for a
+    # routine probe, and never accidentally surfaces the counter itself.
+    authenticated = bool(request.headers.get("X-Forwarded-Email"))
+    if not authenticated:
+        return {"status": status, "mode": "live"}
+
+    # Authenticated caller: full diagnostic body. Keep the dependencies
+    # + circuit_breakers blocks so the frontend's degraded banner and
+    # the ops-facing `/admin/health` page can still reason about
+    # dependency state; those fetches happen in a logged-in workspace
+    # browser session that Databricks Apps decorates with
+    # X-Forwarded-Email.
     deps = {
         "warehouse": "up" if warehouse_up else "down",
         "lakebase": "up" if lakebase_up else "down",
         "genie": "up" if genie_up else "down",
     }
-    status = "ok" if (warehouse_up and lakebase_up and genie_up) else "degraded"
     return {
         "status": status,
         "mode": "live",
@@ -257,5 +291,17 @@ def health() -> dict[str, Any]:
         # should always forward the header. The counter is process-local
         # (like the two above); the durable trail is the structured
         # WARNING log emitted at each fallback.
+        #
+        # R6-08: the legacy ``_total`` suffix matches the Prometheus
+        # global-monotonic-counter convention but the body explicitly
+        # declares ``counters_persistence: "process-local"``. Multi-replica
+        # Databricks Apps deployments show inconsistent scrapes under the
+        # old name because each replica's count is independent.
+        # Canonical key is now ``fallback_identity_fallbacks_process_total``
+        # (``process_`` infix signals per-replica scope). The legacy key is
+        # still emitted for one cycle so dashboards / alerts that already
+        # scrape it don't silently drop to 0; remove in the next cleanup
+        # pass once downstream consumers cut over.
+        "fallback_identity_fallbacks_process_total": get_fallback_identity_count(),
         "fallback_identity_fallbacks_total": get_fallback_identity_count(),
     }

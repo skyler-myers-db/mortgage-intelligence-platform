@@ -56,8 +56,22 @@ class DependencyDownError(RuntimeError):
 
     ``dependency`` is the short name the UI shows ("warehouse",
     "lakebase"); ``reason`` is the operator-facing string (underlying
-    exception or "breaker open").
+    exception or "breaker open"); ``kind`` is the machine-readable
+    classification the frontend keys on to pick a retry cadence.
+
+    R6-05: ``kind`` distinguishes "warming_up" (first-request cold-start
+    against a suspended warehouse, fast retry OK) from "breaker_open"
+    (breaker already tripped by prior flap, give it the cooldown window
+    before retrying) from "retries_exhausted" (retry budget blown by a
+    harder outage). The legacy ``retryable: true`` field stays on the
+    wire so existing UI code keeps working; the additive ``kind`` lets
+    the frontend (in a parallel cycle) pick a smarter backoff.
     """
+
+    KIND_WARMING_UP = "warming_up"
+    KIND_BREAKER_OPEN = "breaker_open"
+    KIND_RETRIES_EXHAUSTED = "retries_exhausted"
+    _ALLOWED_KINDS = frozenset({KIND_WARMING_UP, KIND_BREAKER_OPEN, KIND_RETRIES_EXHAUSTED})
 
     def __init__(
         self,
@@ -65,11 +79,15 @@ class DependencyDownError(RuntimeError):
         *,
         reason: str,
         last_error: BaseException | None = None,
+        kind: str = KIND_WARMING_UP,
     ) -> None:
         super().__init__(f"{dependency} dependency is down: {reason}")
         self.dependency = dependency
         self.reason = reason
         self.last_error = last_error
+        # Defensively clamp to the allowed set so a typo in a future
+        # call site can't ship a freeform string to the frontend.
+        self.kind = kind if kind in self._ALLOWED_KINDS else self.KIND_WARMING_UP
 
 
 # ---------------------------------------------------------------------------
@@ -322,6 +340,14 @@ def with_retry(
     Raises the *last* exception when all attempts are exhausted. A
     ``retry_on`` miss (e.g. ``DependencyDownError``) short-circuits to
     the original exception immediately.
+
+    R6-15: ``DependencyDownError`` is ALWAYS excluded from retry,
+    regardless of ``retry_on``. It's the canonical "a nested Resilient
+    already did its retries, stop" signal -- retrying it in an outer
+    call would compound 3x3=9 real attempts per user request against a
+    dependency that already gave up. Explicit subclass check (not just
+    tuple membership) so callers that pass a broader ``retry_on`` like
+    ``(Exception,)`` still benefit.
     """
     if attempts < 1:
         raise ValueError("attempts must be >= 1")
@@ -329,6 +355,11 @@ def with_retry(
     for attempt in range(attempts):
         try:
             return fn()
+        except DependencyDownError:
+            # R6-15: never retry a DependencyDownError -- it means a
+            # nested Resilient has already exhausted its own retry
+            # budget (or the breaker is OPEN). Propagate immediately.
+            raise
         except BaseException as exc:  # noqa: BLE001 -- re-raised below
             if not isinstance(exc, retry_on):
                 raise
@@ -715,9 +746,14 @@ class Resilient(Generic[T]):
 
     def call(self, fn: Callable[[], T]) -> T:
         if not self._breaker.allow():
+            # R6-05: the breaker is already OPEN (or HALF_OPEN with no
+            # probe slot). Tag ``kind=breaker_open`` so the frontend can
+            # back off longer than the warming-up default; hammering a
+            # known-open breaker just burns the client retry budget.
             raise DependencyDownError(
                 self._name,
                 reason="circuit breaker is open",
+                kind=DependencyDownError.KIND_BREAKER_OPEN,
             )
         # Slice-13: wrap every dependency call in a structured span so
         # operators can correlate a request with every downstream SQL /
@@ -737,10 +773,16 @@ class Resilient(Generic[T]):
             self._breaker.record_failure()
             if isinstance(exc, DependencyDownError):
                 raise
+            # R6-05: the call went through the breaker but the
+            # retry budget is exhausted -- tag as retries_exhausted so
+            # the frontend knows a plain retry likely won't help and
+            # the UI can show an operator-oriented message instead of
+            # the "warming up" copy.
             raise DependencyDownError(
                 self._name,
                 reason=f"{type(exc).__name__}: {exc}",
                 last_error=exc,
+                kind=DependencyDownError.KIND_RETRIES_EXHAUSTED,
             ) from exc
         self._breaker.record_success()
         return result

@@ -28,7 +28,11 @@ from backend.api import (
     portfolio,
     segments,
 )
-from backend.config.settings import _running_under_pytest, settings
+from backend.config.settings import (
+    _running_under_pytest,
+    check_trust_boundary_at_startup,
+    settings,
+)
 from backend.services.observability import (
     configure_logging,
     emit,
@@ -120,6 +124,12 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
         # vars is missing. The exception propagates through FastAPI
         # lifespan and terminates the uvicorn process.
         settings.require_databricks_creds()
+        # R6-10 trust boundary guard: emit WARNING when the default
+        # `trust_forwarded_headers=True` is active but the runtime
+        # doesn't look like a Databricks Apps deploy (so no upstream
+        # header-stripping edge). Non-fatal; operators read the
+        # structured log line and decide whether to flip the flag.
+        check_trust_boundary_at_startup()
         _warm_warehouse()
         _warm_lakebase()
     yield
@@ -281,6 +291,7 @@ async def _dependency_down_handler(_request: Request, exc: DependencyDownError) 
         level=logging.WARNING,
         dependency=exc.dependency,
         reason=exc.reason,
+        kind=exc.kind,
         # ``last_error_str`` is the full upstream message; kept in the
         # structured log line so ops can still pull state=/statement_id=/
         # err_msg from Splunk/Datadog/etc. without the browser seeing it.
@@ -294,6 +305,14 @@ async def _dependency_down_handler(_request: Request, exc: DependencyDownError) 
             "detail": safe_dependency_detail(exc.dependency),
             "retryable": True,
             "dependency": exc.dependency,
+            # R6-05: additive machine-readable classification. Values are
+            # ``"warming_up"`` (cold-start, fast retry OK), ``"breaker_open"``
+            # (breaker already tripped -- back off to cooldown window before
+            # retrying), ``"retries_exhausted"`` (retry budget blown, harder
+            # failure). The legacy ``retryable: true`` stays for
+            # backward compatibility; the frontend (parallel cycle) can key
+            # off ``reason`` for a smarter backoff curve.
+            "reason": exc.kind,
             "correlation_id": get_correlation_id(),
         },
     )

@@ -491,4 +491,21 @@ export const api = {
    */
   auditEvents: (limit = 12, signal?: AbortSignal) =>
     getJson<AuditEventRow[]>(`/api/audit/events?limit=${limit}`, signal),
+
+  /**
+   * Admin rules probe — used by the Administration route's "Offer rules"
+   * tile. Routes through getJson so a 503 retryable turns into an
+   * ApiError the useWarmingUpRetry hook can detect, matching every
+   * other route's cold-start UX.
+   */
+  adminRules: <T>(signal?: AbortSignal) =>
+    getJson<T>('/api/admin/rules', signal),
+
+  /**
+   * Admin data-source readiness probe — per-source rows with status,
+   * row counts, and DESCRIBE DETAIL lastModified stamps. Same warming-up
+   * semantics as adminRules.
+   */
+  adminSources: <T>(signal?: AbortSignal) =>
+    getJson<T>('/api/admin/sources', signal),
 };

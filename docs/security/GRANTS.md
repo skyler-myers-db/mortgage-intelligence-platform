@@ -294,6 +294,43 @@ Flip this flag only if you cannot guarantee the edge strips
 it for an Apps-hosted deploy will make the product unusable without
 gaining any real safety.
 
+### 10a. Non-Databricks-Apps deploys — explicit guidance
+
+A handful of customers run the FastAPI process outside Databricks Apps
+(Azure App Service, GKE, a VM fronted by NGINX). That is a legitimate
+but unusual shape, and the `trust_forwarded_headers=True` default is
+**unsafe** there: without the Apps edge, there is no guarantee the
+upstream proxy strips client-supplied `X-Forwarded-Email` /
+`X-Forwarded-Groups` headers. A caller can then send any email and
+claim any identity — audit rows become forgeable, and if your proxy
+also doesn't strip `X-Forwarded-Groups`, the admin surface is as well.
+
+**Boot-time warning.** On process start
+(`backend/config/settings.py::check_trust_boundary_at_startup`), the
+app emits a structured WARNING `event=rbac_trust_boundary_unclear`
+when `trust_forwarded_headers=True` and the runtime does NOT look like
+a Databricks Apps deploy (no `DATABRICKS_APP_PORT` / `DATABRICKS_APP_URL`
+env var). Operators should treat that log line as a deploy-shape
+smell test: either the Apps marker env var wasn't plumbed through, or
+the deploy genuinely is non-Apps and the flag needs attention.
+
+**What to do.** On a non-Apps deploy, set
+`MIP_TRUST_FORWARDED_HEADERS=false` in the environment fronting the
+Python process. The product shifts to a fail-closed posture:
+
+- Audit rows attribute to `unknown-actor@untrusted-edge` (a distinct,
+  greppable string) rather than a caller-supplied email.
+- The admin surface closes entirely — only the email allowlist can
+  admit, and with the email header ignored, no caller passes.
+- The startup WARNING stops firing on the next boot because trust is
+  now explicitly off.
+
+This is the correct posture when the edge is not trusted. If your
+non-Apps deploy has a reverse proxy that DOES strip inbound
+`X-Forwarded-*` (verify with an e2e test that spoofed headers are
+dropped), you can leave trust enabled — but document that boundary
+assumption in your runbook.
+
 ---
 
 ## 11. Negative grants (things you should NOT give the app SP)

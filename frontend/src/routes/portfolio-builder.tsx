@@ -1,12 +1,14 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { api, isAbortError } from '../lib/api';
+import { api } from '../lib/api';
+import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
 import type { PortfolioPreview } from '../types';
 import { PageShell } from '../components/layout/PageShell';
 import { KpiCard } from '../components/mortgage/KpiCard';
 import { Button } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { FilterSelect } from '../components/ui/FilterSelect';
+import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 import { DRAWER_SOURCES } from '../lib/drawerSources';
 import { useFootprint } from '../components/FootprintProvider';
 
@@ -109,18 +111,19 @@ function formatDelta(pct: number | null | undefined): string | undefined {
 }
 
 /**
- * When the preview is Day-0 (zero population + no refresh timestamp) the
- * raw value would be `0` — a plausible-but-wrong signal. Swap it for
- * `null` so KpiCard renders an em-dash and the banner explains why.
- * Hole-finder round 2 #13, 2026-04-23.
+ * Day-0 detection: trust the server-authoritative ``day_zero`` flag on
+ * PortfolioPreview (R5-20). When true, the KPI grid swaps raw 0 values
+ * for `null` so KpiCard renders an em-dash and the banner explains why.
+ *
+ * R6-06: the two-field fallback inference (marketable_population === 0
+ * && data_refreshed_at === null) was dead code -- the backend always
+ * emits ``day_zero`` (default False), so the "older server" case cannot
+ * exist. The inference also returned a wrong answer for the valid case
+ * where a filter happens to match zero borrowers on a populated
+ * workspace (e.g. "investors in WY"). Removed; we trust the server.
  */
 function isDayZero(preview: PortfolioPreview | null): boolean {
-  if (preview === null) return false;
-  // R5-20: prefer the server flag; fall back to the two-field inference
-  // only when the server didn't emit ``day_zero`` (pre-R5-20 clients).
-  if (preview.day_zero === true) return true;
-  if (preview.day_zero === false) return false;
-  return preview.marketable_population === 0 && preview.data_refreshed_at === null;
+  return preview?.day_zero === true;
 }
 
 function dayZeroSafe(
@@ -156,59 +159,38 @@ export default function PortfolioBuilder() {
   const [filters, setFilters] = useState<Record<string, string>>(() =>
     parseFiltersFromUrl(searchParams),
   );
-  const [preview, setPreview] = useState<PortfolioPreview | null>(null);
-  const [previewError, setPreviewError] = useState<string | null>(null);
-  const [building, setBuilding] = useState<boolean>(false);
+  // The "committed" filter payload drives the useWarmingUpRetry hook.
+  // `filters` tracks the dropdown state, `committedFilters` is what the
+  // KPI grid reflects — only updated via onRunBuild or URL navigation.
+  // This preserves the prototype UX: filter changes don't refetch; the
+  // "Run build" button is the explicit commit point.
+  const [committedFilters, setCommittedFilters] = useState<Record<string, string>>(
+    () => parseFiltersFromUrl(searchParams),
+  );
   const [copyHint, setCopyHint] = useState<'idle' | 'copied' | 'failed'>('idle');
 
-  // Keep an AbortController live across calls so a rapid second click on
-  // "Run build" cancels the first request instead of letting it
-  // race-write stale data into state. Round-2 hole-finder #10/#11,
-  // 2026-04-23.
-  const inflightRef = useRef<AbortController | null>(null);
-
-  const runBuild = useCallback(
-    (criteria: Record<string, string>) => {
-      inflightRef.current?.abort();
-      const ctrl = new AbortController();
-      inflightRef.current = ctrl;
-      setBuilding(true);
-      setPreviewError(null);
-      api
-        .portfolioPreview(criteria, ctrl.signal)
-        .then((p) => {
-          if (ctrl.signal.aborted) return;
-          setPreview(p);
-        })
-        .catch((err: unknown) => {
-          if (isAbortError(err) || ctrl.signal.aborted) return;
-          setPreview(null);
-          setPreviewError(
-            err instanceof Error
-              ? `Couldn't load portfolio preview: ${err.message}`
-              : "Couldn't load portfolio preview.",
-          );
-        })
-        .finally(() => {
-          if (ctrl.signal.aborted) return;
-          setBuilding(false);
-        });
-    },
-    [],
+  // Cold-start warming-up loop. Re-runs whenever committedFilters
+  // changes (via Run build or URL navigation). 6 retries / 5s apart =
+  // 30s of auto-retry before surfacing the red error path.
+  const committedKey = useMemo(
+    () => JSON.stringify(committedFilters),
+    [committedFilters],
   );
-
-  // Initial build on mount using whatever filters came in from the URL.
-  useEffect(() => {
-    runBuild(filters);
-    return () => {
-      inflightRef.current?.abort();
-    };
-    // Intentionally runs once on mount; user drives subsequent runs via
-    // "Run build" (which also pushes to the URL). We don't refetch on
-    // every filter dropdown change — the "Run build" button is the
-    // explicit commit point per the prototype UX.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  const {
+    data: preview,
+    warmingUp,
+    error,
+    manualRetry: retryBuild,
+  } = useWarmingUpRetry<PortfolioPreview>(
+    (signal) => api.portfolioPreview(committedFilters, signal),
+    [committedKey],
+  );
+  const building = preview === null && warmingUp === null && error === null;
+  const previewError = error
+    ? error instanceof Error
+      ? `Couldn't load portfolio preview: ${error.message}`
+      : "Couldn't load portfolio preview."
+    : null;
 
   const setFilter = (key: string) => (next: string) => setFilters((f) => ({ ...f, [key]: next }));
 
@@ -220,8 +202,8 @@ export default function PortfolioBuilder() {
    */
   const onRunBuild = useCallback(() => {
     setSearchParams(buildUrlFromFilters(filters), { replace: false });
-    runBuild(filters);
-  }, [filters, runBuild, setSearchParams]);
+    setCommittedFilters(filters);
+  }, [filters, setSearchParams]);
 
   /**
    * Copy the current URL to the clipboard. Falls back to a failed
@@ -257,7 +239,7 @@ export default function PortfolioBuilder() {
     const differs = URL_FILTER_KEYS.some((k) => urlFilters[k] !== filters[k]);
     if (differs) {
       setFilters(urlFilters);
-      runBuild(urlFilters);
+      setCommittedFilters(urlFilters);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [urlFilters]);
@@ -329,7 +311,16 @@ export default function PortfolioBuilder() {
             </Button>
           </div>
 
-          {previewError && (
+          {warmingUp && (
+            <div style={{ marginTop: 14 }}>
+              <WarmingUpBlock
+                state={warmingUp}
+                title="Portfolio preview loading"
+                compact
+              />
+            </div>
+          )}
+          {previewError && !warmingUp && (
             <div
               role="alert"
               style={{
@@ -339,9 +330,21 @@ export default function PortfolioBuilder() {
                 borderRadius: 'var(--r-md)',
                 color: 'var(--signal-danger)',
                 fontSize: 12,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 12,
               }}
             >
-              {previewError}
+              <span>{previewError}</span>
+              <button
+                type="button"
+                className="btn btn--ghost btn--sm"
+                onClick={retryBuild}
+                aria-label="Retry portfolio preview"
+              >
+                Retry
+              </button>
             </div>
           )}
 

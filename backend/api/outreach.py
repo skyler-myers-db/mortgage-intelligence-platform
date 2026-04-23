@@ -170,12 +170,15 @@ def approve_outreach(
     audit: AuditDep,
     lakebase: LakebaseDep,
 ) -> OutreachApproveResponse:
-    # Approval is a governed, auditable decision: a failure must 503
-    # (not silently fall through). Actor attribution: prefer the
-    # authenticated workspace user from X-Forwarded-Email; fall back
-    # to the caller-supplied ``actor`` only when we're running in a
-    # test/dev path without the header.
-    actor = payload.actor if payload.actor != "anonymous" else resolve_actor(request)
+    # R6 actor-spoof fix: attribution is always the edge-authenticated
+    # identity from X-Forwarded-Email (via ``resolve_actor``). The
+    # ``payload.actor`` body field is retained for backwards compatibility
+    # with existing clients but is IGNORED for the audit row — a caller
+    # that passes ``actor: "ceo@..."`` cannot masquerade. In local dev /
+    # test paths without the header, ``resolve_actor`` returns
+    # ``settings.default_actor`` and emits a structured warning so ops
+    # sees the fallback in the log trail.
+    actor = resolve_actor(request)
     # R5-01 idempotency pre-check: if the caller sent a request_id and
     # we already wrote a row for it (the previous attempt succeeded
     # server-side but its 200 response was lost in flight), return the
@@ -305,7 +308,10 @@ def reject_outreach(
     Failures raise 503 (same contract as approve) so the UI's retry
     banner + resilience layer get to act; no silent fallback.
     """
-    actor = payload.actor if payload.actor != "anonymous" else resolve_actor(request)
+    # R6 actor-spoof fix: same as /approve — attribution is always
+    # ``resolve_actor(request)`` from the edge-authenticated identity.
+    # Body ``payload.actor`` is retained for backcompat but ignored.
+    actor = resolve_actor(request)
     # R5-01 idempotency: same contract as /approve. A re-POSTed reject
     # with the same ``request_id`` returns the existing approval_id
     # instead of writing a second decision row + duplicate audit event.

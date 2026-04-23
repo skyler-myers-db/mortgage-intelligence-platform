@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { api, isAbortError } from '../lib/api';
+import { api } from '../lib/api';
+import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
 import type { LeadSummary, SegmentSummary } from '../types';
 import { PageShell } from '../components/layout/PageShell';
 import { SegmentCard } from '../components/mortgage/SegmentCard';
@@ -12,6 +13,7 @@ import {
 import { Button, Chip } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { FilterSelect } from '../components/ui/FilterSelect';
+import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 import { useFootprint } from '../components/FootprintProvider';
 
 /**
@@ -112,17 +114,11 @@ function buildLocationToStates(
 }
 
 export default function SegmentIntelligence() {
-  const [segments, setSegments] = useState<SegmentSummary[]>([]);
-  const [leads, setLeads] = useState<LeadSummary[]>([]);
-  const [loadError, setLoadError] = useState<string | null>(null);
   const footprint = useFootprint();
   const locationToStates = useMemo(
     () => buildLocationToStates(footprint.states),
     [footprint.states],
   );
-  // Reload token re-runs both /api/segments and /api/leads fetches.
-  // Hole-finder finding #1, 2026-04-23.
-  const [reloadToken, setReloadToken] = useState<number>(0);
   const [activeSegs, setActiveSegs] = useState<string[]>(['itm']);
   const [chipFilters, setChipFilters] = useState<ChipFilters>(INITIAL_FILTERS);
   // Geography drill state emitted by USChoroplethMap. State is the 2-char
@@ -139,48 +135,36 @@ export default function SegmentIntelligence() {
     setMapSelection(sel);
   }, []);
 
-  useEffect(() => {
-    // AbortController cancels the in-flight /api/segments request on
-    // unmount or Retry. Round-2 hole-finder #10/#11, 2026-04-23.
-    const ctrl = new AbortController();
-    // Reset error on retry so stale error copy doesn't linger through
-    // a successful reload.
-    if (reloadToken > 0) setLoadError(null);
-    api
-      .segments(ctrl.signal)
-      .then((s) => setSegments(s))
-      .catch((err: unknown) => {
-        if (isAbortError(err)) return;
-        setLoadError(
-          err instanceof Error
-            ? `Couldn't load segments: ${err.message}`
-            : "Couldn't load segments.",
-        );
-      });
-    return () => {
-      ctrl.abort();
-    };
-  }, [reloadToken]);
-
-  useEffect(() => {
-    const ctrl = new AbortController();
-    api
-      .leads(undefined, ctrl.signal)
-      .then((l) => setLeads(l))
-      .catch((err: unknown) => {
-        if (isAbortError(err)) return;
-        setLoadError(
-          (prev) =>
-            prev ??
-            (err instanceof Error
-              ? `Couldn't load leads: ${err.message}`
-              : "Couldn't load leads."),
-        );
-      });
-    return () => {
-      ctrl.abort();
-    };
-  }, [reloadToken]);
+  // Cold-start warming-up — segments + leads fetch independently so one
+  // tile warming doesn't block the other (per-tile isolation, following
+  // home.tsx). Each hook runs 6 retries / 5s apart = 30s total.
+  const {
+    data: segmentsData,
+    warmingUp: segmentsWarming,
+    error: segmentsError,
+    manualRetry: retrySegments,
+  } = useWarmingUpRetry<SegmentSummary[]>((signal) => api.segments(signal), []);
+  const {
+    data: leadsData,
+    warmingUp: leadsWarming,
+    error: leadsError,
+    manualRetry: retryLeads,
+  } = useWarmingUpRetry<LeadSummary[]>(
+    (signal) => api.leads(undefined, signal),
+    [],
+  );
+  const segments = segmentsData ?? [];
+  const leads = useMemo(() => leadsData ?? [], [leadsData]);
+  const retryAll = useCallback(() => {
+    retrySegments();
+    retryLeads();
+  }, [retrySegments, retryLeads]);
+  const loadErrorMsg =
+    segmentsError
+      ? `Couldn't load segments: ${segmentsError.message}`
+      : leadsError
+        ? `Couldn't load leads: ${leadsError.message}`
+        : null;
 
   const filtered = useMemo(() => {
     let out = leads;
@@ -282,7 +266,21 @@ export default function SegmentIntelligence() {
         ) : undefined
       }
     >
-      {loadError && (
+      {segmentsWarming && (
+        <WarmingUpBlock
+          state={segmentsWarming}
+          title="Segment catalog loading"
+          compact
+        />
+      )}
+      {leadsWarming && !segmentsWarming && (
+        <WarmingUpBlock
+          state={leadsWarming}
+          title="Ranked borrowers loading"
+          compact
+        />
+      )}
+      {loadErrorMsg && !segmentsWarming && !leadsWarming && (
         <div
           role="alert"
           style={{
@@ -298,18 +296,18 @@ export default function SegmentIntelligence() {
             gap: 12,
           }}
         >
-          <span>{loadError}</span>
+          <span>{loadErrorMsg}</span>
           <button
             type="button"
             className="btn btn--ghost btn--sm"
-            onClick={() => setReloadToken((n) => n + 1)}
+            onClick={retryAll}
             aria-label="Retry loading segments and leads"
           >
             Retry
           </button>
         </div>
       )}
-      {segments.length === 0 && !loadError && (
+      {segments.length === 0 && !loadErrorMsg && !segmentsWarming && (
         <div className="muted body" style={{ marginBottom: 'var(--gap-grid)' }}>
           Loading segments…
         </div>

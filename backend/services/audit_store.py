@@ -94,6 +94,85 @@ _PII_DENYLIST_KEYS: frozenset[str] = frozenset(
 )
 
 
+# ----------------------------------------------------------------------
+# R6-20 allowlist -- belt-and-suspenders PII containment for audit
+# metadata. ``lakebase/schema.sql`` line 83 says "NO PII" in the
+# ``metadata JSONB`` column comment; the denylist above covers the
+# obvious PII keys but it is *reactive* -- it catches keys we already
+# knew were bad. A dev accidentally adding ``owner_address`` or
+# ``contact_preference`` to an approve payload would slip through.
+#
+# The allowlist flips the default: only keys we have intentionally
+# written get through. Every new audit metadata key needs an explicit
+# entry here, which means the reviewer adding the key has to think
+# about PII surface before the write lands in production.
+#
+# To extend this list: audit the call site, confirm the value is not
+# PII-adjacent (no names, addresses, phone numbers, ssns, dobs), then
+# add the key here and a line in the PR description explaining why.
+#
+# Inventory is the union of keys written by every audit.write() call
+# site in backend/api/* as of 2026-04-23:
+#
+#   backend/api/borrowers.py::read_borrower_360
+#     opportunity_score, confidence, segment_codes, recommended_offer
+#   backend/api/outreach.py::draft_outreach
+#     channel, offer_code
+#   backend/api/outreach.py::approve_outreach
+#     approval_id, offer_code, borrower_id, request_id, draft_body
+#   backend/api/outreach.py::reject_outreach
+#     approval_id, offer_code, borrower_id, request_id, rationale
+#   backend/api/leads.py::list_leads_ranked
+#     rendered_borrower_ids, portfolio_id, segment, limit
+#   backend/api/offers.py::recommend_offer
+#     offer_code, confidence, thresholds_applied
+#   backend/api/admin.py::set_rules
+#     overrides
+#
+# Plus two keys injected by the audit layer itself:
+#   action      -- canonical verb, added by LakebaseAuditStore.write
+#   evidence_ids -- some flows may pass it inside payload_json (legacy)
+#                   instead of the top-level kwarg; accept both shapes
+#
+# ``reason`` is included for forward compat: the outreach reject path
+# stores a caller-supplied rationale (already free-text-scrubbed by
+# ``scrub_free_text``); a future slice may rename ``rationale`` ->
+# ``reason`` to match governance §4 vocabulary.
+# ----------------------------------------------------------------------
+
+
+_ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
+    {
+        # Audit-layer injected
+        "action",
+        "evidence_ids",
+        # Borrower 360 view
+        "opportunity_score",
+        "confidence",
+        "segment_codes",
+        "recommended_offer",
+        # Outreach draft / approve / reject
+        "channel",
+        "offer_code",
+        "approval_id",
+        "borrower_id",
+        "request_id",
+        "draft_body",
+        "rationale",
+        "reason",
+        # Leads list
+        "rendered_borrower_ids",
+        "portfolio_id",
+        "segment",
+        "limit",
+        # Offers
+        "thresholds_applied",
+        # Admin rules override
+        "overrides",
+    }
+)
+
+
 class AuditPIIError(RuntimeError):
     """Raised when audit metadata would contain raw PII.
 
@@ -112,6 +191,32 @@ class AuditPIIError(RuntimeError):
         )
 
 
+class AuditMetadataViolation(RuntimeError):
+    """Raised when audit metadata contains a key outside the allowlist.
+
+    R6-20: the ``lakebase/schema.sql`` comment says "NO PII" on the
+    metadata JSONB column, but the guarantee was only mechanically
+    enforced against a known-bad denylist. A router adding a new field
+    (e.g. a dev plumbs ``owner_name`` through a reject payload) would
+    slip past the denylist if the field name didn't lexically match a
+    known-bad key.
+
+    The allowlist inverts the default: only reviewed keys pass through,
+    so an unvetted addition fails loudly in tests before it can land in
+    production.
+    """
+
+    def __init__(self, unexpected_keys: list[str]) -> None:
+        self.unexpected_keys = unexpected_keys
+        super().__init__(
+            "Audit metadata contains unexpected keys (not on the "
+            "reviewed allowlist -- see ``_ALLOWED_METADATA_KEYS`` in "
+            "backend/services/audit_store.py for the inventory and how "
+            "to extend it): "
+            + ", ".join(sorted(unexpected_keys))
+        )
+
+
 def _assert_no_pii(metadata: dict[str, Any]) -> None:
     """Raise ``AuditPIIError`` if ``metadata`` has any denylist keys.
 
@@ -126,6 +231,22 @@ def _assert_no_pii(metadata: dict[str, Any]) -> None:
     hits = lowered & _PII_DENYLIST_KEYS
     if hits:
         raise AuditPIIError(sorted(hits))
+
+
+def _assert_allowlisted(metadata: dict[str, Any]) -> None:
+    """Raise ``AuditMetadataViolation`` if any top-level key is unknown.
+
+    Complements ``_assert_no_pii`` (denylist) with an allowlist gate so
+    a new-but-unreviewed key fails loudly. Top-level only, matching the
+    denylist's scope. See ``_ALLOWED_METADATA_KEYS`` for the inventory
+    and extension procedure.
+    """
+    if not metadata:
+        return
+    lowered_keys = {k.lower() for k in metadata}
+    unexpected = lowered_keys - _ALLOWED_METADATA_KEYS
+    if unexpected:
+        raise AuditMetadataViolation(sorted(unexpected))
 
 
 # ----------------------------------------------------------------------
@@ -196,7 +317,9 @@ def resolve_actor(request: Request | None) -> str:
         return _UNTRUSTED_EDGE_ACTOR
     # Fallback path: bump the counter and emit a structured WARNING so
     # the event is observable in stdout JSON logs AND surfaced through
-    # ``/api/health`` as ``fallback_identity_fallbacks_total``.
+    # ``/api/health`` as ``fallback_identity_fallbacks_process_total``
+    # (the legacy ``fallback_identity_fallbacks_total`` key is still
+    # emitted for one cycle; R6-08 rename).
     global _FALLBACK_IDENTITY_COUNT
     _FALLBACK_IDENTITY_COUNT += 1
     log.warning(
@@ -256,7 +379,12 @@ class InMemoryAuditStore:
         # Governance: denylist PII keys at write time, not read time.
         # Applies equally to the in-memory store so unit tests exercise
         # the guard without needing Lakebase.
-        _assert_no_pii({"action": action, **payload})
+        metadata = {"action": action, **payload}
+        _assert_no_pii(metadata)
+        # R6-20: allowlist complement to the denylist. Fails loudly on
+        # any key that isn't explicitly reviewed in
+        # ``_ALLOWED_METADATA_KEYS``.
+        _assert_allowlisted(metadata)
         event = AuditEvent(
             event_id=f"evt-{uuid4().hex[:12]}",
             actor=actor,
@@ -345,6 +473,12 @@ class LakebaseAuditStore:
         # never pass denylist keys, so hitting this branch means a
         # regression a reviewer should see immediately.
         _assert_no_pii(metadata)
+        # R6-20 allowlist: second line of defence on top of the
+        # denylist. Unknown keys raise ``AuditMetadataViolation`` so a
+        # future router change that plumbs an un-reviewed field into
+        # ``payload_json`` fails in tests before it can poison the
+        # append-only ledger.
+        _assert_allowlisted(metadata)
         params: dict[str, Any] = {
             "event_type": _coerce_event_type(event_type, action),
             "actor_email": actor,

@@ -69,30 +69,39 @@ def ensure_approval_idempotency_column(client: LakebaseClient) -> None:
         try:
             for stmt in _APPROVAL_REQUEST_ID_DDL:
                 client.execute(stmt)
-            emit(
-                log,
-                "lakebase_bootstrap_applied",
-                migration="r5_01_approvals_request_id",
-                statements=len(_APPROVAL_REQUEST_ID_DDL),
-            )
         except LakebaseError as exc:
-            # Not fatal. If the column is actually missing, the caller's
-            # INSERT will raise a second LakebaseError and surface as
-            # 503; the operator sees both log lines together.
+            # R6-02: leave the flag False so the next approve/reject
+            # retries the idempotent DDL. The earlier implementation set
+            # the flag on BOTH success and failure; if the first bootstrap
+            # call landed during a Lakebase brownout, the process
+            # permanently believed the migration succeeded and every
+            # subsequent INSERT silently failed on an index that didn't
+            # exist. Since every statement is IF NOT EXISTS, retrying
+            # on the next request is safe and self-healing.
             log.warning(
                 "lakebase_bootstrap failed: migration=r5_01_approvals_request_id "
                 "exc=%s",
                 type(exc).__name__,
             )
+            return
         except Exception as exc:  # noqa: BLE001 -- bootstrap must never crash request path
+            # R6-02: same posture -- leave flag False for retry on the
+            # next call. A persistent outage will log every request, but
+            # that is the intended signal; silently latching success is
+            # the worse failure mode.
             log.warning(
                 "lakebase_bootstrap unexpected failure: migration=r5_01_approvals_request_id "
                 "exc=%s",
                 type(exc).__name__,
             )
-        # Flag is flipped on BOTH success and failure. A second try per
-        # process wouldn't fix a persistent outage; the Databricks Job
-        # is the real remediation path. Operators see the WARNING.
+            return
+        # Success path only.
+        emit(
+            log,
+            "lakebase_bootstrap_applied",
+            migration="r5_01_approvals_request_id",
+            statements=len(_APPROVAL_REQUEST_ID_DDL),
+        )
         _APPROVAL_REQUEST_ID_BOOTSTRAPPED = True
 
 

@@ -1,11 +1,13 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import type { ReactElement, ReactNode } from 'react';
 import { useApp, type Accent, type Density, type Theme } from '../components/AppContext';
 import { PageShell } from '../components/layout/PageShell';
 import { Chip } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { EntradaWordmark } from '../components/brand/Entrada';
-import { api, isAbortError } from '../lib/api';
+import { api } from '../lib/api';
+import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
+import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 
 /**
  * Administration — operator-facing configuration for Module 0.
@@ -107,75 +109,52 @@ export default function AdminConfig() {
   // Disclosure state for the Offer rules threshold table.
   const [rulesExpanded, setRulesExpanded] = useState<boolean>(false);
 
-  // Live signals.
-  const [rules, setRules] = useState<RulesResponse | null>(null);
-  const [rulesError, setRulesError] = useState<string | null>(null);
-  const [rulesLoading, setRulesLoading] = useState<boolean>(true);
+  // Per-tile warming-up fetchers. Each tile retries 6 × 5s independently
+  // so one cold-starting dependency doesn't block its neighbors.
+  const {
+    data: rules,
+    warmingUp: rulesWarming,
+    error: rulesErrorObj,
+  } = useWarmingUpRetry<RulesResponse>(
+    (signal) => api.adminRules<RulesResponse>(signal),
+    [],
+  );
+  const rulesLoading = rules === null && rulesWarming === null && rulesErrorObj === null;
+  const rulesError = rulesErrorObj ? 'Rules endpoint unreachable' : null;
 
-  const [sources, setSources] = useState<SourceRow[] | null>(null);
-  const [sourcesError, setSourcesError] = useState<string | null>(null);
-  const [sourcesLoading, setSourcesLoading] = useState<boolean>(true);
+  const {
+    data: sources,
+    warmingUp: sourcesWarming,
+    error: sourcesErrorObj,
+  } = useWarmingUpRetry<SourceRow[]>(
+    (signal) => api.adminSources<SourceRow[]>(signal),
+    [],
+  );
+  const sourcesLoading =
+    sources === null && sourcesWarming === null && sourcesErrorObj === null;
+  const sourcesError = sourcesErrorObj
+    ? 'Data source readiness temporarily unavailable'
+    : null;
 
-  const [auditLatest, setAuditLatest] = useState<AuditProbeShape | null>(null);
-  const [auditError, setAuditError] = useState<string | null>(null);
-  const [auditLoading, setAuditLoading] = useState<boolean>(true);
-
-  useEffect(() => {
-    // Single AbortController shared by the three admin probes. All three
-    // requests cancel on unmount instead of racing stale setState.
-    // Round-2 hole-finder #10/#11, 2026-04-23.
-    const ctrl = new AbortController();
-    // Offer rules (UC-backed) — /api/admin/rules reads
-    // mip.ref.offer_rules_config.
-    fetch('/api/admin/rules', { signal: ctrl.signal })
-      .then((r) => (r.ok ? (r.json() as Promise<RulesResponse>) : Promise.reject(r.status)))
-      .then((json) => {
-        setRules(json);
-        setRulesLoading(false);
-      })
-      .catch((err: unknown) => {
-        if (isAbortError(err)) return;
-        setRulesError('Rules endpoint unreachable');
-        setRulesLoading(false);
-      });
-
-    // Data source readiness (UC-backed) — /api/admin/sources returns
-    // per-source rows with status / rows / last_updated.
-    fetch('/api/admin/sources', { signal: ctrl.signal })
-      .then((r) => (r.ok ? (r.json() as Promise<SourceRow[]>) : Promise.reject(r.status)))
-      .then((rows) => {
-        setSources(rows);
-        setSourcesLoading(false);
-      })
-      .catch((err: unknown) => {
-        if (isAbortError(err)) return;
-        setSourcesError('Data source readiness temporarily unavailable');
-        setSourcesLoading(false);
-      });
-
-    // Audit probe — routes through api.auditEvents so 503s follow the
-    // shared retry/backoff loop before reporting "unreachable".
-    // Hole-finder finding #4, 2026-04-23.
-    api
-      .auditEvents(1, ctrl.signal)
-      .then((events) => {
-        const first = events.length > 0 ? events[0] : null;
-        // The admin probe only needs a subset of the AuditEventRow
-        // shape (event_id/actor/action/created_at). Cast to the local
-        // AuditProbeShape so the state contract stays narrow.
-        setAuditLatest(first as AuditProbeShape | null);
-        setAuditLoading(false);
-      })
-      .catch((err: unknown) => {
-        if (isAbortError(err)) return;
-        setAuditError(err instanceof Error ? err.message : 'unreachable');
-        setAuditLoading(false);
-      });
-
-    return () => {
-      ctrl.abort();
-    };
-  }, []);
+  const {
+    data: auditEvents,
+    warmingUp: auditWarming,
+    error: auditErrorObj,
+  } = useWarmingUpRetry(
+    (signal) => api.auditEvents(1, signal),
+    [],
+  );
+  const auditLoading =
+    auditEvents === null && auditWarming === null && auditErrorObj === null;
+  const auditError = auditErrorObj
+    ? auditErrorObj instanceof Error
+      ? auditErrorObj.message
+      : 'unreachable'
+    : null;
+  const auditLatest: AuditProbeShape | null =
+    auditEvents && auditEvents.length > 0
+      ? (auditEvents[0] as unknown as AuditProbeShape)
+      : null;
 
   // Rules version chip label. When the endpoint is up we render the
   // deterministic hash-based version ("rules.itm_<12hex>"); when it's
@@ -214,10 +193,15 @@ export default function AdminConfig() {
             <p className="body" style={{ margin: 0 }}>
               Thresholds for in-the-money spread, equity, LTV, and retention scoring. Stored in Unity Catalog (<span className="mono" style={{ fontSize: 11 }}>mip.ref.offer_rules_config</span>).
             </p>
+            {rulesWarming && (
+              <WarmingUpBlock state={rulesWarming} title="Offer rules loading" compact />
+            )}
             <MetaRow
               label="Edited"
               value={
-                rulesLoading
+                rulesWarming
+                  ? 'Warming up…'
+                  : rulesLoading
                   ? 'Loading…'
                   : rulesError
                   ? 'Unavailable'
@@ -273,8 +257,13 @@ export default function AdminConfig() {
             <p className="body" style={{ margin: 0 }}>
               Append-only trail of approvals, rejections, and workflow actions. Exported nightly for compliance review.
             </p>
-            {auditLoading && <MetaRow label="Status" value="Probing Lakebase…" status="neutral" />}
-            {!auditLoading && auditError && (
+            {auditWarming && (
+              <WarmingUpBlock state={auditWarming} title="Audit probe loading" compact />
+            )}
+            {!auditWarming && auditLoading && (
+              <MetaRow label="Status" value="Probing Lakebase…" status="neutral" />
+            )}
+            {!auditWarming && !auditLoading && auditError && (
               <MetaRow
                 label="Status"
                 value="Audit feed currently reconnecting"
@@ -282,7 +271,7 @@ export default function AdminConfig() {
                 statusLabel="503"
               />
             )}
-            {!auditLoading && !auditError && auditLatest && (
+            {!auditWarming && !auditLoading && !auditError && auditLatest && (
               <>
                 <MetaRow
                   label="Last event"
@@ -293,7 +282,7 @@ export default function AdminConfig() {
                 <MetaRow label="Last actor" value={auditLatest.actor} status="neutral" />
               </>
             )}
-            {!auditLoading && !auditError && !auditLatest && (
+            {!auditWarming && !auditLoading && !auditError && !auditLatest && (
               <MetaRow label="Status" value="No events yet" status="neutral" />
             )}
           </div>
@@ -304,7 +293,9 @@ export default function AdminConfig() {
           <div className="surface__hdr" style={{ justifyContent: 'space-between' }}>
             <div className="h-4">Data source readiness</div>
             <Chip variant={sourcesError ? 'warning' : 'neutral'}>
-              {sourcesError
+              {sourcesWarming
+                ? 'warming up…'
+                : sourcesError
                 ? 'unavailable'
                 : sourcesLoading
                 ? 'loading…'
@@ -312,17 +303,24 @@ export default function AdminConfig() {
             </Chip>
           </div>
           <div className="surface__body" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {sourcesLoading && (
+            {sourcesWarming && (
+              <WarmingUpBlock
+                state={sourcesWarming}
+                title="Data source readiness loading"
+                compact
+              />
+            )}
+            {!sourcesWarming && sourcesLoading && (
               <div className="muted body" style={{ fontSize: 12 }}>
                 Probing Unity Catalog…
               </div>
             )}
-            {!sourcesLoading && sourcesError && (
+            {!sourcesWarming && !sourcesLoading && sourcesError && (
               <div className="muted body" style={{ fontSize: 12 }}>
                 Data source readiness temporarily unavailable. Try again shortly.
               </div>
             )}
-            {!sourcesLoading && !sourcesError && sources?.map((s) => (
+            {!sourcesWarming && !sourcesLoading && !sourcesError && sources?.map((s) => (
               <div
                 key={s.name}
                 style={{

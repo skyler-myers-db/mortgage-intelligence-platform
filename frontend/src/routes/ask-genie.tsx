@@ -1,10 +1,12 @@
 import { useState } from 'react';
 import { api } from '../lib/api';
+import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
 import type { GenieAnswer as GenieAnswerShape } from '../types';
 import { PageShell } from '../components/layout/PageShell';
 import { Button, Chip, EvidenceChip } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { GenieAnswer } from '../components/mortgage/GenieAnswer';
+import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 import { DRAWER_SOURCES } from '../lib/drawerSources';
 
 /**
@@ -35,27 +37,36 @@ const TRUSTED_ASSETS: Array<{ label: string; path: string }> = [
 
 export default function AskGenie() {
   const [question, setQuestion] = useState(SAMPLE_QUESTIONS[0]);
-  const [payload, setPayload] = useState<GenieAnswerShape | null>(null);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+  // `submittedQuestion` drives the warming-up-wrapped fetch. Typing in
+  // the textarea updates `question`; clicking Ask commits the current
+  // value into `submittedQuestion`, which triggers the hook. Pairing
+  // with `submitToken` lets the same question be re-asked without
+  // the hook no-op'ing on unchanged deps.
+  const [submittedQuestion, setSubmittedQuestion] = useState<string | null>(null);
+  const [submitToken, setSubmitToken] = useState<number>(0);
 
-  async function ask(q: string) {
+  const {
+    data: payload,
+    warmingUp,
+    error,
+    manualRetry,
+  } = useWarmingUpRetry<GenieAnswerShape>(
+    (signal) => api.genie(submittedQuestion ?? '', signal) as Promise<GenieAnswerShape>,
+    [submittedQuestion, submitToken],
+    { enabled: submittedQuestion !== null && submittedQuestion.length > 0 },
+  );
+
+  const loading = submittedQuestion !== null && payload === null && warmingUp === null && error === null;
+  const errorMsg = error
+    ? error instanceof Error
+      ? `Couldn't reach Genie: ${error.message}`
+      : "Couldn't reach Genie."
+    : null;
+
+  function ask(q: string) {
     setQuestion(q);
-    setLoading(true);
-    setErrorMsg(null);
-    try {
-      const res = (await api.genie(q)) as GenieAnswerShape;
-      setPayload(res);
-    } catch (err) {
-      setPayload(null);
-      setErrorMsg(
-        err instanceof Error
-          ? `Couldn't reach Genie: ${err.message}`
-          : "Couldn't reach Genie.",
-      );
-    } finally {
-      setLoading(false);
-    }
+    setSubmittedQuestion(q);
+    setSubmitToken((n) => n + 1);
   }
 
   const sourceLabel = payload?.source ?? '';
@@ -104,11 +115,21 @@ export default function AskGenie() {
               }}
             />
             <div style={{ marginTop: 10 }}>
-              <Button variant="primary" icon="send" onClick={() => ask(question)} disabled={loading}>
-                {loading ? 'Asking…' : 'Ask Genie'}
+              <Button
+                variant="primary"
+                icon="send"
+                onClick={() => ask(question)}
+                disabled={loading || warmingUp !== null}
+              >
+                {loading || warmingUp !== null ? 'Asking…' : 'Ask Genie'}
               </Button>
             </div>
-            {errorMsg && (
+            {warmingUp && (
+              <div style={{ marginTop: 16 }}>
+                <WarmingUpBlock state={warmingUp} title="Asking Genie" compact />
+              </div>
+            )}
+            {errorMsg && !warmingUp && (
               <div
                 className="surface"
                 role="alert"
@@ -128,7 +149,7 @@ export default function AskGenie() {
                   <button
                     type="button"
                     className="btn btn--ghost btn--sm"
-                    onClick={() => ask(question)}
+                    onClick={manualRetry}
                     disabled={loading}
                     aria-label="Retry Genie question"
                   >

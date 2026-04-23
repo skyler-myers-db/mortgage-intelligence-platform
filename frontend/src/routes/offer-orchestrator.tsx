@@ -99,6 +99,13 @@ export default function OfferOrchestrator() {
   // template used" muted note when we fall back to the local string.
   const [draftBody, setDraftBody] = useState<string>('');
   const [draftLoaded, setDraftLoaded] = useState<boolean>(false);
+  // Cold-start warming-up state for the draftOutreach fetch. Non-null =
+  // the draft endpoint is in a 503 retry loop (mirrors the borrower +
+  // recommend loop). When present, the Draft outreach tile shows the
+  // WarmingUpBlock instead of the template fallback — only after the
+  // retries exhaust does the UI fall through to `defaultDraft` + the
+  // muted "Default template used" note. 2026-04-23 UX fix.
+  const [draftWarming, setDraftWarming] = useState<WarmingUpState | null>(null);
   const { setApproval, approvals, lender } = useApp();
   const approval = id ? approvals[id] : undefined;
 
@@ -187,14 +194,23 @@ export default function OfferOrchestrator() {
 
     void runAttempt(1);
 
-    // Fetch the backend-generated draft in parallel. On any failure we
-    // silently keep `draftLoaded=false`; the render path falls back to
-    // the hardcoded template and shows a muted note so the approver
-    // knows the endpoint was unavailable. This matches the degraded-UI
-    // posture in CLAUDE.md -- fail visible, never substitute silently.
-    api
-      .draftOutreach(id, 'email', ctrl.signal)
-      .then((draft) => {
+    // Fetch the backend-generated draft in parallel via a mirror of
+    // the main borrower+recommend retry loop. On a 503 retryable
+    // (warehouse warming), we show WarmingUpBlock inside the Draft
+    // outreach tile and auto-retry up to MAX_ATTEMPTS. Only after the
+    // retry budget is exhausted do we fall through to the hardcoded
+    // template + the muted "Default template used" note — this
+    // preserves the final-fallback UX while preventing the silent
+    // template swap on cold boot. 2026-04-23 UX fix.
+    let draftTimeoutId: ReturnType<typeof setTimeout> | null = null;
+    setDraftWarming(null);
+
+    const runDraftAttempt = async (attempt: number): Promise<void> => {
+      if (cancelled) return;
+      try {
+        const draft = await api.draftOutreach(id, 'email', ctrl.signal);
+        if (cancelled) return;
+        setDraftWarming(null);
         if (draft?.body && draft.body.trim().length > 0) {
           setDraftBody(draft.body);
           setDraftLoaded(true);
@@ -207,14 +223,35 @@ export default function OfferOrchestrator() {
             });
           }
         }
-      })
-      .catch((err: unknown) => {
-        if (isAbortError(err)) return;
-        // swallow non-abort errors; fall back to defaultDraft below
-      });
+      } catch (err: unknown) {
+        if (cancelled || isAbortError(err)) return;
+        if (isWarmingUpError(err) && attempt < MAX_ATTEMPTS) {
+          setDraftWarming({
+            dependency: err.dependency,
+            label: `${dependencyLabel(err.dependency)} warming up`,
+            attempt: attempt + 1,
+            maxAttempts: MAX_ATTEMPTS,
+            correlationId: err.correlationId,
+          });
+          draftTimeoutId = setTimeout(() => {
+            void runDraftAttempt(attempt + 1);
+          }, INTERVAL_MS);
+          return;
+        }
+        // Retries exhausted or non-warming-up error — fall through to
+        // the hardcoded template. draftLoaded stays false so the render
+        // path shows the muted "Default template used" note. This is
+        // the final-fallback UX called out in CLAUDE.md.
+        setDraftWarming(null);
+      }
+    };
+
+    void runDraftAttempt(1);
+
     return () => {
       cancelled = true;
       if (timeoutId !== null) clearTimeout(timeoutId);
+      if (draftTimeoutId !== null) clearTimeout(draftTimeoutId);
       ctrl.abort();
     };
   }, [id, reloadToken]);
@@ -464,7 +501,16 @@ Reply or call 1-800-XXX-XXXX.`
             <div className="h-4">Draft outreach · review only</div>
           </div>
           <div className="surface__body">
-            {!draftLoaded && b && (
+            {draftWarming && (
+              <div style={{ marginBottom: 10 }}>
+                <WarmingUpBlock
+                  state={draftWarming}
+                  title="Offer draft warming up"
+                  compact
+                />
+              </div>
+            )}
+            {!draftLoaded && !draftWarming && b && (
               <div
                 className="muted"
                 data-testid="draft-fallback-note"
