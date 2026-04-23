@@ -74,11 +74,23 @@ class CountyRollup(BaseModel):
 
 
 class CountyRollupResponse(BaseModel):
-    """Wire envelope — list of counties for a given state + snapshot date."""
+    """Wire envelope — list of counties for a given state + snapshot date.
+
+    ``scope_note`` is a short honesty string surfaced to the UI so a
+    user drilling into a state and seeing a single highlighted county
+    understands that's the extent of the current evaluation share, not
+    a bug. The default message reflects the Cotality evaluation share
+    the app ships with — one anchor county per state (CA:Orange,
+    CO:Douglas, FL:Broward, IL:Cook, TX:Dallas, WA:King). Null means no
+    banner needs to render (e.g. out-of-footprint state, empty
+    response). The field name matches the existing frontend
+    ``CountyRollupResponse`` contract in ``frontend/src/types.ts``.
+    """
 
     state: str = Field(min_length=2, max_length=2)
     rollups: list[CountyRollup]
     snapshot_date: str | None = None
+    scope_note: str | None = None
 
 
 class ZipRollup(BaseModel):

@@ -259,6 +259,11 @@ class DatabricksPortfolioRepository:
     # hardcoded here — they're lender-specific marketing labels and
     # orthogonal to the per-state list. A lender whose footprint diverges
     # would re-label them in the UI; do not over-build until that happens.
+    #
+    # Per-state-name entries ("florida", "california", ...) are injected
+    # at lookup time from the live footprint via `_state_sets()` — see
+    # that method for the merge rule. Keys are always lowercased so
+    # callers can do a case-insensitive match.
     _STATIC_STATE_SETS: dict[str, list[str]] = {
         "chicago msa":     ["IL"],
         "texas":           ["TX"],
@@ -270,15 +275,30 @@ class DatabricksPortfolioRepository:
     def _state_sets(cls) -> dict[str, list[str]]:
         """Build the active _STATE_SETS dict, injecting the live footprint.
 
+        Merge order (later keys override earlier — intentional so a
+        tenant-level override in MSA combos could in principle beat the
+        per-state entry of the same name, though none currently collide):
+
+          1. MSA / multi-state combos from ``_STATIC_STATE_SETS``.
+          2. Per-state-name entries from ``state_name_to_codes()``
+             (fixes the bug where "Florida" in the GEO dropdown
+             returned the whole population because the key was missing).
+          3. ``all N states`` computed from the footprint.
+          4. ``all 6 states`` legacy alias so a deep-linked URL from the
+             old UI still parses.
+
         Called once per `_build_preview_predicates` invocation; the
         resolver caches the UC result for 300s so this is cheap.
         """
         from backend.services.state_footprint import get_state_footprint_resolver
 
-        footprint_codes = get_state_footprint_resolver().state_codes()
+        resolver = get_state_footprint_resolver()
+        footprint_codes = resolver.state_codes()
+        state_name_map = resolver.state_name_to_codes()
         all_key = f"all {len(footprint_codes)} states"
         return {
             **cls._STATIC_STATE_SETS,
+            **state_name_map,
             all_key: list(footprint_codes),
             # Keep the legacy "all 6 states" key active while the frontend
             # catches up, so a deep-linked URL from the old UI still parses.
@@ -1111,6 +1131,11 @@ class DatabricksGeoRepository:
             state=normalised,
             rollups=rollups,
             snapshot_date=snapshot_date,
+            scope_note=(
+                "Cotality evaluation share: 1 anchor county per state"
+                if rollups
+                else None
+            ),
         )
         self._cache.set(cache_key, response, self._cache_ttl_s)
         return response

@@ -3,18 +3,20 @@
   <title>Entrada</title>
   <!-- Official Entrada 3-bar mark on off-white tile.
        Ref: brand reference image supplied 2026-04-23.
+       Uses the same 22x22 internal bar geometry as the wordmark mark, so
+       the favicon and the EntradaWordmark agree visually. Bars are
+       centered in the 32x32 tile (5px margin each side).
        Row 1: bright-accent LEFT segment, navy RIGHT segment.
        Row 2: solid navy full-width.
-       Row 3: navy LEFT segment, bright-accent RIGHT segment.
-       Small horizontal gap between left/right segments on row 1+3. -->
+       Row 3: navy LEFT segment, bright-accent RIGHT segment. -->
   <rect width="32" height="32" rx="7" ry="7" fill="#F4F7FA"/>
-  <!-- bar geometry: x 5..27 (width 22), rows at y=9/15/21, height 3, gap 3 -->
-  <!-- Row 1: accent (6) + gap + navy (14) -->
+  <!-- bar geometry: x 5..27 (22 wide), rows at y=9/15/21, height 3 -->
+  <!-- Row 1: accent (6) + gap + navy (15) -->
   <rect x="5"  y="9"  width="6"  height="3" fill="#66C5FF"/>
-  <rect x="13" y="9"  width="14" height="3" fill="#025080"/>
+  <rect x="12" y="9"  width="15" height="3" fill="#025080"/>
   <!-- Row 2: full navy -->
   <rect x="5"  y="15" width="22" height="3" fill="#025080"/>
-  <!-- Row 3: navy (14) + gap + accent (6) -->
-  <rect x="5"  y="21" width="14" height="3" fill="#025080"/>
+  <!-- Row 3: navy (15) + gap + accent (6) -->
+  <rect x="5"  y="21" width="15" height="3" fill="#025080"/>
   <rect x="21" y="21" width="6"  height="3" fill="#66C5FF"/>
 </svg>

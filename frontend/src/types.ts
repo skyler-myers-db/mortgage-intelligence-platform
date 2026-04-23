@@ -190,6 +190,11 @@ export interface CountyRollupResponse {
   state: string;
   rollups: CountyRollup[];
   snapshot_date?: string | null;
+  /** Optional note from the backend explaining the geographic data scope
+   *  (e.g. "Cotality evaluation share: 1 anchor county per state"). When
+   *  present, the UI renders it verbatim as a scope chip. Added 2026-04-23
+   *  to surface the Cotality eval-share single-county scope honestly. */
+  scope_note?: string | null;
 }
 
 /** Per-ZIP aggregate row from `/api/geo/zip-rollups?fips=NNNNN`.

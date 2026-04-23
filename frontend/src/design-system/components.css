@@ -838,7 +838,17 @@
   transition: fill var(--dur-fast) var(--ease), stroke var(--dur-fast) var(--ease);
 }
 [data-theme="light"] .map-region { fill: #E4EDF4; stroke: color-mix(in oklab, var(--entrada-navy) 35%, transparent); }
-.map-region:hover { fill: var(--bg-4); stroke: var(--accent); stroke-width: 1.2; }
+/* Hover brighten: users reported the prior 1.2px accent stroke was easy
+   to miss on dense map layers. Bump stroke weight, add a soft accent
+   glow, and lift the hovered path into the stacking context so its
+   neighbours don't clip the glow. 2026-04-23. */
+.map-region:hover {
+  fill: var(--bg-4);
+  stroke: var(--accent);
+  stroke-width: 2;
+  filter: drop-shadow(0 0 8px color-mix(in oklab, var(--accent) 40%, transparent));
+}
+.map-region:hover { paint-order: stroke fill; }
 .map-region.lvl-1 { fill: color-mix(in oklab, var(--accent) 15%, var(--bg-3)); }
 .map-region.lvl-2 { fill: color-mix(in oklab, var(--accent) 30%, var(--bg-3)); }
 .map-region.lvl-3 { fill: color-mix(in oklab, var(--accent) 50%, var(--bg-3)); }
@@ -865,7 +875,11 @@
   font-size: var(--fs-12);
   width: 280px;
   transform: translate(-50%, calc(-100% - 10px));
-  z-index: 5;
+  /* z-index has to sit above every surface, rail, and drawer because the
+     tip is portaled to document.body and can appear over any page
+     chrome. Kept below the 1000-tier used by modal scrims so focus-
+     trapped modals still occlude it. 2026-04-23. */
+  z-index: 900;
 }
 .map-tip__name {
   color: var(--text-1);
@@ -923,6 +937,64 @@
 }
 .map-legend__bar { display: flex; height: 8px; margin: 4px 0; border-radius: 2px; overflow: hidden; width: 140px; }
 .map-legend__bar span { flex: 1; }
+
+/* ZIP-tile grid — the drill's ZIP layer for non-Cook counties. Rendered as
+   an HTML/CSS grid (not SVG) so tiles use design-system tokens and land
+   cleanly in the map viewport without overlapping the breadcrumbs above.
+   Tile backgrounds step through quantile buckets via the --lvl-% variable
+   (no hex colors inlined). Prior SVG-rect implementation sat on top of the
+   breadcrumb row and was visually loud. 2026-04-23. */
+.zip-tiles {
+  margin-top: 56px;
+  padding: var(--sp-3);
+  height: calc(100% - 56px);
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(88px, 1fr));
+  gap: var(--sp-2);
+  align-content: start;
+  overflow-y: auto;
+}
+.zip-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: var(--sp-2) var(--sp-2);
+  border-radius: var(--r-md);
+  border: 1px solid color-mix(in oklab, var(--accent) 25%, transparent);
+  background: color-mix(in oklab, var(--accent) 6%, transparent);
+  color: var(--text-1);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease);
+  min-height: 56px;
+}
+.zip-tile--lvl-1 { background: color-mix(in oklab, var(--accent) 6%, transparent); }
+.zip-tile--lvl-2 { background: color-mix(in oklab, var(--accent) 12%, transparent); }
+.zip-tile--lvl-3 { background: color-mix(in oklab, var(--accent) 20%, transparent); }
+.zip-tile--lvl-4 { background: color-mix(in oklab, var(--accent) 30%, transparent); border-color: color-mix(in oklab, var(--accent) 45%, transparent); }
+.zip-tile:hover {
+  border-color: var(--accent);
+  background: color-mix(in oklab, var(--accent) 24%, transparent);
+  transform: translateY(-1px);
+}
+.zip-tile.is-selected {
+  border-color: var(--accent);
+  background: color-mix(in oklab, var(--accent) 36%, transparent);
+  box-shadow: 0 0 0 1px var(--accent) inset;
+}
+.zip-tile__code {
+  font-family: var(--font-mono);
+  font-size: var(--fs-14);
+  font-weight: 600;
+  color: var(--text-1);
+  letter-spacing: 0.02em;
+}
+.zip-tile__count {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-3);
+}
 
 /* ============================================================
    TWEAKS / CONSOLE PANEL

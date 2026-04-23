@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import type { Feature, FeatureCollection, Geometry } from 'geojson';
 import { Icon } from '../Icon';
@@ -192,6 +193,26 @@ const SEGMENT_CODE_TO_NAME: Record<string, string> = {
   equity: 'Home Equity',
   retention: 'Retention',
 };
+
+// Cotality evaluation share: one anchor county per footprint state. Keyed by
+// lowercase USPS code -> { fips5, displayName }. When the user clicks into
+// a state we jump straight to the ZIP tiles for this county -- there is
+// nothing else in the upstream data to drill into. This is an honest
+// surface of the 2026-04-23 upstream data scope (see
+// cotality_mortgage_data.corelogic.entrada_eval_property_domain_v3), NOT a
+// UI-chosen sample. When Cotality expands the eval share to more counties,
+// replace this table with a backend-driven lookup.
+const ANCHOR_COUNTY_BY_STATE: Record<string, { fips: string; name: string }> = {
+  ca: { fips: '06059', name: 'Orange County' },
+  co: { fips: '08035', name: 'Douglas County' },
+  fl: { fips: '12011', name: 'Broward County' },
+  il: { fips: '17031', name: 'Cook County' },
+  tx: { fips: '48113', name: 'Dallas County' },
+  wa: { fips: '53033', name: 'King County' },
+};
+
+const SCOPE_NOTE_DEFAULT =
+  'Cotality evaluation share: 1 anchor county per state';
 
 // ---------- Stylized county/ZIP drill-downs (fallback rendering) --------
 
@@ -392,14 +413,23 @@ export function USChoroplethMap({
   // Per-county ZIP rollups lazy-loaded on county drill. Keyed by 5-char
   // county FIPS. Value is a dict keyed by 5-digit ZIP.
   const [liveZipFacts, setLiveZipFacts] = useState<Record<string, Record<string, ZipRollup>>>({});
+  // Optional scope note surfaced from /api/geo/county-rollups when the
+  // backend carries `scope_note` on the response. Falls back to
+  // SCOPE_NOTE_DEFAULT so the UX is honest even against a pre-scope-note
+  // backend deploy. Keyed by uppercase state code.
+  const [countyScopeByState, setCountyScopeByState] = useState<Record<string, string>>({});
   const navigate = useNavigate();
   const footprint = useOptionalFootprint();
 
-  // Footprint-aware drill allowlist. Intersects the tenant's footprint
-  // (lowercased USPS codes) with USCODE_TO_FIPS so only states that (a)
-  // are in the tenant's footprint AND (b) have polygons in the shipped
-  // TopoJSON drill. Memoised so render-only state flips don't recompute
-  // the set per frame.
+  // Footprint-aware drill allowlist. Previously intersected with
+  // USCODE_TO_FIPS which silently dropped footprint states whose TopoJSON
+  // polygons weren't shipped -- so FL, IL, WA, CO clicks fell into the
+  // non-drill branch. Since the Cotality eval share only exposes one
+  // anchor county per state, we now allow every footprint state to
+  // "drill" and let renderCountyLevel handle the two cases:
+  //   (a) TopoJSON has polygons for this state   -> render the polys.
+  //   (b) TopoJSON does not                      -> render a scope card
+  //       and let the user jump straight to the anchor county's ZIPs.
   const supportedCountyStates = useMemo<Record<string, string>>(() => {
     const out: Record<string, string> = {};
     for (const code of footprint.stateCodes) {
@@ -468,6 +498,15 @@ export function USChoroplethMap({
         const byFips: Record<string, CountyRollup> = {};
         for (const r of payload.rollups) byFips[r.fips_5] = r;
         setLiveCountyFacts((cur) => ({ ...cur, [stateUC]: byFips }));
+        // Preserve the backend's scope_note verbatim when present so the
+        // UI can render "Cotality evaluation share: Dallas County only"
+        // etc. without fabricating copy. Falls back to the static
+        // SCOPE_NOTE_DEFAULT when the backend omits it.
+        const scope =
+          (payload as { scope_note?: string | null }).scope_note ?? null;
+        if (scope) {
+          setCountyScopeByState((cur) => ({ ...cur, [stateUC]: scope }));
+        }
       })
       .catch(() => {
         if (!cancelled) {
@@ -537,6 +576,13 @@ export function USChoroplethMap({
         const stateFeatures = fc.features.filter(
           (f) => typeof f.id === 'string' && f.id.startsWith(fips),
         );
+        // Empty features set = this state is in the footprint but not in
+        // the shipped TopoJSON (e.g. FL/IL/WA/CO). Skip storing a payload
+        // so the anchor-county fallback in renderCountyLevel takes over
+        // (see ANCHOR_COUNTY_BY_STATE). Without this guard we'd store an
+        // empty CountiesPayload with an Infinity viewBox and render a
+        // blank SVG. 2026-04-23.
+        if (stateFeatures.length === 0) return;
         // Aggregate bbox across the state's counties → viewBox with 12px pad.
         let minX = Infinity;
         let minY = Infinity;
@@ -731,6 +777,7 @@ export function USChoroplethMap({
     >
       {usaMap.locations.map((loc) => {
         const facts = factsFor(loc.id);
+        const inFootprint = Boolean(supportedCountyStates[loc.id]);
         const lvl = facts?.lvl ?? 1;
         const dim =
           activeSegNames !== null && facts && facts.topSegment && !activeSegNames.has(facts.topSegment);
@@ -750,16 +797,23 @@ export function USChoroplethMap({
             role="button"
             tabIndex={0}
             aria-label={loc.name}
+            // Always show a tooltip on hover. In-footprint states surface
+            // the live rollup; out-of-footprint states surface an honest
+            // "outside Cotality evaluation scope" card so the user never
+            // hovers a state and sees nothing. Prior behavior short-
+            // circuited on `facts &&` which silently suppressed every
+            // non-footprint state and was read as a broken hover.
             onMouseEnter={(e) =>
-              facts &&
               setHover({
                 x: e.clientX,
                 y: e.clientY,
                 name: loc.name,
-                count: facts.count,
-                avgScore: facts.avgScore,
-                topSegment: facts.topSegment || undefined,
-                sourceHint: 'mip.gold.state_rollup',
+                count: facts ? facts.count : null,
+                avgScore: facts ? facts.avgScore : null,
+                topSegment: facts?.topSegment || undefined,
+                sourceHint: inFootprint
+                  ? 'mip.gold.state_rollup'
+                  : 'Outside Cotality evaluation scope',
               })
             }
             onMouseMove={(e) =>
@@ -776,7 +830,7 @@ export function USChoroplethMap({
                 }
                 return;
               }
-              if (supportedCountyStates[loc.id]) {
+              if (inFootprint) {
                 setLevel('county');
                 setCountyStateId(loc.id);
                 setSelected({ level: 'state', id: loc.id, name: loc.name });
@@ -794,7 +848,7 @@ export function USChoroplethMap({
                 if (facts) navigate(`/lead-queue?state=${loc.id.toUpperCase()}`);
                 return;
               }
-              if (supportedCountyStates[loc.id]) {
+              if (inFootprint) {
                 setLevel('county');
                 setCountyStateId(loc.id);
                 setSelected({ level: 'state', id: loc.id, name: loc.name });
@@ -818,9 +872,89 @@ export function USChoroplethMap({
   // isn't in SUPPORTED_COUNTY_STATES or the fetch hasn't resolved yet.
   const renderCountyLevel = () => {
     const payload = countyStateId ? countiesByState[countyStateId] : null;
+    // Anchor-county fallback: the Cotality eval share exposes one county
+    // per state, and the shipped TopoJSON only has polygons for a subset
+    // of states. When there's no polygon payload but we DO have an anchor
+    // county for this state, render a scope card that drills straight to
+    // the anchor's ZIPs rather than a loading spinner that never
+    // resolves. Prior behavior left FL/IL/WA/CO stuck on "Loading
+    // counties…" because their polygons were never in the TopoJSON.
+    const anchor = countyStateId ? ANCHOR_COUNTY_BY_STATE[countyStateId] : null;
+    if (!payload && anchor && !countyLoadError) {
+      const stateName = countyStateId
+        ? usaMap?.locations.find((l) => l.id === countyStateId)?.name ?? ''
+        : '';
+      const stateUC = countyStateId?.toUpperCase() ?? '';
+      const anchorRollup = liveCountyFacts[stateUC]?.[anchor.fips];
+      const count = anchorRollup?.addressable_borrowers ?? null;
+      const avgScore = anchorRollup?.avg_opportunity_score ?? null;
+      return (
+        <div
+          style={{
+            marginTop: 36,
+            height: 'calc(100% - 36px)',
+            display: 'grid',
+            placeItems: 'center',
+            padding: 'var(--sp-4)',
+          }}
+        >
+          <div
+            style={{
+              maxWidth: 360,
+              textAlign: 'center',
+              display: 'grid',
+              gap: 'var(--sp-3)',
+            }}
+          >
+            <div className="eyebrow">Cotality evaluation share</div>
+            <div className="h-3" style={{ color: 'var(--text-1)' }}>
+              {anchor.name}, {stateName}
+            </div>
+            <div className="body muted" style={{ fontSize: 12, lineHeight: 1.5 }}>
+              1 anchor county per state in the current Cotality eval share.
+              Drill into {anchor.name} to see ZIP-level rollups.
+            </div>
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'center',
+                gap: 'var(--sp-3)',
+                fontFamily: 'var(--font-mono)',
+                fontSize: 11,
+                color: 'var(--text-3)',
+              }}
+            >
+              <span>
+                Marketable{' '}
+                <span style={{ color: 'var(--text-1)' }}>
+                  {count !== null ? count.toLocaleString() : '—'}
+                </span>
+              </span>
+              <span>
+                Avg. score{' '}
+                <span style={{ color: 'var(--text-1)' }}>
+                  {avgScore !== null ? avgScore : '—'}
+                </span>
+              </span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'center', gap: 'var(--sp-2)' }}>
+              <button
+                type="button"
+                className="btn btn--primary"
+                onClick={() => {
+                  setLevel('zip');
+                  setSelected({ level: 'county', id: anchor.fips, name: anchor.name });
+                }}
+              >
+                Drill into {anchor.name} ZIPs
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
     if (!payload) {
-      // Loading or unsupported-state fallback — keep the old stylized polys.
-      // TODO: expand SUPPORTED_COUNTY_STATES to remove this fallback.
+      // Loading or error fallback — keep the old stylized polys + retry.
       return (
         <svg
           viewBox="0 0 340 310"
@@ -991,8 +1125,12 @@ export function USChoroplethMap({
     const useStyledRender = useStyled && styledTiles.length >= 3;
 
     if (byZip && zipsFromApi.length === 0) {
-      // API returned empty — county outside footprint or CTAS hasn't
-      // populated ZIPs for it. Give the user a graceful fallback path.
+      // API returned empty — county outside the Cotality eval share or
+      // the CTAS hasn't populated ZIPs for it. Give the user a graceful
+      // fallback path. The Lead Queue preserves the county filter via
+      // ?state=XX&county=FFFFF; the Queue resolves "borrowers in this
+      // county" client-side by intersecting ZIPs (see
+      // /lead-queue.tsx::countyZips).
       return (
         <div
           style={{
@@ -1003,9 +1141,12 @@ export function USChoroplethMap({
             padding: 'var(--sp-4)',
           }}
         >
-          <div style={{ textAlign: 'center', color: 'var(--text-3)', fontSize: 12, maxWidth: 300 }}>
+          <div style={{ textAlign: 'center', color: 'var(--text-3)', fontSize: 12, maxWidth: 320 }}>
             <div style={{ color: 'var(--text-2)', marginBottom: 'var(--sp-2)' }}>
               No ZIP-level rollup for {countyName}.
+            </div>
+            <div style={{ marginBottom: 'var(--sp-3)', lineHeight: 1.4 }}>
+              Browse this county&apos;s lead queue — the filter will narrow to borrowers in {countyName}.
             </div>
             <button
               type="button"
@@ -1013,7 +1154,7 @@ export function USChoroplethMap({
               style={{ fontSize: 12 }}
               onClick={() => navigate(`/lead-queue?state=${stateUC}&county=${countyFips}`)}
             >
-              Open Lead Queue for this county
+              Open Lead Queue for {countyName}
             </button>
           </div>
         </div>
@@ -1038,7 +1179,10 @@ export function USChoroplethMap({
     }
 
     if (useStyledRender) {
-      // Prototype-style Chicago ZIP layout.
+      // Prototype-style Chicago ZIP layout. Kept for Cook because the
+      // three tiles read as stylized neighborhoods rather than a data
+      // grid. Click deep-links to the filtered lead queue (not a single
+      // borrower) — user wants to see all borrowers in the ZIP.
       return (
         <svg viewBox="0 0 310 210" preserveAspectRatio="xMidYMid meet" style={{ marginTop: 36, height: 'calc(100% - 36px)' }}>
           {styledTiles.map((z) => {
@@ -1047,7 +1191,6 @@ export function USChoroplethMap({
             const avgScore = liveFacts?.avg_opportunity_score ?? null;
             const topSegCode = liveFacts?.top_segment_code ?? null;
             const topSegment = topSegCode ? SEGMENT_CODE_TO_NAME[topSegCode] : undefined;
-            const sampleBorrowerId = liveFacts?.sample_borrower_id ?? null;
             const classes = [
               'map-region',
               `lvl-${zipBucketer(count)}`,
@@ -1077,9 +1220,7 @@ export function USChoroplethMap({
                   onMouseLeave={() => setHover(null)}
                   onClick={() => {
                     setSelected({ level: 'zip', id: z.id, name: z.name });
-                    if (sampleBorrowerId) {
-                      navigate(`/borrower-360/${sampleBorrowerId}`);
-                    }
+                    navigate(`/lead-queue?state=${stateUC}&zip=${z.id}`);
                   }}
                 />
                 <text
@@ -1099,104 +1240,68 @@ export function USChoroplethMap({
       );
     }
 
-    // Auto-tiled grid for every other county. Sort descending by count so
-    // the densest ZIPs land in the top-left -- reads like a Pareto.
+    // Auto-tiled grid for every other county. HTML/CSS grid (not SVG) so
+    // the tiles use design-system tokens (r-md, sp, typography) and sit
+    // cleanly in the map viewport, not overlapping the breadcrumbs above.
+    // Sorted descending by count so densest ZIPs land top-left (Pareto).
+    // Click deep-links to the filtered Lead Queue — seeing all borrowers
+    // in the ZIP is the user's actual goal, not a single random sample.
     const sorted = [...zipsFromApi].sort(
       (a, b) => (b.addressable_borrowers ?? 0) - (a.addressable_borrowers ?? 0),
     );
     const visible = sorted.slice(0, 24);
-    const cols = Math.min(6, Math.ceil(Math.sqrt(Math.max(1, visible.length))));
-    const rows = Math.ceil(visible.length / cols);
-    const tileW = 80;
-    const tileH = 56;
-    const gap = 6;
-    const vbW = cols * tileW + (cols + 1) * gap;
-    const vbH = rows * tileH + (rows + 1) * gap;
-
     return (
-      <svg
-        viewBox={`0 0 ${vbW} ${vbH}`}
-        preserveAspectRatio="xMidYMid meet"
-        style={{ marginTop: 36, height: 'calc(100% - 36px)' }}
-      >
-        {visible.map((rollup, i) => {
-          const col = i % cols;
-          const row = Math.floor(i / cols);
-          const x = gap + col * (tileW + gap);
-          const y = gap + row * (tileH + gap);
+      <div className="zip-tiles" role="list" aria-label={`ZIPs in ${countyName}`}>
+        {visible.map((rollup) => {
           const count = rollup.addressable_borrowers ?? null;
           const avgScore = rollup.avg_opportunity_score ?? null;
           const topSegCode = rollup.top_segment_code ?? null;
           const topSegment = topSegCode ? SEGMENT_CODE_TO_NAME[topSegCode] : undefined;
-          const sampleBorrowerId = rollup.sample_borrower_id ?? null;
+          const lvl = zipBucketer(count);
+          const isSelected =
+            selected?.level === 'zip' && selected.id === rollup.zip;
           const classes = [
-            'map-region',
-            `lvl-${zipBucketer(count)}`,
-            selected?.level === 'zip' && selected.id === rollup.zip ? 'is-selected' : '',
+            'zip-tile',
+            `zip-tile--lvl-${lvl}`,
+            isSelected ? 'is-selected' : '',
           ]
             .filter(Boolean)
             .join(' ');
           return (
-            <g key={rollup.zip}>
-              <rect
-                x={x}
-                y={y}
-                width={tileW}
-                height={tileH}
-                rx={6}
-                ry={6}
-                className={classes}
-                role="button"
-                tabIndex={0}
-                aria-label={`ZIP ${rollup.zip}`}
-                onMouseEnter={(e) =>
-                  setHover({
-                    x: e.clientX,
-                    y: e.clientY,
-                    name: `ZIP ${rollup.zip}, ${countyName}`,
-                    count,
-                    avgScore,
-                    topSegment,
-                    sourceHint: 'mip.gold.zip_rollup',
-                  })
-                }
-                onMouseMove={(e) =>
-                  setHover((h) => (h ? { ...h, x: e.clientX, y: e.clientY } : h))
-                }
-                onMouseLeave={() => setHover(null)}
-                onClick={() => {
-                  setSelected({ level: 'zip', id: rollup.zip, name: rollup.zip });
-                  if (sampleBorrowerId) {
-                    navigate(`/borrower-360/${sampleBorrowerId}`);
-                  }
-                }}
-              />
-              <text
-                x={x + tileW / 2}
-                y={y + tileH / 2 - 2}
-                textAnchor="middle"
-                fontSize="11"
-                fontFamily="var(--font-mono)"
-                fill="var(--text-1)"
-                pointerEvents="none"
-              >
-                {rollup.zip}
-              </text>
-              <text
-                x={x + tileW / 2}
-                y={y + tileH / 2 + 14}
-                textAnchor="middle"
-                fontSize="9"
-                fontFamily="var(--font-mono)"
-                fill="var(--text-3)"
-                pointerEvents="none"
-              >
+            <button
+              key={rollup.zip}
+              type="button"
+              className={classes}
+              role="listitem"
+              aria-label={`ZIP ${rollup.zip}, ${count !== null ? `${count.toLocaleString()} borrowers` : 'no data'}`}
+              onMouseEnter={(e) =>
+                setHover({
+                  x: e.clientX,
+                  y: e.clientY,
+                  name: `ZIP ${rollup.zip}, ${countyName}`,
+                  count,
+                  avgScore,
+                  topSegment,
+                  sourceHint: 'mip.gold.zip_rollup',
+                })
+              }
+              onMouseMove={(e) =>
+                setHover((h) => (h ? { ...h, x: e.clientX, y: e.clientY } : h))
+              }
+              onMouseLeave={() => setHover(null)}
+              onClick={() => {
+                setSelected({ level: 'zip', id: rollup.zip, name: rollup.zip });
+                navigate(`/lead-queue?state=${stateUC}&zip=${rollup.zip}`);
+              }}
+            >
+              <span className="zip-tile__code">{rollup.zip}</span>
+              <span className="zip-tile__count">
                 {count !== null ? count.toLocaleString() : '—'}
-              </text>
-            </g>
+              </span>
+            </button>
           );
         })}
-      </svg>
+      </div>
     );
   };
 
@@ -1261,33 +1366,60 @@ export function USChoroplethMap({
         </div>
       </div>
 
-      {/* Drill hint chip */}
-      <div style={{ position: 'absolute', top: 12, right: 14, zIndex: 2 }}>
+      {/* Drill hint chip + optional Cotality eval-share scope chip. The
+          scope chip only appears at county/ZIP level so the state-level
+          view stays visually simple. Copy mirrors the actual upstream
+          data scope ("1 anchor county per state in the Cotality eval
+          share") — this is not a UI choice, it's upstream truth. */}
+      <div
+        style={{
+          position: 'absolute',
+          top: 12,
+          right: 14,
+          zIndex: 2,
+          display: 'flex',
+          gap: 'var(--sp-2)',
+          flexWrap: 'wrap',
+          justifyContent: 'flex-end',
+          maxWidth: 'calc(100% - 28px)',
+        }}
+      >
         <Chip variant="neutral" icon="pin">
           {level === 'state'
-            ? `Click ${Object.keys(supportedCountyStates).map((s) => s.toUpperCase()).join(', ')} to drill`
+            ? `${Object.keys(supportedCountyStates).length} footprint states · click to drill`
             : level === 'county'
-              ? 'Click any county to drill'
-              : 'Click a ZIP to open borrower'}
+              ? `${SCOPE_NOTE_DEFAULT}${countyStateId && ANCHOR_COUNTY_BY_STATE[countyStateId] ? ` (${ANCHOR_COUNTY_BY_STATE[countyStateId].name})` : ''}`
+              : `ZIPs in ${selected?.level === 'county' ? selected.name : 'county'}`}
         </Chip>
+        {level !== 'state' && countyStateId && countyScopeByState[countyStateId.toUpperCase()] && (
+          <Chip variant="neutral" icon="db">
+            {countyScopeByState[countyStateId.toUpperCase()]}
+          </Chip>
+        )}
       </div>
 
       {level === 'state' && renderStateLevel()}
       {level === 'county' && renderCountyLevel()}
       {level === 'zip' && renderZipLevel()}
 
-      {/* Legend */}
+      {/* Legend — explicit "Colored by" label so the user understands why
+          the home map and the segments map can render different hues for
+          the same state. On segments-with-filter, the gradient reflects
+          quantiles within the filtered segment; on home it's the full
+          marketable population. Fix G, 2026-04-23. */}
       <div className="map-legend">
-        <div>
-          Borrowers in selection{' '}
-          <span
-            style={{
-              color: 'var(--text-1)',
-              fontFamily: 'var(--font-mono)',
-              marginLeft: 6,
-            }}
-          >
-            {totalCount.toLocaleString()}
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+          <span>
+            Borrowers in selection{' '}
+            <span
+              style={{
+                color: 'var(--text-1)',
+                fontFamily: 'var(--font-mono)',
+                marginLeft: 6,
+              }}
+            >
+              {totalCount.toLocaleString()}
+            </span>
           </span>
         </div>
         <div className="map-legend__bar">
@@ -1301,52 +1433,72 @@ export function USChoroplethMap({
           <span>Lower</span>
           <span>Higher</span>
         </div>
-      </div>
-
-      {/* Hover tooltip — infographic-style card. Wider layout (280px) with
-          a dual-KPI grid (marketable population + avg score) + a top-segment
-          callout + source lineage footer. Slice: hover-infographic-richness,
-          2026-04-23. */}
-      {hover && (
         <div
-          className="map-tip"
           style={{
-            left: Math.max(160, Math.min(window.innerWidth - 160, hover.x)),
-            top: hover.y - 4,
+            fontSize: 10,
+            color: 'var(--text-3)',
+            marginTop: 4,
+            lineHeight: 1.35,
           }}
         >
-          <div className="map-tip__name">{hover.name}</div>
-          <div className="map-tip__kpis">
-            <div className="map-tip__kpi">
-              <div className="map-tip__kpi-label">Marketable</div>
-              <div className="map-tip__kpi-value">
-                {hover.count !== null ? hover.count.toLocaleString() : '—'}
-              </div>
-            </div>
-            <div className="map-tip__kpi">
-              <div className="map-tip__kpi-label">Avg. score</div>
-              <div className="map-tip__kpi-value">
-                {hover.avgScore !== null ? hover.avgScore : '—'}
-              </div>
-            </div>
-          </div>
-          {hover.topSegment && (
-            <div className="map-tip__seg">
-              <span className="map-tip__seg-label">Top segment</span>
-              <span className="map-tip__seg-value">{hover.topSegment}</span>
-            </div>
-          )}
-          <div
-            className="map-tip__row"
-            style={{ marginTop: 0, borderTop: '1px dashed var(--line-1)', paddingTop: 'var(--sp-2)' }}
-          >
-            <span>Source</span>
-            <span className="v mono" style={{ fontSize: 10 }}>
-              {hover.sourceHint ?? 'mip.gold'}
-            </span>
-          </div>
+          Colored by:{' '}
+          <span style={{ color: 'var(--text-2)' }}>
+            {segmentFilter && segmentFilter.length > 0
+              ? `opportunity within ${segmentFilter.join(', ')}`
+              : 'marketable population'}
+          </span>
         </div>
-      )}
+      </div>
+
+      {/* Hover tooltip — infographic-style card. Portaled to document.body
+          so `.map-wrap { overflow: hidden }` can never clip it and so the
+          stacking context of a containing surface can't pull it beneath
+          another card. Absolute position is computed from hover.x/y
+          (client coords), clamped to the viewport. Slice: hover-infographic-
+          richness + portal-escape, 2026-04-23. */}
+      {hover &&
+        createPortal(
+          <div
+            className="map-tip"
+            style={{
+              position: 'fixed',
+              left: Math.max(160, Math.min(window.innerWidth - 160, hover.x)),
+              top: hover.y - 4,
+            }}
+          >
+            <div className="map-tip__name">{hover.name}</div>
+            <div className="map-tip__kpis">
+              <div className="map-tip__kpi">
+                <div className="map-tip__kpi-label">Marketable</div>
+                <div className="map-tip__kpi-value">
+                  {hover.count !== null ? hover.count.toLocaleString() : '—'}
+                </div>
+              </div>
+              <div className="map-tip__kpi">
+                <div className="map-tip__kpi-label">Avg. score</div>
+                <div className="map-tip__kpi-value">
+                  {hover.avgScore !== null ? hover.avgScore : '—'}
+                </div>
+              </div>
+            </div>
+            {hover.topSegment && (
+              <div className="map-tip__seg">
+                <span className="map-tip__seg-label">Top segment</span>
+                <span className="map-tip__seg-value">{hover.topSegment}</span>
+              </div>
+            )}
+            <div
+              className="map-tip__row"
+              style={{ marginTop: 0, borderTop: '1px dashed var(--line-1)', paddingTop: 'var(--sp-2)' }}
+            >
+              <span>Source</span>
+              <span className="v mono" style={{ fontSize: 10 }}>
+                {hover.sourceHint ?? 'mip.gold'}
+              </span>
+            </div>
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }

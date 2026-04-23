@@ -164,6 +164,19 @@ class StateFootprintResolver:
         """Return just the USPS codes, sorted by ``display_order``."""
         return [s.state_code for s in self._footprint()]
 
+    def state_name_to_codes(self) -> dict[str, list[str]]:
+        """Return a lowercased ``state_name -> [state_code]`` map.
+
+        Used by the portfolio builder preview predicate to translate
+        frontend dropdown labels like "Florida" / "California" to the
+        2-char USPS codes emitted into the WHERE clause. Keys are
+        lowercased so the lookup is case-insensitive regardless of how
+        the UI cases the label. Each value is a single-element list so
+        callers can treat this alongside the multi-state MSA combos
+        without branching on shape.
+        """
+        return {s.state_name.lower(): [s.state_code] for s in self._footprint()}
+
     def default_state_code(self) -> str:
         """Return the USPS code of the row with ``is_default_state = TRUE``.
 
