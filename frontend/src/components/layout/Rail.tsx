@@ -37,7 +37,7 @@ export function Rail() {
   const activeModuleId = 0;
   const isM0 = activeModuleId === 0 && pathname !== '/__unused';
   return (
-    <nav className="rail" aria-label="Modules">
+    <nav className="rail" aria-label="Primary navigation">
       <Link to="/" className="rail__brand" title="Entrada — Mortgage Intelligence Platform" aria-label="Entrada home">
         <EntradaMark size={32} />
       </Link>

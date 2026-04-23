@@ -85,6 +85,19 @@ export interface AuditEventRow {
   created_at: string;
 }
 
+/**
+ * Resilience reason codes surfaced in 503 bodies by the backend's
+ * `_dependency_down_handler` (cycle 13, 2026-04-23). Used by
+ * `useWarmingUpRetry` to choose a cadence:
+ *
+ *   - "warming_up"        — dependency is initialising after idle; poll 5s.
+ *   - "breaker_open"      — circuit breaker tripped; respect the 30s
+ *                           cooldown before probing again.
+ *   - "retries_exhausted" — backend already burned its retry budget;
+ *                           further client retries will not help.
+ */
+export type ApiErrorReason = 'warming_up' | 'breaker_open' | 'retries_exhausted';
+
 /** Structured error thrown by every api.* method on non-2xx or network failure. */
 export class ApiError extends Error {
   readonly path: string;
@@ -93,6 +106,11 @@ export class ApiError extends Error {
   readonly dependency: string | null;
   readonly correlationId: string | null;
   readonly aborted: boolean;
+  /**
+   * 503 classification from the backend resilience layer, or `null`
+   * when the body did not include one. See `ApiErrorReason`.
+   */
+  readonly reason: ApiErrorReason | string | null;
 
   constructor(
     message: string,
@@ -103,6 +121,7 @@ export class ApiError extends Error {
       dependency?: string | null;
       correlationId?: string | null;
       aborted?: boolean;
+      reason?: ApiErrorReason | string | null;
     } = { path: '' },
   ) {
     super(message);
@@ -113,6 +132,7 @@ export class ApiError extends Error {
     this.dependency = opts.dependency ?? null;
     this.correlationId = opts.correlationId ?? null;
     this.aborted = Boolean(opts.aborted);
+    this.reason = opts.reason ?? null;
   }
 }
 
@@ -206,31 +226,50 @@ function _newRequestId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
 }
 
-interface Retryable503Parsed {
+export interface Retryable503Parsed {
   retryable: boolean;
   dependency: string | null;
   detail: string | null;
   correlationId: string | null;
+  /**
+   * Cycle-13 resilience classification: "warming_up" | "breaker_open" |
+   * "retries_exhausted", or null if the backend didn't include one.
+   * The frontend retry hook branches on this field.
+   */
+  reason: ApiErrorReason | string | null;
 }
 
-async function _parseRetryableBody(res: Response): Promise<Retryable503Parsed> {
-  if (res.status !== 503)
-    return { retryable: false, dependency: null, detail: null, correlationId: null };
+/**
+ * Parse a 503 body emitted by `_dependency_down_handler`. Exported so
+ * tests can exercise the classification logic without mocking `fetch`.
+ * Returns a fully-null parse for any non-503 response.
+ */
+export async function _parseRetryableBody(res: Response): Promise<Retryable503Parsed> {
+  const empty: Retryable503Parsed = {
+    retryable: false,
+    dependency: null,
+    detail: null,
+    correlationId: null,
+    reason: null,
+  };
+  if (res.status !== 503) return empty;
   try {
     const body = (await res.clone().json()) as {
       retryable?: boolean;
       dependency?: string;
       detail?: string;
       correlation_id?: string;
+      reason?: string;
     };
     return {
       retryable: body?.retryable === true,
       dependency: body?.dependency ?? null,
       detail: body?.detail ?? null,
       correlationId: body?.correlation_id ?? null,
+      reason: body?.reason ?? null,
     };
   } catch {
-    return { retryable: false, dependency: null, detail: null, correlationId: null };
+    return empty;
   }
 }
 
@@ -265,6 +304,7 @@ async function _throwFromResponse(res: Response, path: string): Promise<never> {
     retryable: parsed.retryable,
     dependency: parsed.dependency,
     correlationId: parsed.correlationId,
+    reason: parsed.reason,
   });
 }
 

@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { useApp } from '../AppContext';
 import { Icon } from '../Icon';
@@ -43,6 +44,18 @@ export function Topbar() {
   // signal from /api/health (which drives DegradedBanner) — the
   // warehouse can be up while the footprint fetch is stale.
   const { usingFallback: footprintFallback } = useFootprint();
+  // R6-11 (2026-04-23): on a deep-link refresh, three providers race
+  // to report "cold start" simultaneously (DegradedBanner, footprint
+  // fallback chip, route-level WarmingUpBlock). Suppress the footprint
+  // chip for the first ~3s of mount so the first paint doesn't stack
+  // two cold-start indicators before the degraded-banner takes over.
+  // After the grace window, the chip still lights up if the fallback
+  // is still in use.
+  const [mountGraceOver, setMountGraceOver] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setMountGraceOver(true), 3000);
+    return () => clearTimeout(t);
+  }, []);
 
   const envLabel = (health?.app_env ?? 'loading').toLowerCase();
   const warehouseUp = health?.dependencies?.warehouse === 'up';
@@ -91,7 +104,7 @@ export function Topbar() {
           {warehouseUp ? 'warehouse' : health ? 'offline' : '…'}
         </span>
       </div>
-      {footprintFallback && (
+      {footprintFallback && mountGraceOver && (
         <span
           className="chip chip--warning"
           title="The /api/config/footprint fetch failed — showing the canonical 6-state fallback. The warehouse may still be cold-starting."

@@ -13,16 +13,32 @@ import {
  * Cold-boot symptom (2026-04-23): Databricks SQL warehouses auto-suspend
  * when idle and take ~30–60s to warm. During that window the backend's
  * `_dependency_down_handler` returns HTTP 503 with
- * `{retryable: true, dependency: "warehouse"}`. `api.ts`'s
- * `_fetchWithRetry` already retries 3× with backoff, but on a genuinely
- * cold warehouse that still isn't enough — the user sees a red "Backend
- * unavailable" banner on first nav.
+ * `{retryable: true, dependency: "warehouse", reason: "warming_up"}`.
+ * `api.ts`'s `_fetchWithRetry` already retries 3× with backoff, but on a
+ * genuinely cold warehouse that still isn't enough — the user sees a red
+ * "Backend unavailable" banner on first nav.
  *
- * This hook adds a second, user-visible retry layer:
+ * Cycle 13 added `reason ∈ {warming_up, breaker_open, retries_exhausted}`
+ * to the 503 body so the client can pick a cadence that matches the
+ * server's state:
+ *   - "warming_up"        → 5s interval × 6 attempts (30s, the default).
+ *   - "breaker_open"      → 30s interval × 2 attempts (60s — gives the
+ *                           breaker its full cooldown plus a half-open
+ *                           probe. Retrying every 5s against an open
+ *                           breaker just burns the budget.)
+ *   - "retries_exhausted" → 0 attempts; surface the error immediately.
+ *                           Further client retries will not help.
+ *   - null / unknown      → fall back to the "warming_up" cadence.
+ *
+ * The hook's public shape does NOT change — callers still read
+ * `{data, warmingUp, error, manualRetry}`. `warmingUp.label` is the
+ * only operator-visible tell that we're in the breaker branch
+ * ("Circuit breaker cooling" vs "Warehouse warming up").
+ *
+ * Behavior otherwise:
  *   - runs `fetcher(signal)` on mount and when `deps` change.
- *   - on an `ApiError` where `isWarmingUpError(err)` is true: swap the
- *     red banner for a "warming up — attempt N of 6" status block and
- *     auto-retry every 5s up to 6 attempts (30s total wall-clock).
+ *   - on a retryable `ApiError`: show the warming-up block and schedule
+ *     the next attempt at the reason-appropriate cadence.
  *   - on any other error: surface it as `error` and stop retrying.
  *   - on success at any attempt: clear any warming-up state.
  *
@@ -34,6 +50,67 @@ import {
  * unmount or when `deps` change (prevents setState-after-unmount and
  * prevents a stale response from clobbering a newer one).
  */
+
+/**
+ * Cycle-13 cadence plan, derived from the 503 body's `reason` field.
+ * Exported so tests can assert the branching without reaching into the
+ * hook's internal state.
+ */
+export interface RetryPlan {
+  /** "warming_up" | "breaker_open" | "retries_exhausted" | unknown. */
+  reason: string | null;
+  /** Human label for the WarmingUpBlock header. */
+  label: string;
+  /** Interval between attempts, in ms. */
+  intervalMs: number;
+  /** Maximum attempt count (1-indexed ceiling). */
+  maxAttempts: number;
+  /** When true, do not schedule another attempt — surface the error. */
+  stop: boolean;
+}
+
+/** Map a 503 reason + dependency to a retry plan. */
+export function planForReason(
+  reason: string | null,
+  dependency: string | null,
+  defaults: { intervalMs: number; maxAttempts: number },
+): RetryPlan {
+  const depName = dependencyLabel(dependency);
+  if (reason === 'breaker_open') {
+    // Backend CircuitBreaker cools for 30s before it will probe the
+    // dependency again. Retrying every 5s just posts 5 requests into
+    // the open breaker and burns our attempt budget. Pace ourselves
+    // to the cooldown and probe at the boundary + once more.
+    return {
+      reason,
+      label: `${depName} circuit breaker cooling`,
+      intervalMs: 30_000,
+      maxAttempts: 2,
+      stop: false,
+    };
+  }
+  if (reason === 'retries_exhausted') {
+    // Backend already burned its internal retry budget on this call.
+    // Client-side retry cannot fix that — surface the error so the
+    // user sees a real failure state (with a Retry button) instead of
+    // a 30s warming-up facade.
+    return {
+      reason,
+      label: `${depName} unavailable`,
+      intervalMs: defaults.intervalMs,
+      maxAttempts: 0,
+      stop: true,
+    };
+  }
+  // "warming_up", null, or any unknown reason -> default cadence.
+  return {
+    reason,
+    label: `${depName} warming up`,
+    intervalMs: defaults.intervalMs,
+    maxAttempts: defaults.maxAttempts,
+    stop: false,
+  };
+}
 
 export interface WarmingUpState {
   /** Which dependency returned 503 — "warehouse", "lakebase", "genie", … */
@@ -118,22 +195,33 @@ export function useWarmingUpRetry<T>(
         setError(null);
       } catch (err: unknown) {
         if (cancelled || isAbortError(err)) return;
-        if (isWarmingUpError(err) && attempt < maxAttempts) {
-          // Transient cold-start: show warming-up block, schedule next.
+        if (isWarmingUpError(err)) {
+          const plan = planForReason(err.reason, err.dependency, {
+            intervalMs,
+            maxAttempts,
+          });
+          // "retries_exhausted" (or any zero-budget plan): do not
+          // schedule another attempt. The backend already retried and
+          // failed; one more client fetch will not help.
+          if (plan.stop || attempt >= plan.maxAttempts) {
+            setWarmingUp(null);
+            setError(err);
+            return;
+          }
           setWarmingUp({
             dependency: err.dependency,
-            label: `${dependencyLabel(err.dependency)} warming up`,
+            label: plan.label,
             attempt: attempt + 1,
-            maxAttempts,
+            maxAttempts: plan.maxAttempts,
             correlationId: err.correlationId,
           });
           setError(null);
           timeoutId = setTimeout(() => {
             void runAttempt(attempt + 1);
-          }, intervalMs);
+          }, plan.intervalMs);
           return;
         }
-        // Either non-warming-up error or we exhausted attempts.
+        // Non-retryable error.
         setWarmingUp(null);
         setError(err instanceof Error ? err : new Error(String(err)));
       }
