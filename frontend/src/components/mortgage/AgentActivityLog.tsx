@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Icon, type IconName } from '../Icon';
+import { api, isAbortError, type AuditEventRow } from '../../lib/api';
+import { useOptionalHealth } from '../HealthProvider';
 
 /**
  * AgentActivityLog — prototype `.audit` BEM. Pulls events from
@@ -9,25 +11,17 @@ import { Icon, type IconName } from '../Icon';
  * Icon + color keyed off action verb so Approvals stand out green,
  * rejects red, Genie asks amber.
  *
- * The footer renders a live telemetry strip built from /api/health —
- * warehouse + Genie dependency state and a monotonic wall-clock probe
- * latency. Values are not synthesized: `status`, `dependencies`, and
+ * The footer renders a live telemetry strip built from the shared
+ * HealthProvider (round-2 hole-finder #21, 2026-04-23) — warehouse +
+ * Genie dependency state and a monotonic wall-clock probe latency.
+ * Values are not synthesized: `status`, `dependencies`, and
  * `circuit_breakers` come straight from the health endpoint; the
- * `probe_ms` is the wall-clock cost of the single fetch that produced
- * them. This is the operator-honesty beat the talk track calls out:
- * if the warehouse is warming up, the activity log says so.
+ * `probe_ms` is the wall-clock cost of the most recent probe that
+ * produced them. This is the operator-honesty beat the talk track
+ * calls out: if the warehouse is warming up, the activity log says so.
  */
 
-interface AuditEvent {
-  event_id: string;
-  actor: string;
-  action: string;
-  entity_type: string;
-  entity_id: string;
-  payload_json: Record<string, unknown>;
-  evidence_ids: string[];
-  created_at: string;
-}
+type AuditEvent = AuditEventRow;
 
 type IconColor = '' | 'green' | 'amber' | 'red';
 
@@ -55,37 +49,21 @@ function formatTime(iso: string): string {
 }
 
 // ---------------------------------------------------------------------
-// Health telemetry — polled from /api/health every 30s. All three values
-// (dep state, breaker state, probe_ms) are real measurements; nothing
-// here is synthesized.
+// Health telemetry — consumed from the shared HealthProvider. All three
+// values (dep state, breaker state, probe_ms) are real measurements;
+// nothing here is synthesized.
 // ---------------------------------------------------------------------
 
 type DepState = 'up' | 'down' | 'unknown';
 type BreakerState = 'closed' | 'open' | 'half_open' | 'unknown';
 
-interface HealthSnapshot {
-  warehouse: DepState;
-  genie: DepState;
-  warehouse_breaker: BreakerState;
-  genie_breaker: BreakerState;
-  probe_ms: number | null;
-  fetched_at: string;
-}
-
-const EMPTY_HEALTH: HealthSnapshot = {
-  warehouse: 'unknown',
-  genie: 'unknown',
-  warehouse_breaker: 'unknown',
-  genie_breaker: 'unknown',
-  probe_ms: null,
-  fetched_at: '',
-};
-
 function breakerLabel(b: BreakerState): string | null {
-  // A closed breaker is the happy path; we only surface breaker state
-  // when it's degraded, so the strip stays quiet at rest.
-  if (b === 'open') return 'tripped';
-  if (b === 'half_open') return 'recovering';
+  // A closed breaker is the happy path; we only surface a friendly
+  // status suffix when the dependency is degraded, so the strip stays
+  // quiet at rest. Copy is buyer-facing — we avoid infra jargon like
+  // "tripped" / "open breaker" in favor of plain English.
+  if (b === 'open') return 'reconnecting';
+  if (b === 'half_open') return 'reconnecting';
   return null;
 }
 
@@ -94,67 +72,41 @@ type FeedState = 'loading' | 'empty' | 'error' | 'ok';
 export function AgentActivityLog({ limit = 12 }: { limit?: number }) {
   const [rows, setRows] = useState<AuditEvent[]>([]);
   const [feedState, setFeedState] = useState<FeedState>('loading');
-  const [health, setHealth] = useState<HealthSnapshot>(EMPTY_HEALTH);
+  const healthCtx = useOptionalHealth();
+  const health = healthCtx?.health ?? null;
+  const probeMs = healthCtx?.probeMs ?? null;
+  const warehouse = (health?.dependencies?.warehouse as DepState) ?? 'unknown';
+  const genie = (health?.dependencies?.genie as DepState) ?? 'unknown';
+  const warehouseBreakerState =
+    (health?.circuit_breakers?.warehouse as BreakerState) ?? 'unknown';
+  const genieBreakerState =
+    (health?.circuit_breakers?.genie as BreakerState) ?? 'unknown';
 
   useEffect(() => {
-    let cancelled = false;
+    const ctrl = new AbortController();
     (async () => {
       try {
-        const res = await fetch(`/api/audit/events?limit=${limit}`);
-        if (!res.ok) throw new Error(String(res.status));
-        const data = (await res.json()) as AuditEvent[];
-        if (cancelled) return;
+        // Route through api.ts so 503s with `retryable: true` follow
+        // the shared exponential-backoff cadence rather than falling
+        // straight into the "unavailable" state. Hole-finder #4,
+        // 2026-04-23.
+        const data = await api.auditEvents(limit, ctrl.signal);
         setRows(data);
         setFeedState(data.length > 0 ? 'ok' : 'empty');
-      } catch {
-        if (cancelled) return;
+      } catch (err) {
+        if (isAbortError(err)) return;
         setRows([]);
         setFeedState('error');
       }
     })();
     return () => {
-      cancelled = true;
+      ctrl.abort();
     };
   }, [limit]);
 
-  useEffect(() => {
-    let cancelled = false;
-    const poll = async () => {
-      const t0 = performance.now();
-      try {
-        const res = await fetch('/api/health');
-        const elapsed = Math.round(performance.now() - t0);
-        if (!res.ok) throw new Error(String(res.status));
-        const body = (await res.json()) as {
-          dependencies?: Record<string, DepState>;
-          circuit_breakers?: Record<string, BreakerState>;
-        };
-        if (cancelled) return;
-        setHealth({
-          warehouse: body.dependencies?.warehouse ?? 'unknown',
-          genie: body.dependencies?.genie ?? 'unknown',
-          warehouse_breaker: body.circuit_breakers?.warehouse ?? 'unknown',
-          genie_breaker: body.circuit_breakers?.genie ?? 'unknown',
-          probe_ms: elapsed,
-          fetched_at: new Date().toISOString(),
-        });
-      } catch {
-        // /api/health unreachable — surface as unknown; do NOT invent
-        // "up" status. DegradedBanner renders separately for hard fails.
-        if (!cancelled) setHealth({ ...EMPTY_HEALTH, fetched_at: new Date().toISOString() });
-      }
-    };
-    void poll();
-    const id = window.setInterval(poll, 30_000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(id);
-    };
-  }, []);
-
-  const warehouseBreaker = breakerLabel(health.warehouse_breaker);
-  const genieBreaker = breakerLabel(health.genie_breaker);
-  const probeSuffix = health.probe_ms != null ? ` · probe ${health.probe_ms}ms` : '';
+  const warehouseBreaker = breakerLabel(warehouseBreakerState);
+  const genieBreaker = breakerLabel(genieBreakerState);
+  const probeSuffix = probeMs != null ? ` · ${probeMs} ms` : '';
 
   return (
     <div className="surface">
@@ -175,9 +127,9 @@ export function AgentActivityLog({ limit = 12 }: { limit?: number }) {
           </div>
         )}
         {feedState === 'error' && (
-          <div className="body" style={{ padding: 'var(--sp-3)', color: 'var(--signal-error, #EF4444)' }}>
-            Couldn&rsquo;t reach the audit feed (/api/audit/events). Retry will
-            happen on the next page load; dependency state is shown below.
+          <div className="body" style={{ padding: 'var(--sp-3)', color: 'var(--signal-danger)' }}>
+            Audit feed is briefly unavailable. This page will retry on the
+            next refresh; live dependency state is shown below.
           </div>
         )}
         {feedState === 'ok' && rows.map((r) => {
@@ -205,14 +157,14 @@ export function AgentActivityLog({ limit = 12 }: { limit?: number }) {
             style={{
               width: 6, height: 6, borderRadius: '50%',
               background:
-                health.warehouse === 'up'
-                  ? 'var(--signal-success, #10B981)'
-                  : health.warehouse === 'down'
-                    ? 'var(--signal-error, #EF4444)'
+                warehouse === 'up'
+                  ? 'var(--signal-success)'
+                  : warehouse === 'down'
+                    ? 'var(--signal-danger)'
                     : 'var(--text-3)',
             }}
           />
-          Warehouse {health.warehouse}
+          Analytics warehouse {warehouse}
           {warehouseBreaker ? ` · ${warehouseBreaker}` : ''}
         </span>
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
@@ -221,21 +173,21 @@ export function AgentActivityLog({ limit = 12 }: { limit?: number }) {
             style={{
               width: 6, height: 6, borderRadius: '50%',
               background:
-                health.genie === 'up'
-                  ? 'var(--signal-success, #10B981)'
-                  : health.genie === 'down'
-                    ? 'var(--signal-error, #EF4444)'
+                genie === 'up'
+                  ? 'var(--signal-success)'
+                  : genie === 'down'
+                    ? 'var(--signal-danger)'
                     : 'var(--text-3)',
             }}
           />
-          Genie {health.genie}
+          AI assistant {genie}
           {genieBreaker ? ` · ${genieBreaker}` : ''}
         </span>
         <span className="mono" style={{ marginLeft: 'auto' }}>
-          /api/health{probeSuffix}
+          Last health check{probeSuffix}
         </span>
       </div>
-      <div className="surface__ft">Written to Lakebase · immutable · exportable to Unity Catalog</div>
+      <div className="surface__ft">Exported nightly for compliance review</div>
     </div>
   );
 }

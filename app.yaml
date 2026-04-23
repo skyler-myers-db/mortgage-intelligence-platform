@@ -60,8 +60,8 @@ env:
   - name: LAKEBASE_HOST
     valueFrom: database
 
-  # Product overrides. Keep real-data mode on; ensure the post-scrub
-  # catalog name is used even if an older env leaks "mip_demo" in.
+  # Product overrides. Pin the canonical catalog + schema so the
+  # runtime does not inherit a stale name from an older workspace env.
   - name: MIP_DEFAULT_CATALOG
     value: mip
   - name: MIP_DEFAULT_SCHEMA

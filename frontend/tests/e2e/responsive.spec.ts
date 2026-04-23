@@ -1,53 +1,86 @@
 /**
  * Module 0 — responsive + density/theme round-trip coverage.
  *
- * The AppShell is explicitly designed for 1440×900 and above: the Rail is
- * a fixed 72px wide column in a `grid-template-areas: "rail topbar" /
- * "rail main"` layout (see design-system/components.css L9-L19). There
- * is NO mobile-breakpoint that collapses the rail — the prototype is
- * desktop-only. The real responsive breakpoints in components.css are:
+ * Slice 14 responsive pass: container-query driven layout across 8
+ * anchor widths from a 13-inch MacBook Air (1280×720) to a 4K monitor
+ * (3840×2160). The AppShell uses viewport-scoped @media for the rail
+ * width / topbar height / Console gutter (chrome is viewport-bound),
+ * and the inner layout uses @container queries against `main` so the
+ * Console-open state correctly re-flows without waiting on a viewport
+ * resize.
  *
- *   - `.seg-grid`    6col → 3col at max-width 1400px
- *   - `.kpi-row`     4col → 2col at max-width 1200px
- *   - `.layoutA-grid` 2col → 1col at max-width 1200px
- *
- * So the "mobile" test in this file asserts the 1200px breakpoint
- * actually fires (which is what the CSS declares), NOT that the rail
- * collapses (it doesn't, by design). Any future mobile pass would need
- * CSS work first; this test is the canary that catches the existing
- * breakpoints regressing.
+ * Breakpoint anchors (container-query):
+ *   ≤ 640px    : 1-col stack (everything)
+ *   641–960px  : 2-col KPI, 2-col seg, layoutA stacks
+ *   961–1280px : 3-col KPI, 3-col seg, layoutA 2-col (1.2fr 1fr)
+ *   1281–1680px: 4-col KPI, 6-col seg, layoutA 2-col (1.4fr 1fr)  ← design
+ *   1681–2000px: 4-col KPI + extra gap, 6-col seg
+ *   ≥ 2001px   : 4-col KPI + extra gap, 6-col seg, content capped at 1920px
  *
  * Theme / density toggles ARE first-class AppContext state and are
  * covered here end-to-end.
  *
- * Gated on `E2E_LIVE=1` to match real_data.spec.ts — backend boot
- * requires live Databricks creds.
+ * Most tests are gated on `E2E_LIVE=1` to match real_data.spec.ts —
+ * backend boot requires live Databricks credentials. The new responsive
+ * anchor matrix stays gated the same way; the offline CI job still
+ * collects these specs via `playwright test --list` for a syntax check.
  */
 import { test, expect } from '@playwright/test';
 
 const LIVE = process.env.E2E_LIVE === '1';
-test.skip(!LIVE, 'Set E2E_LIVE=1 to run responsive/density coverage.');
 
 const APP_URL = process.env.MIP_APP_URL || 'http://127.0.0.1:5173';
-test.use({ baseURL: APP_URL });
 
-test.describe('Module 0 — responsive + theme/density', () => {
+type Anchor = {
+  width: number;
+  height: number;
+  label: string;
+  kpiCols: number;     // expected .kpi-row track count on Home
+  segCols: number;     // expected .seg-grid track count on Segment Intelligence
+  layoutACols: number; // expected .layoutA-grid track count on Home
+};
+
+// Each anchor carries the expected column counts for its band. Console
+// is closed by default so the main container width approximates the
+// viewport width minus the 72–96px rail. Numbers match the container-
+// query rules in components.css.
+const ANCHORS: Anchor[] = [
+  // viewport - 72px rail ≈ 1208 → medium band (961–1280)
+  { width: 1280, height: 720, label: '1280-smallest-laptop', kpiCols: 3, segCols: 3, layoutACols: 2 },
+  // viewport - 72px rail ≈ 1294 → design band (1281–1680)
+  { width: 1366, height: 768, label: '1366-common-laptop', kpiCols: 4, segCols: 6, layoutACols: 2 },
+  // 1440 - 72px ≈ 1368 → design band — prototype target
+  { width: 1440, height: 900, label: '1440-design-target', kpiCols: 4, segCols: 6, layoutACols: 2 },
+  // 1600 - 72px ≈ 1528 → design band
+  { width: 1600, height: 900, label: '1600-mid-laptop', kpiCols: 4, segCols: 6, layoutACols: 2 },
+  // 1920 - 80px (rail widens at 1920) ≈ 1840 → very-wide band (1681–2000)
+  { width: 1920, height: 1080, label: '1920-fhd-projector', kpiCols: 4, segCols: 6, layoutACols: 2 },
+  // 2560 - 96px (rail widens at 2560) ≈ 2464 → ultra-wide band (≥ 2001)
+  { width: 2560, height: 1440, label: '2560-qhd', kpiCols: 4, segCols: 6, layoutACols: 2 },
+  // 3440 - 96px ≈ 3344 → ultra-wide, content capped at 1920px
+  { width: 3440, height: 1440, label: '3440-ultrawide', kpiCols: 4, segCols: 6, layoutACols: 2 },
+  // 3840 - 96px ≈ 3744 → ultra-wide / 4K
+  { width: 3840, height: 2160, label: '3840-4k', kpiCols: 4, segCols: 6, layoutACols: 2 },
+];
+
+function countTracks(columns: string): number {
+  return columns.split(' ').filter((x) => x.trim().length > 0).length;
+}
+
+test.describe('Module 0 — theme / density / narrow canaries', () => {
+  test.skip(!LIVE, 'Set E2E_LIVE=1 to run responsive/density coverage.');
+  test.use({ baseURL: APP_URL });
+
   test('theme toggle round-trip: dark <-> light + background color token changes', async ({ page }) => {
     await page.goto('/');
     const html = page.locator('html');
     const body = page.locator('body');
 
-    // Capture initial theme + computed bg. data-theme="dark" is the
-    // product default (design_files/index.html), but respect whatever
-    // the app reports to avoid flake from persisted localStorage.
     const initialTheme = await html.getAttribute('data-theme');
     const initialBg = await body.evaluate(
       (el) => getComputedStyle(el).backgroundColor,
     );
 
-    // Use the Topbar theme toggle — the "Toggle theme" aria-label
-    // scopes the click unambiguously (the Admin Config page also has
-    // Dark/Light buttons, but that's a different route).
     await page.getByRole('banner').getByRole('button', { name: 'Toggle theme' }).click();
 
     const nextTheme = initialTheme === 'dark' ? 'light' : 'dark';
@@ -55,16 +88,12 @@ test.describe('Module 0 — responsive + theme/density', () => {
       .poll(() => html.getAttribute('data-theme'), { timeout: 3_000 })
       .toBe(nextTheme);
 
-    // Assert the background computed color actually changed. This is the
-    // "token really flipped" proof — dark and light both set `--bg-1`
-    // which body reads, so the visible RGB triple should differ.
     await expect
       .poll(async () => body.evaluate((el) => getComputedStyle(el).backgroundColor), {
         timeout: 3_000,
       })
       .not.toBe(initialBg);
 
-    // Flip back so test isolation holds.
     await page.getByRole('banner').getByRole('button', { name: 'Toggle theme' }).click();
     await expect
       .poll(() => html.getAttribute('data-theme'), { timeout: 3_000 })
@@ -75,7 +104,6 @@ test.describe('Module 0 — responsive + theme/density', () => {
     await page.goto('/');
     const html = page.locator('html');
 
-    // Open the Console from the Topbar (rightmost icon, "Toggle console").
     await page.getByRole('banner').getByRole('button', { name: 'Toggle console' }).click();
     const consoleDialog = page.getByRole('dialog', { name: 'Console' });
     await expect(consoleDialog).toBeVisible();
@@ -88,7 +116,6 @@ test.describe('Module 0 — responsive + theme/density', () => {
       .poll(() => html.getAttribute('data-density'), { timeout: 3_000 })
       .toBe(nextDensityLabel.toLowerCase());
 
-    // Flip back to leave the app in its starting state.
     const origLabel = initialDensity === 'compact' ? 'Compact' : 'Comfortable';
     await consoleDialog.getByRole('button', { name: origLabel }).click();
     await expect
@@ -96,51 +123,179 @@ test.describe('Module 0 — responsive + theme/density', () => {
       .toBe(initialDensity);
   });
 
-  test('narrow viewport (1150px): kpi-row and layoutA-grid collapse to single column', async ({ page }) => {
-    // 1150 is inside the 1200px breakpoint (components.css L818) but wide
-    // enough that the fixed 72px Rail + main content still fit — the
-    // prototype is desktop-only by design; see file header.
+  test('narrow viewport (1150px): rail stays fixed; kpi-row and layoutA-grid collapse', async ({ page }) => {
     await page.setViewportSize({ width: 1150, height: 900 });
     await page.goto('/');
 
-    // Wait for hero so the shell is fully hydrated.
     await expect(
       page.getByRole('heading', { name: /Who should we contact/i }),
     ).toBeVisible({ timeout: 10_000 });
 
-    // .kpi-row should render as 2-col (max-width: 1200px breakpoint).
-    // We read the computed grid-template-columns: the 2-col rule yields
-    // a string with exactly two track sizes.
+    // 1150 viewport - 72px rail ≈ 1078 → medium band → 3-col KPI.
     const kpiCols = await page.locator('.kpi-row').first().evaluate((el) => {
-      return getComputedStyle(el).gridTemplateColumns.split(' ').filter((x) => x.trim().length > 0).length;
+      return getComputedStyle(el).gridTemplateColumns
+        .split(' ')
+        .filter((x) => x.trim().length > 0).length;
     });
-    expect(kpiCols, 'expected .kpi-row to render 2 columns at 1150px').toBe(2);
+    expect(kpiCols, 'expected .kpi-row to render 3 columns at 1150px').toBe(3);
 
-    // .layoutA-grid (below the KPIs) collapses to 1 column.
+    // .layoutA-grid (below the KPIs) stays 2-col in the medium band.
     const layoutCols = await page.locator('.layoutA-grid').first().evaluate((el) => {
-      return getComputedStyle(el).gridTemplateColumns.split(' ').filter((x) => x.trim().length > 0).length;
+      return getComputedStyle(el).gridTemplateColumns
+        .split(' ')
+        .filter((x) => x.trim().length > 0).length;
     });
-    expect(layoutCols, 'expected .layoutA-grid to render 1 column at 1150px').toBe(1);
+    expect(layoutCols, 'expected .layoutA-grid to render 2 columns at 1150px').toBe(2);
 
-    // Rail is NOT responsive by design — assert it stays at 72px so we
-    // catch any regression that tries to hide it on narrower widths.
+    // Rail is NOT responsive by design (until < 1024 viewport) — assert it stays
+    // at 72px so we catch any regression that tries to hide it.
     const railWidth = await page.locator('.rail').first().evaluate((el) => el.getBoundingClientRect().width);
-    expect(railWidth, 'Rail must stay 72px wide — prototype is desktop-only').toBeGreaterThanOrEqual(60);
+    expect(railWidth, 'Rail must stay ~72px wide — prototype is desktop-only').toBeGreaterThanOrEqual(60);
     expect(railWidth).toBeLessThanOrEqual(90);
   });
 
-  test('segment-intelligence: seg-grid collapses from 6 to 3 cols at 1400px', async ({ page }) => {
-    // The segment grid has its own breakpoint at 1400px
-    // (components.css L809). Test at 1300 to stay safely inside it.
-    await page.setViewportSize({ width: 1300, height: 900 });
+  test('segment-intelligence: seg-grid gives 6 cols at the design target (1440)', async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto('/segment-intelligence');
 
-    // Wait for segment cards to render from /api/segments.
     await expect(page.locator('.seg-grid').first()).toBeVisible({ timeout: 30_000 });
 
     const segCols = await page.locator('.seg-grid').first().evaluate((el) => {
-      return getComputedStyle(el).gridTemplateColumns.split(' ').filter((x) => x.trim().length > 0).length;
+      return getComputedStyle(el).gridTemplateColumns
+        .split(' ')
+        .filter((x) => x.trim().length > 0).length;
     });
-    expect(segCols, 'expected .seg-grid to render 3 columns at 1300px').toBe(3);
+    expect(segCols, 'expected .seg-grid to render 6 columns at 1440px').toBe(6);
+  });
+});
+
+/* ============================================================
+   Responsive anchor matrix (container-query driven).
+
+   Emits one test per (anchor, route) pair; each test boots the app
+   at the anchor's viewport size, navigates, asserts the column
+   count matches the expected band, and asserts the main content
+   doesn't overflow the capped 1920px rule on ultra-wides.
+   ============================================================ */
+test.describe('Module 0 — responsive anchor matrix', () => {
+  test.skip(!LIVE, 'Set E2E_LIVE=1 to run the responsive anchor matrix.');
+  test.use({ baseURL: APP_URL });
+
+  for (const anchor of ANCHORS) {
+    test(`[${anchor.label}] Home renders ${anchor.kpiCols}-col KPI row, ${anchor.layoutACols}-col layoutA`, async ({ page }) => {
+      await page.setViewportSize({ width: anchor.width, height: anchor.height });
+      await page.goto('/');
+
+      await expect(
+        page.getByRole('heading', { name: /Who should we contact/i }),
+      ).toBeVisible({ timeout: 15_000 });
+
+      const kpiCols = await page.locator('.kpi-row').first().evaluate((el) => {
+        return getComputedStyle(el).gridTemplateColumns
+          .split(' ')
+          .filter((x) => x.trim().length > 0).length;
+      });
+      expect(kpiCols, `Home .kpi-row at ${anchor.label}`).toBe(anchor.kpiCols);
+
+      const layoutCols = await page.locator('.layoutA-grid').first().evaluate((el) => {
+        return getComputedStyle(el).gridTemplateColumns
+          .split(' ')
+          .filter((x) => x.trim().length > 0).length;
+      });
+      expect(layoutCols, `Home .layoutA-grid at ${anchor.label}`).toBe(anchor.layoutACols);
+
+      // Content cap: at ≥ 2001px viewport the .main__content wrapper
+      // holds the text-dense content to 1920px. Home's wideMap opts
+      // that wrapper up to 2400px; assert neither cap is exceeded.
+      const contentWidth = await page
+        .locator('.main__content')
+        .first()
+        .evaluate((el) => el.getBoundingClientRect().width);
+      const cap = 2400; // Home uses wideMap
+      expect(contentWidth, `Home .main__content width at ${anchor.label}`).toBeLessThanOrEqual(cap + 2);
+    });
+
+    test(`[${anchor.label}] Segment Intelligence renders ${anchor.segCols}-col seg-grid`, async ({ page }) => {
+      await page.setViewportSize({ width: anchor.width, height: anchor.height });
+      await page.goto('/segment-intelligence');
+
+      await expect(page.locator('.seg-grid').first()).toBeVisible({ timeout: 30_000 });
+
+      const segCols = await page.locator('.seg-grid').first().evaluate((el) => {
+        return getComputedStyle(el).gridTemplateColumns
+          .split(' ')
+          .filter((x) => x.trim().length > 0).length;
+      });
+      expect(segCols, `Segment Intelligence .seg-grid at ${anchor.label}`).toBe(anchor.segCols);
+
+      // Non-hero routes use the 1920px cap (no --wide-map).
+      const contentWidth = await page
+        .locator('.main__content')
+        .first()
+        .evaluate((el) => el.getBoundingClientRect().width);
+      expect(contentWidth, `Segment Intelligence .main__content width at ${anchor.label}`).toBeLessThanOrEqual(1922);
+    });
+
+    test(`[${anchor.label}] Lead Queue content stays within the ultra-wide table cap`, async ({ page }) => {
+      await page.setViewportSize({ width: anchor.width, height: anchor.height });
+      await page.goto('/lead-queue');
+
+      await expect(page.locator('.tbl').first()).toBeVisible({ timeout: 30_000 });
+
+      // Content cap at 1920px; above 2001 container the .tbl surface caps at 1600.
+      const contentWidth = await page
+        .locator('.main__content')
+        .first()
+        .evaluate((el) => el.getBoundingClientRect().width);
+      expect(contentWidth, `Lead Queue .main__content width at ${anchor.label}`).toBeLessThanOrEqual(1922);
+    });
+
+    test(`[${anchor.label}] Borrower 360 layoutA matches the anchor band`, async ({ page }) => {
+      await page.setViewportSize({ width: anchor.width, height: anchor.height });
+      await page.goto('/borrower-360');
+
+      // Borrower 360 has multiple .layoutA-grid blocks; just take the first.
+      await expect(page.locator('.layoutA-grid').first()).toBeVisible({ timeout: 30_000 });
+
+      const layoutCols = await page.locator('.layoutA-grid').first().evaluate((el) => {
+        return getComputedStyle(el).gridTemplateColumns
+          .split(' ')
+          .filter((x) => x.trim().length > 0).length;
+      });
+      expect(layoutCols, `Borrower 360 .layoutA-grid at ${anchor.label}`).toBe(anchor.layoutACols);
+    });
+  }
+});
+
+/* ============================================================
+   Shell chrome scales with viewport
+   ------------------------------------------------------------
+   Rail width scales from 72 (default) → 80 (≥1920) → 96 (≥2560).
+   Topbar grows from 56 → 64 at 2560+. These are viewport-scoped
+   because the chrome sits against the viewport edge, not the
+   main container.
+   ============================================================ */
+test.describe('Module 0 — shell chrome scales with viewport', () => {
+  test.skip(!LIVE, 'Set E2E_LIVE=1 to run responsive/density coverage.');
+  test.use({ baseURL: APP_URL });
+
+  test('rail widens from 72 → 80 → 96 across 1440 / 1920 / 2560', async ({ page }) => {
+    await page.goto('/');
+
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await expect(page.locator('.rail')).toBeVisible();
+    let railWidth = await page.locator('.rail').first().evaluate((el) => el.getBoundingClientRect().width);
+    expect(railWidth).toBeGreaterThanOrEqual(60);
+    expect(railWidth).toBeLessThanOrEqual(90);
+
+    await page.setViewportSize({ width: 1920, height: 1080 });
+    railWidth = await page.locator('.rail').first().evaluate((el) => el.getBoundingClientRect().width);
+    expect(railWidth).toBeGreaterThanOrEqual(72);
+    expect(railWidth).toBeLessThanOrEqual(92);
+
+    await page.setViewportSize({ width: 2560, height: 1440 });
+    railWidth = await page.locator('.rail').first().evaluate((el) => el.getBoundingClientRect().width);
+    expect(railWidth).toBeGreaterThanOrEqual(84);
+    expect(railWidth).toBeLessThanOrEqual(104);
   });
 });

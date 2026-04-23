@@ -23,12 +23,14 @@ const SAMPLE_QUESTIONS = [
   'Which segment converts best among owner-occupied under 50% LTV?',
 ];
 
-const TRUSTED_ASSETS = [
-  'mip.gold.lead_population',
-  'mip.gold.lead_segment_membership',
-  'mip.gold.lead_scores',
-  'mip.gold.evidence_events',
-  'mip.semantics.lead_generation_metric_view',
+// Friendly-name + technical-path tuple. Friendly is what a business user
+// reads; the UC path sits in the title tooltip for governance/ops.
+const TRUSTED_ASSETS: Array<{ label: string; path: string }> = [
+  { label: 'Borrower population',          path: 'mip.gold.lead_population' },
+  { label: 'Segment membership',           path: 'mip.gold.lead_segment_membership' },
+  { label: 'Opportunity scores',           path: 'mip.gold.lead_scores' },
+  { label: 'Source evidence',              path: 'mip.gold.evidence_events' },
+  { label: 'Lead-generation metric view',  path: 'mip.semantics.lead_generation_metric_view' },
 ];
 
 export default function AskGenie() {
@@ -58,13 +60,24 @@ export default function AskGenie() {
 
   const sourceLabel = payload?.source ?? '';
   const sourceChip = sourceLabel || (payload?.trusted_assets?.[0] ?? '');
+  // Map the Genie-provided source label to the best matching drawer entry.
+  // Previously the chip always opened DRAWER_SOURCES.nbo regardless of the
+  // actual source -- a parity bug on the evidence path. Fallback is `nbo`
+  // so unrecognized sources still open a meaningful drawer rather than
+  // silently dropping the click.
+  const drawerForSource =
+    /itm|rules/i.test(sourceChip) ? DRAWER_SOURCES.itm
+      : /permit/i.test(sourceChip) ? DRAWER_SOURCES.permit
+      : /lead_population|population/i.test(sourceChip) ? DRAWER_SOURCES.population
+      : /config/i.test(sourceChip) ? DRAWER_SOURCES.config
+      : DRAWER_SOURCES.nbo;
 
   return (
     <PageShell
       eyebrow="Ask Genie"
-      title="Conversational analytics over curated Module 0 gold tables"
-      lede="Genie is grounded on Unity Catalog metric views. Every answer cites the table and signal it used; tap any evidence chip to see lineage."
-      heroRight={<Chip variant="neutral" icon="sparkle">Production: Databricks Genie API</Chip>}
+      title="Ask Genie about segments, borrowers, and triggers"
+      lede="Type a question or pick a suggestion. Answers cite the metric view that produced them; tap a source chip to open lineage."
+      heroRight={<Chip variant="neutral" icon="sparkle">Databricks Genie API</Chip>}
     >
       <div className="layoutA-grid">
         <div className="surface">
@@ -99,10 +112,28 @@ export default function AskGenie() {
               <div
                 className="surface"
                 role="alert"
-                style={{ marginTop: 16, background: 'var(--bg-1)', borderColor: 'var(--signal-error, #EF4444)' }}
+                style={{ marginTop: 16, background: 'var(--bg-1)', borderColor: 'var(--signal-danger)' }}
               >
-                <div className="surface__body" style={{ color: 'var(--signal-error, #EF4444)' }}>
-                  {errorMsg}
+                <div
+                  className="surface__body"
+                  style={{
+                    color: 'var(--signal-danger)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 12,
+                  }}
+                >
+                  <span>{errorMsg}</span>
+                  <button
+                    type="button"
+                    className="btn btn--ghost btn--sm"
+                    onClick={() => ask(question)}
+                    disabled={loading}
+                    aria-label="Retry Genie question"
+                  >
+                    Retry
+                  </button>
                 </div>
               </div>
             )}
@@ -116,7 +147,7 @@ export default function AskGenie() {
                   {sourceChip && (
                     <div style={{ marginTop: 12, display: 'flex', gap: 6, alignItems: 'center' }}>
                       <span className="muted" style={{ fontSize: 11 }}>Source:</span>
-                      <EvidenceChip source={DRAWER_SOURCES.nbo}>{sourceChip}</EvidenceChip>
+                      <EvidenceChip source={drawerForSource}>{sourceChip}</EvidenceChip>
                     </div>
                   )}
                 </div>
@@ -132,9 +163,10 @@ export default function AskGenie() {
               <div className="h-4">Trusted assets</div>
             </div>
             <div className="surface__body" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {TRUSTED_ASSETS.map((x) => (
+              {TRUSTED_ASSETS.map((a) => (
                 <div
-                  key={x}
+                  key={a.path}
+                  title={a.path}
                   style={{
                     padding: '8px 10px',
                     background: 'var(--bg-1)',
@@ -142,7 +174,7 @@ export default function AskGenie() {
                     borderRadius: 6,
                   }}
                 >
-                  <span className="mono" style={{ fontSize: 12, color: 'var(--text-1)' }}>{x}</span>
+                  <div style={{ fontSize: 13, color: 'var(--text-1)' }}>{a.label}</div>
                 </div>
               ))}
             </div>

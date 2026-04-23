@@ -19,6 +19,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
+from backend.services.databricks_sql_helpers import qualify
 from backend.services.genie_answers import GenieMessageResponse
 from backend.services.repositories import GenieAnswerRepository
 from backend.services.repositories.factory import get_genie_answer_repository
@@ -41,9 +42,9 @@ def genie_start(payload: dict[str, object] | None = None) -> dict[str, object]:
     return {
         "conversation_id": "session-conv",
         "trusted_assets": [
-            "mip.gold.lead_population",
-            "mip.gold.lead_segment_membership",
-            "mip.semantics.lead_generation_metric_view",
+            qualify("gold", "lead_population"),
+            qualify("gold", "lead_segment_membership"),
+            qualify("semantics", "lead_generation_metric_view"),
         ],
     }
 

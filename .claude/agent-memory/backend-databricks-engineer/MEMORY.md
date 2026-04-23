@@ -5,3 +5,5 @@
 - [Slice 7 Genie wiring](project_slice7_genie.md) — real Genie client + safe-corpus fallback only when breaker OPEN; degraded message never fabricates data
 - [Slice 10 catalog rename](project_slice10_catalog_rename.md) — mip_demo → mip; mip-app bundle rename; file renames via git mv; mip_demo_lender intentionally kept
 - [Slice-13 OTEL follow-up](project_slice13_otel_followup.md) — MIP_OTEL_ENDPOINT env-gates OTLP export; deps are optional; counters stay process-local by design
+- [dependency_overrides.pop danger](feedback_dependency_override_pop.md) — test-local overrides must snapshot/restore, never pop; conftest.py registers session-wide bindings; reset breakers when intentionally tripping them
+- [R5 governance fixes](project_r5_governance_fixes.md) — R5-01 request_id idempotency, R5-09 trust boundary flag, R5-18 broadened audit-write except, R5-23 no-body-in-logs test

@@ -1,13 +1,27 @@
 bundle:
   name: mortgage-intelligence-platform
 
-# Target workspace defaults to the DEFAULT CLI profile's host. `dev` is the
-# default development target; `prod` is the same workspace with
-# production-mode guardrails. Run `databricks bundle validate -t dev` before
-# any deploy; run `databricks bundle deploy -t dev` to land the app +
-# resources.
+# `workspace.host` must be literal — the Databricks CLI resolves it at
+# bundle-load time (before variables), so `${var.*}` is rejected here.
+# The URL below is Entrada's dev workspace; a customer deploying this bundle
+# to their own workspace either (a) edits this block once on their fork, or
+# (b) overrides the `host` in their Databricks CLI profile, which the CLI
+# uses for auth when its value matches any target's `workspace.host`. This
+# literal-and-profile contract is the "zero-click after configuring
+# .env.local" story in docs/runbook.md §2. Audit 2026-04-23: flagged as a
+# packaging footgun for non-Entrada customers; resolution ratified with
+# explicit comment + SE checklist on the `prod` target below.
+#
+# DRY-up (audit R5-24, 2026-04-23): a YAML anchor on this root-level host
+# is the single source of truth. All four `workspace.host:` fields across
+# targets dereference `*default_host`. Variables cannot be used here (see
+# above), so an anchor is the correct primitive. A customer forking the
+# repo now edits EXACTLY ONE line to rebind the host. `make
+# check-workspace-host` (Makefile) greps for the literal outside this
+# anchor and fails if it finds one — a forkability safeguard so an SE
+# cannot ship a customer deploy still pointing at Entrada's workspace.
 workspace:
-  host: https://dbc-3aa503a9-4fa8.cloud.databricks.com
+  host: &default_host https://dbc-3aa503a9-4fa8.cloud.databricks.com
 
 # Sync: explicitly include the built frontend bundle in the uploaded
 # source tree. `frontend/dist/` is in .gitignore (we don't commit built
@@ -24,14 +38,26 @@ targets:
     mode: development
     default: true
     workspace:
-      host: https://dbc-3aa503a9-4fa8.cloud.databricks.com
+      host: *default_host
       profile: DEFAULT
       root_path: ~/.bundle/${bundle.name}/${bundle.target}
 
   prod:
     mode: production
+    # CUSTOMER-SE CHECKLIST BEFORE FIRST `bundle deploy -t prod`:
+    #   1. `workspace.host` inherits from the DEFAULT CLI profile (or
+    #      `BUNDLE_VAR_workspace_host`). Point the CLI at the customer's
+    #      production workspace before deploy; no code edit needed.
+    #   2. Decide catalog isolation: share `mip` with dev in a single
+    #      workspace, or set `variables.uc_catalog.default` to `mip_prod`
+    #      for separation. Both are valid; pick one and document.
+    #   3. Confirm `run_as` service principal has CREATE on uc_catalog
+    #      and USAGE on Delta Share source catalog.
+    #   4. Lakebase instance name `mip-app-state` is reused across targets
+    #      via UC; if you need a prod-only instance, override the resource
+    #      block under `database_instances`.
     workspace:
-      host: https://dbc-3aa503a9-4fa8.cloud.databricks.com
+      host: *default_host
       profile: DEFAULT
       root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
     run_as:
@@ -47,7 +73,7 @@ targets:
   # uses this target; deploys use `dev` / `prod`.
   ci:
     workspace:
-      host: https://dbc-3aa503a9-4fa8.cloud.databricks.com
+      host: *default_host
       root_path: /Workspace/ci-placeholder/.bundle/${bundle.name}/${bundle.target}
 
 resources:
@@ -164,10 +190,28 @@ resources:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
               path: sql/ref/lender_dictionary_seed.sql
+        - task_key: seed_ref_offer_rules_config
+          description: "MERGE canonical offer-rule thresholds into mip.ref.offer_rules_config (idempotent)."
+          depends_on:
+            - task_key: init_ref_tables
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/ref/offer_rules_config_seed.sql
+        - task_key: seed_ref_state_footprint
+          description: "MERGE canonical state footprint into mip.ref.state_footprint (idempotent). Hole-finder #20."
+          depends_on:
+            - task_key: init_ref_tables
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/ref/state_footprint_seed.sql
         - task_key: refresh_silver_pipeline
           description: "Run the Lakeflow feature pipeline to materialize mip.silver.* from the Cotality share."
           depends_on:
             - task_key: seed_ref_lender_dictionary
+            - task_key: seed_ref_offer_rules_config
+            - task_key: seed_ref_state_footprint
           pipeline_task:
             pipeline_id: ${resources.pipelines.mip_feature_pipeline.id}
             full_refresh: false
@@ -199,6 +243,22 @@ resources:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
               path: sql/ref/lender_dictionary_seed.sql
+        - task_key: seed_offer_rules_config
+          description: "MERGE canonical offer-rule thresholds into mip.ref.offer_rules_config."
+          depends_on:
+            - task_key: init_ref_tables
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/ref/offer_rules_config_seed.sql
+        - task_key: seed_state_footprint
+          description: "MERGE canonical state footprint into mip.ref.state_footprint. Hole-finder #20."
+          depends_on:
+            - task_key: init_ref_tables
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/ref/state_footprint_seed.sql
     # Gold-layer materialization. Runs the idempotent DDL manifest (adds
     # any new tables -- e.g. lockin_cohort -- on a bundle deploy), then
     # executes each gold CTAS file in dependency order. This CTAS-via-
@@ -217,7 +277,10 @@ resources:
     #   6. segment_population            (needs borrower_360 + lead_scores)
     #   7. lockin_cohort                 (needs borrower_360 + silver.lien_current)
     #   8. borrower_dossier              (needs borrower_360 + evidence_events)
-    #   9. refresh_semantics_views       (needs lead_population + segment_population + borrower_dossier)
+    #   9. county_rollup                 (needs borrower_360 -- geography rollup)
+    #  10. zip_rollup                    (needs borrower_360 -- geography rollup)
+    #  11. state_top_segment             (needs borrower_360 -- geography rollup)
+    #  12. refresh_semantics_views       (needs lead_population + segment_population + borrower_dossier)
     #
     # The DDL manifest (003_gold_tables.sql) is CREATE TABLE IF NOT EXISTS,
     # so running it on every refresh is safe and picks up any newly-added
@@ -245,10 +308,25 @@ resources:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
               path: sql/ddl/003_gold_tables.sql
+        # audit-holes-round-3 #7 fix: capture ONE deterministic refresh_at
+        # timestamp at the top of the DAG. Every downstream CTAS reads
+        # mip.ref.refresh_run_state to replace its own CURRENT_TIMESTAMP()
+        # call, so all `refreshed_at` / `snapshot_at` columns across the
+        # gold layer agree to the second within one run. Without this seed
+        # row, two "Refreshed ..." chips from different gold tables could
+        # disagree by seconds -- enough to make parity tests flaky.
+        - task_key: capture_refresh_timestamp
+          description: "Capture deterministic refresh_at anchor for this run (audit-holes-round-3 #7)."
+          depends_on:
+            - task_key: init_gold_ddl
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/transformations/capture_refresh_timestamp.sql
         - task_key: ctas_property_owner_bridge
           description: "Rebuild mip.gold.property_owner_bridge via CTAS."
           depends_on:
-            - task_key: init_gold_ddl
+            - task_key: capture_refresh_timestamp
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
@@ -256,7 +334,7 @@ resources:
         - task_key: ctas_evidence_events
           description: "Rebuild mip.gold.evidence_events via CTAS."
           depends_on:
-            - task_key: init_gold_ddl
+            - task_key: capture_refresh_timestamp
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
@@ -270,10 +348,25 @@ resources:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
               path: sql/transformations/gold_borrower_360.sql
+        # audit-holes-round-3 #8 fix: integrity gate between borrower_360
+        # and every task that reads from it. Asserts the population is both
+        # non-empty and freshly rebuilt in THIS run (within 30 minutes of
+        # the captured refresh_at). If ctas_borrower_360 silently produced
+        # a stale population (partial silver failure, retry storm), this
+        # task raises and every downstream CTAS is skipped with
+        # UPSTREAM_FAILED instead of scoring yesterday's rows.
+        - task_key: assert_borrower_360_fresh
+          description: "Freshness gate: fail fast if borrower_360 is stale or empty (audit-holes-round-3 #8)."
+          depends_on:
+            - task_key: ctas_borrower_360
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/transformations/assert_borrower_360_fresh.sql
         - task_key: ctas_lead_scores
           description: "Rebuild mip.gold.lead_scores via CTAS."
           depends_on:
-            - task_key: ctas_borrower_360
+            - task_key: assert_borrower_360_fresh
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
@@ -297,7 +390,7 @@ resources:
         - task_key: ctas_lockin_cohort
           description: "Rebuild mip.gold.lockin_cohort via CTAS (slice13-accuracy)."
           depends_on:
-            - task_key: ctas_borrower_360
+            - task_key: assert_borrower_360_fresh
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
@@ -305,12 +398,43 @@ resources:
         - task_key: ctas_borrower_dossier
           description: "Rebuild mip.gold.borrower_dossier via CTAS (slice13-accuracy perf)."
           depends_on:
-            - task_key: ctas_borrower_360
+            - task_key: assert_borrower_360_fresh
             - task_key: ctas_evidence_events
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
               path: sql/transformations/gold_borrower_dossier.sql
+        # slice13-accuracy-validation: three geography rollup tables feed the
+        # USChoroplethMap drill (state -> county -> ZIP). All three aggregate
+        # from gold.borrower_360 directly -- no ZIP->county crosswalk seed
+        # needed because silver.property_master.fips_county_code is projected
+        # up into gold.borrower_360.county_fips_5. Safe to run in parallel
+        # because they read from gold.borrower_360 and write to their own
+        # sibling tables.
+        - task_key: ctas_county_rollup
+          description: "Rebuild mip.gold.county_rollup via CTAS (per-county aggregate for the map county drill)."
+          depends_on:
+            - task_key: assert_borrower_360_fresh
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/transformations/gold_county_rollup.sql
+        - task_key: ctas_zip_rollup
+          description: "Rebuild mip.gold.zip_rollup via CTAS (per-ZIP aggregate + stable sample_borrower_id)."
+          depends_on:
+            - task_key: assert_borrower_360_fresh
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/transformations/gold_zip_rollup.sql
+        - task_key: ctas_state_top_segment
+          description: "Rebuild mip.gold.state_top_segment via CTAS (per-state dominant SegmentCode + share %)."
+          depends_on:
+            - task_key: assert_borrower_360_fresh
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/transformations/gold_state_top_segment.sql
         # Zero-click Genie provisioning — publish the three mip.semantics.*
         # views so the Genie trusted_assets list in
         # genie/mortgage_lead_intelligence_space.yml binds on first deploy.
@@ -328,14 +452,40 @@ resources:
             file:
               path: sql/ddl/005_semantics_views.sql
 
-    # Slice13-accuracy: hourly sync of Lakebase approval + outreach state
-    # into mip.gold.borrower_lifecycle_state. Metric views (segment_
+    # Event-triggered sync of Lakebase approval + outreach state into
+    # mip.gold.borrower_lifecycle_state. Metric views (segment_
     # performance + lead_generation) JOIN this so `approval_rate` and
-    # `outreach_rate` resolve without a runtime federated query. Runs
-    # AFTER mip_refresh_scores (which lands gold.borrower_360) so the
-    # sync has a full borrower_id universe to seed the 'pending' default
-    # against. Lakebase remains authoritative; this job is a strictly
+    # `outreach_rate` resolve without a runtime federated query.
+    # Lakebase remains authoritative; this job is a strictly
     # one-directional mirror.
+    #
+    # Trigger model (changed 2026-04-22 from hourly cron):
+    #   1. **Event-triggered** from the backend. Every POST
+    #      /api/outreach/approve fires backend.services.job_trigger.
+    #      trigger_lifecycle_sync() via FastAPI BackgroundTasks, which
+    #      calls WorkspaceClient.jobs.run_now(job_id=...) non-blocking.
+    #      Trigger is debounced to 60 s so a reviewer clicking through
+    #      an approval queue produces one sync run, not N. See
+    #      backend/services/job_trigger.py for the full contract.
+    #   2. **Daily fallback** (04:00 America/Chicago). Safety net for
+    #      any dropped trigger + records a funnel snapshot even on
+    #      idle days for the WoW delta_vs_prior_* dashboard measures
+    #      (those need ≥ 2 daily snapshot rows to compute). The `dev`
+    #      target's `mode: development` auto-pauses the schedule;
+    #      `mode: production` auto-UNPAUSES. Do NOT hardcode
+    #      `pause_status: UNPAUSED` here — that override also fires in
+    #      dev. Why 04:00: off-peak CST, well before any Monday
+    #      business readout.
+    #
+    # Rationale for removing the hourly cron: data only changes when
+    # an operator acts (approve / outreach). An hourly cron against an
+    # idle workspace was burning Serverless compute for nothing — the
+    # product is sold to mortgage lenders and their cost line should
+    # only reflect real activity.
+    #
+    # Runs AFTER mip_refresh_scores (which lands gold.borrower_360) so
+    # the sync has a full borrower_id universe to seed the 'pending'
+    # default against.
     #
     # The funnel snapshot task (gold_funnel_snapshot_daily.sql) runs
     # after the sync so it reads the freshly-mirrored lifecycle_state
@@ -348,16 +498,21 @@ resources:
         owner: entrada
         slice: slice13-accuracy
       max_concurrent_runs: 1
-      # Hourly cadence. Dev target leaves the schedule paused; prod
-      # target lets it run.
+      # Daily safety-net cron. Dev auto-pauses via mode: development;
+      # prod auto-UNPAUSES via mode: production. Event-trigger from
+      # the backend approval path is the primary freshness driver.
       schedule:
-        quartz_cron_expression: "0 15 * ? * * *"
+        quartz_cron_expression: "0 0 4 ? * * *"
         timezone_id: America/Chicago
-        pause_status: UNPAUSED
       environments:
         - environment_key: py_default
           spec:
-            client: "2"
+            # Serverless Python env version 5 (latest as of 2026-04).
+            # See https://docs.databricks.com/aws/en/release-notes/serverless/environment-version/
+            # for current release notes. Previous setting `client: "2"` used
+            # the deprecated `client` field; the bundle schema now marks
+            # that field deprecated in favour of `environment_version`.
+            environment_version: "5"
             dependencies:
               - psycopg[binary]==3.2.10
               - databricks-sdk>=0.30.0
@@ -407,7 +562,9 @@ resources:
       environments:
         - environment_key: py_default
           spec:
-            client: "2"
+            # Serverless Python env version 5 -- see comment on the
+            # mip_sync_lifecycle_state job for the upgrade rationale.
+            environment_version: "5"
             dependencies:
               - psycopg[binary]==3.2.10
               # Needed by jobs/lakebase_migrate.py to fetch a fresh
@@ -441,14 +598,18 @@ resources:
       environments:
         - environment_key: py_default
           spec:
-            client: "2"
+            # Serverless Python env version 5 -- see comment on the
+            # mip_sync_lifecycle_state job for the upgrade rationale.
+            environment_version: "5"
       # FRED publishes Thursdays; we run Fridays 06:00 America/Chicago so the
-      # refresh lands before any Monday business readout. Disable pause on the
-      # per-target cron; dev stays manual-trigger by default via targets.dev.
+      # refresh lands before any Monday business readout. Do NOT hardcode
+      # `pause_status: UNPAUSED` -- it overrides the `mode: development`
+      # auto-pause (same antipattern we just fixed on mip_sync_lifecycle_state
+      # 2026-04-22). Target mode flips the pause status: dev = PAUSED,
+      # prod = UNPAUSED.
       schedule:
         quartz_cron_expression: "0 0 6 ? * FRI *"
         timezone_id: America/Chicago
-        pause_status: UNPAUSED
       tasks:
         - task_key: init_ddl
           description: "Idempotent CREATE CATALOG/SCHEMA + silver.market_rates_weekly DDL."
@@ -496,7 +657,10 @@ resources:
       catalog: ${var.uc_catalog}
       schema: silver
       photon: true
-      development: true
+      # `development` is intentionally NOT set here -- bundle target mode
+      # (`mode: development` vs `mode: production`) flips the pipeline's
+      # development flag automatically. Hardcoding `development: true` here
+      # blocks `databricks bundle validate -t prod`.
       continuous: false
       libraries:
         - file:
@@ -574,3 +738,27 @@ variables:
   lakebase_database_name:
     description: Lakebase Postgres database name backing Module 0 app state
     default: mip_app_state
+  # ---------------------------------------------------------------------------
+  # FRED API key (audit R5-16, 2026-04-23)
+  # ---------------------------------------------------------------------------
+  # OPTIONAL. The current `jobs/fred_rates_ingest.py` hits
+  # https://fred.stlouisfed.org/graph/fredgraph.csv?id=MORTGAGE30US — the
+  # public unauthenticated FRED graph CSV endpoint — so no key is needed
+  # today. The variable is declared here so (a) SEs know where the key
+  # would land if we later upgrade to the authenticated REST endpoint
+  # (api.stlouisfed.org/fred/series/observations, which requires
+  # api_key=...), and (b) the zero-click-deploy story documented in
+  # CLAUDE.md is honoured: any future secret is reachable from
+  # `databricks bundle deploy -t dev` + a `.env.local` fill-in, never
+  # from click-ops in the Databricks UI. When that upgrade happens, the
+  # ingest script will read `os.environ.get("FRED_API_KEY", "")` and
+  # log-at-warn when missing (fall back to fredgraph.csv), so an empty
+  # default here is correct. Override via `BUNDLE_VAR_fred_api_key` or
+  # set `FRED_API_KEY=` in `.env.local` (wired through
+  # tools/databricks/bundle_env.py, same pattern as DATABRICKS_WAREHOUSE_ID).
+  fred_api_key:
+    description: >-
+      Optional FRED API key (public fredgraph.csv endpoint works without it).
+      When set, future authenticated ingest paths will use it; missing/empty
+      is the expected default and should log-at-warn, never crash.
+    default: ""

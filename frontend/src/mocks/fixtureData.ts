@@ -4,9 +4,14 @@ import type { DrawerSource } from '../components/AppContext';
 export const mockPortfolio: PortfolioPreview = {
   marketable_population: 89553,
   high_intent_leads: 12840,
+  top_tier_opportunities: 4120,
+  offers_recommended: 6250,
   avg_score: 81,
-  projected_contact_to_app: 9.7,
-  cost_per_contact: 2.18
+  approved_count: 432,
+  in_outreach_count: 318,
+  data_refreshed_at: '2026-04-23T12:00:00Z',
+  projected_contact_to_app: null,
+  cost_per_contact: null,
 };
 
 export const mockSegments: SegmentSummary[] = [
@@ -40,7 +45,7 @@ const evidence = [
 // file is test-only per CLAUDE.md; production routes never import it.
 export const mockBorrowers: Borrower360[] = [
   {
-    borrower_id: 'B-48291', display_name: 'James & Maria Rodriguez', city: 'Chicago', state: 'IL', zip: '60611',
+    borrower_id: 'B-48291', clip: 'clip_fixture_48291', display_name: 'James & Maria Rodriguez', city: 'Chicago', state: 'IL', zip: '60611',
     segment_codes: ['itm', 'equity'], equity_estimate: 285000, rate_spread_bps: 88, opportunity_score: 94, confidence: 88,
     recommended_offer: 'Refinance + HELOC', why_now: 'Lien matures in 4 months, strong equity, and local refi activity is rising.', evidence_ids: ['ev-001', 'ev-002', 'ev-003'], approval_status: 'pending',
     clip_id: 'clip_demo_48291', owner_link_id: 'ol_demo_48291', subject_property: 'Synthetic property · Chicago, IL 60611', avm_value: 625000, current_lien_balance: 340000, current_rate: 5.75, ltv: 54, related_property_count: 1,
@@ -48,7 +53,7 @@ export const mockBorrowers: Borrower360[] = [
     why_panel: { rate_spread_bps: 88, market_rate: 0.04875, equity_pct: 46, in_the_money: true, in_the_money_reason: '+88 bps spread (>= 75) AND 46% equity (>= 15%)', min_spread_bps: 75, min_equity_pct: 15, sources: ['mip.gold.fn_rate_spread', 'mip.gold.fn_in_the_money'] }
   },
   {
-    borrower_id: 'B-48294', display_name: 'David Park', city: 'Chicago', state: 'IL', zip: '60647',
+    borrower_id: 'B-48294', clip: 'clip_fixture_48294', display_name: 'David Park', city: 'Chicago', state: 'IL', zip: '60647',
     segment_codes: ['permit', 'equity'], equity_estimate: 218000, rate_spread_bps: 188, opportunity_score: 87, confidence: 82,
     recommended_offer: 'HELOC', why_now: 'Recent high-value permit and strong equity position indicate renovation financing need.', evidence_ids: ['ev-002'], approval_status: 'pending',
     clip_id: 'clip_demo_48294', owner_link_id: 'ol_demo_48294', subject_property: 'Synthetic property · Chicago, IL 60647', avm_value: 560000, current_lien_balance: 342000, current_rate: 6.75, ltv: 61, related_property_count: 1,
@@ -56,7 +61,7 @@ export const mockBorrowers: Borrower360[] = [
     why_panel: { rate_spread_bps: 188, market_rate: 0.04875, equity_pct: 39, in_the_money: true, in_the_money_reason: '+188 bps spread (>= 75) AND 39% equity (>= 15%)', min_spread_bps: 75, min_equity_pct: 15, sources: ['mip.gold.fn_rate_spread', 'mip.gold.fn_in_the_money'] }
   },
   {
-    borrower_id: 'B-48295', display_name: 'Lisa Thompson', city: 'Chicago', state: 'IL', zip: '60613',
+    borrower_id: 'B-48295', clip: 'clip_fixture_48295', display_name: 'Lisa Thompson', city: 'Chicago', state: 'IL', zip: '60613',
     segment_codes: ['listed', 'retention'], equity_estimate: 405000, rate_spread_bps: 162, opportunity_score: 82, confidence: 79,
     recommended_offer: 'Purchase Mortgage', why_now: 'Listed-for-sale trigger suggests a purchase mortgage opportunity.', evidence_ids: ['ev-003'], approval_status: 'pending',
     clip_id: 'clip_demo_48295', owner_link_id: 'ol_demo_48295', subject_property: 'Synthetic property · Chicago, IL 60613', avm_value: 725000, current_lien_balance: 320000, current_rate: 6.50, ltv: 44, related_property_count: 1,

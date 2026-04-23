@@ -18,7 +18,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from backend.schemas.common import EvidenceEvent
 from backend.schemas.lead import Borrower360
 from backend.services.audit_store import AuditStore, get_audit_store, resolve_actor
-from backend.services.lakebase import LakebaseError
+from backend.services.observability import emit
 from backend.services.repositories import BorrowerRepository, get_borrower_repository
 
 log = logging.getLogger(__name__)
@@ -30,17 +30,31 @@ StoreDep = Annotated[AuditStore, Depends(get_audit_store)]
 
 
 def _safe_audit_write(store: AuditStore, **kwargs: object) -> None:
-    """Write an audit row, swallowing + logging Lakebase failures.
+    """Write an audit row, swallowing + logging every failure.
 
-    Used by background tasks: the user-facing response already returned
-    by the time this runs, so raising here would just orphan the
-    connection. We log.warning so operators see the problem in the
-    structured log without disrupting the user-facing flow.
+    Used by background tasks: the user-facing response has already
+    returned by the time this runs, so raising here would just orphan
+    the connection.
+
+    R5-18: widened from ``LakebaseError`` to ``Exception`` because any
+    unhandled exception on the background-task path is silently
+    swallowed by the BackgroundTasks runner; a bare ``TypeError`` from a
+    malformed payload could disappear without an operator ever seeing
+    it. We emit a structured ``event=audit.dropped`` carrying the
+    exception CLASS NAME only -- never ``str(exc)``, which could echo
+    back caller-supplied payload content and defeat the PII posture of
+    the audit ledger.
     """
     try:
         store.write(**kwargs)  # type: ignore[arg-type]
-    except LakebaseError as exc:
-        log.warning("audit.write dropped: %s", exc)
+    except Exception as exc:  # noqa: BLE001 -- background path must not raise
+        emit(
+            log,
+            "audit.dropped",
+            dependency="lakebase",
+            exc_type=type(exc).__name__,
+            outcome="error",
+        )
 
 
 @router.get("/{borrower_id}", response_model=Borrower360)

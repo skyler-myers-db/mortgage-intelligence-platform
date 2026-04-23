@@ -1,4 +1,4 @@
-import { Fragment } from 'react';
+import { Fragment, useEffect, useRef } from 'react';
 import { useApp } from '../AppContext';
 import { Icon } from '../Icon';
 
@@ -14,6 +14,33 @@ export function EvidenceDrawer() {
   const { drawer, setDrawer } = useApp();
   const open = !!drawer;
   const d = drawer;
+  const closeBtnRef = useRef<HTMLButtonElement | null>(null);
+  const lastFocusedRef = useRef<HTMLElement | null>(null);
+
+  // A11y: ESC closes; focus lands on the close button on open and returns
+  // to the element that triggered the open on close. Prevents sighted
+  // keyboard users from being stranded in the dialog.
+  useEffect(() => {
+    if (open) {
+      lastFocusedRef.current = document.activeElement as HTMLElement | null;
+      // Defer to next frame so the element is visible + focusable.
+      queueMicrotask(() => closeBtnRef.current?.focus());
+      const onKey = (e: KeyboardEvent) => {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          setDrawer(null);
+        }
+      };
+      window.addEventListener('keydown', onKey);
+      return () => window.removeEventListener('keydown', onKey);
+    }
+    // When drawer closes, restore focus to whatever opened it.
+    if (lastFocusedRef.current && typeof lastFocusedRef.current.focus === 'function') {
+      lastFocusedRef.current.focus();
+      lastFocusedRef.current = null;
+    }
+    return undefined;
+  }, [open, setDrawer]);
 
   return (
     <>
@@ -25,6 +52,7 @@ export function EvidenceDrawer() {
       <aside
         className={`drawer ${open ? 'is-open' : ''}`}
         role="dialog"
+        aria-modal="true"
         aria-label="Data source and lineage"
         aria-hidden={!open}
       >
@@ -46,11 +74,30 @@ export function EvidenceDrawer() {
             <div style={{ fontSize: 13, fontWeight: 600 }}>Data source & lineage</div>
             <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{d?.title ?? '—'}</div>
           </div>
-          <button className="drawer__close" onClick={() => setDrawer(null)} aria-label="Close drawer" type="button">
+          <button ref={closeBtnRef} className="drawer__close" onClick={() => setDrawer(null)} aria-label="Close drawer" type="button">
             <Icon name="close" size={14} />
           </button>
         </div>
         <div className="drawer__body">
+          <div
+            className="freshness-legend"
+            aria-label="Source freshness legend"
+            title="Fresh: updated within 7 days · Aging: 7–30 days · Stale: over 30 days or unknown"
+            style={{ marginBottom: 10 }}
+          >
+            <span className="freshness-legend__item">
+              <span className="freshness-legend__dot freshness-legend__dot--fresh" aria-hidden="true" />
+              Fresh
+            </span>
+            <span className="freshness-legend__item">
+              <span className="freshness-legend__dot freshness-legend__dot--aging" aria-hidden="true" />
+              Aging
+            </span>
+            <span className="freshness-legend__item">
+              <span className="freshness-legend__dot freshness-legend__dot--stale" aria-hidden="true" />
+              Stale
+            </span>
+          </div>
           {d?.description && <p className="body" style={{ marginTop: 0 }}>{d.description}</p>}
           {d?.lineage && d.lineage.length > 0 && (
             <>

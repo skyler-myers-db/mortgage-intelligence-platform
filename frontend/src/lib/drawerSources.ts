@@ -1,6 +1,35 @@
 import type { DrawerSource } from '../components/AppContext';
 
 /**
+ * Route a raw UC source (e.g. `mip.gold.fn_in_the_money`, `cotality.permits.building`)
+ * to the matching DRAWER_SOURCES entry. Falls back to a neutral descriptor that
+ * still opens the drawer with the raw path so presenters see lineage rather
+ * than a silently-mismatched chip.
+ *
+ * Keep this in sync with backend/services/scoring.source_display_label and
+ * backend/api/offers._sources_for — the two must agree on which UC object
+ * maps to which drawer entry.
+ */
+export function descriptorFor(rawSource: string): DrawerSource {
+  const key = rawSource.toLowerCase();
+  if (key.includes('fn_in_the_money') || key.includes('itm') || key.includes('rate_spread')) {
+    return DRAWER_SOURCES.itm;
+  }
+  if (key.includes('fn_next_best_offer') || key.includes('fn_lead_score') || key.includes('nbo')) {
+    return DRAWER_SOURCES.nbo;
+  }
+  if (key.includes('permit')) return DRAWER_SOURCES.permit;
+  if (key.includes('population') || key.includes('public_records')) return DRAWER_SOURCES.population;
+  return {
+    title: rawSource,
+    short: rawSource.split('.').pop() ?? rawSource,
+    description: `Unity Catalog object: ${rawSource}. Click through for lineage once wired.`,
+    lineage: [{ layer: 'UC', name: rawSource }],
+    signals: [],
+  };
+}
+
+/**
  * DRAWER_SOURCES — UI metadata describing each evidence-drawer entry
  * (title, description, UC lineage, signals).
  *
@@ -19,7 +48,7 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
     title: 'Marketable population',
     short: 'cotality.public_records',
     description:
-      'Joins Cotality Public Records (Deed & Mortgage), Voluntary Lien, and Owner Link under Entrada semantic models; filtered by lender configuration.',
+      'Deed & mortgage records joined to voluntary liens and the Owner Link graph, filtered by the lender configuration.',
     lineage: [
       { layer: 'SOURCE', name: 'cotality.public_records.deed_and_mortgage', meta: 'Delta Share · 142M rows' },
       { layer: 'SOURCE', name: 'cotality.liens.voluntary_lien', meta: 'Delta Share · 98M rows' },
@@ -38,7 +67,7 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
     title: 'In-the-Money logic',
     short: 'rules.itm_v3',
     description:
-      'Lien rate ≥ (par refi rate + 75 bps) AND equity ≥ 15% on latest AVM. Rule set is version-controlled in Unity Catalog.',
+      'Flags a borrower when lien rate ≥ par refi rate + 75 bps and equity ≥ 15% on the latest AVM. Ruleset stored in Unity Catalog.',
     lineage: [
       { layer: 'SOURCE', name: 'cotality.mma.origination_refi', meta: 'Par rate feed (daily)' },
       { layer: 'SOURCE', name: 'cotality.avm.current', meta: 'Property value (monthly)' },
@@ -58,7 +87,7 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
     title: 'Next-Best-Offer model',
     short: 'mlflow · mtg_nbo_v3',
     description:
-      'MLflow model mtg_nbo_v3 — gradient-boosted tree; output = product ∈ {refi, heloc, cashout, purchase, retention} with calibrated propensity.',
+      'Gradient-boosted tree (mtg_nbo_v3) that outputs a product ∈ {refi, heloc, cashout, purchase, retention} with calibrated propensity.',
     lineage: [
       { layer: 'FEATURES', name: 'features.borrower_360', meta: 'Owner Link + property + lien history' },
       { layer: 'MODEL', name: 'mlflow.mtg_nbo_v3', meta: 'AUROC 0.81 · brier 0.09' },
@@ -75,7 +104,7 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
     title: 'Permit signal',
     short: 'permits.building',
     description:
-      'Cotality Building Permits records tagged to CLIP; flag triggers on permit value ≥ $25k in last 180 days.',
+      'Building permit records joined to CLIP. Signal fires when permit value ≥ $25k within the last 180 days.',
     lineage: [
       { layer: 'SOURCE', name: 'cotality.permits.building', meta: '4.8M active records' },
       { layer: 'JOIN', name: 'join.permit_to_clip', meta: 'via address canonicalization' },
@@ -91,7 +120,7 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
   config: {
     title: 'Campaign assumptions',
     short: 'config',
-    description: 'Marketing ROI config, set per lender.',
+    description: 'Cost-per-contact and projected conversion assumptions, set per lender in campaign config.',
     lineage: [{ layer: 'CONFIG', name: 'lender.campaign_config' }],
     signals: [],
   },

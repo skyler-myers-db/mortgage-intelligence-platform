@@ -3,8 +3,22 @@ import { useApp } from '../AppContext';
 import { api } from '../../lib/api';
 import type { GenieAnswer as GenieAnswerShape } from '../../types';
 import { Icon } from '../Icon';
-import { Button } from '../Primitives';
+import { Button, EvidenceChip } from '../Primitives';
 import { GenieAnswer } from './GenieAnswer';
+import { DRAWER_SOURCES } from '../../lib/drawerSources';
+
+/**
+ * Map a free-form trusted-asset string (UC path or ruleset id) to the
+ * best-fitting drawer entry. Falls through to NBO as a "something is
+ * better than nothing" default so a chip click always opens a drawer.
+ */
+function drawerForAsset(asset: string) {
+  if (/itm|rules/i.test(asset)) return DRAWER_SOURCES.itm;
+  if (/permit/i.test(asset)) return DRAWER_SOURCES.permit;
+  if (/lead_population|population/i.test(asset)) return DRAWER_SOURCES.population;
+  if (/config/i.test(asset)) return DRAWER_SOURCES.config;
+  return DRAWER_SOURCES.nbo;
+}
 
 /**
  * Floating Genie chat panel — `.genie` BEM from the prototype. Fixed
@@ -34,7 +48,7 @@ export function GenieChat() {
     {
       who: 'ai',
       payload: {
-        answer: `Hi — I'm Genie, grounded on ${lender}'s Unity Catalog metric views + Cotality semantic models. Ask about borrower segments, triggers, or evidence.`,
+        answer: `Ask about ${lender}'s borrower segments, triggers, or evidence. Answers run against Unity Catalog metric views.`,
         trusted_assets: ['UC.metrics'],
       },
       sources: ['UC.metrics'],
@@ -43,10 +57,61 @@ export function GenieChat() {
   const [input, setInput] = useState('');
   const [typing, setTyping] = useState(false);
   const bodyRef = useRef<HTMLDivElement>(null);
+  // R5-12 (2026-04-23): dialog a11y. Mirrors the EvidenceDrawer pattern
+  // — initial focus lands on the input, ESC closes, focus restores to
+  // the FAB (or whatever opened the panel) on close. Without these
+  // screen-reader + keyboard users are stranded.
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const lastFocusedRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     if (bodyRef.current) bodyRef.current.scrollTop = bodyRef.current.scrollHeight;
   }, [msgs, typing, genieOpen]);
+
+  // R5-12: ESC closes + initial focus + focus restore + lightweight
+  // focus trap via Tab cycling within the panel.
+  useEffect(() => {
+    if (genieOpen) {
+      lastFocusedRef.current = document.activeElement as HTMLElement | null;
+      queueMicrotask(() => inputRef.current?.focus());
+      const onKey = (e: KeyboardEvent) => {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          setGenieOpen(false);
+          return;
+        }
+        if (e.key === 'Tab' && panelRef.current) {
+          // Trap focus inside the panel. Query focusable descendants
+          // fresh on every Tab so late-rendered sample question
+          // buttons are part of the cycle.
+          const focusables = panelRef.current.querySelectorAll<HTMLElement>(
+            'button:not([disabled]), [href], input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+          );
+          if (focusables.length === 0) return;
+          const first = focusables[0];
+          const last = focusables[focusables.length - 1];
+          const active = document.activeElement as HTMLElement | null;
+          if (e.shiftKey && active === first) {
+            e.preventDefault();
+            last.focus();
+          } else if (!e.shiftKey && active === last) {
+            e.preventDefault();
+            first.focus();
+          }
+        }
+      };
+      window.addEventListener('keydown', onKey);
+      return () => window.removeEventListener('keydown', onKey);
+    }
+    // On close, return focus to whatever opened the panel (the FAB or
+    // the topbar Genie toggle). Guard against the element being gone.
+    if (lastFocusedRef.current && typeof lastFocusedRef.current.focus === 'function') {
+      lastFocusedRef.current.focus();
+      lastFocusedRef.current = null;
+    }
+    return undefined;
+  }, [genieOpen, setGenieOpen]);
 
   const ask = async (q: string) => {
     if (!q.trim()) return;
@@ -72,12 +137,19 @@ export function GenieChat() {
       >
         <Icon name="sparkle" size={22} />
       </button>
-      <div className={`genie ${genieOpen ? 'is-open' : ''}`} role="dialog" aria-label="Genie chat" aria-hidden={!genieOpen}>
+      <div
+        ref={panelRef}
+        className={`genie ${genieOpen ? 'is-open' : ''}`}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Genie chat"
+        aria-hidden={!genieOpen}
+      >
         <div className="genie__hdr">
           <div className="genie__avatar" />
           <div style={{ flex: 1 }}>
             <div className="genie__title">Ask Genie</div>
-            <div className="genie__sub">Grounded on UC metric views · {lender}</div>
+            <div className="genie__sub">Unity Catalog metric views · {lender}</div>
           </div>
           <button
             className="drawer__close"
@@ -100,10 +172,9 @@ export function GenieChat() {
                 {m.sources && m.sources.length > 0 && (
                   <div className="sources">
                     {m.sources.map((s, j) => (
-                      <span key={j} className="evidence-chip" title={`Source: ${s}`}>
-                        <Icon name="link" size={9} className="e-ico" />
+                      <EvidenceChip key={j} source={drawerForAsset(s)} title={`Source: ${s}`}>
                         {s}
-                      </span>
+                      </EvidenceChip>
                     ))}
                   </div>
                 )}
@@ -133,6 +204,7 @@ export function GenieChat() {
           }}
         >
           <input
+            ref={inputRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             placeholder="Ask about borrowers, segments, triggers…"

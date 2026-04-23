@@ -6,7 +6,11 @@ from backend.schemas.common import EvidenceEvent
 from backend.schemas.why import WhyPanel
 
 SegmentCode = Literal["itm", "listed", "permit", "investor", "equity", "retention"]
-ApprovalStatus = Literal["pending", "approved", "rejected"]
+# Round-4 hole-finder R4-19: `hold` is a valid 4th state — jobs/sync_lifecycle_state.py
+# writes it; Lakebase CHECK constraint accepts it; gold DDL documents it. The Literal
+# used to reject it, which would 500 `/api/leads` the moment the lead_population CTAS
+# learned to JOIN borrower_lifecycle_state. Include it preemptively.
+ApprovalStatus = Literal["pending", "approved", "rejected", "hold"]
 
 
 class SegmentSummary(BaseModel):
@@ -25,6 +29,13 @@ class LeadSummary(BaseModel):
     city: str
     state: str
     zip: str
+    # Cotality CLIP (10-digit property identifier). Added 2026-04-22 to fix
+    # the "two different CLIP formats across routes" blocker -- the
+    # segment-row preview + lead table must show the SAME CLIP that
+    # Borrower 360 shows. Frontend previously derived a fake CLIP via
+    # `clip_${borrower_id.toLowerCase().replace('-', '')}`; that derivation
+    # is retired in favour of this real field.
+    clip: str = ""
     segment_codes: list[SegmentCode]
     equity_estimate: int
     rate_spread_bps: int
@@ -34,6 +45,22 @@ class LeadSummary(BaseModel):
     why_now: str
     evidence_ids: list[str]
     approval_status: ApprovalStatus = "pending"
+    # Secondary-filter fields (2026-04-23) -- carried from
+    # gold.borrower_360 through gold.lead_population so the
+    # /segment-intelligence page can run real client-side predicates
+    # against occupancy, owner-link (related properties), lien state, and
+    # purchase intent. All default to safe "unknown" values so older
+    # cached rows + the Borrower360-driven in-process test fixture keep
+    # validating. `has_permit` / `listed_for_sale` are BLOCKED FALSE in
+    # gold until Cotality Building Permits + MLS Delta shares land --
+    # the UI surfaces a "data-dependency pending" note for that filter.
+    is_owner_occupied: bool = False
+    is_investor: bool = False
+    related_property_count: int = 1
+    current_lien_balance: int = 0
+    second_pos_amount: int = 0
+    has_permit: bool = False
+    listed_for_sale: bool = False
 
 
 class Borrower360(LeadSummary):

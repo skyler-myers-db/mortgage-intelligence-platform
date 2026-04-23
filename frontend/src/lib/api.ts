@@ -1,9 +1,12 @@
 import type {
   Borrower360,
+  CountyRollupResponse,
   LeadSummary,
   OfferRecommendation,
   PortfolioPreview,
   SegmentSummary,
+  StateRollupResponse,
+  ZipRollupResponse,
 } from '../types';
 
 /**
@@ -21,6 +24,15 @@ import type {
  * The only method that tolerates failure is `health()`: an unreachable
  * /api/health returns `{ status: 'unreachable', mode: 'unknown',
  * dependencies: {} }`. That's honest status, not synthetic data.
+ *
+ * Cancellation (round-2 hole-finder #10/#11, 2026-04-23): every method
+ * accepts an optional `AbortSignal`. Callers pass a controller's
+ * signal in the effect body and call `controller.abort()` from the
+ * cleanup function so an unmount / rapid-refilter actually cancels
+ * the in-flight request. An aborted fetch throws a DOMException with
+ * name === 'AbortError'; we re-throw it as an ApiError with
+ * `retryable: false` so call sites can `if (err.name === 'AbortError')`
+ * cheaply, or inspect `.aborted` on the ApiError.
  */
 
 export interface HealthPayload {
@@ -38,6 +50,21 @@ export interface ApproveResult {
   audit_event_id?: string | null;
 }
 
+export interface RejectResult {
+  rejected: boolean;
+  approval_id?: string | null;
+  audit_event_id?: string | null;
+}
+
+export interface OutreachDraftResult {
+  borrower_id: string;
+  offer_code: string;
+  channel: 'email' | 'sms';
+  subject?: string | null;
+  body: string;
+  status: 'draft';
+}
+
 export interface GenieResult {
   answer: string;
   source?: string;
@@ -47,24 +74,51 @@ export interface GenieResult {
   follow_up_questions?: string[];
 }
 
+export interface AuditEventRow {
+  event_id: string;
+  actor: string;
+  action: string;
+  entity_type: string;
+  entity_id: string;
+  payload_json: Record<string, unknown>;
+  evidence_ids: string[];
+  created_at: string;
+}
+
 /** Structured error thrown by every api.* method on non-2xx or network failure. */
 export class ApiError extends Error {
   readonly path: string;
   readonly status: number | null;
   readonly retryable: boolean;
   readonly dependency: string | null;
+  readonly aborted: boolean;
 
   constructor(
     message: string,
-    opts: { path: string; status?: number | null; retryable?: boolean; dependency?: string | null } = { path: '' },
+    opts: {
+      path: string;
+      status?: number | null;
+      retryable?: boolean;
+      dependency?: string | null;
+      aborted?: boolean;
+    } = { path: '' },
   ) {
     super(message);
-    this.name = 'ApiError';
+    this.name = opts.aborted ? 'AbortError' : 'ApiError';
     this.path = opts.path;
     this.status = opts.status ?? null;
     this.retryable = Boolean(opts.retryable);
     this.dependency = opts.dependency ?? null;
+    this.aborted = Boolean(opts.aborted);
   }
+}
+
+/** True when the error was caused by a caller-driven AbortController abort. */
+export function isAbortError(err: unknown): boolean {
+  if (!err) return false;
+  if (err instanceof ApiError) return err.aborted;
+  if (err instanceof Error && err.name === 'AbortError') return true;
+  return false;
 }
 
 /**
@@ -79,8 +133,46 @@ export class ApiError extends Error {
  * "backend is warming up" while these retries run.
  */
 
-async function _sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function _sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(_abortError());
+      return;
+    }
+    const t = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(t);
+      reject(_abortError());
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+function _abortError(): DOMException {
+  // DOMException exists in browsers + jsdom + recent Node. Fall back to
+  // a plain Error with name='AbortError' in ancient runtimes.
+  try {
+    return new DOMException('The operation was aborted.', 'AbortError');
+  } catch {
+    const err = new Error('The operation was aborted.');
+    err.name = 'AbortError';
+    return err as unknown as DOMException;
+  }
+}
+
+function _newRequestId(): string {
+  // Prefer the standard crypto.randomUUID() (available in all modern
+  // browsers + jsdom >= 22). Fall back to a time-based random for test
+  // environments where crypto is stubbed. The backend only requires
+  // uniqueness within its own unique-index window, not RFC4122
+  // compliance — uniqueness is what matters for idempotency.
+  const c: Crypto | undefined =
+    typeof globalThis !== 'undefined' ? globalThis.crypto : undefined;
+  if (c && typeof c.randomUUID === 'function') return c.randomUUID();
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
 }
 
 interface Retryable503Parsed {
@@ -111,10 +203,12 @@ async function _fetchWithRetry(
   path: string,
   init?: RequestInit,
   attempts = 3,
+  signal?: AbortSignal,
 ): Promise<Response> {
   let lastRes: Response | null = null;
   for (let i = 0; i < attempts; i++) {
-    const res = await fetch(path, init);
+    if (signal?.aborted) throw _abortError();
+    const res = await fetch(path, { ...init, signal });
     if (res.ok) return res;
     const parsed = await _parseRetryableBody(res);
     if (!parsed.retryable) return res;
@@ -122,7 +216,7 @@ async function _fetchWithRetry(
     if (i === attempts - 1) break;
     const delay = Math.min(2000, 200 * 2 ** i);
     const jittered = delay * (0.5 + Math.random());
-    await _sleep(jittered);
+    await _sleep(jittered, signal);
   }
   return lastRes as Response;
 }
@@ -138,30 +232,48 @@ async function _throwFromResponse(res: Response, path: string): Promise<never> {
   });
 }
 
-async function getJson<T>(path: string): Promise<T> {
+function _wrapFetchError(err: unknown, path: string): ApiError {
+  // A caller-triggered abort surfaces as a DOMException with name ===
+  // 'AbortError'. Preserve that signal so consumers can short-circuit
+  // without spamming the user with a red error banner.
+  if (err instanceof Error && err.name === 'AbortError') {
+    return new ApiError('request aborted', {
+      path,
+      status: null,
+      retryable: false,
+      aborted: true,
+    });
+  }
+  const message = err instanceof Error ? err.message : 'network error';
+  return new ApiError(message, { path, status: null, retryable: false });
+}
+
+async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
   let res: Response;
   try {
-    res = await _fetchWithRetry(path);
+    res = await _fetchWithRetry(path, undefined, 3, signal);
   } catch (err) {
-    // Network-level failure (offline, DNS, CORS preflight, etc.)
-    const message = err instanceof Error ? err.message : 'network error';
-    throw new ApiError(message, { path, status: null, retryable: false });
+    throw _wrapFetchError(err, path);
   }
   if (!res.ok) await _throwFromResponse(res, path);
   return (await res.json()) as T;
 }
 
-async function postJson<T, B>(path: string, body: B): Promise<T> {
+async function postJson<T, B>(path: string, body: B, signal?: AbortSignal): Promise<T> {
   let res: Response;
   try {
-    res = await _fetchWithRetry(path, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body ?? {}),
-    });
+    res = await _fetchWithRetry(
+      path,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body ?? {}),
+      },
+      3,
+      signal,
+    );
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'network error';
-    throw new ApiError(message, { path, status: null, retryable: false });
+    throw _wrapFetchError(err, path);
   }
   if (!res.ok) await _throwFromResponse(res, path);
   return (await res.json()) as T;
@@ -171,43 +283,176 @@ export const api = {
   /**
    * Honest health probe. A dead backend returns an "unreachable" status
    * object instead of throwing — callers render dependency state as
-   * `unknown`, never as synthesized "up".
+   * `unknown`, never as synthesized "up". A caller-triggered abort
+   * re-throws so `HealthProvider` can cancel in-flight polls on
+   * unmount.
    */
-  health: async (): Promise<HealthPayload> => {
+  health: async (signal?: AbortSignal): Promise<HealthPayload> => {
     try {
-      return await getJson<HealthPayload>('/api/health');
-    } catch {
+      return await getJson<HealthPayload>('/api/health', signal);
+    } catch (err) {
+      if (isAbortError(err)) throw err;
       return { status: 'unreachable', mode: 'unknown', dependencies: {} };
     }
   },
 
-  portfolioPreview: (criteria: Record<string, unknown> = {}) =>
+  portfolioPreview: (
+    criteria: Record<string, unknown> = {},
+    signal?: AbortSignal,
+  ) =>
     postJson<PortfolioPreview, { criteria: Record<string, unknown> }>(
       '/api/portfolio/preview',
       { criteria },
+      signal,
     ),
 
-  segments: () => getJson<SegmentSummary[]>('/api/segments'),
+  segments: (signal?: AbortSignal) =>
+    getJson<SegmentSummary[]>('/api/segments', signal),
 
-  leads: (segment?: string) =>
+  stateRollups: (signal?: AbortSignal) =>
+    getJson<StateRollupResponse>('/api/geo/state-rollups', signal),
+
+  countyRollups: (state: string, signal?: AbortSignal) =>
+    getJson<CountyRollupResponse>(
+      `/api/geo/county-rollups?state=${encodeURIComponent(state.toUpperCase())}`,
+      signal,
+    ),
+
+  zipRollups: (fips: string, signal?: AbortSignal) =>
+    getJson<ZipRollupResponse>(
+      `/api/geo/zip-rollups?fips=${encodeURIComponent(fips)}`,
+      signal,
+    ),
+
+  leads: (segment?: string, signal?: AbortSignal) =>
     getJson<LeadSummary[]>(
       segment ? `/api/leads?segment=${encodeURIComponent(segment)}` : '/api/leads',
+      signal,
     ),
 
-  borrower: (id: string) => getJson<Borrower360>(`/api/borrowers/${id}`),
+  borrower: (id: string, signal?: AbortSignal) =>
+    getJson<Borrower360>(`/api/borrowers/${id}`, signal),
 
-  recommendOffer: (borrower_id: string) =>
+  recommendOffer: (borrower_id: string, signal?: AbortSignal) =>
     postJson<OfferRecommendation, { borrower_id: string }>(
       '/api/offers/recommend',
       { borrower_id },
+      signal,
     ),
 
-  approve: (borrower_id: string, actor = 'anonymous') =>
-    postJson<ApproveResult, { borrower_id: string; actor: string }>(
+  approve: (
+    borrower_id: string,
+    opts: {
+      actor?: string;
+      offer_code?: string | null;
+      evidence_ids?: string[];
+      draft_body?: string | null;
+      request_id?: string;
+    } = {},
+    signal?: AbortSignal,
+  ) =>
+    postJson<
+      ApproveResult,
+      {
+        borrower_id: string;
+        actor: string;
+        offer_code?: string | null;
+        evidence_ids?: string[];
+        draft_body?: string | null;
+        request_id: string;
+      }
+    >(
       '/api/outreach/approve',
-      { borrower_id, actor },
+      {
+        borrower_id,
+        actor: opts.actor ?? 'anonymous',
+        offer_code: opts.offer_code ?? null,
+        evidence_ids: opts.evidence_ids ?? [],
+        draft_body: opts.draft_body ?? null,
+        // R5-01 idempotency: generate one UUID per user action and reuse
+        // across any transparent retries inside _fetchWithRetry. The
+        // backend has a unique index on mip_app.approvals(request_id)
+        // and ON CONFLICT DO NOTHING so a duplicate POST (e.g. after a
+        // 503 that the server actually committed before losing the
+        // response) does not write a second audit row.
+        request_id: opts.request_id ?? _newRequestId(),
+      },
+      signal,
     ),
 
-  genie: (question: string) =>
-    postJson<GenieResult, { question: string }>('/api/genie/message', { question }),
+  /**
+   * Reject a borrower from outreach. Structural twin of `approve` —
+   * writes one row to `mip_app.approvals` (action='reject') + one to
+   * `mip_app.action_audit` (event_type='OUTREACH_REJECT'). Fires the
+   * same debounced lifecycle-sync trigger so the funnel snapshot
+   * reflects rejected counts without waiting on the daily cron.
+   */
+  reject: (
+    borrower_id: string,
+    opts: {
+      actor?: string;
+      offer_code?: string | null;
+      evidence_ids?: string[];
+      rationale?: string | null;
+      request_id?: string;
+    } = {},
+    signal?: AbortSignal,
+  ) =>
+    postJson<
+      RejectResult,
+      {
+        borrower_id: string;
+        actor: string;
+        offer_code?: string | null;
+        evidence_ids?: string[];
+        rationale?: string | null;
+        request_id: string;
+      }
+    >(
+      '/api/outreach/reject',
+      {
+        borrower_id,
+        actor: opts.actor ?? 'anonymous',
+        offer_code: opts.offer_code ?? null,
+        evidence_ids: opts.evidence_ids ?? [],
+        rationale: opts.rationale ?? null,
+        request_id: opts.request_id ?? _newRequestId(),
+      },
+      signal,
+    ),
+
+  /**
+   * Fetch the backend-generated outreach draft for a borrower. The
+   * backend emits a DRAFT_OUTREACH audit row as a side effect so we
+   * know which draft copy was shown to the approver. Callers should
+   * fall back to a local template string if this rejects so the
+   * Offer Orchestrator stays usable when the endpoint is degraded.
+   */
+  draftOutreach: (
+    borrower_id: string,
+    channel: 'email' | 'sms' = 'email',
+    signal?: AbortSignal,
+  ) =>
+    postJson<OutreachDraftResult, { borrower_id: string; channel: 'email' | 'sms' }>(
+      '/api/outreach/draft',
+      { borrower_id, channel },
+      signal,
+    ),
+
+  genie: (question: string, signal?: AbortSignal) =>
+    postJson<GenieResult, { question: string }>(
+      '/api/genie/message',
+      { question },
+      signal,
+    ),
+
+  /**
+   * Recent audit events for the Agent Activity Log. Routes through the
+   * same retry/backoff loop as every other read so a transient 503 on
+   * Lakebase doesn't immediately render "feed unavailable" — callers
+   * get the same cadence the backend's Resilient wrapper runs at.
+   * Hole-finder finding #4, 2026-04-23.
+   */
+  auditEvents: (limit = 12, signal?: AbortSignal) =>
+    getJson<AuditEventRow[]>(`/api/audit/events?limit=${limit}`, signal),
 };

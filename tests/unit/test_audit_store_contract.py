@@ -23,13 +23,17 @@ from unittest.mock import MagicMock
 from uuid import uuid4
 
 import pytest
+from fastapi.testclient import TestClient
 
 from backend.config.settings import settings
+from backend.main import app
 from backend.services import audit_store as audit_mod
 from backend.services.audit_store import (
     InMemoryAuditStore,
     LakebaseAuditStore,
     _coerce_event_type,
+    _reset_fallback_counter_for_tests,
+    get_fallback_identity_count,
     resolve_actor,
 )
 
@@ -197,6 +201,56 @@ def test_in_memory_store_is_a_drop_in_for_the_protocol() -> None:
     )
     out = store.list(limit=50)
     assert out == [e]
+
+
+def test_default_actor_emits_warning_log(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The fallback path emits a structured WARNING so operators see
+    un-attributed calls in stdout JSON and OTLP logs. The record carries
+    an ``event=identity_fallback`` extra so filtering is cheap in the
+    sink.
+    """
+    _reset_fallback_counter_for_tests()
+    with caplog.at_level(logging.WARNING, logger="backend.services.audit_store"):
+        resolve_actor(None)
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert warnings, "expected at least one WARNING record"
+    assert any(
+        getattr(rec, "event", None) == "identity_fallback" for rec in warnings
+    ), "expected structured extra with event=identity_fallback"
+
+
+def test_default_actor_increments_counter() -> None:
+    """Each fallback bumps the process-local counter monotonically."""
+    _reset_fallback_counter_for_tests()
+    assert get_fallback_identity_count() == 0
+    resolve_actor(None)
+    resolve_actor(None)
+    resolve_actor(None)
+    assert get_fallback_identity_count() == 3
+    # A request with the header does NOT bump the counter.
+    req = _FakeRequest({"X-Forwarded-Email": "alice@example.com"})
+    resolve_actor(req)
+    assert get_fallback_identity_count() == 3
+
+
+def test_health_reports_fallback_counter() -> None:
+    """``/api/health`` exposes the counter as
+    ``fallback_identity_fallbacks_total`` so operators can surface it
+    in dashboards without an extra scrape target.
+    """
+    _reset_fallback_counter_for_tests()
+    # Bump it twice via the service-level API so the test doesn't depend
+    # on internal ordering of other tests.
+    resolve_actor(None)
+    resolve_actor(None)
+    client = TestClient(app)
+    response = client.get("/api/health")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert "fallback_identity_fallbacks_total" in body
+    assert body["fallback_identity_fallbacks_total"] >= 2
 
 
 def test_get_audit_store_returns_the_lakebase_impl_by_default(

@@ -1,45 +1,57 @@
 import type { PropsWithChildren } from 'react';
 import { AppProvider } from '../AppContext';
+import { HealthProvider } from '../HealthProvider';
+import { FootprintProvider } from '../FootprintProvider';
 import { Rail } from './Rail';
 import { Topbar } from './Topbar';
 import { Console } from './Console';
 import { EvidenceDrawer } from '../mortgage/EvidenceDrawer';
 import { GenieChat } from '../mortgage/GenieChat';
 import { DegradedBanner } from '../mortgage/DegradedBanner';
-import { DataMesh } from '../fx/DataMesh';
 
 /**
- * Module 0 AppShell — rail + topbar + main grid (matches the prototype's
- * `grid-template-areas: "rail topbar" "rail main"`). A single AppProvider
- * wraps the whole tree so Topbar, Console, GenieChat, EvidenceDrawer and
- * every page share theme / accent / density / drawer / genie state.
+ * AppShell — rail + topbar + main grid.
  *
- * DataMesh sits inside `.main` (pointer-events none, z-index 0) as the
- * always-on subtle depth layer; `.main__inner` already owns z-index 1 so
- * page content stays on top.
+ * DataMesh (a 36-circle CSS-animated SVG layer behind every page) was
+ * removed 2026-04-23: combined with the body::before/::after ambient
+ * radial-halo animations it was causing mouse-lag on ultra-wide and
+ * high-DPI displays. Enterprise workspace UIs don't need ambient motion.
  *
- * Slice-6: the DegradedBanner sits at the top of `.main`, above the
- * page content. It renders nothing while /api/health returns "ok"
- * (no layout shift in the happy path) and auto-retries the health
- * probe on a short interval while any dependency is down. This is
- * the ONLY signal the UI gives when the real-data path is
- * unavailable — the app never falls back to fake data.
+ * The DegradedBanner renders nothing while /api/health is ok (no layout
+ * shift in the happy path) and auto-retries while any dependency is down.
+ *
+ * HealthProvider wraps the whole shell so Topbar, AgentActivityLog, and
+ * DegradedBanner share a single `/api/health` poll instead of each
+ * running its own setInterval. Round-2 hole-finder #21, 2026-04-23.
  */
 export function AppShell({ children }: PropsWithChildren) {
   return (
     <AppProvider>
-      <div className="app-shell">
-        <Rail />
-        <Topbar />
-        <main className="main">
-          <DataMesh />
-          <DegradedBanner />
-          {children}
-        </main>
-        <EvidenceDrawer />
-        <Console />
-        <GenieChat />
-      </div>
+      <HealthProvider>
+        <FootprintProvider>
+          <div className="app-shell">
+            {/*
+              Keyboard-only skip-link. Tabbing into the page from the browser
+              chrome would otherwise land in the Rail and require ~30 Tab
+              presses to reach the right-rail Console. Visually hidden until
+              focused, per the standard a11y pattern in
+              frontend/src/design-system/components.css.
+            */}
+            <a href="#workspace-console" className="sr-skip-link">
+              Skip to workspace console
+            </a>
+            <Rail />
+            <Topbar />
+            <main className="main">
+              <DegradedBanner />
+              {children}
+            </main>
+            <EvidenceDrawer />
+            <Console />
+            <GenieChat />
+          </div>
+        </FootprintProvider>
+      </HealthProvider>
     </AppProvider>
   );
 }

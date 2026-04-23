@@ -271,7 +271,7 @@ failure — not a silent fall-through to the localhost path or a cached
 success.
 
 **When to run.**
-- Before every major release rehearsal (paired with the existing
+- Before every major release dry-run (paired with the existing
   `docs/credential-kill-drill.md` sweep for warehouse/Lakebase/Genie).
 - After any change to `tools/oauth_m2m_mint.py` or the nightly workflow's
   OAuth mint step.

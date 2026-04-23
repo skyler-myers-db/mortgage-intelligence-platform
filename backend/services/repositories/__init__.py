@@ -8,6 +8,7 @@ single-file edit in ``.factory``.
 from backend.services.repositories.factory import (
     get_borrower_repository,
     get_genie_answer_repository,
+    get_geo_repository,
     get_lead_repository,
     get_offer_repository,
     get_outreach_repository,
@@ -17,6 +18,7 @@ from backend.services.repositories.factory import (
 from backend.services.repositories.protocols import (
     BorrowerRepository,
     GenieAnswerRepository,
+    GeoRepository,
     LeadRepository,
     OfferRepository,
     OutreachRepository,
@@ -27,6 +29,7 @@ from backend.services.repositories.protocols import (
 __all__ = [
     "BorrowerRepository",
     "GenieAnswerRepository",
+    "GeoRepository",
     "LeadRepository",
     "OfferRepository",
     "OutreachRepository",
@@ -34,6 +37,7 @@ __all__ = [
     "SegmentRepository",
     "get_borrower_repository",
     "get_genie_answer_repository",
+    "get_geo_repository",
     "get_lead_repository",
     "get_offer_repository",
     "get_outreach_repository",

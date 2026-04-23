@@ -1,11 +1,18 @@
 import { useLocation } from 'react-router-dom';
 import { useApp } from '../AppContext';
 import { Icon } from '../Icon';
+import { useHealth } from '../HealthProvider';
+import { useFootprint } from '../FootprintProvider';
 
 /**
  * Topbar — breadcrumbs, lender pill, environment pill, warehouse-status pill,
  * theme toggle, Genie toggle, Console toggle. Matches the prototype's BEM
  * (`topbar__crumbs`, `topbar__pill`, `topbar__icon-btn`).
+ *
+ * Topbar reads the shared `HealthProvider` snapshot (round-2 hole-finder
+ * #21, 2026-04-23) instead of running its own `/api/health` poll. Cadence
+ * (8s healthy / 3s degraded) lives in the provider so pills can't drift
+ * from the DegradedBanner.
  */
 
 const ROUTE_CRUMBS: Record<string, string> = {
@@ -22,21 +29,38 @@ const ROUTE_CRUMBS: Record<string, string> = {
 function currentCrumb(path: string): string {
   if (path.startsWith('/borrower-360')) return 'Borrower 360';
   if (path.startsWith('/offer-orchestrator')) return 'Offer Orchestrator';
-  return ROUTE_CRUMBS[path] ?? 'Module 0';
+  return ROUTE_CRUMBS[path] ?? 'Home';
 }
 
 export function Topbar() {
   const { lender, theme, setTheme, genieOpen, setGenieOpen, consoleOpen, setConsoleOpen } = useApp();
   const { pathname } = useLocation();
   const crumb = currentCrumb(pathname);
+  const { health } = useHealth();
+  // R5-07 (2026-04-23): surface the footprint fallback as a muted chip
+  // so operators aren't silently pinned to the 6-state default when
+  // /api/config/footprint failed on cold-start. This is a separate
+  // signal from /api/health (which drives DegradedBanner) — the
+  // warehouse can be up while the footprint fetch is stale.
+  const { usingFallback: footprintFallback } = useFootprint();
+
+  const envLabel = (health?.app_env ?? 'loading').toLowerCase();
+  const warehouseUp = health?.dependencies?.warehouse === 'up';
+  const warehouseDot = !health
+    ? 'dot amber'
+    : warehouseUp
+      ? 'dot is-heartbeat'
+      : 'dot';
+  const warehouseColor = !health
+    ? undefined
+    : warehouseUp
+      ? undefined
+      : { background: 'var(--signal-danger)' };
 
   return (
     <header className="topbar" role="banner">
       <div className="topbar__crumbs">
-        <span className="mono" style={{ color: 'var(--text-3)', fontSize: 11, letterSpacing: '0.06em' }}>WORKSPACE /</span>
-        <span>mip-app</span>
-        <span className="sep">/</span>
-        <span>Module 0: Top of Funnel</span>
+        <span>Mortgage Intelligence Platform</span>
         <span className="sep">/</span>
         <span className="cur">{crumb}</span>
       </div>
@@ -45,14 +69,38 @@ export function Topbar() {
         <Icon name="building" size={12} />
         <span>{lender}</span>
       </div>
-      <div className="topbar__pill" title="Environment: sandbox">
-        <span className="dot amber" />
-        <span>sandbox</span>
+      <div
+        className="topbar__pill"
+        title={`Environment: ${envLabel}`}
+      >
+        <span className={`dot ${envLabel === 'production' ? 'green' : 'amber'}`} />
+        <span>{envLabel}</span>
       </div>
-      <div className="topbar__pill" title="Databricks warehouse: running">
-        <span className="dot is-heartbeat" aria-hidden="true" />
-        <span style={{ fontFamily: 'var(--font-mono)' }}>serverless-xl</span>
+      <div
+        className="topbar__pill"
+        title={
+          health
+            ? `Warehouse: ${warehouseUp ? 'up' : 'down'} · breaker ${
+                health.circuit_breakers?.warehouse ?? 'unknown'
+              }`
+            : 'Warehouse: probing'
+        }
+      >
+        <span className={warehouseDot} aria-hidden="true" style={warehouseColor} />
+        <span style={{ fontFamily: 'var(--font-mono)' }}>
+          {warehouseUp ? 'warehouse' : health ? 'offline' : '…'}
+        </span>
       </div>
+      {footprintFallback && (
+        <span
+          className="chip chip--warning"
+          title="The /api/config/footprint fetch failed — showing the canonical 6-state fallback. The warehouse may still be cold-starting."
+          data-testid="footprint-fallback-chip"
+        >
+          <Icon name="shield" size={10} />
+          Footprint: fallback
+        </span>
+      )}
       <button
         className="topbar__icon-btn"
         onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}

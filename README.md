@@ -22,15 +22,14 @@ The app uses Cotality public-record, lien, ownership, listing, permit, AVM, HPI,
 
 - Frontend: React + Vite + TypeScript
 - UI: CSS tokens from the design prototype, shadcn/Radix-ready structure
-- Backend: FastAPI + Pydantic + Databricks SDK/SQL connector stubs
+- Backend: FastAPI + Pydantic + Databricks SDK and SQL connector (live Unity Catalog)
 - Runtime: Databricks Apps
 - Analytics: Unity Catalog Delta tables + SQL Warehouse
 - Semantics: Unity Catalog metric views
 - Conversational analytics: Genie App resource / Genie API wrapper
 - Transactional state: Lakebase Postgres for campaigns, approvals, feedback, audit
-- Agentic workflow: Agent Bricks/Supervisor roadmap + deterministic orchestrator
+- Agentic workflow: deterministic orchestrator (production-ready); Agent Bricks/Supervisor available as an optional extension
 - Deployment: Databricks Declarative Automation Bundles
-- Local mode: `MIP_MOCK_MODE=true`
 
 ## Quick start locally
 

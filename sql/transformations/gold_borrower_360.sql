@@ -73,6 +73,12 @@ base AS (
     lc.situs_zip_code                   AS zip,
     pm.situs_city                       AS city,
     pm.situs_cbsa_code,
+    -- 5-char FIPS county code from silver.property_master. Projected up so
+    -- gold.county_rollup + gold.zip_rollup can aggregate natively without a
+    -- ZIP->county crosswalk seed. Nullable: ~0.2% of silver rows have a
+    -- missing fips_county_code (block-level geocode gap); those CLIPs land
+    -- in the state rollup but not in any county/ZIP rollup.
+    pm.fips_county_code                 AS county_fips_5,
     pm.owner_link_id,
     pm.owner_name_hash,
     pm.owner_is_corporate,
@@ -102,7 +108,12 @@ base AS (
     ON pm.clip = lc.clip
   LEFT JOIN mip.gold.property_owner_bridge AS pob
     ON pob.owner_link_id = pm.owner_link_id
-  WHERE lc.situs_state IN ('IL','CA','FL','TX','WA','CO')
+  -- Hole-finder #20: situs-state filter reads from mip.ref.state_footprint,
+  -- the single source of truth for the tenant's operational footprint. The
+  -- prior inline literal ('IL','CA','FL','TX','WA','CO') was one of 5
+  -- hardcoded copies that silently broke for tenants with a different
+  -- footprint. The subquery is a tiny (≤50 row) broadcast.
+  WHERE lc.situs_state IN (SELECT state_code FROM mip.ref.state_footprint)
     AND lc.clip IS NOT NULL
 ),
 -- Slice13-accuracy: promote current-customer detection from an inline
@@ -272,40 +283,109 @@ timeline AS (
 -- Sub-scores: economic_incentive + fit + relationship here; intent_trigger +
 -- evidence live fully in gold.lead_scores but we need them NOW to compute
 -- opportunity_score + confidence for borrower_360 (matches §3.2 contract).
+-- Sub-score formulas (fix/copilot-batch-post-merge 2026-04-22):
+--
+-- The tiered CASE statements collapsed 5.16M borrowers into only a
+-- handful of discrete (economic_incentive, fit, relationship, evidence)
+-- buckets, which in turn collapsed `fn_lead_score` into just 3 unique
+-- values across the top 500 of the ranked queue (66/67/68 at refresh
+-- time). Fix: replace the tiered case with continuous (linear) blends
+-- so small variation in inputs produces small variation in outputs and
+-- the opportunity_score distribution actually spans a useful range.
+--
+-- Continuity invariants vs. the prior tiered formulas:
+--   - economic_incentive: rows that clear BOTH the 200-bps/35% band
+--     still score ~95+; rows that clear only the 0-bps lane still
+--     score in the mid-30s. Monotonic in spread AND equity.
+--   - fit: owner-occupant + CONV/FHA/VA still beats corporate, which
+--     still beats the fallback. Monotonic in property-size signals.
+--   - relationship: current-customer > competitor-lien > no-relation.
+--     Customer tenure (historical_distinct_clips) adds up to +10.
+--   - evidence: unchanged (already continuous).
+--
+-- fn_lead_score itself is unchanged (frozen primitive; Python parity
+-- test pins the weighted-sum math + banker's rounding). The
+-- gold.lead_scores CTAS mirrors this formula 1:1 -- drift between the
+-- two is a parity-test failure by construction (they recompute the same
+-- sub-scores from the same inputs; the weighted blend is canonical).
 subscores AS (
   SELECT
     w.clip,
-    -- economic_incentive (data-contract §5):
-    CASE
-      WHEN w.rate_spread_bps >= 200 AND w.equity_pct >= 35 THEN 98
-      WHEN w.rate_spread_bps >= 150 AND w.equity_pct >= 35 THEN 92
-      WHEN w.rate_spread_bps >= 100 AND w.equity_pct >= 25 THEN 85
-      WHEN w.rate_spread_bps >= 75  AND w.equity_pct >= 15 THEN 75
-      WHEN w.rate_spread_bps >= 0   AND w.equity_pct >= 25 THEN 55
-      WHEN w.equity_pct >= 25                              THEN 48
-      ELSE 30
-    END AS economic_incentive,
-    -- intent_trigger: simplified here (full treatment in gold.lead_scores).
-    -- has_permit + listed_for_sale are BLOCKED so their terms are 0.
-    LEAST(100,
-      15 * CASE WHEN w.is_competitor_lien THEN 1 ELSE 0 END
-    ) AS intent_trigger,
-    -- fit (data-contract §5):
-    CASE
-      WHEN w.is_owner_occupied
-        AND w.first_pos_loan_type IN ('CONV','FHA','VA')
-        THEN 85 - (55 - LEAST(55, COALESCE(w.bedrooms, 0) * 10 + CAST(COALESCE(w.bathrooms, 0) AS INT) * 5))
-      WHEN w.is_owner_occupied   THEN 75
-      WHEN w.owner_is_corporate  THEN 65
-      ELSE 58
-    END AS fit,
-    -- relationship (data-contract §5):
-    CASE
-      WHEN w.is_current_customer  THEN 88
-      WHEN w.is_competitor_lien   THEN 60
-      ELSE 45
-    END AS relationship,
-    LEAST(100, 20 * COALESCE(ec.evidence_event_count, 0)) AS evidence
+    -- economic_incentive: continuous blend of spread + equity that
+    -- saturates gently. spread is compressed via a log-style curve
+    -- (via the sqrt shape) so very-high-spread borrowers don't all
+    -- bunch at 100; equity contributes linearly.
+    --   spread_pts = LEAST(55, ROUND(3 * sqrt(GREATEST(0, spread_bps)))) -- saturates at spread ~340 bps
+    --   equity_pts = LEAST(50, ROUND(equity_pct * 0.5))                  -- linear, saturates at 100% equity
+    -- A borrower with spread=246, equity=79 scores ~47 + ~40 = 87.
+    -- A borrower with spread=735, equity=83 scores ~55 + ~42 = 97.
+    -- A borrower with spread=100, equity=25 scores ~30 + ~13 = 43.
+    CAST(LEAST(100, GREATEST(0,
+        LEAST(55, CAST(ROUND(3 * sqrt(GREATEST(0, w.rate_spread_bps))) AS INT))
+      + LEAST(50, CAST(ROUND(0.5 * LEAST(100, GREATEST(0, w.equity_pct))) AS INT))
+    )) AS INT) AS economic_incentive,
+    -- intent_trigger: BLOCKED terms (permit, listing, avm_uplift) stay 0
+    -- on real data until Cotality Permits + MLS land. Continuous
+    -- contributions from always-live signals. Sum cap is ~85 for a
+    -- hypothetical maxed-out row so even top-tier borrowers rarely
+    -- saturate -- separation in the top tail is the whole point of
+    -- the 2026-04-22 fix.
+    --   * 20 if is_competitor_lien (recapture trigger)
+    --   * LEAST(25, 10 * (related_property_count - 1)) Owner Link signal
+    --   * 0-30 continuous rate-drift: LEAST(30, ROUND(2 * sqrt(spread_bps)))
+    --     (saturates gently around ~225 bps so top-band still varies)
+    --   * LEAST(10, equity_pct / 10) continuous equity proxy
+    --   * 8 bump for is_current_customer (soft retention intent)
+    CAST(LEAST(100, GREATEST(0,
+        20 * CASE WHEN w.is_competitor_lien THEN 1 ELSE 0 END
+      + LEAST(25, GREATEST(0, (COALESCE(w.related_property_count, 1) - 1) * 10))
+      + LEAST(30, CAST(ROUND(2 * sqrt(GREATEST(0, w.rate_spread_bps))) AS INT))
+      + LEAST(10, GREATEST(0, CAST(w.equity_pct / 10 AS INT)))
+      + CASE WHEN w.is_current_customer THEN 8 ELSE 0 END
+    )) AS INT) AS intent_trigger,
+    -- fit: continuous over property-size features. Monotonic
+    -- (owner-occupant + CONV/FHA/VA with many bedrooms beats everything).
+    CAST(LEAST(100, GREATEST(0,
+        CASE
+          WHEN w.is_owner_occupied AND w.first_pos_loan_type IN ('CONV','FHA','VA') THEN 70
+          WHEN w.is_owner_occupied                                                  THEN 60
+          WHEN w.owner_is_corporate                                                 THEN 50
+          ELSE 40
+        END
+      + LEAST(20, 4 * COALESCE(w.bedrooms, 0))
+      + LEAST(10, 3 * CAST(COALESCE(w.bathrooms, 0) AS INT))
+    )) AS INT) AS fit,
+    -- relationship: continuous. Current-customer base 70 + multi-property
+    -- tenure bonus up to +25; competitor-lien 55; multi-property owners
+    -- get a +10 nudge over the no-relation floor. The `(related - 1)*5`
+    -- bump spreads owner-link-rich borrowers across several integer
+    -- score values instead of clumping them at 45 or 55.
+    CAST(LEAST(100, GREATEST(0,
+      CASE
+        WHEN w.is_current_customer
+          THEN 70
+        WHEN w.is_competitor_lien
+          THEN 55
+        WHEN COALESCE(w.related_property_count, 1) > 1
+          THEN 45
+        ELSE 35
+      END
+      + LEAST(25, GREATEST(0, (COALESCE(w.related_property_count, 1) - 1) * 5))
+    )) AS INT) AS relationship,
+    -- evidence: was LEAST(100, 20*count) which capped every borrower
+    -- with >=5 events at 100 (median real count is 4, so ~50% of rows
+    -- saturated). Swap to 10*count + sqrt(second_pos_amount/1000) --
+    -- keeps the per-event linearity but spreads the top tail via a
+    -- continuous lien-amount term so dossier-rich borrowers still beat
+    -- dossier-sparse ones, without every row landing at 100.
+    LEAST(100, GREATEST(0,
+      10 * COALESCE(ec.evidence_event_count, 0)
+      + CASE
+          WHEN w.second_pos_amount IS NOT NULL AND w.second_pos_amount > 0
+            THEN LEAST(20, CAST(ROUND(sqrt(w.second_pos_amount / 1000.0)) AS INT))
+          ELSE 0
+        END
+    )) AS evidence
   FROM with_segments AS w
   LEFT JOIN evidence_counts AS ec ON ec.clip = w.clip
 )
@@ -323,11 +403,19 @@ SELECT
   --   across engines (raised by Copilot 2026-04-22 — some SQL engines
   --   return lowercase base-36 digits).
   CONCAT('B-', LPAD(UPPER(CONV(CAST(ABS(XXHASH64(w.clip)) AS STRING), 10, 36)), 13, '0')) AS borrower_id,
-  CONCAT('Owner ', SUBSTR(w.owner_name_hash, 1, 8))                                   AS display_name,
+  -- Round-3 hole-finder #6: NULL owner_name_hash used to render "Owner "
+  -- (trailing space). Coalesce to the short borrower_id suffix so the
+  -- rendered label is always readable.
+  CASE
+    WHEN w.owner_name_hash IS NULL OR LENGTH(TRIM(w.owner_name_hash)) = 0
+      THEN CONCAT('Borrower ', LPAD(UPPER(CONV(CAST(ABS(XXHASH64(w.clip)) AS STRING), 10, 36)), 6, '0'))
+    ELSE CONCAT('Owner ', SUBSTR(w.owner_name_hash, 1, 8))
+  END                                                                                   AS display_name,
   w.city,
   w.state,
   w.zip,
   w.situs_cbsa_code,
+  w.county_fips_5,
   w.segment_codes,
   w.equity_estimate,
   w.equity_pct,
@@ -351,32 +439,30 @@ SELECT
     WHEN 'retention'       THEN 'Retention'
     ELSE                        'Nurture'
   END                                                                               AS recommended_offer,
-  -- why_now template (data-contract §6). No PII; numeric interpolation only.
+  -- why_now template (data-contract §6). Plain-English for business
+  -- personas (loan officers, marketing leads, VPs of Lending). No bps,
+  -- no threshold syntax, no internal jargon -- this string renders
+  -- verbatim on Borrower 360 and is what a human reads before
+  -- approving outreach. Updated 2026-04-22 (fix/copilot-batch-post-merge)
+  -- to drop '+XXX bps (>= YY)' rule-engine phrasing.
   CASE w.recommended_offer_code
     WHEN 'refi_plus_heloc' THEN
-      CONCAT('+', CAST(w.rate_spread_bps AS STRING), ' bps spread with ',
-             CAST(w.equity_pct AS STRING),
-             '% equity — refi + HELOC cross-sell pencils.')
+      'Current rate sits meaningfully above market and the home carries strong equity -- a refinance with a HELOC cross-sell fits.'
     WHEN 'heloc' THEN
-      CONCAT('Recent permit plus ', CAST(w.equity_pct AS STRING),
-             '% equity points to HELOC demand.')
+      'Recent remodel activity plus strong home equity points to a HELOC conversation.'
     WHEN 'refi' THEN
-      CONCAT('+', CAST(w.rate_spread_bps AS STRING), ' bps above par with ',
-             CAST(w.equity_pct AS STRING),
-             '% equity — refi lane (below HELOC cushion).')
+      'Current rate is well above market, and equity clears the refi cushion (below the HELOC bar) -- lead with a refinance.'
     WHEN 'cash_out' THEN
-      CONCAT('Spread below par but ', CAST(w.equity_pct AS STRING),
-             '% equity supports a cash-out conversation.')
+      'Current rate is near market, but strong home equity supports a cash-out refinance conversation.'
     WHEN 'purchase' THEN
-      'Listed-for-sale trigger suggests a purchase mortgage opportunity on the next home.'
+      'The home is actively listed -- a purchase mortgage on the next home is the right offer.'
     WHEN 'investor' THEN
       CONCAT('Owner Link ties ', CAST(w.related_property_count AS STRING),
-             ' related properties — investor desk conversation.')
+             ' related properties -- route to the investor desk.')
     WHEN 'retention' THEN
-      CONCAT('Current customer with ', CAST(w.rate_spread_bps AS STRING),
-             ' bps drift — retention call before a competitor pulls the lien.')
+      'Current customer drifting above our refi bar -- reach out before a competitor pulls the lien.'
     ELSE
-      'No active trigger — keep in nurture until a signal fires.'
+      'No active trigger yet -- keep in nurture until a signal fires.'
   END                                                                                AS why_now,
   COALESCE(tl.evidence_ids, ARRAY())                                                 AS evidence_ids,
   'pending'                                                                          AS approval_status,
@@ -410,7 +496,10 @@ SELECT
   w.min_equity_pct_applied,
   w.in_the_money,
   COALESCE(tl.trigger_timeline_json, '[]')                                           AS trigger_timeline_json,
-  CURRENT_TIMESTAMP()                                                                AS refreshed_at
+  -- refresh_at comes from mip.ref.refresh_run_state (captured once per run
+  -- by the capture_refresh_timestamp seed task) so every gold CTAS agrees
+  -- to the second. See audit-holes-round-3 #7.
+  (SELECT refresh_at FROM mip.ref.refresh_run_state ORDER BY captured_at DESC LIMIT 1) AS refreshed_at
 FROM with_segments AS w
 LEFT JOIN subscores AS ss ON ss.clip = w.clip
 LEFT JOIN timeline  AS tl ON tl.clip = w.clip;

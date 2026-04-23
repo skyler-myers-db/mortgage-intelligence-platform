@@ -1,19 +1,19 @@
-# Module 0 — Conference Session Talk Track
+# Module 0 — Executive Walkthrough
 
 - **Title:** Mortgage Intelligence Platform — Module 0: Top-of-Funnel Lead Generation & Borrower Segmentation
 - **Audience:** Business (Head of Growth / VP Mortgage Lending / Marketing / Sales Mgmt) + Technical (Databricks FS partner, Cotality product/data, Entrada delivery)
 - **Runtime:** 45s open + 6–8 min main + 30s close (~8 min wall clock)
-- **Presenters:** Entrada delivery lead + Databricks FS partner (co-drive)
-- **Venue:** Entrada session, conference 2026
+- **Walkthrough team:** Entrada delivery lead + Databricks FS partner (co-drive)
 - **App URL:** deployed Databricks App at `https://mip-app-2543889327043640.aws.databricksapps.com`, 1440×900, dark theme, compact density. Auth is workspace-identity Bearer (the App mints short-lived creds via `databricks.sdk.core.Config` — no PAT baked into the runtime).
-- **Data posture:** live Unity Catalog on the Cotality Delta Share — no mock fallback. Resilience (warehouse warm-start, retries, circuit breakers, SWR-cached health probe, pre-joined gold for hot read paths, degraded-state UI) is how a flaky network is handled, not a mock swap.
+- **Data posture:** live Unity Catalog on the Cotality Delta Share — never synthesized. Resilience (warehouse warm-start, retries, circuit breakers, SWR-cached health probe, pre-joined gold for hot read paths, degraded-state UI) is how a flaky network is handled; the app fails visibly rather than silently substituting fake data.
 
 ---
 
-## Pre-session setup — use the rehearsal checklist
+## Pre-session setup — use the dry-run checklist
 
 Before stepping up, the operator runs through
-[docs/module0-rehearsal-checklist.md](module0-rehearsal-checklist.md).
+[docs/module0-rehearsal-checklist.md](module0-rehearsal-checklist.md)
+(the pre-walkthrough dry-run checklist; filename retained).
 That checklist warms the serverless warehouse, primes Genie, and confirms
 `/api/health` reports `mode:"live"` with every dependency `up` and every
 circuit breaker `closed`. Do not start the pitch until that page is green.
@@ -24,7 +24,7 @@ circuit breaker `closed`. Do not start the pitch until that page is green.
 
 > "One question, one module. **Who should we contact, why now, and with what offer?**"
 
-> "This is the Mortgage Intelligence Platform on Databricks Apps. Module 0 is top-of-funnel: the real Cotality Delta Share, under Unity Catalog governance, with **5.16 million property snapshots** across six states — Illinois, California, Florida, Texas, Washington, Colorado. **3.1 million of those carry open liens.** Every screen you're about to see queries live gold tables; there is no mock mode behind this curtain."
+> "This is the Mortgage Intelligence Platform on Databricks Apps. Module 0 is top-of-funnel: the real Cotality Delta Share, under Unity Catalog governance, with **5.16 million property snapshots** across six states — Illinois, California, Florida, Texas, Washington, Colorado. **3.1 million of those carry open liens.** Every screen you're about to see queries live gold tables — the data is production, the latency is production, the governance is production."
 
 > "Three principles hold through every screen. *Every recommendation traces to a Cotality source through Unity Catalog. Every score has a rationale. Nothing is sent without human approval, and every approval writes to an immutable Lakebase audit log.* That's the whole contract."
 
@@ -158,7 +158,7 @@ circuit breaker `closed`. Do not start the pitch until that page is green.
 
 ## Backup path — "if something breaks"
 
-| Failure | What happens | What the presenter says |
+| Failure | What happens | What the operator says |
 |---|---|---|
 | Warehouse cold-starts mid-session | DegradedBanner appears at top of page; the retry/breaker logic re-arms within 30s | *You'll notice the banner — the warehouse is warming up. This is real-time honesty, not a stage trick. Back in a moment.* |
 | Genie API times out | Circuit breaker opens; `/api/genie` falls through to the safe corpus in `backend/services/genie_answers.py`; answer still cites a UC table | *Our safe corpus answered this one — ten canonical questions deterministic, even if the Genie space is cold. The provenance chip is real.* |
@@ -170,7 +170,7 @@ circuit breaker `closed`. Do not start the pitch until that page is green.
 
 ## Appendix — canonical click path (muscle memory)
 
-1. Run the [rehearsal checklist](module0-rehearsal-checklist.md) — confirm `/api/health` is fully green.
+1. Run the [dry-run checklist](module0-rehearsal-checklist.md) — confirm `/api/health` is fully green.
 2. Open `/` — verify KPI row animates; glance at the telemetry strip in the Console footer.
 3. Hover *In-the-money* KPI — evidence chip renders.
 4. Click **Illinois** on the map → Cook County → a Chicago ZIP.
@@ -225,4 +225,4 @@ These are the lines that separate this from a slideware session. Use them when y
 
 ---
 
-*End of talk track. Dress rehearsal: read aloud twice, walk the click path once, run the rehearsal checklist end-to-end — then present.*
+*End of talk track. Dry-run: read aloud twice, walk the click path once, run the dry-run checklist end-to-end — then present.*

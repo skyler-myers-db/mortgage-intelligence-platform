@@ -1,14 +1,17 @@
-# Module 0 — Pre-Session Rehearsal Checklist
+# Module 0 — Pre-Walkthrough Dry-Run Checklist
 
-**Who runs this:** the operator (or backup presenter).
+> *(Filename `module0-rehearsal-checklist.md` is retained so existing links
+> resolve; content has been renamed to "pre-walkthrough dry-run".)*
+
+**Who runs this:** the operator (or backup walkthrough lead).
 **When:** 10 minutes before every session.
 **Why:** the app is live Unity Catalog — serverless warehouses cold-start, Genie
 spaces cold-start, Lakebase needs a fresh auth token. Catching these one at a
-time in quiet beats catching all of them on stage.
+time in quiet beats catching all of them during a live walkthrough.
 
-If any step below fails, stop and fix before starting the pitch. The talk
-track is truthful about resilience, but the audience should see *resilience*,
-not *recovery*.
+If any step below fails, stop and fix before starting the walkthrough. The
+talk track is truthful about resilience, but the reviewer should see
+*resilience*, not *recovery*.
 
 ## 1. Warm the serverless SQL warehouse
 
@@ -36,7 +39,7 @@ Expect:
 - `"dependencies": { "warehouse": "up", "lakebase": "up", "genie": "up" }`
 - `"circuit_breakers": { "warehouse": "closed", "lakebase": "closed", "genie": "closed" }`
 
-Any `down` dependency or non-`closed` breaker means do not go on stage yet.
+Any `down` dependency or non-`closed` breaker means do not start the walkthrough yet.
 The probe is fronted by a stale-while-revalidate cache (2 s soft TTL,
 10 s hard TTL, background refresh on a shared ThreadPoolExecutor). A
 cold first request may take ~1 s while it spins up the dependency probes;
@@ -89,9 +92,9 @@ compact density**. Expect:
   not have refreshed; re-run `databricks bundle run mip_refresh_scores -t dev`.
 
 If the DegradedBanner is showing, something upstream failed the `/api/health`
-probe — step back to (2) and do not start the pitch.
+probe — step back to (2) and do not start the walkthrough.
 
-## 6. Rehearse the Genie safe-corpus fallback (once)
+## 6. Dry-run the Genie safe-corpus fallback (once)
 
 Even on a cold Genie, these three canonical questions from
 `genie/sample_questions.md` resolve deterministically through the safe-corpus
@@ -110,7 +113,7 @@ in a minute and the Genie space will have warmed up.
 
 ## 7. Second-monitor backup — have the API queries ready
 
-If the frontend dies on stage, the API still works. Pre-load these in a second
+If the frontend dies mid-walkthrough, the API still works. Pre-load these in a second
 terminal or browser tab:
 
 - `curl /api/leads?limit=5 | jq`
@@ -123,7 +126,7 @@ can narrate from JSON if the UI goes dark.
 ## 8. Clear the click path
 
 Walk the 13-step click path from the talk track Appendix once, silently, before
-the audience arrives. Muscle memory is the difference between a session that
+the reviewer arrives. Muscle memory is the difference between a session that
 takes 7 minutes and one that takes 10.
 
 ---
@@ -132,7 +135,7 @@ takes 7 minutes and one that takes 10.
 
 | Signal | What to do | What to say |
 |---|---|---|
-| DegradedBanner appears at top of page | Keep going; the retry + breaker logic re-arms within 30 s | *"The banner tells you the warehouse is warming up — real-time honesty, not a stage trick."* |
+| DegradedBanner appears at top of page | Keep going; the retry + breaker logic re-arms within 30 s | *"The banner tells you the warehouse is warming up — real-time honesty, not a cover-up."* |
 | Genie answer returns `source: "fallback"` | Keep going; safe corpus is the guarantee | *"The circuit breaker opened and our safe corpus took over — you just watched resilience engineering instead of a spinner."* |
 | Approval click shows an error toast | Don't re-click | *"Lakebase write path is flagged; we'd rather fail visibly than fake success. Audit guarantee working as designed."* |
 | Page outright blanks | Swap to the second monitor and narrate from API JSON | *"The UI is the skin, not the substance — here's the same answer from the API."* |

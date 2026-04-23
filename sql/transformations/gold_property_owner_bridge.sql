@@ -25,6 +25,7 @@ SELECT
   s.distinct_states_count,
   s.distinct_cbsa_count,
   s.primary_clip,
-  CURRENT_TIMESTAMP()      AS refreshed_at
+  -- Shared refresh_at captured once per run. See audit-holes-round-3 #7.
+  (SELECT refresh_at FROM mip.ref.refresh_run_state ORDER BY captured_at DESC LIMIT 1) AS refreshed_at
 FROM mip.silver.owner_property_bridge AS s
 WHERE s.owner_link_id IS NOT NULL;

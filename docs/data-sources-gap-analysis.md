@@ -32,7 +32,7 @@ Provider: `datashare_us_west_2` · Share: `corelogic_226d2860` · Last updated: 
 | WA | 0.74M | 0.49M | 4.16% | 47.0% |
 | CO | 0.16M | 0.10M | 4.12% | 54.1% |
 
-**Demo-posture implication:** the booth story must stay in these 6 states. Our mock fixtures currently cite other metros — that needs to reconcile with the real footprint when we move off mocks (or we cherry-pick a single metro from this list as the demo lender's footprint).
+**Walkthrough-posture implication:** the narrative must stay in these 6 states. Our mock fixtures currently cite other metros — that needs to reconcile with the real footprint when we move off mocks (or we cherry-pick a single metro from this list as the sample lender's footprint).
 
 ### Rate-cohort distribution (first-position mortgage by origination year)
 | Cohort | Count | Median rate | Demo relevance |
@@ -108,7 +108,7 @@ From the screenshot, grouped by Module 0 necessity:
 - **Mortgage Market Analytics** — we have v1 of this pre-joined view.
 
 ### Useful for Module 0 polish, low priority — optional asks
-- **Home Price Index** and **HPI Forecast** — gives us per-CBSA appreciation in the Geography drill-down. **Public FHFA HPI from FRED is good enough for the DAIS demo.** Request only if the demo needs forward-looking HPI ("prices up 4% next 12mo in Denver, offer now").
+- **Home Price Index** and **HPI Forecast** — gives us per-CBSA appreciation in the Geography drill-down. **Public FHFA HPI from FRED is good enough for the customer walkthrough.** Request only if the walkthrough needs forward-looking HPI ("prices up 4% next 12mo in Denver, offer now").
 - **Pre-Foreclosure** — upgrades segment 7 from "have foreclosure stage" to "have NOD/NTS filings" → earlier distress detection. Not on the critical path; post-demo.
 - **Tax Liens**, **Judgments**, **HOA and Mechanics Liens** — involuntary-lien products. Useful as a *filter-out* signal (skip borrowers in distress for outreach) but not required for the segment math. Post-demo.
 
@@ -117,8 +117,8 @@ Per `CLAUDE.md` negative prompting ("Do not overbuild Modules 1–4 before Modul
 - Climate Risk Analytics, Neighborhood Crime/Schools/Demographics/Employment/Real Estate, Propensity Scores, Market Risk Indicators, Rent Amount Model, Insurance Marketing Database, Historical Tax Assessment, Housing Analytics (Market/Rental/Listing Trends), Solar Contracts, ParcelPoint, Building Detail, Neighborhood Schools.
 
 ### CLIP MCP — request, but separately and later
-- **Why defer:** CLIP MCP's job is to **match external/third-party property records to a CLIP**. The 5 shared tables are **already CLIP-keyed**. For the DAIS booth demo, we don't need to resolve inbound property records against a master ID — every record in our warehouse already has one.
-- **When to request:** when we hook up Summit Mortgage's (or any customer's) portfolio CSV as the "bring your portfolio" Module 0 flow. That's post-DAIS delivery work, not the booth demo.
+- **Why defer:** CLIP MCP's job is to **match external/third-party property records to a CLIP**. The 5 shared tables are **already CLIP-keyed**. For the Module 0 walkthrough, we don't need to resolve inbound property records against a master ID — every record in our warehouse already has one.
+- **When to request:** when we hook up Summit Mortgage's (or any customer's) portfolio CSV as the "bring your portfolio" Module 0 flow. That's post-evaluation delivery work, not the initial walkthrough.
 - **Governance note:** MCP gives the agents tool-use against Cotality's API, which is a different security review path than reading a UC share. Plan this as its own ask with Cotality's legal + our governance-security-reviewer subagent in the loop.
 
 ---
@@ -240,7 +240,7 @@ mip.gold.lead_population         -- filtered ranked top-N for demo surface
 | **P0** | **Building Permits** | Only source for renovation-intent trigger | Segment 3 upgrade (HELOC intent, not just equity) |
 | P2 | HPI Forecast | Per-CBSA 12mo appreciation forecast for Geography drill-down | Nice-to-have polish; public FHFA HPI covers the must-have |
 | P2 | Pre-Foreclosure | NOD/NTS leading indicator | Segment 7 upgrade; we have enough for demo without it |
-| P3 | CLIP MCP | Inbound property-record resolution | Post-DAIS, for "bring your portfolio" flow only |
+| P3 | CLIP MCP | Inbound property-record resolution | Post-walkthrough, for "bring your portfolio" flow only |
 | — | Everything else on the marketplace (AVM, HPI, Climate, Neighborhood *, Propensity Scores, Insurance, Historical Tax, MLS Analytics, Loan Assignments/Releases, Rent Amount Model, Mortgage Market Analytics, Total Home Value, Voluntary Lien Status, Property Characteristic Information, Pre-Foreclosure alt products) | Either redundant with existing share or out of Module 0 scope | — |
 
 ---

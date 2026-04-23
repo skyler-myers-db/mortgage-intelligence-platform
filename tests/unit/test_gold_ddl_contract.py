@@ -37,6 +37,10 @@ GOLD_DDL_FILES: tuple[str, ...] = (
     "gold_evidence_events.sql",
     "gold_lead_population.sql",
     "gold_segment_population.sql",
+    # slice13-accuracy-validation: geography rollups for the USChoroplethMap drill.
+    "gold_county_rollup.sql",
+    "gold_zip_rollup.sql",
+    "gold_state_top_segment.sql",
 )
 
 GOLD_TRANSFORMATION_FILES: tuple[str, ...] = (
@@ -46,6 +50,9 @@ GOLD_TRANSFORMATION_FILES: tuple[str, ...] = (
     "gold_evidence_events.sql",
     "gold_lead_population.sql",
     "gold_segment_population.sql",
+    "gold_county_rollup.sql",
+    "gold_zip_rollup.sql",
+    "gold_state_top_segment.sql",
 )
 
 # Target UC paths. The manifest (003_gold_tables.sql) must reference each.
@@ -61,6 +68,9 @@ GOLD_TABLE_PATHS: tuple[str, ...] = (
     "mip.gold.lead_population",
     "mip.gold.segment_population",
     "mip.gold.borrower_dossier",
+    "mip.gold.county_rollup",
+    "mip.gold.zip_rollup",
+    "mip.gold.state_top_segment",
 )
 
 FORBIDDEN_PII_COLUMNS: tuple[str, ...] = (
@@ -245,6 +255,128 @@ def test_borrower_360_transformation_forces_blocked_false() -> None:
     assert re.search(
         r"CAST\(FALSE\s+AS\s+BOOLEAN\)\s+AS\s+listed_for_sale", text, re.IGNORECASE
     ), "gold.borrower_360 CTAS must hardcode listed_for_sale = FALSE (data-contract §9)."
+
+
+# ---------------------------------------------------------------------------
+# Audit-holes-round-3 #7 + #8: deterministic refresh_at + freshness sentinel
+# ---------------------------------------------------------------------------
+
+
+# Every CTAS in mip_refresh_scores that writes a `refreshed_at` or
+# `snapshot_at` column MUST source it from mip.ref.refresh_run_state rather
+# than a per-task CURRENT_TIMESTAMP(). The only SQL file on the gold-refresh
+# path allowed to call CURRENT_TIMESTAMP() is the seed task
+# (capture_refresh_timestamp.sql).
+_TIMESTAMP_SHARED_CTAS_FILES: tuple[str, ...] = (
+    "gold_property_owner_bridge.sql",
+    "gold_borrower_360.sql",
+    "gold_lead_scores.sql",
+    "gold_segment_population.sql",
+    "gold_lockin_cohort.sql",
+    "gold_borrower_dossier.sql",
+    "gold_county_rollup.sql",
+    "gold_zip_rollup.sql",
+)
+
+
+@pytest.mark.parametrize("name", _TIMESTAMP_SHARED_CTAS_FILES)
+def test_ctas_reads_shared_refresh_at(name: str) -> None:
+    """Every gold CTAS in mip_refresh_scores must pull its refresh/snapshot
+    timestamp from mip.ref.refresh_run_state, not call CURRENT_TIMESTAMP()
+    in-line. Fixes audit-holes-round-3 #7 (per-task drift)."""
+    text = (TRANSFORM_DIR / name).read_text(encoding="utf-8")
+    cleaned = _strip_line_comments(text)
+    # Must reference the shared anchor at least once.
+    assert "mip.ref.refresh_run_state" in cleaned, (
+        f"{name}: must read refresh_at from mip.ref.refresh_run_state "
+        f"instead of calling CURRENT_TIMESTAMP() per-task."
+    )
+    # And must NOT call CURRENT_TIMESTAMP() in the body (comments stripped).
+    assert not re.search(r"CURRENT_TIMESTAMP\s*\(", cleaned, re.IGNORECASE), (
+        f"{name}: CURRENT_TIMESTAMP() is forbidden on the gold-refresh path. "
+        f"Use (SELECT refresh_at FROM mip.ref.refresh_run_state ORDER BY "
+        f"captured_at DESC LIMIT 1) instead."
+    )
+
+
+def test_capture_refresh_timestamp_seed_exists() -> None:
+    """The seed task is the ONE place CURRENT_TIMESTAMP() lives on the
+    gold-refresh path. It must exist and must INSERT into
+    mip.ref.refresh_run_state."""
+    path = TRANSFORM_DIR / "capture_refresh_timestamp.sql"
+    assert path.exists(), "missing capture_refresh_timestamp.sql (audit-holes-round-3 #7)."
+    text = path.read_text(encoding="utf-8")
+    assert re.search(
+        r"INSERT\s+INTO\s+mip\.ref\.refresh_run_state", text, re.IGNORECASE
+    ), "capture_refresh_timestamp.sql must INSERT a row into mip.ref.refresh_run_state."
+    assert re.search(r"CURRENT_TIMESTAMP\s*\(", text, re.IGNORECASE), (
+        "capture_refresh_timestamp.sql must call CURRENT_TIMESTAMP() "
+        "exactly once -- it is the anchor every other CTAS reads."
+    )
+
+
+def test_assert_borrower_360_fresh_sentinel_exists() -> None:
+    """The freshness sentinel must exist and must compare borrower_360's
+    MAX(refreshed_at) against the run's refresh_at. Fixes audit-holes-
+    round-3 #8 (stale-population drift)."""
+    path = TRANSFORM_DIR / "assert_borrower_360_fresh.sql"
+    assert path.exists(), "missing assert_borrower_360_fresh.sql (audit-holes-round-3 #8)."
+    text = path.read_text(encoding="utf-8")
+    assert re.search(r"RAISE_ERROR", text, re.IGNORECASE), (
+        "assert_borrower_360_fresh.sql must call RAISE_ERROR on staleness."
+    )
+    assert re.search(r"mip\.gold\.borrower_360", text, re.IGNORECASE), (
+        "assert_borrower_360_fresh.sql must read mip.gold.borrower_360."
+    )
+    assert re.search(r"mip\.ref\.refresh_run_state", text, re.IGNORECASE), (
+        "assert_borrower_360_fresh.sql must compare against the run's "
+        "refresh_at captured in mip.ref.refresh_run_state."
+    )
+
+
+def test_sentinel_wired_in_bundle_definitions() -> None:
+    """Both databricks.yml and resources/jobs.yml must declare the sentinel
+    task (`assert_borrower_360_fresh`) and the seed task
+    (`capture_refresh_timestamp`) inside the `mip_refresh_scores` job
+    definition. A future edit that reverts either wiring should fail CI."""
+    for name in ("databricks.yml", "resources/jobs.yml"):
+        text = (REPO_ROOT / name).read_text(encoding="utf-8")
+        assert "capture_refresh_timestamp" in text, (
+            f"{name}: missing capture_refresh_timestamp task "
+            f"(audit-holes-round-3 #7 wiring regressed)."
+        )
+        assert "assert_borrower_360_fresh" in text, (
+            f"{name}: missing assert_borrower_360_fresh task "
+            f"(audit-holes-round-3 #8 wiring regressed)."
+        )
+
+
+def test_downstream_ctas_depend_on_sentinel() -> None:
+    """The canonical bundle definition (databricks.yml) must route every
+    scoring / rollup / dossier task through the sentinel instead of
+    directly depending on ctas_borrower_360. Pins audit-holes-round-3 #8."""
+    text = (REPO_ROOT / "databricks.yml").read_text(encoding="utf-8")
+    # Locate the mip_refresh_scores block and assert that within it,
+    # ctas_lead_scores' depends_on names the sentinel, not ctas_borrower_360.
+    block_match = re.search(
+        r"mip_refresh_scores:(.*?)(?:\n    [a-zA-Z_]+:|\Z)",
+        text,
+        re.DOTALL,
+    )
+    assert block_match, "could not locate mip_refresh_scores block in databricks.yml."
+    block = block_match.group(1)
+    # ctas_lead_scores is the canary -- it is the first task that would
+    # silently score a stale population if the sentinel were bypassed.
+    lead_scores_match = re.search(
+        r"- task_key:\s*ctas_lead_scores\s*.*?depends_on:\s*\n\s*- task_key:\s*([A-Za-z0-9_]+)",
+        block,
+        re.DOTALL,
+    )
+    assert lead_scores_match, "could not parse ctas_lead_scores.depends_on."
+    assert lead_scores_match.group(1) == "assert_borrower_360_fresh", (
+        "ctas_lead_scores must depend on assert_borrower_360_fresh, not "
+        "directly on ctas_borrower_360 -- the sentinel is the freshness gate."
+    )
 
 
 def test_evidence_events_excludes_blocked_signal_types() -> None:

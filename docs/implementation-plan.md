@@ -1,8 +1,8 @@
-# Full implementation plan — Module 0 DAIS demo
+# Full implementation plan — Module 0
 
 ## Definition of success
 
-The DAIS demo succeeds when a Databricks/Cotality/Entrada presenter can show a polished Databricks App that creates a high-intent mortgage borrower population from Cotality public-record intelligence, ranks and explains borrower opportunities, recommends offers, drafts human-approved outreach, and logs every action.
+Module 0 is ready when a Databricks/Cotality/Entrada walkthrough lead can show a polished Databricks App that creates a high-intent mortgage borrower population from Cotality public-record intelligence, ranks and explains borrower opportunities, recommends offers, drafts human-approved outreach, and logs every action.
 
 ## Architectural target
 
@@ -54,7 +54,7 @@ Implementation steps:
 1. Build app shell: top bar, module rail, content container.
 2. Add design tokens and reusable components.
 3. Add route-level data loading through `frontend/src/lib/api.ts`.
-4. Keep mocks in `frontend/src/mocks` and backend demo data in `backend/services/mock_data.py`.
+4. Keep mocks in `frontend/src/mocks` and backend fixture data in `backend/services/mock_data.py`.
 5. Ensure every route can render without backend by using API fallback.
 
 Validation:
@@ -144,7 +144,7 @@ select * from mip.gold.evidence_events where borrower_id is null limit 10;
 3. Configure a Genie space using only curated gold/semantic assets.
 4. Add suggested questions.
 5. Wire `/ask-genie` to `backend/services/genie_client.py`.
-6. Keep deterministic fallback answers for booth reliability.
+6. Keep deterministic fallback answers for walkthrough reliability.
 
 Validation:
 - Ask: “Which zips have the most in-the-money borrowers?”
@@ -170,7 +170,7 @@ Acceptance:
 
 ## Phase 6 — Agent Bricks / MCP production roadmap
 
-For the DAIS demo, present these as optional production adapters:
+For the Module 0 walkthrough, present these as optional production adapters:
 
 - Property Intelligence Agent: calls CLIP-MCP for property dossier.
 - Segment Analyst Agent: uses metric views and Genie.
@@ -178,7 +178,7 @@ For the DAIS demo, present these as optional production adapters:
 - Outreach Writer Agent: drafts content, never sends automatically.
 - Supervisor Agent: coordinates workflow and writes audit context.
 
-Do not block demo on live Agent Bricks availability. Use a loading choreography and deterministic response if unavailable.
+Do not block the walkthrough on live Agent Bricks availability. Use a loading choreography and deterministic response if unavailable.
 
 ## Phase 7 — CI/CD and deployment
 
@@ -194,9 +194,9 @@ Deployment:
 - Prod target: same bundle, larger warehouse, production Genie space. Deployed today at `https://mip-app-2543889327043640.aws.databricksapps.com` via workspace-identity Bearer.
 - Use branch protection and PR reviews.
 
-## Phase 8 — Rehearsal
+## Phase 8 — Pre-deployment validation
 
-Run the talk track:
+Run the talk track (dry-run):
 
 1. “These numbers show where to act before pipeline begins.”
 2. Build portfolio.

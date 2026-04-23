@@ -18,6 +18,41 @@
   overflow: hidden;
 }
 
+/* Skip-link — visually hidden until keyboard-focused. Standard a11y
+   pattern: keyboard users tab once to surface the link, which jumps
+   past the 72px Rail + Topbar and lands focus on the right-rail
+   Console (#workspace-console). Uses design-system tokens so it
+   honours theme + accent switches. */
+.sr-skip-link {
+  position: absolute;
+  top: var(--sp-2);
+  left: var(--sp-2);
+  z-index: 100;
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--accent);
+  color: var(--bg-1);
+  border-radius: var(--r-md);
+  font-size: var(--fs-12);
+  font-weight: 600;
+  text-decoration: none;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  overflow: hidden;
+  white-space: nowrap;
+  width: 1px;
+  height: 1px;
+}
+.sr-skip-link:focus,
+.sr-skip-link:focus-visible {
+  clip: auto;
+  clip-path: none;
+  overflow: visible;
+  width: auto;
+  height: auto;
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 /* Top bar */
 .topbar {
   grid-area: topbar;
@@ -79,17 +114,18 @@
   width: 56px; height: 56px; margin: 0 auto var(--sp-4);
   display: grid; place-items: center;
   border-radius: var(--r-lg);
-  background: linear-gradient(135deg, var(--entrada-navy) 0%, #013354 100%);
-  color: white;
-  font-family: var(--font-mono); font-weight: 600; font-size: 11px; letter-spacing: 0.08em;
-  position: relative; overflow: hidden;
+  padding: 10px;
   text-decoration: none;
+  transition: background var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease);
 }
-.rail__brand::before {
-  content: ''; position: absolute; inset: 0;
-  background: radial-gradient(circle at 30% 20%, rgba(92,225,230,0.45), transparent 60%);
+.rail__brand:hover {
+  background: color-mix(in oklab, var(--entrada-navy) 10%, transparent);
 }
-.rail__brand span { position: relative; z-index: 1; }
+.rail__brand:focus-visible {
+  outline: 2px solid var(--entrada-bright);
+  outline-offset: 2px;
+}
+.rail__brand img { width: 100%; height: 100%; }
 .rail__item {
   width: 56px; height: 56px; margin: 0 auto;
   display: flex; flex-direction: column; align-items: center; justify-content: center;
@@ -123,10 +159,29 @@
   overflow-y: auto;
   position: relative;
   transition: padding-right var(--dur-base) var(--ease);
+  /* Establish an inline-size container so .kpi-row, .seg-grid and
+     .layoutA-grid can reflow based on their actual available width
+     (Console open vs. closed at a constant viewport, for example)
+     instead of forcing viewport-scale @media rules to guess. */
+  container-type: inline-size;
+  container-name: main;
 }
 .main__inner {
   padding: var(--sp-6) var(--sp-6) var(--sp-12);
-  max-width: 1440px;
+  /* No max-width here. The max-width rule belongs to `.main__content`
+     (our wrapper) so the cap can differ per route (1920 text-dense,
+     2400 hero-map). `.main__inner` should always fill its parent. */
+  width: 100%;
+}
+/* Ultra-wide cap: on monitors beyond ~2000px we center the content in a
+   1920px column so the KPI cards, segment grid and table stay at a
+   human-readable line length. The outer .main remains full-bleed so the
+   ambient gradients keep filling the viewport; .main__content is the
+   centered column that holds the actual page. The hero map route opts
+   out via .main__content--wide-map (below). */
+.main__content {
+  max-width: min(100%, 1920px);
+  margin-inline: auto;
 }
 /* When the Console is docked open at top-right (fixed 300px card), reserve
    a right gutter on .main so long rows do not slide under it. The Console is
@@ -217,6 +272,16 @@
 [data-theme="light"] .chip--warning { color: #B45309; }
 [data-theme="light"] .chip--danger { color: #B91C1C; }
 
+/* Segment-hued chip. Component sets --chip-hue as an inline var (segment
+ * palette entry) and leaves border + fill to color-mix. Text color is
+ * driven from --chip-hue in dark (readable on navy), and from --text-1
+ * navy in light (the 2026-04-22 light-theme audit flagged bright
+ * teal/pink/blue chip text on white at 1.57/2.65/1.91:1 -- below AA).
+ * Border + fill keep the segment hue so the color semantics are
+ * preserved in both themes. */
+.chip--segment { color: var(--chip-hue, var(--accent)); }
+[data-theme="light"] .chip--segment { color: var(--text-1); }
+
 .chip .src-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }
 
 /* Evidence chip — clickable, opens data source drawer */
@@ -236,6 +301,43 @@
 .evidence-chip:hover { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
 .evidence-chip .e-ico { font-size: 9px; opacity: 0.7; }
 
+/* Source-freshness dot — 6px circle after the chip label, 4px gap (via
+   inline-flex gap on .evidence-chip). Additive to the chip variant; does
+   NOT replace the chip's border color, which stays driven by semantic
+   meaning (success/warn/neutral/danger). */
+.evidence-chip__dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  margin-left: -2px; /* trims the flex gap to 4px visual after the label */
+  flex-shrink: 0;
+  background: var(--text-3);
+}
+.evidence-chip__dot--fresh { background: var(--signal-success); }
+.evidence-chip__dot--aging { background: var(--signal-warning); }
+.evidence-chip__dot--stale { background: var(--text-3); }
+
+/* Freshness legend — tiny inline rail used inside the evidence drawer
+   header so operators learn the vocabulary without a tooltip. */
+.freshness-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: var(--fs-11);
+  color: var(--text-3);
+}
+.freshness-legend__item { display: inline-flex; align-items: center; gap: 4px; }
+.freshness-legend__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.freshness-legend__dot--fresh { background: var(--signal-success); }
+.freshness-legend__dot--aging { background: var(--signal-warning); }
+.freshness-legend__dot--stale { background: var(--text-3); }
+
 /* ============================================================
    KPI CARD
    ============================================================ */
@@ -247,6 +349,12 @@
   padding: var(--pad-card);
   overflow: hidden;
   transition: all var(--dur-base) var(--ease);
+  /* Cap individual card width so a 4-card row on an ultra-wide monitor
+     doesn't balloon each card to 600–800px of whitespace. With
+     auto-fit + minmax on .kpi-row (below), cards stay compact and the
+     row centers under the content cap. */
+  max-width: 480px;
+  width: 100%;
 }
 .kpi::before {
   content: ''; position: absolute; inset: 0 0 auto 0; height: 1px;
@@ -267,12 +375,17 @@
 }
 .kpi__value {
   font-family: var(--font-sans); font-weight: 600;
-  font-size: var(--fs-36); letter-spacing: var(--tracking-tight);
+  /* Clamp so the big number scales smoothly from laptop (~24px) through
+     design target (~28–32px at 1440) to QHD/ultra-wide (~36px) without
+     a hard media-query step. --fs-36 is kept as an upper anchor via
+     the clamp max. */
+  font-size: var(--fs-kpi-big);
+  letter-spacing: var(--tracking-tight);
   color: var(--text-1); line-height: 1;
   font-variant-numeric: tabular-nums;
   display: flex; align-items: baseline; gap: var(--sp-2);
 }
-.kpi__unit { font-size: var(--fs-16); color: var(--text-3); font-weight: 500; }
+.kpi__unit { font-size: var(--fs-kpi-unit); color: var(--text-3); font-weight: 500; }
 .kpi__delta {
   display: inline-flex; align-items: center; gap: 4px;
   margin-top: var(--sp-3);
@@ -688,6 +801,14 @@
 .filter__label { color: var(--text-3); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; margin-right: 2px; }
 .filter__value { font-weight: 500; color: var(--text-1); font-family: var(--font-mono); font-size: var(--fs-12); }
 .filter.is-active .filter__value { color: var(--accent); }
+/* Light theme: --accent for bright/teal is washed out on white (~1.8:1 /
+ * ~1.6:1, below WCAG AA 4.5:1). Flagged in the 2026-04-22 light-theme
+ * audit on every route (active nav tab, active map filter, active
+ * density/theme toggle, active density chip). --accent-ink resolves to
+ * the accent hue in dark and to a darker navy in light-with-bright/teal
+ * accent so text clears AA while the border/fill (drawn from --accent
+ * and --accent-soft) keeps the "active" color affordance. */
+[data-theme="light"] .filter.is-active .filter__value { color: var(--accent-ink); }
 
 /* ============================================================
    MAP
@@ -717,6 +838,17 @@
 .map-region.lvl-3 { fill: color-mix(in oklab, var(--accent) 50%, var(--bg-3)); }
 .map-region.lvl-4 { fill: color-mix(in oklab, var(--accent) 70%, var(--bg-3)); }
 .map-region.is-selected { fill: var(--accent); stroke: var(--text-1); stroke-width: 1; }
+/* WCAG 2.4.7 Focus Visible (Level AA): map paths are keyboard-reachable
+   (role="button", tabIndex=0) and keyboard-actionable (Enter/Space handlers),
+   so they need a visible focus indicator. Default UA outlines on SVG are
+   inconsistent across Chromium/WebKit/Firefox; opt into the accent ring
+   explicitly. Hole-finder round 2 #7, 2026-04-23. */
+.map-region:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  stroke: var(--text-1);
+  stroke-width: 1;
+}
 .map-tip {
   position: absolute; pointer-events: none;
   background: var(--bg-1); border: 1px solid var(--line-2);
@@ -784,7 +916,7 @@
   font-size: var(--fs-12); color: var(--text-2); cursor: pointer;
   border-radius: 4px; font-family: var(--font-sans);
 }
-.tweak-row .segmented button.is-active { background: var(--accent-soft); color: var(--accent); }
+.tweak-row .segmented button.is-active { background: var(--accent-soft); color: var(--accent-ink); }
 .tweak-row .row { display: flex; align-items: center; justify-content: space-between; }
 .tweak-row .switch {
   position: relative; width: 32px; height: 18px; border-radius: 999px;
@@ -801,40 +933,129 @@
 
 /* ============================================================
    LAYOUT HELPERS (Module 0 specific, per prototype)
+   ------------------------------------------------------------
+   Layout reflow is driven by @container queries against the
+   `main` container we declared on `.main` above. This is the
+   correct unit of measurement because the Console (right-rail,
+   300px overlay) eats ~324px of horizontal room without
+   changing the viewport width — a pure viewport @media rule
+   would keep a 4-col KPI row while the actual available space
+   is closer to 1000px. A few viewport-scoped @media rules
+   remain below for *shell chrome* (rail width, topbar height)
+   that genuinely belongs to the viewport.
    ============================================================ */
-.kpi-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--gap-grid); }
+
+/* KPI row — auto-fit + minmax means the browser naturally picks
+   the right number of columns for the container width. The
+   container-query breakpoints override when we need a specific
+   count (e.g. force 1-col on very narrow containers even though
+   240px would still fit two). */
+.kpi-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: var(--gap-grid);
+  justify-content: start;
+}
 .section-hdr { display: flex; align-items: baseline; justify-content: space-between; margin: 28px 0 12px; gap: var(--sp-4); }
 .section-hdr .h-2 { margin: 0; }
-.seg-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; }
-@media (max-width: 1400px) { .seg-grid { grid-template-columns: repeat(3, 1fr); } }
+
+/* Segment grid — 6 cards is the design-target ≥ 1440px band.
+   Below that the auto-fit in the container-query stepdowns
+   produces 4 / 3 / 2 / 1 cols. The base rule uses a flexible
+   auto-fit so resizes between breakpoints stay graceful. */
+.seg-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
 .proto-hero {
   display: flex; align-items: flex-end; justify-content: space-between;
   margin-bottom: 24px; gap: 24px;
+  flex-wrap: wrap;
 }
-.proto-hero h1 { font-size: 28px; font-weight: 600; letter-spacing: -0.02em; margin: 0 0 4px; }
+.proto-hero h1 { font-size: var(--fs-hero); font-weight: 600; letter-spacing: -0.02em; margin: 0 0 4px; line-height: var(--lh-tight); }
 .proto-hero .lede { color: var(--text-2); font-size: 14px; max-width: 640px; margin: 0; }
 .audit-panel { max-height: 260px; overflow-y: auto; }
-.layoutA-grid { display: grid; grid-template-columns: 1.4fr 1fr; gap: var(--gap-grid); }
-@media (max-width: 1200px) {
-  .kpi-row { grid-template-columns: repeat(2, 1fr); }
+
+/* LayoutA — 2-col on design target (hero map + activity log, borrower
+   body + right panel). Flips to 1-col when the container is narrower
+   than ~960px (whether from a small laptop, a projector slice, or
+   Console-open on a mid-size display). */
+.layoutA-grid {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr;
+  gap: var(--gap-grid);
+}
+
+/* Table wrappers — on narrow containers the table gains horizontal
+   scroll so cells stay readable. On wide containers nothing changes
+   (design target still holds). Applied to the .surface that wraps a
+   .tbl rather than every .surface to avoid accidental clipping
+   elsewhere. */
+.surface:has(> .tbl),
+.surface:has(> div > .tbl) {
+  overflow-x: auto;
+}
+
+/* --- Container-query reflow ---
+ * Tuned against the design-target 1440px (prototype) sitting at the
+ * top of the "md" band. Anchor breakpoints: 640 / 960 / 1280 / 1680
+ * / 2000. `container: main` named above.
+ */
+
+/* Very narrow (≤ 640px container): stack everything. */
+@container main (max-width: 640px) {
+  .kpi-row      { grid-template-columns: 1fr; }
+  .seg-grid     { grid-template-columns: 1fr; }
+  .layoutA-grid { grid-template-columns: 1fr; }
+  .proto-hero   { flex-direction: column; align-items: flex-start; }
+}
+
+/* Narrow (641–960px): 2-col KPIs, 2-col seg-grid, layoutA stacks. */
+@container main (min-width: 641px) and (max-width: 960px) {
+  .kpi-row      { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .seg-grid     { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .layoutA-grid { grid-template-columns: 1fr; }
 }
 
-/* Map placeholder (before full interactive map ships) */
-.map-placeholder {
-  min-height: 420px;
-  display: grid;
-  place-items: center;
-  background:
-    radial-gradient(800px 500px at 20% 30%, rgba(2,80,128,0.22), transparent 60%),
-    radial-gradient(600px 400px at 80% 70%, rgba(92,225,230,0.10), transparent 60%),
-    var(--bg-2);
-  border: 1px dashed var(--line-2);
-  border-radius: var(--r-lg);
-  text-align: center;
-  padding: var(--sp-8);
+/* Medium (961–1280px): 3-col KPIs, 3-col seg-grid, layoutA 2-col. */
+@container main (min-width: 961px) and (max-width: 1280px) {
+  .kpi-row      { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .seg-grid     { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .layoutA-grid { grid-template-columns: 1.2fr 1fr; }
 }
-.map-placeholder__inner { display: flex; flex-direction: column; align-items: center; gap: var(--sp-3); }
+
+/* Design-target band (1281–1680px): 4-col KPIs, 6-col seg-grid, 2-col
+   layoutA. This is the prototype — 1440×900 lands here exactly. */
+@container main (min-width: 1281px) and (max-width: 1680px) {
+  .kpi-row      { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .seg-grid     { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  .layoutA-grid { grid-template-columns: 1.4fr 1fr; }
+}
+
+/* Very wide (1681–2000px): 4-col KPIs with a little extra gap; seg-grid
+   is free to render 6 cards comfortably. layoutA keeps its 2-col split. */
+@container main (min-width: 1681px) and (max-width: 2000px) {
+  .kpi-row      { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: calc(var(--gap-grid) + 4px); }
+  .seg-grid     { grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 14px; }
+  .layoutA-grid { grid-template-columns: 1.4fr 1fr; gap: calc(var(--gap-grid) + 4px); }
+}
+
+/* Ultra-wide (≥ 2001px container): hand over to .main__content cap.
+   The cap holds content to 1920px so the layout looks exactly like
+   "very wide" inside a centered column. Seg-grid can go 6-across; we
+   don't force more columns beyond the cap because the table and
+   layoutA proportions stop working past 7 cards per row. */
+@container main (min-width: 2001px) {
+  .kpi-row      { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: calc(var(--gap-grid) + 4px); }
+  .seg-grid     { grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 14px; }
+  .layoutA-grid { grid-template-columns: 1.4fr 1fr; gap: calc(var(--gap-grid) + 4px); }
+}
+
+/* Legacy .map-placeholder class block removed: the USChoroplethMap
+ * component renders real SVG paths and no longer uses this styling.
+ * If a consumer re-introduces a skeleton surface for the map, use
+ * the token-driven `.skeleton` utility below instead. */
 
 /* ============================================================
    SKELETON (token-driven shimmer)
@@ -964,45 +1185,8 @@
   margin-top: var(--sp-3);
 }
 
-/* ============================================================
-   DATA MESH — subtle drifting particle field behind app content.
-   Positioned inside AppShell via <DataMesh />, absolute-fill,
-   never interactive. Opacity kept low so it reads as depth.
-   ============================================================ */
-.data-mesh {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  z-index: 0;
-  overflow: hidden;
-}
-.data-mesh__svg {
-  width: 100%; height: 100%;
-  display: block;
-  opacity: 0.55;
-  mix-blend-mode: screen;
-}
-[data-theme="light"] .data-mesh__svg {
-  opacity: 0.45;
-  mix-blend-mode: multiply;
-}
-.data-mesh__dot {
-  fill: var(--entrada-teal);
-  animation: mesh-drift var(--dur-mesh) var(--ease) infinite alternate;
-  will-change: transform, opacity;
-}
-.data-mesh__dot--b { fill: var(--entrada-bright); animation-duration: calc(var(--dur-mesh) * 1.2); }
-.data-mesh__dot--c { fill: var(--accent); animation-duration: calc(var(--dur-mesh) * 0.85); }
-@keyframes mesh-drift {
-  0%   { transform: translate3d(0, 0, 0);       opacity: 0.10; }
-  50%  { transform: translate3d(6px, -10px, 0); opacity: 0.18; }
-  100% { transform: translate3d(-4px, 8px, 0);  opacity: 0.12; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .data-mesh__dot { animation: none; opacity: 0.12; }
-}
-/* The AppShell's main pane needs to establish a stacking context so the
-   mesh sits behind content but above the body::before halos. */
+/* Stacking context preserved for route-level z-index use. DataMesh
+   (36 animated SVG circles) removed 2026-04-23 — see AppShell.tsx. */
 .main { isolation: isolate; }
 .main__inner { position: relative; z-index: 1; }
 
@@ -1078,3 +1262,190 @@
   .reveal-on-scroll { opacity: 1; transform: none; transition: none; }
 }
 
+/* ============================================================
+   SHELL CHROME — VIEWPORT-SCOPED MEDIA QUERIES
+   ------------------------------------------------------------
+   The rail / topbar / Console are fixed chrome that sit
+   against the viewport edge. They SHOULD scale with the
+   viewport, not the container, so these rules use @media.
+   The prototype is tuned for 1440 × 900; these adjust around
+   that anchor for laptops (1280), projectors (1920), QHD
+   (2560) and ultra-wide / 4K (3440 / 3840).
+   ------------------------------------------------------------
+   Rail width:
+     < 1024 : 56px   (degraded; uncommon)
+     1024–1919 : 72px (prototype)
+     1920–2559 : 80px (FHD projectors)
+     ≥ 2560 : 96px    (QHD / 4K / ultrawide)
+   Topbar height:
+     < 2560 : 56px
+     ≥ 2560 : 64px
+   Console gutter ([data-console="open"] .main):
+     < 1280 : Console becomes a bottom sheet (degraded gutter 0)
+     1280–2559 : 324px
+     ≥ 2560 : 360px
+*/
+
+/* --- Tiny viewport fallback (<1024): narrow rail, ensure things fit.
+       Mobile-first design is explicitly out of scope (see
+       design_files/Module 0 Prototype.html); this rule keeps the app
+       from collapsing but does not pretend to be a mobile layout. */
+@media (max-width: 1023px) {
+  .app-shell {
+    grid-template-columns: 56px 1fr;
+  }
+  .rail {
+    padding: var(--sp-2) var(--sp-1);
+  }
+  .rail__brand,
+  .rail__item {
+    width: 48px;
+    height: 48px;
+  }
+}
+
+/* --- Below 1280 viewport: Console was eating too much of the
+       available width. Move it to a bottom sheet so the main column
+       gets its space back. This is a minimal degrade — the Console
+       keeps working but docks below the fold. */
+@media (max-width: 1279px) {
+  .tweaks {
+    top: auto;
+    right: 0;
+    left: 0;
+    bottom: 0;
+    width: 100vw;
+    max-height: 50vh;
+    border-radius: var(--r-lg) var(--r-lg) 0 0;
+    border-bottom: 0;
+    overflow-y: auto;
+  }
+  [data-console="open"] .main {
+    padding-right: var(--sp-6);
+    padding-bottom: calc(50vh + var(--sp-6));
+  }
+}
+
+/* --- FHD projectors / 1920+ viewports: slightly wider rail so icons
+       are more legible at distance; still fits the prototype look. */
+@media (min-width: 1920px) {
+  .app-shell {
+    grid-template-columns: 80px 1fr;
+  }
+  .rail__brand,
+  .rail__item {
+    width: 60px;
+    height: 60px;
+  }
+}
+
+/* --- QHD and above: larger chrome to match the bigger pixel budget.
+       Rail grows to 96px, topbar gains 8px, Console reserves 360px
+       when docked open. */
+@media (min-width: 2560px) {
+  .app-shell {
+    grid-template-columns: 96px 1fr;
+    grid-template-rows: 64px 1fr;
+  }
+  .rail__brand,
+  .rail__item {
+    width: 72px;
+    height: 72px;
+  }
+  [data-console="open"] .main {
+    padding-right: 360px;
+  }
+  .tweaks {
+    width: 340px;
+  }
+}
+
+/* ============================================================
+   ULTRA-WIDE AMBIENT FILL
+   ------------------------------------------------------------
+   Past the 1920px content cap, we have unused viewport room on
+   either side of .main__content. Fill it with a subtle radial
+   gradient that pulls from the same brand tokens as the body
+   halos — it reads as depth, not as a second UI. Only applied
+   at >= 2000px viewport so it never shows during a demo on a
+   typical projector.
+*/
+@media (min-width: 2000px) {
+  .main::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 0;
+    background:
+      radial-gradient(1400px 900px at 0% 30%,
+        color-mix(in oklab, var(--entrada-navy) 10%, transparent),
+        transparent 55%),
+      radial-gradient(1400px 900px at 100% 70%,
+        color-mix(in oklab, var(--entrada-teal) 8%, transparent),
+        transparent 55%);
+    opacity: 0.65;
+  }
+  [data-theme="light"] .main::before { opacity: 0.40; }
+}
+
+/* ============================================================
+   HERO MAP OPT-OUT
+   ------------------------------------------------------------
+   On Home the USChoropleth map is the signature viz and should
+   stretch past the 1920px content cap on ultra-wides. Mark the
+   wrapping .main__content with --wide-map (Home does; the other
+   routes don't) and it bursts past the cap. Typography + KPI
+   cards keep the 1920px cap so text stays readable.
+*/
+.main__content--wide-map {
+  max-width: min(100%, 2400px);
+}
+
+/* ============================================================
+   LEAD TABLE ULTRA-WIDE CAP
+   ------------------------------------------------------------
+   The .tbl column widths stop looking proportional past
+   ~1600px. Cap the surface that wraps a .tbl to 1600px so the
+   table stays tidy on 3440px ultrawide and 3840px 4K, while
+   other surfaces (maps, dossiers) keep their full column
+   width. Applied only at ≥ 2001px container so the design
+   target is untouched. */
+@container main (min-width: 2001px) {
+  .main__inner > .surface:has(> .tbl),
+  .main__inner > .surface:has(> div > .tbl) {
+    max-width: 1600px;
+    margin-inline: auto;
+  }
+}
+
+/* ============================================================
+   PAGE FOOTER — subtle brand attribution at the bottom of every
+   route. Monochrome Entrada wordmark + product name. Muted so
+   it reads as signature, not a call-to-action.
+   ============================================================ */
+.page-footer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: calc(var(--gap-grid) * 1.5);
+  padding: 20px 0 12px;
+  border-top: 1px solid var(--line-1);
+  color: var(--text-3);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+}
+.page-footer__sep { opacity: 0.5; }
+.page-footer__name {
+  font-weight: 500;
+  color: var(--text-2);
+}
+
+/* Optional, larger brand signature for landing-style pages.
+   Centered, airy, muted opacity so it reads as signature not billboard. */
+.brand-signature {
+  display: flex;
+  justify-content: center;
+  padding: calc(var(--gap-grid) * 1.25) 0 var(--sp-3);
+  opacity: 0.72;
+}

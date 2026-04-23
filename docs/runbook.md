@@ -1,12 +1,13 @@
 # Module 0 — Operator Runbook
 
-**Who uses this:** the operator, the backup presenter, and the
+**Who uses this:** the operator, the backup walkthrough lead, and the
 on-call engineer during a live session or after a production deploy.
 **Companion docs:**
 - [`docs/module0-rehearsal-checklist.md`](module0-rehearsal-checklist.md)
-  is the proactive pre-session pass. This runbook is the reactive
-  incident-response + deploy guide. Run the checklist **before** every
-  session; reach for this file when something goes sideways.
+  is the proactive pre-session pass (dry-run / pre-walkthrough checklist;
+  filename retained to preserve external links). This runbook is the
+  reactive incident-response + deploy guide. Run the checklist **before**
+  every session; reach for this file when something goes sideways.
 - [`docs/dashboards.md`](dashboards.md) — dashboard cold-start &
   pending-state behaviour. Read this before explaining to a partner
   why a `delta_vs_prior_*` column is blank or an approval-rate cell is
@@ -56,7 +57,7 @@ databricks api post /api/2.0/sql/statements \
 # but a laptop-connected session sometimes needs a manual refresh.
 databricks auth login --host "$DATABRICKS_HOST"
 # Probe directly (port 5432, psql client):
-psql "host=$LAKEBASE_HOST user=$LAKEBASE_USER dbname=$LAKEBASE_DATABASE_NAME sslmode=require" \
+psql "host=$LAKEBASE_HOST user=$LAKEBASE_USER dbname=$LAKEBASE_DATABASE sslmode=require" \
   -c "SELECT 1"
 ```
 
@@ -218,8 +219,16 @@ That single invocation executes:
    `lead_scores` → `lead_population` → `segment_population` →
    `lockin_cohort` → `borrower_dossier` → **`refresh_semantics_views`**
    (the three `mip.semantics.*` metric views Genie binds to).
-8. `databricks bundle run mip_sync_lifecycle_state -t dev` — hourly
-   sync target plus initial seed so `delta_vs_prior_*` columns resolve.
+8. `databricks bundle run mip_sync_lifecycle_state -t dev` — initial
+   seed run so `mip.gold.borrower_lifecycle_state` has a row per
+   borrower and `delta_vs_prior_*` columns can start resolving. After
+   deploy, this job is **event-triggered** from the backend approval
+   path (POST `/api/outreach/approve` fires
+   `backend.services.job_trigger.trigger_lifecycle_sync` via FastAPI
+   `BackgroundTasks`, debounced 60 s). A daily 04:00 America/Chicago
+   fallback cron catches any dropped trigger + records the funnel
+   snapshot so WoW deltas keep advancing. Not hourly — no reason to
+   refresh when nothing has changed.
 9. `python tools/databricks/provision_genie_space.py` — reads
    `genie/mortgage_lead_intelligence_space.yml`, creates or updates
    the Genie Space, binds trusted assets, writes `genie/space_id.txt`.
@@ -341,13 +350,13 @@ for the full workflow map. Common red jobs:
 
 *Owner: qa-test-engineer + principal-architect. Review cadence: after
 every incident (post-mortem updates this doc), and before every release
-rehearsal.*
+dry-run.*
 
 ---
 
 ## 9. Credential-kill drill
 
-**When to run:** before every release rehearsal, and after any change
+**When to run:** before every release dry-run, and after any change
 to `backend/services/resilience.py`, `backend/api/health.py`, the
 warehouse / Lakebase / Genie client modules, or
 `frontend/src/components/mortgage/DegradedBanner.tsx`.
@@ -426,4 +435,216 @@ pytest -q tests/integration/test_segment_count_parity.py \
 ```
 
 If any fail, route to data-modeler + principal-architect before release.
+
+---
+
+## 11. Admin RBAC header for local dev
+
+The `/api/admin/*` endpoints are gated by
+[`backend/services/rbac.py`](../backend/services/rbac.py). Admission is
+a match against the configured admin group (default `mip-admin`, env
+override `MIP_ADMIN_GROUP_NAME`) or the hard-coded fallback `admins`.
+Databricks Apps forwards workspace group membership via
+`X-Forwarded-Groups`; the deployed app gets this for free from the
+edge.
+
+Local `uvicorn` and `curl` do **not** get that header automatically —
+we deliberately chose fail-closed over an `app_env == "local"` auto-
+admit (flags like that rot into production). Carry the header on
+every local admin call:
+
+```bash
+curl -s -H "X-Forwarded-Groups: mip-admin" \
+     -H "X-Forwarded-Email: you@entrada.ai" \
+     http://localhost:8000/api/admin/rules | jq .
+
+curl -s -X PUT -H "X-Forwarded-Groups: mip-admin" \
+     -H "X-Forwarded-Email: you@entrada.ai" \
+     -H "Content-Type: application/json" \
+     -d '{"overrides":{"note":"local test"}}' \
+     http://localhost:8000/api/admin/rules | jq .
+```
+
+Missing header returns `403 {"detail": "forbidden"}` — that exact body
+string is what the frontend's admin 403 banner keys off of.
+
+Signals to watch in `/api/health` response:
+
+- `fallback_identity_fallbacks_total` — non-zero in a production
+  deploy means Databricks Apps is not forwarding `X-Forwarded-Email`
+  on some path, and audit rows are landing under `settings.default_actor`
+  instead of the real user. Treat as a governance regression and route
+  to governance-security-reviewer.
+
+---
+
+## 12. Diagnostic playbook
+
+Symptom-first triage for the three regressions reviewers hit most often
+during a walkthrough. Each entry lists the three highest-probability
+causes and the exact command to confirm each. For recovery commands the
+full procedure lives elsewhere in this runbook — the links below point
+you at it instead of duplicating.
+
+### R4-06 Home KPIs all show 0 or em-dash
+
+**Symptom:** the four headline KPIs on the home dashboard (marketable
+population, high-intent leads, top-tier opportunities, offers
+recommended) render as `0` or `—` instead of the expected 6-state totals.
+
+**Likely causes, in order:**
+
+1. **`mip.gold.lead_population` empty or not refreshed** (highest
+   probability — the gold CTAS chain skipped or was never run in this
+   workspace).
+
+   Confirm:
+   ```bash
+   databricks api post /api/2.0/sql/statements \
+     --json '{"statement":"SELECT COUNT(*) AS n, MAX(_refreshed_at) AS last_refresh FROM mip.gold.lead_population","warehouse_id":"'"$DATABRICKS_WAREHOUSE_ID"'"}' | jq
+   ```
+   A zero count or a stale `last_refresh` confirms. Fix: re-run the
+   scoring chain from §4 step 7:
+   ```bash
+   databricks bundle run mip_refresh_scores -t dev
+   ```
+
+2. **Schema drift** — the Python `_LEAD_POPULATION_COLUMNS` projection
+   in `backend/services/repositories/databricks_repo.py` references a column the
+   current gold table doesn't materialize, so the SELECT fails silently
+   and the route returns an empty list.
+
+   Confirm:
+   ```bash
+   databricks api post /api/2.0/sql/statements \
+     --json '{"statement":"DESCRIBE mip.gold.lead_population","warehouse_id":"'"$DATABRICKS_WAREHOUSE_ID"'"}' | jq '.result.data_array[] | .[0]'
+   ```
+   Diff against `_LEAD_POPULATION_COLUMNS`. Fix: rerun silver + gold to
+   pick up the latest DDL (§6), or land the missing column in
+   `sql/transformations/gold_lead_population.sql` and redeploy.
+
+3. **Warehouse circuit breaker tripped open** — a burst of 5xx from the
+   Statement Execution API flipped the warehouse breaker, and every KPI
+   call is now short-circuiting to `DependencyDownError`.
+
+   Confirm:
+   ```bash
+   curl -s "$MIP_APP_URL/api/health" | jq '{deps: .dependencies, breakers: .circuit_breakers}'
+   ```
+   If `circuit_breakers.warehouse` is `open` or `half_open`, or
+   `dependencies.warehouse == "down"`, that's your cause. Fix: follow
+   §1.1 to re-warm the warehouse; the breaker re-probes after the 30 s
+   cool-down and closes on one successful probe.
+
+### R4-07 Approvals aren't appearing in the audit ledger
+
+**Symptom:** the analyst clicks "Approve" on a lead, the UI shows the
+success toast, but `/audit` (and the Audit dashboard) don't surface the
+row.
+
+**Likely causes, in order:**
+
+1. **Lakebase credentials missing or stopped** — the write raised, the
+   route caught and 500'd, but the frontend optimistic-success swallowed
+   the toast signal.
+
+   Confirm:
+   ```bash
+   curl -s "$MIP_APP_URL/api/health" \
+     | jq '{lakebase_dep: .dependencies.lakebase, lakebase_breaker: .circuit_breakers.lakebase}'
+   ```
+   `lakebase == "down"` is the smoking gun. Fix: §1.2 (re-auth /
+   bounce the instance).
+
+2. **RBAC denied the approval call** — the analyst isn't in the admin
+   group, or the Databricks Apps edge isn't forwarding
+   `X-Forwarded-Groups`, so `POST /api/outreach/approve` returns 403.
+
+   Confirm in the browser devtools Network panel: the approve POST
+   should be 200. If it's 403 with body `{"detail":"forbidden"}`, RBAC
+   is rejecting. Replay from a trusted host:
+   ```bash
+   curl -s -X POST "$MIP_APP_URL/api/outreach/approve" \
+     -H "X-Forwarded-Groups: mip-admin" \
+     -H "X-Forwarded-Email: you@entrada.ai" \
+     -H "Content-Type: application/json" \
+     -d '{"borrower_id":"B-48291","offer_code":"RATE_TERM_REFI"}' | jq
+   ```
+   Fix: see §11 for the header contract; for production the edge should
+   be forwarding both headers automatically — if it isn't, route to
+   governance-security-reviewer.
+
+3. **Write succeeded, read filtered it out** — the audit list query
+   scopes by `actor_email`, and the email the write recorded disagrees
+   with the email the read request carries (commonly:
+   `X-Forwarded-Email` went through on the write but the read fell back
+   to `settings.default_actor`).
+
+   Confirm the row is actually in Lakebase (bypass the read filter):
+   ```bash
+   psql "host=$LAKEBASE_HOST user=$LAKEBASE_USER dbname=$LAKEBASE_DATABASE sslmode=require" \
+     -c "SELECT actor_email, action, borrower_id, created_at FROM mip_app.audit_events ORDER BY created_at DESC LIMIT 5"
+   ```
+   Then check the identity-fallback counter:
+   ```bash
+   curl -s "$MIP_APP_URL/api/health" | jq .fallback_identity_fallbacks_total
+   ```
+   A non-zero value means Databricks Apps dropped the header on one of
+   the two paths. Fix: see §11's identity-fallback note — governance
+   regression, route accordingly.
+
+### R4-08 Map won't drill from state to county
+
+**Symptom:** the user clicks a state on the footprint map and the
+county layer hangs on "Loading counties…" or shows no data.
+
+**Likely causes, in order:**
+
+1. **`/api/geo/county-rollups` is 503** — warehouse down, warehouse
+   breaker open, or `mip.gold.county_rollup` empty.
+
+   Confirm:
+   ```bash
+   curl -s -o /dev/null -w '%{http_code}\n' \
+     "$MIP_APP_URL/api/geo/county-rollups?state=IL"
+   curl -s "$MIP_APP_URL/api/health" \
+     | jq '{warehouse_dep: .dependencies.warehouse, warehouse_breaker: .circuit_breakers.warehouse}'
+   databricks api post /api/2.0/sql/statements \
+     --json '{"statement":"SELECT state_code, COUNT(*) AS n FROM mip.gold.county_rollup GROUP BY state_code","warehouse_id":"'"$DATABRICKS_WAREHOUSE_ID"'"}' | jq
+   ```
+   Empty per-state counts ⇒ gold table was never built. Fix:
+   `databricks bundle run mip_refresh_scores -t dev` (the rollup is
+   part of the chain in §4 step 7). Warehouse down ⇒ §1.1.
+
+2. **Session footprint context out of sync with gold** — the user's
+   footprint list includes a state that isn't actually in
+   `mip.gold.county_rollup`. Clicking it returns 200 with an empty
+   `counties: []` and the map shows no features.
+
+   Confirm:
+   ```bash
+   curl -s "$MIP_APP_URL/api/portfolio/preview" | jq '.footprint'
+   ```
+   Cross-check the footprint states against the SQL query above. Fix:
+   the canonical footprint is `{IL, CA, FL, TX, WA, CO}` — if the
+   session is showing something else, the portfolio builder has drifted;
+   reset the session (re-run portfolio builder) and route the drift to
+   data-modeler.
+
+3. **`/us-counties.json` TopoJSON returning HTML** — the SPA catch-all
+   route is serving `index.html` at that asset path instead of the
+   static TopoJSON. This was fixed in the Cycle-8 post-merge round and
+   shouldn't recur, but check first because it masquerades as a county
+   rollup bug.
+
+   Confirm:
+   ```bash
+   curl -s -I "$MIP_APP_URL/us-counties.json" | grep -i content-type
+   curl -s "$MIP_APP_URL/us-counties.json" | head -c 80
+   ```
+   Expect `application/json` and a leading `{`. If you see `text/html`
+   or `<!doctype`, the static-file mount in `backend/runtime.py`
+   regressed. Fix: redeploy (`./scripts/deploy.sh`) and verify the
+   frontend build's `frontend/dist/us-counties.json` is present in the
+   bundle sync.
 

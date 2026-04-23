@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { api } from '../lib/api';
+import { api, isAbortError } from '../lib/api';
 import type { LeadSummary } from '../types';
 import { PageShell } from '../components/layout/PageShell';
 import { LeadTable } from '../components/mortgage/LeadTable';
@@ -9,29 +9,39 @@ import { Chip } from '../components/Primitives';
 /**
  * Lead Queue — deep-dive table route. Full borrower list (filtered by segment
  * URL param if present). Row expand opens the inline dossier preview.
+ *
+ * Also honors `?state=XX` for the home-page map drill-through. The predicate
+ * is applied client-side on the already-loaded lead list so the same fetch
+ * powers both filtered and unfiltered views.
  */
 
 export default function LeadQueue() {
   const [searchParams] = useSearchParams();
   const segment = searchParams.get('segment') ?? undefined;
+  // 2-char state code (e.g. `?state=IL`) from the home-map deep-link.
+  // Uppercased defensively so `/lead-queue?state=il` still works.
+  const stateFilter = (searchParams.get('state') ?? '').toUpperCase() || undefined;
   const [leads, setLeads] = useState<LeadSummary[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
+  // Reload token for the Retry button. Hole-finder finding #1, 2026-04-23.
+  const [reloadToken, setReloadToken] = useState<number>(0);
 
   useEffect(() => {
-    let cancelled = false;
+    // AbortController cancels the stale /api/leads fetch when segment
+    // changes or the route unmounts. Round-2 hole-finder #10/#11,
+    // 2026-04-23.
+    const ctrl = new AbortController();
     setLoading(true);
     setLoadError(null);
     api
-      .leads(segment)
+      .leads(segment, ctrl.signal)
       .then((data) => {
-        if (!cancelled) {
-          setLeads(data);
-          setLoading(false);
-        }
+        setLeads(data);
+        setLoading(false);
       })
       .catch((err: unknown) => {
-        if (cancelled) return;
+        if (isAbortError(err)) return;
         setLeads([]);
         setLoading(false);
         setLoadError(
@@ -41,20 +51,27 @@ export default function LeadQueue() {
         );
       });
     return () => {
-      cancelled = true;
+      ctrl.abort();
     };
-  }, [segment]);
+  }, [segment, reloadToken]);
+
+  const visibleLeads = useMemo(
+    () => (stateFilter ? leads.filter((l) => l.state === stateFilter) : leads),
+    [leads, stateFilter],
+  );
 
   return (
     <PageShell
-      eyebrow="Prioritized Lead Queue"
-      title="Ranked borrower opportunities with explainable scores"
-      lede="Every row carries an opportunity score, confidence meter, and evidence chip. Click a row to expand a borrower dossier preview; open the full Borrower 360 for the Why panel and trigger timeline."
+      eyebrow="Lead Queue"
+      title="Ranked borrowers"
+      lede="Click a row to expand the borrower preview. Approve or reject inline, or open Borrower 360 for the full dossier. Keyboard: A approves, R rejects the expanded row."
       heroRight={
-        <>
-          <Chip variant="neutral" icon="db">mip.gold.lead_scores</Chip>
-          {segment && <Chip variant="neutral">segment = {segment}</Chip>}
-        </>
+        segment || stateFilter ? (
+          <>
+            {segment && <Chip variant="neutral">segment = {segment}</Chip>}
+            {stateFilter && <Chip variant="neutral">state = {stateFilter}</Chip>}
+          </>
+        ) : undefined
       }
     >
       {loadError && (
@@ -63,13 +80,25 @@ export default function LeadQueue() {
           style={{
             marginBottom: 'var(--gap-grid)',
             padding: '10px 12px',
-            border: '1px solid var(--signal-error, #EF4444)',
+            border: '1px solid var(--signal-danger)',
             borderRadius: 'var(--r-md)',
-            color: 'var(--signal-error, #EF4444)',
+            color: 'var(--signal-danger)',
             fontSize: 12,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 12,
           }}
         >
-          {loadError}
+          <span>{loadError}</span>
+          <button
+            type="button"
+            className="btn btn--ghost btn--sm"
+            onClick={() => setReloadToken((n) => n + 1)}
+            aria-label="Retry loading leads"
+          >
+            Retry
+          </button>
         </div>
       )}
       {loading && !loadError && (
@@ -77,12 +106,12 @@ export default function LeadQueue() {
           Loading leads…
         </div>
       )}
-      {!loading && !loadError && leads.length === 0 && (
+      {!loading && !loadError && visibleLeads.length === 0 && (
         <div className="muted body" style={{ marginBottom: 'var(--gap-grid)' }}>
           No leads match this filter.
         </div>
       )}
-      <LeadTable leads={leads} />
+      <LeadTable leads={visibleLeads} />
     </PageShell>
   );
 }

@@ -26,8 +26,11 @@ Public surface:
 """
 from __future__ import annotations
 
+import atexit
+import contextlib
 import logging
 import random
+import threading
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -273,6 +276,22 @@ class CircuitBreaker:
             self._opened_at = None
             self._probes_in_flight = 0
 
+    def force_open_for_placeholder_config(self) -> None:
+        """Jam the breaker OPEN because the dependency was configured with a
+        placeholder value that will guaranteed-fail. Used at boot for the
+        Genie client when GENIE_SPACE_ID is still a bundle-default placeholder
+        (``00000000PLACEHOLDER``). Holds the state until reset/cooldown is
+        consumed; the cooldown will re-probe and the placeholder check will
+        trip the next boot.
+
+        Round-3 hole-finder #18, 2026-04-23.
+        """
+        with self._lock:
+            self._state = self.OPEN
+            self._failure_count = self._failure_threshold
+            self._opened_at = self._now()
+            self._probes_in_flight = 0
+
 
 # ---------------------------------------------------------------------------
 # Retry with exponential backoff + decorrelated jitter.
@@ -391,6 +410,16 @@ class TTLCache:
 _SWR_EXECUTOR: ThreadPoolExecutor | None = None
 _SWR_EXECUTOR_LOCK = Lock()
 
+# Per-probe ceiling: the SWR background worker wraps each probe in a
+# ``Thread.join(timeout=_SWR_PROBE_TIMEOUT_S)``. Matches
+# ``backend/api/health.py::_PROBE_TIMEOUT_S`` so the async refresh path has
+# the same latency ceiling as the sync-miss path. A probe that exceeds this
+# is a TCP black hole: we clear the in-flight flag so the slot frees up,
+# log ``event=swr_probe_timeout``, and let the orphaned daemon thread die
+# on process exit (Python can't kill threads, but daemon=True + the atexit
+# ``cancel_futures=True`` shutdown below means the interpreter won't block).
+_SWR_PROBE_TIMEOUT_S = 1.0
+
 
 def _get_swr_executor() -> ThreadPoolExecutor:
     global _SWR_EXECUTOR
@@ -400,6 +429,32 @@ def _get_swr_executor() -> ThreadPoolExecutor:
                 max_workers=3, thread_name_prefix="mip-swr"
             )
         return _SWR_EXECUTOR
+
+
+def _shutdown_swr_executor() -> None:
+    """atexit hook -- drop the SWR executor without waiting.
+
+    ``wait=False`` means we don't block interpreter teardown on a hung
+    refresh (a warehouse probe stuck on a blocking socket read cannot be
+    cancelled from Python). ``cancel_futures=True`` drops queued but
+    not-yet-started work so pending refreshes don't fire during teardown.
+
+    Registered at module-import time so uvicorn reloads / worker
+    restarts don't leak the pool. Safe to call multiple times; the
+    second call is a no-op because ``_SWR_EXECUTOR`` is set back to
+    None after shutdown.
+    """
+    global _SWR_EXECUTOR
+    with _SWR_EXECUTOR_LOCK:
+        pool = _SWR_EXECUTOR
+        _SWR_EXECUTOR = None
+    if pool is None:
+        return
+    with contextlib.suppress(Exception):
+        pool.shutdown(wait=False, cancel_futures=True)
+
+
+atexit.register(_shutdown_swr_executor)
 
 
 class StaleWhileRevalidateCache:
@@ -491,19 +546,63 @@ class StaleWhileRevalidateCache:
         return fresh
 
     def _submit_refresh(self, key: str, probe: Callable[[], Any]) -> None:
-        """Enqueue a background refresh; the worker clears the flag."""
+        """Enqueue a background refresh; the worker clears the flag.
+
+        The worker wraps the actual probe call in a daemon thread with a
+        ``join(timeout=_SWR_PROBE_TIMEOUT_S)``. Rationale: a probe that
+        hangs on a blocking socket read (TCP black hole to the warehouse,
+        frozen Lakebase pooler) would otherwise occupy its executor slot
+        for the full underlying client timeout -- often tens of seconds.
+        With only three SWR slots, a 30 s hang across the three probes
+        exhausts the pool and every subsequent health request falls to
+        the synchronous miss path, defeating the whole cache.
+
+        On timeout we emit ``event=swr_probe_timeout``, clear the
+        in-flight flag so the *next* caller is eligible to schedule a
+        fresh refresh, and let the daemon thread die on process exit.
+        """
 
         def _worker() -> None:
             start = time.monotonic()
-            outcome = "ok"
-            try:
-                fresh = probe()
-            except BaseException:  # noqa: BLE001 -- we only log here
-                outcome = "error"
+            result: dict[str, Any] = {"value": None, "err": None, "done": False}
+
+            def _probe_runner() -> None:
+                try:
+                    result["value"] = probe()
+                except BaseException as exc:  # noqa: BLE001 -- logged by caller
+                    result["err"] = exc
+                finally:
+                    result["done"] = True
+
+            probe_thread = threading.Thread(
+                target=_probe_runner,
+                name=f"mip-swr-probe-{key}",
+                daemon=True,
+            )
+            probe_thread.start()
+            probe_thread.join(timeout=_SWR_PROBE_TIMEOUT_S)
+            duration_ms = (time.monotonic() - start) * 1000.0
+
+            if not result["done"]:
+                # Probe exceeded the per-probe ceiling. Free the slot;
+                # the orphaned daemon thread will be reaped at exit.
+                emit(
+                    log,
+                    "swr_probe_timeout",
+                    level=logging.WARNING,
+                    dependency=key,
+                    hit_soft_ttl=True,
+                    duration_ms=round(duration_ms, 2),
+                    timeout_s=_SWR_PROBE_TIMEOUT_S,
+                    outcome="timeout",
+                )
+                self._clear_refresh_flag(key)
+                return
+
+            if result["err"] is not None:
                 # On error, keep the last-good value but reset the flag
                 # so the next caller can retry. We do NOT schedule
                 # another refresh here -- next caller decides.
-                duration_ms = (time.monotonic() - start) * 1000.0
                 emit(
                     log,
                     "health_probe_background_refresh",
@@ -511,19 +610,20 @@ class StaleWhileRevalidateCache:
                     dependency=key,
                     hit_soft_ttl=True,
                     duration_ms=round(duration_ms, 2),
-                    outcome=outcome,
+                    outcome="error",
+                    exc_type=type(result["err"]).__name__,
                 )
                 self._clear_refresh_flag(key)
                 return
-            duration_ms = (time.monotonic() - start) * 1000.0
-            self._store(key, fresh)
+
+            self._store(key, result["value"])
             emit(
                 log,
                 "health_probe_background_refresh",
                 dependency=key,
                 hit_soft_ttl=True,
                 duration_ms=round(duration_ms, 2),
-                outcome=outcome,
+                outcome="ok",
             )
 
         try:

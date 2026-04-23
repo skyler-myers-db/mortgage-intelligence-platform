@@ -501,3 +501,108 @@ def test_swr_cache_rejects_bad_ttls() -> None:
         StaleWhileRevalidateCache(soft_ttl_s=5.0, hard_ttl_s=5.0)
     with pytest.raises(ValueError, match="hard_ttl_s"):
         StaleWhileRevalidateCache(soft_ttl_s=5.0, hard_ttl_s=1.0)
+
+
+# ---------------------------------------------------------------------------
+# R5-06: SWR probe-timeout + atexit-shutdown hardening
+# ---------------------------------------------------------------------------
+
+
+def test_swr_background_probe_timeout_clears_in_flight_flag() -> None:
+    """R5-06: a probe that hangs past ``_SWR_PROBE_TIMEOUT_S`` must NOT
+    wedge the refresh slot forever.
+
+    Regression: pre-fix, a hung probe held the in-flight flag for the
+    full underlying client timeout (tens of seconds). With only three
+    SWR slots, a TCP-black-hole warehouse could exhaust the pool and
+    every subsequent health request fell to the sync-miss path,
+    defeating the cache.
+
+    Assertion: after the timeout the worker clears the flag so a
+    subsequent stale-but-fresh call is eligible to schedule a fresh
+    refresh. The orphaned probe thread is daemonic and does not block
+    test teardown.
+    """
+    from backend.services import resilience as res
+
+    clock = _FakeClock()
+    cache = StaleWhileRevalidateCache(
+        soft_ttl_s=2.0, hard_ttl_s=10.0, executor=_InlineExecutor(), now=clock
+    )
+    # Seed with a fast probe so the cache has a cached value; the
+    # slow probe below only runs on the stale-window refresh path.
+    assert cache.get_or_refresh("warehouse", lambda: "seed") == "seed"
+
+    # Shrink the probe timeout so the test doesn't wait a full second.
+    # We only touch the module-level constant inside this test; the
+    # try/finally restores it.
+    original_timeout = res._SWR_PROBE_TIMEOUT_S
+    res._SWR_PROBE_TIMEOUT_S = 0.05
+
+    probe_started = Event()
+    release = Event()
+    second_probe_calls = {"n": 0}
+
+    def hang_probe() -> str:
+        probe_started.set()
+        # Block past the per-probe timeout so the SWR worker gives up.
+        release.wait(timeout=1.0)
+        return "should-be-ignored"
+
+    def fast_probe() -> str:
+        second_probe_calls["n"] += 1
+        return "fresh"
+
+    try:
+        clock.advance(3.0)
+        # _InlineExecutor runs the worker inline; the worker in turn
+        # spawns a daemon probe thread and joins with timeout. After
+        # the timeout the worker returns (cached seed is still served).
+        assert cache.get_or_refresh("warehouse", hang_probe) == "seed"
+        assert probe_started.is_set(), "worker should have launched the probe"
+
+        # The in-flight flag must be cleared: the next stale-window
+        # caller has to be able to schedule a fresh refresh and it
+        # must actually run (not be skipped because refreshing==True).
+        clock.advance(0.1)  # still within the stale-but-fresh window
+        cache.get_or_refresh("warehouse", fast_probe)
+        assert second_probe_calls["n"] == 1, (
+            "in-flight flag was not cleared -- next stale caller did "
+            "not schedule a refresh"
+        )
+    finally:
+        release.set()
+        res._SWR_PROBE_TIMEOUT_S = original_timeout
+
+
+def test_swr_executor_shutdown_registered_at_import() -> None:
+    """R5-06: the module-level SWR executor must be handed to ``atexit``
+    at import time so uvicorn reload / worker restart does not leak the
+    pool (threads blocked on socket reads would otherwise keep the
+    interpreter from exiting cleanly).
+
+    We can't observe ``atexit._exithandlers`` portably across CPython
+    versions; instead, we verify that the module exposes the shutdown
+    function and that calling it twice is idempotent (the second call
+    is a no-op because the executor slot is cleared).
+    """
+    from backend.services import resilience as res
+
+    # Touch the executor once so it's actually instantiated.
+    pool = res._get_swr_executor()
+    assert pool is not None
+
+    # Shutdown should tear it down AND null the slot.
+    res._shutdown_swr_executor()
+    # Second shutdown must be a no-op (pool slot is None). If it raised
+    # the atexit hook would crash the interpreter teardown.
+    res._shutdown_swr_executor()
+
+    # After shutdown the next call reconstructs a fresh pool so the
+    # test process doesn't leave other resilience tests without an
+    # executor. This also validates that the slot reset is symmetric.
+    fresh = res._get_swr_executor()
+    assert fresh is not None
+    # Clean up so the atexit hook at real-process shutdown doesn't see
+    # two pools.
+    res._shutdown_swr_executor()

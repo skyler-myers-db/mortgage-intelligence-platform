@@ -1,8 +1,7 @@
 """Minimal, stdlib-only Databricks SQL warehouse client.
 
-Built for Module 0 Slice 4 -- the moment the app flips off in-process
-mock repositories and onto live ``mip.gold.*`` queries. Uses the
-Statement Execution API (the same pattern already proven in
+The production path for every ``mip.gold.*`` read in Module 0. Uses the
+Statement Execution API (the same pattern proven in
 ``tests/integration/test_sql_python_parity.py``) so we avoid pulling
 another wheel dependency into the ``app.yaml`` serverless runtime.
 

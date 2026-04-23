@@ -206,6 +206,59 @@ def test_middleware_echoes_client_correlation_id(
 
 
 # ---------------------------------------------------------------------------
+# R5-17 -- logged `path` field is templated, not verbatim. Borrower-level
+# routes carry an ID in the path; the raw value must never land in logs.
+# ---------------------------------------------------------------------------
+
+
+def test_http_request_log_uses_templated_route_path() -> None:
+    """R5-17: log lines must carry ``/api/borrowers/{borrower_id}``,
+    not ``/api/borrowers/B-00042``.
+
+    Why: today ``B-00042`` is a synthetic ID, but the roadmap swaps it
+    for real Cotality CLIPs. A verbatim-path log line would become a
+    CLIP trail keyed to the correlation id.
+    """
+    from backend.main import CorrelationIdMiddleware
+
+    log = logging.getLogger("mip.http")
+    buf = _capture(log)
+    try:
+        res = client.get("/api/borrowers/B-00042")
+        # The route exists (conftest wires an in-process borrower repo),
+        # so we expect a 2xx/4xx, not a 500 from the middleware itself.
+        assert res.status_code in (200, 404)
+        records = [json.loads(ln) for ln in buf.getvalue().splitlines() if ln]
+        http_lines = [r for r in records if r.get("event") == "http_request"]
+        assert http_lines, "no http_request event was emitted"
+        line = http_lines[-1]
+        # The canonical template from the router.
+        assert line["path"] == "/api/borrowers/{borrower_id}"
+        # And, defensively, the raw ID NEVER appears on ANY log record.
+        for rec in records:
+            flat = json.dumps(rec)
+            assert "B-00042" not in flat, (
+                f"borrower id leaked into log record: {rec}"
+            )
+    finally:
+        log.handlers.clear()
+        log.propagate = True
+    # Direct unit test of the normaliser confirms the fallback regex
+    # works when no route matched (static / 404 / SPA fallback paths).
+    for raw, expected in (
+        ("/api/borrowers/B-00042", "/api/borrowers/{id}"),
+        ("/api/borrowers/B-00042/evidence", "/api/borrowers/{id}/evidence"),
+        ("/api/leads/12345678/evidence", "/api/leads/{id}/evidence"),
+        ("/api/leads/CL-abc123", "/api/leads/{id}"),
+        # Non-id segments are untouched.
+        ("/api/health", "/api/health"),
+        ("/api/genie/message", "/api/genie/message"),
+    ):
+        got = CorrelationIdMiddleware._ID_SEGMENT_PATTERN.sub("/{id}", raw)
+        assert got == expected, f"{raw!r} normalised to {got!r}, want {expected!r}"
+
+
+# ---------------------------------------------------------------------------
 # Health endpoint observability fields
 # ---------------------------------------------------------------------------
 

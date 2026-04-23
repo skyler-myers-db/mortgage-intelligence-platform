@@ -1,10 +1,10 @@
 """Databricks Apps entrypoint: ``python -m backend.runtime``.
 
-Slice-4 invariant: the process refuses to start when live warehouse
+Startup invariant: the process refuses to start when live warehouse
 credentials are absent. A clear, operator-targeted message explains
-which env vars are missing and how to provide them. There is no
-MIP_MOCK_MODE fallback; the app runs on real Unity Catalog data or
-it fails visibly before serving a single request.
+which env vars are missing and how to provide them. The app runs on
+real Unity Catalog data in every environment and fails visibly before
+serving a single request when a required credential is missing.
 """
 from __future__ import annotations
 

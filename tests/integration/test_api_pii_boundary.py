@@ -6,8 +6,16 @@ paths + Pydantic serialization, not the Databricks backends. The
 assertion is structural: for each route that returns a borrower /
 lead / evidence payload, the JSON response keys must be a subset of
 the declared Pydantic schema fields. No raw gold columns
-(``owner_name_hash``, ``trigger_timeline_json``, ``clip``,
+(``owner_name_hash``, ``trigger_timeline_json``,
 ``owner_1_full_name``, etc.) may appear anywhere in the payload.
+
+Note on ``clip``: per CLAUDE.md domain rules, CLIP is the Cotality
+mastered property identifier — a non-PII join key. The product
+intentionally surfaces it on lead rows + segment previews so operators
+can trace each lead back to the underlying Cotality record. It is NOT
+included in the forbidden set below. Personally-identifying fields
+(owner names, street addresses, buyer names, owner-name hashes) remain
+strictly denied.
 
 This complements the unit tests in ``tests/unit/test_pii_redaction.py``
 by catching any router that forgets to go through the repository
@@ -45,7 +53,6 @@ _FORBIDDEN_KEYS: frozenset[str] = frozenset(
         "trigger_timeline_json",     # raw JSON string; UI gets parsed struct
         "buyer_1_full_name",
         "buyer_full_name_raw",
-        "clip",                      # raw CLIP; UI sees clip_id only
     }
 )
 

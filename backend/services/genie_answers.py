@@ -33,6 +33,8 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from backend.services.databricks_sql_helpers import qualify
+
 # ---------------------------------------------------------------------------
 # Canonical-narrative roster (synthetic, pinned). Slice-4 inlined from what
 # was previously ``mock_data.BORROWERS``/``SEGMENTS`` projections. The
@@ -154,9 +156,9 @@ def _answers() -> dict[str, GenieMessageResponse]:
             ),
             source="lead_generation_metric_view",
             trusted_assets=[
-                "mip.gold.lead_population",
-                "mip.gold.lead_segment_membership",
-                "mip.gold.lead_scores",
+                qualify("gold", "lead_population"),
+                qualify("gold", "segment_population"),
+                qualify("gold", "lead_scores"),
             ],
             metric_value="12,840",
             follow_up_questions=[
@@ -173,8 +175,8 @@ def _answers() -> dict[str, GenieMessageResponse]:
             ),
             source="borrower_opportunity_metric_view",
             trusted_assets=[
-                "mip.gold.borrower_360",
-                "mip.gold.evidence_events",
+                qualify("gold", "borrower_360"),
+                qualify("gold", "evidence_events"),
             ],
             metric_value="4,108",
             follow_up_questions=[
@@ -191,8 +193,8 @@ def _answers() -> dict[str, GenieMessageResponse]:
             ),
             source="segment_performance_metric_view",
             trusted_assets=[
-                "mip.gold.lead_segment_membership",
-                "mip.gold.recommended_offers",
+                qualify("gold", "segment_population"),
+                qualify("gold", "borrower_360"),
             ],
             metric_value="3,471",
             follow_up_questions=[
@@ -212,8 +214,8 @@ def _answers() -> dict[str, GenieMessageResponse]:
             ),
             source="lead_generation_metric_view",
             trusted_assets=[
-                "mip.gold.lead_population",
-                "mip.semantics.lead_generation_metric_view",
+                qualify("gold", "lead_population"),
+                qualify("semantics", "lead_generation_metric_view"),
             ],
             table_rows=itm_zip_rows,
             follow_up_questions=[
@@ -231,8 +233,8 @@ def _answers() -> dict[str, GenieMessageResponse]:
             ),
             source="lead_generation_metric_view",
             trusted_assets=[
-                "mip.gold.lead_population",
-                "mip.gold.lead_scores",
+                qualify("gold", "lead_population"),
+                qualify("gold", "lead_scores"),
             ],
             metric_value="1,620",
             follow_up_questions=[
@@ -252,9 +254,9 @@ def _answers() -> dict[str, GenieMessageResponse]:
             ),
             source="borrower_opportunity_metric_view",
             trusted_assets=[
-                "mip.gold.borrower_360",
-                "mip.gold.evidence_events",
-                "mip.semantics.borrower_opportunity_metric_view",
+                qualify("gold", "borrower_360"),
+                qualify("gold", "evidence_events"),
+                qualify("semantics", "borrower_opportunity_metric_view"),
             ],
             table_rows=[
                 {"state": "CA", "permit_equity_borrowers": 1185, "avg_equity": "$312K"},
@@ -282,8 +284,8 @@ def _answers() -> dict[str, GenieMessageResponse]:
             ),
             source="segment_performance_metric_view",
             trusted_assets=[
-                "mip.gold.lead_segment_membership",
-                "mip.gold.recommended_offers",
+                qualify("gold", "segment_population"),
+                qualify("gold", "borrower_360"),
             ],
             metric_value="2,614",
             table_rows=[
@@ -307,9 +309,9 @@ def _answers() -> dict[str, GenieMessageResponse]:
             ),
             source="recommended_offers",
             trusted_assets=[
-                "mip.gold.recommended_offers",
-                "mip.gold.lead_scores",
-                "mip.gold.fn_in_the_money",
+                qualify("gold", "borrower_360"),
+                qualify("gold", "lead_scores"),
+                qualify("semantics", "borrower_opportunity_metric_view"),
             ],
             metric_value="1,842",
             follow_up_questions=[
@@ -329,8 +331,8 @@ def _answers() -> dict[str, GenieMessageResponse]:
             ),
             source="segment_performance_metric_view",
             trusted_assets=[
-                "mip.semantics.segment_performance_metric_view",
-                "mip.gold.recommended_offers",
+                qualify("semantics", "segment_performance_metric_view"),
+                qualify("gold", "borrower_360"),
             ],
             table_rows=[
                 _segment_row("retention") | {"est_conv": "14.8%"},
@@ -354,8 +356,8 @@ def _answers() -> dict[str, GenieMessageResponse]:
             ),
             source="segment_performance_metric_view",
             trusted_assets=[
-                "mip.semantics.segment_performance_metric_view",
-                "mip.gold.lead_segment_membership",
+                qualify("semantics", "segment_performance_metric_view"),
+                qualify("gold", "segment_population"),
             ],
             table_rows=[
                 _segment_row("listed"),
@@ -381,9 +383,9 @@ def _answers() -> dict[str, GenieMessageResponse]:
             ),
             source="lead_scores",
             trusted_assets=[
-                "mip.gold.lead_scores",
-                "mip.gold.borrower_360",
-                "mip.gold.evidence_events",
+                qualify("gold", "lead_scores"),
+                qualify("gold", "borrower_360"),
+                qualify("gold", "evidence_events"),
             ],
             table_rows=top10,
             follow_up_questions=[
@@ -405,9 +407,9 @@ def _answers() -> dict[str, GenieMessageResponse]:
             ),
             source="borrower_360",
             trusted_assets=[
-                "mip.gold.borrower_360",
-                "mip.gold.lead_scores",
-                "mip.gold.fn_rate_spread",
+                qualify("gold", "borrower_360"),
+                qualify("gold", "lead_scores"),
+                qualify("semantics", "borrower_opportunity_metric_view"),
             ],
             table_rows=austin,
             follow_up_questions=[
@@ -427,8 +429,8 @@ def _answers() -> dict[str, GenieMessageResponse]:
             ),
             source="lead_generation_metric_view",
             trusted_assets=[
-                "mip.semantics.lead_generation_metric_view",
-                "mip.gold.lead_population",
+                qualify("semantics", "lead_generation_metric_view"),
+                qualify("gold", "lead_population"),
             ],
             metric_value="$2.18",
             follow_up_questions=[
@@ -446,8 +448,8 @@ def _answers() -> dict[str, GenieMessageResponse]:
             ),
             source="segment_performance_metric_view",
             trusted_assets=[
-                "mip.gold.evidence_events",
-                "mip.semantics.segment_performance_metric_view",
+                qualify("gold", "evidence_events"),
+                qualify("semantics", "segment_performance_metric_view"),
             ],
             metric_value="+14%",
             follow_up_questions=[
@@ -467,8 +469,8 @@ def _answers() -> dict[str, GenieMessageResponse]:
             ),
             source="borrower_opportunity_metric_view",
             trusted_assets=[
-                "mip.gold.borrower_360",
-                "mip.semantics.borrower_opportunity_metric_view",
+                qualify("gold", "borrower_360"),
+                qualify("semantics", "borrower_opportunity_metric_view"),
             ],
             metric_value="~1,640",
             follow_up_questions=[
@@ -658,7 +660,7 @@ def _warm_fallback(question: str) -> GenieMessageResponse:
             "the right, or ask about a specific ZIP, state, or offer branch."
         ),
         source="deterministic_fallback",
-        trusted_assets=["mip.gold.lead_population"],
+        trusted_assets=[qualify("gold", "lead_population")],
         follow_up_questions=[
             "Which ZIPs have the most in-the-money refi candidates?",
             "Show me the top 10 highest-score borrowers.",

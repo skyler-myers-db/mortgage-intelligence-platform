@@ -1,7 +1,6 @@
 """App settings for the Mortgage Intelligence Platform backend.
 
-CLAUDE.md / Slice 4 invariant: there is no ``MIP_MOCK_MODE`` runtime
-toggle. The running app always reads live Unity Catalog data through
+Invariant: the running app always reads live Unity Catalog data through
 the Databricks SQL warehouse. Missing warehouse credentials are a
 fail-fast startup error -- they do NOT silently fall back to fixtures.
 
@@ -24,8 +23,9 @@ _MISSING_CREDS_MSG = (
     "Mortgage Intelligence Platform refuses to start without live "
     "Databricks warehouse credentials. Set DATABRICKS_HOST, "
     "DATABRICKS_TOKEN, and DATABRICKS_WAREHOUSE_ID in .env.local "
-    "(see .env.example). There is no mock-mode fallback: the app runs "
-    "on real Unity Catalog data or it fails visibly."
+    "(see .env.example). The app runs on real Unity Catalog data in "
+    "every environment; it fails visibly when a credential is missing "
+    "rather than substituting synthesized data."
 )
 
 
@@ -106,10 +106,48 @@ class Settings(BaseSettings):
     lakebase_password: SecretStr | None = Field(default=None, repr=False)
     lakebase_sslmode: str = "require"
 
-    # Default actor email used when ``X-Forwarded-Email`` is absent
-    # (local dev / test). The audit writer logs a warning every time
-    # the fallback kicks in so the operator sees it in the logs.
-    default_actor: str = "skyler@entrada.ai"
+    # Default actor identifier used when ``X-Forwarded-Email`` is absent
+    # (local dev / test / broken identity header). Generic, non-customer-
+    # specific so a non-Entrada workspace doesn't surface an Entrada email
+    # address in its own audit rows. The audit writer logs a warning every
+    # time the fallback kicks in so operators see it in structured logs.
+    # Overrideable via the MIP_DEFAULT_ACTOR env var.
+    default_actor: str = "unknown-actor@local"
+
+    # Admin RBAC gate for /api/admin/* endpoints. Two recognition paths
+    # in ``backend/services/rbac.py::require_admin``:
+    #
+    # 1. Group membership — ``X-Forwarded-Groups`` includes this name or
+    #    the hard-coded fallback ``"admins"``. Overrideable via
+    #    ``MIP_ADMIN_GROUP_NAME``.
+    # 2. Email allowlist — ``X-Forwarded-Email`` is in the comma-
+    #    separated list below. Primary path for day-0 customer deploys
+    #    where workspace groups aren't pre-provisioned. Overrideable
+    #    via ``MIP_ADMIN_EMAILS``.
+    admin_group_name: str = "mip-admin"
+    admin_emails: str = "skyler@entrada.ai"
+
+    # R5-09 trust boundary. Databricks Apps is the authoritative
+    # identity edge: it strips inbound ``X-Forwarded-*`` headers and
+    # injects its own based on the authenticated workspace user. That's
+    # the posture the default (True) assumes -- matching production.
+    #
+    # Flip to False for unusual deploys where an intermediate proxy
+    # does NOT strip client-supplied ``X-Forwarded-Email`` /
+    # ``X-Forwarded-Groups`` headers. With trust disabled:
+    #
+    # * ``backend.services.rbac.require_admin`` ignores the forwarded
+    #   group list and denies unless the email allowlist admits the
+    #   caller (fail-closed).
+    # * ``backend.services.audit_store.resolve_actor`` ignores the
+    #   forwarded email/user and returns a marker string
+    #   (``"unknown-actor@untrusted-edge"``) so every audit row is
+    #   attributable to "we don't know who did this", not to a caller-
+    #   spoofed identity.
+    #
+    # See ``docs/security/GRANTS.md`` §Trust boundary for the
+    # deployment shapes where flipping this matters.
+    trust_forwarded_headers: bool = True
 
     # Slice-6 TTL cache: short-window memoization on aggregate KPIs that
     # tolerate staleness (segments count, portfolio preview). Fresh-only

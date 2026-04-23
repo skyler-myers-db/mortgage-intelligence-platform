@@ -51,6 +51,19 @@ WITH ranked AS (
     b.why_now,
     b.evidence_ids,
     b.approval_status,
+    -- Secondary-filter fields (2026-04-23). Carried through from
+    -- gold.borrower_360 so /segment-intelligence runs real client-side
+    -- predicates against occupancy, owner-link (related properties),
+    -- lien state, and purchase intent. Permit + listing columns remain
+    -- BLOCKED FALSE until the Cotality Delta shares land; the UI surfaces
+    -- a "data-dependency pending" note on that filter.
+    b.is_owner_occupied,
+    b.is_investor,
+    b.related_property_count,
+    b.current_lien_balance,
+    b.second_pos_amount,
+    b.has_permit,
+    b.listed_for_sale,
     DENSE_RANK() OVER (ORDER BY b.opportunity_score DESC, b.clip) AS rank_overall,
     DENSE_RANK() OVER (PARTITION BY b.state
                        ORDER BY b.opportunity_score DESC, b.clip) AS rank_within_state,
@@ -75,8 +88,21 @@ SELECT
   why_now,
   evidence_ids,
   approval_status,
+  is_owner_occupied,
+  is_investor,
+  related_property_count,
+  current_lien_balance,
+  second_pos_amount,
+  has_permit,
+  listed_for_sale,
   rank_overall,
   rank_within_state,
   CONCAT(DATE_FORMAT(refreshed_at, 'yyyyMMdd'), '-v1') AS population_version,
   refreshed_at
+-- (clip is already in the SELECT above as column 1; the LeadSummary
+-- repository reads `clip` from this table directly -- no second
+-- projection needed. 2026-04-22: the FE-boundary LeadSummary now
+-- carries a `clip` field that previously the frontend derived as
+-- `clip_${borrower_id.toLowerCase()...}`. Surfaces the real Cotality
+-- CLIP so the segment-row preview and Borrower 360 agree.)
 FROM ranked;

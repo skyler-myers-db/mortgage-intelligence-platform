@@ -20,6 +20,7 @@ from backend.api import (
     borrowers,
     config,
     genie,
+    geo,
     health,
     leads,
     offers,
@@ -141,6 +142,20 @@ class CorrelationIdMiddleware(BaseHTTPMiddleware):
     every downstream ``emit(...)`` call carries the same ID, and echoes
     it back on the response. Emits one ``http_request`` log line per
     request with method / path / status / duration_ms.
+
+    R5-17: the ``path`` field logged on every request is the
+    **templated** route (``/api/borrowers/{id}``), not the concrete URL
+    path (``/api/borrowers/B-00042``). Borrower-level routes put IDs in
+    the path segment -- synthetic today, but the roadmap replaces them
+    with real Cotality CLIPs, at which point a verbatim-path log line
+    becomes a CLIP trail keyed to the correlation id. We match the
+    template off the resolved Starlette ``Route`` (populated by
+    FastAPI's router in ``request.scope["route"]`` after ``call_next``
+    returns) and fall back to a simple segment-stripping regex for any
+    paths that slipped through routing (static files, unresolved 404s,
+    SPA fallback). This mirrors ``_statement_hash`` in
+    ``backend/services/databricks_sql.py`` -- log the shape, not the
+    value.
     """
 
     HEADER = "X-Correlation-ID"
@@ -157,6 +172,14 @@ class CorrelationIdMiddleware(BaseHTTPMiddleware):
     #     that every request has exactly one id.
     _CID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 
+    # Fallback path normaliser for unrouted paths. Matches the two
+    # borrower-id shapes the product currently emits -- B-##### synthetic
+    # IDs and Cotality CLIP strings (numeric, >= 6 digits per the
+    # Cotality data contract). Conservative on purpose: we would rather
+    # under-normalise an unknown path than over-normalise a real UC
+    # object name that happens to match a loose pattern.
+    _ID_SEGMENT_PATTERN = re.compile(r"/(?:B-\d{3,}|CL-[A-Za-z0-9]+|\d{6,})(?=/|$)")
+
     def __init__(self, app: ASGIApp) -> None:
         super().__init__(app)
 
@@ -168,6 +191,25 @@ class CorrelationIdMiddleware(BaseHTTPMiddleware):
         if cls._CID_PATTERN.match(trimmed):
             return trimmed
         return None
+
+    @classmethod
+    def _templated_path(cls, request: StarletteRequest) -> str:
+        """Return the route template for logging.
+
+        Prefer the resolved Starlette ``Route`` parked on
+        ``request.scope["route"]`` by FastAPI's router -- that's the
+        literal ``@router.get("/{borrower_id}")`` string the developer
+        typed, so ID-bearing segments are already parameterised. Falls
+        back to a regex-normalised form of the concrete URL path when
+        no route was matched (pre-routing exceptions, 404s, the SPA
+        catch-all). Never returns the raw URL path verbatim for
+        ID-bearing segments.
+        """
+        route = request.scope.get("route") if request.scope else None
+        template = getattr(route, "path", None)
+        if isinstance(template, str) and template:
+            return template
+        return cls._ID_SEGMENT_PATTERN.sub("/{id}", request.url.path)
 
     async def dispatch(  # type: ignore[override]
         self, request: StarletteRequest, call_next: Any
@@ -188,7 +230,7 @@ class CorrelationIdMiddleware(BaseHTTPMiddleware):
                 logging.getLogger("mip.http"),
                 "http_request",
                 method=request.method,
-                path=request.url.path,
+                path=self._templated_path(request),
                 status=status_code,
                 duration_ms=duration_ms,
             )
@@ -205,25 +247,54 @@ app.add_middleware(CorrelationIdMiddleware)
 from fastapi import Request  # noqa: E402 -- handler below needs it
 from fastapi.responses import JSONResponse  # noqa: E402
 
+from backend.services.error_sanitizer import safe_dependency_detail  # noqa: E402
 from backend.services.resilience import DependencyDownError  # noqa: E402
 
 
 @app.exception_handler(DependencyDownError)
 async def _dependency_down_handler(_request: Request, exc: DependencyDownError) -> JSONResponse:
-    """Return 503 with ``{detail, retryable, dependency}`` body.
+    """Return 503 with ``{detail, retryable, dependency, correlation_id}`` body.
 
     The frontend keys on ``retryable: true`` to turn on the
     DegradedBanner and start exponential-backoff re-fetch. We surface
     the dependency name so the banner copy can be specific
     ("warehouse is warming up" vs "lakebase is warming up") without
     parsing the free-text detail.
+
+    Round-3 hole-finder #10: include ``correlation_id`` in the body (it's
+    also in the ``X-Correlation-ID`` header, but operators pasting errors
+    into incident channels lose the header; the body copy survives the
+    paste). Clients can cite one trace id from either source.
+
+    Round-5 R5-02: the ``detail`` field is a constant per-dependency
+    string derived from ``safe_dependency_detail``; it MUST NOT echo
+    ``str(exc)``. The underlying exception text (which for
+    ``DatabricksSqlError`` contains ``state=``, ``statement_id=``, and
+    warehouse-authored error text that routinely quotes column names and
+    predicate values) is logged at WARNING with structured fields so
+    operators retain full visibility without exposing the text on the
+    wire.
     """
+    emit(
+        log,
+        "dependency_down_handled",
+        level=logging.WARNING,
+        dependency=exc.dependency,
+        reason=exc.reason,
+        # ``last_error_str`` is the full upstream message; kept in the
+        # structured log line so ops can still pull state=/statement_id=/
+        # err_msg from Splunk/Datadog/etc. without the browser seeing it.
+        last_error_str=str(exc.last_error) if exc.last_error is not None else None,
+        last_error_type=type(exc.last_error).__name__ if exc.last_error is not None else None,
+        correlation_id=get_correlation_id(),
+    )
     return JSONResponse(
         status_code=503,
         content={
-            "detail": str(exc),
+            "detail": safe_dependency_detail(exc.dependency),
             "retryable": True,
             "dependency": exc.dependency,
+            "correlation_id": get_correlation_id(),
         },
     )
 
@@ -237,10 +308,23 @@ for router in [
     borrowers.router,
     offers.router,
     outreach.router,
+    geo.router,
     genie.router,
     audit.router,
 ]:
     app.include_router(router)
+
+
+# R5-15 (continued): a dedicated /api/* 404 handler that always runs,
+# whether frontend/dist/ is present or not. The SPA catch-all below
+# only registers when dist/ exists, and without it FastAPI's default
+# 404 fires with "Not Found" (capital N). That broke the JSON contract
+# clients parse (they expect {"detail":"not found"}). Registering this
+# route unconditionally keeps the contract stable across local dev,
+# CI, and Databricks Apps deploys.
+@app.get("/api/{full_path:path}", response_model=None)
+def _api_404(full_path: str) -> JSONResponse:  # noqa: ARG001
+    return JSONResponse(status_code=404, content={"detail": "not found"})
 
 
 # Serve the built Vite SPA. Frontend bundle lands in `frontend/dist/` after
@@ -251,13 +335,42 @@ for router in [
 _FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
 
 if _FRONTEND_DIST.is_dir() and (_FRONTEND_DIST / "index.html").is_file():
-    # Mount the hashed assets under /assets.
+    # Hashed Vite assets.
     app.mount("/assets", StaticFiles(directory=_FRONTEND_DIST / "assets"), name="assets")
+    # Brand artwork (Entrada mark SVG + future brand assets).
+    _BRAND_DIR = _FRONTEND_DIST / "brand"
+    if _BRAND_DIR.is_dir():
+        app.mount("/brand", StaticFiles(directory=_BRAND_DIR), name="brand")
 
-    # Any other non-/api path returns index.html so React Router handles the
-    # client-side route. FastAPI evaluates routes in registration order and
-    # the `/api` routers are already in, so this catch-all doesn't collide.
-    @app.get("/{full_path:path}")
-    def _spa_fallback(full_path: str) -> FileResponse:
-        _ = full_path  # router acts as SPA catch-all
-        return FileResponse(_FRONTEND_DIST / "index.html")
+    # Catch-all: first look for a real file at `dist/<full_path>`. If it
+    # exists, serve it verbatim (static assets dropped into `public/` —
+    # us-counties.json, favicon.svg, future data files — show up at the
+    # dist root and need to be reachable by URL path). Otherwise fall
+    # back to index.html so React Router owns the route client-side.
+    #
+    # `no-store` on the SPA shell so browsers don't keep a stale
+    # index.html that points at an old hashed-asset bundle after a deploy.
+    @app.get("/{full_path:path}", response_model=None)
+    def _spa_fallback(full_path: str) -> FileResponse | JSONResponse:
+        # R5-15: API paths that don't match a registered route must 404,
+        # not fall through to index.html. The prior behavior silently
+        # returned HTML for typos / trailing-slash edge cases, which
+        # suppressed monitoring signal (clients parsing JSON would see
+        # a parse error, logs would show 200 OK) and masked real
+        # routing bugs. FastAPI strips the leading slash into
+        # ``full_path``, so an inbound ``/api/xxx`` arrives here as
+        # ``api/xxx``.
+        if full_path == "api" or full_path.startswith("api/"):
+            return JSONResponse(status_code=404, content={"detail": "not found"})
+        candidate = (_FRONTEND_DIST / full_path).resolve()
+        try:
+            # Path-traversal guard: candidate must stay inside dist/.
+            candidate.relative_to(_FRONTEND_DIST.resolve())
+        except ValueError:
+            candidate = _FRONTEND_DIST / "index.html"
+        if candidate.is_file() and candidate.name != "index.html":
+            return FileResponse(candidate)
+        return FileResponse(
+            _FRONTEND_DIST / "index.html",
+            headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+        )

@@ -32,19 +32,32 @@ space. An open breaker on an unknown question returns a honest
 """
 from __future__ import annotations
 
+import hashlib
 import json
+from datetime import UTC, datetime
 from typing import Any
 
 from backend.schemas.common import EvidenceEvent
+from backend.schemas.geo import (
+    CountyRollup,
+    CountyRollupResponse,
+    StateRollup,
+    StateRollupResponse,
+    ZipRollup,
+    ZipRollupResponse,
+)
 from backend.schemas.lead import Borrower360, LeadSummary, SegmentSummary
 from backend.schemas.portfolio import (
+    KpiTrend,
     PortfolioCreateRequest,
     PortfolioCreateResponse,
+    PortfolioCriteria,
     PortfolioPreview,
     PortfolioPreviewRequest,
 )
-from backend.schemas.why import WhyPanel
+from backend.schemas.why import WhyPanel, WhyPanelSource
 from backend.services.databricks_sql import DatabricksSqlClient
+from backend.services.databricks_sql_helpers import qualify
 from backend.services.genie_answers import (
     GenieMessageResponse,
 )
@@ -65,6 +78,7 @@ from backend.services.resilience import DependencyDownError, TTLCache
 from backend.services.scoring import (
     NBO_PRODUCT_LABELS,
     in_the_money,
+    source_display_label,
 )
 
 # ---------------------------------------------------------------------------
@@ -93,9 +107,20 @@ _BORROWER_DOSSIER_COLUMNS: str = (
 )
 
 _LEAD_POPULATION_COLUMNS: str = (
+    # `clip` is projected first so the repository boundary can surface the
+    # real Cotality CLIP on LeadSummary (fix for the cross-route CLIP
+    # inconsistency blocker 2026-04-22). `redact_lead_row` passes it
+    # through under the same key.
     "clip, borrower_id, display_name, city, state, zip, segment_codes, "
     "equity_estimate, rate_spread_bps, opportunity_score, confidence, "
-    "recommended_offer, why_now, evidence_ids, approval_status"
+    "recommended_offer, why_now, evidence_ids, approval_status, "
+    # Secondary-filter fields (2026-04-23) -- carried through from
+    # gold.borrower_360 into gold.lead_population so /segment-intelligence
+    # can run real client-side predicates against occupancy, owner-link
+    # (related properties), lien state, and purchase intent. Ordering
+    # matches the gold DDL + CTAS (see sql/ddl/gold_lead_population.sql).
+    "is_owner_occupied, is_investor, related_property_count, "
+    "current_lien_balance, second_pos_amount, has_permit, listed_for_sale"
 )
 
 _EVIDENCE_COLUMNS: str = (
@@ -208,33 +233,346 @@ class DatabricksPortfolioRepository:
         self._cache = cache if cache is not None else TTLCache()
         self._cache_ttl_s = cache_ttl_s
 
-    _PREVIEW_SQL = (
+    _PREVIEW_SQL_TEMPLATE = (
         "SELECT "
-        "  COUNT(*)                                               AS marketable_population, "
-        "  SUM(CASE WHEN in_the_money THEN 1 ELSE 0 END)          AS high_intent_leads, "
-        "  CAST(ROUND(AVG(opportunity_score)) AS INT)             AS avg_score "
-        "FROM mip.gold.borrower_360"
+        "  COUNT(*)                                                              AS marketable_population, "
+        "  SUM(CASE WHEN in_the_money THEN 1 ELSE 0 END)                         AS high_intent_leads, "
+        "  SUM(CASE WHEN opportunity_score >= 75 THEN 1 ELSE 0 END)              AS top_tier_opportunities, "
+        "  SUM(CASE WHEN recommended_offer_code <> 'nurture' THEN 1 ELSE 0 END)  AS offers_recommended, "
+        "  CAST(COALESCE(ROUND(AVG(opportunity_score)), 0) AS INT)               AS avg_score "
+        f"FROM {qualify('gold', 'borrower_360')} "
+        "{where}"
+    )
+
+    # Translate display labels from the portfolio-builder UI into
+    # mip.gold.borrower_360 predicates. Every value is a short enum the
+    # frontend emits verbatim; we keep the mapping here rather than ship
+    # the strings to SQL so a typo in a dropdown can't open a SQL-injection
+    # vector.
+    #
+    # Hole-finder #20: the "all N states" option used to hardcode
+    # ["IL","CA","FL","TX","WA","CO"]. That literal was one of 5 copies
+    # of the footprint that silently broke for tenants with a different
+    # state mix. It's now computed from `mip.ref.state_footprint` via
+    # `StateFootprintResolver` (see `_state_sets()` below). MSA
+    # groupings ("Chicago MSA", "CA + FL + TX", "IL + CA + WA") remain
+    # hardcoded here — they're lender-specific marketing labels and
+    # orthogonal to the per-state list. A lender whose footprint diverges
+    # would re-label them in the UI; do not over-build until that happens.
+    _STATIC_STATE_SETS: dict[str, list[str]] = {
+        "chicago msa":     ["IL"],
+        "texas":           ["TX"],
+        "ca + fl + tx":    ["CA", "FL", "TX"],
+        "il + ca + wa":    ["IL", "CA", "WA"],
+    }
+
+    @classmethod
+    def _state_sets(cls) -> dict[str, list[str]]:
+        """Build the active _STATE_SETS dict, injecting the live footprint.
+
+        Called once per `_build_preview_predicates` invocation; the
+        resolver caches the UC result for 300s so this is cheap.
+        """
+        from backend.services.state_footprint import get_state_footprint_resolver
+
+        footprint_codes = get_state_footprint_resolver().state_codes()
+        all_key = f"all {len(footprint_codes)} states"
+        return {
+            **cls._STATIC_STATE_SETS,
+            all_key: list(footprint_codes),
+            # Keep the legacy "all 6 states" key active while the frontend
+            # catches up, so a deep-linked URL from the old UI still parses.
+            # Maps to whatever the current footprint is — a tenant with 3
+            # states who opens an old bookmark sees "all 3 states"
+            # semantics under the legacy label.
+            "all 6 states": list(footprint_codes),
+        }
+
+    # Canonical `recommended_offer_code` values emitted by fn_next_best_offer
+    # (see sql/uc_functions/fn_next_best_offer.sql). Keep in sync.
+    _PRODUCT_CODES: dict[str, list[str]] = {
+        "refi":       ["refi"],
+        "heloc":      ["heloc"],
+        "cash-out":   ["cashout"],
+        "purchase":   ["purchase"],
+        "retention":  ["retention"],
+    }
+
+    _EQUITY_THRESHOLDS: dict[str, int] = {
+        "≥ 15%": 15,
+        "≥ 25%": 25,
+        "≥ 40%": 40,
+    }
+
+    @classmethod
+    def _build_preview_predicates(
+        cls, criteria: PortfolioCriteria | None,
+    ) -> tuple[str, dict[str, Any]]:
+        """Convert validated PortfolioCriteria into a (WHERE clause, params)
+        pair. Returns `("", {})` when no predicates apply so the caller can
+        run the criteria-free SELECT."""
+        if criteria is None:
+            return "", {}
+
+        clauses: list[str] = []
+        params: dict[str, Any] = {}
+
+        # Geography — map display label to a list of state codes. The
+        # "all N states" option is computed from mip.ref.state_footprint
+        # (hole-finder #20); MSA groupings stay hardcoded for now.
+        if criteria.geography:
+            key = criteria.geography.lower()
+            states = cls._state_sets().get(key)
+            if states:
+                placeholders = ", ".join(f":geo_state_{i}" for i in range(len(states)))
+                clauses.append(f"state IN ({placeholders})")
+                for i, s in enumerate(states):
+                    params[f"geo_state_{i}"] = s
+
+        # Occupancy.
+        if criteria.occupancy == "Owner-occupied":
+            clauses.append("is_owner_occupied = TRUE")
+        elif criteria.occupancy == "Non-owner-occupied":
+            clauses.append("is_owner_occupied = FALSE")
+
+        # Lien status. We can cleanly discriminate "Free & clear"; the other
+        # values map to "has an open lien" until we land richer lien_type
+        # columns in gold (flagged in audit as STUB).
+        if criteria.lien_status == "Free & clear":
+            clauses.append("current_lien_balance = 0")
+        elif criteria.lien_status in ("Open 1st lien", "Open HELOC"):
+            clauses.append("current_lien_balance > 0")
+
+        # Lender relationship.
+        if criteria.lender_relationship == "Current customer":
+            clauses.append("is_current_customer = TRUE")
+        elif criteria.lender_relationship == "Former customer":
+            clauses.append("is_current_customer = FALSE AND is_competitor_lien = FALSE")
+        elif criteria.lender_relationship == "Competitor customer":
+            clauses.append("is_competitor_lien = TRUE")
+
+        # Product. "All products" / missing = no predicate.
+        if criteria.product and criteria.product != "All products":
+            codes = cls._PRODUCT_CODES.get(criteria.product.lower())
+            if codes:
+                placeholders = ", ".join(f":product_{i}" for i in range(len(codes)))
+                clauses.append(f"recommended_offer_code IN ({placeholders})")
+                for i, code in enumerate(codes):
+                    params[f"product_{i}"] = code
+
+        # Equity threshold. Prefer explicit float; fall back to the label.
+        equity_floor: int | None = None
+        if criteria.min_equity_pct is not None:
+            equity_floor = int(criteria.min_equity_pct)
+        elif criteria.min_equity_pct_label:
+            equity_floor = cls._EQUITY_THRESHOLDS.get(criteria.min_equity_pct_label)
+        if equity_floor is not None and equity_floor > 0:
+            clauses.append("equity_pct >= :equity_floor")
+            params["equity_floor"] = equity_floor
+
+        if not clauses:
+            return "", {}
+        return "WHERE " + " AND ".join(clauses), params
+
+    # 7-day history for KPI sparklines + the two real funnel counts that
+    # replaced the old hardcoded cost_per_contact / projected_contact_to_app
+    # placeholders. Reads the national rollup row (state='_ALL',
+    # segment_code='_ALL') from the daily funnel snapshot. Returns 0-7 rows
+    # ordered newest-first (repository reverses to oldest-first before
+    # sparkline rendering).
+    _TREND_SQL = (
+        "SELECT "
+        "  snapshot_date, "
+        "  snapshot_at, "
+        "  addressable_borrowers          AS marketable_population, "
+        "  in_the_money_borrowers         AS high_intent_leads, "
+        "  high_opportunity_borrowers     AS top_tier_opportunities, "
+        "  offer_recommended_borrowers    AS offers_recommended, "
+        "  avg_opportunity_score          AS avg_score, "
+        "  approved_borrowers             AS approved_count, "
+        "  actioned_borrowers             AS in_outreach_count "
+        f"FROM {qualify('gold', 'funnel_snapshot_daily')} "
+        "WHERE state = '_ALL' AND segment_code = '_ALL' "
+        "ORDER BY snapshot_date DESC "
+        "LIMIT 7"
     )
 
     _PREVIEW_CACHE_KEY = "portfolio.preview.all"
+    _DAY_ZERO_CACHE_KEY = "portfolio.day_zero"
+
+    # Authoritative "this workspace has never had a gold refresh" signal
+    # (R5-20). Unfiltered population count on mip.gold.lead_population,
+    # because the day-zero state is workspace-wide and must not shift
+    # with the caller's PortfolioCriteria (a criteria that happens to
+    # match zero borrowers is NOT day-zero). LIMIT 1 + EXISTS-style CASE
+    # so the warehouse returns one row no matter how large the table
+    # becomes. The result is cached longer than the preview -- day-zero
+    # flips at most once in a workspace's lifetime.
+    _DAY_ZERO_SQL = (
+        "SELECT CASE WHEN COUNT(*) = 0 THEN TRUE ELSE FALSE END AS day_zero "
+        f"FROM {qualify('gold', 'lead_population')}"
+    )
+
+    @staticmethod
+    def _build_trend(series: list[float]) -> KpiTrend:
+        """Compute KpiTrend (series ascending + delta + direction) from an
+        oldest-first numeric series."""
+        if len(series) < 2 or series[0] == 0:
+            return KpiTrend(series=series, delta_pct=None, direction="flat")
+        delta_pct = ((series[-1] - series[0]) / series[0]) * 100.0
+        direction = "up" if delta_pct > 0.5 else "down" if delta_pct < -0.5 else "flat"
+        return KpiTrend(series=series, delta_pct=round(delta_pct, 1), direction=direction)
+
+    def _load_funnel(self) -> tuple[dict[str, KpiTrend], dict[str, Any]]:
+        """Query the 7-day funnel snapshot and return (trends, latest).
+
+        `trends` is a dict keyed by KPI field; series are oldest-first.
+        `latest` is the newest row (keys include `approved_count`,
+        `in_outreach_count`, `snapshot_at`) — used by the preview to
+        surface the real current counts + data_refreshed_at timestamp.
+
+        Never raises — if the funnel table is empty (first deploy before
+        any snapshot has been written) we return empty dict + {}.
+        """
+        try:
+            rows = self._client.execute(self._TREND_SQL) or []
+        except Exception:  # noqa: BLE001 -- resilience: empty trend is an acceptable fallback
+            return {}, {}
+        if not rows:
+            return {}, {}
+        # Query is DESC; the FIRST row is newest. Reverse for oldest-first
+        # sparkline rendering.
+        latest = rows[0]
+        ordered = list(reversed(rows))
+        trends: dict[str, KpiTrend] = {}
+        for key in (
+            "marketable_population",
+            "high_intent_leads",
+            "top_tier_opportunities",
+            "offers_recommended",
+            "avg_score",
+            "approved_count",
+            "in_outreach_count",
+        ):
+            series = [float(r.get(key) or 0) for r in ordered]
+            trends[key] = self._build_trend(series)
+        return trends, latest
+
+    @staticmethod
+    def _coerce_datetime(value: Any) -> datetime | None:
+        """Normalise ``MAX(snapshot_at)`` into a tz-aware UTC ``datetime``.
+
+        The Databricks SQL connector returns TIMESTAMP as a tz-naive Python
+        ``datetime`` (no ``tzinfo``). Pydantic would serialise that without
+        a ``Z`` / ``+00:00`` suffix, so ``new Date(...)`` in the browser
+        interprets it as local time — and a European viewer sees the wrong
+        hour on ``data_refreshed_at``. Stamp UTC on the way out so the wire
+        contract is unambiguous (hole-finder round 2 #4, 2026-04-23).
+        """
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            if value.tzinfo is None:
+                return value.replace(tzinfo=UTC)
+            return value.astimezone(UTC)
+        # Defensive: a future connector change may emit an ISO string.
+        try:
+            # Accept the "...Z" suffix that some drivers emit.
+            raw = str(value).replace("Z", "+00:00")
+            parsed = datetime.fromisoformat(raw)
+            if parsed.tzinfo is None:
+                return parsed.replace(tzinfo=UTC)
+            return parsed.astimezone(UTC)
+        except (TypeError, ValueError):
+            return None
+
+    @classmethod
+    def _preview_cache_key(cls, where_clause: str, params: dict[str, Any]) -> str:
+        """Deterministic cache key for ``preview`` results.
+
+        R5-08: the prior key embedded ``str(sorted(params.items()))``,
+        which produced semantically-equivalent-but-different strings
+        depending on dict iteration order, Python version, and repr of
+        edge-case values. That was a minor cache-miss waste today and a
+        500-risk if a non-hashable value ever slipped in. We now hash
+        the canonical JSON form of ``(where_clause, params)`` -- stable
+        regardless of insertion order (``sort_keys=True``), string-safe
+        for everything pydantic emits (``default=str``), and bounded in
+        length via SHA-256.
+        """
+        canonical = json.dumps(
+            {"where": where_clause, "params": params},
+            sort_keys=True,
+            default=str,
+            separators=(",", ":"),
+        )
+        digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:32]  # noqa: S324 -- not a secret
+        return f"{cls._PREVIEW_CACHE_KEY}:{digest}"
+
+    def _load_day_zero(self) -> bool:
+        """Return True when ``mip.gold.lead_population`` is empty.
+
+        R5-20: authoritative day-zero signal. Cached under its own key
+        so it's shared across every criteria variant (day-zero doesn't
+        depend on the filter). Resilient-by-default: any failure means
+        we can't prove the gold table is empty, so we return ``False``
+        and let the preview render whatever row counts the warehouse
+        returns. An incorrect ``True`` would hide real data; ``False``
+        is the safe default.
+        """
+        cached = self._cache.get(self._DAY_ZERO_CACHE_KEY)
+        if cached is not None:
+            return bool(cached)
+        try:
+            row = self._client.execute_one(self._DAY_ZERO_SQL) or {}
+        except Exception:  # noqa: BLE001 -- see docstring
+            return False
+        day_zero = bool(row.get("day_zero"))
+        self._cache.set(self._DAY_ZERO_CACHE_KEY, day_zero, self._cache_ttl_s)
+        return day_zero
 
     def preview(self, request: PortfolioPreviewRequest | None) -> PortfolioPreview:
-        _ = request
-        cached = self._cache.get(self._PREVIEW_CACHE_KEY)
+        criteria = request.criteria if request is not None else None
+        where_clause, params = self._build_preview_predicates(criteria)
+        # Include the clause + params in the cache key so distinct criteria
+        # sets don't collide on a single cached entry. See _preview_cache_key
+        # for the R5-08 fix that pins insertion-order independence.
+        cache_key = self._preview_cache_key(where_clause, params)
+        cached = self._cache.get(cache_key)
         if cached is not None:
             return cached
-        row = self._client.execute_one(self._PREVIEW_SQL) or {}
+        sql = self._PREVIEW_SQL_TEMPLATE.format(where=where_clause)
+        row = self._client.execute_one(sql, params) or {}
+        trends, latest = self._load_funnel()
         preview = PortfolioPreview(
             marketable_population=int(row.get("marketable_population") or 0),
             high_intent_leads=int(row.get("high_intent_leads") or 0),
+            top_tier_opportunities=(
+                int(row["top_tier_opportunities"])
+                if row.get("top_tier_opportunities") is not None
+                else None
+            ),
+            offers_recommended=(
+                int(row["offers_recommended"])
+                if row.get("offers_recommended") is not None
+                else None
+            ),
             avg_score=int(row.get("avg_score") or 0),
-            # Projections that aren't in gold yet live on the UI as
-            # deterministic constants -- keeping mock parity for the
-            # portfolio preview bar chart.
-            projected_contact_to_app=9.7,
-            cost_per_contact=2.18,
+            approved_count=(
+                int(latest["approved_count"])
+                if latest.get("approved_count") is not None
+                else None
+            ),
+            in_outreach_count=(
+                int(latest["in_outreach_count"])
+                if latest.get("in_outreach_count") is not None
+                else None
+            ),
+            data_refreshed_at=self._coerce_datetime(latest.get("snapshot_at")),
+            trends=trends,
+            day_zero=self._load_day_zero(),
         )
-        self._cache.set(self._PREVIEW_CACHE_KEY, preview, self._cache_ttl_s)
+        self._cache.set(cache_key, preview, self._cache_ttl_s)
         return preview
 
     def create(self, payload: PortfolioCreateRequest) -> PortfolioCreateResponse:
@@ -277,7 +615,7 @@ class DatabricksSegmentRepository:
 
     _LIST_SQL = (
         f"SELECT {_SEGMENT_COLUMNS} "
-        "FROM mip.gold.segment_population "
+        f"FROM {qualify('gold', 'segment_population')} "
         "WHERE state = '_ALL' "
         "ORDER BY count DESC"
     )
@@ -309,33 +647,63 @@ class DatabricksSegmentRepository:
 
 
 class DatabricksLeadRepository:
-    """Ranked leads from ``gold.lead_population``."""
+    """Ranked leads from ``gold.lead_population``.
+
+    The per-request ``limit`` is bounded by ``MAX_LIMIT`` (5000) so a
+    pathological caller can't pull the whole gold table onto one page.
+    Default is 500 — the size a VP of Lending can scroll in one sitting
+    and the threshold the LeadTable footer renders "Showing N of M" at.
+    Hole-finder round 2 #24, 2026-04-23.
+    """
+
+    DEFAULT_LIMIT: int = 500
+    MAX_LIMIT: int = 5000
 
     def __init__(self, client: DatabricksSqlClient) -> None:
         self._client = client
 
-    _LIST_BASE_SQL = (
+    _LIST_BASE_SQL_TEMPLATE = (
         f"SELECT {_LEAD_POPULATION_COLUMNS} "
-        "FROM mip.gold.lead_population "
+        f"FROM {qualify('gold', 'lead_population')} "
         "ORDER BY opportunity_score DESC, borrower_id ASC "
-        "LIMIT 500"
+        "LIMIT {limit}"
     )
 
-    _LIST_BY_SEGMENT_SQL = (
+    _LIST_BY_SEGMENT_SQL_TEMPLATE = (
         f"SELECT {_LEAD_POPULATION_COLUMNS} "
-        "FROM mip.gold.lead_population "
+        f"FROM {qualify('gold', 'lead_population')} "
         "WHERE array_contains(segment_codes, :segment) "
         "ORDER BY opportunity_score DESC, borrower_id ASC "
-        "LIMIT 500"
+        "LIMIT {limit}"
     )
 
-    def list(self, segment: str | None, portfolio_id: str | None) -> list[LeadSummary]:
+    def list(
+        self,
+        segment: str | None,
+        portfolio_id: str | None,
+        limit: int | None = None,
+    ) -> list[LeadSummary]:
         _ = portfolio_id
+        bounded = self._bound_limit(limit)
         if segment:
-            rows = self._client.execute(self._LIST_BY_SEGMENT_SQL, {"segment": segment})
+            sql = self._LIST_BY_SEGMENT_SQL_TEMPLATE.format(limit=bounded)
+            rows = self._client.execute(sql, {"segment": segment})
         else:
-            rows = self._client.execute(self._LIST_BASE_SQL)
+            sql = self._LIST_BASE_SQL_TEMPLATE.format(limit=bounded)
+            rows = self._client.execute(sql)
         return [LeadSummary(**redact_lead_row(r)) for r in rows]
+
+    @classmethod
+    def _bound_limit(cls, limit: int | None) -> int:
+        """Clamp a caller-supplied ``limit`` to [1, MAX_LIMIT].
+
+        ``None`` / 0 / negative values collapse to ``DEFAULT_LIMIT`` so the
+        SQL stays a literal integer (no binding for LIMIT) and can't be
+        spoofed into pulling the whole table.
+        """
+        if limit is None or limit <= 0:
+            return cls.DEFAULT_LIMIT
+        return min(int(limit), cls.MAX_LIMIT)
 
 
 class DatabricksBorrowerRepository:
@@ -355,7 +723,7 @@ class DatabricksBorrowerRepository:
 
     _GET_SQL = (
         f"SELECT {_BORROWER_DOSSIER_COLUMNS} "
-        "FROM mip.gold.borrower_dossier "
+        f"FROM {qualify('gold', 'borrower_dossier')} "
         "WHERE borrower_id = :borrower_id "
         "LIMIT 1"
     )
@@ -367,9 +735,9 @@ class DatabricksBorrowerRepository:
     # evidence array below.
     _EVIDENCE_SQL = (
         f"SELECT {_EVIDENCE_COLUMNS} "
-        "FROM mip.gold.evidence_events "
+        f"FROM {qualify('gold', 'evidence_events')} "
         "WHERE clip = ("
-        "  SELECT clip FROM mip.gold.borrower_dossier "
+        f"  SELECT clip FROM {qualify('gold', 'borrower_dossier')} "
         "  WHERE borrower_id = :borrower_id LIMIT 1"
         ") "
         "ORDER BY signal_rank ASC"
@@ -407,30 +775,53 @@ class DatabricksBorrowerRepository:
         if not timeline_events and evidence_events:
             timeline_events = evidence_events[:3]
 
+        # Plain-English "why now" string for the dossier rationale box.
+        # Updated 2026-04-22 (fix/copilot-batch-post-merge) to drop
+        # rule-engine phrasing like "+246 bps spread (>= 75) AND 79%
+        # equity (>= 15%)" in favour of language a VP of Lending or
+        # compliance reviewer reads fluidly. The numbers still ground
+        # the claim (an approver wants concrete detail) but without bps
+        # or ">=" syntax.
+        itm_flag = _coerce_bool(row.get("in_the_money"))
+        spread_bps = int(row.get("rate_spread_bps") or 0)
+        equity_pct = int(row.get("equity_pct") or 0)
+        if itm_flag:
+            # Translate bps to a qualitative phrase that still carries
+            # the magnitude signal. Keeping the literal percentage for
+            # equity because LOs / analysts naturally read "79% equity".
+            if spread_bps >= 200:
+                spread_descriptor = "well above market rates"
+            elif spread_bps >= 100:
+                spread_descriptor = "meaningfully above market rates"
+            else:
+                spread_descriptor = "above market rates"
+            itm_reason = (
+                f"Current rate sits {spread_descriptor} and the home has "
+                f"{equity_pct}% equity -- both refinance triggers are met."
+            )
+        else:
+            itm_reason = (
+                f"Rate and equity (currently {equity_pct}%) have not yet "
+                "cleared the refinance trigger; keep in nurture."
+            )
+
+        why_sources = [
+            qualify("gold", "fn_rate_spread"),
+            qualify("gold", "fn_in_the_money"),
+            qualify("gold", "borrower_dossier"),
+        ]
         why = WhyPanel(
-            rate_spread_bps=int(row.get("rate_spread_bps") or 0),
+            rate_spread_bps=spread_bps,
             market_rate=float(row.get("market_rate_fraction") or 0.0),
-            equity_pct=int(row.get("equity_pct") or 0),
-            in_the_money=bool(row.get("in_the_money")),
-            in_the_money_reason=(
-                f"+{row.get('rate_spread_bps')} bps spread "
-                f"(>= {row.get('min_spread_bps_applied')}) AND "
-                f"{row.get('equity_pct')}% equity "
-                f"(>= {row.get('min_equity_pct_applied')}%)"
-                if _coerce_bool(row.get("in_the_money"))
-                else (
-                    f"{row.get('rate_spread_bps')} bps or "
-                    f"{row.get('equity_pct')}% equity does not clear "
-                    f"({row.get('min_spread_bps_applied')} / "
-                    f"{row.get('min_equity_pct_applied')}%)"
-                )
-            ),
+            equity_pct=equity_pct,
+            in_the_money=itm_flag,
+            in_the_money_reason=itm_reason,
             min_spread_bps=int(row.get("min_spread_bps_applied") or 75),
             min_equity_pct=int(row.get("min_equity_pct_applied") or 15),
-            sources=[
-                "mip.gold.fn_rate_spread",
-                "mip.gold.fn_in_the_money",
-                "mip.gold.borrower_dossier",
+            sources=why_sources,
+            source_labels=[
+                WhyPanelSource(name=s, display_label=source_display_label(s))
+                for s in why_sources
             ],
         )
 
@@ -463,7 +854,7 @@ class DatabricksBorrowerRepository:
         # events query so an empty-array dossier row (brand-new CLIP,
         # schema drift) still resolves.
         dossier_row = self._client.execute_one(
-            "SELECT clip, evidence_events FROM mip.gold.borrower_dossier "
+            f"SELECT clip, evidence_events FROM {qualify('gold', 'borrower_dossier')} "
             "WHERE borrower_id = :borrower_id LIMIT 1",
             {"borrower_id": borrower_id},
         )
@@ -491,7 +882,7 @@ class DatabricksOfferRepository:
         "  rate_spread_bps, equity_pct, has_permit, listed_for_sale, "
         "  is_investor, is_current_customer, is_competitor_lien, "
         "  recommended_offer_code "
-        "FROM mip.gold.borrower_360 "
+        f"FROM {qualify('gold', 'borrower_360')} "
         "WHERE borrower_id = :borrower_id "
         "LIMIT 1"
     )
@@ -530,6 +921,211 @@ class DatabricksOutreachRepository:
 
     def find_borrower(self, borrower_id: str) -> Borrower360 | None:
         return self._borrower_repo.get(borrower_id)
+
+
+class DatabricksGeoRepository:
+    """Geography rollups for the USChoroplethMap.
+
+    Reads three gold tables:
+
+    * ``mip.gold.funnel_snapshot_daily`` (state rollup) -- latest
+      snapshot, per-state ``_ALL`` segment row. Powers the hover
+      tooltip (addressable / in-the-money / top-tier / avg_score) plus
+      the state-fill level on the choropleth.
+    * ``mip.gold.state_top_segment`` -- LEFT JOIN on state, latest
+      snapshot, to surface the dominant SegmentCode per state on the
+      ``StateRollup.top_segment_code`` extension.
+    * ``mip.gold.county_rollup`` -- filtered to the given state at the
+      latest snapshot.
+    * ``mip.gold.zip_rollup`` -- filtered to the given county FIPS at
+      the latest snapshot.
+
+    Short-TTL cached (60s default) per-method so a presenter clicking
+    between segment-intelligence and home pays one warehouse round-trip
+    per minute, not per navigation. The data refreshes daily upstream
+    so 60s is a non-issue for correctness.
+    """
+
+    def __init__(
+        self,
+        client: DatabricksSqlClient,
+        *,
+        cache: TTLCache | None = None,
+        cache_ttl_s: float = 60.0,
+    ) -> None:
+        self._client = client
+        self._cache = cache if cache is not None else TTLCache()
+        self._cache_ttl_s = cache_ttl_s
+
+    # State rollup: join the funnel snapshot (counts) with the top-segment
+    # table (dominant SegmentCode). LEFT JOIN on state so an empty
+    # state_top_segment (first deploy before the CTAS has run) still
+    # returns state counts -- top_segment_code just stays NULL.
+    _STATE_SQL = (
+        "SELECT "
+        "  f.state                         AS state, "
+        "  f.addressable_borrowers         AS addressable, "
+        "  f.in_the_money_borrowers        AS in_the_money, "
+        "  f.high_opportunity_borrowers    AS top_tier_opportunities, "
+        "  f.avg_opportunity_score         AS avg_score, "
+        "  f.snapshot_date                 AS snapshot_date, "
+        "  ts.top_segment_code             AS top_segment_code "
+        f"FROM {qualify('gold', 'funnel_snapshot_daily')} AS f "
+        "LEFT JOIN ( "
+        "  SELECT state, top_segment_code "
+        f"  FROM {qualify('gold', 'state_top_segment')} "
+        f"  WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM {qualify('gold', 'state_top_segment')}) "
+        ") AS ts ON ts.state = f.state "
+        "WHERE f.state <> '_ALL' "
+        "  AND f.segment_code = '_ALL' "
+        f"  AND f.snapshot_date = (SELECT MAX(snapshot_date) FROM {qualify('gold', 'funnel_snapshot_daily')}) "
+        "ORDER BY f.addressable_borrowers DESC"
+    )
+
+    _COUNTY_SQL = (
+        "SELECT "
+        "  fips_5, "
+        "  state, "
+        "  county_name, "
+        "  addressable_borrowers, "
+        "  in_the_money_borrowers, "
+        "  high_opportunity_borrowers, "
+        "  avg_opportunity_score, "
+        "  top_segment_code, "
+        "  snapshot_date "
+        f"FROM {qualify('gold', 'county_rollup')} "
+        "WHERE state = :state "
+        f"  AND snapshot_date = (SELECT MAX(snapshot_date) FROM {qualify('gold', 'county_rollup')}) "
+        "ORDER BY addressable_borrowers DESC"
+    )
+
+    _ZIP_SQL = (
+        "SELECT "
+        "  zip, "
+        "  state, "
+        "  county_fips_5, "
+        "  addressable_borrowers, "
+        "  avg_opportunity_score, "
+        "  top_segment_code, "
+        "  sample_borrower_id, "
+        "  snapshot_date "
+        f"FROM {qualify('gold', 'zip_rollup')} "
+        "WHERE county_fips_5 = :fips_5 "
+        f"  AND snapshot_date = (SELECT MAX(snapshot_date) FROM {qualify('gold', 'zip_rollup')}) "
+        "ORDER BY addressable_borrowers DESC"
+    )
+
+    _STATE_CACHE_KEY = "geo.state_rollups"
+
+    def state_rollups(self) -> StateRollupResponse:
+        cached = self._cache.get(self._STATE_CACHE_KEY)
+        if cached is not None:
+            return cached
+        rows = self._client.execute(self._STATE_SQL) or []
+        rollups = [
+            StateRollup(
+                state=str(r.get("state") or "").upper()[:2],
+                addressable=int(r.get("addressable") or 0),
+                in_the_money=int(r.get("in_the_money") or 0),
+                top_tier_opportunities=int(r.get("top_tier_opportunities") or 0),
+                avg_score=int(r.get("avg_score") or 0),
+                top_segment_code=(
+                    str(r["top_segment_code"]) if r.get("top_segment_code") else None
+                ),
+            )
+            for r in rows
+            if r.get("state") and str(r.get("state")) != "_ALL"
+        ]
+        snapshot_date: str | None = None
+        if rows:
+            raw = rows[0].get("snapshot_date")
+            snapshot_date = str(raw) if raw is not None else None
+        response = StateRollupResponse(rollups=rollups, snapshot_date=snapshot_date)
+        self._cache.set(self._STATE_CACHE_KEY, response, self._cache_ttl_s)
+        return response
+
+    def county_rollups(self, state: str) -> CountyRollupResponse:
+        """Fetch per-county rollups for the given state.
+
+        ``state`` is normalised to 2-char uppercase before the warehouse
+        call so the response is stable regardless of UI casing. Returns
+        an empty list + ``snapshot_date=None`` when the state is outside
+        the 6-state footprint or the CTAS hasn't run yet.
+        """
+        normalised = str(state or "").upper()[:2]
+        cache_key = f"geo.county_rollups:{normalised}"
+        cached = self._cache.get(cache_key)
+        if cached is not None:
+            return cached
+        rows = self._client.execute(self._COUNTY_SQL, {"state": normalised}) or []
+        rollups = [
+            CountyRollup(
+                fips_5=str(r.get("fips_5") or "")[:5],
+                state=str(r.get("state") or "").upper()[:2] or normalised,
+                county_name=(
+                    str(r["county_name"]) if r.get("county_name") else None
+                ),
+                addressable_borrowers=int(r.get("addressable_borrowers") or 0),
+                in_the_money_borrowers=int(r.get("in_the_money_borrowers") or 0),
+                high_opportunity_borrowers=int(r.get("high_opportunity_borrowers") or 0),
+                avg_opportunity_score=int(r.get("avg_opportunity_score") or 0),
+                top_segment_code=(
+                    str(r["top_segment_code"]) if r.get("top_segment_code") else None
+                ),
+            )
+            for r in rows
+            if r.get("fips_5") and len(str(r.get("fips_5"))) == 5
+        ]
+        snapshot_date: str | None = None
+        if rows:
+            raw = rows[0].get("snapshot_date")
+            snapshot_date = str(raw) if raw is not None else None
+        response = CountyRollupResponse(
+            state=normalised,
+            rollups=rollups,
+            snapshot_date=snapshot_date,
+        )
+        self._cache.set(cache_key, response, self._cache_ttl_s)
+        return response
+
+    def zip_rollups(self, fips_5: str) -> ZipRollupResponse:
+        """Fetch per-ZIP rollups for the given 5-char county FIPS."""
+        normalised = str(fips_5 or "")[:5]
+        cache_key = f"geo.zip_rollups:{normalised}"
+        cached = self._cache.get(cache_key)
+        if cached is not None:
+            return cached
+        rows = self._client.execute(self._ZIP_SQL, {"fips_5": normalised}) or []
+        rollups = [
+            ZipRollup(
+                zip=str(r.get("zip") or "")[:5],
+                state=str(r.get("state") or "").upper()[:2],
+                county_fips_5=(
+                    str(r["county_fips_5"]) if r.get("county_fips_5") else None
+                ),
+                addressable_borrowers=int(r.get("addressable_borrowers") or 0),
+                avg_opportunity_score=int(r.get("avg_opportunity_score") or 0),
+                top_segment_code=(
+                    str(r["top_segment_code"]) if r.get("top_segment_code") else None
+                ),
+                sample_borrower_id=(
+                    str(r["sample_borrower_id"]) if r.get("sample_borrower_id") else None
+                ),
+            )
+            for r in rows
+            if r.get("zip") and len(str(r.get("zip"))) == 5
+        ]
+        snapshot_date: str | None = None
+        if rows:
+            raw = rows[0].get("snapshot_date")
+            snapshot_date = str(raw) if raw is not None else None
+        response = ZipRollupResponse(
+            fips_5=normalised,
+            rollups=rollups,
+            snapshot_date=snapshot_date,
+        )
+        self._cache.set(cache_key, response, self._cache_ttl_s)
+        return response
 
 
 # ---------------------------------------------------------------------------
@@ -632,6 +1228,14 @@ def _adapt_genie_response(
     already consumes. We derive ``trusted_assets`` from the SQL query
     when one is available (best-effort regex for ``mip.*``
     references); empty otherwise -- the UI tolerates an empty list.
+
+    PII posture (Genie audit finding, 2026-04-23): Genie's Space ``instructions``
+    block forbids returning PII columns, but that's model-compliance, not a
+    guaranteed output-side filter. The repository boundary enforces defence-
+    in-depth by stripping any row keys that match the governance denylist
+    (owner names, raw CLIP, owner_link_id, owner_name_hash, street addresses)
+    regardless of what the model decided to select. Customers see zero PII
+    columns in Ask Genie results even if the Space drifts.
     """
     trusted_assets = _extract_asset_refs(result.sql_query)
     return GenieMessageResponse(
@@ -640,8 +1244,50 @@ def _adapt_genie_response(
         answer=result.answer_text or "",
         source="genie",
         trusted_assets=trusted_assets,
-        table_rows=result.sql_result_rows,
+        table_rows=_redact_genie_rows(result.sql_result_rows),
     )
+
+
+# Governance denylist applied to every Genie table-row before the response
+# leaves the repository boundary. Matches the ``_FORBIDDEN_OUTPUT_KEYS`` set
+# in ``backend/services/pii_redaction`` (keep in sync). These keys are PII
+# per the governance contract and must never ship to the frontend.
+_GENIE_PII_KEYS: frozenset[str] = frozenset({
+    "owner_name",
+    "owner_names",
+    "owner_full_name",
+    "primary_owner",
+    "owner_name_hash",      # hashed, but still a stable identifier — not exported
+    "owner_link_id",        # raw Cotality identifier — replaced with a display surrogate elsewhere
+    "clip",                 # raw CLIP — evidence drawer surfaces a short form only
+    "raw_clip",
+    "street_address",
+    "site_address",
+    "mailing_address",
+    "tax_mailing_address",
+    "subject_property",     # carries synthesized city + ZIP; synthesized upstream, but redacted here too
+    "borrower_email",
+    "email",
+    "phone",
+    "phone_number",
+    "ssn",
+})
+
+
+def _redact_genie_rows(rows: list[dict[str, Any]] | None) -> list[dict[str, Any]] | None:
+    """Strip PII keys from Genie's result set before returning to the UI.
+
+    Never raises; if ``rows`` is falsy we pass it through. Applied to every
+    response path that sets ``table_rows`` on ``GenieMessageResponse``.
+    """
+    if not rows:
+        return rows
+    redacted: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        redacted.append({k: v for k, v in row.items() if k not in _GENIE_PII_KEYS})
+    return redacted
 
 
 def _extract_asset_refs(sql: str | None) -> list[str]:
@@ -666,6 +1312,7 @@ def _extract_asset_refs(sql: str | None) -> list[str]:
 __all__ = [
     "DatabricksBorrowerRepository",
     "DatabricksGenieRepository",
+    "DatabricksGeoRepository",
     "DatabricksLeadRepository",
     "DatabricksOfferRepository",
     "DatabricksOutreachRepository",

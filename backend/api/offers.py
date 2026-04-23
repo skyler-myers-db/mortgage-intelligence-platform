@@ -11,6 +11,7 @@ from backend.schemas.offer import (
     OfferRecommendation,
     OfferRecommendRequest,
     OfferType,
+    SourceLabel,
 )
 from backend.services.audit_store import AuditStore, get_audit_store, resolve_actor
 from backend.services.lakebase import LakebaseError
@@ -20,7 +21,7 @@ from backend.services.repositories import (
     get_borrower_repository,
     get_offer_repository,
 )
-from backend.services.scoring import NBO_PRODUCT_LABELS
+from backend.services.scoring import NBO_PRODUCT_LABELS, source_display_label
 
 log = logging.getLogger(__name__)
 
@@ -57,56 +58,101 @@ def _rationale_for(
     cashout_min: int,
     retention_min: int,
 ) -> str:
-    """Deterministic rationale cited for the winning branch.
+    """Plain-English rationale for the winning offer branch.
 
-    Mirrors the branch narrative in fn_next_best_offer.sql so the
-    approver sees exactly which inputs crossed which thresholds — the
-    evidence chips on the page link to the same signals.
+    Updated 2026-04-22 (fix/copilot-batch-post-merge) to drop rule-engine
+    syntax (``+X bps (>= Y)``, ``cross-sell``, ``pencils``) in favour of
+    language a VP of Lending or Marketing Leader would actually send. The
+    numbers still anchor each string (a Sales Manager wants concrete
+    detail) but with ``bps`` translated to "percentage points above
+    market" when it reads cleaner.
+
+    Branch wording mirrors the `why_now` templates in
+    ``sql/transformations/gold_borrower_360.sql`` -- the two surfaces
+    must agree when Borrower 360 and the Offer Orchestrator render the
+    same borrower.
     """
+    # Translate bps -> readable "percentage points above market" for
+    # the 100+ bps cohort; below that, fall back to a qualitative phrase.
+    def _spread_phrase() -> str:
+        if spread >= 200:
+            return "well above current market rates"
+        if spread >= 100:
+            return "meaningfully above current market rates"
+        if spread >= 50:
+            return "above current market rates"
+        return "roughly at current market rates"
+
+    def _equity_phrase() -> str:
+        if equity >= 50:
+            return "very strong home equity"
+        if equity >= 35:
+            return "strong home equity"
+        if equity >= 15:
+            return "meaningful home equity"
+        return "limited home equity"
+
     if code == "purchase":
-        return "Listed for sale — purchase mortgage opportunity on the next home; current lien will be paid off at close."
+        return (
+            "Home is actively listed for sale -- present a purchase mortgage on "
+            "the next home before the current lien pays off at close."
+        )
     if code == "refi_plus_heloc":
         return (
-            f"Rate spread +{spread} bps (>= {min_sp}) and equity {equity}% "
-            f"(>= {heloc_min}% HELOC-grade) — refi + HELOC cross-sell."
+            f"Rate is {_spread_phrase()} and the home has {_equity_phrase()} -- "
+            "a strong candidate for a refinance with a HELOC alongside it."
         )
     if code == "heloc":
         return (
-            f"Permit on file and equity {equity}% clears HELOC threshold "
-            f"({heloc_min}%); rate spread {spread} bps is below refi bar "
-            f"({min_sp}) — HELOC-only."
+            f"Recent remodel activity paired with {_equity_phrase()} supports a "
+            "HELOC conversation; the rate isn't compelling enough for a full refinance."
         )
     if code == "refi":
         return (
-            f"Rate spread +{spread} bps (>= {min_sp}) and equity {equity}% "
-            f"(>= {min_eq}% refi-minimum, below {heloc_min}% HELOC bar) — lead with refi."
+            f"Rate is {_spread_phrase()} with {_equity_phrase()} -- a straight "
+            "refinance fits (equity sits below the HELOC cushion)."
         )
     if code == "cash_out":
         return (
-            f"No refi rate incentive ({spread} bps < {min_sp}); equity "
-            f"{equity}% clears cash-out bar ({cashout_min}%) — cash-out refi."
+            "Rate isn't high enough to drive a plain refinance, but "
+            f"{_equity_phrase()} supports a cash-out conversation."
         )
     if code == "investor":
-        return "Owner Link shows multi-property/investor behavior and owner-occupant equity branches did not fire — investor desk."
+        return (
+            "Owner Link ties multiple properties to this owner -- owner-occupant "
+            "economics do not apply; route to the investor desk."
+        )
     if code == "retention":
-        trigger = "competitor lien on Owner Link" if competitor_lien else f"spread {spread} bps >= {retention_min} (retention bar)"
-        return f"Current customer with {trigger} — retention outreach."
-    return "No strong refi/HELOC/cash-out/listing/investor/retention signal — keep in nurture until a trigger fires."
+        if competitor_lien:
+            return (
+                "Current customer with a competitor lien recorded on the Owner "
+                "Link -- reach out before the recapture opportunity closes."
+            )
+        return (
+            "Current customer whose rate has drifted above our retention bar -- "
+            "reach out before they shop a competitor."
+        )
+    return (
+        "No active trigger on this borrower right now -- keep in nurture until "
+        "a signal fires."
+    )
 
 
 def _sources_for(code: str) -> list[str]:
     """Unity Catalog tables consulted for this branch. Drives the
     'Source evidence' chips the Offer Orchestrator renders."""
-    base = ["mip.gold.fn_next_best_offer"]
+    from backend.services.databricks_sql_helpers import qualify
+
+    base = [qualify("gold", "fn_next_best_offer")]
     if code in {"refi_plus_heloc", "refi", "retention"}:
-        base.append("mip.gold.fn_rate_spread")
-        base.append("mip.gold.fn_in_the_money")
+        base.append(qualify("gold", "fn_rate_spread"))
+        base.append(qualify("gold", "fn_in_the_money"))
     if code in {"heloc", "cash_out", "refi_plus_heloc"}:
-        base.append("mip.gold.fn_rate_spread")
+        base.append(qualify("gold", "fn_rate_spread"))
     # fn_lead_score is always cited — the orchestrator shows confidence
     # on every recommendation and that confidence rolls up from the
     # lead_score weighted bundle.
-    base.append("mip.gold.fn_lead_score")
+    base.append(qualify("gold", "fn_lead_score"))
     # Dedupe while preserving order.
     seen: set[str] = set()
     ordered: list[str] = []
@@ -246,6 +292,12 @@ def recommend_offer(
         subject_clip=borrower.clip_id,
     )
 
+    sources = _sources_for(code)
+    source_labels = [
+        SourceLabel(name=s, display_label=source_display_label(s))
+        for s in sources
+    ]
+
     return OfferRecommendation(
         borrower_id=borrower.borrower_id,
         offer_code=code,
@@ -268,7 +320,8 @@ def recommend_offer(
             retention_min=settings.mip_retention_min_spread_bps,
         ),
         evidence_ids=borrower.evidence_ids,
-        sources=_sources_for(code),
+        sources=sources,
+        source_labels=source_labels,
         alternatives=_alternatives_for(
             code,
             equity=cast(int, inputs["equity_pct"]),

@@ -59,7 +59,8 @@ SELECT
   -- and dashboards can GROUP BY when new cohorts are added later (e.g.
   -- sub-4 % 2015–2019). Today every row carries 'sub3_2020_2022'.
   CAST('sub3_2020_2022' AS STRING)         AS cohort_tag,
-  CURRENT_TIMESTAMP()                      AS refreshed_at
+  -- Shared refresh_at captured once per run. See audit-holes-round-3 #7.
+  (SELECT refresh_at FROM mip.ref.refresh_run_state ORDER BY captured_at DESC LIMIT 1) AS refreshed_at
 FROM mip.gold.borrower_360 AS b
 JOIN mip.silver.lien_current AS lc
   ON lc.clip = b.clip

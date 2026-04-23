@@ -58,12 +58,24 @@ this doc and point at `mip.gold.funnel_snapshot_daily` row count + dates.
 
 ### 1.1 How operators verify the snapshot cadence
 
-The snapshot table is populated by the `mip_sync_lifecycle_state` job in
-`databricks.yml` on an hourly cron (`0 15 * ? * * *` America/Chicago).
+The snapshot table is populated by the `mip_sync_lifecycle_state` job
+in `databricks.yml`. Trigger model (as of 2026-04-22):
+
+1. **Event-triggered** from the backend. `POST /api/outreach/approve`
+   fires `backend.services.job_trigger.trigger_lifecycle_sync` via
+   `BackgroundTasks`, which calls `WorkspaceClient.jobs.run_now(...)`
+   non-blocking. Triggers are debounced to 60 s so a reviewer clicking
+   through the queue produces one sync run, not N.
+2. **Daily fallback** at 04:00 America/Chicago (`0 0 4 ? * * *`). This
+   is the safety net for any dropped trigger + records a funnel
+   snapshot on idle days so WoW `delta_vs_prior_*` measures keep
+   advancing. Dev auto-pauses via `mode: development`; prod
+   auto-UNPAUSES via `mode: production`.
+
 The `record_funnel_snapshot` task is the one that MERGEs today's per-
 (state, segment) counts into `mip.gold.funnel_snapshot_daily`. Because
-the MERGE is keyed on `(snapshot_date, state, segment_code)`, hourly runs
-on the same calendar day are idempotent — the same day's row gets
+the MERGE is keyed on `(snapshot_date, state, segment_code)`, multiple
+runs on the same calendar day are idempotent — the same day's row gets
 rewritten, not duplicated.
 
 Quick operator probes:
@@ -123,11 +135,13 @@ Specifically:
 
 These populate as operators use the app. Every click on the "Approve"
 button in the Approval Queue writes a row to `mip_app.approvals` in
-Lakebase; the next hourly `sync_from_lakebase` run mirrors that row into
-`mip.gold.borrower_lifecycle_state`, and the next `record_funnel_snapshot`
-run updates the per-(state, segment) counts on
+Lakebase; the backend then fires `mip_sync_lifecycle_state` via
+`WorkspaceClient.jobs.run_now` (non-blocking, debounced 60 s) which
+mirrors that row into `mip.gold.borrower_lifecycle_state` and runs
+`record_funnel_snapshot` to update the per-(state, segment) counts on
 `mip.gold.funnel_snapshot_daily`. The turnaround from a UI click to a
-lit-up dashboard cell is bounded by the hourly cron — typically under 1h.
+lit-up dashboard cell is typically 1–3 minutes (Serverless job cold
+start + three tasks). The daily 04:00 fallback cron is the safety net.
 
 **Kill-switch for the impatient:** if you need to demo a partially-lit
 dashboard on day one without waiting for the cron, the same job can be

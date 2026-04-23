@@ -69,6 +69,7 @@ CREATE TABLE IF NOT EXISTS mip.gold.borrower_360 (
   state                     STRING    NOT NULL COMMENT 'Situs state (6-state footprint).',
   zip                       STRING             COMMENT '5-digit situs ZIP.',
   situs_cbsa_code           STRING             COMMENT 'CBSA metro code. Gold-only; used for geography drill-down.',
+  county_fips_5             STRING             COMMENT '5-char FIPS county code (2-char state + 3-char county) from silver.property_master.fips_county_code. Feeds gold.county_rollup + gold.zip_rollup. NULL for the ~0.2% of rows where silver has no county geocode.',
   segment_codes             ARRAY<STRING> NOT NULL COMMENT 'Ordered list of SegmentCode Literals (itm/listed/permit/investor/equity/retention) this borrower belongs to.',
   equity_estimate           BIGINT    NOT NULL COMMENT 'USD: GREATEST(0, avm_value - total_open_lien_balance).',
   equity_pct                INT       NOT NULL COMMENT '0..100. CAST(100 - estimated_cltv AS INT) fallback to derived avm/lien. Feeds fn_in_the_money + fn_next_best_offer.',

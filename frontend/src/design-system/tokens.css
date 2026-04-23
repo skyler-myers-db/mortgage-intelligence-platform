@@ -3,7 +3,7 @@
    Design Tokens — verbatim port from design_files/index.html
    ============================================================ */
 
-@import url('https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700;800;900&family=Geist+Mono:wght@400;500;600&display=swap');
 
 :root {
   /* ---------- Brand (Entrada AI) ---------- */
@@ -48,6 +48,17 @@
   --fs-28: 28px;
   --fs-36: 36px;
   --fs-48: 48px;
+
+  /* ---------- Responsive (clamp) type scale ----------
+   * These scale smoothly with the viewport and are used in places that
+   * need to grow on QHD/ultra-wide and stay readable on a 13-inch MacBook
+   * Air. The prototype target (1440×900) sits in the middle of each ramp.
+   * Non-clamp tokens (--fs-28, --fs-36) remain the authoritative pixel
+   * values for fixed-chrome elements (chips, dense rows, densities).
+   */
+  --fs-hero:     clamp(1.5rem,  1.20vw + 0.80rem, 2.50rem);  /* ~24px → ~40px */
+  --fs-kpi-big:  clamp(1.5rem,  0.80vw + 1.10rem, 2.25rem);  /* ~24px → ~36px */
+  --fs-kpi-unit: clamp(0.88rem, 0.10vw + 0.82rem, 1.10rem);  /* ~14px → ~17.6px */
 
   --lh-tight: 1.15;
   --lh-snug:  1.35;
@@ -156,6 +167,12 @@
   /* Darker danger so .kpi__delta.down clears 4.5:1 AA against the
    * white surface (--bg-1 = #FFFFFF). #DC2626 reads at ~4.83:1. */
   --signal-danger: #DC2626;
+  /* Darker success so .kpi__delta.up (the +%/-% text on KPI cards) and
+   * .seg-card__meta .up clear AA against white. The default #10B981 reads
+   * at ~2.54:1 and axe-core flagged it on the 2026-04-22 light-theme
+   * audit. #047857 (same shade already used for .chip--success in light)
+   * reads at ~5.1:1. */
+  --signal-success: #047857;
 
   --accent:        #025080;
   --accent-hover:  #013354;
@@ -183,6 +200,21 @@
 [data-accent="navy"] {
   --accent: #025080; --accent-hover: #013354; --accent-soft: rgba(2,80,128,0.14); --accent-contrast: #FFF;
 }
+
+/* ---------- Theme + accent combinations ----------
+ * The bright-blue (#66C5FF) and teal (#5CE1E6) accents are designed for
+ * impact on a dark surface. On the light theme's white surface they read
+ * at ~1.8:1 / ~1.6:1 -- well under WCAG AA 4.5:1 for normal text. Axe-core
+ * flagged these on active nav tabs, active filter chips, KPI source chips,
+ * and primary-CTA halos across every route in the 2026-04-22 light-theme
+ * audit. Expose a new --accent-ink token that is the accent hue WHEN
+ * readable against the background and a darker navy WHEN not, so the
+ * component CSS can opt into a legible-in-both-themes text color without
+ * losing the "active" accent affordance on the chip/border (which is
+ * still drawn from --accent and --accent-soft). */
+:root { --accent-ink: var(--accent); }
+[data-theme="light"][data-accent="bright"] { --accent-ink: #014E80; }
+[data-theme="light"][data-accent="teal"]   { --accent-ink: #045D62; }
 
 /* ---------- Density ----------
  * Comfortable is the default (carried on :root).
@@ -226,53 +258,12 @@ body {
   position: relative;
 }
 
-/* ============================================================
-   Ambient animated background — two radial halos drifting
-   independently behind everything. Barely-conscious motion;
-   reinforces the "workspace is alive" feel without distracting.
-   ============================================================ */
-body::before {
-  content: '';
-  position: fixed;
-  inset: -10%;
-  z-index: -1;
-  pointer-events: none;
-  background:
-    radial-gradient(520px 420px at 20% 30%, color-mix(in oklab, var(--entrada-teal) 14%, transparent), transparent 60%),
-    radial-gradient(640px 480px at 80% 70%, color-mix(in oklab, var(--entrada-bright) 12%, transparent), transparent 60%);
-  opacity: 0.55;
-  animation: bg-drift-1 var(--dur-ambient-1) var(--ease) infinite alternate;
-  will-change: transform, opacity;
-}
-body::after {
-  content: '';
-  position: fixed;
-  inset: -10%;
-  z-index: -1;
-  pointer-events: none;
-  background:
-    radial-gradient(720px 520px at 70% 20%, color-mix(in oklab, var(--entrada-navy) 22%, transparent), transparent 65%),
-    radial-gradient(540px 420px at 10% 85%, color-mix(in oklab, var(--entrada-teal) 10%, transparent), transparent 60%);
-  opacity: 0.45;
-  animation: bg-drift-2 var(--dur-ambient-2) var(--ease) infinite alternate;
-  will-change: transform, opacity;
-}
-[data-theme="light"] body::before { opacity: 0.35; }
-[data-theme="light"] body::after  { opacity: 0.28; }
-
-@keyframes bg-drift-1 {
-  0%   { transform: translate3d(0, 0, 0) scale(1);      opacity: 0.45; }
-  50%  { transform: translate3d(2%, -1.5%, 0) scale(1.04); opacity: 0.60; }
-  100% { transform: translate3d(-1.5%, 1.5%, 0) scale(1.02); opacity: 0.50; }
-}
-@keyframes bg-drift-2 {
-  0%   { transform: translate3d(0, 0, 0) scale(1);       opacity: 0.35; }
-  50%  { transform: translate3d(-1.8%, 2%, 0) scale(1.05); opacity: 0.50; }
-  100% { transform: translate3d(1.2%, -1%, 0) scale(1.02); opacity: 0.40; }
-}
-@media (prefers-reduced-motion: reduce) {
-  body::before, body::after { animation: none; }
-}
+/* Ambient animated radial-halo backgrounds removed 2026-04-23. They were
+   pointer-events:none fixed full-viewport pseudo-elements with `will-change:
+   transform, opacity` and infinite-alternate scale+translate animations —
+   on higher-DPI / ultra-wide displays the GPU was recomposing two
+   viewport-sized layers per frame, causing visible mouse lag. Enterprise
+   workspace UI shouldn't have decorative ambient motion anyway. */
 code, kbd, .mono { font-family: var(--font-mono); }
 a { color: inherit; }
 button, input, select, textarea { font: inherit; }

@@ -22,6 +22,11 @@ from __future__ import annotations
 from typing import Protocol, runtime_checkable
 
 from backend.schemas.common import EvidenceEvent
+from backend.schemas.geo import (
+    CountyRollupResponse,
+    StateRollupResponse,
+    ZipRollupResponse,
+)
 from backend.schemas.lead import Borrower360, LeadSummary, SegmentSummary
 from backend.schemas.portfolio import (
     PortfolioCreateRequest,
@@ -71,7 +76,12 @@ class LeadRepository(Protocol):
     ``segment_codes``; ``portfolio_id`` is accepted for forward-compat.
     """
 
-    def list(self, segment: str | None, portfolio_id: str | None) -> list[LeadSummary]:
+    def list(
+        self,
+        segment: str | None,
+        portfolio_id: str | None,
+        limit: int | None = None,
+    ) -> list[LeadSummary]:
         ...
 
 
@@ -121,6 +131,36 @@ class OutreachRepository(Protocol):
     """
 
     def find_borrower(self, borrower_id: str) -> Borrower360 | None:
+        ...
+
+
+@runtime_checkable
+class GeoRepository(Protocol):
+    """Geography rollups for the USChoroplethMap drill.
+
+    Drives the hover tooltip + fill levels on ``segment-intelligence``
+    and ``home`` without fabricating numbers.
+
+    Backings (slice13-accuracy-validation):
+    * ``state_rollups`` — ``mip.gold.funnel_snapshot_daily`` (latest
+      snapshot, state rows) LEFT JOIN ``mip.gold.state_top_segment``
+      for the ``top_segment_code`` extension.
+    * ``county_rollups`` — ``mip.gold.county_rollup`` filtered to the
+      given state at the latest snapshot_date.
+    * ``zip_rollups`` — ``mip.gold.zip_rollup`` filtered to the given
+      5-char county FIPS at the latest snapshot_date.
+
+    Every method returns a structured response with ``snapshot_date``
+    so the UI can show a "data as of YYYY-MM-DD" provenance chip.
+    """
+
+    def state_rollups(self) -> StateRollupResponse:
+        ...
+
+    def county_rollups(self, state: str) -> CountyRollupResponse:
+        ...
+
+    def zip_rollups(self, fips_5: str) -> ZipRollupResponse:
         ...
 
 

@@ -1,6 +1,6 @@
-import { useEffect, useState, type ReactElement } from 'react';
+import { useEffect, useState, type CSSProperties, type ReactElement } from 'react';
 import { Link, Navigate, useParams } from 'react-router-dom';
-import { api } from '../lib/api';
+import { api, isAbortError } from '../lib/api';
 import type { Borrower360 as Borrower360Type } from '../types';
 import { currency } from '../lib/formatters';
 import { PageShell } from '../components/layout/PageShell';
@@ -11,11 +11,11 @@ import { Chip, EvidenceChip } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { Skeleton } from '../components/ui/Skeleton';
 import { Reveal } from '../components/fx/Reveal';
-import { DRAWER_SOURCES } from '../lib/drawerSources';
+import { descriptorFor } from '../lib/drawerSources';
 import { segmentByCode } from '../lib/segmentMetadata';
 
 /**
- * Borrower 360 — public-record dossier composed in `.surface` blocks.
+ * Borrower 360 — per-borrower dossier composed in `.surface` blocks.
  * Left column: borrower + property + Owner Link details. Middle: trigger
  * timeline. Right: Why-now panel with evidence chips + next-best-offer card
  * and forward link to the Offer Orchestrator.
@@ -28,16 +28,14 @@ export default function Borrower360() {
 
   useEffect(() => {
     if (!id) return;
-    let cancelled = false;
+    const ctrl = new AbortController();
     setB(null);
     setErrorMsg(null);
     api
-      .borrower(id)
-      .then((data) => {
-        if (!cancelled) setB(data);
-      })
+      .borrower(id, ctrl.signal)
+      .then((data) => setB(data))
       .catch((err: unknown) => {
-        if (cancelled) return;
+        if (isAbortError(err)) return;
         setErrorMsg(
           err instanceof Error
             ? `Couldn't load borrower ${id}: ${err.message}`
@@ -45,7 +43,7 @@ export default function Borrower360() {
         );
       });
     return () => {
-      cancelled = true;
+      ctrl.abort();
     };
   }, [id]);
 
@@ -60,7 +58,7 @@ export default function Borrower360() {
   if (errorMsg) {
     return (
       <PageShell
-        eyebrow="Borrower 360 · Public-Record Dossier"
+        eyebrow="Borrower 360"
         title={`Couldn't load ${id}`}
         lede={errorMsg}
       >
@@ -79,9 +77,9 @@ export default function Borrower360() {
   if (!b) {
     return (
       <PageShell
-        eyebrow="Borrower 360 · Public-Record Dossier"
+        eyebrow="Borrower 360"
         title={<Skeleton width={280} height={30} rounded="md" />}
-        lede={`Fetching public-record Customer 360 for ${id}…`}
+        lede={`Loading borrower ${id}…`}
       >
         <div className="layoutA-grid">
           <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--gap-grid)' }}>
@@ -136,11 +134,18 @@ export default function Borrower360() {
   }
 
   const segColor = segmentByCode(b.segment_codes[0])?.color ?? 'var(--accent)';
+  // Strip any "Synthetic property · " legacy prefix so the UI reads as
+  // production, not as a synthesized record. The backend's
+  // subject_property field sometimes ships with this prefix; we render
+  // the location only.
+  const propertyAddress = b.subject_property
+    .replace(/^Synthetic property\s*·\s*/i, '')
+    .trim() || `${b.city}, ${b.state} ${b.zip}`;
 
   return (
     <PageShell
-      eyebrow="Borrower 360 · Public-Record Dossier"
-      title={b.display_name}
+      eyebrow="Borrower 360"
+      title={`Borrower ${b.borrower_id}`}
       lede={`${b.city}, ${b.state} ${b.zip} · ${b.recommended_offer}`}
       heroRight={
         <>
@@ -173,7 +178,18 @@ export default function Borrower360() {
             <div className="surface__body" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
               <Field k="CLIP" v={b.clip_id} mono />
               <Field k="Owner Link" v={b.owner_link_id} mono />
-              <Field k="Subject property" v={b.subject_property} />
+              <Field
+                k="Property address"
+                v=""
+                childEl={
+                  <div>
+                    <div style={{ fontSize: 13, color: 'var(--text-1)' }}>{propertyAddress}</div>
+                    <div className="muted" style={{ fontSize: 10, marginTop: 2 }}>
+                      Street-level address redacted for compliance; city + ZIP shown.
+                    </div>
+                  </div>
+                }
+              />
               <Field k="AVM" v={currency(b.avm_value)} mono />
               <Field k="Current lien" v={`${currency(b.current_lien_balance)} · ${b.current_rate}%`} mono />
               <Field k="LTV / Equity" v={`${b.ltv}% · ${currency(b.equity_estimate)}`} mono />
@@ -186,15 +202,23 @@ export default function Borrower360() {
                     {b.segment_codes.map((sid) => {
                       const s = segmentByCode(sid);
                       const color = s?.color ?? 'var(--accent)';
+                      // Expose the segment hue via a CSS var so the stylesheet
+                      // can pick the right text color per theme. Dark theme:
+                      // segment hue is the text. Light theme: darker navy text
+                      // (the segment hue is still visible in border + fill).
+                      // Fixes WCAG 1.57/1.91/2.65:1 contrast failures flagged
+                      // in the 2026-04-22 light-theme audit.
                       return (
                         <span
                           key={sid}
-                          className="chip"
-                          style={{
-                            color,
-                            background: `color-mix(in oklab, ${color} 14%, transparent)`,
-                            borderColor: `color-mix(in oklab, ${color} 35%, transparent)`,
-                          }}
+                          className="chip chip--segment"
+                          style={
+                            {
+                              '--chip-hue': color,
+                              background: `color-mix(in oklab, ${color} 14%, transparent)`,
+                              borderColor: `color-mix(in oklab, ${color} 35%, transparent)`,
+                            } as CSSProperties
+                          }
                         >
                           {s?.name ?? sid}
                         </span>
@@ -244,13 +268,22 @@ export default function Borrower360() {
               </div>
               <div style={{ marginTop: 10, display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
                 <span className="muted" style={{ fontSize: 11 }}>Evidence:</span>
-                {b.why_panel.sources.map((s) => (
-                  <EvidenceChip key={s} source={DRAWER_SOURCES.itm}>
-                    {s.split('.').slice(-1)[0]}
-                  </EvidenceChip>
-                ))}
-                <EvidenceChip source={DRAWER_SOURCES.nbo}>mlflow.mtg_nbo_v3</EvidenceChip>
-                <EvidenceChip source={DRAWER_SOURCES.permit}>permits.building</EvidenceChip>
+                {b.why_panel.sources.map((s, idx) => {
+                  // Prefer the backend-supplied human-readable label (added
+                  // 2026-04-22). Fall back to the trailing UC segment so
+                  // anything that hasn't been mapped still reads sensibly.
+                  const label = b.why_panel.source_labels?.[idx]?.display_label
+                    ?? s.split('.').slice(-1)[0];
+                  // Route each chip to the drawer entry matching its UC
+                  // source. Previously every why-panel chip opened the
+                  // in-the-money drawer, which was a parity bug when the
+                  // source was NBO/permit/population.
+                  return (
+                    <EvidenceChip key={s} source={descriptorFor(s)}>
+                      {label}
+                    </EvidenceChip>
+                  );
+                })}
               </div>
             </div>
           </div>
@@ -278,12 +311,12 @@ export default function Borrower360() {
           <div className="surface">
             <div className="surface__hdr">
               <Icon name="layers" size={14} style={{ color: 'var(--accent)' }} />
-              <div className="h-4">Why we trust this</div>
+              <div className="h-4">Supporting evidence</div>
             </div>
             <div className="surface__body" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               {b.evidence_events.map((e) => (
                 <div key={e.evidence_id} style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
-                  <EvidenceChip source={DRAWER_SOURCES.itm}>{e.source_product}</EvidenceChip>
+                  <EvidenceChip source={descriptorFor(e.source_table)}>{e.source_product}</EvidenceChip>
                   <span style={{ color: 'var(--text-2)', fontSize: 13 }}>{e.display_text}</span>
                 </div>
               ))}

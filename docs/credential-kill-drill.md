@@ -25,12 +25,12 @@ canonical recovery procedure.
 The **simulated** tier runs in the nightly `kill-drill-simulated`
 GitHub Actions job and is a release gate. The **real-infra** tier is
 opt-in only: either the manual `workflow_dispatch` path with
-`run_real_drills=true`, or a deliberate local rehearsal. It is **never**
+`run_real_drills=true`, or a deliberate local dry-run. It is **never**
 on the nightly cron.
 
 **Cadence.** Run the full four-target simulated sweep before every
-major release rehearsal. Run the real-infra pair before major release
-rehearsals **only** — stopping real infra in production hours is a
+major release dry-run. Run the real-infra pair before major release
+dry-runs **only** — stopping real infra in production hours is a
 user-visible outage. Run immediately after any change to:
 - `backend/services/resilience.py`
 - `backend/api/health.py`
@@ -232,7 +232,7 @@ path works end-to-end — but it causes a 30–90 s user-visible outage
 during the drill window.
 
 ```bash
-# Local rehearsal (operator already has DATABRICKS_WAREHOUSE_ID set):
+# Local dry-run (operator already has DATABRICKS_WAREHOUSE_ID set):
 ./tools/kill_drill/run_drill.sh --target warehouse-real --i-really-mean-it
 ```
 

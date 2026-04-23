@@ -1,6 +1,6 @@
 export type SegmentCode = 'itm' | 'listed' | 'permit' | 'investor' | 'equity' | 'retention';
 export type OfferType = 'refi' | 'heloc' | 'cash_out' | 'purchase' | 'retention' | 'recapture';
-export type ApprovalStatus = 'pending' | 'approved' | 'rejected';
+export type ApprovalStatus = 'pending' | 'approved' | 'rejected' | 'hold';
 
 export interface EvidenceEvent {
   evidence_id: string;
@@ -29,6 +29,11 @@ export interface LeadSummary {
   city: string;
   state: string;
   zip: string;
+  /** Real Cotality CLIP (2026-04-22 contract addition). Present on the
+   *  lead-queue row and matches Borrower360.clip_id exactly. Empty string
+   *  if the upstream gold row predates this projection; callers should
+   *  prefer this field over deriving a fake CLIP from borrower_id. */
+  clip: string;
   segment_codes: SegmentCode[];
   equity_estimate: number;
   rate_spread_bps: number;
@@ -38,6 +43,28 @@ export interface LeadSummary {
   why_now: string;
   evidence_ids: string[];
   approval_status: ApprovalStatus;
+  /** Secondary-filter fields (2026-04-23). Carried from gold.borrower_360
+   *  through gold.lead_population so /segment-intelligence can run real
+   *  client-side predicates against occupancy, owner-link, lien state,
+   *  and purchase intent. All optional with safe defaults so older cached
+   *  payloads still parse. `has_permit` / `listed_for_sale` are BLOCKED
+   *  FALSE in gold until Cotality Building Permits + MLS Delta shares
+   *  land — the UI surfaces a "data-dependency pending" note. */
+  is_owner_occupied?: boolean;
+  is_investor?: boolean;
+  related_property_count?: number;
+  current_lien_balance?: number;
+  second_pos_amount?: number;
+  has_permit?: boolean;
+  listed_for_sale?: boolean;
+}
+
+/** Business-friendly label for a UC source (2026-04-22). `name` is the
+ *  raw UC object name (drives drawer lineage); `display_label` is the
+ *  human-readable chip text (e.g. "In-the-money rule"). */
+export interface SourceLabel {
+  name: string;
+  display_label: string;
 }
 
 export interface WhyPanel {
@@ -49,6 +76,8 @@ export interface WhyPanel {
   min_spread_bps: number;
   min_equity_pct: number;
   sources: string[];
+  /** Index-aligned with `sources`. Added 2026-04-22. */
+  source_labels?: SourceLabel[];
 }
 
 export interface Borrower360 extends LeadSummary {
@@ -65,12 +94,30 @@ export interface Borrower360 extends LeadSummary {
   why_panel: WhyPanel;
 }
 
+export interface KpiTrend {
+  series: number[];
+  delta_pct: number | null;
+  direction: 'up' | 'down' | 'flat';
+}
+
 export interface PortfolioPreview {
   marketable_population: number;
   high_intent_leads: number;
+  top_tier_opportunities: number | null;
+  offers_recommended: number | null;
   avg_score: number;
-  projected_contact_to_app: number;
-  cost_per_contact: number;
+  data_refreshed_at: string | null; // ISO timestamp
+  trends?: Record<string, KpiTrend>;
+  // R5-20: server-authoritative day-zero flag. Optional so older servers
+  // that don't emit it still parse; consumers must fall back to
+  // `marketable_population === 0 && data_refreshed_at === null` when
+  // absent.
+  day_zero?: boolean;
+  // Deprecated — always null. Kept for schema back-compat with older clients.
+  projected_contact_to_app: number | null;
+  cost_per_contact: number | null;
+  approved_count: number | null;
+  in_outreach_count: number | null;
 }
 
 export interface OfferAlternative {
@@ -88,6 +135,10 @@ export interface OfferRecommendation {
   rationale: string;
   evidence_ids: string[];
   sources: string[];
+  /** Index-aligned with `sources`. Added 2026-04-22 so chip text renders
+   *  business-friendly labels (e.g. "In-the-money rule") instead of raw
+   *  UC object names. Optional for back-compat with cached responses. */
+  source_labels?: SourceLabel[];
   alternatives: OfferAlternative[];
   thresholds_applied: Record<string, number>;
 }
@@ -105,4 +156,59 @@ export interface GenieAnswer {
   metric_value?: string | null;
   table_rows?: Record<string, unknown>[] | null;
   follow_up_questions?: string[];
+}
+
+/** Per-state aggregate row from `/api/geo/state-rollups` (see
+ *  backend/schemas/geo.py). `state` is the uppercase USPS code. Consumed
+ *  by the USChoroplethMap state level. `top_segment_code` was added in
+ *  slice13-accuracy-validation so the map can drop the hardcoded
+ *  STATE_FACTS[*].topSegment literal. */
+export interface StateRollup {
+  state: string;
+  addressable: number;
+  in_the_money: number;
+  top_tier_opportunities: number;
+  avg_score: number;
+  top_segment_code?: string | null;
+}
+
+export interface StateRollupResponse {
+  rollups: StateRollup[];
+  snapshot_date?: string | null;
+}
+
+/** Per-county aggregate row from `/api/geo/county-rollups?state=XX`. */
+export interface CountyRollup {
+  fips_5: string;
+  state: string;
+  county_name?: string | null;
+  addressable_borrowers: number;
+  in_the_money_borrowers: number;
+  high_opportunity_borrowers: number;
+  avg_opportunity_score: number;
+  top_segment_code?: string | null;
+}
+
+export interface CountyRollupResponse {
+  state: string;
+  rollups: CountyRollup[];
+  snapshot_date?: string | null;
+}
+
+/** Per-ZIP aggregate row from `/api/geo/zip-rollups?fips=NNNNN`.
+ *  `sample_borrower_id` is the stable-ranked top borrower for deep-link. */
+export interface ZipRollup {
+  zip: string;
+  state: string;
+  county_fips_5?: string | null;
+  addressable_borrowers: number;
+  avg_opportunity_score: number;
+  top_segment_code?: string | null;
+  sample_borrower_id?: string | null;
+}
+
+export interface ZipRollupResponse {
+  fips_5: string;
+  rollups: ZipRollup[];
+  snapshot_date?: string | null;
 }

@@ -3,15 +3,18 @@ import { Icon } from '../Icon';
 import { EvidenceChip } from '../Primitives';
 import type { DrawerSource } from '../AppContext';
 import { Sparkline } from './Sparkline';
-import { useCountUp } from '../../lib/useCountUp';
 
 /**
  * KpiCard — prototype `.kpi` BEM: label / value / unit / delta / source.
- * Two display paths:
- *   - `value: string` → static rendering (for "$2.18" / "9.7" / non-numeric)
- *   - `valueAnimated: number` + optional `format` → counts up from 0 on mount,
- *     formatter is called per frame so currency/percent/locale formatting
- *     stays outside the hook.
+ *
+ * Value paths:
+ *   - `value: string` — static pre-formatted (e.g. "$2.18")
+ *   - `valueAnimated: number | null` — numeric; formatted via `format` (default
+ *     is `.toLocaleString()` rounded to int). Renders the final value directly
+ *     (no count-up animation — it was running on every route navigation and
+ *     came across as demo-ticker, not a settled enterprise metric).
+ *   - `valueAnimated: null` — renders "—" (em dash) while the API is loading
+ *     or errored; never a plausible-but-fake fallback.
  *
  * `trend` renders a micro-sparkline in the top-right corner using the
  * prototype's `.kpi__spark` slot; color direction honors `deltaDir`.
@@ -21,13 +24,9 @@ interface KpiCardProps {
   label: string;
   /** Static pre-formatted value. Used when `valueAnimated` is absent. */
   value?: string;
-  /**
-   * Target numeric value to animate on mount. Formatter applied per frame.
-   * ``null`` renders an em-dash placeholder so the card never shows a
-   * plausible-looking value while the underlying API is loading/errored.
-   */
+  /** Numeric value; `null` renders an em-dash while loading/errored. */
   valueAnimated?: number | null;
-  /** Formatter for animated values. Default: .toLocaleString() rounded to int. */
+  /** Formatter for numeric values. Default: .toLocaleString() rounded to int. */
   format?: (n: number) => string;
   unit?: string;
   delta?: string;
@@ -53,13 +52,11 @@ export function KpiCard({
   spark,
   trend,
 }: KpiCardProps) {
-  // Hooks must run unconditionally — pass 0 when valueAnimated is null/undefined.
-  const animated = useCountUp(valueAnimated ?? 0);
   let display: string;
   if (valueAnimated === null) {
     display = '—';
   } else if (valueAnimated !== undefined) {
-    display = format(animated);
+    display = format(valueAnimated);
   } else {
     display = value ?? '';
   }

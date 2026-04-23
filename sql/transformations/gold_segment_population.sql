@@ -157,7 +157,8 @@ SELECT
   c.avg_score,
   m.description,
   m.color,
-  CURRENT_TIMESTAMP()                                AS refreshed_at
+  -- Shared refresh_at captured once per run. See audit-holes-round-3 #7.
+  (SELECT refresh_at FROM mip.ref.refresh_run_state ORDER BY captured_at DESC LIMIT 1) AS refreshed_at
 FROM current_counts AS c
 LEFT JOIN prior    AS p USING (segment_code, state)
 LEFT JOIN meta     AS m USING (segment_code);

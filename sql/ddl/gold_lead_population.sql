@@ -58,6 +58,19 @@ CREATE TABLE IF NOT EXISTS mip.gold.lead_population (
   why_now                   STRING    NOT NULL COMMENT 'Deterministic template per offer code.',
   evidence_ids              ARRAY<STRING> NOT NULL COMMENT 'Ordered evidence_ids (mirrors gold.borrower_360 for this CLIP).',
   approval_status           STRING    NOT NULL COMMENT '"pending" by default; Lakebase is authoritative for actual state.',
+  -- Secondary-filter fields (2026-04-23). Carried through from
+  -- gold.borrower_360 so /segment-intelligence can run real client-side
+  -- predicates against occupancy, owner-link, lien state, and purchase
+  -- intent. All are NOT NULL because borrower_360 already emits them NOT
+  -- NULL (with BLOCKED FALSE defaults for the permit / listing columns
+  -- until the Cotality Building Permits + MLS Delta shares land).
+  is_owner_occupied         BOOLEAN   NOT NULL COMMENT 'From gold.borrower_360; drives /segment-intelligence DEMOGRAPHICS filter.',
+  is_investor               BOOLEAN   NOT NULL COMMENT 'Carried from gold.borrower_360 (derived: multi-property OR corporate OR absentee).',
+  related_property_count    INT       NOT NULL COMMENT 'From gold.borrower_360; drives /segment-intelligence OWNER LINK filter.',
+  current_lien_balance      BIGINT    NOT NULL COMMENT 'From gold.borrower_360; drives /segment-intelligence LIEN filter.',
+  second_pos_amount         BIGINT             COMMENT 'From gold.borrower_360; nullable (no second-position lien).',
+  has_permit                BOOLEAN   NOT NULL COMMENT 'BLOCKED: FALSE until Cotality Building Permits Delta share lands.',
+  listed_for_sale           BOOLEAN   NOT NULL COMMENT 'BLOCKED: FALSE until Cotality MLS Listings Delta share lands.',
   rank_overall              INT       NOT NULL COMMENT 'DENSE_RANK OVER (ORDER BY opportunity_score DESC, clip). 1 = highest.',
   rank_within_state         INT       NOT NULL COMMENT 'DENSE_RANK OVER (PARTITION BY state ORDER BY opportunity_score DESC, clip). 1 = highest in state.',
   population_version        STRING    NOT NULL COMMENT 'CONCAT(DATE_FORMAT(refreshed_at, "yyyyMMdd"), "-v1"). EvidenceDrawer footer uses this as a provenance chip.',

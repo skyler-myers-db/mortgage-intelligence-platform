@@ -45,6 +45,85 @@ with _NBO_FIXTURE_PATH.open() as _f:
 NBO_PRODUCT_LABELS: dict[str, str] = dict(_NBO_FIXTURE["product_labels"])
 
 
+# ---------------------------------------------------------------------------
+# Source-label registry (2026-04-22 persona-review fix).
+# -----------------------------------------------------------------------------
+# Maps the raw Unity Catalog object names we cite as evidence (and the
+# legacy short aliases the LeadTable still hard-codes) to the business-
+# friendly labels that render on compliance-visible surfaces. The drawer
+# lineage link continues to use the raw UC name so a compliance reviewer
+# can still trace to the exact object; only the chip text changes.
+#
+# Usage:
+#
+#     from backend.services.scoring import source_display_label
+#     label = source_display_label("mip.gold.fn_in_the_money")
+#     # -> "In-the-money rule"
+#
+# Unknown entries fall back to the last dotted segment (the pre-existing
+# `shortSourceLabel` behaviour) so adding a new UC object is non-breaking.
+# ---------------------------------------------------------------------------
+SOURCE_DISPLAY_LABELS: dict[str, str] = {
+    # UC function evidence
+    "mip.gold.fn_rate_spread":      "Market rate comparison",
+    "mip.gold.fn_in_the_money":     "In-the-money rule",
+    "mip.gold.fn_next_best_offer":  "Next-best-offer model",
+    "mip.gold.fn_lead_score":       "Lead score model",
+    # UC table evidence
+    "mip.gold.borrower_360":        "Borrower dossier",
+    "mip.gold.borrower_dossier":    "Borrower dossier",
+    "mip.gold.lead_population":     "Ranked lead population",
+    "mip.gold.lead_scores":         "Lead scores",
+    "mip.gold.evidence_events":     "Evidence stream",
+    "mip.gold.property_owner_bridge": "Owner Link bridge",
+    # Short aliases used on RowPreview / historical code paths
+    "fn_rate_spread":               "Market rate comparison",
+    "fn_in_the_money":              "In-the-money rule",
+    "fn_next_best_offer":           "Next-best-offer model",
+    "fn_lead_score":                "Lead score model",
+    "rules.itm_v3":                 "Rate + equity ruleset",
+    "mlflow.mtg_nbo_v3":            "Next-best-offer model v3",
+    "permits.building":             "Building permit signal",
+    "borrower_dossier":             "Borrower dossier",
+}
+
+
+def source_display_label(name: str | None) -> str:
+    """Return the business-friendly label for a UC source name.
+
+    Unknown names fall back to the last dotted segment (e.g.
+    ``mip.silver.property_master`` -> ``"property_master"``). ``None`` or
+    empty input returns an empty string so callers can pass raw data
+    through without guarding.
+
+    Multi-catalog note: the registry keys embed the default ``mip.*``
+    prefix for legacy compatibility, but we retry the lookup against the
+    ``schema.object`` suffix (e.g. ``gold.fn_in_the_money``) so a
+    customer deploying with ``mip_prod.*`` still resolves the business
+    label instead of leaking the raw object name.
+    """
+    if not name:
+        return ""
+    if name in SOURCE_DISPLAY_LABELS:
+        return SOURCE_DISPLAY_LABELS[name]
+    # Multi-catalog fallback: strip the leading catalog token and re-try
+    # the lookup against ``schema.object`` (or just ``object`` for the
+    # short-alias bucket). This keeps business labels stable even when
+    # the workspace catalog is ``mip_prod`` / ``lender_uc`` / etc.
+    parts = name.split(".")
+    if len(parts) >= 2:
+        schema_object = ".".join(parts[-2:])  # e.g. "gold.fn_in_the_money"
+        prefixed = f"mip.{schema_object}"      # e.g. "mip.gold.fn_in_the_money"
+        if prefixed in SOURCE_DISPLAY_LABELS:
+            return SOURCE_DISPLAY_LABELS[prefixed]
+    # Fall back to the frontend's legacy behaviour so an unmapped source
+    # still renders something reasonable rather than the full FQN.
+    last = name.rsplit(".", 1)[-1]
+    if last in SOURCE_DISPLAY_LABELS:
+        return SOURCE_DISPLAY_LABELS[last]
+    return last
+
+
 def lead_score(
     economic_incentive: int | None,
     intent_trigger: int | None,

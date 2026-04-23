@@ -39,6 +39,7 @@ from typing import Any
 from fastapi import APIRouter
 
 from backend.config.settings import settings
+from backend.services.audit_store import get_fallback_identity_count
 from backend.services.observability import (
     get_otel_handler,
     recent_breaker_state_changes,
@@ -110,13 +111,17 @@ def _probe_warehouse() -> bool:
 
 
 def _probe_lakebase() -> bool:
-    """Return True when a 1s ``SELECT 1`` against Lakebase succeeds."""
+    """Return True when a 1s ``SELECT 1`` against Lakebase succeeds.
+
+    Round-4 R4-10: previously returned True on "not configured" so local
+    dev wouldn't show a banner. That's wrong in any deployed context —
+    missing Lakebase creds = missing audit trail = governance §4 break,
+    and returning "up" made the break invisible. We now only short-circuit
+    to True when ``app_env == 'local'``; every other env surfaces False
+    + `configured=False` so the degraded banner + on-call know.
+    """
     if not settings.lakebase_host or not settings.lakebase_user:
-        # Not configured -- treat as up so we don't show a scary
-        # banner in a dev environment where Lakebase isn't expected
-        # to be available. Governance §4 still requires real Lakebase
-        # for production; that's enforced on deploy, not here.
-        return True
+        return settings.app_env == "local"
     try:
         from backend.services.lakebase import get_lakebase_client
     except Exception:  # pragma: no cover -- defensive
@@ -245,4 +250,12 @@ def health() -> dict[str, Any]:
         # path is active.
         "counters_persistence": "process-local",
         "log_export": "otlp" if get_otel_handler() is not None else "stdout-only",
+        # Slice-RBAC follow-up: count of requests where the audit
+        # ``resolve_actor`` path fell back to ``settings.default_actor``
+        # because ``X-Forwarded-Email`` was absent. A non-zero value in a
+        # production deploy is a regression signal -- Databricks Apps
+        # should always forward the header. The counter is process-local
+        # (like the two above); the durable trail is the structured
+        # WARNING log emitted at each fallback.
+        "fallback_identity_fallbacks_total": get_fallback_identity_count(),
     }
