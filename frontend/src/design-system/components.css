@@ -123,10 +123,29 @@
   overflow-y: auto;
   position: relative;
   transition: padding-right var(--dur-base) var(--ease);
+  /* Establish an inline-size container so .kpi-row, .seg-grid and
+     .layoutA-grid can reflow based on their actual available width
+     (Console open vs. closed at a constant viewport, for example)
+     instead of forcing viewport-scale @media rules to guess. */
+  container-type: inline-size;
+  container-name: main;
 }
 .main__inner {
   padding: var(--sp-6) var(--sp-6) var(--sp-12);
-  max-width: 1440px;
+  /* No max-width here. The max-width rule belongs to `.main__content`
+     (our wrapper) so the cap can differ per route (1920 text-dense,
+     2400 hero-map). `.main__inner` should always fill its parent. */
+  width: 100%;
+}
+/* Ultra-wide cap: on monitors beyond ~2000px we center the content in a
+   1920px column so the KPI cards, segment grid and table stay at a
+   human-readable line length. The outer .main remains full-bleed so the
+   ambient gradients keep filling the viewport; .main__content is the
+   centered column that holds the actual page. The hero map route opts
+   out via .main__content--wide-map (below). */
+.main__content {
+  max-width: min(100%, 1920px);
+  margin-inline: auto;
 }
 /* When the Console is docked open at top-right (fixed 300px card), reserve
    a right gutter on .main so long rows do not slide under it. The Console is
@@ -247,6 +266,12 @@
   padding: var(--pad-card);
   overflow: hidden;
   transition: all var(--dur-base) var(--ease);
+  /* Cap individual card width so a 4-card row on an ultra-wide monitor
+     doesn't balloon each card to 600–800px of whitespace. With
+     auto-fit + minmax on .kpi-row (below), cards stay compact and the
+     row centers under the content cap. */
+  max-width: 480px;
+  width: 100%;
 }
 .kpi::before {
   content: ''; position: absolute; inset: 0 0 auto 0; height: 1px;
@@ -267,12 +292,17 @@
 }
 .kpi__value {
   font-family: var(--font-sans); font-weight: 600;
-  font-size: var(--fs-36); letter-spacing: var(--tracking-tight);
+  /* Clamp so the big number scales smoothly from laptop (~24px) through
+     design target (~28–32px at 1440) to QHD/ultra-wide (~36px) without
+     a hard media-query step. --fs-36 is kept as an upper anchor via
+     the clamp max. */
+  font-size: var(--fs-kpi-big);
+  letter-spacing: var(--tracking-tight);
   color: var(--text-1); line-height: 1;
   font-variant-numeric: tabular-nums;
   display: flex; align-items: baseline; gap: var(--sp-2);
 }
-.kpi__unit { font-size: var(--fs-16); color: var(--text-3); font-weight: 500; }
+.kpi__unit { font-size: var(--fs-kpi-unit); color: var(--text-3); font-weight: 500; }
 .kpi__delta {
   display: inline-flex; align-items: center; gap: 4px;
   margin-top: var(--sp-3);
@@ -801,23 +831,123 @@
 
 /* ============================================================
    LAYOUT HELPERS (Module 0 specific, per prototype)
+   ------------------------------------------------------------
+   Layout reflow is driven by @container queries against the
+   `main` container we declared on `.main` above. This is the
+   correct unit of measurement because the Console (right-rail,
+   300px overlay) eats ~324px of horizontal room without
+   changing the viewport width — a pure viewport @media rule
+   would keep a 4-col KPI row while the actual available space
+   is closer to 1000px. A few viewport-scoped @media rules
+   remain below for *shell chrome* (rail width, topbar height)
+   that genuinely belongs to the viewport.
    ============================================================ */
-.kpi-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--gap-grid); }
+
+/* KPI row — auto-fit + minmax means the browser naturally picks
+   the right number of columns for the container width. The
+   container-query breakpoints override when we need a specific
+   count (e.g. force 1-col on very narrow containers even though
+   240px would still fit two). */
+.kpi-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: var(--gap-grid);
+  justify-content: start;
+}
 .section-hdr { display: flex; align-items: baseline; justify-content: space-between; margin: 28px 0 12px; gap: var(--sp-4); }
 .section-hdr .h-2 { margin: 0; }
-.seg-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; }
-@media (max-width: 1400px) { .seg-grid { grid-template-columns: repeat(3, 1fr); } }
+
+/* Segment grid — 6 cards is the design-target ≥ 1440px band.
+   Below that the auto-fit in the container-query stepdowns
+   produces 4 / 3 / 2 / 1 cols. The base rule uses a flexible
+   auto-fit so resizes between breakpoints stay graceful. */
+.seg-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
 .proto-hero {
   display: flex; align-items: flex-end; justify-content: space-between;
   margin-bottom: 24px; gap: 24px;
+  flex-wrap: wrap;
 }
-.proto-hero h1 { font-size: 28px; font-weight: 600; letter-spacing: -0.02em; margin: 0 0 4px; }
+.proto-hero h1 { font-size: var(--fs-hero); font-weight: 600; letter-spacing: -0.02em; margin: 0 0 4px; line-height: var(--lh-tight); }
 .proto-hero .lede { color: var(--text-2); font-size: 14px; max-width: 640px; margin: 0; }
 .audit-panel { max-height: 260px; overflow-y: auto; }
-.layoutA-grid { display: grid; grid-template-columns: 1.4fr 1fr; gap: var(--gap-grid); }
-@media (max-width: 1200px) {
-  .kpi-row { grid-template-columns: repeat(2, 1fr); }
+
+/* LayoutA — 2-col on design target (hero map + activity log, borrower
+   body + right panel). Flips to 1-col when the container is narrower
+   than ~960px (whether from a small laptop, a projector slice, or
+   Console-open on a mid-size display). */
+.layoutA-grid {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr;
+  gap: var(--gap-grid);
+}
+
+/* Table wrappers — on narrow containers the table gains horizontal
+   scroll so cells stay readable. On wide containers nothing changes
+   (design target still holds). Applied to the .surface that wraps a
+   .tbl rather than every .surface to avoid accidental clipping
+   elsewhere. */
+.surface:has(> .tbl),
+.surface:has(> div > .tbl) {
+  overflow-x: auto;
+}
+
+/* --- Container-query reflow ---
+ * Tuned against the design-target 1440px (prototype) sitting at the
+ * top of the "md" band. Anchor breakpoints: 640 / 960 / 1280 / 1680
+ * / 2000. `container: main` named above.
+ */
+
+/* Very narrow (≤ 640px container): stack everything. */
+@container main (max-width: 640px) {
+  .kpi-row      { grid-template-columns: 1fr; }
+  .seg-grid     { grid-template-columns: 1fr; }
   .layoutA-grid { grid-template-columns: 1fr; }
+  .proto-hero   { flex-direction: column; align-items: flex-start; }
+}
+
+/* Narrow (641–960px): 2-col KPIs, 2-col seg-grid, layoutA stacks. */
+@container main (min-width: 641px) and (max-width: 960px) {
+  .kpi-row      { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .seg-grid     { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .layoutA-grid { grid-template-columns: 1fr; }
+}
+
+/* Medium (961–1280px): 3-col KPIs, 3-col seg-grid, layoutA 2-col. */
+@container main (min-width: 961px) and (max-width: 1280px) {
+  .kpi-row      { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .seg-grid     { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .layoutA-grid { grid-template-columns: 1.2fr 1fr; }
+}
+
+/* Design-target band (1281–1680px): 4-col KPIs, 6-col seg-grid, 2-col
+   layoutA. This is the prototype — 1440×900 lands here exactly. */
+@container main (min-width: 1281px) and (max-width: 1680px) {
+  .kpi-row      { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .seg-grid     { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  .layoutA-grid { grid-template-columns: 1.4fr 1fr; }
+}
+
+/* Very wide (1681–2000px): 4-col KPIs with a little extra gap; seg-grid
+   is free to render 6 cards comfortably. layoutA keeps its 2-col split. */
+@container main (min-width: 1681px) and (max-width: 2000px) {
+  .kpi-row      { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: calc(var(--gap-grid) + 4px); }
+  .seg-grid     { grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 14px; }
+  .layoutA-grid { grid-template-columns: 1.4fr 1fr; gap: calc(var(--gap-grid) + 4px); }
+}
+
+/* Ultra-wide (≥ 2001px container): hand over to .main__content cap.
+   The cap holds content to 1920px so the layout looks exactly like
+   "very wide" inside a centered column. Seg-grid can go 6-across; we
+   don't force more columns beyond the cap because the table and
+   layoutA proportions stop working past 7 cards per row. */
+@container main (min-width: 2001px) {
+  .kpi-row      { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: calc(var(--gap-grid) + 4px); }
+  .seg-grid     { grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 14px; }
+  .layoutA-grid { grid-template-columns: 1.4fr 1fr; gap: calc(var(--gap-grid) + 4px); }
 }
 
 /* Map placeholder (before full interactive map ships) */
@@ -1076,5 +1206,162 @@
 }
 @media (prefers-reduced-motion: reduce) {
   .reveal-on-scroll { opacity: 1; transform: none; transition: none; }
+}
+
+/* ============================================================
+   SHELL CHROME — VIEWPORT-SCOPED MEDIA QUERIES
+   ------------------------------------------------------------
+   The rail / topbar / Console are fixed chrome that sit
+   against the viewport edge. They SHOULD scale with the
+   viewport, not the container, so these rules use @media.
+   The prototype is tuned for 1440 × 900; these adjust around
+   that anchor for laptops (1280), projectors (1920), QHD
+   (2560) and ultra-wide / 4K (3440 / 3840).
+   ------------------------------------------------------------
+   Rail width:
+     < 1024 : 56px   (degraded; uncommon)
+     1024–1919 : 72px (prototype)
+     1920–2559 : 80px (FHD projectors)
+     ≥ 2560 : 96px    (QHD / 4K / ultrawide)
+   Topbar height:
+     < 2560 : 56px
+     ≥ 2560 : 64px
+   Console gutter ([data-console="open"] .main):
+     < 1280 : Console becomes a bottom sheet (degraded gutter 0)
+     1280–2559 : 324px
+     ≥ 2560 : 360px
+*/
+
+/* --- Tiny viewport fallback (<1024): narrow rail, ensure things fit.
+       Mobile-first design is explicitly out of scope (see
+       design_files/Module 0 Prototype.html); this rule keeps the app
+       from collapsing but does not pretend to be a mobile layout. */
+@media (max-width: 1023px) {
+  .app-shell {
+    grid-template-columns: 56px 1fr;
+  }
+  .rail {
+    padding: var(--sp-2) var(--sp-1);
+  }
+  .rail__brand,
+  .rail__item {
+    width: 48px;
+    height: 48px;
+  }
+}
+
+/* --- Below 1280 viewport: Console was eating too much of the
+       available width. Move it to a bottom sheet so the main column
+       gets its space back. This is a minimal degrade — the Console
+       keeps working but docks below the fold. */
+@media (max-width: 1279px) {
+  .tweaks {
+    top: auto;
+    right: 0;
+    left: 0;
+    bottom: 0;
+    width: 100vw;
+    max-height: 50vh;
+    border-radius: var(--r-lg) var(--r-lg) 0 0;
+    border-bottom: 0;
+    overflow-y: auto;
+  }
+  [data-console="open"] .main {
+    padding-right: var(--sp-6);
+    padding-bottom: calc(50vh + var(--sp-6));
+  }
+}
+
+/* --- FHD projectors / 1920+ viewports: slightly wider rail so icons
+       are more legible at distance; still fits the prototype look. */
+@media (min-width: 1920px) {
+  .app-shell {
+    grid-template-columns: 80px 1fr;
+  }
+  .rail__brand,
+  .rail__item {
+    width: 60px;
+    height: 60px;
+  }
+}
+
+/* --- QHD and above: larger chrome to match the bigger pixel budget.
+       Rail grows to 96px, topbar gains 8px, Console reserves 360px
+       when docked open. */
+@media (min-width: 2560px) {
+  .app-shell {
+    grid-template-columns: 96px 1fr;
+    grid-template-rows: 64px 1fr;
+  }
+  .rail__brand,
+  .rail__item {
+    width: 72px;
+    height: 72px;
+  }
+  [data-console="open"] .main {
+    padding-right: 360px;
+  }
+  .tweaks {
+    width: 340px;
+  }
+}
+
+/* ============================================================
+   ULTRA-WIDE AMBIENT FILL
+   ------------------------------------------------------------
+   Past the 1920px content cap, we have unused viewport room on
+   either side of .main__content. Fill it with a subtle radial
+   gradient that pulls from the same brand tokens as the body
+   halos — it reads as depth, not as a second UI. Only applied
+   at >= 2000px viewport so it never shows during a demo on a
+   typical projector.
+*/
+@media (min-width: 2000px) {
+  .main::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 0;
+    background:
+      radial-gradient(1400px 900px at 0% 30%,
+        color-mix(in oklab, var(--entrada-navy) 10%, transparent),
+        transparent 55%),
+      radial-gradient(1400px 900px at 100% 70%,
+        color-mix(in oklab, var(--entrada-teal) 8%, transparent),
+        transparent 55%);
+    opacity: 0.65;
+  }
+  [data-theme="light"] .main::before { opacity: 0.40; }
+}
+
+/* ============================================================
+   HERO MAP OPT-OUT
+   ------------------------------------------------------------
+   On Home the USChoropleth map is the signature viz and should
+   stretch past the 1920px content cap on ultra-wides. Mark the
+   wrapping .main__content with --wide-map (Home does; the other
+   routes don't) and it bursts past the cap. Typography + KPI
+   cards keep the 1920px cap so text stays readable.
+*/
+.main__content--wide-map {
+  max-width: min(100%, 2400px);
+}
+
+/* ============================================================
+   LEAD TABLE ULTRA-WIDE CAP
+   ------------------------------------------------------------
+   The .tbl column widths stop looking proportional past
+   ~1600px. Cap the surface that wraps a .tbl to 1600px so the
+   table stays tidy on 3440px ultrawide and 3840px 4K, while
+   other surfaces (maps, dossiers) keep their full column
+   width. Applied only at ≥ 2001px container so the design
+   target is untouched. */
+@container main (min-width: 2001px) {
+  .main__inner > .surface:has(> .tbl),
+  .main__inner > .surface:has(> div > .tbl) {
+    max-width: 1600px;
+    margin-inline: auto;
+  }
 }
 

@@ -54,6 +54,7 @@ export default function Home() {
       eyebrow="Module 0 · Top-of-Funnel Lead Generation & Borrower Segmentation"
       title="Who should we contact, why now, and with what offer?"
       lede="Grounded on Cotality public records, liens, listings, permits, AVM, and mortgage market data. Every recommendation is traceable, every score has a rationale, and nothing is sent without human approval."
+      wideMap
       heroRight={
         <>
           <Chip variant="neutral" icon="db">Refreshed 06:12 UTC · Delta Share</Chip>
@@ -142,7 +143,13 @@ export default function Home() {
             <div className="h-2">One spine, four extensions</div>
           </div>
         </div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 'var(--gap-grid)' }}>
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+            gap: 'var(--gap-grid)',
+          }}
+        >
           {FUTURE_MODULES.map((m) => (
             <div className="surface" key={m.code}>
               <div className="surface__body">
