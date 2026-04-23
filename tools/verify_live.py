@@ -63,6 +63,8 @@ def probe(
     path: str,
     body: dict | None = None,
     timeout: float = 30.0,
+    extra_headers: dict[str, str] | None = None,
+    expect_status: int | None = None,
 ) -> ProbeResult:
     url = base.rstrip("/") + path
     data = None
@@ -70,6 +72,8 @@ def probe(
     if body is not None:
         data = json.dumps(body).encode("utf-8")
         headers["Content-Type"] = "application/json"
+    if extra_headers:
+        headers.update(extra_headers)
     req = urllib.request.Request(url, data=data, method=method, headers=headers)
     t0 = time.perf_counter()
     try:
@@ -81,15 +85,21 @@ def probe(
         latency = (time.perf_counter() - t0) * 1000
         raw = exc.read() if exc.fp else b""
         status = exc.code
+        # If the caller explicitly expected this status (e.g. a 403 on
+        # the RBAC negative-probe), a match is a PASS, not a failure.
+        matched_expectation = expect_status is not None and status == expect_status
         return ProbeResult(
             name=name,
             method=method,
             path=path,
             status=status,
             latency_ms=latency,
-            ok=False,
+            ok=matched_expectation,
             raw_len=len(raw),
-            error=raw[:500].decode("utf-8", errors="replace"),
+            error=(
+                None if matched_expectation
+                else raw[:500].decode("utf-8", errors="replace")
+            ),
         )
     except Exception as exc:  # noqa: BLE001
         latency = (time.perf_counter() - t0) * 1000
@@ -276,8 +286,29 @@ def run_probes(base: str, token: str) -> list[ProbeResult]:
     )
 
     # 9. Admin + geo
-    results.append(probe(base, token, "admin.rules", "GET", "/api/admin/rules"))
-    results.append(probe(base, token, "admin.sources", "GET", "/api/admin/sources"))
+    # Admin endpoints are RBAC-gated (X-Forwarded-Groups must include the
+    # admin group). Databricks Apps injects this header in production based
+    # on the caller's workspace groups. For the smoke probe we inject it
+    # manually — a 403 here would mean either the gate is disabled (bad)
+    # OR the header plumbing regressed (bad).
+    admin_headers = {"X-Forwarded-Groups": "mip-admin"}
+    results.append(
+        probe(base, token, "admin.rules", "GET", "/api/admin/rules", extra_headers=admin_headers)
+    )
+    results.append(
+        probe(base, token, "admin.sources", "GET", "/api/admin/sources", extra_headers=admin_headers)
+    )
+    # RBAC negative probe: no admin header → 403 expected. We record it as
+    # a SEPARATE endpoint so the CI signal is "did the gate fire as
+    # intended" rather than a regression masquerade.
+    results.append(
+        probe(
+            base, token,
+            "admin.rules.no_admin_header",
+            "GET", "/api/admin/rules",
+            expect_status=403,
+        )
+    )
     results.append(probe(base, token, "geo.state_rollups", "GET", "/api/geo/state-rollups"))
 
     return results

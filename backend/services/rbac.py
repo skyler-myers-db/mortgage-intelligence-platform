@@ -62,32 +62,56 @@ def _parse_groups(raw: str | None) -> set[str]:
     return {tok.strip().lower() for tok in raw.split(",") if tok.strip()}
 
 
+def _parse_admin_emails(raw: str | None) -> set[str]:
+    """Parse ``settings.admin_emails`` (comma-separated env var) into a
+    set of lower-cased email addresses."""
+    if not raw:
+        return set()
+    return {tok.strip().lower() for tok in raw.split(",") if tok.strip()}
+
+
 def require_admin(request: Request) -> str:
     """FastAPI dependency: admit admins, reject everyone else.
+
+    Two recognition paths (either admits):
+
+    1. **Group membership** — comma-separated ``X-Forwarded-Groups``
+       includes ``settings.admin_group_name`` or the hard-coded
+       ``"admins"`` fallback. Databricks Apps may or may not forward a
+       workspace group header; path 2 is the belt-and-suspenders when
+       the edge doesn't inject groups.
+    2. **Email allowlist** — the caller's ``X-Forwarded-Email`` matches
+       one of the addresses in ``settings.admin_emails`` (comma-separated
+       env var). Lets a customer SE land admin access at first deploy
+       without pre-provisioning a workspace group. Empty allowlist by
+       default; must be explicitly opted into.
 
     On success, returns the actor email (from ``resolve_actor``) so
     routers can thread it into audit writes without re-reading the
     ``Request`` headers. On failure, raises ``HTTPException(403,
-    detail="forbidden")`` -- the exact body string is load-bearing for
+    detail="forbidden")`` — the exact body string is load-bearing for
     the frontend's admin 403 banner copy.
     """
     groups = _parse_groups(request.headers.get("X-Forwarded-Groups"))
-    allowed = {settings.admin_group_name.lower(), _FALLBACK_ADMIN_GROUP}
-    if not (groups & allowed):
-        # Log the deny at INFO so ops can see the identity that got
-        # rejected without flooding the log with WARN noise every time
-        # the admin page loads for a non-admin. We deliberately do NOT
-        # log the raw header value -- the actor email is the stable
-        # forensic anchor.
-        actor = resolve_actor(request)
-        log.info(
-            "rbac.require_admin: deny actor=%s groups_present=%d admin_group=%s",
-            actor,
-            len(groups),
-            settings.admin_group_name,
-        )
-        raise HTTPException(status_code=403, detail="forbidden")
-    return resolve_actor(request)
+    allowed_groups = {settings.admin_group_name.lower(), _FALLBACK_ADMIN_GROUP}
+    if groups & allowed_groups:
+        return resolve_actor(request)
+
+    # Path 2: email allowlist.
+    actor = resolve_actor(request)
+    admin_emails = _parse_admin_emails(getattr(settings, "admin_emails", None))
+    if actor and actor.lower() in admin_emails:
+        return actor
+
+    # Deny — log at INFO for forensic traceability; never log the raw
+    # header value (can contain PII / group-name attack surface).
+    log.info(
+        "rbac.require_admin: deny actor=%s groups_present=%d admin_group=%s",
+        actor,
+        len(groups),
+        settings.admin_group_name,
+    )
+    raise HTTPException(status_code=403, detail="forbidden")
 
 
 # Type alias routers pin on so the dependency signature stays uniform
