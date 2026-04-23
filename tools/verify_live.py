@@ -139,13 +139,22 @@ def probe(
         top_keys = [f"[array len={len(parsed)}]"]
         sample = parsed[0] if parsed else None
 
+    # When the caller declared an explicit expectation, honour it on the
+    # 2xx path too — not just the HTTPError branch. Previously a probe
+    # with expect_status=403 that actually returned 200 would silently
+    # pass (the 2xx-default branch didn't consult expect_status), masking
+    # a real RBAC regression.
+    if expect_status is not None:
+        ok = status == expect_status
+    else:
+        ok = 200 <= status < 300
     return ProbeResult(
         name=name,
         method=method,
         path=path,
         status=status,
         latency_ms=latency,
-        ok=200 <= status < 300,
+        ok=ok,
         raw_len=len(raw),
         top_keys=top_keys,
         sample=sample,
@@ -298,17 +307,15 @@ def run_probes(base: str, token: str) -> list[ProbeResult]:
     results.append(
         probe(base, token, "admin.sources", "GET", "/api/admin/sources", extra_headers=admin_headers)
     )
-    # RBAC negative probe: no admin header → 403 expected. We record it as
-    # a SEPARATE endpoint so the CI signal is "did the gate fire as
-    # intended" rather than a regression masquerade.
-    results.append(
-        probe(
-            base, token,
-            "admin.rules.no_admin_header",
-            "GET", "/api/admin/rules",
-            expect_status=403,
-        )
-    )
+    # RBAC negative path is NOT exercised here. The Databricks Apps edge
+    # strips and re-injects ``X-Forwarded-Email`` / ``X-Forwarded-Groups``
+    # from the authenticated bearer identity, so a client running as
+    # skyler (an allow-listed admin) cannot forge a non-admin identity
+    # from outside the edge. The 403 path is covered by
+    # ``tests/unit/test_admin_rbac.py::test_admin_rejects_non_admin_group``
+    # and related unit tests that inject headers directly into the
+    # TestClient. Running an external negative probe would require
+    # provisioning a second service principal with no admin membership.
     results.append(probe(base, token, "geo.state_rollups", "GET", "/api/geo/state-rollups"))
 
     return results
