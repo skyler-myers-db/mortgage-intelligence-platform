@@ -188,32 +188,54 @@ def run_probes(base: str, token: str) -> list[ProbeResult]:
     results.append(probe(base, token, "leads.all", "GET", "/api/leads"))
     results.append(probe(base, token, "leads.itm", "GET", "/api/leads?segment=itm"))
 
-    # 4. Try to pick a real borrower id from /api/leads
-    borrower_id = None
-    for r in results:
-        if r.name == "leads.all" and r.ok:
-            data = r.sample
-            if isinstance(data, dict):
-                rows = data.get("rows") or data.get("leads") or data.get("items") or []
-            elif isinstance(data, list):
-                rows = [data]
-            else:
-                rows = []
+    # 4. Pick a real borrower id from /api/leads (raw fetch since the sample
+    # recorded above is truncated). Using the same bearer token. If the fetch
+    # fails we skip the borrower-dependent probes entirely — a failure there
+    # says nothing about the app when the fake id doesn't exist.
+    borrower_id: str | None = None
+    try:
+        leads_req = urllib.request.Request(
+            base.rstrip("/") + "/api/leads",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        with urllib.request.urlopen(leads_req, timeout=30) as resp:  # noqa: S310 -- controlled URL
+            body_bytes = resp.read()
+        payload = json.loads(body_bytes)
+        if isinstance(payload, list) and payload and isinstance(payload[0], dict):
+            borrower_id = payload[0].get("borrower_id")
+        elif isinstance(payload, dict):
+            rows = payload.get("rows") or payload.get("leads") or payload.get("items") or []
             if rows and isinstance(rows[0], dict):
-                borrower_id = rows[0].get("borrower_id") or rows[0].get("id")
-            break
-    borrower_id = borrower_id or "B-00001"
+                borrower_id = rows[0].get("borrower_id")
+    except Exception:  # noqa: BLE001 -- diagnostic path; don't blow up the whole script
+        borrower_id = None
 
-    results.append(probe(base, token, "borrower.detail", "GET", f"/api/borrowers/{borrower_id}"))
-    results.append(probe(base, token, "borrower.evidence", "GET", f"/api/borrowers/{borrower_id}/evidence"))
+    if not borrower_id:
+        # Record as a neutral skip rather than a fake-id failure.
+        results.append(
+            ProbeResult(
+                name="borrower.pick",
+                method="INFO",
+                path="/api/leads",
+                status=0,
+                latency_ms=0.0,
+                ok=True,
+                top_keys=[],
+                error="no real borrower_id available from /api/leads; skipping borrower-dependent probes",
+            )
+        )
 
-    # 5. Offers & outreach for real borrower
-    results.append(
-        probe(base, token, "offers.recommend", "POST", "/api/offers/recommend", body={"borrower_id": borrower_id})
-    )
-    results.append(
-        probe(base, token, "outreach.draft", "POST", "/api/outreach/draft", body={"borrower_id": borrower_id})
-    )
+    if borrower_id:
+        results.append(probe(base, token, "borrower.detail", "GET", f"/api/borrowers/{borrower_id}"))
+        results.append(probe(base, token, "borrower.evidence", "GET", f"/api/borrowers/{borrower_id}/evidence"))
+
+        # 5. Offers & outreach for real borrower
+        results.append(
+            probe(base, token, "offers.recommend", "POST", "/api/offers/recommend", body={"borrower_id": borrower_id})
+        )
+        results.append(
+            probe(base, token, "outreach.draft", "POST", "/api/outreach/draft", body={"borrower_id": borrower_id})
+        )
 
     # 6. Approval writes — synthetic IDs only
     results.append(

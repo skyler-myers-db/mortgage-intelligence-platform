@@ -148,7 +148,15 @@ def test_get_sources_returns_live_plus_roadmap_split() -> None:
         assert isinstance(r["note"], str)
 
 
-def test_get_sources_returns_503_on_sql_failure() -> None:
+def test_get_sources_degrades_per_source_on_sql_failure() -> None:
+    """Per-source degrade contract (2026-04-23): if a DESCRIBE DETAIL
+    fails for one table (permission denial, schema drift, etc.), the
+    remaining sources still render. The failing source comes back with
+    ``status='error'`` and a diagnostic note, NOT 503 for the whole
+    panel. This prevents a single grant gap from blacking out the
+    admin page.
+    """
+
     class _BoomClient:
         def execute(self, statement: str, parameters: Any = None) -> list[dict[str, Any]]:
             raise DatabricksSqlError("DESCRIBE DETAIL unavailable")
@@ -157,7 +165,39 @@ def test_get_sources_returns_503_on_sql_failure() -> None:
     app.dependency_overrides[get_admin_rules_service] = lambda: AdminRulesService(_BoomClient())
     try:
         response = client.get("/api/admin/sources")
-        assert response.status_code == 503
+        assert response.status_code == 200, response.text
+        rows = response.json()
+        # All live-source candidates degrade to `error`; roadmap rows pass through.
+        statuses = {r["status"] for r in rows}
+        assert "error" in statuses
+        assert "roadmap" in statuses
+        # No live sources when the SQL client blows up on every call.
+        assert "live" not in statuses
+    finally:
+        if previous is None:
+            del app.dependency_overrides[get_admin_rules_service]
+        else:
+            app.dependency_overrides[get_admin_rules_service] = previous
+
+
+def test_get_sources_permission_denied_marks_source_cleanly() -> None:
+    """PERMISSION_DENIED on a single table → `status='permission_denied'`
+    (a distinct value so the admin UI can show "grant needed" specifically)."""
+
+    class _PermDeniedClient:
+        def execute(self, statement: str, parameters: Any = None) -> list[dict[str, Any]]:
+            raise DatabricksSqlError(
+                "PERMISSION_DENIED: User does not have USE SCHEMA on Schema 'mip.silver'."
+            )
+
+    previous = app.dependency_overrides.get(get_admin_rules_service)
+    app.dependency_overrides[get_admin_rules_service] = lambda: AdminRulesService(_PermDeniedClient())
+    try:
+        response = client.get("/api/admin/sources")
+        assert response.status_code == 200, response.text
+        rows = response.json()
+        statuses = {r["status"] for r in rows}
+        assert "permission_denied" in statuses
     finally:
         if previous is None:
             del app.dependency_overrides[get_admin_rules_service]

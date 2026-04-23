@@ -258,16 +258,45 @@ class AdminRulesService:
                     )
                 )
                 continue
-            rows, last_mod = self._describe_detail(desc.uc_table)
-            out.append(
-                SourceRow(
-                    name=desc.name,
-                    status="live",
-                    rows=rows,
-                    last_updated=last_mod,
-                    note=desc.note,
+            # Per-source try/except: if the app identity doesn't have
+            # USE SCHEMA / SELECT on a specific table (e.g. silver) we
+            # surface that source as "permission_denied" rather than
+            # 503-ing the entire /api/admin/sources call. A customer's
+            # app identity may only have GRANTs on gold; admin sources
+            # should degrade gracefully. (E2E verifier 2026-04-23 caught
+            # this — `mip.silver.*` denied to workspace identity.)
+            try:
+                rows, last_mod = self._describe_detail(desc.uc_table)
+                out.append(
+                    SourceRow(
+                        name=desc.name,
+                        status="live",
+                        rows=rows,
+                        last_updated=last_mod,
+                        note=desc.note,
+                    )
                 )
-            )
+            except Exception as exc:  # noqa: BLE001 -- degrade-per-source contract
+                msg = str(exc)
+                # Detect permission denial vs. other SQL errors distinctly so
+                # the admin UI can show a clear "grant needed" vs. "transient
+                # error" banner per source. Everything else surfaces as an
+                # unknown status with the raw error clipped to 200 chars.
+                is_permission = "PERMISSION_DENIED" in msg or "does not have" in msg
+                out.append(
+                    SourceRow(
+                        name=desc.name,
+                        status="permission_denied" if is_permission else "error",
+                        rows=None,
+                        last_updated=None,
+                        note=(
+                            "App identity lacks USE SCHEMA/SELECT on "
+                            f"{desc.uc_table}"
+                            if is_permission
+                            else f"{desc.note} (read error: {msg[:200]})"
+                        ),
+                    )
+                )
         return tuple(out)
 
     def _describe_detail(self, fqtn: str) -> tuple[int | None, str | None]:

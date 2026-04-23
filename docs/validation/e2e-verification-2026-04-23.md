@@ -8,24 +8,24 @@ Synthetic test-id prefix: `B-TEST-*`
 
 | Endpoint | Method+Path | Status | Latency (ms) | Payload OK? | Notes |
 | --- | --- | ---: | ---: | :---: | --- |
-| health | `GET /api/health` | 200 | 1245 | yes | keys/len: app_env, breaker_state_changes_last_hour, circuit_breakers, counters_persistence, dependencies, log_export, mode, recent_errors_count |
-| portfolio.unfiltered | `POST /api/portfolio/preview` | 200 | 1445 | yes | keys/len: approved_count, avg_score, cost_per_contact, data_refreshed_at, high_intent_leads, in_outreach_count, marketable_population, offers_recommended |
-| portfolio.chicago | `POST /api/portfolio/preview` | 200 | 1443 | yes | keys/len: approved_count, avg_score, cost_per_contact, data_refreshed_at, high_intent_leads, in_outreach_count, marketable_population, offers_recommended |
-| portfolio.chicago.owner.25pct | `POST /api/portfolio/preview` | 200 | 1387 | yes | keys/len: approved_count, avg_score, cost_per_contact, data_refreshed_at, high_intent_leads, in_outreach_count, marketable_population, offers_recommended |
-| segments | `GET /api/segments` | 200 | 908 | yes | keys/len: [array len=4] |
+| health | `GET /api/health` | 200 | 1139 | yes | keys/len: app_env, breaker_state_changes_last_hour, circuit_breakers, counters_persistence, dependencies, log_export, mode, recent_errors_count |
+| portfolio.unfiltered | `POST /api/portfolio/preview` | 200 | 398 | yes | keys/len: approved_count, avg_score, cost_per_contact, data_refreshed_at, high_intent_leads, in_outreach_count, marketable_population, offers_recommended |
+| portfolio.chicago | `POST /api/portfolio/preview` | 200 | 378 | yes | keys/len: approved_count, avg_score, cost_per_contact, data_refreshed_at, high_intent_leads, in_outreach_count, marketable_population, offers_recommended |
+| portfolio.chicago.owner.25pct | `POST /api/portfolio/preview` | 200 | 401 | yes | keys/len: approved_count, avg_score, cost_per_contact, data_refreshed_at, high_intent_leads, in_outreach_count, marketable_population, offers_recommended |
+| segments | `GET /api/segments` | 200 | 938 | yes | keys/len: [array len=4] |
 | leads.all | `GET /api/leads` | 200 | 1297 | yes | keys/len: [array len=500] |
-| leads.itm | `GET /api/leads?segment=itm` | 200 | 1372 | yes | keys/len: [array len=500] |
-| borrower.detail | `GET /api/borrowers/B-00001` | 404 | 791 | NO | ERROR: {"detail":"Borrower B-00001 not found"} |
-| borrower.evidence | `GET /api/borrowers/B-00001/evidence` | 404 | 785 | NO | ERROR: {"detail":"Borrower B-00001 not found"} |
-| offers.recommend | `POST /api/offers/recommend` | 404 | 766 | NO | ERROR: {"detail":"Borrower B-00001 not found"} |
-| outreach.draft | `POST /api/outreach/draft` | 404 | 769 | NO | ERROR: {"detail":"Borrower B-00001 not found"} |
-| outreach.approve.synthetic | `POST /api/outreach/approve` | 200 | 646 | yes | keys/len: approval_id, approved, audit_event_id |
-| outreach.reject.synthetic | `POST /api/outreach/reject` | 200 | 874 | yes | keys/len: approval_id, audit_event_id, rejected |
-| audit.events | `GET /api/audit/events?limit=10` | 200 | 614 | yes | keys/len: [array len=10] |
-| genie.message | `POST /api/genie/message` | 200 | 920 | yes | keys/len: answer, conversation_id, follow_up_questions, metric_value, question, source, table_rows, trusted_assets |
-| admin.rules | `GET /api/admin/rules` | 200 | 1374 | yes | keys/len: legacy_override, offer_rules_version, rules_edited_at, thresholds |
-| admin.sources | `GET /api/admin/sources` | 503 | 4992 | NO | ERROR: {"detail":"warehouse dependency is down: DatabricksSqlError: Databricks SQL statement did not succeed (state='FAILED' statement_id='01f13ee3-d33c-14e5-b291-e16b |
-| geo.state_rollups | `GET /api/geo/state-rollups` | 200 | 2400 | yes | keys/len: rollups, snapshot_date |
+| leads.itm | `GET /api/leads?segment=itm` | 200 | 1334 | yes | keys/len: [array len=500] |
+| borrower.detail | `GET /api/borrowers/B-102FL7THC6Q3L` | 200 | 942 | yes | keys/len: approval_status, avm_value, borrower_id, city, clip, clip_id, confidence, current_lien_balance |
+| borrower.evidence | `GET /api/borrowers/B-102FL7THC6Q3L/evidence` | 200 | 897 | yes | keys/len: [array len=8] |
+| offers.recommend | `POST /api/offers/recommend` | 200 | 1454 | yes | keys/len: alternatives, borrower_id, confidence, evidence_ids, offer_code, offer_type, product_label, rationale |
+| outreach.draft | `POST /api/outreach/draft` | 200 | 903 | yes | keys/len: body, borrower_id, channel, offer_code, status, subject |
+| outreach.approve.synthetic | `POST /api/outreach/approve` | 200 | 622 | yes | keys/len: approval_id, approved, audit_event_id |
+| outreach.reject.synthetic | `POST /api/outreach/reject` | 200 | 655 | yes | keys/len: approval_id, audit_event_id, rejected |
+| audit.events | `GET /api/audit/events?limit=10` | 200 | 586 | yes | keys/len: [array len=10] |
+| genie.message | `POST /api/genie/message` | 200 | 1050 | yes | keys/len: answer, conversation_id, follow_up_questions, metric_value, question, source, table_rows, trusted_assets |
+| admin.rules | `GET /api/admin/rules` | 200 | 412 | yes | keys/len: legacy_override, offer_rules_version, rules_edited_at, thresholds |
+| admin.sources | `GET /api/admin/sources` | 503 | 5359 | NO | ERROR: {"detail":"warehouse dependency is down: DatabricksSqlError: Databricks SQL statement did not succeed (state='FAILED' statement_id='01f13ee6-bd80-1760-ba9a-ac8d |
+| geo.state_rollups | `GET /api/geo/state-rollups` | 200 | 406 | yes | keys/len: rollups, snapshot_date |
 
 ## Clean payload samples
 
@@ -348,13 +348,67 @@ Synthetic test-id prefix: `B-TEST-*`
 }
 ```
 
+### borrower.detail — `GET /api/borrowers/B-102FL7THC6Q3L`
+
+```json
+{
+  "borrower_id": "B-102FL7THC6Q3L",
+  "display_name": "Owner 3b3ba2e0",
+  "city": "CALUMET CITY",
+  "state": "IL",
+  "zip": "604092222",
+  "clip": ""
+}
+```
+
+### borrower.evidence — `GET /api/borrowers/B-102FL7THC6Q3L/evidence`
+
+```json
+{
+  "evidence_id": "ev-b4fba688be13",
+  "source_product": "Voluntary Lien",
+  "source_table": "mip.silver.lien_current",
+  "signal_type": "rate_spread",
+  "signal_value": "+397 bps",
+  "display_text": "Current lien rate is 397 bps vs. par.",
+  "confidence": 0.92,
+  "timestamp": "2026-04-21 20:37:48.869"
+}
+```
+
+### offers.recommend — `POST /api/offers/recommend`
+
+```json
+{
+  "borrower_id": "B-102FL7THC6Q3L",
+  "offer_code": "refi_plus_heloc",
+  "offer_type": "refi_plus_heloc",
+  "product_label": "Refinance + HELOC",
+  "confidence": 81,
+  "rationale": "Rate is well above current market rates and the home has very strong home equity -- a strong candidate for a refinance with a HELOC alongside it."
+}
+```
+
+### outreach.draft — `POST /api/outreach/draft`
+
+```json
+{
+  "borrower_id": "B-102FL7THC6Q3L",
+  "offer_code": "OFFER-B-102FL7THC6Q3L",
+  "channel": "email",
+  "subject": "Refinance + HELOC opportunity for Owner 3b3ba2e0",
+  "body": "Hi Owner 3b3ba2e0,\n\nBased on recent public-record signals in CALUMET CITY, IL, you may qualify for Refinance + HELOC. Current rate sits meaningfully above market and the home carries strong equity -- a refinance with a HELOC cross-sell fits.\n\nReply to this note and a licensed officer will follow up. This draft is for human review only; no outreach has been sent.",
+  "status": "draft"
+}
+```
+
 ### outreach.approve.synthetic — `POST /api/outreach/approve`
 
 ```json
 {
   "approved": true,
-  "approval_id": "9591a833-940f-43e5-b0c0-3c271a441280",
-  "audit_event_id": "d8e628a0-c12d-4753-bf9b-2c15e4b1d60d"
+  "approval_id": "5f7b372d-57ce-494c-9c51-95edfd5a2eb3",
+  "audit_event_id": "b07e3372-885b-4eba-9ce2-79ed6ef2e588"
 }
 ```
 
@@ -363,8 +417,8 @@ Synthetic test-id prefix: `B-TEST-*`
 ```json
 {
   "rejected": true,
-  "approval_id": "4d7fb568-06e8-4b67-baf5-9383062dec89",
-  "audit_event_id": "21950ba1-b593-4109-8a03-375f7999b0c6"
+  "approval_id": "79b91ff0-207f-43ed-b69e-7758e32647ae",
+  "audit_event_id": "af848960-c6d0-4711-a144-73e9b358601c"
 }
 ```
 
@@ -372,18 +426,18 @@ Synthetic test-id prefix: `B-TEST-*`
 
 ```json
 {
-  "event_id": "21950ba1-b593-4109-8a03-375f7999b0c6",
+  "event_id": "af848960-c6d0-4711-a144-73e9b358601c",
   "actor": "skyler@entrada.ai",
   "action": "outreach.reject",
   "entity_type": "approval",
-  "entity_id": "4d7fb568-06e8-4b67-baf5-9383062dec89",
+  "entity_id": "79b91ff0-207f-43ed-b69e-7758e32647ae",
   "payload_json": {
     "offer_code": "refi",
-    "approval_id": "4d7fb568-06e8-4b67-baf5-9383062dec89",
-    "borrower_id": "B-TEST-F73E5564"
+    "approval_id": "79b91ff0-207f-43ed-b69e-7758e32647ae",
+    "borrower_id": "B-TEST-1A53AE8F"
   },
   "evidence_ids": [],
-  "created_at": "2026-04-23T07:12:36.881457+00:00",
+  "created_at": "2026-04-23T07:33:29.549978+00:00",
   "event_type": "OUTREACH_REJECT",
   "subject_clip": null,
   "subject_segment": null,
@@ -518,11 +572,7 @@ Synthetic test-id prefix: `B-TEST-*`
 
 ## Red flags
 
-- borrower.detail: status=404 error={"detail":"Borrower B-00001 not found"}
-- borrower.evidence: status=404 error={"detail":"Borrower B-00001 not found"}
-- offers.recommend: status=404 error={"detail":"Borrower B-00001 not found"}
-- outreach.draft: status=404 error={"detail":"Borrower B-00001 not found"}
-- admin.sources: status=503 error={"detail":"warehouse dependency is down: DatabricksSqlError: Databricks SQL statement did not succeed (state='FAILED' statement_id='01f13ee3-d33c-14e5-b291-e16b
+- admin.sources: status=503 error={"detail":"warehouse dependency is down: DatabricksSqlError: Databricks SQL statement did not succeed (state='FAILED' statement_id='01f13ee6-bd80-1760-ba9a-ac8d
 
 ## Teardown
 
