@@ -56,6 +56,15 @@ paths = [
   # the source of truth for these files.
   '''^databricks\.yml$''',
   '''^resources/.*\.yml$''',
+  # SQL transformation files -- DDL/CTAS only. Secrets live in env vars
+  # and Lakebase, not in SQL source. The generic-api-key rule sometimes
+  # flags SQL comments that reference YAML task_key values (e.g.
+  # ``-- task_key: assert_borrower_360_fresh`` in the sentinel check).
+  '''^sql/transformations/.*\.sql$''',
+  '''^sql/ddl/.*\.sql$''',
+  '''^sql/uc_functions/.*\.sql$''',
+  '''^sql/metric_views/.*\.sql$''',
+  '''^sql/ref/.*\.sql$''',
   # Lockfiles -- dependency hashes look like secrets to generic rules.
   '''package-lock\.json$''',
   '''frontend/package-lock\.json$''',

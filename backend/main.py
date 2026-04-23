@@ -315,6 +315,18 @@ for router in [
     app.include_router(router)
 
 
+# R5-15 (continued): a dedicated /api/* 404 handler that always runs,
+# whether frontend/dist/ is present or not. The SPA catch-all below
+# only registers when dist/ exists, and without it FastAPI's default
+# 404 fires with "Not Found" (capital N). That broke the JSON contract
+# clients parse (they expect {"detail":"not found"}). Registering this
+# route unconditionally keeps the contract stable across local dev,
+# CI, and Databricks Apps deploys.
+@app.get("/api/{full_path:path}", response_model=None)
+def _api_404(full_path: str) -> JSONResponse:  # noqa: ARG001
+    return JSONResponse(status_code=404, content={"detail": "not found"})
+
+
 # Serve the built Vite SPA. Frontend bundle lands in `frontend/dist/` after
 # `npm run build`. On Databricks Apps this happens during deployment; locally
 # it happens when the user runs `make build` or `npm --prefix frontend run
