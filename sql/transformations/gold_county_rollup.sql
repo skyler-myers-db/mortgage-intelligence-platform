@@ -86,8 +86,12 @@ SELECT
   a.high_opportunity_borrowers,
   a.avg_opportunity_score,
   ts.top_segment_code,
-  CURRENT_DATE()                                     AS snapshot_date,
-  CURRENT_TIMESTAMP()                                AS snapshot_at
+  -- snapshot_date stays CURRENT_DATE() (day-grain; across-midnight drift is
+  -- an intentional cutoff). snapshot_at shares the run-anchored refresh_at
+  -- so every "Refreshed ..." chip rendered from a gold rollup agrees to
+  -- the second. See audit-holes-round-3 #7.
+  CAST((SELECT refresh_at FROM mip.ref.refresh_run_state ORDER BY captured_at DESC LIMIT 1) AS DATE) AS snapshot_date,
+  (SELECT refresh_at FROM mip.ref.refresh_run_state ORDER BY captured_at DESC LIMIT 1)              AS snapshot_at
 FROM aggregates AS a
 LEFT JOIN top_segment_per_county AS ts
   ON ts.fips_5 = a.fips_5;

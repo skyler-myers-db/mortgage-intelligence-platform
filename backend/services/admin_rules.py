@@ -31,6 +31,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
+from backend.services.databricks_sql_helpers import qualify
 from backend.services.resilience import TTLCache
 
 # ---------------------------------------------------------------------------
@@ -56,32 +57,32 @@ _SOURCES: tuple[_SourceDescriptor, ...] = (
     _SourceDescriptor(
         name="Cotality Public Records",
         note="Delta Share · nightly",
-        uc_table="mip.silver.property_master",
+        uc_table=qualify("silver", "property_master"),
     ),
     _SourceDescriptor(
         name="Voluntary Lien",
         note="Delta Share · nightly",
-        uc_table="mip.silver.lien_current",
+        uc_table=qualify("silver", "lien_current"),
     ),
     _SourceDescriptor(
         name="MMA Mortgage Analytics",
         note="Delta Share · nightly",
-        uc_table="mip.silver.mortgage_events",
+        uc_table=qualify("silver", "mortgage_events"),
     ),
     _SourceDescriptor(
         name="CLIP",
         note="Mastered property id",
-        uc_table="mip.silver.property_master",
+        uc_table=qualify("silver", "property_master"),
     ),
     _SourceDescriptor(
         name="Owner Link",
         note="Mastered owner graph",
-        uc_table="mip.silver.owner_property_bridge",
+        uc_table=qualify("silver", "owner_property_bridge"),
     ),
     _SourceDescriptor(
         name="AVM",
         note="Delta Share · weekly",
-        uc_table="mip.silver.market_rates_weekly",
+        uc_table=qualify("silver", "market_rates_weekly"),
     ),
     _SourceDescriptor(
         name="MLS",
@@ -197,7 +198,7 @@ class AdminRulesService:
         rows = self._sql.execute(
             "SELECT key, value, unit, label, description, sort_order, "
             "CAST(last_updated AS STRING) AS last_updated "
-            "FROM mip.ref.offer_rules_config "
+            f"FROM {qualify('ref', 'offer_rules_config')} "
             "ORDER BY sort_order NULLS LAST, key"
         )
         thresholds = tuple(

@@ -96,8 +96,11 @@ SELECT
   a.avg_opportunity_score,
   ts.top_segment_code,
   sb.sample_borrower_id,
-  CURRENT_DATE()       AS snapshot_date,
-  CURRENT_TIMESTAMP()  AS snapshot_at
+  -- Shared snapshot_at captured once per run. snapshot_date also derived
+  -- from the seed so across-midnight refreshes agree with the county
+  -- rollup. See audit-holes-round-3 #7.
+  CAST((SELECT refresh_at FROM mip.ref.refresh_run_state ORDER BY captured_at DESC LIMIT 1) AS DATE) AS snapshot_date,
+  (SELECT refresh_at FROM mip.ref.refresh_run_state ORDER BY captured_at DESC LIMIT 1)              AS snapshot_at
 FROM aggregates AS a
 LEFT JOIN top_segment_per_zip   AS ts ON ts.zip = a.zip
 LEFT JOIN sample_borrower_per_zip AS sb ON sb.zip = a.zip;

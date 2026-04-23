@@ -26,16 +26,26 @@ resources:
             warehouse_id: ${var.sql_warehouse_id}
             file:
               path: ../sql/ddl/003_gold_tables.sql
-        - task_key: ctas_property_owner_bridge
+        # audit-holes-round-3 #7 + #8: deterministic refresh_at anchor +
+        # freshness gate. See databricks.yml comments for the canonical
+        # rationale. Keep in sync with that file.
+        - task_key: capture_refresh_timestamp
           depends_on:
             - task_key: init_gold_ddl
+          sql_task:
+            warehouse_id: ${var.sql_warehouse_id}
+            file:
+              path: ../sql/transformations/capture_refresh_timestamp.sql
+        - task_key: ctas_property_owner_bridge
+          depends_on:
+            - task_key: capture_refresh_timestamp
           sql_task:
             warehouse_id: ${var.sql_warehouse_id}
             file:
               path: ../sql/transformations/gold_property_owner_bridge.sql
         - task_key: ctas_evidence_events
           depends_on:
-            - task_key: init_gold_ddl
+            - task_key: capture_refresh_timestamp
           sql_task:
             warehouse_id: ${var.sql_warehouse_id}
             file:
@@ -48,9 +58,16 @@ resources:
             warehouse_id: ${var.sql_warehouse_id}
             file:
               path: ../sql/transformations/gold_borrower_360.sql
-        - task_key: ctas_lead_scores
+        - task_key: assert_borrower_360_fresh
           depends_on:
             - task_key: ctas_borrower_360
+          sql_task:
+            warehouse_id: ${var.sql_warehouse_id}
+            file:
+              path: ../sql/transformations/assert_borrower_360_fresh.sql
+        - task_key: ctas_lead_scores
+          depends_on:
+            - task_key: assert_borrower_360_fresh
           sql_task:
             warehouse_id: ${var.sql_warehouse_id}
             file:
@@ -71,14 +88,14 @@ resources:
               path: ../sql/transformations/gold_segment_population.sql
         - task_key: ctas_lockin_cohort
           depends_on:
-            - task_key: ctas_borrower_360
+            - task_key: assert_borrower_360_fresh
           sql_task:
             warehouse_id: ${var.sql_warehouse_id}
             file:
               path: ../sql/transformations/gold_lockin_cohort.sql
         - task_key: ctas_borrower_dossier
           depends_on:
-            - task_key: ctas_borrower_360
+            - task_key: assert_borrower_360_fresh
             - task_key: ctas_evidence_events
           sql_task:
             warehouse_id: ${var.sql_warehouse_id}
@@ -88,21 +105,21 @@ resources:
         # the USChoroplethMap drill. Keep in sync with databricks.yml.
         - task_key: ctas_county_rollup
           depends_on:
-            - task_key: ctas_borrower_360
+            - task_key: assert_borrower_360_fresh
           sql_task:
             warehouse_id: ${var.sql_warehouse_id}
             file:
               path: ../sql/transformations/gold_county_rollup.sql
         - task_key: ctas_zip_rollup
           depends_on:
-            - task_key: ctas_borrower_360
+            - task_key: assert_borrower_360_fresh
           sql_task:
             warehouse_id: ${var.sql_warehouse_id}
             file:
               path: ../sql/transformations/gold_zip_rollup.sql
         - task_key: ctas_state_top_segment
           depends_on:
-            - task_key: ctas_borrower_360
+            - task_key: assert_borrower_360_fresh
           sql_task:
             warehouse_id: ${var.sql_warehouse_id}
             file:

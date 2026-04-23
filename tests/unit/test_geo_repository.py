@@ -74,7 +74,7 @@ def test_state_rollups_reads_funnel_and_top_segment() -> None:
     repo, client = _make_repo()
     client.responses = [
         (
-            "mip.gold.funnel_snapshot_daily",
+            ".gold.funnel_snapshot_daily",
             [
                 {
                     "state": "IL",
@@ -107,15 +107,15 @@ def test_state_rollups_reads_funnel_and_top_segment() -> None:
 
     assert len(client.calls) == 1
     sql, _ = client.calls[0]
-    assert "mip.gold.funnel_snapshot_daily" in sql
-    assert "mip.gold.state_top_segment" in sql
+    assert ".gold.funnel_snapshot_daily" in sql
+    assert ".gold.state_top_segment" in sql
 
 
 def test_state_rollups_caches_across_calls() -> None:
     repo, client = _make_repo()
     client.responses = [
         (
-            "mip.gold.funnel_snapshot_daily",
+            ".gold.funnel_snapshot_daily",
             [
                 {
                     "state": "IL",
@@ -144,7 +144,7 @@ def test_county_rollups_reads_county_rollup_table_with_state_param() -> None:
     repo, client = _make_repo()
     client.responses = [
         (
-            "mip.gold.county_rollup",
+            ".gold.county_rollup",
             [
                 {
                     "fips_5": "17031",
@@ -182,7 +182,7 @@ def test_county_rollups_reads_county_rollup_table_with_state_param() -> None:
     # Parameter binding: state must be uppercased before the warehouse call.
     assert len(client.calls) == 1
     sql, params = client.calls[0]
-    assert "mip.gold.county_rollup" in sql
+    assert ".gold.county_rollup" in sql
     assert params == {"state": "IL"}
 
 
@@ -192,7 +192,7 @@ def test_county_rollups_filters_out_malformed_fips() -> None:
     repo, client = _make_repo()
     client.responses = [
         (
-            "mip.gold.county_rollup",
+            ".gold.county_rollup",
             [
                 {
                     "fips_5": "17031",
@@ -228,7 +228,7 @@ def test_county_rollups_caches_per_state() -> None:
     repo, client = _make_repo()
     client.responses = [
         (
-            "mip.gold.county_rollup",
+            ".gold.county_rollup",
             [
                 {
                     "fips_5": "06037",
@@ -260,7 +260,7 @@ def test_zip_rollups_reads_zip_rollup_table_with_fips_param() -> None:
     repo, client = _make_repo()
     client.responses = [
         (
-            "mip.gold.zip_rollup",
+            ".gold.zip_rollup",
             [
                 {
                     "zip": "60611",
@@ -294,7 +294,7 @@ def test_zip_rollups_reads_zip_rollup_table_with_fips_param() -> None:
 
     assert len(client.calls) == 1
     sql, params = client.calls[0]
-    assert "mip.gold.zip_rollup" in sql
+    assert ".gold.zip_rollup" in sql
     assert params == {"fips_5": "17031"}
 
 

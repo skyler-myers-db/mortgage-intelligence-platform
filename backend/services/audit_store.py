@@ -37,6 +37,37 @@ log = logging.getLogger(__name__)
 
 
 # ----------------------------------------------------------------------
+# Fallback-identity counter. Slice-RBAC follow-up: when the Databricks
+# Apps edge does NOT forward ``X-Forwarded-Email`` (local dev, a broken
+# proxy, or a code path that didn't plumb the ``Request`` through), we
+# fall back to ``settings.default_actor``. Governance wants that event
+# to be observable -- every fallback is potentially an un-attributed
+# audit row, and a non-zero count in production is a regression signal
+# worth paging on.
+#
+# Implementation is a plain module-level integer incremented under a
+# (non-threadsafe, best-effort) counter. FastAPI workers are separate
+# processes; the number is process-local like the other counters in
+# ``backend/services/observability.py``. Tests exercise the counter via
+# ``_reset_fallback_counter_for_tests`` + ``get_fallback_identity_count``.
+# ----------------------------------------------------------------------
+
+
+_FALLBACK_IDENTITY_COUNT: int = 0
+
+
+def get_fallback_identity_count() -> int:
+    """Return the current process-local fallback-identity count."""
+    return _FALLBACK_IDENTITY_COUNT
+
+
+def _reset_fallback_counter_for_tests() -> None:
+    """Test helper -- zero the counter between tests."""
+    global _FALLBACK_IDENTITY_COUNT
+    _FALLBACK_IDENTITY_COUNT = 0
+
+
+# ----------------------------------------------------------------------
 # PII denylist -- Slice 6 governance follow-up. The audit ledger is
 # append-only and read-heavy; once a raw name or address lands there,
 # we cannot scrub it without disturbing the chain. The denylist blocks
@@ -146,10 +177,20 @@ def resolve_actor(request: Request | None) -> str:
         user = request.headers.get("X-Forwarded-User")
         if user:
             return user
+    # Fallback path: bump the counter and emit a structured WARNING so
+    # the event is observable in stdout JSON logs AND surfaced through
+    # ``/api/health`` as ``fallback_identity_fallbacks_total``.
+    global _FALLBACK_IDENTITY_COUNT
+    _FALLBACK_IDENTITY_COUNT += 1
     log.warning(
         "audit_store.resolve_actor: no X-Forwarded-Email header -- "
         "falling back to settings.default_actor=%s",
         settings.default_actor,
+        extra={
+            "event": "identity_fallback",
+            "default_actor": settings.default_actor,
+            "fallback_count": _FALLBACK_IDENTITY_COUNT,
+        },
     )
     return settings.default_actor
 

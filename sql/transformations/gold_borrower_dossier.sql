@@ -181,7 +181,8 @@ SELECT
   -- New dossier-only columns: pre-joined evidence payload.
   COALESCE(ef.evidence_events, ARRAY()) AS evidence_events,
   COALESCE(et.trigger_timeline, ARRAY()) AS trigger_timeline,
-  CURRENT_TIMESTAMP() AS refreshed_at
+  -- Shared refresh_at captured once per run. See audit-holes-round-3 #7.
+  (SELECT refresh_at FROM mip.ref.refresh_run_state ORDER BY captured_at DESC LIMIT 1) AS refreshed_at
 FROM mip.gold.borrower_360 AS b
 LEFT JOIN evidence_full AS ef ON ef.clip = b.clip
 LEFT JOIN evidence_top3 AS et ON et.clip = b.clip;

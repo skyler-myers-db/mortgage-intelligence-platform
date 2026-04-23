@@ -95,14 +95,32 @@ def source_display_label(name: str | None) -> str:
     ``mip.silver.property_master`` -> ``"property_master"``). ``None`` or
     empty input returns an empty string so callers can pass raw data
     through without guarding.
+
+    Multi-catalog note: the registry keys embed the default ``mip.*``
+    prefix for legacy compatibility, but we retry the lookup against the
+    ``schema.object`` suffix (e.g. ``gold.fn_in_the_money``) so a
+    customer deploying with ``mip_prod.*`` still resolves the business
+    label instead of leaking the raw object name.
     """
     if not name:
         return ""
     if name in SOURCE_DISPLAY_LABELS:
         return SOURCE_DISPLAY_LABELS[name]
+    # Multi-catalog fallback: strip the leading catalog token and re-try
+    # the lookup against ``schema.object`` (or just ``object`` for the
+    # short-alias bucket). This keeps business labels stable even when
+    # the workspace catalog is ``mip_prod`` / ``lender_uc`` / etc.
+    parts = name.split(".")
+    if len(parts) >= 2:
+        schema_object = ".".join(parts[-2:])  # e.g. "gold.fn_in_the_money"
+        prefixed = f"mip.{schema_object}"      # e.g. "mip.gold.fn_in_the_money"
+        if prefixed in SOURCE_DISPLAY_LABELS:
+            return SOURCE_DISPLAY_LABELS[prefixed]
     # Fall back to the frontend's legacy behaviour so an unmapped source
     # still renders something reasonable rather than the full FQN.
     last = name.rsplit(".", 1)[-1]
+    if last in SOURCE_DISPLAY_LABELS:
+        return SOURCE_DISPLAY_LABELS[last]
     return last
 
 

@@ -6,7 +6,11 @@ from backend.schemas.common import EvidenceEvent
 from backend.schemas.why import WhyPanel
 
 SegmentCode = Literal["itm", "listed", "permit", "investor", "equity", "retention"]
-ApprovalStatus = Literal["pending", "approved", "rejected"]
+# Round-4 hole-finder R4-19: `hold` is a valid 4th state — jobs/sync_lifecycle_state.py
+# writes it; Lakebase CHECK constraint accepts it; gold DDL documents it. The Literal
+# used to reject it, which would 500 `/api/leads` the moment the lead_population CTAS
+# learned to JOIN borrower_lifecycle_state. Include it preemptively.
+ApprovalStatus = Literal["pending", "approved", "rejected", "hold"]
 
 
 class SegmentSummary(BaseModel):

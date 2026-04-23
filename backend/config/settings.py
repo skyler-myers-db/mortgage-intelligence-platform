@@ -114,6 +114,14 @@ class Settings(BaseSettings):
     # Overrideable via the MIP_DEFAULT_ACTOR env var.
     default_actor: str = "unknown-actor@local"
 
+    # Admin RBAC gate for /api/admin/* endpoints. We admit callers whose
+    # Databricks-forwarded ``X-Forwarded-Groups`` membership includes
+    # this group name (case-insensitive) or the hard-coded fallback
+    # ``"admins"``. Override via ``MIP_ADMIN_GROUP_NAME`` when a lender
+    # deployment uses a different workspace group convention. The
+    # dependency implementation lives in ``backend/services/rbac.py``.
+    admin_group_name: str = "mip-admin"
+
     # Slice-6 TTL cache: short-window memoization on aggregate KPIs that
     # tolerate staleness (segments count, portfolio preview). Fresh-only
     # endpoints (audit, outreach, borrower dossier) never consult the

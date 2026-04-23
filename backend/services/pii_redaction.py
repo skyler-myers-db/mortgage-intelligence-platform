@@ -136,11 +136,12 @@ class LenderRefResolver:
                 DatabricksSqlError,
                 get_sql_client,
             )
+            from backend.services.databricks_sql_helpers import qualify
             from backend.services.resilience import DependencyDownError
 
             client = get_sql_client()
             rows = client.execute(
-                "SELECT raw_key, display_name FROM mip.ref.lender_dictionary"
+                f"SELECT raw_key, display_name FROM {qualify('ref', 'lender_dictionary')}"
             )
         except (DependencyDownError, DatabricksSqlError, RuntimeError, OSError) as exc:
             if not self._warned_fallback:
@@ -246,6 +247,12 @@ _FORBIDDEN_OUTPUT_KEYS: frozenset[str] = frozenset(
         "mailing_street_raw",
         "mailing_city",
         "mailing_state",
+        # Round-4 R4-22: bare `owner_name_hash` was missing. The hash is
+        # a stable identifier per owner and is a cross-tenant correlation
+        # vector — one refactor slip could leak it. Deny explicitly at
+        # the boundary so the redactors strip it regardless of what the
+        # SELECT projects.
+        "owner_name_hash",
         "owner_name_hash_raw",
         "trigger_timeline_json",   # raw JSON string; router gets the parsed struct
         "buyer_1_full_name",

@@ -56,6 +56,7 @@ from backend.schemas.portfolio import (
 )
 from backend.schemas.why import WhyPanel, WhyPanelSource
 from backend.services.databricks_sql import DatabricksSqlClient
+from backend.services.databricks_sql_helpers import qualify
 from backend.services.genie_answers import (
     GenieMessageResponse,
 )
@@ -238,7 +239,7 @@ class DatabricksPortfolioRepository:
         "  SUM(CASE WHEN opportunity_score >= 75 THEN 1 ELSE 0 END)              AS top_tier_opportunities, "
         "  SUM(CASE WHEN recommended_offer_code <> 'nurture' THEN 1 ELSE 0 END)  AS offers_recommended, "
         "  CAST(COALESCE(ROUND(AVG(opportunity_score)), 0) AS INT)               AS avg_score "
-        "FROM mip.gold.borrower_360 "
+        f"FROM {qualify('gold', 'borrower_360')} "
         "{where}"
     )
 
@@ -247,13 +248,44 @@ class DatabricksPortfolioRepository:
     # frontend emits verbatim; we keep the mapping here rather than ship
     # the strings to SQL so a typo in a dropdown can't open a SQL-injection
     # vector.
-    _STATE_SETS: dict[str, list[str]] = {
+    #
+    # Hole-finder #20: the "all N states" option used to hardcode
+    # ["IL","CA","FL","TX","WA","CO"]. That literal was one of 5 copies
+    # of the footprint that silently broke for tenants with a different
+    # state mix. It's now computed from `mip.ref.state_footprint` via
+    # `StateFootprintResolver` (see `_state_sets()` below). MSA
+    # groupings ("Chicago MSA", "CA + FL + TX", "IL + CA + WA") remain
+    # hardcoded here — they're lender-specific marketing labels and
+    # orthogonal to the per-state list. A lender whose footprint diverges
+    # would re-label them in the UI; do not over-build until that happens.
+    _STATIC_STATE_SETS: dict[str, list[str]] = {
         "chicago msa":     ["IL"],
-        "all 6 states":    ["IL", "CA", "FL", "TX", "WA", "CO"],
         "texas":           ["TX"],
         "ca + fl + tx":    ["CA", "FL", "TX"],
         "il + ca + wa":    ["IL", "CA", "WA"],
     }
+
+    @classmethod
+    def _state_sets(cls) -> dict[str, list[str]]:
+        """Build the active _STATE_SETS dict, injecting the live footprint.
+
+        Called once per `_build_preview_predicates` invocation; the
+        resolver caches the UC result for 300s so this is cheap.
+        """
+        from backend.services.state_footprint import get_state_footprint_resolver
+
+        footprint_codes = get_state_footprint_resolver().state_codes()
+        all_key = f"all {len(footprint_codes)} states"
+        return {
+            **cls._STATIC_STATE_SETS,
+            all_key: list(footprint_codes),
+            # Keep the legacy "all 6 states" key active while the frontend
+            # catches up, so a deep-linked URL from the old UI still parses.
+            # Maps to whatever the current footprint is — a tenant with 3
+            # states who opens an old bookmark sees "all 3 states"
+            # semantics under the legacy label.
+            "all 6 states": list(footprint_codes),
+        }
 
     # Canonical `recommended_offer_code` values emitted by fn_next_best_offer
     # (see sql/uc_functions/fn_next_best_offer.sql). Keep in sync.
@@ -284,10 +316,12 @@ class DatabricksPortfolioRepository:
         clauses: list[str] = []
         params: dict[str, Any] = {}
 
-        # Geography — map display label to a list of state codes.
+        # Geography — map display label to a list of state codes. The
+        # "all N states" option is computed from mip.ref.state_footprint
+        # (hole-finder #20); MSA groupings stay hardcoded for now.
         if criteria.geography:
             key = criteria.geography.lower()
-            states = cls._STATE_SETS.get(key)
+            states = cls._state_sets().get(key)
             if states:
                 placeholders = ", ".join(f":geo_state_{i}" for i in range(len(states)))
                 clauses.append(f"state IN ({placeholders})")
@@ -356,7 +390,7 @@ class DatabricksPortfolioRepository:
         "  avg_opportunity_score          AS avg_score, "
         "  approved_borrowers             AS approved_count, "
         "  actioned_borrowers             AS in_outreach_count "
-        "FROM mip.gold.funnel_snapshot_daily "
+        f"FROM {qualify('gold', 'funnel_snapshot_daily')} "
         "WHERE state = '_ALL' AND segment_code = '_ALL' "
         "ORDER BY snapshot_date DESC "
         "LIMIT 7"
@@ -519,7 +553,7 @@ class DatabricksSegmentRepository:
 
     _LIST_SQL = (
         f"SELECT {_SEGMENT_COLUMNS} "
-        "FROM mip.gold.segment_population "
+        f"FROM {qualify('gold', 'segment_population')} "
         "WHERE state = '_ALL' "
         "ORDER BY count DESC"
     )
@@ -568,14 +602,14 @@ class DatabricksLeadRepository:
 
     _LIST_BASE_SQL_TEMPLATE = (
         f"SELECT {_LEAD_POPULATION_COLUMNS} "
-        "FROM mip.gold.lead_population "
+        f"FROM {qualify('gold', 'lead_population')} "
         "ORDER BY opportunity_score DESC, borrower_id ASC "
         "LIMIT {limit}"
     )
 
     _LIST_BY_SEGMENT_SQL_TEMPLATE = (
         f"SELECT {_LEAD_POPULATION_COLUMNS} "
-        "FROM mip.gold.lead_population "
+        f"FROM {qualify('gold', 'lead_population')} "
         "WHERE array_contains(segment_codes, :segment) "
         "ORDER BY opportunity_score DESC, borrower_id ASC "
         "LIMIT {limit}"
@@ -627,7 +661,7 @@ class DatabricksBorrowerRepository:
 
     _GET_SQL = (
         f"SELECT {_BORROWER_DOSSIER_COLUMNS} "
-        "FROM mip.gold.borrower_dossier "
+        f"FROM {qualify('gold', 'borrower_dossier')} "
         "WHERE borrower_id = :borrower_id "
         "LIMIT 1"
     )
@@ -639,9 +673,9 @@ class DatabricksBorrowerRepository:
     # evidence array below.
     _EVIDENCE_SQL = (
         f"SELECT {_EVIDENCE_COLUMNS} "
-        "FROM mip.gold.evidence_events "
+        f"FROM {qualify('gold', 'evidence_events')} "
         "WHERE clip = ("
-        "  SELECT clip FROM mip.gold.borrower_dossier "
+        f"  SELECT clip FROM {qualify('gold', 'borrower_dossier')} "
         "  WHERE borrower_id = :borrower_id LIMIT 1"
         ") "
         "ORDER BY signal_rank ASC"
@@ -710,9 +744,9 @@ class DatabricksBorrowerRepository:
             )
 
         why_sources = [
-            "mip.gold.fn_rate_spread",
-            "mip.gold.fn_in_the_money",
-            "mip.gold.borrower_dossier",
+            qualify("gold", "fn_rate_spread"),
+            qualify("gold", "fn_in_the_money"),
+            qualify("gold", "borrower_dossier"),
         ]
         why = WhyPanel(
             rate_spread_bps=spread_bps,
@@ -758,7 +792,7 @@ class DatabricksBorrowerRepository:
         # events query so an empty-array dossier row (brand-new CLIP,
         # schema drift) still resolves.
         dossier_row = self._client.execute_one(
-            "SELECT clip, evidence_events FROM mip.gold.borrower_dossier "
+            f"SELECT clip, evidence_events FROM {qualify('gold', 'borrower_dossier')} "
             "WHERE borrower_id = :borrower_id LIMIT 1",
             {"borrower_id": borrower_id},
         )
@@ -786,7 +820,7 @@ class DatabricksOfferRepository:
         "  rate_spread_bps, equity_pct, has_permit, listed_for_sale, "
         "  is_investor, is_current_customer, is_competitor_lien, "
         "  recommended_offer_code "
-        "FROM mip.gold.borrower_360 "
+        f"FROM {qualify('gold', 'borrower_360')} "
         "WHERE borrower_id = :borrower_id "
         "LIMIT 1"
     )
@@ -874,15 +908,15 @@ class DatabricksGeoRepository:
         "  f.avg_opportunity_score         AS avg_score, "
         "  f.snapshot_date                 AS snapshot_date, "
         "  ts.top_segment_code             AS top_segment_code "
-        "FROM mip.gold.funnel_snapshot_daily AS f "
+        f"FROM {qualify('gold', 'funnel_snapshot_daily')} AS f "
         "LEFT JOIN ( "
         "  SELECT state, top_segment_code "
-        "  FROM mip.gold.state_top_segment "
-        "  WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM mip.gold.state_top_segment) "
+        f"  FROM {qualify('gold', 'state_top_segment')} "
+        f"  WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM {qualify('gold', 'state_top_segment')}) "
         ") AS ts ON ts.state = f.state "
         "WHERE f.state <> '_ALL' "
         "  AND f.segment_code = '_ALL' "
-        "  AND f.snapshot_date = (SELECT MAX(snapshot_date) FROM mip.gold.funnel_snapshot_daily) "
+        f"  AND f.snapshot_date = (SELECT MAX(snapshot_date) FROM {qualify('gold', 'funnel_snapshot_daily')}) "
         "ORDER BY f.addressable_borrowers DESC"
     )
 
@@ -897,9 +931,9 @@ class DatabricksGeoRepository:
         "  avg_opportunity_score, "
         "  top_segment_code, "
         "  snapshot_date "
-        "FROM mip.gold.county_rollup "
+        f"FROM {qualify('gold', 'county_rollup')} "
         "WHERE state = :state "
-        "  AND snapshot_date = (SELECT MAX(snapshot_date) FROM mip.gold.county_rollup) "
+        f"  AND snapshot_date = (SELECT MAX(snapshot_date) FROM {qualify('gold', 'county_rollup')}) "
         "ORDER BY addressable_borrowers DESC"
     )
 
@@ -913,9 +947,9 @@ class DatabricksGeoRepository:
         "  top_segment_code, "
         "  sample_borrower_id, "
         "  snapshot_date "
-        "FROM mip.gold.zip_rollup "
+        f"FROM {qualify('gold', 'zip_rollup')} "
         "WHERE county_fips_5 = :fips_5 "
-        "  AND snapshot_date = (SELECT MAX(snapshot_date) FROM mip.gold.zip_rollup) "
+        f"  AND snapshot_date = (SELECT MAX(snapshot_date) FROM {qualify('gold', 'zip_rollup')}) "
         "ORDER BY addressable_borrowers DESC"
     )
 

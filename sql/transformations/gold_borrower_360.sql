@@ -108,7 +108,12 @@ base AS (
     ON pm.clip = lc.clip
   LEFT JOIN mip.gold.property_owner_bridge AS pob
     ON pob.owner_link_id = pm.owner_link_id
-  WHERE lc.situs_state IN ('IL','CA','FL','TX','WA','CO')
+  -- Hole-finder #20: situs-state filter reads from mip.ref.state_footprint,
+  -- the single source of truth for the tenant's operational footprint. The
+  -- prior inline literal ('IL','CA','FL','TX','WA','CO') was one of 5
+  -- hardcoded copies that silently broke for tenants with a different
+  -- footprint. The subquery is a tiny (≤50 row) broadcast.
+  WHERE lc.situs_state IN (SELECT state_code FROM mip.ref.state_footprint)
     AND lc.clip IS NOT NULL
 ),
 -- Slice13-accuracy: promote current-customer detection from an inline
@@ -491,7 +496,10 @@ SELECT
   w.min_equity_pct_applied,
   w.in_the_money,
   COALESCE(tl.trigger_timeline_json, '[]')                                           AS trigger_timeline_json,
-  CURRENT_TIMESTAMP()                                                                AS refreshed_at
+  -- refresh_at comes from mip.ref.refresh_run_state (captured once per run
+  -- by the capture_refresh_timestamp seed task) so every gold CTAS agrees
+  -- to the second. See audit-holes-round-3 #7.
+  (SELECT refresh_at FROM mip.ref.refresh_run_state ORDER BY captured_at DESC LIMIT 1) AS refreshed_at
 FROM with_segments AS w
 LEFT JOIN subscores AS ss ON ss.clip = w.clip
 LEFT JOIN timeline  AS tl ON tl.clip = w.clip;

@@ -78,6 +78,75 @@ TBLPROPERTIES (
 --            changes.
 -- ---------------------------------------------------------------------------
 
+-- ---------------------------------------------------------------------------
+-- refresh_run_state
+-- ---------------------------------------------------------------------------
+-- Purpose:   Deterministic refresh-timestamp anchor. One row per
+--            `mip_refresh_scores` run, captured once at the top of the
+--            CTAS DAG; every downstream CTAS reads the value so all
+--            `refreshed_at` / `snapshot_at` columns agree to the second
+--            within one run. See sql/ddl/refresh_run_state.sql for the
+--            full rationale (audit-holes-round-3 #7).
+--
+-- Grain:     One row per job run (append-only audit ledger).
+-- Posture:   CREATE ... IF NOT EXISTS. Idempotent. Provisioned on every
+--            `mip_ref_seed` deploy so the seed task in
+--            `mip_refresh_scores` can INSERT into it without a manual
+--            bootstrap step.
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS mip.ref.refresh_run_state (
+  run_id       STRING             COMMENT 'Databricks job run_id (or ad-hoc marker). NULL tolerated for dev hand-runs.',
+  refresh_at   TIMESTAMP NOT NULL COMMENT 'Deterministic refresh timestamp shared by every gold CTAS in the run.',
+  captured_at  TIMESTAMP NOT NULL COMMENT 'When the seed row was written. Tiebreaker for MAX() when two rows share refresh_at.',
+  source       STRING             COMMENT 'Provenance of the row: mip_refresh_scores | ad_hoc | backfill.'
+)
+USING DELTA
+COMMENT 'Deterministic refresh-timestamp anchor. Consumed by every gold CTAS to replace per-task CURRENT_TIMESTAMP() drift.'
+TBLPROPERTIES (
+  'delta.enableChangeDataFeed'       = 'false',
+  'delta.autoOptimize.optimizeWrite' = 'true',
+  'delta.autoOptimize.autoCompact'   = 'true'
+);
+
+-- ---------------------------------------------------------------------------
+-- state_footprint
+-- ---------------------------------------------------------------------------
+-- Purpose:   Single source of truth for the tenant's operational footprint
+--            (the set of US states where the lender writes business). The
+--            footprint was previously hardcoded in 5 places (backend
+--            _STATE_SETS, frontend SUPPORTED_COUNTY_STATES,
+--            LOCATION_TO_STATES, portfolio-builder GEO dropdown, and the
+--            `WHERE situs_state IN (...)` literal in gold_borrower_360.sql).
+--            Any tenant with a different mix (e.g. NY/NJ/PA) silently broke.
+--
+-- Grain:     One row per 2-char USPS `state_code`. Exactly one row has
+--            `is_default_state = TRUE` (the UI anchor state).
+--
+-- Posture:   CREATE ... IF NOT EXISTS. Idempotent; safe to run on every
+--            bundle deploy. The companion seed SQL
+--            (`sql/ref/state_footprint_seed.sql`) uses MERGE so re-runs
+--            do not duplicate rows and refresh `last_updated` when an
+--            attribute changes.
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS mip.ref.state_footprint (
+  state_code       STRING    NOT NULL COMMENT '2-char USPS state code (uppercase). PK.',
+  state_name       STRING    NOT NULL COMMENT 'Human-readable state name, e.g. "Illinois".',
+  display_order    INT       NOT NULL COMMENT 'Sort order in UI lists (1 = first).',
+  is_default_state BOOLEAN   NOT NULL COMMENT 'Exactly one row TRUE. Default anchor state for empty-filter cases.',
+  last_updated     TIMESTAMP          COMMENT 'CURRENT_TIMESTAMP() on seed/MERGE.',
+  source           STRING             COMMENT 'Provenance: manual_seed | analyst_contribution | tenant_override.',
+  CONSTRAINT state_footprint_pk PRIMARY KEY (state_code)
+)
+USING DELTA
+COMMENT 'Tenant operational footprint. Single source of truth for backend filter builders, frontend map/dropdown hydration, and gold_borrower_360 situs filter.'
+TBLPROPERTIES (
+  'delta.enableChangeDataFeed'      = 'false',
+  'delta.autoOptimize.optimizeWrite' = 'true',
+  'delta.autoOptimize.autoCompact'   = 'true'
+);
+
 CREATE TABLE IF NOT EXISTS mip.ref.offer_rules_config (
   key          STRING    NOT NULL COMMENT 'Stable knob id used by the backend, e.g. ''mip_min_spread_bps''. PK.',
   value        DOUBLE    NOT NULL COMMENT 'Numeric threshold value. bps knobs store an integer in DOUBLE; percentage knobs store the percent (15.0 = 15%); rates store the fractional form (0.04875 = 4.875%).',

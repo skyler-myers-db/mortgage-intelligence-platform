@@ -57,7 +57,7 @@ databricks api post /api/2.0/sql/statements \
 # but a laptop-connected session sometimes needs a manual refresh.
 databricks auth login --host "$DATABRICKS_HOST"
 # Probe directly (port 5432, psql client):
-psql "host=$LAKEBASE_HOST user=$LAKEBASE_USER dbname=$LAKEBASE_DATABASE_NAME sslmode=require" \
+psql "host=$LAKEBASE_HOST user=$LAKEBASE_USER dbname=$LAKEBASE_DATABASE sslmode=require" \
   -c "SELECT 1"
 ```
 
@@ -435,4 +435,44 @@ pytest -q tests/integration/test_segment_count_parity.py \
 ```
 
 If any fail, route to data-modeler + principal-architect before release.
+
+---
+
+## 11. Admin RBAC header for local dev
+
+The `/api/admin/*` endpoints are gated by
+[`backend/services/rbac.py`](../backend/services/rbac.py). Admission is
+a match against the configured admin group (default `mip-admin`, env
+override `MIP_ADMIN_GROUP_NAME`) or the hard-coded fallback `admins`.
+Databricks Apps forwards workspace group membership via
+`X-Forwarded-Groups`; the deployed app gets this for free from the
+edge.
+
+Local `uvicorn` and `curl` do **not** get that header automatically —
+we deliberately chose fail-closed over an `app_env == "local"` auto-
+admit (flags like that rot into production). Carry the header on
+every local admin call:
+
+```bash
+curl -s -H "X-Forwarded-Groups: mip-admin" \
+     -H "X-Forwarded-Email: you@entrada.ai" \
+     http://localhost:8000/api/admin/rules | jq .
+
+curl -s -X PUT -H "X-Forwarded-Groups: mip-admin" \
+     -H "X-Forwarded-Email: you@entrada.ai" \
+     -H "Content-Type: application/json" \
+     -d '{"overrides":{"note":"local test"}}' \
+     http://localhost:8000/api/admin/rules | jq .
+```
+
+Missing header returns `403 {"detail": "forbidden"}` — that exact body
+string is what the frontend's admin 403 banner keys off of.
+
+Signals to watch in `/api/health` response:
+
+- `fallback_identity_fallbacks_total` — non-zero in a production
+  deploy means Databricks Apps is not forwarding `X-Forwarded-Email`
+  on some path, and audit rows are landing under `settings.default_actor`
+  instead of the real user. Treat as a governance regression and route
+  to governance-security-reviewer.
 

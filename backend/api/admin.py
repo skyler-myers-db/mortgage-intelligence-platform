@@ -29,19 +29,22 @@ from pydantic import BaseModel, Field
 
 from backend.config.settings import settings
 from backend.services.admin_rules import AdminRulesService, get_admin_rules_service
+from backend.services.audit_store import AuditStore, get_audit_store
 from backend.services.databricks_sql import DatabricksSqlError
+from backend.services.rbac import AdminDep
 from backend.services.resilience import DependencyDownError
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 ServiceDep = Annotated[AdminRulesService, Depends(get_admin_rules_service)]
+AuditDep = Annotated[AuditStore, Depends(get_audit_store)]
 
 # Legacy in-memory override kept for the PUT shim (see module docstring).
 _RULES_OVERRIDE: dict[str, str] = {}
 
 
 @router.get("/rules")
-def get_rules(service: ServiceDep) -> dict[str, Any]:
+def get_rules(service: ServiceDep, _actor: AdminDep) -> dict[str, Any]:
     """Return the active offer-rule threshold vocabulary.
 
     Shape:
@@ -81,7 +84,11 @@ class AdminRulesUpdateRequest(BaseModel):
 
 
 @router.put("/rules")
-def put_rules(payload: AdminRulesUpdateRequest) -> dict[str, object]:
+def put_rules(
+    payload: AdminRulesUpdateRequest,
+    actor: AdminDep,
+    audit: AuditDep,
+) -> dict[str, object]:
     """Legacy in-memory knob.
 
     Retained so existing ops tooling can push a hint value without a UC
@@ -89,13 +96,31 @@ def put_rules(payload: AdminRulesUpdateRequest) -> dict[str, object]:
     is seeded via ``sql/ref/offer_rules_config_seed.sql`` and is the
     source of truth for GET. Schema now requires an explicit ``overrides``
     key — arbitrary top-level JSON is rejected with 422.
+
+    Slice-RBAC: every accepted PUT writes one audit row so the override
+    change is attributable. The admitted actor email comes from
+    ``AdminDep`` (derived from ``X-Forwarded-Email``); the override
+    payload itself lands in ``payload_json`` for the forensic trail.
+
+    Round-4 R4-23: audit row lands BEFORE the in-memory override mutates.
+    If Lakebase is down, the audit write raises and the mutation does not
+    happen — prevents a silent governance §4 break where the rules change
+    but no audit row exists. The prior order (mutate then audit) left a
+    window where an admin PUT could "succeed" with no durable trail.
     """
+    audit.write(
+        actor=actor,
+        action="admin.rules.override_set",
+        entity_type="admin_rules",
+        entity_id="legacy_override",
+        payload_json={"overrides": dict(payload.overrides)},
+    )
     _RULES_OVERRIDE.update(payload.overrides)
     return {"status": "updated", "rules": dict(_RULES_OVERRIDE)}
 
 
 @router.get("/sources")
-def get_sources(service: ServiceDep) -> list[dict[str, Any]]:
+def get_sources(service: ServiceDep, _actor: AdminDep) -> list[dict[str, Any]]:
     """Return per-source readiness rows.
 
     Shape:
@@ -125,7 +150,7 @@ def get_sources(service: ServiceDep) -> list[dict[str, Any]]:
 
 
 @router.get("/settings")
-def get_settings() -> dict[str, object]:
+def get_settings(_actor: AdminDep) -> dict[str, object]:
     return {
         "app_env": settings.app_env,
         "lender_name": settings.mip_lender_name,

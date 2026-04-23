@@ -8,24 +8,21 @@ Synthetic test-id prefix: `B-TEST-*`
 
 | Endpoint | Method+Path | Status | Latency (ms) | Payload OK? | Notes |
 | --- | --- | ---: | ---: | :---: | --- |
-| health | `GET /api/health` | 200 | 1139 | yes | keys/len: app_env, breaker_state_changes_last_hour, circuit_breakers, counters_persistence, dependencies, log_export, mode, recent_errors_count |
-| portfolio.unfiltered | `POST /api/portfolio/preview` | 200 | 398 | yes | keys/len: approved_count, avg_score, cost_per_contact, data_refreshed_at, high_intent_leads, in_outreach_count, marketable_population, offers_recommended |
-| portfolio.chicago | `POST /api/portfolio/preview` | 200 | 378 | yes | keys/len: approved_count, avg_score, cost_per_contact, data_refreshed_at, high_intent_leads, in_outreach_count, marketable_population, offers_recommended |
-| portfolio.chicago.owner.25pct | `POST /api/portfolio/preview` | 200 | 401 | yes | keys/len: approved_count, avg_score, cost_per_contact, data_refreshed_at, high_intent_leads, in_outreach_count, marketable_population, offers_recommended |
-| segments | `GET /api/segments` | 200 | 938 | yes | keys/len: [array len=4] |
-| leads.all | `GET /api/leads` | 200 | 1297 | yes | keys/len: [array len=500] |
-| leads.itm | `GET /api/leads?segment=itm` | 200 | 1334 | yes | keys/len: [array len=500] |
-| borrower.detail | `GET /api/borrowers/B-102FL7THC6Q3L` | 200 | 942 | yes | keys/len: approval_status, avm_value, borrower_id, city, clip, clip_id, confidence, current_lien_balance |
-| borrower.evidence | `GET /api/borrowers/B-102FL7THC6Q3L/evidence` | 200 | 897 | yes | keys/len: [array len=8] |
-| offers.recommend | `POST /api/offers/recommend` | 200 | 1454 | yes | keys/len: alternatives, borrower_id, confidence, evidence_ids, offer_code, offer_type, product_label, rationale |
-| outreach.draft | `POST /api/outreach/draft` | 200 | 903 | yes | keys/len: body, borrower_id, channel, offer_code, status, subject |
-| outreach.approve.synthetic | `POST /api/outreach/approve` | 200 | 622 | yes | keys/len: approval_id, approved, audit_event_id |
-| outreach.reject.synthetic | `POST /api/outreach/reject` | 200 | 655 | yes | keys/len: approval_id, audit_event_id, rejected |
-| audit.events | `GET /api/audit/events?limit=10` | 200 | 586 | yes | keys/len: [array len=10] |
-| genie.message | `POST /api/genie/message` | 200 | 1050 | yes | keys/len: answer, conversation_id, follow_up_questions, metric_value, question, source, table_rows, trusted_assets |
-| admin.rules | `GET /api/admin/rules` | 200 | 412 | yes | keys/len: legacy_override, offer_rules_version, rules_edited_at, thresholds |
-| admin.sources | `GET /api/admin/sources` | 503 | 5359 | NO | ERROR: {"detail":"warehouse dependency is down: DatabricksSqlError: Databricks SQL statement did not succeed (state='FAILED' statement_id='01f13ee6-bd80-1760-ba9a-ac8d |
-| geo.state_rollups | `GET /api/geo/state-rollups` | 200 | 406 | yes | keys/len: rollups, snapshot_date |
+| health | `GET /api/health` | 200 | 609 | yes | keys/len: app_env, breaker_state_changes_last_hour, circuit_breakers, counters_persistence, dependencies, log_export, mode, recent_errors_count |
+| portfolio.unfiltered | `POST /api/portfolio/preview` | 200 | 416 | yes | keys/len: approved_count, avg_score, cost_per_contact, data_refreshed_at, high_intent_leads, in_outreach_count, marketable_population, offers_recommended |
+| portfolio.chicago | `POST /api/portfolio/preview` | 200 | 421 | yes | keys/len: approved_count, avg_score, cost_per_contact, data_refreshed_at, high_intent_leads, in_outreach_count, marketable_population, offers_recommended |
+| portfolio.chicago.owner.25pct | `POST /api/portfolio/preview` | 200 | 420 | yes | keys/len: approved_count, avg_score, cost_per_contact, data_refreshed_at, high_intent_leads, in_outreach_count, marketable_population, offers_recommended |
+| segments | `GET /api/segments` | 503 | 472 | NO | ERROR: {"detail":"warehouse dependency is down: circuit breaker is open","retryable":true,"dependency":"warehouse","correlation_id":"eb656c76dd904aeeaa28921643f9b49c"} |
+| leads.all | `GET /api/leads` | 503 | 487 | NO | ERROR: {"detail":"warehouse dependency is down: circuit breaker is open","retryable":true,"dependency":"warehouse","correlation_id":"41509ef6419c4964be00d09f37290856"} |
+| leads.itm | `GET /api/leads?segment=itm` | 503 | 470 | NO | ERROR: {"detail":"warehouse dependency is down: circuit breaker is open","retryable":true,"dependency":"warehouse","correlation_id":"c6d5f0f7c32c40e19590f81ca53a90b4"} |
+| borrower.pick | `INFO /api/leads` | 0 | 0 | yes | ERROR: no real borrower_id available from /api/leads; skipping borrower-dependent probes |
+| outreach.approve.synthetic | `POST /api/outreach/approve` | 200 | 659 | yes | keys/len: approval_id, approved, audit_event_id |
+| outreach.reject.synthetic | `POST /api/outreach/reject` | 200 | 711 | yes | keys/len: approval_id, audit_event_id, rejected |
+| audit.events | `GET /api/audit/events?limit=10` | 200 | 668 | yes | keys/len: [array len=10] |
+| genie.message | `POST /api/genie/message` | 200 | 970 | yes | keys/len: answer, conversation_id, follow_up_questions, metric_value, question, source, table_rows, trusted_assets |
+| admin.rules | `GET /api/admin/rules` | 200 | 423 | yes | keys/len: legacy_override, offer_rules_version, rules_edited_at, thresholds |
+| admin.sources | `GET /api/admin/sources` | 200 | 416 | yes | keys/len: [array len=8] |
+| geo.state_rollups | `GET /api/geo/state-rollups` | 503 | 431 | NO | ERROR: {"detail":"warehouse dependency is down: circuit breaker is open","retryable":true,"dependency":"warehouse","correlation_id":"fd0ca6ffbd5f41468982246bb2838ee7"} |
 
 ## Clean payload samples
 
@@ -33,17 +30,17 @@ Synthetic test-id prefix: `B-TEST-*`
 
 ```json
 {
-  "status": "ok",
+  "status": "degraded",
   "mode": "live",
   "app_env": "sandbox",
   "warehouse_id": "81d08d4fa2d799e9",
   "dependencies": {
-    "warehouse": "up",
+    "warehouse": "down",
     "lakebase": "up",
     "genie": "up"
   },
   "circuit_breakers": {
-    "warehouse": "closed",
+    "warehouse": "open",
     "genie": "closed",
     "lakebase": "closed"
   }
@@ -260,155 +257,13 @@ Synthetic test-id prefix: `B-TEST-*`
 }
 ```
 
-### segments — `GET /api/segments`
-
-```json
-{
-  "code": "equity",
-  "name": "Home Equity Candidate",
-  "count": 3141667,
-  "delta": "+0%",
-  "avg_score": 40,
-  "description": "Strong equity and prior cash-out/HELOC propensity.",
-  "color": "#66C5FF"
-}
-```
-
-### leads.all — `GET /api/leads`
-
-```json
-{
-  "borrower_id": "B-102FL7THC6Q3L",
-  "display_name": "Owner 3b3ba2e0",
-  "city": "CALUMET CITY",
-  "state": "IL",
-  "zip": "604092222",
-  "clip": "9154364327",
-  "segment_codes": [
-    "itm",
-    "investor",
-    "equity"
-  ],
-  "equity_estimate": 153163,
-  "rate_spread_bps": 397,
-  "opportunity_score": 86,
-  "confidence": 81,
-  "recommended_offer": "Refinance + HELOC",
-  "why_now": "Current rate sits meaningfully above market and the home carries strong equity -- a refinance with a HELOC cross-sell fits.",
-  "evidence_ids": [
-    "ev-b4fba688be13",
-    "ev-ae027341e9f1",
-    "ev-d3356f99ea2e"
-  ],
-  "approval_status": "pending",
-  "is_owner_occupied": false,
-  "is_investor": true,
-  "related_property_count": 346,
-  "current_lien_balance": 15000,
-  "second_pos_amount": 0,
-  "has_permit": false,
-  "listed_for_sale": false
-}
-```
-
-### leads.itm — `GET /api/leads?segment=itm`
-
-```json
-{
-  "borrower_id": "B-102FL7THC6Q3L",
-  "display_name": "Owner 3b3ba2e0",
-  "city": "CALUMET CITY",
-  "state": "IL",
-  "zip": "604092222",
-  "clip": "9154364327",
-  "segment_codes": [
-    "itm",
-    "investor",
-    "equity"
-  ],
-  "equity_estimate": 153163,
-  "rate_spread_bps": 397,
-  "opportunity_score": 86,
-  "confidence": 81,
-  "recommended_offer": "Refinance + HELOC",
-  "why_now": "Current rate sits meaningfully above market and the home carries strong equity -- a refinance with a HELOC cross-sell fits.",
-  "evidence_ids": [
-    "ev-b4fba688be13",
-    "ev-ae027341e9f1",
-    "ev-d3356f99ea2e"
-  ],
-  "approval_status": "pending",
-  "is_owner_occupied": false,
-  "is_investor": true,
-  "related_property_count": 346,
-  "current_lien_balance": 15000,
-  "second_pos_amount": 0,
-  "has_permit": false,
-  "listed_for_sale": false
-}
-```
-
-### borrower.detail — `GET /api/borrowers/B-102FL7THC6Q3L`
-
-```json
-{
-  "borrower_id": "B-102FL7THC6Q3L",
-  "display_name": "Owner 3b3ba2e0",
-  "city": "CALUMET CITY",
-  "state": "IL",
-  "zip": "604092222",
-  "clip": ""
-}
-```
-
-### borrower.evidence — `GET /api/borrowers/B-102FL7THC6Q3L/evidence`
-
-```json
-{
-  "evidence_id": "ev-b4fba688be13",
-  "source_product": "Voluntary Lien",
-  "source_table": "mip.silver.lien_current",
-  "signal_type": "rate_spread",
-  "signal_value": "+397 bps",
-  "display_text": "Current lien rate is 397 bps vs. par.",
-  "confidence": 0.92,
-  "timestamp": "2026-04-21 20:37:48.869"
-}
-```
-
-### offers.recommend — `POST /api/offers/recommend`
-
-```json
-{
-  "borrower_id": "B-102FL7THC6Q3L",
-  "offer_code": "refi_plus_heloc",
-  "offer_type": "refi_plus_heloc",
-  "product_label": "Refinance + HELOC",
-  "confidence": 81,
-  "rationale": "Rate is well above current market rates and the home has very strong home equity -- a strong candidate for a refinance with a HELOC alongside it."
-}
-```
-
-### outreach.draft — `POST /api/outreach/draft`
-
-```json
-{
-  "borrower_id": "B-102FL7THC6Q3L",
-  "offer_code": "OFFER-B-102FL7THC6Q3L",
-  "channel": "email",
-  "subject": "Refinance + HELOC opportunity for Owner 3b3ba2e0",
-  "body": "Hi Owner 3b3ba2e0,\n\nBased on recent public-record signals in CALUMET CITY, IL, you may qualify for Refinance + HELOC. Current rate sits meaningfully above market and the home carries strong equity -- a refinance with a HELOC cross-sell fits.\n\nReply to this note and a licensed officer will follow up. This draft is for human review only; no outreach has been sent.",
-  "status": "draft"
-}
-```
-
 ### outreach.approve.synthetic — `POST /api/outreach/approve`
 
 ```json
 {
   "approved": true,
-  "approval_id": "5f7b372d-57ce-494c-9c51-95edfd5a2eb3",
-  "audit_event_id": "b07e3372-885b-4eba-9ce2-79ed6ef2e588"
+  "approval_id": "c17eb6b7-3548-4aaa-9081-8426dd0db5d3",
+  "audit_event_id": "ee253c93-598d-4c1f-b94a-60445b0faa9d"
 }
 ```
 
@@ -417,8 +272,8 @@ Synthetic test-id prefix: `B-TEST-*`
 ```json
 {
   "rejected": true,
-  "approval_id": "79b91ff0-207f-43ed-b69e-7758e32647ae",
-  "audit_event_id": "af848960-c6d0-4711-a144-73e9b358601c"
+  "approval_id": "28097a11-8ce3-4a4b-b96c-b8b2594d74e6",
+  "audit_event_id": "8edc678b-30e3-48b6-8212-97b69f81017a"
 }
 ```
 
@@ -426,18 +281,18 @@ Synthetic test-id prefix: `B-TEST-*`
 
 ```json
 {
-  "event_id": "af848960-c6d0-4711-a144-73e9b358601c",
+  "event_id": "8edc678b-30e3-48b6-8212-97b69f81017a",
   "actor": "skyler@entrada.ai",
   "action": "outreach.reject",
   "entity_type": "approval",
-  "entity_id": "79b91ff0-207f-43ed-b69e-7758e32647ae",
+  "entity_id": "28097a11-8ce3-4a4b-b96c-b8b2594d74e6",
   "payload_json": {
     "offer_code": "refi",
-    "approval_id": "79b91ff0-207f-43ed-b69e-7758e32647ae",
-    "borrower_id": "B-TEST-1A53AE8F"
+    "approval_id": "28097a11-8ce3-4a4b-b96c-b8b2594d74e6",
+    "borrower_id": "B-TEST-F56608BE"
   },
   "evidence_ids": [],
-  "created_at": "2026-04-23T07:33:29.549978+00:00",
+  "created_at": "2026-04-23T07:39:43.016282+00:00",
   "event_type": "OUTREACH_REJECT",
   "subject_clip": null,
   "subject_segment": null,
@@ -512,67 +367,24 @@ Synthetic test-id prefix: `B-TEST-*`
       "description": "Lowered sp
 ```
 
-### geo.state_rollups — `GET /api/geo/state-rollups`
+### admin.sources — `GET /api/admin/sources`
 
 ```json
 {
-  "rollups": [
-    {
-      "state": "IL",
-      "addressable": 1851040,
-      "in_the_money": 70939,
-      "top_tier_opportunities": 1163,
-      "avg_score": 35,
-      "top_segment_code": "equity"
-    },
-    {
-      "state": "CA",
-      "addressable": 900371,
-      "in_the_money": 18724,
-      "top_tier_opportunities": 308,
-      "avg_score": 38,
-      "top_segment_code": "equity"
-    },
-    {
-      "state": "FL",
-      "addressable": 752572,
-      "in_the_money": 21528,
-      "top_tier_opportunities": 283,
-      "avg_score": 38,
-      "top_segment_code": "equity"
-    },
-    {
-      "state": "TX",
-      "addressable": 750962,
-      "in_the_money": 19323,
-      "top_tier_opportunities": 331,
-      "avg_score": 37,
-      "top_segment_code": "equity"
-    },
-    {
-      "state": "WA",
-      "addressable": 737682,
-      "in_the_money": 15646,
-      "top_tier_opportunities": 977,
-      "avg_score": 36,
-      "top_segment_code": "equity"
-    },
-    {
-      "state": "CO",
-      "addressable": 163557,
-      "in_the_money": 1582,
-      "top_tier_opportunities": 19,
-      "avg_score": 35,
-      "top_segment_code": "equity"
-    }
-  ],
-  "snapshot_date": "2026-04-23"
+  "name": "Cotality Public Records",
+  "status": "permission_denied",
+  "rows": null,
+  "last_updated": null,
+  "note": "App identity lacks USE SCHEMA/SELECT on mip.silver.property_master"
 }
 ```
 
 ## Red flags
 
-- admin.sources: status=503 error={"detail":"warehouse dependency is down: DatabricksSqlError: Databricks SQL statement did not succeed (state='FAILED' statement_id='01f13ee6-bd80-1760-ba9a-ac8d
+- segments: status=503 error={"detail":"warehouse dependency is down: circuit breaker is open","retryable":true,"dependency":"warehouse","correlation_id":"eb656c76dd904aeeaa28921643f9b49c"}
+- leads.all: status=503 error={"detail":"warehouse dependency is down: circuit breaker is open","retryable":true,"dependency":"warehouse","correlation_id":"41509ef6419c4964be00d09f37290856"}
+- leads.itm: status=503 error={"detail":"warehouse dependency is down: circuit breaker is open","retryable":true,"dependency":"warehouse","correlation_id":"c6d5f0f7c32c40e19590f81ca53a90b4"}
+- geo.state_rollups: status=503 error={"detail":"warehouse dependency is down: circuit breaker is open","retryable":true,"dependency":"warehouse","correlation_id":"fd0ca6ffbd5f41468982246bb2838ee7"}
 
 ## Teardown
 
