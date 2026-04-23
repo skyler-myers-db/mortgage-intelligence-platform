@@ -566,7 +566,7 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
         </div>
       )}
       <div className="surface__ft">
-        Showing {leads.length} borrowers · <span className="mono">SELECT * FROM mip.gold.lead_scores WHERE segment IN (…)</span>
+        Showing {leads.length.toLocaleString()} borrower{leads.length === 1 ? '' : 's'}
       </div>
     </div>
   );

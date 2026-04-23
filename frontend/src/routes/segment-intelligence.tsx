@@ -6,7 +6,7 @@ import { PageShell } from '../components/layout/PageShell';
 import { SegmentCard } from '../components/mortgage/SegmentCard';
 import { LeadTable } from '../components/mortgage/LeadTable';
 import { USChoroplethMap } from '../components/mortgage/USChoroplethMap';
-import { Button, Chip } from '../components/Primitives';
+import { Button } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { FilterSelect } from '../components/ui/FilterSelect';
 
@@ -164,14 +164,11 @@ export default function SegmentIntelligence() {
       }
       lede="Click segment cards to filter the ranked borrower table. Secondary filters narrow by location, demographics, lien, owner link, purchase intent, and equity. Counts refresh nightly."
       heroRight={
-        <>
-          <Chip variant="neutral" icon="db">Refreshed 06:12 UTC · Delta Share</Chip>
-          {filtersDirty && (
-            <Button size="sm" variant="ghost" icon="cross" onClick={clearAll}>
-              Clear filters
-            </Button>
-          )}
-        </>
+        filtersDirty ? (
+          <Button size="sm" variant="ghost" icon="cross" onClick={clearAll}>
+            Clear filters
+          </Button>
+        ) : undefined
       }
     >
       {loadError && (

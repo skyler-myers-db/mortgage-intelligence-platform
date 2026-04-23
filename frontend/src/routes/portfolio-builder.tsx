@@ -5,7 +5,7 @@ import type { PortfolioPreview } from '../types';
 import { PageShell } from '../components/layout/PageShell';
 import { KpiCard } from '../components/mortgage/KpiCard';
 import { ApprovalBanner } from '../components/mortgage/ApprovalBanner';
-import { Chip, Button } from '../components/Primitives';
+import { Button } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { FilterSelect } from '../components/ui/FilterSelect';
 import { DRAWER_SOURCES } from '../lib/drawerSources';
@@ -29,6 +29,12 @@ const FILTER_GROUPS: Array<{ label: string; key: string; options: string[] }> = 
   { label: 'PRODUCT',      key: 'product',  options: ['All products', 'Refi', 'HELOC', 'Cash-out', 'Purchase', 'Retention'] },
   { label: 'EQUITY',       key: 'equity',   options: ['≥ 15%', '≥ 25%', '≥ 40%', 'Any'] },
 ];
+
+function formatDelta(pct: number | null | undefined): string | undefined {
+  if (pct === null || pct === undefined) return undefined;
+  const sign = pct > 0 ? '+' : '';
+  return `${sign}${pct.toFixed(1)}% vs 7d ago`;
+}
 
 export default function PortfolioBuilder() {
   const [preview, setPreview] = useState<PortfolioPreview | null>(null);
@@ -83,7 +89,6 @@ export default function PortfolioBuilder() {
       eyebrow="Portfolio Builder"
       title="Build a borrower population"
       lede="Apply geography, occupancy, lien, relationship, product, and equity filters, then run the build. The KPI grid shows size, average score, and projected conversion."
-      heroRight={<Chip variant="neutral" icon="db">Unity Catalog · metric view</Chip>}
     >
       <div className="surface">
         <div className="surface__hdr" style={{ justifyContent: 'space-between' }}>
@@ -108,7 +113,6 @@ export default function PortfolioBuilder() {
               </div>
             </div>
           </div>
-          <Chip variant="neutral" icon="db">mip.gold.lead_population</Chip>
         </div>
         <div className="surface__body">
           <div className="filter-row">
@@ -153,11 +157,17 @@ export default function PortfolioBuilder() {
             <KpiCard
               label="Marketable population"
               valueAnimated={preview?.marketable_population ?? null}
+              trend={preview?.trends?.marketable_population?.series}
+              delta={formatDelta(preview?.trends?.marketable_population?.delta_pct)}
+              deltaDir={preview?.trends?.marketable_population?.direction}
               source={DRAWER_SOURCES.population}
             />
             <KpiCard
               label="Avg. borrower score"
               valueAnimated={preview?.avg_score ?? null}
+              trend={preview?.trends?.avg_score?.series}
+              delta={formatDelta(preview?.trends?.avg_score?.delta_pct)}
+              deltaDir={preview?.trends?.avg_score?.direction}
               source={DRAWER_SOURCES.nbo}
             />
             <KpiCard

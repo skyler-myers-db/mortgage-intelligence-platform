@@ -38,6 +38,7 @@ from typing import Any
 from backend.schemas.common import EvidenceEvent
 from backend.schemas.lead import Borrower360, LeadSummary, SegmentSummary
 from backend.schemas.portfolio import (
+    KpiTrend,
     PortfolioCreateRequest,
     PortfolioCreateResponse,
     PortfolioPreview,
@@ -221,7 +222,55 @@ class DatabricksPortfolioRepository:
         "FROM mip.gold.borrower_360"
     )
 
+    # 7-day history for KPI sparklines. Reads the national rollup row
+    # (state='_ALL', segment_code='_ALL') from the daily funnel snapshot.
+    # Returns 0-7 rows ordered oldest-first; the caller tolerates a short
+    # series (the sync job has to run on a few days before the trend is
+    # dense).
+    _TREND_SQL = (
+        "SELECT "
+        "  snapshot_date, "
+        "  addressable_borrowers          AS marketable_population, "
+        "  in_the_money_borrowers         AS high_intent_leads, "
+        "  avg_opportunity_score          AS avg_score "
+        "FROM mip.gold.funnel_snapshot_daily "
+        "WHERE state = '_ALL' AND segment_code = '_ALL' "
+        "ORDER BY snapshot_date DESC "
+        "LIMIT 7"
+    )
+
     _PREVIEW_CACHE_KEY = "portfolio.preview.all"
+
+    @staticmethod
+    def _build_trend(series: list[float]) -> KpiTrend:
+        """Compute KpiTrend (series ascending + delta + direction) from an
+        oldest-first numeric series."""
+        if len(series) < 2 or series[0] == 0:
+            return KpiTrend(series=series, delta_pct=None, direction="flat")
+        delta_pct = ((series[-1] - series[0]) / series[0]) * 100.0
+        direction = "up" if delta_pct > 0.5 else "down" if delta_pct < -0.5 else "flat"
+        return KpiTrend(series=series, delta_pct=round(delta_pct, 1), direction=direction)
+
+    def _load_trends(self) -> dict[str, KpiTrend]:
+        """Query the 7-day funnel snapshot and pivot into per-KPI histories.
+
+        Never raises — if the funnel table is empty (fresh workspace before
+        the sync job has run) we return an empty dict and the UI shows KPIs
+        without sparklines.
+        """
+        try:
+            rows = self._client.execute(self._TREND_SQL) or []
+        except Exception:  # noqa: BLE001 -- resilience: empty trend is an acceptable fallback
+            return {}
+        if not rows:
+            return {}
+        # Query is DESC; flip to oldest-first for sparkline rendering.
+        ordered = list(reversed(rows))
+        trends: dict[str, KpiTrend] = {}
+        for key in ("marketable_population", "high_intent_leads", "avg_score"):
+            series = [float(r.get(key) or 0) for r in ordered]
+            trends[key] = self._build_trend(series)
+        return trends
 
     def preview(self, request: PortfolioPreviewRequest | None) -> PortfolioPreview:
         _ = request
@@ -229,15 +278,16 @@ class DatabricksPortfolioRepository:
         if cached is not None:
             return cached
         row = self._client.execute_one(self._PREVIEW_SQL) or {}
+        trends = self._load_trends()
         preview = PortfolioPreview(
             marketable_population=int(row.get("marketable_population") or 0),
             high_intent_leads=int(row.get("high_intent_leads") or 0),
             avg_score=int(row.get("avg_score") or 0),
-            # Projections that aren't in gold yet live on the UI as
-            # deterministic constants -- keeping mock parity for the
-            # portfolio preview bar chart.
-            projected_contact_to_app=9.7,
-            cost_per_contact=2.18,
+            # Cost-per-contact + contact→app are not in gold yet. We return
+            # None so the UI renders an em-dash instead of a fabricated value.
+            projected_contact_to_app=None,
+            cost_per_contact=None,
+            trends=trends,
         )
         self._cache.set(self._PREVIEW_CACHE_KEY, preview, self._cache_ttl_s)
         return preview

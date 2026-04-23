@@ -251,26 +251,31 @@ for router in [
 _FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
 
 if _FRONTEND_DIST.is_dir() and (_FRONTEND_DIST / "index.html").is_file():
-    # Mount the hashed assets under /assets.
+    # Hashed Vite assets.
     app.mount("/assets", StaticFiles(directory=_FRONTEND_DIST / "assets"), name="assets")
-    # Mount brand assets (Entrada mark SVG + future brand artwork) under /brand.
-    # Without this mount the files in frontend/public/brand/ fall through the
-    # SPA catch-all below and return index.html, which breaks <img src="/brand/…">.
+    # Brand artwork (Entrada mark SVG + future brand assets).
     _BRAND_DIR = _FRONTEND_DIST / "brand"
     if _BRAND_DIR.is_dir():
         app.mount("/brand", StaticFiles(directory=_BRAND_DIR), name="brand")
 
-    # Favicon (lives at dist root, not under /assets).
-    @app.get("/favicon.svg", include_in_schema=False)
-    def _favicon() -> FileResponse:
-        return FileResponse(_FRONTEND_DIST / "favicon.svg")
-
-    # Any other non-/api path returns index.html so React Router handles the
-    # client-side route. Explicit no-store header so browsers don't keep a
-    # stale shell pointing at old hashed-asset URLs after a redeploy.
+    # Catch-all: first look for a real file at `dist/<full_path>`. If it
+    # exists, serve it verbatim (static assets dropped into `public/` —
+    # us-counties.json, favicon.svg, future data files — show up at the
+    # dist root and need to be reachable by URL path). Otherwise fall
+    # back to index.html so React Router owns the route client-side.
+    #
+    # `no-store` on the SPA shell so browsers don't keep a stale
+    # index.html that points at an old hashed-asset bundle after a deploy.
     @app.get("/{full_path:path}")
     def _spa_fallback(full_path: str) -> FileResponse:
-        _ = full_path  # router acts as SPA catch-all
+        candidate = (_FRONTEND_DIST / full_path).resolve()
+        try:
+            # Path-traversal guard: candidate must stay inside dist/.
+            candidate.relative_to(_FRONTEND_DIST.resolve())
+        except ValueError:
+            candidate = _FRONTEND_DIST / "index.html"
+        if candidate.is_file() and candidate.name != "index.html":
+            return FileResponse(candidate)
         return FileResponse(
             _FRONTEND_DIST / "index.html",
             headers={"Cache-Control": "no-cache, no-store, must-revalidate"},

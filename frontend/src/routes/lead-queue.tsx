@@ -50,12 +50,7 @@ export default function LeadQueue() {
       eyebrow="Lead Queue"
       title="Ranked borrowers"
       lede="Click a row to expand the borrower preview. Approve or reject inline, or open Borrower 360 for the full dossier. Keyboard: A approves, R rejects the expanded row."
-      heroRight={
-        <>
-          <Chip variant="neutral" icon="db">mip.gold.lead_scores</Chip>
-          {segment && <Chip variant="neutral">segment = {segment}</Chip>}
-        </>
-      }
+      heroRight={segment ? <Chip variant="neutral">segment = {segment}</Chip> : undefined}
     >
       {loadError && (
         <div

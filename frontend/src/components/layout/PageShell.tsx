@@ -53,7 +53,7 @@ export function PageShell({
         )}
         {children}
         <footer className="page-footer" aria-label="Product footer">
-          <EntradaWordmark height={18} monochrome />
+          <EntradaWordmark fontSize={13} monochrome />
           <span className="page-footer__sep" aria-hidden="true">·</span>
           <span className="page-footer__name">Mortgage Intelligence Platform</span>
         </footer>

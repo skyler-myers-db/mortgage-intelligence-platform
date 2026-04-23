@@ -4,7 +4,7 @@ import { PageShell } from '../components/layout/PageShell';
 import { KpiCard } from '../components/mortgage/KpiCard';
 import { USChoroplethMap } from '../components/mortgage/USChoroplethMap';
 import { AgentActivityLog } from '../components/mortgage/AgentActivityLog';
-import { Chip, Button } from '../components/Primitives';
+import { Button } from '../components/Primitives';
 import { DRAWER_SOURCES } from '../lib/drawerSources';
 import { Icon } from '../components/Icon';
 import { Reveal } from '../components/fx/Reveal';
@@ -19,6 +19,14 @@ const FUTURE_MODULES = [
   { code: 'M3', title: 'Underwriting Copilot',  desc: 'Condition handling and exception triage.' },
   { code: 'M4', title: 'Risk & Retention',      desc: 'Portfolio-level retention and recapture.' },
 ];
+
+/** Format a signed percent-delta for the KPI delta slot. `null` → undefined
+ * so the KpiCard simply hides the delta row. */
+function formatDelta(pct: number | null | undefined): string | undefined {
+  if (pct === null || pct === undefined) return undefined;
+  const sign = pct > 0 ? '+' : '';
+  return `${sign}${pct.toFixed(1)}% vs 7d ago`;
+}
 
 export default function Home() {
   // Home KPIs read straight from /api/portfolio/preview. While the request is
@@ -59,13 +67,10 @@ export default function Home() {
       lede="Portfolio KPIs, geography drill-down, and the approval queue. Build a new portfolio, jump to segments, or open a borrower dossier from the map."
       wideMap
       heroRight={
-        <>
-          <Chip variant="neutral" icon="db">Refreshed 06:12 UTC</Chip>
-          <Link to="/portfolio-builder" className="btn btn--primary">
-            Build a portfolio
-            <Icon name="chevright" size={14} />
-          </Link>
-        </>
+        <Link to="/portfolio-builder" className="btn btn--primary">
+          Build a portfolio
+          <Icon name="chevright" size={14} />
+        </Link>
       }
     >
       {previewError && (
@@ -87,11 +92,17 @@ export default function Home() {
         <KpiCard
           label="Marketable population"
           valueAnimated={preview?.marketable_population ?? null}
+          trend={preview?.trends?.marketable_population?.series}
+          delta={formatDelta(preview?.trends?.marketable_population?.delta_pct)}
+          deltaDir={preview?.trends?.marketable_population?.direction}
           source={DRAWER_SOURCES.population}
         />
         <KpiCard
           label="High-intent leads"
           valueAnimated={preview?.high_intent_leads ?? null}
+          trend={preview?.trends?.high_intent_leads?.series}
+          delta={formatDelta(preview?.trends?.high_intent_leads?.delta_pct)}
+          deltaDir={preview?.trends?.high_intent_leads?.direction}
           source={DRAWER_SOURCES.itm}
         />
         <KpiCard
@@ -179,7 +190,7 @@ export default function Home() {
 
       <Reveal>
         <div className="brand-signature" aria-hidden="true">
-          <EntradaWordmark height={42} />
+          <EntradaWordmark fontSize={36} />
         </div>
       </Reveal>
     </PageShell>

@@ -80,12 +80,19 @@ export interface Borrower360 extends LeadSummary {
   why_panel: WhyPanel;
 }
 
+export interface KpiTrend {
+  series: number[];
+  delta_pct: number | null;
+  direction: 'up' | 'down' | 'flat';
+}
+
 export interface PortfolioPreview {
   marketable_population: number;
   high_intent_leads: number;
   avg_score: number;
-  projected_contact_to_app: number;
-  cost_per_contact: number;
+  projected_contact_to_app: number | null;
+  cost_per_contact: number | null;
+  trends?: Record<string, KpiTrend>;
 }
 
 export interface OfferAlternative {

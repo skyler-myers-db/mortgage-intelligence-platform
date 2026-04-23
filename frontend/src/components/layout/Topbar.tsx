@@ -33,8 +33,7 @@ export function Topbar() {
   return (
     <header className="topbar" role="banner">
       <div className="topbar__crumbs">
-        <span className="mono" style={{ color: 'var(--text-3)', fontSize: 11, letterSpacing: '0.06em' }}>WORKSPACE /</span>
-        <span>mip-app</span>
+        <span>Mortgage Intelligence Platform</span>
         <span className="sep">/</span>
         <span className="cur">{crumb}</span>
       </div>

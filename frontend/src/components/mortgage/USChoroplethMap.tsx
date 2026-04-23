@@ -304,6 +304,7 @@ export function USChoroplethMap({ height = 420, segmentFilter }: USChoroplethMap
   // Which supported state we drilled into (for county rendering).
   const [countyStateId, setCountyStateId] = useState<string | null>(null);
   const [countiesByState, setCountiesByState] = useState<Record<string, CountiesPayload>>({});
+  const [countyLoadError, setCountyLoadError] = useState<string | null>(null);
   const navigate = useNavigate();
 
   // Lazy-load the @svg-maps/usa data so the ~140 KB of path strings lands
@@ -387,9 +388,14 @@ export function USChoroplethMap({ height = 420, segmentFilter }: USChoroplethMap
         if (!cancelled) {
           setCountiesByState((cur) => ({ ...cur, [countyStateId]: payload }));
         }
-      } catch {
-        // TODO: surface a real error state when we introduce a shared
-        // ErrorBoundary. Until then the loading skeleton is the fallback.
+      } catch (err) {
+        if (!cancelled) {
+          setCountyLoadError(
+            err instanceof Error
+              ? `Couldn't load county polygons: ${err.message}`
+              : "Couldn't load county polygons.",
+          );
+        }
       }
     })();
     return () => {
@@ -521,11 +527,32 @@ export function USChoroplethMap({ height = 420, segmentFilter }: USChoroplethMap
             y="160"
             textAnchor="middle"
             fontSize="11"
-            fill="var(--text-3)"
+            fill={countyLoadError ? 'var(--signal-danger)' : 'var(--text-3)'}
             pointerEvents="none"
           >
-            Loading counties…
+            {countyLoadError ?? 'Loading counties…'}
           </text>
+          {countyLoadError && (
+            <text
+              x="170"
+              y="180"
+              textAnchor="middle"
+              fontSize="10"
+              fill="var(--text-3)"
+              pointerEvents="none"
+              style={{ cursor: 'pointer' }}
+              onClick={() => {
+                setCountyLoadError(null);
+                setCountiesByState((c) => {
+                  const next = { ...c };
+                  if (countyStateId) delete next[countyStateId];
+                  return next;
+                });
+              }}
+            >
+              Click to retry
+            </text>
+          )}
         </svg>
       );
     }
