@@ -152,7 +152,7 @@ export default function OfferOrchestrator() {
     <PageShell
       eyebrow="Next-Best-Offer + Outreach"
       title="Convert intelligence into a human-approved action"
-      lede="The draft below is never auto-sent. Operators approve or reject each message; approvals are logged to the immutable audit trail and flow through Lakeflow into the marketing channel."
+      lede="The draft below is never auto-sent. Loan officers approve or reject each message; approvals land in the immutable audit trail and release into the outreach channel for the next scheduled send."
       heroRight={
         b && (
           <>

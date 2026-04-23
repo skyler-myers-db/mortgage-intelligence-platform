@@ -176,8 +176,8 @@ export function AgentActivityLog({ limit = 12 }: { limit?: number }) {
         )}
         {feedState === 'error' && (
           <div className="body" style={{ padding: 'var(--sp-3)', color: 'var(--signal-error, #EF4444)' }}>
-            Couldn&rsquo;t reach the audit feed (/api/audit/events). Retry will
-            happen on the next page load; dependency state is shown below.
+            Audit feed is briefly unavailable. This page will retry on the
+            next refresh; live dependency state is shown below.
           </div>
         )}
         {feedState === 'ok' && rows.map((r) => {
@@ -232,7 +232,7 @@ export function AgentActivityLog({ limit = 12 }: { limit?: number }) {
           {genieBreaker ? ` · ${genieBreaker}` : ''}
         </span>
         <span className="mono" style={{ marginLeft: 'auto' }}>
-          /api/health{probeSuffix}
+          Last health probe{probeSuffix}
         </span>
       </div>
       <div className="surface__ft">Written to Lakebase · immutable · exportable to Unity Catalog</div>

@@ -275,7 +275,7 @@ function featureBBox(f: Feature): [number, number, number, number] {
   return [minX, minY, maxX, maxY];
 }
 
-interface MapPlaceholderProps {
+interface USChoroplethMapProps {
   height?: number;
   /** Optional segment-code filter. Non-matching states dim. */
   segmentFilter?: string[];
@@ -291,10 +291,12 @@ interface HoverState {
 }
 
 /**
- * Main component — historical filename kept so routes don't shuffle; exported
- * as both `MapPlaceholder` (legacy) and `USChoroplethMap` (true name).
+ * US Choropleth Map — state → county → ZIP drill-down over Cotality public
+ * records. Exported under both names: `USChoroplethMap` (primary) and
+ * `MapPlaceholder` (deprecated alias kept for any lingering external
+ * imports; remove after the next slice).
  */
-export function MapPlaceholder({ height = 420, segmentFilter }: MapPlaceholderProps) {
+export function USChoroplethMap({ height = 420, segmentFilter }: USChoroplethMapProps) {
   const [level, setLevel] = useState<Level>('state');
   const [selected, setSelected] = useState<Selected | null>(null);
   const [hover, setHover] = useState<HoverState | null>(null);
@@ -814,7 +816,9 @@ export function MapPlaceholder({ height = 420, segmentFilter }: MapPlaceholderPr
   );
 }
 
-export { MapPlaceholder as USChoroplethMap };
+// Deprecated alias — kept so any downstream consumer importing the old
+// name keeps compiling. Remove after the next release window.
+export { USChoroplethMap as MapPlaceholder };
 
 // ---------- Helpers -------------------------------------------------------
 

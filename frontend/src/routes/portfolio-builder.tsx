@@ -182,7 +182,7 @@ export default function PortfolioBuilder() {
           <ApprovalBanner
             count={preview.high_intent_leads}
             text="Portfolio build will queue approvals downstream. No outreach is sent until a human approves each recommendation."
-            approveLabel="Generate approval-required outreach"
+            approveLabel="Send to loan officers for approval"
           />
         </div>
       )}

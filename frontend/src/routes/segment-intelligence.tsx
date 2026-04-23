@@ -5,7 +5,7 @@ import type { LeadSummary, SegmentSummary } from '../types';
 import { PageShell } from '../components/layout/PageShell';
 import { SegmentCard } from '../components/mortgage/SegmentCard';
 import { LeadTable } from '../components/mortgage/LeadTable';
-import { MapPlaceholder } from '../components/mortgage/MapPlaceholder';
+import { USChoroplethMap } from '../components/mortgage/USChoroplethMap';
 import { Button, Chip } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { FilterSelect } from '../components/ui/FilterSelect';
@@ -271,7 +271,7 @@ export default function SegmentIntelligence() {
         style={hasSoftFilter ? { opacity: 0.72, transition: 'opacity var(--dur-fast) var(--ease)' } : undefined}
       >
         <LeadTable leads={filtered} />
-        <MapPlaceholder height={520} segmentFilter={activeSegs} />
+        <USChoroplethMap height={520} segmentFilter={activeSegs} />
       </div>
     </PageShell>
   );

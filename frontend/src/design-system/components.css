@@ -950,21 +950,10 @@
   .layoutA-grid { grid-template-columns: 1.4fr 1fr; gap: calc(var(--gap-grid) + 4px); }
 }
 
-/* Map placeholder (before full interactive map ships) */
-.map-placeholder {
-  min-height: 420px;
-  display: grid;
-  place-items: center;
-  background:
-    radial-gradient(800px 500px at 20% 30%, rgba(2,80,128,0.22), transparent 60%),
-    radial-gradient(600px 400px at 80% 70%, rgba(92,225,230,0.10), transparent 60%),
-    var(--bg-2);
-  border: 1px dashed var(--line-2);
-  border-radius: var(--r-lg);
-  text-align: center;
-  padding: var(--sp-8);
-}
-.map-placeholder__inner { display: flex; flex-direction: column; align-items: center; gap: var(--sp-3); }
+/* Legacy .map-placeholder class block removed: the USChoroplethMap
+ * component renders real SVG paths and no longer uses this styling.
+ * If a consumer re-introduces a skeleton surface for the map, use
+ * the token-driven `.skeleton` utility below instead. */
 
 /* ============================================================
    SKELETON (token-driven shimmer)

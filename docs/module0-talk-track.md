@@ -6,7 +6,7 @@
 - **Presenters:** Entrada delivery lead + Databricks FS partner (co-drive)
 - **Venue:** Entrada session, conference 2026
 - **App URL:** deployed Databricks App at `https://mip-app-2543889327043640.aws.databricksapps.com`, 1440×900, dark theme, compact density. Auth is workspace-identity Bearer (the App mints short-lived creds via `databricks.sdk.core.Config` — no PAT baked into the runtime).
-- **Data posture:** live Unity Catalog on the Cotality Delta Share — no mock fallback. Resilience (warehouse warm-start, retries, circuit breakers, SWR-cached health probe, pre-joined gold for hot read paths, degraded-state UI) is how a flaky network is handled, not a mock swap.
+- **Data posture:** live Unity Catalog on the Cotality Delta Share — never synthesized. Resilience (warehouse warm-start, retries, circuit breakers, SWR-cached health probe, pre-joined gold for hot read paths, degraded-state UI) is how a flaky network is handled; the app fails visibly rather than silently substituting fake data.
 
 ---
 
@@ -24,7 +24,7 @@ circuit breaker `closed`. Do not start the pitch until that page is green.
 
 > "One question, one module. **Who should we contact, why now, and with what offer?**"
 
-> "This is the Mortgage Intelligence Platform on Databricks Apps. Module 0 is top-of-funnel: the real Cotality Delta Share, under Unity Catalog governance, with **5.16 million property snapshots** across six states — Illinois, California, Florida, Texas, Washington, Colorado. **3.1 million of those carry open liens.** Every screen you're about to see queries live gold tables; there is no mock mode behind this curtain."
+> "This is the Mortgage Intelligence Platform on Databricks Apps. Module 0 is top-of-funnel: the real Cotality Delta Share, under Unity Catalog governance, with **5.16 million property snapshots** across six states — Illinois, California, Florida, Texas, Washington, Colorado. **3.1 million of those carry open liens.** Every screen you're about to see queries live gold tables — the data is production, the latency is production, the governance is production."
 
 > "Three principles hold through every screen. *Every recommendation traces to a Cotality source through Unity Catalog. Every score has a rationale. Nothing is sent without human approval, and every approval writes to an immutable Lakebase audit log.* That's the whole contract."
 

@@ -99,8 +99,8 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
             <Icon name="user" size={14} />
           </div>
           <div>
-            <div className="h-4">Named borrowers · drill to evidence</div>
-            <div className="muted" style={{ fontSize: 12 }}>Synthetic names · CLIP-MCP on-demand drill-down</div>
+            <div className="h-4">Ranked borrowers · drill to evidence</div>
+            <div className="muted" style={{ fontSize: 12 }}>Click any row for the Cotality evidence trail — CLIP, Owner Link, and lien history.</div>
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>

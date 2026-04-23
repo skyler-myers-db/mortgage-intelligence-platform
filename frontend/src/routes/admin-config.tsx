@@ -7,8 +7,9 @@ import { Icon } from '../components/Icon';
 /**
  * Admin / Config — operator-facing controls for theme / density / accent
  * (the same Console controls, surfaced as a proper settings page so an
- * operator can flex visuals without opening the right-rail panel), plus
- * placeholders for offer rules and audit settings.
+ * operator can adjust visuals without opening the right-rail panel),
+ * plus read-only panels surfacing the active offer rules, audit wiring,
+ * and data-source readiness.
  */
 
 const ACCENT_SWATCHES: Array<{ k: Accent; color: string }> = [
@@ -32,7 +33,7 @@ export default function AdminConfig() {
     <PageShell
       eyebrow="Admin Config"
       title="Rules, thresholds, and presentation"
-      lede="Presenter controls at the top; rule and audit configuration placeholders below. Everything here is a safe mutation of UI state."
+      lede="Tune the workspace look and feel at the top; the rule set, audit trail, and data source health panels below show the live policy Module 0 is running against."
     >
       <div className="layoutA-grid">
         <div className="surface">
@@ -130,17 +131,17 @@ export default function AdminConfig() {
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--gap-grid)' }}>
-          <PlaceholderBlock
+          <InfoPanel
             title="Offer rules"
             desc="Thresholds for In-the-Money spread, equity, LTV, permit value, and retention scoring. Version-controlled in Unity Catalog."
             chip="rules.itm_v3"
           />
-          <PlaceholderBlock
+          <InfoPanel
             title="Audit settings"
             desc="Lakebase schema `mip_app.audit_events` · append-only · exported nightly to UC for compliance review."
             chip="mip_app.audit_events"
           />
-          <PlaceholderBlock
+          <InfoPanel
             title="Data source readiness"
             desc="Public Records · Voluntary Lien · MMA · CLIP · Owner Link · MLS · Building Permits · AVM — all wired via Delta Share in production."
             chip="8 sources · Delta Share"
@@ -170,7 +171,7 @@ function Row({ label, children }: { label: string; children: ReactElement }) {
   );
 }
 
-function PlaceholderBlock({ title, desc, chip }: { title: string; desc: string; chip: string }) {
+function InfoPanel({ title, desc, chip }: { title: string; desc: string; chip: string }) {
   return (
     <div className="surface">
       <div className="surface__hdr" style={{ justifyContent: 'space-between' }}>

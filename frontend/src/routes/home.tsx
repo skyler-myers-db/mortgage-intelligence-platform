@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { PageShell } from '../components/layout/PageShell';
 import { KpiCard } from '../components/mortgage/KpiCard';
-import { MapPlaceholder } from '../components/mortgage/MapPlaceholder';
+import { USChoroplethMap } from '../components/mortgage/USChoroplethMap';
 import { AgentActivityLog } from '../components/mortgage/AgentActivityLog';
 import { Chip, Button } from '../components/Primitives';
 import { DRAWER_SOURCES } from '../lib/drawerSources';
@@ -39,7 +39,7 @@ export default function Home() {
         if (cancelled) return;
         setPreview(null);
         setPreviewError(
-          err instanceof Error ? err.message : "Couldn't reach /api/portfolio/preview.",
+          err instanceof Error ? err.message : "Couldn't load portfolio KPIs.",
         );
       });
     return () => {
@@ -130,7 +130,7 @@ export default function Home() {
         </div>
       </div>
       <div className="layoutA-grid">
-        <MapPlaceholder />
+        <USChoroplethMap />
         <Reveal>
           <AgentActivityLog />
         </Reveal>

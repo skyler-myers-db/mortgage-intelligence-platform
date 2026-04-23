@@ -112,8 +112,8 @@ export function DegradedBanner({
   const downDep = degradedDependency(health);
   if (!downDep) return null;
 
-  const title = `Backend is warming up — ${downDep} dependency recovering`;
-  const sub = `Retrying automatically every ${Math.round(pollIntervalDegradedMs / 1000)}s. Live data will appear as soon as it's available — no mock fallback.`;
+  const title = `Reconnecting to ${downDep}`;
+  const sub = `Live data will resume automatically. This page refreshes every ${Math.round(pollIntervalDegradedMs / 1000)} seconds.`;
 
   return (
     <div
