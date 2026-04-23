@@ -44,7 +44,7 @@ test.use({ baseURL: APP_URL });
  */
 const ROUTES: Array<{ path: string; readySelector?: RegExp | string }> = [
   { path: '/',                       readySelector: /Who should we contact, why now, and with what offer\?/i },
-  { path: '/portfolio-builder',      readySelector: /Build a high-intent borrower population/i },
+  { path: '/portfolio-builder',      readySelector: /Build a borrower population/i },
   { path: '/segment-intelligence',   readySelector: /borrower segment/i },
   { path: '/lead-queue',             readySelector: /Lead queue|Ranked borrower queue/i },
   { path: '/ask-genie',              readySelector: /Ask a question|Ask Genie/i },

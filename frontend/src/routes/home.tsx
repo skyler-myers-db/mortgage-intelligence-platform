@@ -53,7 +53,7 @@ export default function Home() {
     <PageShell
       eyebrow="Module 0 · Top-of-Funnel Lead Generation & Borrower Segmentation"
       title="Who should we contact, why now, and with what offer?"
-      lede="Grounded on Cotality public records, liens, listings, permits, AVM, and mortgage market data. Every recommendation is traceable, every score has a rationale, and nothing is sent without human approval."
+      lede="Portfolio KPIs, geography drill-down, and today's approval queue. Start a new build, jump to segments, or open a borrower dossier from the map."
       wideMap
       heroRight={
         <>
@@ -109,24 +109,24 @@ export default function Home() {
       <div
         className="approval"
         role="region"
-        aria-label="Human approval required before outreach"
+        aria-label="Approval queue"
         style={{ marginTop: 'var(--gap-grid)' }}
       >
         <div className="approval__ico"><Icon name="shield" size={16} /></div>
         <div className="approval__body">
-          <div className="approval__title">Review approval required before outreach</div>
+          <div className="approval__title">Approval queue</div>
           <div className="approval__sub">
             {queued !== null
-              ? `${queued.toLocaleString()} borrowers queued. Nothing is sent until an officer approves each draft.`
-              : 'Nothing is sent until an officer approves each draft.'}
+              ? `${queued.toLocaleString()} borrowers awaiting loan-officer approval.`
+              : 'Borrowers awaiting loan-officer approval.'}
           </div>
         </div>
       </div>
 
       <div className="section-hdr">
         <div>
-          <div className="eyebrow">Where the opportunity lives</div>
-          <div className="h-2">Geography drill-down · county → ZIP → borrower</div>
+          <div className="eyebrow">Geography</div>
+          <div className="h-2">State → county → ZIP → borrower</div>
         </div>
       </div>
       <div className="layoutA-grid">
@@ -140,7 +140,7 @@ export default function Home() {
         <div className="section-hdr">
           <div>
             <div className="eyebrow">Future modules</div>
-            <div className="h-2">One spine, four extensions</div>
+            <div className="h-2">Planned extensions on the Module 0 data spine</div>
           </div>
         </div>
         <div

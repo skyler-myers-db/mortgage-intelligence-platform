@@ -98,11 +98,15 @@ resources:
             file:
               path: ../sql/ddl/005_semantics_views.sql
 
-    # Slice13-accuracy mirror: canonical definition lives in `databricks.yml`
-    # as `mip_sync_lifecycle_state`. Same rationale as `fred_rates_ingest`
-    # and `mip_ref_seed` below -- keep sibling jobs co-located so a future
-    # `include: [resources/*.yml]` wiring makes per-resource files the
-    # single source of truth. Keep both blocks in sync.
+    # Mirror: canonical definition lives in `databricks.yml` as
+    # `mip_sync_lifecycle_state`. Same rationale as `fred_rates_ingest`
+    # and `mip_ref_seed` below -- keep sibling jobs co-located so a
+    # future `include: [resources/*.yml]` wiring makes per-resource
+    # files the single source of truth. Keep both blocks in sync.
+    #
+    # Trigger model (2026-04-22): event-triggered from the backend
+    # approval path + daily 04:00 America/Chicago fallback. Not hourly.
+    # See databricks.yml comment for full rationale.
     mip_sync_lifecycle_state:
       name: mip-sync-lifecycle-state-${bundle.target}
       tags:
@@ -110,6 +114,9 @@ resources:
         module: module0
         owner: entrada
         slice: slice13-accuracy
+      schedule:
+        quartz_cron_expression: "0 0 4 ? * * *"
+        timezone_id: America/Chicago
       tasks:
         - task_key: seed_default_state
           sql_task:
@@ -165,10 +172,11 @@ resources:
     # enforce that on the Slice 8 CI pass.
     fred_rates_ingest:
       name: mip-fred-rates-ingest-${bundle.target}
+      # Do NOT hardcode `pause_status: UNPAUSED`. Target mode controls pause.
+      # Mirror of databricks.yml `mip_fred_rates_ingest`; keep in sync.
       schedule:
         quartz_cron_expression: "0 0 6 ? * FRI *"
         timezone_id: America/Chicago
-        pause_status: UNPAUSED
       max_concurrent_runs: 1
       tasks:
         - task_key: init_ddl

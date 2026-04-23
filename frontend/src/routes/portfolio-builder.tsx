@@ -81,8 +81,8 @@ export default function PortfolioBuilder() {
   return (
     <PageShell
       eyebrow="Module 0 / Lead Portfolio Builder"
-      title="Build a high-intent borrower population"
-      lede="Start with public-record property and lien data. Layer ownership, market, listing, permit, and lender relationship filters. Every KPI traces to a Cotality source."
+      title="Build a borrower population"
+      lede="Apply geography, occupancy, lien, relationship, product, and equity filters, then run the build. The KPI grid shows size, average score, and projected conversion."
       heroRight={<Chip variant="neutral" icon="db">Unity Catalog · metric view</Chip>}
     >
       <div className="surface">
@@ -104,7 +104,7 @@ export default function PortfolioBuilder() {
             <div>
               <div className="h-4">Lead Portfolio Builder</div>
               <div className="muted" style={{ fontSize: 12 }}>
-                Construct a marketable population from Cotality public records before outreach.
+                Filter the population, run the build, review KPIs.
               </div>
             </div>
           </div>
@@ -181,8 +181,8 @@ export default function PortfolioBuilder() {
         <div style={{ marginTop: 'var(--gap-grid)' }}>
           <ApprovalBanner
             count={preview.high_intent_leads}
-            text="Portfolio build will queue approvals downstream. No outreach is sent until a human approves each recommendation."
-            approveLabel="Send to loan officers for approval"
+            text={`${preview.high_intent_leads.toLocaleString()} borrowers will enter the lead queue for loan-officer review.`}
+            approveLabel="Send to loan officers"
           />
         </div>
       )}

@@ -152,7 +152,7 @@ export default function AdminConfig() {
     <PageShell
       eyebrow="Administration"
       title="Rules, data sources, and audit"
-      lede="Operator-level configuration for the Module 0 platform. Workspace appearance controls live in the Console panel."
+      lede="View the active offer ruleset, data source status, and recent audit activity. Per-user workspace appearance is in the Console panel."
     >
       {/* First row — the three operator-grade panels */}
       <div
@@ -171,8 +171,7 @@ export default function AdminConfig() {
           </div>
           <div className="surface__body" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             <p className="body" style={{ margin: 0 }}>
-              Thresholds for In-the-Money spread, equity, LTV, permit value, and retention scoring.
-              Version-controlled in Unity Catalog.
+              Thresholds for in-the-money spread, equity, LTV, permit value, and retention scoring. Stored in Unity Catalog.
             </p>
             <MetaRow
               label="Edited"
@@ -220,8 +219,7 @@ export default function AdminConfig() {
           </div>
           <div className="surface__body" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             <p className="body" style={{ margin: 0 }}>
-              Append-only trail of every approval, rejection, and workflow action.
-              Immutable by policy; exported nightly for compliance review.
+              Append-only trail of approvals, rejections, and workflow actions. Exported nightly for compliance review.
             </p>
             {auditLoading && <MetaRow label="Status" value="Probing Lakebase…" status="neutral" />}
             {!auditLoading && auditError && (

@@ -161,8 +161,8 @@ Reply or call 1-800-XXX-XXXX.`
   return (
     <PageShell
       eyebrow="Next-Best-Offer + Outreach"
-      title="Convert intelligence into a human-approved action"
-      lede="The draft below is never auto-sent. Loan officers approve or reject each message; approvals land in the immutable audit trail and release into the outreach channel for the next scheduled send."
+      title="Review and approve outreach"
+      lede="Review the recommended offer, alternatives considered, thresholds applied, and the draft message. Approve to release the draft into the outreach queue; reject to drop the borrower."
       heroRight={
         b && (
           <>
@@ -239,7 +239,7 @@ Reply or call 1-800-XXX-XXXX.`
         <div className="surface">
           <div className="surface__hdr">
             <Icon name="doc" size={14} style={{ color: 'var(--accent)' }} />
-            <div className="h-4">Draft outreach · review only, never auto-sent</div>
+            <div className="h-4">Draft outreach · review only</div>
           </div>
           <div className="surface__body">
             <textarea
@@ -350,7 +350,7 @@ Reply or call 1-800-XXX-XXXX.`
 
       <div style={{ marginTop: 'var(--gap-grid)' }}>
         <ApprovalBanner
-          text={`${b ? `Borrower ${b.borrower_id}` : 'Borrower'} queued — approve to write an audit event and queue for outreach. Nothing is sent until you approve.`}
+          text={`${b ? `Borrower ${b.borrower_id}` : 'Borrower'} pending review. Approve writes an audit event and releases the draft into the outreach queue.`}
           onApprove={onApprove}
           onReject={onReject}
           disabled={approval === 'approved'}
@@ -361,7 +361,7 @@ Reply or call 1-800-XXX-XXXX.`
         <div className="surface" style={{ marginTop: 'var(--gap-grid)' }}>
           <div className="surface__body" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <span className="burst" style={{ display: 'inline-flex' }}>
-              <Chip variant="success" icon="check">Approved and logged to audit</Chip>
+              <Chip variant="success" icon="check">Approved · released to outreach queue</Chip>
             </span>
             {auditId && <span className="mono muted" style={{ fontSize: 11 }}>audit: {auditId}</span>}
           </div>
@@ -370,7 +370,7 @@ Reply or call 1-800-XXX-XXXX.`
       {approval === 'rejected' && (
         <div className="surface" style={{ marginTop: 'var(--gap-grid)' }}>
           <div className="surface__body">
-            <Chip variant="danger" icon="cross">Rejected — no outreach queued</Chip>
+            <Chip variant="danger" icon="cross">Rejected</Chip>
           </div>
         </div>
       )}

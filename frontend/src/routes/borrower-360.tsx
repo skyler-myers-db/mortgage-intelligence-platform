@@ -15,7 +15,7 @@ import { DRAWER_SOURCES } from '../lib/drawerSources';
 import { segmentByCode } from '../lib/segmentMetadata';
 
 /**
- * Borrower 360 — public-record dossier composed in `.surface` blocks.
+ * Borrower 360 — per-borrower dossier composed in `.surface` blocks.
  * Left column: borrower + property + Owner Link details. Middle: trigger
  * timeline. Right: Why-now panel with evidence chips + next-best-offer card
  * and forward link to the Offer Orchestrator.
@@ -60,7 +60,7 @@ export default function Borrower360() {
   if (errorMsg) {
     return (
       <PageShell
-        eyebrow="Borrower 360 · Public-Record Dossier"
+        eyebrow="Borrower 360"
         title={`Couldn't load ${id}`}
         lede={errorMsg}
       >
@@ -79,9 +79,9 @@ export default function Borrower360() {
   if (!b) {
     return (
       <PageShell
-        eyebrow="Borrower 360 · Public-Record Dossier"
+        eyebrow="Borrower 360"
         title={<Skeleton width={280} height={30} rounded="md" />}
-        lede={`Fetching public-record Customer 360 for ${id}…`}
+        lede={`Loading borrower ${id}…`}
       >
         <div className="layoutA-grid">
           <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--gap-grid)' }}>
@@ -146,7 +146,7 @@ export default function Borrower360() {
 
   return (
     <PageShell
-      eyebrow="Borrower 360 · Public-Record Dossier"
+      eyebrow="Borrower 360"
       title={`Borrower ${b.borrower_id}`}
       lede={`${b.city}, ${b.state} ${b.zip} · ${b.recommended_offer}`}
       heroRight={
@@ -311,7 +311,7 @@ export default function Borrower360() {
           <div className="surface">
             <div className="surface__hdr">
               <Icon name="layers" size={14} style={{ color: 'var(--accent)' }} />
-              <div className="h-4">Why we trust this</div>
+              <div className="h-4">Supporting evidence</div>
             </div>
             <div className="surface__body" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               {b.evidence_events.map((e) => (

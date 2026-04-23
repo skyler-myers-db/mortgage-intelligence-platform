@@ -48,8 +48,8 @@ export default function LeadQueue() {
   return (
     <PageShell
       eyebrow="Prioritized Lead Queue"
-      title="Ranked borrower opportunities with explainable scores"
-      lede="Every row carries an opportunity score, confidence meter, and evidence chip. Click a row to expand a borrower dossier preview; open the full Borrower 360 for the Why panel and trigger timeline."
+      title="Ranked borrower queue"
+      lede="Click a row to expand the borrower preview. Approve or reject inline, or open Borrower 360 for the full dossier. Keyboard: A approves, R rejects the expanded row."
       heroRight={
         <>
           <Chip variant="neutral" icon="db">mip.gold.lead_scores</Chip>

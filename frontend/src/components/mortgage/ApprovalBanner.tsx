@@ -27,12 +27,12 @@ export function ApprovalBanner({
   disabled,
 }: ApprovalBannerProps) {
   const sub =
-    text ?? `${count} borrower${count === 1 ? '' : 's'} queued — nothing is sent until you approve.`;
+    text ?? `${count} borrower${count === 1 ? '' : 's'} pending review.`;
   return (
-    <div className="approval" role="region" aria-label="Human approval required">
+    <div className="approval" role="region" aria-label="Approval queue">
       <div className="approval__ico"><Icon name="shield" size={16} /></div>
       <div className="approval__body">
-        <div className="approval__title">Human approval required before outreach</div>
+        <div className="approval__title">Pending review</div>
         <div className="approval__sub">{sub}</div>
       </div>
       <div className="approval__actions">

@@ -25,6 +25,7 @@ from backend.schemas.offer import (
     OutreachDraftRequest,
 )
 from backend.services.audit_store import AuditStore, get_audit_store, resolve_actor
+from backend.services.job_trigger import trigger_lifecycle_sync
 from backend.services.lakebase import LakebaseClient, LakebaseError, get_lakebase_client
 from backend.services.repositories import OutreachRepository, get_outreach_repository
 
@@ -100,6 +101,7 @@ def draft_outreach(
 def approve_outreach(
     payload: OutreachApproveRequest,
     request: Request,
+    background: BackgroundTasks,
     audit: AuditDep,
     lakebase: LakebaseDep,
 ) -> OutreachApproveResponse:
@@ -148,6 +150,15 @@ def approve_outreach(
         # No silent fallback. The UI surfaces 503 as a retry banner;
         # the operator's next move is to check Lakebase status.
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    # The approval row is now committed in Lakebase. Kick the
+    # ``mip_sync_lifecycle_state`` job to mirror it into
+    # ``mip.gold.borrower_lifecycle_state`` so metric views + Genie
+    # see the new state within minutes instead of waiting for the
+    # 04:00 daily fallback cron. Scheduled via BackgroundTasks so the
+    # HTTP response ships first; ``trigger_lifecycle_sync`` is itself
+    # debounced + swallows every error class so a transient SDK/auth
+    # failure never breaks an approval.
+    background.add_task(trigger_lifecycle_sync, reason="approval")
     return OutreachApproveResponse(
         approved=True,
         approval_id=approval_id,

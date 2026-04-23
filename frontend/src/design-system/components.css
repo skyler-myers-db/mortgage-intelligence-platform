@@ -265,6 +265,43 @@
 .evidence-chip:hover { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
 .evidence-chip .e-ico { font-size: 9px; opacity: 0.7; }
 
+/* Source-freshness dot — 6px circle after the chip label, 4px gap (via
+   inline-flex gap on .evidence-chip). Additive to the chip variant; does
+   NOT replace the chip's border color, which stays driven by semantic
+   meaning (success/warn/neutral/danger). */
+.evidence-chip__dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  margin-left: -2px; /* trims the flex gap to 4px visual after the label */
+  flex-shrink: 0;
+  background: var(--text-3);
+}
+.evidence-chip__dot--fresh { background: var(--signal-success); }
+.evidence-chip__dot--aging { background: var(--signal-warning); }
+.evidence-chip__dot--stale { background: var(--text-3); }
+
+/* Freshness legend — tiny inline rail used inside the evidence drawer
+   header so operators learn the vocabulary without a tooltip. */
+.freshness-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: var(--fs-11);
+  color: var(--text-3);
+}
+.freshness-legend__item { display: inline-flex; align-items: center; gap: 4px; }
+.freshness-legend__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.freshness-legend__dot--fresh { background: var(--signal-success); }
+.freshness-legend__dot--aging { background: var(--signal-warning); }
+.freshness-legend__dot--stale { background: var(--text-3); }
+
 /* ============================================================
    KPI CARD
    ============================================================ */

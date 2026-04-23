@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { Link } from 'react-router-dom';
 import type { LeadSummary } from '../../types';
 import { Icon } from '../Icon';
@@ -22,7 +22,32 @@ import { segmentColor, segmentName } from '../../lib/segmentMetadata';
  * one click per lead instead of navigating to Offer Orchestrator. Once
  * approved/rejected, the column reverts to the chip shape. Keyboard
  * shortcuts (A / R) act on the expanded row.
+ *
+ * Sales-ops bulk workflow (2026-04-22): a leftmost checkbox column selects
+ * rows for bulk approval. When >= 1 row is selected, a sticky action bar
+ * inside the table container offers "Approve N leads" / "Clear selection".
+ * Bulk approve loops `api.approve()` per selected lead in chunks of 3 to
+ * keep one audit row per approval (matching the single-row flow). Already
+ * approved/rejected rows are skipped silently. Shift+A fires bulk-approve
+ * when the table has focus; plain A still approves only the expanded row.
  */
+
+/** Concurrency cap for the bulk-approve client-side loop. */
+const BULK_APPROVE_CONCURRENCY = 3;
+
+/**
+ * Chunk a list into groups of `size`. Used by the bulk-approve loop to
+ * bound in-flight POSTs to the approve endpoint without inventing a
+ * server-side bulk API.
+ */
+function chunk<T>(items: T[], size: number): T[][] {
+  if (size <= 0) return [items];
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) {
+    out.push(items.slice(i, i + size));
+  }
+  return out;
+}
 
 function RowPreview({ lead }: { lead: LeadSummary }) {
   return (
@@ -100,30 +125,42 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
   const { approvals, setApproval } = useApp();
   const [pendingApproval, setPendingApproval] = useState<Record<string, boolean>>({});
   const [approvalError, setApprovalError] = useState<string | null>(null);
+  // Bulk-approve state. `selectedIds` is a Set so toggling is O(1); we
+  // copy-on-write when updating to keep React's reference check happy.
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+  const [bulkApproving, setBulkApproving] = useState<boolean>(false);
+  // Last bulk result surfaced as a compact toast. Clears on the next bulk
+  // run or when the user dismisses it (auto-dismiss after 4s).
+  const [bulkToast, setBulkToast] = useState<{ ok: number; fail: number } | null>(null);
 
   /**
    * Approve from the queue without leaving the page. Uses the same
    * `/api/outreach/approve` endpoint Offer Orchestrator calls. We mark
    * the row as 'approved' in AppContext optimistically on success so the
    * chip flips immediately and stays flipped on route change.
+   *
+   * Returns `true` on success and `false` on failure so the bulk-approve
+   * caller can tally ok/fail without threading the error string through.
    */
   const approveLead = useCallback(
-    async (borrowerId: string) => {
+    async (borrowerId: string): Promise<boolean> => {
       setApprovalError(null);
       setPendingApproval((p) => ({ ...p, [borrowerId]: true }));
       try {
         const res = await api.approve(borrowerId);
         if (res.approved) {
           setApproval(borrowerId, 'approved');
-        } else {
-          setApprovalError(`Approve failed for ${borrowerId}: endpoint returned approved=false.`);
+          return true;
         }
+        setApprovalError(`Approve failed for ${borrowerId}: endpoint returned approved=false.`);
+        return false;
       } catch (err: unknown) {
         setApprovalError(
           err instanceof Error
             ? `Couldn't approve ${borrowerId}: ${err.message}`
             : `Couldn't approve ${borrowerId}.`,
         );
+        return false;
       } finally {
         setPendingApproval((p) => {
           const { [borrowerId]: _discard, ...rest } = p;
@@ -143,13 +180,103 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
   );
 
   /**
-   * Keyboard: A approves / R rejects the expanded row. We listen at the
-   * window level but bail out if focus is inside an editable element so
-   * typing in the Genie chat or a filter input never triggers approval.
+   * Toggle one row's selection. Called by the row checkbox onChange; the
+   * checkbox click is stopped from bubbling in the markup so the row
+   * still expands/collapses independently.
+   */
+  const toggleSelect = useCallback((borrowerId: string) => {
+    setSelectedIds((cur) => {
+      const next = new Set(cur);
+      if (next.has(borrowerId)) next.delete(borrowerId);
+      else next.add(borrowerId);
+      return next;
+    });
+  }, []);
+
+  const clearSelection = useCallback(() => {
+    setSelectedIds(new Set());
+  }, []);
+
+  // IDs that are actually eligible for bulk approval: not already approved
+  // or rejected. The "select all" header checkbox targets this subset so
+  // already-decided rows don't get bulk-approved again.
+  const eligibleIds = useMemo(
+    () => leads.map((l) => l.borrower_id).filter((id) => !approvals[id]),
+    [leads, approvals],
+  );
+
+  // Indeterminate state for the header checkbox: some (but not all)
+  // eligible rows selected. We also reflect "all eligible selected" as
+  // the checked state.
+  const headerCheckboxState = useMemo(() => {
+    if (eligibleIds.length === 0) return { checked: false, indeterminate: false };
+    const selectedEligibleCount = eligibleIds.filter((id) => selectedIds.has(id)).length;
+    if (selectedEligibleCount === 0) return { checked: false, indeterminate: false };
+    if (selectedEligibleCount === eligibleIds.length) return { checked: true, indeterminate: false };
+    return { checked: false, indeterminate: true };
+  }, [eligibleIds, selectedIds]);
+
+  const toggleSelectAll = useCallback(() => {
+    setSelectedIds((cur) => {
+      // If any eligible rows remain unselected, select all eligible. Else
+      // clear the selection.
+      const allEligibleSelected =
+        eligibleIds.length > 0 && eligibleIds.every((id) => cur.has(id));
+      if (allEligibleSelected) return new Set();
+      return new Set(eligibleIds);
+    });
+  }, [eligibleIds]);
+
+  /**
+   * Bulk-approve: loop `api.approve()` per selected id in chunks of
+   * BULK_APPROVE_CONCURRENCY. We deliberately do NOT invent a server-side
+   * bulk endpoint — the audit trail wants one row per approval.
+   *
+   * Successes drop out of the selection set; failures stay selected so
+   * the operator can retry. A compact toast summarizes ok/fail counts.
+   */
+  const bulkApprove = useCallback(async () => {
+    if (bulkApproving) return;
+    // Snapshot which ids to run: skip already-decided rows silently.
+    const ids = [...selectedIds].filter((id) => !approvals[id]);
+    if (ids.length === 0) return;
+    setBulkApproving(true);
+    setBulkToast(null);
+    let ok = 0;
+    let fail = 0;
+    const failedIds: string[] = [];
+    for (const group of chunk(ids, BULK_APPROVE_CONCURRENCY)) {
+      const results = await Promise.all(group.map((id) => approveLead(id)));
+      results.forEach((success, i) => {
+        if (success) ok += 1;
+        else {
+          fail += 1;
+          failedIds.push(group[i]);
+        }
+      });
+    }
+    // Replace selection with the failed subset so retries are trivial.
+    setSelectedIds(new Set(failedIds));
+    setBulkApproving(false);
+    setBulkToast({ ok, fail });
+  }, [bulkApproving, selectedIds, approvals, approveLead]);
+
+  // Auto-dismiss the toast after 4s so it doesn't pile up next to the
+  // action bar.
+  useEffect(() => {
+    if (!bulkToast) return;
+    const t = window.setTimeout(() => setBulkToast(null), 4000);
+    return () => window.clearTimeout(t);
+  }, [bulkToast]);
+
+  /**
+   * Keyboard: A approves / R rejects the expanded row; Shift+A fires
+   * bulk-approve when >= 1 row is selected. We listen at the window
+   * level but bail out if focus is inside an editable element so typing
+   * in the Genie chat or a filter input never triggers approval.
    */
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!expanded) return;
       const target = e.target as HTMLElement | null;
       if (target) {
         const tag = target.tagName;
@@ -159,6 +286,15 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
       }
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const key = e.key.toLowerCase();
+      // Shift+A: bulk approve. Takes precedence over single-row A when
+      // any row is selected.
+      if (key === 'a' && e.shiftKey) {
+        if (selectedIds.size === 0 || bulkApproving) return;
+        e.preventDefault();
+        void bulkApprove();
+        return;
+      }
+      if (!expanded) return;
       if (key === 'a') {
         if (approvals[expanded] === 'approved') return;
         e.preventDefault();
@@ -171,9 +307,11 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [expanded, approvals, approveLead, rejectLead]);
+  }, [expanded, approvals, approveLead, rejectLead, selectedIds, bulkApproving, bulkApprove]);
 
   const stop = (e: ReactKeyboardEvent | React.MouseEvent) => e.stopPropagation();
+
+  const selectionCount = selectedIds.size;
 
   return (
     <div className="surface" style={{ overflow: 'hidden' }}>
@@ -183,23 +321,36 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
             <Icon name="user" size={14} />
           </div>
           <div>
-            <div className="h-4">Ranked borrowers · drill to evidence</div>
+            <div className="h-4">Ranked borrowers</div>
             <div className="muted" style={{ fontSize: 12 }}>
-              Click any row for the Cotality evidence trail — CLIP, Owner Link, and lien history.
-              {' '}Keyboard: <span className="mono">A</span> to approve, <span className="mono">R</span> to reject the expanded row.
+              Click a row to expand the preview. Keyboard: <span className="mono">A</span> approve, <span className="mono">R</span> reject the expanded row.
             </div>
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
-          <Chip variant="neutral" icon="shield">PII suppressed · compliance</Chip>
+          <Chip variant="neutral" icon="shield">PII suppressed</Chip>
           <Button size="sm" icon="export">Export list</Button>
         </div>
       </div>
-      <div style={{ maxHeight: 520, overflowY: 'auto' }}>
+      <div style={{ maxHeight: 520, overflowY: 'auto', position: 'relative' }}>
         <table className="tbl">
           <thead>
             <tr>
-              <th style={{ paddingLeft: 20, width: 32 }}></th>
+              <th style={{ paddingLeft: 20, width: 32 }}>
+                <input
+                  type="checkbox"
+                  aria-label="Select all eligible leads"
+                  checked={headerCheckboxState.checked}
+                  ref={(el) => {
+                    if (el) el.indeterminate = headerCheckboxState.indeterminate;
+                  }}
+                  disabled={eligibleIds.length === 0 || bulkApproving}
+                  onChange={toggleSelectAll}
+                  onClick={stop}
+                  data-testid="lead-select-all"
+                />
+              </th>
+              <th style={{ width: 32 }}></th>
               <th>Borrower</th>
               <th>Location</th>
               <th>Segments</th>
@@ -215,13 +366,26 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
             {leads.map((lead) => {
               const isOpen = expanded === lead.borrower_id;
               const approval = approvals[lead.borrower_id];
+              const isSelected = selectedIds.has(lead.borrower_id);
+              const isEligible = !approval;
               return (
                 <Fragment key={lead.borrower_id}>
                   <tr
                     className={isOpen ? 'is-expanded' : ''}
                     onClick={() => setExpanded(isOpen ? null : lead.borrower_id)}
                   >
-                    <td style={{ paddingLeft: 20 }}>
+                    <td style={{ paddingLeft: 20 }} onClick={stop}>
+                      <input
+                        type="checkbox"
+                        aria-label={`Select lead ${lead.borrower_id}`}
+                        checked={isSelected}
+                        disabled={!isEligible || bulkApproving}
+                        onChange={() => toggleSelect(lead.borrower_id)}
+                        onClick={stop}
+                        data-testid={`lead-select-${lead.borrower_id}`}
+                      />
+                    </td>
+                    <td>
                       <Icon name={isOpen ? 'down' : 'chevright'} size={14} className="muted" />
                     </td>
                     <td className="is-primary">
@@ -319,7 +483,7 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
                   </tr>
                   {isOpen && (
                     <tr className="tbl__expand">
-                      <td colSpan={10}>
+                      <td colSpan={11}>
                         <RowPreview lead={lead} />
                       </td>
                     </tr>
@@ -330,6 +494,64 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
           </tbody>
         </table>
       </div>
+      {selectionCount > 0 && (
+        <div
+          role="toolbar"
+          aria-label="Bulk actions"
+          data-testid="lead-bulk-actions"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 12,
+            padding: '10px 16px',
+            borderTop: '1px solid var(--line-1)',
+            background: 'var(--bg-1)',
+            position: 'sticky',
+            bottom: 0,
+            zIndex: 2,
+          }}
+        >
+          <div style={{ fontSize: 13, color: 'var(--text-1)' }}>
+            <span className="mono num">{selectionCount}</span> {selectionCount === 1 ? 'lead' : 'leads'} selected
+          </div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            {bulkToast && (
+              <span
+                role="status"
+                aria-live="polite"
+                data-testid="lead-bulk-toast"
+                style={{
+                  fontSize: 12,
+                  color: bulkToast.fail > 0 ? 'var(--signal-warning)' : 'var(--signal-success)',
+                }}
+              >
+                {bulkToast.ok} approved, {bulkToast.fail} failed
+              </span>
+            )}
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={clearSelection}
+              disabled={bulkApproving}
+              data-testid="lead-bulk-clear"
+            >
+              Clear selection
+            </Button>
+            <Button
+              variant="primary"
+              size="sm"
+              icon={bulkApproving ? undefined : 'check'}
+              onClick={() => void bulkApprove()}
+              disabled={bulkApproving || selectionCount === 0}
+              data-testid="lead-bulk-approve"
+              aria-label={`Approve ${selectionCount} leads`}
+            >
+              {bulkApproving ? 'Approving…' : `Approve ${selectionCount} leads`}
+            </Button>
+          </div>
+        </div>
+      )}
       {approvalError && (
         <div
           role="alert"

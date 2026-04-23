@@ -34,7 +34,7 @@ export function GenieChat() {
     {
       who: 'ai',
       payload: {
-        answer: `Hi — I'm Genie, grounded on ${lender}'s Unity Catalog metric views + Cotality semantic models. Ask about borrower segments, triggers, or evidence.`,
+        answer: `Ask about ${lender}'s borrower segments, triggers, or evidence. Answers run against Unity Catalog metric views.`,
         trusted_assets: ['UC.metrics'],
       },
       sources: ['UC.metrics'],
@@ -77,7 +77,7 @@ export function GenieChat() {
           <div className="genie__avatar" />
           <div style={{ flex: 1 }}>
             <div className="genie__title">Ask Genie</div>
-            <div className="genie__sub">Grounded on UC metric views · {lender}</div>
+            <div className="genie__sub">Unity Catalog metric views · {lender}</div>
           </div>
           <button
             className="drawer__close"

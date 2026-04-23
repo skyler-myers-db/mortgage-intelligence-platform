@@ -219,8 +219,16 @@ That single invocation executes:
    `lead_scores` → `lead_population` → `segment_population` →
    `lockin_cohort` → `borrower_dossier` → **`refresh_semantics_views`**
    (the three `mip.semantics.*` metric views Genie binds to).
-8. `databricks bundle run mip_sync_lifecycle_state -t dev` — hourly
-   sync target plus initial seed so `delta_vs_prior_*` columns resolve.
+8. `databricks bundle run mip_sync_lifecycle_state -t dev` — initial
+   seed run so `mip.gold.borrower_lifecycle_state` has a row per
+   borrower and `delta_vs_prior_*` columns can start resolving. After
+   deploy, this job is **event-triggered** from the backend approval
+   path (POST `/api/outreach/approve` fires
+   `backend.services.job_trigger.trigger_lifecycle_sync` via FastAPI
+   `BackgroundTasks`, debounced 60 s). A daily 04:00 America/Chicago
+   fallback cron catches any dropped trigger + records the funnel
+   snapshot so WoW deltas keep advancing. Not hourly — no reason to
+   refresh when nothing has changed.
 9. `python tools/databricks/provision_genie_space.py` — reads
    `genie/mortgage_lead_intelligence_space.yml`, creates or updates
    the Genie Space, binds trusted assets, writes `genie/space_id.txt`.

@@ -162,7 +162,7 @@ export default function SegmentIntelligence() {
           ? `${segments.length} borrower ${segments.length === 1 ? 'segment' : 'segments'} · select to filter`
           : 'Borrower segments · select to filter'
       }
-      lede="Every segment is defined by a rule in Unity Catalog. Counts refresh nightly from Cotality public records + lien + market + listing + permit + AVM feeds."
+      lede="Click segment cards to filter the ranked borrower table. Secondary filters narrow by location, demographics, lien, owner link, purchase intent, and equity. Counts refresh nightly."
       heroRight={
         <>
           <Chip variant="neutral" icon="db">Refreshed 06:12 UTC · Delta Share</Chip>

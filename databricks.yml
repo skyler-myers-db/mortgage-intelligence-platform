@@ -30,6 +30,17 @@ targets:
 
   prod:
     mode: production
+    # CUSTOMER-SE CHECKLIST BEFORE FIRST `bundle deploy -t prod`:
+    #   1. Override `workspace.host` below to the customer's production
+    #      workspace URL (currently inherits Entrada's dev workspace).
+    #   2. Decide catalog isolation: share `mip` with dev in a single
+    #      workspace, or set `variables.uc_catalog.default` to `mip_prod`
+    #      for separation. Both are valid; pick one and document.
+    #   3. Confirm `run_as` service principal has CREATE on uc_catalog
+    #      and USAGE on Delta Share source catalog.
+    #   4. Lakebase instance name `mip-app-state` is reused across targets
+    #      via UC; if you need a prod-only instance, override the resource
+    #      block under `database_instances`.
     workspace:
       host: https://dbc-3aa503a9-4fa8.cloud.databricks.com
       profile: DEFAULT
@@ -328,14 +339,40 @@ resources:
             file:
               path: sql/ddl/005_semantics_views.sql
 
-    # Slice13-accuracy: hourly sync of Lakebase approval + outreach state
-    # into mip.gold.borrower_lifecycle_state. Metric views (segment_
+    # Event-triggered sync of Lakebase approval + outreach state into
+    # mip.gold.borrower_lifecycle_state. Metric views (segment_
     # performance + lead_generation) JOIN this so `approval_rate` and
-    # `outreach_rate` resolve without a runtime federated query. Runs
-    # AFTER mip_refresh_scores (which lands gold.borrower_360) so the
-    # sync has a full borrower_id universe to seed the 'pending' default
-    # against. Lakebase remains authoritative; this job is a strictly
+    # `outreach_rate` resolve without a runtime federated query.
+    # Lakebase remains authoritative; this job is a strictly
     # one-directional mirror.
+    #
+    # Trigger model (changed 2026-04-22 from hourly cron):
+    #   1. **Event-triggered** from the backend. Every POST
+    #      /api/outreach/approve fires backend.services.job_trigger.
+    #      trigger_lifecycle_sync() via FastAPI BackgroundTasks, which
+    #      calls WorkspaceClient.jobs.run_now(job_id=...) non-blocking.
+    #      Trigger is debounced to 60 s so a reviewer clicking through
+    #      an approval queue produces one sync run, not N. See
+    #      backend/services/job_trigger.py for the full contract.
+    #   2. **Daily fallback** (04:00 America/Chicago). Safety net for
+    #      any dropped trigger + records a funnel snapshot even on
+    #      idle days for the WoW delta_vs_prior_* dashboard measures
+    #      (those need ≥ 2 daily snapshot rows to compute). The `dev`
+    #      target's `mode: development` auto-pauses the schedule;
+    #      `mode: production` auto-UNPAUSES. Do NOT hardcode
+    #      `pause_status: UNPAUSED` here — that override also fires in
+    #      dev. Why 04:00: off-peak CST, well before any Monday
+    #      business readout.
+    #
+    # Rationale for removing the hourly cron: data only changes when
+    # an operator acts (approve / outreach). An hourly cron against an
+    # idle workspace was burning Serverless compute for nothing — the
+    # product is sold to mortgage lenders and their cost line should
+    # only reflect real activity.
+    #
+    # Runs AFTER mip_refresh_scores (which lands gold.borrower_360) so
+    # the sync has a full borrower_id universe to seed the 'pending'
+    # default against.
     #
     # The funnel snapshot task (gold_funnel_snapshot_daily.sql) runs
     # after the sync so it reads the freshly-mirrored lifecycle_state
@@ -348,20 +385,22 @@ resources:
         owner: entrada
         slice: slice13-accuracy
       max_concurrent_runs: 1
-      # Hourly cadence (15 min past the hour). The `dev` target's
-      # `mode: development` auto-pauses the schedule so dev deploys
-      # don't burn compute every hour on a workspace that's usually
-      # empty of real approvals. `mode: production` auto-UNPAUSES.
-      # Do NOT hardcode `pause_status: UNPAUSED` here — that override
-      # also fires in dev and runs the job hourly against an empty
-      # Lakebase, which was observed and fixed 2026-04-22.
+      # Daily safety-net cron. Dev auto-pauses via mode: development;
+      # prod auto-UNPAUSES via mode: production. Event-trigger from
+      # the backend approval path is the primary freshness driver.
       schedule:
-        quartz_cron_expression: "0 15 * ? * * *"
+        quartz_cron_expression: "0 0 4 ? * * *"
         timezone_id: America/Chicago
       environments:
         - environment_key: py_default
           spec:
-            client: "2"
+            # Serverless Python env version 3 (Python 3.12 + curated
+            # pandas/pyarrow) is the latest stable for Jobs as of
+            # 2026-04. Previous setting `client: "2"` used the
+            # deprecated `client` field (the bundle schema now marks
+            # that field deprecated in favour of `environment_version`).
+            # Verified by `databricks bundle validate -t ci`.
+            environment_version: "3"
             dependencies:
               - psycopg[binary]==3.2.10
               - databricks-sdk>=0.30.0
@@ -411,7 +450,9 @@ resources:
       environments:
         - environment_key: py_default
           spec:
-            client: "2"
+            # Serverless Python env version 3 -- see comment on the
+            # mip_sync_lifecycle_state job for the upgrade rationale.
+            environment_version: "3"
             dependencies:
               - psycopg[binary]==3.2.10
               # Needed by jobs/lakebase_migrate.py to fetch a fresh
@@ -445,14 +486,18 @@ resources:
       environments:
         - environment_key: py_default
           spec:
-            client: "2"
+            # Serverless Python env version 3 -- see comment on the
+            # mip_sync_lifecycle_state job for the upgrade rationale.
+            environment_version: "3"
       # FRED publishes Thursdays; we run Fridays 06:00 America/Chicago so the
-      # refresh lands before any Monday business readout. Disable pause on the
-      # per-target cron; dev stays manual-trigger by default via targets.dev.
+      # refresh lands before any Monday business readout. Do NOT hardcode
+      # `pause_status: UNPAUSED` -- it overrides the `mode: development`
+      # auto-pause (same antipattern we just fixed on mip_sync_lifecycle_state
+      # 2026-04-22). Target mode flips the pause status: dev = PAUSED,
+      # prod = UNPAUSED.
       schedule:
         quartz_cron_expression: "0 0 6 ? * FRI *"
         timezone_id: America/Chicago
-        pause_status: UNPAUSED
       tasks:
         - task_key: init_ddl
           description: "Idempotent CREATE CATALOG/SCHEMA + silver.market_rates_weekly DDL."
@@ -500,7 +545,10 @@ resources:
       catalog: ${var.uc_catalog}
       schema: silver
       photon: true
-      development: true
+      # `development` is intentionally NOT set here -- bundle target mode
+      # (`mode: development` vs `mode: production`) flips the pipeline's
+      # development flag automatically. Hardcoding `development: true` here
+      # blocks `databricks bundle validate -t prod`.
       continuous: false
       libraries:
         - file:

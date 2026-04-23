@@ -51,6 +51,25 @@ export function EvidenceDrawer() {
           </button>
         </div>
         <div className="drawer__body">
+          <div
+            className="freshness-legend"
+            aria-label="Source freshness legend"
+            title="Fresh: updated within 7 days · Aging: 7–30 days · Stale: over 30 days or unknown"
+            style={{ marginBottom: 10 }}
+          >
+            <span className="freshness-legend__item">
+              <span className="freshness-legend__dot freshness-legend__dot--fresh" aria-hidden="true" />
+              Fresh
+            </span>
+            <span className="freshness-legend__item">
+              <span className="freshness-legend__dot freshness-legend__dot--aging" aria-hidden="true" />
+              Aging
+            </span>
+            <span className="freshness-legend__item">
+              <span className="freshness-legend__dot freshness-legend__dot--stale" aria-hidden="true" />
+              Stale
+            </span>
+          </div>
           {d?.description && <p className="body" style={{ marginTop: 0 }}>{d.description}</p>}
           {d?.lineage && d.lineage.length > 0 && (
             <>

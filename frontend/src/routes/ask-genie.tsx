@@ -62,9 +62,9 @@ export default function AskGenie() {
   return (
     <PageShell
       eyebrow="Ask Genie"
-      title="Conversational analytics over curated Module 0 gold tables"
-      lede="Genie is grounded on Unity Catalog metric views. Every answer cites the table and signal it used; tap any evidence chip to see lineage."
-      heroRight={<Chip variant="neutral" icon="sparkle">Production: Databricks Genie API</Chip>}
+      title="Ask Genie about segments, borrowers, and triggers"
+      lede="Type a question or pick a suggestion. Answers cite the metric view that produced them; tap a source chip to open lineage."
+      heroRight={<Chip variant="neutral" icon="sparkle">Databricks Genie API</Chip>}
     >
       <div className="layoutA-grid">
         <div className="surface">
