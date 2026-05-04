@@ -667,6 +667,24 @@ class DatabricksSegmentRepository:
         "ORDER BY count DESC"
     )
 
+    # Canonical FE display order matching the prototype's seg-grid layout
+    # (`design_files/Module 0 Prototype.html` lines 1546–1551 + the gold
+    # `meta` VALUES table in `sql/transformations/gold_segment_population.sql`).
+    # Used to re-sort the SQL result after fetch so that pending-source
+    # segments (count=0 because of an upstream Cotality data dependency)
+    # are NOT buried at the end of the list by `ORDER BY count DESC`.
+    # Prototype-parity-audit P0-2 (2026-05-04): the gold rollup now always
+    # emits 6 rows; this constant ensures the FE always renders them in the
+    # same predictable order regardless of cardinality.
+    _CANONICAL_ORDER: tuple[str, ...] = (
+        "itm",
+        "listed",
+        "permit",
+        "investor",
+        "equity",
+        "retention",
+    )
+
     def _list_cache_key(self, portfolio_id: str | None) -> str:
         return f"segments.list.{portfolio_id or '_ALL'}"
 
@@ -689,6 +707,20 @@ class DatabricksSegmentRepository:
             )
             for row in rows
         ]
+        # Re-sort into the canonical FE display order. Without this the SQL's
+        # `ORDER BY count DESC` would push pending-source segments (count=0,
+        # currently `listed` and `permit`) to the end of the list, which
+        # defeats the "you always see 6 segments" UX promise. Unknown segment
+        # codes (a future addition that landed in gold but not yet in this
+        # constant) are appended after the canonical set in their original
+        # SQL order so they're still visible.
+        order_index: dict[str, int] = {
+            code: i for i, code in enumerate(self._CANONICAL_ORDER)
+        }
+        unknown_tail_index = len(self._CANONICAL_ORDER)
+        segments.sort(
+            key=lambda s: order_index.get(s.code, unknown_tail_index)
+        )
         self._cache.set(key, segments, self._cache_ttl_s)
         return segments
 

@@ -254,6 +254,35 @@
 .btn[disabled] { opacity: 0.55; cursor: not-allowed; }
 
 /* ============================================================
+   KEYBOARD HINT
+   ------------------------------------------------------------
+   Subtle keycap chip, matched to .chip dimensions so a hint
+   like "Keyboard: <kbd>A</kbd> approve" reads as a tappable
+   key rather than inline code. Used in surface subtitles
+   (Lead Queue) and any page that advertises a hotkey.
+   Prototype-parity-audit P2 (2026-05-04).
+   ============================================================ */
+kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  padding: 1px 6px;
+  border: 1px solid var(--line-2, var(--line-1));
+  border-bottom-width: 2px;
+  border-radius: var(--r-sm, 4px);
+  background: var(--bg-3);
+  color: var(--text-1);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: 0;
+  white-space: nowrap;
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.18);
+}
+
+/* ============================================================
    CHIPS
    ============================================================ */
 .chip {
@@ -456,6 +485,24 @@
   font-family: var(--font-mono);
 }
 .seg-card__meta .up { color: var(--signal-success); }
+
+/* Pending-source variant — see SegmentCard.tsx + the gold rollup CTAS
+ * comment block. The card is a non-button when its predicate is blocked
+ * pending an upstream Cotality Delta Share; we strip the hover lift and
+ * cursor-affordance so the user reads it as informational, not
+ * interactive. The `--seg-color` accent bar at the top still picks up
+ * the segment hue so the card retains its segment identity.
+ * Prototype-parity-audit P0-2 (2026-05-04). */
+.seg-card--pending {
+  cursor: default;
+}
+.seg-card--pending:hover {
+  border-color: var(--line-1);
+  transform: none;
+}
+.seg-card--pending::after {
+  display: none;
+}
 
 /* ============================================================
    SCORE BADGE

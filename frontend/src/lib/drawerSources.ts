@@ -42,6 +42,14 @@ export function descriptorFor(rawSource: string): DrawerSource {
  * Consumed by routes + components that render <EvidenceChip source={…}>.
  * Safe to import from production code (per CLAUDE.md — this is NOT a
  * mock fallback).
+ *
+ * TODO (prototype-parity-audit P0-2 follow-up, 2026-05-04): when Cotality
+ * MLS Delta Share lands in Unity Catalog, add a dedicated `mls` entry
+ * here (lineage: `cotality.mls.listing` → `entity.property_clip` →
+ * `metrics.listed_for_sale_flag`) and re-route the LeadTable RowPreview's
+ * "MLS listing" chip from `population` to `mls`. The current reuse is an
+ * honest placeholder — public-records lineage IS what the row currently
+ * carries — but a dedicated entry will read more clearly to users.
  */
 export const DRAWER_SOURCES: Record<string, DrawerSource> = {
   population: {

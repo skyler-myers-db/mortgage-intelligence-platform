@@ -13,6 +13,17 @@ import { segmentIcon } from '../../lib/segmentMetadata';
  * (animation-iteration-count: 1); bumping the key restarts the animation on
  * every re-selection without ever playing on initial mount of a deselected
  * card (e.g. when loading a filtered URL).
+ *
+ * Pending-source state (2026-05-04, prototype-parity-audit P0-2): the
+ * `listed` and `permit` segments are defined in the canonical 6-segment
+ * registry but their predicates are blocked-FALSE in gold.borrower_360
+ * pending the Cotality MLS + Building-Permits Delta Share arrival. The
+ * gold rollup CTAS now always emits a row for every segment_code (count=0
+ * when no borrower matches), so the FE always sees all 6 segments. We
+ * render those zero-count segments with an honest "Awaiting source" badge
+ * and disable selection so a user can't filter to an empty result set --
+ * the segment is visible (the demo narrative depends on seeing all 6) but
+ * the data dependency is called out in plain English next to the card.
  */
 
 interface SegmentCardProps {
@@ -21,10 +32,30 @@ interface SegmentCardProps {
   onClick?: () => void;
 }
 
+/**
+ * Segments whose predicates are intentionally blocked in gold pending an
+ * upstream Cotality Delta Share. Keep this set narrow — adding a code
+ * here changes the user-visible UX (the card disables and shows a
+ * "pending source" state instead of "0 borrowers"), so it should only
+ * cover segments that genuinely have a known data dependency.
+ */
+const PENDING_SOURCE_SEGMENTS: Record<string, string> = {
+  listed: 'Awaiting Cotality MLS share',
+  permit: 'Awaiting Cotality Permits share',
+};
+
 export function SegmentCard({ segment, selected, onClick }: SegmentCardProps) {
   const icon = segmentIcon(segment.code);
   const prev = useRef<boolean | undefined>(selected);
   const [emanateKey, setEmanateKey] = useState<number>(selected ? 1 : 0);
+
+  // A segment is in the "pending source" state when it's on the explicit
+  // pending list AND the rollup returned zero borrowers. Once the upstream
+  // data lands and the count > 0, the card flips to the normal render
+  // path automatically -- no FE change required.
+  const pendingMessage =
+    segment.count === 0 ? PENDING_SOURCE_SEGMENTS[segment.code] : undefined;
+  const isPending = Boolean(pendingMessage);
 
   useEffect(() => {
     // Fire emanation only on deselected → selected transition.
@@ -33,6 +64,43 @@ export function SegmentCard({ segment, selected, onClick }: SegmentCardProps) {
     }
     prev.current = selected;
   }, [selected]);
+
+  if (isPending) {
+    // Pending-source render: surface the segment, name + color + description,
+    // but replace the count with a clear "Awaiting source" badge and
+    // disable click. Honest UX: zero borrowers means zero borrowers; the
+    // segment is still visible so the demo's "6 borrower segments" framing
+    // holds and the data dependency is called out explicitly.
+    return (
+      <div
+        className="seg-card seg-card--pending"
+        style={{ '--seg-color': segment.color, opacity: 0.78 } as CSSProperties}
+        aria-disabled="true"
+        data-pending-source="true"
+      >
+        <div className="seg-card__hdr">
+          <div className="seg-card__badge"><Icon name={icon} size={14} /></div>
+          <div className="seg-card__title">{segment.name}</div>
+        </div>
+        <div
+          className="seg-card__count num"
+          style={{ fontSize: 'var(--fs-13, 13px)', color: 'var(--text-3)', letterSpacing: 'var(--tracking-caps, 0.08em)', textTransform: 'uppercase' }}
+        >
+          Pending source
+        </div>
+        <div className="seg-card__sub">{segment.description}</div>
+        <div
+          className="seg-card__meta"
+          style={{ color: 'var(--signal-warning, #F59E0B)' }}
+        >
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+            <Icon name="info" size={11} />
+            {pendingMessage}
+          </span>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <button

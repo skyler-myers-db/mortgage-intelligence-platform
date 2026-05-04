@@ -105,8 +105,40 @@ function RowPreview({ lead }: { lead: LeadSummary }) {
         <p className="body" style={{ marginTop: 0 }}>{lead.why_now}</p>
         <div style={{ marginTop: 12, display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
           <span className="muted" style={{ fontSize: 11 }}>Evidence:</span>
+          {/*
+            Prototype-parity-audit P1-5 (2026-05-04): the row preview
+            previously surfaced only two chips — Rate + equity ruleset and
+            Next-best-offer model — which understated the depth of evidence
+            the platform actually carries. Borrower 360 already renders 5+
+            chips per dossier; the inline lead-queue preview should match
+            that posture so an LO scrolling the queue can see what each
+            recommendation is grounded in without opening the dossier. We
+            render a fixed core set (CLIP + NBO scoring) and append
+            data-driven chips for whichever signals the row carries
+            (Permit when has_permit, MLS when listed_for_sale, lien-status
+            when current_lien_balance > 0, AVM when equity_estimate > 0).
+            Each chip routes into the existing EvidenceDrawer with the
+            matching DRAWER_SOURCES entry so lineage stays one click away.
+          */}
           <EvidenceChip source={DRAWER_SOURCES.itm}>Rate + equity ruleset</EvidenceChip>
           <EvidenceChip source={DRAWER_SOURCES.nbo}>Next-best-offer model</EvidenceChip>
+          <EvidenceChip source={DRAWER_SOURCES.population}>CLIP · Owner Link</EvidenceChip>
+          {lead.equity_estimate > 0 && (
+            <EvidenceChip source={DRAWER_SOURCES.itm}>AVM equity</EvidenceChip>
+          )}
+          {(lead.current_lien_balance ?? 0) > 0 && (
+            <EvidenceChip source={DRAWER_SOURCES.population}>Voluntary lien</EvidenceChip>
+          )}
+          {lead.has_permit === true && (
+            <EvidenceChip source={DRAWER_SOURCES.permit}>Recent permit</EvidenceChip>
+          )}
+          {lead.listed_for_sale === true && (
+            // Re-uses the population drawer until a dedicated MLS source
+            // entry lands; the lineage already references mortgage records,
+            // and routing into a "TBD" drawer would be more confusing than
+            // grouping with the broader public-records lineage.
+            <EvidenceChip source={DRAWER_SOURCES.population}>MLS listing</EvidenceChip>
+          )}
         </div>
       </div>
 
@@ -568,7 +600,15 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
           <div>
             <div className="h-4">Ranked borrowers</div>
             <div className="muted" style={{ fontSize: 12 }}>
-              Click a row to expand the preview. Keyboard: <span className="mono">A</span> approve, <span className="mono">R</span> reject the expanded row.
+              {/*
+                Prototype-parity-audit P2 (2026-05-04): keyboard hints
+                were rendered as `.mono` spans, which read as inline code
+                rather than a keycap. Switching to `<kbd>` (styled in
+                design-system/components.css as a subtle keycap chip)
+                makes the affordance scannable — an LO scrolling the
+                queue can spot the shortcut without reading prose.
+              */}
+              Click a row to expand the preview. Keyboard: <kbd>A</kbd> approve, <kbd>R</kbd> reject the expanded row.
             </div>
           </div>
         </div>

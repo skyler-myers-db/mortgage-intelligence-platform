@@ -78,6 +78,21 @@ WHEN NOT MATCHED THEN INSERT (
 );
 
 -- 2) Rebuild segment_population with the current-day counts + derived delta.
+--
+-- 2026-05-04 fix (prototype-parity-audit P0-2): the prior implementation
+-- aggregated FROM gold.borrower_360.segment_codes via LATERAL VIEW EXPLODE,
+-- which means a segment with zero matching borrowers produced ZERO ROWS in
+-- the rollup. The `listed` and `permit` predicates are blocked-FALSE in
+-- gold.borrower_360 pending the Cotality MLS + Building-Permits Delta Share
+-- arrival, so /api/segments was returning only 4 of the contracted 6
+-- segments and the frontend was rendering "4 borrower segments" instead of
+-- the prototype's 6. The fix is to drive the rollup off the `meta` VALUES
+-- table (the canonical 6-segment registry) and LEFT JOIN exploded counts
+-- onto it -- segments with no matching borrowers now appear as count=0 /
+-- avg_score=0 and the FE can render them in a "Awaiting Cotality MLS /
+-- Permits Delta Share" pending state instead of disappearing entirely.
+-- Honest UX: zero counts mean zero counts, but the segment is still
+-- visible so the demo narrative ("you'll see 6 segments") holds.
 CREATE OR REPLACE TABLE mip.gold.segment_population AS
 WITH exploded AS (
   SELECT
@@ -127,38 +142,60 @@ prior AS (
   ) q
   WHERE rn = 1
 ),
--- Segment metadata inline so gold is self-contained.
+-- Segment metadata inline so gold is self-contained. This is the canonical
+-- 6-segment registry that the rollup CROSS-JOIN-spans below; every refresh
+-- emits a row per (segment_code, state) including states + the _ALL
+-- aggregate, so the API can never silently drop a segment whose predicate
+-- matched zero borrowers.
 meta AS (
   SELECT * FROM (
     VALUES
       ('itm',       'In the Money',             'Lien rate >= 75 bps above par and equity >= 15%.',                                      '#5CE1E6'),
-      ('listed',    'Listed for Sale',          'Active listing, likely purchase mortgage opportunity.',                                 '#F59E0B'),
-      ('permit',    'Permit Activity',          'Recent high-value permits indicate HELOC/cash-out demand.',                             '#A78BFA'),
+      ('listed',    'Listed for Sale',          'Active listing, likely purchase mortgage opportunity. Awaiting Cotality MLS share.',     '#F59E0B'),
+      ('permit',    'Permit Activity',          'Recent high-value permits indicate HELOC/cash-out demand. Awaiting Cotality Permits share.', '#A78BFA'),
       ('investor',  'Investor / Multi-Property','Owner Link shows 2+ properties or repeat behavior.',                                    '#F472B6'),
       ('equity',    'Home Equity Candidate',    'Strong equity and prior cash-out/HELOC propensity.',                                    '#66C5FF'),
       ('retention', 'Retention Risk',           'Current customer showing refi/listing/competitor signals.',                             '#34D399')
   ) AS t(segment_code, name, description, color)
+),
+-- Build the full (segment_code, state) grid up front so segments with zero
+-- matching borrowers still get a row. We span all states present in the
+-- exploded rollup PLUS the canonical _ALL national row -- if a workspace
+-- has no borrowers in a particular state at all, no _per-state_ row is
+-- emitted for that state (consistent with the prior behavior); but every
+-- segment_code always appears in the _ALL row, which is what the FE reads.
+states_seen AS (
+  SELECT DISTINCT state FROM current_counts
+  UNION
+  SELECT '_ALL' AS state
+),
+grid AS (
+  SELECT m.segment_code, s.state
+  FROM meta AS m
+  CROSS JOIN states_seen AS s
 )
 SELECT
-  c.segment_code,
-  c.state,
+  g.segment_code,
+  g.state,
   m.name,
-  c.count,
+  COALESCE(c.count, 0)                              AS count,
   -- '+NN%' / '-NN%' / '+0%'. Safe-divide: prior=0 or NULL -> '+0%'.
+  -- Segments with zero current and zero prior naturally collapse to '+0%'.
   CASE
     WHEN COALESCE(p.prior_count, 0) = 0 THEN '+0%'
     ELSE
       CONCAT(
-        CASE WHEN c.count >= p.prior_count THEN '+' ELSE '' END,
-        CAST(CAST(ROUND(100.0 * (c.count - p.prior_count) / p.prior_count) AS INT) AS STRING),
+        CASE WHEN COALESCE(c.count, 0) >= p.prior_count THEN '+' ELSE '' END,
+        CAST(CAST(ROUND(100.0 * (COALESCE(c.count, 0) - p.prior_count) / p.prior_count) AS INT) AS STRING),
         '%'
       )
   END                                                AS delta_vs_prior,
-  c.avg_score,
+  COALESCE(c.avg_score, 0)                          AS avg_score,
   m.description,
   m.color,
   -- Shared refresh_at captured once per run. See audit-holes-round-3 #7.
   (SELECT refresh_at FROM mip.ref.refresh_run_state ORDER BY captured_at DESC LIMIT 1) AS refreshed_at
-FROM current_counts AS c
-LEFT JOIN prior    AS p USING (segment_code, state)
-LEFT JOIN meta     AS m USING (segment_code);
+FROM grid           AS g
+LEFT JOIN meta      AS m USING (segment_code)
+LEFT JOIN current_counts AS c USING (segment_code, state)
+LEFT JOIN prior     AS p USING (segment_code, state);
