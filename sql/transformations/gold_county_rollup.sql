@@ -26,11 +26,13 @@
 --            county rollup row has no meaningful identity.
 -- =============================================================================
 
--- 2026-05-04 fix (FIX F): apply the same opportunity_score >= 50 filter
--- the lead_population transformation uses, so the county-level map
--- tooltip and the Lead Queue (filtered by county) report the same
--- number of marketable borrowers. See gold_zip_rollup.sql header for
--- the original sibling mismatch this aligns with.
+-- 2026-05-04 (FIX α, round 3): revert the score >= 50 filter introduced
+-- in round 2 (FIX F). Aligning the county count to the Lead Queue's
+-- score-quality floor broke the alignment with the home-page Marketable
+-- Population KPI, which reads borrower_360 unfiltered. The right
+-- semantic is "addressable population per county"; the Lead Queue
+-- alignment is implemented in LeadRepository.list (FIX β) by querying
+-- borrower_360 directly when filtered to a geo.
 CREATE OR REPLACE TABLE mip.gold.county_rollup AS
 WITH base AS (
   SELECT
@@ -43,7 +45,6 @@ WITH base AS (
   FROM mip.gold.borrower_360 AS b
   WHERE b.county_fips_5 IS NOT NULL
     AND LENGTH(b.county_fips_5) = 5
-    AND b.opportunity_score >= 50
 ),
 aggregates AS (
   SELECT

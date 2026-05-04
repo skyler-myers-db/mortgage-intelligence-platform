@@ -2,7 +2,7 @@
 -- gold_zip_rollup.sql  (transformation)
 -- -----------------------------------------------------------------------------
 -- Purpose:   Populate `mip.gold.zip_rollup` via CTAS. One row per (zip,
---            snapshot_date) -- aggregates the marketable population per ZIP
+--            snapshot_date) -- aggregates the addressable population per ZIP
 --            and emits a stable-ranked sample_borrower_id so the map's ZIP
 --            tiles can deep-link to a real Borrower 360 dossier.
 --
@@ -11,21 +11,24 @@
 --            rebuild; matches the sibling gold CTAS posture.
 -- Slice:     slice13-accuracy-validation.
 --
--- Source:    mip.gold.borrower_360 (zip + county_fips_5 + segment_codes),
---            FILTERED to opportunity_score >= 50 to align with
---            mip.gold.lead_population (the Lead Queue's source of truth).
+-- Source:    mip.gold.borrower_360 (zip + county_fips_5 + segment_codes).
+--            Counts the FULL addressable population per ZIP — the same
+--            definition used by the home-page Marketable Population KPI.
 --
--- 2026-05-04 fix (FIX F): the prior `base` CTE included every row in
--- borrower_360 regardless of score. The map tooltip therefore reported
--- `addressable_borrowers = 1` for ZIPs whose only borrower had
--- opportunity_score < 50, while the Lead Queue (which reads from
--- lead_population, filtered to >= 50) showed 0 rows for that ZIP. User
--- spotted the inconsistency on a ZIP=80123 drill-down. The fix here:
--- apply the same `opportunity_score >= 50` filter the lead_population
--- transformation uses, so both surfaces share one definition of
--- "marketable borrower in this ZIP". sample_borrower_id is recomputed
--- against the same filtered base so it stays in lead_population (no
--- dossier deep-links to a borrower the queue hides).
+-- 2026-05-04 (FIX α, round 3 — supersedes round 2 FIX F): the round-2
+-- attempt aligned ZIP/county/state rollups with the lead_population
+-- score >= 50 filter, intending to make the map count match the Lead
+-- Queue rows. That created a worse mismatch: the home-page KPI
+-- "Marketable population" reads borrower_360 unfiltered (5.16M) while
+-- the map state tooltip dropped to 254K. The KPI and map were no longer
+-- in the same ballpark, defeating the original alignment intent.
+--
+-- The right semantic is: "marketable" means the addressable population
+-- (every borrower in the eval share). The Lead Queue is a separate
+-- "ranked top" view; when narrowed to a state+zip, it should query
+-- borrower_360 directly (no score floor) so the queue matches the
+-- rollup count for that geo. That alignment is implemented in the
+-- LeadRepository (FIX β, same-day commit), not at the rollup layer.
 --
 -- sample_borrower_id: ROW_NUMBER() OVER (PARTITION BY zip ORDER BY
 --            opportunity_score DESC, borrower_id ASC) LIMIT 1 per ZIP. Stable
@@ -45,10 +48,6 @@ WITH base AS (
   FROM mip.gold.borrower_360 AS b
   WHERE b.zip IS NOT NULL
     AND LENGTH(b.zip) = 5
-    -- Align with mip.gold.lead_population's quality floor so the map
-    -- tooltip and the Lead Queue agree on "marketable in this ZIP".
-    -- See header for the original mismatch this fixes.
-    AND b.opportunity_score >= 50
 ),
 aggregates AS (
   SELECT
