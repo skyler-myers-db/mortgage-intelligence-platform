@@ -190,20 +190,203 @@ function MarkdownAnswer({ text }: { text: string }) {
   );
 }
 
+/**
+ * Auto-detect "this table_rows payload is one categorical column +
+ * one numeric column" — the simplest shape that's worth charting.
+ * Returns {label, value} per row when chartable, else null.
+ *
+ * 2026-05-04 (FIX Δ3): the user wants charts on the /ask-genie deep-
+ * dive view when the data calls for it (a top-N by category, a
+ * per-state breakdown, etc.) without forcing a chart on every text
+ * answer. Detection rules:
+ *   - 2 to MAX_TABLE_COLS columns total (else the table is too wide
+ *     to summarize with one bar series)
+ *   - one column has ALL string values (the label axis)
+ *   - the other has ALL numeric values (the bar height)
+ *   - >= 2 rows (a single bar isn't a chart)
+ *
+ * The Genie space's `chart_spec` attachment path (Vega-Lite JSON
+ * via a follow-up GET) is documented but not wired today; this
+ * table-rows-shaped detector covers the common cases without that
+ * extra round-trip. When chart_spec lands we can switch to it as
+ * the primary path.
+ */
+type ChartRow = { label: string; value: number };
+
+function inferChartFromRows(
+  rows: Array<Record<string, unknown>>,
+  columns: string[],
+): { rows: ChartRow[]; labelCol: string; valueCol: string } | null {
+  if (rows.length < 2) return null;
+  if (columns.length < 2 || columns.length > MAX_TABLE_COLS) return null;
+  // Walk the columns once and tag each as "all string" / "all
+  // numeric" / "mixed". Skip rows where the value is null/undefined
+  // — they're "missing" not "wrong type".
+  const types: Record<string, 'str' | 'num' | 'mixed'> = {};
+  for (const col of columns) {
+    let hasStr = false;
+    let hasNum = false;
+    let hasMixed = false;
+    for (const r of rows) {
+      const v = r[col];
+      if (v === null || v === undefined) continue;
+      if (typeof v === 'string') hasStr = true;
+      else if (typeof v === 'number' && Number.isFinite(v)) hasNum = true;
+      else {
+        hasMixed = true;
+        break;
+      }
+    }
+    types[col] = hasMixed || (hasStr && hasNum) ? 'mixed' : hasStr ? 'str' : 'num';
+  }
+  const labelCol = columns.find((c) => types[c] === 'str');
+  const valueCol = columns.find((c) => types[c] === 'num');
+  if (!labelCol || !valueCol) return null;
+  const projected: ChartRow[] = [];
+  for (const r of rows) {
+    const lv = r[labelCol];
+    const vv = r[valueCol];
+    if (typeof lv !== 'string') continue;
+    if (typeof vv !== 'number' || !Number.isFinite(vv)) continue;
+    projected.push({ label: lv, value: vv });
+  }
+  if (projected.length < 2) return null;
+  return { rows: projected, labelCol, valueCol };
+}
+
+/**
+ * Inline horizontal bar chart. Dependency-free SVG so we don't pull
+ * a 100KB+ chart lib. Each bar is sized relative to the max value;
+ * negative values are clamped to 0 (real Genie data is counts /
+ * scores / dollars — all >= 0). Truncates to 12 bars to stay
+ * readable in the Ask Genie surface; the underlying table still
+ * renders below for the full data.
+ */
+function GenieBarChart({
+  data,
+  labelCol,
+  valueCol,
+}: {
+  data: ChartRow[];
+  labelCol: string;
+  valueCol: string;
+}) {
+  const MAX_BARS = 12;
+  const bars = data.slice(0, MAX_BARS);
+  const maxV = Math.max(1, ...bars.map((b) => b.value));
+  const rowH = 22;
+  const labelW = 140;
+  const trackW = 240;
+  const valueW = 70;
+  const totalW = labelW + trackW + 12 + valueW;
+  const totalH = bars.length * rowH + 28;
+  return (
+    <div style={{ marginTop: 12 }}>
+      <div
+        className="eyebrow"
+        style={{ marginBottom: 6, color: 'var(--text-3)' }}
+      >
+        {humanizeKey(valueCol)} by {humanizeKey(labelCol)}
+      </div>
+      <svg
+        width="100%"
+        viewBox={`0 0 ${totalW} ${totalH}`}
+        role="img"
+        aria-label={`Bar chart: ${humanizeKey(valueCol)} by ${humanizeKey(labelCol)}`}
+        style={{ maxWidth: 540, display: 'block' }}
+      >
+        {bars.map((b, i) => {
+          const y = i * rowH + 10;
+          const w = (b.value / maxV) * trackW;
+          return (
+            <g key={`${b.label}-${i}`}>
+              <text
+                x={labelW - 8}
+                y={y + rowH / 2}
+                textAnchor="end"
+                dominantBaseline="middle"
+                fontSize={11}
+                fill="var(--text-2)"
+                fontFamily="var(--font-sans)"
+              >
+                {b.label.length > 22 ? `${b.label.slice(0, 21)}…` : b.label}
+              </text>
+              <rect
+                x={labelW}
+                y={y + 4}
+                width={trackW}
+                height={rowH - 8}
+                fill="var(--bg-3)"
+                rx={3}
+              />
+              <rect
+                x={labelW}
+                y={y + 4}
+                width={Math.max(2, w)}
+                height={rowH - 8}
+                fill="var(--accent)"
+                rx={3}
+              />
+              <text
+                x={labelW + trackW + 8}
+                y={y + rowH / 2}
+                dominantBaseline="middle"
+                fontSize={11}
+                fill="var(--text-1)"
+                fontFamily="var(--font-mono)"
+                fontVariant="tabular-nums"
+              >
+                {Number.isInteger(b.value)
+                  ? b.value.toLocaleString()
+                  : b.value.toFixed(2)}
+              </text>
+            </g>
+          );
+        })}
+      </svg>
+      {data.length > MAX_BARS && (
+        <div
+          style={{
+            fontSize: 11,
+            color: 'var(--text-3)',
+            marginTop: 4,
+            fontStyle: 'italic',
+          }}
+        >
+          chart shows top {MAX_BARS}; full {data.length} rows in the table below
+        </div>
+      )}
+    </div>
+  );
+}
+
 interface GenieAnswerProps {
   payload: GenieAnswerShape;
   onFollowUp?: (q: string) => void;
   /** Compact mode (used inside the floating chat bubble). */
   dense?: boolean;
+  /** Render an inline chart when the table_rows shape is chartable.
+   *  Off by default so the floating GenieChat bubble stays compact;
+   *  the Ask Genie deep-dive route opts in. (FIX Δ3, 2026-05-04). */
+  withChart?: boolean;
 }
 
-export function GenieAnswer({ payload, onFollowUp, dense = false }: GenieAnswerProps) {
+export function GenieAnswer({
+  payload,
+  onFollowUp,
+  dense = false,
+  withChart = false,
+}: GenieAnswerProps) {
   const { answer, metric_value, table_rows, follow_up_questions } = payload;
   const rows = Array.isArray(table_rows) ? table_rows : [];
   const visibleRows = rows.slice(0, MAX_TABLE_ROWS);
   const hiddenRows = Math.max(0, rows.length - MAX_TABLE_ROWS);
   const columns = visibleRows[0] ? Object.keys(visibleRows[0]).slice(0, MAX_TABLE_COLS) : [];
   const cleanedAnswer = answer ? stripQuestionRestatement(answer) : '';
+  // Chart is optional: only computed when the caller opts in AND the
+  // table_rows shape is chartable. Computed lazily so the floating
+  // bubble (which never opts in) doesn't pay the inference cost.
+  const chart = withChart ? inferChartFromRows(rows, columns) : null;
 
   return (
     <div>
@@ -216,6 +399,18 @@ export function GenieAnswer({ payload, onFollowUp, dense = false }: GenieAnswerP
         </div>
       )}
       {cleanedAnswer && <MarkdownAnswer text={cleanedAnswer} />}
+      {/* FIX Δ3: chart renders BEFORE the underlying table so the user
+          sees the visual summary first; the table stays as the
+          authoritative data source below. Only renders when withChart
+          is true (Ask Genie deep-dive route only) AND the data shape
+          is chartable (1 categorical + 1 numeric column). */}
+      {chart && (
+        <GenieBarChart
+          data={chart.rows}
+          labelCol={chart.labelCol}
+          valueCol={chart.valueCol}
+        />
+      )}
       {visibleRows.length > 0 && columns.length > 0 && (
         <>
           <table className="genie-answer__table">
