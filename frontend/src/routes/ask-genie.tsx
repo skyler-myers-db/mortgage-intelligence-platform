@@ -117,6 +117,27 @@ export default function AskGenie() {
               aria-label="Ask Genie — question"
               value={question}
               onChange={(e) => setQuestion(e.target.value)}
+              onKeyDown={(e) => {
+                // 2026-05-04 (FIX Δ1): standard chat keymap — Enter
+                // submits, Shift+Enter inserts a newline. Match how
+                // Slack / GitHub PRs behave so the keyboard-first user
+                // doesn't have to mouse over to the Ask Genie button.
+                // The submit-disabled guard mirrors the button's
+                // `disabled` prop so a stray Enter during a warming-up
+                // request can't double-fire.
+                if (
+                  e.key === 'Enter' &&
+                  !e.shiftKey &&
+                  !e.metaKey &&
+                  !e.ctrlKey &&
+                  !e.altKey
+                ) {
+                  e.preventDefault();
+                  if (!loading && warmingUp === null && question.trim().length > 0) {
+                    ask(question);
+                  }
+                }
+              }}
               style={{
                 width: '100%',
                 minHeight: 90,
@@ -180,7 +201,11 @@ export default function AskGenie() {
                 style={{ marginTop: 16, background: 'var(--bg-1)' }}
               >
                 <div className="surface__body">
-                  <GenieAnswer payload={payload} onFollowUp={ask} />
+                  {/* withChart=true: opt this deep-dive view in to the
+                      auto-detected bar chart for top-N / per-state-style
+                      table_rows payloads. The floating bubble does NOT
+                      pass this prop, so its compact form is unchanged. */}
+                  <GenieAnswer payload={payload} onFollowUp={ask} withChart />
                   {sourceChip && (
                     <div style={{ marginTop: 12, display: 'flex', gap: 6, alignItems: 'center' }}>
                       <span className="muted" style={{ fontSize: 11 }}>Source:</span>
