@@ -154,7 +154,22 @@ class GeoRepository(Protocol):
     so the UI can show a "data as of YYYY-MM-DD" provenance chip.
     """
 
-    def state_rollups(self) -> StateRollupResponse:
+    def state_rollups(
+        self,
+        segment_codes: list[str] | None = None,
+    ) -> StateRollupResponse:
+        """Per-state aggregates for the latest snapshot.
+
+        ``segment_codes``: optional non-empty list of SegmentCode values
+        (itm, listed, permit, investor, equity, retention). When
+        provided, the per-state counts reflect ONLY borrowers whose
+        ``segment_codes`` array overlaps the filter — distinct-counted
+        across multi-segment borrowers so a borrower in {itm,
+        retention} is counted once when the filter is {itm, retention}.
+
+        When ``segment_codes`` is None or empty, the cross-segment
+        ``_ALL`` rollup is returned (the prior unfiltered behaviour).
+        """
         ...
 
     def county_rollups(self, state: str) -> CountyRollupResponse:

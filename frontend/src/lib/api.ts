@@ -397,8 +397,17 @@ export const api = {
   segments: (signal?: AbortSignal) =>
     getJson<SegmentSummary[]>('/api/segments', signal),
 
-  stateRollups: (signal?: AbortSignal) =>
-    getJson<StateRollupResponse>('/api/geo/state-rollups', signal),
+  stateRollups: (segmentCodes?: string[] | null, signal?: AbortSignal) => {
+    // 2026-05-04 (FIX G): when a segment filter is active, fetch the
+    // segment-aware per-state counts so the choropleth tooltip + the
+    // shading reflect "marketable in <segment>" instead of the cross-
+    // segment total. No filter ⇒ the original cross-segment query.
+    const qs =
+      segmentCodes && segmentCodes.length > 0
+        ? `?segment_codes=${encodeURIComponent(segmentCodes.join(','))}`
+        : '';
+    return getJson<StateRollupResponse>(`/api/geo/state-rollups${qs}`, signal);
+  },
 
   countyRollups: (state: string, signal?: AbortSignal) =>
     getJson<CountyRollupResponse>(

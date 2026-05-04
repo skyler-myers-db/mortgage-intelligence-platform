@@ -1096,7 +1096,67 @@ class DatabricksGeoRepository:
 
     _STATE_CACHE_KEY = "geo.state_rollups"
 
-    def state_rollups(self) -> StateRollupResponse:
+    # 2026-05-04 (FIX G): segment-aware per-state counts. Computed live
+    # off mip.gold.lead_population (already filtered to score >= 50 —
+    # the same population the Lead Queue reads), with `arrays_overlap`
+    # as the segment predicate so multi-segment borrowers are
+    # distinct-counted exactly once even when the filter selects two
+    # of their segments. The funnel snapshot is per-segment and would
+    # double-count after a sum, so we deliberately bypass it for the
+    # filtered path.
+    _STATE_SEGMENT_FILTER_SQL_TPL = (
+        "SELECT "
+        "  state                                        AS state, "
+        "  CAST(COUNT(*) AS INT)                         AS addressable, "
+        "  CAST(SUM(CASE WHEN opportunity_score >= 75 "
+        "                THEN 1 ELSE 0 END) AS INT)      AS top_tier_opportunities, "
+        "  CAST(ROUND(AVG(opportunity_score)) AS INT)    AS avg_score "
+        f"FROM {qualify('gold', 'lead_population')} "
+        "WHERE arrays_overlap(segment_codes, :segment_codes) "
+        "GROUP BY state"
+    )
+
+    def state_rollups(
+        self,
+        segment_codes: list[str] | None = None,
+    ) -> StateRollupResponse:
+        if segment_codes:
+            # Filtered path. Cache key includes the sorted tuple so two
+            # callers asking the same filter share the cache while a
+            # different filter doesn't poison the result. The unfiltered
+            # `_ALL` path keeps its own _STATE_CACHE_KEY so the most
+            # common request (no filter) stays warm.
+            normalised = sorted({c.strip() for c in segment_codes if c.strip()})
+            cache_key = f"{self._STATE_CACHE_KEY}:filtered:{','.join(normalised)}"
+            cached = self._cache.get(cache_key)
+            if cached is not None:
+                return cached
+            rows = self._client.execute(
+                self._STATE_SEGMENT_FILTER_SQL_TPL,
+                {"segment_codes": normalised},
+            ) or []
+            # in_the_money + top_segment_code aren't carried by the
+            # filtered query (they would require an extra join the
+            # tooltip doesn't surface). Set sentinel zeros so the
+            # response shape stays stable; the FE only reads
+            # `addressable` for the filtered tooltip path.
+            rollups = [
+                StateRollup(
+                    state=str(r.get("state") or "").upper()[:2],
+                    addressable=int(r.get("addressable") or 0),
+                    in_the_money=0,
+                    top_tier_opportunities=int(r.get("top_tier_opportunities") or 0),
+                    avg_score=int(r.get("avg_score") or 0),
+                    top_segment_code=None,
+                )
+                for r in rows
+                if r.get("state") and str(r.get("state")) != "_ALL"
+            ]
+            response = StateRollupResponse(rollups=rollups, snapshot_date=None)
+            self._cache.set(cache_key, response, self._cache_ttl_s)
+            return response
+
+        # Unfiltered path — unchanged behaviour.
         cached = self._cache.get(self._STATE_CACHE_KEY)
         if cached is not None:
             return cached

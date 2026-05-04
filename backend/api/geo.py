@@ -33,14 +33,42 @@ RepoDep = Annotated[GeoRepository, Depends(get_geo_repository)]
 
 
 @router.get("/state-rollups", response_model=StateRollupResponse)
-def state_rollups(repo: RepoDep) -> StateRollupResponse:
+def state_rollups(
+    repo: RepoDep,
+    segment_codes: Annotated[
+        str | None,
+        Query(
+            alias="segment_codes",
+            description=(
+                "Optional comma-separated SegmentCode list (itm,listed,permit,"
+                "investor,equity,retention). When provided, per-state counts "
+                "reflect ONLY borrowers whose segment_codes overlap the filter "
+                "(distinct-counted across multi-segment borrowers)."
+            ),
+        ),
+    ] = None,
+) -> StateRollupResponse:
     """Return per-state rollups for the latest funnel snapshot.
 
     60s TTL cache lives in the repository; the router is a thin pass-
     through so adding a per-portfolio filter later is a repo change,
     not a router change.
+
+    2026-05-04 (FIX G): when ``segment_codes`` is supplied, the
+    repository switches to a live `arrays_overlap` query against
+    ``mip.gold.lead_population`` so the home-page choropleth tooltip
+    can show the borrower count for the active segment filter instead
+    of the cross-segment total.
     """
-    return repo.state_rollups()
+    parsed: list[str] | None = None
+    if segment_codes:
+        parsed = [s.strip() for s in segment_codes.split(",") if s.strip()]
+        # Cap the filter at six (the SegmentCode universe size). Anything
+        # bigger than that is the same as no filter (returns _ALL); save
+        # the warehouse the work and return the unfiltered rollup.
+        if not parsed or len(parsed) >= 6:
+            parsed = None
+    return repo.state_rollups(segment_codes=parsed)
 
 
 @router.get("/county-rollups", response_model=CountyRollupResponse)

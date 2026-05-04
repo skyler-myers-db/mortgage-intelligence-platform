@@ -428,16 +428,24 @@ export function USChoroplethMap({
     };
   }, []);
 
-  // Fetch per-state rollups from the backend once on mount. The repo
-  // response replaces the `count` + `avgScore` pair in STATE_FACTS with
-  // real rollups; the `lvl` / `topSegment` metadata stays synthetic
-  // because those aren't in gold. On error we silently fall back to the
+  // Fetch per-state rollups from the backend. The repo response
+  // replaces the `count` + `avgScore` pair in STATE_FACTS with real
+  // rollups; the `lvl` / `topSegment` metadata stays synthetic because
+  // those aren't in gold. On error we silently fall back to the
   // hardcoded STATE_FACTS so the map still renders rather than going
   // blank — the honest UX trade-off when the backend is down.
+  //
+  // 2026-05-04 (FIX G): the effect now re-runs whenever segmentFilter
+  // changes so the per-state counts (and the choropleth bucketer
+  // derived from them) reflect the active segment selection. Without
+  // a filter we use the cross-segment _ALL row; with a filter we hit
+  // the new arrays_overlap path that distinct-counts borrowers across
+  // segments. The 60s repo cache keys on the filter so toggling
+  // segments back-and-forth stays warm.
   useEffect(() => {
     let cancelled = false;
     api
-      .stateRollups()
+      .stateRollups(segmentFilter && segmentFilter.length > 0 ? segmentFilter : null)
       .then((payload) => {
         if (cancelled) return;
         const byCode: Record<string, StateRollup> = {};
@@ -457,7 +465,7 @@ export function USChoroplethMap({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [segmentFilter]);
 
   // Lazy-fetch county rollups on drill. /api/geo/county-rollups?state=XX
   // returns real counts / avg_score / top_segment_code per FIPS from
@@ -1451,17 +1459,16 @@ export function USChoroplethMap({
           (client coords), clamped to the viewport. Slice: hover-infographic-
           richness + portal-escape, 2026-04-23.
 
-          2026-05-04 fix (#8): when a segment filter is active the count
-          is still the unfiltered state-total (the gold rollup endpoint
-          returns one row per state, not one row per state×segment), so
-          the prior tooltip silently displayed an unfiltered number with
-          no indication it was unfiltered. We now explicitly label the
-          count "(all segments)" and add a footer row showing the active
-          filter — honest about what the data actually represents rather
-          than appearing to silently misreport. The choropleth shading
-          DOES respect the filter (non-matching top-segment states dim
-          to opacity 0.3 above), so the map and tooltip together tell a
-          coherent story: "shading filtered, count unfiltered". */}
+          2026-05-04 (FIX G): the per-state count IS now segment-aware —
+          the upstream useEffect re-fetches /api/geo/state-rollups with a
+          `segment_codes` query param whenever segmentFilter changes, and
+          the backend hits a distinct-count `arrays_overlap` query
+          against mip.gold.lead_population. So the tooltip no longer
+          needs the "(all segments)" disclaimer or the explicit "Filter:
+          shading by …" footer the previous slice introduced — both
+          would be misleading now that the number IS the filtered count.
+          A small "filtered by …" hint stays so the user remembers the
+          context, but it's a single-line clarifier, not a disclaimer. */}
       {hover &&
         createPortal(
           <div
@@ -1475,19 +1482,12 @@ export function USChoroplethMap({
             <div className="map-tip__name">{hover.name}</div>
             <div className="map-tip__kpis">
               <div className="map-tip__kpi">
-                {/* Label was "Marketable" — too ambiguous (marketable for
-                    what?). Now "Marketable borrowers" so a hover reader
-                    knows the count is borrowers in the addressable
-                    population for this state. 2026-05-04 user feedback.
-                    Suffix "(all segments)" added when a segment filter
-                    is active so the unfiltered total isn't mistaken for
-                    a filtered count (#8). */}
-                <div className="map-tip__kpi-label">
-                  Marketable borrowers
-                  {activeSegNames !== null ? (
-                    <span style={{ color: 'var(--text-3)' }}> (all segments)</span>
-                  ) : null}
-                </div>
+                {/* "Marketable borrowers" — the count IS now segment-
+                    aware when a filter is active (FIX G, 2026-05-04),
+                    so the prior "(all segments)" suffix is gone.
+                    A small filtered-by hint appears in the footer
+                    instead, and the count itself reflects the filter. */}
+                <div className="map-tip__kpi-label">Marketable borrowers</div>
                 <div className="map-tip__kpi-value">
                   {hover.count !== null ? hover.count.toLocaleString() : '—'}
                 </div>
@@ -1509,11 +1509,12 @@ export function USChoroplethMap({
                 <span className="map-tip__seg-value">{hover.topSegment}</span>
               </div>
             )}
-            {/* Filter context row — only appears when a segmentFilter is
-                active. Tells the user the choropleth shading is filtered
-                even though the state-total count above is not. Without
-                this the count looked the same with and without a filter
-                and the user reasonably read that as a broken filter (#8). */}
+            {/* Filter hint — present when a segment filter is active.
+                Reminds the reader the shown count is the segment-
+                filtered population, not the cross-segment total.
+                FIX G, 2026-05-04: the count itself is now segment-
+                aware (was just "all segments" before), so the copy
+                reads "filtered by …" not "shading by …". */}
             {activeSegNames !== null && (
               <div
                 className="map-tip__row"
@@ -1527,7 +1528,7 @@ export function USChoroplethMap({
               >
                 <span>Filter</span>
                 <span className="v" style={{ fontSize: 10 }}>
-                  shading by {Array.from(activeSegNames).join(', ')}
+                  filtered by {Array.from(activeSegNames).join(', ')}
                 </span>
               </div>
             )}
