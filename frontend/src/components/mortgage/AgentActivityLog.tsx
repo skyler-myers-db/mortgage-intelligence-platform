@@ -75,6 +75,7 @@ export function AgentActivityLog({ limit = 12 }: { limit?: number }) {
   const health = healthCtx?.health ?? null;
   const probeMs = healthCtx?.probeMs ?? null;
   const warehouse = (health?.dependencies?.warehouse as DepState) ?? 'unknown';
+  const lakebase = (health?.dependencies?.lakebase as DepState) ?? 'unknown';
   const genie = (health?.dependencies?.genie as DepState) ?? 'unknown';
   const warehouseBreakerState =
     (health?.circuit_breakers?.warehouse as BreakerState) ?? 'unknown';
@@ -133,14 +134,22 @@ export function AgentActivityLog({ limit = 12 }: { limit?: number }) {
             events here.
           </div>
         )}
-        {feedState === 'error' && (warehouse === 'down' || genie === 'down') && (
+        {/* 2026-05-04 fix (#4): the audit feed is backed by Lakebase
+            (mip_app.action_audit). The prior conditions only checked
+            warehouse + genie, so when Lakebase was the actual dep that
+            went down (the common case — Lakebase is the audit store)
+            the FE wrongly rendered the red "briefly unavailable" tile
+            while showing "Analytics warehouse up · AI assistant up"
+            below it. Now the muted "waiting" path fires whenever ANY
+            of the three deps is down — including Lakebase. */}
+        {feedState === 'error' && (warehouse === 'down' || lakebase === 'down' || genie === 'down') && (
           <div className="body" style={{ padding: 'var(--sp-3)', color: 'var(--text-2)' }}>
             Audit feed is waiting on a dependency to come back online — the
             live state is shown below. The feed will populate automatically
             once the dependency reconnects.
           </div>
         )}
-        {feedState === 'error' && warehouse !== 'down' && genie !== 'down' && (
+        {feedState === 'error' && warehouse !== 'down' && lakebase !== 'down' && genie !== 'down' && (
           <div className="body" style={{ padding: 'var(--sp-3)', color: 'var(--signal-danger)' }}>
             Audit feed is briefly unavailable. This page will retry on the
             next refresh; live dependency state is shown below.
