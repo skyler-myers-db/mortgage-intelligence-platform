@@ -107,13 +107,20 @@ class Settings(BaseSettings):
     lakebase_password: SecretStr | None = Field(default=None, repr=False)
     lakebase_sslmode: str = "require"
 
-    # Default actor identifier used when ``X-Forwarded-Email`` is absent
-    # (local dev / test / broken identity header). Generic, non-customer-
-    # specific so a non-Entrada workspace doesn't surface an Entrada email
-    # address in its own audit rows. The audit writer logs a warning every
-    # time the fallback kicks in so operators see it in structured logs.
-    # Overrideable via the MIP_DEFAULT_ACTOR env var.
-    default_actor: str = "unknown-actor@local"
+    # Default actor identifier used when ``X-Forwarded-Email`` is absent.
+    # In practice this fires for: (1) local dev / pytest paths that
+    # don't install the X-Forwarded-Email header, (2) background tasks
+    # that re-enter the audit writer through a worker thread without a
+    # request context, (3) Databricks Apps warm-up probes that hit the
+    # endpoints before the user is OAuth'd through. The string is shown
+    # verbatim in the FE audit log, so it should READ like an honest
+    # system attribution — not a confusing placeholder. Prior value
+    # ``"unknown-actor@local"`` made users ask "who is that?" — the new
+    # value names the runtime explicitly so the row reads as "this was
+    # the system, not a user". The audit writer still logs a warning
+    # every time the fallback kicks in so operators see it in structured
+    # logs. Overrideable via the MIP_DEFAULT_ACTOR env var.
+    default_actor: str = "system@databricks-apps"
 
     # Admin RBAC gate for /api/admin/* endpoints. Two recognition paths
     # in ``backend/services/rbac.py::require_admin``:

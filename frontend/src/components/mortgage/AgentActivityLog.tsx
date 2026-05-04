@@ -49,6 +49,43 @@ function formatTime(iso: string): string {
   }
 }
 
+/**
+ * Detect "this row was attributed to a system identity, not a logged-in
+ * user" and produce a friendly display label + tooltip. The backend
+ * uses `system@databricks-apps` (or the legacy `unknown-actor@local`)
+ * as the fallback when X-Forwarded-Email isn't present — typically for
+ * background tasks, warm-up probes, or pre-OAuth requests. Without
+ * this normalization the row reads as a mysterious user account.
+ *
+ * 2026-05-04 user feedback: "What is this agent action audit log? Who
+ * is unknown-actor@local…?" — answered here by surfacing system
+ * attribution explicitly with a tooltip explaining what it means.
+ */
+const SYSTEM_ACTOR_PATTERNS: Array<{ test: RegExp; label: string; tip: string }> = [
+  {
+    test: /^system@databricks-apps$/i,
+    label: 'System (Databricks Apps)',
+    tip: 'Action ran in a background task or warm-up probe — no logged-in user was attached to the request.',
+  },
+  {
+    test: /^unknown-actor@local$/i,
+    label: 'System (legacy)',
+    tip: 'Action recorded before OAuth identity was wired through the request path. Pre-2026-05-04 fallback identity.',
+  },
+  {
+    test: /^unknown-actor@untrusted-edge$/i,
+    label: 'System (edge untrusted)',
+    tip: 'Trust-forwarded-headers is disabled in this deployment, so the edge-claimed identity was rejected.',
+  },
+];
+
+function actorDisplay(raw: string): { text: string; isSystem: boolean; tip: string | null } {
+  for (const p of SYSTEM_ACTOR_PATTERNS) {
+    if (p.test.test(raw)) return { text: p.label, isSystem: true, tip: p.tip };
+  }
+  return { text: raw, isSystem: false, tip: null };
+}
+
 // ---------------------------------------------------------------------
 // Health telemetry — consumed from the shared HealthProvider. All three
 // values (dep state, breaker state, probe_ms) are real measurements;
@@ -157,13 +194,28 @@ export function AgentActivityLog({ limit = 12 }: { limit?: number }) {
         )}
         {feedState === 'ok' && rows.map((r) => {
           const cls = classify(r.action, r.entity_type);
+          const actor = actorDisplay(r.actor);
           return (
             <div className="audit" key={r.event_id}>
               <div className="audit__time mono">{formatTime(r.created_at)}</div>
               <div className={`audit__ico ${cls.color}`}><Icon name={cls.icon} size={11} /></div>
               <div className="audit__body">
                 <div className="audit__what">{r.action}</div>
-                <div className="audit__who">{r.actor}</div>
+                {/* System-attributed events render the friendly label
+                    in muted/italic so a glance separates "user X did
+                    this" from "the runtime did this on its own". The
+                    raw actor string is kept in the tooltip for ops. */}
+                <div
+                  className="audit__who"
+                  style={
+                    actor.isSystem
+                      ? { fontStyle: 'italic', color: 'var(--text-3)' }
+                      : undefined
+                  }
+                  title={actor.tip ? `${actor.tip}\nRaw actor: ${r.actor}` : r.actor}
+                >
+                  {actor.text}
+                </div>
               </div>
             </div>
           );
