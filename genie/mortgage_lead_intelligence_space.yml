@@ -106,7 +106,21 @@ instructions: |
       they are NOT failures.
     - Never fabricate. If data is missing (MLS listings, permits,
       demographics), say "no data available" explicitly. Listed-for-Sale
-      returns zero today because Cotality MLS has not shipped yet.
+      and recent-permits return zero today because Cotality MLS and
+      Building Permits have not shipped yet — gold_evidence_events.sql
+      hardcodes both signal types as BLOCKED. If the user asks about
+      permits or listings, EXPLAIN UPFRONT that the data feed is
+      pending rather than running a query that returns "no candidates"
+      with no context. Suggested redirect: "Permit and MLS data are
+      pending Cotality feeds. The closest available signal is
+      borrower_360.has_permit (always FALSE today) — would you like to
+      see HELOC-eligible borrowers by equity instead?"
+    - Never use thresholds tighter than the data-contract defaults
+      unless the user explicitly asks for stricter cuts: in-the-money
+      ≥ 50 bps spread, HELOC eligible ≥ 35% equity, rate-and-term
+      refi ≥ 75 bps, top-tier opportunity score ≥ 75. Don't interpret
+      "strong equity" as 70%+ — interpret it as ≥ 35% (the segment
+      definition floor).
     - Never return a non-zero count for a geography outside IL/CA/FL/TX/
       WA/CO. Those populations are zero in the share footprint.
 
@@ -213,13 +227,26 @@ trusted_assets:
       and trigger type. Use for "where should I spend my next campaign
       dollar" and territory-planning questions.
 
+# 2026-05-04 (FIX Δ4 / Genie accuracy benchmark): the prior sample
+# questions advertised features the data layer does not (yet) ship —
+# specifically permit triggers (gold_evidence_events.sql line 15
+# emits ZERO permit rows; the column is BLOCKED until Cotality
+# Building Permits lands) and listed-for-sale triggers (same
+# story for Cotality MLS). Sample questions that mention either
+# would force Genie to write a query that returns "no candidates"
+# even when the addressable population is large, which the user
+# experienced as a confusing hallucination. The replacement set
+# below stays inside the data the warehouse actually has today —
+# rate spread, equity, segment membership, lead score, lien
+# changes, retention. When MLS / Permits ship, restore the
+# permit/listing questions in a follow-up commit.
 sample_questions:
   - How many borrowers are currently in-the-money and what is the average rate spread?
-  - Which five ZIP codes have the highest count of HELOC/cash-out candidates?
-  - Show me the top 20 borrowers by lead score who have also had a permit filed in the last 90 days.
+  - Which five ZIP codes have the highest count of HELOC-eligible borrowers (equity ≥ 35%)?
+  - Show me the top 20 borrowers by lead score with rate spread > 75 bps and equity > 35%.
   - What is the conversion rate from recommended-offer to approved-offer by segment this quarter?
   - Which borrowers on our retention list have a competitor lien filed in the last 30 days?
-  - Break down the Listed-for-Sale segment by loan product and average current rate.
+  - Break down the Investor / Multi-Property segment by state and average current rate.
   - For investors with three or more properties, which have the strongest cash-out potential?
   - Compare mean lead score by MSA for our top five markets.
   - How many evidence events were recorded yesterday, grouped by trigger type?
