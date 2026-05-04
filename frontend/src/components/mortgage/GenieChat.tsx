@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useApp } from '../AppContext';
 import { api } from '../../lib/api';
 import type { GenieAnswer as GenieAnswerShape } from '../../types';
@@ -6,6 +6,48 @@ import { Icon } from '../Icon';
 import { Button, Chip, EvidenceChip } from '../Primitives';
 import { GenieAnswer } from './GenieAnswer';
 import { DRAWER_SOURCES } from '../../lib/drawerSources';
+
+// 2026-05-04 (FIX Δ2): persisted size for the floating panel. The
+// ranges below cap at "still feels like a chat panel" — bigger than
+// the default 420×640 default (so users can read longer answers
+// without scrolling) but smaller than a full-screen takeover (which
+// would conflict with the /ask-genie deep-dive route). Persisted
+// per-browser via localStorage so a user's preferred size sticks
+// across sessions. Storage key is namespaced under mip- to avoid
+// collisions with sibling apps in the workspace.
+const SIZE_STORAGE_KEY = 'mip-genie-chat-size-v1';
+const MIN_W = 360;
+const MAX_W = 900;
+const MIN_H = 400;
+const MAX_H = 900;
+const DEFAULT_SIZE = { w: 420, h: 640 };
+
+interface GenieSize {
+  w: number;
+  h: number;
+}
+
+function loadGenieSize(): GenieSize {
+  try {
+    const raw = localStorage.getItem(SIZE_STORAGE_KEY);
+    if (!raw) return DEFAULT_SIZE;
+    const parsed = JSON.parse(raw) as Partial<GenieSize>;
+    const w = Math.min(MAX_W, Math.max(MIN_W, Number(parsed.w) || DEFAULT_SIZE.w));
+    const h = Math.min(MAX_H, Math.max(MIN_H, Number(parsed.h) || DEFAULT_SIZE.h));
+    return { w, h };
+  } catch {
+    return DEFAULT_SIZE;
+  }
+}
+
+function saveGenieSize(size: GenieSize): void {
+  try {
+    localStorage.setItem(SIZE_STORAGE_KEY, JSON.stringify(size));
+  } catch {
+    // localStorage unavailable (private mode, full storage). Drop on
+    // the floor — non-persistence is a degraded UX, not broken.
+  }
+}
 
 /**
  * Map a free-form trusted-asset string (UC path or ruleset id) to the
@@ -65,6 +107,86 @@ export function GenieChat() {
   const [input, setInput] = useState('');
   const [typing, setTyping] = useState(false);
   const bodyRef = useRef<HTMLDivElement>(null);
+
+  // FIX Δ2: persisted resize state. Reads from localStorage on mount
+  // (defaults to 420×640 — the prior fixed dimensions). Drag handle
+  // in the top-left corner adjusts both axes so the panel can grow
+  // up + left from the bottom-right anchor. Bounded to [MIN, MAX] so
+  // the panel can't shrink past unusable or grow past viewport-eating.
+  const [size, setSize] = useState<GenieSize>(() => loadGenieSize());
+  const resizeOriginRef = useRef<{
+    startX: number;
+    startY: number;
+    startW: number;
+    startH: number;
+  } | null>(null);
+
+  const onResizePointerDown = useCallback(
+    (e: React.PointerEvent<HTMLButtonElement>) => {
+      // Capture the gesture so the pointer keeps streaming events
+      // even when it leaves the handle (Chrome / Safari behave the
+      // same). preventDefault stops text selection while dragging.
+      e.preventDefault();
+      e.currentTarget.setPointerCapture(e.pointerId);
+      resizeOriginRef.current = {
+        startX: e.clientX,
+        startY: e.clientY,
+        startW: size.w,
+        startH: size.h,
+      };
+    },
+    [size.w, size.h],
+  );
+
+  const onResizePointerMove = useCallback(
+    (e: React.PointerEvent<HTMLButtonElement>) => {
+      const origin = resizeOriginRef.current;
+      if (!origin) return;
+      // The panel is anchored bottom-right and the handle is top-left,
+      // so dragging UP/LEFT grows the panel — invert the delta sign.
+      const dx = origin.startX - e.clientX;
+      const dy = origin.startY - e.clientY;
+      const w = Math.min(MAX_W, Math.max(MIN_W, origin.startW + dx));
+      const h = Math.min(MAX_H, Math.max(MIN_H, origin.startH + dy));
+      setSize({ w, h });
+    },
+    [],
+  );
+
+  const onResizePointerUp = useCallback(
+    (e: React.PointerEvent<HTMLButtonElement>) => {
+      if (!resizeOriginRef.current) return;
+      e.currentTarget.releasePointerCapture(e.pointerId);
+      resizeOriginRef.current = null;
+      // Persist final size — only on pointerup so we don't pound
+      // localStorage during the drag.
+      saveGenieSize(size);
+    },
+    [size],
+  );
+
+  // Keyboard accessibility for the resize handle: Arrow keys nudge
+  // by 24 px; Shift+Arrow nudges by 96 px. Persisted on each press.
+  const onResizeKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLButtonElement>) => {
+      const step = e.shiftKey ? 96 : 24;
+      let dw = 0;
+      let dh = 0;
+      if (e.key === 'ArrowLeft') dw = step;
+      else if (e.key === 'ArrowRight') dw = -step;
+      else if (e.key === 'ArrowUp') dh = step;
+      else if (e.key === 'ArrowDown') dh = -step;
+      else return;
+      e.preventDefault();
+      const next = {
+        w: Math.min(MAX_W, Math.max(MIN_W, size.w + dw)),
+        h: Math.min(MAX_H, Math.max(MIN_H, size.h + dh)),
+      };
+      setSize(next);
+      saveGenieSize(next);
+    },
+    [size],
+  );
   // R5-12 (2026-04-23): dialog a11y. Mirrors the EvidenceDrawer pattern
   // — initial focus lands on the input, ESC closes, focus restores to
   // the FAB (or whatever opened the panel) on close. Without these
@@ -152,7 +274,36 @@ export function GenieChat() {
         aria-modal="true"
         aria-label="Genie chat"
         aria-hidden={!genieOpen}
+        style={{
+          // FIX Δ2: inline size overrides win over the .genie static
+          // 420×640 from components.css. max-height is set explicitly
+          // here too because the CSS rule uses max-height (not
+          // height) and the panel needs to actually grow vertically.
+          width: size.w,
+          height: size.h,
+          maxHeight: size.h,
+        }}
       >
+        {/* FIX Δ2: resize handle. Anchored top-left because the
+            panel itself is anchored bottom-right (dragging top-left
+            "outward" grows the panel). It's a real <button> so screen
+            readers can announce it; Arrow keys + Shift+Arrow give
+            keyboard users a way to resize without a mouse. The CSS
+            handle styling lives in components.css under .genie__resize. */}
+        {genieOpen && (
+          <button
+            type="button"
+            className="genie__resize"
+            aria-label={`Resize Genie panel (currently ${size.w} by ${size.h} pixels). Drag, or use arrow keys.`}
+            onPointerDown={onResizePointerDown}
+            onPointerMove={onResizePointerMove}
+            onPointerUp={onResizePointerUp}
+            onPointerCancel={onResizePointerUp}
+            onKeyDown={onResizeKeyDown}
+          >
+            <span aria-hidden="true">⇲</span>
+          </button>
+        )}
         <div className="genie__hdr">
           <div className="genie__avatar" />
           <div style={{ flex: 1 }}>

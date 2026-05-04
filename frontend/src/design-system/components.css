@@ -714,6 +714,9 @@ kbd {
    ============================================================ */
 .genie {
   position: fixed; bottom: var(--sp-4); right: var(--sp-4);
+  /* Default size — inline `width` / `height` / `max-height` from the
+     React component override these when the user has resized the
+     panel (FIX Δ2, 2026-05-04, persisted in localStorage). */
   width: 420px; max-height: 640px;
   background: var(--bg-1);
   border: 1px solid var(--line-2);
@@ -722,8 +725,48 @@ kbd {
   display: flex; flex-direction: column;
   overflow: hidden;
   z-index: 30;
+  /* Disable the open/close transform transition for `width`/`height`
+     so the resize drag tracks the pointer instantly — without this
+     each pointer-move would tween over var(--dur-slow) and feel
+     mushy. The opacity + transform tween for open/close still runs. */
   transform: translateY(12px) scale(0.98); opacity: 0; pointer-events: none;
-  transition: all var(--dur-slow) var(--ease);
+  transition: opacity var(--dur-slow) var(--ease),
+              transform var(--dur-slow) var(--ease);
+}
+/* Resize handle — top-left corner. Visible affordance: an arrow
+   glyph in a small square. Hover/focus brightens it so keyboard
+   users can see when it's selected. The button itself is positioned
+   absolute against `.genie` so it sits above the .genie__hdr but
+   doesn't displace the avatar. */
+.genie__resize {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--text-3);
+  font-size: 14px;
+  cursor: nwse-resize;
+  z-index: 1;
+  transition: background var(--dur-fast) var(--ease),
+              color var(--dur-fast) var(--ease),
+              border-color var(--dur-fast) var(--ease);
+}
+.genie__resize:hover,
+.genie__resize:focus-visible {
+  background: var(--bg-3);
+  color: var(--text-1);
+  border-color: var(--line-2);
+  outline: none;
+}
+.genie__resize:active {
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 .genie.is-open { transform: translateY(0) scale(1); opacity: 1; pointer-events: auto; }
 .genie__hdr {
