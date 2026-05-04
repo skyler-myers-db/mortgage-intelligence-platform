@@ -40,6 +40,19 @@ USING (
       b.recommended_offer_code,
       COALESCE(ls.approval_status, 'pending')  AS approval_status,
       COALESCE(ls.outreach_status, 'none')     AS outreach_status
+    FROM mip.gold.borrower_360 AS b
+    LEFT JOIN mip.gold.borrower_lifecycle_state AS ls
+      ON ls.borrower_id = b.borrower_id
+    LATERAL VIEW EXPLODE(b.segment_codes) s AS sc
+    -- 2026-05-04 fix (FIX F): apply the lead_population quality floor
+    -- so the per-state addressable counts on the home-page choropleth
+    -- agree with the Lead Queue (which reads lead_population, not the
+    -- full borrower_360). Without this filter the map said "1.85M
+    -- marketable in IL" while the Lead Queue could only show borrowers
+    -- with opportunity_score >= 50, producing a smaller queue. Same
+    -- alignment was applied to gold_zip_rollup + gold_county_rollup.
+    WHERE b.opportunity_score >= 50
+  ),
   -- Each borrower also contributes to the '_ALL' segment row, so dashboards
   -- can read a single cross-segment line per state per day. Same quality
   -- floor as `exploded` above so the per-state '_ALL' row matches the
