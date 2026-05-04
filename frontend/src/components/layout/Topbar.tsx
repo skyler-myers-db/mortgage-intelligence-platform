@@ -4,6 +4,82 @@ import { useApp } from '../AppContext';
 import { Icon } from '../Icon';
 import { useHealth } from '../HealthProvider';
 import { useFootprint } from '../FootprintProvider';
+import type { HealthPayload } from '../../lib/api';
+
+/**
+ * Single status pill that consolidates env + dep state for the topbar.
+ *
+ * Replaces the prior 3-pill row (sandbox / warehouse·live / offline)
+ * which was always-visible noise on every page when the system was
+ * healthy. 2026-05-04 user feedback: "wouldn't every page say
+ * Warehouse · live? how is that useful?" — the answer is "only useful
+ * when something's wrong." The compact pill renders just a status dot
+ * + a single word (Live / Degraded / Probing); the env name and the
+ * per-dependency breakdown surface in the title tooltip on hover, so
+ * the operator can drill in without burning persistent screen real
+ * estate.
+ */
+function SystemStatusPill({
+  envLabel,
+  health,
+}: {
+  envLabel: string;
+  health: HealthPayload | null;
+}) {
+  // Health states:
+  //   probing  → no payload yet; gray dot, tooltip "first probe in flight"
+  //   live     → status==="ok" + every tracked dep === "up"
+  //   degraded → status==="degraded" OR any dep down OR any breaker open
+  const isProbing = !health;
+  const deps = health?.dependencies ?? {};
+  const breakers = health?.circuit_breakers ?? {};
+  const allUp =
+    deps.warehouse === 'up' && deps.lakebase === 'up' && deps.genie === 'up';
+  const anyBreakerOpen = Object.values(breakers).some(
+    (s) => s === 'open' || s === 'half_open',
+  );
+  const live = !isProbing && allUp && !anyBreakerOpen && health?.status !== 'degraded';
+
+  const dotClass = isProbing
+    ? 'dot amber'
+    : live
+      ? 'dot is-heartbeat'
+      : 'dot';
+  const dotColor = isProbing
+    ? undefined
+    : live
+      ? undefined
+      : { background: 'var(--signal-danger)' };
+  const label = isProbing ? 'Probing' : live ? 'Live' : 'Degraded';
+
+  // Per-dep breakdown for the tooltip. Compact and grep-able so the
+  // tooltip reads like a one-line health summary an operator could
+  // paste into Slack.
+  const depLine = (name: string, state: string | undefined): string =>
+    `${name}=${state ?? '?'}`;
+  const tooltip = isProbing
+    ? `System status · probing — first /api/health probe still in flight (env: ${envLabel}).`
+    : `System status · ${live ? 'live' : 'degraded'}\n` +
+      `env=${envLabel} · ${depLine('warehouse', deps.warehouse)} · ` +
+      `${depLine('lakebase', deps.lakebase)} · ${depLine('genie', deps.genie)} · ` +
+      `breakers ${Object.entries(breakers)
+        .map(([k, v]) => `${k}=${v}`)
+        .join(' / ') || 'unknown'}`;
+
+  return (
+    <div
+      className="topbar__pill"
+      title={tooltip}
+      aria-label={`System status: ${label}. Environment: ${envLabel}.`}
+      data-testid="system-status-pill"
+    >
+      <span className={dotClass} aria-hidden="true" style={dotColor} />
+      <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-12)' }}>
+        {label}
+      </span>
+    </div>
+  );
+}
 
 /**
  * Topbar — breadcrumbs, lender pill, environment pill, warehouse-status pill,
@@ -58,17 +134,6 @@ export function Topbar() {
   }, []);
 
   const envLabel = (health?.app_env ?? 'loading').toLowerCase();
-  const warehouseUp = health?.dependencies?.warehouse === 'up';
-  const warehouseDot = !health
-    ? 'dot amber'
-    : warehouseUp
-      ? 'dot is-heartbeat'
-      : 'dot';
-  const warehouseColor = !health
-    ? undefined
-    : warehouseUp
-      ? undefined
-      : { background: 'var(--signal-danger)' };
 
   return (
     <header className="topbar" role="banner">
@@ -89,53 +154,19 @@ export function Topbar() {
         <Icon name="building" size={12} />
         <span>{lender}</span>
       </div>
-      {/* Environment pill — which workspace the app is bound to. `sandbox`
-          is the dev workspace (Entrada-internal evaluation share);
-          `production` is the customer's prod workspace. Comes from
-          APP_ENV env var → backend.config.settings → /api/health. The
-          dot color encodes severity (amber = non-prod, green = prod).
-          Tooltip spells it out so the label is self-explanatory.
-          User feedback 2026-05-04: "what does sandbox mean?" */}
-      <div
-        className="topbar__pill"
-        title={
-          envLabel === 'production'
-            ? 'Environment · production. Bound to the customer production workspace.'
-            : `Environment · ${envLabel}. Non-prod evaluation workspace; data and audit rows are not customer-facing.`
-        }
-        aria-label={`Environment: ${envLabel}`}
-      >
-        <span className={`dot ${envLabel === 'production' ? 'green' : 'amber'}`} />
-        <span>{envLabel}</span>
-      </div>
-      {/* Warehouse status pill — live state of the analytics SQL
-          warehouse the app reads from. `live` (with heartbeat dot) =
-          warehouse is up and answering health probes; `offline` =
-          warehouse is down or the breaker is open; `…` = first probe
-          still in flight. Tooltip surfaces the exact dependency state
-          + breaker. User feedback 2026-05-04: "what does warehouse
-          mean?" — relabeled from the bare token "warehouse" to the
-          self-explanatory "Warehouse · live / offline". */}
-      <div
-        className="topbar__pill"
-        title={
-          health
-            ? `Warehouse · ${warehouseUp ? 'live' : 'offline'}. Breaker ${
-                health.circuit_breakers?.warehouse ?? 'unknown'
-              }. Driven by the /api/health probe.`
-            : 'Warehouse · probing — first health probe in flight.'
-        }
-        aria-label={
-          health
-            ? `Warehouse status: ${warehouseUp ? 'live' : 'offline'}`
-            : 'Warehouse status: probing'
-        }
-      >
-        <span className={warehouseDot} aria-hidden="true" style={warehouseColor} />
-        <span style={{ fontFamily: 'var(--font-mono)' }}>
-          {warehouseUp ? 'Warehouse · live' : health ? 'Warehouse · offline' : 'Warehouse · …'}
-        </span>
-      </div>
+      {/*
+        Single "system status" pill consolidating environment + warehouse
+        + lakebase + genie state. Replaces the prior 3-pill row (sandbox /
+        warehouse · live / offline) which was always-visible noise on
+        every page even when the system was healthy. 2026-05-04 user
+        feedback: "wouldn't every page say Warehouse · live? how is that
+        useful?" — the answer is: only useful when something's wrong. The
+        new pill shows just a status dot + "Live" / "Degraded" /
+        "Probing", with the env name + per-dep breakdown surfaced via
+        the title tooltip on hover. The dot color carries the severity
+        signal (green=live, amber=degraded, gray=probing).
+      */}
+      <SystemStatusPill envLabel={envLabel} health={health} />
       {footprintFallback && mountGraceOver && (
         <span
           className="chip chip--warning"

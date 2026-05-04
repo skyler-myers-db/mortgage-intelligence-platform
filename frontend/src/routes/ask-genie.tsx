@@ -105,17 +105,18 @@ export default function AskGenie() {
   const sourceChipVariant: 'warning' | 'neutral' | undefined =
     isComputedFallback || isDegraded ? 'warning' : undefined;
   // Map the Genie-provided source label to the best matching drawer entry.
-  // Previously the chip always opened DRAWER_SOURCES.nbo regardless of the
-  // actual source -- a parity bug on the evidence path. Fallback is `nbo`
-  // so unrecognized sources still open a meaningful drawer rather than
-  // silently dropping the click. Computed-fallback / degraded chips don't
-  // route into the drawer (the chip itself is the explanation).
+  // Returns null when no specific match exists — the chip then renders as
+  // an inert neutral chip rather than defaulting to NBO and misleading
+  // the user into the wrong drawer (the prior "default to NBO" routing
+  // was confusing per 2026-05-04 user feedback). Computed-fallback /
+  // degraded chips also render inert (the chip text is the explanation).
   const drawerForSource =
     /itm|rules/i.test(sourceChip) ? DRAWER_SOURCES.itm
       : /permit/i.test(sourceChip) ? DRAWER_SOURCES.permit
       : /lead_population|population|borrower_360/i.test(sourceChip) ? DRAWER_SOURCES.population
+      : /next.?best|nbo/i.test(sourceChip) ? DRAWER_SOURCES.nbo
       : /config/i.test(sourceChip) ? DRAWER_SOURCES.config
-      : DRAWER_SOURCES.nbo;
+      : null;
 
   return (
     <PageShell
@@ -207,9 +208,7 @@ export default function AskGenie() {
                         // warning chip with an explanatory tooltip so the user
                         // can tell the source from a live Genie answer at a
                         // glance. We don't open the drawer because the chip
-                        // text already names the table; clicking would just
-                        // open the population drawer which isn't the right
-                        // story here.
+                        // text already names the table.
                         <Chip
                           variant="warning"
                           icon={isComputedFallback ? 'bolt' : 'info'}
@@ -217,8 +216,16 @@ export default function AskGenie() {
                         >
                           {sourceChip}
                         </Chip>
-                      ) : (
+                      ) : drawerForSource ? (
+                        // Specific UC asset → open the matching drawer entry.
                         <EvidenceChip source={drawerForSource}>{sourceChip}</EvidenceChip>
+                      ) : (
+                        // Generic / unknown source → inert chip so a click
+                        // doesn't open the wrong drawer. (Prior code
+                        // defaulted to NBO and was misleading.)
+                        <Chip variant="neutral" title={`Source: ${sourceChip}`}>
+                          {sourceChip}
+                        </Chip>
                       )}
                     </div>
                   )}

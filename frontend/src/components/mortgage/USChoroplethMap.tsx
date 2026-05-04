@@ -120,67 +120,34 @@ interface StateFacts {
   topSegment: string;
 }
 
-// lowercase state id (matches @svg-maps/usa) → facts. Slice 9 re-weighted
-// so all six Delta Share footprint states (IL / CA / FL / TX / WA / CO)
-// surface at lvl:4 and anchor the narrative of a real multi-state book.
-// Counts are synthetic but proportional to the Apr-2026 share probe
-// in docs/data-sources-gap-analysis.md §1 (IL 1.86M · CA 0.90M · FL 0.76M ·
-// TX 0.75M · WA 0.74M · CO 0.16M properties). Non-footprint states render
-// at lvl:1-3 so the presenter's eye lands on the footprint first.
+// lowercase state id (matches @svg-maps/usa) → facts. Only the 6-state
+// Cotality Delta Share footprint (IL / CA / FL / TX / WA / CO) appears
+// here; non-footprint states intentionally have NO entry so the hover
+// card surfaces "—" for marketable / avg score and labels the source
+// "Outside Cotality evaluation scope" instead of fabricating numbers.
+//
+// Counts for the footprint states are synthetic-but-proportional fall-
+// backs used only when /api/geo/state-rollups hasn't returned yet
+// (cold-start). Once the rollup resolves, `factsFor` below merges the
+// LIVE addressable + avg_score + top_segment_code from the live payload
+// over these placeholders. Numbers here track the Apr-2026 share probe
+// in docs/data-sources-gap-analysis.md §1 (IL 1.86M · CA 0.90M · FL 0.76M
+// · TX 0.75M · WA 0.74M · CO 0.16M properties).
+//
+// 2026-05-04: stripped 45 non-footprint entries that previously hard-
+// coded a fabricated count for every state in the lower 48. The user
+// rightly flagged that the hover card said "Outside Cotality evaluation
+// scope" while still showing a count and avg score — that's exactly the
+// "no mock fallback" violation CLAUDE.md prohibits. Non-footprint
+// states now render at the lightest density tier (`lvl-1` default in
+// the renderer) and hover with "—" for every metric.
 const STATE_FACTS: Record<string, StateFacts> = {
-  // --- Cotality Delta Share footprint (hero tier) --------------------------
   il: { count: 1860, avgScore: 84, lvl: 4, topSegment: 'In the Money' }, // Chicago anchor
   ca: { count: 900,  avgScore: 83, lvl: 4, topSegment: 'Home Equity' },
   fl: { count: 760,  avgScore: 81, lvl: 4, topSegment: 'Investor' },
   tx: { count: 750,  avgScore: 82, lvl: 4, topSegment: 'Home Equity' },
   wa: { count: 740,  avgScore: 81, lvl: 4, topSegment: 'In the Money' },
   co: { count: 160,  avgScore: 80, lvl: 4, topSegment: 'Listed' },
-  // --- Non-footprint (muted tier) ----------------------------------------
-  ga: { count: 540,  avgScore: 76, lvl: 3, topSegment: 'In the Money' },
-  ny: { count: 820,  avgScore: 79, lvl: 3, topSegment: 'Retention' },
-  nc: { count: 710,  avgScore: 78, lvl: 3, topSegment: 'Permit Activity' },
-  va: { count: 640,  avgScore: 77, lvl: 3, topSegment: 'In the Money' },
-  oh: { count: 620,  avgScore: 76, lvl: 3, topSegment: 'In the Money' },
-  pa: { count: 540,  avgScore: 76, lvl: 3, topSegment: 'Retention' },
-  mi: { count: 540,  avgScore: 75, lvl: 3, topSegment: 'Home Equity' },
-  ma: { count: 480,  avgScore: 78, lvl: 3, topSegment: 'Retention' },
-  az: { count: 470,  avgScore: 77, lvl: 3, topSegment: 'Permit Activity' },
-  nj: { count: 410,  avgScore: 77, lvl: 3, topSegment: 'Retention' },
-  tn: { count: 395,  avgScore: 73, lvl: 2, topSegment: 'In the Money' },
-  mn: { count: 330,  avgScore: 71, lvl: 2, topSegment: 'In the Money' },
-  in: { count: 310,  avgScore: 73, lvl: 2, topSegment: 'Home Equity' },
-  sc: { count: 310,  avgScore: 73, lvl: 2, topSegment: 'In the Money' },
-  wi: { count: 295,  avgScore: 72, lvl: 2, topSegment: 'Home Equity' },
-  or: { count: 290,  avgScore: 74, lvl: 2, topSegment: 'Listed' },
-  mo: { count: 285,  avgScore: 72, lvl: 2, topSegment: 'In the Money' },
-  md: { count: 265,  avgScore: 74, lvl: 2, topSegment: 'Retention' },
-  al: { count: 260,  avgScore: 72, lvl: 2, topSegment: 'Home Equity' },
-  ok: { count: 240,  avgScore: 72, lvl: 2, topSegment: 'Home Equity' },
-  ky: { count: 235,  avgScore: 71, lvl: 2, topSegment: 'In the Money' },
-  la: { count: 230,  avgScore: 72, lvl: 2, topSegment: 'Home Equity' },
-  ia: { count: 215,  avgScore: 72, lvl: 2, topSegment: 'In the Money' },
-  ct: { count: 215,  avgScore: 74, lvl: 2, topSegment: 'Retention' },
-  ar: { count: 205,  avgScore: 70, lvl: 2, topSegment: 'Home Equity' },
-  nv: { count: 195,  avgScore: 72, lvl: 2, topSegment: 'Listed' },
-  ms: { count: 185,  avgScore: 70, lvl: 2, topSegment: 'Home Equity' },
-  ks: { count: 180,  avgScore: 71, lvl: 2, topSegment: 'Home Equity' },
-  ut: { count: 175,  avgScore: 70, lvl: 2, topSegment: 'Permit Activity' },
-  ne: { count: 150,  avgScore: 70, lvl: 1, topSegment: 'Home Equity' },
-  nm: { count: 145,  avgScore: 74, lvl: 1, topSegment: 'Home Equity' },
-  id: { count: 140,  avgScore: 69, lvl: 1, topSegment: 'Permit Activity' },
-  mt: { count: 120,  avgScore: 68, lvl: 1, topSegment: 'Home Equity' },
-  wv: { count: 115,  avgScore: 67, lvl: 1, topSegment: 'Home Equity' },
-  wy: { count: 110,  avgScore: 66, lvl: 1, topSegment: 'Home Equity' },
-  sd: { count: 92,   avgScore: 66, lvl: 1, topSegment: 'Home Equity' },
-  nh: { count: 90,   avgScore: 69, lvl: 1, topSegment: 'Retention' },
-  me: { count: 88,   avgScore: 68, lvl: 1, topSegment: 'Retention' },
-  ak: { count: 85,   avgScore: 70, lvl: 1, topSegment: 'Home Equity' },
-  hi: { count: 80,   avgScore: 72, lvl: 1, topSegment: 'Investor' },
-  nd: { count: 78,   avgScore: 65, lvl: 1, topSegment: 'Home Equity' },
-  de: { count: 65,   avgScore: 70, lvl: 1, topSegment: 'Home Equity' },
-  vt: { count: 58,   avgScore: 67, lvl: 1, topSegment: 'Retention' },
-  ri: { count: 48,   avgScore: 69, lvl: 1, topSegment: 'Retention' },
-  dc: { count: 42,   avgScore: 82, lvl: 2, topSegment: 'Retention' },
 };
 
 // Map segment code (from activeSegs / segmentFilter) → the topSegment strings
@@ -1469,13 +1436,21 @@ export function USChoroplethMap({
             <div className="map-tip__name">{hover.name}</div>
             <div className="map-tip__kpis">
               <div className="map-tip__kpi">
-                <div className="map-tip__kpi-label">Marketable</div>
+                {/* Label was "Marketable" — too ambiguous (marketable for
+                    what?). Now "Marketable borrowers" so a hover reader
+                    knows the count is borrowers in the addressable
+                    population for this state. 2026-05-04 user feedback. */}
+                <div className="map-tip__kpi-label">Marketable borrowers</div>
                 <div className="map-tip__kpi-value">
                   {hover.count !== null ? hover.count.toLocaleString() : '—'}
                 </div>
               </div>
               <div className="map-tip__kpi">
-                <div className="map-tip__kpi-label">Avg. score</div>
+                {/* Label was "Avg. score" — too ambiguous (score of what?).
+                    Now "Avg. opportunity score" so the metric ties to the
+                    same fn_lead_score primitive used everywhere else.
+                    2026-05-04 user feedback. */}
+                <div className="map-tip__kpi-label">Avg. opportunity score</div>
                 <div className="map-tip__kpi-value">
                   {hover.avgScore !== null ? hover.avgScore : '—'}
                 </div>

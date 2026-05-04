@@ -9,15 +9,19 @@ import { DRAWER_SOURCES } from '../../lib/drawerSources';
 
 /**
  * Map a free-form trusted-asset string (UC path or ruleset id) to the
- * best-fitting drawer entry. Falls through to NBO as a "something is
- * better than nothing" default so a chip click always opens a drawer.
+ * best-fitting drawer entry. Returns null when no specific match exists
+ * — the caller renders an inert chip so clicking a generic source like
+ * "UC.metrics" or "Databricks Genie API" does NOT open the wrong (NBO)
+ * drawer. 2026-05-04 user feedback: clicking what looked like a status
+ * chip was opening Next-Best-Offer logic, which was misleading.
  */
 function drawerForAsset(asset: string) {
   if (/itm|rules/i.test(asset)) return DRAWER_SOURCES.itm;
   if (/permit/i.test(asset)) return DRAWER_SOURCES.permit;
-  if (/lead_population|population/i.test(asset)) return DRAWER_SOURCES.population;
+  if (/lead_population|population|borrower_360/i.test(asset)) return DRAWER_SOURCES.population;
+  if (/next.?best|nbo/i.test(asset)) return DRAWER_SOURCES.nbo;
   if (/config/i.test(asset)) return DRAWER_SOURCES.config;
-  return DRAWER_SOURCES.nbo;
+  return null;
 }
 
 /**
@@ -44,14 +48,18 @@ const SAMPLE_QUESTIONS = [
 
 export function GenieChat() {
   const { genieOpen, setGenieOpen, lender } = useApp();
+  // Seed greeting carries no source chips — the prior placeholder
+  // ("UC.metrics") wasn't a real UC path and clicking it routed into
+  // the wrong drawer (NBO logic), which was misleading per 2026-05-04
+  // user feedback. The greeting is editorial copy only; real source
+  // chips appear once the user asks a question.
   const [msgs, setMsgs] = useState<ChatMsg[]>([
     {
       who: 'ai',
       payload: {
         answer: `Ask about ${lender}'s borrower segments, triggers, or evidence. Answers run against Unity Catalog metric views.`,
-        trusted_assets: ['UC.metrics'],
+        trusted_assets: [],
       },
-      sources: ['UC.metrics'],
     },
   ]);
   const [input, setInput] = useState('');
@@ -205,11 +213,27 @@ export function GenieChat() {
                   m.payload.source !== 'degraded' &&
                   m.sources && m.sources.length > 0 && (
                   <div className="sources">
-                    {m.sources.map((s, j) => (
-                      <EvidenceChip key={j} source={drawerForAsset(s)} title={`Source: ${s}`}>
-                        {s}
-                      </EvidenceChip>
-                    ))}
+                    {m.sources.map((s, j) => {
+                      const drawer = drawerForAsset(s);
+                      if (drawer === null) {
+                        // Source string doesn't map to a specific drawer
+                        // entry — render an inert neutral chip so the
+                        // user can read the source label without being
+                        // misled into the wrong drawer (the prior
+                        // "default to NBO" routing was confusing per
+                        // 2026-05-04 user feedback).
+                        return (
+                          <Chip key={j} variant="neutral" title={`Source: ${s}`}>
+                            {s}
+                          </Chip>
+                        );
+                      }
+                      return (
+                        <EvidenceChip key={j} source={drawer} title={`Source: ${s}`}>
+                          {s}
+                        </EvidenceChip>
+                      );
+                    })}
                   </div>
                 )}
               </div>
