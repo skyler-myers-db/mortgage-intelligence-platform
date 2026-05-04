@@ -81,7 +81,19 @@ class LeadRepository(Protocol):
         segment: str | None,
         portfolio_id: str | None,
         limit: int | None = None,
+        state: str | None = None,
+        zip_code: str | None = None,
     ) -> list[LeadSummary]:
+        """Return up to ``limit`` ranked leads.
+
+        ``state`` / ``zip_code`` (optional, 2026-05-04 FIX β): when
+        provided, the implementation queries ``mip.gold.borrower_360``
+        directly (no score floor) instead of ``mip.gold.lead_population``,
+        so the returned rows match the per-geo addressable counts the
+        map tooltips report. Without these, the call returns the
+        national top-N by score from ``lead_population`` (the
+        existing top-of-queue behaviour).
+        """
         ...
 
 

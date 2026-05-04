@@ -64,6 +64,30 @@ def list_leads(
     audit: StoreDep,
     segment: str | None = None,
     portfolio_id: str | None = None,
+    state: Annotated[
+        str | None,
+        Query(
+            min_length=2,
+            max_length=2,
+            description=(
+                "Optional 2-char USPS state code. When present, the repo "
+                "queries borrower_360 directly (no score floor) so the "
+                "returned rows match the per-state map count."
+            ),
+        ),
+    ] = None,
+    zip_code: Annotated[
+        str | None,
+        Query(
+            alias="zip",
+            min_length=5,
+            max_length=5,
+            description=(
+                "Optional 5-char ZIP. Same borrower_360 query path as state. "
+                "Use with state for the most narrow filter."
+            ),
+        ),
+    ] = None,
     limit: Annotated[
         int,
         Query(
@@ -77,11 +101,20 @@ def list_leads(
         ),
     ] = DEFAULT_LEAD_LIMIT,
 ) -> list[LeadSummary]:
-    # Hole-finder round 2 #24, 2026-04-23: plumb an optional `limit` down to
-    # the gold read so lenders with >500 in-the-money borrowers aren't
-    # silently capped at the first page. Bounded at MAX_LEAD_LIMIT to keep
-    # the warehouse scan pageable.
-    leads = repo.list(segment=segment, portfolio_id=portfolio_id, limit=limit)
+    # 2026-05-04 FIX β: plumb optional state/zip filters through to the
+    # repo. The repo's geo-filtered path bypasses lead_population (which
+    # has score >= 50 baked in) and queries borrower_360, so the returned
+    # rows match the addressable counts the map tooltips report. Without
+    # this, the previous behaviour returned the national top-N from
+    # lead_population and the FE filtered client-side, producing 0 rows
+    # for ZIPs whose borrowers didn't make the national top 500.
+    leads = repo.list(
+        segment=segment,
+        portfolio_id=portfolio_id,
+        limit=limit,
+        state=state,
+        zip_code=zip_code,
+    )
     # When the result set hit the requested cap, advertise the truncation
     # explicitly so the frontend can tell "exactly N" vs "N and there's
     # more you didn't see". We can't distinguish at this layer between

@@ -756,14 +756,78 @@ class DatabricksLeadRepository:
         "LIMIT {limit}"
     )
 
+    # 2026-05-04 FIX β: when the caller filters by state and/or zip we
+    # bypass lead_population (which has the score >= 50 quality floor
+    # baked into its CTAS) and read borrower_360 directly. Rationale:
+    # the home-page map ZIP/county/state tooltips report the FULL
+    # addressable population per geo (no score filter), and the user
+    # expectation is that drilling INTO a geo from the map shows
+    # everyone the map counted. Pre-fix: ZIP 33073 showed 19 marketable
+    # on the map, then 0 in the Lead Queue because the API returned
+    # the top-500 nationally-ranked from lead_population and none of
+    # those 500 lived in 33073. Post-fix: the same /api/leads call,
+    # narrowed to (state='FL', zip='33073'), runs against borrower_360
+    # and returns the 19 borrowers the map promised. ORDER BY score
+    # still surfaces the highest-opportunity ones first; LIMIT applies
+    # AFTER the geo filter so the cap doesn't pre-truncate.
+    _LIST_BY_GEO_SQL_TEMPLATE = (
+        # Project the lead_population columns directly off borrower_360.
+        # Every column in _LEAD_POPULATION_COLUMNS exists in borrower_360
+        # except `display_name` (synthesized in the lead_population CTAS).
+        # We re-synthesize it here with the same formula so LeadSummary
+        # rows stay shape-compatible whether they came from
+        # lead_population or borrower_360.
+        "SELECT "
+        "  clip, borrower_id, "
+        "  CONCAT('Owner ', SUBSTR(owner_name_hash, 1, 8)) AS display_name, "
+        "  city, state, zip, segment_codes, "
+        "  equity_estimate, rate_spread_bps, opportunity_score, confidence, "
+        "  recommended_offer, why_now, evidence_ids, approval_status, "
+        "  is_owner_occupied, is_investor, related_property_count, "
+        "  current_lien_balance, second_pos_amount, has_permit, listed_for_sale "
+        f"FROM {qualify('gold', 'borrower_360')} "
+        "WHERE 1=1 {state_clause} {zip_clause} {segment_clause} "
+        "ORDER BY opportunity_score DESC, borrower_id ASC "
+        "LIMIT {limit}"
+    )
+
     def list(
         self,
         segment: str | None,
         portfolio_id: str | None,
         limit: int | None = None,
+        state: str | None = None,
+        zip_code: str | None = None,
     ) -> list[LeadSummary]:
         _ = portfolio_id
         bounded = self._bound_limit(limit)
+
+        # FIX β: geo-filtered path bypasses lead_population so the queue
+        # row count matches the map tooltip. See the
+        # _LIST_BY_GEO_SQL_TEMPLATE docstring above for the full rationale.
+        if state or zip_code:
+            params: dict[str, object] = {}
+            state_clause = ""
+            if state:
+                state_clause = "AND state = :state"
+                params["state"] = state.upper()[:2]
+            zip_clause = ""
+            if zip_code:
+                zip_clause = "AND zip = :zip"
+                params["zip"] = zip_code
+            segment_clause = ""
+            if segment:
+                segment_clause = "AND array_contains(segment_codes, :segment)"
+                params["segment"] = segment
+            sql = self._LIST_BY_GEO_SQL_TEMPLATE.format(
+                state_clause=state_clause,
+                zip_clause=zip_clause,
+                segment_clause=segment_clause,
+                limit=bounded,
+            )
+            rows = self._client.execute(sql, params)
+            return [LeadSummary(**redact_lead_row(r)) for r in rows]
+
         if segment:
             sql = self._LIST_BY_SEGMENT_SQL_TEMPLATE.format(limit=bounded)
             rows = self._client.execute(sql, {"segment": segment})

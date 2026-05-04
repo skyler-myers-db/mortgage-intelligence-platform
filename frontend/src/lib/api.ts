@@ -421,11 +421,26 @@ export const api = {
       signal,
     ),
 
-  leads: (segment?: string, signal?: AbortSignal) =>
-    getJson<LeadSummary[]>(
-      segment ? `/api/leads?segment=${encodeURIComponent(segment)}` : '/api/leads',
+  leads: (
+    segment?: string,
+    signal?: AbortSignal,
+    geo?: { state?: string; zip?: string },
+  ) => {
+    // 2026-05-04 FIX β: forward state + zip to the API so the backend
+    // queries borrower_360 directly (no score floor) when a geo
+    // narrowing is requested. Without this, narrow ZIP/state filters
+    // returned 0 rows because the unfiltered top-500 from
+    // lead_population didn't include the geo's borrowers.
+    const params = new URLSearchParams();
+    if (segment) params.set('segment', segment);
+    if (geo?.state) params.set('state', geo.state);
+    if (geo?.zip) params.set('zip', geo.zip);
+    const qs = params.toString();
+    return getJson<LeadSummary[]>(
+      qs ? `/api/leads?${qs}` : '/api/leads',
       signal,
-    ),
+    );
+  },
 
   borrower: (id: string, signal?: AbortSignal) =>
     getJson<Borrower360>(`/api/borrowers/${id}`, signal),

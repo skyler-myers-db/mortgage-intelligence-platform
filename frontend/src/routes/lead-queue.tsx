@@ -30,16 +30,22 @@ export default function LeadQueue() {
   const zipFilter = (searchParams.get('zip') ?? '').trim() || undefined;
   const countyFilter = (searchParams.get('county') ?? '').trim() || undefined;
 
-  // Cold-start warming-up loop — 6 retries / 5s apart. Re-runs when
-  // `segment` changes (deep-link from /segment-intelligence).
+  // 2026-05-04 FIX β: pass state + zip to the API so the geo-filtered
+  // path on the backend bypasses lead_population's score >= 50 floor
+  // and queries borrower_360 directly. The returned rows then match
+  // the per-geo addressable counts the map tooltips report. Pre-fix,
+  // the FE only filtered client-side against the top-500 from
+  // lead_population, so ZIPs whose borrowers didn't make the national
+  // top 500 rendered as 0 rows (the "ZIP shows 19 but queue shows 0"
+  // bug). Re-runs when state, zip, or segment changes.
   const {
     data: leadsData,
     warmingUp,
     error,
     manualRetry,
   } = useWarmingUpRetry<LeadSummary[]>(
-    (signal) => api.leads(segment, signal),
-    [segment],
+    (signal) => api.leads(segment, signal, { state: stateFilter, zip: zipFilter }),
+    [segment, stateFilter, zipFilter],
   );
   const loading = leadsData === null && warmingUp === null && error === null;
   const loadError = error
@@ -77,9 +83,12 @@ export default function LeadQueue() {
   }, [countyFilter]);
 
   const visibleLeads = useMemo(() => {
+    // 2026-05-04 FIX β: state and zip filters are now applied
+    // server-side (see the api.leads call above). Only the county
+    // filter still runs client-side, because LeadSummary doesn't
+    // carry county_fips and the ZIPs-in-county set has to be resolved
+    // separately via /api/geo/zip-rollups.
     let leads = leadsData ?? [];
-    if (stateFilter) leads = leads.filter((l) => l.state === stateFilter);
-    if (zipFilter) leads = leads.filter((l) => l.zip === zipFilter);
     if (countyFilter && countyZips) {
       // Empty set = the county returned no ZIPs; render zero rows rather
       // than silently showing all state rows. Matches user expectation
@@ -87,7 +96,7 @@ export default function LeadQueue() {
       leads = leads.filter((l) => countyZips.has(l.zip));
     }
     return leads;
-  }, [leadsData, stateFilter, zipFilter, countyFilter, countyZips]);
+  }, [leadsData, countyFilter, countyZips]);
 
   const countyLoading = Boolean(countyFilter) && countyZips === null;
 
