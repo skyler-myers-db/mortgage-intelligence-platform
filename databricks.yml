@@ -29,9 +29,21 @@ workspace:
 # the FastAPI SPA fallback serves the React bundle. The operator runs
 # `npm --prefix frontend run build` before `bundle deploy` — a one-line
 # wrapper in Makefile's `bundle-deploy-dev` guards this.
+#
+# 2026-05-04: also include `sql/_rendered/**`. The render_sql tool writes
+# UC-catalog-substituted SQL into `sql/_rendered/` (gitignored — never
+# committed), and every job task in this file references those rendered
+# paths (`sql/_rendered/ddl/001_catalogs_schemas.sql`,
+# `sql/_rendered/transformations/gold_segment_population.sql`, etc.).
+# Without this include, `databricks bundle deploy` honors the gitignore
+# and the workspace ends up missing every rendered SQL file, causing the
+# next `bundle run` to fail with "File ... not found." The deploy.sh
+# orchestrator runs render_sql in step 2 specifically so step 5
+# (bundle deploy) has the freshly-rendered files on disk to upload.
 sync:
   include:
     - frontend/dist/**
+    - sql/_rendered/**
 
 targets:
   dev:
