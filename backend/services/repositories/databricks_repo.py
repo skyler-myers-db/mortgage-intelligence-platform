@@ -62,6 +62,9 @@ from backend.services.genie_answers import (
     GenieMessageResponse,
 )
 from backend.services.genie_answers import (
+    match_intent as genie_match_intent,
+)
+from backend.services.genie_answers import (
     respond as genie_catalog_respond,
 )
 from backend.services.genie_client import (
@@ -69,6 +72,7 @@ from backend.services.genie_client import (
     GenieResponse,
     ResilientGenieClient,
 )
+from backend.services.genie_compute_fallback import try_compute as genie_try_compute
 from backend.services.pii_redaction import (
     redact_borrower_row,
     redact_evidence_row,
@@ -1230,34 +1234,39 @@ def _coerce_bool(value: Any) -> bool:
 
 
 class DatabricksGenieRepository:
-    """Real Genie + honest degraded message gated on the ``genie`` breaker.
+    """Real Genie, computed-from-UC fallback, then honest degraded.
 
-    The control flow is deliberately narrow and defensive:
+    Control flow:
 
-    1. If the ``genie`` circuit breaker is OPEN, return the honest
-       "warming up" message. We do NOT serve curated catalog answers
-       any more — they contained hardcoded specific numbers (counts,
-       dollar amounts, sample borrower IDs) that read as real Cotality
-       data even though the source chip said "fallback". CLAUDE.md
-       prohibits any mock fallback in the running app, so the only
-       acceptable degraded response is an honest "Genie is warming up"
-       message that contains zero fabricated content.
-       (2026-05-04: user feedback flagged the prior `source="fallback"`
-       answers as misleading.)
+    1. If the ``genie`` circuit breaker is OPEN, try a computed
+       fallback (deterministic SQL against ``mip.gold.*``) for the
+       canonical intents we know how to answer locally
+       (``backend.services.genie_compute_fallback``). When the SQL
+       succeeds we return the REAL aggregated answer with
+       ``source="computed_fallback"`` so the user can tell at a glance
+       that the answer is from a deterministic local query, not from
+       Genie. When the question doesn't match a known intent OR the
+       compute fails (warehouse also down, schema drift, etc.) we
+       return the honest "warming up" message with ``source="degraded"``.
     2. Otherwise call ``ResilientGenieClient.ask(question)``. On
        success, adapt ``GenieResponse`` into the ``GenieMessageResponse``
        wire contract (``source="genie"``).
     3. If the call fails with ``DependencyDownError`` (breaker just
-       opened on us), return the warming-up message — same path as (1).
+       opened on us), follow path (1).
     4. On any other exception, re-raise so the router's 503 translation
        engages — we never swallow to a mock answer.
 
-    The ``genie_answers`` catalog file is NOT removed: it still serves
-    follow-up-question lists (which are static UI suggestions, not
-    fabricated data) and remains available for tests + future use if we
-    ever land a fallback that computes from real UC tables on demand.
-    But its hardcoded answer bodies + table_rows never reach the user
-    at runtime through this path.
+    No path ever fabricates data. The hardcoded catalog literals in
+    ``genie_answers.py`` are NEVER returned at runtime — only the
+    ``follow_up_questions`` (static prompt suggestions) are pulled
+    through, and only as adornment on a degraded response. Numbers
+    always come from a live SQL query (computed fallback) or a live
+    Genie call.
+
+    2026-05-04 follow-up to user feedback: they were alarmed to see
+    fabricated numbers tagged "fallback" while Genie was down. The
+    correct answer is "every number you see is real, computed from
+    your own UC data."
     """
 
     _WARMING_MESSAGE = (
@@ -1266,8 +1275,17 @@ class DatabricksGenieRepository:
         "Genie space; no curated answers are served while it reconnects."
     )
 
-    def __init__(self, genie: ResilientGenieClient) -> None:
+    def __init__(
+        self,
+        genie: ResilientGenieClient,
+        sql_client: DatabricksSqlClient | None = None,
+    ) -> None:
         self._genie = genie
+        # Optional SQL client used by the computed-fallback path. When
+        # absent (older callers, tests) we fall straight through to the
+        # plain warming-up message — same behaviour as if the warehouse
+        # were also unreachable.
+        self._sql = sql_client
 
     def respond(self, question: str) -> GenieMessageResponse:
         breaker_state = self._genie.resilient.breaker.state
@@ -1276,7 +1294,8 @@ class DatabricksGenieRepository:
         try:
             result = self._genie.ask(question)
         except DependencyDownError:
-            # Breaker opened during this call -> honest degraded message.
+            # Breaker opened during this call -> try computed fallback,
+            # then honest degraded message.
             return self._degraded(question)
         except GenieClientError:
             # Underlying Genie surfaced an unrecoverable response (401,
@@ -1290,16 +1309,33 @@ class DatabricksGenieRepository:
     # ------------------------------------------------------------------
 
     def _degraded(self, question: str) -> GenieMessageResponse:
-        """Return an honest "Genie is warming up" message.
+        """Try a computed-from-UC fallback, then fall back to the
+        honest "Genie is warming up" message.
 
-        We pull the catalog match purely so we can carry over its
-        ``follow_up_questions`` (static UI suggestions like "Which zips
-        have the most in-the-money refi candidates?" — these are
-        editorial prompt help, not fabricated data). The catalog's
-        answer body and table_rows are intentionally discarded so no
-        hardcoded numbers reach the wire when Genie is unreachable.
+        The computed-fallback path runs a small deterministic SQL
+        query against ``mip.gold.*`` for canonical intents we have a
+        formula for (in-the-money count, top ITM zips, HELOC by state,
+        etc.). When that succeeds the user sees a real number labelled
+        ``source="computed_fallback"`` so they can tell at a glance
+        the answer is local SQL, not Genie. When no compute is
+        registered for the intent OR the compute itself fails (UC down,
+        schema drift), we serve the plain warming-up message with
+        ``source="degraded"``.
+
+        The ``follow_up_questions`` from the catalog are pulled through
+        in both paths because they're static UI prompt suggestions
+        (editorial copy), not fabricated data.
         """
         catalog_answer = genie_catalog_respond(question)
+        intent = genie_match_intent(question)
+        computed = genie_try_compute(intent, self._sql)
+        if computed is not None:
+            return computed.model_copy(
+                update={
+                    "question": question,
+                    "follow_up_questions": catalog_answer.follow_up_questions,
+                }
+            )
         return GenieMessageResponse(
             conversation_id=catalog_answer.conversation_id,
             question=question,
