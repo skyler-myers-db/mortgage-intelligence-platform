@@ -12,6 +12,7 @@ import { api, isAbortError, isWarmingUpError, dependencyLabel } from '../lib/api
 import type { WarmingUpState } from '../lib/useWarmingUpRetry';
 import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 import { useApp } from '../components/AppContext';
+import { useOptionalHealth } from '../components/HealthProvider';
 import { EntradaWordmark } from '../components/brand/Entrada';
 import { formatRefreshed } from '../lib/formatRefreshed';
 import type { PortfolioPreview } from '../types';
@@ -37,6 +38,18 @@ export default function Home() {
   // so the surface never presents a plausible-but-fake value. The KpiCard
   // component interprets a null `valueAnimated` as "render em-dash".
   const { lender } = useApp();
+  const healthCtx = useOptionalHealth();
+  // True when the shared health poll has confirmed warehouse / lakebase is
+  // down. While that's the case we keep the warming-up tile visible
+  // instead of falling into a contradictory red error: the system-wide
+  // DegradedBanner already explains the situation, and the per-tile
+  // retry budget (30s) is shorter than a typical serverless-warehouse
+  // cold start (30-60s). User feedback 2026-04-25: showing both a
+  // "reconnecting" banner AND a "couldn't load" red tile makes the app
+  // look broken when it is correctly warming up.
+  const warehouseDown =
+    healthCtx?.health?.dependencies?.warehouse === 'down' ||
+    healthCtx?.health?.dependencies?.lakebase === 'down';
   const [preview, setPreview] = useState<PortfolioPreview | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   // Cold-start retry state for the portfolio-preview tile. Non-null =
@@ -49,6 +62,16 @@ export default function Home() {
   // portfolio-preview fetch without a full route reload. Hole-finder
   // finding #1, 2026-04-23.
   const [reloadToken, setReloadToken] = useState<number>(0);
+  // When the shared health poll flips warehouse from down → up after
+  // we've fallen out of the per-tile retry loop, auto-trigger a fresh
+  // fetch. Without this, the tile stays in the "warming up" copy
+  // forever even though the warehouse is now ready. User feedback
+  // 2026-04-25: the page should self-recover, not require a click.
+  useEffect(() => {
+    if (!warehouseDown && previewError) {
+      setReloadToken((n) => n + 1);
+    }
+  }, [warehouseDown, previewError]);
   useEffect(() => {
     // AbortController replaces the legacy `cancelled` guard so an unmount
     // or filter change actually cancels the in-flight fetch (not just the
@@ -150,7 +173,33 @@ export default function Home() {
           compact
         />
       )}
-      {previewError && !previewWarming && (
+      {/* When the health poll confirms the warehouse / lakebase is down,
+          we keep the warming-up copy visible instead of dropping into
+          the red error. The system-wide DegradedBanner already says
+          "reconnecting"; a contradictory red tile underneath made the
+          app look broken when it was correctly cold-starting. The
+          tile auto-recovers when health flips back to up (effect
+          below increments reloadToken). */}
+      {previewError && !previewWarming && warehouseDown && (
+        <div
+          role="status"
+          aria-live="polite"
+          style={{
+            marginBottom: 'var(--gap-grid)',
+            padding: '10px 12px',
+            border: '1px solid var(--line-2)',
+            borderRadius: 'var(--r-md)',
+            background: 'var(--bg-1)',
+            color: 'var(--text-2)',
+            fontSize: 12,
+          }}
+        >
+          Portfolio KPIs are waiting on the analytics warehouse. The page
+          will fetch them automatically once the warehouse finishes
+          warming up — typically 30–60 seconds after first request.
+        </div>
+      )}
+      {previewError && !previewWarming && !warehouseDown && (
         <div
           role="alert"
           style={{
@@ -318,7 +367,7 @@ export default function Home() {
 
       <Reveal>
         <div className="brand-signature" aria-hidden="true">
-          <EntradaWordmark fontSize={36} />
+          <EntradaWordmark height={44} />
         </div>
       </Reveal>
     </PageShell>

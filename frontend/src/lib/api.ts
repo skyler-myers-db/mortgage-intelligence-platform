@@ -150,6 +150,18 @@ export function isWarmingUpError(err: unknown): err is ApiError {
   if (err.aborted) return false;
   if (err.status !== 503) return false;
   if (!err.retryable) return false;
+  // 2026-04-25 incident: an expired SDK-minted OAuth token caused the
+  // warehouse path to fail with HTTP 403 forever; the resilience layer
+  // wraps that as DependencyDownError(kind="retries_exhausted") and
+  // the breaker eventually opens (kind="breaker_open"). Both reasons
+  // arrive on the wire as 503+retryable=true, so the prior "any 503
+  // counts as warming-up" rule retried forever and never surfaced the
+  // real problem to the user. Only the explicit "warming_up" classifi-
+  // cation should drive the warming-up UX. Unknown/null reason still
+  // counts as warming-up so older backends keep working.
+  if (err.reason === 'breaker_open' || err.reason === 'retries_exhausted') {
+    return false;
+  }
   return true;
 }
 

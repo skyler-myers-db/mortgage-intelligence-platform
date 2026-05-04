@@ -12,6 +12,7 @@ never open a warehouse connection.
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from functools import lru_cache
 
 from pydantic import Field, SecretStr
@@ -185,22 +186,26 @@ class Settings(BaseSettings):
     # warehouse-query minimisation.
     mip_portfolio_preview_ttl_s: float = 120.0
 
-    def require_databricks_creds(self) -> tuple[str, SecretStr, str]:
-        """Return ``(host, token, warehouse_id)`` or raise at startup.
+    def require_databricks_creds(self) -> tuple[str, Callable[[], str], str]:
+        """Return ``(host, token_provider, warehouse_id)`` or raise at startup.
 
-        Two supported auth pathways:
+        ``token_provider`` is a zero-arg callable that returns a fresh
+        bearer string each call. Two supported pathways:
 
         1. **Local / CI with a PAT** -- set ``DATABRICKS_TOKEN`` directly.
-           Fastest path; used for developer laptops and the nightly
-           GitHub Actions workflow which has a PAT in repo secrets.
+           ``token_provider`` returns the literal PAT every time.
 
         2. **Databricks Apps (workspace identity)** -- on Databricks
            Apps the runtime injects ``DATABRICKS_HOST`` and the service-
            principal OAuth credentials (``DATABRICKS_CLIENT_ID`` /
            ``DATABRICKS_CLIENT_SECRET``) but NOT a PAT. When the PAT is
-           absent we use the Databricks SDK's auth resolver to mint a
-           bearer token from the workspace identity; the rest of our
-           stdlib urllib SQL client reads it as an ordinary string.
+           absent we hand back the SDK's authenticate-callback as the
+           provider. The SDK caches and refreshes the bearer
+           internally, so each call returns a non-expired token. This
+           replaces the prior contract that minted ONCE at startup and
+           cached the result -- which expired after ~1h and produced
+           HTTP 403 ``Invalid Token`` on every warehouse call until
+           someone restarted the app. 2026-04-25 incident.
 
         Never call this from a path that imports ``settings`` at module-
         import time unless you want the process to refuse to boot on a
@@ -208,27 +213,37 @@ class Settings(BaseSettings):
         SQL client and its factory, but not for simple utility imports.
         """
         host = self.databricks_host
-        token = self.databricks_token
         warehouse = self.databricks_warehouse_id
         if not host or not warehouse:
             raise RuntimeError(_MISSING_CREDS_MSG)
-        if token is None:
-            token = _mint_workspace_identity_token(host)
-            if token is None:
-                raise RuntimeError(_MISSING_CREDS_MSG)
         # Normalise host shape: strip trailing slash, ensure scheme.
         if not host.startswith("http"):
             host = "https://" + host
         host = host.rstrip("/")
-        return host, token, warehouse
+
+        if self.databricks_token is not None:
+            literal = self.databricks_token.get_secret_value()
+            return host, (lambda: literal), warehouse
+
+        sdk_provider = _build_workspace_identity_provider(host)
+        if sdk_provider is None:
+            raise RuntimeError(_MISSING_CREDS_MSG)
+        return host, sdk_provider, warehouse
 
 
-def _mint_workspace_identity_token(host: str) -> SecretStr | None:
-    """Use the Databricks SDK to mint a bearer token from workspace identity.
+def _build_workspace_identity_provider(host: str) -> Callable[[], str] | None:
+    """Build a per-request token provider from workspace identity.
 
-    Returns None when the SDK can't authenticate (no service-principal
-    credentials in env, not running on Databricks Apps, etc.) so the
-    caller falls through to the PAT-missing RuntimeError.
+    Returns a zero-arg callable that, on each call, asks the Databricks
+    SDK for an Authorization header and extracts the Bearer value. The
+    SDK's ``Config.authenticate`` caches and refreshes the underlying
+    OAuth token internally, so the callable form gives our SQL/HTTP
+    clients a non-expiring source of truth without us having to
+    re-implement OAuth refresh.
+
+    Returns None when the SDK can't authenticate at construction time
+    (no service-principal credentials in env, not running on Databricks
+    Apps, etc.) so the caller falls through to the missing-creds error.
 
     The SDK picks up credentials from standard env vars that Databricks
     Apps populates automatically: ``DATABRICKS_CLIENT_ID``,
@@ -236,31 +251,50 @@ def _mint_workspace_identity_token(host: str) -> SecretStr | None:
     exchange. Locally, if you've run ``databricks auth login`` the SDK
     reads ``~/.databrickscfg`` too.
 
-    Emits a diagnostic line to stderr on every failure path so operator
-    triage in container logs sees exactly which auth step failed.
+    Emits a diagnostic line to stderr on the construction failure path
+    so operator triage in container logs sees exactly which auth step
+    failed. We also probe the credentials once here so a misconfigured
+    environment fails at startup rather than on the first request.
     """
     import sys  # local; only needed on the auth-debug path
     try:
         from databricks.sdk.core import Config as _Config  # pragma: no cover
 
         cfg = _Config(host=host)
-        headers_cb = cfg.authenticate
-        headers: dict[str, str] = headers_cb()
-        auth_header = headers.get("Authorization", "") if isinstance(headers, dict) else ""
-        if not auth_header.startswith("Bearer "):
+        # Probe once so we surface bad creds at startup, not at first
+        # request. The SDK caches the result; the next call from
+        # ``provider()`` will be a no-op cache hit until expiry.
+        probe_headers: dict[str, str] = cfg.authenticate()
+        probe_auth = probe_headers.get("Authorization", "") if isinstance(probe_headers, dict) else ""
+        if not probe_auth.startswith("Bearer "):
             print(
                 f"[mip-runtime] workspace-identity auth returned no Bearer header; "
-                f"keys={list(headers.keys()) if isinstance(headers, dict) else 'non-dict'}",
+                f"keys={list(probe_headers.keys()) if isinstance(probe_headers, dict) else 'non-dict'}",
                 file=sys.stderr,
             )
             return None
-        token_val = auth_header.removeprefix("Bearer ").strip()
         print(
             "[mip-runtime] workspace-identity auth ok "
-            f"(token_len={len(token_val)}, auth_type={getattr(cfg, 'auth_type', 'unknown')})",
+            f"(auth_type={getattr(cfg, 'auth_type', 'unknown')}); "
+            "tokens will be refreshed per-request via SDK Config.authenticate",
             file=sys.stderr,
         )
-        return SecretStr(token_val)
+
+        def provider() -> str:
+            # Re-read the Authorization header on every call. The SDK
+            # caches the underlying OAuth token internally and refreshes
+            # before expiry, so this is a fast in-memory lookup in the
+            # common case and a fresh OAuth exchange when the cached
+            # token is near expiry.
+            headers = cfg.authenticate()
+            auth = headers.get("Authorization", "") if isinstance(headers, dict) else ""
+            if not auth.startswith("Bearer "):
+                raise RuntimeError(
+                    "Databricks SDK auth returned no Bearer header on refresh"
+                )
+            return auth.removeprefix("Bearer ").strip()
+
+        return provider
     except Exception as exc:  # noqa: BLE001 -- surface reason to operator
         print(
             f"[mip-runtime] workspace-identity auth FAILED: "

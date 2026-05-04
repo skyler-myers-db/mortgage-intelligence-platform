@@ -133,7 +133,14 @@ export function AgentActivityLog({ limit = 12 }: { limit?: number }) {
             events here.
           </div>
         )}
-        {feedState === 'error' && (
+        {feedState === 'error' && (warehouse === 'down' || genie === 'down') && (
+          <div className="body" style={{ padding: 'var(--sp-3)', color: 'var(--text-2)' }}>
+            Audit feed is waiting on a dependency to come back online — the
+            live state is shown below. The feed will populate automatically
+            once the dependency reconnects.
+          </div>
+        )}
+        {feedState === 'error' && warehouse !== 'down' && genie !== 'down' && (
           <div className="body" style={{ padding: 'var(--sp-3)', color: 'var(--signal-danger)' }}>
             Audit feed is briefly unavailable. This page will retry on the
             next refresh; live dependency state is shown below.

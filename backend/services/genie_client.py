@@ -37,6 +37,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from threading import Lock
 from typing import Any, Literal
@@ -134,14 +135,22 @@ class GenieClient:
     def __init__(
         self,
         host: str,
-        token: str,
+        token: str | Callable[[], str],
         space_id: str,
         timeout_s: int = 45,
     ) -> None:
         if not host.startswith("http"):
             host = "https://" + host
         self._host = host.rstrip("/")
-        self._token = token
+        # See DatabricksSqlClient: store a token PROVIDER, not a string.
+        # Caching the literal at construction caused the warehouse path
+        # to 403 forever once the SDK-minted OAuth token expired (~1h).
+        # The same pattern protects the Genie client.
+        if callable(token):
+            self._token_provider: Callable[[], str] = token
+        else:
+            literal = token
+            self._token_provider = lambda: literal
         self._space_id = space_id
         self._timeout_s = timeout_s
 
@@ -392,22 +401,24 @@ class GenieClient:
 
     def _post(self, url: str, body: dict[str, Any]) -> dict[str, Any]:
         payload = json.dumps(body).encode("utf-8")
+        bearer = self._token_provider()
         req = urllib.request.Request(
             url,
             data=payload,
             method="POST",
             headers={
-                "Authorization": f"Bearer {self._token}",
+                "Authorization": f"Bearer {bearer}",
                 "Content-Type": "application/json",
             },
         )
         return self._send(req)
 
     def _get(self, url: str, *, timeout_s: float | None = None) -> dict[str, Any]:
+        bearer = self._token_provider()
         req = urllib.request.Request(
             url,
             method="GET",
-            headers={"Authorization": f"Bearer {self._token}"},
+            headers={"Authorization": f"Bearer {bearer}"},
         )
         return self._send(req, timeout_s=timeout_s)
 
@@ -567,11 +578,11 @@ def get_genie_client() -> ResilientGenieClient:
     with _CLIENT_LOCK:
         if _CLIENT is not None:
             return _CLIENT
-        host, token, _warehouse_id = settings.require_databricks_creds()
+        host, token_provider, _warehouse_id = settings.require_databricks_creds()
         space_id = _resolve_space_id()
         bare = GenieClient(
             host=host,
-            token=token.get_secret_value(),
+            token=token_provider,
             space_id=space_id,
             timeout_s=settings.databricks_timeout_s + 15,
         )
