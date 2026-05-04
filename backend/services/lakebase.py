@@ -35,7 +35,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from threading import Lock
 from typing import Any
@@ -117,8 +117,9 @@ class LakebaseClient:
         port: int,
         database: str,
         user: str,
-        password: str,
+        password: str | None = None,
         sslmode: str = "require",
+        password_provider: Callable[[], str] | None = None,
     ) -> None:
         if not host:
             raise LakebaseError("Lakebase host is empty")
@@ -126,28 +127,38 @@ class LakebaseClient:
             raise LakebaseError("Lakebase database is empty")
         if not user:
             raise LakebaseError("Lakebase user is empty")
-        # password can be empty for workspace-identity auth paths; the
-        # real validation is done by Postgres on CONNECT.
+        # 2026-05-04 fix: prior client cached the password ONCE at
+        # startup. Lakebase's workspace-identity OAuth tokens are
+        # short-lived (~1h) — once expired, every reconnect failed
+        # with `password authentication failed for user '<sp-uuid>'`,
+        # the breaker tripped open, half-opened, failed again, and the
+        # FE banner showed "Reconnecting to operational database" 99 %
+        # of the time. The fix mirrors the warehouse OAuth-refresh
+        # pattern in commit cdacafd: a `password_provider` callable
+        # that mints a fresh credential per connection. Static-string
+        # passwords (laptop / CI with `.env.local` LAKEBASE_PASSWORD)
+        # still work — pass `password=...` and we wrap it in a const
+        # provider.
         self._host = host
         self._port = port
         self._database = database
         self._user = user
-        self._password = password
         self._sslmode = sslmode
+        if password_provider is not None:
+            self._password_provider = password_provider
+        else:
+            constant = password or ""
+            self._password_provider = lambda: constant
 
     def _dsn(self) -> str:
         """Build a libpq keyword-style DSN.
 
-        We construct the DSN string rather than using a conninfo dict
-        so psycopg can log / reuse the exact form the user configured
-        in ``.env.local``. The password is passed positionally; no
-        value ever reaches stdout unless the user enables SQL debug.
+        Calls ``self._password_provider()`` on each invocation so a
+        rotating workspace-identity OAuth token is always fresh.
+        Static-string passwords just return the same value every call
+        (zero overhead for the laptop / CI path).
         """
-        # Password may be None / empty in workspace-identity flows;
-        # psycopg accepts an empty password and delegates to libpq.
-        pwd = self._password or ""
-        # Escape single quotes in the password so it can't break out
-        # of the value -- libpq also requires this.
+        pwd = self._password_provider() or ""
         pwd_escaped = pwd.replace("\\", "\\\\").replace("'", "\\'")
         return (
             f"host={self._host} "
@@ -259,8 +270,57 @@ _CLIENT: LakebaseClient | None = None
 _LOCK = Lock()
 
 
-def _resolve_lakebase_connection_params() -> tuple[str, int, str, str, str, str]:
-    """Return ``(host, port, database, user, password, sslmode)``.
+def _mint_lakebase_token(instance_name: str) -> str:
+    """Mint a fresh Lakebase OAuth token via the workspace SDK.
+
+    Called per-connection (not once at startup) so the bearer is
+    always within its short-lived expiry window. Wraps every failure
+    in a LakebaseError with enough context to surface in the audit-
+    feed banner without leaking the raw SDK message. 2026-05-04 fix
+    for the persistent "Reconnecting to operational database" banner
+    that traced to a stale cached token.
+    """
+    try:  # pragma: no cover -- exercised on deployed Databricks Apps only
+        import os as _os
+
+        from databricks.sdk import WorkspaceClient
+
+        workspace = WorkspaceClient()
+        cred = workspace.api_client.do(
+            "POST",
+            "/api/2.0/database/credentials",
+            body={
+                "request_id": (
+                    f"mip-backend-"
+                    f"{_os.environ.get('DATABRICKS_JOB_RUN_ID','app')}"
+                ),
+                "instance_names": [instance_name],
+            },
+        )
+        token = cred.get("token") or ""
+        if not token:
+            raise LakebaseError(
+                "Lakebase token mint returned empty token; check the database "
+                "resource binding on the app and CAN_CONNECT_AND_CREATE on the "
+                "instance."
+            )
+        return token
+    except LakebaseError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise LakebaseError(f"Lakebase token mint failed: {exc}") from exc
+
+
+def _resolve_lakebase_connection_params() -> tuple[
+    str, int, str, str, str, str, Callable[[], str] | None,
+]:
+    """Return ``(host, port, database, user, password, sslmode, password_provider)``.
+
+    The 7th element is an optional per-call provider used by
+    ``LakebaseClient`` to mint a fresh OAuth token on every connection
+    when the static password is empty (the deployed-Apps path). Local /
+    CI paths return ``provider=None`` and the constant-password
+    behaviour applies.
 
     Three supported pathways:
 
@@ -294,10 +354,12 @@ def _resolve_lakebase_connection_params() -> tuple[str, int, str, str, str, str]
     sslmode = settings.lakebase_sslmode or "require"
 
     if host and user and password:
-        return host, port, database, user, password, sslmode
+        # Static-credential path (laptop / CI). No provider needed.
+        return host, port, database, user, password, sslmode, None
 
     instance_name = _os.environ.get("LAKEBASE_INSTANCE_NAME", "mip-app-state")
 
+    # Resolve host + user via the SDK (one-time; these don't rotate).
     try:  # pragma: no cover -- exercised on deployed Databricks Apps only
         from databricks.sdk import WorkspaceClient
 
@@ -310,23 +372,18 @@ def _resolve_lakebase_connection_params() -> tuple[str, int, str, str, str, str]
         if not user:
             me = workspace.current_user.me()
             user = me.user_name or me.display_name or ""
-        if not password:
-            cred = workspace.api_client.do(
-                "POST",
-                "/api/2.0/database/credentials",
-                body={
-                    "request_id": (
-                        f"mip-backend-"
-                        f"{_os.environ.get('DATABRICKS_JOB_RUN_ID','app')}"
-                    ),
-                    "instance_names": [instance_name],
-                },
-            )
-            password = cred.get("token") or ""
     except Exception as exc:  # noqa: BLE001 -- surface reason on first call
-        raise LakebaseError(f"Lakebase credential resolution failed: {exc}") from exc
+        raise LakebaseError(f"Lakebase host/user resolution failed: {exc}") from exc
 
-    return host, port, database, user, password, sslmode
+    # Per-call password provider so the OAuth token is always fresh.
+    # An expired bearer used to surface as
+    #   "password authentication failed for user '<sp-uuid>'"
+    # on every reconnect, tripping the breaker and pinning the
+    # "Reconnecting to operational database" banner.
+    def _provider() -> str:
+        return _mint_lakebase_token(instance_name)
+
+    return host, port, database, user, "", sslmode, _provider
 
 
 def get_lakebase_client() -> LakebaseClient:
@@ -353,7 +410,9 @@ def get_lakebase_client() -> LakebaseClient:
 
     with _LOCK:
         if _CLIENT is None:
-            host, port, database, user, password, sslmode = _resolve_lakebase_connection_params()
+            (
+                host, port, database, user, password, sslmode, provider,
+            ) = _resolve_lakebase_connection_params()
             bare = LakebaseClient(
                 host=host,
                 port=port,
@@ -361,6 +420,7 @@ def get_lakebase_client() -> LakebaseClient:
                 user=user,
                 password=password,
                 sslmode=sslmode,
+                password_provider=provider,
             )
             resilient = Resilient[Any](
                 breaker=get_breaker("lakebase"),
