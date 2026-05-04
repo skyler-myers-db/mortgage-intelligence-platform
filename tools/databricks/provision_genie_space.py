@@ -550,12 +550,32 @@ def run(args: argparse.Namespace) -> int:
     # Verify round-trip: fetch the space and confirm curated fields landed.
     try:
         verified = _verify_round_trip(client, space_id)
+        # 2026-05-04 hardening: assert the space's bound warehouse matches
+        # what we asked for. Earlier the live space was bound to a workspace
+        # default (da02d15a9490650b) the app SP didn't have CAN_USE on,
+        # producing PERMISSION_DENIED on every Genie call. The provisioner
+        # passes warehouse_id on update but the SDK does not always honour
+        # warehouse changes silently — we now fail loudly on drift so the
+        # operator notices instead of discovering it from a flapping breaker.
+        bound_warehouse = verified.get("warehouse_id")
+        if args.warehouse_id and bound_warehouse and bound_warehouse != args.warehouse_id:
+            print(
+                f"error: Genie space is bound to warehouse {bound_warehouse} but the "
+                f"bundle / DATABRICKS_WAREHOUSE_ID expects {args.warehouse_id}. "
+                f"The app's service principal needs CAN_USE on the bound warehouse "
+                f"or every Genie call returns 403 PERMISSION_DENIED.\n"
+                f"hint:  databricks genie update-space {space_id} "
+                f"--warehouse-id {args.warehouse_id}",
+                file=sys.stderr,
+            )
+            return 8
         parsed = verified.get("_parsed_serialized_space", {}) or {}
         questions = (parsed.get("config", {}) or {}).get("sample_questions", []) or []
         tables = (parsed.get("data_sources", {}) or {}).get("tables", []) or []
         instructions = (parsed.get("instructions", {}) or {}).get("text_instructions", []) or []
         print(
             f"  verified:      title={verified.get('title')!r} "
+            f"warehouse={bound_warehouse} "
             f"questions={len(questions)} instructions={len(instructions)} "
             f"tables={len(tables)} (bound_in_payload={tables_bound})"
         )
