@@ -12,7 +12,17 @@ import type { DrawerSource } from '../components/AppContext';
  */
 export function descriptorFor(rawSource: string): DrawerSource {
   const key = rawSource.toLowerCase();
-  if (key.includes('fn_in_the_money') || key.includes('itm') || key.includes('rate_spread')) {
+  // 2026-05-04 fix (FIX E): `fn_rate_spread` was being swept into the ITM
+  // drawer because the catch-all `rate_spread` substring matched both the
+  // `fn_rate_spread` UC function (Market rate comparison evidence) AND
+  // unrelated ITM-derived columns (`rate_spread_bps`). The result was
+  // that clicking the "Market rate comparison" chip and the "In-the-money
+  // rule" chip both opened the same drawer (In-the-Money logic). Now
+  // `fn_rate_spread` routes to its own market-rate drawer, and ITM only
+  // matches on `fn_in_the_money` / `itm`. Order matters: the more
+  // specific UC-function checks come BEFORE the broad substring matches.
+  if (key.includes('fn_rate_spread')) return DRAWER_SOURCES.marketRate;
+  if (key.includes('fn_in_the_money') || key.includes('itm')) {
     return DRAWER_SOURCES.itm;
   }
   if (key.includes('fn_next_best_offer') || key.includes('fn_lead_score') || key.includes('nbo')) {
@@ -88,6 +98,29 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
       { label: 'Example lien rate', source: 'voluntary_lien', value: '7.125%' },
       { label: 'Rate spread', source: 'derived', value: '+87.5 bps' },
       { label: 'Equity %', source: 'avm + lien balance', value: '56%' },
+    ],
+    updatedAt: '2026-04-20 06:12 UTC',
+  },
+  // 2026-05-04 fix (FIX E): split out so the "Market rate comparison"
+  // chip opens its OWN drawer with the rate-feed lineage rather than
+  // re-opening the In-the-Money rule explainer (the prior behavior
+  // — both chips opened ITM — was misleading per user feedback).
+  marketRate: {
+    title: 'Market rate comparison',
+    short: 'UC function · fn_rate_spread',
+    description:
+      'Computes the basis-point spread between a borrower’s current lien rate and the market par-refinance rate. Output feeds into the In-the-Money rule but is also surfaced standalone so loan officers can see the raw spread and the FRED par-rate snapshot it was compared against.',
+    lineage: [
+      { layer: 'SOURCE', name: 'fred.MORTGAGE30US', meta: 'FRED 30y conforming par-refi rate (weekly)' },
+      { layer: 'SOURCE', name: 'cotality.mma.origination_refi', meta: 'Par rate feed (daily) — fallback' },
+      { layer: 'SOURCE', name: 'cotality.liens.voluntary_lien', meta: 'Current lien rate, per CLIP' },
+      { layer: 'PRIMITIVE', name: 'mip.gold.fn_rate_spread', meta: 'UC SQL · parity-pinned to scoring.py' },
+      { layer: 'SEMANTIC', name: 'metrics.rate_spread_bps', meta: 'UC metric view' },
+    ],
+    signals: [
+      { label: 'Market par rate (30y conf.)', source: 'fred.MORTGAGE30US', value: '6.250%' },
+      { label: 'Borrower lien rate', source: 'voluntary_lien.current_rate', value: 'per row' },
+      { label: 'Spread (bps)', source: 'derived', value: 'lien − par × 100' },
     ],
     updatedAt: '2026-04-20 06:12 UTC',
   },
