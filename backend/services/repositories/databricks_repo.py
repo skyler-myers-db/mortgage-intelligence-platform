@@ -1160,14 +1160,21 @@ class DatabricksGeoRepository:
 
     _STATE_CACHE_KEY = "geo.state_rollups"
 
-    # 2026-05-04 (FIX G): segment-aware per-state counts. Computed live
-    # off mip.gold.lead_population (already filtered to score >= 50 —
-    # the same population the Lead Queue reads), with `arrays_overlap`
-    # as the segment predicate so multi-segment borrowers are
-    # distinct-counted exactly once even when the filter selects two
-    # of their segments. The funnel snapshot is per-segment and would
-    # double-count after a sum, so we deliberately bypass it for the
-    # filtered path.
+    # 2026-05-04 (FIX G, round 3): segment-aware per-state counts.
+    # Computed live off mip.gold.borrower_360 (the FULL addressable
+    # population — same source the unfiltered funnel snapshot reads),
+    # with `arrays_overlap` as the segment predicate so multi-segment
+    # borrowers are distinct-counted exactly once even when the filter
+    # selects two of their segments.
+    #
+    # Round-2 (FIX G) queried lead_population, which has a score >= 50
+    # floor baked in. After round-3 reverted the rollup filters (FIX α)
+    # the unfiltered map shows the FULL addressable count per state.
+    # Querying lead_population for the filtered path would have been
+    # inconsistent: filter ON = score-quality subset, filter OFF =
+    # full population. Switching to borrower_360 here keeps both paths
+    # at the same "addressable" definition, so toggling a segment
+    # filter always cuts the count down from the same baseline.
     _STATE_SEGMENT_FILTER_SQL_TPL = (
         "SELECT "
         "  state                                        AS state, "
@@ -1175,7 +1182,7 @@ class DatabricksGeoRepository:
         "  CAST(SUM(CASE WHEN opportunity_score >= 75 "
         "                THEN 1 ELSE 0 END) AS INT)      AS top_tier_opportunities, "
         "  CAST(ROUND(AVG(opportunity_score)) AS INT)    AS avg_score "
-        f"FROM {qualify('gold', 'lead_population')} "
+        f"FROM {qualify('gold', 'borrower_360')} "
         "WHERE arrays_overlap(segment_codes, :segment_codes) "
         "GROUP BY state"
     )
