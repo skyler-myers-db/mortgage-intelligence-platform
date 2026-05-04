@@ -49,6 +49,99 @@ function saveGenieSize(size: GenieSize): void {
   }
 }
 
+// 2026-05-04 (FIX ε2): undock + drag-to-position support.
+//
+// Position model: when undocked the panel is anchored top-left of
+// the viewport at ({x, y}). When docked (default) it stays glued
+// to bottom-right and `pos` is null. Persisted under its own key
+// so toggling between docked/undocked across sessions feels right.
+//
+// Snap rule: while dragging, if the panel's pointer-anchored top-
+// left ends up within SNAP_PX of any viewport corner, the position
+// snaps to that corner. The bottom-right corner snap re-DOCKS
+// (collapses pos to null) so a user who liked the bottom-right
+// origin can return to it without remembering keyboard shortcuts.
+const POS_STORAGE_KEY = 'mip-genie-chat-pos-v1';
+const SNAP_PX = 24;
+
+interface GeniePos {
+  x: number;
+  y: number;
+}
+
+type GeniePersist = { pos: GeniePos | null };
+
+function loadGeniePos(): GeniePos | null {
+  try {
+    const raw = localStorage.getItem(POS_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<GeniePersist>;
+    if (!parsed.pos) return null;
+    const x = Number(parsed.pos.x);
+    const y = Number(parsed.pos.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+    return { x, y };
+  } catch {
+    return null;
+  }
+}
+
+function saveGeniePos(pos: GeniePos | null): void {
+  try {
+    if (pos === null) {
+      localStorage.removeItem(POS_STORAGE_KEY);
+    } else {
+      localStorage.setItem(POS_STORAGE_KEY, JSON.stringify({ pos }));
+    }
+  } catch {
+    // private mode / quota — degrade silently like saveGenieSize.
+  }
+}
+
+/** Clamp (x,y) so the panel stays at least 32 px on screen on each
+ *  axis (a stranded panel that's mostly off-screen is the worst
+ *  bug in this UX — the user can't grab it back). The h param is
+ *  kept in the signature for symmetry / future extension (we may
+ *  want to clamp differently per axis later) but the y-axis floor
+ *  is currently 0 — the title bar (drag handle) has to stay
+ *  visible at the top, so we don't allow it to slide above the
+ *  viewport top edge regardless of panel height. */
+function clampPos(pos: GeniePos, w: number, _h: number): GeniePos {
+  if (typeof window === 'undefined') return pos;
+  const minVisible = 32;
+  const maxX = window.innerWidth - minVisible;
+  const maxY = window.innerHeight - minVisible;
+  const minX = -(w - minVisible);
+  const minY = 0;
+  return {
+    x: Math.min(maxX, Math.max(minX, pos.x)),
+    y: Math.min(maxY, Math.max(minY, pos.y)),
+  };
+}
+
+/** Snap a candidate (x,y) to a viewport corner if within SNAP_PX of
+ *  one. Bottom-right snap returns null (re-dock); the other corners
+ *  return the corner coordinates so the panel stays undocked but
+ *  anchored. */
+function snapPos(
+  pos: GeniePos,
+  w: number,
+  h: number,
+): GeniePos | null {
+  if (typeof window === 'undefined') return pos;
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const nearLeft = pos.x < SNAP_PX;
+  const nearRight = pos.x + w > vw - SNAP_PX;
+  const nearTop = pos.y < SNAP_PX;
+  const nearBottom = pos.y + h > vh - SNAP_PX;
+  if (nearRight && nearBottom) return null; // re-dock
+  if (nearLeft && nearTop) return { x: 16, y: 16 };
+  if (nearRight && nearTop) return { x: vw - w - 16, y: 16 };
+  if (nearLeft && nearBottom) return { x: 16, y: vh - h - 16 };
+  return pos;
+}
+
 /**
  * Map a free-form trusted-asset string (UC path or ruleset id) to the
  * best-fitting drawer entry. Returns null when no specific match exists
@@ -120,6 +213,98 @@ export function GenieChat() {
     startW: number;
     startH: number;
   } | null>(null);
+
+  // FIX ε2: persisted position. null = docked (bottom-right, default).
+  // Non-null = undocked at viewport ({x, y}). On window resize we
+  // re-clamp so a panel that was undocked at (1900, 800) on a wide
+  // monitor doesn't end up off-screen on a 1280-wide viewport.
+  const [pos, setPos] = useState<GeniePos | null>(() => loadGeniePos());
+  const dragOriginRef = useRef<{
+    pointerX: number;
+    pointerY: number;
+    startX: number;
+    startY: number;
+    didMove: boolean;
+  } | null>(null);
+
+  useEffect(() => {
+    function onResize() {
+      setPos((cur) => (cur ? clampPos(cur, size.w, size.h) : cur));
+    }
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, [size.w, size.h]);
+
+  const onDragPointerDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      // Only start a drag from the header background — not when the
+      // pointer originated on the avatar / title text / close button.
+      // Cheap check: the target must BE the header div itself.
+      if (e.target !== e.currentTarget) return;
+      e.preventDefault();
+      e.currentTarget.setPointerCapture(e.pointerId);
+      // Where the panel currently sits in viewport coords. If docked,
+      // compute the equivalent (top-left) position from window dims +
+      // current size + 16 px gutter so the drag picks up smoothly.
+      const startPos =
+        pos ??
+        (typeof window !== 'undefined'
+          ? {
+              x: window.innerWidth - size.w - 16,
+              y: window.innerHeight - size.h - 16,
+            }
+          : { x: 0, y: 0 });
+      dragOriginRef.current = {
+        pointerX: e.clientX,
+        pointerY: e.clientY,
+        startX: startPos.x,
+        startY: startPos.y,
+        didMove: false,
+      };
+    },
+    [pos, size.w, size.h],
+  );
+
+  const onDragPointerMove = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      const origin = dragOriginRef.current;
+      if (!origin) return;
+      const dx = e.clientX - origin.pointerX;
+      const dy = e.clientY - origin.pointerY;
+      if (Math.abs(dx) < 3 && Math.abs(dy) < 3 && !origin.didMove) return;
+      origin.didMove = true;
+      setPos(
+        clampPos({ x: origin.startX + dx, y: origin.startY + dy }, size.w, size.h),
+      );
+    },
+    [size.w, size.h],
+  );
+
+  const onDragPointerUp = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      const origin = dragOriginRef.current;
+      if (!origin) return;
+      e.currentTarget.releasePointerCapture(e.pointerId);
+      dragOriginRef.current = null;
+      // No movement = treat as a click on the header (no-op for
+      // close/avatar; user can still click those directly).
+      if (!origin.didMove) return;
+      // On release, run the snap rule. Snap to bottom-right re-docks.
+      setPos((cur) => {
+        if (!cur) return cur;
+        const snapped = snapPos(cur, size.w, size.h);
+        saveGeniePos(snapped);
+        return snapped;
+      });
+    },
+    [size.w, size.h],
+  );
+
+  const onDragDoubleClick = useCallback(() => {
+    // Double-click the header to re-dock immediately.
+    setPos(null);
+    saveGeniePos(null);
+  }, []);
 
   const onResizePointerDown = useCallback(
     (e: React.PointerEvent<HTMLButtonElement>) => {
@@ -269,19 +454,24 @@ export function GenieChat() {
       </button>
       <div
         ref={panelRef}
-        className={`genie ${genieOpen ? 'is-open' : ''}`}
+        className={`genie ${genieOpen ? 'is-open' : ''} ${pos ? 'is-undocked' : ''}`}
         role="dialog"
         aria-modal="true"
         aria-label="Genie chat"
         aria-hidden={!genieOpen}
         style={{
-          // FIX Δ2: inline size overrides win over the .genie static
-          // 420×640 from components.css. max-height is set explicitly
-          // here too because the CSS rule uses max-height (not
-          // height) and the panel needs to actually grow vertically.
+          // FIX Δ2 (size) + FIX ε2 (position). Inline size always wins
+          // over the .genie static defaults. When pos is non-null the
+          // panel is undocked: we override the CSS bottom/right
+          // anchoring with explicit left/top so it floats wherever the
+          // user dragged it. When pos is null we fall back to the CSS
+          // bottom-right anchor (no inline left/top set).
           width: size.w,
           height: size.h,
           maxHeight: size.h,
+          ...(pos
+            ? { left: pos.x, top: pos.y, right: 'auto', bottom: 'auto' }
+            : {}),
         }}
       >
         {/* FIX Δ2: resize handle. Anchored top-left because the
@@ -304,15 +494,55 @@ export function GenieChat() {
             <span aria-hidden="true">⇲</span>
           </button>
         )}
-        <div className="genie__hdr">
+        {/* FIX ε2: header is the drag handle. Pointer events on the
+            header background start the drag; double-click re-docks.
+            Children (avatar, title, close button) intercept clicks
+            normally because the move guard checks e.target === header. */}
+        <div
+          className="genie__hdr"
+          onPointerDown={onDragPointerDown}
+          onPointerMove={onDragPointerMove}
+          onPointerUp={onDragPointerUp}
+          onPointerCancel={onDragPointerUp}
+          onDoubleClick={onDragDoubleClick}
+          style={{ cursor: pos ? 'grabbing' : 'grab', userSelect: 'none' }}
+          title={
+            pos
+              ? 'Drag to move · double-click to re-dock'
+              : 'Drag to undock · double-click to reset'
+          }
+        >
           <div className="genie__avatar" />
-          <div style={{ flex: 1 }}>
+          <div style={{ flex: 1, pointerEvents: 'none' }}>
             <div className="genie__title">Ask Genie</div>
-            <div className="genie__sub">Unity Catalog metric views · {lender}</div>
+            <div className="genie__sub">
+              Unity Catalog metric views · {lender}
+              {pos ? ' · undocked' : ''}
+            </div>
           </div>
+          {/* Re-dock button — only visible when the panel is undocked.
+              Gives a discoverable affordance for users who haven't
+              learned the double-click shortcut. */}
+          {pos && (
+            <button
+              type="button"
+              className="drawer__close"
+              onClick={(e) => {
+                e.stopPropagation();
+                onDragDoubleClick();
+              }}
+              aria-label="Re-dock Genie panel to bottom-right"
+              title="Re-dock"
+            >
+              <Icon name="db" size={14} />
+            </button>
+          )}
           <button
             className="drawer__close"
-            onClick={() => setGenieOpen(false)}
+            onClick={(e) => {
+              e.stopPropagation();
+              setGenieOpen(false);
+            }}
             aria-label="Close Genie"
             type="button"
           >
