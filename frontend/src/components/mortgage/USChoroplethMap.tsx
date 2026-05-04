@@ -359,6 +359,15 @@ export function USChoroplethMap({
   const [level, setLevel] = useState<Level>('state');
   const [selected, setSelected] = useState<Selected | null>(null);
   const [hover, setHover] = useState<HoverState | null>(null);
+  // 2026-05-04 fix (#2): clear the floating map-tip whenever the user
+  // drills into a different layer or selects a new region. Without this
+  // a hover that was active on a state path would stay pinned to the
+  // viewport (rendered via createPortal at fixed coords) after the user
+  // clicked through to county view, because the path that fired the
+  // mouseLeave handler is no longer in the DOM.
+  useEffect(() => {
+    setHover(null);
+  }, [level, selected]);
   const [usaMap, setUsaMap] = useState<UsaSvgMap | null>(null);
   // Reduced-motion guard for SVG SMIL pulses (IllinoisBeacon + Cook
   // centroid). CSS `prefers-reduced-motion` doesn't cover <animate>;
@@ -616,6 +625,26 @@ export function USChoroplethMap({
    *  (lvl). Prefers the live top_segment_code when the backend returns
    *  one; falls back to the hardcoded STATE_FACTS[*].topSegment only
    *  when the endpoint errored (slice13-accuracy-validation). */
+  // 2026-05-04 fix (#1, #7): the prior factsFor returned `stat.lvl`
+  // straight from STATE_FACTS, where every footprint state is hardcoded
+  // to lvl:4 — so the choropleth rendered IL (1.85M) and CO (163K) the
+  // same darkest color despite a 10× count ratio. The map looked
+  // binary-coloured (footprint vs not) instead of count-weighted. We
+  // now compute a quantile bucketer over the LIVE state counts (same
+  // approach already used at the county and ZIP layers below) so the
+  // visible color tier reflects actual borrower volume across whichever
+  // states the workspace has data for. Falls back to STATE_FACTS.lvl
+  // on cold-start before liveStateFacts resolves.
+  const stateBucketer = useMemo(() => {
+    if (!liveStateFacts) return lvlFromCount;
+    const counts = Object.values(liveStateFacts).map((r) => r.addressable);
+    return buildQuantileBucketer(counts);
+  }, [liveStateFacts]);
+
+  /** Merge the live state rollup (count / avg_score / top_segment_code)
+   *  with the static STATE_FACTS metadata. The lvl now comes from the
+   *  live-count quantile bucketer above so the gradient reflects real
+   *  borrower volume. Pre-rollup, falls back to STATE_FACTS.lvl. */
   const factsFor = useMemo(() => {
     return (uscode: string): StateFacts | undefined => {
       const live = liveStateFacts?.[uscode];
@@ -627,27 +656,25 @@ export function USChoroplethMap({
         return {
           count: live.addressable,
           avgScore: live.avg_score || stat.avgScore,
-          lvl: stat.lvl,
-          // Prefer the live segment label; only fall back to the static
-          // literal when the API did not return a segment code.
+          lvl: stateBucketer(live.addressable),
           topSegment: liveTopSegment || stat.topSegment,
         };
       }
       if (live) {
         // State not in STATE_FACTS literal — synthesize minimal facts so
-        // the hover still shows the real count. lvl defaults to 2 (mid
-        // tier); topSegment uses the live value when present else blank
-        // so the tooltip row hides.
+        // the hover still shows the real count. lvl from the same live
+        // quantile bucketer as everyone else; topSegment uses the live
+        // value when present else blank so the tooltip row hides.
         return {
           count: live.addressable,
           avgScore: live.avg_score,
-          lvl: 2,
+          lvl: stateBucketer(live.addressable),
           topSegment: liveTopSegment,
         };
       }
       return stat;
     };
-  }, [liveStateFacts]);
+  }, [liveStateFacts, stateBucketer]);
 
   // Quantile bucketer for the county layer of the currently-drilled
   // state. Computed per-payload so the gradient reads whether the real
@@ -1422,7 +1449,19 @@ export function USChoroplethMap({
           stacking context of a containing surface can't pull it beneath
           another card. Absolute position is computed from hover.x/y
           (client coords), clamped to the viewport. Slice: hover-infographic-
-          richness + portal-escape, 2026-04-23. */}
+          richness + portal-escape, 2026-04-23.
+
+          2026-05-04 fix (#8): when a segment filter is active the count
+          is still the unfiltered state-total (the gold rollup endpoint
+          returns one row per state, not one row per state×segment), so
+          the prior tooltip silently displayed an unfiltered number with
+          no indication it was unfiltered. We now explicitly label the
+          count "(all segments)" and add a footer row showing the active
+          filter — honest about what the data actually represents rather
+          than appearing to silently misreport. The choropleth shading
+          DOES respect the filter (non-matching top-segment states dim
+          to opacity 0.3 above), so the map and tooltip together tell a
+          coherent story: "shading filtered, count unfiltered". */}
       {hover &&
         createPortal(
           <div
@@ -1439,8 +1478,16 @@ export function USChoroplethMap({
                 {/* Label was "Marketable" — too ambiguous (marketable for
                     what?). Now "Marketable borrowers" so a hover reader
                     knows the count is borrowers in the addressable
-                    population for this state. 2026-05-04 user feedback. */}
-                <div className="map-tip__kpi-label">Marketable borrowers</div>
+                    population for this state. 2026-05-04 user feedback.
+                    Suffix "(all segments)" added when a segment filter
+                    is active so the unfiltered total isn't mistaken for
+                    a filtered count (#8). */}
+                <div className="map-tip__kpi-label">
+                  Marketable borrowers
+                  {activeSegNames !== null ? (
+                    <span style={{ color: 'var(--text-3)' }}> (all segments)</span>
+                  ) : null}
+                </div>
                 <div className="map-tip__kpi-value">
                   {hover.count !== null ? hover.count.toLocaleString() : '—'}
                 </div>
@@ -1460,6 +1507,28 @@ export function USChoroplethMap({
               <div className="map-tip__seg">
                 <span className="map-tip__seg-label">Top segment</span>
                 <span className="map-tip__seg-value">{hover.topSegment}</span>
+              </div>
+            )}
+            {/* Filter context row — only appears when a segmentFilter is
+                active. Tells the user the choropleth shading is filtered
+                even though the state-total count above is not. Without
+                this the count looked the same with and without a filter
+                and the user reasonably read that as a broken filter (#8). */}
+            {activeSegNames !== null && (
+              <div
+                className="map-tip__row"
+                style={{
+                  marginTop: 0,
+                  borderTop: '1px dashed var(--line-1)',
+                  paddingTop: 'var(--sp-2)',
+                  fontSize: 10,
+                  color: 'var(--text-3)',
+                }}
+              >
+                <span>Filter</span>
+                <span className="v" style={{ fontSize: 10 }}>
+                  shading by {Array.from(activeSegNames).join(', ')}
+                </span>
               </div>
             )}
             <div
