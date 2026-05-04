@@ -260,62 +260,72 @@ function inferChartFromRows(
 }
 
 /**
- * Parse bullet-list data out of a Genie answer's prose.
+ * Parse label/value data out of a Genie answer's prose.
  *
  * Real examples we've seen Genie produce in this app:
  *
- *   - **60611**: 6,506 borrowers
- *   - 60605: 4,896 borrowers
- *   • Travis County: 14,200 candidates
- *   1) Cook County — 95,432
- *   - Refinance + HELOC: 87 candidates
+ *   bullet form:
+ *     - **60611**: 6,506 borrowers
+ *     - 60605: 4,896 borrowers
+ *     • Travis County: 14,200 candidates
+ *     1) Cook County — 95,432
  *
- * Strategy: scan each line of the answer; when a line starts with a
- * bullet/number marker, look for "<label>: <number>" or
- * "<label> — <number>" or "<label> has <number>" patterns. Coerce
- * comma-separated numbers ("6,506") to integers; ignore decimal
- * percentages or currency unless they're the only number (then
- * accept). Return null when fewer than 2 chartable lines were found.
+ *   inline-prose form (the round-5 case the user caught):
+ *     "...highest count is **60611** with **6,506** HELOC-eligible
+ *      borrowers, followed by **60605** (4,896), **60610** (4,507),
+ *      **92602** (4,421), and **60607** (3,314)..."
  *
- * Exported for unit testing — see GenieAnswer.test.tsx.
+ * Strategy:
+ *   (a) Scan each LINE for a bullet pattern ("- label: 12,345" /
+ *       "- label — 12,345" / "label has 12,345"). Strips bullet
+ *       markers + markdown bold so the regex sees clean text.
+ *   (b) ALSO scan the WHOLE TEXT for inline bold-bracketed pairs:
+ *       `**LABEL** with **NUMBER**` and `**LABEL** (NUMBER)`. This
+ *       catches Genie answers that pack the data into a single
+ *       prose paragraph instead of a bulleted list.
+ *
+ * Returns null when fewer than 2 distinct chartable rows were found
+ * across either path. Caller expects null = render the answer as
+ * text + the existing table_rows path; non-null = render a chart.
+ *
+ * Exported for unit testing — see GenieAnswer.test.tsx, including
+ * a regression test for the literal screenshot text.
  */
 export function inferChartFromBullets(text: string): InferredChart | null {
   if (!text) return null;
-  const lines = text.split(/\r?\n/);
-  // Bullet markers: -, *, •, 1), 1., etc. Strip them off so the
-  // label scan sees clean "<label>: <num>" pairs. Accept lines that
-  // look like list items even without an explicit marker IF they
-  // start with a small distinctive label (e.g., a ZIP, a county).
+
+  // ── (a) Per-line bullet/list patterns ───────────────────────────
   const bulletPattern = /^\s*(?:[-*•]|\d{1,2}[.)])\s+(.*)$/;
-  // Number capture: 6,506 / 6506 / 6,506.42 / 6506.42 / -3.5
-  // Match the LAST number in the line so "Score: 86 (out of 100)"
-  // reads "86" not "100" — the leading number is usually the value.
-  // Actually first-significant: find a "label: number" or
-  // "label — number" pattern explicitly.
-  const labelValuePatterns = [
+  // Two pattern sets:
+  //   labelValueStrict — distinctive list-item shapes ("X: 12,345",
+  //     "X — 12,345"). Safe to run on un-marked lines too because the
+  //     punctuation alone signals "this is a list item, not prose."
+  //   labelValueLoose — looser "X has/with 12,345" pattern. Greedy
+  //     enough to misfire on a prose paragraph (round-6 bug —
+  //     matched "Cook County leads with Cook County" as a fake label
+  //     from an inline-prose answer). Only run when the line came in
+  //     with an explicit bullet marker so we know it IS a list item.
+  const labelValueStrict = [
     /^(.+?):\s*[*]*([\d,]+(?:\.\d+)?)[*]*\b/,
-    /^(.+?)\s*[—–-]\s*[*]*([\d,]+(?:\.\d+)?)[*]*\b/,
+    /^(.+?)\s*[—–]\s*[*]*([\d,]+(?:\.\d+)?)[*]*\b/,
+  ];
+  const labelValueLoose = [
     /^(.+?)\s+(?:has|with|=|is)\s+[*]*([\d,]+(?:\.\d+)?)[*]*\b/i,
   ];
   const collected: ChartRow[] = [];
-  for (const raw of lines) {
+  for (const raw of text.split(/\r?\n/)) {
     const line = raw.trim();
     if (!line) continue;
-    // Strip bullet marker if present, but ALSO accept un-marked
-    // lines that match a label:number pattern (Genie sometimes
-    // omits markers when the list is short).
-    const stripped = (() => {
-      const m = bulletPattern.exec(line);
-      return m ? m[1].trim() : line;
-    })();
+    const bulletMatch = bulletPattern.exec(line);
+    const stripped = bulletMatch ? bulletMatch[1].trim() : line;
+    const patterns = bulletMatch
+      ? [...labelValueStrict, ...labelValueLoose]
+      : labelValueStrict;
     let matched: { label: string; value: number } | null = null;
-    for (const re of labelValuePatterns) {
+    for (const re of patterns) {
       const m = re.exec(stripped);
       if (!m) continue;
-      const label = m[1]
-        .replace(/\*\*/g, '') // strip markdown bold
-        .replace(/^[-•*\s]+/, '')
-        .trim();
+      const label = m[1].replace(/\*\*/g, '').replace(/^[-•*\s]+/, '').trim();
       const num = Number(m[2].replace(/,/g, ''));
       if (!Number.isFinite(num)) continue;
       if (label.length === 0 || label.length > 60) continue;
@@ -324,9 +334,41 @@ export function inferChartFromBullets(text: string): InferredChart | null {
     }
     if (matched) collected.push(matched);
   }
-  // Need at least 2 distinct rows AND every label distinct (else
-  // we're charting "the same thing twice", which signals we
-  // mis-parsed). Cap at 12 to match the chart's MAX_BARS.
+
+  // ── (b) Inline bold-bracketed prose patterns ────────────────────
+  // Catches the round-5 user-screenshot shape:
+  //   **60611** with **6,506**       → 60611:6506
+  //   **60605** (4,896)              → 60605:4896
+  //   **60610** — **4,507**          → 60610:4507
+  //   **60611** has **6,506**        → 60611:6506
+  // We only fire the inline scan when the bullet path didn't
+  // collect enough rows on its own; an answer that's ALREADY a
+  // clean bullet list shouldn't be re-parsed for inline pairs that
+  // would shadow the bullet results.
+  if (collected.length < 2) {
+    const inlinePatterns = [
+      // **LABEL** with **NUM** / has **NUM** / = **NUM**
+      /\*\*([^*]+?)\*\*\s+(?:with|has|of|equals?|=|is)\s+\*\*?([\d,]+(?:\.\d+)?)\*\*?/gi,
+      // **LABEL** (NUM)  — the most common Genie shape we've seen
+      /\*\*([^*]+?)\*\*\s*[(\[]\s*([\d,]+(?:\.\d+)?)\s*[)\]]/g,
+      // **LABEL** — **NUM**  (em-dash inline)
+      /\*\*([^*]+?)\*\*\s*[—–]\s*\*\*?([\d,]+(?:\.\d+)?)\*\*?/g,
+      // **LABEL**: **NUM**  (colon inline)
+      /\*\*([^*]+?)\*\*\s*:\s*\*\*?([\d,]+(?:\.\d+)?)\*\*?/g,
+    ];
+    for (const re of inlinePatterns) {
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(text)) !== null) {
+        const label = m[1].trim();
+        const num = Number(m[2].replace(/,/g, ''));
+        if (!Number.isFinite(num)) continue;
+        if (label.length === 0 || label.length > 60) continue;
+        collected.push({ label, value: num });
+      }
+    }
+  }
+
+  // ── Dedupe + final shape ───────────────────────────────────────
   const seen = new Set<string>();
   const distinct = collected.filter((r) => {
     if (seen.has(r.label)) return false;
@@ -336,9 +378,6 @@ export function inferChartFromBullets(text: string): InferredChart | null {
   if (distinct.length < 2) return null;
   return {
     rows: distinct,
-    // Best-effort heuristic for axis labels: pull "X by Y" or "X for Y"
-    // from the first sentence of the answer when present, otherwise
-    // generic.
     labelCol: 'category',
     valueCol: 'value',
     source: 'answer_bullets',

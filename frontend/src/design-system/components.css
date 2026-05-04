@@ -768,6 +768,50 @@ kbd {
   background: var(--accent-soft);
   color: var(--accent);
 }
+
+/* FIX ζ2 (2026-05-04): 7 invisible edge / corner pointer-targets so
+   the user can resize from any side. The visible affordance is only
+   the cursor change on hover — keeping these invisible avoids
+   visually crowding the panel. The keyboard-accessible visible
+   handle is .genie__resize (top-left corner, button); these 7 are
+   pointer-only siblings.
+   The hit area is 6 px wide on edges, 12×12 on corners — large
+   enough to grab without being a click trap on adjacent UI. */
+.genie__resize-edge {
+  position: absolute;
+  z-index: 2;
+  background: transparent;
+}
+/* Edges */
+.genie__resize-edge--n {
+  top: 0; left: 26px; right: 12px; height: 6px;
+  cursor: ns-resize;
+}
+.genie__resize-edge--s {
+  bottom: 0; left: 12px; right: 12px; height: 6px;
+  cursor: ns-resize;
+}
+.genie__resize-edge--e {
+  top: 12px; bottom: 12px; right: 0; width: 6px;
+  cursor: ew-resize;
+}
+.genie__resize-edge--w {
+  top: 26px; bottom: 12px; left: 0; width: 6px;
+  cursor: ew-resize;
+}
+/* Corners — square hit zones overlap edges so corner-grabbing wins */
+.genie__resize-edge--ne {
+  top: 0; right: 0; width: 12px; height: 12px;
+  cursor: nesw-resize;
+}
+.genie__resize-edge--se {
+  bottom: 0; right: 0; width: 12px; height: 12px;
+  cursor: nwse-resize;
+}
+.genie__resize-edge--sw {
+  bottom: 0; left: 0; width: 12px; height: 12px;
+  cursor: nesw-resize;
+}
 .genie.is-open { transform: translateY(0) scale(1); opacity: 1; pointer-events: auto; }
 .genie__hdr {
   padding: var(--sp-3) var(--sp-4);

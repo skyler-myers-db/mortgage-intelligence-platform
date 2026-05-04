@@ -119,6 +119,28 @@ function clampPos(pos: GeniePos, w: number, _h: number): GeniePos {
   };
 }
 
+// FIX ζ2: per-handle signature for the 8-direction resize.
+// `wSign` / `hSign` map a pointer dx/dy into a size delta. `xSign`
+// / `ySign` are how the panel position shifts when the user grabs a
+// LEFT or TOP edge while undocked (so growing leftward keeps the
+// right edge fixed in viewport space). When docked, position deltas
+// are ignored — the bottom-right anchor handles "growth toward the
+// origin" implicitly.
+type ResizeHandle = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w';
+const RESIZE_MATRIX: Record<
+  ResizeHandle,
+  { wSign: number; hSign: number; xSign: number; ySign: number; cursor: string }
+> = {
+  nw: { wSign: -1, hSign: -1, xSign: 1, ySign: 1, cursor: 'nwse-resize' },
+  n:  { wSign: 0,  hSign: -1, xSign: 0, ySign: 1, cursor: 'ns-resize' },
+  ne: { wSign: 1,  hSign: -1, xSign: 0, ySign: 1, cursor: 'nesw-resize' },
+  e:  { wSign: 1,  hSign: 0,  xSign: 0, ySign: 0, cursor: 'ew-resize' },
+  se: { wSign: 1,  hSign: 1,  xSign: 0, ySign: 0, cursor: 'nwse-resize' },
+  s:  { wSign: 0,  hSign: 1,  xSign: 0, ySign: 0, cursor: 'ns-resize' },
+  sw: { wSign: -1, hSign: 1,  xSign: 1, ySign: 0, cursor: 'nesw-resize' },
+  w:  { wSign: -1, hSign: 0,  xSign: 1, ySign: 0, cursor: 'ew-resize' },
+};
+
 /** Snap a candidate (x,y) to a viewport corner if within SNAP_PX of
  *  one. Bottom-right snap returns null (re-dock); the other corners
  *  return the corner coordinates so the panel stays undocked but
@@ -206,12 +228,27 @@ export function GenieChat() {
   // in the top-left corner adjusts both axes so the panel can grow
   // up + left from the bottom-right anchor. Bounded to [MIN, MAX] so
   // the panel can't shrink past unusable or grow past viewport-eating.
+  //
+  // FIX ζ2 (2026-05-04): widened from one corner handle to 8
+  // directional handles (4 corners + 4 edges) so the user can grow
+  // / shrink the panel from any side. Each handle carries a small
+  // signature `{ wSign, hSign, xSign, ySign }`:
+  //   wSign / hSign  — how a pointer-delta maps to width / height
+  //                    (-1 means dragging RIGHT shrinks W; +1 grows)
+  //   xSign / ySign  — how a pointer-delta maps to position when
+  //                    UN-DOCKED (only meaningful for left + top
+  //                    edges; bottom-right corner is the implicit
+  //                    docked anchor and never moves the panel)
+  // The matrix below covers every cursor: nw / n / ne / e / se / s / sw / w.
   const [size, setSize] = useState<GenieSize>(() => loadGenieSize());
   const resizeOriginRef = useRef<{
     startX: number;
     startY: number;
     startW: number;
     startH: number;
+    startPosX: number | null;
+    startPosY: number | null;
+    handle: ResizeHandle;
   } | null>(null);
 
   // FIX ε2: persisted position. null = docked (bottom-right, default).
@@ -306,52 +343,82 @@ export function GenieChat() {
     saveGeniePos(null);
   }, []);
 
-  const onResizePointerDown = useCallback(
-    (e: React.PointerEvent<HTMLButtonElement>) => {
-      // Capture the gesture so the pointer keeps streaming events
-      // even when it leaves the handle (Chrome / Safari behave the
-      // same). preventDefault stops text selection while dragging.
-      e.preventDefault();
-      e.currentTarget.setPointerCapture(e.pointerId);
-      resizeOriginRef.current = {
-        startX: e.clientX,
-        startY: e.clientY,
-        startW: size.w,
-        startH: size.h,
-      };
-    },
-    [size.w, size.h],
+  const beginResize = useCallback(
+    (handle: ResizeHandle) =>
+      (e: React.PointerEvent<HTMLDivElement>) => {
+        // Capture the gesture so the pointer keeps streaming events
+        // even when it leaves the handle (Chrome / Safari behave the
+        // same). preventDefault stops text selection while dragging.
+        e.preventDefault();
+        e.stopPropagation();
+        e.currentTarget.setPointerCapture(e.pointerId);
+        resizeOriginRef.current = {
+          startX: e.clientX,
+          startY: e.clientY,
+          startW: size.w,
+          startH: size.h,
+          startPosX: pos?.x ?? null,
+          startPosY: pos?.y ?? null,
+          handle,
+        };
+      },
+    [size.w, size.h, pos],
   );
 
-  const onResizePointerMove = useCallback(
-    (e: React.PointerEvent<HTMLButtonElement>) => {
+  const moveResize = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
       const origin = resizeOriginRef.current;
       if (!origin) return;
-      // The panel is anchored bottom-right and the handle is top-left,
-      // so dragging UP/LEFT grows the panel — invert the delta sign.
-      const dx = origin.startX - e.clientX;
-      const dy = origin.startY - e.clientY;
-      const w = Math.min(MAX_W, Math.max(MIN_W, origin.startW + dx));
-      const h = Math.min(MAX_H, Math.max(MIN_H, origin.startH + dy));
+      const sig = RESIZE_MATRIX[origin.handle];
+      const dx = e.clientX - origin.startX;
+      const dy = e.clientY - origin.startY;
+      // Width/height delta. wSign tells us "+1 → grow when dragging
+      // right" (right edge), "-1 → grow when dragging left" (left
+      // edge). Same idea for h on top/bottom edges. 0 axis means
+      // this handle doesn't touch that axis (e.g. north handle is
+      // height-only).
+      const dw = sig.wSign * dx;
+      const dh = sig.hSign * dy;
+      const w = Math.min(MAX_W, Math.max(MIN_W, origin.startW + dw));
+      const h = Math.min(MAX_H, Math.max(MIN_H, origin.startH + dh));
       setSize({ w, h });
+      // Position delta. Only meaningful when undocked AND we're
+      // grabbing a left/top edge — those edges' "growth" pulls the
+      // panel's anchor in the opposite direction so the OPPOSITE
+      // edge stays fixed in viewport space. xSign / ySign in the
+      // matrix are 1 for left/top, 0 elsewhere.
+      if (origin.startPosX !== null && origin.startPosY !== null) {
+        // We must clamp the resulting size BEFORE computing the
+        // position shift, otherwise hitting MIN_W on the left edge
+        // would let the position keep sliding leftward into space.
+        const actualDw = w - origin.startW;
+        const actualDh = h - origin.startH;
+        const newX = origin.startPosX - sig.xSign * actualDw;
+        const newY = origin.startPosY - sig.ySign * actualDh;
+        setPos(clampPos({ x: newX, y: newY }, w, h));
+      }
     },
     [],
   );
 
-  const onResizePointerUp = useCallback(
-    (e: React.PointerEvent<HTMLButtonElement>) => {
+  const endResize = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
       if (!resizeOriginRef.current) return;
       e.currentTarget.releasePointerCapture(e.pointerId);
       resizeOriginRef.current = null;
-      // Persist final size — only on pointerup so we don't pound
-      // localStorage during the drag.
+      // Persist on release only — pointermove fires hundreds of
+      // times per drag and we don't want to hammer localStorage.
       saveGenieSize(size);
+      if (pos) saveGeniePos(pos);
     },
-    [size],
+    [size, pos],
   );
 
-  // Keyboard accessibility for the resize handle: Arrow keys nudge
-  // by 24 px; Shift+Arrow nudges by 96 px. Persisted on each press.
+  // Keyboard accessibility — keep the corner handle interactive
+  // for screen-reader / no-mouse users. Arrow keys nudge ±24, Shift
+  // ±96. The 8 mouse handles are pure pointer affordances; a
+  // keyboard user only needs ONE handle to resize, so we keep the
+  // focusable corner button and leave the edge handles aria-hidden.
   const onResizeKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLButtonElement>) => {
       const step = e.shiftKey ? 96 : 24;
@@ -474,25 +541,39 @@ export function GenieChat() {
             : {}),
         }}
       >
-        {/* FIX Δ2: resize handle. Anchored top-left because the
-            panel itself is anchored bottom-right (dragging top-left
-            "outward" grows the panel). It's a real <button> so screen
-            readers can announce it; Arrow keys + Shift+Arrow give
-            keyboard users a way to resize without a mouse. The CSS
-            handle styling lives in components.css under .genie__resize. */}
+        {/* FIX ζ2: 8-direction resize. Each `.genie__resize-edge--*`
+            div catches the pointer in its corner / edge band and
+            dispatches through `beginResize(handle)`. The keyboard-
+            accessible button (top-left corner) is kept for screen-
+            reader / no-mouse users — they only need one focusable
+            handle to resize via arrow keys. The 7 other divs are
+            aria-hidden because they're pure pointer affordances. */}
         {genieOpen && (
-          <button
-            type="button"
-            className="genie__resize"
-            aria-label={`Resize Genie panel (currently ${size.w} by ${size.h} pixels). Drag, or use arrow keys.`}
-            onPointerDown={onResizePointerDown}
-            onPointerMove={onResizePointerMove}
-            onPointerUp={onResizePointerUp}
-            onPointerCancel={onResizePointerUp}
-            onKeyDown={onResizeKeyDown}
-          >
-            <span aria-hidden="true">⇲</span>
-          </button>
+          <>
+            <button
+              type="button"
+              className="genie__resize genie__resize-edge--nw-button"
+              aria-label={`Resize Genie panel (currently ${size.w} by ${size.h} pixels). Drag any edge or corner, or use arrow keys.`}
+              onPointerDown={(e) => beginResize('nw')(e as unknown as React.PointerEvent<HTMLDivElement>)}
+              onPointerMove={(e) => moveResize(e as unknown as React.PointerEvent<HTMLDivElement>)}
+              onPointerUp={(e) => endResize(e as unknown as React.PointerEvent<HTMLDivElement>)}
+              onPointerCancel={(e) => endResize(e as unknown as React.PointerEvent<HTMLDivElement>)}
+              onKeyDown={onResizeKeyDown}
+            >
+              <span aria-hidden="true">⇲</span>
+            </button>
+            {(['n', 'ne', 'e', 'se', 's', 'sw', 'w'] as const).map((h) => (
+              <div
+                key={h}
+                className={`genie__resize-edge genie__resize-edge--${h}`}
+                aria-hidden="true"
+                onPointerDown={beginResize(h)}
+                onPointerMove={moveResize}
+                onPointerUp={endResize}
+                onPointerCancel={endResize}
+              />
+            ))}
+          </>
         )}
         {/* FIX ε2: header is the drag handle. Pointer events on the
             header background start the drag; double-click re-docks.
