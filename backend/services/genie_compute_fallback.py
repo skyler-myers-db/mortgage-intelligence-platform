@@ -338,6 +338,14 @@ def try_compute(
     compute_fn = COMPUTE_BY_INTENT.get(intent_key)
     if compute_fn is None:
         return None
+    # Cache key is keyed only on the intent — there is one
+    # DatabricksGenieRepository per process today and gold tables are
+    # workspace-scoped via the SQL client's bound warehouse_id, so a
+    # global per-intent cache is correct. TODO if multi-tenant compute
+    # ever lands (one process serving multiple workspaces): include the
+    # workspace identifier in the key, e.g. f"genie.compute.{ws_id}.
+    # {intent_key}", so a stale answer from one tenant cannot leak to
+    # another. Flagged by the code-review subagent on 2026-05-04.
     cache_key = f"genie.compute.{intent_key}"
     cached = _COMPUTE_CACHE.get(cache_key)
     if cached is not None:
@@ -357,7 +365,7 @@ def try_compute(
 
 def reset_cache() -> None:
     """Test hook — clears the per-intent compute cache."""
-    _COMPUTE_CACHE.reset()
+    _COMPUTE_CACHE.clear()
 
 
 __all__ = [

@@ -135,6 +135,82 @@ def test_breaker_open_with_catalog_match_returns_degraded() -> None:
     assert stub.ask_calls == []
 
 
+def test_breaker_open_with_canonical_intent_runs_computed_fallback() -> None:
+    """When the breaker is open AND the question matches a canonical
+    intent we have a compute function for, the repo runs the SQL
+    against the provided sql_client and returns ``source=
+    "computed_fallback"`` with the REAL number from the query.
+    Verifies the user gets a useful answer (not just "warming up")
+    when Genie is reconnecting and gold tables are reachable.
+    2026-05-04 follow-up to the parity-audit Q1 ("How is Genie
+    figuring this out?")."""
+
+    # Stub SQL client that records every execute_one call and returns
+    # a fixed row matching the in_the_money_count compute function's
+    # query shape: {"cnt": int, "avg_spread_bps": int}.
+    class _StubSql:
+        def __init__(self) -> None:
+            self.queries: list[str] = []
+
+        def execute_one(self, sql: str, params: dict[str, Any] | None = None) -> dict[str, Any]:  # noqa: ARG002
+            self.queries.append(sql)
+            return {"cnt": 147742, "avg_spread_bps": 312}
+
+        def execute(self, sql: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:  # noqa: ARG002
+            self.queries.append(sql)
+            return []
+
+    # Reset the per-intent compute cache so a prior test result doesn't
+    # short-circuit this one.
+    from backend.services import genie_compute_fallback as gcf
+    gcf.reset_cache()
+
+    sql_stub = _StubSql()
+    genie_stub = _StubClient(_make_breaker("open"), response=None)
+    repo = DatabricksGenieRepository(genie_stub, sql_client=sql_stub)  # type: ignore[arg-type]
+
+    result = repo.respond("how many borrowers are in the money?")
+
+    # Source must be the new computed_fallback marker so the FE can
+    # distinguish from a live Genie answer.
+    assert result.source == "computed_fallback"
+    # The number must come from the SQL stub (147,742), not from any
+    # catalog literal — verifying we exercised the compute path.
+    assert "147,742" in result.answer
+    assert "312 bps" in result.answer
+    # trusted_assets must cite the actual gold table the query read.
+    assert any("borrower_360" in a for a in result.trusted_assets)
+    # The live Genie client must NOT have been called (breaker open).
+    assert genie_stub.ask_calls == []
+    # The SQL client SHOULD have been queried.
+    assert sql_stub.queries, "compute fallback should have hit the SQL client"
+
+
+def test_breaker_open_compute_failure_falls_through_to_warming_up() -> None:
+    """When the canonical intent's compute function raises (e.g. the
+    warehouse is also down), the repo must fall back to the honest
+    warming-up message rather than bubbling the SQL error to the user
+    or returning fabricated data."""
+
+    class _BrokenSql:
+        def execute_one(self, sql: str, params: dict[str, Any] | None = None) -> dict[str, Any]:  # noqa: ARG002
+            raise RuntimeError("warehouse unreachable")
+
+        def execute(self, sql: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:  # noqa: ARG002
+            raise RuntimeError("warehouse unreachable")
+
+    from backend.services import genie_compute_fallback as gcf
+    gcf.reset_cache()
+
+    genie_stub = _StubClient(_make_breaker("open"), response=None)
+    repo = DatabricksGenieRepository(genie_stub, sql_client=_BrokenSql())  # type: ignore[arg-type]
+
+    result = repo.respond("how many borrowers are in the money?")
+    assert result.source == "degraded"
+    assert "warming up" in result.answer.lower()
+    assert result.trusted_assets == []
+
+
 def test_breaker_open_unknown_question_returns_degraded_message() -> None:
     stub = _StubClient(_make_breaker("open"), response=None)
     repo = DatabricksGenieRepository(stub)  # type: ignore[arg-type]

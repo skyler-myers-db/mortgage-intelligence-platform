@@ -3,7 +3,7 @@ import { useApp } from '../AppContext';
 import { api } from '../../lib/api';
 import type { GenieAnswer as GenieAnswerShape } from '../../types';
 import { Icon } from '../Icon';
-import { Button, EvidenceChip } from '../Primitives';
+import { Button, Chip, EvidenceChip } from '../Primitives';
 import { GenieAnswer } from './GenieAnswer';
 import { DRAWER_SOURCES } from '../../lib/drawerSources';
 
@@ -169,7 +169,41 @@ export function GenieChat() {
                 <div className="bubble">
                   <GenieAnswer payload={m.payload} onFollowUp={ask} dense />
                 </div>
-                {m.sources && m.sources.length > 0 && (
+                {/* Source chip row. The backend's `payload.source` field
+                    distinguishes a live Genie answer (`"genie"`) from a
+                    computed-from-UC fallback (`"computed_fallback"`) and
+                    the honest no-data degraded message (`"degraded"`).
+                    The first two surface real numbers; the third surfaces
+                    only the warming-up copy. We render computed-fallback
+                    and degraded with a warning chip + tooltip so users
+                    can tell at a glance which path produced the answer.
+                    Live Genie + the trusted_assets list keep the prior
+                    multi-chip lineage rendering. 2026-05-04 follow-up. */}
+                {m.payload.source === 'computed_fallback' && (
+                  <div className="sources">
+                    <Chip
+                      variant="warning"
+                      icon="bolt"
+                      title="Genie is reconnecting; this answer was computed from a deterministic local SQL aggregation against the gold table cited. The number is live, not a catalog literal."
+                    >
+                      Local SQL · {m.payload.trusted_assets?.[0] ?? 'gold'}
+                    </Chip>
+                  </div>
+                )}
+                {m.payload.source === 'degraded' && (
+                  <div className="sources">
+                    <Chip
+                      variant="warning"
+                      icon="info"
+                      title="The Genie space is warming up. Live answers will resume shortly. No curated answers are served while it reconnects."
+                    >
+                      Genie reconnecting
+                    </Chip>
+                  </div>
+                )}
+                {m.payload.source !== 'computed_fallback' &&
+                  m.payload.source !== 'degraded' &&
+                  m.sources && m.sources.length > 0 && (
                   <div className="sources">
                     {m.sources.map((s, j) => (
                       <EvidenceChip key={j} source={drawerForAsset(s)} title={`Source: ${s}`}>

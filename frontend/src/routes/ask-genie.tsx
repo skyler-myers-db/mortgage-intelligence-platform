@@ -70,16 +70,50 @@ export default function AskGenie() {
   }
 
   const sourceLabel = payload?.source ?? '';
-  const sourceChip = sourceLabel || (payload?.trusted_assets?.[0] ?? '');
+  // The backend now emits three distinct source values:
+  //   "genie"             — answer came from the live Genie space.
+  //   "computed_fallback" — Genie was unreachable; answer was computed
+  //                         deterministically from gold tables at request
+  //                         time. The number is REAL (live SQL), not a
+  //                         catalog literal — but the user should be able
+  //                         to tell at a glance that this is a local
+  //                         fallback, not a live Genie answer. We render
+  //                         these chips with the warning variant +
+  //                         explicit "Local SQL fallback" copy.
+  //   "degraded"          — Genie + computed-fallback both unavailable.
+  //                         Honest "warming up" message with no numbers.
+  // 2026-05-04 follow-up to user feedback Q1 ("How is Genie figuring this
+  // out?"). The user must always know whether they're reading a Genie
+  // answer or a local SQL aggregation.
+  const isComputedFallback = sourceLabel === 'computed_fallback';
+  const isDegraded = sourceLabel === 'degraded';
+  const sourceChip = (() => {
+    if (isComputedFallback) {
+      const asset = payload?.trusted_assets?.[0] ?? 'gold tables';
+      return `Local SQL · ${asset}`;
+    }
+    if (isDegraded) {
+      return 'Genie reconnecting';
+    }
+    return sourceLabel || (payload?.trusted_assets?.[0] ?? '');
+  })();
+  const sourceChipTitle = isComputedFallback
+    ? 'Genie is reconnecting; this answer was computed from a deterministic local SQL aggregation against the gold table cited. The number is live, not a catalog literal.'
+    : isDegraded
+      ? 'The Genie space is warming up. Live answers will resume shortly. No curated answers are served while it reconnects.'
+      : undefined;
+  const sourceChipVariant: 'warning' | 'neutral' | undefined =
+    isComputedFallback || isDegraded ? 'warning' : undefined;
   // Map the Genie-provided source label to the best matching drawer entry.
   // Previously the chip always opened DRAWER_SOURCES.nbo regardless of the
   // actual source -- a parity bug on the evidence path. Fallback is `nbo`
   // so unrecognized sources still open a meaningful drawer rather than
-  // silently dropping the click.
+  // silently dropping the click. Computed-fallback / degraded chips don't
+  // route into the drawer (the chip itself is the explanation).
   const drawerForSource =
     /itm|rules/i.test(sourceChip) ? DRAWER_SOURCES.itm
       : /permit/i.test(sourceChip) ? DRAWER_SOURCES.permit
-      : /lead_population|population/i.test(sourceChip) ? DRAWER_SOURCES.population
+      : /lead_population|population|borrower_360/i.test(sourceChip) ? DRAWER_SOURCES.population
       : /config/i.test(sourceChip) ? DRAWER_SOURCES.config
       : DRAWER_SOURCES.nbo;
 
@@ -168,7 +202,24 @@ export default function AskGenie() {
                   {sourceChip && (
                     <div style={{ marginTop: 12, display: 'flex', gap: 6, alignItems: 'center' }}>
                       <span className="muted" style={{ fontSize: 11 }}>Source:</span>
-                      <EvidenceChip source={drawerForSource}>{sourceChip}</EvidenceChip>
+                      {sourceChipVariant === 'warning' ? (
+                        // Computed-fallback / degraded: render a non-clickable
+                        // warning chip with an explanatory tooltip so the user
+                        // can tell the source from a live Genie answer at a
+                        // glance. We don't open the drawer because the chip
+                        // text already names the table; clicking would just
+                        // open the population drawer which isn't the right
+                        // story here.
+                        <Chip
+                          variant="warning"
+                          icon={isComputedFallback ? 'bolt' : 'info'}
+                          title={sourceChipTitle}
+                        >
+                          {sourceChip}
+                        </Chip>
+                      ) : (
+                        <EvidenceChip source={drawerForSource}>{sourceChip}</EvidenceChip>
+                      )}
                     </div>
                   )}
                 </div>
