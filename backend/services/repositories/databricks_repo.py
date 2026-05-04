@@ -1230,29 +1230,40 @@ def _coerce_bool(value: Any) -> bool:
 
 
 class DatabricksGenieRepository:
-    """Real Genie + safe-corpus fallback gated on the ``genie`` breaker.
+    """Real Genie + honest degraded message gated on the ``genie`` breaker.
 
     The control flow is deliberately narrow and defensive:
 
-    1. If the ``genie`` circuit breaker is OPEN *and* the question
-       matches a canonical sample (deterministic catalog from
-       ``backend.services.genie_answers``), return that catalog answer
-       with ``source="fallback"`` so the canonical trio of questions
-       still lands.
+    1. If the ``genie`` circuit breaker is OPEN, return the honest
+       "warming up" message. We do NOT serve curated catalog answers
+       any more — they contained hardcoded specific numbers (counts,
+       dollar amounts, sample borrower IDs) that read as real Cotality
+       data even though the source chip said "fallback". CLAUDE.md
+       prohibits any mock fallback in the running app, so the only
+       acceptable degraded response is an honest "Genie is warming up"
+       message that contains zero fabricated content.
+       (2026-05-04: user feedback flagged the prior `source="fallback"`
+       answers as misleading.)
     2. Otherwise call ``ResilientGenieClient.ask(question)``. On
        success, adapt ``GenieResponse`` into the ``GenieMessageResponse``
        wire contract (``source="genie"``).
     3. If the call fails with ``DependencyDownError`` (breaker just
-       opened on us), fall back to the safe corpus; if the question
-       isn't in the corpus, return a honest "warming up" message --
-       never fabricate data.
+       opened on us), return the warming-up message — same path as (1).
     4. On any other exception, re-raise so the router's 503 translation
-       engages -- we never swallow to a mock answer.
+       engages — we never swallow to a mock answer.
+
+    The ``genie_answers`` catalog file is NOT removed: it still serves
+    follow-up-question lists (which are static UI suggestions, not
+    fabricated data) and remains available for tests + future use if we
+    ever land a fallback that computes from real UC tables on demand.
+    But its hardcoded answer bodies + table_rows never reach the user
+    at runtime through this path.
     """
 
     _WARMING_MESSAGE = (
-        "The Genie service is warming up - please try that question again "
-        "in a few seconds."
+        "Genie is warming up — try that question again in a few seconds. "
+        "Live answers come straight from the Mortgage Lead Intelligence "
+        "Genie space; no curated answers are served while it reconnects."
     )
 
     def __init__(self, genie: ResilientGenieClient) -> None:
@@ -1261,13 +1272,12 @@ class DatabricksGenieRepository:
     def respond(self, question: str) -> GenieMessageResponse:
         breaker_state = self._genie.resilient.breaker.state
         if breaker_state == "open":
-            return self._fallback_or_degraded(question)
+            return self._degraded(question)
         try:
             result = self._genie.ask(question)
         except DependencyDownError:
-            # Breaker opened during this call; serve safe corpus if we
-            # can, otherwise honest degraded message.
-            return self._fallback_or_degraded(question)
+            # Breaker opened during this call -> honest degraded message.
+            return self._degraded(question)
         except GenieClientError:
             # Underlying Genie surfaced an unrecoverable response (401,
             # 500, malformed JSON). Re-raise so the router translates
@@ -1279,29 +1289,25 @@ class DatabricksGenieRepository:
     # Internals
     # ------------------------------------------------------------------
 
-    def _fallback_or_degraded(self, question: str) -> GenieMessageResponse:
-        """Return a curated safe-corpus answer, or an honest degraded
-        message if the question has no match.
+    def _degraded(self, question: str) -> GenieMessageResponse:
+        """Return an honest "Genie is warming up" message.
 
-        ``genie_catalog_respond`` returns its own deterministic warm
-        fallback when no intent matches -- we detect that and replace
-        it with the "warming up" message so the user sees a resilience
-        signal, not a generic catch-all answer dressed up as real data.
+        We pull the catalog match purely so we can carry over its
+        ``follow_up_questions`` (static UI suggestions like "Which zips
+        have the most in-the-money refi candidates?" — these are
+        editorial prompt help, not fabricated data). The catalog's
+        answer body and table_rows are intentionally discarded so no
+        hardcoded numbers reach the wire when Genie is unreachable.
         """
         catalog_answer = genie_catalog_respond(question)
-        if catalog_answer.source == "deterministic_fallback":
-            # Unknown question + breaker open -> honest degraded state.
-            return GenieMessageResponse(
-                conversation_id=catalog_answer.conversation_id,
-                question=question,
-                answer=self._WARMING_MESSAGE,
-                source="degraded",
-                trusted_assets=[],
-                follow_up_questions=catalog_answer.follow_up_questions,
-            )
-        # Rewrite the source marker so the UI can style the fallback
-        # banner / the caller can tell catalog vs live apart.
-        return catalog_answer.model_copy(update={"source": "fallback"})
+        return GenieMessageResponse(
+            conversation_id=catalog_answer.conversation_id,
+            question=question,
+            answer=self._WARMING_MESSAGE,
+            source="degraded",
+            trusted_assets=[],
+            follow_up_questions=catalog_answer.follow_up_questions,
+        )
 
 
 def _adapt_genie_response(

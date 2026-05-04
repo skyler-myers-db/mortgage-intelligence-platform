@@ -78,30 +78,62 @@ export function Topbar() {
         <span className="cur">{crumb}</span>
       </div>
       <div className="topbar__spacer" />
-      <div className="topbar__pill" title="Lender">
+      {/* Lender pill — tenant currently signed in, set per-user via the
+          Console panel. Drives the lender-config predicate everywhere
+          downstream. */}
+      <div
+        className="topbar__pill"
+        title={`Lender · ${lender}. Drives the lender-config filter on every gold rollup. Change in the Console panel.`}
+        aria-label={`Lender: ${lender}`}
+      >
         <Icon name="building" size={12} />
         <span>{lender}</span>
       </div>
+      {/* Environment pill — which workspace the app is bound to. `sandbox`
+          is the dev workspace (Entrada-internal evaluation share);
+          `production` is the customer's prod workspace. Comes from
+          APP_ENV env var → backend.config.settings → /api/health. The
+          dot color encodes severity (amber = non-prod, green = prod).
+          Tooltip spells it out so the label is self-explanatory.
+          User feedback 2026-05-04: "what does sandbox mean?" */}
       <div
         className="topbar__pill"
-        title={`Environment: ${envLabel}`}
+        title={
+          envLabel === 'production'
+            ? 'Environment · production. Bound to the customer production workspace.'
+            : `Environment · ${envLabel}. Non-prod evaluation workspace; data and audit rows are not customer-facing.`
+        }
+        aria-label={`Environment: ${envLabel}`}
       >
         <span className={`dot ${envLabel === 'production' ? 'green' : 'amber'}`} />
         <span>{envLabel}</span>
       </div>
+      {/* Warehouse status pill — live state of the analytics SQL
+          warehouse the app reads from. `live` (with heartbeat dot) =
+          warehouse is up and answering health probes; `offline` =
+          warehouse is down or the breaker is open; `…` = first probe
+          still in flight. Tooltip surfaces the exact dependency state
+          + breaker. User feedback 2026-05-04: "what does warehouse
+          mean?" — relabeled from the bare token "warehouse" to the
+          self-explanatory "Warehouse · live / offline". */}
       <div
         className="topbar__pill"
         title={
           health
-            ? `Warehouse: ${warehouseUp ? 'up' : 'down'} · breaker ${
+            ? `Warehouse · ${warehouseUp ? 'live' : 'offline'}. Breaker ${
                 health.circuit_breakers?.warehouse ?? 'unknown'
-              }`
-            : 'Warehouse: probing'
+              }. Driven by the /api/health probe.`
+            : 'Warehouse · probing — first health probe in flight.'
+        }
+        aria-label={
+          health
+            ? `Warehouse status: ${warehouseUp ? 'live' : 'offline'}`
+            : 'Warehouse status: probing'
         }
       >
         <span className={warehouseDot} aria-hidden="true" style={warehouseColor} />
         <span style={{ fontFamily: 'var(--font-mono)' }}>
-          {warehouseUp ? 'warehouse' : health ? 'offline' : '…'}
+          {warehouseUp ? 'Warehouse · live' : health ? 'Warehouse · offline' : 'Warehouse · …'}
         </span>
       </div>
       {footprintFallback && mountGraceOver && (

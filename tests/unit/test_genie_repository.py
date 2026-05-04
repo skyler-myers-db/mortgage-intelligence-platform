@@ -4,10 +4,15 @@ Contract under test:
 
 1. Breaker CLOSED + happy path: calls ``ResilientGenieClient.ask`` and
    adapts the response to ``GenieMessageResponse(source="genie")``.
-2. Breaker OPEN + question in safe corpus: returns the curated catalog
-   answer with ``source="fallback"``.
-3. Breaker OPEN + unknown question: returns the honest "warming up"
-   message with ``source="degraded"``, never fabricated data.
+2. Breaker OPEN + question in safe corpus: returns the honest "warming
+   up" message with ``source="degraded"``. Prior behavior (`source=
+   "fallback"` with a curated catalog answer body) was retired
+   2026-05-04 — the catalog answers shipped hardcoded specific numbers
+   that read as real Cotality data. CLAUDE.md prohibits mock fallback
+   in the running app, so the only acceptable degraded response carries
+   no fabricated content.
+3. Breaker OPEN + unknown question: also returns the honest "warming
+   up" message with ``source="degraded"``, never fabricated data.
 4. ``DependencyDownError`` bubbled from the client with the breaker
    just opening: falls back to the safe corpus / degraded message.
 5. ``GenieClientError`` from the live client (401, 500, malformed JSON)
@@ -103,16 +108,28 @@ def test_breaker_closed_calls_live_genie_and_stamps_source() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_breaker_open_with_catalog_match_returns_fallback() -> None:
-    # Breaker open; question matches the ``in_the_money`` intent in the
-    # curated catalog.
+def test_breaker_open_with_catalog_match_returns_degraded() -> None:
+    # Breaker open; even when the question matches a catalog intent we
+    # now return the honest "Genie is warming up" message rather than
+    # the curated catalog answer body. The catalog used to ship hard-
+    # coded specific numbers (counts, dollar amounts, sample borrower
+    # IDs) tagged source="fallback"; user feedback 2026-05-04 flagged
+    # those as misleading because they read like real Cotality data.
+    # CLAUDE.md prohibits mock fallback in the running app, so the
+    # only acceptable degraded response carries no fabricated content.
     stub = _StubClient(_make_breaker("open"), response=None)
     repo = DatabricksGenieRepository(stub)  # type: ignore[arg-type]
 
     result = repo.respond("show me the in the money segment")
 
-    assert result.source == "fallback"
-    assert result.answer  # curated catalog answer carries content
+    assert result.source == "degraded"
+    assert "warming up" in result.answer.lower()
+    # No trusted assets on a degraded reply — we are not claiming a
+    # source we cannot cite.
+    assert result.trusted_assets == []
+    # Follow-up suggestions still flow through (static UI hints, not
+    # fabricated data).
+    assert result.follow_up_questions
     assert result.question == "show me the in the money segment"
     # Live client must NOT have been called while the breaker was open.
     assert stub.ask_calls == []
@@ -137,10 +154,13 @@ def test_breaker_open_unknown_question_returns_degraded_message() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_dependency_down_error_falls_back_to_safe_corpus() -> None:
+def test_dependency_down_error_returns_degraded() -> None:
     # Breaker closed at check time but the call itself raises
     # DependencyDownError (simulating the breaker opening during the
-    # attempt). Safe-corpus match should kick in.
+    # attempt). We now return the honest degraded message regardless
+    # of whether the question matched the catalog (2026-05-04: see
+    # `test_breaker_open_with_catalog_match_returns_degraded` for the
+    # rationale — catalog answer bodies were misleading).
     stub = _StubClient(
         _make_breaker("closed"),
         response=DependencyDownError("genie", reason="circuit opened mid-call"),
@@ -148,7 +168,10 @@ def test_dependency_down_error_falls_back_to_safe_corpus() -> None:
     repo = DatabricksGenieRepository(stub)  # type: ignore[arg-type]
 
     result = repo.respond("show me the in the money segment")
-    assert result.source == "fallback"
+    assert result.source == "degraded"
+    assert "warming up" in result.answer.lower()
+    # The live client WAS attempted (breaker was closed at check time);
+    # only the call itself raised.
     assert stub.ask_calls == ["show me the in the money segment"]
 
 
@@ -228,7 +251,8 @@ def test_end_to_end_with_real_resilient_wrapper() -> None:
     # After the failure, breaker is open.
     assert breaker.state == "open"
 
-    # Next call with a catalog-matching question -> safe-corpus fallback,
-    # no live call attempted.
+    # Next call with a catalog-matching question -> still degraded
+    # message (no fabricated data), no live call attempted.
     second = repo.respond("show me the in the money segment")
-    assert second.source == "fallback"
+    assert second.source == "degraded"
+    assert "warming up" in second.answer.lower()
