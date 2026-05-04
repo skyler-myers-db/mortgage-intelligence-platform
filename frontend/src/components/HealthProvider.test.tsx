@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { HealthProvider, computeDegraded, useHealth, useOptionalHealth } from './HealthProvider';
+import {
+  HealthProvider,
+  applyDownUpDebounce,
+  computeDegraded,
+  useHealth,
+  useOptionalHealth,
+} from './HealthProvider';
 
 /**
  * HealthProvider — unit tests for the shared `/api/health` poll.
@@ -62,6 +68,82 @@ describe('computeDegraded', () => {
         circuit_breakers: { warehouse: 'closed', lakebase: 'closed', genie: 'closed' },
       }),
     ).toBe(false);
+  });
+});
+
+describe('applyDownUpDebounce', () => {
+  // Pure-function tests for the down→up debounce. Cadence + React
+  // wiring are covered by the SSR-contract block + the existing
+  // DegradedBanner integration tests + the e2e smoke. 2026-05-04
+  // follow-up to user feedback: "the reconnecting banner seems to
+  // be up a *lot*."
+  const RAW_DOWN = {
+    status: 'degraded' as const,
+    mode: 'live',
+    dependencies: { warehouse: 'down', lakebase: 'up', genie: 'up' },
+  };
+  const RAW_UP = {
+    status: 'ok' as const,
+    mode: 'live',
+    dependencies: { warehouse: 'up', lakebase: 'up', genie: 'up' },
+  };
+
+  it('first probe is trusted as-is (no prior to debounce against)', () => {
+    const { payload, next } = applyDownUpDebounce(RAW_UP, {}, 1000, 5000);
+    expect(payload.dependencies?.warehouse).toBe('up');
+    expect(next.warehouse?.filtered).toBe('up');
+    expect(next.warehouse?.pendingUpSince).toBeNull();
+  });
+
+  it('raw down flips immediately to down (real outages surface fast)', () => {
+    const prior = { warehouse: { filtered: 'up' as const, pendingUpSince: null } };
+    const { payload } = applyDownUpDebounce(RAW_DOWN, prior, 1000, 5000);
+    expect(payload.dependencies?.warehouse).toBe('down');
+  });
+
+  it('raw up after a down stays "down" inside the debounce window', () => {
+    const priorDown = { warehouse: { filtered: 'down' as const, pendingUpSince: null } };
+    const r1 = applyDownUpDebounce(RAW_UP, priorDown, 1000, 5000);
+    expect(r1.payload.dependencies?.warehouse).toBe('down');
+    expect(r1.next.warehouse?.pendingUpSince).toBe(1000);
+    // Second up probe 2s later — still inside the 5s window.
+    const r2 = applyDownUpDebounce(RAW_UP, r1.next, 3000, 5000);
+    expect(r2.payload.dependencies?.warehouse).toBe('down');
+    expect(r2.next.warehouse?.pendingUpSince).toBe(1000); // pending preserved
+  });
+
+  it('raw up after the debounce window flips to up', () => {
+    const priorDown = { warehouse: { filtered: 'down' as const, pendingUpSince: null } };
+    const r1 = applyDownUpDebounce(RAW_UP, priorDown, 1000, 5000);
+    expect(r1.payload.dependencies?.warehouse).toBe('down');
+    // 5500ms later — past the 5000ms window.
+    const r2 = applyDownUpDebounce(RAW_UP, r1.next, 6500, 5000);
+    expect(r2.payload.dependencies?.warehouse).toBe('up');
+    expect(r2.next.warehouse?.pendingUpSince).toBeNull();
+  });
+
+  it('a brief flap in the middle of debounce keeps it down + restarts pending', () => {
+    const priorDown = { warehouse: { filtered: 'down' as const, pendingUpSince: null } };
+    const r1 = applyDownUpDebounce(RAW_UP, priorDown, 1000, 5000);
+    // Flap back to down at t=2000 — pending should clear.
+    const r2 = applyDownUpDebounce(RAW_DOWN, r1.next, 2000, 5000);
+    expect(r2.payload.dependencies?.warehouse).toBe('down');
+    expect(r2.next.warehouse?.pendingUpSince).toBeNull();
+    // Up again at t=3000 — must restart the debounce window from t=3000.
+    const r3 = applyDownUpDebounce(RAW_UP, r2.next, 3000, 5000);
+    expect(r3.next.warehouse?.pendingUpSince).toBe(3000);
+    // At t=7000 (4s after restart) — still inside the new window.
+    const r4 = applyDownUpDebounce(RAW_UP, r3.next, 7000, 5000);
+    expect(r4.payload.dependencies?.warehouse).toBe('down');
+    // At t=8500 — finally past the new window.
+    const r5 = applyDownUpDebounce(RAW_UP, r4.next, 8500, 5000);
+    expect(r5.payload.dependencies?.warehouse).toBe('up');
+  });
+
+  it('debounceMs=0 disables the debounce (instant flips both directions)', () => {
+    const priorDown = { warehouse: { filtered: 'down' as const, pendingUpSince: null } };
+    const { payload } = applyDownUpDebounce(RAW_UP, priorDown, 1000, 0);
+    expect(payload.dependencies?.warehouse).toBe('up');
   });
 });
 

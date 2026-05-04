@@ -60,6 +60,19 @@ interface HealthProviderProps {
   pollIntervalOkMs?: number;
   pollIntervalDegradedMs?: number;
   /**
+   * Debounce window applied to the down→up transition for each
+   * dependency (warehouse / lakebase / genie). A dep that flaps back
+   * to "up" briefly is reported as still "down" until it has been
+   * "up" for at least this many ms across consecutive probes. The
+   * up→down direction is NOT debounced — real outages surface
+   * immediately. Default 5000ms (≈ 1–2 polls at degraded cadence)
+   * smooths the serverless warehouse cold-start cycle without
+   * masking sustained problems. Set to 0 in tests for instant flips.
+   * 2026-05-04 follow-up to user feedback: "the reconnecting banner
+   * seems to be up a *lot*."
+   */
+  debounceUpMs?: number;
+  /**
    * Injected fetcher for tests. Defaults to `api.health()` which
    * already tolerates network failures (returns an "unreachable"
    * snapshot instead of throwing) and routes through the retry
@@ -68,9 +81,90 @@ interface HealthProviderProps {
   fetchHealth?: (signal?: AbortSignal) => Promise<HealthPayload>;
 }
 
+/** Per-dependency state we track for the debounce. `pendingUpSince` is
+ *  the wall-clock ms (`performance.now()`) at which we first saw an
+ *  "up" probe after a "down" — null when the dep is currently "up" or
+ *  has never been "up". `filtered` is what we expose to consumers. */
+interface DebounceState {
+  filtered: 'up' | 'down' | 'unknown';
+  pendingUpSince: number | null;
+}
+
+const DEPS_TRACKED = ['warehouse', 'lakebase', 'genie'] as const;
+
+/** Apply the down→up debounce to a fresh raw payload + the prior
+ *  per-dep filter state. Pure function so it is testable in isolation
+ *  and the cadence loop remains readable.
+ *
+ *  Rules per dep:
+ *    raw=down  → filtered=down, clear pending          (instant outage)
+ *    raw=up + filtered already up → keep up
+ *    raw=up + filtered=down + no pending → start pending (filtered stays down)
+ *    raw=up + filtered=down + pending elapsed ≥ debounceMs → flip to up, clear pending
+ *    raw=up + filtered=down + pending not elapsed → stay down (still debouncing)
+ *    raw=unknown → keep prior filter (don't flap on missing data)
+ *
+ *  Returned payload is a shallow copy of `raw` with `dependencies`
+ *  replaced by the filtered dict. Consumers (DegradedBanner, Topbar
+ *  pill) keep reading the same `HealthPayload` shape — no API change.
+ */
+export function applyDownUpDebounce(
+  raw: HealthPayload,
+  prior: Record<string, DebounceState>,
+  nowMs: number,
+  debounceMs: number,
+): { payload: HealthPayload; next: Record<string, DebounceState> } {
+  const rawDeps = raw.dependencies ?? {};
+  const next: Record<string, DebounceState> = { ...prior };
+  const filteredDeps: Record<string, string> = { ...rawDeps };
+  for (const dep of DEPS_TRACKED) {
+    const rawState = rawDeps[dep];
+    const priorState = prior[dep] ?? { filtered: 'unknown', pendingUpSince: null };
+    if (rawState === 'down') {
+      next[dep] = { filtered: 'down', pendingUpSince: null };
+      filteredDeps[dep] = 'down';
+    } else if (rawState === 'up') {
+      if (priorState.filtered === 'up') {
+        next[dep] = { filtered: 'up', pendingUpSince: null };
+        filteredDeps[dep] = 'up';
+      } else if (debounceMs <= 0) {
+        next[dep] = { filtered: 'up', pendingUpSince: null };
+        filteredDeps[dep] = 'up';
+      } else if (priorState.filtered === 'unknown') {
+        // First-ever observation for this dep → trust it (there's no
+        // prior down to debounce against). pendingUpSince stays null.
+        next[dep] = { filtered: 'up', pendingUpSince: null };
+        filteredDeps[dep] = 'up';
+      } else if (priorState.pendingUpSince === null) {
+        // Prior was "down", now first "up" probe → start the debounce
+        // window. Keep showing "down" until the window elapses.
+        next[dep] = { filtered: 'down', pendingUpSince: nowMs };
+        filteredDeps[dep] = 'down';
+      } else if (nowMs - priorState.pendingUpSince >= debounceMs) {
+        next[dep] = { filtered: 'up', pendingUpSince: null };
+        filteredDeps[dep] = 'up';
+      } else {
+        next[dep] = priorState; // still debouncing
+        filteredDeps[dep] = 'down';
+      }
+    } else {
+      // unknown / missing — preserve prior filter; don't claim transitions.
+      next[dep] = priorState;
+      if (priorState.filtered !== 'unknown') {
+        filteredDeps[dep] = priorState.filtered;
+      }
+    }
+  }
+  return {
+    payload: { ...raw, dependencies: filteredDeps },
+    next,
+  };
+}
+
 export function HealthProvider({
   pollIntervalOkMs = 8000,
   pollIntervalDegradedMs = 3000,
+  debounceUpMs = 5000,
   fetchHealth = api.health,
   children,
 }: PropsWithChildren<HealthProviderProps>) {
@@ -80,6 +174,10 @@ export function HealthProvider({
   // Latest degraded flag in a ref so the polling loop reads the fresh
   // cadence without being re-registered every time the state flips.
   const degradedRef = useRef(false);
+  // Per-dependency debounce state. Lives in a ref so the tick closure
+  // sees the latest pendingUpSince across re-renders without React
+  // batching it out of order.
+  const debounceRef = useRef<Record<string, DebounceState>>({});
 
   useEffect(() => {
     const ctrl = new AbortController();
@@ -89,9 +187,16 @@ export function HealthProvider({
     const tick = async () => {
       const t0 = performance.now();
       try {
-        const payload = await fetchHealth(ctrl.signal);
+        const rawPayload = await fetchHealth(ctrl.signal);
         if (cancelled) return;
         const elapsed = Math.round(performance.now() - t0);
+        const { payload, next } = applyDownUpDebounce(
+          rawPayload,
+          debounceRef.current,
+          performance.now(),
+          debounceUpMs,
+        );
+        debounceRef.current = next;
         setHealth(payload);
         setProbeMs(elapsed);
         setFetchedAt(new Date().toISOString());
@@ -101,12 +206,22 @@ export function HealthProvider({
         // api.health() swallows network errors internally and returns
         // an "unreachable" payload, so landing here means the caller
         // passed a custom fetcher that actually threw. Treat that as
-        // degraded so the next tick runs faster.
-        setHealth({
+        // degraded so the next tick runs faster — and feed it through
+        // the same debounce so a single thrown probe doesn't immediately
+        // wipe out a healthy filter.
+        const fakeRaw: HealthPayload = {
           status: 'degraded',
           mode: 'unknown',
           dependencies: { warehouse: 'down', lakebase: 'down' },
-        });
+        };
+        const { payload, next } = applyDownUpDebounce(
+          fakeRaw,
+          debounceRef.current,
+          performance.now(),
+          debounceUpMs,
+        );
+        debounceRef.current = next;
+        setHealth(payload);
         setProbeMs(null);
         setFetchedAt(new Date().toISOString());
         degradedRef.current = true;
@@ -124,7 +239,7 @@ export function HealthProvider({
       ctrl.abort();
       if (timer !== null) clearTimeout(timer);
     };
-  }, [fetchHealth, pollIntervalDegradedMs, pollIntervalOkMs]);
+  }, [fetchHealth, pollIntervalDegradedMs, pollIntervalOkMs, debounceUpMs]);
 
   const value = useMemo<HealthContextValue>(
     () => ({
