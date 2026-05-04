@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { stripQuestionRestatement } from './GenieAnswer';
+import { inferChartFromBullets, stripQuestionRestatement } from './GenieAnswer';
 
 /**
  * GenieAnswer.stripQuestionRestatement is the small piece of pre-render
@@ -61,5 +61,96 @@ describe('stripQuestionRestatement', () => {
     // return the original — never render an empty bubble.
     const input = 'You want to see the data.';
     expect(stripQuestionRestatement(input)).toBe('You want to see the data.');
+  });
+});
+
+/**
+ * inferChartFromBullets is the parser that fixes the round-4 bug
+ * where Genie returns prose-with-embedded-data and no chart shows.
+ * The screenshot the user sent has the EXACT shape exercised here.
+ */
+describe('inferChartFromBullets', () => {
+  it('parses the user-reported screenshot case (top-5 ZIPs)', () => {
+    const text = [
+      'Defined as having at least 35% equity.',
+      '',
+      'The top 5 ZIP codes with the highest number of HELOC-eligible borrowers (with at least 35% equity) are:',
+      '',
+      '- **60611**: 6,506 borrowers',
+      '- **60605**: 4,896 borrowers',
+      '- **60610**: 4,507 borrowers',
+      '- **92602**: 4,421 borrowers',
+      '- **60607**: 3,314 borrowers',
+      '',
+      'ZIP 60611 leads by a significant margin, with nearly 2,000 more eligible borrowers than the next highest ZIP. Source: mip.gold.borrower_360.',
+    ].join('\n');
+    const chart = inferChartFromBullets(text);
+    expect(chart).not.toBeNull();
+    expect(chart?.rows).toHaveLength(5);
+    expect(chart?.rows[0]).toEqual({ label: '60611', value: 6506 });
+    expect(chart?.rows[4]).toEqual({ label: '60607', value: 3314 });
+    expect(chart?.source).toBe('answer_bullets');
+  });
+
+  it('handles em-dash separators ("Cook County — 95,432")', () => {
+    const text = [
+      'Top counties by lead count:',
+      '- Cook County — 95,432',
+      '- Travis County — 14,200',
+      '- Harris County — 12,500',
+    ].join('\n');
+    const chart = inferChartFromBullets(text);
+    expect(chart?.rows).toEqual([
+      { label: 'Cook County', value: 95432 },
+      { label: 'Travis County', value: 14200 },
+      { label: 'Harris County', value: 12500 },
+    ]);
+  });
+
+  it('handles "label has number" pattern', () => {
+    const text = [
+      'Top markets:',
+      'Chicago has 87,432 borrowers',
+      'Austin has 14,200 borrowers',
+      'Seattle has 9,876 borrowers',
+    ].join('\n');
+    const chart = inferChartFromBullets(text);
+    expect(chart?.rows).toHaveLength(3);
+    expect(chart?.rows[0]).toEqual({ label: 'Chicago', value: 87432 });
+  });
+
+  it('returns null when fewer than 2 chartable rows', () => {
+    expect(inferChartFromBullets('Just one: 42 borrowers.')).toBeNull();
+    expect(inferChartFromBullets('No bullets here at all, just prose.')).toBeNull();
+    expect(inferChartFromBullets('')).toBeNull();
+  });
+
+  it('dedupes identical labels (defensive against reparse)', () => {
+    // If Genie repeats a label (e.g., header line that also matches),
+    // we should only count it once. Without the dedupe we could pair
+    // a row with itself and emit a single-bar chart pretending to be
+    // a multi-bar one.
+    const text = [
+      '- Foo: 100',
+      '- Bar: 200',
+      '- Foo: 100',
+    ].join('\n');
+    const chart = inferChartFromBullets(text);
+    expect(chart?.rows).toHaveLength(2);
+  });
+
+  it('skips lines whose label is too long to fit a bar (defensive)', () => {
+    // 60-char label cap — anything longer is probably a sentence,
+    // not a label. Without this, a sentence ending in a number
+    // would be parsed as one giant bar.
+    const giant = 'a'.repeat(80);
+    const text = [
+      `- ${giant}: 9999`,
+      '- ZIP 60611: 6,506 borrowers',
+      '- ZIP 60605: 4,896 borrowers',
+    ].join('\n');
+    const chart = inferChartFromBullets(text);
+    expect(chart?.rows).toHaveLength(2);
+    expect(chart?.rows[0].label.startsWith('a')).toBe(false);
   });
 });

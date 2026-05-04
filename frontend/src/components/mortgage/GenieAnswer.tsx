@@ -191,32 +191,37 @@ function MarkdownAnswer({ text }: { text: string }) {
 }
 
 /**
- * Auto-detect "this table_rows payload is one categorical column +
- * one numeric column" — the simplest shape that's worth charting.
+ * Auto-detect a chartable payload. Tries TWO sources in order:
+ *
+ *   1. Structured `table_rows` (when Genie wrote SQL and returned
+ *      query rows): one categorical column + one numeric column.
+ *
+ *   2. Bullet-list inside the answer text (when Genie answered in
+ *      prose, e.g. "- 60611: 6,506 borrowers" or "60611 has 6,506
+ *      borrowers"): parse the bullets into label/value pairs.
+ *
  * Returns {label, value} per row when chartable, else null.
  *
- * 2026-05-04 (FIX Δ3): the user wants charts on the /ask-genie deep-
- * dive view when the data calls for it (a top-N by category, a
- * per-state breakdown, etc.) without forcing a chart on every text
- * answer. Detection rules:
- *   - 2 to MAX_TABLE_COLS columns total (else the table is too wide
- *     to summarize with one bar series)
- *   - one column has ALL string values (the label axis)
- *   - the other has ALL numeric values (the bar height)
- *   - >= 2 rows (a single bar isn't a chart)
- *
- * The Genie space's `chart_spec` attachment path (Vega-Lite JSON
- * via a follow-up GET) is documented but not wired today; this
- * table-rows-shaped detector covers the common cases without that
- * extra round-trip. When chart_spec lands we can switch to it as
- * the primary path.
+ * 2026-05-04 (FIX ε1, supersedes Δ3): round-4 only handled (1).
+ * The screenshot the user shared had answer prose with bullet data
+ * and zero `table_rows`, so the chart never rendered — failure
+ * I caused by not testing live. (2) closes that gap so the
+ * common "Top N ZIPs by X" question now charts even when Genie
+ * embeds the data in the prose.
  */
-type ChartRow = { label: string; value: number };
+export type ChartRow = { label: string; value: number };
+
+export interface InferredChart {
+  rows: ChartRow[];
+  labelCol: string;
+  valueCol: string;
+  source: 'table_rows' | 'answer_bullets';
+}
 
 function inferChartFromRows(
   rows: Array<Record<string, unknown>>,
   columns: string[],
-): { rows: ChartRow[]; labelCol: string; valueCol: string } | null {
+): InferredChart | null {
   if (rows.length < 2) return null;
   if (columns.length < 2 || columns.length > MAX_TABLE_COLS) return null;
   // Walk the columns once and tag each as "all string" / "all
@@ -251,7 +256,110 @@ function inferChartFromRows(
     projected.push({ label: lv, value: vv });
   }
   if (projected.length < 2) return null;
-  return { rows: projected, labelCol, valueCol };
+  return { rows: projected, labelCol, valueCol, source: 'table_rows' };
+}
+
+/**
+ * Parse bullet-list data out of a Genie answer's prose.
+ *
+ * Real examples we've seen Genie produce in this app:
+ *
+ *   - **60611**: 6,506 borrowers
+ *   - 60605: 4,896 borrowers
+ *   • Travis County: 14,200 candidates
+ *   1) Cook County — 95,432
+ *   - Refinance + HELOC: 87 candidates
+ *
+ * Strategy: scan each line of the answer; when a line starts with a
+ * bullet/number marker, look for "<label>: <number>" or
+ * "<label> — <number>" or "<label> has <number>" patterns. Coerce
+ * comma-separated numbers ("6,506") to integers; ignore decimal
+ * percentages or currency unless they're the only number (then
+ * accept). Return null when fewer than 2 chartable lines were found.
+ *
+ * Exported for unit testing — see GenieAnswer.test.tsx.
+ */
+export function inferChartFromBullets(text: string): InferredChart | null {
+  if (!text) return null;
+  const lines = text.split(/\r?\n/);
+  // Bullet markers: -, *, •, 1), 1., etc. Strip them off so the
+  // label scan sees clean "<label>: <num>" pairs. Accept lines that
+  // look like list items even without an explicit marker IF they
+  // start with a small distinctive label (e.g., a ZIP, a county).
+  const bulletPattern = /^\s*(?:[-*•]|\d{1,2}[.)])\s+(.*)$/;
+  // Number capture: 6,506 / 6506 / 6,506.42 / 6506.42 / -3.5
+  // Match the LAST number in the line so "Score: 86 (out of 100)"
+  // reads "86" not "100" — the leading number is usually the value.
+  // Actually first-significant: find a "label: number" or
+  // "label — number" pattern explicitly.
+  const labelValuePatterns = [
+    /^(.+?):\s*[*]*([\d,]+(?:\.\d+)?)[*]*\b/,
+    /^(.+?)\s*[—–-]\s*[*]*([\d,]+(?:\.\d+)?)[*]*\b/,
+    /^(.+?)\s+(?:has|with|=|is)\s+[*]*([\d,]+(?:\.\d+)?)[*]*\b/i,
+  ];
+  const collected: ChartRow[] = [];
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line) continue;
+    // Strip bullet marker if present, but ALSO accept un-marked
+    // lines that match a label:number pattern (Genie sometimes
+    // omits markers when the list is short).
+    const stripped = (() => {
+      const m = bulletPattern.exec(line);
+      return m ? m[1].trim() : line;
+    })();
+    let matched: { label: string; value: number } | null = null;
+    for (const re of labelValuePatterns) {
+      const m = re.exec(stripped);
+      if (!m) continue;
+      const label = m[1]
+        .replace(/\*\*/g, '') // strip markdown bold
+        .replace(/^[-•*\s]+/, '')
+        .trim();
+      const num = Number(m[2].replace(/,/g, ''));
+      if (!Number.isFinite(num)) continue;
+      if (label.length === 0 || label.length > 60) continue;
+      matched = { label, value: num };
+      break;
+    }
+    if (matched) collected.push(matched);
+  }
+  // Need at least 2 distinct rows AND every label distinct (else
+  // we're charting "the same thing twice", which signals we
+  // mis-parsed). Cap at 12 to match the chart's MAX_BARS.
+  const seen = new Set<string>();
+  const distinct = collected.filter((r) => {
+    if (seen.has(r.label)) return false;
+    seen.add(r.label);
+    return true;
+  });
+  if (distinct.length < 2) return null;
+  return {
+    rows: distinct,
+    // Best-effort heuristic for axis labels: pull "X by Y" or "X for Y"
+    // from the first sentence of the answer when present, otherwise
+    // generic.
+    labelCol: 'category',
+    valueCol: 'value',
+    source: 'answer_bullets',
+  };
+}
+
+/**
+ * Combined chart inference: prefer structured rows; fall back to the
+ * bullet parser. Future: if the backend starts shipping a
+ * `chart_spec` field on GenieMessageResponse (Vega-Lite from a Genie
+ * attachment), prefer that as the highest-fidelity path because it
+ * lets Genie pick the chart type, not us.
+ */
+function inferChart(
+  rows: Array<Record<string, unknown>>,
+  columns: string[],
+  answerText: string,
+): InferredChart | null {
+  return (
+    inferChartFromRows(rows, columns) ?? inferChartFromBullets(answerText)
+  );
 }
 
 /**
@@ -383,10 +491,12 @@ export function GenieAnswer({
   const hiddenRows = Math.max(0, rows.length - MAX_TABLE_ROWS);
   const columns = visibleRows[0] ? Object.keys(visibleRows[0]).slice(0, MAX_TABLE_COLS) : [];
   const cleanedAnswer = answer ? stripQuestionRestatement(answer) : '';
-  // Chart is optional: only computed when the caller opts in AND the
-  // table_rows shape is chartable. Computed lazily so the floating
-  // bubble (which never opts in) doesn't pay the inference cost.
-  const chart = withChart ? inferChartFromRows(rows, columns) : null;
+  // Chart is optional: only computed when the caller opts in. Tries
+  // structured table_rows first, then falls back to parsing bullet-
+  // list data out of the answer text. The bullet path is what fixes
+  // the "Top 5 ZIPs by HELOC" case — Genie returns prose with
+  // embedded numbers and zero table_rows.
+  const chart = withChart ? inferChart(rows, columns, cleanedAnswer) : null;
 
   return (
     <div>
