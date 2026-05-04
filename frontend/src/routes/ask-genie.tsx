@@ -70,40 +70,21 @@ export default function AskGenie() {
   }
 
   const sourceLabel = payload?.source ?? '';
-  // The backend now emits three distinct source values:
-  //   "genie"             — answer came from the live Genie space.
-  //   "computed_fallback" — Genie was unreachable; answer was computed
-  //                         deterministically from gold tables at request
-  //                         time. The number is REAL (live SQL), not a
-  //                         catalog literal — but the user should be able
-  //                         to tell at a glance that this is a local
-  //                         fallback, not a live Genie answer. We render
-  //                         these chips with the warning variant +
-  //                         explicit "Local SQL fallback" copy.
-  //   "degraded"          — Genie + computed-fallback both unavailable.
-  //                         Honest "warming up" message with no numbers.
-  // 2026-05-04 follow-up to user feedback Q1 ("How is Genie figuring this
-  // out?"). The user must always know whether they're reading a Genie
-  // answer or a local SQL aggregation.
-  const isComputedFallback = sourceLabel === 'computed_fallback';
+  // The backend emits two source values:
+  //   "genie"    — answer came from the live Genie space.
+  //   "degraded" — Genie is unreachable. Honest "warming up" message
+  //                with no numbers. (The "computed_fallback" path that
+  //                used a Python SQL template was removed 2026-05-04
+  //                per user feedback: "we don't want this app to be
+  //                gimmicky at all.")
   const isDegraded = sourceLabel === 'degraded';
-  const sourceChip = (() => {
-    if (isComputedFallback) {
-      const asset = payload?.trusted_assets?.[0] ?? 'gold tables';
-      return `Local SQL · ${asset}`;
-    }
-    if (isDegraded) {
-      return 'Genie reconnecting';
-    }
-    return sourceLabel || (payload?.trusted_assets?.[0] ?? '');
-  })();
-  const sourceChipTitle = isComputedFallback
-    ? 'Genie is reconnecting; this answer was computed from a deterministic local SQL aggregation against the gold table cited. The number is live, not a catalog literal.'
-    : isDegraded
-      ? 'The Genie space is warming up. Live answers will resume shortly. No curated answers are served while it reconnects.'
-      : undefined;
-  const sourceChipVariant: 'warning' | 'neutral' | undefined =
-    isComputedFallback || isDegraded ? 'warning' : undefined;
+  const sourceChip = isDegraded
+    ? 'Genie reconnecting'
+    : sourceLabel || (payload?.trusted_assets?.[0] ?? '');
+  const sourceChipTitle = isDegraded
+    ? 'The Genie space is warming up. Live answers will resume shortly.'
+    : undefined;
+  const sourceChipVariant: 'warning' | undefined = isDegraded ? 'warning' : undefined;
   // Map the Genie-provided source label to the best matching drawer entry.
   // Returns null when no specific match exists — the chip then renders as
   // an inert neutral chip rather than defaulting to NBO and misleading
@@ -204,14 +185,11 @@ export default function AskGenie() {
                     <div style={{ marginTop: 12, display: 'flex', gap: 6, alignItems: 'center' }}>
                       <span className="muted" style={{ fontSize: 11 }}>Source:</span>
                       {sourceChipVariant === 'warning' ? (
-                        // Computed-fallback / degraded: render a non-clickable
-                        // warning chip with an explanatory tooltip so the user
-                        // can tell the source from a live Genie answer at a
-                        // glance. We don't open the drawer because the chip
-                        // text already names the table.
+                        // Degraded: warning chip with tooltip so the user
+                        // knows Genie is reconnecting. Not clickable.
                         <Chip
                           variant="warning"
-                          icon={isComputedFallback ? 'bolt' : 'info'}
+                          icon="info"
                           title={sourceChipTitle}
                         >
                           {sourceChip}
