@@ -41,6 +41,7 @@ GOLD_DDL_FILES: tuple[str, ...] = (
     "gold_county_rollup.sql",
     "gold_zip_rollup.sql",
     "gold_state_top_segment.sql",
+    "gold_source_readiness.sql",
 )
 
 GOLD_TRANSFORMATION_FILES: tuple[str, ...] = (
@@ -53,6 +54,7 @@ GOLD_TRANSFORMATION_FILES: tuple[str, ...] = (
     "gold_county_rollup.sql",
     "gold_zip_rollup.sql",
     "gold_state_top_segment.sql",
+    "gold_source_readiness.sql",
 )
 
 # Target UC paths. The manifest (003_gold_tables.sql) must reference each.
@@ -71,6 +73,7 @@ GOLD_TABLE_PATHS: tuple[str, ...] = (
     "mip.gold.county_rollup",
     "mip.gold.zip_rollup",
     "mip.gold.state_top_segment",
+    "mip.gold.source_readiness",
 )
 
 FORBIDDEN_PII_COLUMNS: tuple[str, ...] = (
@@ -276,6 +279,7 @@ _TIMESTAMP_SHARED_CTAS_FILES: tuple[str, ...] = (
     "gold_borrower_dossier.sql",
     "gold_county_rollup.sql",
     "gold_zip_rollup.sql",
+    "gold_source_readiness.sql",
 )
 
 

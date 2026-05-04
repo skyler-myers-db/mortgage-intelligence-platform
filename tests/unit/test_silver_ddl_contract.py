@@ -32,6 +32,7 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DDL_DIR = REPO_ROOT / "sql" / "ddl"
 TRANSFORM_DIR = REPO_ROOT / "sql" / "transformations"
+PIPELINE_PATH = REPO_ROOT / "pipelines" / "lakeflow" / "mip_feature_pipeline.py"
 
 # The five silver tables landed by Slice 2. `silver_market_rates_weekly`
 # belongs to Slice 1 (FRED ingest) and is covered by its own tests; we
@@ -273,3 +274,15 @@ def test_all_five_transformation_files_exist() -> None:
         f"missing Slice-2 silver transformation file(s): {missing}. The DDL "
         f"declares the schema; the transformation populates it."
     )
+
+
+def test_lakeflow_pipeline_normalizes_zip5_for_live_silver_path() -> None:
+    """Live silver refresh uses Lakeflow, so the DLT path must enforce ZIP5.
+
+    The warehouse MERGE SQL already truncates ZIP+4. This guard prevents the
+    pipeline implementation from drifting and reintroducing 9-digit ZIPs.
+    """
+    text = PIPELINE_PATH.read_text(encoding="utf-8")
+    assert "def _zip5" in text
+    assert text.count('_zip5("situs_zip_code").alias("situs_zip_code")') >= 2
+    assert text.count('@dlt.expect("zip_is_zip5_or_null"') >= 2

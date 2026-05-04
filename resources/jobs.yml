@@ -124,6 +124,13 @@ resources:
             warehouse_id: ${var.sql_warehouse_id}
             file:
               path: ../sql/transformations/gold_state_top_segment.sql
+        - task_key: ctas_source_readiness
+          depends_on:
+            - task_key: capture_refresh_timestamp
+          sql_task:
+            warehouse_id: ${var.sql_warehouse_id}
+            file:
+              path: ../sql/transformations/gold_source_readiness.sql
         # Zero-click Genie provisioning: rebuild the three mip.semantics.*
         # metric views on every refresh so Genie's trusted_assets bind
         # without a manual UI step. See databricks.yml for the canonical

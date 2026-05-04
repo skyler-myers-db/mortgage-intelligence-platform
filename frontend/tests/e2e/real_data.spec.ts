@@ -141,7 +141,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
       .first()
       .click();
 
-    await expect(page.getByText(/Approved and logged to audit/i)).toBeVisible({
+    await expect(page.getByText(/Approved.*(?:audit|outreach queue)/i)).toBeVisible({
       timeout: 5_000,
     });
 
@@ -264,7 +264,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
       .toBeGreaterThan(0);
 
     // Forward nav CTA (secondary, but the product's intended progression).
-    await page.getByRole('link', { name: /Next: segment intelligence/ }).click();
+    await page.getByRole('link', { name: /Next: (?:segment intelligence|segments)/i }).click();
     await expect(page).toHaveURL(/\/segment-intelligence$/);
   });
 
@@ -359,7 +359,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     // assert the "Thresholds applied" and "Considered alternatives"
     // surfaces renderd — these are the route's differentiators from the
     // simpler prototypes.
-    await expect(page.getByText(/Thresholds applied/i)).toBeVisible();
+    await expect(page.getByText(/Thresholds applied/i).first()).toBeVisible();
     await expect(page.getByText(/Considered alternatives/i)).toBeVisible();
   });
 
@@ -391,14 +391,17 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
   test('admin-config: presentation controls flip theme + density', async ({ page }) => {
     await page.goto('/admin-config');
 
-    // Unique-to-route: the "Presentation controls" surface with Theme /
-    // Accent / Density / Lender / evidence+confidence toggle rows.
-    await expect(page.getByText(/Presentation controls/i)).toBeVisible({ timeout: 5_000 });
+    // Unique-to-route: the source-readiness and per-user appearance surfaces.
+    await expect(page.getByText(/Data source readiness/i)).toBeVisible({ timeout: 5_000 });
+    const appearanceToggle = page.getByRole('button', { name: /Workspace appearance/i });
+    await expect(appearanceToggle).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByText(/grant needed|read error/i)).toHaveCount(0);
 
     const html = page.locator('html');
 
-    // Primary CTA per prototype: Theme toggle (the topmost control in
-    // the route, matching the prototype's segmented control order).
+    await appearanceToggle.click();
+
+    // Primary CTA per prototype: Theme toggle.
     const initialTheme = await html.getAttribute('data-theme');
     const expectedNext = initialTheme === 'dark' ? 'light' : 'dark';
     // Scope to the page body so we don't race with the Topbar icon button.

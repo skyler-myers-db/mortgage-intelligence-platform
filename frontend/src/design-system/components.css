@@ -1157,6 +1157,10 @@ kbd {
   width: 24px; height: 24px; border-radius: 6px; cursor: pointer;
   border: 2px solid transparent; transition: all var(--dur-fast) var(--ease);
 }
+.tweak-row .sw--bright { background: var(--entrada-bright); }
+.tweak-row .sw--teal { background: var(--entrada-teal); }
+.tweak-row .sw--navy { background: var(--entrada-navy); }
+.tweak-row .sw--red { background: var(--entrada-red); }
 .tweak-row .sw.is-active { border-color: var(--text-1); }
 .tweak-row select, .tweak-row input[type="text"] {
   width: 100%; background: var(--bg-2); border: 1px solid var(--line-1);
@@ -1186,6 +1190,34 @@ kbd {
 }
 .tweak-row .switch.on { background: var(--accent-soft); border-color: var(--accent); }
 .tweak-row .switch.on::after { left: 15px; background: var(--accent); }
+
+.status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-3);
+}
+.status-dot--ok { background: var(--signal-success); }
+.status-dot--warn { background: var(--signal-warning); }
+.status-dot--error { background: var(--signal-danger); }
+
+.trusted-asset {
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--bg-1);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-md);
+}
+.trusted-asset__label {
+  font-size: var(--fs-13);
+  color: var(--text-1);
+}
+.trusted-asset__path {
+  margin-top: var(--sp-1);
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+  color: var(--text-3);
+}
 
 /* ============================================================
    LAYOUT HELPERS (Module 0 specific, per prototype)

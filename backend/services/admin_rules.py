@@ -9,12 +9,11 @@ Two callers:
   of the ruleset payload + the max ``last_updated`` across rows. The
   hash means a single seed edit bumps the version deterministically
   without needing an explicit schema migration.
-* ``GET /api/admin/sources`` runs cheap metadata reads
-  (``SHOW TABLES`` + ``DESCRIBE DETAIL``) against the eight source-of-
-  record tables that back the product's 6-state footprint, returning
-  ``{name, status, rows, last_updated}`` per source. MLS + Building
-  Permits are reported with ``status='roadmap'`` (contracted but not yet
-  loaded into ``mip.raw``).
+* ``GET /api/admin/sources`` reads the non-PII
+  ``mip.gold.source_readiness`` summary produced by the gold refresh job.
+  If that summary has not been deployed yet, the service falls back to the
+  legacy per-table probes and degrades per-source. The running app should
+  not need direct ``mip.silver.*`` grants for the Admin panel.
 
 Both read paths:
 
@@ -144,7 +143,7 @@ class RulesPayload:
 @dataclass(frozen=True)
 class SourceRow:
     name: str
-    status: str  # 'live' | 'roadmap'
+    status: str  # 'live' | 'roadmap' | 'permission_denied' | 'error'
     rows: int | None
     last_updated: str | None
     note: str
@@ -247,6 +246,10 @@ class AdminRulesService:
         return payload
 
     def _load_sources(self) -> tuple[SourceRow, ...]:
+        summary_rows = self._try_load_source_readiness_summary()
+        if summary_rows is not None:
+            return summary_rows
+
         # Parallelise the per-source probes. Each live source issues up
         # to two warehouse round-trips (DESCRIBE DETAIL, optional COUNT)
         # and the serial version paid 8 * (describe + count) ~= 16 round
@@ -283,6 +286,45 @@ class AdminRulesService:
                     results[idx] = future.result()
 
         return tuple(results[i] for i in range(len(_SOURCES)))
+
+    def _try_load_source_readiness_summary(self) -> tuple[SourceRow, ...] | None:
+        """Read the gold-layer source-readiness snapshot when available.
+
+        This is the preferred production path: ETL has silver access, writes
+        a non-PII summary into gold, and the Databricks App principal reads
+        only gold. Returning ``None`` means "summary unavailable; use the
+        legacy direct-probe fallback" so older deployments keep rendering.
+        """
+        try:
+            rows = self._sql.execute(
+                "SELECT source_name, status, row_count, "
+                "CAST(last_updated AS STRING) AS last_updated, note, sort_order "
+                f"FROM {qualify('gold', 'source_readiness')} "
+                "ORDER BY sort_order"
+            )
+        except Exception:  # noqa: BLE001 -- fallback preserves legacy deploys
+            return None
+        if not rows:
+            return None
+
+        by_name = {str(r.get("source_name")) for r in rows}
+        expected = {desc.name for desc in _SOURCES}
+        if by_name != expected:
+            # A partial/mismatched table is more dangerous than the fallback:
+            # the Admin panel would look green while omitting a contracted
+            # source. Use the legacy probe path until the CTAS is corrected.
+            return None
+
+        return tuple(
+            SourceRow(
+                name=str(r.get("source_name")),
+                status=str(r.get("status") or "error"),
+                rows=_opt_int(r.get("row_count")),
+                last_updated=_opt_str(r.get("last_updated")),
+                note=_opt_str(r.get("note")) or "",
+            )
+            for r in sorted(rows, key=lambda r: _opt_int(r.get("sort_order")) or 999)
+        )
 
     def _probe_source(self, desc: _SourceDescriptor) -> SourceRow:
         """Probe a single live source. Never raises -- returns a

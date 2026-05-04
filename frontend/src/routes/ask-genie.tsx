@@ -249,14 +249,10 @@ export default function AskGenie() {
                 <div
                   key={a.path}
                   title={a.path}
-                  style={{
-                    padding: '8px 10px',
-                    background: 'var(--bg-1)',
-                    border: '1px solid var(--line-1)',
-                    borderRadius: 6,
-                  }}
+                  className="trusted-asset"
                 >
-                  <div style={{ fontSize: 13, color: 'var(--text-1)' }}>{a.label}</div>
+                  <div className="trusted-asset__label">{a.label}</div>
+                  <div className="trusted-asset__path">{a.path}</div>
                 </div>
               ))}
             </div>

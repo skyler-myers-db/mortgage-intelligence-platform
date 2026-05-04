@@ -8,12 +8,7 @@ import { Icon } from '../Icon';
  * controls positioning + animation.
  */
 
-const ACCENT_SWATCHES: Array<{ k: Accent; color: string }> = [
-  { k: 'bright', color: '#66C5FF' },
-  { k: 'teal',   color: '#5CE1E6' },
-  { k: 'navy',   color: '#025080' },
-  { k: 'red',    color: '#FF3621' },
-];
+const ACCENT_SWATCHES: Accent[] = ['bright', 'teal', 'navy', 'red'];
 
 export function Console() {
   const {
@@ -69,11 +64,10 @@ export function Console() {
           <div className="swatches">
             {ACCENT_SWATCHES.map((a) => (
               <button
-                key={a.k}
-                className={`sw ${accent === a.k ? 'is-active' : ''}`}
-                style={{ background: a.color }}
-                onClick={() => setAccent(a.k)}
-                aria-label={`Accent ${a.k}`}
+                key={a}
+                className={`sw sw--${a} ${accent === a ? 'is-active' : ''}`}
+                onClick={() => setAccent(a)}
+                aria-label={`Accent ${a}`}
                 type="button"
               />
             ))}

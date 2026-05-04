@@ -292,7 +292,8 @@ resources:
     #   9. county_rollup                 (needs borrower_360 -- geography rollup)
     #  10. zip_rollup                    (needs borrower_360 -- geography rollup)
     #  11. state_top_segment             (needs borrower_360 -- geography rollup)
-    #  12. refresh_semantics_views       (needs lead_population + segment_population + borrower_dossier)
+    #  12. source_readiness              (needs silver tables only; app-readable admin summary)
+    #  13. refresh_semantics_views       (needs lead_population + segment_population + borrower_dossier)
     #
     # The DDL manifest (003_gold_tables.sql) is CREATE TABLE IF NOT EXISTS,
     # so running it on every refresh is safe and picks up any newly-added
@@ -447,6 +448,14 @@ resources:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
               path: sql/_rendered/transformations/gold_state_top_segment.sql
+        - task_key: ctas_source_readiness
+          description: "Rebuild mip.gold.source_readiness via CTAS so the app Admin panel reads gold, not silver."
+          depends_on:
+            - task_key: capture_refresh_timestamp
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/_rendered/transformations/gold_source_readiness.sql
         # Zero-click Genie provisioning — publish the three mip.semantics.*
         # views so the Genie trusted_assets list in
         # genie/mortgage_lead_intelligence_space.yml binds on first deploy.

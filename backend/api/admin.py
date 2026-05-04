@@ -134,7 +134,7 @@ def get_sources(service: ServiceDep, _actor: AdminDep) -> list[dict[str, Any]]:
         [
           {
             "name":         "Cotality Public Records",
-            "status":       "live" | "roadmap",
+            "status":       "live" | "roadmap" | "permission_denied" | "error",
             "rows":         12345 | null,
             "last_updated": "2026-04-22T17:02:11Z" | null,
             "note":         "Delta Share · nightly"
@@ -143,9 +143,9 @@ def get_sources(service: ServiceDep, _actor: AdminDep) -> list[dict[str, Any]]:
         ]
 
     ``rows`` and ``last_updated`` are null for roadmap sources (MLS,
-    Building Permits). ``status='live'`` means the underlying UC table
-    responded to ``DESCRIBE DETAIL`` -- a zero row count is still LIVE,
-    just empty.
+    Building Permits). Preferred production path reads
+    ``mip.gold.source_readiness`` so the running app principal does not
+    need direct silver grants.
     """
     try:
         rows = service.get_sources()

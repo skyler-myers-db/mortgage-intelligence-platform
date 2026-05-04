@@ -148,6 +148,60 @@ def test_get_sources_returns_live_plus_roadmap_split() -> None:
         assert isinstance(r["note"], str)
 
 
+def test_get_sources_prefers_gold_source_readiness_summary() -> None:
+    """The production path reads mip.gold.source_readiness, not silver.
+
+    This preserves the governance boundary: ETL can inspect silver and
+    publish a non-PII gold summary, while the running app principal only
+    needs SELECT on gold/ref.
+    """
+
+    class _GoldSummaryClient:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def execute(
+            self, statement: str, parameters: Any = None
+        ) -> list[dict[str, Any]]:
+            self.calls.append(statement)
+            if "GOLD.SOURCE_READINESS" in statement.upper():
+                names = [
+                    "Cotality Public Records",
+                    "Voluntary Lien",
+                    "MMA Mortgage Analytics",
+                    "CLIP",
+                    "Owner Link",
+                    "AVM",
+                    "MLS",
+                    "Building Permits",
+                ]
+                return [
+                    {
+                        "source_name": name,
+                        "status": "roadmap" if idx >= 7 else "live",
+                        "row_count": None if idx >= 7 else 1000 + idx,
+                        "last_updated": None if idx >= 7 else "2026-05-04 19:45:13",
+                        "note": "Contracted · pending Cotality share"
+                        if idx >= 7
+                        else "Delta Share · nightly",
+                        "sort_order": idx,
+                    }
+                    for idx, name in enumerate(names, start=1)
+                ]
+            raise AssertionError(f"unexpected legacy source probe: {statement}")
+
+    fake = _GoldSummaryClient()
+    service = AdminRulesService(fake)
+    rows = service.get_sources()
+
+    assert len(rows) == 8
+    assert rows[0].name == "Cotality Public Records"
+    assert rows[0].status == "live"
+    assert rows[-1].name == "Building Permits"
+    assert rows[-1].status == "roadmap"
+    assert not any("SILVER." in call.upper() for call in fake.calls)
+
+
 def test_get_sources_degrades_per_source_on_sql_failure() -> None:
     """Per-source degrade contract (2026-04-23): if a DESCRIBE DETAIL
     fails for one table (permission denial, schema drift, etc.), the

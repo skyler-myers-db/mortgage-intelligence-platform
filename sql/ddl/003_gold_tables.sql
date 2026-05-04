@@ -23,6 +23,7 @@
 --   4. gold.lead_scores               (depends on borrower_360 + evidence_events)
 --   5. gold.lead_population           (depends on borrower_360 + lead_scores)
 --   6. gold.segment_population        (depends on borrower_360 + lead_scores)
+--   7. gold.source_readiness          (non-PII Admin source summary)
 --
 -- Each file uses CREATE TABLE IF NOT EXISTS so re-running is a no-op if the
 -- schema hasn't changed. If a column is added to a per-file DDL, this
@@ -152,7 +153,29 @@ TBLPROPERTIES (
 );
 
 -- -----------------------------------------------------------------------------
--- 4. mip.gold.lead_scores
+-- 4. mip.gold.source_readiness
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS mip.gold.source_readiness (
+  source_name   STRING    NOT NULL COMMENT 'Admin panel display name.',
+  status        STRING    NOT NULL COMMENT 'live / roadmap / error.',
+  row_count     BIGINT             COMMENT 'Source row count when live.',
+  last_updated  TIMESTAMP          COMMENT 'Latest source ingest timestamp when live.',
+  note          STRING    NOT NULL COMMENT 'Human-readable source note.',
+  source_table  STRING             COMMENT 'UC source table used by ETL; null for roadmap sources.',
+  sort_order    INT       NOT NULL COMMENT 'Stable Admin panel order.',
+  checked_at    TIMESTAMP NOT NULL COMMENT 'Gold refresh anchor used for this readiness snapshot.'
+)
+USING DELTA
+CLUSTER BY (sort_order)
+COMMENT 'Non-PII source-readiness summary for Admin. Populated by gold_source_readiness.sql so the running app does not need direct silver grants.'
+TBLPROPERTIES (
+  'delta.enableChangeDataFeed' = 'false',
+  'delta.autoOptimize.optimizeWrite' = 'true',
+  'delta.autoOptimize.autoCompact'   = 'true'
+);
+
+-- -----------------------------------------------------------------------------
+-- 5. mip.gold.lead_scores
 -- -----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS mip.gold.lead_scores (
   clip                     STRING    NOT NULL COMMENT 'CLIP. PK.',
@@ -189,7 +212,7 @@ TBLPROPERTIES (
 );
 
 -- -----------------------------------------------------------------------------
--- 5. mip.gold.lead_population
+-- 6. mip.gold.lead_population
 -- -----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS mip.gold.lead_population (
   clip                      STRING    NOT NULL COMMENT 'CLIP. PK.',
@@ -223,7 +246,7 @@ TBLPROPERTIES (
 );
 
 -- -----------------------------------------------------------------------------
--- 6. mip.gold.segment_population (+ segment_population_prior)
+-- 7. mip.gold.segment_population (+ segment_population_prior)
 -- -----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS mip.gold.segment_population (
   segment_code    STRING    NOT NULL COMMENT 'itm/listed/permit/investor/equity/retention.',

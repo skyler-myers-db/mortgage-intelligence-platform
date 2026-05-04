@@ -24,12 +24,20 @@ import json
 import os
 import urllib.error
 import urllib.request
+from dataclasses import dataclass, field
 from typing import Any
 
 import pytest
 
 
-def _creds() -> tuple[str, str, str] | None:
+@dataclass(frozen=True)
+class WarehouseCreds:
+    host: str
+    token: str = field(repr=False)
+    warehouse_id: str
+
+
+def _creds() -> WarehouseCreds | None:
     host = os.environ.get("DATABRICKS_HOST") or os.environ.get(
         "DATABRICKS_SERVER_HOSTNAME"
     )
@@ -39,7 +47,7 @@ def _creds() -> tuple[str, str, str] | None:
         return None
     if not host.startswith("http"):
         host = "https://" + host
-    return host.rstrip("/"), token, warehouse_id
+    return WarehouseCreds(host=host.rstrip("/"), token=token, warehouse_id=warehouse_id)
 
 
 def _run_sql_rows(
@@ -82,7 +90,7 @@ def _run_sql_rows(
 
 
 @pytest.fixture(scope="module")
-def warehouse() -> tuple[str, str, str]:
+def warehouse() -> WarehouseCreds:
     creds = _creds()
     if creds is None:
         pytest.skip(
@@ -98,7 +106,7 @@ def warehouse() -> tuple[str, str, str]:
     ["mip.silver.property_master", "mip.silver.lien_current"],
 )
 def test_silver_zip_is_five_digits_or_fewer(
-    warehouse: tuple[str, str, str],
+    warehouse: WarehouseCreds,
     silver_table: str,
 ) -> None:
     """If silver ever emits a 6+ char ZIP, gold's geography surfaces drift.
@@ -107,11 +115,10 @@ def test_silver_zip_is_five_digits_or_fewer(
     ``LENGTH(situs_zip_code) > 5`` indicates the slice13 Wave-2 truncation
     regressed in the silver transformation for this table.
     """
-    host, token, wid = warehouse
     rows = _run_sql_rows(
-        host,
-        token,
-        wid,
+        warehouse.host,
+        warehouse.token,
+        warehouse.warehouse_id,
         f"SELECT COALESCE(MAX(LENGTH(situs_zip_code)), 0) AS max_len "
         f"FROM {silver_table}",
     )

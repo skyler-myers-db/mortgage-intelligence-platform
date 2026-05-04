@@ -84,22 +84,26 @@ overrides configured via `/api/admin/rules` do not apply. The
 
 ---
 
-## 4. Schema `mip.silver` (admin/sources — optional)
+## 4. Schema `mip.silver` (ETL only — do not grant to the App)
+
+The running Databricks App service principal should not receive direct
+`SELECT` on `mip.silver.*`. The Admin → Sources panel reads
+`mip.gold.source_readiness`, a non-PII summary produced by the gold
+refresh job. That keeps source readiness live without weakening the
+governance boundary that prevents the app from accidentally querying
+raw/silver fields.
+
+Grant silver access to the ETL/deploy identity that runs
+`mip_refresh_silver` and `mip_refresh_scores`, not to `mip-app`:
 
 ```sql
-GRANT USE SCHEMA, SELECT ON SCHEMA mip.silver TO `mip-app`;
+GRANT USE SCHEMA, SELECT ON SCHEMA mip.silver TO `sp-mip-etl`;
 ```
 
-**Objects covered.** `property_master`, `lien_current`,
-`mortgage_events`, `owner_transfer_events`, `market_rates_weekly`,
-`owner_property_bridge`.
-
-**What breaks if missing.** The `/api/admin/sources` endpoint degrades
-per-source with `status: "permission_denied"` on each silver row. The
-Admin → Sources page renders a red chip per table instead of row counts
-+ last-refreshed timestamps. The product flow itself (portfolio → leads
-→ borrower → approve) is unaffected because the app reads gold, not
-silver. **Grant this on prod; it is optional on dev.**
+**What breaks if missing.** The refresh jobs cannot rebuild gold tables
+or `mip.gold.source_readiness`. The product flow then goes stale or
+fails at refresh time. The app itself still only needs `mip.gold` and
+`mip.ref` reads.
 
 ---
 

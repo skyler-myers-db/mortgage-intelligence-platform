@@ -128,6 +128,18 @@ def _in_six_states(col):  # pragma: no cover -- Databricks-runtime only
     return col.isin(*SIX_STATE_FOOTPRINT)
 
 
+def _zip5(col_name: str):  # pragma: no cover -- Databricks-runtime only
+    """Normalize Cotality ZIP/ZIP+4 strings to the Module 0 ZIP5 contract."""
+    digits = F.regexp_replace(
+        F.coalesce(F.col(col_name).cast("string"), F.lit("")),
+        "[^0-9]",
+        "",
+    )
+    return F.when(F.length(digits) > 0, F.substring(digits, 1, 5)).otherwise(
+        F.lit(None).cast("string")
+    )
+
+
 # ---------------------------------------------------------------------------
 # silver.property_master
 # ---------------------------------------------------------------------------
@@ -150,6 +162,7 @@ def _in_six_states(col):  # pragma: no cover -- Databricks-runtime only
 )
 @dlt.expect_or_fail("valid_clip", "clip IS NOT NULL")
 @dlt.expect("valid_state", "situs_state IN ('IL','CA','FL','TX','WA','CO')")
+@dlt.expect("zip_is_zip5_or_null", "situs_zip_code IS NULL OR length(situs_zip_code) <= 5")
 def silver_property_master() -> DataFrame:  # pragma: no cover
     src = _read_share_table(_SHARE_PROPERTY_V3)
     return (
@@ -160,7 +173,10 @@ def silver_property_master() -> DataFrame:  # pragma: no cover
             F.col("fips_county_code"),
             F.col("situs_state"),
             F.col("situs_city"),
-            F.col("situs_zip_code"),
+            # Data contract §2.2 requires ZIP5. Cotality frequently ships
+            # ZIP+4; normalize in the live Lakeflow path, not just the
+            # warehouse MERGE fallback.
+            _zip5("situs_zip_code").alias("situs_zip_code"),
             F.col("situs_core_based_statistical_area_cbsa").alias("situs_cbsa_code"),
             F.col("block_level_latitude").cast("double").alias("situs_lat"),
             F.col("block_level_longitude").cast("double").alias("situs_lon"),
@@ -226,6 +242,7 @@ def silver_property_master() -> DataFrame:  # pragma: no cover
 )
 @dlt.expect_or_fail("valid_clip", "clip IS NOT NULL")
 @dlt.expect("valid_state", "situs_state IN ('IL','CA','FL','TX','WA','CO')")
+@dlt.expect("zip_is_zip5_or_null", "situs_zip_code IS NULL OR length(situs_zip_code) <= 5")
 @dlt.expect("rate_is_fractional", "first_pos_rate IS NULL OR first_pos_rate BETWEEN 0 AND 0.25")
 def silver_lien_current() -> DataFrame:  # pragma: no cover
     src = _read_share_table(_SHARE_VOLUNTARY_LIEN)
@@ -247,7 +264,9 @@ def silver_lien_current() -> DataFrame:  # pragma: no cover
         .select(
             F.col("clip"),
             F.col("situs_state"),
-            F.col("situs_zip_code"),
+            # Data contract §2.1 requires ZIP5. Keep the DLT path in parity
+            # with sql/transformations/silver_lien_current.sql.
+            _zip5("situs_zip_code").alias("situs_zip_code"),
             F.col("owner_occupancy_code"),
             F.col("total_number_of_open_mortgage_liens").cast("int").alias("total_open_liens"),
             F.col("total_amount_of_open_mortgage_liens").cast("bigint").alias("total_open_lien_balance"),

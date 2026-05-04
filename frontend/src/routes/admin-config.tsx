@@ -29,12 +29,7 @@ import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
  * message -- never a fabricated literal.
  */
 
-const ACCENT_SWATCHES: Array<{ k: Accent; color: string }> = [
-  { k: 'bright', color: '#66C5FF' },
-  { k: 'teal',   color: '#5CE1E6' },
-  { k: 'navy',   color: '#025080' },
-  { k: 'red',    color: '#FF3621' },
-];
+const ACCENT_SWATCHES: Accent[] = ['bright', 'teal', 'navy', 'red'];
 
 // ---------------------------------------------------------------------------
 // API shapes
@@ -57,9 +52,11 @@ interface RulesResponse {
   legacy_override?: Record<string, string>;
 }
 
+type SourceStatus = 'live' | 'roadmap' | 'permission_denied' | 'error';
+
 interface SourceRow {
   name: string;
-  status: 'live' | 'roadmap';
+  status: SourceStatus;
   rows: number | null;
   last_updated: string | null;
   note: string;
@@ -331,7 +328,7 @@ export default function AdminConfig() {
                   fontSize: 12,
                 }}
               >
-                <StatusDot status={s.status === 'live' ? 'ok' : 'warn'} />
+                <StatusDot status={sourceStatusTone(s.status)} />
                 <div style={{ color: 'var(--text-1)' }}>
                   {s.name}
                   {s.status === 'live' && s.rows !== null && (
@@ -353,7 +350,7 @@ export default function AdminConfig() {
                 >
                   {s.status === 'live'
                     ? formatSourceLastUpdated(s.last_updated) ?? s.note
-                    : 'roadmap'}
+                    : sourceStatusLabel(s.status)}
                 </div>
               </div>
             ))}
@@ -411,12 +408,11 @@ export default function AdminConfig() {
                 <div className="swatches">
                   {ACCENT_SWATCHES.map((a) => (
                     <button
-                      key={a.k}
+                      key={a}
                       type="button"
-                      className={`sw ${accent === a.k ? 'is-active' : ''}`}
-                      style={{ background: a.color }}
-                      onClick={() => setAccent(a.k)}
-                      aria-label={`Accent ${a.k}`}
+                      className={`sw sw--${a} ${accent === a ? 'is-active' : ''}`}
+                      onClick={() => setAccent(a)}
+                      aria-label={`Accent ${a}`}
                     />
                   ))}
                 </div>
@@ -563,25 +559,25 @@ function MetaRow({
 }
 
 /** 8px status dot — green (ok), amber (warn), gray (neutral). */
-function StatusDot({ status }: { status: 'ok' | 'warn' | 'neutral' }) {
-  const color =
-    status === 'ok'
-      ? 'rgb(16, 185, 129)'
-      : status === 'warn'
-      ? 'rgb(245, 158, 11)'
-      : 'var(--text-3)';
+function StatusDot({ status }: { status: 'ok' | 'warn' | 'neutral' | 'error' }) {
   return (
     <span
       aria-hidden
-      style={{
-        display: 'inline-block',
-        width: 8,
-        height: 8,
-        borderRadius: '50%',
-        background: color,
-      }}
+      className={`status-dot status-dot--${status}`}
     />
   );
+}
+
+function sourceStatusTone(status: SourceStatus): 'ok' | 'warn' | 'error' {
+  if (status === 'live') return 'ok';
+  if (status === 'permission_denied' || status === 'error') return 'error';
+  return 'warn';
+}
+
+function sourceStatusLabel(status: SourceStatus): string {
+  if (status === 'permission_denied') return 'grant needed';
+  if (status === 'error') return 'read error';
+  return 'roadmap';
 }
 
 /** Best-effort ISO-timestamp prettifier. Lakebase returns ISO-8601 strings. */
