@@ -591,7 +591,16 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
   }, [leads, approvals]);
 
   return (
-    <div className="surface" style={{ overflow: 'hidden' }}>
+    // 2026-05-04 fix (alignment): removed inline `overflow: hidden`.
+    // It was establishing a new block formatting context that, combined
+    // with the table's intrinsic min-content width and the wrap div's
+    // overflowY: auto, was nudging the surface off the .main__inner
+    // left edge on the lead-queue page. The intended scroll behaviour
+    // for table-containing surfaces is provided by the
+    // `.surface:has(> div > .tbl) { overflow-x: auto }` rule in
+    // components.css; the inline override was both unnecessary and the
+    // proximate cause of the shift the user reported.
+    <div className="surface">
       <div className="surface__hdr" style={{ justifyContent: 'space-between' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <div style={{ width: 28, height: 28, borderRadius: 8, background: 'var(--accent-soft)', color: 'var(--accent)', display: 'grid', placeItems: 'center' }}>

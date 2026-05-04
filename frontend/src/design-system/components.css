@@ -1144,6 +1144,24 @@ kbd {
 }
 .proto-hero h1 { font-size: var(--fs-hero); font-weight: 600; letter-spacing: -0.02em; margin: 0 0 4px; line-height: var(--lh-tight); }
 .proto-hero .lede { color: var(--text-2); font-size: 14px; max-width: 640px; margin: 0; }
+
+/* 2026-05-04 fix (Ranked Borrowers alignment): defensively guarantee
+   that every direct child of .main__inner aligns to the same x as the
+   proto-hero block. Without this, surfaces inside the lead-queue
+   route appeared shifted right relative to the page title — a
+   .surface inline `overflow: hidden` was establishing a new BFC
+   that, combined with the table's natural min-content width, was
+   pushing the surface off the .main__inner left edge. The reset
+   ensures `.surface` (and any other direct child element) starts at
+   x=0 of .main__inner regardless of inner content width. */
+.main__inner > .surface,
+.main__inner > .approval,
+.main__inner > .layoutA-grid,
+.main__inner > .kpi-row,
+.main__inner > .seg-grid {
+  margin-inline: 0;
+  width: 100%;
+}
 .audit-panel { max-height: 260px; overflow-y: auto; }
 
 /* LayoutA — 2-col on design target (hero map + activity log, borrower
