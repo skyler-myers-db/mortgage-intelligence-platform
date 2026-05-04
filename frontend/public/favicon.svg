@@ -1,13 +1,15 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Entrada">
   <title>Entrada</title>
-  <!-- Legacy favicon path — kept in sync with favicon-v2.svg so any cached or
-       third-party reference still renders the correct mark. Prefer
-       /favicon-v2.svg for new links. -->
-  <rect width="32" height="32" rx="7" ry="7" fill="#F4F7FA"/>
-  <rect x="5"  y="9"  width="6"  height="3" fill="#66C5FF"/>
-  <rect x="13" y="9"  width="14" height="3" fill="#025080"/>
-  <rect x="5"  y="15" width="22" height="3" fill="#025080"/>
-  <rect x="5"  y="21" width="14" height="3" fill="#025080"/>
-  <rect x="21" y="21" width="6"  height="3" fill="#66C5FF"/>
+  <!-- Favicon — matches /brand/entrada-mark.svg, scaled into a 32x32 frame
+       with the brand's pale-icy background (#CFEFFF) so the navy bars stay
+       legible at 16/32px. Five-rect two-tone composition per the brand
+       style guide: cyan accents on top-left + bottom-right corners.
+  -->
+  <rect width="32" height="32" rx="6" ry="6" fill="#CFEFFF"/>
+  <rect x="5"  y="9"  width="5.5"  height="4" fill="#66C5FF"/>
+  <rect x="10.5" y="9"  width="16.5" height="4" fill="#025080"/>
+  <rect x="5"  y="15" width="22"   height="4" fill="#025080"/>
+  <rect x="5"  y="21" width="16.5" height="4" fill="#025080"/>
+  <rect x="21.5" y="21" width="5.5"  height="4" fill="#66C5FF"/>
 </svg>

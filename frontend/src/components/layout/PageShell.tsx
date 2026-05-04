@@ -53,7 +53,12 @@ export function PageShell({
         )}
         {children}
         <footer className="page-footer" aria-label="Product footer">
-          <EntradaWordmark fontSize={13} monochrome />
+          {/* Wordmark always renders the official two-tone brand asset.
+              The footer's muted character comes from container opacity
+              (set in components.css .page-footer), not from a different
+              brand variant — keeps brand consistency per 2026-05-04
+              brand-asset cleanup. */}
+          <EntradaWordmark height={16} />
           <span className="page-footer__sep" aria-hidden="true">·</span>
           <span className="page-footer__name">Mortgage Intelligence Platform</span>
         </footer>

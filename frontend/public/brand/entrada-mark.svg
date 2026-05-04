@@ -1,15 +1,20 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 22 22" role="img" aria-label="Entrada">
   <title>Entrada</title>
-  <!-- 1:1 aspect so the "E" reads as one letter, not a logo block. Matches
-       the Geist "NTRADA" letter geometry (user feedback 2026-04-23: prior
-       32x22 viewBox made the E look too wide next to the wordmark).
-       Row 1: bright-accent LEFT (width 6) + navy RIGHT (width 14), with a
-       1px gap so both colors stay visible at favicon sizes.
-       Row 2: full navy bar (width 22).
-       Row 3: navy LEFT (width 14) + bright-accent RIGHT (width 6). -->
-  <rect x="0"  y="0"    width="6"  height="4.5" fill="#66C5FF"/>
-  <rect x="7"  y="0"    width="15" height="4.5" fill="#025080"/>
-  <rect x="0"  y="8.75" width="22" height="4.5" fill="#025080"/>
-  <rect x="0"  y="17.5" width="15" height="4.5" fill="#025080"/>
-  <rect x="16" y="17.5" width="6"  height="4.5" fill="#66C5FF"/>
+  <!-- Official Entrada mark per the brand style guide (2026-05-04).
+       Five rectangles in a 22x22 viewBox forming a stylized "E":
+         row 1 (y=0..4.5):     short CYAN bar (left, 25%)  + long NAVY bar (right, 75%)
+         row 2 (y=8.75..13.25): single NAVY bar full-width
+         row 3 (y=17.5..22):    long NAVY bar (left, 75%)  + short CYAN bar (right, 25%)
+       The cyan accents are on the top-left and bottom-right corners
+       (diagonal mirror). Colors are pulled from the brand palette:
+         #66C5FF — bright accent (the cyan)
+         #025080 — primary dark navy
+       This replaces the prior 3-equal-solid-navy-bar placeholder, which
+       was a holdover that did not match the actual brand mark.
+  -->
+  <rect x="0"   y="0"     width="5.5"  height="4.5" fill="#66C5FF"/>
+  <rect x="5.5" y="0"     width="16.5" height="4.5" fill="#025080"/>
+  <rect x="0"   y="8.75"  width="22"   height="4.5" fill="#025080"/>
+  <rect x="0"   y="17.5"  width="16.5" height="4.5" fill="#025080"/>
+  <rect x="16.5" y="17.5" width="5.5"  height="4.5" fill="#66C5FF"/>
 </svg>

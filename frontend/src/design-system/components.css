@@ -1590,8 +1590,11 @@ kbd {
 
 /* ============================================================
    PAGE FOOTER — subtle brand attribution at the bottom of every
-   route. Monochrome Entrada wordmark + product name. Muted so
-   it reads as signature, not a call-to-action.
+   route. Official two-tone Entrada wordmark + product name.
+   The wordmark always renders in brand colors (cyan + navy);
+   the muted character is achieved via opacity on the image so
+   we stay brand-consistent with the rail/topbar/Admin uses.
+   2026-05-04 brand-asset cleanup.
    ============================================================ */
 .page-footer {
   display: flex;
@@ -1604,6 +1607,7 @@ kbd {
   font-size: 11px;
   letter-spacing: 0.02em;
 }
+.page-footer img { opacity: 0.7; }
 .page-footer__sep { opacity: 0.5; }
 .page-footer__name {
   font-weight: 500;

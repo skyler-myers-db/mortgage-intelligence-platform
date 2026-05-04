@@ -172,7 +172,7 @@ export default function AdminConfig() {
       eyebrow="Administration"
       title="Rules, data sources, and audit"
       lede="View the active offer ruleset, data source status, and recent audit activity. Per-user workspace appearance is in the Console panel."
-      heroRight={<EntradaWordmark fontSize={22} />}
+      heroRight={<EntradaWordmark height={28} />}
     >
       {/* First row — the three operator-grade panels */}
       <div
