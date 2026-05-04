@@ -32,6 +32,7 @@ frontend's degraded banner auto-retries until ``status == "ok"``.
 from __future__ import annotations
 
 import logging
+import os
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 from typing import Any
@@ -119,8 +120,22 @@ def _probe_lakebase() -> bool:
     and returning "up" made the break invisible. We now only short-circuit
     to True when ``app_env == 'local'``; every other env surfaces False
     + `configured=False` so the degraded banner + on-call know.
+
+    2026-05-04: the configured-check now mirrors the env-var fallback
+    chain in ``backend/services/lakebase.py:_compose_dsn`` (which reads
+    ``settings.lakebase_host or os.environ.get("PGHOST")``, etc.).
+    Databricks Apps's ``database`` resource binding injects ``PGHOST``,
+    ``PGUSER``, and ``PGPASSWORD`` (per the platform's standard
+    psycopg-compatible env contract), but it does NOT alias them to
+    ``LAKEBASE_*``. The old guard checked ``settings.lakebase_user``
+    directly, which is None whenever Lakebase creds arrive via PGUSER —
+    so the probe short-circuited to "down" in production even though
+    the actual lakebase client connected fine. Mirror the client's
+    fallback here so the probe and the client agree.
     """
-    if not settings.lakebase_host or not settings.lakebase_user:
+    host = settings.lakebase_host or os.environ.get("PGHOST") or ""
+    user = settings.lakebase_user or os.environ.get("PGUSER") or ""
+    if not host or not user:
         return settings.app_env == "local"
     try:
         from backend.services.lakebase import get_lakebase_client
