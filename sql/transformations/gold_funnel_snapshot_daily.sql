@@ -40,13 +40,10 @@ USING (
       b.recommended_offer_code,
       COALESCE(ls.approval_status, 'pending')  AS approval_status,
       COALESCE(ls.outreach_status, 'none')     AS outreach_status
-    FROM mip.gold.borrower_360 AS b
-    LEFT JOIN mip.gold.borrower_lifecycle_state AS ls
-      ON ls.borrower_id = b.borrower_id
-    LATERAL VIEW EXPLODE(b.segment_codes) s AS sc
-  ),
   -- Each borrower also contributes to the '_ALL' segment row, so dashboards
-  -- can read a single cross-segment line per state per day.
+  -- can read a single cross-segment line per state per day. Same quality
+  -- floor as `exploded` above so the per-state '_ALL' row matches the
+  -- sum of its segment rows AND the Lead Queue (FIX F, 2026-05-04).
   all_segments AS (
     SELECT
       b.borrower_id,
@@ -60,6 +57,7 @@ USING (
     FROM mip.gold.borrower_360 AS b
     LEFT JOIN mip.gold.borrower_lifecycle_state AS ls
       ON ls.borrower_id = b.borrower_id
+    WHERE b.opportunity_score >= 50
   ),
   unioned AS (
     SELECT * FROM exploded
