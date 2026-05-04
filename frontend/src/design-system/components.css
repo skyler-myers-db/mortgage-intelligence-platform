@@ -1602,7 +1602,16 @@ kbd {
   .main__inner > .surface:has(> .tbl),
   .main__inner > .surface:has(> div > .tbl) {
     max-width: 1600px;
-    margin-inline: auto;
+    /* 2026-05-04 fix (FIX γ): keep table-surfaces LEFT-aligned at the
+       1600px cap, not centered. Centering with `margin-inline: auto`
+       was the visible cause of the user's "data box too far right"
+       complaint on the Lead Queue route — the surface was capped at
+       1600px and pushed toward the middle of the 1920px content
+       column, sitting visibly right of the page title. Anchoring
+       margin-inline-start to 0 holds the surface flush against the
+       same x as the proto-hero title block. */
+    margin-inline-start: 0;
+    margin-inline-end: auto;
   }
 }
 
