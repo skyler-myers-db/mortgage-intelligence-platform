@@ -79,6 +79,40 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     expect(hasPositive, `no segment card had a positive count: ${rendered.join(' | ')}`).toBe(true);
   });
 
+  test('segment multi-select re-queries ranked list and map in all-mode', async ({ page }) => {
+    await page.goto('/segment-intelligence');
+
+    const rankedHeader = page.locator('.h-2').filter({ hasText: /ranked borrowers/ }).first();
+    await expect(rankedHeader).toBeVisible({ timeout: 30_000 });
+    await expect(rankedHeader).toContainText(/filtered by itm/);
+
+    const isAllModeSegmentResponse = (url: string, path: string) => {
+      if (!url.includes(path)) return false;
+      const parsed = new URL(url);
+      const codes = parsed.searchParams.get('segment_codes') ?? '';
+      return (
+        parsed.searchParams.get('segment_mode') === 'all' &&
+        codes.includes('itm') &&
+        codes.includes('equity')
+      );
+    };
+
+    const leadsResponse = page.waitForResponse((response) =>
+      isAllModeSegmentResponse(response.url(), '/api/leads'),
+    );
+    const geoResponse = page.waitForResponse((response) =>
+      isAllModeSegmentResponse(response.url(), '/api/geo/state-rollups'),
+    );
+
+    await page.getByText('Home Equity Candidate', { exact: true }).click();
+
+    const [leads, geo] = await Promise.all([leadsResponse, geoResponse]);
+    expect(leads.status(), 'ranked list segment all-mode response').toBe(200);
+    expect(geo.status(), 'map segment all-mode response').toBe(200);
+    await expect(rankedHeader).toContainText(/filtered by itm \+ equity/);
+    await expect(rankedHeader).toContainText(/must match all selected segments/);
+  });
+
   test('ranked borrower -> evidence drawer shows >= 2 rows', async ({ page, request }) => {
     const leads = await fetchLeads(request);
     expect(leads.length, 'need >= 1 ranked borrower from /api/leads').toBeGreaterThan(0);

@@ -147,12 +147,12 @@ export function AgentActivityLog({ limit = 12 }: { limit?: number }) {
   return (
     <div className="surface">
       <div className="surface__hdr">
-        <Icon name="audit" size={14} style={{ color: 'var(--accent)' }} />
+        <Icon name="audit" size={14} className="icon-accent" />
         <div className="h-4">Agent action audit log</div>
       </div>
       <div className="audit-panel">
         {feedState === 'warming' && warmingUp && (
-          <div style={{ padding: 'var(--sp-3)' }}>
+          <div className="audit-panel__pad">
             <WarmingUpBlock
               state={warmingUp}
               title="Agent activity loading"
@@ -161,12 +161,12 @@ export function AgentActivityLog({ limit = 12 }: { limit?: number }) {
           </div>
         )}
         {feedState === 'loading' && (
-          <div className="muted body" style={{ padding: 'var(--sp-3)' }}>
+          <div className="muted body audit-panel__pad">
             Loading audit events…
           </div>
         )}
         {feedState === 'empty' && (
-          <div className="muted body" style={{ padding: 'var(--sp-3)' }}>
+          <div className="muted body audit-panel__pad">
             No activity yet — run a segment build or approve an offer to see
             events here.
           </div>
@@ -180,14 +180,14 @@ export function AgentActivityLog({ limit = 12 }: { limit?: number }) {
             below it. Now the muted "waiting" path fires whenever ANY
             of the three deps is down — including Lakebase. */}
         {feedState === 'error' && (warehouse === 'down' || lakebase === 'down' || genie === 'down') && (
-          <div className="body" style={{ padding: 'var(--sp-3)', color: 'var(--text-2)' }}>
+          <div className="body audit-panel__message">
             Audit feed is waiting on a dependency to come back online — the
             live state is shown below. The feed will populate automatically
             once the dependency reconnects.
           </div>
         )}
         {feedState === 'error' && warehouse !== 'down' && lakebase !== 'down' && genie !== 'down' && (
-          <div className="body" style={{ padding: 'var(--sp-3)', color: 'var(--signal-danger)' }}>
+          <div className="body audit-panel__message audit-panel__message--danger">
             Audit feed is briefly unavailable. This page will retry on the
             next refresh; live dependency state is shown below.
           </div>
@@ -206,12 +206,7 @@ export function AgentActivityLog({ limit = 12 }: { limit?: number }) {
                     this" from "the runtime did this on its own". The
                     raw actor string is kept in the tooltip for ops. */}
                 <div
-                  className="audit__who"
-                  style={
-                    actor.isSystem
-                      ? { fontStyle: 'italic', color: 'var(--text-3)' }
-                      : undefined
-                  }
+                  className={`audit__who ${actor.isSystem ? 'audit__who--system' : ''}`}
                   title={actor.tip ? `${actor.tip}\nRaw actor: ${r.actor}` : r.actor}
                 >
                   {actor.text}
@@ -222,43 +217,38 @@ export function AgentActivityLog({ limit = 12 }: { limit?: number }) {
         })}
       </div>
       <div
-        className="surface__ft"
-        style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--sp-3)' }}
+        className="surface__ft surface__ft--wrap"
         aria-label="Live dependency telemetry"
       >
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+        <span className="dependency-row">
           <span
             aria-hidden
-            style={{
-              width: 6, height: 6, borderRadius: '50%',
-              background:
-                warehouse === 'up'
-                  ? 'var(--signal-success)'
-                  : warehouse === 'down'
-                    ? 'var(--signal-danger)'
-                    : 'var(--text-3)',
-            }}
+            className={`dependency-dot ${
+              warehouse === 'up'
+                ? 'dependency-dot--up'
+                : warehouse === 'down'
+                  ? 'dependency-dot--down'
+                  : ''
+            }`}
           />
           Analytics warehouse {warehouse}
           {warehouseBreaker ? ` · ${warehouseBreaker}` : ''}
         </span>
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+        <span className="dependency-row">
           <span
             aria-hidden
-            style={{
-              width: 6, height: 6, borderRadius: '50%',
-              background:
-                genie === 'up'
-                  ? 'var(--signal-success)'
-                  : genie === 'down'
-                    ? 'var(--signal-danger)'
-                    : 'var(--text-3)',
-            }}
+            className={`dependency-dot ${
+              genie === 'up'
+                ? 'dependency-dot--up'
+                : genie === 'down'
+                  ? 'dependency-dot--down'
+                  : ''
+            }`}
           />
           AI assistant {genie}
           {genieBreaker ? ` · ${genieBreaker}` : ''}
         </span>
-        <span className="mono" style={{ marginLeft: 'auto' }}>
+        <span className="mono surface__ft-spacer">
           Last health check{probeSuffix}
         </span>
       </div>

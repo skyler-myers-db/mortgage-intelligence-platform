@@ -123,7 +123,7 @@ _PII_DENYLIST_KEYS: frozenset[str] = frozenset(
 #   backend/api/outreach.py::reject_outreach
 #     approval_id, offer_code, borrower_id, request_id, rationale
 #   backend/api/leads.py::list_leads_ranked
-#     rendered_borrower_ids, portfolio_id, segment, limit
+#     rendered_borrower_ids, portfolio_id, segment, segment_mode, limit
 #   backend/api/offers.py::recommend_offer
 #     offer_code, confidence, thresholds_applied
 #   backend/api/admin.py::set_rules
@@ -164,6 +164,7 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         "rendered_borrower_ids",
         "portfolio_id",
         "segment",
+        "segment_mode",
         "limit",
         # Offers
         "thresholds_applied",

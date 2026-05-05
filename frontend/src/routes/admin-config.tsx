@@ -172,23 +172,16 @@ export default function AdminConfig() {
       heroRight={<EntradaWordmark height={28} />}
     >
       {/* First row — the three operator-grade panels */}
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
-          gap: 'var(--gap-grid)',
-          marginBottom: 'var(--gap-grid)',
-        }}
-      >
+      <div className="admin-grid">
         {/* Offer rules — clickable to expand threshold table */}
         <div className="surface">
-          <div className="surface__hdr" style={{ justifyContent: 'space-between' }}>
+          <div className="surface__hdr surface__hdr--split">
             <div className="h-4">Offer rules</div>
             <Chip variant="neutral">{rulesVersionLabel}</Chip>
           </div>
-          <div className="surface__body" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <p className="body" style={{ margin: 0 }}>
-              Thresholds for in-the-money spread, equity, LTV, and retention scoring. Stored in Unity Catalog (<span className="mono" style={{ fontSize: 11 }}>mip.ref.offer_rules_config</span>).
+          <div className="surface__body admin-panel-body">
+            <p className="body flush">
+              Thresholds for in-the-money spread, equity, LTV, and retention scoring. Stored in Unity Catalog (<span className="mono fs-11">mip.ref.offer_rules_config</span>).
             </p>
             {rulesWarming && (
               <WarmingUpBlock state={rulesWarming} title="Offer rules loading" compact />
@@ -212,24 +205,13 @@ export default function AdminConfig() {
               className="btn btn--ghost btn--sm"
               onClick={() => setRulesExpanded((v) => !v)}
               aria-expanded={rulesExpanded}
-              style={{ alignSelf: 'flex-start' }}
               disabled={!rules || rules.thresholds.length === 0}
             >
               <Icon name={rulesExpanded ? 'up' : 'down'} size={12} />
               {rulesExpanded ? 'Hide thresholds' : 'View thresholds'}
             </button>
             {rulesExpanded && rules && (
-              <div
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: '1fr auto',
-                  rowGap: 6,
-                  columnGap: 16,
-                  paddingTop: 8,
-                  borderTop: '1px solid var(--line-1)',
-                  fontSize: 12,
-                }}
-              >
+              <div className="admin-thresholds">
                 {rules.thresholds.map((t) => (
                   <Row2
                     key={t.key}
@@ -244,14 +226,14 @@ export default function AdminConfig() {
 
         {/* Audit trail — live count + last event timestamp */}
         <div className="surface">
-          <div className="surface__hdr" style={{ justifyContent: 'space-between' }}>
+          <div className="surface__hdr surface__hdr--split">
             <div className="h-4">Audit trail</div>
             <Chip variant={auditError ? 'warning' : 'success'}>
               {auditError ? 'reconnecting' : 'live'}
             </Chip>
           </div>
-          <div className="surface__body" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <p className="body" style={{ margin: 0 }}>
+          <div className="surface__body admin-panel-body">
+            <p className="body flush">
               Append-only trail of approvals, rejections, and workflow actions. Exported nightly for compliance review.
             </p>
             {auditWarming && (
@@ -287,7 +269,7 @@ export default function AdminConfig() {
 
         {/* Data source readiness — per-source status rows */}
         <div className="surface">
-          <div className="surface__hdr" style={{ justifyContent: 'space-between' }}>
+          <div className="surface__hdr surface__hdr--split">
             <div className="h-4">Data source readiness</div>
             <Chip variant={sourcesError ? 'warning' : 'neutral'}>
               {sourcesWarming
@@ -299,7 +281,7 @@ export default function AdminConfig() {
                 : `${liveCount} of ${totalCount} live`}
             </Chip>
           </div>
-          <div className="surface__body" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div className="surface__body surface__body--stack-sm">
             {sourcesWarming && (
               <WarmingUpBlock
                 state={sourcesWarming}
@@ -308,46 +290,32 @@ export default function AdminConfig() {
               />
             )}
             {!sourcesWarming && sourcesLoading && (
-              <div className="muted body" style={{ fontSize: 12 }}>
+              <div className="muted body fs-12">
                 Probing Unity Catalog…
               </div>
             )}
             {!sourcesWarming && !sourcesLoading && sourcesError && (
-              <div className="muted body" style={{ fontSize: 12 }}>
+              <div className="muted body fs-12">
                 Data source readiness temporarily unavailable. Try again shortly.
               </div>
             )}
             {!sourcesWarming && !sourcesLoading && !sourcesError && sources?.map((s) => (
               <div
                 key={s.name}
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: '10px 1fr auto',
-                  alignItems: 'center',
-                  columnGap: 10,
-                  fontSize: 12,
-                }}
+                className="source-status-row"
               >
                 <StatusDot status={sourceStatusTone(s.status)} />
-                <div style={{ color: 'var(--text-1)' }}>
+                <div className="source-status-main">
                   {s.name}
                   {s.status === 'live' && s.rows !== null && (
                     <span
-                      className="muted"
-                      style={{ marginLeft: 8, fontSize: 11, fontFamily: 'var(--font-mono)' }}
+                      className="muted source-status-count"
                     >
                       {s.rows.toLocaleString()} rows
                     </span>
                   )}
                 </div>
-                <div
-                  style={{
-                    color: 'var(--text-3)',
-                    fontFamily: 'var(--font-mono)',
-                    fontSize: 11,
-                    textAlign: 'right',
-                  }}
-                >
+                <div className="source-status-meta">
                   {s.status === 'live'
                     ? formatSourceLastUpdated(s.last_updated) ?? s.note
                     : sourceStatusLabel(s.status)}
@@ -362,33 +330,25 @@ export default function AdminConfig() {
       <div className="surface">
         <button
           type="button"
-          className="surface__hdr"
+          className="surface__hdr appearance-toggle"
           onClick={() => setAppearanceOpen((v) => !v)}
           aria-expanded={appearanceOpen}
-          style={{
-            width: '100%',
-            justifyContent: 'space-between',
-            background: 'transparent',
-            border: 0,
-            cursor: 'pointer',
-            color: 'var(--text-1)',
-          }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <Icon name="tweak" size={14} style={{ color: 'var(--accent)' }} />
+          <div className="appearance-toggle__side">
+            <Icon name="tweak" size={14} className="icon-accent" />
             <div className="h-4">Workspace appearance (per-user)</div>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ fontSize: 12, color: 'var(--text-3)' }}>
+          <div className="appearance-toggle__side">
+            <span className="appearance-toggle__meta">
               theme · accent · density · lender · chips · meters
             </span>
             <Icon name={appearanceOpen ? 'up' : 'down'} size={12} />
           </div>
         </button>
         {appearanceOpen && (
-          <div className="surface__body" style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+          <div className="surface__body appearance-body">
             <Row label="Theme">
-              <div className="tweak-row" style={{ minWidth: 220 }}>
+              <div className="tweak-row tweak-row--theme">
                 <div className="segmented">
                   {(['dark', 'light'] as Theme[]).map((t) => (
                     <button
@@ -419,7 +379,7 @@ export default function AdminConfig() {
               </div>
             </Row>
             <Row label="Density">
-              <div className="tweak-row" style={{ minWidth: 260 }}>
+              <div className="tweak-row tweak-row--density">
                 <div className="segmented">
                   {(['comfortable', 'compact'] as Density[]).map((d) => (
                     <button
@@ -440,17 +400,7 @@ export default function AdminConfig() {
                 aria-label="Lender"
                 value={lender}
                 onChange={(e) => setLender(e.target.value)}
-                style={{
-                  flex: 1,
-                  background: 'var(--bg-2)',
-                  border: '1px solid var(--line-1)',
-                  color: 'var(--text-1)',
-                  fontFamily: 'var(--font-sans)',
-                  fontSize: 13,
-                  padding: '6px 10px',
-                  borderRadius: 'var(--r-md)',
-                  outline: 'none',
-                }}
+                className="form-input"
               />
             </Row>
             <Row label="Show evidence chips">
@@ -480,18 +430,8 @@ export default function AdminConfig() {
 
 function Row({ label, children }: { label: string; children: ReactElement }) {
   return (
-    <div style={{ display: 'flex', gap: 20, alignItems: 'center' }}>
-      <label
-        style={{
-          minWidth: 180,
-          fontSize: 12,
-          color: 'var(--text-3)',
-          textTransform: 'uppercase',
-          letterSpacing: '0.06em',
-        }}
-      >
-        {label}
-      </label>
+    <div className="admin-row">
+      <label className="admin-row__label">{label}</label>
       {children}
     </div>
   );
@@ -501,8 +441,8 @@ function Row({ label, children }: { label: string; children: ReactElement }) {
 function Row2({ label, value }: { label: string; value: string }) {
   return (
     <>
-      <div style={{ color: 'var(--text-2)' }}>{label}</div>
-      <div style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-1)' }}>{value}</div>
+      <div className="row2__label">{label}</div>
+      <div className="row2__value">{value}</div>
     </>
   );
 }
@@ -520,38 +460,13 @@ function MetaRow({
   statusLabel?: string;
 }) {
   return (
-    <div
-      style={{
-        display: 'grid',
-        gridTemplateColumns: '96px 1fr auto',
-        alignItems: 'center',
-        columnGap: 12,
-        fontSize: 12,
-      }}
-    >
-      <div
-        style={{
-          color: 'var(--text-3)',
-          textTransform: 'uppercase',
-          letterSpacing: '0.06em',
-          fontSize: 11,
-        }}
-      >
-        {label}
-      </div>
-      <div style={{ color: 'var(--text-1)' }}>{value}</div>
+    <div className="meta-row">
+      <div className="meta-row__label">{label}</div>
+      <div className="meta-row__value">{value}</div>
       {statusLabel && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <div className="meta-row__status">
           <StatusDot status={status} />
-          <span
-            style={{
-              color: 'var(--text-3)',
-              fontFamily: 'var(--font-mono)',
-              fontSize: 11,
-            }}
-          >
-            {statusLabel}
-          </span>
+          <span className="meta-row__status-label">{statusLabel}</span>
         </div>
       )}
     </div>

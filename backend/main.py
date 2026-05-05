@@ -27,6 +27,7 @@ from backend.api import (
     outreach,
     portfolio,
     segments,
+    workspace,
 )
 from backend.config.settings import (
     _running_under_pytest,
@@ -330,6 +331,7 @@ for router in [
     geo.router,
     genie.router,
     audit.router,
+    workspace.router,
 ]:
     app.include_router(router)
 

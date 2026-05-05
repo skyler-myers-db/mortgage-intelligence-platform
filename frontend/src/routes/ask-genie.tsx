@@ -93,6 +93,7 @@ export default function AskGenie() {
   // degraded chips also render inert (the chip text is the explanation).
   const drawerForSource =
     /itm|rules/i.test(sourceChip) ? DRAWER_SOURCES.itm
+      : /lead.?score|lead_scores|fn_lead_score/i.test(sourceChip) ? DRAWER_SOURCES.leadScore
       : /permit/i.test(sourceChip) ? DRAWER_SOURCES.permit
       : /lead_population|population|borrower_360/i.test(sourceChip) ? DRAWER_SOURCES.population
       : /next.?best|nbo/i.test(sourceChip) ? DRAWER_SOURCES.nbo
@@ -109,7 +110,7 @@ export default function AskGenie() {
       <div className="layoutA-grid">
         <div className="surface">
           <div className="surface__hdr">
-            <Icon name="sparkle" size={14} style={{ color: 'var(--accent)' }} />
+            <Icon name="sparkle" size={14} className="icon-accent" />
             <div className="h-4">Ask a question</div>
           </div>
           <div className="surface__body">
@@ -138,20 +139,9 @@ export default function AskGenie() {
                   }
                 }
               }}
-              style={{
-                width: '100%',
-                minHeight: 90,
-                background: 'var(--bg-1)',
-                color: 'var(--text-1)',
-                border: '1px solid var(--line-1)',
-                borderRadius: 8,
-                padding: 12,
-                fontFamily: 'var(--font-sans)',
-                fontSize: 14,
-                resize: 'vertical',
-              }}
+              className="route-textarea"
             />
-            <div style={{ marginTop: 10 }}>
+            <div className="mt-3">
               <Button
                 variant="primary"
                 icon="send"
@@ -162,26 +152,16 @@ export default function AskGenie() {
               </Button>
             </div>
             {warmingUp && (
-              <div style={{ marginTop: 16 }}>
+              <div className="mt-4">
                 <WarmingUpBlock state={warmingUp} title="Asking Genie" compact />
               </div>
             )}
             {errorMsg && !warmingUp && (
               <div
-                className="surface"
+                className="surface surface--inset surface--danger mt-4"
                 role="alert"
-                style={{ marginTop: 16, background: 'var(--bg-1)', borderColor: 'var(--signal-danger)' }}
               >
-                <div
-                  className="surface__body"
-                  style={{
-                    color: 'var(--signal-danger)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    gap: 12,
-                  }}
-                >
+                <div className="surface__body status-callout--danger">
                   <span>{errorMsg}</span>
                   <button
                     type="button"
@@ -197,8 +177,7 @@ export default function AskGenie() {
             )}
             {payload && (
               <div
-                className="surface"
-                style={{ marginTop: 16, background: 'var(--bg-1)' }}
+                className="surface surface--inset mt-4"
               >
                 <div className="surface__body">
                   {/* withChart=true: opt this deep-dive view in to the
@@ -207,8 +186,8 @@ export default function AskGenie() {
                       pass this prop, so its compact form is unchanged. */}
                   <GenieAnswer payload={payload} onFollowUp={ask} withChart />
                   {sourceChip && (
-                    <div style={{ marginTop: 12, display: 'flex', gap: 6, alignItems: 'center' }}>
-                      <span className="muted" style={{ fontSize: 11 }}>Source:</span>
+                    <div className="chip-row mt-3">
+                      <span className="muted fs-11">Source:</span>
                       {sourceChipVariant === 'warning' ? (
                         // Degraded: warning chip with tooltip so the user
                         // knows Genie is reconnecting. Not clickable.
@@ -238,13 +217,13 @@ export default function AskGenie() {
           </div>
         </div>
 
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--gap-grid)' }}>
+        <div className="stack-grid">
           <div className="surface">
             <div className="surface__hdr">
-              <Icon name="layers" size={14} style={{ color: 'var(--accent)' }} />
+              <Icon name="layers" size={14} className="icon-accent" />
               <div className="h-4">Trusted assets</div>
             </div>
-            <div className="surface__body" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <div className="surface__body trusted-asset-list">
               {TRUSTED_ASSETS.map((a) => (
                 <div
                   key={a.path}
@@ -260,20 +239,19 @@ export default function AskGenie() {
 
           <div className="surface">
             <div className="surface__hdr">
-              <Icon name="sparkle" size={14} style={{ color: 'var(--accent)' }} />
+              <Icon name="sparkle" size={14} className="icon-accent" />
               <div className="h-4">Suggested questions</div>
             </div>
-            <div className="surface__body" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <div className="surface__body trusted-asset-list">
               {SAMPLE_QUESTIONS.map((q) => (
                 <button
                   key={q}
                   type="button"
-                  className="filter"
-                  style={{ textAlign: 'left' }}
+                  className="filter filter--question"
                   onClick={() => ask(q)}
                 >
                   <Icon name="sparkle" size={11} />
-                  <span style={{ color: 'var(--text-2)' }}>{q}</span>
+                  <span className="filter__text">{q}</span>
                 </button>
               ))}
             </div>

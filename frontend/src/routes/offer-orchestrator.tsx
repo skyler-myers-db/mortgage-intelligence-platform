@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, Navigate, useParams } from 'react-router-dom';
 import { api, isAbortError, isWarmingUpError, dependencyLabel } from '../lib/api';
 import type { WarmingUpState } from '../lib/useWarmingUpRetry';
 import type { Borrower360 as Borrower360Type, OfferRecommendation } from '../types';
@@ -106,8 +106,23 @@ export default function OfferOrchestrator() {
   // retries exhaust does the UI fall through to `defaultDraft` + the
   // muted "Default template used" note. 2026-04-23 UX fix.
   const [draftWarming, setDraftWarming] = useState<WarmingUpState | null>(null);
-  const { setApproval, approvals, lender } = useApp();
+  const {
+    setApproval,
+    approvals,
+    lender,
+    lastBorrowerId,
+    setLastBorrowerId,
+    saveLead,
+    isLeadSaved,
+    savedDrafts,
+    saveDraft,
+  } = useApp();
   const approval = id ? approvals[id] : undefined;
+  const savedDraftBody = id ? savedDrafts[id]?.body : undefined;
+
+  useEffect(() => {
+    if (id) setLastBorrowerId(id);
+  }, [id, setLastBorrowerId]);
 
   useEffect(() => {
     if (!id) return;
@@ -128,12 +143,16 @@ export default function OfferOrchestrator() {
     // We still refetch in the background so the data stays live.
     const cached = readBorrowerCache(id);
     if (cached && reloadToken === 0) {
+      const cachedDraftBody =
+        savedDraftBody && savedDraftBody.trim().length > 0
+          ? savedDraftBody
+          : cached.draftBody;
       setB(cached.borrower);
       setRec(cached.recommendation);
       setLoadError(null);
       setWarmingUp(null);
-      if (cached.draftBody && cached.draftBody.trim().length > 0) {
-        setDraftBody(cached.draftBody);
+      if (cachedDraftBody && cachedDraftBody.trim().length > 0) {
+        setDraftBody(cachedDraftBody);
         setDraftLoaded(true);
       } else {
         setDraftBody('');
@@ -212,13 +231,17 @@ export default function OfferOrchestrator() {
         if (cancelled) return;
         setDraftWarming(null);
         if (draft?.body && draft.body.trim().length > 0) {
-          setDraftBody(draft.body);
+          const body =
+            savedDraftBody && savedDraftBody.trim().length > 0
+              ? savedDraftBody
+              : draft.body;
+          setDraftBody(body);
           setDraftLoaded(true);
           const prev = BORROWER_CACHE.get(id);
           if (prev) {
             BORROWER_CACHE.set(id, {
               ...prev,
-              draftBody: draft.body,
+              draftBody: body,
               fetched: Date.now(),
             });
           }
@@ -254,11 +277,15 @@ export default function OfferOrchestrator() {
       if (draftTimeoutId !== null) clearTimeout(draftTimeoutId);
       ctrl.abort();
     };
-  }, [id, reloadToken]);
+  }, [id, reloadToken, savedDraftBody]);
 
   // Offer Orchestrator is a per-borrower action page; without an id
   // render an empty-state landing page so the tab click isn't a silent
   // redirect. 2026-04-23 UX fix.
+  if (!id && lastBorrowerId) {
+    return <Navigate to={`/offer-orchestrator/${lastBorrowerId}`} replace />;
+  }
+
   if (!id) {
     return (
       <PageShell
@@ -274,17 +301,17 @@ export default function OfferOrchestrator() {
       >
         <div className="surface">
           <div className="surface__hdr">
-            <Icon name="bolt" size={14} style={{ color: 'var(--accent)' }} />
+            <Icon name="bolt" size={14} className="icon-accent" />
             <div className="h-4">What you'll see</div>
           </div>
-          <div className="surface__body" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)' }}>
-            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+          <div className="surface__body surface__body--stack-sm">
+            <div className="chip-row">
               <Chip variant="neutral" icon="bolt">Primary offer</Chip>
               <Chip variant="neutral" icon="doc">Considered alternatives</Chip>
               <Chip variant="neutral" icon="shield">Thresholds applied</Chip>
               <Chip variant="neutral" icon="check">Human approval gate</Chip>
             </div>
-            <p className="body muted" style={{ margin: 0 }}>
+            <p className="body muted flush">
               Every draft writes an audit row before it enters the outreach
               queue. No outreach sends automatically.
             </p>
@@ -309,6 +336,31 @@ If you'd like to explore, a licensed ${lender} loan officer can walk you through
 
 Reply or call 1-800-XXX-XXXX.`
     : '';
+  const draftText = draftLoaded ? draftBody : defaultDraft;
+  const savedDraft = id ? savedDrafts[id] : undefined;
+  const draftIsSaved = Boolean(savedDraft && savedDraft.body === draftText);
+  const leadIsSaved = b ? isLeadSaved(b.borrower_id) : false;
+  const saveCurrentLead = () => {
+    if (!b) return;
+    saveLead({
+      borrower_id: b.borrower_id,
+      city: b.city,
+      state: b.state,
+      zip: b.zip,
+      recommended_offer: rec?.product_label ?? b.recommended_offer,
+      opportunity_score: b.opportunity_score,
+      confidence: b.confidence,
+    });
+  };
+  const saveCurrentDraft = () => {
+    if (!id || draftText.trim().length === 0) return;
+    saveDraft({
+      borrower_id: id,
+      offer_code: rec?.offer_code ?? b?.recommended_offer ?? null,
+      channel: 'email',
+      body: draftText,
+    });
+  };
 
   const onApprove = async () => {
     if (approving) return;
@@ -326,8 +378,7 @@ Reply or call 1-800-XXX-XXXX.`
       // rendered default template so callers that approved without
       // touching the textarea still write durable copy into the audit
       // metadata.
-      const draft_body =
-        (draftLoaded ? draftBody : draftBody) || defaultDraft || null;
+      const draft_body = draftText || null;
       const res = await api.approve(id, { offer_code, evidence_ids, draft_body });
       if (res.approved) {
         setApproval(id, 'approved');
@@ -398,7 +449,7 @@ Reply or call 1-800-XXX-XXXX.`
         lede={loadError}
       >
         <div className="surface">
-          <div className="surface__body" style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <div className="surface__body surface__body--inline">
             <Chip variant="danger" icon="cross">Backend unavailable</Chip>
             <button
               type="button"
@@ -452,29 +503,29 @@ Reply or call 1-800-XXX-XXXX.`
       <div className="layoutA-grid">
         <div className="surface">
           <div className="surface__hdr">
-            <Icon name="bolt" size={14} style={{ color: 'var(--accent)' }} />
+            <Icon name="bolt" size={14} className="icon-accent" />
             <div className="h-4">Primary offer</div>
           </div>
           <div className="surface__body">
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 'var(--sp-3)' }}>
-              <div style={{ fontSize: 'var(--fs-22)', fontWeight: 600, letterSpacing: '-0.01em' }}>
+            <div className="split-row">
+              <div className="offer-title offer-title--large">
                 {productLabel}
               </div>
               {b && <ScoreBadge value={b.opportunity_score} />}
             </div>
             {rec ? (
-              <p className="body" style={{ marginTop: 'var(--sp-2)' }}>
+              <p className="body mt-2">
                 {rec.rationale ?? b?.why_now}
               </p>
             ) : (
-              <div style={{ marginTop: 'var(--sp-2)', display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div className="stack-sm mt-2">
                 <Skeleton width="100%" height={14} rounded="sm" />
                 <Skeleton width="92%" height={14} rounded="sm" />
                 <Skeleton width="78%" height={14} rounded="sm" />
               </div>
             )}
-            <div style={{ marginTop: 'var(--sp-3)', display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-              <span className="muted" style={{ fontSize: 11 }}>Sources:</span>
+            <div className="chip-row mt-3">
+              <span className="muted fs-11">Sources:</span>
               {rec
                 ? rec.sources.map((s, idx) => {
                     // Prefer the backend-supplied human-readable label
@@ -493,16 +544,29 @@ Reply or call 1-800-XXX-XXXX.`
                     <Skeleton key={i} width={96} height={18} rounded="sm" />
                   ))}
             </div>
+            {b && (
+              <div className="chip-row mt-3">
+                <Button
+                  variant={leadIsSaved ? 'ghost' : 'default'}
+                  size="sm"
+                  icon={leadIsSaved ? 'check' : 'tag'}
+                  onClick={saveCurrentLead}
+                  aria-label={`${leadIsSaved ? 'Saved' : 'Save'} borrower ${b.borrower_id}`}
+                >
+                  {leadIsSaved ? 'Lead saved' : 'Save lead'}
+                </Button>
+              </div>
+            )}
           </div>
         </div>
         <div className="surface">
           <div className="surface__hdr">
-            <Icon name="doc" size={14} style={{ color: 'var(--accent)' }} />
+            <Icon name="doc" size={14} className="icon-accent" />
             <div className="h-4">Draft outreach · review only</div>
           </div>
           <div className="surface__body">
             {draftWarming && (
-              <div style={{ marginBottom: 10 }}>
+              <div className="mb-3">
                 <WarmingUpBlock
                   state={draftWarming}
                   title="Offer draft warming up"
@@ -512,9 +576,8 @@ Reply or call 1-800-XXX-XXXX.`
             )}
             {!draftLoaded && !draftWarming && b && (
               <div
-                className="muted"
                 data-testid="draft-fallback-note"
-                style={{ marginBottom: 6, fontSize: 11 }}
+                className="muted fs-11 mb-2"
               >
                 Default template used — offer-draft endpoint unavailable.
               </div>
@@ -522,7 +585,7 @@ Reply or call 1-800-XXX-XXXX.`
             <textarea
               key={b?.borrower_id ?? 'empty'}
               aria-label="Outreach draft — review only"
-              value={draftLoaded ? draftBody : defaultDraft}
+              value={draftText}
               onChange={(e) => {
                 // Hydrate draftBody on first edit when the backend
                 // draft never loaded, so subsequent edits accumulate
@@ -531,68 +594,58 @@ Reply or call 1-800-XXX-XXXX.`
                 setDraftBody(e.target.value);
               }}
               data-testid="outreach-draft"
-              style={{
-                width: '100%',
-                minHeight: 180,
-                background: 'var(--bg-1)',
-                color: 'var(--text-1)',
-                border: '1px solid var(--line-1)',
-                borderRadius: 8,
-                padding: 12,
-                fontFamily: 'var(--font-sans)',
-                fontSize: 13,
-                lineHeight: 1.6,
-                resize: 'vertical',
-              }}
+              className="route-textarea route-textarea--outreach"
             />
-            <div className="muted" style={{ marginTop: 6, fontSize: 11 }}>
+            <div className="muted fs-11 mt-2">
               First-name placeholder fills from CRM at send time. Phone number is a lender default — replace with the campaign&apos;s tracking number.
             </div>
-            <div style={{ marginTop: 10, display: 'flex', gap: 8, alignItems: 'center' }}>
+            <div className="chip-row mt-3">
               <Chip variant="neutral" icon="shield">Email channel</Chip>
               <Chip variant="neutral">LO call follow-up within 5 days</Chip>
+              <Button
+                variant={draftIsSaved ? 'ghost' : 'default'}
+                size="sm"
+                icon={draftIsSaved ? 'check' : 'doc'}
+                onClick={saveCurrentDraft}
+                disabled={!id || draftText.trim().length === 0}
+                aria-label={`Save outreach draft for ${id ?? 'borrower'}`}
+              >
+                {draftIsSaved ? 'Draft saved' : 'Save draft'}
+              </Button>
             </div>
           </div>
         </div>
       </div>
 
-      <Reveal className="layoutA-grid" style={{ marginTop: 'var(--gap-grid)' }}>
+      <Reveal className="layoutA-grid mt-grid">
         <div className="surface">
           <div className="surface__hdr">
-            <Icon name="doc" size={14} style={{ color: 'var(--accent)' }} />
+            <Icon name="doc" size={14} className="icon-accent" />
             <div>
               <div className="eyebrow">Considered alternatives</div>
-              <div className="h-4" style={{ marginTop: 2 }}>
+              <div className="h-4 mt-1">
                 {rec ? `${rec.alternatives.length} other product${rec.alternatives.length === 1 ? '' : 's'} ruled out` : 'Loading…'}
               </div>
             </div>
           </div>
           <div className="surface__body">
             {rec && rec.alternatives.length === 0 && (
-              <p className="muted body" style={{ margin: 0 }}>
+              <p className="muted body flush">
                 No alternatives considered — no trigger fires.
               </p>
             )}
             {rec && rec.alternatives.length > 0 && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-3)' }}>
+              <div className="stack-md">
                 {rec.alternatives.map((alt) => (
                   <div
                     key={alt.offer_code}
-                    style={{
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: 'var(--sp-2)',
-                      padding: 'var(--sp-3)',
-                      background: 'var(--bg-1)',
-                      border: '1px solid var(--line-1)',
-                      borderRadius: 'var(--r-md)',
-                    }}
+                    className="alt-card"
                   >
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 'var(--sp-2)' }}>
-                      <div style={{ fontWeight: 600, color: 'var(--text-1)' }}>{alt.product_label}</div>
+                    <div className="split-row">
+                      <div className="fw-600 text-1">{alt.product_label}</div>
                       <Chip variant="neutral" className="mono">{alt.offer_code}</Chip>
                     </div>
-                    <p className="body muted" style={{ margin: 0 }}>{alt.reason_not_chosen}</p>
+                    <p className="body muted flush">{alt.reason_not_chosen}</p>
                   </div>
                 ))}
               </div>
@@ -602,38 +655,30 @@ Reply or call 1-800-XXX-XXXX.`
 
         <div className="surface">
           <div className="surface__hdr">
-            <Icon name="shield" size={14} style={{ color: 'var(--accent)' }} />
+            <Icon name="shield" size={14} className="icon-accent" />
             <div>
               <div className="eyebrow">Thresholds applied</div>
-              <div className="h-4" style={{ marginTop: 2 }}>Admin config at decision time</div>
+              <div className="h-4 mt-1">Admin config at decision time</div>
             </div>
           </div>
           <div className="surface__body">
             {rec ? (
-              <div
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: '1fr auto',
-                  rowGap: 'var(--sp-2)',
-                  columnGap: 'var(--sp-3)',
-                  alignItems: 'baseline',
-                }}
-              >
+              <div className="threshold-grid">
                 {Object.entries(rec.thresholds_applied).map(([k, v]) => (
-                  <div key={k} style={{ display: 'contents' }}>
+                  <div key={k} className="contents">
                     <span className="muted body">{humanizeThresholdKey(k)}</span>
-                    <span className="mono" style={{ fontSize: 'var(--fs-13)', color: 'var(--text-1)' }}>{v}</span>
+                    <span className="mono fs-13 text-1">{v}</span>
                   </div>
                 ))}
               </div>
             ) : (
-              <p className="muted body" style={{ margin: 0 }}>Loading thresholds…</p>
+              <p className="muted body flush">Loading thresholds…</p>
             )}
           </div>
         </div>
       </Reveal>
 
-      <div style={{ marginTop: 'var(--gap-grid)' }}>
+      <div className="mt-grid">
         <ApprovalBanner
           text={`${b ? `Borrower ${b.borrower_id}` : 'Borrower'} pending review. Approve writes an audit event and releases the draft into the outreach queue.`}
           onApprove={() => void onApprove()}
@@ -644,17 +689,17 @@ Reply or call 1-800-XXX-XXXX.`
       </div>
 
       {approval === 'approved' && (
-        <div className="surface" style={{ marginTop: 'var(--gap-grid)' }}>
-          <div className="surface__body" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <span className="burst" style={{ display: 'inline-flex' }}>
+        <div className="surface mt-grid">
+          <div className="surface__body surface__body--inline">
+            <span className="burst inline-flex">
               <Chip variant="success" icon="check">Approved · released to outreach queue</Chip>
             </span>
-            {auditId && <span className="mono muted" style={{ fontSize: 11 }}>audit: {auditId}</span>}
+            {auditId && <span className="mono muted fs-11">audit: {auditId}</span>}
           </div>
         </div>
       )}
       {approval === 'rejected' && (
-        <div className="surface" style={{ marginTop: 'var(--gap-grid)' }}>
+        <div className="surface mt-grid">
           <div className="surface__body">
             <Chip variant="danger" icon="cross">Rejected</Chip>
           </div>
@@ -662,11 +707,10 @@ Reply or call 1-800-XXX-XXXX.`
       )}
       {approveError && (
         <div
-          className="surface"
+          className="surface surface--danger mt-grid"
           role="alert"
-          style={{ marginTop: 'var(--gap-grid)', borderColor: 'var(--signal-danger)' }}
         >
-          <div className="surface__body" style={{ color: 'var(--signal-danger)' }}>
+          <div className="surface__body text-danger">
             {approveError}
           </div>
         </div>

@@ -72,11 +72,32 @@ class InProcessMockLeadRepository:
         segment: str | None,
         portfolio_id: str | None,
         limit: int | None = None,
+        state: str | None = None,
+        zip_code: str | None = None,
+        segment_codes: list[str] | None = None,
+        segment_mode: str = "any",
     ) -> list[LeadSummary]:
         _ = portfolio_id
         leads = [LeadSummary(**b.model_dump()) for b in mock_data.BORROWERS]
-        if segment:
-            leads = [lead for lead in leads if segment in lead.segment_codes]
+        codes = segment_codes or ([segment] if segment else [])
+        codes = [str(code).strip() for code in codes if str(code).strip()]
+        if codes:
+            if segment_mode == "all":
+                leads = [
+                    lead
+                    for lead in leads
+                    if all(code in lead.segment_codes for code in codes)
+                ]
+            else:
+                leads = [
+                    lead
+                    for lead in leads
+                    if any(code in lead.segment_codes for code in codes)
+                ]
+        if state:
+            leads = [lead for lead in leads if lead.state == state.upper()[:2]]
+        if zip_code:
+            leads = [lead for lead in leads if lead.zip == zip_code]
         if limit is not None and limit > 0:
             return leads[:limit]
         return leads
@@ -176,7 +197,12 @@ _FIXTURE_ZIP_ROLLUPS: dict[str, list[ZipRollup]] = {
 class InProcessMockGeoRepository:
     """Test fixture implementing ``GeoRepository`` from the synthetic rollups."""
 
-    def state_rollups(self) -> StateRollupResponse:
+    def state_rollups(
+        self,
+        segment_codes: list[str] | None = None,
+        segment_mode: str = "any",
+    ) -> StateRollupResponse:
+        _ = (segment_codes, segment_mode)
         return StateRollupResponse(
             rollups=list(_FIXTURE_STATE_ROLLUPS),
             snapshot_date="2026-04-22",

@@ -33,6 +33,10 @@ from backend.services.admin_rules import (
 )
 from backend.services.audit_store import InMemoryAuditStore, get_audit_store
 from backend.services.lakebase import get_lakebase_client
+from backend.services.workspace_store import (
+    InMemoryWorkspaceStore,
+    get_workspace_store,
+)
 from backend.services.repositories import (
     get_borrower_repository,
     get_genie_answer_repository,
@@ -213,6 +217,7 @@ def _install_dependency_overrides() -> Iterator[None]:
     geo = InProcessMockGeoRepository()
     audit = InMemoryAuditStore()
     lakebase = _FakeLakebaseClient()
+    workspace = InMemoryWorkspaceStore()
     admin_rules = AdminRulesService(_FakeAdminSqlClient())
 
     app.dependency_overrides[get_portfolio_repository] = lambda: portfolio
@@ -225,6 +230,7 @@ def _install_dependency_overrides() -> Iterator[None]:
     app.dependency_overrides[get_geo_repository] = lambda: geo
     app.dependency_overrides[get_audit_store] = lambda: audit
     app.dependency_overrides[get_lakebase_client] = lambda: lakebase
+    app.dependency_overrides[get_workspace_store] = lambda: workspace
     app.dependency_overrides[get_admin_rules_service] = lambda: admin_rules
     try:
         yield

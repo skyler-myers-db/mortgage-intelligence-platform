@@ -57,22 +57,12 @@ export function EvidenceDrawer() {
         aria-hidden={!open}
       >
         <div className="drawer__hdr">
-          <div
-            style={{
-              display: 'grid',
-              placeItems: 'center',
-              width: 32,
-              height: 32,
-              background: 'var(--accent-soft)',
-              color: 'var(--accent)',
-              borderRadius: 8,
-            }}
-          >
+          <div className="drawer__source-icon">
             <Icon name="db" size={16} />
           </div>
           <div>
-            <div style={{ fontSize: 13, fontWeight: 600 }}>Data source & lineage</div>
-            <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{d?.title ?? '—'}</div>
+            <div className="drawer__title">Data source & lineage</div>
+            <div className="drawer__subtitle">{d?.title ?? '—'}</div>
           </div>
           <button ref={closeBtnRef} className="drawer__close" onClick={() => setDrawer(null)} aria-label="Close drawer" type="button">
             <Icon name="close" size={14} />
@@ -80,10 +70,9 @@ export function EvidenceDrawer() {
         </div>
         <div className="drawer__body">
           <div
-            className="freshness-legend"
             aria-label="Source freshness legend"
             title="Fresh: updated within 7 days · Aging: 7–30 days · Stale: over 30 days or unknown"
-            style={{ marginBottom: 10 }}
+            className="freshness-legend mb-3"
           >
             <span className="freshness-legend__item">
               <span className="freshness-legend__dot freshness-legend__dot--fresh" aria-hidden="true" />
@@ -98,17 +87,17 @@ export function EvidenceDrawer() {
               Stale
             </span>
           </div>
-          {d?.description && <p className="body" style={{ marginTop: 0 }}>{d.description}</p>}
+          {d?.description && <p className="body flush">{d.description}</p>}
           {d?.lineage && d.lineage.length > 0 && (
             <>
-              <div className="eyebrow" style={{ marginTop: 16, marginBottom: 8 }}>Lineage</div>
+              <div className="eyebrow mt-4 mb-2">Lineage</div>
               {d.lineage.map((n, i) => (
                 <Fragment key={`${n.name}-${i}`}>
                   <div className="lineage-node">
                     <div className="lineage-node__label">{n.layer}</div>
                     <div className="lineage-node__name">{n.name}</div>
                     {n.meta && (
-                      <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 4 }}>{n.meta}</div>
+                      <div className="lineage-node__meta">{n.meta}</div>
                     )}
                   </div>
                   {d.lineage && i < d.lineage.length - 1 && <div className="lineage-arrow">↓</div>}
@@ -118,24 +107,23 @@ export function EvidenceDrawer() {
           )}
           {d?.signals && d.signals.length > 0 && (
             <>
-              <div className="eyebrow" style={{ marginTop: 20, marginBottom: 8 }}>Raw signals</div>
+              <div className="eyebrow mt-5 mb-2">Raw signals</div>
               {d.signals.map((s, i) => (
                 <div
                   key={`${s.label}-${i}`}
-                  className="lineage-node"
-                  style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}
+                  className="lineage-node lineage-node--signal"
                 >
                   <div>
                     <div className="lineage-node__label">{s.label}</div>
                     <div className="lineage-node__name">{s.source}</div>
                   </div>
-                  <div className="mono num" style={{ color: 'var(--text-1)', fontSize: 13 }}>{s.value}</div>
+                  <div className="mono num lineage-node__value">{s.value}</div>
                 </div>
               ))}
             </>
           )}
           {d?.updatedAt && (
-            <div style={{ marginTop: 16, fontSize: 11, color: 'var(--text-3)' }}>
+            <div className="drawer__updated">
               Last refresh: {d.updatedAt} · via Delta Share
             </div>
           )}

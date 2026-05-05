@@ -15,7 +15,7 @@ import { useApp } from '../components/AppContext';
 import { useOptionalHealth } from '../components/HealthProvider';
 import { EntradaWordmark } from '../components/brand/Entrada';
 import { formatRefreshed } from '../lib/formatRefreshed';
-import type { PortfolioPreview } from '../types';
+import type { KpiTrend, PortfolioPreview } from '../types';
 
 const FUTURE_MODULES = [
   { code: 'M1', title: 'Pipeline Optimization', desc: 'Lead → app → approval throughput and stalls.' },
@@ -26,10 +26,11 @@ const FUTURE_MODULES = [
 
 /** Format a signed percent-delta for the KPI delta slot. `null` → undefined
  * so the KpiCard simply hides the delta row. */
-function formatDelta(pct: number | null | undefined): string | undefined {
+function formatDelta(trend: KpiTrend | undefined): string | undefined {
+  const pct = trend?.delta_pct;
   if (pct === null || pct === undefined) return undefined;
   const sign = pct > 0 ? '+' : '';
-  return `${sign}${pct.toFixed(1)}% vs 7d ago`;
+  return `${sign}${pct.toFixed(1)}% ${trend?.comparison_label ?? 'vs prior snapshot'}`;
 }
 
 export default function Home() {
@@ -142,7 +143,7 @@ export default function Home() {
   return (
     <PageShell
       eyebrow={lender}
-      title="Today"
+      title="Who should we contact, why now, and with what offer?"
       lede="Portfolio KPIs, geography drill-down, and the approval queue. Build a new portfolio, jump to segments, or open a borrower dossier from the map."
       wideMap
       heroRight={
@@ -184,15 +185,7 @@ export default function Home() {
         <div
           role="status"
           aria-live="polite"
-          style={{
-            marginBottom: 'var(--gap-grid)',
-            padding: '10px 12px',
-            border: '1px solid var(--line-2)',
-            borderRadius: 'var(--r-md)',
-            background: 'var(--bg-1)',
-            color: 'var(--text-2)',
-            fontSize: 12,
-          }}
+          className="status-callout"
         >
           Portfolio KPIs are waiting on the analytics warehouse. The page
           will fetch them automatically once the warehouse finishes
@@ -202,18 +195,7 @@ export default function Home() {
       {previewError && !previewWarming && !warehouseDown && (
         <div
           role="alert"
-          style={{
-            marginBottom: 'var(--gap-grid)',
-            padding: '10px 12px',
-            border: '1px solid var(--signal-danger)',
-            borderRadius: 'var(--r-md)',
-            color: 'var(--signal-danger)',
-            fontSize: 12,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: 12,
-          }}
+          className="status-callout status-callout--danger"
         >
           <span>Couldn&apos;t load portfolio KPIs: {previewError}</span>
           <button
@@ -229,30 +211,19 @@ export default function Home() {
       {isDayZero && (
         <div
           role="status"
-          style={{
-            marginBottom: 'var(--gap-grid)',
-            padding: '12px 14px',
-            border: '1px solid var(--line-2)',
-            borderRadius: 'var(--r-md)',
-            background: 'var(--bg-1)',
-            fontSize: 13,
-            color: 'var(--text-1)',
-          }}
+          className="status-callout status-callout--day-zero"
         >
           <strong>First data refresh pending.</strong>{' '}
           Unity Catalog gold tables are empty. Run{' '}
-          <code
-            style={{
-              fontFamily: 'var(--font-mono)',
-              fontSize: 12,
-              padding: '1px 6px',
-              borderRadius: 4,
-              background: 'var(--bg-2)',
-            }}
-          >
+          <code className="callout-code">
             databricks bundle run mip_refresh_scores -t dev
           </code>{' '}
           to populate them.
+        </div>
+      )}
+      {!isDayZero && !previewWarming && preview?.trend_note && (
+        <div role="status" className="status-callout status-callout--info">
+          {preview.trend_note}
         </div>
       )}
       {!isDayZero && !previewWarming && (
@@ -261,7 +232,7 @@ export default function Home() {
             label="Marketable population"
             valueAnimated={preview?.marketable_population ?? null}
             trend={preview?.trends?.marketable_population?.series}
-            delta={formatDelta(preview?.trends?.marketable_population?.delta_pct)}
+            delta={formatDelta(preview?.trends?.marketable_population)}
             deltaDir={preview?.trends?.marketable_population?.direction}
             source={DRAWER_SOURCES.population}
           />
@@ -269,7 +240,7 @@ export default function Home() {
             label="High-intent leads"
             valueAnimated={preview?.high_intent_leads ?? null}
             trend={preview?.trends?.high_intent_leads?.series}
-            delta={formatDelta(preview?.trends?.high_intent_leads?.delta_pct)}
+            delta={formatDelta(preview?.trends?.high_intent_leads)}
             deltaDir={preview?.trends?.high_intent_leads?.direction}
             source={DRAWER_SOURCES.itm}
           />
@@ -277,15 +248,15 @@ export default function Home() {
             label="Top-tier opportunities"
             valueAnimated={preview?.top_tier_opportunities ?? null}
             trend={preview?.trends?.top_tier_opportunities?.series}
-            delta={formatDelta(preview?.trends?.top_tier_opportunities?.delta_pct)}
+            delta={formatDelta(preview?.trends?.top_tier_opportunities)}
             deltaDir={preview?.trends?.top_tier_opportunities?.direction}
-            source={DRAWER_SOURCES.nbo}
+            source={DRAWER_SOURCES.leadScore}
           />
           <KpiCard
             label="Offers recommended"
             valueAnimated={preview?.offers_recommended ?? null}
             trend={preview?.trends?.offers_recommended?.series}
-            delta={formatDelta(preview?.trends?.offers_recommended?.delta_pct)}
+            delta={formatDelta(preview?.trends?.offers_recommended)}
             deltaDir={preview?.trends?.offers_recommended?.direction}
             source={DRAWER_SOURCES.nbo}
           />
@@ -293,10 +264,9 @@ export default function Home() {
       )}
 
       <div
-        className="approval"
         role="region"
         aria-label="Approval queue"
-        style={{ marginTop: 'var(--gap-grid)' }}
+        className="approval mt-grid"
       >
         <div className="approval__ico"><Icon name="shield" size={16} /></div>
         <div className="approval__body">
@@ -334,26 +304,20 @@ export default function Home() {
             <div className="h-2">Planned modules</div>
           </div>
         </div>
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
-            gap: 'var(--gap-grid)',
-          }}
-        >
+        <div className="roadmap-grid">
           {FUTURE_MODULES.map((m) => (
             <div className="surface" key={m.code}>
               <div className="surface__body">
                 <div className="eyebrow">{m.code} · planned</div>
-                <div className="h-3" style={{ marginTop: 6 }}>{m.title}</div>
-                <p className="body" style={{ marginTop: 6 }}>{m.desc}</p>
+                <div className="h-3 mt-2">{m.title}</div>
+                <p className="body mt-2">{m.desc}</p>
               </div>
             </div>
           ))}
         </div>
       </Reveal>
 
-      <div style={{ marginTop: 'var(--gap-grid)', display: 'flex', gap: 12 }}>
+      <div className="section-actions">
         <Link to="/portfolio-builder" className="btn btn--primary" aria-label="Build a lead portfolio">
           Build a lead portfolio
         </Link>

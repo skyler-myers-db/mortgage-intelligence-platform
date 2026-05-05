@@ -2,7 +2,7 @@ import { useCallback, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../lib/api';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
-import type { LeadSummary, SegmentSummary } from '../types';
+import type { LeadSummary, SegmentCode, SegmentSummary } from '../types';
 import { PageShell } from '../components/layout/PageShell';
 import { SegmentCard } from '../components/mortgage/SegmentCard';
 import { LeadTable } from '../components/mortgage/LeadTable';
@@ -119,7 +119,7 @@ export default function SegmentIntelligence() {
     () => buildLocationToStates(footprint.states),
     [footprint.states],
   );
-  const [activeSegs, setActiveSegs] = useState<string[]>(['itm']);
+  const [activeSegs, setActiveSegs] = useState<SegmentCode[]>(['itm']);
   const [chipFilters, setChipFilters] = useState<ChipFilters>(INITIAL_FILTERS);
   // Geography drill state emitted by USChoroplethMap. State is the 2-char
   // USPS code; null = US level (no geography filter). County/ZIP aren't
@@ -144,16 +144,30 @@ export default function SegmentIntelligence() {
     error: segmentsError,
     manualRetry: retrySegments,
   } = useWarmingUpRetry<SegmentSummary[]>((signal) => api.segments(signal), []);
+  const selectedLocationState = (locationToStates[chipFilters.location] ?? [])[0];
+  const serverGeo = useMemo(
+    () => ({
+      state: mapSelection.state ?? selectedLocationState,
+      zip: mapSelection.zip ?? undefined,
+    }),
+    [mapSelection.state, mapSelection.zip, selectedLocationState],
+  );
+  const activeSegsKey = activeSegs.join(',');
   const {
     data: leadsData,
     warmingUp: leadsWarming,
     error: leadsError,
     manualRetry: retryLeads,
   } = useWarmingUpRetry<LeadSummary[]>(
-    (signal) => api.leads(undefined, signal),
-    [],
+    (signal) =>
+      api.leads(undefined, signal, serverGeo, {
+        segmentCodes: activeSegs.length > 0 ? activeSegs : undefined,
+        segmentMode: 'all',
+      }),
+    [activeSegsKey, serverGeo.state, serverGeo.zip],
   );
   const segments = segmentsData ?? [];
+  const leadsRefreshing = leadsData === null && !leadsWarming && !leadsError;
   const leads = useMemo(() => leadsData ?? [], [leadsData]);
   const retryAll = useCallback(() => {
     retrySegments();
@@ -168,14 +182,9 @@ export default function SegmentIntelligence() {
 
   const filtered = useMemo(() => {
     let out = leads;
-    if (activeSegs.length > 0) {
-      out = out.filter((l) => l.segment_codes.some((s) => activeSegs.includes(s)));
-    }
-    // Location: restrict to selected states (if any).
-    const locStates = locationToStates[chipFilters.location] ?? [];
-    if (locStates.length > 0) {
-      out = out.filter((l) => locStates.includes(l.state));
-    }
+    // Primary segment and geography filters are pushed down to /api/leads
+    // before LIMIT is applied. The predicates below are secondary fields
+    // carried on the ranked lead rows and still run locally.
     // DEMOGRAPHICS -> occupancy predicate (is_owner_occupied).
     if (chipFilters.demographics === 'Owner-occupied') {
       out = out.filter((l) => l.is_owner_occupied === true);
@@ -219,21 +228,10 @@ export default function SegmentIntelligence() {
     if (floor > 0) {
       out = out.filter((l) => l.equity_estimate >= floor);
     }
-    // Geography drill: if the user picked a state on the map, restrict
-    // the table to that state. ZIP is a stricter predicate so it runs
-    // next when present. County isn't applied (LeadSummary doesn't carry
-    // county FIPS yet); the selection chip still shows it so the user
-    // sees the drill feedback.
-    if (mapSelection.state) {
-      out = out.filter((l) => l.state === mapSelection.state);
-    }
-    if (mapSelection.zip) {
-      out = out.filter((l) => l.zip === mapSelection.zip);
-    }
     return out;
-  }, [leads, activeSegs, chipFilters, mapSelection, locationToStates]);
+  }, [leads, chipFilters]);
 
-  const toggleSeg = (code: string) => {
+  const toggleSeg = (code: SegmentCode) => {
     setActiveSegs((cur) => (cur.includes(code) ? cur.filter((s) => s !== code) : [...cur, code]));
   };
 
@@ -280,21 +278,15 @@ export default function SegmentIntelligence() {
           compact
         />
       )}
+      {leadsRefreshing && !segmentsWarming && (
+        <div className="status-callout">
+          Refreshing ranked borrowers for the selected filters…
+        </div>
+      )}
       {loadErrorMsg && !segmentsWarming && !leadsWarming && (
         <div
           role="alert"
-          style={{
-            marginBottom: 'var(--gap-grid)',
-            padding: '10px 12px',
-            border: '1px solid var(--signal-danger)',
-            borderRadius: 'var(--r-md)',
-            color: 'var(--signal-danger)',
-            fontSize: 12,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: 12,
-          }}
+          className="status-callout status-callout--danger"
         >
           <span>{loadErrorMsg}</span>
           <button
@@ -308,7 +300,7 @@ export default function SegmentIntelligence() {
         </div>
       )}
       {segments.length === 0 && !loadErrorMsg && !segmentsWarming && (
-        <div className="muted body" style={{ marginBottom: 'var(--gap-grid)' }}>
+        <div className="muted body mb-grid">
           Loading segments…
         </div>
       )}
@@ -324,8 +316,7 @@ export default function SegmentIntelligence() {
       </div>
 
       <div
-        className="filter-row"
-        style={{ marginTop: 'var(--gap-grid)' }}
+        className="filter-row filter-row--spaced"
         aria-label="Secondary borrower filters"
       >
         <FilterSelect
@@ -361,12 +352,6 @@ export default function SegmentIntelligence() {
           />
           <div
             className="filter-row__hint muted"
-            style={{
-              fontSize: 11,
-              marginTop: 4,
-              maxWidth: 220,
-              lineHeight: 1.35,
-            }}
           >
             Cotality MLS + Building Permits Delta shares pending — will
             return 0 until those feeds land.
@@ -384,15 +369,29 @@ export default function SegmentIntelligence() {
         <div>
           <div className="eyebrow">Ranked borrowers · selected segments</div>
           <div className="h-2">
-            {filtered.length} borrowers{' '}
-            {activeSegs.length > 0 && (
-              <span className="muted" style={{ fontSize: 14, fontWeight: 400 }}>
-                · filtered by {activeSegs.join(', ')}
-              </span>
+            {leadsRefreshing ? (
+              'Refreshing ranked borrowers'
+            ) : (
+              <>
+                {filtered.length >= 500 ? 'Top ' : ''}
+                {filtered.length} ranked borrowers{' '}
+                {activeSegs.length > 0 && (
+                  <span className="muted fs-14">
+                    · filtered by {activeSegs.join(' + ')}
+                    {activeSegs.length > 1 ? ' · must match all selected segments' : ''}
+                  </span>
+                )}
+              </>
             )}
           </div>
+          {!leadsRefreshing && filtered.length >= 500 && (
+            <div className="muted fs-14">
+              Showing the highest-ranked rows; segment cards and map show
+              marketable population.
+            </div>
+          )}
           {(mapSelection.state || mapSelection.zip) && (
-            <div style={{ marginTop: 6, display: 'flex', gap: 6 }}>
+            <div className="chip-row mt-2">
               {mapSelection.state && (
                 <Chip variant="neutral" icon="pin">
                   state: {mapSelection.state}
@@ -425,6 +424,7 @@ export default function SegmentIntelligence() {
         <USChoroplethMap
           height={520}
           segmentFilter={activeSegs}
+          segmentFilterMode="all"
           onSelectionChange={handleMapSelection}
         />
       </div>

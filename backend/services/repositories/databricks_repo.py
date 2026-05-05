@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from datetime import UTC, datetime
 from typing import Any
 
@@ -80,6 +81,8 @@ from backend.services.scoring import (
     in_the_money,
     source_display_label,
 )
+
+log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Column projections -- one source of truth per query. Explicitly enumerated
@@ -239,7 +242,7 @@ class DatabricksPortfolioRepository:
         "  SUM(CASE WHEN in_the_money THEN 1 ELSE 0 END)                         AS high_intent_leads, "
         "  SUM(CASE WHEN opportunity_score >= 75 THEN 1 ELSE 0 END)              AS top_tier_opportunities, "
         "  SUM(CASE WHEN recommended_offer_code <> 'nurture' THEN 1 ELSE 0 END)  AS offers_recommended, "
-        "  CAST(COALESCE(ROUND(AVG(opportunity_score)), 0) AS INT)               AS avg_score "
+        "  CAST(ROUND(AVG(opportunity_score)) AS INT)                            AS avg_score "
         f"FROM {qualify('gold', 'borrower_360')} "
         "{where}"
     )
@@ -434,35 +437,71 @@ class DatabricksPortfolioRepository:
     )
 
     @staticmethod
-    def _build_trend(series: list[float]) -> KpiTrend:
-        """Compute KpiTrend (series ascending + delta + direction) from an
-        oldest-first numeric series."""
+    def _build_trend(points: list[tuple[str, float]]) -> KpiTrend:
+        """Compute KpiTrend from oldest-first (date label, value) points.
+
+        The live funnel table currently has a bootstrap row where some
+        later-added metrics are 0 before the metric existed. A percent
+        change from that row is mathematically undefined and visually
+        misleading. Drop leading zero bootstrap points when later non-zero
+        rows exist, then label the comparison date explicitly so the UI
+        never says "7d ago" unless the data really represents that grain.
+        """
+        while len(points) > 1 and points[0][1] == 0 and any(p[1] != 0 for p in points[1:]):
+            points = points[1:]
+        series = [value for _, value in points]
+        comparison_label = f"vs {points[0][0]}" if len(points) >= 2 else None
         if len(series) < 2 or series[0] == 0:
-            return KpiTrend(series=series, delta_pct=None, direction="flat")
+            return KpiTrend(
+                series=series,
+                delta_pct=None,
+                direction="flat",
+                comparison_label=comparison_label,
+            )
         delta_pct = ((series[-1] - series[0]) / series[0]) * 100.0
         direction = "up" if delta_pct > 0.5 else "down" if delta_pct < -0.5 else "flat"
-        return KpiTrend(series=series, delta_pct=round(delta_pct, 1), direction=direction)
+        return KpiTrend(
+            series=series,
+            delta_pct=round(delta_pct, 1),
+            direction=direction,
+            comparison_label=comparison_label,
+        )
 
-    def _load_funnel(self) -> tuple[dict[str, KpiTrend], dict[str, Any]]:
-        """Query the 7-day funnel snapshot and return (trends, latest).
+    def _load_funnel(
+        self,
+        *,
+        include_trends: bool,
+    ) -> tuple[dict[str, KpiTrend], dict[str, Any], str, str | None]:
+        """Query the funnel snapshot and return trends + latest metadata.
 
         `trends` is a dict keyed by KPI field; series are oldest-first.
         `latest` is the newest row (keys include `approved_count`,
         `in_outreach_count`, `snapshot_at`) — used by the preview to
         surface the real current counts + data_refreshed_at timestamp.
 
-        Never raises — if the funnel table is empty (first deploy before
-        any snapshot has been written) we return empty dict + {}.
+        Trend lines are only cohort-correct for the unfiltered portfolio
+        because ``funnel_snapshot_daily`` currently snapshots the national
+        _ALL/_ALL row, not arbitrary filter combinations. For filtered
+        requests we still read the latest refresh metadata but deliberately
+        return no sparkline series and a note for the UI.
         """
         try:
             rows = self._client.execute(self._TREND_SQL) or []
-        except Exception:  # noqa: BLE001 -- resilience: empty trend is an acceptable fallback
-            return {}, {}
+        except Exception as exc:  # noqa: BLE001 -- surface unavailable, don't invent trends
+            log.warning("portfolio funnel snapshot query failed: %s", exc)
+            return {}, {}, "unavailable", "Trend snapshots are unavailable; headline KPIs still come from live borrower_360."
         if not rows:
-            return {}, {}
+            return {}, {}, "empty", "No daily funnel snapshots have been written yet."
         # Query is DESC; the FIRST row is newest. Reverse for oldest-first
         # sparkline rendering.
         latest = rows[0]
+        if not include_trends:
+            return (
+                {},
+                latest,
+                "not_applicable",
+                "Trend lines are hidden for this filtered build because daily snapshots are not stored at this custom filter grain.",
+            )
         ordered = list(reversed(rows))
         trends: dict[str, KpiTrend] = {}
         for key in (
@@ -474,9 +513,12 @@ class DatabricksPortfolioRepository:
             "approved_count",
             "in_outreach_count",
         ):
-            series = [float(r.get(key) or 0) for r in ordered]
-            trends[key] = self._build_trend(series)
-        return trends, latest
+            points = [
+                (str(r.get("snapshot_date") or "prior snapshot"), float(r.get(key) or 0))
+                for r in ordered
+            ]
+            trends[key] = self._build_trend(points)
+        return trends, latest, "live", None
 
     @staticmethod
     def _coerce_datetime(value: Any) -> datetime | None:
@@ -589,7 +631,9 @@ class DatabricksPortfolioRepository:
                 return cached
         sql = self._PREVIEW_SQL_TEMPLATE.format(where=where_clause)
         row = self._client.execute_one(sql, params) or {}
-        trends, latest = self._load_funnel()
+        trends, latest, trend_status, trend_note = self._load_funnel(
+            include_trends=not bool(where_clause),
+        )
         preview = PortfolioPreview(
             marketable_population=int(row.get("marketable_population") or 0),
             high_intent_leads=int(row.get("high_intent_leads") or 0),
@@ -603,7 +647,11 @@ class DatabricksPortfolioRepository:
                 if row.get("offers_recommended") is not None
                 else None
             ),
-            avg_score=int(row.get("avg_score") or 0),
+            avg_score=(
+                int(row["avg_score"])
+                if row.get("avg_score") is not None
+                else None
+            ),
             approved_count=(
                 int(latest["approved_count"])
                 if latest.get("approved_count") is not None
@@ -616,6 +664,8 @@ class DatabricksPortfolioRepository:
             ),
             data_refreshed_at=self._coerce_datetime(latest.get("snapshot_at")),
             trends=trends,
+            trend_status=trend_status,
+            trend_note=trend_note,
             day_zero=self._load_day_zero(),
         )
         if caching_enabled:
@@ -756,6 +806,14 @@ class DatabricksLeadRepository:
         "LIMIT {limit}"
     )
 
+    _LIST_FILTERED_SQL_TEMPLATE = (
+        f"SELECT {_LEAD_POPULATION_COLUMNS} "
+        f"FROM {qualify('gold', 'lead_population')} "
+        "WHERE {segment_clause} "
+        "ORDER BY opportunity_score DESC, borrower_id ASC "
+        "LIMIT {limit}"
+    )
+
     # 2026-05-04 FIX β: when the caller filters by state and/or zip we
     # bypass lead_population (which has the score >= 50 quality floor
     # baked into its CTAS) and read borrower_360 directly. Rationale:
@@ -798,15 +856,22 @@ class DatabricksLeadRepository:
         limit: int | None = None,
         state: str | None = None,
         zip_code: str | None = None,
+        segment_codes: list[str] | None = None,
+        segment_mode: str = "any",
     ) -> list[LeadSummary]:
         _ = portfolio_id
         bounded = self._bound_limit(limit)
+        segment_clause, segment_params = self._segment_filter_clause(
+            segment=segment,
+            segment_codes=segment_codes,
+            segment_mode=segment_mode,
+        )
 
         # FIX β: geo-filtered path bypasses lead_population so the queue
         # row count matches the map tooltip. See the
         # _LIST_BY_GEO_SQL_TEMPLATE docstring above for the full rationale.
         if state or zip_code:
-            params: dict[str, object] = {}
+            params: dict[str, object] = dict(segment_params)
             state_clause = ""
             if state:
                 state_clause = "AND state = :state"
@@ -815,26 +880,66 @@ class DatabricksLeadRepository:
             if zip_code:
                 zip_clause = "AND zip = :zip"
                 params["zip"] = zip_code
-            segment_clause = ""
-            if segment:
-                segment_clause = "AND array_contains(segment_codes, :segment)"
-                params["segment"] = segment
+            geo_segment_clause = f"AND {segment_clause}" if segment_clause else ""
             sql = self._LIST_BY_GEO_SQL_TEMPLATE.format(
                 state_clause=state_clause,
                 zip_clause=zip_clause,
-                segment_clause=segment_clause,
+                segment_clause=geo_segment_clause,
                 limit=bounded,
             )
             rows = self._client.execute(sql, params)
             return [LeadSummary(**redact_lead_row(r)) for r in rows]
 
-        if segment:
-            sql = self._LIST_BY_SEGMENT_SQL_TEMPLATE.format(limit=bounded)
-            rows = self._client.execute(sql, {"segment": segment})
+        if segment_clause:
+            sql = self._LIST_FILTERED_SQL_TEMPLATE.format(
+                segment_clause=segment_clause,
+                limit=bounded,
+            )
+            rows = self._client.execute(sql, segment_params)
         else:
             sql = self._LIST_BASE_SQL_TEMPLATE.format(limit=bounded)
             rows = self._client.execute(sql)
         return [LeadSummary(**redact_lead_row(r)) for r in rows]
+
+    @staticmethod
+    def _normalise_segment_codes(
+        segment: str | None,
+        segment_codes: list[str] | None,
+    ) -> list[str]:
+        raw = segment_codes if segment_codes else ([segment] if segment else [])
+        # Preserve caller order for deterministic parameter names while
+        # dropping duplicates and blanks.
+        out: list[str] = []
+        seen: set[str] = set()
+        for code in raw:
+            normalised = str(code or "").strip()
+            if not normalised or normalised in seen:
+                continue
+            seen.add(normalised)
+            out.append(normalised)
+        return out
+
+    @classmethod
+    def _segment_filter_clause(
+        cls,
+        *,
+        segment: str | None,
+        segment_codes: list[str] | None,
+        segment_mode: str,
+    ) -> tuple[str, dict[str, object]]:
+        codes = cls._normalise_segment_codes(segment, segment_codes)
+        if not codes:
+            return "", {}
+        if len(codes) == 1:
+            return "array_contains(segment_codes, :segment)", {"segment": codes[0]}
+        if segment_mode == "all":
+            params = {f"segment_{i}": code for i, code in enumerate(codes)}
+            clause = " AND ".join(
+                f"array_contains(segment_codes, :segment_{i})"
+                for i in range(len(codes))
+            )
+            return clause, params
+        return "arrays_overlap(segment_codes, :segment_codes)", {"segment_codes": codes}
 
     @classmethod
     def _bound_limit(cls, limit: int | None) -> int:
@@ -1183,13 +1288,14 @@ class DatabricksGeoRepository:
         "                THEN 1 ELSE 0 END) AS INT)      AS top_tier_opportunities, "
         "  CAST(ROUND(AVG(opportunity_score)) AS INT)    AS avg_score "
         f"FROM {qualify('gold', 'borrower_360')} "
-        "WHERE arrays_overlap(segment_codes, :segment_codes) "
+        "WHERE {segment_clause} "
         "GROUP BY state"
     )
 
     def state_rollups(
         self,
         segment_codes: list[str] | None = None,
+        segment_mode: str = "any",
     ) -> StateRollupResponse:
         if segment_codes:
             # Filtered path. Cache key includes the sorted tuple so two
@@ -1198,13 +1304,23 @@ class DatabricksGeoRepository:
             # `_ALL` path keeps its own _STATE_CACHE_KEY so the most
             # common request (no filter) stays warm.
             normalised = sorted({c.strip() for c in segment_codes if c.strip()})
-            cache_key = f"{self._STATE_CACHE_KEY}:filtered:{','.join(normalised)}"
+            cache_key = (
+                f"{self._STATE_CACHE_KEY}:filtered:{segment_mode}:"
+                f"{','.join(normalised)}"
+            )
             cached = self._cache.get(cache_key)
             if cached is not None:
                 return cached
+            segment_clause, params = self._state_segment_filter_clause(
+                normalised,
+                segment_mode=segment_mode,
+            )
+            sql = self._STATE_SEGMENT_FILTER_SQL_TPL.format(
+                segment_clause=segment_clause,
+            )
             rows = self._client.execute(
-                self._STATE_SEGMENT_FILTER_SQL_TPL,
-                {"segment_codes": normalised},
+                sql,
+                params,
             ) or []
             # in_the_money + top_segment_code aren't carried by the
             # filtered query (they would require an extra join the
@@ -1253,6 +1369,23 @@ class DatabricksGeoRepository:
         response = StateRollupResponse(rollups=rollups, snapshot_date=snapshot_date)
         self._cache.set(self._STATE_CACHE_KEY, response, self._cache_ttl_s)
         return response
+
+    @staticmethod
+    def _state_segment_filter_clause(
+        segment_codes: list[str],
+        *,
+        segment_mode: str,
+    ) -> tuple[str, dict[str, object]]:
+        if len(segment_codes) == 1:
+            return "array_contains(segment_codes, :segment)", {"segment": segment_codes[0]}
+        if segment_mode == "all":
+            params = {f"segment_{i}": code for i, code in enumerate(segment_codes)}
+            clause = " AND ".join(
+                f"array_contains(segment_codes, :segment_{i})"
+                for i in range(len(segment_codes))
+            )
+            return clause, params
+        return "arrays_overlap(segment_codes, :segment_codes)", {"segment_codes": segment_codes}
 
     def county_rollups(self, state: str) -> CountyRollupResponse:
         """Fetch per-county rollups for the given state.

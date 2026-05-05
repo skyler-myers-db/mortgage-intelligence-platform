@@ -7,6 +7,8 @@ import {
   useState,
   type PropsWithChildren,
 } from 'react';
+import { api } from '../lib/api';
+import type { SavedDraft, SavedDraftInput, SavedLead, SavedLeadInput } from '../types';
 
 /**
  * AppContext — theme, accent, density, lender, drawer, Genie, approvals,
@@ -48,6 +50,18 @@ interface AppCtxValue {
   setGenieOpen: (v: boolean) => void;
   approvals: Record<string, 'approved' | 'rejected'>;
   setApproval: (borrowerId: string, state: 'approved' | 'rejected') => void;
+  lastBorrowerId: string | null;
+  setLastBorrowerId: (borrowerId: string | null) => void;
+  savedLeads: Record<string, SavedLead>;
+  saveLead: (lead: SavedLeadInput) => void;
+  removeSavedLead: (borrowerId: string) => void;
+  isLeadSaved: (borrowerId: string) => boolean;
+  savedDrafts: Record<string, SavedDraft>;
+  saveDraft: (draft: SavedDraftInput) => void;
+  removeSavedDraft: (borrowerId: string) => void;
+  workspaceStatus: 'loading' | 'ready' | 'error';
+  workspaceError: string | null;
+  refreshWorkspace: () => void;
 }
 
 const AppCtx = createContext<AppCtxValue | null>(null);
@@ -75,9 +89,23 @@ function readStoredBool(key: string, fallback: boolean): boolean {
   return fallback;
 }
 
+function readStoredString(key: string): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage.getItem(key);
+    return raw && raw.trim().length > 0 ? raw : null;
+  } catch {
+    return null;
+  }
+}
+
 const THEMES: readonly Theme[] = ['dark', 'light'];
 const ACCENTS: readonly Accent[] = ['bright', 'teal', 'navy', 'red'];
 const DENSITIES: readonly Density[] = ['comfortable', 'compact'];
+
+function mapByBorrower<T extends { borrower_id: string }>(items: T[]): Record<string, T> {
+  return Object.fromEntries(items.map((item) => [item.borrower_id, item]));
+}
 
 export function AppProvider({ children }: PropsWithChildren) {
   const [theme, setThemeState] = useState<Theme>(() => readStored('mip.theme', 'dark', THEMES));
@@ -95,6 +123,14 @@ export function AppProvider({ children }: PropsWithChildren) {
   const [drawer, setDrawer] = useState<DrawerSource | null>(null);
   const [genieOpen, setGenieOpen] = useState(false);
   const [approvals, setApprovals] = useState<Record<string, 'approved' | 'rejected'>>({});
+  const [lastBorrowerIdState, setLastBorrowerIdState] = useState<string | null>(() =>
+    readStoredString('mip.lastBorrowerId'),
+  );
+  const [savedLeads, setSavedLeads] = useState<Record<string, SavedLead>>({});
+  const [savedDrafts, setSavedDrafts] = useState<Record<string, SavedDraft>>({});
+  const [workspaceStatus, setWorkspaceStatus] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [workspaceError, setWorkspaceError] = useState<string | null>(null);
+  const [workspaceReloadToken, setWorkspaceReloadToken] = useState(0);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -121,12 +157,174 @@ export function AppProvider({ children }: PropsWithChildren) {
     }
   }, [consoleOpen]);
 
+  useEffect(() => {
+    try {
+      if (lastBorrowerIdState) {
+        window.localStorage.setItem('mip.lastBorrowerId', lastBorrowerIdState);
+      } else {
+        window.localStorage.removeItem('mip.lastBorrowerId');
+      }
+    } catch {
+      // ignore
+    }
+  }, [lastBorrowerIdState]);
+
+  useEffect(() => {
+    const ctrl = new AbortController();
+    setWorkspaceStatus((cur) => (cur === 'ready' ? cur : 'loading'));
+    void api.workspace(ctrl.signal)
+      .then((workspace) => {
+        setSavedLeads(mapByBorrower(workspace.saved_leads));
+        setSavedDrafts(mapByBorrower(workspace.saved_drafts));
+        setWorkspaceStatus('ready');
+        setWorkspaceError(null);
+      })
+      .catch((err: unknown) => {
+        if (err instanceof Error && err.name === 'AbortError') return;
+        setWorkspaceStatus('error');
+        setWorkspaceError(
+          err instanceof Error
+            ? `Couldn't load saved workspace: ${err.message}`
+            : "Couldn't load saved workspace.",
+        );
+      });
+    return () => ctrl.abort();
+  }, [workspaceReloadToken]);
+
   const setTheme = useCallback((t: Theme) => setThemeState(t), []);
   const setAccent = useCallback((a: Accent) => setAccentState(a), []);
   const setDensity = useCallback((d: Density) => setDensityState(d), []);
   const setConsoleOpen = useCallback((v: boolean) => setConsoleOpenState(v), []);
   const setApproval = useCallback((borrowerId: string, state: 'approved' | 'rejected') => {
     setApprovals((cur) => ({ ...cur, [borrowerId]: state }));
+  }, []);
+  const setLastBorrowerId = useCallback((borrowerId: string | null) => {
+    const next = borrowerId?.trim();
+    setLastBorrowerIdState(next && next.length > 0 ? next : null);
+  }, []);
+  const saveLead = useCallback((lead: SavedLeadInput) => {
+    if (!lead.borrower_id) return;
+    const now = new Date().toISOString();
+    setLastBorrowerIdState(lead.borrower_id);
+    let prior: SavedLead | undefined;
+    setSavedLeads((cur) => {
+      prior = cur[lead.borrower_id];
+      return {
+        ...cur,
+        [lead.borrower_id]: {
+          ...prior,
+          ...lead,
+          saved_at: prior?.saved_at ?? now,
+          updated_at: now,
+        },
+      };
+    });
+    void api.saveWorkspaceLead(lead)
+      .then((saved) => {
+        setSavedLeads((cur) => ({ ...cur, [saved.borrower_id]: saved }));
+        setWorkspaceStatus('ready');
+        setWorkspaceError(null);
+      })
+      .catch((err: unknown) => {
+        setSavedLeads((cur) => {
+          const { [lead.borrower_id]: _discard, ...rest } = cur;
+          return prior ? { ...rest, [lead.borrower_id]: prior } : rest;
+        });
+        setWorkspaceStatus('error');
+        setWorkspaceError(
+          err instanceof Error
+            ? `Couldn't save lead: ${err.message}`
+            : "Couldn't save lead.",
+        );
+      });
+  }, []);
+  const removeSavedLead = useCallback((borrowerId: string) => {
+    let prior: SavedLead | undefined;
+    setSavedLeads((cur) => {
+      prior = cur[borrowerId];
+      const { [borrowerId]: _discard, ...rest } = cur;
+      return rest;
+    });
+    void api.deleteWorkspaceLead(borrowerId)
+      .then(() => {
+        setWorkspaceStatus('ready');
+        setWorkspaceError(null);
+      })
+      .catch((err: unknown) => {
+        if (prior) setSavedLeads((cur) => ({ ...cur, [borrowerId]: prior as SavedLead }));
+        setWorkspaceStatus('error');
+        setWorkspaceError(
+          err instanceof Error
+            ? `Couldn't remove saved lead: ${err.message}`
+            : "Couldn't remove saved lead.",
+        );
+      });
+  }, []);
+  const isLeadSaved = useCallback(
+    (borrowerId: string) => Boolean(savedLeads[borrowerId]),
+    [savedLeads],
+  );
+  const saveDraft = useCallback((draft: SavedDraftInput) => {
+    if (!draft.borrower_id || draft.body.trim().length === 0) return;
+    const now = new Date().toISOString();
+    setLastBorrowerIdState(draft.borrower_id);
+    let prior: SavedDraft | undefined;
+    setSavedDrafts((cur) => {
+      prior = cur[draft.borrower_id];
+      return {
+        ...cur,
+        [draft.borrower_id]: {
+          ...prior,
+          ...draft,
+          channel: draft.channel,
+          saved_at: prior?.saved_at ?? now,
+          updated_at: now,
+        },
+      };
+    });
+    void api.saveWorkspaceDraft(draft)
+      .then((saved) => {
+        setSavedDrafts((cur) => ({ ...cur, [saved.borrower_id]: saved }));
+        setWorkspaceStatus('ready');
+        setWorkspaceError(null);
+      })
+      .catch((err: unknown) => {
+        setSavedDrafts((cur) => {
+          const { [draft.borrower_id]: _discard, ...rest } = cur;
+          return prior ? { ...rest, [draft.borrower_id]: prior } : rest;
+        });
+        setWorkspaceStatus('error');
+        setWorkspaceError(
+          err instanceof Error
+            ? `Couldn't save draft: ${err.message}`
+            : "Couldn't save draft.",
+        );
+      });
+  }, []);
+  const removeSavedDraft = useCallback((borrowerId: string) => {
+    let prior: SavedDraft | undefined;
+    setSavedDrafts((cur) => {
+      prior = cur[borrowerId];
+      const { [borrowerId]: _discard, ...rest } = cur;
+      return rest;
+    });
+    void api.deleteWorkspaceDraft(borrowerId)
+      .then(() => {
+        setWorkspaceStatus('ready');
+        setWorkspaceError(null);
+      })
+      .catch((err: unknown) => {
+        if (prior) setSavedDrafts((cur) => ({ ...cur, [borrowerId]: prior as SavedDraft }));
+        setWorkspaceStatus('error');
+        setWorkspaceError(
+          err instanceof Error
+            ? `Couldn't remove draft: ${err.message}`
+            : "Couldn't remove draft.",
+        );
+      });
+  }, []);
+  const refreshWorkspace = useCallback(() => {
+    setWorkspaceReloadToken((n) => n + 1);
   }, []);
 
   const value = useMemo<AppCtxValue>(
@@ -141,11 +339,27 @@ export function AppProvider({ children }: PropsWithChildren) {
       drawer, setDrawer,
       genieOpen, setGenieOpen,
       approvals, setApproval,
+      lastBorrowerId: lastBorrowerIdState,
+      setLastBorrowerId,
+      savedLeads,
+      saveLead,
+      removeSavedLead,
+      isLeadSaved,
+      savedDrafts,
+      saveDraft,
+      removeSavedDraft,
+      workspaceStatus,
+      workspaceError,
+      refreshWorkspace,
     }),
     [
       theme, setTheme, accent, setAccent, density, setDensity,
       lender, showEvidence, showConfidence, consoleOpen, setConsoleOpen,
       drawer, genieOpen, approvals, setApproval,
+      lastBorrowerIdState, setLastBorrowerId,
+      savedLeads, saveLead, removeSavedLead, isLeadSaved,
+      savedDrafts, saveDraft, removeSavedDraft,
+      workspaceStatus, workspaceError, refreshWorkspace,
     ]
   );
 

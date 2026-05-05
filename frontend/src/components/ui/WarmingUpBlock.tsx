@@ -77,47 +77,38 @@ export function WarmingUpBlock({
       return null;
     }
   }
-  const padding = compact ? '10px 12px' : 'var(--sp-3) var(--sp-4)';
   return (
     <div
-      className="surface"
+      className={`surface warming-block ${compact ? 'warming-block--compact' : ''}`}
       role="status"
       aria-live="polite"
       data-testid="warming-up-block"
-      style={{ marginBottom: compact ? 0 : 'var(--gap-grid)' }}
     >
       <div
-        className="surface__body"
-        style={{
-          padding,
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 'var(--sp-2)',
-        }}
+        className={`surface__body warming-block__body ${compact ? 'warming-block__body--compact' : ''}`}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div className="warming-block__head">
           <Chip variant="neutral" icon="bolt">
             {state.label}
           </Chip>
           <span
-            className="mono muted"
-            style={{ fontSize: 11 }}
+            className="mono muted warming-block__attempt"
             data-testid="warming-up-attempt"
           >
             (attempt {state.attempt} of {state.maxAttempts})
           </span>
         </div>
         {title && (
-          <div className="h-4" style={{ marginTop: 2 }}>
+          <div className="h-4 warming-block__title">
             {title}
           </div>
         )}
-        <p className="body muted" style={{ margin: 0, fontSize: 12 }}>
+        <p className="body muted warming-block__copy">
           {body ?? defaultBodyFor(state.label)}
         </p>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <div className="warming-block__footer">
           <Icon name="db" size={11} />
-          <span className="muted" style={{ fontSize: 10 }}>
+          <span className="muted warming-block__meta">
             {state.correlationId
               ? `correlation_id: ${state.correlationId}`
               : cadenceFor(state.label)}

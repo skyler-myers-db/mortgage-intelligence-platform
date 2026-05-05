@@ -25,7 +25,10 @@ export function descriptorFor(rawSource: string): DrawerSource {
   if (key.includes('fn_in_the_money') || key.includes('itm')) {
     return DRAWER_SOURCES.itm;
   }
-  if (key.includes('fn_next_best_offer') || key.includes('fn_lead_score') || key.includes('nbo')) {
+  if (key.includes('fn_lead_score') || key.includes('lead_scores')) {
+    return DRAWER_SOURCES.leadScore;
+  }
+  if (key.includes('fn_next_best_offer') || key.includes('nbo')) {
     return DRAWER_SOURCES.nbo;
   }
   if (key.includes('permit')) return DRAWER_SOURCES.permit;
@@ -75,11 +78,10 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
       { layer: 'SEMANTIC', name: 'metrics.borrower_universe', meta: 'UC metric view' },
     ],
     signals: [
-      { label: 'Owner-occupied SFR', source: 'property_clip.occupancy', value: '1.84M' },
-      { label: 'Open first lien', source: 'voluntary_lien.status', value: '1.72M' },
-      { label: 'After lender filter', source: 'filter.lender_config', value: '89,553' },
+      { label: 'Borrower universe', source: 'metrics.borrower_universe', value: 'live count' },
+      { label: 'Ownership graph', source: 'entity.owner_link', value: 'CLIP-grain' },
+      { label: 'Lender filter', source: 'filter.lender_config', value: 'applied at query time' },
     ],
-    updatedAt: '2026-04-20 06:12 UTC',
   },
   itm: {
     title: 'In-the-Money logic',
@@ -94,12 +96,11 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
       { layer: 'SEMANTIC', name: 'metrics.itm_flag', meta: 'UC metric view' },
     ],
     signals: [
-      { label: 'Par refi rate (30y conf.)', source: 'mma.origination_refi', value: '6.250%' },
-      { label: 'Example lien rate', source: 'voluntary_lien', value: '7.125%' },
-      { label: 'Rate spread', source: 'derived', value: '+87.5 bps' },
-      { label: 'Equity %', source: 'avm + lien balance', value: '56%' },
+      { label: 'Par refi rate', source: 'mma.origination_refi', value: 'latest daily feed' },
+      { label: 'Lien rate', source: 'voluntary_lien.current_rate', value: 'per borrower' },
+      { label: 'Rate spread', source: 'derived', value: 'lien minus par' },
+      { label: 'Equity %', source: 'avm + lien balance', value: 'per borrower' },
     ],
-    updatedAt: '2026-04-20 06:12 UTC',
   },
   // 2026-05-04 fix (FIX E): split out so the "Market rate comparison"
   // chip opens its OWN drawer with the rate-feed lineage rather than
@@ -118,11 +119,29 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
       { layer: 'SEMANTIC', name: 'metrics.rate_spread_bps', meta: 'UC metric view' },
     ],
     signals: [
-      { label: 'Market par rate (30y conf.)', source: 'fred.MORTGAGE30US', value: '6.250%' },
+      { label: 'Market par rate', source: 'fred.MORTGAGE30US', value: 'latest available snapshot' },
       { label: 'Borrower lien rate', source: 'voluntary_lien.current_rate', value: 'per row' },
       { label: 'Spread (bps)', source: 'derived', value: 'lien − par × 100' },
     ],
-    updatedAt: '2026-04-20 06:12 UTC',
+  },
+  leadScore: {
+    title: 'Lead score model',
+    short: 'UC function · fn_lead_score',
+    description:
+      'Canonical 0-100 opportunity score. The score is a deterministic weighted blend of five sub-scores and is parity-pinned between mip.gold.fn_lead_score, mip.gold.lead_scores, backend/services/scoring.py, and the golden fixtures.',
+    lineage: [
+      { layer: 'FEATURES', name: 'mip.gold.lead_scores', meta: 'CLIP-grain component scores + final opportunity_score' },
+      { layer: 'PRIMITIVE', name: 'mip.gold.fn_lead_score', meta: 'UC SQL weighted blend' },
+      { layer: 'PARITY', name: 'backend/services/scoring.py', meta: 'Pinned to tests/fixtures/lead_score_golden.json' },
+      { layer: 'SEMANTIC', name: 'mip.semantics.lead_generation_metric_view', meta: 'Genie + reporting surface' },
+    ],
+    signals: [
+      { label: 'Economic incentive', source: 'lead_scores.economic_incentive', value: '35% weight' },
+      { label: 'Intent trigger', source: 'lead_scores.intent_trigger', value: '30% weight' },
+      { label: 'Fit', source: 'lead_scores.fit', value: '15% weight' },
+      { label: 'Relationship', source: 'lead_scores.relationship', value: '10% weight' },
+      { label: 'Evidence', source: 'lead_scores.evidence', value: '10% weight' },
+    ],
   },
   nbo: {
     title: 'Next-Best-Offer logic',
@@ -143,7 +162,6 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
       { label: 'Input', source: 'borrower_360.is_current_customer', value: 'is_current_customer' },
       { label: 'Input', source: 'borrower_360.is_competitor_lien', value: 'is_competitor_lien' },
     ],
-    updatedAt: '2026-04-20 06:12 UTC',
   },
   permit: {
     title: 'Permit signal',
@@ -156,11 +174,10 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
       { layer: 'SEMANTIC', name: 'metrics.permit_signal', meta: 'UC metric view' },
     ],
     signals: [
-      { label: 'Permit type', source: 'permits.type', value: 'Kitchen remodel' },
-      { label: 'Filed value', source: 'permits.value', value: '$48,000' },
-      { label: 'Filed', source: 'permits.filed_at', value: '2026-03-17' },
+      { label: 'Permit type', source: 'permits.type', value: 'per permit row' },
+      { label: 'Filed value', source: 'permits.value', value: 'per permit row' },
+      { label: 'Filed', source: 'permits.filed_at', value: 'per permit row' },
     ],
-    updatedAt: '2026-04-20 06:12 UTC',
   },
   config: {
     title: 'Campaign assumptions',

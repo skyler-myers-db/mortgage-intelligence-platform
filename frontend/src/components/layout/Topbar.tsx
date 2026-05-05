@@ -44,12 +44,7 @@ function SystemStatusPill({
     ? 'dot amber'
     : live
       ? 'dot is-heartbeat'
-      : 'dot';
-  const dotColor = isProbing
-    ? undefined
-    : live
-      ? undefined
-      : { background: 'var(--signal-danger)' };
+      : 'dot danger';
   const label = isProbing ? 'Probing' : live ? 'Live' : 'Degraded';
 
   // Per-dep breakdown for the tooltip. Compact and grep-able so the
@@ -73,8 +68,8 @@ function SystemStatusPill({
       aria-label={`System status: ${label}. Environment: ${envLabel}.`}
       data-testid="system-status-pill"
     >
-      <span className={dotClass} aria-hidden="true" style={dotColor} />
-      <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-12)' }}>
+      <span className={dotClass} aria-hidden="true" />
+      <span className="topbar__pill-label">
         {label}
       </span>
     </div>

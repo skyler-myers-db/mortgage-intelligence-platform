@@ -4,9 +4,16 @@ import type {
   LeadSummary,
   OfferRecommendation,
   PortfolioPreview,
+  SegmentCode,
   SegmentSummary,
   StateRollupResponse,
+  SavedDraft,
+  SavedDraftInput,
+  SavedLead,
+  SavedLeadInput,
   ZipRollupResponse,
+  WorkspaceMutationResult,
+  WorkspaceState,
 } from '../types';
 
 /**
@@ -83,6 +90,14 @@ export interface AuditEventRow {
   payload_json: Record<string, unknown>;
   evidence_ids: string[];
   created_at: string;
+}
+
+export type SegmentFilterMode = 'any' | 'all';
+
+export interface LeadQueryOptions {
+  segmentCodes?: SegmentCode[];
+  segmentMode?: SegmentFilterMode;
+  limit?: number;
 }
 
 /**
@@ -367,6 +382,42 @@ async function postJson<T, B>(path: string, body: B, signal?: AbortSignal): Prom
   return (await res.json()) as T;
 }
 
+async function putJson<T, B>(path: string, body: B, signal?: AbortSignal): Promise<T> {
+  let res: Response;
+  try {
+    res = await _fetchWithRetry(
+      path,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body ?? {}),
+      },
+      3,
+      signal,
+    );
+  } catch (err) {
+    throw _wrapFetchError(err, path);
+  }
+  if (!res.ok) await _throwFromResponse(res, path);
+  return (await res.json()) as T;
+}
+
+async function deleteJson<T>(path: string, signal?: AbortSignal): Promise<T> {
+  let res: Response;
+  try {
+    res = await _fetchWithRetry(
+      path,
+      { method: 'DELETE' },
+      3,
+      signal,
+    );
+  } catch (err) {
+    throw _wrapFetchError(err, path);
+  }
+  if (!res.ok) await _throwFromResponse(res, path);
+  return (await res.json()) as T;
+}
+
 export const api = {
   /**
    * Honest health probe. A dead backend returns an "unreachable" status
@@ -397,16 +448,25 @@ export const api = {
   segments: (signal?: AbortSignal) =>
     getJson<SegmentSummary[]>('/api/segments', signal),
 
-  stateRollups: (segmentCodes?: string[] | null, signal?: AbortSignal) => {
+  stateRollups: (
+    segmentCodes?: string[] | null,
+    signal?: AbortSignal,
+    segmentMode: SegmentFilterMode = 'any',
+  ) => {
     // 2026-05-04 (FIX G): when a segment filter is active, fetch the
     // segment-aware per-state counts so the choropleth tooltip + the
     // shading reflect "marketable in <segment>" instead of the cross-
     // segment total. No filter ⇒ the original cross-segment query.
-    const qs =
-      segmentCodes && segmentCodes.length > 0
-        ? `?segment_codes=${encodeURIComponent(segmentCodes.join(','))}`
-        : '';
-    return getJson<StateRollupResponse>(`/api/geo/state-rollups${qs}`, signal);
+    const params = new URLSearchParams();
+    if (segmentCodes && segmentCodes.length > 0) {
+      params.set('segment_codes', segmentCodes.join(','));
+      params.set('segment_mode', segmentMode);
+    }
+    const qs = params.toString();
+    return getJson<StateRollupResponse>(
+      qs ? `/api/geo/state-rollups?${qs}` : '/api/geo/state-rollups',
+      signal,
+    );
   },
 
   countyRollups: (state: string, signal?: AbortSignal) =>
@@ -425,6 +485,7 @@ export const api = {
     segment?: string,
     signal?: AbortSignal,
     geo?: { state?: string; zip?: string },
+    opts: LeadQueryOptions = {},
   ) => {
     // 2026-05-04 FIX β: forward state + zip to the API so the backend
     // queries borrower_360 directly (no score floor) when a geo
@@ -433,6 +494,11 @@ export const api = {
     // lead_population didn't include the geo's borrowers.
     const params = new URLSearchParams();
     if (segment) params.set('segment', segment);
+    if (opts.segmentCodes && opts.segmentCodes.length > 0) {
+      params.set('segment_codes', opts.segmentCodes.join(','));
+      params.set('segment_mode', opts.segmentMode ?? 'any');
+    }
+    if (opts.limit) params.set('limit', String(opts.limit));
     if (geo?.state) params.set('state', geo.state);
     if (geo?.zip) params.set('zip', geo.zip);
     const qs = params.toString();
@@ -567,6 +633,39 @@ export const api = {
    */
   auditEvents: (limit = 12, signal?: AbortSignal) =>
     getJson<AuditEventRow[]>(`/api/audit/events?limit=${limit}`, signal),
+
+  workspace: (signal?: AbortSignal) =>
+    getJson<WorkspaceState>('/api/workspace', signal),
+
+  saveWorkspaceLead: (lead: SavedLeadInput, signal?: AbortSignal) =>
+    putJson<SavedLead, SavedLeadInput>(
+      `/api/workspace/leads/${encodeURIComponent(lead.borrower_id)}`,
+      lead,
+      signal,
+    ),
+
+  deleteWorkspaceLead: (borrowerId: string, signal?: AbortSignal) =>
+    deleteJson<WorkspaceMutationResult>(
+      `/api/workspace/leads/${encodeURIComponent(borrowerId)}`,
+      signal,
+    ),
+
+  saveWorkspaceDraft: (draft: SavedDraftInput, signal?: AbortSignal) =>
+    putJson<SavedDraft, SavedDraftInput>(
+      `/api/workspace/drafts/${encodeURIComponent(draft.borrower_id)}`,
+      draft,
+      signal,
+    ),
+
+  deleteWorkspaceDraft: (
+    borrowerId: string,
+    channel: 'email' | 'sms' = 'email',
+    signal?: AbortSignal,
+  ) =>
+    deleteJson<WorkspaceMutationResult>(
+      `/api/workspace/drafts/${encodeURIComponent(borrowerId)}?channel=${encodeURIComponent(channel)}`,
+      signal,
+    ),
 
   /**
    * Admin rules probe — used by the Administration route's "Offer rules"

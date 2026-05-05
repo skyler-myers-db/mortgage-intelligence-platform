@@ -64,17 +64,30 @@ function chunk<T>(items: T[], size: number): T[][] {
 }
 
 function RowPreview({ lead }: { lead: LeadSummary }) {
+  const { setLastBorrowerId, saveLead, isLeadSaved } = useApp();
   // Prefer the real Cotality CLIP projected by the backend (2026-04-22
   // contract addition). Fall back to a borrower-id derived placeholder
   // only for rows predating that projection (empty string).
   const clipValue = lead.clip && lead.clip.length > 0
     ? lead.clip
     : `clip_${lead.borrower_id.toLowerCase().replace('-', '')}`;
+  const saved = isLeadSaved(lead.borrower_id);
+  const saveCurrentLead = () => {
+    saveLead({
+      borrower_id: lead.borrower_id,
+      city: lead.city,
+      state: lead.state,
+      zip: lead.zip,
+      recommended_offer: lead.recommended_offer,
+      opportunity_score: lead.opportunity_score,
+      confidence: lead.confidence,
+    });
+  };
   return (
-    <div className="tbl__expand-inner" style={{ display: 'grid', gridTemplateColumns: '1.1fr 1fr 1fr', gap: 20 }}>
+    <div className="tbl__expand-inner tbl__expand-inner--lead">
       <div>
-        <div className="eyebrow" style={{ marginBottom: 8 }}>Customer 360 preview</div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+        <div className="eyebrow mb-2">Customer 360 preview</div>
+        <div className="preview-grid">
           <Cell k="CLIP"          v={clipValue} mono />
           <Cell k="Location"      v={`${lead.city}, ${lead.state} · ${lead.zip}`} />
           <Cell k="Equity"        v={`$${(lead.equity_estimate / 1000).toFixed(0)}k`} mono />
@@ -82,17 +95,16 @@ function RowPreview({ lead }: { lead: LeadSummary }) {
           <Cell k="Score"         v={`${lead.opportunity_score}`} mono />
           <Cell k="Confidence"    v={`${lead.confidence}%`} mono />
         </div>
-        <div className="eyebrow" style={{ marginTop: 18, marginBottom: 8 }}>Segments</div>
-        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+        <div className="eyebrow mt-4 mb-2">Segments</div>
+        <div className="chip-row">
           {lead.segment_codes.map((sid) => {
             const color = segmentColor(sid);
-            const style: CSSProperties = {
-              color,
-              background: `color-mix(in oklab, ${color} 14%, transparent)`,
-              borderColor: `color-mix(in oklab, ${color} 35%, transparent)`,
-            };
             return (
-              <span key={sid} className="chip" style={style}>
+              <span
+                key={sid}
+                className="chip chip--segment"
+                style={{ '--chip-hue': color } as CSSProperties}
+              >
                 {segmentName(sid)}
               </span>
             );
@@ -101,10 +113,10 @@ function RowPreview({ lead }: { lead: LeadSummary }) {
       </div>
 
       <div>
-        <div className="eyebrow" style={{ marginBottom: 8 }}>Why now</div>
-        <p className="body" style={{ marginTop: 0 }}>{lead.why_now}</p>
-        <div style={{ marginTop: 12, display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-          <span className="muted" style={{ fontSize: 11 }}>Evidence:</span>
+        <div className="eyebrow mb-2">Why now</div>
+        <p className="body flush">{lead.why_now}</p>
+        <div className="chip-row mt-3">
+          <span className="muted fs-11">Evidence:</span>
           {/*
             Prototype-parity-audit P1-5 (2026-05-04): the row preview
             previously surfaced only two chips — Rate + equity ruleset and
@@ -121,6 +133,7 @@ function RowPreview({ lead }: { lead: LeadSummary }) {
             matching DRAWER_SOURCES entry so lineage stays one click away.
           */}
           <EvidenceChip source={DRAWER_SOURCES.itm}>Rate + equity ruleset</EvidenceChip>
+          <EvidenceChip source={DRAWER_SOURCES.leadScore}>Lead score model</EvidenceChip>
           <EvidenceChip source={DRAWER_SOURCES.nbo}>Next-best-offer model</EvidenceChip>
           <EvidenceChip source={DRAWER_SOURCES.population}>CLIP · Owner Link</EvidenceChip>
           {lead.equity_estimate > 0 && (
@@ -143,19 +156,32 @@ function RowPreview({ lead }: { lead: LeadSummary }) {
       </div>
 
       <div>
-        <div className="eyebrow" style={{ marginBottom: 8 }}>Next-best-offer</div>
-        <div className="surface" style={{ padding: '14px 16px', background: 'var(--bg-1)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <div style={{ fontSize: 16, fontWeight: 600, letterSpacing: '-0.01em' }}>{lead.recommended_offer}</div>
+        <div className="eyebrow mb-2">Next-best-offer</div>
+        <div className="surface preview-offer-card">
+          <div className="split-row">
+            <div className="offer-title">{lead.recommended_offer}</div>
             <ScoreBadge value={lead.opportunity_score} />
           </div>
-          <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+          <div className="muted fs-12 mt-1">
             Confidence <ConfidenceMeter value={lead.confidence} compact />
           </div>
-          <div style={{ marginTop: 12 }}>
-            <Link className="btn btn--primary btn--sm" to={`/borrower-360/${lead.borrower_id}`}>
+          <div className="chip-row mt-3">
+            <Link
+              className="btn btn--primary btn--sm"
+              to={`/borrower-360/${lead.borrower_id}`}
+              onClick={() => setLastBorrowerId(lead.borrower_id)}
+            >
               Open Borrower 360
             </Link>
+            <Button
+              variant={saved ? 'ghost' : 'default'}
+              size="sm"
+              icon={saved ? 'check' : 'tag'}
+              onClick={saveCurrentLead}
+              aria-label={`${saved ? 'Saved' : 'Save'} borrower ${lead.borrower_id}`}
+            >
+              {saved ? 'Saved' : 'Save lead'}
+            </Button>
           </div>
         </div>
       </div>
@@ -166,15 +192,15 @@ function RowPreview({ lead }: { lead: LeadSummary }) {
 function Cell({ k, v, mono }: { k: string; v: string; mono?: boolean }) {
   return (
     <div>
-      <div className="muted" style={{ fontSize: 11 }}>{k}</div>
-      <div className={mono ? 'mono num' : ''} style={{ fontSize: 13, color: 'var(--text-1)' }}>{v}</div>
+      <div className="field__label">{k}</div>
+      <div className={`field__value ${mono ? 'mono num' : ''}`}>{v}</div>
     </div>
   );
 }
 
 export function LeadTable({ leads }: { leads: LeadSummary[] }) {
   const [expanded, setExpanded] = useState<string | null>(leads[0]?.borrower_id ?? null);
-  const { approvals, setApproval } = useApp();
+  const { approvals, setApproval, setLastBorrowerId } = useApp();
   const [pendingApproval, setPendingApproval] = useState<Record<string, boolean>>({});
   const [approvalError, setApprovalError] = useState<string | null>(null);
   // Bulk-approve state. `selectedIds` is a Set so toggling is O(1); we
@@ -213,6 +239,10 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
   const [bulkToast, setBulkToast] = useState<
     { ok: number; fail: number; network: number; aborted: number } | null
   >(null);
+
+  useEffect(() => {
+    if (expanded) setLastBorrowerId(expanded);
+  }, [expanded, setLastBorrowerId]);
 
   /**
    * Approve from the queue without leaving the page. Uses the same
@@ -601,14 +631,14 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
     // components.css; the inline override was both unnecessary and the
     // proximate cause of the shift the user reported.
     <div className="surface">
-      <div className="surface__hdr" style={{ justifyContent: 'space-between' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <div style={{ width: 28, height: 28, borderRadius: 8, background: 'var(--accent-soft)', color: 'var(--accent)', display: 'grid', placeItems: 'center' }}>
+      <div className="surface__hdr surface__hdr--split">
+        <div className="surface__hdr-main">
+          <div className="surface__icon">
             <Icon name="user" size={14} />
           </div>
           <div>
             <div className="h-4">Ranked borrowers</div>
-            <div className="muted" style={{ fontSize: 12 }}>
+            <div className="muted fs-12">
               {/*
                 Prototype-parity-audit P2 (2026-05-04): keyboard hints
                 were rendered as `.mono` spans, which read as inline code
@@ -621,7 +651,7 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
             </div>
           </div>
         </div>
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div className="lead-table__header-actions">
           <Chip variant="neutral" icon="shield">PII suppressed</Chip>
           <Button
             size="sm"
@@ -635,11 +665,11 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
           </Button>
         </div>
       </div>
-      <div style={{ maxHeight: 520, overflowY: 'auto', position: 'relative' }}>
+      <div className="tbl-wrap">
         <table className="tbl">
           <thead>
             <tr>
-              <th style={{ paddingLeft: 20, width: 32 }}>
+              <th className="tbl-cell--select">
                 <input
                   type="checkbox"
                   aria-label="Select all eligible leads"
@@ -653,14 +683,14 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
                   data-testid="lead-select-all"
                 />
               </th>
-              <th style={{ width: 32 }}></th>
+              <th className="tbl-cell--narrow"></th>
               <th>Borrower</th>
               <th>Location</th>
               <th>Segments</th>
-              <th style={{ textAlign: 'right' }}>Equity</th>
-              <th style={{ textAlign: 'right' }}>Rate Δ (bps)</th>
+              <th className="tbl-cell--right">Equity</th>
+              <th className="tbl-cell--right">Rate Δ (bps)</th>
               <th>Next-best-offer</th>
-              <th style={{ textAlign: 'right' }}>Score</th>
+              <th className="tbl-cell--right">Score</th>
               <th>Confidence</th>
               <th>Approval</th>
             </tr>
@@ -687,7 +717,10 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
                     role="button"
                     aria-expanded={isOpen}
                     aria-label={`Lead ${lead.borrower_id}, ${isOpen ? 'expanded' : 'collapsed'}. Press Enter or Space to toggle preview; A to approve, R to reject.`}
-                    onClick={() => setExpanded(isOpen ? null : lead.borrower_id)}
+                    onClick={() => {
+                      setLastBorrowerId(lead.borrower_id);
+                      setExpanded(isOpen ? null : lead.borrower_id);
+                    }}
                     onKeyDown={(e) => {
                       // R5-10 (2026-04-23): make rows toggleable from
                       // the keyboard so A/R hotkeys work without a
@@ -698,11 +731,12 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
                       if (e.target !== e.currentTarget) return;
                       if (e.key === 'Enter' || e.key === ' ') {
                         e.preventDefault();
+                        setLastBorrowerId(lead.borrower_id);
                         setExpanded(isOpen ? null : lead.borrower_id);
                       }
                     }}
                   >
-                    <td style={{ paddingLeft: 20 }} onClick={stop}>
+                    <td className="tbl-cell--select" onClick={stop}>
                       <input
                         type="checkbox"
                         aria-label={`Select lead ${lead.borrower_id}`}
@@ -717,8 +751,8 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
                       <Icon name={isOpen ? 'down' : 'chevright'} size={14} className="muted" />
                     </td>
                     <td className="is-primary">
-                      <div className="mono" style={{ fontSize: 12, color: 'var(--text-1)' }}>{lead.borrower_id}</div>
-                      <div className="mono muted" style={{ fontSize: 10 }}>
+                      <div className="mono lead-table__borrower">{lead.borrower_id}</div>
+                      <div className="mono muted lead-table__clip">
                         {lead.clip && lead.clip.length > 0
                           ? lead.clip
                           : `clip_${lead.borrower_id.toLowerCase().replace(/-/g, '')}`}
@@ -726,57 +760,50 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
                     </td>
                     <td>
                       {lead.city}, {lead.state}
-                      <div className="muted mono" style={{ fontSize: 11 }}>{lead.zip}</div>
+                      <div className="muted mono lead-table__zip">{lead.zip}</div>
                     </td>
                     <td>
-                      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                      <div className="lead-table__segments">
                         {lead.segment_codes.slice(0, 2).map((sid) => {
                           const color = segmentColor(sid);
-                          const style: CSSProperties = {
-                            padding: '2px 6px',
-                            fontSize: 10,
-                            color,
-                            background: `color-mix(in oklab, ${color} 12%, transparent)`,
-                            borderColor: `color-mix(in oklab, ${color} 30%, transparent)`,
-                          };
                           return (
-                            <span key={sid} className="chip" style={style}>
+                            <span
+                              key={sid}
+                              className="chip chip--segment chip--compact"
+                              style={{ '--chip-hue': color } as CSSProperties}
+                            >
                               {segmentName(sid)}
                             </span>
                           );
                         })}
                         {lead.segment_codes.length > 2 && (
-                          <span className="chip chip--neutral" style={{ padding: '2px 6px', fontSize: 10 }}>
+                          <span className="chip chip--neutral chip--compact">
                             +{lead.segment_codes.length - 2}
                           </span>
                         )}
                       </div>
                     </td>
-                    <td className="num" style={{ textAlign: 'right' }}>${(lead.equity_estimate / 1000).toFixed(0)}k</td>
+                    <td className="num tbl-cell--right">${(lead.equity_estimate / 1000).toFixed(0)}k</td>
                     <td
-                      className="num"
-                      style={{
-                        textAlign: 'right',
-                        color: lead.rate_spread_bps >= 75 ? 'var(--signal-success)' : 'var(--text-2)',
-                      }}
+                      className={`num tbl-cell--right ${lead.rate_spread_bps >= 75 ? 'lead-table__rate--positive' : 'lead-table__rate--neutral'}`}
                     >
                       +{lead.rate_spread_bps}
                     </td>
                     <td>
-                      <span className="mono" style={{ fontSize: 12, color: 'var(--text-1)' }}>{lead.recommended_offer}</span>{' '}
+                      <span className="mono fs-12 text-1">{lead.recommended_offer}</span>{' '}
                       <EvidenceChip source={DRAWER_SOURCES.nbo}>{DRAWER_SOURCES.nbo.short}</EvidenceChip>
                     </td>
-                    <td style={{ textAlign: 'right' }}><ScoreBadge value={lead.opportunity_score} /></td>
+                    <td className="tbl-cell--right"><ScoreBadge value={lead.opportunity_score} /></td>
                     <td><ConfidenceMeter value={lead.confidence} compact /></td>
                     <td
-                      style={{ paddingRight: 16 }}
+                      className="tbl-cell--approval"
                       data-testid={`lead-approval-cell-${lead.borrower_id}`}
                     >
                       {approval === 'approved' && <Chip variant="success" icon="check">Approved</Chip>}
                       {approval === 'rejected' && <Chip variant="danger" icon="cross">Rejected</Chip>}
                       {!approval && (
                         <div
-                          style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+                          className="lead-table__approval-actions"
                           onClick={stop}
                         >
                           <Button
@@ -795,7 +822,7 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
                           </Button>
                           <button
                             type="button"
-                            className="btn btn--sm"
+                            className="btn btn--sm lead-table__reject"
                             aria-label={`Reject ${lead.borrower_id}`}
                             title="Reject"
                             disabled={Boolean(pendingApproval[lead.borrower_id])}
@@ -804,7 +831,6 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
                               void rejectLead(lead.borrower_id);
                             }}
                             data-testid={`lead-reject-${lead.borrower_id}`}
-                            style={{ padding: '4px 8px' }}
                           >
                             <Icon name="cross" size={12} />
                           </button>
@@ -830,37 +856,24 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
           role="toolbar"
           aria-label="Bulk actions"
           data-testid="lead-bulk-actions"
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: 12,
-            padding: '10px 16px',
-            borderTop: '1px solid var(--line-1)',
-            background: 'var(--bg-1)',
-            position: 'sticky',
-            bottom: 0,
-            zIndex: 2,
-          }}
+          className="bulk-actions"
         >
-          <div style={{ fontSize: 13, color: 'var(--text-1)' }}>
+          <div className="bulk-actions__label">
             <span className="mono num">{selectionCount}</span> {selectionCount === 1 ? 'lead' : 'leads'} selected
           </div>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <div className="bulk-actions__controls">
             {bulkToast && (
               <span
                 role="status"
                 aria-live="polite"
                 data-testid="lead-bulk-toast"
-                style={{
-                  fontSize: 12,
-                  color:
-                    bulkToast.aborted > 0 || bulkToast.network > 0
-                      ? 'var(--signal-danger)'
-                      : bulkToast.fail > 0
-                      ? 'var(--signal-warning)'
-                      : 'var(--signal-success)',
-                }}
+                className={`bulk-actions__toast ${
+                  bulkToast.aborted > 0 || bulkToast.network > 0
+                    ? 'bulk-actions__toast--danger'
+                    : bulkToast.fail > 0
+                      ? 'bulk-actions__toast--warn'
+                      : 'bulk-actions__toast--ok'
+                }`}
               >
                 {bulkToast.ok} approved
                 {bulkToast.fail > 0 ? `, ${bulkToast.fail} failed` : ''}
@@ -905,18 +918,13 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
       {approvalError && (
         <div
           role="alert"
-          style={{
-            padding: '8px 16px',
-            color: 'var(--signal-danger)',
-            fontSize: 12,
-            borderTop: '1px solid var(--line-1)',
-          }}
+          className="table-error"
         >
           {approvalError}
         </div>
       )}
       <div className="surface__ft">
-        Showing {leads.length.toLocaleString()} borrower{leads.length === 1 ? '' : 's'}
+        Showing {leads.length.toLocaleString()} ranked borrower{leads.length === 1 ? '' : 's'}
       </div>
     </div>
   );

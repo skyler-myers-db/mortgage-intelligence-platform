@@ -74,7 +74,7 @@ export function SegmentCard({ segment, selected, onClick }: SegmentCardProps) {
     return (
       <div
         className="seg-card seg-card--pending"
-        style={{ '--seg-color': segment.color, opacity: 0.78 } as CSSProperties}
+        style={{ '--seg-color': segment.color } as CSSProperties}
         aria-disabled="true"
         data-pending-source="true"
       >
@@ -83,17 +83,13 @@ export function SegmentCard({ segment, selected, onClick }: SegmentCardProps) {
           <div className="seg-card__title">{segment.name}</div>
         </div>
         <div
-          className="seg-card__count num"
-          style={{ fontSize: 'var(--fs-13, 13px)', color: 'var(--text-3)', letterSpacing: 'var(--tracking-caps, 0.08em)', textTransform: 'uppercase' }}
+          className="seg-card__count seg-card__count--pending num"
         >
           Pending source
         </div>
         <div className="seg-card__sub">{segment.description}</div>
-        <div
-          className="seg-card__meta"
-          style={{ color: 'var(--signal-warning, #F59E0B)' }}
-        >
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+        <div className="seg-card__meta seg-card__meta--pending">
+          <span className="seg-card__meta-item">
             <Icon name="info" size={11} />
             {pendingMessage}
           </span>

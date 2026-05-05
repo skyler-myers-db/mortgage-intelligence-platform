@@ -59,6 +59,42 @@ export interface LeadSummary {
   listed_for_sale?: boolean;
 }
 
+export interface SavedLead {
+  borrower_id: string;
+  city?: string | null;
+  state?: string | null;
+  zip?: string | null;
+  recommended_offer?: string | null;
+  opportunity_score?: number | null;
+  confidence?: number | null;
+  saved_at: string;
+  updated_at: string;
+}
+
+export type SavedLeadInput = Omit<SavedLead, 'saved_at' | 'updated_at'>;
+
+export interface SavedDraft {
+  borrower_id: string;
+  offer_code?: string | null;
+  channel: 'email' | 'sms';
+  body: string;
+  saved_at: string;
+  updated_at: string;
+}
+
+export type SavedDraftInput = Omit<SavedDraft, 'saved_at' | 'updated_at'>;
+
+export interface WorkspaceState {
+  saved_leads: SavedLead[];
+  saved_drafts: SavedDraft[];
+}
+
+export interface WorkspaceMutationResult {
+  ok: boolean;
+  borrower_id: string;
+  audit_event_id?: string | null;
+}
+
 /** Business-friendly label for a UC source (2026-04-22). `name` is the
  *  raw UC object name (drives drawer lineage); `display_label` is the
  *  human-readable chip text (e.g. "In-the-money rule"). */
@@ -98,6 +134,7 @@ export interface KpiTrend {
   series: number[];
   delta_pct: number | null;
   direction: 'up' | 'down' | 'flat';
+  comparison_label?: string | null;
 }
 
 export interface PortfolioPreview {
@@ -105,9 +142,11 @@ export interface PortfolioPreview {
   high_intent_leads: number;
   top_tier_opportunities: number | null;
   offers_recommended: number | null;
-  avg_score: number;
+  avg_score: number | null;
   data_refreshed_at: string | null; // ISO timestamp
   trends?: Record<string, KpiTrend>;
+  trend_status?: 'live' | 'not_applicable' | 'unavailable' | 'empty' | string;
+  trend_note?: string | null;
   // R5-20: server-authoritative day-zero flag. Optional so older servers
   // that don't emit it still parse; consumers must fall back to
   // `marketable_population === 0 && data_refreshed_at === null` when

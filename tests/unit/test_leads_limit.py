@@ -41,6 +41,21 @@ def test_bound_limit_clamps_caller_input():
     assert DatabricksLeadRepository._bound_limit(100_000) == DatabricksLeadRepository.MAX_LIMIT
 
 
+def test_segment_filter_clause_supports_multi_select_all_mode():
+    """Segments-page multi-select is a narrowing filter: selecting ITM
+    plus equity should require both segment codes, not either one."""
+    clause, params = DatabricksLeadRepository._segment_filter_clause(
+        segment=None,
+        segment_codes=["itm", "equity"],
+        segment_mode="all",
+    )
+    assert clause == (
+        "array_contains(segment_codes, :segment_0) AND "
+        "array_contains(segment_codes, :segment_1)"
+    )
+    assert params == {"segment_0": "itm", "segment_1": "equity"}
+
+
 def test_limit_query_param_rejects_zero_and_negative():
     """``?limit=0`` and ``?limit=-1`` must be 422s — a caller asking for
     no rows is almost certainly a bug, not a valid request."""
@@ -71,8 +86,12 @@ def test_truncation_header_present_when_limit_reached(monkeypatch: Any):
             segment: str | None,
             portfolio_id: str | None,
             limit: int | None = None,
+            state: str | None = None,
+            zip_code: str | None = None,
+            segment_codes: list[str] | None = None,
+            segment_mode: str = "any",
         ) -> list[LeadSummary]:
-            _ = (segment, portfolio_id)
+            _ = (segment, portfolio_id, state, zip_code, segment_codes, segment_mode)
             # Emit exactly `limit` rows so the header kicks in.
             n = limit or DEFAULT_LEAD_LIMIT
             return [
@@ -125,8 +144,12 @@ def test_truncation_header_absent_when_under_limit():
             segment: str | None,
             portfolio_id: str | None,
             limit: int | None = None,
+            state: str | None = None,
+            zip_code: str | None = None,
+            segment_codes: list[str] | None = None,
+            segment_mode: str = "any",
         ) -> list[LeadSummary]:
-            _ = (segment, portfolio_id, limit)
+            _ = (segment, portfolio_id, limit, state, zip_code, segment_codes, segment_mode)
             return [
                 LeadSummary(
                     borrower_id="B-00001",

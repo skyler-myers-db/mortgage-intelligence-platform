@@ -1,5 +1,6 @@
 import { NavLink } from 'react-router-dom';
 import { Icon, type IconName } from '../Icon';
+import { useApp } from '../AppContext';
 
 /**
  * Secondary route nav — chip strip matching the prototype's `.filter` /
@@ -16,35 +17,37 @@ interface NavItem {
   icon: IconName;
 }
 
-const ITEMS: NavItem[] = [
+const BASE_ITEMS: NavItem[] = [
   { to: '/',                      label: 'Home',            icon: 'home' },
   { to: '/portfolio-builder',     label: 'Portfolio',       icon: 'target' },
   { to: '/segment-intelligence',  label: 'Segments',        icon: 'layers' },
   { to: '/lead-queue',            label: 'Leads',           icon: 'user' },
-  { to: '/borrower-360',          label: 'Borrower 360',    icon: 'doc' },
-  { to: '/offer-orchestrator',    label: 'Offer',           icon: 'bolt' },
   { to: '/ask-genie',             label: 'Ask Genie',       icon: 'sparkle' },
   { to: '/admin-config',          label: 'Admin',           icon: 'settings' },
 ];
 
 export function RouteNav() {
+  const { lastBorrowerId } = useApp();
+  const detailItems: NavItem[] = [
+    {
+      to: lastBorrowerId ? `/borrower-360/${lastBorrowerId}` : '/borrower-360',
+      label: 'Borrower 360',
+      icon: 'doc',
+    },
+    {
+      to: lastBorrowerId ? `/offer-orchestrator/${lastBorrowerId}` : '/offer-orchestrator',
+      label: 'Offer',
+      icon: 'bolt',
+    },
+  ];
+  const items = [
+    ...BASE_ITEMS.slice(0, 4),
+    ...detailItems,
+    ...BASE_ITEMS.slice(4),
+  ];
   return (
-    <nav
-      aria-label="Main navigation"
-      style={{
-        display: 'flex',
-        gap: 6,
-        padding: '12px 24px',
-        borderBottom: '1px solid var(--line-1)',
-        background: 'color-mix(in oklab, var(--bg-1) 72%, transparent)',
-        backdropFilter: 'blur(8px)',
-        flexWrap: 'wrap',
-        position: 'sticky',
-        top: 0,
-        zIndex: 5,
-      }}
-    >
-      {ITEMS.map((i) => {
+    <nav aria-label="Main navigation" className="route-nav">
+      {items.map((i) => {
         const end = i.to === '/';
         return (
           <NavLink

@@ -90,6 +90,14 @@ test.describe('Module 0 — golden path', () => {
   });
 
   test('segment intelligence: six cards, ITM preselected, toggle + clear', async ({ page }) => {
+    const segmentRequests: string[] = [];
+    page.on('request', (request) => {
+      const url = request.url();
+      if (url.includes('/api/leads') || url.includes('/api/geo/state-rollups')) {
+        segmentRequests.push(url);
+      }
+    });
+
     await page.goto('/segment-intelligence');
 
     for (const name of [
@@ -111,6 +119,29 @@ test.describe('Module 0 — golden path', () => {
 
     await page.getByText('Listed for Sale', { exact: true }).click();
     await expect(rankedHeader).toContainText(/filtered by .*listed/);
+
+    await page.getByText('Home Equity Candidate', { exact: true }).click();
+    await expect(rankedHeader).toContainText(/must match all selected segments/);
+    await expect
+      .poll(() =>
+        segmentRequests.some(
+          (url) =>
+            url.includes('/api/leads') &&
+            url.includes('segment_codes=') &&
+            url.includes('segment_mode=all'),
+        ),
+      )
+      .toBe(true);
+    await expect
+      .poll(() =>
+        segmentRequests.some(
+          (url) =>
+            url.includes('/api/geo/state-rollups') &&
+            url.includes('segment_codes=') &&
+            url.includes('segment_mode=all'),
+        ),
+      )
+      .toBe(true);
 
     await page.getByRole('button', { name: /Clear filters/ }).click();
     await expect(rankedHeader).not.toContainText(/filtered by/);

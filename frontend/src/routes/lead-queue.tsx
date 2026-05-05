@@ -122,18 +122,7 @@ export default function LeadQueue() {
       {loadError && !warmingUp && (
         <div
           role="alert"
-          style={{
-            marginBottom: 'var(--gap-grid)',
-            padding: '10px 12px',
-            border: '1px solid var(--signal-danger)',
-            borderRadius: 'var(--r-md)',
-            color: 'var(--signal-danger)',
-            fontSize: 12,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: 12,
-          }}
+          className="status-callout status-callout--danger"
         >
           <span>{loadError}</span>
           <button
@@ -147,17 +136,17 @@ export default function LeadQueue() {
         </div>
       )}
       {loading && !loadError && !warmingUp && (
-        <div className="muted body" style={{ marginBottom: 'var(--gap-grid)' }}>
+        <div className="muted body mb-grid">
           Loading leads…
         </div>
       )}
       {countyLoading && !loading && !loadError && !warmingUp && (
-        <div className="muted body" style={{ marginBottom: 'var(--gap-grid)' }}>
+        <div className="muted body mb-grid">
           Resolving county ZIPs…
         </div>
       )}
       {!loading && !loadError && !warmingUp && !countyLoading && visibleLeads.length === 0 && (
-        <div className="muted body" style={{ marginBottom: 'var(--gap-grid)' }}>
+        <div className="muted body mb-grid">
           {countyFilter && countyZips && countyZips.size === 0
             ? 'No ZIP-level rollup for this county in the Cotality evaluation share.'
             : 'No leads match this filter.'}

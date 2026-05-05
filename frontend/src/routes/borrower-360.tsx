@@ -1,5 +1,5 @@
-import { type CSSProperties, type ReactElement } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { useEffect, type CSSProperties, type ReactElement } from 'react';
+import { Link, Navigate, useParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import type { Borrower360 as Borrower360Type } from '../types';
 import { currency } from '../lib/formatters';
@@ -15,6 +15,7 @@ import { Reveal } from '../components/fx/Reveal';
 import { descriptorFor } from '../lib/drawerSources';
 import { segmentByCode } from '../lib/segmentMetadata';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
+import { useApp } from '../components/AppContext';
 
 /**
  * Borrower 360 — per-borrower dossier composed in `.surface` blocks.
@@ -25,6 +26,11 @@ import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
 
 export default function Borrower360() {
   const { id } = useParams();
+  const { lastBorrowerId, setLastBorrowerId, saveLead, isLeadSaved } = useApp();
+
+  useEffect(() => {
+    if (id) setLastBorrowerId(id);
+  }, [id, setLastBorrowerId]);
 
   // Cold-start posture (2026-04-23 UX fix): a fresh Databricks warehouse
   // auto-suspends, so the first nav to /borrower-360/{id} commonly
@@ -44,6 +50,10 @@ export default function Borrower360() {
   // there is no borrower to show. Render a proper empty-state landing
   // page instead of silently redirecting — clicking the tab should not
   // feel like a broken link.
+  if (!id && lastBorrowerId) {
+    return <Navigate to={`/borrower-360/${lastBorrowerId}`} replace />;
+  }
+
   if (!id) {
     return (
       <PageShell
@@ -59,17 +69,17 @@ export default function Borrower360() {
       >
         <div className="surface">
           <div className="surface__hdr">
-            <Icon name="user" size={14} style={{ color: 'var(--accent)' }} />
+            <Icon name="user" size={14} className="icon-accent" />
             <div className="h-4">What you'll see</div>
           </div>
-          <div className="surface__body" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)' }}>
-            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+          <div className="surface__body surface__body--stack-sm">
+            <div className="chip-row">
               <Chip variant="neutral" icon="user">Customer 360</Chip>
               <Chip variant="neutral" icon="bolt">Trigger timeline</Chip>
               <Chip variant="neutral" icon="shield">Why-now rationale</Chip>
               <Chip variant="neutral" icon="layers">Supporting evidence</Chip>
             </div>
-            <p className="body muted" style={{ margin: 0 }}>
+            <p className="body muted flush">
               Every score traces back to a Cotality source row via the evidence
               chips. Open a borrower to see the full dossier.
             </p>
@@ -101,7 +111,7 @@ export default function Borrower360() {
         lede={`Couldn't load borrower ${id}: ${error.message}`}
       >
         <div className="surface">
-          <div className="surface__body" style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <div className="surface__body surface__body--inline">
             <Chip variant="danger" icon="cross">Backend unavailable</Chip>
             <Button onClick={manualRetry} aria-label={`Retry loading borrower ${id}`}>
               Retry
@@ -123,16 +133,18 @@ export default function Borrower360() {
         lede={`Loading borrower ${id}…`}
       >
         <div className="layoutA-grid">
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--gap-grid)' }}>
+          <div className="stack-grid">
             <div className="surface">
               <div className="surface__hdr">
                 <Skeleton width={28} height={28} rounded="md" />
                 <Skeleton width={140} height={14} rounded="sm" />
               </div>
-              <div className="surface__body" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+              <div className="surface__body surface__body--grid-2">
                 {Array.from({ length: 8 }).map((_, i) => (
                   <div key={i}>
-                    <Skeleton width={80} height={11} rounded="sm" style={{ marginBottom: 6 }} />
+                    <div className="mb-2">
+                      <Skeleton width={80} height={11} rounded="sm" />
+                    </div>
                     <Skeleton width="85%" height={14} rounded="sm" />
                   </div>
                 ))}
@@ -143,9 +155,9 @@ export default function Borrower360() {
                 <Skeleton width={16} height={16} rounded="sm" />
                 <Skeleton width={140} height={14} rounded="sm" />
               </div>
-              <div className="surface__body" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              <div className="surface__body stack-md">
                 {Array.from({ length: 4 }).map((_, i) => (
-                  <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <div key={i} className="stack-sm">
                     <Skeleton width={90} height={10} rounded="sm" />
                     <Skeleton width="70%" height={13} rounded="sm" />
                     <Skeleton width="55%" height={12} rounded="sm" />
@@ -154,14 +166,14 @@ export default function Borrower360() {
               </div>
             </div>
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--gap-grid)' }}>
+          <div className="stack-grid">
             {Array.from({ length: 3 }).map((_, i) => (
               <div key={i} className="surface">
                 <div className="surface__hdr">
                   <Skeleton width={16} height={16} rounded="sm" />
                   <Skeleton width={160} height={14} rounded="sm" />
                 </div>
-                <div className="surface__body" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <div className="surface__body surface__body--stack-sm">
                   <Skeleton width="90%" height={14} rounded="sm" />
                   <Skeleton width="80%" height={12} rounded="sm" />
                   <Skeleton width="65%" height={12} rounded="sm" />
@@ -182,6 +194,18 @@ export default function Borrower360() {
   const propertyAddress = b.subject_property
     .replace(/^Synthetic property\s*·\s*/i, '')
     .trim() || `${b.city}, ${b.state} ${b.zip}`;
+  const saved = isLeadSaved(b.borrower_id);
+  const saveCurrentLead = () => {
+    saveLead({
+      borrower_id: b.borrower_id,
+      city: b.city,
+      state: b.state,
+      zip: b.zip,
+      recommended_offer: b.recommended_offer,
+      opportunity_score: b.opportunity_score,
+      confidence: b.confidence,
+    });
+  };
 
   return (
     <PageShell
@@ -198,25 +222,15 @@ export default function Borrower360() {
     >
       <div className="layoutA-grid">
         {/* Left column — Customer 360 + trigger timeline stacked */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--gap-grid)' }}>
+        <div className="stack-grid">
           <div className="surface">
             <div className="surface__hdr">
-              <div
-                style={{
-                  width: 28,
-                  height: 28,
-                  borderRadius: 8,
-                  background: 'var(--accent-soft)',
-                  color: 'var(--accent)',
-                  display: 'grid',
-                  placeItems: 'center',
-                }}
-              >
+              <div className="surface__icon">
                 <Icon name="user" size={14} />
               </div>
               <div className="h-4">Customer 360</div>
             </div>
-            <div className="surface__body" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+            <div className="surface__body field-grid">
               <Field k="CLIP" v={b.clip_id} mono />
               <Field k="Owner Link" v={b.owner_link_id} mono />
               <Field
@@ -224,8 +238,8 @@ export default function Borrower360() {
                 v=""
                 childEl={
                   <div>
-                    <div style={{ fontSize: 13, color: 'var(--text-1)' }}>{propertyAddress}</div>
-                    <div className="muted" style={{ fontSize: 10, marginTop: 2 }}>
+                    <div className="field__value">{propertyAddress}</div>
+                    <div className="field__sub">
                       Street-level address redacted for compliance; city + ZIP shown.
                     </div>
                   </div>
@@ -239,7 +253,7 @@ export default function Borrower360() {
                 k="Segments"
                 v=""
                 childEl={
-                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
+                  <div className="chip-row mt-1">
                     {b.segment_codes.map((sid) => {
                       const s = segmentByCode(sid);
                       const color = s?.color ?? 'var(--accent)';
@@ -256,8 +270,6 @@ export default function Borrower360() {
                           style={
                             {
                               '--chip-hue': color,
-                              background: `color-mix(in oklab, ${color} 14%, transparent)`,
-                              borderColor: `color-mix(in oklab, ${color} 35%, transparent)`,
                             } as CSSProperties
                           }
                         >
@@ -274,7 +286,7 @@ export default function Borrower360() {
           <Reveal>
             <div className="surface">
               <div className="surface__hdr">
-                <Icon name="bolt" size={14} style={{ color: 'var(--accent)' }} />
+                <Icon name="bolt" size={14} className="icon-accent" />
                 <div className="h-4">Trigger timeline</div>
               </div>
               <div className="surface__body">
@@ -285,30 +297,30 @@ export default function Borrower360() {
         </div>
 
         {/* Right column — Why-now + NBO + CTA */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--gap-grid)' }}>
+        <div className="stack-grid">
           <div className="surface">
             <div className="surface__hdr">
-              <Icon name="shield" size={14} style={{ color: 'var(--accent)' }} />
+              <Icon name="shield" size={14} className="icon-accent" />
               <div className="h-4">Why we recommend this</div>
             </div>
             <div className="surface__body">
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+              <div className="chip-row mb-3">
                 <Chip variant={b.why_panel.in_the_money ? 'success' : 'warning'}>
                   {b.why_panel.in_the_money ? 'In-the-money' : 'Not in the money'}
                 </Chip>
-                <span className="mono num" style={{ color: 'var(--text-1)' }}>
+                <span className="mono num text-1">
                   +{b.why_panel.rate_spread_bps} bps
                 </span>
-                <span className="muted" style={{ fontSize: 12 }}>
+                <span className="muted fs-12">
                   vs. par {(b.why_panel.market_rate * 100).toFixed(3)}%
                 </span>
               </div>
-              <div style={{ padding: '10px 12px', background: 'var(--bg-3)', borderRadius: 6, fontSize: 13, color: 'var(--text-2)' }}>
-                <span style={{ color: 'var(--text-1)', fontWeight: 500 }}>Rationale.</span>{' '}
+              <div className="rationale-box">
+                <span className="text-1 fw-500">Rationale.</span>{' '}
                 {b.why_panel.in_the_money_reason}
               </div>
-              <div style={{ marginTop: 10, display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-                <span className="muted" style={{ fontSize: 11 }}>Evidence:</span>
+              <div className="chip-row mt-3">
+                <span className="muted fs-11">Evidence:</span>
                 {b.why_panel.sources.map((s, idx) => {
                   // Prefer the backend-supplied human-readable label (added
                   // 2026-04-22). Fall back to the trailing UC segment so
@@ -331,34 +343,47 @@ export default function Borrower360() {
 
           <div className="surface">
             <div className="surface__hdr">
-              <Icon name="bolt" size={14} style={{ color: 'var(--accent)' }} />
+              <Icon name="bolt" size={14} className="icon-accent" />
               <div className="h-4">Next-best-offer</div>
             </div>
             <div className="surface__body">
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <div style={{ fontSize: 18, fontWeight: 600, letterSpacing: '-0.01em' }}>{b.recommended_offer}</div>
+              <div className="split-row">
+                <div className="offer-title">{b.recommended_offer}</div>
                 <ScoreBadge value={b.opportunity_score} />
               </div>
-              <p className="body" style={{ marginTop: 8 }}>{b.why_now}</p>
-              <div style={{ marginTop: 12 }}>
-                <Link className="btn btn--primary" to={`/offer-orchestrator/${b.borrower_id}`}>
+              <p className="body mt-2">{b.why_now}</p>
+              <div className="chip-row mt-3">
+                <Link
+                  className="btn btn--primary"
+                  to={`/offer-orchestrator/${b.borrower_id}`}
+                  onClick={() => setLastBorrowerId(b.borrower_id)}
+                >
                   Build outreach draft
                   <Icon name="chevright" size={14} />
                 </Link>
+                <Button
+                  variant={saved ? 'ghost' : 'default'}
+                  size="default"
+                  icon={saved ? 'check' : 'tag'}
+                  onClick={saveCurrentLead}
+                  aria-label={`${saved ? 'Saved' : 'Save'} borrower ${b.borrower_id}`}
+                >
+                  {saved ? 'Saved' : 'Save lead'}
+                </Button>
               </div>
             </div>
           </div>
 
           <div className="surface">
             <div className="surface__hdr">
-              <Icon name="layers" size={14} style={{ color: 'var(--accent)' }} />
+              <Icon name="layers" size={14} className="icon-accent" />
               <div className="h-4">Supporting evidence</div>
             </div>
-            <div className="surface__body" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div className="surface__body surface__body--stack-sm">
               {b.evidence_events.map((e) => (
-                <div key={e.evidence_id} style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
+                <div key={e.evidence_id} className="chip-row chip-row--baseline">
                   <EvidenceChip source={descriptorFor(e.source_table)}>{e.source_product}</EvidenceChip>
-                  <span style={{ color: 'var(--text-2)', fontSize: 13 }}>{e.display_text}</span>
+                  <span className="text-2 fs-13">{e.display_text}</span>
                 </div>
               ))}
             </div>
@@ -372,8 +397,8 @@ export default function Borrower360() {
 function Field({ k, v, mono, childEl }: { k: string; v: string; mono?: boolean; childEl?: ReactElement }) {
   return (
     <div>
-      <div className="muted" style={{ fontSize: 11 }}>{k}</div>
-      {childEl ?? <div className={mono ? 'mono num' : ''} style={{ fontSize: 13, color: 'var(--text-1)' }}>{v}</div>}
+      <div className="field__label">{k}</div>
+      {childEl ?? <div className={`field__value ${mono ? 'mono num' : ''}`}>{v}</div>}
     </div>
   );
 }

@@ -15,6 +15,7 @@ class KpiTrend(BaseModel):
     series: list[float]
     delta_pct: float | None = None
     direction: str = "flat"  # "up" | "down" | "flat"
+    comparison_label: str | None = None
 
 
 class PortfolioPreview(BaseModel):
@@ -25,10 +26,16 @@ class PortfolioPreview(BaseModel):
     high_intent_leads: int
     top_tier_opportunities: int | None = None  # opportunity_score >= 75
     offers_recommended: int | None = None       # recommended_offer_code != 'nurture'
-    avg_score: int = Field(ge=0, le=100)
+    avg_score: int | None = Field(default=None, ge=0, le=100)
     # Optional trend histories keyed by KPI field name. When absent, the UI
     # renders the KPI without a sparkline.
     trends: dict[str, KpiTrend] = Field(default_factory=dict)
+    # Explains the trend contract. "live" means sparklines are cohort-
+    # aligned; "not_applicable" means the API intentionally withheld
+    # trend lines because the snapshot table does not store that custom
+    # filter grain; "unavailable" means the snapshot query failed.
+    trend_status: str = "live"
+    trend_note: str | None = None
     # MAX(snapshot_at) from funnel_snapshot_daily — the most recent time the
     # gold mirror was refreshed. Rendered in the user's local timezone.
     data_refreshed_at: datetime | None = None

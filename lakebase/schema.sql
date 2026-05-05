@@ -72,6 +72,46 @@ CREATE INDEX IF NOT EXISTS idx_approvals_campaign
 CREATE INDEX IF NOT EXISTS idx_approvals_borrower
     ON mip_app.approvals (borrower_id, decided_at DESC);
 
+-- Saved workspace ----------------------------------------------------
+-- Actor-scoped saved leads and draft outreach copy. These tables back
+-- the in-app inbox/workspace; they intentionally store synthetic
+-- borrower ids plus coarse location / offer metadata only. Raw names,
+-- street addresses, emails, phone numbers, and raw Cotality CLIPs do
+-- not belong here.
+CREATE TABLE IF NOT EXISTS mip_app.saved_leads (
+    actor_email       TEXT NOT NULL,
+    borrower_id       TEXT NOT NULL,
+    city              TEXT,
+    state             TEXT,
+    zip               TEXT,
+    recommended_offer TEXT,
+    opportunity_score INTEGER CHECK (opportunity_score BETWEEN 0 AND 100),
+    confidence        INTEGER CHECK (confidence BETWEEN 0 AND 100),
+    saved_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    deleted_at        TIMESTAMPTZ,
+    PRIMARY KEY (actor_email, borrower_id)
+);
+CREATE INDEX IF NOT EXISTS idx_saved_leads_actor_updated
+    ON mip_app.saved_leads (actor_email, updated_at DESC)
+    WHERE deleted_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS mip_app.outreach_drafts (
+    actor_email  TEXT NOT NULL,
+    borrower_id  TEXT NOT NULL,
+    offer_code   TEXT,
+    channel      TEXT NOT NULL DEFAULT 'email' CHECK (channel IN ('email','sms')),
+    body         TEXT NOT NULL CHECK (length(body) <= 5000),
+    status       TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','released')),
+    saved_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    deleted_at   TIMESTAMPTZ,
+    PRIMARY KEY (actor_email, borrower_id, channel)
+);
+CREATE INDEX IF NOT EXISTS idx_outreach_drafts_actor_updated
+    ON mip_app.outreach_drafts (actor_email, updated_at DESC)
+    WHERE deleted_at IS NULL;
+
 -- Action audit --------------------------------------------------------
 -- The append-only ledger governance §4 requires. `event_type` is the
 -- canonical verb: VIEW_BORROWER, VIEW_LEADS, APPROVE, DRAFT_OUTREACH,

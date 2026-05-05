@@ -47,7 +47,7 @@ export function PageShell({
               {lede && <p className="lede">{lede}</p>}
             </div>
             {heroRight && (
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>{heroRight}</div>
+              <div className="proto-hero__actions">{heroRight}</div>
             )}
           </div>
         )}

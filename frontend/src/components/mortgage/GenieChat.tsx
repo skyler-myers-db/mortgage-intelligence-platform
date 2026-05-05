@@ -174,6 +174,7 @@ function snapPos(
  */
 function drawerForAsset(asset: string) {
   if (/itm|rules/i.test(asset)) return DRAWER_SOURCES.itm;
+  if (/lead.?score|lead_scores|fn_lead_score/i.test(asset)) return DRAWER_SOURCES.leadScore;
   if (/permit/i.test(asset)) return DRAWER_SOURCES.permit;
   if (/lead_population|population|borrower_360/i.test(asset)) return DRAWER_SOURCES.population;
   if (/next.?best|nbo/i.test(asset)) return DRAWER_SOURCES.nbo;
@@ -580,13 +581,12 @@ export function GenieChat() {
             Children (avatar, title, close button) intercept clicks
             normally because the move guard checks e.target === header. */}
         <div
-          className="genie__hdr"
+          className={`genie__hdr ${pos ? 'genie__hdr--dragging' : ''}`}
           onPointerDown={onDragPointerDown}
           onPointerMove={onDragPointerMove}
           onPointerUp={onDragPointerUp}
           onPointerCancel={onDragPointerUp}
           onDoubleClick={onDragDoubleClick}
-          style={{ cursor: pos ? 'grabbing' : 'grab', userSelect: 'none' }}
           title={
             pos
               ? 'Drag to move · double-click to re-dock'
@@ -594,7 +594,7 @@ export function GenieChat() {
           }
         >
           <div className="genie__avatar" />
-          <div style={{ flex: 1, pointerEvents: 'none' }}>
+          <div className="genie-chat__drag-title">
             <div className="genie__title">Ask Genie</div>
             <div className="genie__sub">
               Unity Catalog metric views · {lender}
@@ -691,9 +691,9 @@ export function GenieChat() {
             </div>
           )}
           {msgs.length <= 1 && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 4 }}>
+            <div className="genie-chat__samples">
               {SAMPLE_QUESTIONS.map((s) => (
-                <button key={s} className="filter" style={{ alignSelf: 'flex-start', textAlign: 'left' }} onClick={() => ask(s)} type="button">
+                <button key={s} className="filter genie-chat__sample" onClick={() => ask(s)} type="button">
                   <Icon name="sparkle" size={11} /> {s}
                 </button>
               ))}

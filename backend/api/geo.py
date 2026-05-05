@@ -42,11 +42,21 @@ def state_rollups(
             description=(
                 "Optional comma-separated SegmentCode list (itm,listed,permit,"
                 "investor,equity,retention). When provided, per-state counts "
-                "reflect ONLY borrowers whose segment_codes overlap the filter "
-                "(distinct-counted across multi-segment borrowers)."
+                "reflect ONLY borrowers matching the filter. Use segment_mode="
+                "all when selected cards should narrow via intersection."
             ),
         ),
     ] = None,
+    segment_mode: Annotated[
+        str,
+        Query(
+            pattern="^(any|all)$",
+            description=(
+                "any = segment arrays overlap; all = borrower contains every "
+                "selected segment code."
+            ),
+        ),
+    ] = "any",
 ) -> StateRollupResponse:
     """Return per-state rollups for the latest funnel snapshot.
 
@@ -55,10 +65,10 @@ def state_rollups(
     not a router change.
 
     2026-05-04 (FIX G): when ``segment_codes`` is supplied, the
-    repository switches to a live `arrays_overlap` query against
-    ``mip.gold.lead_population`` so the home-page choropleth tooltip
-    can show the borrower count for the active segment filter instead
-    of the cross-segment total.
+    repository switches to a live segment-filtered query against
+    ``mip.gold.borrower_360`` so the choropleth tooltip can show the
+    borrower count for the active segment filter instead of the
+    cross-segment total.
     """
     parsed: list[str] | None = None
     if segment_codes:
@@ -68,7 +78,7 @@ def state_rollups(
         # the warehouse the work and return the unfiltered rollup.
         if not parsed or len(parsed) >= 6:
             parsed = None
-    return repo.state_rollups(segment_codes=parsed)
+    return repo.state_rollups(segment_codes=parsed, segment_mode=segment_mode)
 
 
 @router.get("/county-rollups", response_model=CountyRollupResponse)

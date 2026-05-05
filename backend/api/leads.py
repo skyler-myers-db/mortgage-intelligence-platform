@@ -63,6 +63,27 @@ def list_leads(
     repo: RepoDep,
     audit: StoreDep,
     segment: str | None = None,
+    segment_codes: Annotated[
+        str | None,
+        Query(
+            alias="segment_codes",
+            description=(
+                "Optional comma-separated SegmentCode list for multi-card "
+                "filters. Prefer this over legacy `segment` when more than "
+                "one segment card is active."
+            ),
+        ),
+    ] = None,
+    segment_mode: Annotated[
+        str,
+        Query(
+            pattern="^(any|all)$",
+            description=(
+                "any = segment arrays overlap; all = borrower contains every "
+                "selected segment code."
+            ),
+        ),
+    ] = "any",
     portfolio_id: str | None = None,
     state: Annotated[
         str | None,
@@ -108,12 +129,20 @@ def list_leads(
     # this, the previous behaviour returned the national top-N from
     # lead_population and the FE filtered client-side, producing 0 rows
     # for ZIPs whose borrowers didn't make the national top 500.
+    parsed_segments: list[str] | None = None
+    if segment_codes:
+        parsed_segments = [s.strip() for s in segment_codes.split(",") if s.strip()]
+        if not parsed_segments or len(parsed_segments) >= 6:
+            parsed_segments = None
+
     leads = repo.list(
         segment=segment,
         portfolio_id=portfolio_id,
         limit=limit,
         state=state,
         zip_code=zip_code,
+        segment_codes=parsed_segments,
+        segment_mode=segment_mode,
     )
     # When the result set hit the requested cap, advertise the truncation
     # explicitly so the frontend can tell "exactly N" vs "N and there's
@@ -122,20 +151,25 @@ def list_leads(
     # conservative signal ("capped at") and the UI phrases it that way.
     if len(leads) >= limit:
         response.headers["X-Truncated-At"] = str(limit)
+    audit_payload: dict[str, object] = {
+        "rendered_borrower_ids": [lead.borrower_id for lead in leads],
+        "portfolio_id": portfolio_id,
+        "segment": segment,
+        "limit": limit,
+    }
+    if parsed_segments:
+        audit_payload["segment_codes"] = parsed_segments
+        audit_payload["segment_mode"] = segment_mode
+
     background.add_task(
         _safe_audit_write,
         audit,
         actor=resolve_actor(request),
         action="view_leads_ranked",
         entity_type="lead_queue",
-        entity_id=segment or "_all",
-        payload_json={
-            "rendered_borrower_ids": [lead.borrower_id for lead in leads],
-            "portfolio_id": portfolio_id,
-            "segment": segment,
-            "limit": limit,
-        },
+        entity_id=segment or (",".join(parsed_segments) if parsed_segments else "_all"),
+        payload_json=audit_payload,
         event_type="VIEW_LEADS",
-        subject_segment=segment,
+        subject_segment=segment or (",".join(parsed_segments) if parsed_segments else None),
     )
     return leads

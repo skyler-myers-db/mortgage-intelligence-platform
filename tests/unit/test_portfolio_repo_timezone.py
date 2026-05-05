@@ -71,15 +71,21 @@ def _preview_row() -> dict[str, Any]:
     }
 
 
-def _trend_row(snapshot_at: Any) -> dict[str, Any]:
+def _trend_row(
+    snapshot_at: Any,
+    *,
+    snapshot_date: str = "2026-04-22",
+    top_tier_opportunities: int = 120,
+    avg_score: int = 72,
+) -> dict[str, Any]:
     return {
-        "snapshot_date": "2026-04-22",
+        "snapshot_date": snapshot_date,
         "snapshot_at": snapshot_at,
         "marketable_population": 1000,
         "high_intent_leads": 300,
-        "top_tier_opportunities": 120,
+        "top_tier_opportunities": top_tier_opportunities,
         "offers_recommended": 250,
-        "avg_score": 72,
+        "avg_score": avg_score,
         "approved_count": 0,
         "in_outreach_count": 0,
     }
@@ -266,3 +272,68 @@ def test_preview_second_call_same_order_hits_cache():
     assert calls_after_first == calls_after_second == 1, (
         f"second call should have hit cache; saw {calls_after_second} preview SELECTs"
     )
+
+
+def test_trend_delta_uses_exact_snapshot_date_and_drops_bootstrap_zero():
+    """A bootstrap 0 row must not become a fake percent change baseline."""
+    trend_rows = [
+        _trend_row(
+            "2026-05-04T19:48:14",
+            snapshot_date="2026-05-04",
+            top_tier_opportunities=3074,
+        ),
+        _trend_row(
+            "2026-04-23T19:48:14",
+            snapshot_date="2026-04-23",
+            top_tier_opportunities=3081,
+        ),
+        _trend_row(
+            "2026-04-22T19:48:14",
+            snapshot_date="2026-04-22",
+            top_tier_opportunities=0,
+        ),
+    ]
+    client = _StubClient(_preview_row(), trend_rows)
+    repo = DatabricksPortfolioRepository(client)  # type: ignore[arg-type]
+
+    preview = repo.preview(None)
+    trend = preview.trends["top_tier_opportunities"]
+
+    assert trend.series == [3081.0, 3074.0]
+    assert trend.comparison_label == "vs 2026-04-23"
+    assert trend.delta_pct == -0.2
+
+
+def test_filtered_preview_suppresses_national_trends():
+    """Filtered KPIs must not reuse the _ALL/_ALL national trend line."""
+    from backend.schemas.portfolio import PortfolioCriteria, PortfolioPreviewRequest
+
+    client = _StubClient(_preview_row(), [_trend_row("2026-04-22T18:30:00")])
+    repo = DatabricksPortfolioRepository(client)  # type: ignore[arg-type]
+    req = PortfolioPreviewRequest(
+        criteria=PortfolioCriteria(geography="Texas", min_equity_pct=25)
+    )
+
+    preview = repo.preview(req)
+
+    assert preview.trends == {}
+    assert preview.trend_status == "not_applicable"
+    assert preview.trend_note is not None
+
+
+def test_empty_filtered_cohort_keeps_avg_score_null_not_zero():
+    client = _StubClient(
+        {
+            "marketable_population": 0,
+            "high_intent_leads": 0,
+            "top_tier_opportunities": None,
+            "offers_recommended": None,
+            "avg_score": None,
+        },
+        [_trend_row("2026-04-22T18:30:00")],
+    )
+    repo = DatabricksPortfolioRepository(client)  # type: ignore[arg-type]
+
+    preview = repo.preview(None)
+
+    assert preview.avg_score is None

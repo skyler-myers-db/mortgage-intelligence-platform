@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
-import type { PortfolioPreview } from '../types';
+import type { KpiTrend, PortfolioPreview } from '../types';
 import { PageShell } from '../components/layout/PageShell';
 import { KpiCard } from '../components/mortgage/KpiCard';
 import { Button } from '../components/Primitives';
@@ -59,27 +59,32 @@ function buildGeoOptions(
   return opts;
 }
 
-// Default filter values keyed by the short codes the existing local
-// state uses. Keeping these keys stable is a guardrail from the
-// round-2 audit — the backend schema already ignores unknown fields,
-// and renaming them mid-slice would be a scope creep.
+// Default filter values keyed by PortfolioCriteria field names. The
+// backend rejects unknown fields by omission, so short aliases like
+// `geo` / `occ` would silently turn the controls into no-ops.
 const DEFAULT_FILTERS: Record<string, string> = {
-  geo: 'Chicago MSA',
-  occ: 'Owner-occupied',
-  lien: 'Open 1st lien',
-  rel: 'All',
+  geography: 'Chicago MSA',
+  occupancy: 'Owner-occupied',
+  lien_status: 'Open 1st lien',
+  lender_relationship: 'All',
   product: 'All products',
-  equity: '≥ 15%',
+  min_equity_pct_label: '≥ 15%',
 };
 
 /**
  * URL search-param keys we round-trip. One per filter + the reload
  * token so the "Run build" commit is reproducible from a deep link.
- * These match the field names in DEFAULT_FILTERS so the URL reads
- * naturally ("?geo=Chicago+MSA&occ=Owner-occupied&..."). Unknown
- * params are ignored on parse; defaults fill in the rest.
+ * These match PortfolioCriteria so a copied URL replays the same
+ * server-side predicates.
  */
-const URL_FILTER_KEYS = ['geo', 'occ', 'lien', 'rel', 'product', 'equity'] as const;
+const URL_FILTER_KEYS = [
+  'geography',
+  'occupancy',
+  'lien_status',
+  'lender_relationship',
+  'product',
+  'min_equity_pct_label',
+] as const;
 
 function parseFiltersFromUrl(sp: URLSearchParams): Record<string, string> {
   const out: Record<string, string> = { ...DEFAULT_FILTERS };
@@ -104,10 +109,11 @@ function buildUrlFromFilters(filters: Record<string, string>): URLSearchParams {
   return sp;
 }
 
-function formatDelta(pct: number | null | undefined): string | undefined {
+function formatDelta(trend: KpiTrend | undefined): string | undefined {
+  const pct = trend?.delta_pct;
   if (pct === null || pct === undefined) return undefined;
   const sign = pct > 0 ? '+' : '';
-  return `${sign}${pct.toFixed(1)}% vs 7d ago`;
+  return `${sign}${pct.toFixed(1)}% ${trend?.comparison_label ?? 'vs prior snapshot'}`;
 }
 
 /**
@@ -251,24 +257,14 @@ export default function PortfolioBuilder() {
       lede="Apply geography, occupancy, lien, relationship, product, and equity filters, then run the build. The KPI grid shows size, average score, and projected conversion."
     >
       <div className="surface">
-        <div className="surface__hdr" style={{ justifyContent: 'space-between' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <div
-              style={{
-                width: 28,
-                height: 28,
-                borderRadius: 8,
-                background: 'var(--accent-soft)',
-                color: 'var(--accent)',
-                display: 'grid',
-                placeItems: 'center',
-              }}
-            >
+        <div className="surface__hdr surface__hdr--split">
+          <div className="surface__hdr-main">
+            <div className="surface__icon">
               <Icon name="target" size={14} />
             </div>
             <div>
               <div className="h-4">Filters</div>
-              <div className="muted" style={{ fontSize: 12 }}>
+              <div className="muted fs-12">
                 Filter the population, run the build, review KPIs.
               </div>
             </div>
@@ -285,7 +281,7 @@ export default function PortfolioBuilder() {
                 onChange={setFilter(g.key)}
               />
             ))}
-            <div style={{ flex: 1 }} />
+            <div className="filter-row__spacer" />
             <Button
               variant="ghost"
               size="default"
@@ -312,7 +308,7 @@ export default function PortfolioBuilder() {
           </div>
 
           {warmingUp && (
-            <div style={{ marginTop: 14 }}>
+            <div className="mt-4">
               <WarmingUpBlock
                 state={warmingUp}
                 title="Portfolio preview loading"
@@ -323,18 +319,7 @@ export default function PortfolioBuilder() {
           {previewError && !warmingUp && (
             <div
               role="alert"
-              style={{
-                marginTop: 14,
-                padding: '10px 12px',
-                border: '1px solid var(--signal-danger)',
-                borderRadius: 'var(--r-md)',
-                color: 'var(--signal-danger)',
-                fontSize: 12,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: 12,
-              }}
+              className="status-callout status-callout--danger mt-4"
             >
               <span>{previewError}</span>
               <button
@@ -358,39 +343,31 @@ export default function PortfolioBuilder() {
           {isDayZero(preview) && (
             <div
               role="status"
-              style={{
-                marginTop: 14,
-                padding: '12px 14px',
-                border: '1px solid var(--line-2)',
-                borderRadius: 'var(--r-md)',
-                background: 'var(--bg-1)',
-                fontSize: 13,
-                color: 'var(--text-1)',
-              }}
+              className="status-callout status-callout--day-zero mt-4"
             >
               <strong>First data refresh pending.</strong>{' '}
               Unity Catalog gold tables are empty. Run{' '}
-              <code
-                style={{
-                  fontFamily: 'var(--font-mono)',
-                  fontSize: 12,
-                  padding: '1px 6px',
-                  borderRadius: 4,
-                  background: 'var(--bg-2)',
-                }}
-              >
+              <code className="callout-code">
                 databricks bundle run mip_refresh_scores -t dev
               </code>{' '}
               to populate them.
             </div>
           )}
+          {!isDayZero(preview) && preview?.trend_note && (
+            <div
+              role="status"
+              className="status-callout status-callout--info mt-4"
+            >
+              {preview.trend_note}
+            </div>
+          )}
 
-          <div className="kpi-row" style={{ marginTop: 20 }}>
+          <div className="kpi-row kpi-row--spaced">
             <KpiCard
               label="Marketable population"
               valueAnimated={dayZeroSafe(preview, preview?.marketable_population)}
               trend={preview?.trends?.marketable_population?.series}
-              delta={formatDelta(preview?.trends?.marketable_population?.delta_pct)}
+              delta={formatDelta(preview?.trends?.marketable_population)}
               deltaDir={preview?.trends?.marketable_population?.direction}
               source={DRAWER_SOURCES.population}
             />
@@ -398,23 +375,23 @@ export default function PortfolioBuilder() {
               label="Avg. borrower score"
               valueAnimated={dayZeroSafe(preview, preview?.avg_score)}
               trend={preview?.trends?.avg_score?.series}
-              delta={formatDelta(preview?.trends?.avg_score?.delta_pct)}
+              delta={formatDelta(preview?.trends?.avg_score)}
               deltaDir={preview?.trends?.avg_score?.direction}
-              source={DRAWER_SOURCES.nbo}
+              source={DRAWER_SOURCES.leadScore}
             />
             <KpiCard
               label="Top-tier opportunities"
               valueAnimated={dayZeroSafe(preview, preview?.top_tier_opportunities)}
               trend={preview?.trends?.top_tier_opportunities?.series}
-              delta={formatDelta(preview?.trends?.top_tier_opportunities?.delta_pct)}
+              delta={formatDelta(preview?.trends?.top_tier_opportunities)}
               deltaDir={preview?.trends?.top_tier_opportunities?.direction}
-              source={DRAWER_SOURCES.nbo}
+              source={DRAWER_SOURCES.leadScore}
             />
             <KpiCard
               label="Offers recommended"
               valueAnimated={dayZeroSafe(preview, preview?.offers_recommended)}
               trend={preview?.trends?.offers_recommended?.series}
-              delta={formatDelta(preview?.trends?.offers_recommended?.delta_pct)}
+              delta={formatDelta(preview?.trends?.offers_recommended)}
               deltaDir={preview?.trends?.offers_recommended?.direction}
               source={DRAWER_SOURCES.nbo}
             />
@@ -423,24 +400,13 @@ export default function PortfolioBuilder() {
       </div>
 
       {preview?.high_intent_leads !== undefined && preview.high_intent_leads > 0 && (
-        <div
-          style={{
-            marginTop: 'var(--gap-grid)',
-            padding: '14px 16px',
-            border: '1px solid var(--line-1)',
-            borderRadius: 'var(--r-md)',
-            background: 'var(--bg-1)',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 14,
-          }}
-        >
-          <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 13, color: 'var(--text-1)' }}>
+        <div className="lead-cta">
+          <div className="lead-cta__body">
+            <div className="lead-cta__title">
               {preview.high_intent_leads.toLocaleString()} high-intent borrower
               {preview.high_intent_leads === 1 ? '' : 's'} match the current filters.
             </div>
-            <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
+            <div className="lead-cta__sub">
               Open the lead queue to review evidence and approve outreach per borrower.
             </div>
           </div>
@@ -451,7 +417,7 @@ export default function PortfolioBuilder() {
         </div>
       )}
 
-      <div style={{ marginTop: 'var(--gap-grid)', display: 'flex', gap: 12 }}>
+      <div className="section-actions">
         <Link to="/segment-intelligence" className="btn">
           Next: segments
           <Icon name="chevright" size={14} />

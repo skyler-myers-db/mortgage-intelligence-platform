@@ -83,6 +83,8 @@ class LeadRepository(Protocol):
         limit: int | None = None,
         state: str | None = None,
         zip_code: str | None = None,
+        segment_codes: list[str] | None = None,
+        segment_mode: str = "any",
     ) -> list[LeadSummary]:
         """Return up to ``limit`` ranked leads.
 
@@ -93,6 +95,11 @@ class LeadRepository(Protocol):
         map tooltips report. Without these, the call returns the
         national top-N by score from ``lead_population`` (the
         existing top-of-queue behaviour).
+
+        ``segment_codes`` extends the legacy single ``segment`` query
+        for the Segments page. ``segment_mode="all"`` means a borrower
+        must carry every selected segment code, matching card clicks as
+        narrowing filters; ``"any"`` preserves the old overlap behavior.
         """
         ...
 
@@ -169,15 +176,16 @@ class GeoRepository(Protocol):
     def state_rollups(
         self,
         segment_codes: list[str] | None = None,
+        segment_mode: str = "any",
     ) -> StateRollupResponse:
         """Per-state aggregates for the latest snapshot.
 
         ``segment_codes``: optional non-empty list of SegmentCode values
         (itm, listed, permit, investor, equity, retention). When
-        provided, the per-state counts reflect ONLY borrowers whose
-        ``segment_codes`` array overlaps the filter — distinct-counted
-        across multi-segment borrowers so a borrower in {itm,
-        retention} is counted once when the filter is {itm, retention}.
+        provided, the per-state counts reflect ONLY borrowers matching
+        the selected segment filter. ``segment_mode="any"`` means the
+        arrays overlap; ``"all"`` means the borrower must carry every
+        selected code.
 
         When ``segment_codes`` is None or empty, the cross-segment
         ``_ALL`` rollup is returned (the prior unfiltered behaviour).

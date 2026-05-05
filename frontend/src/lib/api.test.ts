@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { ApiError, _parseRetryableBody } from './api';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { api, ApiError, _parseRetryableBody } from './api';
 
 /**
  * _parseRetryableBody — cycle-13 `reason` field extraction.
@@ -20,6 +20,10 @@ function jsonResponse(status: number, body: unknown): Response {
     headers: { 'Content-Type': 'application/json' },
   });
 }
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe('_parseRetryableBody', () => {
   it('extracts reason="breaker_open" from a 503 body', async () => {
@@ -104,5 +108,47 @@ describe('ApiError', () => {
   it('defaults reason to null when the caller omits it', () => {
     const err = new ApiError('boom', { path: '/api/leads', status: 500 });
     expect(err.reason).toBeNull();
+  });
+});
+
+describe('workspace API client', () => {
+  it('saves leads with PUT and deletes with DELETE', async () => {
+    const calls: Array<{ path: string; init?: RequestInit }> = [];
+    vi.stubGlobal('fetch', async (path: string, init?: RequestInit) => {
+      calls.push({ path, init });
+      if (init?.method === 'DELETE') {
+        return jsonResponse(200, { ok: true, borrower_id: 'B-123' });
+      }
+      return jsonResponse(200, {
+        borrower_id: 'B-123',
+        city: 'Seattle',
+        state: 'WA',
+        zip: '98118',
+        recommended_offer: 'Refinance + HELOC',
+        opportunity_score: 86,
+        confidence: 81,
+        saved_at: '2026-05-05T00:00:00Z',
+        updated_at: '2026-05-05T00:00:00Z',
+      });
+    });
+
+    await api.saveWorkspaceLead({
+      borrower_id: 'B-123',
+      city: 'Seattle',
+      state: 'WA',
+      zip: '98118',
+      recommended_offer: 'Refinance + HELOC',
+      opportunity_score: 86,
+      confidence: 81,
+    });
+    await api.deleteWorkspaceLead('B-123');
+
+    expect(calls[0].path).toBe('/api/workspace/leads/B-123');
+    expect(calls[0].init?.method).toBe('PUT');
+    expect(JSON.parse(String(calls[0].init?.body))).toMatchObject({
+      borrower_id: 'B-123',
+    });
+    expect(calls[1].path).toBe('/api/workspace/leads/B-123');
+    expect(calls[1].init?.method).toBe('DELETE');
   });
 });

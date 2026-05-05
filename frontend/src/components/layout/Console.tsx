@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom';
 import { useApp, type Accent, type Density, type Theme } from '../AppContext';
 import { Icon } from '../Icon';
 
@@ -20,7 +21,20 @@ export function Console() {
     showEvidence, setShowEvidence,
     showConfidence, setShowConfidence,
     setGenieOpen,
+    savedLeads,
+    savedDrafts,
+    workspaceStatus,
+    workspaceError,
+    refreshWorkspace,
   } = useApp();
+  const savedLeadItems = Object.values(savedLeads)
+    .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
+    .slice(0, 4);
+  const savedDraftItems = Object.values(savedDrafts)
+    .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
+    .slice(0, 3);
+  const savedLeadCount = Object.keys(savedLeads).length;
+  const savedDraftCount = Object.keys(savedDrafts).length;
 
   return (
     <aside
@@ -31,11 +45,10 @@ export function Console() {
       aria-hidden={!consoleOpen}
     >
       <div className="tweaks__hdr">
-        <Icon name="tweak" size={14} style={{ marginRight: 8, color: 'var(--accent)' }} />
+        <Icon name="tweak" size={14} className="tweaks__hdr-icon" />
         <div className="tweaks__title">Console</div>
         <button
           className="drawer__close"
-          style={{ marginLeft: 'auto' }}
           onClick={() => setConsoleOpen(false)}
           aria-label="Close console"
           type="button"
@@ -98,8 +111,63 @@ export function Console() {
           />
         </div>
         <div className="tweak-row">
+          <label>Saved workspace</label>
+          <div className="saved-workspace">
+            <div className="saved-workspace__summary">
+              <span>{savedLeadCount} saved lead{savedLeadCount === 1 ? '' : 's'}</span>
+              <span>{savedDraftCount} draft{savedDraftCount === 1 ? '' : 's'}</span>
+            </div>
+            {workspaceStatus === 'loading' && (
+              <div className="muted fs-12">Loading Lakebase workspace…</div>
+            )}
+            {workspaceError && (
+              <div className="stack-sm">
+                <div className="text-danger fs-12">{workspaceError}</div>
+                <button
+                  type="button"
+                  className="btn btn--sm"
+                  onClick={refreshWorkspace}
+                >
+                  Retry workspace
+                </button>
+              </div>
+            )}
+            {workspaceStatus !== 'loading' && savedLeadItems.length === 0 && savedDraftItems.length === 0 && (
+              <div className="muted fs-12">No saved leads or drafts yet.</div>
+            )}
+            {savedLeadItems.map((lead) => (
+              <Link
+                key={`lead-${lead.borrower_id}`}
+                className="saved-workspace__item"
+                to={`/borrower-360/${lead.borrower_id}`}
+                onClick={() => setConsoleOpen(false)}
+              >
+                <Icon name="tag" size={12} />
+                <span className="saved-workspace__body">
+                  <span className="mono">{lead.borrower_id}</span>
+                  <span>{lead.city}, {lead.state} · {lead.recommended_offer}</span>
+                </span>
+              </Link>
+            ))}
+            {savedDraftItems.map((draft) => (
+              <Link
+                key={`draft-${draft.borrower_id}`}
+                className="saved-workspace__item"
+                to={`/offer-orchestrator/${draft.borrower_id}`}
+                onClick={() => setConsoleOpen(false)}
+              >
+                <Icon name="doc" size={12} />
+                <span className="saved-workspace__body">
+                  <span className="mono">{draft.borrower_id}</span>
+                  <span>Draft saved · {draft.channel}</span>
+                </span>
+              </Link>
+            ))}
+          </div>
+        </div>
+        <div className="tweak-row">
           <div className="row">
-            <label style={{ margin: 0 }}>Show evidence chips</label>
+            <label>Show evidence chips</label>
             <button
               className={`switch ${showEvidence ? 'on' : ''}`}
               onClick={() => setShowEvidence(!showEvidence)}
@@ -111,7 +179,7 @@ export function Console() {
         </div>
         <div className="tweak-row">
           <div className="row">
-            <label style={{ margin: 0 }}>Show confidence meters</label>
+            <label>Show confidence meters</label>
             <button
               className={`switch ${showConfidence ? 'on' : ''}`}
               onClick={() => setShowConfidence(!showConfidence)}
@@ -123,7 +191,7 @@ export function Console() {
         </div>
         <div className="tweak-row">
           <div className="row">
-            <label style={{ margin: 0 }}>Ask Genie</label>
+            <label>Ask Genie</label>
             <button
               className="btn btn--sm"
               onClick={() => { setGenieOpen(true); setConsoleOpen(false); }}

@@ -100,13 +100,7 @@ function renderInlineMd(text: string): ReactNode[] {
       out.push(
         <code
           key={key++}
-          style={{
-            fontFamily: 'var(--font-mono)',
-            fontSize: '0.92em',
-            background: 'var(--bg-3)',
-            padding: '1px 4px',
-            borderRadius: 3,
-          }}
+          className="inline-code"
         >
           {match[3]}
         </code>,
@@ -160,25 +154,14 @@ function MarkdownAnswer({ text }: { text: string }) {
           b.type === 'p' ? (
             <p
               key={i}
-              style={{
-                margin: i === 0 ? 0 : '8px 0 0',
-                fontSize: 'var(--fs-13)',
-                color: 'var(--text-1)',
-                lineHeight: 1.5,
-              }}
+              className={`genie-md-p ${i === 0 ? 'genie-md-p--first' : ''}`}
             >
               {renderInlineMd(b.text)}
             </p>
           ) : (
             <ul
               key={i}
-              style={{
-                margin: '8px 0 0',
-                paddingLeft: 18,
-                fontSize: 'var(--fs-13)',
-                color: 'var(--text-1)',
-                lineHeight: 1.5,
-              }}
+              className="genie-md-list"
             >
               {b.items.map((it, j) => (
                 <li key={j}>{renderInlineMd(it)}</li>
@@ -428,11 +411,8 @@ function GenieBarChart({
   const totalW = labelW + trackW + 12 + valueW;
   const totalH = bars.length * rowH + 28;
   return (
-    <div style={{ marginTop: 12 }}>
-      <div
-        className="eyebrow"
-        style={{ marginBottom: 6, color: 'var(--text-3)' }}
-      >
+    <div className="genie-chart">
+      <div className="eyebrow genie-chart__title">
         {humanizeKey(valueCol)} by {humanizeKey(labelCol)}
       </div>
       <svg
@@ -440,7 +420,7 @@ function GenieBarChart({
         viewBox={`0 0 ${totalW} ${totalH}`}
         role="img"
         aria-label={`Bar chart: ${humanizeKey(valueCol)} by ${humanizeKey(labelCol)}`}
-        style={{ maxWidth: 540, display: 'block' }}
+        className="genie-chart__svg"
       >
         {bars.map((b, i) => {
           const y = i * rowH + 10;
@@ -492,14 +472,7 @@ function GenieBarChart({
         })}
       </svg>
       {data.length > MAX_BARS && (
-        <div
-          style={{
-            fontSize: 11,
-            color: 'var(--text-3)',
-            marginTop: 4,
-            fontStyle: 'italic',
-          }}
-        >
+        <div className="genie-chart__more">
           chart shows top {MAX_BARS}; full {data.length} rows in the table below
         </div>
       )}
@@ -541,8 +514,7 @@ export function GenieAnswer({
     <div>
       {metric_value && (
         <div
-          className="genie-answer__metric"
-          style={dense ? { fontSize: 'var(--fs-22)' } : undefined}
+          className={`genie-answer__metric ${dense ? 'genie-answer__metric--dense' : ''}`}
         >
           {metric_value}
         </div>
@@ -597,12 +569,11 @@ export function GenieAnswer({
             <button
               key={q}
               type="button"
-              className="filter"
+              className="filter filter--question"
               onClick={() => onFollowUp(q)}
-              style={{ textAlign: 'left' }}
             >
               <span className="filter__label">Ask</span>
-              <span className="filter__value" style={{ fontFamily: 'var(--font-sans)', color: 'var(--text-1)' }}>{q}</span>
+              <span className="filter__value filter__value--question">{q}</span>
             </button>
           ))}
         </div>

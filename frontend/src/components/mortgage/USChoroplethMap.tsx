@@ -106,52 +106,19 @@ function buildQuantileBucketer(counts: number[]): (count: number | null | undefi
  * surface — not a Chicago-only filter. Click IL to drill through real Cook
  * County polygons; clicking CA or TX also drills (same supported set);
  * every other state shows hover facts but no county drill.
- *
- * TODO: when the borrower dataset expansion slice lands, derive STATE_FACTS
- * from the API instead of hardcoded synthetic counts.
  */
 
-// ---------- Synthetic per-state facts (preview; see TODO above) ----------
+// ---------- Live per-state facts ----------
 
 interface StateFacts {
   count: number;
   avgScore: number;
   lvl: 1 | 2 | 3 | 4;
-  topSegment: string;
+  topSegment?: string;
 }
 
-// lowercase state id (matches @svg-maps/usa) → facts. Only the 6-state
-// Cotality Delta Share footprint (IL / CA / FL / TX / WA / CO) appears
-// here; non-footprint states intentionally have NO entry so the hover
-// card surfaces "—" for marketable / avg score and labels the source
-// "Outside Cotality evaluation scope" instead of fabricating numbers.
-//
-// Counts for the footprint states are synthetic-but-proportional fall-
-// backs used only when /api/geo/state-rollups hasn't returned yet
-// (cold-start). Once the rollup resolves, `factsFor` below merges the
-// LIVE addressable + avg_score + top_segment_code from the live payload
-// over these placeholders. Numbers here track the Apr-2026 share probe
-// in docs/data-sources-gap-analysis.md §1 (IL 1.86M · CA 0.90M · FL 0.76M
-// · TX 0.75M · WA 0.74M · CO 0.16M properties).
-//
-// 2026-05-04: stripped 45 non-footprint entries that previously hard-
-// coded a fabricated count for every state in the lower 48. The user
-// rightly flagged that the hover card said "Outside Cotality evaluation
-// scope" while still showing a count and avg score — that's exactly the
-// "no mock fallback" violation CLAUDE.md prohibits. Non-footprint
-// states now render at the lightest density tier (`lvl-1` default in
-// the renderer) and hover with "—" for every metric.
-const STATE_FACTS: Record<string, StateFacts> = {
-  il: { count: 1860, avgScore: 84, lvl: 4, topSegment: 'In the Money' }, // Chicago anchor
-  ca: { count: 900,  avgScore: 83, lvl: 4, topSegment: 'Home Equity' },
-  fl: { count: 760,  avgScore: 81, lvl: 4, topSegment: 'Investor' },
-  tx: { count: 750,  avgScore: 82, lvl: 4, topSegment: 'Home Equity' },
-  wa: { count: 740,  avgScore: 81, lvl: 4, topSegment: 'In the Money' },
-  co: { count: 160,  avgScore: 80, lvl: 4, topSegment: 'Listed' },
-};
-
-// Map segment code (from activeSegs / segmentFilter) → the topSegment strings
-// above. Used for highlight/dim logic on segment-intelligence.
+// Map segment code (from activeSegs / segmentFilter) → user-facing names.
+// Used for filter hints and, when available, top-segment dim logic.
 const SEGMENT_CODE_TO_NAME: Record<string, string> = {
   itm: 'In the Money',
   listed: 'Listed',
@@ -319,6 +286,8 @@ interface USChoroplethMapProps {
   height?: number;
   /** Optional segment-code filter. Non-matching states dim. */
   segmentFilter?: string[];
+  /** any = overlap; all = borrower must carry every selected segment. */
+  segmentFilterMode?: 'any' | 'all';
   /** Fires every time the user drills or navigates back. Always fires
    *  with the current selection — an empty selection (all nulls) when
    *  the user returns to US level. */
@@ -353,6 +322,7 @@ interface HoverState {
 export function USChoroplethMap({
   height = 420,
   segmentFilter,
+  segmentFilterMode = 'any',
   onSelectionChange,
   drillBehavior = 'filter',
 }: USChoroplethMapProps) {
@@ -379,8 +349,9 @@ export function USChoroplethMap({
   const [countiesByState, setCountiesByState] = useState<Record<string, CountiesPayload>>({});
   const [countyLoadError, setCountyLoadError] = useState<string | null>(null);
   // Per-state rollups from /api/geo/state-rollups. `null` = loading; `{}`
-  // = API unreachable (fall back to STATE_FACTS literal). Keyed by
-  // lowercase state code to match @svg-maps/usa location ids.
+  // = API unreachable. We keep the static geography interactive, but do
+  // not surface static borrower counts while live rollups are loading.
+  // Keyed by lowercase state code to match @svg-maps/usa location ids.
   const [liveStateFacts, setLiveStateFacts] = useState<Record<string, StateRollup> | null>(null);
   // Per-state county rollups lazy-loaded on drill. Keyed by uppercase
   // state code. Each value is a dict keyed by 5-char FIPS so the map's
@@ -428,24 +399,27 @@ export function USChoroplethMap({
     };
   }, []);
 
-  // Fetch per-state rollups from the backend. The repo response
-  // replaces the `count` + `avgScore` pair in STATE_FACTS with real
-  // rollups; the `lvl` / `topSegment` metadata stays synthetic because
-  // those aren't in gold. On error we silently fall back to the
-  // hardcoded STATE_FACTS so the map still renders rather than going
-  // blank — the honest UX trade-off when the backend is down.
+  // Fetch per-state rollups from the backend. Counts, score, tint, and
+  // top-segment labels all come from the live response; on error the map
+  // stays interactive but metric fields render as unknown.
   //
   // 2026-05-04 (FIX G): the effect now re-runs whenever segmentFilter
   // changes so the per-state counts (and the choropleth bucketer
   // derived from them) reflect the active segment selection. Without
   // a filter we use the cross-segment _ALL row; with a filter we hit
-  // the new arrays_overlap path that distinct-counts borrowers across
-  // segments. The 60s repo cache keys on the filter so toggling
-  // segments back-and-forth stays warm.
+  // the segment-aware path. Segment Intelligence passes mode="all" so
+  // selecting another card narrows the population instead of expanding
+  // to borrowers in either segment.
   useEffect(() => {
     let cancelled = false;
+    setHover(null);
+    setLiveStateFacts(null);
     api
-      .stateRollups(segmentFilter && segmentFilter.length > 0 ? segmentFilter : null)
+      .stateRollups(
+        segmentFilter && segmentFilter.length > 0 ? segmentFilter : null,
+        undefined,
+        segmentFilterMode,
+      )
       .then((payload) => {
         if (cancelled) return;
         const byCode: Record<string, StateRollup> = {};
@@ -455,17 +429,15 @@ export function USChoroplethMap({
         setLiveStateFacts(byCode);
       })
       .catch(() => {
-        // Silent fallback to STATE_FACTS. This is the one place in the
-        // map where we prefer "synthetic but static" over "degraded
-        // banner" — the map is an ambient surface and a failing hover
-        // shouldn't block the whole page. Everything else on the page
-        // that uses the same /api/* path DOES surface an error banner.
+        // Keep the geography interactive, but do not surface static
+        // borrower counts as if they were live. The tooltip renders
+        // "—" until the rollup endpoint recovers.
         if (!cancelled) setLiveStateFacts({});
       });
     return () => {
       cancelled = true;
     };
-  }, [segmentFilter]);
+  }, [segmentFilter, segmentFilterMode]);
 
   // Lazy-fetch county rollups on drill. /api/geo/county-rollups?state=XX
   // returns real counts / avg_score / top_segment_code per FIPS from
@@ -628,59 +600,36 @@ export function USChoroplethMap({
     );
   }, [segmentFilter]);
 
-  /** Merge the live state rollup (count / avg_score / top_segment_code
-   *  from /api/geo/state-rollups) with the static STATE_FACTS metadata
-   *  (lvl). Prefers the live top_segment_code when the backend returns
-   *  one; falls back to the hardcoded STATE_FACTS[*].topSegment only
-   *  when the endpoint errored (slice13-accuracy-validation). */
-  // 2026-05-04 fix (#1, #7): the prior factsFor returned `stat.lvl`
-  // straight from STATE_FACTS, where every footprint state is hardcoded
-  // to lvl:4 — so the choropleth rendered IL (1.85M) and CO (163K) the
-  // same darkest color despite a 10× count ratio. The map looked
-  // binary-coloured (footprint vs not) instead of count-weighted. We
-  // now compute a quantile bucketer over the LIVE state counts (same
-  // approach already used at the county and ZIP layers below) so the
+  /** Convert live state rollups into map facts. Borrower counts require
+   *  the live endpoint so a fast hover cannot surface stale demo numbers. */
+  // 2026-05-04 fix (#1, #7): compute a quantile bucketer over the LIVE
+  // state counts (same approach already used at the county and ZIP layers) so the
   // visible color tier reflects actual borrower volume across whichever
-  // states the workspace has data for. Falls back to STATE_FACTS.lvl
-  // on cold-start before liveStateFacts resolves.
+  // states the workspace has data for.
   const stateBucketer = useMemo(() => {
     if (!liveStateFacts) return lvlFromCount;
     const counts = Object.values(liveStateFacts).map((r) => r.addressable);
     return buildQuantileBucketer(counts);
   }, [liveStateFacts]);
 
-  /** Merge the live state rollup (count / avg_score / top_segment_code)
-   *  with the static STATE_FACTS metadata. The lvl now comes from the
-   *  live-count quantile bucketer above so the gradient reflects real
-   *  borrower volume. Pre-rollup, falls back to STATE_FACTS.lvl. */
+  /** Live state facts. Pre-rollup / failed-rollup states intentionally
+   *  return undefined so the tooltip shows "—" instead of stale fallback
+   *  borrower counts. */
   const factsFor = useMemo(() => {
     return (uscode: string): StateFacts | undefined => {
       const live = liveStateFacts?.[uscode];
-      const stat = STATE_FACTS[uscode];
       const liveTopSegment = live?.top_segment_code
         ? (SEGMENT_CODE_TO_NAME[live.top_segment_code] ?? '')
         : '';
-      if (live && stat) {
-        return {
-          count: live.addressable,
-          avgScore: live.avg_score || stat.avgScore,
-          lvl: stateBucketer(live.addressable),
-          topSegment: liveTopSegment || stat.topSegment,
-        };
-      }
       if (live) {
-        // State not in STATE_FACTS literal — synthesize minimal facts so
-        // the hover still shows the real count. lvl from the same live
-        // quantile bucketer as everyone else; topSegment uses the live
-        // value when present else blank so the tooltip row hides.
         return {
           count: live.addressable,
           avgScore: live.avg_score,
           lvl: stateBucketer(live.addressable),
-          topSegment: liveTopSegment,
+          topSegment: liveTopSegment || undefined,
         };
       }
-      return stat;
+      return undefined;
     };
   }, [liveStateFacts, stateBucketer]);
 
@@ -726,7 +675,7 @@ export function USChoroplethMap({
       if (liveStateFacts && Object.keys(liveStateFacts).length > 0) {
         return Object.values(liveStateFacts).reduce((a, b) => a + b.addressable, 0);
       }
-      return Object.values(STATE_FACTS).reduce((a, b) => a + b.count, 0);
+      return 0;
     }
     if (level === 'county') {
       const stateUC = countyStateId?.toUpperCase() ?? '';
@@ -757,16 +706,7 @@ export function USChoroplethMap({
   const renderStateLevel = () => {
     if (!usaMap) {
       return (
-        <div
-          style={{
-            marginTop: 36,
-            height: 'calc(100% - 36px)',
-            display: 'grid',
-            placeItems: 'center',
-            color: 'var(--text-3)',
-            fontSize: 12,
-          }}
-        >
+        <div className="map-stage map-stage--empty">
           Loading geography…
         </div>
       );
@@ -775,7 +715,7 @@ export function USChoroplethMap({
     <svg
       viewBox={usaMap.viewBox}
       preserveAspectRatio="xMidYMid meet"
-      style={{ marginTop: 36, height: 'calc(100% - 36px)' }}
+      className="map-svg-stage"
     >
       {usaMap.locations.map((loc) => {
         const facts = factsFor(loc.id);
@@ -891,55 +831,31 @@ export function USChoroplethMap({
       const count = anchorRollup?.addressable_borrowers ?? null;
       const avgScore = anchorRollup?.avg_opportunity_score ?? null;
       return (
-        <div
-          style={{
-            marginTop: 36,
-            height: 'calc(100% - 36px)',
-            display: 'grid',
-            placeItems: 'center',
-            padding: 'var(--sp-4)',
-          }}
-        >
-          <div
-            style={{
-              maxWidth: 360,
-              textAlign: 'center',
-              display: 'grid',
-              gap: 'var(--sp-3)',
-            }}
-          >
+        <div className="map-stage">
+          <div className="map-center-card">
             <div className="eyebrow">Cotality evaluation share</div>
-            <div className="h-3" style={{ color: 'var(--text-1)' }}>
+            <div className="h-3 text-1">
               {anchor.name}, {stateName}
             </div>
-            <div className="body muted" style={{ fontSize: 12, lineHeight: 1.5 }}>
+            <div className="body muted map-center-copy">
               1 anchor county per state in the current Cotality eval share.
               Drill into {anchor.name} to see ZIP-level rollups.
             </div>
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'center',
-                gap: 'var(--sp-3)',
-                fontFamily: 'var(--font-mono)',
-                fontSize: 11,
-                color: 'var(--text-3)',
-              }}
-            >
+            <div className="map-center-stats">
               <span>
                 Marketable{' '}
-                <span style={{ color: 'var(--text-1)' }}>
+                <span className="text-1">
                   {count !== null ? count.toLocaleString() : '—'}
                 </span>
               </span>
               <span>
                 Avg. score{' '}
-                <span style={{ color: 'var(--text-1)' }}>
+                <span className="text-1">
                   {avgScore !== null ? avgScore : '—'}
                 </span>
               </span>
             </div>
-            <div style={{ display: 'flex', justifyContent: 'center', gap: 'var(--sp-2)' }}>
+            <div className="map-center-actions">
               <button
                 type="button"
                 className="btn btn--primary"
@@ -961,7 +877,7 @@ export function USChoroplethMap({
         <svg
           viewBox="0 0 340 310"
           preserveAspectRatio="xMidYMid meet"
-          style={{ marginTop: 36, height: 'calc(100% - 36px)' }}
+          className="map-svg-stage"
         >
           {IL_COUNTIES.map((c) => {
             const classes = ['map-region', `lvl-${c.lvl ?? 1}`].join(' ');
@@ -985,7 +901,7 @@ export function USChoroplethMap({
               fontSize="10"
               fill="var(--text-3)"
               pointerEvents="none"
-              style={{ cursor: 'pointer' }}
+              className="map-retry-text"
               onClick={() => {
                 setCountyLoadError(null);
                 setCountiesByState((c) => {
@@ -1010,7 +926,7 @@ export function USChoroplethMap({
       <svg
         viewBox={payload.viewBox}
         preserveAspectRatio="xMidYMid meet"
-        style={{ marginTop: 36, height: 'calc(100% - 36px)' }}
+        className="map-svg-stage"
       >
         {payload.features.map((f) => {
           const stateUC = countyStateId?.toUpperCase() ?? '';
@@ -1134,26 +1050,17 @@ export function USChoroplethMap({
       // county" client-side by intersecting ZIPs (see
       // /lead-queue.tsx::countyZips).
       return (
-        <div
-          style={{
-            marginTop: 36,
-            height: 'calc(100% - 36px)',
-            display: 'grid',
-            placeItems: 'center',
-            padding: 'var(--sp-4)',
-          }}
-        >
-          <div style={{ textAlign: 'center', color: 'var(--text-3)', fontSize: 12, maxWidth: 320 }}>
-            <div style={{ color: 'var(--text-2)', marginBottom: 'var(--sp-2)' }}>
+        <div className="map-stage">
+          <div className="map-center-card map-center-card--narrow">
+            <div className="text-2 mb-2">
               No ZIP-level rollup for {countyName}.
             </div>
-            <div style={{ marginBottom: 'var(--sp-3)', lineHeight: 1.4 }}>
+            <div className="mb-3">
               Browse this county&apos;s lead queue — the filter will narrow to borrowers in {countyName}.
             </div>
             <button
               type="button"
               className="btn btn--ghost"
-              style={{ fontSize: 12 }}
               onClick={() => navigate(`/lead-queue?state=${stateUC}&county=${countyFips}`)}
             >
               Open Lead Queue for {countyName}
@@ -1165,16 +1072,7 @@ export function USChoroplethMap({
 
     if (!byZip) {
       return (
-        <div
-          style={{
-            marginTop: 36,
-            height: 'calc(100% - 36px)',
-            display: 'grid',
-            placeItems: 'center',
-            color: 'var(--text-3)',
-            fontSize: 12,
-          }}
-        >
+        <div className="map-stage map-stage--empty">
           Loading ZIPs…
         </div>
       );
@@ -1186,7 +1084,7 @@ export function USChoroplethMap({
       // grid. Click deep-links to the filtered lead queue (not a single
       // borrower) — user wants to see all borrowers in the ZIP.
       return (
-        <svg viewBox="0 0 310 210" preserveAspectRatio="xMidYMid meet" style={{ marginTop: 36, height: 'calc(100% - 36px)' }}>
+        <svg viewBox="0 0 310 210" preserveAspectRatio="xMidYMid meet" className="map-svg-stage">
           {styledTiles.map((z) => {
             const liveFacts = byZip[z.id];
             const count = liveFacts?.addressable_borrowers ?? null;
@@ -1310,23 +1208,12 @@ export function USChoroplethMap({
   return (
     <div className="map-wrap" style={{ height }}>
       {/* Breadcrumbs */}
-      <div
-        style={{
-          position: 'absolute',
-          top: 12,
-          left: 14,
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-          zIndex: 2,
-        }}
-      >
+      <div className="map-crumbs">
         <div className="eyebrow">Geography drill-down</div>
-        <div className="topbar__crumbs" style={{ fontSize: 12 }}>
+        <div className="topbar__crumbs map-crumbs__trail">
           <button
             type="button"
-            className={`filter ${level === 'state' ? 'is-active' : ''}`}
-            style={{ padding: '3px 8px' }}
+            className={`filter filter--compact ${level === 'state' ? 'is-active' : ''}`}
             onClick={() => {
               setLevel('state');
               setCountyStateId(null);
@@ -1340,8 +1227,7 @@ export function USChoroplethMap({
               <Icon name="chevright" size={11} />
               <button
                 type="button"
-                className={`filter ${level === 'county' ? 'is-active' : ''}`}
-                style={{ padding: '3px 8px' }}
+                className={`filter filter--compact ${level === 'county' ? 'is-active' : ''}`}
                 onClick={() => {
                   setLevel('county');
                   const st = countyStateId ?? 'il';
@@ -1360,7 +1246,7 @@ export function USChoroplethMap({
           {level === 'zip' && selected?.level === 'county' && (
             <>
               <Icon name="chevright" size={11} />
-              <span className="filter is-active" style={{ padding: '3px 8px' }}>
+              <span className="filter filter--compact is-active">
                 <span className="filter__value">{selected.name}</span>
               </span>
             </>
@@ -1373,19 +1259,7 @@ export function USChoroplethMap({
           view stays visually simple. Copy mirrors the actual upstream
           data scope ("1 anchor county per state in the Cotality eval
           share") — this is not a UI choice, it's upstream truth. */}
-      <div
-        style={{
-          position: 'absolute',
-          top: 12,
-          right: 14,
-          zIndex: 2,
-          display: 'flex',
-          gap: 'var(--sp-2)',
-          flexWrap: 'wrap',
-          justifyContent: 'flex-end',
-          maxWidth: 'calc(100% - 28px)',
-        }}
-      >
+      <div className="map-corner-chips">
         <Chip variant="neutral" icon="pin">
           {level === 'state'
             ? `${Object.keys(supportedCountyStates).length} footprint states · click to drill`
@@ -1410,41 +1284,28 @@ export function USChoroplethMap({
           quantiles within the filtered segment; on home it's the full
           marketable population. Fix G, 2026-04-23. */}
       <div className="map-legend">
-        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+        <div className="map-legend__header">
           <span>
             Borrowers in selection{' '}
-            <span
-              style={{
-                color: 'var(--text-1)',
-                fontFamily: 'var(--font-mono)',
-                marginLeft: 6,
-              }}
-            >
+            <span className="map-legend__value">
               {totalCount.toLocaleString()}
             </span>
           </span>
         </div>
         <div className="map-legend__bar">
-          <span style={{ background: 'var(--bg-3)' }} />
-          <span style={{ background: 'color-mix(in oklab, var(--accent) 15%, var(--bg-3))' }} />
-          <span style={{ background: 'color-mix(in oklab, var(--accent) 30%, var(--bg-3))' }} />
-          <span style={{ background: 'color-mix(in oklab, var(--accent) 50%, var(--bg-3))' }} />
-          <span style={{ background: 'color-mix(in oklab, var(--accent) 70%, var(--bg-3))' }} />
+          <span className="lvl-0" />
+          <span className="lvl-1" />
+          <span className="lvl-2" />
+          <span className="lvl-3" />
+          <span className="lvl-4" />
         </div>
-        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10 }}>
+        <div className="map-legend__range">
           <span>Lower</span>
           <span>Higher</span>
         </div>
-        <div
-          style={{
-            fontSize: 10,
-            color: 'var(--text-3)',
-            marginTop: 4,
-            lineHeight: 1.35,
-          }}
-        >
+        <div className="map-legend__caption">
           Colored by:{' '}
-          <span style={{ color: 'var(--text-2)' }}>
+          <span className="text-2">
             {segmentFilter && segmentFilter.length > 0
               ? `opportunity within ${segmentFilter.join(', ')}`
               : 'marketable population'}
@@ -1517,27 +1378,19 @@ export function USChoroplethMap({
                 reads "filtered by …" not "shading by …". */}
             {activeSegNames !== null && (
               <div
-                className="map-tip__row"
-                style={{
-                  marginTop: 0,
-                  borderTop: '1px dashed var(--line-1)',
-                  paddingTop: 'var(--sp-2)',
-                  fontSize: 10,
-                  color: 'var(--text-3)',
-                }}
+                className="map-tip__row map-tip__row--compact map-tip__row--muted"
               >
                 <span>Filter</span>
-                <span className="v" style={{ fontSize: 10 }}>
+                <span className="v map-tip__value--small">
                   filtered by {Array.from(activeSegNames).join(', ')}
                 </span>
               </div>
             )}
             <div
-              className="map-tip__row"
-              style={{ marginTop: 0, borderTop: '1px dashed var(--line-1)', paddingTop: 'var(--sp-2)' }}
+              className="map-tip__row map-tip__row--compact"
             >
               <span>Source</span>
-              <span className="v mono" style={{ fontSize: 10 }}>
+              <span className="v mono map-tip__value--small">
                 {hover.sourceHint ?? 'mip.gold'}
               </span>
             </div>

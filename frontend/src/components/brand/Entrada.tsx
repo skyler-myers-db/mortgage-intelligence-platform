@@ -16,7 +16,7 @@
  *
  * Mark geometry (32x22 viewBox = 16:11 ≈ 1.45:1 width:height, palette
  * per brand guide):
- *   row 1 (y=0..4.5):    short CYAN  (#66C5FF) +  long  NAVY (#025080)
+ *   row 1 (y=0..4.5):    short CYAN token + long NAVY token
  *   row 2 (y=8.75..13.25): full-width NAVY
  *   row 3 (y=17.5..22):  long  NAVY              + short CYAN
  * The cyan accents sit diagonally opposite (top-left + bottom-right)
@@ -40,8 +40,8 @@
  *   - long bar 19   (32 − 13)
  */
 
-const NAVY = '#025080';
-const CYAN = '#66C5FF';
+const NAVY = 'var(--entrada-navy)';
+const CYAN = 'var(--entrada-bright)';
 
 // Source viewBox dimensions — kept separate from the rect coordinates
 // so any future aspect-ratio tweak is a one-line change. The displayed
@@ -73,11 +73,10 @@ export function EntradaMark({ size = 24, className, monochrome = false }: Entrad
       viewBox={`0 0 ${VB_W} ${VB_H}`}
       width={renderedW}
       height={size}
-      className={className}
       role="img"
       aria-label="Entrada"
       focusable="false"
-      style={{ display: 'block' }}
+      className={`entrada-mark-svg ${className ?? ''}`.trim()}
     >
       <title>Entrada</title>
       {/* Bar geometry pixel-measured from the brand wordmark PNG.
@@ -118,8 +117,7 @@ export function EntradaWordmark({ height, fontSize, className }: EntradaWordmark
       src="/brand/entrada-wordmark.png"
       alt="Entrada"
       height={finalHeight}
-      className={className}
-      style={{ display: 'block', height: finalHeight, width: 'auto' }}
+      className={`entrada-wordmark-img ${className ?? ''}`.trim()}
     />
   );
 }

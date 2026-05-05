@@ -67,7 +67,6 @@ export function Rail() {
             role="presentation"
             aria-disabled="true"
             title={`Module ${m.id}: ${m.name} — ${m.desc}`}
-            style={{ opacity: 0.45, cursor: 'default' }}
           >
             <Icon name={m.icon} size={18} className="ico" />
             <span className="mod">M{m.id}</span>

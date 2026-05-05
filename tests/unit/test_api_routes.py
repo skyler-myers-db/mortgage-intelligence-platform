@@ -14,6 +14,8 @@ def test_required_routes_exist_and_respond():
         ("get", "/api/portfolio/p1", None, 200),
         ("get", "/api/segments?portfolio_id=p1", None, 200),
         ("get", "/api/leads?portfolio_id=p1&segment=itm", None, 200),
+        ("get", "/api/leads?segment_codes=itm,equity&segment_mode=all", None, 200),
+        ("get", "/api/geo/state-rollups?segment_codes=itm,equity&segment_mode=all", None, 200),
         ("get", "/api/borrowers/B-48291", None, 200),
         ("get", "/api/borrowers/B-48291/evidence", None, 200),
         ("post", "/api/offers/recommend", {"borrower_id": "B-48291"}, 200),
