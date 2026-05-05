@@ -1553,6 +1553,11 @@ class DatabricksGenieRepository:
             return self._degraded(question)
         try:
             result = self._genie.ask(question, conversation_id=conversation_id)
+            if _needs_genie_sql_repair(question, result):
+                result = self._repair_text_only_genie_answer(
+                    question=question,
+                    original=result,
+                )
         except DependencyDownError:
             return self._degraded(question)
         except GenieClientError:
@@ -1561,6 +1566,27 @@ class DatabricksGenieRepository:
             # to 503 + degraded UI. No silent mock fallback.
             raise
         return _adapt_genie_response(question, result, sql_client=self._sql_client)
+
+    def _repair_text_only_genie_answer(
+        self,
+        *,
+        question: str,
+        original: GenieResponse,
+    ) -> GenieResponse:
+        """Retry once when a data question returns narrative without a query.
+
+        This is not an answer-specific override. It asks the Genie space to
+        regenerate any data-bearing response as a governed SELECT attachment so
+        the normal SQL/source/freshness policy can validate it. If the repair
+        turn still lacks proof, the original policy-block path remains in force.
+        """
+        try:
+            repaired = self._genie.ask(_trusted_sql_repair_prompt(question))
+        except (DependencyDownError, GenieClientError):
+            return original
+        if _genie_response_has_query_proof(repaired):
+            return repaired
+        return original
 
     # ------------------------------------------------------------------
     # Internals
@@ -1595,6 +1621,89 @@ class DatabricksGenieRepository:
         )
 
 
+def _merge_trusted_assets(*asset_lists: list[str] | None) -> list[str]:
+    merged: list[str] = []
+    for assets in asset_lists:
+        for raw in assets or []:
+            asset = str(raw).replace("`", "").replace(" ", "").lower()
+            if asset and asset not in merged:
+                merged.append(asset)
+    return merged
+
+
+def _genie_response_has_query_proof(result: GenieResponse) -> bool:
+    assets = _merge_trusted_assets(
+        _extract_asset_refs(result.sql_query),
+        result.trusted_assets,
+    )
+    return bool(result.sql_query and assets)
+
+
+def _likely_data_question(question: str) -> bool:
+    q = re.sub(r"[^a-z0-9\s-]+", " ", question.lower())
+    q = re.sub(r"\s+", " ", q).strip()
+    data_terms = (
+        "how many",
+        "count",
+        "top",
+        "highest",
+        "which",
+        "show",
+        "list",
+        "break down",
+        "broken down",
+        "compare",
+        "average",
+        "avg",
+        "mean",
+        "trend",
+        "map",
+        "where should",
+    )
+    domain_terms = (
+        "borrower",
+        "borrowers",
+        "lead",
+        "leads",
+        "zip",
+        "zips",
+        "state",
+        "segment",
+        "score",
+        "equity",
+        "rate",
+        "offer",
+        "retention",
+        "heloc",
+        "refi",
+        "refinance",
+        "lien",
+        "msa",
+        "cbsa",
+    )
+    return any(term in q for term in data_terms) and any(term in q for term in domain_terms)
+
+
+def _needs_genie_sql_repair(question: str, result: GenieResponse) -> bool:
+    if not _likely_data_question(question):
+        return False
+    if _answer_text_contains_pii(result.answer_text):
+        return False
+    return not _genie_response_has_query_proof(result)
+
+
+def _trusted_sql_repair_prompt(question: str) -> str:
+    return (
+        "Regenerate the following Mortgage Intelligence Platform data question "
+        "as a governed analytics answer. Produce a read-only SQL SELECT query "
+        "attachment over the trusted mip.gold or mip.semantics assets, execute "
+        "it, return the result rows, and cite the source asset. Do not answer "
+        "from narrative alone, do not use PII or protected-class criteria, and "
+        "do not use catalogs outside mip. User question: "
+        f"{question}"
+    )
+
+
 def _adapt_genie_response(
     question: str,
     result: GenieResponse,
@@ -1614,7 +1723,10 @@ def _adapt_genie_response(
     regardless of what the model decided to select. Customers see zero PII
     columns in Ask Genie results even if the Space drifts.
     """
-    trusted_assets = _extract_asset_refs(result.sql_query)
+    trusted_assets = _merge_trusted_assets(
+        _extract_asset_refs(result.sql_query),
+        result.trusted_assets,
+    )
     rows = _redact_genie_rows(result.sql_result_rows)
     trusted_sql = _trusted_sql_policy(result.sql_query, trusted_assets)
     question_hash = _genie_question_hash(question)
@@ -1626,7 +1738,16 @@ def _adapt_genie_response(
     if canonical is not None:
         return canonical
     text_contains_pii = _answer_text_contains_pii(result.answer_text)
-    if text_contains_pii or (result.sql_query and not trusted_sql):
+    lacks_trusted_proof = not result.sql_query or not trusted_assets
+    if text_contains_pii or lacks_trusted_proof or (result.sql_query and not trusted_sql):
+        gaps = _known_data_gaps(question, trusted_assets)
+        blocked_answer = (
+            "Genie did not return trusted SQL and source assets for this answer, "
+            "so the app did not display the result. Ask a scoped question over "
+            "the trusted mortgage lead assets without PII or protected-class criteria."
+        )
+        if gaps:
+            blocked_answer = f"{blocked_answer} Known data gap: {' '.join(gaps)}"
         proof = _build_genie_proof(
             sql_query=None,
             trusted_assets=trusted_assets,
@@ -1635,6 +1756,7 @@ def _adapt_genie_response(
             conversation_id=result.conversation_id,
             message_id=result.message_id,
             elapsed_ms=result.elapsed_ms,
+            reasoning_trace=result.thoughts,
         )
         return GenieMessageResponse(
             conversation_id=result.conversation_id,
@@ -1642,11 +1764,7 @@ def _adapt_genie_response(
             elapsed_ms=result.elapsed_ms,
             question_hash=question_hash,
             question=question,
-            answer=(
-                "Genie returned content outside the trusted Module 0 policy, "
-                "so the app did not display the result. Ask a scoped question "
-                "over the trusted mortgage lead assets without PII or protected-class criteria."
-            ),
+            answer=blocked_answer,
             source="policy_blocked",
             trusted_assets=trusted_assets,
             sql_query=None,
@@ -1664,6 +1782,7 @@ def _adapt_genie_response(
         conversation_id=result.conversation_id,
         message_id=result.message_id,
         elapsed_ms=result.elapsed_ms,
+        reasoning_trace=result.thoughts,
     )
     visualization = _plan_genie_visualization(question, rows)
     actions = _suggest_genie_actions(
@@ -2363,6 +2482,7 @@ def _build_genie_proof(
     conversation_id: str,
     message_id: str,
     elapsed_ms: int,
+    reasoning_trace: list[dict[str, str]] | None = None,
 ) -> GenieProof:
     trusted = _trusted_sql_policy(sql_query, trusted_assets)
     return GenieProof(
@@ -2372,6 +2492,7 @@ def _build_genie_proof(
         row_count=len(rows) if rows else 0,
         filters=_extract_filters(sql_query),
         trusted=trusted,
+        reasoning_trace=reasoning_trace or [],
         known_data_gaps=_known_data_gaps(question, trusted_assets),
         conversation_id=conversation_id,
         message_id=message_id,
@@ -2386,6 +2507,19 @@ def _label_column(rows: list[dict[str, Any]] | None, question: str) -> str | Non
         "state",
         "zip",
         "zip_code",
+        "zipcode",
+        "postal_code",
+        "fips",
+        "fips_5",
+        "county_fips",
+        "county_fips_5",
+        "msa_cbsa_code",
+        "cbsa_code",
+        "census_tract",
+        "tract",
+        "borrower_id",
+        "clip",
+        "id",
         "county",
         "county_name",
         "msa",
@@ -2398,7 +2532,11 @@ def _label_column(rows: list[dict[str, Any]] | None, question: str) -> str | Non
     ]
     q = question.lower()
     if "zip" in q:
-        preferred = ["zip", "zip_code", *preferred]
+        preferred = ["zip", "zip_code", "zipcode", "postal_code", *preferred]
+    if "fips" in q:
+        preferred = ["fips", "fips_5", "county_fips", "county_fips_5", *preferred]
+    if "cbsa" in q or "msa" in q:
+        preferred = ["msa_cbsa_code", "cbsa_code", "msa", "market", *preferred]
     if "state" in q or "map" in q:
         preferred = ["state", *preferred]
     for col in preferred:
@@ -2465,13 +2603,13 @@ def _plan_genie_visualization(
             y=value,
             reason="strategy-oriented prompt with returned rows",
         )
-    if ("map" in q or "geo" in q or "where" in q) and label in {"state", "zip", "zip_code"} and value:
+    if ("map" in q or "geo" in q or "where" in q) and label == "state" and value:
         return GenieVisualizationSpec(
             kind="map",
             title=f"{value} by {label}",
             x=label,
             y=value,
-            reason="geography prompt with state or ZIP column",
+            reason="geography prompt with state column",
         )
     if ("trend" in q or "over time" in q or "by week" in q or "daily" in q) and date_col and value:
         return GenieVisualizationSpec(

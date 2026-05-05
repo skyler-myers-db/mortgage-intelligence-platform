@@ -255,8 +255,10 @@ test.describe('Module 0 — golden path', () => {
     await panel.getByLabel('Ask Genie').fill('How many HELOC candidates?');
     await panel.getByRole('button', { name: /Ask/i }).click();
 
-    // Deterministic fallback surfaces metric_value = "4,108".
-    await expect(panel.getByText('4,108').first()).toBeVisible({ timeout: 5_000 });
+    // Permit-specific HELOC counts are blocked until Cotality shares the
+    // Building Permits feed; fallback and live paths must not fabricate
+    // positive permit-derived borrower volume.
+    await expect(panel.getByText(/Building Permits share lands|pending permit/i).first()).toBeVisible({ timeout: 5_000 });
     await expect(panel.locator('.evidence-chip').first()).toBeVisible();
 
     const followUp = panel.locator('.genie-answer__followups .filter').first();

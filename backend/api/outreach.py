@@ -28,7 +28,14 @@ from backend.schemas.offer import (
     OutreachRejectRequest,
     OutreachRejectResponse,
 )
-from backend.services.audit_store import AuditStore, get_audit_store, resolve_actor
+from backend.services.audit_store import (
+    AuditMetadataViolation,
+    AuditPIIError,
+    AuditStore,
+    get_audit_store,
+    resolve_actor,
+    write_audit_event_in_transaction,
+)
 from backend.services.error_sanitizer import safe_dependency_detail
 from backend.services.job_trigger import enqueue_lifecycle_trigger
 from backend.services.lakebase import LakebaseClient, LakebaseError, get_lakebase_client
@@ -79,6 +86,19 @@ INSERT INTO mip_app.approvals (
     %(actor_email)s, %(rationale)s, %(request_id)s
 )
 ON CONFLICT (request_id) WHERE request_id IS NOT NULL DO NOTHING
+"""
+
+
+_APPROVAL_INSERT_RETURNING = """
+INSERT INTO mip_app.approvals (
+    approval_id, borrower_id, offer_code, action,
+    actor_email, rationale, request_id
+) VALUES (
+    %(approval_id)s, %(borrower_id)s, %(offer_code)s, %(action)s,
+    %(actor_email)s, %(rationale)s, %(request_id)s
+)
+ON CONFLICT (request_id) WHERE request_id IS NOT NULL DO NOTHING
+RETURNING approval_id
 """
 
 
@@ -157,6 +177,73 @@ def _lookup_existing_approval(
         return None
     approval_id = row.get("approval_id")
     return str(approval_id) if approval_id else None
+
+
+def _supports_atomic_outreach_write(lakebase: LakebaseClient) -> bool:
+    return getattr(lakebase, "_supports_atomic_transactions", False) is True and callable(
+        getattr(lakebase, "transaction", None)
+    )
+
+
+def _commit_outreach_decision_atomic(
+    lakebase: LakebaseClient,
+    *,
+    approval_id: str,
+    actor: str,
+    action: str,
+    borrower_id: str,
+    offer_code: str | None,
+    rationale: str | None,
+    request_id: str,
+    audit_payload: dict[str, Any],
+    evidence_ids: list[str],
+    event_action: str,
+    event_type: str,
+    audit_request_id: str | None,
+) -> tuple[str, str]:
+    """Write approval + audit in one Lakebase transaction."""
+    try:
+        with lakebase.transaction() as conn:
+            row = conn.execute(
+                _APPROVAL_INSERT_RETURNING,
+                {
+                    "approval_id": approval_id,
+                    "borrower_id": borrower_id,
+                    "offer_code": offer_code,
+                    "action": action,
+                    "actor_email": actor,
+                    "rationale": rationale,
+                    "request_id": request_id,
+                },
+            ).fetchone()
+            if row is None:
+                existing = conn.execute(
+                    _APPROVAL_LOOKUP_BY_REQUEST_ID, {"request_id": request_id}
+                ).fetchone()
+                if existing and existing.get("approval_id"):
+                    return str(existing["approval_id"]), ""
+                raise LakebaseError("Lakebase approval insert returned no row")
+
+            row_approval_id = str(row.get("approval_id") or approval_id)
+            payload_for_audit = {**audit_payload, "approval_id": row_approval_id}
+            event = write_audit_event_in_transaction(
+                conn,
+                actor=actor,
+                action=event_action,
+                entity_type="approval",
+                entity_id=row_approval_id,
+                payload_json=payload_for_audit,
+                evidence_ids=evidence_ids,
+                event_type=event_type,
+                request_id=audit_request_id,
+            )
+            return row_approval_id, event.event_id
+    except (AuditMetadataViolation, AuditPIIError):
+        raise
+    except LakebaseError:
+        raise
+    except Exception as exc:  # noqa: BLE001 -- normalize raw psycopg/fake-client errors
+        raise LakebaseError("Lakebase atomic outreach decision failed") from exc
 
 
 @router.post("/draft", response_model=OutreachDraft)
@@ -247,62 +334,61 @@ def approve_outreach(
     # Postgres's UUID cast; truncating it to 12 hex chars produced
     # `invalid input syntax for type uuid: "apr-..."` on INSERT.
     approval_id = str(uuid4())
-    # Governance §4: approvals live in both the ``approvals`` table
-    # (durable decision record, queryable by campaign) AND the
-    # ``action_audit`` table (append-only ledger). We write approvals
-    # first so the audit row's ``entity_id`` (the approval_id) is a
-    # valid FK-equivalent pointer.
+    audit_payload: dict[str, Any] = {
+        "approval_id": approval_id,
+        "offer_code": payload.offer_code,
+        "borrower_id": payload.borrower_id,
+    }
+    if payload.request_id:
+        # Persist the idempotency key in the audit metadata too --
+        # retrospective auditors can correlate "same client request,
+        # same approval_id" across the decision ledger and audit log.
+        audit_payload["request_id"] = payload.request_id
+    if payload.draft_body:
+        # Defence-in-depth: scrub obvious PII markers before the final
+        # approver-visible draft lands in the append-only audit ledger.
+        audit_payload["draft_body"] = scrub_free_text(payload.draft_body)
     try:
-        lakebase.execute(
-            _APPROVAL_INSERT,
-            {
-                "approval_id": approval_id,
-                "borrower_id": payload.borrower_id,
-                "offer_code": payload.offer_code,
-                "action": "approve",
-                "actor_email": actor,
-                "rationale": None,
-                "request_id": effective_request_id,
-            },
-        )
-        # Governance §4: the audit metadata mirrors what the approver
-        # saw + what they committed to. ``draft_body`` (when supplied)
-        # lets compliance reconstruct the exact outreach copy that was
-        # released; we keep it out of the ``approvals`` table to avoid
-        # bloating the decision ledger and because action_audit is the
-        # append-only surface governance queries against.
-        audit_payload: dict[str, Any] = {
-            "approval_id": approval_id,
-            "offer_code": payload.offer_code,
-            "borrower_id": payload.borrower_id,
-        }
-        if payload.request_id:
-            # Persist the idempotency key in the audit metadata too --
-            # retrospective auditors can then correlate "same client
-            # request, same approval_id" across the decision ledger and
-            # the append-only audit log. Note: when ``payload.request_id``
-            # is None we still wrote the server-derived fallback to the
-            # approvals row (R6-19), but we don't expose that derived key
-            # in the audit metadata -- it's an implementation detail, and
-            # the audit row already has the approval_id pointer.
-            audit_payload["request_id"] = payload.request_id
-        if payload.draft_body:
-            # Defence-in-depth: scrub obvious PII markers (SSN / phone / email /
-            # street address) before the free-text body lands in the append-only
-            # audit ledger. Governance posture says approvers shouldn't paste PII
-            # into the draft in the first place, but an accidental paste
-            # shouldn't become a durable PII leak.
-            audit_payload["draft_body"] = scrub_free_text(payload.draft_body)
-        event = audit.write(
-            actor=actor,
-            action="outreach.approve",
-            entity_type="approval",
-            entity_id=approval_id,
-            payload_json=audit_payload,
-            evidence_ids=payload.evidence_ids,
-            event_type="APPROVE",
-            request_id=payload.request_id,
-        )
+        if _supports_atomic_outreach_write(lakebase):
+            approval_id, audit_event_id = _commit_outreach_decision_atomic(
+                lakebase,
+                approval_id=approval_id,
+                actor=actor,
+                action="approve",
+                borrower_id=payload.borrower_id,
+                offer_code=payload.offer_code,
+                rationale=None,
+                request_id=effective_request_id,
+                audit_payload=audit_payload,
+                evidence_ids=payload.evidence_ids,
+                event_action="outreach.approve",
+                event_type="APPROVE",
+                audit_request_id=payload.request_id,
+            )
+        else:
+            lakebase.execute(
+                _APPROVAL_INSERT,
+                {
+                    "approval_id": approval_id,
+                    "borrower_id": payload.borrower_id,
+                    "offer_code": payload.offer_code,
+                    "action": "approve",
+                    "actor_email": actor,
+                    "rationale": None,
+                    "request_id": effective_request_id,
+                },
+            )
+            event = audit.write(
+                actor=actor,
+                action="outreach.approve",
+                entity_type="approval",
+                entity_id=approval_id,
+                payload_json=audit_payload,
+                evidence_ids=payload.evidence_ids,
+                event_type="APPROVE",
+                request_id=payload.request_id,
+            )
+            audit_event_id = event.event_id
     except LakebaseError as exc:
         # No silent fallback. The UI surfaces 503 as a retry banner;
         # the operator's next move is to check Lakebase status.
@@ -321,11 +407,12 @@ def approve_outreach(
     # between response commit and task execution drops the call
     # silently (BackgroundTasks has no drain) -- the enqueue log is
     # the breadcrumb and the daily 04:00 cron is the safety net.
-    enqueue_lifecycle_trigger(background, reason="approval")
+    if audit_event_id:
+        enqueue_lifecycle_trigger(background, reason="approval")
     return OutreachApproveResponse(
         approved=True,
         approval_id=approval_id,
-        audit_event_id=event.event_id,
+        audit_event_id=audit_event_id,
     )
 
 
@@ -381,38 +468,57 @@ def reject_outreach(
             audit_event_id="",
         )
     approval_id = str(uuid4())
+    safe_rationale = scrub_free_text(payload.rationale) if payload.rationale else None
+    audit_payload: dict[str, Any] = {
+        "approval_id": approval_id,
+        "offer_code": payload.offer_code,
+        "borrower_id": payload.borrower_id,
+    }
+    if payload.request_id:
+        audit_payload["request_id"] = payload.request_id
+    if safe_rationale:
+        audit_payload["rationale"] = safe_rationale
     try:
-        lakebase.execute(
-            _APPROVAL_INSERT,
-            {
-                "approval_id": approval_id,
-                "borrower_id": payload.borrower_id,
-                "offer_code": payload.offer_code,
-                "action": "reject",
-                "actor_email": actor,
-                "rationale": payload.rationale,
-                "request_id": effective_request_id,
-            },
-        )
-        audit_payload: dict[str, Any] = {
-            "approval_id": approval_id,
-            "offer_code": payload.offer_code,
-            "borrower_id": payload.borrower_id,
-        }
-        if payload.request_id:
-            audit_payload["request_id"] = payload.request_id
-        if payload.rationale:
-            audit_payload["rationale"] = payload.rationale
-        event = audit.write(
-            actor=actor,
-            action="outreach.reject",
-            entity_type="approval",
-            entity_id=approval_id,
-            payload_json=audit_payload,
-            evidence_ids=payload.evidence_ids,
-            event_type="OUTREACH_REJECT",
-            request_id=payload.request_id,
-        )
+        if _supports_atomic_outreach_write(lakebase):
+            approval_id, audit_event_id = _commit_outreach_decision_atomic(
+                lakebase,
+                approval_id=approval_id,
+                actor=actor,
+                action="reject",
+                borrower_id=payload.borrower_id,
+                offer_code=payload.offer_code,
+                rationale=safe_rationale,
+                request_id=effective_request_id,
+                audit_payload=audit_payload,
+                evidence_ids=payload.evidence_ids,
+                event_action="outreach.reject",
+                event_type="OUTREACH_REJECT",
+                audit_request_id=payload.request_id,
+            )
+        else:
+            lakebase.execute(
+                _APPROVAL_INSERT,
+                {
+                    "approval_id": approval_id,
+                    "borrower_id": payload.borrower_id,
+                    "offer_code": payload.offer_code,
+                    "action": "reject",
+                    "actor_email": actor,
+                    "rationale": safe_rationale,
+                    "request_id": effective_request_id,
+                },
+            )
+            event = audit.write(
+                actor=actor,
+                action="outreach.reject",
+                entity_type="approval",
+                entity_id=approval_id,
+                payload_json=audit_payload,
+                evidence_ids=payload.evidence_ids,
+                event_type="OUTREACH_REJECT",
+                request_id=payload.request_id,
+            )
+            audit_event_id = event.event_id
     except LakebaseError as exc:
         raise HTTPException(
             status_code=503, detail=safe_dependency_detail("lakebase")
@@ -420,9 +526,10 @@ def reject_outreach(
     # Same debounced fire-and-forget sync the approve path uses -- the
     # funnel / lifecycle views need to reflect rejected-borrower counts
     # without waiting on the daily cron.
-    enqueue_lifecycle_trigger(background, reason="rejection")
+    if audit_event_id:
+        enqueue_lifecycle_trigger(background, reason="rejection")
     return OutreachRejectResponse(
         rejected=True,
         approval_id=approval_id,
-        audit_event_id=event.event_id,
+        audit_event_id=audit_event_id,
     )

@@ -67,8 +67,8 @@ _SAFE_CORPUS_AUSTIN_ROWS: list[dict[str, Any]] = [
 
 _SAFE_CORPUS_SEGMENT_ROWS: dict[str, dict[str, Any]] = {
     "itm":       {"segment": "In the Money",              "count": 12840, "avg_score": 82, "delta": "+18%"},
-    "listed":    {"segment": "Listed for Sale",           "count":  2614, "avg_score": 74, "delta":  "+9%"},
-    "permit":    {"segment": "Permit Activity",           "count":  4108, "avg_score": 71, "delta": "+11%"},
+    "listed":    {"segment": "Listed for Sale",           "count":     0, "avg_score": 0, "delta": "pending"},
+    "permit":    {"segment": "Permit Activity",           "count":     0, "avg_score": 0, "delta": "pending"},
     "investor":  {"segment": "Investor / Multi-Property", "count":  1892, "avg_score": 79, "delta":  "+6%"},
     "equity":    {"segment": "Home Equity Candidate",     "count":  6320, "avg_score": 76, "delta": "+14%"},
     "retention": {"segment": "Retention Risk",            "count":  3471, "avg_score": 88, "delta":  "+4%"},
@@ -82,6 +82,11 @@ class GenieDataFreshness(BaseModel):
     note: str | None = None
 
 
+class GenieReasoningStep(BaseModel):
+    kind: str
+    content: str
+
+
 class GenieProof(BaseModel):
     sql_query: str | None = None
     source_assets: list[str] = Field(default_factory=list)
@@ -89,6 +94,7 @@ class GenieProof(BaseModel):
     row_count: int | None = None
     filters: list[str] = Field(default_factory=list)
     trusted: bool = False
+    reasoning_trace: list[GenieReasoningStep] = Field(default_factory=list)
     known_data_gaps: list[str] = Field(default_factory=list)
     conversation_id: str | None = None
     message_id: str | None = None
@@ -244,15 +250,16 @@ def _answers() -> dict[str, GenieMessageResponse]:
         "heloc": GenieMessageResponse(
             conversation_id="fallback-conv", question="",
             answer=(
-                "4,108 properties show a recent permit trigger paired with HELOC-qualifying equity. "
-                "Average estimated equity is $228K; top ZIPs are 60614 Chicago and 78704 Austin."
+                "Permit-driven HELOC candidate counts are blocked at 0 until the Cotality Building "
+                "Permits share lands. Home-equity and refi-plus-HELOC candidates can still be sized "
+                "from the trusted borrower_360 equity and lien-rate fields."
             ),
             source="borrower_opportunity_metric_view",
             trusted_assets=[
                 qualify("gold", "borrower_360"),
                 qualify("gold", "evidence_events"),
             ],
-            metric_value="4,108",
+            metric_value="0",
             follow_up_questions=[
                 "What if we raised the HELOC equity floor to 50%?",
                 "How many borrowers qualify for refi + HELOC cross-sell?",
@@ -319,12 +326,10 @@ def _answers() -> dict[str, GenieMessageResponse]:
         ),
         "heloc_by_state": GenieMessageResponse(
             conversation_id="fallback-conv", question="",
-            # Slice 9: per-state table re-scoped to the 6-state Delta Share
-            # footprint (IL / CA / FL / TX / WA / CO). California still leads.
             answer=(
-                "The biggest HELOC opportunities by state: CA (1,185 permit+equity borrowers), "
-                "IL (924), TX (812), FL (671), WA (487), CO (412). California leads both on count "
-                "and average equity ($312K)."
+                "Permit-driven HELOC-by-state counts are blocked at 0 until the Cotality Building "
+                "Permits share lands. Use the Home Equity Candidate or refi-plus-HELOC segment for "
+                "live borrower sizing today."
             ),
             source="borrower_opportunity_metric_view",
             trusted_assets=[
@@ -333,12 +338,12 @@ def _answers() -> dict[str, GenieMessageResponse]:
                 qualify("semantics", "borrower_opportunity_metric_view"),
             ],
             table_rows=[
-                {"state": "CA", "permit_equity_borrowers": 1185, "avg_equity": "$312K"},
-                {"state": "IL", "permit_equity_borrowers":  924, "avg_equity": "$238K"},
-                {"state": "TX", "permit_equity_borrowers":  812, "avg_equity": "$244K"},
-                {"state": "FL", "permit_equity_borrowers":  671, "avg_equity": "$221K"},
-                {"state": "WA", "permit_equity_borrowers":  487, "avg_equity": "$296K"},
-                {"state": "CO", "permit_equity_borrowers":  412, "avg_equity": "$258K"},
+                {"state": "CA", "permit_equity_borrowers": 0, "status": "pending Cotality Permits share"},
+                {"state": "IL", "permit_equity_borrowers": 0, "status": "pending Cotality Permits share"},
+                {"state": "TX", "permit_equity_borrowers": 0, "status": "pending Cotality Permits share"},
+                {"state": "FL", "permit_equity_borrowers": 0, "status": "pending Cotality Permits share"},
+                {"state": "WA", "permit_equity_borrowers": 0, "status": "pending Cotality Permits share"},
+                {"state": "CO", "permit_equity_borrowers": 0, "status": "pending Cotality Permits share"},
             ],
             follow_up_questions=[
                 "What if we raised the HELOC equity floor to 50%?",
@@ -351,22 +356,17 @@ def _answers() -> dict[str, GenieMessageResponse]:
         "purchase": GenieMessageResponse(
             conversation_id="fallback-conv", question="",
             answer=(
-                "2,614 borrowers fall into the Listed for Sale segment — purchase-mortgage "
-                "candidates. The top three in the ranked sample are Lisa Thompson (Chicago, "
-                "score 82), Alicia Greenberg (Austin, 75), and Wei Zhang (San Francisco, 75 — "
-                "also an existing customer, so retention stays in-house on the next home)."
+                "Listed-for-sale candidate counts are blocked at 0 until the Cotality MLS share "
+                "lands. The purchase-offer rule remains present, but live Module 0 borrower rows "
+                "must not show MLS intent until that source is available."
             ),
             source="segment_performance_metric_view",
             trusted_assets=[
                 qualify("gold", "segment_population"),
                 qualify("gold", "borrower_360"),
             ],
-            metric_value="2,614",
-            table_rows=[
-                {"borrower_id": "B-48295", "name": "Lisa Thompson", "geo": "Chicago, IL", "score": 82},
-                {"borrower_id": "B-60284", "name": "Alicia Greenberg", "geo": "Austin, TX", "score": 75},
-                {"borrower_id": "B-60517", "name": "Wei Zhang", "geo": "San Francisco, CA", "score": 75},
-            ],
+            metric_value="0",
+            table_rows=[{"segment": "Listed for Sale", "borrowers": 0, "status": "pending Cotality MLS share"}],
             follow_up_questions=[
                 "How many borrowers qualify for refi + HELOC cross-sell?",
                 "Which segment converts best?",
@@ -401,7 +401,8 @@ def _answers() -> dict[str, GenieMessageResponse]:
             answer=(
                 "Retention Risk converts best at ~14.8% (avg score 88), driven by existing "
                 "relationships. In the Money follows at ~11.2% (avg 82), Home Equity Candidate at "
-                "~9.6% (avg 76). Listed for Sale and Permit Activity trail at ~6–7%."
+                "~9.6% (avg 76). Listed for Sale and Permit Activity remain blocked at 0 until "
+                "the Cotality MLS and Building Permits shares land."
             ),
             source="segment_performance_metric_view",
             trusted_assets=[
@@ -424,9 +425,9 @@ def _answers() -> dict[str, GenieMessageResponse]:
         "listed_vs_permit": GenieMessageResponse(
             conversation_id="fallback-conv", question="",
             answer=(
-                "Listed for Sale (2,614 borrowers, avg score 74, +9% QoQ) runs just above Permit "
-                "Activity (4,108 borrowers, avg score 71, +11%). Permit has more volume; Listed "
-                "has the higher avg score because every row has a confirmed intent signal."
+                "Listed for Sale and Permit Activity are both blocked at 0 today. The Cotality MLS "
+                "and Building Permits shares are contracted but not landed, so the app does not "
+                "rank, chart, or action borrowers from those overlays yet."
             ),
             source="segment_performance_metric_view",
             trusted_assets=[
@@ -516,16 +517,16 @@ def _answers() -> dict[str, GenieMessageResponse]:
         "permit_lift": GenieMessageResponse(
             conversation_id="fallback-conv", question="",
             answer=(
-                "Adding Cotality Permits lifts the Permit Activity segment's avg score from 62 to "
-                "71 (+14%) and surfaces 4,108 HELOC/cash-out candidates that the rate-spread-only "
-                "lane would miss. Estimated incremental funded volume: $112M / quarter."
+                "Permit lift cannot be measured until the Cotality Building Permits share lands. "
+                "The current governed answer is 0 permit-sourced borrowers, with the source marked "
+                "pending rather than estimated."
             ),
             source="segment_performance_metric_view",
             trusted_assets=[
                 qualify("gold", "evidence_events"),
                 qualify("semantics", "segment_performance_metric_view"),
             ],
-            metric_value="+14%",
+            metric_value="pending",
             follow_up_questions=[
                 "Where is the biggest HELOC opportunity by state?",
                 "Which segment converts best?",
@@ -537,16 +538,16 @@ def _answers() -> dict[str, GenieMessageResponse]:
         "heloc_floor_50": GenieMessageResponse(
             conversation_id="fallback-conv", question="",
             answer=(
-                "Raising the HELOC equity floor from 35% to 50% tightens the Permit Activity "
-                "segment from 4,108 to ~1,640 borrowers (-60%), lifts avg score from 71 to 78, and "
-                "cuts estimated funded volume by ~$46M/quarter. It's a precision/recall trade."
+                "The 50% HELOC floor scenario can be run on live equity-based cohorts, but the "
+                "permit-specific lane remains blocked at 0 until Cotality Building Permits lands. "
+                "No permit lift or funded-volume estimate is displayed."
             ),
             source="borrower_opportunity_metric_view",
             trusted_assets=[
                 qualify("gold", "borrower_360"),
                 qualify("semantics", "borrower_opportunity_metric_view"),
             ],
-            metric_value="~1,640",
+            metric_value="0",
             follow_up_questions=[
                 "How many borrowers qualify for refi + HELOC cross-sell?",
                 "Which segment converts best?",

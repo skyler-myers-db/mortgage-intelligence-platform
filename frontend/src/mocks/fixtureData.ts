@@ -14,8 +14,8 @@ export const mockPortfolio: PortfolioPreview = {
 
 export const mockSegments: SegmentSummary[] = [
   { code: 'itm', name: 'In the Money', count: 12840, delta: '+18%', avg_score: 82, description: 'Lien rate ≥ 75 bps above par and equity ≥ 15%.', color: 'var(--seg-itm)' },
-  { code: 'listed', name: 'Listed for Sale', count: 2614, delta: '+9%', avg_score: 74, description: 'Active listing, likely purchase mortgage opportunity.', color: 'var(--seg-listed)' },
-  { code: 'permit', name: 'Permit Activity', count: 4108, delta: '+11%', avg_score: 71, description: 'Recent high-value permits indicate HELOC/cash-out demand.', color: 'var(--seg-permit)' },
+  { code: 'listed', name: 'Listed for Sale', count: 0, delta: 'pending', avg_score: 0, description: 'Pending Cotality MLS share; blocked false until landed.', color: 'var(--seg-listed)' },
+  { code: 'permit', name: 'Permit Activity', count: 0, delta: 'pending', avg_score: 0, description: 'Pending Cotality Building Permits share; blocked false until landed.', color: 'var(--seg-permit)' },
   { code: 'investor', name: 'Investor / Multi-Property', count: 1892, delta: '+6%', avg_score: 79, description: 'Owner Link shows 2+ properties or repeat behavior.', color: 'var(--seg-investor)' },
   { code: 'equity', name: 'Home Equity Candidate', count: 6320, delta: '+14%', avg_score: 76, description: 'Strong equity and prior cash-out/HELOC propensity.', color: 'var(--seg-equity)' },
   { code: 'retention', name: 'Retention Risk', count: 3471, delta: '+4%', avg_score: 88, description: 'Current customer showing refi/listing/competitor signals.', color: 'var(--seg-retention)' }
@@ -134,16 +134,16 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
   permit: {
     title: 'Permit signal',
     short: 'permits.building',
-    description: 'Cotality Building Permits records tagged to CLIP; flag triggers on permit value ≥ $25k in last 180 days.',
+    description: 'Cotality Building Permits share is pending; permit signals are blocked false until the feed lands.',
     lineage: [
-      { layer: 'SOURCE',   name: 'cotality.permits.building', meta: '4.8M active records' },
-      { layer: 'JOIN',     name: 'join.permit_to_clip',       meta: 'via address canonicalization' },
-      { layer: 'SEMANTIC', name: 'metrics.permit_signal',     meta: 'UC metric view' },
+      { layer: 'SOURCE',   name: 'cotality.permits.building', meta: 'Delta Share · pending' },
+      { layer: 'JOIN',     name: 'join.permit_to_clip',       meta: 'pending feed arrival' },
+      { layer: 'SEMANTIC', name: 'metrics.permit_signal',     meta: 'blocked false until landed' },
     ],
     signals: [
-      { label: 'Permit type',   source: 'permits.type',     value: 'Kitchen remodel' },
-      { label: 'Filed value',   source: 'permits.value',    value: '$48,000' },
-      { label: 'Filed',         source: 'permits.filed_at', value: '2026-03-17' },
+      { label: 'Readiness',     source: 'admin.sources',    value: 'roadmap' },
+      { label: 'has_permit',    source: 'borrower_360',     value: 'blocked false' },
+      { label: 'Permit rows',   source: 'permits.building', value: 'pending share' },
     ],
     updatedAt: '2026-04-20 06:12 UTC',
   },

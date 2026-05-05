@@ -343,7 +343,7 @@ export default function SegmentIntelligence() {
           options={[...OWNER_LINK_OPTIONS]}
           onChange={(v) => setChipFilters((f) => ({ ...f, ownerLink: v }))}
         />
-        <div>
+        <div className="filter-row__group">
           <FilterSelect
             label="PURCHASE INTENT"
             value={chipFilters.purchase}

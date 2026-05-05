@@ -217,6 +217,7 @@ export interface GenieProof {
   row_count?: number | null;
   filters?: string[];
   trusted?: boolean;
+  reasoning_trace?: Array<{ kind: string; content: string }>;
   known_data_gaps?: string[];
   conversation_id?: string | null;
   message_id?: string | null;

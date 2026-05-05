@@ -450,6 +450,114 @@ LIMIT %(limit)s
 """
 
 
+def _build_insert_params(
+    *,
+    actor: str,
+    action: str,
+    entity_type: str,
+    entity_id: str,
+    payload_json: dict[str, Any] | None = None,
+    evidence_ids: list[str] | None = None,
+    event_type: str | None = None,
+    subject_clip: str | None = None,
+    subject_segment: str | None = None,
+    request_id: str | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    payload = payload_json or {}
+    metadata = {"action": action, **payload}
+    _assert_no_pii(metadata)
+    _assert_allowlisted(metadata)
+    params: dict[str, Any] = {
+        "event_type": _coerce_event_type(event_type, action),
+        "actor_email": actor,
+        "entity_type": entity_type,
+        "entity_id": entity_id,
+        "subject_clip": subject_clip,
+        "subject_segment": subject_segment,
+        "request_id": request_id,
+        "evidence_ids": list(evidence_ids or []),
+        "metadata": json.dumps(metadata),
+    }
+    return payload, params
+
+
+def _audit_event_from_row(
+    row: dict[str, Any],
+    *,
+    actor: str,
+    action: str,
+    entity_type: str,
+    entity_id: str,
+    payload_json: dict[str, Any],
+    evidence_ids: list[str] | None = None,
+    event_type: str | None = None,
+    subject_clip: str | None = None,
+    subject_segment: str | None = None,
+    request_id: str | None = None,
+) -> AuditEvent:
+    event_at = row["event_at"]
+    created_at = event_at.isoformat() if hasattr(event_at, "isoformat") else str(event_at)
+    return AuditEvent(
+        event_id=str(row["audit_id"]),
+        actor=actor,
+        action=action,
+        entity_type=entity_type,
+        entity_id=entity_id,
+        payload_json=payload_json,
+        evidence_ids=evidence_ids or [],
+        created_at=created_at,
+        event_type=_coerce_event_type(event_type, action),
+        subject_clip=subject_clip,
+        subject_segment=subject_segment,
+        request_id=request_id,
+    )
+
+
+def write_audit_event_in_transaction(
+    conn: Any,
+    *,
+    actor: str,
+    action: str,
+    entity_type: str,
+    entity_id: str,
+    payload_json: dict[str, Any] | None = None,
+    evidence_ids: list[str] | None = None,
+    event_type: str | None = None,
+    subject_clip: str | None = None,
+    subject_segment: str | None = None,
+    request_id: str | None = None,
+) -> AuditEvent:
+    """Insert one audit row using an already-open Lakebase transaction."""
+    payload, params = _build_insert_params(
+        actor=actor,
+        action=action,
+        entity_type=entity_type,
+        entity_id=entity_id,
+        payload_json=payload_json,
+        evidence_ids=evidence_ids,
+        event_type=event_type,
+        subject_clip=subject_clip,
+        subject_segment=subject_segment,
+        request_id=request_id,
+    )
+    row = conn.execute(_INSERT_SQL, params).fetchone()
+    if row is None:
+        raise RuntimeError("Lakebase INSERT returned no row")
+    return _audit_event_from_row(
+        dict(row),
+        actor=actor,
+        action=action,
+        entity_type=entity_type,
+        entity_id=entity_id,
+        payload_json=payload,
+        evidence_ids=evidence_ids,
+        event_type=event_type,
+        subject_clip=subject_clip,
+        subject_segment=subject_segment,
+        request_id=request_id,
+    )
+
+
 class LakebaseAuditStore:
     """Audit store backed by the Lakebase ``mip_app.action_audit`` table.
 
@@ -477,49 +585,31 @@ class LakebaseAuditStore:
         subject_segment: str | None = None,
         request_id: str | None = None,
     ) -> AuditEvent:
-        payload = payload_json or {}
-        # Governance §4: metadata JSONB gets the "action" verb + any
-        # caller-supplied payload, but we never smuggle PII in here --
-        # routers that pass ``payload_json`` are expected to have
-        # already stripped borrower names / addresses. Callers who pass
-        # a score + thresholds bundle are safe.
-        metadata = {"action": action, **payload}
-        # Slice-6 denylist: block at write. Raises ``AuditPIIError``
-        # which the router surfaces as 500 in dev; production routers
-        # never pass denylist keys, so hitting this branch means a
-        # regression a reviewer should see immediately.
-        _assert_no_pii(metadata)
-        # R6-20 allowlist: second line of defence on top of the
-        # denylist. Unknown keys raise ``AuditMetadataViolation`` so a
-        # future router change that plumbs an un-reviewed field into
-        # ``payload_json`` fails in tests before it can poison the
-        # append-only ledger.
-        _assert_allowlisted(metadata)
-        params: dict[str, Any] = {
-            "event_type": _coerce_event_type(event_type, action),
-            "actor_email": actor,
-            "entity_type": entity_type,
-            "entity_id": entity_id,
-            "subject_clip": subject_clip,
-            "subject_segment": subject_segment,
-            "request_id": request_id,
-            "evidence_ids": list(evidence_ids or []),
-            "metadata": json.dumps(metadata),
-        }
+        payload, params = _build_insert_params(
+            actor=actor,
+            action=action,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            payload_json=payload_json,
+            evidence_ids=evidence_ids,
+            event_type=event_type,
+            subject_clip=subject_clip,
+            subject_segment=subject_segment,
+            request_id=request_id,
+        )
         row = self._client.fetchone(_INSERT_SQL, params)
         if row is None:
             # Should be impossible with RETURNING, but guard anyway --
             # the Protocol promises an AuditEvent, not None.
             raise RuntimeError("Lakebase INSERT returned no row")
-        return AuditEvent(
-            event_id=str(row["audit_id"]),
+        return _audit_event_from_row(
+            row,
             actor=actor,
             action=action,
             entity_type=entity_type,
             entity_id=entity_id,
             payload_json=payload,
             evidence_ids=list(evidence_ids or []),
-            created_at=row["event_at"].isoformat(),
             event_type=params["event_type"],
             subject_clip=subject_clip,
             subject_segment=subject_segment,

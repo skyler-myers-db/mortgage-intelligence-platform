@@ -5,6 +5,7 @@ import type { GenieActionSuggestion, GenieAnswer as GenieAnswerShape } from '../
 import { Icon } from '../Icon';
 import { Button, Chip, EvidenceChip } from '../Primitives';
 import { GenieAnswer } from './GenieAnswer';
+import { GenieProgress } from './GenieProgress';
 import { DRAWER_SOURCES } from '../../lib/drawerSources';
 
 // 2026-05-04 (FIX Δ2): persisted size for the floating panel. The
@@ -185,10 +186,10 @@ function drawerForAsset(asset: string) {
 
 /**
  * Floating Genie chat panel — `.genie` BEM from the prototype. Fixed
- * bottom-right, reachable from every page. Falls back to api.genie() which
- * already has a deterministic fallback wired. A floating `.genie__fab` is
- * shown when the panel is closed (bottom-right sparkle) so one click anywhere
- * in the app reaches Genie.
+ * bottom-right, reachable from every page. The API path enforces governed
+ * SQL/source proof before displaying data-bearing answers. A floating
+ * `.genie__fab` is shown when the panel is closed (bottom-right sparkle)
+ * so one click anywhere in the app reaches Genie.
  *
  * The AI message shape now holds the full GenieAnswer payload so
  * metric_value / table_rows / follow_up_questions all render in the bubble
@@ -771,7 +772,7 @@ export function GenieChat() {
           )}
           {typing && (
             <div className="genie__msg genie__msg--ai">
-              <div className="bubble"><div className="typing-dots"><span/><span/><span/></div></div>
+              <div className="bubble"><GenieProgress dense /></div>
             </div>
           )}
           {msgs.length <= 1 && (

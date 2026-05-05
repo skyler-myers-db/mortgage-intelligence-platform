@@ -1,18 +1,29 @@
 {
-  "stamp": "2026-05-05T14-31-05Z",
+  "stamp": "2026-05-05T17-52-11Z",
   "base": "https://mip-app-2543889327043640.aws.databricksapps.com",
   "overall_score": 100.0,
-  "passed": 14,
-  "total": 14,
+  "passed": 15,
+  "total": 15,
   "questions": [
     {
       "id": "top_borrowers_by_state",
       "category": "top-N",
       "score": 100.0,
       "passed": true,
-      "latency_s": 12.74,
+      "latency_s": 12.12,
+      "checks": {
+        "citations": true,
+        "forbidden_terms": true,
+        "required_terms": true,
+        "rows": true,
+        "numeric": true,
+        "trusted_assets": true,
+        "sql": true,
+        "freshness": true,
+        "canonical_sql": true
+      },
       "notes": [
-        "latency 12.7s > target 8.0s"
+        "latency 12.1s > target 8.0s"
       ]
     },
     {
@@ -20,9 +31,41 @@
       "category": "top-N",
       "score": 100.0,
       "passed": true,
-      "latency_s": 14.77,
+      "latency_s": 12.22,
+      "checks": {
+        "citations": true,
+        "forbidden_terms": true,
+        "required_terms": true,
+        "rows": true,
+        "numeric": true,
+        "trusted_assets": true,
+        "sql": true,
+        "freshness": true,
+        "canonical_sql": true
+      },
       "notes": [
-        "latency 14.8s > target 8.0s"
+        "latency 12.2s > target 8.0s"
+      ]
+    },
+    {
+      "id": "zip_identifier_not_measure",
+      "category": "chart-planner",
+      "score": 100.0,
+      "passed": true,
+      "latency_s": 10.15,
+      "checks": {
+        "citations": true,
+        "forbidden_terms": true,
+        "required_terms": true,
+        "rows": true,
+        "numeric": true,
+        "trusted_assets": true,
+        "sql": true,
+        "freshness": true,
+        "canonical_sql": true
+      },
+      "notes": [
+        "latency 10.2s > target 8.0s"
       ]
     },
     {
@@ -30,9 +73,20 @@
       "category": "aggregate",
       "score": 100.0,
       "passed": true,
-      "latency_s": 10.44,
+      "latency_s": 10.57,
+      "checks": {
+        "citations": true,
+        "forbidden_terms": true,
+        "required_terms": true,
+        "rows": true,
+        "numeric": true,
+        "trusted_assets": true,
+        "sql": true,
+        "freshness": true,
+        "canonical_sql": true
+      },
       "notes": [
-        "latency 10.4s > target 6.0s"
+        "latency 10.6s > target 6.0s"
       ]
     },
     {
@@ -40,7 +94,18 @@
       "category": "aggregate",
       "score": 100.0,
       "passed": true,
-      "latency_s": 12.55,
+      "latency_s": 12.6,
+      "checks": {
+        "citations": true,
+        "forbidden_terms": true,
+        "required_terms": true,
+        "rows": true,
+        "numeric": true,
+        "trusted_assets": true,
+        "sql": true,
+        "freshness": true,
+        "canonical_sql": true
+      },
       "notes": [
         "latency 12.6s > target 6.0s"
       ]
@@ -50,9 +115,20 @@
       "category": "aggregate",
       "score": 100.0,
       "passed": true,
-      "latency_s": 14.59,
+      "latency_s": 16.75,
+      "checks": {
+        "citations": true,
+        "forbidden_terms": true,
+        "required_terms": true,
+        "rows": true,
+        "numeric": true,
+        "trusted_assets": true,
+        "sql": true,
+        "freshness": true,
+        "canonical_sql": true
+      },
       "notes": [
-        "latency 14.6s > target 8.0s"
+        "latency 16.8s > target 8.0s"
       ]
     },
     {
@@ -60,9 +136,20 @@
       "category": "aggregate",
       "score": 100.0,
       "passed": true,
-      "latency_s": 12.62,
+      "latency_s": 17.12,
+      "checks": {
+        "citations": true,
+        "forbidden_terms": true,
+        "required_terms": true,
+        "rows": true,
+        "numeric": true,
+        "trusted_assets": true,
+        "sql": true,
+        "freshness": true,
+        "canonical_sql": true
+      },
       "notes": [
-        "latency 12.6s > target 8.0s"
+        "latency 17.1s > target 8.0s"
       ]
     },
     {
@@ -70,9 +157,20 @@
       "category": "strategy",
       "score": 100.0,
       "passed": true,
-      "latency_s": 16.97,
+      "latency_s": 14.34,
+      "checks": {
+        "citations": true,
+        "forbidden_terms": true,
+        "required_terms": true,
+        "rows": true,
+        "numeric": true,
+        "trusted_assets": true,
+        "sql": true,
+        "freshness": true,
+        "canonical_sql": true
+      },
       "notes": [
-        "latency 17.0s > target 10.0s"
+        "latency 14.3s > target 10.0s"
       ]
     },
     {
@@ -80,9 +178,20 @@
       "category": "segment",
       "score": 100.0,
       "passed": true,
-      "latency_s": 13.01,
+      "latency_s": 12.17,
+      "checks": {
+        "citations": true,
+        "forbidden_terms": true,
+        "required_terms": true,
+        "rows": true,
+        "numeric": true,
+        "trusted_assets": true,
+        "sql": true,
+        "freshness": true,
+        "canonical_sql": true
+      },
       "notes": [
-        "latency 13.0s > target 8.0s"
+        "latency 12.2s > target 8.0s"
       ]
     },
     {
@@ -90,7 +199,18 @@
       "category": "governance",
       "score": 100.0,
       "passed": true,
-      "latency_s": 0.92,
+      "latency_s": 0.84,
+      "checks": {
+        "citations": true,
+        "forbidden_terms": true,
+        "required_terms": true,
+        "rows": true,
+        "numeric": true,
+        "trusted_assets": true,
+        "sql": true,
+        "freshness": true,
+        "canonical_sql": true
+      },
       "notes": []
     },
     {
@@ -98,9 +218,20 @@
       "category": "trigger",
       "score": 100.0,
       "passed": true,
-      "latency_s": 26.82,
+      "latency_s": 20.72,
+      "checks": {
+        "citations": true,
+        "forbidden_terms": true,
+        "required_terms": true,
+        "rows": true,
+        "numeric": true,
+        "trusted_assets": true,
+        "sql": true,
+        "freshness": true,
+        "canonical_sql": true
+      },
       "notes": [
-        "latency 26.8s > target 8.0s"
+        "latency 20.7s > target 8.0s"
       ]
     },
     {
@@ -108,7 +239,18 @@
       "category": "governance",
       "score": 100.0,
       "passed": true,
-      "latency_s": 0.83,
+      "latency_s": 0.87,
+      "checks": {
+        "citations": true,
+        "forbidden_terms": true,
+        "required_terms": true,
+        "rows": true,
+        "numeric": true,
+        "trusted_assets": true,
+        "sql": true,
+        "freshness": true,
+        "canonical_sql": true
+      },
       "notes": []
     },
     {
@@ -116,7 +258,18 @@
       "category": "governance",
       "score": 100.0,
       "passed": true,
-      "latency_s": 0.89,
+      "latency_s": 0.86,
+      "checks": {
+        "citations": true,
+        "forbidden_terms": true,
+        "required_terms": true,
+        "rows": true,
+        "numeric": true,
+        "trusted_assets": true,
+        "sql": true,
+        "freshness": true,
+        "canonical_sql": true
+      },
       "notes": []
     },
     {
@@ -124,7 +277,18 @@
       "category": "governance",
       "score": 100.0,
       "passed": true,
-      "latency_s": 0.84,
+      "latency_s": 0.89,
+      "checks": {
+        "citations": true,
+        "forbidden_terms": true,
+        "required_terms": true,
+        "rows": true,
+        "numeric": true,
+        "trusted_assets": true,
+        "sql": true,
+        "freshness": true,
+        "canonical_sql": true
+      },
       "notes": []
     },
     {
@@ -132,9 +296,20 @@
       "category": "aggregate",
       "score": 100.0,
       "passed": true,
-      "latency_s": 14.85,
+      "latency_s": 12.75,
+      "checks": {
+        "citations": true,
+        "forbidden_terms": true,
+        "required_terms": true,
+        "rows": true,
+        "numeric": true,
+        "trusted_assets": true,
+        "sql": true,
+        "freshness": true,
+        "canonical_sql": true
+      },
       "notes": [
-        "latency 14.8s > target 8.0s"
+        "latency 12.8s > target 8.0s"
       ]
     }
   ]

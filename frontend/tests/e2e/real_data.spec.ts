@@ -468,6 +468,20 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     );
   });
 
+  test('ask-genie: shows governed progress while a live request is pending', async ({ page }) => {
+    await page.route('**/api/genie/message', async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      await route.continue();
+    });
+    await page.goto('/ask-genie');
+
+    await page.getByRole('button', { name: /^Ask Genie$/i }).first().click();
+    await expect(page.getByText(/Opening a governed Genie turn|Selecting trusted Unity Catalog assets/)).toBeVisible({
+      timeout: 2_000,
+    });
+    await expect(page.locator('.surface', { hasText: /Source:/i }).first()).toBeVisible({ timeout: 45_000 });
+  });
+
   test('ask-genie: dynamic chart, proof drawer, and governed action confirmation', async ({ page }) => {
     test.setTimeout(90_000);
 

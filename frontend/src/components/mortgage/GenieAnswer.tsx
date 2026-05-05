@@ -255,7 +255,11 @@ function coerceMeasure(value: unknown, column: string): number | null {
 function formatIdentifier(column: string, value: unknown): string {
   if (value === null || value === undefined) return '—';
   const raw = String(value).trim();
-  if (/^zip(code)?$|^zip_code$/i.test(column)) {
+  if (/^zip(code)?$|^zip_code$|^postal(_code)?$/i.test(column)) {
+    const digits = raw.replace(/\D/g, '');
+    if (digits.length > 0 && digits.length <= 5) return digits.padStart(5, '0');
+  }
+  if (/^(fips|fips_5|county_fips|county_fips_5|cbsa_code|msa_cbsa_code)$/i.test(column)) {
     const digits = raw.replace(/\D/g, '');
     if (digits.length > 0 && digits.length <= 5) return digits.padStart(5, '0');
   }
@@ -706,6 +710,21 @@ function GenieProofPanel({ payload }: { payload: GenieAnswerShape }) {
         <div className="genie-proof__section">
           <div className="eyebrow">Known data gaps</div>
           {proof.known_data_gaps.map((gap) => <div key={gap} className="genie-proof__gap">{gap}</div>)}
+        </div>
+      )}
+      {proof.reasoning_trace && proof.reasoning_trace.length > 0 && (
+        <div className="genie-proof__section">
+          <div className="eyebrow">Genie query trace</div>
+          <div className="genie-proof__trace">
+            {proof.reasoning_trace.slice(0, 4).map((step, i) => (
+              <div key={`${step.kind}-${i}`} className="genie-proof__trace-step">
+                <div className="genie-proof__trace-kind">
+                  {humanizeKey(step.kind.replace(/^THOUGHT_TYPE_/, '').toLowerCase())}
+                </div>
+                <div className="genie-proof__trace-content">{step.content}</div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
       {proof.sql_query && (

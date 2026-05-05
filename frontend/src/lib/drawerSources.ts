@@ -167,16 +167,16 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
     title: 'Permit signal',
     short: 'permits.building',
     description:
-      'Building permit records joined to CLIP. Signal fires when permit value ≥ $25k within the last 180 days.',
+      'Cotality Building Permits share is pending. The signal is modeled but blocked false until the feed lands, so permit-sourced borrower counts remain 0 today.',
     lineage: [
-      { layer: 'SOURCE', name: 'cotality.permits.building', meta: 'Delta Share · rolling 24 months' },
-      { layer: 'JOIN', name: 'join.permit_to_clip', meta: 'via address canonicalization' },
-      { layer: 'SEMANTIC', name: 'metrics.permit_signal', meta: 'UC metric view' },
+      { layer: 'SOURCE', name: 'cotality.permits.building', meta: 'Delta Share · pending' },
+      { layer: 'JOIN', name: 'join.permit_to_clip', meta: 'pending feed arrival' },
+      { layer: 'SEMANTIC', name: 'metrics.permit_signal', meta: 'blocked false until landed' },
     ],
     signals: [
-      { label: 'Permit type', source: 'permits.type', value: 'per permit row' },
-      { label: 'Filed value', source: 'permits.value', value: 'per permit row' },
-      { label: 'Filed', source: 'permits.filed_at', value: 'per permit row' },
+      { label: 'Readiness', source: 'admin.sources', value: 'roadmap' },
+      { label: 'has_permit', source: 'mip.gold.borrower_360', value: 'blocked false' },
+      { label: 'Permit rows', source: 'cotality.permits.building', value: 'pending share' },
     ],
   },
   config: {

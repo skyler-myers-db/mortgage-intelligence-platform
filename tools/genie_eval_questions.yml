@@ -55,6 +55,28 @@ questions:
     forbid_keywords:
       - no candidates
       - no eligible
+    require_trusted_proof: true
+    require_select_sql: true
+    required_sql_contains:
+      - zip
+      - equity_pct
+    min_rows: 5
+    max_latency_s: 8
+
+  - id: zip_identifier_not_measure
+    category: chart-planner
+    question: Which zips have the most in-the-money refi candidates?
+    must_cite:
+      - mip.gold.borrower_360
+    forbid_keywords:
+      - no borrowers
+      - no candidates
+    require_trusted_proof: true
+    require_select_sql: true
+    require_freshness: true
+    required_sql_contains:
+      - zip
+      - in_the_money
     min_rows: 5
     max_latency_s: 8
 
@@ -75,6 +97,11 @@ questions:
     required_sql_contains:
       - mip.gold.borrower_360
       - in_the_money = true
+    canonical_column: in_the_money_borrowers
+    canonical_sql: |
+      SELECT COUNT(*) AS in_the_money_borrowers
+      FROM mip.gold.borrower_360
+      WHERE in_the_money = TRUE
     min_rows: 0  # answer is a single metric, not a table
     max_latency_s: 6
 
@@ -96,6 +123,12 @@ questions:
     required_sql_contains:
       - mip.gold.borrower_360
       - state = :state
+    canonical_column: in_the_money_borrowers
+    canonical_sql: |
+      SELECT COUNT(*) AS in_the_money_borrowers
+      FROM mip.gold.borrower_360
+      WHERE in_the_money = TRUE
+        AND state = 'IL'
     min_rows: 0
     max_latency_s: 6
 
@@ -207,5 +240,11 @@ questions:
       - mip.gold
     forbid_keywords:
       - no MSAs
+    require_trusted_proof: true
+    require_select_sql: true
+    require_freshness: true
+    required_sql_contains:
+      - situs_cbsa_code
+      - mip.gold.borrower_360
     min_rows: 5
     max_latency_s: 8

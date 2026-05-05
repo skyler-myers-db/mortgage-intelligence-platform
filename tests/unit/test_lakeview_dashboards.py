@@ -95,6 +95,14 @@ def _iter_dataset_sql(spec: dict[str, Any]):
         yield name, "\n".join(lines)
 
 
+def _dataset_sql(path: Path, dataset_name: str) -> str:
+    spec = _load(path)
+    for name, sql in _iter_dataset_sql(spec):
+        if name == dataset_name:
+            return sql
+    raise AssertionError(f"{path.name} missing dataset {dataset_name!r}")
+
+
 @pytest.mark.parametrize("path", DASHBOARD_FILES, ids=lambda p: p.name)
 def test_dashboard_json_parses(path: Path) -> None:
     spec = _load(path)
@@ -180,3 +188,29 @@ def test_no_hardcoded_warehouse_or_workspace_id(path: Path) -> None:
     assert "warehouseId" not in spec, (
         f"{path.name} declares a top-level warehouseId key"
     )
+
+
+def test_executive_funnel_reads_canonical_snapshot() -> None:
+    totals_sql = _dataset_sql(EXECUTIVE, "ds_funnel_totals")
+    stages_sql = _dataset_sql(EXECUTIVE, "ds_funnel_stages")
+    for sql in (totals_sql, stages_sql):
+        normalized = sql.lower()
+        assert "mip.gold.funnel_snapshot_daily" in normalized
+        assert "state = '_all'" in normalized
+        assert "segment_code = '_all'" in normalized
+        assert "approval_status = 'actioned'" not in normalized
+
+
+def test_borrower_opportunity_metric_view_aggregates_use_distinct_grain() -> None:
+    for path in DASHBOARD_FILES:
+        for name, sql in _iter_dataset_sql(_load(path)):
+            normalized = re.sub(r"\s+", " ", sql.lower())
+            if "mip.semantics.borrower_opportunity_metric_view" not in normalized:
+                continue
+            unsafe_count = re.search(r"\bcount\s*\(\s*\*\s*\)", normalized)
+            has_distinct_clip = "count(distinct clip)" in normalized
+            group_by_segment = re.search(r"group by[^;]*(segment|segment_code)", normalized)
+            assert not (unsafe_count and not has_distinct_clip and not group_by_segment), (
+                f"{path.name} dataset '{name}' aggregates exploded borrower_opportunity_metric_view "
+                "without COUNT(DISTINCT clip) or segment grouping"
+            )

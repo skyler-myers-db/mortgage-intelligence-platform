@@ -8,24 +8,24 @@ Synthetic test-id prefix: `B-TEST-*`
 
 | Endpoint | Method+Path | Status | Latency (ms) | Payload OK? | Notes |
 | --- | --- | ---: | ---: | :---: | --- |
-| health | `GET /api/health` | 200 | 522 | yes | keys/len: app_env, breaker_state_changes_last_hour, circuit_breakers, counters_persistence, dependencies, fallback_identity_fallbacks_process_total, fallback_identity_fallbacks_total, log_export |
-| portfolio.unfiltered | `POST /api/portfolio/preview` | 200 | 411 | yes | keys/len: approved_count, avg_score, data_refreshed_at, day_zero, high_intent_leads, in_outreach_count, marketable_population, offers_recommended |
-| portfolio.chicago | `POST /api/portfolio/preview` | 200 | 1338 | yes | keys/len: approved_count, avg_score, data_refreshed_at, day_zero, high_intent_leads, in_outreach_count, marketable_population, offers_recommended |
-| portfolio.chicago.owner.25pct | `POST /api/portfolio/preview` | 200 | 1287 | yes | keys/len: approved_count, avg_score, data_refreshed_at, day_zero, high_intent_leads, in_outreach_count, marketable_population, offers_recommended |
-| segments | `GET /api/segments` | 200 | 893 | yes | keys/len: [array len=6] |
-| leads.all | `GET /api/leads` | 200 | 1435 | yes | keys/len: [array len=500] |
-| leads.itm | `GET /api/leads?segment=itm` | 200 | 1564 | yes | keys/len: [array len=500] |
-| borrower.detail | `GET /api/borrowers/B-102FL7THC6Q3L` | 200 | 1397 | yes | keys/len: approval_status, avm_value, borrower_id, city, clip, clip_id, confidence, current_lien_balance |
-| borrower.evidence | `GET /api/borrowers/B-102FL7THC6Q3L/evidence` | 200 | 821 | yes | keys/len: [array len=8] |
-| offers.recommend | `POST /api/offers/recommend` | 200 | 1296 | yes | keys/len: alternatives, borrower_id, confidence, evidence_ids, offer_code, offer_type, product_label, rationale |
-| outreach.draft | `POST /api/outreach/draft` | 200 | 959 | yes | keys/len: body, borrower_id, channel, offer_code, status, subject |
+| health | `GET /api/health` | 200 | 506 | yes | keys/len: app_env, breaker_state_changes_last_hour, circuit_breakers, counters_persistence, dependencies, fallback_identity_fallbacks_process_total, fallback_identity_fallbacks_total, log_export |
+| portfolio.unfiltered | `POST /api/portfolio/preview` | 200 | 1804 | yes | keys/len: approved_count, avg_score, data_refreshed_at, day_zero, high_intent_leads, in_outreach_count, marketable_population, offers_recommended |
+| portfolio.chicago | `POST /api/portfolio/preview` | 200 | 1429 | yes | keys/len: approved_count, avg_score, data_refreshed_at, day_zero, high_intent_leads, in_outreach_count, marketable_population, offers_recommended |
+| portfolio.chicago.owner.25pct | `POST /api/portfolio/preview` | 200 | 1376 | yes | keys/len: approved_count, avg_score, data_refreshed_at, day_zero, high_intent_leads, in_outreach_count, marketable_population, offers_recommended |
+| segments | `GET /api/segments` | 200 | 842 | yes | keys/len: [array len=6] |
+| leads.all | `GET /api/leads` | 200 | 1253 | yes | keys/len: [array len=500] |
+| leads.itm | `GET /api/leads?segment=itm` | 200 | 1247 | yes | keys/len: [array len=500] |
+| borrower.detail | `GET /api/borrowers/B-102FL7THC6Q3L` | 200 | 1476 | yes | keys/len: approval_status, avm_value, borrower_id, city, clip, clip_id, confidence, current_lien_balance |
+| borrower.evidence | `GET /api/borrowers/B-102FL7THC6Q3L/evidence` | 200 | 952 | yes | keys/len: [array len=8] |
+| offers.recommend | `POST /api/offers/recommend` | 200 | 1358 | yes | keys/len: alternatives, borrower_id, confidence, evidence_ids, offer_code, offer_type, product_label, rationale |
+| outreach.draft | `POST /api/outreach/draft` | 200 | 839 | yes | keys/len: body, borrower_id, channel, offer_code, status, subject |
 | outreach.approve.synthetic | `POST /api/outreach/approve` | 200 | 4037 | yes | keys/len: approval_id, approved, audit_event_id |
-| outreach.reject.synthetic | `POST /api/outreach/reject` | 200 | 4299 | yes | keys/len: approval_id, audit_event_id, rejected |
-| audit.events | `GET /api/audit/events?limit=10` | 200 | 1048 | yes | keys/len: [array len=10] |
-| genie.message | `POST /api/genie/message` | 200 | 15204 | yes | keys/len: actions, answer, conversation_id, elapsed_ms, follow_up_questions, message_id, metric_value, proof |
-| admin.rules | `GET /api/admin/rules` | 200 | 1047 | yes | keys/len: legacy_override, offer_rules_version, rules_edited_at, thresholds |
-| admin.sources | `GET /api/admin/sources` | 200 | 852 | yes | keys/len: [array len=8] |
-| geo.state_rollups | `GET /api/geo/state-rollups` | 200 | 894 | yes | keys/len: rollups, snapshot_date |
+| outreach.reject.synthetic | `POST /api/outreach/reject` | 200 | 4016 | yes | keys/len: approval_id, audit_event_id, rejected |
+| audit.events | `GET /api/audit/events?limit=10` | 200 | 957 | yes | keys/len: [array len=10] |
+| genie.message | `POST /api/genie/message` | 200 | 12474 | yes | keys/len: actions, answer, conversation_id, elapsed_ms, follow_up_questions, message_id, metric_value, proof |
+| admin.rules | `GET /api/admin/rules` | 200 | 893 | yes | keys/len: legacy_override, offer_rules_version, rules_edited_at, thresholds |
+| admin.sources | `GET /api/admin/sources` | 200 | 960 | yes | keys/len: [array len=8] |
+| geo.state_rollups | `GET /api/geo/state-rollups` | 200 | 864 | yes | keys/len: rollups, snapshot_date |
 
 ## Clean payload samples
 
@@ -302,8 +302,8 @@ Synthetic test-id prefix: `B-TEST-*`
 ```json
 {
   "approved": true,
-  "approval_id": "4c2dd0f5-e86b-4095-a732-be1b8c3b2392",
-  "audit_event_id": "67275fa9-597c-45cd-8d02-16fd8348bb56"
+  "approval_id": "2bc61ff7-e46f-4027-9309-81d7600b2fee",
+  "audit_event_id": "b76abd2b-e2da-403c-a19e-5afe6a853ee8"
 }
 ```
 
@@ -312,8 +312,8 @@ Synthetic test-id prefix: `B-TEST-*`
 ```json
 {
   "rejected": true,
-  "approval_id": "cfc47809-3eae-4260-af4f-c6fa88942197",
-  "audit_event_id": "a3be83e6-e7e4-42f0-bc49-c62ff4a704d7"
+  "approval_id": "d40f7eae-0eac-4d61-8a33-c27e00d27eea",
+  "audit_event_id": "055cbe55-2b96-42f4-b14c-368a65d9602c"
 }
 ```
 
@@ -321,18 +321,18 @@ Synthetic test-id prefix: `B-TEST-*`
 
 ```json
 {
-  "event_id": "a3be83e6-e7e4-42f0-bc49-c62ff4a704d7",
+  "event_id": "055cbe55-2b96-42f4-b14c-368a65d9602c",
   "actor": "skyler@entrada.ai",
   "action": "outreach.reject",
   "entity_type": "approval",
-  "entity_id": "cfc47809-3eae-4260-af4f-c6fa88942197",
+  "entity_id": "d40f7eae-0eac-4d61-8a33-c27e00d27eea",
   "payload_json": {
     "offer_code": "refi",
-    "approval_id": "cfc47809-3eae-4260-af4f-c6fa88942197",
-    "borrower_id": "B-TEST-B5944E25"
+    "approval_id": "d40f7eae-0eac-4d61-8a33-c27e00d27eea",
+    "borrower_id": "B-TEST-71F5EF12"
   },
   "evidence_ids": [],
-  "created_at": "2026-05-05T14:28:06.557239+00:00",
+  "created_at": "2026-05-05T17:54:08.909307+00:00",
   "event_type": "OUTREACH_REJECT",
   "subject_clip": null,
   "subject_segment": null,
@@ -344,14 +344,14 @@ Synthetic test-id prefix: `B-TEST-*`
 
 ```json
 {
-  "conversation_id": "01f1488ea2f31f0dae9da3f249d63bd8",
+  "conversation_id": "01f148ab6b781806b0224bd668f44efb",
   "question": "Which zips have the most in-the-money refi candidates?",
-  "answer": "You want to see which ZIP codes have the highest number of borrowers who are currently in-the-money for refinancing.\n\nA few representative values include:\n- **60617**: 1,503 borrowers, average score 60.3\n- **60628**: 1,482 borrowers, average score 60.3\n- **60629**: 1,387 borrowers, average score 59.0\n- **60643**: 1,108 borrowers, average score 60.1\n- **60620**: 1,095 borrowers, average score 60.8\n\nWould you like to see the top ZIP codes for in-the-money candidates broken down by state as well?",
+  "answer": "You want to see which ZIP codes have the highest number of borrowers who are currently in-the-money for refinancing.\n\nThe ZIP codes with the most in-the-money refi candidates are led by **60617** with 1,503 borrowers, followed by **60628** (1,482), **60629** (1,387), **60643** (1,108), and **60620** (1,095). These areas have the highest counts of borrowers who are currently in a favorable position for refinancing. \n\nSource: mip.gold.borrower_360",
   "source": "genie",
   "trusted_assets": [
     "mip.gold.borrower_360"
   ],
-  "message_id": "01f1488ea2fe1e2da42f5f95173a68ba"
+  "message_id": "01f148ab6b831cbbaee2bb0207acc8e4"
 }
 ```
 

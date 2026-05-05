@@ -120,7 +120,18 @@ def test_ask_drives_start_poll_query_and_returns_structured_response(
                 "query": {
                     "query": "SELECT count(*) FROM mip.gold.lead_scores",
                     "description": "count of ITM borrowers",
-                }
+                    "thoughts": [
+                        {
+                            "thought_type": "THOUGHT_TYPE_DATA_SOURCING",
+                            "content": "- mip.gold.lead_scores",
+                        },
+                        {
+                            "thought_type": "THOUGHT_TYPE_STEPS",
+                            "content": "- Count matching borrowers.",
+                        },
+                    ],
+                },
+                "attachment_id": "att-sql-1",
             },
         ],
     }
@@ -146,12 +157,21 @@ def test_ask_drives_start_poll_query_and_returns_structured_response(
     assert result.sql_query is not None
     assert "mip.gold.lead_scores" in result.sql_query
     assert result.sql_result_rows == [{"count": 12840}]
+    assert result.query_attachment_id == "att-sql-1"
+    assert result.trusted_assets == ["mip.gold.lead_scores"]
+    assert result.thoughts == [
+        {
+            "kind": "THOUGHT_TYPE_DATA_SOURCING",
+            "content": "- mip.gold.lead_scores",
+        },
+        {"kind": "THOUGHT_TYPE_STEPS", "content": "- Count matching borrowers."},
+    ]
     # Call shape: start, poll (IN_PROGRESS), poll (COMPLETED), query-result.
     assert len(calls) == 4
     assert "/start-conversation" in calls[0][0]
     assert calls[0][1] == "POST"
     assert calls[1][1] == "GET"
-    assert "/query-result" in calls[3][0]
+    assert "/query-result/att-sql-1" in calls[3][0]
 
 
 def test_ask_handles_text_only_responses_without_sql(

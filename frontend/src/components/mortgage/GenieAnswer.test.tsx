@@ -91,4 +91,28 @@ describe('inferChartFromRows', () => {
     expect(chart?.valueCol).toBe('borrowers');
     expect(chart?.rows.map((row) => row.value)).toEqual([42, 39]);
   });
+
+  it.each([
+    ['zip', 2139, '02139'],
+    ['zip_code', 2139, '02139'],
+    ['postal_code', 2139, '02139'],
+    ['fips_5', 17031, '17031'],
+    ['county_fips_5', 6037, '06037'],
+    ['cbsa_code', 16980, '16980'],
+    ['msa_cbsa_code', 38060, '38060'],
+    ['borrower_id', 'B-102FL7THC6Q3L', 'B-102FL7THC6Q3L'],
+    ['clip', '9154364327', '9154364327'],
+    ['id', 'row-001', 'row-001'],
+  ])('uses %s as the chart label, never the numeric measure', (column, value, expectedLabel) => {
+    const rows = [
+      { [column]: value, borrowers: 42, avg_score: 60.3 },
+      { [column]: `${value}-B`, borrowers: 39, avg_score: 61.1 },
+    ];
+
+    const chart = inferChartFromRows(rows, [column, 'borrowers', 'avg_score']);
+
+    expect(chart?.labelCol).toBe(column);
+    expect(chart?.valueCol).toBe('borrowers');
+    expect(chart?.rows[0]).toEqual({ label: expectedLabel, value: 42 });
+  });
 });

@@ -8,6 +8,7 @@ import { PageShell } from '../components/layout/PageShell';
 import { Button, Chip, EvidenceChip } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { GenieAnswer } from '../components/mortgage/GenieAnswer';
+import { GenieProgress } from '../components/mortgage/GenieProgress';
 import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 import { DRAWER_SOURCES } from '../lib/drawerSources';
 
@@ -256,6 +257,13 @@ export default function AskGenie() {
                 <WarmingUpBlock state={warmingUp} title="Asking Genie" compact />
               </div>
             )}
+            {loading && !warmingUp && (
+              <div className="surface surface--inset mt-4">
+                <div className="surface__body">
+                  <GenieProgress />
+                </div>
+              </div>
+            )}
             {errorMsg && !warmingUp && (
               <div
                 className="surface surface--inset surface--danger mt-4"
@@ -272,6 +280,21 @@ export default function AskGenie() {
                   >
                     Retry
                   </button>
+                </div>
+              </div>
+            )}
+            {!payload && !loading && !warmingUp && !errorMsg && (
+              <div className="surface surface--inset mt-4">
+                <div className="surface__body genie-empty">
+                  <div className="genie-empty__icon">
+                    <Icon name="sparkle" size={16} />
+                  </div>
+                  <div>
+                    <div className="genie-empty__title">Ready for governed analysis</div>
+                    <p className="genie-empty__copy">
+                      Trusted SQL, source assets, freshness, and approval-safe actions appear with each answer.
+                    </p>
+                  </div>
                 </div>
               </div>
             )}

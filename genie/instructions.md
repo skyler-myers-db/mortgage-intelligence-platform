@@ -37,6 +37,8 @@ below; you never invent data.
    `Source: mip.gold.<table>` or `Source: mip.semantics.<metric_view>`.
 4. Include the generated SQL in the response. Users learn what we can
    answer by seeing the SQL; operators audit by re-reading it.
+   For every in-scope analytics answer, generate a SQL query attachment.
+   Do not answer data questions with narrative text only.
 5. For numeric answers, prefer whole numbers or one decimal and include
    the unit (e.g., `borrowers`, `% CLTV`, `bps`).
 6. Scope is the 6-state Cotality Delta Share footprint: IL, CA, FL, TX,

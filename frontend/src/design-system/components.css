@@ -619,7 +619,7 @@ kbd {
   background: var(--bg-0);
   border: 2px solid var(--seg-color, var(--accent));
 }
-.trig__when { font-family: var(--font-mono); font-size: 10px; color: var(--text-3); letter-spacing: 0.04em; text-transform: uppercase; }
+.trig__when { font-family: var(--font-mono); font-size: 10px; color: var(--text-2); letter-spacing: 0.04em; text-transform: uppercase; }
 .trig__what { font-size: var(--fs-13); color: var(--text-1); font-weight: 500; margin-top: 2px; }
 .trig__why  { font-size: var(--fs-12); color: var(--text-2); margin-top: 2px; }
 
@@ -913,9 +913,9 @@ kbd {
 .genie__resize {
   position: absolute;
   top: calc(-1 * var(--sp-2));
-  left: calc(-1 * var(--sp-2));
-  width: calc(var(--sp-5) + var(--sp-1));
-  height: calc(var(--sp-5) + var(--sp-1));
+  left: calc(-1 * var(--sp-3));
+  width: var(--sp-5);
+  height: var(--sp-5);
   display: grid;
   place-items: center;
   background: color-mix(in oklab, var(--bg-2) 82%, transparent);
@@ -1059,12 +1059,78 @@ kbd {
 }
 .genie__fab:hover { transform: translateY(-2px); }
 .genie__fab.is-hidden { transform: translateY(20px) scale(0.6); opacity: 0; pointer-events: none; }
+.genie-empty {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-3);
+}
+.genie-empty__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--sp-8);
+  height: var(--sp-8);
+  border: 1px solid var(--line-3);
+  border-radius: var(--r-md);
+  background: var(--accent-soft);
+  color: var(--accent);
+  flex: 0 0 auto;
+}
+.genie-empty__title {
+  color: var(--text-1);
+  font-weight: 600;
+  font-size: var(--fs-13);
+}
+.genie-empty__copy {
+  margin-top: var(--sp-1);
+  color: var(--text-3);
+  font-size: var(--fs-12);
+  line-height: var(--lh-snug);
+}
 
 .typing-dots { display: inline-flex; gap: 3px; padding: 6px 0; }
 .typing-dots span { width: 6px; height: 6px; border-radius: 50%; background: var(--text-3); animation: tdot 1.2s infinite; }
 .typing-dots span:nth-child(2) { animation-delay: 0.15s; }
 .typing-dots span:nth-child(3) { animation-delay: 0.3s; }
 @keyframes tdot { 0%, 60%, 100% { opacity: 0.3; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-3px); } }
+
+.genie-progress {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.genie-progress__head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  color: var(--text-1);
+  font-size: var(--fs-13);
+  font-weight: 600;
+}
+.genie-progress__rail {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: var(--sp-1);
+}
+.genie-progress__rail span {
+  height: 3px;
+  border-radius: var(--r-pill);
+  background: var(--bg-3);
+}
+.genie-progress__rail span.is-active {
+  background: var(--accent);
+  box-shadow: 0 0 10px var(--accent-soft);
+}
+.genie-progress__meta {
+  color: var(--text-3);
+  font-size: var(--fs-11);
+  line-height: var(--lh-snug);
+}
+.genie-progress--dense { gap: var(--sp-1); }
+.genie-progress--dense .genie-progress__head {
+  font-size: var(--fs-12);
+  font-weight: 500;
+}
 
 /* ============================================================
    AUDIT LOG ROW
@@ -1119,14 +1185,21 @@ kbd {
    ============================================================ */
 .filter-row {
   display: flex; flex-wrap: wrap; gap: var(--sp-2) var(--sp-3);
-  align-items: center;
+  align-items: flex-start;
 }
 .filter-row--spaced { margin-top: var(--gap-grid); }
 .filter-row__spacer { flex: 1; }
+.filter-row__group {
+  display: inline-flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  inline-size: 15rem;
+  max-inline-size: 100%;
+}
 .filter-row__hint {
   font-size: var(--fs-11);
-  margin-top: var(--sp-1);
-  max-width: 220px;
+  margin-top: 0;
+  max-inline-size: 100%;
   line-height: var(--lh-snug);
 }
 .filter-root { position: relative; }
@@ -2583,6 +2656,29 @@ kbd {
   color: var(--signal-warning);
   font-size: var(--fs-12);
   margin-top: var(--sp-1);
+}
+.genie-proof__trace {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.genie-proof__trace-step {
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-md);
+  background: var(--bg-0);
+  padding: var(--sp-2);
+}
+.genie-proof__trace-kind {
+  color: var(--accent);
+  font-size: var(--fs-11);
+  font-family: var(--font-mono);
+  margin-bottom: var(--sp-1);
+}
+.genie-proof__trace-content {
+  white-space: pre-wrap;
+  color: var(--text-2);
+  font-size: var(--fs-12);
+  line-height: var(--lh-snug);
 }
 .genie-proof__sql {
   display: block;

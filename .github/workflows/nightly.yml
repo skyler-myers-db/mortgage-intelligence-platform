@@ -120,6 +120,8 @@ jobs:
         # (no continue-on-error): a broken widget means executives see a
         # blank chart on the next login.
         run: pytest tests/integration/test_dashboard_widgets_resolve.py -q --tb=short
+      - name: Executive metrics reconcile to canonical snapshot
+        run: pytest tests/integration/test_executive_metric_reconciliation.py -q --tb=short
       - name: Lakebase round-trip
         # continue-on-error so a stale LAKEBASE_PASSWORD secret doesn't
         # block the downstream Genie regression + Playwright runs.
@@ -252,6 +254,9 @@ jobs:
         run: |
           echo "MIP_APP_URL=$_URL" >> "$GITHUB_ENV"
           echo "MIP_API_URL=$_URL" >> "$GITHUB_ENV"
+      - name: Genie semantic eval scorecard (deployed app)
+        if: steps.pathsel.outputs.use_deployed == 'true'
+        run: python tools/genie_eval.py --base "$MIP_APP_URL" --token "$MIP_BEARER_TOKEN" --timeout 120
       - name: Run real-UC Playwright spec
         # Config + specs both live under `frontend/` so `@playwright/test`
         # imports resolve against frontend/node_modules. E2E_LIVE-gated
@@ -265,6 +270,7 @@ jobs:
         run: |
           npx playwright test \
             tests/e2e/real_data.spec.ts \
+            tests/e2e/demo_visual.spec.ts \
             --reporter=list --workers=1
       - name: Upload Playwright report + traces on failure
         if: failure()

@@ -87,6 +87,8 @@ instructions: |
     - Prefer mip.semantics.* for aggregates; prefer mip.gold.* for row-level drill-downs.
     - End every answer with "Source: <fully.qualified.asset>".
     - Include the generated SQL. All SQL must be SELECT-only.
+    - For every in-scope analytics answer, generate a SQL query attachment.
+      Do not answer data questions with narrative text only.
 
   ──────────────────────────────────────────────────────────────────
   NEVER:

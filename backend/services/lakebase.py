@@ -111,6 +111,8 @@ class LakebaseClient:
     for the Module 0 traffic shape; Slice 6 will add pooling.
     """
 
+    _supports_atomic_transactions = True
+
     def __init__(
         self,
         host: str,
@@ -453,11 +455,13 @@ class ResilientLakebaseClient:
 
     Duck-types ``LakebaseClient`` -- the audit store already holds a
     ``LakebaseClient``-typed attribute, and the wrapper exposes the
-    same four read/write methods so no call-site changes are required.
-    Transactions aren't wrapped (they'd need to be idempotent across
-    retries; we don't currently have any multi-statement audit writes
-    that would benefit).
+    same read/write + transaction methods so no call-site changes are
+    required. Multi-statement transaction blocks intentionally are not
+    retried as a unit; the caller owns idempotency keys before entering
+    the transaction.
     """
+
+    _supports_atomic_transactions = True
 
     def __init__(self, client: LakebaseClient, resilient: Any) -> None:
         self._client = client
@@ -466,6 +470,11 @@ class ResilientLakebaseClient:
     @property
     def resilient(self) -> Any:
         return self._resilient
+
+    @contextmanager
+    def transaction(self) -> Iterator[Connection[Any]]:
+        with self._client.transaction() as conn:
+            yield conn
 
     def execute(self, sql: str, params: dict[str, Any] | None = None) -> None:
         self._resilient.call(lambda: self._client.execute(sql, params))

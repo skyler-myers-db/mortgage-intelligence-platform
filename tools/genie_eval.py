@@ -23,11 +23,10 @@ overall score drops > 10 points from docs/genie_eval/baseline.json
 (committed alongside the YAML; bump it intentionally when you
 believe the new floor is the new baseline).
 
-Wired into the bundle as the `mip_genie_eval` job (resources/jobs/
-mip_genie_eval.yml) so it runs nightly after mip_refresh_scores.
-Failures are release-gating by default: any failed canonical question
-or baseline regression returns a non-zero exit code. Use ``--soft`` only
-for exploratory runs where writing the report is enough.
+Wired into the GitHub nightly real-UC workflow against the deployed
+Databricks App. Failures are release-gating by default: any failed
+canonical question or baseline regression returns a non-zero exit code.
+Use ``--soft`` only for exploratory runs where writing the report is enough.
 """
 from __future__ import annotations
 
@@ -76,6 +75,7 @@ class QuestionScore:
     trusted_ok: bool = True
     sql_ok: bool = True
     freshness_ok: bool = True
+    canonical_ok: bool = True
     latency_s: float = 0.0
     notes: list[str] = field(default_factory=list)
 
@@ -90,6 +90,7 @@ class QuestionScore:
             and self.trusted_ok
             and self.sql_ok
             and self.freshness_ok
+            and self.canonical_ok
         )
 
 
@@ -124,6 +125,62 @@ def _ask(base: str, token: str | None, question: str, timeout_s: int) -> tuple[
         return ({"error": f"URLError: {e.reason}"}, elapsed)
     elapsed = time.monotonic() - start
     return payload, elapsed
+
+
+def _warehouse_creds() -> tuple[str, str, str] | None:
+    host = os.environ.get("DATABRICKS_HOST") or os.environ.get("DATABRICKS_SERVER_HOSTNAME")
+    token = os.environ.get("DATABRICKS_TOKEN")
+    warehouse_id = os.environ.get("DATABRICKS_WAREHOUSE_ID")
+    if not host or not token or not warehouse_id:
+        return None
+    if not host.startswith("http"):
+        host = "https://" + host
+    return host.rstrip("/"), token, warehouse_id
+
+
+def _run_canonical_sql(statement: str, column: str) -> float | None:
+    creds = _warehouse_creds()
+    if creds is None:
+        return None
+    host, token, warehouse_id = creds
+    url = f"{host}/api/2.0/sql/statements/"
+    body = json.dumps(
+        {
+            "statement": statement,
+            "warehouse_id": warehouse_id,
+            "wait_timeout": "50s",
+            "on_wait_timeout": "CANCEL",
+            "disposition": "INLINE",
+            "format": "JSON_ARRAY",
+        }
+    ).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=body,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=60) as resp:  # noqa: S310 -- internal API
+        payload = json.loads(resp.read().decode("utf-8"))
+    state = (payload.get("status") or {}).get("state")
+    if state != "SUCCEEDED":
+        err = ((payload.get("status") or {}).get("error") or {}).get("message", "unknown")
+        raise RuntimeError(f"canonical SQL failed: state={state!r} err={err!r}")
+    columns = [
+        c.get("name", "")
+        for c in ((payload.get("manifest") or {}).get("schema") or {}).get("columns", [])
+    ]
+    rows = (payload.get("result") or {}).get("data_array") or []
+    if not rows:
+        raise RuntimeError("canonical SQL returned zero rows")
+    try:
+        idx = columns.index(column)
+    except ValueError as exc:
+        raise RuntimeError(f"canonical SQL missing column {column!r}; columns={columns!r}") from exc
+    return float(rows[0][idx])
 
 
 def _score_question(spec: dict[str, Any], response: dict[str, Any], elapsed_s: float) -> QuestionScore:
@@ -235,6 +292,26 @@ def _score_question(spec: dict[str, Any], response: dict[str, Any], elapsed_s: f
         if not score.freshness_ok:
             score.notes.append("proof.data_freshness did not include refreshed_at")
 
+    canonical_sql = spec.get("canonical_sql")
+    canonical_column = spec.get("canonical_column")
+    if canonical_sql and canonical_column:
+        try:
+            expected = _run_canonical_sql(str(canonical_sql), str(canonical_column))
+            if expected is None:
+                score.canonical_ok = False
+                score.notes.append("canonical SQL configured but Databricks warehouse env vars are missing")
+            else:
+                values = _extract_numeric_values(answer, table_rows)
+                score.canonical_ok = any(round(value) == round(expected) for value in values)
+                if not score.canonical_ok:
+                    score.notes.append(
+                        f"canonical mismatch for {canonical_column}: expected {expected:g}; "
+                        f"saw {values[:10]!r}"
+                    )
+        except Exception as exc:  # noqa: BLE001 -- eval should report the failed gate
+            score.canonical_ok = False
+            score.notes.append(f"canonical SQL check failed: {exc}")
+
     # Latency is informational, not a fail.
     max_latency = float(spec.get("max_latency_s") or 0)
     if max_latency > 0 and elapsed_s > max_latency:
@@ -252,6 +329,7 @@ def _score_question(spec: dict[str, Any], response: dict[str, Any], elapsed_s: f
         score.trusted_ok,
         score.sql_ok,
         score.freshness_ok,
+        score.canonical_ok,
     ]
     score.score = round(100.0 * sum(checks) / len(checks), 1)
     return score
@@ -323,12 +401,14 @@ def _emit_markdown(scores: list[QuestionScore], stamp: str, base: str) -> str:
             lines.append("")
     lines.append("## Per-question detail")
     lines.append("")
-    lines.append("| id | category | score | latency | passed |")
-    lines.append("|---|---|---:|---:|:---:|")
+    lines.append("| id | category | score | latency | reconcile | proof | passed |")
+    lines.append("|---|---|---:|---:|:---:|:---:|:---:|")
     for s in scores:
         ok = "✅" if s.passed else "❌"
+        canonical = "✅" if s.canonical_ok else "❌"
+        proof = "✅" if all([s.trusted_ok, s.sql_ok, s.freshness_ok]) else "❌"
         lines.append(
-            f"| `{s.id}` | {s.category} | {s.score:.0f} | {s.latency_s:.1f}s | {ok} |"
+            f"| `{s.id}` | {s.category} | {s.score:.0f} | {s.latency_s:.1f}s | {canonical} | {proof} | {ok} |"
         )
     return "\n".join(lines) + "\n"
 
@@ -348,6 +428,17 @@ def _write_json_summary(scores: list[QuestionScore], stamp: str, base: str) -> d
                 "score": s.score,
                 "passed": s.passed,
                 "latency_s": s.latency_s,
+                "checks": {
+                    "citations": s.cite_ok,
+                    "forbidden_terms": s.forbid_ok,
+                    "required_terms": s.require_ok,
+                    "rows": s.rows_ok,
+                    "numeric": s.numeric_ok,
+                    "trusted_assets": s.trusted_ok,
+                    "sql": s.sql_ok,
+                    "freshness": s.freshness_ok,
+                    "canonical_sql": s.canonical_ok,
+                },
                 "notes": s.notes,
             }
             for s in scores
