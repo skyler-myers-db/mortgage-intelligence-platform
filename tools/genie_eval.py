@@ -25,9 +25,9 @@ believe the new floor is the new baseline).
 
 Wired into the bundle as the `mip_genie_eval` job (resources/jobs/
 mip_genie_eval.yml) so it runs nightly after mip_refresh_scores.
-Failures emit a structured WARNING; we don't fail the pipeline on
-a single regression because Genie behaviour is non-deterministic
-and we'd rather see the trend than block deploys on noise.
+Failures are release-gating by default: any failed canonical question
+or baseline regression returns a non-zero exit code. Use ``--soft`` only
+for exploratory runs where writing the report is enough.
 """
 from __future__ import annotations
 
@@ -72,12 +72,25 @@ class QuestionScore:
     require_ok: bool = True
     rows_ok: bool = True
     latency_ok: bool = True
+    numeric_ok: bool = True
+    trusted_ok: bool = True
+    sql_ok: bool = True
+    freshness_ok: bool = True
     latency_s: float = 0.0
     notes: list[str] = field(default_factory=list)
 
     @property
     def passed(self) -> bool:
-        return self.cite_ok and self.forbid_ok and self.require_ok and self.rows_ok
+        return (
+            self.cite_ok
+            and self.forbid_ok
+            and self.require_ok
+            and self.rows_ok
+            and self.numeric_ok
+            and self.trusted_ok
+            and self.sql_ok
+            and self.freshness_ok
+        )
 
 
 def _load_questions() -> list[dict[str, Any]]:
@@ -118,6 +131,8 @@ def _score_question(spec: dict[str, Any], response: dict[str, Any], elapsed_s: f
     qid = spec["id"]
     answer = str(response.get("answer") or "")
     table_rows = response.get("table_rows") or []
+    proof = response.get("proof") or {}
+    sql_query = response.get("sql_query") or proof.get("sql_query")
     score = QuestionScore(
         id=qid,
         category=spec.get("category", "uncategorised"),
@@ -131,11 +146,25 @@ def _score_question(spec: dict[str, Any], response: dict[str, Any], elapsed_s: f
         return score
 
     answer_lc = answer.lower()
+    proof_assets = proof.get("source_assets") or []
+    if not isinstance(proof_assets, list):
+        proof_assets = []
+    response_assets = response.get("trusted_assets") or []
+    if not isinstance(response_assets, list):
+        response_assets = []
+    citation_text = " ".join(
+        [
+            answer,
+            str(sql_query or ""),
+            *[str(asset) for asset in proof_assets],
+            *[str(asset) for asset in response_assets],
+        ]
+    ).lower()
 
     # 1. must_cite
     must_cite = spec.get("must_cite") or []
     if must_cite:
-        cite_hits = [c for c in must_cite if c.lower() in answer_lc]
+        cite_hits = [c for c in must_cite if c.lower() in citation_text]
         score.cite_ok = bool(cite_hits)
         if not score.cite_ok:
             score.notes.append(
@@ -168,6 +197,44 @@ def _score_question(spec: dict[str, Any], response: dict[str, Any], elapsed_s: f
                 f"too few rows: got {actual}, expected >= {min_rows}"
             )
 
+    expected_range = spec.get("expected_numeric_range") or {}
+    if expected_range:
+        lo = float(expected_range.get("min", float("-inf")))
+        hi = float(expected_range.get("max", float("inf")))
+        values = _extract_numeric_values(answer, table_rows)
+        score.numeric_ok = any(lo <= value <= hi for value in values)
+        if not score.numeric_ok:
+            score.notes.append(
+                f"no numeric value inside expected range [{lo}, {hi}]; saw {values[:10]!r}"
+            )
+
+    if spec.get("require_trusted_proof"):
+        score.trusted_ok = bool(proof.get("trusted"))
+        if not score.trusted_ok:
+            score.notes.append("proof.trusted was not true")
+
+    if spec.get("require_select_sql"):
+        sql_text = str(sql_query or "").strip().lower()
+        score.sql_ok = sql_text.startswith("select") or sql_text.startswith("with")
+        if not score.sql_ok:
+            score.notes.append("missing SELECT-only generated SQL")
+    required_sql = [str(v).lower() for v in spec.get("required_sql_contains") or []]
+    if required_sql:
+        sql_text = str(sql_query or "").lower()
+        missing = [needle for needle in required_sql if needle not in sql_text]
+        if missing:
+            score.sql_ok = False
+            score.notes.append(f"generated SQL missing required text: {missing!r}")
+
+    if spec.get("require_freshness"):
+        freshness = proof.get("data_freshness") if isinstance(proof, dict) else None
+        score.freshness_ok = any(
+            isinstance(row, dict) and row.get("refreshed_at")
+            for row in freshness or []
+        )
+        if not score.freshness_ok:
+            score.notes.append("proof.data_freshness did not include refreshed_at")
+
     # Latency is informational, not a fail.
     max_latency = float(spec.get("max_latency_s") or 0)
     if max_latency > 0 and elapsed_s > max_latency:
@@ -176,10 +243,44 @@ def _score_question(spec: dict[str, Any], response: dict[str, Any], elapsed_s: f
             f"latency {elapsed_s:.1f}s > target {max_latency:.1f}s"
         )
 
-    score.score = 25.0 * sum(
-        [score.cite_ok, score.forbid_ok, score.require_ok, score.rows_ok]
-    )
+    checks = [
+        score.cite_ok,
+        score.forbid_ok,
+        score.require_ok,
+        score.rows_ok,
+        score.numeric_ok,
+        score.trusted_ok,
+        score.sql_ok,
+        score.freshness_ok,
+    ]
+    score.score = round(100.0 * sum(checks) / len(checks), 1)
     return score
+
+
+def _extract_numeric_values(answer: str, table_rows: Any) -> list[float]:
+    import re
+
+    values: list[float] = []
+    for raw in re.findall(r"(?<![A-Za-z])[-+]?\$?\d[\d,]*(?:\.\d+)?%?", answer):
+        cleaned = raw.replace("$", "").replace(",", "").replace("%", "")
+        try:
+            values.append(float(cleaned))
+        except ValueError:
+            continue
+    if isinstance(table_rows, list):
+        for row in table_rows:
+            if not isinstance(row, dict):
+                continue
+            for value in row.values():
+                if isinstance(value, int | float):
+                    values.append(float(value))
+                elif isinstance(value, str):
+                    cleaned = value.replace("$", "").replace(",", "").replace("%", "").strip()
+                    try:
+                        values.append(float(cleaned))
+                    except ValueError:
+                        continue
+    return values
 
 
 def _emit_markdown(scores: list[QuestionScore], stamp: str, base: str) -> str:
@@ -278,6 +379,11 @@ def main() -> int:
     parser.add_argument("--report-dir", default=str(REPORT_DIR))
     parser.add_argument("--update-baseline", action="store_true",
                         help="Treat this run's overall score as the new floor")
+    parser.add_argument(
+        "--soft",
+        action="store_true",
+        help="Write reports but return 0 even when questions fail or the baseline regresses.",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -312,14 +418,19 @@ def main() -> int:
         return 0
 
     regressed, baseline_score = _check_regression(summary["overall_score"])
+    failed = [s for s in scores if not s.passed]
     if regressed and baseline_score is not None:
         log.warning(
             "REGRESSION: overall score %.1f dropped > %.1f below baseline %.1f",
             summary["overall_score"], REGRESSION_THRESHOLD, baseline_score,
         )
-        # Exit 0 anyway — Genie is non-deterministic and we'd rather
-        # see the trend in the markdown report than fail the bundle
-        # job on noise. Operators triage from the report.
+    if args.soft:
+        return 0
+    if failed:
+        log.error("FAIL: %d Genie eval question(s) failed", len(failed))
+        return 10
+    if regressed and baseline_score is not None:
+        return 11
     return 0
 
 

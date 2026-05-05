@@ -25,6 +25,24 @@ StoreDep = Annotated[AuditStore, Depends(get_audit_store)]
 # (~50) so operator deep-dives still have headroom.
 DEFAULT_AUDIT_LIMIT: int = 50
 MAX_AUDIT_LIMIT: int = 500
+_ROUTER_OWNED_EVENT_TYPES: frozenset[str] = frozenset(
+    {
+        "APPROVE",
+        "DRAFT_OUTREACH",
+        "OUTREACH_APPROVE",
+        "OUTREACH_REJECT",
+        "RECOMMEND_OFFER",
+        "RUN_GENIE",
+        "SAVE_DRAFT",
+        "SAVE_LEAD",
+        "UNSAVE_LEAD",
+        "DELETE_DRAFT",
+    }
+)
+
+
+def _event_type_for_payload(payload: AuditEventCreateRequest) -> str:
+    return (payload.event_type or payload.action).replace(".", "_").replace("-", "_").upper()
 
 
 @router.get("/events", response_model=list[AuditEvent])
@@ -51,6 +69,12 @@ def log_event(
     request: Request,
     store: StoreDep,
 ) -> AuditEvent:
+    event_type = _event_type_for_payload(payload)
+    if event_type in _ROUTER_OWNED_EVENT_TYPES or event_type.startswith("GENIE_ACTION_"):
+        raise HTTPException(
+            status_code=400,
+            detail="event type is owned by a governed server route",
+        )
     # R6 actor-spoof fix: never trust `payload.actor` from the request
     # body. The audit ledger must reflect the edge-authenticated identity,
     # not a client-supplied string — a caller passing `actor: "ceo@..."`

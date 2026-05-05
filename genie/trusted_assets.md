@@ -22,7 +22,7 @@ serverless SQL warehouse referenced in `databricks.yml`.
 | `mip.gold.lockin_cohort` | table | one row per borrower in the sub-3% 2020–2022 cohort | Size + composition of the rate-lock-in cohort that is retention / HELOC / cash-out addressable but will not rate-and-term refi. |
 | `mip.semantics.lead_generation_metric_view` | metric view | funnel-wide | Executive + Head-of-Growth funnel KPIs: addressable → eligible → scored → approved → actioned. |
 | `mip.semantics.segment_performance_metric_view` | metric view | segment | Segment strategy and A/B decisions: mean score, rate spread, equity, approval rate, outreach rate. |
-| `mip.semantics.borrower_opportunity_metric_view` | metric view | region × product × trigger | Territory planning and campaign-budget allocation. |
+| `mip.semantics.borrower_opportunity_metric_view` | metric view | state × product × trigger | Territory planning and campaign-budget allocation. Use `mip.gold.borrower_360.situs_cbsa_code` for MSA/CBSA questions. |
 
 ## Why each asset matters for Module 0
 
@@ -53,14 +53,18 @@ routes. It must stay pinned between the SQL function
 ### `gold.borrower_360`
 Unified borrower profile — property details, mortgage state, owner
 relationships, and behavioral signals — denormalized for fast single-
-borrower reads. This is the source of truth for the Evidence Drawer.
+borrower reads. This is the source of truth for the Evidence Drawer and
+for unique borrower counts such as "how many borrowers are currently
+in-the-money?"
 
 ### `gold.evidence_events`
 Append-only event ledger. Every card in the UI that shows "why now" reads
 from this table (via `backend/services/evidence.py`). Trigger types
-include rate-drop, equity-crossed, permit-filed, listed-for-sale,
-lien-change. Each row carries a `source_table` citation back to the
-Cotality silver layer.
+include rate-drop, equity-crossed, and lien-change. MLS listing and
+building-permit trigger feeds are pending Cotality delivery and are
+blocked false today; answers must disclose that gap instead of treating
+missing feed data as zero demand. Each row carries a `source_table`
+citation back to the Cotality silver layer.
 
 ### `gold.borrower_dossier`
 One row per `borrower_id` pre-joined with everything the
@@ -95,9 +99,10 @@ approval rate, outreach rate. Powers the Segment Intelligence cards and
 answers "which segment should I invest in next quarter".
 
 ### `semantics.borrower_opportunity_metric_view`
-Borrower-opportunity rollups sliced by region (MSA/ZIP), product, and
-trigger type. Powers the geography drill-down map and territory-planning
-questions.
+Borrower-opportunity rollups sliced by state, product, and trigger type.
+Powers territory-planning questions. MSA/CBSA and ZIP questions should use
+`mip.gold.borrower_360` directly because `situs_cbsa_code` and `zip` live on
+the gold borrower profile.
 
 ## Out of scope for this space
 

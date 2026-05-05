@@ -190,6 +190,7 @@ def get_genie_answer_repository() -> GenieAnswerRepository:
     global _GENIE_REPO
     if _GENIE_REPO is not None:
         return _GENIE_REPO
+    from backend.services.databricks_sql import get_sql_client
     from backend.services.genie_client import get_genie_client
     from backend.services.repositories.databricks_repo import (
         DatabricksGenieRepository,
@@ -197,7 +198,10 @@ def get_genie_answer_repository() -> GenieAnswerRepository:
 
     with _LOCK:
         if _GENIE_REPO is None:
-            _GENIE_REPO = DatabricksGenieRepository(get_genie_client())
+            _GENIE_REPO = DatabricksGenieRepository(
+                get_genie_client(),
+                get_sql_client(),
+            )
         return _GENIE_REPO
 
 

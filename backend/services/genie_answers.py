@@ -31,7 +31,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from backend.services.databricks_sql_helpers import qualify
 
@@ -75,6 +75,72 @@ _SAFE_CORPUS_SEGMENT_ROWS: dict[str, dict[str, Any]] = {
 }
 
 
+class GenieDataFreshness(BaseModel):
+    asset: str
+    refreshed_at: str | None = None
+    status: str = "unknown"
+    note: str | None = None
+
+
+class GenieProof(BaseModel):
+    sql_query: str | None = None
+    source_assets: list[str] = Field(default_factory=list)
+    data_freshness: list[GenieDataFreshness] = Field(default_factory=list)
+    row_count: int | None = None
+    filters: list[str] = Field(default_factory=list)
+    trusted: bool = False
+    known_data_gaps: list[str] = Field(default_factory=list)
+    conversation_id: str | None = None
+    message_id: str | None = None
+    elapsed_ms: int | None = None
+    generated_at: str | None = None
+
+
+class GenieVisualizationSpec(BaseModel):
+    kind: str
+    title: str | None = None
+    x: str | None = None
+    y: str | None = None
+    series: str | None = None
+    reason: str | None = None
+
+
+class GenieActionSuggestion(BaseModel):
+    id: str
+    label: str
+    action_type: str
+    description: str
+    requires_confirmation: bool = True
+    route: str | None = None
+    borrower_ids: list[str] = Field(default_factory=list)
+    criteria: dict[str, Any] = Field(default_factory=dict)
+    request_id: str | None = Field(default=None, max_length=128)
+    confirmation_token: str | None = None
+
+
+class GenieActionRequest(BaseModel):
+    action_type: str = Field(min_length=1, max_length=64)
+    conversation_id: str | None = Field(default=None, max_length=128)
+    message_id: str | None = Field(default=None, max_length=128)
+    question_hash: str | None = Field(default=None, max_length=64)
+    borrower_ids: list[str] = Field(default_factory=list, max_length=100)
+    criteria: dict[str, Any] = Field(default_factory=dict)
+    route: str | None = Field(default=None, max_length=256)
+    request_id: str | None = Field(default=None, max_length=128)
+    confirmed: bool = False
+    confirmation_token: str | None = Field(default=None, max_length=2048)
+
+
+class GenieActionResponse(BaseModel):
+    ok: bool
+    action_type: str
+    audit_event_id: str | None = None
+    route: str | None = None
+    saved_count: int = 0
+    campaign_id: str | None = None
+    message: str
+
+
 class GenieMessageResponse(BaseModel):
     """Wire contract. Existing fields (conversation_id/question/answer/
     source/trusted_assets) are unchanged. New optional fields are purely
@@ -88,6 +154,14 @@ class GenieMessageResponse(BaseModel):
     source: str
     trusted_assets: list[str]
     # Additive, optional:
+    message_id: str | None = None
+    elapsed_ms: int | None = None
+    question_hash: str | None = None
+    sql_query: str | None = None
+    row_count: int | None = None
+    proof: GenieProof | None = None
+    visualization: GenieVisualizationSpec | None = None
+    actions: list[GenieActionSuggestion] = Field(default_factory=list)
     metric_value: str | None = None
     table_rows: list[dict[str, Any]] | None = None
     follow_up_questions: list[str] = []

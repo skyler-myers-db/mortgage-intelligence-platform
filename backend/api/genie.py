@@ -2,10 +2,9 @@
 
 Slice-7 posture: `/api/genie/message` delegates to
 ``DatabricksGenieRepository`` which wraps ``ResilientGenieClient`` with
-a safe-corpus fallback gated on the ``genie`` circuit breaker. Happy
-path always queries the live Databricks Genie space; the curated catalog
-in ``backend.services.genie_answers`` is consulted only when the
-breaker is OPEN or the live call raised a ``DependencyDownError``.
+an honest degraded response gated on the ``genie`` circuit breaker. Happy
+path always queries the live Databricks Genie space; no curated answer
+body is served while Genie is reconnecting.
 
 Prior to the 2026-04-22 real-data walkthrough this router called
 ``backend.services.genie_answers.respond(question)`` directly --
@@ -14,21 +13,48 @@ canonical corpus (e.g. "12,840 borrowers" for any in-the-money
 question, even though the live gold table carries 147,742). That was
 a silent-mock-fallback regression and has been corrected here.
 """
-from typing import Annotated
+import base64
+import hashlib
+import hmac
+import json
+import re
+import secrets
+import time
+from typing import Annotated, Any
+from uuid import uuid4
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from pydantic import BaseModel
 
+from backend.config.settings import settings
+from backend.services.audit_store import (
+    AuditStore,
+    _assert_allowlisted,
+    _assert_no_pii,
+    get_audit_store,
+    resolve_actor,
+)
 from backend.services.databricks_sql_helpers import qualify
-from backend.services.genie_answers import GenieMessageResponse
+from backend.services.error_sanitizer import safe_dependency_detail
+from backend.services.genie_answers import (
+    GenieActionRequest,
+    GenieActionResponse,
+    GenieMessageResponse,
+    GenieProof,
+)
+from backend.services.lakebase import LakebaseClient, LakebaseError, get_lakebase_client
 from backend.services.repositories import GenieAnswerRepository
 from backend.services.repositories.factory import get_genie_answer_repository
+from backend.services.workspace_store import WorkspaceStore, get_workspace_store
 
 router = APIRouter(prefix="/api/genie", tags=["genie"])
 
 # Annotated[...] variant of Depends so ruff's B008 stays quiet (Depends
 # is not a default *value*; it's FastAPI's dependency marker).
 RepoDep = Annotated[GenieAnswerRepository, Depends(get_genie_answer_repository)]
+AuditDep = Annotated[AuditStore, Depends(get_audit_store)]
+LakebaseDep = Annotated[LakebaseClient, Depends(get_lakebase_client)]
+WorkspaceDep = Annotated[WorkspaceStore, Depends(get_workspace_store)]
 
 
 class GenieMessageRequest(BaseModel):
@@ -36,22 +62,1062 @@ class GenieMessageRequest(BaseModel):
     conversation_id: str | None = None
 
 
-@router.post("/start")
-def genie_start(payload: dict[str, object] | None = None) -> dict[str, object]:
-    _ = payload
+_TRUSTED_ASSET_PAIRS = (
+    ("gold", "lead_population"),
+    ("gold", "segment_population"),
+    ("gold", "lead_scores"),
+    ("gold", "borrower_360"),
+    ("gold", "borrower_dossier"),
+    ("gold", "evidence_events"),
+    ("gold", "lockin_cohort"),
+    ("semantics", "lead_generation_metric_view"),
+    ("semantics", "segment_performance_metric_view"),
+    ("semantics", "borrower_opportunity_metric_view"),
+)
+
+_ALLOWED_ACTION_TYPES = frozenset(
+    {
+        "open_cohort",
+        "save_borrowers",
+        "create_draft_campaign",
+        "compare_offer_strategies",
+        "show_rationale",
+        "export_insight",
+    }
+)
+
+_ACTION_TOKEN_TTL_S = 2 * 60 * 60
+_PROCESS_ACTION_SECRET = secrets.token_urlsafe(32)
+
+_PROTECTED_PROMPT_TERMS = (
+    "age",
+    "asian",
+    "black",
+    "disability",
+    "disabled",
+    "ethnic",
+    "ethnicity",
+    "familial status",
+    "female",
+    "gender",
+    "hispanic",
+    "latino",
+    "latina",
+    "male",
+    "marital status",
+    "national origin",
+    "native american",
+    "pacific islander",
+    "pregnant",
+    "race",
+    "religion",
+    "religious",
+    "sex",
+    "sexual orientation",
+    "white",
+    "woman",
+    "women",
+)
+
+_US_STATE_NAMES: dict[str, str] = {
+    "alabama": "AL",
+    "alaska": "AK",
+    "arizona": "AZ",
+    "arkansas": "AR",
+    "california": "CA",
+    "colorado": "CO",
+    "connecticut": "CT",
+    "delaware": "DE",
+    "florida": "FL",
+    "georgia": "GA",
+    "hawaii": "HI",
+    "idaho": "ID",
+    "illinois": "IL",
+    "indiana": "IN",
+    "iowa": "IA",
+    "kansas": "KS",
+    "kentucky": "KY",
+    "louisiana": "LA",
+    "maine": "ME",
+    "maryland": "MD",
+    "massachusetts": "MA",
+    "michigan": "MI",
+    "minnesota": "MN",
+    "mississippi": "MS",
+    "missouri": "MO",
+    "montana": "MT",
+    "nebraska": "NE",
+    "nevada": "NV",
+    "new hampshire": "NH",
+    "new jersey": "NJ",
+    "new mexico": "NM",
+    "new york": "NY",
+    "north carolina": "NC",
+    "north dakota": "ND",
+    "ohio": "OH",
+    "oklahoma": "OK",
+    "oregon": "OR",
+    "pennsylvania": "PA",
+    "rhode island": "RI",
+    "south carolina": "SC",
+    "south dakota": "SD",
+    "tennessee": "TN",
+    "texas": "TX",
+    "utah": "UT",
+    "vermont": "VT",
+    "virginia": "VA",
+    "washington": "WA",
+    "west virginia": "WV",
+    "wisconsin": "WI",
+    "wyoming": "WY",
+}
+
+_MODULE0_FOOTPRINT_CODES = ("IL", "CA", "FL", "TX", "WA", "CO")
+
+
+_CAMPAIGN_INSERT_SQL = """
+WITH inserted_audit AS (
+  INSERT INTO mip_app.action_audit (
+    event_type, actor_email, entity_type, entity_id,
+    request_id, evidence_ids, metadata
+  ) VALUES (
+    'GENIE_ACTION_CREATE_DRAFT_CAMPAIGN',
+    %(owner_email)s,
+    'campaign',
+    '',
+    %(request_id)s,
+    ARRAY[]::TEXT[],
+    %(metadata)s::jsonb
+  )
+  ON CONFLICT (actor_email, request_id, event_type)
+    WHERE request_id IS NOT NULL AND left(event_type, 13) = 'GENIE_ACTION_'
+    DO NOTHING
+  RETURNING audit_id, metadata
+),
+existing_audit AS (
+  SELECT audit_id, metadata
+  FROM mip_app.action_audit
+  WHERE actor_email = %(owner_email)s
+    AND request_id = %(request_id)s
+    AND event_type = 'GENIE_ACTION_CREATE_DRAFT_CAMPAIGN'
+    AND NOT EXISTS (SELECT 1 FROM inserted_audit)
+  LIMIT 1
+),
+audit AS (
+  SELECT audit_id, metadata, TRUE AS inserted FROM inserted_audit
+  UNION ALL
+  SELECT audit_id, metadata, FALSE AS inserted FROM existing_audit
+),
+inserted_campaign AS (
+  INSERT INTO mip_app.campaigns (name, owner_email, status, criteria)
+  SELECT %(name)s, %(owner_email)s, 'draft', %(criteria)s::jsonb
+  FROM audit
+  WHERE inserted
+  RETURNING campaign_id
+),
+updated_audit AS (
+  UPDATE mip_app.action_audit AS aa
+  SET entity_id = inserted_campaign.campaign_id::text,
+      metadata = jsonb_set(
+        aa.metadata,
+        '{campaign_id}',
+        to_jsonb(inserted_campaign.campaign_id::text),
+        true
+      )
+  FROM inserted_campaign, audit
+  WHERE aa.audit_id = audit.audit_id
+  RETURNING aa.audit_id, aa.entity_id, aa.metadata
+)
+SELECT
+  COALESCE(
+    (SELECT entity_id FROM updated_audit),
+    NULLIF((SELECT metadata ->> 'campaign_id' FROM audit), ''),
+    NULLIF((SELECT metadata ->> 'entity_id' FROM audit), ''),
+    NULLIF((SELECT entity_id FROM mip_app.action_audit WHERE audit_id = (SELECT audit_id FROM audit)), '')
+  ) AS campaign_id,
+  (SELECT audit_id FROM audit) AS audit_id
+"""
+
+_ACTION_AUDIT_BY_REQUEST_ID_SQL = """
+SELECT audit_id, event_type, entity_id, metadata
+FROM mip_app.action_audit
+WHERE request_id = %(request_id)s
+  AND actor_email = %(actor_email)s
+  AND event_type = %(event_type)s
+  AND metadata ->> 'action_type' = %(action_type)s
+ORDER BY event_at DESC
+LIMIT 1
+"""
+
+_GENIE_ACTION_AUDIT_INSERT_SQL = """
+WITH inserted_audit AS (
+  INSERT INTO mip_app.action_audit (
+    event_type, actor_email, entity_type, entity_id,
+    request_id, evidence_ids, metadata
+  ) VALUES (
+    %(event_type)s,
+    %(actor_email)s,
+    'genie_action',
+    %(entity_id)s,
+    %(request_id)s,
+    ARRAY[]::TEXT[],
+    %(metadata)s::jsonb
+  )
+  ON CONFLICT (actor_email, request_id, event_type)
+    WHERE request_id IS NOT NULL AND left(event_type, 13) = 'GENIE_ACTION_'
+    DO NOTHING
+  RETURNING audit_id, entity_id, metadata
+),
+existing_audit AS (
+  SELECT audit_id, entity_id, metadata
+  FROM mip_app.action_audit
+  WHERE actor_email = %(actor_email)s
+    AND request_id = %(request_id)s
+    AND event_type = %(event_type)s
+    AND NOT EXISTS (SELECT 1 FROM inserted_audit)
+  LIMIT 1
+)
+SELECT audit_id, entity_id, metadata
+FROM inserted_audit
+UNION ALL
+SELECT audit_id, entity_id, metadata
+FROM existing_audit
+LIMIT 1
+"""
+
+_LATEST_GENIE_SESSION_SQL = """
+SELECT conversation_id
+FROM mip_app.genie_sessions
+WHERE actor_email = %(actor_email)s
+ORDER BY updated_at DESC
+LIMIT 1
+"""
+
+_GENIE_SESSION_UPSERT_SQL = """
+INSERT INTO mip_app.genie_sessions (
+  actor_email, conversation_id, last_message_id, last_question_hash,
+  source, trusted_assets, updated_at
+) VALUES (
+  %(actor_email)s, %(conversation_id)s, %(last_message_id)s, %(last_question_hash)s,
+  %(source)s, %(trusted_assets)s, now()
+)
+ON CONFLICT (actor_email, conversation_id) DO UPDATE SET
+  last_message_id = EXCLUDED.last_message_id,
+  last_question_hash = EXCLUDED.last_question_hash,
+  source = EXCLUDED.source,
+  trusted_assets = EXCLUDED.trusted_assets,
+  updated_at = now()
+"""
+
+_GENIE_MESSAGE_INSERT_SQL = """
+INSERT INTO mip_app.genie_messages (
+  conversation_id, message_id, actor_email, question_hash,
+  source, row_count, visualization_kind, trusted_assets, request_id
+) VALUES (
+  %(conversation_id)s, %(message_id)s, %(actor_email)s, %(question_hash)s,
+  %(source)s, %(row_count)s, %(visualization_kind)s, %(trusted_assets)s,
+  %(request_id)s
+)
+ON CONFLICT (conversation_id, message_id) DO NOTHING
+"""
+
+
+def _actor(request: Request) -> str:
+    if settings.trust_forwarded_headers:
+        email = request.headers.get("X-Forwarded-Email")
+        if email:
+            return email
+        user = request.headers.get("X-Forwarded-User")
+        if user:
+            return user
+        raise HTTPException(status_code=401, detail="genie action identity required")
+    return resolve_actor(request)
+
+
+def _safe_audit_write(store: AuditStore, **kwargs: Any) -> None:
+    try:
+        store.write(**kwargs)
+    except Exception:
+        # The answer itself must not fail because a best-effort read audit
+        # row was unavailable. Governed write actions below still fail closed.
+        return
+
+
+def _required_audit_write(store: AuditStore, **kwargs: Any) -> None:
+    try:
+        store.write(**kwargs)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=safe_dependency_detail("lakebase"),
+        ) from exc
+
+
+def _borrower_ids(ids: list[str]) -> list[str]:
+    out: list[str] = []
+    for value in ids:
+        borrower_id = str(value).strip()
+        if not borrower_id.startswith("B-"):
+            continue
+        if borrower_id not in out:
+            out.append(borrower_id)
+    return out[:100]
+
+
+def _genie_event_type(action_type: str) -> str:
+    return f"GENIE_ACTION_{action_type.upper()}"
+
+
+def _reviewed_audit_metadata(action: str, payload: dict[str, Any]) -> str:
+    metadata = {"action": action, **payload}
+    _assert_no_pii(metadata)
+    _assert_allowlisted(metadata)
+    return json.dumps(metadata)
+
+
+def _criteria_summary(criteria: dict[str, Any]) -> tuple[str, list[str], list[str], str | None]:
+    safe_keys = sorted(
+        str(k)
+        for k in criteria
+        if str(k) in {"source", "source_assets", "visualization_kind", "row_count"}
+    )
+    canonical = json.dumps(
+        {k: criteria.get(k) for k in safe_keys},
+        sort_keys=True,
+        default=str,
+    )
+    criteria_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+    source_assets = _validated_source_assets(criteria)
+    visualization_kind = criteria.get("visualization_kind")
+    return (
+        criteria_hash,
+        safe_keys,
+        source_assets,
+        str(visualization_kind) if visualization_kind else None,
+    )
+
+
+def _validated_source_assets(criteria: dict[str, Any]) -> list[str]:
+    assets = [str(v) for v in criteria.get("source_assets", []) if isinstance(v, str)]
+    trusted = set(_trusted_assets())
+    invalid = [asset for asset in assets if asset not in trusted]
+    if invalid:
+        raise HTTPException(status_code=400, detail="Genie action includes untrusted source assets")
+    return assets[:10]
+
+
+def _action_token_secret() -> bytes:
+    configured = settings.mip_genie_action_secret
+    if configured is not None:
+        value = configured.get_secret_value().strip()
+        if value:
+            return value.encode("utf-8")
+    return _PROCESS_ACTION_SECRET.encode("utf-8")
+
+
+def _b64url_encode(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _b64url_decode(value: str) -> bytes:
+    padded = value + ("=" * (-len(value) % 4))
+    return base64.urlsafe_b64decode(padded.encode("ascii"))
+
+
+def _action_token_claims(
+    *,
+    actor: str,
+    action_type: str,
+    borrower_ids: list[str],
+    criteria: dict[str, Any],
+    route: str | None,
+    conversation_id: str | None,
+    message_id: str | None,
+    question_hash: str | None,
+    request_id: str,
+    expires_at: int,
+    nonce: str,
+) -> dict[str, Any]:
+    criteria_hash, _criteria_keys, source_assets, _visualization_kind = _criteria_summary(criteria)
     return {
-        "conversation_id": "session-conv",
-        "trusted_assets": [
-            qualify("gold", "lead_population"),
-            qualify("gold", "lead_segment_membership"),
-            qualify("semantics", "lead_generation_metric_view"),
-        ],
+        "v": 1,
+        "actor": actor,
+        "action_type": action_type,
+        "borrower_ids": sorted(set(borrower_ids)),
+        "conversation_id": conversation_id or "",
+        "criteria_hash": criteria_hash,
+        "exp": expires_at,
+        "message_id": message_id or "",
+        "nonce": nonce,
+        "question_hash": question_hash or "",
+        "request_id": request_id,
+        "route": route or "",
+        "trusted_assets": sorted(set(source_assets)),
+    }
+
+
+def _sign_action_claims(claims: dict[str, Any]) -> str:
+    canonical = json.dumps(claims, sort_keys=True, separators=(",", ":"), default=str)
+    body = _b64url_encode(canonical.encode("utf-8"))
+    sig = hmac.new(
+        _action_token_secret(),
+        body.encode("ascii"),
+        hashlib.sha256,
+    ).digest()
+    return f"{body}.{_b64url_encode(sig)}"
+
+
+def _issue_response_action_tokens(
+    response: GenieMessageResponse,
+    *,
+    actor: str,
+) -> None:
+    for action in response.actions:
+        expires_at = int(time.time()) + _ACTION_TOKEN_TTL_S
+        request_id = action.request_id or f"genie-action-{uuid4()}"
+        action.request_id = request_id
+        claims = _action_token_claims(
+            actor=actor,
+            action_type=action.action_type,
+            borrower_ids=_borrower_ids(action.borrower_ids),
+            criteria=action.criteria,
+            route=action.route,
+            conversation_id=response.conversation_id,
+            message_id=response.message_id,
+            question_hash=response.question_hash,
+            request_id=request_id,
+            expires_at=expires_at,
+            nonce=secrets.token_urlsafe(12),
+        )
+        action.confirmation_token = _sign_action_claims(claims)
+
+
+def _decode_action_token(token: str) -> dict[str, Any]:
+    try:
+        body, supplied_sig = token.split(".", 1)
+        expected_sig = hmac.new(
+            _action_token_secret(),
+            body.encode("ascii"),
+            hashlib.sha256,
+        ).digest()
+        actual_sig = _b64url_decode(supplied_sig)
+        if not hmac.compare_digest(actual_sig, expected_sig):
+            raise ValueError("bad signature")
+        claims = json.loads(_b64url_decode(body).decode("utf-8"))
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="Genie action confirmation token is invalid",
+        ) from exc
+    if not isinstance(claims, dict):
+        raise HTTPException(status_code=400, detail="Genie action confirmation token is invalid")
+    return claims
+
+
+def _lookup_existing_genie_action(
+    lakebase: LakebaseClient,
+    *,
+    request_id: str | None,
+    actor: str,
+    action_type: str,
+) -> GenieActionResponse | None:
+    """Return the prior result for a replayed Genie action request.
+
+    The browser generates one request id per confirmed click. If the
+    network drops after Lakebase commits, a retry should not duplicate the
+    campaign, saved-workspace mutation, or audit row.
+    """
+    if not request_id:
+        return None
+    try:
+        row = lakebase.fetchone(
+            _ACTION_AUDIT_BY_REQUEST_ID_SQL,
+            {
+                "request_id": request_id,
+                "actor_email": actor,
+                "event_type": _genie_event_type(action_type),
+                "action_type": action_type,
+            },
+        )
+    except LakebaseError:
+        return None
+    if row is None or "metadata" not in row:
+        return None
+    metadata = row.get("metadata") or {}
+    if isinstance(metadata, str):
+        try:
+            metadata = json.loads(metadata)
+        except json.JSONDecodeError:
+            metadata = {}
+    if not isinstance(metadata, dict):
+        metadata = {}
+    campaign_id = metadata.get("campaign_id")
+    if not campaign_id and action_type == "create_draft_campaign":
+        campaign_id = row.get("entity_id")
+    saved_count = metadata.get("saved_count")
+    try:
+        parsed_saved_count = int(saved_count or 0)
+    except (TypeError, ValueError):
+        parsed_saved_count = 0
+    return GenieActionResponse(
+        ok=True,
+        action_type=action_type,
+        audit_event_id=str(row.get("audit_id") or ""),
+        route=str(metadata.get("route") or "") or None,
+        saved_count=parsed_saved_count,
+        campaign_id=str(campaign_id) if campaign_id else None,
+        message="Genie action was already recorded for this request.",
+    )
+
+
+def _latest_genie_conversation(
+    lakebase: LakebaseClient,
+    *,
+    actor: str,
+) -> str | None:
+    try:
+        row = lakebase.fetchone(_LATEST_GENIE_SESSION_SQL, {"actor_email": actor})
+    except LakebaseError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=safe_dependency_detail("lakebase"),
+        ) from exc
+    if row is None:
+        return None
+    conversation_id = row.get("conversation_id")
+    return str(conversation_id) if conversation_id else None
+
+
+def _record_genie_session(
+    lakebase: LakebaseClient,
+    *,
+    actor: str,
+    response: GenieMessageResponse,
+) -> None:
+    conversation_id = response.conversation_id
+    if not conversation_id:
+        return
+    question_hash = response.question_hash or hashlib.sha256(
+        response.question.encode("utf-8")
+    ).hexdigest()[:16]
+    message_id = response.message_id or f"{response.source}-{question_hash}"
+    params = {
+        "actor_email": actor,
+        "conversation_id": conversation_id,
+        "last_message_id": message_id,
+        "last_question_hash": question_hash,
+        "source": response.source,
+        "trusted_assets": response.trusted_assets,
+        "question_hash": question_hash,
+        "message_id": message_id,
+        "row_count": int(response.row_count or 0),
+        "visualization_kind": response.visualization.kind if response.visualization else None,
+        "request_id": f"genie-{uuid4()}",
+    }
+    try:
+        lakebase.execute(_GENIE_SESSION_UPSERT_SQL, params)
+        lakebase.execute(_GENIE_MESSAGE_INSERT_SQL, params)
+    except LakebaseError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=safe_dependency_detail("lakebase"),
+        ) from exc
+
+
+def _finalize_genie_response(
+    lakebase: LakebaseClient,
+    *,
+    actor: str,
+    response: GenieMessageResponse,
+) -> GenieMessageResponse:
+    _issue_response_action_tokens(response, actor=actor)
+    _record_genie_session(lakebase, actor=actor, response=response)
+    return response
+
+
+def _validate_action_confirmation(payload: GenieActionRequest, *, actor: str) -> dict[str, Any]:
+    if not payload.confirmed:
+        raise HTTPException(status_code=400, detail="Genie action requires explicit confirmation")
+    if not payload.confirmation_token:
+        raise HTTPException(status_code=400, detail="Genie action confirmation token is invalid")
+    claims = _decode_action_token(payload.confirmation_token)
+    if claims.get("exp") is None:
+        raise HTTPException(status_code=400, detail="Genie action confirmation token is invalid")
+    try:
+        expires_at = int(claims["exp"])
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="Genie action confirmation token is invalid",
+        ) from exc
+    if expires_at < int(time.time()):
+        raise HTTPException(status_code=400, detail="Genie action confirmation token expired")
+    token_request_id = str(claims.get("request_id") or "")
+    if not token_request_id:
+        raise HTTPException(status_code=400, detail="Genie action confirmation token is invalid")
+    if payload.request_id != token_request_id:
+        raise HTTPException(status_code=400, detail="Genie action confirmation token is invalid")
+    expected_claims = _action_token_claims(
+        actor=actor,
+        action_type=payload.action_type,
+        borrower_ids=_borrower_ids(payload.borrower_ids),
+        criteria=payload.criteria,
+        route=payload.route,
+        conversation_id=payload.conversation_id,
+        message_id=payload.message_id,
+        question_hash=payload.question_hash,
+        request_id=token_request_id,
+        expires_at=expires_at,
+        nonce=str(claims.get("nonce") or ""),
+    )
+    for key, expected_value in expected_claims.items():
+        if claims.get(key) != expected_value:
+            raise HTTPException(status_code=400, detail="Genie action confirmation token is invalid")
+    if claims.get("v") != 1 or not claims.get("nonce"):
+        raise HTTPException(status_code=400, detail="Genie action confirmation token is invalid")
+    return claims
+
+
+def _audit_payload(payload: GenieActionRequest, *, saved_count: int = 0, campaign_id: str | None = None) -> dict[str, Any]:
+    criteria_hash, criteria_keys, source_assets, visualization_kind = _criteria_summary(payload.criteria)
+    borrower_ids = _borrower_ids(payload.borrower_ids)
+    return {
+        "action_type": payload.action_type,
+        "conversation_id": payload.conversation_id,
+        "message_id": payload.message_id,
+        "question_hash": payload.question_hash,
+        "rendered_borrower_ids": borrower_ids,
+        "row_count": int(payload.criteria.get("row_count") or len(borrower_ids) or 0),
+        "saved_count": saved_count,
+        "campaign_id": campaign_id,
+        "criteria_hash": criteria_hash,
+        "criteria_keys": criteria_keys,
+        "source_assets": source_assets,
+        "visualization_kind": visualization_kind,
+        "route": payload.route,
+    }
+
+
+def _campaign_criteria(payload: GenieActionRequest) -> dict[str, Any]:
+    borrower_ids = _borrower_ids(payload.borrower_ids)
+    criteria_hash, criteria_keys, source_assets, visualization_kind = _criteria_summary(payload.criteria)
+    return {
+        "source": "genie",
+        "borrower_ids": borrower_ids,
+        "criteria_hash": criteria_hash,
+        "criteria_keys": criteria_keys,
+        "source_assets": source_assets,
+        "visualization_kind": visualization_kind,
+        "question_hash": payload.question_hash,
+    }
+
+
+def _trusted_assets() -> list[str]:
+    assets = [qualify(schema, table) for schema, table in _TRUSTED_ASSET_PAIRS]
+    for schema, table in _TRUSTED_ASSET_PAIRS:
+        asset = qualify(schema, table, catalog="mip")
+        if asset not in assets:
+            assets.append(asset)
+    return assets
+
+
+def _protected_prompt_match(question: str) -> str | None:
+    for term in _PROTECTED_PROMPT_TERMS:
+        pattern = r"(?<![a-z0-9])" + re.escape(term) + r"(?![a-z0-9])"
+        if re.search(pattern, question, flags=re.IGNORECASE):
+            return term
+    return None
+
+
+def _pending_feed_gaps(question: str) -> list[str]:
+    q = question.lower()
+    gaps: list[str] = []
+    if "permit" in q or "building permit" in q:
+        gaps.append(
+            "Cotality Building Permits feed is pending; permit flags are blocked false today."
+        )
+    if "listing" in q or "listed" in q or "mls" in q:
+        gaps.append(
+            "Cotality MLS/listing feed is pending; listed-for-sale flags are blocked false today."
+        )
+    return gaps
+
+
+def _outside_footprint_match(question: str) -> tuple[str, str, list[str]] | None:
+    q = question.lower()
+    matched: list[tuple[str, str]] = []
+    for name, code in _US_STATE_NAMES.items():
+        name_pattern = r"(?<![a-z0-9])" + re.escape(name) + r"(?![a-z0-9])"
+        code_pattern = r"(?<![A-Za-z0-9])" + re.escape(code) + r"(?![A-Za-z0-9])"
+        if re.search(name_pattern, q) or re.search(code_pattern, question):
+            matched.append((name.title(), code))
+    if not matched:
+        return None
+    allowed_codes = set(_MODULE0_FOOTPRINT_CODES)
+    for name, code in matched:
+        if code not in allowed_codes:
+            return (name, code, list(_MODULE0_FOOTPRINT_CODES))
+    return None
+
+
+def _is_outreach_writer_request(question: str) -> bool:
+    q = question.lower()
+    patterns = (
+        r"\bwrite\b.*\b(email|sms|text|message|letter)\b",
+        r"\b(email|sms|text|message|letter)\b.*\b(send|write|draft)\b",
+        r"\bsend\b.*\b(email|sms|text|message|letter)\b",
+        r"\bdraft\b.*\b(email|sms|text|message|letter)\b",
+    )
+    return any(re.search(pattern, q) for pattern in patterns)
+
+
+@router.post("/start")
+def genie_start(
+    request: Request,
+    lakebase: LakebaseDep,
+    payload: dict[str, object] | None = None,
+) -> dict[str, object]:
+    _ = payload
+    actor = resolve_actor(request)
+    return {
+        "conversation_id": _latest_genie_conversation(lakebase, actor=actor),
+        "trusted_assets": _trusted_assets(),
     }
 
 
 @router.post("/message", response_model=GenieMessageResponse)
-def genie_message(payload: GenieMessageRequest, repo: RepoDep) -> GenieMessageResponse:
+def genie_message(
+    payload: GenieMessageRequest,
+    request: Request,
+    background: BackgroundTasks,
+    repo: RepoDep,
+    audit: AuditDep,
+    lakebase: LakebaseDep,
+) -> GenieMessageResponse:
+    protected_term = _protected_prompt_match(payload.question)
+    if protected_term:
+        question_hash = hashlib.sha256(payload.question.encode("utf-8")).hexdigest()[:16]
+        actor = resolve_actor(request)
+        _ = background
+        _required_audit_write(
+            audit,
+            actor=actor,
+            action="genie.refused_prompt",
+            entity_type="genie_message",
+            entity_id=payload.conversation_id or question_hash,
+            payload_json={
+                "conversation_id": payload.conversation_id,
+                "message_id": None,
+                "question_hash": question_hash,
+                "row_count": 0,
+                "source_assets": [],
+                "visualization_kind": None,
+                "action_type": "refused_prompt",
+            },
+            event_type="RUN_GENIE",
+        )
+        response = GenieMessageResponse(
+            conversation_id=payload.conversation_id or "",
+            question=payload.question,
+            answer=(
+                "For fair-lending compliance, I cannot segment, score, rank, "
+                "or target borrowers using protected-class attributes or "
+                "proxies. Ask for a permitted Module 0 strategy using trusted "
+                "mortgage, lien, equity, segment, and offer signals."
+            ),
+            source="refused",
+            trusted_assets=[],
+            question_hash=question_hash,
+            row_count=0,
+            proof=GenieProof(
+                source_assets=[],
+                row_count=0,
+                trusted=False,
+                filters=[],
+                known_data_gaps=[
+                    f"prompt refused before Genie execution due protected-class term: {protected_term}"
+                ],
+                conversation_id=payload.conversation_id,
+            ),
+            table_rows=[],
+        )
+        return _finalize_genie_response(lakebase, actor=actor, response=response)
+    pending_gaps = _pending_feed_gaps(payload.question)
+    if pending_gaps:
+        question_hash = hashlib.sha256(payload.question.encode("utf-8")).hexdigest()[:16]
+        actor = resolve_actor(request)
+        _ = background
+        _required_audit_write(
+            audit,
+            actor=actor,
+            action="genie.pending_source_gap",
+            entity_type="genie_message",
+            entity_id=payload.conversation_id or question_hash,
+            payload_json={
+                "conversation_id": payload.conversation_id,
+                "message_id": None,
+                "question_hash": question_hash,
+                "row_count": 0,
+                "source_assets": [],
+                "visualization_kind": None,
+                "action_type": "pending_source_gap",
+            },
+            event_type="RUN_GENIE",
+        )
+        response = GenieMessageResponse(
+            conversation_id=payload.conversation_id or "",
+            question=payload.question,
+            answer=(
+                "This question depends on a source feed that is not live yet. "
+                + " ".join(pending_gaps)
+                + " I will not treat the missing feed as zero demand; ask without "
+                "that pending criterion, or use the current lien, equity, owner-link, "
+                "rate-spread, segment, and offer signals."
+            ),
+            source="data_gap",
+            trusted_assets=[],
+            question_hash=question_hash,
+            row_count=0,
+            proof=GenieProof(
+                source_assets=[],
+                row_count=0,
+                trusted=False,
+                filters=[],
+                known_data_gaps=pending_gaps,
+                conversation_id=payload.conversation_id,
+            ),
+            table_rows=[],
+        )
+        return _finalize_genie_response(lakebase, actor=actor, response=response)
+    outside_footprint = _outside_footprint_match(payload.question)
+    if outside_footprint is not None:
+        state_name, state_code, footprint_codes = outside_footprint
+        question_hash = hashlib.sha256(payload.question.encode("utf-8")).hexdigest()[:16]
+        actor = resolve_actor(request)
+        _ = background
+        footprint_label = ", ".join(footprint_codes)
+        _required_audit_write(
+            audit,
+            actor=actor,
+            action="genie.outside_footprint",
+            entity_type="genie_message",
+            entity_id=payload.conversation_id or question_hash,
+            payload_json={
+                "conversation_id": payload.conversation_id,
+                "message_id": None,
+                "question_hash": question_hash,
+                "row_count": 0,
+                "source_assets": [],
+                "visualization_kind": None,
+                "action_type": "outside_footprint",
+                "requested_state": state_code,
+                "footprint_states": footprint_codes,
+            },
+            event_type="RUN_GENIE",
+        )
+        response = GenieMessageResponse(
+            conversation_id=payload.conversation_id or "",
+            question=payload.question,
+            answer=(
+                f"{state_name} ({state_code}) is outside the current Summit Mortgage "
+                f"Module 0 footprint ({footprint_label}), so there are 0 in-footprint "
+                "borrowers there. I will not treat that as a missing data feed; ask for "
+                "one of the footprint states, or ask for the full six-state view."
+            ),
+            source="out_of_footprint",
+            trusted_assets=[],
+            question_hash=question_hash,
+            row_count=0,
+            proof=GenieProof(
+                source_assets=[],
+                row_count=0,
+                trusted=False,
+                filters=[f"requested_state = {state_code}"],
+                known_data_gaps=[
+                    f"{state_code} is outside the current Module 0 footprint: {footprint_label}"
+                ],
+                conversation_id=payload.conversation_id,
+            ),
+            follow_up_questions=[
+                "How many borrowers do we have across the full footprint?",
+                "Break down in-the-money borrowers by footprint state.",
+            ],
+            table_rows=[],
+        )
+        return _finalize_genie_response(lakebase, actor=actor, response=response)
+    if _is_outreach_writer_request(payload.question):
+        question_hash = hashlib.sha256(payload.question.encode("utf-8")).hexdigest()[:16]
+        actor = resolve_actor(request)
+        _ = background
+        _required_audit_write(
+            audit,
+            actor=actor,
+            action="genie.outreach_guardrail",
+            entity_type="genie_message",
+            entity_id=payload.conversation_id or question_hash,
+            payload_json={
+                "conversation_id": payload.conversation_id,
+                "message_id": None,
+                "question_hash": question_hash,
+                "row_count": 0,
+                "source_assets": [],
+                "visualization_kind": None,
+                "action_type": "outreach_guardrail",
+            },
+            event_type="RUN_GENIE",
+        )
+        response = GenieMessageResponse(
+            conversation_id=payload.conversation_id or "",
+            question=payload.question,
+            answer=(
+                "Use governed outreach workflow for borrower communications. "
+                "Genie can size the cohort, explain why borrowers qualify, and "
+                "create an audited draft campaign, but borrower-specific email "
+                "or SMS copy must stay in the Offer Orchestrator / outreach "
+                "review path with explicit human approval."
+            ),
+            source="refused",
+            trusted_assets=[],
+            question_hash=question_hash,
+            row_count=0,
+            proof=GenieProof(
+                source_assets=[],
+                row_count=0,
+                trusted=False,
+                filters=[],
+                known_data_gaps=[],
+                conversation_id=payload.conversation_id,
+            ),
+            follow_up_questions=[
+                "Show the top 10 refinance borrowers by score.",
+                "Turn the top refinance cohort into a draft campaign.",
+            ],
+            table_rows=[],
+        )
+        return _finalize_genie_response(lakebase, actor=actor, response=response)
     # repo.respond() returns a GenieMessageResponse by contract; the
     # protocol annotates `object` only to dodge a forward-import cycle.
-    result = repo.respond(payload.question)
-    return result  # type: ignore[return-value]
+    result = repo.respond(payload.question, conversation_id=payload.conversation_id)
+    actor = resolve_actor(request)
+    _ = background
+    _required_audit_write(
+        audit,
+        actor=actor,
+        action="genie.run_query",
+        entity_type="genie_message",
+        entity_id=result.message_id or result.conversation_id,
+        payload_json={
+            "conversation_id": result.conversation_id,
+            "message_id": result.message_id,
+            "question_hash": result.question_hash,
+            "row_count": result.row_count or 0,
+            "source_assets": result.trusted_assets,
+            "visualization_kind": result.visualization.kind if result.visualization else None,
+        },
+        event_type="RUN_GENIE",
+    )
+    return _finalize_genie_response(lakebase, actor=actor, response=result)  # type: ignore[arg-type]
+
+
+@router.post("/actions", response_model=GenieActionResponse)
+def genie_action(
+    payload: GenieActionRequest,
+    request: Request,
+    audit: AuditDep,
+    workspace: WorkspaceDep,
+    lakebase: LakebaseDep,
+) -> GenieActionResponse:
+    _ = audit
+    actor = _actor(request)
+    borrower_ids = _borrower_ids(payload.borrower_ids)
+    action_type = payload.action_type
+    if action_type not in _ALLOWED_ACTION_TYPES:
+        raise HTTPException(status_code=400, detail="unsupported Genie action")
+    claims = _validate_action_confirmation(payload, actor=actor)
+    request_id = str(claims["request_id"])
+    existing = _lookup_existing_genie_action(
+        lakebase,
+        request_id=request_id,
+        actor=actor,
+        action_type=action_type,
+    )
+    if existing is not None:
+        return existing
+
+    try:
+        if action_type == "save_borrowers":
+            audit_metadata = _audit_payload(payload, saved_count=len(borrower_ids))
+            saved, audit_event_id = workspace.save_leads_from_genie_action(
+                actor=actor,
+                borrower_ids=borrower_ids,
+                request_id=request_id,
+                entity_id=payload.message_id or payload.conversation_id or request_id,
+                metadata=audit_metadata,
+            )
+            return GenieActionResponse(
+                ok=True,
+                action_type=action_type,
+                audit_event_id=audit_event_id,
+                route=payload.route,
+                saved_count=saved,
+                message=f"Saved {saved} borrower{'' if saved == 1 else 's'} to the governed workspace.",
+            )
+
+        if action_type == "create_draft_campaign":
+            campaign_payload = _campaign_criteria(payload)
+            metadata = {
+                **_audit_payload(payload),
+            }
+            row = lakebase.fetchone(
+                _CAMPAIGN_INSERT_SQL,
+                {
+                    "name": "Genie strategy draft",
+                    "owner_email": actor,
+                    "criteria": json.dumps(campaign_payload),
+                    "request_id": request_id,
+                    "metadata": _reviewed_audit_metadata(
+                        "genie.create_draft_campaign",
+                        metadata,
+                    ),
+                },
+            )
+            if row is None:
+                raise LakebaseError("campaign insert returned no row")
+            return GenieActionResponse(
+                ok=True,
+                action_type=action_type,
+                audit_event_id=str(row.get("audit_id") or ""),
+                route=payload.route or "/lead-queue",
+                campaign_id=str(row.get("campaign_id") or ""),
+                message="Created a Lakebase draft campaign from this Genie result.",
+            )
+
+        row = lakebase.fetchone(
+            _GENIE_ACTION_AUDIT_INSERT_SQL,
+            {
+                "event_type": _genie_event_type(action_type),
+                "actor_email": actor,
+                "entity_id": payload.message_id or payload.conversation_id or request_id,
+                "request_id": request_id,
+                "metadata": _reviewed_audit_metadata(
+                    f"genie.{action_type}",
+                    _audit_payload(payload),
+                ),
+            },
+        )
+        if row is None:
+            raise LakebaseError("genie action audit insert returned no row")
+    except LakebaseError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=safe_dependency_detail("lakebase"),
+        ) from exc
+
+    return GenieActionResponse(
+        ok=True,
+        action_type=action_type,
+        audit_event_id=str(row.get("audit_id") or ""),
+        route=payload.route,
+        saved_count=0,
+        message="Genie action recorded to the governed audit ledger.",
+    )

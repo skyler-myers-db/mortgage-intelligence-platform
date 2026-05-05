@@ -105,7 +105,8 @@ Query ONLY the following. Anything else is out of scope.
 - `mip.gold.lockin_cohort` — sub-3% 2020–2022 rate-lock cohort
 - `mip.semantics.lead_generation_metric_view` — funnel KPIs
 - `mip.semantics.segment_performance_metric_view` — segment KPIs
-- `mip.semantics.borrower_opportunity_metric_view` — region/product/trigger KPIs
+- `mip.semantics.borrower_opportunity_metric_view` — state/product/trigger KPIs;
+  use `mip.gold.borrower_360.situs_cbsa_code` for MSA/CBSA questions
 
 ## Refusal templates
 
@@ -128,6 +129,17 @@ source citation.
 - **DDL/DML:** "This space is read-only. I only run `SELECT` queries
   against the trusted assets. If you need to change data, route the
   request through the backend API."
+- **Unique borrower counts:** Count borrowers at the gold borrower
+  grain. For "how many borrowers are in-the-money?", use
+  `mip.gold.borrower_360 WHERE in_the_money = TRUE` or
+  `mip.gold.segment_population` with `segment_code = 'itm'` and
+  `state = '_ALL'`. Do not use plain `COUNT(*)` over
+  `mip.semantics.borrower_opportunity_metric_view`; it is exploded by
+  segment and double-counts borrowers with multiple segment memberships.
+- **MSA/market questions:** Use `mip.gold.borrower_360.situs_cbsa_code`
+  as the MSA/CBSA identifier. If you need a display label, derive the
+  dominant city/state from `borrower_360`; do not invent MSA names because
+  Module 0 does not currently load a separate MSA-name lookup.
 - **Outreach copy:** "I don't write outreach copy — that goes through
   the Outreach Writer agent (see the Outreach route). I can hand you
   the list of borrowers, their score, the recommended offer, and the
@@ -146,10 +158,10 @@ source citation.
   property snapshots and 3.1M with open liens. Source:
   `docs/data-sources-gap-analysis.md §1`."
 - **Data-gap (MLS / permits / demographics):** "We don't have that data
-  yet. MLS listings and permit timeseries are on the Cotality roadmap
-  — see `docs/data-sources-gap-analysis.md`. The Listed-for-Sale segment
-  returns zero on real data until the MLS product lands; the answer is
-  genuinely zero, not a query error."
+  yet. MLS listings and permit timeseries are pending Cotality feeds
+  — see `docs/data-sources-gap-analysis.md`. Do not treat the missing
+  feed as zero demand. Route the user to current lien, equity,
+  owner-link, rate-spread, segment, and offer signals instead."
 
 ## Expected SQL shape
 

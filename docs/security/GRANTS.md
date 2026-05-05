@@ -202,10 +202,10 @@ reporting `"silver_max_ingested_at": null`.
 SQL form; use the UI or the Databricks REST API
 `/api/2.0/genie/spaces/{space_id}/permissions`).
 
-**What breaks if missing.** `/api/genie/ask` returns `source: "fallback"`
-for every question (safe corpus answers them with a provenance chip).
-Not an outage — the degraded posture is by design — but the product
-demo loses its "real Genie" proof point.
+**What breaks if missing.** `/api/genie/message` returns `source: "degraded"`
+for every question. Not an outage — the degraded posture is by design and
+does not fabricate metrics — but the product demo loses its "real Genie"
+proof point.
 
 **Genie's own grants.** The Genie space itself queries the semantics
 views as the space owner. If the space owner is a human user who leaves

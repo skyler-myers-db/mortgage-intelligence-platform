@@ -109,6 +109,43 @@ def _hex_id(*parts: str) -> str:
     return h.hexdigest()
 
 
+def _sort_snippet_groups(value: Any, *, path: str = "sql_snippets") -> Any:
+    """Sort snippet arrays by id for Genie's export-proto validator."""
+
+    if isinstance(value, dict):
+        out = {k: _sort_snippet_groups(v, path=f"{path}.{k}") for k, v in value.items()}
+        raw_id = out.get("id")
+        if isinstance(raw_id, str) and not _is_hex32(raw_id):
+            out["id"] = _hex_id(path, raw_id)
+        return out
+    if isinstance(value, list):
+        sorted_items = sorted(
+            (_sort_snippet_groups(v, path=path) for v in value),
+            key=lambda item: str(item.get("id", "")) if isinstance(item, dict) else "",
+        )
+        return sorted_items
+    return value
+
+
+def _is_hex32(value: str) -> bool:
+    return len(value) == 32 and all(ch in "0123456789abcdef" for ch in value)
+
+
+def _column_config_v2(config: dict[str, Any]) -> dict[str, Any]:
+    """Translate YAML column hints to Genie serialized_space v2 fields."""
+
+    out = {
+        k: v
+        for k, v in config.items()
+        if k not in {"get_example_values", "build_value_dictionary"}
+    }
+    if "get_example_values" in config:
+        out["enable_format_assistance"] = bool(config["get_example_values"])
+    if "build_value_dictionary" in config:
+        out["enable_entity_matching"] = bool(config["build_value_dictionary"])
+    return out
+
+
 @dataclass(frozen=True)
 class SpaceSpec:
     """In-memory representation of the curated Genie Space YAML."""
@@ -118,8 +155,10 @@ class SpaceSpec:
     catalog: str
     schema: str
     instructions: str
-    trusted_assets: list[dict[str, str]]
+    trusted_assets: list[dict[str, Any]]
     sample_questions: list[str]
+    example_question_sqls: list[dict[str, Any]]
+    sql_snippets: dict[str, Any]
 
     @classmethod
     def load(cls, path: Path) -> SpaceSpec:
@@ -134,6 +173,8 @@ class SpaceSpec:
             instructions=str(raw.get("instructions", "")).strip(),
             trusted_assets=list(raw.get("trusted_assets") or []),
             sample_questions=list(raw.get("sample_questions") or []),
+            example_question_sqls=list(raw.get("example_question_sqls") or []),
+            sql_snippets=dict(raw.get("sql_snippets") or {}),
         )
 
     def table_identifiers(self) -> list[str]:
@@ -164,6 +205,16 @@ class SpaceSpec:
                 entry: dict[str, Any] = {"identifier": name}
                 if desc:
                     entry["description"] = [desc]
+                column_configs = asset.get("column_configs")
+                if isinstance(column_configs, list) and column_configs:
+                    entry["column_configs"] = sorted(
+                        [
+                            _column_config_v2(cfg)
+                            for cfg in column_configs
+                            if isinstance(cfg, dict)
+                        ],
+                        key=lambda cfg: str(cfg.get("column_name", "")) if isinstance(cfg, dict) else "",
+                    )
                 tables.append(entry)
             # Genie's proto validator rejects unsorted `data_sources.tables`
             # with "Invalid export proto: data_sources.tables must be sorted
@@ -195,8 +246,33 @@ class SpaceSpec:
         payload: dict[str, Any] = {"version": 2, "data_sources": {"tables": tables}}
         if sample_questions:
             payload["config"] = {"sample_questions": sample_questions}
+        instructions: dict[str, Any] = {}
         if text_instructions:
-            payload["instructions"] = {"text_instructions": text_instructions}
+            instructions["text_instructions"] = text_instructions
+        example_question_sqls: list[dict[str, Any]] = []
+        for idx, item in enumerate(self.example_question_sqls):
+            question = str(item.get("question", "")).strip()
+            sql = item.get("sql")
+            if not question or not sql:
+                continue
+            if isinstance(sql, str):
+                sql_parts = [sql]
+            else:
+                sql_parts = [str(part) for part in sql if str(part).strip()]
+            example_question_sqls.append(
+                {
+                    "id": _hex_id("example_question_sql", str(idx), question, "\n".join(sql_parts)),
+                    "question": [question],
+                    "sql": sql_parts,
+                }
+            )
+        if example_question_sqls:
+            example_question_sqls.sort(key=lambda e: str(e.get("id", "")))
+            instructions["example_question_sqls"] = example_question_sqls
+        if self.sql_snippets:
+            instructions["sql_snippets"] = _sort_snippet_groups(self.sql_snippets)
+        if instructions:
+            payload["instructions"] = instructions
 
         # sort_keys=True keeps the payload byte-stable across runs so an
         # "update with no YAML change" is deterministically a no-op diff.
@@ -420,7 +496,7 @@ def _verify_round_trip(client: Any, space_id: str) -> dict[str, Any]:
     return d
 
 
-def _run_smoke_test(client: Any, space_id: str) -> None:
+def _run_smoke_test(client: Any, space_id: str) -> bool:
     """Ask the space a deterministic warm-up question.
 
     If the space is still initializing (common on a freshly-created space
@@ -435,10 +511,10 @@ def _run_smoke_test(client: Any, space_id: str) -> None:
         msg = client.genie.start_conversation_and_wait(space_id, DEFAULT_SMOKE_QUESTION)
     except Exception as exc:  # noqa: BLE001
         print(
-            f"  Genie is still warming up or no tables are bound yet: {exc}",
+            f"  smoke-test failed: {exc}",
             file=sys.stderr,
         )
-        return
+        return False
     # Genie responses are composed of attachments; print the first text answer
     # we can find without over-interpreting the shape.
     printed = False
@@ -455,6 +531,7 @@ def _run_smoke_test(client: Any, space_id: str) -> None:
         atts = d.get("attachments") or []
         if atts and isinstance(atts, list):
             print(f"  first attachment: {json.dumps(atts[0], indent=2)[:800]}")
+    return True
 
 
 def run(args: argparse.Namespace) -> int:
@@ -601,8 +678,13 @@ def run(args: argparse.Namespace) -> int:
             "gold tables, then re-run this tool to bind them to the space."
         )
 
-    if args.smoke_test:
-        _run_smoke_test(client, space_id)
+    if args.smoke_test and not _run_smoke_test(client, space_id):
+        print(
+            "error: Genie smoke-test failed. Re-run with --no-smoke-test only for a "
+            "known manual recovery path.",
+            file=sys.stderr,
+        )
+        return 9
 
     return 0
 

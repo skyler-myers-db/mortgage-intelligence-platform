@@ -8,24 +8,24 @@ Synthetic test-id prefix: `B-TEST-*`
 
 | Endpoint | Method+Path | Status | Latency (ms) | Payload OK? | Notes |
 | --- | --- | ---: | ---: | :---: | --- |
-| health | `GET /api/health` | 200 | 2067 | yes | keys/len: app_env, breaker_state_changes_last_hour, circuit_breakers, counters_persistence, dependencies, fallback_identity_fallbacks_process_total, fallback_identity_fallbacks_total, log_export |
-| portfolio.unfiltered | `POST /api/portfolio/preview` | 200 | 4679 | yes | keys/len: approved_count, avg_score, data_refreshed_at, day_zero, high_intent_leads, in_outreach_count, marketable_population, offers_recommended |
-| portfolio.chicago | `POST /api/portfolio/preview` | 200 | 2850 | yes | keys/len: approved_count, avg_score, data_refreshed_at, day_zero, high_intent_leads, in_outreach_count, marketable_population, offers_recommended |
-| portfolio.chicago.owner.25pct | `POST /api/portfolio/preview` | 200 | 1706 | yes | keys/len: approved_count, avg_score, data_refreshed_at, day_zero, high_intent_leads, in_outreach_count, marketable_population, offers_recommended |
-| segments | `GET /api/segments` | 200 | 1539 | yes | keys/len: [array len=4] |
-| leads.all | `GET /api/leads` | 200 | 2078 | yes | keys/len: [array len=500] |
-| leads.itm | `GET /api/leads?segment=itm` | 200 | 1528 | yes | keys/len: [array len=500] |
-| borrower.detail | `GET /api/borrowers/B-102FL7THC6Q3L` | 200 | 1969 | yes | keys/len: approval_status, avm_value, borrower_id, city, clip, clip_id, confidence, current_lien_balance |
-| borrower.evidence | `GET /api/borrowers/B-102FL7THC6Q3L/evidence` | 200 | 1566 | yes | keys/len: [array len=8] |
-| offers.recommend | `POST /api/offers/recommend` | 200 | 1624 | yes | keys/len: alternatives, borrower_id, confidence, evidence_ids, offer_code, offer_type, product_label, rationale |
-| outreach.draft | `POST /api/outreach/draft` | 200 | 931 | yes | keys/len: body, borrower_id, channel, offer_code, status, subject |
-| outreach.approve.synthetic | `POST /api/outreach/approve` | 200 | 2111 | yes | keys/len: approval_id, approved, audit_event_id |
-| outreach.reject.synthetic | `POST /api/outreach/reject` | 200 | 1817 | yes | keys/len: approval_id, audit_event_id, rejected |
-| audit.events | `GET /api/audit/events?limit=10` | 200 | 782 | yes | keys/len: [array len=10] |
-| genie.message | `POST /api/genie/message` | 200 | 1062 | yes | keys/len: answer, conversation_id, follow_up_questions, metric_value, question, source, table_rows, trusted_assets |
-| admin.rules | `GET /api/admin/rules` | 200 | 1562 | yes | keys/len: legacy_override, offer_rules_version, rules_edited_at, thresholds |
-| admin.sources | `GET /api/admin/sources` | 200 | 2333 | yes | keys/len: [array len=8] |
-| geo.state_rollups | `GET /api/geo/state-rollups` | 503 | 451 | NO | ERROR: {"detail":"warehouse is temporarily unavailable","retryable":true,"dependency":"warehouse","reason":"breaker_open","correlation_id":"a0058697727b434eae5beec5931 |
+| health | `GET /api/health` | 200 | 522 | yes | keys/len: app_env, breaker_state_changes_last_hour, circuit_breakers, counters_persistence, dependencies, fallback_identity_fallbacks_process_total, fallback_identity_fallbacks_total, log_export |
+| portfolio.unfiltered | `POST /api/portfolio/preview` | 200 | 411 | yes | keys/len: approved_count, avg_score, data_refreshed_at, day_zero, high_intent_leads, in_outreach_count, marketable_population, offers_recommended |
+| portfolio.chicago | `POST /api/portfolio/preview` | 200 | 1338 | yes | keys/len: approved_count, avg_score, data_refreshed_at, day_zero, high_intent_leads, in_outreach_count, marketable_population, offers_recommended |
+| portfolio.chicago.owner.25pct | `POST /api/portfolio/preview` | 200 | 1287 | yes | keys/len: approved_count, avg_score, data_refreshed_at, day_zero, high_intent_leads, in_outreach_count, marketable_population, offers_recommended |
+| segments | `GET /api/segments` | 200 | 893 | yes | keys/len: [array len=6] |
+| leads.all | `GET /api/leads` | 200 | 1435 | yes | keys/len: [array len=500] |
+| leads.itm | `GET /api/leads?segment=itm` | 200 | 1564 | yes | keys/len: [array len=500] |
+| borrower.detail | `GET /api/borrowers/B-102FL7THC6Q3L` | 200 | 1397 | yes | keys/len: approval_status, avm_value, borrower_id, city, clip, clip_id, confidence, current_lien_balance |
+| borrower.evidence | `GET /api/borrowers/B-102FL7THC6Q3L/evidence` | 200 | 821 | yes | keys/len: [array len=8] |
+| offers.recommend | `POST /api/offers/recommend` | 200 | 1296 | yes | keys/len: alternatives, borrower_id, confidence, evidence_ids, offer_code, offer_type, product_label, rationale |
+| outreach.draft | `POST /api/outreach/draft` | 200 | 959 | yes | keys/len: body, borrower_id, channel, offer_code, status, subject |
+| outreach.approve.synthetic | `POST /api/outreach/approve` | 200 | 4037 | yes | keys/len: approval_id, approved, audit_event_id |
+| outreach.reject.synthetic | `POST /api/outreach/reject` | 200 | 4299 | yes | keys/len: approval_id, audit_event_id, rejected |
+| audit.events | `GET /api/audit/events?limit=10` | 200 | 1048 | yes | keys/len: [array len=10] |
+| genie.message | `POST /api/genie/message` | 200 | 15204 | yes | keys/len: actions, answer, conversation_id, elapsed_ms, follow_up_questions, message_id, metric_value, proof |
+| admin.rules | `GET /api/admin/rules` | 200 | 1047 | yes | keys/len: legacy_override, offer_rules_version, rules_edited_at, thresholds |
+| admin.sources | `GET /api/admin/sources` | 200 | 852 | yes | keys/len: [array len=8] |
+| geo.state_rollups | `GET /api/geo/state-rollups` | 200 | 894 | yes | keys/len: rollups, snapshot_date |
 
 ## Clean payload samples
 
@@ -33,19 +33,19 @@ Synthetic test-id prefix: `B-TEST-*`
 
 ```json
 {
-  "status": "degraded",
+  "status": "ok",
   "mode": "live",
   "app_env": "sandbox",
   "warehouse_id": "81d08d4fa2d799e9",
   "dependencies": {
     "warehouse": "up",
-    "lakebase": "down",
+    "lakebase": "up",
     "genie": "up"
   },
   "circuit_breakers": {
     "warehouse": "closed",
-    "genie": "closed",
-    "lakebase": "closed"
+    "lakebase": "closed",
+    "genie": "closed"
   }
 }
 ```
@@ -56,68 +56,77 @@ Synthetic test-id prefix: `B-TEST-*`
 {
   "marketable_population": 5156184,
   "high_intent_leads": 147742,
-  "top_tier_opportunities": 3080,
+  "top_tier_opportunities": 3074,
   "offers_recommended": 4468137,
   "avg_score": 36,
   "trends": {
     "marketable_population": {
       "series": [
         5156184.0,
+        5156184.0,
         5156184.0
       ],
       "delta_pct": 0.0,
-      "direction": "flat"
+      "direction": "flat",
+      "comparison_label": "vs 2026-04-22"
     },
     "high_intent_leads": {
       "series": [
         147742.0,
+        147742.0,
         147742.0
       ],
       "delta_pct": 0.0,
-      "direction": "flat"
+      "direction": "flat",
+      "comparison_label": "vs 2026-04-22"
     },
     "top_tier_opportunities": {
       "series": [
-        0.0,
-        3081.0
+        3081.0,
+        3074.0
       ],
-      "delta_pct": null,
-      "direction": "flat"
+      "delta_pct": -0.2,
+      "direction": "flat",
+      "comparison_label": "vs 2026-04-23"
     },
     "offers_recommended": {
       "series": [
         4468137.0,
-        4468007.0
+        4468007.0,
+        4468137.0
       ],
-      "delta_pct": -0.0,
-      "direction": "flat"
+      "delta_pct": 0.0,
+      "direction": "flat",
+      "comparison_label": "vs 2026-04-22"
     },
     "avg_score": {
       "series": [
         42.0,
+        36.0,
         36.0
       ],
       "delta_pct": -14.3,
-      "direction": "down"
+      "direction": "down",
+      "comparison_label": "vs 2026-04-22"
     },
     "approved_count": {
       "series": [
         1.0,
-        1.0
+        1.0,
+        2.0
       ],
-      "delta_pct": 0.0,
-      "direction": "flat"
+      "delta_pct": 100.0,
+      "direction": "up",
+      "comparison_label": "vs 2026-04-22"
     },
     "in_outreach_count": {
       "series": [
         0.0,
+        0.0,
         0.0
       ],
       "delta_pct": null,
-      "direction": "flat"
-    }
-  }
-}
+      "direct
 ```
 
 ### portfolio.chicago — `POST /api/portfolio/preview`
@@ -129,64 +138,7 @@ Synthetic test-id prefix: `B-TEST-*`
   "top_tier_opportunities": 1162,
   "offers_recommended": 1504711,
   "avg_score": 35,
-  "trends": {
-    "marketable_population": {
-      "series": [
-        5156184.0,
-        5156184.0
-      ],
-      "delta_pct": 0.0,
-      "direction": "flat"
-    },
-    "high_intent_leads": {
-      "series": [
-        147742.0,
-        147742.0
-      ],
-      "delta_pct": 0.0,
-      "direction": "flat"
-    },
-    "top_tier_opportunities": {
-      "series": [
-        0.0,
-        3081.0
-      ],
-      "delta_pct": null,
-      "direction": "flat"
-    },
-    "offers_recommended": {
-      "series": [
-        4468137.0,
-        4468007.0
-      ],
-      "delta_pct": -0.0,
-      "direction": "flat"
-    },
-    "avg_score": {
-      "series": [
-        42.0,
-        36.0
-      ],
-      "delta_pct": -14.3,
-      "direction": "down"
-    },
-    "approved_count": {
-      "series": [
-        1.0,
-        1.0
-      ],
-      "delta_pct": 0.0,
-      "direction": "flat"
-    },
-    "in_outreach_count": {
-      "series": [
-        0.0,
-        0.0
-      ],
-      "delta_pct": null,
-      "direction": "flat"
-    }
-  }
+  "trends": {}
 }
 ```
 
@@ -199,64 +151,7 @@ Synthetic test-id prefix: `B-TEST-*`
   "top_tier_opportunities": 876,
   "offers_recommended": 924898,
   "avg_score": 39,
-  "trends": {
-    "marketable_population": {
-      "series": [
-        5156184.0,
-        5156184.0
-      ],
-      "delta_pct": 0.0,
-      "direction": "flat"
-    },
-    "high_intent_leads": {
-      "series": [
-        147742.0,
-        147742.0
-      ],
-      "delta_pct": 0.0,
-      "direction": "flat"
-    },
-    "top_tier_opportunities": {
-      "series": [
-        0.0,
-        3081.0
-      ],
-      "delta_pct": null,
-      "direction": "flat"
-    },
-    "offers_recommended": {
-      "series": [
-        4468137.0,
-        4468007.0
-      ],
-      "delta_pct": -0.0,
-      "direction": "flat"
-    },
-    "avg_score": {
-      "series": [
-        42.0,
-        36.0
-      ],
-      "delta_pct": -14.3,
-      "direction": "down"
-    },
-    "approved_count": {
-      "series": [
-        1.0,
-        1.0
-      ],
-      "delta_pct": 0.0,
-      "direction": "flat"
-    },
-    "in_outreach_count": {
-      "series": [
-        0.0,
-        0.0
-      ],
-      "delta_pct": null,
-      "direction": "flat"
-    }
-  }
+  "trends": {}
 }
 ```
 
@@ -264,13 +159,13 @@ Synthetic test-id prefix: `B-TEST-*`
 
 ```json
 {
-  "code": "equity",
-  "name": "Home Equity Candidate",
-  "count": 3141667,
+  "code": "itm",
+  "name": "In the Money",
+  "count": 147742,
   "delta": "+0%",
-  "avg_score": 40,
-  "description": "Strong equity and prior cash-out/HELOC propensity.",
-  "color": "#66C5FF"
+  "avg_score": 60,
+  "description": "Lien rate >= 75 bps above par and equity >= 15%.",
+  "color": "#5CE1E6"
 }
 ```
 
@@ -282,7 +177,7 @@ Synthetic test-id prefix: `B-TEST-*`
   "display_name": "Owner 3b3ba2e0",
   "city": "CALUMET CITY",
   "state": "IL",
-  "zip": "604092222",
+  "zip": "60409",
   "clip": "9154364327",
   "segment_codes": [
     "itm",
@@ -296,9 +191,9 @@ Synthetic test-id prefix: `B-TEST-*`
   "recommended_offer": "Refinance + HELOC",
   "why_now": "Current rate sits meaningfully above market and the home carries strong equity -- a refinance with a HELOC cross-sell fits.",
   "evidence_ids": [
-    "ev-b4fba688be13",
-    "ev-ae027341e9f1",
-    "ev-d3356f99ea2e"
+    "ev-2839ff827d7e",
+    "ev-93da831520d8",
+    "ev-5a6e84f25fed"
   ],
   "approval_status": "pending",
   "is_owner_occupied": false,
@@ -319,7 +214,7 @@ Synthetic test-id prefix: `B-TEST-*`
   "display_name": "Owner 3b3ba2e0",
   "city": "CALUMET CITY",
   "state": "IL",
-  "zip": "604092222",
+  "zip": "60409",
   "clip": "9154364327",
   "segment_codes": [
     "itm",
@@ -333,9 +228,9 @@ Synthetic test-id prefix: `B-TEST-*`
   "recommended_offer": "Refinance + HELOC",
   "why_now": "Current rate sits meaningfully above market and the home carries strong equity -- a refinance with a HELOC cross-sell fits.",
   "evidence_ids": [
-    "ev-b4fba688be13",
-    "ev-ae027341e9f1",
-    "ev-d3356f99ea2e"
+    "ev-2839ff827d7e",
+    "ev-93da831520d8",
+    "ev-5a6e84f25fed"
   ],
   "approval_status": "pending",
   "is_owner_occupied": false,
@@ -356,7 +251,7 @@ Synthetic test-id prefix: `B-TEST-*`
   "display_name": "Owner 3b3ba2e0",
   "city": "CALUMET CITY",
   "state": "IL",
-  "zip": "604092222",
+  "zip": "60409",
   "clip": ""
 }
 ```
@@ -365,14 +260,14 @@ Synthetic test-id prefix: `B-TEST-*`
 
 ```json
 {
-  "evidence_id": "ev-b4fba688be13",
+  "evidence_id": "ev-2839ff827d7e",
   "source_product": "Voluntary Lien",
   "source_table": "mip.silver.lien_current",
   "signal_type": "rate_spread",
   "signal_value": "+397 bps",
   "display_text": "Current lien rate is 397 bps vs. par.",
   "confidence": 0.92,
-  "timestamp": "2026-04-21 20:37:48.869"
+  "timestamp": "2026-05-04 22:05:20.385"
 }
 ```
 
@@ -407,8 +302,8 @@ Synthetic test-id prefix: `B-TEST-*`
 ```json
 {
   "approved": true,
-  "approval_id": "3661fce5-759f-4bd7-8ee8-dc72b2767c81",
-  "audit_event_id": "65be3c61-17ce-40d9-8099-e2872fef01d3"
+  "approval_id": "4c2dd0f5-e86b-4095-a732-be1b8c3b2392",
+  "audit_event_id": "67275fa9-597c-45cd-8d02-16fd8348bb56"
 }
 ```
 
@@ -417,8 +312,8 @@ Synthetic test-id prefix: `B-TEST-*`
 ```json
 {
   "rejected": true,
-  "approval_id": "375f7f01-8c4e-4a0a-9b6c-b8d690f61d33",
-  "audit_event_id": "1e80aa21-5cc3-470e-8c27-91e9ac761094"
+  "approval_id": "cfc47809-3eae-4260-af4f-c6fa88942197",
+  "audit_event_id": "a3be83e6-e7e4-42f0-bc49-c62ff4a704d7"
 }
 ```
 
@@ -426,18 +321,18 @@ Synthetic test-id prefix: `B-TEST-*`
 
 ```json
 {
-  "event_id": "1e80aa21-5cc3-470e-8c27-91e9ac761094",
+  "event_id": "a3be83e6-e7e4-42f0-bc49-c62ff4a704d7",
   "actor": "skyler@entrada.ai",
   "action": "outreach.reject",
   "entity_type": "approval",
-  "entity_id": "375f7f01-8c4e-4a0a-9b6c-b8d690f61d33",
+  "entity_id": "cfc47809-3eae-4260-af4f-c6fa88942197",
   "payload_json": {
     "offer_code": "refi",
-    "approval_id": "375f7f01-8c4e-4a0a-9b6c-b8d690f61d33",
-    "borrower_id": "B-TEST-FA3B77F7"
+    "approval_id": "cfc47809-3eae-4260-af4f-c6fa88942197",
+    "borrower_id": "B-TEST-B5944E25"
   },
   "evidence_ids": [],
-  "created_at": "2026-04-23T20:04:01.958601+00:00",
+  "created_at": "2026-05-05T14:28:06.557239+00:00",
   "event_type": "OUTREACH_REJECT",
   "subject_clip": null,
   "subject_segment": null,
@@ -449,15 +344,14 @@ Synthetic test-id prefix: `B-TEST-*`
 
 ```json
 {
-  "conversation_id": "fallback-conv",
+  "conversation_id": "01f1488ea2f31f0dae9da3f249d63bd8",
   "question": "Which zips have the most in-the-money refi candidates?",
-  "answer": "The top in-the-money ZIPs are 60611 Chicago (~1,420 borrowers), 78704 Austin (~1,180), 94110 San Francisco (~960), 98103 Seattle (~720), and 33132 Miami (~640). Together they cover about 38% of the 6-state ITM book.",
-  "source": "fallback",
+  "answer": "You want to see which ZIP codes have the highest number of borrowers who are currently in-the-money for refinancing.\n\nA few representative values include:\n- **60617**: 1,503 borrowers, average score 60.3\n- **60628**: 1,482 borrowers, average score 60.3\n- **60629**: 1,387 borrowers, average score 59.0\n- **60643**: 1,108 borrowers, average score 60.1\n- **60620**: 1,095 borrowers, average score 60.8\n\nWould you like to see the top ZIP codes for in-the-money candidates broken down by state as well?",
+  "source": "genie",
   "trusted_assets": [
-    "mip.gold.lead_population",
-    "mip.semantics.lead_generation_metric_view"
+    "mip.gold.borrower_360"
   ],
-  "metric_value": null
+  "message_id": "01f1488ea2fe1e2da42f5f95173a68ba"
 }
 ```
 
@@ -466,7 +360,7 @@ Synthetic test-id prefix: `B-TEST-*`
 ```json
 {
   "offer_rules_version": "itm_77eddaa7d767",
-  "rules_edited_at": "2026-04-23 14:27:52.06284",
+  "rules_edited_at": "2026-05-04 21:55:43.474781",
   "thresholds": [
     {
       "key": "mip_min_spread_bps",
@@ -475,7 +369,7 @@ Synthetic test-id prefix: `B-TEST-*`
       "label": "Min spread (bps)",
       "description": "Minimum rate spread vs. market before a borrower is considered in the money.",
       "sort_order": 1,
-      "last_updated": "2026-04-23 14:27:52.06284"
+      "last_updated": "2026-05-04 21:55:43.474781"
     },
     {
       "key": "mip_min_equity_pct",
@@ -484,7 +378,7 @@ Synthetic test-id prefix: `B-TEST-*`
       "label": "Min equity (%)",
       "description": "Minimum equity percentage required to qualify as in the money.",
       "sort_order": 2,
-      "last_updated": "2026-04-23 14:27:52.06284"
+      "last_updated": "2026-05-04 21:55:43.474781"
     },
     {
       "key": "mip_heloc_equity_min_pct",
@@ -493,7 +387,7 @@ Synthetic test-id prefix: `B-TEST-*`
       "label": "HELOC equity floor (%)",
       "description": "Equity floor required for HELOC eligibility and refi+HELOC cross-sell.",
       "sort_order": 3,
-      "last_updated": "2026-04-23 14:27:52.06284"
+      "last_updated": "2026-05-04 21:55:43.474781"
     },
     {
       "key": "mip_cashout_equity_min_pct",
@@ -502,14 +396,14 @@ Synthetic test-id prefix: `B-TEST-*`
       "label": "Cash-out equity floor (%)",
       "description": "Equity floor required for cash-out refi eligibility when rate economics are absent.",
       "sort_order": 4,
-      "last_updated": "2026-04-23 14:27:52.06284"
+      "last_updated": "2026-05-04 21:55:43.474781"
     },
     {
       "key": "mip_retention_min_spread_bps",
       "value": 50.0,
       "unit": "bps",
       "label": "Retention min spread (bps)",
-      "description": "Lowered spread 
+      "description": "Lowered sp
 ```
 
 ### admin.sources — `GET /api/admin/sources`
@@ -517,16 +411,74 @@ Synthetic test-id prefix: `B-TEST-*`
 ```json
 {
   "name": "Cotality Public Records",
-  "status": "permission_denied",
-  "rows": null,
-  "last_updated": null,
-  "note": "App identity lacks USE SCHEMA/SELECT on mip.silver.property_master"
+  "status": "live",
+  "rows": 5192913,
+  "last_updated": "2026-05-04 22:05:22.99",
+  "note": "Delta Share \u00b7 nightly"
+}
+```
+
+### geo.state_rollups — `GET /api/geo/state-rollups`
+
+```json
+{
+  "rollups": [
+    {
+      "state": "IL",
+      "addressable": 1851040,
+      "in_the_money": 70939,
+      "top_tier_opportunities": 1162,
+      "avg_score": 35,
+      "top_segment_code": "equity"
+    },
+    {
+      "state": "CA",
+      "addressable": 900371,
+      "in_the_money": 18724,
+      "top_tier_opportunities": 305,
+      "avg_score": 38,
+      "top_segment_code": "equity"
+    },
+    {
+      "state": "FL",
+      "addressable": 752572,
+      "in_the_money": 21528,
+      "top_tier_opportunities": 282,
+      "avg_score": 38,
+      "top_segment_code": "equity"
+    },
+    {
+      "state": "TX",
+      "addressable": 750962,
+      "in_the_money": 19323,
+      "top_tier_opportunities": 331,
+      "avg_score": 37,
+      "top_segment_code": "equity"
+    },
+    {
+      "state": "WA",
+      "addressable": 737682,
+      "in_the_money": 15646,
+      "top_tier_opportunities": 975,
+      "avg_score": 36,
+      "top_segment_code": "equity"
+    },
+    {
+      "state": "CO",
+      "addressable": 163557,
+      "in_the_money": 1582,
+      "top_tier_opportunities": 19,
+      "avg_score": 35,
+      "top_segment_code": "equity"
+    }
+  ],
+  "snapshot_date": "2026-05-04"
 }
 ```
 
 ## Red flags
 
-- geo.state_rollups: status=503 error={"detail":"warehouse is temporarily unavailable","retryable":true,"dependency":"warehouse","reason":"breaker_open","correlation_id":"a0058697727b434eae5beec5931
+(none)
 
 ## Teardown
 

@@ -33,10 +33,6 @@ from backend.services.admin_rules import (
 )
 from backend.services.audit_store import InMemoryAuditStore, get_audit_store
 from backend.services.lakebase import get_lakebase_client
-from backend.services.workspace_store import (
-    InMemoryWorkspaceStore,
-    get_workspace_store,
-)
 from backend.services.repositories import (
     get_borrower_repository,
     get_genie_answer_repository,
@@ -46,6 +42,10 @@ from backend.services.repositories import (
     get_outreach_repository,
     get_portfolio_repository,
     get_segment_repository,
+)
+from backend.services.workspace_store import (
+    InMemoryWorkspaceStore,
+    get_workspace_store,
 )
 from tests.fixtures.in_process_repos import (
     InProcessMockBorrowerRepository,

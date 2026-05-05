@@ -67,14 +67,14 @@ If the Lakebase instance itself is stopped, bounce it:
 databricks bundle run mip_lakebase_migrate -t dev
 ```
 
-### 1.3 Genie cold / first ask returns `source: "fallback"`
+### 1.3 Genie cold / first ask returns `source: "degraded"`
 
-A cold Genie space takes 10–30 s on the first conversation. The safe
-corpus in `backend/services/genie_answers.py` catches this invisibly,
-but you probably want the real space for the audience pitch. Prime it:
+A cold Genie space takes 10–30 s on the first conversation. The app now
+returns an honest degraded response with no fabricated metrics until the
+real space is available. Prime it before the audience pitch:
 
 ```bash
-curl -s -X POST "$MIP_APP_URL/api/genie/ask" \
+curl -s -X POST "$MIP_APP_URL/api/genie/message" \
   -H 'content-type: application/json' \
   -d '{"question":"How many borrowers across the 6-state footprint are currently in-the-money?"}' \
   | jq '{source, metric_value}'
@@ -107,16 +107,15 @@ Back in a moment."*
    the warehouse (§1.1), refresh the Lakebase token (§1.2), or wait out
    Genie (§1.3).
 
-### 2.2 A Genie answer returned `source: "fallback"`
+### 2.2 A Genie answer returned `source: "degraded"`
 
-The Genie circuit breaker is open; the safe corpus answered instead.
-Audience sees a structured answer with a provenance chip. **Do not
-re-ask the same question on-stage** — the breaker's cool-down is 30 s
-and re-asking just re-opens it.
+The Genie circuit breaker is open. The app did not display fabricated
+analytics. **Do not re-ask the same question on-stage** — the breaker's
+cool-down is 30 s and re-asking just re-opens it.
 
-**What to say:** *"Our safe corpus just answered that — ten canonical
-questions pinned to sample_questions.md, always available even if the
-Genie space is cold-starting. The provenance chip is real."*
+**What to say:** *"Genie is reconnecting, and the app is refusing to show
+unsourced analytics. We'll use the already-loaded proof-backed surfaces and
+come back to Genie once the live space is warm."*
 
 ### 2.3 Whole UI is gone
 
@@ -319,7 +318,7 @@ MIP_APP_URL="https://mip-dev.databricksapps.com" ./scripts/smoke_live.sh
 The script boots a local uvicorn + vite if `MIP_APP_URL` is unset, waits
 for `/api/health` to go green, then exercises `/api/portfolio/preview`,
 `/api/leads`, `/api/borrowers/B-48291`, `/api/borrowers/B-48291/evidence`,
-and `/api/genie/ask`. Any non-200 response or a `"down"` dependency
+and `/api/genie/message`. Any non-200 response or a `"down"` dependency
 exits non-zero and prints the failing call.
 
 This is the operator's "is real UC actually reachable from this laptop"
@@ -653,4 +652,3 @@ county layer hangs on "Loading counties…" or shows no data.
    regressed. Fix: redeploy (`./scripts/deploy.sh`) and verify the
    frontend build's `frontend/dist/us-counties.json` is present in the
    bundle sync.
-

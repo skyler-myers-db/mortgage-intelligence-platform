@@ -25,7 +25,7 @@ Invariants (checked on every response):
 #. No 500s. ``GenieClient.ask`` returns a :class:`GenieResponse` or
    raises :class:`GenieClientError` -- both count as "handled"; the
    suite fails only on unhandled exceptions.
-#. ``source`` is declared and in ``{"genie", "fallback", "corpus"}``.
+#. ``source`` is declared and is ``"genie"`` for executed responses.
 #. The wire shape matches :class:`GenieResponse` (a dataclass; we
    validate by attribute presence + type).
 #. If SQL is emitted, it references only tables under
@@ -579,7 +579,7 @@ def _validate_response_shape(response: GenieResponse) -> None:
     ), "sql_result_rows must be list or None"
     assert isinstance(response.conversation_id, str)
     assert isinstance(response.message_id, str)
-    assert response.source in {"genie", "fallback", "corpus"}, (
+    assert response.source == "genie", (
         f"source {response.source!r} not in declared source set"
     )
     assert isinstance(response.elapsed_ms, int)

@@ -1,5 +1,11 @@
-import type { ReactNode } from 'react';
-import type { GenieAnswer as GenieAnswerShape } from '../../types';
+import { useEffect, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
+import type {
+  GenieActionSuggestion,
+  GenieAnswer as GenieAnswerShape,
+  GenieVisualization,
+} from '../../types';
+import { Icon } from '../Icon';
 
 /**
  * GenieAnswer — renders the widened Genie payload: metric_value (big tabular
@@ -25,6 +31,9 @@ import type { GenieAnswer as GenieAnswerShape } from '../../types';
 
 const MAX_TABLE_ROWS = 10;
 const MAX_TABLE_COLS = 4;
+
+interface UsaSvgMapLocation { name: string; id: string; path: string }
+interface UsaSvgMap { label: string; viewBox: string; locations: UsaSvgMapLocation[] }
 
 /** Phrases Genie commonly uses to restate the question before answering.
  *  Matched at the very start of the answer; the WHOLE first sentence
@@ -174,23 +183,11 @@ function MarkdownAnswer({ text }: { text: string }) {
 }
 
 /**
- * Auto-detect a chartable payload. Tries TWO sources in order:
+ * Auto-detect a chartable payload from structured `table_rows` only.
  *
- *   1. Structured `table_rows` (when Genie wrote SQL and returned
- *      query rows): one categorical column + one numeric column.
- *
- *   2. Bullet-list inside the answer text (when Genie answered in
- *      prose, e.g. "- 60611: 6,506 borrowers" or "60611 has 6,506
- *      borrowers"): parse the bullets into label/value pairs.
- *
- * Returns {label, value} per row when chartable, else null.
- *
- * 2026-05-04 (FIX ε1, supersedes Δ3): round-4 only handled (1).
- * The screenshot the user shared had answer prose with bullet data
- * and zero `table_rows`, so the chart never rendered — failure
- * I caused by not testing live. (2) closes that gap so the
- * common "Top N ZIPs by X" question now charts even when Genie
- * embeds the data in the prose.
+ * Genie prose is rendered as prose. Visualizations are allowed only when the
+ * backend has returned query rows or an explicit visualization spec, so demo
+ * charts remain tied to SQL-backed data instead of parsed answer wording.
  */
 export type ChartRow = { label: string; value: number };
 
@@ -198,15 +195,114 @@ export interface InferredChart {
   rows: ChartRow[];
   labelCol: string;
   valueCol: string;
-  source: 'table_rows' | 'answer_bullets';
+  source: 'table_rows';
 }
 
-function inferChartFromRows(
+const IDENTIFIER_COLUMN_PATTERNS = [
+  /^zip(code)?$/i,
+  /^zip_code$/i,
+  /^postal(_code)?$/i,
+  /^fips(_\d+)?$/i,
+  /^county_fips(_5)?$/i,
+  /^cbsa(_code)?$/i,
+  /^msa_cbsa_code$/i,
+  /^census_tract$/i,
+  /^tract$/i,
+  /(^|_)id$/i,
+  /^id$/i,
+  /^clip$/i,
+];
+
+const VALUE_COLUMN_PRIORITY = [
+  'borrowers',
+  'borrower_count',
+  'count',
+  'marketable_borrowers',
+  'addressable_borrowers',
+  'in_the_money_borrowers',
+  'high_opportunity_borrowers',
+  'opportunities',
+  'opportunity_count',
+  'avg_score',
+  'average_score',
+  'opportunity_score',
+  'approval_rate',
+  'conversion_rate',
+  'rate_spread_bps',
+  'equity_pct',
+];
+
+function isIdentifierColumn(column: string): boolean {
+  return IDENTIFIER_COLUMN_PATTERNS.some((pattern) => pattern.test(column));
+}
+
+function coerceNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string') {
+    const cleaned = value.replace(/[$,%]/g, '').replace(/,/g, '').trim();
+    if (!cleaned) return null;
+    const n = Number(cleaned);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
+function coerceMeasure(value: unknown, column: string): number | null {
+  if (isIdentifierColumn(column)) return null;
+  return coerceNumber(value);
+}
+
+function formatIdentifier(column: string, value: unknown): string {
+  if (value === null || value === undefined) return '—';
+  const raw = String(value).trim();
+  if (/^zip(code)?$|^zip_code$/i.test(column)) {
+    const digits = raw.replace(/\D/g, '');
+    if (digits.length > 0 && digits.length <= 5) return digits.padStart(5, '0');
+  }
+  return raw;
+}
+
+function chooseValueColumn(columns: string[], types: Record<string, 'str' | 'num' | 'mixed'>): string | null {
+  const candidates = columns.filter((col) => types[col] === 'num' && !isIdentifierColumn(col));
+  if (candidates.length === 0) return null;
+  for (const preferred of VALUE_COLUMN_PRIORITY) {
+    const found = candidates.find((col) => col.toLowerCase() === preferred);
+    if (found) return found;
+  }
+  return candidates[0];
+}
+
+function chartFromColumns(
+  rows: Array<Record<string, unknown>>,
+  labelCol: string,
+  valueCol: string,
+): InferredChart | null {
+  const projected: ChartRow[] = [];
+  for (const r of rows) {
+    const vv = coerceMeasure(r[valueCol], valueCol);
+    if (vv === null) continue;
+    projected.push({ label: formatIdentifier(labelCol, r[labelCol]), value: vv });
+  }
+  if (projected.length < 2) return null;
+  return { rows: projected, labelCol, valueCol, source: 'table_rows' };
+}
+
+function chartFromVisualization(
+  rows: Array<Record<string, unknown>>,
+  viz: GenieVisualization | null,
+): InferredChart | null {
+  if (!viz?.x || !viz.y) return null;
+  const columns = new Set(Object.keys(rows[0] ?? {}));
+  if (!columns.has(viz.x) || !columns.has(viz.y)) return null;
+  return chartFromColumns(rows, viz.x, viz.y);
+}
+
+export function inferChartFromRows(
   rows: Array<Record<string, unknown>>,
   columns: string[],
 ): InferredChart | null {
   if (rows.length < 2) return null;
-  if (columns.length < 2 || columns.length > MAX_TABLE_COLS) return null;
+  if (columns.length < 2) return null;
   // Walk the columns once and tag each as "all string" / "all
   // numeric" / "mixed". Skip rows where the value is null/undefined
   // — they're "missing" not "wrong type".
@@ -218,8 +314,12 @@ function inferChartFromRows(
     for (const r of rows) {
       const v = r[col];
       if (v === null || v === undefined) continue;
-      if (typeof v === 'string') hasStr = true;
-      else if (typeof v === 'number' && Number.isFinite(v)) hasNum = true;
+      if (isIdentifierColumn(col)) {
+        hasStr = true;
+        continue;
+      }
+      if (coerceNumber(v) !== null) hasNum = true;
+      else if (typeof v === 'string') hasStr = true;
       else {
         hasMixed = true;
         break;
@@ -228,148 +328,58 @@ function inferChartFromRows(
     types[col] = hasMixed || (hasStr && hasNum) ? 'mixed' : hasStr ? 'str' : 'num';
   }
   const labelCol = columns.find((c) => types[c] === 'str');
-  const valueCol = columns.find((c) => types[c] === 'num');
+  const valueCol = chooseValueColumn(columns, types);
   if (!labelCol || !valueCol) return null;
-  const projected: ChartRow[] = [];
-  for (const r of rows) {
-    const lv = r[labelCol];
-    const vv = r[valueCol];
-    if (typeof lv !== 'string') continue;
-    if (typeof vv !== 'number' || !Number.isFinite(vv)) continue;
-    projected.push({ label: lv, value: vv });
-  }
-  if (projected.length < 2) return null;
-  return { rows: projected, labelCol, valueCol, source: 'table_rows' };
+  return chartFromColumns(rows, labelCol, valueCol);
+}
+
+const STATE_NAME_TO_CODE: Record<string, string> = {
+  alabama: 'AL', alaska: 'AK', arizona: 'AZ', arkansas: 'AR',
+  california: 'CA', colorado: 'CO', connecticut: 'CT', delaware: 'DE',
+  florida: 'FL', georgia: 'GA', hawaii: 'HI', idaho: 'ID',
+  illinois: 'IL', indiana: 'IN', iowa: 'IA', kansas: 'KS',
+  kentucky: 'KY', louisiana: 'LA', maine: 'ME', maryland: 'MD',
+  massachusetts: 'MA', michigan: 'MI', minnesota: 'MN', mississippi: 'MS',
+  missouri: 'MO', montana: 'MT', nebraska: 'NE', nevada: 'NV',
+  'new hampshire': 'NH', 'new jersey': 'NJ', 'new mexico': 'NM',
+  'new york': 'NY', 'north carolina': 'NC', 'north dakota': 'ND',
+  ohio: 'OH', oklahoma: 'OK', oregon: 'OR', pennsylvania: 'PA',
+  'rhode island': 'RI', 'south carolina': 'SC', 'south dakota': 'SD',
+  tennessee: 'TN', texas: 'TX', utah: 'UT', vermont: 'VT',
+  virginia: 'VA', washington: 'WA', 'west virginia': 'WV',
+  wisconsin: 'WI', wyoming: 'WY',
+};
+
+function normalizeState(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const cleaned = value.trim();
+  if (/^[A-Za-z]{2}$/.test(cleaned)) return cleaned.toUpperCase();
+  return STATE_NAME_TO_CODE[cleaned.toLowerCase()] ?? null;
+}
+
+function level(value: number, max: number): 1 | 2 | 3 | 4 {
+  if (max <= 0 || value <= 0) return 1;
+  const pct = value / max;
+  if (pct >= 0.75) return 4;
+  if (pct >= 0.45) return 3;
+  if (pct >= 0.2) return 2;
+  return 1;
+}
+
+function pickPlan(
+  payload: GenieAnswerShape,
+  rows: Array<Record<string, unknown>>,
+  columns: string[],
+): { kind: string; chart: InferredChart | null; viz: GenieVisualization | null } {
+  const viz = payload.visualization ?? null;
+  const chart = chartFromVisualization(rows, viz) ?? inferChart(rows, columns);
+  if (viz?.kind) return { kind: viz.kind, chart, viz };
+  if (rows.some((r) => typeof r.borrower_id === 'string')) return { kind: 'borrower_list', chart, viz };
+  return { kind: chart ? 'bar' : rows.length > 0 ? 'table' : 'none', chart, viz };
 }
 
 /**
- * Parse label/value data out of a Genie answer's prose.
- *
- * Real examples we've seen Genie produce in this app:
- *
- *   bullet form:
- *     - **60611**: 6,506 borrowers
- *     - 60605: 4,896 borrowers
- *     • Travis County: 14,200 candidates
- *     1) Cook County — 95,432
- *
- *   inline-prose form (the round-5 case the user caught):
- *     "...highest count is **60611** with **6,506** HELOC-eligible
- *      borrowers, followed by **60605** (4,896), **60610** (4,507),
- *      **92602** (4,421), and **60607** (3,314)..."
- *
- * Strategy:
- *   (a) Scan each LINE for a bullet pattern ("- label: 12,345" /
- *       "- label — 12,345" / "label has 12,345"). Strips bullet
- *       markers + markdown bold so the regex sees clean text.
- *   (b) ALSO scan the WHOLE TEXT for inline bold-bracketed pairs:
- *       `**LABEL** with **NUMBER**` and `**LABEL** (NUMBER)`. This
- *       catches Genie answers that pack the data into a single
- *       prose paragraph instead of a bulleted list.
- *
- * Returns null when fewer than 2 distinct chartable rows were found
- * across either path. Caller expects null = render the answer as
- * text + the existing table_rows path; non-null = render a chart.
- *
- * Exported for unit testing — see GenieAnswer.test.tsx, including
- * a regression test for the literal screenshot text.
- */
-export function inferChartFromBullets(text: string): InferredChart | null {
-  if (!text) return null;
-
-  // ── (a) Per-line bullet/list patterns ───────────────────────────
-  const bulletPattern = /^\s*(?:[-*•]|\d{1,2}[.)])\s+(.*)$/;
-  // Two pattern sets:
-  //   labelValueStrict — distinctive list-item shapes ("X: 12,345",
-  //     "X — 12,345"). Safe to run on un-marked lines too because the
-  //     punctuation alone signals "this is a list item, not prose."
-  //   labelValueLoose — looser "X has/with 12,345" pattern. Greedy
-  //     enough to misfire on a prose paragraph (round-6 bug —
-  //     matched "Cook County leads with Cook County" as a fake label
-  //     from an inline-prose answer). Only run when the line came in
-  //     with an explicit bullet marker so we know it IS a list item.
-  const labelValueStrict = [
-    /^(.+?):\s*[*]*([\d,]+(?:\.\d+)?)[*]*\b/,
-    /^(.+?)\s*[—–]\s*[*]*([\d,]+(?:\.\d+)?)[*]*\b/,
-  ];
-  const labelValueLoose = [
-    /^(.+?)\s+(?:has|with|=|is)\s+[*]*([\d,]+(?:\.\d+)?)[*]*\b/i,
-  ];
-  const collected: ChartRow[] = [];
-  for (const raw of text.split(/\r?\n/)) {
-    const line = raw.trim();
-    if (!line) continue;
-    const bulletMatch = bulletPattern.exec(line);
-    const stripped = bulletMatch ? bulletMatch[1].trim() : line;
-    const patterns = bulletMatch
-      ? [...labelValueStrict, ...labelValueLoose]
-      : labelValueStrict;
-    let matched: { label: string; value: number } | null = null;
-    for (const re of patterns) {
-      const m = re.exec(stripped);
-      if (!m) continue;
-      const label = m[1].replace(/\*\*/g, '').replace(/^[-•*\s]+/, '').trim();
-      const num = Number(m[2].replace(/,/g, ''));
-      if (!Number.isFinite(num)) continue;
-      if (label.length === 0 || label.length > 60) continue;
-      matched = { label, value: num };
-      break;
-    }
-    if (matched) collected.push(matched);
-  }
-
-  // ── (b) Inline bold-bracketed prose patterns ────────────────────
-  // Catches the round-5 user-screenshot shape:
-  //   **60611** with **6,506**       → 60611:6506
-  //   **60605** (4,896)              → 60605:4896
-  //   **60610** — **4,507**          → 60610:4507
-  //   **60611** has **6,506**        → 60611:6506
-  // We only fire the inline scan when the bullet path didn't
-  // collect enough rows on its own; an answer that's ALREADY a
-  // clean bullet list shouldn't be re-parsed for inline pairs that
-  // would shadow the bullet results.
-  if (collected.length < 2) {
-    const inlinePatterns = [
-      // **LABEL** with **NUM** / has **NUM** / = **NUM**
-      /\*\*([^*]+?)\*\*\s+(?:with|has|of|equals?|=|is)\s+\*\*?([\d,]+(?:\.\d+)?)\*\*?/gi,
-      // **LABEL** (NUM)  — the most common Genie shape we've seen
-      /\*\*([^*]+?)\*\*\s*[(\[]\s*([\d,]+(?:\.\d+)?)\s*[)\]]/g,
-      // **LABEL** — **NUM**  (em-dash inline)
-      /\*\*([^*]+?)\*\*\s*[—–]\s*\*\*?([\d,]+(?:\.\d+)?)\*\*?/g,
-      // **LABEL**: **NUM**  (colon inline)
-      /\*\*([^*]+?)\*\*\s*:\s*\*\*?([\d,]+(?:\.\d+)?)\*\*?/g,
-    ];
-    for (const re of inlinePatterns) {
-      let m: RegExpExecArray | null;
-      while ((m = re.exec(text)) !== null) {
-        const label = m[1].trim();
-        const num = Number(m[2].replace(/,/g, ''));
-        if (!Number.isFinite(num)) continue;
-        if (label.length === 0 || label.length > 60) continue;
-        collected.push({ label, value: num });
-      }
-    }
-  }
-
-  // ── Dedupe + final shape ───────────────────────────────────────
-  const seen = new Set<string>();
-  const distinct = collected.filter((r) => {
-    if (seen.has(r.label)) return false;
-    seen.add(r.label);
-    return true;
-  });
-  if (distinct.length < 2) return null;
-  return {
-    rows: distinct,
-    labelCol: 'category',
-    valueCol: 'value',
-    source: 'answer_bullets',
-  };
-}
-
-/**
- * Combined chart inference: prefer structured rows; fall back to the
- * bullet parser. Future: if the backend starts shipping a
+ * Combined chart inference. Future: if the backend starts shipping a
  * `chart_spec` field on GenieMessageResponse (Vega-Lite from a Genie
  * attachment), prefer that as the highest-fidelity path because it
  * lets Genie pick the chart type, not us.
@@ -377,11 +387,8 @@ export function inferChartFromBullets(text: string): InferredChart | null {
 function inferChart(
   rows: Array<Record<string, unknown>>,
   columns: string[],
-  answerText: string,
 ): InferredChart | null {
-  return (
-    inferChartFromRows(rows, columns) ?? inferChartFromBullets(answerText)
-  );
+  return inferChartFromRows(rows, columns);
 }
 
 /**
@@ -480,9 +487,241 @@ function GenieBarChart({
   );
 }
 
+function GenieLineChart({ data, labelCol, valueCol }: { data: ChartRow[]; labelCol: string; valueCol: string }) {
+  const points = data.slice(0, 24);
+  const maxV = Math.max(1, ...points.map((p) => p.value));
+  const minV = Math.min(0, ...points.map((p) => p.value));
+  const width = 520;
+  const height = 180;
+  const span = Math.max(1, maxV - minV);
+  const path = points
+    .map((p, i) => {
+      const x = points.length === 1 ? width / 2 : (i / (points.length - 1)) * width;
+      const y = height - ((p.value - minV) / span) * height;
+      return `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(' ');
+  return (
+    <div className="genie-chart">
+      <div className="eyebrow genie-chart__title">
+        {humanizeKey(valueCol)} over {humanizeKey(labelCol)}
+      </div>
+      <svg className="genie-chart__svg" viewBox={`0 0 ${width} ${height + 36}`} role="img" aria-label={`Line chart: ${humanizeKey(valueCol)} over ${humanizeKey(labelCol)}`}>
+        <path d={path} className="genie-line__path" />
+        {points.map((p, i) => {
+          const x = points.length === 1 ? width / 2 : (i / (points.length - 1)) * width;
+          const y = height - ((p.value - minV) / span) * height;
+          return <circle key={`${p.label}-${i}`} cx={x} cy={y} r="3" className="genie-line__dot" />;
+        })}
+        {points[0] && <text x="0" y={height + 24} className="genie-line__axis">{points[0].label}</text>}
+        {points[points.length - 1] && <text x={width} y={height + 24} textAnchor="end" className="genie-line__axis">{points[points.length - 1].label}</text>}
+      </svg>
+    </div>
+  );
+}
+
+function GenieMapChart({
+  rows,
+  x,
+  y,
+}: {
+  rows: Array<Record<string, unknown>>;
+  x?: string | null;
+  y?: string | null;
+}) {
+  const [usaMap, setUsaMap] = useState<UsaSvgMap | null>(null);
+  useEffect(() => {
+    let live = true;
+    import('@svg-maps/usa').then((mod) => {
+      if (live) setUsaMap(mod.default as UsaSvgMap);
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
+  if (!x || !y) return null;
+  const values = new Map<string, number>();
+  for (const row of rows) {
+    const state = normalizeState(row[x]);
+    const value = coerceNumber(row[y]);
+    if (!state || value === null) continue;
+    values.set(state, value);
+  }
+  if (values.size === 0) return null;
+  const maxV = Math.max(...values.values(), 1);
+  if (!usaMap) {
+    return (
+      <div className="genie-map">
+        <div className="eyebrow genie-chart__title">
+          {humanizeKey(y)} by {humanizeKey(x)}
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="genie-map">
+      <div className="eyebrow genie-chart__title">
+        {humanizeKey(y)} by {humanizeKey(x)}
+      </div>
+      <svg viewBox={usaMap.viewBox} className="genie-map__svg" role="img" aria-label={`Map: ${humanizeKey(y)} by state`}>
+        {usaMap.locations.map((location) => {
+          const code = location.id.toUpperCase();
+          const value = values.get(code) ?? 0;
+          return (
+            <path
+              key={location.id}
+              d={location.path}
+              className={`genie-map__region lvl-${level(value, maxV)} ${value > 0 ? 'has-data' : ''}`}
+              aria-label={`${location.name}: ${value.toLocaleString()}`}
+            />
+          );
+        })}
+      </svg>
+      <div className="genie-map__legend">
+        {Array.from(values.entries())
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 6)
+          .map(([state, value]) => (
+            <span key={state} className="genie-map__legend-item">
+              <span className={`genie-map__dot lvl-${level(value, maxV)}`} />
+              {state} {value.toLocaleString()}
+            </span>
+          ))}
+      </div>
+    </div>
+  );
+}
+
+function GenieBorrowerList({ rows }: { rows: Array<Record<string, unknown>> }) {
+  const borrowers = rows
+    .filter((r) => typeof r.borrower_id === 'string')
+    .slice(0, 10);
+  if (borrowers.length === 0) return null;
+  return (
+    <div className="genie-board">
+      <div className="eyebrow genie-chart__title">Borrower drill-down</div>
+      <div className="genie-board__grid">
+        {borrowers.map((row) => {
+          const id = String(row.borrower_id);
+          const score = coerceNumber(row.opportunity_score ?? row.score);
+          return (
+            <a key={id} className="genie-board__card" href={`/borrower-360/${encodeURIComponent(id)}`}>
+              <div className="genie-board__title">{id}</div>
+              <div className="genie-board__meta">
+                {[row.city, row.state, row.zip].filter(Boolean).join(', ') || 'Open borrower evidence'}
+              </div>
+              {score !== null && <div className="genie-board__value">{score.toLocaleString()}</div>}
+            </a>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function GenieStrategyBoard({
+  rows,
+  x,
+  y,
+}: {
+  rows: Array<Record<string, unknown>>;
+  x?: string | null;
+  y?: string | null;
+}) {
+  const label = x ?? Object.keys(rows[0] ?? {}).find((c) => typeof rows[0]?.[c] === 'string');
+  const value = y ?? Object.keys(rows[0] ?? {}).find((c) => coerceNumber(rows[0]?.[c]) !== null);
+  if (!label || !value || rows.length === 0) return null;
+  return (
+    <div className="genie-board">
+      <div className="eyebrow genie-chart__title">Strategy board</div>
+      <div className="genie-board__grid">
+        {rows.slice(0, 6).map((row, i) => {
+          const title = formatCell(label, row[label]);
+          const metric = coerceNumber(row[value]);
+          const offer = row.recommended_offer ?? row.offer_code ?? row.product_label;
+          const segment = row.segment ?? row.segment_code ?? row.top_segment;
+          return (
+            <div key={`${title}-${i}`} className="genie-board__card">
+              <div className="genie-board__title">{title}</div>
+              <div className="genie-board__meta">
+                {[segment, offer].filter(Boolean).map(String).join(' · ') || humanizeKey(value)}
+              </div>
+              {metric !== null && <div className="genie-board__value">{metric.toLocaleString()}</div>}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function GenieProofPanel({ payload }: { payload: GenieAnswerShape }) {
+  const proof = payload.proof;
+  if (!proof) return null;
+  const assets = proof.source_assets ?? payload.trusted_assets ?? [];
+  return (
+    <div className="genie-proof" role="region" aria-label="Genie proof">
+      <div className="genie-proof__grid">
+        <div>
+          <div className="eyebrow">Trust</div>
+          <div className={proof.trusted ? 'chip chip--success' : 'chip chip--warning'}>
+            {proof.trusted ? 'Trusted SELECT on curated assets' : 'Review required'}
+          </div>
+        </div>
+        <div>
+          <div className="eyebrow">Rows</div>
+          <div className="genie-proof__value">{proof.row_count ?? payload.row_count ?? 0}</div>
+        </div>
+        <div>
+          <div className="eyebrow">Latency</div>
+          <div className="genie-proof__value">{proof.elapsed_ms ? `${proof.elapsed_ms} ms` : '—'}</div>
+        </div>
+      </div>
+      {assets.length > 0 && (
+        <div className="genie-proof__section">
+          <div className="eyebrow">Source UC assets</div>
+          <div className="chip-row">
+            {assets.map((asset) => <span key={asset} className="chip chip--neutral">{asset}</span>)}
+          </div>
+        </div>
+      )}
+      {proof.data_freshness && proof.data_freshness.length > 0 && (
+        <div className="genie-proof__section">
+          <div className="eyebrow">Data freshness</div>
+          {proof.data_freshness.map((f) => (
+            <div key={`${f.asset}-${f.refreshed_at ?? f.status}`} className="genie-proof__line">
+              <span>{f.asset}</span>
+              <span>{f.refreshed_at ?? f.status}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {proof.filters && proof.filters.length > 0 && (
+        <div className="genie-proof__section">
+          <div className="eyebrow">Filters applied</div>
+          {proof.filters.map((filter) => <code key={filter} className="genie-proof__sql">{filter}</code>)}
+        </div>
+      )}
+      {proof.known_data_gaps && proof.known_data_gaps.length > 0 && (
+        <div className="genie-proof__section">
+          <div className="eyebrow">Known data gaps</div>
+          {proof.known_data_gaps.map((gap) => <div key={gap} className="genie-proof__gap">{gap}</div>)}
+        </div>
+      )}
+      {proof.sql_query && (
+        <div className="genie-proof__section">
+          <div className="eyebrow">Generated SQL</div>
+          <pre className="genie-proof__sql">{proof.sql_query}</pre>
+        </div>
+      )}
+    </div>
+  );
+}
+
 interface GenieAnswerProps {
   payload: GenieAnswerShape;
   onFollowUp?: (q: string) => void;
+  onAction?: (action: GenieActionSuggestion) => void | Promise<void>;
   /** Compact mode (used inside the floating chat bubble). */
   dense?: boolean;
   /** Render an inline chart when the table_rows shape is chartable.
@@ -494,25 +733,28 @@ interface GenieAnswerProps {
 export function GenieAnswer({
   payload,
   onFollowUp,
+  onAction,
   dense = false,
   withChart = false,
 }: GenieAnswerProps) {
-  const { answer, metric_value, table_rows, follow_up_questions } = payload;
+  const { answer, metric_value, table_rows, follow_up_questions, actions } = payload;
+  const [showProof, setShowProof] = useState(false);
+  const [confirmActionId, setConfirmActionId] = useState<string | null>(null);
+  const [pendingActionId, setPendingActionId] = useState<string | null>(null);
   const rows = Array.isArray(table_rows) ? table_rows : [];
   const visibleRows = rows.slice(0, MAX_TABLE_ROWS);
   const hiddenRows = Math.max(0, rows.length - MAX_TABLE_ROWS);
   const columns = visibleRows[0] ? Object.keys(visibleRows[0]).slice(0, MAX_TABLE_COLS) : [];
+  const chartColumns = rows[0] ? Object.keys(rows[0]) : [];
   const cleanedAnswer = answer ? stripQuestionRestatement(answer) : '';
-  // Chart is optional: only computed when the caller opts in. Tries
-  // structured table_rows first, then falls back to parsing bullet-
-  // list data out of the answer text. The bullet path is what fixes
-  // the "Top 5 ZIPs by HELOC" case — Genie returns prose with
-  // embedded numbers and zero table_rows.
-  const chart = withChart ? inferChart(rows, columns, cleanedAnswer) : null;
+  // Chart is optional and only computed from structured table_rows.
+  // Answer prose is never parsed into visualization data.
+  const plan = withChart ? pickPlan(payload, rows, chartColumns) : { kind: 'none', chart: null, viz: null };
+  const chart = plan.chart;
 
   return (
     <div>
-      {metric_value && (
+      {metric_value !== null && metric_value !== undefined && metric_value !== '' && (
         <div
           className={`genie-answer__metric ${dense ? 'genie-answer__metric--dense' : ''}`}
         >
@@ -525,7 +767,17 @@ export function GenieAnswer({
           authoritative data source below. Only renders when withChart
           is true (Ask Genie deep-dive route only) AND the data shape
           is chartable (1 categorical + 1 numeric column). */}
-      {chart && (
+      {plan.kind === 'strategy_board' && (
+        <GenieStrategyBoard rows={rows} x={plan.viz?.x} y={plan.viz?.y} />
+      )}
+      {plan.kind === 'borrower_list' && <GenieBorrowerList rows={rows} />}
+      {plan.kind === 'map' && (
+        <GenieMapChart rows={rows} x={plan.viz?.x ?? chart?.labelCol} y={plan.viz?.y ?? chart?.valueCol} />
+      )}
+      {plan.kind === 'line' && chart && (
+        <GenieLineChart data={chart.rows} labelCol={chart.labelCol} valueCol={chart.valueCol} />
+      )}
+      {(plan.kind === 'bar' || plan.kind === 'funnel' || (!['strategy_board', 'borrower_list', 'map', 'line'].includes(plan.kind) && chart)) && chart && (
         <GenieBarChart
           data={chart.rows}
           labelCol={chart.labelCol}
@@ -547,10 +799,10 @@ export function GenieAnswer({
                 <tr key={i}>
                   {columns.map((c) => {
                     const v = row[c];
-                    const isNum = typeof v === 'number';
+                    const isNum = typeof v === 'number' && !isIdentifierColumn(c);
                     return (
                       <td key={c} className={isNum ? 'num' : undefined}>
-                        {formatCell(v)}
+                        {formatCell(c, v)}
                       </td>
                     );
                   })}
@@ -562,6 +814,56 @@ export function GenieAnswer({
             <div className="genie-answer__more">+{hiddenRows} more row{hiddenRows === 1 ? '' : 's'}</div>
           )}
         </>
+      )}
+      {payload.proof && (
+        <div className="genie-proof-toggle">
+          <button type="button" className="btn btn--ghost btn--sm" onClick={() => setShowProof((cur) => !cur)}>
+            <Icon name="audit" size={12} />
+            {showProof ? 'Hide proof' : 'Show proof'}
+          </button>
+          {payload.proof.trusted !== undefined && (
+            <span className={payload.proof.trusted ? 'chip chip--success' : 'chip chip--warning'}>
+              {payload.proof.trusted ? 'trusted' : 'review'}
+            </span>
+          )}
+        </div>
+      )}
+      {payload.proof && showProof && typeof document !== 'undefined' && createPortal(
+        <>
+          <div
+            className="drawer-scrim is-open"
+            onClick={() => setShowProof(false)}
+            aria-hidden="true"
+          />
+          <aside
+            className="drawer genie-proof-drawer is-open"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Genie answer proof"
+          >
+            <div className="drawer__hdr">
+              <div className="drawer__source-icon">
+                <Icon name="audit" size={16} />
+              </div>
+              <div>
+                <div className="drawer__title">Answer proof</div>
+                <div className="drawer__subtitle">{payload.question_hash ?? payload.message_id ?? 'Genie result'}</div>
+              </div>
+              <button
+                className="drawer__close"
+                onClick={() => setShowProof(false)}
+                aria-label="Close Genie proof"
+                type="button"
+              >
+                <Icon name="close" size={14} />
+              </button>
+            </div>
+            <div className="drawer__body">
+              <GenieProofPanel payload={payload} />
+            </div>
+          </aside>
+        </>,
+        document.body,
       )}
       {follow_up_questions && follow_up_questions.length > 0 && onFollowUp && (
         <div className="genie-answer__followups">
@@ -578,6 +880,51 @@ export function GenieAnswer({
           ))}
         </div>
       )}
+      {actions && actions.length > 0 && onAction && (
+        <div className="genie-actions">
+          <div className="eyebrow">Governed actions</div>
+          {actions.slice(0, 5).map((action) => {
+            const confirming = confirmActionId === action.id;
+            const pending = pendingActionId === action.id;
+            return (
+              <div key={action.id} className="genie-action">
+                <div className="genie-action__body">
+                  <div className="genie-action__label">{action.label}</div>
+                  <div className="genie-action__desc">{action.description}</div>
+                </div>
+                {confirming ? (
+                  <div className="genie-action__confirm">
+                    <button
+                      type="button"
+                      className="btn btn--primary btn--sm"
+                      disabled={Boolean(pendingActionId)}
+                      onClick={async () => {
+                        setPendingActionId(action.id);
+                        setConfirmActionId(null);
+                        try {
+                          await onAction(action);
+                        } finally {
+                          setPendingActionId(null);
+                        }
+                      }}
+                    >
+                      {pending ? 'Recording…' : 'Confirm'}
+                    </button>
+                    <button type="button" className="btn btn--ghost btn--sm" disabled={Boolean(pendingActionId)} onClick={() => setConfirmActionId(null)}>
+                      Cancel
+                    </button>
+                  </div>
+                ) : (
+                  <button type="button" className="btn btn--ghost btn--sm" disabled={Boolean(pendingActionId)} onClick={() => setConfirmActionId(action.id)}>
+                    <Icon name="play" size={12} />
+                    {pending ? 'Recording…' : 'Run'}
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -586,8 +933,9 @@ function humanizeKey(k: string): string {
   return k.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-function formatCell(v: unknown): string {
+function formatCell(column: string, v: unknown): string {
   if (v === null || v === undefined) return '—';
+  if (isIdentifierColumn(column)) return formatIdentifier(column, v);
   if (typeof v === 'number') return Number.isInteger(v) ? v.toLocaleString() : v.toFixed(2);
   return String(v);
 }

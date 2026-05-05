@@ -143,6 +143,53 @@ CREATE INDEX IF NOT EXISTS idx_action_audit_actor
 CREATE INDEX IF NOT EXISTS idx_action_audit_subject_clip
     ON mip_app.action_audit (subject_clip)
     WHERE subject_clip IS NOT NULL;
+-- Genie action idempotency: the server issues request ids inside the
+-- HMAC confirmation token, and Lakebase enforces one audited mutation per
+-- actor/request/event. The partial predicate keeps legacy non-Genie audit
+-- rows append-only while giving governed Genie actions retry safety.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_action_audit_genie_request_actor_event
+    ON mip_app.action_audit (actor_email, request_id, event_type)
+    WHERE request_id IS NOT NULL AND event_type LIKE 'GENIE_ACTION_%';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_action_audit_genie_request_actor_event_v2
+    ON mip_app.action_audit (actor_email, request_id, event_type)
+    WHERE request_id IS NOT NULL AND left(event_type, 13) = 'GENIE_ACTION_';
+
+-- Genie sessions ------------------------------------------------------
+-- Durable state for Databricks Genie conversations. These tables store
+-- conversation/message identifiers and proof metadata only; they do NOT
+-- store raw user prompts or answer text, because those fields can contain
+-- free-form PII-like content. The app can recover the latest conversation
+-- after reload while the append-only action_audit ledger remains the
+-- governed proof of each read/action.
+CREATE TABLE IF NOT EXISTS mip_app.genie_sessions (
+    actor_email        TEXT NOT NULL,
+    conversation_id    TEXT NOT NULL,
+    last_message_id    TEXT,
+    last_question_hash TEXT,
+    source             TEXT,
+    trusted_assets     TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (actor_email, conversation_id)
+);
+CREATE INDEX IF NOT EXISTS idx_genie_sessions_actor_updated
+    ON mip_app.genie_sessions (actor_email, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS mip_app.genie_messages (
+    conversation_id    TEXT NOT NULL,
+    message_id         TEXT NOT NULL,
+    actor_email        TEXT NOT NULL,
+    question_hash      TEXT NOT NULL,
+    source             TEXT NOT NULL,
+    row_count          INTEGER NOT NULL DEFAULT 0 CHECK (row_count >= 0),
+    visualization_kind TEXT,
+    trusted_assets     TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+    request_id         TEXT,
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (conversation_id, message_id)
+);
+CREATE INDEX IF NOT EXISTS idx_genie_messages_actor_created
+    ON mip_app.genie_messages (actor_email, created_at DESC);
 
 -- Immutability: app writer has INSERT + SELECT only; revoke UPDATE/DELETE.
 -- The role may not yet exist at schema-install time; the REVOKE is a no-op

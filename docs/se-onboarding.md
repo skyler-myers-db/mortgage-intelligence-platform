@@ -195,10 +195,10 @@ the frontend retries automatically.
 
 ### 6.3 Genie first-ask
 
-First `/api/genie/ask` call after Genie space creation takes 10–30 s.
-The safe corpus in `backend/services/genie_answers.py` answers invisibly
-with `source: "fallback"` during that window. To prime the space before
-a demo, see [`docs/runbook.md`](runbook.md) §1.3.
+First `/api/genie/message` call after Genie space creation takes 10–30 s.
+The app returns `source: "degraded"` with no fabricated metrics during that
+window. To prime the space before a demo, see [`docs/runbook.md`](runbook.md)
+§1.3.
 
 ### 6.4 Frontend shell caches stale JS
 
@@ -255,7 +255,7 @@ Then re-probe `/api/health` — `lakebase` should flip to `"up"` within
 (`databricks database list-instances`) and bounce if STOPPED
 (customer-side billing can auto-stop instances).
 
-### 7.4 `/api/genie/ask` always returns `source: "fallback"`
+### 7.4 `/api/genie/message` always returns `source: "degraded"`
 
 Three possible causes, in order of likelihood:
 

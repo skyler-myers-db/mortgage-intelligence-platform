@@ -665,7 +665,7 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
           </Button>
         </div>
       </div>
-      <div className="tbl-wrap">
+      <div className="tbl-wrap" tabIndex={0} aria-label="Ranked borrowers table scroll region">
         <table className="tbl">
           <thead>
             <tr>

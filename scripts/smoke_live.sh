@@ -22,7 +22,7 @@
 #   2 -- env prerequisites missing (curl / jq).
 #
 # Flags:
-#   --no-genie  -- skip the /api/genie/ask probe (useful for cold-Genie
+#   --no-genie  -- skip the /api/genie/message probe (useful for cold-Genie
 #                  laptops where the space takes 30s to warm).
 #   --boot-timeout <s> -- override the boot wait (default 20s).
 #
@@ -146,7 +146,7 @@ probe "borrower dossier"  "/api/borrowers/B-48291"
 probe "evidence timeline" "/api/borrowers/B-48291/evidence"
 
 if [[ "$SKIP_GENIE" == "0" ]]; then
-  probe "genie ask" "/api/genie/ask" POST \
+  probe "genie message" "/api/genie/message" POST \
     '{"question":"How many borrowers across the 6-state footprint are currently in-the-money?"}'
 fi
 

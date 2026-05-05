@@ -94,6 +94,13 @@ class Settings(BaseSettings):
     # per-environment space id.
     genie_space_id: str | None = None
 
+    # Server-side HMAC key for Genie action confirmation tokens. When
+    # unset, the app generates a process-local key at boot, which keeps
+    # tokens unforgeable but invalidates outstanding confirmations after
+    # a restart. Set MIP_GENIE_ACTION_SECRET in production to preserve
+    # still-visible answer actions across app restarts.
+    mip_genie_action_secret: SecretStr | None = Field(default=None, repr=False)
+
     # Lakebase Postgres credentials -- required for the durable audit
     # trail introduced in Slice 5. Missing values make the audit write
     # path raise ``LakebaseError`` (audit router returns 503); they do

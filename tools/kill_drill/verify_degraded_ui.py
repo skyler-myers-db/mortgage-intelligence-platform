@@ -160,7 +160,7 @@ def check_endpoint_degraded(api_url: str, endpoint: str) -> tuple[bool, str]:
       * HTTP 500/502/504 (visible non-200 failure)
       * HTTP 200 with ``degraded: true`` or ``status: degraded``
       * HTTP 200 with an empty collection (no borrowers is not fake)
-      * HTTP 200 with ``source: fallback | corpus`` (Genie safe corpus)
+      * HTTP 200 with ``source: degraded`` (honest Genie reconnecting state)
 
     Unacceptable (regression signal):
       * HTTP 200 with non-empty, real-looking rows.
@@ -178,7 +178,7 @@ def check_endpoint_degraded(api_url: str, endpoint: str) -> tuple[bool, str]:
     if isinstance(payload, dict):
         if payload.get("degraded") is True or payload.get("status") == "degraded":
             return True, f"{endpoint} -> 200 with degraded=true"
-        if payload.get("source") in ("fallback", "corpus"):
+        if payload.get("source") == "degraded":
             return True, f"{endpoint} -> 200 with source={payload['source']}"
         items = payload.get("items")
         if isinstance(items, list) and len(items) == 0:

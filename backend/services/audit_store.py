@@ -166,6 +166,21 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         "segment",
         "segment_mode",
         "limit",
+        # Genie control-layer actions
+        "action_type",
+        "conversation_id",
+        "message_id",
+        "question_hash",
+        "row_count",
+        "saved_count",
+        "campaign_id",
+        "criteria_hash",
+        "criteria_keys",
+        "source_assets",
+        "visualization_kind",
+        "route",
+        "requested_state",
+        "footprint_states",
         # Offers
         "thresholds_applied",
         # Admin rules override

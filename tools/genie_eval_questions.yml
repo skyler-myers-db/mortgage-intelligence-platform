@@ -66,8 +66,75 @@ questions:
     forbid_keywords:
       - no borrowers
       - 0 borrowers
+    expected_numeric_range:
+      min: 100000
+      max: 250000
+    require_trusted_proof: true
+    require_select_sql: true
+    require_freshness: true
+    required_sql_contains:
+      - mip.gold.borrower_360
+      - in_the_money = true
     min_rows: 0  # answer is a single metric, not a table
     max_latency_s: 6
+
+  - id: in_the_money_count_illinois
+    category: aggregate
+    question: How many borrowers in Illinois are in the money?
+    must_cite:
+      - mip.gold.borrower_360
+    forbid_keywords:
+      - no borrowers
+      - 147,742
+      - 277,139
+    expected_numeric_range:
+      min: 60000
+      max: 80000
+    require_trusted_proof: true
+    require_select_sql: true
+    require_freshness: true
+    required_sql_contains:
+      - mip.gold.borrower_360
+      - state = :state
+    min_rows: 0
+    max_latency_s: 6
+
+  - id: in_the_money_count_chicago_city_scope
+    category: aggregate
+    question: How many in-the-money borrowers in Chicago?
+    must_cite:
+      - mip.gold
+    forbid_keywords:
+      - 147,742
+      - all-footprint
+      - full footprint
+    max_latency_s: 8
+
+  - id: in_the_money_count_boston_city_scope
+    category: aggregate
+    question: How many in-the-money borrowers do we have in Boston?
+    forbid_keywords:
+      - 147,742
+      - all-footprint
+      - full footprint
+    max_latency_s: 8
+
+  - id: executive_strategy_board
+    category: strategy
+    question: Where should Summit Mortgage spend its next 10000 outreach touches this week, and why?
+    must_cite:
+      - mip.gold
+    forbid_keywords:
+      - permit candidates
+      - listed candidates
+    require_keywords:
+      - segment
+      - state
+      - offer
+    require_trusted_proof: true
+    require_select_sql: true
+    min_rows: 4
+    max_latency_s: 10
 
   - id: investor_segment
     category: segment
@@ -90,6 +157,8 @@ questions:
     forbid_keywords: []
     require_keywords:
       - blocked  # OR pending OR unavailable — checked by OR-ing all
+      - pending
+      - unavailable
     min_rows: 0
     max_latency_s: 6
 

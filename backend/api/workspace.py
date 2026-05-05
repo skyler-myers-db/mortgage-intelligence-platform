@@ -10,6 +10,7 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
+from backend.config.settings import settings
 from backend.schemas.workspace import (
     SavedDraft,
     SavedDraftInput,
@@ -18,7 +19,6 @@ from backend.schemas.workspace import (
     WorkspaceMutationResponse,
     WorkspaceState,
 )
-from backend.config.settings import settings
 from backend.services.audit_store import resolve_actor
 from backend.services.error_sanitizer import safe_dependency_detail
 from backend.services.lakebase import LakebaseError

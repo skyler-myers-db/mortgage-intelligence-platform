@@ -21,6 +21,11 @@ class _RecordingLakebase:
         p = params or {}
         self.fetchones.append((sql, p))
         now = datetime.now(UTC)
+        if "GENIE_ACTION_SAVE_BORROWERS" in sql:
+            return {
+                "saved_count": len(p.get("borrower_ids") or []),
+                "audit_id": "audit-genie-save",
+            }
         if "mip_app.saved_leads" in sql:
             return {
                 "borrower_id": p["borrower_id"],
@@ -116,3 +121,22 @@ def test_save_draft_scrubs_body_before_storage_and_audit_is_bodyless() -> None:
         "request_id": params["request_id"],
     }
     assert "draft_body" not in metadata
+
+
+def test_genie_save_action_sql_avoids_raw_percent_predicates() -> None:
+    client = _RecordingLakebase()
+    store = LakebaseWorkspaceStore(client=client)  # type: ignore[arg-type]
+
+    saved, audit_id = store.save_leads_from_genie_action(
+        actor="lo@example.com",
+        borrower_ids=["B-123", "not-a-borrower"],
+        request_id="genie-action-test",
+        entity_id="message-1",
+        metadata={"action_type": "save_borrowers"},
+    )
+
+    sql, _ = client.fetchones[0]
+    assert saved == 2
+    assert audit_id == "audit-genie-save"
+    assert "LIKE 'B-%'" not in sql
+    assert "left(borrower_id, 2) = 'B-'" in sql

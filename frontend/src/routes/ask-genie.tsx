@@ -1,7 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { api } from '../lib/api';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
-import type { GenieAnswer as GenieAnswerShape } from '../types';
+import type { GenieActionSuggestion, GenieAnswer as GenieAnswerShape } from '../types';
+import { useApp } from '../components/AppContext';
 import { PageShell } from '../components/layout/PageShell';
 import { Button, Chip, EvidenceChip } from '../components/Primitives';
 import { Icon } from '../components/Icon';
@@ -20,7 +22,7 @@ import { DRAWER_SOURCES } from '../lib/drawerSources';
 
 const SAMPLE_QUESTIONS = [
   'Which zips have the most in-the-money refi candidates?',
-  'Show HELOC candidates with recent permits and strong equity.',
+  'Show HELOC candidates with strong equity and explain the pending permit-feed gap.',
   'How many current customers show retention risk this week?',
   'Which segment converts best among owner-occupied under 50% LTV?',
 ];
@@ -29,14 +31,48 @@ const SAMPLE_QUESTIONS = [
 // reads; the UC path sits in the title tooltip for governance/ops.
 const TRUSTED_ASSETS: Array<{ label: string; path: string }> = [
   { label: 'Borrower population',          path: 'mip.gold.lead_population' },
-  { label: 'Segment membership',           path: 'mip.gold.lead_segment_membership' },
+  { label: 'Segment rollups',              path: 'mip.gold.segment_population' },
   { label: 'Opportunity scores',           path: 'mip.gold.lead_scores' },
+  { label: 'Borrower 360 profile',         path: 'mip.gold.borrower_360' },
+  { label: 'Borrower dossier',             path: 'mip.gold.borrower_dossier' },
   { label: 'Source evidence',              path: 'mip.gold.evidence_events' },
+  { label: 'Lock-in cohort',               path: 'mip.gold.lockin_cohort' },
   { label: 'Lead-generation metric view',  path: 'mip.semantics.lead_generation_metric_view' },
+  { label: 'Segment performance view',     path: 'mip.semantics.segment_performance_metric_view' },
+  { label: 'Borrower opportunity view',    path: 'mip.semantics.borrower_opportunity_metric_view' },
 ];
 
 export default function AskGenie() {
+  const navigate = useNavigate();
+  const { refreshWorkspace } = useApp();
   const [question, setQuestion] = useState(SAMPLE_QUESTIONS[0]);
+  const [conversationId, setConversationId] = useState<string | null>(() => {
+    try {
+      return window.localStorage.getItem('mip.genie.conversationId');
+    } catch {
+      return null;
+    }
+  });
+
+  useEffect(() => {
+    if (conversationId) return undefined;
+    const controller = new AbortController();
+    api.genieStart(controller.signal)
+      .then((result) => {
+        if (!result.conversation_id) return;
+        setConversationId(result.conversation_id);
+        try {
+          window.localStorage.setItem('mip.genie.conversationId', result.conversation_id);
+        } catch {
+          // ignore
+        }
+      })
+      .catch(() => {
+        // The first question will start a new Databricks Genie conversation.
+      });
+    return () => controller.abort();
+  }, [conversationId]);
+  const [actionStatus, setActionStatus] = useState<string | null>(null);
   // `submittedQuestion` drives the warming-up-wrapped fetch. Typing in
   // the textarea updates `question`; clicking Ask commits the current
   // value into `submittedQuestion`, which triggers the hook. Pairing
@@ -51,7 +87,7 @@ export default function AskGenie() {
     error,
     manualRetry,
   } = useWarmingUpRetry<GenieAnswerShape>(
-    (signal) => api.genie(submittedQuestion ?? '', signal) as Promise<GenieAnswerShape>,
+    (signal) => api.genie(submittedQuestion ?? '', conversationId, signal) as Promise<GenieAnswerShape>,
     [submittedQuestion, submitToken],
     { enabled: submittedQuestion !== null && submittedQuestion.length > 0 },
   );
@@ -67,6 +103,53 @@ export default function AskGenie() {
     setQuestion(q);
     setSubmittedQuestion(q);
     setSubmitToken((n) => n + 1);
+    setActionStatus(null);
+  }
+
+  function newConversation() {
+    setConversationId(null);
+    setSubmittedQuestion(null);
+    setActionStatus('Started a new Genie thread.');
+    try {
+      window.localStorage.removeItem('mip.genie.conversationId');
+    } catch {
+      // ignore
+    }
+  }
+
+  useEffect(() => {
+    if (!payload?.conversation_id) return;
+    setConversationId(payload.conversation_id);
+    try {
+      window.localStorage.setItem('mip.genie.conversationId', payload.conversation_id);
+    } catch {
+      // ignore
+    }
+  }, [payload?.conversation_id]);
+
+  async function runAction(action: GenieActionSuggestion) {
+    setActionStatus(`Running ${action.label.toLowerCase()}...`);
+    try {
+      const result = await api.genieAction({
+        ...action,
+        conversation_id: payload?.conversation_id ?? conversationId,
+        message_id: payload?.message_id ?? null,
+        question_hash: payload?.question_hash ?? null,
+      });
+      setActionStatus(
+        result.audit_event_id
+          ? `${result.message} Audit event ${result.audit_event_id}.`
+          : result.message,
+      );
+      if (action.action_type === 'save_borrowers') refreshWorkspace();
+      if (result.route) navigate(result.route);
+    } catch (err) {
+      setActionStatus(
+        err instanceof Error
+          ? `Action failed: ${err.message}`
+          : 'Action failed.',
+      );
+    }
   }
 
   const sourceLabel = payload?.source ?? '';
@@ -78,13 +161,22 @@ export default function AskGenie() {
   //                per user feedback: "we don't want this app to be
   //                gimmicky at all.")
   const isDegraded = sourceLabel === 'degraded';
+  const isBlocked = sourceLabel === 'policy_blocked' || sourceLabel === 'refused' || sourceLabel === 'data_gap';
   const sourceChip = isDegraded
     ? 'Genie reconnecting'
-    : sourceLabel || (payload?.trusted_assets?.[0] ?? '');
+    : isBlocked
+      ? sourceLabel === 'refused'
+        ? 'Prompt refused'
+        : sourceLabel === 'data_gap'
+          ? 'Source pending'
+          : 'Policy blocked'
+      : payload?.trusted_assets?.[0] || sourceLabel || '';
   const sourceChipTitle = isDegraded
     ? 'The Genie space is warming up. Live answers will resume shortly.'
+    : isBlocked
+      ? 'The answer was not displayed because it did not meet the governed Genie policy.'
     : undefined;
-  const sourceChipVariant: 'warning' | undefined = isDegraded ? 'warning' : undefined;
+  const sourceChipVariant: 'warning' | undefined = isDegraded || isBlocked ? 'warning' : undefined;
   // Map the Genie-provided source label to the best matching drawer entry.
   // Returns null when no specific match exists — the chip then renders as
   // an inert neutral chip rather than defaulting to NBO and misleading
@@ -141,7 +233,7 @@ export default function AskGenie() {
               }}
               className="route-textarea"
             />
-            <div className="mt-3">
+            <div className="section-actions">
               <Button
                 variant="primary"
                 icon="send"
@@ -149,6 +241,14 @@ export default function AskGenie() {
                 disabled={loading || warmingUp !== null}
               >
                 {loading || warmingUp !== null ? 'Asking…' : 'Ask Genie'}
+              </Button>
+              <Button
+                variant="ghost"
+                icon="chat"
+                onClick={newConversation}
+                disabled={loading || warmingUp !== null}
+              >
+                New thread
               </Button>
             </div>
             {warmingUp && (
@@ -184,7 +284,12 @@ export default function AskGenie() {
                       auto-detected bar chart for top-N / per-state-style
                       table_rows payloads. The floating bubble does NOT
                       pass this prop, so its compact form is unchanged. */}
-                  <GenieAnswer payload={payload} onFollowUp={ask} withChart />
+                  <GenieAnswer payload={payload} onFollowUp={ask} onAction={runAction} withChart />
+                  {actionStatus && (
+                    <div className="status-callout status-callout--info mt-3">
+                      {actionStatus}
+                    </div>
+                  )}
                   {sourceChip && (
                     <div className="chip-row mt-3">
                       <span className="muted fs-11">Source:</span>

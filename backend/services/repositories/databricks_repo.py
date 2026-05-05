@@ -35,6 +35,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 from datetime import UTC, datetime
 from typing import Any
 
@@ -57,10 +58,14 @@ from backend.schemas.portfolio import (
     PortfolioPreviewRequest,
 )
 from backend.schemas.why import WhyPanel, WhyPanelSource
-from backend.services.databricks_sql import DatabricksSqlClient
+from backend.services.databricks_sql import DatabricksSqlClient, DatabricksSqlError
 from backend.services.databricks_sql_helpers import qualify
 from backend.services.genie_answers import (
+    GenieActionSuggestion,
+    GenieDataFreshness,
     GenieMessageResponse,
+    GenieProof,
+    GenieVisualizationSpec,
 )
 from backend.services.genie_answers import (
     respond as genie_catalog_respond,
@@ -1530,15 +1535,24 @@ class DatabricksGenieRepository:
         "Genie space; no curated answers are served while it reconnects."
     )
 
-    def __init__(self, genie: ResilientGenieClient) -> None:
+    def __init__(
+        self,
+        genie: ResilientGenieClient,
+        sql_client: DatabricksSqlClient | None = None,
+    ) -> None:
         self._genie = genie
+        self._sql_client = sql_client
 
-    def respond(self, question: str) -> GenieMessageResponse:
+    def respond(
+        self,
+        question: str,
+        conversation_id: str | None = None,
+    ) -> GenieMessageResponse:
         breaker_state = self._genie.resilient.breaker.state
         if breaker_state == "open":
             return self._degraded(question)
         try:
-            result = self._genie.ask(question)
+            result = self._genie.ask(question, conversation_id=conversation_id)
         except DependencyDownError:
             return self._degraded(question)
         except GenieClientError:
@@ -1546,7 +1560,7 @@ class DatabricksGenieRepository:
             # 500, malformed JSON). Re-raise so the router translates
             # to 503 + degraded UI. No silent mock fallback.
             raise
-        return _adapt_genie_response(question, result)
+        return _adapt_genie_response(question, result, sql_client=self._sql_client)
 
     # ------------------------------------------------------------------
     # Internals
@@ -1568,6 +1582,15 @@ class DatabricksGenieRepository:
             answer=self._WARMING_MESSAGE,
             source="degraded",
             trusted_assets=[],
+            question_hash=_genie_question_hash(question),
+            proof=GenieProof(
+                source_assets=[],
+                row_count=0,
+                trusted=False,
+                known_data_gaps=_known_data_gaps(question, []),
+                conversation_id=catalog_answer.conversation_id,
+                generated_at=datetime.now(UTC).isoformat(),
+            ),
             follow_up_questions=catalog_answer.follow_up_questions,
         )
 
@@ -1575,6 +1598,8 @@ class DatabricksGenieRepository:
 def _adapt_genie_response(
     question: str,
     result: GenieResponse,
+    *,
+    sql_client: DatabricksSqlClient | None = None,
 ) -> GenieMessageResponse:
     """Wrap a live ``GenieResponse`` into the wire contract the UI
     already consumes. We derive ``trusted_assets`` from the SQL query
@@ -1590,13 +1615,480 @@ def _adapt_genie_response(
     columns in Ask Genie results even if the Space drifts.
     """
     trusted_assets = _extract_asset_refs(result.sql_query)
+    rows = _redact_genie_rows(result.sql_result_rows)
+    trusted_sql = _trusted_sql_policy(result.sql_query, trusted_assets)
+    question_hash = _genie_question_hash(question)
+    canonical = _canonical_genie_answer(
+        question=question,
+        result=result,
+        sql_client=sql_client,
+    )
+    if canonical is not None:
+        return canonical
+    text_contains_pii = _answer_text_contains_pii(result.answer_text)
+    if text_contains_pii or (result.sql_query and not trusted_sql):
+        proof = _build_genie_proof(
+            sql_query=None,
+            trusted_assets=trusted_assets,
+            rows=[],
+            question=question,
+            conversation_id=result.conversation_id,
+            message_id=result.message_id,
+            elapsed_ms=result.elapsed_ms,
+        )
+        return GenieMessageResponse(
+            conversation_id=result.conversation_id,
+            message_id=result.message_id,
+            elapsed_ms=result.elapsed_ms,
+            question_hash=question_hash,
+            question=question,
+            answer=(
+                "Genie returned content outside the trusted Module 0 policy, "
+                "so the app did not display the result. Ask a scoped question "
+                "over the trusted mortgage lead assets without PII or protected-class criteria."
+            ),
+            source="policy_blocked",
+            trusted_assets=trusted_assets,
+            sql_query=None,
+            row_count=0,
+            proof=proof,
+            table_rows=[],
+        )
+    if result.sql_query and trusted_sql and not rows and sql_client is not None:
+        rows = _redact_genie_rows(_execute_trusted_genie_sql(sql_client, result.sql_query))
+    proof = _build_genie_proof(
+        sql_query=result.sql_query,
+        trusted_assets=trusted_assets,
+        rows=rows,
+        question=question,
+        conversation_id=result.conversation_id,
+        message_id=result.message_id,
+        elapsed_ms=result.elapsed_ms,
+    )
+    visualization = _plan_genie_visualization(question, rows)
+    actions = _suggest_genie_actions(
+        question=question,
+        rows=rows,
+        trusted_assets=trusted_assets,
+        visualization=visualization,
+        conversation_id=result.conversation_id,
+        message_id=result.message_id,
+        question_hash=question_hash,
+    )
     return GenieMessageResponse(
         conversation_id=result.conversation_id,
+        message_id=result.message_id,
+        elapsed_ms=result.elapsed_ms,
+        question_hash=question_hash,
         question=question,
         answer=result.answer_text or "",
         source="genie",
         trusted_assets=trusted_assets,
-        table_rows=_redact_genie_rows(result.sql_result_rows),
+        sql_query=result.sql_query,
+        row_count=len(rows) if rows else 0,
+        proof=proof,
+        visualization=visualization,
+        actions=actions,
+        table_rows=rows,
+    )
+
+
+_CANONICAL_ITM_COUNT_SQL = """
+SELECT COUNT(*) AS in_the_money_borrowers
+     , MAX(refreshed_at) AS refreshed_at
+FROM mip.gold.borrower_360
+WHERE in_the_money = TRUE
+""".strip()
+
+_CANONICAL_ITM_COUNT_BY_STATE_SQL = """
+SELECT COUNT(*) AS in_the_money_borrowers
+     , MAX(refreshed_at) AS refreshed_at
+FROM mip.gold.borrower_360
+WHERE in_the_money = TRUE
+  AND state = :state
+""".strip()
+
+_CANONICAL_ITM_COUNT_BY_CITY_SQL = """
+SELECT COUNT(*) AS in_the_money_borrowers
+     , MAX(refreshed_at) AS refreshed_at
+FROM mip.gold.borrower_360
+WHERE in_the_money = TRUE
+  AND LOWER(city) = LOWER(:city)
+""".strip()
+
+_CANONICAL_MSA_SCORE_SQL = """
+WITH borrower_markets AS (
+  SELECT situs_cbsa_code
+       , COALESCE(NULLIF(city, ''), 'Unknown') AS city
+       , state
+       , opportunity_score
+       , refreshed_at
+  FROM mip.gold.borrower_360
+  WHERE situs_cbsa_code IS NOT NULL
+    AND TRIM(situs_cbsa_code) <> ''
+),
+market_scores AS (
+  SELECT situs_cbsa_code AS msa_cbsa_code
+       , CAST(COUNT(*) AS BIGINT) AS borrowers
+       , CAST(ROUND(AVG(opportunity_score), 1) AS DOUBLE) AS avg_score
+       , MAX(refreshed_at) AS refreshed_at
+  FROM borrower_markets
+  GROUP BY situs_cbsa_code
+),
+city_counts AS (
+  SELECT situs_cbsa_code
+       , city
+       , state
+       , COUNT(*) AS city_borrowers
+  FROM borrower_markets
+  GROUP BY situs_cbsa_code, city, state
+),
+city_ranked AS (
+  SELECT situs_cbsa_code
+       , city
+       , state
+       , city_borrowers
+       , ROW_NUMBER() OVER (
+           PARTITION BY situs_cbsa_code
+           ORDER BY city_borrowers DESC, city ASC, state ASC
+         ) AS rn
+  FROM city_counts
+)
+SELECT CONCAT(cr.city, ', ', cr.state, ' (CBSA ', ms.msa_cbsa_code, ')') AS market
+     , ms.msa_cbsa_code
+     , ms.borrowers
+     , ms.avg_score
+     , ms.refreshed_at
+FROM market_scores AS ms
+LEFT JOIN city_ranked AS cr
+  ON cr.situs_cbsa_code = ms.msa_cbsa_code
+ AND cr.rn = 1
+ORDER BY ms.borrowers DESC, ms.avg_score DESC, ms.msa_cbsa_code ASC
+LIMIT 5
+""".strip()
+
+_US_STATE_FILTERS: tuple[tuple[str, str], ...] = (
+    ("alabama", "AL"), ("alaska", "AK"), ("arizona", "AZ"), ("arkansas", "AR"),
+    ("california", "CA"), ("colorado", "CO"), ("connecticut", "CT"), ("delaware", "DE"),
+    ("florida", "FL"), ("georgia", "GA"), ("hawaii", "HI"), ("idaho", "ID"),
+    ("illinois", "IL"), ("indiana", "IN"), ("iowa", "IA"), ("kansas", "KS"),
+    ("kentucky", "KY"), ("louisiana", "LA"), ("maine", "ME"), ("maryland", "MD"),
+    ("massachusetts", "MA"), ("michigan", "MI"), ("minnesota", "MN"),
+    ("mississippi", "MS"), ("missouri", "MO"), ("montana", "MT"), ("nebraska", "NE"),
+    ("nevada", "NV"), ("new hampshire", "NH"), ("new jersey", "NJ"),
+    ("new mexico", "NM"), ("new york", "NY"), ("north carolina", "NC"),
+    ("north dakota", "ND"), ("ohio", "OH"), ("oklahoma", "OK"), ("oregon", "OR"),
+    ("pennsylvania", "PA"), ("rhode island", "RI"), ("south carolina", "SC"),
+    ("south dakota", "SD"), ("tennessee", "TN"), ("texas", "TX"), ("utah", "UT"),
+    ("vermont", "VT"), ("virginia", "VA"), ("washington", "WA"),
+    ("west virginia", "WV"), ("wisconsin", "WI"), ("wyoming", "WY"),
+)
+
+
+def _canonical_itm_state_scope(question: str) -> tuple[str, str] | None:
+    q = question.lower()
+    for name, code in _US_STATE_FILTERS:
+        name_pattern = r"(?<![a-z0-9])" + re.escape(name) + r"(?![a-z0-9])"
+        code_pattern = r"(?<![A-Za-z0-9])" + re.escape(code) + r"(?![A-Za-z0-9])"
+        if re.search(name_pattern, q) or re.search(code_pattern, question):
+            return name.title(), code
+    return None
+
+
+def _canonical_in_the_money_count_scope(question: str) -> tuple[str, str] | None | bool:
+    q = re.sub(r"[^a-z0-9\s-]+", " ", question.lower())
+    q = re.sub(r"\s+", " ", q).strip()
+    if not any(phrase in q for phrase in ("in-the-money", "in the money")):
+        return False
+    if "borrower" not in q:
+        return False
+    if not any(term in q for term in ("how many", "count", "total number", "number of")):
+        return False
+    breakdown_terms = (
+        " by ",
+        "break down",
+        "broken down",
+        " by state",
+        "by-state",
+        "state by state",
+        "top ",
+        "rank",
+        "list",
+        "zip",
+        "county",
+        "msa",
+        "market",
+        "average",
+        "avg",
+        "mean",
+    )
+    if any(term in q for term in breakdown_terms):
+        return None
+    state_scope = _canonical_itm_state_scope(question)
+    if state_scope is not None:
+        return state_scope
+    if re.search(
+        r"\bborrowers?\b(?:\s+[a-z0-9-]+){0,6}\s+"
+        r"(?:in|for|near|around|within)\s+(?!the\b|the-money\b)[a-z]",
+        q,
+    ):
+        return None
+    if re.search(r"\bin[- ]the[- ]money\s+in\s+[a-z]", q):
+        return None
+    return True
+
+
+def _canonical_itm_city_scope(question: str) -> str | None:
+    q = re.sub(r"[^a-z0-9\s-]+", " ", question.lower())
+    q = re.sub(r"[-]+", " ", q)
+    q = re.sub(r"\s+", " ", q).strip()
+    if "in the money" not in q or "borrower" not in q:
+        return None
+    if not any(term in q for term in ("how many", "count", "total number", "number of")):
+        return None
+    city_start = q.rfind(" in ")
+    if city_start <= q.find("in the money"):
+        return None
+    city = q[city_start + 4 :].strip()
+    city = re.sub(r"\b(?:right now|currently|today|this week|this month)\b.*$", "", city)
+    city = city.strip()
+    if not city:
+        return None
+    blocked_geo_terms = {"state", "states", "zip", "zips", "msa", "market", "markets", "county"}
+    if any(term in city.split() for term in blocked_geo_terms):
+        return None
+    state_names = {name for name, _code in _US_STATE_FILTERS}
+    state_codes = {code.lower() for _name, code in _US_STATE_FILTERS}
+    if city in state_names or city.lower() in state_codes:
+        return None
+    return " ".join(part.capitalize() for part in city.split())
+
+
+def _canonical_msa_score_scope(question: str) -> bool:
+    q = re.sub(r"[^a-z0-9\s]+", " ", question.lower())
+    q = re.sub(r"\s+", " ", q).strip()
+    score_terms = (
+        "lead score",
+        "opportunity score",
+        "avg score",
+        "average score",
+        "mean score",
+        "mean lead score",
+    )
+    geo_terms = ("msa", "cbsa", "market", "markets")
+    top_terms = ("top five", "top 5", "five markets", "5 markets")
+    return (
+        "compare" in q
+        and any(term in q for term in score_terms)
+        and any(term in q for term in geo_terms)
+        and any(term in q for term in top_terms)
+    )
+
+
+def _canonical_genie_answer(
+    *,
+    question: str,
+    result: GenieResponse,
+    sql_client: DatabricksSqlClient | None,
+) -> GenieMessageResponse | None:
+    """Return hard-gated trusted answers for known grain-sensitive metrics.
+
+    The Genie space is allowed to read metric views, but
+    ``borrower_opportunity_metric_view`` is exploded by segment. A plain
+    ``COUNT(*)`` there double-counts multi-segment borrowers. For the exact
+    executive question "how many borrowers are currently in-the-money", the
+    app replays the canonical gold-grain query and displays that proof.
+    """
+    if sql_client is None:
+        return None
+    if _canonical_msa_score_scope(question):
+        try:
+            rows = sql_client.execute(_CANONICAL_MSA_SCORE_SQL)
+        except DatabricksSqlError as exc:
+            log.warning("canonical_genie_msa_score_failed: %s", exc, exc_info=True)
+            return None
+        rows = _redact_genie_rows(rows) or []
+        trusted_assets = [qualify("gold", "borrower_360", catalog="mip")]
+        question_hash = _genie_question_hash(question)
+        proof = _build_genie_proof(
+            sql_query=_CANONICAL_MSA_SCORE_SQL,
+            trusted_assets=trusted_assets,
+            rows=rows,
+            question=question,
+            conversation_id=result.conversation_id,
+            message_id=result.message_id,
+            elapsed_ms=result.elapsed_ms,
+        )
+        visualization = _plan_genie_visualization(question, rows)
+        actions = _suggest_genie_actions(
+            question=question,
+            rows=rows,
+            trusted_assets=trusted_assets,
+            visualization=visualization,
+            conversation_id=result.conversation_id,
+            message_id=result.message_id,
+            question_hash=question_hash,
+        )
+        if rows:
+            answer = (
+                "I used Cotality's `situs_cbsa_code` as the MSA identifier and "
+                "ranked the top five markets by borrower volume, then calculated "
+                "mean lead score at the unique borrower grain from mip.gold.borrower_360."
+            )
+        else:
+            answer = (
+                "The current gold borrower table did not return CBSA-coded market rows. "
+                "Module 0 has `situs_cbsa_code` for MSA-style grouping, but no separate "
+                "MSA-name lookup is loaded."
+            )
+        return GenieMessageResponse(
+            conversation_id=result.conversation_id,
+            message_id=result.message_id,
+            elapsed_ms=result.elapsed_ms,
+            question_hash=question_hash,
+            question=question,
+            answer=answer,
+            source="genie",
+            trusted_assets=trusted_assets,
+            sql_query=_CANONICAL_MSA_SCORE_SQL,
+            row_count=len(rows),
+            proof=proof,
+            visualization=visualization,
+            actions=actions,
+            table_rows=rows,
+        )
+
+    scope = _canonical_in_the_money_count_scope(question)
+    if not scope:
+        city_scope = _canonical_itm_city_scope(question)
+        if not city_scope:
+            return None
+        try:
+            row = sql_client.execute_one(
+                _CANONICAL_ITM_COUNT_BY_CITY_SQL,
+                {"city": city_scope},
+            ) or {}
+        except DatabricksSqlError as exc:
+            log.warning("canonical_genie_metric_failed: %s", exc, exc_info=True)
+            return None
+        count = row.get("in_the_money_borrowers")
+        try:
+            count_int = int(count)
+        except (TypeError, ValueError):
+            log.warning("canonical_genie_metric_bad_count: %r", count)
+            return None
+        rows = [
+            {
+                "city": city_scope,
+                "in_the_money_borrowers": count_int,
+                "refreshed_at": row.get("refreshed_at"),
+            }
+        ]
+        trusted_assets = [qualify("gold", "borrower_360", catalog="mip")]
+        question_hash = _genie_question_hash(question)
+        proof = _build_genie_proof(
+            sql_query=_CANONICAL_ITM_COUNT_BY_CITY_SQL,
+            trusted_assets=trusted_assets,
+            rows=rows,
+            question=question,
+            conversation_id=result.conversation_id,
+            message_id=result.message_id,
+            elapsed_ms=result.elapsed_ms,
+        )
+        visualization = _plan_genie_visualization(question, rows)
+        actions = _suggest_genie_actions(
+            question=question,
+            rows=rows,
+            trusted_assets=trusted_assets,
+            visualization=visualization,
+            conversation_id=result.conversation_id,
+            message_id=result.message_id,
+            question_hash=question_hash,
+        )
+        answer = (
+            f"There are {count_int:,} borrowers currently in-the-money in {city_scope} "
+            "within the current IL / CA / FL / TX / WA / CO share footprint. "
+            "This is a city-scoped unique borrower count from mip.gold.borrower_360; "
+            "it is not the overall share total."
+        )
+        return GenieMessageResponse(
+            conversation_id=result.conversation_id,
+            message_id=result.message_id,
+            elapsed_ms=result.elapsed_ms,
+            question_hash=question_hash,
+            question=question,
+            answer=answer,
+            source="genie",
+            trusted_assets=trusted_assets,
+            sql_query=_CANONICAL_ITM_COUNT_BY_CITY_SQL,
+            row_count=len(rows),
+            proof=proof,
+            visualization=visualization,
+            actions=actions,
+            metric_value=f"{count_int:,}",
+            table_rows=rows,
+        )
+    state_scope = scope if isinstance(scope, tuple) else None
+    sql_query = _CANONICAL_ITM_COUNT_BY_STATE_SQL if state_scope else _CANONICAL_ITM_COUNT_SQL
+    params = {"state": state_scope[1]} if state_scope else None
+    try:
+        row = sql_client.execute_one(sql_query, params) or {}
+    except DatabricksSqlError as exc:
+        log.warning("canonical_genie_metric_failed: %s", exc, exc_info=True)
+        return None
+    count = row.get("in_the_money_borrowers")
+    try:
+        count_int = int(count)
+    except (TypeError, ValueError):
+        log.warning("canonical_genie_metric_bad_count: %r", count)
+        return None
+
+    rows = [{"in_the_money_borrowers": count_int, "refreshed_at": row.get("refreshed_at")}]
+    if state_scope:
+        rows[0]["state"] = state_scope[1]
+    trusted_assets = [qualify("gold", "borrower_360", catalog="mip")]
+    question_hash = _genie_question_hash(question)
+    proof = _build_genie_proof(
+        sql_query=sql_query,
+        trusted_assets=trusted_assets,
+        rows=rows,
+        question=question,
+        conversation_id=result.conversation_id,
+        message_id=result.message_id,
+        elapsed_ms=result.elapsed_ms,
+    )
+    visualization = _plan_genie_visualization(question, rows)
+    actions = _suggest_genie_actions(
+        question=question,
+        rows=rows,
+        trusted_assets=trusted_assets,
+        visualization=visualization,
+        conversation_id=result.conversation_id,
+        message_id=result.message_id,
+        question_hash=question_hash,
+    )
+    geo_text = f" in {state_scope[0]} ({state_scope[1]})" if state_scope else ""
+    answer = (
+        f"There are {count_int:,} borrowers currently in-the-money{geo_text}. "
+        "This is a unique borrower count from mip.gold.borrower_360 at the "
+        "gold borrower grain, so multi-segment borrowers are counted once."
+    )
+    return GenieMessageResponse(
+        conversation_id=result.conversation_id,
+        message_id=result.message_id,
+        elapsed_ms=result.elapsed_ms,
+        question_hash=question_hash,
+        question=question,
+        answer=answer,
+        source="genie",
+        trusted_assets=trusted_assets,
+        sql_query=sql_query,
+        row_count=len(rows),
+        proof=proof,
+        visualization=visualization,
+        actions=actions,
+        metric_value=f"{count_int:,}",
+        table_rows=rows,
     )
 
 
@@ -1618,6 +2110,7 @@ _GENIE_PII_KEYS: frozenset[str] = frozenset({
     "mailing_address",
     "tax_mailing_address",
     "subject_property",     # carries synthesized city + ZIP; synthesized upstream, but redacted here too
+    "owner_email",
     "borrower_email",
     "email",
     "phone",
@@ -1638,26 +2131,596 @@ def _redact_genie_rows(rows: list[dict[str, Any]] | None) -> list[dict[str, Any]
     for row in rows:
         if not isinstance(row, dict):
             continue
-        redacted.append({k: v for k, v in row.items() if k not in _GENIE_PII_KEYS})
+        redacted.append(
+            {
+                k: v
+                for k, v in row.items()
+                if _normalise_genie_key(str(k)) not in _GENIE_PII_KEYS
+            }
+        )
     return redacted
 
 
-def _extract_asset_refs(sql: str | None) -> list[str]:
-    """Pull ``mip.<schema>.<table>`` references out of a SQL
-    string. Best-effort; returns the first three unique references so
-    the evidence chip row stays readable.
-    """
+def _normalise_genie_key(key: str) -> str:
+    split_camel = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", key)
+    return re.sub(r"[^a-z0-9]+", "_", split_camel.lower()).strip("_")
+
+
+_PII_TEXT_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE),
+    re.compile(r"\b(?:\+?1[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?)\d{3}[-.\s]?\d{4}\b"),
+    re.compile(r"\b\d{3}-\d{2}-\d{4}\b"),
+)
+
+
+def _answer_text_contains_pii(text: str | None) -> bool:
+    if not text:
+        return False
+    return any(pattern.search(text) for pattern in _PII_TEXT_PATTERNS)
+
+
+def _trusted_genie_asset_names() -> frozenset[str]:
+    """Return explicit trusted assets for the configured and demo catalogs."""
+
+    pairs = (
+        ("gold", "lead_population"),
+        ("gold", "segment_population"),
+        ("gold", "lead_scores"),
+        ("gold", "borrower_360"),
+        ("gold", "borrower_dossier"),
+        ("gold", "evidence_events"),
+        ("gold", "lockin_cohort"),
+        ("semantics", "lead_generation_metric_view"),
+        ("semantics", "segment_performance_metric_view"),
+        ("semantics", "borrower_opportunity_metric_view"),
+    )
+    assets = {qualify(schema, table) for schema, table in pairs}
+    assets.update(qualify(schema, table, catalog="mip") for schema, table in pairs)
+    return frozenset(assets)
+
+
+_TRUSTED_GENIE_ASSETS: frozenset[str] = _trusted_genie_asset_names()
+
+
+def _genie_question_hash(question: str) -> str:
+    return hashlib.sha256(question.encode("utf-8")).hexdigest()[:16]
+
+
+def _is_select_only(sql: str | None) -> bool:
+    if not sql:
+        return False
+    policy_sql = _scrub_sql_for_policy(sql)
+    if policy_sql is None:
+        return False
+    stripped = policy_sql.strip().lower()
+    if not (stripped.startswith("select") or stripped.startswith("with")):
+        return False
+    blocked = "alter|create|delete|drop|grant|insert|merge|revoke|set|truncate|update|use"
+    return re.search(rf"\b(?:{blocked})\b", stripped) is None
+
+
+def _trusted_sql_policy(sql: str | None, trusted_assets: list[str]) -> bool:
+    return bool(trusted_assets) and all(
+        asset in _TRUSTED_GENIE_ASSETS for asset in trusted_assets
+    ) and _is_select_only(sql) and not _sql_mentions_pii_columns(sql)
+
+
+def _bounded_genie_sql(sql: str) -> str:
+    stripped = sql.strip().rstrip(";")
+    return f"SELECT * FROM ({stripped}) AS genie_result LIMIT 500"
+
+
+def _execute_trusted_genie_sql(
+    sql_client: DatabricksSqlClient,
+    sql: str,
+) -> list[dict[str, Any]] | None:
+    try:
+        return sql_client.execute(_bounded_genie_sql(sql))
+    except DatabricksSqlError as exc:
+        log.warning("trusted_genie_sql_replay_failed: %s", exc, exc_info=True)
+        return None
+
+
+def _extract_filters(sql: str | None) -> list[str]:
     if not sql:
         return []
     import re
 
-    pattern = re.compile(r"\bmip\.[a-zA-Z_][a-zA-Z0-9_]*\.[a-zA-Z_][a-zA-Z0-9_]*\b")
+    match = re.search(
+        r"\bwhere\b(?P<where>.*?)(?:\bgroup\s+by\b|\border\s+by\b|\blimit\b|$)",
+        sql,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if not match:
+        return []
+    where = re.sub(r"\s+", " ", match.group("where")).strip()
+    if not where:
+        return []
+    return [where[:500]]
+
+
+def _row_columns(rows: list[dict[str, Any]] | None) -> list[str]:
+    if not rows:
+        return []
+    cols: list[str] = []
+    for row in rows[:5]:
+        for key in row:
+            if key not in cols:
+                cols.append(key)
+    return cols
+
+
+_GENIE_IDENTIFIER_COLUMNS = {
+    "zip",
+    "zip_code",
+    "zipcode",
+    "postal_code",
+    "fips",
+    "fips_5",
+    "county_fips",
+    "county_fips_5",
+    "msa_cbsa_code",
+    "cbsa_code",
+    "census_tract",
+    "tract",
+    "borrower_id",
+    "clip",
+    "id",
+}
+
+
+def _is_genie_identifier_column(column: str) -> bool:
+    lower = column.lower()
+    return lower in _GENIE_IDENTIFIER_COLUMNS or lower.endswith("_id")
+
+
+def _numeric_columns(rows: list[dict[str, Any]] | None) -> list[str]:
+    out: list[str] = []
+    for col in _row_columns(rows):
+        if _is_genie_identifier_column(col):
+            continue
+        values = [row.get(col) for row in rows or [] if row.get(col) is not None]
+        if values and all(isinstance(v, int | float) for v in values):
+            out.append(col)
+    return out
+
+
+def _text_columns(rows: list[dict[str, Any]] | None) -> list[str]:
+    out: list[str] = []
+    for col in _row_columns(rows):
+        values = [row.get(col) for row in rows or [] if row.get(col) is not None]
+        if values and all(isinstance(v, str) for v in values):
+            out.append(col)
+    return out
+
+
+def _dateish_columns(rows: list[dict[str, Any]] | None) -> list[str]:
+    names = []
+    for col in _row_columns(rows):
+        lower = col.lower()
+        if lower.endswith("_date") or lower.endswith("_at") or "snapshot" in lower:
+            names.append(col)
+    return names
+
+
+def _freshness_from_rows(
+    assets: list[str],
+    rows: list[dict[str, Any]] | None,
+) -> list[GenieDataFreshness]:
+    freshness_cols = [
+        col
+        for col in _row_columns(rows)
+        if col.lower() in {"refreshed_at", "snapshot_at", "data_refreshed_at"}
+        or col.lower().endswith("_refreshed_at")
+    ]
+    values: list[str] = []
+    for col in freshness_cols:
+        for row in rows or []:
+            value = row.get(col)
+            if value is not None:
+                values.append(str(value))
+    refreshed_at = max(values) if values else None
+    if refreshed_at:
+        return [
+            GenieDataFreshness(
+                asset=asset,
+                refreshed_at=refreshed_at,
+                status="live",
+                note="freshness returned by the generated SQL result",
+            )
+            for asset in assets
+        ]
+    return [
+        GenieDataFreshness(
+            asset=asset,
+            status="source-cited",
+            note="generated SQL did not return refreshed_at/snapshot_at; inspect SQL or query MAX(refreshed_at) for this asset",
+        )
+        for asset in assets
+    ]
+
+
+def _known_data_gaps(question: str, assets: list[str]) -> list[str]:
+    material = " ".join([question, *assets]).lower()
+    gaps: list[str] = []
+    if any(token in material for token in ("permit", "building permit")):
+        gaps.append(
+            "Cotality Building Permits feed is pending; permit flags are blocked false today."
+        )
+    if any(token in material for token in ("listing", "listed", "mls")):
+        gaps.append(
+            "Cotality MLS/listing feed is pending; listed-for-sale flags are blocked false today."
+        )
+    return gaps
+
+
+def _build_genie_proof(
+    *,
+    sql_query: str | None,
+    trusted_assets: list[str],
+    rows: list[dict[str, Any]] | None,
+    question: str,
+    conversation_id: str,
+    message_id: str,
+    elapsed_ms: int,
+) -> GenieProof:
+    trusted = _trusted_sql_policy(sql_query, trusted_assets)
+    return GenieProof(
+        sql_query=sql_query,
+        source_assets=trusted_assets,
+        data_freshness=_freshness_from_rows(trusted_assets, rows),
+        row_count=len(rows) if rows else 0,
+        filters=_extract_filters(sql_query),
+        trusted=trusted,
+        known_data_gaps=_known_data_gaps(question, trusted_assets),
+        conversation_id=conversation_id,
+        message_id=message_id,
+        elapsed_ms=elapsed_ms,
+        generated_at=datetime.now(UTC).isoformat(),
+    )
+
+
+def _label_column(rows: list[dict[str, Any]] | None, question: str) -> str | None:
+    cols = _row_columns(rows)
+    preferred = [
+        "state",
+        "zip",
+        "zip_code",
+        "county",
+        "county_name",
+        "msa",
+        "market",
+        "segment",
+        "segment_code",
+        "recommended_offer",
+        "offer_code",
+        "product_label",
+    ]
+    q = question.lower()
+    if "zip" in q:
+        preferred = ["zip", "zip_code", *preferred]
+    if "state" in q or "map" in q:
+        preferred = ["state", *preferred]
+    for col in preferred:
+        if col in cols:
+            return col
+    texts = _text_columns(rows)
+    return texts[0] if texts else None
+
+
+def _value_column(rows: list[dict[str, Any]] | None, question: str) -> str | None:
+    nums = _numeric_columns(rows)
+    if not nums:
+        return None
+    q = question.lower()
+    preferred = [
+        "borrowers",
+        "borrower_count",
+        "count",
+        "marketable_borrowers",
+        "addressable_borrowers",
+        "in_the_money_borrowers",
+        "high_opportunity_borrowers",
+        "opportunity_score",
+        "avg_score",
+        "approval_rate",
+        "conversion_rate",
+        "rate_spread_bps",
+        "equity_pct",
+    ]
+    if "score" in q:
+        preferred = ["opportunity_score", "avg_score", *preferred]
+    if "rate" in q:
+        preferred = ["approval_rate", "conversion_rate", "rate_spread_bps", *preferred]
+    for col in preferred:
+        if col in nums:
+            return col
+    return nums[0]
+
+
+def _plan_genie_visualization(
+    question: str,
+    rows: list[dict[str, Any]] | None,
+) -> GenieVisualizationSpec | None:
+    q = question.lower()
+    row_count = len(rows) if rows else 0
+    label = _label_column(rows, question)
+    value = _value_column(rows, question)
+    date_col = (_dateish_columns(rows) or [None])[0]
+    cols = set(_row_columns(rows))
+
+    if "borrower_id" in cols and row_count > 0:
+        return GenieVisualizationSpec(
+            kind="borrower_list",
+            title="Borrower drill-down",
+            x="borrower_id",
+            y=value,
+            reason="result includes borrower_id rows",
+        )
+    if ("strategy" in q or "10,000" in q or "outreach touches" in q) and row_count > 0:
+        return GenieVisualizationSpec(
+            kind="strategy_board",
+            title="Strategy board",
+            x=label,
+            y=value,
+            reason="strategy-oriented prompt with returned rows",
+        )
+    if ("map" in q or "geo" in q or "where" in q) and label in {"state", "zip", "zip_code"} and value:
+        return GenieVisualizationSpec(
+            kind="map",
+            title=f"{value} by {label}",
+            x=label,
+            y=value,
+            reason="geography prompt with state or ZIP column",
+        )
+    if ("trend" in q or "over time" in q or "by week" in q or "daily" in q) and date_col and value:
+        return GenieVisualizationSpec(
+            kind="line",
+            title=f"{value} trend",
+            x=date_col,
+            y=value,
+            reason="time-oriented prompt with date/snapshot column",
+        )
+    if row_count == 1 and value:
+        return GenieVisualizationSpec(
+            kind="metric",
+            title=value,
+            y=value,
+            reason="single-row numeric result",
+        )
+    if label and value and row_count >= 2:
+        return GenieVisualizationSpec(
+            kind="bar",
+            title=f"{value} by {label}",
+            x=label,
+            y=value,
+            reason="categorical result with numeric measure",
+        )
+    if row_count > 0:
+        return GenieVisualizationSpec(kind="table", title="Query result")
+    return None
+
+
+def _borrower_ids_from_rows(rows: list[dict[str, Any]] | None) -> list[str]:
+    ids: list[str] = []
+    for row in rows or []:
+        value = row.get("borrower_id")
+        if isinstance(value, str) and value.startswith("B-") and value not in ids:
+            ids.append(value)
+    return ids[:50]
+
+
+def _suggest_genie_actions(
+    *,
+    question: str,
+    rows: list[dict[str, Any]] | None,
+    trusted_assets: list[str],
+    visualization: GenieVisualizationSpec | None,
+    conversation_id: str | None,
+    message_id: str | None,
+    question_hash: str | None,
+) -> list[GenieActionSuggestion]:
+    actions: list[GenieActionSuggestion] = []
+    borrower_ids = _borrower_ids_from_rows(rows)
+    row_count = len(rows) if rows else 0
+    q = question.lower()
+    base_criteria: dict[str, Any] = {
+        "source": "genie",
+        "source_assets": trusted_assets,
+        "visualization_kind": visualization.kind if visualization else None,
+        "row_count": row_count,
+    }
+    if borrower_ids:
+        criteria = dict(base_criteria)
+        actions.append(
+            GenieActionSuggestion(
+                id="save-borrowers",
+                label=f"Save {len(borrower_ids)} borrower{'' if len(borrower_ids) == 1 else 's'}",
+                action_type="save_borrowers",
+                description="Add returned borrowers to the governed saved workspace.",
+                borrower_ids=borrower_ids,
+                criteria=criteria,
+            )
+        )
+        criteria = dict(base_criteria)
+        route = f"/borrower-360/{borrower_ids[0]}"
+        actions.append(
+            GenieActionSuggestion(
+                id="show-first-rationale",
+                label="Show why first borrower is ranked",
+                action_type="show_rationale",
+                description="Open Borrower 360 for the top returned borrower.",
+                route=route,
+                borrower_ids=[borrower_ids[0]],
+                criteria=criteria,
+            )
+        )
+    if row_count > 0:
+        criteria = dict(base_criteria)
+        actions.append(
+            GenieActionSuggestion(
+                id="open-cohort",
+                label="Open this cohort in Lead Queue",
+                action_type="open_cohort",
+                description="Navigate into the lead queue with this Genie result audited.",
+                route="/lead-queue",
+                borrower_ids=borrower_ids,
+                criteria=criteria,
+            )
+        )
+        criteria = dict(base_criteria)
+        actions.append(
+            GenieActionSuggestion(
+                id="create-campaign-draft",
+                label="Create draft campaign",
+                action_type="create_draft_campaign",
+                description="Create a Lakebase draft campaign from this governed Genie result.",
+                route="/lead-queue",
+                borrower_ids=borrower_ids,
+                criteria=criteria,
+            )
+        )
+    if "offer" in q or "strategy" in q or "10,000" in q:
+        criteria = dict(base_criteria)
+        route = f"/offer-orchestrator/{borrower_ids[0]}" if borrower_ids else "/offer-orchestrator"
+        actions.append(
+            GenieActionSuggestion(
+                id="compare-offers",
+                label="Compare offer strategies",
+                action_type="compare_offer_strategies",
+                description="Audit this strategy comparison and open the offer surface.",
+                route=route,
+                borrower_ids=borrower_ids[:1],
+                criteria=criteria,
+            )
+        )
+    criteria = dict(base_criteria)
+    actions.append(
+        GenieActionSuggestion(
+            id="export-insight",
+            label="Export demo-ready insight",
+            action_type="export_insight",
+            description="Record an audited insight export for this Genie answer.",
+            borrower_ids=borrower_ids,
+            criteria=criteria,
+        )
+    )
+    return actions[:5]
+
+
+_SQL_IDENT_RE = r"(?:`[^`]+`|[a-zA-Z_][a-zA-Z0-9_]*)"
+
+
+def _scrub_sql_for_policy(sql: str | None) -> str | None:
+    """Remove literals and reject SQL shapes the proof gate cannot trust.
+
+    Genie is allowed to generate one read-only statement over curated UC
+    assets. Comments, semicolons, and double-quoted identifiers are rejected
+    fail-closed: they are unnecessary for Module 0 questions and make a
+    regex-backed verifier easy to spoof.
+    """
+    if not sql:
+        return None
+    out: list[str] = []
+    i = 0
+    while i < len(sql):
+        ch = sql[i]
+        nxt = sql[i + 1] if i + 1 < len(sql) else ""
+        if ch == ";":
+            return None
+        if ch == "-" and nxt == "-":
+            return None
+        if ch == "/" and nxt == "*":
+            return None
+        if ch == '"':
+            return None
+        if ch == "'":
+            out.append(" '' ")
+            i += 1
+            while i < len(sql):
+                if sql[i] == "'" and i + 1 < len(sql) and sql[i + 1] == "'":
+                    i += 2
+                    continue
+                if sql[i] == "'":
+                    i += 1
+                    break
+                i += 1
+            continue
+        if ch == "`":
+            start = i
+            i += 1
+            while i < len(sql) and sql[i] != "`":
+                i += 1
+            if i >= len(sql):
+                return None
+            out.append(sql[start : i + 1])
+            i += 1
+            continue
+        out.append(ch)
+        i += 1
+    scrubbed = "".join(out).strip()
+    return scrubbed or None
+
+
+def _normalise_sql_ref(ref: str) -> str:
+    parts = [part.strip().strip("`").lower() for part in ref.split(".")]
+    return ".".join(part for part in parts if part)
+
+
+_GENIE_PII_SQL_COLUMNS: frozenset[str] = frozenset({
+    "clip",
+    "owner_link_id",
+    "owner_name",
+    "owner_names",
+    "owner_full_name",
+    "owner_name_hash",
+    "primary_owner",
+    "raw_clip",
+    "street_address",
+    "site_address",
+    "mailing_address",
+    "tax_mailing_address",
+    "subject_property",
+    "owner_email",
+    "borrower_email",
+    "email",
+    "phone",
+    "phone_number",
+    "ssn",
+})
+
+
+def _sql_mentions_pii_columns(sql: str | None) -> bool:
+    scrubbed = _scrub_sql_for_policy(sql)
+    if not scrubbed:
+        return False
+    normalised = re.sub(r"[^a-z0-9_]+", " ", scrubbed.lower())
+    tokens = set(normalised.split())
+    return bool(tokens & _GENIE_PII_SQL_COLUMNS)
+
+
+def _extract_asset_refs(sql: str | None) -> list[str]:
+    """Pull three-part UC references out of a SQL string.
+
+    Best-effort, but intentionally returns every unique reference it
+    sees. UI callers can choose how many chips to render; trust
+    enforcement must evaluate the whole query.
+    """
+    if not sql:
+        return []
+    policy_sql = _scrub_sql_for_policy(sql)
+    if not policy_sql:
+        return []
+
+    table_pattern = re.compile(
+        rf"\b(?:from|join)\s+({_SQL_IDENT_RE}(?:\s*\.\s*{_SQL_IDENT_RE}){{1,2}})(?!\s*\.)",
+        flags=re.IGNORECASE,
+    )
     seen: list[str] = []
-    for match in pattern.findall(sql):
-        if match not in seen:
-            seen.append(match)
-        if len(seen) >= 3:
-            break
+    for match in table_pattern.findall(policy_sql):
+        ref = _normalise_sql_ref(match)
+        if ref and ref not in seen:
+            seen.append(ref)
     return seen
 
 

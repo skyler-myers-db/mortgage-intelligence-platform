@@ -189,9 +189,76 @@ export interface GenieAnswer {
   answer: string;
   source?: string;
   trusted_assets?: string[];
+  conversation_id?: string;
+  message_id?: string | null;
+  elapsed_ms?: number | null;
+  question_hash?: string | null;
+  sql_query?: string | null;
+  row_count?: number | null;
+  proof?: GenieProof | null;
+  visualization?: GenieVisualization | null;
+  actions?: GenieActionSuggestion[];
   metric_value?: string | null;
   table_rows?: Record<string, unknown>[] | null;
   follow_up_questions?: string[];
+}
+
+export interface GenieFreshness {
+  asset: string;
+  refreshed_at?: string | null;
+  status: string;
+  note?: string | null;
+}
+
+export interface GenieProof {
+  sql_query?: string | null;
+  source_assets?: string[];
+  data_freshness?: GenieFreshness[];
+  row_count?: number | null;
+  filters?: string[];
+  trusted?: boolean;
+  known_data_gaps?: string[];
+  conversation_id?: string | null;
+  message_id?: string | null;
+  elapsed_ms?: number | null;
+  generated_at?: string | null;
+}
+
+export interface GenieVisualization {
+  kind: 'metric' | 'bar' | 'line' | 'funnel' | 'scatter' | 'map' | 'table' | 'borrower_list' | 'strategy_board' | string;
+  title?: string | null;
+  x?: string | null;
+  y?: string | null;
+  series?: string | null;
+  reason?: string | null;
+}
+
+export interface GenieStartResult {
+  conversation_id?: string | null;
+  trusted_assets?: string[];
+}
+
+export interface GenieActionSuggestion {
+  id: string;
+  label: string;
+  action_type: string;
+  description: string;
+  requires_confirmation?: boolean;
+  route?: string | null;
+  borrower_ids?: string[];
+  criteria?: Record<string, unknown>;
+  request_id?: string | null;
+  confirmation_token?: string | null;
+}
+
+export interface GenieActionResult {
+  ok: boolean;
+  action_type: string;
+  audit_event_id?: string | null;
+  route?: string | null;
+  saved_count?: number;
+  campaign_id?: string | null;
+  message: string;
 }
 
 /** Per-state aggregate row from `/api/geo/state-rollups` (see

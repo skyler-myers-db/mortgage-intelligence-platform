@@ -152,3 +152,83 @@ describe('workspace API client', () => {
     expect(calls[1].init?.method).toBe('DELETE');
   });
 });
+
+describe('genie API client', () => {
+  it('starts or resumes a governed Genie session', async () => {
+    const calls: Array<{ path: string; init?: RequestInit }> = [];
+    vi.stubGlobal('fetch', async (path: string, init?: RequestInit) => {
+      calls.push({ path, init });
+      return jsonResponse(200, {
+        conversation_id: 'conv-123',
+        trusted_assets: ['mip.gold.lead_population'],
+      });
+    });
+
+    const result = await api.genieStart();
+
+    expect(result.conversation_id).toBe('conv-123');
+    expect(calls[0].path).toBe('/api/genie/start');
+    expect(JSON.parse(String(calls[0].init?.body))).toEqual({ context: {} });
+  });
+
+  it('passes conversation_id on follow-up questions', async () => {
+    const calls: Array<{ path: string; init?: RequestInit }> = [];
+    vi.stubGlobal('fetch', async (path: string, init?: RequestInit) => {
+      calls.push({ path, init });
+      return jsonResponse(200, {
+        answer: 'Follow-up answer',
+        source: 'genie',
+        trusted_assets: ['mip.gold.lead_population'],
+        conversation_id: 'conv-123',
+      });
+    });
+
+    await api.genie('show that by ZIP', 'conv-123');
+
+    expect(calls[0].path).toBe('/api/genie/message');
+    expect(JSON.parse(String(calls[0].init?.body))).toMatchObject({
+      question: 'show that by ZIP',
+      conversation_id: 'conv-123',
+    });
+  });
+
+  it('runs governed Genie actions with confirmation payload fields', async () => {
+    const calls: Array<{ path: string; init?: RequestInit }> = [];
+    vi.stubGlobal('fetch', async (path: string, init?: RequestInit) => {
+      calls.push({ path, init });
+      return jsonResponse(200, {
+        ok: true,
+        action_type: 'save_borrowers',
+        saved_count: 1,
+        message: 'Saved 1 borrower.',
+      });
+    });
+
+    await api.genieAction({
+      id: 'save-borrowers',
+      label: 'Save borrowers',
+      action_type: 'save_borrowers',
+      description: 'Save returned borrowers',
+      borrower_ids: ['B-123'],
+      criteria: { source: 'genie', row_count: 1 },
+      request_id: 'genie-action-server-issued',
+      confirmation_token: 'token-123',
+      conversation_id: 'conv-123',
+      message_id: 'msg-456',
+      question_hash: 'abc',
+    });
+
+    expect(calls[0].path).toBe('/api/genie/actions');
+    const body = JSON.parse(String(calls[0].init?.body));
+    expect(body).toMatchObject({
+      action_type: 'save_borrowers',
+      conversation_id: 'conv-123',
+      message_id: 'msg-456',
+      question_hash: 'abc',
+      borrower_ids: ['B-123'],
+      request_id: 'genie-action-server-issued',
+      confirmed: true,
+      confirmation_token: 'token-123',
+    });
+  });
+});

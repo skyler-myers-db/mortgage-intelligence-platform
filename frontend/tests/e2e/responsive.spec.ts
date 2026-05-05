@@ -25,11 +25,27 @@
  * anchor matrix stays gated the same way; the offline CI job still
  * collects these specs via `playwright test --list` for a syntax check.
  */
-import { test, expect } from '@playwright/test';
+import { test, expect, type APIRequestContext } from '@playwright/test';
 
 const LIVE = process.env.E2E_LIVE === '1';
 
 const APP_URL = process.env.MIP_APP_URL || 'http://127.0.0.1:5173';
+const API_URL = process.env.MIP_API_URL || APP_URL.replace(':5173', ':8000');
+const BEARER = process.env.MIP_BEARER_TOKEN || process.env.DATABRICKS_TOKEN || '';
+const AUTH_HEADERS: Record<string, string> = BEARER
+  ? { Authorization: `Bearer ${BEARER}` }
+  : {};
+
+async function fetchFirstLeadId(request: APIRequestContext): Promise<string> {
+  const resp = await request.get(`${API_URL}/api/leads?limit=1`, {
+    headers: AUTH_HEADERS,
+  });
+  expect(resp.status(), 'GET /api/leads returned non-200').toBe(200);
+  const rows = (await resp.json()) as Array<{ borrower_id?: string }>;
+  const id = rows[0]?.borrower_id;
+  expect(id, 'need a live borrower id for responsive deep-link coverage').toBeTruthy();
+  return id!;
+}
 
 type Anchor = {
   width: number;
@@ -69,7 +85,7 @@ function countTracks(columns: string): number {
 
 test.describe('Module 0 — theme / density / narrow canaries', () => {
   test.skip(!LIVE, 'Set E2E_LIVE=1 to run responsive/density coverage.');
-  test.use({ baseURL: APP_URL });
+  test.use({ baseURL: APP_URL, extraHTTPHeaders: AUTH_HEADERS });
 
   test('theme toggle round-trip: dark <-> light + background color token changes', async ({ page }) => {
     await page.goto('/');
@@ -105,7 +121,7 @@ test.describe('Module 0 — theme / density / narrow canaries', () => {
     const html = page.locator('html');
 
     await page.getByRole('banner').getByRole('button', { name: 'Toggle console' }).click();
-    const consoleDialog = page.getByRole('dialog', { name: 'Console' });
+    const consoleDialog = page.getByRole('complementary', { name: 'Workspace console' });
     await expect(consoleDialog).toBeVisible();
 
     const initialDensity = await html.getAttribute('data-density');
@@ -179,7 +195,7 @@ test.describe('Module 0 — theme / density / narrow canaries', () => {
    ============================================================ */
 test.describe('Module 0 — responsive anchor matrix', () => {
   test.skip(!LIVE, 'Set E2E_LIVE=1 to run the responsive anchor matrix.');
-  test.use({ baseURL: APP_URL });
+  test.use({ baseURL: APP_URL, extraHTTPHeaders: AUTH_HEADERS });
 
   for (const anchor of ANCHORS) {
     test(`[${anchor.label}] Home renders ${anchor.kpiCols}-col KPI row, ${anchor.layoutACols}-col layoutA`, async ({ page }) => {
@@ -250,9 +266,10 @@ test.describe('Module 0 — responsive anchor matrix', () => {
       expect(contentWidth, `Lead Queue .main__content width at ${anchor.label}`).toBeLessThanOrEqual(1922);
     });
 
-    test(`[${anchor.label}] Borrower 360 layoutA matches the anchor band`, async ({ page }) => {
+    test(`[${anchor.label}] Borrower 360 layoutA matches the anchor band`, async ({ page, request }) => {
+      const target = await fetchFirstLeadId(request);
       await page.setViewportSize({ width: anchor.width, height: anchor.height });
-      await page.goto('/borrower-360');
+      await page.goto(`/borrower-360/${target}`);
 
       // Borrower 360 has multiple .layoutA-grid blocks; just take the first.
       await expect(page.locator('.layoutA-grid').first()).toBeVisible({ timeout: 30_000 });
@@ -277,7 +294,7 @@ test.describe('Module 0 — responsive anchor matrix', () => {
    ============================================================ */
 test.describe('Module 0 — shell chrome scales with viewport', () => {
   test.skip(!LIVE, 'Set E2E_LIVE=1 to run responsive/density coverage.');
-  test.use({ baseURL: APP_URL });
+  test.use({ baseURL: APP_URL, extraHTTPHeaders: AUTH_HEADERS });
 
   test('rail widens from 72 → 80 → 96 across 1440 / 1920 / 2560', async ({ page }) => {
     await page.goto('/');

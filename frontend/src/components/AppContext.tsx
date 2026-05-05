@@ -114,11 +114,11 @@ export function AppProvider({ children }: PropsWithChildren) {
   const [lender, setLender] = useState<string>('Summit Mortgage');
   const [showEvidence, setShowEvidence] = useState(true);
   const [showConfidence, setShowConfidence] = useState(true);
-  // Console is visible by default so presenters see the workspace controls
-  // without hunting for the topbar tweak icon. Preference persists across
-  // reloads via localStorage (same pattern as theme/accent/density).
+  // Console is opt-in so the first demo viewport uses the full prototype
+  // layout. Presenter preference persists across reloads via localStorage
+  // (same pattern as theme/accent/density).
   const [consoleOpen, setConsoleOpenState] = useState<boolean>(() =>
-    readStoredBool('mip.consoleOpen', true),
+    readStoredBool('mip.consoleOpen', false),
   );
   const [drawer, setDrawer] = useState<DrawerSource | null>(null);
   const [genieOpen, setGenieOpen] = useState(false);

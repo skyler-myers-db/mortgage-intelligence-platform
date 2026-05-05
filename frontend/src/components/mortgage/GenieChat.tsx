@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useApp } from '../AppContext';
 import { api } from '../../lib/api';
-import type { GenieAnswer as GenieAnswerShape } from '../../types';
+import type { GenieActionSuggestion, GenieAnswer as GenieAnswerShape } from '../../types';
 import { Icon } from '../Icon';
 import { Button, Chip, EvidenceChip } from '../Primitives';
 import { GenieAnswer } from './GenieAnswer';
@@ -62,6 +62,7 @@ function saveGenieSize(size: GenieSize): void {
 // (collapses pos to null) so a user who liked the bottom-right
 // origin can return to it without remembering keyboard shortcuts.
 const POS_STORAGE_KEY = 'mip-genie-chat-pos-v1';
+const CONVERSATION_STORAGE_KEY = 'mip.genie.conversationId';
 const SNAP_PX = 24;
 
 interface GeniePos {
@@ -205,7 +206,7 @@ const SAMPLE_QUESTIONS = [
 ];
 
 export function GenieChat() {
-  const { genieOpen, setGenieOpen, lender } = useApp();
+  const { genieOpen, setGenieOpen, lender, refreshWorkspace } = useApp();
   // Seed greeting carries no source chips — the prior placeholder
   // ("UC.metrics") wasn't a real UC path and clicking it routed into
   // the wrong drawer (NBO logic), which was misleading per 2026-05-04
@@ -222,7 +223,33 @@ export function GenieChat() {
   ]);
   const [input, setInput] = useState('');
   const [typing, setTyping] = useState(false);
+  const [conversationId, setConversationId] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem(CONVERSATION_STORAGE_KEY);
+    } catch {
+      return null;
+    }
+  });
   const bodyRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (conversationId) return undefined;
+    const controller = new AbortController();
+    api.genieStart(controller.signal)
+      .then((result) => {
+        if (!result.conversation_id) return;
+        setConversationId(result.conversation_id);
+        try {
+          localStorage.setItem(CONVERSATION_STORAGE_KEY, result.conversation_id);
+        } catch {
+          // ignore
+        }
+      })
+      .catch(() => {
+        // Asking a question will start a fresh Databricks Genie conversation.
+      });
+    return () => controller.abort();
+  }, [conversationId]);
 
   // FIX Δ2: persisted resize state. Reads from localStorage on mount
   // (defaults to 420×640 — the prior fixed dimensions). Drag handle
@@ -502,9 +529,61 @@ export function GenieChat() {
     setInput('');
     setTyping(true);
     try {
-      const res = (await api.genie(q)) as GenieAnswerShape;
+      const res = (await api.genie(q, conversationId)) as GenieAnswerShape;
+      if (res.conversation_id) {
+        setConversationId(res.conversation_id);
+        try {
+          localStorage.setItem(CONVERSATION_STORAGE_KEY, res.conversation_id);
+        } catch {
+          // ignore
+        }
+      }
       const trusted = res.trusted_assets ?? [];
       setMsgs((m) => [...m, { who: 'ai', payload: res, sources: trusted.slice(0, 4) }]);
+    } finally {
+      setTyping(false);
+    }
+  };
+
+  const runAction = async (action: GenieActionSuggestion, payload: GenieAnswerShape) => {
+    setTyping(true);
+    try {
+      const result = await api.genieAction({
+        ...action,
+        conversation_id: payload.conversation_id ?? conversationId,
+        message_id: payload.message_id ?? null,
+        question_hash: payload.question_hash ?? null,
+      });
+      if (action.action_type === 'save_borrowers') refreshWorkspace();
+      setMsgs((m) => [
+        ...m,
+        {
+          who: 'ai',
+          payload: {
+            answer: result.audit_event_id
+              ? `${result.message} Audit event ${result.audit_event_id}.`
+              : result.message,
+            source: 'genie',
+            trusted_assets: [],
+            conversation_id: payload.conversation_id,
+          },
+          sources: [],
+        },
+      ]);
+      if (result.route) window.location.href = result.route;
+    } catch (err) {
+      setMsgs((m) => [
+        ...m,
+        {
+          who: 'ai',
+          payload: {
+            answer: err instanceof Error ? `Action failed: ${err.message}` : 'Action failed.',
+            source: 'degraded',
+            trusted_assets: [],
+          },
+          sources: [],
+        },
+      ]);
     } finally {
       setTyping(false);
     }
@@ -637,7 +716,12 @@ export function GenieChat() {
             ) : (
               <div key={i} className="genie__msg genie__msg--ai">
                 <div className="bubble">
-                  <GenieAnswer payload={m.payload} onFollowUp={ask} dense />
+                  <GenieAnswer
+                    payload={m.payload}
+                    onFollowUp={ask}
+                    onAction={(action) => runAction(action, m.payload)}
+                    dense
+                  />
                 </div>
                 {/* Source chip row. The backend emits "genie" (live)
                     or "degraded" (warming-up). Degraded gets a warning

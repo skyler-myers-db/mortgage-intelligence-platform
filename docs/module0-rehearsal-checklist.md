@@ -53,14 +53,14 @@ second call, something's off — investigate before going on stage.
 ## 3. Cold-start probe the Genie space
 
 ```bash
-curl -s -X POST https://<databricks-app-host>/api/genie/ask \
+curl -s -X POST https://<databricks-app-host>/api/genie/message \
   -H 'content-type: application/json' \
   -d '{"question":"How many borrowers across the 6-state footprint are currently in-the-money, and what is the average rate spread?"}'
 ```
 
 First call on a cold Genie space can take 10–30 s. A second call against the
 same question after the first returns will be snappy — that's the warm path
-the audience sees. Verify the response `source` is `"genie"`, not `"fallback"`.
+the audience sees. Verify the response `source` is `"genie"`, not `"degraded"`.
 
 ## 4. Verify Lakebase write path via a benign audit row
 
@@ -94,11 +94,11 @@ compact density**. Expect:
 If the DegradedBanner is showing, something upstream failed the `/api/health`
 probe — step back to (2) and do not start the walkthrough.
 
-## 6. Dry-run the Genie safe-corpus fallback (once)
+## 6. Dry-run the Genie degraded path (once)
 
-Even on a cold Genie, these three canonical questions from
-`genie/sample_questions.md` resolve deterministically through the safe-corpus
-in `backend/services/genie_answers.py`:
+On a cold or unavailable Genie space, the app must return an honest
+`source: "degraded"` reconnecting response with no fabricated numbers.
+Prime one of these canonical questions from `genie/sample_questions.md`:
 
 - "How many borrowers across the 6-state footprint are currently in-the-money?"
 - "Show the top 10 cash-out candidates in Florida by estimated equity."
@@ -106,10 +106,11 @@ in `backend/services/genie_answers.py`:
   — expect **669,320**, materialized as `mip.gold.lockin_cohort` (new this
   slice, independent raw-share reference Δ=0).
 
-Ask one verbatim, confirm you get a structured answer (metric, table, follow-ups,
-trusted-asset chips). If the answer returns with `source: "fallback"`, that's
-fine — it means the breaker is open and the safe corpus caught it. Re-run step (3)
-in a minute and the Genie space will have warmed up.
+Ask one verbatim. For the live demo, wait until you get a structured
+`source: "genie"` answer with proof metadata and trusted-asset chips. If the
+answer returns with `source: "degraded"`, do not present it as an answer; it
+means the breaker is open and the app correctly refused to fabricate data.
+Re-run step (3) in a minute and the Genie space will have warmed up.
 
 ## 7. Second-monitor backup — have the API queries ready
 
@@ -136,7 +137,7 @@ takes 7 minutes and one that takes 10.
 | Signal | What to do | What to say |
 |---|---|---|
 | DegradedBanner appears at top of page | Keep going; the retry + breaker logic re-arms within 30 s | *"The banner tells you the warehouse is warming up — real-time honesty, not a cover-up."* |
-| Genie answer returns `source: "fallback"` | Keep going; safe corpus is the guarantee | *"The circuit breaker opened and our safe corpus took over — you just watched resilience engineering instead of a spinner."* |
+| Genie answer returns `source: "degraded"` | Pause Genie answers until it warms | *"The app is being honest: Genie is reconnecting, and we do not show fabricated analytics while it is down."* |
 | Approval click shows an error toast | Don't re-click | *"Lakebase write path is flagged; we'd rather fail visibly than fake success. Audit guarantee working as designed."* |
 | Page outright blanks | Swap to the second monitor and narrate from API JSON | *"The UI is the skin, not the substance — here's the same answer from the API."* |
 

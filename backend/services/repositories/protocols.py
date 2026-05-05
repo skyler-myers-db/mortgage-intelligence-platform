@@ -208,7 +208,11 @@ class GenieAnswerRepository(Protocol):
     ``backend.services.genie_client`` with a catalog-fallback.
     """
 
-    def respond(self, question: str) -> object:
+    def respond(
+        self,
+        question: str,
+        conversation_id: str | None = None,
+    ) -> object:
         """Return a ``GenieMessageResponse``. Typed as ``object`` here
         to avoid a forward-import cycle with ``backend.services
         .genie_answers``; routers re-annotate to the concrete model."""

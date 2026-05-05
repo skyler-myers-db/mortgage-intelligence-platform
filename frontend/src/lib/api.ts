@@ -11,6 +11,9 @@ import type {
   SavedDraftInput,
   SavedLead,
   SavedLeadInput,
+  GenieActionResult,
+  GenieActionSuggestion,
+  GenieStartResult,
   ZipRollupResponse,
   WorkspaceMutationResult,
   WorkspaceState,
@@ -76,6 +79,15 @@ export interface GenieResult {
   answer: string;
   source?: string;
   trusted_assets?: string[];
+  conversation_id?: string;
+  message_id?: string | null;
+  elapsed_ms?: number | null;
+  question_hash?: string | null;
+  sql_query?: string | null;
+  row_count?: number | null;
+  proof?: Record<string, unknown> | null;
+  visualization?: Record<string, unknown> | null;
+  actions?: GenieActionSuggestion[];
   metric_value?: string | null;
   table_rows?: Record<string, unknown>[] | null;
   follow_up_questions?: string[];
@@ -617,10 +629,42 @@ export const api = {
       signal,
     ),
 
-  genie: (question: string, signal?: AbortSignal) =>
-    postJson<GenieResult, { question: string }>(
+  genie: (question: string, conversationId?: string | null, signal?: AbortSignal) =>
+    postJson<GenieResult, { question: string; conversation_id?: string | null }>(
       '/api/genie/message',
-      { question },
+      { question, conversation_id: conversationId ?? null },
+      signal,
+    ),
+
+  genieStart: (signal?: AbortSignal) =>
+    postJson<GenieStartResult, { context: Record<string, never> }>(
+      '/api/genie/start',
+      { context: {} },
+      signal,
+    ),
+
+  genieAction: (
+    action: GenieActionSuggestion & {
+      conversation_id?: string | null;
+      message_id?: string | null;
+      question_hash?: string | null;
+    },
+    signal?: AbortSignal,
+  ) =>
+    postJson<GenieActionResult, Record<string, unknown>>(
+      '/api/genie/actions',
+      {
+        action_type: action.action_type,
+        conversation_id: action.conversation_id ?? null,
+        message_id: action.message_id ?? null,
+        question_hash: action.question_hash ?? null,
+        borrower_ids: action.borrower_ids ?? [],
+        criteria: action.criteria ?? {},
+        route: action.route ?? null,
+        request_id: action.request_id ?? _newRequestId(),
+        confirmed: true,
+        confirmation_token: action.confirmation_token ?? null,
+      },
       signal,
     ),
 

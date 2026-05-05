@@ -108,7 +108,7 @@ class GenieResponse:
     sql_result_rows: list[dict[str, Any]] | None
     conversation_id: str
     message_id: str
-    source: Literal["genie", "fallback"] = "genie"
+    source: Literal["genie"] = "genie"
     elapsed_ms: int = 0
     trusted_assets: list[str] = field(default_factory=list)
 

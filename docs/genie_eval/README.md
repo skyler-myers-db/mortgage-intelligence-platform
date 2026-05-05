@@ -28,11 +28,10 @@ Each run writes:
 ## Regression check
 
 `baseline.json` is the committed score floor. A run whose
-`overall_score` drops more than 10 points below the baseline emits
-a WARNING in the log (the script doesn't fail the bundle job — Genie
-is non-deterministic and we'd rather see the trend than block
-deploys on noise). When the new floor is intentional, refresh the
-baseline:
+`overall_score` drops more than 10 points below the baseline fails
+the release gate. Any canonical question failure also returns non-zero.
+Use `--soft` only for exploratory report-only runs. When the new floor
+is intentional, refresh the baseline:
 
 ```bash
 python tools/genie_eval.py --base $URL --update-baseline

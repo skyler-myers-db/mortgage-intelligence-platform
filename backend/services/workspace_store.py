@@ -32,6 +32,16 @@ class WorkspaceStore(Protocol):
 
     def save_lead(self, *, actor: str, lead: SavedLeadInput) -> SavedLead: ...
 
+    def save_leads_from_genie_action(
+        self,
+        *,
+        actor: str,
+        borrower_ids: list[str],
+        request_id: str,
+        entity_id: str,
+        metadata: dict[str, Any],
+    ) -> tuple[int, str | None]: ...
+
     def delete_lead(
         self, *, actor: str, borrower_id: str
     ) -> WorkspaceMutationResponse: ...
@@ -120,6 +130,72 @@ audit AS (
 )
 SELECT upsert.*, audit.audit_id
 FROM upsert CROSS JOIN audit
+"""
+
+
+_SAVE_LEADS_FROM_GENIE_ACTION_SQL = """
+WITH inserted_audit AS (
+  INSERT INTO mip_app.action_audit (
+    event_type, actor_email, entity_type, entity_id,
+    request_id, evidence_ids, metadata
+  ) VALUES (
+    'GENIE_ACTION_SAVE_BORROWERS',
+    %(actor_email)s,
+    'genie_action',
+    %(entity_id)s,
+    %(request_id)s,
+    ARRAY[]::TEXT[],
+    %(metadata)s::jsonb
+  )
+  ON CONFLICT (actor_email, request_id, event_type)
+    WHERE request_id IS NOT NULL AND left(event_type, 13) = 'GENIE_ACTION_'
+    DO NOTHING
+  RETURNING audit_id, metadata
+),
+existing_audit AS (
+  SELECT audit_id, metadata
+  FROM mip_app.action_audit
+  WHERE actor_email = %(actor_email)s
+    AND request_id = %(request_id)s
+    AND event_type = 'GENIE_ACTION_SAVE_BORROWERS'
+    AND NOT EXISTS (SELECT 1 FROM inserted_audit)
+  LIMIT 1
+),
+audit AS (
+  SELECT audit_id, metadata, TRUE AS inserted FROM inserted_audit
+  UNION ALL
+  SELECT audit_id, metadata, FALSE AS inserted FROM existing_audit
+),
+input AS (
+  SELECT DISTINCT unnest(%(borrower_ids)s::text[]) AS borrower_id
+),
+upsert AS (
+  INSERT INTO mip_app.saved_leads (
+    actor_email, borrower_id, city, state, zip,
+    recommended_offer, opportunity_score, confidence,
+    saved_at, updated_at, deleted_at
+  )
+  SELECT
+    %(actor_email)s, borrower_id, NULL, NULL, NULL,
+    NULL, NULL, NULL,
+    now(), now(), NULL
+  FROM input
+  WHERE left(borrower_id, 2) = 'B-'
+    AND (SELECT inserted FROM audit)
+  ON CONFLICT (actor_email, borrower_id) DO UPDATE SET
+    updated_at = now(),
+    deleted_at = NULL
+  RETURNING borrower_id
+)
+SELECT
+  CASE
+    WHEN (SELECT inserted FROM audit) THEN COUNT(upsert.borrower_id)::int
+    ELSE COALESCE(NULLIF((SELECT metadata ->> 'saved_count' FROM audit), '')::int, 0)
+  END AS saved_count,
+  (SELECT audit_id FROM audit) AS audit_id
+FROM audit
+LEFT JOIN upsert ON TRUE
+GROUP BY audit.audit_id, audit.inserted, audit.metadata
 """
 
 
@@ -267,6 +343,27 @@ class LakebaseWorkspaceStore:
             raise RuntimeError("Lakebase saved_leads upsert returned no row")
         return _lead_from_row(row)
 
+    def save_leads_from_genie_action(
+        self,
+        *,
+        actor: str,
+        borrower_ids: list[str],
+        request_id: str,
+        entity_id: str,
+        metadata: dict[str, Any],
+    ) -> tuple[int, str | None]:
+        params = {
+            "actor_email": actor,
+            "borrower_ids": borrower_ids,
+            "entity_id": entity_id,
+            "request_id": request_id,
+            "metadata": _audit_metadata("genie.save_borrowers", metadata),
+        }
+        row = self._client.fetchone(_SAVE_LEADS_FROM_GENIE_ACTION_SQL, params)
+        if row is None:
+            raise RuntimeError("Lakebase Genie save action returned no row")
+        return int(row.get("saved_count") or 0), str(row["audit_id"]) if row.get("audit_id") else None
+
     def delete_lead(
         self, *, actor: str, borrower_id: str
     ) -> WorkspaceMutationResponse:
@@ -369,6 +466,24 @@ class InMemoryWorkspaceStore:
         )
         self._leads[key] = row
         return row
+
+    def save_leads_from_genie_action(
+        self,
+        *,
+        actor: str,
+        borrower_ids: list[str],
+        request_id: str,
+        entity_id: str,
+        metadata: dict[str, Any],
+    ) -> tuple[int, str | None]:
+        _ = (request_id, entity_id, metadata)
+        saved = 0
+        for borrower_id in borrower_ids:
+            if not borrower_id.startswith("B-"):
+                continue
+            self.save_lead(actor=actor, lead=SavedLeadInput(borrower_id=borrower_id))
+            saved += 1
+        return saved, f"evt-{uuid4().hex[:12]}"
 
     def delete_lead(
         self, *, actor: str, borrower_id: str

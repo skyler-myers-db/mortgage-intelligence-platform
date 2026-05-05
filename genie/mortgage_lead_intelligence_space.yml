@@ -11,9 +11,11 @@ name: Mortgage Lead Intelligence
 description: >-
   Conversational analytics over Module 0 gold tables and semantic models for
   the Mortgage Intelligence Platform. Backed by Cotality public records,
-  liens, listings, permits, AVM, and mortgage market data. Every answer must
-  cite the UC table or metric view it drew from so Growth, Lending, and
-  Sales leaders can trust the recommendation before outreach.
+  liens, AVM, and mortgage market data. MLS listing and building-permit feeds
+  are pending Cotality delivery and must be disclosed as unavailable until
+  those feeds are live. Every answer must cite the UC table or metric view it
+  drew from so Growth, Lending, and Sales leaders can trust the recommendation
+  before outreach.
 
 catalog: mip
 schema: gold
@@ -105,22 +107,35 @@ instructions: |
       question. Out-of-scope questions get the bucket-B redirect text;
       they are NOT failures.
     - Never fabricate. If data is missing (MLS listings, permits,
-      demographics), say "no data available" explicitly. Listed-for-Sale
-      and recent-permits return zero today because Cotality MLS and
-      Building Permits have not shipped yet — gold_evidence_events.sql
-      hardcodes both signal types as BLOCKED. If the user asks about
+      demographics), say the source feed is pending explicitly.
+      Listed-for-Sale and recent-permits are pending-source gaps because
+      Cotality MLS and Building Permits have not shipped yet; do not
+      treat the missing feeds as zero demand. If the user asks about
       permits or listings, EXPLAIN UPFRONT that the data feed is
       pending rather than running a query that returns "no candidates"
       with no context. Suggested redirect: "Permit and MLS data are
-      pending Cotality feeds. The closest available signal is
-      borrower_360.has_permit (always FALSE today) — would you like to
-      see HELOC-eligible borrowers by equity instead?"
+      pending Cotality feeds. I will not count the missing feed as zero
+      demand. Would you like to see HELOC-eligible borrowers by equity
+      instead?"
     - Never use thresholds tighter than the data-contract defaults
       unless the user explicitly asks for stricter cuts: in-the-money
       ≥ 50 bps spread, HELOC eligible ≥ 35% equity, rate-and-term
       refi ≥ 75 bps, top-tier opportunity score ≥ 75. Don't interpret
       "strong equity" as 70%+ — interpret it as ≥ 35% (the segment
       definition floor).
+    - Count unique borrowers at the gold borrower grain. Do NOT answer
+      "how many borrowers are in-the-money" with COUNT(*) over
+      mip.semantics.borrower_opportunity_metric_view because that view
+      explodes one borrower into multiple segment rows. Use
+      mip.gold.borrower_360 WHERE in_the_money = TRUE, or use
+      mip.gold.segment_population where segment_code = 'itm' and
+      state = '_ALL'. If you must query borrower_opportunity_metric_view
+      for a unique count, use COUNT(DISTINCT clip).
+    - For MSA or market questions, use `mip.gold.borrower_360.situs_cbsa_code`
+      as the source MSA/CBSA identifier. The current Module 0 share does not
+      include an MSA-name lookup table, so label results as CBSA-coded markets
+      or derive a dominant city/state display label from borrower_360. Do not
+      invent human-readable MSA names.
     - Never return a non-zero count for a geography outside IL/CA/FL/TX/
       WA/CO. Those populations are zero in the share footprint.
 
@@ -144,6 +159,18 @@ trusted_assets:
       Module 0. Joins Cotality-mastered property (CLIP) and owner (Owner
       Link) identifiers with current mortgage state (rate, balance, term,
       origination date) and property economics (AVM, LTV, equity).
+    column_configs:
+      - column_name: state
+        get_example_values: true
+        build_value_dictionary: true
+      - column_name: zip
+        get_example_values: true
+        build_value_dictionary: true
+      - column_name: segment_codes
+        get_example_values: true
+      - column_name: recommended_offer
+        get_example_values: true
+        build_value_dictionary: true
 
   - name: mip.gold.segment_population
     kind: table
@@ -157,6 +184,13 @@ trusted_assets:
       sql/transformations/gold_segment_population.sql. Use this table for
       any question that slices or rolls up by segment; prefer the
       segment_performance_metric_view for aggregate KPIs.
+    column_configs:
+      - column_name: segment_code
+        get_example_values: true
+        build_value_dictionary: true
+      - column_name: state
+        get_example_values: true
+        build_value_dictionary: true
 
   - name: mip.gold.lead_scores
     kind: table
@@ -172,13 +206,23 @@ trusted_assets:
       Unified borrower profile joining property, mortgage, owner, and
       behavioral signals. Feeds the Borrower 360 route and the Evidence
       Drawer. Every field traces back to a Cotality source table.
+    column_configs:
+      - column_name: state
+        get_example_values: true
+        build_value_dictionary: true
+      - column_name: recommended_offer
+        get_example_values: true
+        build_value_dictionary: true
+      - column_name: segment_codes
+        get_example_values: true
 
   - name: mip.gold.evidence_events
     kind: table
     description: >-
       Append-only ledger of trigger events (rate-drop, equity-crossed,
-      permit-filed, listed-for-sale, lien-change) per borrower with a
-      UTC timestamp, confidence, and source-table citation. Drives the
+      lien-change) per borrower with a UTC timestamp, confidence, and
+      source-table citation. MLS listing and building-permit trigger feeds
+      are pending Cotality delivery and are blocked false today. Drives the
       "why now" rationale on every score and recommendation.
 
   - name: mip.gold.borrower_dossier
@@ -226,6 +270,174 @@ trusted_assets:
       Borrower-level opportunity scoring aggregated by region, product,
       and trigger type. Use for "where should I spend my next campaign
       dollar" and territory-planning questions.
+
+example_question_sqls:
+  - question: How many borrowers are currently in-the-money?
+    sql:
+      - |
+        SELECT
+          COUNT(*) AS in_the_money_borrowers,
+          MAX(refreshed_at) AS refreshed_at
+        FROM mip.gold.borrower_360
+        WHERE in_the_money = TRUE
+  - question: Where should Summit Mortgage spend its next 10000 outreach touches this week, and why?
+    sql:
+      - |
+        WITH segment_geo AS (
+          SELECT
+            state,
+            segment_code,
+            count AS marketable_borrowers,
+            avg_score,
+            refreshed_at
+          FROM mip.gold.segment_population
+          WHERE state <> '_ALL'
+            AND segment_code IN ('itm', 'equity', 'investor', 'retention')
+        )
+        SELECT
+          state,
+          segment_code,
+          marketable_borrowers,
+          avg_score,
+          CASE
+            WHEN segment_code IN ('itm', 'equity') THEN 'Refinance + HELOC'
+            WHEN segment_code = 'investor' THEN 'Cash-out / DSCR review'
+            ELSE 'Retention review'
+          END AS recommended_offer,
+          refreshed_at
+        FROM segment_geo
+        WHERE marketable_borrowers > 0
+        ORDER BY avg_score DESC, marketable_borrowers DESC
+        LIMIT 12
+  - question: Show the top ZIP codes for HELOC eligible borrowers and include freshness.
+    sql:
+      - |
+        SELECT
+          zip,
+          state,
+          COUNT(*) AS borrowers,
+          ROUND(AVG(opportunity_score), 1) AS avg_score,
+          MAX(refreshed_at) AS refreshed_at
+        FROM mip.gold.borrower_360
+        WHERE equity_pct >= 35
+        GROUP BY zip, state
+        ORDER BY borrowers DESC
+        LIMIT 10
+  - question: Compare mean lead score by MSA for our top five markets.
+    sql:
+      - |
+        WITH borrower_markets AS (
+          SELECT
+            situs_cbsa_code,
+            COALESCE(NULLIF(city, ''), 'Unknown') AS city,
+            state,
+            opportunity_score,
+            refreshed_at
+          FROM mip.gold.borrower_360
+          WHERE situs_cbsa_code IS NOT NULL
+            AND TRIM(situs_cbsa_code) <> ''
+        ),
+        market_scores AS (
+          SELECT
+            situs_cbsa_code AS msa_cbsa_code,
+            COUNT(*) AS borrowers,
+            ROUND(AVG(opportunity_score), 1) AS avg_score,
+            MAX(refreshed_at) AS refreshed_at
+          FROM borrower_markets
+          GROUP BY situs_cbsa_code
+        )
+        SELECT
+          msa_cbsa_code,
+          borrowers,
+          avg_score,
+          refreshed_at
+        FROM market_scores
+        ORDER BY borrowers DESC, avg_score DESC
+        LIMIT 5
+  - question: Which borrowers should I review first for refinance plus HELOC?
+    sql:
+      - |
+        SELECT
+          borrower_id,
+          city,
+          state,
+          zip,
+          opportunity_score,
+          confidence,
+          recommended_offer,
+          refreshed_at
+        FROM mip.gold.lead_population
+        WHERE array_contains(segment_codes, 'itm')
+          AND array_contains(segment_codes, 'equity')
+        ORDER BY opportunity_score DESC, confidence DESC
+        LIMIT 20
+  - question: Compare segment overlap for in-the-money and home-equity candidates.
+    sql:
+      - |
+        SELECT
+          state,
+          COUNT(*) AS borrowers,
+          ROUND(AVG(opportunity_score), 1) AS avg_score,
+          MAX(refreshed_at) AS refreshed_at
+        FROM mip.gold.borrower_360
+        WHERE array_contains(segment_codes, 'itm')
+          AND array_contains(segment_codes, 'equity')
+        GROUP BY state
+        ORDER BY borrowers DESC
+  - question: Simulate a stricter top-tier threshold by state.
+    sql:
+      - |
+        SELECT
+          state,
+          COUNT_IF(opportunity_score >= 75) AS threshold_75,
+          COUNT_IF(opportunity_score >= 80) AS threshold_80,
+          COUNT_IF(opportunity_score >= 85) AS threshold_85,
+          MAX(refreshed_at) AS refreshed_at
+        FROM mip.gold.lead_population
+        GROUP BY state
+        ORDER BY threshold_85 DESC
+
+sql_snippets:
+  filters:
+    - id: module0_footprint_states
+      sql:
+        - "state IN ('IL', 'CA', 'FL', 'TX', 'WA', 'CO')"
+      display_name: Module 0 footprint states
+      synonyms:
+        - footprint
+        - six-state footprint
+        - Summit footprint
+    - id: top_tier_opportunities
+      sql:
+        - "opportunity_score >= 75"
+      display_name: top-tier opportunities
+      synonyms:
+        - top tier
+        - highest intent
+        - best leads
+  measures:
+    - id: marketable_borrowers
+      alias: marketable_borrowers
+      sql:
+        - "COUNT(*)"
+      display_name: marketable borrowers
+      synonyms:
+        - lead count
+        - addressable borrowers
+    - id: avg_opportunity_score
+      alias: avg_score
+      sql:
+        - "ROUND(AVG(opportunity_score), 1)"
+      display_name: average opportunity score
+      synonyms:
+        - avg score
+        - mean lead score
+  expressions:
+    - id: freshness_timestamp
+      alias: refreshed_at
+      sql:
+        - "MAX(refreshed_at)"
+      display_name: data freshness timestamp
 
 # 2026-05-04 (FIX Δ4 / Genie accuracy benchmark): the prior sample
 # questions advertised features the data layer does not (yet) ship —

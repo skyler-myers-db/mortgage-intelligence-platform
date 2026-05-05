@@ -78,3 +78,19 @@ def test_audit_events_accepts_limit_at_cap() -> None:
     documented ceiling, not an off-by-one."""
     response = client.get("/api/audit/events?limit=500")
     assert response.status_code == 200, response.text
+
+
+def test_public_audit_event_cannot_forge_genie_actions() -> None:
+    response = client.post(
+        "/api/audit/event",
+        json={
+            "actor": "attacker@example.com",
+            "action": "genie.save_borrowers",
+            "entity_type": "genie_action",
+            "entity_id": "msg-1",
+            "event_type": "GENIE_ACTION_SAVE_BORROWERS",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "event type is owned by a governed server route"

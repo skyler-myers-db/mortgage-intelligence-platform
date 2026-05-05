@@ -58,6 +58,8 @@ def test_spec_loads_all_trusted_assets_and_questions() -> None:
     names = {a.get("name") for a in spec.trusted_assets}
     assert names == EXPECTED_ASSETS
     assert len(spec.sample_questions) == 10
+    assert len(spec.example_question_sqls) >= 5
+    assert "measures" in spec.sql_snippets
 
 
 def test_serialized_payload_matches_discovered_schema() -> None:
@@ -86,6 +88,12 @@ def test_serialized_payload_matches_discovered_schema() -> None:
         if "description" in t:
             assert isinstance(t["description"], list)
             assert all(isinstance(x, str) for x in t["description"])
+        if "column_configs" in t:
+            column_names = [cfg["column_name"] for cfg in t["column_configs"]]
+            assert column_names == sorted(column_names)
+            for cfg in t["column_configs"]:
+                assert "get_example_values" not in cfg
+                assert "build_value_dictionary" not in cfg
 
     # config.sample_questions is a list of {id: 32hex, question: [text]} entries.
     assert "config" in parsed
@@ -111,6 +119,20 @@ def test_serialized_payload_matches_discovered_schema() -> None:
     assert HEX32.match(inst["id"])
     assert isinstance(inst["content"], list)
     assert all(isinstance(x, str) for x in inst["content"])
+    examples = parsed["instructions"]["example_question_sqls"]
+    assert len(examples) >= 5
+    assert [ex["id"] for ex in examples] == sorted(ex["id"] for ex in examples)
+    for ex in examples:
+        assert HEX32.match(ex["id"])
+        assert isinstance(ex["question"], list)
+        assert isinstance(ex["sql"], list)
+        assert all(str(part).strip() for part in ex["sql"])
+    assert "sql_snippets" in parsed["instructions"]
+    for group in parsed["instructions"]["sql_snippets"].values():
+        if isinstance(group, list):
+            ids = [item["id"] for item in group]
+            assert ids == sorted(ids)
+            assert all(HEX32.match(item["id"]) for item in group)
 
 
 def test_payload_is_idempotent_for_unchanged_spec() -> None:

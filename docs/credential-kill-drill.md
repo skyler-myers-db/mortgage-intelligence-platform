@@ -173,20 +173,19 @@ It:
 
 1. Exports `GENIE_SPACE_ID=00000000-0000-0000-0000-000000000000`.
 2. Starts a private uvicorn on port 8001.
-3. POSTs a question to `/api/genie/ask` and verifies the response is
-   either a 503 or a 200 with `source: fallback` / `source: corpus`.
+3. POSTs a question to `/api/genie/message` and verifies the response is
+   either a 503 or a 200 with `source: "degraded"`.
 
 **Expected signals**
 
 | Signal | Expected value |
 |---|---|
 | `/api/health` (port 8001) `dependencies.genie` | `down` after first probe |
-| `/api/genie/ask` | HTTP 503 or HTTP 200 with `source: "fallback"` |
+| `/api/genie/message` | HTTP 503 or HTTP 200 with `source: "degraded"` |
 | Never | HTTP 200 with `source: "genie"` and hallucinated metrics |
 
-The safe-corpus fallback with an explicit `source` field **is not** a
-silent mock; the chip surfaces provenance to the user, which is the
-contract.
+The explicit `source: "degraded"` response is the contract: no fake rows, no
+fake provenance, and no fabricated analytics while Genie is unavailable.
 
 **Recovery**
 

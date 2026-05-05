@@ -156,6 +156,45 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
       .toBeGreaterThan(20);
   });
 
+  test('brand favicon and Genie dock chrome do not regress', async ({ page, request }) => {
+    await page.goto('/');
+
+    const iconHref = await page
+      .locator('link[rel~="icon"][type="image/png"]')
+      .first()
+      .getAttribute('href');
+    expect(iconHref, 'browser tab should prefer the Entrada PNG favicon').toContain(
+      '/favicon.png?v=entrada-20260505',
+    );
+
+    const iconResponse = await request.get(`${APP_URL}/favicon.png?v=entrada-20260505`, {
+      headers: AUTH_HEADERS,
+    });
+    expect(iconResponse.status(), 'Entrada favicon asset should be served by the deployed app').toBe(200);
+    expect(iconResponse.headers()['content-type'] ?? '').toContain('image/png');
+
+    await page.locator('.genie__fab').click();
+    const panel = page.getByRole('dialog', { name: 'Genie chat' });
+    await expect(panel).toBeVisible();
+
+    const resizeBox = await panel.locator('.genie__resize').boundingBox();
+    const avatarBox = await panel.locator('.genie__avatar').boundingBox();
+    expect(resizeBox, 'Genie resize affordance should exist').toBeTruthy();
+    expect(avatarBox, 'Genie avatar should exist').toBeTruthy();
+
+    const overlapW = Math.max(
+      0,
+      Math.min(resizeBox!.x + resizeBox!.width, avatarBox!.x + avatarBox!.width) -
+        Math.max(resizeBox!.x, avatarBox!.x),
+    );
+    const overlapH = Math.max(
+      0,
+      Math.min(resizeBox!.y + resizeBox!.height, avatarBox!.y + avatarBox!.height) -
+        Math.max(resizeBox!.y, avatarBox!.y),
+    );
+    expect(overlapW * overlapH, 'Genie resize affordance must not overlap the avatar').toBeLessThanOrEqual(1);
+  });
+
   test('approve outreach writes a new audit row visible in /api/audit within 5s', async ({ page, request }) => {
     const leads = await fetchLeads(request);
     expect(leads.length).toBeGreaterThan(0);
@@ -420,6 +459,43 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     // we assert by presence of a source chip (every answer has one).
     const answerSurface = page.locator('.surface', { hasText: /Source:/i }).first();
     await expect(answerSurface).toBeVisible({ timeout: 40_000 });
+    await expect(answerSurface.locator('.genie-chart__title').first()).toContainText(
+      /Borrowers by Zip/i,
+      { timeout: 10_000 },
+    );
+    await expect(answerSurface.locator('.genie-chart__title').first()).not.toContainText(
+      /Zip by State/i,
+    );
+  });
+
+  test('ask-genie: dynamic chart, proof drawer, and governed action confirmation', async ({ page }) => {
+    test.setTimeout(90_000);
+
+    await page.goto('/ask-genie');
+
+    await page
+      .locator('textarea[aria-label="Ask Genie — question"]')
+      .fill('Break down in-the-money borrowers by state and return the count as a table.');
+    await page.getByRole('button', { name: /^Ask Genie$/i }).first().click();
+
+    await expect(page.locator('.genie-chart').first()).toBeVisible({ timeout: 45_000 });
+    await expect(page.locator('.genie-answer__table').first()).toContainText('IL', { timeout: 10_000 });
+
+    await page.getByRole('button', { name: /Show proof/i }).click();
+    const proofDrawer = page.getByRole('dialog', { name: /Genie answer proof/i });
+    await expect(proofDrawer).toBeVisible();
+    const proof = proofDrawer.locator('.genie-proof').first();
+    await expect(proof.getByText(/Generated SQL/i)).toBeVisible();
+    await expect(proof.getByText(/mip\.gold\./i).first()).toBeVisible();
+    await expect(proof.getByText(/Trusted SELECT on curated assets/i)).toBeVisible();
+    await proofDrawer.getByRole('button', { name: /Close Genie proof/i }).click();
+    await expect(proofDrawer).toBeHidden();
+
+    const exportAction = page.locator('.genie-action', { hasText: /Export demo-ready insight/i }).first();
+    await expect(exportAction).toBeVisible();
+    await exportAction.getByRole('button', { name: /Run/i }).click();
+    await exportAction.getByRole('button', { name: /Confirm/i }).click();
+    await expect(page.getByText(/Genie action recorded to the governed audit ledger/i)).toBeVisible({ timeout: 15_000 });
   });
 
   test('admin-config: presentation controls flip theme + density', async ({ page }) => {

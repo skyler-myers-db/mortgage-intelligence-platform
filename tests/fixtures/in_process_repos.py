@@ -29,7 +29,7 @@ from backend.schemas.portfolio import (
     PortfolioPreview,
     PortfolioPreviewRequest,
 )
-from backend.services.genie_answers import GenieMessageResponse
+from backend.services.genie_answers import GenieActionSuggestion, GenieMessageResponse
 from backend.services.genie_answers import respond as _genie_respond
 from tests.fixtures import mock_population as mock_data
 
@@ -139,8 +139,40 @@ class InProcessMockOutreachRepository:
 class InProcessMockGenieAnswerRepository:
     """Test fixture wrapping the deterministic Genie answer catalog."""
 
-    def respond(self, question: str) -> GenieMessageResponse:
-        return _genie_respond(question)
+    def respond(
+        self,
+        question: str,
+        conversation_id: str | None = None,
+    ) -> GenieMessageResponse:
+        response = _genie_respond(question)
+        borrower_ids: list[str] = []
+        for row in response.table_rows or []:
+            value = row.get("borrower_id")
+            if isinstance(value, str) and value.startswith("B-") and value not in borrower_ids:
+                borrower_ids.append(value)
+        if borrower_ids:
+            response = response.model_copy(
+                update={
+                    "actions": [
+                        GenieActionSuggestion(
+                            id="save-borrowers",
+                            label="Save 1 borrower",
+                            action_type="save_borrowers",
+                            description="Add returned borrowers to the governed saved workspace.",
+                            borrower_ids=borrower_ids[:1],
+                            criteria={
+                                "source": "genie",
+                                "source_assets": ["mip.gold.lead_population"],
+                                "visualization_kind": "borrower_list",
+                                "row_count": len(response.table_rows or []),
+                            },
+                        )
+                    ]
+                }
+            )
+        if conversation_id:
+            return response.model_copy(update={"conversation_id": conversation_id})
+        return response
 
 
 # Fixture per-state rollups — covers the 6-state Delta Share footprint
