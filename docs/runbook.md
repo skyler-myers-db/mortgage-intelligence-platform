@@ -191,7 +191,7 @@ specific step.
 
 ```bash
 # 0. Prereqs: .env.local populated with DATABRICKS_HOST + DATABRICKS_WAREHOUSE_ID.
-#    The Genie space id is written by step 8 on first run.
+#    If GENIE_SPACE_ID is blank, deploy.sh provisions it before bundle deploy.
 
 # One command:
 ./scripts/deploy.sh
@@ -203,22 +203,26 @@ That single invocation executes:
 
 1. `npm --prefix frontend run build` — the bundle sync uploads
    `frontend/dist/**` so the FastAPI runtime can serve the SPA.
-2. `databricks bundle validate -t dev` (via `tools/databricks/bundle_env.py`
-   so `.env.local` maps to `BUNDLE_VAR_sql_warehouse_id` / `BUNDLE_VAR_genie_space_id`).
-3. `databricks bundle deploy -t dev` — SQL warehouse, app, jobs,
+2. `tools/databricks/bundle_env.py validate -t dev`
+   (env-aware wrapper around `databricks bundle validate`; it maps
+   `.env.local` to `BUNDLE_VAR_sql_warehouse_id` / `BUNDLE_VAR_genie_space_id`).
+3. `tools/databricks/bundle_env.py deploy -t dev` — env-aware wrapper
+   around `databricks bundle deploy`; SQL warehouse, app, jobs,
    pipelines, Lakebase instance, MLflow experiment, dashboards.
-4. `databricks bundle run mip_fred_rates_ingest -t dev` — FRED
+4. `databricks apps deploy mip-app --mode SNAPSHOT` — promotes the
+   uploaded bundle source to the running app compute.
+5. `databricks bundle run mip_fred_rates_ingest -t dev` — FRED
    MORTGAGE30US into `silver.market_rates_weekly`.
-5. `databricks bundle run mip_refresh_silver -t dev` — Cotality Delta
+6. `databricks bundle run mip_refresh_silver -t dev` — Cotality Delta
    Share → `mip.silver.*`, 6-state filtered.
-6. `databricks bundle run mip_lakebase_migrate -t dev` — Postgres
+7. `databricks bundle run mip_lakebase_migrate -t dev` — Postgres
    `schema.sql` + `seed_campaigns.sql` (both idempotent).
-7. `databricks bundle run mip_refresh_scores -t dev` — CTAS chain:
+8. `databricks bundle run mip_refresh_scores -t dev` — CTAS chain:
    `property_owner_bridge` → `evidence_events` → `borrower_360` →
    `lead_scores` → `lead_population` → `segment_population` →
    `lockin_cohort` → `borrower_dossier` → **`refresh_semantics_views`**
    (the three `mip.semantics.*` metric views Genie binds to).
-8. `databricks bundle run mip_sync_lifecycle_state -t dev` — initial
+9. `databricks bundle run mip_sync_lifecycle_state -t dev` — initial
    seed run so `mip.gold.borrower_lifecycle_state` has a row per
    borrower and `delta_vs_prior_*` columns can start resolving. After
    deploy, this job is **event-triggered** from the backend approval
@@ -228,18 +232,18 @@ That single invocation executes:
    fallback cron catches any dropped trigger + records the funnel
    snapshot so WoW deltas keep advancing. Not hourly — no reason to
    refresh when nothing has changed.
-9. `python tools/databricks/provision_genie_space.py` — reads
+10. `python tools/databricks/provision_genie_space.py` — reads
    `genie/mortgage_lead_intelligence_space.yml`, creates or updates
    the Genie Space, binds trusted assets, writes `genie/space_id.txt`.
-10. `./scripts/smoke_live.sh` — verify the app and all four deps up.
+11. `./scripts/smoke_live.sh` — verify the app and all four deps up.
 
 Flags on `scripts/deploy.sh` for partial re-runs:
 
 | Flag | Effect |
 |---|---|
 | `--dry-run` | print the plan, make no changes |
-| `--skip-silver` | skip steps 4–5 (fast path when silver is already fresh) |
-| `--skip-smoke` | skip step 10 |
+| `--skip-silver` | skip steps 5–6 (fast path when silver is already fresh) |
+| `--skip-smoke` | skip step 11 |
 | `--no-confirm` | skip the interactive `y/N` prompt |
 
 Every step is idempotent — re-running `./scripts/deploy.sh` is safe
@@ -248,7 +252,7 @@ and picks up where a previous run stopped.
 **No manual UI step anywhere.** The previous runbook called for
 opening the Databricks UI to rebind the Genie space's trusted assets
 after a metric view rename; that is no longer required. Step 7
-publishes the views, step 9 binds them, and re-running `deploy.sh`
+publishes the views, step 10 binds them, and re-running `deploy.sh`
 re-runs both.
 
 On a brand-new deploy, the dashboards render but a handful of widgets

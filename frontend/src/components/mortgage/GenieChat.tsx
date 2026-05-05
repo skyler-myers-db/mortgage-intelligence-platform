@@ -7,6 +7,7 @@ import { Button, Chip, EvidenceChip } from '../Primitives';
 import { GenieAnswer } from './GenieAnswer';
 import { GenieProgress } from './GenieProgress';
 import { DRAWER_SOURCES } from '../../lib/drawerSources';
+import { isGenieFollowUpQuestion } from '../../lib/genieSession';
 
 // 2026-05-04 (FIX Δ2): persisted size for the floating panel. The
 // ranges below cap at "still feels like a chat panel" — bigger than
@@ -525,12 +526,22 @@ export function GenieChat() {
   }, [genieOpen, setGenieOpen]);
 
   const ask = async (q: string) => {
-    if (!q.trim()) return;
-    setMsgs((m) => [...m, { who: 'user', text: q }]);
+    const trimmed = q.trim();
+    if (!trimmed) return;
+    const nextConversationId = isGenieFollowUpQuestion(trimmed) ? conversationId : null;
+    if (!nextConversationId) {
+      setConversationId(null);
+      try {
+        localStorage.removeItem(CONVERSATION_STORAGE_KEY);
+      } catch {
+        // ignore
+      }
+    }
+    setMsgs((m) => [...m, { who: 'user', text: trimmed }]);
     setInput('');
     setTyping(true);
     try {
-      const res = (await api.genie(q, conversationId)) as GenieAnswerShape;
+      const res = (await api.genie(trimmed, nextConversationId)) as GenieAnswerShape;
       if (res.conversation_id) {
         setConversationId(res.conversation_id);
         try {
@@ -555,6 +566,21 @@ export function GenieChat() {
         message_id: payload.message_id ?? null,
         question_hash: payload.question_hash ?? null,
       });
+      if (!result.ok) {
+        setMsgs((m) => [
+          ...m,
+          {
+            who: 'ai',
+            payload: {
+              answer: `Action failed: ${result.message}`,
+              source: 'degraded',
+              trusted_assets: [],
+            },
+            sources: [],
+          },
+        ]);
+        return;
+      }
       if (action.action_type === 'save_borrowers') refreshWorkspace();
       setMsgs((m) => [
         ...m,

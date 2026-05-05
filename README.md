@@ -56,15 +56,18 @@ python -m backend.runtime
 
 `app.yaml` runs `python -m backend.runtime`. That module reads `DATABRICKS_APP_PORT`/`UVICORN_PORT` if Databricks injects one, otherwise it uses port `8000` locally.
 
-## Bundle commands
+## Databricks deploy
 
 ```bash
-databricks bundle validate -t dev
-databricks bundle deploy -t dev
-databricks bundle run refresh_silver -t dev
+make deploy-dev
 ```
 
-Fill the environment-specific variables in `databricks.yml` or set them through your Databricks CLI profile.
+`make deploy-dev` runs `scripts/deploy.sh`: build, env-aware bundle
+validate/deploy, app snapshot promotion, refresh jobs, Genie rebinding,
+and smoke checks. For narrow resource-only recovery, `make bundle-validate`
+and `make bundle-deploy` are safe because they run `tools/databricks/bundle_env.py`.
+Do not run bare `databricks bundle deploy` for a real app deploy; without
+the env-aware wrapper the app can try to bind placeholder resources.
 
 ## Agentic coding setup
 

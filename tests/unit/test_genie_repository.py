@@ -196,6 +196,105 @@ def test_zip_rows_prefer_in_the_money_borrowers_over_avg_score() -> None:
     assert result.visualization.y == "in_the_money_borrowers"
 
 
+def test_zip_rollup_open_cohort_action_routes_to_filtered_lead_queue() -> None:
+    live = GenieResponse(
+        answer_text="ZIP 60617 has the most in-the-money borrowers.",
+        sql_query=(
+            "SELECT zip, state, COUNT(*) AS in_the_money_borrowers "
+            "FROM mip.gold.borrower_360 WHERE array_contains(segment_codes, 'itm') "
+            "GROUP BY zip, state ORDER BY in_the_money_borrowers DESC LIMIT 10"
+        ),
+        sql_result_rows=[
+            {"zip": "60617", "state": "IL", "in_the_money_borrowers": 1503},
+            {"zip": "60628", "state": "IL", "in_the_money_borrowers": 1482},
+        ],
+        conversation_id="conv-zip-action",
+        message_id="msg-zip-action",
+    )
+    stub = _StubClient(_make_breaker("closed"), response=live)
+    repo = DatabricksGenieRepository(stub)  # type: ignore[arg-type]
+
+    result = repo.respond("Which ZIPs have the most in-the-money refinance candidates?")
+    action = next(row for row in result.actions if row.id == "open-cohort")
+
+    assert action.route == "/lead-queue?zips=60617%2C60628&segment=itm"
+    assert action.criteria["result_filters"] == {
+        "zips": ["60617", "60628"],
+        "route_limit": 12,
+        "segment_codes": ["itm"],
+        "segment_mode": "any",
+    }
+    assert action.criteria["sql_hash"]
+
+
+def test_zip_rollup_open_cohort_route_stays_under_action_payload_limit() -> None:
+    rows = [
+        {"zip": f"{60000 + i:05d}", "state": "IL", "in_the_money_borrowers": 1000 - i}
+        for i in range(40)
+    ]
+    live = GenieResponse(
+        answer_text="Many ZIPs qualify.",
+        sql_query=(
+            "SELECT zip, state, COUNT(*) AS in_the_money_borrowers "
+            "FROM mip.gold.borrower_360 WHERE array_contains(segment_codes, 'itm') "
+            "GROUP BY zip, state ORDER BY in_the_money_borrowers DESC"
+        ),
+        sql_result_rows=rows,
+        conversation_id="conv-many-zips",
+        message_id="msg-many-zips",
+    )
+    stub = _StubClient(_make_breaker("closed"), response=live)
+    repo = DatabricksGenieRepository(stub)  # type: ignore[arg-type]
+
+    result = repo.respond("Which ZIPs have the most in-the-money refinance candidates?")
+    action = next(row for row in result.actions if row.id == "open-cohort")
+
+    assert action.route is not None
+    assert len(action.route) < 256
+    assert str(action.route).count("%2C") == 11
+    assert action.criteria["result_filters"]["route_limit"] == 12
+
+
+def test_borrower_rows_open_cohort_action_routes_to_exact_borrower_ids() -> None:
+    live = GenieResponse(
+        answer_text="Here are the highest-score borrowers.",
+        sql_query=(
+            "SELECT borrower_id, city, state, zip, opportunity_score "
+            "FROM mip.gold.borrower_360 ORDER BY opportunity_score DESC LIMIT 2"
+        ),
+        sql_result_rows=[
+            {
+                "borrower_id": "B-11111",
+                "city": "Seattle",
+                "state": "WA",
+                "zip": "98118",
+                "opportunity_score": 92,
+            },
+            {
+                "borrower_id": "B-22222",
+                "city": "Chicago",
+                "state": "IL",
+                "zip": "60617",
+                "opportunity_score": 91,
+            },
+        ],
+        conversation_id="conv-borrower-action",
+        message_id="msg-borrower-action",
+    )
+    stub = _StubClient(_make_breaker("closed"), response=live)
+    repo = DatabricksGenieRepository(stub)  # type: ignore[arg-type]
+
+    result = repo.respond("Show the top borrowers by score.")
+    action = next(row for row in result.actions if row.id == "open-cohort")
+
+    assert action.route == "/lead-queue?borrower_ids=B-11111%2CB-22222"
+    assert action.borrower_ids == ["B-11111", "B-22222"]
+    assert action.criteria["result_filters"] == {
+        "borrower_ids": ["B-11111", "B-22222"],
+        "route_limit": 10,
+    }
+
+
 def test_data_question_without_query_gets_generic_sql_repair() -> None:
     text_only = GenieResponse(
         answer_text="The top ZIP is 60617.",
@@ -244,6 +343,67 @@ def test_data_question_without_query_gets_generic_sql_repair() -> None:
     assert result.visualization.y == "in_the_money_borrowers"
     assert result.table_rows is not None
     assert result.table_rows[0]["zip"] == 60617
+
+
+def test_top_zip_question_uses_canonical_gold_sql_when_genie_repair_lacks_proof() -> None:
+    text_only = GenieResponse(
+        answer_text="The top ZIP is 60617.",
+        sql_query=None,
+        sql_result_rows=[],
+        conversation_id="stale-conv",
+        message_id="msg-stale",
+    )
+    still_text_only = GenieResponse(
+        answer_text="The answer is still ZIP 60617, but no query was attached.",
+        sql_query=None,
+        sql_result_rows=[],
+        conversation_id="repair-conv",
+        message_id="repair-msg",
+    )
+    stub = _StubClient(_make_breaker("closed"), response=[text_only, still_text_only])
+    sql = _StubSqlClient(
+        [
+            {
+                "zip": "60617",
+                "state": "IL",
+                "in_the_money_borrowers": 1503,
+                "avg_score": 60.3,
+                "refreshed_at": "2026-05-04T22:08:34.662Z",
+            },
+            {
+                "zip": "60628",
+                "state": "IL",
+                "in_the_money_borrowers": 1482,
+                "avg_score": 60.3,
+                "refreshed_at": "2026-05-04T22:08:34.662Z",
+            },
+        ],
+    )
+    repo = DatabricksGenieRepository(stub, sql)  # type: ignore[arg-type]
+
+    result = repo.respond("Which zips have the most in-the-money refi candidates?")
+
+    assert result.source == "genie"
+    assert len(stub.ask_calls) == 2
+    assert result.conversation_id == "stale-conv"
+    assert result.sql_query is not None
+    assert "FROM mip.gold.borrower_360" in result.sql_query
+    assert "GROUP BY zip, state" in result.sql_query
+    assert sql.statements == [result.sql_query]
+    assert result.table_rows is not None
+    assert result.table_rows[0]["zip"] == "60617"
+    assert result.visualization is not None
+    assert result.visualization.x == "zip"
+    assert result.visualization.y == "in_the_money_borrowers"
+    assert result.actions[0].route == "/lead-queue?zips=60617%2C60628&segment=itm"
+    assert result.actions[0].criteria["result_filters"] == {
+        "zips": ["60617", "60628"],
+        "segment_codes": ["itm"],
+        "segment_mode": "any",
+        "route_limit": 12,
+    }
+    assert result.proof is not None
+    assert result.proof.trusted is True
 
 
 @pytest.mark.parametrize(
@@ -490,6 +650,34 @@ def test_pii_column_sql_is_policy_blocked() -> None:
     assert "Alice" not in result.answer
 
 
+@pytest.mark.parametrize(
+    "column",
+    [
+        "owner_1_full_name",
+        "situs_street_address",
+        "mailing_street_address",
+        "owner_name_hash",
+        "trigger_timeline_json",
+    ],
+)
+def test_raw_gold_pii_column_sql_is_policy_blocked(column: str) -> None:
+    live = GenieResponse(
+        answer_text="Raw borrower detail.",
+        sql_query=f"SELECT {column}, score FROM mip.gold.borrower_360 LIMIT 5",
+        sql_result_rows=[{column: "raw value", "score": 91}],
+        conversation_id="conv-raw-pii-sql",
+        message_id="msg-raw-pii-sql",
+    )
+    stub = _StubClient(_make_breaker("closed"), response=live)
+    repo = DatabricksGenieRepository(stub)  # type: ignore[arg-type]
+
+    result = repo.respond(f"show {column}")
+
+    assert result.source == "policy_blocked"
+    assert result.sql_query is None
+    assert result.table_rows == []
+
+
 def test_pii_answer_text_is_policy_blocked() -> None:
     live = GenieResponse(
         answer_text="The top borrower email is raw@example.com.",
@@ -565,6 +753,9 @@ def test_genie_row_redaction_blocks_case_and_camel_pii_aliases() -> None:
                 "borrower_id": "B-1",
                 "OwnerName": "Raw Name",
                 "OWNER_EMAIL": "raw@example.com",
+                "owner_1_full_name": "Raw Owner",
+                "SitusStreetAddress": "123 Main St",
+                "mailing_street_address": "456 Market Ave",
                 "score": 86,
             }
         ],
@@ -578,6 +769,25 @@ def test_genie_row_redaction_blocks_case_and_camel_pii_aliases() -> None:
 
     assert result.source == "genie"
     assert result.table_rows == [{"borrower_id": "B-1", "score": 86}]
+
+
+def test_pending_feed_columns_are_blocked_even_when_question_does_not_say_permit() -> None:
+    live = GenieResponse(
+        answer_text="Rows.",
+        sql_query="SELECT state, COUNT(*) AS borrowers FROM mip.gold.borrower_360 WHERE has_permit = true GROUP BY state",
+        sql_result_rows=[{"state": "IL", "borrowers": 1}],
+        conversation_id="conv-hidden-permit",
+        message_id="msg-hidden-permit",
+    )
+    stub = _StubClient(_make_breaker("closed"), response=live)
+    repo = DatabricksGenieRepository(stub)  # type: ignore[arg-type]
+
+    result = repo.respond("Show borrowers with recent remodeling signals by state.")
+
+    assert result.source == "policy_blocked"
+    assert result.table_rows == []
+    assert result.proof is not None
+    assert any("Building Permits" in gap for gap in result.proof.known_data_gaps)
 
 
 def test_trusted_sql_is_replayed_when_genie_query_rows_are_missing() -> None:

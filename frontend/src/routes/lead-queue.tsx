@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
-import type { LeadSummary } from '../types';
+import type { LeadSummary, SegmentCode } from '../types';
 import { PageShell } from '../components/layout/PageShell';
 import { LeadTable } from '../components/mortgage/LeadTable';
 import { Chip } from '../components/Primitives';
@@ -12,7 +12,9 @@ import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
  * Lead Queue — deep-dive table route. Full borrower list (filtered by segment
  * URL param if present). Row expand opens the inline dossier preview.
  *
- * Honors `?state=XX`, `?zip=NNNNN`, and `?county=FFFFF` query params so the
+ * Honors `?state=XX`, `?zip=NNNNN`, `?states=IL,TX`, `?zips=60617,75217`,
+ * `?borrower_ids=B-...`,
+ * and `?county=FFFFF` query params so the
  * home/segments geography drill can deep-link into a filtered view. The
  * state + zip filters run client-side against the already-loaded list (fast,
  * no extra fetch). The county filter resolves to the set of ZIPs within the
@@ -21,13 +23,71 @@ import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
  * county" since LeadSummary carries zip but not county_fips.
  */
 
+const SEGMENT_CODES = new Set<SegmentCode>(['itm', 'listed', 'permit', 'investor', 'equity', 'retention']);
+
+function parseCsvParam(
+  raw: string | null,
+  pattern: RegExp,
+  max: number,
+): string[] {
+  if (!raw) return [];
+  const out: string[] = [];
+  for (const value of raw.split(',')) {
+    const trimmed = value.trim().toUpperCase();
+    if (!pattern.test(trimmed) || out.includes(trimmed)) continue;
+    out.push(trimmed);
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
+function parseSegmentCodes(raw: string | null): SegmentCode[] {
+  if (!raw) return [];
+  const out: SegmentCode[] = [];
+  for (const value of raw.split(',')) {
+    const code = value.trim() as SegmentCode;
+    if (!SEGMENT_CODES.has(code) || out.includes(code)) continue;
+    out.push(code);
+  }
+  return out;
+}
+
+function parseBorrowerIds(raw: string | null): string[] {
+  if (!raw) return [];
+  const out: string[] = [];
+  for (const value of raw.split(',')) {
+    const borrowerId = value.trim();
+    if (!borrowerId.startsWith('B-') || out.includes(borrowerId)) continue;
+    out.push(borrowerId);
+    if (out.length >= 20) break;
+  }
+  return out;
+}
+
 export default function LeadQueue() {
   const [searchParams] = useSearchParams();
-  const segment = searchParams.get('segment') ?? undefined;
+  const segment = (searchParams.get('segment') as SegmentCode | null) ?? undefined;
+  const segmentCodes = useMemo(
+    () => parseSegmentCodes(searchParams.get('segment_codes')),
+    [searchParams],
+  );
+  const segmentMode = searchParams.get('segment_mode') === 'all' ? 'all' : 'any';
   // 2-char state code (e.g. `?state=IL`) from the home-map deep-link.
   // Uppercased defensively so `/lead-queue?state=il` still works.
   const stateFilter = (searchParams.get('state') ?? '').toUpperCase() || undefined;
   const zipFilter = (searchParams.get('zip') ?? '').trim() || undefined;
+  const stateFilters = useMemo(
+    () => parseCsvParam(searchParams.get('states'), /^[A-Z]{2}$/, 20),
+    [searchParams],
+  );
+  const zipFilters = useMemo(
+    () => parseCsvParam(searchParams.get('zips'), /^\d{5}$/, 50),
+    [searchParams],
+  );
+  const borrowerIdFilters = useMemo(
+    () => parseBorrowerIds(searchParams.get('borrower_ids')),
+    [searchParams],
+  );
   const countyFilter = (searchParams.get('county') ?? '').trim() || undefined;
 
   // 2026-05-04 FIX β: pass state + zip to the API so the geo-filtered
@@ -44,8 +104,31 @@ export default function LeadQueue() {
     error,
     manualRetry,
   } = useWarmingUpRetry<LeadSummary[]>(
-    (signal) => api.leads(segment, signal, { state: stateFilter, zip: zipFilter }),
-    [segment, stateFilter, zipFilter],
+    (signal) => api.leads(
+      segment,
+      signal,
+      {
+        state: stateFilter,
+        zip: zipFilter,
+        states: stateFilters,
+        zips: zipFilters,
+        borrowerIds: borrowerIdFilters,
+      },
+      {
+        segmentCodes,
+        segmentMode,
+      },
+    ),
+    [
+      segment,
+      stateFilter,
+      zipFilter,
+      stateFilters.join(','),
+      zipFilters.join(','),
+      borrowerIdFilters.join(','),
+      segmentCodes.join(','),
+      segmentMode,
+    ],
   );
   const loading = leadsData === null && warmingUp === null && error === null;
   const loadError = error
@@ -106,11 +189,15 @@ export default function LeadQueue() {
       title="Ranked borrowers"
       lede="Click a row to expand the borrower preview. Approve or reject inline, or open Borrower 360 for the full dossier. Keyboard: A approves, R rejects the expanded row."
       heroRight={
-        segment || stateFilter || zipFilter || countyFilter ? (
+        segment || segmentCodes.length > 0 || stateFilter || zipFilter || stateFilters.length > 0 || zipFilters.length > 0 || borrowerIdFilters.length > 0 || countyFilter ? (
           <>
             {segment && <Chip variant="neutral">segment = {segment}</Chip>}
+            {segmentCodes.length > 0 && <Chip variant="neutral">segments = {segmentCodes.join(', ')}</Chip>}
             {stateFilter && <Chip variant="neutral">state = {stateFilter}</Chip>}
             {zipFilter && <Chip variant="neutral">zip = {zipFilter}</Chip>}
+            {stateFilters.length > 0 && <Chip variant="neutral">states = {stateFilters.join(', ')}</Chip>}
+            {zipFilters.length > 0 && <Chip variant="neutral">zips = {zipFilters.length} selected</Chip>}
+            {borrowerIdFilters.length > 0 && <Chip variant="neutral">borrowers = {borrowerIdFilters.length} selected</Chip>}
             {countyFilter && <Chip variant="neutral">county = {countyFilter}</Chip>}
           </>
         ) : undefined

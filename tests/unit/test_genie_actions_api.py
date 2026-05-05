@@ -6,14 +6,16 @@ import json
 from fastapi.testclient import TestClient
 
 from backend.main import app
-from backend.services.lakebase import LakebaseError
+from backend.services.genie_answers import GenieActionSuggestion, GenieMessageResponse
+from backend.services.lakebase import LakebaseError, get_lakebase_client
+from backend.services.repositories import get_genie_answer_repository
 from backend.services.workspace_store import InMemoryWorkspaceStore, get_workspace_store
 
 client = TestClient(app)
 ACTOR_HEADERS = {"X-Forwarded-Email": "lo@example.com"}
 
 
-def _confirmed_payload(**overrides: object) -> dict[str, object]:
+def _confirmed_payload_for_action(action_type: str) -> dict[str, object]:
     message = client.post(
         "/api/genie/message",
         json={"question": "Show me the top 10 borrowers by lead score in Illinois."},
@@ -23,9 +25,9 @@ def _confirmed_payload(**overrides: object) -> dict[str, object]:
     answer = message.json()
     action = next(
         row for row in answer["actions"]
-        if row["action_type"] == "save_borrowers"
+        if row["action_type"] == action_type
     )
-    payload: dict[str, object] = {
+    return {
         "action_type": action["action_type"],
         "conversation_id": answer["conversation_id"],
         "message_id": answer["message_id"],
@@ -37,6 +39,10 @@ def _confirmed_payload(**overrides: object) -> dict[str, object]:
         "confirmed": True,
         "confirmation_token": action["confirmation_token"],
     }
+
+
+def _confirmed_payload(**overrides: object) -> dict[str, object]:
+    payload = _confirmed_payload_for_action("save_borrowers")
     payload.update(overrides)
     return payload
 
@@ -241,6 +247,22 @@ def test_genie_actions_reject_token_after_payload_tampering() -> None:
     assert res.json()["detail"] == "Genie action confirmation token is invalid"
 
 
+def test_genie_actions_reject_result_filter_tampering() -> None:
+    payload = _confirmed_payload()
+    criteria = dict(payload["criteria"])  # type: ignore[arg-type]
+    criteria["result_filters"] = {"zips": ["99999"], "segment_codes": ["itm"]}
+    payload["criteria"] = criteria
+
+    res = client.post(
+        "/api/genie/actions",
+        json=payload,
+        headers=ACTOR_HEADERS,
+    )
+
+    assert res.status_code == 400
+    assert res.json()["detail"] == "Genie action confirmation token is invalid"
+
+
 def test_genie_actions_reject_untrusted_source_assets() -> None:
     payload = _confirmed_payload(
         action_type="export_insight",
@@ -261,6 +283,107 @@ def test_genie_actions_reject_untrusted_source_assets() -> None:
 
     assert res.status_code == 400
     assert res.json()["detail"] == "Genie action includes untrusted source assets"
+
+
+class _DraftCampaignRepo:
+    def respond(
+        self,
+        question: str,
+        conversation_id: str | None = None,
+    ) -> GenieMessageResponse:
+        _ = question
+        return GenieMessageResponse(
+            conversation_id=conversation_id or "conv-draft",
+            message_id="msg-draft",
+            question="Turn this cohort into a draft campaign.",
+            question_hash="hash-draft",
+            answer="Draft cohort.",
+            source="genie",
+            trusted_assets=["mip.gold.borrower_360"],
+            row_count=2,
+            table_rows=[
+                {"zip": "60617", "state": "IL", "borrowers": 1503},
+                {"zip": "60628", "state": "IL", "borrowers": 1482},
+            ],
+            actions=[
+                GenieActionSuggestion(
+                    id="create-campaign-draft",
+                    label="Create draft campaign",
+                    action_type="create_draft_campaign",
+                    description="Create a Lakebase draft campaign from this governed Genie result.",
+                    route="/lead-queue?zips=60617%2C60628&segment=itm",
+                    borrower_ids=[],
+                    criteria={
+                        "source": "genie",
+                        "source_assets": ["mip.gold.borrower_360"],
+                        "visualization_kind": "bar",
+                        "row_count": 2,
+                        "result_filters": {
+                            "zips": ["60617", "60628"],
+                            "segment_codes": ["itm"],
+                            "segment_mode": "any",
+                        },
+                        "sql_hash": "abc123",
+                    },
+                )
+            ],
+        )
+
+
+class _RecordingLakebase:
+    def __init__(self) -> None:
+        self.executes: list[tuple[str, dict[str, object]]] = []
+        self.fetchones: list[tuple[str, dict[str, object]]] = []
+
+    def execute(self, sql: str, params: dict[str, object] | None = None) -> None:
+        self.executes.append((sql, params or {}))
+
+    def fetchone(
+        self,
+        sql: str,
+        params: dict[str, object] | None = None,
+    ) -> dict[str, object] | None:
+        self.fetchones.append((sql, params or {}))
+        if "INSERT INTO mip_app.campaigns" in sql:
+            return {"campaign_id": "campaign-1", "audit_id": "audit-1"}
+        return None
+
+
+def test_genie_create_draft_campaign_persists_full_cohort_criteria() -> None:
+    lakebase = _RecordingLakebase()
+    prior_repo = app.dependency_overrides.get(get_genie_answer_repository)
+    prior_lakebase = app.dependency_overrides.get(get_lakebase_client)
+    app.dependency_overrides[get_genie_answer_repository] = _DraftCampaignRepo
+    app.dependency_overrides[get_lakebase_client] = lambda: lakebase
+    try:
+        payload = _confirmed_payload_for_action("create_draft_campaign")
+        res = client.post(
+            "/api/genie/actions",
+            json=payload,
+            headers=ACTOR_HEADERS,
+        )
+    finally:
+        if prior_repo is None:
+            app.dependency_overrides.pop(get_genie_answer_repository, None)
+        else:
+            app.dependency_overrides[get_genie_answer_repository] = prior_repo
+        if prior_lakebase is None:
+            app.dependency_overrides.pop(get_lakebase_client, None)
+        else:
+            app.dependency_overrides[get_lakebase_client] = prior_lakebase
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["ok"] is True
+    assert body["campaign_id"] == "campaign-1"
+    campaign_params = next(
+        params for sql, params in lakebase.fetchones
+        if "INSERT INTO mip_app.campaigns" in sql
+    )
+    criteria = json.loads(str(campaign_params["criteria"]))
+    assert criteria["result_filters"]["zips"] == ["60617", "60628"]
+    assert criteria["result_filters"]["segment_codes"] == ["itm"]
+    assert criteria["sql_hash"] == "abc123"
 
 
 class _ExplodingGenieWorkspaceStore(InMemoryWorkspaceStore):

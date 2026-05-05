@@ -496,7 +496,7 @@ export const api = {
   leads: (
     segment?: string,
     signal?: AbortSignal,
-    geo?: { state?: string; zip?: string },
+    geo?: { state?: string; zip?: string; states?: string[]; zips?: string[]; borrowerIds?: string[] },
     opts: LeadQueryOptions = {},
   ) => {
     // 2026-05-04 FIX β: forward state + zip to the API so the backend
@@ -513,6 +513,9 @@ export const api = {
     if (opts.limit) params.set('limit', String(opts.limit));
     if (geo?.state) params.set('state', geo.state);
     if (geo?.zip) params.set('zip', geo.zip);
+    if (geo?.states && geo.states.length > 0) params.set('states', geo.states.join(','));
+    if (geo?.zips && geo.zips.length > 0) params.set('zips', geo.zips.join(','));
+    if (geo?.borrowerIds && geo.borrowerIds.length > 0) params.set('borrower_ids', geo.borrowerIds.join(','));
     const qs = params.toString();
     return getJson<LeadSummary[]>(
       qs ? `/api/leads?${qs}` : '/api/leads',

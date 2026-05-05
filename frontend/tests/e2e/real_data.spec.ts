@@ -459,13 +459,9 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     // we assert by presence of a source chip (every answer has one).
     const answerSurface = page.locator('.surface', { hasText: /Source:/i }).first();
     await expect(answerSurface).toBeVisible({ timeout: 40_000 });
-    await expect(answerSurface.locator('.genie-chart__title').first()).toContainText(
-      /Borrowers by Zip/i,
-      { timeout: 10_000 },
-    );
-    await expect(answerSurface.locator('.genie-chart__title').first()).not.toContainText(
-      /Zip by State/i,
-    );
+    const chartTitle = answerSurface.locator('.genie-chart__title').first();
+    await expect(chartTitle).toContainText(/borrowers.*by.*zip/i, { timeout: 10_000 });
+    await expect(chartTitle).not.toContainText(/zip.*by.*state/i);
   });
 
   test('ask-genie: shows governed progress while a live request is pending', async ({ page }) => {
@@ -505,11 +501,45 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     await proofDrawer.getByRole('button', { name: /Close Genie proof/i }).click();
     await expect(proofDrawer).toBeHidden();
 
-    const exportAction = page.locator('.genie-action', { hasText: /Export demo-ready insight/i }).first();
+    const exportAction = page.locator('.genie-action', { hasText: /Record demo-ready insight/i }).first();
     await expect(exportAction).toBeVisible();
     await exportAction.getByRole('button', { name: /Run/i }).click();
     await exportAction.getByRole('button', { name: /Confirm/i }).click();
     await expect(page.getByText(/Genie action recorded to the governed audit ledger/i)).toBeVisible({ timeout: 15_000 });
+  });
+
+  test('ask-genie: open cohort action carries ZIP answer filters into Lead Queue', async ({ page }) => {
+    test.setTimeout(120_000);
+
+    await page.goto('/ask-genie');
+
+    await page
+      .locator('textarea[aria-label="Ask Genie — question"]')
+      .fill('Which ZIPs have the most in-the-money refinance candidates?');
+    await page.getByRole('button', { name: /^Ask Genie$/i }).first().click();
+
+    await expect(page.locator('.genie-answer__table').first()).toContainText('606', { timeout: 60_000 });
+    const cohortAction = page.locator('.genie-action', { hasText: /Open this cohort in Lead Queue/i }).first();
+    await expect(cohortAction).toBeVisible();
+    await cohortAction.getByRole('button', { name: /Run/i }).click();
+    await cohortAction.getByRole('button', { name: /Confirm/i }).click();
+
+    await expect(page).toHaveURL(/\/lead-queue\?.*zips=/, { timeout: 20_000 });
+    await expect(page).toHaveURL(/segment=itm/, { timeout: 20_000 });
+    await expect(page.getByText(/zips = \d+ selected/i)).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByText(/segment = itm/i)).toBeVisible();
+    await expect(page.getByText(/Loading leads/i)).toBeHidden({ timeout: 45_000 });
+    await expect(page.locator('.lead-table__zip').first()).toBeVisible({ timeout: 45_000 });
+
+    const url = new URL(page.url());
+    const allowedZips = new Set((url.searchParams.get('zips') ?? '').split(',').filter(Boolean));
+    expect(allowedZips.size).toBeGreaterThan(0);
+
+    const rowZips = await page.locator('.lead-table__zip').evaluateAll((nodes) =>
+      nodes.slice(0, 25).map((node) => node.textContent?.trim() ?? ''),
+    );
+    expect(rowZips.length).toBeGreaterThan(0);
+    expect(rowZips.every((zip) => allowedZips.has(zip))).toBeTruthy();
   });
 
   test('admin-config: presentation controls flip theme + density', async ({ page }) => {

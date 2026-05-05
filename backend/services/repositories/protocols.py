@@ -83,18 +83,23 @@ class LeadRepository(Protocol):
         limit: int | None = None,
         state: str | None = None,
         zip_code: str | None = None,
+        state_codes: list[str] | None = None,
+        zip_codes: list[str] | None = None,
+        borrower_ids: list[str] | None = None,
         segment_codes: list[str] | None = None,
         segment_mode: str = "any",
     ) -> list[LeadSummary]:
         """Return up to ``limit`` ranked leads.
 
-        ``state`` / ``zip_code`` (optional, 2026-05-04 FIX β): when
-        provided, the implementation queries ``mip.gold.borrower_360``
+        ``state`` / ``zip_code`` / ``borrower_ids`` and the multi-value
+        ``state_codes`` / ``zip_codes``
+        (optional, 2026-05-04 FIX beta plus Genie cohort extension):
+        when provided, the implementation queries ``mip.gold.borrower_360``
         directly (no score floor) instead of ``mip.gold.lead_population``,
         so the returned rows match the per-geo addressable counts the
-        map tooltips report. Without these, the call returns the
-        national top-N by score from ``lead_population`` (the
-        existing top-of-queue behaviour).
+        map and Genie cohort actions report. Without these, the call
+        returns the national top-N by score from ``lead_population``
+        (the existing top-of-queue behaviour).
 
         ``segment_codes`` extends the legacy single ``segment`` query
         for the Segments page. ``segment_mode="all"`` means a borrower

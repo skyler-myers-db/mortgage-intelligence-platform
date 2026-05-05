@@ -41,6 +41,27 @@ def test_bound_limit_clamps_caller_input():
     assert DatabricksLeadRepository._bound_limit(100_000) == DatabricksLeadRepository.MAX_LIMIT
 
 
+def test_geo_in_clause_supports_multi_zip_and_state_lists() -> None:
+    params: dict[str, object] = {}
+
+    zip_clause = DatabricksLeadRepository._in_clause(
+        column="zip",
+        prefix="zip",
+        values=["60617", "60628"],
+        params=params,
+    )
+    state_clause = DatabricksLeadRepository._in_clause(
+        column="state",
+        prefix="state",
+        values=["IL"],
+        params=params,
+    )
+
+    assert zip_clause == "AND zip IN (:zip_0, :zip_1)"
+    assert state_clause == "AND state = :state_0"
+    assert params == {"zip_0": "60617", "zip_1": "60628", "state_0": "IL"}
+
+
 def test_segment_filter_clause_supports_multi_select_all_mode():
     """Segments-page multi-select is a narrowing filter: selecting ITM
     plus equity should require both segment codes, not either one."""
@@ -54,6 +75,145 @@ def test_segment_filter_clause_supports_multi_select_all_mode():
         "array_contains(segment_codes, :segment_1)"
     )
     assert params == {"segment_0": "itm", "segment_1": "equity"}
+
+
+def test_leads_route_passes_genie_multi_zip_cohort_to_repository() -> None:
+    from backend.schemas.lead import LeadSummary
+    from backend.services.repositories import get_lead_repository
+
+    captured: dict[str, object] = {}
+
+    class _CohortRepo:
+        def list(
+            self,
+            segment: str | None,
+            portfolio_id: str | None,
+            limit: int | None = None,
+            state: str | None = None,
+            zip_code: str | None = None,
+            state_codes: list[str] | None = None,
+            zip_codes: list[str] | None = None,
+            borrower_ids: list[str] | None = None,
+            segment_codes: list[str] | None = None,
+            segment_mode: str = "any",
+        ) -> list[LeadSummary]:
+            captured.update(
+                {
+                    "segment": segment,
+                    "portfolio_id": portfolio_id,
+                    "limit": limit,
+                    "state": state,
+                    "zip_code": zip_code,
+                    "state_codes": state_codes,
+                    "zip_codes": zip_codes,
+                    "borrower_ids": borrower_ids,
+                    "segment_codes": segment_codes,
+                    "segment_mode": segment_mode,
+                }
+            )
+            return [
+                LeadSummary(
+                    borrower_id="B-60617",
+                    display_name="Synthetic Owner",
+                    city="Chicago",
+                    state="IL",
+                    zip="60617",
+                    segment_codes=["itm"],
+                    equity_estimate=100000,
+                    rate_spread_bps=150,
+                    opportunity_score=80,
+                    confidence=80,
+                    recommended_offer="Refinance + HELOC",
+                    why_now="test",
+                    evidence_ids=[],
+                    approval_status="pending",
+                )
+            ]
+
+    prior = app.dependency_overrides.get(get_lead_repository)
+    app.dependency_overrides[get_lead_repository] = _CohortRepo
+    try:
+        client = TestClient(app)
+        response = client.get("/api/leads?segment=itm&zips=60617,60628")
+        assert response.status_code == 200
+        assert captured["segment"] == "itm"
+        assert captured["zip_codes"] == ["60617", "60628"]
+        assert captured["state_codes"] is None
+        assert captured["borrower_ids"] is None
+    finally:
+        if prior is None:
+            app.dependency_overrides.pop(get_lead_repository, None)
+        else:
+            app.dependency_overrides[get_lead_repository] = prior
+
+
+def test_leads_route_passes_genie_borrower_id_cohort_to_repository() -> None:
+    from backend.schemas.lead import LeadSummary
+    from backend.services.repositories import get_lead_repository
+
+    captured: dict[str, object] = {}
+
+    class _BorrowerCohortRepo:
+        def list(
+            self,
+            segment: str | None,
+            portfolio_id: str | None,
+            limit: int | None = None,
+            state: str | None = None,
+            zip_code: str | None = None,
+            state_codes: list[str] | None = None,
+            zip_codes: list[str] | None = None,
+            borrower_ids: list[str] | None = None,
+            segment_codes: list[str] | None = None,
+            segment_mode: str = "any",
+        ) -> list[LeadSummary]:
+            captured.update(
+                {
+                    "segment": segment,
+                    "portfolio_id": portfolio_id,
+                    "limit": limit,
+                    "state": state,
+                    "zip_code": zip_code,
+                    "state_codes": state_codes,
+                    "zip_codes": zip_codes,
+                    "borrower_ids": borrower_ids,
+                    "segment_codes": segment_codes,
+                    "segment_mode": segment_mode,
+                }
+            )
+            return [
+                LeadSummary(
+                    borrower_id="B-11111",
+                    display_name="Synthetic Owner",
+                    city="Seattle",
+                    state="WA",
+                    zip="98118",
+                    segment_codes=["itm"],
+                    equity_estimate=100000,
+                    rate_spread_bps=150,
+                    opportunity_score=80,
+                    confidence=80,
+                    recommended_offer="Refinance + HELOC",
+                    why_now="test",
+                    evidence_ids=[],
+                    approval_status="pending",
+                )
+            ]
+
+    prior = app.dependency_overrides.get(get_lead_repository)
+    app.dependency_overrides[get_lead_repository] = _BorrowerCohortRepo
+    try:
+        client = TestClient(app)
+        response = client.get("/api/leads?borrower_ids=B-11111,B-22222")
+        assert response.status_code == 200
+        assert captured["borrower_ids"] == ["B-11111", "B-22222"]
+        assert captured["zip_codes"] is None
+        assert captured["state_codes"] is None
+    finally:
+        if prior is None:
+            app.dependency_overrides.pop(get_lead_repository, None)
+        else:
+            app.dependency_overrides[get_lead_repository] = prior
 
 
 def test_limit_query_param_rejects_zero_and_negative():
@@ -88,10 +248,23 @@ def test_truncation_header_present_when_limit_reached(monkeypatch: Any):
             limit: int | None = None,
             state: str | None = None,
             zip_code: str | None = None,
+            state_codes: list[str] | None = None,
+            zip_codes: list[str] | None = None,
+            borrower_ids: list[str] | None = None,
             segment_codes: list[str] | None = None,
             segment_mode: str = "any",
         ) -> list[LeadSummary]:
-            _ = (segment, portfolio_id, state, zip_code, segment_codes, segment_mode)
+            _ = (
+                segment,
+                portfolio_id,
+                state,
+                zip_code,
+                state_codes,
+                zip_codes,
+                borrower_ids,
+                segment_codes,
+                segment_mode,
+            )
             # Emit exactly `limit` rows so the header kicks in.
             n = limit or DEFAULT_LEAD_LIMIT
             return [
@@ -146,10 +319,24 @@ def test_truncation_header_absent_when_under_limit():
             limit: int | None = None,
             state: str | None = None,
             zip_code: str | None = None,
+            state_codes: list[str] | None = None,
+            zip_codes: list[str] | None = None,
+            borrower_ids: list[str] | None = None,
             segment_codes: list[str] | None = None,
             segment_mode: str = "any",
         ) -> list[LeadSummary]:
-            _ = (segment, portfolio_id, limit, state, zip_code, segment_codes, segment_mode)
+            _ = (
+                segment,
+                portfolio_id,
+                limit,
+                state,
+                zip_code,
+                state_codes,
+                zip_codes,
+                borrower_ids,
+                segment_codes,
+                segment_mode,
+            )
             return [
                 LeadSummary(
                     borrower_id="B-00001",

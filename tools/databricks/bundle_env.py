@@ -58,11 +58,44 @@ def main() -> int:
     env = dict(os.environ)
     if ENV_LOCAL.exists():
         for k, v in dotenv_values(ENV_LOCAL).items():
-            if v is not None:
-                env[k] = v
+            if v is None:
+                continue
+            # deploy.sh may pre-provision Genie and export GENIE_SPACE_ID
+            # before calling this helper. Preserve that real value if
+            # .env.local still carries the first-run blank/template value.
+            if k in {"DATABRICKS_WAREHOUSE_ID", "GENIE_SPACE_ID"}:
+                if _is_real(env.get(k)) and not _is_real(v):
+                    continue
+            env[k] = v
 
     warehouse = env.get("DATABRICKS_WAREHOUSE_ID")
     genie = env.get("GENIE_SPACE_ID")
+    if not _is_real(genie):
+        space_id_file = REPO / "genie" / "space_id.txt"
+        if space_id_file.exists():
+            genie = space_id_file.read_text(encoding="utf-8").strip()
+            if _is_real(genie):
+                env["GENIE_SPACE_ID"] = genie
+
+    if subcmd == "deploy":
+        missing = []
+        if not _is_real(warehouse):
+            missing.append("DATABRICKS_WAREHOUSE_ID")
+        if not _is_real(genie):
+            missing.append("GENIE_SPACE_ID")
+        if missing:
+            print(
+                "[bundle_env] refusing real deploy with placeholder bundle variables: "
+                + ", ".join(missing),
+                file=sys.stderr,
+            )
+            print(
+                "[bundle_env] run tools/databricks/provision_genie_space.py or "
+                "./scripts/deploy.sh so a real Genie space id is available before "
+                "databricks_app.mip_app is updated.",
+                file=sys.stderr,
+            )
+            return 2
 
     env["BUNDLE_VAR_sql_warehouse_id"] = warehouse if _is_real(warehouse) else PLACEHOLDER
     env["BUNDLE_VAR_genie_space_id"] = genie if _is_real(genie) else PLACEHOLDER

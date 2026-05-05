@@ -47,10 +47,10 @@ render-sql:
 	$(PYTHON) tools/render_sql.py --catalog "$${MIP_DEFAULT_CATALOG:-mip}"
 
 bundle-validate: render-sql
-	databricks bundle validate -t dev
+	$(PYTHON) tools/databricks/bundle_env.py validate -t dev
 
 bundle-deploy: render-sql
-	databricks bundle deploy -t dev
+	$(PYTHON) tools/databricks/bundle_env.py deploy -t dev
 
 zip:
 	cd .. && zip -r mortgage-intelligence-platform.zip mortgage-intelligence-platform -x '*/node_modules/*' '*/.venv/*' '*/frontend/dist/*'

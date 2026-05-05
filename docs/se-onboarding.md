@@ -57,7 +57,9 @@ cat > .env.local <<'EOF'
 DATABRICKS_HOST=https://<customer-workspace>.cloud.databricks.com
 DATABRICKS_TOKEN=<PAT from workspace User Settings -> Developer -> Access Tokens>
 DATABRICKS_WAREHOUSE_ID=<serverless warehouse id from Compute -> SQL warehouses>
-# GENIE_SPACE_ID is written by step 4; leave blank on first deploy.
+# GENIE_SPACE_ID may be blank on first deploy; scripts/deploy.sh will
+# provision the space before applying the app resource and write
+# genie/space_id.txt.
 GENIE_SPACE_ID=
 # OPTIONAL: set the UC catalog name if the customer uses a non-default name
 # (default is "mip"). scripts/deploy.sh step 1a renders sql/_rendered/**
@@ -110,38 +112,26 @@ warehouse warm-up time diagnosing it.
 
 ## 4. Deploy (one command, ~15 minutes wall time)
 
-**Two-step deploy gotcha — read first.** The Databricks App lifecycle has
-two phases:
-
-1. `databricks bundle deploy -t dev` — **uploads** source and provisions
-   every non-app resource (warehouse, Lakebase, jobs, pipelines,
-   dashboards, MLflow experiment). The app resource is registered but
-   its compute is not started.
-2. `databricks apps deploy mip-app` — **promotes** the uploaded source
-   to the running app compute. Until this runs, the app URL serves the
-   previous revision (or 404 on first ever deploy).
-
-`./scripts/deploy.sh` runs phase 1. Phase 2 is a separate command the SE
-runs after the first bundle deploy succeeds. Forgetting phase 2 is the
-most common first-deploy mistake — you see a green CLI log and a 404 at
-the app URL.
+**Deploy lifecycle.** The Databricks App lifecycle still has two API
+phases — bundle resource apply, then app snapshot promotion — but
+`./scripts/deploy.sh` runs both. The bundle phase must go through
+`tools/databricks/bundle_env.py` because it maps `.env.local` to
+`BUNDLE_VAR_*`; bare `databricks bundle deploy` can bind placeholder
+resources and fail with misleading permission errors.
 
 ```bash
-# Phase 1: bundle deploy + jobs + silver/gold refresh + Genie provision
+# One command: env-aware bundle deploy, app promotion, jobs, refreshes, and Genie provision
 ./scripts/deploy.sh
-# Expected last line: "[deploy.sh] OK — all 10 steps complete."
-
-# Phase 2: promote uploaded source to running app compute
-databricks apps deploy mip-app
-# Expected: "deployment_id: ..." + state SUCCEEDED within ~2 min.
+# Expected last line: "[deploy] complete."
 ```
 
 What `scripts/deploy.sh` does is enumerated in
 [`docs/runbook.md`](runbook.md) §4 (steps 1–10). Re-running is
 idempotent — safe after a partial failure.
 
-On first deploy, step 9 (Genie provisioning) writes
-`genie/space_id.txt`. Append it to `.env.local`:
+On first deploy, Genie provisioning writes `genie/space_id.txt`.
+Keeping the value in `.env.local` makes later manual wrapper invocations
+more explicit:
 
 ```bash
 echo "GENIE_SPACE_ID=$(cat genie/space_id.txt)" >> .env.local

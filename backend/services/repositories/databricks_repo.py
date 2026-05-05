@@ -38,6 +38,7 @@ import logging
 import re
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlencode
 
 from backend.schemas.common import EvidenceEvent
 from backend.schemas.geo import (
@@ -76,6 +77,7 @@ from backend.services.genie_client import (
     ResilientGenieClient,
 )
 from backend.services.pii_redaction import (
+    _FORBIDDEN_OUTPUT_KEYS,
     redact_borrower_row,
     redact_evidence_row,
     redact_lead_row,
@@ -849,7 +851,7 @@ class DatabricksLeadRepository:
         "  is_owner_occupied, is_investor, related_property_count, "
         "  current_lien_balance, second_pos_amount, has_permit, listed_for_sale "
         f"FROM {qualify('gold', 'borrower_360')} "
-        "WHERE 1=1 {state_clause} {zip_clause} {segment_clause} "
+        "WHERE 1=1 {state_clause} {zip_clause} {borrower_clause} {segment_clause} "
         "ORDER BY opportunity_score DESC, borrower_id ASC "
         "LIMIT {limit}"
     )
@@ -861,6 +863,9 @@ class DatabricksLeadRepository:
         limit: int | None = None,
         state: str | None = None,
         zip_code: str | None = None,
+        state_codes: list[str] | None = None,
+        zip_codes: list[str] | None = None,
+        borrower_ids: list[str] | None = None,
         segment_codes: list[str] | None = None,
         segment_mode: str = "any",
     ) -> list[LeadSummary]:
@@ -875,20 +880,34 @@ class DatabricksLeadRepository:
         # FIX β: geo-filtered path bypasses lead_population so the queue
         # row count matches the map tooltip. See the
         # _LIST_BY_GEO_SQL_TEMPLATE docstring above for the full rationale.
-        if state or zip_code:
+        normalised_states = self._normalise_states(state, state_codes)
+        normalised_zips = self._normalise_zips(zip_code, zip_codes)
+        normalised_borrower_ids = self._normalise_borrower_ids(borrower_ids)
+        if normalised_states or normalised_zips or normalised_borrower_ids:
             params: dict[str, object] = dict(segment_params)
-            state_clause = ""
-            if state:
-                state_clause = "AND state = :state"
-                params["state"] = state.upper()[:2]
-            zip_clause = ""
-            if zip_code:
-                zip_clause = "AND zip = :zip"
-                params["zip"] = zip_code
+            state_clause = self._in_clause(
+                column="state",
+                prefix="state",
+                values=normalised_states,
+                params=params,
+            )
+            zip_clause = self._in_clause(
+                column="zip",
+                prefix="zip",
+                values=normalised_zips,
+                params=params,
+            )
+            borrower_clause = self._in_clause(
+                column="borrower_id",
+                prefix="borrower_id",
+                values=normalised_borrower_ids,
+                params=params,
+            )
             geo_segment_clause = f"AND {segment_clause}" if segment_clause else ""
             sql = self._LIST_BY_GEO_SQL_TEMPLATE.format(
                 state_clause=state_clause,
                 zip_clause=zip_clause,
+                borrower_clause=borrower_clause,
                 segment_clause=geo_segment_clause,
                 limit=bounded,
             )
@@ -905,6 +924,62 @@ class DatabricksLeadRepository:
             sql = self._LIST_BASE_SQL_TEMPLATE.format(limit=bounded)
             rows = self._client.execute(sql)
         return [LeadSummary(**redact_lead_row(r)) for r in rows]
+
+    @staticmethod
+    def _normalise_states(
+        state: str | None,
+        state_codes: list[str] | None,
+    ) -> list[str]:
+        raw = ([state] if state else []) + (state_codes or [])
+        out: list[str] = []
+        for value in raw:
+            code = str(value or "").upper()[:2]
+            if len(code) == 2 and code.isalpha() and code not in out:
+                out.append(code)
+        return out
+
+    @staticmethod
+    def _normalise_zips(
+        zip_code: str | None,
+        zip_codes: list[str] | None,
+    ) -> list[str]:
+        raw = ([zip_code] if zip_code else []) + (zip_codes or [])
+        out: list[str] = []
+        for value in raw:
+            code = str(value or "").strip()[:5]
+            if len(code) == 5 and code.isdigit() and code not in out:
+                out.append(code)
+        return out
+
+    @staticmethod
+    def _normalise_borrower_ids(
+        borrower_ids: list[str] | None,
+    ) -> list[str]:
+        out: list[str] = []
+        for value in borrower_ids or []:
+            borrower_id = str(value or "").strip()
+            if borrower_id.startswith("B-") and borrower_id not in out:
+                out.append(borrower_id)
+        return out
+
+    @staticmethod
+    def _in_clause(
+        *,
+        column: str,
+        prefix: str,
+        values: list[str],
+        params: dict[str, object],
+    ) -> str:
+        if not values:
+            return ""
+        placeholders: list[str] = []
+        for i, value in enumerate(values):
+            key = f"{prefix}_{i}"
+            params[key] = value
+            placeholders.append(f":{key}")
+        if len(placeholders) == 1:
+            return f"AND {column} = {placeholders[0]}"
+        return f"AND {column} IN ({', '.join(placeholders)})"
 
     @staticmethod
     def _normalise_segment_codes(
@@ -1739,8 +1814,29 @@ def _adapt_genie_response(
         return canonical
     text_contains_pii = _answer_text_contains_pii(result.answer_text)
     lacks_trusted_proof = not result.sql_query or not trusted_assets
-    if text_contains_pii or lacks_trusted_proof or (result.sql_query and not trusted_sql):
-        gaps = _known_data_gaps(question, trusted_assets)
+    gaps = _known_data_gaps_for_result(
+        question=question,
+        assets=trusted_assets,
+        sql_query=result.sql_query,
+        rows=rows,
+    )
+    depends_on_pending_feeds = bool(
+        _pending_feed_gaps_from_material(result.sql_query or "")
+        or _pending_feed_gaps_from_rows(rows)
+    )
+    if (
+        text_contains_pii
+        or lacks_trusted_proof
+        or (result.sql_query and not trusted_sql)
+        or depends_on_pending_feeds
+    ):
+        if depends_on_pending_feeds:
+            gaps = _known_data_gaps_for_result(
+                question=" ".join([question, "permit listing mls"]),
+                assets=trusted_assets,
+                sql_query=result.sql_query,
+                rows=rows,
+            )
         blocked_answer = (
             "Genie did not return trusted SQL and source assets for this answer, "
             "so the app did not display the result. Ask a scoped question over "
@@ -1758,6 +1854,8 @@ def _adapt_genie_response(
             elapsed_ms=result.elapsed_ms,
             reasoning_trace=result.thoughts,
         )
+        if gaps:
+            proof = proof.model_copy(update={"known_data_gaps": gaps})
         return GenieMessageResponse(
             conversation_id=result.conversation_id,
             message_id=result.message_id,
@@ -1793,6 +1891,7 @@ def _adapt_genie_response(
         conversation_id=result.conversation_id,
         message_id=result.message_id,
         question_hash=question_hash,
+        sql_query=result.sql_query,
     )
     return GenieMessageResponse(
         conversation_id=result.conversation_id,
@@ -1833,6 +1932,21 @@ SELECT COUNT(*) AS in_the_money_borrowers
 FROM mip.gold.borrower_360
 WHERE in_the_money = TRUE
   AND LOWER(city) = LOWER(:city)
+""".strip()
+
+_CANONICAL_ITM_TOP_ZIPS_SQL = """
+SELECT zip
+     , state
+     , COUNT(*) AS in_the_money_borrowers
+     , CAST(ROUND(AVG(opportunity_score), 1) AS DOUBLE) AS avg_score
+     , MAX(refreshed_at) AS refreshed_at
+FROM mip.gold.borrower_360
+WHERE in_the_money = TRUE
+  AND zip IS NOT NULL
+  AND TRIM(zip) <> ''
+GROUP BY zip, state
+ORDER BY in_the_money_borrowers DESC, avg_score DESC, zip ASC
+LIMIT 10
 """.strip()
 
 _CANONICAL_MSA_SCORE_SQL = """
@@ -2004,6 +2118,31 @@ def _canonical_msa_score_scope(question: str) -> bool:
     )
 
 
+def _canonical_itm_zip_scope(question: str) -> bool:
+    q = re.sub(r"[^a-z0-9\s-]+", " ", question.lower())
+    q = re.sub(r"\s+", " ", q).strip()
+    zip_terms = ("zip", "zips", "zipcode", "zipcodes", "zip code", "zip codes", "postal")
+    rank_terms = (
+        "top",
+        "most",
+        "highest",
+        "rank",
+        "ranked",
+        "which",
+        "show",
+        "list",
+        "break down",
+        "by zip",
+    )
+    refi_terms = ("in-the-money", "in the money", "itm", "refi", "refinance")
+    return (
+        any(term in q for term in zip_terms)
+        and any(term in q for term in rank_terms)
+        and any(term in q for term in refi_terms)
+        and any(term in q for term in ("borrower", "lead", "candidate"))
+    )
+
+
 def _canonical_genie_answer(
     *,
     question: str,
@@ -2020,6 +2159,65 @@ def _canonical_genie_answer(
     """
     if sql_client is None:
         return None
+    if _canonical_itm_zip_scope(question):
+        try:
+            rows = sql_client.execute(_CANONICAL_ITM_TOP_ZIPS_SQL)
+        except DatabricksSqlError as exc:
+            log.warning("canonical_genie_itm_zips_failed: %s", exc, exc_info=True)
+            return None
+        rows = _redact_genie_rows(rows) or []
+        trusted_assets = [qualify("gold", "borrower_360", catalog="mip")]
+        question_hash = _genie_question_hash(question)
+        proof = _build_genie_proof(
+            sql_query=_CANONICAL_ITM_TOP_ZIPS_SQL,
+            trusted_assets=trusted_assets,
+            rows=rows,
+            question=question,
+            conversation_id=result.conversation_id,
+            message_id=result.message_id,
+            elapsed_ms=result.elapsed_ms,
+        )
+        visualization = _plan_genie_visualization(question, rows)
+        actions = _suggest_genie_actions(
+            question=question,
+            rows=rows,
+            trusted_assets=trusted_assets,
+            visualization=visualization,
+            conversation_id=result.conversation_id,
+            message_id=result.message_id,
+            question_hash=question_hash,
+            sql_query=_CANONICAL_ITM_TOP_ZIPS_SQL,
+        )
+        if rows:
+            top = rows[0]
+            answer = (
+                "I ranked ZIP codes by unique borrowers currently in-the-money "
+                "for refinance from mip.gold.borrower_360. "
+                f"The current leader is ZIP {top.get('zip')} ({top.get('state')}) "
+                f"with {int(top.get('in_the_money_borrowers') or 0):,} borrowers; "
+                "the cohort action below carries these ZIP filters into Lead Queue."
+            )
+        else:
+            answer = (
+                "The trusted borrower table returned no in-the-money ZIP rows for "
+                "the current Module 0 footprint."
+            )
+        return GenieMessageResponse(
+            conversation_id=result.conversation_id,
+            message_id=result.message_id,
+            elapsed_ms=result.elapsed_ms,
+            question_hash=question_hash,
+            question=question,
+            answer=answer,
+            source="genie",
+            trusted_assets=trusted_assets,
+            sql_query=_CANONICAL_ITM_TOP_ZIPS_SQL,
+            row_count=len(rows),
+            proof=proof,
+            visualization=visualization,
+            actions=actions,
+            table_rows=rows,
+        )
     if _canonical_msa_score_scope(question):
         try:
             rows = sql_client.execute(_CANONICAL_MSA_SCORE_SQL)
@@ -2047,6 +2245,7 @@ def _canonical_genie_answer(
             conversation_id=result.conversation_id,
             message_id=result.message_id,
             question_hash=question_hash,
+            sql_query=_CANONICAL_MSA_SCORE_SQL,
         )
         if rows:
             answer = (
@@ -2123,6 +2322,7 @@ def _canonical_genie_answer(
             conversation_id=result.conversation_id,
             message_id=result.message_id,
             question_hash=question_hash,
+            sql_query=_CANONICAL_ITM_COUNT_BY_CITY_SQL,
         )
         answer = (
             f"There are {count_int:,} borrowers currently in-the-money in {city_scope} "
@@ -2185,6 +2385,7 @@ def _canonical_genie_answer(
         conversation_id=result.conversation_id,
         message_id=result.message_id,
         question_hash=question_hash,
+        sql_query=sql_query,
     )
     geo_text = f" in {state_scope[0]} ({state_scope[1]})" if state_scope else ""
     answer = (
@@ -2216,6 +2417,7 @@ def _canonical_genie_answer(
 # in ``backend/services/pii_redaction`` (keep in sync). These keys are PII
 # per the governance contract and must never ship to the frontend.
 _GENIE_PII_KEYS: frozenset[str] = frozenset({
+    *_FORBIDDEN_OUTPUT_KEYS,
     "owner_name",
     "owner_names",
     "owner_full_name",
@@ -2269,6 +2471,12 @@ _PII_TEXT_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE),
     re.compile(r"\b(?:\+?1[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?)\d{3}[-.\s]?\d{4}\b"),
     re.compile(r"\b\d{3}-\d{2}-\d{4}\b"),
+    re.compile(
+        r"\b\d{1,6}\s+[A-Za-z0-9 .'-]{2,40}\s+"
+        r"(?:st|street|ave|avenue|rd|road|dr|drive|ln|lane|ct|court|"
+        r"blvd|boulevard|way|pl|place|pkwy|parkway)\b",
+        re.IGNORECASE,
+    ),
 )
 
 
@@ -2461,15 +2669,43 @@ def _freshness_from_rows(
 
 def _known_data_gaps(question: str, assets: list[str]) -> list[str]:
     material = " ".join([question, *assets]).lower()
+    return _pending_feed_gaps_from_material(material)
+
+
+def _pending_feed_gaps_from_material(material: str) -> list[str]:
+    material = material.lower()
     gaps: list[str] = []
-    if any(token in material for token in ("permit", "building permit")):
+    if any(token in material for token in ("permit", "building permit", "has_permit")):
         gaps.append(
             "Cotality Building Permits feed is pending; permit flags are blocked false today."
         )
-    if any(token in material for token in ("listing", "listed", "mls")):
+    if any(token in material for token in ("listing", "listed", "mls", "listed_for_sale")):
         gaps.append(
             "Cotality MLS/listing feed is pending; listed-for-sale flags are blocked false today."
         )
+    return gaps
+
+
+def _pending_feed_gaps_from_rows(rows: list[dict[str, Any]] | None) -> list[str]:
+    keys = " ".join(_row_columns(rows))
+    return _pending_feed_gaps_from_material(keys)
+
+
+def _known_data_gaps_for_result(
+    *,
+    question: str,
+    assets: list[str],
+    sql_query: str | None,
+    rows: list[dict[str, Any]] | None,
+) -> list[str]:
+    gaps: list[str] = []
+    for gap in [
+        *_known_data_gaps(question, assets),
+        *_pending_feed_gaps_from_material(sql_query or ""),
+        *_pending_feed_gaps_from_rows(rows),
+    ]:
+        if gap not in gaps:
+            gaps.append(gap)
     return gaps
 
 
@@ -2493,12 +2729,26 @@ def _build_genie_proof(
         filters=_extract_filters(sql_query),
         trusted=trusted,
         reasoning_trace=reasoning_trace or [],
-        known_data_gaps=_known_data_gaps(question, trusted_assets),
+        known_data_gaps=_known_data_gaps_for_result(
+            question=question,
+            assets=trusted_assets,
+            sql_query=sql_query,
+            rows=rows,
+        ),
         conversation_id=conversation_id,
         message_id=message_id,
         elapsed_ms=elapsed_ms,
         generated_at=datetime.now(UTC).isoformat(),
     )
+
+
+def _sql_hash(sql_query: str | None) -> str | None:
+    if not sql_query:
+        return None
+    normalized = re.sub(r"\s+", " ", sql_query.strip())
+    if not normalized:
+        return None
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
 
 
 def _label_column(rows: list[dict[str, Any]] | None, question: str) -> str | None:
@@ -2648,6 +2898,97 @@ def _borrower_ids_from_rows(rows: list[dict[str, Any]] | None) -> list[str]:
     return ids[:50]
 
 
+def _row_values(
+    rows: list[dict[str, Any]] | None,
+    *columns: str,
+    digits: int | None = None,
+    upper: bool = False,
+) -> list[str]:
+    values: list[str] = []
+    for row in rows or []:
+        for column in columns:
+            raw = row.get(column)
+            if raw is None:
+                continue
+            value = str(raw).strip()
+            if upper:
+                value = value.upper()
+            if digits is not None:
+                match = re.fullmatch(rf"\d{{{digits}}}", value)
+                if not match:
+                    continue
+            elif upper and not re.fullmatch(r"[A-Z]{2}", value):
+                continue
+            if value not in values:
+                values.append(value)
+    return values
+
+
+def _segment_codes_from_question(question: str) -> list[str]:
+    q = question.lower()
+    codes: list[str] = []
+    if re.search(r"\b(in[-\s]?the[-\s]?money|itm|refi|refinance)\b", q):
+        codes.append("itm")
+    if "home equity" in q or "heloc" in q or "cash-out" in q or "cash out" in q:
+        codes.append("equity")
+    if "investor" in q or "multi-property" in q or "multi property" in q:
+        codes.append("investor")
+    if "retention" in q or "competitor lien" in q or "current customer" in q:
+        codes.append("retention")
+    if "listed" in q or "for sale" in q or "purchase" in q:
+        codes.append("listed")
+    if "permit" in q:
+        codes.append("permit")
+    return list(dict.fromkeys(codes))
+
+
+_MAX_COHORT_ROUTE_ZIPS = 12
+_MAX_COHORT_ROUTE_STATES = 10
+_MAX_COHORT_ROUTE_BORROWERS = 10
+
+
+def _route_from_answer_rows(
+    *,
+    question: str,
+    rows: list[dict[str, Any]] | None,
+    borrower_ids: list[str],
+) -> tuple[str, dict[str, Any]]:
+    params: dict[str, str] = {}
+    filter_criteria: dict[str, Any] = {}
+    zips = _row_values(rows, "zip", "zip_code", "zipcode", "postal_code", digits=5)
+    states = _row_values(rows, "state", "state_code", upper=True)
+    segment_codes = _segment_codes_from_question(question)
+
+    if borrower_ids:
+        route_borrower_ids = borrower_ids[:_MAX_COHORT_ROUTE_BORROWERS]
+        filter_criteria["borrower_ids"] = route_borrower_ids
+        filter_criteria["route_limit"] = _MAX_COHORT_ROUTE_BORROWERS
+        params["borrower_ids"] = ",".join(route_borrower_ids)
+    elif zips:
+        route_zips = zips[:_MAX_COHORT_ROUTE_ZIPS]
+        params["zips"] = ",".join(route_zips)
+        filter_criteria["zips"] = route_zips
+        filter_criteria["route_limit"] = _MAX_COHORT_ROUTE_ZIPS
+    elif states:
+        route_states = states[:_MAX_COHORT_ROUTE_STATES]
+        params["states"] = ",".join(route_states)
+        filter_criteria["states"] = route_states
+        filter_criteria["route_limit"] = _MAX_COHORT_ROUTE_STATES
+
+    if segment_codes:
+        if len(segment_codes) == 1:
+            params["segment"] = segment_codes[0]
+        else:
+            params["segment_codes"] = ",".join(segment_codes)
+            params["segment_mode"] = "all"
+        filter_criteria["segment_codes"] = segment_codes
+        filter_criteria["segment_mode"] = "all" if len(segment_codes) > 1 else "any"
+
+    if params:
+        return f"/lead-queue?{urlencode(params)}", filter_criteria
+    return "/lead-queue", filter_criteria
+
+
 def _suggest_genie_actions(
     *,
     question: str,
@@ -2657,6 +2998,7 @@ def _suggest_genie_actions(
     conversation_id: str | None,
     message_id: str | None,
     question_hash: str | None,
+    sql_query: str | None,
 ) -> list[GenieActionSuggestion]:
     actions: list[GenieActionSuggestion] = []
     borrower_ids = _borrower_ids_from_rows(rows)
@@ -2668,6 +3010,16 @@ def _suggest_genie_actions(
         "visualization_kind": visualization.kind if visualization else None,
         "row_count": row_count,
     }
+    sql_digest = _sql_hash(sql_query)
+    if sql_digest:
+        base_criteria["sql_hash"] = sql_digest
+    lead_queue_route, result_filters = _route_from_answer_rows(
+        question=question,
+        rows=rows,
+        borrower_ids=borrower_ids,
+    )
+    if result_filters:
+        base_criteria["result_filters"] = result_filters
     if borrower_ids:
         criteria = dict(base_criteria)
         actions.append(
@@ -2701,7 +3053,7 @@ def _suggest_genie_actions(
                 label="Open this cohort in Lead Queue",
                 action_type="open_cohort",
                 description="Navigate into the lead queue with this Genie result audited.",
-                route="/lead-queue",
+                route=lead_queue_route,
                 borrower_ids=borrower_ids,
                 criteria=criteria,
             )
@@ -2713,14 +3065,14 @@ def _suggest_genie_actions(
                 label="Create draft campaign",
                 action_type="create_draft_campaign",
                 description="Create a Lakebase draft campaign from this governed Genie result.",
-                route="/lead-queue",
+                route=lead_queue_route,
                 borrower_ids=borrower_ids,
                 criteria=criteria,
             )
         )
-    if "offer" in q or "strategy" in q or "10,000" in q:
+    if borrower_ids and ("offer" in q or "strategy" in q or "10,000" in q):
         criteria = dict(base_criteria)
-        route = f"/offer-orchestrator/{borrower_ids[0]}" if borrower_ids else "/offer-orchestrator"
+        route = f"/offer-orchestrator/{borrower_ids[0]}"
         actions.append(
             GenieActionSuggestion(
                 id="compare-offers",
@@ -2736,7 +3088,7 @@ def _suggest_genie_actions(
     actions.append(
         GenieActionSuggestion(
             id="export-insight",
-            label="Export demo-ready insight",
+            label="Record demo-ready insight",
             action_type="export_insight",
             description="Record an audited insight export for this Genie answer.",
             borrower_ids=borrower_ids,
@@ -2806,6 +3158,7 @@ def _normalise_sql_ref(ref: str) -> str:
 
 
 _GENIE_PII_SQL_COLUMNS: frozenset[str] = frozenset({
+    *_FORBIDDEN_OUTPUT_KEYS,
     "clip",
     "owner_link_id",
     "owner_name",

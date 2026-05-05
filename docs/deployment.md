@@ -20,16 +20,27 @@ FastAPI serves `frontend/dist` automatically if present.
 
 ## Databricks App
 
-1. Fill bundle variables.
-2. Build frontend.
-3. Validate bundle.
-4. Deploy app.
+1. Fill `.env.local` with workspace and warehouse values.
+2. Run the deployment script. It builds the frontend, provisions Genie if
+   needed, validates/deploys the bundle through the env-aware wrapper,
+   promotes the uploaded source to the running Databricks App, and runs
+   the refresh/smoke steps.
 
 ```bash
-npm --prefix frontend run build
-databricks bundle validate -t dev
-databricks bundle deploy -t dev
+./scripts/deploy.sh
 ```
+
+Do not run bare `databricks bundle deploy -t dev` or project-mode
+`databricks apps deploy` as the shipping path. Those commands bypass
+`.env.local` to `BUNDLE_VAR_*` mapping and can try to update
+`databricks_app.mip_app` with placeholder bindings such as
+`00000000PLACEHOLDER`, which Databricks reports as an opaque
+permission error.
+
+For a narrow resource-only recovery, `make bundle-validate` and
+`make bundle-deploy` are safe because they use `tools/databricks/bundle_env.py`.
+After a resource-only deploy, promote the uploaded source with
+`databricks apps deploy mip-app --mode SNAPSHOT`.
 
 ## Resources
 

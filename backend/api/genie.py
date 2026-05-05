@@ -376,22 +376,27 @@ def _reviewed_audit_metadata(action: str, payload: dict[str, Any]) -> str:
 
 
 def _criteria_summary(criteria: dict[str, Any]) -> tuple[str, list[str], list[str], str | None]:
-    safe_keys = sorted(
-        str(k)
-        for k in criteria
-        if str(k) in {"source", "source_assets", "visualization_kind", "row_count"}
-    )
+    # The confirmation token must bind the full reviewed action criteria,
+    # not just a few display keys. Otherwise a caller could keep a valid
+    # token while changing `result_filters` and turning a confirmed cohort
+    # into a different one.
+    source_assets = _validated_source_assets(criteria)
+    criteria_keys = sorted(str(k) for k in criteria)
+    canonical_payload = {
+        str(k): criteria[k]
+        for k in sorted(criteria, key=lambda value: str(value))
+    }
     canonical = json.dumps(
-        {k: criteria.get(k) for k in safe_keys},
+        canonical_payload,
         sort_keys=True,
         default=str,
+        separators=(",", ":"),
     )
     criteria_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
-    source_assets = _validated_source_assets(criteria)
     visualization_kind = criteria.get("visualization_kind")
     return (
         criteria_hash,
-        safe_keys,
+        criteria_keys,
         source_assets,
         str(visualization_kind) if visualization_kind else None,
     )
@@ -681,7 +686,7 @@ def _validate_action_confirmation(payload: GenieActionRequest, *, actor: str) ->
 def _audit_payload(payload: GenieActionRequest, *, saved_count: int = 0, campaign_id: str | None = None) -> dict[str, Any]:
     criteria_hash, criteria_keys, source_assets, visualization_kind = _criteria_summary(payload.criteria)
     borrower_ids = _borrower_ids(payload.borrower_ids)
-    return {
+    out: dict[str, Any] = {
         "action_type": payload.action_type,
         "conversation_id": payload.conversation_id,
         "message_id": payload.message_id,
@@ -696,20 +701,38 @@ def _audit_payload(payload: GenieActionRequest, *, saved_count: int = 0, campaig
         "visualization_kind": visualization_kind,
         "route": payload.route,
     }
+    result_filters = payload.criteria.get("result_filters")
+    if isinstance(result_filters, dict) and result_filters:
+        out["result_filters"] = result_filters
+    sql_hash = payload.criteria.get("sql_hash")
+    if sql_hash:
+        out["sql_hash"] = str(sql_hash)
+    return out
 
 
 def _campaign_criteria(payload: GenieActionRequest) -> dict[str, Any]:
     borrower_ids = _borrower_ids(payload.borrower_ids)
     criteria_hash, criteria_keys, source_assets, visualization_kind = _criteria_summary(payload.criteria)
-    return {
+    out: dict[str, Any] = {
         "source": "genie",
         "borrower_ids": borrower_ids,
         "criteria_hash": criteria_hash,
         "criteria_keys": criteria_keys,
         "source_assets": source_assets,
         "visualization_kind": visualization_kind,
+        "conversation_id": payload.conversation_id,
+        "message_id": payload.message_id,
         "question_hash": payload.question_hash,
+        "row_count": int(payload.criteria.get("row_count") or len(borrower_ids) or 0),
+        "route": payload.route,
     }
+    result_filters = payload.criteria.get("result_filters")
+    if isinstance(result_filters, dict) and result_filters:
+        out["result_filters"] = result_filters
+    sql_hash = payload.criteria.get("sql_hash")
+    if sql_hash:
+        out["sql_hash"] = str(sql_hash)
+    return out
 
 
 def _trusted_assets() -> list[str]:

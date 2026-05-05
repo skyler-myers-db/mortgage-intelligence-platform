@@ -162,9 +162,14 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         "reason",
         # Leads list
         "rendered_borrower_ids",
+        "borrower_ids",
         "portfolio_id",
         "segment",
         "segment_mode",
+        "state",
+        "zip",
+        "states",
+        "zips",
         "limit",
         # Genie control-layer actions
         "action_type",
@@ -179,6 +184,8 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         "source_assets",
         "visualization_kind",
         "route",
+        "result_filters",
+        "sql_hash",
         "requested_state",
         "footprint_states",
         # Offers

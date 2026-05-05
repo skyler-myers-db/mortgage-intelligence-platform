@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Query, Request, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response
 
 from backend.schemas.lead import LeadSummary
 from backend.services.audit_store import AuditStore, get_audit_store, resolve_actor
@@ -53,6 +53,51 @@ def _safe_audit_write(store: AuditStore, **kwargs: object) -> None:
             exc_type=type(exc).__name__,
             outcome="error",
         )
+
+
+def _parse_csv_filter(
+    raw: str | None,
+    *,
+    width: int,
+    label: str,
+    numeric: bool = False,
+) -> list[str] | None:
+    if raw is None:
+        return None
+    values = [part.strip().upper() for part in raw.split(",") if part.strip()]
+    if not values:
+        return None
+    seen: set[str] = set()
+    out: list[str] = []
+    for value in values:
+        valid_chars = value.isdigit() if numeric else value.isalpha()
+        if len(value) != width or not valid_chars:
+            raise HTTPException(
+                status_code=422,
+                detail=f"{label} must be comma-separated {width}-character values",
+            )
+        if value not in seen:
+            seen.add(value)
+            out.append(value)
+    return out
+
+
+def _parse_borrower_ids(raw: str | None) -> list[str] | None:
+    if raw is None:
+        return None
+    out: list[str] = []
+    for value in raw.split(","):
+        borrower_id = value.strip()
+        if not borrower_id:
+            continue
+        if not borrower_id.startswith("B-") or len(borrower_id) > 64:
+            raise HTTPException(
+                status_code=422,
+                detail="borrower_ids must be comma-separated synthetic B-* ids",
+            )
+        if borrower_id not in out:
+            out.append(borrower_id)
+    return out or None
 
 
 @router.get("/leads", response_model=list[LeadSummary])
@@ -109,6 +154,39 @@ def list_leads(
             ),
         ),
     ] = None,
+    states: Annotated[
+        str | None,
+        Query(
+            alias="states",
+            max_length=128,
+            description=(
+                "Optional comma-separated USPS states for Genie-generated "
+                "cohort actions."
+            ),
+        ),
+    ] = None,
+    zips: Annotated[
+        str | None,
+        Query(
+            alias="zips",
+            max_length=512,
+            description=(
+                "Optional comma-separated 5-digit ZIP list for Genie-generated "
+                "cohort actions."
+            ),
+        ),
+    ] = None,
+    borrower_ids: Annotated[
+        str | None,
+        Query(
+            alias="borrower_ids",
+            max_length=768,
+            description=(
+                "Optional comma-separated synthetic borrower IDs for Genie "
+                "borrower-list cohort actions."
+            ),
+        ),
+    ] = None,
     limit: Annotated[
         int,
         Query(
@@ -134,6 +212,9 @@ def list_leads(
         parsed_segments = [s.strip() for s in segment_codes.split(",") if s.strip()]
         if not parsed_segments or len(parsed_segments) >= 6:
             parsed_segments = None
+    parsed_states = _parse_csv_filter(states, width=2, label="states")
+    parsed_zips = _parse_csv_filter(zips, width=5, label="zips", numeric=True)
+    parsed_borrower_ids = _parse_borrower_ids(borrower_ids)
 
     leads = repo.list(
         segment=segment,
@@ -141,6 +222,9 @@ def list_leads(
         limit=limit,
         state=state,
         zip_code=zip_code,
+        state_codes=parsed_states,
+        zip_codes=parsed_zips,
+        borrower_ids=parsed_borrower_ids,
         segment_codes=parsed_segments,
         segment_mode=segment_mode,
     )
@@ -160,6 +244,16 @@ def list_leads(
     if parsed_segments:
         audit_payload["segment_codes"] = parsed_segments
         audit_payload["segment_mode"] = segment_mode
+    if state:
+        audit_payload["state"] = state.upper()
+    if zip_code:
+        audit_payload["zip"] = zip_code
+    if parsed_states:
+        audit_payload["states"] = parsed_states
+    if parsed_zips:
+        audit_payload["zips"] = parsed_zips
+    if parsed_borrower_ids:
+        audit_payload["borrower_ids"] = parsed_borrower_ids
 
     background.add_task(
         _safe_audit_write,

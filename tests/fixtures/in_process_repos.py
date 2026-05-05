@@ -74,6 +74,9 @@ class InProcessMockLeadRepository:
         limit: int | None = None,
         state: str | None = None,
         zip_code: str | None = None,
+        state_codes: list[str] | None = None,
+        zip_codes: list[str] | None = None,
+        borrower_ids: list[str] | None = None,
         segment_codes: list[str] | None = None,
         segment_mode: str = "any",
     ) -> list[LeadSummary]:
@@ -98,6 +101,15 @@ class InProcessMockLeadRepository:
             leads = [lead for lead in leads if lead.state == state.upper()[:2]]
         if zip_code:
             leads = [lead for lead in leads if lead.zip == zip_code]
+        if state_codes:
+            allowed_states = {code.upper()[:2] for code in state_codes if code}
+            leads = [lead for lead in leads if lead.state in allowed_states]
+        if zip_codes:
+            allowed_zips = {code for code in zip_codes if code}
+            leads = [lead for lead in leads if lead.zip in allowed_zips]
+        if borrower_ids:
+            allowed_ids = {borrower_id for borrower_id in borrower_ids if borrower_id}
+            leads = [lead for lead in leads if lead.borrower_id in allowed_ids]
         if limit is not None and limit > 0:
             return leads[:limit]
         return leads

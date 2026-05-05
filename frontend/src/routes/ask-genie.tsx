@@ -11,6 +11,7 @@ import { GenieAnswer } from '../components/mortgage/GenieAnswer';
 import { GenieProgress } from '../components/mortgage/GenieProgress';
 import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 import { DRAWER_SOURCES } from '../lib/drawerSources';
+import { isGenieFollowUpQuestion } from '../lib/genieSession';
 
 /**
  * Ask Genie — deep-dive view with trusted-asset list and sample questions.
@@ -80,6 +81,7 @@ export default function AskGenie() {
   // with `submitToken` lets the same question be re-asked without
   // the hook no-op'ing on unchanged deps.
   const [submittedQuestion, setSubmittedQuestion] = useState<string | null>(null);
+  const [submittedConversationId, setSubmittedConversationId] = useState<string | null>(null);
   const [submitToken, setSubmitToken] = useState<number>(0);
 
   const {
@@ -88,8 +90,8 @@ export default function AskGenie() {
     error,
     manualRetry,
   } = useWarmingUpRetry<GenieAnswerShape>(
-    (signal) => api.genie(submittedQuestion ?? '', conversationId, signal) as Promise<GenieAnswerShape>,
-    [submittedQuestion, submitToken],
+    (signal) => api.genie(submittedQuestion ?? '', submittedConversationId, signal) as Promise<GenieAnswerShape>,
+    [submittedQuestion, submittedConversationId, submitToken],
     { enabled: submittedQuestion !== null && submittedQuestion.length > 0 },
   );
 
@@ -101,14 +103,26 @@ export default function AskGenie() {
     : null;
 
   function ask(q: string) {
+    const trimmed = q.trim();
+    const nextConversationId = isGenieFollowUpQuestion(trimmed) ? conversationId : null;
     setQuestion(q);
-    setSubmittedQuestion(q);
+    setConversationId(nextConversationId);
+    setSubmittedConversationId(nextConversationId);
+    setSubmittedQuestion(trimmed);
     setSubmitToken((n) => n + 1);
     setActionStatus(null);
+    if (!nextConversationId) {
+      try {
+        window.localStorage.removeItem('mip.genie.conversationId');
+      } catch {
+        // ignore
+      }
+    }
   }
 
   function newConversation() {
     setConversationId(null);
+    setSubmittedConversationId(null);
     setSubmittedQuestion(null);
     setActionStatus('Started a new Genie thread.');
     try {
@@ -137,6 +151,10 @@ export default function AskGenie() {
         message_id: payload?.message_id ?? null,
         question_hash: payload?.question_hash ?? null,
       });
+      if (!result.ok) {
+        setActionStatus(`Action failed: ${result.message}`);
+        return;
+      }
       setActionStatus(
         result.audit_event_id
           ? `${result.message} Audit event ${result.audit_event_id}.`
@@ -162,7 +180,11 @@ export default function AskGenie() {
   //                per user feedback: "we don't want this app to be
   //                gimmicky at all.")
   const isDegraded = sourceLabel === 'degraded';
-  const isBlocked = sourceLabel === 'policy_blocked' || sourceLabel === 'refused' || sourceLabel === 'data_gap';
+  const isBlocked =
+    sourceLabel === 'policy_blocked' ||
+    sourceLabel === 'refused' ||
+    sourceLabel === 'data_gap' ||
+    sourceLabel === 'out_of_footprint';
   const sourceChip = isDegraded
     ? 'Genie reconnecting'
     : isBlocked
@@ -170,6 +192,8 @@ export default function AskGenie() {
         ? 'Prompt refused'
         : sourceLabel === 'data_gap'
           ? 'Source pending'
+          : sourceLabel === 'out_of_footprint'
+            ? 'Outside footprint'
           : 'Policy blocked'
       : payload?.trusted_assets?.[0] || sourceLabel || '';
   const sourceChipTitle = isDegraded

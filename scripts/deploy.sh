@@ -10,16 +10,17 @@
 #   2.  Validate the bundle under `-t dev`, with .env.local mapped to
 #       BUNDLE_VAR_* via tools/databricks/bundle_env.py.
 #   3.  Deploy the bundle.
-#   4.  Seed + refresh silver (FRED MORTGAGE30US + Cotality share).
-#   5.  Migrate Lakebase (idempotent schema.sql + seed_campaigns.sql).
-#   6.  Refresh gold (CTAS chain) — the last task in the chain is
+#   4.  Promote the uploaded bundle source to the running Databricks App.
+#   5.  Seed + refresh silver (FRED MORTGAGE30US + Cotality share).
+#   6.  Migrate Lakebase (idempotent schema.sql + seed_campaigns.sql).
+#   7.  Refresh gold (CTAS chain) — the last task in the chain is
 #       `refresh_semantics_views`, which lands the three mip.semantics.*
 #       metric views Genie depends on.
-#   7.  Sync lifecycle state + funnel snapshot so the delta_vs_prior_*
+#   8.  Sync lifecycle state + funnel snapshot so the delta_vs_prior_*
 #       view columns resolve on the first dashboard render.
-#   8.  Provision / rebind the Genie space via
+#   9.  Provision / rebind the Genie space via
 #       tools/databricks/provision_genie_space.py.
-#   9.  Smoke-check the live API via scripts/smoke_live.sh (optional).
+#   10. Smoke-check the live API via scripts/smoke_live.sh (optional).
 #
 # Why one script (vs a bundle job that invokes provision_genie_space.py):
 # the Genie provisioner reads genie/mortgage_lead_intelligence_space.yml
@@ -36,8 +37,10 @@
 #
 # Environment:
 #   .env.local must set at minimum DATABRICKS_HOST, DATABRICKS_WAREHOUSE_ID.
-#   (GENIE_SPACE_ID is written by step 8 on first run; re-running deploy
-#   afterwards picks it up and feeds it to the bundle via BUNDLE_VAR_*.)
+#   (If GENIE_SPACE_ID is blank on first run, this script provisions the
+#   Genie space before bundle deploy so databricks_app.mip_app never binds
+#   to the placeholder sentinel. The later Genie step re-runs after gold
+#   refresh to bind trusted assets.)
 #
 # Fail-loud contract:
 #   * `set -euo pipefail` — any step that exits non-zero stops the script.
@@ -139,6 +142,31 @@ else
   PYTHON="python3"
 fi
 
+is_real_bundle_value() {
+  local value="${1:-}"
+  [[ -n "$value" ]] || return 1
+  [[ "$value" != "00000000PLACEHOLDER" ]] || return 1
+  [[ ! ( "$value" == \<* && "$value" == *\> ) ]] || return 1
+  return 0
+}
+
+dotenv_value() {
+  local key="$1"
+  "$PYTHON" - "$key" <<'PY'
+import sys
+from pathlib import Path
+
+from dotenv import dotenv_values
+
+key = sys.argv[1]
+path = Path(".env.local")
+if not path.exists():
+    print("")
+else:
+    print((dotenv_values(path).get(key) or "").strip())
+PY
+}
+
 # -----------------------------------------------------------------------------
 # Step 0: preflight
 # -----------------------------------------------------------------------------
@@ -168,6 +196,35 @@ if [[ "$DRY_RUN" -eq 0 && "$NO_CONFIRM" -eq 0 ]]; then
     echo "aborted."
     exit 1
   fi
+fi
+
+# -----------------------------------------------------------------------------
+# Step 0a: ensure the bundle has a real Genie space id before app resource apply
+# -----------------------------------------------------------------------------
+# The app resource binding validates the Genie space during
+# `databricks bundle deploy`. If GENIE_SPACE_ID is blank, the bundle default
+# `00000000PLACEHOLDER` can reach Terraform and Databricks returns the opaque
+# error "You need Can View permission to perform this action." Provisioning the
+# space here makes the first real app update deterministic. We re-run the same
+# provisioner after gold refresh below so the space picks up newly-materialized
+# trusted assets.
+GENIE_SPACE_ID_FROM_ENV="${GENIE_SPACE_ID:-}"
+if ! is_real_bundle_value "$GENIE_SPACE_ID_FROM_ENV"; then
+  GENIE_SPACE_ID_FROM_ENV="$(dotenv_value GENIE_SPACE_ID)"
+fi
+
+if ! is_real_bundle_value "$GENIE_SPACE_ID_FROM_ENV"; then
+  step "provision Genie space before bundle deploy (first-run app binding)"
+  run "$PYTHON" tools/databricks/provision_genie_space.py --no-smoke-test
+  if [[ "$DRY_RUN" -eq 0 ]]; then
+    if [[ ! -s genie/space_id.txt ]]; then
+      echo "${RED}[deploy] Genie provisioner did not write genie/space_id.txt.${RST}" >&2
+      exit 2
+    fi
+    export GENIE_SPACE_ID="$(< genie/space_id.txt)"
+  fi
+else
+  export GENIE_SPACE_ID="$GENIE_SPACE_ID_FROM_ENV"
 fi
 
 # -----------------------------------------------------------------------------
@@ -203,7 +260,13 @@ step "deploy bundle (app + warehouse + jobs + pipelines + Lakebase)"
 run "$PYTHON" tools/databricks/bundle_env.py deploy -t "$TARGET"
 
 # -----------------------------------------------------------------------------
-# Step 4: silver refresh (FRED + Cotality share)
+# Step 4: promote uploaded source to the running Databricks App
+# -----------------------------------------------------------------------------
+step "deploy Databricks App snapshot from uploaded bundle source"
+run databricks apps deploy "${MIP_APP_NAME:-mip-app}" --mode SNAPSHOT --timeout 20m
+
+# -----------------------------------------------------------------------------
+# Step 5: silver refresh (FRED + Cotality share)
 # -----------------------------------------------------------------------------
 if [[ "$SKIP_SILVER" -eq 1 ]]; then
   step "silver refresh — SKIPPED (--skip-silver)"
@@ -216,31 +279,31 @@ else
 fi
 
 # -----------------------------------------------------------------------------
-# Step 5: Lakebase migration
+# Step 6: Lakebase migration
 # -----------------------------------------------------------------------------
 step "migrate Lakebase — schema.sql + seed_campaigns.sql (idempotent)"
 run databricks bundle run mip_lakebase_migrate -t "$TARGET"
 
 # -----------------------------------------------------------------------------
-# Step 6: gold refresh (CTAS chain, ends with refresh_semantics_views)
+# Step 7: gold refresh (CTAS chain, ends with refresh_semantics_views)
 # -----------------------------------------------------------------------------
 step "refresh gold — borrower_360, lead_scores, *_population, dossier, + mip.semantics.*"
 run databricks bundle run mip_refresh_scores -t "$TARGET"
 
 # -----------------------------------------------------------------------------
-# Step 7: lifecycle sync + funnel snapshot (approval / outreach rates)
+# Step 8: lifecycle sync + funnel snapshot (approval / outreach rates)
 # -----------------------------------------------------------------------------
 step "sync lifecycle state from Lakebase + record daily funnel snapshot"
 run databricks bundle run mip_sync_lifecycle_state -t "$TARGET"
 
 # -----------------------------------------------------------------------------
-# Step 8: provision the Genie space
+# Step 9: rebind the Genie space after gold/semantic assets exist
 # -----------------------------------------------------------------------------
-step "provision Genie space — bind trusted assets from genie/mortgage_lead_intelligence_space.yml"
+step "rebind Genie space — bind trusted assets from genie/mortgage_lead_intelligence_space.yml"
 run "$PYTHON" tools/databricks/provision_genie_space.py --no-smoke-test
 
 # -----------------------------------------------------------------------------
-# Step 9 (optional): live smoke test
+# Step 10 (optional): live smoke test
 # -----------------------------------------------------------------------------
 if [[ "$SKIP_SMOKE" -eq 1 ]]; then
   step "live smoke — SKIPPED (--skip-smoke)"
@@ -262,5 +325,5 @@ fi
 echo
 echo "${GRN}[deploy] complete.${RST}"
 echo "${DIM}  App URL:     \$MIP_APP_URL (or check the Databricks workspace → Apps).${RST}"
-echo "${DIM}  Genie space: genie/space_id.txt (written by step 8).${RST}"
+echo "${DIM}  Genie space: genie/space_id.txt (provisioned before bundle deploy, rebound after gold refresh).${RST}"
 echo "${DIM}  Re-run any time — every step is idempotent.${RST}"
