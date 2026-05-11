@@ -35,6 +35,18 @@ import { segmentColor, segmentName } from '../../lib/segmentMetadata';
 /** Concurrency cap for the bulk-approve client-side loop. */
 const BULK_APPROVE_CONCURRENCY = 3;
 
+export interface LeadExportContext {
+  generatedAt?: string;
+  filters?: string;
+  refreshedAt?: string | null;
+  rulesVersion?: string | null;
+}
+
+interface LeadTableProps {
+  leads: LeadSummary[];
+  exportContext?: LeadExportContext;
+}
+
 /**
  * Return true when `el` is an editable element that the window-level
  * hotkey handler must skip over. Exported for unit tests — the
@@ -63,14 +75,93 @@ function chunk<T>(items: T[], size: number): T[][] {
   return out;
 }
 
+function csvEscape(raw: string): string {
+  const v = /^[=+\-@]/.test(raw) ? `'${raw}` : raw;
+  return /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
+}
+
+function csvValue(raw: unknown): string {
+  if (raw === null || raw === undefined) return '';
+  if (typeof raw === 'boolean') return raw ? 'true' : 'false';
+  if (typeof raw === 'number') return Number.isFinite(raw) ? String(raw) : '';
+  return String(raw);
+}
+
+export function buildLeadCsv(
+  leads: LeadSummary[],
+  approvals: Record<string, string | undefined> = {},
+  context: LeadExportContext = {},
+): string {
+  const header = [
+    'borrower_id',
+    'property_ref',
+    'city',
+    'state',
+    'zip',
+    'segments',
+    'equity_estimate',
+    'rate_spread_bps',
+    'opportunity_score',
+    'confidence',
+    'recommended_offer',
+    'approval_status',
+    'is_owner_occupied',
+    'is_investor',
+    'is_current_customer',
+    'is_former_customer',
+    'is_competitor_lien',
+    'current_lender_ref',
+    'current_lien_balance',
+    'second_pos_amount',
+    'has_permit',
+    'listed_for_sale',
+    'related_property_count',
+  ];
+  const metadata = [
+    ['generated_at', context.generatedAt ?? new Date().toISOString()],
+    ['filters', context.filters ?? 'none'],
+    ['refreshed_at', context.refreshedAt ?? 'unknown'],
+    ['rules_version', context.rulesVersion ?? 'unknown'],
+  ].map(([key, value]) => `# ${key}=${String(value).replace(/\r?\n/g, ' ')}`);
+  const rows = leads.map((l) =>
+    [
+      l.borrower_id,
+      l.clip ?? '',
+      l.city,
+      l.state,
+      l.zip,
+      l.segment_codes.join('|'),
+      l.equity_estimate,
+      l.rate_spread_bps,
+      l.opportunity_score,
+      l.confidence,
+      l.recommended_offer,
+      approvals[l.borrower_id] ?? l.approval_status ?? 'pending',
+      l.is_owner_occupied,
+      l.is_investor,
+      l.is_current_customer,
+      l.is_former_customer,
+      l.is_competitor_lien,
+      l.current_lender_ref,
+      l.current_lien_balance,
+      l.second_pos_amount,
+      l.has_permit,
+      l.listed_for_sale,
+      l.related_property_count,
+    ]
+      .map((value) => csvEscape(csvValue(value)))
+      .join(','),
+  );
+  return [...metadata, header.join(','), ...rows].join('\n');
+}
+
 function RowPreview({ lead }: { lead: LeadSummary }) {
   const { setLastBorrowerId, saveLead, isLeadSaved } = useApp();
-  // Prefer the real Cotality CLIP projected by the backend (2026-04-22
-  // contract addition). Fall back to a borrower-id derived placeholder
-  // only for rows predating that projection (empty string).
-  const clipValue = lead.clip && lead.clip.length > 0
+  // Prefer the display-safe Cotality property ref projected by the
+  // backend. Raw CLIP is masked server-side for public demo safety.
+  const propertyRef = lead.clip && lead.clip.length > 0
     ? lead.clip
-    : `clip_${lead.borrower_id.toLowerCase().replace('-', '')}`;
+    : 'property_ref_unavailable';
   const saved = isLeadSaved(lead.borrower_id);
   const saveCurrentLead = () => {
     saveLead({
@@ -88,7 +179,7 @@ function RowPreview({ lead }: { lead: LeadSummary }) {
       <div>
         <div className="eyebrow mb-2">Customer 360 preview</div>
         <div className="preview-grid">
-          <Cell k="CLIP"          v={clipValue} mono />
+          <Cell k="Property ref"  v={propertyRef} mono />
           <Cell k="Location"      v={`${lead.city}, ${lead.state} · ${lead.zip}`} />
           <Cell k="Equity"        v={`$${(lead.equity_estimate / 1000).toFixed(0)}k`} mono />
           <Cell k="Rate spread"   v={`+${lead.rate_spread_bps} bps`} mono />
@@ -116,7 +207,7 @@ function RowPreview({ lead }: { lead: LeadSummary }) {
         <div className="eyebrow mb-2">Why now</div>
         <p className="body flush">{lead.why_now}</p>
         <div className="chip-row mt-3">
-          <span className="muted fs-11">Evidence:</span>
+          <span className="muted fs-11">Decision inputs:</span>
           {/*
             Prototype-parity-audit P1-5 (2026-05-04): the row preview
             previously surfaced only two chips — Rate + equity ruleset and
@@ -125,32 +216,26 @@ function RowPreview({ lead }: { lead: LeadSummary }) {
             chips per dossier; the inline lead-queue preview should match
             that posture so an LO scrolling the queue can see what each
             recommendation is grounded in without opening the dossier. We
-            render a fixed core set (CLIP + NBO scoring) and append
-            data-driven chips for whichever signals the row carries
-            (Permit when has_permit, MLS when listed_for_sale, lien-status
-            when current_lien_balance > 0, AVM when equity_estimate > 0).
-            Each chip routes into the existing EvidenceDrawer with the
-            matching DRAWER_SOURCES entry so lineage stays one click away.
+            Render a fixed core set and append data-driven chips for whichever
+            signals the row carries. Each chip routes to a distinct drawer
+            entry; related evidence can share upstream Cotality assets, but the
+            drawer should still describe the specific primitive being cited.
           */}
           <EvidenceChip source={DRAWER_SOURCES.itm}>Rate + equity ruleset</EvidenceChip>
           <EvidenceChip source={DRAWER_SOURCES.leadScore}>Lead score model</EvidenceChip>
           <EvidenceChip source={DRAWER_SOURCES.nbo}>Next-best-offer model</EvidenceChip>
-          <EvidenceChip source={DRAWER_SOURCES.population}>CLIP · Owner Link</EvidenceChip>
+          <EvidenceChip source={DRAWER_SOURCES.ownerGraph}>Property + owner graph</EvidenceChip>
           {lead.equity_estimate > 0 && (
-            <EvidenceChip source={DRAWER_SOURCES.itm}>AVM equity</EvidenceChip>
+            <EvidenceChip source={DRAWER_SOURCES.avm}>AVM equity</EvidenceChip>
           )}
           {(lead.current_lien_balance ?? 0) > 0 && (
-            <EvidenceChip source={DRAWER_SOURCES.population}>Voluntary lien</EvidenceChip>
+            <EvidenceChip source={DRAWER_SOURCES.lien}>Voluntary lien</EvidenceChip>
           )}
           {lead.has_permit === true && (
             <EvidenceChip source={DRAWER_SOURCES.permit}>Recent permit</EvidenceChip>
           )}
           {lead.listed_for_sale === true && (
-            // Re-uses the population drawer until a dedicated MLS source
-            // entry lands; the lineage already references mortgage records,
-            // and routing into a "TBD" drawer would be more confusing than
-            // grouping with the broader public-records lineage.
-            <EvidenceChip source={DRAWER_SOURCES.population}>MLS listing</EvidenceChip>
+            <EvidenceChip source={DRAWER_SOURCES.mls}>MLS listing</EvidenceChip>
           )}
         </div>
       </div>
@@ -172,6 +257,13 @@ function RowPreview({ lead }: { lead: LeadSummary }) {
               onClick={() => setLastBorrowerId(lead.borrower_id)}
             >
               Open Borrower 360
+            </Link>
+            <Link
+              className="btn btn--default btn--sm"
+              to={`/offer-orchestrator/${lead.borrower_id}`}
+              onClick={() => setLastBorrowerId(lead.borrower_id)}
+            >
+              Build offer
             </Link>
             <Button
               variant={saved ? 'ghost' : 'default'}
@@ -198,9 +290,13 @@ function Cell({ k, v, mono }: { k: string; v: string; mono?: boolean }) {
   );
 }
 
-export function LeadTable({ leads }: { leads: LeadSummary[] }) {
+export function LeadTable({ leads, exportContext }: LeadTableProps) {
   const [expanded, setExpanded] = useState<string | null>(leads[0]?.borrower_id ?? null);
   const { approvals, setApproval, setLastBorrowerId } = useApp();
+  const leadsById = useMemo(
+    () => new Map(leads.map((lead) => [lead.borrower_id, lead])),
+    [leads],
+  );
   const [pendingApproval, setPendingApproval] = useState<Record<string, boolean>>({});
   const [approvalError, setApprovalError] = useState<string | null>(null);
   // Bulk-approve state. `selectedIds` is a Set so toggling is O(1); we
@@ -265,7 +361,15 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
       setApprovalError(null);
       setPendingApproval((p) => ({ ...p, [borrowerId]: true }));
       try {
-        const res = await api.approve(borrowerId, {}, signal);
+        const lead = leadsById.get(borrowerId);
+        const res = await api.approve(
+          borrowerId,
+          {
+            evidence_ids: lead?.evidence_ids ?? [],
+            offer_code: lead?.recommended_offer ?? null,
+          },
+          signal,
+        );
         if (res.approved) {
           setApproval(borrowerId, 'approved');
           return 'ok';
@@ -289,7 +393,7 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
         });
       }
     },
-    [setApproval],
+    [leadsById, setApproval],
   );
 
   /**
@@ -311,7 +415,14 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
       setApprovalError(null);
       setPendingApproval((p) => ({ ...p, [borrowerId]: true }));
       try {
-        const res = await api.reject(borrowerId);
+        const lead = leadsById.get(borrowerId);
+        const res = await api.reject(
+          borrowerId,
+          {
+            evidence_ids: lead?.evidence_ids ?? [],
+            offer_code: lead?.recommended_offer ?? null,
+          },
+        );
         if (res.rejected) {
           setApproval(borrowerId, 'rejected');
         } else {
@@ -332,7 +443,7 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
         });
       }
     },
-    [setApproval],
+    [leadsById, setApproval],
   );
 
   /**
@@ -573,41 +684,7 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
    */
   const exportCsv = useCallback(() => {
     if (leads.length === 0) return;
-    const header = [
-      'borrower_id',
-      'clip',
-      'city',
-      'state',
-      'zip',
-      'segments',
-      'equity_estimate',
-      'rate_spread_bps',
-      'opportunity_score',
-      'confidence',
-      'recommended_offer',
-      'approval_status',
-    ];
-    const escape = (v: string): string =>
-      /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
-    const rows = leads.map((l) =>
-      [
-        l.borrower_id,
-        l.clip ?? '',
-        l.city,
-        l.state,
-        l.zip,
-        l.segment_codes.join('|'),
-        String(l.equity_estimate),
-        String(l.rate_spread_bps),
-        String(l.opportunity_score),
-        String(l.confidence),
-        l.recommended_offer,
-        approvals[l.borrower_id] ?? l.approval_status ?? 'pending',
-      ]
-        .map(escape)
-        .join(','),
-    );
-    const csv = [header.join(','), ...rows].join('\n');
+    const csv = buildLeadCsv(leads, approvals, exportContext);
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -618,7 +695,7 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
-  }, [leads, approvals]);
+  }, [leads, approvals, exportContext]);
 
   return (
     // 2026-05-04 fix (alignment): removed inline `overflow: hidden`.
@@ -755,7 +832,7 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
                       <div className="mono muted lead-table__clip">
                         {lead.clip && lead.clip.length > 0
                           ? lead.clip
-                          : `clip_${lead.borrower_id.toLowerCase().replace(/-/g, '')}`}
+                          : 'property_ref_unavailable'}
                       </div>
                     </td>
                     <td>

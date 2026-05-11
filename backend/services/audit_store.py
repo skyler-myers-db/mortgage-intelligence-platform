@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import UTC, datetime
 from typing import Any, Protocol, runtime_checkable
 from uuid import uuid4
@@ -31,7 +32,13 @@ from fastapi import Request
 
 from backend.config.settings import settings
 from backend.schemas.audit import AuditEvent
+from backend.schemas.common import validate_public_borrower_id
 from backend.services.lakebase import LakebaseClient, get_lakebase_client
+from backend.services.pii_redaction import (
+    mask_cotality_id,
+    normalize_public_lender_ref,
+    scrub_free_text,
+)
 
 log = logging.getLogger(__name__)
 
@@ -168,9 +175,14 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         "segment_mode",
         "state",
         "zip",
+        "county",
+        "counties",
         "states",
         "zips",
         "limit",
+        "target_lender_ref",
+        "portfolio_criteria",
+        "cohort_id",
         # Genie control-layer actions
         "action_type",
         "conversation_id",
@@ -181,6 +193,7 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         "campaign_id",
         "criteria_hash",
         "criteria_keys",
+        "source",
         "source_assets",
         "visualization_kind",
         "route",
@@ -193,6 +206,37 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         # Admin rules override
         "overrides",
     }
+)
+
+_FREE_TEXT_METADATA_KEYS: frozenset[str] = frozenset(
+    {"draft_body", "rationale", "reason"}
+)
+
+_BORROWER_ID_METADATA_KEYS: frozenset[str] = frozenset({"borrower_id"})
+
+_BORROWER_ID_LIST_METADATA_KEYS: frozenset[str] = frozenset(
+    {"borrower_ids", "rendered_borrower_ids"}
+)
+
+_ALLOWED_RESULT_FILTER_KEYS: frozenset[str] = frozenset(
+    {
+        "zips",
+        "states",
+        "county",
+        "counties",
+        "segment_codes",
+        "segment_mode",
+        "target_lender_ref",
+        "borrower_ids",
+        "portfolio_criteria",
+        "source",
+    }
+)
+_MAX_RESULT_FILTER_VALUES = 500
+_MAX_RESULT_FILTER_STATES = 56
+
+_ALLOWED_SEGMENT_CODES: frozenset[str] = frozenset(
+    {"itm", "listed", "permit", "investor", "equity", "retention"}
 )
 
 
@@ -240,6 +284,28 @@ class AuditMetadataViolation(RuntimeError):
         )
 
 
+class AuditMetadataValueViolation(RuntimeError):
+    """Raised when a reviewed audit metadata key carries an unsafe value."""
+
+    def __init__(self, field: str, reason: str) -> None:
+        self.field = field
+        super().__init__(f"Audit metadata field {field!r} failed value policy: {reason}")
+
+
+def _metadata_keys_deep(value: Any) -> set[str]:
+    if isinstance(value, dict):
+        out: set[str] = {str(k).lower() for k in value}
+        for nested in value.values():
+            out.update(_metadata_keys_deep(nested))
+        return out
+    if isinstance(value, list):
+        out: set[str] = set()
+        for nested in value:
+            out.update(_metadata_keys_deep(nested))
+        return out
+    return set()
+
+
 def _assert_no_pii(metadata: dict[str, Any]) -> None:
     """Raise ``AuditPIIError`` if ``metadata`` has any denylist keys.
 
@@ -250,7 +316,7 @@ def _assert_no_pii(metadata: dict[str, Any]) -> None:
     """
     if not metadata:
         return
-    lowered = {k.lower() for k in metadata}
+    lowered = _metadata_keys_deep(metadata)
     hits = lowered & _PII_DENYLIST_KEYS
     if hits:
         raise AuditPIIError(sorted(hits))
@@ -270,6 +336,207 @@ def _assert_allowlisted(metadata: dict[str, Any]) -> None:
     unexpected = lowered_keys - _ALLOWED_METADATA_KEYS
     if unexpected:
         raise AuditMetadataViolation(sorted(unexpected))
+
+
+def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
+    """Validate reviewed free-ish values that have their own public policy."""
+    if not metadata:
+        return
+    for field in _BORROWER_ID_METADATA_KEYS:
+        value = metadata.get(field)
+        if value is not None:
+            try:
+                validate_public_borrower_id(str(value))
+            except ValueError as exc:
+                raise AuditMetadataValueViolation(
+                    field,
+                    "must be an app-scoped public borrower id",
+                ) from exc
+    for field in _BORROWER_ID_LIST_METADATA_KEYS:
+        value = metadata.get(field)
+        if value is None:
+            continue
+        if not isinstance(value, list):
+            raise AuditMetadataValueViolation(
+                field,
+                "must be a list of app-scoped public borrower ids",
+            )
+        for item in value:
+            try:
+                validate_public_borrower_id(str(item))
+            except ValueError as exc:
+                raise AuditMetadataValueViolation(
+                    field,
+                    "must contain only app-scoped public borrower ids",
+                ) from exc
+    target = metadata.get("target_lender_ref")
+    if target is not None:
+        try:
+            normalize_public_lender_ref(str(target), allow_all=True)
+        except ValueError as exc:
+            raise AuditMetadataValueViolation(
+                "target_lender_ref",
+                "must be Summit Mortgage, Competitor A-Z, Competitor Other, or All",
+            ) from exc
+    portfolio_criteria = metadata.get("portfolio_criteria")
+    if portfolio_criteria is not None:
+        _assert_portfolio_criteria_value_policy(portfolio_criteria)
+    result_filters = metadata.get("result_filters")
+    if result_filters is not None:
+        _assert_result_filters_value_policy(result_filters)
+
+
+_ALLOWED_PORTFOLIO_CRITERIA_KEYS: frozenset[str] = frozenset(
+    {
+        "geography",
+        "occupancy",
+        "lien_status",
+        "lender_relationship",
+        "product",
+        "target_lender_ref",
+        "min_equity_pct_label",
+        "min_equity_pct",
+        "owner_link",
+        "purchase_intent",
+    }
+)
+
+
+def _assert_portfolio_criteria_value_policy(value: Any) -> None:
+    if not isinstance(value, dict):
+        raise AuditMetadataValueViolation(
+            "portfolio_criteria",
+            "must be an object with reviewed Portfolio Builder keys",
+        )
+    unexpected = {str(k).lower() for k in value} - _ALLOWED_PORTFOLIO_CRITERIA_KEYS
+    if unexpected:
+        raise AuditMetadataValueViolation(
+            "portfolio_criteria",
+            "contains unreviewed keys: " + ", ".join(sorted(unexpected)),
+        )
+    try:
+        from backend.schemas.portfolio import PortfolioCriteria
+
+        PortfolioCriteria(**value)
+    except ValueError as exc:
+        raise AuditMetadataValueViolation(
+            "portfolio_criteria",
+            "contains values outside the reviewed Portfolio Builder vocabularies",
+        ) from exc
+
+
+def _assert_string_list(
+    field: str,
+    value: Any,
+    *,
+    pattern: str | None = None,
+    allowed: frozenset[str] | None = None,
+    max_items: int = 100,
+) -> None:
+    if not isinstance(value, list):
+        raise AuditMetadataValueViolation(field, "must be a reviewed list")
+    if len(value) > max_items:
+        raise AuditMetadataValueViolation(field, f"must contain at most {max_items} values")
+    rx = re.compile(pattern) if pattern else None
+    for item in value:
+        text = str(item)
+        if rx is not None and not rx.fullmatch(text):
+            raise AuditMetadataValueViolation(field, "contains values outside the reviewed format")
+        if allowed is not None and text not in allowed:
+            raise AuditMetadataValueViolation(field, "contains values outside the reviewed vocabulary")
+
+
+def _assert_result_filters_value_policy(value: Any) -> None:
+    if not isinstance(value, dict):
+        raise AuditMetadataValueViolation(
+            "result_filters",
+            "must be an object with reviewed cohort filter keys",
+        )
+    unexpected = {str(k).lower() for k in value} - _ALLOWED_RESULT_FILTER_KEYS
+    if unexpected:
+        raise AuditMetadataValueViolation(
+            "result_filters",
+            "contains unreviewed keys: " + ", ".join(sorted(unexpected)),
+        )
+    if "zips" in value:
+        _assert_string_list(
+            "result_filters.zips",
+            value["zips"],
+            pattern=r"^\d{5}$",
+            max_items=_MAX_RESULT_FILTER_VALUES,
+        )
+    if "states" in value:
+        _assert_string_list(
+            "result_filters.states",
+            value["states"],
+            pattern=r"^[A-Z]{2}$",
+            max_items=_MAX_RESULT_FILTER_STATES,
+        )
+    if "county" in value and not re.fullmatch(r"^\d{5}$", str(value["county"])):
+        raise AuditMetadataValueViolation("result_filters.county", "must be a 5-digit county FIPS")
+    if "counties" in value:
+        _assert_string_list(
+            "result_filters.counties",
+            value["counties"],
+            pattern=r"^\d{5}$",
+            max_items=_MAX_RESULT_FILTER_VALUES,
+        )
+    if "segment_codes" in value:
+        _assert_string_list(
+            "result_filters.segment_codes",
+            value["segment_codes"],
+            allowed=_ALLOWED_SEGMENT_CODES,
+            max_items=6,
+        )
+    if "segment_mode" in value and str(value["segment_mode"]) not in {"any", "all"}:
+        raise AuditMetadataValueViolation("result_filters.segment_mode", "must be any or all")
+    if "target_lender_ref" in value:
+        try:
+            normalize_public_lender_ref(str(value["target_lender_ref"]), allow_all=True)
+        except ValueError as exc:
+            raise AuditMetadataValueViolation(
+                "result_filters.target_lender_ref",
+                "must be a public-safe lender alias",
+            ) from exc
+    if "borrower_ids" in value:
+        borrower_ids = value["borrower_ids"]
+        if not isinstance(borrower_ids, list):
+            raise AuditMetadataValueViolation("result_filters.borrower_ids", "must be a list")
+        if len(borrower_ids) > _MAX_RESULT_FILTER_VALUES:
+            raise AuditMetadataValueViolation(
+                "result_filters.borrower_ids",
+                f"must contain at most {_MAX_RESULT_FILTER_VALUES} values",
+            )
+        for item in borrower_ids:
+            try:
+                validate_public_borrower_id(str(item))
+            except ValueError as exc:
+                raise AuditMetadataValueViolation(
+                    "result_filters.borrower_ids",
+                    "must contain only app-scoped public borrower ids",
+                ) from exc
+    if "portfolio_criteria" in value:
+        _assert_portfolio_criteria_value_policy(value["portfolio_criteria"])
+    if "source" in value and str(value["source"]) not in {"genie", "trusted_sql"}:
+        raise AuditMetadataValueViolation("result_filters.source", "must be genie or trusted_sql")
+
+
+def _sanitize_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    """Return reviewed audit metadata with known free-text values scrubbed.
+
+    The allowlist says a key is allowed to exist; it does not prove caller
+    supplied free text is clean. Scrub the few intentionally free-text fields
+    at the write choke point so direct AuditStore use cannot persist a raw
+    email, phone number, address, or SSN in the append-only ledger.
+    """
+
+    if not metadata:
+        return {}
+    cleaned = dict(metadata)
+    for key in _FREE_TEXT_METADATA_KEYS:
+        if key in cleaned and cleaned[key] is not None:
+            cleaned[key] = scrub_free_text(str(cleaned[key]))
+    return cleaned
 
 
 # ----------------------------------------------------------------------
@@ -402,12 +669,14 @@ class InMemoryAuditStore:
         # Governance: denylist PII keys at write time, not read time.
         # Applies equally to the in-memory store so unit tests exercise
         # the guard without needing Lakebase.
-        metadata = {"action": action, **payload}
+        metadata = _sanitize_metadata({"action": action, **payload})
+        payload = {k: v for k, v in metadata.items() if k != "action"}
         _assert_no_pii(metadata)
         # R6-20: allowlist complement to the denylist. Fails loudly on
         # any key that isn't explicitly reviewed in
         # ``_ALLOWED_METADATA_KEYS``.
         _assert_allowlisted(metadata)
+        _assert_public_safe_values(metadata)
         event = AuditEvent(
             event_id=f"evt-{uuid4().hex[:12]}",
             actor=actor,
@@ -418,7 +687,11 @@ class InMemoryAuditStore:
             evidence_ids=evidence_ids or [],
             created_at=datetime.now(UTC).isoformat(),
             event_type=_coerce_event_type(event_type, action),
-            subject_clip=subject_clip,
+            subject_clip=(
+                mask_cotality_id("clip", subject_clip)
+                if subject_clip is not None
+                else None
+            ),
             subject_segment=subject_segment,
             request_id=request_id,
         )
@@ -471,15 +744,22 @@ def _build_insert_params(
     request_id: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     payload = payload_json or {}
-    metadata = {"action": action, **payload}
+    metadata = _sanitize_metadata({"action": action, **payload})
+    payload = {k: v for k, v in metadata.items() if k != "action"}
     _assert_no_pii(metadata)
     _assert_allowlisted(metadata)
+    _assert_public_safe_values(metadata)
+    safe_subject_clip = (
+        mask_cotality_id("clip", subject_clip)
+        if subject_clip is not None
+        else None
+    )
     params: dict[str, Any] = {
         "event_type": _coerce_event_type(event_type, action),
         "actor_email": actor,
         "entity_type": entity_type,
         "entity_id": entity_id,
-        "subject_clip": subject_clip,
+        "subject_clip": safe_subject_clip,
         "subject_segment": subject_segment,
         "request_id": request_id,
         "evidence_ids": list(evidence_ids or []),
@@ -559,7 +839,7 @@ def write_audit_event_in_transaction(
         payload_json=payload,
         evidence_ids=evidence_ids,
         event_type=event_type,
-        subject_clip=subject_clip,
+        subject_clip=params["subject_clip"],
         subject_segment=subject_segment,
         request_id=request_id,
     )
@@ -618,7 +898,7 @@ class LakebaseAuditStore:
             payload_json=payload,
             evidence_ids=list(evidence_ids or []),
             event_type=params["event_type"],
-            subject_clip=subject_clip,
+            subject_clip=params["subject_clip"],
             subject_segment=subject_segment,
             request_id=request_id,
         )
@@ -646,7 +926,11 @@ class LakebaseAuditStore:
                     evidence_ids=list(row.get("evidence_ids") or []),
                     created_at=row["event_at"].isoformat(),
                     event_type=row["event_type"],
-                    subject_clip=row.get("subject_clip"),
+                    subject_clip=(
+                        mask_cotality_id("clip", row.get("subject_clip"))
+                        if row.get("subject_clip") is not None
+                        else None
+                    ),
                     subject_segment=row.get("subject_segment"),
                     request_id=row.get("request_id"),
                 )

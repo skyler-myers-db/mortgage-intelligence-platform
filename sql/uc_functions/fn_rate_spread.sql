@@ -35,9 +35,9 @@
 --            fictional par rate chosen so the three canonical sample
 --            borrowers in backend/services/mock_data.py produce defensible
 --            spreads:
---                B-48291 (current 5.75%): +88 bps  (raw 87.5, bankers-rounds up)
---                B-48294 (current 6.75%): +188 bps (raw 187.5, bankers-rounds up)
---                B-48295 (current 6.50%): +162 bps (raw 162.5, bankers-rounds DOWN to even)
+--                fixture current 5.75%: +88 bps  (raw 87.5, bankers-rounds up)
+--                fixture current 6.75%: +188 bps (raw 187.5, bankers-rounds up)
+--                fixture current 6.50%: +162 bps (raw 162.5, bankers-rounds DOWN to even)
 --            All three remain "in the money" under the default
 --            min_spread_bps=75 threshold documented on fn_in_the_money.
 --            Production deployments will source market_rate from a rate

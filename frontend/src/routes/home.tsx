@@ -4,6 +4,7 @@ import { PageShell } from '../components/layout/PageShell';
 import { KpiCard } from '../components/mortgage/KpiCard';
 import { USChoroplethMap } from '../components/mortgage/USChoroplethMap';
 import { AgentActivityLog } from '../components/mortgage/AgentActivityLog';
+import { DataEstatePanel } from '../components/mortgage/DataEstatePanel';
 import { Button, Chip } from '../components/Primitives';
 import { DRAWER_SOURCES } from '../lib/drawerSources';
 import { Icon } from '../components/Icon';
@@ -15,7 +16,7 @@ import { useApp } from '../components/AppContext';
 import { useOptionalHealth } from '../components/HealthProvider';
 import { EntradaWordmark } from '../components/brand/Entrada';
 import { formatRefreshed } from '../lib/formatRefreshed';
-import type { KpiTrend, PortfolioPreview } from '../types';
+import type { DataEstateResponse, KpiTrend, PortfolioPreview } from '../types';
 
 const FUTURE_MODULES = [
   { code: 'M1', title: 'Pipeline Optimization', desc: 'Lead → app → approval throughput and stalls.' },
@@ -35,9 +36,8 @@ function formatDelta(trend: KpiTrend | undefined): string | undefined {
 
 export default function Home() {
   // Home KPIs read straight from /api/portfolio/preview. While the request is
-  // in flight we show an em-dash placeholder rather than design-time numbers
-  // so the surface never presents a plausible-but-fake value. The KpiCard
-  // component interprets a null `valueAnimated` as "render em-dash".
+  // in flight we show skeletons rather than design-time numbers or em-dashes,
+  // so normal loading is visually distinct from a genuinely unknown value.
   const { lender } = useApp();
   const healthCtx = useOptionalHealth();
   // True when the shared health poll has confirmed warehouse / lakebase is
@@ -52,6 +52,7 @@ export default function Home() {
     healthCtx?.health?.dependencies?.warehouse === 'down' ||
     healthCtx?.health?.dependencies?.lakebase === 'down';
   const [preview, setPreview] = useState<PortfolioPreview | null>(null);
+  const [dataEstate, setDataEstate] = useState<DataEstateResponse | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   // Cold-start retry state for the portfolio-preview tile. Non-null =
   // we're in a 503 retry loop driven by warehouse/lakebase auto-suspend.
@@ -125,7 +126,38 @@ export default function Home() {
     };
   }, [reloadToken]);
 
+  useEffect(() => {
+    const ctrl = new AbortController();
+    api.dataEstate(ctrl.signal)
+      .then(setDataEstate)
+      .catch(() => setDataEstate({
+        generated_at: new Date().toISOString(),
+        lender_name: lender,
+        public_demo_masking: true,
+        lanes: [
+          {
+            id: 'proof_unavailable',
+            title: 'Data-estate proof unavailable',
+            description: 'The app could not load the source-readiness proof surface.',
+            status: 'error',
+            assets: [
+              {
+                name: 'Data-estate API',
+                label: '/api/data-estate',
+                status: 'error',
+                note: 'Do not claim source proof until this endpoint recovers.',
+              },
+            ],
+          },
+        ],
+        known_data_gaps: ['Data-estate proof API unavailable; do not claim source proof until it recovers.'],
+        proof_assets: [],
+      }));
+    return () => ctrl.abort();
+  }, [lender]);
+
   const queued = preview?.high_intent_leads ?? null;
+  const kpisLoading = preview === null && !previewError && !previewWarming;
 
   // Day-0 detection (R5-20): trust the server-authoritative
   // ``day_zero`` flag on PortfolioPreview, which keys off
@@ -144,7 +176,7 @@ export default function Home() {
     <PageShell
       eyebrow={lender}
       title="Who should we contact, why now, and with what offer?"
-      lede="Portfolio KPIs, geography drill-down, and the approval queue. Build a new portfolio, jump to segments, or open a borrower dossier from the map."
+      lede="Portfolio KPIs, geography drill-down, and the approval queue. Build a new portfolio, jump to segments, or open a filtered lead queue from the map."
       wideMap
       heroRight={
         <>
@@ -234,6 +266,8 @@ export default function Home() {
             trend={preview?.trends?.marketable_population?.series}
             delta={formatDelta(preview?.trends?.marketable_population)}
             deltaDir={preview?.trends?.marketable_population?.direction}
+            trendNote={preview?.trends?.marketable_population?.note}
+            loading={kpisLoading}
             source={DRAWER_SOURCES.population}
           />
           <KpiCard
@@ -242,6 +276,8 @@ export default function Home() {
             trend={preview?.trends?.high_intent_leads?.series}
             delta={formatDelta(preview?.trends?.high_intent_leads)}
             deltaDir={preview?.trends?.high_intent_leads?.direction}
+            trendNote={preview?.trends?.high_intent_leads?.note}
+            loading={kpisLoading}
             source={DRAWER_SOURCES.itm}
           />
           <KpiCard
@@ -250,6 +286,8 @@ export default function Home() {
             trend={preview?.trends?.top_tier_opportunities?.series}
             delta={formatDelta(preview?.trends?.top_tier_opportunities)}
             deltaDir={preview?.trends?.top_tier_opportunities?.direction}
+            trendNote={preview?.trends?.top_tier_opportunities?.note}
+            loading={kpisLoading}
             source={DRAWER_SOURCES.leadScore}
           />
           <KpiCard
@@ -258,6 +296,8 @@ export default function Home() {
             trend={preview?.trends?.offers_recommended?.series}
             delta={formatDelta(preview?.trends?.offers_recommended)}
             deltaDir={preview?.trends?.offers_recommended?.direction}
+            trendNote={preview?.trends?.offers_recommended?.note}
+            loading={kpisLoading}
             source={DRAWER_SOURCES.nbo}
           />
         </div>
@@ -273,11 +313,25 @@ export default function Home() {
           <div className="approval__title">Approval queue</div>
           <div className="approval__sub">
             {queued !== null
-              ? `${queued.toLocaleString()} borrowers awaiting loan-officer approval.`
-              : 'Borrowers awaiting loan-officer approval.'}
+              ? `${queued.toLocaleString()} high-intent borrowers ready for loan-officer review. ${(
+                  preview?.approved_count ?? 0
+                ).toLocaleString()} approved and ${(
+                  preview?.in_outreach_count ?? 0
+                ).toLocaleString()} in outreach in the latest snapshot.`
+              : 'High-intent borrowers ready for loan-officer review.'}
           </div>
         </div>
+        <Link to="/lead-queue?segment=itm" className="btn btn--sm btn--primary">
+          Open review queue
+          <Icon name="chevright" size={13} />
+        </Link>
       </div>
+
+      {dataEstate && (
+        <Reveal>
+          <DataEstatePanel estate={dataEstate} />
+        </Reveal>
+      )}
 
       <div className="section-hdr">
         <div>
@@ -286,11 +340,9 @@ export default function Home() {
         </div>
       </div>
       <div className="layoutA-grid">
-        {/* Home map drills in-place (state → county → ZIP → borrower deep
-            link) rather than bouncing to /lead-queue. Matches the
-            prototype's hero-map behavior; the Lead Queue remains the
-            source-of-truth index and is one click away via the CTAs
-            below. Fix D, 2026-04-23. */}
+        {/* Home map drills in-place through state/county/ZIP and then opens
+            the filtered Lead Queue. Lead Queue remains the source-of-truth
+            index for borrower selection. */}
         <USChoroplethMap drillBehavior="filter" />
         <Reveal>
           <AgentActivityLog />

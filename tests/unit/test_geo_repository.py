@@ -135,6 +135,41 @@ def test_state_rollups_caches_across_calls() -> None:
     assert len(client.calls) == 1
 
 
+def test_state_rollups_filtered_all_mode_reads_borrower_360() -> None:
+    repo, client = _make_repo()
+    client.responses = [
+        (
+            ".gold.borrower_360",
+            [
+                {
+                    "state": "FL",
+                    "addressable": 308,
+                    "top_tier_opportunities": 120,
+                    "avg_score": 63,
+                },
+            ],
+        ),
+    ]
+
+    result = repo.state_rollups(
+        segment_codes=["itm", "equity", "investor", "retention"],
+        segment_mode="all",
+    )
+
+    assert result.rollups[0].state == "FL"
+    assert result.rollups[0].addressable == 308
+    sql, params = client.calls[0]
+    assert ".gold.borrower_360" in sql
+    assert "array_contains(segment_codes, :segment_0)" in sql
+    assert "array_contains(segment_codes, :segment_3)" in sql
+    assert params == {
+        "segment_0": "equity",
+        "segment_1": "investor",
+        "segment_2": "itm",
+        "segment_3": "retention",
+    }
+
+
 # ---------------------------------------------------------------------------
 # county_rollups
 # ---------------------------------------------------------------------------
@@ -180,10 +215,20 @@ def test_county_rollups_reads_county_rollup_table_with_state_param() -> None:
     assert result.rollups[0].top_segment_code == "itm"
 
     # Parameter binding: state must be uppercased before the warehouse call.
-    assert len(client.calls) == 1
-    sql, params = client.calls[0]
+    # The repository may issue additional scope-discovery reads for the
+    # data-driven coverage chip, so assert the county-rollup call itself.
+    county_calls = [
+        call for call in client.calls
+        if "WHERE state = :state" in call[0]
+    ]
+    assert len(county_calls) == 1
+    sql, params = county_calls[0]
     assert ".gold.county_rollup" in sql
     assert params == {"state": "IL"}
+    assert result.scope_note == (
+        "Cotality data coverage: 2 counties across 1 state; "
+        "2 counties available in IL"
+    )
 
 
 def test_county_rollups_filters_out_malformed_fips() -> None:
@@ -246,9 +291,55 @@ def test_county_rollups_caches_per_state() -> None:
     ]
     repo.county_rollups("CA")
     repo.county_rollups("CA")
-    assert len(client.calls) == 1  # second call cached
+    county_calls = [call for call in client.calls if "WHERE state = :state" in call[0]]
+    assert len(county_calls) == 1  # second call cached
     repo.county_rollups("IL")  # different state key -> new call
-    assert len(client.calls) == 2
+    county_calls = [call for call in client.calls if "WHERE state = :state" in call[0]]
+    assert len(county_calls) == 2
+
+
+def test_county_rollups_filtered_all_mode_reads_borrower_360_with_state() -> None:
+    repo, client = _make_repo()
+    client.responses = [
+        (
+            ".gold.borrower_360",
+            [
+                {
+                    "fips_5": "12011",
+                    "state": "FL",
+                    "county_name": None,
+                    "addressable_borrowers": 308,
+                    "in_the_money_borrowers": 308,
+                    "high_opportunity_borrowers": 120,
+                    "avg_opportunity_score": 63,
+                    "top_segment_code": "equity",
+                    "snapshot_date": None,
+                },
+            ],
+        ),
+    ]
+
+    result = repo.county_rollups(
+        "fl",
+        segment_codes=["itm", "investor", "equity", "retention"],
+        segment_mode="all",
+    )
+
+    assert result.state == "FL"
+    assert result.rollups[0].fips_5 == "12011"
+    assert result.rollups[0].addressable_borrowers == 308
+    sql, params = client.calls[0]
+    assert ".gold.borrower_360" in sql
+    assert "state = :state" in sql
+    assert "array_contains(segment_codes, :segment_0)" in sql
+    assert "array_contains(segment_codes, :segment_3)" in sql
+    assert params == {
+        "segment_0": "equity",
+        "segment_1": "investor",
+        "segment_2": "itm",
+        "segment_3": "retention",
+        "state": "FL",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -304,3 +395,46 @@ def test_zip_rollups_empty_when_no_rows() -> None:
     result = repo.zip_rollups("99999")
     assert result.rollups == []
     assert result.snapshot_date is None
+
+
+def test_zip_rollups_filtered_all_mode_reads_borrower_360_with_fips() -> None:
+    repo, client = _make_repo()
+    client.responses = [
+        (
+            ".gold.borrower_360",
+            [
+                {
+                    "zip": "33311",
+                    "state": "FL",
+                    "county_fips_5": "12011",
+                    "addressable_borrowers": 12,
+                    "avg_opportunity_score": 70,
+                    "top_segment_code": "itm",
+                    "sample_borrower_id": "B-12011",
+                    "snapshot_date": None,
+                },
+            ],
+        ),
+    ]
+
+    result = repo.zip_rollups(
+        "12011",
+        segment_codes=["itm", "investor", "equity", "retention"],
+        segment_mode="all",
+    )
+
+    assert result.fips_5 == "12011"
+    assert result.rollups[0].zip == "33311"
+    assert result.rollups[0].addressable_borrowers == 12
+    sql, params = client.calls[0]
+    assert ".gold.borrower_360" in sql
+    assert "county_fips_5 = :fips_5" in sql
+    assert "array_contains(segment_codes, :segment_0)" in sql
+    assert "array_contains(segment_codes, :segment_3)" in sql
+    assert params == {
+        "segment_0": "equity",
+        "segment_1": "investor",
+        "segment_2": "itm",
+        "segment_3": "retention",
+        "fips_5": "12011",
+    }

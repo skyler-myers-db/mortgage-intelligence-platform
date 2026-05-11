@@ -14,12 +14,14 @@ from unittest.mock import MagicMock
 import pytest
 
 from backend.services.audit_store import (
+    AuditMetadataValueViolation,
     AuditMetadataViolation,
     AuditPIIError,
     InMemoryAuditStore,
     LakebaseAuditStore,
     _assert_allowlisted,
     _assert_no_pii,
+    _assert_public_safe_values,
 )
 
 # ---------------------------------------------------------------------------
@@ -177,6 +179,103 @@ def test_allowlist_is_case_insensitive() -> None:
     _assert_allowlisted({"OFFER_CODE": "RATE_REFI"})
 
 
+def test_audit_target_lender_ref_rejects_raw_lender_name() -> None:
+    with pytest.raises(AuditMetadataValueViolation):
+        _assert_public_safe_values({"target_lender_ref": "Wells Fargo Bank"})
+
+
+def test_audit_target_lender_ref_accepts_public_alias() -> None:
+    _assert_public_safe_values({"target_lender_ref": "Competitor B"})
+
+
+def test_audit_portfolio_criteria_accepts_reviewed_safe_keys() -> None:
+    _assert_allowlisted(
+        {
+            "portfolio_criteria": {
+                "geography": "All",
+                "occupancy": "Owner-occupied",
+                "lien_status": "Open 1st lien",
+                "lender_relationship": "All",
+                "product": "Refi",
+                "target_lender_ref": "Competitor B",
+                "min_equity_pct_label": "≥ 25%",
+            }
+        }
+    )
+    _assert_public_safe_values(
+        {
+            "portfolio_criteria": {
+                "geography": "All",
+                "target_lender_ref": "Competitor B",
+            }
+        }
+    )
+
+
+def test_audit_portfolio_criteria_rejects_raw_nested_lender_name() -> None:
+    with pytest.raises(AuditMetadataValueViolation):
+        _assert_public_safe_values(
+            {
+                "portfolio_criteria": {
+                    "geography": "All",
+                    "target_lender_ref": "Wells Fargo Bank",
+                }
+            }
+        )
+
+
+def test_audit_portfolio_criteria_rejects_unreviewed_nested_key() -> None:
+    with pytest.raises(AuditMetadataValueViolation):
+        _assert_public_safe_values(
+            {
+                "portfolio_criteria": {
+                    "geography": "All",
+                    "owner_name": "Alice Borrower",
+                }
+            }
+        )
+
+
+def test_audit_portfolio_criteria_rejects_arbitrary_reviewed_key_value() -> None:
+    with pytest.raises(AuditMetadataValueViolation):
+        _assert_public_safe_values(
+            {
+                "portfolio_criteria": {
+                    "geography": "123 Main Street",
+                }
+            }
+        )
+
+
+def test_audit_public_safe_values_reject_raw_borrower_id() -> None:
+    with pytest.raises(AuditMetadataValueViolation):
+        _assert_public_safe_values({"borrower_id": "1234567890"})
+
+
+def test_in_memory_store_scrubs_allowed_free_text_before_persisting() -> None:
+    store = InMemoryAuditStore()
+
+    event = store.write(
+        actor="skyler@entrada.ai",
+        action="outreach.approve",
+        entity_type="approval",
+        entity_id="approval-1",
+        payload_json={
+            "approval_id": "approval-1",
+            "borrower_id": "B-12345",
+            "offer_code": "RATE_REFI",
+            "draft_body": "Call 555-212-3333 or email jane@example.com about 123 Elm St.",
+        },
+    )
+
+    assert "555-212-3333" not in str(event.payload_json)
+    assert "jane@example.com" not in str(event.payload_json)
+    assert "123 Elm St" not in str(event.payload_json)
+    assert "[PHONE-REDACTED]" in event.payload_json["draft_body"]
+    assert "[EMAIL-REDACTED]" in event.payload_json["draft_body"]
+    assert "[ADDRESS-REDACTED]" in event.payload_json["draft_body"]
+
+
 def test_in_memory_store_rejects_unlisted_metadata_key() -> None:
     """The InMemoryAuditStore must run the allowlist check. ``owner_address``
     is NOT on the denylist (not one of the classic name/phone/email keys)
@@ -263,6 +362,10 @@ def test_historical_payload_shapes_all_pass_allowlist() -> None:
             "rendered_borrower_ids": ["B-1", "B-2"],
             "portfolio_id": "p-1",
             "segment": "itm",
+            "portfolio_criteria": {
+                "geography": "All",
+                "target_lender_ref": "Competitor B",
+            },
             "limit": 50,
         },
     )

@@ -7,8 +7,9 @@ demo to the customer's Head of Growth.
 
 **Scope.** First-time deploy. For recurring operator concerns
 (cold-start, Genie fallback, parity regression, credential rotation), see
-[`docs/runbook.md`](runbook.md). For UC grant details, see
-[`docs/security/GRANTS.md`](security/GRANTS.md). This doc links to both.
+[`docs/runbook.md`](runbook.md). Customer-facing security posture is summarized
+in [`docs/security-and-compliance.md`](security-and-compliance.md); detailed
+workspace grant inventories stay in the internal implementation packet.
 
 **Budget.** 45 minutes of hands-on + ~15 minutes of bundle-run wall time
 (silver refresh + gold CTAS against an idle 2X-Small warehouse).
@@ -96,12 +97,10 @@ to match, or pass `--profile` explicitly.
 
 ## 3. Apply UC grants (5 minutes — BEFORE `bundle deploy`)
 
-Open [`docs/security/GRANTS.md`](security/GRANTS.md) and execute §§1–8 in
-order against the customer workspace (Databricks SQL editor, any
-warehouse). Sections 1, 2, 3, 5a, 6, 7 are required; 4 and 5b are
-conditional. The whole section is copy-paste-able; budget 5 minutes
-actual work + a few minutes if the metastore admin needs to switch
-seats.
+Open the internal workspace-grants packet and execute the required UC grants in
+order against the customer workspace (Databricks SQL editor, any warehouse).
+The whole section is copy-paste-able; budget 5 minutes actual work + a few
+minutes if the metastore admin needs to switch seats.
 
 **Do not skip this step.** `databricks bundle deploy` does not need the
 grants (it runs as your admin user) but the app's first boot does —
@@ -113,14 +112,15 @@ warehouse warm-up time diagnosing it.
 ## 4. Deploy (one command, ~15 minutes wall time)
 
 **Deploy lifecycle.** The Databricks App lifecycle still has two API
-phases — bundle resource apply, then app snapshot promotion — but
-`./scripts/deploy.sh` runs both. The bundle phase must go through
+phases — direct bundle resource deploy, then app snapshot promotion —
+but `./scripts/deploy.sh` runs both. The bundle phase must go through
 `tools/databricks/bundle_env.py` because it maps `.env.local` to
-`BUNDLE_VAR_*`; bare `databricks bundle deploy` can bind placeholder
-resources and fail with misleading permission errors.
+`BUNDLE_VAR_*` and runs the direct deployment plan before apply; bare
+`databricks bundle deploy` can bind placeholder resources and fail with
+misleading permission errors.
 
 ```bash
-# One command: env-aware bundle deploy, app promotion, jobs, refreshes, and Genie provision
+# One command: env-aware direct bundle validate/plan/deploy, app promotion, jobs, refreshes, and Genie provision
 ./scripts/deploy.sh
 # Expected last line: "[deploy] complete."
 ```
@@ -158,7 +158,7 @@ done
 
 # 3. End-to-end smoke
 ./scripts/smoke_live.sh
-# Expected last line: "smoke_live.sh: OK — 5/5 endpoints green."
+# Expected last line: "[smoke] PASS · <target app url>"
 ```
 
 Open the app URL in a browser. The Portfolio page loads on first hit,
@@ -212,9 +212,9 @@ customer.
 ### 7.1 "PERMISSION_DENIED" on `mip.gold.*` or `mip.silver.*`
 
 You skipped §3 or one of the `GRANT` statements ran under a non-
-metastore-admin identity. Re-run [`docs/security/GRANTS.md`](security/GRANTS.md)
-§§1–5 as a metastore admin and re-run §5 verification here. No
-redeploy needed — grants take effect on the next SQL statement.
+metastore-admin identity. Re-run the internal workspace-grants packet as a
+metastore admin and re-run §5 verification here. No redeploy needed — grants
+take effect on the next SQL statement.
 
 ### 7.2 `/api/health` reports `warehouse: "down"` for > 60 s
 
@@ -252,8 +252,8 @@ Three possible causes, in order of likelihood:
 1. **`GENIE_SPACE_ID` not set.** Re-run
    `echo "GENIE_SPACE_ID=$(cat genie/space_id.txt)" >> .env.local`,
    re-run phase 1 deploy, re-run phase 2.
-2. **Service principal missing `CAN RUN` on the space.** Fix per
-   [`docs/security/GRANTS.md`](security/GRANTS.md) §7.
+2. **Service principal missing `CAN RUN` on the space.** Fix per the internal
+   workspace-grants packet.
 3. **Semantics views unbound.** Re-run
    `databricks bundle run mip_refresh_scores -t dev` — the
    `refresh_semantics_views` task rebinds Genie's trusted assets.

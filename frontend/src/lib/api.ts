@@ -1,8 +1,11 @@
 import type {
   Borrower360,
+  ConfigOptions,
   CountyRollupResponse,
+  DataEstateResponse,
   LeadSummary,
   OfferRecommendation,
+  PortfolioCreateResponse,
   PortfolioPreview,
   SegmentCode,
   SegmentSummary,
@@ -104,12 +107,35 @@ export interface AuditEventRow {
   created_at: string;
 }
 
+/**
+ * Segment multi-select semantics forwarded to /api/leads and geo rollups.
+ * `any` = OR, `all` = AND. Segment Intelligence uses `all` so each
+ * additional selected card narrows the ranked borrowers and map.
+ */
 export type SegmentFilterMode = 'any' | 'all';
 
 export interface LeadQueryOptions {
   segmentCodes?: SegmentCode[];
+  /** `all` means borrowers must match every code in `segmentCodes`. */
   segmentMode?: SegmentFilterMode;
+  targetLenderRef?: string | null;
+  cohortId?: string | null;
+  portfolioCriteria?: GeoQueryCriteria;
   limit?: number;
+}
+
+export type GeoQueryCriteria = Record<string, string | number | readonly string[] | null | undefined>;
+
+function appendPortfolioCriteria(params: URLSearchParams, criteria?: GeoQueryCriteria | null) {
+  if (!criteria) return;
+  Object.entries(criteria).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === '') return;
+    if (Array.isArray(value)) {
+      if (value.length > 0) params.set(key, value.join(','));
+      return;
+    }
+    params.set(key, String(value));
+  });
 }
 
 /**
@@ -457,13 +483,38 @@ export const api = {
       signal,
     ),
 
-  segments: (signal?: AbortSignal) =>
-    getJson<SegmentSummary[]>('/api/segments', signal),
+  portfolioCreate: (
+    name: string,
+    criteria: Record<string, unknown> = {},
+    signal?: AbortSignal,
+  ) =>
+    postJson<PortfolioCreateResponse, { name: string; criteria: Record<string, unknown> }>(
+      '/api/portfolio/create',
+      { name, criteria },
+      signal,
+    ),
+
+  segments: (
+    signal?: AbortSignal,
+    segmentCodes?: SegmentCode[] | null,
+    segmentMode: SegmentFilterMode = 'any',
+    portfolioCriteria?: GeoQueryCriteria | null,
+  ) => {
+    const params = new URLSearchParams();
+    if (segmentCodes && segmentCodes.length > 0) {
+      params.set('segment_codes', segmentCodes.join(','));
+      params.set('segment_mode', segmentMode);
+    }
+    appendPortfolioCriteria(params, portfolioCriteria);
+    const qs = params.toString();
+    return getJson<SegmentSummary[]>(qs ? `/api/segments?${qs}` : '/api/segments', signal);
+  },
 
   stateRollups: (
     segmentCodes?: string[] | null,
     signal?: AbortSignal,
     segmentMode: SegmentFilterMode = 'any',
+    portfolioCriteria?: GeoQueryCriteria | null,
   ) => {
     // 2026-05-04 (FIX G): when a segment filter is active, fetch the
     // segment-aware per-state counts so the choropleth tooltip + the
@@ -474,6 +525,7 @@ export const api = {
       params.set('segment_codes', segmentCodes.join(','));
       params.set('segment_mode', segmentMode);
     }
+    appendPortfolioCriteria(params, portfolioCriteria);
     const qs = params.toString();
     return getJson<StateRollupResponse>(
       qs ? `/api/geo/state-rollups?${qs}` : '/api/geo/state-rollups',
@@ -481,22 +533,50 @@ export const api = {
     );
   },
 
-  countyRollups: (state: string, signal?: AbortSignal) =>
-    getJson<CountyRollupResponse>(
-      `/api/geo/county-rollups?state=${encodeURIComponent(state.toUpperCase())}`,
+  countyRollups: (
+    state: string,
+    signal?: AbortSignal,
+    segmentCodes?: string[] | null,
+    segmentMode: SegmentFilterMode = 'any',
+    portfolioCriteria?: GeoQueryCriteria | null,
+  ) => {
+    const params = new URLSearchParams();
+    params.set('state', state.toUpperCase());
+    if (segmentCodes && segmentCodes.length > 0) {
+      params.set('segment_codes', segmentCodes.join(','));
+      params.set('segment_mode', segmentMode);
+    }
+    appendPortfolioCriteria(params, portfolioCriteria);
+    return getJson<CountyRollupResponse>(
+      `/api/geo/county-rollups?${params.toString()}`,
       signal,
-    ),
+    );
+  },
 
-  zipRollups: (fips: string, signal?: AbortSignal) =>
-    getJson<ZipRollupResponse>(
-      `/api/geo/zip-rollups?fips=${encodeURIComponent(fips)}`,
+  zipRollups: (
+    countyFips: string,
+    signal?: AbortSignal,
+    segmentCodes?: string[] | null,
+    segmentMode: SegmentFilterMode = 'any',
+    portfolioCriteria?: GeoQueryCriteria | null,
+  ) => {
+    const params = new URLSearchParams();
+    params.set('county_fips', countyFips);
+    if (segmentCodes && segmentCodes.length > 0) {
+      params.set('segment_codes', segmentCodes.join(','));
+      params.set('segment_mode', segmentMode);
+    }
+    appendPortfolioCriteria(params, portfolioCriteria);
+    return getJson<ZipRollupResponse>(
+      `/api/geo/zip-rollups?${params.toString()}`,
       signal,
-    ),
+    );
+  },
 
   leads: (
     segment?: string,
     signal?: AbortSignal,
-    geo?: { state?: string; zip?: string; states?: string[]; zips?: string[]; borrowerIds?: string[] },
+    geo?: { state?: string; zip?: string; county?: string; states?: string[]; zips?: string[]; borrowerIds?: string[] },
     opts: LeadQueryOptions = {},
   ) => {
     // 2026-05-04 FIX β: forward state + zip to the API so the backend
@@ -513,9 +593,19 @@ export const api = {
     if (opts.limit) params.set('limit', String(opts.limit));
     if (geo?.state) params.set('state', geo.state);
     if (geo?.zip) params.set('zip', geo.zip);
+    if (geo?.county) params.set('county', geo.county);
     if (geo?.states && geo.states.length > 0) params.set('states', geo.states.join(','));
     if (geo?.zips && geo.zips.length > 0) params.set('zips', geo.zips.join(','));
     if (geo?.borrowerIds && geo.borrowerIds.length > 0) params.set('borrower_ids', geo.borrowerIds.join(','));
+    if (opts.targetLenderRef) params.set('target_lender_ref', opts.targetLenderRef);
+    if (opts.cohortId) params.set('cohort_id', opts.cohortId);
+    if (opts.portfolioCriteria) {
+      for (const [key, value] of Object.entries(opts.portfolioCriteria)) {
+        if (value !== null && value !== undefined && String(value).length > 0) {
+          params.set(key, String(value));
+        }
+      }
+    }
     const qs = params.toString();
     return getJson<LeadSummary[]>(
       qs ? `/api/leads?${qs}` : '/api/leads',
@@ -617,9 +707,8 @@ export const api = {
   /**
    * Fetch the backend-generated outreach draft for a borrower. The
    * backend emits a DRAFT_OUTREACH audit row as a side effect so we
-   * know which draft copy was shown to the approver. Callers should
-   * fall back to a local template string if this rejects so the
-   * Offer Orchestrator stays usable when the endpoint is degraded.
+   * know which draft copy was shown to the approver. Callers must fail
+   * closed if this rejects; outreach copy is never generated locally.
    */
   draftOutreach: (
     borrower_id: string,
@@ -730,4 +819,10 @@ export const api = {
    */
   adminSources: <T>(signal?: AbortSignal) =>
     getJson<T>('/api/admin/sources', signal),
+
+  dataEstate: (signal?: AbortSignal) =>
+    getJson<DataEstateResponse>('/api/data-estate', signal),
+
+  configOptions: (signal?: AbortSignal) =>
+    getJson<ConfigOptions>('/api/config/options', signal),
 };

@@ -135,6 +135,14 @@ _PARITY_COLUMNS: tuple[str, ...] = (
     "current_rate",
     "ltv",
     "related_property_count",
+    "is_owner_occupied",
+    "is_investor",
+    "is_current_customer",
+    "is_former_customer",
+    "is_competitor_lien",
+    "has_permit",
+    "listed_for_sale",
+    "second_pos_amount",
     "min_spread_bps_applied",
     "min_equity_pct_applied",
     "in_the_money",
@@ -273,11 +281,11 @@ def test_dossier_top3_matches_evidence_events_top3(
             token,
             wh,
             "SELECT "
-            "  trigger_timeline[0].evidence_id, trigger_timeline[0].signal_rank, "
-            "  trigger_timeline[1].evidence_id, trigger_timeline[1].signal_rank, "
-            "  trigger_timeline[2].evidence_id, trigger_timeline[2].signal_rank, "
-            "  evidence_events[0].evidence_id, evidence_events[1].evidence_id, "
-            "  evidence_events[2].evidence_id "
+            "  get(trigger_timeline, 0).evidence_id, get(trigger_timeline, 0).signal_rank, "
+            "  get(trigger_timeline, 1).evidence_id, get(trigger_timeline, 1).signal_rank, "
+            "  get(trigger_timeline, 2).evidence_id, get(trigger_timeline, 2).signal_rank, "
+            "  get(evidence_events, 0).evidence_id, get(evidence_events, 1).evidence_id, "
+            "  get(evidence_events, 2).evidence_id "
             "FROM mip.gold.borrower_dossier "
             f"WHERE borrower_id = '{_sanitize(bid)}' LIMIT 1",
         )
@@ -286,7 +294,10 @@ def test_dossier_top3_matches_evidence_events_top3(
         # Build dossier-side lists, trimming to the length of `direct`
         # so CLIPs with fewer than 3 live signals don't spuriously fail.
         n = len(direct)
-        dossier_timeline = [(r[0], r[1]), (r[2], r[3]), (r[4], r[5])][:n]
+        dossier_timeline = [
+            (evidence_id, int(signal_rank))
+            for evidence_id, signal_rank in [(r[0], r[1]), (r[2], r[3]), (r[4], r[5])][:n]
+        ]
         dossier_full_head = [r[6], r[7], r[8]][:n]
         direct_pairs = [(row[0], int(row[2])) for row in direct]
         direct_ids = [row[0] for row in direct]

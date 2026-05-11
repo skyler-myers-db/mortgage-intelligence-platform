@@ -1,3 +1,5 @@
+> **Internal implementation artifact. Not approved for public release.**
+
 # Lakeview dashboards — validation report
 
 Two dashboard specs replace the prior stubs:
@@ -26,12 +28,12 @@ matters."
 
 ### Page 2 — Geography
 
-Top row: a symbol-map keyed by `state` coloring each of the six footprint
-states (IL / CA / FL / TX / WA / CO) by mean opportunity score, sized by
-borrower count, next to a bar chart of total AVM value by state. Bottom:
+Top row: a symbol-map keyed by `state` coloring each current coverage
+state by mean opportunity score, sized by borrower count, next to a bar
+chart of total AVM value by state. Bottom:
 a 20-row table of the densest in-the-money ZIPs with city, borrower count,
 ITM count, mean score, and mean rate spread. **Screenshot:** wait for the
-map to paint all six states before capturing — the story is "Chicago is
+map to paint all current coverage states before capturing — the story is "Chicago is
 the anchor, Denver is the runner-up" (`docs/data-contract-module0.md §10`).
 
 ### Page 3 — Economic incentive
@@ -62,7 +64,7 @@ Intelligence route.
 A pivot (rows = state, cols = segment, cell = count) and a stacked bar
 of the top 3 segments per state. The pivot answers "which markets over-
 or under-index on which segment" without the user writing SQL.
-**Screenshot:** zoom the pivot so all six states and all six segment
+**Screenshot:** zoom the pivot so current coverage states and all segment
 columns are visible in one frame.
 
 ### Page 3 — Triggers
@@ -112,10 +114,9 @@ Flagged for a future slice:
   `SUBSTRING(`timestamp`, 1, 10)` and `DATE_FORMAT(CURRENT_DATE() -
   INTERVAL 30 DAYS, 'yyyy-MM-dd')`. Do not cast to DATE without updating
   the gold DDL first.
-- The 6-state footprint is implicit (the share is filtered to IL / CA /
-  FL / TX / WA / CO at silver). No dashboard adds a state filter at the
-  query level — scoping to a metro is a user action on the rendered
-  widget.
+- The source footprint is derived from refreshed gold coverage. No dashboard
+  hardcodes a fixed state list; scoping to a state, county, ZIP, or metro is a
+  user action on the rendered widget.
 
 ## Validation
 

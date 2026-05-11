@@ -1,3 +1,5 @@
+> **Internal implementation artifact. Not approved for public release.**
+
 # Metric-view contract — approval_rate, outreach_rate, delta_vs_prior
 
 Slice13-accuracy follow-up to `docs/validation/dashboards.md` §"Metric-view
@@ -87,16 +89,21 @@ that want typed deltas.
 
 ### `mip.semantics.lead_generation_metric_view`
 
-Still explodes segments. Now LEFT JOINs `gold.borrower_lifecycle_state`
-keyed by `borrower_id`, with `COALESCE` falling back to `'pending'` /
-`'none'` so unreviewed borrowers still appear. Publishes:
+Preserves `gold.lead_population` borrower grain. Segment membership remains
+an array in `segment_codes`; segment filters must use
+`array_contains(segment_codes, '<segment_code>')`, and aggregate borrower
+counts must use `COUNT(DISTINCT clip)`. The view LEFT JOINs
+`gold.borrower_lifecycle_state` keyed by `borrower_id`, with `COALESCE`
+falling back to `'pending'` / `'none'` so unreviewed borrowers still appear.
+Publishes:
 
-- `approval_status` / `outreach_status` — per-row dimensions.
-- `approval_rate` / `outreach_rate` — partition-level aggregates
-  (window functions over `(state, segment)`), so widgets can display a
-  per-cell rate without re-aggregating.
+- `segment_codes` / `primary_segment` — per-row dimensions. `primary_segment`
+  is display-only; it is not a complete membership filter.
+- `approval_status` / `outreach_status` — per-row lifecycle dimensions.
+- `approval_rate` / `outreach_rate` — state-level window aggregates that keep
+  one row per borrower.
 - `delta_vs_prior_count` — WoW addressable delta sourced from the
-  funnel snapshot.
+  `_ALL` funnel snapshot by state.
 
 ## Widgets unblocked
 

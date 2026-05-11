@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useApp } from '../AppContext';
-import { api } from '../../lib/api';
+import { ApiError, api } from '../../lib/api';
 import type { GenieActionSuggestion, GenieAnswer as GenieAnswerShape } from '../../types';
 import { Icon } from '../Icon';
 import { Button, Chip, EvidenceChip } from '../Primitives';
 import { GenieAnswer } from './GenieAnswer';
 import { GenieProgress } from './GenieProgress';
-import { DRAWER_SOURCES } from '../../lib/drawerSources';
+import { drawerForAsset } from '../../lib/drawerSources';
 import { isGenieFollowUpQuestion } from '../../lib/genieSession';
 
 // 2026-05-04 (FIX Δ2): persisted size for the floating panel. The
@@ -168,24 +169,6 @@ function snapPos(
 }
 
 /**
- * Map a free-form trusted-asset string (UC path or ruleset id) to the
- * best-fitting drawer entry. Returns null when no specific match exists
- * — the caller renders an inert chip so clicking a generic source like
- * "UC.metrics" or "Databricks Genie API" does NOT open the wrong (NBO)
- * drawer. 2026-05-04 user feedback: clicking what looked like a status
- * chip was opening Next-Best-Offer logic, which was misleading.
- */
-function drawerForAsset(asset: string) {
-  if (/itm|rules/i.test(asset)) return DRAWER_SOURCES.itm;
-  if (/lead.?score|lead_scores|fn_lead_score/i.test(asset)) return DRAWER_SOURCES.leadScore;
-  if (/permit/i.test(asset)) return DRAWER_SOURCES.permit;
-  if (/lead_population|population|borrower_360/i.test(asset)) return DRAWER_SOURCES.population;
-  if (/next.?best|nbo/i.test(asset)) return DRAWER_SOURCES.nbo;
-  if (/config/i.test(asset)) return DRAWER_SOURCES.config;
-  return null;
-}
-
-/**
  * Floating Genie chat panel — `.genie` BEM from the prototype. Fixed
  * bottom-right, reachable from every page. The API path enforces governed
  * SQL/source proof before displaying data-bearing answers. A floating
@@ -201,30 +184,46 @@ type ChatMsg =
   | { who: 'user'; text: string }
   | { who: 'ai'; payload: GenieAnswerShape; sources?: string[] };
 
-const SAMPLE_QUESTIONS = [
-  'How many in-the-money borrowers in Travis County?',
-  'Top 10 borrowers by score',
-  'Show HELOC candidates by state.',
-];
+function sourceAssetsFor(payload: GenieAnswerShape): string[] {
+  const seen = new Set<string>();
+  const assets = [
+    ...(payload.proof?.source_assets ?? []),
+    ...(payload.trusted_assets ?? []),
+  ];
+  for (const raw of assets) {
+    const asset = typeof raw === 'string' ? raw.trim() : '';
+    if (asset) seen.add(asset);
+  }
+  return Array.from(seen).slice(0, 4);
+}
+
+const NON_PERSISTABLE_SOURCES = new Set([
+  'degraded',
+  'policy_blocked',
+  'refused',
+  'data_gap',
+  'out_of_footprint',
+]);
+
+function shouldPersistConversation(payload: GenieAnswerShape): boolean {
+  return Boolean(payload.conversation_id && !NON_PERSISTABLE_SOURCES.has(String(payload.source ?? '')));
+}
+
+function warningLabelForSource(source: string | undefined): string | null {
+  if (source === 'degraded') return 'Genie reconnecting';
+  if (source === 'policy_blocked' || source === 'refused') return 'Governed refusal';
+  if (source === 'data_gap') return 'Pending source feed';
+  if (source === 'out_of_footprint') return 'Outside footprint';
+  return null;
+}
 
 export function GenieChat() {
   const { genieOpen, setGenieOpen, lender, refreshWorkspace } = useApp();
-  // Seed greeting carries no source chips — the prior placeholder
-  // ("UC.metrics") wasn't a real UC path and clicking it routed into
-  // the wrong drawer (NBO logic), which was misleading per 2026-05-04
-  // user feedback. The greeting is editorial copy only; real source
-  // chips appear once the user asks a question.
-  const [msgs, setMsgs] = useState<ChatMsg[]>([
-    {
-      who: 'ai',
-      payload: {
-        answer: `Ask about ${lender}'s borrower segments, triggers, or evidence. Answers run against Unity Catalog metric views.`,
-        trusted_assets: [],
-      },
-    },
-  ]);
+  const navigate = useNavigate();
+  const [msgs, setMsgs] = useState<ChatMsg[]>([]);
   const [input, setInput] = useState('');
   const [typing, setTyping] = useState(false);
+  const [sampleQuestions, setSampleQuestions] = useState<string[]>([]);
   const [conversationId, setConversationId] = useState<string | null>(() => {
     try {
       return localStorage.getItem(CONVERSATION_STORAGE_KEY);
@@ -235,10 +234,11 @@ export function GenieChat() {
   const bodyRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (conversationId) return undefined;
     const controller = new AbortController();
     api.genieStart(controller.signal)
       .then((result) => {
+        setSampleQuestions(Array.isArray(result.sample_questions) ? result.sample_questions : []);
+        if (conversationId) return;
         if (!result.conversation_id) return;
         setConversationId(result.conversation_id);
         try {
@@ -542,16 +542,37 @@ export function GenieChat() {
     setTyping(true);
     try {
       const res = (await api.genie(trimmed, nextConversationId)) as GenieAnswerShape;
-      if (res.conversation_id) {
-        setConversationId(res.conversation_id);
+      const returnedConversationId = res.conversation_id ?? null;
+      if (returnedConversationId && shouldPersistConversation(res)) {
+        setConversationId(returnedConversationId);
         try {
-          localStorage.setItem(CONVERSATION_STORAGE_KEY, res.conversation_id);
+          localStorage.setItem(CONVERSATION_STORAGE_KEY, returnedConversationId);
         } catch {
           // ignore
         }
       }
-      const trusted = res.trusted_assets ?? [];
-      setMsgs((m) => [...m, { who: 'ai', payload: res, sources: trusted.slice(0, 4) }]);
+      setMsgs((m) => [...m, { who: 'ai', payload: res, sources: sourceAssetsFor(res) }]);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 403) {
+        setConversationId(null);
+        try {
+          localStorage.removeItem(CONVERSATION_STORAGE_KEY);
+        } catch {
+          // ignore
+        }
+      }
+      setMsgs((m) => [
+        ...m,
+        {
+          who: 'ai',
+          payload: {
+            answer: err instanceof Error ? `Genie session reset: ${err.message}` : 'Genie session reset.',
+            source: 'degraded',
+            trusted_assets: [],
+          },
+          sources: [],
+        },
+      ]);
     } finally {
       setTyping(false);
     }
@@ -597,8 +618,16 @@ export function GenieChat() {
           sources: [],
         },
       ]);
-      if (result.route) window.location.href = result.route;
+      if (result.route) navigate(result.route);
     } catch (err) {
+      if (err instanceof ApiError && err.status === 403) {
+        setConversationId(null);
+        try {
+          localStorage.removeItem(CONVERSATION_STORAGE_KEY);
+        } catch {
+          // ignore
+        }
+      }
       setMsgs((m) => [
         ...m,
         {
@@ -751,26 +780,27 @@ export function GenieChat() {
                   />
                 </div>
                 {/* Source chip row. The backend emits "genie" (live)
-                    or "degraded" (warming-up). Degraded gets a warning
-                    chip + tooltip; live answers render their trusted-
-                    asset lineage. 2026-05-04: removed the
-                    "computed_fallback" path entirely per user feedback
-                    ("we don't want this app to be gimmicky at all"). */}
-                {m.payload.source === 'degraded' && (
+                    or governed refusal/degraded source values. Warning
+                    chips never pretend to be data-bearing answers. */}
+                {warningLabelForSource(m.payload.source) && (
                   <div className="sources">
                     <Chip
                       variant="warning"
                       icon="info"
-                      title="The Genie space is warming up. Live answers will resume shortly."
+                      title={
+                        m.payload.source === 'degraded'
+                          ? 'The Genie space is warming up. Live answers will resume shortly.'
+                          : 'This answer intentionally stopped before displaying a live result.'
+                      }
                     >
-                      Genie reconnecting
+                      {warningLabelForSource(m.payload.source)}
                     </Chip>
                   </div>
                 )}
-                {m.payload.source !== 'degraded' &&
-                  m.sources && m.sources.length > 0 && (
+                {!warningLabelForSource(m.payload.source) &&
+                  sourceAssetsFor(m.payload).length > 0 && (
                   <div className="sources">
-                    {m.sources.map((s, j) => {
+                    {(m.sources && m.sources.length > 0 ? m.sources : sourceAssetsFor(m.payload)).map((s, j) => {
                       const drawer = drawerForAsset(s);
                       if (drawer === null) {
                         // Source string doesn't map to a specific drawer
@@ -801,9 +831,22 @@ export function GenieChat() {
               <div className="bubble"><GenieProgress dense /></div>
             </div>
           )}
-          {msgs.length <= 1 && (
+          {msgs.length === 0 && !typing && (
             <div className="genie-chat__samples">
-              {SAMPLE_QUESTIONS.map((s) => (
+              <div className="surface surface--inset">
+                <div className="surface__body genie-empty">
+                  <div className="genie-empty__icon">
+                    <Icon name="sparkle" size={16} />
+                  </div>
+                  <div>
+                    <div className="genie-empty__title">Ready for governed analysis</div>
+                    <p className="genie-empty__copy">
+                      Ask a question. Data-bearing answers appear only after Genie returns trusted SQL, source assets, and proof.
+                    </p>
+                  </div>
+                </div>
+              </div>
+              {sampleQuestions.map((s) => (
                 <button key={s} className="filter genie-chat__sample" onClick={() => ask(s)} type="button">
                   <Icon name="sparkle" size={11} /> {s}
                 </button>

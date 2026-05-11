@@ -15,7 +15,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 
-from backend.schemas.common import EvidenceEvent
+from backend.schemas.common import EvidenceEvent, validate_public_borrower_id
 from backend.schemas.lead import Borrower360
 from backend.services.audit_store import AuditStore, get_audit_store, resolve_actor
 from backend.services.observability import emit
@@ -27,6 +27,16 @@ router = APIRouter(prefix="/api/borrowers", tags=["borrowers"])
 
 RepoDep = Annotated[BorrowerRepository, Depends(get_borrower_repository)]
 StoreDep = Annotated[AuditStore, Depends(get_audit_store)]
+
+
+def _path_borrower_id(value: str) -> str:
+    try:
+        return validate_public_borrower_id(value)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail="borrower_id must be an app-scoped public borrower id",
+        ) from exc
 
 
 def _safe_audit_write(store: AuditStore, **kwargs: object) -> None:
@@ -65,6 +75,7 @@ def get_borrower(
     repo: RepoDep,
     audit: StoreDep,
 ) -> Borrower360:
+    borrower_id = _path_borrower_id(borrower_id)
     borrower = repo.get(borrower_id)
     if borrower is None:
         raise HTTPException(status_code=404, detail=f"Borrower {borrower_id} not found")
@@ -93,6 +104,7 @@ def get_borrower(
 
 @router.get("/{borrower_id}/evidence", response_model=list[EvidenceEvent])
 def get_borrower_evidence(borrower_id: str, repo: RepoDep) -> list[EvidenceEvent]:
+    borrower_id = _path_borrower_id(borrower_id)
     events = repo.evidence(borrower_id)
     if events is None:
         raise HTTPException(status_code=404, detail=f"Borrower {borrower_id} not found")

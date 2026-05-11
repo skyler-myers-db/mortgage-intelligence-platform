@@ -101,7 +101,8 @@ def test_dependency_down_handler_leaks_no_warehouse_substrings() -> None:
     field, and that the ``dependency`` field is still populated.
     """
     class _BoomSegmentRepo:
-        def list(self, portfolio_id: str | None = None) -> list:
+        def list(self, **kwargs: object) -> list:
+            _ = kwargs
             _raise_wrapped_warehouse_error()
             return []  # unreachable, keeps type-checker happy
 
@@ -142,7 +143,8 @@ def test_dependency_down_handler_includes_correlation_id() -> None:
     can stitch a client-visible 503 to the server-side structured log
     line that carries the full ``str(exc)``."""
     class _BoomSegmentRepo:
-        def list(self, portfolio_id: str | None = None) -> list:
+        def list(self, **kwargs: object) -> list:
+            _ = kwargs
             raise DependencyDownError("warehouse", reason="circuit breaker is open")
 
     previous = app.dependency_overrides.get(get_segment_repository)

@@ -1,16 +1,18 @@
 # Module 0 — Data Sources Gap Analysis
 
-**Scope:** Convert the Module 0 app from mock fixtures to Unity-Catalog-backed real data.
-**Status:** The Delta Share `cotality_mortgage_data.corelogic` is provisioned in the DEFAULT workspace, but every Module 0 SQL transformation, every `backend/services/*.py` data client, and all gold DDL are still placeholder stubs (1 line each). This document is the contract that closes that gap.
+**Audience:** Internal implementation note. Not approved for public release or external recording without Cotality review.
 
-**TL;DR:** We can build **5 of the 7 canonical Module 0 segments end-to-end today** with only one public-rates dataset added. Cotality's suggestion to add **MLS Listings** and **Building Permits** is correct — those are the two real blockers for the remaining segments ("Listed for Sale" and the "recent-renovation" HELOC signal). Everything else on the marketplace board is a future-module enhancement, not a Module 0 blocker.
+**Scope:** Track the remaining data-source gaps for the Unity-Catalog-backed Module 0 app.
+**Status:** The Cotality Delta Share `cotality_mortgage_data.corelogic`, FRED market-rate ingestion, silver/gold DDL, scoring UDFs, and Module 0 SQL transformations are implemented in-repo. This document now records the remaining data-source blockers and the minimum Cotality request needed to close them.
+
+**TL;DR:** We can model the core refi, cash-out/equity, investor, current-customer retention, and distress-lite use-cases from the current share plus FRED. Cotality's suggestion to add **MLS Listings** and **Building Permits** is correct: MLS unlocks the blocked `listed` segment and purchase branch; Permits upgrade HELOC from equity-only to intent-driven. Everything else on the marketplace board is a future-module enhancement, not a Module 0 blocker.
 
 ---
 
 ## 1. What we have in the share
 
 Catalog: `cotality_mortgage_data.corelogic`
-Provider: `datashare_us_west_2` · Share: `corelogic_226d2860` · Last updated: Oct 29, 2026
+Provider: `datashare_us_west_2` · Share: `corelogic_226d2860` · Live probe used for this analysis: Apr 21, 2026
 
 | Table | Rows | Cols | Primary key | Role |
 |---|---:|---:|---|---|
@@ -20,19 +22,26 @@ Provider: `datashare_us_west_2` · Share: `corelogic_226d2860` · Last updated: 
 | `entrada_eval_owner_transfer_domain_v1` | 24,051,375 | 114 | composite txn id | **Historical deeds** — every sale/transfer, buyer/seller names, REO/short-sale/investor/cash flags. |
 | `entrada_eval_mortgage_market_analytics_domain_v1` | 39,772,305 | 197 | composite txn id | Pre-joined mortgage⊕sale analytics view. Useful for purchase analysis; duplicates the mortgage+owner_transfer columns. |
 
-### Geography (coverage the demo story has to live inside)
-6 states, weighted toward IL/CA/FL/TX/WA/CO:
+### Geography (data-driven coverage)
+The app discovers Cotality coverage from `mip.gold.county_rollup` and
+`mip.gold.zip_rollup`; the product does not hardcode a county count. The
+current validation workspace resolves to the following counties, which is not
+the same as full-state Cotality coverage:
 
-| State | Properties | With open liens | Avg 1st-pos rate | Avg C-LTV |
-|---|---:|---:|---:|---:|
-| IL | 1.86M | 1.13M | 4.75% | 49.2% |
-| CA | 0.90M | 0.58M | 4.04% | 30.6% |
-| FL | 0.76M | 0.40M | 4.71% | 36.5% |
-| TX | 0.75M | 0.41M | 4.72% | 45.3% |
-| WA | 0.74M | 0.49M | 4.16% | 47.0% |
-| CO | 0.16M | 0.10M | 4.12% | 54.1% |
+| State | Discovered county | Property snapshots | With open liens | Avg 1st-pos rate | Avg C-LTV |
+|---|---|---:|---:|---:|---:|
+| IL | Cook | 1.86M | 1.13M | 4.75% | 49.2% |
+| CA | Orange | 0.90M | 0.58M | 4.04% | 30.6% |
+| FL | Broward | 0.76M | 0.40M | 4.71% | 36.5% |
+| TX | Dallas | 0.75M | 0.41M | 4.72% | 45.3% |
+| WA | King | 0.74M | 0.49M | 4.16% | 47.0% |
+| CO | Douglas | 0.16M | 0.10M | 4.12% | 54.1% |
 
-**Walkthrough-posture implication:** the narrative must stay in these 6 states. Our mock fixtures currently cite other metros — that needs to reconcile with the real footprint when we move off mocks (or we cherry-pick a single metro from this list as the sample lender's footprint).
+**Walkthrough-posture implication:** the narrative should follow the discovered
+coverage shown by the app. State-level UI buckets are useful for executive
+scanning, but any drill-down or public narration should name the counties
+actually returned by the coverage service rather than implying full-state
+Cotality coverage.
 
 ### Rate-cohort distribution (first-position mortgage by origination year)
 | Cohort | Count | Median rate | Demo relevance |
@@ -65,15 +74,15 @@ From `CLAUDE.md`, the seven canonical borrower segments and what each needs:
 |---|---|---|---|---|
 | 1 | **Rate-&-term refi (in the money)** | Current rate ≥ market + 75bps, equity ≥ 15% | ✅ **Yes, with public PMMS** | voluntary_lien `first_position_mortgage_interest_rate`, `estimated_equity`, + FRED `MORTGAGE30US` |
 | 2 | **Cash-out refi** | Rate-spread ≥ 0 AND ΔEquity ≥ threshold | ✅ **Yes** | voluntary_lien rate + `estimated_equity` + AVM appreciation via `estimated_value_mktg` vs. `purchase_amount` |
-| 3 | **HELOC / 2nd-lien candidates** | High equity, clean 1st-lien, renovation/life-event intent | ⚠️ **Partial** — can build equity-only filter; **renovation intent blocked without Building Permits** | voluntary_lien equity + lack of 2nd-position; **gap: Permits** |
+| 3 | **HELOC / 2nd-lien candidates** | High equity, clean 1st-lien, renovation/life-event intent | ⚠️ **Partial** — equity-only segment ships; renovation intent blocked without Building Permits | voluntary_lien equity + `COALESCE(second_position_mortgage_amount, 0) = 0`; **gap: Permits** |
 | 4 | **Investor / multi-property** | Owner Link with ≥N properties OR corporate owner OR absentee mailing | ✅ **Yes** | property_v3 `owner_1_identifier` aggregation + `*_corporate_indicator` + mailing vs. situs |
-| 5 | **Retention / recapture** | Existing customer OR competitor-refi detection | ✅ **Yes** | voluntary_lien `first_position_lender_company_name` (origin) + `first_position_currently_assigned_lender_company_name` (current) + mortgage_domain payoff history |
-| 6 | **Listed for sale (purchase mortgage)** | Active MLS listing | ❌ **Blocked** — not in share, Zillow/MLS required | **gap: MLS Listings** |
+| 5 | **Retention / recapture** | Current customer retention now; former-customer recapture from historical Summit-financed Owner Link relationships | ✅ **Current-customer side yes** / ✅ **Former-customer filter yes, subject to historical Summit coverage** | voluntary_lien `first_position_currently_assigned_lender_company_name` + governed `mip.ref.lender_dictionary`; `is_former_customer` is backed by owner-level historical Summit CLIP history with no current Summit-serviced lien |
+| 6 | **Listed for sale (purchase mortgage)** | Active MLS listing | ❌ **Blocked** — not in current share, Cotality MLS required | **gap: MLS Listings** |
 | 7 | **Distress / pre-foreclosure** | NOD/NTS filings, late-stage foreclosure | ⚠️ **Partial** — have `foreclosure_stage_code` snapshot (29K properties) + REO sale history (1.2M); **missing pre-NOD leading indicators** | property_v3 + owner_transfer; **nice-to-have: Pre-Foreclosure product** |
 
 **Counting segments that ship today vs. require more data:**
-- **Ship now (5):** Rate-&-term refi, Cash-out, Investor, Retention/Recapture, Distress-lite (current foreclosure stage + REO history only).
-- **Blocked (2):** Listed-for-Sale (needs MLS), HELOC renovation-intent (needs Permits).
+- **Ship now:** Rate-&-term refi, Cash-out/equity, Investor/Multi-property, current-customer Retention, Distress-lite (current foreclosure stage + REO history only).
+- **Blocked:** Listed-for-Sale (needs MLS), permit-driven HELOC intent (needs Building Permits).
 - **Upgradeable (1):** Distress becomes much stronger with Pre-Foreclosure product.
 
 ---
@@ -125,11 +134,11 @@ Per `CLAUDE.md` negative prompting ("Do not overbuild Modules 1–4 before Modul
 
 ## 5. Public datasets required
 
-### Required for Module 0 (blocks in-the-money math) — **1 dataset**
+### Required for Module 0 (already integrated) — **1 dataset**
 - **Freddie Mac PMMS 30-year fixed rate** via FRED series `MORTGAGE30US`.
   - Why: `fn_in_the_money` needs `rate_spread_bps = borrower_rate - market_rate`. Without a market rate series we cannot compute the spread.
   - Cadence: weekly, small CSV.
-  - Integration: small Databricks job writes the FRED CSV to a `mip.silver.market_rates_weekly` table, lagged by one day.
+  - Integration: Databricks job writes the FRED CSV/seed to `mip.silver.market_rates_weekly`, lagged by one day.
   - License: FRED is free for redistribution.
 
 ### Optional / nice-to-have for polish
@@ -145,25 +154,26 @@ Per `CLAUDE.md` negative prompting ("Do not overbuild Modules 1–4 before Modul
 
 ## 6. Mapping — share → silver → gold
 
-This is the bridge from today's empty transformation files to real data. Target catalog: `mip` (per `CLAUDE.md`).
+This is the implemented bridge from the Cotality share to the `mip` silver/gold contract (per `CLAUDE.md`). Raw names and street addresses are read only where needed for hashing/derivation and are not persisted into silver/gold UI surfaces.
 
 ### Silver (1:1 typed lift with minimal filtering)
 ```
 mip.silver.property_master
-  <- SELECT clip, fips_county_code, situs_street_address, situs_city, situs_state, situs_zip_code,
+  <- SELECT clip, fips_county_code, situs_city, situs_state, ZIP5(situs_zip_code),
            situs_core_based_statistical_area_cbsa, block_level_latitude, block_level_longitude,
-           owner_1_full_name, owner_1_identifier, owner_1_corporate_indicator, owner_occupancy_code,
-           mailing_street_address, mailing_city, mailing_state,
+           sha2(owner_1_full_name || salt) AS owner_name_hash,
+           owner_1_identifier, owner_1_corporate_indicator, owner_occupancy_code,
+           mailing_city, mailing_state,
            calculated_total_value, assessed_total_value, total_tax_amount, tax_year,
            foreclosure_stage_code, last_foreclosure_transaction_date,
            year_built, total_living_area_square_feet_all_bldgs,
            total_number_of_bedrooms_all_bldgs, total_number_of_bathrooms
      FROM cotality_mortgage_data.corelogic.entrada_eval_property_domain_v3
-     WHERE situs_state IN ('IL','CA','FL','TX','WA','CO')     -- match real footprint
+     WHERE situs_state IS NOT NULL     -- source coverage is data-driven
 
 mip.silver.lien_current
-  <- SELECT clip, owner_1_full_name, owner_occupancy_code,
-           situs_street_address, situs_state, situs_zip_code,
+  <- SELECT clip, owner_occupancy_code,
+           situs_state, ZIP5(situs_zip_code),
            total_number_of_open_mortgage_liens, total_amount_of_open_mortgage_liens,
            estimated_value_mktg, estimated_value_high_mktg, estimated_value_low_mktg,
            confidence_score_mktg, value_as_of_date_mktg,
@@ -179,7 +189,7 @@ mip.silver.lien_current
            second_position_mortgage_amount, second_position_mortgage_interest_rate,
            second_position_mortgage_purpose_code, second_position_lender_company_name
      FROM cotality_mortgage_data.corelogic.entrada_eval_voluntary_lien_status_marketing_v2
-     WHERE situs_state IN ('IL','CA','FL','TX','WA','CO')
+     WHERE situs_state IS NOT NULL
 
 mip.silver.mortgage_events
   <- SELECT clip, mortgage_composite_transaction_id, mortgage_derived_date, mortgage_amount,
@@ -188,7 +198,7 @@ mip.silver.mortgage_events
            lender_company_name, mortgage_release_date, mortgage_status_indicator,
            borrower_1_identifier
      FROM cotality_mortgage_data.corelogic.entrada_eval_mortgage_domain_v1
-     WHERE deed_situs_state_static IN ('IL','CA','FL','TX','WA','CO')
+     WHERE deed_situs_state_static IS NOT NULL
 
 mip.silver.owner_transfer_events
   <- SELECT clip, sale_derived_date, sale_amount, sale_type_code,
@@ -197,7 +207,7 @@ mip.silver.owner_transfer_events
            buyer_1_full_name, buyer_1_corporate_indicator, buyer_1_identifier,
            buyer_mailing_state
      FROM cotality_mortgage_data.corelogic.entrada_eval_owner_transfer_domain_v1
-     WHERE deed_situs_state_static IN ('IL','CA','FL','TX','WA','CO')
+     WHERE deed_situs_state_static IS NOT NULL
 
 mip.silver.market_rates_weekly
   <- FRED MORTGAGE30US CSV (weekly job)
@@ -206,29 +216,27 @@ mip.silver.market_rates_weekly
 ### Gold (scoring-ready, matches existing UDF signatures)
 ```
 mip.gold.property_owner_bridge   -- Owner Link rollup (count properties per owner_1_identifier)
-mip.gold.borrower_360            -- one row per CLIP: joined lien_current + property + owner + latest retention signal
+mip.gold.borrower_360            -- one row per CLIP: joined lien_current + property + owner + latest market rate
 mip.gold.lead_scores             -- fn_lead_score(economic, intent, fit, relationship, evidence) per CLIP
 mip.gold.evidence_events         -- timeline per CLIP: refis, payoffs, sales, foreclosure stage, rate changes
 mip.gold.lead_population         -- filtered ranked top-N for demo surface
 ```
 
 ### Component score definitions (feeds `fn_lead_score`)
-- **economic_incentive (0.35):** piecewise from rate_spread_bps and equity_pct using `fn_in_the_money` + magnitude.
-- **intent_trigger (0.30):** today, from recent refi/payoff/new-lien events in mortgage_domain within last 90d. **Upgrades dramatically with Permits + MLS.**
+- **economic_incentive (0.35):** continuous blend from rate_spread_bps and equity_pct using the frozen `fn_rate_spread` / `fn_in_the_money` contract.
+- **intent_trigger (0.30):** today, from recent refi/payoff events, competitor-lien signal, investor signal, rate drift, equity proxy, and current-customer bump. **Upgrades dramatically with Permits + MLS.**
 - **fit (0.15):** from loan_type_code, owner_occupancy_code, property type, geography match to lender LO coverage.
-- **relationship (0.10):** from `first_position_lender_company_name` match to demo lender (Summit Mortgage), and historical mortgage_events for same CLIP.
-- **evidence (0.10):** count of distinct Cotality source rows contributing to the record (used for the evidence-drawer confidence UI).
+- **relationship (0.10):** from current-servicer Summit relationship, former-customer relationship, competitor-lien flag, owner-link breadth, and owner-level historical Summit distinct-CLIP count.
+- **evidence (0.10):** count of distinct Cotality source rows plus bounded second-position evidence tail (used for the evidence-drawer confidence UI).
 
 ---
 
-## 7. What we do first (implementation sequence, not schedule)
+## 7. Remaining implementation and data-source work
 
-1. **Add FRED `MORTGAGE30US` ingestion** (1 small job, 1 silver table). Unblocks in-the-money math.
-2. **Populate silver transformations** per §6. No cross-domain joins yet — plain SELECT-with-WHERE on the share.
-3. **Populate gold** `borrower_360` + `lead_scores` + `evidence_events`. Join lien_current + property_v3 + mortgage_events aggregates.
-4. **Wire `backend/services/databricks_sql.py`** to point at `mip.gold.*`. Live UC is the only runtime path; resilience (retry, warm-start, SWR cache, circuit breaker, degraded banner) handles flakiness — no silent mock fallback (see [CLAUDE.md](../CLAUDE.md) "Negative prompting").
-5. **Reconcile demo lender footprint** with real state coverage (pick one of IL/CA/FL/TX/WA/CO as Summit Mortgage's book, or a metro like Chicago/Seattle/Denver).
-6. **Request MLS Listings + Building Permits from Cotality** in parallel with the above — these unblock segment 6 and upgrade segment 3 but don't block the other 5 segments from shipping.
+1. **Keep the implemented UC path refreshed**: FRED `MORTGAGE30US`, silver lifts, gold CTAS, metric views, and `sql/_rendered` output are the repo-backed data path.
+2. **Request MLS Listings + Building Permits from Cotality**: these unblock the `listed` segment and convert HELOC from equity-only to intent-driven.
+3. **Refresh and validate former-customer recapture live**: `is_former_customer` now uses a distinct historical-Summit Owner Link predicate, but live UC counts are only certified after the next gold refresh and parity check.
+4. **Optional post-demo enrichment**: HPI forecast / Pre-Foreclosure / CLIP MCP remain later asks, not prerequisites for Module 0 truth.
 
 ---
 
@@ -252,7 +260,8 @@ Run against warehouse `cfa0e10eed4f00a5` (sidewinder) on profile `DEFAULT`, Apr 
 Row counts, geographic coverage, cohort distribution, signal-completeness, Owner Link cardinality, distress/refi event volumes — all reproducible from the SQL files at `/tmp/*.sql` in the investigation transcript. Summary:
 
 - 5 tables · 103M total rows · CLIP is clean primary key on voluntary_lien (1:1) and property_v3 (1:1).
-- 6-state footprint (IL/CA/FL/TX/WA/CO), 5.16M property snapshots.
+- Current coverage discovery resolves to the counties listed above, totaling
+  5.16M property snapshots in this validation workspace.
 - 84% AVM coverage, 94% occupancy coverage, 59% current-servicer coverage, 83% Owner Link coverage.
 - 565K borrowers in the 2023+ high-rate cohort (active in-the-money pool).
 - 1.22M borrowers in the 2020–2022 sub-3% cohort (retention + cash-out pool).

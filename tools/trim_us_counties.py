@@ -1,14 +1,12 @@
 #!/usr/bin/env python
-"""Trim us-atlas counties-albers-10m.json to the 6-state Module 0
-footprint and write the result to frontend/public/us-counties.json.
+"""Build the county TopoJSON used by the app's geography drill-down.
 
 Module 0's USChoroplethMap renders state-level polygons from
 @svg-maps/usa, then drills into county polygons read from the
-trimmed TopoJSON shipped at `frontend/public/us-counties.json`. The
-upstream us-atlas counties file weighs ~795 KB and contains every
-US county; trimming to the footprint states (IL/CA/FL/TX/WA/CO) gets
-us under 160 KB while still providing real polygons for every state
-in the Cotality eval share.
+TopoJSON shipped at `frontend/public/us-counties.json`. The upstream
+us-atlas counties file weighs less than 1 MB and contains every US county;
+shipping the full national file means a broader Cotality share does not
+require a code edit before county drill-down works.
 
 USAGE
 =====
@@ -17,7 +15,7 @@ USAGE
   curl -sL https://unpkg.com/us-atlas@3.0.1/counties-albers-10m.json \
     -o /tmp/counties-albers-10m.json
 
-  # trim and write
+  # write full national county topology
   python tools/trim_us_counties.py
 
 WHY ALBERS
@@ -32,26 +30,13 @@ WHY A SCRIPT (vs commit-only output)
 ====================================
 
 The committed JSON is what the app ships, but a script makes the
-provenance + the filter list explicit. Bumping us-atlas, adding a
-new footprint state, or moving to a higher-res polygon set is now a
-one-line edit + a re-run, not a manual JSON surgery.
+provenance explicit. Bumping us-atlas or moving to a higher-res polygon
+set is a re-run, not manual JSON surgery.
 """
 from __future__ import annotations
 
 import json
 from pathlib import Path
-
-# Mirror CLAUDE.md "do not filter real data to a single metro. The product
-# spans the full 6-state share footprint (IL/CA/FL/TX/WA/CO)". Add a state
-# here when the Cotality share extends; the trimmer picks it up next run.
-FOOTPRINT: dict[str, str] = {
-    "06": "CA",
-    "08": "CO",
-    "12": "FL",
-    "17": "IL",
-    "48": "TX",
-    "53": "WA",
-}
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SRC = Path("/tmp/counties-albers-10m.json")
@@ -114,13 +99,9 @@ def main() -> int:
         topo = json.load(f)
 
     counties = topo["objects"]["counties"]["geometries"]
-    keep = [
-        g
-        for g in counties
-        if str(g.get("id", "")).startswith(tuple(FOOTPRINT.keys()))
-    ]
+    keep = list(counties)
     print(f"source counties: {len(counties)}")
-    print(f"kept (footprint): {len(keep)}")
+    print(f"kept (national): {len(keep)}")
 
     used: set[int] = set()
     for g in keep:

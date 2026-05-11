@@ -6,7 +6,7 @@ Module 0 answers the lender's first question before LOS/CRM pipeline optimizatio
 
 > **Who should we contact, why now, and with what offer?**
 
-The app uses Cotality public-record, lien, ownership, listing, permit, AVM, HPI, and mortgage market intelligence data through Databricks to build lead populations, score borrower opportunity, explain source evidence, draft next-best-offer outreach, and require human approval before action.
+The app uses live Cotality public-record, lien, ownership, valuation, and mortgage market intelligence data through Databricks to build lead populations, score borrower opportunity, explain source evidence, draft next-best-offer outreach, and require human approval before action. MLS listing and Building Permit overlays are visible as blocked/pending segments until Cotality shares those Delta Share products.
 
 ## Product flow
 
@@ -14,7 +14,7 @@ The app uses Cotality public-record, lien, ownership, listing, permit, AVM, HPI,
 2. Go to `/portfolio-builder` and build a lead population from geography, occupancy, open lien, lender relationship, target product, and assumptions.
 3. Go to `/segment-intelligence` and show the map + segment cards.
 4. Go to `/lead-queue` and expand a high-scoring borrower.
-5. Go to `/borrower-360/:id` and show CLIP, Owner Link, liens, equity, related properties, triggers, and evidence.
+5. Go to `/borrower-360/:id` and show masked property/owner refs, liens, equity, related properties, triggers, and evidence.
 6. Go to `/offer-orchestrator/:id` and approve a human-in-the-loop action.
 7. Go to `/ask-genie` and ask one curated question over Module 0 gold tables.
 
@@ -28,8 +28,8 @@ The app uses Cotality public-record, lien, ownership, listing, permit, AVM, HPI,
 - Semantics: Unity Catalog metric views
 - Conversational analytics: Genie App resource / Genie API wrapper
 - Transactional state: Lakebase Postgres for campaigns, approvals, feedback, audit
-- Agentic workflow: deterministic orchestrator (production-ready); Agent Bricks/Supervisor available as an optional extension
-- Deployment: Databricks Declarative Automation Bundles
+- Agentic workflow: governed action orchestrator for demo-safe workflows; Agent Bricks/Supervisor available as an optional production extension
+- Deployment: Databricks Declarative Automation Bundles using the direct deployment engine
 
 ## Quick start locally
 
@@ -62,10 +62,11 @@ python -m backend.runtime
 make deploy-dev
 ```
 
-`make deploy-dev` runs `scripts/deploy.sh`: build, env-aware bundle
-validate/deploy, app snapshot promotion, refresh jobs, Genie rebinding,
-and smoke checks. For narrow resource-only recovery, `make bundle-validate`
-and `make bundle-deploy` are safe because they run `tools/databricks/bundle_env.py`.
+`make deploy-dev` runs `scripts/deploy.sh`: build, env-aware direct bundle
+validate/plan/deploy, app snapshot promotion, refresh jobs, Genie rebinding,
+and smoke checks. For narrow resource-only recovery, `make bundle-validate`,
+`make bundle-plan`, and `make bundle-deploy` are safe because they run
+`tools/databricks/bundle_env.py`.
 Do not run bare `databricks bundle deploy` for a real app deploy; without
 the env-aware wrapper the app can try to bind placeholder resources.
 

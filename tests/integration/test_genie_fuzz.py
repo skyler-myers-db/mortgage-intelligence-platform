@@ -275,7 +275,7 @@ def _ask_with_backoff(client: GenieClient, question: str) -> GenieResponse:
 
 
 # Deliberately mortgage-flavoured vocab. Anything Genie should plausibly
-# answer for our 6-state footprint.
+# answer for the current refreshed gold coverage.
 _ACTION_VERBS = [
     "how many",
     "show me",
@@ -305,14 +305,15 @@ _METRICS = [
 ]
 
 _SCOPES = [
-    # States in-footprint
+    # Representative state scopes; live guardrails decide whether each state
+    # is inside the current coverage.
     "in IL",
     "in CA",
     "in FL",
     "in TX",
     "in WA",
     "in CO",
-    # Metros / cities in-footprint
+    # Metros / cities in the current Cotality data coverage
     "in Chicago",
     "in Los Angeles",
     "in San Francisco",
@@ -334,8 +335,8 @@ _SCOPES = [
     "with equity above 40%",
     "with equity above 50%",
     "with LTV below 65%",
-    # 6-state footprint call-out
-    "across the 6-state share footprint",
+    # Evaluation-share call-out
+    "across the current Cotality data coverage",
 ]
 
 _TIME_CONSTRAINTS = [
@@ -1060,6 +1061,7 @@ def test_trusted_asset_parser_finds_known_tables() -> None:
     """
     assert "mip.gold.lead_population" in _TRUSTED_TABLES
     assert "mip.gold.lead_scores" in _TRUSTED_TABLES
+    assert "mip.gold.source_readiness" in _TRUSTED_TABLES
     assert "mip.semantics.lead_generation_metric_view" in _TRUSTED_TABLES
     # Negative: silver + raw are NOT trusted.
     assert "mip.silver.property_basic" not in _TRUSTED_TABLES

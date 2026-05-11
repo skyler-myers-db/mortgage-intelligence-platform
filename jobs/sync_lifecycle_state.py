@@ -242,8 +242,20 @@ def _write_gold(rows: list[dict[str, Any]]) -> None:
     lb_df = spark.createDataFrame(lakebase_rows, schema=_LIFECYCLE_SCHEMA)
     lb_df.createOrReplaceTempView("_mip_lifecycle_lakebase")
 
+    # Only mirror decisions that reconcile to the current gold borrower
+    # population. Lakebase can contain historical sandbox probes or stale
+    # deleted-population rows; those stay in Lakebase/audit history but must
+    # not create phantom borrowers in the gold lifecycle table.
+    spark.sql("""
+        CREATE OR REPLACE TEMP VIEW _mip_lifecycle_valid AS
+        SELECT l.*
+        FROM _mip_lifecycle_lakebase AS l
+        INNER JOIN mip.gold.borrower_360 AS b
+          ON b.borrower_id = l.borrower_id
+    """)
+
     # Seed every known borrower to the default. A LEFT ANTI against the
-    # Lakebase rows guarantees no duplicate.
+    # valid Lakebase rows guarantees no duplicate.
     spark.sql("""
         CREATE OR REPLACE TABLE mip.gold.borrower_lifecycle_state AS
         SELECT
@@ -254,7 +266,7 @@ def _write_gold(rows: list[dict[str, Any]]) -> None:
             approved_at,
             outreach_at,
             synced_at
-        FROM _mip_lifecycle_lakebase
+        FROM _mip_lifecycle_valid
         UNION ALL
         SELECT
             b.borrower_id,
@@ -265,7 +277,7 @@ def _write_gold(rows: list[dict[str, Any]]) -> None:
             CAST(NULL AS TIMESTAMP)    AS outreach_at,
             CURRENT_TIMESTAMP()        AS synced_at
         FROM mip.gold.borrower_360 AS b
-        LEFT ANTI JOIN _mip_lifecycle_lakebase AS l
+        LEFT ANTI JOIN _mip_lifecycle_valid AS l
           ON l.borrower_id = b.borrower_id
     """)
 

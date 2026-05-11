@@ -8,8 +8,8 @@
 --            national total without re-aggregating at request time.
 --
 -- Grain:     One row per (segment_code, state) + one row per (segment_code,
---            '_ALL') for the national rollup. 6 segments * (6 states + _ALL)
---            = 42 rows maximum in the current 6-state footprint.
+--            '_ALL') for the national rollup. Row count follows refreshed
+--            source state coverage.
 -- PK:        (segment_code, state).
 -- Clustering: Liquid cluster on (segment_code).
 --
@@ -19,20 +19,22 @@
 --            state='_ALL' for the national route or to a specific state.)
 --            Column rename at router: delta_vs_prior -> delta.
 --
--- Segment membership predicates (matching mock_data.SEGMENTS, data-contract
--- §4):
+-- Segment membership predicates (canonical SegmentCode registry,
+-- data-contract §4):
 --   itm         : fn_in_the_money(rate_spread_bps, equity_pct, 75, 15) = TRUE
---   equity      : equity_pct >= 35 AND second_pos_amount IS NULL (clean 1st-
---                 lien, HELOC-grade equity). NOTE: predicate requires
---                 second_pos_amount column to be present on gold.borrower_360
---                 (and it is -- see gold_borrower_360.sql).
+--   equity      : equity_pct >= 35 AND COALESCE(second_pos_amount, 0) = 0
+--                 (clean 1st-lien, HELOC-grade equity). NOTE: predicate
+--                 requires second_pos_amount column to be present on
+--                 gold.borrower_360 (and it is -- see gold_borrower_360.sql).
 --   investor    : related_property_count >= 2 OR is_corporate_owner OR
 --                 is_absentee.
 --   retention   : is_current_customer = TRUE AND (rate_spread_bps >= 50 OR
 --                 is_competitor_lien OR listed_for_sale). listed_for_sale is
---                 BLOCKED -> FALSE, so the retention predicate simplifies to
---                 (customer AND (spread >= 50 OR competitor_lien)) on real
---                 data.
+--                 BLOCKED -> FALSE. In the current CLIP-grain refresh path,
+--                 is_current_customer and is_competitor_lien are mutually
+--                 exclusive current-servicer flags, so this behaves as
+--                 customer AND spread >= 50 until a portfolio-history
+--                 recapture join lands.
 --   listed      : listed_for_sale = TRUE. BLOCKED -> zero-count rows on
 --                 real data (data-contract §9).
 --   permit      : has_permit = TRUE. BLOCKED -> zero-count rows on real
@@ -49,7 +51,7 @@
 
 CREATE TABLE IF NOT EXISTS mip.gold.segment_population (
   segment_code    STRING    NOT NULL COMMENT 'itm / listed / permit / investor / equity / retention. Matches SegmentCode Literal exactly.',
-  state           STRING    NOT NULL COMMENT '2-char state code (IL/CA/FL/TX/WA/CO) or "_ALL" for national rollup.',
+  state           STRING    NOT NULL COMMENT '2-char state code from refreshed source coverage or "_ALL" for national rollup.',
   name            STRING    NOT NULL COMMENT 'Static label per segment_code (e.g., "In the Money").',
   count           INT       NOT NULL COMMENT 'Member count for this (segment, state) cell.',
   delta_vs_prior  STRING    NOT NULL COMMENT 'Quarter-over-quarter delta as "+NN%" / "-NN%". Router maps to SegmentSummary.delta. "+0%" on first refresh.',

@@ -8,8 +8,7 @@ the latest snapshot_date).
 
 slice13-accuracy-validation: adds county + ZIP rollup schemas and
 extends ``StateRollup`` with ``top_segment_code`` sourced from
-``mip.gold.state_top_segment`` so the UI can drop the hardcoded
-``STATE_FACTS.topSegment`` literal.
+``mip.gold.state_top_segment``.
 """
 from __future__ import annotations
 
@@ -32,8 +31,8 @@ class StateRollup(BaseModel):
     ``top_segment_code`` is the dominant SegmentCode for the state
     sourced from ``mip.gold.state_top_segment``. Nullable because the
     join is ``LEFT`` (state has data but no segment-code row yet on
-    first deploy); the UI falls back to the hardcoded STATE_FACTS
-    literal when null.
+    first deploy); the UI renders a neutral "unknown" segment label
+    when null.
     """
 
     state: str = Field(min_length=2, max_length=2)
@@ -77,13 +76,11 @@ class CountyRollupResponse(BaseModel):
     """Wire envelope — list of counties for a given state + snapshot date.
 
     ``scope_note`` is a short honesty string surfaced to the UI so a
-    user drilling into a state and seeing a single highlighted county
-    understands that's the extent of the current evaluation share, not
-    a bug. The default message reflects the Cotality evaluation share
-    the app ships with — one anchor county per state (CA:Orange,
-    CO:Douglas, FL:Broward, IL:Cook, TX:Dallas, WA:King). Null means no
-    banner needs to render (e.g. out-of-footprint state, empty
-    response). The field name matches the existing frontend
+    user drilling into a state understands the actual county coverage
+    discovered from the current Cotality share. It is generated from
+    ``mip.gold.county_rollup`` rather than a demo-specific constant.
+    Null means no banner needs to render (e.g. out-of-footprint state,
+    empty response). The field name matches the existing frontend
     ``CountyRollupResponse`` contract in ``frontend/src/types.ts``.
     """
 

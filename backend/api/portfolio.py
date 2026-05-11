@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from backend.schemas.portfolio import (
     PortfolioCreateRequest,
@@ -8,6 +8,9 @@ from backend.schemas.portfolio import (
     PortfolioPreview,
     PortfolioPreviewRequest,
 )
+from backend.services.audit_store import resolve_actor
+from backend.services.error_sanitizer import safe_dependency_detail
+from backend.services.lakebase import LakebaseError
 from backend.services.repositories import PortfolioRepository, get_portfolio_repository
 
 router = APIRouter(prefix="/api/portfolio", tags=["portfolio"])
@@ -30,8 +33,18 @@ def preview_portfolio(
 
 
 @router.post("/create", response_model=PortfolioCreateResponse)
-def create_portfolio(payload: PortfolioCreateRequest, repo: RepoDep) -> PortfolioCreateResponse:
-    return repo.create(payload)
+def create_portfolio(
+    request: Request,
+    payload: PortfolioCreateRequest,
+    repo: RepoDep,
+) -> PortfolioCreateResponse:
+    try:
+        return repo.create(payload, actor=resolve_actor(request))
+    except LakebaseError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=safe_dependency_detail("lakebase"),
+        ) from exc
 
 
 @router.get("/{portfolio_id}")

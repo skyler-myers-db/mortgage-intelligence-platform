@@ -3,9 +3,11 @@
 -- -----------------------------------------------------------------------------
 -- Purpose:   Genie-reachable and dashboard-reachable semantic view of
 --            `mip.gold.lead_population`. Dimensions the ranked lead
---            queue by segment + state + a simple rank_bucket, so questions
---            like "top 100 leads in California in the ITM segment" answer
---            cleanly.
+--            queue by state + a simple rank_bucket while preserving
+--            borrower grain. Segment questions should filter with
+--            array_contains(segment_codes, '<segment_code>') or use
+--            mip.semantics.segment_performance_metric_view for segment-grain
+--            KPIs.
 --
 -- Grain:     Inherits gold.lead_population (one row per clip in the
 --            top-N ranked cut).
@@ -14,11 +16,14 @@
 --            metric-views.md.
 --
 -- Dimensions:
---   segment    — explode segment_codes so Genie can filter by segment.
+--   segment_codes — array of borrower segment memberships; not exploded.
+--   primary_segment — first segment code for display only; do not use as a
+--                     full segment-membership filter.
 --   state      — situs state.
---   rank_bucket — 'top_10' / 'top_100' / 'top_1000' / 'top_10000'. Derived
---                from rank_overall so the dashboard can slice the lead
---                queue into pre-sized cohorts without computing CASE.
+--   rank_bucket — 'top_10' / 'top_100' / 'top_1000' / 'top_10000' /
+--                'outside_top_10000'. Derived from rank_overall so the
+--                dashboard can slice the lead queue into pre-sized cohorts
+--                without computing CASE.
 --
 -- Borrower-level measures (per row):
 --   approval_status   — pending / approved / rejected / hold. Joined from
@@ -29,7 +34,7 @@
 -- Cell-level measures (read in dashboard/Genie aggregations):
 --   count_top10                — COUNT(*) FILTER (rank_overall <= 10).
 --   count_top100               — COUNT(*) FILTER (rank_overall <= 100).
---   sum_marketable_population  — COUNT(*) (size of the ranked population).
+--   sum_marketable_population  — COUNT(DISTINCT clip) (size of the ranked population).
 --   approval_rate              — COUNT(approved) / COUNT(*) * 100, 2dp.
 --   outreach_rate              — COUNT(actioned) / COUNT(*) * 100, 2dp.
 --   delta_vs_prior_count       — (addressable_today - addressable_prior_week)
@@ -59,16 +64,21 @@ prior AS (
   FROM mip.gold.funnel_snapshot_daily
   WHERE snapshot_date = (SELECT snapshot_date FROM prior_snapshot)
 ),
-exploded AS (
+lead_rows AS (
   SELECT
     lp.clip,
     lp.state,
-    segment                                 AS segment,
+    lp.segment_codes                          AS segment_codes,
+    CASE
+      WHEN SIZE(lp.segment_codes) > 0 THEN lp.segment_codes[0]
+      ELSE 'none'
+    END                                     AS primary_segment,
     CASE
       WHEN lp.rank_overall <= 10    THEN 'top_10'
       WHEN lp.rank_overall <= 100   THEN 'top_100'
       WHEN lp.rank_overall <= 1000  THEN 'top_1000'
-      ELSE                               'top_10000'
+      WHEN lp.rank_overall <= 10000 THEN 'top_10000'
+      ELSE                               'outside_top_10000'
     END                                     AS rank_bucket,
     lp.rank_overall,
     lp.rank_within_state,
@@ -83,37 +93,37 @@ exploded AS (
   FROM mip.gold.lead_population AS lp
   LEFT JOIN mip.gold.borrower_lifecycle_state AS ls
     ON ls.borrower_id = lp.borrower_id
-  LATERAL VIEW EXPLODE(lp.segment_codes) seg AS segment
 )
 SELECT
-  e.clip,
-  e.state,
-  e.segment,
-  e.rank_bucket,
-  e.rank_overall,
-  e.rank_within_state,
-  e.opportunity_score,
-  e.equity_estimate,
-  e.rate_spread_bps,
-  e.population_version,
-  e.refreshed_at,
-  e.approval_status,
-  e.outreach_status,
-  -- Per-(state, segment) rates computed against the snapshot so widgets that
-  -- want a cell-level KPI don't need to re-aggregate across the full view.
+  l.clip,
+  l.state,
+  l.segment_codes,
+  l.primary_segment,
+  l.rank_bucket,
+  l.rank_overall,
+  l.rank_within_state,
+  l.opportunity_score,
+  l.equity_estimate,
+  l.rate_spread_bps,
+  l.population_version,
+  l.refreshed_at,
+  l.approval_status,
+  l.outreach_status,
+  -- State-level rates preserve one row per borrower; segment-level rates
+  -- belong in segment_performance_metric_view.
   CAST(
     ROUND(
-      100.0 * COUNT(CASE WHEN e.approval_status = 'approved' THEN 1 END)
-        OVER (PARTITION BY e.state, e.segment)
-        / NULLIF(COUNT(*) OVER (PARTITION BY e.state, e.segment), 0),
+      100.0 * COUNT(CASE WHEN l.approval_status = 'approved' THEN 1 END)
+        OVER (PARTITION BY l.state)
+        / NULLIF(COUNT(*) OVER (PARTITION BY l.state), 0),
       2
     ) AS DOUBLE
   )                                           AS approval_rate,
   CAST(
     ROUND(
-      100.0 * COUNT(CASE WHEN e.outreach_status = 'actioned' THEN 1 END)
-        OVER (PARTITION BY e.state, e.segment)
-        / NULLIF(COUNT(*) OVER (PARTITION BY e.state, e.segment), 0),
+      100.0 * COUNT(CASE WHEN l.outreach_status = 'actioned' THEN 1 END)
+        OVER (PARTITION BY l.state)
+        / NULLIF(COUNT(*) OVER (PARTITION BY l.state), 0),
       2
     ) AS DOUBLE
   )                                           AS outreach_rate,
@@ -124,9 +134,9 @@ SELECT
       2
     ) AS DOUBLE
   )                                           AS delta_vs_prior_count
-FROM exploded AS e
-LEFT JOIN today AS t ON t.state = e.state AND t.segment_code = e.segment
-LEFT JOIN prior AS p ON p.state = e.state AND p.segment_code = e.segment;
+FROM lead_rows AS l
+LEFT JOIN today AS t ON t.state = l.state AND t.segment_code = '_ALL'
+LEFT JOIN prior AS p ON p.state = l.state AND p.segment_code = '_ALL';
 
 COMMENT ON VIEW mip.semantics.lead_generation_metric_view IS
-  'Genie + dashboard metric view over gold.lead_population + gold.borrower_lifecycle_state + gold.funnel_snapshot_daily. Dimensions: segment, state, rank_bucket. Row measures: approval_status, outreach_status. Aggregate measures: count_top10, count_top100, sum_marketable_population, approval_rate, outreach_rate, delta_vs_prior_count. See docs/data-contract-module0.md §3.5 + docs/validation/metric-views.md.';
+  'Genie + dashboard borrower-grain metric view over gold.lead_population + gold.borrower_lifecycle_state + gold.funnel_snapshot_daily. Dimensions: segment_codes, primary_segment, state, rank_bucket. Row measures: approval_status, outreach_status. Aggregate measures must COUNT(DISTINCT clip); approval_rate/outreach_rate/delta_vs_prior_count are state-level. See docs/data-contract-module0.md §3.5 + docs/validation/metric-views.md.';

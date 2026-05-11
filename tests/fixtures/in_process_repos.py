@@ -26,11 +26,17 @@ from backend.schemas.lead import Borrower360, LeadSummary, SegmentSummary
 from backend.schemas.portfolio import (
     PortfolioCreateRequest,
     PortfolioCreateResponse,
+    PortfolioCriteria,
     PortfolioPreview,
     PortfolioPreviewRequest,
 )
-from backend.services.genie_answers import GenieActionSuggestion, GenieMessageResponse
-from backend.services.genie_answers import respond as _genie_respond
+from backend.services.genie_answers import (
+    GenieActionSuggestion,
+    GenieMessageResponse,
+    GenieProof,
+    GenieVisualizationSpec,
+    default_follow_up_questions,
+)
 from tests.fixtures import mock_population as mock_data
 
 
@@ -41,7 +47,13 @@ class InProcessMockPortfolioRepository:
         _ = request  # criteria don't shift the preview numbers yet; deterministic payload.
         return mock_data.PORTFOLIO
 
-    def create(self, payload: PortfolioCreateRequest) -> PortfolioCreateResponse:
+    def create(
+        self,
+        payload: PortfolioCreateRequest,
+        *,
+        actor: str | None = None,
+    ) -> PortfolioCreateResponse:
+        _ = actor
         return PortfolioCreateResponse(
             portfolio_id="module0-portfolio",
             name=payload.name,
@@ -59,9 +71,49 @@ class InProcessMockPortfolioRepository:
 class InProcessMockSegmentRepository:
     """Test fixture implementing ``SegmentRepository`` from the synthetic population."""
 
-    def list(self, portfolio_id: str | None) -> list[SegmentSummary]:
+    def list(
+        self,
+        portfolio_id: str | None,
+        segment_codes: list[str] | None = None,
+        segment_mode: str = "any",
+        portfolio_criteria: PortfolioCriteria | None = None,
+    ) -> list[SegmentSummary]:
         _ = portfolio_id
-        return mock_data.SEGMENTS
+        borrowers = list(mock_data.BORROWERS)
+        codes = [str(code).strip() for code in segment_codes or [] if str(code).strip()]
+        if codes:
+            if segment_mode == "all":
+                borrowers = [
+                    borrower for borrower in borrowers
+                    if all(code in borrower.segment_codes for code in codes)
+                ]
+            else:
+                borrowers = [
+                    borrower for borrower in borrowers
+                    if any(code in borrower.segment_codes for code in codes)
+                ]
+        if portfolio_criteria is not None:
+            if portfolio_criteria.occupancy == "Owner-occupied":
+                borrowers = [b for b in borrowers if b.is_owner_occupied is True]
+            elif portfolio_criteria.occupancy == "Non-owner-occupied":
+                borrowers = [b for b in borrowers if b.is_owner_occupied is False]
+        counts: dict[str, int] = {}
+        scores: dict[str, list[int]] = {}
+        for borrower in borrowers:
+            for code in borrower.segment_codes:
+                counts[code] = counts.get(code, 0) + 1
+                scores.setdefault(code, []).append(borrower.opportunity_score)
+        return [
+            segment.model_copy(
+                update={
+                    "count": counts.get(segment.code, 0),
+                    "avg_score": round(
+                        sum(scores.get(segment.code, [])) / len(scores.get(segment.code, []))
+                    ) if scores.get(segment.code) else 0,
+                },
+            )
+            for segment in mock_data.SEGMENTS
+        ]
 
 
 class InProcessMockLeadRepository:
@@ -74,14 +126,24 @@ class InProcessMockLeadRepository:
         limit: int | None = None,
         state: str | None = None,
         zip_code: str | None = None,
+        county_fips: str | None = None,
+        county_fipses: list[str] | None = None,
         state_codes: list[str] | None = None,
         zip_codes: list[str] | None = None,
         borrower_ids: list[str] | None = None,
         segment_codes: list[str] | None = None,
         segment_mode: str = "any",
+        target_lender_ref: str | None = None,
+        cohort_id: str | None = None,
+        portfolio_criteria: PortfolioCriteria | None = None,
     ) -> list[LeadSummary]:
-        _ = portfolio_id
+        _ = (portfolio_id, cohort_id)
         leads = [LeadSummary(**b.model_dump()) for b in mock_data.BORROWERS]
+        if portfolio_criteria is not None:
+            if portfolio_criteria.occupancy == "Owner-occupied":
+                leads = [lead for lead in leads if lead.is_owner_occupied is True]
+            elif portfolio_criteria.occupancy == "Non-owner-occupied":
+                leads = [lead for lead in leads if lead.is_owner_occupied is False]
         codes = segment_codes or ([segment] if segment else [])
         codes = [str(code).strip() for code in codes if str(code).strip()]
         if codes:
@@ -101,6 +163,21 @@ class InProcessMockLeadRepository:
             leads = [lead for lead in leads if lead.state == state.upper()[:2]]
         if zip_code:
             leads = [lead for lead in leads if lead.zip == zip_code]
+        requested_counties = ([county_fips] if county_fips else []) + (county_fipses or [])
+        if requested_counties:
+            allowed_zips: set[str] = set()
+            for requested_county in requested_counties:
+                allowed_zips.update(
+                    rollup.zip
+                    for rollup in _FIXTURE_ZIP_ROLLUPS.get(str(requested_county or "")[:5], [])
+                )
+            leads = [lead for lead in leads if lead.zip in allowed_zips]
+        elif county_fips:
+            county_zips = {
+                rollup.zip
+                for rollup in _FIXTURE_ZIP_ROLLUPS.get(str(county_fips or "")[:5], [])
+            }
+            leads = [lead for lead in leads if lead.zip in county_zips]
         if state_codes:
             allowed_states = {code.upper()[:2] for code in state_codes if code}
             leads = [lead for lead in leads if lead.state in allowed_states]
@@ -110,6 +187,11 @@ class InProcessMockLeadRepository:
         if borrower_ids:
             allowed_ids = {borrower_id for borrower_id in borrower_ids if borrower_id}
             leads = [lead for lead in leads if lead.borrower_id in allowed_ids]
+        if target_lender_ref and target_lender_ref != "All":
+            leads = [
+                lead for lead in leads
+                if lead.current_lender_ref == target_lender_ref
+            ]
         if limit is not None and limit > 0:
             return leads[:limit]
         return leads
@@ -149,16 +231,98 @@ class InProcessMockOutreachRepository:
 
 
 class InProcessMockGenieAnswerRepository:
-    """Test fixture wrapping the deterministic Genie answer catalog."""
+    """Test fixture deriving Genie-shaped answers from mock_population rows.
+
+    The production codebase intentionally has no canned Genie answer catalog.
+    This fixture is test-only and computes its counts/rows from
+    ``tests.fixtures.mock_population`` so local UI tests still exercise the
+    response shape without importing production fallback content.
+    """
 
     def respond(
         self,
         question: str,
         conversation_id: str | None = None,
     ) -> GenieMessageResponse:
-        response = _genie_respond(question)
+        q = question.lower()
+        rows: list[dict[str, object]]
+        answer: str
+        visualization: GenieVisualizationSpec | None = None
+        assets = ["mip.gold.borrower_360"]
+        if "heloc" in q or "equity" in q or "permit" in q:
+            equity_rows = [
+                b for b in mock_data.BORROWERS
+                if "equity" in b.segment_codes or b.recommended_offer in {"Refinance + HELOC", "HELOC"}
+            ]
+            rows = [
+                {
+                    "borrower_id": b.borrower_id,
+                    "state": b.state,
+                    "zip": b.zip,
+                    "recommended_offer": b.recommended_offer,
+                    "opportunity_score": b.opportunity_score,
+                }
+                for b in equity_rows[:5]
+            ]
+            answer = (
+                "The test fixture can size equity-backed HELOC candidates from "
+                f"{len(equity_rows):,} mock borrower rows. Pending permit-driven "
+                "HELOC signals remain blocked until the Building Permits share lands."
+            )
+            assets = ["mip.gold.borrower_360", "mip.gold.source_readiness"]
+            visualization = GenieVisualizationSpec(
+                kind="borrower_list",
+                title="Fixture HELOC candidates",
+                x="borrower_id",
+                y="opportunity_score",
+            )
+        else:
+            ranked = sorted(
+                mock_data.BORROWERS,
+                key=lambda b: b.opportunity_score,
+                reverse=True,
+            )
+            rows = [
+                {
+                    "borrower_id": b.borrower_id,
+                    "state": b.state,
+                    "zip": b.zip,
+                    "opportunity_score": b.opportunity_score,
+                    "recommended_offer": b.recommended_offer,
+                }
+                for b in ranked[:5]
+            ]
+            answer = (
+                "The test fixture returned the highest-scored mock borrower rows "
+                "from the in-process borrower population."
+            )
+            visualization = GenieVisualizationSpec(
+                kind="borrower_list",
+                title="Fixture borrower ranking",
+                x="borrower_id",
+                y="opportunity_score",
+            )
+        response = GenieMessageResponse(
+            conversation_id=conversation_id or "fixture-conv",
+            question=question,
+            answer=answer,
+            source="genie",
+            trusted_assets=assets,
+            row_count=len(rows),
+            proof=GenieProof(
+                source_assets=assets,
+                row_count=len(rows),
+                trusted=True,
+                filters=[],
+                known_data_gaps=[],
+                conversation_id=conversation_id or "fixture-conv",
+            ),
+            visualization=visualization,
+            table_rows=rows,
+            follow_up_questions=default_follow_up_questions(),
+        )
         borrower_ids: list[str] = []
-        for row in response.table_rows or []:
+        for row in rows:
             value = row.get("borrower_id")
             if isinstance(value, str) and value.startswith("B-") and value not in borrower_ids:
                 borrower_ids.append(value)
@@ -176,19 +340,17 @@ class InProcessMockGenieAnswerRepository:
                                 "source": "genie",
                                 "source_assets": ["mip.gold.lead_population"],
                                 "visualization_kind": "borrower_list",
-                                "row_count": len(response.table_rows or []),
+                                "row_count": len(rows),
                             },
                         )
                     ]
                 }
             )
-        if conversation_id:
-            return response.model_copy(update={"conversation_id": conversation_id})
         return response
 
 
-# Fixture per-state rollups — covers the 6-state Delta Share footprint
-# so /api/geo/state-rollups returns realistic shapes under test and
+# Fixture per-state rollups — covers a representative current-coverage shape
+# so /api/geo/state-rollups returns realistic schemas under test and
 # exercises the same code path the UI hits in prod (no secondary code
 # branch for "no data"). Numbers are proportional to the Apr-2026 share
 # probe in docs/data-sources-gap-analysis.md §1.
@@ -245,14 +407,22 @@ class InProcessMockGeoRepository:
         self,
         segment_codes: list[str] | None = None,
         segment_mode: str = "any",
+        portfolio_criteria: PortfolioCriteria | None = None,
     ) -> StateRollupResponse:
-        _ = (segment_codes, segment_mode)
+        _ = (segment_codes, segment_mode, portfolio_criteria)
         return StateRollupResponse(
             rollups=list(_FIXTURE_STATE_ROLLUPS),
             snapshot_date="2026-04-22",
         )
 
-    def county_rollups(self, state: str) -> CountyRollupResponse:
+    def county_rollups(
+        self,
+        state: str,
+        segment_codes: list[str] | None = None,
+        segment_mode: str = "any",
+        portfolio_criteria: PortfolioCriteria | None = None,
+    ) -> CountyRollupResponse:
+        _ = (segment_codes, segment_mode, portfolio_criteria)
         normalised = str(state or "").upper()[:2]
         return CountyRollupResponse(
             state=normalised,
@@ -260,7 +430,14 @@ class InProcessMockGeoRepository:
             snapshot_date="2026-04-22",
         )
 
-    def zip_rollups(self, fips_5: str) -> ZipRollupResponse:
+    def zip_rollups(
+        self,
+        fips_5: str,
+        segment_codes: list[str] | None = None,
+        segment_mode: str = "any",
+        portfolio_criteria: PortfolioCriteria | None = None,
+    ) -> ZipRollupResponse:
+        _ = (segment_codes, segment_mode, portfolio_criteria)
         normalised = str(fips_5 or "")[:5]
         return ZipRollupResponse(
             fips_5=normalised,

@@ -67,7 +67,8 @@ def test_get_rules_returns_uc_backed_thresholds() -> None:
     assert by_key["mip_heloc_equity_min_pct"]["value"] == 35.0
     assert by_key["mip_cashout_equity_min_pct"]["value"] == 25.0
     assert by_key["mip_retention_min_spread_bps"]["value"] == 50.0
-    assert by_key["mip_market_rate"]["value"] == 0.04875
+    assert by_key["mip_market_rate"]["value"] == 0.0637
+    assert by_key["mip_market_rate"]["description"].startswith("Operating market rate")
 
 
 def test_get_rules_version_is_deterministic_hash_of_values() -> None:
@@ -122,10 +123,8 @@ def test_get_sources_returns_live_plus_roadmap_split() -> None:
     rows = response.json()
 
     assert isinstance(rows, list)
-    assert len(rows) == 8
+    assert len(rows) == 14
 
-    # Exactly two roadmap entries (MLS + Building Permits) per the
-    # slice13-accuracy split.
     by_name = {r["name"]: r for r in rows}
     assert by_name["MLS"]["status"] == "roadmap"
     assert by_name["MLS"]["rows"] is None
@@ -140,12 +139,21 @@ def test_get_sources_returns_live_plus_roadmap_split() -> None:
         "CLIP",
         "Owner Link",
         "AVM",
+        "FRED Market Rates",
     ):
         r = by_name[live_name]
         assert r["status"] == "live", r
         assert r["rows"] is not None
         assert r["last_updated"] is not None
         assert isinstance(r["note"], str)
+    for optional_name in (
+        "First-party LOS / Applications",
+        "First-party Servicing Portfolio",
+        "First-party CRM / Campaigns",
+        "First-party Customer Interactions",
+        "First-party Product Balances",
+    ):
+        assert by_name[optional_name]["status"] in {"live", "demo_synthetic", "configured_empty", "not_configured"}
 
 
 def test_get_sources_prefers_gold_source_readiness_summary() -> None:
@@ -172,34 +180,114 @@ def test_get_sources_prefers_gold_source_readiness_summary() -> None:
                     "CLIP",
                     "Owner Link",
                     "AVM",
+                    "FRED Market Rates",
+                    "First-party LOS / Applications",
+                    "First-party Servicing Portfolio",
+                    "First-party CRM / Campaigns",
+                    "First-party Customer Interactions",
+                    "First-party Product Balances",
                     "MLS",
                     "Building Permits",
+                    "UC Gold Borrower 360",
+                    "UC Gold Lead Scores",
+                    "UC Gold Lead Population",
+                    "UC Gold Segment Population",
+                    "UC Gold Borrower Dossier",
                 ]
                 return [
                     {
                         "source_name": name,
-                        "status": "roadmap" if idx >= 7 else "live",
-                        "row_count": None if idx >= 7 else 1000 + idx,
-                        "last_updated": None if idx >= 7 else "2026-05-04 19:45:13",
+                        "status": "roadmap"
+                        if name in {"MLS", "Building Permits"}
+                        else "demo_synthetic"
+                        if name == "First-party LOS / Applications"
+                        else "live",
+                        "row_count": None
+                        if name in {"MLS", "Building Permits"}
+                        else 1000 + idx,
+                        "last_updated": None
+                        if name in {"MLS", "Building Permits"}
+                        else "2026-05-04 19:45:13",
+                        "checked_at": "2026-05-04 20:00:00",
                         "note": "Contracted · pending Cotality share"
-                        if idx >= 7
-                        else "Delta Share · nightly",
+                        if name in {"MLS", "Building Permits"}
+                        else (
+                            "Summit Mortgage synthetic LOS/application feed · connected"
+                            if name == "First-party LOS / Applications"
+                            else "Delta Share · nightly"
+                        ),
+                        "synthetic_demo": name == "First-party LOS / Applications",
                         "sort_order": idx,
                     }
                     for idx, name in enumerate(names, start=1)
                 ]
-            raise AssertionError(f"unexpected legacy source probe: {statement}")
+            raise AssertionError(f"unexpected fallback source probe: {statement}")
 
     fake = _GoldSummaryClient()
     service = AdminRulesService(fake)
     rows = service.get_sources()
 
-    assert len(rows) == 8
+    assert len(rows) == 19
     assert rows[0].name == "Cotality Public Records"
     assert rows[0].status == "live"
-    assert rows[-1].name == "Building Permits"
-    assert rows[-1].status == "roadmap"
+    assert rows[0].checked_at == "2026-05-04 20:00:00"
+    assert rows[13].name == "Building Permits"
+    assert rows[13].status == "roadmap"
+    assert rows[-1].name == "UC Gold Borrower Dossier"
+    assert rows[-1].status == "live"
+    assert rows[7].name == "First-party LOS / Applications"
+    assert rows[7].synthetic_demo is True
     assert not any("SILVER." in call.upper() for call in fake.calls)
+
+
+def test_first_party_fallback_marks_empty_tables_configured_empty() -> None:
+    """Fallback source probing must not call empty first-party tables live."""
+
+    class _EmptyFirstPartyClient:
+        def execute(
+            self, statement: str, parameters: Any = None
+        ) -> list[dict[str, Any]]:
+            s = statement.strip().upper()
+            if "GOLD.SOURCE_READINESS" in s:
+                raise DatabricksSqlError("summary unavailable")
+            if s.startswith("DESCRIBE DETAIL"):
+                if ".FIRST_PARTY." in s:
+                    return [{"lastModified": "2026-05-06T00:00:00.000Z", "numRecords": 0}]
+                return [{"lastModified": "2026-05-06T00:00:00.000Z", "numRecords": 100}]
+            return []
+
+    service = AdminRulesService(_EmptyFirstPartyClient())
+    rows = service.get_sources()
+    by_name = {row.name: row for row in rows}
+
+    assert by_name["First-party LOS / Applications"].status == "configured_empty"
+    assert by_name["First-party LOS / Applications"].rows == 0
+    assert by_name["First-party LOS / Applications"].synthetic_demo is False
+
+
+def test_first_party_fallback_preserves_synthetic_demo_disclosure() -> None:
+    """If the gold summary is down, non-empty demo feeds must still disclose."""
+
+    class _SyntheticFirstPartyClient:
+        def execute(
+            self, statement: str, parameters: Any = None
+        ) -> list[dict[str, Any]]:
+            s = statement.strip().upper()
+            if "GOLD.SOURCE_READINESS" in s:
+                raise DatabricksSqlError("summary unavailable")
+            if s.startswith("DESCRIBE DETAIL"):
+                return [{"lastModified": "2026-05-06T00:00:00.000Z", "numRecords": 100}]
+            if "COUNT_IF(COALESCE(SYNTHETIC_DEMO" in s:
+                return [{"synthetic_rows": 100, "last_updated": "2026-05-06 00:00:00"}]
+            return []
+
+    service = AdminRulesService(_SyntheticFirstPartyClient())
+    rows = service.get_sources()
+    by_name = {row.name: row for row in rows}
+
+    assert by_name["First-party CRM / Campaigns"].status == "demo_synthetic"
+    assert by_name["First-party CRM / Campaigns"].synthetic_demo is True
+    assert by_name["First-party CRM / Campaigns"].last_updated == "2026-05-06 00:00:00"
 
 
 def test_get_sources_degrades_per_source_on_sql_failure() -> None:
@@ -265,7 +353,7 @@ def test_get_sources_permission_denied_marks_source_cleanly() -> None:
 
 
 def test_rules_service_caches_reads_within_ttl() -> None:
-    """TTL cache collapses repeat reads into a single warehouse call."""
+    """TTL cache collapses repeat reads into one rules load cycle."""
 
     class _CountingClient:
         def __init__(self) -> None:
@@ -290,7 +378,7 @@ def test_rules_service_caches_reads_within_ttl() -> None:
     service.get_rules()
     service.get_rules()
     service.get_rules()
-    assert sql.call_count == 1
+    assert sql.call_count == 2
 
 
 # ---------------------------------------------------------------------------
@@ -378,8 +466,9 @@ def test_get_sources_two_failing_sources_do_not_cascade() -> None:
         # (lien_current) per the _SOURCES descriptor table.
         assert by_name["Voluntary Lien"]["status"] == "error"
         assert by_name["MMA Mortgage Analytics"]["status"] == "error"
+        assert by_name["AVM"]["status"] == "error"
         # The other live sources still render with row counts.
-        for still_live in ("Cotality Public Records", "CLIP", "Owner Link", "AVM"):
+        for still_live in ("Cotality Public Records", "CLIP", "Owner Link"):
             r = by_name[still_live]
             assert r["status"] == "live", r
             assert r["rows"] == 4242, r

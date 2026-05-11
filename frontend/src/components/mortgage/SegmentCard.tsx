@@ -17,10 +17,10 @@ import { segmentIcon } from '../../lib/segmentMetadata';
  * Pending-source state (2026-05-04, prototype-parity-audit P0-2): the
  * `listed` and `permit` segments are defined in the canonical 6-segment
  * registry but their predicates are blocked-FALSE in gold.borrower_360
- * pending the Cotality MLS + Building-Permits Delta Share arrival. The
+ * pending the Cotality MLS + Building Permits Delta Share arrival. The
  * gold rollup CTAS now always emits a row for every segment_code (count=0
  * when no borrower matches), so the FE always sees all 6 segments. We
- * render those zero-count segments with an honest "Awaiting source" badge
+ * render those zero-count segments with an honest "Awaiting feed" badge
  * and disable selection so a user can't filter to an empty result set --
  * the segment is visible (the demo narrative depends on seeing all 6) but
  * the data dependency is called out in plain English next to the card.
@@ -40,8 +40,13 @@ interface SegmentCardProps {
  * cover segments that genuinely have a known data dependency.
  */
 const PENDING_SOURCE_SEGMENTS: Record<string, string> = {
-  listed: 'Awaiting Cotality MLS share',
-  permit: 'Awaiting Cotality Permits share',
+  listed: 'Awaiting Cotality MLS Delta Share',
+  permit: 'Awaiting Cotality Building Permits Delta Share',
+};
+
+const PENDING_SOURCE_DESCRIPTIONS: Record<string, string> = {
+  listed: 'Pending Cotality MLS share; listed-for-sale predicates are blocked false until the feed lands.',
+  permit: 'Pending Cotality Building Permits share; permit predicates are blocked false until the feed lands.',
 };
 
 export function SegmentCard({ segment, selected, onClick }: SegmentCardProps) {
@@ -56,6 +61,11 @@ export function SegmentCard({ segment, selected, onClick }: SegmentCardProps) {
   const pendingMessage =
     segment.count === 0 ? PENDING_SOURCE_SEGMENTS[segment.code] : undefined;
   const isPending = Boolean(pendingMessage);
+  const deltaIsFirstSnapshot =
+    segment.delta.trim() === '+0%' ||
+    segment.delta.trim() === '0%' ||
+    segment.delta.trim() === '+0.0%' ||
+    segment.delta.trim() === '0.0%';
 
   useEffect(() => {
     // Fire emanation only on deselected → selected transition.
@@ -67,7 +77,7 @@ export function SegmentCard({ segment, selected, onClick }: SegmentCardProps) {
 
   if (isPending) {
     // Pending-source render: surface the segment, name + color + description,
-    // but replace the count with a clear "Awaiting source" badge and
+    // but replace the count with a clear "Awaiting feed" badge and
     // disable click. Honest UX: zero borrowers means zero borrowers; the
     // segment is still visible so the demo's "6 borrower segments" framing
     // holds and the data dependency is called out explicitly.
@@ -85,9 +95,11 @@ export function SegmentCard({ segment, selected, onClick }: SegmentCardProps) {
         <div
           className="seg-card__count seg-card__count--pending num"
         >
-          Pending source
+          Awaiting feed
         </div>
-        <div className="seg-card__sub">{segment.description}</div>
+        <div className="seg-card__sub">
+          {PENDING_SOURCE_DESCRIPTIONS[segment.code] ?? segment.description}
+        </div>
         <div className="seg-card__meta seg-card__meta--pending">
           <span className="seg-card__meta-item">
             <Icon name="info" size={11} />
@@ -116,7 +128,13 @@ export function SegmentCard({ segment, selected, onClick }: SegmentCardProps) {
       <div className="seg-card__count num">{segment.count.toLocaleString()}</div>
       <div className="seg-card__sub">{segment.description}</div>
       <div className="seg-card__meta">
-        <span className="up">▲ {segment.delta}</span>
+        {deltaIsFirstSnapshot ? (
+          <span>first snapshot · deltas pending</span>
+        ) : (
+          <span className={segment.delta.startsWith('-') ? 'down' : 'up'}>
+            {segment.delta.startsWith('-') ? '▼' : '▲'} {segment.delta}
+          </span>
+        )}
         <span>avg {segment.avg_score}</span>
       </div>
     </button>

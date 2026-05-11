@@ -122,13 +122,26 @@ jobs:
         run: pytest tests/integration/test_dashboard_widgets_resolve.py -q --tb=short
       - name: Executive metrics reconcile to canonical snapshot
         run: pytest tests/integration/test_executive_metric_reconciliation.py -q --tb=short
+      - name: Module 0 segment and raw-share parity
+        run: pytest tests/integration/test_segment_count_parity.py -q --tb=short
+      - name: Module 0 gold data-truth invariants
+        run: pytest tests/integration/test_gold_data_truth.py -q --tb=short
+      - name: Module 0 geography rollup reconciliation
+        run: pytest tests/integration/test_geo_rollup_reconciliation.py -q --tb=short
+      - name: Module 0 source readiness completeness
+        run: pytest tests/integration/test_source_readiness_live.py -q --tb=short
+      - name: Borrower dossier parity
+        run: pytest tests/integration/test_borrower_dossier_parity.py -q --tb=short
+      - name: Borrower identity and silver normalization invariants
+        run: |
+          pytest -q --tb=short \
+            tests/integration/test_borrower_id_uniqueness.py \
+            tests/integration/test_silver_coercion.py \
+            tests/integration/test_silver_zip_5_digit.py
       - name: Lakebase round-trip
-        # continue-on-error so a stale LAKEBASE_PASSWORD secret doesn't
-        # block the downstream Genie regression + Playwright runs.
-        # Failure is still surfaced by the auto-filed GitHub issue; the
-        # job-level conclusion is "failure" when this step fails, which
-        # is the right behavior for the tracking issue.
-        continue-on-error: true
+        # Release-blocking: Lakebase stores governed cohorts, drafts,
+        # approvals, and audit rows. Auth/schema drift here means the app can
+        # look correct while losing durable workflow proof.
         run: pytest -q tests/integration/test_lakebase_round_trip.py
       - name: Genie live
         if: always()
@@ -169,11 +182,9 @@ jobs:
       # real_data.spec.ts uses this to flip the force-degraded flag.
       MIP_FORCE_DEGRADED_TOKEN: ${{ secrets.MIP_FORCE_DEGRADED_TOKEN }}
       # MIP_APP_URL / MIP_BEARER_TOKEN are populated at step-time by the
-      # "Detect deployed-URL path" + "Mint workspace Bearer" steps below
-      # when (and only when) all three deployed-path secrets are set. In
-      # the meantime the localhost-on-runner path (playwright.config.ts
-      # webServer block) remains the fallback so the nightly stays green
-      # for devs without M2M admin creds.
+      # "Detect deployed-URL path" + "Mint workspace Bearer" steps below.
+      # This job is the deployed-app release gate, so missing deployed-path
+      # secrets fail fast instead of silently falling back to localhost.
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -198,12 +209,10 @@ jobs:
         working-directory: frontend
         run: npx playwright install --with-deps chromium
       - name: Detect deployed-URL path
-        # Two paths exist for this job:
-        #   deployed  -> mint an M2M Bearer, hit the real Databricks App
-        #                through its OAuth proxy
-        #   localhost -> boot uvicorn+vite on the runner (Playwright
-        #                config's webServer block), same source code
-        # We take the deployed path ONLY when all three secrets are set.
+        # This job intentionally has one path:
+        #   deployed -> mint an M2M Bearer, hit the real Databricks App
+        #               through its OAuth proxy.
+        # Missing M2M/app-url secrets are a release-gate failure.
         # GitHub Actions doesn't allow `secrets.*` in `if:` expressions,
         # so we reduce the presence check to a single step output here.
         id: pathsel
@@ -216,8 +225,8 @@ jobs:
             echo "use_deployed=true" >> "$GITHUB_OUTPUT"
             echo "::notice::Nightly Playwright will target deployed app via M2M OAuth."
           else
-            echo "use_deployed=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::Nightly Playwright will fall back to localhost-on-runner (deployed-path secrets not all set)."
+            echo "::error::Missing deployed-path secrets: DATABRICKS_CLIENT_ID, DATABRICKS_CLIENT_SECRET, and MIP_APP_URL are all required."
+            exit 1
           fi
       - name: Mint workspace Bearer (M2M OAuth)
         # Runs ONLY when the deployed path is selected. A mint failure
@@ -257,20 +266,20 @@ jobs:
       - name: Genie semantic eval scorecard (deployed app)
         if: steps.pathsel.outputs.use_deployed == 'true'
         run: python tools/genie_eval.py --base "$MIP_APP_URL" --token "$MIP_BEARER_TOKEN" --timeout 120
-      - name: Run real-UC Playwright spec
+      - name: Run real-UC Playwright specs
         # Config + specs both live under `frontend/` so `@playwright/test`
         # imports resolve against frontend/node_modules. E2E_LIVE-gated
         # so this spec is nightly-only; the PR CI runs a --list parse
-        # check. When MIP_APP_URL is set (deployed path), the config's
-        # webServer block is disabled and real_data.spec.ts attaches the
-        # MIP_BEARER_TOKEN as an Authorization header. When unset
-        # (localhost fallback), the webServer boots uvicorn+vite on the
-        # runner and the spec hits 127.0.0.1:5173.
+        # check. MIP_APP_URL is required for this deployed path, so the
+        # config's webServer block is disabled and real_data.spec.ts
+        # attaches MIP_BEARER_TOKEN as an Authorization header.
         working-directory: frontend
         run: |
           npx playwright test \
             tests/e2e/real_data.spec.ts \
             tests/e2e/demo_visual.spec.ts \
+            tests/e2e/accessibility.spec.ts \
+            tests/e2e/responsive.spec.ts \
             --reporter=list --workers=1
       - name: Upload Playwright report + traces on failure
         if: failure()

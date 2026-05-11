@@ -13,8 +13,11 @@ Two narrow concerns covered here:
 """
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
 
+import backend.services.databricks_sql as databricks_sql
+from backend.api.config import _target_lender_options
 from backend.main import app
 
 client = TestClient(app)
@@ -94,3 +97,37 @@ def test_public_audit_event_cannot_forge_genie_actions() -> None:
 
     assert response.status_code == 400
     assert response.json()["detail"] == "event type is owned by a governed server route"
+
+
+def test_public_audit_event_masks_subject_clip() -> None:
+    response = client.post(
+        "/api/audit/event",
+        json={
+            "actor": "anonymous",
+            "action": "view.custom",
+            "entity_type": "lead_queue",
+            "entity_id": "manual",
+            "subject_clip": "1234567890",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["subject_clip"].startswith("clip_ref_")
+
+
+def test_config_target_lender_options_drop_raw_lender_names(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _Client:
+        def execute(self, sql: str) -> list[dict[str, object]]:
+            _ = sql
+            return [
+                {"current_lender_ref": "Summit Mortgage"},
+                {"current_lender_ref": "Wells Fargo Bank"},
+                {"current_lender_ref": "Competitor B"},
+            ]
+
+    monkeypatch.setattr(databricks_sql, "get_sql_client", lambda: _Client())
+
+    values, status = _target_lender_options()
+
+    assert status == "live"
+    assert values == ["All", "Summit Mortgage", "Competitor B"]

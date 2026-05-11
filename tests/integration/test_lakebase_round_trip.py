@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import re
 from pathlib import Path
 from uuid import uuid4
 
@@ -90,7 +91,7 @@ def test_lakebase_audit_round_trip() -> None:
     assert e.event_id == written.event_id
     assert e.event_type == "VIEW_BORROWER"
     assert e.actor == "integration-test@entrada.ai"
-    assert e.subject_clip == "int-test-clip"
+    assert re.fullmatch(r"clip_ref_[0-9a-f]{12}", e.subject_clip or "")
     assert e.payload_json.get("integration_marker") == req_id
 
     # Cleanup -- UPDATE/DELETE are revoked on PUBLIC, but the service

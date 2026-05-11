@@ -17,6 +17,7 @@ Assertions:
 from __future__ import annotations
 
 import logging
+import re
 from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import MagicMock
@@ -94,13 +95,13 @@ def test_write_issues_insert_with_named_params() -> None:
         assert key in params, f"missing bind param: {key}"
     assert params["actor_email"] == "skyler@entrada.ai"
     assert params["event_type"] == "VIEW_BORROWER"
-    assert params["subject_clip"] == "abc123def456"
+    assert re.fullmatch(r"clip_ref_[0-9a-f]{12}", params["subject_clip"])
     assert params["evidence_ids"] == ["ev-1", "ev-2"]
     assert "opportunity_score" in params["metadata"]  # JSON-serialized
     # Round-tripped AuditEvent.
     assert event.actor == "skyler@entrada.ai"
     assert event.event_type == "VIEW_BORROWER"
-    assert event.subject_clip == "abc123def456"
+    assert re.fullmatch(r"clip_ref_[0-9a-f]{12}", event.subject_clip or "")
 
 
 def test_list_issues_select_ordered_desc_with_limit() -> None:
@@ -136,7 +137,7 @@ def test_list_hydrates_rows_into_audit_events() -> None:
             "actor_email": "skyler@entrada.ai",
             "entity_type": "borrower",
             "entity_id": "B-48291",
-            "subject_clip": "abc123",
+            "subject_clip": "clip_ref_abc123def456",
             "subject_segment": None,
             "request_id": None,
             "evidence_ids": ["ev-1"],
@@ -153,12 +154,45 @@ def test_list_hydrates_rows_into_audit_events() -> None:
     assert e.event_id == str(aid)
     assert e.action == "view_borrower_360"
     assert e.event_type == "VIEW_BORROWER"
-    assert e.subject_clip == "abc123"
+    assert e.subject_clip == "clip_ref_abc123def456"
     assert e.evidence_ids == ["ev-1"]
     # metadata "action" key is popped so it doesn't duplicate at
     # payload_json; the score survives.
     assert e.payload_json == {"score": 92}
     assert e.created_at == now.isoformat()
+
+
+def test_list_masks_legacy_raw_subject_clip_values() -> None:
+    """Legacy audit rows may predate the public-demo masking pass.
+
+    Listing audit events is still an API egress path, so hydration masks
+    any stored raw subject_clip before returning the AuditEvent.
+    """
+    client = MagicMock()
+    client.fetchone.return_value = None
+    now = datetime.now(UTC)
+    aid = uuid4()
+    client.fetchall.return_value = [
+        {
+            "audit_id": aid,
+            "event_type": "VIEW_BORROWER",
+            "actor_email": "skyler@entrada.ai",
+            "entity_type": "borrower",
+            "entity_id": "B-48291",
+            "subject_clip": "1234567890",
+            "subject_segment": None,
+            "request_id": None,
+            "evidence_ids": [],
+            "metadata": {"action": "view_borrower_360"},
+            "event_at": now,
+        }
+    ]
+    store = LakebaseAuditStore(client=client)
+
+    events = store.list(limit=10)
+
+    assert len(events) == 1
+    assert re.fullmatch(r"clip_ref_[0-9a-f]{12}", events[0].subject_clip or "")
 
 
 def test_resolve_actor_reads_x_forwarded_email() -> None:

@@ -1,3 +1,5 @@
+> **Internal implementation artifact. Not approved for public release.**
+
 # Validation — Credential-Kill Drill
 
 **Validates:** the Module 0 "no silent mock fallback" posture —

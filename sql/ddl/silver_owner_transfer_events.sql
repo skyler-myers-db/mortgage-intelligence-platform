@@ -12,8 +12,8 @@
 -- Source:    cotality_mortgage_data.corelogic.entrada_eval_owner_transfer_
 --            domain_v1 (~24M rows, event grain; composite txn id is PK).
 --
--- Geography filter (non-negotiable):
---            WHERE deed_situs_state_static IN ('IL','CA','FL','TX','WA','CO')
+-- Geography contract:
+--            WHERE deed_situs_state_static IS NOT NULL
 --
 -- PII posture (NON-NEGOTIABLE, governance-real-data-review §1):
 --            - `buyer_1_full_name`, `seller_1_full_name` : NEVER landed.
@@ -62,7 +62,7 @@
 CREATE TABLE IF NOT EXISTS mip.silver.owner_transfer_events (
   transfer_txn_id        STRING    NOT NULL COMMENT 'Composite transfer transaction ID from share. PK.',
   clip                   STRING    NOT NULL COMMENT 'Cotality mastered property ID. FK to silver.lien_current / property_master.',
-  situs_state            STRING    NOT NULL COMMENT '2-char state code (renamed from deed_situs_state_static). Filter: IN (IL, CA, FL, TX, WA, CO).',
+  situs_state            STRING    NOT NULL COMMENT '2-char state code (renamed from deed_situs_state_static).',
   sale_date              DATE               COMMENT 'Sale date (from sale_derived_date).',
   sale_amount            BIGINT             COMMENT 'Sale amount, USD.',
   sale_type_code         STRING             COMMENT 'sale_type_code from share.',
@@ -81,7 +81,7 @@ CREATE TABLE IF NOT EXISTS mip.silver.owner_transfer_events (
 )
 USING DELTA
 CLUSTER BY (clip, sale_date)
-COMMENT 'Event-grain owner-transfer history lifted from cotality_mortgage_data.corelogic.entrada_eval_owner_transfer_domain_v1 filtered to deed_situs_state_static IN (IL, CA, FL, TX, WA, CO). Buyer names never land in silver. See docs/data-contract-module0.md §2.4.'
+COMMENT 'Event-grain owner-transfer history lifted from the Cotality source share for all non-null source states. Buyer names never land in silver. See docs/data-contract-module0.md §2.4.'
 TBLPROPERTIES (
   'delta.enableChangeDataFeed' = 'false',
   'delta.autoOptimize.optimizeWrite' = 'true',

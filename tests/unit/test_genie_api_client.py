@@ -115,7 +115,7 @@ def test_ask_drives_start_poll_query_and_returns_structured_response(
         "status": "COMPLETED",
         "id": "msg-456",
         "attachments": [
-            {"text": {"content": "12,840 borrowers are in the money."}},
+            {"text": {"content": "123 borrowers are in the money."}},
             {
                 "query": {
                     "query": "SELECT count(*) FROM mip.gold.lead_scores",

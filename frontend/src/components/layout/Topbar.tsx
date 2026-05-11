@@ -77,7 +77,7 @@ function SystemStatusPill({
 }
 
 /**
- * Topbar — breadcrumbs, lender pill, environment pill, warehouse-status pill,
+ * Topbar — breadcrumbs, tenant pill, environment pill, warehouse-status pill,
  * theme toggle, Genie toggle, Console toggle. Matches the prototype's BEM
  * (`topbar__crumbs`, `topbar__pill`, `topbar__icon-btn`).
  *
@@ -109,11 +109,11 @@ export function Topbar() {
   const { pathname } = useLocation();
   const crumb = currentCrumb(pathname);
   const { health } = useHealth();
-  // R5-07 (2026-04-23): surface the footprint fallback as a muted chip
-  // so operators aren't silently pinned to the 6-state default when
-  // /api/config/footprint failed on cold-start. This is a separate
-  // signal from /api/health (which drives DegradedBanner) — the
-  // warehouse can be up while the footprint fetch is stale.
+  // Surface the footprint fallback as a muted chip so operators are not
+  // silently pinned to generic geography metadata when /api/config/footprint
+  // failed on cold-start. This is separate from /api/health (which drives
+  // DegradedBanner) because the warehouse can be up while the footprint fetch
+  // is stale.
   const { usingFallback: footprintFallback } = useFootprint();
   // R6-11 (2026-04-23): on a deep-link refresh, three providers race
   // to report "cold start" simultaneously (DegradedBanner, footprint
@@ -138,13 +138,13 @@ export function Topbar() {
         <span className="cur">{crumb}</span>
       </div>
       <div className="topbar__spacer" />
-      {/* Lender pill — tenant currently signed in, set per-user via the
-          Console panel. Drives the lender-config predicate everywhere
-          downstream. */}
+      {/* Tenant pill — display-only label for the configured lender. The
+          backend applies lender configuration; the UI does not support
+          arbitrary client-side lender switching. */}
       <div
         className="topbar__pill"
-        title={`Lender · ${lender}. Drives the lender-config filter on every gold rollup. Change in the Console panel.`}
-        aria-label={`Lender: ${lender}`}
+        title={`Configured tenant · ${lender}. Lender configuration is applied server-side.`}
+        aria-label={`Configured tenant: ${lender}`}
       >
         <Icon name="building" size={12} />
         <span>{lender}</span>
@@ -165,7 +165,7 @@ export function Topbar() {
       {footprintFallback && mountGraceOver && (
         <span
           className="chip chip--warning"
-          title="The /api/config/footprint fetch failed — showing the canonical 6-state fallback. The warehouse may still be cold-starting."
+          title="The /api/config/footprint fetch failed — showing generic US-state metadata until the footprint endpoint recovers."
           data-testid="footprint-fallback-chip"
         >
           <Icon name="shield" size={10} />

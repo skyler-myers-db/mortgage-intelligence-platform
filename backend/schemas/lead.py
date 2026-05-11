@@ -1,9 +1,11 @@
+import re
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from backend.schemas.common import EvidenceEvent
 from backend.schemas.why import WhyPanel
+from backend.services.pii_redaction import normalize_public_lender_ref
 
 SegmentCode = Literal["itm", "listed", "permit", "investor", "equity", "retention"]
 # Round-4 hole-finder R4-19: `hold` is a valid 4th state — jobs/sync_lifecycle_state.py
@@ -29,12 +31,10 @@ class LeadSummary(BaseModel):
     city: str
     state: str
     zip: str
-    # Cotality CLIP (10-digit property identifier). Added 2026-04-22 to fix
-    # the "two different CLIP formats across routes" blocker -- the
-    # segment-row preview + lead table must show the SAME CLIP that
-    # Borrower 360 shows. Frontend previously derived a fake CLIP via
-    # `clip_${borrower_id.toLowerCase().replace('-', '')}`; that derivation
-    # is retired in favour of this real field.
+    # Display-safe Cotality property reference. Raw CLIP never leaves the
+    # repository boundary by default; values are `clip_ref_*` or synthetic
+    # `clip_demo_*` refs unless an internal debug flag explicitly exposes raw
+    # identifiers.
     clip: str = ""
     segment_codes: list[SegmentCode]
     equity_estimate: int
@@ -56,11 +56,40 @@ class LeadSummary(BaseModel):
     # the UI surfaces a "data-dependency pending" note for that filter.
     is_owner_occupied: bool = False
     is_investor: bool = False
+    is_current_customer: bool = False
+    is_former_customer: bool = False
+    is_competitor_lien: bool = False
     related_property_count: int = 1
     current_lien_balance: int = 0
     second_pos_amount: int = 0
     has_permit: bool = False
     listed_for_sale: bool = False
+    current_lender_ref: str | None = None
+
+    @field_validator("display_name")
+    @classmethod
+    def _display_name_is_public_safe(cls, value: str) -> str:
+        stripped = value.strip()
+        if re.fullmatch(r"(Owner|Borrower) [A-Za-z0-9_-]{3,16}|Owner anon", stripped):
+            return stripped
+        raise ValueError("display_name must be synthesized, not a borrower name")
+
+    @field_validator("clip")
+    @classmethod
+    def _clip_is_public_safe(cls, value: str) -> str:
+        if not value:
+            return value
+        if re.fullmatch(r"(clip_ref_[0-9a-f]{12}|clip_demo_[A-Za-z0-9_-]+)", value):
+            return value
+        raise ValueError("clip must be a masked display ref")
+
+    @field_validator("current_lender_ref")
+    @classmethod
+    def _lender_ref_is_public_safe(cls, value: str | None) -> str | None:
+        try:
+            return normalize_public_lender_ref(value)
+        except ValueError as exc:
+            raise ValueError("current_lender_ref must be a public-safe lender alias") from exc
 
 
 class Borrower360(LeadSummary):
@@ -75,3 +104,30 @@ class Borrower360(LeadSummary):
     trigger_timeline: list[EvidenceEvent]
     evidence_events: list[EvidenceEvent]
     why_panel: WhyPanel
+
+    @field_validator("clip_id")
+    @classmethod
+    def _clip_id_is_public_safe(cls, value: str) -> str:
+        if re.fullmatch(r"(clip_ref_[0-9a-f]{12}|clip_demo_[A-Za-z0-9_-]+)", value):
+            return value
+        raise ValueError("clip_id must be a masked display ref")
+
+    @field_validator("owner_link_id")
+    @classmethod
+    def _owner_link_id_is_public_safe(cls, value: str) -> str:
+        if re.fullmatch(r"(owner_link_ref_[0-9a-f]{12}|ol_demo_[A-Za-z0-9_-]+)", value):
+            return value
+        raise ValueError("owner_link_id must be a masked display ref")
+
+    @field_validator("subject_property")
+    @classmethod
+    def _subject_property_has_no_street(cls, value: str) -> str:
+        if re.search(
+            r"\b\d{1,6}\s+[A-Za-z0-9 .'-]{2,40}\s+"
+            r"(?:st|street|ave|avenue|rd|road|dr|drive|ln|lane|ct|court|"
+            r"blvd|boulevard|way|pl|place|pkwy|parkway)\b",
+            value,
+            flags=re.IGNORECASE,
+        ):
+            raise ValueError("subject_property must not contain a street address")
+        return value

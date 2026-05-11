@@ -15,7 +15,7 @@ Wave-2 coerces explicitly:
 Assertion
 ---------
 At least some rows in ``mip.silver.property_master`` must surface
-``owner_is_corporate = TRUE`` -- the 6-state footprint has plenty of
+``owner_is_corporate = TRUE`` -- the Module 0 evaluation share has plenty of
 corporate-owned property, so an all-FALSE population is prima-facie wrong.
 """
 from __future__ import annotations
@@ -98,7 +98,7 @@ def test_owner_is_corporate_has_true_rows(
 ) -> None:
     """If ``CAST('Y' AS BOOLEAN)`` re-regresses, the TRUE count collapses to 0.
 
-    This asserts at least one TRUE row exists. The 6-state footprint contains
+    This asserts at least one TRUE row exists. The Module 0 evaluation share contains
     a well-known non-trivial slice of LLC-owned investment property, so this
     is a safe lower bound that catches the cast regression immediately.
     """

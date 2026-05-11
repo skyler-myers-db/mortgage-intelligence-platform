@@ -23,7 +23,11 @@ class _RecordingLakebase:
         now = datetime.now(UTC)
         if "GENIE_ACTION_SAVE_BORROWERS" in sql:
             return {
-                "saved_count": len(p.get("borrower_ids") or []),
+                "saved_count": sum(
+                    1
+                    for borrower_id in p.get("borrower_ids") or []
+                    if str(borrower_id).startswith("B-")
+                ),
                 "audit_id": "audit-genie-save",
             }
         if "mip_app.saved_leads" in sql:
@@ -136,7 +140,8 @@ def test_genie_save_action_sql_avoids_raw_percent_predicates() -> None:
     )
 
     sql, _ = client.fetchones[0]
-    assert saved == 2
+    assert saved == 1
     assert audit_id == "audit-genie-save"
     assert "LIKE 'B-%'" not in sql
-    assert "left(borrower_id, 2) = 'B-'" in sql
+    assert "left(borrower_id, 2) = 'B-'" not in sql
+    assert "borrower_id ~ '^B-[A-Za-z0-9][A-Za-z0-9_-]{0,126}$'" in sql

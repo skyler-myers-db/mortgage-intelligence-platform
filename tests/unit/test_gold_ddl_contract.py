@@ -225,6 +225,10 @@ def test_borrower_360_declares_blocked_columns() -> None:
     declared = _declared_column_names_in_block(blocks[0])
     assert "has_permit" in declared, "gold.borrower_360 must declare has_permit (BLOCKED FALSE per §9)."
     assert "listed_for_sale" in declared, "gold.borrower_360 must declare listed_for_sale (BLOCKED FALSE per §9)."
+    assert "is_former_customer" in declared, (
+        "gold.borrower_360 must declare is_former_customer so Portfolio "
+        "Builder does not alias Former customer to competitor-lien."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -258,6 +262,63 @@ def test_borrower_360_transformation_forces_blocked_false() -> None:
     assert re.search(
         r"CAST\(FALSE\s+AS\s+BOOLEAN\)\s+AS\s+listed_for_sale", text, re.IGNORECASE
     ), "gold.borrower_360 CTAS must hardcode listed_for_sale = FALSE (data-contract §9)."
+
+
+def test_source_readiness_core_input_lanes_are_fail_closed() -> None:
+    """Core input lanes must not claim live status if their source table is empty."""
+    text = (TRANSFORM_DIR / "gold_source_readiness.sql").read_text(encoding="utf-8")
+    for source_name in (
+        "Cotality Public Records",
+        "Voluntary Lien",
+        "MMA Mortgage Analytics",
+        "CLIP",
+        "Owner Link",
+        "AVM",
+        "FRED Market Rates",
+    ):
+        pattern = (
+            rf"'{re.escape(source_name)}'\s+AS\s+source_name,.*?"
+            r"CASE\s+WHEN\s+COUNT(?:_IF|\()"
+        )
+        assert re.search(pattern, text, re.IGNORECASE | re.DOTALL), (
+            f"{source_name}: source_readiness must use a COUNT-based CASE "
+            "instead of an unconditional live status."
+        )
+
+
+def test_source_readiness_avm_has_defensible_freshness_fallback() -> None:
+    """AVM may not ship a distinct as-of date in every Cotality share row.
+
+    If AVM is marked live, source_readiness still needs a non-null freshness
+    timestamp. Use the valuation as-of date where present, otherwise the lien
+    silver ingest timestamp for rows carrying AVM values.
+    """
+    text = (TRANSFORM_DIR / "gold_source_readiness.sql").read_text(encoding="utf-8")
+    assert "COALESCE(CAST(avm_as_of_date AS TIMESTAMP), ingest_ts)" in text
+    assert "WHEN avm_value IS NOT NULL" in text
+
+
+def test_borrower_360_transformation_derives_former_customer_distinctly() -> None:
+    """Former customer must be a historical tenant-lender Owner Link signal,
+    not a synonym for competitor current servicer."""
+    text = (TRANSFORM_DIR / "gold_borrower_360.sql").read_text(encoding="utf-8")
+    assert "AS is_former_customer" in text
+    assert "historical_tenant_distinct_clips" in text
+    assert "LIKE '%SUMMIT%'" not in text
+    assert not re.search(
+        r"is_competitor_lien\s+AS\s+is_former_customer",
+        text,
+        re.IGNORECASE,
+    )
+
+
+def test_borrower_360_transformation_enforces_zip5_or_null_boundary() -> None:
+    """Gold is the API-facing table, so it must not expose short ZIP fragments."""
+    text = (TRANSFORM_DIR / "gold_borrower_360.sql").read_text(encoding="utf-8")
+    assert "AS zip" in text
+    assert "LENGTH(REGEXP_REPLACE(CAST(lc.situs_zip_code AS STRING), '[^0-9]', '')) = 5" in text
+    assert "LPAD(REGEXP_REPLACE(CAST(lc.situs_zip_code AS STRING), '[^0-9]', ''), 5, '0')" in text
+    assert "ELSE NULL" in text
 
 
 # ---------------------------------------------------------------------------
@@ -349,6 +410,11 @@ def test_sentinel_wired_in_bundle_definitions() -> None:
             f"{name}: missing capture_refresh_timestamp task "
             f"(audit-holes-round-3 #7 wiring regressed)."
         )
+        assert "seed_demo_first_party_feeds" in text, (
+            f"{name}: missing seed_demo_first_party_feeds task "
+            "first-party relationship scoring would silently ignore the "
+            "configured lender-owned feeds."
+        )
         assert "assert_borrower_360_fresh" in text, (
             f"{name}: missing assert_borrower_360_fresh task "
             f"(audit-holes-round-3 #8 wiring regressed)."
@@ -402,3 +468,44 @@ def test_evidence_events_excludes_blocked_signal_types() -> None:
         "gold.evidence_events emits a 'listing' signal_type row. Listing is "
         "BLOCKED until Cotality MLS lands (data-contract §9)."
     )
+
+
+def test_evidence_events_uses_silver_lien_spine_not_borrower_360() -> None:
+    """gold.evidence_events must be buildable before gold.borrower_360.
+
+    borrower_360 reads evidence_events for scoring/timeline fields, so evidence
+    cannot safely read borrower_360 as its spine without creating stale gold
+    feedback across refreshes.
+    """
+    text = (TRANSFORM_DIR / "gold_evidence_events.sql").read_text(encoding="utf-8")
+    body = re.sub(r"--.*$", "", text, flags=re.MULTILINE)
+
+    assert "mip.gold.borrower_360" not in body
+    assert "mip.silver.lien_current" in body
+    assert re.search(
+        r"borrower_spine\s+AS\s*\(.*?"
+        r"FROM\s+mip\.silver\.lien_current.*?"
+        r"situs_state\s+IS\s+NOT\s+NULL.*?"
+        r"clip\s+IS\s+NOT\s+NULL",
+        body,
+        re.IGNORECASE | re.DOTALL,
+    ), "evidence_events borrower_spine must match borrower_360's silver lien spine."
+
+
+def test_evidence_event_source_table_literals_are_uc_paths() -> None:
+    """EvidenceDrawer renders source_table verbatim, so each literal must be a
+    real single UC table path, not prose or a compound lineage expression."""
+    text = (TRANSFORM_DIR / "gold_evidence_events.sql").read_text(encoding="utf-8")
+    source_table_literals = re.findall(
+        r"'([^']+)'\s+AS\s+source_table",
+        text,
+        flags=re.IGNORECASE,
+    )
+
+    assert source_table_literals, "gold.evidence_events must emit source_table literals."
+    for literal in source_table_literals:
+        assert re.fullmatch(r"mip\.(silver|gold|ref)\.[a-z0-9_]+", literal), (
+            f"source_table literal must be one real UC path, got {literal!r}."
+        )
+
+    assert "'Voluntary Lien + Market Rates'                  AS source_product" in text

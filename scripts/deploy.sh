@@ -7,20 +7,21 @@
 # What it does, in order, idempotently:
 #   0.  Preflight: check .env.local exists + `databricks` CLI + the venv.
 #   1.  Build the frontend (frontend/dist/** is uploaded with the bundle).
-#   2.  Validate the bundle under `-t dev`, with .env.local mapped to
+#   2.  Validate the direct-deployment bundle under `-t dev`, with .env.local mapped to
 #       BUNDLE_VAR_* via tools/databricks/bundle_env.py.
-#   3.  Deploy the bundle.
-#   4.  Promote the uploaded bundle source to the running Databricks App.
-#   5.  Seed + refresh silver (FRED MORTGAGE30US + Cotality share).
-#   6.  Migrate Lakebase (idempotent schema.sql + seed_campaigns.sql).
-#   7.  Refresh gold (CTAS chain) — the last task in the chain is
+#   3.  Show the direct deployment plan.
+#   4.  Deploy the bundle.
+#   5.  Promote the uploaded bundle source to the running Databricks App.
+#   6.  Seed + refresh silver (FRED MORTGAGE30US + Cotality share).
+#   7.  Migrate Lakebase (idempotent schema.sql + seed_campaigns.sql).
+#   8.  Refresh gold (CTAS chain) — the last task in the chain is
 #       `refresh_semantics_views`, which lands the three mip.semantics.*
 #       metric views Genie depends on.
-#   8.  Sync lifecycle state + funnel snapshot so the delta_vs_prior_*
+#   9.  Sync lifecycle state + funnel snapshot so the delta_vs_prior_*
 #       view columns resolve on the first dashboard render.
-#   9.  Provision / rebind the Genie space via
+#   10. Provision / rebind the Genie space via
 #       tools/databricks/provision_genie_space.py.
-#   10. Smoke-check the live API via scripts/smoke_live.sh (optional).
+#   11. Smoke-check the live API via scripts/smoke_live.sh (optional; fail-loud by default).
 #
 # Why one script (vs a bundle job that invokes provision_genie_space.py):
 # the Genie provisioner reads genie/mortgage_lead_intelligence_space.yml
@@ -33,6 +34,8 @@
 #   ./scripts/deploy.sh --dry-run       # print the plan, make no changes
 #   ./scripts/deploy.sh --skip-silver   # skip silver refresh (FRED + share)
 #   ./scripts/deploy.sh --skip-smoke    # skip the post-deploy curl smoke test
+#   ALLOW_SMOKE_FAILURE=1 ./scripts/deploy.sh
+#                                       # emergency/manual deploy only: warn instead of fail
 #   ./scripts/deploy.sh --no-confirm    # skip the y/N prompt before deploy
 #
 # Environment:
@@ -142,6 +145,21 @@ else
   PYTHON="python3"
 fi
 
+RESTORE_RENDERED_SQL_FAIL_CLOSED=0
+
+restore_rendered_sql_fail_closed() {
+  if [[ "$DRY_RUN" -eq 1 || "$RESTORE_RENDERED_SQL_FAIL_CLOSED" -ne 1 ]]; then
+    return 0
+  fi
+  MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS=0 "$PYTHON" tools/render_sql.py \
+    --catalog "${MIP_DEFAULT_CATALOG:-mip}" >/dev/null 2>&1 || {
+      echo "${YLW}[deploy] warning: failed to restore sql/_rendered with demo first-party feeds disabled.${RST}" >&2
+      return 0
+    }
+  echo "${DIM}[deploy] restored sql/_rendered with demo first-party feeds disabled.${RST}" >&2
+}
+trap restore_rendered_sql_fail_closed EXIT
+
 is_real_bundle_value() {
   local value="${1:-}"
   [[ -n "$value" ]] || return 1
@@ -203,7 +221,7 @@ fi
 # -----------------------------------------------------------------------------
 # The app resource binding validates the Genie space during
 # `databricks bundle deploy`. If GENIE_SPACE_ID is blank, the bundle default
-# `00000000PLACEHOLDER` can reach Terraform and Databricks returns the opaque
+# `00000000PLACEHOLDER` can reach Databricks and return the opaque
 # error "You need Can View permission to perform this action." Provisioning the
 # space here makes the first real app update deterministic. We re-run the same
 # provisioner after gold refresh below so the space picks up newly-materialized
@@ -234,12 +252,37 @@ fi
 # sources under sql/** hardcode the default `mip.*` catalog prefix for
 # readability + code review; tools/render_sql.py substitutes the five
 # documented UC prefixes (mip.gold., mip.silver., mip.ref., mip.semantics.,
-# mip.raw.) for the target catalog before bundle validate/deploy read the
-# rendered tree. This is the automated replacement for the old manual
-# `sed` workaround documented in docs/runbook-multi-catalog.md. Honours
-# `MIP_DEFAULT_CATALOG` from .env.local; defaults to `mip`.
-step "render SQL for target UC catalog (MIP_DEFAULT_CATALOG=${MIP_DEFAULT_CATALOG:-mip})"
+# mip.raw., mip.first_party.) for the target catalog before bundle
+# validate/deploy read the rendered tree. The renderer also materializes the
+# first-party demo-feed switch as a SQL literal because Databricks SQL does not
+# allow parameter markers in this DDL path. The stand-alone renderer defaults to
+# disabled; this wrapper explicitly opts the Summit dev demo in while keeping
+# prod/customer deploys fail-closed.
+DEMO_FEEDS_FROM_ENV="${MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS:-}"
+if [[ -z "$DEMO_FEEDS_FROM_ENV" ]]; then
+  DEMO_FEEDS_FROM_ENV="$(dotenv_value MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS)"
+fi
+if [[ -z "$DEMO_FEEDS_FROM_ENV" ]]; then
+  if [[ "$TARGET" == "dev" ]]; then
+    DEMO_FEEDS_FROM_ENV=1
+  else
+    DEMO_FEEDS_FROM_ENV=0
+  fi
+fi
+if [[ "$TARGET" != "dev" ]]; then
+  DEMO_FEEDS_NORMALIZED="$(printf '%s' "$DEMO_FEEDS_FROM_ENV" | tr '[:upper:]' '[:lower:]')"
+  if [[ "$DEMO_FEEDS_NORMALIZED" =~ ^(1|true|yes|y|on)$ && "${MIP_ALLOW_DEMO_FIRST_PARTY_IN_PROD:-0}" != "1" ]]; then
+    echo "${RED}[deploy] refusing to enable Summit demo first-party feeds for target ${TARGET}.${RST}" >&2
+    echo "  Set MIP_ALLOW_DEMO_FIRST_PARTY_IN_PROD=1 only for an approved demo workspace; never for a customer production workspace." >&2
+    exit 2
+  fi
+fi
+export MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS="$DEMO_FEEDS_FROM_ENV"
+step "render SQL for target UC catalog (MIP_DEFAULT_CATALOG=${MIP_DEFAULT_CATALOG:-mip}, MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS=${MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS})"
 run "$PYTHON" tools/render_sql.py --catalog "${MIP_DEFAULT_CATALOG:-mip}"
+if [[ "$MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS" =~ ^(1|true|TRUE|yes|YES|y|Y|on|ON)$ ]]; then
+  RESTORE_RENDERED_SQL_FAIL_CLOSED=1
+fi
 
 # -----------------------------------------------------------------------------
 # Step 1: build the frontend
@@ -250,23 +293,41 @@ run npm --prefix frontend run build
 # -----------------------------------------------------------------------------
 # Step 2: validate bundle
 # -----------------------------------------------------------------------------
-step "validate bundle against -t ${TARGET}"
+step "validate direct-deployment bundle against -t ${TARGET}"
 run "$PYTHON" tools/databricks/bundle_env.py validate -t "$TARGET"
 
 # -----------------------------------------------------------------------------
-# Step 3: deploy bundle
+# Step 3: plan bundle
+# -----------------------------------------------------------------------------
+step "plan direct deployment against -t ${TARGET}"
+run "$PYTHON" tools/databricks/bundle_env.py plan -t "$TARGET"
+
+# -----------------------------------------------------------------------------
+# Step 4: deploy bundle
 # -----------------------------------------------------------------------------
 step "deploy bundle (app + warehouse + jobs + pipelines + Lakebase)"
 run "$PYTHON" tools/databricks/bundle_env.py deploy -t "$TARGET"
 
 # -----------------------------------------------------------------------------
-# Step 4: promote uploaded source to the running Databricks App
+# Step 5: promote uploaded source to the running Databricks App
 # -----------------------------------------------------------------------------
+APP_NAME="${MIP_APP_NAME:-mip-app}"
 step "deploy Databricks App snapshot from uploaded bundle source"
-run databricks apps deploy "${MIP_APP_NAME:-mip-app}" --mode SNAPSHOT --timeout 20m
+run databricks apps deploy "$APP_NAME" --mode SNAPSHOT --timeout 20m
+
+if [[ "$DRY_RUN" -eq 0 && -z "${MIP_APP_URL:-}" ]]; then
+  DEPLOYED_APP_URL="$(databricks apps get "$APP_NAME" -o json | "$PYTHON" -c 'import json,sys; print(json.load(sys.stdin).get("url",""))')"
+  if [[ -n "$DEPLOYED_APP_URL" ]]; then
+    export MIP_APP_URL="$DEPLOYED_APP_URL"
+    echo "  app url:    ${MIP_APP_URL}"
+  else
+    echo "${RED}[deploy] deployed app URL could not be resolved; refusing to run a local smoke while claiming deployed proof.${RST}" >&2
+    exit 1
+  fi
+fi
 
 # -----------------------------------------------------------------------------
-# Step 5: silver refresh (FRED + Cotality share)
+# Step 6: silver refresh (FRED + Cotality share)
 # -----------------------------------------------------------------------------
 if [[ "$SKIP_SILVER" -eq 1 ]]; then
   step "silver refresh — SKIPPED (--skip-silver)"
@@ -274,46 +335,58 @@ else
   step "refresh silver — FRED MORTGAGE30US rates"
   run databricks bundle run mip_fred_rates_ingest -t "$TARGET"
 
-  step "refresh silver — Cotality share (state-filtered to IL/CA/FL/TX/WA/CO)"
+  step "refresh silver — Cotality share (data-driven geography coverage)"
   run databricks bundle run mip_refresh_silver -t "$TARGET"
 fi
 
 # -----------------------------------------------------------------------------
-# Step 6: Lakebase migration
+# Step 7: Lakebase migration
 # -----------------------------------------------------------------------------
 step "migrate Lakebase — schema.sql + seed_campaigns.sql (idempotent)"
 run databricks bundle run mip_lakebase_migrate -t "$TARGET"
 
 # -----------------------------------------------------------------------------
-# Step 7: gold refresh (CTAS chain, ends with refresh_semantics_views)
+# Step 8: gold refresh (CTAS chain, ends with refresh_semantics_views)
 # -----------------------------------------------------------------------------
 step "refresh gold — borrower_360, lead_scores, *_population, dossier, + mip.semantics.*"
 run databricks bundle run mip_refresh_scores -t "$TARGET"
 
 # -----------------------------------------------------------------------------
-# Step 8: lifecycle sync + funnel snapshot (approval / outreach rates)
+# Step 9: lifecycle sync + funnel snapshot (approval / outreach rates)
 # -----------------------------------------------------------------------------
 step "sync lifecycle state from Lakebase + record daily funnel snapshot"
 run databricks bundle run mip_sync_lifecycle_state -t "$TARGET"
 
 # -----------------------------------------------------------------------------
-# Step 9: rebind the Genie space after gold/semantic assets exist
+# Step 10: rebind the Genie space after gold/semantic assets exist
 # -----------------------------------------------------------------------------
 step "rebind Genie space — bind trusted assets from genie/mortgage_lead_intelligence_space.yml"
 run "$PYTHON" tools/databricks/provision_genie_space.py --no-smoke-test
 
 # -----------------------------------------------------------------------------
-# Step 10 (optional): live smoke test
+# Step 11 (optional): live smoke test
 # -----------------------------------------------------------------------------
 if [[ "$SKIP_SMOKE" -eq 1 ]]; then
   step "live smoke — SKIPPED (--skip-smoke)"
 else
   if [[ -x scripts/smoke_live.sh ]]; then
+    if [[ "$DRY_RUN" -eq 0 && -n "${MIP_APP_URL:-}" && -z "${MIP_BEARER_TOKEN:-}" && -z "${DATABRICKS_TOKEN:-}" ]]; then
+      AUTH_HOST="${DATABRICKS_HOST:-$(dotenv_value DATABRICKS_HOST)}"
+      if [[ -n "$AUTH_HOST" ]]; then
+        export MIP_BEARER_TOKEN="$(databricks auth token --host "$AUTH_HOST" | "$PYTHON" -c 'import json,sys; print(json.load(sys.stdin).get("access_token",""))')"
+      fi
+    fi
     step "live smoke — scripts/smoke_live.sh against the deployed app"
-    run ./scripts/smoke_live.sh || {
-      echo "${YLW}[deploy] smoke test failed — the deploy itself is green, but the app isn't responding yet.${RST}" >&2
-      echo "${YLW}[deploy] this is often a cold warehouse / cold Lakebase. See docs/runbook.md §1.${RST}" >&2
-    }
+    if ! run ./scripts/smoke_live.sh; then
+      if [[ "${ALLOW_SMOKE_FAILURE:-0}" == "1" ]]; then
+        echo "${YLW}[deploy] smoke test failed — override ALLOW_SMOKE_FAILURE=1 kept the deploy moving.${RST}" >&2
+        echo "${YLW}[deploy] this is for manual emergency use only; fix before customer release.${RST}" >&2
+      else
+        echo "${RED}[deploy] smoke test failed — deployed source is not customer-release-ready.${RST}" >&2
+        echo "${RED}[deploy] set ALLOW_SMOKE_FAILURE=1 only for an intentional manual emergency override.${RST}" >&2
+        exit 1
+      fi
+    fi
   else
     step "live smoke — scripts/smoke_live.sh not executable; skipping"
   fi
@@ -324,6 +397,6 @@ fi
 # -----------------------------------------------------------------------------
 echo
 echo "${GRN}[deploy] complete.${RST}"
-echo "${DIM}  App URL:     \$MIP_APP_URL (or check the Databricks workspace → Apps).${RST}"
+echo "${DIM}  App URL:     ${MIP_APP_URL:-"(check the Databricks workspace → Apps)"}${RST}"
 echo "${DIM}  Genie space: genie/space_id.txt (provisioned before bundle deploy, rebound after gold refresh).${RST}"
 echo "${DIM}  Re-run any time — every step is idempotent.${RST}"

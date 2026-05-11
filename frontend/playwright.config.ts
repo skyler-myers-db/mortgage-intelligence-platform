@@ -1,5 +1,7 @@
 import { defineConfig, devices } from '@playwright/test';
 
+const liveE2E = process.env.E2E_LIVE === '1';
+
 /**
  * Playwright config for the Module 0 product golden path.
  *
@@ -30,6 +32,7 @@ import { defineConfig, devices } from '@playwright/test';
 export default defineConfig({
   testDir: './tests/e2e',
   testMatch: /.*\.spec\.ts$/,
+  timeout: liveE2E ? 90_000 : 30_000,
   snapshotPathTemplate: '{testDir}/{testFilePath}-snapshots/{arg}{-projectName}{ext}',
   fullyParallel: false,
   workers: 1,
@@ -42,8 +45,8 @@ export default defineConfig({
     video: 'retain-on-failure',
     screenshot: 'only-on-failure',
     trace: 'retain-on-failure',
-    actionTimeout: 10_000,
-    navigationTimeout: 15_000,
+    actionTimeout: liveE2E ? 20_000 : 10_000,
+    navigationTimeout: liveE2E ? 30_000 : 15_000,
   },
   projects: [
     {

@@ -1,3 +1,5 @@
+> **Internal implementation artifact. Not approved for public release.**
+
 # Human UX-pass checklist — Module 0
 
 Hand-off checklist for a human evaluator (LO, marketing lead, Databricks
@@ -41,8 +43,8 @@ didn't provide, flag it.
 - [ ] The four hero KPIs render real numbers (not `—`, not `Loading…`).
       Cross-check one KPI value against `/api/portfolio/preview` — they
       must match.
-- [ ] The geography drill-down map draws all 6 states in the footprint
-      (IL / CA / FL / TX / WA / CO). Hover shows the state name + count.
+- [ ] The geography drill-down map draws every refreshed coverage state
+      (current live geography footprint). Hover shows the state name + count.
       Click IL — county view loads.
 - [ ] The agent activity log shows at least 1 event — either a real
       audit row or the honest empty-state copy ("No activity yet…").
@@ -70,8 +72,8 @@ didn't provide, flag it.
 - [ ] Each card shows: icon, name, count, delta, avg score, short
       description, evidence chip. Click a card — LeadTable filters to
       that segment.
-- [ ] LeadTable renders real borrower rows (not `B-48291` / `James &
-      Maria Rodriguez` fixture IDs).
+- [ ] LeadTable renders real masked borrower rows, not fixture IDs or
+      fixture names.
 - [ ] Expand a lead row (`.tbl__expand`) — inline dossier preview
       opens and shows real CLIP, Owner Link, segments, why-now.
 - [ ] MapPlaceholder on the right refreshes as you change segment
@@ -82,7 +84,7 @@ didn't provide, flag it.
 - [ ] Table populated with real borrowers. Filters narrow the result
       set. Empty state appears if a filter yields zero matches.
 - [ ] Click a borrower row — navigates to `/borrower-360/:id` with a
-      real id (not `B-48291`).
+      real masked borrower id from the current lead queue.
 
 ### 5. Borrower 360 (`/borrower-360/:id`)
 
@@ -169,12 +171,9 @@ didn't provide, flag it.
 
 These failed past dry-runs and are worth double-checking:
 
-- **Fixture borrower IDs**: `B-48291` / `B-48294` / `B-48295` are
-  test-only. They should never appear in production UI.
-- **Fixture names**: "James & Maria Rodriguez" / "David Park" / "Lisa
-  Thompson" are fixtures. The app's real surface uses whatever
-  `mip.gold.borrower_360.display_name` returns, which is synthetic but
-  NOT those three.
+- **Fixture borrower IDs and names**: test-only fixtures should never appear
+  in production UI. The app's real surface uses masked borrower references
+  returned from `mip.gold.borrower_360`.
 - **Suspiciously clean KPI numbers**: a number ending in exactly
   `,000` or `,553` that never changes on a re-build is a clue you're
   looking at a hardcoded literal, not the live `/api/portfolio/preview`

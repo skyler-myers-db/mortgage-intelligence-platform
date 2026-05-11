@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { api, ApiError, _parseRetryableBody } from './api';
+import type { SegmentCode } from '../types';
 
 /**
  * _parseRetryableBody — cycle-13 `reason` field extraction.
@@ -153,6 +154,203 @@ describe('workspace API client', () => {
   });
 });
 
+describe('lead queue API client', () => {
+  it('serializes Genie cohort filters into the leads query string', async () => {
+    const calls: Array<{ path: string; init?: RequestInit }> = [];
+    vi.stubGlobal('fetch', async (path: string, init?: RequestInit) => {
+      calls.push({ path, init });
+      return jsonResponse(200, []);
+    });
+
+    await api.leads(
+      undefined,
+      undefined,
+      {
+        states: ['IL', 'TX'],
+        zips: ['60617', '75217'],
+        borrowerIds: ['B-11111', 'B-22222'],
+      },
+      {
+        segmentCodes: ['itm', 'equity'] as SegmentCode[],
+        segmentMode: 'all',
+        targetLenderRef: 'Competitor B',
+        cohortId: '11111111-1111-1111-1111-111111111111',
+        portfolioCriteria: {
+          geography: 'All',
+          occupancy: 'Owner-occupied',
+          lien_status: 'Open 1st lien',
+          lender_relationship: 'Current customer',
+          product: 'Refi',
+          min_equity_pct_label: '≥ 25%',
+        },
+        limit: 25,
+      },
+    );
+
+    const url = new URL(calls[0].path, 'http://localhost');
+    expect(url.pathname).toBe('/api/leads');
+    expect(url.searchParams.get('states')).toBe('IL,TX');
+    expect(url.searchParams.get('zips')).toBe('60617,75217');
+    expect(url.searchParams.get('borrower_ids')).toBe('B-11111,B-22222');
+    expect(url.searchParams.get('segment_codes')).toBe('itm,equity');
+    expect(url.searchParams.get('segment_mode')).toBe('all');
+    expect(url.searchParams.get('target_lender_ref')).toBe('Competitor B');
+    expect(url.searchParams.get('cohort_id')).toBe('11111111-1111-1111-1111-111111111111');
+    expect(url.searchParams.get('geography')).toBe('All');
+    expect(url.searchParams.get('occupancy')).toBe('Owner-occupied');
+    expect(url.searchParams.get('lien_status')).toBe('Open 1st lien');
+    expect(url.searchParams.get('lender_relationship')).toBe('Current customer');
+    expect(url.searchParams.get('product')).toBe('Refi');
+    expect(url.searchParams.get('min_equity_pct_label')).toBe('≥ 25%');
+    expect(url.searchParams.get('limit')).toBe('25');
+  });
+
+  it('serializes singular state county zip and segment filters', async () => {
+    const calls: Array<{ path: string; init?: RequestInit }> = [];
+    vi.stubGlobal('fetch', async (path: string, init?: RequestInit) => {
+      calls.push({ path, init });
+      return jsonResponse(200, []);
+    });
+
+    await api.leads(
+      undefined,
+      undefined,
+      {
+        state: 'FL',
+        county: '12011',
+        zip: '33311',
+      },
+      {
+        segmentCodes: ['itm', 'investor', 'equity', 'retention'] as SegmentCode[],
+        segmentMode: 'all',
+      },
+    );
+
+    const url = new URL(calls[0].path, 'http://localhost');
+    expect(url.pathname).toBe('/api/leads');
+    expect(url.searchParams.get('state')).toBe('FL');
+    expect(url.searchParams.get('county')).toBe('12011');
+    expect(url.searchParams.get('zip')).toBe('33311');
+    expect(url.searchParams.get('segment_codes')).toBe('itm,investor,equity,retention');
+    expect(url.searchParams.get('segment_mode')).toBe('all');
+  });
+});
+
+describe('segment API client', () => {
+  it('serializes selected segments and secondary criteria into the segment query string', async () => {
+    const calls: Array<{ path: string; init?: RequestInit }> = [];
+    vi.stubGlobal('fetch', async (path: string, init?: RequestInit) => {
+      calls.push({ path, init });
+      return jsonResponse(200, []);
+    });
+
+    await api.segments(
+      undefined,
+      ['itm', 'equity'] as SegmentCode[],
+      'all',
+      {
+        occupancy: 'Owner-occupied',
+        lien_status: 'Open HELOC',
+        min_equity_pct_label: '≥ 25%',
+      },
+    );
+
+    const url = new URL(calls[0].path, 'http://localhost');
+    expect(url.pathname).toBe('/api/segments');
+    expect(url.searchParams.get('segment_codes')).toBe('itm,equity');
+    expect(url.searchParams.get('segment_mode')).toBe('all');
+    expect(url.searchParams.get('occupancy')).toBe('Owner-occupied');
+    expect(url.searchParams.get('lien_status')).toBe('Open HELOC');
+    expect(url.searchParams.get('min_equity_pct_label')).toBe('≥ 25%');
+  });
+});
+
+describe('geo API client', () => {
+  it('serializes segment and secondary portfolio filters through geo rollups', async () => {
+    const calls: Array<{ path: string; init?: RequestInit }> = [];
+    vi.stubGlobal('fetch', async (path: string, init?: RequestInit) => {
+      calls.push({ path, init });
+      return jsonResponse(200, { rollups: [], snapshot_date: null });
+    });
+
+    const portfolioCriteria = {
+      occupancy: 'Owner-occupied',
+      lien_status: 'Open 1st lien',
+      owner_link: 'Portfolio investor (5+)',
+      purchase_intent: 'Listed for sale',
+      min_equity_pct_label: '≥ 25%',
+    };
+
+    await api.stateRollups(
+      ['itm', 'investor', 'equity', 'retention'],
+      undefined,
+      'all',
+      portfolioCriteria,
+    );
+    await api.countyRollups(
+      'fl',
+      undefined,
+      ['itm', 'investor', 'equity', 'retention'],
+      'all',
+      portfolioCriteria,
+    );
+    await api.zipRollups(
+      '12011',
+      undefined,
+      ['itm', 'investor', 'equity', 'retention'],
+      'all',
+      portfolioCriteria,
+    );
+
+    const stateUrl = new URL(calls[0].path, 'http://localhost');
+    expect(stateUrl.pathname).toBe('/api/geo/state-rollups');
+    expect(stateUrl.searchParams.get('segment_codes')).toBe('itm,investor,equity,retention');
+    expect(stateUrl.searchParams.get('segment_mode')).toBe('all');
+
+    const countyUrl = new URL(calls[1].path, 'http://localhost');
+    expect(countyUrl.pathname).toBe('/api/geo/county-rollups');
+    expect(countyUrl.searchParams.get('state')).toBe('FL');
+    expect(countyUrl.searchParams.get('segment_codes')).toBe('itm,investor,equity,retention');
+    expect(countyUrl.searchParams.get('segment_mode')).toBe('all');
+
+    const zipUrl = new URL(calls[2].path, 'http://localhost');
+    expect(zipUrl.pathname).toBe('/api/geo/zip-rollups');
+    expect(zipUrl.searchParams.get('county_fips')).toBe('12011');
+    expect(zipUrl.searchParams.get('segment_codes')).toBe('itm,investor,equity,retention');
+    expect(zipUrl.searchParams.get('segment_mode')).toBe('all');
+
+    for (const url of [stateUrl, countyUrl, zipUrl]) {
+      expect(url.searchParams.get('occupancy')).toBe('Owner-occupied');
+      expect(url.searchParams.get('lien_status')).toBe('Open 1st lien');
+      expect(url.searchParams.get('owner_link')).toBe('Portfolio investor (5+)');
+      expect(url.searchParams.get('purchase_intent')).toBe('Listed for sale');
+      expect(url.searchParams.get('min_equity_pct_label')).toBe('≥ 25%');
+    }
+  });
+});
+
+describe('data estate API client', () => {
+  it('fetches the data-estate proof surface', async () => {
+    const calls: Array<{ path: string; init?: RequestInit }> = [];
+    vi.stubGlobal('fetch', async (path: string, init?: RequestInit) => {
+      calls.push({ path, init });
+      return jsonResponse(200, {
+        generated_at: '2026-05-06T00:00:00Z',
+        lender_name: 'Summit Mortgage',
+        public_demo_masking: true,
+        lanes: [],
+        known_data_gaps: [],
+        proof_assets: [],
+      });
+    });
+
+    const result = await api.dataEstate();
+
+    expect(calls[0].path).toBe('/api/data-estate');
+    expect(result.public_demo_masking).toBe(true);
+  });
+});
+
 describe('genie API client', () => {
   it('starts or resumes a governed Genie session', async () => {
     const calls: Array<{ path: string; init?: RequestInit }> = [];
@@ -161,12 +359,14 @@ describe('genie API client', () => {
       return jsonResponse(200, {
         conversation_id: 'conv-123',
         trusted_assets: ['mip.gold.lead_population'],
+        sample_questions: ['How many borrowers are currently in-the-money?'],
       });
     });
 
     const result = await api.genieStart();
 
     expect(result.conversation_id).toBe('conv-123');
+    expect(result.sample_questions).toEqual(['How many borrowers are currently in-the-money?']);
     expect(calls[0].path).toBe('/api/genie/start');
     expect(JSON.parse(String(calls[0].init?.body))).toEqual({ context: {} });
   });

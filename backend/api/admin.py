@@ -2,7 +2,8 @@
 
 Two read endpoints (both UC-backed as of slice13-accuracy follow-up):
 
-* ``GET /api/admin/rules``    -- reads ``mip.ref.offer_rules_config``.
+* ``GET /api/admin/rules``    -- reads ``mip.ref.offer_rules_config`` plus
+  the operating market rate from ``mip.gold.borrower_360``.
 * ``GET /api/admin/sources``  -- reads per-table metadata via
   ``DESCRIBE DETAIL`` + ``SELECT COUNT(*)`` for the eight source-of-
   record tables that back the product.
@@ -134,9 +135,12 @@ def get_sources(service: ServiceDep, _actor: AdminDep) -> list[dict[str, Any]]:
         [
           {
             "name":         "Cotality Public Records",
-            "status":       "live" | "roadmap" | "permission_denied" | "error",
+            "status":       "live" | "demo_synthetic" | "configured_empty"
+                            | "not_configured" | "roadmap"
+                            | "permission_denied" | "error",
             "rows":         12345 | null,
             "last_updated": "2026-04-22T17:02:11Z" | null,
+            "checked_at":   "2026-04-22T17:04:11Z" | null,
             "note":         "Delta Share · nightly"
           },
           ...

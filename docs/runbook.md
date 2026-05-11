@@ -76,7 +76,7 @@ real space is available. Prime it before the audience pitch:
 ```bash
 curl -s -X POST "$MIP_APP_URL/api/genie/message" \
   -H 'content-type: application/json' \
-  -d '{"question":"How many borrowers across the 6-state footprint are currently in-the-money?"}' \
+  -d '{"question":"How many borrowers across the current Cotality data coverage are currently in-the-money?"}' \
   | jq '{source, metric_value}'
 # Once `source == "genie"`, cached and fast for the session.
 ```
@@ -123,7 +123,8 @@ Swap to the second-monitor terminal and pre-loaded tabs:
 
 ```bash
 curl -s $MIP_APP_URL/api/leads?limit=5 | jq
-curl -s $MIP_APP_URL/api/borrowers/B-48291 | jq
+BORROWER_ID="$(curl -s "$MIP_APP_URL/api/leads?limit=1" | jq -r '.[0].borrower_id')"
+curl -s "$MIP_APP_URL/api/borrowers/$BORROWER_ID" | jq
 curl -s $MIP_APP_URL/api/segments | jq
 curl -s $MIP_APP_URL/api/audit/events?limit=5 | jq '.[0]'
 ```
@@ -206,23 +207,26 @@ That single invocation executes:
 2. `tools/databricks/bundle_env.py validate -t dev`
    (env-aware wrapper around `databricks bundle validate`; it maps
    `.env.local` to `BUNDLE_VAR_sql_warehouse_id` / `BUNDLE_VAR_genie_space_id`).
-3. `tools/databricks/bundle_env.py deploy -t dev` — env-aware wrapper
-   around `databricks bundle deploy`; SQL warehouse, app, jobs,
+3. `tools/databricks/bundle_env.py plan -t dev` — read-only direct
+   deployment plan. Review this output before a real app/customer deploy.
+4. `tools/databricks/bundle_env.py deploy -t dev` — env-aware wrapper
+   around direct `databricks bundle deploy`; SQL warehouse, app, jobs,
    pipelines, Lakebase instance, MLflow experiment, dashboards.
-4. `databricks apps deploy mip-app --mode SNAPSHOT` — promotes the
+5. `databricks apps deploy mip-app --mode SNAPSHOT` — promotes the
    uploaded bundle source to the running app compute.
-5. `databricks bundle run mip_fred_rates_ingest -t dev` — FRED
+6. `databricks bundle run mip_fred_rates_ingest -t dev` — FRED
    MORTGAGE30US into `silver.market_rates_weekly`.
-6. `databricks bundle run mip_refresh_silver -t dev` — Cotality Delta
-   Share → `mip.silver.*`, 6-state filtered.
-7. `databricks bundle run mip_lakebase_migrate -t dev` — Postgres
+7. `databricks bundle run mip_refresh_silver -t dev` — Cotality Delta
+   Share → `mip.silver.*`; geography coverage is discovered from source
+   rows with non-null states.
+8. `databricks bundle run mip_lakebase_migrate -t dev` — Postgres
    `schema.sql` + `seed_campaigns.sql` (both idempotent).
-8. `databricks bundle run mip_refresh_scores -t dev` — CTAS chain:
+9. `databricks bundle run mip_refresh_scores -t dev` — CTAS chain:
    `property_owner_bridge` → `evidence_events` → `borrower_360` →
    `lead_scores` → `lead_population` → `segment_population` →
    `lockin_cohort` → `borrower_dossier` → **`refresh_semantics_views`**
    (the three `mip.semantics.*` metric views Genie binds to).
-9. `databricks bundle run mip_sync_lifecycle_state -t dev` — initial
+10. `databricks bundle run mip_sync_lifecycle_state -t dev` — initial
    seed run so `mip.gold.borrower_lifecycle_state` has a row per
    borrower and `delta_vs_prior_*` columns can start resolving. After
    deploy, this job is **event-triggered** from the backend approval
@@ -232,10 +236,10 @@ That single invocation executes:
    fallback cron catches any dropped trigger + records the funnel
    snapshot so WoW deltas keep advancing. Not hourly — no reason to
    refresh when nothing has changed.
-10. `python tools/databricks/provision_genie_space.py` — reads
+11. `python tools/databricks/provision_genie_space.py` — reads
    `genie/mortgage_lead_intelligence_space.yml`, creates or updates
    the Genie Space, binds trusted assets, writes `genie/space_id.txt`.
-11. `./scripts/smoke_live.sh` — verify the app and all four deps up.
+12. `./scripts/smoke_live.sh` — verify the app and all four deps up.
 
 Flags on `scripts/deploy.sh` for partial re-runs:
 
@@ -316,14 +320,16 @@ API calls return data.
 ```bash
 ./scripts/smoke_live.sh
 # or to target a different host:
-MIP_APP_URL="https://mip-dev.databricksapps.com" ./scripts/smoke_live.sh
+MIP_APP_URL="$(databricks apps get mip-app -o json | jq -r '.url')" ./scripts/smoke_live.sh
 ```
 
 The script boots a local uvicorn + vite if `MIP_APP_URL` is unset, waits
 for `/api/health` to go green, then exercises `/api/portfolio/preview`,
-`/api/leads`, `/api/borrowers/B-48291`, `/api/borrowers/B-48291/evidence`,
-and `/api/genie/message`. Any non-200 response or a `"down"` dependency
-exits non-zero and prints the failing call.
+`/api/leads`, a dynamically selected `/api/borrowers/{borrower_id}`,
+`/api/borrowers/{borrower_id}/evidence`, and `/api/genie/message`.
+It also verifies Cotality property/owner identifiers are masked on the
+lead and borrower payloads. Any non-200 response, unmasked identifier, or
+non-up dependency exits non-zero and prints the failing call.
 
 This is the operator's "is real UC actually reachable from this laptop"
 check — run it after §4 deploy-from-scratch and after any cred rotation.
@@ -497,7 +503,7 @@ you at it instead of duplicating.
 
 **Symptom:** the four headline KPIs on the home dashboard (marketable
 population, high-intent leads, top-tier opportunities, offers
-recommended) render as `0` or `—` instead of the expected 6-state totals.
+recommended) render as `0` or `—` instead of the expected evaluation-share totals.
 
 **Likely causes, in order:**
 
@@ -571,11 +577,12 @@ row.
    should be 200. If it's 403 with body `{"detail":"forbidden"}`, RBAC
    is rejecting. Replay from a trusted host:
    ```bash
+   BORROWER_ID="$(curl -s "$MIP_APP_URL/api/leads?limit=1" | jq -r '.[0].borrower_id')"
    curl -s -X POST "$MIP_APP_URL/api/outreach/approve" \
      -H "X-Forwarded-Groups: mip-admin" \
      -H "X-Forwarded-Email: you@entrada.ai" \
      -H "Content-Type: application/json" \
-     -d '{"borrower_id":"B-48291","offer_code":"RATE_TERM_REFI"}' | jq
+     -d "{\"borrower_id\":\"$BORROWER_ID\",\"offer_code\":\"RATE_TERM_REFI\"}" | jq
    ```
    Fix: see §11 for the header contract; for production the edge should
    be forwarding both headers automatically — if it isn't, route to
@@ -634,11 +641,10 @@ county layer hangs on "Loading counties…" or shows no data.
    ```bash
    curl -s "$MIP_APP_URL/api/portfolio/preview" | jq '.footprint'
    ```
-   Cross-check the footprint states against the SQL query above. Fix:
-   the canonical footprint is `{IL, CA, FL, TX, WA, CO}` — if the
-   session is showing something else, the portfolio builder has drifted;
-   reset the session (re-run portfolio builder) and route the drift to
-   data-modeler.
+   Cross-check discovered states/counties against the SQL query above. The app
+   should disclose whatever county coverage is present after the latest gold
+   refresh; if the session shows a different state set, route the drift to
+   data-modeler and do not record the demo until gold/UI coverage agrees.
 
 3. **`/us-counties.json` TopoJSON returning HTML** — the SPA catch-all
    route is serving `index.html` at that asset path instead of the

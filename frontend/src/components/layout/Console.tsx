@@ -1,10 +1,11 @@
 import { Link } from 'react-router-dom';
 import { useApp, type Accent, type Density, type Theme } from '../AppContext';
 import { Icon } from '../Icon';
+import { Chip } from '../Primitives';
 
 /**
  * Console — the right-side tweaks panel from the prototype. Theme, accent,
- * density, evidence / confidence toggles, tenant-lender input. Opens from the
+ * density, evidence / confidence toggles, configured tenant. Opens from the
  * topbar tweak icon. Uses `.tweaks` BEM from the prototype so a single class
  * controls positioning + animation.
  */
@@ -17,7 +18,7 @@ export function Console() {
     theme, setTheme,
     accent, setAccent,
     density, setDensity,
-    lender, setLender,
+    lender,
     showEvidence, setShowEvidence,
     showConfidence, setShowConfidence,
     setGenieOpen,
@@ -102,13 +103,13 @@ export function Console() {
           </div>
         </div>
         <div className="tweak-row">
-          <label htmlFor="console-lender-input">Lender</label>
-          <input
-            id="console-lender-input"
-            type="text"
-            value={lender}
-            onChange={(e) => setLender(e.target.value)}
-          />
+          <label>Configured tenant</label>
+          <div className="stack-sm">
+            <Chip variant="neutral" icon="building">{lender}</Chip>
+            <div className="muted fs-12">
+              Read-only in Module 0; lender configuration is applied server-side.
+            </div>
+          </div>
         </div>
         <div className="tweak-row">
           <label>Saved workspace</label>

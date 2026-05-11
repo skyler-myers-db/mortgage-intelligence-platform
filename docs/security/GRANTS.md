@@ -1,5 +1,9 @@
 # Unity Catalog grants for the MIP app service principal
 
+> **Internal implementation artifact. Not approved for public release.**
+> Contains workspace object names, grant SQL, and provider/share access
+> assumptions intended for implementation operators only.
+
 **Audience.** The Entrada/Databricks SE (or customer workspace admin) who
 runs `databricks bundle deploy -t dev|prod` against a fresh customer
 workspace. This file is the runbook — every SQL block below is
@@ -72,7 +76,8 @@ GRANT USE SCHEMA, SELECT ON SCHEMA mip.ref TO `mip-app`;
 
 **Objects covered.** `lender_dictionary` (PII redaction vocabulary),
 `offer_rules_config` (admin-tunable offer thresholds), `state_footprint`
-(the 6-state IL/CA/FL/TX/WA/CO whitelist), `refresh_run_state` (one-row
+(US-state display metadata; live coverage comes from gold rollups),
+`refresh_run_state` (one-row
 anchor for deterministic `refreshed_at` across the gold DAG).
 
 **What breaks if missing.** Lender names redact to the raw uppercase
@@ -128,16 +133,26 @@ Lakebase — the bundle deploy plus the `mip_lakebase_migrate` job
 idempotently applies `lakebase/schema.sql` + `lakebase/seed_campaigns.sql`
 using workspace-identity short-lived credentials. If you are coming from
 a customer whose Lakebase is external (not the bundle-provisioned
-instance), grant the SP `USAGE` on the `mip_app` schema and
-`SELECT, INSERT, UPDATE, DELETE` on every table in it:
+instance), grant the SP only the table permissions its runtime paths
+need. The audit ledger is append-only: `mip-app` gets `SELECT, INSERT`
+there and must not receive `UPDATE` or `DELETE`.
 
 ```sql
 -- Only for externally-managed Lakebase. The bundle-provisioned
 -- instance grants the app binding automatically via CAN_CONNECT_AND_CREATE.
 GRANT USAGE ON SCHEMA mip_app TO "mip-app";
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA mip_app TO "mip-app";
-ALTER DEFAULT PRIVILEGES IN SCHEMA mip_app
-  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO "mip-app";
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE mip_app.campaigns TO "mip-app";
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE mip_app.approvals TO "mip-app";
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE mip_app.saved_leads TO "mip-app";
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE mip_app.outreach_drafts TO "mip-app";
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE mip_app.genie_sessions TO "mip-app";
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE mip_app.genie_messages TO "mip-app";
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE mip_app.genie_cohorts TO "mip-app";
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE mip_app.genie_cohort_members TO "mip-app";
+GRANT SELECT, INSERT ON TABLE mip_app.action_audit TO "mip-app";
+REVOKE UPDATE, DELETE ON TABLE mip_app.action_audit FROM "mip-app";
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE mip_app.agent_sessions TO "mip-app";
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE mip_app.feedback TO "mip-app";
 ```
 
 **What breaks if missing.** `/api/audit/events` returns 503. Approval
@@ -163,15 +178,18 @@ shared tables via a provider catalog (typically named
 3. **Create catalog from share** → name it `cotality_mortgage_data` (or
    whatever `pipelines/lakeflow/mip_feature_pipeline.py` references —
    grep the pipeline for the literal catalog name before naming).
-4. On the new provider catalog: **Permissions → Grant → `mip-app` →
-   `USE CATALOG`, `SELECT`**.
+4. On the new provider catalog: **Permissions → Grant → the ETL/deploy
+   identity that runs `mip_refresh_silver` → `USE CATALOG`, `SELECT`**.
+   Do not grant the running `mip-app` service principal direct read access
+   to Cotality provider/raw catalogs; the app reads curated `mip.gold` and
+   `mip.ref` surfaces only.
 
 **SQL equivalent** (metastore admin):
 
 ```sql
-GRANT USE PROVIDER ON METASTORE TO `mip-app`;
-GRANT USE CATALOG ON CATALOG cotality_mortgage_data TO `mip-app`;
-GRANT USE SCHEMA, SELECT ON SCHEMA cotality_mortgage_data.corelogic TO `mip-app`;
+GRANT USE PROVIDER ON METASTORE TO `sp-mip-etl`;
+GRANT USE CATALOG ON CATALOG cotality_mortgage_data TO `sp-mip-etl`;
+GRANT USE SCHEMA, SELECT ON SCHEMA cotality_mortgage_data.corelogic TO `sp-mip-etl`;
 ```
 
 **What breaks if missing.** The `mip_refresh_silver` Lakeflow pipeline
@@ -241,11 +259,10 @@ Run after completing §§1–8 to confirm every grant is live:
 SHOW GRANTS `mip-app` ON CATALOG mip;
 SHOW GRANTS `mip-app` ON SCHEMA mip.gold;
 SHOW GRANTS `mip-app` ON SCHEMA mip.ref;
-SHOW GRANTS `mip-app` ON SCHEMA mip.silver;
 SHOW GRANTS `mip-app` ON SCHEMA mip_app_state.public;
 
--- Cotality share (catalog name depends on customer)
-SHOW GRANTS `mip-app` ON CATALOG cotality_mortgage_data;
+-- Cotality share (catalog name depends on customer) -- ETL/deploy identity only
+SHOW GRANTS `sp-mip-etl` ON CATALOG cotality_mortgage_data;
 
 -- Warehouse
 SHOW GRANTS ON WAREHOUSE `mip_serverless_sql`;
@@ -253,7 +270,8 @@ SHOW GRANTS ON WAREHOUSE `mip_serverless_sql`;
 -- Concrete round-trip
 SELECT COUNT(*) FROM mip.gold.borrower_360;     -- expect > 0 after refresh
 SELECT COUNT(*) FROM mip.ref.offer_rules_config; -- expect > 0 after seed
-SELECT COUNT(*) FROM mip.silver.property_master; -- optional; §4 gate
+-- Optional ETL-only proof; run as `sp-mip-etl`, not `mip-app`.
+SELECT COUNT(*) FROM mip.silver.property_master;
 ```
 
 ---
@@ -339,8 +357,8 @@ assumption in your runbook.
 
 ## 11. Negative grants (things you should NOT give the app SP)
 
-- **`MANAGE` or `ALL PRIVILEGES`** on `mip` catalog. The app only reads
-  gold/ref/silver and writes to `mip_app` — never DDL. A leaked app
+-- **`MANAGE` or `ALL PRIVILEGES`** on `mip` catalog. The app only reads
+  gold/ref and writes to `mip_app` — never DDL. A leaked app
   credential should not be able to drop tables.
 - **`MODIFY`** on `mip.gold` / `mip.silver`. Gold/silver are
   materialized by bundle jobs under a separate jobs SP; the app SP

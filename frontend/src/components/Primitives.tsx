@@ -111,6 +111,8 @@ export function EvidenceChip({
   const defaultTitle = source
     ? source.updatedAt
       ? `Source: ${source.title} · Refreshed ${source.updatedAt}`
+      : source.eventDate
+        ? `Source: ${source.title} · Evidence event date ${source.eventDate}`
       : `Source: ${source.title}`
     : undefined;
   // Visible freshness dot: no hover required. Missing updatedAt renders

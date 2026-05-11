@@ -8,9 +8,9 @@ Usage:
     python tools/verify_live.py
     python tools/verify_live.py --base-url https://mip-app-2543889327043640.aws.databricksapps.com
 
-Idempotent: writes approvals with synthetic B-TEST-<uuid> IDs that the teardown
-block deletes at the end via the Lakebase API path (best-effort; the report
-still records what was written).
+Idempotent: write probes use real borrower IDs discovered from `/api/leads`.
+Unknown-borrower probes use synthetic B-TEST ids only as 404 negative checks,
+so the verifier never creates phantom borrowers in Lakebase or gold mirrors.
 """
 
 from __future__ import annotations
@@ -21,9 +21,11 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 DEFAULT_BASE = "https://mip-app-2543889327043640.aws.databricksapps.com"
@@ -137,7 +139,7 @@ def probe(
         sample = {k: parsed[k] for k in list(parsed.keys())[:6]}
     elif isinstance(parsed, list):
         top_keys = [f"[array len={len(parsed)}]"]
-        sample = parsed[0] if parsed else None
+        sample = parsed if name == "admin.sources" else parsed[0] if parsed else []
 
     # When the caller declared an explicit expectation, honour it on the
     # 2xx path too — not just the HTTPError branch. Previously a probe
@@ -162,15 +164,33 @@ def probe(
     )
 
 
+def get_json(base: str, token: str, path: str, timeout: float = 30.0) -> Any:
+    req = urllib.request.Request(
+        base.rstrip("/") + path,
+        headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 -- controlled URL
+        return json.loads(resp.read())
+
+
 def run_probes(base: str, token: str) -> list[ProbeResult]:
-    # generate synthetic test IDs so we never pollute real data
-    test_uuid_approve = f"B-TEST-{uuid.uuid4().hex[:8].upper()}"
-    test_uuid_reject = f"B-TEST-{uuid.uuid4().hex[:8].upper()}"
+    unknown_uuid_approve = f"B-TEST-{uuid.uuid4().hex[:8].upper()}"
+    unknown_uuid_reject = f"B-TEST-{uuid.uuid4().hex[:8].upper()}"
 
     results: list[ProbeResult] = []
 
     # 1. Health
     results.append(probe(base, token, "health", "GET", "/api/health"))
+    results.append(probe(base, token, "config.options", "GET", "/api/config/options"))
+
+    geography_label = "All"
+    try:
+        config_options = get_json(base, token, "/api/config/options")
+        geographies = config_options.get("geographies") if isinstance(config_options, dict) else None
+        if isinstance(geographies, list) and geographies:
+            geography_label = str(geographies[0])
+    except Exception:  # noqa: BLE001 -- verifier falls back to the broad accepted alias
+        geography_label = "All"
 
     # 2. Portfolio preview — unfiltered vs filtered
     results.append(
@@ -180,22 +200,22 @@ def run_probes(base: str, token: str) -> list[ProbeResult]:
         probe(
             base,
             token,
-            "portfolio.chicago",
+            "portfolio.all_states",
             "POST",
             "/api/portfolio/preview",
-            body={"criteria": {"geography": "Chicago MSA"}},
+            body={"criteria": {"geography": geography_label}},
         )
     )
     results.append(
         probe(
             base,
             token,
-            "portfolio.chicago.owner.25pct",
+            "portfolio.all_states.owner.25pct",
             "POST",
             "/api/portfolio/preview",
             body={
                 "criteria": {
-                    "geography": "Chicago MSA",
+                    "geography": geography_label,
                     "occupancy": "Owner-occupied",
                     "min_equity_pct_label": "≥ 25%",
                 }
@@ -212,7 +232,7 @@ def run_probes(base: str, token: str) -> list[ProbeResult]:
     # recorded above is truncated). Using the same bearer token. If the fetch
     # fails we skip the borrower-dependent probes entirely — a failure there
     # says nothing about the app when the fake id doesn't exist.
-    borrower_id: str | None = None
+    borrower_ids: list[str] = []
     try:
         leads_req = urllib.request.Request(
             base.rstrip("/") + "/api/leads",
@@ -222,16 +242,27 @@ def run_probes(base: str, token: str) -> list[ProbeResult]:
             body_bytes = resp.read()
         payload = json.loads(body_bytes)
         if isinstance(payload, list) and payload and isinstance(payload[0], dict):
-            borrower_id = payload[0].get("borrower_id")
+            borrower_ids = [
+                str(row.get("borrower_id"))
+                for row in payload
+                if isinstance(row, dict) and row.get("borrower_id")
+            ]
         elif isinstance(payload, dict):
             rows = payload.get("rows") or payload.get("leads") or payload.get("items") or []
-            if rows and isinstance(rows[0], dict):
-                borrower_id = rows[0].get("borrower_id")
+            if rows:
+                borrower_ids = [
+                    str(row.get("borrower_id"))
+                    for row in rows
+                    if isinstance(row, dict) and row.get("borrower_id")
+                ]
     except Exception:  # noqa: BLE001 -- diagnostic path; don't blow up the whole script
-        borrower_id = None
+        borrower_ids = []
+
+    borrower_ids = list(dict.fromkeys(borrower_ids))
+    borrower_id = borrower_ids[0] if borrower_ids else None
+    reject_borrower_id = borrower_ids[1] if len(borrower_ids) > 1 else borrower_id
 
     if not borrower_id:
-        # Record as a neutral skip rather than a fake-id failure.
         results.append(
             ProbeResult(
                 name="borrower.pick",
@@ -239,9 +270,9 @@ def run_probes(base: str, token: str) -> list[ProbeResult]:
                 path="/api/leads",
                 status=0,
                 latency_ms=0.0,
-                ok=True,
+                ok=False,
                 top_keys=[],
-                error="no real borrower_id available from /api/leads; skipping borrower-dependent probes",
+                error="no real borrower_id available from /api/leads; borrower-dependent probes not proven",
             )
         )
 
@@ -257,25 +288,66 @@ def run_probes(base: str, token: str) -> list[ProbeResult]:
             probe(base, token, "outreach.draft", "POST", "/api/outreach/draft", body={"borrower_id": borrower_id})
         )
 
-    # 6. Approval writes — synthetic IDs only
+    # 6. Approval writes. Positive probes use real borrowers; negative probes
+    # use synthetic IDs and must 404 without writing Lakebase rows.
+    if borrower_id:
+        results.append(
+            probe(
+                base,
+                token,
+                "outreach.approve.real",
+                "POST",
+                "/api/outreach/approve",
+                body={
+                    "borrower_id": borrower_id,
+                    "offer_code": "refi",
+                    "request_id": f"verify-live-approve-{uuid.uuid4()}",
+                },
+            )
+        )
+    if reject_borrower_id:
+        results.append(
+            probe(
+                base,
+                token,
+                "outreach.reject.real",
+                "POST",
+                "/api/outreach/reject",
+                body={
+                    "borrower_id": reject_borrower_id,
+                    "offer_code": "refi",
+                    "request_id": f"verify-live-reject-{uuid.uuid4()}",
+                },
+            )
+        )
     results.append(
         probe(
             base,
             token,
-            "outreach.approve.synthetic",
+            "outreach.approve.unknown_404",
             "POST",
             "/api/outreach/approve",
-            body={"borrower_id": test_uuid_approve, "offer_code": "refi"},
+            body={
+                "borrower_id": unknown_uuid_approve,
+                "offer_code": "refi",
+                "request_id": f"verify-live-unknown-approve-{uuid.uuid4()}",
+            },
+            expect_status=404,
         )
     )
     results.append(
         probe(
             base,
             token,
-            "outreach.reject.synthetic",
+            "outreach.reject.unknown_404",
             "POST",
             "/api/outreach/reject",
-            body={"borrower_id": test_uuid_reject, "offer_code": "refi"},
+            body={
+                "borrower_id": unknown_uuid_reject,
+                "offer_code": "refi",
+                "request_id": f"verify-live-unknown-reject-{uuid.uuid4()}",
+            },
+            expect_status=404,
         )
     )
 
@@ -318,8 +390,265 @@ def run_probes(base: str, token: str) -> list[ProbeResult]:
     # TestClient. Running an external negative probe would require
     # provisioning a second service principal with no admin membership.
     results.append(probe(base, token, "geo.state_rollups", "GET", "/api/geo/state-rollups"))
+    results.extend(_geo_drill_probes(base, token))
 
     return results
+
+
+def _geo_drill_probes(base: str, token: str) -> list[ProbeResult]:
+    criteria = {
+        "segment_codes": "itm,equity",
+        "segment_mode": "all",
+        "occupancy": "Owner-occupied",
+        "lien_status": "Open 1st lien",
+        "min_equity_pct_label": "≥ 25%",
+    }
+    state_path = "/api/geo/state-rollups?" + urllib.parse.urlencode(criteria)
+    results = [probe(base, token, "geo.state_rollups.filtered", "GET", state_path)]
+
+    state_code: str | None = None
+    try:
+        state_payload = get_json(base, token, state_path)
+        rollups = state_payload.get("rollups") if isinstance(state_payload, dict) else None
+        if isinstance(rollups, list):
+            for row in rollups:
+                if isinstance(row, dict) and int(row.get("addressable") or 0) > 0:
+                    state_code = str(row.get("state") or "").upper()
+                    break
+    except Exception as exc:  # noqa: BLE001
+        results.append(
+            ProbeResult(
+                name="geo.drill_target.state",
+                method="INFO",
+                path=state_path,
+                status=0,
+                latency_ms=0.0,
+                ok=False,
+                error=f"could not discover filtered state target: {exc}",
+            )
+        )
+        return results
+
+    if not state_code:
+        results.append(
+            ProbeResult(
+                name="geo.drill_target.state",
+                method="INFO",
+                path=state_path,
+                status=0,
+                latency_ms=0.0,
+                ok=False,
+                error="no filtered state rollup with addressable borrowers",
+            )
+        )
+        return results
+
+    county_params = {"state": state_code, **criteria}
+    county_path = "/api/geo/county-rollups?" + urllib.parse.urlencode(county_params)
+    results.append(probe(base, token, "geo.county_rollups.filtered", "GET", county_path))
+
+    county_fips: str | None = None
+    try:
+        county_payload = get_json(base, token, county_path)
+        rollups = county_payload.get("rollups") if isinstance(county_payload, dict) else None
+        if isinstance(rollups, list):
+            for row in rollups:
+                if isinstance(row, dict) and int(row.get("addressable_borrowers") or 0) > 0:
+                    county_fips = str(row.get("fips_5") or "")
+                    break
+    except Exception as exc:  # noqa: BLE001
+        results.append(
+            ProbeResult(
+                name="geo.drill_target.county",
+                method="INFO",
+                path=county_path,
+                status=0,
+                latency_ms=0.0,
+                ok=False,
+                error=f"could not discover filtered county target: {exc}",
+            )
+        )
+        return results
+
+    if not county_fips:
+        results.append(
+            ProbeResult(
+                name="geo.drill_target.county",
+                method="INFO",
+                path=county_path,
+                status=0,
+                latency_ms=0.0,
+                ok=False,
+                error=f"no filtered county rollup with addressable borrowers for {state_code}",
+            )
+        )
+        return results
+
+    zip_params = {"county_fips": county_fips, **criteria}
+    zip_path = "/api/geo/zip-rollups?" + urllib.parse.urlencode(zip_params)
+    results.append(probe(base, token, "geo.zip_rollups.filtered", "GET", zip_path))
+    results.append(
+        probe(
+            base,
+            token,
+            "leads.filtered_geo",
+            "GET",
+            "/api/leads?"
+            + urllib.parse.urlencode(
+                {
+                    "state": state_code,
+                    "county": county_fips,
+                    **criteria,
+                }
+            ),
+        )
+    )
+    return results
+
+
+def collect_red_flags(results: list[ProbeResult]) -> list[str]:
+    flags: list[str] = []
+
+    def find(n: str) -> ProbeResult | None:
+        return next((r for r in results if r.name == n), None)
+
+    unf = find("portfolio.unfiltered")
+    narrowed = find("portfolio.all_states.owner.25pct")
+
+    def total_of(r: ProbeResult | None) -> int | None:
+        if r is None or not r.ok or not isinstance(r.sample, dict):
+            return None
+        for k in (
+            "marketable_population",
+            "total",
+            "total_rows",
+            "count",
+            "row_count",
+            "match_count",
+        ):
+            v = r.sample.get(k)
+            if isinstance(v, int):
+                return v
+        return None
+
+    t_unf = total_of(unf)
+    t_narrowed = total_of(narrowed)
+    if t_unf is not None and t_narrowed is not None and t_unf <= t_narrowed:
+        flags.append(
+            "portfolio filtered predicate did not narrow results: "
+            f"unfiltered={t_unf} vs all_states.owner.25pct={t_narrowed}"
+        )
+
+    admin_sources = find("admin.sources")
+    if admin_sources is not None and admin_sources.ok and isinstance(admin_sources.sample, list):
+        flags.extend(_source_readiness_flags(admin_sources.sample))
+
+    for r in results:
+        if not r.ok:
+            detail = r.error[:160] if r.error else "payload sanity check failed"
+            flags.append(f"{r.name}: status={r.status} error={detail}")
+        if r.ok and isinstance(r.sample, list) and len(r.sample) == 0:
+            flags.append(f"{r.name}: returned empty array")
+        if r.ok and any(key == "[array len=0]" for key in r.top_keys):
+            flags.append(f"{r.name}: returned empty array")
+        if r.ok and isinstance(r.sample, dict):
+            for key in ("rows", "leads", "items", "rollups", "segments"):
+                value = r.sample.get(key)
+                if isinstance(value, list) and len(value) == 0:
+                    flags.append(f"{r.name}: `{key}` returned empty array")
+    return flags
+
+
+def _source_readiness_flags(rows: list[Any]) -> list[str]:
+    flags: list[str] = []
+    by_name = {
+        str(row.get("name")): row
+        for row in rows
+        if isinstance(row, dict) and row.get("name") is not None
+    }
+    core_sources = {
+        "Cotality Public Records",
+        "Voluntary Lien",
+        "MMA Mortgage Analytics",
+        "CLIP",
+        "Owner Link",
+        "AVM",
+        "FRED Market Rates",
+        "UC Gold Borrower 360",
+        "UC Gold Lead Scores",
+        "UC Gold Lead Population",
+        "UC Gold Segment Population",
+        "UC Gold Borrower Dossier",
+    }
+    first_party_sources = {
+        "First-party LOS / Applications",
+        "First-party Servicing Portfolio",
+        "First-party CRM / Campaigns",
+        "First-party Customer Interactions",
+        "First-party Product Balances",
+    }
+    for source_name in sorted(core_sources):
+        row = by_name.get(source_name)
+        if row is None:
+            flags.append(f"admin.sources: missing core source `{source_name}`")
+            continue
+        if row.get("status") != "live":
+            flags.append(f"admin.sources: {source_name} status={row.get('status')} expected live")
+        if int(row.get("rows") or 0) <= 0:
+            flags.append(f"admin.sources: {source_name} has no row count proof")
+        if not row.get("last_updated"):
+            flags.append(f"admin.sources: {source_name} missing last_updated")
+        if not row.get("checked_at"):
+            flags.append(f"admin.sources: {source_name} missing checked_at")
+        elif _is_stale_checked_at(row.get("checked_at")):
+            flags.append(f"admin.sources: {source_name} checked_at is stale")
+    for source_name in sorted(first_party_sources):
+        row = by_name.get(source_name)
+        if row is None:
+            flags.append(f"admin.sources: missing first-party source `{source_name}`")
+            continue
+        if row.get("status") not in {"live", "demo_synthetic"}:
+            flags.append(
+                f"admin.sources: {source_name} status={row.get('status')} expected live/demo_synthetic"
+            )
+        if bool(row.get("synthetic_demo")) and row.get("status") != "demo_synthetic":
+            flags.append(f"admin.sources: {source_name} synthetic_demo not disclosed")
+        if int(row.get("rows") or 0) <= 0:
+            flags.append(f"admin.sources: {source_name} has no row count proof")
+        if not row.get("last_updated"):
+            flags.append(f"admin.sources: {source_name} missing last_updated")
+        if not row.get("checked_at"):
+            flags.append(f"admin.sources: {source_name} missing checked_at")
+        elif _is_stale_checked_at(row.get("checked_at")):
+            flags.append(f"admin.sources: {source_name} checked_at is stale")
+    for source_name in ("MLS", "Building Permits"):
+        row = by_name.get(source_name)
+        if row is None:
+            flags.append(f"admin.sources: missing pending source `{source_name}`")
+        elif row.get("status") == "live":
+            flags.append(f"admin.sources: {source_name} cannot be live until the feed is loaded")
+    return flags
+
+
+def _is_stale_checked_at(value: Any, *, max_age: timedelta = timedelta(days=3)) -> bool:
+    if not isinstance(value, str) or not value.strip():
+        return True
+    raw = value.strip()
+    candidates = [
+        raw,
+        raw.replace(" ", "T"),
+        raw.replace("Z", "+00:00"),
+        raw.replace(" ", "T").replace("Z", "+00:00"),
+    ]
+    for candidate in candidates:
+        try:
+            parsed = datetime.fromisoformat(candidate)
+        except ValueError:
+            continue
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        return datetime.now(UTC) - parsed.astimezone(UTC) > max_age
+    return True
 
 
 def render_markdown(results: list[ProbeResult], base: str, test_tag: str) -> str:
@@ -354,45 +683,10 @@ def render_markdown(results: list[ProbeResult], base: str, test_tag: str) -> str
             lines.append("```json")
             lines.append(json.dumps(r.sample, indent=2, default=str)[:1500])
             lines.append("```")
-            lines.append("")
+    lines.append("")
     lines.append("## Red flags")
     lines.append("")
-    flags: list[str] = []
-
-    # compute filter sanity
-    def find(n: str) -> ProbeResult | None:
-        return next((r for r in results if r.name == n), None)
-
-    unf = find("portfolio.unfiltered")
-    chi = find("portfolio.chicago")
-    chi_own = find("portfolio.chicago.owner.25pct")
-
-    def total_of(r: ProbeResult | None) -> int | None:
-        if r is None or not r.ok or not isinstance(r.sample, dict):
-            return None
-        for k in ("total", "total_rows", "count", "row_count", "match_count"):
-            v = r.sample.get(k)
-            if isinstance(v, int):
-                return v
-        return None
-
-    t_unf = total_of(unf)
-    t_chi = total_of(chi)
-    t_chi_own = total_of(chi_own)
-    if t_unf is not None and t_chi is not None and t_unf <= t_chi:
-        flags.append(
-            f"portfolio filter predicate did NOT narrow results: unfiltered={t_unf} vs chicago={t_chi}"
-        )
-    if t_chi is not None and t_chi_own is not None and t_chi <= t_chi_own:
-        flags.append(
-            f"chicago+owner+25pct not stricter than chicago: chicago={t_chi} vs chicago.owner={t_chi_own}"
-        )
-
-    for r in results:
-        if not r.ok and r.error:
-            flags.append(f"{r.name}: status={r.status} error={r.error[:160]}")
-        if r.ok and isinstance(r.sample, list) and len(r.sample) == 0:
-            flags.append(f"{r.name}: returned empty array")
+    flags = collect_red_flags(results)
 
     if not flags:
         lines.append("(none)")
@@ -404,13 +698,8 @@ def render_markdown(results: list[ProbeResult], base: str, test_tag: str) -> str
     lines.append("## Teardown")
     lines.append("")
     lines.append(
-        "Synthetic approvals/rejections written with `B-TEST-*` IDs. Clean up via:"
+        "No synthetic approval/rejection rows are expected. `B-TEST-*` IDs are used only for unknown-borrower 404 probes."
     )
-    lines.append("")
-    lines.append("```sql")
-    lines.append("DELETE FROM mip_app.approvals WHERE borrower_id LIKE 'B-TEST-%';")
-    lines.append("DELETE FROM mip_app.audit_events WHERE borrower_id LIKE 'B-TEST-%';")
-    lines.append("```")
     lines.append("")
     return "\n".join(lines)
 
@@ -447,6 +736,12 @@ def main() -> int:
         for r in results
     ]
     print(json.dumps(summary, indent=2))
+    flags = collect_red_flags(results)
+    if flags:
+        print("Live verification red flags:", file=sys.stderr)
+        for flag in flags:
+            print(f"- {flag}", file=sys.stderr)
+        return 1
     return 0
 
 

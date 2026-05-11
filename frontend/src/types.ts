@@ -29,10 +29,9 @@ export interface LeadSummary {
   city: string;
   state: string;
   zip: string;
-  /** Real Cotality CLIP (2026-04-22 contract addition). Present on the
-   *  lead-queue row and matches Borrower360.clip_id exactly. Empty string
-   *  if the upstream gold row predates this projection; callers should
-   *  prefer this field over deriving a fake CLIP from borrower_id. */
+  /** Display-safe Cotality property ref. Raw CLIP is masked at the API
+   *  boundary by default; values are `clip_ref_*` or synthetic demo refs
+   *  and match Borrower360.clip_id exactly. */
   clip: string;
   segment_codes: SegmentCode[];
   equity_estimate: number;
@@ -48,15 +47,20 @@ export interface LeadSummary {
    *  client-side predicates against occupancy, owner-link, lien state,
    *  and purchase intent. All optional with safe defaults so older cached
    *  payloads still parse. `has_permit` / `listed_for_sale` are BLOCKED
-   *  FALSE in gold until Cotality Building Permits + MLS Delta shares
-   *  land — the UI surfaces a "data-dependency pending" note. */
+   *  FALSE in gold until Cotality Building Permits + MLS Delta Shares
+   *  are live — the UI surfaces a "data-dependency pending" note. */
   is_owner_occupied?: boolean;
   is_investor?: boolean;
+  is_current_customer?: boolean;
+  is_former_customer?: boolean;
+  is_competitor_lien?: boolean;
   related_property_count?: number;
   current_lien_balance?: number;
   second_pos_amount?: number;
   has_permit?: boolean;
   listed_for_sale?: boolean;
+  /** Public-demo-safe lender alias for the current open lien holder. */
+  current_lender_ref?: string | null;
 }
 
 export interface SavedLead {
@@ -135,6 +139,7 @@ export interface KpiTrend {
   delta_pct: number | null;
   direction: 'up' | 'down' | 'flat';
   comparison_label?: string | null;
+  note?: string | null;
 }
 
 export interface PortfolioPreview {
@@ -154,6 +159,13 @@ export interface PortfolioPreview {
   day_zero?: boolean;
   approved_count: number | null;
   in_outreach_count: number | null;
+}
+
+export interface PortfolioCreateResponse {
+  portfolio_id: string;
+  name: string;
+  marketable_population: number;
+  audit_event_id?: string | null;
 }
 
 export interface OfferAlternative {
@@ -237,6 +249,7 @@ export interface GenieVisualization {
 export interface GenieStartResult {
   conversation_id?: string | null;
   trusted_assets?: string[];
+  sample_questions?: string[];
 }
 
 export interface GenieActionSuggestion {
@@ -262,11 +275,74 @@ export interface GenieActionResult {
   message: string;
 }
 
+export type DataEstateStatus =
+  | 'live'
+  | 'demo_synthetic'
+  | 'configured_empty'
+  | 'not_configured'
+  | 'roadmap'
+  | 'permission_denied'
+  | 'error';
+
+export interface DataEstateAsset {
+  name: string;
+  label: string;
+  status: DataEstateStatus;
+  uc_object?: string | null;
+  row_count?: number | null;
+  last_updated?: string | null;
+  note: string;
+  synthetic_demo?: boolean;
+}
+
+export interface DataEstateLane {
+  id: string;
+  title: string;
+  description: string;
+  status: DataEstateStatus;
+  assets: DataEstateAsset[];
+}
+
+export interface DataEstateResponse {
+  generated_at: string;
+  lender_name: string;
+  public_demo_masking: boolean;
+  lanes: DataEstateLane[];
+  known_data_gaps: string[];
+  proof_assets: string[];
+}
+
+export interface ConfigOptions {
+  lender_name: string;
+  geographies: string[];
+  geographies_status?: string;
+  geography_scope?: {
+    state_count: number;
+    county_count: number;
+    zip_count?: number | null;
+    snapshot_date?: string | null;
+    source_table?: string | null;
+    scope_label: string;
+    counties: Array<{
+      state: string;
+      fips_5: string;
+      county_name?: string | null;
+      addressable_borrowers: number;
+    }>;
+  } | null;
+  occupancy: string[];
+  lien_status: string[];
+  lender_relationships: string[];
+  products: string[];
+  equity_thresholds: string[];
+  target_lender_refs?: string[];
+  target_lender_refs_status?: string;
+}
+
 /** Per-state aggregate row from `/api/geo/state-rollups` (see
  *  backend/schemas/geo.py). `state` is the uppercase USPS code. Consumed
- *  by the USChoroplethMap state level. `top_segment_code` was added in
- *  slice13-accuracy-validation so the map can drop the hardcoded
- *  STATE_FACTS[*].topSegment literal. */
+ *  by the USChoroplethMap state level. `top_segment_code` lets the map
+ *  render dominant-segment metadata from backend rollups. */
 export interface StateRollup {
   state: string;
   addressable: number;
@@ -298,13 +374,12 @@ export interface CountyRollupResponse {
   rollups: CountyRollup[];
   snapshot_date?: string | null;
   /** Optional note from the backend explaining the geographic data scope
-   *  (e.g. "Cotality evaluation share: 1 anchor county per state"). When
-   *  present, the UI renders it verbatim as a scope chip. Added 2026-04-23
-   *  to surface the Cotality eval-share single-county scope honestly. */
+   *  as discovered from gold county rollups. When present, the UI renders it
+   *  verbatim as a scope chip rather than inventing demo-specific wording. */
   scope_note?: string | null;
 }
 
-/** Per-ZIP aggregate row from `/api/geo/zip-rollups?fips=NNNNN`.
+/** Per-ZIP aggregate row from `/api/geo/zip-rollups?county_fips=NNNNN`.
  *  `sample_borrower_id` is the stable-ranked top borrower for deep-link. */
 export interface ZipRollup {
   zip: string;

@@ -1,3 +1,5 @@
+> **Internal implementation artifact. Not approved for public release.**
+
 # Interactive-Element Audit — Segment Intelligence & Lead Queue
 
 Date: 2026-04-23
@@ -15,7 +17,7 @@ The user's complaint was that "a lot of numbers still look like fake demo placeh
 | segment-intelligence | `Clear filters` button | Reset `activeSegs` + `chipFilters` | LIVE | [segment-intelligence.tsx:168](../../frontend/src/routes/segment-intelligence.tsx) — `onClick={clearAll}` resets local state |
 | segment-intelligence | `SegmentCard` (6 cards) | Toggle segment in `activeSegs`, filters `LeadTable` | LIVE | [segment-intelligence.tsx:200](../../frontend/src/routes/segment-intelligence.tsx) — `toggleSeg(s.code)`; LeadTable filtering at line 128 via `segment_codes.some` |
 | segment-intelligence | `SegmentCard` count / delta / avg | Display segment KPIs | LIVE | Values come from `/api/segments` → `mip.gold.segment_population.count/delta_vs_prior/avg_score` — see [databricks_repo.py:333–363](../../backend/services/repositories/databricks_repo.py) |
-| segment-intelligence | `FilterSelect` LOCATION | Filter table by state | **LIVE (client-side)** | [segment-intelligence.tsx:130–134](../../frontend/src/routes/segment-intelligence.tsx) — narrows `leads` via `LOCATION_TO_STATES`. Options are hardcoded metros (not fetched from `/api/config/options`). |
+| segment-intelligence | `FilterSelect` LOCATION | Filter table by state | **LIVE** | Uses refreshed footprint options and narrows leads by current coverage state. |
 | segment-intelligence | `FilterSelect` DEMOGRAPHICS | Filter by occupancy | **STUB (display-only)** | [segment-intelligence.tsx:140–142](../../frontend/src/routes/segment-intelligence.tsx) — TODO comment; filter change only dims table opacity via `hasSoftFilter`, does not narrow rows. |
 | segment-intelligence | `FilterSelect` LIEN | Filter by lien status | **STUB** | Same — dims only, no predicate on `LeadSummary` (no lien field). |
 | segment-intelligence | `FilterSelect` OWNER LINK | Filter by owner link | **STUB** | Same — dims only. |
@@ -36,15 +38,15 @@ The user's complaint was that "a lot of numbers still look like fake demo placeh
 | segment-intelligence + lead-queue | RowPreview segment chips | Display segment codes | LIVE | From `lead.segment_codes` |
 | segment-intelligence + lead-queue | RowPreview `EvidenceChip` × 2 (Why-now) | Open EvidenceDrawer | LIVE | [LeadTable.tsx:88–89](../../frontend/src/components/mortgage/LeadTable.tsx) — `DRAWER_SOURCES.itm/nbo` |
 | segment-intelligence + lead-queue | LeadTable `nbo_v3` chip | Open EvidenceDrawer | LIVE | [LeadTable.tsx:437](../../frontend/src/components/mortgage/LeadTable.tsx) |
-| segment-intelligence | `USChoroplethMap` state path | Drill to county (IL/CA/TX only) | **PARTIAL** | [USChoroplethMap.tsx:489–497](../../frontend/src/components/mortgage/USChoroplethMap.tsx) — only 3 of 6 footprint states have `SUPPORTED_COUNTY_STATES`; FL/WA/CO show hover but no drill. |
-| segment-intelligence | Map state hover tooltip (count/avgScore/topSegment) | Display | **STUB** | [USChoroplethMap.tsx:98–152](../../frontend/src/components/mortgage/USChoroplethMap.tsx) — `STATE_FACTS` is a hardcoded dict, not from backend. TODO comment at line 79. |
-| segment-intelligence | Map county path | Drill to ZIP (Cook only) | **PARTIAL** | [USChoroplethMap.tsx:602–609](../../frontend/src/components/mortgage/USChoroplethMap.tsx) — only FIPS `17031` (Cook) has a ZIP drill. Other counties: selected state only. |
-| segment-intelligence | Map county hover tooltip | Display | **STUB** | `COUNTY_FACTS` is hardcoded ([USChoroplethMap.tsx:31–57](../../frontend/src/components/mortgage/USChoroplethMap.tsx)). TODO at line 30. |
-| segment-intelligence | Map ZIP path | Navigate to `/borrower-360/<id>` | **PARTIAL** | [USChoroplethMap.tsx:678–683](../../frontend/src/components/mortgage/USChoroplethMap.tsx) — only 3 of 6 ZIPs (60611/60647/60613) have `borrowerId`. Clicking 60614/60610/60657 sets `selected` but does NOT navigate — silent no-op. |
+| segment-intelligence | `USChoroplethMap` state path | Drill to county | **LIVE (superseded finding)** | Current map coverage is derived from backend geography rollups and available county geometry. |
+| segment-intelligence | Map state hover tooltip (count/avgScore/topSegment) | Display | **LIVE (superseded finding)** | Current tooltip values come from backend rollups, not local geography fixtures. |
+| segment-intelligence | Map county path | Drill to ZIP | **LIVE (superseded finding)** | Current county and ZIP levels are driven by backend rollups for the selected geography. |
+| segment-intelligence | Map county hover tooltip | Display | **LIVE (superseded finding)** | Current county tooltip values come from backend rollups, not local geography fixtures. |
+| segment-intelligence | Map ZIP path | Navigate to `/borrower-360/<id>` when a sample borrower exists | **LIVE** | ZIP tiles use backend rollup context and only expose borrower navigation when the API returns a sample borrower id. |
 | segment-intelligence | Map breadcrumb "US" | Reset to state level | LIVE | [USChoroplethMap.tsx:718–729](../../frontend/src/components/mortgage/USChoroplethMap.tsx) |
 | segment-intelligence | Map breadcrumb state name | Reset to county level | LIVE | [USChoroplethMap.tsx:734–749](../../frontend/src/components/mortgage/USChoroplethMap.tsx) |
 | segment-intelligence | Map legend | Display | DEAD | [USChoroplethMap.tsx:781–805](../../frontend/src/components/mortgage/USChoroplethMap.tsx) — legend is a color-ramp reference |
-| segment-intelligence | Map `segmentFilter` dim | Dim non-matching states | LIVE (decorative) | [USChoroplethMap.tsx:457, 470](../../frontend/src/components/mortgage/USChoroplethMap.tsx) — respects `activeSegs` prop, but operates on hardcoded `STATE_FACTS.topSegment`. |
+| segment-intelligence | Map `segmentFilter` dim | Dim non-matching geographies | LIVE (decorative) | Respects `activeSegs` using backend rollup top-segment metadata. |
 | **segment-intelligence** | **Map click filters LeadTable?** | — | **BROKEN** | No callback from map to parent. Map is decorative — clicking a state does NOT narrow the LeadTable below. LOCATION dropdown is the only way to filter geographically. |
 | lead-queue | `segment = foo` URL chip | Display-only | LIVE | [lead-queue.tsx:53](../../frontend/src/routes/lead-queue.tsx) — `segment` URL param is passed to `api.leads(segment)` which hits `_LIST_BY_SEGMENT_SQL` WHERE `array_contains(segment_codes, :segment)` — real predicate. |
 
@@ -95,21 +97,24 @@ Recommend (A) but note a migration is required.
 
 `LOCATION_TO_STATES`, demographics/lien/owner-link/purchase/cashout option lists are hardcoded in the route. [backend/api/config.py](../../backend/api/config.py) already ships `/api/config/options` with curated lists (geographies, occupancy, lien_status, lender_relationships, products, equity_thresholds). Either the frontend should fetch these, or the endpoint should be deprecated. Right now both exist and drift.
 
-### 3.4 STUB — Map facts are hardcoded dicts
+### 3.4 SUPERSEDED — Map facts now come from backend rollups
 
-`STATE_FACTS` (per-state count/avgScore/topSegment) and `COUNTY_FACTS` (per-FIPS count/avgScore/lvl) and `CHI_ZIPS` (borrower count/score per ZIP) are literals in [USChoroplethMap.tsx:98–152, 31–57, 196–203](../../frontend/src/components/mortgage/USChoroplethMap.tsx). The "6-state Delta Share footprint" narrative says these should come from a gold geography rollup. Both TODOs in the file acknowledge this. Backend work: add `gold.geography_rollup` (state/county/zip → count/avg_score/top_segment) and a `/api/geography` endpoint.
+Current state/county/ZIP facts come from backend geography rollups and current source coverage. The earlier local-map fixture finding is closed.
 
-### 3.5 BROKEN — ZIP drill has 3 dead tiles
+### 3.5 SUPERSEDED — ZIP drill uses backend rollup context
 
-Clicking ZIPs 60614, 60610, 60657 sets `selected` state but does NOT navigate because `borrowerId` is undefined on those records ([USChoroplethMap.tsx:200–202](../../frontend/src/components/mortgage/USChoroplethMap.tsx)). Silent no-op from the operator's perspective. Fix: either populate `borrowerId` for all six ZIPs, or render a disabled cursor / "no sample" tooltip on those tiles.
+Current ZIP tiles are generated from backend rollups. Borrower navigation is
+available only when the rollup payload includes a sample borrower id; otherwise
+the tile remains an aggregate geography view.
 
 ### 3.6 STUB — Reject is local-only
 
 `rejectLead` in [LeadTable.tsx:174–180](../../frontend/src/components/mortgage/LeadTable.tsx) updates `AppContext.approvals` but never hits the backend — no audit row is written for rejections. Governance §4 says approve AND reject should both land in the Lakebase audit table. Needs a `POST /api/outreach/reject` (or an `approve` body extension with `decision: 'reject'`).
 
-### 3.7 PARTIAL — County drill only covers IL/CA/TX
+### 3.7 SUPERSEDED — County drill follows available coverage
 
-`SUPPORTED_COUNTY_STATES` has 3 of the 6 footprint states ([USChoroplethMap.tsx:18–22](../../frontend/src/components/mortgage/USChoroplethMap.tsx)). FL, WA, CO are on the state map at lvl:4 but clicking them just sets `selected`; no county polygons. FIPS codes needed: FL=12, WA=53, CO=08. TODO at line 16.
+Current county drill behavior follows available backend rollups and geometry
+for the selected state rather than a fixed local state allowlist.
 
 ---
 
@@ -125,13 +130,11 @@ Every literal on these two routes that currently masquerades as data.
 | [segment-intelligence.tsx](../../frontend/src/routes/segment-intelligence.tsx) | 225 | `['Any', 'Open 1st lien', 'Open HELOC', 'Free & clear']` | Real lien taxonomy |
 | [segment-intelligence.tsx](../../frontend/src/routes/segment-intelligence.tsx) | 231 | `['All', 'Single property', 'Multi-property']` | Real owner-link taxonomy |
 | [segment-intelligence.tsx](../../frontend/src/routes/segment-intelligence.tsx) | 237 | `['All', 'Listed for sale', 'Permit activity']` | Real purchase-intent taxonomy |
-| [USChoroplethMap.tsx](../../frontend/src/components/mortgage/USChoroplethMap.tsx) | 18–22 | `SUPPORTED_COUNTY_STATES` | Drill-down coverage |
-| [USChoroplethMap.tsx](../../frontend/src/components/mortgage/USChoroplethMap.tsx) | 31–57 | `COUNTY_FACTS` (20 counties) | Per-county borrower density |
-| [USChoroplethMap.tsx](../../frontend/src/components/mortgage/USChoroplethMap.tsx) | 98–152 | `STATE_FACTS` (49 rows) | Per-state borrower density / top segment |
-| [USChoroplethMap.tsx](../../frontend/src/components/mortgage/USChoroplethMap.tsx) | 156–163 | `SEGMENT_CODE_TO_NAME` | Map-highlight ↔ segment name join |
-| [USChoroplethMap.tsx](../../frontend/src/components/mortgage/USChoroplethMap.tsx) | 183–189 | `IL_COUNTIES` (stylized polygons + counts/scores) | IL county drill fallback |
-| [USChoroplethMap.tsx](../../frontend/src/components/mortgage/USChoroplethMap.tsx) | 196–203 | `CHI_ZIPS` (counts/scores per ZIP, partial `borrowerId`) | Cook County ZIP tiles |
-| [USChoroplethMap.tsx](../../frontend/src/components/mortgage/USChoroplethMap.tsx) | 836–838 | `Source: CLIP + MMA` chip | Lineage claim on map-tip |
+| [USChoroplethMap.tsx](../../frontend/src/components/mortgage/USChoroplethMap.tsx) | current | Backend geography rollup payload | Per-state/per-county/per-ZIP borrower density and top segment |
+| [USChoroplethMap.tsx](../../frontend/src/components/mortgage/USChoroplethMap.tsx) | current | Segment label map | Map-highlight to segment-name join |
+| [USChoroplethMap.tsx](../../frontend/src/components/mortgage/USChoroplethMap.tsx) | current | Current county geometry + backend rollups | County drill rendering |
+| [USChoroplethMap.tsx](../../frontend/src/components/mortgage/USChoroplethMap.tsx) | current | Backend ZIP rollup payload | ZIP tiles and optional sample borrower link |
+| [USChoroplethMap.tsx](../../frontend/src/components/mortgage/USChoroplethMap.tsx) | current | Rollup source metadata | Lineage claim on map-tip |
 | [USChoroplethMap.tsx](../../frontend/src/components/mortgage/USChoroplethMap.tsx) | 862, 872 | `cx="833" cy="300"` Illinois beacon | Chicago pixel position (decoration, acceptable) |
 
 Counts: 6 literal-taxonomy lists, 3 hardcoded geography-fact dicts (one per drill level), 1 fake source-claim chip. The two tables that ARE real — `segments` (6 rows from `mip.gold.segment_population`) and `leads` (up to 500 rows from `mip.gold.lead_population`) — drive the rest of the page correctly.

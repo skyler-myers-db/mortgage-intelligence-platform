@@ -72,6 +72,7 @@ Public surface
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from typing import Any
@@ -112,6 +113,12 @@ _cached_job_id_at: float = float("-inf")
 def _resolve_job_id(workspace: Any) -> int | None:
     """Return the integer job_id for ``mip_sync_lifecycle_state``.
 
+    Databricks Apps bind the lifecycle-sync job as an app resource and
+    expose its id through ``MIP_LIFECYCLE_SYNC_JOB_ID``. That is the primary
+    path because the app service principal may have CAN_MANAGE_RUN on this
+    one job without workspace-wide job-list visibility. Local/dev fall back
+    to name resolution below.
+
     On the bundle-deployed workspace the job name is the literal
     ``mip_sync_lifecycle_state``; under ``mode: development`` the CLI
     prefixes it with ``[dev <user>]`` so a simple name lookup must
@@ -129,6 +136,12 @@ def _resolve_job_id(workspace: Any) -> int | None:
         _cached_job_id is not None
         and (now - _cached_job_id_at) < _JOB_ID_TTL_SECONDS
     ):
+        return _cached_job_id
+
+    configured_job_id = _job_id_from_env()
+    if configured_job_id is not None:
+        _cached_job_id = configured_job_id
+        _cached_job_id_at = now
         return _cached_job_id
 
     # ``jobs.list`` honours a ``name`` filter; for Development-mode
@@ -155,6 +168,24 @@ def _resolve_job_id(workspace: Any) -> int | None:
                 _cached_job_id_at = now
                 return _cached_job_id
     return None
+
+
+def _job_id_from_env() -> int | None:
+    raw = os.environ.get("MIP_LIFECYCLE_SYNC_JOB_ID")
+    if raw is None or not raw.strip():
+        return None
+    try:
+        job_id = int(raw.strip())
+    except ValueError:
+        emit(
+            _log,
+            "job_trigger_config_invalid",
+            level=logging.WARNING,
+            job_name=_LIFECYCLE_JOB_NAME,
+            env_var="MIP_LIFECYCLE_SYNC_JOB_ID",
+        )
+        return None
+    return job_id if job_id > 0 else None
 
 
 def _invalidate_cached_job_id() -> None:

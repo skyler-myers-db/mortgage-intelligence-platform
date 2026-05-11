@@ -11,7 +11,7 @@ import { api } from '../lib/api';
 import type { SavedDraft, SavedDraftInput, SavedLead, SavedLeadInput } from '../types';
 
 /**
- * AppContext — theme, accent, density, lender, drawer, Genie, approvals,
+ * AppContext — theme, accent, density, configured tenant, drawer, Genie, approvals,
  * evidence toggles. Ported from the Module 0 prototype so every page shares
  * one provider and writes data-theme/data-accent/data-density to <html>.
  */
@@ -26,6 +26,7 @@ export interface DrawerSource {
   lineage?: Array<{ layer: string; name: string; meta?: string }>;
   signals?: Array<{ label: string; source: string; value: string }>;
   updatedAt?: string;
+  eventDate?: string;
   short?: string;
 }
 
@@ -37,7 +38,6 @@ interface AppCtxValue {
   density: Density;
   setDensity: (d: Density) => void;
   lender: string;
-  setLender: (s: string) => void;
   showEvidence: boolean;
   setShowEvidence: (v: boolean) => void;
   showConfidence: boolean;
@@ -111,7 +111,10 @@ export function AppProvider({ children }: PropsWithChildren) {
   const [theme, setThemeState] = useState<Theme>(() => readStored('mip.theme', 'dark', THEMES));
   const [accent, setAccentState] = useState<Accent>(() => readStored('mip.accent', 'bright', ACCENTS));
   const [density, setDensityState] = useState<Density>(() => readStored('mip.density', 'comfortable', DENSITIES));
-  const [lender, setLender] = useState<string>('Summit Mortgage');
+  // Module 0 does not support arbitrary client-side lender switching.
+  // The tenant label is display-only; lender predicates are resolved by
+  // backend configuration and the Unity Catalog gold views.
+  const lender = 'Summit Mortgage';
   const [showEvidence, setShowEvidence] = useState(true);
   const [showConfidence, setShowConfidence] = useState(true);
   // Console is opt-in so the first demo viewport uses the full prototype
@@ -332,7 +335,7 @@ export function AppProvider({ children }: PropsWithChildren) {
       theme, setTheme,
       accent, setAccent,
       density, setDensity,
-      lender, setLender,
+      lender,
       showEvidence, setShowEvidence,
       showConfidence, setShowConfidence,
       consoleOpen, setConsoleOpen,

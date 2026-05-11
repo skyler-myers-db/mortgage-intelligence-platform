@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from backend.schemas.common import validate_public_borrower_id
 
 
 class SavedLeadInput(BaseModel):
@@ -13,6 +15,11 @@ class SavedLeadInput(BaseModel):
     recommended_offer: str | None = Field(default=None, max_length=128)
     opportunity_score: int | None = Field(default=None, ge=0, le=100)
     confidence: int | None = Field(default=None, ge=0, le=100)
+
+    @field_validator("borrower_id")
+    @classmethod
+    def _borrower_id_is_public_safe(cls, value: str) -> str:
+        return validate_public_borrower_id(value)
 
 
 class SavedLead(SavedLeadInput):
@@ -25,6 +32,11 @@ class SavedDraftInput(BaseModel):
     offer_code: str | None = Field(default=None, max_length=128)
     channel: Literal["email", "sms"] = "email"
     body: str = Field(min_length=1, max_length=5000)
+
+    @field_validator("borrower_id")
+    @classmethod
+    def _borrower_id_is_public_safe(cls, value: str) -> str:
+        return validate_public_borrower_id(value)
 
 
 class SavedDraft(SavedDraftInput):

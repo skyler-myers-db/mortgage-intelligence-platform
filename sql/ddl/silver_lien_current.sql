@@ -5,18 +5,19 @@
 --            one row per CLIP carrying the current-state lien stack, rates,
 --            AVM, equity, LTV, and servicer. Every gold lead-scoring join
 --            starts here. 1:1 with `entrada_eval_voluntary_lien_status_
---            marketing_v2` on the CLIP key, filtered to the 6-state share
---            footprint.
+--            marketing_v2` on the CLIP key. Coverage follows the states
+--            present in the source share; no fixed-state filter is applied.
 --
 -- Data contract reference: docs/data-contract-module0.md §2.1.
 -- Slice:     module0-real-data-slice2 (silver lift from the Cotality share).
 -- Source:    cotality_mortgage_data.corelogic.entrada_eval_voluntary_lien_
 --            status_marketing_v2 (5.16M rows, CLIP 1:1).
 --
--- Geography filter (non-negotiable, CLAUDE.md + data-contract-module0 §2):
---            WHERE situs_state IN ('IL','CA','FL','TX','WA','CO')
+-- Geography contract:
+--            WHERE situs_state IS NOT NULL
 --            -- Applied in sql/transformations/silver_lien_current.sql.
---            Single-metro footprints are explicitly forbidden.
+--            Downstream geography rollups discover state/county/ZIP coverage
+--            from the refreshed data.
 --
 -- PII posture (NON-NEGOTIABLE, governance-real-data-review §1):
 --            - `owner_1_full_name`       : NEVER landed in silver. The gold
@@ -51,7 +52,7 @@
 -- carried here as a placeholder NULL for gold's convenience):
 --
 --            clip                           Property spine, PK.
---            situs_state                    6-state filter.
+--            situs_state                    Source-state coverage.
 --            situs_zip_code                 5-digit STRING.
 --            owner_occupancy_code           Occupancy code.
 --            total_open_liens               Count of active mortgage liens.
@@ -76,11 +77,9 @@
 --                                           2nd-lien features (HELOC flag).
 --            ingest_ts, _meta_batch_id      Audit metadata.
 --
--- Clustering: Liquid cluster on (situs_state, clip) -- gold always state-
---            filters first and joins on clip; clustering here makes the
---            downstream 6-state scan cheap. 5M rows: partitioning by state
---            would create only 6 partitions (too coarse) and hurt per-CLIP
---            lookups; Delta + liquid is the right posture.
+-- Clustering: Liquid cluster on (situs_state, clip) -- gold and map
+--            queries group/filter by state and join on clip; Delta + liquid
+--            keeps per-state and per-CLIP reads selective as coverage changes.
 --
 -- Idempotency: CREATE TABLE IF NOT EXISTS. Transformation file MERGE-keys
 --            on `clip` only (CLIP is 1:1 per share).
@@ -88,7 +87,7 @@
 
 CREATE TABLE IF NOT EXISTS mip.silver.lien_current (
   clip                       STRING    NOT NULL COMMENT 'Cotality mastered property ID. PK.',
-  situs_state                STRING    NOT NULL COMMENT '2-char state code. Filter: IN (IL, CA, FL, TX, WA, CO).',
+  situs_state                STRING    NOT NULL COMMENT '2-char state code from the source share.',
   situs_zip_code             STRING             COMMENT '5-digit situs ZIP (STRING preserves leading zeros).',
   owner_occupancy_code       STRING             COMMENT 'Owner-occupancy code: O/A/T/NULL.',
   total_open_liens           INT                COMMENT 'Count of active mortgage liens.',
@@ -122,7 +121,7 @@ CREATE TABLE IF NOT EXISTS mip.silver.lien_current (
 )
 USING DELTA
 CLUSTER BY (situs_state, clip)
-COMMENT 'CLIP-grain lien + rates snapshot lifted from cotality_mortgage_data.corelogic.entrada_eval_voluntary_lien_status_marketing_v2 filtered to IN (IL, CA, FL, TX, WA, CO). THE SPINE of Module 0 scoring. Raw owner names and situs street addresses never land here. See docs/data-contract-module0.md §2.1 and docs/governance-real-data-review.md §1.'
+COMMENT 'CLIP-grain lien + rates snapshot lifted from the Cotality source share for all non-null source states. THE SPINE of Module 0 scoring. Raw owner names and situs street addresses never land here. See docs/data-contract-module0.md §2.1 and docs/governance-real-data-review.md §1.'
 TBLPROPERTIES (
   'delta.enableChangeDataFeed' = 'false',
   'delta.autoOptimize.optimizeWrite' = 'true',

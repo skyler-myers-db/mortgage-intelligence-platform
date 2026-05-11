@@ -191,6 +191,38 @@ CREATE TABLE IF NOT EXISTS mip_app.genie_messages (
 CREATE INDEX IF NOT EXISTS idx_genie_messages_actor_created
     ON mip_app.genie_messages (actor_email, created_at DESC);
 
+-- Genie-governed cohorts ---------------------------------------------
+-- One row per confirmed "open this cohort" action. The cohort stores
+-- only reviewed filters and optional synthetic borrower ids from the
+-- Genie result, never owner names, raw CLIPs, addresses, emails, or
+-- phone numbers. Lead Queue replays this Lakebase row by cohort_id so
+-- a governed Genie action cannot degrade into the generic lead queue.
+CREATE TABLE IF NOT EXISTS mip_app.genie_cohorts (
+    cohort_id       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    actor_email     TEXT NOT NULL,
+    request_id      TEXT NOT NULL,
+    conversation_id TEXT,
+    message_id      TEXT,
+    question_hash   TEXT,
+    route_filters   JSONB NOT NULL DEFAULT '{}'::jsonb,
+    source_assets   TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+    sql_hash        TEXT,
+    row_count       INTEGER NOT NULL DEFAULT 0 CHECK (row_count >= 0),
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (actor_email, request_id)
+);
+CREATE INDEX IF NOT EXISTS idx_genie_cohorts_actor_created
+    ON mip_app.genie_cohorts (actor_email, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS mip_app.genie_cohort_members (
+    cohort_id   UUID NOT NULL REFERENCES mip_app.genie_cohorts(cohort_id) ON DELETE CASCADE,
+    borrower_id TEXT NOT NULL,
+    rank_order  INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (cohort_id, borrower_id)
+);
+CREATE INDEX IF NOT EXISTS idx_genie_cohort_members_borrower
+    ON mip_app.genie_cohort_members (borrower_id);
+
 -- Immutability: app writer has INSERT + SELECT only; revoke UPDATE/DELETE.
 -- The role may not yet exist at schema-install time; the REVOKE is a no-op
 -- when the grantee is absent, but we guard with DO-blocks to avoid

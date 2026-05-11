@@ -14,7 +14,7 @@ golden-fixture JSON that the SQL side validates against the same inputs:
                             (cases 04/05 pin the inclusive ``>=`` boundary).
 - ``next_best_offer``    -> ``sql/uc_functions/fn_next_best_offer.sql``
                             + ``tests/fixtures/next_best_offer_golden.json``
-                            (case_12 pins the B-48294 'refi_plus_heloc' shift;
+                            (case_12 pins the fixture refi_plus_heloc shift;
                             cases 09/10 pin the HELOC-equity boundary).
 
 Weights for ``lead_score`` (non-negotiable): 0.35 / 0.30 / 0.15 / 0.10 / 0.10.

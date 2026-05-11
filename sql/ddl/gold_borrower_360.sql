@@ -11,7 +11,7 @@
 -- Grain:     One row per `clip`.
 -- PK:        clip.
 -- Clustering: Liquid cluster on (situs_state, clip). Frontend always
---            state-filters first (6-state footprint) and then drills by
+--            refreshed source geography first and then drills by
 --            score; liquid clustering beats partitioning for this access
 --            pattern at ~5M rows. Z-order on `opportunity_score` is applied
 --            after the first refresh (out-of-band, not DDL).
@@ -25,6 +25,9 @@
 --   - silver.property_master   (on clip: city/state/zip/occupancy/built year)
 --   - gold.property_owner_bridge (on owner_link_id: related-property count)
 --   - silver.market_rates_weekly (is_latest=TRUE, cross-like: one row)
+--   - first_party.*            (optional lender LOS/servicing/CRM/
+--                               interaction/product-balance feeds, or the
+--                               explicit demo_synthetic seed)
 --
 -- PII posture (NON-NEGOTIABLE, docs/governance-real-data-review.md §1):
 --   - No raw owner name or street address column exists here.
@@ -42,7 +45,7 @@
 --   - `has_permit`       : FALSE. `intent_trigger` permit term is 0.
 --   - `listed_for_sale`  : FALSE. `fn_next_best_offer` 'purchase' branch
 --                          never fires on real data. Mock-mode retains the
---                          B-48295 (Thompson) listed-for-sale dossier.
+--                          the listed-for-sale fixture dossier.
 --
 -- Threshold columns: carried alongside the score columns so the WhyPanel
 -- can show WHICH thresholds produced the current ITM flag, without a
@@ -66,7 +69,7 @@ CREATE TABLE IF NOT EXISTS mip.gold.borrower_360 (
   borrower_id               STRING    NOT NULL COMMENT 'Synthetic stable id from CLIP: CONCAT("B-", LPAD(CONV(ABS(xxhash64(clip)), 10, 36), 13, "0")). Base36 encoding of the 64-bit hash, width 13 => 36^13 slots. No PII.',
   display_name              STRING    NOT NULL COMMENT 'Synthesized label "Owner " || SUBSTR(owner_name_hash, 1, 8). Never a real name.',
   city                      STRING             COMMENT 'Situs city from property_master.',
-  state                     STRING    NOT NULL COMMENT 'Situs state (6-state footprint).',
+  state                     STRING    NOT NULL COMMENT 'Situs state from refreshed source coverage.',
   zip                       STRING             COMMENT '5-digit situs ZIP.',
   situs_cbsa_code           STRING             COMMENT 'CBSA metro code. Gold-only; used for geography drill-down.',
   county_fips_5             STRING             COMMENT '5-char FIPS county code (2-char state + 3-char county) from silver.property_master.fips_county_code. Feeds gold.county_rollup + gold.zip_rollup. NULL for the ~0.2% of rows where silver has no county geocode.',
@@ -95,9 +98,16 @@ CREATE TABLE IF NOT EXISTS mip.gold.borrower_360 (
   has_permit                BOOLEAN   NOT NULL COMMENT 'BLOCKED (data-contract §9) -- hardcoded FALSE until Cotality Building Permits product lands. intent_trigger permit term is 0.',
   listed_for_sale           BOOLEAN   NOT NULL COMMENT 'BLOCKED (data-contract §9) -- hardcoded FALSE until Cotality MLS Listings lands. fn_next_best_offer purchase branch never fires on real data.',
   is_investor               BOOLEAN   NOT NULL COMMENT 'Derived: related_property_count >= 2 OR is_corporate_owner OR is_absentee.',
-  is_current_customer       BOOLEAN   NOT NULL COMMENT 'COALESCE(NOT lender_dictionary.is_competitor, FALSE) via JOIN on UPPER(TRIM(first_pos_lender_current)) = mip.ref.lender_dictionary.raw_key (slice13-accuracy).',
-  is_competitor_lien        BOOLEAN   NOT NULL COMMENT 'first_pos_lender_current IS NOT NULL AND NOT is_current_customer. 263K-row recapture universe.',
-  second_pos_amount         BIGINT             COMMENT '2nd-lien balance passthrough; NULL / 0 when no 2nd-lien. Feeds "equity" segment predicate (HELOC-clean only).',
+  is_current_customer       BOOLEAN   NOT NULL COMMENT 'Current-servicer relationship to tenant: governed lender_dictionary says non-competitor.',
+  is_former_customer        BOOLEAN   NOT NULL COMMENT 'Historical tenant-lender Owner Link relationship with no current tenant-serviced lien.',
+  is_competitor_lien        BOOLEAN   NOT NULL COMMENT 'Current servicer is known and not the tenant. Competitor/recapture signal; mutually exclusive with is_current_customer in the current CLIP-grain refresh path.',
+  has_first_party_relationship BOOLEAN NOT NULL COMMENT 'TRUE when LOS, servicing, CRM, interaction, or product-balance feeds resolve to this borrower.',
+  first_party_relationship_depth INT   NOT NULL COMMENT 'Bounded count of resolved first-party feed categories for relationship scoring.',
+  first_party_recent_interactions INT  NOT NULL COMMENT 'Recent call-center/digital interaction count resolved through first-party feeds.',
+  first_party_recent_application BOOLEAN NOT NULL COMMENT 'TRUE when a recent LOS/application event exists.',
+  first_party_synthetic_demo     BOOLEAN NOT NULL COMMENT 'TRUE only when resolved first-party rows come from the Summit demo_synthetic seed.',
+  current_lender_ref        STRING             COMMENT 'Public-demo-safe current-servicer reference: Summit Mortgage, Competitor A/B/etc., or Competitor Other. Never the raw Cotality lender string.',
+  second_pos_amount         BIGINT             COMMENT '2nd-lien balance passthrough; NULL or 0 both mean no active 2nd-lien. Feeds the equity segment clean-lien predicate.',
   first_pos_loan_type       STRING             COMMENT '1st-lien loan type code (CONV / FHA / VA / etc). Feeds fit sub-score.',
   owner_name_hash           STRING    NOT NULL COMMENT 'sha2(LOWER(TRIM(name)) || salt, 256) propagated from silver.property_master. Internal only -- router strips before /api/*.',
   min_spread_bps_applied    INT       NOT NULL COMMENT 'Threshold applied when computing ITM for THIS refresh. Carried so WhyPanel.min_spread_bps is the run-specific value.',

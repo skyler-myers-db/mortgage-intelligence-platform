@@ -19,6 +19,7 @@ from backend.api import (
     audit,
     borrowers,
     config,
+    data_estate,
     genie,
     geo,
     health,
@@ -184,7 +185,7 @@ class CorrelationIdMiddleware(BaseHTTPMiddleware):
     _CID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 
     # Fallback path normaliser for unrouted paths. Matches the two
-    # borrower-id shapes the product currently emits -- B-##### synthetic
+    # borrower-id shapes the product currently emits -- masked borrower
     # IDs and Cotality CLIP strings (numeric, >= 6 digits per the
     # Cotality data contract). Conservative on purpose: we would rather
     # under-normalise an unknown path than over-normalise a real UC
@@ -321,6 +322,7 @@ async def _dependency_down_handler(_request: Request, exc: DependencyDownError) 
 for router in [
     health.router,
     config.router,
+    data_estate.router,
     admin.router,
     portfolio.router,
     segments.router,

@@ -124,7 +124,7 @@ Hard rules for UI work:
 - Do not invent real borrower PII or real customer names.
 - Do not wire automatic email/SMS sending.
 - Do not introduce a mock fallback in the running app. The app runs on real Unity Catalog data or it fails visibly. Handle flakiness with resilience engineering (retries, warm-start, cache, circuit breaker, degraded-state UI) — never with silent mock substitution.
-- Do not filter real data to a single metro. The product spans the full 6-state share footprint (IL/CA/FL/TX/WA/CO); geography drill-down is a hero surface, not a nice-to-have.
+- Do not filter real data to a single metro. The product must follow the current refreshed Cotality coverage dynamically; geography drill-down is a hero surface, not a nice-to-have.
 - Do not add out-of-band setup steps. Any new infrastructure (UC object, secret scope, job, pipeline, Lakebase migration, seed file) must be provisionable from `databricks bundle deploy -t dev` plus a documented `.env.local` template. Manual click-ops in the Databricks UI are a packaging bug.
 - Do not rely on external APIs being reachable at deploy-time. FRED and any future public-data sources must have a repo-committed seed file so the first app boot has data even before the first scheduled refresh runs.
 - Do not put secrets in source, `.env`, `app.yaml`, screenshots, notebooks, or logs.
@@ -140,7 +140,7 @@ Hard rules for UI work:
 - Module: Module 0 or M0.
 - Internal app prefix: `mip`.
 - Sample-lender default: `Summit Mortgage` unless the user changes it.
-- Synthetic borrower IDs: `B-#####` (fixture population).
+- Masked borrower IDs: `B-[0-9A-Z]{13}`.
 - Catalog default: `mip`.
 - Gold schema default: `mip.gold`.
 - Lakebase app schema default: `mip_app`.

@@ -51,6 +51,7 @@ WITH ranked AS (
     b.why_now,
     b.evidence_ids,
     b.approval_status,
+    b.current_lender_ref,
     -- Secondary-filter fields (2026-04-23). Carried through from
     -- gold.borrower_360 so /segment-intelligence runs real client-side
     -- predicates against occupancy, owner-link (related properties),
@@ -59,6 +60,9 @@ WITH ranked AS (
     -- a "data-dependency pending" note on that filter.
     b.is_owner_occupied,
     b.is_investor,
+    b.is_current_customer,
+    b.is_former_customer,
+    b.is_competitor_lien,
     b.related_property_count,
     b.current_lien_balance,
     b.second_pos_amount,
@@ -88,8 +92,12 @@ SELECT
   why_now,
   evidence_ids,
   approval_status,
+  current_lender_ref,
   is_owner_occupied,
   is_investor,
+  is_current_customer,
+  is_former_customer,
+  is_competitor_lien,
   related_property_count,
   current_lien_balance,
   second_pos_amount,

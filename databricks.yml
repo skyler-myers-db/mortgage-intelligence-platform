@@ -1,5 +1,10 @@
 bundle:
   name: mortgage-intelligence-platform
+  databricks_cli_version: ">= 0.279.0"
+  # Direct deployment is the Databricks-recommended bundle engine for new
+  # projects. This product has no customer-installed Terraform bundle state to
+  # migrate, so the bundle defaults to direct from first deploy.
+  engine: direct
 
 # `workspace.host` must be literal — the Databricks CLI resolves it at
 # bundle-load time (before variables), so `${var.*}` is rejected here.
@@ -74,7 +79,6 @@ targets:
       root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
     run_as:
       user_name: ${workspace.current_user.userName}
-
   # `ci` target is for PR validation ONLY — never deploy against it. The
   # `dev` + `prod` targets both carry `mode:` + `${workspace.current_user
   # .userName}` templates that force the CLI to call
@@ -150,6 +154,11 @@ resources:
             database_name: ${var.lakebase_database_name}
             instance_name: ${resources.database_instances.mip_app_state.name}
             permission: CAN_CONNECT_AND_CREATE
+        - name: lifecycle_sync_job
+          description: "Event-triggered lifecycle sync job for approval/outreach state."
+          job:
+            id: ${resources.jobs.mip_sync_lifecycle_state.id}
+            permission: CAN_MANAGE_RUN
 
   sql_warehouses:
     mip_serverless_sql:
@@ -226,7 +235,10 @@ resources:
             - task_key: seed_ref_state_footprint
           pipeline_task:
             pipeline_id: ${resources.pipelines.mip_feature_pipeline.id}
-            full_refresh: false
+            # Module 0 is not yet a customer incremental workload. Run silver as
+            # a full refresh so ZIP/lender/PII transformation fixes reprocess
+            # existing rows instead of leaving stale Delta output behind.
+            full_refresh: true
     # Slice13-accuracy: standalone ref-data seed job. Mirrors the two
     # tasks baked into mip_refresh_silver so analysts / ops can re-run
     # the lender-dictionary seed without kicking the full silver pipeline.
@@ -282,7 +294,7 @@ resources:
     #
     # Dependency order (respected by the depends_on chain below):
     #   1. property_owner_bridge         (owner-link rollup; no deps)
-    #   2. evidence_events               (silver-derived; no gold deps)
+    #   2. evidence_events               (needs property_owner_bridge for multi-property evidence)
     #   3. borrower_360                  (needs property_owner_bridge + evidence_events)
     #   4. lead_scores                   (needs borrower_360 + evidence_events)
     #   5. lead_population               (needs borrower_360)
@@ -292,7 +304,7 @@ resources:
     #   9. county_rollup                 (needs borrower_360 -- geography rollup)
     #  10. zip_rollup                    (needs borrower_360 -- geography rollup)
     #  11. state_top_segment             (needs borrower_360 -- geography rollup)
-    #  12. source_readiness              (needs silver tables only; app-readable admin summary)
+    #  12. source_readiness              (needs refreshed gold outputs + upstream probes; app-readable admin summary)
     #  13. refresh_semantics_views       (needs lead_population + segment_population + borrower_dossier)
     #
     # The DDL manifest (003_gold_tables.sql) is CREATE TABLE IF NOT EXISTS,
@@ -336,6 +348,14 @@ resources:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
               path: sql/_rendered/transformations/capture_refresh_timestamp.sql
+        - task_key: seed_demo_first_party_feeds
+          description: "Populate mip.first_party.* with explicit Summit Mortgage demo_synthetic feeds when enabled."
+          depends_on:
+            - task_key: ctas_property_owner_bridge
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/_rendered/transformations/demo_first_party_feeds.sql
         - task_key: ctas_property_owner_bridge
           description: "Rebuild mip.gold.property_owner_bridge via CTAS."
           depends_on:
@@ -347,7 +367,7 @@ resources:
         - task_key: ctas_evidence_events
           description: "Rebuild mip.gold.evidence_events via CTAS."
           depends_on:
-            - task_key: capture_refresh_timestamp
+            - task_key: ctas_property_owner_bridge
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
@@ -357,6 +377,7 @@ resources:
           depends_on:
             - task_key: ctas_property_owner_bridge
             - task_key: ctas_evidence_events
+            - task_key: seed_demo_first_party_feeds
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
@@ -451,7 +472,10 @@ resources:
         - task_key: ctas_source_readiness
           description: "Rebuild mip.gold.source_readiness via CTAS so the app Admin panel reads gold, not silver."
           depends_on:
-            - task_key: capture_refresh_timestamp
+            - task_key: ctas_lead_scores
+            - task_key: ctas_lead_population
+            - task_key: ctas_segment_population
+            - task_key: ctas_borrower_dossier
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:

@@ -87,6 +87,8 @@ class _FakeLakebaseClient:
         from datetime import UTC, datetime
         from uuid import uuid4
 
+        if "FROM mip_app.approvals" in sql and "request_id" in sql:
+            return None
         return {"audit_id": uuid4(), "event_at": datetime.now(UTC)}
 
     def fetchall(
@@ -104,8 +106,10 @@ class _FakeAdminSqlClient:
 
     Pre-programs two query shapes the service issues:
 
-    * ``SELECT ... FROM mip.ref.offer_rules_config`` -> canonical six
+    * ``SELECT ... FROM mip.ref.offer_rules_config`` -> canonical five
       threshold rows mirroring the seed file.
+    * ``SELECT ... FROM mip.gold.borrower_360`` -> operating market-rate row
+      injected into the admin rules response.
     * ``DESCRIBE DETAIL`` / ``SELECT COUNT(*)`` against each silver
       table -> deterministic row counts + a fixed ``lastModified``
       timestamp so the sources endpoint reports LIVE for every wired
@@ -135,8 +139,9 @@ class _FakeAdminSqlClient:
                 {"key": "mip_heloc_equity_min_pct",     "value": 35.0,    "unit": "pct",           "label": "HELOC equity floor (%)",      "description": "desc", "sort_order": 3, "last_updated": "2026-04-22 12:00:00"},
                 {"key": "mip_cashout_equity_min_pct",   "value": 25.0,    "unit": "pct",           "label": "Cash-out equity floor (%)",   "description": "desc", "sort_order": 4, "last_updated": "2026-04-22 12:00:00"},
                 {"key": "mip_retention_min_spread_bps", "value": 50.0,    "unit": "bps",           "label": "Retention min spread (bps)",  "description": "desc", "sort_order": 5, "last_updated": "2026-04-22 12:00:00"},
-                {"key": "mip_market_rate",              "value": 0.04875, "unit": "rate_fraction", "label": "Market rate reference",       "description": "desc", "sort_order": 6, "last_updated": "2026-04-22 12:00:00"},
             ]
+        if ".GOLD.BORROWER_360" in s and "MARKET_RATE_FRACTION" in s:
+            return [{"rate_fraction": 0.0637, "last_updated": "2026-05-07 12:00:00"}]
         if s.startswith("DESCRIBE DETAIL"):
             return [{"lastModified": "2026-04-22T12:00:00.000Z"}]
         if "COUNT(*)" in s and "FROM" in s:

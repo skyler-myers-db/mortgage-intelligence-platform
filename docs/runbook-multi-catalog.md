@@ -40,7 +40,7 @@ Refactored call-sites:
 
 - `backend/services/repositories/databricks_repo.py` (portfolio / segment / lead / borrower / offer / geo readers)
 - `backend/services/admin_rules.py` (`/api/admin/rules` + sources)
-- `backend/services/genie_answers.py` (safe-corpus `trusted_assets`)
+- `backend/services/genie_answers.py` (Genie wire models + prompt suggestions)
 - `backend/services/pii_redaction.py` (`lender_dictionary` lookup)
 - `backend/services/state_footprint.py` (`state_footprint` lookup)
 - `backend/api/offers.py` (offer-evidence citation)

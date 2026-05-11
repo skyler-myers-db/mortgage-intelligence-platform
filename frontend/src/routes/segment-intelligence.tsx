@@ -23,23 +23,6 @@ import { useFootprint } from '../components/FootprintProvider';
  * with the prototype's "segment-first" layout.
  */
 
-// Display-label -> US state code map (matches LeadSummary.state). The set
-// of entries is derived from the tenant's footprint via FootprintProvider
-// at render time (see `buildLocationToStates` below); this static table
-// holds only the display label for each state code we know how to name.
-// States not in this table fall through to their state_name from the
-// footprint payload, so a tenant adding a new state still gets a
-// readable dropdown option even before we curate a metro label for it.
-// Keys are 2-letter USPS codes.
-const STATE_CODE_TO_METRO_LABEL: Record<string, string> = {
-  IL: 'Chicago MSA',
-  TX: 'Austin',
-  CA: 'SF Bay',
-  CO: 'Denver',
-  FL: 'Orlando',
-  WA: 'Seattle',
-};
-
 // Equity thresholds expressed as a minimum equity-to-AVM ratio. We don't
 // have AVM on LeadSummary (it's on Borrower360), so the predicate uses
 // equity_estimate as a lower bound proxy. Good enough for the UI filter.
@@ -50,7 +33,7 @@ const EQUITY_FLOOR_USD: Record<string, number> = {
   'Equity ≥ 40%': 300_000,
 };
 
-// DEMOGRAPHICS replaced "Homeowner / First-time buyer / Age 55+" (no
+// OCCUPANCY replaced "Homeowner / First-time buyer / Age 55+" (no
 // predicate available) with a real occupancy predicate against
 // `is_owner_occupied`. Options re-phrased to match the signal we actually
 // carry from gold.borrower_360.
@@ -67,9 +50,9 @@ const LIEN_OPTIONS = ['Any', 'Open 1st lien only', 'Open 2nd lien / HELOC', 'Fre
 // portfolios (single / small / large).
 const OWNER_LINK_OPTIONS = ['All', 'Single-property owner', 'Multi-property (2-4)', 'Portfolio investor (5+)'] as const;
 
-// PURCHASE INTENT: wired predicates that will return zero rows until
-// Cotality Building Permits + MLS Delta shares land. Copy on the filter
-// calls this out to the presenter.
+// PURCHASE INTENT: wired predicates that intentionally return zero rows
+// until Cotality Building Permits + MLS Delta Shares are live. Copy on
+// the filter calls this out to the presenter.
 const PURCHASE_OPTIONS = ['All', 'Listed for sale', 'Recent permit activity', 'Both'] as const;
 
 interface ChipFilters {
@@ -94,12 +77,11 @@ const INITIAL_FILTERS: ChipFilters = {
  * Build the LOCATION-dropdown map for the current tenant footprint.
  *
  * Keeps the "All" entry first (no state filter), then one entry per
- * footprint state. Each state's display label prefers the curated metro
- * name from `STATE_CODE_TO_METRO_LABEL` (e.g. "Chicago MSA" for IL),
- * falling back to the backend's `state_name` (e.g. "Georgia") when we
- * haven't hand-curated a label yet. This makes the dropdown resilient
- * to a new tenant whose footprint includes a state we haven't picked
- * a metro for.
+ * footprint state. The display label is the backend-provided state name,
+ * so the UI adjusts naturally when live coverage changes. While footprint
+ * metadata is still loading or on fallback, consumers pass an empty list so
+ * only "All" appears instead of exposing generic US-state metadata as if it
+ * were tenant coverage.
  */
 function buildLocationToStates(
   states: ReadonlyArray<{ state_code: string; state_name: string }>,
@@ -107,8 +89,7 @@ function buildLocationToStates(
   const out: Record<string, string[]> = { All: [] };
   for (const s of states) {
     const code = s.state_code.toUpperCase();
-    const label = STATE_CODE_TO_METRO_LABEL[code] ?? s.state_name;
-    out[label] = [code];
+    out[s.state_name] = [code];
   }
   return out;
 }
@@ -116,16 +97,17 @@ function buildLocationToStates(
 export default function SegmentIntelligence() {
   const footprint = useFootprint();
   const locationToStates = useMemo(
-    () => buildLocationToStates(footprint.states),
-    [footprint.states],
+    () => buildLocationToStates(
+      footprint.ready && !footprint.usingFallback ? footprint.states : [],
+    ),
+    [footprint.ready, footprint.states, footprint.usingFallback],
   );
   const [activeSegs, setActiveSegs] = useState<SegmentCode[]>(['itm']);
   const [chipFilters, setChipFilters] = useState<ChipFilters>(INITIAL_FILTERS);
   // Geography drill state emitted by USChoroplethMap. State is the 2-char
-  // USPS code; null = US level (no geography filter). County/ZIP aren't
-  // wired as predicates here yet (LeadSummary carries zip + city but not
-  // county FIPS), but the map still exposes them on selectionChange for
-  // the selection-chip UX.
+  // USPS code; null = US level (no geography filter). County/ZIP are pushed
+  // down to /api/leads so the ranked table follows the same state → county
+  // → ZIP cohort the map counted.
   const [mapSelection, setMapSelection] = useState<MapSelection>({
     state: null,
     county: null,
@@ -134,6 +116,41 @@ export default function SegmentIntelligence() {
   const handleMapSelection = useCallback((sel: MapSelection) => {
     setMapSelection(sel);
   }, []);
+  const selectedLocationState = (locationToStates[chipFilters.location] ?? [])[0];
+  const secondaryPortfolioCriteria = useMemo(() => {
+    const criteria: Record<string, string> = {};
+    if (chipFilters.demographics !== 'All') {
+      criteria.occupancy = chipFilters.demographics;
+    }
+    if (chipFilters.lien === 'Open 1st lien only') {
+      criteria.lien_status = 'Open 1st lien';
+    } else if (chipFilters.lien === 'Open 2nd lien / HELOC') {
+      criteria.lien_status = 'Open HELOC';
+    } else if (chipFilters.lien === 'Free & clear') {
+      criteria.lien_status = 'Free & clear';
+    }
+    if (chipFilters.ownerLink !== 'All') {
+      criteria.owner_link = chipFilters.ownerLink;
+    }
+    if (chipFilters.purchase !== 'All') {
+      criteria.purchase_intent = chipFilters.purchase;
+    }
+    if (chipFilters.cashout === 'Equity ≥ 15%') {
+      criteria.min_equity_pct_label = '≥ 15%';
+    } else if (chipFilters.cashout === 'Equity ≥ 25%') {
+      criteria.min_equity_pct_label = '≥ 25%';
+    } else if (chipFilters.cashout === 'Equity ≥ 40%') {
+      criteria.min_equity_pct_label = '≥ 40%';
+    }
+    return criteria;
+  }, [
+    chipFilters.cashout,
+    chipFilters.demographics,
+    chipFilters.lien,
+    chipFilters.ownerLink,
+    chipFilters.purchase,
+  ]);
+  const activeSegsKey = activeSegs.join(',');
 
   // Cold-start warming-up — segments + leads fetch independently so one
   // tile warming doesn't block the other (per-tile isolation, following
@@ -143,16 +160,24 @@ export default function SegmentIntelligence() {
     warmingUp: segmentsWarming,
     error: segmentsError,
     manualRetry: retrySegments,
-  } = useWarmingUpRetry<SegmentSummary[]>((signal) => api.segments(signal), []);
-  const selectedLocationState = (locationToStates[chipFilters.location] ?? [])[0];
+  } = useWarmingUpRetry<SegmentSummary[]>(
+    (signal) =>
+      api.segments(
+        signal,
+        activeSegs.length > 0 ? activeSegs : undefined,
+        'all',
+        secondaryPortfolioCriteria,
+      ),
+    [activeSegsKey, secondaryPortfolioCriteria],
+  );
   const serverGeo = useMemo(
     () => ({
       state: mapSelection.state ?? selectedLocationState,
+      county: mapSelection.county ?? undefined,
       zip: mapSelection.zip ?? undefined,
     }),
-    [mapSelection.state, mapSelection.zip, selectedLocationState],
+    [mapSelection.state, mapSelection.county, mapSelection.zip, selectedLocationState],
   );
-  const activeSegsKey = activeSegs.join(',');
   const {
     data: leadsData,
     warmingUp: leadsWarming,
@@ -162,11 +187,22 @@ export default function SegmentIntelligence() {
     (signal) =>
       api.leads(undefined, signal, serverGeo, {
         segmentCodes: activeSegs.length > 0 ? activeSegs : undefined,
+        // Multi-select uses AND semantics: borrowers must match every
+        // selected segment. The page copy mirrors this exact contract.
         segmentMode: 'all',
+        portfolioCriteria: secondaryPortfolioCriteria,
       }),
-    [activeSegsKey, serverGeo.state, serverGeo.zip],
+    [activeSegsKey, secondaryPortfolioCriteria, serverGeo.state, serverGeo.county, serverGeo.zip],
   );
-  const segments = segmentsData ?? [];
+  const segments = useMemo(() => segmentsData ?? [], [segmentsData]);
+  const segmentLabelByCode = useMemo(
+    () => new Map<SegmentCode, string>(segments.map((s) => [s.code, s.name])),
+    [segments],
+  );
+  const selectedSegmentLabel = useMemo(
+    () => activeSegs.map((code) => segmentLabelByCode.get(code) ?? code).join(' + '),
+    [activeSegs, segmentLabelByCode],
+  );
   const leadsRefreshing = leadsData === null && !leadsWarming && !leadsError;
   const leads = useMemo(() => leadsData ?? [], [leadsData]);
   const retryAll = useCallback(() => {
@@ -185,7 +221,7 @@ export default function SegmentIntelligence() {
     // Primary segment and geography filters are pushed down to /api/leads
     // before LIMIT is applied. The predicates below are secondary fields
     // carried on the ranked lead rows and still run locally.
-    // DEMOGRAPHICS -> occupancy predicate (is_owner_occupied).
+    // OCCUPANCY -> is_owner_occupied predicate.
     if (chipFilters.demographics === 'Owner-occupied') {
       out = out.filter((l) => l.is_owner_occupied === true);
     } else if (chipFilters.demographics === 'Non-owner-occupied') {
@@ -214,7 +250,7 @@ export default function SegmentIntelligence() {
     }
     // PURCHASE INTENT -> listed_for_sale + has_permit. Both flags are
     // BLOCKED FALSE in gold until Cotality Building Permits + MLS Delta
-    // shares land, so these predicates will return 0 rows today. The
+    // Shares are live, so these predicates return 0 rows today. The
     // filter label carries a muted note explaining the data dependency.
     if (chipFilters.purchase === 'Listed for sale') {
       out = out.filter((l) => l.listed_for_sale === true);
@@ -239,6 +275,7 @@ export default function SegmentIntelligence() {
     activeSegs.length > 0 ||
     JSON.stringify(chipFilters) !== JSON.stringify(INITIAL_FILTERS) ||
     mapSelection.state !== null ||
+    mapSelection.county !== null ||
     mapSelection.zip !== null;
 
   const clearAll = () => {
@@ -247,15 +284,44 @@ export default function SegmentIntelligence() {
     setMapSelection({ state: null, county: null, zip: null });
   };
 
+  const leadQueueHref = useMemo(() => {
+    const params = new URLSearchParams();
+    if (activeSegs.length === 1) {
+      params.set('segment', activeSegs[0]);
+    } else if (activeSegs.length > 1) {
+      params.set('segment_codes', activeSegs.join(','));
+      params.set('segment_mode', 'all');
+    }
+    if (mapSelection.zip) {
+      params.set('zip', mapSelection.zip);
+    } else if (mapSelection.county) {
+      params.set('county', mapSelection.county);
+    } else if (mapSelection.state ?? selectedLocationState) {
+      params.set('state', mapSelection.state ?? selectedLocationState ?? '');
+    }
+    Object.entries(secondaryPortfolioCriteria).forEach(([key, value]) => {
+      params.set(key, value);
+    });
+    const query = params.toString();
+    return query ? `/lead-queue?${query}` : '/lead-queue';
+  }, [
+    activeSegs,
+    mapSelection.zip,
+    mapSelection.county,
+    mapSelection.state,
+    selectedLocationState,
+    secondaryPortfolioCriteria,
+  ]);
+
   return (
     <PageShell
       eyebrow="Segments"
       title={
         segments.length > 0
-          ? `${segments.length} borrower ${segments.length === 1 ? 'segment' : 'segments'} · select to filter`
-          : 'Borrower segments · select to filter'
+          ? `${segments.length} borrower ${segments.length === 1 ? 'segment' : 'segments'} · multi-select AND`
+          : 'Borrower segments · multi-select uses AND'
       }
-      lede="Click segment cards to filter the ranked borrower table. Secondary filters narrow by location, demographics, lien, owner link, purchase intent, and equity. Counts refresh nightly."
+      lede="Segment cards are a multi-select AND filter: each added card narrows the ranked table to borrowers matching every selected segment. Secondary filters narrow by location, occupancy, lien, owner link, purchase intent, and equity. Counts refresh nightly."
       heroRight={
         filtersDirty ? (
           <Button size="sm" variant="ghost" icon="cross" onClick={clearAll}>
@@ -326,7 +392,7 @@ export default function SegmentIntelligence() {
           onChange={(v) => setChipFilters((f) => ({ ...f, location: v }))}
         />
         <FilterSelect
-          label="DEMOGRAPHICS"
+          label="OCCUPANCY"
           value={chipFilters.demographics}
           options={[...OCCUPANCY_OPTIONS]}
           onChange={(v) => setChipFilters((f) => ({ ...f, demographics: v }))}
@@ -343,31 +409,30 @@ export default function SegmentIntelligence() {
           options={[...OWNER_LINK_OPTIONS]}
           onChange={(v) => setChipFilters((f) => ({ ...f, ownerLink: v }))}
         />
-        <div className="filter-row__group">
-          <FilterSelect
-            label="PURCHASE INTENT"
-            value={chipFilters.purchase}
-            options={[...PURCHASE_OPTIONS]}
-            onChange={(v) => setChipFilters((f) => ({ ...f, purchase: v }))}
-          />
-          <div
-            className="filter-row__hint muted"
-          >
-            Cotality MLS + Building Permits Delta shares pending — will
-            return 0 until those feeds land.
-          </div>
-        </div>
+        <FilterSelect
+          label="PURCHASE INTENT"
+          value={chipFilters.purchase}
+          options={[...PURCHASE_OPTIONS]}
+          onChange={(v) => setChipFilters((f) => ({ ...f, purchase: v }))}
+        />
         <FilterSelect
           label="CASH-OUT"
           value={chipFilters.cashout}
           options={Object.keys(EQUITY_FLOOR_USD)}
           onChange={(v) => setChipFilters((f) => ({ ...f, cashout: v }))}
         />
+        <div
+          className="filter-row__hint filter-row__hint--full muted"
+        >
+          Delta shares pending: listed-for-sale and permit predicates are
+          blocked false until Cotality MLS and Building Permits Delta Shares are
+          live; these options return no rows today.
+        </div>
       </div>
 
       <div className="section-hdr">
         <div>
-          <div className="eyebrow">Ranked borrowers · selected segments</div>
+          <div className="eyebrow">Ranked borrowers · AND segment filter</div>
           <div className="h-2">
             {leadsRefreshing ? (
               'Refreshing ranked borrowers'
@@ -377,8 +442,8 @@ export default function SegmentIntelligence() {
                 {filtered.length} ranked borrowers{' '}
                 {activeSegs.length > 0 && (
                   <span className="muted fs-14">
-                    · filtered by {activeSegs.join(' + ')}
-                    {activeSegs.length > 1 ? ' · must match all selected segments' : ''}
+                    · segment filter: {selectedSegmentLabel}
+                    {activeSegs.length > 1 ? ' · must match every selected segment' : ''}
                   </span>
                 )}
               </>
@@ -390,11 +455,16 @@ export default function SegmentIntelligence() {
               marketable population.
             </div>
           )}
-          {(mapSelection.state || mapSelection.zip) && (
+          {(mapSelection.state || mapSelection.county || mapSelection.zip) && (
             <div className="chip-row mt-2">
               {mapSelection.state && (
                 <Chip variant="neutral" icon="pin">
                   state: {mapSelection.state}
+                </Chip>
+              )}
+              {mapSelection.county && (
+                <Chip variant="neutral" icon="pin">
+                  county: {mapSelection.county}
                 </Chip>
               )}
               {mapSelection.zip && (
@@ -413,7 +483,7 @@ export default function SegmentIntelligence() {
             </div>
           )}
         </div>
-        <Link to="/lead-queue" className="btn">
+        <Link to={leadQueueHref} className="btn">
           Deep-dive lead queue
           <Icon name="chevright" size={14} />
         </Link>
@@ -425,6 +495,7 @@ export default function SegmentIntelligence() {
           height={520}
           segmentFilter={activeSegs}
           segmentFilterMode="all"
+          portfolioCriteria={secondaryPortfolioCriteria}
           onSelectionChange={handleMapSelection}
         />
       </div>

@@ -4,12 +4,13 @@
 -- Purpose:   Idempotent MERGE that populates
 --            `mip.silver.owner_transfer_events` from
 --            `cotality_mortgage_data.corelogic.entrada_eval_owner_transfer_
---            domain_v1`, filtered to the 6-state footprint via
---            `deed_situs_state_static`.
+--            domain_v1`. Coverage follows whatever states are present in the
+--            source share via `deed_situs_state_static`.
 --
 -- Grain:     One row per sale/transfer event (~24M in share).
 -- PK (MERGE key): transfer_txn_id (composite transaction ID from share).
--- Geography filter: WHERE deed_situs_state_static IN ('IL','CA','FL','TX','WA','CO').
+-- Geography contract: keep rows with a non-null deed_situs_state_static;
+-- downstream geography rollups discover state/county/ZIP coverage from data.
 -- Slice:     module0-real-data-slice2.
 -- Data contract: docs/data-contract-module0.md §2.4.
 --
@@ -58,7 +59,7 @@ USING (
     CURRENT_TIMESTAMP()                                              AS ingest_ts,
     CAST(:batch_id AS STRING)                                        AS _meta_batch_id
   FROM cotality_mortgage_data.corelogic.entrada_eval_owner_transfer_domain_v1
-  WHERE deed_situs_state_static IN ('IL','CA','FL','TX','WA','CO')
+  WHERE deed_situs_state_static IS NOT NULL
     AND owner_transfer_composite_transaction_id IS NOT NULL
     AND clip IS NOT NULL
 ) AS s

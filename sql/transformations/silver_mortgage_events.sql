@@ -3,12 +3,13 @@
 -- -----------------------------------------------------------------------------
 -- Purpose:   Idempotent MERGE that populates `mip.silver.mortgage_events`
 --            from `cotality_mortgage_data.corelogic.entrada_eval_mortgage_
---            domain_v1`, filtered to the 6-state footprint via the share's
---            `deed_situs_state_static` column.
+--            domain_v1`. Coverage follows whatever states are present in the
+--            source share via the `deed_situs_state_static` column.
 --
--- Grain:     One row per mortgage event (~29M in share; ~10M after filter).
+-- Grain:     One row per mortgage event.
 -- PK (MERGE key): mortgage_txn_id (= mortgage_composite_transaction_id).
--- Geography filter: WHERE deed_situs_state_static IN ('IL','CA','FL','TX','WA','CO').
+-- Geography contract: keep rows with a non-null deed_situs_state_static;
+-- downstream geography rollups discover state/county/ZIP coverage from data.
 -- Slice:     module0-real-data-slice2.
 -- Data contract: docs/data-contract-module0.md §2.3.
 --
@@ -53,7 +54,7 @@ USING (
     CURRENT_TIMESTAMP()                                              AS ingest_ts,
     CAST(:batch_id AS STRING)                                        AS _meta_batch_id
   FROM cotality_mortgage_data.corelogic.entrada_eval_mortgage_domain_v1
-  WHERE deed_situs_state_static IN ('IL','CA','FL','TX','WA','CO')
+  WHERE deed_situs_state_static IS NOT NULL
     AND mortgage_composite_transaction_id IS NOT NULL
     AND clip IS NOT NULL
 ) AS s

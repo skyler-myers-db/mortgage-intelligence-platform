@@ -1,5 +1,10 @@
 # Module 0 — Real Data Migration Plan
 
+> **Internal implementation artifact. Not approved for public release.**
+> Contains provider/share/table inventory and historical implementation
+> planning intended for Entrada, Databricks, and Cotality implementation
+> reviewers only.
+
 > **Note:** This plan describes the migration from mock fixtures to live Unity Catalog. The migration completed in the live-data cutover (commit `2f09424`), and `MIP_MOCK_MODE` has been removed — the app now runs on live UC + Lakebase unconditionally. The nine-slice sequence below is preserved as a historical design record. For the current runtime contract see [CLAUDE.md](../CLAUDE.md) "Implementation posture" and [docs/data-contract-module0.md](data-contract-module0.md).
 
 **Author:** principal-architect subagent
@@ -11,7 +16,7 @@
 
 ## 1. Executive summary
 
-We are migrating the Module 0 customer walkthrough from end-to-end mock fixtures to a Unity-Catalog-backed real data path sourced from the provisioned Cotality Delta Share (`cotality_mortgage_data.corelogic`, 5 tables, 103M rows, 6-state footprint). The work is structured as nine independently committable vertical slices that each leave `MIP_MOCK_MODE=true` fully functional, preserving the walkthrough's zero-network-dependency property. The single largest risk is parity drift between the frozen SQL scoring primitives (`fn_lead_score`, `fn_in_the_money`, `fn_rate_spread`, `fn_next_best_offer`) and the Python mirrors in `backend/services/scoring.py` — if real-data plumbing silently changes rounding, thresholding, or NULL semantics, the golden fixtures stop protecting us and every downstream screen goes wrong at once. The second-largest risk is PII leakage: the share contains real owner names and situs addresses, and the current `backend/api/*` routers unconditionally import `mock_data` with no `MIP_MOCK_MODE` seam, so an unreviewed wiring change could surface real names in the UI. We therefore introduce the mock-vs-live seam (Slice 0) *before* any SQL or service wiring changes.
+We are migrating the Module 0 customer walkthrough from end-to-end mock fixtures to a Unity-Catalog-backed real data path sourced from the provisioned Cotality Delta Share (`cotality_mortgage_data.corelogic`, 5 tables, 103M rows). Geography coverage is discovered from gold rollups instead of hardcoded in the app, so a larger future share should flow through without a route/component rewrite. The work is structured as nine independently committable vertical slices that each leave `MIP_MOCK_MODE=true` fully functional, preserving the walkthrough's zero-network-dependency property. The single largest risk is parity drift between the frozen SQL scoring primitives (`fn_lead_score`, `fn_in_the_money`, `fn_rate_spread`, `fn_next_best_offer`) and the Python mirrors in `backend/services/scoring.py` — if real-data plumbing silently changes rounding, thresholding, or NULL semantics, the golden fixtures stop protecting us and every downstream screen goes wrong at once. The second-largest risk is PII leakage: the share contains real owner names and situs addresses, and the current `backend/api/*` routers unconditionally import `mock_data` with no `MIP_MOCK_MODE` seam, so an unreviewed wiring change could surface real names in the UI. We therefore introduce the mock-vs-live seam (Slice 0) *before* any SQL or service wiring changes.
 
 ## 2. Vertical-slice sequence
 
@@ -24,7 +29,7 @@ Slices are ordered so each is (a) PR-worthy on its own, (b) reversible in one re
   - `backend/services/__init__.py` (add `get_borrower_repo()`, `get_portfolio_repo()`, `get_evidence_repo()` factory functions)
   - `backend/services/repositories.py` (new — defines `BorrowerRepository`, `PortfolioRepository`, `EvidenceRepository` Protocols; `MockBorrowerRepository` etc. adapt the existing `mock_data` module unchanged)
   - `backend/api/portfolio.py`, `backend/api/leads.py`, `backend/api/segments.py`, `backend/api/borrowers.py`, `backend/api/offers.py`, `backend/api/outreach.py` (replace direct `mock_data` imports with repo factories; zero behavior change when `MIP_MOCK_MODE=true`)
-  - `tests/unit/test_api_routes.py` (add one parametrized test proving all six routers still return identical payloads under `MIP_MOCK_MODE=true`)
+  - `tests/unit/test_api_routes.py` (add one parametrized test proving all app routers still return identical payloads under `MIP_MOCK_MODE=true`)
   - `tests/unit/test_repositories.py` (new — unit-test the factory returns the mock impl when mock mode is on)
   - `.env.example` (document `MIP_MOCK_MODE` default `true`)
 - **Owner:** backend-databricks-engineer
@@ -51,7 +56,7 @@ Slices are ordered so each is (a) PR-worthy on its own, (b) reversible in one re
 - **Depends on:** Slice 0 (not strictly, but merges cleanly after it).
 
 ### Slice 2 — Silver transformations for lien + property + mortgage events
-- **Intent:** 1:1 typed lift from the share into `mip.silver.*`, state-filtered to the real 6-state footprint.
+- **Intent:** 1:1 typed lift from the share into `mip.silver.*`, state-filtered to the configured Module 0 state set.
 - **Files touched (exact):**
   - `sql/transformations/silver_property_master.sql` (replace placeholder — from `entrada_eval_property_domain_v3`)
   - `sql/transformations/silver_lien_current.sql` (replace placeholder — from `entrada_eval_voluntary_lien_status_marketing_v2`)
@@ -62,7 +67,7 @@ Slices are ordered so each is (a) PR-worthy on its own, (b) reversible in one re
   - `notebooks/00_validate_cotality_share.py` (add row-count + null-rate sanity assertions per §1 of gap-analysis doc)
   - `tests/integration/test_sql_queries.py` (add schema-shape assertions for each silver table using `information_schema`)
 - **Owner:** data-modeler
-- **Acceptance:** All 5 silver tables materialized. Row counts match gap-analysis §1 within ±5%. State filter is exactly `('IL','CA','FL','TX','WA','CO')`. Validation notebook passes without manual intervention.
+- **Acceptance:** All 5 silver tables materialized. Row counts match current non-null Cotality source-state coverage within ±5%. No fixed state-list filter is present; geography coverage is discovered from refreshed gold rollups. Validation notebook passes without manual intervention.
 - **Validation:** `databricks bundle run mip_refresh_silver -t dev` then `pytest tests/integration/test_sql_queries.py -q`
 - **Blast radius:** Workspace (writes 5 silver tables, ~10M rows total after state filter). No PII surfaces to app yet.
 - **Rollback:** `DROP SCHEMA mip.silver CASCADE` + `git revert`.
@@ -119,8 +124,8 @@ Slices are ordered so each is (a) PR-worthy on its own, (b) reversible in one re
 - **Rollback:** `DROP SCHEMA mip_app CASCADE` in Lakebase; `git revert`.
 - **Depends on:** Slice 4.
 
-### Slice 6 — Reconcile demo lender footprint + talk track
-- **Intent:** Pick one state/metro from IL/CA/FL/TX/WA/CO as Summit Mortgage's book so the narrative matches the data. Update fixtures and talk track.
+### Slice 6 — Reconcile lender footprint + talk track
+- **Intent:** Derive the lender geography story from refreshed coverage so Summit Mortgage's book and the narrative match the data. Update fixtures and talk track.
 - **Files touched (exact):**
   - `backend/services/mock_data.py` (reshape `PORTFOLIO`, `BORROWERS` to sit inside chosen metro; keep borrower IDs `demo-borrower-*`)
   - `frontend/src/mocks/demoData.ts` (mirror the reshape)
@@ -179,7 +184,7 @@ Routers ONLY depend on the Protocols, never on concrete classes. `mock_data.py` 
 |---|---|---|---|
 | R1 | **Scoring parity drift.** Someone edits `fn_lead_score.sql` or `scoring.py` without regenerating the fixture, and real-data path diverges from mock. | qa-test-engineer | Slice 3 adds `test_gold_parity.py` which runs all four golden fixtures through both the SQL UDF (via warehouse) and the Python primitive, asserting integer equality. Nightly CI (Slice 8) catches drift within 24h. Governance-reviewer gate on any PR touching `sql/uc_functions/` or `backend/services/scoring.py`. |
 | R2 | **Real PII leak.** Share contains real owner names + situs addresses. Current routers import `mock_data` directly — a careless Slice-4 shortcut could push raw names into the UI. | governance-security-reviewer | `pii_redaction.py` (Slice 4) enforced at the repository boundary, not the router. Unit tests pin exact redaction rules (initials for names, block-level lat/lon, street-number masked). Governance-reviewer sign-off is blocking on Slice 4 PR. `MIP_MOCK_MODE=true` default keeps offline walkthroughs on synthetic data. |
-| R3 | **Lakeflow pipeline cost runaway.** Full-fat silver builds scan 103M source rows; gold joins multiply that. Unbounded re-runs on a large warehouse become expensive fast. | backend-databricks-engineer | 2X-Small serverless warehouse with `auto_stop_mins: 15` (already set in `databricks.yml`). Silver filters to 6 states at the source. `gold_lead_population` capped at 500 rows per metro. Bundle-declared jobs run on manual trigger only in dev (no schedule). Monitor first full run; set a workspace budget alert before enabling any schedule. |
+| R3 | **Lakeflow pipeline cost runaway.** Full-fat silver builds scan source rows; gold joins multiply that. Unbounded re-runs on a large warehouse become expensive fast. | backend-databricks-engineer | 2X-Small serverless warehouse with `auto_stop_mins: 15` (already set in `databricks.yml`). Silver requires non-null state/CLIP keys and gold discovers current coverage dynamically. Bundle-declared jobs run on manual trigger only in dev (no schedule). Monitor first full run; set a workspace budget alert before enabling any schedule. |
 | R4 | **Warehouse auto-stop during walkthrough.** 15-min auto-stop means first query after intermission is a 30–60s cold start; ruins the walkthrough pacing. | demo-storyteller + performance-optimizer | Runbook (Slice 8) adds "warm-start 5 minutes before each walkthrough block" step. Additionally: keep offline walkthroughs on `MIP_MOCK_MODE=true` by default; use real-data toggle only in sit-down meetings where a 30s cold start is acceptable. Frontend shows a "loading real data…" skeleton, not a blank state. |
 | R5 | **Genie API flakiness during walkthrough.** Real Genie can return 500s or rate-limit. Switching to the fallback mid-answer is visible. | backend-databricks-engineer | `genie_client.py` (Slice 7) always tries deterministic `genie_answers.py` first when `MIP_MOCK_MODE=true`. In sit-down mode, 5s timeout + pre-cached answers for the three canonical questions from the talk track. A failed real-API call silently uses the cached answer; a failed cache lookup returns a deterministic "Let me connect you to a specialist" response (never an exception bubble). |
 

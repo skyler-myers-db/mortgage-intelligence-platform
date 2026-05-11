@@ -4,8 +4,8 @@ Module 0 Slice 7 flips ``/ask-genie`` onto the real `mortgage_lead_
 intelligence` Genie space provisioned at space id
 ``01f13d4968af1b249dc388fd5b18b195`` in the DEFAULT workspace. This
 module is the HTTP seam; ``backend.services.repositories.databricks_repo
-.DatabricksGenieRepository`` wraps it with a safe-corpus fallback that
-only activates when the ``genie`` circuit breaker is OPEN.
+.DatabricksGenieRepository`` wraps it with an honest degraded response
+when the ``genie`` circuit breaker is OPEN.
 
 Design notes:
 
@@ -647,9 +647,9 @@ def _load_space_id_from_file() -> str | None:
 
 # Placeholder values defined by the bundle's default var (docs/runbook §2).
 # When the space id is still one of these strings we deliberately trip the
-# breaker at boot so the safe-corpus fallback answers /api/genie/message
-# instead of the live client 500-ing on the first request (hole-finder
-# round 3 #18, 2026-04-23).
+# breaker at boot so /api/genie/message returns the explicit degraded response
+# instead of the live client 500-ing on the first request (hole-finder round 3
+# #18, 2026-04-23).
 _PLACEHOLDER_SPACE_IDS: frozenset[str] = frozenset({
     "00000000PLACEHOLDER",
     "PLACEHOLDER",
@@ -704,8 +704,7 @@ def get_genie_client() -> ResilientGenieClient:
         # Round-3 hole-finder #18: when GENIE_SPACE_ID is still one of the
         # bundle-default placeholder strings, the upstream Databricks call
         # will 500 on the first query. Trip the breaker open at boot so the
-        # repository's safe-corpus fallback answers immediately; no user-
-        # visible "warming up" message on day 0 of a fresh customer deploy.
+        # repository returns the explicit degraded response immediately.
         if is_placeholder_space_id(space_id):
             breaker.force_open_for_placeholder_config()
         resilient = Resilient[Any](

@@ -6,14 +6,11 @@
 --            silver.property_master ⟕ silver.lien_current. One row per
 --            distinct Owner-Link id.
 --
--- Grain:     One row per owner_link_id (~3.44M across 6-state footprint).
+-- Grain:     One row per owner_link_id.
 -- PK (MERGE key): owner_link_id.
--- Geography filter: INHERITED from upstream silver tables -- both
---            property_master and lien_current are themselves filtered to
---            IN ('IL','CA','FL','TX','WA','CO') at their ingest time.
---            Reasserted here via INNER-JOIN-filter-on-NOT-NULL so a
---            malformed row with NULL state or Owner-Link cannot leak into
---            the bridge.
+-- Geography contract: inherited from upstream silver tables. Reasserted here
+--            via NOT NULL state / Owner-Link checks so malformed rows cannot
+--            leak into the bridge.
 -- Slice:     module0-real-data-slice2.
 -- Data contract: docs/data-contract-module0.md §3.1 is the canonical gold
 --            projection; this silver rollup pre-aggregates so gold becomes
@@ -40,10 +37,7 @@ USING (
     LEFT JOIN mip.silver.lien_current   AS lc
       ON lc.clip = pm.clip
     WHERE pm.owner_link_id IS NOT NULL
-      -- Defense-in-depth: upstream already enforces the 6-state filter, but
-      -- asserting here keeps the bridge correct even if property_master is
-      -- bulk-backfilled from a non-filtered source during a future slice.
-      AND pm.situs_state IN ('IL','CA','FL','TX','WA','CO')
+      AND pm.situs_state IS NOT NULL
   )
   SELECT
     owner_link_id,

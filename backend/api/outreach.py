@@ -103,7 +103,7 @@ RETURNING approval_id
 
 
 _APPROVAL_LOOKUP_BY_REQUEST_ID = """
-SELECT approval_id
+SELECT approval_id, borrower_id, action, actor_email
 FROM mip_app.approvals
 WHERE request_id = %(request_id)s
 LIMIT 1
@@ -148,15 +148,19 @@ def _derive_fallback_request_id(
 
 
 def _lookup_existing_approval(
-    lakebase: LakebaseClient, request_id: str | None
+    lakebase: LakebaseClient,
+    request_id: str | None,
+    *,
+    actor: str,
+    borrower_id: str,
+    action: str,
 ) -> str | None:
     """Return an existing approval_id for this request_id, or None.
 
     R5-01: the idempotency contract is "same request_id => same
-    approval_id, no duplicate write". Callers that want the retry-safe
-    guarantee pass a ``request_id``; when they do and we already have a
-    row in ``mip_app.approvals``, we return its approval_id without
-    issuing a second INSERT or a second audit write.
+    actor + borrower + action => same approval_id, no duplicate write".
+    Reusing the same request_id for a different decision is rejected
+    instead of silently returning another user's or borrower's approval.
 
     Safe to short-circuit with None when ``request_id`` is falsy --
     legacy callers keep their pre-R5-01 behaviour.
@@ -173,9 +177,32 @@ def _lookup_existing_approval(
         # "we don't know if there's a duplicate"; the INSERT's ON
         # CONFLICT clause is the second line of defence.
         return None
+    return _existing_approval_id_or_conflict(
+        row,
+        actor=actor,
+        borrower_id=borrower_id,
+        action=action,
+    )
+
+
+def _existing_approval_id_or_conflict(
+    row: dict[str, Any] | None,
+    *,
+    actor: str,
+    borrower_id: str,
+    action: str,
+) -> str | None:
     if row is None:
         return None
     approval_id = row.get("approval_id")
+    same_actor = str(row.get("actor_email") or "") == actor
+    same_borrower = str(row.get("borrower_id") or "") == borrower_id
+    same_action = str(row.get("action") or "") == action
+    if not (same_actor and same_borrower and same_action):
+        raise HTTPException(
+            status_code=409,
+            detail="request_id already belongs to a different outreach decision",
+        )
     return str(approval_id) if approval_id else None
 
 
@@ -220,8 +247,14 @@ def _commit_outreach_decision_atomic(
                 existing = conn.execute(
                     _APPROVAL_LOOKUP_BY_REQUEST_ID, {"request_id": request_id}
                 ).fetchone()
-                if existing and existing.get("approval_id"):
-                    return str(existing["approval_id"]), ""
+                existing_id = _existing_approval_id_or_conflict(
+                    existing,
+                    actor=actor,
+                    borrower_id=borrower_id,
+                    action=action,
+                )
+                if existing_id:
+                    return existing_id, ""
                 raise LakebaseError("Lakebase approval insert returned no row")
 
             row_approval_id = str(row.get("approval_id") or approval_id)
@@ -240,6 +273,8 @@ def _commit_outreach_decision_atomic(
             return row_approval_id, event.event_id
     except (AuditMetadataViolation, AuditPIIError):
         raise
+    except HTTPException:
+        raise
     except LakebaseError:
         raise
     except Exception as exc:  # noqa: BLE001 -- normalize raw psycopg/fake-client errors
@@ -257,9 +292,9 @@ def draft_outreach(
     b = repo.find_borrower(payload.borrower_id)
     if b is None:
         raise HTTPException(status_code=404, detail=f"Borrower {payload.borrower_id} not found")
-    subject = f"{b.recommended_offer} opportunity for {b.display_name}"
+    subject = f"{b.recommended_offer} opportunity for your property"
     body = (
-        f"Hi {b.display_name.split(' & ')[0]},\n\n"
+        "Hi [first name],\n\n"
         f"Based on recent public-record signals in {b.city}, {b.state}, you may qualify for "
         f"{b.recommended_offer}. {b.why_now}\n\n"
         "Reply to this note and a licensed officer will follow up. "
@@ -293,6 +328,7 @@ def approve_outreach(
     payload: OutreachApproveRequest,
     request: Request,
     background: BackgroundTasks,
+    repo: RepoDep,
     audit: AuditDep,
     lakebase: LakebaseDep,
 ) -> OutreachApproveResponse:
@@ -305,6 +341,9 @@ def approve_outreach(
     # ``settings.default_actor`` and emits a structured warning so ops
     # sees the fallback in the log trail.
     actor = resolve_actor(request)
+    borrower = repo.find_borrower(payload.borrower_id)
+    if borrower is None:
+        raise HTTPException(status_code=404, detail=f"Borrower {payload.borrower_id} not found")
     # R5-01 idempotency pre-check: if the caller sent a request_id and
     # we already wrote a row for it (the previous attempt succeeded
     # server-side but its 200 response was lost in flight), return the
@@ -322,7 +361,13 @@ def approve_outreach(
     effective_request_id = payload.request_id or _derive_fallback_request_id(
         actor=actor, borrower_id=payload.borrower_id, action="approve",
     )
-    existing = _lookup_existing_approval(lakebase, effective_request_id)
+    existing = _lookup_existing_approval(
+        lakebase,
+        effective_request_id,
+        actor=actor,
+        borrower_id=payload.borrower_id,
+        action="approve",
+    )
     if existing is not None:
         return OutreachApproveResponse(
             approved=True,
@@ -421,6 +466,7 @@ def reject_outreach(
     payload: OutreachRejectRequest,
     request: Request,
     background: BackgroundTasks,
+    repo: RepoDep,
     audit: AuditDep,
     lakebase: LakebaseDep,
 ) -> OutreachRejectResponse:
@@ -451,6 +497,9 @@ def reject_outreach(
     # ``resolve_actor(request)`` from the edge-authenticated identity.
     # Body ``payload.actor`` is retained for backcompat but ignored.
     actor = resolve_actor(request)
+    borrower = repo.find_borrower(payload.borrower_id)
+    if borrower is None:
+        raise HTTPException(status_code=404, detail=f"Borrower {payload.borrower_id} not found")
     # R5-01 idempotency: same contract as /approve. A re-POSTed reject
     # with the same ``request_id`` returns the existing approval_id
     # instead of writing a second decision row + duplicate audit event.
@@ -460,7 +509,13 @@ def reject_outreach(
     effective_request_id = payload.request_id or _derive_fallback_request_id(
         actor=actor, borrower_id=payload.borrower_id, action="reject",
     )
-    existing = _lookup_existing_approval(lakebase, effective_request_id)
+    existing = _lookup_existing_approval(
+        lakebase,
+        effective_request_id,
+        actor=actor,
+        borrower_id=payload.borrower_id,
+        action="reject",
+    )
     if existing is not None:
         return OutreachRejectResponse(
             rejected=True,

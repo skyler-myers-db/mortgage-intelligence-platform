@@ -3,12 +3,13 @@ readiness from Unity Catalog.
 
 Two callers:
 
-* ``GET /api/admin/rules`` reads `mip.ref.offer_rules_config` and returns
-  one row per threshold (key, value, unit, label, description,
-  updated_at) plus an ``offer_rules_version`` derived from a stable hash
-  of the ruleset payload + the max ``last_updated`` across rows. The
-  hash means a single seed edit bumps the version deterministically
-  without needing an explicit schema migration.
+* ``GET /api/admin/rules`` reads `mip.ref.offer_rules_config` and injects
+  the operating market-rate row from `mip.gold.borrower_360`, which is the
+  gold surface that already consumed the latest FRED MORTGAGE30US row.
+  The response returns one row per threshold/source value (key, value,
+  unit, label, description, updated_at) plus an ``offer_rules_version``
+  derived from a stable hash of the payload + the max ``last_updated``
+  across rows.
 * ``GET /api/admin/sources`` reads the non-PII
   ``mip.gold.source_readiness`` summary produced by the gold refresh job.
   If that summary has not been deployed yet, the service falls back to the
@@ -33,6 +34,14 @@ from typing import Any
 
 from backend.services.databricks_sql_helpers import qualify
 from backend.services.resilience import TTLCache
+
+_OPERATING_MARKET_RATE_SQL = (
+    "SELECT CAST(market_rate_fraction AS DOUBLE) AS rate_fraction, "
+    "CAST(refreshed_at AS STRING) AS last_updated "
+    f"FROM {qualify('gold', 'borrower_360')} "
+    "WHERE market_rate_fraction IS NOT NULL "
+    "LIMIT 1"
+)
 
 # ---------------------------------------------------------------------------
 # Per-source descriptors -- one row per panel entry. The ``uc_table`` column
@@ -82,7 +91,37 @@ _SOURCES: tuple[_SourceDescriptor, ...] = (
     _SourceDescriptor(
         name="AVM",
         note="Delta Share · weekly",
+        uc_table=qualify("silver", "lien_current"),
+    ),
+    _SourceDescriptor(
+        name="FRED Market Rates",
+        note="Public FRED MORTGAGE30US · weekly",
         uc_table=qualify("silver", "market_rates_weekly"),
+    ),
+    _SourceDescriptor(
+        name="First-party LOS / Applications",
+        note="Customer LOS/application feed · optional",
+        uc_table=qualify("first_party", "loan_applications"),
+    ),
+    _SourceDescriptor(
+        name="First-party Servicing Portfolio",
+        note="Customer servicing feed · optional",
+        uc_table=qualify("first_party", "servicing_portfolio"),
+    ),
+    _SourceDescriptor(
+        name="First-party CRM / Campaigns",
+        note="Customer CRM/campaign feed · optional",
+        uc_table=qualify("first_party", "crm_campaign_membership"),
+    ),
+    _SourceDescriptor(
+        name="First-party Customer Interactions",
+        note="Customer call-center/digital feed · optional",
+        uc_table=qualify("first_party", "customer_interactions"),
+    ),
+    _SourceDescriptor(
+        name="First-party Product Balances",
+        note="Customer banking-product feed · optional",
+        uc_table=qualify("first_party", "product_balances"),
     ),
     _SourceDescriptor(
         name="MLS",
@@ -143,10 +182,12 @@ class RulesPayload:
 @dataclass(frozen=True)
 class SourceRow:
     name: str
-    status: str  # 'live' | 'roadmap' | 'permission_denied' | 'error'
+    status: str  # 'live' | 'demo_synthetic' | 'configured_empty' | 'not_configured' | 'roadmap' | 'permission_denied' | 'error'
     rows: int | None
     last_updated: str | None
     note: str
+    checked_at: str | None = None
+    synthetic_demo: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -155,6 +196,8 @@ class SourceRow:
             "rows": self.rows,
             "last_updated": self.last_updated,
             "note": self.note,
+            "checked_at": self.checked_at,
+            "synthetic_demo": self.synthetic_demo,
         }
 
 
@@ -213,6 +256,37 @@ class AdminRulesService:
             )
             for r in rows
         )
+        latest_market_rate = self._latest_market_rate()
+        if latest_market_rate is not None:
+            rate_value, rate_updated_at = latest_market_rate
+            saw_market_rate = any(t.key == "mip_market_rate" for t in thresholds)
+            thresholds = tuple(
+                ThresholdRow(
+                    key=t.key,
+                    value=rate_value,
+                    unit=t.unit,
+                    label=t.label,
+                    description="Operating market rate used by gold rate-spread calculations; sourced from FRED MORTGAGE30US during gold refresh.",
+                    sort_order=t.sort_order,
+                    last_updated=rate_updated_at or t.last_updated,
+                )
+                if t.key == "mip_market_rate"
+                else t
+                for t in thresholds
+            )
+            if not saw_market_rate:
+                thresholds = (
+                    *thresholds,
+                    ThresholdRow(
+                        key="mip_market_rate",
+                        value=rate_value,
+                        unit="rate_fraction",
+                        label="Market rate reference",
+                        description="Operating market rate used by gold rate-spread calculations; sourced from FRED MORTGAGE30US during gold refresh.",
+                        sort_order=6,
+                        last_updated=rate_updated_at,
+                    ),
+                )
         # Deterministic version: hash of the (key, value) pairs. A seed
         # update that changes any value bumps the hash; a pure metadata
         # edit (description / label) does not. Pairs are sorted by key
@@ -234,6 +308,15 @@ class AdminRulesService:
             rules_edited_at=edited_at,
             thresholds=thresholds,
         )
+
+    def _latest_market_rate(self) -> tuple[float, str | None] | None:
+        rows = self._sql.execute(_OPERATING_MARKET_RATE_SQL)
+        if not rows:
+            return None
+        row = rows[0]
+        if row.get("rate_fraction") is None:
+            return None
+        return float(row["rate_fraction"]), _opt_str(row.get("last_updated"))
 
     # ---- Data source readiness -------------------------------------
 
@@ -272,6 +355,7 @@ class AdminRulesService:
                     rows=None,
                     last_updated=None,
                     note=desc.note,
+                    synthetic_demo=False,
                 )
             else:
                 live_indices.append(idx)
@@ -298,7 +382,9 @@ class AdminRulesService:
         try:
             rows = self._sql.execute(
                 "SELECT source_name, status, row_count, "
-                "CAST(last_updated AS STRING) AS last_updated, note, sort_order "
+                "CAST(last_updated AS STRING) AS last_updated, note, "
+                "CAST(checked_at AS STRING) AS checked_at, "
+                "COALESCE(synthetic_demo, FALSE) AS synthetic_demo, sort_order "
                 f"FROM {qualify('gold', 'source_readiness')} "
                 "ORDER BY sort_order"
             )
@@ -309,10 +395,12 @@ class AdminRulesService:
 
         by_name = {str(r.get("source_name")) for r in rows}
         expected = {desc.name for desc in _SOURCES}
-        if by_name != expected:
-            # A partial/mismatched table is more dangerous than the fallback:
-            # the Admin panel would look green while omitting a contracted
-            # source. Use the legacy probe path until the CTAS is corrected.
+        if not expected.issubset(by_name):
+            # A partial table is more dangerous than the fallback: the Admin
+            # panel would look green while omitting a contracted source. Use
+            # the legacy probe path until the CTAS is corrected. Extra rows
+            # are allowed because /api/data-estate consumes gold/runtime proof
+            # rows that were added after the original Admin source list.
             return None
 
         return tuple(
@@ -322,6 +410,8 @@ class AdminRulesService:
                 rows=_opt_int(r.get("row_count")),
                 last_updated=_opt_str(r.get("last_updated")),
                 note=_opt_str(r.get("note")) or "",
+                checked_at=_opt_str(r.get("checked_at")),
+                synthetic_demo=bool(r.get("synthetic_demo")),
             )
             for r in sorted(rows, key=lambda r: _opt_int(r.get("sort_order")) or 999)
         )
@@ -340,12 +430,31 @@ class AdminRulesService:
         # this — `mip.silver.*` denied to workspace identity.)
         try:
             rows, last_mod = self._describe_detail(desc.uc_table)
+            if _is_first_party_source(desc):
+                if rows == 0:
+                    return SourceRow(
+                        name=desc.name,
+                        status="configured_empty",
+                        rows=0,
+                        last_updated=last_mod,
+                        note=f"{desc.note} · table exists with zero rows",
+                        synthetic_demo=False,
+                    )
+                synthetic_demo, disclosed_last_mod = self._probe_first_party_disclosure(
+                    desc.uc_table
+                )
+                last_mod = disclosed_last_mod or last_mod
             return SourceRow(
                 name=desc.name,
-                status="live",
+                status=(
+                    "demo_synthetic"
+                    if _is_first_party_source(desc) and synthetic_demo
+                    else "live"
+                ),
                 rows=rows,
                 last_updated=last_mod,
                 note=desc.note,
+                synthetic_demo=synthetic_demo if _is_first_party_source(desc) else False,
             )
         except Exception as exc:  # noqa: BLE001 -- degrade-per-source contract
             msg = str(exc)
@@ -354,6 +463,15 @@ class AdminRulesService:
             # error" banner per source. Everything else surfaces as an
             # unknown status with the raw error clipped to 200 chars.
             is_permission = "PERMISSION_DENIED" in msg or "does not have" in msg
+            if _is_first_party_source(desc) and _is_not_found_error(msg):
+                return SourceRow(
+                    name=desc.name,
+                    status="not_configured",
+                    rows=None,
+                    last_updated=None,
+                    note=f"{desc.note} · table not created yet",
+                    synthetic_demo=False,
+                )
             return SourceRow(
                 name=desc.name,
                 status="permission_denied" if is_permission else "error",
@@ -365,7 +483,27 @@ class AdminRulesService:
                     if is_permission
                     else f"{desc.note} (read error: {msg[:200]})"
                 ),
+                synthetic_demo=False,
             )
+
+    def _probe_first_party_disclosure(self, fqtn: str) -> tuple[bool, str | None]:
+        """Return whether a non-empty first-party feed contains demo rows.
+
+        This is intentionally separate from ``DESCRIBE DETAIL``. Delta metadata
+        can prove a table exists and roughly how many rows it has, but the
+        customer-facing truth contract also requires the ``synthetic_demo``
+        disclosure. If the gold ``source_readiness`` summary is unavailable,
+        the legacy fallback must still avoid overclaiming these optional feeds.
+        """
+        rows = self._sql.execute(
+            "SELECT "
+            "COUNT_IF(COALESCE(synthetic_demo, FALSE)) AS synthetic_rows, "
+            "MAX(CAST(refreshed_at AS STRING)) AS last_updated "
+            f"FROM {fqtn}"
+        )
+        row = rows[0] if rows else {}
+        synthetic_rows = _opt_int(row.get("synthetic_rows")) or 0
+        return synthetic_rows > 0, _opt_str(row.get("last_updated"))
 
     def _describe_detail(self, fqtn: str) -> tuple[int | None, str | None]:
         """Cheap metadata read for a single table.
@@ -417,6 +555,23 @@ def _opt_int(v: Any) -> int | None:
         return int(v)
     except (TypeError, ValueError):
         return None
+
+
+def _is_first_party_source(desc: _SourceDescriptor) -> bool:
+    return desc.uc_table is not None and ".first_party." in desc.uc_table
+
+
+def _is_not_found_error(message: str) -> bool:
+    lowered = message.lower()
+    return any(
+        needle in lowered
+        for needle in (
+            "table_or_view_not_found",
+            "not found",
+            "does not exist",
+            "cannot resolve",
+        )
+    )
 
 
 # ---------------------------------------------------------------------------

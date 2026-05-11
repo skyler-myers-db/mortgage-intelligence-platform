@@ -35,8 +35,8 @@ test.describe('Module 0 — golden path', () => {
 
     await expectKpiValue(page, 'Marketable population', '89,553');
     await expectKpiValue(page, 'High-intent leads', '12,840');
-    await expectKpiValue(page, 'Cost per contact (est.)', '$2.18');
-    await expectKpiValue(page, 'Projected contact → app', /9\.7/);
+    await expectKpiValue(page, 'Top-tier opportunities', '4,120');
+    await expectKpiValue(page, 'Offers recommended', '6,250');
 
     // Slice 9: assert Illinois since it's the anchor metro for the county
     // drill (Chicago/Cook County). @svg-maps/usa ships aria-labels for every
@@ -115,13 +115,13 @@ test.describe('Module 0 — golden path', () => {
     // footer + sample Genie questions that also say "N borrowers").
     const rankedHeader = page.locator('.h-2').filter({ hasText: /borrowers/ }).first();
     await expect(rankedHeader).toBeVisible();
-    await expect(rankedHeader).toContainText(/filtered by itm/);
+    await expect(rankedHeader).toContainText(/segment filter: In the Money/);
 
     await page.getByText('Listed for Sale', { exact: true }).click();
-    await expect(rankedHeader).toContainText(/filtered by .*listed/);
+    await expect(rankedHeader).toContainText(/segment filter: In the Money \+ Listed for Sale/);
 
     await page.getByText('Home Equity Candidate', { exact: true }).click();
-    await expect(rankedHeader).toContainText(/must match all selected segments/);
+    await expect(rankedHeader).toContainText(/must match every selected segment/);
     await expect
       .poll(() =>
         segmentRequests.some(
@@ -326,7 +326,6 @@ test.describe('Module 0 — golden path', () => {
                 row_count: 2,
                 result_filters: {
                   borrower_ids: borrowerIds,
-                  route_limit: 10,
                 },
                 sql_hash: 'hash-sql',
               },

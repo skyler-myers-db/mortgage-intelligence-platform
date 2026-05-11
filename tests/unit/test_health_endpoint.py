@@ -123,7 +123,8 @@ def test_dependency_down_exception_translates_to_structured_503(
     from backend.services.resilience import DependencyDownError
 
     class _BoomSegmentRepo:
-        def list(self, portfolio_id: str | None = None) -> list:
+        def list(self, **kwargs: object) -> list:
+            _ = kwargs
             raise DependencyDownError("warehouse", reason="circuit breaker is open")
 
     # Layer a one-off override on top of the session-scoped stub.

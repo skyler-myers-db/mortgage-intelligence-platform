@@ -2,8 +2,9 @@
 
 FastAPI routers inject one of these helpers via ``Depends(...)``. The
 factories resolve the process-wide ``Databricks*Repository`` instances
-(Slice 4 and onward); Genie stays on the in-process deterministic
-catalog until Slice 7 grounds it against the real semantic views.
+(Slice 4 and onward); Genie is wired to the Databricks Conversation API
+and fails visibly through the degraded-state path instead of substituting
+local answer data.
 
 Test processes override every factory through FastAPI's
 ``app.dependency_overrides[get_*_repository]`` so unit tests never
@@ -158,8 +159,7 @@ def get_geo_repository() -> GeoRepository:
 
     Used by ``/api/geo/state-rollups`` to feed the USChoroplethMap
     hover/fill with real numbers from ``mip.gold.funnel_snapshot_daily``
-    instead of the hardcoded STATE_FACTS literal the component shipped
-    with in Slice 9.
+    and current geography rollups.
     """
     global _GEO_REPO
     if _GEO_REPO is not None:
@@ -179,13 +179,11 @@ def get_genie_answer_repository() -> GenieAnswerRepository:
     """Return the live Genie repository backed by the real Mortgage
     Lead Intelligence space.
 
-    Slice 7 swap: hits the Databricks Genie Conversation API through
-    ``ResilientGenieClient`` (breaker key ``"genie"``). The curated
-    catalog in ``backend.services.genie_answers`` degrades to a safe-
-    corpus fallback only when the breaker is OPEN -- happy path always
-    queries the real space. Unknown questions with an open breaker
-    return a honest "warming up" degraded message; they do NOT
-    fabricate data.
+    Hits the Databricks Genie Conversation API through
+    ``ResilientGenieClient`` (breaker key ``"genie"``). If Genie is
+    unavailable, the repository returns an honest "warming up" degraded
+    message with static follow-up suggestions only; it does not serve a
+    local answer body or table rows.
     """
     global _GENIE_REPO
     if _GENIE_REPO is not None:

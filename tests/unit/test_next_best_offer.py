@@ -87,3 +87,11 @@ def test_next_best_offer_importable_from_scoring_module() -> None:
     assert hasattr(scoring, "next_best_offer")
     assert hasattr(scoring, "NBO_PRODUCT_LABELS")
     assert scoring.NBO_PRODUCT_LABELS["refi_plus_heloc"] == "Refinance + HELOC"
+
+
+def test_e2e_borrower_audit_reuses_canonical_offer_label_map() -> None:
+    audit_tool = Path(__file__).resolve().parents[2] / "tools" / "e2e_borrower_audit.py"
+    text = audit_tool.read_text(encoding="utf-8")
+
+    assert "OFFER_LABELS =" not in text
+    assert "NBO_PRODUCT_LABELS" in text

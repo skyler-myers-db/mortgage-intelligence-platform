@@ -57,6 +57,12 @@ FORBIDDEN_TABLE_SUBSTRINGS = (
     "hive_metastore.",
 )
 
+FIXED_FOOTPRINT_COPY = (
+    "6-state",
+    "six-state",
+    "IL, CA, FL, TX, WA, CO",
+)
+
 # Emoji range covers the Unicode blocks commonly used. We reject them
 # entirely - dashboards rendered to executives must stay text-only.
 EMOJI_RE = re.compile(
@@ -188,6 +194,16 @@ def test_no_hardcoded_warehouse_or_workspace_id(path: Path) -> None:
     assert "warehouseId" not in spec, (
         f"{path.name} declares a top-level warehouseId key"
     )
+
+
+@pytest.mark.parametrize("path", DASHBOARD_FILES, ids=lambda p: p.name)
+def test_dashboard_copy_does_not_pin_fixed_cotality_footprint(path: Path) -> None:
+    text = path.read_text(encoding="utf-8")
+    for phrase in FIXED_FOOTPRINT_COPY:
+        assert phrase.lower() not in text.lower(), (
+            f"{path.name} contains fixed-footprint copy {phrase!r}; dashboards "
+            "must describe current Cotality data coverage dynamically"
+        )
 
 
 def test_executive_funnel_reads_canonical_snapshot() -> None:

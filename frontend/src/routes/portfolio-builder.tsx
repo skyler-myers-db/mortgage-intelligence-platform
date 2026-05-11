@@ -21,8 +21,8 @@ import { useFootprint } from '../components/FootprintProvider';
 
 // Non-GEO filter groups are tenant-invariant. The GEO group is built at
 // render time from the FootprintProvider (see `buildGeoOptions` below) so
-// the "All N states" label and the state-triple presets reflect the
-// tenant's real footprint rather than a hardcoded 6-state literal.
+// the "All N states" label and per-state options reflect the tenant's
+// real footprint rather than a source-code state literal.
 // Keys MUST match PortfolioCriteria in backend/schemas/portfolio.py. The
 // earlier mismatch (`geo` vs `geography`, `occ` vs `occupancy`, etc.) made
 // every filter a no-op because Pydantic silently ignored unknown fields.
@@ -38,38 +38,40 @@ const NON_GEO_FILTER_GROUPS: Array<{ label: string; key: string; options: string
  * Build the GEO-dropdown options for the current tenant footprint.
  *
  * Emits (in order):
- *   1. The curated "Chicago MSA" anchor (only if IL is in the footprint;
- *      Summit's default tenant leads with Chicago so this entry preserves
- *      the established UX).
- *   2. "All N states" — the whole-footprint option, where N is the live
+ *   - If live footprint metadata is not ready, "All" only. This prevents the
+ *     generic fallback dictionary from appearing as tenant-selectable states.
+ *   1. "All N states" — the whole-footprint option, where N is the live
  *      count (so a 4-state tenant sees "All 4 states", not "All 6").
- *   3. Each state by its backend-provided state_name (so TX is "Texas",
- *      CA is "California", etc.). This replaces the prior hardcoded
- *      per-state entries ("Texas") + ad-hoc triples ("CA + FL + TX",
- *      "IL + CA + WA") that were only meaningful for Summit.
+ *   2. Each state by its backend-provided state_name (so TX is "Texas",
+ *      CA is "California", etc.).
  */
 function buildGeoOptions(
   states: ReadonlyArray<{ state_code: string; state_name: string }>,
 ): string[] {
+  if (states.length === 0) return ['All'];
   const opts: string[] = [];
-  const hasIllinois = states.some((s) => s.state_code.toUpperCase() === 'IL');
-  if (hasIllinois) opts.push('Chicago MSA');
   opts.push(`All ${states.length} states`);
   for (const s of states) opts.push(s.state_name);
   return opts;
 }
 
+function defaultGeographyForOptions(geoOptions: readonly string[]): string {
+  return geoOptions.find((opt) => /^All \d+ states$/.test(opt)) ?? geoOptions[0] ?? 'All';
+}
+
 // Default filter values keyed by PortfolioCriteria field names. The
 // backend rejects unknown fields by omission, so short aliases like
 // `geo` / `occ` would silently turn the controls into no-ops.
-const DEFAULT_FILTERS: Record<string, string> = {
-  geography: 'Chicago MSA',
+const BASE_DEFAULT_FILTERS: Record<string, string> = {
   occupancy: 'Owner-occupied',
   lien_status: 'Open 1st lien',
   lender_relationship: 'All',
+  target_lender_ref: 'All',
   product: 'All products',
   min_equity_pct_label: '≥ 15%',
 };
+
+const PUBLIC_LENDER_REF_RE = /^(All|Summit Mortgage|Competitor ([A-Z]|Other))$/;
 
 /**
  * URL search-param keys we round-trip. One per filter + the reload
@@ -78,35 +80,182 @@ const DEFAULT_FILTERS: Record<string, string> = {
  * server-side predicates.
  */
 const URL_FILTER_KEYS = [
-  'geography',
   'occupancy',
   'lien_status',
   'lender_relationship',
+  'target_lender_ref',
   'product',
   'min_equity_pct_label',
 ] as const;
 
-function parseFiltersFromUrl(sp: URLSearchParams): Record<string, string> {
-  const out: Record<string, string> = { ...DEFAULT_FILTERS };
+function parseFiltersFromUrl(
+  sp: URLSearchParams,
+  defaults: Record<string, string>,
+): Record<string, string> {
+  const out: Record<string, string> = { ...defaults };
   for (const k of URL_FILTER_KEYS) {
     const v = sp.get(k);
-    if (v !== null && v.length > 0) out[k] = v;
+    if (v !== null && v.length > 0) {
+      if (k === 'target_lender_ref' && !PUBLIC_LENDER_REF_RE.test(v.trim())) {
+        continue;
+      }
+      out[k] = v;
+    }
   }
   return out;
 }
 
-function buildUrlFromFilters(filters: Record<string, string>): URLSearchParams {
+function buildUrlFromFilters(
+  filters: Record<string, string>,
+  defaults: Record<string, string>,
+  stateCodes: readonly string[],
+): URLSearchParams {
   const sp = new URLSearchParams();
+  if (stateCodes.length > 0) {
+    sp.set('states', stateCodes.join(','));
+  }
   for (const k of URL_FILTER_KEYS) {
     const v = filters[k];
     // Skip defaults so the URL stays compact and shareable — a user
     // who hasn't touched a filter won't have 6 redundant params in
     // their address bar.
-    if (v !== undefined && v !== DEFAULT_FILTERS[k]) {
+    if (v !== undefined && v !== defaults[k]) {
+      if (k === 'target_lender_ref' && !PUBLIC_LENDER_REF_RE.test(v.trim())) {
+        continue;
+      }
       sp.set(k, v);
     }
   }
   return sp;
+}
+
+function buildPreviewCriteria(
+  filters: Record<string, string>,
+  stateCodes: readonly string[],
+): Record<string, unknown> {
+  const criteria: Record<string, unknown> = { ...filters };
+  if (stateCodes.length > 0) criteria.states = [...stateCodes];
+  return criteria;
+}
+
+function buildLeadQueueUrlFromFilters(
+  filters: Record<string, string>,
+  stateCodes: readonly string[],
+): string {
+  const sp = new URLSearchParams();
+  if (stateCodes.length > 0) {
+    sp.set('states', stateCodes.join(','));
+  }
+  for (const k of URL_FILTER_KEYS) {
+    const v = filters[k];
+    if (v !== undefined && v.length > 0) {
+      if (k === 'target_lender_ref' && !PUBLIC_LENDER_REF_RE.test(v.trim())) {
+        continue;
+      }
+      sp.set(k, v);
+    }
+  }
+  const query = sp.toString();
+  return query ? `/lead-queue?${query}` : '/lead-queue';
+}
+
+function parseStateCodesFromUrl(
+  sp: URLSearchParams,
+  states: ReadonlyArray<{ state_code: string; state_name: string }>,
+): string[] {
+  const allowed = new Set(states.map((state) => state.state_code));
+  const rawStates = sp.get('states');
+  if (!rawStates) return [];
+  const out: string[] = [];
+  for (const raw of rawStates.split(',')) {
+    const code = raw.trim().toUpperCase();
+    if (!allowed.has(code) || out.includes(code)) continue;
+    out.push(code);
+  }
+  return out.length === states.length ? [] : out;
+}
+
+function stateLabel(
+  code: string,
+  states: ReadonlyArray<{ state_code: string; state_name: string }>,
+): string {
+  return states.find((state) => state.state_code === code)?.state_name ?? code;
+}
+
+function StateMultiSelect({
+  label,
+  allLabel,
+  states,
+  value,
+  onChange,
+}: {
+  label: string;
+  allLabel: string;
+  states: ReadonlyArray<{ state_code: string; state_name: string }>;
+  value: string[];
+  onChange: (next: string[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const active = value.length > 0;
+  const display = !active
+    ? allLabel
+    : value.length === 1
+      ? stateLabel(value[0], states)
+      : `${value.length} states`;
+  const toggleState = (code: string) => {
+    const next = value.includes(code)
+      ? value.filter((state) => state !== code)
+      : [...value, code];
+    onChange(next.length === states.length ? [] : next);
+  };
+
+  return (
+    <div className="filter-root">
+      <button
+        type="button"
+        className={`filter ${active ? 'is-active' : ''}`}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-label={`${label}: ${display}`}
+        onClick={() => setOpen((next) => !next)}
+      >
+        <span className="filter__label">{label}</span>
+        <span className="filter__value">{display}</span>
+        <Icon name="chevdown" size={11} />
+      </button>
+      {open && (
+        <ul className="filter-menu" role="listbox" aria-label={label}>
+          <li
+            role="option"
+            aria-selected={!active}
+            className={`filter-menu__item${!active ? ' is-selected' : ''}`}
+            onClick={() => {
+              onChange([]);
+              setOpen(false);
+            }}
+          >
+            {allLabel}
+            {!active && <Icon name="check" size={11} />}
+          </li>
+          {states.map((state) => {
+            const selected = value.includes(state.state_code);
+            return (
+              <li
+                key={state.state_code}
+                role="option"
+                aria-selected={selected}
+                className={`filter-menu__item${selected ? ' is-selected' : ''}`}
+                onClick={() => toggleState(state.state_code)}
+              >
+                {state.state_name}
+                {selected && <Icon name="check" size={11} />}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
 }
 
 function formatDelta(trend: KpiTrend | undefined): string | undefined {
@@ -145,25 +294,39 @@ function dayZeroSafe(
 export default function PortfolioBuilder() {
   const [searchParams, setSearchParams] = useSearchParams();
   const footprint = useFootprint();
+  const [targetLenderOptions, setTargetLenderOptions] = useState<string[]>(['All']);
+  const [targetLenderStatus, setTargetLenderStatus] = useState<string>('loading');
   // Build the GEO dropdown from the tenant footprint. Memoised so the
   // FilterSelect doesn't get a fresh options array on every render (it
   // would be identity-stable for same-footprint re-renders).
   const geoOptions = useMemo(
-    () => buildGeoOptions(footprint.states),
-    [footprint.states],
+    () => buildGeoOptions(
+      footprint.ready && !footprint.usingFallback ? footprint.states : [],
+    ),
+    [footprint.ready, footprint.states, footprint.usingFallback],
   );
+  const defaultFilters = useMemo(
+    () => ({ ...BASE_DEFAULT_FILTERS }),
+    [],
+  );
+  const geoOptionsKey = useMemo(() => geoOptions.join('\u0000'), [geoOptions]);
+  const defaultGeo = useMemo(() => defaultGeographyForOptions(geoOptions), [geoOptions]);
   const filterGroups = useMemo(
     () => [
-      { label: 'GEO', key: 'geography', options: geoOptions },
-      ...NON_GEO_FILTER_GROUPS,
+      ...NON_GEO_FILTER_GROUPS.slice(0, 3),
+      { label: 'TARGET LIEN HOLDER', key: 'target_lender_ref', options: targetLenderOptions },
+      ...NON_GEO_FILTER_GROUPS.slice(3),
     ],
-    [geoOptions],
+    [targetLenderOptions],
   );
   // Initialize from URL so deep-links and browser back/forward work. On
   // mount we also trigger a build, so a shared link reproduces the
   // exact KPI grid the sender saw. Round-2 hole-finder #16, 2026-04-23.
   const [filters, setFilters] = useState<Record<string, string>>(() =>
-    parseFiltersFromUrl(searchParams),
+    parseFiltersFromUrl(searchParams, defaultFilters),
+  );
+  const [stateCodes, setStateCodes] = useState<string[]>(() =>
+    parseStateCodesFromUrl(searchParams, footprint.states),
   );
   // The "committed" filter payload drives the useWarmingUpRetry hook.
   // `filters` tracks the dropdown state, `committedFilters` is what the
@@ -171,16 +334,35 @@ export default function PortfolioBuilder() {
   // This preserves the prototype UX: filter changes don't refetch; the
   // "Run build" button is the explicit commit point.
   const [committedFilters, setCommittedFilters] = useState<Record<string, string>>(
-    () => parseFiltersFromUrl(searchParams),
+    () => parseFiltersFromUrl(searchParams, defaultFilters),
+  );
+  const [committedStateCodes, setCommittedStateCodes] = useState<string[]>(() =>
+    parseStateCodesFromUrl(searchParams, footprint.states),
   );
   const [copyHint, setCopyHint] = useState<'idle' | 'copied' | 'failed'>('idle');
+  const [saveHint, setSaveHint] = useState<'idle' | 'saved' | 'failed'>('idle');
+
+  useEffect(() => {
+    const ctrl = new AbortController();
+    api.configOptions(ctrl.signal)
+      .then((options) => {
+        const values = options.target_lender_refs?.filter(Boolean);
+        setTargetLenderOptions(values && values.length > 0 ? values : ['All']);
+        setTargetLenderStatus(options.target_lender_refs_status ?? 'unavailable');
+      })
+      .catch(() => {
+        setTargetLenderOptions(['All']);
+        setTargetLenderStatus('unavailable');
+      });
+    return () => ctrl.abort();
+  }, []);
 
   // Cold-start warming-up loop. Re-runs whenever committedFilters
   // changes (via Run build or URL navigation). 6 retries / 5s apart =
   // 30s of auto-retry before surfacing the red error path.
   const committedKey = useMemo(
-    () => JSON.stringify(committedFilters),
-    [committedFilters],
+    () => JSON.stringify({ filters: committedFilters, stateCodes: committedStateCodes }),
+    [committedFilters, committedStateCodes],
   );
   const {
     data: preview,
@@ -188,7 +370,7 @@ export default function PortfolioBuilder() {
     error,
     manualRetry: retryBuild,
   } = useWarmingUpRetry<PortfolioPreview>(
-    (signal) => api.portfolioPreview(committedFilters, signal),
+    (signal) => api.portfolioPreview(buildPreviewCriteria(committedFilters, committedStateCodes), signal),
     [committedKey],
   );
   const building = preview === null && warmingUp === null && error === null;
@@ -199,6 +381,12 @@ export default function PortfolioBuilder() {
     : null;
 
   const setFilter = (key: string) => (next: string) => setFilters((f) => ({ ...f, [key]: next }));
+  const buildDirty = useMemo(
+    () =>
+      JSON.stringify({ filters, stateCodes }) !==
+      JSON.stringify({ filters: committedFilters, stateCodes: committedStateCodes }),
+    [committedFilters, committedStateCodes, filters, stateCodes],
+  );
 
   /**
    * Commit the current filter state: push to URL, then refetch. The
@@ -207,9 +395,10 @@ export default function PortfolioBuilder() {
    * change (which would pollute browser history with every keystroke).
    */
   const onRunBuild = useCallback(() => {
-    setSearchParams(buildUrlFromFilters(filters), { replace: false });
+    setSearchParams(buildUrlFromFilters(filters, defaultFilters, stateCodes), { replace: false });
     setCommittedFilters(filters);
-  }, [filters, setSearchParams]);
+    setCommittedStateCodes(stateCodes);
+  }, [defaultFilters, filters, setSearchParams, stateCodes]);
 
   /**
    * Copy the current URL to the clipboard. Falls back to a failed
@@ -218,13 +407,27 @@ export default function PortfolioBuilder() {
    * because onRunBuild wrote to it.
    */
   const onCopyLink = useCallback(async () => {
+    if (buildDirty) return;
     try {
       await navigator.clipboard.writeText(window.location.href);
       setCopyHint('copied');
     } catch {
       setCopyHint('failed');
     }
-  }, []);
+  }, [buildDirty]);
+
+  const onSaveBuild = useCallback(async () => {
+    if (buildDirty) return;
+    const defaultName = `Portfolio build ${new Date().toLocaleString()}`;
+    const name = window.prompt('Name this build', defaultName)?.trim();
+    if (!name) return;
+    try {
+      await api.portfolioCreate(name, buildPreviewCriteria(committedFilters, committedStateCodes));
+      setSaveHint('saved');
+    } catch {
+      setSaveHint('failed');
+    }
+  }, [buildDirty, committedFilters, committedStateCodes]);
 
   useEffect(() => {
     if (copyHint === 'idle') return;
@@ -232,23 +435,50 @@ export default function PortfolioBuilder() {
     return () => window.clearTimeout(t);
   }, [copyHint]);
 
+  useEffect(() => {
+    if (saveHint === 'idle') return;
+    const t = window.setTimeout(() => setSaveHint('idle'), 2200);
+    return () => window.clearTimeout(t);
+  }, [saveHint]);
+
   // When the URL changes (browser back/forward), reconcile local state
   // and refetch so the KPI grid reflects the navigation. We only
   // refetch if the URL-derived filters actually differ from local
   // state — otherwise setState from onRunBuild would cause an
   // unnecessary second fetch.
   const urlFilters = useMemo(
-    () => parseFiltersFromUrl(searchParams),
-    [searchParams],
+    () => parseFiltersFromUrl(searchParams, defaultFilters),
+    [defaultFilters, searchParams],
+  );
+  const urlStateCodes = useMemo(
+    () => parseStateCodesFromUrl(searchParams, footprint.states),
+    [footprint.states, searchParams],
   );
   useEffect(() => {
     const differs = URL_FILTER_KEYS.some((k) => urlFilters[k] !== filters[k]);
-    if (differs) {
+    const stateDiffers = urlStateCodes.join(',') !== stateCodes.join(',');
+    if (differs || stateDiffers) {
       setFilters(urlFilters);
       setCommittedFilters(urlFilters);
+      setStateCodes(urlStateCodes);
+      setCommittedStateCodes(urlStateCodes);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [urlFilters]);
+  }, [urlFilters, urlStateCodes]);
+
+  useEffect(() => {
+    const allowed = new Set(footprint.states.map((state) => state.state_code));
+    const sanitize = (codes: string[]) => {
+      const next = codes.filter((code) => allowed.has(code));
+      return next.length === footprint.states.length ? [] : next;
+    };
+    setStateCodes(sanitize);
+    setCommittedStateCodes(sanitize);
+  }, [footprint.states, geoOptionsKey]);
+
+  const leadQueueUrl = useMemo(() => {
+    return buildLeadQueueUrlFromFilters(committedFilters, committedStateCodes);
+  }, [committedFilters, committedStateCodes]);
 
   return (
     <PageShell
@@ -272,6 +502,13 @@ export default function PortfolioBuilder() {
         </div>
         <div className="surface__body">
           <div className="filter-row">
+            <StateMultiSelect
+              label="GEO"
+              allLabel={defaultGeo}
+              states={footprint.ready && !footprint.usingFallback ? footprint.states : []}
+              value={stateCodes}
+              onChange={setStateCodes}
+            />
             {filterGroups.map((g) => (
               <FilterSelect
                 key={g.key}
@@ -287,6 +524,7 @@ export default function PortfolioBuilder() {
               size="default"
               icon="link"
               onClick={() => void onCopyLink()}
+              disabled={buildDirty}
               aria-label="Copy shareable URL for the current build"
               data-testid="portfolio-copy-link"
             >
@@ -294,7 +532,26 @@ export default function PortfolioBuilder() {
                 ? 'Link copied'
                 : copyHint === 'failed'
                 ? 'Copy failed'
+                : buildDirty
+                ? 'Run before sharing'
                 : 'Share this build'}
+            </Button>
+            <Button
+              variant="ghost"
+              size="default"
+              icon="doc"
+              onClick={() => void onSaveBuild()}
+              disabled={buildDirty || building}
+              aria-label="Save current portfolio build"
+              data-testid="portfolio-save-build"
+            >
+              {saveHint === 'saved'
+                ? 'Build saved'
+                : saveHint === 'failed'
+                ? 'Save failed'
+                : buildDirty
+                ? 'Run before saving'
+                : 'Save build'}
             </Button>
             <Button
               variant="primary"
@@ -306,6 +563,11 @@ export default function PortfolioBuilder() {
               {building ? 'Running…' : 'Run build'}
             </Button>
           </div>
+          {targetLenderStatus !== 'live' && (
+            <div className="filter-row__hint muted">
+              Target lien holder options are limited until live borrower lender aliases finish refreshing.
+            </div>
+          )}
 
           {warmingUp && (
             <div className="mt-4">
@@ -369,6 +631,8 @@ export default function PortfolioBuilder() {
               trend={preview?.trends?.marketable_population?.series}
               delta={formatDelta(preview?.trends?.marketable_population)}
               deltaDir={preview?.trends?.marketable_population?.direction}
+              trendNote={preview?.trends?.marketable_population?.note}
+              loading={building}
               source={DRAWER_SOURCES.population}
             />
             <KpiCard
@@ -377,6 +641,8 @@ export default function PortfolioBuilder() {
               trend={preview?.trends?.avg_score?.series}
               delta={formatDelta(preview?.trends?.avg_score)}
               deltaDir={preview?.trends?.avg_score?.direction}
+              trendNote={preview?.trends?.avg_score?.note}
+              loading={building}
               source={DRAWER_SOURCES.leadScore}
             />
             <KpiCard
@@ -385,6 +651,8 @@ export default function PortfolioBuilder() {
               trend={preview?.trends?.top_tier_opportunities?.series}
               delta={formatDelta(preview?.trends?.top_tier_opportunities)}
               deltaDir={preview?.trends?.top_tier_opportunities?.direction}
+              trendNote={preview?.trends?.top_tier_opportunities?.note}
+              loading={building}
               source={DRAWER_SOURCES.leadScore}
             />
             <KpiCard
@@ -393,6 +661,8 @@ export default function PortfolioBuilder() {
               trend={preview?.trends?.offers_recommended?.series}
               delta={formatDelta(preview?.trends?.offers_recommended)}
               deltaDir={preview?.trends?.offers_recommended?.direction}
+              trendNote={preview?.trends?.offers_recommended?.note}
+              loading={building}
               source={DRAWER_SOURCES.nbo}
             />
           </div>
@@ -410,7 +680,7 @@ export default function PortfolioBuilder() {
               Open the lead queue to review evidence and approve outreach per borrower.
             </div>
           </div>
-          <Link to="/lead-queue" className="btn btn--primary">
+          <Link to={leadQueueUrl} className="btn btn--primary">
             Open lead queue
             <Icon name="chevright" size={14} />
           </Link>

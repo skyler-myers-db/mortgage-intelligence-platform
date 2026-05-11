@@ -1,51 +1,86 @@
 -- =============================================================================
 -- state_footprint_seed.sql
 -- -----------------------------------------------------------------------------
--- Purpose:   Seed `mip.ref.state_footprint` with the canonical list of US
---            states the current tenant (Summit Mortgage) operates in. The
---            footprint is the single source of truth consumed by:
+-- Purpose:   Seed `mip.ref.state_footprint` with stable US-state display
+--            metadata. This table is NOT data-bearing Cotality coverage. The
+--            current coverage scope is discovered from refreshed gold
+--            geography rollups; these rows are only labels/default metadata
+--            used when coverage rows are present or as a degraded fallback.
 --
---              1. backend `_STATE_SETS` builder in
---                 `backend/services/repositories/databricks_repo.py` (the
---                 "All N states" option and the default-population filter).
---              2. `sql/transformations/gold_borrower_360.sql` (`WHERE
---                 lc.situs_state IN (SELECT state_code FROM state_footprint)`).
---              3. `/api/config/footprint` endpoint (consumed by the frontend
---                 AppShell to hydrate `SUPPORTED_COUNTY_STATES` in
---                 `USChoroplethMap.tsx` and `LOCATION_TO_STATES` in
---                 `routes/segment-intelligence.tsx`).
---
---            Moving the footprint here eliminates the 5-way hardcoded
---            duplication that previously broke silently for any tenant with
---            a different state mix (e.g. NY/NJ/PA).
+--              1. `backend/services/state_footprint.py`, which enriches live
+--                 county_rollup states with human-readable names.
+--              2. `/api/config/footprint`, which tells the frontend the live
+--                 coverage list or an explicit metadata-only degraded state.
 --
 -- Provenance:
---            `source = 'manual_seed'` on every row. These 6 states are the
---            Cotality Delta Share footprint for Summit Mortgage as of
---            slice 9. A tenant with a different footprint overrides these
---            rows by re-running this seed after editing the VALUES list --
---            no Python, TypeScript, or SQL transformation deploy required.
+--            `source = 'us_state_metadata_seed'` on every row. These rows are
+--            stable public geography labels, not a Cotality license scope and
+--            not a Summit Mortgage operating footprint.
 --
 -- Idempotency: MERGE on state_code. Re-running is a no-op for unchanged
 --            rows and refreshes `last_updated` for any row whose
 --            `display_order` / `is_default_state` / `state_name` changed.
 --
 -- `is_default_state`:
---            Exactly one row should carry TRUE. That row is the default
---            anchor state for empty-filter cases in the UI (e.g. the
---            default "Chicago MSA" dropdown value in portfolio-builder).
+--            Exactly one row carries TRUE as generic anchor metadata only.
+--            User-facing broad defaults use the dynamic "All N states" option
+--            built from live coverage, not this seed.
 -- =============================================================================
 
 MERGE INTO mip.ref.state_footprint AS t
 USING (
   SELECT col1 AS state_code, col2 AS state_name, col3 AS display_order, col4 AS is_default_state
   FROM VALUES
-    ('IL', 'Illinois',    1, TRUE),   -- default anchor (largest state in footprint)
-    ('CA', 'California',  2, FALSE),
-    ('FL', 'Florida',     3, FALSE),
-    ('TX', 'Texas',       4, FALSE),
-    ('WA', 'Washington',  5, FALSE),
-    ('CO', 'Colorado',    6, FALSE)
+    ('AL', 'Alabama',         1, TRUE),
+    ('AK', 'Alaska',          2, FALSE),
+    ('AZ', 'Arizona',         3, FALSE),
+    ('AR', 'Arkansas',        4, FALSE),
+    ('CA', 'California',      5, FALSE),
+    ('CO', 'Colorado',        6, FALSE),
+    ('CT', 'Connecticut',     7, FALSE),
+    ('DE', 'Delaware',        8, FALSE),
+    ('FL', 'Florida',         9, FALSE),
+    ('GA', 'Georgia',        10, FALSE),
+    ('HI', 'Hawaii',         11, FALSE),
+    ('ID', 'Idaho',          12, FALSE),
+    ('IL', 'Illinois',       13, FALSE),
+    ('IN', 'Indiana',        14, FALSE),
+    ('IA', 'Iowa',           15, FALSE),
+    ('KS', 'Kansas',         16, FALSE),
+    ('KY', 'Kentucky',       17, FALSE),
+    ('LA', 'Louisiana',      18, FALSE),
+    ('ME', 'Maine',          19, FALSE),
+    ('MD', 'Maryland',       20, FALSE),
+    ('MA', 'Massachusetts',  21, FALSE),
+    ('MI', 'Michigan',       22, FALSE),
+    ('MN', 'Minnesota',      23, FALSE),
+    ('MS', 'Mississippi',    24, FALSE),
+    ('MO', 'Missouri',       25, FALSE),
+    ('MT', 'Montana',        26, FALSE),
+    ('NE', 'Nebraska',       27, FALSE),
+    ('NV', 'Nevada',         28, FALSE),
+    ('NH', 'New Hampshire',  29, FALSE),
+    ('NJ', 'New Jersey',     30, FALSE),
+    ('NM', 'New Mexico',     31, FALSE),
+    ('NY', 'New York',       32, FALSE),
+    ('NC', 'North Carolina', 33, FALSE),
+    ('ND', 'North Dakota',   34, FALSE),
+    ('OH', 'Ohio',           35, FALSE),
+    ('OK', 'Oklahoma',       36, FALSE),
+    ('OR', 'Oregon',         37, FALSE),
+    ('PA', 'Pennsylvania',   38, FALSE),
+    ('RI', 'Rhode Island',   39, FALSE),
+    ('SC', 'South Carolina', 40, FALSE),
+    ('SD', 'South Dakota',   41, FALSE),
+    ('TN', 'Tennessee',      42, FALSE),
+    ('TX', 'Texas',          43, FALSE),
+    ('UT', 'Utah',           44, FALSE),
+    ('VT', 'Vermont',        45, FALSE),
+    ('VA', 'Virginia',       46, FALSE),
+    ('WA', 'Washington',     47, FALSE),
+    ('WV', 'West Virginia',  48, FALSE),
+    ('WI', 'Wisconsin',      49, FALSE),
+    ('WY', 'Wyoming',        50, FALSE)
 ) AS s
 ON t.state_code = s.state_code
 WHEN MATCHED THEN UPDATE SET
@@ -53,10 +88,10 @@ WHEN MATCHED THEN UPDATE SET
   display_order    = s.display_order,
   is_default_state = s.is_default_state,
   last_updated     = CURRENT_TIMESTAMP(),
-  source           = 'manual_seed'
+  source           = 'us_state_metadata_seed'
 WHEN NOT MATCHED THEN INSERT (
   state_code, state_name, display_order, is_default_state, last_updated, source
 ) VALUES (
   s.state_code, s.state_name, s.display_order, s.is_default_state,
-  CURRENT_TIMESTAMP(), 'manual_seed'
+  CURRENT_TIMESTAMP(), 'us_state_metadata_seed'
 );

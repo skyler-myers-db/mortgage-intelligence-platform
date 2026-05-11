@@ -20,10 +20,19 @@ substituted for a caller-provided catalog:
     mip.ref.        -> {catalog}.ref.
     mip.semantics.  -> {catalog}.semantics.
     mip.raw.        -> {catalog}.raw.
+    mip.first_party.-> {catalog}.first_party.
 
 The canonical sources keep the readable ``mip.*`` identifiers so code
 review + git diffs stay legible. The rendered tree is a build artifact
 (.gitignore'd) that the Databricks bundle's SQL tasks read from.
+
+The renderer also materializes the Summit Mortgage first-party demo-feed
+switch because Databricks SQL does not allow runtime parameter markers inside
+the ``CREATE VIEW`` / CTAS statements used by ``demo_first_party_feeds.sql``.
+The stand-alone renderer is fail-closed: if no explicit value is provided, it
+renders the demo feed disabled so customer/prod workspaces keep
+``mip.first_party.*`` empty until real lender feeds arrive. The deploy wrapper
+explicitly opts the dev Summit demo into these feeds.
 
 Why the regex is safe (no false-positive substitutions).
 ---------------------------------------------------------------------------
@@ -74,13 +83,14 @@ Exit status: 0 on success, 2 on arg error, 1 on I/O / permission error.
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import sys
 from pathlib import Path
 
 # The five UC schema segments governed by this rewrite. Order does not
 # matter (they are disjoint). Documented in docs/multi-catalog-plan.md.
-_UC_SCHEMAS: tuple[str, ...] = ("gold", "silver", "ref", "semantics", "raw")
+_UC_SCHEMAS: tuple[str, ...] = ("gold", "silver", "ref", "semantics", "raw", "first_party")
 
 # Pre-compile one regex per prefix. Anchoring: word boundary before
 # ``mip`` ensures ``mip_app`` (Lakebase schema) is never matched. The
@@ -90,6 +100,7 @@ _PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(rf"\bmip\.{schema}\."), f"{{catalog}}.{schema}.")
     for schema in _UC_SCHEMAS
 ]
+_DEMO_FIRST_PARTY_TOKEN = "{{mip_enable_demo_first_party_feeds}}"
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _DEFAULT_SOURCE = _REPO_ROOT / "sql"
@@ -112,14 +123,38 @@ def _resolve_default_catalog() -> str:
         return "mip"
 
 
-def _render_text(text: str, catalog: str) -> tuple[str, int]:
-    """Apply all five prefix substitutions. Returns (new_text, count)."""
+def _parse_bool(raw: str | None, *, default: bool) -> bool:
+    """Parse a human/operator boolean with a conservative fallback."""
+    if raw is None or not raw.strip():
+        return default
+    value = raw.strip().lower()
+    if value in {"1", "true", "yes", "y", "on"}:
+        return True
+    if value in {"0", "false", "no", "n", "off"}:
+        return False
+    raise ValueError(
+        "MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS must be one of "
+        "1/0, true/false, yes/no, on/off"
+    )
+
+
+def _resolve_demo_first_party_enabled(cli_value: str | None) -> bool:
+    if cli_value is not None:
+        return _parse_bool(cli_value, default=False)
+    return _parse_bool(os.environ.get("MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS"), default=False)
+
+
+def _render_text(text: str, catalog: str, *, demo_first_party_enabled: bool) -> tuple[str, int]:
+    """Apply UC prefix substitutions and render-time SQL switches."""
     total = 0
     for pattern, template in _PATTERNS:
         replacement = template.format(catalog=catalog)
         new_text, n = pattern.subn(replacement, text)
         total += n
         text = new_text
+    demo_literal = "TRUE" if demo_first_party_enabled else "FALSE"
+    text, n = re.subn(re.escape(_DEMO_FIRST_PARTY_TOKEN), demo_literal, text)
+    total += n
     return text, total
 
 
@@ -141,6 +176,7 @@ def _iter_sql_files(source_root: Path, dest_root: Path) -> list[Path]:
 def render(
     *,
     catalog: str,
+    demo_first_party_enabled: bool,
     source_root: Path = _DEFAULT_SOURCE,
     dest_root: Path = _DEFAULT_DEST,
 ) -> tuple[int, int, int]:
@@ -164,7 +200,11 @@ def render(
         dst.parent.mkdir(parents=True, exist_ok=True)
 
         src_text = src.read_text(encoding="utf-8")
-        rendered, n = _render_text(src_text, catalog)
+        rendered, n = _render_text(
+            src_text,
+            catalog,
+            demo_first_party_enabled=demo_first_party_enabled,
+        )
         total_subs += n
 
         # Idempotent write: only touch dst when content differs.
@@ -204,12 +244,28 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         default=str(_DEFAULT_DEST),
         help="Destination tree root (default: sql/_rendered/).",
     )
+    parser.add_argument(
+        "--enable-demo-first-party-feeds",
+        default=None,
+        help=(
+            "Render demo_first_party_feeds.sql with TRUE/FALSE. Defaults to "
+            "MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS, falling back to false. "
+            "The deploy wrapper explicitly enables this for the Summit dev demo."
+        ),
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     catalog = args.catalog or _resolve_default_catalog()
+    try:
+        demo_first_party_enabled = _resolve_demo_first_party_enabled(
+            args.enable_demo_first_party_feeds
+        )
+    except ValueError as exc:
+        print(f"render_sql: {exc}", file=sys.stderr)
+        return 2
 
     # Light validation -- UC catalog names are lowercase alphanumerics +
     # underscore, DNS-ish. We do not enforce casing; we only reject empty
@@ -224,6 +280,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         processed, written, subs = render(
             catalog=catalog,
+            demo_first_party_enabled=demo_first_party_enabled,
             source_root=source_root,
             dest_root=dest_root,
         )
@@ -237,6 +294,7 @@ def main(argv: list[str] | None = None) -> int:
     print(
         f"render_sql: catalog={catalog} processed={processed} "
         f"written={written} substitutions={subs} "
+        f"demo_first_party_feeds={'enabled' if demo_first_party_enabled else 'disabled'} "
         f"source={source_root.relative_to(_REPO_ROOT) if source_root.is_relative_to(_REPO_ROOT) else source_root} "
         f"dest={dest_root.relative_to(_REPO_ROOT) if dest_root.is_relative_to(_REPO_ROOT) else dest_root}"
     )

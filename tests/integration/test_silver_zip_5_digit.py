@@ -16,7 +16,9 @@ defensive SUBSTR.
 
 Assertion
 ---------
-``MAX(LENGTH(situs_zip_code)) <= 5`` on both silver tables.
+``situs_zip_code IS NULL OR LENGTH(situs_zip_code) = 5`` on both silver
+tables. Four-digit fragments are invalid unless they can be safely restored
+as leading-zero ZIPs at ingest time.
 """
 from __future__ import annotations
 
@@ -105,7 +107,7 @@ def warehouse() -> WarehouseCreds:
     "silver_table",
     ["mip.silver.property_master", "mip.silver.lien_current"],
 )
-def test_silver_zip_is_five_digits_or_fewer(
+def test_silver_zip_is_five_digits_or_null(
     warehouse: WarehouseCreds,
     silver_table: str,
 ) -> None:
@@ -119,12 +121,12 @@ def test_silver_zip_is_five_digits_or_fewer(
         warehouse.host,
         warehouse.token,
         warehouse.warehouse_id,
-        f"SELECT COALESCE(MAX(LENGTH(situs_zip_code)), 0) AS max_len "
-        f"FROM {silver_table}",
+        f"SELECT COUNT(*) AS bad_rows FROM {silver_table} "
+        "WHERE situs_zip_code IS NOT NULL AND LENGTH(situs_zip_code) != 5",
     )
     assert rows, f"no row returned from {silver_table} zip-length probe"
-    max_len = int(rows[0][0])
-    assert max_len <= 5, (
-        f"{silver_table}.situs_zip_code MAX(LENGTH) = {max_len}, expected <= 5. "
-        "slice13 Wave-2 silver-side truncation has regressed."
+    bad_rows = int(rows[0][0])
+    assert bad_rows == 0, (
+        f"{silver_table}.situs_zip_code has {bad_rows} non-null non-ZIP5 rows. "
+        "silver-side ZIP normalization has regressed."
     )

@@ -20,12 +20,12 @@ through the same primitives that UC functions mirror, so every
 ``recommended_offer`` is derived — never hardcoded.
 
 The population is designed so every branch of ``fn_next_best_offer``
-fires on at least two borrowers, geography spans the 6-state Delta
+fires on at least two borrowers, geography spans the configured Delta
 Share footprint (IL/CA/FL/TX/WA/CO per docs/data-sources-gap-analysis
 §1) with Chicago as the anchor metro per data-contract §10, and
 ``opportunity_score`` spreads from ~45 to ~96 — the ranked-borrower
 table and segment counts look like a real book of business.
-``SEGMENTS`` aggregate counts (e.g. 12,840 ITM) remain population-level
+``SEGMENTS`` aggregate counts remain population-level
 estimates of Summit Mortgage's marketable book — the 25 rows here are
 the ranked sample the orchestrator surfaces first.
 """
@@ -87,7 +87,7 @@ SEGMENTS = [
     SegmentSummary(code="permit", name="Permit Activity", count=0, delta="pending", avg_score=0, description="Pending Cotality Building Permits share; blocked false until landed.", color="#A78BFA"),
     SegmentSummary(code="investor", name="Investor / Multi-Property", count=1892, delta="+6%", avg_score=79, description="Owner Link shows 2+ properties or repeat behavior.", color="#F472B6"),
     SegmentSummary(code="equity", name="Home Equity Candidate", count=6320, delta="+14%", avg_score=76, description="Strong equity and prior cash-out/HELOC propensity.", color="#66C5FF"),
-    SegmentSummary(code="retention", name="Retention Risk", count=3471, delta="+4%", avg_score=88, description="Current customer showing refi/listing/competitor signals.", color="#34D399"),
+    SegmentSummary(code="retention", name="Retention Risk", count=3471, delta="+4%", avg_score=88, description="Current customer with rate spread above the retention threshold; listing and competitor overlays join only when live evidence exists.", color="#34D399"),
 ]
 
 
@@ -325,10 +325,10 @@ def _build_borrower(spec: dict) -> tuple[Borrower360, dict]:
     clip_demo = f"clip_demo_{spec['bid'].replace('B-', '')}"
     borrower = Borrower360(
         borrower_id=spec["bid"],
-        display_name=spec["name"],
+        display_name=f"Owner {spec['bid'].replace('B-', '').lower()}",
         city=spec["city"], state=spec["state"], zip=spec["zip"],
-        # LeadSummary.clip (added 2026-04-22) must match clip_id so tests
-        # and in-process fixtures surface the same CLIP across routes.
+        # LeadSummary.clip must match clip_id so tests and in-process
+        # fixtures surface the same display-safe property ref across routes.
         clip=clip_demo,
         segment_codes=spec["segs"],
         equity_estimate=equity_estimate,
@@ -347,6 +347,7 @@ def _build_borrower(spec: dict) -> tuple[Borrower360, dict]:
         current_rate=current_rate_pct,
         ltv=ltv,
         related_property_count=spec["related_props"],
+        current_lender_ref="Summit Mortgage" if spec["customer"] else "Competitor Other",
         trigger_timeline=evidence_events or EVIDENCE[:1],
         evidence_events=evidence_events,
         why_panel=why,

@@ -17,12 +17,13 @@
         "FROM mip.semantics.segment_performance_metric_view AS sp",
         "LEFT JOIN (",
         "  SELECT",
-        "    segment                              AS segment_code,",
+        "    segment_code                         AS segment_code,",
         "    CAST(ROUND(AVG(rate_spread_bps)) AS INT) AS mean_rate_spread_bps,",
         "    CAST(ROUND(AVG(equity_pct))     AS INT)  AS mean_equity_pct,",
         "    SUM(CASE WHEN in_the_money THEN 1 ELSE 0 END) AS in_the_money_borrowers",
         "  FROM mip.semantics.borrower_opportunity_metric_view",
-        "  GROUP BY segment",
+        "  LATERAL VIEW EXPLODE(segment_codes) seg AS segment_code",
+        "  GROUP BY segment_code",
         ") AS agg",
         "  ON sp.segment_code = agg.segment_code",
         "WHERE sp.state = '_ALL'",
@@ -196,7 +197,7 @@
               },
               "frame": {
                 "title": "Segment Size",
-                "description": "Borrower count per segment across the 6-state footprint",
+                "description": "Borrower count per segment across current Cotality data coverage",
                 "showTitle": true,
                 "showDescription": true
               }

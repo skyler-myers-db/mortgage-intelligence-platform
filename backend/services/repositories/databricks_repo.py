@@ -22,13 +22,10 @@ Evidence ordering: ``ORDER BY signal_rank ASC`` per the data-contract
 §3.4. Chronological order is a display concern handled in the UI; the
 canonical order for the evidence drawer is the gold-defined priority.
 
-Slice-7: ``DatabricksGenieRepository`` flips ``/api/genie`` onto the
-real Mortgage Lead Intelligence Genie space. A deterministic safe
-corpus (parsed from ``genie/sample_questions.md`` + the curated catalog
-in ``backend.services.genie_answers``) only fires when the ``genie``
-circuit breaker is OPEN -- otherwise every answer comes from the live
-space. An open breaker on an unknown question returns a honest
-"warming up" message rather than fabricating data.
+Slice-7+: ``DatabricksGenieRepository`` serves ``/api/genie`` from the
+real Mortgage Lead Intelligence Genie space. If the ``genie`` circuit
+breaker is OPEN, the repository returns an honest "warming up" message
+rather than fabricating or replaying analytic content.
 """
 from __future__ import annotations
 
@@ -36,11 +33,12 @@ import hashlib
 import json
 import logging
 import re
+import uuid
 from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlencode
 
-from backend.schemas.common import EvidenceEvent
+from backend.schemas.common import EvidenceEvent, validate_public_borrower_id
 from backend.schemas.geo import (
     CountyRollup,
     CountyRollupResponse,
@@ -59,6 +57,7 @@ from backend.schemas.portfolio import (
     PortfolioPreviewRequest,
 )
 from backend.schemas.why import WhyPanel, WhyPanelSource
+from backend.services.county_names import county_name_for_fips
 from backend.services.databricks_sql import DatabricksSqlClient, DatabricksSqlError
 from backend.services.databricks_sql_helpers import qualify
 from backend.services.genie_answers import (
@@ -67,15 +66,15 @@ from backend.services.genie_answers import (
     GenieMessageResponse,
     GenieProof,
     GenieVisualizationSpec,
-)
-from backend.services.genie_answers import (
-    respond as genie_catalog_respond,
+    default_follow_up_questions,
 )
 from backend.services.genie_client import (
     GenieClientError,
     GenieResponse,
     ResilientGenieClient,
 )
+from backend.services.geography_scope import GeographyScope, load_geography_scope
+from backend.services.lakebase import LakebaseError, get_lakebase_client
 from backend.services.pii_redaction import (
     _FORBIDDEN_OUTPUT_KEYS,
     redact_borrower_row,
@@ -102,7 +101,10 @@ _BORROWER_360_COLUMNS: str = (
     "opportunity_score, confidence, recommended_offer_code, recommended_offer, "
     "why_now, evidence_ids, approval_status, owner_link_id, subject_property, "
     "avm_value, current_lien_balance, current_rate, ltv, related_property_count, "
-    "min_spread_bps_applied, min_equity_pct_applied, in_the_money"
+    "is_owner_occupied, is_investor, is_current_customer, is_former_customer, "
+    "is_competitor_lien, has_permit, listed_for_sale, second_pos_amount, "
+    "min_spread_bps_applied, min_equity_pct_applied, in_the_money, "
+    "current_lender_ref"
 )
 
 # Slice13-accuracy perf: mip.gold.borrower_dossier is a pre-joined superset
@@ -117,19 +119,20 @@ _BORROWER_DOSSIER_COLUMNS: str = (
 )
 
 _LEAD_POPULATION_COLUMNS: str = (
-    # `clip` is projected first so the repository boundary can surface the
-    # real Cotality CLIP on LeadSummary (fix for the cross-route CLIP
-    # inconsistency blocker 2026-04-22). `redact_lead_row` passes it
-    # through under the same key.
+    # `clip` is projected first so the repository boundary can derive the
+    # display-safe LeadSummary.clip surrogate. Raw Cotality CLIP stays below
+    # the redaction boundary by default.
     "clip, borrower_id, display_name, city, state, zip, segment_codes, "
     "equity_estimate, rate_spread_bps, opportunity_score, confidence, "
     "recommended_offer, why_now, evidence_ids, approval_status, "
+    "current_lender_ref, "
     # Secondary-filter fields (2026-04-23) -- carried through from
     # gold.borrower_360 into gold.lead_population so /segment-intelligence
     # can run real client-side predicates against occupancy, owner-link
     # (related properties), lien state, and purchase intent. Ordering
     # matches the gold DDL + CTAS (see sql/ddl/gold_lead_population.sql).
-    "is_owner_occupied, is_investor, related_property_count, "
+    "is_owner_occupied, is_investor, is_current_customer, "
+    "is_former_customer, is_competitor_lien, related_property_count, "
     "current_lien_balance, second_pos_amount, has_permit, listed_for_sale"
 )
 
@@ -260,42 +263,19 @@ class DatabricksPortfolioRepository:
     # the strings to SQL so a typo in a dropdown can't open a SQL-injection
     # vector.
     #
-    # Hole-finder #20: the "all N states" option used to hardcode
-    # ["IL","CA","FL","TX","WA","CO"]. That literal was one of 5 copies
-    # of the footprint that silently broke for tenants with a different
-    # state mix. It's now computed from `mip.ref.state_footprint` via
-    # `StateFootprintResolver` (see `_state_sets()` below). MSA
-    # groupings ("Chicago MSA", "CA + FL + TX", "IL + CA + WA") remain
-    # hardcoded here — they're lender-specific marketing labels and
-    # orthogonal to the per-state list. A lender whose footprint diverges
-    # would re-label them in the UI; do not over-build until that happens.
-    #
-    # Per-state-name entries ("florida", "california", ...) are injected
-    # at lookup time from the live footprint via `_state_sets()` — see
-    # that method for the merge rule. Keys are always lowercased so
-    # callers can do a case-insensitive match.
-    _STATIC_STATE_SETS: dict[str, list[str]] = {
-        "chicago msa":     ["IL"],
-        "texas":           ["TX"],
-        "ca + fl + tx":    ["CA", "FL", "TX"],
-        "il + ca + wa":    ["IL", "CA", "WA"],
-    }
+    # Geography labels are computed from current live coverage. The broad
+    # option is exactly "all N states" for the current N; individual state
+    # names come from StateFootprintResolver. No fixed MSA or demo-only
+    # shortcuts are accepted here.
 
     @classmethod
     def _state_sets(cls) -> dict[str, list[str]]:
-        """Build the active _STATE_SETS dict, injecting the live footprint.
+        """Build the active _STATE_SETS dict from live coverage.
 
-        Merge order (later keys override earlier — intentional so a
-        tenant-level override in MSA combos could in principle beat the
-        per-state entry of the same name, though none currently collide):
+        Active labels:
 
-          1. MSA / multi-state combos from ``_STATIC_STATE_SETS``.
-          2. Per-state-name entries from ``state_name_to_codes()``
-             (fixes the bug where "Florida" in the GEO dropdown
-             returned the whole population because the key was missing).
-          3. ``all N states`` computed from the footprint.
-          4. ``all 6 states`` legacy alias so a deep-linked URL from the
-             old UI still parses.
+          1. Per-state-name entries from ``state_name_to_codes()``.
+          2. ``all N states`` computed from current coverage.
 
         Called once per `_build_preview_predicates` invocation; the
         resolver caches the UC result for 300s so this is cheap.
@@ -307,23 +287,16 @@ class DatabricksPortfolioRepository:
         state_name_map = resolver.state_name_to_codes()
         all_key = f"all {len(footprint_codes)} states"
         return {
-            **cls._STATIC_STATE_SETS,
             **state_name_map,
             all_key: list(footprint_codes),
-            # Keep the legacy "all 6 states" key active while the frontend
-            # catches up, so a deep-linked URL from the old UI still parses.
-            # Maps to whatever the current footprint is — a tenant with 3
-            # states who opens an old bookmark sees "all 3 states"
-            # semantics under the legacy label.
-            "all 6 states": list(footprint_codes),
         }
 
     # Canonical `recommended_offer_code` values emitted by fn_next_best_offer
     # (see sql/uc_functions/fn_next_best_offer.sql). Keep in sync.
     _PRODUCT_CODES: dict[str, list[str]] = {
-        "refi":       ["refi"],
-        "heloc":      ["heloc"],
-        "cash-out":   ["cashout"],
+        "refi":       ["refi", "refi_plus_heloc"],
+        "heloc":      ["heloc", "refi_plus_heloc"],
+        "cash-out":   ["cash_out"],
         "purchase":   ["purchase"],
         "retention":  ["retention"],
     }
@@ -347,17 +320,27 @@ class DatabricksPortfolioRepository:
         clauses: list[str] = []
         params: dict[str, Any] = {}
 
-        # Geography — map display label to a list of state codes. The
-        # "all N states" option is computed from mip.ref.state_footprint
-        # (hole-finder #20); MSA groupings stay hardcoded for now.
+        # Geography — map reviewed display labels or explicit reviewed USPS
+        # state codes to predicates. Broad "all N states" stays equivalent
+        # to no geography predicate; gold.borrower_360 is already scoped to
+        # rows with a non-null state, and skipping the redundant state IN
+        # keeps broad builds aligned to the national funnel snapshots.
+        states: list[str] = []
+        if criteria.states:
+            states.extend(criteria.states)
         if criteria.geography:
             key = criteria.geography.lower()
-            states = cls._state_sets().get(key)
-            if states:
-                placeholders = ", ".join(f":geo_state_{i}" for i in range(len(states)))
-                clauses.append(f"state IN ({placeholders})")
-                for i, s in enumerate(states):
-                    params[f"geo_state_{i}"] = s
+            state_sets = cls._state_sets()
+            if key == "all" or (key.startswith("all ") and key in state_sets):
+                pass
+            else:
+                states.extend(state_sets.get(key) or [])
+        states = list(dict.fromkeys(states))
+        if states:
+            placeholders = ", ".join(f":geo_state_{i}" for i in range(len(states)))
+            clauses.append(f"state IN ({placeholders})")
+            for i, s in enumerate(states):
+                params[f"geo_state_{i}"] = s
 
         # Occupancy.
         if criteria.occupancy == "Owner-occupied":
@@ -365,21 +348,53 @@ class DatabricksPortfolioRepository:
         elif criteria.occupancy == "Non-owner-occupied":
             clauses.append("is_owner_occupied = FALSE")
 
-        # Lien status. We can cleanly discriminate "Free & clear"; the other
-        # values map to "has an open lien" until we land richer lien_type
-        # columns in gold (flagged in audit as STUB).
-        if criteria.lien_status == "Free & clear":
+        # Lien status. `second_pos_amount` is the backed HELOC / 2nd-lien
+        # signal in gold, so "Open HELOC" must not collapse into the generic
+        # first-lien predicate.
+        lien_status = (criteria.lien_status or "").strip().lower()
+        if lien_status in {"free & clear", "free and clear"}:
             clauses.append("current_lien_balance = 0")
-        elif criteria.lien_status in ("Open 1st lien", "Open HELOC"):
+        elif lien_status in {"open 1st lien", "open first lien"}:
             clauses.append("current_lien_balance > 0")
+            clauses.append("COALESCE(second_pos_amount, 0) = 0")
+        elif lien_status in {"open heloc", "open 2nd lien / heloc", "multiple liens"}:
+            clauses.append("COALESCE(second_pos_amount, 0) > 0")
 
-        # Lender relationship.
-        if criteria.lender_relationship == "Current customer":
+        owner_link = (criteria.owner_link or "").strip().lower()
+        if owner_link == "single-property owner":
+            clauses.append("COALESCE(related_property_count, 1) <= 1")
+        elif owner_link == "multi-property (2-4)":
+            clauses.append("COALESCE(related_property_count, 1) BETWEEN 2 AND 4")
+        elif owner_link == "portfolio investor (5+)":
+            clauses.append("COALESCE(related_property_count, 1) >= 5")
+
+        purchase_intent = (criteria.purchase_intent or "").strip().lower()
+        if purchase_intent == "listed for sale":
+            clauses.append("listed_for_sale = TRUE")
+        elif purchase_intent == "recent permit activity":
+            clauses.append("has_permit = TRUE")
+        elif purchase_intent == "both":
+            clauses.append("listed_for_sale = TRUE")
+            clauses.append("has_permit = TRUE")
+
+        # Lender relationship. These predicates only use backed gold flags:
+        # current-servicer tenant match, historical tenant relationship with
+        # no current tenant lien, and current competitor servicer.
+        relationship = (criteria.lender_relationship or "").strip().lower()
+        if relationship == "current customer":
             clauses.append("is_current_customer = TRUE")
-        elif criteria.lender_relationship == "Former customer":
-            clauses.append("is_current_customer = FALSE AND is_competitor_lien = FALSE")
-        elif criteria.lender_relationship == "Competitor customer":
+        elif relationship == "former customer":
+            clauses.append("is_former_customer = TRUE")
+        elif relationship in {"competitor customer", "competitor"}:
             clauses.append("is_competitor_lien = TRUE")
+
+        # Governed current-lender targeting. Values are display-safe refs
+        # from mip.ref.lender_dictionary (`Summit Mortgage`, `Competitor A`,
+        # etc.), never raw Cotality lender strings.
+        target_lender_ref = (criteria.target_lender_ref or "").strip()
+        if target_lender_ref and target_lender_ref.lower() != "all":
+            clauses.append("current_lender_ref = :target_lender_ref")
+            params["target_lender_ref"] = target_lender_ref
 
         # Product. "All products" / missing = no predicate.
         if criteria.product and criteria.product != "All products":
@@ -443,6 +458,35 @@ class DatabricksPortfolioRepository:
         f"FROM {qualify('gold', 'lead_population')}"
     )
 
+    _CAMPAIGN_INSERT_SQL = """
+    WITH inserted_campaign AS (
+      INSERT INTO mip_app.campaigns (name, owner_email, status, criteria)
+      VALUES (%(name)s, %(owner_email)s, 'draft', %(criteria)s::jsonb)
+      RETURNING campaign_id
+    ),
+    inserted_audit AS (
+      INSERT INTO mip_app.action_audit (
+        event_type, actor_email, entity_type, entity_id,
+        request_id, evidence_ids, metadata
+      )
+      SELECT
+        'PORTFOLIO_CREATE',
+        %(owner_email)s,
+        'campaign',
+        inserted_campaign.campaign_id::text,
+        %(request_id)s,
+        ARRAY[]::TEXT[],
+        %(metadata)s::jsonb
+      FROM inserted_campaign
+      RETURNING audit_id
+    )
+    SELECT
+      inserted_campaign.campaign_id,
+      inserted_audit.audit_id
+    FROM inserted_campaign
+    LEFT JOIN inserted_audit ON TRUE
+    """
+
     @staticmethod
     def _build_trend(points: list[tuple[str, float]]) -> KpiTrend:
         """Compute KpiTrend from oldest-first (date label, value) points.
@@ -454,8 +498,14 @@ class DatabricksPortfolioRepository:
         rows exist, then label the comparison date explicitly so the UI
         never says "7d ago" unless the data really represents that grain.
         """
+        notes: list[str] = []
+        original_start = points[0][0] if points else None
         while len(points) > 1 and points[0][1] == 0 and any(p[1] != 0 for p in points[1:]):
             points = points[1:]
+        if original_start and points and points[0][0] != original_start:
+            notes.append(
+                f"Comparison starts on {points[0][0]} because earlier snapshots predate this metric."
+            )
         series = [value for _, value in points]
         comparison_label = f"vs {points[0][0]}" if len(points) >= 2 else None
         if len(series) < 2 or series[0] == 0:
@@ -464,7 +514,19 @@ class DatabricksPortfolioRepository:
                 delta_pct=None,
                 direction="flat",
                 comparison_label=comparison_label,
+                note=" ".join(notes) or None,
             )
+        for index in range(1, len(points)):
+            previous = points[index - 1][1]
+            current = points[index][1]
+            if previous == 0:
+                continue
+            step_pct = abs((current - previous) / previous) * 100.0
+            if step_pct >= 8.0:
+                notes.append(
+                    f"Material step change on {points[index][0]}; verify rules or refresh context before presenting this as market movement."
+                )
+                break
         delta_pct = ((series[-1] - series[0]) / series[0]) * 100.0
         direction = "up" if delta_pct > 0.5 else "down" if delta_pct < -0.5 else "flat"
         return KpiTrend(
@@ -472,6 +534,7 @@ class DatabricksPortfolioRepository:
             delta_pct=round(delta_pct, 1),
             direction=direction,
             comparison_label=comparison_label,
+            note=" ".join(notes) or None,
         )
 
     def _load_funnel(
@@ -661,12 +724,12 @@ class DatabricksPortfolioRepository:
             ),
             approved_count=(
                 int(latest["approved_count"])
-                if latest.get("approved_count") is not None
+                if not where_clause and latest.get("approved_count") is not None
                 else None
             ),
             in_outreach_count=(
                 int(latest["in_outreach_count"])
-                if latest.get("in_outreach_count") is not None
+                if not where_clause and latest.get("in_outreach_count") is not None
                 else None
             ),
             data_refreshed_at=self._coerce_datetime(latest.get("snapshot_at")),
@@ -679,12 +742,37 @@ class DatabricksPortfolioRepository:
             self._cache.set(cache_key, preview, self._cache_ttl_s)
         return preview
 
-    def create(self, payload: PortfolioCreateRequest) -> PortfolioCreateResponse:
-        preview = self.preview(None)
+    def create(
+        self,
+        payload: PortfolioCreateRequest,
+        *,
+        actor: str | None = None,
+    ) -> PortfolioCreateResponse:
+        preview = self.preview(PortfolioPreviewRequest(criteria=payload.criteria))
+        row = get_lakebase_client().fetchone(
+            self._CAMPAIGN_INSERT_SQL,
+            {
+                "name": payload.name,
+                "owner_email": actor or "unknown",
+                "criteria": json.dumps(payload.criteria.model_dump(exclude_none=True)),
+                "request_id": f"portfolio-create-{uuid.uuid4()}",
+                "metadata": json.dumps(
+                    {
+                        "source": "portfolio_builder",
+                        "criteria": payload.criteria.model_dump(exclude_none=True),
+                        "marketable_population": preview.marketable_population,
+                    },
+                    sort_keys=True,
+                ),
+            },
+        )
+        if row is None or not row.get("campaign_id"):
+            raise LakebaseError("campaign insert returned no row")
         return PortfolioCreateResponse(
-            portfolio_id="module0-portfolio",
+            portfolio_id=str(row["campaign_id"]),
             name=payload.name,
             marketable_population=preview.marketable_population,
+            audit_event_id=str(row["audit_id"]) if row.get("audit_id") else None,
         )
 
     def get(self, portfolio_id: str) -> dict[str, object]:
@@ -724,6 +812,40 @@ class DatabricksSegmentRepository:
         "ORDER BY count DESC"
     )
 
+    _LIST_FILTERED_SQL_TPL = (
+        "WITH meta AS ( "
+        f"  SELECT {_SEGMENT_COLUMNS} "
+        f"  FROM {qualify('gold', 'segment_population')} "
+        "  WHERE state = '_ALL' "
+        "), base AS ( "
+        "  SELECT segment_codes, opportunity_score "
+        f"  FROM {qualify('gold', 'borrower_360')} "
+        "  WHERE {filter_clause} "
+        "), exploded_segments AS ( "
+        "  SELECT sc AS segment_code, opportunity_score "
+        "  FROM base "
+        "  LATERAL VIEW EXPLODE(segment_codes) s AS sc "
+        "  WHERE sc IS NOT NULL "
+        "), rollup AS ( "
+        "  SELECT "
+        "    segment_code, "
+        "    CAST(COUNT(*) AS INT) AS count, "
+        "    CAST(ROUND(AVG(opportunity_score)) AS INT) AS avg_score "
+        "  FROM exploded_segments "
+        "  GROUP BY segment_code "
+        ") "
+        "SELECT "
+        "  m.segment_code, "
+        "  m.name, "
+        "  COALESCE(r.count, 0) AS count, "
+        "  m.delta_vs_prior, "
+        "  COALESCE(r.avg_score, 0) AS avg_score, "
+        "  m.description, "
+        "  m.color "
+        "FROM meta AS m "
+        "LEFT JOIN rollup AS r ON r.segment_code = m.segment_code"
+    )
+
     # Canonical FE display order matching the prototype's seg-grid layout
     # (`design_files/Module 0 Prototype.html` lines 1546–1551 + the gold
     # `meta` VALUES table in `sql/transformations/gold_segment_population.sql`).
@@ -742,15 +864,47 @@ class DatabricksSegmentRepository:
         "retention",
     )
 
-    def _list_cache_key(self, portfolio_id: str | None) -> str:
-        return f"segments.list.{portfolio_id or '_ALL'}"
+    def _list_cache_key(
+        self,
+        portfolio_id: str | None,
+        *,
+        segment_codes: list[str] | None = None,
+        segment_mode: str = "any",
+        portfolio_criteria: PortfolioCriteria | None = None,
+    ) -> str:
+        portfolio_key = DatabricksGeoRepository._portfolio_cache_key(portfolio_criteria)
+        segment_key = ",".join(segment_codes or [])
+        return f"segments.list.{portfolio_id or '_ALL'}:{segment_mode}:{segment_key}:{portfolio_key}"
 
-    def list(self, portfolio_id: str | None) -> list[SegmentSummary]:
-        key = self._list_cache_key(portfolio_id)
+    def list(
+        self,
+        portfolio_id: str | None,
+        segment_codes: list[str] | None = None,
+        segment_mode: str = "any",
+        portfolio_criteria: PortfolioCriteria | None = None,
+    ) -> list[SegmentSummary]:
+        normalised_segments = DatabricksGeoRepository._normalise_geo_segments(segment_codes)
+        key = self._list_cache_key(
+            portfolio_id,
+            segment_codes=normalised_segments,
+            segment_mode=segment_mode,
+            portfolio_criteria=portfolio_criteria,
+        )
         cached = self._cache.get(key)
         if cached is not None:
             return cached
-        rows = self._client.execute(self._LIST_SQL)
+        if normalised_segments or portfolio_criteria is not None:
+            filter_clause, params = DatabricksGeoRepository._geo_filter_clause(
+                normalised_segments,
+                segment_mode=segment_mode,
+                portfolio_criteria=portfolio_criteria,
+            )
+            rows = self._client.execute(
+                self._LIST_FILTERED_SQL_TPL.format(filter_clause=filter_clause),
+                params,
+            )
+        else:
+            rows = self._client.execute(self._LIST_SQL)
         segments = [
             SegmentSummary(
                 code=row["segment_code"],
@@ -801,7 +955,7 @@ class DatabricksLeadRepository:
     _LIST_BASE_SQL_TEMPLATE = (
         f"SELECT {_LEAD_POPULATION_COLUMNS} "
         f"FROM {qualify('gold', 'lead_population')} "
-        "ORDER BY opportunity_score DESC, borrower_id ASC "
+        "ORDER BY rank_overall ASC, borrower_id ASC "
         "LIMIT {limit}"
     )
 
@@ -809,7 +963,7 @@ class DatabricksLeadRepository:
         f"SELECT {_LEAD_POPULATION_COLUMNS} "
         f"FROM {qualify('gold', 'lead_population')} "
         "WHERE array_contains(segment_codes, :segment) "
-        "ORDER BY opportunity_score DESC, borrower_id ASC "
+        "ORDER BY rank_overall ASC, borrower_id ASC "
         "LIMIT {limit}"
     )
 
@@ -817,7 +971,7 @@ class DatabricksLeadRepository:
         f"SELECT {_LEAD_POPULATION_COLUMNS} "
         f"FROM {qualify('gold', 'lead_population')} "
         "WHERE {segment_clause} "
-        "ORDER BY opportunity_score DESC, borrower_id ASC "
+        "ORDER BY rank_overall ASC, borrower_id ASC "
         "LIMIT {limit}"
     )
 
@@ -848,10 +1002,13 @@ class DatabricksLeadRepository:
         "  city, state, zip, segment_codes, "
         "  equity_estimate, rate_spread_bps, opportunity_score, confidence, "
         "  recommended_offer, why_now, evidence_ids, approval_status, "
-        "  is_owner_occupied, is_investor, related_property_count, "
+        "  current_lender_ref, "
+        "  is_owner_occupied, is_investor, is_current_customer, "
+        "  is_former_customer, is_competitor_lien, related_property_count, "
         "  current_lien_balance, second_pos_amount, has_permit, listed_for_sale "
         f"FROM {qualify('gold', 'borrower_360')} "
-        "WHERE 1=1 {state_clause} {zip_clause} {borrower_clause} {segment_clause} "
+        "WHERE 1=1 {state_clause} {zip_clause} {county_clause} {borrower_clause} "
+        "{segment_clause} {lender_clause} {portfolio_clause} "
         "ORDER BY opportunity_score DESC, borrower_id ASC "
         "LIMIT {limit}"
     )
@@ -863,13 +1020,18 @@ class DatabricksLeadRepository:
         limit: int | None = None,
         state: str | None = None,
         zip_code: str | None = None,
+        county_fips: str | None = None,
+        county_fipses: list[str] | None = None,
         state_codes: list[str] | None = None,
         zip_codes: list[str] | None = None,
         borrower_ids: list[str] | None = None,
         segment_codes: list[str] | None = None,
         segment_mode: str = "any",
+        target_lender_ref: str | None = None,
+        cohort_id: str | None = None,
+        portfolio_criteria: PortfolioCriteria | None = None,
     ) -> list[LeadSummary]:
-        _ = portfolio_id
+        _ = (portfolio_id, cohort_id)
         bounded = self._bound_limit(limit)
         segment_clause, segment_params = self._segment_filter_clause(
             segment=segment,
@@ -882,9 +1044,36 @@ class DatabricksLeadRepository:
         # _LIST_BY_GEO_SQL_TEMPLATE docstring above for the full rationale.
         normalised_states = self._normalise_states(state, state_codes)
         normalised_zips = self._normalise_zips(zip_code, zip_codes)
+        normalised_county = self._normalise_county_fips(county_fips, county_fipses)
         normalised_borrower_ids = self._normalise_borrower_ids(borrower_ids)
-        if normalised_states or normalised_zips or normalised_borrower_ids:
+        lender_clause = ""
+        lender_params: dict[str, object] = {}
+        if target_lender_ref and target_lender_ref.strip().lower() != "all":
+            lender_clause = "AND current_lender_ref = :target_lender_ref"
+            lender_params["target_lender_ref"] = target_lender_ref.strip()
+        portfolio_where, portfolio_params = DatabricksPortfolioRepository._build_preview_predicates(
+            portfolio_criteria,
+        )
+        portfolio_clause = (
+            "AND " + portfolio_where.removeprefix("WHERE ").strip()
+            if portfolio_where
+            else ""
+        )
+        if "target_lender_ref" in portfolio_params:
+            lender_clause = ""
+            lender_params = {}
+
+        if (
+            normalised_states
+            or normalised_zips
+            or normalised_county
+            or normalised_borrower_ids
+            or lender_clause
+            or portfolio_clause
+        ):
             params: dict[str, object] = dict(segment_params)
+            params.update(lender_params)
+            params.update(portfolio_params)
             state_clause = self._in_clause(
                 column="state",
                 prefix="state",
@@ -897,6 +1086,12 @@ class DatabricksLeadRepository:
                 values=normalised_zips,
                 params=params,
             )
+            county_clause = self._in_clause(
+                column="county_fips_5",
+                prefix="county",
+                values=normalised_county,
+                params=params,
+            )
             borrower_clause = self._in_clause(
                 column="borrower_id",
                 prefix="borrower_id",
@@ -907,14 +1102,20 @@ class DatabricksLeadRepository:
             sql = self._LIST_BY_GEO_SQL_TEMPLATE.format(
                 state_clause=state_clause,
                 zip_clause=zip_clause,
+                county_clause=county_clause,
                 borrower_clause=borrower_clause,
                 segment_clause=geo_segment_clause,
+                lender_clause=lender_clause,
+                portfolio_clause=portfolio_clause,
                 limit=bounded,
             )
             rows = self._client.execute(sql, params)
             return [LeadSummary(**redact_lead_row(r)) for r in rows]
 
         if segment_clause:
+            if lender_clause:
+                segment_clause = f"{segment_clause} {lender_clause}"
+                segment_params = {**segment_params, **lender_params}
             sql = self._LIST_FILTERED_SQL_TEMPLATE.format(
                 segment_clause=segment_clause,
                 limit=bounded,
@@ -952,13 +1153,29 @@ class DatabricksLeadRepository:
         return out
 
     @staticmethod
+    def _normalise_county_fips(
+        county_fips: str | None,
+        county_fipses: list[str] | None = None,
+    ) -> list[str]:
+        raw = ([county_fips] if county_fips else []) + (county_fipses or [])
+        out: list[str] = []
+        for value in raw:
+            code = str(value or "").strip()[:5]
+            if len(code) == 5 and code.isdigit() and code not in out:
+                out.append(code)
+        return out
+
+    @staticmethod
     def _normalise_borrower_ids(
         borrower_ids: list[str] | None,
     ) -> list[str]:
         out: list[str] = []
         for value in borrower_ids or []:
-            borrower_id = str(value or "").strip()
-            if borrower_id.startswith("B-") and borrower_id not in out:
+            try:
+                borrower_id = validate_public_borrower_id(str(value or ""))
+            except ValueError:
+                continue
+            if borrower_id not in out:
                 out.append(borrower_id)
         return out
 
@@ -1019,7 +1236,12 @@ class DatabricksLeadRepository:
                 for i in range(len(codes))
             )
             return clause, params
-        return "arrays_overlap(segment_codes, :segment_codes)", {"segment_codes": codes}
+        params = {f"segment_{i}": code for i, code in enumerate(codes)}
+        clause = " OR ".join(
+            f"array_contains(segment_codes, :segment_{i})"
+            for i in range(len(codes))
+        )
+        return f"({clause})", params
 
     @classmethod
     def _bound_limit(cls, limit: int | None) -> int:
@@ -1344,13 +1566,15 @@ class DatabricksGeoRepository:
     )
 
     _STATE_CACHE_KEY = "geo.state_rollups"
+    _SCOPE_CACHE_KEY = "geo.scope"
 
     # 2026-05-04 (FIX G, round 3): segment-aware per-state counts.
     # Computed live off mip.gold.borrower_360 (the FULL addressable
     # population — same source the unfiltered funnel snapshot reads),
-    # with `arrays_overlap` as the segment predicate so multi-segment
-    # borrowers are distinct-counted exactly once even when the filter
-    # selects two of their segments.
+    # with scalar `array_contains` predicates so Databricks SQL parameter
+    # binding never has to coerce a Python list into ARRAY<STRING>.
+    # Multi-segment borrowers are still distinct-counted exactly once even
+    # when the filter selects two of their segments.
     #
     # Round-2 (FIX G) queried lead_population, which has a score >= 50
     # floor baked in. After round-3 reverted the rollup filters (FIX α)
@@ -1360,43 +1584,174 @@ class DatabricksGeoRepository:
     # full population. Switching to borrower_360 here keeps both paths
     # at the same "addressable" definition, so toggling a segment
     # filter always cuts the count down from the same baseline.
-    _STATE_SEGMENT_FILTER_SQL_TPL = (
+    _STATE_FILTER_SQL_TPL = (
         "SELECT "
         "  state                                        AS state, "
         "  CAST(COUNT(*) AS INT)                         AS addressable, "
+        "  CAST(SUM(CASE WHEN in_the_money "
+        "                THEN 1 ELSE 0 END) AS INT)      AS in_the_money, "
         "  CAST(SUM(CASE WHEN opportunity_score >= 75 "
         "                THEN 1 ELSE 0 END) AS INT)      AS top_tier_opportunities, "
         "  CAST(ROUND(AVG(opportunity_score)) AS INT)    AS avg_score "
         f"FROM {qualify('gold', 'borrower_360')} "
-        "WHERE {segment_clause} "
+        "WHERE {filter_clause} "
         "GROUP BY state"
+    )
+
+    _COUNTY_FILTER_SQL_TPL = (
+        "WITH base AS ( "
+        "  SELECT "
+        "    county_fips_5 AS fips_5, "
+        "    state, "
+        "    opportunity_score, "
+        "    in_the_money, "
+        "    segment_codes "
+        f"  FROM {qualify('gold', 'borrower_360')} "
+        "  WHERE state = :state "
+        "    AND county_fips_5 IS NOT NULL "
+        "    AND LENGTH(county_fips_5) = 5 "
+        "    AND {filter_clause} "
+        "), aggregates AS ( "
+        "  SELECT "
+        "    fips_5, "
+        "    ANY_VALUE(state) AS state, "
+        "    CAST(COUNT(*) AS INT) AS addressable_borrowers, "
+        "    CAST(SUM(CASE WHEN in_the_money THEN 1 ELSE 0 END) AS INT) AS in_the_money_borrowers, "
+        "    CAST(SUM(CASE WHEN opportunity_score >= 75 THEN 1 ELSE 0 END) AS INT) AS high_opportunity_borrowers, "
+        "    CAST(ROUND(AVG(opportunity_score)) AS INT) AS avg_opportunity_score "
+        "  FROM base "
+        "  GROUP BY fips_5 "
+        "), exploded_segments AS ( "
+        "  SELECT fips_5, sc AS segment_code "
+        "  FROM base "
+        "  LATERAL VIEW EXPLODE(segment_codes) s AS sc "
+        "  WHERE sc IS NOT NULL "
+        "), segment_counts AS ( "
+        "  SELECT "
+        "    fips_5, "
+        "    segment_code, "
+        "    COUNT(*) AS cnt, "
+        "    ROW_NUMBER() OVER (PARTITION BY fips_5 ORDER BY COUNT(*) DESC, segment_code ASC) AS rn "
+        "  FROM exploded_segments "
+        "  GROUP BY fips_5, segment_code "
+        "), top_segment_per_county AS ( "
+        "  SELECT fips_5, segment_code AS top_segment_code "
+        "  FROM segment_counts "
+        "  WHERE rn = 1 "
+        ") "
+        "SELECT "
+        "  a.fips_5, "
+        "  a.state, "
+        "  CAST(NULL AS STRING) AS county_name, "
+        "  a.addressable_borrowers, "
+        "  a.in_the_money_borrowers, "
+        "  a.high_opportunity_borrowers, "
+        "  a.avg_opportunity_score, "
+        "  ts.top_segment_code, "
+        "  CAST(NULL AS STRING) AS snapshot_date "
+        "FROM aggregates AS a "
+        "LEFT JOIN top_segment_per_county AS ts ON ts.fips_5 = a.fips_5 "
+        "ORDER BY a.addressable_borrowers DESC"
+    )
+
+    _ZIP_FILTER_SQL_TPL = (
+        "WITH base AS ( "
+        "  SELECT "
+        "    zip, "
+        "    state, "
+        "    county_fips_5, "
+        "    borrower_id, "
+        "    opportunity_score, "
+        "    segment_codes "
+        f"  FROM {qualify('gold', 'borrower_360')} "
+        "  WHERE county_fips_5 = :fips_5 "
+        "    AND zip IS NOT NULL "
+        "    AND LENGTH(zip) = 5 "
+        "    AND {filter_clause} "
+        "), aggregates AS ( "
+        "  SELECT "
+        "    state, "
+        "    county_fips_5, "
+        "    zip, "
+        "    CAST(COUNT(*) AS INT) AS addressable_borrowers, "
+        "    CAST(ROUND(AVG(opportunity_score)) AS INT) AS avg_opportunity_score "
+        "  FROM base "
+        "  GROUP BY state, county_fips_5, zip "
+        "), exploded_segments AS ( "
+        "  SELECT state, county_fips_5, zip, sc AS segment_code "
+        "  FROM base "
+        "  LATERAL VIEW EXPLODE(segment_codes) s AS sc "
+        "  WHERE sc IS NOT NULL "
+        "), segment_counts AS ( "
+        "  SELECT "
+        "    state, "
+        "    county_fips_5, "
+        "    zip, "
+        "    segment_code, "
+        "    COUNT(*) AS cnt, "
+        "    ROW_NUMBER() OVER (PARTITION BY state, county_fips_5, zip ORDER BY COUNT(*) DESC, segment_code ASC) AS rn "
+        "  FROM exploded_segments "
+        "  GROUP BY state, county_fips_5, zip, segment_code "
+        "), top_segment_per_zip AS ( "
+        "  SELECT state, county_fips_5, zip, segment_code AS top_segment_code "
+        "  FROM segment_counts "
+        "  WHERE rn = 1 "
+        "), ranked_borrowers AS ( "
+        "  SELECT "
+        "    state, "
+        "    county_fips_5, "
+        "    zip, "
+        "    borrower_id, "
+        "    ROW_NUMBER() OVER (PARTITION BY state, county_fips_5, zip ORDER BY opportunity_score DESC, borrower_id ASC) AS rn "
+        "  FROM base "
+        "), sample_borrower_per_zip AS ( "
+        "  SELECT state, county_fips_5, zip, borrower_id AS sample_borrower_id "
+        "  FROM ranked_borrowers "
+        "  WHERE rn = 1 "
+        ") "
+        "SELECT "
+        "  a.zip, "
+        "  a.state, "
+        "  a.county_fips_5, "
+        "  a.addressable_borrowers, "
+        "  a.avg_opportunity_score, "
+        "  ts.top_segment_code, "
+        "  sb.sample_borrower_id, "
+        "  CAST(NULL AS STRING) AS snapshot_date "
+        "FROM aggregates AS a "
+        "LEFT JOIN top_segment_per_zip AS ts ON ts.state = a.state AND COALESCE(ts.county_fips_5, '') = COALESCE(a.county_fips_5, '') AND ts.zip = a.zip "
+        "LEFT JOIN sample_borrower_per_zip AS sb ON sb.state = a.state AND COALESCE(sb.county_fips_5, '') = COALESCE(a.county_fips_5, '') AND sb.zip = a.zip "
+        "ORDER BY a.addressable_borrowers DESC"
     )
 
     def state_rollups(
         self,
         segment_codes: list[str] | None = None,
         segment_mode: str = "any",
+        portfolio_criteria: PortfolioCriteria | None = None,
     ) -> StateRollupResponse:
-        if segment_codes:
+        if segment_codes or portfolio_criteria is not None:
             # Filtered path. Cache key includes the sorted tuple so two
             # callers asking the same filter share the cache while a
             # different filter doesn't poison the result. The unfiltered
             # `_ALL` path keeps its own _STATE_CACHE_KEY so the most
             # common request (no filter) stays warm.
-            normalised = sorted({c.strip() for c in segment_codes if c.strip()})
+            normalised = self._normalise_geo_segments(segment_codes)
+            portfolio_key = self._portfolio_cache_key(portfolio_criteria)
             cache_key = (
                 f"{self._STATE_CACHE_KEY}:filtered:{segment_mode}:"
-                f"{','.join(normalised)}"
+                f"{','.join(normalised)}:{portfolio_key}"
             )
             cached = self._cache.get(cache_key)
             if cached is not None:
                 return cached
-            segment_clause, params = self._state_segment_filter_clause(
+            filter_clause, params = self._geo_filter_clause(
                 normalised,
                 segment_mode=segment_mode,
+                portfolio_criteria=portfolio_criteria,
             )
-            sql = self._STATE_SEGMENT_FILTER_SQL_TPL.format(
-                segment_clause=segment_clause,
+            sql = self._STATE_FILTER_SQL_TPL.format(
+                filter_clause=filter_clause,
             )
             rows = self._client.execute(
                 sql,
@@ -1411,7 +1766,7 @@ class DatabricksGeoRepository:
                 StateRollup(
                     state=str(r.get("state") or "").upper()[:2],
                     addressable=int(r.get("addressable") or 0),
-                    in_the_money=0,
+                    in_the_money=int(r.get("in_the_money") or 0),
                     top_tier_opportunities=int(r.get("top_tier_opportunities") or 0),
                     avg_score=int(r.get("avg_score") or 0),
                     top_segment_code=None,
@@ -1465,29 +1820,124 @@ class DatabricksGeoRepository:
                 for i in range(len(segment_codes))
             )
             return clause, params
-        return "arrays_overlap(segment_codes, :segment_codes)", {"segment_codes": segment_codes}
+        params = {f"segment_{i}": code for i, code in enumerate(segment_codes)}
+        clause = " OR ".join(
+            f"array_contains(segment_codes, :segment_{i})"
+            for i in range(len(segment_codes))
+        )
+        return f"({clause})", params
 
-    def county_rollups(self, state: str) -> CountyRollupResponse:
+    @staticmethod
+    def _portfolio_cache_key(portfolio_criteria: PortfolioCriteria | None) -> str:
+        if portfolio_criteria is None:
+            return "_none"
+        return json.dumps(portfolio_criteria.model_dump(exclude_none=True), sort_keys=True)
+
+    @classmethod
+    def _geo_filter_clause(
+        cls,
+        segment_codes: list[str],
+        *,
+        segment_mode: str,
+        portfolio_criteria: PortfolioCriteria | None,
+    ) -> tuple[str, dict[str, object]]:
+        clauses: list[str] = []
+        params: dict[str, object] = {}
+        if segment_codes:
+            segment_clause, segment_params = cls._state_segment_filter_clause(
+                segment_codes,
+                segment_mode=segment_mode,
+            )
+            clauses.append(segment_clause)
+            params.update(segment_params)
+        portfolio_where, portfolio_params = DatabricksPortfolioRepository._build_preview_predicates(
+            portfolio_criteria,
+        )
+        if portfolio_where:
+            clauses.append(portfolio_where.removeprefix("WHERE ").strip())
+            params.update(portfolio_params)
+        return (" AND ".join(clauses) if clauses else "1 = 1"), params
+
+    @staticmethod
+    def _normalise_geo_segments(segment_codes: list[str] | None) -> list[str]:
+        if not segment_codes:
+            return []
+        out: list[str] = []
+        seen: set[str] = set()
+        for code in segment_codes:
+            normalised = str(code or "").strip()
+            if not normalised or normalised in seen:
+                continue
+            seen.add(normalised)
+            out.append(normalised)
+        return sorted(out)
+
+    @staticmethod
+    def _filtered_geo_cache_key(
+        prefix: str,
+        grain: str,
+        *,
+        segment_codes: list[str],
+        segment_mode: str,
+    ) -> str:
+        return (
+            f"{prefix}:{grain}:filtered:{segment_mode}:"
+            f"{','.join(segment_codes)}"
+        )
+
+    def county_rollups(
+        self,
+        state: str,
+        segment_codes: list[str] | None = None,
+        segment_mode: str = "any",
+        portfolio_criteria: PortfolioCriteria | None = None,
+    ) -> CountyRollupResponse:
         """Fetch per-county rollups for the given state.
 
         ``state`` is normalised to 2-char uppercase before the warehouse
         call so the response is stable regardless of UI casing. Returns
-        an empty list + ``snapshot_date=None`` when the state is outside
-        the 6-state footprint or the CTAS hasn't run yet.
+        an empty list + ``snapshot_date=None`` when the state has no
+        Cotality-backed county coverage or the CTAS hasn't run yet.
         """
         normalised = str(state or "").upper()[:2]
-        cache_key = f"geo.county_rollups:{normalised}"
+        normalised_segments = self._normalise_geo_segments(segment_codes)
+        use_filtered_path = bool(normalised_segments) or portfolio_criteria is not None
+        portfolio_key = self._portfolio_cache_key(portfolio_criteria)
+        cache_key = (
+            self._filtered_geo_cache_key(
+                "geo.county_rollups",
+                normalised,
+                segment_codes=normalised_segments,
+                segment_mode=segment_mode,
+            )
+            + f":{portfolio_key}"
+            if use_filtered_path
+            else f"geo.county_rollups:{normalised}"
+        )
         cached = self._cache.get(cache_key)
         if cached is not None:
             return cached
-        rows = self._client.execute(self._COUNTY_SQL, {"state": normalised}) or []
+        if use_filtered_path:
+            filter_clause, params = self._geo_filter_clause(
+                normalised_segments,
+                segment_mode=segment_mode,
+                portfolio_criteria=portfolio_criteria,
+            )
+            params["state"] = normalised
+            sql = self._COUNTY_FILTER_SQL_TPL.format(
+                filter_clause=filter_clause,
+            )
+            rows = self._client.execute(sql, params) or []
+        else:
+            rows = self._client.execute(self._COUNTY_SQL, {"state": normalised}) or []
         rollups = [
             CountyRollup(
                 fips_5=str(r.get("fips_5") or "")[:5],
                 state=str(r.get("state") or "").upper()[:2] or normalised,
                 county_name=(
                     str(r["county_name"]) if r.get("county_name") else None
-                ),
+                )
+                or county_name_for_fips(str(r.get("fips_5") or "")[:5]),
                 addressable_borrowers=int(r.get("addressable_borrowers") or 0),
                 in_the_money_borrowers=int(r.get("in_the_money_borrowers") or 0),
                 high_opportunity_borrowers=int(r.get("high_opportunity_borrowers") or 0),
@@ -1503,27 +1953,80 @@ class DatabricksGeoRepository:
         if rows:
             raw = rows[0].get("snapshot_date")
             snapshot_date = str(raw) if raw is not None else None
+        scope_note = self._scope_note_for_state(
+            normalised,
+            returned_count=len(rollups),
+        )
         response = CountyRollupResponse(
             state=normalised,
             rollups=rollups,
             snapshot_date=snapshot_date,
-            scope_note=(
-                "Cotality evaluation share: 1 anchor county per state"
-                if rollups
-                else None
-            ),
+            scope_note=scope_note if rollups else None,
         )
         self._cache.set(cache_key, response, self._cache_ttl_s)
         return response
 
-    def zip_rollups(self, fips_5: str) -> ZipRollupResponse:
+    def _geography_scope(self) -> GeographyScope | None:
+        cached = self._cache.get(self._SCOPE_CACHE_KEY)
+        if cached is not None:
+            return cached
+        try:
+            scope = load_geography_scope(self._client)
+        except Exception as exc:  # noqa: BLE001 -- scope copy is non-critical
+            log.warning("geo scope discovery failed: %s", exc)
+            return None
+        self._cache.set(self._SCOPE_CACHE_KEY, scope, self._cache_ttl_s)
+        return scope
+
+    def _scope_note_for_state(self, state: str, *, returned_count: int) -> str | None:
+        scope = self._geography_scope()
+        if scope is not None:
+            return scope.state_scope_label(state, returned_count=returned_count)
+        if returned_count <= 0:
+            return None
+        county_word = "county" if returned_count == 1 else "counties"
+        state_uc = str(state or "").upper()[:2]
+        return f"Cotality data coverage for {state_uc}: {returned_count:,} {county_word} returned"
+
+    def zip_rollups(
+        self,
+        fips_5: str,
+        segment_codes: list[str] | None = None,
+        segment_mode: str = "any",
+        portfolio_criteria: PortfolioCriteria | None = None,
+    ) -> ZipRollupResponse:
         """Fetch per-ZIP rollups for the given 5-char county FIPS."""
         normalised = str(fips_5 or "")[:5]
-        cache_key = f"geo.zip_rollups:{normalised}"
+        normalised_segments = self._normalise_geo_segments(segment_codes)
+        use_filtered_path = bool(normalised_segments) or portfolio_criteria is not None
+        portfolio_key = self._portfolio_cache_key(portfolio_criteria)
+        cache_key = (
+            self._filtered_geo_cache_key(
+                "geo.zip_rollups",
+                normalised,
+                segment_codes=normalised_segments,
+                segment_mode=segment_mode,
+            )
+            + f":{portfolio_key}"
+            if use_filtered_path
+            else f"geo.zip_rollups:{normalised}"
+        )
         cached = self._cache.get(cache_key)
         if cached is not None:
             return cached
-        rows = self._client.execute(self._ZIP_SQL, {"fips_5": normalised}) or []
+        if use_filtered_path:
+            filter_clause, params = self._geo_filter_clause(
+                normalised_segments,
+                segment_mode=segment_mode,
+                portfolio_criteria=portfolio_criteria,
+            )
+            params["fips_5"] = normalised
+            sql = self._ZIP_FILTER_SQL_TPL.format(
+                filter_clause=filter_clause,
+            )
+            rows = self._client.execute(sql, params) or []
+        else:
+            rows = self._client.execute(self._ZIP_SQL, {"fips_5": normalised}) or []
         rollups = [
             ZipRollup(
                 zip=str(r.get("zip") or "")[:5],
@@ -1588,26 +2091,16 @@ class DatabricksGenieRepository:
     4. On any other exception, re-raise so the router's 503 translation
        engages — we never swallow to a mock answer.
 
-    No path ever fabricates data. There used to be a "computed_fallback"
-    path that ran a small Python-templated SQL query when Genie was
-    down, but that was removed 2026-05-04 per user feedback ("we don't
-    want this app to be gimmicky at all"). When Genie is unreachable we
-    show the user a single honest message and let them retry; we don't
-    half-impersonate Genie with a hand-written intent matcher + SQL
-    template. Live Genie does conversational analytics; nothing else
-    pretends to.
-
-    The ``genie_answers`` catalog file remains in-tree for its
-    ``follow_up_questions`` lists (static UI prompt suggestions, not
-    data), and would be the natural seed if someone ever wires a
-    proper LLM-backed fallback. None of its hardcoded numeric content
-    reaches the wire.
+    No path ever fabricates data. When Genie is unreachable we show the
+    user a single honest message and let them retry; no answer body,
+    metric, table row, or recommendation is generated without live Genie
+    or trusted SQL proof.
     """
 
     _WARMING_MESSAGE = (
         "Genie is warming up — try that question again in a few seconds. "
         "Live answers come straight from the Mortgage Lead Intelligence "
-        "Genie space; no curated answers are served while it reconnects."
+        "Genie space once the connection is ready."
     )
 
     def __init__(
@@ -1632,6 +2125,7 @@ class DatabricksGenieRepository:
                 result = self._repair_text_only_genie_answer(
                     question=question,
                     original=result,
+                    conversation_id=conversation_id,
                 )
         except DependencyDownError:
             return self._degraded(question)
@@ -1647,6 +2141,7 @@ class DatabricksGenieRepository:
         *,
         question: str,
         original: GenieResponse,
+        conversation_id: str | None,
     ) -> GenieResponse:
         """Retry once when a data question returns narrative without a query.
 
@@ -1656,10 +2151,15 @@ class DatabricksGenieRepository:
         turn still lacks proof, the original policy-block path remains in force.
         """
         try:
-            repaired = self._genie.ask(_trusted_sql_repair_prompt(question))
+            repaired = self._genie.ask(
+                _trusted_sql_repair_prompt(question),
+                conversation_id=conversation_id or original.conversation_id,
+            )
         except (DependencyDownError, GenieClientError):
             return original
         if _genie_response_has_query_proof(repaired):
+            if original.conversation_id:
+                repaired.conversation_id = original.conversation_id
             return repaired
         return original
 
@@ -1670,15 +2170,12 @@ class DatabricksGenieRepository:
     def _degraded(self, question: str) -> GenieMessageResponse:
         """Honest "Genie is warming up" message with no fabricated content.
 
-        We pull the catalog match purely so we can carry over its
-        ``follow_up_questions`` (static UI suggestions like "Which zips
-        have the most in-the-money refi candidates?" — these are
-        editorial prompt help, not data). The catalog's answer body
-        and table_rows are intentionally discarded.
+        Prompt suggestions are questions only. The degraded path does not
+        inspect local analytics and cannot return rows, counts, or
+        borrower examples.
         """
-        catalog_answer = genie_catalog_respond(question)
         return GenieMessageResponse(
-            conversation_id=catalog_answer.conversation_id,
+            conversation_id="",
             question=question,
             answer=self._WARMING_MESSAGE,
             source="degraded",
@@ -1689,10 +2186,10 @@ class DatabricksGenieRepository:
                 row_count=0,
                 trusted=False,
                 known_data_gaps=_known_data_gaps(question, []),
-                conversation_id=catalog_answer.conversation_id,
+                conversation_id=None,
                 generated_at=datetime.now(UTC).isoformat(),
             ),
-            follow_up_questions=catalog_answer.follow_up_questions,
+            follow_up_questions=default_follow_up_questions(),
         )
 
 
@@ -1805,13 +2302,6 @@ def _adapt_genie_response(
     rows = _redact_genie_rows(result.sql_result_rows)
     trusted_sql = _trusted_sql_policy(result.sql_query, trusted_assets)
     question_hash = _genie_question_hash(question)
-    canonical = _canonical_genie_answer(
-        question=question,
-        result=result,
-        sql_client=sql_client,
-    )
-    if canonical is not None:
-        return canonical
     text_contains_pii = _answer_text_contains_pii(result.answer_text)
     lacks_trusted_proof = not result.sql_query or not trusted_assets
     gaps = _known_data_gaps_for_result(
@@ -1820,14 +2310,35 @@ def _adapt_genie_response(
         sql_query=result.sql_query,
         rows=rows,
     )
-    depends_on_pending_feeds = bool(
-        _pending_feed_gaps_from_material(result.sql_query or "")
-        or _pending_feed_gaps_from_rows(rows)
+    source_readiness_gap_disclosure = (
+        trusted_sql and _source_readiness_only_assets(trusted_assets)
     )
+    depends_on_pending_feeds = bool(
+        not source_readiness_gap_disclosure
+        and (
+            _pending_feed_gaps_from_material(result.sql_query or "")
+            or _pending_feed_gaps_from_rows(rows)
+        )
+    )
+    # Trusted SQL overlays are allowed to answer known grain-sensitive
+    # questions only when the live Genie turn is not unsafe. They must not
+    # mask PII, untrusted SQL, or pending-feed dependence. Text-only turns can
+    # still be answered through this explicit `trusted_sql` source so users see
+    # that the app used a governed canonical query rather than the raw Genie
+    # narrative.
+    unsafe_live_sql = bool(result.sql_query and not trusted_sql)
+    if not text_contains_pii and not unsafe_live_sql and not depends_on_pending_feeds:
+        canonical = _canonical_genie_answer(
+            question=question,
+            result=result,
+            sql_client=sql_client,
+        )
+        if canonical is not None:
+            return canonical
     if (
         text_contains_pii
         or lacks_trusted_proof
-        or (result.sql_query and not trusted_sql)
+        or unsafe_live_sql
         or depends_on_pending_feeds
     ):
         if depends_on_pending_feeds:
@@ -2016,6 +2527,34 @@ _US_STATE_FILTERS: tuple[tuple[str, str], ...] = (
     ("vermont", "VT"), ("virginia", "VA"), ("washington", "WA"),
     ("west virginia", "WV"), ("wisconsin", "WI"), ("wyoming", "WY"),
 )
+_AMBIGUOUS_STATE_CODES: frozenset[str] = frozenset({"HI", "ID", "IN", "ME", "OH", "OK", "OR"})
+
+
+def _ambiguous_state_code_match_is_contextual(
+    question: str, match: re.Match[str]
+) -> bool:
+    before = question[: match.start()]
+    after = question[match.end() :]
+    has_geo_preface = bool(
+        re.search(
+            r"(?:^|[\s(,/;:-])(?:in|for|from|state|states|market|coverage|geography|geo)[:\s]+$",
+            before,
+            flags=re.IGNORECASE,
+        )
+    )
+    if not has_geo_preface and not before.rstrip().endswith(("(", "[")):
+        return False
+    next_word = re.match(r"[\s,;:.-]+([A-Za-z]+)", after)
+    if next_word is None:
+        return True
+    return next_word.group(1).lower() in {"is", "are", "has", "have", "with", "and"}
+
+
+def _current_footprint_label() -> str:
+    from backend.services.state_footprint import get_state_footprint_resolver
+
+    codes = get_state_footprint_resolver().state_codes()
+    return " / ".join(codes) if codes else "configured"
 
 
 def _canonical_itm_state_scope(question: str) -> tuple[str, str] | None:
@@ -2023,7 +2562,14 @@ def _canonical_itm_state_scope(question: str) -> tuple[str, str] | None:
     for name, code in _US_STATE_FILTERS:
         name_pattern = r"(?<![a-z0-9])" + re.escape(name) + r"(?![a-z0-9])"
         code_pattern = r"(?<![A-Za-z0-9])" + re.escape(code) + r"(?![A-Za-z0-9])"
-        if re.search(name_pattern, q) or re.search(code_pattern, question):
+        code_match = False
+        exact_code_matches = tuple(re.finditer(code_pattern, question, flags=re.IGNORECASE))
+        if exact_code_matches:
+            code_match = code not in _AMBIGUOUS_STATE_CODES or any(
+                _ambiguous_state_code_match_is_contextual(question, match)
+                for match in exact_code_matches
+            )
+        if re.search(name_pattern, q) or code_match:
             return name.title(), code
     return None
 
@@ -2151,11 +2697,11 @@ def _canonical_genie_answer(
 ) -> GenieMessageResponse | None:
     """Return hard-gated trusted answers for known grain-sensitive metrics.
 
-    The Genie space is allowed to read metric views, but
-    ``borrower_opportunity_metric_view`` is exploded by segment. A plain
-    ``COUNT(*)`` there double-counts multi-segment borrowers. For the exact
-    executive question "how many borrowers are currently in-the-money", the
-    app replays the canonical gold-grain query and displays that proof.
+    The Genie space is allowed to read metric views, but some executive
+    questions have canonical gold-grain SQL that we use as a governed repair
+    when the live Genie turn returns text without SQL proof. Unsafe live SQL
+    or PII-bearing answers are blocked before this path so canonical repair
+    cannot mask a policy failure.
     """
     if sql_client is None:
         return None
@@ -2187,6 +2733,7 @@ def _canonical_genie_answer(
             message_id=result.message_id,
             question_hash=question_hash,
             sql_query=_CANONICAL_ITM_TOP_ZIPS_SQL,
+            source="trusted_sql",
         )
         if rows:
             top = rows[0]
@@ -2200,7 +2747,7 @@ def _canonical_genie_answer(
         else:
             answer = (
                 "The trusted borrower table returned no in-the-money ZIP rows for "
-                "the current Module 0 footprint."
+                "the current refreshed data coverage."
             )
         return GenieMessageResponse(
             conversation_id=result.conversation_id,
@@ -2209,7 +2756,7 @@ def _canonical_genie_answer(
             question_hash=question_hash,
             question=question,
             answer=answer,
-            source="genie",
+            source="trusted_sql",
             trusted_assets=trusted_assets,
             sql_query=_CANONICAL_ITM_TOP_ZIPS_SQL,
             row_count=len(rows),
@@ -2246,6 +2793,7 @@ def _canonical_genie_answer(
             message_id=result.message_id,
             question_hash=question_hash,
             sql_query=_CANONICAL_MSA_SCORE_SQL,
+            source="trusted_sql",
         )
         if rows:
             answer = (
@@ -2266,7 +2814,7 @@ def _canonical_genie_answer(
             question_hash=question_hash,
             question=question,
             answer=answer,
-            source="genie",
+            source="trusted_sql",
             trusted_assets=trusted_assets,
             sql_query=_CANONICAL_MSA_SCORE_SQL,
             row_count=len(rows),
@@ -2323,10 +2871,11 @@ def _canonical_genie_answer(
             message_id=result.message_id,
             question_hash=question_hash,
             sql_query=_CANONICAL_ITM_COUNT_BY_CITY_SQL,
+            source="trusted_sql",
         )
         answer = (
             f"There are {count_int:,} borrowers currently in-the-money in {city_scope} "
-            "within the current IL / CA / FL / TX / WA / CO share footprint. "
+            f"within the current {_current_footprint_label()} evaluation-share scope. "
             "This is a city-scoped unique borrower count from mip.gold.borrower_360; "
             "it is not the overall share total."
         )
@@ -2337,7 +2886,7 @@ def _canonical_genie_answer(
             question_hash=question_hash,
             question=question,
             answer=answer,
-            source="genie",
+            source="trusted_sql",
             trusted_assets=trusted_assets,
             sql_query=_CANONICAL_ITM_COUNT_BY_CITY_SQL,
             row_count=len(rows),
@@ -2386,6 +2935,7 @@ def _canonical_genie_answer(
         message_id=result.message_id,
         question_hash=question_hash,
         sql_query=sql_query,
+        source="trusted_sql",
     )
     geo_text = f" in {state_scope[0]} ({state_scope[1]})" if state_scope else ""
     answer = (
@@ -2400,7 +2950,7 @@ def _canonical_genie_answer(
         question_hash=question_hash,
         question=question,
         answer=answer,
-        source="genie",
+        source="trusted_sql",
         trusted_assets=trusted_assets,
         sql_query=sql_query,
         row_count=len(rows),
@@ -2472,6 +3022,13 @@ _PII_TEXT_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\b(?:\+?1[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?)\d{3}[-.\s]?\d{4}\b"),
     re.compile(r"\b\d{3}-\d{2}-\d{4}\b"),
     re.compile(
+        r"\b(?:clip|raw\s+clip|owner[_\s]*link(?:[_\s]*id)?|ownerlink(?:\s+id)?|"
+        r"owner_link_id|owner[_\s]*1[_\s]*identifier|owner[_\s]*id|ownerid|"
+        r"owner_identifier|owner\s+identifier|borrower_identifier|borrower\s+identifier)\b"
+        r"\s*[:#=]?\s*[A-Za-z0-9_-]*\d[A-Za-z0-9_-]{7,}\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
         r"\b\d{1,6}\s+[A-Za-z0-9 .'-]{2,40}\s+"
         r"(?:st|street|ave|avenue|rd|road|dr|drive|ln|lane|ct|court|"
         r"blvd|boulevard|way|pl|place|pkwy|parkway)\b",
@@ -2496,7 +3053,10 @@ def _trusted_genie_asset_names() -> frozenset[str]:
         ("gold", "borrower_360"),
         ("gold", "borrower_dossier"),
         ("gold", "evidence_events"),
+        ("gold", "source_readiness"),
         ("gold", "lockin_cohort"),
+        ("gold", "county_rollup"),
+        ("gold", "zip_rollup"),
         ("semantics", "lead_generation_metric_view"),
         ("semantics", "segment_performance_metric_view"),
         ("semantics", "borrower_opportunity_metric_view"),
@@ -2527,9 +3087,19 @@ def _is_select_only(sql: str | None) -> bool:
 
 
 def _trusted_sql_policy(sql: str | None, trusted_assets: list[str]) -> bool:
-    return bool(trusted_assets) and all(
-        asset in _TRUSTED_GENIE_ASSETS for asset in trusted_assets
-    ) and _is_select_only(sql) and not _sql_mentions_pii_columns(sql)
+    refs = _extract_asset_refs(sql)
+    return (
+        bool(refs)
+        and all(asset in _TRUSTED_GENIE_ASSETS for asset in refs)
+        and all(asset in _TRUSTED_GENIE_ASSETS for asset in trusted_assets)
+        and _is_select_only(sql)
+        and not _sql_mentions_pii_columns(sql)
+        and not _sql_has_unqualified_relations(_scrub_sql_for_policy(sql) or "")
+    )
+
+
+def _source_readiness_only_assets(assets: list[str]) -> bool:
+    return bool(assets) and all(asset.endswith(".gold.source_readiness") for asset in assets)
 
 
 def _bounded_genie_sql(sql: str) -> str:
@@ -2591,7 +3161,6 @@ _GENIE_IDENTIFIER_COLUMNS = {
     "census_tract",
     "tract",
     "borrower_id",
-    "clip",
     "id",
 }
 
@@ -2781,8 +3350,18 @@ def _label_column(rows: list[dict[str, Any]] | None, question: str) -> str | Non
         "product_label",
     ]
     q = question.lower()
-    if "zip" in q:
+    if "zip" in q or "postal" in q:
         preferred = ["zip", "zip_code", "zipcode", "postal_code", *preferred]
+    if "county" in q or "counties" in q:
+        preferred = [
+            "county_fips_5",
+            "county_fips",
+            "fips_5",
+            "fips",
+            "county",
+            "county_name",
+            *preferred,
+        ]
     if "fips" in q:
         preferred = ["fips", "fips_5", "county_fips", "county_fips_5", *preferred]
     if "cbsa" in q or "msa" in q:
@@ -2893,9 +3472,15 @@ def _borrower_ids_from_rows(rows: list[dict[str, Any]] | None) -> list[str]:
     ids: list[str] = []
     for row in rows or []:
         value = row.get("borrower_id")
-        if isinstance(value, str) and value.startswith("B-") and value not in ids:
-            ids.append(value)
-    return ids[:50]
+        if not isinstance(value, str):
+            continue
+        try:
+            borrower_id = validate_public_borrower_id(value)
+        except ValueError:
+            continue
+        if borrower_id not in ids:
+            ids.append(borrower_id)
+    return ids
 
 
 def _row_values(
@@ -2914,6 +3499,10 @@ def _row_values(
             if upper:
                 value = value.upper()
             if digits is not None:
+                if re.fullmatch(r"\d+\.0", value):
+                    value = value.split(".", 1)[0]
+                if re.fullmatch(r"\d+", value) and len(value) < digits:
+                    value = value.zfill(digits)
                 match = re.fullmatch(rf"\d{{{digits}}}", value)
                 if not match:
                     continue
@@ -2929,7 +3518,7 @@ def _segment_codes_from_question(question: str) -> list[str]:
     codes: list[str] = []
     if re.search(r"\b(in[-\s]?the[-\s]?money|itm|refi|refinance)\b", q):
         codes.append("itm")
-    if "home equity" in q or "heloc" in q or "cash-out" in q or "cash out" in q:
+    if "home equity" in q or "heloc" in q:
         codes.append("equity")
     if "investor" in q or "multi-property" in q or "multi property" in q:
         codes.append("investor")
@@ -2942,9 +3531,136 @@ def _segment_codes_from_question(question: str) -> list[str]:
     return list(dict.fromkeys(codes))
 
 
-_MAX_COHORT_ROUTE_ZIPS = 12
-_MAX_COHORT_ROUTE_STATES = 10
-_MAX_COHORT_ROUTE_BORROWERS = 10
+def _portfolio_criteria_from_question(question: str) -> dict[str, Any]:
+    q = question.lower()
+    criteria: dict[str, Any] = {}
+    if re.search(r"\b(owner[-\s]?occupied|primary residence)\b", q):
+        criteria["occupancy"] = "Owner-occupied"
+    elif re.search(r"\b(non[-\s]?owner[-\s]?occupied|investment property)\b", q):
+        criteria["occupancy"] = "Non-owner-occupied"
+
+    if re.search(r"\b(open|active)\s+(heloc|second lien|2nd lien)\b", q):
+        criteria["lien_status"] = "Open HELOC"
+    elif re.search(r"\b(open|active)\s+(first lien|1st lien)\b", q):
+        criteria["lien_status"] = "Open 1st lien"
+    elif re.search(r"\b(free\s*(?:&|and)\s*clear)\b", q):
+        criteria["lien_status"] = "Free & clear"
+
+    if re.search(r"\bsingle[-\s]?property owner\b", q):
+        criteria["owner_link"] = "Single-property owner"
+    elif re.search(r"\b(multi[-\s]?property|2[-\s]*4 properties)\b", q):
+        criteria["owner_link"] = "Multi-property (2-4)"
+    elif re.search(r"\b(portfolio investor|5\+ properties)\b", q):
+        criteria["owner_link"] = "Portfolio investor (5+)"
+
+    if "listed for sale" in q:
+        criteria["purchase_intent"] = "Listed for sale"
+    elif "permit" in q:
+        criteria["purchase_intent"] = "Recent permit activity"
+
+    if "cash-out" in q or "cash out" in q:
+        criteria["product"] = "Cash-out"
+    elif re.search(r"\bheloc\b", q):
+        criteria["product"] = "HELOC"
+    elif re.search(r"\b(retention|recapture)\b", q):
+        criteria["product"] = "Retention"
+
+    if "current customer" in q:
+        criteria["lender_relationship"] = "Current customer"
+    elif "former customer" in q:
+        criteria["lender_relationship"] = "Former customer"
+    elif "competitor" in q:
+        criteria["lender_relationship"] = "Competitor customer"
+
+    equity_match = re.search(
+        r"(?:equity|ltv|loan[-\s]?to[-\s]?value)[^\d]{0,24}(15|25|40)\s*%",
+        q,
+    )
+    if equity_match:
+        criteria["min_equity_pct_label"] = f"≥ {equity_match.group(1)}%"
+    return criteria
+
+
+def _portfolio_criteria_from_sql(sql_query: str | None) -> dict[str, Any]:
+    if not sql_query:
+        return {}
+    sql = re.sub(r"\s+", " ", sql_query.strip().lower())
+    if not sql:
+        return {}
+
+    criteria: dict[str, Any] = {}
+    if re.search(r"\bis_owner_occupied\s*=\s*(true|1)\b", sql) or re.search(
+        r"\bwhere\s+is_owner_occupied\b", sql
+    ):
+        criteria["occupancy"] = "Owner-occupied"
+    elif re.search(r"\bis_owner_occupied\s*=\s*(false|0)\b", sql):
+        criteria["occupancy"] = "Non-owner-occupied"
+
+    second_pos_positive = bool(
+        re.search(r"\bcoalesce\(\s*second_pos_amount\s*,\s*0\s*\)\s*>\s*0\b", sql)
+        or re.search(r"\bsecond_pos_amount\s*>\s*0\b", sql)
+    )
+    second_pos_zero = bool(
+        re.search(r"\bcoalesce\(\s*second_pos_amount\s*,\s*0\s*\)\s*=\s*0\b", sql)
+        or re.search(r"\bsecond_pos_amount\s*=\s*0\b", sql)
+        or re.search(r"\bsecond_pos_amount\s+is\s+null\b", sql)
+    )
+    first_pos_positive = bool(
+        re.search(r"\bcoalesce\(\s*current_lien_balance\s*,\s*0\s*\)\s*>\s*0\b", sql)
+        or re.search(r"\bcurrent_lien_balance\s*>\s*0\b", sql)
+    )
+    first_pos_zero = bool(
+        re.search(r"\bcoalesce\(\s*current_lien_balance\s*,\s*0\s*\)\s*<=\s*0\b", sql)
+        or re.search(r"\bcurrent_lien_balance\s*<=\s*0\b", sql)
+        or re.search(r"\bcurrent_lien_balance\s+is\s+null\b", sql)
+    )
+    if second_pos_positive:
+        criteria["lien_status"] = "Open HELOC"
+    elif first_pos_positive and second_pos_zero:
+        criteria["lien_status"] = "Open 1st lien"
+    elif first_pos_zero and second_pos_zero:
+        criteria["lien_status"] = "Free & clear"
+
+    if re.search(r"\bcoalesce\(\s*related_property_count\s*,\s*1\s*\)\s*<=\s*1\b", sql):
+        criteria["owner_link"] = "Single-property owner"
+    elif re.search(
+        r"\bcoalesce\(\s*related_property_count\s*,\s*1\s*\)\s+between\s+2\s+and\s+4\b",
+        sql,
+    ):
+        criteria["owner_link"] = "Multi-property (2-4)"
+    elif re.search(r"\bcoalesce\(\s*related_property_count\s*,\s*1\s*\)\s*>=\s*5\b", sql):
+        criteria["owner_link"] = "Portfolio investor (5+)"
+
+    has_listing = bool(re.search(r"\blisted_for_sale\s*=\s*true\b", sql))
+    has_permit = bool(re.search(r"\bhas_permit\s*=\s*true\b", sql))
+    if has_listing and has_permit:
+        criteria["purchase_intent"] = "Both"
+    elif has_listing:
+        criteria["purchase_intent"] = "Listed for sale"
+    elif has_permit:
+        criteria["purchase_intent"] = "Recent permit activity"
+
+    if re.search(r"\bis_current_customer\s*=\s*true\b", sql):
+        criteria["lender_relationship"] = "Current customer"
+    elif re.search(r"\bis_former_customer\s*=\s*true\b", sql):
+        criteria["lender_relationship"] = "Former customer"
+    elif re.search(r"\bis_competitor_lien\s*=\s*true\b", sql):
+        criteria["lender_relationship"] = "Competitor customer"
+
+    if re.search(r"\brecommended_offer_code\s*=\s*'cash_out'\b", sql) or re.search(
+        r'\brecommended_offer_code\s*=\s*"cash_out"\b',
+        sql,
+    ) or re.search(r"\brecommended_offer_code\s+in\s*\([^)]*'cash_out'[^)]*\)", sql):
+        criteria["product"] = "Cash-out"
+    elif re.search(r"\brecommended_offer_code\s*=\s*'retention'\b", sql):
+        criteria["product"] = "Retention"
+    elif re.search(r"\brecommended_offer_code\s*=\s*'heloc'\b", sql):
+        criteria["product"] = "HELOC"
+
+    equity_match = re.search(r"\bequity_pct\s*>=\s*(15|25|40)\b", sql)
+    if equity_match:
+        criteria["min_equity_pct_label"] = f"≥ {equity_match.group(1)}%"
+    return criteria
 
 
 def _route_from_answer_rows(
@@ -2952,28 +3668,37 @@ def _route_from_answer_rows(
     question: str,
     rows: list[dict[str, Any]] | None,
     borrower_ids: list[str],
+    sql_query: str | None = None,
 ) -> tuple[str, dict[str, Any]]:
     params: dict[str, str] = {}
     filter_criteria: dict[str, Any] = {}
     zips = _row_values(rows, "zip", "zip_code", "zipcode", "postal_code", digits=5)
+    counties = _row_values(rows, "county_fips_5", "county_fips", "fips_5", "fips", digits=5)
     states = _row_values(rows, "state", "state_code", upper=True)
+    if states and re.search(r"\bwhich\s+state\b|\bwhat\s+state\b", question.lower()):
+        states = states[:1]
     segment_codes = _segment_codes_from_question(question)
+    portfolio_criteria = {
+        **_portfolio_criteria_from_question(question),
+        **_portfolio_criteria_from_sql(sql_query),
+    }
 
     if borrower_ids:
-        route_borrower_ids = borrower_ids[:_MAX_COHORT_ROUTE_BORROWERS]
-        filter_criteria["borrower_ids"] = route_borrower_ids
-        filter_criteria["route_limit"] = _MAX_COHORT_ROUTE_BORROWERS
-        params["borrower_ids"] = ",".join(route_borrower_ids)
+        filter_criteria["borrower_ids"] = borrower_ids
+        params["borrower_ids"] = ",".join(borrower_ids)
     elif zips:
-        route_zips = zips[:_MAX_COHORT_ROUTE_ZIPS]
-        params["zips"] = ",".join(route_zips)
-        filter_criteria["zips"] = route_zips
-        filter_criteria["route_limit"] = _MAX_COHORT_ROUTE_ZIPS
+        params["zips"] = ",".join(zips)
+        filter_criteria["zips"] = zips
+    elif counties:
+        if len(counties) == 1:
+            params["county"] = counties[0]
+            filter_criteria["county"] = counties[0]
+        else:
+            params["counties"] = ",".join(counties)
+            filter_criteria["counties"] = counties
     elif states:
-        route_states = states[:_MAX_COHORT_ROUTE_STATES]
-        params["states"] = ",".join(route_states)
-        filter_criteria["states"] = route_states
-        filter_criteria["route_limit"] = _MAX_COHORT_ROUTE_STATES
+        params["states"] = ",".join(states)
+        filter_criteria["states"] = states
 
     if segment_codes:
         if len(segment_codes) == 1:
@@ -2983,6 +3708,22 @@ def _route_from_answer_rows(
             params["segment_mode"] = "all"
         filter_criteria["segment_codes"] = segment_codes
         filter_criteria["segment_mode"] = "all" if len(segment_codes) > 1 else "any"
+
+    if portfolio_criteria:
+        filter_criteria["portfolio_criteria"] = portfolio_criteria
+        for key in (
+            "occupancy",
+            "lien_status",
+            "lender_relationship",
+            "product",
+            "target_lender_ref",
+            "min_equity_pct_label",
+            "owner_link",
+            "purchase_intent",
+        ):
+            value = portfolio_criteria.get(key)
+            if isinstance(value, str) and value.strip():
+                params[key] = value
 
     if params:
         return f"/lead-queue?{urlencode(params)}", filter_criteria
@@ -2999,13 +3740,14 @@ def _suggest_genie_actions(
     message_id: str | None,
     question_hash: str | None,
     sql_query: str | None,
+    source: str = "genie",
 ) -> list[GenieActionSuggestion]:
     actions: list[GenieActionSuggestion] = []
     borrower_ids = _borrower_ids_from_rows(rows)
     row_count = len(rows) if rows else 0
     q = question.lower()
     base_criteria: dict[str, Any] = {
-        "source": "genie",
+        "source": source,
         "source_assets": trusted_assets,
         "visualization_kind": visualization.kind if visualization else None,
         "row_count": row_count,
@@ -3017,6 +3759,7 @@ def _suggest_genie_actions(
         question=question,
         rows=rows,
         borrower_ids=borrower_ids,
+        sql_query=sql_query,
     )
     if result_filters:
         base_criteria["result_filters"] = result_filters
@@ -3045,7 +3788,7 @@ def _suggest_genie_actions(
                 criteria=criteria,
             )
         )
-    if row_count > 0:
+    if row_count > 0 and result_filters:
         criteria = dict(base_criteria)
         actions.append(
             GenieActionSuggestion(
@@ -3084,17 +3827,6 @@ def _suggest_genie_actions(
                 criteria=criteria,
             )
         )
-    criteria = dict(base_criteria)
-    actions.append(
-        GenieActionSuggestion(
-            id="export-insight",
-            label="Record demo-ready insight",
-            action_type="export_insight",
-            description="Record an audited insight export for this Genie answer.",
-            borrower_ids=borrower_ids,
-            criteria=criteria,
-        )
-    )
     return actions[:5]
 
 
@@ -3159,7 +3891,6 @@ def _normalise_sql_ref(ref: str) -> str:
 
 _GENIE_PII_SQL_COLUMNS: frozenset[str] = frozenset({
     *_FORBIDDEN_OUTPUT_KEYS,
-    "clip",
     "owner_link_id",
     "owner_name",
     "owner_names",
@@ -3181,10 +3912,221 @@ _GENIE_PII_SQL_COLUMNS: frozenset[str] = frozenset({
 })
 
 
+_RAW_IDENTIFIER_SQL_LITERAL_RE = re.compile(
+    rf"(?<![A-Za-z0-9_])(?:{_SQL_IDENT_RE}\s*\.\s*)?"
+    r"`?(?:clip|raw_clip|owner_link_id|owner_1_identifier|borrower_identifier)`?"
+    r"\s*(?:"
+    r"=\s*(?:CAST\s*\(\s*)?(?:'[^']*[0-9][^']{7,}'|[0-9]{8,})"
+    r"|IN\s*\([^)]*(?:'[^']*[0-9][^']{7,}'|[0-9]{8,})"
+    r")",
+    re.IGNORECASE,
+)
+_LONG_RAW_IDENTIFIER_LITERAL_RE = re.compile(
+    r"(?:'[^']*[0-9][^']{7,}'|[0-9]{8,})",
+    re.IGNORECASE,
+)
+_SENSITIVE_SQL_IDENTIFIER_RE = re.compile(
+    rf"(?<![A-Za-z0-9_])(?:{_SQL_IDENT_RE}\s*\.\s*)?"
+    r"`?(?:clip|raw_clip|owner_link_id|owner_1_identifier|borrower_identifier)`?"
+    r"(?![A-Za-z0-9_])",
+    re.IGNORECASE,
+)
+
+
+def _sql_has_raw_identifier_literal(sql: str) -> bool:
+    if _RAW_IDENTIFIER_SQL_LITERAL_RE.search(sql):
+        return True
+    return bool(
+        _LONG_RAW_IDENTIFIER_LITERAL_RE.search(sql)
+        and _SENSITIVE_SQL_IDENTIFIER_RE.search(sql)
+    )
+
+
+def _projection_has_wildcard_expansion(term: str) -> bool:
+    compact = re.sub(
+        r"\s*\.\s*",
+        ".",
+        re.sub(r"\s+", " ", term.replace("`", "")).strip(),
+    ).lower()
+    if re.fullmatch(
+        r"(?:count|approx_count_distinct)\s*\(\s*\*\s*\)(?:\s+as\s+[a-z_][a-z0-9_]*)?",
+        compact,
+    ):
+        return False
+    if compact.startswith("*") or re.match(r"^(?:[a-z_][a-z0-9_]*\.)+\*", compact):
+        return True
+    for match in re.finditer(r"\*", compact):
+        before = compact[: match.start()].rstrip()
+        after = compact[match.end() :].lstrip()
+        previous = before[-1:] if before else ""
+        next_char = after[:1]
+        if previous in {"(", "."} or next_char in {"", ")", ","} or after.startswith("except"):
+            return True
+    return False
+
+
+def _sql_has_wildcard_expansion(sql: str) -> bool:
+    compact = re.sub(
+        r"\s*\.\s*",
+        ".",
+        re.sub(r"\s+", " ", sql.replace("`", "")).strip(),
+    ).lower()
+    compact = re.sub(
+        r"\b(?:count|approx_count_distinct)\s*\(\s*\*\s*\)",
+        "safe_count_star()",
+        compact,
+        flags=re.IGNORECASE,
+    )
+    if re.search(r"\bselect\s+\*", compact) or re.search(r",\s*\*", compact):
+        return True
+    for match in re.finditer(r"\*", compact):
+        before = compact[: match.start()].rstrip()
+        after = compact[match.end() :].lstrip()
+        previous = before[-1:] if before else ""
+        next_char = after[:1]
+        if previous in {"(", ".", ","} or next_char in {"", ")", ","} or after.startswith("except"):
+            return True
+    return False
+
+
+def _cte_names(sql: str) -> set[str]:
+    names: set[str] = set()
+    for match in re.finditer(
+        rf"(?:\bwith\b|,)\s+({_SQL_IDENT_RE})\s+as\s*\(",
+        sql,
+        flags=re.IGNORECASE,
+    ):
+        names.add(match.group(1).strip("`").lower())
+    return names
+
+
+def _split_top_level_commas(text: str) -> list[str]:
+    parts: list[str] = []
+    start = 0
+    depth = 0
+    in_quote: str | None = None
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if in_quote:
+            if char == in_quote:
+                in_quote = None
+            index += 1
+            continue
+        if char in {"'", '"', "`"}:
+            in_quote = char
+        elif char == "(":
+            depth += 1
+        elif char == ")" and depth > 0:
+            depth -= 1
+        elif char == "," and depth == 0:
+            parts.append(text[start:index])
+            start = index + 1
+        index += 1
+    parts.append(text[start:])
+    return parts
+
+
+def _iter_from_clause_segments(sql: str) -> list[str]:
+    clause_boundary = re.compile(
+        r"\b(?:where|group\s+by|order\s+by|having|limit|qualify|union|intersect|except)\b",
+        flags=re.IGNORECASE,
+    )
+    segments: list[str] = []
+    for match in re.finditer(r"\bfrom\b", sql, flags=re.IGNORECASE):
+        start = match.end()
+        depth = 0
+        end = len(sql)
+        index = start
+        while index < len(sql):
+            char = sql[index]
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                if depth == 0:
+                    end = index
+                    break
+                depth -= 1
+            if depth == 0:
+                boundary = clause_boundary.match(sql, index)
+                if boundary is not None:
+                    end = index
+                    break
+            index += 1
+        segments.append(sql[start:end])
+    return segments
+
+
+def _relation_refs(sql: str) -> list[str]:
+    seen: list[str] = []
+    relation_pattern = re.compile(
+        rf"\b(?:from|join)\s+({_SQL_IDENT_RE}(?:\s*\.\s*{_SQL_IDENT_RE}){{0,2}})(?!\s*\.)",
+        flags=re.IGNORECASE,
+    )
+    parenthesized_relation_pattern = re.compile(
+        rf"\b(?:from|join)\s*\(\s*({_SQL_IDENT_RE}(?:\s*\.\s*{_SQL_IDENT_RE}){{0,2}})\s*\)",
+        flags=re.IGNORECASE,
+    )
+    for match in relation_pattern.finditer(sql):
+        ref = _normalise_sql_ref(match.group(1))
+        if ref and ref not in seen:
+            seen.append(ref)
+    for match in parenthesized_relation_pattern.finditer(sql):
+        ref = _normalise_sql_ref(match.group(1))
+        if ref and ref not in seen:
+            seen.append(ref)
+
+    leading_relation = re.compile(
+        rf"^\s*({_SQL_IDENT_RE}(?:\s*\.\s*{_SQL_IDENT_RE}){{0,2}})(?!\s*\.)",
+        flags=re.IGNORECASE,
+    )
+    parenthesized_leading_relation = re.compile(
+        rf"^\s*\(\s*({_SQL_IDENT_RE}(?:\s*\.\s*{_SQL_IDENT_RE}){{0,2}})\s*\)",
+        flags=re.IGNORECASE,
+    )
+    for segment in _iter_from_clause_segments(sql):
+        for part in _split_top_level_commas(segment):
+            stripped = part.lstrip()
+            if re.match(r"^\(\s*(?:select|with)\b", stripped, flags=re.IGNORECASE):
+                continue
+            match = leading_relation.match(part) or parenthesized_leading_relation.match(part)
+            if match is None:
+                continue
+            ref = _normalise_sql_ref(match.group(1))
+            if ref and ref not in seen:
+                seen.append(ref)
+    return seen
+
+
+def _sql_has_unqualified_relations(sql: str) -> bool:
+    ctes = _cte_names(sql)
+    for ref in _relation_refs(sql):
+        parts = ref.split(".")
+        if len(parts) == 1 and parts[0] not in ctes:
+            return True
+    return False
+
+
 def _sql_mentions_pii_columns(sql: str | None) -> bool:
+    if sql and _sql_has_raw_identifier_literal(sql):
+        return True
     scrubbed = _scrub_sql_for_policy(sql)
     if not scrubbed:
         return False
+    if _sql_has_wildcard_expansion(scrubbed):
+        return True
+    select_match = re.search(r"\bselect\b(?P<select>.*?)\bfrom\b", scrubbed, re.IGNORECASE | re.DOTALL)
+    if select_match is not None:
+        select_list = select_match.group("select")
+        projected_terms = [term.strip() for term in select_list.split(",")]
+        for term in projected_terms:
+            if _projection_has_wildcard_expansion(term):
+                return True
+            if (
+                re.search(r"(?<![A-Za-z0-9_])(?:[A-Za-z_][A-Za-z0-9_]*\.)?clip(?![A-Za-z0-9_])", term)
+                and not re.search(r"\b(count|approx_count_distinct)\s*\(", term, flags=re.IGNORECASE)
+            ):
+                return True
     normalised = re.sub(r"[^a-z0-9_]+", " ", scrubbed.lower())
     tokens = set(normalised.split())
     return bool(tokens & _GENIE_PII_SQL_COLUMNS)
@@ -3203,14 +4145,9 @@ def _extract_asset_refs(sql: str | None) -> list[str]:
     if not policy_sql:
         return []
 
-    table_pattern = re.compile(
-        rf"\b(?:from|join)\s+({_SQL_IDENT_RE}(?:\s*\.\s*{_SQL_IDENT_RE}){{1,2}})(?!\s*\.)",
-        flags=re.IGNORECASE,
-    )
     seen: list[str] = []
-    for match in table_pattern.findall(policy_sql):
-        ref = _normalise_sql_ref(match)
-        if ref and ref not in seen:
+    for ref in _relation_refs(policy_sql):
+        if ref and len(ref.split(".")) >= 2 and ref not in seen:
             seen.append(ref)
     return seen
 

@@ -7,7 +7,7 @@ match what the raw Cotality Delta Share actually says about that
 property. This tool:
 
 1. Samples N random CLIPs from ``mip.gold.borrower_360`` stratified
-   across the six-state footprint (IL/CA/FL/TX/WA/CO) with a mix of
+   across the current refreshed geography coverage with a mix of
    high/mid/low ``opportunity_score``.
 2. For each CLIP:
    a. Pulls the raw-share rows (``entrada_eval_voluntary_lien_status_
@@ -30,7 +30,7 @@ Reproducibility
 ``python tools/e2e_borrower_audit.py --sample-size 20 --seed 42`` pins
 the deterministic selection. The sampler uses ``XXHASH64(clip)`` to
 produce a stable, seed-driven ordering without ``ORDER BY RAND()``
-(which on a 5.16M-row table is expensive and non-deterministic across
+(which is expensive and non-deterministic across
 re-runs).
 
 Environment
@@ -73,6 +73,7 @@ from backend.services.databricks_sql import (  # noqa: E402
 )
 from backend.services.pii_redaction import redact_borrower_row  # noqa: E402
 from backend.services.scoring import (  # noqa: E402
+    NBO_PRODUCT_LABELS,
     in_the_money,
     lead_score,
     next_best_offer,
@@ -90,20 +91,6 @@ DEFAULT_MIN_EQUITY_PCT = 15
 DEFAULT_HELOC_EQUITY_MIN = 35
 DEFAULT_CASHOUT_EQUITY_MIN = 25
 DEFAULT_RETENTION_MIN_SPREAD = 50
-
-SIX_STATES = ("IL", "CA", "FL", "TX", "WA", "CO")
-
-OFFER_LABELS = {
-    "purchase": "Purchase Mortgage",
-    "refi_plus_heloc": "Refinance + HELOC",
-    "heloc": "HELOC",
-    "refi": "Refinance",
-    "cash_out": "Cash-out Refi",
-    "investor": "Investor Product",
-    "retention": "Retention",
-    "nurture": "Nurture",
-}
-
 
 # ---------------------------------------------------------------------------
 # Result containers
@@ -182,21 +169,65 @@ def _bucket_label(score: int) -> str:
     return "low"
 
 
+def load_coverage_states(client: DatabricksSqlClient) -> list[str]:
+    """Return the current state coverage from refreshed gold geography.
+
+    ``mip.gold.county_rollup`` is the authoritative coverage surface. If
+    that rollup has not refreshed yet, fall back to distinct states present
+    in ``mip.gold.borrower_360`` so the audit remains data-driven.
+    """
+
+    statements = (
+        """
+        SELECT DISTINCT state
+        FROM mip.gold.county_rollup
+        WHERE snapshot_date = (
+          SELECT MAX(snapshot_date) FROM mip.gold.county_rollup
+        )
+          AND state RLIKE '^[A-Z]{2}$'
+        ORDER BY state
+        """,
+        """
+        SELECT DISTINCT state
+        FROM mip.gold.borrower_360
+        WHERE state RLIKE '^[A-Z]{2}$'
+        ORDER BY state
+        """,
+    )
+    for stmt in statements:
+        rows = client.execute(stmt)
+        states = sorted(
+            {
+                str(row.get("state") or "").upper()[:2]
+                for row in rows
+                if str(row.get("state") or "").upper()[:2].isalpha()
+                and len(str(row.get("state") or "").upper()[:2]) == 2
+            }
+        )
+        if states:
+            return states
+    raise DatabricksSqlError(
+        "No refreshed state coverage found in gold geography or borrower tables"
+    )
+
+
 def sample_clips(
     client: DatabricksSqlClient,
     *,
     sample_size: int,
     seed: int,
+    states: list[str],
 ) -> list[dict[str, Any]]:
     """Stratified-random sample of CLIPs across state x score bucket.
 
     We use ``ORDER BY HASH(clip, :seed)`` so the selection is
-    reproducible for a given seed without the cost of ``RAND()`` over
-    5.16M rows. For each ``(state, bucket)`` cell we take ``ceil
-    (sample_size / 18)`` candidates, then trim to ``sample_size`` total
-    while preserving state coverage.
+    reproducible for a given seed without the cost of ``RAND()``. For
+    each ``(state, bucket)`` cell we take a dynamic share of candidates,
+    then trim to ``sample_size`` total while preserving state coverage.
     """
-    per_state = max(3, math.ceil(sample_size / len(SIX_STATES)))
+    if not states:
+        raise DatabricksSqlError("No states supplied for borrower audit sampling")
+    per_state = max(3, math.ceil(sample_size / len(states)))
     # Thresholds tuned to the live borrower_360 score distribution --
     # see _bucket_label for the rationale (capped at ~68 because the
     # full intent_trigger lives in gold.lead_scores, not here).
@@ -210,7 +241,7 @@ def sample_clips(
     per_cell = max(1, math.ceil(per_state / len(buckets)))
 
     rows: list[dict[str, Any]] = []
-    for state in SIX_STATES:
+    for state in states:
         for bucket_name, pred in buckets:
             stmt = (
                 "SELECT clip, borrower_id, state, opportunity_score "
@@ -229,7 +260,7 @@ def sample_clips(
     # a per-(state, bucket) queue and pick round-robin.
     bucket_names = ("high", "mid", "low")
     by_cell: dict[tuple[str, str], list[dict[str, Any]]] = {
-        (s, b): [] for s in SIX_STATES for b in bucket_names
+        (s, b): [] for s in states for b in bucket_names
     }
     # Sort rows into cells while keeping the deterministic HASH order
     # from the per-cell LIMITs intact (ordering by clip for stability).
@@ -241,7 +272,7 @@ def sample_clips(
     idx = 0
     # Interleave: first pass hits every (state, bucket) once, then
     # repeats until we run out or hit sample_size.
-    cells = [(s, b) for b in bucket_names for s in SIX_STATES]
+    cells = [(s, b) for b in bucket_names for s in states]
     while len(selected) < sample_size:
         cell = cells[idx % len(cells)]
         if by_cell[cell]:
@@ -293,14 +324,9 @@ def fetch_raw_inputs(
         "LIMIT 1"
     )
     # Note on `owner_1_corporate_indicator`: the raw share schema emits
-    # this column as STRING on the live catalog (values 'Y'/'N'/empty),
-    # but silver_property_master.sql casts `COALESCE(col, 0) AS BOOLEAN`
-    # which Spark evaluates to NULL on 'Y' strings. Silver currently
-    # carries stale BOOLEAN values from an earlier ingest where the
-    # column was BIGINT; we do NOT recompute that drift here -- instead
-    # the audit pulls the silver-layer projection (via gold.borrower_360
-    # inputs) as the authoritative corporate-owner flag. The raw
-    # projection is retained for transparency only.
+    # this column as STRING on the live catalog (values 'Y'/'N'/empty).
+    # The current silver transformation normalizes it with
+    # UPPER(TRIM(...)) = 'Y'; the audit recomputes the same boolean below.
     stmt_prop = (
         "SELECT "
         "  clip, "
@@ -397,9 +423,8 @@ def fetch_gold_row(
     """Projected gold row -- every column the audit compares against.
 
     Keyed by ``clip`` (the only globally-unique key in the table).
-    ``borrower_id`` is a 5-digit synthetic collision-prone label -- on
-    the 5.16M-row borrower_360 it has only ~90K distinct values, so a
-    ``WHERE borrower_id = ...`` lookup is NOT deterministic.
+    ``borrower_id`` is display-safe, but ``clip`` is the mastered key for
+    this audit; the report never assumes borrower_id uniqueness.
     """
     stmt = (
         "SELECT "
@@ -608,7 +633,7 @@ def recompute_from_raw(
         )
     )
 
-    recommended_offer = OFFER_LABELS.get(offer_code, "Nurture")
+    recommended_offer = NBO_PRODUCT_LABELS.get(offer_code, NBO_PRODUCT_LABELS["nurture"])
 
     return {
         "avm_value": avm_value,
@@ -746,7 +771,7 @@ def compare_raw_vs_silver(audit: ClipAudit) -> list[Mismatch]:
     _add("owner_is_corporate",
          raw_corporate,
          bool(silver_pm.get("owner_is_corporate")),
-         notes="raw share has STRING ('Y'/'N'); silver coerces via CAST AS BOOLEAN")
+         notes="raw share has STRING ('Y'/'N'); silver normalizes with UPPER(TRIM(...)) = 'Y'")
 
     # is_absentee: recompute from raw property mailing_state.
     # (Fetched separately -- not projected above; keep this check soft.)
@@ -897,30 +922,7 @@ def compare_gold_vs_api(audit: ClipAudit) -> list[Mismatch]:
     _add("recommended_offer",  g.get("recommended_offer"),          a.get("recommended_offer"))
     _add("why_now",            g.get("why_now"),                    a.get("why_now"))
     _add("approval_status",    g.get("approval_status"),            a.get("approval_status"))
-    # subject_property: gold CTAS truncates ZIP to 5 digits (SUBSTR(zip,
-    # 1, 5)) so it agrees with `pii_redaction.synthesize_subject_
-    # property`. Before Slice-13 this field could drift on ZIP+4 rows;
-    # tolerant compare keeps the audit sane across a pre- and post-fix
-    # gold refresh. We compare the api's 5-digit form against what the
-    # gold string WOULD be after the same truncation -- so a stale gold
-    # shows as a "pending refresh" note, not a hard fail.
-    gold_subject = g.get("subject_property") or ""
-    api_subject = a.get("subject_property") or ""
-    if gold_subject != api_subject:
-        # Attempt the post-fix equivalence: chop gold's trailing digits
-        # past 5 and compare. If THAT matches, the field is "pending
-        # gold rebuild" -- not a real bug.
-        import re as _re
-        truncated_gold = _re.sub(r"(\d{5})\d+$", r"\1", gold_subject)
-        if truncated_gold == api_subject:
-            pass  # known drift, already fixed in SQL
-        else:
-            m.append(Mismatch(
-                clip=audit.clip, borrower_id=audit.borrower_id,
-                surface_a="gold", surface_b="api",
-                field="subject_property", expected=gold_subject, actual=api_subject,
-                notes="gold vs api subject_property drift -- not explained by ZIP-truncation fix",
-            ))
+    _add("subject_property",   g.get("subject_property"),           a.get("subject_property"))
     _add("avm_value",          _safe_int(g.get("avm_value")),       _safe_int(a.get("avm_value")))
     _add("current_lien_balance", _safe_int(g.get("current_lien_balance")),
          _safe_int(a.get("current_lien_balance")))
@@ -963,15 +965,24 @@ def run_audit(
     *,
     sample_size: int,
     seed: int,
-) -> list[ClipAudit]:
+) -> tuple[list[ClipAudit], list[str]]:
     """Sample + audit ``sample_size`` CLIPs and return per-CLIP results."""
-    candidates = sample_clips(client, sample_size=sample_size, seed=seed)
+    coverage_states = load_coverage_states(client)
+    candidates = sample_clips(
+        client,
+        sample_size=sample_size,
+        seed=seed,
+        states=coverage_states,
+    )
     if not candidates:
         raise DatabricksSqlError("Sampling produced zero CLIPs -- check the warehouse/tables")
 
     market_rate = fetch_market_rate(client)
     print(f"Market rate (fractional): {market_rate}")
-    print(f"Sampled {len(candidates)} CLIPs. Auditing...")
+    print(
+        f"Sampled {len(candidates)} CLIPs across "
+        f"{len(coverage_states)} coverage states. Auditing..."
+    )
 
     audits: list[ClipAudit] = []
     for i, cand in enumerate(candidates, start=1):
@@ -987,8 +998,7 @@ def run_audit(
         try:
             raw = fetch_raw_inputs(client, clip)
             # IMPORTANT: key the gold lookup by CLIP, not borrower_id.
-            # The synthetic borrower_id collides massively (see
-            # docs/validation/borrower-e2e-audit.md "Known defects").
+            # CLIP is the mastered property key for this audit.
             gold = fetch_gold_row(client, clip)
             related_count = fetch_owner_related_count(client, gold.get("owner_link_id"))
             recomputed = recompute_from_raw(
@@ -1052,7 +1062,7 @@ def run_audit(
         status = "PASS" if audit.passed else f"FAIL ({len(audit.mismatches)})"
         print(f"  [{i:2d}/{len(candidates)}] {borrower_id} {cand['state']} score={score} -> {status}")
 
-    return audits
+    return audits, coverage_states
 
 
 def _hash_clip(clip: str) -> str:
@@ -1065,7 +1075,12 @@ def _hash_clip(clip: str) -> str:
     return hashlib.sha256(("mip_clip_log_v1:" + clip).encode()).hexdigest()[:12]
 
 
-def render_report(audits: list[ClipAudit], seed: int, sample_size: int) -> str:
+def render_report(
+    audits: list[ClipAudit],
+    seed: int,
+    sample_size: int,
+    coverage_states: list[str],
+) -> str:
     """Render the markdown report body."""
     passed = [a for a in audits if a.passed]
     total = len(audits)
@@ -1085,7 +1100,10 @@ def render_report(audits: list[ClipAudit], seed: int, sample_size: int) -> str:
     # Methodology
     lines.append("## Methodology")
     lines.append("")
-    lines.append("1. Stratified random sample across 6 states x 3 opportunity buckets")
+    lines.append(
+        f"1. Stratified random sample across {len(coverage_states)} current coverage "
+        "states x 3 opportunity buckets"
+    )
     lines.append("   (high >= 60, mid 45..59, low < 45 -- tuned to the live")
     lines.append("   `gold.borrower_360` cap of ~68 given the simplified")
     lines.append("   `intent_trigger` column; full treatment lives in")
@@ -1115,7 +1133,7 @@ def render_report(audits: list[ClipAudit], seed: int, sample_size: int) -> str:
     lines.append("")
     lines.append("| State | Count |")
     lines.append("|---|---|")
-    for s in SIX_STATES:
+    for s in coverage_states:
         lines.append(f"| {s} | {by_state.get(s, 0)} |")
     lines.append("")
     lines.append("| Opportunity bucket | Count |")
@@ -1146,65 +1164,12 @@ def render_report(audits: list[ClipAudit], seed: int, sample_size: int) -> str:
         )
     lines.append("")
 
-    # Known defects (called out prominently so the reader sees them
-    # even if the per-CLIP pass rate is 100%).
-    lines.append("## Known defects discovered during this audit")
+    lines.append("## Structural findings surfaced during this run")
     lines.append("")
-    lines.append("These are found by the audit and are NOT arithmetic drift on a")
-    lines.append("given CLIP -- they are structural issues the audit surfaces as a")
-    lines.append("by-product of its construction. They do not count against the")
-    lines.append("per-CLIP pass rate above.")
-    lines.append("")
-    lines.append("### `borrower_id` is not globally unique on `mip.gold.borrower_360`")
-    lines.append("")
-    lines.append("The synthetic `borrower_id` is `CONCAT('B-', LPAD(XXHASH64(clip) %")
-    lines.append("99999 + 10000, 5))`. With 5.16M CLIPs hashing into ~90K slots, the")
-    lines.append("average collision is ~57 CLIPs per `borrower_id`; the worst is 688.")
-    lines.append("Every `/api/*` endpoint that filters by `borrower_id`")
-    lines.append("(`DatabricksBorrowerRepository.get`, `_EVIDENCE_SQL`,")
-    lines.append("`DatabricksOfferRepository._SQL`) currently returns whichever")
-    lines.append("colliding CLIP the warehouse happens to order first, which is")
-    lines.append("non-deterministic across queries.")
-    lines.append("")
-    lines.append("**Impact:** Borrower 360 / Lead Queue / Offer Orchestrator show")
-    lines.append("inconsistent data for the same `borrower_id` across sessions.")
-    lines.append("")
-    lines.append("**Audit workaround:** this tool keys gold lookups by `clip`")
-    lines.append("(globally unique), not by `borrower_id`.")
-    lines.append("")
-    lines.append("**Recommended fix (outside this audit's scope):** widen the")
-    lines.append("synthetic id to a full-collision-resistant form, e.g.")
-    lines.append("`CONCAT('B-', XXHASH64_BASE62(clip))` -- full 64-bit hash base-62")
-    lines.append("encoded -- and update the router / tests. This also deprecates the")
-    lines.append("`(borrower_id) % 99999` truncation which is the root cause.")
-    lines.append("")
-    lines.append("### Silver `situs_zip_code` carries ZIP+4 (9 digits) for ~89% of rows")
-    lines.append("")
-    lines.append("The data contract (§2.1) defines `situs_zip_code` as 5-digit.")
-    lines.append("Live silver has 4.6M/5.16M rows with 9-digit ZIP+4 strings. The")
-    lines.append("gold `subject_property` column concatenated the full string, while")
-    lines.append("the `/api/*` boundary truncates to 5 digits -- so gold and api")
-    lines.append("disagreed on those rows. **Fixed in `sql/transformations/")
-    lines.append("gold_borrower_360.sql` this audit** (SUBSTR to 5 digits on emit).")
-    lines.append("")
-    lines.append("**Follow-up:** either (a) fix silver to project a 5-digit ZIP and")
-    lines.append("drop the gold-side SUBSTR, or (b) add an `is_zip4` gold column so")
-    lines.append("the UI can surface the 4-digit tail where useful without leaking")
-    lines.append("it into the default dossier.")
-    lines.append("")
-    lines.append("### `owner_1_corporate_indicator` raw type drift (share)")
-    lines.append("")
-    lines.append("The raw share emits `owner_1_corporate_indicator` as STRING")
-    lines.append("(values `'Y'`/`'N'`/empty); `silver_property_master.sql` casts")
-    lines.append("`COALESCE(col, 0) AS BOOLEAN`, which in Spark evaluates to NULL")
-    lines.append("on a `'Y'` string. Current silver carries the earlier BIGINT-era")
-    lines.append("ingest values, so most rows appear TRUE; a fresh silver rebuild")
-    lines.append("on the current share would flip these to NULL/FALSE. Tracked")
-    lines.append("under the raw-vs-silver drift table below.")
-    lines.append("")
-    lines.append("**Recommended fix (outside this audit's scope):** change silver")
-    lines.append("to `COALESCE(UPPER(TRIM(owner_1_corporate_indicator)), '') = 'Y'`,")
-    lines.append("then trigger a silver rebuild.")
+    lines.append("This report does not carry static defect assertions. Any active drift")
+    lines.append("must appear as a field-level mismatch below, sourced from the sampled")
+    lines.append("raw, gold, and API payloads. Gold lookups are keyed by mastered CLIP")
+    lines.append("so the audit does not assume any display identifier is globally unique.")
     lines.append("")
 
     # Field-level issue list
@@ -1255,26 +1220,10 @@ def render_report(audits: list[ClipAudit], seed: int, sample_size: int) -> str:
             lines.append(f"| `{fld}` | {len(rows)} | {repr_} |")
     lines.append("")
 
-    # Remediation
     lines.append("## Remediation / decisions")
     lines.append("")
-    lines.append("**Fixes landed in this audit commit:**")
-    lines.append("")
-    lines.append("- `sql/transformations/gold_borrower_360.sql`: truncate ZIP to 5")
-    lines.append("  digits inside `subject_property` so gold and api agree on ZIP+4")
-    lines.append("  rows. The fix is in SQL; the next gold refresh picks it up.")
-    lines.append("")
-    lines.append("**Fixes recommended but out of this audit's scope (filed as")
-    lines.append("known-defects above):**")
-    lines.append("")
-    lines.append("- Widen `borrower_id` to a collision-free synthetic id.")
-    lines.append("- Fix `owner_1_corporate_indicator` string-to-boolean coercion in")
-    lines.append("  `silver_property_master.sql` and trigger a silver rebuild.")
-    lines.append("- Decide whether `situs_zip_code` should be 5-digit at silver or")
-    lines.append("  kept at ZIP+4 with a derived 5-digit projection.")
-    lines.append("")
     if not all_mismatches:
-        lines.append("**Arithmetic verdict:** gold arithmetic and /api projection")
+        lines.append("**Verdict:** gold arithmetic and /api projection")
         lines.append("agree with independent Python recomputation on every sampled CLIP.")
         lines.append("`mip.gold.borrower_360` is trustworthy for the columns audited.")
     else:
@@ -1398,9 +1347,18 @@ def main() -> int:
     client = build_client()
     warmup_client(client)
 
-    audits = run_audit(client, sample_size=args.sample_size, seed=args.seed)
+    audits, coverage_states = run_audit(
+        client,
+        sample_size=args.sample_size,
+        seed=args.seed,
+    )
 
-    report = render_report(audits, seed=args.seed, sample_size=args.sample_size)
+    report = render_report(
+        audits,
+        seed=args.seed,
+        sample_size=args.sample_size,
+        coverage_states=coverage_states,
+    )
     out_path = Path(args.output) if args.output else (
         _REPO_ROOT / "docs" / "validation" / "borrower-e2e-audit.md"
     )

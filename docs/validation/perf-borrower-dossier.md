@@ -1,3 +1,5 @@
+> **Internal implementation artifact. Not approved for public release.**
+
 # Validation: perf-borrower-dossier
 
 Closes the `/api/borrowers/{id}` p95 gap called out in

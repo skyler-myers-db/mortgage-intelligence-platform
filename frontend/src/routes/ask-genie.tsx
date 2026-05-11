@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { api } from '../lib/api';
+import { ApiError, api } from '../lib/api';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
 import type { GenieActionSuggestion, GenieAnswer as GenieAnswerShape } from '../types';
 import { useApp } from '../components/AppContext';
@@ -10,24 +10,18 @@ import { Icon } from '../components/Icon';
 import { GenieAnswer } from '../components/mortgage/GenieAnswer';
 import { GenieProgress } from '../components/mortgage/GenieProgress';
 import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
-import { DRAWER_SOURCES } from '../lib/drawerSources';
+import { drawerForAsset } from '../lib/drawerSources';
 import { isGenieFollowUpQuestion } from '../lib/genieSession';
 
 /**
- * Ask Genie — deep-dive view with trusted-asset list and sample questions.
+ * Ask Genie — deep-dive view with trusted-asset list and backend-provided
+ * prompt suggestions.
  * The floating GenieChat in the AppShell is the "ask anywhere" entry point;
  * this route is the curated walkthrough for stakeholders who want to see
  * which UC metric views Genie is grounded on. Answer rendering is delegated
  * to the shared <GenieAnswer> so metric_value / table_rows / follow_ups
  * surface identically here and in the floating chat.
  */
-
-const SAMPLE_QUESTIONS = [
-  'Which zips have the most in-the-money refi candidates?',
-  'Show HELOC candidates with strong equity and explain the pending permit-feed gap.',
-  'How many current customers show retention risk this week?',
-  'Which segment converts best among owner-occupied under 50% LTV?',
-];
 
 // Friendly-name + technical-path tuple. Friendly is what a business user
 // reads; the UC path sits in the title tooltip for governance/ops.
@@ -38,16 +32,30 @@ const TRUSTED_ASSETS: Array<{ label: string; path: string }> = [
   { label: 'Borrower 360 profile',         path: 'mip.gold.borrower_360' },
   { label: 'Borrower dossier',             path: 'mip.gold.borrower_dossier' },
   { label: 'Source evidence',              path: 'mip.gold.evidence_events' },
+  { label: 'Source readiness',             path: 'mip.gold.source_readiness' },
   { label: 'Lock-in cohort',               path: 'mip.gold.lockin_cohort' },
   { label: 'Lead-generation metric view',  path: 'mip.semantics.lead_generation_metric_view' },
   { label: 'Segment performance view',     path: 'mip.semantics.segment_performance_metric_view' },
   { label: 'Borrower opportunity view',    path: 'mip.semantics.borrower_opportunity_metric_view' },
 ];
 
+const NON_PERSISTABLE_SOURCES = new Set([
+  'degraded',
+  'policy_blocked',
+  'refused',
+  'data_gap',
+  'out_of_footprint',
+]);
+
+function shouldPersistConversation(payload: GenieAnswerShape): boolean {
+  return Boolean(payload.conversation_id && !NON_PERSISTABLE_SOURCES.has(String(payload.source ?? '')));
+}
+
 export default function AskGenie() {
   const navigate = useNavigate();
   const { refreshWorkspace } = useApp();
-  const [question, setQuestion] = useState(SAMPLE_QUESTIONS[0]);
+  const [question, setQuestion] = useState('');
+  const [sampleQuestions, setSampleQuestions] = useState<string[]>([]);
   const [conversationId, setConversationId] = useState<string | null>(() => {
     try {
       return window.localStorage.getItem('mip.genie.conversationId');
@@ -57,10 +65,11 @@ export default function AskGenie() {
   });
 
   useEffect(() => {
-    if (conversationId) return undefined;
     const controller = new AbortController();
     api.genieStart(controller.signal)
       .then((result) => {
+        setSampleQuestions(Array.isArray(result.sample_questions) ? result.sample_questions : []);
+        if (conversationId) return;
         if (!result.conversation_id) return;
         setConversationId(result.conversation_id);
         try {
@@ -102,6 +111,17 @@ export default function AskGenie() {
       : "Couldn't reach Genie."
     : null;
 
+  useEffect(() => {
+    if (!(error instanceof ApiError) || error.status !== 403) return;
+    setConversationId(null);
+    setSubmittedConversationId(null);
+    try {
+      window.localStorage.removeItem('mip.genie.conversationId');
+    } catch {
+      // ignore
+    }
+  }, [error]);
+
   function ask(q: string) {
     const trimmed = q.trim();
     const nextConversationId = isGenieFollowUpQuestion(trimmed) ? conversationId : null;
@@ -133,14 +153,15 @@ export default function AskGenie() {
   }
 
   useEffect(() => {
-    if (!payload?.conversation_id) return;
-    setConversationId(payload.conversation_id);
+    if (!payload?.conversation_id || !shouldPersistConversation(payload)) return;
+    const nextConversationId = payload.conversation_id;
+    setConversationId(nextConversationId);
     try {
-      window.localStorage.setItem('mip.genie.conversationId', payload.conversation_id);
+      window.localStorage.setItem('mip.genie.conversationId', nextConversationId);
     } catch {
       // ignore
     }
-  }, [payload?.conversation_id]);
+  }, [payload]);
 
   async function runAction(action: GenieActionSuggestion) {
     setActionStatus(`Running ${action.label.toLowerCase()}...`);
@@ -172,13 +193,8 @@ export default function AskGenie() {
   }
 
   const sourceLabel = payload?.source ?? '';
-  // The backend emits two source values:
-  //   "genie"    — answer came from the live Genie space.
-  //   "degraded" — Genie is unreachable. Honest "warming up" message
-  //                with no numbers. (The "computed_fallback" path that
-  //                used a Python SQL template was removed 2026-05-04
-  //                per user feedback: "we don't want this app to be
-  //                gimmicky at all.")
+  // The backend emits "genie" for live answers, or governed refusal/degraded
+  // source values when it intentionally stops before showing data.
   const isDegraded = sourceLabel === 'degraded';
   const isBlocked =
     sourceLabel === 'policy_blocked' ||
@@ -206,16 +222,9 @@ export default function AskGenie() {
   // Returns null when no specific match exists — the chip then renders as
   // an inert neutral chip rather than defaulting to NBO and misleading
   // the user into the wrong drawer (the prior "default to NBO" routing
-  // was confusing per 2026-05-04 user feedback). Computed-fallback /
-  // degraded chips also render inert (the chip text is the explanation).
-  const drawerForSource =
-    /itm|rules/i.test(sourceChip) ? DRAWER_SOURCES.itm
-      : /lead.?score|lead_scores|fn_lead_score/i.test(sourceChip) ? DRAWER_SOURCES.leadScore
-      : /permit/i.test(sourceChip) ? DRAWER_SOURCES.permit
-      : /lead_population|population|borrower_360/i.test(sourceChip) ? DRAWER_SOURCES.population
-      : /next.?best|nbo/i.test(sourceChip) ? DRAWER_SOURCES.nbo
-      : /config/i.test(sourceChip) ? DRAWER_SOURCES.config
-      : null;
+  // was confusing per 2026-05-04 user feedback). Governed refusal/degraded
+  // chips also render inert (the chip text is the explanation).
+  const drawerForSource = sourceChip ? drawerForAsset(sourceChip) : null;
 
   return (
     <PageShell
@@ -263,7 +272,7 @@ export default function AskGenie() {
                 variant="primary"
                 icon="send"
                 onClick={() => ask(question)}
-                disabled={loading || warmingUp !== null}
+                disabled={loading || warmingUp !== null || question.trim().length === 0}
               >
                 {loading || warmingUp !== null ? 'Asking…' : 'Ask Genie'}
               </Button>
@@ -395,17 +404,23 @@ export default function AskGenie() {
               <div className="h-4">Suggested questions</div>
             </div>
             <div className="surface__body trusted-asset-list">
-              {SAMPLE_QUESTIONS.map((q) => (
-                <button
-                  key={q}
-                  type="button"
-                  className="filter filter--question"
-                  onClick={() => ask(q)}
-                >
-                  <Icon name="sparkle" size={11} />
-                  <span className="filter__text">{q}</span>
-                </button>
-              ))}
+              {sampleQuestions.length > 0 ? (
+                sampleQuestions.map((q) => (
+                  <button
+                    key={q}
+                    type="button"
+                    className="filter filter--question"
+                    onClick={() => ask(q)}
+                  >
+                    <Icon name="sparkle" size={11} />
+                    <span className="filter__text">{q}</span>
+                  </button>
+                ))
+              ) : (
+                <p className="body muted flush">
+                  Prompt suggestions load from the configured Genie space.
+                </p>
+              )}
             </div>
           </div>
         </div>

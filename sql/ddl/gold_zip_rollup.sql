@@ -4,14 +4,14 @@
 -- Purpose:   DDL for `mip.gold.zip_rollup` -- per-ZIP aggregate of the
 --            addressable borrower population, carrying county FIPS so the
 --            map can filter by the county the user drilled into. Feeds
---            `/api/geo/zip-rollups?fips=<FIPS>` so the USChoroplethMap ZIP
+--            `/api/geo/zip-rollups?county_fips=<FIPS>` so the USChoroplethMap ZIP
 --            tiles render real numbers + a click-through borrower id.
 --
--- Grain:     (zip, snapshot_date).
--- PK:        (zip, snapshot_date).
+-- Grain:     (state, county_fips_5, zip, snapshot_date).
+-- PK:        (state, county_fips_5, zip, snapshot_date).
 -- Clustering: Liquid cluster on (state, zip). Map read path always filters by
 --            state first (the user drilled into a state-then-county), then
---            WHERE county_fips_5 = :fips.
+--            WHERE county_fips_5 = :county_fips.
 --
 -- Source:    `mip.gold.borrower_360` (CLIP-grain) rolled up to ZIP.
 --            `sample_borrower_id` is the highest-opportunity-score borrower
@@ -26,9 +26,9 @@
 -- =============================================================================
 
 CREATE TABLE IF NOT EXISTS mip.gold.zip_rollup (
+  state                     STRING    NOT NULL COMMENT '2-char USPS state code (uppercase). PK part.',
+  county_fips_5             STRING             COMMENT '5-char county FIPS. Nullable when silver lacked a county geocode. PK part when present.',
   zip                       STRING    NOT NULL COMMENT '5-digit ZIP (STRING preserves leading zeros). PK part.',
-  state                     STRING    NOT NULL COMMENT '2-char USPS state code (uppercase).',
-  county_fips_5             STRING             COMMENT '5-char county FIPS. Nullable when silver lacked a county geocode.',
   addressable_borrowers     INT       NOT NULL COMMENT 'Population count for this ZIP on snapshot_date.',
   avg_opportunity_score     INT       NOT NULL COMMENT 'AVG(borrower_360.opportunity_score) rounded to int.',
   top_segment_code          STRING             COMMENT 'Dominant segment_code by count. NULL when every borrower in the ZIP has empty segment_codes.',

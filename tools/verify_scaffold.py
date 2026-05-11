@@ -9,8 +9,8 @@ R6-25: also emits a non-fatal warning when the deploying user lacks the
 ``Can Manage`` permission on the Databricks App resource. ``databricks
 bundle validate`` only checks schema, so the two-phase deploy gotcha
 (bundle uploads files; ``databricks apps deploy`` promotes -- see
-``docs/se-onboarding.md`` §5) first surfaces during ``terraform apply``
-with a confusing "Can View" permission error. Catching it in the
+``docs/se-onboarding.md`` §5) can otherwise first surface during resource
+apply with a confusing "Can View" permission error. Catching it in the
 pre-deploy scaffold check means SEs see the actionable message BEFORE
 they burn the warehouse warm-up time.
 """
@@ -63,8 +63,8 @@ def _check_app_permissions() -> str | None:
 
     Non-fatal: any CLI failure (no binary, no auth, no app yet on
     first deploy) returns ``None``. The goal is to surface the known
-    ``terraform apply`` failure-mode for SEs who have already deployed
-    once and hit the second-deploy permission error.
+    resource-update permission failure-mode for SEs who have already
+    deployed once and then hit a later app update error.
     """
     # Skip in CI / non-interactive environments where the SE isn't
     # waiting on the output.
@@ -75,7 +75,7 @@ def _check_app_permissions() -> str | None:
         # been deployed yet (skip -- nothing to check); 200 lets us
         # inspect the permissions. Any other error: stay silent.
         out = subprocess.check_output(
-            ["databricks", "apps", "get", _APP_NAME],
+            ["databricks", "apps", "get", _APP_NAME, "-o", "json"],
             text=True,
             stderr=subprocess.DEVNULL,
             timeout=20,
@@ -94,8 +94,8 @@ def _check_app_permissions() -> str | None:
     app_id = app.get("id") or app.get("app_id") or _APP_NAME
     return (
         f"note: Databricks App '{app_id}' detected. If 'databricks bundle "
-        f"deploy -t dev' fails at terraform-apply with a 'Can View' permission "
-        f"error on databricks_app, run the two-phase deploy documented in "
+        f"deploy -t dev' fails during app resource update with a 'Can View' "
+        f"permission error, run the two-phase deploy documented in "
         f"docs/se-onboarding.md §5: bundle deploy uploads files, then "
         f"'databricks apps deploy {_APP_NAME}' promotes them."
     )

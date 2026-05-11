@@ -3,9 +3,9 @@
 This is the highest-priority accuracy test for Slice 13. It answers the
 question:
 
-    When the app shows "Investor segment: 1,749,208 borrowers in the
-    6-state footprint," does that number actually match what the raw
-    Cotality Delta Share contains?
+    When the app shows "Investor segment: N borrowers," does that number
+    actually match what the raw Cotality Delta Share contains for the
+    refreshed source coverage?
 
 For each of the five UNBLOCKED segments:
 
@@ -14,15 +14,21 @@ For each of the five UNBLOCKED segments:
                        OR is_absentee
     * ``equity``    -- equity_pct >= 35 AND second_pos_amount IS NULL
     * ``retention`` -- is_current_customer AND (rate_spread_bps >= 50
-                       OR is_competitor_lien OR listed_for_sale)
+                       OR is_competitor_lien OR listed_for_sale), where
+                       current-customer can come from the lender dictionary
+                       or the optional first-party servicing feed.
     * ``listed`` / ``permit``   -- BLOCKED per data-contract §9; must be 0.
 
-we compute a segment count per state from TWO independent paths:
+we compute a segment count per discovered source state from TWO independent
+paths:
 
     1. REFERENCE -- an INDEPENDENT query written against
-       ``cotality_mortgage_data.corelogic.*`` that reimplements the
-       segment rule from scratch (no silver/gold reuse). Independence is
-       what makes this a validation rather than a tautology.
+       ``cotality_mortgage_data.corelogic.*`` plus raw ``mip.first_party.*``
+       optional lender feeds when a segment explicitly consumes them. The
+       reference does not read silver/gold borrower/segment outputs. It reads
+       the latest reviewed FRED market-rate row from ``mip.silver
+       .market_rates_weekly`` and separately asserts that the row is live and
+       fresh; otherwise the test would become stale every weekly FRED publish.
     2. GOLD      -- ``SELECT state, COUNT(*) FROM mip.gold.borrower_360
                      WHERE array_contains(segment_codes, '<segment>')``.
 
@@ -55,20 +61,6 @@ import pytest
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Constants -- the reference query reads the MORTGAGE30US fraction inline
-# rather than joining against mip.silver.market_rates_weekly (which would
-# re-use our silver code and defeat independence). This value was probed
-# directly from the live silver table on 2026-04-21; re-probe if the FRED
-# series ever moves and the silver `is_latest` row changes.
-#
-# Re-read rule: if you're updating this constant, first run
-#   SELECT rate_fraction FROM mip.silver.market_rates_weekly
-#   WHERE series_id='MORTGAGE30US' AND is_latest=TRUE
-# and paste the exact decimal here.
-# ---------------------------------------------------------------------------
-MORTGAGE30US_FRACTION = 0.063  # 6.30% par rate
-
 # Segment thresholds (must match docs/data-contract-module0.md §5 +
 # sql/transformations/gold_borrower_360.sql lines 155-159)
 MIN_SPREAD_BPS = 75
@@ -76,7 +68,6 @@ MIN_EQUITY_PCT = 15
 HELOC_EQUITY_MIN = 35
 RETENTION_MIN_SPREAD = 50
 
-SIX_STATES = ("CA", "CO", "FL", "IL", "TX", "WA")
 SEGMENTS = ("itm", "investor", "equity", "retention", "listed", "permit")
 
 # Tolerance: we allow 0.5% drift per state per segment. Segment counts
@@ -231,7 +222,7 @@ def _run_sql(
 # ---------------------------------------------------------------------------
 
 
-def _itm_reference_sql() -> str:
+def _itm_reference_sql(mortgage30us_fraction: float) -> str:
     """Reference ITM count per state.
 
     Mirrors gold_borrower_360.sql WHERE:
@@ -260,13 +251,13 @@ def _itm_reference_sql() -> str:
         CAST(total_amount_of_open_mortgage_liens AS BIGINT) AS lien,
         CAST(estimated_combined_ltv_loan_to_value AS DOUBLE) AS cltv
       FROM cotality_mortgage_data.corelogic.entrada_eval_voluntary_lien_status_marketing_v2
-      WHERE situs_state IN ('IL','CA','FL','TX','WA','CO')
+      WHERE situs_state IS NOT NULL
         AND clip IS NOT NULL
     ),
     calc AS (
       SELECT
         state, clip,
-        CAST(ROUND((rate_frac - {MORTGAGE30US_FRACTION}) * 10000.0) AS INT) AS rate_spread_bps,
+        CAST(ROUND((rate_frac - {mortgage30us_fraction}) * 10000.0) AS INT) AS rate_spread_bps,
         CAST(GREATEST(0, LEAST(100, CASE
           WHEN cltv IS NOT NULL AND cltv > 0 THEN ROUND(100 - cltv)
           WHEN avm  IS NOT NULL AND avm  > 0 THEN ROUND(100.0 * (avm - COALESCE(lien, 0)) / avm)
@@ -297,7 +288,7 @@ def _equity_reference_sql() -> str:
         CAST(estimated_combined_ltv_loan_to_value AS DOUBLE) AS cltv,
         CAST(second_position_mortgage_amount AS BIGINT) AS second_pos
       FROM cotality_mortgage_data.corelogic.entrada_eval_voluntary_lien_status_marketing_v2
-      WHERE situs_state IN ('IL','CA','FL','TX','WA','CO')
+      WHERE situs_state IS NOT NULL
         AND clip IS NOT NULL
     ),
     calc AS (
@@ -349,7 +340,7 @@ def _investor_reference_sql() -> str:
         (mailing_state IS NOT NULL
          AND UPPER(TRIM(mailing_state)) <> UPPER(TRIM(situs_state))) AS is_absentee
       FROM cotality_mortgage_data.corelogic.entrada_eval_property_domain_v3
-      WHERE situs_state IN ('IL','CA','FL','TX','WA','CO') AND clip IS NOT NULL
+      WHERE situs_state IS NOT NULL AND clip IS NOT NULL
     ),
     bridge AS (
       SELECT owner_1_identifier AS owner_link, COUNT(*) AS related_n
@@ -361,13 +352,13 @@ def _investor_reference_sql() -> str:
     FROM cotality_mortgage_data.corelogic.entrada_eval_voluntary_lien_status_marketing_v2 l
     JOIN prop6 p ON p.clip = l.clip
     LEFT JOIN bridge b ON b.owner_link = p.owner_link
-    WHERE l.situs_state IN ('IL','CA','FL','TX','WA','CO') AND l.clip IS NOT NULL
+    WHERE l.situs_state IS NOT NULL AND l.clip IS NOT NULL
       AND (COALESCE(b.related_n, 1) >= 2 OR p.is_corp OR p.is_absentee)
     GROUP BY p.state ORDER BY p.state
     """
 
 
-def _retention_reference_sql() -> str:
+def _retention_reference_sql(mortgage30us_fraction: float) -> str:
     """Reference retention-segment count per state.
 
     Segment rule:
@@ -375,35 +366,49 @@ def _retention_reference_sql() -> str:
           (rate_spread_bps >= 50 OR is_competitor_lien OR listed_for_sale)
 
     Independent derivation notes:
-      * is_current_customer: UPPER(first_position_currently_assigned_
-        lender_company_name) LIKE '%SUMMIT%' (Summit Mortgage is the
-        sample-lender per CLAUDE.md naming rules).
-      * is_competitor_lien: servicer known AND NOT contains SUMMIT --
-        which makes is_current_customer and is_competitor_lien
-        mutually exclusive by construction. So the OR-branch collapses
-        to: is_current_customer AND rate_spread_bps >= 50 (listed_for_sale
-        is BLOCKED -> FALSE).
+      * is_current_customer: current servicer resolves to a non-competitor row
+        in mip.ref.lender_dictionary OR raw first_party.servicing_portfolio has
+        an active row for the CLIP-derived borrower_id. This keeps the test
+        tenant-driven while validating the lender-owned feed contract.
+      * is_competitor_lien: servicer known AND not current-customer, matching
+        gold_borrower_360. This makes is_current_customer and
+        is_competitor_lien mutually exclusive by construction. With
+        listed_for_sale BLOCKED -> FALSE, the OR branch collapses to
+        current-customer AND rate_spread_bps >= 50.
     """
     return f"""
-    WITH calc AS (
+    WITH servicing AS (
       SELECT
-        situs_state AS state,
-        (first_position_currently_assigned_lender_company_name IS NOT NULL
-         AND UPPER(first_position_currently_assigned_lender_company_name) LIKE '%SUMMIT%')
-          AS is_summit,
+        borrower_id,
+        COUNT_IF(servicing_status = 'active') > 0 AS has_active_servicing
+      FROM mip.first_party.servicing_portfolio
+      GROUP BY borrower_id
+    ),
+    calc AS (
+      SELECT
+        l.situs_state AS state,
+        CONCAT('B-', LPAD(UPPER(CONV(CAST(ABS(XXHASH64(l.clip)) AS STRING), 10, 36)), 13, '0')) AS borrower_id,
+        (
+          COALESCE(NOT lr.is_competitor, FALSE)
+          OR COALESCE(s.has_active_servicing, FALSE)
+        ) AS is_current_customer,
         CAST(ROUND((
           CASE
-            WHEN first_position_mortgage_interest_rate IS NULL THEN NULL
-            WHEN CAST(first_position_mortgage_interest_rate AS DOUBLE) <= 0 THEN NULL
-            ELSE CAST(first_position_mortgage_interest_rate AS DOUBLE) / 100.0
-          END - {MORTGAGE30US_FRACTION}) * 10000.0
+            WHEN l.first_position_mortgage_interest_rate IS NULL THEN NULL
+            WHEN CAST(l.first_position_mortgage_interest_rate AS DOUBLE) <= 0 THEN NULL
+            ELSE CAST(l.first_position_mortgage_interest_rate AS DOUBLE) / 100.0
+          END - {mortgage30us_fraction}) * 10000.0
         ) AS INT) AS spread_bps
-      FROM cotality_mortgage_data.corelogic.entrada_eval_voluntary_lien_status_marketing_v2
-      WHERE situs_state IN ('IL','CA','FL','TX','WA','CO') AND clip IS NOT NULL
+      FROM cotality_mortgage_data.corelogic.entrada_eval_voluntary_lien_status_marketing_v2 l
+      LEFT JOIN mip.ref.lender_dictionary lr
+        ON UPPER(TRIM(lr.raw_key)) = UPPER(TRIM(l.first_position_currently_assigned_lender_company_name))
+      LEFT JOIN servicing s
+        ON s.borrower_id = CONCAT('B-', LPAD(UPPER(CONV(CAST(ABS(XXHASH64(l.clip)) AS STRING), 10, 36)), 13, '0'))
+      WHERE l.situs_state IS NOT NULL AND l.clip IS NOT NULL
     )
     SELECT state, COUNT(*) AS n
     FROM calc
-    WHERE is_summit AND spread_bps >= {RETENTION_MIN_SPREAD}
+    WHERE is_current_customer AND spread_bps >= {RETENTION_MIN_SPREAD}
     GROUP BY state ORDER BY state
     """
 
@@ -446,30 +451,70 @@ def warehouse() -> tuple[str, str, str]:
     return creds
 
 
+def _latest_mortgage30us_fraction(
+    host: str,
+    token: str,
+    warehouse_id: str,
+) -> float:
+    """Return the live FRED MORTGAGE30US fraction used by gold.
+
+    This keeps the segment-parity reference in lockstep with the app's
+    current market-rate assumption while still failing loudly if the FRED
+    ingest has fallen back to seed data or gone stale.
+    """
+    rows = _run_sql(
+        host,
+        token,
+        warehouse_id,
+        """
+        SELECT
+          CAST(rate_fraction AS DOUBLE) AS rate_fraction,
+          source,
+          CAST(DATEDIFF(CURRENT_DATE(), observation_week) AS INT) AS age_days
+        FROM mip.silver.market_rates_weekly
+        WHERE series_id='MORTGAGE30US' AND is_latest=TRUE
+        LIMIT 1
+        """,
+    )
+    if not rows:
+        pytest.fail("no latest MORTGAGE30US row found in mip.silver.market_rates_weekly")
+    rate_fraction, source, age_days = rows[0]
+    if str(source) != "fred":
+        pytest.fail(
+            "latest MORTGAGE30US row is not live FRED data "
+            f"(source={source!r}); run mip_fred_rates_ingest before parity validation"
+        )
+    if int(age_days) > 21:
+        pytest.fail(
+            "latest MORTGAGE30US row is stale "
+            f"({age_days} days old); refresh FRED before parity validation"
+        )
+    return float(rate_fraction)
+
+
 @pytest.fixture(scope="module")
 def counts(warehouse: tuple[str, str, str]) -> dict[str, dict[str, dict[str, int]]]:
     """Returns ``counts[segment][path][state] -> int``.
 
-    path is 'ref' or 'gold'. States are the six-state footprint.
+    path is 'ref' or 'gold'. States are discovered from the refreshed source
+    coverage.
     BLOCKED segments (listed, permit) have ref = {state: 0, ...} and
     gold = whatever the warehouse emits (should also be all zero).
     """
     host, token, wh = warehouse
-
-    def zero_map() -> dict[str, int]:
-        return {s: 0 for s in SIX_STATES}
+    mortgage30us_fraction = _latest_mortgage30us_fraction(host, token, wh)
 
     reference_sqls: dict[str, str] = {
-        "itm": _itm_reference_sql(),
+        "itm": _itm_reference_sql(mortgage30us_fraction),
         "equity": _equity_reference_sql(),
         "investor": _investor_reference_sql(),
-        "retention": _retention_reference_sql(),
+        "retention": _retention_reference_sql(mortgage30us_fraction),
         # BLOCKED segments: reference is definitionally 0 per data-contract §9.
     }
 
     out: dict[str, dict[str, dict[str, int]]] = {}
     for seg in SEGMENTS:
-        ref = zero_map()
+        ref: dict[str, int] = {}
         if seg in reference_sqls:
             t0 = time.time()
             rows = _run_sql(host, token, wh, reference_sqls[seg])
@@ -477,64 +522,49 @@ def counts(warehouse: tuple[str, str, str]) -> dict[str, dict[str, dict[str, int
             ref.update(_rows_to_state_map(rows))
         gold_rows = _run_sql(host, token, wh, _gold_segment_sql(seg))
         logger.debug("GOLD %s: %s", seg, gold_rows)
-        gold = zero_map()
-        gold.update(_rows_to_state_map(gold_rows))
+        gold = _rows_to_state_map(gold_rows)
         out[seg] = {"ref": ref, "gold": gold}
     return out
 
 
 # ---------------------------------------------------------------------------
-# Parametrized segment*state parity test.
+# Segment/state parity test.
 # ---------------------------------------------------------------------------
 
 
-_PARAMS = [(seg, state) for seg in SEGMENTS for state in SIX_STATES]
-
-
-@pytest.mark.parametrize(
-    ("segment", "state"),
-    _PARAMS,
-    ids=[f"{seg}-{st}" for seg, st in _PARAMS],
-)
 def test_segment_count_parity(
     counts: dict[str, dict[str, dict[str, int]]],
-    segment: str,
-    state: str,
 ) -> None:
-    """One assertion per (segment, state). Failure message prints both
-    counts and the tolerance branch taken for triage."""
-    ref_n = counts[segment]["ref"][state]
-    gold_n = counts[segment]["gold"][state]
+    """One assertion path per discovered (segment, state)."""
+    assert any(counts[seg]["ref"] or counts[seg]["gold"] for seg in SEGMENTS)
+    for segment in SEGMENTS:
+        ref_map = counts[segment]["ref"]
+        gold_map = counts[segment]["gold"]
 
-    # BLOCKED segments: must be exactly 0 on BOTH sides. A non-zero
-    # gold count here means either the gold CTAS stopped hardcoding
-    # listed_for_sale/has_permit = FALSE, OR the BLOCKED contract
-    # changed. Either way, surface loudly.
-    if segment in ("listed", "permit"):
-        assert ref_n == 0, (
-            f"{segment}/{state}: reference must be 0 for BLOCKED segment"
-        )
-        assert gold_n == 0, (
-            f"{segment}/{state}: gold emitted {gold_n} rows for BLOCKED "
-            f"segment (expected 0). Check gold_borrower_360.sql "
-            f"hardcoded has_permit/listed_for_sale = FALSE."
-        )
-        return
+        # BLOCKED segments: gold must emit zero rows anywhere. Reference is
+        # definitionally empty until the corresponding Cotality feeds arrive.
+        if segment in ("listed", "permit"):
+            assert not gold_map, (
+                f"{segment}: gold emitted rows for blocked segment: {gold_map}. "
+                "Check gold_borrower_360.sql has_permit/listed_for_sale contract."
+            )
+            continue
 
-    delta = abs(ref_n - gold_n)
-    # Small-N branch: exact match required.
-    if ref_n < ABS_TOLERANCE_MIN or gold_n < ABS_TOLERANCE_MIN:
-        assert ref_n == gold_n, (
-            f"{segment}/{state}: ref={ref_n} gold={gold_n} "
-            f"delta={delta} (exact match required below {ABS_TOLERANCE_MIN})"
-        )
-        return
-    # Large-N branch: 0.5% relative tolerance.
-    pct = delta / max(ref_n, 1)
-    assert pct <= REL_TOLERANCE, (
-        f"{segment}/{state}: ref={ref_n} gold={gold_n} "
-        f"delta={delta} ({pct * 100:.2f}% > {REL_TOLERANCE * 100}%)"
-    )
+        for state in sorted(set(ref_map) | set(gold_map)):
+            ref_n = ref_map.get(state, 0)
+            gold_n = gold_map.get(state, 0)
+            delta = abs(ref_n - gold_n)
+            if ref_n < ABS_TOLERANCE_MIN or gold_n < ABS_TOLERANCE_MIN:
+                assert ref_n == gold_n, (
+                    f"{segment}/{state}: ref={ref_n} gold={gold_n} "
+                    f"delta={delta} (exact match required below {ABS_TOLERANCE_MIN})"
+                )
+                continue
+            pct = delta / max(ref_n, 1)
+            assert pct <= REL_TOLERANCE, (
+                f"{segment}/{state}: ref={ref_n} gold={gold_n} "
+                f"delta={delta} ({pct * 100:.2f}% > {REL_TOLERANCE * 100}%)"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -543,8 +573,8 @@ def test_segment_count_parity(
 
 
 def test_borrower_360_total_rows(warehouse: tuple[str, str, str]) -> None:
-    """``gold.borrower_360`` row count must equal the 6-state share row
-    count (exact -- no aggregation, just a filter+join). A drift here
+    """``gold.borrower_360`` row count must equal the source share row
+    count for all non-null states (exact -- no aggregation, just a lift/join). A drift here
     means the gold CTAS dropped or double-counted rows during its
     lien_current join, which would invalidate every segment count."""
     host, token, wh = warehouse
@@ -557,15 +587,15 @@ def test_borrower_360_total_rows(warehouse: tuple[str, str, str]) -> None:
           (SELECT COUNT(*) FROM mip.gold.borrower_360) AS b360,
           (SELECT COUNT(*)
            FROM cotality_mortgage_data.corelogic.entrada_eval_voluntary_lien_status_marketing_v2
-           WHERE situs_state IN ('IL','CA','FL','TX','WA','CO')
-             AND clip IS NOT NULL) AS share_6
+           WHERE situs_state IS NOT NULL
+             AND clip IS NOT NULL) AS source_count
         """,
     )
     assert rows, "no rows returned for total-count probe"
-    b360, share_6 = int(rows[0][0]), int(rows[0][1])
-    assert b360 == share_6, (
-        f"gold.borrower_360={b360:,} but share(6-state)={share_6:,} "
-        f"-- drift of {abs(b360 - share_6)} rows. Check gold_borrower_"
+    b360, source_count = int(rows[0][0]), int(rows[0][1])
+    assert b360 == source_count, (
+        f"gold.borrower_360={b360:,} but share(non-null states)={source_count:,} "
+        f"-- drift of {abs(b360 - source_count)} rows. Check gold_borrower_"
         f"360.sql join predicates."
     )
 

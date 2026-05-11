@@ -1,3 +1,5 @@
+> **Internal implementation artifact. Not approved for public release.**
+
 # Lakeview dashboards — widget verification report
 
 This doc pairs every widget shipped in `dashboards/*.lvdash.json` with
@@ -33,7 +35,7 @@ the authoritative live status is the output of the nightly run (see
 
 | Widget | Type | Dataset | Purpose | Verdict |
 |---|---|---|---|---|
-| `kpi_addressable` | counter | `ds_funnel_totals` | Addressable Borrowers — unique CLIPs in the 6-state Cotality share with an open lien. | 🟢 |
+| `kpi_addressable` | counter | `ds_funnel_totals` | Addressable Borrowers — unique CLIPs in current Cotality gold coverage with an open lien. | 🟢 |
 | `kpi_itm` | counter | `ds_funnel_totals` | In-the-Money Borrowers — rate spread ≥ 75 bps and equity ≥ 15 percent. | 🟢 |
 | `kpi_offers` | counter | `ds_funnel_totals` | Offers Recommended — next-best-offer other than nurture. | 🟢 |
 | `kpi_actioned` | counter | `ds_funnel_totals` | Outreach Actioned — approved + sent by a human loan officer. Authoritative in Lakebase; mirrored to gold on refresh. | 🟡 starts at 0 on cold deploy (no approvals yet). Populates as operators use the Approval Queue. See `docs/dashboards.md` §2. |
@@ -44,7 +46,7 @@ the authoritative live status is the output of the nightly run (see
 
 | Widget | Type | Dataset | Purpose | Verdict |
 |---|---|---|---|---|
-| `map_state_opportunity` | symbol-map | `ds_state_opportunity` | Six footprint states (IL, CA, FL, TX, WA, CO) colored by mean opportunity score, sized by borrower count. | 🟢 |
+| `map_state_opportunity` | symbol-map | `ds_state_opportunity` | Current refreshed coverage states colored by mean opportunity score, sized by borrower count. | 🟢 |
 | `chart_state_avm_value` | bar | `ds_state_avm_value` | Total AVM value per state. | 🟢 |
 | `table_top_zips` | table | `ds_top_zips_itm` | 20 densest in-the-money ZIPs with city, borrower count, ITM count, mean score, mean rate spread. | 🟢 |
 

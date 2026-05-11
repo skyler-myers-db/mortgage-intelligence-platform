@@ -123,6 +123,32 @@ def test_bootstrap_successful_call_flips_flag_and_runs_all_statements() -> None:
     assert len(ddl_calls) == len(lakebase_bootstrap._APPROVAL_REQUEST_ID_DDL)
 
 
+def test_bootstrap_preflight_latches_when_schema_already_exists() -> None:
+    """Runtime app principal should not issue owner-only DDL after deploy.
+
+    The deploy-time migration creates the column/index. On a fresh app process,
+    a read-only preflight can prove that and latch the bootstrap flag without
+    trying ALTER TABLE as the app service principal.
+    """
+
+    class _AlreadyApplied(_FakeClient):
+        def fetchone(self, stmt: str, params: Any = None) -> dict[str, bool]:
+            _ = params
+            self.calls.append(stmt)
+            return {
+                "has_request_id_column": True,
+                "has_request_id_index": True,
+            }
+
+    client = _AlreadyApplied()
+    ensure_approval_idempotency_column(client)  # type: ignore[arg-type]
+
+    assert _bootstrap_state_for_tests()["request_id_bootstrapped"] is True
+    assert len(client.calls) == 1
+    assert "information_schema.columns" in client.calls[0]
+    assert not any("ALTER TABLE" in call for call in client.calls)
+
+
 def test_bootstrap_second_call_after_success_is_noop() -> None:
     """A successful bootstrap should not re-execute statements on the
     second invocation -- that's the memoisation contract."""

@@ -6,13 +6,13 @@
 --            borrowers that fall into it. Feeds the `top_segment_code`
 --            extension on /api/geo/state-rollups so the USChoroplethMap's
 --            per-state tooltips + segment-filter dim logic read from gold
---            instead of the hardcoded STATE_FACTS[*].topSegment literal.
+--            geography rollups.
 --
 -- Grain:     (state, snapshot_date). One row per state per refresh day.
 -- PK:        (state, snapshot_date).
--- Clustering: Liquid cluster on (state) -- cardinality is 6 (Delta Share
---            footprint), so clustering is mostly notational; kept for
---            parity with siblings + the gold DDL contract test.
+-- Clustering: Liquid cluster on (state). Cardinality follows refreshed
+--            source coverage; kept for parity with siblings + the gold DDL
+--            contract test.
 --
 -- Source:    `mip.gold.borrower_360.segment_codes` (ARRAY<STRING>) exploded
 --            per-state, grouped by segment_code, ranked DESC by count, pick

@@ -1,3 +1,5 @@
+> **Internal implementation artifact. Not approved for public release.**
+
 # Production deploy dry-run — 2026-04-22
 
 **Target:** `prod` (mode: production)

@@ -19,11 +19,9 @@ This mimics the real UX (user sees a queue, clicks into a row) and
 keeps the IDs grounded in whatever the live warehouse actually
 returns -- no hardcoded fixture IDs that might not exist in prod.
 
-State rotation across IL/CA/FL/TX/WA/CO matches the six-state share
-footprint called out in CLAUDE.md; the leads endpoint uses `segment`
-and `portfolio_id` filters, not `state`, so we rotate the segment
-codes (which do exist) and leave any future state filter to a follow
-up. For now the task varies `limit` to stress pagination boundaries.
+The leads endpoint uses `segment` and `portfolio_id` filters, not `state`,
+so this profile rotates segment codes and varies `limit` to stress
+pagination boundaries without pinning a geography footprint.
 """
 from __future__ import annotations
 
@@ -41,13 +39,6 @@ SEGMENTS = [
     "investor",
     "retention",
 ]
-
-# Six-state share footprint. Used only to vary request URLs so the
-# resilience layer isn't hitting the same cache key every time. The
-# leads router does not currently take a state filter; when it does,
-# flip this into the query string.
-STATES = ["IL", "CA", "FL", "TX", "WA", "CO"]
-
 
 class MipUser(HttpUser):
     """Simulated operator poking the Module 0 UI at a realistic cadence."""

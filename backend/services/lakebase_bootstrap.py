@@ -68,6 +68,23 @@ _APPROVAL_REQUEST_ID_DDL: tuple[str, ...] = (
         "ON mip_app.approvals (request_id) WHERE request_id IS NOT NULL"
     ),
 )
+_APPROVAL_REQUEST_ID_PREFLIGHT_SQL = """
+SELECT
+  EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'mip_app'
+      AND table_name = 'approvals'
+      AND column_name = 'request_id'
+  ) AS has_request_id_column,
+  EXISTS (
+    SELECT 1
+    FROM pg_indexes
+    WHERE schemaname = 'mip_app'
+      AND tablename = 'approvals'
+      AND indexname = 'idx_approvals_request_id'
+  ) AS has_request_id_index
+"""
 
 # R6-04 advisory-lock key -- deterministic 64-bit integer derived from a
 # migration-specific string so we don't collide with other advisory locks
@@ -106,6 +123,14 @@ def ensure_approval_idempotency_column(client: LakebaseClient) -> None:
             return
         lock_acquired = False
         try:
+            if _approval_request_id_already_applied(client):
+                emit(
+                    log,
+                    "lakebase_bootstrap_already_applied",
+                    migration="r5_01_approvals_request_id",
+                )
+                _APPROVAL_REQUEST_ID_BOOTSTRAPPED = True
+                return
             # R6-04: take the advisory lock first so a racing mip_lakebase_
             # migrate job waits its turn on the DDL block instead of
             # interleaving statements.
@@ -156,6 +181,28 @@ def ensure_approval_idempotency_column(client: LakebaseClient) -> None:
             statements=len(_APPROVAL_REQUEST_ID_DDL),
         )
         _APPROVAL_REQUEST_ID_BOOTSTRAPPED = True
+
+
+def _approval_request_id_already_applied(client: LakebaseClient) -> bool:
+    """Return True when the migration shape already exists.
+
+    The Databricks deploy-time Lakebase migration is the normal owner of DDL.
+    The running app principal may have table DML rights but not ownership, so
+    blindly issuing ``ALTER TABLE`` on every fresh process can produce noisy
+    ``InsufficientPrivilege`` warnings even when the schema is already correct.
+    A read-only preflight lets the app latch success without attempting DDL.
+    Older test doubles may only implement ``execute``; those fall through to
+    the legacy idempotent DDL path.
+    """
+    fetchone = getattr(client, "fetchone", None)
+    if not callable(fetchone):
+        return False
+    row = fetchone(_APPROVAL_REQUEST_ID_PREFLIGHT_SQL)
+    if not row:
+        return False
+    return bool(row.get("has_request_id_column")) and bool(
+        row.get("has_request_id_index")
+    )
 
 
 def _release_advisory_lock(client: LakebaseClient, acquired: bool) -> None:

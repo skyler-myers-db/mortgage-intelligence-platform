@@ -52,7 +52,7 @@ interface RulesResponse {
   legacy_override?: Record<string, string>;
 }
 
-type SourceStatus = 'live' | 'roadmap' | 'permission_denied' | 'error';
+type SourceStatus = 'live' | 'demo_synthetic' | 'configured_empty' | 'not_configured' | 'roadmap' | 'permission_denied' | 'error';
 
 interface SourceRow {
   name: string;
@@ -95,7 +95,7 @@ export default function AdminConfig() {
     theme, setTheme,
     accent, setAccent,
     density, setDensity,
-    lender, setLender,
+    lender,
     showEvidence, setShowEvidence,
     showConfidence, setShowConfidence,
   } = useApp();
@@ -340,7 +340,7 @@ export default function AdminConfig() {
           </div>
           <div className="appearance-toggle__side">
             <span className="appearance-toggle__meta">
-              theme · accent · density · lender · chips · meters
+              theme · accent · density · chips · meters
             </span>
             <Icon name={appearanceOpen ? 'up' : 'down'} size={12} />
           </div>
@@ -394,14 +394,13 @@ export default function AdminConfig() {
                 </div>
               </div>
             </Row>
-            <Row label="Lender">
-              <input
-                type="text"
-                aria-label="Lender"
-                value={lender}
-                onChange={(e) => setLender(e.target.value)}
-                className="form-input"
-              />
+            <Row label="Configured tenant">
+              <div className="stack-sm">
+                <Chip variant="neutral" icon="building">{lender}</Chip>
+                <span className="muted fs-12">
+                  Read-only in Module 0; tenant predicates are applied by backend configuration.
+                </span>
+              </div>
             </Row>
             <Row label="Show evidence chips">
               <button
@@ -492,6 +491,9 @@ function sourceStatusTone(status: SourceStatus): 'ok' | 'warn' | 'error' {
 function sourceStatusLabel(status: SourceStatus): string {
   if (status === 'permission_denied') return 'grant needed';
   if (status === 'error') return 'read error';
+  if (status === 'demo_synthetic') return 'demo synthetic';
+  if (status === 'configured_empty') return 'empty';
+  if (status === 'not_configured') return 'not connected';
   return 'roadmap';
 }
 

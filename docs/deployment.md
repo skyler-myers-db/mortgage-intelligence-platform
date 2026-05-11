@@ -22,7 +22,7 @@ FastAPI serves `frontend/dist` automatically if present.
 
 1. Fill `.env.local` with workspace and warehouse values.
 2. Run the deployment script. It builds the frontend, provisions Genie if
-   needed, validates/deploys the bundle through the env-aware wrapper,
+   needed, validates/plans/deploys the direct bundle through the env-aware wrapper,
    promotes the uploaded source to the running Databricks App, and runs
    the refresh/smoke steps.
 
@@ -37,8 +37,9 @@ Do not run bare `databricks bundle deploy -t dev` or project-mode
 `00000000PLACEHOLDER`, which Databricks reports as an opaque
 permission error.
 
-For a narrow resource-only recovery, `make bundle-validate` and
-`make bundle-deploy` are safe because they use `tools/databricks/bundle_env.py`.
+For a narrow resource-only recovery, `make bundle-validate`,
+`make bundle-plan`, and `make bundle-deploy` are safe because they use
+`tools/databricks/bundle_env.py`.
 After a resource-only deploy, promote the uploaded source with
 `databricks apps deploy mip-app --mode SNAPSHOT`.
 
@@ -59,7 +60,9 @@ The app runs on live Unity Catalog + Lakebase in every environment — there is 
 - Genie space is curated against `mip.semantics.*` metric views only.
 - `/api/health` reports `warehouse: up`, `genie: up`, `lakebase: up`, all circuits `closed`.
 - Resilience is observable: degraded banner renders when a dependency drops; Approve writes a real row to `mip_app.action_audit`.
-- `databricks bundle validate -t dev` passes.
+- `tools/databricks/bundle_env.py validate -t dev` passes.
+- `tools/databricks/bundle_env.py plan -t dev` shows the expected direct
+  deployment changes.
 - Frontend build passes (`npm --prefix frontend run build`).
 - Python tests pass (`pytest -q`).
 - Talk track rehearsed.

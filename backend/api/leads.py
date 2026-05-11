@@ -5,18 +5,23 @@ Slice 5 adds audit emission on the ranked-list view: one
 and the list of borrower_ids the user saw. Governance §4 wants this
 so we can reconstruct "which list did the approver see when they
 decided to approve". No PII lands in the audit row -- borrower ids are
-already the synthetic ``B-#####`` form.
+already masked before API egress.
 """
 from __future__ import annotations
 
+import json
 import logging
 from typing import Annotated
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response
 
+from backend.schemas.common import validate_public_borrower_id
 from backend.schemas.lead import LeadSummary
+from backend.schemas.portfolio import PortfolioCriteria
 from backend.services.audit_store import AuditStore, get_audit_store, resolve_actor
+from backend.services.lakebase import LakebaseError, get_lakebase_client
 from backend.services.observability import emit
+from backend.services.pii_redaction import normalize_public_lender_ref
 from backend.services.repositories import LeadRepository, get_lead_repository
 
 log = logging.getLogger(__name__)
@@ -28,6 +33,17 @@ router = APIRouter(prefix="/api", tags=["leads"])
 # and the unit tests can both read one source of truth.
 DEFAULT_LEAD_LIMIT: int = 500
 MAX_LEAD_LIMIT: int = 5000
+_ALLOWED_SEGMENT_CODES: frozenset[str] = frozenset(
+    {"itm", "listed", "permit", "investor", "equity", "retention"}
+)
+
+_COHORT_FILTER_SELECT_SQL = """
+SELECT route_filters
+FROM mip_app.genie_cohorts
+WHERE cohort_id = %(cohort_id)s
+  AND actor_email = %(actor_email)s
+LIMIT 1
+"""
 
 RepoDep = Annotated[LeadRepository, Depends(get_lead_repository)]
 StoreDep = Annotated[AuditStore, Depends(get_audit_store)]
@@ -82,6 +98,21 @@ def _parse_csv_filter(
     return out
 
 
+def _parse_segment_codes(raw: str | None) -> list[str] | None:
+    if raw is None:
+        return None
+    out: list[str] = []
+    for part in raw.split(","):
+        code = part.strip().lower()
+        if not code:
+            continue
+        if code not in _ALLOWED_SEGMENT_CODES:
+            raise HTTPException(status_code=422, detail="segment_codes contains an unknown segment")
+        if code not in out:
+            out.append(code)
+    return out or None
+
+
 def _parse_borrower_ids(raw: str | None) -> list[str] | None:
     if raw is None:
         return None
@@ -90,14 +121,128 @@ def _parse_borrower_ids(raw: str | None) -> list[str] | None:
         borrower_id = value.strip()
         if not borrower_id:
             continue
-        if not borrower_id.startswith("B-") or len(borrower_id) > 64:
+        try:
+            borrower_id = validate_public_borrower_id(borrower_id)
+        except ValueError as exc:
             raise HTTPException(
                 status_code=422,
                 detail="borrower_ids must be comma-separated synthetic B-* ids",
-            )
+            ) from exc
         if borrower_id not in out:
             out.append(borrower_id)
     return out or None
+
+
+def _cohort_list(
+    filters: dict[str, object],
+    key: str,
+    *,
+    width: int | None = None,
+    numeric: bool = False,
+    borrower_ids: bool = False,
+) -> list[str] | None:
+    raw = filters.get(key)
+    if raw is None:
+        return None
+    if not isinstance(raw, list):
+        raise HTTPException(status_code=422, detail=f"cohort {key} filter is invalid")
+    out: list[str] = []
+    for value in raw:
+        text = str(value).strip()
+        if not text:
+            continue
+        if borrower_ids:
+            try:
+                normalized = validate_public_borrower_id(text)
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=422,
+                    detail="cohort borrower_ids filter is invalid",
+                ) from exc
+        else:
+            normalized = text.upper()
+            if width is not None:
+                valid_chars = normalized.isdigit() if numeric else normalized.isalpha()
+                if len(normalized) != width or not valid_chars:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"cohort {key} filter is invalid",
+                    )
+        if normalized not in out:
+            out.append(normalized)
+    return out or None
+
+
+def _cohort_segment_mode(filters: dict[str, object]) -> str:
+    raw = filters.get("segment_mode")
+    if raw is None:
+        return "any"
+    if not isinstance(raw, str):
+        raise HTTPException(status_code=422, detail="cohort segment_mode filter is invalid")
+    normalized = raw.strip().lower()
+    if normalized not in {"any", "all"}:
+        raise HTTPException(status_code=422, detail="cohort segment_mode filter is invalid")
+    return normalized
+
+
+def _load_cohort_filters(cohort_id: str, *, actor: str) -> dict[str, object]:
+    try:
+        row = get_lakebase_client().fetchone(
+            _COHORT_FILTER_SELECT_SQL,
+            {"cohort_id": cohort_id, "actor_email": actor},
+        )
+    except LakebaseError as exc:
+        raise HTTPException(status_code=503, detail="Lakebase temporarily unavailable") from exc
+    if row is None:
+        raise HTTPException(status_code=404, detail="cohort not found")
+    filters_raw = row.get("route_filters") or {}
+    if isinstance(filters_raw, str):
+        try:
+            filters_raw = json.loads(filters_raw)
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=422, detail="cohort route filters are invalid") from exc
+    if not isinstance(filters_raw, dict):
+        raise HTTPException(status_code=422, detail="cohort route filters are invalid")
+    return filters_raw
+
+
+def _portfolio_criteria_from_query(
+    *,
+    geography: str | None,
+    occupancy: str | None,
+    lien_status: str | None,
+    lender_relationship: str | None,
+    product: str | None,
+    target_lender_ref: str | None,
+    min_equity_pct_label: str | None,
+    min_equity_pct: float | None,
+    owner_link: str | None = None,
+    purchase_intent: str | None = None,
+) -> PortfolioCriteria | None:
+    fields: dict[str, object] = {}
+    if geography:
+        fields["geography"] = geography
+    if occupancy:
+        fields["occupancy"] = occupancy
+    if lien_status:
+        fields["lien_status"] = lien_status
+    if lender_relationship:
+        fields["lender_relationship"] = lender_relationship
+    if product:
+        fields["product"] = product
+    if target_lender_ref:
+        fields["target_lender_ref"] = target_lender_ref
+    if min_equity_pct_label:
+        fields["min_equity_pct_label"] = min_equity_pct_label
+    if min_equity_pct is not None:
+        fields["min_equity_pct"] = min_equity_pct
+    if owner_link:
+        fields["owner_link"] = owner_link
+    if purchase_intent:
+        fields["purchase_intent"] = purchase_intent
+    if not fields:
+        return None
+    return PortfolioCriteria(**fields)
 
 
 @router.get("/leads", response_model=list[LeadSummary])
@@ -114,8 +259,7 @@ def list_leads(
             alias="segment_codes",
             description=(
                 "Optional comma-separated SegmentCode list for multi-card "
-                "filters. Prefer this over legacy `segment` when more than "
-                "one segment card is active."
+                "filters. Use when more than one segment card is active."
             ),
         ),
     ] = None,
@@ -135,6 +279,7 @@ def list_leads(
         Query(
             min_length=2,
             max_length=2,
+            pattern=r"^[A-Za-z]{2}$",
             description=(
                 "Optional 2-char USPS state code. When present, the repo "
                 "queries borrower_360 directly (no score floor) so the "
@@ -148,9 +293,23 @@ def list_leads(
             alias="zip",
             min_length=5,
             max_length=5,
+            pattern=r"^\d{5}$",
             description=(
                 "Optional 5-char ZIP. Same borrower_360 query path as state. "
                 "Use with state for the most narrow filter."
+            ),
+        ),
+    ] = None,
+    county: Annotated[
+        str | None,
+        Query(
+            alias="county",
+            min_length=5,
+            max_length=5,
+            pattern=r"^\d{5}$",
+            description=(
+                "Optional 5-char county FIPS. Same borrower_360 query path "
+                "as state/zip so map drill-downs preserve the counted cohort."
             ),
         ),
     ] = None,
@@ -158,7 +317,7 @@ def list_leads(
         str | None,
         Query(
             alias="states",
-            max_length=128,
+            max_length=256,
             description=(
                 "Optional comma-separated USPS states for Genie-generated "
                 "cohort actions."
@@ -169,10 +328,21 @@ def list_leads(
         str | None,
         Query(
             alias="zips",
-            max_length=512,
+            max_length=4096,
             description=(
                 "Optional comma-separated 5-digit ZIP list for Genie-generated "
                 "cohort actions."
+            ),
+        ),
+    ] = None,
+    counties: Annotated[
+        str | None,
+        Query(
+            alias="counties",
+            max_length=4096,
+            description=(
+                "Optional comma-separated 5-digit county FIPS list for "
+                "Genie-generated cohort actions."
             ),
         ),
     ] = None,
@@ -180,11 +350,100 @@ def list_leads(
         str | None,
         Query(
             alias="borrower_ids",
-            max_length=768,
+            max_length=8192,
             description=(
                 "Optional comma-separated synthetic borrower IDs for Genie "
                 "borrower-list cohort actions."
             ),
+        ),
+    ] = None,
+    target_lender_ref: Annotated[
+        str | None,
+        Query(
+            alias="target_lender_ref",
+            max_length=64,
+            description="Optional public-demo-safe current-lender ref such as Summit Mortgage or Competitor A.",
+        ),
+    ] = None,
+    geography: Annotated[
+        str | None,
+        Query(
+            alias="geography",
+            max_length=64,
+            description="Optional Portfolio Builder geography label to replay the built population.",
+        ),
+    ] = None,
+    occupancy: Annotated[
+        str | None,
+        Query(
+            alias="occupancy",
+            max_length=64,
+            description="Optional Portfolio Builder occupancy filter.",
+        ),
+    ] = None,
+    lien_status: Annotated[
+        str | None,
+        Query(
+            alias="lien_status",
+            max_length=64,
+            description="Optional Portfolio Builder lien-status filter.",
+        ),
+    ] = None,
+    lender_relationship: Annotated[
+        str | None,
+        Query(
+            alias="lender_relationship",
+            max_length=64,
+            description="Optional Portfolio Builder lender-relationship filter.",
+        ),
+    ] = None,
+    product: Annotated[
+        str | None,
+        Query(
+            alias="product",
+            max_length=64,
+            description="Optional Portfolio Builder product filter.",
+        ),
+    ] = None,
+    min_equity_pct_label: Annotated[
+        str | None,
+        Query(
+            alias="min_equity_pct_label",
+            max_length=32,
+            description="Optional Portfolio Builder display equity threshold.",
+        ),
+    ] = None,
+    min_equity_pct: Annotated[
+        float | None,
+        Query(
+            alias="min_equity_pct",
+            ge=0,
+            le=100,
+            description="Optional numeric Portfolio Builder equity threshold.",
+        ),
+    ] = None,
+    owner_link: Annotated[
+        str | None,
+        Query(
+            alias="owner_link",
+            max_length=64,
+            description="Optional owner-link bucket from Segment Intelligence.",
+        ),
+    ] = None,
+    purchase_intent: Annotated[
+        str | None,
+        Query(
+            alias="purchase_intent",
+            max_length=64,
+            description="Optional purchase-intent bucket from Segment Intelligence.",
+        ),
+    ] = None,
+    cohort_id: Annotated[
+        str | None,
+        Query(
+            alias="cohort_id",
+            max_length=64,
+            description="Optional Lakebase persisted cohort id produced by a governed Genie action.",
         ),
     ] = None,
     limit: Annotated[
@@ -207,14 +466,125 @@ def list_leads(
     # this, the previous behaviour returned the national top-N from
     # lead_population and the FE filtered client-side, producing 0 rows
     # for ZIPs whose borrowers didn't make the national top 500.
-    parsed_segments: list[str] | None = None
-    if segment_codes:
-        parsed_segments = [s.strip() for s in segment_codes.split(",") if s.strip()]
-        if not parsed_segments or len(parsed_segments) >= 6:
-            parsed_segments = None
+    if segment:
+        segment = segment.strip().lower()
+        if segment not in _ALLOWED_SEGMENT_CODES:
+            raise HTTPException(status_code=422, detail="segment contains an unknown segment")
+    parsed_segments = _parse_segment_codes(segment_codes)
     parsed_states = _parse_csv_filter(states, width=2, label="states")
     parsed_zips = _parse_csv_filter(zips, width=5, label="zips", numeric=True)
+    parsed_counties = _parse_csv_filter(counties, width=5, label="counties", numeric=True)
     parsed_borrower_ids = _parse_borrower_ids(borrower_ids)
+    cohort_filters: dict[str, object] = {}
+
+    if cohort_id:
+        # Cohort id is the governed source of truth. Query params are
+        # useful for shareable URLs and visual chips, but they must not
+        # widen a confirmed Genie cohort if the URL is edited by hand.
+        cohort_filters = _load_cohort_filters(cohort_id, actor=resolve_actor(request))
+        segment = None
+        state = None
+        zip_code = None
+        county = None
+        portfolio_id = None
+        geography = None
+        occupancy = None
+        lien_status = None
+        lender_relationship = None
+        product = None
+        min_equity_pct_label = None
+        min_equity_pct = None
+        owner_link = None
+        purchase_intent = None
+        target_lender_ref = None
+        parsed_segments = None
+        segment_mode = _cohort_segment_mode(cohort_filters)
+        parsed_states = _cohort_list(cohort_filters, "states", width=2)
+        parsed_zips = _cohort_list(cohort_filters, "zips", width=5, numeric=True)
+        parsed_counties = _cohort_list(cohort_filters, "counties", width=5, numeric=True)
+        parsed_borrower_ids = _cohort_list(cohort_filters, "borrower_ids", borrower_ids=True)
+        cohort_county = str(cohort_filters.get("county") or "").strip()
+        if cohort_county:
+            if not cohort_county.isdigit() or len(cohort_county) != 5:
+                raise HTTPException(status_code=422, detail="cohort county filter is invalid")
+            county = cohort_county
+        cohort_segments = _cohort_list(cohort_filters, "segment_codes")
+        if cohort_segments is not None:
+            parsed_segments = _parse_segment_codes(",".join(cohort_segments))
+        cohort_target = str(cohort_filters.get("target_lender_ref") or "").strip()
+        if cohort_target:
+            target_lender_ref = cohort_target
+    try:
+        target_lender_ref = normalize_public_lender_ref(target_lender_ref, allow_all=True)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail="target_lender_ref must be Summit Mortgage or a public-safe Competitor alias",
+        ) from exc
+    if target_lender_ref == "All":
+        target_lender_ref = None
+
+    if cohort_id:
+        portfolio_raw = cohort_filters.get("portfolio_criteria")
+        if isinstance(portfolio_raw, dict):
+            try:
+                portfolio_criteria = PortfolioCriteria(**portfolio_raw)
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=422,
+                    detail="cohort portfolio criteria are invalid",
+                ) from exc
+            if not portfolio_criteria.has_effective_predicate():
+                raise HTTPException(
+                    status_code=422,
+                    detail="cohort portfolio criteria are invalid",
+                )
+        elif portfolio_raw is not None:
+            raise HTTPException(
+                status_code=422,
+                detail="cohort portfolio criteria are invalid",
+            )
+        else:
+            portfolio_criteria = None
+    else:
+        try:
+            portfolio_criteria = _portfolio_criteria_from_query(
+                geography=geography,
+                occupancy=occupancy,
+                lien_status=lien_status,
+                lender_relationship=lender_relationship,
+                product=product,
+                target_lender_ref=target_lender_ref,
+                min_equity_pct_label=min_equity_pct_label,
+                min_equity_pct=min_equity_pct,
+                owner_link=owner_link,
+                purchase_intent=purchase_intent,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    repo_kwargs: dict[str, object] = {}
+    if portfolio_criteria is not None:
+        repo_kwargs["portfolio_criteria"] = portfolio_criteria
+    if parsed_counties:
+        repo_kwargs["county_fipses"] = parsed_counties
+
+    if cohort_id and not any(
+        (
+            parsed_states,
+            parsed_zips,
+            parsed_counties,
+            parsed_borrower_ids,
+            county,
+            parsed_segments,
+            target_lender_ref,
+            portfolio_criteria,
+        )
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="cohort has no replayable lead filters",
+        )
 
     leads = repo.list(
         segment=segment,
@@ -222,11 +592,15 @@ def list_leads(
         limit=limit,
         state=state,
         zip_code=zip_code,
+        county_fips=county,
         state_codes=parsed_states,
         zip_codes=parsed_zips,
         borrower_ids=parsed_borrower_ids,
         segment_codes=parsed_segments,
         segment_mode=segment_mode,
+        target_lender_ref=target_lender_ref,
+        cohort_id=cohort_id,
+        **repo_kwargs,
     )
     # When the result set hit the requested cap, advertise the truncation
     # explicitly so the frontend can tell "exactly N" vs "N and there's
@@ -248,12 +622,23 @@ def list_leads(
         audit_payload["state"] = state.upper()
     if zip_code:
         audit_payload["zip"] = zip_code
+    if county:
+        audit_payload["county"] = county
     if parsed_states:
         audit_payload["states"] = parsed_states
     if parsed_zips:
         audit_payload["zips"] = parsed_zips
+    if parsed_counties:
+        audit_payload["counties"] = parsed_counties
     if parsed_borrower_ids:
         audit_payload["borrower_ids"] = parsed_borrower_ids
+    if target_lender_ref:
+        audit_payload["target_lender_ref"] = target_lender_ref
+    if cohort_id:
+        audit_payload["cohort_id"] = cohort_id
+    portfolio_payload = portfolio_criteria.model_dump(exclude_none=True) if portfolio_criteria else {}
+    if portfolio_payload:
+        audit_payload["portfolio_criteria"] = portfolio_payload
 
     background.add_task(
         _safe_audit_write,

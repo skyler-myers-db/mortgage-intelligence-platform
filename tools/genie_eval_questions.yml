@@ -169,6 +169,33 @@ questions:
     min_rows: 4
     max_latency_s: 10
 
+  - id: cash_out_state_strategy
+    category: strategy
+    question: Which state has the most cash-out opportunity right now?
+    must_cite:
+      - mip.gold.borrower_360
+    forbid_keywords:
+      - no borrowers
+      - no candidates
+      - policy blocked
+    require_trusted_proof: true
+    require_select_sql: true
+    require_freshness: true
+    required_sql_contains:
+      - recommended_offer_code
+      - cash_out
+      - state
+    canonical_column: cash_out_borrowers
+    canonical_sql: |
+      SELECT state, COUNT(*) AS cash_out_borrowers
+      FROM mip.gold.borrower_360
+      WHERE recommended_offer_code = 'cash_out'
+      GROUP BY state
+      ORDER BY cash_out_borrowers DESC
+      LIMIT 1
+    min_rows: 1
+    max_latency_s: 10
+
   - id: investor_segment
     category: segment
     question: Show the Investor / Multi-Property segment broken down by state.
@@ -176,7 +203,7 @@ questions:
       - mip.gold
     forbid_keywords:
       - no investors
-    min_rows: 4  # at least 4 of the 6 footprint states
+    min_rows: 1  # at least one refreshed coverage state when the segment is present
     max_latency_s: 8
 
   # The known BLOCKED-data trap. We INTENTIONALLY ask the question that

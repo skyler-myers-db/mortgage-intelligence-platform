@@ -1,104 +1,113 @@
-"""Matcher tests for the Genie SAFE-CORPUS fallback (Slice 7).
+"""Guards for Genie degraded-state prompt suggestions.
 
-After the Slice-7 cutover, ``genie_answers.respond`` is no longer the
-primary Genie path -- it is the fallback that only fires when the
-``genie`` circuit breaker is open. These tests still exercise the
-matcher directly because intent resolution is what determines whether
-the fallback claims a curated answer (``source="fallback"``) or cedes
-to the honest degraded message (``source="degraded"``, applied by
-``DatabricksGenieRepository``).
-
-Each case is an audience-realistic question paired with the intent we
-expect the scored matcher to pick -- a mix of direct hits and near-
-misses that would have collided in a naive ``if token in q`` matcher.
-Off-topic questions must fall through to the warm generic fallback.
+Production Genie code must never carry a local analytic answer catalog. When
+live Genie is down, the app may show an honest degraded message plus suggested
+questions, but it must not return hardcoded rows, counts, borrower examples, or
+narrative answers from a local catalog.
 """
 from __future__ import annotations
 
-import pytest
+from pathlib import Path
 
-from backend.services.genie_answers import match_intent, respond
-
-
-@pytest.mark.parametrize(
-    "question, expected_intent",
-    [
-        # --- Geography -----------------------------------------------------
-        ("Which ZIPs have the most in-the-money refi candidates?", "itm_zips"),
-        ("top zips by ITM volume", "itm_zips"),
-        ("How many in-the-money borrowers in Travis County?", "travis_county"),
-        ("Where's the biggest HELOC opportunity by state?", "heloc_by_state"),
-        ("Which state leads on HELOC?", "heloc_by_state"),
-        # --- Offer / branch ------------------------------------------------
-        ("Show me all the purchase-mortgage candidates.", "purchase"),
-        ("listed for sale borrowers", "purchase"),
-        ("How many borrowers qualify for refi + HELOC cross-sell?", "refi_plus_heloc"),
-        ("who gets both refi and HELOC?", "refi_plus_heloc"),
-        # --- Segment comparisons -------------------------------------------
-        ("Which segment converts best?", "best_converting"),
-        ("best converting segment this quarter", "best_converting"),
-        ("How does Listed for Sale compare to Permit Activity on avg score?", "listed_vs_permit"),
-        # --- Borrower lookups ---------------------------------------------
-        ("Show me the top 10 highest-score borrowers.", "top_borrowers"),
-        ("give me the top 20 borrowers", "top_borrowers"),
-        ("Who in Austin is in the money?", "austin_itm"),
-        ("austin borrowers ranked", "austin_itm"),
-        # --- Trend / pipeline ---------------------------------------------
-        ("How is our cost per contact trending?", "cost_per_contact"),
-        ("What's the lift from adding permit data?", "permit_lift"),
-        # --- Policy / threshold -------------------------------------------
-        ("What if we raised the HELOC equity floor to 50%?", "heloc_floor_50"),
-        ("How many approvals were logged today?", "approvals_today"),
-        # --- Canonical three (regression) ---------------------------------
-        ("What about retention risk?", "retention"),
-        ("show me the in the money segment", "in_the_money"),
-        ("permits and home equity — what do we see?", "heloc"),
-    ],
+from backend.services.genie_answers import (
+    default_follow_up_questions,
+    load_sample_questions,
+    match_sample_question,
 )
-def test_matcher_picks_expected_intent(question: str, expected_intent: str) -> None:
-    assert match_intent(question) == expected_intent
+
+REPO = Path(__file__).resolve().parents[2]
+GENIE_ANSWERS = REPO / "backend" / "services" / "genie_answers.py"
+PRODUCTION_BACKEND_FILES = tuple(sorted((REPO / "backend").rglob("*.py")))
 
 
-@pytest.mark.parametrize(
-    "question",
-    [
-        "What's the weather in Tokyo?",
-        "Tell me a joke about mortgages.",
-        "asdfghjkl",
-        "",
-        "   ",
-    ],
-)
-def test_offtopic_falls_through_to_warm_fallback(question: str) -> None:
-    assert match_intent(question) is None
-    r = respond(question)
-    assert r.source == "deterministic_fallback"
-    assert "segments" in r.answer.lower()
-    assert r.follow_up_questions  # warm fallback still nudges the stage
+def test_sample_question_loader_returns_prompt_suggestions_only() -> None:
+    questions = load_sample_questions()
+    assert questions
+    assert all(q.endswith("?") or q.endswith(".") for q in questions)
+    assert default_follow_up_questions(3) == questions[:3]
+    assert match_sample_question(questions[0]) == questions[0]
 
 
-def test_response_carries_question_and_uc_sources() -> None:
-    r = respond("Which ZIPs have the most in-the-money refi candidates?")
-    assert r.question == "Which ZIPs have the most in-the-money refi candidates?"
-    # Trusted assets are fully-qualified UC names routed through qualify();
-    # the exact catalog name varies by deployment (mip / mip_demo / mip_prod)
-    # so assert on the ``.gold.`` / ``.semantics.`` schema suffix instead.
-    assert any(".gold." in a or ".semantics." in a for a in r.trusted_assets)
-    assert r.table_rows and len(r.table_rows) >= 3
+def test_production_genie_answers_module_has_no_canned_answer_catalog() -> None:
+    text = GENIE_ANSWERS.read_text(encoding="utf-8")
+    forbidden = [
+        "_SAFE_CORPUS",
+        "fallback" + "-conv",
+        "deterministic" + "_fallback",
+        "def respond(",
+        "def match_intent(",
+        "table_rows=[",
+        "metric_value=",
+        "James & Maria",
+        "Thomas Chen",
+        "12,840",
+        "3,471",
+        "1,842",
+        "47 outreach",
+        "Cost per contact is trending",
+    ]
+    for needle in forbidden:
+        assert needle not in text, f"production Genie module still contains {needle!r}"
 
 
-def test_top_borrowers_cites_pinned_safe_corpus_roster() -> None:
-    """The Genie catalog's top-borrowers answer is served from the pinned
-    safe-corpus roster inlined in
-    ``genie_answers._SAFE_CORPUS_TOP_BORROWERS``. This test asserts every
-    row in the response refers to an id that exists in that roster --
-    nothing fabricated, nothing stale.
-    """
-    from backend.services.genie_answers import _SAFE_CORPUS_TOP_BORROWERS
+def test_production_backend_has_no_moved_genie_answer_catalog() -> None:
+    forbidden_literals = [
+        "_SAFE_CORPUS",
+        "fallback" + "-conv",
+        "deterministic" + "_fallback",
+        "James & Maria",
+        "Thomas Chen",
+        "12,840",
+        "3,471",
+        "1,842",
+        "47 outreach",
+        "Cost per contact is trending",
+        "table_rows=[{",
+        'metric_value="',
+        "metric_value='",
+        "from backend.services.genie_answers import respond",
+        "from backend.services.genie_answers import (respond",
+        "export_insight",
+        "demo-ready insight",
+        "tests.fixtures",
+        "backend.services.mock_data",
+    ]
+    for path in PRODUCTION_BACKEND_FILES:
+        text = path.read_text(encoding="utf-8")
+        for needle in forbidden_literals:
+            assert needle not in text, f"{path.relative_to(REPO)} contains {needle!r}"
 
-    r = respond("top 10 borrowers by score")
-    assert r.table_rows is not None
-    assert len(r.table_rows) == len(_SAFE_CORPUS_TOP_BORROWERS)
-    roster_ids = {row["borrower_id"] for row in _SAFE_CORPUS_TOP_BORROWERS}
-    for row in r.table_rows:
-        assert row["borrower_id"] in roster_ids, row
+
+def test_databricks_repo_does_not_import_genie_answer_catalog() -> None:
+    text = (REPO / "backend" / "services" / "repositories" / "databricks_repo.py").read_text(
+        encoding="utf-8"
+    )
+    assert "genie_catalog" + "_respond" not in text
+    assert "respond as" not in text
+
+
+def test_offer_orchestrator_does_not_generate_local_outreach_copy() -> None:
+    text = (REPO / "frontend" / "src" / "routes" / "offer-orchestrator.tsx").read_text(
+        encoding="utf-8"
+    )
+    forbidden = [
+        "defaultDraft",
+        "Default template used",
+        "hardcoded template",
+        "Hi [first name]",
+        "Reply or call",
+    ]
+    for needle in forbidden:
+        assert needle not in text, f"Offer Orchestrator still contains {needle!r}"
+    assert "draftReady" in text
+    assert "Approval is disabled until the audited outreach draft loads" in text
+
+
+def test_floating_genie_has_no_ai_shaped_seed_answer() -> None:
+    text = (REPO / "frontend" / "src" / "components" / "mortgage" / "GenieChat.tsx").read_text(
+        encoding="utf-8"
+    )
+    assert "useState<ChatMsg[]>([])" in text
+    pre_ask = text.split("const ask = async", maxsplit=1)[0]
+    assert "payload: {\n        answer:" not in pre_ask
+    assert "Answers run against Unity Catalog metric views" not in text

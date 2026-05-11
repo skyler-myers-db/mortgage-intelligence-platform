@@ -23,19 +23,18 @@
 -- the target shape):
 --   - silver.lien_current      -> rate_spread, equity, competitor_lien signals.
 --   - silver.mortgage_events   -> recent_refi, recent_payoff signals.
---   - silver.owner_transfer_events -> recent_sale, REO signals.
+--   - silver.owner_transfer_events -> recent_sale signals.
 --   - gold.property_owner_bridge   -> multi_property, absentee_mailing,
 --                                      corporate_owner signals.
 --   - silver.market_rates_weekly   -> market_trend signal.
 --
 -- BLOCKED signals: `signal_type='permit'` and `signal_type='listing'` are
 --            NEVER emitted on the real-data path (data-contract §9 + §3.4).
---            Cotality Permits + MLS Listings are not yet licensed; mock-mode
---            ev-004 (permit) and ev-008 (listing) remain the only such
---            evidence rendered to the UI.
+--            Cotality Permits + MLS Listings are not yet licensed; the live
+--            app surfaces those gaps as pending-feed states, not evidence rows.
 --
 -- `confidence` sourcing (per data-contract §3.4):
---   - AVM-backed signals (equity, equity_delta): upstream confidence_score_mktg
+--   - AVM-backed signals (equity): upstream confidence_score_mktg
 --     from silver.lien_current. Coerced to 0..1 (divided by 100 if >1).
 --   - Rate_spread / market_trend          : 0.92 (deterministic).
 --   - Owner-Link derived (multi_property,
@@ -63,9 +62,9 @@
 CREATE TABLE IF NOT EXISTS mip.gold.evidence_events (
   clip           STRING NOT NULL COMMENT 'Cotality CLIP. Not in Pydantic EvidenceEvent (router strips); used for join / filter.',
   evidence_id    STRING NOT NULL COMMENT 'Deterministic: "ev-" || substr(sha2(clip || signal_type || timestamp, 256), 1, 12). Stable across refreshes so Borrower360.evidence_ids stays consistent.',
-  source_product STRING NOT NULL COMMENT 'Human label: Voluntary Lien / AVM / Owner Link / Mortgage Domain / Owner Transfer / Market Rates.',
+  source_product STRING NOT NULL COMMENT 'Human label: Voluntary Lien / AVM / Owner Link / Property / Mortgage Domain / Owner Transfer / Market Rates.',
   source_table   STRING NOT NULL COMMENT 'Real UC path. Shown verbatim in EvidenceDrawer -- must be a resolvable mip.silver.* or mip.gold.* path.',
-  signal_type    STRING NOT NULL COMMENT 'Controlled vocab: rate_spread / equity / equity_delta / competitor_lien / multi_property / absentee_mailing / corporate_owner / foreclosure_stage / recent_refi / recent_payoff / recent_sale / market_trend. BLOCKED vocab (permit, listing) NEVER emitted.',
+  signal_type    STRING NOT NULL COMMENT 'Controlled vocab: rate_spread / equity / competitor_lien / multi_property / absentee_mailing / corporate_owner / foreclosure_stage / recent_refi / recent_payoff / recent_sale / market_trend. BLOCKED vocab (permit, listing) NEVER emitted.',
   signal_value   STRING NOT NULL COMMENT 'Human-readable value: "+88 bps", "$285K", "3 properties", "competitor refi".',
   display_text   STRING NOT NULL COMMENT 'One-sentence deterministic template per signal_type. No PII.',
   confidence     DOUBLE NOT NULL COMMENT '0..1. Per-signal: AVM uses upstream confidence_score_mktg; count-based rows 0.85-0.92 (see header).',

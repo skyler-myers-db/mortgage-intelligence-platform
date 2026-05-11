@@ -83,8 +83,16 @@ WITH market AS (
 base AS (
   SELECT
     lc.clip,
+    CONCAT('B-', LPAD(UPPER(CONV(CAST(ABS(XXHASH64(lc.clip)) AS STRING), 10, 36)), 13, '0')) AS borrower_id,
     lc.situs_state                      AS state,
-    lc.situs_zip_code                   AS zip,
+    CASE
+      WHEN LENGTH(REGEXP_REPLACE(CAST(lc.situs_zip_code AS STRING), '[^0-9]', '')) = 5
+        THEN REGEXP_REPLACE(CAST(lc.situs_zip_code AS STRING), '[^0-9]', '')
+      WHEN LENGTH(REGEXP_REPLACE(CAST(lc.situs_zip_code AS STRING), '[^0-9]', '')) = 4
+       AND UPPER(TRIM(lc.situs_state)) IN ('CT','MA','ME','NH','NJ','RI','VT','PR','VI')
+        THEN LPAD(REGEXP_REPLACE(CAST(lc.situs_zip_code AS STRING), '[^0-9]', ''), 5, '0')
+      ELSE NULL
+    END                                 AS zip,
     pm.situs_city                       AS city,
     pm.situs_cbsa_code,
     -- 5-char FIPS county code from silver.property_master. Projected up so
@@ -110,7 +118,7 @@ base AS (
     -- Normalised lender raw_key for the JOIN to mip.ref.lender_dictionary.
     -- Both sides are normalised with UPPER(TRIM(...)) so the match is case +
     -- trailing-whitespace insensitive. See sql/ref/lender_dictionary_seed.sql
-    -- for the canonical raw_key set (11 seeded entries incl. 'SUMMIT MTG').
+    -- for the canonical raw_key set and tenant-specific aliases.
     CASE
       WHEN lc.first_pos_lender_current IS NULL THEN NULL
       ELSE UPPER(TRIM(lc.first_pos_lender_current))
@@ -122,35 +130,89 @@ base AS (
     ON pm.clip = lc.clip
   LEFT JOIN mip.gold.property_owner_bridge AS pob
     ON pob.owner_link_id = pm.owner_link_id
-  -- Hole-finder #20: situs-state filter reads from mip.ref.state_footprint,
-  -- the single source of truth for the tenant's operational footprint. The
-  -- prior inline literal ('IL','CA','FL','TX','WA','CO') was one of 5
-  -- hardcoded copies that silently broke for tenants with a different
-  -- footprint. The subquery is a tiny (≤50 row) broadcast.
-  WHERE lc.situs_state IN (SELECT state_code FROM mip.ref.state_footprint)
+  -- Coverage is data-driven. If the Cotality share expands or contracts,
+  -- borrower_360 follows the refreshed silver source rows instead of a
+  -- tenant/demo state seed.
+  WHERE lc.situs_state IS NOT NULL
     AND lc.clip IS NOT NULL
 ),
--- Slice13-accuracy: promote current-customer detection from an inline
--- UPPER(...) LIKE '%SUMMIT%' to a governed JOIN against
--- mip.ref.lender_dictionary. The dictionary carries `is_competitor` per
--- lender (FALSE iff the row IS the tenant, e.g. SUMMIT MTG for Summit
--- Mortgage); `is_current_customer` is its inverse. Running as a CTE so
--- the JOIN happens once and the projected boolean flows through
--- enriched / scored / with_segments like the old literal.
---
--- Behaviour vs prior inline LIKE:
---   - Known tenant lender (raw_key = 'SUMMIT MTG'): is_current_customer = TRUE.
---   - Known third-party lender (is_competitor = TRUE in ref): FALSE.
---   - Lender string not in ref.lender_dictionary: COALESCE -> FALSE, matching
---     the fallback posture (no known customer relationship). Third-party
---     lenders not yet seeded still land in `is_competitor_lien` because of
---     the `lender IS NOT NULL AND NOT is_current_customer` fallback below.
---   - Lender string NULL: FALSE for both flags.
+-- Current-customer detection is dictionary-driven, not hardcoded to a
+-- brand token. mip.ref.lender_dictionary is the tenant override point:
+-- rows with is_competitor = FALSE are the tenant lender aliases; rows
+-- with is_competitor = TRUE are public-demo-safe competitor aliases.
 lender_ref AS (
   SELECT
     UPPER(TRIM(raw_key)) AS raw_key,
+    display_name,
     is_competitor
   FROM mip.ref.lender_dictionary
+),
+tenant_display AS (
+  SELECT COALESCE(MIN(display_name), 'Summit Mortgage') AS tenant_lender_ref
+  FROM lender_ref
+  WHERE COALESCE(NOT is_competitor, FALSE)
+),
+historical_tenant AS (
+  SELECT
+    pm.owner_link_id,
+    COUNT(DISTINCT me.clip) AS historical_tenant_distinct_clips
+  FROM mip.silver.mortgage_events AS me
+  JOIN mip.silver.property_master AS pm
+    ON pm.clip = me.clip
+  JOIN lender_ref AS lr
+    ON lr.raw_key = UPPER(TRIM(me.lender_name))
+  WHERE me.lender_name IS NOT NULL
+    AND COALESCE(NOT lr.is_competitor, FALSE)
+    AND me.situs_state IS NOT NULL
+    AND pm.owner_link_id IS NOT NULL
+  GROUP BY pm.owner_link_id
+),
+first_party_servicing AS (
+  SELECT
+    borrower_id,
+    COUNT(*) AS servicing_rows,
+    COUNT_IF(servicing_status = 'active') > 0 AS has_active_servicing,
+    COUNT_IF(servicing_status IN ('paid_off', 'transferred')) > 0 AS has_closed_servicing,
+    COUNT_IF(COALESCE(synthetic_demo, FALSE)) > 0 AS synthetic_demo
+  FROM mip.first_party.servicing_portfolio
+  GROUP BY borrower_id
+),
+first_party_applications AS (
+  SELECT
+    borrower_id,
+    COUNT(*) AS application_rows,
+    COUNT_IF(application_status = 'funded') AS funded_application_count,
+    COUNT_IF(application_at >= DATE_SUB(CURRENT_DATE(), 180)) > 0 AS has_recent_application,
+    COUNT_IF(COALESCE(synthetic_demo, FALSE)) > 0 AS synthetic_demo
+  FROM mip.first_party.loan_applications
+  GROUP BY borrower_id
+),
+first_party_crm AS (
+  SELECT
+    borrower_id,
+    COUNT(*) AS crm_rows,
+    COUNT_IF(consent_status = 'opt_in' AND suppression_reason IS NULL) > 0 AS marketing_eligible,
+    COUNT_IF(COALESCE(synthetic_demo, FALSE)) > 0 AS synthetic_demo
+  FROM mip.first_party.crm_campaign_membership
+  GROUP BY borrower_id
+),
+first_party_interactions AS (
+  SELECT
+    borrower_id,
+    COUNT(*) AS interaction_rows,
+    COUNT_IF(outcome_code = 'positive' AND interaction_at >= DATE_SUB(CURRENT_DATE(), 180)) AS recent_positive_interactions,
+    COUNT_IF(COALESCE(synthetic_demo, FALSE)) > 0 AS synthetic_demo
+  FROM mip.first_party.customer_interactions
+  GROUP BY borrower_id
+),
+first_party_products AS (
+  SELECT
+    borrower_id,
+    COUNT(*) AS product_rows,
+    MAX(relationship_tenure_months) AS max_relationship_tenure_months,
+    COUNT_IF(COALESCE(synthetic_demo, FALSE)) > 0 AS synthetic_demo
+  FROM mip.first_party.product_balances
+  GROUP BY borrower_id
 ),
 enriched AS (
   SELECT
@@ -185,59 +247,81 @@ enriched AS (
     (b.related_property_count >= 2
      OR COALESCE(b.owner_is_corporate, FALSE)
      OR COALESCE(b.is_absentee, FALSE)) AS is_investor,
-    -- Current-customer detection: governed JOIN against
-    -- mip.ref.lender_dictionary (slice13-accuracy) with a LIKE fallback
-    -- for tenant-name variants.
-    --
-    -- R6-12 fix (2026-04-23): prior impl relied solely on an exact
-    -- equi-JOIN against `raw_key = 'SUMMIT MTG'`. Cotality's raw lender
-    -- strings carry multiple variants for the same tenant
-    -- ('SUMMIT MTG', 'SUMMIT MORTGAGE', 'SUMMIT MTG CORP', ...) so the
-    -- exact JOIN missed every non-seeded variant and collapsed the
-    -- retention segment to 0 rows across all 6 states. The integration
-    -- test `test_segment_count_parity.py::_retention_reference_sql` uses
-    -- `UPPER(lender) LIKE '%SUMMIT%'` as its authoritative check, which
-    -- is the data-contract §3.2 intent ("tenant customer, string match")
-    -- -- this CTAS now mirrors that semantic.
-    --
-    -- Order of precedence:
-    --   1. If ref.lender_dictionary has a row for this lender_raw_key:
-    --      trust the governed `is_competitor` flag (FALSE -> customer).
-    --      This keeps the Summit rebrand path governed -- admins edit
-    --      ref.lender_dictionary, not this SQL.
-    --   2. Else if the raw lender string contains the tenant token
-    --      (`%SUMMIT%`): treat as current customer. Catches seeding gaps
-    --      for unseeded tenant variants.
-    --   3. Else: FALSE (not a known customer).
-    --
-    -- The tenant token is hardcoded 'SUMMIT' here to match the
-    -- sample-lender naming rule in CLAUDE.md. When admin-config lands
-    -- (Slice 5) this becomes a `settings.tenant_lender_token` binding
-    -- passed in via the refresh job -- see mip_app.thresholds pattern.
+    COALESCE(ht.historical_tenant_distinct_clips, 0) AS historical_tenant_distinct_clips,
+    COALESCE(fps.servicing_rows, 0) AS fp_servicing_rows,
+    COALESCE(fpa.application_rows, 0) AS fp_application_rows,
+    COALESCE(fpc.crm_rows, 0) AS fp_crm_rows,
+    COALESCE(fpi.interaction_rows, 0) AS fp_interaction_rows,
+    COALESCE(fpp.product_rows, 0) AS fp_product_rows,
+    COALESCE(fps.has_active_servicing, FALSE) AS fp_has_active_servicing,
+    COALESCE(fps.has_closed_servicing, FALSE) AS fp_has_closed_servicing,
+    COALESCE(fpa.funded_application_count, 0) AS fp_funded_application_count,
+    COALESCE(fpa.has_recent_application, FALSE) AS fp_has_recent_application,
+    COALESCE(fpc.marketing_eligible, FALSE) AS fp_marketing_eligible,
+    COALESCE(fpi.recent_positive_interactions, 0) AS fp_recent_positive_interactions,
+    COALESCE(fpp.max_relationship_tenure_months, 0) AS fp_max_relationship_tenure_months,
     (
-      COALESCE(NOT lr.is_competitor, FALSE)
-      OR (b.first_pos_lender_current IS NOT NULL
-          AND UPPER(b.first_pos_lender_current) LIKE '%SUMMIT%')
-    ) AS is_current_customer,
+      COALESCE(fps.synthetic_demo, FALSE)
+      OR COALESCE(fpa.synthetic_demo, FALSE)
+      OR COALESCE(fpc.synthetic_demo, FALSE)
+      OR COALESCE(fpi.synthetic_demo, FALSE)
+      OR COALESCE(fpp.synthetic_demo, FALSE)
+    ) AS fp_synthetic_demo,
+    (
+      CASE WHEN COALESCE(fps.servicing_rows, 0) > 0 THEN 1 ELSE 0 END
+      + CASE WHEN COALESCE(fpa.application_rows, 0) > 0 THEN 1 ELSE 0 END
+      + CASE WHEN COALESCE(fpc.crm_rows, 0) > 0 THEN 1 ELSE 0 END
+      + CASE WHEN COALESCE(fpi.interaction_rows, 0) > 0 THEN 1 ELSE 0 END
+      + CASE WHEN COALESCE(fpp.product_rows, 0) > 0 THEN 1 ELSE 0 END
+    ) AS fp_relationship_depth,
+    -- Current-customer detection combines the lender dictionary with optional
+    -- first-party servicing rows. The latter lets the demo/customer lender show
+    -- its own book even when the public-record current servicer is absent or
+    -- generalized.
+    (COALESCE(NOT lr.is_competitor, FALSE) OR COALESCE(fps.has_active_servicing, FALSE)) AS is_current_customer,
+    (
+      (
+        COALESCE(ht.historical_tenant_distinct_clips, 0) > 0
+        OR COALESCE(fps.has_closed_servicing, FALSE)
+        OR COALESCE(fpa.funded_application_count, 0) > 0
+      )
+      AND NOT (COALESCE(NOT lr.is_competitor, FALSE) OR COALESCE(fps.has_active_servicing, FALSE))
+    ) AS is_former_customer,
     -- Competitor lien: servicer known AND is NOT our tenant. Mirrors the
     -- customer detection above -- any row that lands as is_current_customer
-    -- (either via ref or LIKE fallback) is NOT a competitor lien; everything
-    -- else with a non-null lender string is. Preserves the "servicer known
-    -- and != tenant" semantic so unknown third-party lenders keep lighting
-    -- up the retention + competitor-lien paths.
+    -- (either via dictionary match or first-party servicing) is NOT a
+    -- competitor lien; everything else with a non-null lender string is.
+    -- Preserves the "servicer known and != tenant" semantic so unknown
+    -- third-party lenders keep lighting up retention + competitor-lien paths.
     (b.first_pos_lender_current IS NOT NULL
-     AND NOT (
-       COALESCE(NOT lr.is_competitor, FALSE)
-       OR UPPER(b.first_pos_lender_current) LIKE '%SUMMIT%'
-     )) AS is_competitor_lien,
+     AND NOT (COALESCE(NOT lr.is_competitor, FALSE) OR COALESCE(fps.has_active_servicing, FALSE))) AS is_competitor_lien,
+    CASE
+      WHEN b.first_pos_lender_current IS NULL THEN NULL
+      WHEN COALESCE(fps.has_active_servicing, FALSE) THEN td.tenant_lender_ref
+      WHEN COALESCE(NOT lr.is_competitor, FALSE) THEN lr.display_name
+      ELSE COALESCE(lr.display_name, 'Competitor Other')
+    END AS current_lender_ref,
     (COALESCE(b.owner_occupancy_code, '') = 'O') AS is_owner_occupied,
     -- BLOCKED columns -- hardcoded FALSE until Cotality Permits + MLS land.
     CAST(FALSE AS BOOLEAN) AS has_permit,
     CAST(FALSE AS BOOLEAN) AS listed_for_sale
   FROM base AS b
   CROSS JOIN market AS m
+  CROSS JOIN tenant_display AS td
   LEFT JOIN lender_ref AS lr
     ON lr.raw_key = b.lender_raw_key
+  LEFT JOIN historical_tenant AS ht
+    ON ht.owner_link_id = b.owner_link_id
+  LEFT JOIN first_party_servicing AS fps
+    ON fps.borrower_id = b.borrower_id
+  LEFT JOIN first_party_applications AS fpa
+    ON fpa.borrower_id = b.borrower_id
+  LEFT JOIN first_party_crm AS fpc
+    ON fpc.borrower_id = b.borrower_id
+  LEFT JOIN first_party_interactions AS fpi
+    ON fpi.borrower_id = b.borrower_id
+  LEFT JOIN first_party_products AS fpp
+    ON fpp.borrower_id = b.borrower_id
 ),
 -- Scored rows: bring the default thresholds inline and call the frozen
 -- UDFs for ITM + next-best-offer.
@@ -277,7 +361,8 @@ with_segments AS (
         CASE WHEN s.listed_for_sale                         THEN 'listed'    END,
         CASE WHEN s.has_permit                              THEN 'permit'    END,
         CASE WHEN s.is_investor                             THEN 'investor'  END,
-        CASE WHEN s.equity_pct >= 35 AND s.second_pos_amount IS NULL
+        -- Cotality can express "no second-position balance" as NULL or 0.
+        CASE WHEN s.equity_pct >= 35 AND COALESCE(s.second_pos_amount, 0) = 0
                                                             THEN 'equity'    END,
         CASE WHEN s.is_current_customer
               AND (s.rate_spread_bps >= 50
@@ -345,7 +430,8 @@ timeline AS (
 --   - fit: owner-occupant + CONV/FHA/VA still beats corporate, which
 --     still beats the fallback. Monotonic in property-size signals.
 --   - relationship: current-customer > competitor-lien > no-relation.
---     Customer tenure (historical_distinct_clips) adds up to +10.
+--     Customer tenure (historical_tenant_distinct_clips) feeds the
+--     relationship sub-score below.
 --   - evidence: unchanged (already continuous).
 --
 -- fn_lead_score itself is unchanged (frozen primitive; Python parity
@@ -400,22 +486,29 @@ subscores AS (
       + LEAST(20, 4 * COALESCE(w.bedrooms, 0))
       + LEAST(10, 3 * CAST(COALESCE(w.bathrooms, 0) AS INT))
     )) AS INT) AS fit,
-    -- relationship: continuous. Current-customer base 70 + multi-property
-    -- tenure bonus up to +25; competitor-lien 55; multi-property owners
-    -- get a +10 nudge over the no-relation floor. The `(related - 1)*5`
-    -- bump spreads owner-link-rich borrowers across several integer
-    -- score values instead of clumping them at 45 or 55.
+    -- relationship: continuous. Current/former customers get an owner-
+    -- level historical-tenant bonus; competitor-lien stays distinct.
+    -- Multi-property owners get a +10 nudge over the no-relation floor.
     CAST(LEAST(100, GREATEST(0,
       CASE
         WHEN w.is_current_customer
           THEN 70
+        WHEN w.is_former_customer
+          THEN 60
         WHEN w.is_competitor_lien
           THEN 55
         WHEN COALESCE(w.related_property_count, 1) > 1
           THEN 45
         ELSE 35
       END
-      + LEAST(25, GREATEST(0, (COALESCE(w.related_property_count, 1) - 1) * 5))
+      + CASE
+          WHEN w.is_current_customer OR w.is_former_customer
+            THEN LEAST(25, 5 * LEAST(5, w.historical_tenant_distinct_clips))
+          ELSE LEAST(25, GREATEST(0, (COALESCE(w.related_property_count, 1) - 1) * 5))
+        END
+      + LEAST(12, 3 * COALESCE(w.fp_relationship_depth, 0))
+      + LEAST(8, 4 * COALESCE(w.fp_recent_positive_interactions, 0))
+      + CASE WHEN w.fp_has_recent_application THEN 5 ELSE 0 END
     )) AS INT) AS relationship,
     -- evidence: was LEAST(100, 20*count) which capped every borrower
     -- with >=5 events at 100 (median real count is 4, so ~50% of rows
@@ -447,7 +540,7 @@ SELECT
   --   `B-[0-9A-Z]{13}` contract the parity test pins is deterministic
   --   across engines (raised by Copilot 2026-04-22 — some SQL engines
   --   return lowercase base-36 digits).
-  CONCAT('B-', LPAD(UPPER(CONV(CAST(ABS(XXHASH64(w.clip)) AS STRING), 10, 36)), 13, '0')) AS borrower_id,
+  w.borrower_id,
   -- Round-3 hole-finder #6: NULL owner_name_hash used to render "Owner "
   -- (trailing space). Coalesce to the short borrower_id suffix so the
   -- rendered label is always readable.
@@ -505,19 +598,16 @@ SELECT
       CONCAT('Owner Link ties ', CAST(w.related_property_count AS STRING),
              ' related properties -- route to the investor desk.')
     WHEN 'retention' THEN
-      'Current customer drifting above our refi bar -- reach out before a competitor pulls the lien.'
+      'Current customer rate spread is above the retention threshold -- prioritize audited retention outreach before the borrower shops alternatives.'
     ELSE
       'No active trigger yet -- keep in nurture until a signal fires.'
   END                                                                                AS why_now,
   COALESCE(tl.evidence_ids, ARRAY())                                                 AS evidence_ids,
   'pending'                                                                          AS approval_status,
   w.owner_link_id,
-  -- Truncate ZIP to 5 digits to match the api-boundary redaction
-  -- (`pii_redaction.synthesize_subject_property` uses `zip[:5]`). As of
-  -- slice13 Wave-2, silver.property_master + silver.lien_current emit a
-  -- 5-digit situs_zip_code, so this is now a COALESCE (not a SUBSTR)
-  -- guard. Tracked by docs/validation/borrower-e2e-audit.md +
-  -- docs/validation/data-corrections.md §REFRESH-AFTER-WAVE-2.
+  -- Gold keeps the same ZIP5-or-null contract as silver. Invalid short
+  -- fragments (for example a WA row with only 4 digits) are nulled in `base`;
+  -- the synthetic property label falls back to the API redaction sentinel.
   CONCAT('Synthetic property · ', COALESCE(w.city, 'Unknown'), ', ',
          w.state, ' ', COALESCE(w.zip, '00000'))                                      AS subject_property,
   CAST(COALESCE(w.avm_value, 0) AS BIGINT)                                           AS avm_value,
@@ -533,7 +623,14 @@ SELECT
   w.listed_for_sale,
   w.is_investor,
   w.is_current_customer,
+  w.is_former_customer,
   w.is_competitor_lien,
+  (w.fp_relationship_depth > 0)                                                         AS has_first_party_relationship,
+  CAST(LEAST(5, COALESCE(w.fp_relationship_depth, 0)) AS INT)                            AS first_party_relationship_depth,
+  CAST(COALESCE(w.fp_recent_positive_interactions, 0) AS INT)                            AS first_party_recent_interactions,
+  COALESCE(w.fp_has_recent_application, FALSE)                                           AS first_party_recent_application,
+  COALESCE(w.fp_synthetic_demo, FALSE)                                                   AS first_party_synthetic_demo,
+  w.current_lender_ref,
   w.second_pos_amount,
   w.first_pos_loan_type,
   w.owner_name_hash,

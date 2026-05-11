@@ -180,7 +180,7 @@ upsert AS (
     NULL, NULL, NULL,
     now(), now(), NULL
   FROM input
-  WHERE left(borrower_id, 2) = 'B-'
+  WHERE borrower_id ~ '^B-[A-Za-z0-9][A-Za-z0-9_-]{0,126}$'
     AND (SELECT inserted FROM audit)
   ON CONFLICT (actor_email, borrower_id) DO UPDATE SET
     updated_at = now(),

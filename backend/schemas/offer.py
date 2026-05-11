@@ -1,6 +1,8 @@
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from backend.schemas.common import validate_public_borrower_id
 
 # The eight lowercase codes returned by fn_next_best_offer plus 'recapture'
 # (forward-compat alias — no current analog in the decision tree).
@@ -70,6 +72,11 @@ class OfferRecommendation(BaseModel):
 class OfferRecommendRequest(BaseModel):
     borrower_id: str
 
+    @field_validator("borrower_id")
+    @classmethod
+    def _borrower_id_is_public_safe(cls, value: str) -> str:
+        return validate_public_borrower_id(value)
+
 
 class OutreachDraft(BaseModel):
     borrower_id: str
@@ -83,6 +90,11 @@ class OutreachDraft(BaseModel):
 class OutreachDraftRequest(BaseModel):
     borrower_id: str
     channel: Literal["email", "sms"] = "email"
+
+    @field_validator("borrower_id")
+    @classmethod
+    def _borrower_id_is_public_safe(cls, value: str) -> str:
+        return validate_public_borrower_id(value)
 
 
 class OutreachApproveRequest(BaseModel):
@@ -105,6 +117,11 @@ class OutreachApproveRequest(BaseModel):
     # chars to match the DDL column width; None keeps legacy callers
     # working at pre-R5-01 semantics (no duplicate protection).
     request_id: str | None = Field(default=None, max_length=64)
+
+    @field_validator("borrower_id")
+    @classmethod
+    def _borrower_id_is_public_safe(cls, value: str) -> str:
+        return validate_public_borrower_id(value)
 
 
 class OutreachApproveResponse(BaseModel):
@@ -131,6 +148,11 @@ class OutreachRejectRequest(BaseModel):
     # R5-01 idempotency key -- see ``OutreachApproveRequest.request_id``.
     # Reject carries the same retry-safety contract as approve.
     request_id: str | None = Field(default=None, max_length=64)
+
+    @field_validator("borrower_id")
+    @classmethod
+    def _borrower_id_is_public_safe(cls, value: str) -> str:
+        return validate_public_borrower_id(value)
 
 
 class OutreachRejectResponse(BaseModel):

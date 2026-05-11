@@ -6,7 +6,8 @@
 --            national rollup. Also APPENDS today's snapshot to
 --            gold.segment_population_prior for the next refresh's delta.
 --
--- Grain:     (segment_code, state). 6 segments * (6 states + _ALL) = 42 rows.
+-- Grain:     (segment_code, state). One row for each segment in each refreshed
+--            coverage state plus one _ALL row per segment.
 -- Pattern:   CREATE OR REPLACE TABLE ... AS SELECT for the current table;
 --            MERGE on (segment_code, state, snapshot_date) for the prior
 --            snapshot append (idempotent if re-run same day).
@@ -151,11 +152,11 @@ meta AS (
   SELECT * FROM (
     VALUES
       ('itm',       'In the Money',             'Lien rate >= 75 bps above par and equity >= 15%.',                                      '#5CE1E6'),
-      ('listed',    'Listed for Sale',          'Active listing, likely purchase mortgage opportunity. Awaiting Cotality MLS share.',     '#F59E0B'),
-      ('permit',    'Permit Activity',          'Recent high-value permits indicate HELOC/cash-out demand. Awaiting Cotality Permits share.', '#A78BFA'),
+      ('listed',    'Listed for Sale',          'Pending Cotality MLS share; listed-for-sale predicates are blocked false until the feed lands.', '#F59E0B'),
+      ('permit',    'Permit Activity',          'Pending Cotality Building Permits share; permit predicates are blocked false until the feed lands.', '#A78BFA'),
       ('investor',  'Investor / Multi-Property','Owner Link shows 2+ properties or repeat behavior.',                                    '#F472B6'),
-      ('equity',    'Home Equity Candidate',    'Strong equity and prior cash-out/HELOC propensity.',                                    '#66C5FF'),
-      ('retention', 'Retention Risk',           'Current customer showing refi/listing/competitor signals.',                             '#34D399')
+      ('equity',    'Home Equity Candidate',    'Strong equity and no active second-position balance.',                                  '#66C5FF'),
+      ('retention', 'Retention Risk',           'Current customer with rate spread above the retention threshold; live listing and competitor overlays join only when source evidence is present.', '#34D399')
   ) AS t(segment_code, name, description, color)
 ),
 -- Build the full (segment_code, state) grid up front so segments with zero

@@ -12,13 +12,13 @@
 -- Data contract: docs/data-contract-module0.md §3.4.
 --
 -- BLOCKED signal types (data-contract §9):
---   - 'permit'  : NEVER emitted. Mock-mode ev-004 remains the only permit
---                 row rendered.
---   - 'listing' : NEVER emitted. Mock-mode ev-008 remains the only listing
---                 row rendered.
+--   - 'permit'  : NEVER emitted until the Cotality Building Permits Delta
+--                 Share lands.
+--   - 'listing' : NEVER emitted until the Cotality MLS/Listings Delta Share
+--                 lands.
 --
 -- Confidence values (data-contract §3.4):
---   - AVM-backed (equity, equity_delta): from silver confidence_score_mktg.
+--   - AVM-backed (equity): from silver confidence_score_mktg.
 --     Share emits 0..1 OR 0..100 depending on batch; we detect scale by
 --     dividing by 100 when value > 1, else by 1 (clip to [0, 1] at the end).
 --   - rate_spread, market_trend       : 0.92 (deterministic).
@@ -29,7 +29,6 @@
 --   1  rate_spread
 --   2  equity
 --   3  market_trend
---   4  equity_delta
 --   5  competitor_lien
 --   6  multi_property
 --   7  absentee_mailing
@@ -54,17 +53,28 @@
 
 CREATE OR REPLACE TABLE mip.gold.evidence_events AS
 WITH market AS (
-  SELECT rate_fraction AS market_rate_fraction
+  SELECT
+    rate_fraction AS market_rate_fraction,
+    observation_week AS market_observation_week,
+    vintage_ts AS market_vintage_ts
   FROM mip.silver.market_rates_weekly
   WHERE series_id = 'MORTGAGE30US' AND is_latest = TRUE
   LIMIT 1
+),
+borrower_spine AS (
+  -- Match gold.borrower_360's silver lien spine without reading gold output.
+  -- This keeps evidence_events buildable before borrower_360 in the refresh DAG.
+  SELECT DISTINCT clip
+  FROM mip.silver.lien_current
+  WHERE situs_state IS NOT NULL
+    AND clip IS NOT NULL
 ),
 -- 1. rate_spread (per CLIP, requires a borrower with a 1st-pos rate).
 rate_spread_rows AS (
   SELECT
     lc.clip,
-    'Voluntary Lien'                                 AS source_product,
-    'mip.silver.lien_current'                   AS source_table,
+    'Voluntary Lien + Market Rates'                  AS source_product,
+    'mip.silver.lien_current'                        AS source_table,
     'rate_spread'                                    AS signal_type,
     CONCAT(
       CASE WHEN mip.gold.fn_rate_spread(lc.first_pos_rate, m.market_rate_fraction) >= 0
@@ -81,7 +91,7 @@ rate_spread_rows AS (
   FROM mip.silver.lien_current AS lc
   CROSS JOIN market AS m
   WHERE lc.first_pos_rate IS NOT NULL
-    AND lc.situs_state IN ('IL','CA','FL','TX','WA','CO')
+    AND lc.situs_state IS NOT NULL
 ),
 -- 2. equity (per CLIP with meaningful equity). Confidence comes from AVM
 --    confidence where available; clipped to [0, 1].
@@ -109,7 +119,7 @@ equity_rows AS (
   WHERE lc.avm_value IS NOT NULL
     AND lc.avm_value > 0
     AND (COALESCE(lc.avm_value, 0) - COALESCE(lc.total_open_lien_balance, 0)) > 0
-    AND lc.situs_state IN ('IL','CA','FL','TX','WA','CO')
+    AND lc.situs_state IS NOT NULL
 ),
 -- 3. market_trend: one evidence row per CLIP describing latest par rate.
 market_trend_rows AS (
@@ -119,15 +129,19 @@ market_trend_rows AS (
     'mip.silver.market_rates_weekly'            AS source_table,
     'market_trend'                                   AS signal_type,
     CONCAT(CAST(ROUND(m.market_rate_fraction * 100, 2) AS STRING), '% par') AS signal_value,
-    'Latest MORTGAGE30US market rate (FRED).'        AS display_text,
+    CONCAT(
+      'Latest MORTGAGE30US market rate (FRED observation week ',
+      CAST(m.market_observation_week AS STRING),
+      ').'
+    )                                                AS display_text,
     0.92                                             AS confidence,
-    CAST(CURRENT_DATE() AS STRING)                   AS `timestamp`,
+    CAST(COALESCE(m.market_observation_week, DATE(m.market_vintage_ts)) AS STRING) AS `timestamp`,
     3                                                AS signal_rank
   FROM mip.silver.lien_current AS lc
   CROSS JOIN market AS m
-  WHERE lc.situs_state IN ('IL','CA','FL','TX','WA','CO')
+  WHERE lc.situs_state IS NOT NULL
 ),
--- 4. competitor_lien: current servicer known and != Summit.
+-- 4. competitor_lien: current servicer known and not a tenant-lender alias.
 competitor_lien_rows AS (
   SELECT
     lc.clip,
@@ -140,9 +154,11 @@ competitor_lien_rows AS (
     CAST(lc.ingest_ts AS STRING)                     AS `timestamp`,
     5                                                AS signal_rank
   FROM mip.silver.lien_current AS lc
+  LEFT JOIN mip.ref.lender_dictionary AS lr
+    ON UPPER(TRIM(lr.raw_key)) = UPPER(TRIM(lc.first_pos_lender_current))
   WHERE lc.first_pos_lender_current IS NOT NULL
-    AND NOT (UPPER(lc.first_pos_lender_current) LIKE '%SUMMIT%')
-    AND lc.situs_state IN ('IL','CA','FL','TX','WA','CO')
+    AND NOT COALESCE(NOT lr.is_competitor, FALSE)
+    AND lc.situs_state IS NOT NULL
 ),
 -- 5. multi_property: Owner-Link rollup says >= 2 related properties.
 multi_property_rows AS (
@@ -160,7 +176,7 @@ multi_property_rows AS (
   JOIN mip.gold.property_owner_bridge AS pob
     ON pob.owner_link_id = pm.owner_link_id
   WHERE pob.related_property_count >= 2
-    AND pm.situs_state IN ('IL','CA','FL','TX','WA','CO')
+    AND pm.situs_state IS NOT NULL
 ),
 -- 6. absentee_mailing: mailing state != situs state.
 absentee_rows AS (
@@ -176,7 +192,7 @@ absentee_rows AS (
     7                                                AS signal_rank
   FROM mip.silver.property_master AS pm
   WHERE pm.is_absentee = TRUE
-    AND pm.situs_state IN ('IL','CA','FL','TX','WA','CO')
+    AND pm.situs_state IS NOT NULL
 ),
 -- 7. corporate_owner: ownership flagged corporate.
 corporate_owner_rows AS (
@@ -192,7 +208,7 @@ corporate_owner_rows AS (
     8                                                AS signal_rank
   FROM mip.silver.property_master AS pm
   WHERE pm.owner_is_corporate = TRUE
-    AND pm.situs_state IN ('IL','CA','FL','TX','WA','CO')
+    AND pm.situs_state IS NOT NULL
 ),
 -- 8. recent_refi: last refi event per CLIP in the last 365 days.
 recent_refi_rows AS (
@@ -214,7 +230,7 @@ recent_refi_rows AS (
     WHERE is_refinance = TRUE
       AND event_date IS NOT NULL
       AND event_date >= DATE_SUB(CURRENT_DATE(), 365)
-      AND situs_state IN ('IL','CA','FL','TX','WA','CO')
+      AND situs_state IS NOT NULL
   ) me
   WHERE me.rn = 1
 ),
@@ -237,7 +253,7 @@ recent_payoff_rows AS (
     FROM mip.silver.mortgage_events
     WHERE release_date IS NOT NULL
       AND release_date >= DATE_SUB(CURRENT_DATE(), 365)
-      AND situs_state IN ('IL','CA','FL','TX','WA','CO')
+      AND situs_state IS NOT NULL
   ) me
   WHERE me.rn = 1
 ),
@@ -260,7 +276,7 @@ recent_sale_rows AS (
     FROM mip.silver.owner_transfer_events
     WHERE sale_date IS NOT NULL
       AND sale_date >= DATE_SUB(CURRENT_DATE(), 365)
-      AND situs_state IN ('IL','CA','FL','TX','WA','CO')
+      AND situs_state IS NOT NULL
   ) ot
   WHERE ot.rn = 1
 ),
@@ -278,7 +294,7 @@ foreclosure_stage_rows AS (
     12                                               AS signal_rank
   FROM mip.silver.property_master AS pm
   WHERE pm.foreclosure_stage_code IS NOT NULL
-    AND pm.situs_state IN ('IL','CA','FL','TX','WA','CO')
+    AND pm.situs_state IS NOT NULL
 ),
 unioned AS (
   SELECT * FROM rate_spread_rows      UNION ALL
@@ -304,4 +320,6 @@ SELECT
   u.confidence,
   u.`timestamp`,
   u.signal_rank
-FROM unioned AS u;
+FROM unioned AS u
+JOIN borrower_spine AS bs
+  ON bs.clip = u.clip;

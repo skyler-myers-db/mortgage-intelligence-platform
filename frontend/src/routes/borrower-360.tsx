@@ -7,19 +7,20 @@ import { PageShell } from '../components/layout/PageShell';
 import { TriggerTimeline } from '../components/mortgage/TriggerTimeline';
 import { ScoreBadge } from '../components/mortgage/ScoreBadge';
 import { ConfidenceMeter } from '../components/mortgage/ConfidenceMeter';
+import { BorrowerTruthFlags } from '../components/mortgage/BorrowerTruthFlags';
 import { Button, Chip, EvidenceChip } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { Skeleton } from '../components/ui/Skeleton';
 import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 import { Reveal } from '../components/fx/Reveal';
-import { descriptorFor } from '../lib/drawerSources';
+import { descriptorFor, descriptorForEvidence } from '../lib/drawerSources';
 import { segmentByCode } from '../lib/segmentMetadata';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
 import { useApp } from '../components/AppContext';
 
 /**
  * Borrower 360 — per-borrower dossier composed in `.surface` blocks.
- * Left column: borrower + property + Owner Link details. Middle: trigger
+ * Left column: borrower + masked property/owner-graph refs. Middle: trigger
  * timeline. Right: Why-now panel with evidence chips + next-best-offer card
  * and forward link to the Offer Orchestrator.
  */
@@ -59,7 +60,7 @@ export default function Borrower360() {
       <PageShell
         eyebrow="Borrower 360"
         title="Choose a borrower to inspect"
-        lede="Borrower 360 shows a single borrower's full dossier — CLIP, equity estimate, rate spread, trigger timeline, recommended offer, and every evidence chip that justifies the score. Pick a borrower from the Lead Queue to open it here."
+        lede="Borrower 360 shows a single borrower's full dossier — masked property ref, equity estimate, rate spread, trigger timeline, recommended offer, and every evidence chip that justifies the score. Pick a borrower from the Lead Queue to open it here."
         heroRight={
           <Link className="btn btn--primary" to="/lead-queue">
             Browse lead queue
@@ -231,8 +232,8 @@ export default function Borrower360() {
               <div className="h-4">Customer 360</div>
             </div>
             <div className="surface__body field-grid">
-              <Field k="CLIP" v={b.clip_id} mono />
-              <Field k="Owner Link" v={b.owner_link_id} mono />
+              <Field k="Property ref" v={b.clip_id} mono />
+              <Field k="Owner graph ref" v={b.owner_link_id} mono />
               <Field
                 k="Property address"
                 v=""
@@ -248,7 +249,12 @@ export default function Borrower360() {
               <Field k="AVM" v={currency(b.avm_value)} mono />
               <Field k="Current lien" v={`${currency(b.current_lien_balance)} · ${b.current_rate}%`} mono />
               <Field k="LTV / Equity" v={`${b.ltv}% · ${currency(b.equity_estimate)}`} mono />
-              <Field k="Related properties" v={`${b.related_property_count} (via Owner Link)`} />
+              <Field k="Related properties" v={`${b.related_property_count} (via owner graph)`} />
+              <Field
+                k="Relationship flags"
+                v=""
+                childEl={<BorrowerTruthFlags borrower={b} />}
+              />
               <Field
                 k="Segments"
                 v=""
@@ -382,7 +388,7 @@ export default function Borrower360() {
             <div className="surface__body surface__body--stack-sm">
               {b.evidence_events.map((e) => (
                 <div key={e.evidence_id} className="chip-row chip-row--baseline">
-                  <EvidenceChip source={descriptorFor(e.source_table)}>{e.source_product}</EvidenceChip>
+                  <EvidenceChip source={descriptorForEvidence(e)}>{e.source_product}</EvidenceChip>
                   <span className="text-2 fs-13">{e.display_text}</span>
                 </div>
               ))}

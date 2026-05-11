@@ -3,11 +3,13 @@
 -- -----------------------------------------------------------------------------
 -- Purpose:   Idempotent MERGE that populates `mip.silver.property_master`
 --            from `cotality_mortgage_data.corelogic.entrada_eval_property_
---            domain_v3`, filtered to the 6-state share footprint.
+--            domain_v3`. Coverage follows whatever states are present in the
+--            source share; no fixed-state filter is applied.
 --
 -- Grain:     One row per CLIP (1:1 with source).
 -- PK (MERGE key): clip.
--- Geography filter: WHERE situs_state IN ('IL','CA','FL','TX','WA','CO').
+-- Geography contract: keep rows with a non-null situs_state; downstream
+-- geography rollups discover state/county/ZIP coverage from the data.
 -- Slice:     module0-real-data-slice2.
 -- Data contract: docs/data-contract-module0.md §2.2.
 --
@@ -44,12 +46,18 @@ USING (
     fips_county_code,
     situs_state,
     situs_city,
-    -- Data contract §2.2 says situs_zip_code is 5-digit; ~89% of share rows
-    -- actually ship ZIP+4 (9-digit with or without dash). Truncate at silver
-    -- so downstream gold/api no longer need to defensively SUBSTR
-    -- (slice13 Wave-2 fix).
-    SUBSTR(REGEXP_REPLACE(CAST(situs_zip_code AS STRING), '[^0-9]', ''), 1, 5)
-                                                                    AS situs_zip_code,
+    -- Data contract §2.2 says situs_zip_code is ZIP5. ZIP+4 rows are
+    -- truncated; short non-leading-zero-state fragments are nulled so gold
+    -- never displays invalid 4-digit ZIPs. Four-digit values are only left-
+    -- padded for jurisdictions whose real ZIPs can start with zero.
+    CASE
+      WHEN LENGTH(REGEXP_REPLACE(CAST(situs_zip_code AS STRING), '[^0-9]', '')) >= 5
+        THEN SUBSTR(REGEXP_REPLACE(CAST(situs_zip_code AS STRING), '[^0-9]', ''), 1, 5)
+      WHEN LENGTH(REGEXP_REPLACE(CAST(situs_zip_code AS STRING), '[^0-9]', '')) = 4
+       AND UPPER(TRIM(situs_state)) IN ('CT','MA','ME','NH','NJ','RI','VT','PR','VI')
+        THEN LPAD(REGEXP_REPLACE(CAST(situs_zip_code AS STRING), '[^0-9]', ''), 5, '0')
+      ELSE NULL
+    END                                                             AS situs_zip_code,
     situs_core_based_statistical_area_cbsa                          AS situs_cbsa_code,
     CAST(block_level_latitude  AS DOUBLE)                            AS situs_lat,
     CAST(block_level_longitude AS DOUBLE)                            AS situs_lon,
@@ -98,7 +106,7 @@ USING (
     CURRENT_TIMESTAMP()                                              AS ingest_ts,
     CAST(:batch_id AS STRING)                                        AS _meta_batch_id
   FROM cotality_mortgage_data.corelogic.entrada_eval_property_domain_v3
-  WHERE situs_state IN ('IL','CA','FL','TX','WA','CO')
+  WHERE situs_state IS NOT NULL
     AND clip IS NOT NULL
 ) AS s
   ON t.clip = s.clip

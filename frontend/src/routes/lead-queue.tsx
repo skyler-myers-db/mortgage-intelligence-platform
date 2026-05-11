@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
-import type { LeadSummary, SegmentCode } from '../types';
+import type { LeadSummary, PortfolioPreview, SegmentCode } from '../types';
 import { PageShell } from '../components/layout/PageShell';
 import { LeadTable } from '../components/mortgage/LeadTable';
 import { Chip } from '../components/Primitives';
@@ -13,17 +13,32 @@ import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
  * URL param if present). Row expand opens the inline dossier preview.
  *
  * Honors `?state=XX`, `?zip=NNNNN`, `?states=IL,TX`, `?zips=60617,75217`,
- * `?borrower_ids=B-...`,
+ * `?borrower_ids=B-...`, `?target_lender_ref=Competitor%20A`,
+ * `?cohort_id=<uuid>`,
  * and `?county=FFFFF` query params so the
- * home/segments geography drill can deep-link into a filtered view. The
- * state + zip filters run client-side against the already-loaded list (fast,
- * no extra fetch). The county filter resolves to the set of ZIPs within the
- * county via `/api/geo/zip-rollups?fips=FFFFF`, then intersects ZIPs — this
- * is the only predicate on LeadSummary that can express "borrowers in a
- * county" since LeadSummary carries zip but not county_fips.
+ * home/segments geography drill can deep-link into a filtered view. State,
+ * county, and ZIP filters are pushed down to `/api/leads`, which reads
+ * borrower_360 for geo cohorts so the queue preserves the map's counted
+ * population.
  */
 
 const SEGMENT_CODES = new Set<SegmentCode>(['itm', 'listed', 'permit', 'investor', 'equity', 'retention']);
+const PUBLIC_LENDER_REF_RE = /^(All|Summit Mortgage|Competitor ([A-Z]|Other))$/;
+const PORTFOLIO_FILTER_KEYS = [
+  'occupancy',
+  'lien_status',
+  'lender_relationship',
+  'target_lender_ref',
+  'product',
+  'min_equity_pct_label',
+  'owner_link',
+  'purchase_intent',
+] as const;
+type PortfolioFilterKey = (typeof PORTFOLIO_FILTER_KEYS)[number];
+
+interface AdminRulesSummary {
+  offer_rules_version?: string | null;
+}
 
 function parseCsvParam(
   raw: string | null,
@@ -64,6 +79,107 @@ function parseBorrowerIds(raw: string | null): string[] {
   return out;
 }
 
+function parseTargetLenderRef(raw: string | null): string | undefined {
+  const value = raw?.trim();
+  if (!value) return undefined;
+  if (value === 'All') return undefined;
+  return PUBLIC_LENDER_REF_RE.test(value) ? value : undefined;
+}
+
+const PORTFOLIO_FILTER_VALUE_SETS: Partial<Record<PortfolioFilterKey, Set<string>>> = {
+  occupancy: new Set(['Owner-occupied', 'Non-owner-occupied', 'All']),
+  lien_status: new Set(['Any', 'Open 1st lien', 'Open first lien', 'Open HELOC', 'Free & clear', 'Free and clear']),
+  lender_relationship: new Set(['All', 'Current customer', 'Former customer', 'Competitor customer', 'Competitor']),
+  product: new Set(['All products', 'Refi', 'HELOC', 'Cash-out', 'Purchase', 'Retention']),
+  min_equity_pct_label: new Set(['Any', '≥ 15%', '≥ 25%', '≥ 40%']),
+  owner_link: new Set(['All', 'Single-property owner', 'Multi-property (2-4)', 'Portfolio investor (5+)']),
+  purchase_intent: new Set(['All', 'Listed for sale', 'Recent permit activity', 'Both']),
+};
+
+function sanitizePortfolioCriteria(raw: Record<string, string | undefined>): Record<string, string> | undefined {
+  const criteria: Record<string, string> = {};
+  for (const key of PORTFOLIO_FILTER_KEYS) {
+    const value = raw[key]?.trim();
+    if (!value) continue;
+    if (key === 'target_lender_ref' && !PUBLIC_LENDER_REF_RE.test(value)) continue;
+    const allowedValues = PORTFOLIO_FILTER_VALUE_SETS[key];
+    if (allowedValues && !allowedValues.has(value)) continue;
+    criteria[key] = value;
+  }
+  return Object.keys(criteria).length > 0 ? criteria : undefined;
+}
+
+function parsePortfolioCriteria(sp: URLSearchParams): Record<string, string> | undefined {
+  return sanitizePortfolioCriteria(
+    Object.fromEntries(PORTFOLIO_FILTER_KEYS.map((key) => [key, sp.get(key) ?? undefined])),
+  );
+}
+
+const PORTFOLIO_FILTER_LABELS: Record<string, string> = {
+  occupancy: 'occupancy',
+  lien_status: 'lien',
+  lender_relationship: 'relationship',
+  target_lender_ref: 'lender',
+  product: 'product',
+  min_equity_pct_label: 'equity',
+  owner_link: 'owner link',
+  purchase_intent: 'purchase intent',
+};
+
+function portfolioFilterEntries(criteria: Record<string, string> | undefined) {
+  if (!criteria) return [];
+  return Object.entries(criteria).map(([key, value]) => ({
+    key,
+    label: PORTFOLIO_FILTER_LABELS[key] ?? key.replace(/_/g, ' '),
+    value,
+  }));
+}
+
+export interface LeadQueueExportFiltersInput {
+  segment?: SegmentCode;
+  segmentCodes?: SegmentCode[];
+  segmentMode?: 'any' | 'all';
+  stateFilter?: string;
+  zipFilter?: string;
+  stateFilters?: string[];
+  zipFilters?: string[];
+  borrowerIdFilters?: string[];
+  countyFilter?: string;
+  targetLenderRef?: string;
+  portfolioCriteria?: Record<string, string>;
+  cohortId?: string;
+}
+
+export function buildLeadQueueExportFilters(input: LeadQueueExportFiltersInput): string {
+  const params = new URLSearchParams();
+  if (input.segment) params.set('segment', input.segment);
+  if (input.segmentCodes?.length) {
+    params.set('segment_codes', input.segmentCodes.join(','));
+    params.set('segment_mode', input.segmentMode === 'all' ? 'all' : 'any');
+  }
+  if (input.stateFilter) params.set('state', input.stateFilter);
+  if (input.zipFilter) params.set('zip', input.zipFilter);
+  if (input.stateFilters?.length) params.set('states', input.stateFilters.join(','));
+  if (input.zipFilters?.length) params.set('zips', input.zipFilters.join(','));
+  if (input.borrowerIdFilters?.length) {
+    params.set('borrower_ids', input.borrowerIdFilters.join(','));
+  }
+  if (input.countyFilter && /^\d{5}$/.test(input.countyFilter)) {
+    params.set('county', input.countyFilter);
+  }
+  if (input.targetLenderRef) params.set('target_lender_ref', input.targetLenderRef);
+  const safePortfolioCriteria = sanitizePortfolioCriteria(input.portfolioCriteria ?? {});
+  for (const key of PORTFOLIO_FILTER_KEYS) {
+    const value = safePortfolioCriteria?.[key];
+    if (value) params.set(key, value);
+  }
+  if (input.cohortId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(input.cohortId)) {
+    params.set('cohort_id', input.cohortId);
+  }
+  const rendered = params.toString();
+  return rendered.length > 0 ? rendered : 'none';
+}
+
 export default function LeadQueue() {
   const [searchParams] = useSearchParams();
   const segment = (searchParams.get('segment') as SegmentCode | null) ?? undefined;
@@ -89,6 +205,16 @@ export default function LeadQueue() {
     [searchParams],
   );
   const countyFilter = (searchParams.get('county') ?? '').trim() || undefined;
+  const targetLenderRef = parseTargetLenderRef(searchParams.get('target_lender_ref'));
+  const portfolioCriteria = useMemo(
+    () => parsePortfolioCriteria(searchParams),
+    [searchParams],
+  );
+  const portfolioFilters = useMemo(
+    () => portfolioFilterEntries(portfolioCriteria),
+    [portfolioCriteria],
+  );
+  const cohortId = (searchParams.get('cohort_id') ?? '').trim() || undefined;
 
   // 2026-05-04 FIX β: pass state + zip to the API so the geo-filtered
   // path on the backend bypasses lead_population's score >= 50 floor
@@ -110,6 +236,7 @@ export default function LeadQueue() {
       {
         state: stateFilter,
         zip: zipFilter,
+        county: countyFilter,
         states: stateFilters,
         zips: zipFilters,
         borrowerIds: borrowerIdFilters,
@@ -117,17 +244,24 @@ export default function LeadQueue() {
       {
         segmentCodes,
         segmentMode,
+        targetLenderRef,
+        cohortId,
+        portfolioCriteria,
       },
     ),
     [
       segment,
       stateFilter,
       zipFilter,
+      countyFilter,
       stateFilters.join(','),
       zipFilters.join(','),
       borrowerIdFilters.join(','),
       segmentCodes.join(','),
       segmentMode,
+      targetLenderRef,
+      JSON.stringify(portfolioCriteria ?? {}),
+      cohortId,
     ],
   );
   const loading = leadsData === null && warmingUp === null && error === null;
@@ -137,12 +271,13 @@ export default function LeadQueue() {
       : "Couldn't load leads."
     : null;
 
-  // Resolve `?county=FFFFF` → set of ZIPs via /api/geo/zip-rollups. LeadSummary
-  // doesn't carry county_fips so the only way to express "borrowers in this
-  // county" is to intersect on ZIP. `null` = still loading; `Set` with zero
-  // entries = the county had no ZIP-level rollup (the queue will empty out
-  // and the hero will show a "no ZIP rollup" chip). 2026-04-23.
+  // Resolve `?county=FFFFF` → set of ZIPs via /api/geo/zip-rollups for an
+  // honest scope chip only. The actual county predicate is now server-side
+  // in /api/leads, so a transient rollup failure must not broaden or empty
+  // the ranked borrower list.
   const [countyZips, setCountyZips] = useState<Set<string> | null>(null);
+  const [exportRefreshedAt, setExportRefreshedAt] = useState<string | null>(null);
+  const [rulesVersion, setRulesVersion] = useState<string | null>(null);
   useEffect(() => {
     if (!countyFilter) {
       setCountyZips(null);
@@ -151,7 +286,12 @@ export default function LeadQueue() {
     const ctrl = new AbortController();
     let cancelled = false;
     api
-      .zipRollups(countyFilter, ctrl.signal)
+      .zipRollups(
+        countyFilter,
+        ctrl.signal,
+        segmentCodes.length > 0 ? segmentCodes : null,
+        segmentMode,
+      )
       .then((payload) => {
         if (cancelled) return;
         setCountyZips(new Set(payload.rollups.map((r) => r.zip)));
@@ -163,25 +303,61 @@ export default function LeadQueue() {
       cancelled = true;
       ctrl.abort();
     };
-  }, [countyFilter]);
+  }, [countyFilter, segmentCodes, segmentMode]);
+
+  useEffect(() => {
+    const ctrl = new AbortController();
+    api
+      .portfolioPreview({}, ctrl.signal)
+      .then((payload: PortfolioPreview) => setExportRefreshedAt(payload.data_refreshed_at ?? null))
+      .catch(() => setExportRefreshedAt(null));
+    api
+      .adminRules<AdminRulesSummary>(ctrl.signal)
+      .then((payload) => setRulesVersion(payload.offer_rules_version ?? null))
+      .catch(() => setRulesVersion(null));
+    return () => ctrl.abort();
+  }, []);
 
   const visibleLeads = useMemo(() => {
-    // 2026-05-04 FIX β: state and zip filters are now applied
-    // server-side (see the api.leads call above). Only the county
-    // filter still runs client-side, because LeadSummary doesn't
-    // carry county_fips and the ZIPs-in-county set has to be resolved
-    // separately via /api/geo/zip-rollups.
-    let leads = leadsData ?? [];
-    if (countyFilter && countyZips) {
-      // Empty set = the county returned no ZIPs; render zero rows rather
-      // than silently showing all state rows. Matches user expectation
-      // for "county filter was applied but the data scope is 0".
-      leads = leads.filter((l) => countyZips.has(l.zip));
-    }
-    return leads;
-  }, [leadsData, countyFilter, countyZips]);
+    return leadsData ?? [];
+  }, [leadsData]);
 
   const countyLoading = Boolean(countyFilter) && countyZips === null;
+  const exportContext = useMemo(() => {
+    return {
+      filters: buildLeadQueueExportFilters({
+        segment,
+        segmentCodes,
+        segmentMode,
+        stateFilter,
+        zipFilter,
+        stateFilters,
+        zipFilters,
+        borrowerIdFilters,
+        countyFilter,
+        targetLenderRef,
+        portfolioCriteria,
+        cohortId,
+      }),
+      refreshedAt: exportRefreshedAt,
+      rulesVersion,
+    };
+  }, [
+    borrowerIdFilters,
+    cohortId,
+    countyFilter,
+    exportRefreshedAt,
+    portfolioCriteria,
+    rulesVersion,
+    segment,
+    segmentCodes,
+    segmentMode,
+    stateFilter,
+    stateFilters,
+    targetLenderRef,
+    zipFilter,
+    zipFilters,
+  ]);
 
   return (
     <PageShell
@@ -189,7 +365,7 @@ export default function LeadQueue() {
       title="Ranked borrowers"
       lede="Click a row to expand the borrower preview. Approve or reject inline, or open Borrower 360 for the full dossier. Keyboard: A approves, R rejects the expanded row."
       heroRight={
-        segment || segmentCodes.length > 0 || stateFilter || zipFilter || stateFilters.length > 0 || zipFilters.length > 0 || borrowerIdFilters.length > 0 || countyFilter ? (
+        segment || segmentCodes.length > 0 || stateFilter || zipFilter || stateFilters.length > 0 || zipFilters.length > 0 || borrowerIdFilters.length > 0 || countyFilter || targetLenderRef || portfolioCriteria || cohortId ? (
           <>
             {segment && <Chip variant="neutral">segment = {segment}</Chip>}
             {segmentCodes.length > 0 && <Chip variant="neutral">segments = {segmentCodes.join(', ')}</Chip>}
@@ -199,6 +375,13 @@ export default function LeadQueue() {
             {zipFilters.length > 0 && <Chip variant="neutral">zips = {zipFilters.length} selected</Chip>}
             {borrowerIdFilters.length > 0 && <Chip variant="neutral">borrowers = {borrowerIdFilters.length} selected</Chip>}
             {countyFilter && <Chip variant="neutral">county = {countyFilter}</Chip>}
+            {targetLenderRef && <Chip variant="neutral">lender = {targetLenderRef}</Chip>}
+            {portfolioFilters.map((filter) => (
+              <Chip key={filter.key} variant="neutral">
+                {filter.label} = {filter.value}
+              </Chip>
+            ))}
+            {cohortId && <Chip variant="success">Genie cohort</Chip>}
           </>
         ) : undefined
       }
@@ -235,11 +418,11 @@ export default function LeadQueue() {
       {!loading && !loadError && !warmingUp && !countyLoading && visibleLeads.length === 0 && (
         <div className="muted body mb-grid">
           {countyFilter && countyZips && countyZips.size === 0
-            ? 'No ZIP-level rollup for this county in the Cotality evaluation share.'
+            ? 'No ZIP-level rollup for this county in the current Cotality data coverage.'
             : 'No leads match this filter.'}
         </div>
       )}
-      <LeadTable leads={visibleLeads} />
+      <LeadTable leads={visibleLeads} exportContext={exportContext} />
     </PageShell>
   );
 }

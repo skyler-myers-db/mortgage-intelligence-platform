@@ -2,7 +2,7 @@
 # only `python3` is on PATH. Override by running `make PYTHON=python3 …`.
 PYTHON ?= $(shell [ -x .venv/bin/python ] && echo .venv/bin/python || echo python3)
 
-.PHONY: setup dev-api dev-ui test test-e2e lint build validate bundle-validate bundle-deploy zip \
+.PHONY: setup dev-api dev-ui test test-e2e lint build validate bundle-validate bundle-plan bundle-deploy zip \
         provision-genie bundle-validate-env bundle-deploy-dev deploy-dev check-workspace-host \
         render-sql
 
@@ -25,7 +25,7 @@ test:
 # Assumes uvicorn + vite are already running (or Playwright's `webServer`
 # block in playwright.config.ts will boot them). Run from the repo root.
 test-e2e:
-	npx playwright test -c playwright.config.ts
+	npm --prefix frontend run e2e
 
 lint:
 	ruff check backend tests tools
@@ -48,6 +48,9 @@ render-sql:
 
 bundle-validate: render-sql
 	$(PYTHON) tools/databricks/bundle_env.py validate -t dev
+
+bundle-plan: render-sql
+	$(PYTHON) tools/databricks/bundle_env.py plan -t dev
 
 bundle-deploy: render-sql
 	$(PYTHON) tools/databricks/bundle_env.py deploy -t dev

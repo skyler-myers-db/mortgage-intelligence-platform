@@ -20,6 +20,7 @@ from backend.services.pii_redaction import (
     LenderRefResolver,
     _reset_lender_resolver_for_tests,
     generalize_lender,
+    mask_cotality_id,
     redact_borrower_row,
     redact_evidence_row,
     redact_lead_row,
@@ -88,31 +89,32 @@ def test_subject_property_truncates_long_zip() -> None:
 @pytest.mark.parametrize(
     "raw,expected",
     [
-        ("UNITED WHOLESALE MTG", "United Wholesale Mortgage"),
-        ("WELLS FARGO BK NA", "Wells Fargo Bank"),
-        ("JPMORGAN CHASE BK NA", "JPMorgan Chase"),
-        ("ROCKET MTG LLC", "Rocket Mortgage"),
-        ("QUICKEN LNS", "Quicken Loans"),
-        ("BANK OF AMERICA NA", "Bank of America"),
-        ("GUARANTEED RATE INC", "Guaranteed Rate"),
-        ("LOANDEPOT.COM LLC", "loanDepot"),
-        ("CALIBER HM LOANS INC", "Caliber Home Loans"),
-        ("FAIRWAY INDEPENDENT MTG CORP", "Fairway Independent Mortgage"),
+        ("UNITED WHOLESALE MTG", "Competitor A"),
+        ("WELLS FARGO BK NA", "Competitor B"),
+        ("JPMORGAN CHASE BK NA", "Competitor C"),
+        ("ROCKET MTG LLC", "Competitor D"),
+        ("QUICKEN LNS", "Competitor E"),
+        ("BANK OF AMERICA NA", "Competitor F"),
+        ("GUARANTEED RATE INC", "Competitor G"),
+        ("LOANDEPOT.COM LLC", "Competitor H"),
+        ("CALIBER HM LOANS INC", "Competitor I"),
+        ("FAIRWAY INDEPENDENT MTG CORP", "Competitor J"),
         ("SUMMIT MTG", "Summit Mortgage"),
+        ("SUMMIT MORTGAGE", "Summit Mortgage"),
+        ("SUMMIT MTG CORP", "Summit Mortgage"),
+        ("SUMMIT MORTGAGE CORP", "Summit Mortgage"),
         # Case-insensitive lookup
-        ("wells fargo bk na", "Wells Fargo Bank"),
+        ("wells fargo bk na", "Competitor B"),
         # Whitespace handling
-        ("  WELLS FARGO BK NA  ", "Wells Fargo Bank"),
+        ("  WELLS FARGO BK NA  ", "Competitor B"),
     ],
 )
 def test_generalize_lender_known_vocabulary(raw: str, expected: str) -> None:
     assert generalize_lender(raw) == expected
 
 
-def test_generalize_lender_unknown_is_title_cased() -> None:
-    # "PENNYMAC LOAN SERVICES LLC" isn't in the vocabulary -- fall back
-    # to title-case.
-    assert generalize_lender("PENNYMAC LOAN SERVICES LLC") == "Pennymac Loan Services Llc"
+def test_generalize_lender_unknown_is_public_safe_alias() -> None:
+    assert generalize_lender("PENNYMAC LOAN SERVICES LLC") == "Competitor Other"
 
 
 def test_generalize_lender_none_passthrough() -> None:
@@ -149,12 +151,21 @@ def _sample_borrower_row(**overrides: object) -> dict[str, object]:
         "current_rate": 5.75,
         "ltv": 54,
         "related_property_count": 1,
+        "is_owner_occupied": False,
+        "is_investor": True,
+        "is_current_customer": False,
+        "is_former_customer": False,
+        "is_competitor_lien": True,
+        "has_permit": False,
+        "listed_for_sale": False,
+        "second_pos_amount": 0,
         # Forbidden raw-PII columns we expect the redactor to strip --
         # these MUST NOT appear in the output.
         "owner_1_full_name": "Jane Q Public",
         "situs_street_address": "123 Elm St",
         "mailing_street_address": "PO Box 9",
         "trigger_timeline_json": '[{"evidence_id":"ev-001"}]',
+        "current_lender_ref": "WELLS FARGO BK NA",
     }
     row.update(overrides)
     return row
@@ -168,8 +179,24 @@ def test_redact_borrower_row_strips_forbidden_keys() -> None:
 
 def test_redact_borrower_row_renames_clip_to_clip_id() -> None:
     out = redact_borrower_row(_sample_borrower_row())
-    assert out["clip_id"] == "clip-abc-123"
+    assert re.fullmatch(r"clip_ref_[0-9a-f]{12}", out["clip_id"])
     assert "clip" not in out
+
+
+def test_redact_borrower_row_masks_owner_link_id() -> None:
+    out = redact_borrower_row(_sample_borrower_row())
+    assert re.fullmatch(r"owner_link_ref_[0-9a-f]{12}", out["owner_link_id"])
+
+
+def test_mask_cotality_id_preserves_synthetic_demo_refs() -> None:
+    assert mask_cotality_id("clip", "clip_demo_48291") == "clip_demo_48291"
+    assert mask_cotality_id("owner_link", "ol_demo_48291") == "ol_demo_48291"
+
+
+def test_mask_cotality_id_internal_escape_hatch(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MIP_EXPOSE_RAW_COTALITY_IDS", "1")
+    assert mask_cotality_id("clip", "1234567890") == "1234567890"
+    assert mask_cotality_id("owner_link", "9876543210") == "9876543210"
 
 
 def test_redact_borrower_row_synthesizes_display_name() -> None:
@@ -180,6 +207,23 @@ def test_redact_borrower_row_synthesizes_display_name() -> None:
 def test_redact_borrower_row_synthesizes_subject_property() -> None:
     out = redact_borrower_row(_sample_borrower_row())
     assert out["subject_property"] == "Synthetic property · Chicago, IL 60614"
+
+
+def test_redact_borrower_row_masks_current_lender_ref() -> None:
+    out = redact_borrower_row(_sample_borrower_row())
+    assert out["current_lender_ref"] == "Competitor B"
+
+
+def test_redact_borrower_row_preserves_module0_boolean_flags() -> None:
+    out = redact_borrower_row(_sample_borrower_row())
+    assert out["is_owner_occupied"] is False
+    assert out["is_investor"] is True
+    assert out["is_current_customer"] is False
+    assert out["is_former_customer"] is False
+    assert out["is_competitor_lien"] is True
+    assert out["has_permit"] is False
+    assert out["listed_for_sale"] is False
+    assert out["second_pos_amount"] == 0
 
 
 # ---------------------------------------------------------------------------
@@ -205,6 +249,7 @@ def _sample_lead_row() -> dict[str, object]:
         "why_now": "ok",
         "evidence_ids": ["ev-001"],
         "approval_status": "pending",
+        "current_lender_ref": "WELLS FARGO BK NA",
         # Raw-PII columns the redactor must drop.
         "owner_1_full_name": "Jane Q Public",
         "situs_street_address": "123 Elm St",
@@ -215,6 +260,11 @@ def test_redact_lead_row_strips_forbidden_keys() -> None:
     out = redact_lead_row(_sample_lead_row())
     leaks = _FORBIDDEN_OUTPUT_KEYS.intersection(out.keys())
     assert not leaks, f"forbidden keys leaked: {leaks}"
+
+
+def test_redact_lead_row_masks_clip_value() -> None:
+    out = redact_lead_row(_sample_lead_row())
+    assert re.fullmatch(r"clip_ref_[0-9a-f]{12}", out["clip"])
 
 
 def test_redact_lead_row_prefers_hash_derived_display_name() -> None:
@@ -228,6 +278,11 @@ def test_redact_lead_row_falls_back_to_gold_display_name_when_no_hash() -> None:
     row.pop("owner_name_hash")
     out = redact_lead_row(row)
     assert out["display_name"] == "Owner anon"
+
+
+def test_redact_lead_row_masks_current_lender_ref() -> None:
+    out = redact_lead_row(_sample_lead_row())
+    assert out["current_lender_ref"] == "Competitor B"
 
 
 # ---------------------------------------------------------------------------
@@ -266,7 +321,7 @@ def test_redact_evidence_row_generalizes_lender_string_for_competitor_lien() -> 
         "timestamp": "2026-04-10T07:55:00Z",
     }
     out = redact_evidence_row(row)
-    assert out["signal_value"] == "Wells Fargo Bank"
+    assert out["signal_value"] == "Competitor B"
 
 
 def test_redact_evidence_row_passthrough_for_non_lender_signals() -> None:
@@ -324,21 +379,21 @@ def test_resolver_loads_from_uc_on_first_call() -> None:
     # UC carries a LARGER vocabulary than the fallback; we prove the
     # resolver prefers it over the in-process constant.
     uc_dict = {
-        "WELLS FARGO BK NA": "Wells Fargo Bank",
-        "PENNYMAC LOAN SVCS LLC": "PennyMac Loan Services",  # NOT in fallback
+        "WELLS FARGO BK NA": "Competitor B",
+        "PENNYMAC LOAN SVCS LLC": "Competitor K",  # NOT in fallback
     }
     resolver = _resolver_with_uc_dict(uc_dict)
     # Known-to-UC-only entry resolves.
-    assert resolver.resolve("PENNYMAC LOAN SVCS LLC") == "PennyMac Loan Services"
+    assert resolver.resolve("PENNYMAC LOAN SVCS LLC") == "Competitor K"
     # Known-to-both resolves to UC value (identical here).
-    assert resolver.resolve("WELLS FARGO BK NA") == "Wells Fargo Bank"
+    assert resolver.resolve("WELLS FARGO BK NA") == "Competitor B"
 
 
 def test_resolver_falls_back_to_ref_map_when_uc_unavailable() -> None:
     # `_load_from_uc` returns None == "UC load failed"; resolver uses the
     # fallback dict (defaults to _LENDER_REF_MAP).
     resolver = _resolver_with_uc_dict(None)
-    assert resolver.resolve("WELLS FARGO BK NA") == "Wells Fargo Bank"
+    assert resolver.resolve("WELLS FARGO BK NA") == "Competitor B"
     assert resolver.resolve("SUMMIT MTG") == "Summit Mortgage"
 
 
@@ -349,12 +404,12 @@ def test_resolver_caches_uc_result_until_ttl() -> None:
 
     def counted_load() -> dict[str, str]:
         call_count["n"] += 1
-        return {"WELLS FARGO BK NA": "Wells Fargo Bank"}
+        return {"WELLS FARGO BK NA": "Competitor B"}
 
     resolver = LenderRefResolver(ttl_s=60.0)
     resolver._load_from_uc = counted_load  # type: ignore[method-assign]
     for _ in range(5):
-        assert resolver.resolve("WELLS FARGO BK NA") == "Wells Fargo Bank"
+        assert resolver.resolve("WELLS FARGO BK NA") == "Competitor B"
     assert call_count["n"] == 1, "UC should be queried at most once within TTL"
 
 
@@ -363,7 +418,7 @@ def test_resolver_invalidate_forces_reload() -> None:
 
     def counted_load() -> dict[str, str]:
         call_count["n"] += 1
-        return {"WELLS FARGO BK NA": "Wells Fargo Bank"}
+        return {"WELLS FARGO BK NA": "Competitor B"}
 
     resolver = LenderRefResolver(ttl_s=60.0)
     resolver._load_from_uc = counted_load  # type: ignore[method-assign]
@@ -373,12 +428,12 @@ def test_resolver_invalidate_forces_reload() -> None:
     assert call_count["n"] == 2
 
 
-def test_resolver_unknown_key_titlecases() -> None:
+def test_resolver_unknown_key_uses_public_safe_alias() -> None:
     resolver = _resolver_with_uc_dict({})  # empty UC dict; empty fallback
     resolver._fallback = {}  # type: ignore[attr-defined]
     resolver.invalidate()
     resolver._load_from_uc = lambda: {}  # type: ignore[method-assign]
-    assert resolver.resolve("PENNYMAC LOAN SERVICES LLC") == "Pennymac Loan Services Llc"
+    assert resolver.resolve("PENNYMAC LOAN SERVICES LLC") == "Competitor Other"
 
 
 def test_resolver_handles_none_and_empty() -> None:
@@ -398,7 +453,8 @@ def test_generalize_lender_uses_process_resolver_when_set() -> None:
 
 
 def test_fallback_ref_map_still_covers_canonical_11() -> None:
-    # The in-process fallback must not shrink below the canonical 11 rows
+    # The in-process fallback must not shrink below the canonical rows
     # (so dev/tests without UC creds still get the expected labels).
     assert _LENDER_REF_MAP["SUMMIT MTG"] == "Summit Mortgage"
-    assert len(_LENDER_REF_MAP) >= 11
+    assert _LENDER_REF_MAP["SUMMIT MORTGAGE"] == "Summit Mortgage"
+    assert len(_LENDER_REF_MAP) >= 14

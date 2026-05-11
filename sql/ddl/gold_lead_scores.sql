@@ -4,8 +4,8 @@
 -- Purpose:   DDL for `mip.gold.lead_scores` -- one row per CLIP carrying
 --            the five 0..100 component sub-scores, the fn_lead_score blended
 --            opportunity_score, and the fn_next_best_offer recommendation.
---            This is where scoring happens; gold.borrower_360 JOINs against
---            this table for its score columns.
+--            This is the scoring audit surface; gold.borrower_360 computes
+--            the hot-path borrower scores directly from the same primitives.
 --
 -- Grain:     One row per CLIP.
 -- PK:        clip.
@@ -17,16 +17,19 @@
 -- Slice:     module0-real-data-slice3 (gold layer build).
 --
 -- Sub-score semantics (each 0..100, formula per data-contract §5):
---   economic_incentive : piecewise on rate_spread_bps + equity_pct.
---   intent_trigger     : LEAST(100, 20*recent_refi_90d + 15*recent_payoff_90d
---                        + 25*listed_for_sale + 20*has_permit
---                        + 15*is_competitor_lien + 10*recent_avm_uplift>=10).
---                        listed_for_sale and has_permit are BLOCKED -> 0,
---                        leaving intent driven purely by real events.
---   fit                : owner-occupancy + loan_type + size fit (0..100).
---   relationship       : is_current_customer + historical count at the
---                        tenant lender.
---   evidence           : LEAST(100, 20 * count_of_evidence_rows_for_clip).
+--   economic_incentive : continuous sqrt/linear blend of rate_spread_bps +
+--                        equity_pct.
+--   intent_trigger     : recent refi/payoff counts + competitor-lien,
+--                        investor, rate-drift, equity, and current-customer
+--                        terms. listed_for_sale and has_permit are BLOCKED
+--                        -> 0 on the current real-data path.
+--   fit                : owner-occupancy + loan_type + corporate/investor fit
+--                        using fields carried on borrower_360.
+--   relationship       : current/former customer, competitor, investor, owner-
+--                        level Summit history, and first-party relationship
+--                        depth / recent engagement.
+--   evidence           : 10 pts per live evidence row plus bounded
+--                        second-position balance tail.
 --
 -- opportunity_score = mip.gold.fn_lead_score(economic_incentive,
 --                     intent_trigger, fit, relationship, evidence).
@@ -34,11 +37,12 @@
 -- in_the_money = mip.gold.fn_in_the_money(rate_spread_bps, equity_pct,
 --                                              min_spread, min_equity).
 --
--- Thresholds: Five admin-tunable INTs come from mip_app.thresholds (Lakebase)
--- at refresh time. Thresholds are baked into the refresh and the columns
--- `min_*_applied` record what was used so WhyPanel can reproduce the
--- decision. The UDFs themselves remain threshold-parameterized (frozen
--- signature), so a future feature flag can recompute per-query.
+-- Thresholds: Five admin-tunable INTs are represented as explicit columns
+-- on the scoring row. The current SQL refresh applies the documented
+-- default literals; future admin-config binding must update borrower_360
+-- and lead_scores together. The UDFs themselves remain threshold-
+-- parameterized (frozen signature), so a future feature flag can recompute
+-- per-query.
 --
 -- Threshold defaults (per docs/data-contract §5 + frozen UDF headers):
 --   min_spread_bps       = 75
@@ -47,14 +51,15 @@
 --   cashout_equity_min   = 25
 --   retention_min_spread = 50
 --
--- Golden fixture parity: every row's (opportunity_score,
--- recommended_offer_code, in_the_money) tuple is a function of the inputs
--- already defined in gold.borrower_360 for the same CLIP. The SQL-Python
--- parity test in tests/integration/test_sql_python_parity.py loads
--- tests/fixtures/*_golden.json and asserts fn_lead_score / fn_in_the_money /
--- fn_rate_spread / fn_next_best_offer produce byte-identical output in
--- Python and in Databricks SQL. If this table's numbers drift from Python
--- scoring, that test fails loudly.
+-- Golden fixture parity: every row's (opportunity_score, confidence,
+-- recommended_offer_code, in_the_money) tuple is a function of the same
+-- primitive inputs used by gold.borrower_360 for the same CLIP. The
+-- SQL-Python parity test in tests/integration/test_sql_python_parity.py
+-- loads tests/fixtures/*_golden.json and asserts fn_lead_score /
+-- fn_in_the_money / fn_rate_spread / fn_next_best_offer produce
+-- byte-identical output in Python and in Databricks SQL. If this table's
+-- numbers drift from borrower_360 or Python scoring, that test fails
+-- loudly.
 --
 -- Idempotency: CREATE TABLE IF NOT EXISTS; populated via CTAS in the
 --            transformation file (CREATE OR REPLACE TABLE ... AS SELECT).
@@ -63,12 +68,12 @@
 CREATE TABLE IF NOT EXISTS mip.gold.lead_scores (
   clip                     STRING    NOT NULL COMMENT 'Cotality CLIP. PK. FK to gold.borrower_360.clip.',
   economic_incentive       INT       NOT NULL COMMENT '0..100 sub-score on rate_spread_bps + equity_pct. Weight 0.35 in fn_lead_score.',
-  intent_trigger           INT       NOT NULL COMMENT '0..100 sub-score on recent mortgage events + listed/permit (BLOCKED->0) + competitor_lien + recent_avm_uplift. Weight 0.30.',
-  fit                      INT       NOT NULL COMMENT '0..100 sub-score on owner-occupancy + loan_type + property size. Weight 0.15.',
-  relationship             INT       NOT NULL COMMENT '0..100 sub-score on customer + historical mortgage count at tenant lender. Weight 0.10.',
-  evidence                 INT       NOT NULL COMMENT '0..100: LEAST(100, 20 * count_of_evidence_rows_for_clip). Weight 0.10.',
-  opportunity_score        INT       NOT NULL COMMENT 'mip.gold.fn_lead_score(...) output. 0..100. Frozen UDF signature; parity test locks it to Python.',
-  confidence               INT       NOT NULL COMMENT 'ROUND(mean(5 sub-scores)). Mirrors mock_data._build_borrower for screen parity.',
+  intent_trigger           INT       NOT NULL COMMENT '0..100 sub-score on recent mortgage events, competitor/investor signals, rate drift, equity proxy, and current-customer bump. Weight 0.30.',
+  fit                      INT       NOT NULL COMMENT '0..100 sub-score on owner-occupancy + loan_type + corporate/investor fit. Weight 0.15.',
+  relationship             INT       NOT NULL COMMENT '0..100 sub-score on customer / competitor / investor relationship ladder plus owner-level distinct tenant-lender CLIP history. Weight 0.10.',
+  evidence                 INT       NOT NULL COMMENT '0..100: 10 pts per live evidence row plus bounded second-position balance tail. Weight 0.10.',
+  opportunity_score        INT       NOT NULL COMMENT 'mip.gold.fn_lead_score(...) output. 0..100. Mirrors gold.borrower_360 for the same CLIP.',
+  confidence               INT       NOT NULL COMMENT 'ROUND(mean(5 sub-scores)). Mirrors gold.borrower_360 for the same CLIP.',
   in_the_money             BOOLEAN   NOT NULL COMMENT 'mip.gold.fn_in_the_money(rate_spread_bps, equity_pct, min_spread_bps_applied, min_equity_pct_applied).',
   recommended_offer_code   STRING    NOT NULL COMMENT 'mip.gold.fn_next_best_offer(...) lowercase code.',
   rate_spread_bps          INT       NOT NULL COMMENT 'Input to fn_in_the_money / fn_next_best_offer. Carried here so the table is self-contained for parity testing.',
@@ -77,7 +82,13 @@ CREATE TABLE IF NOT EXISTS mip.gold.lead_scores (
   listed_for_sale          BOOLEAN   NOT NULL COMMENT 'BLOCKED -> FALSE; carried for parity test transparency.',
   is_investor              BOOLEAN   NOT NULL COMMENT 'Carried from borrower_360.',
   is_current_customer      BOOLEAN   NOT NULL COMMENT 'Carried from borrower_360.',
+  is_former_customer       BOOLEAN   NOT NULL COMMENT 'Carried from borrower_360. Distinct from competitor lien; requires historical tenant relationship and no current tenant lien.',
   is_competitor_lien       BOOLEAN   NOT NULL COMMENT 'Carried from borrower_360.',
+  has_first_party_relationship BOOLEAN NOT NULL COMMENT 'Carried from borrower_360. TRUE when optional first-party feeds resolve to this borrower.',
+  first_party_relationship_depth INT   NOT NULL COMMENT 'Bounded count of resolved first-party feed categories.',
+  first_party_recent_interactions INT  NOT NULL COMMENT 'Recent positive interaction count from the first-party engagement feed.',
+  first_party_recent_application BOOLEAN NOT NULL COMMENT 'TRUE when a recent first-party LOS/application event exists.',
+  first_party_synthetic_demo     BOOLEAN NOT NULL COMMENT 'TRUE only for rows touched by the Summit demo_synthetic first-party seed.',
   min_spread_bps_applied   INT       NOT NULL COMMENT 'Threshold applied this refresh.',
   min_equity_pct_applied   INT       NOT NULL COMMENT 'Threshold applied this refresh.',
   heloc_equity_min_applied INT       NOT NULL COMMENT 'HELOC equity threshold applied this refresh (fn_next_best_offer branch 2/3).',

@@ -10,7 +10,8 @@ resources:
 
     # Slice13-accuracy mirror: canonical definition lives in `databricks.yml`
     # as `mip_refresh_scores`. Runs the gold CTAS chain (idempotent DDL +
-    # 7 dependency-ordered CTAS tasks including `ctas_lockin_cohort`).
+    # dependency-ordered CTAS tasks including first-party demo-feed seeding,
+    # `ctas_lockin_cohort`, and `ctas_source_readiness`).
     # Keep in sync with the databricks.yml definition.
     mip_refresh_scores:
       name: mip-refresh-scores-${bundle.target}
@@ -36,6 +37,13 @@ resources:
             warehouse_id: ${var.sql_warehouse_id}
             file:
               path: ../sql/transformations/capture_refresh_timestamp.sql
+        - task_key: seed_demo_first_party_feeds
+          depends_on:
+            - task_key: capture_refresh_timestamp
+          sql_task:
+            warehouse_id: ${var.sql_warehouse_id}
+            file:
+              path: ../sql/transformations/demo_first_party_feeds.sql
         - task_key: ctas_property_owner_bridge
           depends_on:
             - task_key: capture_refresh_timestamp
@@ -45,7 +53,7 @@ resources:
               path: ../sql/transformations/gold_property_owner_bridge.sql
         - task_key: ctas_evidence_events
           depends_on:
-            - task_key: capture_refresh_timestamp
+            - task_key: ctas_property_owner_bridge
           sql_task:
             warehouse_id: ${var.sql_warehouse_id}
             file:
@@ -54,6 +62,7 @@ resources:
           depends_on:
             - task_key: ctas_property_owner_bridge
             - task_key: ctas_evidence_events
+            - task_key: seed_demo_first_party_feeds
           sql_task:
             warehouse_id: ${var.sql_warehouse_id}
             file:
@@ -126,7 +135,10 @@ resources:
               path: ../sql/transformations/gold_state_top_segment.sql
         - task_key: ctas_source_readiness
           depends_on:
-            - task_key: capture_refresh_timestamp
+            - task_key: ctas_lead_scores
+            - task_key: ctas_lead_population
+            - task_key: ctas_segment_population
+            - task_key: ctas_borrower_dossier
           sql_task:
             warehouse_id: ${var.sql_warehouse_id}
             file:

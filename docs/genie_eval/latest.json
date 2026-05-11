@@ -1,5 +1,5 @@
 {
-  "stamp": "2026-05-05T17-52-11Z",
+  "stamp": "2026-05-07T01-10-00Z",
   "base": "https://mip-app-2543889327043640.aws.databricksapps.com",
   "overall_score": 100.0,
   "passed": 15,
@@ -10,7 +10,7 @@
       "category": "top-N",
       "score": 100.0,
       "passed": true,
-      "latency_s": 12.12,
+      "latency_s": 14.62,
       "checks": {
         "citations": true,
         "forbidden_terms": true,
@@ -23,7 +23,7 @@
         "canonical_sql": true
       },
       "notes": [
-        "latency 12.1s > target 8.0s"
+        "latency 14.6s > target 8.0s"
       ]
     },
     {
@@ -31,7 +31,7 @@
       "category": "top-N",
       "score": 100.0,
       "passed": true,
-      "latency_s": 12.22,
+      "latency_s": 12.36,
       "checks": {
         "citations": true,
         "forbidden_terms": true,
@@ -44,7 +44,7 @@
         "canonical_sql": true
       },
       "notes": [
-        "latency 12.2s > target 8.0s"
+        "latency 12.4s > target 8.0s"
       ]
     },
     {
@@ -52,7 +52,7 @@
       "category": "chart-planner",
       "score": 100.0,
       "passed": true,
-      "latency_s": 10.15,
+      "latency_s": 12.77,
       "checks": {
         "citations": true,
         "forbidden_terms": true,
@@ -65,7 +65,7 @@
         "canonical_sql": true
       },
       "notes": [
-        "latency 10.2s > target 8.0s"
+        "latency 12.8s > target 8.0s"
       ]
     },
     {
@@ -73,7 +73,7 @@
       "category": "aggregate",
       "score": 100.0,
       "passed": true,
-      "latency_s": 10.57,
+      "latency_s": 10.62,
       "checks": {
         "citations": true,
         "forbidden_terms": true,
@@ -94,7 +94,7 @@
       "category": "aggregate",
       "score": 100.0,
       "passed": true,
-      "latency_s": 12.6,
+      "latency_s": 12.95,
       "checks": {
         "citations": true,
         "forbidden_terms": true,
@@ -107,7 +107,7 @@
         "canonical_sql": true
       },
       "notes": [
-        "latency 12.6s > target 6.0s"
+        "latency 13.0s > target 6.0s"
       ]
     },
     {
@@ -115,7 +115,7 @@
       "category": "aggregate",
       "score": 100.0,
       "passed": true,
-      "latency_s": 16.75,
+      "latency_s": 13.6,
       "checks": {
         "citations": true,
         "forbidden_terms": true,
@@ -128,7 +128,7 @@
         "canonical_sql": true
       },
       "notes": [
-        "latency 16.8s > target 8.0s"
+        "latency 13.6s > target 8.0s"
       ]
     },
     {
@@ -136,7 +136,7 @@
       "category": "aggregate",
       "score": 100.0,
       "passed": true,
-      "latency_s": 17.12,
+      "latency_s": 13.0,
       "checks": {
         "citations": true,
         "forbidden_terms": true,
@@ -149,7 +149,7 @@
         "canonical_sql": true
       },
       "notes": [
-        "latency 17.1s > target 8.0s"
+        "latency 13.0s > target 8.0s"
       ]
     },
     {
@@ -157,7 +157,7 @@
       "category": "strategy",
       "score": 100.0,
       "passed": true,
-      "latency_s": 14.34,
+      "latency_s": 12.25,
       "checks": {
         "citations": true,
         "forbidden_terms": true,
@@ -170,7 +170,7 @@
         "canonical_sql": true
       },
       "notes": [
-        "latency 14.3s > target 10.0s"
+        "latency 12.2s > target 10.0s"
       ]
     },
     {
@@ -178,7 +178,7 @@
       "category": "segment",
       "score": 100.0,
       "passed": true,
-      "latency_s": 12.17,
+      "latency_s": 12.43,
       "checks": {
         "citations": true,
         "forbidden_terms": true,
@@ -191,7 +191,7 @@
         "canonical_sql": true
       },
       "notes": [
-        "latency 12.2s > target 8.0s"
+        "latency 12.4s > target 8.0s"
       ]
     },
     {
@@ -199,7 +199,7 @@
       "category": "governance",
       "score": 100.0,
       "passed": true,
-      "latency_s": 0.84,
+      "latency_s": 0.82,
       "checks": {
         "citations": true,
         "forbidden_terms": true,
@@ -218,7 +218,7 @@
       "category": "trigger",
       "score": 100.0,
       "passed": true,
-      "latency_s": 20.72,
+      "latency_s": 20.82,
       "checks": {
         "citations": true,
         "forbidden_terms": true,
@@ -231,7 +231,7 @@
         "canonical_sql": true
       },
       "notes": [
-        "latency 20.7s > target 8.0s"
+        "latency 20.8s > target 8.0s"
       ]
     },
     {
@@ -239,7 +239,7 @@
       "category": "governance",
       "score": 100.0,
       "passed": true,
-      "latency_s": 0.87,
+      "latency_s": 0.82,
       "checks": {
         "citations": true,
         "forbidden_terms": true,
@@ -258,7 +258,7 @@
       "category": "governance",
       "score": 100.0,
       "passed": true,
-      "latency_s": 0.86,
+      "latency_s": 0.83,
       "checks": {
         "citations": true,
         "forbidden_terms": true,
@@ -277,7 +277,7 @@
       "category": "governance",
       "score": 100.0,
       "passed": true,
-      "latency_s": 0.89,
+      "latency_s": 0.84,
       "checks": {
         "citations": true,
         "forbidden_terms": true,
@@ -296,7 +296,7 @@
       "category": "aggregate",
       "score": 100.0,
       "passed": true,
-      "latency_s": 12.75,
+      "latency_s": 13.35,
       "checks": {
         "citations": true,
         "forbidden_terms": true,
@@ -309,7 +309,7 @@
         "canonical_sql": true
       },
       "notes": [
-        "latency 12.8s > target 8.0s"
+        "latency 13.3s > target 8.0s"
       ]
     }
   ]

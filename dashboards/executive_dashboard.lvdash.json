@@ -121,7 +121,7 @@
       "displayName": "Equity percent vs rate spread by segment",
       "queryLines": [
         "SELECT",
-        "  segment                AS segment,",
+        "  primary_segment        AS segment,",
         "  state                  AS state,",
         "  equity_pct             AS equity_pct,",
         "  rate_spread_bps        AS rate_spread_bps,",
@@ -181,7 +181,7 @@
               },
               "frame": {
                 "title": "Addressable Borrowers",
-                "description": "Unique CLIPs in the 6-state Cotality share with an open lien",
+                "description": "Unique CLIPs in current Cotality data coverage with an open lien",
                 "showTitle": true,
                 "showDescription": true
               }
@@ -383,7 +383,7 @@
               },
               "frame": {
                 "title": "Opportunity by State",
-                "description": "Mean opportunity score across the 6-state Cotality share footprint (IL, CA, FL, TX, WA, CO)",
+                "description": "Mean opportunity score across current Cotality data coverage",
                 "showTitle": true,
                 "showDescription": true
               }

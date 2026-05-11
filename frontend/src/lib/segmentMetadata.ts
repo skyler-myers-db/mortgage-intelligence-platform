@@ -59,7 +59,7 @@ export const SEGMENT_DEFINITIONS: readonly SegmentDefinition[] = [
     code: 'retention',
     name: 'Retention Risk',
     color: 'var(--seg-retention)',
-    description: 'Current customer showing refi/listing/competitor signals.',
+    description: 'Current customer with rate spread above the retention threshold; listing and competitor overlays join only when live evidence exists.',
     icon: 'shield',
   },
 ];

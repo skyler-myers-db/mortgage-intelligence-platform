@@ -29,16 +29,22 @@
 # Env:
 #   MIP_APP_URL      Override target URL. Default: http://127.0.0.1:8000.
 #   MIP_FRONTEND_URL Frontend URL. Default: http://127.0.0.1:5173.
+#   MIP_BEARER_TOKEN Optional Databricks Apps bearer token for deployed URLs.
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
 APP_URL="${MIP_APP_URL:-http://127.0.0.1:8000}"
 FRONTEND_URL="${MIP_FRONTEND_URL:-http://127.0.0.1:5173}"
+AUTH_TOKEN="${MIP_BEARER_TOKEN:-${DATABRICKS_TOKEN:-}}"
 BOOT_TIMEOUT=20
 SKIP_GENIE=0
 BOOT_LOCAL=0
 BACKEND_PID=""
 FRONTEND_PID=""
+CURL_AUTH_ARGS=()
+if [[ -n "$AUTH_TOKEN" ]]; then
+  CURL_AUTH_ARGS=(-H "Authorization: Bearer $AUTH_TOKEN")
+fi
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -87,7 +93,7 @@ if [[ "$APP_URL" == http://127.0.0.1:* ]] || [[ "$APP_URL" == http://localhost:*
 
   # Poll /api/health until green or timeout.
   waited=0
-  until curl -sf "$APP_URL/api/health" > /dev/null 2>&1; do
+  until curl -sf "${CURL_AUTH_ARGS[@]}" "$APP_URL/api/health" > /dev/null 2>&1; do
     sleep 1
     waited=$((waited + 1))
     if (( waited >= BOOT_TIMEOUT )); then
@@ -102,7 +108,7 @@ fi
 
 # --- Health --------------------------------------------------------------
 echo "[smoke] GET /api/health"
-HEALTH="$(curl -sf "$APP_URL/api/health")" || {
+HEALTH="$(curl -sf "${CURL_AUTH_ARGS[@]}" "$APP_URL/api/health")" || {
   echo "[smoke] /api/health failed" >&2; exit 1;
 }
 
@@ -128,9 +134,11 @@ probe() {
   local code
   if [[ "$method" == "POST" ]]; then
     code=$(curl -s -o /tmp/mip-smoke-out.json -w '%{http_code}' \
+      "${CURL_AUTH_ARGS[@]}" \
       -X POST -H 'content-type: application/json' --data "$body" "$APP_URL$path")
   else
-    code=$(curl -s -o /tmp/mip-smoke-out.json -w '%{http_code}' "$APP_URL$path")
+    code=$(curl -s -o /tmp/mip-smoke-out.json -w '%{http_code}' \
+      "${CURL_AUTH_ARGS[@]}" "$APP_URL$path")
   fi
   if [[ "$code" != "200" ]]; then
     echo "[smoke] $label ($path) returned $code" >&2
@@ -140,14 +148,106 @@ probe() {
   echo "[smoke] ok · $label"
 }
 
-probe "portfolio preview" "/api/portfolio/preview"
+probe "portfolio preview" "/api/portfolio/preview" POST '{}'
 probe "ranked leads"      "/api/leads?limit=5"
-probe "borrower dossier"  "/api/borrowers/B-48291"
-probe "evidence timeline" "/api/borrowers/B-48291/evidence"
+if ! jq -e 'all(.[]; (.clip // "" | test("^(clip_ref_|clip_demo_|$)")))' /tmp/mip-smoke-out.json >/dev/null; then
+  echo "[smoke] ranked leads exposed an unmasked property ref" >&2
+  cat /tmp/mip-smoke-out.json >&2 || true
+  exit 1
+fi
+BORROWER_ID="$(jq -r '.[0].borrower_id // empty' /tmp/mip-smoke-out.json)"
+if [[ -z "$BORROWER_ID" ]]; then
+  echo "[smoke] ranked leads returned no borrower_id" >&2
+  cat /tmp/mip-smoke-out.json >&2 || true
+  exit 1
+fi
+probe "borrower dossier"  "/api/borrowers/$BORROWER_ID"
+if ! jq -e '(.clip_id // "" | test("^(clip_ref_|clip_demo_)")) and (.owner_link_id // "" | test("^(owner_link_ref_|ol_demo_|$)"))' /tmp/mip-smoke-out.json >/dev/null; then
+  echo "[smoke] borrower dossier exposed an unmasked Cotality identifier" >&2
+  cat /tmp/mip-smoke-out.json >&2 || true
+  exit 1
+fi
+probe "evidence timeline" "/api/borrowers/$BORROWER_ID/evidence"
+if ! jq -e 'length > 0 and all(.[]; (.source_table // "" | test("^mip\\.")) and (.source_product // "" | length > 0) and (.signal_type // "" | length > 0))' /tmp/mip-smoke-out.json >/dev/null; then
+  echo "[smoke] evidence timeline did not return source-backed evidence rows" >&2
+  cat /tmp/mip-smoke-out.json >&2 || true
+  exit 1
+fi
+
+probe "data estate proof" "/api/data-estate"
+if ! jq -e '.public_demo_masking == true and (.proof_assets | length > 0) and any(.lanes[]?.assets[]?; .synthetic_demo == true)' /tmp/mip-smoke-out.json >/dev/null; then
+  echo "[smoke] data estate proof is missing masking/proof/synthetic-disclosure contract" >&2
+  cat /tmp/mip-smoke-out.json >&2 || true
+  exit 1
+fi
+
+probe "source readiness" "/api/admin/sources"
+if ! jq -e '
+  . as $rows
+  |
+  length > 0
+  and (["Cotality Public Records","Voluntary Lien","MMA Mortgage Analytics","CLIP","Owner Link","AVM","FRED Market Rates","UC Gold Borrower 360","UC Gold Lead Scores","UC Gold Lead Population","UC Gold Segment Population","UC Gold Borrower Dossier"] as $core
+    | all($core[]; . as $name
+      | any($rows[]; .name == $name and .status == "live" and (.rows // 0) > 0 and (.last_updated // "") != "" and (.checked_at // "") != "")))
+  and (["First-party LOS / Applications","First-party Servicing Portfolio","First-party CRM / Campaigns","First-party Customer Interactions","First-party Product Balances"] as $firstparty
+    | all($firstparty[]; . as $name
+      | any($rows[]; .name == $name and (.status == "live" or .status == "demo_synthetic") and (.rows // 0) > 0 and (.last_updated // "") != "" and (.checked_at // "") != "")))
+  and all($rows[]; if (.name == "MLS" or .name == "Building Permits") then .status != "live" else true end)
+  and all($rows[]; if .synthetic_demo == true then .status == "demo_synthetic" else true end)
+' /tmp/mip-smoke-out.json >/dev/null; then
+  echo "[smoke] source readiness failed core-live/synthetic-disclosure checks" >&2
+  cat /tmp/mip-smoke-out.json >&2 || true
+  exit 1
+fi
+
+probe "geo state rollups" "/api/geo/state-rollups?segment_codes=itm,equity&segment_mode=all"
+if ! jq -e '.rollups | length > 0' /tmp/mip-smoke-out.json >/dev/null; then
+  echo "[smoke] geo state rollups returned no filtered rows" >&2
+  cat /tmp/mip-smoke-out.json >&2 || true
+  exit 1
+fi
+SMOKE_STATE="$(jq -r '.rollups | map(select((.addressable // 0) > 0)) | .[0].state // empty' /tmp/mip-smoke-out.json)"
+if [[ -z "$SMOKE_STATE" ]]; then
+  echo "[smoke] geo state rollups did not include a populated state" >&2
+  cat /tmp/mip-smoke-out.json >&2 || true
+  exit 1
+fi
+probe "geo county rollups" "/api/geo/county-rollups?state=$SMOKE_STATE&segment_codes=itm,equity&segment_mode=all"
+if ! jq -e '.rollups | length > 0' /tmp/mip-smoke-out.json >/dev/null; then
+  echo "[smoke] geo county rollups returned no filtered rows for state=$SMOKE_STATE" >&2
+  cat /tmp/mip-smoke-out.json >&2 || true
+  exit 1
+fi
+SMOKE_FIPS="$(jq -r '.rollups | map(select((.addressable_borrowers // 0) > 0)) | .[0].fips_5 // empty' /tmp/mip-smoke-out.json)"
+if [[ -z "$SMOKE_FIPS" ]]; then
+  echo "[smoke] geo county rollups did not include fips_5" >&2
+  cat /tmp/mip-smoke-out.json >&2 || true
+  exit 1
+fi
+probe "geo zip rollups" "/api/geo/zip-rollups?county_fips=$SMOKE_FIPS&segment_codes=itm,equity&segment_mode=all"
+if ! jq -e '.rollups | length > 0' /tmp/mip-smoke-out.json >/dev/null; then
+  echo "[smoke] geo zip rollups returned no filtered rows for county_fips=$SMOKE_FIPS" >&2
+  cat /tmp/mip-smoke-out.json >&2 || true
+  exit 1
+fi
+
+SMOKE_REQUEST_ID="smoke-$(date +%s)-$RANDOM"
+probe "outreach approval audit write" "/api/outreach/approve" POST \
+  "{\"borrower_id\":\"$BORROWER_ID\",\"offer_code\":\"smoke\",\"evidence_ids\":[],\"request_id\":\"$SMOKE_REQUEST_ID\"}"
+if ! jq -e '.approved == true and (.audit_event_id // "" | length > 0)' /tmp/mip-smoke-out.json >/dev/null; then
+  echo "[smoke] outreach approval did not return an audit event id" >&2
+  cat /tmp/mip-smoke-out.json >&2 || true
+  exit 1
+fi
 
 if [[ "$SKIP_GENIE" == "0" ]]; then
   probe "genie message" "/api/genie/message" POST \
-    '{"question":"How many borrowers across the 6-state footprint are currently in-the-money?"}'
+    '{"question":"How many borrowers across current refreshed coverage are currently in-the-money?"}'
+  if ! jq -e '(.source == "genie" or .source == "trusted_sql") and (.proof.trusted == true) and ((.proof.source_assets // []) | length > 0) and ((.sql_query // "") | length > 0)' /tmp/mip-smoke-out.json >/dev/null; then
+    echo "[smoke] Genie endpoint did not return a trusted governed answer with SQL/source proof" >&2
+    cat /tmp/mip-smoke-out.json >&2 || true
+    exit 1
+  fi
 fi
 
 echo "[smoke] PASS · $APP_URL"

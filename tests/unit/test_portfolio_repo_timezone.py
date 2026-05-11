@@ -10,11 +10,17 @@ offset and bring the drift back.
 """
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta, timezone
 from typing import Any
 
 import pytest
 
+from backend.schemas.portfolio import (
+    PortfolioCreateRequest,
+    PortfolioCriteria,
+    PortfolioPreviewRequest,
+)
 from backend.services.repositories.databricks_repo import (
     DatabricksPortfolioRepository,
 )
@@ -39,12 +45,15 @@ class _StubClient:
         self._trend_rows = trend_rows
         self._day_zero_row = day_zero_row if day_zero_row is not None else {"day_zero": False}
         self.preview_calls: int = 0
+        self.statements: list[str] = []
+        self.parameters: list[dict[str, Any] | None] = []
 
     def _is_day_zero_sql(self, sql: str) -> bool:
         return "lead_population" in sql and "day_zero" in sql
 
     def execute(self, sql: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
-        _ = params
+        self.statements.append(sql)
+        self.parameters.append(params)
         if "funnel_snapshot_daily" in sql:
             return self._trend_rows
         if self._is_day_zero_sql(sql):
@@ -52,13 +61,26 @@ class _StubClient:
         return [self._preview_row]
 
     def execute_one(self, sql: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        _ = params
+        self.statements.append(sql)
+        self.parameters.append(params)
         if "funnel_snapshot_daily" in sql:
             return self._trend_rows[0] if self._trend_rows else {}
         if self._is_day_zero_sql(sql):
             return self._day_zero_row
         self.preview_calls += 1
         return self._preview_row
+
+
+class _StubLakebase:
+    def __init__(self) -> None:
+        self.rows: list[dict[str, object]] = []
+
+    def fetchone(self, sql: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        self.rows.append({"sql": sql, "params": params or {}})
+        return {
+            "campaign_id": "11111111-1111-1111-1111-111111111111",
+            "audit_id": "22222222-2222-2222-2222-222222222222",
+        }
 
 
 def _preview_row() -> dict[str, Any]:
@@ -257,14 +279,10 @@ def test_preview_second_call_same_order_hits_cache():
     """Functional: two calls with semantically-equivalent criteria must
     share the same cache entry. The second call should NOT re-run the
     preview SELECT on the stub client."""
-    from backend.schemas.portfolio import PortfolioCriteria, PortfolioPreviewRequest
-
     client = _StubClient(_preview_row(), [_trend_row("2026-04-22T18:30:00")])
     repo = DatabricksPortfolioRepository(client)  # type: ignore[arg-type]
 
-    req = PortfolioPreviewRequest(
-        criteria=PortfolioCriteria(geography="Texas", min_equity_pct=25)
-    )
+    req = PortfolioPreviewRequest(criteria=PortfolioCriteria(min_equity_pct=25))
     repo.preview(req)
     calls_after_first = client.preview_calls
     repo.preview(req)
@@ -302,23 +320,85 @@ def test_trend_delta_uses_exact_snapshot_date_and_drops_bootstrap_zero():
     assert trend.series == [3081.0, 3074.0]
     assert trend.comparison_label == "vs 2026-04-23"
     assert trend.delta_pct == -0.2
+    assert trend.note == "Comparison starts on 2026-04-23 because earlier snapshots predate this metric."
+
+
+def test_trend_step_change_adds_presenter_caution_note():
+    trend_rows = [
+        _trend_row(
+            "2026-05-08T19:48:14",
+            snapshot_date="2026-05-08",
+            top_tier_opportunities=4320,
+        ),
+        _trend_row(
+            "2026-05-07T19:48:14",
+            snapshot_date="2026-05-07",
+            top_tier_opportunities=4542,
+        ),
+        _trend_row(
+            "2026-05-06T19:48:14",
+            snapshot_date="2026-05-06",
+            top_tier_opportunities=3074,
+        ),
+    ]
+    client = _StubClient(_preview_row(), trend_rows)
+    repo = DatabricksPortfolioRepository(client)  # type: ignore[arg-type]
+
+    preview = repo.preview(None)
+    trend = preview.trends["top_tier_opportunities"]
+
+    assert trend.note is not None
+    assert "Material step change on 2026-05-07" in trend.note
 
 
 def test_filtered_preview_suppresses_national_trends():
     """Filtered KPIs must not reuse the _ALL/_ALL national trend line."""
-    from backend.schemas.portfolio import PortfolioCriteria, PortfolioPreviewRequest
-
     client = _StubClient(_preview_row(), [_trend_row("2026-04-22T18:30:00")])
     repo = DatabricksPortfolioRepository(client)  # type: ignore[arg-type]
-    req = PortfolioPreviewRequest(
-        criteria=PortfolioCriteria(geography="Texas", min_equity_pct=25)
-    )
+    req = PortfolioPreviewRequest(criteria=PortfolioCriteria(min_equity_pct=25))
 
     preview = repo.preview(req)
 
     assert preview.trends == {}
     assert preview.trend_status == "not_applicable"
     assert preview.trend_note is not None
+    assert preview.approved_count is None
+    assert preview.in_outreach_count is None
+
+
+def test_create_uses_submitted_criteria_for_population_count(monkeypatch):
+    """Saved portfolio size must match the reviewed criteria, not the national default."""
+    client = _StubClient(_preview_row(), [])
+    lakebase = _StubLakebase()
+    monkeypatch.setattr(
+        "backend.services.repositories.databricks_repo.get_lakebase_client",
+        lambda: lakebase,
+    )
+    repo = DatabricksPortfolioRepository(client)  # type: ignore[arg-type]
+
+    repo.create(
+        PortfolioCreateRequest(
+            name="Owner occupied",
+            criteria=PortfolioCriteria(occupancy="Owner-occupied", min_equity_pct_label="≥ 25%"),
+        )
+    )
+
+    preview_index = next(i for i, sql in enumerate(client.statements) if "borrower_360" in sql)
+    preview_sql = client.statements[preview_index]
+    preview_params = client.parameters[preview_index]
+    assert "is_owner_occupied = TRUE" in preview_sql
+    assert "equity_pct >= :equity_floor" in preview_sql
+    assert preview_params == {"equity_floor": 25}
+    assert lakebase.rows
+    assert "mip_app.action_audit" in lakebase.rows[0]["sql"]
+    assert lakebase.rows[0]["params"]["criteria"] == '{"occupancy": "Owner-occupied", "min_equity_pct_label": "\\u2265 25%"}'
+    metadata = json.loads(str(lakebase.rows[0]["params"]["metadata"]))
+    assert metadata["source"] == "portfolio_builder"
+    assert metadata["criteria"] == {
+        "occupancy": "Owner-occupied",
+        "min_equity_pct_label": "≥ 25%",
+    }
+    assert metadata["marketable_population"] == 1000
 
 
 def test_empty_filtered_cohort_keeps_avg_score_null_not_zero():

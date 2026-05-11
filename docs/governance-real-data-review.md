@@ -1,5 +1,9 @@
 # Module 0 — Governance & Security Review: Real-Data Migration
 
+> **Internal implementation artifact. Not approved for public release.**
+> Contains provider/share/table inventory and pre-cutover security analysis
+> intended for Entrada, Databricks, and Cotality implementation reviewers only.
+
 > **Note:** This review predates the live-data cutover (commit `2f09424`). `MIP_MOCK_MODE` has since been removed; the app runs on live Unity Catalog + Lakebase unconditionally, with no mock-mode runtime fallback. PII redaction, UC governance, audit, and resilience guidance below are still authoritative — the only retired mechanism is the `MIP_MOCK_MODE` env seam itself. See [CLAUDE.md](../CLAUDE.md) "Negative prompting" for the current posture.
 
 **Scope:** Pre-implementation risk review for swapping the Module 0 customer walkthrough off synthetic fixtures onto live `cotality_mortgage_data.corelogic` Delta Share.
@@ -12,9 +16,9 @@
 
 ## Executive summary
 
-- **Verdict: CONDITIONAL-GO.** The share is safe to use as a *signal source* for Module 0 during a customer walkthrough, but **not safe to redisplay raw at the browser**. The three canonical walkthrough borrowers (B-48291, B-48294, B-48295) must remain the synthetic trio shown to reviewers. Real-data power is exposed via **segment counts, score distributions, geography rollups, and redacted/masked detail** — not via real owner names or real street addresses.
+- **Verdict: CONDITIONAL-GO.** The share is safe to use as a *signal source* for Module 0 during a customer walkthrough, but **not safe to redisplay raw at the browser**. Borrower-level screens must use masked borrower references generated from governed IDs. Real-data power is exposed via **segment counts, score distributions, geography rollups, and redacted/masked detail** — not via real owner names or real street addresses.
 - **Three hard pre-implementation blockers** (see "Top 3 must-fixes" below): (1) a gold-layer PII redaction contract before any `/api/*` response is wired to real data; (2) a Unity Catalog column-mask + row-filter policy on `silver.*` tables that hold names/addresses; (3) a Databricks secret scope (`mip`) that replaces every `.env`-resident token and kills the current `profile: DEFAULT` pathway for app runtime.
-- **Licensing stance:** treat the customer walkthrough as an **external redisplay surface** under Cotality's licensing posture. Assume property/borrower-level detail is **not** licensed for external redisplay. The walkthrough stays on the synthetic trio for dossier-level screens; real-data surfaces are limited to cohort counts, aggregates, and already-obfuscated fields. This is a risk decision that needs legal sign-off from Entrada before turning the silver→gold pipeline on against the share.
+- **Licensing stance:** treat the customer walkthrough as an **external redisplay surface** under Cotality's licensing posture. Assume property/borrower-level detail is **not** licensed for external redisplay unless Cotality approves it explicitly. Dossier-level screens must be masked by default; real-data surfaces are limited to cohort counts, aggregates, and already-obfuscated fields. This is a risk decision that needs legal sign-off from Entrada before relaxing the redaction boundary.
 
 ---
 
@@ -24,13 +28,13 @@ The share carries real owner and borrower identity. The UI renders dossier cards
 
 | Field (source table) | Sensitivity | Ruling | How to enforce |
 |---|---|---|---|
-| `owner_1_full_name` (property_v3) | **PII (direct identifier)** | **Never in any `/api/*` response.** Hash to `owner_hash = SHA-256(lower(trim(value)) \|\| daily_salt)` for join keys only. Dossier `display_name` must remain the synthetic trio (B-48291/4/5). | Gold DDL: `owner_hash` column only; drop `owner_1_full_name` before writing `gold.borrower_360`. UC column mask `mip.silver.mask_name(x)` returning NULL for non-privileged readers. |
+| `owner_1_full_name` (property_v3) | **PII (direct identifier)** | **Never in any `/api/*` response.** Hash to `owner_hash = SHA-256(lower(trim(value)) \|\| daily_salt)` for join keys only. Dossier `display_name` must remain a masked borrower reference. | Gold DDL: `owner_hash` column only; drop `owner_1_full_name` before writing `gold.borrower_360`. UC column mask `mip.silver.mask_name(x)` returning NULL for non-privileged readers. |
 | `owner_2_full_name`, `buyer_1_full_name`, `buyer_2_full_name`, seller names (owner_transfer) | **PII** | Same as above. Hash for join, never surface. | Same column-mask UDF applied at silver. |
 | `situs_street_address`, `situs_city`, `situs_zip_code` (property_v3, voluntary_lien) | **Quasi-identifier** (street-level is re-identifying; ZIP + city is not) | **Street not in `/api/*`.** `city`, `state`, `zip` are fine at cohort granularity. `Borrower360.subject_property` must be generalized to `"{city}, {state} {zip}"` — drop the street. | Gold: `gold.borrower_360` selects city/state/zip only; no `situs_street_address` column. Mask at silver for non-privileged. |
 | `mailing_street_address`, `mailing_city`, `mailing_state` (property_v3) | **PII (direct mail)** | **Silver-only.** Use for absentee/investor flag derivation (`is_absentee = mailing_zip != situs_zip`), then drop. | Boolean derived column in `gold.borrower_360`; mailing fields never leave silver. |
 | `borrower_1_identifier`, `borrower_1_full_name` (mortgage_domain) | **PII** | Never in `/api/*`. Hash for recapture join. | Same redaction pattern as owner_1_full_name. |
-| `clip` (all tables) | **Sensitive (quasi-identifier, licensed id)** | **Not in `/api/*` as raw CLIP.** `Borrower360.clip_id` currently emits `clip_demo_*` synthetic strings — keep that pattern. For real data surface `clip_ref` = `SHA-256(clip \|\| daily_salt)[:12]` so the UI can deep-link without leaking the real CLIP. | Gold materializes `clip_ref`; raw `clip` stays in silver for joins. |
-| `owner_1_identifier` (Owner Link) | **Sensitive (licensed id)** | Same as `clip` — hash to `owner_link_ref` for UI. Real value stays silver. | Gold: `owner_link_ref` only. |
+| `clip` (all tables) | **Sensitive (quasi-identifier, licensed id)** | **Not in `/api/*` as raw CLIP.** `Borrower360.clip_id` emits `clip_demo_*` or `clip_ref_*` display refs by default. | Gold keeps raw `clip` for governed joins; the repository redaction boundary masks it before API/UI/CSV/audit. |
+| `owner_1_identifier` (Owner Link) | **Sensitive (licensed id)** | Same as `clip` — API emits `owner_link_ref_*` by default. Real value stays in governed UC tables. | Gold keeps raw `owner_link_id` for joins; repository redaction masks it before egress. |
 | `first_position_lender_company_name`, `first_position_currently_assigned_lender_company_name`, `second_position_lender_company_name` (voluntary_lien) | **Competitively sensitive** — real lender names (WELLS FARGO BK NA, etc.) tied to specific properties | **Redact to a controlled vocabulary** before `/api/*`. Map via `ref.lender_ref(real_name) → {Summit Mortgage, Competitor A, Competitor B, ...}` so demo retains "competitor refi" narrative without naming competitors at addresses. | New `ref.lender_dictionary` table; applied in `gold.borrower_360` as `current_servicer_ref` / `origin_lender_ref`. |
 | Lender NMLS IDs (mortgage_domain) | **Sensitive** | Silver-only. | Drop from gold projection. |
 | Loan amount, interest rate, origination date, term, purpose code (voluntary_lien + mortgage_domain) | **Non-PII in isolation; quasi-identifying at street+amount combo** | **Safe for `/api/*` once address is generalized.** `avm_value`, `current_lien_balance`, `current_rate`, `ltv`, `rate_spread_bps` already in the wire model. | Keep as-is; generalize address per the row above is the mitigation. |
@@ -40,17 +44,17 @@ The share carries real owner and borrower identity. The UI renders dossier cards
 | `block_level_latitude`, `block_level_longitude` | Quasi-identifier at block resolution | **Snap to CBSA or ZIP centroid** before rendering on the map. Never render the raw block-level coords. | Gold: `geo_point = st_centroid(zip_polygon)`; raw lat/lon stays silver. |
 | `borrower_1_identifier` hashes across mortgage_domain | Non-PII after hashing | Safe | Use `borrower_hash` consistently across gold tables. |
 
-### The "display trio stays synthetic" rule
+### The masked borrower display rule
 
-`Borrower360.display_name` MUST remain `{"James & Maria Rodriguez", "David Park", "Lisa Thompson"}` for the canonical walkthrough path. Rationale: the dossier view is the screen where a leak would be most damaging, the synthetic trio is pinned by golden fixtures, and there is no walkthrough benefit from swapping these three to real names. Real-data power is shown through **counts, distributions, geography, and evidence timelines** — not through "this is Jane Doe's actual mortgage".
+`Borrower360.display_name` MUST remain a masked borrower reference by default. Rationale: the dossier view is the screen where a leak would be most damaging, and there is no walkthrough benefit from showing a real person's name. Real-data power is shown through **counts, distributions, geography, and evidence timelines** — not through "this is Jane Doe's actual mortgage".
 
-Concretely: `gold.borrower_360` on the real-data path emits two kinds of rows — three **pinned synthetic dossiers** (display_name = trio) merged from `backend/services/mock_data.py`, plus the **real-data cohort** where `display_name` is `f"Borrower {clip_ref[:6]}"` (never the real name). The ranked-borrower table is safe to render for the real cohort because no real name or street is exposed.
+Concretely: `gold.borrower_360` on the real-data path emits masked borrower references derived from governed identifiers, never real owner names or street addresses. The ranked-borrower table is safe to render only because no real name or street is exposed.
 
 ### `Borrower360` wire-schema diff (apply before real-data migration)
 
 Fields currently on `Borrower360` in `backend/schemas/lead.py` that need policy:
 
-- `display_name` — OK; contract: synthetic trio OR `Borrower {clip_ref[:6]}`.
+- `display_name` — OK; contract: masked borrower reference derived from a governed ID.
 - `clip_id` — OK; contract: `clip_demo_*` OR `clip_ref_{12-char-hash}`. Never the raw CLIP.
 - `owner_link_id` — same pattern.
 - `subject_property` — **change**: drop street; emit `"{city}, {state} {zip}"` only.
@@ -61,7 +65,7 @@ Fields currently on `Borrower360` in `backend/schemas/lead.py` that need policy:
 **Risk:** High — every `/api/*` route that returns a `Borrower360` is a potential leak point.
 **Likelihood:** Near-certain if no explicit redaction layer is introduced (current code would happily plumb whatever a real-data query returns).
 **Impact:** Severe — direct PII exposure to customer-walkthrough attendees over an external network; Cotality license breach; reputational damage.
-**Mitigation:** Gold-layer redaction contract + Pydantic validator on `Borrower360` that **rejects** any `display_name` not matching `^(Borrower [a-f0-9]{6}|James & Maria Rodriguez|David Park|Lisa Thompson)$` in non-mock mode. Ditto for `subject_property` not matching the generalized shape. Fail closed, loudly.
+**Mitigation:** Gold-layer redaction contract + Pydantic validator on `Borrower360` that **rejects** real names in non-mock mode. Ditto for `subject_property` not matching the generalized shape. Fail closed, loudly.
 **Owner:** backend + data-modeler.
 **Pre-implementation blocker:** **YES.**
 
@@ -73,10 +77,10 @@ Fields currently on `Borrower360` in `backend/schemas/lead.py` that need policy:
 
 **Specific risks:**
 
-1. **Real owner names on a walkthrough screen** — The share carries `owner_1_full_name`. Displaying it during an external walkthrough is redisplay of licensed PII. Mitigation: per §1, display the synthetic trio only at dossier level.
+1. **Real owner names on a walkthrough screen** — The share carries `owner_1_full_name`. Displaying it during an external walkthrough is redisplay of licensed PII. Mitigation: per §1, display masked borrower references only at dossier level.
 2. **Real lender names on a competitor-refi narrative** — Showing "Wells Fargo refinanced this borrower away" to an audience that includes Wells Fargo competitors (and possibly Wells Fargo themselves) is a redisplay issue *and* a competitor-intelligence leak. Mitigation: `ref.lender_dictionary` maps real lenders to `Summit Mortgage / Competitor A / Competitor B` before `/api/*`.
 3. **Real street addresses on the map** — Block-level lat/lon rendered at zoom-in is property-level identification. Mitigation: snap to ZIP centroid or CBSA polygon only.
-4. **Aggregate redistribution** — Segment counts ("12,840 In the Money borrowers in our footprint") are fine. Per-borrower detail is not.
+4. **Aggregate redistribution** — Current segment counts at refreshed coverage grain are acceptable. Per-borrower detail is not.
 5. **Screenshots and recordings** — Walkthroughs will be captured. Any screenshot containing a real name/address is an after-the-fact redisplay artifact. Mitigation: nothing below the generalization line should ever appear on screen, so screenshots are safe by construction.
 
 **Mitigation bundle:**
@@ -121,7 +125,7 @@ Create UC column-mask UDFs and apply to silver columns that hold PII. Mask retur
 
 ### Row filters
 
-- `silver.*` row filter: `situs_state IN ('IL','CA','FL','TX','WA','CO')` — matches real footprint (per gap analysis §1), rejects accidental out-of-scope queries.
+- `silver.*` row filter: `situs_state IS NOT NULL` / `deed_situs_state_static IS NOT NULL` plus required join keys — preserves whatever current Cotality coverage exists without pinning the product to a fixed state list.
 - `gold.borrower_360` row filter: `row_kind IN ('synthetic_trio') OR (row_kind = 'real' AND displayable = true)` — belt-and-suspenders for the `Borrower360` Pydantic validator in §1.
 
 ### CTAS pattern (enforcement at write-time, not read-time)
@@ -147,7 +151,8 @@ SELECT
 FROM mip.silver.lien_current l
 LEFT JOIN mip.semantics.lender_dictionary ld
   ON ld.real_name = l.first_position_currently_assigned_lender_company_name
-WHERE l.situs_state IN ('IL','CA','FL','TX','WA','CO')
+WHERE l.situs_state IS NOT NULL
+  AND l.clip IS NOT NULL
 ```
 
 The masked columns (`owner_1_full_name`, `situs_street_address`) are **never referenced** by the gold CTAS. A developer has to consciously go edit the DDL to add them, which is the audit signal we want.
@@ -319,7 +324,7 @@ Only the minimum — things the user must decide; everything else I've decided i
 
 1. **Legal sign-off on Cotality licensing posture.** Can Entrada confirm (in writing, even a Slack message from legal is fine) that the walkthrough-level redisplay policy in §2 — synthetic trio for dossiers, redacted lender names, ZIP-centroid geography, aggregate-only real data — is within the current Cotality license? If legal is stricter ("no real counts displayed"), we fall back to 100% mock mode for public walkthroughs and use real data only in private follow-up evaluations.
 
-2. **Demo lender footprint.** The real share covers IL/CA/FL/TX/WA/CO. The mock trio lives in Atlanta (GA), which **is not in the footprint**. For the real-data cohort rollups to be geographically coherent with the dossier trio, either: (a) move the synthetic trio to a real-footprint metro (recommend Chicago/IL, largest cohort), or (b) keep trio in GA and explicitly frame them as "here's how it looks for one Summit customer" alongside "here's the real market in the Midwest". Which is the talk track?
+2. **Demo lender footprint.** The app now derives geography from refreshed coverage. For the real-data cohort rollups to be geographically coherent with the dossier flow, keep the talk track tied to whichever states/counties the current share exposes rather than a fixed state list.
 
 3. **Authenticated actor identity in live walkthroughs.** Databricks Apps will pass the workspace user in `X-Forwarded-Email`. Will live walkthroughs run under a single shared service account, or under each operator's account? This changes whether `actor` in audit events is meaningful for attribution.
 

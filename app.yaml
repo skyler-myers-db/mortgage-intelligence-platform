@@ -60,6 +60,12 @@ env:
   - name: LAKEBASE_HOST
     valueFrom: database
 
+  # Job id for the event-triggered Lakebase -> gold lifecycle mirror.
+  # Binding this as an app resource gives the app service principal
+  # CAN_MANAGE_RUN and avoids relying on workspace-wide jobs.list().
+  - name: MIP_LIFECYCLE_SYNC_JOB_ID
+    valueFrom: lifecycle_sync_job
+
   # Product overrides. Pin the canonical catalog + schema so the
   # runtime does not inherit a stale name from an older workspace env.
   - name: MIP_DEFAULT_CATALOG

@@ -107,7 +107,7 @@ export function EvidenceDrawer() {
           )}
           {d?.signals && d.signals.length > 0 && (
             <>
-              <div className="eyebrow mt-5 mb-2">Raw signals</div>
+              <div className="eyebrow mt-5 mb-2">Sanitized signals</div>
               {d.signals.map((s, i) => (
                 <div
                   key={`${s.label}-${i}`}
@@ -125,6 +125,11 @@ export function EvidenceDrawer() {
           {d?.updatedAt && (
             <div className="drawer__updated">
               Last refresh: {d.updatedAt} · via Delta Share
+            </div>
+          )}
+          {d?.eventDate && (
+            <div className="drawer__updated">
+              Evidence event date: {d.eventDate}
             </div>
           )}
           {!d && (

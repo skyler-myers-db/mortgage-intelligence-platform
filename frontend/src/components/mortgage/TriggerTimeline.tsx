@@ -1,7 +1,7 @@
 import type { EvidenceEvent } from '../../types';
 import type { CSSProperties } from 'react';
 import { EvidenceChip } from '../Primitives';
-import { descriptorFor } from '../../lib/drawerSources';
+import { descriptorForEvidence } from '../../lib/drawerSources';
 
 /**
  * TriggerTimeline — prototype `.trig` BEM. Vertical rail with dot markers
@@ -34,16 +34,19 @@ export function TriggerTimeline({ events, segmentColor }: TriggerTimelineProps) 
   const style = { '--seg-color': segmentColor ?? 'var(--accent)' } as CSSProperties;
   return (
     <div className="trig" style={style}>
-      {events.map((e) => (
-        <div className="trig__item" key={e.evidence_id}>
-          <div className="trig__when">{relativeWhen(e.timestamp)}</div>
-          <div className="trig__what">{e.display_text}</div>
-          <div className="trig__why">
-            {e.source_product} · {e.signal_value}{' '}
-            <EvidenceChip source={descriptorFor(e.source_table)}>{e.source_table.split('.')[0]}</EvidenceChip>
+      {events.map((e) => {
+        const source = descriptorForEvidence(e);
+        return (
+          <div className="trig__item" key={e.evidence_id}>
+            <div className="trig__when">{relativeWhen(e.timestamp)}</div>
+            <div className="trig__what">{e.display_text}</div>
+            <div className="trig__why">
+              {e.source_product} · {e.signal_value}{' '}
+              <EvidenceChip source={source}>{source.title}</EvidenceChip>
+            </div>
           </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }

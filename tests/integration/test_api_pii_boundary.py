@@ -9,13 +9,10 @@ the declared Pydantic schema fields. No raw gold columns
 (``owner_name_hash``, ``trigger_timeline_json``,
 ``owner_1_full_name``, etc.) may appear anywhere in the payload.
 
-Note on ``clip``: per CLAUDE.md domain rules, CLIP is the Cotality
-mastered property identifier — a non-PII join key. The product
-intentionally surfaces it on lead rows + segment previews so operators
-can trace each lead back to the underlying Cotality record. It is NOT
-included in the forbidden set below. Personally-identifying fields
-(owner names, street addresses, buyer names, owner-name hashes) remain
-strictly denied.
+Note on Cotality identifiers: raw CLIP and Owner Link are licensed
+quasi-identifiers. API surfaces may carry display-safe surrogates
+(``clip_ref_*``, ``owner_link_ref_*``) or synthetic demo ids
+(``clip_demo_*``, ``ol_demo_*``), never the raw share values.
 
 This complements the unit tests in ``tests/unit/test_pii_redaction.py``
 by catching any router that forgets to go through the repository
@@ -70,6 +67,18 @@ def _walk_keys(node: Any) -> set[str]:
     return keys
 
 
+def _walk_pairs(node: Any) -> list[tuple[str, Any]]:
+    pairs: list[tuple[str, Any]] = []
+    if isinstance(node, dict):
+        for k, v in node.items():
+            pairs.append((str(k), v))
+            pairs.extend(_walk_pairs(v))
+    elif isinstance(node, list):
+        for item in node:
+            pairs.extend(_walk_pairs(item))
+    return pairs
+
+
 def _assert_no_forbidden_keys(payload: Any, *, route: str) -> None:
     seen = _walk_keys(payload)
     leaks = _FORBIDDEN_KEYS.intersection(seen)
@@ -77,6 +86,21 @@ def _assert_no_forbidden_keys(payload: Any, *, route: str) -> None:
         f"{route} leaked forbidden PII keys: {sorted(leaks)} "
         f"(full keyset: {sorted(seen)})"
     )
+
+
+def _assert_no_raw_cotality_ids(payload: Any, *, route: str) -> None:
+    for key, value in _walk_pairs(payload):
+        if value in (None, ""):
+            continue
+        text = str(value)
+        if key in {"clip", "clip_id", "subject_clip"}:
+            assert text.startswith(("clip_ref_", "clip_demo_")), (
+                f"{route} exposed raw CLIP-like value for {key}: {text!r}"
+            )
+        if key == "owner_link_id":
+            assert text.startswith(("owner_link_ref_", "ol_demo_")), (
+                f"{route} exposed raw Owner Link value: {text!r}"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -89,6 +113,7 @@ def test_borrower_get_has_only_schema_keys() -> None:
     assert resp.status_code == 200
     body = resp.json()
     _assert_no_forbidden_keys(body, route="/api/borrowers/{id}")
+    _assert_no_raw_cotality_ids(body, route="/api/borrowers/{id}")
     # Keys at the top level MUST be a subset of Borrower360 fields.
     allowed_top = set(Borrower360.model_fields.keys())
     assert set(body.keys()).issubset(allowed_top), (
@@ -104,6 +129,7 @@ def test_borrower_evidence_has_only_schema_keys() -> None:
     assert resp.status_code == 200
     body = resp.json()
     _assert_no_forbidden_keys(body, route="/api/borrowers/{id}/evidence")
+    _assert_no_raw_cotality_ids(body, route="/api/borrowers/{id}/evidence")
     allowed = set(EvidenceEvent.model_fields.keys())
     for ev in body:
         assert set(ev.keys()).issubset(allowed), (
@@ -121,6 +147,7 @@ def test_leads_list_has_only_schema_keys() -> None:
     assert resp.status_code == 200
     body = resp.json()
     _assert_no_forbidden_keys(body, route="/api/leads")
+    _assert_no_raw_cotality_ids(body, route="/api/leads")
     allowed = set(LeadSummary.model_fields.keys())
     for row in body:
         assert set(row.keys()).issubset(allowed), (
@@ -138,6 +165,7 @@ def test_segments_list_has_only_schema_keys() -> None:
     assert resp.status_code == 200
     body = resp.json()
     _assert_no_forbidden_keys(body, route="/api/segments")
+    _assert_no_raw_cotality_ids(body, route="/api/segments")
     allowed = set(SegmentSummary.model_fields.keys())
     for row in body:
         assert set(row.keys()).issubset(allowed)

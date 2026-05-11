@@ -76,8 +76,17 @@ class _AtomicConn:
             self.owner.pending_approvals.append(dict(params))
             return _TxnResult({"approval_id": params["approval_id"]})
         if "SELECT approval_id" in sql:
+            if self.owner.existing_row:
+                return _TxnResult(self.owner.existing_row)
             if self.owner.existing_approval_id:
-                return _TxnResult({"approval_id": self.owner.existing_approval_id})
+                return _TxnResult(
+                    {
+                        "approval_id": self.owner.existing_approval_id,
+                        "borrower_id": "B-48291",
+                        "action": "approve",
+                        "actor_email": "lo@example.com",
+                    }
+                )
             return _TxnResult(None)
         if "INSERT INTO mip_app.action_audit" in sql:
             self.owner.audit_insert_count += 1
@@ -97,10 +106,12 @@ class _AtomicLakebase:
         audit_fails: bool = False,
         conflict: bool = False,
         existing_approval_id: str | None = None,
+        existing_row: dict[str, Any] | None = None,
     ) -> None:
         self.audit_fails = audit_fails
         self.conflict = conflict
         self.existing_approval_id = existing_approval_id
+        self.existing_row = existing_row
         self.pending_approvals: list[dict[str, Any]] = []
         self.committed_approvals: list[dict[str, Any]] = []
         self.executed_sql: list[str] = []
@@ -237,6 +248,25 @@ def test_reject_writes_approval_and_audit_rows(override_deps) -> None:
     assert evt.payload_json["rationale"] == "Borrower opted out"
 
 
+def test_approve_reject_unknown_borrower_fail_closed_before_lakebase(override_deps) -> None:
+    audit = InMemoryAuditStore()
+    fake_lakebase = MagicMock()
+    override_deps(audit=audit, lakebase=fake_lakebase)
+
+    client = TestClient(app)
+    for path, body in (
+        ("/api/outreach/approve", {"borrower_id": "B-DOES-NOT-EXIST", "offer_code": "HELOC-STD"}),
+        ("/api/outreach/reject", {"borrower_id": "B-DOES-NOT-EXIST", "offer_code": "HELOC-STD"}),
+    ):
+        response = client.post(path, json=body, headers={"X-Forwarded-Email": "lo@example.com"})
+        assert response.status_code == 404, response.text
+        assert response.json()["detail"] == "Borrower B-DOES-NOT-EXIST not found"
+
+    fake_lakebase.execute.assert_not_called()
+    fake_lakebase.fetchone.assert_not_called()
+    assert audit.list(limit=10) == []
+
+
 def test_reject_scrubs_free_text_before_decision_and_audit_rows(override_deps) -> None:
     audit = InMemoryAuditStore()
     fake_lakebase = MagicMock()
@@ -330,6 +360,47 @@ def test_atomic_conflict_does_not_write_audit_for_uninserted_approval(
     assert resp.json()["audit_event_id"] == ""
     assert lakebase.audit_insert_count == 0
     assert lakebase.committed_approvals == []
+    assert trigger_calls == []
+
+
+def test_atomic_conflict_rejects_request_id_for_different_decision(
+    override_deps,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    audit = InMemoryAuditStore()
+    lakebase = _AtomicLakebase(
+        conflict=True,
+        existing_row={
+            "approval_id": "11111111-1111-1111-1111-111111111111",
+            "borrower_id": "B-48294",
+            "action": "reject",
+            "actor_email": "other@example.com",
+        },
+    )
+    trigger_calls: list[str] = []
+    monkeypatch.setattr(
+        outreach_mod,
+        "enqueue_lifecycle_trigger",
+        lambda background, *, reason="approval": trigger_calls.append(reason),
+    )
+    override_deps(audit=audit, lakebase=lakebase)
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/outreach/approve",
+        json={
+            "borrower_id": "B-48291",
+            "offer_code": "HELOC-STD",
+            "request_id": "req-existing",
+        },
+        headers={"X-Forwarded-Email": "lo@example.com"},
+    )
+
+    assert response.status_code == 409, response.text
+    assert "different outreach decision" in response.json()["detail"]
+    assert lakebase.audit_insert_count == 0
+    assert lakebase.committed_approvals == []
+    assert audit.list(limit=10) == []
     assert trigger_calls == []
 
 
@@ -441,17 +512,22 @@ def test_approve_idempotent_on_retry_with_same_request_id(
     # A stateful fake: track what was "inserted" so fetchone can return
     # the existing approval_id on the second call, the way the real
     # Postgres lookup would.
-    inserted: dict[str, str] = {}
+    inserted: dict[str, dict[str, Any]] = {}
 
     def _execute(sql: str, params: dict[str, Any]) -> None:
         if "INSERT INTO mip_app.approvals" in sql and params.get("request_id"):
-            inserted[params["request_id"]] = params["approval_id"]
+            inserted[params["request_id"]] = {
+                "approval_id": params["approval_id"],
+                "borrower_id": params["borrower_id"],
+                "action": params["action"],
+                "actor_email": params["actor_email"],
+            }
 
     def _fetchone(sql: str, params: dict[str, Any]) -> dict[str, Any] | None:
         if "WHERE request_id" in sql:
             rid = params.get("request_id")
             if rid and rid in inserted:
-                return {"approval_id": inserted[rid]}
+                return inserted[rid]
             return None
         return None
 
@@ -499,17 +575,22 @@ def test_reject_idempotent_on_retry_with_same_request_id(
 ) -> None:
     """Reject-path twin of the approve idempotency test above."""
     audit = InMemoryAuditStore()
-    inserted: dict[str, str] = {}
+    inserted: dict[str, dict[str, Any]] = {}
 
     def _execute(sql: str, params: dict[str, Any]) -> None:
         if "INSERT INTO mip_app.approvals" in sql and params.get("request_id"):
-            inserted[params["request_id"]] = params["approval_id"]
+            inserted[params["request_id"]] = {
+                "approval_id": params["approval_id"],
+                "borrower_id": params["borrower_id"],
+                "action": params["action"],
+                "actor_email": params["actor_email"],
+            }
 
     def _fetchone(sql: str, params: dict[str, Any]) -> dict[str, Any] | None:
         if "WHERE request_id" in sql:
             rid = params.get("request_id")
             if rid and rid in inserted:
-                return {"approval_id": inserted[rid]}
+                return inserted[rid]
         return None
 
     fake_lakebase = MagicMock()
@@ -544,6 +625,37 @@ def test_reject_idempotent_on_retry_with_same_request_id(
     assert len([e for e in audit.list(limit=5) if e.event_type == "OUTREACH_REJECT"]) == 1
 
 
+def test_request_id_conflict_for_different_decision_is_rejected(
+    override_deps, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    audit = InMemoryAuditStore()
+    fake_lakebase = MagicMock()
+    fake_lakebase.fetchone.return_value = {
+        "approval_id": "11111111-1111-1111-1111-111111111111",
+        "borrower_id": "B-48294",
+        "action": "approve",
+        "actor_email": "other@example.com",
+    }
+    monkeypatch.setattr(
+        outreach_mod,
+        "enqueue_lifecycle_trigger",
+        lambda background, *, reason="approval": None,
+    )
+    override_deps(audit=audit, lakebase=fake_lakebase)
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/outreach/approve",
+        json={"borrower_id": "B-48291", "request_id": "req-conflict"},
+        headers={"X-Forwarded-Email": "lo@example.com"},
+    )
+
+    assert response.status_code == 409
+    assert "different outreach decision" in response.json()["detail"]
+    fake_lakebase.execute.assert_not_called()
+    assert audit.list(limit=10) == []
+
+
 def test_approve_without_request_id_same_minute_collapses_to_one_row(
     override_deps, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -556,17 +668,22 @@ def test_approve_without_request_id_same_minute_collapses_to_one_row(
     below covers that.
     """
     audit = InMemoryAuditStore()
-    inserted: dict[str, str] = {}
+    inserted: dict[str, dict[str, Any]] = {}
 
     def _execute(sql: str, params: dict[str, Any]) -> None:
         if "INSERT INTO mip_app.approvals" in sql and params.get("request_id"):
-            inserted[params["request_id"]] = params["approval_id"]
+            inserted[params["request_id"]] = {
+                "approval_id": params["approval_id"],
+                "borrower_id": params["borrower_id"],
+                "action": params["action"],
+                "actor_email": params["actor_email"],
+            }
 
     def _fetchone(sql: str, params: dict[str, Any]) -> dict[str, Any] | None:
         if "WHERE request_id" in sql:
             rid = params.get("request_id")
             if rid and rid in inserted:
-                return {"approval_id": inserted[rid]}
+                return inserted[rid]
         return None
 
     fake_lakebase = MagicMock()
@@ -609,17 +726,22 @@ def test_approve_without_request_id_cross_minute_produces_two_rows(
     bucket so the second POST writes a distinct row.
     """
     audit = InMemoryAuditStore()
-    inserted: dict[str, str] = {}
+    inserted: dict[str, dict[str, Any]] = {}
 
     def _execute(sql: str, params: dict[str, Any]) -> None:
         if "INSERT INTO mip_app.approvals" in sql and params.get("request_id"):
-            inserted[params["request_id"]] = params["approval_id"]
+            inserted[params["request_id"]] = {
+                "approval_id": params["approval_id"],
+                "borrower_id": params["borrower_id"],
+                "action": params["action"],
+                "actor_email": params["actor_email"],
+            }
 
     def _fetchone(sql: str, params: dict[str, Any]) -> dict[str, Any] | None:
         if "WHERE request_id" in sql:
             rid = params.get("request_id")
             if rid and rid in inserted:
-                return {"approval_id": inserted[rid]}
+                return inserted[rid]
         return None
 
     fake_lakebase = MagicMock()

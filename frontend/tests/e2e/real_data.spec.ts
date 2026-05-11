@@ -27,7 +27,7 @@
  *   * Resilient selectors (getByRole, getByText, aria-label) matching the
  *     prototype's BEM class names; no brittle xpath.
  */
-import { test, expect, type APIRequestContext } from '@playwright/test';
+import { test, expect, type APIRequestContext, type Locator, type Page } from '@playwright/test';
 
 // Gate: skip everything unless E2E_LIVE=1 is set by the nightly workflow.
 const LIVE = process.env.E2E_LIVE === '1';
@@ -55,15 +55,292 @@ const AUTH_HEADERS: Record<string, string> = BEARER
 
 test.use({ baseURL: APP_URL, extraHTTPHeaders: AUTH_HEADERS });
 
-async function fetchLeads(request: APIRequestContext): Promise<Array<{ borrower_id: string }>> {
-  const resp = await request.get(`${API_URL}/api/leads?limit=10`, {
+type LeadRow = {
+  borrower_id: string;
+  clip?: string;
+  equity_estimate?: number;
+  current_lien_balance?: number;
+  evidence_ids?: string[];
+  approval_status?: string;
+  recommended_offer?: string;
+};
+
+type EvidenceEventRow = {
+  source_product: string;
+  source_table: string;
+  signal_type: string;
+};
+
+type BorrowerDossier = LeadRow & {
+  trigger_timeline?: EvidenceEventRow[];
+  evidence_events?: EvidenceEventRow[];
+};
+
+type MapDrillTarget = {
+  state: string;
+  stateName: string;
+  countyFips: string;
+  countyName: string;
+};
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+async function fetchLeads(request: APIRequestContext, limit = 10): Promise<LeadRow[]> {
+  const resp = await request.get(`${API_URL}/api/leads?limit=${limit}`, {
     headers: AUTH_HEADERS,
   });
   expect(resp.status(), 'GET /api/leads returned non-200').toBe(200);
-  return (await resp.json()) as Array<{ borrower_id: string }>;
+  return (await resp.json()) as LeadRow[];
+}
+
+async function fetchBorrower(request: APIRequestContext, borrowerId: string): Promise<BorrowerDossier> {
+  const resp = await request.get(`${API_URL}/api/borrowers/${borrowerId}`, {
+    headers: AUTH_HEADERS,
+  });
+  expect(resp.status(), `GET /api/borrowers/${borrowerId} returned non-200`).toBe(200);
+  return (await resp.json()) as BorrowerDossier;
+}
+
+async function findBorrowerWithEvidenceProducts(
+  request: APIRequestContext,
+  products: string[],
+): Promise<BorrowerDossier> {
+  const leads = await fetchLeads(request, 40);
+  for (const lead of leads) {
+    const borrower = await fetchBorrower(request, lead.borrower_id);
+    const seen = new Set([
+      ...(borrower.trigger_timeline ?? []).map((e) => e.source_product),
+      ...(borrower.evidence_events ?? []).map((e) => e.source_product),
+    ]);
+    if (products.every((product) => seen.has(product))) return borrower;
+  }
+  throw new Error(`No borrower found with evidence products: ${products.join(', ')}`);
+}
+
+function collectCotalityIdValues(payload: unknown, out: Array<{ key: string; value: string }> = []) {
+  if (Array.isArray(payload)) {
+    for (const item of payload) collectCotalityIdValues(item, out);
+    return out;
+  }
+  if (!payload || typeof payload !== 'object') return out;
+  for (const [key, value] of Object.entries(payload as Record<string, unknown>)) {
+    if (
+      (key === 'clip' || key === 'clip_id' || key === 'subject_clip' || key === 'owner_link_id') &&
+      typeof value === 'string' &&
+      value.length > 0
+    ) {
+      out.push({ key, value });
+    }
+    collectCotalityIdValues(value, out);
+  }
+  return out;
+}
+
+function expectMaskedCotalityIds(payload: unknown, label: string) {
+  const values = collectCotalityIdValues(payload);
+  for (const { key, value } of values) {
+    if (key === 'owner_link_id') {
+      expect(
+        /^(owner_link_ref_|ol_demo_)/.test(value),
+        `${label} exposed raw Owner Link in ${key}: ${value}`,
+      ).toBe(true);
+    } else {
+      expect(
+        /^(clip_ref_|clip_demo_)/.test(value),
+        `${label} exposed raw CLIP in ${key}: ${value}`,
+      ).toBe(true);
+    }
+  }
+}
+
+async function clickSegmentCard(page: Page, label: string) {
+  const card = page.locator('.seg-card', { hasText: label });
+  await expect(card, `segment card ${label} should be ready`).toBeVisible({ timeout: 45_000 });
+  await card.click();
+}
+
+async function chooseFilter(page: Page, label: string, value: string) {
+  const trigger = page.getByRole('button', { name: new RegExp(`^${escapeRegExp(label)}:`) });
+  await expect(trigger, `filter ${label} should be ready`).toBeVisible({ timeout: 45_000 });
+  await trigger.click();
+  await page.getByRole('option', { name: value, exact: true }).click();
+}
+
+async function clickSvgRegion(page: Page, target: Locator, label: string) {
+  await expect(target, `${label} SVG region should be visible`).toBeVisible({ timeout: 10_000 });
+  await target.scrollIntoViewIfNeeded();
+  const point = await target.evaluate((node) => {
+    const rect = node.getBoundingClientRect();
+    if (!(node instanceof SVGGeometryElement) || !node.ownerSVGElement) {
+      return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+    }
+
+    const bbox = node.getBBox();
+    const ctm = node.getScreenCTM();
+    const svgPoint = node.ownerSVGElement.createSVGPoint();
+    if (!ctm || bbox.width === 0 || bbox.height === 0) {
+      return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+    }
+
+    // SVG geography paths are irregular. Playwright's default path click
+    // targets the bounding-box center, which can be outside the painted
+    // state/county shape. Sample the path box and click a painted point.
+    for (const xStep of [0.5, 0.35, 0.65, 0.2, 0.8]) {
+      for (const yStep of [0.5, 0.35, 0.65, 0.2, 0.8]) {
+        svgPoint.x = bbox.x + bbox.width * xStep;
+        svgPoint.y = bbox.y + bbox.height * yStep;
+        if (node.isPointInFill(svgPoint) || node.isPointInStroke(svgPoint)) {
+          const clientPoint = svgPoint.matrixTransform(ctm);
+          return { x: clientPoint.x, y: clientPoint.y };
+        }
+      }
+    }
+
+    const pathPoint = node.getPointAtLength(node.getTotalLength() / 2).matrixTransform(ctm);
+    return { x: pathPoint.x, y: pathPoint.y };
+  });
+  await page.mouse.click(point.x, point.y);
+}
+
+async function discoverMapDrillTarget(
+  request: APIRequestContext,
+  segmentCodes: string[] = [],
+): Promise<MapDrillTarget> {
+  const params = new URLSearchParams();
+  if (segmentCodes.length > 0) {
+    params.set('segment_codes', segmentCodes.join(','));
+    params.set('segment_mode', 'all');
+  }
+  const suffix = params.toString() ? `?${params.toString()}` : '';
+  const statesResp = await request.get(`${API_URL}/api/geo/state-rollups${suffix}`, {
+    headers: AUTH_HEADERS,
+  });
+  expect(statesResp.status(), 'state rollups target discovery').toBe(200);
+  const statesPayload = await statesResp.json();
+  const stateRollup = statesPayload.rollups.find((row: { state?: string; addressable?: number }) =>
+    row.state && Number(row.addressable ?? 0) > 0,
+  );
+  expect(stateRollup, 'state rollups should expose at least one populated state').toBeTruthy();
+
+  const footprintResp = await request.get(`${API_URL}/api/config/footprint`, {
+    headers: AUTH_HEADERS,
+  });
+  expect(footprintResp.status(), 'footprint target discovery').toBe(200);
+  const footprint = await footprintResp.json();
+  const stateName =
+    footprint.states?.find((row: { state_code?: string }) => row.state_code === stateRollup.state)
+      ?.state_name ?? stateRollup.state;
+
+  const countyResp = await request.get(
+    `${API_URL}/api/geo/county-rollups?state=${stateRollup.state}${params.toString() ? `&${params.toString()}` : ''}`,
+    { headers: AUTH_HEADERS },
+  );
+  expect(countyResp.status(), 'county rollups target discovery').toBe(200);
+  const countyPayload = await countyResp.json();
+  const county = countyPayload.rollups.find((row: { fips_5?: string; addressable_borrowers?: number }) =>
+    row.fips_5 && Number(row.addressable_borrowers ?? 0) > 0,
+  );
+  expect(county, 'county rollups should expose at least one populated county').toBeTruthy();
+  const rawCountyName = String(county.county_name || county.fips_5);
+  const countyName = rawCountyName.toLowerCase().endsWith('county')
+    ? rawCountyName
+    : `${rawCountyName} County`;
+
+  return {
+    state: stateRollup.state,
+    stateName,
+    countyFips: county.fips_5,
+    countyName,
+  };
+}
+
+async function drillStateToCounty(page: Page, target: MapDrillTarget) {
+  const map = page.locator('.map-wrap').first();
+  await bringMapIntoViewport(page);
+  const state = map.getByRole('button', { name: new RegExp(`^${escapeRegExp(target.stateName)}$`) }).first();
+  await clickSvgRegion(page, state, target.stateName);
+}
+
+async function drillCountyToZips(page: Page, target: MapDrillTarget) {
+  const map = page.locator('.map-wrap').first();
+  await bringMapIntoViewport(page);
+  const county = map.getByRole('button', { name: new RegExp(escapeRegExp(target.countyName), 'i') }).first();
+  await expect(county).toBeVisible({ timeout: 10_000 });
+  await county.click({ force: true });
+}
+
+async function bringMapIntoViewport(page: Page) {
+  await page.evaluate(() => {
+    const scroller = document.querySelector('.main') as HTMLElement | null;
+    const map = document.querySelector('.map-wrap') as HTMLElement | null;
+    if (scroller && map) scroller.scrollTop = Math.max(0, map.offsetTop - 120);
+  });
+}
+
+async function expectMapCornerIconsCompact(page: import('@playwright/test').Page, label: string) {
+  const boxes = await page.locator('.map-corner-chips .chip svg').evaluateAll((nodes) =>
+    nodes.map((node) => {
+      const rect = node.getBoundingClientRect();
+      return { width: rect.width, height: rect.height };
+    }),
+  );
+  expect(boxes.length, `${label}: map header chips should include icons`).toBeGreaterThan(0);
+  for (const box of boxes) {
+    expect(box.width, `${label}: map chip icon width should stay compact`).toBeLessThanOrEqual(16);
+    expect(box.height, `${label}: map chip icon height should stay compact`).toBeLessThanOrEqual(16);
+  }
+}
+
+async function assertSourceDrawer(
+  page: Page,
+  scope: Locator,
+  chipLabel: string | RegExp,
+  drawerTitle: string | RegExp,
+) {
+  const chip = scope.locator('.evidence-chip').filter({ hasText: chipLabel }).first();
+  await expect(chip, `evidence chip ${String(chipLabel)} should be visible`).toBeVisible({
+    timeout: 10_000,
+  });
+  await chip.click();
+  const drawer = page.locator('.drawer.is-open').first();
+  await expect(drawer).toBeVisible({ timeout: 3_000 });
+  await expect(drawer.locator('.drawer__subtitle')).toHaveText(drawerTitle);
+  await drawer.getByRole('button', { name: /Close drawer/i }).click();
+  await expect(drawer).toBeHidden({ timeout: 3_000 });
 }
 
 test.describe('Module 0 — real-UC golden path (nightly only)', () => {
+  test('API payloads mask Cotality identifiers', async ({ request }) => {
+    const leadsResp = await request.get(`${API_URL}/api/leads?limit=5`, { headers: AUTH_HEADERS });
+    expect(leadsResp.status(), 'GET /api/leads returned non-200').toBe(200);
+    const leads = await leadsResp.json();
+    expectMaskedCotalityIds(leads, '/api/leads');
+
+    const firstBorrower = (leads as LeadRow[])[0]?.borrower_id;
+    expect(firstBorrower, 'need a borrower id for PII boundary check').toBeTruthy();
+
+    const borrowerResp = await request.get(`${API_URL}/api/borrowers/${firstBorrower}`, {
+      headers: AUTH_HEADERS,
+    });
+    expect(borrowerResp.status(), 'GET /api/borrowers/:id returned non-200').toBe(200);
+    expectMaskedCotalityIds(await borrowerResp.json(), '/api/borrowers/:id');
+
+    const auditResp = await request.post(`${API_URL}/api/audit/event`, {
+      headers: AUTH_HEADERS,
+      data: {
+        actor: 'playwright',
+        action: 'view.masking_check',
+        entity_type: 'qa',
+        entity_id: 'playwright',
+        subject_clip: '1234567890',
+      },
+    });
+    expect(auditResp.status(), 'POST /api/audit/event returned non-200').toBe(200);
+    expectMaskedCotalityIds(await auditResp.json(), '/api/audit/event');
+  });
+
   test('dashboard renders non-zero segment counts from gold', async ({ page }) => {
     // Segment cards live on /segment-intelligence, not the home dashboard.
     // Home is a narrative/launchpad; segments (.seg-card__count BEM class)
@@ -82,9 +359,12 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
   test('segment multi-select re-queries ranked list and map in all-mode', async ({ page }) => {
     await page.goto('/segment-intelligence');
 
-    const rankedHeader = page.locator('.h-2').filter({ hasText: /ranked borrowers/ }).first();
+    const rankedHeader = page
+      .locator('.h-2')
+      .filter({ hasText: /\d[\d,]* ranked borrowers/ })
+      .first();
     await expect(rankedHeader).toBeVisible({ timeout: 30_000 });
-    await expect(rankedHeader).toContainText(/filtered by itm/);
+    await expect(rankedHeader).toContainText(/segment filter: In the Money/);
 
     const isAllModeSegmentResponse = (url: string, path: string) => {
       if (!url.includes(path)) return false;
@@ -104,13 +384,150 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
       isAllModeSegmentResponse(response.url(), '/api/geo/state-rollups'),
     );
 
-    await page.getByText('Home Equity Candidate', { exact: true }).click();
+    await clickSegmentCard(page, 'Home Equity Candidate');
 
     const [leads, geo] = await Promise.all([leadsResponse, geoResponse]);
     expect(leads.status(), 'ranked list segment all-mode response').toBe(200);
     expect(geo.status(), 'map segment all-mode response').toBe(200);
-    await expect(rankedHeader).toContainText(/filtered by itm \+ equity/);
-    await expect(rankedHeader).toContainText(/must match all selected segments/);
+    await expect(rankedHeader).toContainText(/segment filter: In the Money \+ Home Equity Candidate/);
+    await expect(rankedHeader).toContainText(/must match every selected segment/);
+  });
+
+  test('segment map drill preserves segment filters through county ZIP and Lead Queue', async ({ page, request }) => {
+    await page.goto('/segment-intelligence');
+
+    const selectedSegments = ['Investor / Multi-Property', 'Home Equity Candidate', 'Retention Risk'];
+    const target = await discoverMapDrillTarget(request, ['itm', 'investor', 'equity', 'retention']);
+    for (const label of selectedSegments) {
+      await clickSegmentCard(page, label);
+    }
+
+    const filteredGeoResponse = (path: string) => (response: { url: () => string; status: () => number }) => {
+      if (response.status() !== 200 || !response.url().includes(path)) return false;
+      const parsed = new URL(response.url());
+      const codes = parsed.searchParams.get('segment_codes') ?? '';
+      return (
+        parsed.searchParams.get('segment_mode') === 'all' &&
+        codes.includes('itm') &&
+        codes.includes('investor') &&
+        codes.includes('equity') &&
+        codes.includes('retention')
+      );
+    };
+
+    const countyResponse = page.waitForResponse(filteredGeoResponse('/api/geo/county-rollups'));
+    await drillStateToCounty(page, target);
+    await countyResponse;
+
+    const zipResponse = page.waitForResponse(filteredGeoResponse('/api/geo/zip-rollups'));
+    await drillCountyToZips(page, target);
+    await zipResponse;
+
+    await expect(page.locator('.zip-tiles')).toBeVisible({ timeout: 10_000 });
+	    const crumbs = await page.locator('.map-crumbs').boundingBox();
+	    const chips = await page.locator('.map-corner-chips').boundingBox();
+	    const header = await page.locator('.map-hdr').boundingBox();
+	    const zipGrid = await page.locator('.zip-tiles').boundingBox();
+	    expect(crumbs, 'map crumbs should render').toBeTruthy();
+	    expect(chips, 'map corner chips should render').toBeTruthy();
+	    expect(header, 'map header should render').toBeTruthy();
+	    expect(zipGrid, 'ZIP grid should render').toBeTruthy();
+	    if (crumbs && chips) {
+	      const separated =
+	        crumbs.x + crumbs.width <= chips.x ||
+	        chips.x + chips.width <= crumbs.x ||
+	        crumbs.y + crumbs.height <= chips.y ||
+	        chips.y + chips.height <= crumbs.y;
+	      expect(separated, 'map breadcrumbs and corner chips must not overlap').toBe(true);
+	    }
+	    if (header && zipGrid) {
+	      expect(
+	        header.y + header.height,
+	        'map header must not visually overlap ZIP tiles',
+	      ).toBeLessThanOrEqual(zipGrid.y + 1);
+	    }
+    await expectMapCornerIconsCompact(page, 'segment ZIP map');
+
+	    const leadsResponse = page.waitForResponse(filteredGeoResponse('/api/leads'));
+	    await page.locator('.zip-tile').first().click();
+	    await leadsResponse;
+	    const url = new URL(page.url());
+	    expect(url.pathname).toBe('/lead-queue');
+    expect(url.searchParams.get('state')).toBe(target.state);
+    expect(url.searchParams.get('county')).toBe(target.countyFips);
+    expect(url.searchParams.get('segment_mode')).toBe('all');
+    expect(url.searchParams.get('segment_codes')).toContain('retention');
+    expect(url.searchParams.get('zip')).toMatch(/^\d{5}$/);
+  });
+
+  test('segment secondary filters are forwarded to live geo rollups', async ({ page }) => {
+    await page.goto('/segment-intelligence');
+
+    const filteredGeoResponse = page.waitForResponse((response) => {
+      if (response.status() !== 200 || !response.url().includes('/api/geo/state-rollups')) return false;
+      const parsed = new URL(response.url());
+      return (
+        parsed.searchParams.get('occupancy') === 'Owner-occupied' &&
+        parsed.searchParams.get('lien_status') === 'Open 1st lien' &&
+        parsed.searchParams.get('owner_link') === 'Multi-property (2-4)' &&
+        parsed.searchParams.get('purchase_intent') === 'Listed for sale' &&
+        parsed.searchParams.get('min_equity_pct_label') === '≥ 25%'
+      );
+    });
+
+    await chooseFilter(page, 'OCCUPANCY', 'Owner-occupied');
+    await chooseFilter(page, 'LIEN', 'Open 1st lien only');
+    await chooseFilter(page, 'OWNER LINK', 'Multi-property (2-4)');
+    await chooseFilter(page, 'PURCHASE INTENT', 'Listed for sale');
+    await chooseFilter(page, 'CASH-OUT', 'Equity ≥ 25%');
+
+    await filteredGeoResponse;
+  });
+
+  test('home map drills to ZIP layer and deep-links without overlay collisions', async ({ page, request }) => {
+    await page.goto('/');
+    const target = await discoverMapDrillTarget(request);
+
+    const map = page.locator('.map-wrap').first();
+    await expect(map).toBeVisible({ timeout: 30_000 });
+    await map.scrollIntoViewIfNeeded();
+
+    await drillStateToCounty(page, target);
+
+    await drillCountyToZips(page, target);
+
+    await expect(page.locator('.zip-tiles')).toBeVisible({ timeout: 10_000 });
+
+    const header = await page.locator('.map-hdr').boundingBox();
+    const zipGrid = await page.locator('.zip-tiles').boundingBox();
+    const crumbs = await page.locator('.map-crumbs').boundingBox();
+    const chips = await page.locator('.map-corner-chips').boundingBox();
+    expect(header, 'home map header should render').toBeTruthy();
+    expect(zipGrid, 'home map ZIP grid should render').toBeTruthy();
+    expect(crumbs, 'home map breadcrumbs should render').toBeTruthy();
+    expect(chips, 'home map corner chips should render').toBeTruthy();
+    if (header && zipGrid) {
+      expect(header.y + header.height, 'home map header must not overlap ZIP tiles').toBeLessThanOrEqual(
+        zipGrid.y + 1,
+      );
+    }
+    if (crumbs && chips) {
+      const separated =
+        crumbs.x + crumbs.width <= chips.x ||
+        chips.x + chips.width <= crumbs.x ||
+        crumbs.y + crumbs.height <= chips.y ||
+        chips.y + chips.height <= crumbs.y;
+      expect(separated, 'home map breadcrumbs and corner chips must not overlap').toBe(true);
+    }
+    await expectMapCornerIconsCompact(page, 'home ZIP map');
+
+    await page.locator('.zip-tile').first().click();
+    const url = new URL(page.url());
+    expect(url.pathname).toBe('/lead-queue');
+    expect(url.searchParams.get('state')).toBe(target.state);
+    expect(url.searchParams.get('county')).toBe(target.countyFips);
+    expect(url.searchParams.get('zip')).toMatch(/^\d{5}$/);
+    await expect(page.locator('table.tbl')).toBeVisible({ timeout: 45_000 });
   });
 
   test('ranked borrower -> evidence drawer shows >= 2 rows', async ({ page, request }) => {
@@ -131,7 +548,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
       .toBeGreaterThanOrEqual(2);
   });
 
-  test('genie FAB returns a non-empty answer within 20s', async ({ page }) => {
+  test('genie FAB returns a non-empty answer and source chip opens lineage', async ({ page }) => {
     await page.goto('/');
 
     // Open the floating FAB (consistent selector with module0.spec.ts).
@@ -140,7 +557,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     await expect(panel).toBeVisible();
 
     const canonicalQ =
-      'How many borrowers across the 6-state footprint are currently in-the-money?';
+      'How many borrowers across current refreshed coverage are currently in-the-money?';
     await panel.getByLabel('Ask Genie').fill(canonicalQ);
     await panel.getByRole('button', { name: /Ask/i }).click();
 
@@ -149,11 +566,23 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     // We assert the answer region renders at least one non-empty character
     // that is NOT the spinner glyph. The component uses `genie__msg--ai`
     // for assistant bubbles (see components/mortgage/GenieChat.tsx).
-    const answer = panel.locator('.genie__msg--ai .bubble').last();
+    await expect(panel.getByRole('status')).toBeHidden({ timeout: 60_000 });
+    const aiMessage = panel.locator('.genie__msg--ai').last();
+    const answer = aiMessage.locator('.bubble');
     await expect(answer).toBeVisible({ timeout: 40_000 });
     await expect
       .poll(async () => (await answer.innerText()).trim().length, { timeout: 40_000 })
       .toBeGreaterThan(20);
+
+    const sourceChip = aiMessage.locator('.sources .evidence-chip').first();
+    await expect(sourceChip).toBeVisible({ timeout: 10_000 });
+    await sourceChip.click();
+    const drawer = page.locator('.drawer.is-open').first();
+    await expect(drawer).toBeVisible({ timeout: 3_000 });
+    await expect(drawer.locator('.drawer__subtitle')).toHaveText(
+      /Marketable population|Ranked lead population|Lead score model|Borrower 360 feature set|Lead-generation metric view|Borrower opportunity metric view/,
+    );
+    await drawer.getByRole('button', { name: /Close drawer/i }).click();
   });
 
   test('brand favicon and Genie dock chrome do not regress', async ({ page, request }) => {
@@ -336,6 +765,24 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
       )
       .toBeGreaterThan(0);
 
+    const leadQueue = page.getByRole('link', { name: /Open lead queue/i });
+    await expect(leadQueue).toBeVisible({ timeout: 30_000 });
+    await leadQueue.click();
+    await expect(page).toHaveURL(/\/lead-queue\?/);
+    await expect
+      .poll(() => new URL(page.url()).searchParams.has('geography'), { timeout: 5_000 })
+      .toBe(false);
+    await expect
+      .poll(() => new URL(page.url()).searchParams.has('states'), { timeout: 5_000 })
+      .toBe(false);
+    await expect(page).toHaveURL(/occupancy=Owner-occupied/);
+    await expect(page).toHaveURL(/lien_status=Open\+1st\+lien/);
+    await expect(page).toHaveURL(/min_equity_pct_label=/);
+    await expect(page.getByText(/occupancy = Owner-occupied/i)).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText(/equity = ≥ 15%/i)).toBeVisible();
+    await expect(page.locator('table.tbl')).toBeVisible({ timeout: 45_000 });
+
+    await page.goto('/portfolio-builder');
     // Forward nav CTA (secondary, but the product's intended progression).
     await page.getByRole('link', { name: /Next: (?:segment intelligence|segments)/i }).click();
     await expect(page).toHaveURL(/\/segment-intelligence$/);
@@ -358,47 +805,134 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     // — there's no "go" button; expanding the row IS the primary action.
     const firstRow = rows.first();
     await expect(firstRow).toBeVisible();
-    await firstRow.click();
+    await firstRow.click({ noWaitAfter: true });
 
     // Downstream state: a `.tbl__expand` row is inserted right after the
     // clicked row, revealing the mini-dossier preview.
     await expect(page.locator('.tbl__expand').first()).toBeVisible({ timeout: 3_000 });
-    await expect(page.locator('.tbl__expand-inner').first()).toContainText(/Customer 360 preview|CLIP|Segments/i);
+    await expect(page.locator('.tbl__expand-inner').first()).toContainText(/Customer 360 preview|Property ref|Segments/i);
   });
 
-  test('borrower-360: evidence chips click open the drawer', async ({ page, request }) => {
-    const leads = await fetchLeads(request);
-    expect(leads.length).toBeGreaterThan(0);
-    const target = leads[0].borrower_id;
+  test('lead-queue: row-preview evidence chips open distinct source drawers', async ({ page, request }) => {
+    const leads = await fetchLeads(request, 25);
+    const target = leads.find(
+      (lead) => (lead.equity_estimate ?? 0) > 0 && (lead.current_lien_balance ?? 0) > 0,
+    );
+    expect(target, 'need a lead carrying both AVM/equity and lien evidence').toBeTruthy();
+
+    await page.goto('/lead-queue');
+    const table = page.locator('table.tbl');
+    await expect(table).toBeVisible({ timeout: 30_000 });
+
+    const targetRow = table.locator('tbody tr', { hasText: target!.borrower_id }).first();
+    await expect(targetRow).toBeVisible({ timeout: 45_000 });
+    await targetRow.click({ noWaitAfter: true });
+
+    const preview = page.locator('.tbl__expand').first();
+    await expect(preview).toBeVisible({ timeout: 3_000 });
+
+    const assertDrawer = async (chipLabel: string, drawerTitle: string) => {
+      const chip = preview.getByRole('button', { name: chipLabel });
+      await expect(chip).toBeVisible();
+      await chip.click();
+      const drawer = page.locator('.drawer.is-open').first();
+      await expect(drawer).toBeVisible({ timeout: 3_000 });
+      await expect(drawer.locator('.drawer__subtitle')).toHaveText(drawerTitle);
+      await drawer.getByRole('button', { name: /Close drawer/i }).click();
+      await expect(drawer).toBeHidden({ timeout: 3_000 });
+    };
+
+    await assertDrawer('Property + owner graph', 'Property + owner graph');
+    await assertDrawer('AVM equity', 'AVM equity');
+    await assertDrawer('Voluntary lien', 'Voluntary lien');
+    await assertDrawer('Lead score model', 'Lead score model');
+  });
+
+  test('lead-queue: inline approval writes selected evidence ids to audit', async ({ page, request }) => {
+    const leads = await fetchLeads(request, 100);
+    const target = leads.find(
+      (lead) =>
+        (lead.evidence_ids?.length ?? 0) > 0 &&
+        lead.approval_status !== 'approved' &&
+        lead.approval_status !== 'rejected',
+    );
+    expect(target, 'need a pending lead with evidence ids').toBeTruthy();
+
+    const before = (await (await request.get(`${API_URL}/api/audit/events?limit=100`, {
+      headers: AUTH_HEADERS,
+    })).json()) as Array<{
+      event_id?: string;
+      action?: string;
+      evidence_ids?: string[];
+      payload_json?: { borrower_id?: string };
+    }>;
+    const beforeIds = new Set(before.map((e) => e.event_id).filter(Boolean));
+
+    await page.goto('/lead-queue');
+    const row = page.locator('table.tbl tbody tr', { hasText: target!.borrower_id }).first();
+    await expect(row).toBeVisible({ timeout: 45_000 });
+    await page.getByTestId(`lead-approve-${target!.borrower_id}`).click();
+
+    await expect
+      .poll(
+        async () => {
+          const resp = await request.get(`${API_URL}/api/audit/events?limit=100`, {
+            headers: AUTH_HEADERS,
+          });
+          const rows = (await resp.json()) as Array<{
+            event_id?: string;
+            action?: string;
+            evidence_ids?: string[];
+            payload_json?: { borrower_id?: string };
+          }>;
+          return rows.find(
+            (r) =>
+              (r.action === 'outreach.approve' || r.action === 'outreach_approve') &&
+              r.payload_json?.borrower_id === target!.borrower_id &&
+              !beforeIds.has(r.event_id),
+          )?.evidence_ids?.length ?? 0;
+        },
+        { timeout: 10_000 },
+      )
+      .toBeGreaterThan(0);
+  });
+
+  test('borrower-360: why, timeline, and supporting evidence chips open specific drawers', async ({ page, request }) => {
+    const borrower = await findBorrowerWithEvidenceProducts(request, [
+      'Voluntary Lien',
+      'AVM',
+      'Market Rates',
+      'Owner Link',
+      'Property',
+      'Mortgage Domain',
+    ]);
+    const target = borrower.borrower_id;
 
     await page.goto(`/borrower-360/${target}`);
 
     // Unique-to-route: the "Why we recommend this" surface with ITM chip.
     await expect(page.getByText(/Why we recommend this/i)).toBeVisible({ timeout: 30_000 });
 
-    // Real data: the Customer 360 surface shows CLIP + Owner Link. Format
-    // is opaque (clip_<hex>/<id>) but it must not be empty / "—".
+    // Real data: the Customer 360 surface shows masked property and owner
+    // graph refs. Raw Cotality identifiers must not appear in the UI.
     const c360 = page.locator('.surface', { hasText: /Customer 360/i }).first();
     await expect(c360).toBeVisible();
-    await expect(c360).toContainText(/CLIP/i);
+    await expect(c360).toContainText(/Property ref/i);
+    await expect(c360).toContainText(/clip_ref_|clip_demo_/i);
 
-    // Primary CTA per prototype: "Build outreach draft" — the forward
-    // motion into the Offer Orchestrator. Also exercise an evidence chip
-    // click to prove the drawer is wired (interaction #2 per the
-    // extend-borrower-360 ask).
-    const evidenceChip = page.locator('.evidence-chip, [class*="EvidenceChip"]').first();
-    await expect(evidenceChip).toBeVisible({ timeout: 5_000 });
-    await evidenceChip.click();
-    // Drawer opens — `.drawer` is the prototype BEM root. Some variants
-    // use `.drawer.is-open` or aria-hidden; we accept either so a small
-    // prototype-CSS drift doesn't red-ball the nightly.
-    await expect(
-      page.locator('.drawer.is-open, [role="dialog"][aria-label*="Evidence" i], .drawer[aria-hidden="false"]').first(),
-    ).toBeVisible({ timeout: 3_000 });
+    const why = page.locator('.surface', { hasText: /Why we recommend this/i }).first();
+    await assertSourceDrawer(page, why, 'Market rate comparison', 'Market rate comparison');
+    await assertSourceDrawer(page, why, 'In-the-money rule', 'In-the-Money logic');
 
-    // Close the drawer (Escape is the universal close in the prototype)
-    // before clicking the forward CTA so it doesn't eat the click.
-    await page.keyboard.press('Escape');
+    const timeline = page.locator('.surface', { hasText: /Trigger timeline/i }).first();
+    await assertSourceDrawer(page, timeline, 'Rate spread evidence', 'Rate spread evidence');
+    await assertSourceDrawer(page, timeline, 'AVM equity', 'AVM equity');
+    await assertSourceDrawer(page, timeline, 'Market rate comparison', 'Market rate comparison');
+
+    const supporting = page.locator('.surface', { hasText: /Supporting evidence/i }).first();
+    await assertSourceDrawer(page, supporting, 'Owner Link', 'Property + owner graph');
+    await assertSourceDrawer(page, supporting, 'Property', 'Property profile');
+    await assertSourceDrawer(page, supporting, 'Mortgage Domain', 'Mortgage Domain events');
 
     // Forward CTA.
     await page.getByRole('link', { name: /Build outreach draft/i }).click();
@@ -434,6 +968,12 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     // simpler prototypes.
     await expect(page.getByText(/Thresholds applied/i).first()).toBeVisible();
     await expect(page.getByText(/Considered alternatives/i)).toBeVisible();
+
+    const primaryOffer = page.locator('.surface', { hasText: /Primary offer/i }).first();
+    await assertSourceDrawer(page, primaryOffer, 'Next-best-offer model', 'Next-Best-Offer logic');
+    await assertSourceDrawer(page, primaryOffer, 'Market rate comparison', 'Market rate comparison');
+    await assertSourceDrawer(page, primaryOffer, 'In-the-money rule', 'In-the-Money logic');
+    await assertSourceDrawer(page, primaryOffer, 'Lead score model', 'Lead score model');
   });
 
   test('ask-genie: standalone page (not the FAB) renders + primary CTA works', async ({ page }) => {
@@ -447,9 +987,12 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     await expect(page.getByText('mip.gold.lead_population')).toBeVisible();
     await expect(page.getByText('mip.semantics.lead_generation_metric_view')).toBeVisible();
 
-    // Real data: the textarea is pre-filled with the first sample
-    // question; clicking "Ask Genie" fires /api/genie and the answer
-    // surface appears. Cold Genie first-call is ~10-15 s; allow 40 s.
+    // Real data: the presenter/user types the question explicitly. The
+    // page should not depend on a prefilled canned prompt before it can ask
+    // Genie.
+    await page
+      .locator('textarea[aria-label="Ask Genie — question"]')
+      .fill('Which ZIPs have the most in-the-money refinance candidates?');
     const askButton = page.getByRole('button', { name: /^Ask Genie$/i }).first();
     await expect(askButton).toBeVisible();
     await askButton.click();
@@ -462,6 +1005,12 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     const chartTitle = answerSurface.locator('.genie-chart__title').first();
     await expect(chartTitle).toContainText(/borrowers.*by.*zip/i, { timeout: 10_000 });
     await expect(chartTitle).not.toContainText(/zip.*by.*state/i);
+    await assertSourceDrawer(
+      page,
+      answerSurface,
+      /mip\.gold\.borrower_360|mip\.gold\.lead_population/,
+      /Borrower 360 feature set|Ranked lead population/,
+    );
   });
 
   test('ask-genie: shows governed progress while a live request is pending', async ({ page }) => {
@@ -471,6 +1020,9 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     });
     await page.goto('/ask-genie');
 
+    await page
+      .locator('textarea[aria-label="Ask Genie — question"]')
+      .fill('Which ZIPs have the most in-the-money refinance candidates?');
     await page.getByRole('button', { name: /^Ask Genie$/i }).first().click();
     await expect(page.getByText(/Opening a governed Genie turn|Selecting trusted Unity Catalog assets/)).toBeVisible({
       timeout: 2_000,
@@ -489,7 +1041,10 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     await page.getByRole('button', { name: /^Ask Genie$/i }).first().click();
 
     await expect(page.locator('.genie-chart').first()).toBeVisible({ timeout: 45_000 });
-    await expect(page.locator('.genie-answer__table').first()).toContainText('IL', { timeout: 10_000 });
+    const stateCells = await page
+      .locator('.genie-answer__table tbody tr td:first-child')
+      .evaluateAll((nodes) => nodes.map((node) => node.textContent?.trim() ?? ''));
+    expect(stateCells.some((value) => /^[A-Z]{2}$/.test(value))).toBeTruthy();
 
     await page.getByRole('button', { name: /Show proof/i }).click();
     const proofDrawer = page.getByRole('dialog', { name: /Genie answer proof/i });
@@ -498,14 +1053,32 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     await expect(proof.getByText(/Generated SQL/i)).toBeVisible();
     await expect(proof.getByText(/mip\.gold\./i).first()).toBeVisible();
     await expect(proof.getByText(/Trusted SELECT on curated assets/i)).toBeVisible();
-    await proofDrawer.getByRole('button', { name: /Close Genie proof/i }).click();
-    await expect(proofDrawer).toBeHidden();
+    const proofSourceChip = proof.locator('.evidence-chip').first();
+    await expect(proofSourceChip).toBeVisible();
+    await proofSourceChip.click();
+    await expect(proofDrawer).toBeHidden({ timeout: 3_000 });
+    const sourceDrawer = page.locator('.drawer.is-open').first();
+    await expect(sourceDrawer).toBeVisible({ timeout: 3_000 });
+    await expect(sourceDrawer.locator('.drawer__subtitle')).toHaveText(
+      /Marketable population|Ranked lead population|Segment population|Lead score model|Borrower 360 feature set|Evidence stream|Lead-generation metric view|Segment performance metric view|Borrower opportunity metric view/,
+    );
+    await sourceDrawer.getByRole('button', { name: /Close drawer/i }).click();
+    await expect(sourceDrawer).toBeHidden({ timeout: 3_000 });
 
-    const exportAction = page.locator('.genie-action', { hasText: /Record demo-ready insight/i }).first();
-    await expect(exportAction).toBeVisible();
-    await exportAction.getByRole('button', { name: /Run/i }).click();
-    await exportAction.getByRole('button', { name: /Confirm/i }).click();
-    await expect(page.getByText(/Genie action recorded to the governed audit ledger/i)).toBeVisible({ timeout: 15_000 });
+    const draftAction = page.locator('.genie-action', { hasText: /Create draft campaign/i }).first();
+    await expect(draftAction).toBeVisible();
+    await draftAction.getByRole('button', { name: /Run/i }).click();
+    const actionResponse = page.waitForResponse((response) =>
+      response.url().includes('/api/genie/actions') && response.request().method() === 'POST',
+    );
+    await draftAction.getByRole('button', { name: /Confirm/i }).click();
+    const response = await actionResponse;
+    expect(response.status(), 'Create draft campaign action should succeed').toBe(200);
+    const actionPayload = await response.json();
+    expect(actionPayload.action_type).toBe('create_draft_campaign');
+    expect(actionPayload.audit_event_id).toBeTruthy();
+    expect(actionPayload.campaign_id).toBeTruthy();
+    await expect(page).toHaveURL(/\/lead-queue\?/, { timeout: 20_000 });
   });
 
   test('ask-genie: open cohort action carries ZIP answer filters into Lead Queue', async ({ page }) => {
@@ -518,7 +1091,8 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
       .fill('Which ZIPs have the most in-the-money refinance candidates?');
     await page.getByRole('button', { name: /^Ask Genie$/i }).first().click();
 
-    await expect(page.locator('.genie-answer__table').first()).toContainText('606', { timeout: 60_000 });
+    const zipTableText = await page.locator('.genie-answer__table').first().textContent({ timeout: 60_000 });
+    expect(zipTableText ?? '').toMatch(/\b\d{5}\b/);
     const cohortAction = page.locator('.genie-action', { hasText: /Open this cohort in Lead Queue/i }).first();
     await expect(cohortAction).toBeVisible();
     await cohortAction.getByRole('button', { name: /Run/i }).click();

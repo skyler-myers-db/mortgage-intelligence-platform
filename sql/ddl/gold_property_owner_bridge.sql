@@ -8,7 +8,7 @@
 --            narrowed to the gold-layer contract columns.
 --
 -- Grain:     One row per owner_link_id. Upstream silver already aggregates
---            per Owner-Link across the 6-state footprint.
+--            per Owner-Link across refreshed source coverage.
 -- PK:        owner_link_id.
 -- Clustering: Liquid cluster on (owner_link_id). Gold.borrower_360 joins 1:1
 --            on this column; clustering makes the lookup cheap.
@@ -31,7 +31,7 @@
 
 CREATE TABLE IF NOT EXISTS mip.gold.property_owner_bridge (
   owner_link_id             STRING    NOT NULL COMMENT 'Cotality Owner Link. PK.',
-  related_property_count    INT       NOT NULL COMMENT 'Count of distinct CLIPs tied to this Owner Link across the 6-state footprint. Drives Borrower360.related_property_count and the investor branch of fn_next_best_offer.',
+  related_property_count    INT       NOT NULL COMMENT 'Count of distinct CLIPs tied to this Owner Link across refreshed source coverage. Drives Borrower360.related_property_count and the investor branch of fn_next_best_offer.',
   corporate_property_count  INT       NOT NULL COMMENT 'Number of related properties with owner_is_corporate = TRUE.',
   absentee_property_count   INT       NOT NULL COMMENT 'Number of related properties with is_absentee = TRUE.',
   distinct_states_count     INT       NOT NULL COMMENT 'Number of distinct situs_state values. Multi-market investor signal.',

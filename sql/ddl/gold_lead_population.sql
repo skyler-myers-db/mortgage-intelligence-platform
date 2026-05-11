@@ -58,6 +58,7 @@ CREATE TABLE IF NOT EXISTS mip.gold.lead_population (
   why_now                   STRING    NOT NULL COMMENT 'Deterministic template per offer code.',
   evidence_ids              ARRAY<STRING> NOT NULL COMMENT 'Ordered evidence_ids (mirrors gold.borrower_360 for this CLIP).',
   approval_status           STRING    NOT NULL COMMENT '"pending" by default; Lakebase is authoritative for actual state.',
+  current_lender_ref        STRING             COMMENT 'Public-demo-safe current-servicer reference from borrower_360. Never the raw Cotality lender string.',
   -- Secondary-filter fields (2026-04-23). Carried through from
   -- gold.borrower_360 so /segment-intelligence can run real client-side
   -- predicates against occupancy, owner-link, lien state, and purchase
@@ -66,6 +67,9 @@ CREATE TABLE IF NOT EXISTS mip.gold.lead_population (
   -- until the Cotality Building Permits + MLS Delta shares land).
   is_owner_occupied         BOOLEAN   NOT NULL COMMENT 'From gold.borrower_360; drives /segment-intelligence DEMOGRAPHICS filter.',
   is_investor               BOOLEAN   NOT NULL COMMENT 'Carried from gold.borrower_360 (derived: multi-property OR corporate OR absentee).',
+  is_current_customer       BOOLEAN   NOT NULL COMMENT 'From gold.borrower_360; current servicer or first-party servicing relationship to the tenant lender.',
+  is_former_customer        BOOLEAN   NOT NULL COMMENT 'From gold.borrower_360; historical tenant-lender relationship with no current tenant lien.',
+  is_competitor_lien        BOOLEAN   NOT NULL COMMENT 'From gold.borrower_360; current servicer is known and not the tenant lender.',
   related_property_count    INT       NOT NULL COMMENT 'From gold.borrower_360; drives /segment-intelligence OWNER LINK filter.',
   current_lien_balance      BIGINT    NOT NULL COMMENT 'From gold.borrower_360; drives /segment-intelligence LIEN filter.',
   second_pos_amount         BIGINT             COMMENT 'From gold.borrower_360; nullable (no second-position lien).',

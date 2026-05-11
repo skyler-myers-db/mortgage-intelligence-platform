@@ -5,6 +5,7 @@ import type { WarmingUpState } from '../lib/useWarmingUpRetry';
 import type { Borrower360 as Borrower360Type, OfferRecommendation } from '../types';
 import { PageShell } from '../components/layout/PageShell';
 import { ApprovalBanner } from '../components/mortgage/ApprovalBanner';
+import { BorrowerTruthFlags } from '../components/mortgage/BorrowerTruthFlags';
 import { ScoreBadge } from '../components/mortgage/ScoreBadge';
 import { ConfidenceMeter } from '../components/mortgage/ConfidenceMeter';
 import { Button, Chip, EvidenceChip } from '../components/Primitives';
@@ -92,30 +93,29 @@ export default function OfferOrchestrator() {
   // Reload token re-runs the borrower + recommend + draft fetches.
   // Hole-finder finding #1, 2026-04-23.
   const [reloadToken, setReloadToken] = useState<number>(0);
-  // 2026-04-22: the draft textarea is now controlled and hydrated from
-  // /api/outreach/draft so edits persist through approve (they were
-  // being dropped on a JSX string literal before). `draftLoaded` tracks
-  // whether the backend fetch succeeded so we can render the "default
-  // template used" muted note when we fall back to the local string.
+  // 2026-04-22: the draft textarea is controlled and hydrated from
+  // /api/outreach/draft so edits persist through approve.
+  // 2026-05-08: fail closed if the backend draft endpoint is unavailable;
+  // the UI must not generate or approve local outreach copy.
   const [draftBody, setDraftBody] = useState<string>('');
   const [draftLoaded, setDraftLoaded] = useState<boolean>(false);
+  const [draftError, setDraftError] = useState<string | null>(null);
   // Cold-start warming-up state for the draftOutreach fetch. Non-null =
   // the draft endpoint is in a 503 retry loop (mirrors the borrower +
   // recommend loop). When present, the Draft outreach tile shows the
-  // WarmingUpBlock instead of the template fallback — only after the
-  // retries exhaust does the UI fall through to `defaultDraft` + the
-  // muted "Default template used" note. 2026-04-23 UX fix.
+  // WarmingUpBlock; after retries exhaust the approval path remains
+  // disabled until a governed draft loads.
   const [draftWarming, setDraftWarming] = useState<WarmingUpState | null>(null);
   const {
     setApproval,
     approvals,
-    lender,
     lastBorrowerId,
     setLastBorrowerId,
     saveLead,
     isLeadSaved,
     savedDrafts,
     saveDraft,
+    removeSavedDraft,
   } = useApp();
   const approval = id ? approvals[id] : undefined;
   const savedDraftBody = id ? savedDrafts[id]?.body : undefined;
@@ -215,14 +215,13 @@ export default function OfferOrchestrator() {
 
     // Fetch the backend-generated draft in parallel via a mirror of
     // the main borrower+recommend retry loop. On a 503 retryable
-    // (warehouse warming), we show WarmingUpBlock inside the Draft
-    // outreach tile and auto-retry up to MAX_ATTEMPTS. Only after the
-    // retry budget is exhausted do we fall through to the hardcoded
-    // template + the muted "Default template used" note — this
-    // preserves the final-fallback UX while preventing the silent
-    // template swap on cold boot. 2026-04-23 UX fix.
+    // (warehouse warming), show WarmingUpBlock inside the Draft
+    // outreach tile and auto-retry up to MAX_ATTEMPTS. If the retry
+    // budget exhausts, approval stays blocked; there is no local
+    // outreach copy fallback.
     let draftTimeoutId: ReturnType<typeof setTimeout> | null = null;
     setDraftWarming(null);
+    setDraftError(null);
 
     const runDraftAttempt = async (attempt: number): Promise<void> => {
       if (cancelled) return;
@@ -245,6 +244,9 @@ export default function OfferOrchestrator() {
               fetched: Date.now(),
             });
           }
+        } else {
+          setDraftLoaded(false);
+          setDraftError('Offer draft endpoint returned an empty draft. Approval is disabled until an audited draft loads.');
         }
       } catch (err: unknown) {
         if (cancelled || isAbortError(err)) return;
@@ -261,11 +263,13 @@ export default function OfferOrchestrator() {
           }, INTERVAL_MS);
           return;
         }
-        // Retries exhausted or non-warming-up error — fall through to
-        // the hardcoded template. draftLoaded stays false so the render
-        // path shows the muted "Default template used" note. This is
-        // the final-fallback UX called out in CLAUDE.md.
         setDraftWarming(null);
+        setDraftLoaded(false);
+        setDraftError(
+          err instanceof Error
+            ? `Offer draft unavailable: ${err.message}`
+            : 'Offer draft unavailable.',
+        );
       }
     };
 
@@ -321,22 +325,9 @@ export default function OfferOrchestrator() {
     );
   }
 
-  // Marketing-approved outreach copy. The "[first name]" placeholder is
-  // intentionally left for the CRM to fill at send-time — we never store
-  // or expose borrower PII in the UI. The body references the borrower's
-  // city/state for local relevance but avoids internal thresholds or
-  // engineering jargon ("bps", "cross-sell", etc.).
   const productLabel = rec?.product_label ?? b?.recommended_offer ?? '…';
-  const defaultDraft = b
-    ? `Hi [first name],
-
-Our records show you may have a strong opportunity to reduce your monthly payment or access equity through a refinance or home equity line of credit. Based on current rates and your home's estimated value in ${b.city}, ${b.state}, your loan is a strong candidate for a ${productLabel.toLowerCase()}.
-
-If you'd like to explore, a licensed ${lender} loan officer can walk you through the numbers — no obligation.
-
-Reply or call 1-800-XXX-XXXX.`
-    : '';
-  const draftText = draftLoaded ? draftBody : defaultDraft;
+  const draftText = draftLoaded ? draftBody : '';
+  const draftReady = draftLoaded && draftText.trim().length > 0;
   const savedDraft = id ? savedDrafts[id] : undefined;
   const draftIsSaved = Boolean(savedDraft && savedDraft.body === draftText);
   const leadIsSaved = b ? isLeadSaved(b.borrower_id) : false;
@@ -353,7 +344,7 @@ Reply or call 1-800-XXX-XXXX.`
     });
   };
   const saveCurrentDraft = () => {
-    if (!id || draftText.trim().length === 0) return;
+    if (!id || !draftReady) return;
     saveDraft({
       borrower_id: id,
       offer_code: rec?.offer_code ?? b?.recommended_offer ?? null,
@@ -361,10 +352,25 @@ Reply or call 1-800-XXX-XXXX.`
       body: draftText,
     });
   };
+  const resetCurrentDraft = () => {
+    if (!id) return;
+    removeSavedDraft(id);
+    const cached = BORROWER_CACHE.get(id);
+    if (cached) {
+      BORROWER_CACHE.set(id, { ...cached, draftBody: null, fetched: 0 });
+    }
+    setDraftBody('');
+    setDraftLoaded(false);
+    setReloadToken((n) => n + 1);
+  };
 
   const onApprove = async () => {
     if (approving) return;
     setApproveError(null);
+    if (!draftReady) {
+      setApproveError('Approval is disabled until the audited outreach draft loads from the backend.');
+      return;
+    }
     setApproving(true);
     try {
       // Forward the chosen offer_code + evidence_ids so the audit row
@@ -373,12 +379,7 @@ Reply or call 1-800-XXX-XXXX.`
       // recommendation hasn't hydrated yet.
       const offer_code = rec?.offer_code ?? b?.recommended_offer ?? null;
       const evidence_ids = rec?.evidence_ids ?? b?.evidence_ids ?? [];
-      // Prefer whatever the approver actually has in front of them:
-      // the controlled textarea's current value. Fall back to the
-      // rendered default template so callers that approved without
-      // touching the textarea still write durable copy into the audit
-      // metadata.
-      const draft_body = draftText || null;
+      const draft_body = draftText;
       const res = await api.approve(id, { offer_code, evidence_ids, draft_body });
       if (res.approved) {
         setApproval(id, 'approved');
@@ -486,7 +487,7 @@ Reply or call 1-800-XXX-XXXX.`
               size="sm"
               icon="check"
               onClick={() => void onApprove()}
-              disabled={!rec || approval === 'approved'}
+              disabled={!rec || !draftReady || approval === 'approved'}
               aria-label={
                 approval === 'approved'
                   ? `Borrower ${b.borrower_id} already approved`
@@ -545,6 +546,12 @@ Reply or call 1-800-XXX-XXXX.`
                   ))}
             </div>
             {b && (
+              <div className="mt-3">
+                <div className="eyebrow mb-2">Borrower flags</div>
+                <BorrowerTruthFlags borrower={b} />
+              </div>
+            )}
+            {b && (
               <div className="chip-row mt-3">
                 <Button
                   variant={leadIsSaved ? 'ghost' : 'default'}
@@ -576,10 +583,11 @@ Reply or call 1-800-XXX-XXXX.`
             )}
             {!draftLoaded && !draftWarming && b && (
               <div
-                data-testid="draft-fallback-note"
-                className="muted fs-11 mb-2"
+                data-testid="draft-unavailable-note"
+                className="status-callout status-callout--warning mb-3"
+                role="alert"
               >
-                Default template used — offer-draft endpoint unavailable.
+                {draftError ?? 'Offer draft unavailable. Approval is disabled until the audited draft loads.'}
               </div>
             )}
             <textarea
@@ -587,12 +595,10 @@ Reply or call 1-800-XXX-XXXX.`
               aria-label="Outreach draft — review only"
               value={draftText}
               onChange={(e) => {
-                // Hydrate draftBody on first edit when the backend
-                // draft never loaded, so subsequent edits accumulate
-                // on top of the default template rather than reverting.
-                if (!draftLoaded) setDraftLoaded(true);
+                if (!draftLoaded) return;
                 setDraftBody(e.target.value);
               }}
+              disabled={!draftLoaded}
               data-testid="outreach-draft"
               className="route-textarea route-textarea--outreach"
             />
@@ -607,11 +613,22 @@ Reply or call 1-800-XXX-XXXX.`
                 size="sm"
                 icon={draftIsSaved ? 'check' : 'doc'}
                 onClick={saveCurrentDraft}
-                disabled={!id || draftText.trim().length === 0}
+                disabled={!id || !draftReady}
                 aria-label={`Save outreach draft for ${id ?? 'borrower'}`}
               >
                 {draftIsSaved ? 'Draft saved' : 'Save draft'}
               </Button>
+              {savedDraft && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  icon="cross"
+                  onClick={resetCurrentDraft}
+                  aria-label={`Reset saved outreach draft for ${id ?? 'borrower'}`}
+                >
+                  Reset draft
+                </Button>
+              )}
             </div>
           </div>
         </div>
@@ -683,7 +700,7 @@ Reply or call 1-800-XXX-XXXX.`
           text={`${b ? `Borrower ${b.borrower_id}` : 'Borrower'} pending review. Approve writes an audit event and releases the draft into the outreach queue.`}
           onApprove={() => void onApprove()}
           onReject={() => void onReject()}
-          disabled={approval === 'approved' || approval === 'rejected'}
+          disabled={!draftReady || approval === 'approved' || approval === 'rejected'}
           isSubmitting={approving}
         />
       </div>

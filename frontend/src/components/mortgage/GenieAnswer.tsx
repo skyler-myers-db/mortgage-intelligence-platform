@@ -6,6 +6,9 @@ import type {
   GenieVisualization,
 } from '../../types';
 import { Icon } from '../Icon';
+import { Chip, EvidenceChip } from '../Primitives';
+import { drawerForAsset } from '../../lib/drawerSources';
+import { useApp, type DrawerSource } from '../AppContext';
 
 /**
  * GenieAnswer — renders the widened Genie payload: metric_value (big tabular
@@ -659,7 +662,13 @@ function GenieStrategyBoard({
   );
 }
 
-function GenieProofPanel({ payload }: { payload: GenieAnswerShape }) {
+function GenieProofPanel({
+  payload,
+  onOpenSource,
+}: {
+  payload: GenieAnswerShape;
+  onOpenSource: (source: DrawerSource) => void;
+}) {
   const proof = payload.proof;
   if (!proof) return null;
   const assets = proof.source_assets ?? payload.trusted_assets ?? [];
@@ -685,7 +694,18 @@ function GenieProofPanel({ payload }: { payload: GenieAnswerShape }) {
         <div className="genie-proof__section">
           <div className="eyebrow">Source UC assets</div>
           <div className="chip-row">
-            {assets.map((asset) => <span key={asset} className="chip chip--neutral">{asset}</span>)}
+            {assets.map((asset) => {
+              const drawer = drawerForAsset(asset);
+              return drawer ? (
+                <EvidenceChip key={asset} source={drawer} onClick={() => onOpenSource(drawer)}>
+                  {asset}
+                </EvidenceChip>
+              ) : (
+                <Chip key={asset} variant="neutral" title={`Source: ${asset}`}>
+                  {asset}
+                </Chip>
+              );
+            })}
           </div>
         </div>
       )}
@@ -749,6 +769,28 @@ interface GenieAnswerProps {
   withChart?: boolean;
 }
 
+function actionPreview(action: GenieActionSuggestion): string[] {
+  const criteria = action.criteria ?? {};
+  const filters = criteria.result_filters && typeof criteria.result_filters === 'object'
+    ? criteria.result_filters as Record<string, unknown>
+    : {};
+  const preview: string[] = [];
+  const zips = Array.isArray(filters.zips) ? filters.zips : [];
+  if (zips.length > 0) preview.push(`${zips.length} ZIP${zips.length === 1 ? '' : 's'}: ${zips.slice(0, 5).join(', ')}${zips.length > 5 ? '…' : ''}`);
+  const states = Array.isArray(filters.states) ? filters.states : [];
+  if (states.length > 0) preview.push(`States: ${states.join(', ')}`);
+  const segments = Array.isArray(filters.segment_codes) ? filters.segment_codes : [];
+  if (segments.length > 0) preview.push(`Segments: ${segments.join(', ')} (${filters.segment_mode === 'all' ? 'all' : 'any'})`);
+  if (typeof filters.target_lender_ref === 'string' && filters.target_lender_ref.length > 0) {
+    preview.push(`Target lien holder: ${filters.target_lender_ref}`);
+  }
+  if (action.borrower_ids && action.borrower_ids.length > 0) {
+    preview.push(`${action.borrower_ids.length} borrower${action.borrower_ids.length === 1 ? '' : 's'} bound by ID`);
+  }
+  if (typeof criteria.row_count === 'number') preview.push(`${criteria.row_count.toLocaleString()} result row${criteria.row_count === 1 ? '' : 's'}`);
+  return preview;
+}
+
 export function GenieAnswer({
   payload,
   onFollowUp,
@@ -757,6 +799,7 @@ export function GenieAnswer({
   withChart = false,
 }: GenieAnswerProps) {
   const { answer, metric_value, table_rows, follow_up_questions, actions } = payload;
+  const { setDrawer } = useApp();
   const [showProof, setShowProof] = useState(false);
   const [confirmActionId, setConfirmActionId] = useState<string | null>(null);
   const [pendingActionId, setPendingActionId] = useState<string | null>(null);
@@ -878,7 +921,13 @@ export function GenieAnswer({
               </button>
             </div>
             <div className="drawer__body">
-              <GenieProofPanel payload={payload} />
+              <GenieProofPanel
+                payload={payload}
+                onOpenSource={(source) => {
+                  setShowProof(false);
+                  setDrawer(source);
+                }}
+              />
             </div>
           </aside>
         </>,
@@ -905,11 +954,19 @@ export function GenieAnswer({
           {actions.slice(0, 5).map((action) => {
             const confirming = confirmActionId === action.id;
             const pending = pendingActionId === action.id;
+            const preview = actionPreview(action);
             return (
               <div key={action.id} className="genie-action">
                 <div className="genie-action__body">
                   <div className="genie-action__label">{action.label}</div>
                   <div className="genie-action__desc">{action.description}</div>
+                  {preview.length > 0 && (
+                    <div className="genie-action__preview">
+                      {preview.slice(0, 4).map((item) => (
+                        <span key={item} className="chip chip--neutral">{item}</span>
+                      ))}
+                    </div>
+                  )}
                 </div>
                 {confirming ? (
                   <div className="genie-action__confirm">

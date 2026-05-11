@@ -52,6 +52,7 @@ import io
 import logging
 import os
 import sys
+import time
 import urllib.error
 import urllib.request
 from collections.abc import Iterable
@@ -180,11 +181,59 @@ def parse_seed_csv(path: Path) -> list[RateRow]:
     return rows
 
 
-def fetch_fred_csv(url: str = FRED_CSV_URL, timeout: int = 30) -> str:
-    """Fetch the FRED graph CSV. Raises urllib.error.URLError on network failure."""
-    req = urllib.request.Request(url, headers={"User-Agent": "mip-ingest/0.1"})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
-        return resp.read().decode("utf-8")
+def fetch_fred_csv(
+    url: str = FRED_CSV_URL,
+    timeout: int = 30,
+    *,
+    attempts: int = 3,
+    backoff_s: float = 0.5,
+    user_agent: str | None = None,
+) -> str:
+    """Fetch the FRED graph CSV with small retry/backoff.
+
+    2026-05-06 production blocker: FRED/Akamai started hanging on the
+    bespoke ``mip-ingest/0.1`` user-agent while the same endpoint replied
+    immediately to vanilla urllib/curl clients. The default path now sends
+    no custom user-agent. Operators can set ``FRED_USER_AGENT`` if their
+    network edge requires one, but the committed default intentionally
+    avoids a custom fingerprint.
+    """
+    last_exc: BaseException | None = None
+    headers: dict[str, str] = {}
+    resolved_user_agent = (
+        os.environ.get("FRED_USER_AGENT", "").strip()
+        if user_agent is None
+        else user_agent.strip()
+    )
+    if resolved_user_agent:
+        headers["User-Agent"] = resolved_user_agent
+
+    for attempt in range(1, max(1, attempts) + 1):
+        req = urllib.request.Request(url, headers=headers)
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
+                text = resp.read().decode("utf-8")
+            if not text.strip():
+                raise urllib.error.URLError("FRED returned an empty CSV payload")
+            return text
+        except (TimeoutError, urllib.error.URLError, OSError) as exc:
+            last_exc = exc
+            if attempt >= max(1, attempts):
+                raise
+            sleep_for = backoff_s * (2 ** (attempt - 1))
+            log.warning(
+                "FRED fetch attempt %d/%d failed: %s; retrying in %.1fs",
+                attempt,
+                max(1, attempts),
+                exc,
+                sleep_for,
+            )
+            if sleep_for > 0:
+                time.sleep(sleep_for)
+
+    # Unreachable, but keeps type-checkers honest if attempts <= 0 drifted.
+    assert last_exc is not None
+    raise last_exc
 
 
 # ---------------------------------------------------------------------------
@@ -408,7 +457,7 @@ def run_fred(table: str, batch_id: str, dry_run: bool, staleness_days: int) -> i
     """Fetch FRED, MERGE into silver. Resilient to FRED outage if silver is fresh."""
     try:
         payload = fetch_fred_csv()
-    except (urllib.error.URLError, TimeoutError) as exc:
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
         log.warning("FRED fetch failed: %s", exc)
         if dry_run:
             log.info("[dry-run] would check staleness and exit 0 or 1")

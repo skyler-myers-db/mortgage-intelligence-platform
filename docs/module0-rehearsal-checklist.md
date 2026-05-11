@@ -26,7 +26,7 @@ against `mip.gold.borrower_360` immediately after.
 ## 2. Probe app health — expect full green
 
 ```bash
-curl -s https://mip-app-2543889327043640.aws.databricksapps.com/api/health | jq
+curl -s "$MIP_APP_URL/api/health" | jq
 ```
 
 (The deployed App authenticates via workspace-identity Bearer — no PAT
@@ -55,7 +55,7 @@ second call, something's off — investigate before going on stage.
 ```bash
 curl -s -X POST https://<databricks-app-host>/api/genie/message \
   -H 'content-type: application/json' \
-  -d '{"question":"How many borrowers across the 6-state footprint are currently in-the-money, and what is the average rate spread?"}'
+  -d '{"question":"How many borrowers across the current Cotality data coverage are currently in-the-money, and what is the average rate spread?"}'
 ```
 
 First call on a cold Genie space can take 10–30 s. A second call against the
@@ -64,11 +64,11 @@ the audience sees. Verify the response `source` is `"genie"`, not `"degraded"`.
 
 ## 4. Verify Lakebase write path via a benign audit row
 
-Load the app in an incognito tab, click into a borrower dossier (e.g.
-`/borrower-360/B-48291`) and confirm a row appears in `/api/audit` within a
-second or two. This proves the Lakebase write path is open; an expired auth
-token will cause a quiet 500 if you find out during the approval beat
-instead.
+Load the app in an incognito tab, open Lead Queue, choose the first available
+borrower row, open its Borrower 360 dossier, and confirm a row appears in
+`/api/audit` within a second or two. This proves the Lakebase write path is
+open; an expired auth token will cause a quiet 500 if you find out during the
+approval beat instead.
 
 ```bash
 curl -s https://<databricks-app-host>/api/audit/events?limit=5 | jq '.[0]'
@@ -84,8 +84,9 @@ compact density**. Expect:
   latency near **130 ms** (warm path through the SWR cache — see
   [docs/load-baseline.md](load-baseline.md) for the full endpoint p95 table).
 - Floating Genie FAB is visible bottom-right.
-- Map choropleth shades all six real states (IL, CA, FL, TX, WA, CO).
-- Opening a borrower dossier (e.g. `/borrower-360/B-48291`) returns in
+- Map choropleth shades the refreshed coverage states, and drill-down copy
+  discloses the county count discovered from gold rollups.
+- Opening a borrower dossier from the first Lead Queue row returns in
   ~1.2 s — that's the `mip.gold.borrower_dossier` CTAS (pre-joined
   borrower_360 × top-20 evidence events) replacing the old two-query
   fan-out. If you're seeing 3-second-plus dossier loads, the CTAS may
@@ -100,11 +101,11 @@ On a cold or unavailable Genie space, the app must return an honest
 `source: "degraded"` reconnecting response with no fabricated numbers.
 Prime one of these canonical questions from `genie/sample_questions.md`:
 
-- "How many borrowers across the 6-state footprint are currently in-the-money?"
+- "How many borrowers across the current Cotality data coverage are currently in-the-money?"
 - "Show the top 10 cash-out candidates in Florida by estimated equity."
-- "How big is the 2020–2022 sub-3% lock-in cohort across the 6-state footprint?"
-  — expect **669,320**, materialized as `mip.gold.lockin_cohort` (new this
-  slice, independent raw-share reference Δ=0).
+- "How big is the 2020–2022 sub-3% lock-in cohort across the current Cotality data coverage?"
+  — compare the answer against the current `mip.gold.lockin_cohort` count
+  during rehearsal; do not use a stale fixed count in the walkthrough.
 
 Ask one verbatim. For the live demo, wait until you get a structured
 `source: "genie"` answer with proof metadata and trusted-asset chips. If the
@@ -117,9 +118,10 @@ Re-run step (3) in a minute and the Genie space will have warmed up.
 If the frontend dies mid-walkthrough, the API still works. Pre-load these in a second
 terminal or browser tab:
 
-- `curl /api/leads?limit=5 | jq`
-- `curl /api/borrowers/B-48291 | jq`
-- `curl /api/segments | jq`
+- `curl "$MIP_APP_URL/api/leads?limit=5" | jq`
+- `BORROWER_ID="$(curl -s "$MIP_APP_URL/api/leads?limit=1" | jq -r '.[0].borrower_id')"`
+- `curl "$MIP_APP_URL/api/borrowers/$BORROWER_ID" | jq`
+- `curl "$MIP_APP_URL/api/segments" | jq`
 
 The dossier endpoint contains everything the Borrower 360 page renders — you
 can narrate from JSON if the UI goes dark.

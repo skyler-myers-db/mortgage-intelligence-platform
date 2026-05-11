@@ -4,7 +4,7 @@ Live SDK interactions are excluded by design: this tool mutates workspace
 state, so the end-to-end path is exercised via ``make provision-genie``
 against the DEFAULT profile. Here we verify:
 
-* The curated YAML parses into a ``SpaceSpec`` with all 9 trusted assets
+* The curated YAML parses into a ``SpaceSpec`` with all trusted assets
   and 10 sample questions.
 * ``to_serialized_payload()`` yields a JSON string matching the discovered
   Genie ``serialized_space`` schema:
@@ -42,7 +42,11 @@ EXPECTED_ASSETS = {
     "mip.gold.borrower_360",
     "mip.gold.borrower_dossier",
     "mip.gold.evidence_events",
+    "mip.gold.source_readiness",
     "mip.gold.lockin_cohort",
+    "mip.gold.funnel_snapshot_daily",
+    "mip.gold.county_rollup",
+    "mip.gold.zip_rollup",
     "mip.semantics.lead_generation_metric_view",
     "mip.semantics.segment_performance_metric_view",
     "mip.semantics.borrower_opportunity_metric_view",
@@ -60,6 +64,124 @@ def test_spec_loads_all_trusted_assets_and_questions() -> None:
     assert len(spec.sample_questions) == 10
     assert len(spec.example_question_sqls) >= 5
     assert "measures" in spec.sql_snippets
+
+
+def test_genie_allowlist_docs_match_provisioned_assets() -> None:
+    instructions = (REPO_ROOT / "genie" / "instructions.md").read_text(encoding="utf-8")
+    trusted_assets_doc = (REPO_ROOT / "genie" / "trusted_assets.md").read_text(encoding="utf-8")
+
+    for asset in EXPECTED_ASSETS:
+        assert asset in instructions
+        assert asset in trusted_assets_doc
+
+
+def test_genie_in_the_money_threshold_matches_module0_contract() -> None:
+    space_text = pgs.SPACE_YAML.read_text(encoding="utf-8")
+    mirror_text = (REPO_ROOT / "genie" / "instructions.md").read_text(encoding="utf-8")
+
+    threshold_line = re.search(
+        r"in-the-money\s+≥\s*(\d+)\s*bps spread and ≥\s*(\d+)% equity",
+        space_text,
+    )
+    assert threshold_line is not None
+    assert threshold_line.groups() == ("75", "15")
+    assert "in-the-money means ≥ 75 bps rate\n    spread and ≥ 15% equity" in mirror_text
+    assert "in-the-money\n      ≥ 50 bps spread" not in space_text
+
+
+def test_genie_source_gap_questions_are_no_sql_redirects() -> None:
+    space_text = pgs.SPACE_YAML.read_text(encoding="utf-8")
+    mirror_text = (REPO_ROOT / "genie" / "instructions.md").read_text(encoding="utf-8")
+
+    assert "A. SOURCE-GAP QUESTION" in space_text
+    assert "DO NOT generate SQL" in space_text
+    assert "I will not count the missing feed as zero demand" in space_text
+    assert "Source:\n     mip.gold.source_readiness" in space_text
+    assert "This bucket has priority over all other buckets" in space_text
+    assert (
+        "Which borrowers have both a permit signal and an equity-crossing"
+        in space_text
+    )
+    assert "If bucket A/C/D/E fired" in space_text
+    for snippet in (
+        "**A. Source-gap question:**",
+        "This bucket has priority",
+        "Do **not** generate SQL",
+        "will not be counted as zero demand",
+        "`mip.gold.source_readiness`",
+    ):
+        assert snippet in mirror_text
+
+
+def test_strategy_example_derives_offer_mix_from_borrower_360() -> None:
+    spec = pgs.SpaceSpec.load(pgs.SPACE_YAML)
+    question = (
+        "Where should Summit Mortgage spend its next 10000 outreach touches "
+        "this week, and why?"
+    )
+    strategy = next(
+        item
+        for item in spec.example_question_sqls
+        if item.get("question") == question
+    )
+    sql_items = strategy.get("sql")
+    assert isinstance(sql_items, list) and sql_items
+    sql = "\n".join(str(part) for part in sql_items)
+    sql_nc = re.sub(r"\s+", " ", sql).lower()
+
+    assert "from mip.gold.borrower_360" in sql_nc
+    assert "recommended_offer" in sql_nc
+    assert "recommended_offer_code" in sql_nc
+    assert "leading_recommended_offer" in sql_nc
+    assert "case when segment_code" not in sql_nc
+    assert "then 'refinance + heloc'" not in sql_nc
+    assert "then 'cash-out / dscr review'" not in sql_nc
+    assert "then 'retention review'" not in sql_nc
+
+
+def test_genie_geography_zero_count_is_not_zero_demand() -> None:
+    space_text = pgs.SPACE_YAML.read_text(encoding="utf-8")
+    mirror_text = (REPO_ROOT / "genie" / "instructions.md").read_text(encoding="utf-8")
+
+    assert "Geography guard inside bucket B" in space_text
+    assert "not phrase that as zero borrower demand" in space_text
+    assert "not present in the current Cotality data coverage" in space_text
+    assert "Atlanta/Georgia" in space_text
+    assert "do **not** phrase that as zero borrower demand" in mirror_text
+    assert "not present in the current Cotality data coverage" in mirror_text
+
+
+def test_genie_cross_lender_customer_questions_are_out_of_scope() -> None:
+    space_text = pgs.SPACE_YAML.read_text(encoding="utf-8")
+    mirror_text = (REPO_ROOT / "genie" / "instructions.md").read_text(encoding="utf-8")
+
+    assert "third-party lender or lead-vendor-owned" in space_text
+    assert "configured tenant lender" in space_text
+    assert "tenant is Summit\n     Mortgage" in space_text
+    assert "LendingTree-sourced borrower" in space_text
+    assert "Rocket\n     Mortgage customers" in space_text
+    assert "Quicken Loans customers" in space_text
+    assert "third-party lender or\n  lead-vendor-owned customers" in mirror_text
+    assert "tenant is Summit\n  Mortgage" in mirror_text
+    assert "LendingTree-sourced borrower" in mirror_text
+    assert "Rocket Mortgage customers" in mirror_text
+
+
+def test_serialized_text_instruction_allowlist_names_every_trusted_asset() -> None:
+    spec = pgs.SpaceSpec.load(pgs.SPACE_YAML)
+    parsed = json.loads(spec.to_serialized_payload())
+    instruction_text = "\n".join(
+        part
+        for item in parsed["instructions"]["text_instructions"]
+        for part in item["content"]
+    )
+
+    allowlist_section = instruction_text.split("Query ONLY these assets:", 1)[1].split(
+        "- `mip.ref.state_footprint`",
+        1,
+    )[0]
+    for asset in EXPECTED_ASSETS:
+        assert asset in allowlist_section
 
 
 def test_serialized_payload_matches_discovered_schema() -> None:

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { isEditableTarget } from './LeadTable';
+import { buildLeadCsv, isEditableTarget } from './LeadTable';
+import type { LeadSummary } from '../../types';
 
 /**
  * LeadTable hotkey-bailout guard (R5-12, 2026-04-23).
@@ -96,5 +97,74 @@ describe('synchronous in-flight latch shape', () => {
     latch.release();
     expect(latch.snapshot()).toBe(false);
     expect(latch.tryEnter()).toBe(true);
+  });
+});
+
+const sampleLead = (overrides: Partial<LeadSummary> = {}): LeadSummary => ({
+  borrower_id: 'B-TEST1',
+  display_name: 'Owner masked',
+  city: 'Chicago',
+  state: 'IL',
+  zip: '60617',
+  clip: 'clip_ref_public',
+  segment_codes: ['itm', 'equity'],
+  equity_estimate: 350000,
+  rate_spread_bps: 325,
+  opportunity_score: 82,
+  confidence: 77,
+  recommended_offer: 'Refinance + HELOC',
+  why_now: 'Market rate comparison',
+  evidence_ids: ['EV1'],
+  approval_status: 'pending',
+  is_owner_occupied: true,
+  is_investor: false,
+  is_current_customer: false,
+  is_former_customer: true,
+  is_competitor_lien: true,
+  current_lender_ref: 'Competitor A',
+  current_lien_balance: 120000,
+  second_pos_amount: 0,
+  has_permit: false,
+  listed_for_sale: false,
+  related_property_count: 1,
+  ...overrides,
+});
+
+describe('buildLeadCsv', () => {
+  it('exports context comments and public truth-flag columns', () => {
+    const csv = buildLeadCsv(
+      [sampleLead()],
+      { 'B-TEST1': 'approved' },
+      {
+        generatedAt: '2026-05-10T12:00:00.000Z',
+        filters: 'states=IL&product=Cash-out',
+        refreshedAt: '2026-05-09T21:54:00Z',
+        rulesVersion: 'rules.itm_abc123',
+      },
+    );
+
+    expect(csv).toContain('# generated_at=2026-05-10T12:00:00.000Z');
+    expect(csv).toContain('# filters=states=IL&product=Cash-out');
+    expect(csv).toContain('# refreshed_at=2026-05-09T21:54:00Z');
+    expect(csv).toContain('# rules_version=rules.itm_abc123');
+    expect(csv).toContain(
+      'approval_status,is_owner_occupied,is_investor,is_current_customer,is_former_customer,is_competitor_lien,current_lender_ref',
+    );
+    expect(csv).toContain('approved,true,false,false,true,true,Competitor A');
+    expect(csv).not.toContain('owner_name');
+    expect(csv).not.toContain('street_address');
+  });
+
+  it('escapes comma quote newline and formula-leading values', () => {
+    const csv = buildLeadCsv([
+      sampleLead({
+        borrower_id: 'B-TEST2',
+        city: 'North, "West"\nSide',
+        current_lender_ref: '=unsafe',
+      }),
+    ], {}, { generatedAt: '2026-05-10T12:00:00.000Z' });
+
+    expect(csv).toContain('"North, ""West""\nSide"');
+    expect(csv).toContain(",'=unsafe,");
   });
 });

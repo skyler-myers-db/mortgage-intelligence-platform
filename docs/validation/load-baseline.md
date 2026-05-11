@@ -1,3 +1,5 @@
+> **Internal implementation artifact. Not approved for public release.**
+
 # Validation: load-baseline
 
 Short companion to [`docs/load-baseline.md`](../load-baseline.md).

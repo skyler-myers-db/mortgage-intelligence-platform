@@ -14,8 +14,8 @@
 -- Source:    cotality_mortgage_data.corelogic.entrada_eval_mortgage_domain_v1
 --            (~29M rows, event grain; composite txn id is PK).
 --
--- Geography filter (non-negotiable):
---            WHERE deed_situs_state_static IN ('IL','CA','FL','TX','WA','CO')
+-- Geography contract:
+--            WHERE deed_situs_state_static IS NOT NULL
 --            -- Note: this share's state column is `deed_situs_state_static`
 --            (different from the voluntary_lien / property_v3 convention).
 --            Transformation file handles the column rename to `situs_state`
@@ -63,9 +63,8 @@
 --
 -- Clustering: Liquid cluster on (clip, event_date) -- gold per-CLIP timeline
 --            queries filter on clip and take the most recent N events; event
---            counts in the last 90 days feed `intent_trigger`. 29M rows
---            filtered to 6 states is still ~10M+; clustering on (clip,
---            event_date) lets that scan skip aggressively. Partitioning by
+--            counts in the last 90 days feed `intent_trigger`; clustering on
+--            (clip, event_date) lets that scan skip aggressively. Partitioning by
 --            event_year was considered and rejected: gold reads the last 90
 --            days most often, so year-partition boundaries don't help.
 --
@@ -76,7 +75,7 @@
 CREATE TABLE IF NOT EXISTS mip.silver.mortgage_events (
   mortgage_txn_id        STRING    NOT NULL COMMENT 'Composite transaction ID from share (mortgage_composite_transaction_id). PK.',
   clip                   STRING    NOT NULL COMMENT 'Cotality mastered property ID. FK to silver.lien_current + silver.property_master.',
-  situs_state            STRING    NOT NULL COMMENT '2-char state code (renamed from deed_situs_state_static). Filter: IN (IL, CA, FL, TX, WA, CO).',
+  situs_state            STRING    NOT NULL COMMENT '2-char state code (renamed from deed_situs_state_static).',
   event_date             DATE               COMMENT 'Event date. TO_DATE(CAST(yyyyMMdd AS STRING), ...) from share.',
   event_year             INT                COMMENT 'YEAR(event_date). Convenience column for cohort aggregates.',
   mortgage_amount        BIGINT             COMMENT 'Loan amount, USD.',
@@ -95,7 +94,7 @@ CREATE TABLE IF NOT EXISTS mip.silver.mortgage_events (
 )
 USING DELTA
 CLUSTER BY (clip, event_date)
-COMMENT 'Event-grain mortgage history lifted from cotality_mortgage_data.corelogic.entrada_eval_mortgage_domain_v1 filtered to deed_situs_state_static IN (IL, CA, FL, TX, WA, CO). Feeds intent_trigger scoring and gold.evidence_events. See docs/data-contract-module0.md §2.3.'
+COMMENT 'Event-grain mortgage history lifted from the Cotality source share for all non-null source states. Feeds intent_trigger scoring and gold.evidence_events. See docs/data-contract-module0.md §2.3.'
 TBLPROPERTIES (
   'delta.enableChangeDataFeed' = 'false',
   'delta.autoOptimize.optimizeWrite' = 'true',
