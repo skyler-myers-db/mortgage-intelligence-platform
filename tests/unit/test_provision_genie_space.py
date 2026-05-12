@@ -167,6 +167,34 @@ def test_genie_cross_lender_customer_questions_are_out_of_scope() -> None:
     assert "Rocket Mortgage customers" in mirror_text
 
 
+def test_genie_retention_and_evidence_vocab_instructions_match_gold_contract() -> None:
+    space_text = pgs.SPACE_YAML.read_text(encoding="utf-8")
+    mirror_text = (REPO_ROOT / "genie" / "instructions.md").read_text(encoding="utf-8")
+    trusted_assets_doc = (REPO_ROOT / "genie" / "trusted_assets.md").read_text(encoding="utf-8")
+    serialized = json.loads(pgs.SpaceSpec.load(pgs.SPACE_YAML).to_serialized_payload())
+    instruction_text = "\n".join(
+        part
+        for item in serialized["instructions"]["text_instructions"]
+        for part in item["content"]
+    )
+
+    for text in (space_text, mirror_text, instruction_text):
+        assert "recommended_offer_code = 'retention'" in text
+        assert "is_current_customer" in text
+        assert "is_competitor_lien" in text
+        assert "to both be" in text
+        assert "mutually exclusive" in text
+        assert "signal_type = 'competitor_lien'" in text
+        assert "signal_type = 'lien-change'" in text
+        assert "signal_type = 'competitor'" in text
+
+    for text in (space_text, trusted_assets_doc, instruction_text):
+        assert "competitor_lien" in text
+    assert "lien-change" not in trusted_assets_doc
+    assert "or lien-change analysis" not in space_text
+    assert "events (rate-drop, equity-crossed,\n      lien-change)" not in space_text
+
+
 def test_serialized_text_instruction_allowlist_names_every_trusted_asset() -> None:
     spec = pgs.SpaceSpec.load(pgs.SPACE_YAML)
     parsed = json.loads(spec.to_serialized_payload())

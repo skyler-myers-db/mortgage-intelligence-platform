@@ -32,6 +32,14 @@ instructions: |
   and `mip.semantics` assets. Do not hardcode how many counties or states are
   available; coverage can expand as new Cotality shares are connected.
 
+  Sales operations scope: loan-officer assignment, call disposition, standup,
+  and per-LO conversion live in governed Lakebase `mip_app.*` state. The app
+  backend routes narrow Sales Manager questions through its Sales Ops adapter
+  before invoking this Databricks Genie space. This space itself must not query
+  `mip_app.*`; if such a prompt reaches the space directly, say LO operational
+  state is available through the Sales Ops panel/API, not through Unity Catalog
+  Genie SQL.
+
   ──────────────────────────────────────────────────────────────────
   STEP 0 — TRIAGE BEFORE EVERY ANSWER
   ──────────────────────────────────────────────────────────────────
@@ -58,7 +66,7 @@ instructions: |
      I will not count the missing feed as zero demand. Source:
      mip.gold.source_readiness." If useful, offer a live alternative
      such as HELOC/equity, in-the-money refinance, investor, retention,
-     or lien-change analysis.
+     or competitor-lien analysis.
 
   B. IN-SCOPE ANALYTICS — the question is about borrowers, segments,
      scores, evidence, geography (within refreshed gold data coverage),
@@ -150,6 +158,16 @@ instructions: |
         * nurture: recommended_offer_code = 'nurture'
         * broad refinance/refi without a HELOC qualifier:
           recommended_offer_code IN ('refi', 'refi_plus_heloc')
+    - For current-customer retention-risk / recapture-risk questions, use the
+      retention risk signal already modeled in mip.gold.borrower_360:
+      is_current_customer = TRUE AND
+      (array_contains(segment_codes, 'retention') OR recommended_offer_code = 'retention').
+      Do NOT require is_current_customer and is_competitor_lien to both be TRUE;
+      those relationship flags are mutually exclusive in the gold model.
+    - For evidence trigger questions, use the governed signal_type vocabulary
+      exactly as modeled in mip.gold.evidence_events. Competitor-lien evidence is
+      signal_type = 'competitor_lien'. Never use signal_type = 'lien-change' or
+      signal_type = 'competitor'.
 
   ──────────────────────────────────────────────────────────────────
   NEVER:
@@ -281,8 +299,10 @@ trusted_assets:
   - name: mip.gold.evidence_events
     kind: table
     description: >-
-      Refreshed trigger evidence table of events (rate-drop, equity-crossed,
-      lien-change) per borrower with a UTC timestamp, confidence, and
+      Refreshed trigger evidence table of events (rate_spread, equity,
+      market_trend, competitor_lien, multi_property, absentee_mailing,
+      corporate_owner, recent_refi, recent_payoff, recent_sale,
+      foreclosure_stage) per borrower with a UTC timestamp, confidence, and
       source-table citation. MLS listing and building-permit trigger feeds
       are pending Cotality delivery and are blocked false today. Use this for
       supporting proof, timelines, and trigger freshness; offer rationale text
@@ -588,8 +608,8 @@ sql_snippets:
 # even when the addressable population is large, which the user
 # experienced as a confusing hallucination. The replacement set
 # below stays inside the data the warehouse actually has today —
-# rate spread, equity, segment membership, lead score, lien
-# changes, retention. When MLS / Permits ship, restore the
+    # rate spread, equity, segment membership, lead score, competitor-lien
+    # evidence, retention. When MLS / Permits ship, restore the
 # permit/listing questions in a follow-up commit.
 sample_questions:
   - How many borrowers are currently in-the-money and what is the average rate spread?

@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { type ChangeEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
-import type { KpiTrend, PortfolioPreview } from '../types';
+import type { CampaignSummary, KpiTrend, PortfolioPreview } from '../types';
 import { PageShell } from '../components/layout/PageShell';
 import { KpiCard } from '../components/mortgage/KpiCard';
 import { Button } from '../components/Primitives';
@@ -32,6 +32,9 @@ const NON_GEO_FILTER_GROUPS: Array<{ label: string; key: string; options: string
   { label: 'RELATIONSHIP', key: 'lender_relationship',  options: ['All', 'Current customer', 'Former customer', 'Competitor customer'] },
   { label: 'PRODUCT',      key: 'product',              options: ['All products', 'Refi', 'HELOC', 'Cash-out', 'Purchase', 'Retention'] },
   { label: 'EQUITY',       key: 'min_equity_pct_label', options: ['≥ 15%', '≥ 25%', '≥ 40%', 'Any'] },
+  { label: 'CONTACTABILITY', key: 'marketing_eligibility', options: ['Eligible only', 'Any', 'Suppressed only'] },
+  { label: 'CONSENT', key: 'consent_status', options: ['Any', 'Opt-in', 'Opt-out', 'Unknown'] },
+  { label: 'RECENCY', key: 'recency', options: ['Any', 'Untouched 30d', 'Untouched 60d', 'Untouched 90d'] },
 ];
 
 /**
@@ -69,6 +72,9 @@ const BASE_DEFAULT_FILTERS: Record<string, string> = {
   target_lender_ref: 'All',
   product: 'All products',
   min_equity_pct_label: '≥ 15%',
+  marketing_eligibility: 'Eligible only',
+  consent_status: 'Any',
+  recency: 'Any',
 };
 
 const PUBLIC_LENDER_REF_RE = /^(All|Summit Mortgage|Competitor ([A-Z]|Other))$/;
@@ -86,6 +92,9 @@ const URL_FILTER_KEYS = [
   'target_lender_ref',
   'product',
   'min_equity_pct_label',
+  'marketing_eligibility',
+  'consent_status',
+  'recency',
 ] as const;
 
 function parseFiltersFromUrl(
@@ -157,6 +166,115 @@ function buildLeadQueueUrlFromFilters(
   }
   const query = sp.toString();
   return query ? `/lead-queue?${query}` : '/lead-queue';
+}
+
+function campaignCriteriaSummary(campaign: CampaignSummary): string {
+  const criteria = campaign.criteria ?? {};
+  const parts: string[] = [];
+  const states = Array.isArray(criteria.states) ? criteria.states.map(String).filter(Boolean) : [];
+  if (states.length > 0) parts.push(states.join(', '));
+  for (const key of ['lender_relationship', 'product', 'marketing_eligibility', 'consent_status', 'recency']) {
+    const value = criteria[key];
+    if (typeof value === 'string' && value && value !== 'All' && value !== 'Any') {
+      parts.push(value);
+    }
+  }
+  const policy = campaign.suppression_policy?.default;
+  if (typeof policy === 'string' && policy) parts.push(policy.replace(/_/g, ' '));
+  const holdoutPct = campaign.holdout?.size_pct;
+  if (typeof holdoutPct === 'number') parts.push(`${holdoutPct}% holdout`);
+  return parts.length > 0 ? parts.join(' · ') : 'Eligible-only draft campaign';
+}
+
+type CampaignSetupState = {
+  subjectA: string;
+  subjectB: string;
+  bodyA: string;
+  bodyB: string;
+  holdoutPct: string;
+  startLocal: string;
+  endLocal: string;
+  budget: string;
+  emailCost: string;
+  smsCost: string;
+  mailCost: string;
+};
+
+const DEFAULT_CAMPAIGN_SETUP: CampaignSetupState = {
+  subjectA: 'Summit Mortgage review for your current loan options',
+  subjectB: 'A refinance review may improve your mortgage fit',
+  bodyA: 'Review current mortgage fit with Summit Mortgage using the governed relationship-aware template.',
+  bodyB: 'Highlight rate, equity, and human review using the governed relationship-aware template.',
+  holdoutPct: '10',
+  startLocal: '09:00',
+  endLocal: '16:00',
+  budget: '',
+  emailCost: '1.20',
+  smsCost: '0.08',
+  mailCost: '0.86',
+};
+
+function boundedNumber(raw: string, fallback: number, min: number, max: number): number {
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(max, Math.max(min, parsed));
+}
+
+function nullableMoney(raw: string): number | null {
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return Number(parsed.toFixed(2));
+}
+
+function buildCampaignConfig(setup: CampaignSetupState): {
+  suppression_policy: Record<string, unknown>;
+  message_variants: Record<string, unknown>[];
+  channel_cascade: Record<string, unknown>[];
+  send_window: Record<string, unknown>;
+  holdout: Record<string, unknown>;
+  roi_assumptions: Record<string, unknown>;
+} {
+  const holdoutPct = boundedNumber(setup.holdoutPct, 10, 0, 50);
+  return {
+    suppression_policy: { default: 'eligible_only', frequency_cap_days: 30 },
+    message_variants: [
+      {
+        variant_name: 'A',
+        channel: 'email',
+        subject: setup.subjectA.trim(),
+        body: setup.bodyA.trim(),
+        weight_pct: Math.max(0, Math.round((100 - holdoutPct) / 2)),
+      },
+      {
+        variant_name: 'B',
+        channel: 'email',
+        subject: setup.subjectB.trim(),
+        body: setup.bodyB.trim(),
+        weight_pct: Math.max(0, Math.floor((100 - holdoutPct) / 2)),
+      },
+    ],
+    channel_cascade: [
+      { channel: 'email', step: 1 },
+      { channel: 'sms', step: 2, after_days: 3 },
+      { channel: 'direct_mail', step: 3, after_days: 10 },
+    ],
+    send_window: {
+      days: ['Tuesday', 'Wednesday', 'Thursday'],
+      timezone: 'borrower_local',
+      start_local: setup.startLocal,
+      end_local: setup.endLocal,
+    },
+    holdout: { method: 'hash_modulo', size_pct: holdoutPct },
+    roi_assumptions: {
+      budget_usd: nullableMoney(setup.budget),
+      cost_per_contact_usd: {
+        email: nullableMoney(setup.emailCost),
+        sms: nullableMoney(setup.smsCost),
+        direct_mail: nullableMoney(setup.mailCost),
+      },
+      source: 'operator_configured',
+    },
+  };
 }
 
 function parseStateCodesFromUrl(
@@ -341,6 +459,10 @@ export default function PortfolioBuilder() {
   );
   const [copyHint, setCopyHint] = useState<'idle' | 'copied' | 'failed'>('idle');
   const [saveHint, setSaveHint] = useState<'idle' | 'saved' | 'failed'>('idle');
+  const [campaigns, setCampaigns] = useState<CampaignSummary[]>([]);
+  const [campaignsLoading, setCampaignsLoading] = useState(true);
+  const [campaignsError, setCampaignsError] = useState<string | null>(null);
+  const [campaignSetup, setCampaignSetup] = useState<CampaignSetupState>(DEFAULT_CAMPAIGN_SETUP);
 
   useEffect(() => {
     const ctrl = new AbortController();
@@ -381,6 +503,9 @@ export default function PortfolioBuilder() {
     : null;
 
   const setFilter = (key: string) => (next: string) => setFilters((f) => ({ ...f, [key]: next }));
+  const setCampaignField = (key: keyof CampaignSetupState) => (
+    event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>,
+  ) => setCampaignSetup((current) => ({ ...current, [key]: event.target.value }));
   const buildDirty = useMemo(
     () =>
       JSON.stringify({ filters, stateCodes }) !==
@@ -416,18 +541,44 @@ export default function PortfolioBuilder() {
     }
   }, [buildDirty]);
 
+  const loadCampaigns = useCallback(async (signal?: AbortSignal) => {
+    setCampaignsLoading(true);
+    setCampaignsError(null);
+    try {
+      const payload = await api.campaigns(signal);
+      setCampaigns(payload.campaigns ?? []);
+    } catch {
+      if (!signal?.aborted) {
+        setCampaignsError('Saved campaigns unavailable');
+      }
+    } finally {
+      if (!signal?.aborted) setCampaignsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const ctrl = new AbortController();
+    void loadCampaigns(ctrl.signal);
+    return () => ctrl.abort();
+  }, [loadCampaigns]);
+
   const onSaveBuild = useCallback(async () => {
     if (buildDirty) return;
     const defaultName = `Portfolio build ${new Date().toLocaleString()}`;
     const name = window.prompt('Name this build', defaultName)?.trim();
     if (!name) return;
     try {
-      await api.portfolioCreate(name, buildPreviewCriteria(committedFilters, committedStateCodes));
+      await api.portfolioCreate(
+        name,
+        buildPreviewCriteria(committedFilters, committedStateCodes),
+        buildCampaignConfig(campaignSetup),
+      );
+      await loadCampaigns();
       setSaveHint('saved');
     } catch {
       setSaveHint('failed');
     }
-  }, [buildDirty, committedFilters, committedStateCodes]);
+  }, [buildDirty, campaignSetup, committedFilters, committedStateCodes, loadCampaigns]);
 
   useEffect(() => {
     if (copyHint === 'idle') return;
@@ -666,6 +817,179 @@ export default function PortfolioBuilder() {
               source={DRAWER_SOURCES.nbo}
             />
           </div>
+        </div>
+      </div>
+
+      <div className="surface mt-4">
+        <div className="surface__hdr surface__hdr--split">
+          <div className="surface__hdr-main">
+            <div className="surface__icon">
+              <Icon name="send" size={14} />
+            </div>
+            <div>
+              <div className="h-4">Campaign setup</div>
+              <div className="muted fs-12">
+                Eligible-only suppression, channel sequence, holdout, send window, and ROI inputs.
+              </div>
+            </div>
+          </div>
+          <span className="chip chip--success">eligible only · 30d cap</span>
+        </div>
+        <div className="surface__body">
+          <div className="campaign-setup">
+            <label className="campaign-setup__field">
+              <span>Subject A</span>
+              <input
+                className="form-input"
+                value={campaignSetup.subjectA}
+                onChange={setCampaignField('subjectA')}
+                maxLength={120}
+              />
+            </label>
+            <label className="campaign-setup__field">
+              <span>Subject B</span>
+              <input
+                className="form-input"
+                value={campaignSetup.subjectB}
+                onChange={setCampaignField('subjectB')}
+                maxLength={120}
+              />
+            </label>
+            <label className="campaign-setup__field campaign-setup__field--wide">
+              <span>Body angle A</span>
+              <textarea
+                className="form-input campaign-setup__textarea"
+                value={campaignSetup.bodyA}
+                onChange={setCampaignField('bodyA')}
+                maxLength={700}
+              />
+            </label>
+            <label className="campaign-setup__field campaign-setup__field--wide">
+              <span>Body angle B</span>
+              <textarea
+                className="form-input campaign-setup__textarea"
+                value={campaignSetup.bodyB}
+                onChange={setCampaignField('bodyB')}
+                maxLength={700}
+              />
+            </label>
+            <label className="campaign-setup__field">
+              <span>Holdout %</span>
+              <input
+                className="form-input"
+                inputMode="decimal"
+                value={campaignSetup.holdoutPct}
+                onChange={setCampaignField('holdoutPct')}
+              />
+            </label>
+            <label className="campaign-setup__field">
+              <span>Send start</span>
+              <input
+                className="form-input"
+                type="time"
+                value={campaignSetup.startLocal}
+                onChange={setCampaignField('startLocal')}
+              />
+            </label>
+            <label className="campaign-setup__field">
+              <span>Send end</span>
+              <input
+                className="form-input"
+                type="time"
+                value={campaignSetup.endLocal}
+                onChange={setCampaignField('endLocal')}
+              />
+            </label>
+            <label className="campaign-setup__field">
+              <span>Budget</span>
+              <input
+                className="form-input"
+                inputMode="decimal"
+                value={campaignSetup.budget}
+                onChange={setCampaignField('budget')}
+                placeholder="optional"
+              />
+            </label>
+            <label className="campaign-setup__field">
+              <span>Email cost</span>
+              <input
+                className="form-input"
+                inputMode="decimal"
+                value={campaignSetup.emailCost}
+                onChange={setCampaignField('emailCost')}
+              />
+            </label>
+            <label className="campaign-setup__field">
+              <span>SMS cost</span>
+              <input
+                className="form-input"
+                inputMode="decimal"
+                value={campaignSetup.smsCost}
+                onChange={setCampaignField('smsCost')}
+              />
+            </label>
+            <label className="campaign-setup__field">
+              <span>Mail cost</span>
+              <input
+                className="form-input"
+                inputMode="decimal"
+                value={campaignSetup.mailCost}
+                onChange={setCampaignField('mailCost')}
+              />
+            </label>
+          </div>
+          <div className="campaign-setup__meta">
+            <span>Email → SMS after 3 days → direct mail after 10 days</span>
+            <span>Tue-Thu · borrower local time</span>
+          </div>
+        </div>
+      </div>
+
+      <div className="surface mt-4">
+        <div className="surface__hdr surface__hdr--split">
+          <div className="surface__hdr-main">
+            <div className="surface__icon">
+              <Icon name="doc" size={14} />
+            </div>
+            <div>
+              <div className="h-4">Saved campaigns</div>
+              <div className="muted fs-12">Drafts and review status for portfolio builds.</div>
+            </div>
+          </div>
+          <Button
+            variant="ghost"
+            size="sm"
+            icon="tweak"
+            onClick={() => void loadCampaigns()}
+            aria-label="Refresh saved campaigns"
+          >
+            Refresh
+          </Button>
+        </div>
+        <div className="surface__body">
+          {campaignsLoading ? (
+            <div className="muted fs-12">Loading campaigns…</div>
+          ) : campaignsError ? (
+            <div className="status-callout status-callout--danger">{campaignsError}</div>
+          ) : campaigns.length === 0 ? (
+            <div className="muted fs-12">No saved campaigns.</div>
+          ) : (
+            <div className="saved-workspace">
+              <div className="saved-workspace__summary">
+                <span>{campaigns.length.toLocaleString()} saved</span>
+                <span>eligible-only policy required before approval</span>
+              </div>
+              {campaigns.slice(0, 8).map((campaign) => (
+                <div key={campaign.campaign_id} className="saved-workspace__item">
+                  <span className="status-dot status-dot--ok" aria-hidden="true" />
+                  <div className="saved-workspace__body">
+                    <span className="text-1">{campaign.name}</span>
+                    <span>{campaign.status.replace(/_/g, ' ')} · {campaignCriteriaSummary(campaign)}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 

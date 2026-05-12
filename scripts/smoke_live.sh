@@ -60,6 +60,17 @@ done
 command -v curl >/dev/null || { echo "curl required" >&2; exit 2; }
 command -v jq   >/dev/null || { echo "jq required"   >&2; exit 2; }
 
+new_request_id() {
+  if command -v uuidgen >/dev/null; then
+    uuidgen | tr '[:upper:]' '[:lower:]'
+  else
+    python3 - <<'PY'
+import uuid
+print(uuid.uuid4())
+PY
+  fi
+}
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
@@ -231,9 +242,24 @@ if ! jq -e '.rollups | length > 0' /tmp/mip-smoke-out.json >/dev/null; then
   exit 1
 fi
 
-SMOKE_REQUEST_ID="smoke-$(date +%s)-$RANDOM"
+SMOKE_REQUEST_ID="$(new_request_id)"
+probe "outreach draft for approval" "/api/outreach/draft" POST \
+  "{\"borrower_id\":\"$BORROWER_ID\",\"channel\":\"email\"}"
+SMOKE_DRAFT_BODY="$(jq -r '.body // empty' /tmp/mip-smoke-out.json)"
+SMOKE_OFFER_CODE="$(jq -r '.offer_code // empty' /tmp/mip-smoke-out.json)"
+if [[ -z "$SMOKE_DRAFT_BODY" || -z "$SMOKE_OFFER_CODE" ]]; then
+  echo "[smoke] outreach draft did not return body and offer_code for approval gate" >&2
+  cat /tmp/mip-smoke-out.json >&2 || true
+  exit 1
+fi
+SMOKE_APPROVE_PAYLOAD="$(jq -n \
+  --arg borrower_id "$BORROWER_ID" \
+  --arg offer_code "$SMOKE_OFFER_CODE" \
+  --arg draft_body "$SMOKE_DRAFT_BODY" \
+  --arg request_id "$SMOKE_REQUEST_ID" \
+  '{borrower_id:$borrower_id, offer_code:$offer_code, evidence_ids:[], channel:"email", draft_body:$draft_body, request_id:$request_id}')"
 probe "outreach approval audit write" "/api/outreach/approve" POST \
-  "{\"borrower_id\":\"$BORROWER_ID\",\"offer_code\":\"smoke\",\"evidence_ids\":[],\"request_id\":\"$SMOKE_REQUEST_ID\"}"
+  "$SMOKE_APPROVE_PAYLOAD"
 if ! jq -e '.approved == true and (.audit_event_id // "" | length > 0)' /tmp/mip-smoke-out.json >/dev/null; then
   echo "[smoke] outreach approval did not return an audit event id" >&2
   cat /tmp/mip-smoke-out.json >&2 || true

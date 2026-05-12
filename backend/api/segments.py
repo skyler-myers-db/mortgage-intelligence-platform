@@ -39,6 +39,9 @@ def _portfolio_criteria_from_query(
     min_equity_pct: float | None,
     owner_link: str | None,
     purchase_intent: str | None,
+    marketing_eligibility: str | None,
+    consent_status: str | None,
+    recency: str | None,
 ) -> PortfolioCriteria | None:
     fields: dict[str, object] = {}
     for key, value in (
@@ -51,6 +54,9 @@ def _portfolio_criteria_from_query(
         ("min_equity_pct_label", min_equity_pct_label),
         ("owner_link", owner_link),
         ("purchase_intent", purchase_intent),
+        ("marketing_eligibility", marketing_eligibility),
+        ("consent_status", consent_status),
+        ("recency", recency),
     ):
         if value:
             fields[key] = value
@@ -77,6 +83,9 @@ def list_segments(
     min_equity_pct: float | None = None,
     owner_link: str | None = None,
     purchase_intent: str | None = None,
+    marketing_eligibility: str = "Eligible only",
+    consent_status: str | None = None,
+    recency: str | None = None,
 ) -> list[SegmentSummary]:
     if segment_mode not in {"any", "all"}:
         raise HTTPException(status_code=422, detail="segment_mode must be any or all")
@@ -92,6 +101,9 @@ def list_segments(
             min_equity_pct=min_equity_pct,
             owner_link=owner_link,
             purchase_intent=purchase_intent,
+            marketing_eligibility=marketing_eligibility,
+            consent_status=consent_status,
+            recency=recency,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

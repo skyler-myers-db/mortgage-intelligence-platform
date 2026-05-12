@@ -46,7 +46,7 @@ def teardown_function(_func: object) -> None:
 
 
 def _predicates(geography: str) -> tuple[str, dict[str, object]]:
-    criteria = PortfolioCriteria(geography=geography)
+    criteria = PortfolioCriteria(geography=geography, marketing_eligibility="Any")
     return _predicates_for(criteria)
 
 
@@ -150,7 +150,7 @@ def test_unknown_geography_label_is_rejected() -> None:
 def test_open_first_lien_excludes_second_position_helocs() -> None:
     """Portfolio Builder's 1st-lien filter must not include open HELOC rows."""
     where, params = _predicates_for(
-        PortfolioCriteria(lien_status="Open 1st lien"),
+        PortfolioCriteria(lien_status="Open 1st lien", marketing_eligibility="Any"),
     )
 
     assert "current_lien_balance > 0" in where
@@ -161,7 +161,7 @@ def test_open_first_lien_excludes_second_position_helocs() -> None:
 def test_open_heloc_uses_second_position_lien_signal() -> None:
     """Open HELOC is backed by gold.second_pos_amount, not any open lien."""
     where, params = _predicates_for(
-        PortfolioCriteria(lien_status="Open HELOC"),
+        PortfolioCriteria(lien_status="Open HELOC", marketing_eligibility="Any"),
     )
 
     assert "COALESCE(second_pos_amount, 0) > 0" in where
@@ -172,7 +172,7 @@ def test_open_heloc_uses_second_position_lien_signal() -> None:
 def test_former_customer_uses_backed_recapture_signal() -> None:
     """Former customer must use the backed historical relationship flag."""
     where, params = _predicates_for(
-        PortfolioCriteria(lender_relationship="Former customer"),
+        PortfolioCriteria(lender_relationship="Former customer", marketing_eligibility="Any"),
     )
 
     assert "is_former_customer = TRUE" in where
@@ -183,7 +183,7 @@ def test_former_customer_uses_backed_recapture_signal() -> None:
 
 def test_competitor_customer_alias_uses_competitor_lien_signal() -> None:
     where, params = _predicates_for(
-        PortfolioCriteria(lender_relationship="Competitor customer"),
+        PortfolioCriteria(lender_relationship="Competitor customer", marketing_eligibility="Any"),
     )
 
     assert "is_competitor_lien = TRUE" in where

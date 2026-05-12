@@ -49,6 +49,9 @@ from backend.schemas.geo import (
 )
 from backend.schemas.lead import Borrower360, LeadSummary, SegmentSummary
 from backend.schemas.portfolio import (
+    CampaignListResponse,
+    CampaignStatusPatchRequest,
+    CampaignSummary,
     KpiTrend,
     PortfolioCreateRequest,
     PortfolioCreateResponse,
@@ -103,6 +106,8 @@ _BORROWER_360_COLUMNS: str = (
     "avm_value, current_lien_balance, current_rate, ltv, related_property_count, "
     "is_owner_occupied, is_investor, is_current_customer, is_former_customer, "
     "is_competitor_lien, has_permit, listed_for_sale, second_pos_amount, "
+    "marketing_eligible, consent_status, suppression_reason, last_touch_at, "
+    "eligible_recontact_at, "
     "min_spread_bps_applied, min_equity_pct_applied, in_the_money, "
     "current_lender_ref"
 )
@@ -124,7 +129,7 @@ _LEAD_POPULATION_COLUMNS: str = (
     # the redaction boundary by default.
     "clip, borrower_id, display_name, city, state, zip, segment_codes, "
     "equity_estimate, rate_spread_bps, opportunity_score, confidence, "
-    "recommended_offer, why_now, evidence_ids, approval_status, "
+    "recommended_offer_code, recommended_offer, why_now, evidence_ids, approval_status, "
     "current_lender_ref, "
     # Secondary-filter fields (2026-04-23) -- carried through from
     # gold.borrower_360 into gold.lead_population so /segment-intelligence
@@ -133,7 +138,41 @@ _LEAD_POPULATION_COLUMNS: str = (
     # matches the gold DDL + CTAS (see sql/ddl/gold_lead_population.sql).
     "is_owner_occupied, is_investor, is_current_customer, "
     "is_former_customer, is_competitor_lien, related_property_count, "
-    "current_lien_balance, second_pos_amount, has_permit, listed_for_sale"
+    "current_lien_balance, second_pos_amount, has_permit, listed_for_sale, "
+    "marketing_eligible, consent_status, suppression_reason, last_touch_at, "
+    "eligible_recontact_at"
+)
+
+_LEAD_POPULATION_SELECT_FROM_LP: str = (
+    "lp.clip, lp.borrower_id, lp.display_name, lp.city, lp.state, lp.zip, lp.segment_codes, "
+    "lp.equity_estimate, lp.rate_spread_bps, lp.opportunity_score, lp.confidence, "
+    "lp.recommended_offer_code, lp.recommended_offer, lp.why_now, lp.evidence_ids, "
+    "COALESCE(ls.approval_status, lp.approval_status, 'pending') AS approval_status, "
+    "COALESCE(ls.outreach_status, 'none') AS outreach_status, "
+    "ls.approved_at, ls.outreach_at, "
+    "lp.current_lender_ref, "
+    "lp.is_owner_occupied, lp.is_investor, lp.is_current_customer, "
+    "lp.is_former_customer, lp.is_competitor_lien, lp.related_property_count, "
+    "lp.current_lien_balance, lp.second_pos_amount, lp.has_permit, lp.listed_for_sale, "
+    "lp.marketing_eligible, lp.consent_status, lp.suppression_reason, lp.last_touch_at, "
+    "lp.eligible_recontact_at"
+)
+
+_LEAD_POPULATION_SELECT_FROM_B360: str = (
+    "b.clip, b.borrower_id, "
+    "CONCAT('Owner ', SUBSTR(b.owner_name_hash, 1, 8)) AS display_name, "
+    "b.city, b.state, b.zip, b.segment_codes, "
+    "b.equity_estimate, b.rate_spread_bps, b.opportunity_score, b.confidence, "
+    "b.recommended_offer_code, b.recommended_offer, b.why_now, b.evidence_ids, "
+    "COALESCE(ls.approval_status, b.approval_status, 'pending') AS approval_status, "
+    "COALESCE(ls.outreach_status, 'none') AS outreach_status, "
+    "ls.approved_at, ls.outreach_at, "
+    "b.current_lender_ref, "
+    "b.is_owner_occupied, b.is_investor, b.is_current_customer, "
+    "b.is_former_customer, b.is_competitor_lien, b.related_property_count, "
+    "b.current_lien_balance, b.second_pos_amount, b.has_permit, b.listed_for_sale, "
+    "b.marketing_eligible, b.consent_status, b.suppression_reason, b.last_touch_at, "
+    "b.eligible_recontact_at"
 )
 
 _EVIDENCE_COLUMNS: str = (
@@ -415,6 +454,31 @@ class DatabricksPortfolioRepository:
             clauses.append("equity_pct >= :equity_floor")
             params["equity_floor"] = equity_floor
 
+        marketing_eligibility = (criteria.marketing_eligibility or "").strip()
+        if marketing_eligibility == "Eligible only":
+            clauses.append("marketing_eligible = TRUE")
+        elif marketing_eligibility == "Suppressed only":
+            clauses.append("marketing_eligible = FALSE")
+
+        consent_status = (criteria.consent_status or "").strip()
+        if consent_status == "Opt-in":
+            clauses.append("consent_status = 'opt_in'")
+        elif consent_status == "Opt-out":
+            clauses.append("consent_status = 'opt_out'")
+        elif consent_status == "Unknown":
+            clauses.append("consent_status = 'unknown'")
+
+        recency = (criteria.recency or "").strip()
+        recency_days = {
+            "Untouched 30d": 30,
+            "Untouched 60d": 60,
+            "Untouched 90d": 90,
+        }.get(recency)
+        if recency_days:
+            clauses.append(
+                f"(last_touch_at IS NULL OR last_touch_at < CURRENT_TIMESTAMP() - INTERVAL {recency_days} DAYS)"
+            )
+
         if not clauses:
             return "", {}
         return "WHERE " + " AND ".join(clauses), params
@@ -460,8 +524,17 @@ class DatabricksPortfolioRepository:
 
     _CAMPAIGN_INSERT_SQL = """
     WITH inserted_campaign AS (
-      INSERT INTO mip_app.campaigns (name, owner_email, status, criteria)
-      VALUES (%(name)s, %(owner_email)s, 'draft', %(criteria)s::jsonb)
+      INSERT INTO mip_app.campaigns (
+        name, owner_email, status, criteria, suppression_policy,
+        message_variants, channel_cascade, send_window, holdout,
+        roi_assumptions, updated_at
+      )
+      VALUES (
+        %(name)s, %(owner_email)s, 'draft', %(criteria)s::jsonb,
+        %(suppression_policy)s::jsonb, %(message_variants)s::jsonb,
+        %(channel_cascade)s::jsonb, %(send_window)s::jsonb,
+        %(holdout)s::jsonb, %(roi_assumptions)s::jsonb, now()
+      )
       RETURNING campaign_id
     ),
     inserted_audit AS (
@@ -485,6 +558,48 @@ class DatabricksPortfolioRepository:
       inserted_audit.audit_id
     FROM inserted_campaign
     LEFT JOIN inserted_audit ON TRUE
+    """
+
+    _CAMPAIGN_VARIANT_UPSERT_SQL = """
+    INSERT INTO mip_app.campaign_message_variants (
+      campaign_id, variant_name, channel, subject, body, weight_pct
+    ) VALUES (
+      %(campaign_id)s, %(variant_name)s, %(channel)s, %(subject)s, %(body)s, %(weight_pct)s
+    )
+    ON CONFLICT (campaign_id, variant_name, channel)
+    DO UPDATE SET
+      subject = EXCLUDED.subject,
+      body = EXCLUDED.body,
+      weight_pct = EXCLUDED.weight_pct
+    """
+
+    _CAMPAIGN_LIST_SQL = """
+    SELECT campaign_id::text, name, owner_email, status, criteria,
+           suppression_policy, message_variants, channel_cascade, send_window,
+           holdout, roi_assumptions, created_at, updated_at
+    FROM mip_app.campaigns
+    WHERE (%(owner_email)s::text IS NULL OR owner_email = %(owner_email)s::text)
+      AND (%(status)s::text IS NULL OR status = %(status)s::text)
+    ORDER BY updated_at DESC, created_at DESC
+    LIMIT %(limit)s
+    """
+
+    _CAMPAIGN_GET_SQL = """
+    SELECT campaign_id::text, name, owner_email, status, criteria,
+           suppression_policy, message_variants, channel_cascade, send_window,
+           holdout, roi_assumptions, created_at, updated_at
+    FROM mip_app.campaigns
+    WHERE campaign_id = %(campaign_id)s::uuid
+    LIMIT 1
+    """
+
+    _CAMPAIGN_PATCH_SQL = """
+    UPDATE mip_app.campaigns
+    SET status = %(status)s, updated_at = now()
+    WHERE campaign_id = %(campaign_id)s::uuid
+    RETURNING campaign_id::text, name, owner_email, status, criteria,
+              suppression_policy, message_variants, channel_cascade, send_window,
+              holdout, roi_assumptions, created_at, updated_at
     """
 
     @staticmethod
@@ -755,11 +870,22 @@ class DatabricksPortfolioRepository:
                 "name": payload.name,
                 "owner_email": actor or "unknown",
                 "criteria": json.dumps(payload.criteria.model_dump(exclude_none=True)),
+                "suppression_policy": json.dumps(payload.suppression_policy, sort_keys=True),
+                "message_variants": json.dumps(payload.message_variants, sort_keys=True),
+                "channel_cascade": json.dumps(payload.channel_cascade, sort_keys=True),
+                "send_window": json.dumps(payload.send_window, sort_keys=True),
+                "holdout": json.dumps(payload.holdout, sort_keys=True) if payload.holdout is not None else "null",
+                "roi_assumptions": json.dumps(payload.roi_assumptions, sort_keys=True) if payload.roi_assumptions is not None else "null",
                 "request_id": f"portfolio-create-{uuid.uuid4()}",
                 "metadata": json.dumps(
                     {
                         "source": "portfolio_builder",
                         "criteria": payload.criteria.model_dump(exclude_none=True),
+                        "suppression_policy": payload.suppression_policy,
+                        "channel_cascade": payload.channel_cascade,
+                        "send_window": payload.send_window,
+                        "holdout": payload.holdout,
+                        "roi_assumptions": payload.roi_assumptions,
                         "marketable_population": preview.marketable_population,
                     },
                     sort_keys=True,
@@ -768,20 +894,147 @@ class DatabricksPortfolioRepository:
         )
         if row is None or not row.get("campaign_id"):
             raise LakebaseError("campaign insert returned no row")
+        campaign_id = str(row["campaign_id"])
+        variant_rows = [
+            {
+                "campaign_id": campaign_id,
+                "variant_name": str(variant.get("variant_name") or variant.get("name") or "default")[:64],
+                "channel": str(variant.get("channel") or "email"),
+                "subject": variant.get("subject"),
+                "body": str(variant.get("body") or ""),
+                "weight_pct": variant.get("weight_pct"),
+            }
+            for variant in payload.message_variants
+            if str(variant.get("body") or "").strip()
+        ]
+        if variant_rows:
+            get_lakebase_client().executemany(self._CAMPAIGN_VARIANT_UPSERT_SQL, variant_rows)
         return PortfolioCreateResponse(
-            portfolio_id=str(row["campaign_id"]),
+            portfolio_id=campaign_id,
+            campaign_id=campaign_id,
             name=payload.name,
             marketable_population=preview.marketable_population,
             audit_event_id=str(row["audit_id"]) if row.get("audit_id") else None,
         )
 
+    @staticmethod
+    def _json_value(value: Any, fallback: Any) -> Any:
+        if value is None:
+            return fallback
+        if isinstance(value, str):
+            try:
+                return json.loads(value)
+            except json.JSONDecodeError:
+                return fallback
+        return value
+
+    @classmethod
+    def _campaign_from_row(cls, row: dict[str, Any]) -> CampaignSummary:
+        criteria = cls._json_value(row.get("criteria"), {})
+        suppression_policy = cls._json_value(row.get("suppression_policy"), {})
+        message_variants = cls._json_value(row.get("message_variants"), [])
+        channel_cascade = cls._json_value(row.get("channel_cascade"), [])
+        send_window = cls._json_value(row.get("send_window"), {})
+        holdout = cls._json_value(row.get("holdout"), None)
+        roi_assumptions = cls._json_value(row.get("roi_assumptions"), None)
+        return CampaignSummary(
+            campaign_id=str(row.get("campaign_id")),
+            name=str(row.get("name") or "Campaign"),
+            owner_email=str(row.get("owner_email") or "unknown"),
+            status=str(row.get("status") or "draft"),  # type: ignore[arg-type]
+            criteria=criteria if isinstance(criteria, dict) else {},
+            suppression_policy=suppression_policy if isinstance(suppression_policy, dict) else {},
+            message_variants=message_variants if isinstance(message_variants, list) else [],
+            channel_cascade=channel_cascade if isinstance(channel_cascade, list) else [],
+            send_window=send_window if isinstance(send_window, dict) else {},
+            holdout=holdout if isinstance(holdout, dict) or holdout is None else None,
+            roi_assumptions=roi_assumptions if isinstance(roi_assumptions, dict) or roi_assumptions is None else None,
+            created_at=cls._coerce_datetime(row.get("created_at")),
+            updated_at=cls._coerce_datetime(row.get("updated_at")),
+        )
+
+    def list_campaigns(
+        self,
+        *,
+        owner_email: str | None = None,
+        status: str | None = None,
+        limit: int = 50,
+    ) -> CampaignListResponse:
+        rows = get_lakebase_client().fetchall(
+            self._CAMPAIGN_LIST_SQL,
+            {"owner_email": owner_email, "status": status, "limit": max(1, min(limit, 200))},
+            limit=max(1, min(limit, 200)),
+        )
+        return CampaignListResponse(campaigns=[self._campaign_from_row(row) for row in rows])
+
     def get(self, portfolio_id: str) -> dict[str, object]:
-        preview = self.preview(None)
-        return {
-            "portfolio_id": portfolio_id,
-            "status": "ready",
-            "marketable_population": preview.marketable_population,
-        }
+        row = get_lakebase_client().fetchone(
+            self._CAMPAIGN_GET_SQL,
+            {"campaign_id": portfolio_id},
+        )
+        if row is None:
+            return {}
+        return self._campaign_from_row(row).model_dump()
+
+    def patch_status(
+        self,
+        portfolio_id: str,
+        payload: CampaignStatusPatchRequest,
+        *,
+        actor: str | None = None,
+    ) -> CampaignSummary:
+        existing = get_lakebase_client().fetchone(
+            self._CAMPAIGN_GET_SQL,
+            {"campaign_id": portfolio_id},
+        )
+        if existing is None:
+            raise LakebaseError("campaign status update returned no row")
+        if payload.status in {"pending_review", "approved", "live", "active"}:
+            criteria = self._json_value(existing.get("criteria"), {})
+            suppression_policy = self._json_value(existing.get("suppression_policy"), {})
+            criteria_ok = (
+                isinstance(criteria, dict)
+                and criteria.get("marketing_eligibility") == "Eligible only"
+            )
+            policy_ok = isinstance(suppression_policy, dict) and (
+                suppression_policy.get("default") == "eligible_only"
+                or suppression_policy.get("require_marketing_eligible") is True
+                or str(suppression_policy.get("marketing_eligibility") or "")
+                .strip()
+                .lower()
+                .replace(" ", "_")
+                == "eligible_only"
+            )
+            if not (criteria_ok and policy_ok):
+                raise ValueError(
+                    "campaign cannot advance without an Eligible only contactability policy"
+                )
+        row = get_lakebase_client().fetchone(
+            self._CAMPAIGN_PATCH_SQL,
+            {"campaign_id": portfolio_id, "status": payload.status},
+        )
+        if row is None:
+            raise LakebaseError("campaign status update returned no row")
+        campaign = self._campaign_from_row(row)
+        get_lakebase_client().execute(
+            """
+            INSERT INTO mip_app.action_audit (
+              event_type, actor_email, entity_type, entity_id, evidence_ids, metadata
+            ) VALUES (
+              'CAMPAIGN_STATUS_UPDATE', %(actor)s, 'campaign', %(campaign_id)s,
+              ARRAY[]::TEXT[], %(metadata)s::jsonb
+            )
+            """,
+            {
+                "actor": actor or "unknown",
+                "campaign_id": portfolio_id,
+                "metadata": json.dumps(
+                    {"status": payload.status, "rationale": payload.rationale},
+                    sort_keys=True,
+                ),
+            },
+        )
+        return campaign
 
 
 class DatabricksSegmentRepository:
@@ -953,26 +1206,55 @@ class DatabricksLeadRepository:
         self._client = client
 
     _LIST_BASE_SQL_TEMPLATE = (
-        f"SELECT {_LEAD_POPULATION_COLUMNS} "
-        f"FROM {qualify('gold', 'lead_population')} "
-        "ORDER BY rank_overall ASC, borrower_id ASC "
+        f"SELECT {_LEAD_POPULATION_SELECT_FROM_LP} "
+        f"FROM {qualify('gold', 'lead_population')} lp "
+        f"LEFT JOIN {qualify('gold', 'borrower_lifecycle_state')} ls "
+        "  ON ls.borrower_id = lp.borrower_id "
+        "WHERE 1=1 {lifecycle_clause} "
+        "ORDER BY lp.rank_overall ASC, lp.borrower_id ASC "
         "LIMIT {limit}"
     )
 
     _LIST_BY_SEGMENT_SQL_TEMPLATE = (
-        f"SELECT {_LEAD_POPULATION_COLUMNS} "
-        f"FROM {qualify('gold', 'lead_population')} "
-        "WHERE array_contains(segment_codes, :segment) "
-        "ORDER BY rank_overall ASC, borrower_id ASC "
+        f"SELECT {_LEAD_POPULATION_SELECT_FROM_LP} "
+        f"FROM {qualify('gold', 'lead_population')} lp "
+        f"LEFT JOIN {qualify('gold', 'borrower_lifecycle_state')} ls "
+        "  ON ls.borrower_id = lp.borrower_id "
+        "WHERE array_contains(segment_codes, :segment) {lifecycle_clause} "
+        "ORDER BY lp.rank_overall ASC, lp.borrower_id ASC "
         "LIMIT {limit}"
     )
 
     _LIST_FILTERED_SQL_TEMPLATE = (
-        f"SELECT {_LEAD_POPULATION_COLUMNS} "
-        f"FROM {qualify('gold', 'lead_population')} "
-        "WHERE {segment_clause} "
-        "ORDER BY rank_overall ASC, borrower_id ASC "
+        f"SELECT {_LEAD_POPULATION_SELECT_FROM_LP} "
+        f"FROM {qualify('gold', 'lead_population')} lp "
+        f"LEFT JOIN {qualify('gold', 'borrower_lifecycle_state')} ls "
+        "  ON ls.borrower_id = lp.borrower_id "
+        "WHERE {segment_clause} {lifecycle_clause} "
+        "ORDER BY lp.rank_overall ASC, lp.borrower_id ASC "
         "LIMIT {limit}"
+    )
+
+    _COUNT_BASE_SQL = (
+        f"SELECT COUNT(*) AS n FROM {qualify('gold', 'lead_population')} lp "
+        f"LEFT JOIN {qualify('gold', 'borrower_lifecycle_state')} ls "
+        "  ON ls.borrower_id = lp.borrower_id "
+        "WHERE 1=1 {lifecycle_clause}"
+    )
+
+    _COUNT_FILTERED_SQL_TEMPLATE = (
+        f"SELECT COUNT(*) AS n FROM {qualify('gold', 'lead_population')} lp "
+        f"LEFT JOIN {qualify('gold', 'borrower_lifecycle_state')} ls "
+        "  ON ls.borrower_id = lp.borrower_id "
+        "WHERE {segment_clause} {lifecycle_clause}"
+    )
+
+    _COUNT_BY_GEO_SQL_TEMPLATE = (
+        f"SELECT COUNT(*) AS n FROM {qualify('gold', 'borrower_360')} b "
+        f"LEFT JOIN {qualify('gold', 'borrower_lifecycle_state')} ls "
+        "  ON ls.borrower_id = b.borrower_id "
+        "WHERE 1=1 {state_clause} {zip_clause} {county_clause} {borrower_clause} "
+        "{segment_clause} {lender_clause} {portfolio_clause} {lifecycle_clause}"
     )
 
     # 2026-05-04 FIX β: when the caller filters by state and/or zip we
@@ -996,20 +1278,13 @@ class DatabricksLeadRepository:
         # We re-synthesize it here with the same formula so LeadSummary
         # rows stay shape-compatible whether they came from
         # lead_population or borrower_360.
-        "SELECT "
-        "  clip, borrower_id, "
-        "  CONCAT('Owner ', SUBSTR(owner_name_hash, 1, 8)) AS display_name, "
-        "  city, state, zip, segment_codes, "
-        "  equity_estimate, rate_spread_bps, opportunity_score, confidence, "
-        "  recommended_offer, why_now, evidence_ids, approval_status, "
-        "  current_lender_ref, "
-        "  is_owner_occupied, is_investor, is_current_customer, "
-        "  is_former_customer, is_competitor_lien, related_property_count, "
-        "  current_lien_balance, second_pos_amount, has_permit, listed_for_sale "
-        f"FROM {qualify('gold', 'borrower_360')} "
+        f"SELECT {_LEAD_POPULATION_SELECT_FROM_B360} "
+        f"FROM {qualify('gold', 'borrower_360')} b "
+        f"LEFT JOIN {qualify('gold', 'borrower_lifecycle_state')} ls "
+        "  ON ls.borrower_id = b.borrower_id "
         "WHERE 1=1 {state_clause} {zip_clause} {county_clause} {borrower_clause} "
-        "{segment_clause} {lender_clause} {portfolio_clause} "
-        "ORDER BY opportunity_score DESC, borrower_id ASC "
+        "{segment_clause} {lender_clause} {portfolio_clause} {lifecycle_clause} "
+        "ORDER BY b.opportunity_score DESC, b.borrower_id ASC "
         "LIMIT {limit}"
     )
 
@@ -1030,6 +1305,9 @@ class DatabricksLeadRepository:
         target_lender_ref: str | None = None,
         cohort_id: str | None = None,
         portfolio_criteria: PortfolioCriteria | None = None,
+        approval_status: str | None = None,
+        outreach_status: str | None = None,
+        aged_days: int | None = None,
     ) -> list[LeadSummary]:
         _ = (portfolio_id, cohort_id)
         bounded = self._bound_limit(limit)
@@ -1046,10 +1324,16 @@ class DatabricksLeadRepository:
         normalised_zips = self._normalise_zips(zip_code, zip_codes)
         normalised_county = self._normalise_county_fips(county_fips, county_fipses)
         normalised_borrower_ids = self._normalise_borrower_ids(borrower_ids)
+        lifecycle_clause, lifecycle_params = self._lifecycle_filter_clause(
+            source_alias="b",
+            approval_status=approval_status,
+            outreach_status=outreach_status,
+            aged_days=aged_days,
+        )
         lender_clause = ""
         lender_params: dict[str, object] = {}
         if target_lender_ref and target_lender_ref.strip().lower() != "all":
-            lender_clause = "AND current_lender_ref = :target_lender_ref"
+            lender_clause = "AND b.current_lender_ref = :target_lender_ref"
             lender_params["target_lender_ref"] = target_lender_ref.strip()
         portfolio_where, portfolio_params = DatabricksPortfolioRepository._build_preview_predicates(
             portfolio_criteria,
@@ -1074,26 +1358,27 @@ class DatabricksLeadRepository:
             params: dict[str, object] = dict(segment_params)
             params.update(lender_params)
             params.update(portfolio_params)
+            params.update(lifecycle_params)
             state_clause = self._in_clause(
-                column="state",
+                column="b.state",
                 prefix="state",
                 values=normalised_states,
                 params=params,
             )
             zip_clause = self._in_clause(
-                column="zip",
+                column="b.zip",
                 prefix="zip",
                 values=normalised_zips,
                 params=params,
             )
             county_clause = self._in_clause(
-                column="county_fips_5",
+                column="b.county_fips_5",
                 prefix="county",
                 values=normalised_county,
                 params=params,
             )
             borrower_clause = self._in_clause(
-                column="borrower_id",
+                column="b.borrower_id",
                 prefix="borrower_id",
                 values=normalised_borrower_ids,
                 params=params,
@@ -1107,24 +1392,134 @@ class DatabricksLeadRepository:
                 segment_clause=geo_segment_clause,
                 lender_clause=lender_clause,
                 portfolio_clause=portfolio_clause,
+                lifecycle_clause=lifecycle_clause,
                 limit=bounded,
             )
             rows = self._client.execute(sql, params)
             return [LeadSummary(**redact_lead_row(r)) for r in rows]
 
+        lifecycle_clause, lifecycle_params = self._lifecycle_filter_clause(
+            source_alias="lp",
+            approval_status=approval_status,
+            outreach_status=outreach_status,
+            aged_days=aged_days,
+        )
         if segment_clause:
             if lender_clause:
                 segment_clause = f"{segment_clause} {lender_clause}"
                 segment_params = {**segment_params, **lender_params}
+            segment_params = {**segment_params, **lifecycle_params}
             sql = self._LIST_FILTERED_SQL_TEMPLATE.format(
                 segment_clause=segment_clause,
+                lifecycle_clause=lifecycle_clause,
                 limit=bounded,
             )
             rows = self._client.execute(sql, segment_params)
         else:
-            sql = self._LIST_BASE_SQL_TEMPLATE.format(limit=bounded)
-            rows = self._client.execute(sql)
+            sql = self._LIST_BASE_SQL_TEMPLATE.format(
+                lifecycle_clause=lifecycle_clause,
+                limit=bounded,
+            )
+            rows = self._client.execute(sql, lifecycle_params)
         return [LeadSummary(**redact_lead_row(r)) for r in rows]
+
+    def count(
+        self,
+        segment: str | None,
+        portfolio_id: str | None,
+        state: str | None = None,
+        zip_code: str | None = None,
+        county_fips: str | None = None,
+        county_fipses: list[str] | None = None,
+        state_codes: list[str] | None = None,
+        zip_codes: list[str] | None = None,
+        borrower_ids: list[str] | None = None,
+        segment_codes: list[str] | None = None,
+        segment_mode: str = "any",
+        target_lender_ref: str | None = None,
+        cohort_id: str | None = None,
+        portfolio_criteria: PortfolioCriteria | None = None,
+        approval_status: str | None = None,
+        outreach_status: str | None = None,
+        aged_days: int | None = None,
+    ) -> int:
+        _ = (portfolio_id, cohort_id)
+        segment_clause, segment_params = self._segment_filter_clause(
+            segment=segment,
+            segment_codes=segment_codes,
+            segment_mode=segment_mode,
+        )
+        normalised_states = self._normalise_states(state, state_codes)
+        normalised_zips = self._normalise_zips(zip_code, zip_codes)
+        normalised_county = self._normalise_county_fips(county_fips, county_fipses)
+        normalised_borrower_ids = self._normalise_borrower_ids(borrower_ids)
+        lifecycle_clause_geo, lifecycle_params_geo = self._lifecycle_filter_clause(
+            source_alias="b",
+            approval_status=approval_status,
+            outreach_status=outreach_status,
+            aged_days=aged_days,
+        )
+        lender_clause = ""
+        lender_params: dict[str, object] = {}
+        if target_lender_ref and target_lender_ref.strip().lower() != "all":
+            lender_clause = "AND b.current_lender_ref = :target_lender_ref"
+            lender_params["target_lender_ref"] = target_lender_ref.strip()
+        portfolio_where, portfolio_params = DatabricksPortfolioRepository._build_preview_predicates(
+            portfolio_criteria,
+        )
+        portfolio_clause = (
+            "AND " + portfolio_where.removeprefix("WHERE ").strip()
+            if portfolio_where
+            else ""
+        )
+        if "target_lender_ref" in portfolio_params:
+            lender_clause = ""
+            lender_params = {}
+        if (
+            normalised_states
+            or normalised_zips
+            or normalised_county
+            or normalised_borrower_ids
+            or lender_clause
+            or portfolio_clause
+        ):
+            params: dict[str, object] = dict(segment_params)
+            params.update(lender_params)
+            params.update(portfolio_params)
+            params.update(lifecycle_params_geo)
+            sql = self._COUNT_BY_GEO_SQL_TEMPLATE.format(
+                state_clause=self._in_clause(column="b.state", prefix="state", values=normalised_states, params=params),
+                zip_clause=self._in_clause(column="b.zip", prefix="zip", values=normalised_zips, params=params),
+                county_clause=self._in_clause(column="b.county_fips_5", prefix="county", values=normalised_county, params=params),
+                borrower_clause=self._in_clause(column="b.borrower_id", prefix="borrower_id", values=normalised_borrower_ids, params=params),
+                segment_clause=f"AND {segment_clause}" if segment_clause else "",
+                lender_clause=lender_clause,
+                portfolio_clause=portfolio_clause,
+                lifecycle_clause=lifecycle_clause_geo,
+            )
+            row = self._client.execute_one(sql, params)
+            return int((row or {}).get("n") or 0)
+        lifecycle_clause, lifecycle_params = self._lifecycle_filter_clause(
+            source_alias="lp",
+            approval_status=approval_status,
+            outreach_status=outreach_status,
+            aged_days=aged_days,
+        )
+        if segment_clause:
+            segment_params = {**segment_params, **lifecycle_params}
+            row = self._client.execute_one(
+                self._COUNT_FILTERED_SQL_TEMPLATE.format(
+                    segment_clause=segment_clause,
+                    lifecycle_clause=lifecycle_clause,
+                ),
+                segment_params,
+            )
+            return int((row or {}).get("n") or 0)
+        row = self._client.execute_one(
+            self._COUNT_BASE_SQL.format(lifecycle_clause=lifecycle_clause),
+            lifecycle_params,
+        )
+        return int((row or {}).get("n") or 0)
 
     @staticmethod
     def _normalise_states(
@@ -1178,6 +1573,35 @@ class DatabricksLeadRepository:
             if borrower_id not in out:
                 out.append(borrower_id)
         return out
+
+    @staticmethod
+    def _lifecycle_filter_clause(
+        *,
+        source_alias: str,
+        approval_status: str | None,
+        outreach_status: str | None,
+        aged_days: int | None,
+    ) -> tuple[str, dict[str, object]]:
+        clauses: list[str] = []
+        params: dict[str, object] = {}
+        if approval_status:
+            clauses.append(
+                f"COALESCE(ls.approval_status, {source_alias}.approval_status, 'pending') = :approval_status"
+            )
+            params["approval_status"] = approval_status
+        if outreach_status:
+            clauses.append("COALESCE(ls.outreach_status, 'none') = :outreach_status")
+            params["outreach_status"] = outreach_status
+        if aged_days is not None:
+            bounded_days = max(1, min(int(aged_days), 90))
+            clauses.append(
+                f"COALESCE(ls.approval_status, {source_alias}.approval_status, 'pending') = 'approved'"
+            )
+            clauses.append("ls.approved_at <= current_timestamp() - INTERVAL " f"{bounded_days} DAYS")
+            clauses.append("ls.outreach_at IS NULL")
+        if not clauses:
+            return "", {}
+        return "AND " + " AND ".join(clauses), params
 
     @staticmethod
     def _in_clause(
@@ -1276,6 +1700,30 @@ class DatabricksBorrowerRepository:
         f"FROM {qualify('gold', 'borrower_dossier')} "
         "WHERE borrower_id = :borrower_id "
         "LIMIT 1"
+    )
+
+    _SEARCH_SQL_TEMPLATE = (
+        "SELECT "
+        "  clip, borrower_id, "
+        "  CONCAT('Owner ', SUBSTR(owner_name_hash, 1, 8)) AS display_name, "
+        "  city, state, zip, segment_codes, "
+        "  equity_estimate, rate_spread_bps, opportunity_score, confidence, "
+        "  recommended_offer_code, recommended_offer, why_now, evidence_ids, approval_status, "
+        "  current_lender_ref, "
+        "  is_owner_occupied, is_investor, is_current_customer, "
+        "  is_former_customer, is_competitor_lien, related_property_count, "
+        "  current_lien_balance, second_pos_amount, has_permit, listed_for_sale, "
+        "  marketing_eligible, consent_status, suppression_reason, last_touch_at, "
+        "  eligible_recontact_at "
+        f"FROM {qualify('gold', 'borrower_360')} "
+        "WHERE UPPER(borrower_id) LIKE :borrower_prefix "
+        "   OR zip = :zip_exact "
+        "   OR UPPER(city) LIKE :term_contains "
+        "   OR clip = :clip_exact "
+        "ORDER BY "
+        "  CASE WHEN UPPER(borrower_id) = :borrower_exact THEN 0 ELSE 1 END, "
+        "  opportunity_score DESC, borrower_id ASC "
+        "LIMIT {limit}"
     )
 
     # Fallback evidence fetch — preserved so /api/borrowers/{id}/evidence
@@ -1419,6 +1867,25 @@ class DatabricksBorrowerRepository:
         if not rows:
             return []
         return [EvidenceEvent(**redact_evidence_row(r)) for r in rows]
+
+    def search(self, query: str, limit: int = 10) -> list[LeadSummary]:
+        term = str(query or "").strip()
+        if len(term) < 2:
+            return []
+        bounded = max(1, min(int(limit or 10), 25))
+        upper = term.upper()
+        zip_exact = term if term.isdigit() and len(term) == 5 else "__NO_ZIP_MATCH__"
+        rows = self._client.execute(
+            self._SEARCH_SQL_TEMPLATE.format(limit=bounded),
+            {
+                "borrower_exact": upper,
+                "borrower_prefix": f"{upper}%",
+                "term_contains": f"%{upper}%",
+                "zip_exact": zip_exact,
+                "clip_exact": term,
+            },
+        )
+        return [LeadSummary(**redact_lead_row(r)) for r in rows]
 
 
 class DatabricksOfferRepository:
@@ -2235,6 +2702,8 @@ def _likely_data_question(question: str) -> bool:
     domain_terms = (
         "borrower",
         "borrowers",
+        "customer",
+        "customers",
         "lead",
         "leads",
         "zip",
@@ -2246,6 +2715,8 @@ def _likely_data_question(question: str) -> bool:
         "rate",
         "offer",
         "retention",
+        "recapture",
+        "risk",
         "heloc",
         "refi",
         "refinance",
@@ -2261,7 +2732,69 @@ def _needs_genie_sql_repair(question: str, result: GenieResponse) -> bool:
         return False
     if _answer_text_contains_pii(result.answer_text):
         return False
+    if _sql_uses_stale_evidence_signal_enum(result.sql_query):
+        return True
+    if _sql_uses_impossible_retention_conjunction(question, result.sql_query):
+        return True
     return not _genie_response_has_query_proof(result)
+
+
+def _retention_risk_question(question: str) -> bool:
+    q = question.lower()
+    if _retention_competitor_lien_list_question(question):
+        return False
+    has_customer_scope = bool(re.search(r"\b(current|summit|customer|customers)\b", q))
+    has_retention_risk_phrase = bool(re.search(r"\bretention[-\s]?risk\b", q))
+    has_risk_intent = bool(
+        re.search(
+            r"\b(retention|recapture|at risk|risk of going|going to a competitor|"
+            r"shop(?:ping)?(?: a)? competitor|competitor recapture)\b",
+            q,
+        )
+    )
+    if has_retention_risk_phrase:
+        return True
+    return has_customer_scope and has_risk_intent
+
+
+def _retention_competitor_lien_list_question(question: str) -> bool:
+    q = question.lower()
+    asks_for_rows = bool(
+        re.search(r"\b(which|show|list|find|who are|give me)\b", q)
+        and re.search(r"\bborrowers?\b", q)
+    )
+    retention_scope = bool(
+        re.search(
+            r"\b(retention list|retention cohort|retention-risk|retention risk|recapture)\b",
+            q,
+        )
+    )
+    competitor_signal = "competitor lien" in q or "competitor-lien" in q
+    return asks_for_rows and retention_scope and competitor_signal
+
+
+def _sql_uses_stale_evidence_signal_enum(sql_query: str | None) -> bool:
+    if not sql_query:
+        return False
+    sql = re.sub(r"\s+", " ", sql_query.strip().lower())
+    if not re.search(r"\bevidence_events\b", sql):
+        return False
+    for literal in ("lien-change", "lien_change", "competitor"):
+        if re.search(rf"\bsignal_type\s*=\s*['\"]{re.escape(literal)}['\"]", sql):
+            return True
+        if re.search(rf"\bsignal_type\s+in\s*\([^)]*['\"]{re.escape(literal)}['\"]", sql):
+            return True
+    return False
+
+
+def _sql_uses_impossible_retention_conjunction(question: str, sql_query: str | None) -> bool:
+    if not sql_query or not _retention_risk_question(question):
+        return False
+    sql = re.sub(r"\s+", " ", sql_query.strip().lower())
+    return bool(
+        re.search(r"\bis_current_customer\s*=\s*(true|1)\b", sql)
+        and re.search(r"\bis_competitor_lien\s*=\s*(true|1)\b", sql)
+    )
 
 
 def _trusted_sql_repair_prompt(question: str) -> str:
@@ -2271,7 +2804,14 @@ def _trusted_sql_repair_prompt(question: str) -> str:
         "attachment over the trusted mip.gold or mip.semantics assets, execute "
         "it, return the result rows, and cite the source asset. Do not answer "
         "from narrative alone, do not use PII or protected-class criteria, and "
-        "do not use catalogs outside mip. User question: "
+        "do not use catalogs outside mip. For current-customer retention or "
+        "recapture-risk questions, use the retention risk signal already modeled "
+        "in mip.gold.borrower_360 (segment_codes contains 'retention' or "
+        "recommended_offer_code = 'retention') instead of requiring "
+        "is_current_customer and is_competitor_lien to both be true. For evidence "
+        "trigger questions, use the governed signal_type enum exactly as modeled; "
+        "competitor-lien evidence is signal_type = 'competitor_lien', never "
+        "'lien-change' or 'competitor'. User question: "
         f"{question}"
     )
 
@@ -2327,7 +2867,14 @@ def _adapt_genie_response(
     # that the app used a governed canonical query rather than the raw Genie
     # narrative.
     unsafe_live_sql = bool(result.sql_query and not trusted_sql)
-    if not text_contains_pii and not unsafe_live_sql and not depends_on_pending_feeds:
+    stale_evidence_enum_only = bool(
+        result.sql_query and _trusted_sql_policy_allowing_stale_evidence_enum(result.sql_query, trusted_assets)
+    )
+    if (
+        not text_contains_pii
+        and (not unsafe_live_sql or stale_evidence_enum_only)
+        and not depends_on_pending_feeds
+    ):
         canonical = _canonical_genie_answer(
             question=question,
             result=result,
@@ -2458,6 +3005,61 @@ WHERE in_the_money = TRUE
 GROUP BY zip, state
 ORDER BY in_the_money_borrowers DESC, avg_score DESC, zip ASC
 LIMIT 10
+""".strip()
+
+_CANONICAL_CURRENT_CUSTOMER_RETENTION_RISK_SQL = """
+SELECT COUNT(*) AS retention_risk_borrowers
+     , MAX(refreshed_at) AS refreshed_at
+FROM mip.gold.borrower_360
+WHERE is_current_customer = TRUE
+  AND (
+    array_contains(segment_codes, 'retention')
+    OR recommended_offer_code = 'retention'
+  )
+""".strip()
+
+_CANONICAL_RETENTION_COMPETITOR_LIEN_LIST_SQL = """
+WITH matches AS (
+  SELECT b.borrower_id
+       , b.city
+       , b.state
+       , b.recommended_offer_code
+       , b.opportunity_score
+       , MAX(to_timestamp(e.`timestamp`)) AS latest_competitor_lien_at
+  FROM mip.gold.borrower_360 AS b
+  JOIN mip.gold.evidence_events AS e
+    ON e.clip = b.clip
+  WHERE array_contains(b.segment_codes, 'retention')
+    AND e.signal_type = 'competitor_lien'
+    AND to_timestamp(e.`timestamp`) >= current_timestamp() - interval 30 days
+  GROUP BY b.borrower_id
+         , b.city
+         , b.state
+         , b.recommended_offer_code
+         , b.opportunity_score
+),
+ranked AS (
+  SELECT borrower_id
+       , city
+       , state
+       , recommended_offer_code
+       , opportunity_score
+       , latest_competitor_lien_at
+       , COUNT(*) OVER () AS total_matching_borrowers
+  FROM matches
+)
+SELECT borrower_id
+     , city
+     , state
+     , recommended_offer_code
+     , opportunity_score
+     , latest_competitor_lien_at
+     , total_matching_borrowers
+FROM ranked
+ORDER BY latest_competitor_lien_at DESC
+       , opportunity_score DESC
+       , borrower_id ASC
+LIMIT 50
 """.strip()
 
 _CANONICAL_MSA_SCORE_SQL = """
@@ -2705,6 +3307,144 @@ def _canonical_genie_answer(
     """
     if sql_client is None:
         return None
+    if _retention_competitor_lien_list_question(question):
+        try:
+            rows = _redact_genie_rows(
+                sql_client.execute(_CANONICAL_RETENTION_COMPETITOR_LIEN_LIST_SQL)
+            ) or []
+        except DatabricksSqlError as exc:
+            log.warning("canonical_genie_retention_competitor_lien_failed: %s", exc, exc_info=True)
+            return None
+        trusted_assets = [
+            qualify("gold", "borrower_360", catalog="mip"),
+            qualify("gold", "evidence_events", catalog="mip"),
+        ]
+        question_hash = _genie_question_hash(question)
+        proof = _build_genie_proof(
+            sql_query=_CANONICAL_RETENTION_COMPETITOR_LIEN_LIST_SQL,
+            trusted_assets=trusted_assets,
+            rows=rows,
+            question=question,
+            conversation_id=result.conversation_id,
+            message_id=result.message_id,
+            elapsed_ms=result.elapsed_ms,
+        )
+        visualization = _plan_genie_visualization(question, rows)
+        actions = _suggest_genie_actions(
+            question=question,
+            rows=rows,
+            trusted_assets=trusted_assets,
+            visualization=visualization,
+            conversation_id=result.conversation_id,
+            message_id=result.message_id,
+            question_hash=question_hash,
+            sql_query=_CANONICAL_RETENTION_COMPETITOR_LIEN_LIST_SQL,
+            source="trusted_sql",
+        )
+        total_matching = _total_matching_from_rows(rows)
+        shown_count = len(rows)
+        if rows:
+            if total_matching > shown_count:
+                answer = (
+                    f"There are {total_matching:,} retention-list borrowers with "
+                    f"competitor-lien evidence in the last 30 days; showing the first "
+                    f"{shown_count:,} by latest evidence timestamp and opportunity score. "
+                    "The result uses the governed `competitor_lien` signal_type from "
+                    "mip.gold.evidence_events."
+                )
+            else:
+                answer = (
+                    f"I found {shown_count:,} retention-list borrowers with competitor-lien "
+                    "evidence in the last 30 days. The result uses the governed "
+                    "`competitor_lien` signal_type from mip.gold.evidence_events."
+                )
+        else:
+            answer = (
+                "No retention-list borrowers have governed competitor-lien evidence "
+                "in the last 30 days. This is a live result from the modeled "
+                "`competitor_lien` signal_type, not a stale `lien-change` alias."
+            )
+        return GenieMessageResponse(
+            conversation_id=result.conversation_id,
+            message_id=result.message_id,
+            elapsed_ms=result.elapsed_ms,
+            question_hash=question_hash,
+            question=question,
+            answer=answer,
+            source="trusted_sql",
+            trusted_assets=trusted_assets,
+            sql_query=_CANONICAL_RETENTION_COMPETITOR_LIEN_LIST_SQL,
+            row_count=len(rows),
+            proof=proof,
+            visualization=visualization,
+            actions=actions,
+            metric_value=f"{total_matching:,}",
+            table_rows=rows,
+        )
+    if _retention_risk_question(question):
+        try:
+            row = sql_client.execute_one(_CANONICAL_CURRENT_CUSTOMER_RETENTION_RISK_SQL) or {}
+        except DatabricksSqlError as exc:
+            log.warning("canonical_genie_retention_risk_failed: %s", exc, exc_info=True)
+            return None
+        count = row.get("retention_risk_borrowers")
+        try:
+            count_int = int(count)
+        except (TypeError, ValueError):
+            log.warning("canonical_genie_retention_risk_bad_count: %r", count)
+            return None
+        rows = [
+            {
+                "retention_risk_borrowers": count_int,
+                "refreshed_at": row.get("refreshed_at"),
+            }
+        ]
+        trusted_assets = [qualify("gold", "borrower_360", catalog="mip")]
+        question_hash = _genie_question_hash(question)
+        proof = _build_genie_proof(
+            sql_query=_CANONICAL_CURRENT_CUSTOMER_RETENTION_RISK_SQL,
+            trusted_assets=trusted_assets,
+            rows=rows,
+            question=question,
+            conversation_id=result.conversation_id,
+            message_id=result.message_id,
+            elapsed_ms=result.elapsed_ms,
+        )
+        visualization = _plan_genie_visualization(question, rows)
+        actions = _suggest_genie_actions(
+            question=question,
+            rows=rows,
+            trusted_assets=trusted_assets,
+            visualization=visualization,
+            conversation_id=result.conversation_id,
+            message_id=result.message_id,
+            question_hash=question_hash,
+            sql_query=_CANONICAL_CURRENT_CUSTOMER_RETENTION_RISK_SQL,
+            source="trusted_sql",
+        )
+        answer = (
+            f"There are {count_int:,} current Summit customers in the retention-risk "
+            "cohort. This uses the modeled retention signal in mip.gold.borrower_360 "
+            "rather than the mutually exclusive current-customer and competitor-lien "
+            "flags."
+        )
+        return GenieMessageResponse(
+            conversation_id=result.conversation_id,
+            message_id=result.message_id,
+            elapsed_ms=result.elapsed_ms,
+            question_hash=question_hash,
+            question=question,
+            answer=answer,
+            source="trusted_sql",
+            trusted_assets=trusted_assets,
+            sql_query=_CANONICAL_CURRENT_CUSTOMER_RETENTION_RISK_SQL,
+            row_count=len(rows),
+            proof=proof,
+            visualization=visualization,
+            actions=actions,
+            metric_value=f"{count_int:,}",
+            table_rows=rows,
+        )
     if _canonical_itm_zip_scope(question):
         try:
             rows = sql_client.execute(_CANONICAL_ITM_TOP_ZIPS_SQL)
@@ -3087,6 +3827,30 @@ def _is_select_only(sql: str | None) -> bool:
 
 
 def _trusted_sql_policy(sql: str | None, trusted_assets: list[str]) -> bool:
+    return _trusted_sql_policy_core(
+        sql,
+        trusted_assets,
+        allow_stale_evidence_enum=False,
+    )
+
+
+def _trusted_sql_policy_allowing_stale_evidence_enum(
+    sql: str | None,
+    trusted_assets: list[str],
+) -> bool:
+    return _trusted_sql_policy_core(
+        sql,
+        trusted_assets,
+        allow_stale_evidence_enum=True,
+    )
+
+
+def _trusted_sql_policy_core(
+    sql: str | None,
+    trusted_assets: list[str],
+    *,
+    allow_stale_evidence_enum: bool,
+) -> bool:
     refs = _extract_asset_refs(sql)
     return (
         bool(refs)
@@ -3095,6 +3859,7 @@ def _trusted_sql_policy(sql: str | None, trusted_assets: list[str]) -> bool:
         and _is_select_only(sql)
         and not _sql_mentions_pii_columns(sql)
         and not _sql_has_unqualified_relations(_scrub_sql_for_policy(sql) or "")
+        and (allow_stale_evidence_enum or not _sql_uses_stale_evidence_signal_enum(sql))
     )
 
 
@@ -3483,6 +4248,18 @@ def _borrower_ids_from_rows(rows: list[dict[str, Any]] | None) -> list[str]:
     return ids
 
 
+def _total_matching_from_rows(rows: list[dict[str, Any]] | None) -> int:
+    for row in rows or []:
+        raw = row.get("total_matching_borrowers")
+        if raw is None:
+            continue
+        try:
+            return max(0, int(raw))
+        except (TypeError, ValueError):
+            continue
+    return len(rows or [])
+
+
 def _row_values(
     rows: list[dict[str, Any]] | None,
     *columns: str,
@@ -3522,7 +4299,14 @@ def _segment_codes_from_question(question: str) -> list[str]:
         codes.append("equity")
     if "investor" in q or "multi-property" in q or "multi property" in q:
         codes.append("investor")
-    if "retention" in q or "competitor lien" in q or "current customer" in q:
+    if (
+        "retention" in q
+        or "competitor lien" in q
+        or "current customer" in q
+        or "recapture" in q
+        or "at risk" in q
+        or "going to a competitor" in q
+    ):
         codes.append("retention")
     if "listed" in q or "for sale" in q or "purchase" in q:
         codes.append("listed")
@@ -3562,14 +4346,14 @@ def _portfolio_criteria_from_question(question: str) -> dict[str, Any]:
         criteria["product"] = "Cash-out"
     elif re.search(r"\bheloc\b", q):
         criteria["product"] = "HELOC"
-    elif re.search(r"\b(retention|recapture)\b", q):
+    elif re.search(r"\b(retention|recapture|at risk|going to a competitor)\b", q):
         criteria["product"] = "Retention"
 
     if "current customer" in q:
         criteria["lender_relationship"] = "Current customer"
     elif "former customer" in q:
         criteria["lender_relationship"] = "Former customer"
-    elif "competitor" in q:
+    elif "competitor" in q and not _retention_competitor_lien_list_question(question):
         criteria["lender_relationship"] = "Competitor customer"
 
     equity_match = re.search(

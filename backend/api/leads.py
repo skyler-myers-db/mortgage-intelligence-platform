@@ -11,18 +11,20 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response
 
-from backend.schemas.common import validate_public_borrower_id
+from backend.schemas.common import validate_internal_staff_email, validate_public_borrower_id
 from backend.schemas.lead import LeadSummary
 from backend.schemas.portfolio import PortfolioCriteria
 from backend.services.audit_store import AuditStore, get_audit_store, resolve_actor
 from backend.services.lakebase import LakebaseError, get_lakebase_client
 from backend.services.observability import emit
 from backend.services.pii_redaction import normalize_public_lender_ref
+from backend.services.rbac import require_admin
 from backend.services.repositories import LeadRepository, get_lead_repository
+from backend.services.sales_state import SalesStateStore, get_sales_state_store, hydrate_leads_with_sales_state
 
 log = logging.getLogger(__name__)
 
@@ -47,6 +49,7 @@ LIMIT 1
 
 RepoDep = Annotated[LeadRepository, Depends(get_lead_repository)]
 StoreDep = Annotated[AuditStore, Depends(get_audit_store)]
+SalesStateDep = Annotated[SalesStateStore, Depends(get_sales_state_store)]
 
 
 def _safe_audit_write(store: AuditStore, **kwargs: object) -> None:
@@ -218,6 +221,9 @@ def _portfolio_criteria_from_query(
     min_equity_pct: float | None,
     owner_link: str | None = None,
     purchase_intent: str | None = None,
+    marketing_eligibility: str | None = None,
+    consent_status: str | None = None,
+    recency: str | None = None,
 ) -> PortfolioCriteria | None:
     fields: dict[str, object] = {}
     if geography:
@@ -240,9 +246,29 @@ def _portfolio_criteria_from_query(
         fields["owner_link"] = owner_link
     if purchase_intent:
         fields["purchase_intent"] = purchase_intent
+    if marketing_eligibility:
+        fields["marketing_eligibility"] = marketing_eligibility
+    if consent_status:
+        fields["consent_status"] = consent_status
+    if recency:
+        fields["recency"] = recency
     if not fields:
         return None
     return PortfolioCriteria(**fields)
+
+
+def _requires_marketing_override_admin(
+    *,
+    marketing_eligibility: str | None,
+    consent_status: str | None,
+) -> bool:
+    """Return true when a lead-list request may expose suppressed rows."""
+
+    normalized_marketing = (marketing_eligibility or "Eligible only").strip()
+    normalized_consent = (consent_status or "").strip()
+    if normalized_marketing and normalized_marketing != "Eligible only":
+        return True
+    return normalized_consent in {"Opt-out", "Unknown"}
 
 
 @router.get("/leads", response_model=list[LeadSummary])
@@ -252,6 +278,7 @@ def list_leads(
     background: BackgroundTasks,
     repo: RepoDep,
     audit: StoreDep,
+    sales_state: SalesStateDep,
     segment: str | None = None,
     segment_codes: Annotated[
         str | None,
@@ -438,6 +465,46 @@ def list_leads(
             description="Optional purchase-intent bucket from Segment Intelligence.",
         ),
     ] = None,
+    marketing_eligibility: Annotated[
+        str,
+        Query(
+            alias="marketing_eligibility",
+            max_length=32,
+            description="Contactability gate. Defaults to Eligible only for fail-closed campaign/export use.",
+        ),
+    ] = "Eligible only",
+    consent_status: Annotated[
+        str | None,
+        Query(
+            alias="consent_status",
+            max_length=32,
+            description="Optional consent filter: Opt-in, Opt-out, Unknown, Any.",
+        ),
+    ] = None,
+    recency: Annotated[
+        str | None,
+        Query(
+            alias="recency",
+            max_length=32,
+            description="Optional touch-recency filter: Untouched 30d/60d/90d or Any.",
+        ),
+    ] = None,
+    approval_status: Annotated[
+        Literal["pending", "approved", "rejected", "hold", "any"],
+        Query(alias="approval_status", description="Sales workflow approval state filter."),
+    ] = "any",
+    outreach_status: Annotated[
+        Literal["none", "queued", "actioned", "sent", "bounced", "replied", "any"],
+        Query(alias="outreach_status", description="Sales workflow outreach state filter."),
+    ] = "any",
+    assigned_to: Annotated[
+        str | None,
+        Query(alias="assigned_to", max_length=256, description="Internal LO email assigned to the lead."),
+    ] = None,
+    aged_days: Annotated[
+        int | None,
+        Query(alias="aged_days", ge=1, le=90, description="Only approved leads aged at least this many days with no outreach."),
+    ] = None,
     cohort_id: Annotated[
         str | None,
         Query(
@@ -470,18 +537,49 @@ def list_leads(
         segment = segment.strip().lower()
         if segment not in _ALLOWED_SEGMENT_CODES:
             raise HTTPException(status_code=422, detail="segment contains an unknown segment")
+    if _requires_marketing_override_admin(
+        marketing_eligibility=marketing_eligibility,
+        consent_status=consent_status,
+    ):
+        require_admin(request)
+    actor = resolve_actor(request)
     parsed_segments = _parse_segment_codes(segment_codes)
     parsed_states = _parse_csv_filter(states, width=2, label="states")
     parsed_zips = _parse_csv_filter(zips, width=5, label="zips", numeric=True)
     parsed_counties = _parse_csv_filter(counties, width=5, label="counties", numeric=True)
     parsed_borrower_ids = _parse_borrower_ids(borrower_ids)
+    assignment_filter_ids: list[str] | None = None
+    if assigned_to:
+        try:
+            assigned_to = validate_internal_staff_email(assigned_to)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="assigned_to must be an internal staff email") from exc
+        try:
+            sales_state.require_visible_assignee(actor=actor, assigned_to_email=assigned_to)
+            assignment_filter_ids = sales_state.borrower_ids_for_assignee(assigned_to)
+        except LakebaseError as exc:
+            raise HTTPException(status_code=503, detail="Lakebase temporarily unavailable") from exc
+        except KeyError as exc:
+            raise HTTPException(status_code=422, detail="assigned_to must be an active loan officer") from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail="assigned_to is outside the actor scope") from exc
+        if parsed_borrower_ids:
+            allowed = set(assignment_filter_ids)
+            parsed_borrower_ids = [bid for bid in parsed_borrower_ids if bid in allowed]
+        else:
+            parsed_borrower_ids = assignment_filter_ids
+        if parsed_borrower_ids == []:
+            response.headers["X-Total-Matching"] = "0"
+            response.headers["X-Returned-Rows"] = "0"
+            return []
     cohort_filters: dict[str, object] = {}
 
+    cohort_has_replay_filter = False
     if cohort_id:
         # Cohort id is the governed source of truth. Query params are
         # useful for shareable URLs and visual chips, but they must not
         # widen a confirmed Genie cohort if the URL is edited by hand.
-        cohort_filters = _load_cohort_filters(cohort_id, actor=resolve_actor(request))
+        cohort_filters = _load_cohort_filters(cohort_id, actor=actor)
         segment = None
         state = None
         zip_code = None
@@ -496,6 +594,13 @@ def list_leads(
         min_equity_pct = None
         owner_link = None
         purchase_intent = None
+        marketing_eligibility = "Eligible only"
+        consent_status = None
+        recency = None
+        approval_status = "any"
+        outreach_status = "any"
+        assigned_to = None
+        aged_days = None
         target_lender_ref = None
         parsed_segments = None
         segment_mode = _cohort_segment_mode(cohort_filters)
@@ -526,26 +631,42 @@ def list_leads(
 
     if cohort_id:
         portfolio_raw = cohort_filters.get("portfolio_criteria")
+        cohort_has_replay_filter = any(
+            (
+                parsed_states,
+                parsed_zips,
+                parsed_counties,
+                parsed_borrower_ids,
+                county,
+                parsed_segments,
+                target_lender_ref,
+            )
+        )
         if isinstance(portfolio_raw, dict):
             try:
-                portfolio_criteria = PortfolioCriteria(**portfolio_raw)
+                original_criteria = PortfolioCriteria(**portfolio_raw)
             except ValueError as exc:
                 raise HTTPException(
                     status_code=422,
                     detail="cohort portfolio criteria are invalid",
                 ) from exc
-            if not portfolio_criteria.has_effective_predicate():
+            if not original_criteria.has_effective_predicate(count_default_marketing=False):
                 raise HTTPException(
                     status_code=422,
                     detail="cohort portfolio criteria are invalid",
                 )
+            cohort_has_replay_filter = True
+            safe_portfolio_raw = dict(portfolio_raw)
+            safe_portfolio_raw["marketing_eligibility"] = "Eligible only"
+            safe_portfolio_raw.pop("consent_status", None)
+            portfolio_criteria = PortfolioCriteria(**safe_portfolio_raw)
         elif portfolio_raw is not None:
             raise HTTPException(
                 status_code=422,
                 detail="cohort portfolio criteria are invalid",
             )
         else:
-            portfolio_criteria = None
+            portfolio_criteria = PortfolioCriteria(marketing_eligibility="Eligible only")
     else:
         try:
             portfolio_criteria = _portfolio_criteria_from_query(
@@ -559,6 +680,9 @@ def list_leads(
                 min_equity_pct=min_equity_pct,
                 owner_link=owner_link,
                 purchase_intent=purchase_intent,
+                marketing_eligibility=marketing_eligibility,
+                consent_status=consent_status,
+                recency=recency,
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -569,18 +693,7 @@ def list_leads(
     if parsed_counties:
         repo_kwargs["county_fipses"] = parsed_counties
 
-    if cohort_id and not any(
-        (
-            parsed_states,
-            parsed_zips,
-            parsed_counties,
-            parsed_borrower_ids,
-            county,
-            parsed_segments,
-            target_lender_ref,
-            portfolio_criteria,
-        )
-    ):
+    if cohort_id and not cohort_has_replay_filter:
         raise HTTPException(
             status_code=422,
             detail="cohort has no replayable lead filters",
@@ -600,8 +713,43 @@ def list_leads(
         segment_mode=segment_mode,
         target_lender_ref=target_lender_ref,
         cohort_id=cohort_id,
+        approval_status=None if approval_status == "any" else approval_status,
+        outreach_status=None if outreach_status == "any" else outreach_status,
+        aged_days=aged_days,
         **repo_kwargs,
     )
+    try:
+        leads = hydrate_leads_with_sales_state(leads, sales_state, actor=actor)
+    except LakebaseError as exc:
+        raise HTTPException(status_code=503, detail="Lakebase temporarily unavailable") from exc
+    count_fn = getattr(repo, "count", None)
+    if callable(count_fn):
+        total_matching = count_fn(
+            segment=segment,
+            portfolio_id=portfolio_id,
+            state=state,
+            zip_code=zip_code,
+            county_fips=county,
+            state_codes=parsed_states,
+            zip_codes=parsed_zips,
+            borrower_ids=parsed_borrower_ids,
+            segment_codes=parsed_segments,
+            segment_mode=segment_mode,
+            target_lender_ref=target_lender_ref,
+            cohort_id=cohort_id,
+            approval_status=None if approval_status == "any" else approval_status,
+            outreach_status=None if outreach_status == "any" else outreach_status,
+            aged_days=aged_days,
+            **repo_kwargs,
+        )
+    else:
+        # Test-local repositories and external connectors may implement only
+        # the list contract. The production Databricks repository implements
+        # count; use the returned row count as a lower-bound only when the
+        # dependency cannot report a cohort total.
+        total_matching = len(leads)
+    response.headers["X-Total-Matching"] = str(total_matching)
+    response.headers["X-Returned-Rows"] = str(len(leads))
     # When the result set hit the requested cap, advertise the truncation
     # explicitly so the frontend can tell "exactly N" vs "N and there's
     # more you didn't see". We can't distinguish at this layer between
@@ -636,6 +784,14 @@ def list_leads(
         audit_payload["target_lender_ref"] = target_lender_ref
     if cohort_id:
         audit_payload["cohort_id"] = cohort_id
+    if approval_status != "any":
+        audit_payload["approval_status"] = approval_status
+    if outreach_status != "any":
+        audit_payload["outreach_status"] = outreach_status
+    if assigned_to:
+        audit_payload["assigned_to_email"] = assigned_to
+    if aged_days is not None:
+        audit_payload["aged_days"] = aged_days
     portfolio_payload = portfolio_criteria.model_dump(exclude_none=True) if portfolio_criteria else {}
     if portfolio_payload:
         audit_payload["portfolio_criteria"] = portfolio_payload
@@ -643,7 +799,7 @@ def list_leads(
     background.add_task(
         _safe_audit_write,
         audit,
-        actor=resolve_actor(request),
+        actor=actor,
         action="view_leads_ranked",
         entity_type="lead_queue",
         entity_id=segment or (",".join(parsed_segments) if parsed_segments else "_all"),

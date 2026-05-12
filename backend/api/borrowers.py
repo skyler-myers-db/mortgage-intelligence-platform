@@ -13,13 +13,14 @@ from __future__ import annotations
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 
 from backend.schemas.common import EvidenceEvent, validate_public_borrower_id
-from backend.schemas.lead import Borrower360
+from backend.schemas.lead import Borrower360, LeadSummary
 from backend.services.audit_store import AuditStore, get_audit_store, resolve_actor
 from backend.services.observability import emit
 from backend.services.repositories import BorrowerRepository, get_borrower_repository
+from backend.services.sales_state import SalesStateStore, get_sales_state_store, hydrate_leads_with_sales_state
 
 log = logging.getLogger(__name__)
 
@@ -27,6 +28,7 @@ router = APIRouter(prefix="/api/borrowers", tags=["borrowers"])
 
 RepoDep = Annotated[BorrowerRepository, Depends(get_borrower_repository)]
 StoreDep = Annotated[AuditStore, Depends(get_audit_store)]
+SalesStateDep = Annotated[SalesStateStore, Depends(get_sales_state_store)]
 
 
 def _path_borrower_id(value: str) -> str:
@@ -67,6 +69,18 @@ def _safe_audit_write(store: AuditStore, **kwargs: object) -> None:
         )
 
 
+@router.get("/search", response_model=list[LeadSummary])
+def search_borrowers(
+    repo: RepoDep,
+    q: Annotated[
+        str,
+        Query(min_length=2, max_length=64, description="Borrower id, ZIP, city, or masked property ref."),
+    ],
+    limit: Annotated[int, Query(ge=1, le=25)] = 10,
+) -> list[LeadSummary]:
+    return repo.search(q, limit=limit)
+
+
 @router.get("/{borrower_id}", response_model=Borrower360)
 def get_borrower(
     borrower_id: str,
@@ -74,11 +88,35 @@ def get_borrower(
     background: BackgroundTasks,
     repo: RepoDep,
     audit: StoreDep,
+    sales_state: SalesStateDep,
 ) -> Borrower360:
     borrower_id = _path_borrower_id(borrower_id)
     borrower = repo.get(borrower_id)
     if borrower is None:
         raise HTTPException(status_code=404, detail=f"Borrower {borrower_id} not found")
+    try:
+        lifecycle = sales_state.lifecycle_for(borrower_id)
+        hydrated = hydrate_leads_with_sales_state(
+            [borrower],
+            sales_state,
+            actor=resolve_actor(request),
+        )[0]
+        borrower = hydrated.model_copy(
+            update={
+                "approval_status": lifecycle.get("approval_status") or hydrated.approval_status,
+                "outreach_status": lifecycle.get("outreach_status") or hydrated.outreach_status,
+                "approved_at": lifecycle.get("approved_at"),
+                "outreach_at": lifecycle.get("outreach_at"),
+            }
+        )
+    except Exception as exc:  # noqa: BLE001 -- dossier read should remain available
+        emit(
+            log,
+            "sales_state_hydration_failed",
+            dependency="lakebase",
+            exc_type=type(exc).__name__,
+            outcome="error",
+        )
     # Governance §4: record score components + thresholds so we can
     # reconstruct "what the approver saw" after the fact. No PII lands
     # in metadata -- display_name and subject_property stay out.

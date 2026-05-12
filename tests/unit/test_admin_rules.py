@@ -382,29 +382,22 @@ def test_rules_service_caches_reads_within_ttl() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Legacy PUT shim (backwards compat)
+# Rules write posture
 # ---------------------------------------------------------------------------
 
 
-def test_put_rules_legacy_shim_still_works() -> None:
-    """The legacy in-memory PUT is retained -- it no longer changes the
-    UC-backed GET payload, but it DOES record an override surfaced via
-    ``legacy_override``.
-
-    Round-3 hole-finder #17: the request body is now Pydantic-validated
-    (``{"overrides": {...}}``) — arbitrary top-level keys get a 422.
-    """
-    put = client.put("/api/admin/rules", json={"overrides": {"note": "hello"}})
-    assert put.status_code == 200
+def test_put_rules_is_gone_because_scoring_rules_are_uc_governed() -> None:
+    put = client.put("/api/admin/rules", json={"attempted_change": {"note": "hello"}})
+    assert put.status_code == 410
+    assert "mip.ref.offer_rules_config" in put.json()["detail"]
     body = client.get("/api/admin/rules").json()
-    assert body["legacy_override"].get("note") == "hello"
+    assert "legacy_override" not in body
 
 
-def test_put_rules_rejects_arbitrary_top_level_keys() -> None:
-    """Round-3 hole-finder #17: the old contract silently accepted
-    ``{"x": "y"}``. Now it's 422."""
+def test_put_rules_rejects_every_app_local_edit_attempt() -> None:
     put = client.put("/api/admin/rules", json={"x": "y"})
-    assert put.status_code == 422
+    assert put.status_code == 410
+    assert "Unity Catalog" in put.json()["detail"]
 
 
 # ---------------------------------------------------------------------------

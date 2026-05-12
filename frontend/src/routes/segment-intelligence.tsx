@@ -54,6 +54,9 @@ const OWNER_LINK_OPTIONS = ['All', 'Single-property owner', 'Multi-property (2-4
 // until Cotality Building Permits + MLS Delta Shares are live. Copy on
 // the filter calls this out to the presenter.
 const PURCHASE_OPTIONS = ['All', 'Listed for sale', 'Recent permit activity', 'Both'] as const;
+const CONTACTABILITY_OPTIONS = ['Eligible only', 'Any', 'Suppressed only'] as const;
+const CONSENT_OPTIONS = ['Any', 'Opt-in', 'Opt-out', 'Unknown'] as const;
+const RECENCY_OPTIONS = ['Any', 'Untouched 30d', 'Untouched 60d', 'Untouched 90d'] as const;
 
 interface ChipFilters {
   location: string;
@@ -62,6 +65,9 @@ interface ChipFilters {
   ownerLink: string;
   purchase: string;
   cashout: string;
+  contactability: string;
+  consent: string;
+  recency: string;
 }
 
 const INITIAL_FILTERS: ChipFilters = {
@@ -71,6 +77,9 @@ const INITIAL_FILTERS: ChipFilters = {
   ownerLink: 'All',
   purchase: 'All',
   cashout: 'Any',
+  contactability: 'Eligible only',
+  consent: 'Any',
+  recency: 'Any',
 };
 
 /**
@@ -142,13 +151,25 @@ export default function SegmentIntelligence() {
     } else if (chipFilters.cashout === 'Equity ≥ 40%') {
       criteria.min_equity_pct_label = '≥ 40%';
     }
+    if (chipFilters.contactability !== 'Any') {
+      criteria.marketing_eligibility = chipFilters.contactability;
+    }
+    if (chipFilters.consent !== 'Any') {
+      criteria.consent_status = chipFilters.consent;
+    }
+    if (chipFilters.recency !== 'Any') {
+      criteria.recency = chipFilters.recency;
+    }
     return criteria;
   }, [
     chipFilters.cashout,
+    chipFilters.contactability,
+    chipFilters.consent,
     chipFilters.demographics,
     chipFilters.lien,
     chipFilters.ownerLink,
     chipFilters.purchase,
+    chipFilters.recency,
   ]);
   const activeSegsKey = activeSegs.join(',');
 
@@ -420,6 +441,24 @@ export default function SegmentIntelligence() {
           value={chipFilters.cashout}
           options={Object.keys(EQUITY_FLOOR_USD)}
           onChange={(v) => setChipFilters((f) => ({ ...f, cashout: v }))}
+        />
+        <FilterSelect
+          label="CONTACTABILITY"
+          value={chipFilters.contactability}
+          options={[...CONTACTABILITY_OPTIONS]}
+          onChange={(v) => setChipFilters((f) => ({ ...f, contactability: v }))}
+        />
+        <FilterSelect
+          label="CONSENT"
+          value={chipFilters.consent}
+          options={[...CONSENT_OPTIONS]}
+          onChange={(v) => setChipFilters((f) => ({ ...f, consent: v }))}
+        />
+        <FilterSelect
+          label="RECENCY"
+          value={chipFilters.recency}
+          options={[...RECENCY_OPTIONS]}
+          onChange={(v) => setChipFilters((f) => ({ ...f, recency: v }))}
         />
         <div
           className="filter-row__hint filter-row__hint--full muted"

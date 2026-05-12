@@ -76,6 +76,12 @@ WITH market AS (
   WHERE series_id = 'MORTGAGE30US' AND is_latest = TRUE
   LIMIT 1
 ),
+refresh_anchor AS (
+  SELECT refresh_at
+  FROM mip.ref.refresh_run_state
+  ORDER BY captured_at DESC
+  LIMIT 1
+),
 -- Recent-event aggregates per CLIP feeding intent_trigger (last 90 days).
 -- Intent_trigger itself is computed in gold.lead_scores, not here, but the
 -- AVM-uplift evidence signal reads from recent AVMs; we expose the raw
@@ -187,14 +193,55 @@ first_party_applications AS (
   FROM mip.first_party.loan_applications
   GROUP BY borrower_id
 ),
-first_party_crm AS (
+first_party_crm_rollup AS (
   SELECT
     borrower_id,
     COUNT(*) AS crm_rows,
-    COUNT_IF(consent_status = 'opt_in' AND suppression_reason IS NULL) > 0 AS marketing_eligible,
+    MAX(last_touch_at) AS last_touch_at,
+    COUNT_IF(consent_status = 'opt_out') > 0 AS has_opt_out,
+    COUNT_IF(consent_status = 'opt_in') > 0 AS has_opt_in,
+    COUNT_IF(suppression_reason = 'do_not_contact') > 0 AS has_do_not_contact,
+    COUNT_IF(suppression_reason = 'recent_contact_cap') > 0 AS has_recent_contact_cap,
+    MAX(NULLIF(suppression_reason, '')) AS any_suppression_reason,
     COUNT_IF(COALESCE(synthetic_demo, FALSE)) > 0 AS synthetic_demo
   FROM mip.first_party.crm_campaign_membership
   GROUP BY borrower_id
+),
+first_party_crm AS (
+  SELECT
+    borrower_id,
+    crm_rows,
+    CASE
+      WHEN has_opt_out THEN 'opt_out'
+      WHEN has_opt_in THEN 'opt_in'
+      ELSE 'unknown'
+    END AS consent_status,
+    CASE
+      WHEN has_do_not_contact THEN 'do_not_contact'
+      WHEN has_recent_contact_cap THEN 'recent_contact_cap'
+      ELSE any_suppression_reason
+    END AS suppression_reason,
+    last_touch_at,
+    CASE
+      WHEN last_touch_at >= (SELECT refresh_at FROM refresh_anchor) - INTERVAL 30 DAYS
+        THEN last_touch_at + INTERVAL 30 DAYS
+      WHEN has_recent_contact_cap AND last_touch_at IS NOT NULL
+        THEN last_touch_at + INTERVAL 30 DAYS
+      ELSE NULL
+    END AS eligible_recontact_at,
+    (
+      CASE
+        WHEN has_opt_out THEN 'opt_out'
+        WHEN has_opt_in THEN 'opt_in'
+        ELSE 'unknown'
+      END = 'opt_in'
+      AND NOT has_do_not_contact
+      AND NOT has_recent_contact_cap
+      AND any_suppression_reason IS NULL
+      AND (last_touch_at IS NULL OR last_touch_at < (SELECT refresh_at FROM refresh_anchor) - INTERVAL 30 DAYS)
+    ) AS marketing_eligible,
+    synthetic_demo
+  FROM first_party_crm_rollup
 ),
 first_party_interactions AS (
   SELECT
@@ -258,6 +305,10 @@ enriched AS (
     COALESCE(fpa.funded_application_count, 0) AS fp_funded_application_count,
     COALESCE(fpa.has_recent_application, FALSE) AS fp_has_recent_application,
     COALESCE(fpc.marketing_eligible, FALSE) AS fp_marketing_eligible,
+    COALESCE(fpc.consent_status, 'unknown') AS fp_consent_status,
+    fpc.suppression_reason AS fp_suppression_reason,
+    fpc.last_touch_at AS fp_last_touch_at,
+    fpc.eligible_recontact_at AS fp_eligible_recontact_at,
     COALESCE(fpi.recent_positive_interactions, 0) AS fp_recent_positive_interactions,
     COALESCE(fpp.max_relationship_tenure_months, 0) AS fp_max_relationship_tenure_months,
     (
@@ -630,6 +681,11 @@ SELECT
   CAST(COALESCE(w.fp_recent_positive_interactions, 0) AS INT)                            AS first_party_recent_interactions,
   COALESCE(w.fp_has_recent_application, FALSE)                                           AS first_party_recent_application,
   COALESCE(w.fp_synthetic_demo, FALSE)                                                   AS first_party_synthetic_demo,
+  COALESCE(w.fp_marketing_eligible, FALSE)                                                AS marketing_eligible,
+  COALESCE(w.fp_consent_status, 'unknown')                                                AS consent_status,
+  w.fp_suppression_reason                                                                 AS suppression_reason,
+  w.fp_last_touch_at                                                                      AS last_touch_at,
+  w.fp_eligible_recontact_at                                                              AS eligible_recontact_at,
   w.current_lender_ref,
   w.second_pos_amount,
   w.first_pos_loan_type,
@@ -641,7 +697,7 @@ SELECT
   -- refresh_at comes from mip.ref.refresh_run_state (captured once per run
   -- by the capture_refresh_timestamp seed task) so every gold CTAS agrees
   -- to the second. See audit-holes-round-3 #7.
-  (SELECT refresh_at FROM mip.ref.refresh_run_state ORDER BY captured_at DESC LIMIT 1) AS refreshed_at
+  (SELECT refresh_at FROM refresh_anchor) AS refreshed_at
 FROM with_segments AS w
 LEFT JOIN subscores AS ss ON ss.clip = w.clip
 LEFT JOIN timeline  AS tl ON tl.clip = w.clip;

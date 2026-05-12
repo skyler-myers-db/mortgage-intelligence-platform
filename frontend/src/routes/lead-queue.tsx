@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
-import { api } from '../lib/api';
+import { Link, useSearchParams } from 'react-router-dom';
+import { api, isAbortError, type LeadsPageResult } from '../lib/api';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
-import type { LeadSummary, PortfolioPreview, SegmentCode } from '../types';
+import type { PortfolioPreview, SalesAgingLead, SalesConversionResponse, SalesStandupResponse, SalesTeamMember, SegmentCode } from '../types';
 import { PageShell } from '../components/layout/PageShell';
 import { LeadTable } from '../components/mortgage/LeadTable';
 import { Chip } from '../components/Primitives';
 import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
+import { FilterSelect } from '../components/ui/FilterSelect';
+import { useFootprint } from '../components/FootprintProvider';
 
 /**
  * Lead Queue — deep-dive table route. Full borrower list (filtered by segment
@@ -23,6 +25,22 @@ import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
  */
 
 const SEGMENT_CODES = new Set<SegmentCode>(['itm', 'listed', 'permit', 'investor', 'equity', 'retention']);
+const SEGMENT_FILTER_OPTIONS = ['All segments', 'In the Money', 'Investor / Multi-Property', 'Home Equity Candidate', 'Retention Risk'] as const;
+const SEGMENT_OPTION_TO_CODE: Record<string, SegmentCode | null> = {
+  'All segments': null,
+  'In the Money': 'itm',
+  'Investor / Multi-Property': 'investor',
+  'Home Equity Candidate': 'equity',
+  'Retention Risk': 'retention',
+};
+const RELATIONSHIP_FILTER_OPTIONS = ['All', 'Current customer', 'Former customer', 'Competitor customer'] as const;
+const PRODUCT_FILTER_OPTIONS = ['All products', 'Refi', 'HELOC', 'Cash-out', 'Purchase', 'Retention'] as const;
+const CONTACTABILITY_FILTER_OPTIONS = ['Eligible only', 'Any', 'Suppressed only'] as const;
+const CONSENT_FILTER_OPTIONS = ['Any', 'Opt-in', 'Opt-out', 'Unknown'] as const;
+const RECENCY_FILTER_OPTIONS = ['Any', 'Untouched 30d', 'Untouched 60d', 'Untouched 90d'] as const;
+const APPROVAL_FILTER_OPTIONS = ['Any approval', 'Approved', 'Pending', 'Rejected', 'Hold'] as const;
+const OUTREACH_FILTER_OPTIONS = ['Any outreach', 'None', 'Queued', 'Actioned', 'Sent', 'Bounced', 'Replied'] as const;
+const AGING_FILTER_OPTIONS = ['Any age', 'Aged >7d', 'Aged >14d', 'Aged >30d'] as const;
 const PUBLIC_LENDER_REF_RE = /^(All|Summit Mortgage|Competitor ([A-Z]|Other))$/;
 const PORTFOLIO_FILTER_KEYS = [
   'occupancy',
@@ -33,8 +51,29 @@ const PORTFOLIO_FILTER_KEYS = [
   'min_equity_pct_label',
   'owner_link',
   'purchase_intent',
+  'marketing_eligibility',
+  'consent_status',
+  'recency',
 ] as const;
 type PortfolioFilterKey = (typeof PORTFOLIO_FILTER_KEYS)[number];
+
+function isoDate(date: Date): string {
+  return date.toISOString().slice(0, 10);
+}
+
+function relativeIsoDate(days: number): string {
+  const date = new Date();
+  date.setDate(date.getDate() + days);
+  return isoDate(date);
+}
+
+function weekStartIsoDate(): string {
+  const date = new Date();
+  const day = date.getDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  date.setDate(date.getDate() + diff);
+  return isoDate(date);
+}
 
 interface AdminRulesSummary {
   offer_rules_version?: string | null;
@@ -94,6 +133,9 @@ const PORTFOLIO_FILTER_VALUE_SETS: Partial<Record<PortfolioFilterKey, Set<string
   min_equity_pct_label: new Set(['Any', '≥ 15%', '≥ 25%', '≥ 40%']),
   owner_link: new Set(['All', 'Single-property owner', 'Multi-property (2-4)', 'Portfolio investor (5+)']),
   purchase_intent: new Set(['All', 'Listed for sale', 'Recent permit activity', 'Both']),
+  marketing_eligibility: new Set(['Eligible only', 'Any', 'Suppressed only']),
+  consent_status: new Set(['Any', 'Opt-in', 'Opt-out', 'Unknown']),
+  recency: new Set(['Any', 'Untouched 30d', 'Untouched 60d', 'Untouched 90d']),
 };
 
 function sanitizePortfolioCriteria(raw: Record<string, string | undefined>): Record<string, string> | undefined {
@@ -124,6 +166,9 @@ const PORTFOLIO_FILTER_LABELS: Record<string, string> = {
   min_equity_pct_label: 'equity',
   owner_link: 'owner link',
   purchase_intent: 'purchase intent',
+  marketing_eligibility: 'contactability',
+  consent_status: 'consent',
+  recency: 'recency',
 };
 
 function portfolioFilterEntries(criteria: Record<string, string> | undefined) {
@@ -147,6 +192,10 @@ export interface LeadQueueExportFiltersInput {
   countyFilter?: string;
   targetLenderRef?: string;
   portfolioCriteria?: Record<string, string>;
+  approvalStatus?: string;
+  outreachStatus?: string;
+  assignedTo?: string;
+  agedDays?: number | null;
   cohortId?: string;
 }
 
@@ -168,6 +217,10 @@ export function buildLeadQueueExportFilters(input: LeadQueueExportFiltersInput):
     params.set('county', input.countyFilter);
   }
   if (input.targetLenderRef) params.set('target_lender_ref', input.targetLenderRef);
+  if (input.approvalStatus && input.approvalStatus !== 'any') params.set('approval_status', input.approvalStatus);
+  if (input.outreachStatus && input.outreachStatus !== 'any') params.set('outreach_status', input.outreachStatus);
+  if (input.assignedTo) params.set('assigned_to', input.assignedTo);
+  if (input.agedDays) params.set('aged_days', String(input.agedDays));
   const safePortfolioCriteria = sanitizePortfolioCriteria(input.portfolioCriteria ?? {});
   for (const key of PORTFOLIO_FILTER_KEYS) {
     const value = safePortfolioCriteria?.[key];
@@ -181,7 +234,8 @@ export function buildLeadQueueExportFilters(input: LeadQueueExportFiltersInput):
 }
 
 export default function LeadQueue() {
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const footprint = useFootprint();
   const segment = (searchParams.get('segment') as SegmentCode | null) ?? undefined;
   const segmentCodes = useMemo(
     () => parseSegmentCodes(searchParams.get('segment_codes')),
@@ -215,6 +269,84 @@ export default function LeadQueue() {
     [portfolioCriteria],
   );
   const cohortId = (searchParams.get('cohort_id') ?? '').trim() || undefined;
+  const stateOptions = useMemo(() => {
+    const states = footprint.ready && !footprint.usingFallback
+      ? footprint.states.map((s) => s.state_code).sort()
+      : [];
+    return ['All states', ...states];
+  }, [footprint.ready, footprint.states, footprint.usingFallback]);
+  const relationshipFilter = portfolioCriteria?.lender_relationship ?? 'All';
+  const productFilter = portfolioCriteria?.product ?? 'All products';
+  const contactabilityFilter = portfolioCriteria?.marketing_eligibility ?? 'Eligible only';
+  const consentFilter = portfolioCriteria?.consent_status ?? 'Any';
+  const recencyFilter = portfolioCriteria?.recency ?? 'Any';
+  const approvalStatus = (searchParams.get('approval_status') ?? 'any').toLowerCase();
+  const outreachStatus = (searchParams.get('outreach_status') ?? 'any').toLowerCase();
+  const assignedTo = (searchParams.get('assigned_to') ?? '').trim() || undefined;
+  const agedDays = Number(searchParams.get('aged_days') ?? '') || null;
+  const [salesTeam, setSalesTeam] = useState<SalesTeamMember[]>([]);
+  const [staleLeads, setStaleLeads] = useState<SalesAgingLead[]>([]);
+  const [standup, setStandup] = useState<SalesStandupResponse | null>(null);
+  const [conversion, setConversion] = useState<SalesConversionResponse | null>(null);
+  const [salesTeamError, setSalesTeamError] = useState<string | null>(null);
+  const [salesOpsError, setSalesOpsError] = useState<string | null>(null);
+  const segmentFilter = segment
+    ? (Object.entries(SEGMENT_OPTION_TO_CODE).find(([, code]) => code === segment)?.[0] ?? 'All segments')
+    : segmentCodes.length === 1
+      ? (Object.entries(SEGMENT_OPTION_TO_CODE).find(([, code]) => code === segmentCodes[0])?.[0] ?? 'All segments')
+      : 'All segments';
+
+  const updateParam = (key: string, value: string | null) => {
+    const next = new URLSearchParams(searchParams);
+    if (key === 'state') {
+      ['states', 'zips', 'zip', 'county', 'borrower_ids', 'cohort_id'].forEach((k) => next.delete(k));
+    }
+    if (value === null || value === '' || value.startsWith('All')) next.delete(key);
+    else next.set(key, value);
+    if (key === 'segment') {
+      next.delete('segment_codes');
+      next.delete('segment_mode');
+    }
+    setSearchParams(next);
+  };
+
+  useEffect(() => {
+    const ctrl = new AbortController();
+    api.salesTeam(ctrl.signal)
+      .then((team) => {
+        setSalesTeam(team.filter((member) => member.role === 'loan_officer'));
+        setSalesTeamError(null);
+      })
+      .catch((err: unknown) => {
+        if (isAbortError(err)) return;
+        setSalesTeam([]);
+        setSalesTeamError(err instanceof Error ? err.message : 'Sales team unavailable.');
+      });
+    return () => ctrl.abort();
+  }, []);
+
+  useEffect(() => {
+    const ctrl = new AbortController();
+    const yesterday = relativeIsoDate(-1);
+    const weekStart = weekStartIsoDate();
+    const today = isoDate(new Date());
+    Promise.all([
+      api.salesAging(7, 100, ctrl.signal),
+      api.salesStandup(yesterday, ctrl.signal),
+      api.salesConversion(weekStart, today, 'lo', ctrl.signal),
+    ])
+      .then(([agingRows, standupRows, conversionRows]) => {
+        setStaleLeads(agingRows);
+        setStandup(standupRows);
+        setConversion(conversionRows);
+        setSalesOpsError(null);
+      })
+      .catch((err: unknown) => {
+        if (isAbortError(err)) return;
+        setSalesOpsError(err instanceof Error ? err.message : 'Sales operations metrics unavailable.');
+      });
+    return () => ctrl.abort();
+  }, []);
 
   // 2026-05-04 FIX β: pass state + zip to the API so the geo-filtered
   // path on the backend bypasses lead_population's score >= 50 floor
@@ -229,8 +361,8 @@ export default function LeadQueue() {
     warmingUp,
     error,
     manualRetry,
-  } = useWarmingUpRetry<LeadSummary[]>(
-    (signal) => api.leads(
+  } = useWarmingUpRetry<LeadsPageResult>(
+    (signal) => api.leadsPage(
       segment,
       signal,
       {
@@ -247,6 +379,10 @@ export default function LeadQueue() {
         targetLenderRef,
         cohortId,
         portfolioCriteria,
+        approvalStatus: approvalStatus === 'any' ? 'any' : approvalStatus as 'pending' | 'approved' | 'rejected' | 'hold',
+        outreachStatus: outreachStatus === 'any' ? 'any' : outreachStatus as 'none' | 'queued' | 'actioned' | 'sent' | 'bounced' | 'replied',
+        assignedTo,
+        agedDays,
       },
     ),
     [
@@ -262,6 +398,10 @@ export default function LeadQueue() {
       targetLenderRef,
       JSON.stringify(portfolioCriteria ?? {}),
       cohortId,
+      approvalStatus,
+      outreachStatus,
+      assignedTo,
+      agedDays,
     ],
   );
   const loading = leadsData === null && warmingUp === null && error === null;
@@ -319,7 +459,7 @@ export default function LeadQueue() {
   }, []);
 
   const visibleLeads = useMemo(() => {
-    return leadsData ?? [];
+    return leadsData?.leads ?? [];
   }, [leadsData]);
 
   const countyLoading = Boolean(countyFilter) && countyZips === null;
@@ -337,6 +477,10 @@ export default function LeadQueue() {
         countyFilter,
         targetLenderRef,
         portfolioCriteria,
+        approvalStatus: approvalStatus === 'any' ? undefined : approvalStatus,
+        outreachStatus: outreachStatus === 'any' ? undefined : outreachStatus,
+        assignedTo,
+        agedDays,
         cohortId,
       }),
       refreshedAt: exportRefreshedAt,
@@ -355,6 +499,10 @@ export default function LeadQueue() {
     stateFilter,
     stateFilters,
     targetLenderRef,
+    approvalStatus,
+    outreachStatus,
+    assignedTo,
+    agedDays,
     zipFilter,
     zipFilters,
   ]);
@@ -363,9 +511,9 @@ export default function LeadQueue() {
     <PageShell
       eyebrow="Lead Queue"
       title="Ranked borrowers"
-      lede="Click a row to expand the borrower preview. Approve or reject inline, or open Borrower 360 for the full dossier. Keyboard: A approves, R rejects the expanded row."
+      lede="Click a row to expand the borrower preview. Approve, reject, assign to LOs, log call outcomes, or open Borrower 360 for the full dossier. Keyboard: A approves, R rejects the expanded row."
       heroRight={
-        segment || segmentCodes.length > 0 || stateFilter || zipFilter || stateFilters.length > 0 || zipFilters.length > 0 || borrowerIdFilters.length > 0 || countyFilter || targetLenderRef || portfolioCriteria || cohortId ? (
+        segment || segmentCodes.length > 0 || stateFilter || zipFilter || stateFilters.length > 0 || zipFilters.length > 0 || borrowerIdFilters.length > 0 || countyFilter || targetLenderRef || portfolioCriteria || cohortId || approvalStatus !== 'any' || outreachStatus !== 'any' || assignedTo || agedDays ? (
           <>
             {segment && <Chip variant="neutral">segment = {segment}</Chip>}
             {segmentCodes.length > 0 && <Chip variant="neutral">segments = {segmentCodes.join(', ')}</Chip>}
@@ -381,11 +529,177 @@ export default function LeadQueue() {
                 {filter.label} = {filter.value}
               </Chip>
             ))}
+            {approvalStatus !== 'any' && <Chip variant="neutral">approval = {approvalStatus}</Chip>}
+            {outreachStatus !== 'any' && <Chip variant="neutral">outreach = {outreachStatus}</Chip>}
+            {assignedTo && <Chip variant="neutral">assigned = {assignedTo}</Chip>}
+            {agedDays && <Chip variant="neutral">aged &gt; {agedDays}d</Chip>}
             {cohortId && <Chip variant="success">Genie cohort</Chip>}
           </>
         ) : undefined
       }
     >
+      <div className="surface mb-grid">
+        <div className="surface__hdr surface__hdr--split">
+          <div className="surface__hdr-main">
+            <div className="h-4">Queue filters</div>
+            <div className="muted fs-12">
+              Narrow the operational queue without hand-editing the URL.
+            </div>
+          </div>
+          <button
+            type="button"
+            className="btn btn--ghost btn--sm"
+            onClick={() => setSearchParams(new URLSearchParams())}
+          >
+            Clear filters
+          </button>
+        </div>
+        <div className="surface__body">
+          <div className="filter-row">
+            <FilterSelect
+              label="STATE"
+              value={stateFilter ?? 'All states'}
+              options={stateOptions}
+              onChange={(v) => updateParam('state', v === 'All states' ? null : v)}
+            />
+            <FilterSelect
+              label="RELATIONSHIP"
+              value={relationshipFilter}
+              options={[...RELATIONSHIP_FILTER_OPTIONS]}
+              onChange={(v) => updateParam('lender_relationship', v)}
+            />
+            <FilterSelect
+              label="SEGMENT"
+              value={segmentFilter}
+              options={[...SEGMENT_FILTER_OPTIONS]}
+              onChange={(v) => {
+                const code = SEGMENT_OPTION_TO_CODE[v];
+                updateParam('segment', code);
+              }}
+            />
+            <FilterSelect
+              label="PRODUCT"
+              value={productFilter}
+              options={[...PRODUCT_FILTER_OPTIONS]}
+              onChange={(v) => updateParam('product', v)}
+            />
+            <FilterSelect
+              label="CONTACTABILITY"
+              value={contactabilityFilter}
+              options={[...CONTACTABILITY_FILTER_OPTIONS]}
+              onChange={(v) => updateParam('marketing_eligibility', v)}
+            />
+            <FilterSelect
+              label="CONSENT"
+              value={consentFilter}
+              options={[...CONSENT_FILTER_OPTIONS]}
+              onChange={(v) => updateParam('consent_status', v)}
+            />
+            <FilterSelect
+              label="RECENCY"
+              value={recencyFilter}
+              options={[...RECENCY_FILTER_OPTIONS]}
+              onChange={(v) => updateParam('recency', v)}
+            />
+            <FilterSelect
+              label="APPROVAL"
+              value={approvalStatus === 'any' ? 'Any approval' : approvalStatus[0].toUpperCase() + approvalStatus.slice(1)}
+              options={[...APPROVAL_FILTER_OPTIONS]}
+              onChange={(v) => updateParam('approval_status', v === 'Any approval' ? null : v.toLowerCase())}
+            />
+            <FilterSelect
+              label="OUTREACH"
+              value={outreachStatus === 'any' ? 'Any outreach' : outreachStatus[0].toUpperCase() + outreachStatus.slice(1)}
+              options={[...OUTREACH_FILTER_OPTIONS]}
+              onChange={(v) => updateParam('outreach_status', v === 'Any outreach' ? null : v.toLowerCase())}
+            />
+            <FilterSelect
+              label="ASSIGNED"
+              value={assignedTo ?? 'All LOs'}
+              options={['All LOs', ...salesTeam.map((member) => member.email)]}
+              onChange={(v) => updateParam('assigned_to', v === 'All LOs' ? null : v)}
+            />
+            <FilterSelect
+              label="AGING"
+              value={agedDays ? `Aged >${agedDays}d` : 'Any age'}
+              options={[...AGING_FILTER_OPTIONS]}
+              onChange={(v) => {
+                const match = v.match(/>(\d+)d/);
+                updateParam('aged_days', match ? match[1] : null);
+              }}
+            />
+          </div>
+        </div>
+      </div>
+      <div className="surface mb-grid">
+        <div className="surface__hdr surface__hdr--split">
+          <div className="surface__hdr-main">
+            <div className="h-4">Sales ops snapshot</div>
+            <div className="muted fs-12">
+              Shift capacity, stale approvals, yesterday's activity, and week-to-date LO conversion.
+            </div>
+          </div>
+          <div className="chip-row">
+            <Chip variant="neutral">{salesTeam.length} active LOs</Chip>
+            <Chip variant="neutral">
+              {salesTeam.reduce((sum, member) => sum + member.capacity_per_day, 0)} daily capacity
+            </Chip>
+            {salesTeamError && <Chip variant="warning">Team unavailable</Chip>}
+          </div>
+        </div>
+        <div className="surface__body">
+          {salesTeamError && (
+            <div role="alert" className="status-callout status-callout--warning mb-3">
+              Sales team unavailable: {salesTeamError}
+            </div>
+          )}
+          {salesOpsError && (
+            <div role="alert" className="status-callout status-callout--warning mb-3">
+              Sales operations metrics unavailable: {salesOpsError}
+            </div>
+          )}
+          <div className="sales-ops-grid">
+            <div className="sales-ops-card">
+              <div className="eyebrow">Stale approved</div>
+              <div className="kpi__value">{staleLeads.length >= 100 ? '100+' : staleLeads.length.toLocaleString()}</div>
+              <div className="muted fs-12">
+                Approved over 7 days ago with no LO disposition{staleLeads.length >= 100 ? '; showing first 100.' : '.'}
+              </div>
+              <div className="chip-row mt-2">
+                <Link className="btn btn--default btn--sm" to="/lead-queue?approval_status=approved&outreach_status=queued&aged_days=7">
+                  Open stale queue
+                </Link>
+                {staleLeads.slice(0, 2).map((lead) => (
+                  <Link key={lead.borrower_id} className="chip chip--neutral chip--compact" to={`/borrower-360/${lead.borrower_id}`}>
+                    {lead.borrower_id} · {lead.age_days}d
+                  </Link>
+                ))}
+              </div>
+            </div>
+            <div className="sales-ops-card">
+              <div className="eyebrow">Yesterday standup</div>
+              <div className="kpi__value">{(standup?.calls_logged ?? 0).toLocaleString()}</div>
+              <div className="muted fs-12">
+                {(standup?.contacts_reached ?? 0).toLocaleString()} reached · {(standup?.callbacks_scheduled ?? 0).toLocaleString()} callbacks · {(standup?.applications_started ?? 0).toLocaleString()} apps.
+              </div>
+            </div>
+            <div className="sales-ops-card">
+              <div className="eyebrow">Week-to-date conversion</div>
+              <div className="sales-ops-list">
+                {(conversion?.rows ?? []).slice(0, 3).map((row) => (
+                  <div key={row.group_key} className="split-row">
+                    <span className="mono fs-12">{row.group_key}</span>
+                    <span className="mono num">{Math.round(row.application_start_rate * 100)}%</span>
+                  </div>
+                ))}
+                {(conversion?.rows ?? []).length === 0 && (
+                  <div className="muted fs-12">No LO dispositions logged this week.</div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
       {warmingUp && (
         <WarmingUpBlock state={warmingUp} title="Ranked borrowers loading" compact />
       )}
@@ -422,7 +736,13 @@ export default function LeadQueue() {
             : 'No leads match this filter.'}
         </div>
       )}
-      <LeadTable leads={visibleLeads} exportContext={exportContext} />
+      <LeadTable
+        leads={visibleLeads}
+        totalMatching={leadsData?.totalMatching ?? null}
+        truncatedAt={leadsData?.truncatedAt ?? null}
+        exportContext={exportContext}
+        salesTeam={salesTeam}
+      />
     </PageShell>
   );
 }

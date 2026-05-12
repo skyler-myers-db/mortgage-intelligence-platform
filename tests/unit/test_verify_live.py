@@ -4,7 +4,6 @@ from pathlib import Path
 
 from tools.verify_live import ProbeResult, collect_red_flags
 
-
 REPO = Path(__file__).resolve().parents[2]
 
 

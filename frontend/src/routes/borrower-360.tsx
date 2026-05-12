@@ -25,6 +25,36 @@ import { useApp } from '../components/AppContext';
  * and forward link to the Offer Orchestrator.
  */
 
+function titleCaseStatus(status?: string | null, fallback = 'None'): string {
+  if (!status) return fallback;
+  return status.split('_').map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(' ');
+}
+
+function approvalVariant(status?: string | null): 'success' | 'danger' | 'warning' | 'neutral' {
+  if (status === 'approved') return 'success';
+  if (status === 'rejected') return 'danger';
+  if (status === 'hold') return 'warning';
+  return 'neutral';
+}
+
+function outreachVariant(status?: string | null): 'success' | 'warning' | 'neutral' {
+  if (status === 'sent' || status === 'replied' || status === 'actioned') return 'success';
+  if (status === 'queued' || status === 'bounced') return 'warning';
+  return 'neutral';
+}
+
+function formatDateTimeShort(value?: string | null): string {
+  if (!value) return '—';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
+
 export default function Borrower360() {
   const { id } = useParams();
   const { lastBorrowerId, setLastBorrowerId, saveLead, isLeadSaved } = useApp();
@@ -217,7 +247,12 @@ export default function Borrower360() {
         <>
           <ScoreBadge value={b.opportunity_score} />
           <ConfidenceMeter value={b.confidence} />
-          <Chip variant="warning">Approval pending</Chip>
+          <Chip variant={approvalVariant(b.approval_status)}>
+            Approval {titleCaseStatus(b.approval_status, 'Pending')}
+          </Chip>
+          <Chip variant={outreachVariant(b.outreach_status)}>
+            Outreach {titleCaseStatus(b.outreach_status)}
+          </Chip>
         </>
       }
     >
@@ -254,6 +289,16 @@ export default function Borrower360() {
                 k="Relationship flags"
                 v=""
                 childEl={<BorrowerTruthFlags borrower={b} />}
+              />
+              <Field k="Assigned to" v={b.assigned_to_label ?? b.assigned_to_email ?? 'Unassigned'} />
+              <Field k="Approval status" v={titleCaseStatus(b.approval_status, 'Pending')} />
+              <Field
+                k="Outreach status"
+                v={`${titleCaseStatus(b.outreach_status)} · ${formatDateTimeShort(b.outreach_at)}`}
+              />
+              <Field
+                k="Latest disposition"
+                v={`${titleCaseStatus(b.latest_disposition_outcome, 'Untouched')} · ${formatDateTimeShort(b.latest_disposition_at)}`}
               />
               <Field
                 k="Segments"

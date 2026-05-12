@@ -16,6 +16,13 @@ def test_segments():
 
 
 def test_approve_writes_audit():
-    res = client.post("/api/outreach/approve", json={"borrower_id": "B-48291", "actor": "test"})
+    res = client.post(
+        "/api/outreach/approve",
+        json={
+            "borrower_id": "B-48291",
+            "actor": "test",
+            "draft_body": "Governed approval body. Summit Mortgage, NMLS #123456. Equal Housing Lender. Reply unsubscribe to opt out.",
+        },
+    )
     assert res.status_code == 200
     assert res.json()["approved"] is True

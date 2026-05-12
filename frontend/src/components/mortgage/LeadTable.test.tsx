@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { buildLeadCsv, isEditableTarget } from './LeadTable';
+import {
+  buildLeadCsv,
+  isEditableTarget,
+  isLeadApprovalEligible,
+  isLeadSelectableForSalesOps,
+} from './LeadTable';
 import type { LeadSummary } from '../../types';
 
 /**
@@ -100,6 +105,23 @@ describe('synchronous in-flight latch shape', () => {
   });
 });
 
+describe('Sales Manager approval-state guards', () => {
+  it('keeps hold rows out of approval and sales-work selections', () => {
+    expect(isLeadApprovalEligible('hold')).toBe(false);
+    expect(isLeadSelectableForSalesOps('hold')).toBe(false);
+  });
+
+  it('allows approved rows to be assigned but not approved again', () => {
+    expect(isLeadApprovalEligible('approved')).toBe(false);
+    expect(isLeadSelectableForSalesOps('approved')).toBe(true);
+  });
+
+  it('keeps rejected rows locked out of sales work', () => {
+    expect(isLeadApprovalEligible('rejected')).toBe(false);
+    expect(isLeadSelectableForSalesOps('rejected')).toBe(false);
+  });
+});
+
 const sampleLead = (overrides: Partial<LeadSummary> = {}): LeadSummary => ({
   borrower_id: 'B-TEST1',
   display_name: 'Owner masked',
@@ -127,6 +149,11 @@ const sampleLead = (overrides: Partial<LeadSummary> = {}): LeadSummary => ({
   has_permit: false,
   listed_for_sale: false,
   related_property_count: 1,
+  marketing_eligible: true,
+  consent_status: 'opt_in',
+  suppression_reason: null,
+  last_touch_at: null,
+  eligible_recontact_at: null,
   ...overrides,
 });
 
@@ -148,9 +175,12 @@ describe('buildLeadCsv', () => {
     expect(csv).toContain('# refreshed_at=2026-05-09T21:54:00Z');
     expect(csv).toContain('# rules_version=rules.itm_abc123');
     expect(csv).toContain(
-      'approval_status,is_owner_occupied,is_investor,is_current_customer,is_former_customer,is_competitor_lien,current_lender_ref',
+      'approval_status,outreach_status,approved_at,outreach_at,assigned_to_email,assigned_at,latest_disposition_outcome',
     );
-    expect(csv).toContain('approved,true,false,false,true,true,Competitor A');
+    expect(csv).toContain(
+      'aging_days,is_owner_occupied,is_investor,is_current_customer,is_former_customer,is_competitor_lien,current_lender_ref',
+    );
+    expect(csv).toContain('approved,none,,,,,,,,,true,false,false,true,true,Competitor A');
     expect(csv).not.toContain('owner_name');
     expect(csv).not.toContain('street_address');
   });

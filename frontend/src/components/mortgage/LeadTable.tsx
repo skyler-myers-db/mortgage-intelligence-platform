@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { Link } from 'react-router-dom';
-import type { LeadSummary } from '../../types';
+import type { CallDisposition, LeadSummary, SalesTeamMember } from '../../types';
 import { Icon } from '../Icon';
 import { Chip, Button, EvidenceChip } from '../Primitives';
 import { ScoreBadge } from './ScoreBadge';
@@ -44,8 +44,44 @@ export interface LeadExportContext {
 
 interface LeadTableProps {
   leads: LeadSummary[];
+  totalMatching?: number | null;
+  truncatedAt?: number | null;
   exportContext?: LeadExportContext;
+  salesTeam?: SalesTeamMember[];
 }
+
+type RejectReasonCode =
+  | 'out_of_footprint'
+  | 'do_not_call'
+  | 'opt_out'
+  | 'fair_lending_review'
+  | 'low_intent'
+  | 'data_quality'
+  | 'other_with_text';
+
+const REJECT_REASONS: { code: RejectReasonCode; label: string }[] = [
+  { code: 'low_intent', label: 'Low intent' },
+  { code: 'do_not_call', label: 'Do Not Call' },
+  { code: 'opt_out', label: 'Opt-out' },
+  { code: 'fair_lending_review', label: 'Fair-lending review' },
+  { code: 'data_quality', label: 'Data quality' },
+  { code: 'out_of_footprint', label: 'Out of footprint' },
+  { code: 'other_with_text', label: 'Other' },
+];
+
+const DISPOSITION_OPTIONS: { outcome: CallDisposition['outcome']; label: string }[] = [
+  { outcome: 'called_no_answer', label: 'No answer' },
+  { outcome: 'called_left_voicemail', label: 'Left voicemail' },
+  { outcome: 'connected', label: 'Connected' },
+  { outcome: 'callback_scheduled', label: 'Callback scheduled' },
+  { outcome: 'application_started', label: 'Application started' },
+  { outcome: 'not_interested', label: 'Not interested' },
+  { outcome: 'not_now', label: 'Not now' },
+  { outcome: 'dead', label: 'Dead lead' },
+];
+
+type SortKey = 'rank' | 'relationship' | 'assignment' | 'outreach' | 'equity' | 'rate' | 'score' | 'confidence';
+type SortDir = 'asc' | 'desc';
 
 /**
  * Return true when `el` is an editable element that the window-level
@@ -75,6 +111,15 @@ function chunk<T>(items: T[], size: number): T[][] {
   return out;
 }
 
+function _newBulkId(): string {
+  const c = typeof globalThis !== 'undefined' ? globalThis.crypto : undefined;
+  if (c && typeof c.randomUUID === 'function') return c.randomUUID();
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (ch) => {
+    const n = ch === 'x' ? Math.floor(Math.random() * 16) : 8 + Math.floor(Math.random() * 4);
+    return n.toString(16);
+  });
+}
+
 function csvEscape(raw: string): string {
   const v = /^[=+\-@]/.test(raw) ? `'${raw}` : raw;
   return /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
@@ -85,6 +130,81 @@ function csvValue(raw: unknown): string {
   if (typeof raw === 'boolean') return raw ? 'true' : 'false';
   if (typeof raw === 'number') return Number.isFinite(raw) ? String(raw) : '';
   return String(raw);
+}
+
+function relationshipLabel(lead: LeadSummary): string {
+  if (lead.is_current_customer) return 'Current';
+  if (lead.is_former_customer) return 'Former';
+  if (lead.is_competitor_lien) return 'Competitor';
+  return 'Other';
+}
+
+function relationshipVariant(lead: LeadSummary): 'success' | 'warning' | 'neutral' {
+  if (lead.is_current_customer) return 'success';
+  if (lead.is_competitor_lien) return 'warning';
+  return 'neutral';
+}
+
+function sortValue(lead: LeadSummary, key: SortKey): string | number {
+  if (key === 'relationship') return relationshipLabel(lead);
+  if (key === 'assignment') return lead.assigned_to_label ?? lead.assigned_to_email ?? 'Unassigned';
+  if (key === 'outreach') return lead.outreach_status ?? 'none';
+  if (key === 'equity') return lead.equity_estimate;
+  if (key === 'rate') return lead.rate_spread_bps;
+  if (key === 'score') return lead.opportunity_score;
+  if (key === 'confidence') return lead.confidence;
+  return 0;
+}
+
+function outreachLabel(status?: string | null): string {
+  if (!status || status === 'none') return 'None';
+  return status.charAt(0).toUpperCase() + status.slice(1);
+}
+
+function outreachVariant(status?: string | null): 'success' | 'warning' | 'neutral' {
+  if (status === 'sent' || status === 'replied' || status === 'actioned') return 'success';
+  if (status === 'queued' || status === 'bounced') return 'warning';
+  return 'neutral';
+}
+
+function isTerminalApproval(status?: string | null): boolean {
+  return status === 'approved' || status === 'rejected' || status === 'hold';
+}
+
+function isNonWorkableApproval(status?: string | null): boolean {
+  return status === 'rejected' || status === 'hold';
+}
+
+export function isLeadSelectableForSalesOps(status?: string | null, localStatus?: string | null): boolean {
+  return !isNonWorkableApproval(status) && !isNonWorkableApproval(localStatus);
+}
+
+export function isLeadApprovalEligible(status?: string | null, localStatus?: string | null): boolean {
+  return !localStatus && !isTerminalApproval(status);
+}
+
+function dispositionLabel(outcome?: string | null): string {
+  if (!outcome) return 'Untouched';
+  return outcome.split('_').map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(' ');
+}
+
+function dispositionVariant(outcome?: string | null): 'success' | 'warning' | 'neutral' | 'danger' {
+  if (outcome === 'application_started' || outcome === 'callback_scheduled' || outcome === 'connected') return 'success';
+  if (outcome === 'called_no_answer' || outcome === 'called_left_voicemail' || outcome === 'not_now') return 'warning';
+  if (outcome === 'dead' || outcome === 'not_interested') return 'danger';
+  return 'neutral';
+}
+
+function formatDateTimeShort(value?: string | null): string {
+  if (!value) return '—';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
 }
 
 export function buildLeadCsv(
@@ -105,6 +225,15 @@ export function buildLeadCsv(
     'confidence',
     'recommended_offer',
     'approval_status',
+    'outreach_status',
+    'approved_at',
+    'outreach_at',
+    'assigned_to_email',
+    'assigned_at',
+    'latest_disposition_outcome',
+    'latest_disposition_at',
+    'latest_callback_at',
+    'aging_days',
     'is_owner_occupied',
     'is_investor',
     'is_current_customer',
@@ -116,14 +245,21 @@ export function buildLeadCsv(
     'has_permit',
     'listed_for_sale',
     'related_property_count',
+    'marketing_eligible',
+    'consent_status',
+    'suppression_reason',
+    'last_touch_at',
+    'eligible_recontact_at',
   ];
+  const exportableLeads = leads.filter((lead) => lead.marketing_eligible === true);
   const metadata = [
     ['generated_at', context.generatedAt ?? new Date().toISOString()],
     ['filters', context.filters ?? 'none'],
+    ['suppression_policy', 'eligible_only_default; non-eligible visible rows are excluded from client CSV'],
     ['refreshed_at', context.refreshedAt ?? 'unknown'],
     ['rules_version', context.rulesVersion ?? 'unknown'],
   ].map(([key, value]) => `# ${key}=${String(value).replace(/\r?\n/g, ' ')}`);
-  const rows = leads.map((l) =>
+  const rows = exportableLeads.map((l) =>
     [
       l.borrower_id,
       l.clip ?? '',
@@ -137,6 +273,15 @@ export function buildLeadCsv(
       l.confidence,
       l.recommended_offer,
       approvals[l.borrower_id] ?? l.approval_status ?? 'pending',
+      l.outreach_status ?? 'none',
+      l.approved_at ?? '',
+      l.outreach_at ?? '',
+      l.assigned_to_email ?? '',
+      l.assigned_at ?? '',
+      l.latest_disposition_outcome ?? '',
+      l.latest_disposition_at ?? '',
+      l.latest_callback_at ?? '',
+      l.aging_days ?? '',
       l.is_owner_occupied,
       l.is_investor,
       l.is_current_customer,
@@ -148,6 +293,11 @@ export function buildLeadCsv(
       l.has_permit,
       l.listed_for_sale,
       l.related_property_count,
+      l.marketing_eligible,
+      l.consent_status ?? 'unknown',
+      l.suppression_reason ?? '',
+      l.last_touch_at ?? '',
+      l.eligible_recontact_at ?? '',
     ]
       .map((value) => csvEscape(csvValue(value)))
       .join(','),
@@ -185,6 +335,10 @@ function RowPreview({ lead }: { lead: LeadSummary }) {
           <Cell k="Rate spread"   v={`+${lead.rate_spread_bps} bps`} mono />
           <Cell k="Score"         v={`${lead.opportunity_score}`} mono />
           <Cell k="Confidence"    v={`${lead.confidence}%`} mono />
+          <Cell k="Approval"      v={lead.approval_status ?? 'pending'} />
+          <Cell k="Outreach"      v={outreachLabel(lead.outreach_status)} />
+          <Cell k="Assigned to"   v={lead.assigned_to_label ?? lead.assigned_to_email ?? 'Unassigned'} />
+          <Cell k="Last touch"    v={dispositionLabel(lead.latest_disposition_outcome)} />
         </div>
         <div className="eyebrow mt-4 mb-2">Segments</div>
         <div className="chip-row">
@@ -290,13 +444,45 @@ function Cell({ k, v, mono }: { k: string; v: string; mono?: boolean }) {
   );
 }
 
-export function LeadTable({ leads, exportContext }: LeadTableProps) {
+export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exportContext, salesTeam = [] }: LeadTableProps) {
   const [expanded, setExpanded] = useState<string | null>(leads[0]?.borrower_id ?? null);
+  const [sortKey, setSortKey] = useState<SortKey>('rank');
+  const [sortDir, setSortDir] = useState<SortDir>('desc');
+  const [pendingReject, setPendingReject] = useState<string | null>(null);
+  const [rejectReasonCode, setRejectReasonCode] = useState<RejectReasonCode>('low_intent');
+  const [rejectRationale, setRejectRationale] = useState('');
+  const [bulkRationaleOpen, setBulkRationaleOpen] = useState(false);
+  const [bulkRationale, setBulkRationale] = useState('');
+  const [selectedAssignee, setSelectedAssignee] = useState<string>('');
+  const [salesToast, setSalesToast] = useState<string | null>(null);
+  const [salesBusy, setSalesBusy] = useState(false);
+  const [salesOverrides, setSalesOverrides] = useState<Record<string, Partial<LeadSummary>>>({});
+  const [pendingDisposition, setPendingDisposition] = useState<string | null>(null);
+  const [dispositionOutcome, setDispositionOutcome] = useState<CallDisposition['outcome']>('called_left_voicemail');
+  const [dispositionLo, setDispositionLo] = useState<string>('');
+  const [dispositionCallbackAt, setDispositionCallbackAt] = useState('');
+  const [dispositionNotes, setDispositionNotes] = useState('');
   const { approvals, setApproval, setLastBorrowerId } = useApp();
   const leadsById = useMemo(
-    () => new Map(leads.map((lead) => [lead.borrower_id, lead])),
-    [leads],
+    () => new Map(leads.map((lead) => [lead.borrower_id, { ...lead, ...(salesOverrides[lead.borrower_id] ?? {}) }])),
+    [leads, salesOverrides],
   );
+  const displayLeads = useMemo(
+    () => leads.map((lead) => ({ ...lead, ...(salesOverrides[lead.borrower_id] ?? {}) })),
+    [leads, salesOverrides],
+  );
+  const sortedLeads = useMemo(() => {
+    if (sortKey === 'rank') return displayLeads;
+    const direction = sortDir === 'asc' ? 1 : -1;
+    return [...displayLeads].sort((a, b) => {
+      const av = sortValue(a, sortKey);
+      const bv = sortValue(b, sortKey);
+      if (typeof av === 'number' && typeof bv === 'number') {
+        return (av - bv) * direction;
+      }
+      return String(av).localeCompare(String(bv)) * direction;
+    });
+  }, [displayLeads, sortDir, sortKey]);
   const [pendingApproval, setPendingApproval] = useState<Record<string, boolean>>({});
   const [approvalError, setApprovalError] = useState<string | null>(null);
   // Bulk-approve state. `selectedIds` is a Set so toggling is O(1); we
@@ -351,7 +537,11 @@ export function LeadTable({ leads, exportContext }: LeadTableProps) {
    * rejection ("server said no"). Hole-finder finding #2, 2026-04-23.
    */
   const approveLead = useCallback(
-    async (borrowerId: string, signal?: AbortSignal): Promise<'ok' | 'network' | 'backend' | 'aborted' | 'duplicate'> => {
+    async (
+      borrowerId: string,
+      signal?: AbortSignal,
+      extras: { rationale?: string | null; bulk_id?: string | null; bulk_rationale?: string | null } = {},
+    ): Promise<'ok' | 'network' | 'backend' | 'aborted' | 'duplicate'> => {
       // R5-04: synchronous latch check. setState is async, so a rapid
       // second click could slip in before `pendingApproval[id]` flips
       // to true and produce a second audit row. The ref flips
@@ -362,11 +552,17 @@ export function LeadTable({ leads, exportContext }: LeadTableProps) {
       setPendingApproval((p) => ({ ...p, [borrowerId]: true }));
       try {
         const lead = leadsById.get(borrowerId);
+        const draft = await api.draftOutreach(borrowerId, 'email', signal);
         const res = await api.approve(
           borrowerId,
           {
             evidence_ids: lead?.evidence_ids ?? [],
-            offer_code: lead?.recommended_offer ?? null,
+            offer_code: draft.offer_code ?? lead?.recommended_offer_code ?? null,
+            draft_body: draft.body,
+            channel: 'email',
+            rationale: extras.rationale ?? null,
+            bulk_id: extras.bulk_id ?? null,
+            bulk_rationale: extras.bulk_rationale ?? null,
           },
           signal,
         );
@@ -408,9 +604,9 @@ export function LeadTable({ leads, exportContext }: LeadTableProps) {
    * so the user can retry. Matches the approve flow's error posture.
    */
   const rejectLead = useCallback(
-    async (borrowerId: string) => {
+    async (borrowerId: string, reasonCode: RejectReasonCode, rationale: string | null = null) => {
       // R5-04: synchronous latch — see approveLead above.
-      if (rowInFlightRef.current[borrowerId]) return;
+      if (rowInFlightRef.current[borrowerId]) return false;
       rowInFlightRef.current[borrowerId] = true;
       setApprovalError(null);
       setPendingApproval((p) => ({ ...p, [borrowerId]: true }));
@@ -420,21 +616,26 @@ export function LeadTable({ leads, exportContext }: LeadTableProps) {
           borrowerId,
           {
             evidence_ids: lead?.evidence_ids ?? [],
-            offer_code: lead?.recommended_offer ?? null,
+            offer_code: lead?.recommended_offer_code ?? null,
+            rationale_code: reasonCode,
+            rationale,
           },
         );
         if (res.rejected) {
           setApproval(borrowerId, 'rejected');
+          return true;
         } else {
           setApprovalError(`Reject failed for ${borrowerId}: endpoint returned rejected=false.`);
+          return false;
         }
       } catch (err: unknown) {
-        if (isAbortError(err)) return;
+        if (isAbortError(err)) return false;
         setApprovalError(
           err instanceof Error
             ? `Couldn't reject ${borrowerId}: ${err.message}`
             : `Couldn't reject ${borrowerId}.`,
         );
+        return false;
       } finally {
         rowInFlightRef.current[borrowerId] = false;
         setPendingApproval((p) => {
@@ -445,6 +646,16 @@ export function LeadTable({ leads, exportContext }: LeadTableProps) {
     },
     [leadsById, setApproval],
   );
+
+  const submitReject = useCallback(async () => {
+    if (!pendingReject) return;
+    const rejected = await rejectLead(pendingReject, rejectReasonCode, rejectRationale.trim() || null);
+    if (rejected) {
+      setPendingReject(null);
+      setRejectRationale('');
+      setRejectReasonCode('low_intent');
+    }
+  }, [pendingReject, rejectLead, rejectRationale, rejectReasonCode]);
 
   /**
    * Toggle one row's selection. Called by the row checkbox onChange; the
@@ -464,41 +675,164 @@ export function LeadTable({ leads, exportContext }: LeadTableProps) {
     setSelectedIds(new Set());
   }, []);
 
-  // IDs that are actually eligible for bulk approval: not already approved
-  // or rejected. The "select all" header checkbox targets this subset so
-  // already-decided rows don't get bulk-approved again.
-  const eligibleIds = useMemo(
+  useEffect(() => {
+    if (!selectedAssignee && salesTeam.length > 0) {
+      setSelectedAssignee(salesTeam[0].email);
+    }
+  }, [salesTeam, selectedAssignee]);
+
+  useEffect(() => {
+    if (!pendingDisposition) return;
+    const lead = leadsById.get(pendingDisposition);
+    setDispositionLo(lead?.assigned_to_email ?? selectedAssignee ?? salesTeam[0]?.email ?? '');
+    setDispositionOutcome('called_left_voicemail');
+    setDispositionCallbackAt('');
+    setDispositionNotes('');
+  }, [leadsById, pendingDisposition, salesTeam, selectedAssignee]);
+
+  useEffect(() => {
+    if (!salesToast) return;
+    const t = window.setTimeout(() => setSalesToast(null), 4000);
+    return () => window.clearTimeout(t);
+  }, [salesToast]);
+
+  // Sales Manager selection is broader than approval eligibility: already
+  // approved rows must still be selectable for assignment/distribution.
+  // Rejected and hold rows remain locked out so operations do not
+  // accidentally work a dropped or governance-held borrower.
+  const selectableIds = useMemo(
     () =>
-      leads
+      displayLeads
+        .filter((l) => isLeadSelectableForSalesOps(l.approval_status, approvals[l.borrower_id]))
+        .map((l) => l.borrower_id),
+    [displayLeads, approvals],
+  );
+  const approvalEligibleIds = useMemo(
+    () =>
+      displayLeads
         .filter((l) => {
-          const serverDecided = l.approval_status === 'approved' || l.approval_status === 'rejected';
-          return !approvals[l.borrower_id] && !serverDecided;
+          const localStatus = approvals[l.borrower_id];
+          return isLeadApprovalEligible(l.approval_status, localStatus);
         })
         .map((l) => l.borrower_id),
-    [leads, approvals],
+    [displayLeads, approvals],
   );
+
+  const applyAssignmentOverrides = useCallback((assignments: { borrower_id: string; assigned_to_email: string; assigned_to_label?: string | null; assigned_at: string; expires_at?: string | null }[]) => {
+    setSalesOverrides((current) => {
+      const next = { ...current };
+      assignments.forEach((assignment) => {
+        next[assignment.borrower_id] = {
+          ...(next[assignment.borrower_id] ?? {}),
+          assigned_to_email: assignment.assigned_to_email,
+          assigned_to_label: assignment.assigned_to_label ?? assignment.assigned_to_email,
+          assigned_at: assignment.assigned_at,
+          assignment_expires_at: assignment.expires_at ?? null,
+        };
+      });
+      return next;
+    });
+  }, []);
+
+  const assignSelected = useCallback(async (mode: 'selected-lo' | 'round-robin') => {
+    if (salesBusy) return;
+    const borrowerIds = [...selectedIds].filter((id) => selectableIds.includes(id));
+    if (borrowerIds.length === 0) return;
+    const loEmails = mode === 'round-robin'
+      ? salesTeam.map((member) => member.email)
+      : selectedAssignee
+        ? [selectedAssignee]
+        : [];
+    if (loEmails.length === 0) {
+      setApprovalError('No active loan officers are available for assignment.');
+      return;
+    }
+    setSalesBusy(true);
+    setApprovalError(null);
+    try {
+      const result = borrowerIds.length === 1 && loEmails.length === 1
+        ? {
+            assigned_count: 1,
+            assignments: [(await api.assignLead(borrowerIds[0], loEmails[0])).assignment],
+          }
+        : await api.distributeLeads(borrowerIds, loEmails, mode === 'round-robin' ? 'round_robin' : 'score_balanced');
+      applyAssignmentOverrides(result.assignments);
+      setSalesToast(`${result.assigned_count} ${result.assigned_count === 1 ? 'lead' : 'leads'} assigned`);
+      setSelectedIds(new Set());
+    } catch (err: unknown) {
+      setApprovalError(
+        err instanceof Error
+          ? `Couldn't assign selected leads: ${err.message}`
+          : "Couldn't assign selected leads.",
+      );
+    } finally {
+      setSalesBusy(false);
+    }
+  }, [applyAssignmentOverrides, salesBusy, salesTeam, selectableIds, selectedAssignee, selectedIds]);
+
+  const submitDisposition = useCallback(async () => {
+    if (!pendingDisposition) return;
+    if (!dispositionLo) {
+      setApprovalError('Choose the loan officer who worked this lead.');
+      return;
+    }
+    if (dispositionOutcome === 'callback_scheduled' && !dispositionCallbackAt) {
+      setApprovalError('Callback scheduled dispositions require a callback time.');
+      return;
+    }
+    setSalesBusy(true);
+    setApprovalError(null);
+    try {
+      const result = await api.logDisposition(pendingDisposition, {
+        lo_email: dispositionLo,
+        outcome: dispositionOutcome,
+        callback_at: dispositionCallbackAt ? new Date(dispositionCallbackAt).toISOString() : null,
+        notes: dispositionNotes.trim() || null,
+      });
+      setSalesOverrides((current) => ({
+        ...current,
+        [pendingDisposition]: {
+          ...(current[pendingDisposition] ?? {}),
+          assigned_to_email: current[pendingDisposition]?.assigned_to_email ?? leadsById.get(pendingDisposition)?.assigned_to_email ?? dispositionLo,
+          latest_disposition_outcome: result.disposition.outcome,
+          latest_disposition_at: result.disposition.occurred_at,
+          latest_callback_at: result.disposition.callback_at ?? null,
+        },
+      }));
+      setSalesToast(`${dispositionLabel(result.disposition.outcome)} logged for ${pendingDisposition}`);
+      setPendingDisposition(null);
+    } catch (err: unknown) {
+      setApprovalError(
+        err instanceof Error
+          ? `Couldn't log disposition: ${err.message}`
+          : "Couldn't log disposition.",
+      );
+    } finally {
+      setSalesBusy(false);
+    }
+  }, [dispositionCallbackAt, dispositionLo, dispositionNotes, dispositionOutcome, leadsById, pendingDisposition]);
 
   // Indeterminate state for the header checkbox: some (but not all)
   // eligible rows selected. We also reflect "all eligible selected" as
   // the checked state.
   const headerCheckboxState = useMemo(() => {
-    if (eligibleIds.length === 0) return { checked: false, indeterminate: false };
-    const selectedEligibleCount = eligibleIds.filter((id) => selectedIds.has(id)).length;
+    if (selectableIds.length === 0) return { checked: false, indeterminate: false };
+    const selectedEligibleCount = selectableIds.filter((id) => selectedIds.has(id)).length;
     if (selectedEligibleCount === 0) return { checked: false, indeterminate: false };
-    if (selectedEligibleCount === eligibleIds.length) return { checked: true, indeterminate: false };
+    if (selectedEligibleCount === selectableIds.length) return { checked: true, indeterminate: false };
     return { checked: false, indeterminate: true };
-  }, [eligibleIds, selectedIds]);
+  }, [selectableIds, selectedIds]);
 
   const toggleSelectAll = useCallback(() => {
     setSelectedIds((cur) => {
-      // If any eligible rows remain unselected, select all eligible. Else
+      // If any selectable rows remain unselected, select all selectable. Else
       // clear the selection.
       const allEligibleSelected =
-        eligibleIds.length > 0 && eligibleIds.every((id) => cur.has(id));
+        selectableIds.length > 0 && selectableIds.every((id) => cur.has(id));
       if (allEligibleSelected) return new Set();
-      return new Set(eligibleIds);
+      return new Set(selectableIds);
     });
-  }, [eligibleIds]);
+  }, [selectableIds]);
 
   /**
    * Bulk-approve: loop `api.approve()` per selected id in chunks of
@@ -516,8 +850,16 @@ export function LeadTable({ leads, exportContext }: LeadTableProps) {
     if (bulkInFlightRef.current || bulkApproving) return;
     bulkInFlightRef.current = true;
     // Snapshot which ids to run: skip already-decided rows silently.
-    const ids = [...selectedIds].filter((id) => !approvals[id]);
+    const eligibleForApproval = new Set(approvalEligibleIds);
+    const ids = [...selectedIds].filter((id) => eligibleForApproval.has(id));
     if (ids.length === 0) {
+      bulkInFlightRef.current = false;
+      return;
+    }
+    const bulkId = ids.length > 1 ? _newBulkId() : null;
+    const sharedRationale = ids.length > 1 ? bulkRationale.trim() : '';
+    if (ids.length > 1 && sharedRationale.length === 0) {
+      setBulkRationaleOpen(true);
       bulkInFlightRef.current = false;
       return;
     }
@@ -545,7 +887,10 @@ export function LeadTable({ leads, exportContext }: LeadTableProps) {
         abortedIds.push(...group);
         continue;
       }
-      const results = await Promise.all(group.map((id) => approveLead(id, ctrl.signal)));
+      const results = await Promise.all(group.map((id) => approveLead(id, ctrl.signal, {
+        bulk_id: bulkId,
+        bulk_rationale: sharedRationale || null,
+      })));
       results.forEach((outcome, i) => {
         if (outcome === 'ok') {
           ok += 1;
@@ -582,11 +927,13 @@ export function LeadTable({ leads, exportContext }: LeadTableProps) {
     // server may have committed them and a blind re-click would
     // duplicate the audit row. R5-21 (2026-04-23).
     setSelectedIds(new Set(failedIds));
+    setBulkRationaleOpen(false);
+    setBulkRationale('');
     setBulkApproving(false);
     setBulkToast({ ok, fail, network, aborted });
     bulkAbortRef.current = null;
     bulkInFlightRef.current = false;
-  }, [bulkApproving, selectedIds, approvals, approveLead]);
+  }, [approvalEligibleIds, bulkApproving, selectedIds, approveLead, bulkRationale]);
 
   // On mount: if the previous mount left a partial bulk-approve snapshot
   // in sessionStorage (user navigated away mid-loop), flash a compact
@@ -656,23 +1003,29 @@ export function LeadTable({ leads, exportContext }: LeadTableProps) {
         return;
       }
       if (!expanded) return;
+      const expandedLead = leadsById.get(expanded);
+      const expandedStatus = approvals[expanded] ?? expandedLead?.approval_status;
       if (key === 'a') {
-        if (approvals[expanded] === 'approved') return;
+        if (isTerminalApproval(expandedStatus)) return;
         e.preventDefault();
         void approveLead(expanded);
       } else if (key === 'r') {
-        if (approvals[expanded] === 'rejected') return;
+        if (isTerminalApproval(expandedStatus)) return;
         e.preventDefault();
-        void rejectLead(expanded);
+        setPendingReject(expanded);
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [expanded, approvals, approveLead, rejectLead, selectedIds, bulkApproving, bulkApprove]);
+  }, [expanded, approvals, approveLead, selectedIds, bulkApproving, bulkApprove, leadsById]);
 
   const stop = (e: ReactKeyboardEvent | React.MouseEvent) => e.stopPropagation();
 
   const selectionCount = selectedIds.size;
+  const selectedApprovalEligibleCount = useMemo(
+    () => approvalEligibleIds.filter((id) => selectedIds.has(id)).length,
+    [approvalEligibleIds, selectedIds],
+  );
 
   /**
    * Export the currently-visible leads as CSV. Client-side only: the
@@ -696,6 +1049,37 @@ export function LeadTable({ leads, exportContext }: LeadTableProps) {
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
   }, [leads, approvals, exportContext]);
+
+  const toggleSort = useCallback((key: SortKey) => {
+    if (key === 'rank') {
+      setSortKey('rank');
+      setSortDir('desc');
+      return;
+    }
+    setSortKey((current) => {
+      if (current === key) {
+        setSortDir((dir) => (dir === 'desc' ? 'asc' : 'desc'));
+        return current;
+      }
+      setSortDir('desc');
+      return key;
+    });
+  }, []);
+
+  const renderSortHeader = (key: SortKey, label: string) => (
+    <button
+      type="button"
+      className="tbl__sort"
+      onClick={() => toggleSort(key)}
+      aria-label={`Sort by ${label}`}
+      aria-pressed={sortKey === key}
+    >
+      <span>{label}</span>
+      {sortKey === key && key !== 'rank' && (
+        <Icon name={sortDir === 'desc' ? 'down' : 'up'} size={10} />
+      )}
+    </button>
+  );
 
   return (
     // 2026-05-04 fix (alignment): removed inline `overflow: hidden`.
@@ -742,8 +1126,171 @@ export function LeadTable({ leads, exportContext }: LeadTableProps) {
           </Button>
         </div>
       </div>
+      {pendingReject && (
+        <form
+          className="decision-panel decision-panel--inline"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void submitReject();
+          }}
+        >
+          <div>
+            <div className="h-4">Reject rationale</div>
+            <div className="muted fs-12">
+              Record the committee-visible reason for {pendingReject}.
+            </div>
+          </div>
+          <label className="decision-panel__field">
+            <span className="field__label">Reason</span>
+            <select
+              value={rejectReasonCode}
+              onChange={(e) => setRejectReasonCode(e.target.value as RejectReasonCode)}
+            >
+              {REJECT_REASONS.map((reason) => (
+                <option key={reason.code} value={reason.code}>{reason.label}</option>
+              ))}
+            </select>
+          </label>
+          <label className="decision-panel__field decision-panel__field--wide">
+            <span className="field__label">Rationale note</span>
+            <textarea
+              value={rejectRationale}
+              onChange={(e) => setRejectRationale(e.target.value)}
+              maxLength={500}
+              placeholder="Optional unless reason is Other."
+            />
+          </label>
+          <div className="decision-panel__actions">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setPendingReject(null);
+                setRejectRationale('');
+                setRejectReasonCode('low_intent');
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              variant="primary"
+              size="sm"
+              icon="cross"
+              disabled={rejectReasonCode === 'other_with_text' && rejectRationale.trim().length === 0}
+            >
+              Confirm reject
+            </Button>
+          </div>
+        </form>
+      )}
+      {pendingDisposition && (
+        <form
+          className="decision-panel decision-panel--inline"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void submitDisposition();
+          }}
+        >
+          <div>
+            <div className="h-4">Call disposition</div>
+            <div className="muted fs-12">
+              Log LO activity for {pendingDisposition}.
+            </div>
+          </div>
+          <label className="decision-panel__field">
+            <span className="field__label">Loan officer</span>
+            <select
+              value={dispositionLo}
+              onChange={(e) => setDispositionLo(e.target.value)}
+              required
+            >
+              <option value="" disabled>Choose LO</option>
+              {salesTeam.map((member) => (
+                <option key={member.email} value={member.email}>
+                  {member.display_label} · {member.email}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="decision-panel__field">
+            <span className="field__label">Outcome</span>
+            <select
+              value={dispositionOutcome}
+              onChange={(e) => setDispositionOutcome(e.target.value as CallDisposition['outcome'])}
+            >
+              {DISPOSITION_OPTIONS.map((option) => (
+                <option key={option.outcome} value={option.outcome}>{option.label}</option>
+              ))}
+            </select>
+          </label>
+          {dispositionOutcome === 'callback_scheduled' && (
+            <label className="decision-panel__field">
+              <span className="field__label">Callback time</span>
+              <input
+                type="datetime-local"
+                value={dispositionCallbackAt}
+                onChange={(e) => setDispositionCallbackAt(e.target.value)}
+                required
+              />
+            </label>
+          )}
+          <label className="decision-panel__field decision-panel__field--wide">
+            <span className="field__label">Notes</span>
+            <textarea
+              value={dispositionNotes}
+              onChange={(e) => setDispositionNotes(e.target.value)}
+              maxLength={500}
+              placeholder="Optional operational note; no borrower PII."
+            />
+          </label>
+          <div className="decision-panel__actions">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => setPendingDisposition(null)}
+              disabled={salesBusy}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              variant="primary"
+              size="sm"
+              icon="bolt"
+              disabled={salesBusy || !dispositionLo}
+            >
+              {salesBusy ? 'Logging…' : 'Log disposition'}
+            </Button>
+          </div>
+        </form>
+      )}
+      {salesToast && (
+        <div role="status" aria-live="polite" className="table-success">
+          {salesToast}
+        </div>
+      )}
       <div className="tbl-wrap" tabIndex={0} aria-label="Ranked borrowers table scroll region">
-        <table className="tbl">
+        <table className="tbl lead-table__table">
+          <colgroup>
+            <col className="lead-table__col-select" />
+            <col className="lead-table__col-expand" />
+            <col className="lead-table__col-borrower" />
+            <col className="lead-table__col-location" />
+            <col className="lead-table__col-relationship" />
+            <col className="lead-table__col-assignment" />
+            <col className="lead-table__col-outreach" />
+            <col className="lead-table__col-disposition" />
+            <col className="lead-table__col-segments" />
+            <col className="lead-table__col-equity" />
+            <col className="lead-table__col-rate" />
+            <col className="lead-table__col-offer" />
+            <col className="lead-table__col-score" />
+            <col className="lead-table__col-confidence" />
+            <col className="lead-table__col-approval" />
+          </colgroup>
           <thead>
             <tr>
               <th className="tbl-cell--select">
@@ -754,7 +1301,7 @@ export function LeadTable({ leads, exportContext }: LeadTableProps) {
                   ref={(el) => {
                     if (el) el.indeterminate = headerCheckboxState.indeterminate;
                   }}
-                  disabled={eligibleIds.length === 0 || bulkApproving}
+                  disabled={selectableIds.length === 0 || bulkApproving}
                   onChange={toggleSelectAll}
                   onClick={stop}
                   data-testid="lead-select-all"
@@ -763,29 +1310,33 @@ export function LeadTable({ leads, exportContext }: LeadTableProps) {
               <th className="tbl-cell--narrow"></th>
               <th>Borrower</th>
               <th>Location</th>
+              <th>{renderSortHeader('relationship', 'Relationship')}</th>
+              <th>{renderSortHeader('assignment', 'Assigned to')}</th>
+              <th>{renderSortHeader('outreach', 'Outreach')}</th>
+              <th>Last touch</th>
               <th>Segments</th>
-              <th className="tbl-cell--right">Equity</th>
-              <th className="tbl-cell--right">Rate Δ (bps)</th>
+              <th className="tbl-cell--right">{renderSortHeader('equity', 'Equity')}</th>
+              <th className="tbl-cell--right">{renderSortHeader('rate', 'Rate Δ (bps)')}</th>
               <th>Next-best-offer</th>
-              <th className="tbl-cell--right">Score</th>
-              <th>Confidence</th>
+              <th className="tbl-cell--right">{renderSortHeader('score', 'Score')}</th>
+              <th>{renderSortHeader('confidence', 'Confidence')}</th>
               <th>Approval</th>
             </tr>
           </thead>
           <tbody>
-            {leads.map((lead) => {
+            {sortedLeads.map((lead) => {
               const isOpen = expanded === lead.borrower_id;
               // Prefer in-session AppContext override (set optimistically on
               // approve/reject); fall back to the server-projected
               // approval_status so a page reload doesn't make approved
               // borrowers look pending. Round-2 hole-finder #12, 2026-04-23.
               const serverStatus = lead.approval_status;
-              const approval = approvals[lead.borrower_id]
-                ?? (serverStatus === 'approved' || serverStatus === 'rejected'
+              const approval: string | undefined = approvals[lead.borrower_id]
+                ?? (isTerminalApproval(serverStatus)
                     ? serverStatus
                     : undefined);
               const isSelected = selectedIds.has(lead.borrower_id);
-              const isEligible = !approval;
+              const isSelectable = isLeadSelectableForSalesOps(serverStatus, approval);
               return (
                 <Fragment key={lead.borrower_id}>
                   <tr
@@ -818,7 +1369,7 @@ export function LeadTable({ leads, exportContext }: LeadTableProps) {
                         type="checkbox"
                         aria-label={`Select lead ${lead.borrower_id}`}
                         checked={isSelected}
-                        disabled={!isEligible || bulkApproving}
+                        disabled={!isSelectable || bulkApproving}
                         onChange={() => toggleSelect(lead.borrower_id)}
                         onClick={stop}
                         data-testid={`lead-select-${lead.borrower_id}`}
@@ -838,6 +1389,61 @@ export function LeadTable({ leads, exportContext }: LeadTableProps) {
                     <td>
                       {lead.city}, {lead.state}
                       <div className="muted mono lead-table__zip">{lead.zip}</div>
+                    </td>
+                    <td>
+                      <div className="chip-stack">
+                        <Chip variant={relationshipVariant(lead)}>
+                          {relationshipLabel(lead)}
+                        </Chip>
+                        {lead.marketing_eligible === false && (
+                          <Chip variant="warning">
+                            Suppressed{lead.suppression_reason ? `: ${lead.suppression_reason}` : ''}
+                          </Chip>
+                        )}
+                      </div>
+                    </td>
+                    <td>
+                      <div className="chip-stack">
+                        <Chip variant={lead.assigned_to_email ? 'success' : 'neutral'}>
+                          {lead.assigned_to_label ?? lead.assigned_to_email ?? 'Unassigned'}
+                        </Chip>
+                        {lead.assigned_at && (
+                          <span className="muted mono fs-11">{formatDateTimeShort(lead.assigned_at)}</span>
+                        )}
+                      </div>
+                    </td>
+                    <td>
+                      <div className="chip-stack">
+                        <Chip variant={outreachVariant(lead.outreach_status)}>
+                          {outreachLabel(lead.outreach_status)}
+                        </Chip>
+                        {typeof lead.aging_days === 'number' && lead.aging_days > 7 && (
+                          <Chip variant="warning">{lead.aging_days}d aging</Chip>
+                        )}
+                      </div>
+                    </td>
+                    <td>
+                      <div className="chip-stack lead-table__last-touch" onClick={stop}>
+                        <Chip variant={dispositionVariant(lead.latest_disposition_outcome)}>
+                          {dispositionLabel(lead.latest_disposition_outcome)}
+                        </Chip>
+                        {lead.latest_disposition_at && (
+                          <span className="muted mono fs-11">{formatDateTimeShort(lead.latest_disposition_at)}</span>
+                        )}
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          icon="bolt"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setPendingDisposition(lead.borrower_id);
+                          }}
+                          disabled={salesBusy || salesTeam.length === 0}
+                          aria-label={`Log call disposition for ${lead.borrower_id}`}
+                        >
+                          Log
+                        </Button>
+                      </div>
                     </td>
                     <td>
                       <div className="lead-table__segments">
@@ -878,6 +1484,7 @@ export function LeadTable({ leads, exportContext }: LeadTableProps) {
                     >
                       {approval === 'approved' && <Chip variant="success" icon="check">Approved</Chip>}
                       {approval === 'rejected' && <Chip variant="danger" icon="cross">Rejected</Chip>}
+                      {approval === 'hold' && <Chip variant="warning" icon="shield">Hold</Chip>}
                       {!approval && (
                         <div
                           className="lead-table__approval-actions"
@@ -905,7 +1512,7 @@ export function LeadTable({ leads, exportContext }: LeadTableProps) {
                             disabled={Boolean(pendingApproval[lead.borrower_id])}
                             onClick={(e) => {
                               e.stopPropagation();
-                              void rejectLead(lead.borrower_id);
+                              setPendingReject(lead.borrower_id);
                             }}
                             data-testid={`lead-reject-${lead.borrower_id}`}
                           >
@@ -917,7 +1524,7 @@ export function LeadTable({ leads, exportContext }: LeadTableProps) {
                   </tr>
                   {isOpen && (
                     <tr className="tbl__expand">
-                      <td colSpan={11}>
+                      <td colSpan={15}>
                         <RowPreview lead={lead} />
                       </td>
                     </tr>
@@ -938,7 +1545,57 @@ export function LeadTable({ leads, exportContext }: LeadTableProps) {
           <div className="bulk-actions__label">
             <span className="mono num">{selectionCount}</span> {selectionCount === 1 ? 'lead' : 'leads'} selected
           </div>
+          {selectionCount > 1 && bulkRationaleOpen && (
+            <label className="bulk-actions__rationale">
+              <span className="field__label">Shared approval rationale</span>
+              <input
+                value={bulkRationale}
+                onChange={(e) => setBulkRationale(e.target.value)}
+                maxLength={500}
+                placeholder="Example: Q3 retention sweep, all reviewed against current rules."
+              />
+            </label>
+          )}
           <div className="bulk-actions__controls">
+            {salesTeam.length > 0 && (
+              <>
+                <label className="bulk-actions__assignee">
+                  <span className="field__label">Assign to</span>
+                  <select
+                    value={selectedAssignee}
+                    onChange={(e) => setSelectedAssignee(e.target.value)}
+                    disabled={salesBusy}
+                    aria-label="Loan officer assignment target"
+                  >
+                    {salesTeam.map((member) => (
+                      <option key={member.email} value={member.email}>
+                        {member.display_label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <Button
+                  variant="default"
+                  size="sm"
+                  icon="user"
+                  onClick={() => void assignSelected('selected-lo')}
+                  disabled={salesBusy || !selectedAssignee || selectionCount === 0}
+                  aria-label={`Assign ${selectionCount} selected leads to selected loan officer`}
+                >
+                  {salesBusy ? 'Assigning…' : 'Assign'}
+                </Button>
+                <Button
+                  variant="default"
+                  size="sm"
+                  icon="layers"
+                  onClick={() => void assignSelected('round-robin')}
+                  disabled={salesBusy || salesTeam.length === 0 || selectionCount === 0}
+                  aria-label={`Distribute ${selectionCount} selected leads across active loan officers`}
+                >
+                  Distribute
+                </Button>
+              </>
+            )}
             {bulkToast && (
               <span
                 role="status"
@@ -983,11 +1640,11 @@ export function LeadTable({ leads, exportContext }: LeadTableProps) {
               size="sm"
               icon={bulkApproving ? undefined : 'check'}
               onClick={() => void bulkApprove()}
-              disabled={bulkApproving || selectionCount === 0}
+              disabled={bulkApproving || selectedApprovalEligibleCount === 0}
               data-testid="lead-bulk-approve"
-              aria-label={`Approve ${selectionCount} leads`}
+              aria-label={`Approve ${selectedApprovalEligibleCount} eligible leads`}
             >
-              {bulkApproving ? 'Approving…' : `Approve ${selectionCount} leads`}
+              {bulkApproving ? 'Approving…' : `Approve ${selectedApprovalEligibleCount} eligible`}
             </Button>
           </div>
         </div>
@@ -1002,6 +1659,14 @@ export function LeadTable({ leads, exportContext }: LeadTableProps) {
       )}
       <div className="surface__ft">
         Showing {leads.length.toLocaleString()} ranked borrower{leads.length === 1 ? '' : 's'}
+        {totalMatching !== null && (
+          <>
+            {' '}of {totalMatching.toLocaleString()} total matching filters
+          </>
+        )}
+        {truncatedAt !== null && totalMatching !== null && totalMatching > leads.length && (
+          <span className="muted"> · capped at {truncatedAt.toLocaleString()}</span>
+        )}
       </div>
     </div>
   );

@@ -1,6 +1,7 @@
 export type SegmentCode = 'itm' | 'listed' | 'permit' | 'investor' | 'equity' | 'retention';
 export type OfferType = 'refi' | 'heloc' | 'cash_out' | 'purchase' | 'retention' | 'recapture';
 export type ApprovalStatus = 'pending' | 'approved' | 'rejected' | 'hold';
+export type OutreachStatus = 'none' | 'queued' | 'actioned' | 'sent' | 'bounced' | 'replied';
 
 export interface EvidenceEvent {
   evidence_id: string;
@@ -38,10 +39,15 @@ export interface LeadSummary {
   rate_spread_bps: number;
   opportunity_score: number;
   confidence: number;
+  /** Canonical lowercase code emitted by fn_next_best_offer. */
+  recommended_offer_code?: string;
   recommended_offer: string;
   why_now: string;
   evidence_ids: string[];
   approval_status: ApprovalStatus;
+  outreach_status?: OutreachStatus;
+  approved_at?: string | null;
+  outreach_at?: string | null;
   /** Secondary-filter fields (2026-04-23). Carried from gold.borrower_360
    *  through gold.lead_population so /segment-intelligence can run real
    *  client-side predicates against occupancy, owner-link, lien state,
@@ -61,6 +67,112 @@ export interface LeadSummary {
   listed_for_sale?: boolean;
   /** Public-demo-safe lender alias for the current open lien holder. */
   current_lender_ref?: string | null;
+  marketing_eligible?: boolean;
+  consent_status?: 'opt_in' | 'opt_out' | 'unknown';
+  suppression_reason?: string | null;
+  last_touch_at?: string | null;
+  eligible_recontact_at?: string | null;
+  assigned_to_email?: string | null;
+  assigned_to_label?: string | null;
+  assigned_at?: string | null;
+  assignment_expires_at?: string | null;
+  latest_disposition_outcome?: string | null;
+  latest_disposition_at?: string | null;
+  latest_callback_at?: string | null;
+  aging_days?: number | null;
+}
+
+export interface SalesTeamMember {
+  email: string;
+  display_label: string;
+  role: 'loan_officer' | 'sales_manager' | 'admin';
+  region?: string | null;
+  manager_email?: string | null;
+  capacity_per_day: number;
+  active: boolean;
+}
+
+export interface LeadAssignment {
+  assignment_id: string;
+  borrower_id: string;
+  assigned_to_email: string;
+  assigned_to_label?: string | null;
+  assigned_by: string;
+  assigned_at: string;
+  expires_at?: string | null;
+  released_at?: string | null;
+  strategy: 'manual' | 'round_robin' | 'score_balanced';
+}
+
+export interface CallDisposition {
+  disposition_id: string;
+  borrower_id: string;
+  lo_email: string;
+  outcome:
+    | 'called_no_answer'
+    | 'called_left_voicemail'
+    | 'connected'
+    | 'callback_scheduled'
+    | 'application_started'
+    | 'not_interested'
+    | 'not_now'
+    | 'dead';
+  attempt_number: number;
+  occurred_at: string;
+  callback_at?: string | null;
+  notes?: string | null;
+  audit_event_id?: string | null;
+}
+
+export interface BorrowerLifecycle {
+  borrower_id: string;
+  approval_status: ApprovalStatus;
+  outreach_status: OutreachStatus;
+  approved_at?: string | null;
+  outreach_at?: string | null;
+  synced_at?: string | null;
+  assignment?: LeadAssignment | null;
+  latest_disposition?: CallDisposition | null;
+}
+
+export interface SalesAgingLead {
+  borrower_id: string;
+  approval_status: 'approved';
+  approved_at: string;
+  age_days: number;
+  outreach_status: OutreachStatus;
+  outreach_at?: string | null;
+  assigned_to_email?: string | null;
+  latest_disposition_outcome?: string | null;
+  latest_disposition_at?: string | null;
+}
+
+export interface SalesStandupResponse {
+  date: string;
+  calls_logged: number;
+  contacts_reached: number;
+  callbacks_scheduled: number;
+  applications_started: number;
+  dead_leads: number;
+  by_lo: Array<{
+    lo_email: string;
+    outcomes: Record<string, number>;
+    calls_logged: number;
+  }>;
+}
+
+export interface SalesConversionResponse {
+  from_date: string;
+  to_date: string;
+  group_by: 'lo' | 'cohort';
+  rows: Array<{
+    group_key: string;
+    calls_attempted: number;
+    contacts_reached: number;
+    callbacks_scheduled: number;
+    applications_started: number;
+    application_start_rate: number;
+  }>;
 }
 
 export interface SavedLead {
@@ -80,7 +192,7 @@ export type SavedLeadInput = Omit<SavedLead, 'saved_at' | 'updated_at'>;
 export interface SavedDraft {
   borrower_id: string;
   offer_code?: string | null;
-  channel: 'email' | 'sms';
+  channel: 'email' | 'sms' | 'direct_mail';
   body: string;
   saved_at: string;
   updated_at: string;
@@ -163,9 +275,30 @@ export interface PortfolioPreview {
 
 export interface PortfolioCreateResponse {
   portfolio_id: string;
+  campaign_id?: string | null;
   name: string;
   marketable_population: number;
   audit_event_id?: string | null;
+}
+
+export interface CampaignSummary {
+  campaign_id: string;
+  name: string;
+  owner_email: string;
+  status: 'draft' | 'pending_review' | 'approved' | 'live' | 'active' | 'rejected' | 'archived';
+  criteria: Record<string, unknown>;
+  suppression_policy?: Record<string, unknown>;
+  message_variants?: Record<string, unknown>[];
+  channel_cascade?: Record<string, unknown>[];
+  send_window?: Record<string, unknown>;
+  holdout?: Record<string, unknown> | null;
+  roi_assumptions?: Record<string, unknown> | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface CampaignListResponse {
+  campaigns: CampaignSummary[];
 }
 
 export interface OfferAlternative {

@@ -1116,6 +1116,7 @@ def test_genie_open_cohort_materializes_lakebase_cohort_and_returns_filtered_rou
     assert json.loads(str(cohort_params["route_filters"])) == {
         "borrower_ids": ["B-102FL7THC6Q3L"],
         "portfolio_criteria": {
+            "marketing_eligibility": "Eligible only",
             "min_equity_pct_label": "≥ 25%",
             "occupancy": "Owner-occupied",
         },

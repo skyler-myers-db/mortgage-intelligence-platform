@@ -120,13 +120,7 @@ def test_admin_fallback_group_always_admitted(client: TestClient) -> None:
     assert response.status_code == 200, response.text
 
 
-def test_put_rules_still_audited() -> None:
-    """Every accepted PUT /rules writes one audit row attributed to the
-    admitted actor (``X-Forwarded-Email``). We override the audit store
-    to an ``InMemoryAuditStore`` for this test so we can read back what
-    was written; the production path is the Lakebase store wired in the
-    factory.
-    """
+def test_put_rules_is_rejected_without_mutating_or_auditing() -> None:
     audit = InMemoryAuditStore()
     previous = app.dependency_overrides.get(get_audit_store)
     app.dependency_overrides[get_audit_store] = lambda: audit
@@ -134,21 +128,14 @@ def test_put_rules_still_audited() -> None:
         c = TestClient(app)
         response = c.put(
             "/api/admin/rules",
-            json={"overrides": {"note": "hello"}},
+            json={"attempted_change": {"note": "hello"}},
             headers={
                 "X-Forwarded-Email": "governance-reviewer@example.com",
                 "X-Forwarded-Groups": "mip-admin",
             },
         )
-        assert response.status_code == 200, response.text
-        events = audit.list(limit=10)
-        assert len(events) == 1
-        e = events[0]
-        assert e.actor == "governance-reviewer@example.com"
-        assert e.action == "admin.rules.override_set"
-        assert e.entity_type == "admin_rules"
-        assert e.entity_id == "legacy_override"
-        assert e.payload_json.get("overrides") == {"note": "hello"}
+        assert response.status_code == 410, response.text
+        assert audit.list(limit=10) == []
     finally:
         if previous is None:
             del app.dependency_overrides[get_audit_store]

@@ -675,24 +675,24 @@ function GenieProofPanel({
   return (
     <div className="genie-proof" role="region" aria-label="Genie proof">
       <div className="genie-proof__grid">
-        <div>
+        <div className="genie-proof__metric">
           <div className="eyebrow">Trust</div>
-          <div className={proof.trusted ? 'chip chip--success' : 'chip chip--warning'}>
+          <div className={`genie-proof__trust-chip chip ${proof.trusted ? 'chip--success' : 'chip--warning'}`}>
             {proof.trusted ? 'Trusted SELECT on curated assets' : 'Review required'}
           </div>
         </div>
-        <div>
+        <div className="genie-proof__metric">
           <div className="eyebrow">Rows</div>
           <div className="genie-proof__value">{proof.row_count ?? payload.row_count ?? 0}</div>
         </div>
-        <div>
+        <div className="genie-proof__metric">
           <div className="eyebrow">Latency</div>
           <div className="genie-proof__value">{proof.elapsed_ms ? `${proof.elapsed_ms} ms` : '—'}</div>
         </div>
       </div>
       {assets.length > 0 && (
         <div className="genie-proof__section">
-          <div className="eyebrow">Source UC assets</div>
+          <div className="eyebrow">Source assets</div>
           <div className="chip-row">
             {assets.map((asset) => {
               const drawer = drawerForAsset(asset);

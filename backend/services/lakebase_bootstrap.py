@@ -93,10 +93,25 @@ SELECT
 # Document additional bootstraps here as they're added so the lock-key
 # namespace stays auditable.
 _APPROVAL_REQUEST_ID_KEY: str = "mip_bootstrap_approvals_request_id"
+_SALES_WORKFLOW_REQUEST_ID_DDL: tuple[str, ...] = (
+    "ALTER TABLE mip_app.lead_assignments ADD COLUMN IF NOT EXISTS request_id TEXT",
+    "DROP INDEX IF EXISTS mip_app.idx_lead_assignments_request_id",
+    (
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_lead_assignments_request_borrower "
+        "ON mip_app.lead_assignments (request_id, borrower_id) WHERE request_id IS NOT NULL"
+    ),
+    "ALTER TABLE mip_app.call_dispositions ADD COLUMN IF NOT EXISTS request_id TEXT",
+    (
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_call_dispositions_request_id "
+        "ON mip_app.call_dispositions (request_id) WHERE request_id IS NOT NULL"
+    ),
+)
+_SALES_WORKFLOW_REQUEST_ID_KEY: str = "mip_bootstrap_sales_workflow_request_id"
 
 
 _LOCK = Lock()
 _APPROVAL_REQUEST_ID_BOOTSTRAPPED: bool = False
+_SALES_WORKFLOW_REQUEST_ID_BOOTSTRAPPED: bool = False
 
 
 def ensure_approval_idempotency_column(client: LakebaseClient) -> None:
@@ -183,6 +198,55 @@ def ensure_approval_idempotency_column(client: LakebaseClient) -> None:
         _APPROVAL_REQUEST_ID_BOOTSTRAPPED = True
 
 
+def ensure_sales_workflow_request_id_columns(client: LakebaseClient) -> None:
+    """Apply Sales Manager request-id DDL once per process.
+
+    Existing demo workspaces may already have `lead_assignments` and
+    `call_dispositions` from an earlier deploy. The table-level
+    `CREATE IF NOT EXISTS` in `lakebase/schema.sql` will not add newly
+    introduced columns to those existing tables, so the runtime write path
+    must bootstrap the two `request_id` columns and their partial unique
+    indexes before assignment/disposition inserts use them.
+    """
+    global _SALES_WORKFLOW_REQUEST_ID_BOOTSTRAPPED
+    if _SALES_WORKFLOW_REQUEST_ID_BOOTSTRAPPED:
+        return
+    with _LOCK:
+        if _SALES_WORKFLOW_REQUEST_ID_BOOTSTRAPPED:
+            return
+        lock_acquired = False
+        try:
+            client.execute(
+                "SELECT pg_advisory_lock(hashtext(%(key)s))",
+                {"key": _SALES_WORKFLOW_REQUEST_ID_KEY},
+            )
+            lock_acquired = True
+            for stmt in _SALES_WORKFLOW_REQUEST_ID_DDL:
+                client.execute(stmt)
+        except LakebaseError as exc:
+            log.warning(
+                "lakebase_bootstrap failed: migration=sales_workflow_request_id exc=%s",
+                type(exc).__name__,
+            )
+            _release_advisory_lock_with_key(client, lock_acquired, _SALES_WORKFLOW_REQUEST_ID_KEY)
+            return
+        except Exception as exc:  # noqa: BLE001 -- bootstrap must never crash request path
+            log.warning(
+                "lakebase_bootstrap unexpected failure: migration=sales_workflow_request_id exc=%s",
+                type(exc).__name__,
+            )
+            _release_advisory_lock_with_key(client, lock_acquired, _SALES_WORKFLOW_REQUEST_ID_KEY)
+            return
+        _release_advisory_lock_with_key(client, lock_acquired, _SALES_WORKFLOW_REQUEST_ID_KEY)
+        emit(
+            log,
+            "lakebase_bootstrap_applied",
+            migration="sales_workflow_request_id",
+            statements=len(_SALES_WORKFLOW_REQUEST_ID_DDL),
+        )
+        _SALES_WORKFLOW_REQUEST_ID_BOOTSTRAPPED = True
+
+
 def _approval_request_id_already_applied(client: LakebaseClient) -> bool:
     """Return True when the migration shape already exists.
 
@@ -216,25 +280,35 @@ def _release_advisory_lock(client: LakebaseClient, acquired: bool) -> None:
     """
     if not acquired:
         return
+    _release_advisory_lock_with_key(client, acquired, _APPROVAL_REQUEST_ID_KEY)
+
+
+def _release_advisory_lock_with_key(client: LakebaseClient, acquired: bool, key: str) -> None:
+    if not acquired:
+        return
     try:
         client.execute(
             "SELECT pg_advisory_unlock(hashtext(%(key)s))",
-            {"key": _APPROVAL_REQUEST_ID_KEY},
+            {"key": key},
         )
     except Exception as exc:  # noqa: BLE001 -- unlock failure is informational
         log.warning(
-            "lakebase_bootstrap advisory_unlock failed: migration=r5_01_approvals_request_id "
-            "exc=%s",
+            "lakebase_bootstrap advisory_unlock failed: key=%s exc=%s",
+            key,
             type(exc).__name__,
         )
 
 
 def _reset_bootstrap_for_tests() -> None:
     """Test helper -- clear the per-process flag between tests."""
-    global _APPROVAL_REQUEST_ID_BOOTSTRAPPED
+    global _APPROVAL_REQUEST_ID_BOOTSTRAPPED, _SALES_WORKFLOW_REQUEST_ID_BOOTSTRAPPED
     _APPROVAL_REQUEST_ID_BOOTSTRAPPED = False
+    _SALES_WORKFLOW_REQUEST_ID_BOOTSTRAPPED = False
 
 
 def _bootstrap_state_for_tests() -> dict[str, Any]:
     """Test helper -- read the current bootstrap flag."""
-    return {"request_id_bootstrapped": _APPROVAL_REQUEST_ID_BOOTSTRAPPED}
+    return {
+        "request_id_bootstrapped": _APPROVAL_REQUEST_ID_BOOTSTRAPPED,
+        "sales_workflow_request_id_bootstrapped": _SALES_WORKFLOW_REQUEST_ID_BOOTSTRAPPED,
+    }

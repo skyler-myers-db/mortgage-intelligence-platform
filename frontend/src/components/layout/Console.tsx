@@ -152,7 +152,7 @@ export function Console() {
             ))}
             {savedDraftItems.map((draft) => (
               <Link
-                key={`draft-${draft.borrower_id}`}
+                key={`draft-${draft.borrower_id}-${draft.channel}`}
                 className="saved-workspace__item"
                 to={`/offer-orchestrator/${draft.borrower_id}`}
                 onClick={() => setConsoleOpen(false)}

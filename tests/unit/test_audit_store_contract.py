@@ -125,6 +125,19 @@ def test_list_issues_select_ordered_desc_with_limit() -> None:
     assert kwargs.get("limit", args[2] if len(args) > 2 else None) == 25
 
 
+def test_list_can_filter_by_borrower_id_metadata_or_entity() -> None:
+    client = _build_client_returning_row()
+    client.fetchall.return_value = []
+    store = LakebaseAuditStore(client=client)
+
+    store.list(limit=25, borrower_id="B-102FL7THC6Q3L")
+
+    sql, params = client.fetchall.call_args.args[:2]
+    assert "metadata->>'borrower_id'" in sql
+    assert "entity_id = %(borrower_id)s" in sql
+    assert params["borrower_id"] == "B-102FL7THC6Q3L"
+
+
 def test_list_hydrates_rows_into_audit_events() -> None:
     client = MagicMock()
     client.fetchone.return_value = None

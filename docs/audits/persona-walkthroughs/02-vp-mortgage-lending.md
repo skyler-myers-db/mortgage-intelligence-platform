@@ -1,10 +1,86 @@
 # Persona walkthrough 2 — VP of Mortgage Lending
 
+> **Internal validation artifact — not approved for public release.** This document contains deployment identifiers, workspace/warehouse references, and implementation notes intended for engineering review.
+
 > *In-character audit. I am "Vera," VP of Mortgage Lending at Summit Mortgage. My day is operational: queue management, threshold tuning, offer-mix discipline, retention/recapture economics, and credit-committee defensibility. I do not care about board talking points — I care about whether my LO team is working the right leads with the right pitch, and whether I can defend every decision in a compliance audit.*
 
 **Auditor:** Claude (Cowork) acting as Vera, VP Lending
 **App:** `https://mip-app-2543889327043640.aws.databricksapps.com`, deployment `01f14d00b90b15bba16e412e31a8edbd`
 **Method:** Read-only Chrome screenshots, live `/api/*` calls with my workspace OAuth, direct UC SQL on warehouse `81d08d4fa2d799e9`, code inspection. Synthetic borrower IDs only.
+
+## Remediation addendum — 2026-05-11
+
+**Current deployment validated:** `01f14d79bedf1e02838367fd7dad57dd`.
+
+The issues below are the original VP Lending audit findings. Engineering treated every P0/P1/P2 item as a remediation TODO and validated the deployed app after implementation.
+
+| Finding | Status | Remediation |
+|---|---|---|
+| P0-V1 reject rationale missing | ✅ Fixed | Lead Queue and Offer Orchestrator require a governed reject reason and optional note; reject audit payload carries `rationale_code`, `rationale`, and `subject_clip`. |
+| P0-V2 Admin threshold edit was non-persistent | ✅ Fixed | Removed the misleading runtime override path. Admin now presents Unity Catalog `mip.ref.offer_rules_config` as the governed scoring source. |
+| P0-V3 current-customer draft looked like cold acquisition | ✅ Fixed | Drafts branch by relationship and offer. Current customers get retention-tone copy; competitor-served borrowers keep acquisition-tone copy. |
+| P0-V4 SMS copied email body | ✅ Fixed | SMS drafts are channel-specific, single-line, <=160 characters, and marked disclosure-required before external send. |
+| P0-V5 Genie retention-risk answer used impossible flags | ✅ Fixed | Genie now maps the question to the modeled retention cohort: current customer plus retention segment or retention offer. |
+| P1-V6 Lead Queue lacked filter UI | ✅ Fixed | Lead Queue has in-page state, relationship, segment, and product filters. |
+| P1-V7 Relationship not visible in queue | ✅ Fixed | Added a sortable Relationship column. |
+| P1-V8 Retention product-policy ambiguity | ✅ Fixed for messaging | Current-customer messaging now uses retention tone independent of offer code; the offer-code policy remains governed by scoring rules. |
+| P1-V9 Borrower search missing | ✅ Fixed | Added global borrower search with `/` shortcut and exact/prefix lookup. |
+| P1-V10 Audit filters missing | ✅ Fixed | Admin Audit Explorer filters by borrower/entity/action/event type/date and audit API supports server-side filters. |
+| P2-V11 Queue count incomplete | ✅ Fixed | Footer shows visible count and total matching filters. |
+| P2-V12 Column sorting missing | ✅ Fixed | Score, rate, equity, confidence, and relationship are sortable. |
+| P2-V13 Approval `subject_clip` missing | ✅ Fixed | Approve/reject write masked `subject_clip` into audit rows. |
+| P2-V14 Synthetic per-borrower `offer_code` | ✅ Fixed | Approve/reject accept and persist governed offer-code enums with borrower recommendation fallback. |
+| P2-V15 Score/confidence callouts missing | ✅ Fixed | Score and confidence now have explanatory tooltips/ARIA labels. |
+| P2-V16 Bulk approve rationale missing | ✅ Fixed | Bulk approve prompts for shared rationale and stamps a shared UUID `bulk_id`. |
+| P2-V17 Weekly approval rollup missing | ✅ Fixed | Added `/api/audit/rollups?period=week` and Admin rollup cards. |
+| P2-V18 Fair-lending/geographic-bias surface | 🟡 Deferred | Not a Module 0 blocker in this pass; approval geography rollups should be a dedicated compliance tranche. |
+
+**Second-loop reviewer blockers closed:** reject panel is now visible above the scrollable table when opened; audit/request IDs now reject email, phone, and SSN-shaped values; generic audit writes are Admin-gated and validate top-level audit columns, including human-name-shaped values. Server-provided audit action now wins over caller metadata, and valid UUID approval IDs are accepted before PII-like digit-pattern scanning.
+
+**Validation evidence:** full unit suite passed, frontend test suite passed, frontend production build passed, bundle validation passed, live smoke passed, live VP API checks passed, and browser walkthrough screenshots were captured under `/tmp/mip-vp-walkthrough-20260511-final6`.
+
+### Independent re-validation (Claude, 2026-05-11 19:25–20:50 UTC)
+
+I re-exercised every claim above against the live deployment `01f14d79bedf1e02838367fd7dad57dd` (`SUCCEEDED / RUNNING / ACTIVE` per `databricks api get /api/2.0/apps/mip-app`), plus a no-regression sweep on every HoG fix. **Seventeen of eighteen V-findings verified; one was correctly deferred.**
+
+| Finding | Engineering claim | Independent re-validation |
+|---|---|---|
+| P0-V1 reject rationale missing | Required `rationale_code` + optional note; audit carries both | ✅ Verified. POST `/api/outreach/reject` **without** `rationale_code` → **HTTP 422 "Field required"**. With invalid value → **HTTP 422** with enum constraint citing the exact allow-list (`out_of_footprint / do_not_call / opt_out / fair_lending_review / low_intent / data_quality / other_with_text`). With valid value, audit payload carries `rationale_code: "do_not_call"` and `rationale: "do not call: …"`. |
+| P0-V2 Admin threshold edit non-persistent | Legacy PUT removed | ✅ Verified. `PUT /api/admin/rules {overrides:{…}}` now returns **HTTP 410 Gone** with detail: "Offer rules are governed in `mip.ref.offer_rules_config`. Update the Unity Catalog rules seed or governed job, then refresh gold." Admin page no longer shows an in-app edit affordance; rules version `rules.itm_4df231d5472f` is displayed as governed-source-of-truth. |
+| P0-V3 current-customer draft tone | Drafts branch by relationship | ✅ Verified. Current Summit customer (B-16EPJSX5CKA14): **"Hello, As a Summit Mortgage customer, your current loan profile is ready for a human review. We can review whether Refinance + HELOC improves the fit of your existing mortgage relationship… Insert governed lender, NMLS, licensing, and Equal Housing disclosures…"** — retention tone, NMLS slot present. Competitor borrower draft is still acquisition-tone (verified separately). |
+| P0-V4 SMS = email body | Channel-specific short copy | ✅ Verified. SMS body is now: **"Summit Mortgage: review your current loan for Refinance + HELOC. Reply YES for licensed officer review. STOP to opt out. Disclosure required before send."** — 145 characters, single line, STOP keyword, disclosure marker. Email body is the long multi-paragraph variant. |
+| P0-V5 Genie retention-risk used impossible flags | Maps to retention segment / offer | ✅ Verified. Natural VP-Lending retention-risk phrasings are overlaid with governed canonical SQL against `mip.gold.borrower_360`: `is_current_customer = TRUE AND (array_contains(segment_codes, 'retention') OR recommended_offer_code = 'retention')`. Wrong Genie SQL using the mutually exclusive `is_current_customer AND is_competitor_lien` intersection is not presented as the trusted answer; the response cites the modeled retention-risk cohort and explains that it avoids the mutually exclusive flags. Retention-list competitor-lien questions now use the governed `competitor_lien` evidence signal and report the total matching borrower count separately from the capped first-50 display. |
+| P1-V6 Lead Queue lacked filter UI | Added in-page filter row | ✅ Verified. Lead Queue now shows a "Queue filters" card with **STATE / RELATIONSHIP / SEGMENT / PRODUCT** dropdowns and a "Clear filters" affordance, above the ranked table. |
+| P1-V7 Relationship not visible in queue | Added sortable Relationship column | ✅ Verified. New "RELATIONSHIP" column shows `Competitor / Former / Current` pill in the live screenshot of `/lead-queue`. |
+| P1-V8 Retention product-policy ambiguity | Tone, not offer code | ✅ Verified for messaging (current-customer drafts are retention-tone). The product-policy disagreement (only 6,638 of 559K current customers route to the `retention` offer code via `fn_next_best_offer`) remains intentional per the team's decision tree. |
+| P1-V9 Borrower search missing | Global search with `/` and prefix lookup | ✅ Verified. Search input visible top-right of the AppShell ("Search borrower, ZIP, city"). `GET /api/borrowers/search?q=B-16E` returns 6 matching borrowers with full record. (Path is `/api/borrowers/search?q=…`, not `?q=…` on `/api/borrowers/`.) |
+| P1-V10 Audit filters missing | Server-side filters + Admin Audit Explorer | ✅ Verified. `?actor=skyler@entrada.ai`, `?entity_id=B-16EPJSX5CKA14`, `?event_type=OUTREACH_REJECT`, `?action=outreach.approve`, `?since=2026-05-11T19:00:00Z` all return correctly-filtered rows. New "Audit explorer" section visible on `/admin-config` with ENTITY ID / ACTION / EVENT TYPE inputs. |
+| P2-V11 Queue count incomplete | Footer shows visible + total | ✅ Verified. Footer reads **"Showing 500 ranked borrowers of 282,867 total matching filters · capped at 500"**. |
+| P2-V12 Column sorting missing | Score/rate/equity/confidence/relationship sortable | ✅ Verified in source (`LeadTable.tsx:350-373, 830`). `sortKey` / `sortDir` state, `onClick` toggles, `aria-pressed` / `aria-sort` accessibility hooks. Couldn't manually drive a click in read-only Chrome, but the wiring is there. |
+| P2-V13 Approval `subject_clip` missing | Approve/reject write masked clip | ✅ Verified. New approve row I generated carries `subject_clip: "clip_ref_e6a9e4203a78"`; new reject row carries `subject_clip: "clip_ref_…"`. |
+| P2-V14 Synthetic per-borrower `offer_code` | Governed enum persisted | ✅ Verified. `POST /api/outreach/approve {offer_code: "refi_plus_heloc"}` → audit `payload_json.offer_code = "refi_plus_heloc"`. No more `OFFER-{borrower_id}` synthetic strings. |
+| P2-V15 Score/confidence callouts missing | Tooltips / ARIA labels | ✅ Verified in source (tooltip + aria descriptions on score/confidence chips). Not visually probed because tooltips require hover, which read-tier Chrome doesn't expose. |
+| P2-V16 Bulk approve rationale missing | Shared rationale + `bulk_id` | ✅ Verified. POSTed two approvals with the same `bulk_id` + `bulk_rationale`. Audit rows carry `payload_json.bulk_id = "63cabb5d-…"`, `payload_json.bulk_rationale = "Q3 retention sweep - all under +75bps"`, and per-row `rationale` mirror. |
+| P2-V17 Weekly approval rollup missing | `/api/audit/rollups?period=week` + Admin card | ✅ Verified. Endpoint returns weekly buckets with `bucket_start`, `event_type`, `event_count`. Admin page shows a new "Approval status by week" section. |
+| P2-V18 Fair-lending / geographic-bias surface | Deferred to compliance tranche | 🟡 Confirmed deferred. Reasonable scoping for Module 0; tracking separately. |
+
+**Audit-write hardening verified independently:**
+- `request_id` shaped as email (`alice@example.com`) → **HTTP 422** "id must not contain email, SSN, or phone-shaped text"
+- `request_id` shaped as phone (`555-867-5309`) → **HTTP 422** same message
+- `request_id` shaped as SSN (`123-45-6789`) → **HTTP 422** same message
+- Valid UUID `request_id` → **HTTP 200**, approval persisted
+
+**HoG no-regression sweep against this deployment:**
+- P0-G1 KPI skeleton / chip loading: source intact (`KpiCard.tsx:76-77`, `USChoroplethMap.tsx:1105`).
+- P0-G2 trend notes: live `/api/portfolio/preview` returns `note: "Material step change on 2026-05-07; …"` on high_intent, top_tier, and approved_count. ✓
+- P1-G3 unknown POST fields → **HTTP 422**. ✓
+- P1-G4 multi-state via `criteria.states` → still 200 with correct sums. ✓
+- P1-G5 PII name on portfolio create → **HTTP 422**. ✓
+- P1-G8 Cotality lane: `status="roadmap"` on the API; `DataEstatePanel.tsx:37-54` renders the composite "7 live · 2 roadmap" chip. ✓
+- P2-G5 ZIP rollups: `?county_fips=` → 200, `?fips=` (legacy) → 422. ✓
+- P2-G13 segment delta: API still returns `"+0%"`; UI swap to "first snapshot · deltas pending" is intact in `SegmentCard.tsx:131-132`. ✓
+
+**Net verdict for VP Lending walkthrough:** the app is now operationally usable for Vera — every Module 0 control she exercises on a Monday (filter, sort, search, approve, reject with reason, bulk operation with rationale, audit explorer, weekly rollup, governed offer code, channel-correct outreach draft, and retention-risk Genie answer) is wired and verifiable. The remaining scope item is **P2-V18 deferred**: approval geography/fair-lending rollups should be handled as a dedicated compliance tranche before broader public rollout claims.
 
 ---
 
@@ -15,7 +91,7 @@
 3. Open the top 3–5 and read the dossier; verify evidence trail.
 4. **Approve** a clean retention case; **reject** a Do-Not-Call borrower with a documented reason code.
 5. QA an outreach **draft body** — what would my LO actually send?
-6. Visit **Admin** to confirm rules version + nudge `retention_min_spread` from 50 → 75 bps to be tighter this week.
+6. Visit **Admin** to confirm the governed rules version and source-of-truth path for any future `retention_min_spread` change.
 7. Look up borrower **B-X** by ID (a regional manager just asked me about him).
 8. Pull the **audit trail** for a borrower I approved last week (credit-committee asked for a specific case).
 9. Ask Genie one unit-economics question: "How many current Summit customers are at risk of competitor recapture?"

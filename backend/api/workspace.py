@@ -6,7 +6,8 @@ an audit row for each state-changing action.
 """
 from __future__ import annotations
 
-from typing import Annotated, Literal
+from datetime import UTC, datetime, timedelta
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
@@ -22,15 +23,23 @@ from backend.schemas.workspace import (
     WorkspaceState,
 )
 from backend.services.audit_store import resolve_actor
+from backend.services.disclosures import MissingTenantDisclosureError, resolve_tenant_disclosure
 from backend.services.error_sanitizer import safe_dependency_detail
-from backend.services.lakebase import LakebaseError
-from backend.services.repositories import LeadRepository, get_lead_repository
+from backend.services.lakebase import LakebaseClient, LakebaseError, get_lakebase_client
+from backend.services.repositories import (
+    LeadRepository,
+    OutreachRepository,
+    get_lead_repository,
+    get_outreach_repository,
+)
 from backend.services.workspace_store import WorkspaceStore, get_workspace_store
 
 router = APIRouter(prefix="/api/workspace", tags=["workspace"])
 
 WorkspaceDep = Annotated[WorkspaceStore, Depends(get_workspace_store)]
 LeadRepoDep = Annotated[LeadRepository, Depends(get_lead_repository)]
+OutreachRepoDep = Annotated[OutreachRepository, Depends(get_outreach_repository)]
+LakebaseDep = Annotated[LakebaseClient, Depends(get_lakebase_client)]
 
 
 def _actor(request: Request) -> str:
@@ -63,6 +72,46 @@ def _path_borrower_id(value: str) -> str:
             status_code=422,
             detail="borrower_id must be an app-scoped public borrower id",
         ) from exc
+
+
+def _coerce_datetime(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=UTC)
+    if isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+    return None
+
+
+def _assert_workspace_marketing_eligible(borrower: Any) -> None:
+    consent_status = str(getattr(borrower, "consent_status", "unknown") or "unknown")
+    if consent_status != "opt_in":
+        raise HTTPException(
+            status_code=422,
+            detail=f"borrower is not marketing-eligible: consent_status={consent_status}",
+        )
+    now = datetime.now(UTC)
+    recontact_at = _coerce_datetime(getattr(borrower, "eligible_recontact_at", None))
+    if recontact_at and recontact_at > now:
+        raise HTTPException(
+            status_code=409,
+            detail=f"borrower hit frequency cap; earliest re-contact {recontact_at.date().isoformat()}",
+        )
+    last_touch_at = _coerce_datetime(getattr(borrower, "last_touch_at", None))
+    if last_touch_at and last_touch_at > now - timedelta(days=30):
+        earliest = last_touch_at + timedelta(days=30)
+        raise HTTPException(
+            status_code=409,
+            detail=f"borrower hit frequency cap; earliest re-contact {earliest.date().isoformat()}",
+        )
+    if getattr(borrower, "marketing_eligible", False) is not True:
+        reason = getattr(borrower, "suppression_reason", None) or "eligibility_not_proven"
+        raise HTTPException(status_code=422, detail=f"borrower is not marketing-eligible: {reason}")
 
 
 def _saved_lead_from_live(lead: LeadSummary, *, saved_at: str, updated_at: str) -> SavedLead:
@@ -182,10 +231,26 @@ def save_draft(
     payload: SavedDraftInput,
     request: Request,
     store: WorkspaceDep,
+    repo: OutreachRepoDep,
+    lakebase: LakebaseDep,
 ) -> SavedDraft:
     borrower_id = _path_borrower_id(borrower_id)
     if payload.borrower_id != borrower_id:
         raise HTTPException(status_code=400, detail="borrower_id path/body mismatch")
+    borrower = repo.find_borrower(borrower_id)
+    if borrower is None:
+        raise HTTPException(status_code=404, detail=f"Borrower {borrower_id} not found")
+    _assert_workspace_marketing_eligible(borrower)
+    try:
+        resolve_tenant_disclosure(
+            lakebase,
+            state=str(getattr(borrower, "state", "") or ""),
+            channel=payload.channel,
+        )
+    except MissingTenantDisclosureError as exc:
+        raise HTTPException(status_code=412, detail=str(exc)) from exc
+    except LakebaseError as exc:
+        raise _as_lakebase_503() from exc
     try:
         return store.save_draft(actor=_actor(request), draft=payload)
     except LakebaseError as exc:
@@ -197,7 +262,7 @@ def delete_draft(
     borrower_id: str,
     request: Request,
     store: WorkspaceDep,
-    channel: Literal["email", "sms"] = "email",
+    channel: Literal["email", "sms", "direct_mail"] = "email",
 ) -> WorkspaceMutationResponse:
     borrower_id = _path_borrower_id(borrower_id)
     try:

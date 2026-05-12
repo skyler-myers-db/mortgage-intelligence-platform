@@ -115,6 +115,35 @@ def test_public_audit_event_masks_subject_clip() -> None:
     assert response.json()["subject_clip"].startswith("clip_ref_")
 
 
+def test_public_audit_event_rejects_top_level_pii_values() -> None:
+    response = client.post(
+        "/api/audit/event",
+        json={
+            "actor": "anonymous",
+            "action": "view.custom",
+            "entity_type": "lead_queue",
+            "entity_id": "jane@example.com",
+            "subject_segment": "SSN 123-45-6789",
+            "request_id": "555-212-3333",
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_public_audit_event_rejects_name_shaped_top_level_values() -> None:
+    for field in ("action", "entity_type", "entity_id", "event_type", "subject_segment"):
+        payload = {
+            "actor": "anonymous",
+            "action": "view.custom",
+            "entity_type": "lead_queue",
+            "entity_id": "manual",
+        }
+        payload[field] = "Jane Smith"
+        response = client.post("/api/audit/event", json=payload)
+        assert response.status_code == 422, field
+
+
 def test_config_target_lender_options_drop_raw_lender_names(monkeypatch: pytest.MonkeyPatch) -> None:
     class _Client:
         def execute(self, sql: str) -> list[dict[str, object]]:

@@ -25,6 +25,12 @@ const FUTURE_MODULES = [
   { code: 'M4', title: 'Risk & Retention',      desc: 'Portfolio-level retention and recapture.' },
 ];
 
+export const HOME_PORTFOLIO_PREVIEW_CRITERIA = { marketing_eligibility: 'Any' } as const;
+
+export function requestHomePortfolioPreview(signal?: AbortSignal) {
+  return api.portfolioPreview(HOME_PORTFOLIO_PREVIEW_CRITERIA, signal);
+}
+
 /** Format a signed percent-delta for the KPI delta slot. `null` → undefined
  * so the KpiCard simply hides the delta row. */
 function formatDelta(trend: KpiTrend | undefined): string | undefined {
@@ -87,7 +93,7 @@ export default function Home() {
     const runAttempt = async (attempt: number): Promise<void> => {
       if (cancelled) return;
       try {
-        const p = await api.portfolioPreview({}, ctrl.signal);
+        const p = await requestHomePortfolioPreview(ctrl.signal);
         if (cancelled) return;
         setPreview(p);
         setPreviewError(null);

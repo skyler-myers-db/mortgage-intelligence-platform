@@ -37,6 +37,35 @@ from backend.services.lakebase_bootstrap import _reset_bootstrap_for_tests
 from backend.services.resilience import _reset_breakers_for_tests
 
 
+def _disclosure_row(params: dict[str, Any] | None = None) -> dict[str, str]:
+    params = params or {}
+    channel = params.get("channel", "email")
+    body = (
+        "Summit Mortgage NMLS #123456. Equal Housing Lender. Reply STOP to opt out."
+        if channel == "sms"
+        else "Summit Mortgage, NMLS #123456. Equal Housing Lender. Reply unsubscribe to opt out."
+    )
+    return {
+        "state": params.get("state", "_ALL"),
+        "channel": channel,
+        "disclosure_version": "test-disclosure-v1",
+        "body": body,
+    }
+
+
+DISCLOSURE_BODY = _disclosure_row()["body"]
+APPROVAL_DRAFT_BODY = f"Governed approval body. {DISCLOSURE_BODY}"
+
+
+def _fetchone_none_or_disclosure(
+    sql: str,
+    params: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    if "FROM mip_app.tenant_disclosures" in sql:
+        return _disclosure_row(params)
+    return None
+
+
 class _TxnResult:
     def __init__(self, row: dict[str, Any] | None) -> None:
         self._row = row
@@ -122,6 +151,8 @@ class _AtomicLakebase:
         self.conn: _AtomicConn | None = None
 
     def fetchone(self, sql: str, params: dict[str, Any] | None = None) -> dict[str, Any] | None:
+        if "FROM mip_app.tenant_disclosures" in sql:
+            return _disclosure_row(params)
         return None
 
     def transaction(self) -> _TxnContext:
@@ -197,7 +228,7 @@ def test_reject_writes_approval_and_audit_rows(override_deps) -> None:
     # clients (no body field), so the idempotency lookup runs on every
     # request. Pin fetchone to None so this first call sees no prior
     # approval and proceeds with the INSERT + audit write.
-    fake_lakebase.fetchone.return_value = None
+    fake_lakebase.fetchone.side_effect = _fetchone_none_or_disclosure
     override_deps(audit=audit, lakebase=fake_lakebase)
 
     client = TestClient(app)
@@ -208,8 +239,9 @@ def test_reject_writes_approval_and_audit_rows(override_deps) -> None:
         "/api/outreach/reject",
         json={
             "borrower_id": "B-48291",
-            "offer_code": "HELOC-STD",
+            "offer_code": "heloc",
             "evidence_ids": ["ev-1", "ev-2"],
+            "rationale_code": "opt_out",
             "rationale": "Borrower opted out",
         },
         headers={"X-Forwarded-Email": "lo@example.com"},
@@ -228,8 +260,8 @@ def test_reject_writes_approval_and_audit_rows(override_deps) -> None:
     assert params["action"] == "reject"
     assert params["actor_email"] == "lo@example.com"
     assert params["borrower_id"] == "B-48291"
-    assert params["offer_code"] == "HELOC-STD"
-    assert params["rationale"] == "Borrower opted out"
+    assert params["offer_code"] == "heloc"
+    assert params["rationale"] == "opt out: Borrower opted out"
     # approval_id in the INSERT must match the id we returned.
     assert params["approval_id"] == body["approval_id"]
 
@@ -243,9 +275,11 @@ def test_reject_writes_approval_and_audit_rows(override_deps) -> None:
     assert evt.entity_id == body["approval_id"]
     assert evt.actor == "lo@example.com"
     assert evt.evidence_ids == ["ev-1", "ev-2"]
+    assert evt.subject_clip is not None
     assert evt.payload_json["borrower_id"] == "B-48291"
-    assert evt.payload_json["offer_code"] == "HELOC-STD"
-    assert evt.payload_json["rationale"] == "Borrower opted out"
+    assert evt.payload_json["offer_code"] == "heloc"
+    assert evt.payload_json["rationale_code"] == "opt_out"
+    assert evt.payload_json["rationale"] == "opt out: Borrower opted out"
 
 
 def test_approve_reject_unknown_borrower_fail_closed_before_lakebase(override_deps) -> None:
@@ -255,8 +289,8 @@ def test_approve_reject_unknown_borrower_fail_closed_before_lakebase(override_de
 
     client = TestClient(app)
     for path, body in (
-        ("/api/outreach/approve", {"borrower_id": "B-DOES-NOT-EXIST", "offer_code": "HELOC-STD"}),
-        ("/api/outreach/reject", {"borrower_id": "B-DOES-NOT-EXIST", "offer_code": "HELOC-STD"}),
+        ("/api/outreach/approve", {"borrower_id": "B-DOES-NOT-EXIST", "offer_code": "heloc"}),
+        ("/api/outreach/reject", {"borrower_id": "B-DOES-NOT-EXIST", "offer_code": "heloc", "rationale_code": "low_intent"}),
     ):
         response = client.post(path, json=body, headers={"X-Forwarded-Email": "lo@example.com"})
         assert response.status_code == 404, response.text
@@ -270,7 +304,7 @@ def test_approve_reject_unknown_borrower_fail_closed_before_lakebase(override_de
 def test_reject_scrubs_free_text_before_decision_and_audit_rows(override_deps) -> None:
     audit = InMemoryAuditStore()
     fake_lakebase = MagicMock()
-    fake_lakebase.fetchone.return_value = None
+    fake_lakebase.fetchone.side_effect = _fetchone_none_or_disclosure
     override_deps(audit=audit, lakebase=fake_lakebase)
 
     raw_rationale = (
@@ -282,7 +316,8 @@ def test_reject_scrubs_free_text_before_decision_and_audit_rows(override_deps) -
         "/api/outreach/reject",
         json={
             "borrower_id": "B-48291",
-            "offer_code": "HELOC-STD",
+            "offer_code": "heloc",
+            "rationale_code": "data_quality",
             "rationale": raw_rationale,
         },
         headers={"X-Forwarded-Email": "lo@example.com"},
@@ -291,6 +326,7 @@ def test_reject_scrubs_free_text_before_decision_and_audit_rows(override_deps) -
 
     _sql, params = fake_lakebase.execute.call_args.args
     persisted_rationale = params["rationale"]
+    assert persisted_rationale.startswith("data quality: ")
     assert "[EMAIL-REDACTED]" in persisted_rationale
     assert "[PHONE-REDACTED]" in persisted_rationale
     assert "[SSN-REDACTED]" in persisted_rationale
@@ -301,6 +337,36 @@ def test_reject_scrubs_free_text_before_decision_and_audit_rows(override_deps) -
     evt = audit.list(limit=1)[0]
     audit_rationale = evt.payload_json["rationale"]
     assert audit_rationale == persisted_rationale
+
+
+def test_draft_outreach_is_relationship_and_channel_aware() -> None:
+    client = TestClient(app)
+
+    current = client.post(
+        "/api/outreach/draft",
+        json={"borrower_id": "B-65102", "channel": "email"},
+        headers={"X-Forwarded-Email": "lo@example.com"},
+    )
+    assert current.status_code == 200, current.text
+    current_body = current.json()["body"]
+    assert "As a Summit Mortgage customer" in current_body
+    assert "public-record signals" not in current_body
+    assert "[first name]" not in current_body
+    assert "NMLS #123456" in current_body
+    assert "Equal Housing" in current_body
+    assert current.json()["offer_code"] in {"retention", "nurture", "refi", "refi_plus_heloc", "cash_out"}
+
+    sms = client.post(
+        "/api/outreach/draft",
+        json={"borrower_id": "B-65102", "channel": "sms"},
+        headers={"X-Forwarded-Email": "lo@example.com"},
+    )
+    assert sms.status_code == 200, sms.text
+    sms_body = sms.json()["body"]
+    assert sms.json()["subject"] is None
+    assert len(sms_body) <= 160
+    assert "STOP" in sms_body
+    assert "\n" not in sms_body
 
 
 def test_atomic_decision_rolls_back_if_audit_insert_fails(
@@ -319,7 +385,11 @@ def test_atomic_decision_rolls_back_if_audit_insert_fails(
     client = TestClient(app)
     resp = client.post(
         "/api/outreach/approve",
-        json={"borrower_id": "B-48291", "offer_code": "HELOC-STD"},
+        json={
+            "borrower_id": "B-48291",
+            "offer_code": "heloc",
+            "draft_body": APPROVAL_DRAFT_BODY,
+        },
         headers={"X-Forwarded-Email": "lo@example.com"},
     )
 
@@ -349,8 +419,9 @@ def test_atomic_conflict_does_not_write_audit_for_uninserted_approval(
         "/api/outreach/approve",
         json={
             "borrower_id": "B-48291",
-            "offer_code": "HELOC-STD",
-            "request_id": "req-existing",
+            "offer_code": "heloc",
+            "request_id": "11111111-1111-4111-8111-111111111111",
+            "draft_body": APPROVAL_DRAFT_BODY,
         },
         headers={"X-Forwarded-Email": "lo@example.com"},
     )
@@ -390,8 +461,9 @@ def test_atomic_conflict_rejects_request_id_for_different_decision(
         "/api/outreach/approve",
         json={
             "borrower_id": "B-48291",
-            "offer_code": "HELOC-STD",
-            "request_id": "req-existing",
+            "offer_code": "heloc",
+            "request_id": "11111111-1111-4111-8111-111111111111",
+            "draft_body": APPROVAL_DRAFT_BODY,
         },
         headers={"X-Forwarded-Email": "lo@example.com"},
     )
@@ -414,7 +486,7 @@ def test_reject_schedules_lifecycle_sync_trigger(
     fake_lakebase = MagicMock()
     # R6-19: fetchone runs on every request now (server-derived fallback
     # key), so pin it to None for the no-prior-approval path.
-    fake_lakebase.fetchone.return_value = None
+    fake_lakebase.fetchone.side_effect = _fetchone_none_or_disclosure
 
     calls: list[dict[str, Any]] = []
 
@@ -427,7 +499,7 @@ def test_reject_schedules_lifecycle_sync_trigger(
     client = TestClient(app)
     resp = client.post(
         "/api/outreach/reject",
-        json={"borrower_id": "B-48291", "actor": "anonymous"},
+        json={"borrower_id": "B-48291", "actor": "anonymous", "rationale_code": "low_intent"},
     )
     assert resp.status_code == 200, resp.text
     assert len(calls) == 1
@@ -444,13 +516,13 @@ def test_reject_surfaces_503_on_lakebase_failure(override_deps) -> None:
     fake_lakebase.execute.side_effect = LakebaseError("simulated postgres outage")
     # R6-19: server-derived fallback request_id always triggers lookup;
     # pin fetchone to None so the INSERT path is the one that fails.
-    fake_lakebase.fetchone.return_value = None
+    fake_lakebase.fetchone.side_effect = _fetchone_none_or_disclosure
     override_deps(audit=audit, lakebase=fake_lakebase)
 
     client = TestClient(app)
     resp = client.post(
         "/api/outreach/reject",
-        json={"borrower_id": "B-48291", "actor": "anonymous"},
+        json={"borrower_id": "B-48291", "actor": "anonymous", "rationale_code": "low_intent"},
     )
     assert resp.status_code == 503, resp.text
     # Audit store should not have recorded anything if the
@@ -467,7 +539,7 @@ def test_approve_forwards_draft_body_into_audit_metadata(
     audit = InMemoryAuditStore()
     fake_lakebase = MagicMock()
     # R6-19: server-derived fallback request_id path now runs the lookup.
-    fake_lakebase.fetchone.return_value = None
+    fake_lakebase.fetchone.side_effect = _fetchone_none_or_disclosure
 
     # Silence the lifecycle-sync trigger so this test doesn't import
     # the real SDK.
@@ -479,7 +551,7 @@ def test_approve_forwards_draft_body_into_audit_metadata(
     override_deps(audit=audit, lakebase=fake_lakebase)
 
     client = TestClient(app)
-    draft = "Hi [first name], custom edited outreach copy."
+    draft = APPROVAL_DRAFT_BODY
     resp = client.post(
         "/api/outreach/approve",
         json={
@@ -524,6 +596,8 @@ def test_approve_idempotent_on_retry_with_same_request_id(
             }
 
     def _fetchone(sql: str, params: dict[str, Any]) -> dict[str, Any] | None:
+        if "FROM mip_app.tenant_disclosures" in sql:
+            return _disclosure_row(params)
         if "WHERE request_id" in sql:
             rid = params.get("request_id")
             if rid and rid in inserted:
@@ -546,7 +620,8 @@ def test_approve_idempotent_on_retry_with_same_request_id(
     body = {
         "borrower_id": "B-48291",
         "actor": "anonymous",
-        "request_id": "req-abc-123",
+        "request_id": "22222222-2222-4222-8222-222222222222",
+        "draft_body": APPROVAL_DRAFT_BODY,
     }
     first = client.post("/api/outreach/approve", json=body)
     second = client.post("/api/outreach/approve", json=body)
@@ -587,6 +662,8 @@ def test_reject_idempotent_on_retry_with_same_request_id(
             }
 
     def _fetchone(sql: str, params: dict[str, Any]) -> dict[str, Any] | None:
+        if "FROM mip_app.tenant_disclosures" in sql:
+            return _disclosure_row(params)
         if "WHERE request_id" in sql:
             rid = params.get("request_id")
             if rid and rid in inserted:
@@ -608,7 +685,8 @@ def test_reject_idempotent_on_retry_with_same_request_id(
     body = {
         "borrower_id": "B-48291",
         "actor": "anonymous",
-        "request_id": "req-reject-xyz",
+        "rationale_code": "low_intent",
+        "request_id": "33333333-3333-4333-8333-333333333333",
     }
     first = client.post("/api/outreach/reject", json=body)
     second = client.post("/api/outreach/reject", json=body)
@@ -646,7 +724,11 @@ def test_request_id_conflict_for_different_decision_is_rejected(
     client = TestClient(app)
     response = client.post(
         "/api/outreach/approve",
-        json={"borrower_id": "B-48291", "request_id": "req-conflict"},
+        json={
+            "borrower_id": "B-48291",
+            "request_id": "44444444-4444-4444-8444-444444444444",
+            "draft_body": APPROVAL_DRAFT_BODY,
+        },
         headers={"X-Forwarded-Email": "lo@example.com"},
     )
 
@@ -680,6 +762,8 @@ def test_approve_without_request_id_same_minute_collapses_to_one_row(
             }
 
     def _fetchone(sql: str, params: dict[str, Any]) -> dict[str, Any] | None:
+        if "FROM mip_app.tenant_disclosures" in sql:
+            return _disclosure_row(params)
         if "WHERE request_id" in sql:
             rid = params.get("request_id")
             if rid and rid in inserted:
@@ -700,7 +784,7 @@ def test_approve_without_request_id_same_minute_collapses_to_one_row(
     override_deps(audit=audit, lakebase=fake_lakebase)
 
     client = TestClient(app)
-    body = {"borrower_id": "B-48291"}
+    body = {"borrower_id": "B-48291", "draft_body": APPROVAL_DRAFT_BODY}
     headers = {"X-Forwarded-Email": "lo@example.com"}
     first = client.post("/api/outreach/approve", json=body, headers=headers)
     second = client.post("/api/outreach/approve", json=body, headers=headers)
@@ -738,6 +822,8 @@ def test_approve_without_request_id_cross_minute_produces_two_rows(
             }
 
     def _fetchone(sql: str, params: dict[str, Any]) -> dict[str, Any] | None:
+        if "FROM mip_app.tenant_disclosures" in sql:
+            return _disclosure_row(params)
         if "WHERE request_id" in sql:
             rid = params.get("request_id")
             if rid and rid in inserted:
@@ -759,7 +845,7 @@ def test_approve_without_request_id_cross_minute_produces_two_rows(
     override_deps(audit=audit, lakebase=fake_lakebase)
 
     client = TestClient(app)
-    body = {"borrower_id": "B-48291"}
+    body = {"borrower_id": "B-48291", "draft_body": APPROVAL_DRAFT_BODY}
     headers = {"X-Forwarded-Email": "lo@example.com"}
     first = client.post("/api/outreach/approve", json=body, headers=headers)
     clock["t"] += 61.0  # bump to the next minute bucket
@@ -795,7 +881,7 @@ def test_approve_body_not_in_logs(
     """
     audit = InMemoryAuditStore()
     fake_lakebase = MagicMock()
-    fake_lakebase.fetchone.return_value = None
+    fake_lakebase.fetchone.side_effect = _fetchone_none_or_disclosure
 
     monkeypatch.setattr(
         outreach_mod,
@@ -816,7 +902,7 @@ def test_approve_body_not_in_logs(
         json={
             "borrower_id": "B-48291",
             "actor": f"{sentinel}@example.com",
-            "draft_body": sentinel,
+            "draft_body": f"{sentinel} {APPROVAL_DRAFT_BODY}",
         },
     )
     assert resp.status_code == 200, resp.text
@@ -857,7 +943,9 @@ def test_safe_audit_write_broadened_exception_scope(
         def list(self, limit: int = 50) -> list[Any]:
             return []
 
-    override_deps(audit=_ExplodingAuditStore(), lakebase=MagicMock())
+    fake_lakebase = MagicMock()
+    fake_lakebase.fetchone.side_effect = _fetchone_none_or_disclosure
+    override_deps(audit=_ExplodingAuditStore(), lakebase=fake_lakebase)
 
     import logging as _logging
     # emit() logs at INFO by default; caplog must be at INFO or

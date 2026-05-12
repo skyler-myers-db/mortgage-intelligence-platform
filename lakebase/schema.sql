@@ -37,10 +37,128 @@ CREATE TABLE IF NOT EXISTS mip_app.campaigns (
     owner_email  TEXT NOT NULL,
     status       TEXT NOT NULL DEFAULT 'draft',
     criteria     JSONB NOT NULL DEFAULT '{}'::jsonb,
+    suppression_policy JSONB NOT NULL DEFAULT '{}'::jsonb,
+    message_variants JSONB NOT NULL DEFAULT '[]'::jsonb,
+    channel_cascade JSONB NOT NULL DEFAULT '[]'::jsonb,
+    send_window JSONB NOT NULL DEFAULT '{}'::jsonb,
+    holdout JSONB,
+    roi_assumptions JSONB,
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE mip_app.campaigns
+    ADD COLUMN IF NOT EXISTS suppression_policy JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE mip_app.campaigns
+    ADD COLUMN IF NOT EXISTS message_variants JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE mip_app.campaigns
+    ADD COLUMN IF NOT EXISTS channel_cascade JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE mip_app.campaigns
+    ADD COLUMN IF NOT EXISTS send_window JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE mip_app.campaigns
+    ADD COLUMN IF NOT EXISTS holdout JSONB;
+ALTER TABLE mip_app.campaigns
+    ADD COLUMN IF NOT EXISTS roi_assumptions JSONB;
+ALTER TABLE mip_app.campaigns
+    ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
 CREATE INDEX IF NOT EXISTS idx_campaigns_owner
     ON mip_app.campaigns (owner_email, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_campaigns_status
+    ON mip_app.campaigns (status, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS mip_app.campaign_message_variants (
+    campaign_id  UUID NOT NULL REFERENCES mip_app.campaigns(campaign_id) ON DELETE CASCADE,
+    variant_name TEXT NOT NULL,
+    channel      TEXT NOT NULL CHECK (channel IN ('email','sms','direct_mail')),
+    subject      TEXT,
+    body         TEXT NOT NULL CHECK (length(body) <= 5000),
+    weight_pct   NUMERIC,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (campaign_id, variant_name, channel)
+);
+
+CREATE TABLE IF NOT EXISTS mip_app.tenant_disclosures (
+    tenant_id           TEXT NOT NULL DEFAULT 'summit',
+    state               TEXT NOT NULL,
+    channel             TEXT NOT NULL CHECK (channel IN ('email','sms','direct_mail')),
+    disclosure_version  TEXT NOT NULL,
+    body                TEXT NOT NULL CHECK (length(body) BETWEEN 20 AND 2000),
+    active              BOOLEAN NOT NULL DEFAULT true,
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (tenant_id, state, channel, disclosure_version)
+);
+CREATE INDEX IF NOT EXISTS idx_tenant_disclosures_active
+    ON mip_app.tenant_disclosures (tenant_id, state, channel, active, updated_at DESC);
+
+-- Sales operations ----------------------------------------------------
+-- Thin Module 0 work-management layer for the named Sales Manager
+-- persona. These tables store internal staff identity and synthetic
+-- borrower ids only. Borrower names, emails, phone numbers, street
+-- addresses, and raw Cotality identifiers do not belong here.
+CREATE TABLE IF NOT EXISTS mip_app.sales_team (
+    email            TEXT PRIMARY KEY,
+    display_label    TEXT NOT NULL,
+    role             TEXT NOT NULL DEFAULT 'loan_officer'
+                     CHECK (role IN ('loan_officer','sales_manager','admin')),
+    manager_email    TEXT,
+    region           TEXT,
+    capacity_per_day INTEGER NOT NULL DEFAULT 35
+                     CHECK (capacity_per_day BETWEEN 0 AND 250),
+    active           BOOLEAN NOT NULL DEFAULT true,
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_sales_team_manager
+    ON mip_app.sales_team (manager_email, active, display_label);
+
+CREATE TABLE IF NOT EXISTS mip_app.lead_assignments (
+    assignment_id     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    borrower_id       TEXT NOT NULL,
+    assigned_to_email TEXT NOT NULL REFERENCES mip_app.sales_team(email),
+    assigned_by       TEXT NOT NULL,
+    assigned_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at        TIMESTAMPTZ,
+    released_at       TIMESTAMPTZ,
+    strategy          TEXT NOT NULL DEFAULT 'manual'
+                      CHECK (strategy IN ('manual','round_robin','score_balanced')),
+    request_id        TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_lead_assignments_active_borrower
+    ON mip_app.lead_assignments (borrower_id)
+    WHERE released_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_lead_assignments_assignee
+    ON mip_app.lead_assignments (assigned_to_email, assigned_at DESC)
+    WHERE released_at IS NULL;
+DROP INDEX IF EXISTS mip_app.idx_lead_assignments_request_id;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_lead_assignments_request_borrower
+    ON mip_app.lead_assignments (request_id, borrower_id)
+    WHERE request_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS mip_app.call_dispositions (
+    disposition_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    borrower_id    TEXT NOT NULL,
+    lo_email       TEXT NOT NULL REFERENCES mip_app.sales_team(email),
+    outcome        TEXT NOT NULL CHECK (
+        outcome IN (
+            'called_no_answer','called_left_voicemail','connected',
+            'callback_scheduled','application_started','not_interested',
+            'not_now','dead'
+        )
+    ),
+    attempt_number INTEGER NOT NULL DEFAULT 1 CHECK (attempt_number > 0),
+    occurred_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    callback_at    TIMESTAMPTZ,
+    notes          TEXT CHECK (notes IS NULL OR length(notes) <= 500),
+    audit_event_id UUID,
+    request_id     TEXT,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_call_dispositions_borrower
+    ON mip_app.call_dispositions (borrower_id, occurred_at DESC);
+CREATE INDEX IF NOT EXISTS idx_call_dispositions_lo
+    ON mip_app.call_dispositions (lo_email, occurred_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_call_dispositions_request_id
+    ON mip_app.call_dispositions (request_id)
+    WHERE request_id IS NOT NULL;
 
 -- Approvals -----------------------------------------------------------
 -- One row per human-in-the-loop decision on an outreach draft.
@@ -100,7 +218,7 @@ CREATE TABLE IF NOT EXISTS mip_app.outreach_drafts (
     actor_email  TEXT NOT NULL,
     borrower_id  TEXT NOT NULL,
     offer_code   TEXT,
-    channel      TEXT NOT NULL DEFAULT 'email' CHECK (channel IN ('email','sms')),
+    channel      TEXT NOT NULL DEFAULT 'email' CHECK (channel IN ('email','sms','direct_mail')),
     body         TEXT NOT NULL CHECK (length(body) <= 5000),
     status       TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','released')),
     saved_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -108,6 +226,10 @@ CREATE TABLE IF NOT EXISTS mip_app.outreach_drafts (
     deleted_at   TIMESTAMPTZ,
     PRIMARY KEY (actor_email, borrower_id, channel)
 );
+ALTER TABLE mip_app.outreach_drafts
+    DROP CONSTRAINT IF EXISTS outreach_drafts_channel_check;
+ALTER TABLE mip_app.outreach_drafts
+    ADD CONSTRAINT outreach_drafts_channel_check CHECK (channel IN ('email','sms','direct_mail'));
 CREATE INDEX IF NOT EXISTS idx_outreach_drafts_actor_updated
     ON mip_app.outreach_drafts (actor_email, updated_at DESC)
     WHERE deleted_at IS NULL;

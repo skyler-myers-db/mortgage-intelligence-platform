@@ -122,7 +122,7 @@ def test_lead_queue_cohort_without_target_ignores_url_target_lender(
     assert call["zip_codes"] == ["60617"]
     assert call["segment_codes"] == ["itm"]
     assert call["target_lender_ref"] is None
-    assert "portfolio_criteria" not in call
+    assert call["portfolio_criteria"].marketing_eligibility == "Eligible only"
 
 
 def test_lead_queue_cohort_rejects_invalid_lakebase_route_filters(

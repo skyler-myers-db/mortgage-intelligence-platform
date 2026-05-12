@@ -1,14 +1,23 @@
 import type {
   Borrower360,
+  BorrowerLifecycle,
+  CallDisposition,
+  CampaignListResponse,
+  CampaignSummary,
   ConfigOptions,
   CountyRollupResponse,
   DataEstateResponse,
   LeadSummary,
+  LeadAssignment,
   OfferRecommendation,
   PortfolioCreateResponse,
   PortfolioPreview,
   SegmentCode,
   SegmentSummary,
+  SalesTeamMember,
+  SalesAgingLead,
+  SalesConversionResponse,
+  SalesStandupResponse,
   StateRollupResponse,
   SavedDraft,
   SavedDraftInput,
@@ -72,10 +81,13 @@ export interface RejectResult {
 export interface OutreachDraftResult {
   borrower_id: string;
   offer_code: string;
-  channel: 'email' | 'sms';
+  channel: 'email' | 'sms' | 'direct_mail';
   subject?: string | null;
   body: string;
   status: 'draft';
+  disclosure_version: string;
+  disclosure_state: string;
+  marketing_eligible: boolean;
 }
 
 export interface GenieResult {
@@ -105,6 +117,10 @@ export interface AuditEventRow {
   payload_json: Record<string, unknown>;
   evidence_ids: string[];
   created_at: string;
+  event_type?: string | null;
+  subject_clip?: string | null;
+  subject_segment?: string | null;
+  request_id?: string | null;
 }
 
 /**
@@ -121,7 +137,28 @@ export interface LeadQueryOptions {
   targetLenderRef?: string | null;
   cohortId?: string | null;
   portfolioCriteria?: GeoQueryCriteria;
+  approvalStatus?: 'pending' | 'approved' | 'rejected' | 'hold' | 'any';
+  outreachStatus?: 'none' | 'queued' | 'actioned' | 'sent' | 'bounced' | 'replied' | 'any';
+  assignedTo?: string | null;
+  agedDays?: number | null;
   limit?: number;
+}
+
+export interface AssignmentResponse {
+  assignment: LeadAssignment;
+  audit_event_id?: string | null;
+}
+
+export interface DispositionResponse {
+  disposition: CallDisposition;
+  audit_event_id?: string | null;
+}
+
+export interface LeadsPageResult {
+  leads: LeadSummary[];
+  totalMatching: number | null;
+  returnedRows: number | null;
+  truncatedAt: number | null;
 }
 
 export type GeoQueryCriteria = Record<string, string | number | readonly string[] | null | undefined>;
@@ -288,7 +325,10 @@ function _newRequestId(): string {
   const c: Crypto | undefined =
     typeof globalThis !== 'undefined' ? globalThis.crypto : undefined;
   if (c && typeof c.randomUUID === 'function') return c.randomUUID();
-  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (ch) => {
+    const n = ch === 'x' ? Math.floor(Math.random() * 16) : 8 + Math.floor(Math.random() * 4);
+    return n.toString(16);
+  });
 }
 
 export interface Retryable503Parsed {
@@ -400,6 +440,17 @@ async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
   return (await res.json()) as T;
 }
 
+async function getJsonWithHeaders<T>(path: string, signal?: AbortSignal): Promise<{ data: T; headers: Headers }> {
+  let res: Response;
+  try {
+    res = await _fetchWithRetry(path, undefined, 3, signal);
+  } catch (err) {
+    throw _wrapFetchError(err, path);
+  }
+  if (!res.ok) await _throwFromResponse(res, path);
+  return { data: (await res.json()) as T, headers: res.headers };
+}
+
 async function postJson<T, B>(path: string, body: B, signal?: AbortSignal): Promise<T> {
   let res: Response;
   try {
@@ -427,6 +478,26 @@ async function putJson<T, B>(path: string, body: B, signal?: AbortSignal): Promi
       path,
       {
         method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body ?? {}),
+      },
+      3,
+      signal,
+    );
+  } catch (err) {
+    throw _wrapFetchError(err, path);
+  }
+  if (!res.ok) await _throwFromResponse(res, path);
+  return (await res.json()) as T;
+}
+
+async function patchJson<T, B>(path: string, body: B, signal?: AbortSignal): Promise<T> {
+  let res: Response;
+  try {
+    res = await _fetchWithRetry(
+      path,
+      {
+        method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body ?? {}),
       },
@@ -486,11 +557,41 @@ export const api = {
   portfolioCreate: (
     name: string,
     criteria: Record<string, unknown> = {},
+    config: Partial<{
+      suppression_policy: Record<string, unknown>;
+      message_variants: Record<string, unknown>[];
+      channel_cascade: Record<string, unknown>[];
+      send_window: Record<string, unknown>;
+      holdout: Record<string, unknown>;
+      roi_assumptions: Record<string, unknown>;
+    }> = {},
     signal?: AbortSignal,
   ) =>
-    postJson<PortfolioCreateResponse, { name: string; criteria: Record<string, unknown> }>(
+    postJson<PortfolioCreateResponse, {
+      name: string;
+      criteria: Record<string, unknown>;
+      suppression_policy: Record<string, unknown>;
+      message_variants: Record<string, unknown>[];
+      channel_cascade: Record<string, unknown>[];
+      send_window: Record<string, unknown>;
+      holdout: Record<string, unknown>;
+      roi_assumptions: Record<string, unknown>;
+    }>(
       '/api/portfolio/create',
-      { name, criteria },
+      {
+        name,
+        criteria,
+        suppression_policy: config.suppression_policy ?? { default: 'eligible_only', frequency_cap_days: 30 },
+        message_variants: config.message_variants ?? [],
+        channel_cascade: config.channel_cascade ?? [
+          { channel: 'email', step: 1 },
+          { channel: 'sms', step: 2, after_days: 3 },
+          { channel: 'direct_mail', step: 3, after_days: 10 },
+        ],
+        send_window: config.send_window ?? { days: ['Tuesday', 'Wednesday', 'Thursday'], start_local: '09:00', end_local: '16:00' },
+        holdout: config.holdout ?? { method: 'hash_modulo', size_pct: 10 },
+        roi_assumptions: config.roi_assumptions ?? { source: 'operator_required_before_live_send' },
+      },
       signal,
     ),
 
@@ -573,7 +674,7 @@ export const api = {
     );
   },
 
-  leads: (
+  leadsPage: (
     segment?: string,
     signal?: AbortSignal,
     geo?: { state?: string; zip?: string; county?: string; states?: string[]; zips?: string[]; borrowerIds?: string[] },
@@ -599,6 +700,10 @@ export const api = {
     if (geo?.borrowerIds && geo.borrowerIds.length > 0) params.set('borrower_ids', geo.borrowerIds.join(','));
     if (opts.targetLenderRef) params.set('target_lender_ref', opts.targetLenderRef);
     if (opts.cohortId) params.set('cohort_id', opts.cohortId);
+    if (opts.approvalStatus && opts.approvalStatus !== 'any') params.set('approval_status', opts.approvalStatus);
+    if (opts.outreachStatus && opts.outreachStatus !== 'any') params.set('outreach_status', opts.outreachStatus);
+    if (opts.assignedTo) params.set('assigned_to', opts.assignedTo);
+    if (opts.agedDays) params.set('aged_days', String(opts.agedDays));
     if (opts.portfolioCriteria) {
       for (const [key, value] of Object.entries(opts.portfolioCriteria)) {
         if (value !== null && value !== undefined && String(value).length > 0) {
@@ -607,14 +712,35 @@ export const api = {
       }
     }
     const qs = params.toString();
-    return getJson<LeadSummary[]>(
+    return getJsonWithHeaders<LeadSummary[]>(
       qs ? `/api/leads?${qs}` : '/api/leads',
       signal,
-    );
+    ).then(({ data, headers }) => ({
+      leads: data,
+      totalMatching: headers.get('X-Total-Matching') ? Number(headers.get('X-Total-Matching')) : null,
+      returnedRows: headers.get('X-Returned-Rows') ? Number(headers.get('X-Returned-Rows')) : null,
+      truncatedAt: headers.get('X-Truncated-At') ? Number(headers.get('X-Truncated-At')) : null,
+    }));
   },
+
+  leads: (
+    segment?: string,
+    signal?: AbortSignal,
+    geo?: { state?: string; zip?: string; county?: string; states?: string[]; zips?: string[]; borrowerIds?: string[] },
+    opts: LeadQueryOptions = {},
+  ) => api.leadsPage(segment, signal, geo, opts).then((page) => page.leads),
 
   borrower: (id: string, signal?: AbortSignal) =>
     getJson<Borrower360>(`/api/borrowers/${id}`, signal),
+
+  borrowerLifecycle: (id: string, signal?: AbortSignal) =>
+    getJson<BorrowerLifecycle>(`/api/borrowers/${id}/lifecycle`, signal),
+
+  borrowerSearch: (q: string, signal?: AbortSignal) => {
+    const params = new URLSearchParams();
+    params.set('q', q);
+    return getJson<LeadSummary[]>(`/api/borrowers/search?${params.toString()}`, signal);
+  },
 
   recommendOffer: (borrower_id: string, signal?: AbortSignal) =>
     postJson<OfferRecommendation, { borrower_id: string }>(
@@ -630,6 +756,12 @@ export const api = {
       offer_code?: string | null;
       evidence_ids?: string[];
       draft_body?: string | null;
+      rationale?: string | null;
+      bulk_id?: string | null;
+      bulk_rationale?: string | null;
+      channel?: 'email' | 'sms' | 'direct_mail';
+      campaign_id?: string | null;
+      variant_name?: string | null;
       request_id?: string;
     } = {},
     signal?: AbortSignal,
@@ -642,6 +774,12 @@ export const api = {
         offer_code?: string | null;
         evidence_ids?: string[];
         draft_body?: string | null;
+        rationale?: string | null;
+        bulk_id?: string | null;
+        bulk_rationale?: string | null;
+        channel?: 'email' | 'sms' | 'direct_mail';
+        campaign_id?: string | null;
+        variant_name?: string | null;
         request_id: string;
       }
     >(
@@ -652,6 +790,12 @@ export const api = {
         offer_code: opts.offer_code ?? null,
         evidence_ids: opts.evidence_ids ?? [],
         draft_body: opts.draft_body ?? null,
+        rationale: opts.rationale ?? null,
+        bulk_id: opts.bulk_id ?? null,
+        bulk_rationale: opts.bulk_rationale ?? null,
+        channel: opts.channel ?? 'email',
+        campaign_id: opts.campaign_id ?? null,
+        variant_name: opts.variant_name ?? null,
         // R5-01 idempotency: generate one UUID per user action and reuse
         // across any transparent retries inside _fetchWithRetry. The
         // backend has a unique index on mip_app.approvals(request_id)
@@ -676,9 +820,13 @@ export const api = {
       actor?: string;
       offer_code?: string | null;
       evidence_ids?: string[];
+      rationale_code: string;
       rationale?: string | null;
+      channel?: 'email' | 'sms' | 'direct_mail';
+      campaign_id?: string | null;
+      variant_name?: string | null;
       request_id?: string;
-    } = {},
+    },
     signal?: AbortSignal,
   ) =>
     postJson<
@@ -688,7 +836,11 @@ export const api = {
         actor: string;
         offer_code?: string | null;
         evidence_ids?: string[];
+        rationale_code: string;
         rationale?: string | null;
+        channel?: 'email' | 'sms' | 'direct_mail';
+        campaign_id?: string | null;
+        variant_name?: string | null;
         request_id: string;
       }
     >(
@@ -698,7 +850,11 @@ export const api = {
         actor: opts.actor ?? 'anonymous',
         offer_code: opts.offer_code ?? null,
         evidence_ids: opts.evidence_ids ?? [],
+        rationale_code: opts.rationale_code,
         rationale: opts.rationale ?? null,
+        channel: opts.channel ?? 'email',
+        campaign_id: opts.campaign_id ?? null,
+        variant_name: opts.variant_name ?? null,
         request_id: opts.request_id ?? _newRequestId(),
       },
       signal,
@@ -712,12 +868,133 @@ export const api = {
    */
   draftOutreach: (
     borrower_id: string,
-    channel: 'email' | 'sms' = 'email',
+    channel: 'email' | 'sms' | 'direct_mail' = 'email',
     signal?: AbortSignal,
   ) =>
-    postJson<OutreachDraftResult, { borrower_id: string; channel: 'email' | 'sms' }>(
+    postJson<OutreachDraftResult, { borrower_id: string; channel: 'email' | 'sms' | 'direct_mail' }>(
       '/api/outreach/draft',
       { borrower_id, channel },
+      signal,
+    ),
+
+  salesTeam: (signal?: AbortSignal) =>
+    getJson<SalesTeamMember[]>('/api/sales/team', signal),
+
+  assignLead: (
+    borrowerId: string,
+    assignedToEmail: string,
+    strategy: 'manual' | 'round_robin' | 'score_balanced' = 'manual',
+    signal?: AbortSignal,
+  ) =>
+    postJson<AssignmentResponse, {
+      assigned_to_email: string;
+      strategy: 'manual' | 'round_robin' | 'score_balanced';
+      expires_in_hours: number;
+      request_id: string;
+    }>(
+      `/api/leads/${encodeURIComponent(borrowerId)}/assign`,
+      {
+        assigned_to_email: assignedToEmail,
+        strategy,
+        expires_in_hours: 24,
+        request_id: _newRequestId(),
+      },
+      signal,
+    ),
+
+  distributeLeads: (
+    borrowerIds: string[],
+    loEmails: string[],
+    strategy: 'round_robin' | 'score_balanced' = 'round_robin',
+    signal?: AbortSignal,
+  ) =>
+    postJson<{
+      assigned_count: number;
+      strategy: string;
+      assignments: LeadAssignment[];
+      per_lo_counts: Record<string, number>;
+      audit_event_id?: string | null;
+    }, {
+      borrower_ids: string[];
+      lo_emails: string[];
+      strategy: 'round_robin' | 'score_balanced';
+      expires_in_hours: number;
+      request_id: string;
+    }>(
+      '/api/sales/distribute',
+      {
+        borrower_ids: borrowerIds,
+        lo_emails: loEmails,
+        strategy,
+        expires_in_hours: 24,
+        request_id: _newRequestId(),
+      },
+      signal,
+    ),
+
+  logDisposition: (
+    borrowerId: string,
+    payload: {
+      lo_email: string;
+      outcome: CallDisposition['outcome'];
+      callback_at?: string | null;
+      notes?: string | null;
+    },
+    signal?: AbortSignal,
+  ) =>
+    postJson<DispositionResponse, {
+      lo_email: string;
+      outcome: CallDisposition['outcome'];
+      callback_at?: string | null;
+      notes?: string | null;
+      request_id: string;
+    }>(
+      `/api/leads/${encodeURIComponent(borrowerId)}/disposition`,
+      {
+        ...payload,
+        request_id: _newRequestId(),
+      },
+      signal,
+    ),
+
+  salesAging: (olderThanDays = 7, limit = 100, signal?: AbortSignal) =>
+    getJson<SalesAgingLead[]>(`/api/sales/aging?older_than_days=${olderThanDays}&limit=${limit}`, signal),
+
+  salesStandup: (date?: string, signal?: AbortSignal) => {
+    const params = new URLSearchParams();
+    if (date) params.set('date', date);
+    const qs = params.toString();
+    return getJson<SalesStandupResponse>(qs ? `/api/sales/standup?${qs}` : '/api/sales/standup', signal);
+  },
+
+  salesConversion: (
+    fromDate: string,
+    toDate: string,
+    groupBy: 'lo' | 'cohort' = 'lo',
+    signal?: AbortSignal,
+  ) => {
+    const params = new URLSearchParams();
+    params.set('from', fromDate);
+    params.set('to', toDate);
+    params.set('groupBy', groupBy);
+    return getJson<SalesConversionResponse>(`/api/sales/conversion?${params.toString()}`, signal);
+  },
+
+  campaigns: (signal?: AbortSignal) =>
+    getJson<CampaignListResponse>('/api/campaigns', signal),
+
+  campaign: (campaignId: string, signal?: AbortSignal) =>
+    getJson<CampaignSummary>(`/api/campaigns/${campaignId}`, signal),
+
+  campaignStatus: (
+    campaignId: string,
+    status: CampaignSummary['status'],
+    rationale?: string | null,
+    signal?: AbortSignal,
+  ) =>
+    patchJson<CampaignSummary, { status: CampaignSummary['status']; rationale?: string | null }>(
+      `/api/campaigns/${campaignId}`,
+      { status, rationale: rationale ?? null },
       signal,
     ),
 
@@ -767,8 +1044,33 @@ export const api = {
    * get the same cadence the backend's Resilient wrapper runs at.
    * Hole-finder finding #4, 2026-04-23.
    */
-  auditEvents: (limit = 12, signal?: AbortSignal) =>
-    getJson<AuditEventRow[]>(`/api/audit/events?limit=${limit}`, signal),
+  auditEvents: (
+    limit = 12,
+    signal?: AbortSignal,
+    filters: {
+      actor?: string | null;
+      action?: string | null;
+      entity_id?: string | null;
+      borrower_id?: string | null;
+      subject_clip?: string | null;
+      event_type?: string | null;
+      since?: string | null;
+      until?: string | null;
+    } = {},
+  ) => {
+    const params = new URLSearchParams();
+    params.set('limit', String(limit));
+    Object.entries(filters).forEach(([key, value]) => {
+      if (value) params.set(key, value);
+    });
+    return getJson<AuditEventRow[]>(`/api/audit/events?${params.toString()}`, signal);
+  },
+
+  auditRollups: (period: 'day' | 'week' | 'month' = 'week', signal?: AbortSignal) =>
+    getJson<Array<{ bucket_start: string; event_type: string; event_count: number }>>(
+      `/api/audit/rollups?period=${period}`,
+      signal,
+    ),
 
   workspace: (signal?: AbortSignal) =>
     getJson<WorkspaceState>('/api/workspace', signal),
@@ -795,7 +1097,7 @@ export const api = {
 
   deleteWorkspaceDraft: (
     borrowerId: string,
-    channel: 'email' | 'sms' = 'email',
+    channel: 'email' | 'sms' | 'direct_mail' = 'email',
     signal?: AbortSignal,
   ) =>
     deleteJson<WorkspaceMutationResult>(

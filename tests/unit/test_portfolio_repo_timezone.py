@@ -17,6 +17,7 @@ from typing import Any
 import pytest
 
 from backend.schemas.portfolio import (
+    CampaignStatusPatchRequest,
     PortfolioCreateRequest,
     PortfolioCriteria,
     PortfolioPreviewRequest,
@@ -81,6 +82,36 @@ class _StubLakebase:
             "campaign_id": "11111111-1111-1111-1111-111111111111",
             "audit_id": "22222222-2222-2222-2222-222222222222",
         }
+
+
+class _CampaignPatchLakebase:
+    def __init__(self, *, suppression_policy: dict[str, object]) -> None:
+        self.suppression_policy = suppression_policy
+        self.calls: list[dict[str, object]] = []
+
+    def _row(self, *, status: str = "draft") -> dict[str, object]:
+        return {
+            "campaign_id": "11111111-1111-4111-8111-111111111111",
+            "name": "Maya QA CA recapture",
+            "owner_email": "skyler@entrada.ai",
+            "status": status,
+            "criteria": {"marketing_eligibility": "Eligible only"},
+            "suppression_policy": self.suppression_policy,
+            "message_variants": [],
+            "channel_cascade": [],
+            "send_window": {},
+            "holdout": None,
+            "roi_assumptions": None,
+        }
+
+    def fetchone(self, sql: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        self.calls.append({"sql": sql, "params": params or {}})
+        if "UPDATE mip_app.campaigns" in sql:
+            return self._row(status=str((params or {}).get("status") or "pending_review"))  # type: ignore[return-value]
+        return self._row()  # type: ignore[return-value]
+
+    def execute(self, sql: str, params: dict[str, Any] | None = None) -> None:
+        self.calls.append({"sql": sql, "params": params or {}})
 
 
 def _preview_row() -> dict[str, Any]:
@@ -388,17 +419,51 @@ def test_create_uses_submitted_criteria_for_population_count(monkeypatch):
     preview_params = client.parameters[preview_index]
     assert "is_owner_occupied = TRUE" in preview_sql
     assert "equity_pct >= :equity_floor" in preview_sql
+    assert "marketing_eligible = TRUE" in preview_sql
     assert preview_params == {"equity_floor": 25}
     assert lakebase.rows
     assert "mip_app.action_audit" in lakebase.rows[0]["sql"]
-    assert lakebase.rows[0]["params"]["criteria"] == '{"occupancy": "Owner-occupied", "min_equity_pct_label": "\\u2265 25%"}'
+    assert lakebase.rows[0]["params"]["criteria"] == (
+        '{"occupancy": "Owner-occupied", "marketing_eligibility": "Eligible only", '
+        '"min_equity_pct_label": "\\u2265 25%"}'
+    )
     metadata = json.loads(str(lakebase.rows[0]["params"]["metadata"]))
     assert metadata["source"] == "portfolio_builder"
     assert metadata["criteria"] == {
         "occupancy": "Owner-occupied",
+        "marketing_eligibility": "Eligible only",
         "min_equity_pct_label": "≥ 25%",
     }
     assert metadata["marketable_population"] == 1000
+
+
+@pytest.mark.parametrize(
+    "suppression_policy",
+    [
+        {"default": "eligible_only", "frequency_cap_days": 30},
+        {"require_marketing_eligible": True, "frequency_cap_days": 30},
+        {"marketing_eligibility": "Eligible only", "frequency_cap_days": 30},
+        {"marketing_eligibility": "eligible_only", "frequency_cap_days": 30},
+    ],
+)
+def test_campaign_status_accepts_reviewed_eligible_only_policy_shapes(
+    monkeypatch,
+    suppression_policy: dict[str, object],
+):
+    lakebase = _CampaignPatchLakebase(suppression_policy=suppression_policy)
+    monkeypatch.setattr(
+        "backend.services.repositories.databricks_repo.get_lakebase_client",
+        lambda: lakebase,
+    )
+    repo = DatabricksPortfolioRepository(_StubClient(_preview_row(), []))  # type: ignore[arg-type]
+
+    summary = repo.patch_status(
+        "11111111-1111-4111-8111-111111111111",
+        CampaignStatusPatchRequest(status="pending_review"),
+        actor="skyler@entrada.ai",
+    )
+
+    assert summary.status == "pending_review"
 
 
 def test_empty_filtered_cohort_keeps_avg_score_null_not_zero():

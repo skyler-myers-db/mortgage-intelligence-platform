@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
@@ -10,6 +12,8 @@ from backend.services.repositories.databricks_repo import (
     _BORROWER_360_COLUMNS,
     _LEAD_POPULATION_COLUMNS,
 )
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _lead_payload(**overrides: object) -> dict[str, object]:
@@ -85,6 +89,7 @@ def test_borrower_360_projection_selects_module0_flags() -> None:
 
 def test_lead_population_projection_selects_module0_flags() -> None:
     for column in (
+        "recommended_offer_code",
         "is_owner_occupied",
         "is_investor",
         "is_current_customer",
@@ -95,6 +100,16 @@ def test_lead_population_projection_selects_module0_flags() -> None:
         "second_pos_amount",
     ):
         assert column in _LEAD_POPULATION_COLUMNS
+
+
+def test_lead_population_sql_emits_canonical_offer_code() -> None:
+    transform_sql = (
+        REPO_ROOT / "sql" / "transformations" / "gold_lead_population.sql"
+    ).read_text()
+    ddl_sql = (REPO_ROOT / "sql" / "ddl" / "gold_lead_population.sql").read_text()
+
+    assert "b.recommended_offer_code" in transform_sql
+    assert "recommended_offer_code" in ddl_sql
 
 
 def test_borrower_360_rejects_street_address_subject_property() -> None:

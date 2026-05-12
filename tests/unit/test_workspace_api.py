@@ -60,7 +60,7 @@ def test_workspace_saved_leads_are_actor_scoped_and_deletable() -> None:
 
 
 def test_workspace_drafts_are_persisted_and_pii_scrubbed() -> None:
-    borrower_id = f"B-DR-{uuid4().hex[:8]}"
+    borrower_id = "B-48291"
     actor = f"lo-{uuid4().hex[:8]}@example.com"
     body = (
         "Hi [first name], call 212-555-1212 or email person@example.com. "
@@ -71,7 +71,7 @@ def test_workspace_drafts_are_persisted_and_pii_scrubbed() -> None:
         f"/api/workspace/drafts/{borrower_id}",
         json={
             "borrower_id": borrower_id,
-            "offer_code": "OFFER-123",
+            "offer_code": "refi_plus_heloc",
             "channel": "email",
             "body": body,
         },

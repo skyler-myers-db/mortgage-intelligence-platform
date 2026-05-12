@@ -29,6 +29,9 @@ from backend.schemas.geo import (
 )
 from backend.schemas.lead import Borrower360, LeadSummary, SegmentSummary
 from backend.schemas.portfolio import (
+    CampaignListResponse,
+    CampaignStatusPatchRequest,
+    CampaignSummary,
     PortfolioCreateRequest,
     PortfolioCreateResponse,
     PortfolioCriteria,
@@ -52,6 +55,24 @@ class PortfolioRepository(Protocol):
         ...
 
     def get(self, portfolio_id: str) -> dict[str, object]:
+        ...
+
+    def list_campaigns(
+        self,
+        *,
+        owner_email: str | None = None,
+        status: str | None = None,
+        limit: int = 50,
+    ) -> CampaignListResponse:
+        ...
+
+    def patch_status(
+        self,
+        portfolio_id: str,
+        payload: CampaignStatusPatchRequest,
+        *,
+        actor: str | None = None,
+    ) -> CampaignSummary:
         ...
 
 
@@ -100,6 +121,9 @@ class LeadRepository(Protocol):
         target_lender_ref: str | None = None,
         cohort_id: str | None = None,
         portfolio_criteria: PortfolioCriteria | None = None,
+        approval_status: str | None = None,
+        outreach_status: str | None = None,
+        aged_days: int | None = None,
     ) -> list[LeadSummary]:
         """Return up to ``limit`` ranked leads.
 
@@ -124,6 +148,29 @@ class LeadRepository(Protocol):
         """
         ...
 
+    def count(
+        self,
+        segment: str | None,
+        portfolio_id: str | None,
+        state: str | None = None,
+        zip_code: str | None = None,
+        county_fips: str | None = None,
+        county_fipses: list[str] | None = None,
+        state_codes: list[str] | None = None,
+        zip_codes: list[str] | None = None,
+        borrower_ids: list[str] | None = None,
+        segment_codes: list[str] | None = None,
+        segment_mode: str = "any",
+        target_lender_ref: str | None = None,
+        cohort_id: str | None = None,
+        portfolio_criteria: PortfolioCriteria | None = None,
+        approval_status: str | None = None,
+        outreach_status: str | None = None,
+        aged_days: int | None = None,
+    ) -> int:
+        """Return the total matching the same predicates as ``list``."""
+        ...
+
 
 @runtime_checkable
 class BorrowerRepository(Protocol):
@@ -140,6 +187,10 @@ class BorrowerRepository(Protocol):
         ...
 
     def evidence(self, borrower_id: str) -> list[EvidenceEvent] | None:
+        ...
+
+    def search(self, query: str, limit: int = 10) -> list[LeadSummary]:
+        """Find borrowers by public borrower id, ZIP, city, or masked property ref."""
         ...
 
 

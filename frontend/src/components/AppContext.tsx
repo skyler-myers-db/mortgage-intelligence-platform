@@ -58,7 +58,7 @@ interface AppCtxValue {
   isLeadSaved: (borrowerId: string) => boolean;
   savedDrafts: Record<string, SavedDraft>;
   saveDraft: (draft: SavedDraftInput) => void;
-  removeSavedDraft: (borrowerId: string) => void;
+  removeSavedDraft: (borrowerId: string, channel?: SavedDraft['channel']) => void;
   workspaceStatus: 'loading' | 'ready' | 'error';
   workspaceError: string | null;
   refreshWorkspace: () => void;
@@ -105,6 +105,14 @@ const DENSITIES: readonly Density[] = ['comfortable', 'compact'];
 
 function mapByBorrower<T extends { borrower_id: string }>(items: T[]): Record<string, T> {
   return Object.fromEntries(items.map((item) => [item.borrower_id, item]));
+}
+
+function draftKey(borrowerId: string, channel: SavedDraft['channel'] = 'email'): string {
+  return `${borrowerId}::${channel}`;
+}
+
+function mapDraftsByBorrowerChannel(items: SavedDraft[]): Record<string, SavedDraft> {
+  return Object.fromEntries(items.map((item) => [draftKey(item.borrower_id, item.channel), item]));
 }
 
 export function AppProvider({ children }: PropsWithChildren) {
@@ -178,7 +186,7 @@ export function AppProvider({ children }: PropsWithChildren) {
     void api.workspace(ctrl.signal)
       .then((workspace) => {
         setSavedLeads(mapByBorrower(workspace.saved_leads));
-        setSavedDrafts(mapByBorrower(workspace.saved_drafts));
+        setSavedDrafts(mapDraftsByBorrowerChannel(workspace.saved_drafts));
         setWorkspaceStatus('ready');
         setWorkspaceError(null);
       })
@@ -272,11 +280,12 @@ export function AppProvider({ children }: PropsWithChildren) {
     const now = new Date().toISOString();
     setLastBorrowerIdState(draft.borrower_id);
     let prior: SavedDraft | undefined;
+    const key = draftKey(draft.borrower_id, draft.channel);
     setSavedDrafts((cur) => {
-      prior = cur[draft.borrower_id];
+      prior = cur[key];
       return {
         ...cur,
-        [draft.borrower_id]: {
+        [key]: {
           ...prior,
           ...draft,
           channel: draft.channel,
@@ -287,14 +296,14 @@ export function AppProvider({ children }: PropsWithChildren) {
     });
     void api.saveWorkspaceDraft(draft)
       .then((saved) => {
-        setSavedDrafts((cur) => ({ ...cur, [saved.borrower_id]: saved }));
+        setSavedDrafts((cur) => ({ ...cur, [draftKey(saved.borrower_id, saved.channel)]: saved }));
         setWorkspaceStatus('ready');
         setWorkspaceError(null);
       })
       .catch((err: unknown) => {
         setSavedDrafts((cur) => {
-          const { [draft.borrower_id]: _discard, ...rest } = cur;
-          return prior ? { ...rest, [draft.borrower_id]: prior } : rest;
+          const { [key]: _discard, ...rest } = cur;
+          return prior ? { ...rest, [key]: prior } : rest;
         });
         setWorkspaceStatus('error');
         setWorkspaceError(
@@ -304,20 +313,21 @@ export function AppProvider({ children }: PropsWithChildren) {
         );
       });
   }, []);
-  const removeSavedDraft = useCallback((borrowerId: string) => {
+  const removeSavedDraft = useCallback((borrowerId: string, channel: SavedDraft['channel'] = 'email') => {
     let prior: SavedDraft | undefined;
+    const key = draftKey(borrowerId, channel);
     setSavedDrafts((cur) => {
-      prior = cur[borrowerId];
-      const { [borrowerId]: _discard, ...rest } = cur;
+      prior = cur[key];
+      const { [key]: _discard, ...rest } = cur;
       return rest;
     });
-    void api.deleteWorkspaceDraft(borrowerId)
+    void api.deleteWorkspaceDraft(borrowerId, channel)
       .then(() => {
         setWorkspaceStatus('ready');
         setWorkspaceError(null);
       })
       .catch((err: unknown) => {
-        if (prior) setSavedDrafts((cur) => ({ ...cur, [borrowerId]: prior as SavedDraft }));
+        if (prior) setSavedDrafts((cur) => ({ ...cur, [key]: prior as SavedDraft }));
         setWorkspaceStatus('error');
         setWorkspaceError(
           err instanceof Error

@@ -64,12 +64,15 @@ in-the-money?"
 ### `gold.evidence_events`
 Refreshed trigger evidence table rebuilt by the gold refresh job. Every card
 in the UI that shows "why now" reads from this table through the borrower
-dossier and evidence repository paths. Trigger types
-include rate-drop, equity-crossed, and lien-change. MLS listing and
-building-permit trigger feeds are pending Cotality delivery and are
-blocked false today; answers must disclose that gap instead of treating
-missing feed data as zero demand. Each row carries a `source_table`
-citation back to the Cotality silver layer.
+dossier and evidence repository paths. Governed trigger `signal_type` values
+are `rate_spread`, `equity`, `market_trend`, `competitor_lien`,
+`multi_property`, `absentee_mailing`, `corporate_owner`, `recent_refi`,
+`recent_payoff`, `recent_sale`, and `foreclosure_stage`. Competitor-lien
+evidence is always `signal_type = 'competitor_lien'`; no alias is valid. MLS
+listing and building-permit trigger feeds are pending Cotality delivery and are
+blocked false today; answers must disclose that gap instead of treating missing
+feed data as zero demand. Each row carries a `source_table` citation back to the
+Cotality silver layer.
 
 ### `gold.borrower_dossier`
 One row per `borrower_id` pre-joined with everything the

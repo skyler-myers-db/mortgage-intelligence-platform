@@ -164,9 +164,9 @@ def test_allowlist_permits_known_keys() -> None:
         {
             "action": "outreach.approve",
             "approval_id": "uuid-123",
-            "offer_code": "RATE_REFI",
+            "offer_code": "refi",
             "borrower_id": "B-00042",
-            "request_id": "req-abc",
+            "request_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
             "opportunity_score": 92,
             "confidence": 0.87,
             "thresholds_applied": {"min_spread_bps": 75},
@@ -176,7 +176,7 @@ def test_allowlist_permits_known_keys() -> None:
 
 def test_allowlist_is_case_insensitive() -> None:
     """Upper-cased known keys still pass -- matches the denylist policy."""
-    _assert_allowlisted({"OFFER_CODE": "RATE_REFI"})
+    _assert_allowlisted({"OFFER_CODE": "refi"})
 
 
 def test_audit_target_lender_ref_rejects_raw_lender_name() -> None:
@@ -252,6 +252,118 @@ def test_audit_public_safe_values_reject_raw_borrower_id() -> None:
         _assert_public_safe_values({"borrower_id": "1234567890"})
 
 
+def test_audit_public_safe_values_reject_unknown_offer_code() -> None:
+    with pytest.raises(AuditMetadataValueViolation):
+        _assert_public_safe_values({"offer_code": "jane@example.com"})
+
+
+def test_audit_public_safe_values_reject_pii_like_bulk_id() -> None:
+    with pytest.raises(AuditMetadataValueViolation):
+        _assert_public_safe_values({"bulk_id": "jane@example.com"})
+    with pytest.raises(AuditMetadataValueViolation):
+        _assert_public_safe_values({"bulk_id": "555-212-3333"})
+    with pytest.raises(AuditMetadataValueViolation):
+        _assert_public_safe_values({"request_id": "req-123-45-6789"})
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"BORROWER_ID": "1234567890"},
+        {"BULK_ID": "jane@example.com"},
+        {"Request_ID": "req-123-45-6789"},
+        {"CAMPAIGN_ID": "jane@example.com"},
+        {"Variant_Name": "Call 212-555-1212"},
+    ],
+)
+def test_audit_public_safe_values_are_case_insensitive(payload: dict[str, str]) -> None:
+    with pytest.raises(AuditMetadataValueViolation):
+        _assert_public_safe_values(payload)
+
+
+def test_audit_stores_reject_case_variant_campaign_metadata_before_persisting() -> None:
+    store = InMemoryAuditStore()
+    with pytest.raises(AuditMetadataValueViolation):
+        store.write(
+            actor="skyler@entrada.ai",
+            action="draft_outreach",
+            entity_type="outreach_draft",
+            entity_id="B-48291",
+            payload_json={"CAMPAIGN_ID": "jane@example.com"},
+        )
+    with pytest.raises(AuditMetadataValueViolation):
+        store.write(
+            actor="skyler@entrada.ai",
+            action="draft_outreach",
+            entity_type="outreach_draft",
+            entity_id="B-48291",
+            payload_json={"VARIANT_NAME": "Call 212-555-1212"},
+        )
+
+    client = MagicMock()
+    lakebase_store = LakebaseAuditStore(client=client)
+    with pytest.raises(AuditMetadataValueViolation):
+        lakebase_store.write(
+            actor="skyler@entrada.ai",
+            action="draft_outreach",
+            entity_type="outreach_draft",
+            entity_id="B-48291",
+            payload_json={"CAMPAIGN_ID": "jane@example.com"},
+        )
+    client.fetchone.assert_not_called()
+
+
+def test_audit_store_rejects_name_shaped_top_level_columns() -> None:
+    store = InMemoryAuditStore()
+    with pytest.raises(AuditMetadataValueViolation):
+        store.write(
+            actor="skyler@entrada.ai",
+            action="view.custom",
+            entity_type="lead_queue",
+            entity_id="Jane Smith",
+            payload_json={},
+        )
+    with pytest.raises(AuditMetadataValueViolation):
+        store.write(
+            actor="skyler@entrada.ai",
+            action="John Smith",
+            entity_type="lead_queue",
+            entity_id="manual",
+            payload_json={},
+        )
+
+
+def test_audit_store_server_action_overrides_payload_action() -> None:
+    store = InMemoryAuditStore()
+
+    event = store.write(
+        actor="skyler@entrada.ai",
+        action="view.custom",
+        entity_type="lead_queue",
+        entity_id="manual",
+        payload_json={"action": "Jane Smith", "row_count": 1},
+    )
+
+    assert event.action == "view.custom"
+    assert event.event_type == "VIEW_CUSTOM"
+    assert "action" not in event.payload_json
+
+
+def test_audit_store_accepts_uuid_with_phone_like_digit_run() -> None:
+    store = InMemoryAuditStore()
+
+    event = store.write(
+        actor="skyler@entrada.ai",
+        action="outreach.reject",
+        entity_type="approval",
+        entity_id="94e455bb-5fed-4745-82db-0b8606194175",
+        payload_json={"approval_id": "94e455bb-5fed-4745-82db-0b8606194175"},
+        event_type="OUTREACH_REJECT",
+    )
+
+    assert event.entity_id == "94e455bb-5fed-4745-82db-0b8606194175"
+
+
 def test_in_memory_store_scrubs_allowed_free_text_before_persisting() -> None:
     store = InMemoryAuditStore()
 
@@ -259,11 +371,11 @@ def test_in_memory_store_scrubs_allowed_free_text_before_persisting() -> None:
         actor="skyler@entrada.ai",
         action="outreach.approve",
         entity_type="approval",
-        entity_id="approval-1",
+        entity_id="94e455bb-5fed-4745-82db-0b8606194175",
         payload_json={
-            "approval_id": "approval-1",
+            "approval_id": "94e455bb-5fed-4745-82db-0b8606194175",
             "borrower_id": "B-12345",
-            "offer_code": "RATE_REFI",
+            "offer_code": "refi",
             "draft_body": "Call 555-212-3333 or email jane@example.com about 123 Elm St.",
         },
     )
@@ -321,36 +433,36 @@ def test_historical_payload_shapes_all_pass_allowlist() -> None:
             "opportunity_score": 92,
             "confidence": 0.87,
             "segment_codes": ["itm"],
-            "recommended_offer": "RATE_REFI",
+            "recommended_offer": "refi",
         },
     )
     # outreach.py::draft_outreach
     store.write(
         actor="a@b.com", action="draft_outreach",
         entity_type="outreach_draft", entity_id="B-1",
-        payload_json={"channel": "email", "offer_code": "RATE_REFI"},
+        payload_json={"channel": "email", "offer_code": "refi"},
     )
     # outreach.py::approve_outreach
     store.write(
         actor="a@b.com", action="outreach.approve",
-        entity_type="approval", entity_id="uuid-1",
+        entity_type="approval", entity_id="94e455bb-5fed-4745-82db-0b8606194175",
         payload_json={
-            "approval_id": "uuid-1",
-            "offer_code": "RATE_REFI",
+            "approval_id": "94e455bb-5fed-4745-82db-0b8606194175",
+            "offer_code": "refi",
             "borrower_id": "B-1",
-            "request_id": "req-1",
+            "request_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
             "draft_body": "Hi there...",
         },
     )
     # outreach.py::reject_outreach
     store.write(
         actor="a@b.com", action="outreach.reject",
-        entity_type="approval", entity_id="uuid-2",
+        entity_type="approval", entity_id="2ee3b92a-8910-4dc1-b72a-5ef0e0413f37",
         payload_json={
-            "approval_id": "uuid-2",
-            "offer_code": "RATE_REFI",
+            "approval_id": "2ee3b92a-8910-4dc1-b72a-5ef0e0413f37",
+            "offer_code": "refi",
             "borrower_id": "B-1",
-            "request_id": "req-2",
+            "request_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
             "rationale": "not a fit",
         },
     )
@@ -374,14 +486,8 @@ def test_historical_payload_shapes_all_pass_allowlist() -> None:
         actor="a@b.com", action="recommend_offer",
         entity_type="borrower", entity_id="B-1",
         payload_json={
-            "offer_code": "RATE_REFI",
+            "offer_code": "refi",
             "confidence": 0.87,
             "thresholds_applied": {"min_spread_bps": 75},
         },
-    )
-    # admin.py::set_rules
-    store.write(
-        actor="a@b.com", action="admin.rules.override_set",
-        entity_type="admin_rules", entity_id="legacy_override",
-        payload_json={"overrides": {"min_spread_bps": 80}},
     )

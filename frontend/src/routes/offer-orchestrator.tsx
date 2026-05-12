@@ -38,8 +38,10 @@ interface BorrowerCacheEntry {
   borrower: Borrower360Type;
   recommendation: OfferRecommendation;
   draftBody: string | null;
+  draftChannel: OutreachChannel | null;
   fetched: number;
 }
+type OutreachChannel = 'email' | 'sms' | 'direct_mail';
 const BORROWER_CACHE = new Map<string, BorrowerCacheEntry>();
 const BORROWER_CACHE_TTL_MS = 5 * 60 * 1000;
 function readBorrowerCache(id: string): BorrowerCacheEntry | null {
@@ -60,6 +62,25 @@ const THRESHOLD_LABELS: Record<string, string> = {
   cashout_equity_min_pct: 'Cash-out equity floor (%)',
   retention_min_spread_bps: 'Retention min spread (bps)',
 };
+
+type RejectReasonCode =
+  | 'out_of_footprint'
+  | 'do_not_call'
+  | 'opt_out'
+  | 'fair_lending_review'
+  | 'low_intent'
+  | 'data_quality'
+  | 'other_with_text';
+
+const REJECT_REASONS: { code: RejectReasonCode; label: string }[] = [
+  { code: 'low_intent', label: 'Low intent' },
+  { code: 'do_not_call', label: 'Do Not Call' },
+  { code: 'opt_out', label: 'Opt-out' },
+  { code: 'fair_lending_review', label: 'Fair-lending review' },
+  { code: 'data_quality', label: 'Data quality' },
+  { code: 'out_of_footprint', label: 'Out of footprint' },
+  { code: 'other_with_text', label: 'Other' },
+];
 
 function humanizeThresholdKey(k: string): string {
   if (THRESHOLD_LABELS[k]) return THRESHOLD_LABELS[k];
@@ -98,14 +119,20 @@ export default function OfferOrchestrator() {
   // 2026-05-08: fail closed if the backend draft endpoint is unavailable;
   // the UI must not generate or approve local outreach copy.
   const [draftBody, setDraftBody] = useState<string>('');
+  const [draftChannel, setDraftChannel] = useState<OutreachChannel>('email');
   const [draftLoaded, setDraftLoaded] = useState<boolean>(false);
   const [draftError, setDraftError] = useState<string | null>(null);
+  const [draftDisclosureVersion, setDraftDisclosureVersion] = useState<string | null>(null);
+  const [draftDisclosureState, setDraftDisclosureState] = useState<string | null>(null);
   // Cold-start warming-up state for the draftOutreach fetch. Non-null =
   // the draft endpoint is in a 503 retry loop (mirrors the borrower +
   // recommend loop). When present, the Draft outreach tile shows the
   // WarmingUpBlock; after retries exhaust the approval path remains
   // disabled until a governed draft loads.
   const [draftWarming, setDraftWarming] = useState<WarmingUpState | null>(null);
+  const [rejectReviewOpen, setRejectReviewOpen] = useState(false);
+  const [rejectReasonCode, setRejectReasonCode] = useState<RejectReasonCode>('low_intent');
+  const [rejectRationale, setRejectRationale] = useState('');
   const {
     setApproval,
     approvals,
@@ -118,7 +145,8 @@ export default function OfferOrchestrator() {
     removeSavedDraft,
   } = useApp();
   const approval = id ? approvals[id] : undefined;
-  const savedDraftBody = id ? savedDrafts[id]?.body : undefined;
+  const savedDraftKey = id ? `${id}::${draftChannel}` : null;
+  const savedDraftBody = savedDraftKey ? savedDrafts[savedDraftKey]?.body : undefined;
 
   useEffect(() => {
     if (id) setLastBorrowerId(id);
@@ -146,7 +174,9 @@ export default function OfferOrchestrator() {
       const cachedDraftBody =
         savedDraftBody && savedDraftBody.trim().length > 0
           ? savedDraftBody
-          : cached.draftBody;
+          : cached.draftChannel === draftChannel
+            ? cached.draftBody
+            : null;
       setB(cached.borrower);
       setRec(cached.recommendation);
       setLoadError(null);
@@ -155,8 +185,10 @@ export default function OfferOrchestrator() {
         setDraftBody(cachedDraftBody);
         setDraftLoaded(true);
       } else {
-        setDraftBody('');
-        setDraftLoaded(false);
+          setDraftBody('');
+          setDraftLoaded(false);
+          setDraftDisclosureVersion(null);
+          setDraftDisclosureState(null);
       }
     } else {
       setB(null);
@@ -183,7 +215,8 @@ export default function OfferOrchestrator() {
         BORROWER_CACHE.set(id, {
           borrower,
           recommendation,
-          draftBody: prev?.draftBody ?? null,
+          draftBody: prev?.draftChannel === draftChannel ? (prev?.draftBody ?? null) : null,
+          draftChannel: prev?.draftChannel === draftChannel ? draftChannel : null,
           fetched: Date.now(),
         });
       } catch (err: unknown) {
@@ -226,7 +259,7 @@ export default function OfferOrchestrator() {
     const runDraftAttempt = async (attempt: number): Promise<void> => {
       if (cancelled) return;
       try {
-        const draft = await api.draftOutreach(id, 'email', ctrl.signal);
+        const draft = await api.draftOutreach(id, draftChannel, ctrl.signal);
         if (cancelled) return;
         setDraftWarming(null);
         if (draft?.body && draft.body.trim().length > 0) {
@@ -236,16 +269,21 @@ export default function OfferOrchestrator() {
               : draft.body;
           setDraftBody(body);
           setDraftLoaded(true);
+          setDraftDisclosureVersion(draft.disclosure_version);
+          setDraftDisclosureState(draft.disclosure_state);
           const prev = BORROWER_CACHE.get(id);
           if (prev) {
             BORROWER_CACHE.set(id, {
               ...prev,
               draftBody: body,
+              draftChannel,
               fetched: Date.now(),
             });
           }
         } else {
           setDraftLoaded(false);
+          setDraftDisclosureVersion(null);
+          setDraftDisclosureState(null);
           setDraftError('Offer draft endpoint returned an empty draft. Approval is disabled until an audited draft loads.');
         }
       } catch (err: unknown) {
@@ -265,6 +303,8 @@ export default function OfferOrchestrator() {
         }
         setDraftWarming(null);
         setDraftLoaded(false);
+        setDraftDisclosureVersion(null);
+        setDraftDisclosureState(null);
         setDraftError(
           err instanceof Error
             ? `Offer draft unavailable: ${err.message}`
@@ -281,7 +321,7 @@ export default function OfferOrchestrator() {
       if (draftTimeoutId !== null) clearTimeout(draftTimeoutId);
       ctrl.abort();
     };
-  }, [id, reloadToken, savedDraftBody]);
+  }, [draftChannel, id, reloadToken, savedDraftBody]);
 
   // Offer Orchestrator is a per-borrower action page; without an id
   // render an empty-state landing page so the tab click isn't a silent
@@ -328,7 +368,7 @@ export default function OfferOrchestrator() {
   const productLabel = rec?.product_label ?? b?.recommended_offer ?? '…';
   const draftText = draftLoaded ? draftBody : '';
   const draftReady = draftLoaded && draftText.trim().length > 0;
-  const savedDraft = id ? savedDrafts[id] : undefined;
+  const savedDraft = savedDraftKey ? savedDrafts[savedDraftKey] : undefined;
   const draftIsSaved = Boolean(savedDraft && savedDraft.body === draftText);
   const leadIsSaved = b ? isLeadSaved(b.borrower_id) : false;
   const saveCurrentLead = () => {
@@ -347,20 +387,22 @@ export default function OfferOrchestrator() {
     if (!id || !draftReady) return;
     saveDraft({
       borrower_id: id,
-      offer_code: rec?.offer_code ?? b?.recommended_offer ?? null,
-      channel: 'email',
+      offer_code: rec?.offer_code ?? b?.recommended_offer_code ?? null,
+      channel: draftChannel,
       body: draftText,
     });
   };
   const resetCurrentDraft = () => {
     if (!id) return;
-    removeSavedDraft(id);
+    removeSavedDraft(id, draftChannel);
     const cached = BORROWER_CACHE.get(id);
     if (cached) {
       BORROWER_CACHE.set(id, { ...cached, draftBody: null, fetched: 0 });
     }
     setDraftBody('');
     setDraftLoaded(false);
+    setDraftDisclosureVersion(null);
+    setDraftDisclosureState(null);
     setReloadToken((n) => n + 1);
   };
 
@@ -377,10 +419,10 @@ export default function OfferOrchestrator() {
       // captures what the approver actually saw — not just the borrower
       // id. Falls back to the borrower's recommended_offer when the
       // recommendation hasn't hydrated yet.
-      const offer_code = rec?.offer_code ?? b?.recommended_offer ?? null;
+      const offer_code = rec?.offer_code ?? b?.recommended_offer_code ?? null;
       const evidence_ids = rec?.evidence_ids ?? b?.evidence_ids ?? [];
       const draft_body = draftText;
-      const res = await api.approve(id, { offer_code, evidence_ids, draft_body });
+      const res = await api.approve(id, { offer_code, evidence_ids, draft_body, channel: draftChannel });
       if (res.approved) {
         setApproval(id, 'approved');
         setAuditId(res.audit_event_id ?? null);
@@ -400,6 +442,14 @@ export default function OfferOrchestrator() {
 
   const onReject = async () => {
     if (approving) return;
+    if (!rejectReviewOpen) {
+      setRejectReviewOpen(true);
+      return;
+    }
+    if (rejectReasonCode === 'other_with_text' && rejectRationale.trim().length === 0) {
+      setApproveError('Rejection reason "Other" requires a rationale note.');
+      return;
+    }
     setApproveError(null);
     setApproving(true);
     try {
@@ -410,12 +460,21 @@ export default function OfferOrchestrator() {
       // the same lifecycle-sync trigger so the funnel view reflects
       // the drop. Failures surface as a banner; state flips only on
       // confirmed success.
-      const offer_code = rec?.offer_code ?? b?.recommended_offer ?? null;
+      const offer_code = rec?.offer_code ?? b?.recommended_offer_code ?? null;
       const evidence_ids = rec?.evidence_ids ?? b?.evidence_ids ?? [];
-      const res = await api.reject(id, { offer_code, evidence_ids });
+      const res = await api.reject(id, {
+        offer_code,
+        evidence_ids,
+        channel: draftChannel,
+        rationale_code: rejectReasonCode,
+        rationale: rejectRationale.trim() || null,
+      });
       if (res.rejected) {
         setApproval(id, 'rejected');
         setAuditId(res.audit_event_id ?? null);
+        setRejectReviewOpen(false);
+        setRejectReasonCode('low_intent');
+        setRejectRationale('');
       } else {
         setApproveError('Reject endpoint returned rejected=false.');
       }
@@ -473,7 +532,7 @@ export default function OfferOrchestrator() {
     <PageShell
       eyebrow="Offer & Outreach"
       title="Review and approve outreach"
-      lede="Review the recommended offer, alternatives considered, thresholds applied, and the draft message. Approve to release the draft into the outreach queue; reject to drop the borrower."
+      lede="Review the recommended offer, alternatives considered, thresholds applied, and the draft message. Approve to place the decision in the governed internal queue; reject to drop the borrower."
       heroRight={
         b && (
           <>
@@ -501,6 +560,67 @@ export default function OfferOrchestrator() {
         )
       }
     >
+      {rejectReviewOpen && (
+        <form
+          className="surface mb-grid"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void onReject();
+          }}
+        >
+          <div className="decision-panel">
+            <div>
+              <div className="h-4">Reject rationale</div>
+              <div className="muted fs-12">
+                Capture a committee-visible reason before dropping this lead.
+              </div>
+            </div>
+            <label className="decision-panel__field">
+              <span className="field__label">Reason</span>
+              <select
+                value={rejectReasonCode}
+                onChange={(e) => setRejectReasonCode(e.target.value as RejectReasonCode)}
+              >
+                {REJECT_REASONS.map((reason) => (
+                  <option key={reason.code} value={reason.code}>{reason.label}</option>
+                ))}
+              </select>
+            </label>
+            <label className="decision-panel__field decision-panel__field--wide">
+              <span className="field__label">Rationale note</span>
+              <textarea
+                value={rejectRationale}
+                onChange={(e) => setRejectRationale(e.target.value)}
+                maxLength={500}
+                placeholder="Optional unless reason is Other."
+              />
+            </label>
+            <div className="decision-panel__actions">
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setRejectReviewOpen(false);
+                  setRejectRationale('');
+                  setRejectReasonCode('low_intent');
+                }}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                variant="primary"
+                size="sm"
+                icon="cross"
+                disabled={rejectReasonCode === 'other_with_text' && rejectRationale.trim().length === 0}
+              >
+                Confirm reject
+              </Button>
+            </div>
+          </div>
+        </form>
+      )}
       <div className="layoutA-grid">
         <div className="surface">
           <div className="surface__hdr">
@@ -528,7 +648,7 @@ export default function OfferOrchestrator() {
             <div className="chip-row mt-3">
               <span className="muted fs-11">Sources:</span>
               {rec
-                ? rec.sources.map((s, idx) => {
+                ? (rec.sources ?? []).map((s, idx) => {
                     // Prefer the backend-supplied human-readable label
                     // (added 2026-04-22). Fall back to the trailing UC
                     // segment so anything that hasn't been mapped still
@@ -603,11 +723,32 @@ export default function OfferOrchestrator() {
               className="route-textarea route-textarea--outreach"
             />
             <div className="muted fs-11 mt-2">
-              First-name placeholder fills from CRM at send time. Phone number is a lender default — replace with the campaign&apos;s tracking number.
+              Draft text is relationship-aware, disclosure-backed, and must be reviewed by a licensed officer before any external send.
             </div>
             <div className="chip-row mt-3">
-              <Chip variant="neutral" icon="shield">Email channel</Chip>
-              <Chip variant="neutral">LO call follow-up within 5 days</Chip>
+              {(['email', 'sms', 'direct_mail'] as const).map((channel) => (
+                <Button
+                  key={channel}
+                  variant={draftChannel === channel ? 'primary' : 'ghost'}
+                  size="sm"
+	                  onClick={() => {
+	                    setDraftChannel(channel);
+	                    setDraftLoaded(false);
+	                    setDraftBody('');
+	                    setDraftDisclosureVersion(null);
+	                    setDraftDisclosureState(null);
+	                  }}
+                  disabled={approving}
+                >
+                  {channel === 'direct_mail' ? 'Direct mail' : channel.toUpperCase()}
+                </Button>
+              ))}
+	              <Chip variant="neutral">LO call follow-up within 5 days</Chip>
+	              {draftDisclosureVersion && (
+	                <Chip variant="success" icon="shield">
+	                  Disclosure {draftDisclosureVersion} · {draftDisclosureState ?? 'state fallback'}
+	                </Chip>
+	              )}
               <Button
                 variant={draftIsSaved ? 'ghost' : 'default'}
                 size="sm"
@@ -697,7 +838,7 @@ export default function OfferOrchestrator() {
 
       <div className="mt-grid">
         <ApprovalBanner
-          text={`${b ? `Borrower ${b.borrower_id}` : 'Borrower'} pending review. Approve writes an audit event and releases the draft into the outreach queue.`}
+          text={`${b ? `Borrower ${b.borrower_id}` : 'Borrower'} pending review. Approve writes an audit event and places the decision in the governed internal queue.`}
           onApprove={() => void onApprove()}
           onReject={() => void onReject()}
           disabled={!draftReady || approval === 'approved' || approval === 'rejected'}
@@ -709,7 +850,7 @@ export default function OfferOrchestrator() {
         <div className="surface mt-grid">
           <div className="surface__body surface__body--inline">
             <span className="burst inline-flex">
-              <Chip variant="success" icon="check">Approved · released to outreach queue</Chip>
+              <Chip variant="success" icon="check">Approved · governed internal queue</Chip>
             </span>
             {auditId && <span className="mono muted fs-11">audit: {auditId}</span>}
           </div>

@@ -30,7 +30,7 @@ class SavedLead(SavedLeadInput):
 class SavedDraftInput(BaseModel):
     borrower_id: str = Field(min_length=1, max_length=128)
     offer_code: str | None = Field(default=None, max_length=128)
-    channel: Literal["email", "sms"] = "email"
+    channel: Literal["email", "sms", "direct_mail"] = "email"
     body: str = Field(min_length=1, max_length=5000)
 
     @field_validator("borrower_id")

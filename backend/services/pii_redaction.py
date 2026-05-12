@@ -274,6 +274,7 @@ _STREET_NUMBER_PATTERN = re.compile(r"\d")
 _TRUE_ENV_VALUES: frozenset[str] = frozenset({"1", "true", "yes", "y", "on"})
 _ID_MASK_NAMESPACE = "mip-cotality-id-mask-v1"
 _PUBLIC_LENDER_REF_RE = re.compile(r"^(Summit Mortgage|Competitor ([A-Z]|Other))$")
+_CONSENT_STATUS_VALUES: frozenset[str] = frozenset({"opt_in", "opt_out", "unknown"})
 
 
 # ---------------------------------------------------------------------------
@@ -303,6 +304,11 @@ def _public_lender_ref(raw: Any) -> str | None:
     if is_public_lender_ref(value):
         return value
     return generalize_lender(value)
+
+
+def _consent_status(raw: Any) -> str:
+    value = str(raw or "").strip().lower()
+    return value if value in _CONSENT_STATUS_VALUES else "unknown"
 
 
 def is_public_lender_ref(value: str | None, *, allow_all: bool = False) -> bool:
@@ -469,10 +475,14 @@ def redact_borrower_row(row: dict[str, Any]) -> dict[str, Any]:
         "rate_spread_bps": int(row.get("rate_spread_bps") or 0),
         "opportunity_score": int(row.get("opportunity_score") or 0),
         "confidence": int(row.get("confidence") or 0),
+        "recommended_offer_code": row.get("recommended_offer_code") or "nurture",
         "recommended_offer": row.get("recommended_offer") or "Nurture",
         "why_now": row.get("why_now") or "",
         "evidence_ids": row.get("evidence_ids") or [],
         "approval_status": row.get("approval_status") or "pending",
+        "outreach_status": row.get("outreach_status") or "none",
+        "approved_at": row.get("approved_at"),
+        "outreach_at": row.get("outreach_at"),
         # Borrower360 additions:
         "clip_id": mask_cotality_id("clip", row.get("clip")),  # <-- rename + mask at boundary
         # Cotality owner_1_identifier arrives as BIGINT from silver; the
@@ -493,6 +503,13 @@ def redact_borrower_row(row: dict[str, Any]) -> dict[str, Any]:
         "second_pos_amount": int(row.get("second_pos_amount") or 0),
         "has_permit": bool(row.get("has_permit") or False),
         "listed_for_sale": bool(row.get("listed_for_sale") or False),
+        # Fail closed when the gold column is missing/null: marketing
+        # workflows must prove eligibility rather than assume it.
+        "marketing_eligible": bool(row.get("marketing_eligible") is True),
+        "consent_status": _consent_status(row.get("consent_status")),
+        "suppression_reason": row.get("suppression_reason") or None,
+        "last_touch_at": row.get("last_touch_at"),
+        "eligible_recontact_at": row.get("eligible_recontact_at"),
         "current_lender_ref": _public_lender_ref(row.get("current_lender_ref")),
     }
     _enforce_no_forbidden_keys(output)
@@ -537,10 +554,14 @@ def redact_lead_row(row: dict[str, Any]) -> dict[str, Any]:
         "rate_spread_bps": int(row.get("rate_spread_bps") or 0),
         "opportunity_score": int(row.get("opportunity_score") or 0),
         "confidence": int(row.get("confidence") or 0),
+        "recommended_offer_code": row.get("recommended_offer_code") or "nurture",
         "recommended_offer": row.get("recommended_offer") or "Nurture",
         "why_now": row.get("why_now") or "",
         "evidence_ids": row.get("evidence_ids") or [],
         "approval_status": row.get("approval_status") or "pending",
+        "outreach_status": row.get("outreach_status") or "none",
+        "approved_at": row.get("approved_at"),
+        "outreach_at": row.get("outreach_at"),
         # Secondary-filter fields (2026-04-23). Optional in the schema and
         # safely-defaulted here so older gold rows (pre-DDL-extension) and
         # the in-process test fixtures (which build LeadSummary from a
@@ -556,6 +577,12 @@ def redact_lead_row(row: dict[str, Any]) -> dict[str, Any]:
         "second_pos_amount": int(row.get("second_pos_amount") or 0),
         "has_permit": bool(row.get("has_permit") or False),
         "listed_for_sale": bool(row.get("listed_for_sale") or False),
+        # Fail closed when source columns are missing/null.
+        "marketing_eligible": bool(row.get("marketing_eligible") is True),
+        "consent_status": _consent_status(row.get("consent_status")),
+        "suppression_reason": row.get("suppression_reason") or None,
+        "last_touch_at": row.get("last_touch_at"),
+        "eligible_recontact_at": row.get("eligible_recontact_at"),
         "current_lender_ref": _public_lender_ref(row.get("current_lender_ref")),
     }
     _enforce_no_forbidden_keys(output)

@@ -184,6 +184,8 @@ def test_leads_route_segment_mode_any_vs_all_changes_membership() -> None:
             segment_mode: str = "any",
             target_lender_ref: str | None = None,
             cohort_id: str | None = None,
+            portfolio_criteria: object | None = None,
+            **_kwargs: object,
         ) -> list[LeadSummary]:
             _ = (
                 segment,
@@ -196,6 +198,8 @@ def test_leads_route_segment_mode_any_vs_all_changes_membership() -> None:
                 borrower_ids,
                 target_lender_ref,
                 cohort_id,
+                portfolio_criteria,
+                _kwargs,
             )
             captured_modes.append(segment_mode)
             rows = [
@@ -313,6 +317,7 @@ def test_leads_route_replays_portfolio_builder_criteria_to_repository() -> None:
             target_lender_ref: str | None = None,
             cohort_id: str | None = None,
             portfolio_criteria: object | None = None,
+            **_kwargs: object,
         ) -> list[LeadSummary]:
             captured.update(
                 {
@@ -329,6 +334,7 @@ def test_leads_route_replays_portfolio_builder_criteria_to_repository() -> None:
                     "target_lender_ref": target_lender_ref,
                     "cohort_id": cohort_id,
                     "portfolio_criteria": portfolio_criteria,
+                    "extra_kwargs": _kwargs,
                 }
             )
             return [_lead("B-PORT")]
@@ -413,6 +419,7 @@ def test_leads_route_audits_safe_portfolio_criteria() -> None:
     assert event.payload_json["portfolio_criteria"] == {
         "geography": "All",
         "occupancy": "Owner-occupied",
+        "marketing_eligibility": "Eligible only",
         "target_lender_ref": "Competitor B",
     }
 
@@ -438,6 +445,8 @@ def test_leads_route_passes_genie_multi_zip_cohort_to_repository() -> None:
             segment_mode: str = "any",
             target_lender_ref: str | None = None,
             cohort_id: str | None = None,
+            portfolio_criteria: object | None = None,
+            **_kwargs: object,
         ) -> list[LeadSummary]:
             captured.update(
                 {
@@ -453,6 +462,8 @@ def test_leads_route_passes_genie_multi_zip_cohort_to_repository() -> None:
                     "segment_mode": segment_mode,
                     "target_lender_ref": target_lender_ref,
                     "cohort_id": cohort_id,
+                    "portfolio_criteria": portfolio_criteria,
+                    "extra_kwargs": _kwargs,
                 }
             )
             return [_lead("B-60617")]
@@ -524,6 +535,8 @@ def test_leads_route_passes_genie_borrower_id_cohort_to_repository() -> None:
             segment_mode: str = "any",
             target_lender_ref: str | None = None,
             cohort_id: str | None = None,
+            portfolio_criteria: object | None = None,
+            **_kwargs: object,
         ) -> list[LeadSummary]:
             captured.update(
                 {
@@ -539,6 +552,8 @@ def test_leads_route_passes_genie_borrower_id_cohort_to_repository() -> None:
                     "segment_mode": segment_mode,
                     "target_lender_ref": target_lender_ref,
                     "cohort_id": cohort_id,
+                    "portfolio_criteria": portfolio_criteria,
+                    "extra_kwargs": _kwargs,
                 }
             )
             return [_lead("B-11111", state="WA", zip_code="98118")]
@@ -583,6 +598,8 @@ def test_leads_route_audits_genie_cohort_filters() -> None:
             segment_mode: str = "any",
             target_lender_ref: str | None = None,
             cohort_id: str | None = None,
+            portfolio_criteria: object | None = None,
+            **_kwargs: object,
         ) -> list[LeadSummary]:
             _ = (
                 segment,
@@ -597,6 +614,8 @@ def test_leads_route_audits_genie_cohort_filters() -> None:
                 segment_mode,
                 target_lender_ref,
                 cohort_id,
+                portfolio_criteria,
+                _kwargs,
             )
             return [_lead("B-48291")]
 
@@ -675,6 +694,8 @@ def test_truncation_header_present_when_limit_reached():
             segment_mode: str = "any",
             target_lender_ref: str | None = None,
             cohort_id: str | None = None,
+            portfolio_criteria: object | None = None,
+            **_kwargs: object,
         ) -> list[LeadSummary]:
             _ = (
                 segment,
@@ -688,6 +709,8 @@ def test_truncation_header_present_when_limit_reached():
                 segment_mode,
                 target_lender_ref,
                 cohort_id,
+                portfolio_criteria,
+                _kwargs,
             )
             # Emit exactly `limit` rows so the header kicks in.
             n = limit or DEFAULT_LEAD_LIMIT
@@ -735,6 +758,8 @@ def test_truncation_header_absent_when_under_limit():
             segment_mode: str = "any",
             target_lender_ref: str | None = None,
             cohort_id: str | None = None,
+            portfolio_criteria: object | None = None,
+            **_kwargs: object,
         ) -> list[LeadSummary]:
             _ = (
                 segment,
@@ -749,6 +774,8 @@ def test_truncation_header_absent_when_under_limit():
                 segment_mode,
                 target_lender_ref,
                 cohort_id,
+                portfolio_criteria,
+                _kwargs,
             )
             return [_lead("B-00001", zip_code="60611")]
 

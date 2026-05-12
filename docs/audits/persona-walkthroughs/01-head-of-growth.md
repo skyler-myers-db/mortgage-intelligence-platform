@@ -124,7 +124,7 @@ Fix: set `model_config = ConfigDict(extra='forbid')` on `PortfolioCriteria` so u
 
 #### P1-G4. Single-state filter only
 
-The portfolio-preview `geography` field is a single string. A real growth pilot is "CA + NY + WA, owner-occupied, competitor-owned." `/api/leads?states=IL,WA` accepts a list, and the geo rollups expose all 6 states — but the portfolio preview can't combine them. So I have to run three previews and add them in my head.
+The portfolio-preview `geography` field is a single string. A real growth pilot is "CA + NY + WA, owner-occupied, competitor-owned." `/api/leads?states=IL,WA` accepts a list, and the geo rollups expose the current refreshed footprint dynamically — but the portfolio preview can't combine them. So I have to run three previews and add them in my head.
 
 Fix: make `geography` `list[str] | None` on `PortfolioCriteria` (mirror the lead-queue behaviour) and update the dropdown to a multi-select.
 

@@ -49,7 +49,6 @@ interface RulesResponse {
   offer_rules_version: string;
   rules_edited_at: string | null;
   thresholds: ThresholdRow[];
-  legacy_override?: Record<string, string>;
 }
 
 type SourceStatus = 'live' | 'demo_synthetic' | 'configured_empty' | 'not_configured' | 'roadmap' | 'permission_denied' | 'error';
@@ -67,6 +66,12 @@ interface AuditProbeShape {
   actor: string;
   action: string;
   created_at: string;
+}
+
+interface AuditRollupRow {
+  bucket_start: string;
+  event_type: string;
+  event_count: number;
 }
 
 /**
@@ -105,6 +110,9 @@ export default function AdminConfig() {
   const [appearanceOpen, setAppearanceOpen] = useState<boolean>(false);
   // Disclosure state for the Offer rules threshold table.
   const [rulesExpanded, setRulesExpanded] = useState<boolean>(false);
+  const [auditEntityFilter, setAuditEntityFilter] = useState<string>('');
+  const [auditActionFilter, setAuditActionFilter] = useState<string>('');
+  const [auditEventTypeFilter, setAuditEventTypeFilter] = useState<string>('');
 
   // Per-tile warming-up fetchers. Each tile retries 6 × 5s independently
   // so one cold-starting dependency doesn't block its neighbors.
@@ -152,6 +160,40 @@ export default function AdminConfig() {
     auditEvents && auditEvents.length > 0
       ? (auditEvents[0] as unknown as AuditProbeShape)
       : null;
+  const auditEntityValue = auditEntityFilter.trim();
+  const auditEntityIsBorrower = /^B-[A-Z0-9]+$/i.test(auditEntityValue);
+
+  const {
+    data: auditExplorerEvents,
+    warmingUp: auditExplorerWarming,
+    error: auditExplorerErrorObj,
+  } = useWarmingUpRetry(
+    (signal) => api.auditEvents(25, signal, {
+      entity_id: auditEntityValue && !auditEntityIsBorrower ? auditEntityValue : null,
+      borrower_id: auditEntityValue && auditEntityIsBorrower ? auditEntityValue : null,
+      action: auditActionFilter.trim() || null,
+      event_type: auditEventTypeFilter.trim() || null,
+    }),
+    [auditEntityValue, auditEntityIsBorrower, auditActionFilter, auditEventTypeFilter],
+  );
+  const auditExplorerError = auditExplorerErrorObj
+    ? auditExplorerErrorObj instanceof Error
+      ? auditExplorerErrorObj.message
+      : 'unreachable'
+    : null;
+  const {
+    data: auditRollups,
+    warmingUp: auditRollupsWarming,
+    error: auditRollupsErrorObj,
+  } = useWarmingUpRetry<AuditRollupRow[]>(
+    (signal) => api.auditRollups('week', signal),
+    [],
+  );
+  const auditRollupsError = auditRollupsErrorObj
+    ? auditRollupsErrorObj instanceof Error
+      ? auditRollupsErrorObj.message
+      : 'unreachable'
+    : null;
 
   // Rules version chip label. When the endpoint is up we render the
   // deterministic hash-based version ("rules.itm_<12hex>"); when it's
@@ -323,6 +365,99 @@ export default function AdminConfig() {
               </div>
             ))}
           </div>
+        </div>
+      </div>
+
+      <div className="surface mt-grid">
+        <div className="surface__hdr surface__hdr--split">
+          <div>
+            <div className="h-4">Audit explorer</div>
+            <div className="muted fs-12">
+              Filter the Lakebase ledger by borrower/approval id, action, or event type.
+            </div>
+          </div>
+          <Chip variant={auditExplorerError ? 'warning' : 'neutral'}>
+            {auditExplorerError ? 'reconnecting' : 'last 25'}
+          </Chip>
+        </div>
+        <div className="surface__body">
+          <div className="filter-row">
+            <label className="filter-row__group">
+              <span className="field__label">ENTITY ID</span>
+              <input
+                className="admin-filter-input"
+                value={auditEntityFilter}
+                onChange={(e) => setAuditEntityFilter(e.target.value)}
+                placeholder="B-... or approval UUID"
+              />
+            </label>
+            <label className="filter-row__group">
+              <span className="field__label">ACTION</span>
+              <input
+                className="admin-filter-input"
+                value={auditActionFilter}
+                onChange={(e) => setAuditActionFilter(e.target.value)}
+                placeholder="outreach.approve"
+              />
+            </label>
+            <label className="filter-row__group">
+              <span className="field__label">EVENT TYPE</span>
+              <input
+                className="admin-filter-input"
+                value={auditEventTypeFilter}
+                onChange={(e) => setAuditEventTypeFilter(e.target.value)}
+                placeholder="APPROVE"
+              />
+            </label>
+          </div>
+          {auditExplorerWarming && (
+            <div className="mt-3">
+              <WarmingUpBlock state={auditExplorerWarming} title="Audit explorer loading" compact />
+            </div>
+          )}
+          {auditExplorerError && !auditExplorerWarming && (
+            <div className="muted body fs-12 mt-3">
+              Audit explorer unavailable: {auditExplorerError}
+            </div>
+          )}
+          <div className="admin-rollups mt-3">
+            <div className="h-5">Approval status by week</div>
+            {auditRollupsWarming && (
+              <WarmingUpBlock state={auditRollupsWarming} title="Audit rollups loading" compact />
+            )}
+            {auditRollupsError && !auditRollupsWarming && (
+              <div className="muted fs-12">Audit rollups unavailable: {auditRollupsError}</div>
+            )}
+            {!auditRollupsWarming && !auditRollupsError && (
+              <div className="admin-rollups__grid">
+                {(auditRollups ?? []).slice(0, 6).map((row) => (
+                  <div key={`${row.bucket_start}-${row.event_type}`} className="admin-rollup">
+                    <span className="mono fs-12">{row.event_type}</span>
+                    <strong>{row.event_count.toLocaleString()}</strong>
+                    <span className="muted fs-11">{formatAuditTimestamp(row.bucket_start)}</span>
+                  </div>
+                ))}
+                {auditRollups?.length === 0 && (
+                  <div className="muted fs-12">No approval/rejection events in the current rollup window.</div>
+                )}
+              </div>
+            )}
+          </div>
+          {!auditExplorerWarming && !auditExplorerError && (
+            <div className="admin-audit-list mt-3">
+              {(auditExplorerEvents ?? []).map((event) => (
+                <div key={event.event_id} className="admin-audit-row">
+                  <span className="mono fs-12">{event.event_type ?? event.action}</span>
+                  <span className="mono fs-12">{event.entity_id}</span>
+                  <span className="muted fs-12">{event.actor}</span>
+                  <span className="muted fs-12">{formatAuditTimestamp(event.created_at)}</span>
+                </div>
+              ))}
+              {auditExplorerEvents?.length === 0 && (
+                <div className="muted fs-12">No audit rows match these filters.</div>
+              )}
+            </div>
+          )}
         </div>
       </div>
 

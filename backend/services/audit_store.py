@@ -32,13 +32,24 @@ from fastapi import Request
 
 from backend.config.settings import settings
 from backend.schemas.audit import AuditEvent
-from backend.schemas.common import validate_public_borrower_id
+from backend.schemas.common import (
+    validate_public_audit_action,
+    validate_public_audit_entity_type,
+    validate_public_audit_event_type,
+    validate_public_audit_identifier_or_none,
+    validate_public_audit_subject_segment,
+    validate_public_borrower_id,
+    validate_public_campaign_label,
+    validate_internal_staff_email,
+    validate_public_opaque_id,
+)
 from backend.services.lakebase import LakebaseClient, get_lakebase_client
 from backend.services.pii_redaction import (
     mask_cotality_id,
     normalize_public_lender_ref,
     scrub_free_text,
 )
+from backend.services.scoring import NBO_PRODUCT_LABELS
 
 log = logging.getLogger(__name__)
 
@@ -126,16 +137,14 @@ _PII_DENYLIST_KEYS: frozenset[str] = frozenset(
 #   backend/api/outreach.py::draft_outreach
 #     channel, offer_code
 #   backend/api/outreach.py::approve_outreach
-#     approval_id, offer_code, borrower_id, request_id, draft_body
+#     approval_id, offer_code, borrower_id, request_id, draft_body,
+#     rationale, bulk_id, bulk_rationale
 #   backend/api/outreach.py::reject_outreach
-#     approval_id, offer_code, borrower_id, request_id, rationale
+#     approval_id, offer_code, borrower_id, request_id, rationale, rationale_code
 #   backend/api/leads.py::list_leads_ranked
 #     rendered_borrower_ids, portfolio_id, segment, segment_mode, limit
 #   backend/api/offers.py::recommend_offer
 #     offer_code, confidence, thresholds_applied
-#   backend/api/admin.py::set_rules
-#     overrides
-#
 # Plus two keys injected by the audit layer itself:
 #   action      -- canonical verb, added by LakebaseAuditStore.write
 #   evidence_ids -- some flows may pass it inside payload_json (legacy)
@@ -166,7 +175,20 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         "request_id",
         "draft_body",
         "rationale",
+        "rationale_code",
+        "bulk_id",
+        "bulk_rationale",
         "reason",
+        "variant_name",
+        # Marketing-contactability and disclosure proof
+        "marketing_eligible",
+        "consent_status",
+        "suppression_reason",
+        "last_touch_at",
+        "eligible_recontact_at",
+        "disclosure_version",
+        "disclosure_state",
+        "disclosure_channel",
         # Leads list
         "rendered_borrower_ids",
         "borrower_ids",
@@ -180,9 +202,29 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         "states",
         "zips",
         "limit",
+        "approval_status",
+        "outreach_status",
+        "assigned_to_email",
+        "aged_days",
         "target_lender_ref",
         "portfolio_criteria",
         "cohort_id",
+        # Sales manager workflow state
+        "assignment_id",
+        "assigned_by",
+        "assigned_at",
+        "expires_at",
+        "strategy",
+        "assigned_count",
+        "lo_email",
+        "lo_emails",
+        "per_lo_counts",
+        "disposition_id",
+        "outcome",
+        "attempt_number",
+        "occurred_at",
+        "callback_at",
+        "notes",
         # Genie control-layer actions
         "action_type",
         "conversation_id",
@@ -203,20 +245,54 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         "footprint_states",
         # Offers
         "thresholds_applied",
-        # Admin rules override
-        "overrides",
     }
 )
 
 _FREE_TEXT_METADATA_KEYS: frozenset[str] = frozenset(
-    {"draft_body", "rationale", "reason"}
+    {"draft_body", "rationale", "bulk_rationale", "reason", "notes"}
+)
+_HUMAN_NAME_OR_PLACEHOLDER_PATTERN = re.compile(
+    r"\b[A-Z][a-z]{1,30}\s+(?:[A-Z]\s+)?[A-Z][a-z]{1,30}\b|"
+    r"\[(?:first|last|full)[_\s-]?[Nn]ame\]|\{(?:first|last|full)[_\s-]?[Nn]ame\}"
 )
 
 _BORROWER_ID_METADATA_KEYS: frozenset[str] = frozenset({"borrower_id"})
 
+_OPAQUE_ID_METADATA_KEYS: frozenset[str] = frozenset(
+    {"approval_id", "bulk_id", "campaign_id", "request_id", "assignment_id", "disposition_id"}
+)
+_CAMPAIGN_LABEL_METADATA_KEYS: frozenset[str] = frozenset({"variant_name"})
+_INTERNAL_STAFF_EMAIL_METADATA_KEYS: frozenset[str] = frozenset(
+    {"assigned_to_email", "assigned_by", "lo_email"}
+)
+_INTERNAL_STAFF_EMAIL_LIST_METADATA_KEYS: frozenset[str] = frozenset({"lo_emails"})
+_SALES_STRATEGIES: frozenset[str] = frozenset({"manual", "round_robin", "score_balanced"})
+_SALES_DISPOSITION_OUTCOMES: frozenset[str] = frozenset(
+    {
+        "called_no_answer",
+        "called_left_voicemail",
+        "connected",
+        "callback_scheduled",
+        "application_started",
+        "not_interested",
+        "not_now",
+        "dead",
+    }
+)
+
+_ALLOWED_OFFER_CODES: frozenset[str] = frozenset(NBO_PRODUCT_LABELS) | {"recapture"}
+
 _BORROWER_ID_LIST_METADATA_KEYS: frozenset[str] = frozenset(
     {"borrower_ids", "rendered_borrower_ids"}
 )
+
+
+def _metadata_values_for(
+    metadata: dict[str, Any],
+    keys: frozenset[str] | set[str],
+) -> list[tuple[str, Any]]:
+    lowered = {key.lower() for key in keys}
+    return [(key, value) for key, value in metadata.items() if key.lower() in lowered]
 
 _ALLOWED_RESULT_FILTER_KEYS: frozenset[str] = frozenset(
     {
@@ -342,18 +418,67 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
     """Validate reviewed free-ish values that have their own public policy."""
     if not metadata:
         return
-    for field in _BORROWER_ID_METADATA_KEYS:
-        value = metadata.get(field)
-        if value is not None:
+    for field, value in _metadata_values_for(metadata, _BORROWER_ID_METADATA_KEYS):
+        if value is None:
+            continue
+        try:
+            validate_public_borrower_id(str(value))
+        except ValueError as exc:
+            raise AuditMetadataValueViolation(
+                field,
+                "must be an app-scoped public borrower id",
+            ) from exc
+
+    for field, offer_code in _metadata_values_for(metadata, {"offer_code"}):
+        if offer_code is not None and str(offer_code) not in _ALLOWED_OFFER_CODES:
+            raise AuditMetadataValueViolation(
+                field,
+                "must be a governed offer code",
+            )
+    for field, value in _metadata_values_for(metadata, _OPAQUE_ID_METADATA_KEYS):
+        if value is None:
+            continue
+        try:
+            validate_public_opaque_id(str(value))
+        except ValueError as exc:
+            raise AuditMetadataValueViolation(
+                field,
+                "must be a UUID or governed server-issued opaque id",
+            ) from exc
+    for field, value in _metadata_values_for(metadata, _CAMPAIGN_LABEL_METADATA_KEYS):
+        if value is None:
+            continue
+        try:
+            validate_public_campaign_label(str(value), field_name=field)
+        except ValueError as exc:
+            raise AuditMetadataValueViolation(
+                field,
+                "must be a public-safe campaign label",
+            ) from exc
+    for field, value in _metadata_values_for(metadata, _INTERNAL_STAFF_EMAIL_METADATA_KEYS):
+        if value is None:
+            continue
+        try:
+            validate_internal_staff_email(str(value))
+        except ValueError as exc:
+            raise AuditMetadataValueViolation(
+                field,
+                "must be an approved internal staff email",
+            ) from exc
+    for field, value in _metadata_values_for(metadata, _INTERNAL_STAFF_EMAIL_LIST_METADATA_KEYS):
+        if value is None:
+            continue
+        if not isinstance(value, list):
+            raise AuditMetadataValueViolation(field, "must be a list of internal staff emails")
+        for item in value:
             try:
-                validate_public_borrower_id(str(value))
+                validate_internal_staff_email(str(item))
             except ValueError as exc:
                 raise AuditMetadataValueViolation(
                     field,
-                    "must be an app-scoped public borrower id",
+                    "must contain only approved internal staff emails",
                 ) from exc
-    for field in _BORROWER_ID_LIST_METADATA_KEYS:
-        value = metadata.get(field)
+    for field, value in _metadata_values_for(metadata, _BORROWER_ID_LIST_METADATA_KEYS):
         if value is None:
             continue
         if not isinstance(value, list):
@@ -369,21 +494,85 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
                     field,
                     "must contain only app-scoped public borrower ids",
                 ) from exc
-    target = metadata.get("target_lender_ref")
-    if target is not None:
+    for field, target in _metadata_values_for(metadata, {"target_lender_ref"}):
+        if target is None:
+            continue
         try:
             normalize_public_lender_ref(str(target), allow_all=True)
         except ValueError as exc:
             raise AuditMetadataValueViolation(
-                "target_lender_ref",
+                field,
                 "must be Summit Mortgage, Competitor A-Z, Competitor Other, or All",
             ) from exc
-    portfolio_criteria = metadata.get("portfolio_criteria")
-    if portfolio_criteria is not None:
+    for _, portfolio_criteria in _metadata_values_for(metadata, {"portfolio_criteria"}):
+        if portfolio_criteria is None:
+            continue
         _assert_portfolio_criteria_value_policy(portfolio_criteria)
-    result_filters = metadata.get("result_filters")
-    if result_filters is not None:
+    for _, result_filters in _metadata_values_for(metadata, {"result_filters"}):
+        if result_filters is None:
+            continue
         _assert_result_filters_value_policy(result_filters)
+    for field, value in _metadata_values_for(metadata, {"strategy"}):
+        if value is not None and str(value) not in _SALES_STRATEGIES:
+            raise AuditMetadataValueViolation(field, "must be a governed sales assignment strategy")
+    for field, value in _metadata_values_for(metadata, {"outcome"}):
+        if value is not None and str(value) not in _SALES_DISPOSITION_OUTCOMES:
+            raise AuditMetadataValueViolation(field, "must be a governed call disposition outcome")
+    for field, value in _metadata_values_for(metadata, {"per_lo_counts"}):
+        if value is None:
+            continue
+        if not isinstance(value, dict):
+            raise AuditMetadataValueViolation(field, "must be an object keyed by internal staff email")
+        if len(value) > 25:
+            raise AuditMetadataValueViolation(field, "must contain at most 25 loan officers")
+        for key, count in value.items():
+            try:
+                validate_internal_staff_email(str(key))
+            except ValueError as exc:
+                raise AuditMetadataValueViolation(
+                    field,
+                    "must contain only approved internal staff emails",
+                ) from exc
+            if not isinstance(count, int) or count < 0 or count > 500:
+                raise AuditMetadataValueViolation(field, "must contain bounded integer counts")
+
+
+def _validate_top_level_audit_columns(
+    *,
+    action: str,
+    entity_type: str,
+    entity_id: str,
+    event_type: str | None,
+    subject_segment: str | None,
+    request_id: str | None,
+) -> tuple[str, str, str, str | None, str | None, str | None]:
+    try:
+        safe_action = validate_public_audit_action(action)
+        safe_entity_type = validate_public_audit_entity_type(entity_type)
+        safe_entity_id = validate_public_audit_identifier_or_none(entity_id)
+        if safe_entity_id is None:
+            raise ValueError("entity_id must not be blank")
+        safe_event_type = (
+            validate_public_audit_event_type(event_type) if event_type is not None else None
+        )
+        safe_subject_segment = (
+            validate_public_audit_subject_segment(subject_segment)
+            if subject_segment is not None
+            else None
+        )
+        safe_request_id = (
+            validate_public_opaque_id(request_id) if request_id is not None else None
+        )
+    except ValueError as exc:
+        raise AuditMetadataValueViolation("audit_column", str(exc)) from exc
+    return (
+        safe_action,
+        safe_entity_type,
+        safe_entity_id,
+        safe_event_type,
+        safe_subject_segment,
+        safe_request_id,
+    )
 
 
 _ALLOWED_PORTFOLIO_CRITERIA_KEYS: frozenset[str] = frozenset(
@@ -398,6 +587,10 @@ _ALLOWED_PORTFOLIO_CRITERIA_KEYS: frozenset[str] = frozenset(
         "min_equity_pct",
         "owner_link",
         "purchase_intent",
+        "states",
+        "marketing_eligibility",
+        "consent_status",
+        "recency",
     }
 )
 
@@ -536,6 +729,11 @@ def _sanitize_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     for key in _FREE_TEXT_METADATA_KEYS:
         if key in cleaned and cleaned[key] is not None:
             cleaned[key] = scrub_free_text(str(cleaned[key]))
+            if key == "notes" and _HUMAN_NAME_OR_PLACEHOLDER_PATTERN.search(str(cleaned[key])):
+                raise AuditMetadataValueViolation(
+                    key,
+                    "must not contain human-name-shaped text or unresolved placeholders",
+                )
     return cleaned
 
 
@@ -565,7 +763,19 @@ class AuditStore(Protocol):
         request_id: str | None = None,
     ) -> AuditEvent: ...
 
-    def list(self, limit: int = 50) -> list[AuditEvent]: ...
+    def list(
+        self,
+        limit: int = 50,
+        *,
+        actor: str | None = None,
+        action: str | None = None,
+        entity_id: str | None = None,
+        borrower_id: str | None = None,
+        subject_clip: str | None = None,
+        event_type: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+    ) -> list[AuditEvent]: ...
 
 
 # ----------------------------------------------------------------------
@@ -669,7 +879,7 @@ class InMemoryAuditStore:
         # Governance: denylist PII keys at write time, not read time.
         # Applies equally to the in-memory store so unit tests exercise
         # the guard without needing Lakebase.
-        metadata = _sanitize_metadata({"action": action, **payload})
+        metadata = _sanitize_metadata({**payload, "action": action})
         payload = {k: v for k, v in metadata.items() if k != "action"}
         _assert_no_pii(metadata)
         # R6-20: allowlist complement to the denylist. Fails loudly on
@@ -677,29 +887,84 @@ class InMemoryAuditStore:
         # ``_ALLOWED_METADATA_KEYS``.
         _assert_allowlisted(metadata)
         _assert_public_safe_values(metadata)
-        event = AuditEvent(
-            event_id=f"evt-{uuid4().hex[:12]}",
-            actor=actor,
+        safe_event_type = _coerce_event_type(event_type, action)
+        (
+            safe_action,
+            safe_entity_type,
+            safe_entity_id,
+            safe_event_type,
+            safe_subject_segment,
+            safe_request_id,
+        ) = _validate_top_level_audit_columns(
             action=action,
             entity_type=entity_type,
             entity_id=entity_id,
+            event_type=safe_event_type,
+            subject_segment=subject_segment,
+            request_id=request_id,
+        )
+        event = AuditEvent(
+            event_id=f"evt-{uuid4().hex[:12]}",
+            actor=actor,
+            action=safe_action,
+            entity_type=safe_entity_type,
+            entity_id=safe_entity_id,
             payload_json=payload,
             evidence_ids=evidence_ids or [],
             created_at=datetime.now(UTC).isoformat(),
-            event_type=_coerce_event_type(event_type, action),
+            event_type=safe_event_type,
             subject_clip=(
                 mask_cotality_id("clip", subject_clip)
                 if subject_clip is not None
                 else None
             ),
-            subject_segment=subject_segment,
-            request_id=request_id,
+            subject_segment=safe_subject_segment,
+            request_id=safe_request_id,
         )
         self._events.append(event)
         return event
 
-    def list(self, limit: int = 50) -> list[AuditEvent]:
-        return list(reversed(self._events[-limit:]))
+    def list(
+        self,
+        limit: int = 50,
+        *,
+        actor: str | None = None,
+        action: str | None = None,
+        entity_id: str | None = None,
+        borrower_id: str | None = None,
+        subject_clip: str | None = None,
+        event_type: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+    ) -> list[AuditEvent]:
+        filtered = self._events
+        if actor:
+            filtered = [e for e in filtered if e.actor == actor]
+        if action:
+            filtered = [e for e in filtered if e.action == action]
+        if entity_id:
+            filtered = [e for e in filtered if e.entity_id == entity_id]
+        if borrower_id:
+            filtered = [
+                e for e in filtered
+                if e.entity_id == borrower_id
+                or str((e.payload_json or {}).get("borrower_id") or "") == borrower_id
+            ]
+        if subject_clip:
+            filtered = [e for e in filtered if e.subject_clip == subject_clip]
+        if event_type:
+            filtered = [e for e in filtered if e.event_type == event_type]
+        if since:
+            filtered = [
+                e for e in filtered
+                if datetime.fromisoformat(e.created_at.replace("Z", "+00:00")) >= since
+            ]
+        if until:
+            filtered = [
+                e for e in filtered
+                if datetime.fromisoformat(e.created_at.replace("Z", "+00:00")) <= until
+            ]
+        return list(reversed(filtered[-limit:]))
 
 
 # ----------------------------------------------------------------------
@@ -720,11 +985,12 @@ INSERT INTO mip_app.action_audit (
 RETURNING audit_id, event_at
 """
 
-_SELECT_SQL = """
+_SELECT_SQL_TEMPLATE = """
 SELECT audit_id, event_type, actor_email, entity_type, entity_id,
        subject_clip, subject_segment, request_id,
        evidence_ids, metadata, event_at
 FROM mip_app.action_audit
+{where_clause}
 ORDER BY event_at DESC
 LIMIT %(limit)s
 """
@@ -744,27 +1010,44 @@ def _build_insert_params(
     request_id: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     payload = payload_json or {}
-    metadata = _sanitize_metadata({"action": action, **payload})
+    metadata = _sanitize_metadata({**payload, "action": action})
     payload = {k: v for k, v in metadata.items() if k != "action"}
     _assert_no_pii(metadata)
     _assert_allowlisted(metadata)
     _assert_public_safe_values(metadata)
+    safe_event_type = _coerce_event_type(event_type, action)
+    (
+        safe_action,
+        safe_entity_type,
+        safe_entity_id,
+        safe_event_type,
+        safe_subject_segment,
+        safe_request_id,
+    ) = _validate_top_level_audit_columns(
+        action=action,
+        entity_type=entity_type,
+        entity_id=entity_id,
+        event_type=safe_event_type,
+        subject_segment=subject_segment,
+        request_id=request_id,
+    )
     safe_subject_clip = (
         mask_cotality_id("clip", subject_clip)
         if subject_clip is not None
         else None
     )
     params: dict[str, Any] = {
-        "event_type": _coerce_event_type(event_type, action),
+        "event_type": safe_event_type,
         "actor_email": actor,
-        "entity_type": entity_type,
-        "entity_id": entity_id,
+        "entity_type": safe_entity_type,
+        "entity_id": safe_entity_id,
         "subject_clip": safe_subject_clip,
-        "subject_segment": subject_segment,
-        "request_id": request_id,
+        "subject_segment": safe_subject_segment,
+        "request_id": safe_request_id,
         "evidence_ids": list(evidence_ids or []),
         "metadata": json.dumps(metadata),
     }
+    _ = safe_action
     return payload, params
 
 
@@ -903,8 +1186,48 @@ class LakebaseAuditStore:
             request_id=request_id,
         )
 
-    def list(self, limit: int = 50) -> list[AuditEvent]:
-        rows = self._client.fetchall(_SELECT_SQL, {"limit": limit}, limit=limit)
+    def list(
+        self,
+        limit: int = 50,
+        *,
+        actor: str | None = None,
+        action: str | None = None,
+        entity_id: str | None = None,
+        borrower_id: str | None = None,
+        subject_clip: str | None = None,
+        event_type: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+    ) -> list[AuditEvent]:
+        clauses: list[str] = []
+        params: dict[str, Any] = {"limit": limit}
+        if actor:
+            clauses.append("actor_email = %(actor)s")
+            params["actor"] = actor
+        if entity_id:
+            clauses.append("entity_id = %(entity_id)s")
+            params["entity_id"] = entity_id
+        if borrower_id:
+            clauses.append("(entity_id = %(borrower_id)s OR metadata->>'borrower_id' = %(borrower_id)s)")
+            params["borrower_id"] = borrower_id
+        if subject_clip:
+            clauses.append("subject_clip = %(subject_clip)s")
+            params["subject_clip"] = mask_cotality_id("clip", subject_clip)
+        if event_type:
+            clauses.append("event_type = %(event_type)s")
+            params["event_type"] = event_type
+        if action:
+            clauses.append("metadata->>'action' = %(action)s")
+            params["action"] = action
+        if since:
+            clauses.append("event_at >= %(since)s")
+            params["since"] = since
+        if until:
+            clauses.append("event_at <= %(until)s")
+            params["until"] = until
+        where_clause = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        sql = _SELECT_SQL_TEMPLATE.format(where_clause=where_clause)
+        rows = self._client.fetchall(sql, params, limit=limit)
         out: list[AuditEvent] = []
         for row in rows:
             metadata = row.get("metadata") or {}

@@ -18,7 +18,11 @@ export function ConfidenceMeter({ value, compact }: ConfidenceMeterProps) {
   const filled = Math.max(0, Math.min(5, Math.round(value / 20)));
   const tier = value >= 80 ? 'high' : value >= 60 ? 'med' : 'low';
   return (
-    <span className={`conf conf--${tier}`}>
+    <span
+      className={`conf conf--${tier}`}
+      title="Confidence reflects source coverage and model certainty for this recommendation."
+      aria-label={`Recommendation confidence ${value} percent.`}
+    >
       <span className="conf__bars">
         {[0, 1, 2, 3, 4].map((i) => (
           <span key={i} className={`conf__bar ${i < filled ? 'on' : ''}`} />

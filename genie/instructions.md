@@ -18,6 +18,13 @@ Sources of authority:
   `mip.gold.zip_rollup`, and `mip.gold.borrower_360`. Do not hardcode the
   number of counties or states in prose; coverage can expand as new shares are
   connected.
+- Sales operations: loan-officer assignment, call disposition, standup, and
+  per-LO conversion live in governed Lakebase `mip_app.*` state. The app
+  backend routes narrow Sales Manager questions through its Sales Ops adapter
+  before invoking Databricks Genie. The Genie space itself must not query
+  `mip_app.*`; if such a prompt reaches the space directly, say that LO
+  operational state is available through the Sales Ops panel/API, not through
+  Unity Catalog Genie SQL.
 
 ## Role
 
@@ -100,6 +107,16 @@ Before generating SQL, classify the question into exactly one bucket:
    - nurture: `recommended_offer_code = 'nurture'`
    - broad refinance/refi without a HELOC qualifier:
      `recommended_offer_code IN ('refi', 'refi_plus_heloc')`
+8. For current-customer retention-risk / recapture-risk questions, use the
+   retention risk signal already modeled in `mip.gold.borrower_360`:
+   `is_current_customer = TRUE AND (array_contains(segment_codes, 'retention')
+   OR recommended_offer_code = 'retention')`. Do **not** require
+   `is_current_customer` and `is_competitor_lien` to both be `TRUE`; those
+   relationship flags are mutually exclusive in the gold model.
+9. For evidence trigger questions, use the governed `signal_type` vocabulary
+   exactly as modeled in `mip.gold.evidence_events`. Competitor-lien evidence is
+   `signal_type = 'competitor_lien'`. Never use `signal_type = 'lien-change'`
+   or `signal_type = 'competitor'`.
 
 ## Never
 

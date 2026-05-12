@@ -1,4 +1,5 @@
 import re
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
@@ -13,6 +14,8 @@ SegmentCode = Literal["itm", "listed", "permit", "investor", "equity", "retentio
 # used to reject it, which would 500 `/api/leads` the moment the lead_population CTAS
 # learned to JOIN borrower_lifecycle_state. Include it preemptively.
 ApprovalStatus = Literal["pending", "approved", "rejected", "hold"]
+ConsentStatus = Literal["opt_in", "opt_out", "unknown"]
+OutreachStatus = Literal["none", "queued", "actioned", "sent", "bounced", "replied"]
 
 
 class SegmentSummary(BaseModel):
@@ -41,10 +44,14 @@ class LeadSummary(BaseModel):
     rate_spread_bps: int
     opportunity_score: int = Field(ge=0, le=100)
     confidence: int = Field(ge=0, le=100)
+    recommended_offer_code: str = "nurture"
     recommended_offer: str
     why_now: str
     evidence_ids: list[str]
     approval_status: ApprovalStatus = "pending"
+    outreach_status: OutreachStatus = "none"
+    approved_at: datetime | None = None
+    outreach_at: datetime | None = None
     # Secondary-filter fields (2026-04-23) -- carried from
     # gold.borrower_360 through gold.lead_population so the
     # /segment-intelligence page can run real client-side predicates
@@ -65,6 +72,24 @@ class LeadSummary(BaseModel):
     has_permit: bool = False
     listed_for_sale: bool = False
     current_lender_ref: str | None = None
+    # Marketing-contactability fields. These are sourced from first-party
+    # CRM/campaign membership, not Cotality, and intentionally carry only
+    # controlled consent/suppression enums plus timestamps. They are required
+    # for fail-closed campaign/export/draft flows; no emails, phones, names,
+    # street addresses, or raw campaign-member ids are exposed.
+    marketing_eligible: bool = True
+    consent_status: ConsentStatus = "opt_in"
+    suppression_reason: str | None = None
+    last_touch_at: datetime | None = None
+    eligible_recontact_at: datetime | None = None
+    assigned_to_email: str | None = None
+    assigned_to_label: str | None = None
+    assigned_at: datetime | None = None
+    assignment_expires_at: datetime | None = None
+    latest_disposition_outcome: str | None = None
+    latest_disposition_at: datetime | None = None
+    latest_callback_at: datetime | None = None
+    aging_days: int | None = None
 
     @field_validator("display_name")
     @classmethod

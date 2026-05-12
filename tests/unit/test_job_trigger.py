@@ -204,8 +204,9 @@ def test_approval_endpoint_schedules_trigger(monkeypatch: pytest.MonkeyPatch) ->
         "/api/outreach/approve",
         json={
             "borrower_id": "B-48291",
-            "offer_code": "HELOC-STD",
+            "offer_code": "heloc",
             "actor": "anonymous",
+            "draft_body": "Governed approval body. Summit Mortgage, NMLS #123456. Equal Housing Lender. Reply unsubscribe to opt out.",
         },
     )
     assert resp.status_code == 200, resp.text

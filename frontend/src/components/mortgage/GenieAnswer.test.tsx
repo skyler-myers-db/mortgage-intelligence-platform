@@ -1,5 +1,13 @@
 import { describe, it, expect } from 'vitest';
+// @ts-expect-error Frontend app types intentionally exclude Node globals; this
+// unit test reads the design-system CSS text under Vitest only.
+import { readFileSync } from 'node:fs';
 import { inferChartFromRows, stripQuestionRestatement } from './GenieAnswer';
+
+const designCss = () => readFileSync(
+  new URL('../../design-system/components.css', import.meta.url),
+  'utf8',
+);
 
 /**
  * GenieAnswer.stripQuestionRestatement is the small piece of pre-render
@@ -114,5 +122,23 @@ describe('inferChartFromRows', () => {
     expect(chart?.labelCol).toBe(column);
     expect(chart?.valueCol).toBe('borrowers');
     expect(chart?.rows[0]).toEqual({ label: expectedLabel, value: 42 });
+  });
+});
+
+describe('Genie proof layout contract', () => {
+  it('stacks proof metrics in the drawer so Trust cannot overlap Rows', () => {
+    const css = designCss();
+
+    expect(css).toContain('.genie-proof-drawer .genie-proof__grid');
+    expect(css).toMatch(/\.genie-proof-drawer \.genie-proof__grid\s*\{[^}]*grid-template-columns:\s*1fr;/s);
+    expect(css).toMatch(/\.genie-proof-drawer \.genie-proof__metric\s*\{[^}]*grid-template-columns:\s*8rem minmax\(0,\s*1fr\);/s);
+  });
+
+  it('allows long proof chips and freshness rows to wrap inside their bounds', () => {
+    const css = designCss();
+
+    expect(css).toMatch(/\.genie-proof__trust-chip\s*\{[^}]*white-space:\s*normal;/s);
+    expect(css).toMatch(/\.genie-proof__trust-chip\s*\{[^}]*overflow-wrap:\s*anywhere;/s);
+    expect(css).toMatch(/\.genie-proof__line span\s*\{[^}]*overflow-wrap:\s*anywhere;/s);
   });
 });

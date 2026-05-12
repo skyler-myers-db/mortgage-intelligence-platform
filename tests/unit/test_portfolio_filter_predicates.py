@@ -11,7 +11,11 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from backend.schemas.portfolio import PortfolioCreateRequest, PortfolioCriteria, PortfolioPreviewRequest
+from backend.schemas.portfolio import (
+    PortfolioCreateRequest,
+    PortfolioCriteria,
+    PortfolioPreviewRequest,
+)
 from backend.services.repositories.databricks_repo import DatabricksPortfolioRepository
 from backend.services.state_footprint import (
     FootprintState,
@@ -22,6 +26,10 @@ from backend.services.state_footprint import (
 
 def _where_for(criteria: PortfolioCriteria) -> tuple[str, dict[str, object]]:
     return DatabricksPortfolioRepository._build_preview_predicates(criteria)
+
+
+def _any_contactability(**kwargs: object) -> PortfolioCriteria:
+    return PortfolioCriteria(marketing_eligibility="Any", **kwargs)
 
 
 def _install_test_coverage() -> None:
@@ -50,7 +58,7 @@ def test_lender_relationship_predicates_are_specific(
     expected_clause: str,
 ) -> None:
     where, params = _where_for(
-        PortfolioCriteria(lender_relationship=relationship),
+        _any_contactability(lender_relationship=relationship),
     )
 
     assert where == f"WHERE {expected_clause}"
@@ -62,7 +70,7 @@ def test_lender_relationship_all_or_missing_is_not_a_predicate(
     relationship: str | None,
 ) -> None:
     where, params = _where_for(
-        PortfolioCriteria(lender_relationship=relationship),
+        _any_contactability(lender_relationship=relationship),
     )
 
     assert where == ""
@@ -72,7 +80,7 @@ def test_lender_relationship_all_or_missing_is_not_a_predicate(
 def test_open_heloc_lien_filter_uses_second_position_predicate() -> None:
     """Open HELOC means an existing second-position lien, not any open first lien."""
     where, params = _where_for(
-        PortfolioCriteria(lien_status="Open HELOC"),
+        _any_contactability(lien_status="Open HELOC"),
     )
 
     assert "COALESCE(second_pos_amount, 0) > 0" in where
@@ -82,7 +90,7 @@ def test_open_heloc_lien_filter_uses_second_position_predicate() -> None:
 
 def test_target_lender_ref_predicate_is_parameterized() -> None:
     where, params = _where_for(
-        PortfolioCriteria(target_lender_ref="Competitor B"),
+        _any_contactability(target_lender_ref="Competitor B"),
     )
 
     assert where == "WHERE current_lender_ref = :target_lender_ref"
@@ -91,10 +99,44 @@ def test_target_lender_ref_predicate_is_parameterized() -> None:
 
 def test_target_lender_ref_all_is_not_a_predicate() -> None:
     where, params = _where_for(
-        PortfolioCriteria(target_lender_ref="All"),
+        _any_contactability(target_lender_ref="All"),
     )
 
     assert where == ""
+    assert params == {}
+
+
+def test_marketing_contactability_predicates_are_specific() -> None:
+    where, params = _where_for(
+        PortfolioCriteria(
+            marketing_eligibility="Eligible only",
+            consent_status="Opt-in",
+            recency="Untouched 30d",
+        ),
+    )
+
+    assert "marketing_eligible = TRUE" in where
+    assert "consent_status = 'opt_in'" in where
+    assert "last_touch_at IS NULL OR last_touch_at < CURRENT_TIMESTAMP() - INTERVAL 30 DAYS" in where
+    assert params == {}
+
+
+def test_portfolio_criteria_defaults_to_eligible_only_contactability() -> None:
+    criteria = PortfolioCriteria()
+    where, params = _where_for(criteria)
+
+    assert criteria.marketing_eligibility == "Eligible only"
+    assert where == "WHERE marketing_eligible = TRUE"
+    assert params == {}
+
+
+def test_marketing_suppressed_predicate_is_explicit() -> None:
+    where, params = _where_for(
+        PortfolioCriteria(marketing_eligibility="Suppressed only", consent_status="Opt-out"),
+    )
+
+    assert "marketing_eligible = FALSE" in where
+    assert "consent_status = 'opt_out'" in where
     assert params == {}
 
 
@@ -121,7 +163,7 @@ def test_portfolio_criteria_accepts_reviewed_geography_labels() -> None:
 def test_portfolio_criteria_accepts_reviewed_multi_state_codes() -> None:
     _install_test_coverage()
     try:
-        criteria = PortfolioCriteria(states=["ny", "NJ", "NY"])
+        criteria = _any_contactability(states=["ny", "NJ", "NY"])
         assert criteria.states == ["NY", "NJ"]
         where, params = _where_for(criteria)
     finally:

@@ -11,7 +11,7 @@ trusted gold assets. Questions should use "current Cotality data coverage" or
 "current coverage states" rather than hardcoding county/state counts; the
 coverage can expand or contract as Cotality shares are connected.
 
-The 25 prompts below are grouped into 7 categories that mirror the
+The 30 prompts below are grouped into 8 categories that mirror the
 shapes a lender will actually throw at the space:
 
 1. **Population sizing** — absolute counts over the addressable market.
@@ -21,6 +21,7 @@ shapes a lender will actually throw at the space:
 5. **Offer + next-best-offer** — product mix + projected savings + NBO recs.
 6. **Lock-in cohort** — the sub-3% 2020-2022 retention cohort.
 7. **Cross-asset joins** — evidence × segment × scores / lender retention.
+8. **Sales operations** — LO assignment, aging, dispositions, and conversion.
 
 Each entry has:
 
@@ -261,3 +262,56 @@ Each entry has:
     SQL hint: none until `mip.gold.source_readiness` reports Building
     Permits live.
     Source: `mip.gold.source_readiness`.
+
+---
+
+## Category 8 — Sales operations
+
+Sales operations questions are routed through the governed backend Sales Ops
+adapter because LO assignment and call dispositions live in Lakebase
+`mip_app.*`, which the Databricks Genie space itself must not query directly.
+The response still includes executable SQL and proof, but the source is
+reported as governed Sales Ops state rather than a Unity Catalog asset.
+
+26. **Which LO had the highest application-start rate this week?**
+    Intent: Sam's Friday close-out — identify the strongest converter and
+    coaching benchmark.
+    Expected skeleton: one top LO plus a table of `{lo_email, calls_attempted,
+    applications_started, application_start_rate}`. If no dispositions are
+    logged this week, say so instead of inventing a conversion rate.
+    SQL hint: aggregate `mip_app.call_dispositions` from week start by
+    `lo_email`, using `outcome = 'application_started'` as the numerator.
+    Source: governed Sales Ops adapter over `mip_app.call_dispositions`.
+
+27. **How many calls did each LO make yesterday?**
+    Intent: 8:30 standup activity readout.
+    Expected skeleton: one row per LO/outcome or LO-level rollup with nonnegative
+    counts. No borrower identifiers.
+    SQL hint: `WHERE occurred_at >= current_date - interval '1 day' AND occurred_at < current_date GROUP BY lo_email, outcome`.
+    Source: governed Sales Ops adapter over `mip_app.call_dispositions`.
+
+28. **Show approved leads that have not been touched in 7 days.**
+    Intent: stale-lead triage for manager follow-up.
+    Expected skeleton: up to 10 masked borrower IDs with `age_days`, plus a link
+    hint to Lead Queue filters `approval_status=approved&outreach_status=queued&aged_days=7`.
+    SQL hint: latest approval is `approve`, no LO disposition, decided at least
+    7 days ago.
+    Source: governed Sales Ops adapter over `mip_app.approvals` and
+    `mip_app.call_dispositions`.
+
+29. **Top borrowers in an LO queue ranked by aging and score.**
+    Intent: daily call-list prioritization for a named LO.
+    Expected skeleton: if an LO email is supplied, route to Lead Queue with
+    `assigned_to=<email>&approval_status=approved`; otherwise ask for the LO
+    email. No names, no phone numbers, no street addresses.
+    SQL hint: operational assignment comes from `mip_app.lead_assignments`;
+    borrower score comes from `mip.gold.borrower_360` through the app API.
+    Source: governed Sales Ops adapter plus Lead Queue.
+
+30. **How many leads went from approved to application started this week?**
+    Intent: bridge Vera's approval gate to Sam's LO execution funnel.
+    Expected skeleton: count of `application_started` dispositions this week,
+    optionally grouped by LO.
+    SQL hint: `COUNT(*) FILTER (WHERE outcome = 'application_started')` over
+    `mip_app.call_dispositions` for the current week.
+    Source: governed Sales Ops adapter over `mip_app.call_dispositions`.

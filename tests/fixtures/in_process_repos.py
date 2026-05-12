@@ -24,6 +24,9 @@ from backend.schemas.geo import (
 )
 from backend.schemas.lead import Borrower360, LeadSummary, SegmentSummary
 from backend.schemas.portfolio import (
+    CampaignListResponse,
+    CampaignStatusPatchRequest,
+    CampaignSummary,
     PortfolioCreateRequest,
     PortfolioCreateResponse,
     PortfolioCriteria,
@@ -55,17 +58,49 @@ class InProcessMockPortfolioRepository:
     ) -> PortfolioCreateResponse:
         _ = actor
         return PortfolioCreateResponse(
-            portfolio_id="module0-portfolio",
+            portfolio_id="11111111-1111-4111-8111-111111111111",
+            campaign_id="11111111-1111-4111-8111-111111111111",
             name=payload.name,
             marketable_population=mock_data.PORTFOLIO.marketable_population,
         )
 
     def get(self, portfolio_id: str) -> dict[str, object]:
-        return {
-            "portfolio_id": portfolio_id,
-            "status": "ready",
-            "marketable_population": mock_data.PORTFOLIO.marketable_population,
-        }
+        return self._campaign(portfolio_id).model_dump()
+
+    def _campaign(self, campaign_id: str) -> CampaignSummary:
+        return CampaignSummary(
+            campaign_id=campaign_id,
+            name="Synthetic campaign",
+            owner_email="skyler@entrada.ai",
+            status="draft",
+            criteria={"marketing_eligibility": "Eligible only"},
+            suppression_policy={"default": "eligible_only"},
+            message_variants=[],
+            channel_cascade=[],
+            send_window={},
+        )
+
+    def list_campaigns(
+        self,
+        *,
+        owner_email: str | None = None,
+        status: str | None = None,
+        limit: int = 50,
+    ) -> CampaignListResponse:
+        _ = (owner_email, status, limit)
+        return CampaignListResponse(
+            campaigns=[self._campaign("11111111-1111-4111-8111-111111111111")]
+        )
+
+    def patch_status(
+        self,
+        portfolio_id: str,
+        payload: CampaignStatusPatchRequest,
+        *,
+        actor: str | None = None,
+    ) -> CampaignSummary:
+        _ = actor
+        return self._campaign(portfolio_id).model_copy(update={"status": payload.status})
 
 
 class InProcessMockSegmentRepository:
@@ -97,6 +132,16 @@ class InProcessMockSegmentRepository:
                 borrowers = [b for b in borrowers if b.is_owner_occupied is True]
             elif portfolio_criteria.occupancy == "Non-owner-occupied":
                 borrowers = [b for b in borrowers if b.is_owner_occupied is False]
+            if portfolio_criteria.marketing_eligibility == "Eligible only":
+                borrowers = [b for b in borrowers if b.marketing_eligible is True]
+            elif portfolio_criteria.marketing_eligibility == "Suppressed only":
+                borrowers = [b for b in borrowers if b.marketing_eligible is False]
+            if portfolio_criteria.consent_status == "Opt-in":
+                borrowers = [b for b in borrowers if b.consent_status == "opt_in"]
+            elif portfolio_criteria.consent_status == "Opt-out":
+                borrowers = [b for b in borrowers if b.consent_status == "opt_out"]
+            elif portfolio_criteria.consent_status == "Unknown":
+                borrowers = [b for b in borrowers if b.consent_status == "unknown"]
         counts: dict[str, int] = {}
         scores: dict[str, list[int]] = {}
         for borrower in borrowers:
@@ -136,14 +181,33 @@ class InProcessMockLeadRepository:
         target_lender_ref: str | None = None,
         cohort_id: str | None = None,
         portfolio_criteria: PortfolioCriteria | None = None,
+        approval_status: str | None = None,
+        outreach_status: str | None = None,
+        aged_days: int | None = None,
     ) -> list[LeadSummary]:
         _ = (portfolio_id, cohort_id)
         leads = [LeadSummary(**b.model_dump()) for b in mock_data.BORROWERS]
+        if approval_status:
+            leads = [lead for lead in leads if lead.approval_status == approval_status]
+        if outreach_status:
+            leads = [lead for lead in leads if lead.outreach_status == outreach_status]
+        if aged_days is not None:
+            leads = [lead for lead in leads if (lead.aging_days or 0) >= aged_days]
         if portfolio_criteria is not None:
             if portfolio_criteria.occupancy == "Owner-occupied":
                 leads = [lead for lead in leads if lead.is_owner_occupied is True]
             elif portfolio_criteria.occupancy == "Non-owner-occupied":
                 leads = [lead for lead in leads if lead.is_owner_occupied is False]
+            if portfolio_criteria.marketing_eligibility == "Eligible only":
+                leads = [lead for lead in leads if lead.marketing_eligible is True]
+            elif portfolio_criteria.marketing_eligibility == "Suppressed only":
+                leads = [lead for lead in leads if lead.marketing_eligible is False]
+            if portfolio_criteria.consent_status == "Opt-in":
+                leads = [lead for lead in leads if lead.consent_status == "opt_in"]
+            elif portfolio_criteria.consent_status == "Opt-out":
+                leads = [lead for lead in leads if lead.consent_status == "opt_out"]
+            elif portfolio_criteria.consent_status == "Unknown":
+                leads = [lead for lead in leads if lead.consent_status == "unknown"]
         codes = segment_codes or ([segment] if segment else [])
         codes = [str(code).strip() for code in codes if str(code).strip()]
         if codes:
@@ -196,6 +260,49 @@ class InProcessMockLeadRepository:
             return leads[:limit]
         return leads
 
+    def count(
+        self,
+        segment: str | None,
+        portfolio_id: str | None,
+        limit: int | None = None,
+        state: str | None = None,
+        zip_code: str | None = None,
+        county_fips: str | None = None,
+        county_fipses: list[str] | None = None,
+        state_codes: list[str] | None = None,
+        zip_codes: list[str] | None = None,
+        borrower_ids: list[str] | None = None,
+        segment_codes: list[str] | None = None,
+        segment_mode: str = "any",
+        target_lender_ref: str | None = None,
+        cohort_id: str | None = None,
+        portfolio_criteria: PortfolioCriteria | None = None,
+        approval_status: str | None = None,
+        outreach_status: str | None = None,
+        aged_days: int | None = None,
+    ) -> int:
+        _ = limit
+        return len(self.list(
+            segment=segment,
+            portfolio_id=portfolio_id,
+            limit=None,
+            state=state,
+            zip_code=zip_code,
+            county_fips=county_fips,
+            county_fipses=county_fipses,
+            state_codes=state_codes,
+            zip_codes=zip_codes,
+            borrower_ids=borrower_ids,
+            segment_codes=segment_codes,
+            segment_mode=segment_mode,
+            target_lender_ref=target_lender_ref,
+            cohort_id=cohort_id,
+            portfolio_criteria=portfolio_criteria,
+            approval_status=approval_status,
+            outreach_status=outreach_status,
+            aged_days=aged_days,
+        ))
+
 
 class InProcessMockBorrowerRepository:
     """Test fixture implementing ``BorrowerRepository`` from the synthetic population."""
@@ -211,6 +318,18 @@ class InProcessMockBorrowerRepository:
         if borrower is None:
             return None
         return borrower.evidence_events
+
+    def search(self, query: str, limit: int = 10) -> list[LeadSummary]:
+        q = query.strip().upper()
+        rows = [
+            LeadSummary(**b.model_dump())
+            for b in mock_data.BORROWERS
+            if b.borrower_id.upper().startswith(q)
+            or b.zip == query.strip()
+            or q in b.city.upper()
+            or b.clip_id == query.strip()
+        ]
+        return rows[:limit]
 
 
 class InProcessMockOfferRepository:
