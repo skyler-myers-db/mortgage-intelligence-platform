@@ -1,0 +1,60 @@
+import { describe, expect, it } from 'vitest';
+// @ts-expect-error Frontend app types intentionally exclude Node globals; this
+// unit test reads the design-system CSS text under Vitest only.
+import { readFileSync } from 'node:fs';
+
+const designCss = () => readFileSync(
+  new URL('./components.css', import.meta.url),
+  'utf8',
+);
+
+describe('layout containment contracts', () => {
+  it('keeps topbar borrower search visibly actionable', () => {
+    const css = designCss();
+
+    expect(css).toMatch(/\.topbar\s*\{[^}]*display:\s*grid;/s);
+    expect(css).toMatch(
+      /\.topbar\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\) minmax\(30rem,\s*44rem\) minmax\(0,\s*1fr\);/s,
+    );
+    expect(css).toMatch(/\.topbar__search\s*\{[^}]*grid-column:\s*2;/s);
+    expect(css).toMatch(/\.topbar__search\s*\{[^}]*inline-size:\s*min\(44rem,\s*100%\);/s);
+    expect(css).toContain('.topbar__actions');
+    expect(css).toContain('.topbar__search-results');
+    expect(css).toContain('.topbar__search-status');
+    expect(css).toMatch(/\.topbar__search-results\s*\{[^}]*z-index:\s*60;/s);
+  });
+
+  it('prevents lead-table chips from compressing into neighboring cells', () => {
+    const css = designCss();
+
+    expect(css).toMatch(/\.tbl-wrap\s*\{[^}]*overflow:\s*auto;/s);
+    expect(css).toMatch(/\.lead-table__table\s*\{[^}]*inline-size:\s*max-content;/s);
+    expect(css).toMatch(/\.chip__label\s*\{[^}]*text-overflow:\s*ellipsis;/s);
+    expect(css).toMatch(/\.lead-table__segments\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\);/s);
+  });
+
+  it('lets evidence drawer signal rows wrap long source and value text', () => {
+    const css = designCss();
+
+    expect(css).toMatch(/\.lineage-node--signal\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\) minmax\(0,\s*auto\);/s);
+    expect(css).toMatch(/\.lineage-node__name\s*\{[^}]*overflow-wrap:\s*anywhere;/s);
+    expect(css).toMatch(/\.lineage-node__value\s*\{[^}]*overflow-wrap:\s*anywhere;/s);
+  });
+
+  it('makes proof affordance rows visibly interactive without layout shifts', () => {
+    const css = designCss();
+
+    expect(css).toContain('.data-estate__lane-proof');
+    expect(css).toMatch(/\.data-estate__asset\s*\{[^}]*display:\s*grid;/s);
+    expect(css).toMatch(/\.data-estate__asset\s*\{[^}]*cursor:\s*pointer;/s);
+    expect(css).toContain('.trusted-asset--button');
+    expect(css).toMatch(/\.trusted-asset--button\s*\{[^}]*width:\s*100%;/s);
+  });
+
+  it('keeps theme switches visually coherent across shell surfaces', () => {
+    const css = designCss();
+
+    expect(css).toMatch(/\.topbar,[\s\S]*?\.topbar__icon-btn\s*\{[^}]*transition:/s);
+    expect(css).toMatch(/@media \(prefers-reduced-motion:\s*reduce\)\s*\{[\s\S]*?\.topbar,[\s\S]*?transition:\s*none;/s);
+  });
+});

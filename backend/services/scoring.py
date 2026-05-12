@@ -76,12 +76,12 @@ SOURCE_DISPLAY_LABELS: dict[str, str] = {
     "mip.gold.lead_scores":         "Lead scores",
     "mip.gold.evidence_events":     "Evidence stream",
     "mip.gold.property_owner_bridge": "Owner Link bridge",
-    # Short aliases used on RowPreview / historical code paths
+    # Short aliases used on RowPreview and app proof chips.
     "fn_rate_spread":               "Market rate comparison",
     "fn_in_the_money":              "In-the-money rule",
     "fn_next_best_offer":           "Next-best-offer model",
     "fn_lead_score":                "Lead score model",
-    "rules.itm_v3":                 "Rate + equity ruleset",
+    "rules.itm_v3":                 "In-the-Money logic",
     "mlflow.mtg_nbo_v3":            "Next-best-offer model v3",
     "permits.building":             "Building permit signal",
     "borrower_dossier":             "Borrower dossier",

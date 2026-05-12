@@ -60,7 +60,7 @@ from backend.schemas.portfolio import (
     PortfolioPreviewRequest,
 )
 from backend.schemas.why import WhyPanel, WhyPanelSource
-from backend.services.county_names import county_name_for_fips
+from backend.services.county_names import county_fips_for_name, county_name_for_fips
 from backend.services.databricks_sql import DatabricksSqlClient, DatabricksSqlError
 from backend.services.databricks_sql_helpers import qualify
 from backend.services.genie_answers import (
@@ -1703,26 +1703,42 @@ class DatabricksBorrowerRepository:
     )
 
     _SEARCH_SQL_TEMPLATE = (
+        "WITH latest_counties AS ( "
+        "  SELECT fips_5, state, county_name "
+        f"  FROM {qualify('gold', 'county_rollup')} "
+        f"  WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM {qualify('gold', 'county_rollup')}) "
+        ") "
         "SELECT "
-        "  clip, borrower_id, "
-        "  CONCAT('Owner ', SUBSTR(owner_name_hash, 1, 8)) AS display_name, "
-        "  city, state, zip, segment_codes, "
-        "  equity_estimate, rate_spread_bps, opportunity_score, confidence, "
-        "  recommended_offer_code, recommended_offer, why_now, evidence_ids, approval_status, "
-        "  current_lender_ref, "
-        "  is_owner_occupied, is_investor, is_current_customer, "
-        "  is_former_customer, is_competitor_lien, related_property_count, "
-        "  current_lien_balance, second_pos_amount, has_permit, listed_for_sale, "
-        "  marketing_eligible, consent_status, suppression_reason, last_touch_at, "
-        "  eligible_recontact_at "
-        f"FROM {qualify('gold', 'borrower_360')} "
-        "WHERE UPPER(borrower_id) LIKE :borrower_prefix "
-        "   OR zip = :zip_exact "
-        "   OR UPPER(city) LIKE :term_contains "
-        "   OR clip = :clip_exact "
+        "  b.clip, b.borrower_id, "
+        "  CONCAT('Owner ', SUBSTR(b.owner_name_hash, 1, 8)) AS display_name, "
+        "  b.city, b.state, b.zip, b.segment_codes, "
+        "  b.equity_estimate, b.rate_spread_bps, b.opportunity_score, b.confidence, "
+        "  b.recommended_offer_code, b.recommended_offer, b.why_now, b.evidence_ids, b.approval_status, "
+        "  b.current_lender_ref, "
+        "  b.is_owner_occupied, b.is_investor, b.is_current_customer, "
+        "  b.is_former_customer, b.is_competitor_lien, b.related_property_count, "
+        "  b.current_lien_balance, b.second_pos_amount, b.has_permit, b.listed_for_sale, "
+        "  b.marketing_eligible, b.consent_status, b.suppression_reason, b.last_touch_at, "
+        "  b.eligible_recontact_at "
+        f"FROM {qualify('gold', 'borrower_360')} AS b "
+        "LEFT JOIN latest_counties AS cr "
+        "  ON cr.fips_5 = b.county_fips_5 "
+        "WHERE UPPER(b.borrower_id) LIKE :borrower_prefix "
+        "   OR b.zip = :zip_exact "
+        "   OR b.zip LIKE :zip_prefix "
+        "   OR UPPER(b.city) LIKE :term_contains "
+        "   OR b.clip = :clip_exact "
+        "   OR b.state = :state_exact "
+        "   OR UPPER(cr.county_name) LIKE :county_contains "
+        "{county_fips_clause} "
         "ORDER BY "
-        "  CASE WHEN UPPER(borrower_id) = :borrower_exact THEN 0 ELSE 1 END, "
-        "  opportunity_score DESC, borrower_id ASC "
+        "  CASE "
+        "    WHEN UPPER(b.borrower_id) = :borrower_exact THEN 0 "
+        "    WHEN b.zip = :zip_exact THEN 1 "
+        "    WHEN b.state = :state_exact THEN 2 "
+        "    ELSE 3 "
+        "  END, "
+        "  b.opportunity_score DESC, b.borrower_id ASC "
         "LIMIT {limit}"
     )
 
@@ -1874,18 +1890,51 @@ class DatabricksBorrowerRepository:
             return []
         bounded = max(1, min(int(limit or 10), 25))
         upper = term.upper()
+        state_exact = self._state_search_code(term) or "__NO_STATE_MATCH__"
         zip_exact = term if term.isdigit() and len(term) == 5 else "__NO_ZIP_MATCH__"
+        zip_prefix = f"{term}%" if term.isdigit() and 2 <= len(term) <= 5 else "__NO_ZIP_PREFIX__"
+        county_term = re.sub(r"\bcounty\b", "", term, flags=re.IGNORECASE).strip()
+        county_contains = f"%{county_term.upper()}%" if len(county_term) >= 2 else "__NO_COUNTY_MATCH__"
+        county_fipses = county_fips_for_name(county_term, limit=25)
+        county_fips_clause = ""
+        county_params: dict[str, object] = {}
+        if county_fipses:
+            placeholders: list[str] = []
+            for i, fips in enumerate(county_fipses):
+                key = f"county_fips_{i}"
+                county_params[key] = fips
+                placeholders.append(f":{key}")
+            county_fips_clause = f"   OR b.county_fips_5 IN ({', '.join(placeholders)}) "
         rows = self._client.execute(
-            self._SEARCH_SQL_TEMPLATE.format(limit=bounded),
+            self._SEARCH_SQL_TEMPLATE.format(limit=bounded, county_fips_clause=county_fips_clause),
             {
                 "borrower_exact": upper,
                 "borrower_prefix": f"{upper}%",
                 "term_contains": f"%{upper}%",
                 "zip_exact": zip_exact,
+                "zip_prefix": zip_prefix,
                 "clip_exact": term,
+                "state_exact": state_exact,
+                "county_contains": county_contains,
+                **county_params,
             },
         )
         return [LeadSummary(**redact_lead_row(r)) for r in rows]
+
+    @staticmethod
+    def _state_search_code(term: str) -> str | None:
+        normalized = re.sub(r"[^a-z\s]+", " ", term.lower()).strip()
+        normalized = re.sub(r"\s+", " ", normalized)
+        upper = term.strip().upper()
+        codes = {code for _name, code in _US_STATE_FILTERS}
+        if len(upper) == 2 and upper in codes:
+            return upper
+        if len(normalized) < 3:
+            return None
+        for name, code in _US_STATE_FILTERS:
+            if name == normalized or name.startswith(normalized):
+                return code
+        return None
 
 
 class DatabricksOfferRepository:

@@ -321,11 +321,23 @@ class InProcessMockBorrowerRepository:
 
     def search(self, query: str, limit: int = 10) -> list[LeadSummary]:
         q = query.strip().upper()
+        state_names = {
+            "CALIFORNIA": "CA",
+            "COLORADO": "CO",
+            "FLORIDA": "FL",
+            "ILLINOIS": "IL",
+            "TEXAS": "TX",
+            "WASHINGTON": "WA",
+        }
+        state_code = q if len(q) == 2 else state_names.get(q)
+        if state_code is None and len(q) >= 3:
+            state_code = next((code for name, code in state_names.items() if name.startswith(q)), None)
         rows = [
             LeadSummary(**b.model_dump())
             for b in mock_data.BORROWERS
             if b.borrower_id.upper().startswith(q)
-            or b.zip == query.strip()
+            or b.zip.startswith(query.strip())
+            or b.state == state_code
             or q in b.city.upper()
             or b.clip_id == query.strip()
         ]

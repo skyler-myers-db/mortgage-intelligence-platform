@@ -350,7 +350,7 @@ function RowPreview({ lead }: { lead: LeadSummary }) {
                 className="chip chip--segment"
                 style={{ '--chip-hue': color } as CSSProperties}
               >
-                {segmentName(sid)}
+                <span className="chip__label">{segmentName(sid)}</span>
               </span>
             );
           })}
@@ -364,8 +364,8 @@ function RowPreview({ lead }: { lead: LeadSummary }) {
           <span className="muted fs-11">Decision inputs:</span>
           {/*
             Prototype-parity-audit P1-5 (2026-05-04): the row preview
-            previously surfaced only two chips — Rate + equity ruleset and
-            Next-best-offer model — which understated the depth of evidence
+            previously surfaced only two chips — In-the-Money logic and
+            Next-Best-Offer logic — which understated the depth of evidence
             the platform actually carries. Borrower 360 already renders 5+
             chips per dossier; the inline lead-queue preview should match
             that posture so an LO scrolling the queue can see what each
@@ -375,21 +375,21 @@ function RowPreview({ lead }: { lead: LeadSummary }) {
             entry; related evidence can share upstream Cotality assets, but the
             drawer should still describe the specific primitive being cited.
           */}
-          <EvidenceChip source={DRAWER_SOURCES.itm}>Rate + equity ruleset</EvidenceChip>
-          <EvidenceChip source={DRAWER_SOURCES.leadScore}>Lead score model</EvidenceChip>
-          <EvidenceChip source={DRAWER_SOURCES.nbo}>Next-best-offer model</EvidenceChip>
-          <EvidenceChip source={DRAWER_SOURCES.ownerGraph}>Property + owner graph</EvidenceChip>
+          <EvidenceChip source={DRAWER_SOURCES.itm}>{DRAWER_SOURCES.itm.title}</EvidenceChip>
+          <EvidenceChip source={DRAWER_SOURCES.leadScore}>{DRAWER_SOURCES.leadScore.title}</EvidenceChip>
+          <EvidenceChip source={DRAWER_SOURCES.nbo}>{DRAWER_SOURCES.nbo.title}</EvidenceChip>
+          <EvidenceChip source={DRAWER_SOURCES.ownerGraph}>{DRAWER_SOURCES.ownerGraph.title}</EvidenceChip>
           {lead.equity_estimate > 0 && (
-            <EvidenceChip source={DRAWER_SOURCES.avm}>AVM equity</EvidenceChip>
+            <EvidenceChip source={DRAWER_SOURCES.avm}>{DRAWER_SOURCES.avm.title}</EvidenceChip>
           )}
           {(lead.current_lien_balance ?? 0) > 0 && (
-            <EvidenceChip source={DRAWER_SOURCES.lien}>Voluntary lien</EvidenceChip>
+            <EvidenceChip source={DRAWER_SOURCES.lien}>{DRAWER_SOURCES.lien.title}</EvidenceChip>
           )}
           {lead.has_permit === true && (
-            <EvidenceChip source={DRAWER_SOURCES.permit}>Recent permit</EvidenceChip>
+            <EvidenceChip source={DRAWER_SOURCES.permit}>{DRAWER_SOURCES.permit.title}</EvidenceChip>
           )}
           {lead.listed_for_sale === true && (
-            <EvidenceChip source={DRAWER_SOURCES.mls}>MLS listing</EvidenceChip>
+            <EvidenceChip source={DRAWER_SOURCES.mls}>{DRAWER_SOURCES.mls.title}</EvidenceChip>
           )}
         </div>
       </div>
@@ -1455,13 +1455,13 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
                               className="chip chip--segment chip--compact"
                               style={{ '--chip-hue': color } as CSSProperties}
                             >
-                              {segmentName(sid)}
+                              <span className="chip__label">{segmentName(sid)}</span>
                             </span>
                           );
                         })}
                         {lead.segment_codes.length > 2 && (
                           <span className="chip chip--neutral chip--compact">
-                            +{lead.segment_codes.length - 2}
+                            <span className="chip__label">+{lead.segment_codes.length - 2}</span>
                           </span>
                         )}
                       </div>
@@ -1474,7 +1474,7 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
                     </td>
                     <td>
                       <span className="mono fs-12 text-1">{lead.recommended_offer}</span>{' '}
-                      <EvidenceChip source={DRAWER_SOURCES.nbo}>{DRAWER_SOURCES.nbo.short}</EvidenceChip>
+                      <EvidenceChip source={DRAWER_SOURCES.nbo}>{DRAWER_SOURCES.nbo.title}</EvidenceChip>
                     </td>
                     <td className="tbl-cell--right"><ScoreBadge value={lead.opportunity_score} /></td>
                     <td><ConfidenceMeter value={lead.confidence} compact /></td>

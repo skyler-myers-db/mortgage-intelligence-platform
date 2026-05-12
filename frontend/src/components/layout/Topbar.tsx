@@ -127,6 +127,8 @@ export function Topbar() {
   const [mountGraceOver, setMountGraceOver] = useState(false);
   const [borrowerQuery, setBorrowerQuery] = useState('');
   const [borrowerResults, setBorrowerResults] = useState<LeadSummary[]>([]);
+  const [borrowerSearchTerm, setBorrowerSearchTerm] = useState('');
+  const [borrowerSearchStatus, setBorrowerSearchStatus] = useState<'idle' | 'loading' | 'empty' | 'error'>('idle');
   const [searchOpen, setSearchOpen] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
@@ -150,17 +152,29 @@ export function Topbar() {
     const q = borrowerQuery.trim();
     if (q.length < 2) {
       setBorrowerResults([]);
+      setBorrowerSearchTerm('');
+      setBorrowerSearchStatus('idle');
       return;
     }
     const ctrl = new AbortController();
+    setBorrowerSearchStatus('loading');
     const t = window.setTimeout(() => {
       api
         .borrowerSearch(q, ctrl.signal)
         .then((rows) => {
+          if (ctrl.signal.aborted) return;
           setBorrowerResults(rows);
+          setBorrowerSearchTerm(q);
+          setBorrowerSearchStatus(rows.length > 0 ? 'idle' : 'empty');
           setSearchOpen(true);
         })
-        .catch(() => setBorrowerResults([]));
+        .catch(() => {
+          if (ctrl.signal.aborted) return;
+          setBorrowerResults([]);
+          setBorrowerSearchTerm(q);
+          setBorrowerSearchStatus('error');
+          setSearchOpen(true);
+        });
     }, 180);
     return () => {
       window.clearTimeout(t);
@@ -172,7 +186,44 @@ export function Topbar() {
     setSearchOpen(false);
     setBorrowerQuery('');
     setBorrowerResults([]);
+    setBorrowerSearchTerm('');
+    setBorrowerSearchStatus('idle');
     navigate(`/borrower-360/${id}`);
+  };
+
+  const submitBorrowerSearch = async () => {
+    const q = borrowerQuery.trim();
+    if (q.length < 2) {
+      setSearchOpen(true);
+      setBorrowerSearchStatus('empty');
+      return;
+    }
+    const cached =
+      borrowerSearchTerm === q
+        ? borrowerResults.find((row) => row.borrower_id.toUpperCase() === q.toUpperCase()) ?? borrowerResults[0]
+        : undefined;
+    if (cached) {
+      openBorrower(cached.borrower_id);
+      return;
+    }
+    setSearchOpen(true);
+    setBorrowerSearchStatus('loading');
+    try {
+      const rows = await api.borrowerSearch(q);
+      setBorrowerResults(rows);
+      setBorrowerSearchTerm(q);
+      const exact = rows.find((row) => row.borrower_id.toUpperCase() === q.toUpperCase());
+      const first = exact ?? rows[0];
+      if (first) {
+        openBorrower(first.borrower_id);
+      } else {
+        setBorrowerSearchStatus('empty');
+      }
+    } catch {
+      setBorrowerResults([]);
+      setBorrowerSearchTerm(q);
+      setBorrowerSearchStatus('error');
+    }
   };
 
   const envLabel = (health?.app_env ?? 'loading').toLowerCase();
@@ -184,17 +235,12 @@ export function Topbar() {
         <span className="sep">/</span>
         <span className="cur">{crumb}</span>
       </div>
-      <div className="topbar__spacer" />
       <form
         className="topbar__search"
         role="search"
         onSubmit={(e) => {
           e.preventDefault();
-          const exact = borrowerResults.find(
-            (row) => row.borrower_id.toUpperCase() === borrowerQuery.trim().toUpperCase(),
-          );
-          const first = exact ?? borrowerResults[0];
-          if (first) openBorrower(first.borrower_id);
+          void submitBorrowerSearch();
         }}
       >
         <Icon name="search" size={12} />
@@ -204,10 +250,10 @@ export function Topbar() {
           onChange={(e) => setBorrowerQuery(e.target.value)}
           onFocus={() => setSearchOpen(true)}
           onBlur={() => window.setTimeout(() => setSearchOpen(false), 120)}
-          placeholder="Search borrower, ZIP, city"
+          placeholder="Search borrower, ZIP, city, county, state"
           aria-label="Search borrowers"
         />
-        {searchOpen && borrowerResults.length > 0 && (
+        {searchOpen && borrowerQuery.trim().length >= 2 && (borrowerResults.length > 0 || borrowerSearchStatus !== 'idle') && (
           <div className="topbar__search-results" role="listbox">
             {borrowerResults.slice(0, 5).map((row) => (
               <button
@@ -222,9 +268,25 @@ export function Topbar() {
                 <span>{row.city}, {row.state} · {row.zip}</span>
               </button>
             ))}
+            {borrowerSearchStatus === 'loading' && (
+              <div className="topbar__search-status" role="status">
+                Searching borrower, ZIP, city, county, and state...
+              </div>
+            )}
+            {borrowerSearchStatus === 'empty' && borrowerResults.length === 0 && (
+              <div className="topbar__search-status" role="status">
+                No borrower, ZIP, city, county, or state matches "{borrowerSearchTerm || borrowerQuery.trim()}".
+              </div>
+            )}
+            {borrowerSearchStatus === 'error' && (
+              <div className="topbar__search-status topbar__search-status--error" role="status">
+                Search is temporarily unavailable.
+              </div>
+            )}
           </div>
         )}
       </form>
+      <div className="topbar__actions">
       {/* Tenant pill — display-only label for the configured lender. The
           backend applies lender configuration; the UI does not support
           arbitrary client-side lender switching. */}
@@ -288,6 +350,7 @@ export function Topbar() {
       >
         <Icon name="tweak" size={15} />
       </button>
+      </div>
     </header>
   );
 }

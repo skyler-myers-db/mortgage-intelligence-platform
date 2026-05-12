@@ -429,8 +429,9 @@ export default function LeadQueue() {
       .zipRollups(
         countyFilter,
         ctrl.signal,
-        segmentCodes.length > 0 ? segmentCodes : null,
+        segmentCodes.length > 0 ? segmentCodes : segment ? [segment] : null,
         segmentMode,
+        portfolioCriteria,
       )
       .then((payload) => {
         if (cancelled) return;
@@ -443,7 +444,7 @@ export default function LeadQueue() {
       cancelled = true;
       ctrl.abort();
     };
-  }, [countyFilter, segmentCodes, segmentMode]);
+  }, [countyFilter, portfolioCriteria, segment, segmentCodes, segmentMode]);
 
   useEffect(() => {
     const ctrl = new AbortController();

@@ -103,6 +103,9 @@ def test_state_rollups_passes_secondary_portfolio_criteria_to_repository():
             "&owner_link=Portfolio%20investor%20%285%2B%29"
             "&purchase_intent=Listed%20for%20sale"
             "&min_equity_pct_label=%E2%89%A5%2025%25"
+            "&marketing_eligibility=Eligible%20only"
+            "&consent_status=Opt-in"
+            "&recency=Untouched%2030d"
         )
     finally:
         if previous is None:
@@ -121,6 +124,9 @@ def test_state_rollups_passes_secondary_portfolio_criteria_to_repository():
     assert criteria.owner_link == "Portfolio investor (5+)"
     assert criteria.purchase_intent == "Listed for sale"
     assert criteria.min_equity_pct_label == "≥ 25%"
+    assert criteria.marketing_eligibility == "Eligible only"
+    assert criteria.consent_status == "Opt-in"
+    assert criteria.recency == "Untouched 30d"
 
 
 def test_state_rollups_reject_unknown_segment_codes():
@@ -209,6 +215,9 @@ def test_county_rollups_passes_secondary_portfolio_criteria_to_repository():
             "&owner_link=Portfolio%20investor%20%285%2B%29"
             "&purchase_intent=Listed%20for%20sale"
             "&min_equity_pct_label=%E2%89%A5%2025%25"
+            "&marketing_eligibility=Eligible%20only"
+            "&consent_status=Opt-in"
+            "&recency=Untouched%2030d"
         )
     finally:
         if previous is None:
@@ -228,6 +237,9 @@ def test_county_rollups_passes_secondary_portfolio_criteria_to_repository():
     assert criteria.owner_link == "Portfolio investor (5+)"
     assert criteria.purchase_intent == "Listed for sale"
     assert criteria.min_equity_pct_label == "≥ 25%"
+    assert criteria.marketing_eligibility == "Eligible only"
+    assert criteria.consent_status == "Opt-in"
+    assert criteria.recency == "Untouched 30d"
 
 
 def test_county_rollups_validates_state_length():
@@ -298,6 +310,9 @@ def test_zip_rollups_passes_secondary_portfolio_criteria_to_repository():
             "&owner_link=Portfolio%20investor%20%285%2B%29"
             "&purchase_intent=Listed%20for%20sale"
             "&min_equity_pct_label=%E2%89%A5%2025%25"
+            "&marketing_eligibility=Eligible%20only"
+            "&consent_status=Opt-in"
+            "&recency=Untouched%2030d"
         )
     finally:
         if previous is None:
@@ -317,6 +332,9 @@ def test_zip_rollups_passes_secondary_portfolio_criteria_to_repository():
     assert criteria.owner_link == "Portfolio investor (5+)"
     assert criteria.purchase_intent == "Listed for sale"
     assert criteria.min_equity_pct_label == "≥ 25%"
+    assert criteria.marketing_eligibility == "Eligible only"
+    assert criteria.consent_status == "Opt-in"
+    assert criteria.recency == "Untouched 30d"
 
 
 def test_zip_rollups_empty_for_unpopulated_county():

@@ -266,6 +266,15 @@ body {
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   position: relative;
+  transition:
+    background-color var(--dur-base) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body {
+    transition: none;
+  }
 }
 
 /* Ambient animated radial-halo backgrounds removed 2026-04-23. They were

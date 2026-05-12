@@ -35,3 +35,31 @@ def county_name_for_fips(fips_5: str | None) -> str | None:
     if len(fips) != 5:
         return None
     return _county_name_map().get(fips)
+
+
+def county_fips_for_name(term: str | None, *, limit: int = 25) -> list[str]:
+    """Return FIPS codes whose public county name matches ``term``.
+
+    This is intentionally backed by the shipped national TopoJSON instead of
+    a demo-footprint lookup. It lets global search resolve county names even
+    when the current Cotality rollup has FIPS codes but no county-name column.
+    """
+    normalized = str(term or "").strip().lower()
+    if not normalized:
+        return []
+    normalized = " ".join(part for part in normalized.replace(".", " ").split() if part != "county")
+    if len(normalized) < 2:
+        return []
+    matches: list[tuple[int, str]] = []
+    for fips, name in _county_name_map().items():
+        county = name.lower()
+        if county == normalized:
+            rank = 0
+        elif county.startswith(normalized):
+            rank = 1
+        elif normalized in county:
+            rank = 2
+        else:
+            continue
+        matches.append((rank, fips))
+    return [fips for _rank, fips in sorted(matches)[: max(1, min(limit, 50))]]

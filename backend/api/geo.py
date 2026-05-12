@@ -60,6 +60,9 @@ def _portfolio_criteria_from_geo_query(
     purchase_intent: str | None = None,
     min_equity_pct_label: str | None = None,
     min_equity_pct: float | None = None,
+    marketing_eligibility: str | None = None,
+    consent_status: str | None = None,
+    recency: str | None = None,
 ) -> PortfolioCriteria | None:
     fields: dict[str, object] = {}
     if occupancy:
@@ -74,6 +77,12 @@ def _portfolio_criteria_from_geo_query(
         fields["min_equity_pct_label"] = min_equity_pct_label
     if min_equity_pct is not None:
         fields["min_equity_pct"] = min_equity_pct
+    if marketing_eligibility:
+        fields["marketing_eligibility"] = marketing_eligibility
+    if consent_status:
+        fields["consent_status"] = consent_status
+    if recency:
+        fields["recency"] = recency
     if not fields:
         return None
     try:
@@ -113,6 +122,9 @@ def state_rollups(
     purchase_intent: Annotated[str | None, Query(alias="purchase_intent", max_length=64)] = None,
     min_equity_pct_label: Annotated[str | None, Query(alias="min_equity_pct_label", max_length=32)] = None,
     min_equity_pct: Annotated[float | None, Query(alias="min_equity_pct", ge=0, le=100)] = None,
+    marketing_eligibility: Annotated[str | None, Query(alias="marketing_eligibility", max_length=32)] = None,
+    consent_status: Annotated[str | None, Query(alias="consent_status", max_length=32)] = None,
+    recency: Annotated[str | None, Query(alias="recency", max_length=32)] = None,
 ) -> StateRollupResponse:
     """Return per-state rollups for the latest funnel snapshot.
 
@@ -137,6 +149,9 @@ def state_rollups(
             purchase_intent=purchase_intent,
             min_equity_pct_label=min_equity_pct_label,
             min_equity_pct=min_equity_pct,
+            marketing_eligibility=marketing_eligibility,
+            consent_status=consent_status,
+            recency=recency,
         ),
     )
 
@@ -180,6 +195,9 @@ def county_rollups(
     purchase_intent: Annotated[str | None, Query(alias="purchase_intent", max_length=64)] = None,
     min_equity_pct_label: Annotated[str | None, Query(alias="min_equity_pct_label", max_length=32)] = None,
     min_equity_pct: Annotated[float | None, Query(alias="min_equity_pct", ge=0, le=100)] = None,
+    marketing_eligibility: Annotated[str | None, Query(alias="marketing_eligibility", max_length=32)] = None,
+    consent_status: Annotated[str | None, Query(alias="consent_status", max_length=32)] = None,
+    recency: Annotated[str | None, Query(alias="recency", max_length=32)] = None,
 ) -> CountyRollupResponse:
     """Return per-county rollups for the given state at the latest snapshot.
 
@@ -200,6 +218,9 @@ def county_rollups(
             purchase_intent=purchase_intent,
             min_equity_pct_label=min_equity_pct_label,
             min_equity_pct=min_equity_pct,
+            marketing_eligibility=marketing_eligibility,
+            consent_status=consent_status,
+            recency=recency,
         ),
     )
 
@@ -244,6 +265,9 @@ def zip_rollups(
     purchase_intent: Annotated[str | None, Query(alias="purchase_intent", max_length=64)] = None,
     min_equity_pct_label: Annotated[str | None, Query(alias="min_equity_pct_label", max_length=32)] = None,
     min_equity_pct: Annotated[float | None, Query(alias="min_equity_pct", ge=0, le=100)] = None,
+    marketing_eligibility: Annotated[str | None, Query(alias="marketing_eligibility", max_length=32)] = None,
+    consent_status: Annotated[str | None, Query(alias="consent_status", max_length=32)] = None,
+    recency: Annotated[str | None, Query(alias="recency", max_length=32)] = None,
 ) -> ZipRollupResponse:
     """Return per-ZIP rollups for the given county FIPS.
 
@@ -263,5 +287,8 @@ def zip_rollups(
             purchase_intent=purchase_intent,
             min_equity_pct_label=min_equity_pct_label,
             min_equity_pct=min_equity_pct,
+            marketing_eligibility=marketing_eligibility,
+            consent_status=consent_status,
+            recency=recency,
         ),
     )

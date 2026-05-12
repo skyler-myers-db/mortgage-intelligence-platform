@@ -692,7 +692,7 @@ function GenieProofPanel({
       </div>
       {assets.length > 0 && (
         <div className="genie-proof__section">
-          <div className="eyebrow">Source assets</div>
+          <div className="eyebrow">Source UC assets</div>
           <div className="chip-row">
             {assets.map((asset) => {
               const drawer = drawerForAsset(asset);

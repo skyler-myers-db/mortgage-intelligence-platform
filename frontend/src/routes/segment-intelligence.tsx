@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { api } from '../lib/api';
+import { api, type LeadsPageResult } from '../lib/api';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
 import type { LeadSummary, SegmentCode, SegmentSummary } from '../types';
 import { PageShell } from '../components/layout/PageShell';
@@ -204,9 +204,9 @@ export default function SegmentIntelligence() {
     warmingUp: leadsWarming,
     error: leadsError,
     manualRetry: retryLeads,
-  } = useWarmingUpRetry<LeadSummary[]>(
+  } = useWarmingUpRetry<LeadsPageResult>(
     (signal) =>
-      api.leads(undefined, signal, serverGeo, {
+      api.leadsPage(undefined, signal, serverGeo, {
         segmentCodes: activeSegs.length > 0 ? activeSegs : undefined,
         // Multi-select uses AND semantics: borrowers must match every
         // selected segment. The page copy mirrors this exact contract.
@@ -225,7 +225,9 @@ export default function SegmentIntelligence() {
     [activeSegs, segmentLabelByCode],
   );
   const leadsRefreshing = leadsData === null && !leadsWarming && !leadsError;
-  const leads = useMemo(() => leadsData ?? [], [leadsData]);
+  const leads = useMemo(() => leadsData?.leads ?? [], [leadsData]);
+  const totalMatching = leadsData?.totalMatching ?? null;
+  const truncatedAt = leadsData?.truncatedAt ?? null;
   const retryAll = useCallback(() => {
     retrySegments();
     retryLeads();
@@ -477,8 +479,11 @@ export default function SegmentIntelligence() {
               'Refreshing ranked borrowers'
             ) : (
               <>
-                {filtered.length >= 500 ? 'Top ' : ''}
-                {filtered.length} ranked borrowers{' '}
+                {truncatedAt ? 'Top ' : ''}
+                {filtered.length} ranked borrowers
+                {totalMatching !== null && totalMatching !== filtered.length && (
+                  <> of {totalMatching.toLocaleString()} total matching filters</>
+                )}{' '}
                 {activeSegs.length > 0 && (
                   <span className="muted fs-14">
                     · segment filter: {selectedSegmentLabel}
@@ -488,10 +493,10 @@ export default function SegmentIntelligence() {
               </>
             )}
           </div>
-          {!leadsRefreshing && filtered.length >= 500 && (
+          {!leadsRefreshing && truncatedAt && (
             <div className="muted fs-14">
-              Showing the highest-ranked rows; segment cards and map show
-              marketable population.
+              Showing the highest-ranked returned rows; segment cards and map
+              show the same eligible marketable population for the active filters.
             </div>
           )}
           {(mapSelection.state || mapSelection.county || mapSelection.zip) && (
@@ -529,7 +534,11 @@ export default function SegmentIntelligence() {
       </div>
 
       <div className="layoutA-grid">
-        <LeadTable leads={filtered} />
+        <LeadTable
+          leads={filtered}
+          totalMatching={totalMatching}
+          truncatedAt={truncatedAt}
+        />
         <USChoroplethMap
           height={520}
           segmentFilter={activeSegs}

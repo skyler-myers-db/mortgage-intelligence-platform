@@ -131,7 +131,7 @@ describe('Genie proof layout contract', () => {
 
     expect(css).toContain('.genie-proof-drawer .genie-proof__grid');
     expect(css).toMatch(/\.genie-proof-drawer \.genie-proof__grid\s*\{[^}]*grid-template-columns:\s*1fr;/s);
-    expect(css).toMatch(/\.genie-proof-drawer \.genie-proof__metric\s*\{[^}]*grid-template-columns:\s*8rem minmax\(0,\s*1fr\);/s);
+    expect(css).toMatch(/\.genie-proof-drawer \.genie-proof__metric\s*\{[^}]*flex-direction:\s*column;/s);
   });
 
   it('allows long proof chips and freshness rows to wrap inside their bounds', () => {
@@ -139,6 +139,8 @@ describe('Genie proof layout contract', () => {
 
     expect(css).toMatch(/\.genie-proof__trust-chip\s*\{[^}]*white-space:\s*normal;/s);
     expect(css).toMatch(/\.genie-proof__trust-chip\s*\{[^}]*overflow-wrap:\s*anywhere;/s);
+    expect(css).toContain('.genie-proof .evidence-chip');
+    expect(css).toMatch(/\.genie-proof \.chip,\s*\.genie-proof \.evidence-chip\s*\{[^}]*white-space:\s*normal;/s);
     expect(css).toMatch(/\.genie-proof__line span\s*\{[^}]*overflow-wrap:\s*anywhere;/s);
   });
 });

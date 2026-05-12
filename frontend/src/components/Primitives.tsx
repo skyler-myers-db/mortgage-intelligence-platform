@@ -24,7 +24,7 @@ export function Chip({
   return (
     <span className={cls} title={title}>
       {icon && <Icon name={icon} size={10} />}
-      {children}
+      <span className="chip__label">{children}</span>
     </span>
   );
 }
@@ -121,7 +121,7 @@ export function EvidenceChip({
   return (
     <button type="button" className="evidence-chip" onClick={handle} title={title ?? defaultTitle}>
       <Icon name="link" size={9} className="e-ico" />
-      {children}
+      <span className="evidence-chip__label">{children}</span>
       {bucket && (
         <span
           className={`evidence-chip__dot evidence-chip__dot--${bucket}`}

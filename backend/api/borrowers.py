@@ -20,7 +20,11 @@ from backend.schemas.lead import Borrower360, LeadSummary
 from backend.services.audit_store import AuditStore, get_audit_store, resolve_actor
 from backend.services.observability import emit
 from backend.services.repositories import BorrowerRepository, get_borrower_repository
-from backend.services.sales_state import SalesStateStore, get_sales_state_store, hydrate_leads_with_sales_state
+from backend.services.sales_state import (
+    SalesStateStore,
+    get_sales_state_store,
+    hydrate_leads_with_sales_state,
+)
 
 log = logging.getLogger(__name__)
 
@@ -74,7 +78,7 @@ def search_borrowers(
     repo: RepoDep,
     q: Annotated[
         str,
-        Query(min_length=2, max_length=64, description="Borrower id, ZIP, city, or masked property ref."),
+        Query(min_length=2, max_length=64, description="Borrower id, ZIP, city, county, state, or masked property ref."),
     ],
     limit: Annotated[int, Query(ge=1, le=25)] = 10,
 ) -> list[LeadSummary]:

@@ -1,6 +1,8 @@
 import type { DataEstateResponse, DataEstateStatus } from '../../types';
 import { Chip } from '../Primitives';
 import { Icon } from '../Icon';
+import { useApp } from '../AppContext';
+import { descriptorFor, DRAWER_SOURCES } from '../../lib/drawerSources';
 
 function statusLabel(status: DataEstateStatus): string {
   if (status === 'demo_synthetic') return 'demo synthetic';
@@ -54,6 +56,8 @@ function laneStatusSummary(status: DataEstateStatus, assets: { status: DataEstat
 }
 
 export function DataEstatePanel({ estate }: { estate: DataEstateResponse }) {
+  const { setDrawer } = useApp();
+
   return (
     <div className="surface data-estate">
       <div className="surface__hdr surface__hdr--split">
@@ -81,11 +85,24 @@ export function DataEstatePanel({ estate }: { estate: DataEstateResponse }) {
                   <div className="data-estate__lane-title">{lane.title}</div>
                   <div className="data-estate__lane-copy">{lane.description}</div>
                 </div>
-                <Chip variant={chipVariant(lane.status)}>{laneStatusSummary(lane.status, lane.assets)}</Chip>
+                <button
+                  type="button"
+                  className={`chip chip--${chipVariant(lane.status)} data-estate__lane-proof`}
+                  onClick={() => setDrawer(DRAWER_SOURCES.sourceReadiness)}
+                  title={`Open source-readiness proof for ${lane.title}`}
+                >
+                  <span className="chip__label">{laneStatusSummary(lane.status, lane.assets)}</span>
+                </button>
               </div>
               <div className="data-estate__assets">
                 {lane.assets.map((asset) => (
-                  <div key={`${lane.id}-${asset.name}`} className="data-estate__asset">
+                  <button
+                    key={`${lane.id}-${asset.name}`}
+                    type="button"
+                    className="data-estate__asset"
+                    onClick={() => setDrawer(descriptorFor(asset.uc_object ?? asset.name))}
+                    title={`Open lineage for ${asset.label}${asset.uc_object ? ` · ${asset.uc_object}` : ''}`}
+                  >
                     <div className="data-estate__asset-main">
                       <span className={`status-dot status-dot--${statusDot(asset.status)}`} />
                       <span>{asset.label}</span>
@@ -96,7 +113,7 @@ export function DataEstatePanel({ estate }: { estate: DataEstateResponse }) {
                         <span className="chip chip--neutral data-estate__asset-chip">demo synthetic</span>
                       )}
                     </div>
-                  </div>
+                  </button>
                 ))}
               </div>
             </section>

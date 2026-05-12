@@ -10,7 +10,7 @@ import { Icon } from '../components/Icon';
 import { GenieAnswer } from '../components/mortgage/GenieAnswer';
 import { GenieProgress } from '../components/mortgage/GenieProgress';
 import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
-import { drawerForAsset } from '../lib/drawerSources';
+import { descriptorFor, drawerForAsset } from '../lib/drawerSources';
 import { isGenieFollowUpQuestion } from '../lib/genieSession';
 
 /**
@@ -53,7 +53,7 @@ function shouldPersistConversation(payload: GenieAnswerShape): boolean {
 
 export default function AskGenie() {
   const navigate = useNavigate();
-  const { refreshWorkspace } = useApp();
+  const { refreshWorkspace, setDrawer } = useApp();
   const [question, setQuestion] = useState('');
   const [sampleQuestions, setSampleQuestions] = useState<string[]>([]);
   const [conversationId, setConversationId] = useState<string | null>(() => {
@@ -327,6 +327,21 @@ export default function AskGenie() {
                     <p className="genie-empty__copy">
                       Trusted SQL, source assets, freshness, and approval-safe actions appear with each answer.
                     </p>
+                    {sampleQuestions.length > 0 && (
+                      <div className="genie-empty__suggestions" aria-label="Suggested Genie questions">
+                        {sampleQuestions.slice(0, 4).map((q) => (
+                          <button
+                            key={q}
+                            type="button"
+                            className="filter filter--question"
+                            onClick={() => ask(q)}
+                          >
+                            <Icon name="sparkle" size={11} />
+                            <span className="filter__text">{q}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
@@ -386,14 +401,16 @@ export default function AskGenie() {
             </div>
             <div className="surface__body trusted-asset-list">
               {TRUSTED_ASSETS.map((a) => (
-                <div
+                <button
                   key={a.path}
                   title={a.path}
-                  className="trusted-asset"
+                  type="button"
+                  className="trusted-asset trusted-asset--button"
+                  onClick={() => setDrawer(descriptorFor(a.path))}
                 >
                   <div className="trusted-asset__label">{a.label}</div>
                   <div className="trusted-asset__path">{a.path}</div>
-                </div>
+                </button>
               ))}
             </div>
           </div>
