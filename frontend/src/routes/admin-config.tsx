@@ -7,6 +7,7 @@ import { Icon } from '../components/Icon';
 import { EntradaWordmark } from '../components/brand/Entrada';
 import { api } from '../lib/api';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
+import { queryKeys } from '../lib/queryClient';
 import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 
 /**
@@ -126,6 +127,7 @@ export default function AdminConfig() {
   } = useWarmingUpRetry<RulesResponse>(
     (signal) => api.adminRules<RulesResponse>(signal),
     [],
+    { queryKey: queryKeys.adminRules() },
   );
   const rulesLoading = rules === null && rulesWarming === null && rulesErrorObj === null;
   const rulesError = rulesErrorObj ? 'Rules endpoint unreachable' : null;
@@ -137,6 +139,7 @@ export default function AdminConfig() {
   } = useWarmingUpRetry<SourceRow[]>(
     (signal) => api.adminSources<SourceRow[]>(signal),
     [],
+    { queryKey: queryKeys.adminSources() },
   );
   const sourcesLoading =
     sources === null && sourcesWarming === null && sourcesErrorObj === null;
@@ -151,6 +154,7 @@ export default function AdminConfig() {
   } = useWarmingUpRetry(
     (signal) => api.auditEvents(1, signal),
     [],
+    { queryKey: queryKeys.auditEvents(['latest', 1]) },
   );
   const auditLoading =
     auditEvents === null && auditWarming === null && auditErrorObj === null;
@@ -197,6 +201,15 @@ export default function AdminConfig() {
       event_type: auditEventTypeFilter.trim() || null,
     }),
     [auditEntityValue, auditEntityIsBorrower, auditActionFilter, auditEventTypeFilter],
+    {
+      queryKey: queryKeys.auditEvents([
+        'explorer',
+        auditEntityValue,
+        auditEntityIsBorrower,
+        auditActionFilter,
+        auditEventTypeFilter,
+      ]),
+    },
   );
   const auditExplorerError = auditExplorerErrorObj
     ? auditExplorerErrorObj instanceof Error
@@ -210,6 +223,7 @@ export default function AdminConfig() {
   } = useWarmingUpRetry<AuditRollupRow[]>(
     (signal) => api.auditRollups('week', signal),
     [],
+    { queryKey: queryKeys.auditRollups('week') },
   );
   const auditRollupsError = auditRollupsErrorObj
     ? auditRollupsErrorObj instanceof Error

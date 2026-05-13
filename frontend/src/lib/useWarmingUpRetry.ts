@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useMemo } from 'react';
+import { useQuery, type QueryKey } from '@tanstack/react-query';
 import {
   ApiError,
   dependencyLabel,
-  isAbortError,
   isWarmingUpError,
 } from './api';
 
@@ -142,6 +142,12 @@ export interface UseWarmingUpRetryOpts {
   intervalMs?: number;
   /** If false, the hook is a no-op (used when an id param is missing). */
   enabled?: boolean;
+  /** Stable cache key. Pass a semantic key so unrelated fetchers never collide. */
+  queryKey?: QueryKey;
+  /** Query freshness window. Default comes from the app QueryClient. */
+  staleTime?: number;
+  /** Override focus refetch for expensive one-shot calls such as Genie answers. */
+  refetchOnWindowFocus?: boolean;
 }
 
 export function useWarmingUpRetry<T>(
@@ -153,96 +159,62 @@ export function useWarmingUpRetry<T>(
   const intervalMs = opts.intervalMs ?? 5000;
   const enabled = opts.enabled ?? true;
 
-  const [data, setData] = useState<T | null>(null);
-  const [warmingUp, setWarmingUp] = useState<WarmingUpState | null>(null);
-  const [error, setError] = useState<ApiError | Error | null>(null);
-  const [reloadToken, setReloadToken] = useState(0);
+  const queryKey = useMemo<QueryKey>(
+    () => opts.queryKey ?? ['warming-up-retry', ...deps],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [opts.queryKey, ...deps],
+  );
 
-  // Keep the latest fetcher in a ref so the effect doesn't re-run on
-  // every parent render. Callers typically pass an inline closure.
-  const fetcherRef = useRef(fetcher);
-  fetcherRef.current = fetcher;
+  const query = useQuery<T, ApiError | Error>({
+    queryKey,
+    enabled,
+    queryFn: ({ signal }) => fetcher(signal),
+    staleTime: opts.staleTime,
+    refetchOnWindowFocus: opts.refetchOnWindowFocus,
+    retry: (failureCount, err) => {
+      if (!isWarmingUpError(err)) return false;
+      const plan = planForReason(err.reason, err.dependency, {
+        intervalMs,
+        maxAttempts,
+      });
+      if (plan.stop) return false;
+      return failureCount < Math.max(0, plan.maxAttempts - 1);
+    },
+    retryDelay: (_failureCount, err) => {
+      if (!isWarmingUpError(err)) return 0;
+      return planForReason(err.reason, err.dependency, {
+        intervalMs,
+        maxAttempts,
+      }).intervalMs;
+    },
+  });
+
+  const failureReason = query.failureReason;
+  const warmingUp = useMemo<WarmingUpState | null>(() => {
+    if (query.data !== undefined) return null;
+    if (!isWarmingUpError(failureReason)) return null;
+    const plan = planForReason(failureReason.reason, failureReason.dependency, {
+      intervalMs,
+      maxAttempts,
+    });
+    if (plan.stop) return null;
+    return {
+      dependency: failureReason.dependency,
+      label: plan.label,
+      attempt: Math.min(query.failureCount + 1, Math.max(1, plan.maxAttempts)),
+      maxAttempts: plan.maxAttempts,
+      correlationId: failureReason.correlationId,
+    };
+  }, [failureReason, intervalMs, maxAttempts, query.data, query.failureCount]);
 
   const manualRetry = useCallback(() => {
-    setReloadToken((n) => n + 1);
-  }, []);
+    void query.refetch();
+  }, [query]);
 
-  useEffect(() => {
-    if (!enabled) {
-      setData(null);
-      setWarmingUp(null);
-      setError(null);
-      return;
-    }
-    const ctrl = new AbortController();
-    let cancelled = false;
-    let timeoutId: ReturnType<typeof setTimeout> | null = null;
-
-    const clearTimer = () => {
-      if (timeoutId !== null) {
-        clearTimeout(timeoutId);
-        timeoutId = null;
-      }
-    };
-
-    const runAttempt = async (attempt: number): Promise<void> => {
-      if (cancelled) return;
-      try {
-        const result = await fetcherRef.current(ctrl.signal);
-        if (cancelled) return;
-        setData(result);
-        setWarmingUp(null);
-        setError(null);
-      } catch (err: unknown) {
-        if (cancelled || isAbortError(err)) return;
-        if (isWarmingUpError(err)) {
-          const plan = planForReason(err.reason, err.dependency, {
-            intervalMs,
-            maxAttempts,
-          });
-          // "retries_exhausted" (or any zero-budget plan): do not
-          // schedule another attempt. The backend already retried and
-          // failed; one more client fetch will not help.
-          if (plan.stop || attempt >= plan.maxAttempts) {
-            setWarmingUp(null);
-            setError(err);
-            return;
-          }
-          setWarmingUp({
-            dependency: err.dependency,
-            label: plan.label,
-            attempt: attempt + 1,
-            maxAttempts: plan.maxAttempts,
-            correlationId: err.correlationId,
-          });
-          setError(null);
-          timeoutId = setTimeout(() => {
-            void runAttempt(attempt + 1);
-          }, plan.intervalMs);
-          return;
-        }
-        // Non-retryable error.
-        setWarmingUp(null);
-        setError(err instanceof Error ? err : new Error(String(err)));
-      }
-    };
-
-    // Reset state on re-run so callers don't see stale data while the
-    // next fetch is in flight (important when `deps` change — e.g.
-    // borrower id switch).
-    setData(null);
-    setWarmingUp(null);
-    setError(null);
-
-    void runAttempt(1);
-
-    return () => {
-      cancelled = true;
-      clearTimer();
-      ctrl.abort();
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, reloadToken, ...deps]);
-
-  return { data, warmingUp, error, manualRetry };
+  return {
+    data: query.data ?? null,
+    warmingUp,
+    error: query.error ?? null,
+    manualRetry,
+  };
 }

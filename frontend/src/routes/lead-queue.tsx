@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router-dom';
-import { api, ApiError, isAbortError, type LeadsPageResult } from '../lib/api';
+import { api, ApiError, type LeadsPageResult } from '../lib/api';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
 import type { PortfolioPreview, SalesAgingLead, SalesConversionResponse, SalesStandupResponse, SalesTeamMember, SegmentCode } from '../types';
 import { PageShell } from '../components/layout/PageShell';
@@ -10,6 +11,7 @@ import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 import { FilterSelect } from '../components/ui/FilterSelect';
 import { useFootprint } from '../components/FootprintProvider';
 import { Skeleton } from '../components/ui/Skeleton';
+import { queryKeys } from '../lib/queryClient';
 
 /**
  * Lead Queue — deep-dive table route. Full borrower list (filtered by segment
@@ -347,12 +349,36 @@ export default function LeadQueue() {
   const outreachStatus = (searchParams.get('outreach_status') ?? 'any').toLowerCase();
   const assignedTo = (searchParams.get('assigned_to') ?? '').trim() || undefined;
   const agedDays = Number(searchParams.get('aged_days') ?? '') || null;
-  const [salesTeam, setSalesTeam] = useState<SalesTeamMember[]>([]);
-  const [staleLeads, setStaleLeads] = useState<SalesAgingLead[]>([]);
-  const [standup, setStandup] = useState<SalesStandupResponse | null>(null);
-  const [conversion, setConversion] = useState<SalesConversionResponse | null>(null);
-  const [salesTeamError, setSalesTeamError] = useState<string | null>(null);
-  const [salesOpsError, setSalesOpsError] = useState<string | null>(null);
+  const yesterday = relativeIsoDate(-1);
+  const weekStart = weekStartIsoDate();
+  const today = isoDate(new Date());
+  const salesTeamQuery = useQuery<SalesTeamMember[]>({
+    queryKey: queryKeys.salesTeam(),
+    queryFn: ({ signal }) => api.salesTeam(signal).then((team) => team.filter((member) => member.role === 'loan_officer')),
+    staleTime: 60_000,
+  });
+  const salesOpsQuery = useQuery<{
+    staleLeads: SalesAgingLead[];
+    standup: SalesStandupResponse;
+    conversion: SalesConversionResponse;
+  }>({
+    queryKey: queryKeys.salesOps(),
+    queryFn: async ({ signal }) => {
+      const [agingRows, standupRows, conversionRows] = await Promise.all([
+        api.salesAging(7, 100, signal),
+        api.salesStandup(yesterday, signal),
+        api.salesConversion(weekStart, today, 'lo', signal),
+      ]);
+      return { staleLeads: agingRows, standup: standupRows, conversion: conversionRows };
+    },
+    staleTime: 30_000,
+  });
+  const salesTeam = salesTeamQuery.data ?? [];
+  const staleLeads = salesOpsQuery.data?.staleLeads ?? [];
+  const standup = salesOpsQuery.data?.standup ?? null;
+  const conversion = salesOpsQuery.data?.conversion ?? null;
+  const salesTeamError = salesTeamQuery.error instanceof Error ? salesTeamQuery.error.message : null;
+  const salesOpsError = salesOpsQuery.error instanceof Error ? salesOpsQuery.error.message : null;
   const segmentFilter = segment
     ? (Object.entries(SEGMENT_OPTION_TO_CODE).find(([, code]) => code === segment)?.[0] ?? 'All segments')
     : segmentCodes.length === 1
@@ -372,44 +398,6 @@ export default function LeadQueue() {
     }
     setSearchParams(next);
   };
-
-  useEffect(() => {
-    const ctrl = new AbortController();
-    api.salesTeam(ctrl.signal)
-      .then((team) => {
-        setSalesTeam(team.filter((member) => member.role === 'loan_officer'));
-        setSalesTeamError(null);
-      })
-      .catch((err: unknown) => {
-        if (isAbortError(err)) return;
-        setSalesTeam([]);
-        setSalesTeamError(err instanceof Error ? err.message : 'Sales team unavailable.');
-      });
-    return () => ctrl.abort();
-  }, []);
-
-  useEffect(() => {
-    const ctrl = new AbortController();
-    const yesterday = relativeIsoDate(-1);
-    const weekStart = weekStartIsoDate();
-    const today = isoDate(new Date());
-    Promise.all([
-      api.salesAging(7, 100, ctrl.signal),
-      api.salesStandup(yesterday, ctrl.signal),
-      api.salesConversion(weekStart, today, 'lo', ctrl.signal),
-    ])
-      .then(([agingRows, standupRows, conversionRows]) => {
-        setStaleLeads(agingRows);
-        setStandup(standupRows);
-        setConversion(conversionRows);
-        setSalesOpsError(null);
-      })
-      .catch((err: unknown) => {
-        if (isAbortError(err)) return;
-        setSalesOpsError(err instanceof Error ? err.message : 'Sales operations metrics unavailable.');
-      });
-    return () => ctrl.abort();
-  }, []);
 
   // 2026-05-04 FIX β: pass state + zip to the API so the geo-filtered
   // path on the backend bypasses lead_population's score >= 50 floor
@@ -466,6 +454,27 @@ export default function LeadQueue() {
       assignedTo,
       agedDays,
     ],
+    {
+      queryKey: queryKeys.leads([
+        'lead-queue',
+        segment ?? '',
+        stateFilter ?? '',
+        zipFilter ?? '',
+        countyFilter ?? '',
+        stateFilters.join(','),
+        zipFilters.join(','),
+        borrowerIdFilters.join(','),
+        segmentCodes.join(','),
+        segmentMode,
+        targetLenderRef ?? '',
+        JSON.stringify(portfolioCriteria ?? {}),
+        cohortId ?? '',
+        approvalStatus,
+        outreachStatus,
+        assignedTo ?? '',
+        agedDays ?? '',
+      ]),
+    },
   );
   const loading = leadsData === null && warmingUp === null && error === null;
   const loadError = error ? formatLeadQueueLoadError(error) : null;

@@ -1,4 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import type { CallDisposition, LeadSummary, SalesTeamMember } from '../../types';
 import { Icon } from '../Icon';
@@ -9,6 +10,7 @@ import { useApp } from '../AppContext';
 import { api, ApiError, isAbortError } from '../../lib/api';
 import { DRAWER_SOURCES } from '../../lib/drawerSources';
 import { segmentColor, segmentName } from '../../lib/segmentMetadata';
+import { invalidateOperationalQueries } from '../../lib/queryClient';
 
 /**
  * LeadTable — prototype `.surface` + `.tbl` BEM. Sticky thead, hover, row
@@ -34,6 +36,10 @@ import { segmentColor, segmentName } from '../../lib/segmentMetadata';
 
 /** Concurrency cap for the bulk-approve client-side loop. */
 const BULK_APPROVE_CONCURRENCY = 3;
+const LEAD_ROW_ESTIMATE_PX = 86;
+const LEAD_ROW_OVERSCAN = 12;
+const LEAD_VIRTUALIZATION_THRESHOLD = 120;
+const LEAD_TABLE_COL_COUNT = 15;
 
 export interface LeadExportContext {
   generatedAt?: string;
@@ -82,6 +88,35 @@ const DISPOSITION_OPTIONS: { outcome: CallDisposition['outcome']; label: string 
 
 type SortKey = 'rank' | 'relationship' | 'assignment' | 'outreach' | 'equity' | 'rate' | 'score' | 'confidence';
 type SortDir = 'asc' | 'desc';
+
+export interface LeadVirtualRange {
+  start: number;
+  end: number;
+  top: number;
+  bottom: number;
+}
+
+export function computeLeadVirtualRange(
+  totalRows: number,
+  scrollTop: number,
+  viewportHeight: number,
+  enabled: boolean,
+  rowEstimatePx = LEAD_ROW_ESTIMATE_PX,
+  overscan = LEAD_ROW_OVERSCAN,
+): LeadVirtualRange {
+  if (!enabled || totalRows <= 0) {
+    return { start: 0, end: totalRows, top: 0, bottom: 0 };
+  }
+  const start = Math.max(0, Math.floor(Math.max(0, scrollTop) / rowEstimatePx) - overscan);
+  const visibleCount = Math.ceil(Math.max(1, viewportHeight) / rowEstimatePx) + overscan * 2;
+  const end = Math.min(totalRows, start + visibleCount);
+  return {
+    start,
+    end,
+    top: start * rowEstimatePx,
+    bottom: Math.max(0, (totalRows - end) * rowEstimatePx),
+  };
+}
 
 /**
  * Return true when `el` is an editable element that the window-level
@@ -445,6 +480,9 @@ function Cell({ k, v, mono }: { k: string; v: string; mono?: boolean }) {
 }
 
 export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exportContext, salesTeam = [] }: LeadTableProps) {
+  const queryClient = useQueryClient();
+  const tableWrapRef = useRef<HTMLDivElement | null>(null);
+  const [scrollWindow, setScrollWindow] = useState({ top: 0, height: 640 });
   const [expanded, setExpanded] = useState<string | null>(leads[0]?.borrower_id ?? null);
   const [sortKey, setSortKey] = useState<SortKey>('rank');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
@@ -483,6 +521,19 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
       return String(av).localeCompare(String(bv)) * direction;
     });
   }, [displayLeads, sortDir, sortKey]);
+  const shouldVirtualize = sortedLeads.length > LEAD_VIRTUALIZATION_THRESHOLD;
+  const virtualRange = useMemo(() => {
+    return computeLeadVirtualRange(
+      sortedLeads.length,
+      scrollWindow.top,
+      scrollWindow.height,
+      shouldVirtualize,
+    );
+  }, [scrollWindow.height, scrollWindow.top, shouldVirtualize, sortedLeads.length]);
+  const virtualLeads = useMemo(
+    () => sortedLeads.slice(virtualRange.start, virtualRange.end),
+    [sortedLeads, virtualRange.end, virtualRange.start],
+  );
   const [pendingApproval, setPendingApproval] = useState<Record<string, boolean>>({});
   const [approvalError, setApprovalError] = useState<string | null>(null);
   // Bulk-approve state. `selectedIds` is a Set so toggling is O(1); we
@@ -526,6 +577,23 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
     if (expanded) setLastBorrowerId(expanded);
   }, [expanded, setLastBorrowerId]);
 
+  useEffect(() => {
+    const node = tableWrapRef.current;
+    if (!node) return;
+    const sync = () => setScrollWindow({
+      top: node.scrollTop,
+      height: node.clientHeight || 640,
+    });
+    sync();
+    node.addEventListener('scroll', sync, { passive: true });
+    const resizeObserver = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(sync) : null;
+    resizeObserver?.observe(node);
+    return () => {
+      node.removeEventListener('scroll', sync);
+      resizeObserver?.disconnect();
+    };
+  }, []);
+
   /**
    * Approve from the queue without leaving the page. Uses the same
    * `/api/outreach/approve` endpoint Offer Orchestrator calls. We mark
@@ -540,7 +608,12 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
     async (
       borrowerId: string,
       signal?: AbortSignal,
-      extras: { rationale?: string | null; bulk_id?: string | null; bulk_rationale?: string | null } = {},
+      extras: {
+        rationale?: string | null;
+        bulk_id?: string | null;
+        bulk_rationale?: string | null;
+        suppressInvalidation?: boolean;
+      } = {},
     ): Promise<'ok' | 'network' | 'backend' | 'aborted' | 'duplicate'> => {
       // R5-04: synchronous latch check. setState is async, so a rapid
       // second click could slip in before `pendingApproval[id]` flips
@@ -568,6 +641,7 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
         );
         if (res.approved) {
           setApproval(borrowerId, 'approved');
+          if (!extras.suppressInvalidation) void invalidateOperationalQueries(queryClient);
           return 'ok';
         }
         setApprovalError(`Approve failed for ${borrowerId}: endpoint returned approved=false.`);
@@ -589,7 +663,7 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
         });
       }
     },
-    [leadsById, setApproval],
+    [leadsById, queryClient, setApproval],
   );
 
   /**
@@ -623,6 +697,7 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
         );
         if (res.rejected) {
           setApproval(borrowerId, 'rejected');
+          void invalidateOperationalQueries(queryClient);
           return true;
         } else {
           setApprovalError(`Reject failed for ${borrowerId}: endpoint returned rejected=false.`);
@@ -644,7 +719,7 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
         });
       }
     },
-    [leadsById, setApproval],
+    [leadsById, queryClient, setApproval],
   );
 
   const submitReject = useCallback(async () => {
@@ -757,6 +832,7 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
           }
         : await api.distributeLeads(borrowerIds, loEmails, mode === 'round-robin' ? 'round_robin' : 'score_balanced');
       applyAssignmentOverrides(result.assignments);
+      void invalidateOperationalQueries(queryClient);
       setSalesToast(`${result.assigned_count} ${result.assigned_count === 1 ? 'lead' : 'leads'} assigned`);
       setSelectedIds(new Set());
     } catch (err: unknown) {
@@ -768,7 +844,7 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
     } finally {
       setSalesBusy(false);
     }
-  }, [applyAssignmentOverrides, salesBusy, salesTeam, selectableIds, selectedAssignee, selectedIds]);
+  }, [applyAssignmentOverrides, queryClient, salesBusy, salesTeam, selectableIds, selectedAssignee, selectedIds]);
 
   const submitDisposition = useCallback(async () => {
     if (!pendingDisposition) return;
@@ -800,6 +876,7 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
         },
       }));
       setSalesToast(`${dispositionLabel(result.disposition.outcome)} logged for ${pendingDisposition}`);
+      void invalidateOperationalQueries(queryClient);
       setPendingDisposition(null);
     } catch (err: unknown) {
       setApprovalError(
@@ -810,7 +887,7 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
     } finally {
       setSalesBusy(false);
     }
-  }, [dispositionCallbackAt, dispositionLo, dispositionNotes, dispositionOutcome, leadsById, pendingDisposition]);
+  }, [dispositionCallbackAt, dispositionLo, dispositionNotes, dispositionOutcome, leadsById, pendingDisposition, queryClient]);
 
   // Indeterminate state for the header checkbox: some (but not all)
   // eligible rows selected. We also reflect "all eligible selected" as
@@ -890,6 +967,7 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
       const results = await Promise.all(group.map((id) => approveLead(id, ctrl.signal, {
         bulk_id: bulkId,
         bulk_rationale: sharedRationale || null,
+        suppressInvalidation: true,
       })));
       results.forEach((outcome, i) => {
         if (outcome === 'ok') {
@@ -927,13 +1005,14 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
     // server may have committed them and a blind re-click would
     // duplicate the audit row. R5-21 (2026-04-23).
     setSelectedIds(new Set(failedIds));
+    if (ok > 0) void invalidateOperationalQueries(queryClient);
     setBulkRationaleOpen(false);
     setBulkRationale('');
     setBulkApproving(false);
     setBulkToast({ ok, fail, network, aborted });
     bulkAbortRef.current = null;
     bulkInFlightRef.current = false;
-  }, [approvalEligibleIds, bulkApproving, selectedIds, approveLead, bulkRationale]);
+  }, [approvalEligibleIds, bulkApproving, selectedIds, approveLead, bulkRationale, queryClient]);
 
   // On mount: if the previous mount left a partial bulk-approve snapshot
   // in sessionStorage (user navigated away mid-loop), flash a compact
@@ -1272,8 +1351,8 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
           {salesToast}
         </div>
       )}
-      <div className="tbl-wrap" tabIndex={0} aria-label="Ranked borrowers table scroll region">
-        <table className="tbl lead-table__table">
+      <div ref={tableWrapRef} className="tbl-wrap" tabIndex={0} aria-label="Ranked borrowers table scroll region">
+        <table className="tbl lead-table__table" aria-rowcount={sortedLeads.length + 1}>
           <colgroup>
             <col className="lead-table__col-select" />
             <col className="lead-table__col-expand" />
@@ -1324,7 +1403,13 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
             </tr>
           </thead>
           <tbody>
-            {sortedLeads.map((lead) => {
+            {shouldVirtualize && virtualRange.top > 0 && (
+              <tr aria-hidden="true" className="lead-table__virtual-spacer">
+                <td colSpan={LEAD_TABLE_COL_COUNT} style={{ height: virtualRange.top }} />
+              </tr>
+            )}
+            {virtualLeads.map((lead, virtualOffset) => {
+              const virtualIndex = virtualRange.start + virtualOffset;
               const isOpen = expanded === lead.borrower_id;
               // Prefer in-session AppContext override (set optimistically on
               // approve/reject); fall back to the server-projected
@@ -1343,6 +1428,7 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
                     className={isOpen ? 'is-expanded' : ''}
                     tabIndex={0}
                     role="button"
+                    aria-rowindex={virtualIndex + 2}
                     aria-expanded={isOpen}
                     aria-label={`Lead ${lead.borrower_id}, ${isOpen ? 'expanded' : 'collapsed'}. Press Enter or Space to toggle preview; A to approve, R to reject.`}
                     onClick={() => {
@@ -1532,6 +1618,11 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
                 </Fragment>
               );
             })}
+            {shouldVirtualize && virtualRange.bottom > 0 && (
+              <tr aria-hidden="true" className="lead-table__virtual-spacer">
+                <td colSpan={LEAD_TABLE_COL_COUNT} style={{ height: virtualRange.bottom }} />
+              </tr>
+            )}
           </tbody>
         </table>
       </div>

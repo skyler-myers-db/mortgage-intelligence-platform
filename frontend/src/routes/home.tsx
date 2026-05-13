@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { PageShell } from '../components/layout/PageShell';
 import { KpiCard } from '../components/mortgage/KpiCard';
@@ -9,8 +10,9 @@ import { Button, Chip } from '../components/Primitives';
 import { DRAWER_SOURCES } from '../lib/drawerSources';
 import { Icon } from '../components/Icon';
 import { Reveal } from '../components/fx/Reveal';
-import { api, isAbortError, isWarmingUpError, dependencyLabel } from '../lib/api';
-import type { WarmingUpState } from '../lib/useWarmingUpRetry';
+import { api } from '../lib/api';
+import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
+import { queryKeys } from '../lib/queryClient';
 import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 import { useApp } from '../components/AppContext';
 import { useOptionalHealth } from '../components/HealthProvider';
@@ -29,6 +31,32 @@ export const HOME_PORTFOLIO_PREVIEW_CRITERIA = { marketing_eligibility: 'Any' } 
 
 export function requestHomePortfolioPreview(signal?: AbortSignal) {
   return api.portfolioPreview(HOME_PORTFOLIO_PREVIEW_CRITERIA, signal);
+}
+
+function dataEstateFallback(lender: string): DataEstateResponse {
+  return {
+    generated_at: new Date().toISOString(),
+    lender_name: lender,
+    public_demo_masking: true,
+    lanes: [
+      {
+        id: 'proof_unavailable',
+        title: 'Data-estate proof unavailable',
+        description: 'The app could not load the source-readiness proof surface.',
+        status: 'error',
+        assets: [
+          {
+            name: 'Data-estate API',
+            label: '/api/data-estate',
+            status: 'error',
+            note: 'Do not claim source proof until this endpoint recovers.',
+          },
+        ],
+      },
+    ],
+    known_data_gaps: ['Data-estate proof API unavailable; do not claim source proof until it recovers.'],
+    proof_assets: [],
+  };
 }
 
 /** Format a signed percent-delta for the KPI delta slot. `null` → undefined
@@ -57,110 +85,32 @@ export default function Home() {
   const warehouseDown =
     healthCtx?.health?.dependencies?.warehouse === 'down' ||
     healthCtx?.health?.dependencies?.lakebase === 'down';
-  const [preview, setPreview] = useState<PortfolioPreview | null>(null);
-  const [dataEstate, setDataEstate] = useState<DataEstateResponse | null>(null);
-  const [previewError, setPreviewError] = useState<string | null>(null);
-  // Cold-start retry state for the portfolio-preview tile. Non-null =
-  // we're in a 503 retry loop driven by warehouse/lakebase auto-suspend.
-  // Rendered as an inline "Portfolio KPIs — warehouse warming up
-  // (attempt N of 6)…" block in place of the KPI row so the rest of the
-  // page (map, activity log) stays reactive. 2026-04-23 UX fix.
-  const [previewWarming, setPreviewWarming] = useState<WarmingUpState | null>(null);
-  // Reload token — incrementing it via the Retry button re-runs the
-  // portfolio-preview fetch without a full route reload. Hole-finder
-  // finding #1, 2026-04-23.
-  const [reloadToken, setReloadToken] = useState<number>(0);
-  // When the shared health poll flips warehouse from down → up after
-  // we've fallen out of the per-tile retry loop, auto-trigger a fresh
-  // fetch. Without this, the tile stays in the "warming up" copy
-  // forever even though the warehouse is now ready. User feedback
-  // 2026-04-25: the page should self-recover, not require a click.
-  useEffect(() => {
-    if (!warehouseDown && previewError) {
-      setReloadToken((n) => n + 1);
-    }
-  }, [warehouseDown, previewError]);
-  useEffect(() => {
-    // AbortController replaces the legacy `cancelled` guard so an unmount
-    // or filter change actually cancels the in-flight fetch (not just the
-    // setState). Round-2 hole-finder #10/#11, 2026-04-23.
-    const ctrl = new AbortController();
-    let cancelled = false;
-    let timeoutId: ReturnType<typeof setTimeout> | null = null;
-    const MAX_ATTEMPTS = 6;
-    const INTERVAL_MS = 5000;
+  const previousWarehouseDown = useRef(warehouseDown);
+  const {
+    data: preview,
+    warmingUp: previewWarming,
+    error: previewErrorObj,
+    manualRetry: retryPreview,
+  } = useWarmingUpRetry<PortfolioPreview>(
+    requestHomePortfolioPreview,
+    ['home'],
+    { queryKey: queryKeys.homePreview() },
+  );
+  const previewError = previewErrorObj
+    ? previewErrorObj instanceof Error
+      ? previewErrorObj.message
+      : "Couldn't load portfolio KPIs."
+    : null;
 
-    const runAttempt = async (attempt: number): Promise<void> => {
-      if (cancelled) return;
-      try {
-        const p = await requestHomePortfolioPreview(ctrl.signal);
-        if (cancelled) return;
-        setPreview(p);
-        setPreviewError(null);
-        setPreviewWarming(null);
-      } catch (err: unknown) {
-        if (cancelled || isAbortError(err)) return;
-        if (isWarmingUpError(err) && attempt < MAX_ATTEMPTS) {
-          setPreviewWarming({
-            dependency: err.dependency,
-            label: `${dependencyLabel(err.dependency)} warming up`,
-            attempt: attempt + 1,
-            maxAttempts: MAX_ATTEMPTS,
-            correlationId: err.correlationId,
-          });
-          setPreview(null);
-          setPreviewError(null);
-          timeoutId = setTimeout(() => {
-            void runAttempt(attempt + 1);
-          }, INTERVAL_MS);
-          return;
-        }
-        setPreview(null);
-        setPreviewWarming(null);
-        setPreviewError(
-          err instanceof Error ? err.message : "Couldn't load portfolio KPIs.",
-        );
-      }
-    };
-
-    void runAttempt(1);
-
-    return () => {
-      cancelled = true;
-      if (timeoutId !== null) clearTimeout(timeoutId);
-      ctrl.abort();
-    };
-  }, [reloadToken]);
+  const { data: dataEstate = null } = useQuery<DataEstateResponse>({
+    queryKey: queryKeys.dataEstate(),
+    queryFn: ({ signal }) => api.dataEstate(signal).catch(() => dataEstateFallback(lender)),
+  });
 
   useEffect(() => {
-    const ctrl = new AbortController();
-    api.dataEstate(ctrl.signal)
-      .then(setDataEstate)
-      .catch(() => setDataEstate({
-        generated_at: new Date().toISOString(),
-        lender_name: lender,
-        public_demo_masking: true,
-        lanes: [
-          {
-            id: 'proof_unavailable',
-            title: 'Data-estate proof unavailable',
-            description: 'The app could not load the source-readiness proof surface.',
-            status: 'error',
-            assets: [
-              {
-                name: 'Data-estate API',
-                label: '/api/data-estate',
-                status: 'error',
-                note: 'Do not claim source proof until this endpoint recovers.',
-              },
-            ],
-          },
-        ],
-        known_data_gaps: ['Data-estate proof API unavailable; do not claim source proof until it recovers.'],
-        proof_assets: [],
-      }));
-    return () => ctrl.abort();
-  }, [lender]);
+    if (previousWarehouseDown.current && !warehouseDown && previewErrorObj) retryPreview();
+    previousWarehouseDown.current = warehouseDown;
+  }, [previewErrorObj, retryPreview, warehouseDown]);
 
   const queued = preview?.high_intent_leads ?? null;
   const kpisLoading = preview === null && !previewError && !previewWarming;
@@ -239,7 +189,7 @@ export default function Home() {
           <button
             type="button"
             className="btn btn--ghost btn--sm"
-            onClick={() => setReloadToken((n) => n + 1)}
+            onClick={retryPreview}
             aria-label="Retry loading portfolio KPIs"
           >
             Retry

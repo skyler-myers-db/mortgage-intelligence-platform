@@ -3,6 +3,7 @@ import { api, type AuditEventRow } from '../../lib/api';
 import { useWarmingUpRetry } from '../../lib/useWarmingUpRetry';
 import { WarmingUpBlock } from '../ui/WarmingUpBlock';
 import { useOptionalHealth } from '../HealthProvider';
+import { queryKeys } from '../../lib/queryClient';
 
 /**
  * AgentActivityLog — prototype `.audit` BEM. Pulls events from
@@ -128,7 +129,11 @@ export function AgentActivityLog({ limit = 12 }: { limit?: number }) {
     data: auditData,
     warmingUp,
     error,
-  } = useWarmingUpRetry<AuditEvent[]>((signal) => api.auditEvents(limit, signal), [limit]);
+  } = useWarmingUpRetry<AuditEvent[]>(
+    (signal) => api.auditEvents(limit, signal),
+    [limit],
+    { queryKey: queryKeys.auditEvents(['activity-log', limit]) },
+  );
   const rows: AuditEvent[] = auditData ?? [];
   const feedState: FeedState = warmingUp
     ? 'warming'

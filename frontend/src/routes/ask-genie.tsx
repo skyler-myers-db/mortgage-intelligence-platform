@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { ApiError, api } from '../lib/api';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
@@ -12,6 +13,7 @@ import { GenieProgress } from '../components/mortgage/GenieProgress';
 import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 import { descriptorFor, drawerForAsset } from '../lib/drawerSources';
 import { isGenieFollowUpQuestion } from '../lib/genieSession';
+import { queryKeys } from '../lib/queryClient';
 
 /**
  * Ask Genie — deep-dive view with trusted-asset list and backend-provided
@@ -64,25 +66,26 @@ export default function AskGenie() {
     }
   });
 
+  const genieStartQuery = useQuery({
+    queryKey: queryKeys.genieStart(),
+    queryFn: ({ signal }) => api.genieStart(signal),
+    staleTime: 5 * 60_000,
+    refetchOnWindowFocus: false,
+  });
+
   useEffect(() => {
-    const controller = new AbortController();
-    api.genieStart(controller.signal)
-      .then((result) => {
-        setSampleQuestions(Array.isArray(result.sample_questions) ? result.sample_questions : []);
-        if (conversationId) return;
-        if (!result.conversation_id) return;
-        setConversationId(result.conversation_id);
-        try {
-          window.localStorage.setItem('mip.genie.conversationId', result.conversation_id);
-        } catch {
-          // ignore
-        }
-      })
-      .catch(() => {
-        // The first question will start a new Databricks Genie conversation.
-      });
-    return () => controller.abort();
-  }, [conversationId]);
+    const result = genieStartQuery.data;
+    if (!result) return;
+    setSampleQuestions(Array.isArray(result.sample_questions) ? result.sample_questions : []);
+    if (conversationId) return;
+    if (!result.conversation_id) return;
+    setConversationId(result.conversation_id);
+    try {
+      window.localStorage.setItem('mip.genie.conversationId', result.conversation_id);
+    } catch {
+      // ignore
+    }
+  }, [conversationId, genieStartQuery.data]);
   const [actionStatus, setActionStatus] = useState<string | null>(null);
   // `submittedQuestion` drives the warming-up-wrapped fetch. Typing in
   // the textarea updates `question`; clicking Ask commits the current
@@ -101,7 +104,16 @@ export default function AskGenie() {
   } = useWarmingUpRetry<GenieAnswerShape>(
     (signal) => api.genie(submittedQuestion ?? '', submittedConversationId, signal) as Promise<GenieAnswerShape>,
     [submittedQuestion, submittedConversationId, submitToken],
-    { enabled: submittedQuestion !== null && submittedQuestion.length > 0 },
+    {
+      enabled: submittedQuestion !== null && submittedQuestion.length > 0,
+      queryKey: queryKeys.genieAnswer([
+        submittedQuestion ?? '',
+        submittedConversationId ?? '',
+        submitToken,
+      ]),
+      staleTime: Infinity,
+      refetchOnWindowFocus: false,
+    },
   );
 
   const loading = submittedQuestion !== null && payload === null && warmingUp === null && error === null;

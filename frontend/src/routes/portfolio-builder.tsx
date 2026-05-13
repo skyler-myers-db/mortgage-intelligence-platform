@@ -11,6 +11,7 @@ import { FilterSelect } from '../components/ui/FilterSelect';
 import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 import { DRAWER_SOURCES } from '../lib/drawerSources';
 import { useFootprint } from '../components/FootprintProvider';
+import { queryKeys } from '../lib/queryClient';
 
 /**
  * Portfolio Builder — prototype `.surface` + `.filter-row` composition.
@@ -494,6 +495,7 @@ export default function PortfolioBuilder() {
   } = useWarmingUpRetry<PortfolioPreview>(
     (signal) => api.portfolioPreview(buildPreviewCriteria(committedFilters, committedStateCodes), signal),
     [committedKey],
+    { queryKey: queryKeys.portfolioPreview([committedKey]) },
   );
   const building = preview === null && warmingUp === null && error === null;
   const previewError = error

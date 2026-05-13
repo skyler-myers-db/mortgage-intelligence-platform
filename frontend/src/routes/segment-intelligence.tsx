@@ -15,6 +15,7 @@ import { Icon } from '../components/Icon';
 import { FilterSelect } from '../components/ui/FilterSelect';
 import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 import { useFootprint } from '../components/FootprintProvider';
+import { queryKeys } from '../lib/queryClient';
 
 /**
  * Segment Intelligence — prototype composition: segment cards across the top
@@ -190,6 +191,12 @@ export default function SegmentIntelligence() {
         secondaryPortfolioCriteria,
       ),
     [activeSegsKey, secondaryPortfolioCriteria],
+    {
+      queryKey: queryKeys.segments([
+        activeSegsKey,
+        JSON.stringify(secondaryPortfolioCriteria),
+      ]),
+    },
   );
   const serverGeo = useMemo(
     () => ({
@@ -214,6 +221,16 @@ export default function SegmentIntelligence() {
         portfolioCriteria: secondaryPortfolioCriteria,
       }),
     [activeSegsKey, secondaryPortfolioCriteria, serverGeo.state, serverGeo.county, serverGeo.zip],
+    {
+      queryKey: queryKeys.leads([
+        'segment-intelligence',
+        activeSegsKey,
+        JSON.stringify(secondaryPortfolioCriteria),
+        serverGeo.state ?? '',
+        serverGeo.county ?? '',
+        serverGeo.zip ?? '',
+      ]),
+    },
   );
   const segments = useMemo(() => segmentsData ?? [], [segmentsData]);
   const segmentLabelByCode = useMemo(

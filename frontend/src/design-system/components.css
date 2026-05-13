@@ -899,6 +899,14 @@ kbd {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.lead-table__virtual-spacer,
+.lead-table__virtual-spacer:hover {
+  background: transparent;
+}
+.lead-table__virtual-spacer td {
+  padding: 0;
+  border: 0;
+}
 .lead-queue-skeleton__table {
   display: grid;
   gap: var(--sp-2);

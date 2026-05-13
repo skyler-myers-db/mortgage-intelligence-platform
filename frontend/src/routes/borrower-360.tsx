@@ -16,6 +16,7 @@ import { Reveal } from '../components/fx/Reveal';
 import { descriptorFor, descriptorForEvidence } from '../lib/drawerSources';
 import { segmentByCode } from '../lib/segmentMetadata';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
+import { queryKeys } from '../lib/queryClient';
 import { useApp } from '../components/AppContext';
 
 /**
@@ -74,7 +75,7 @@ export default function Borrower360() {
   const { data: b, warmingUp, error, manualRetry } = useWarmingUpRetry<Borrower360Type>(
     (signal) => api.borrower(id!, signal),
     [id],
-    { enabled: Boolean(id) },
+    { enabled: Boolean(id), queryKey: queryKeys.borrower(id) },
   );
 
   // Borrower 360 is a per-borrower detail page; without an id in the URL
