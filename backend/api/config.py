@@ -4,9 +4,15 @@ from backend.config.settings import settings
 from backend.services.databricks_sql_helpers import qualify
 from backend.services.geography_scope import GeographyScope, load_geography_scope
 from backend.services.pii_redaction import normalize_public_lender_ref
+from backend.services.resilience import TTLCache
 from backend.services.state_footprint import get_state_footprint_resolver
 
 router = APIRouter(prefix="/api/config", tags=["config"])
+_CONFIG_CACHE = TTLCache()
+
+
+def _reset_config_cache_for_tests() -> None:
+    _CONFIG_CACHE.clear()
 
 
 def _target_lender_options() -> tuple[list[str], str]:
@@ -59,10 +65,15 @@ def _geography_options(scope: GeographyScope | None) -> tuple[list[str], str]:
 
 @router.get("/options")
 def get_config_options() -> dict[str, object]:
+    cache_key = "config.options.v1"
+    cached = _CONFIG_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
     target_lenders, target_lenders_status = _target_lender_options()
     geo_scope = _live_geography_scope()
     geographies, geographies_status = _geography_options(geo_scope)
-    return {
+    payload = {
         "lender_name": settings.mip_lender_name,
         "geographies": geographies,
         "geographies_status": geographies_status,
@@ -75,6 +86,9 @@ def get_config_options() -> dict[str, object]:
         "target_lender_refs": target_lenders,
         "target_lender_refs_status": target_lenders_status,
     }
+    if target_lenders_status != "unavailable" and geographies_status != "unavailable":
+        _CONFIG_CACHE.set(cache_key, payload, settings.mip_cache_ttl_s)
+    return payload
 
 
 @router.get("/footprint")
@@ -99,10 +113,15 @@ def get_config_footprint() -> dict[str, object]:
 
     Hole-finder round-2 #20.
     """
+    cache_key = "config.footprint.v1"
+    cached = _CONFIG_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
     resolver = get_state_footprint_resolver()
     rows = resolver.list()
     geo_scope = _live_geography_scope()
-    return {
+    payload = {
         "states": [
             {
                 "state_code": r.state_code,
@@ -115,3 +134,6 @@ def get_config_footprint() -> dict[str, object]:
         "geography_scope": geo_scope.to_api_dict() if geo_scope else None,
         "using_fallback": resolver.using_fallback(),
     }
+    if rows and geo_scope is not None and not resolver.using_fallback():
+        _CONFIG_CACHE.set(cache_key, payload, settings.mip_cache_ttl_s)
+    return payload

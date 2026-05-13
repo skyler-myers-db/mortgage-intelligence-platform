@@ -13,6 +13,8 @@ Two narrow concerns covered here:
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -85,6 +87,22 @@ def test_browser_security_headers_are_present_on_api_responses() -> None:
     assert "default-src 'self'" in csp
     assert "frame-ancestors 'none'" in csp
     assert "object-src 'none'" in csp
+
+
+def test_hashed_static_assets_are_compressed_and_immutable() -> None:
+    """Vite's hashed bundles should be gzip-compressed and cache-immutable."""
+
+    assets_dir = Path(__file__).resolve().parents[2] / "frontend" / "dist" / "assets"
+    asset = next(assets_dir.glob("index-*.js"))
+    response = client.get(
+        f"/assets/{asset.name}",
+        headers={"Accept-Encoding": "gzip"},
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-encoding"] == "gzip"
+    assert response.headers["vary"] == "Accept-Encoding"
+    assert response.headers["cache-control"] == "public, max-age=31536000, immutable"
 
 
 def test_data_estate_does_not_shadow_admin_auth_dependency_name() -> None:

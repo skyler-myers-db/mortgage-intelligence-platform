@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
+from backend.api.config import _reset_config_cache_for_tests
 from backend.main import app
 from backend.services.state_footprint import (
     FootprintState,
@@ -172,6 +173,7 @@ def test_config_footprint_endpoint_returns_resolver_payload() -> None:
     ]
     fake = _resolver_with_uc_rows(uc_rows)
     _reset_state_footprint_resolver_for_tests(fake)
+    _reset_config_cache_for_tests()
     try:
         client = TestClient(app)
         resp = client.get("/api/config/footprint")
@@ -189,6 +191,7 @@ def test_config_footprint_endpoint_returns_resolver_payload() -> None:
         }
     finally:
         _reset_state_footprint_resolver_for_tests(None)
+        _reset_config_cache_for_tests()
 
 
 def test_singleton_get_state_footprint_resolver_is_stable() -> None:
