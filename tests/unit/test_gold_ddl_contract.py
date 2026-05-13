@@ -380,6 +380,27 @@ def test_capture_refresh_timestamp_seed_exists() -> None:
     )
 
 
+def test_borrower_360_bounds_source_mortgage_rates_before_scoring() -> None:
+    text = (
+        TRANSFORM_DIR / "gold_borrower_360.sql"
+    ).read_text(encoding="utf-8")
+
+    assert "WHEN lc.first_pos_rate < 0.01 THEN NULL" in text
+    assert "WHEN lc.first_pos_rate > 0.15 THEN 0.15" in text
+    assert "mip.gold.fn_rate_spread(b.first_pos_rate" in text
+
+
+def test_rate_spread_evidence_uses_same_bounded_rate_contract() -> None:
+    text = (
+        TRANSFORM_DIR / "gold_evidence_events.sql"
+    ).read_text(encoding="utf-8")
+
+    assert "rate_spread_inputs AS" in text
+    assert "WHEN lc.first_pos_rate < 0.01 THEN NULL" in text
+    assert "WHEN lc.first_pos_rate > 0.15 THEN 0.15" in text
+    assert "FROM rate_spread_inputs AS lc" in text
+
+
 def test_assert_borrower_360_fresh_sentinel_exists() -> None:
     """The freshness sentinel must exist and must compare borrower_360's
     MAX(refreshed_at) against the run's refresh_at. Fixes audit-holes-

@@ -118,7 +118,17 @@ base AS (
     lc.avm_value,
     lc.total_open_lien_balance,
     lc.estimated_cltv,
-    lc.first_pos_rate,                  -- fractional
+    -- Fractional mortgage rate after source-quality bounding. The synthetic
+    -- Cotality seed can emit rare long-tail values above 1000 bps of spread
+    -- (for example 84.56%). Those are generator artifacts, not mortgage
+    -- economics. Keep the scoring path inside a defensible 1%-15% APR range:
+    -- invalid lows become NULL (no rate signal), invalid highs clamp to 15%.
+    CASE
+      WHEN lc.first_pos_rate IS NULL THEN NULL
+      WHEN lc.first_pos_rate < 0.01 THEN NULL
+      WHEN lc.first_pos_rate > 0.15 THEN 0.15
+      ELSE lc.first_pos_rate
+    END                                 AS first_pos_rate,
     lc.first_pos_loan_type,
     lc.first_pos_lender_current,
     -- Normalised lender raw_key for the JOIN to mip.ref.lender_dictionary.

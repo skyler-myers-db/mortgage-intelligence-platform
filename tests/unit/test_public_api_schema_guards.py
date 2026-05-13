@@ -76,6 +76,8 @@ def test_lead_summary_exposes_module0_relationship_flags() -> None:
 def test_borrower_360_projection_selects_module0_flags() -> None:
     for column in (
         "is_owner_occupied",
+        "is_absentee",
+        "is_corporate_owner",
         "is_investor",
         "is_current_customer",
         "is_former_customer",
@@ -83,8 +85,58 @@ def test_borrower_360_projection_selects_module0_flags() -> None:
         "has_permit",
         "listed_for_sale",
         "second_pos_amount",
+        "situs_cbsa_code",
+        "first_pos_loan_type",
+        "has_first_party_relationship",
+        "first_party_relationship_depth",
+        "first_party_recent_interactions",
+        "first_party_recent_application",
+        "first_party_synthetic_demo",
     ):
         assert column in _BORROWER_360_COLUMNS
+
+
+def test_borrower_360_accepts_governed_dossier_enrichment_fields() -> None:
+    payload = {
+        **_lead_payload(),
+        "clip_id": "clip_ref_0123abcd4567",
+        "owner_link_id": "owner_link_ref_0123abcd4567",
+        "subject_property": "Synthetic property · Chicago, IL 60614",
+        "avm_value": 500000,
+        "current_lien_balance": 300000,
+        "current_rate": 6.5,
+        "ltv": 60,
+        "related_property_count": 1,
+        "situs_cbsa_code": "16980",
+        "first_pos_loan_type": "CONV",
+        "is_absentee": True,
+        "is_corporate_owner": False,
+        "has_first_party_relationship": True,
+        "first_party_relationship_depth": 3,
+        "first_party_recent_interactions": 2,
+        "first_party_recent_application": True,
+        "first_party_synthetic_demo": True,
+        "trigger_timeline": [],
+        "evidence_events": [],
+        "why_panel": {
+            "rate_spread_bps": 100,
+            "market_rate": 6.0,
+            "equity_pct": 30,
+            "in_the_money": True,
+            "in_the_money_reason": "ok",
+            "min_spread_bps": 75,
+            "min_equity_pct": 15,
+            "sources": [],
+        },
+    }
+
+    parsed = Borrower360.model_validate(payload)
+
+    assert parsed.situs_cbsa_code == "16980"
+    assert parsed.first_pos_loan_type == "CONV"
+    assert parsed.is_absentee is True
+    assert parsed.has_first_party_relationship is True
+    assert parsed.first_party_recent_interactions == 2
 
 
 def test_lead_population_projection_selects_module0_flags() -> None:

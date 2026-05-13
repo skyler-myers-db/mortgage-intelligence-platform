@@ -15,6 +15,8 @@ type TruthFlagView = {
 };
 
 export function truthFlagLabels(borrower: LeadSummary, compact = false): TruthFlagView[] {
+  const hasAbsenteeSignal = 'is_absentee' in borrower;
+  const hasCorporateSignal = 'is_corporate_owner' in borrower;
   const flags: TruthFlag[] = [
     {
       label: 'current customer',
@@ -51,6 +53,28 @@ export function truthFlagLabels(borrower: LeadSummary, compact = false): TruthFl
       inactiveLabel: 'Not investor',
       activeVariant: 'warning',
     },
+    ...(hasAbsenteeSignal
+      ? [
+          {
+            label: 'absentee',
+            active: (borrower as LeadSummary & { is_absentee?: boolean }).is_absentee === true,
+            activeLabel: 'Absentee owner',
+            inactiveLabel: 'Not absentee',
+            activeVariant: 'warning' as const,
+          },
+        ]
+      : []),
+    ...(hasCorporateSignal
+      ? [
+          {
+            label: 'corporate owner',
+            active: (borrower as LeadSummary & { is_corporate_owner?: boolean }).is_corporate_owner === true,
+            activeLabel: 'Corporate owner',
+            inactiveLabel: 'Individual owner',
+            activeVariant: 'warning' as const,
+          },
+        ]
+      : []),
     {
       label: 'listing',
       active: borrower.listed_for_sale === true,

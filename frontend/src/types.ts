@@ -241,6 +241,15 @@ export interface Borrower360 extends LeadSummary {
   current_rate: number;
   ltv: number;
   related_property_count: number;
+  situs_cbsa_code?: string | null;
+  first_pos_loan_type?: string | null;
+  is_absentee?: boolean;
+  is_corporate_owner?: boolean;
+  has_first_party_relationship?: boolean;
+  first_party_relationship_depth?: number;
+  first_party_recent_interactions?: number;
+  first_party_recent_application?: boolean;
+  first_party_synthetic_demo?: boolean;
   trigger_timeline: EvidenceEvent[];
   evidence_events: EvidenceEvent[];
   why_panel: WhyPanel;

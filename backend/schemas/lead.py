@@ -126,6 +126,15 @@ class Borrower360(LeadSummary):
     current_rate: float
     ltv: int
     related_property_count: int
+    situs_cbsa_code: str | None = None
+    first_pos_loan_type: str | None = None
+    is_absentee: bool = False
+    is_corporate_owner: bool = False
+    has_first_party_relationship: bool = False
+    first_party_relationship_depth: int = 0
+    first_party_recent_interactions: int = 0
+    first_party_recent_application: bool = False
+    first_party_synthetic_demo: bool = False
     trigger_timeline: list[EvidenceEvent]
     evidence_events: list[EvidenceEvent]
     why_panel: WhyPanel

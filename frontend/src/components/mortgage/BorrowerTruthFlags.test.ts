@@ -51,4 +51,15 @@ describe('truthFlagLabels', () => {
     expect(labels).not.toContain('No listing trigger');
     expect(labels).not.toContain('No permit trigger');
   });
+
+  it('surfaces borrower-dossier absentee and corporate-owner signals when present', () => {
+    const labels = truthFlagLabels({
+      ...baseBorrower,
+      is_absentee: true,
+      is_corporate_owner: true,
+    } as LeadSummary & { is_absentee: boolean; is_corporate_owner: boolean }).map((flag) => flag.label);
+
+    expect(labels).toContain('Absentee owner');
+    expect(labels).toContain('Corporate owner');
+  });
 });

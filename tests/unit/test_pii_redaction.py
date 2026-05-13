@@ -151,7 +151,11 @@ def _sample_borrower_row(**overrides: object) -> dict[str, object]:
         "current_rate": 5.75,
         "ltv": 54,
         "related_property_count": 1,
+        "situs_cbsa_code": "16980",
+        "first_pos_loan_type": "CONV",
         "is_owner_occupied": False,
+        "is_absentee": True,
+        "is_corporate_owner": False,
         "is_investor": True,
         "is_current_customer": False,
         "is_former_customer": False,
@@ -159,6 +163,11 @@ def _sample_borrower_row(**overrides: object) -> dict[str, object]:
         "has_permit": False,
         "listed_for_sale": False,
         "second_pos_amount": 0,
+        "has_first_party_relationship": True,
+        "first_party_relationship_depth": 3,
+        "first_party_recent_interactions": 2,
+        "first_party_recent_application": True,
+        "first_party_synthetic_demo": True,
         # Forbidden raw-PII columns we expect the redactor to strip --
         # these MUST NOT appear in the output.
         "owner_1_full_name": "Jane Q Public",
@@ -218,12 +227,21 @@ def test_redact_borrower_row_preserves_module0_boolean_flags() -> None:
     out = redact_borrower_row(_sample_borrower_row())
     assert out["is_owner_occupied"] is False
     assert out["is_investor"] is True
+    assert out["is_absentee"] is True
+    assert out["is_corporate_owner"] is False
     assert out["is_current_customer"] is False
     assert out["is_former_customer"] is False
     assert out["is_competitor_lien"] is True
     assert out["has_permit"] is False
     assert out["listed_for_sale"] is False
     assert out["second_pos_amount"] == 0
+    assert out["situs_cbsa_code"] == "16980"
+    assert out["first_pos_loan_type"] == "CONV"
+    assert out["has_first_party_relationship"] is True
+    assert out["first_party_relationship_depth"] == 3
+    assert out["first_party_recent_interactions"] == 2
+    assert out["first_party_recent_application"] is True
+    assert out["first_party_synthetic_demo"] is True
 
 
 # ---------------------------------------------------------------------------

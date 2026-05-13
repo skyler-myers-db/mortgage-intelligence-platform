@@ -262,21 +262,35 @@ def silver_property_master() -> DataFrame:  # pragma: no cover
 @dlt.expect_or_fail("valid_clip", "clip IS NOT NULL")
 @dlt.expect("valid_state", "situs_state RLIKE '^[A-Z]{2}$'")
 @dlt.expect("zip_is_zip5_or_null", "situs_zip_code IS NULL OR length(situs_zip_code) = 5")
-@dlt.expect("rate_is_fractional", "first_pos_rate IS NULL OR first_pos_rate BETWEEN 0 AND 0.25")
+@dlt.expect("rate_is_fractional", "first_pos_rate IS NULL OR first_pos_rate BETWEEN 0.01 AND 0.15")
 def silver_lien_current() -> DataFrame:  # pragma: no cover
     src = _read_share_table(_SHARE_VOLUNTARY_LIEN)
-    # Fractional rate expression: share rate is DOUBLE in percent form; divide
-    # by 100 and coerce <= 0 to NULL. Applied to both first- and second-pos.
+    # Fractional rate expression: share rate is DOUBLE in percent form. Bound
+    # first- and second-position rates to a defensible 1%-15% APR range before
+    # scoring; values below 1% are treated as missing, generator outliers above
+    # 15% clamp to 15%.
     first_pos_rate_frac = F.when(
         F.col("first_position_mortgage_interest_rate").isNull()
-        | (F.col("first_position_mortgage_interest_rate").cast("double") <= 0),
+        | (F.col("first_position_mortgage_interest_rate").cast("double") < 1),
         F.lit(None).cast("double"),
-    ).otherwise(F.col("first_position_mortgage_interest_rate").cast("double") / F.lit(100.0))
+    ).otherwise(
+        F.least(
+            F.col("first_position_mortgage_interest_rate").cast("double"),
+            F.lit(15.0),
+        )
+        / F.lit(100.0)
+    )
     second_pos_rate_frac = F.when(
         F.col("second_position_mortgage_interest_rate").isNull()
-        | (F.col("second_position_mortgage_interest_rate").cast("double") <= 0),
+        | (F.col("second_position_mortgage_interest_rate").cast("double") < 1),
         F.lit(None).cast("double"),
-    ).otherwise(F.col("second_position_mortgage_interest_rate").cast("double") / F.lit(100.0))
+    ).otherwise(
+        F.least(
+            F.col("second_position_mortgage_interest_rate").cast("double"),
+            F.lit(15.0),
+        )
+        / F.lit(100.0)
+    )
     return (
         src.filter(_valid_state(F.col("situs_state")))
         .filter(F.col("clip").isNotNull())

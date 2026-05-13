@@ -73,10 +73,13 @@ USING (
       AS first_pos_date,
     CAST(first_position_mortgage_amount AS BIGINT)                   AS first_pos_amount,
     -- Share rate is DOUBLE in percent form (6.40 == 6.40%). Convert to
-    -- fractional; coerce rates <= 0 to NULL per data-contract §2.1.
+    -- fractional and bound to a defensible mortgage APR range. Source
+    -- generator outliers above 15% clamp to 15%; sub-1% values are treated
+    -- as missing rather than as a real refi signal.
     CASE
       WHEN first_position_mortgage_interest_rate IS NULL THEN NULL
-      WHEN CAST(first_position_mortgage_interest_rate AS DOUBLE) <= 0 THEN NULL
+      WHEN CAST(first_position_mortgage_interest_rate AS DOUBLE) < 1 THEN NULL
+      WHEN CAST(first_position_mortgage_interest_rate AS DOUBLE) > 15 THEN 0.15
       ELSE CAST(first_position_mortgage_interest_rate AS DOUBLE) / 100.0
     END                                                              AS first_pos_rate,
     first_position_mortgage_interest_rate_type_code                  AS first_pos_rate_type,
@@ -89,7 +92,8 @@ USING (
     CAST(second_position_mortgage_amount AS BIGINT)                  AS second_pos_amount,
     CASE
       WHEN second_position_mortgage_interest_rate IS NULL THEN NULL
-      WHEN CAST(second_position_mortgage_interest_rate AS DOUBLE) <= 0 THEN NULL
+      WHEN CAST(second_position_mortgage_interest_rate AS DOUBLE) < 1 THEN NULL
+      WHEN CAST(second_position_mortgage_interest_rate AS DOUBLE) > 15 THEN 0.15
       ELSE CAST(second_position_mortgage_interest_rate AS DOUBLE) / 100.0
     END                                                              AS second_pos_rate,
     second_position_mortgage_purpose_code                            AS second_pos_purpose,

@@ -234,8 +234,9 @@ def _itm_reference_sql(mortgage30us_fraction: float) -> str:
               WHEN estimated_value_mktg  > 0 THEN ROUND(100 * (avm - lien) / avm)
               ELSE 0 END))
         * Rate conversion: share rate is PERCENT (6.40 == 6.40%); divide
-          by 100 before feeding to fn_rate_spread. Rates <= 0 -> NULL per
-          silver rate-contract.
+          by 100 before feeding to fn_rate_spread. Rates below 1% are
+          treated as missing and source outliers above 15% APR clamp to 15%
+          before scoring.
     """
     return f"""
     WITH src AS (
@@ -244,7 +245,8 @@ def _itm_reference_sql(mortgage30us_fraction: float) -> str:
         clip,
         CASE
           WHEN first_position_mortgage_interest_rate IS NULL THEN NULL
-          WHEN CAST(first_position_mortgage_interest_rate AS DOUBLE) <= 0 THEN NULL
+          WHEN CAST(first_position_mortgage_interest_rate AS DOUBLE) < 1 THEN NULL
+          WHEN CAST(first_position_mortgage_interest_rate AS DOUBLE) > 15 THEN 0.15
           ELSE CAST(first_position_mortgage_interest_rate AS DOUBLE) / 100.0
         END AS rate_frac,
         CAST(estimated_value_mktg AS BIGINT) AS avm,

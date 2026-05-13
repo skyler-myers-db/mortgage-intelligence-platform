@@ -69,6 +69,19 @@ borrower_spine AS (
   WHERE situs_state IS NOT NULL
     AND clip IS NOT NULL
 ),
+rate_spread_inputs AS (
+  SELECT
+    lc.clip,
+    lc.ingest_ts,
+    lc.situs_state,
+    CASE
+      WHEN lc.first_pos_rate IS NULL THEN NULL
+      WHEN lc.first_pos_rate < 0.01 THEN NULL
+      WHEN lc.first_pos_rate > 0.15 THEN 0.15
+      ELSE lc.first_pos_rate
+    END AS first_pos_rate
+  FROM mip.silver.lien_current AS lc
+),
 -- 1. rate_spread (per CLIP, requires a borrower with a 1st-pos rate).
 rate_spread_rows AS (
   SELECT
@@ -88,7 +101,7 @@ rate_spread_rows AS (
     0.92                                             AS confidence,
     CAST(lc.ingest_ts AS STRING)                     AS `timestamp`,
     1                                                AS signal_rank
-  FROM mip.silver.lien_current AS lc
+  FROM rate_spread_inputs AS lc
   CROSS JOIN market AS m
   WHERE lc.first_pos_rate IS NOT NULL
     AND lc.situs_state IS NOT NULL

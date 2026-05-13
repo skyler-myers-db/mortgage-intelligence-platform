@@ -495,7 +495,11 @@ def redact_borrower_row(row: dict[str, Any]) -> dict[str, Any]:
         "current_rate": float(row.get("current_rate") or 0.0),
         "ltv": int(row.get("ltv") or 0),
         "related_property_count": int(row.get("related_property_count") or 1),
+        "situs_cbsa_code": row.get("situs_cbsa_code") or None,
+        "first_pos_loan_type": row.get("first_pos_loan_type") or None,
         "is_owner_occupied": bool(row.get("is_owner_occupied") or False),
+        "is_absentee": bool(row.get("is_absentee") or False),
+        "is_corporate_owner": bool(row.get("is_corporate_owner") or False),
         "is_investor": bool(row.get("is_investor") or False),
         "is_current_customer": bool(row.get("is_current_customer") or False),
         "is_former_customer": bool(row.get("is_former_customer") or False),
@@ -503,6 +507,19 @@ def redact_borrower_row(row: dict[str, Any]) -> dict[str, Any]:
         "second_pos_amount": int(row.get("second_pos_amount") or 0),
         "has_permit": bool(row.get("has_permit") or False),
         "listed_for_sale": bool(row.get("listed_for_sale") or False),
+        "has_first_party_relationship": bool(
+            row.get("has_first_party_relationship") or False
+        ),
+        "first_party_relationship_depth": int(
+            row.get("first_party_relationship_depth") or 0
+        ),
+        "first_party_recent_interactions": int(
+            row.get("first_party_recent_interactions") or 0
+        ),
+        "first_party_recent_application": bool(
+            row.get("first_party_recent_application") or False
+        ),
+        "first_party_synthetic_demo": bool(row.get("first_party_synthetic_demo") or False),
         # Fail closed when the gold column is missing/null: marketing
         # workflows must prove eligibility rather than assume it.
         "marketing_eligible": bool(row.get("marketing_eligible") is True),

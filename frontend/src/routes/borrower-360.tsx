@@ -233,6 +233,15 @@ export default function Borrower360() {
   const propertyAddress = b.subject_property
     .replace(/^Synthetic property\s*·\s*/i, '')
     .trim() || `${b.city}, ${b.state} ${b.zip}`;
+  const hasAvm = b.avm_value > 0;
+  const firstPartySignalSummary = [
+    b.has_first_party_relationship ? `${b.first_party_relationship_depth ?? 0} first-party links` : null,
+    (b.first_party_recent_interactions ?? 0) > 0
+      ? `${b.first_party_recent_interactions} recent interactions`
+      : null,
+    b.first_party_recent_application ? 'Recent application' : null,
+    b.first_party_synthetic_demo ? 'Summit demo synthetic' : null,
+  ].filter(Boolean);
   const saved = isLeadSaved(b.borrower_id);
   const saveCurrentLead = () => {
     saveLead({
@@ -289,14 +298,62 @@ export default function Borrower360() {
                   </div>
                 }
               />
-              <Field k="AVM" v={currency(b.avm_value)} mono />
+              <Field
+                k="AVM"
+                v=""
+                childEl={
+                  hasAvm ? (
+                    <div className="field__value mono num">{currency(b.avm_value)}</div>
+                  ) : (
+                    <div>
+                      <span className="chip chip--warning chip--compact">AVM unavailable</span>
+                      <div className="field__sub">Valuation feed missing for this CLIP; equity math is gated.</div>
+                    </div>
+                  )
+                }
+              />
               <Field k="Current lien" v={`${currency(b.current_lien_balance)} · ${b.current_rate}%`} mono />
-              <Field k="LTV / Equity" v={`${b.ltv}% · ${currency(b.equity_estimate)}`} mono />
+              <Field
+                k="LTV / Equity"
+                v=""
+                childEl={
+                  hasAvm ? (
+                    <div className="field__value mono num">{`${b.ltv}% · ${currency(b.equity_estimate)}`}</div>
+                  ) : (
+                    <div>
+                      <div className="field__value mono num">—</div>
+                      <div className="field__sub">Not a zero-equity signal; AVM was unavailable.</div>
+                    </div>
+                  )
+                }
+              />
               <Field k="Related properties" v={`${b.related_property_count} (via owner graph)`} />
+              <Field
+                k="Metro / loan type"
+                v={`${b.situs_cbsa_code ?? 'CBSA unavailable'} · ${b.first_pos_loan_type ?? 'Loan type unavailable'}`}
+                mono
+              />
               <Field
                 k="Relationship flags"
                 v=""
                 childEl={<BorrowerTruthFlags borrower={b} />}
+              />
+              <Field
+                k="First-party signals"
+                v=""
+                childEl={
+                  firstPartySignalSummary.length > 0 ? (
+                    <div className="chip-row">
+                      {firstPartySignalSummary.map((label) => (
+                        <span key={label} className="chip chip--neutral chip--compact">
+                          {label}
+                        </span>
+                      ))}
+                    </div>
+                  ) : (
+                    <span className="chip chip--neutral chip--compact">No first-party signal</span>
+                  )
+                }
               />
               <Field k="Assigned to" v={b.assigned_to_label ?? b.assigned_to_email ?? 'Unassigned'} />
               <Field k="Approval status" v={titleCaseStatus(b.approval_status, 'Pending')} />
