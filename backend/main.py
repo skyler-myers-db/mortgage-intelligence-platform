@@ -139,7 +139,13 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     yield
 
 
-app = FastAPI(title="Mortgage Intelligence Platform API", lifespan=_lifespan)
+app = FastAPI(
+    title="Mortgage Intelligence Platform API",
+    lifespan=_lifespan,
+    docs_url="/docs" if settings.mip_expose_openapi else None,
+    redoc_url="/redoc" if settings.mip_expose_openapi else None,
+    openapi_url="/openapi.json" if settings.mip_expose_openapi else None,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -251,6 +257,49 @@ class CorrelationIdMiddleware(BaseHTTPMiddleware):
             reset_correlation_id(token)
 
 
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Attach browser security headers to every app response.
+
+    The Databricks Apps edge owns authentication and may add its own
+    platform headers after this middleware runs. These headers cover the
+    application-controlled browser posture: no content sniffing, no
+    framing, conservative referrer behavior, no ambient device APIs, and
+    a CSP tuned for the static Vite SPA served from this same origin.
+    """
+
+    _CSP = (
+        "default-src 'self'; "
+        "base-uri 'self'; "
+        "object-src 'none'; "
+        "frame-ancestors 'none'; "
+        "script-src 'self'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data: blob:; "
+        "font-src 'self' data:; "
+        "connect-src 'self'; "
+        "form-action 'self'"
+    )
+
+    async def dispatch(  # type: ignore[override]
+        self, request: StarletteRequest, call_next: Any
+    ) -> StarletteResponse:
+        response = await call_next(request)
+        response.headers.setdefault(
+            "Strict-Transport-Security",
+            "max-age=31536000; includeSubDomains",
+        )
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+        response.headers.setdefault(
+            "Permissions-Policy",
+            "geolocation=(), camera=(), microphone=()",
+        )
+        response.headers.setdefault("Content-Security-Policy", self._CSP)
+        return response
+
+
+app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(CorrelationIdMiddleware)
 
 
@@ -340,6 +389,24 @@ for router in [
     workspace.router,
 ]:
     app.include_router(router)
+
+
+if not settings.mip_expose_openapi:
+    # Keep FastAPI's schema/documentation routes from falling through to the
+    # SPA catch-all. Returning the same compact 404 shape as unmatched /api/*
+    # paths avoids leaking whether the generated docs are merely hidden or
+    # absent from this deployment.
+    @app.get("/openapi.json", response_model=None)
+    def _openapi_disabled() -> JSONResponse:
+        return JSONResponse(status_code=404, content={"detail": "not found"})
+
+    @app.get("/docs", response_model=None)
+    def _docs_disabled() -> JSONResponse:
+        return JSONResponse(status_code=404, content={"detail": "not found"})
+
+    @app.get("/redoc", response_model=None)
+    def _redoc_disabled() -> JSONResponse:
+        return JSONResponse(status_code=404, content={"detail": "not found"})
 
 
 # R5-15 (continued): a dedicated /api/* 404 handler that always runs,

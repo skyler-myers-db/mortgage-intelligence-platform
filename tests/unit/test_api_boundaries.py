@@ -16,6 +16,7 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
+import backend.api.data_estate as data_estate_api
 import backend.services.databricks_sql as databricks_sql
 from backend.api.config import _target_lender_options
 from backend.main import app
@@ -51,6 +52,45 @@ def test_unmatched_api_route_with_trailing_segments_also_404() -> None:
     response = client.get("/api/audit/events/does-not-exist/nested")
     assert response.status_code == 404, response.text
     assert response.headers["content-type"].startswith("application/json")
+
+
+def test_generated_api_docs_are_not_exposed_by_default() -> None:
+    """FastAPI docs/schema routes stay closed in shared app deploys.
+
+    With the SPA catch-all mounted, a disabled docs route must not fall
+    through to ``index.html`` with HTTP 200. A compact JSON 404 keeps the
+    external contract uninteresting to authenticated workspace users.
+    """
+    for path in ("/openapi.json", "/docs", "/redoc"):
+        response = client.get(path)
+        assert response.status_code == 404, path
+        assert response.headers["content-type"].startswith("application/json"), path
+        assert response.json() == {"detail": "not found"}
+
+
+def test_browser_security_headers_are_present_on_api_responses() -> None:
+    """Defense-in-depth browser headers are emitted by app middleware."""
+    response = client.get("/api/this-route-does-not-exist")
+
+    assert response.headers["strict-transport-security"].startswith(
+        "max-age=31536000"
+    )
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.headers["x-frame-options"] == "DENY"
+    assert response.headers["referrer-policy"] == "strict-origin-when-cross-origin"
+    assert response.headers["permissions-policy"] == (
+        "geolocation=(), camera=(), microphone=()"
+    )
+    csp = response.headers["content-security-policy"]
+    assert "default-src 'self'" in csp
+    assert "frame-ancestors 'none'" in csp
+    assert "object-src 'none'" in csp
+
+
+def test_data_estate_does_not_shadow_admin_auth_dependency_name() -> None:
+    """Only RBAC-gated routers should expose an ``AdminDep`` alias."""
+    assert "AdminDep" not in data_estate_api.__dict__
+    assert "AdminRulesServiceDep" in data_estate_api.__dict__
 
 
 # ---------------------------------------------------------------------------

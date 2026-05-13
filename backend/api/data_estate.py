@@ -11,11 +11,11 @@ from backend.services.data_estate import build_data_estate_response
 
 router = APIRouter(prefix="/api/data-estate", tags=["data-estate"])
 
-AdminDep = Annotated[AdminRulesService, Depends(get_admin_rules_service)]
+AdminRulesServiceDep = Annotated[AdminRulesService, Depends(get_admin_rules_service)]
 
 
 @router.get("", response_model=DataEstateResponse)
-def get_data_estate(service: AdminDep) -> DataEstateResponse:
+def get_data_estate(service: AdminRulesServiceDep) -> DataEstateResponse:
     runtime_statuses: dict[str, bool] = {}
     for name, probe in {"genie": _probe_genie, "lakebase": _probe_lakebase}.items():
         try:

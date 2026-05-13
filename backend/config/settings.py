@@ -62,6 +62,11 @@ class Settings(BaseSettings):
     mip_default_catalog: str = "mip"
     mip_default_schema: str = "gold"
     mip_lakebase_schema: str = "mip_app"
+    # FastAPI's generated OpenAPI/Swagger/ReDoc surfaces expose every
+    # route and schema to any authenticated workspace user. Keep them
+    # off by default for demo/customer deploys; developers can opt in
+    # locally with MIP_EXPOSE_OPENAPI=1 when they need schema browsing.
+    mip_expose_openapi: bool = False
 
     # In-the-money contract: matches tests/fixtures/rate_spread_golden.json
     # (market_rate_constant) and tests/fixtures/in_the_money_golden.json
