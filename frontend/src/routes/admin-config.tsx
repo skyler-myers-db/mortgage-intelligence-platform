@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { ReactElement, ReactNode } from 'react';
+import type { FormEvent, ReactElement, ReactNode } from 'react';
 import { useApp, type Accent, type Density, type Theme } from '../components/AppContext';
 import { PageShell } from '../components/layout/PageShell';
 import { Chip } from '../components/Primitives';
@@ -110,6 +110,9 @@ export default function AdminConfig() {
   const [appearanceOpen, setAppearanceOpen] = useState<boolean>(false);
   // Disclosure state for the Offer rules threshold table.
   const [rulesExpanded, setRulesExpanded] = useState<boolean>(false);
+  const [auditEntityDraft, setAuditEntityDraft] = useState<string>('');
+  const [auditActionDraft, setAuditActionDraft] = useState<string>('');
+  const [auditEventTypeDraft, setAuditEventTypeDraft] = useState<string>('');
   const [auditEntityFilter, setAuditEntityFilter] = useState<string>('');
   const [auditActionFilter, setAuditActionFilter] = useState<string>('');
   const [auditEventTypeFilter, setAuditEventTypeFilter] = useState<string>('');
@@ -162,6 +165,25 @@ export default function AdminConfig() {
       : null;
   const auditEntityValue = auditEntityFilter.trim();
   const auditEntityIsBorrower = /^B-[A-Z0-9]+$/i.test(auditEntityValue);
+  const auditExplorerFiltersActive = Boolean(
+    auditEntityFilter.trim() ||
+    auditActionFilter.trim() ||
+    auditEventTypeFilter.trim(),
+  );
+  const applyAuditFilters = (event?: FormEvent<HTMLFormElement>) => {
+    event?.preventDefault();
+    setAuditEntityFilter(auditEntityDraft.trim());
+    setAuditActionFilter(auditActionDraft.trim());
+    setAuditEventTypeFilter(auditEventTypeDraft.trim());
+  };
+  const clearAuditFilters = () => {
+    setAuditEntityDraft('');
+    setAuditActionDraft('');
+    setAuditEventTypeDraft('');
+    setAuditEntityFilter('');
+    setAuditActionFilter('');
+    setAuditEventTypeFilter('');
+  };
 
   const {
     data: auditExplorerEvents,
@@ -376,18 +398,24 @@ export default function AdminConfig() {
               Filter the Lakebase ledger by borrower/approval id, action, or event type.
             </div>
           </div>
-          <Chip variant={auditExplorerError ? 'warning' : 'neutral'}>
-            {auditExplorerError ? 'reconnecting' : 'last 25'}
+          <Chip variant={auditExplorerError ? 'warning' : auditExplorerFiltersActive ? 'success' : 'neutral'}>
+            {auditExplorerError
+              ? 'reconnecting'
+              : auditExplorerFiltersActive
+                ? auditExplorerEvents === null
+                  ? 'filtering…'
+                  : `${auditExplorerEvents.length} matching`
+                : 'last 25'}
           </Chip>
         </div>
         <div className="surface__body">
-          <div className="filter-row">
+          <form className="filter-row" onSubmit={applyAuditFilters}>
             <label className="filter-row__group">
               <span className="field__label">ENTITY ID</span>
               <input
                 className="admin-filter-input"
-                value={auditEntityFilter}
-                onChange={(e) => setAuditEntityFilter(e.target.value)}
+                value={auditEntityDraft}
+                onChange={(e) => setAuditEntityDraft(e.target.value)}
                 placeholder="B-... or approval UUID"
               />
             </label>
@@ -395,8 +423,8 @@ export default function AdminConfig() {
               <span className="field__label">ACTION</span>
               <input
                 className="admin-filter-input"
-                value={auditActionFilter}
-                onChange={(e) => setAuditActionFilter(e.target.value)}
+                value={auditActionDraft}
+                onChange={(e) => setAuditActionDraft(e.target.value)}
                 placeholder="outreach.approve"
               />
             </label>
@@ -404,12 +432,41 @@ export default function AdminConfig() {
               <span className="field__label">EVENT TYPE</span>
               <input
                 className="admin-filter-input"
-                value={auditEventTypeFilter}
-                onChange={(e) => setAuditEventTypeFilter(e.target.value)}
+                value={auditEventTypeDraft}
+                onChange={(e) => setAuditEventTypeDraft(e.target.value)}
                 placeholder="APPROVE"
               />
             </label>
-          </div>
+            <div className="admin-filter-actions">
+              <button type="submit" className="btn btn--default btn--sm">
+                Apply filters
+              </button>
+              <button
+                type="button"
+                className="btn btn--ghost btn--sm"
+                onClick={clearAuditFilters}
+                disabled={!auditExplorerFiltersActive && !auditEntityDraft && !auditActionDraft && !auditEventTypeDraft}
+              >
+                Clear
+              </button>
+            </div>
+          </form>
+          {auditExplorerFiltersActive && (
+            <div className="chip-row mt-3" aria-label="Applied audit filters">
+              {auditEntityFilter.trim() && (
+                <Chip variant="neutral">entity = {auditEntityFilter.trim()}</Chip>
+              )}
+              {auditActionFilter.trim() && (
+                <Chip variant="neutral">action = {auditActionFilter.trim()}</Chip>
+              )}
+              {auditEventTypeFilter.trim() && (
+                <Chip variant="neutral">event = {auditEventTypeFilter.trim()}</Chip>
+              )}
+              <span className="muted fs-12">
+                Showing the latest 25 rows that match the applied filters.
+              </span>
+            </div>
+          )}
           {auditExplorerWarming && (
             <div className="mt-3">
               <WarmingUpBlock state={auditExplorerWarming} title="Audit explorer loading" compact />

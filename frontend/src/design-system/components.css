@@ -899,6 +899,20 @@ kbd {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.lead-queue-skeleton__table {
+  display: grid;
+  gap: var(--sp-2);
+}
+.lead-queue-skeleton__row {
+  display: grid;
+  grid-template-columns: 28px 132px 116px 96px 124px 98px 126px minmax(150px, 1fr) 84px;
+  gap: var(--sp-3);
+  align-items: center;
+  min-width: 920px;
+  padding: var(--sp-2) 0;
+  border-bottom: 1px solid var(--line-1);
+}
+.lead-queue-skeleton__row:last-child { border-bottom: 0; }
 .chip-stack {
   display: flex;
   flex-direction: column;
@@ -1390,7 +1404,7 @@ kbd {
   width: 52px; height: 52px; border-radius: 50%;
   background: linear-gradient(135deg, var(--entrada-navy), var(--entrada-teal));
   border: 1px solid rgba(255,255,255,0.15);
-  color: white; display: grid; place-items: center;
+  color: white; display: none; place-items: center;
   cursor: pointer;
   box-shadow: 0 8px 24px -8px var(--entrada-teal);
   z-index: 29;
@@ -1398,6 +1412,12 @@ kbd {
 }
 .genie__fab:hover { transform: translateY(-2px); }
 .genie__fab.is-hidden { transform: translateY(20px) scale(0.6); opacity: 0; pointer-events: none; }
+@media (max-width: 720px) {
+  .genie__fab {
+    display: grid;
+    bottom: calc(var(--sp-4) + 56px);
+  }
+}
 .genie-empty {
   display: flex;
   align-items: flex-start;
@@ -2665,6 +2685,11 @@ kbd {
   align-items: center;
   justify-content: space-between;
   gap: var(--sp-3);
+  flex-wrap: wrap;
+}
+.status-callout--danger > span {
+  min-width: min(100%, 24rem);
+  flex: 1 1 24rem;
 }
 .status-callout--day-zero {
   padding: var(--sp-3) var(--sp-4);
@@ -2728,6 +2753,12 @@ kbd {
   gap: var(--sp-3);
   align-items: flex-start;
 }
+.data-estate__lane-skeleton-main {
+  display: grid;
+  gap: var(--sp-2);
+  min-width: 0;
+  width: 100%;
+}
 .data-estate__lane-proof {
   flex: 0 0 auto;
   border: 1px solid var(--chip-line);
@@ -2774,6 +2805,10 @@ kbd {
 }
 .data-estate__asset:hover {
   background: var(--bg-3);
+}
+.data-estate__asset--skeleton {
+  pointer-events: none;
+  cursor: default;
 }
 .data-estate__asset-main {
   display: flex;
@@ -2886,6 +2921,11 @@ kbd {
   outline: none;
 }
 .admin-filter-input:focus { border-color: var(--accent); }
+.admin-filter-actions {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--sp-2);
+}
 .admin-audit-list {
   display: grid;
   gap: var(--sp-2);

@@ -188,6 +188,12 @@ function appendPortfolioCriteria(params: URLSearchParams, criteria?: GeoQueryCri
  */
 export type ApiErrorReason = 'warming_up' | 'breaker_open' | 'retries_exhausted';
 
+export interface ApiValidationIssue {
+  field: string;
+  message: string;
+  location: string[];
+}
+
 /** Structured error thrown by every api.* method on non-2xx or network failure. */
 export class ApiError extends Error {
   readonly path: string;
@@ -196,6 +202,7 @@ export class ApiError extends Error {
   readonly dependency: string | null;
   readonly correlationId: string | null;
   readonly aborted: boolean;
+  readonly validationIssues: ApiValidationIssue[];
   /**
    * 503 classification from the backend resilience layer, or `null`
    * when the body did not include one. See `ApiErrorReason`.
@@ -212,6 +219,7 @@ export class ApiError extends Error {
       correlationId?: string | null;
       aborted?: boolean;
       reason?: ApiErrorReason | string | null;
+      validationIssues?: ApiValidationIssue[];
     } = { path: '' },
   ) {
     super(message);
@@ -223,6 +231,7 @@ export class ApiError extends Error {
     this.correlationId = opts.correlationId ?? null;
     this.aborted = Boolean(opts.aborted);
     this.reason = opts.reason ?? null;
+    this.validationIssues = opts.validationIssues ?? [];
   }
 }
 
@@ -378,6 +387,59 @@ export async function _parseRetryableBody(res: Response): Promise<Retryable503Pa
   }
 }
 
+function _fieldFromLoc(loc: unknown): { field: string; location: string[] } {
+  const location = Array.isArray(loc)
+    ? loc.map((part) => String(part))
+    : [];
+  const publicParts = location.filter((part) => !['query', 'body', 'path'].includes(part));
+  return {
+    field: publicParts.length > 0 ? publicParts.join('.') : location.join('.') || 'request',
+    location,
+  };
+}
+
+export async function _parseHttpErrorBody(res: Response): Promise<{
+  message: string | null;
+  validationIssues: ApiValidationIssue[];
+}> {
+  try {
+    const body = (await res.clone().json()) as {
+      detail?: string | Array<{ loc?: unknown; msg?: string; message?: string }>;
+      message?: string;
+      error?: string;
+    };
+    const detail = body?.detail;
+    if (Array.isArray(detail)) {
+      const validationIssues = detail.map((item) => {
+        const loc = _fieldFromLoc(item?.loc);
+        return {
+          field: loc.field,
+          location: loc.location,
+          message: item?.msg ?? item?.message ?? 'Invalid value.',
+        };
+      });
+      return {
+        message: validationIssues
+          .map((issue) => `${issue.field}: ${issue.message}`)
+          .join('; '),
+        validationIssues,
+      };
+    }
+    if (typeof detail === 'string' && detail.trim().length > 0) {
+      return { message: detail, validationIssues: [] };
+    }
+    if (typeof body?.message === 'string' && body.message.trim().length > 0) {
+      return { message: body.message, validationIssues: [] };
+    }
+    if (typeof body?.error === 'string' && body.error.trim().length > 0) {
+      return { message: body.error, validationIssues: [] };
+    }
+  } catch {
+    // Non-JSON error bodies fall through to the HTTP status text below.
+  }
+  return { message: null, validationIssues: [] };
+}
+
 async function _fetchWithRetry(
   path: string,
   init?: RequestInit,
@@ -402,7 +464,8 @@ async function _fetchWithRetry(
 
 async function _throwFromResponse(res: Response, path: string): Promise<never> {
   const parsed = await _parseRetryableBody(res);
-  const msg = parsed.detail ?? `${res.status} ${res.statusText}`;
+  const parsedBody = await _parseHttpErrorBody(res);
+  const msg = parsed.detail ?? parsedBody.message ?? `${res.status} ${res.statusText}`;
   throw new ApiError(msg, {
     path,
     status: res.status,
@@ -410,6 +473,7 @@ async function _throwFromResponse(res: Response, path: string): Promise<never> {
     dependency: parsed.dependency,
     correlationId: parsed.correlationId,
     reason: parsed.reason,
+    validationIssues: parsedBody.validationIssues,
   });
 }
 

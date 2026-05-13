@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { api, ApiError, _parseRetryableBody } from './api';
+import { api, ApiError, _parseHttpErrorBody, _parseRetryableBody } from './api';
 import type { SegmentCode } from '../types';
 
 /**
@@ -91,6 +91,37 @@ describe('_parseRetryableBody', () => {
   });
 });
 
+describe('_parseHttpErrorBody', () => {
+  it('extracts FastAPI validation details into public field messages', async () => {
+    const res = jsonResponse(422, {
+      detail: [
+        {
+          loc: ['query', 'aged_days'],
+          msg: 'Input should be less than or equal to 90',
+        },
+      ],
+    });
+
+    const parsed = await _parseHttpErrorBody(res);
+
+    expect(parsed.message).toBe('aged_days: Input should be less than or equal to 90');
+    expect(parsed.validationIssues).toEqual([
+      {
+        field: 'aged_days',
+        location: ['query', 'aged_days'],
+        message: 'Input should be less than or equal to 90',
+      },
+    ]);
+  });
+
+  it('extracts string detail messages for not-found responses', async () => {
+    const parsed = await _parseHttpErrorBody(jsonResponse(404, { detail: 'Borrower B-X not found' }));
+
+    expect(parsed.message).toBe('Borrower B-X not found');
+    expect(parsed.validationIssues).toEqual([]);
+  });
+});
+
 describe('ApiError', () => {
   it('carries the reason field through to callers', () => {
     const err = new ApiError('warehouse cooling', {
@@ -109,6 +140,21 @@ describe('ApiError', () => {
   it('defaults reason to null when the caller omits it', () => {
     const err = new ApiError('boom', { path: '/api/leads', status: 500 });
     expect(err.reason).toBeNull();
+  });
+
+  it('carries validation issues through to route-level error copy', () => {
+    const err = new ApiError('aged_days: Input should be less than or equal to 90', {
+      path: '/api/leads',
+      status: 422,
+      validationIssues: [
+        {
+          field: 'aged_days',
+          location: ['query', 'aged_days'],
+          message: 'Input should be less than or equal to 90',
+        },
+      ],
+    });
+    expect(err.validationIssues[0]?.field).toBe('aged_days');
   });
 });
 

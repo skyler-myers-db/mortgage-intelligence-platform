@@ -3,6 +3,7 @@ import { Chip } from '../Primitives';
 import { Icon } from '../Icon';
 import { useApp } from '../AppContext';
 import { descriptorFor, DRAWER_SOURCES } from '../../lib/drawerSources';
+import { Skeleton } from '../ui/Skeleton';
 
 function statusLabel(status: DataEstateStatus): string {
   if (status === 'demo_synthetic') return 'demo synthetic';
@@ -128,6 +129,53 @@ export function DataEstatePanel({ estate }: { estate: DataEstateResponse }) {
             ))}
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+export function DataEstatePanelSkeleton() {
+  return (
+    <div className="surface data-estate" aria-busy="true" role="status">
+      <div className="surface__hdr surface__hdr--split">
+        <div className="surface__hdr-main">
+          <div className="surface__icon">
+            <Icon name="layers" size={14} />
+          </div>
+          <div>
+            <div className="h-4">AI data estate under the hood</div>
+            <div className="muted fs-12">
+              Loading source readiness, freshness, and governed lineage proof…
+            </div>
+          </div>
+        </div>
+        <Skeleton width={128} height={24} rounded="pill" />
+      </div>
+      <div className="surface__body">
+        <div className="data-estate__grid">
+          {Array.from({ length: 4 }).map((_, lane) => (
+            <section key={lane} className="data-estate__lane" aria-label="Data estate lane loading">
+              <div className="data-estate__lane-hdr">
+                <div className="data-estate__lane-skeleton-main">
+                  <Skeleton width={160} height={13} rounded="sm" />
+                  <Skeleton width="92%" height={11} rounded="sm" />
+                </div>
+                <Skeleton width={72} height={22} rounded="pill" />
+              </div>
+              <div className="data-estate__assets">
+                {Array.from({ length: 5 }).map((__, asset) => (
+                  <div key={asset} className="data-estate__asset data-estate__asset--skeleton">
+                    <div className="data-estate__asset-main">
+                      <Skeleton width={8} height={8} rounded="pill" />
+                      <Skeleton width="78%" height={11} rounded="sm" />
+                    </div>
+                    <Skeleton width={54} height={11} rounded="sm" />
+                  </div>
+                ))}
+              </div>
+            </section>
+          ))}
+        </div>
       </div>
     </div>
   );

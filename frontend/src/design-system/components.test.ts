@@ -51,6 +51,29 @@ describe('layout containment contracts', () => {
     expect(css).toMatch(/\.trusted-asset--button\s*\{[^}]*width:\s*100%;/s);
   });
 
+  it('renders skeleton placeholders for slow lead and data-estate loads', () => {
+    const css = designCss();
+
+    expect(css).toContain('.lead-queue-skeleton__row');
+    expect(css).toMatch(/\.lead-queue-skeleton__row\s*\{[^}]*grid-template-columns:/s);
+    expect(css).toContain('.data-estate__lane-skeleton-main');
+    expect(css).toContain('.data-estate__asset--skeleton');
+  });
+
+  it('keeps long error messages wrapped inside callouts', () => {
+    const css = designCss();
+
+    expect(css).toMatch(/\.status-callout--danger\s*\{[^}]*flex-wrap:\s*wrap;/s);
+    expect(css).toMatch(/\.status-callout--danger > span\s*\{[^}]*flex:\s*1 1 24rem;/s);
+  });
+
+  it('keeps the floating Genie entrypoint out of desktop table/map content', () => {
+    const css = designCss();
+
+    expect(css).toMatch(/\.genie__fab\s*\{[^}]*display:\s*none;/s);
+    expect(css).toMatch(/@media \(max-width:\s*720px\)\s*\{[\s\S]*?\.genie__fab\s*\{[\s\S]*?display:\s*grid;/s);
+  });
+
   it('keeps theme switches visually coherent across shell surfaces', () => {
     const css = designCss();
 

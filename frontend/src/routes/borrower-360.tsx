@@ -1,6 +1,6 @@
 import { useEffect, type CSSProperties, type ReactElement } from 'react';
 import { Link, Navigate, useParams } from 'react-router-dom';
-import { api } from '../lib/api';
+import { api, ApiError } from '../lib/api';
 import type { Borrower360 as Borrower360Type } from '../types';
 import { currency } from '../lib/formatters';
 import { PageShell } from '../components/layout/PageShell';
@@ -135,18 +135,26 @@ export default function Borrower360() {
   }
 
   if (error) {
+    const notFound = error instanceof ApiError && error.status === 404;
+    const errorLede = notFound
+      ? `Borrower ${id} was not found. Check the ID, use search, or return to the lead queue.`
+      : `Couldn't load borrower ${id}: ${error.message}`;
     return (
       <PageShell
         eyebrow="Borrower 360"
-        title={`Couldn't load ${id}`}
-        lede={`Couldn't load borrower ${id}: ${error.message}`}
+        title={notFound ? `Borrower ${id} not found` : `Couldn't load ${id}`}
+        lede={errorLede}
       >
         <div className="surface">
           <div className="surface__body surface__body--inline">
-            <Chip variant="danger" icon="cross">Backend unavailable</Chip>
-            <Button onClick={manualRetry} aria-label={`Retry loading borrower ${id}`}>
-              Retry
-            </Button>
+            <Chip variant={notFound ? 'warning' : 'danger'} icon={notFound ? 'search' : 'cross'}>
+              {notFound ? 'Not found' : 'Backend unavailable'}
+            </Chip>
+            {!notFound && (
+              <Button onClick={manualRetry} aria-label={`Retry loading borrower ${id}`}>
+                Retry
+              </Button>
+            )}
             <Link className="btn" to="/lead-queue">
               Back to lead queue
             </Link>

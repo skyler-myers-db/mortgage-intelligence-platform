@@ -4,7 +4,7 @@ import { PageShell } from '../components/layout/PageShell';
 import { KpiCard } from '../components/mortgage/KpiCard';
 import { USChoroplethMap } from '../components/mortgage/USChoroplethMap';
 import { AgentActivityLog } from '../components/mortgage/AgentActivityLog';
-import { DataEstatePanel } from '../components/mortgage/DataEstatePanel';
+import { DataEstatePanel, DataEstatePanelSkeleton } from '../components/mortgage/DataEstatePanel';
 import { Button, Chip } from '../components/Primitives';
 import { DRAWER_SOURCES } from '../lib/drawerSources';
 import { Icon } from '../components/Icon';
@@ -333,9 +333,13 @@ export default function Home() {
         </Link>
       </div>
 
-      {dataEstate && (
+      {dataEstate ? (
         <Reveal>
           <DataEstatePanel estate={dataEstate} />
+        </Reveal>
+      ) : (
+        <Reveal>
+          <DataEstatePanelSkeleton />
         </Reveal>
       )}
 

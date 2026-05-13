@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { api, isAbortError, type LeadsPageResult } from '../lib/api';
+import { api, ApiError, isAbortError, type LeadsPageResult } from '../lib/api';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
 import type { PortfolioPreview, SalesAgingLead, SalesConversionResponse, SalesStandupResponse, SalesTeamMember, SegmentCode } from '../types';
 import { PageShell } from '../components/layout/PageShell';
@@ -9,6 +9,7 @@ import { Chip } from '../components/Primitives';
 import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 import { FilterSelect } from '../components/ui/FilterSelect';
 import { useFootprint } from '../components/FootprintProvider';
+import { Skeleton } from '../components/ui/Skeleton';
 
 /**
  * Lead Queue — deep-dive table route. Full borrower list (filtered by segment
@@ -233,6 +234,68 @@ export function buildLeadQueueExportFilters(input: LeadQueueExportFiltersInput):
   return rendered.length > 0 ? rendered : 'none';
 }
 
+export interface LeadQueueLoadErrorState {
+  message: string;
+  invalidFilters: boolean;
+}
+
+export function formatLeadQueueLoadError(error: unknown): LeadQueueLoadErrorState {
+  if (error instanceof ApiError && error.status === 422) {
+    const issueText = error.validationIssues.length > 0
+      ? error.validationIssues.map((issue) => `${issue.field}: ${issue.message}`).join('; ')
+      : error.message;
+    return {
+      message: `Lead queue filters are invalid. ${issueText}. Clear filters or choose a supported filter value.`,
+      invalidFilters: true,
+    };
+  }
+  if (error instanceof Error) {
+    return {
+      message: `Couldn't load leads: ${error.message}`,
+      invalidFilters: false,
+    };
+  }
+  return {
+    message: "Couldn't load leads.",
+    invalidFilters: false,
+  };
+}
+
+function LeadQueueTableSkeleton() {
+  return (
+    <div className="surface lead-queue-skeleton mb-grid" aria-busy="true" role="status">
+      <div className="surface__hdr surface__hdr--split">
+        <div className="surface__hdr-main">
+          <Skeleton width={28} height={28} rounded="md" />
+          <div>
+            <div className="h-4">Loading ranked borrowers</div>
+            <div className="mt-2">
+              <span className="muted fs-12">Fetching the current queue with the selected filters.</span>
+            </div>
+          </div>
+        </div>
+        <Skeleton width={120} height={32} rounded="md" />
+      </div>
+      <div className="surface__body">
+        <div className="lead-queue-skeleton__table">
+          {Array.from({ length: 6 }).map((_, row) => (
+            <div key={row} className="lead-queue-skeleton__row">
+              {Array.from({ length: 9 }).map((__, col) => (
+                <Skeleton
+                  key={col}
+                  width={col === 0 ? 18 : col === 1 ? 120 : col === 8 ? 84 : '100%'}
+                  height={col === 0 ? 18 : 14}
+                  rounded={col === 0 ? 'sm' : 'pill'}
+                />
+              ))}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function LeadQueue() {
   const [searchParams, setSearchParams] = useSearchParams();
   const footprint = useFootprint();
@@ -405,11 +468,7 @@ export default function LeadQueue() {
     ],
   );
   const loading = leadsData === null && warmingUp === null && error === null;
-  const loadError = error
-    ? error instanceof Error
-      ? `Couldn't load leads: ${error.message}`
-      : "Couldn't load leads."
-    : null;
+  const loadError = error ? formatLeadQueueLoadError(error) : null;
 
   // Resolve `?county=FFFFF` → set of ZIPs via /api/geo/zip-rollups for an
   // honest scope chip only. The actual county predicate is now server-side
@@ -709,21 +768,30 @@ export default function LeadQueue() {
           role="alert"
           className="status-callout status-callout--danger"
         >
-          <span>{loadError}</span>
-          <button
-            type="button"
-            className="btn btn--ghost btn--sm"
-            onClick={manualRetry}
-            aria-label="Retry loading leads"
-          >
-            Retry
-          </button>
+          <span>{loadError.message}</span>
+          {loadError.invalidFilters ? (
+            <button
+              type="button"
+              className="btn btn--ghost btn--sm"
+              onClick={() => setSearchParams(new URLSearchParams())}
+              aria-label="Clear invalid lead queue filters"
+            >
+              Clear filters
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="btn btn--ghost btn--sm"
+              onClick={manualRetry}
+              aria-label="Retry loading leads"
+            >
+              Retry
+            </button>
+          )}
         </div>
       )}
       {loading && !loadError && !warmingUp && (
-        <div className="muted body mb-grid">
-          Loading leads…
-        </div>
+        <LeadQueueTableSkeleton />
       )}
       {countyLoading && !loading && !loadError && !warmingUp && (
         <div className="muted body mb-grid">
@@ -737,13 +805,15 @@ export default function LeadQueue() {
             : 'No leads match this filter.'}
         </div>
       )}
-      <LeadTable
-        leads={visibleLeads}
-        totalMatching={leadsData?.totalMatching ?? null}
-        truncatedAt={leadsData?.truncatedAt ?? null}
-        exportContext={exportContext}
-        salesTeam={salesTeam}
-      />
+      {!loading && (
+        <LeadTable
+          leads={visibleLeads}
+          totalMatching={leadsData?.totalMatching ?? null}
+          truncatedAt={leadsData?.truncatedAt ?? null}
+          exportContext={exportContext}
+          salesTeam={salesTeam}
+        />
+      )}
     </PageShell>
   );
 }

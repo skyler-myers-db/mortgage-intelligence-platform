@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, Navigate, useParams } from 'react-router-dom';
-import { api, isAbortError, isWarmingUpError, dependencyLabel } from '../lib/api';
+import { api, ApiError, isAbortError, isWarmingUpError, dependencyLabel } from '../lib/api';
 import type { WarmingUpState } from '../lib/useWarmingUpRetry';
 import type { Borrower360 as Borrower360Type, OfferRecommendation } from '../types';
 import { PageShell } from '../components/layout/PageShell';
@@ -100,6 +100,7 @@ export default function OfferOrchestrator() {
   const [b, setB] = useState<Borrower360Type | null>(null);
   const [rec, setRec] = useState<OfferRecommendation | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [loadErrorStatus, setLoadErrorStatus] = useState<number | null>(null);
   // Cold-start warming-up state for the borrower + recommend fetch pair.
   // Shape matches WarmingUpBlock's contract. Non-null means we're in a
   // 503 retry loop and the UI should show "Warehouse warming up
@@ -180,6 +181,7 @@ export default function OfferOrchestrator() {
       setB(cached.borrower);
       setRec(cached.recommendation);
       setLoadError(null);
+      setLoadErrorStatus(null);
       setWarmingUp(null);
       if (cachedDraftBody && cachedDraftBody.trim().length > 0) {
         setDraftBody(cachedDraftBody);
@@ -194,6 +196,7 @@ export default function OfferOrchestrator() {
       setB(null);
       setRec(null);
       setLoadError(null);
+      setLoadErrorStatus(null);
       setWarmingUp(null);
       setDraftBody('');
       setDraftLoaded(false);
@@ -211,6 +214,7 @@ export default function OfferOrchestrator() {
         setRec(recommendation);
         setWarmingUp(null);
         setLoadError(null);
+        setLoadErrorStatus(null);
         const prev = BORROWER_CACHE.get(id);
         BORROWER_CACHE.set(id, {
           borrower,
@@ -230,12 +234,14 @@ export default function OfferOrchestrator() {
             correlationId: err.correlationId,
           });
           setLoadError(null);
+          setLoadErrorStatus(null);
           timeoutId = setTimeout(() => {
             void runAttempt(attempt + 1);
           }, INTERVAL_MS);
           return;
         }
         setWarmingUp(null);
+        setLoadErrorStatus(err instanceof ApiError ? err.status : null);
         setLoadError(
           err instanceof Error
             ? `Couldn't load borrower or offer: ${err.message}`
@@ -502,23 +508,28 @@ export default function OfferOrchestrator() {
   }
 
   if (loadError) {
+    const notFound = loadErrorStatus === 404;
     return (
       <PageShell
         eyebrow="Offer & Outreach"
-        title={`Couldn't load ${id}`}
-        lede={loadError}
+        title={notFound ? `Borrower ${id} not found` : `Couldn't load ${id}`}
+        lede={notFound ? `Borrower ${id} was not found. Check the ID, use search, or return to the lead queue.` : loadError}
       >
         <div className="surface">
           <div className="surface__body surface__body--inline">
-            <Chip variant="danger" icon="cross">Backend unavailable</Chip>
-            <button
-              type="button"
-              className="btn"
-              onClick={() => setReloadToken((n) => n + 1)}
-              aria-label="Retry loading borrower and offer"
-            >
-              Retry
-            </button>
+            <Chip variant={notFound ? 'warning' : 'danger'} icon={notFound ? 'search' : 'cross'}>
+              {notFound ? 'Not found' : 'Backend unavailable'}
+            </Chip>
+            {!notFound && (
+              <button
+                type="button"
+                className="btn"
+                onClick={() => setReloadToken((n) => n + 1)}
+                aria-label="Retry loading borrower and offer"
+              >
+                Retry
+              </button>
+            )}
             <Link className="btn" to="/lead-queue">
               Back to lead queue
             </Link>
