@@ -276,6 +276,28 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_action_audit_genie_request_actor_event_v2
     ON mip_app.action_audit (actor_email, request_id, event_type)
     WHERE request_id IS NOT NULL AND left(event_type, 13) = 'GENIE_ACTION_';
 
+-- Append-only enforcement must not rely solely on GRANT shape. The
+-- Databricks Apps / migration identity can own or receive broader table
+-- privileges on bundle-provisioned Lakebase, so a statement-level trigger
+-- blocks UPDATE/DELETE even when Postgres would otherwise authorize them.
+-- Statement-level is intentional: UPDATE ... WHERE false and DELETE ...
+-- WHERE false still prove mutation privilege and must be rejected.
+CREATE OR REPLACE FUNCTION mip_app.prevent_action_audit_mutation()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    RAISE EXCEPTION 'mip_app.action_audit is append-only; % is not allowed', TG_OP
+        USING ERRCODE = '42501';
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_action_audit_append_only ON mip_app.action_audit;
+CREATE TRIGGER trg_action_audit_append_only
+    BEFORE UPDATE OR DELETE ON mip_app.action_audit
+    FOR EACH STATEMENT
+    EXECUTE FUNCTION mip_app.prevent_action_audit_mutation();
+
 -- Genie sessions ------------------------------------------------------
 -- Durable state for Databricks Genie conversations. These tables store
 -- conversation/message identifiers and proof metadata only; they do NOT

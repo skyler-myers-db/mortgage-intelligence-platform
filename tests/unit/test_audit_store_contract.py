@@ -19,6 +19,7 @@ from __future__ import annotations
 import logging
 import re
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 from uuid import uuid4
@@ -102,6 +103,19 @@ def test_write_issues_insert_with_named_params() -> None:
     assert event.actor == "skyler@entrada.ai"
     assert event.event_type == "VIEW_BORROWER"
     assert re.fullmatch(r"clip_ref_[0-9a-f]{12}", event.subject_clip or "")
+
+
+def test_action_audit_schema_has_statement_level_append_only_trigger() -> None:
+    """The ledger must reject UPDATE/DELETE even if the runtime role owns the table."""
+
+    schema_sql = Path("lakebase/schema.sql").read_text(encoding="utf-8")
+
+    assert "CREATE OR REPLACE FUNCTION mip_app.prevent_action_audit_mutation()" in schema_sql
+    assert "RAISE EXCEPTION 'mip_app.action_audit is append-only" in schema_sql
+    assert "USING ERRCODE = '42501'" in schema_sql
+    assert "CREATE TRIGGER trg_action_audit_append_only" in schema_sql
+    assert "BEFORE UPDATE OR DELETE ON mip_app.action_audit" in schema_sql
+    assert "FOR EACH STATEMENT" in schema_sql
 
 
 def test_list_issues_select_ordered_desc_with_limit() -> None:

@@ -519,6 +519,20 @@ def test_campaign_status_accepts_reviewed_eligible_only_policy_shapes(
     )
 
     assert summary.status == "pending_review"
+    patch_calls = [
+        call for call in lakebase.calls
+        if "UPDATE mip_app.campaigns" in str(call["sql"])
+    ]
+    assert len(patch_calls) == 1
+    patch_call = patch_calls[0]
+    assert "INSERT INTO mip_app.action_audit" in str(patch_call["sql"])
+    assert patch_call["params"]["actor"] == "skyler@entrada.ai"
+    metadata = json.loads(str(patch_call["params"]["metadata"]))
+    assert metadata == {
+        "action": "campaign.status_update",
+        "rationale": None,
+        "status": "pending_review",
+    }
 
 
 def test_empty_filtered_cohort_keeps_avg_score_null_not_zero():

@@ -7,6 +7,7 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from backend.schemas.common import validate_public_borrower_id
+from backend.schemas.portfolio import PortfolioCriteria
 from backend.schemas.sales import (
     AssignLeadRequest,
     AssignmentResponse,
@@ -25,8 +26,12 @@ from backend.services.audit_store import resolve_actor
 from backend.services.error_sanitizer import safe_dependency_detail
 from backend.services.lakebase import LakebaseError
 from backend.services.lakebase_bootstrap import ensure_sales_workflow_request_id_columns
-from backend.schemas.portfolio import PortfolioCriteria
-from backend.services.repositories import BorrowerRepository, LeadRepository, get_borrower_repository, get_lead_repository
+from backend.services.repositories import (
+    BorrowerRepository,
+    LeadRepository,
+    get_borrower_repository,
+    get_lead_repository,
+)
 from backend.services.sales_state import SalesStateStore, get_sales_state_store
 
 router = APIRouter(prefix="/api", tags=["sales"])

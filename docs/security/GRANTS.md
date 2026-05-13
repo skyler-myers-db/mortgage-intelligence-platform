@@ -135,7 +135,10 @@ using workspace-identity short-lived credentials. If you are coming from
 a customer whose Lakebase is external (not the bundle-provisioned
 instance), grant the SP only the table permissions its runtime paths
 need. The audit ledger is append-only: `mip-app` gets `SELECT, INSERT`
-there and must not receive `UPDATE` or `DELETE`.
+there and must not receive `UPDATE` or `DELETE`. `lakebase/schema.sql`
+also installs `trg_action_audit_append_only`, a statement-level trigger
+that rejects `UPDATE` / `DELETE` even if a bundle-provisioned identity owns
+the table or receives broader grants.
 
 ```sql
 -- Only for externally-managed Lakebase. The bundle-provisioned

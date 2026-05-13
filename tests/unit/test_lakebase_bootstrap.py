@@ -25,6 +25,7 @@ from backend.services.lakebase_bootstrap import (
     _bootstrap_state_for_tests,
     _reset_bootstrap_for_tests,
     ensure_approval_idempotency_column,
+    ensure_sales_workflow_request_id_columns,
 )
 
 
@@ -207,3 +208,66 @@ def test_bootstrap_releases_advisory_lock_on_ddl_failure() -> None:
     assert len(client.calls) == 3
     assert "pg_advisory_lock" in client.calls[0]
     assert "pg_advisory_unlock" in client.calls[-1]
+
+
+# ---------------------------------------------------------------------------
+# Sales workflow request-id bootstrap
+# ---------------------------------------------------------------------------
+
+
+def test_sales_workflow_bootstrap_runs_expected_ddl_under_lock() -> None:
+    """Sales assignment/disposition idempotency DDL must be applied atomically.
+
+    This pins the exact migration shape used by the runtime bootstrap: the old
+    assignment request-id-only index is dropped, assignments receive the
+    borrower-aware request-id index, and dispositions receive their own
+    request-id uniqueness guard.
+    """
+
+    client = _FakeClient()
+
+    ensure_sales_workflow_request_id_columns(client)  # type: ignore[arg-type]
+
+    assert _bootstrap_state_for_tests()["sales_workflow_request_id_bootstrapped"] is True
+    assert len(client.calls) == len(lakebase_bootstrap._SALES_WORKFLOW_REQUEST_ID_DDL) + 2
+    assert "pg_advisory_lock" in client.calls[0]
+    assert "pg_advisory_unlock" in client.calls[-1]
+    assert client.calls[1:-1] == list(lakebase_bootstrap._SALES_WORKFLOW_REQUEST_ID_DDL)
+    ddl_blob = "\n".join(client.calls[1:-1])
+    assert "ALTER TABLE mip_app.lead_assignments ADD COLUMN IF NOT EXISTS request_id TEXT" in ddl_blob
+    assert "DROP INDEX IF EXISTS mip_app.idx_lead_assignments_request_id" in ddl_blob
+    assert "idx_lead_assignments_request_borrower" in ddl_blob
+    assert "ON mip_app.lead_assignments (request_id, borrower_id)" in ddl_blob
+    assert "ALTER TABLE mip_app.call_dispositions ADD COLUMN IF NOT EXISTS request_id TEXT" in ddl_blob
+    assert "idx_call_dispositions_request_id" in ddl_blob
+
+
+def test_sales_workflow_bootstrap_retries_after_lakebase_error() -> None:
+    """A Sales DDL failure must not latch success; the next request retries."""
+
+    failing = _FakeClient(raise_on_call=[False, False, True])
+
+    ensure_sales_workflow_request_id_columns(failing)  # type: ignore[arg-type]
+
+    assert _bootstrap_state_for_tests()["sales_workflow_request_id_bootstrapped"] is False
+    assert "pg_advisory_unlock" in failing.calls[-1]
+
+    clean = _FakeClient()
+    ensure_sales_workflow_request_id_columns(clean)  # type: ignore[arg-type]
+
+    assert _bootstrap_state_for_tests()["sales_workflow_request_id_bootstrapped"] is True
+    assert len(clean.calls) == len(lakebase_bootstrap._SALES_WORKFLOW_REQUEST_ID_DDL) + 2
+
+
+def test_sales_workflow_bootstrap_second_call_after_success_is_noop() -> None:
+    """Successful Sales bootstrap should not re-run DDL on later requests."""
+
+    first = _FakeClient()
+    ensure_sales_workflow_request_id_columns(first)  # type: ignore[arg-type]
+    assert _bootstrap_state_for_tests()["sales_workflow_request_id_bootstrapped"] is True
+
+    second = _FakeClient()
+    ensure_sales_workflow_request_id_columns(second)  # type: ignore[arg-type]
+
+    assert _bootstrap_state_for_tests()["sales_workflow_request_id_bootstrapped"] is True
+    assert second.calls == []

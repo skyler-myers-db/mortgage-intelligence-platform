@@ -9,11 +9,25 @@
 
 ---
 
+## Engineering re-validation addendum — 2026-05-13
+
+Independent re-validation found one true defect in the original audit wording: `REVOKE UPDATE, DELETE ON mip_app.action_audit FROM PUBLIC` was not enough to prove immutability for the actual Lakebase role. A live no-op privilege probe (`UPDATE ... WHERE false`, `DELETE ... WHERE false`) was accepted before remediation, which meant a future code path with direct SQL execution could have mutated the ledger if it existed.
+
+Remediation: `lakebase/schema.sql` now installs `mip_app.prevent_action_audit_mutation()` plus `trg_action_audit_append_only`, a statement-level trigger that rejects every `UPDATE` and `DELETE` on `mip_app.action_audit` with SQLSTATE `42501`. Statement-level enforcement is intentional so even no-op mutation probes fail.
+
+Additional hardening from the subagent review: campaign status transitions now update `mip_app.campaigns` and insert the `CAMPAIGN_STATUS_UPDATE` audit row in one CTE statement. Previously the campaign row updated first and the audit insert ran in a second Lakebase call, which could have left a status change without its trace row if the second call failed.
+
+Post-remediation live validation: both no-op `UPDATE` and `DELETE` now fail with `mip_app.action_audit is append-only`; `INSERT ... RETURNING audit_id` still succeeds on the live Lakebase ledger. Backend grep still shows no production `UPDATE` / `DELETE` paths against `action_audit`.
+
+The original LOW findings remain tracked as production-onboarding decisions: verbatim approved body storage is intentional for synthetic Module 0 evidence, and the warehouse audit mirror remains a longer-horizon analytics enhancement rather than a Module 0 runtime blocker.
+
+---
+
 ## Headline result
 
-**The compliance posture is strong.** The ledger is append-only **at the database level** (`REVOKE UPDATE, DELETE ON mip_app.action_audit FROM PUBLIC`), grep confirms zero UPDATE/DELETE paths against `action_audit` in app code (only INSERTs), every state-changing endpoint writes an audit row with the edge-injected actor (verified non-spoofable in the security audit), and the disclosure resolution path fail-closes when any of NMLS / Equal Housing / opt-out / SMS-STOP / no-placeholder validations fail — meaning the system **cannot send outreach without a fully-compliant disclosure block**. The disclosure version active at time of contact is pinned into every APPROVE row's payload, so a future disclosure rotation doesn't destroy the contact-time record. Genie refusals on protected-class prompts are themselves audited as `genie.refused_prompt` events with question hash + conversation_id + actor — providing fair-lending evidence that the model attempted to enforce ECOA without storing the verbatim prompt.
+**The compliance posture is strong.** The ledger is append-only **at the database level** through a statement-level `UPDATE` / `DELETE` rejection trigger plus `REVOKE UPDATE, DELETE ON mip_app.action_audit FROM PUBLIC`, grep confirms zero UPDATE/DELETE paths against `action_audit` in app code (only INSERTs), every state-changing endpoint writes an audit row with the edge-injected actor (verified non-spoofable in the security audit), and the disclosure resolution path fail-closes when any of NMLS / Equal Housing / opt-out / SMS-STOP / no-placeholder validations fail — meaning the system **cannot draft or approve outreach content without a fully-compliant disclosure block**. Module 0 still does not send external outreach. The disclosure version active at time of contact is pinned into every APPROVE row's payload, so a future disclosure rotation doesn't destroy the contact-time record. Genie refusals on protected-class prompts are themselves audited as `genie.refused_prompt` events with question hash + conversation_id + actor — providing fair-lending evidence that the model attempted to enforce ECOA without storing the verbatim prompt.
 
-**Zero P0 / P1 / MEDIUM findings. Two LOW findings, both about audit-evidence ergonomics rather than defects:**
+**Two engineering findings were found and remediated during engineering re-validation: action-audit mutation privilege and non-atomic campaign-status audit. Two LOW findings remain, both about audit-evidence ergonomics rather than Module 0 runtime defects:**
 1. The `payload_json` on APPROVE rows includes the full `draft_body` verbatim. The body contains the synthesized location (e.g., "DALLAS, TX") + the offer + the disclosure text. For synthetic borrower data this is fine and arguably *required* (you want the audit trail to capture exactly what *would have been* sent). For a production deploy with real PII, the body would warrant review — but the marketing-eligibility / consent / disclosure gates would catch most real-name issues upstream.
 2. `mip.gold.audit_events_mirror` doesn't appear in the warehouse — only the Lakebase Postgres copy is visible. The audit ledger IS reachable via `/api/audit/events` + `/api/audit/rollups`, and Lakebase backups give recovery, but a warehouse mirror would simplify long-horizon (24+ month) regulatory exports via the warehouse's existing partition + ACL story. Worth confirming whether the mirror is intentionally absent or just not yet built.
 
@@ -42,8 +56,23 @@ The columns map cleanly to ECOA's "credit-related actions" recordkeeping require
 
 ### 2. Immutability is **enforced at the database**
 
-`lakebase/schema.sql:352-356`:
+`lakebase/schema.sql` installs both privilege revocation and a statement-level mutation blocker:
 ```sql
+CREATE OR REPLACE FUNCTION mip_app.prevent_action_audit_mutation()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    RAISE EXCEPTION 'mip_app.action_audit is append-only; % is not allowed', TG_OP
+        USING ERRCODE = '42501';
+END;
+$$;
+
+CREATE TRIGGER trg_action_audit_append_only
+    BEFORE UPDATE OR DELETE ON mip_app.action_audit
+    FOR EACH STATEMENT
+    EXECUTE FUNCTION mip_app.prevent_action_audit_mutation();
+
 DO $$
 BEGIN
     REVOKE UPDATE, DELETE ON mip_app.action_audit FROM PUBLIC;
@@ -51,11 +80,11 @@ EXCEPTION WHEN OTHERS THEN NULL;
 END $$;
 ```
 
-The app's connection role inherits from PUBLIC; revoking UPDATE/DELETE on `action_audit` means the app **literally cannot mutate or delete an audit row** even if a future code-path tried to. The exception handler accommodates a fresh Lakebase instance where PUBLIC may not yet exist as a defined role.
+The trigger is the hard enforcement layer. It blocks `UPDATE` and `DELETE` even when the app / migration identity owns the table or has broader grants, and it fires for statement-level no-op probes (`WHERE false`) too. The `REVOKE` remains a defense-in-depth privilege constraint for externally-managed Lakebase instances.
 
 Code-side double-defense: `grep -r "UPDATE.*action_audit\|DELETE.*action_audit"` across `backend/` returns **zero matches**. The only audit-table operations in the codebase are INSERTs (10 distinct INSERT call sites across `audit_store.py`, `workspace_store.py`, `sales_state.py`, `databricks_repo.py`, `genie.py`).
 
-**Verdict:** ✅ Double-defense append-only ledger. DB-enforced, code-confirmed.
+**Verdict:** ✅ Double-defense append-only ledger. Trigger-enforced, privilege-hardened, code-confirmed.
 
 ### 3. Live walk of state-changing actions
 
@@ -188,9 +217,9 @@ This is exactly what an ECOA fair-lending auditor wants: **provable record that 
 - ✅ Body contains opt-out language (`"opt out"`, `"unsubscribe"`, or `"stop"`) — CAN-SPAM
 - ✅ For SMS channel: body MUST contain `"STOP"` — TCPA
 
-The lookup query (`_DISCLOSURE_SELECT_SQL`) prefers a state-specific match over the `_ALL` fallback, ordered by most recently updated. If no active row matches, the function raises and the outreach draft / approve flow fails before any record is sent.
+The lookup query (`_DISCLOSURE_SELECT_SQL`) prefers a state-specific match over the `_ALL` fallback, ordered by most recently updated. If no active row matches, the function raises and the outreach draft / approve flow fails before any outreach content is approved.
 
-**The system cannot send outreach without a fully-compliant disclosure block.** And the version that was active is pinned into the audit row, so a future rotation doesn't destroy the contact-time evidence.
+**The system cannot draft or approve outreach content without a fully-compliant disclosure block.** Module 0 has no external send path. The version that was active is pinned into the audit row, so a future rotation doesn't destroy the contact-time evidence for approved copy.
 
 ### 5. /api/audit/events: chronological evidence trail
 
@@ -230,7 +259,7 @@ For ECOA / RESPA recordkeeping: **the count of audit rows equals the count of di
 
 Grep `UPDATE.*action_audit|DELETE.*action_audit` across `backend/`: **0 matches**.
 
-Combined with the DB REVOKE, this gives belt-and-suspenders append-only. A regulator's expected answer to "can audit rows be modified or deleted?" is "no, and here is the GRANT / REVOKE proof plus the absence of UPDATE/DELETE SQL in the codebase."
+Combined with the DB trigger and REVOKE, this gives belt-and-suspenders append-only. A regulator's expected answer to "can audit rows be modified or deleted?" is "no, and here is the trigger / GRANT / REVOKE proof plus the absence of UPDATE/DELETE SQL in the codebase."
 
 ---
 
@@ -290,7 +319,7 @@ The audit ledger lives in Lakebase Postgres at `mip_app.action_audit`. The app r
 
 ## What works well
 
-- **DB-enforced append-only ledger**: `REVOKE UPDATE, DELETE ON mip_app.action_audit FROM PUBLIC` — regulator-friendly proof that audit rows are immutable.
+- **DB-enforced append-only ledger**: `trg_action_audit_append_only` rejects `UPDATE` / `DELETE`; `REVOKE UPDATE, DELETE ON mip_app.action_audit FROM PUBLIC` remains defense-in-depth — regulator-friendly proof that audit rows are immutable.
 - **Code-side append-only**: zero UPDATE/DELETE SQL against `action_audit` across the entire backend.
 - **Edge-bound actor**: every audit row's `actor_email` is the Databricks Apps platform-injected `X-Forwarded-Email`. Verified non-spoofable in the security audit; verified consistent in this audit (all 30 most-recent events show `skyler@entrada.ai`).
 - **HMAC-masked subject_clip**: every row references the borrower via `clip_ref_<12hex>`, never the raw Cotality CLIP. Combined with synthetic `B-XXX` borrower IDs in development, no PII reaches the ledger.
@@ -311,9 +340,11 @@ The audit ledger lives in Lakebase Postgres at `mip_app.action_audit`. The app r
 
 | Probe | Expected | Actual | Verdict |
 |---|---|---|---|
-| `action_audit` REVOKE UPDATE/DELETE | DB-level | `lakebase/schema.sql:352-356` REVOKEs on PUBLIC | ✅ |
+| `action_audit` UPDATE/DELETE trigger | DB-level | live no-op UPDATE/DELETE rejected with append-only exception | ✅ |
+| `action_audit` REVOKE UPDATE/DELETE | privilege defense-in-depth | `lakebase/schema.sql` REVOKEs on PUBLIC | ✅ |
 | UPDATE/DELETE against action_audit in code | 0 matches | 0 matches | ✅ |
 | INSERT against action_audit in code | many (one per state-changing action) | 10 INSERT call sites | ✅ |
+| Campaign status transition audit | campaign update and audit insert atomic | one CTE updates `mip_app.campaigns` and inserts `CAMPAIGN_STATUS_UPDATE` | ✅ |
 | `subject_clip` is masked | starts with `clip_ref_` or `clip_demo_` | 30/30 most-recent rows | ✅ |
 | `actor_email` is edge identity | matches X-Forwarded-Email | 30/30 rows = `skyler@entrada.ai` | ✅ |
 | `event_at` is immutable server timestamp | TIMESTAMPTZ DEFAULT now() | confirmed in DDL | ✅ |
@@ -338,7 +369,7 @@ The audit ledger lives in Lakebase Postgres at `mip_app.action_audit`. The app r
 | Body verbatim in APPROVE row | present | present | 🟡 LOW-1 (intentional, flag for production review) |
 | `mip.gold.audit_events_mirror` warehouse-side copy | exists | not found | 🟡 LOW-2 (Lakebase is sufficient; warehouse mirror would help long-horizon analytics) |
 
-**25 of 25 probes pass or surface a flagged LOW. No P0 / P1 / MEDIUM findings.**
+**27 of 27 probes pass, correspond to the remediated append-only/atomicity defects, or surface a flagged LOW. No open P0 / P1 / MEDIUM findings.**
 
 ---
 
@@ -360,9 +391,9 @@ The audit ledger lives in Lakebase Postgres at `mip_app.action_audit`. The app r
 
 ## Summary verdict
 
-- **25 probes executed across 8 compliance categories.**
-- **0 P0, 0 P1, 0 MEDIUM, 2 LOW findings.**
-- **Append-only ledger enforced at both DB (REVOKE) and code (no UPDATE/DELETE) layers.**
+- **27 probes executed across 8 compliance categories.**
+- **0 P0, 0 P1, 2 engineering findings remediated, 2 LOW findings.**
+- **Append-only ledger enforced at both DB (statement-level trigger + REVOKE) and code (no UPDATE/DELETE) layers.**
 - **Every state-changing action writes an actor-bound, disclosure-version-pinned, HMAC-masked audit row.**
 - **Genie refusals on protected-class prompts are audited with privacy-preserving question hashes.**
 - **Disclosure resolver fail-closes on missing NMLS / Equal Housing / opt-out / SMS-STOP language.**
@@ -389,3 +420,59 @@ The system would survive a fair-lending exam with the evidence it currently reco
 - `/api/audit/events` and `/api/audit/rollups` (45-route OpenAPI surface)
 - Live probes: `/tmp/comp_outreach.sh`, `/tmp/comp_audit_shape.sh`, `/tmp/comp_fairlending.sh`, `/tmp/comp_sales.sh`, `/tmp/comp_sales2.sh`
 - Deployment: `01f14e7aedef1c1c97ad86726790cc82` (RUNNING / ACTIVE)
+
+---
+
+## Independent re-validation — 2026-05-13 (post-trigger remediation)
+
+After engineering pushed the statement-level mutation trigger + atomic campaign-status CTE + regression tests, re-ran the full compliance probe against the new deployment.
+
+**Active deployment:** `01f14eda34d0190683452aad6555402a` (live Lakebase migration applied, statement-level append-only trigger active).
+
+### Engineering finding — original audit was over-confident
+
+The independent review correctly identified that **`REVOKE UPDATE, DELETE ON mip_app.action_audit FROM PUBLIC` alone is not sufficient** for immutability. The Databricks Apps / migration identity can hold owner or broad-grant privileges on bundle-provisioned Lakebase that bypass PUBLIC revokes entirely. My original audit gave this an unqualified ✅ when the proof was weaker than I claimed.
+
+This is a real audit-discipline finding I missed: never accept "REVOKE X FROM PUBLIC" as proof that role X cannot perform that operation, without also verifying what direct grants role X holds.
+
+### Source-of-truth checks for the remediations
+
+- ✅ `lakebase/schema.sql:285-299` — `CREATE OR REPLACE FUNCTION mip_app.prevent_action_audit_mutation()` plus `CREATE TRIGGER trg_action_audit_append_only BEFORE UPDATE OR DELETE ON mip_app.action_audit FOR EACH STATEMENT`. The exception uses SQLSTATE `42501` (insufficient privilege) and the message is `"mip_app.action_audit is append-only; <TG_OP> is not allowed"`. The trigger fires `BEFORE UPDATE OR DELETE` at statement level — intentional so that no-op probes (`UPDATE ... WHERE false`, `DELETE ... WHERE false`) still fail. The `DROP TRIGGER IF EXISTS` first line keeps the migration idempotent.
+- ✅ `backend/services/repositories/databricks_repo.py:601-627` — `_CAMPAIGN_PATCH_SQL` is now a single CTE: `WITH updated_campaign AS (UPDATE ... RETURNING ...), inserted_audit AS (INSERT INTO mip_app.action_audit ... SELECT ... FROM updated_campaign RETURNING audit_id) SELECT updated_campaign.*, inserted_audit.audit_id`. The INSERT's `FROM updated_campaign` makes it conditional on the UPDATE — if the campaign_id doesn't exist, the UPDATE returns 0 rows and the audit insert writes 0 rows. Atomic by construction. The CTE runs as a single Postgres statement, so either both succeed or both fail.
+- ✅ `tests/unit/test_audit_store_contract.py:111-118` — regression test asserts the schema contains exactly the trigger function, the exception message string, the SQLSTATE `42501`, the trigger definition, the `BEFORE UPDATE OR DELETE` event spec, and `FOR EACH STATEMENT`. A future edit that loosens the trigger would fail this test.
+- ✅ `tests/unit/test_portfolio_repo_timezone.py:522-528` — regression test asserts exactly ONE Lakebase call contains `UPDATE mip_app.campaigns` AND that the same call contains `INSERT INTO mip_app.action_audit`. A future refactor that splits them back into two calls would fail this test.
+
+### Re-validation table
+
+| Claim | Probe | Expected | Actual | Verdict |
+|---|---|---|---|---|
+| Trigger function defined | grep `prevent_action_audit_mutation` in `lakebase/schema.sql` | present | `lakebase/schema.sql:285-293` | ✅ |
+| Trigger creation | grep `trg_action_audit_append_only` | present, BEFORE UPDATE OR DELETE, FOR EACH STATEMENT | `lakebase/schema.sql:295-299` | ✅ |
+| Live no-op UPDATE rejected | engineering report | SQLSTATE 42501 | confirmed by engineering live-validation | ✅ |
+| Live no-op DELETE rejected | engineering report | SQLSTATE 42501 | confirmed by engineering live-validation | ✅ |
+| Live INSERT still succeeds | run draft + approve flow | row written, audit_event_id returned | confirmed (audit_event_id `24a85031-0e2f-4ba8-8d87-3c69664b03b6`) | ✅ |
+| Campaign status atomic CTE | grep `_CAMPAIGN_PATCH_SQL` in `databricks_repo.py` | single CTE with UPDATE + INSERT | `databricks_repo.py:601-627` confirmed | ✅ |
+| Regression test pins trigger | grep `test_audit_store_contract.py` | asserts 6 trigger SQL fragments | confirmed at line 113-118 | ✅ |
+| Regression test pins atomicity | grep `test_portfolio_repo_timezone.py` | asserts 1 SQL call contains both UPDATE + INSERT | confirmed at line 522-528 | ✅ |
+| /api/health on new deployment | all deps up, all breakers closed | unchanged | confirmed | ✅ |
+| Draft outreach writes DRAFT_OUTREACH row | disclosure_version + consent_status + marketing_eligible in payload | all present | exact match (`summit-demo-2026-05-v1` / opt_in / true) | ✅ |
+| Approve writes APPROVE row | actor + subject_clip + disclosure_version + body | all present | exact match | ✅ |
+| Subject clip masked on new approval | `clip_ref_*` prefix | masked | `clip_ref_a8fd22896b92` | ✅ |
+| Genie refusal still audited | `genie.refused_prompt` row with question_hash | present | event_id `da36e6b1`, question_hash `76ddc05c19b382b5` | ✅ |
+| Genie refusal does NOT store verbatim prompt | "race" / "ethnicity" absent from metadata | absent | confirmed (`verbatim prompt text present: False`) | ✅ |
+| PII redaction on 30 most recent rows | 0 forbidden findings | 0 | 0 across 30 rows | ✅ |
+| Audit rollups still aggregate | event_type counts incremented | APPROVE=293 (was 291, +2 from my probes), OUTREACH_REJECT=67, LEAD_ASSIGN=6, CALL_DISPOSITION=4, LEAD_DISTRIBUTE=2 | exact | ✅ |
+| Backend grep — UPDATE/DELETE against action_audit | 0 matches | 0 | confirmed | ✅ |
+| Backend grep — INSERT against action_audit | 10 INSERT sites | 10 | confirmed | ✅ |
+
+**18 of 18 re-validation checks pass. The two engineering defects are closed. The two LOW production-onboarding flags remain documented and unblocking.**
+
+### Sign-off
+
+- **Engineering defect 1 (mutation privilege) — closed.** Statement-level trigger `trg_action_audit_append_only` rejects every UPDATE and DELETE on `mip_app.action_audit` with SQLSTATE `42501`. Two layers now: (1) statement-level trigger blocks the SQL even when the role has privileges; (2) `REVOKE UPDATE, DELETE FROM PUBLIC` covers the privilege-inheritance path. Defense-in-depth. INSERTs verified still working.
+- **Engineering defect 2 (non-atomic campaign-status audit) — closed.** `_CAMPAIGN_PATCH_SQL` is a single CTE that updates the campaign row and inserts the `CAMPAIGN_STATUS_UPDATE` audit row in one Postgres statement. Either both succeed or both fail; no orphan campaign-status change can exist without its audit row.
+- **Audit wording correction acknowledged.** The original audit overclaimed "send" — Module 0 drafts and approves outreach copy but does not externally send. The headline and disclosure section have been tightened. This is a writing fix, not a behavior change.
+- **LOW-1 and LOW-2 remain documented production-onboarding flags.** Verbatim `draft_body` storage in APPROVE rows is intentional for synthetic Module 0 evidence. The warehouse-side `mip.gold.audit_events_mirror` remains a longer-horizon analytics enhancement, not a Module 0 runtime blocker.
+- **Auditor self-correction noted.** My original "REVOKE FROM PUBLIC is enough" claim was insufficient evidence for the immutability assertion. The actual proof requires either (a) verification that the role lacks direct grants, or (b) a row/statement-level trigger that fires regardless of privilege. Engineering installed (b); going forward, the trigger is the load-bearing control.
+
+The compliance + governance posture is **production-ready and audit-clean** on deployment `01f14eda34d0190683452aad6555402a`. The trigger-enforced append-only ledger + atomic campaign-status CTE close the two real engineering defects. The two LOW items are production-onboarding decisions that do not affect Module 0 sign-off.

@@ -33,6 +33,7 @@ from fastapi import Request
 from backend.config.settings import settings
 from backend.schemas.audit import AuditEvent
 from backend.schemas.common import (
+    validate_internal_staff_email,
     validate_public_audit_action,
     validate_public_audit_entity_type,
     validate_public_audit_event_type,
@@ -40,7 +41,6 @@ from backend.schemas.common import (
     validate_public_audit_subject_segment,
     validate_public_borrower_id,
     validate_public_campaign_label,
-    validate_internal_staff_email,
     validate_public_opaque_id,
 )
 from backend.services.lakebase import LakebaseClient, get_lakebase_client

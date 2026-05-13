@@ -599,12 +599,31 @@ class DatabricksPortfolioRepository:
     """
 
     _CAMPAIGN_PATCH_SQL = """
-    UPDATE mip_app.campaigns
-    SET status = %(status)s, updated_at = now()
-    WHERE campaign_id = %(campaign_id)s::uuid
-    RETURNING campaign_id::text, name, owner_email, status, criteria,
-              suppression_policy, message_variants, channel_cascade, send_window,
-              holdout, roi_assumptions, created_at, updated_at
+    WITH updated_campaign AS (
+      UPDATE mip_app.campaigns
+      SET status = %(status)s, updated_at = now()
+      WHERE campaign_id = %(campaign_id)s::uuid
+      RETURNING campaign_id::text, name, owner_email, status, criteria,
+                suppression_policy, message_variants, channel_cascade, send_window,
+                holdout, roi_assumptions, created_at, updated_at
+    ),
+    inserted_audit AS (
+      INSERT INTO mip_app.action_audit (
+        event_type, actor_email, entity_type, entity_id, evidence_ids, metadata
+      )
+      SELECT
+        'CAMPAIGN_STATUS_UPDATE',
+        %(actor)s,
+        'campaign',
+        updated_campaign.campaign_id,
+        ARRAY[]::TEXT[],
+        %(metadata)s::jsonb
+      FROM updated_campaign
+      RETURNING audit_id
+    )
+    SELECT updated_campaign.*, inserted_audit.audit_id
+    FROM updated_campaign
+    LEFT JOIN inserted_audit ON TRUE
     """
 
     @staticmethod
@@ -1016,29 +1035,23 @@ class DatabricksPortfolioRepository:
                 )
         row = get_lakebase_client().fetchone(
             self._CAMPAIGN_PATCH_SQL,
-            {"campaign_id": portfolio_id, "status": payload.status},
-        )
-        if row is None:
-            raise LakebaseError("campaign status update returned no row")
-        campaign = self._campaign_from_row(row)
-        get_lakebase_client().execute(
-            """
-            INSERT INTO mip_app.action_audit (
-              event_type, actor_email, entity_type, entity_id, evidence_ids, metadata
-            ) VALUES (
-              'CAMPAIGN_STATUS_UPDATE', %(actor)s, 'campaign', %(campaign_id)s,
-              ARRAY[]::TEXT[], %(metadata)s::jsonb
-            )
-            """,
             {
-                "actor": actor or "unknown",
                 "campaign_id": portfolio_id,
+                "status": payload.status,
+                "actor": actor or "unknown",
                 "metadata": json.dumps(
-                    {"status": payload.status, "rationale": payload.rationale},
+                    {
+                        "action": "campaign.status_update",
+                        "status": payload.status,
+                        "rationale": payload.rationale,
+                    },
                     sort_keys=True,
                 ),
             },
         )
+        if row is None:
+            raise LakebaseError("campaign status update returned no row")
+        campaign = self._campaign_from_row(row)
         return campaign
 
 
