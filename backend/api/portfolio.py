@@ -74,6 +74,13 @@ def list_portfolios(
     status: str | None = None,
     limit: int = 50,
 ) -> CampaignListResponse:
+    """Return fresh Lakebase campaign rows for the current actor.
+
+    This route is intentionally not the hot KPI/cache path. The
+    cacheable aggregate is ``POST /api/portfolio/preview``; the list
+    view is mutation-adjacent campaign state and should reflect recent
+    creates/status changes immediately.
+    """
     try:
         actor = resolve_actor(request)
         is_admin = _is_admin(request)

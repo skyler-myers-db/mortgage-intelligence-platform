@@ -9,6 +9,23 @@
 
 ---
 
+## Engineering re-validation addendum — 2026-05-13
+
+**Current deployment validated:** `01f14e7aedef1c1c97ad86726790cc82` (`RUNNING / ACTIVE`, update_time `2026-05-13T03:26:39Z`).
+
+The two LOW findings were independently checked against source and live endpoints:
+
+- **LOW 1 revised:** the flat `/api/portfolio` timing is expected. `GET /api/portfolio` is the fresh Lakebase campaign-list endpoint and is intentionally uncached so recent campaign creates/status transitions are visible immediately. The cacheable KPI path is `POST /api/portfolio/preview`, and live timing showed a clear cache hit pattern: `2.38s -> 0.43s -> 0.44s -> 0.61s -> 0.44s`. A route docstring and unit test now guard this distinction so future audits benchmark the correct endpoint.
+- **LOW 2 accepted as SLI:** Borrower 360 warm latency remains a thermometer, not a defect. The endpoint is intentionally uncached because the dossier includes lifecycle/assignment/disposition state that must not lag after Vera/Sam actions. Keep the existing skeleton and WarmingUpBlock UX, and track the latency floor before adding wider joins.
+
+Additional validation run in this pass:
+
+- `/api/health`: `status=ok`, all dependencies `up`, all breakers `closed`, `breaker_state_changes_last_hour=0`, `recent_errors_count=0`, fallback identity total `0`.
+- Live benchmark: `POST /api/portfolio/preview` cached as expected; `GET /api/portfolio` stayed flat by design.
+- Source contract: `DatabricksPortfolioRepository.preview()` uses `TTLCache` with `mip_portfolio_preview_ttl_s`; `list_campaigns()` reads Lakebase directly.
+
+---
+
 ## Headline result
 
 **The resilience layer holds up under every condition tested.** Warm-start hooks fire at lifespan startup (warehouse + Lakebase + Genie); `/api/health` reports all three dependencies up with closed breakers and zero breaker state changes in the last hour; KPI rollup endpoints show a clear 2-2.3x cache speedup on repeat reads; per-borrower endpoints correctly do NOT cache (each ID is unique); the 503 contract returns `{detail, retryable, dependency, reason, correlation_id}` with PII-safe constant detail strings; the React app renders an explicit "Warehouse warming up (attempt N of 6)" block with dependency-specific copy and correlation-ID echo when a `retryable: true` 503 is injected; slow-network injection (8s throttle) produces clean skeleton loading without crashes; 5 parallel approval requests with the same `request_id` collapse to exactly one Lakebase write with one audit event; and grep proves zero production imports of test fixtures and zero `MIP_MOCK_MODE`-style flags anywhere in the codebase.
@@ -307,3 +324,64 @@ The resilience layer is **production-ready** and exceeds the Module 0 completion
 - Live probes: `/tmp/res_warm.sh`, `/tmp/res_cache.sh`, `/tmp/res_idempotency.sh`
 - Chrome MCP fetch interception: 503 injection on `/api/segments`, 8s throttle on `/api/leads`
 - Deployment: `01f14e7aedef1c1c97ad86726790cc82` (RUNNING / ACTIVE)
+
+---
+
+## Independent re-validation — 2026-05-13 (post-correction)
+
+After engineering pushed the docstring + regression test for the portfolio fresh-vs-cached contract, re-ran the original probes + a corrected portfolio benchmark + a focused no-regression sweep against the same deployment `01f14e7aedef1c1c97ad86726790cc82`.
+
+### Source-of-truth checks
+
+- ✅ `backend/api/portfolio.py:77-83` — `list_portfolios` carries a docstring stating "This route is intentionally not the hot KPI/cache path. The cacheable aggregate is `POST /api/portfolio/preview`; the list view is mutation-adjacent campaign state and should reflect recent creates/status changes immediately." Future auditors won't repeat the misread.
+- ✅ `tests/unit/test_portfolio_repo_timezone.py:357-378` — new regression test `test_campaign_list_is_fresh_lakebase_state_not_preview_cache` asserts `len(lakebase.calls) == 2` after two `list_campaigns` invocations (no cache) and confirms both queries hit `mip_app.campaigns`. This pins the no-cache contract mechanically.
+
+### Corrected portfolio benchmark — POST /api/portfolio/preview (the cached endpoint)
+
+| Call | Latency |
+|---|---|
+| 1 (cold) | **5.629s** |
+| 2 (cache HIT) | 0.400s |
+| 3 (cache HIT) | 0.397s |
+| 4 (cache HIT) | 0.428s |
+| 5 (cache HIT) | 0.435s |
+
+**Cache speedup: ~14x** on `POST /api/portfolio/preview`. This is consistent with the `mip_portfolio_preview_ttl_s = 120.0` setting in `backend/config/settings.py:206`. The original LOW-1 was an auditor error (benchmarked the wrong route); the actual cached hot path is working better than `/api/segments` or `/api/data-estate`.
+
+### Confirmation that GET /api/portfolio is intentionally uncached
+
+| Call | Latency |
+|---|---|
+| 1 | 0.976s |
+| 2 | 0.929s |
+| 3 | 0.925s |
+| 4 | 0.960s |
+| 5 | 0.946s |
+
+Flat at ~0.95s across 5 calls — Lakebase fetch on every call, exactly as the docstring claims. Each call surfaces fresh campaign state (status transitions, new creates from Vera/Pat workflows). Cache would defeat the freshness contract.
+
+### Re-validation table
+
+| Claim | Probe | Expected | Actual | Verdict |
+|---|---|---|---|---|
+| LOW-1 corrected — `POST /api/portfolio/preview` shows cache speedup | 5-call timing benchmark | 2x+ speedup | 14x (5.6s → 0.4s) | ✅ |
+| LOW-1 corrected — `GET /api/portfolio` is intentionally fresh | 5-call timing | flat ~1s | flat at 0.93–0.98s | ✅ |
+| LOW-1 corrected — docstring documents contract | `backend/api/portfolio.py:77-83` | docstring present | present, clear | ✅ |
+| LOW-1 corrected — regression test pins contract | `tests/unit/test_portfolio_repo_timezone.py:357` | test present, asserts 2 Lakebase calls | present, `len(lakebase.calls) == 2` assertion | ✅ |
+| LOW-2 accepted as SLI thermometer | `/api/borrowers/{id}` warm latency | ~3.3-3.5s stable | 3.36-3.63s stable (with one 5.86s outlier on first call after gap) | ✅ accepted |
+| Warm-start no regression | `/api/health` | all up, all closed, 0 changes | exact match | ✅ |
+| Cache HIT no regression — `/api/segments` | 3-call timing | speedup | 2.19s → 0.42s → 0.43s (5.2x) | ✅ |
+| Cache HIT no regression — `/api/data-estate` | 3-call timing | speedup | 1.20s → 0.40s → 0.40s (3.0x) | ✅ |
+| 503 contract intact | `safe_dependency_detail` grep in `main.py` | import + body shape `{detail, retryable, dependency, correlation_id}` | present at line 313 / 358-360 | ✅ |
+| Degraded-state UI fires on injected 503 | Chrome MCP fetch interception on `/api/segments` | WarmingUpBlock renders with dependency-aware copy + correlation_id echo | "Warehouse warming up (attempt 2 of 6)" + "Databricks SQL warehouses auto-suspend when idle..." + `correlation_id: 22222222-...` | ✅ |
+| Idempotency holds under 5x parallel retry | 5 concurrent POST `/api/outreach/approve` with same `request_id` | 1 distinct approval_id, 1 audit_event_id set | 1 distinct approval_id (`7a1ea403-88f7-43d6-9db2-73fc55185040`), 1 audit_event_id set (result 3 won the race) | ✅ |
+
+**11 of 11 re-validation checks pass.** No regressions.
+
+### Sign-off
+
+- **LOW-1 corrected and closed.** The flat `/api/portfolio` timing was the fresh Lakebase campaign list endpoint, intentionally uncached. The actual cached hot path is `POST /api/portfolio/preview`, which shows a ~14x cache speedup on call 2+. The docstring at `backend/api/portfolio.py:77-83` + regression test at `tests/unit/test_portfolio_repo_timezone.py:357` prevent the misread from recurring.
+- **LOW-2 accepted as SLI thermometer.** Borrower 360's ~3.3-3.5s warm latency is real and intentional — the dossier includes lifecycle / assignment / disposition state that must not lag after Vera/Sam mutations. Skeleton + WarmingUpBlock UX continues to do the perceptual work. Track as SLI.
+- **All other resilience patterns hold** — warm-start, breaker state, cache on segments + data-estate, 503 contract, degraded UI, idempotency under retry storm.
+
+The resilience layer is **production-ready and audit-clean.** All Module 0 completion criteria from CLAUDE.md are met.

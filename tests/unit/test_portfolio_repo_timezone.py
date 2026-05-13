@@ -84,6 +84,37 @@ class _StubLakebase:
         }
 
 
+class _CampaignListLakebase:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    def fetchall(
+        self,
+        sql: str,
+        params: dict[str, Any] | None = None,
+        *,
+        limit: int | None = None,
+    ) -> list[dict[str, Any]]:
+        self.calls.append({"sql": sql, "params": params or {}, "limit": limit})
+        return [
+            {
+                "campaign_id": "11111111-1111-4111-8111-111111111111",
+                "name": "Maya QA CA recapture",
+                "owner_email": "skyler@entrada.ai",
+                "status": "draft",
+                "criteria": {},
+                "suppression_policy": {},
+                "message_variants": [],
+                "channel_cascade": [],
+                "send_window": {},
+                "holdout": None,
+                "roi_assumptions": None,
+                "created_at": datetime(2026, 5, 12, 12, 0, tzinfo=UTC),
+                "updated_at": datetime(2026, 5, 12, 12, 1, tzinfo=UTC),
+            }
+        ]
+
+
 class _CampaignPatchLakebase:
     def __init__(self, *, suppression_policy: dict[str, object]) -> None:
         self.suppression_policy = suppression_policy
@@ -321,6 +352,30 @@ def test_preview_second_call_same_order_hits_cache():
     assert calls_after_first == calls_after_second == 1, (
         f"second call should have hit cache; saw {calls_after_second} preview SELECTs"
     )
+
+
+def test_campaign_list_is_fresh_lakebase_state_not_preview_cache(monkeypatch):
+    """GET /api/portfolio is the campaign list, not the KPI preview cache.
+
+    Resilience audits should benchmark POST /api/portfolio/preview for
+    aggregate cache behavior. Campaign list reads are mutation-adjacent
+    Lakebase state, so each call intentionally reaches Lakebase.
+    """
+    lakebase = _CampaignListLakebase()
+    monkeypatch.setattr(
+        "backend.services.repositories.databricks_repo.get_lakebase_client",
+        lambda: lakebase,
+    )
+    repo = DatabricksPortfolioRepository(
+        _StubClient(_preview_row(), [_trend_row("2026-04-22T18:30:00")])
+    )  # type: ignore[arg-type]
+
+    first = repo.list_campaigns(owner_email="skyler@entrada.ai")
+    second = repo.list_campaigns(owner_email="skyler@entrada.ai")
+
+    assert len(first.campaigns) == len(second.campaigns) == 1
+    assert len(lakebase.calls) == 2
+    assert all("mip_app.campaigns" in str(call["sql"]) for call in lakebase.calls)
 
 
 def test_trend_delta_uses_exact_snapshot_date_and_drops_bootstrap_zero():
