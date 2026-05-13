@@ -25,7 +25,9 @@ into a small, borrower-keyed gold table and JOIN that.
   §7). One row per `borrower_id`. Columns: `approval_status`
   (`pending` / `approved` / `rejected` / `hold`), `outreach_status`
   (`none` / `queued` / `actioned`), `offer_code`, `approved_at`,
-  `outreach_at`, `synced_at`. Cluster BY `borrower_id`.
+  `outreach_at`, `synced_at`, `refreshed_at`. `refreshed_at` is the
+  Lakebase mirror refresh boundary for this lifecycle snapshot; it is not the
+  scoring gold refresh boundary. Cluster BY `borrower_id`.
 
 - **`mip.gold.funnel_snapshot_daily`** (DDL §8). One row per
   `(snapshot_date, state, segment_code)` incl. the `_ALL` rollups.

@@ -259,6 +259,7 @@ class TestGoldDdlAdditions:
             "approved_at",
             "outreach_at",
             "synced_at",
+            "refreshed_at",
         ):
             assert col in body, f"lifecycle_state missing column `{col}`"
 

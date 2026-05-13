@@ -186,3 +186,52 @@ The data plane is production-quality. The three P2 items are honest-UX polish an
 - `sql/transformations/gold_segment_population.sql` lines 32–80
 - `sql/uc_functions/fn_rate_spread.sql`
 - Statement IDs: `01f14e66-b5af-1299-b2e0-a7980b6c80ad`, `01f14e66-b675-1af8-8430-64d6736b9c37` (segment prior); plus follow-up rate / AVM / FK probes documented in `/tmp/segpop.sh`, `/tmp/segpop2.sh`, `/tmp/rate_check.sh`, `/tmp/rate_real.sh`, `/tmp/rate_source.sh`, `/tmp/rate_units.sh`, `/tmp/avm_check.sh`
+
+---
+
+## Re-validation — 2026-05-13
+
+After the engineering team shipped fixes for all three P2 defects, re-ran the original probes plus live API + UI checks against the new deployment.
+
+**Active deployment:** `01f14e6f026a161e95c88e798a8096cc`
+**Gold refresh run:** `623227038704667` (refresh_at `2026-05-13T01:46:40.218Z`, applied uniformly across `borrower_360`, `borrower_dossier`, `lead_scores`, `lead_population`)
+
+### Claim-by-claim verdict
+
+| Claim | Probe | Expected | Actual | Verdict |
+|---|---|---|---|---|
+| `current_rate` is bounded ≤ 15% | `SELECT MAX(current_rate)` | `15.0` | `15.0` | ✅ PASS |
+| No `current_rate > 15` rows | `COUNT(*) WHERE current_rate > 15` | `0` | `0` | ✅ PASS |
+| No `current_rate ∈ (0, 1)` outliers (sub-1% noise clamped) | `COUNT(*) WHERE current_rate > 0 AND current_rate < 1` | `0` | `0` | ✅ PASS |
+| No impossible `rate_spread_bps ≥ 1000` | `COUNT(*) WHERE rate_spread_bps >= 1000` | `0` | `0` | ✅ PASS (was 695) |
+| AVM=0 borrowers still route safely | `COUNT(*) WHERE avm_value=0 AND offer IN (heloc, cash_out, refi_plus_heloc)` | `0` | `0` | ✅ PASS |
+| B-0OXOBYLW8MNCK borrower math fixed | `SELECT current_rate, rate_spread_bps` | `15.0 / 863` | `15.0 / 863` | ✅ PASS |
+| B-0OXOBYLW8MNCK evidence chip parity (no stale +9238) | `evidence_events[0].signal_value` | `+863 bps` | `+863 bps` | ✅ PASS |
+| B-0OXOBYLW8MNCK why-panel uses fresh spread | `why_panel.rate_spread_bps` | `863` | `863` | ✅ PASS |
+| API exposes all 8 previously-hidden dossier fields | `/api/borrowers/B-0OXOBYLW8MNCK` | all present, valid types | `situs_cbsa_code=16980, first_pos_loan_type=CNV, is_absentee=False, is_corporate_owner=False, has_first_party_relationship=True, depth=1, recent_interactions=0, recent_application=False` | ✅ PASS |
+| UI renders AVM-unavailable chrome (B-1EU6J79FEJGFS) | DOM scrape | `"AVM unavailable"` + `"Not a zero-equity signal"` | exact match | ✅ PASS |
+| UI renders Metro / loan-type pair | DOM scrape | `"16980 · CNV"` for Chicago borrower | `"16980 · CNV"` | ✅ PASS |
+| UI renders is_absentee/is_corporate_owner badges | DOM scrape | `"Not absentee" / "Individual owner"` | exact match on both test borrowers | ✅ PASS |
+| UI renders First-party signals block | DOM scrape | `"1 first-party links / Summit demo synthetic"` | exact match for has_relationship=True borrower; `"No first-party signal"` empty state for the negative case | ✅ PASS |
+| equity_pct serializes as `null` when AVM=0 (UI branch signal) | `/api/borrowers/B-1EU6J79FEJGFS` | `equity_pct: null` | `equity_pct: null` | ✅ PASS |
+| Cardinality preserved | `COUNT(*)` per gold table | `5,156,184` | `5,156,184` exact on borrower_360 / borrower_dossier / lead_scores / borrower_lifecycle_state | ✅ PASS |
+| Lead population shrinks marginally (expected — clamped rates push ~42 borrowers below ITM) | `COUNT(*) lead_population` | `~282,825` | `282,825` | ✅ PASS |
+| FK integrity (1:1 mirror, zero orphans) | LEFT JOIN both directions | `0 / 0` | `0 / 0` | ✅ PASS |
+| Scoring refresh timestamps share single boundary | `MAX(refreshed_at)` per scoring gold table | identical ISO ts | `2026-05-13T01:46:40.218Z` across borrower_360 / borrower_dossier / lead_scores / lead_population | ✅ PASS |
+| Lifecycle mirror carries its own refresh boundary | `COUNT(refreshed_at), MIN/MAX(refreshed_at), MIN/MAX(synced_at)` on borrower_lifecycle_state | all rows non-null; one mirror timestamp | `5,156,184` non-null rows; `2026-05-13T02:53:10.232Z` for min/max refreshed_at and synced_at | ✅ PASS |
+| segment_population unaffected | `SELECT count FROM segment_population WHERE state='_ALL'` | 6 segments, ITM 134,534, listed/permit blocked at 0 | exact match | ✅ PASS |
+| No regression in Lead Queue rendering | DOM scrape, 1030 rows, no error banners, no rates ≥ 1000 bps anywhere visible | clean | clean | ✅ PASS |
+| No regression on Home (KPIs) | DOM scrape: 5,156,184 portfolio / 134,534 ITM | exact | exact | ✅ PASS |
+| No regression on Segment Intelligence | DOM scrape: 6 segment cards with `Awaiting feed` for listed/permit | clean | clean | ✅ PASS |
+
+**23 of 23 checks pass.** No regressions surfaced.
+
+### Lifecycle refresh-boundary follow-up
+
+- Closed after follow-up: `borrower_lifecycle_state` now includes `refreshed_at` as the Lakebase mirror refresh boundary. It intentionally equals the sync-run timestamp, not the scoring gold `refresh_run_state` timestamp.
+
+### Sign-off
+
+All three P2 defects from the original audit are **closed live on deployment `01f14e6f026a161e95c88e798a8096cc`**. The parity bug found mid-fix (evidence chips showing stale `+9238 bps` while borrower math showed `+863 bps`) is also closed — chip, why-panel, supporting-evidence section, and trigger timeline all agree on `+863 bps`.
+
+The op note about `databricks bundle deploy -t dev` returning 403 on app-update (recovered via direct `databricks apps deploy`) is a tooling story for the bundle workflow, not a data-quality issue, and doesn't affect this sign-off.

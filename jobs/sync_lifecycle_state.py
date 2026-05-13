@@ -211,11 +211,8 @@ def _write_gold(rows: list[dict[str, Any]]) -> None:
     spark = _get_spark()
     # Local imports: pyspark isn't available off-Databricks; keep import out of
     # module scope so the file remains importable by lint/tests.
-    from datetime import UTC, datetime
-
     from pyspark.sql import Row  # type: ignore[import-not-found]
 
-    now = datetime.now(UTC)
     # Build the Lakebase-side DataFrame.
     lakebase_rows = [
         Row(
@@ -225,7 +222,6 @@ def _write_gold(rows: list[dict[str, Any]]) -> None:
             offer_code=(str(r["offer_code"]) if r.get("offer_code") else None),
             approved_at=r.get("approved_at"),
             outreach_at=r.get("outreach_at"),
-            synced_at=now,
         )
         for r in rows
         if r.get("borrower_id")
@@ -236,8 +232,7 @@ def _write_gold(rows: list[dict[str, Any]]) -> None:
     # is the same for empty-input and populated-input cases.
     _LIFECYCLE_SCHEMA = (
         "borrower_id STRING, approval_status STRING, outreach_status STRING, "
-        "offer_code STRING, approved_at TIMESTAMP, outreach_at TIMESTAMP, "
-        "synced_at TIMESTAMP"
+        "offer_code STRING, approved_at TIMESTAMP, outreach_at TIMESTAMP"
     )
     lb_df = spark.createDataFrame(lakebase_rows, schema=_LIFECYCLE_SCHEMA)
     lb_df.createOrReplaceTempView("_mip_lifecycle_lakebase")
@@ -258,15 +253,20 @@ def _write_gold(rows: list[dict[str, Any]]) -> None:
     # valid Lakebase rows guarantees no duplicate.
     spark.sql("""
         CREATE OR REPLACE TABLE mip.gold.borrower_lifecycle_state AS
+        WITH sync_anchor AS (
+          SELECT CURRENT_TIMESTAMP() AS mirror_refreshed_at
+        )
         SELECT
-            borrower_id,
-            approval_status,
-            outreach_status,
-            offer_code,
-            approved_at,
-            outreach_at,
-            synced_at
-        FROM _mip_lifecycle_valid
+            l.borrower_id,
+            l.approval_status,
+            l.outreach_status,
+            l.offer_code,
+            l.approved_at,
+            l.outreach_at,
+            a.mirror_refreshed_at AS synced_at,
+            a.mirror_refreshed_at AS refreshed_at
+        FROM _mip_lifecycle_valid AS l
+        CROSS JOIN sync_anchor AS a
         UNION ALL
         SELECT
             b.borrower_id,
@@ -275,8 +275,10 @@ def _write_gold(rows: list[dict[str, Any]]) -> None:
             CAST(NULL AS STRING)       AS offer_code,
             CAST(NULL AS TIMESTAMP)    AS approved_at,
             CAST(NULL AS TIMESTAMP)    AS outreach_at,
-            CURRENT_TIMESTAMP()        AS synced_at
+            a.mirror_refreshed_at      AS synced_at,
+            a.mirror_refreshed_at      AS refreshed_at
         FROM mip.gold.borrower_360 AS b
+        CROSS JOIN sync_anchor AS a
         LEFT ANTI JOIN _mip_lifecycle_valid AS l
           ON l.borrower_id = b.borrower_id
     """)

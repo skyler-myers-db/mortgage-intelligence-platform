@@ -425,7 +425,8 @@ CREATE TABLE IF NOT EXISTS mip.gold.borrower_lifecycle_state (
   offer_code        STRING             COMMENT 'Latest offer_code associated with the approval decision.',
   approved_at       TIMESTAMP          COMMENT 'decided_at for the latest approve action; NULL when not approved.',
   outreach_at       TIMESTAMP          COMMENT 'Timestamp of latest outreach action.',
-  synced_at         TIMESTAMP NOT NULL COMMENT 'Last sync run that touched this row.'
+  synced_at         TIMESTAMP NOT NULL COMMENT 'Last sync run that touched this row.',
+  refreshed_at      TIMESTAMP NOT NULL COMMENT 'Lakebase mirror refresh boundary for this lifecycle snapshot; distinct from the scoring gold refresh boundary.'
 )
 USING DELTA
 CLUSTER BY (borrower_id)
