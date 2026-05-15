@@ -31,8 +31,11 @@ frontend's degraded banner auto-retries until ``status == "ok"``.
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
 import logging
 import os
+import secrets
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 from typing import Any
@@ -46,6 +49,7 @@ from backend.services.observability import (
     recent_breaker_state_changes,
     recent_error_count,
 )
+from backend.services.rbac import AdminDep
 from backend.services.resilience import StaleWhileRevalidateCache, all_breakers
 
 log = logging.getLogger(__name__)
@@ -53,6 +57,7 @@ router = APIRouter(prefix="/api")
 
 
 _PROBE_TIMEOUT_S = 1.0
+_PROCESS_ACTOR_CACHE_SECRET = secrets.token_urlsafe(32)
 
 # Slice-13 performance follow-up (v2): stale-while-revalidate cache
 # around each dependency probe.
@@ -81,6 +86,37 @@ _probe_cache: StaleWhileRevalidateCache = StaleWhileRevalidateCache(
     soft_ttl_s=_HEALTH_PROBE_SOFT_TTL_S,
     hard_ttl_s=_HEALTH_PROBE_HARD_TTL_S,
 )
+
+
+def _actor_cache_key(actor_email: str) -> str:
+    """Return a non-reversible actor/session discriminator for browser caches."""
+
+    secret = (
+        settings.mip_genie_action_secret.get_secret_value()
+        if settings.mip_genie_action_secret
+        else _PROCESS_ACTOR_CACHE_SECRET
+    )
+    digest = hmac.new(
+        secret.encode("utf-8"),
+        actor_email.strip().lower().encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()[:16]
+    return f"actor_{digest}"
+
+
+def _trusted_health_actor(request: Request) -> str | None:
+    """Return forwarded actor identity only when this edge is trusted.
+
+    Health cannot call `resolve_actor()` directly because anonymous load
+    balancer probes are expected and must not increment the audit fallback
+    counter. The trust-boundary behavior still has to match audit writes:
+    when forwarded headers are not trusted, spoofed client headers are
+    ignored and the caller receives the minimal health body.
+    """
+
+    if not settings.trust_forwarded_headers:
+        return None
+    return request.headers.get("X-Forwarded-Email") or request.headers.get("X-Forwarded-User")
 
 
 def _probe_warehouse() -> bool:
@@ -228,51 +264,20 @@ def _cached_probe(name: str, probe: Any) -> bool:
     return bool(_probe_cache.get_or_refresh(name, probe))
 
 
-@router.get("/health")
-def health(request: Request) -> dict[str, Any]:
-    """Return a probe-friendly body to anonymous callers and the full
-    diagnostic body to authenticated callers.
-
-    R6-09 (governance/security): the endpoint is publicly reachable via
-    the Databricks Apps URL, which is how the platform's load balancer
-    does liveness/readiness checks. The LB sends anonymous requests, so
-    we MUST keep returning a 200 with a minimal body shape
-    (``{status, mode}``) for that path. What changed: an external
-    attacker probing the same URL used to get circuit-breaker state,
-    app_env, flap-history counts, and the identity-fallback counter --
-    which is free reconnaissance. That data is now gated behind
-    ``X-Forwarded-Email``: any authenticated workspace user sees it,
-    anonymous callers do not. We deliberately do NOT require admin
-    here; the diagnostic body is ops-grade, not admin-grade, and every
-    authenticated user can already see the degraded banner's reasoning.
-
-    HTTP status stays 200 in both shapes even when ``status=="degraded"``
-    so the LB probe contract (degraded != unhealthy) is preserved.
-    """
+def _probe_snapshot() -> tuple[str, dict[str, str]]:
     warehouse_up = _cached_probe("warehouse", _probe_warehouse)
     lakebase_up = _cached_probe("lakebase", _probe_lakebase)
     genie_up = _cached_probe("genie", _probe_genie)
     status = "ok" if (warehouse_up and lakebase_up and genie_up) else "degraded"
-
-    # Anonymous caller (LB / external probe): minimal body only. We
-    # check the forwarded-email header rather than running resolve_actor
-    # so this endpoint never bumps the identity-fallback counter for a
-    # routine probe, and never accidentally surfaces the counter itself.
-    authenticated = bool(request.headers.get("X-Forwarded-Email"))
-    if not authenticated:
-        return {"status": status, "mode": "live"}
-
-    # Authenticated caller: full diagnostic body. Keep the dependencies
-    # + circuit_breakers blocks so the frontend's degraded banner and
-    # the ops-facing `/admin/health` page can still reason about
-    # dependency state; those fetches happen in a logged-in workspace
-    # browser session that Databricks Apps decorates with
-    # X-Forwarded-Email.
     deps = {
         "warehouse": "up" if warehouse_up else "down",
         "lakebase": "up" if lakebase_up else "down",
         "genie": "up" if genie_up else "down",
     }
+    return status, deps
+
+
+def _diagnostic_body(status: str, deps: dict[str, str], actor_email: str) -> dict[str, Any]:
     return {
         "status": status,
         "mode": "live",
@@ -280,6 +285,11 @@ def health(request: Request) -> dict[str, Any]:
         "warehouse_id": settings.databricks_warehouse_id,
         "dependencies": deps,
         "circuit_breakers": _breaker_states(),
+        # PII-safe identity discriminator for frontend cache hygiene.
+        # The browser never receives the actor email, but can still clear
+        # QueryClient data if Databricks Apps swaps the workspace identity
+        # within the same browser session.
+        "actor_cache_key": _actor_cache_key(actor_email),
         # Slice-13 observability counters. Values reflect the last
         # rolling hour. A non-zero ``breaker_state_changes_last_hour``
         # is the earliest signal that a dependency is flapping; a
@@ -292,7 +302,7 @@ def health(request: Request) -> dict[str, Any]:
         # and reset on every container restart. That is intentional --
         # the durable path is the OTLP log exporter (set
         # ``MIP_OTEL_ENDPOINT`` to enable; see docs/observability.md).
-        # Surfacing the posture in the health body means operators can
+        # Surfacing the posture in the admin health body means operators can
         # tell at a glance whether to trust the counters for trend
         # analysis (they should not) vs. use them for "right now" signal
         # (they should). ``log_export`` tells them whether the durable
@@ -320,3 +330,52 @@ def health(request: Request) -> dict[str, Any]:
         "fallback_identity_fallbacks_process_total": get_fallback_identity_count(),
         "fallback_identity_fallbacks_total": get_fallback_identity_count(),
     }
+
+
+@router.get("/health")
+def health(request: Request) -> dict[str, Any]:
+    """Return probe-friendly health with only runtime status.
+
+    R6-09 (governance/security): the endpoint is publicly reachable via
+    the Databricks Apps URL, which is how the platform's load balancer
+    does liveness/readiness checks. The LB sends anonymous requests, so
+    we MUST keep returning a 200 with a minimal body shape
+    (``{status, mode}``) for that path. What changed: an external
+    attacker probing the same URL used to get circuit-breaker state,
+    app_env, warehouse IDs, flap-history counts, and the identity-fallback
+    counter. That diagnostic body now lives behind admin RBAC at
+    ``/api/admin/health``. Trusted authenticated browsers only receive
+    the coarse dependency / breaker states required for the
+    degraded-state UI plus a PII-safe actor cache discriminator.
+
+    HTTP status stays 200 in both shapes even when ``status=="degraded"``
+    so the LB probe contract (degraded != unhealthy) is preserved.
+    """
+    status, deps = _probe_snapshot()
+
+    # Anonymous caller (LB / external probe): minimal body only. Use the
+    # same trust boundary as audit actor resolution without calling
+    # resolve_actor(), so routine probes never bump the fallback counter
+    # and untrusted proxy deployments cannot spoof diagnostic access.
+    actor_email = _trusted_health_actor(request)
+    authenticated = bool(actor_email)
+    if not authenticated:
+        return {"status": status, "mode": "live"}
+
+    return {
+        "status": status,
+        "mode": "live",
+        "dependencies": deps,
+        # Keep the topbar / degraded-state UI useful for authenticated
+        # workspace users without exposing admin-only diagnostics such as
+        # warehouse ids, app_env, log exporter posture, or fallback counters.
+        "circuit_breakers": _breaker_states(),
+        "actor_cache_key": _actor_cache_key(actor_email or ""),
+    }
+
+
+@router.get("/admin/health")
+def admin_health(_actor: AdminDep) -> dict[str, Any]:
+    """Return ops diagnostics behind admin RBAC."""
+    status, deps = _probe_snapshot()
+    return _diagnostic_body(status, deps, _actor)

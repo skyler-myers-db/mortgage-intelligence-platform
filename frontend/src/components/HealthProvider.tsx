@@ -49,6 +49,7 @@ export function computeDegraded(health: HealthPayload | null): boolean {
   const deps = health.dependencies ?? {};
   if (deps.warehouse === 'down') return true;
   if (deps.lakebase === 'down') return true;
+  if (deps.genie === 'down') return true;
   const breakers = health.circuit_breakers ?? {};
   for (const state of Object.values(breakers)) {
     if (state === 'open') return true;

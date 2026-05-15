@@ -136,8 +136,14 @@ for dep in warehouse lakebase genie; do
     echo "[smoke] dependency $dep=$state (expected up)" >&2
     exit 1
   fi
+  breaker=$(echo "$HEALTH" | jq -r ".circuit_breakers.$dep // empty")
+  if [[ ! "$breaker" =~ ^(closed|open|half_open)$ ]]; then
+    echo "[smoke] circuit_breakers.$dep=$breaker (expected closed|open|half_open)" >&2
+    echo "$HEALTH" | jq . >&2
+    exit 1
+  fi
 done
-echo "[smoke] health ok · warehouse/lakebase/genie all up"
+echo "[smoke] health ok · warehouse/lakebase/genie all up · breaker states present"
 
 # --- Five canonical API calls -------------------------------------------
 probe() {

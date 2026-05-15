@@ -1,92 +1,26 @@
 import { useEffect, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { Link, Navigate, useParams } from 'react-router-dom';
 import { api, ApiError, isAbortError, isWarmingUpError, dependencyLabel } from '../lib/api';
 import type { WarmingUpState } from '../lib/useWarmingUpRetry';
 import type { Borrower360 as Borrower360Type, OfferRecommendation } from '../types';
 import { PageShell } from '../components/layout/PageShell';
 import { ApprovalBanner } from '../components/mortgage/ApprovalBanner';
-import { BorrowerTruthFlags } from '../components/mortgage/BorrowerTruthFlags';
 import { ScoreBadge } from '../components/mortgage/ScoreBadge';
 import { ConfidenceMeter } from '../components/mortgage/ConfidenceMeter';
-import { Button, Chip, EvidenceChip } from '../components/Primitives';
-import { Icon } from '../components/Icon';
-import { Skeleton } from '../components/ui/Skeleton';
+import { Button, Chip } from '../components/Primitives';
 import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
-import { Reveal } from '../components/fx/Reveal';
-import { descriptorFor } from '../lib/drawerSources';
 import { useApp } from '../components/AppContext';
-
-/** Short, presenter-friendly label that fits in a chip. */
-function shortSourceLabel(source: string): string {
-  return source.split('.').pop() ?? source;
-}
-
-/**
- * Module-scoped stale-while-revalidate cache for the three per-borrower
- * fetches (`api.borrower`, `api.recommendOffer`, `api.draftOutreach`).
- *
- * The backend's resilience layer already caches the portfolio preview,
- * but the per-borrower dossier path was unbuffered — navigating
- * back/forward between borrowers re-fired three API calls each trip.
- * This cache keeps a 5-minute TTL snapshot in memory so the user sees
- * instant hydration on revisit; the effect still re-fetches in the
- * background when the token increments so the data stays live.
- *
- * Hole-finder finding #23, 2026-04-23.
- */
-interface BorrowerCacheEntry {
-  borrower: Borrower360Type;
-  recommendation: OfferRecommendation;
-  draftBody: string | null;
-  draftChannel: OutreachChannel | null;
-  fetched: number;
-}
-type OutreachChannel = 'email' | 'sms' | 'direct_mail';
-const BORROWER_CACHE = new Map<string, BorrowerCacheEntry>();
-const BORROWER_CACHE_TTL_MS = 5 * 60 * 1000;
-function readBorrowerCache(id: string): BorrowerCacheEntry | null {
-  const hit = BORROWER_CACHE.get(id);
-  if (!hit) return null;
-  if (Date.now() - hit.fetched > BORROWER_CACHE_TTL_MS) {
-    BORROWER_CACHE.delete(id);
-    return null;
-  }
-  return hit;
-}
-
-/** Human-readable threshold labels. Keeps the "if you raised X here" story tangible. */
-const THRESHOLD_LABELS: Record<string, string> = {
-  min_spread_bps: 'Min spread (bps)',
-  min_equity_pct: 'Min equity (%)',
-  heloc_equity_min_pct: 'HELOC equity floor (%)',
-  cashout_equity_min_pct: 'Cash-out equity floor (%)',
-  retention_min_spread_bps: 'Retention min spread (bps)',
-};
-
-type RejectReasonCode =
-  | 'out_of_footprint'
-  | 'do_not_call'
-  | 'opt_out'
-  | 'fair_lending_review'
-  | 'low_intent'
-  | 'data_quality'
-  | 'other_with_text';
-
-const REJECT_REASONS: { code: RejectReasonCode; label: string }[] = [
-  { code: 'low_intent', label: 'Low intent' },
-  { code: 'do_not_call', label: 'Do Not Call' },
-  { code: 'opt_out', label: 'Opt-out' },
-  { code: 'fair_lending_review', label: 'Fair-lending review' },
-  { code: 'data_quality', label: 'Data quality' },
-  { code: 'out_of_footprint', label: 'Out of footprint' },
-  { code: 'other_with_text', label: 'Other' },
-];
-
-function humanizeThresholdKey(k: string): string {
-  if (THRESHOLD_LABELS[k]) return THRESHOLD_LABELS[k];
-  // Reasonable fallback: snake_case → Title Case
-  return k.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
-}
+import { invalidateOperationalQueries } from '../lib/queryKeys';
+import { BORROWER_CACHE, clearBorrowerCache, readBorrowerCache } from './offer-orchestrator.cache';
+import { DEFAULT_REJECT_REASON, type OutreachChannel, type RejectReasonCode } from './offer-orchestrator.constants';
+import {
+  OfferDetailsRows,
+  OfferOrchestratorEmptyHero,
+  OfferOrchestratorEmptyState,
+  OfferReviewGrid,
+  RejectRationalePanel,
+} from './offer-orchestrator.panels';
 
 /**
  * Offer Orchestrator — convert the borrower intelligence into a drafted
@@ -97,6 +31,7 @@ function humanizeThresholdKey(k: string): string {
 
 export default function OfferOrchestrator() {
   const { id } = useParams();
+  const queryClient = useQueryClient();
   const [b, setB] = useState<Borrower360Type | null>(null);
   const [rec, setRec] = useState<OfferRecommendation | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -132,7 +67,7 @@ export default function OfferOrchestrator() {
   // disabled until a governed draft loads.
   const [draftWarming, setDraftWarming] = useState<WarmingUpState | null>(null);
   const [rejectReviewOpen, setRejectReviewOpen] = useState(false);
-  const [rejectReasonCode, setRejectReasonCode] = useState<RejectReasonCode>('low_intent');
+  const [rejectReasonCode, setRejectReasonCode] = useState<RejectReasonCode>(DEFAULT_REJECT_REASON);
   const [rejectRationale, setRejectRationale] = useState('');
   const {
     setApproval,
@@ -342,31 +277,9 @@ export default function OfferOrchestrator() {
         eyebrow="Offer Orchestrator"
         title="Choose a borrower to compose an offer"
         lede="Offer Orchestrator drafts a tailored recommendation — HELOC / Cash-Out / Rate-Term Refi / Retention — from the borrower's score + equity + rate spread, then routes through human approval before any outreach goes out. Pick a borrower to begin."
-        heroRight={
-          <Link className="btn btn--primary" to="/lead-queue">
-            Browse lead queue
-            <Icon name="chevright" size={14} />
-          </Link>
-        }
+        heroRight={<OfferOrchestratorEmptyHero to="/lead-queue" />}
       >
-        <div className="surface">
-          <div className="surface__hdr">
-            <Icon name="bolt" size={14} className="icon-accent" />
-            <div className="h-4">What you'll see</div>
-          </div>
-          <div className="surface__body surface__body--stack-sm">
-            <div className="chip-row">
-              <Chip variant="neutral" icon="bolt">Primary offer</Chip>
-              <Chip variant="neutral" icon="doc">Considered alternatives</Chip>
-              <Chip variant="neutral" icon="shield">Thresholds applied</Chip>
-              <Chip variant="neutral" icon="check">Human approval gate</Chip>
-            </div>
-            <p className="body muted flush">
-              Every draft writes an audit row before it enters the outreach
-              queue. No outreach sends automatically.
-            </p>
-          </div>
-        </div>
+        <OfferOrchestratorEmptyState />
       </PageShell>
     );
   }
@@ -432,6 +345,8 @@ export default function OfferOrchestrator() {
       if (res.approved) {
         setApproval(id, 'approved');
         setAuditId(res.audit_event_id ?? null);
+        clearBorrowerCache(id);
+        void invalidateOperationalQueries(queryClient);
       } else {
         setApproveError('Approval endpoint returned approved=false.');
       }
@@ -478,8 +393,10 @@ export default function OfferOrchestrator() {
       if (res.rejected) {
         setApproval(id, 'rejected');
         setAuditId(res.audit_event_id ?? null);
+        clearBorrowerCache(id);
+        void invalidateOperationalQueries(queryClient);
         setRejectReviewOpen(false);
-        setRejectReasonCode('low_intent');
+        setRejectReasonCode(DEFAULT_REJECT_REASON);
         setRejectRationale('');
       } else {
         setApproveError('Reject endpoint returned rejected=false.');
@@ -572,280 +489,50 @@ export default function OfferOrchestrator() {
       }
     >
       {rejectReviewOpen && (
-        <form
-          className="surface mb-grid"
-          onSubmit={(e) => {
-            e.preventDefault();
-            void onReject();
+        <RejectRationalePanel
+          reasonCode={rejectReasonCode}
+          rationale={rejectRationale}
+          onReasonChange={setRejectReasonCode}
+          onRationaleChange={setRejectRationale}
+          onCancel={() => {
+            setRejectReviewOpen(false);
+            setRejectRationale('');
+            setRejectReasonCode(DEFAULT_REJECT_REASON);
           }}
-        >
-          <div className="decision-panel">
-            <div>
-              <div className="h-4">Reject rationale</div>
-              <div className="muted fs-12">
-                Capture a committee-visible reason before dropping this lead.
-              </div>
-            </div>
-            <label className="decision-panel__field">
-              <span className="field__label">Reason</span>
-              <select
-                value={rejectReasonCode}
-                onChange={(e) => setRejectReasonCode(e.target.value as RejectReasonCode)}
-              >
-                {REJECT_REASONS.map((reason) => (
-                  <option key={reason.code} value={reason.code}>{reason.label}</option>
-                ))}
-              </select>
-            </label>
-            <label className="decision-panel__field decision-panel__field--wide">
-              <span className="field__label">Rationale note</span>
-              <textarea
-                value={rejectRationale}
-                onChange={(e) => setRejectRationale(e.target.value)}
-                maxLength={500}
-                placeholder="Optional unless reason is Other."
-              />
-            </label>
-            <div className="decision-panel__actions">
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={() => {
-                  setRejectReviewOpen(false);
-                  setRejectRationale('');
-                  setRejectReasonCode('low_intent');
-                }}
-              >
-                Cancel
-              </Button>
-              <Button
-                type="submit"
-                variant="primary"
-                size="sm"
-                icon="cross"
-                disabled={rejectReasonCode === 'other_with_text' && rejectRationale.trim().length === 0}
-              >
-                Confirm reject
-              </Button>
-            </div>
-          </div>
-        </form>
+          onSubmit={() => void onReject()}
+        />
       )}
-      <div className="layoutA-grid">
-        <div className="surface">
-          <div className="surface__hdr">
-            <Icon name="bolt" size={14} className="icon-accent" />
-            <div className="h-4">Primary offer</div>
-          </div>
-          <div className="surface__body">
-            <div className="split-row">
-              <div className="offer-title offer-title--large">
-                {productLabel}
-              </div>
-              {b && <ScoreBadge value={b.opportunity_score} />}
-            </div>
-            {rec ? (
-              <p className="body mt-2">
-                {rec.rationale ?? b?.why_now}
-              </p>
-            ) : (
-              <div className="stack-sm mt-2">
-                <Skeleton width="100%" height={14} rounded="sm" />
-                <Skeleton width="92%" height={14} rounded="sm" />
-                <Skeleton width="78%" height={14} rounded="sm" />
-              </div>
-            )}
-            <div className="chip-row mt-3">
-              <span className="muted fs-11">Sources:</span>
-              {rec
-                ? (rec.sources ?? []).map((s, idx) => {
-                    // Prefer the backend-supplied human-readable label
-                    // (added 2026-04-22). Fall back to the trailing UC
-                    // segment so anything that hasn't been mapped still
-                    // reads sensibly.
-                    const label = rec.source_labels?.[idx]?.display_label
-                      ?? shortSourceLabel(s);
-                    return (
-                      <EvidenceChip key={s} source={descriptorFor(s)}>
-                        {label}
-                      </EvidenceChip>
-                    );
-                  })
-                : Array.from({ length: 3 }).map((_, i) => (
-                    <Skeleton key={i} width={96} height={18} rounded="sm" />
-                  ))}
-            </div>
-            {b && (
-              <div className="mt-3">
-                <div className="eyebrow mb-2">Borrower flags</div>
-                <BorrowerTruthFlags borrower={b} />
-              </div>
-            )}
-            {b && (
-              <div className="chip-row mt-3">
-                <Button
-                  variant={leadIsSaved ? 'ghost' : 'default'}
-                  size="sm"
-                  icon={leadIsSaved ? 'check' : 'tag'}
-                  onClick={saveCurrentLead}
-                  aria-label={`${leadIsSaved ? 'Saved' : 'Save'} borrower ${b.borrower_id}`}
-                >
-                  {leadIsSaved ? 'Lead saved' : 'Save lead'}
-                </Button>
-              </div>
-            )}
-          </div>
-        </div>
-        <div className="surface">
-          <div className="surface__hdr">
-            <Icon name="doc" size={14} className="icon-accent" />
-            <div className="h-4">Draft outreach · review only</div>
-          </div>
-          <div className="surface__body">
-            {draftWarming && (
-              <div className="mb-3">
-                <WarmingUpBlock
-                  state={draftWarming}
-                  title="Offer draft warming up"
-                  compact
-                />
-              </div>
-            )}
-            {!draftLoaded && !draftWarming && b && (
-              <div
-                data-testid="draft-unavailable-note"
-                className="status-callout status-callout--warning mb-3"
-                role="alert"
-              >
-                {draftError ?? 'Offer draft unavailable. Approval is disabled until the audited draft loads.'}
-              </div>
-            )}
-            <textarea
-              key={b?.borrower_id ?? 'empty'}
-              aria-label="Outreach draft — review only"
-              value={draftText}
-              onChange={(e) => {
-                if (!draftLoaded) return;
-                setDraftBody(e.target.value);
-              }}
-              disabled={!draftLoaded}
-              data-testid="outreach-draft"
-              className="route-textarea route-textarea--outreach"
-            />
-            <div className="muted fs-11 mt-2">
-              Draft text is relationship-aware, disclosure-backed, and must be reviewed by a licensed officer before any external send.
-            </div>
-            <div className="chip-row mt-3">
-              {(['email', 'sms', 'direct_mail'] as const).map((channel) => (
-                <Button
-                  key={channel}
-                  variant={draftChannel === channel ? 'primary' : 'ghost'}
-                  size="sm"
-	                  onClick={() => {
-	                    setDraftChannel(channel);
-	                    setDraftLoaded(false);
-	                    setDraftBody('');
-	                    setDraftDisclosureVersion(null);
-	                    setDraftDisclosureState(null);
-	                  }}
-                  disabled={approving}
-                >
-                  {channel === 'direct_mail' ? 'Direct mail' : channel.toUpperCase()}
-                </Button>
-              ))}
-	              <Chip variant="neutral">LO call follow-up within 5 days</Chip>
-	              {draftDisclosureVersion && (
-	                <Chip variant="success" icon="shield">
-	                  Disclosure {draftDisclosureVersion} · {draftDisclosureState ?? 'state fallback'}
-	                </Chip>
-	              )}
-              <Button
-                variant={draftIsSaved ? 'ghost' : 'default'}
-                size="sm"
-                icon={draftIsSaved ? 'check' : 'doc'}
-                onClick={saveCurrentDraft}
-                disabled={!id || !draftReady}
-                aria-label={`Save outreach draft for ${id ?? 'borrower'}`}
-              >
-                {draftIsSaved ? 'Draft saved' : 'Save draft'}
-              </Button>
-              {savedDraft && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  icon="cross"
-                  onClick={resetCurrentDraft}
-                  aria-label={`Reset saved outreach draft for ${id ?? 'borrower'}`}
-                >
-                  Reset draft
-                </Button>
-              )}
-            </div>
-          </div>
-        </div>
-      </div>
+      <OfferReviewGrid
+        borrower={b}
+        recommendation={rec}
+        productLabel={productLabel}
+        leadIsSaved={leadIsSaved}
+        saveCurrentLead={saveCurrentLead}
+        draftWarming={draftWarming}
+        draftLoaded={draftLoaded}
+        draftError={draftError}
+        draftText={draftText}
+        onDraftChange={setDraftBody}
+        draftChannel={draftChannel}
+        onDraftChannelChange={(channel) => {
+          setDraftChannel(channel);
+          setDraftLoaded(false);
+          setDraftBody('');
+          setDraftDisclosureVersion(null);
+          setDraftDisclosureState(null);
+        }}
+        approving={approving}
+        draftDisclosureVersion={draftDisclosureVersion}
+        draftDisclosureState={draftDisclosureState}
+        draftIsSaved={draftIsSaved}
+        saveCurrentDraft={saveCurrentDraft}
+        savedDraftExists={Boolean(savedDraft)}
+        resetCurrentDraft={resetCurrentDraft}
+        draftReady={draftReady}
+        borrowerId={id}
+      />
 
-      <Reveal className="layoutA-grid mt-grid">
-        <div className="surface">
-          <div className="surface__hdr">
-            <Icon name="doc" size={14} className="icon-accent" />
-            <div>
-              <div className="eyebrow">Considered alternatives</div>
-              <div className="h-4 mt-1">
-                {rec ? `${rec.alternatives.length} other product${rec.alternatives.length === 1 ? '' : 's'} ruled out` : 'Loading…'}
-              </div>
-            </div>
-          </div>
-          <div className="surface__body">
-            {rec && rec.alternatives.length === 0 && (
-              <p className="muted body flush">
-                No alternatives considered — no trigger fires.
-              </p>
-            )}
-            {rec && rec.alternatives.length > 0 && (
-              <div className="stack-md">
-                {rec.alternatives.map((alt) => (
-                  <div
-                    key={alt.offer_code}
-                    className="alt-card"
-                  >
-                    <div className="split-row">
-                      <div className="fw-600 text-1">{alt.product_label}</div>
-                      <Chip variant="neutral" className="mono">{alt.offer_code}</Chip>
-                    </div>
-                    <p className="body muted flush">{alt.reason_not_chosen}</p>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-
-        <div className="surface">
-          <div className="surface__hdr">
-            <Icon name="shield" size={14} className="icon-accent" />
-            <div>
-              <div className="eyebrow">Thresholds applied</div>
-              <div className="h-4 mt-1">Admin config at decision time</div>
-            </div>
-          </div>
-          <div className="surface__body">
-            {rec ? (
-              <div className="threshold-grid">
-                {Object.entries(rec.thresholds_applied).map(([k, v]) => (
-                  <div key={k} className="contents">
-                    <span className="muted body">{humanizeThresholdKey(k)}</span>
-                    <span className="mono fs-13 text-1">{v}</span>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <p className="muted body flush">Loading thresholds…</p>
-            )}
-          </div>
-        </div>
-      </Reveal>
+      <OfferDetailsRows recommendation={rec} />
 
       <div className="mt-grid">
         <ApprovalBanner

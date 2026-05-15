@@ -1,17 +1,19 @@
-import { lazy, Suspense } from 'react';
+import { Suspense, useEffect } from 'react';
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { AppShell } from './components/layout/AppShell';
 import { RouteNav } from './components/layout/RouteNav';
 import { Skeleton } from './components/ui/Skeleton';
-
-const HomeRoute = lazy(() => import('./routes/home'));
-const PortfolioBuilderRoute = lazy(() => import('./routes/portfolio-builder'));
-const SegmentIntelligenceRoute = lazy(() => import('./routes/segment-intelligence'));
-const LeadQueueRoute = lazy(() => import('./routes/lead-queue'));
-const Borrower360Route = lazy(() => import('./routes/borrower-360'));
-const OfferOrchestratorRoute = lazy(() => import('./routes/offer-orchestrator'));
-const AskGenieRoute = lazy(() => import('./routes/ask-genie'));
-const AdminConfigRoute = lazy(() => import('./routes/admin-config'));
+import {
+  AdminConfigRoute,
+  AskGenieRoute,
+  Borrower360Route,
+  HomeRoute,
+  LeadQueueRoute,
+  OfferOrchestratorRoute,
+  PortfolioBuilderRoute,
+  SegmentIntelligenceRoute,
+  preloadLikelyNextRoutes,
+} from './lib/routePreloaders';
 
 function RouteFallback() {
   return (
@@ -66,6 +68,7 @@ function RouteTransition() {
 }
 
 export default function App() {
+  useEffect(() => preloadLikelyNextRoutes(), []);
   return (
     <AppShell>
       <RouteNav />

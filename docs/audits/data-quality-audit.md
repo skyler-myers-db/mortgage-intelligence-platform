@@ -232,6 +232,51 @@ After the engineering team shipped fixes for all three P2 defects, re-ran the or
 
 ### Sign-off
 
-All three P2 defects from the original audit are **closed live on deployment `01f14e6f026a161e95c88e798a8096cc`**. The parity bug found mid-fix (evidence chips showing stale `+9238 bps` while borrower math showed `+863 bps`) is also closed — chip, why-panel, supporting-evidence section, and trigger timeline all agree on `+863 bps`.
+All three P2 defects from the original audit were **closed live on historical deployment `01f14e6f026a161e95c88e798a8096cc`**. The parity bug found mid-fix (evidence chips showing stale `+9238 bps` while borrower math showed `+863 bps`) was also closed in that validation pass — chip, why-panel, supporting-evidence section, and trigger timeline all agreed on `+863 bps`.
 
-The op note about `databricks bundle deploy -t dev` returning 403 on app-update (recovered via direct `databricks apps deploy`) is a tooling story for the bundle workflow, not a data-quality issue, and doesn't affect this sign-off.
+The op note about `databricks bundle deploy -t dev` returning 403 on app-update (recovered via direct `databricks apps deploy`) was a tooling story for the bundle workflow, not a data-quality issue, and did not affect this sign-off. It was resolved on 2026-05-14 by pinning the dev target's Genie space id so the bare bundle path no longer sends the CI placeholder to Databricks Apps.
+
+---
+
+## Open follow-up — Owner Link long-tail distribution
+
+**Filed:** 2026-05-15  
+**Severity:** P2 data-quality review / model-interpretation guardrail  
+**Status:** Open
+
+The critical uncommitted-change walkthrough found borrower `B-102FL7THC6Q3L`
+rendering `Related properties: 346 (via owner graph)`. That row is plausible for
+an institutional landlord because the borrower is `is_corporate_owner=true`,
+`is_absentee=true`, and `is_investor=true`. A follow-up live SQL probe confirmed
+the broader Owner Link long tail still needs review:
+
+| Metric | Result |
+|---|---:|
+| `COUNT(*)` in `mip.gold.borrower_360` | 5,156,184 |
+| `MAX(related_property_count)` | 3,686 |
+| `p99(related_property_count)` | 397 |
+| `p999(related_property_count)` | 3,564 |
+| Rows with `related_property_count >= 100` | 118,990 |
+| Rows with `related_property_count >= 500` | 43,974 |
+| Rows with `related_property_count >= 1000` | 27,269 |
+| Non-corporate rows with `related_property_count >= 1000` | 4,384 |
+| `B-102FL7THC6Q3L` related count / flags | 346 / corporate, absentee, investor |
+
+**Required follow-up before using high Owner Link counts as household-investor
+evidence in customer-facing scoring or copy:**
+
+1. Quantify the top Owner Link entities by `related_property_count` and verify
+   whether high-count non-corporate links are true institutional/LLC ownership,
+   trust/servicer patterns, or over-matched owner entities.
+2. Decide whether UI and offer logic should cap, bucket, or label extreme counts
+   (for example `1000+`) rather than displaying the exact long-tail number.
+3. Verify downstream scoring and recommended-offer rules do not treat extreme
+   `related_property_count` values as the same kind of evidence as a 2-4 property
+   household investor signal.
+4. If the high-count tail reflects real institutional landlords, add an
+   explicit "institutional owner" interpretation path so borrower-facing and
+   operator-facing copy does not imply household ownership behavior.
+
+This follow-up does not reopen the previous P2 data-quality fixes. It is a
+separate owner-graph interpretation guardrail surfaced by the 2026-05-15 live
+walkthrough.

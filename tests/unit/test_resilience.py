@@ -273,6 +273,63 @@ def test_ttl_cache_zero_ttl_disables_entry() -> None:
     assert cache.get("k") is None
 
 
+def test_ttl_cache_evicts_least_recently_used_entry() -> None:
+    cache = TTLCache(max_entries=2)
+    cache.set("a", 1, ttl_s=60.0)
+    cache.set("b", 2, ttl_s=60.0)
+    assert cache.get("a") == 1  # make a most-recent
+    cache.set("c", 3, ttl_s=60.0)
+
+    assert cache.get("a") == 1
+    assert cache.get("b") is None
+    assert cache.get("c") == 3
+
+
+def test_ttl_cache_get_or_set_coalesces_concurrent_misses() -> None:
+    cache = TTLCache()
+    start = Event()
+    release = Event()
+    calls = 0
+    calls_lock = Lock()
+
+    def factory() -> str:
+        nonlocal calls
+        with calls_lock:
+            calls += 1
+        start.set()
+        release.wait(timeout=2.0)
+        return "fresh"
+
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        futures = [
+            pool.submit(cache.get_or_set, "hot", factory, ttl_s=60.0)
+            for _ in range(5)
+        ]
+        assert start.wait(timeout=2.0)
+        release.set()
+        assert [future.result(timeout=2.0) for future in futures] == ["fresh"] * 5
+
+    assert calls == 1
+
+
+def test_ttl_cache_stale_if_error_returns_expired_last_good_value() -> None:
+    clock = _FakeClock()
+    cache = TTLCache(now=clock)
+    cache.set("aggregate", {"count": 7}, ttl_s=1.0)
+    clock.advance(2.0)
+
+    def boom() -> dict[str, int]:
+        raise RuntimeError("warehouse down")
+
+    assert cache.get("aggregate") is None
+    assert cache.get_or_set(
+        "aggregate",
+        boom,
+        ttl_s=60.0,
+        stale_if_error=True,
+    ) == {"count": 7}
+
+
 # ---------------------------------------------------------------------------
 # Resilient composition
 # ---------------------------------------------------------------------------

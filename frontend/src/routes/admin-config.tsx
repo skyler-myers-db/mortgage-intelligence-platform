@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { FormEvent, ReactElement, ReactNode } from 'react';
+import { useLocation } from 'react-router-dom';
 import { useApp, type Accent, type Density, type Theme } from '../components/AppContext';
 import { PageShell } from '../components/layout/PageShell';
 import { Chip } from '../components/Primitives';
@@ -7,7 +8,7 @@ import { Icon } from '../components/Icon';
 import { EntradaWordmark } from '../components/brand/Entrada';
 import { api } from '../lib/api';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
-import { queryKeys } from '../lib/queryClient';
+import { queryKeys } from '../lib/queryKeys';
 import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 
 /**
@@ -97,6 +98,7 @@ function formatThresholdValue(t: ThresholdRow): string {
 }
 
 export default function AdminConfig() {
+  const location = useLocation();
   const {
     theme, setTheme,
     accent, setAccent,
@@ -111,6 +113,7 @@ export default function AdminConfig() {
   const [appearanceOpen, setAppearanceOpen] = useState<boolean>(false);
   // Disclosure state for the Offer rules threshold table.
   const [rulesExpanded, setRulesExpanded] = useState<boolean>(false);
+  const [rulesDetailsOpen, setRulesDetailsOpen] = useState<boolean>(false);
   const [auditEntityDraft, setAuditEntityDraft] = useState<string>('');
   const [auditActionDraft, setAuditActionDraft] = useState<string>('');
   const [auditEventTypeDraft, setAuditEventTypeDraft] = useState<string>('');
@@ -131,6 +134,13 @@ export default function AdminConfig() {
   );
   const rulesLoading = rules === null && rulesWarming === null && rulesErrorObj === null;
   const rulesError = rulesErrorObj ? 'Rules endpoint unreachable' : null;
+
+  useEffect(() => {
+    if (location.hash === '#offer-rules') {
+      setRulesDetailsOpen(true);
+      setRulesExpanded(true);
+    }
+  }, [location.hash]);
 
   const {
     data: sources,
@@ -252,10 +262,21 @@ export default function AdminConfig() {
       {/* First row — the three operator-grade panels */}
       <div className="admin-grid">
         {/* Offer rules — clickable to expand threshold table */}
-        <div className="surface">
+        <div className="surface" id="offer-rules">
           <div className="surface__hdr surface__hdr--split">
             <div className="h-4">Offer rules</div>
-            <Chip variant="neutral">{rulesVersionLabel}</Chip>
+            <button
+              type="button"
+              className="chip chip--neutral admin-rules-version"
+              onClick={() => setRulesDetailsOpen((v) => !v)}
+              aria-expanded={rulesDetailsOpen}
+              aria-controls="admin-rules-version-detail"
+              disabled={!rules && !rulesError}
+              title="Show governed offer-rules version details"
+            >
+              <span className="chip__label">{rulesVersionLabel}</span>
+              <Icon name={rulesDetailsOpen ? 'up' : 'down'} size={10} />
+            </button>
           </div>
           <div className="surface__body admin-panel-body">
             <p className="body flush">
@@ -278,6 +299,40 @@ export default function AdminConfig() {
               status={rulesError ? 'warn' : 'ok'}
               statusLabel={rulesError ?? 'Active'}
             />
+            <MetaRow
+              label="Rules version"
+              value={rulesVersionLabel}
+              status={rulesError ? 'warn' : 'ok'}
+              statusLabel={rules ? 'Hash of active UC config' : 'Awaiting rules endpoint'}
+            />
+            {rulesDetailsOpen && (
+              <div className="admin-rules-detail" id="admin-rules-version-detail">
+                <div className="admin-rules-detail__hdr">
+                  <div className="h-5">Version governance</div>
+                  <Chip variant={rules ? 'success' : 'warning'}>
+                    {rules ? 'active ruleset' : 'unavailable'}
+                  </Chip>
+                </div>
+                <p className="body muted flush">
+                  This app receives only the active rules payload from <span className="mono fs-11">/api/admin/rules</span>. No version-history feed is exposed, so this panel shows the active governed details instead of claiming a diff against prior rules.
+                </p>
+                <div className="admin-rules-detail__grid">
+                  <Row2 label="Version code" value={rulesVersionLabel} />
+                  <Row2
+                    label="Source table"
+                    value="mip.ref.offer_rules_config"
+                  />
+                  <Row2
+                    label="Edited"
+                    value={formatEditedAt(rules?.rules_edited_at ?? null)}
+                  />
+                  <Row2
+                    label="Threshold rows"
+                    value={rules ? `${rules.thresholds.length}` : 'Unavailable'}
+                  />
+                </div>
+              </div>
+            )}
             <button
               type="button"
               className="btn btn--ghost btn--sm"

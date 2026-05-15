@@ -24,7 +24,11 @@ from backend.services.observability import emit
 from backend.services.pii_redaction import normalize_public_lender_ref
 from backend.services.rbac import require_admin
 from backend.services.repositories import LeadRepository, get_lead_repository
-from backend.services.sales_state import SalesStateStore, get_sales_state_store, hydrate_leads_with_sales_state
+from backend.services.sales_state import (
+    SalesStateStore,
+    get_sales_state_store,
+    hydrate_leads_with_sales_state,
+)
 
 log = logging.getLogger(__name__)
 

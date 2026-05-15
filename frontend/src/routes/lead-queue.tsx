@@ -11,7 +11,7 @@ import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 import { FilterSelect } from '../components/ui/FilterSelect';
 import { useFootprint } from '../components/FootprintProvider';
 import { Skeleton } from '../components/ui/Skeleton';
-import { queryKeys } from '../lib/queryClient';
+import { queryKeys } from '../lib/queryKeys';
 
 /**
  * Lead Queue — deep-dive table route. Full borrower list (filtered by segment

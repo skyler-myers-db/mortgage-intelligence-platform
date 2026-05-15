@@ -1,16 +1,40 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { Link } from 'react-router-dom';
-import type { CallDisposition, LeadSummary, SalesTeamMember } from '../../types';
+import type { CallDisposition, LeadSummary } from '../../types';
 import { Icon } from '../Icon';
-import { Chip, Button, EvidenceChip } from '../Primitives';
-import { ScoreBadge } from './ScoreBadge';
-import { ConfidenceMeter } from './ConfidenceMeter';
+import { Chip, Button } from '../Primitives';
 import { useApp } from '../AppContext';
 import { api, ApiError, isAbortError } from '../../lib/api';
-import { DRAWER_SOURCES } from '../../lib/drawerSources';
-import { segmentColor, segmentName } from '../../lib/segmentMetadata';
-import { invalidateOperationalQueries } from '../../lib/queryClient';
+import { invalidateOperationalQueries } from '../../lib/queryKeys';
+import { buildLeadCsv } from './LeadTable.csv';
+import {
+  BULK_APPROVE_CONCURRENCY,
+  LEAD_TABLE_COL_COUNT,
+  LEAD_VIRTUALIZATION_THRESHOLD,
+} from './LeadTable.constants';
+import {
+  _newBulkId,
+  chunk,
+  computeLeadVirtualRange,
+  dispositionLabel,
+  isEditableTarget,
+  isLeadApprovalEligible,
+  isLeadSelectableForSalesOps,
+  isTerminalApproval,
+  sortValue,
+} from './LeadTable.logic';
+import { LeadTableRow } from './LeadTableRow';
+import { LeadDispositionPanel, LeadRejectPanel } from './LeadTableDecisionPanels';
+import type { LeadTableProps, RejectReasonCode, SortDir, SortKey } from './LeadTable.types';
+
+export { buildLeadCsv } from './LeadTable.csv';
+export {
+  computeLeadVirtualRange,
+  isEditableTarget,
+  isLeadApprovalEligible,
+  isLeadSelectableForSalesOps,
+} from './LeadTable.logic';
+export type { LeadExportContext, LeadVirtualRange } from './LeadTable.types';
 
 /**
  * LeadTable — prototype `.surface` + `.tbl` BEM. Sticky thead, hover, row
@@ -33,451 +57,6 @@ import { invalidateOperationalQueries } from '../../lib/queryClient';
  * approved/rejected rows are skipped silently. Shift+A fires bulk-approve
  * when the table has focus; plain A still approves only the expanded row.
  */
-
-/** Concurrency cap for the bulk-approve client-side loop. */
-const BULK_APPROVE_CONCURRENCY = 3;
-const LEAD_ROW_ESTIMATE_PX = 86;
-const LEAD_ROW_OVERSCAN = 12;
-const LEAD_VIRTUALIZATION_THRESHOLD = 120;
-const LEAD_TABLE_COL_COUNT = 15;
-
-export interface LeadExportContext {
-  generatedAt?: string;
-  filters?: string;
-  refreshedAt?: string | null;
-  rulesVersion?: string | null;
-}
-
-interface LeadTableProps {
-  leads: LeadSummary[];
-  totalMatching?: number | null;
-  truncatedAt?: number | null;
-  exportContext?: LeadExportContext;
-  salesTeam?: SalesTeamMember[];
-}
-
-type RejectReasonCode =
-  | 'out_of_footprint'
-  | 'do_not_call'
-  | 'opt_out'
-  | 'fair_lending_review'
-  | 'low_intent'
-  | 'data_quality'
-  | 'other_with_text';
-
-const REJECT_REASONS: { code: RejectReasonCode; label: string }[] = [
-  { code: 'low_intent', label: 'Low intent' },
-  { code: 'do_not_call', label: 'Do Not Call' },
-  { code: 'opt_out', label: 'Opt-out' },
-  { code: 'fair_lending_review', label: 'Fair-lending review' },
-  { code: 'data_quality', label: 'Data quality' },
-  { code: 'out_of_footprint', label: 'Out of footprint' },
-  { code: 'other_with_text', label: 'Other' },
-];
-
-const DISPOSITION_OPTIONS: { outcome: CallDisposition['outcome']; label: string }[] = [
-  { outcome: 'called_no_answer', label: 'No answer' },
-  { outcome: 'called_left_voicemail', label: 'Left voicemail' },
-  { outcome: 'connected', label: 'Connected' },
-  { outcome: 'callback_scheduled', label: 'Callback scheduled' },
-  { outcome: 'application_started', label: 'Application started' },
-  { outcome: 'not_interested', label: 'Not interested' },
-  { outcome: 'not_now', label: 'Not now' },
-  { outcome: 'dead', label: 'Dead lead' },
-];
-
-type SortKey = 'rank' | 'relationship' | 'assignment' | 'outreach' | 'equity' | 'rate' | 'score' | 'confidence';
-type SortDir = 'asc' | 'desc';
-
-export interface LeadVirtualRange {
-  start: number;
-  end: number;
-  top: number;
-  bottom: number;
-}
-
-export function computeLeadVirtualRange(
-  totalRows: number,
-  scrollTop: number,
-  viewportHeight: number,
-  enabled: boolean,
-  rowEstimatePx = LEAD_ROW_ESTIMATE_PX,
-  overscan = LEAD_ROW_OVERSCAN,
-): LeadVirtualRange {
-  if (!enabled || totalRows <= 0) {
-    return { start: 0, end: totalRows, top: 0, bottom: 0 };
-  }
-  const start = Math.max(0, Math.floor(Math.max(0, scrollTop) / rowEstimatePx) - overscan);
-  const visibleCount = Math.ceil(Math.max(1, viewportHeight) / rowEstimatePx) + overscan * 2;
-  const end = Math.min(totalRows, start + visibleCount);
-  return {
-    start,
-    end,
-    top: start * rowEstimatePx,
-    bottom: Math.max(0, (totalRows - end) * rowEstimatePx),
-  };
-}
-
-/**
- * Return true when `el` is an editable element that the window-level
- * hotkey handler must skip over. Exported for unit tests — the
- * actual hotkey listener uses both this and `document.activeElement`
- * so typing "a" into a text field can never trigger bulk-approve.
- * R5-12 (2026-04-23).
- */
-export function isEditableTarget(el: Element | null | undefined): boolean {
-  if (!el) return false;
-  const tag = (el as HTMLElement).tagName;
-  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
-  return (el as HTMLElement).isContentEditable === true;
-}
-
-/**
- * Chunk a list into groups of `size`. Used by the bulk-approve loop to
- * bound in-flight POSTs to the approve endpoint without inventing a
- * server-side bulk API.
- */
-function chunk<T>(items: T[], size: number): T[][] {
-  if (size <= 0) return [items];
-  const out: T[][] = [];
-  for (let i = 0; i < items.length; i += size) {
-    out.push(items.slice(i, i + size));
-  }
-  return out;
-}
-
-function _newBulkId(): string {
-  const c = typeof globalThis !== 'undefined' ? globalThis.crypto : undefined;
-  if (c && typeof c.randomUUID === 'function') return c.randomUUID();
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (ch) => {
-    const n = ch === 'x' ? Math.floor(Math.random() * 16) : 8 + Math.floor(Math.random() * 4);
-    return n.toString(16);
-  });
-}
-
-function csvEscape(raw: string): string {
-  const v = /^[=+\-@]/.test(raw) ? `'${raw}` : raw;
-  return /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
-}
-
-function csvValue(raw: unknown): string {
-  if (raw === null || raw === undefined) return '';
-  if (typeof raw === 'boolean') return raw ? 'true' : 'false';
-  if (typeof raw === 'number') return Number.isFinite(raw) ? String(raw) : '';
-  return String(raw);
-}
-
-function relationshipLabel(lead: LeadSummary): string {
-  if (lead.is_current_customer) return 'Current';
-  if (lead.is_former_customer) return 'Former';
-  if (lead.is_competitor_lien) return 'Competitor';
-  return 'Other';
-}
-
-function relationshipVariant(lead: LeadSummary): 'success' | 'warning' | 'neutral' {
-  if (lead.is_current_customer) return 'success';
-  if (lead.is_competitor_lien) return 'warning';
-  return 'neutral';
-}
-
-function sortValue(lead: LeadSummary, key: SortKey): string | number {
-  if (key === 'relationship') return relationshipLabel(lead);
-  if (key === 'assignment') return lead.assigned_to_label ?? lead.assigned_to_email ?? 'Unassigned';
-  if (key === 'outreach') return lead.outreach_status ?? 'none';
-  if (key === 'equity') return lead.equity_estimate;
-  if (key === 'rate') return lead.rate_spread_bps;
-  if (key === 'score') return lead.opportunity_score;
-  if (key === 'confidence') return lead.confidence;
-  return 0;
-}
-
-function outreachLabel(status?: string | null): string {
-  if (!status || status === 'none') return 'None';
-  return status.charAt(0).toUpperCase() + status.slice(1);
-}
-
-function outreachVariant(status?: string | null): 'success' | 'warning' | 'neutral' {
-  if (status === 'sent' || status === 'replied' || status === 'actioned') return 'success';
-  if (status === 'queued' || status === 'bounced') return 'warning';
-  return 'neutral';
-}
-
-function isTerminalApproval(status?: string | null): boolean {
-  return status === 'approved' || status === 'rejected' || status === 'hold';
-}
-
-function isNonWorkableApproval(status?: string | null): boolean {
-  return status === 'rejected' || status === 'hold';
-}
-
-export function isLeadSelectableForSalesOps(status?: string | null, localStatus?: string | null): boolean {
-  return !isNonWorkableApproval(status) && !isNonWorkableApproval(localStatus);
-}
-
-export function isLeadApprovalEligible(status?: string | null, localStatus?: string | null): boolean {
-  return !localStatus && !isTerminalApproval(status);
-}
-
-function dispositionLabel(outcome?: string | null): string {
-  if (!outcome) return 'Untouched';
-  return outcome.split('_').map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(' ');
-}
-
-function dispositionVariant(outcome?: string | null): 'success' | 'warning' | 'neutral' | 'danger' {
-  if (outcome === 'application_started' || outcome === 'callback_scheduled' || outcome === 'connected') return 'success';
-  if (outcome === 'called_no_answer' || outcome === 'called_left_voicemail' || outcome === 'not_now') return 'warning';
-  if (outcome === 'dead' || outcome === 'not_interested') return 'danger';
-  return 'neutral';
-}
-
-function formatDateTimeShort(value?: string | null): string {
-  if (!value) return '—';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  });
-}
-
-export function buildLeadCsv(
-  leads: LeadSummary[],
-  approvals: Record<string, string | undefined> = {},
-  context: LeadExportContext = {},
-): string {
-  const header = [
-    'borrower_id',
-    'property_ref',
-    'city',
-    'state',
-    'zip',
-    'segments',
-    'equity_estimate',
-    'rate_spread_bps',
-    'opportunity_score',
-    'confidence',
-    'recommended_offer',
-    'approval_status',
-    'outreach_status',
-    'approved_at',
-    'outreach_at',
-    'assigned_to_email',
-    'assigned_at',
-    'latest_disposition_outcome',
-    'latest_disposition_at',
-    'latest_callback_at',
-    'aging_days',
-    'is_owner_occupied',
-    'is_investor',
-    'is_current_customer',
-    'is_former_customer',
-    'is_competitor_lien',
-    'current_lender_ref',
-    'current_lien_balance',
-    'second_pos_amount',
-    'has_permit',
-    'listed_for_sale',
-    'related_property_count',
-    'marketing_eligible',
-    'consent_status',
-    'suppression_reason',
-    'last_touch_at',
-    'eligible_recontact_at',
-  ];
-  const exportableLeads = leads.filter((lead) => lead.marketing_eligible === true);
-  const metadata = [
-    ['generated_at', context.generatedAt ?? new Date().toISOString()],
-    ['filters', context.filters ?? 'none'],
-    ['suppression_policy', 'eligible_only_default; non-eligible visible rows are excluded from client CSV'],
-    ['refreshed_at', context.refreshedAt ?? 'unknown'],
-    ['rules_version', context.rulesVersion ?? 'unknown'],
-  ].map(([key, value]) => `# ${key}=${String(value).replace(/\r?\n/g, ' ')}`);
-  const rows = exportableLeads.map((l) =>
-    [
-      l.borrower_id,
-      l.clip ?? '',
-      l.city,
-      l.state,
-      l.zip,
-      l.segment_codes.join('|'),
-      l.equity_estimate,
-      l.rate_spread_bps,
-      l.opportunity_score,
-      l.confidence,
-      l.recommended_offer,
-      approvals[l.borrower_id] ?? l.approval_status ?? 'pending',
-      l.outreach_status ?? 'none',
-      l.approved_at ?? '',
-      l.outreach_at ?? '',
-      l.assigned_to_email ?? '',
-      l.assigned_at ?? '',
-      l.latest_disposition_outcome ?? '',
-      l.latest_disposition_at ?? '',
-      l.latest_callback_at ?? '',
-      l.aging_days ?? '',
-      l.is_owner_occupied,
-      l.is_investor,
-      l.is_current_customer,
-      l.is_former_customer,
-      l.is_competitor_lien,
-      l.current_lender_ref,
-      l.current_lien_balance,
-      l.second_pos_amount,
-      l.has_permit,
-      l.listed_for_sale,
-      l.related_property_count,
-      l.marketing_eligible,
-      l.consent_status ?? 'unknown',
-      l.suppression_reason ?? '',
-      l.last_touch_at ?? '',
-      l.eligible_recontact_at ?? '',
-    ]
-      .map((value) => csvEscape(csvValue(value)))
-      .join(','),
-  );
-  return [...metadata, header.join(','), ...rows].join('\n');
-}
-
-function RowPreview({ lead }: { lead: LeadSummary }) {
-  const { setLastBorrowerId, saveLead, isLeadSaved } = useApp();
-  // Prefer the display-safe Cotality property ref projected by the
-  // backend. Raw CLIP is masked server-side for public demo safety.
-  const propertyRef = lead.clip && lead.clip.length > 0
-    ? lead.clip
-    : 'property_ref_unavailable';
-  const saved = isLeadSaved(lead.borrower_id);
-  const saveCurrentLead = () => {
-    saveLead({
-      borrower_id: lead.borrower_id,
-      city: lead.city,
-      state: lead.state,
-      zip: lead.zip,
-      recommended_offer: lead.recommended_offer,
-      opportunity_score: lead.opportunity_score,
-      confidence: lead.confidence,
-    });
-  };
-  return (
-    <div className="tbl__expand-inner tbl__expand-inner--lead">
-      <div>
-        <div className="eyebrow mb-2">Customer 360 preview</div>
-        <div className="preview-grid">
-          <Cell k="Property ref"  v={propertyRef} mono />
-          <Cell k="Location"      v={`${lead.city}, ${lead.state} · ${lead.zip}`} />
-          <Cell k="Equity"        v={`$${(lead.equity_estimate / 1000).toFixed(0)}k`} mono />
-          <Cell k="Rate spread"   v={`+${lead.rate_spread_bps} bps`} mono />
-          <Cell k="Score"         v={`${lead.opportunity_score}`} mono />
-          <Cell k="Confidence"    v={`${lead.confidence}%`} mono />
-          <Cell k="Approval"      v={lead.approval_status ?? 'pending'} />
-          <Cell k="Outreach"      v={outreachLabel(lead.outreach_status)} />
-          <Cell k="Assigned to"   v={lead.assigned_to_label ?? lead.assigned_to_email ?? 'Unassigned'} />
-          <Cell k="Last touch"    v={dispositionLabel(lead.latest_disposition_outcome)} />
-        </div>
-        <div className="eyebrow mt-4 mb-2">Segments</div>
-        <div className="chip-row">
-          {lead.segment_codes.map((sid) => {
-            const color = segmentColor(sid);
-            return (
-              <span
-                key={sid}
-                className="chip chip--segment"
-                style={{ '--chip-hue': color } as CSSProperties}
-              >
-                <span className="chip__label">{segmentName(sid)}</span>
-              </span>
-            );
-          })}
-        </div>
-      </div>
-
-      <div>
-        <div className="eyebrow mb-2">Why now</div>
-        <p className="body flush">{lead.why_now}</p>
-        <div className="chip-row mt-3">
-          <span className="muted fs-11">Decision inputs:</span>
-          {/*
-            Prototype-parity-audit P1-5 (2026-05-04): the row preview
-            previously surfaced only two chips — In-the-Money logic and
-            Next-Best-Offer logic — which understated the depth of evidence
-            the platform actually carries. Borrower 360 already renders 5+
-            chips per dossier; the inline lead-queue preview should match
-            that posture so an LO scrolling the queue can see what each
-            recommendation is grounded in without opening the dossier. We
-            Render a fixed core set and append data-driven chips for whichever
-            signals the row carries. Each chip routes to a distinct drawer
-            entry; related evidence can share upstream Cotality assets, but the
-            drawer should still describe the specific primitive being cited.
-          */}
-          <EvidenceChip source={DRAWER_SOURCES.itm}>{DRAWER_SOURCES.itm.title}</EvidenceChip>
-          <EvidenceChip source={DRAWER_SOURCES.leadScore}>{DRAWER_SOURCES.leadScore.title}</EvidenceChip>
-          <EvidenceChip source={DRAWER_SOURCES.nbo}>{DRAWER_SOURCES.nbo.title}</EvidenceChip>
-          <EvidenceChip source={DRAWER_SOURCES.ownerGraph}>{DRAWER_SOURCES.ownerGraph.title}</EvidenceChip>
-          {lead.equity_estimate > 0 && (
-            <EvidenceChip source={DRAWER_SOURCES.avm}>{DRAWER_SOURCES.avm.title}</EvidenceChip>
-          )}
-          {(lead.current_lien_balance ?? 0) > 0 && (
-            <EvidenceChip source={DRAWER_SOURCES.lien}>{DRAWER_SOURCES.lien.title}</EvidenceChip>
-          )}
-          {lead.has_permit === true && (
-            <EvidenceChip source={DRAWER_SOURCES.permit}>{DRAWER_SOURCES.permit.title}</EvidenceChip>
-          )}
-          {lead.listed_for_sale === true && (
-            <EvidenceChip source={DRAWER_SOURCES.mls}>{DRAWER_SOURCES.mls.title}</EvidenceChip>
-          )}
-        </div>
-      </div>
-
-      <div>
-        <div className="eyebrow mb-2">Next-best-offer</div>
-        <div className="surface preview-offer-card">
-          <div className="split-row">
-            <div className="offer-title">{lead.recommended_offer}</div>
-            <ScoreBadge value={lead.opportunity_score} />
-          </div>
-          <div className="muted fs-12 mt-1">
-            Confidence <ConfidenceMeter value={lead.confidence} compact />
-          </div>
-          <div className="chip-row mt-3">
-            <Link
-              className="btn btn--primary btn--sm"
-              to={`/borrower-360/${lead.borrower_id}`}
-              onClick={() => setLastBorrowerId(lead.borrower_id)}
-            >
-              Open Borrower 360
-            </Link>
-            <Link
-              className="btn btn--default btn--sm"
-              to={`/offer-orchestrator/${lead.borrower_id}`}
-              onClick={() => setLastBorrowerId(lead.borrower_id)}
-            >
-              Build offer
-            </Link>
-            <Button
-              variant={saved ? 'ghost' : 'default'}
-              size="sm"
-              icon={saved ? 'check' : 'tag'}
-              onClick={saveCurrentLead}
-              aria-label={`${saved ? 'Saved' : 'Save'} borrower ${lead.borrower_id}`}
-            >
-              {saved ? 'Saved' : 'Save lead'}
-            </Button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function Cell({ k, v, mono }: { k: string; v: string; mono?: boolean }) {
-  return (
-    <div>
-      <div className="field__label">{k}</div>
-      <div className={`field__value ${mono ? 'mono num' : ''}`}>{v}</div>
-    </div>
-  );
-}
 
 export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exportContext, salesTeam = [] }: LeadTableProps) {
   const queryClient = useQueryClient();
@@ -562,13 +141,11 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
   //
   // `aborted` rows fall in an ambiguous state: the client cancelled the
   // POST mid-flight on unmount, but the server may have already
-  // committed the audit row. We surface these as a distinct "check the
-  // audit log" message rather than pushing retry language, because a
-  // blind retry can produce a duplicate audit row. R5-21 (2026-04-23).
-  //
-  // TODO: once R5-01 (server-side idempotency keys on /api/outreach/
-  // approve) lands, aborted becomes safe to retry and this branch can
-  // collapse back into the network-retry path.
+  // committed the audit row. Server-side idempotency protects retries
+  // that reuse the original request_id; this bulk UI does not persist
+  // those per-row ids after unmount, so the honest operator guidance is
+  // still to check the audit log instead of blindly retrying. R5-21
+  // (2026-04-23).
   const [bulkToast, setBulkToast] = useState<
     { ok: number; fail: number; network: number; aborted: number } | null
   >(null);
@@ -1098,7 +675,7 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
     return () => window.removeEventListener('keydown', onKey);
   }, [expanded, approvals, approveLead, selectedIds, bulkApproving, bulkApprove, leadsById]);
 
-  const stop = (e: ReactKeyboardEvent | React.MouseEvent) => e.stopPropagation();
+  const stop = (e: ReactKeyboardEvent | ReactMouseEvent) => e.stopPropagation();
 
   const selectionCount = selectedIds.size;
   const selectedApprovalEligibleCount = useMemo(
@@ -1206,145 +783,36 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
         </div>
       </div>
       {pendingReject && (
-        <form
-          className="decision-panel decision-panel--inline"
-          onSubmit={(e) => {
-            e.preventDefault();
-            void submitReject();
+        <LeadRejectPanel
+          borrowerId={pendingReject}
+          reasonCode={rejectReasonCode}
+          rationale={rejectRationale}
+          onReasonChange={setRejectReasonCode}
+          onRationaleChange={setRejectRationale}
+          onCancel={() => {
+            setPendingReject(null);
+            setRejectRationale('');
+            setRejectReasonCode('low_intent');
           }}
-        >
-          <div>
-            <div className="h-4">Reject rationale</div>
-            <div className="muted fs-12">
-              Record the committee-visible reason for {pendingReject}.
-            </div>
-          </div>
-          <label className="decision-panel__field">
-            <span className="field__label">Reason</span>
-            <select
-              value={rejectReasonCode}
-              onChange={(e) => setRejectReasonCode(e.target.value as RejectReasonCode)}
-            >
-              {REJECT_REASONS.map((reason) => (
-                <option key={reason.code} value={reason.code}>{reason.label}</option>
-              ))}
-            </select>
-          </label>
-          <label className="decision-panel__field decision-panel__field--wide">
-            <span className="field__label">Rationale note</span>
-            <textarea
-              value={rejectRationale}
-              onChange={(e) => setRejectRationale(e.target.value)}
-              maxLength={500}
-              placeholder="Optional unless reason is Other."
-            />
-          </label>
-          <div className="decision-panel__actions">
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={() => {
-                setPendingReject(null);
-                setRejectRationale('');
-                setRejectReasonCode('low_intent');
-              }}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="submit"
-              variant="primary"
-              size="sm"
-              icon="cross"
-              disabled={rejectReasonCode === 'other_with_text' && rejectRationale.trim().length === 0}
-            >
-              Confirm reject
-            </Button>
-          </div>
-        </form>
+          onSubmit={() => void submitReject()}
+        />
       )}
       {pendingDisposition && (
-        <form
-          className="decision-panel decision-panel--inline"
-          onSubmit={(e) => {
-            e.preventDefault();
-            void submitDisposition();
-          }}
-        >
-          <div>
-            <div className="h-4">Call disposition</div>
-            <div className="muted fs-12">
-              Log LO activity for {pendingDisposition}.
-            </div>
-          </div>
-          <label className="decision-panel__field">
-            <span className="field__label">Loan officer</span>
-            <select
-              value={dispositionLo}
-              onChange={(e) => setDispositionLo(e.target.value)}
-              required
-            >
-              <option value="" disabled>Choose LO</option>
-              {salesTeam.map((member) => (
-                <option key={member.email} value={member.email}>
-                  {member.display_label} · {member.email}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="decision-panel__field">
-            <span className="field__label">Outcome</span>
-            <select
-              value={dispositionOutcome}
-              onChange={(e) => setDispositionOutcome(e.target.value as CallDisposition['outcome'])}
-            >
-              {DISPOSITION_OPTIONS.map((option) => (
-                <option key={option.outcome} value={option.outcome}>{option.label}</option>
-              ))}
-            </select>
-          </label>
-          {dispositionOutcome === 'callback_scheduled' && (
-            <label className="decision-panel__field">
-              <span className="field__label">Callback time</span>
-              <input
-                type="datetime-local"
-                value={dispositionCallbackAt}
-                onChange={(e) => setDispositionCallbackAt(e.target.value)}
-                required
-              />
-            </label>
-          )}
-          <label className="decision-panel__field decision-panel__field--wide">
-            <span className="field__label">Notes</span>
-            <textarea
-              value={dispositionNotes}
-              onChange={(e) => setDispositionNotes(e.target.value)}
-              maxLength={500}
-              placeholder="Optional operational note; no borrower PII."
-            />
-          </label>
-          <div className="decision-panel__actions">
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={() => setPendingDisposition(null)}
-              disabled={salesBusy}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="submit"
-              variant="primary"
-              size="sm"
-              icon="bolt"
-              disabled={salesBusy || !dispositionLo}
-            >
-              {salesBusy ? 'Logging…' : 'Log disposition'}
-            </Button>
-          </div>
-        </form>
+        <LeadDispositionPanel
+          borrowerId={pendingDisposition}
+          salesTeam={salesTeam}
+          salesBusy={salesBusy}
+          loEmail={dispositionLo}
+          outcome={dispositionOutcome}
+          callbackAt={dispositionCallbackAt}
+          notes={dispositionNotes}
+          onLoChange={setDispositionLo}
+          onOutcomeChange={setDispositionOutcome}
+          onCallbackAtChange={setDispositionCallbackAt}
+          onNotesChange={setDispositionNotes}
+          onCancel={() => setPendingDisposition(null)}
+          onSubmit={() => void submitDisposition()}
+        />
       )}
       {salesToast && (
         <div role="status" aria-live="polite" className="table-success">
@@ -1423,199 +891,27 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
               const isSelected = selectedIds.has(lead.borrower_id);
               const isSelectable = isLeadSelectableForSalesOps(serverStatus, approval);
               return (
-                <Fragment key={lead.borrower_id}>
-                  <tr
-                    className={isOpen ? 'is-expanded' : ''}
-                    tabIndex={0}
-                    role="button"
-                    aria-rowindex={virtualIndex + 2}
-                    aria-expanded={isOpen}
-                    aria-label={`Lead ${lead.borrower_id}, ${isOpen ? 'expanded' : 'collapsed'}. Press Enter or Space to toggle preview; A to approve, R to reject.`}
-                    onClick={() => {
-                      setLastBorrowerId(lead.borrower_id);
-                      setExpanded(isOpen ? null : lead.borrower_id);
-                    }}
-                    onKeyDown={(e) => {
-                      // R5-10 (2026-04-23): make rows toggleable from
-                      // the keyboard so A/R hotkeys work without a
-                      // prior mouse click. We only intercept when the
-                      // focus target is the row itself — if focus is
-                      // on the nested checkbox or approve button,
-                      // their own handlers run and we bail.
-                      if (e.target !== e.currentTarget) return;
-                      if (e.key === 'Enter' || e.key === ' ') {
-                        e.preventDefault();
-                        setLastBorrowerId(lead.borrower_id);
-                        setExpanded(isOpen ? null : lead.borrower_id);
-                      }
-                    }}
-                  >
-                    <td className="tbl-cell--select" onClick={stop}>
-                      <input
-                        type="checkbox"
-                        aria-label={`Select lead ${lead.borrower_id}`}
-                        checked={isSelected}
-                        disabled={!isSelectable || bulkApproving}
-                        onChange={() => toggleSelect(lead.borrower_id)}
-                        onClick={stop}
-                        data-testid={`lead-select-${lead.borrower_id}`}
-                      />
-                    </td>
-                    <td>
-                      <Icon name={isOpen ? 'down' : 'chevright'} size={14} className="muted" />
-                    </td>
-                    <td className="is-primary">
-                      <div className="mono lead-table__borrower">{lead.borrower_id}</div>
-                      <div className="mono muted lead-table__clip">
-                        {lead.clip && lead.clip.length > 0
-                          ? lead.clip
-                          : 'property_ref_unavailable'}
-                      </div>
-                    </td>
-                    <td>
-                      {lead.city}, {lead.state}
-                      <div className="muted mono lead-table__zip">{lead.zip}</div>
-                    </td>
-                    <td>
-                      <div className="chip-stack">
-                        <Chip variant={relationshipVariant(lead)}>
-                          {relationshipLabel(lead)}
-                        </Chip>
-                        {lead.marketing_eligible === false && (
-                          <Chip variant="warning">
-                            Suppressed{lead.suppression_reason ? `: ${lead.suppression_reason}` : ''}
-                          </Chip>
-                        )}
-                      </div>
-                    </td>
-                    <td>
-                      <div className="chip-stack">
-                        <Chip variant={lead.assigned_to_email ? 'success' : 'neutral'}>
-                          {lead.assigned_to_label ?? lead.assigned_to_email ?? 'Unassigned'}
-                        </Chip>
-                        {lead.assigned_at && (
-                          <span className="muted mono fs-11">{formatDateTimeShort(lead.assigned_at)}</span>
-                        )}
-                      </div>
-                    </td>
-                    <td>
-                      <div className="chip-stack">
-                        <Chip variant={outreachVariant(lead.outreach_status)}>
-                          {outreachLabel(lead.outreach_status)}
-                        </Chip>
-                        {typeof lead.aging_days === 'number' && lead.aging_days > 7 && (
-                          <Chip variant="warning">{lead.aging_days}d aging</Chip>
-                        )}
-                      </div>
-                    </td>
-                    <td>
-                      <div className="chip-stack lead-table__last-touch" onClick={stop}>
-                        <Chip variant={dispositionVariant(lead.latest_disposition_outcome)}>
-                          {dispositionLabel(lead.latest_disposition_outcome)}
-                        </Chip>
-                        {lead.latest_disposition_at && (
-                          <span className="muted mono fs-11">{formatDateTimeShort(lead.latest_disposition_at)}</span>
-                        )}
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          icon="bolt"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setPendingDisposition(lead.borrower_id);
-                          }}
-                          disabled={salesBusy || salesTeam.length === 0}
-                          aria-label={`Log call disposition for ${lead.borrower_id}`}
-                        >
-                          Log
-                        </Button>
-                      </div>
-                    </td>
-                    <td>
-                      <div className="lead-table__segments">
-                        {lead.segment_codes.slice(0, 2).map((sid) => {
-                          const color = segmentColor(sid);
-                          return (
-                            <span
-                              key={sid}
-                              className="chip chip--segment chip--compact"
-                              style={{ '--chip-hue': color } as CSSProperties}
-                            >
-                              <span className="chip__label">{segmentName(sid)}</span>
-                            </span>
-                          );
-                        })}
-                        {lead.segment_codes.length > 2 && (
-                          <span className="chip chip--neutral chip--compact">
-                            <span className="chip__label">+{lead.segment_codes.length - 2}</span>
-                          </span>
-                        )}
-                      </div>
-                    </td>
-                    <td className="num tbl-cell--right">${(lead.equity_estimate / 1000).toFixed(0)}k</td>
-                    <td
-                      className={`num tbl-cell--right ${lead.rate_spread_bps >= 75 ? 'lead-table__rate--positive' : 'lead-table__rate--neutral'}`}
-                    >
-                      +{lead.rate_spread_bps}
-                    </td>
-                    <td>
-                      <span className="mono fs-12 text-1">{lead.recommended_offer}</span>{' '}
-                      <EvidenceChip source={DRAWER_SOURCES.nbo}>{DRAWER_SOURCES.nbo.title}</EvidenceChip>
-                    </td>
-                    <td className="tbl-cell--right"><ScoreBadge value={lead.opportunity_score} /></td>
-                    <td><ConfidenceMeter value={lead.confidence} compact /></td>
-                    <td
-                      className="tbl-cell--approval"
-                      data-testid={`lead-approval-cell-${lead.borrower_id}`}
-                    >
-                      {approval === 'approved' && <Chip variant="success" icon="check">Approved</Chip>}
-                      {approval === 'rejected' && <Chip variant="danger" icon="cross">Rejected</Chip>}
-                      {approval === 'hold' && <Chip variant="warning" icon="shield">Hold</Chip>}
-                      {!approval && (
-                        <div
-                          className="lead-table__approval-actions"
-                          onClick={stop}
-                        >
-                          <Button
-                            variant="primary"
-                            size="sm"
-                            icon="check"
-                            disabled={Boolean(pendingApproval[lead.borrower_id])}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              void approveLead(lead.borrower_id);
-                            }}
-                            aria-label={`Approve ${lead.borrower_id}`}
-                            data-testid={`lead-approve-${lead.borrower_id}`}
-                          >
-                            {pendingApproval[lead.borrower_id] ? 'Approving…' : 'Approve'}
-                          </Button>
-                          <button
-                            type="button"
-                            className="btn btn--sm lead-table__reject"
-                            aria-label={`Reject ${lead.borrower_id}`}
-                            title="Reject"
-                            disabled={Boolean(pendingApproval[lead.borrower_id])}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setPendingReject(lead.borrower_id);
-                            }}
-                            data-testid={`lead-reject-${lead.borrower_id}`}
-                          >
-                            <Icon name="cross" size={12} />
-                          </button>
-                        </div>
-                      )}
-                    </td>
-                  </tr>
-                  {isOpen && (
-                    <tr className="tbl__expand">
-                      <td colSpan={15}>
-                        <RowPreview lead={lead} />
-                      </td>
-                    </tr>
-                  )}
-                </Fragment>
+                <LeadTableRow
+                  key={lead.borrower_id}
+                  lead={lead}
+                  virtualIndex={virtualIndex}
+                  isOpen={isOpen}
+                  approval={approval}
+                  isSelected={isSelected}
+                  isSelectable={isSelectable}
+                  bulkApproving={bulkApproving}
+                  salesBusy={salesBusy}
+                  salesTeamCount={salesTeam.length}
+                  pendingApproval={Boolean(pendingApproval[lead.borrower_id])}
+                  onToggleRow={(row, open) => {
+                    setLastBorrowerId(row.borrower_id);
+                    setExpanded(open ? null : row.borrower_id);
+                  }}
+                  onToggleSelect={toggleSelect}
+                  onApprove={(borrowerId) => void approveLead(borrowerId)}
+                  onReject={setPendingReject}
+                  onOpenDisposition={setPendingDisposition}
+                />
               );
             })}
             {shouldVirtualize && virtualRange.bottom > 0 && (
@@ -1706,11 +1002,10 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
                   ? ` (${bulkToast.network} network dropped — retry)`
                   : ''}
                 {/*
-                  R5-21: aborted rows are in an ambiguous state — the
-                  client cancelled the POST but the server may have
-                  committed. Do NOT encourage retry; direct the user to
-                  the audit log instead. TODO: once R5-01 (server-side
-                  idempotency) lands, retry becomes safe.
+                  R5-21: aborted rows are in an ambiguous state. Server
+                  idempotency is safe only when the same request_id is
+                  reused; this bulk toast no longer owns those ids after
+                  unmount, so direct the user to the audit log instead.
                 */}
                 {bulkToast.aborted > 0
                   ? ` · ${bulkToast.aborted} cancelled in flight — unknown state, check the audit log`

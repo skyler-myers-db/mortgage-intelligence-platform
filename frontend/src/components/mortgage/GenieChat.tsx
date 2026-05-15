@@ -8,6 +8,12 @@ import { Button, Chip, EvidenceChip } from '../Primitives';
 import { GenieAnswer } from './GenieAnswer';
 import { GenieProgress } from './GenieProgress';
 import { drawerForAsset } from '../../lib/drawerSources';
+import {
+  GENIE_CONVERSATION_RESET_EVENT,
+  clearGenieConversationState,
+  readGenieConversationId,
+  writeGenieConversationId,
+} from '../../lib/genieConversation';
 import { isGenieFollowUpQuestion } from '../../lib/genieSession';
 
 // 2026-05-04 (FIX Δ2): persisted size for the floating panel. The
@@ -65,7 +71,6 @@ function saveGenieSize(size: GenieSize): void {
 // (collapses pos to null) so a user who liked the bottom-right
 // origin can return to it without remembering keyboard shortcuts.
 const POS_STORAGE_KEY = 'mip-genie-chat-pos-v1';
-const CONVERSATION_STORAGE_KEY = 'mip.genie.conversationId';
 const SNAP_PX = 24;
 
 interface GeniePos {
@@ -224,13 +229,7 @@ export function GenieChat() {
   const [input, setInput] = useState('');
   const [typing, setTyping] = useState(false);
   const [sampleQuestions, setSampleQuestions] = useState<string[]>([]);
-  const [conversationId, setConversationId] = useState<string | null>(() => {
-    try {
-      return localStorage.getItem(CONVERSATION_STORAGE_KEY);
-    } catch {
-      return null;
-    }
-  });
+  const [conversationId, setConversationId] = useState<string | null>(() => readGenieConversationId());
   const bodyRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -241,17 +240,26 @@ export function GenieChat() {
         if (conversationId) return;
         if (!result.conversation_id) return;
         setConversationId(result.conversation_id);
-        try {
-          localStorage.setItem(CONVERSATION_STORAGE_KEY, result.conversation_id);
-        } catch {
-          // ignore
-        }
+        writeGenieConversationId(result.conversation_id);
       })
       .catch(() => {
         // Asking a question will start a fresh Databricks Genie conversation.
       });
     return () => controller.abort();
   }, [conversationId]);
+
+  useEffect(() => {
+    const onActorBoundaryReset = () => {
+      setConversationId(null);
+      setMsgs([]);
+      setInput('');
+      setTyping(false);
+    };
+    window.addEventListener(GENIE_CONVERSATION_RESET_EVENT, onActorBoundaryReset);
+    return () => {
+      window.removeEventListener(GENIE_CONVERSATION_RESET_EVENT, onActorBoundaryReset);
+    };
+  }, []);
 
   // FIX Δ2: persisted resize state. Reads from localStorage on mount
   // (defaults to 420×640 — the prior fixed dimensions). Drag handle
@@ -531,11 +539,7 @@ export function GenieChat() {
     const nextConversationId = isGenieFollowUpQuestion(trimmed) ? conversationId : null;
     if (!nextConversationId) {
       setConversationId(null);
-      try {
-        localStorage.removeItem(CONVERSATION_STORAGE_KEY);
-      } catch {
-        // ignore
-      }
+      clearGenieConversationState();
     }
     setMsgs((m) => [...m, { who: 'user', text: trimmed }]);
     setInput('');
@@ -545,21 +549,13 @@ export function GenieChat() {
       const returnedConversationId = res.conversation_id ?? null;
       if (returnedConversationId && shouldPersistConversation(res)) {
         setConversationId(returnedConversationId);
-        try {
-          localStorage.setItem(CONVERSATION_STORAGE_KEY, returnedConversationId);
-        } catch {
-          // ignore
-        }
+        writeGenieConversationId(returnedConversationId);
       }
       setMsgs((m) => [...m, { who: 'ai', payload: res, sources: sourceAssetsFor(res) }]);
     } catch (err) {
       if (err instanceof ApiError && err.status === 403) {
         setConversationId(null);
-        try {
-          localStorage.removeItem(CONVERSATION_STORAGE_KEY);
-        } catch {
-          // ignore
-        }
+        clearGenieConversationState();
       }
       setMsgs((m) => [
         ...m,
@@ -622,11 +618,7 @@ export function GenieChat() {
     } catch (err) {
       if (err instanceof ApiError && err.status === 403) {
         setConversationId(null);
-        try {
-          localStorage.removeItem(CONVERSATION_STORAGE_KEY);
-        } catch {
-          // ignore
-        }
+        clearGenieConversationState();
       }
       setMsgs((m) => [
         ...m,

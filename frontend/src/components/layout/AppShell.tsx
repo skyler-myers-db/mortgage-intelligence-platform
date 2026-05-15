@@ -1,13 +1,29 @@
-import type { PropsWithChildren } from 'react';
-import { AppProvider } from '../AppContext';
+import { Suspense, useCallback, useEffect, useRef, type PropsWithChildren } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import { AppProvider, useApp } from '../AppContext';
 import { HealthProvider, useHealth } from '../HealthProvider';
 import { FootprintProvider } from '../FootprintProvider';
 import { Rail } from './Rail';
 import { Topbar } from './Topbar';
-import { Console } from './Console';
 import { EvidenceDrawer } from '../mortgage/EvidenceDrawer';
-import { GenieChat } from '../mortgage/GenieChat';
 import { DegradedBanner } from '../mortgage/DegradedBanner';
+import { Icon } from '../Icon';
+import { lazyWithPreload, preloadBestEffort } from '../../lib/lazyPreload';
+import { createIdlePreloader } from '../../lib/prefetch';
+import { clearActorScopedBrowserState } from '../../lib/actorScopedBrowserState';
+import { clearActorScopedMemoryCaches } from '../../lib/actorScopedMemoryCaches';
+
+const LazyConsole = lazyWithPreload(() =>
+  import('./Console').then((module) => ({ default: module.Console })),
+);
+
+const LazyGenieChat = lazyWithPreload(() =>
+  import('../mortgage/GenieChat').then((module) => ({ default: module.GenieChat })),
+);
+
+const preloadConsole = createIdlePreloader(() => LazyConsole.preload(), 5000);
+const preloadGenieChat = createIdlePreloader(() => LazyGenieChat.preload(), 5000);
+const preloadDrawerSources = createIdlePreloader(() => import('../../lib/drawerSources'), 5000);
 
 /**
  * AppShell — rail + topbar + main grid.
@@ -55,7 +71,76 @@ export function useIsHealthDegraded(): boolean {
   return useHealth().degraded;
 }
 
+export function shouldResetActorScopedStateForActorChange(
+  previousActorCacheKey: string | null,
+  nextActorCacheKey: string | null,
+): boolean {
+  return previousActorCacheKey !== null && previousActorCacheKey !== nextActorCacheKey;
+}
+
+export function applyActorScopedStateTransition({
+  previousActorCacheKey,
+  nextActorCacheKey,
+  clearQueryClient,
+  clearAppState,
+  clearBrowserState,
+  clearMemoryState,
+}: {
+  previousActorCacheKey: string | null;
+  nextActorCacheKey: string | null;
+  clearQueryClient: () => void;
+  clearAppState: () => void;
+  clearBrowserState: () => void;
+  clearMemoryState: () => void;
+}): string | null {
+  if (previousActorCacheKey === nextActorCacheKey) return previousActorCacheKey;
+  if (shouldResetActorScopedStateForActorChange(previousActorCacheKey, nextActorCacheKey)) {
+    clearQueryClient();
+    clearAppState();
+    clearBrowserState();
+    clearMemoryState();
+  }
+  return nextActorCacheKey;
+}
+
 function AppShellInner({ children }: PropsWithChildren) {
+  const { clearActorScopedState, consoleOpen, genieOpen, setGenieOpen } = useApp();
+  const { health } = useHealth();
+  const queryClient = useQueryClient();
+  const actorCacheKeyRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    const cancelConsole = preloadConsole();
+    const cancelDrawer = preloadDrawerSources();
+    const cancelGenie = preloadGenieChat();
+    return () => {
+      cancelConsole();
+      cancelDrawer();
+      cancelGenie();
+    };
+  }, []);
+
+  useEffect(() => {
+    const nextKey = health?.actor_cache_key ?? null;
+    const previousKey = actorCacheKeyRef.current;
+    actorCacheKeyRef.current = applyActorScopedStateTransition({
+      previousActorCacheKey: previousKey,
+      nextActorCacheKey: nextKey,
+      clearQueryClient: () => queryClient.clear(),
+      clearAppState: clearActorScopedState,
+      clearBrowserState: clearActorScopedBrowserState,
+      clearMemoryState: clearActorScopedMemoryCaches,
+    });
+  }, [clearActorScopedState, health?.actor_cache_key, queryClient]);
+
+  const openGenie = useCallback(() => {
+    setGenieOpen(true);
+  }, [setGenieOpen]);
+
+  const warmGenie = useCallback(() => {
+    preloadBestEffort(LazyGenieChat.preload);
+  }, []);
+
   return (
     <div className="app-shell">
       {/*
@@ -79,8 +164,44 @@ function AppShellInner({ children }: PropsWithChildren) {
         {children}
       </main>
       <EvidenceDrawer />
-      <Console />
-      <GenieChat />
+      <Suspense
+        fallback={(
+          <aside
+            id="workspace-console"
+            className={`tweaks ${consoleOpen ? 'is-open' : ''}`}
+            role="complementary"
+            aria-label="Workspace console"
+            aria-hidden={!consoleOpen}
+          />
+        )}
+      >
+        {consoleOpen ? (
+          <LazyConsole />
+        ) : (
+          <aside
+            id="workspace-console"
+            className="tweaks"
+            role="complementary"
+            aria-label="Workspace console"
+            aria-hidden="true"
+          />
+        )}
+      </Suspense>
+      {!genieOpen && (
+        <button
+          className="genie__fab"
+          onClick={openGenie}
+          onMouseEnter={warmGenie}
+          onFocus={warmGenie}
+          aria-label="Open Genie"
+          type="button"
+        >
+          <Icon name="sparkle" size={22} />
+        </button>
+      )}
+      <Suspense fallback={null}>
+        {genieOpen ? <LazyGenieChat /> : null}
+      </Suspense>
     </div>
   );
 }

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { api, ApiError, _parseHttpErrorBody, _parseRetryableBody } from './api';
+import { api, ApiError, isWarmingUpError, _parseHttpErrorBody, _parseRetryableBody } from './api';
 import type { SegmentCode } from '../types';
 
 /**
@@ -22,7 +22,15 @@ function jsonResponse(status: number, body: unknown): Response {
   });
 }
 
+function jsonResponseWithHeaders(status: number, body: unknown, headers: Record<string, string>): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json', ...headers },
+  });
+}
+
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -81,6 +89,71 @@ describe('_parseRetryableBody', () => {
     expect(parsed.retryable).toBe(false);
     expect(parsed.reason).toBeNull();
     expect(parsed.dependency).toBeNull();
+  });
+
+  it('extracts retry-after from retryable 429 backpressure responses', async () => {
+    const res = jsonResponseWithHeaders(
+      429,
+      {
+        detail: 'rate limit exceeded',
+        retryable: true,
+        correlation_id: 'corr-429',
+      },
+      { 'Retry-After': '1.5' },
+    );
+    const parsed = await _parseRetryableBody(res);
+    expect(parsed.retryable).toBe(true);
+    expect(parsed.detail).toBe('rate limit exceeded');
+    expect(parsed.correlationId).toBe('corr-429');
+    expect(parsed.retryAfterMs).toBe(1500);
+  });
+
+  it('honors longer retry-after windows from 429 backpressure responses', async () => {
+    const res = jsonResponseWithHeaders(
+      429,
+      {
+        detail: 'rate limit exceeded',
+        retryable: true,
+        correlation_id: 'corr-429-long',
+      },
+      { 'Retry-After': '60' },
+    );
+    const parsed = await _parseRetryableBody(res);
+    expect(parsed.retryable).toBe(true);
+    expect(parsed.retryAfterMs).toBe(60_000);
+  });
+
+  it('honors Retry-After timing before retrying a retryable 429', async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn(async () => {
+      if (fetchMock.mock.calls.length === 1) {
+        return jsonResponseWithHeaders(
+          429,
+          {
+            detail: 'rate limit exceeded',
+            retryable: true,
+            dependency: 'warehouse',
+            reason: 'rate_limited',
+            correlation_id: 'corr-429',
+          },
+          { 'Retry-After': '1.5' },
+        );
+      }
+      return jsonResponse(200, []);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const pending = api.segments();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1499);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+
+    await expect(pending).resolves.toEqual([]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it('tolerates a non-JSON 503 body without throwing', async () => {
@@ -155,6 +228,31 @@ describe('ApiError', () => {
       ],
     });
     expect(err.validationIssues[0]?.field).toBe('aged_days');
+  });
+});
+
+describe('isWarmingUpError', () => {
+  it.each([
+    ['warming_up', true],
+    ['breaker_open', true],
+    [null, true],
+    ['brand_new_reason', true],
+    ['retries_exhausted', false],
+  ])('classifies reason=%s as warmingUp=%s', (reason, expected) => {
+    const err = new ApiError('dependency unavailable', {
+      path: '/api/segments',
+      status: 503,
+      retryable: true,
+      dependency: 'warehouse',
+      reason,
+    });
+    expect(isWarmingUpError(err)).toBe(expected);
+  });
+
+  it('rejects aborted, non-503, and non-retryable errors', () => {
+    expect(isWarmingUpError(new ApiError('abort', { path: '/api/x', aborted: true }))).toBe(false);
+    expect(isWarmingUpError(new ApiError('boom', { path: '/api/x', status: 500 }))).toBe(false);
+    expect(isWarmingUpError(new ApiError('no retry', { path: '/api/x', status: 503 }))).toBe(false);
   });
 });
 

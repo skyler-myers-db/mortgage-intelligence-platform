@@ -1,36 +1,27 @@
 import { useEffect, useMemo, useState } from 'react';
-import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
-import type { Feature, FeatureCollection, Geometry } from 'geojson';
+import type { FeatureCollection } from 'geojson';
 import { Icon } from '../Icon';
 import { Chip } from '../Primitives';
 import { api } from '../../lib/api';
 import { useOptionalFootprint } from '../FootprintProvider';
 import type { CountyRollup, StateRollup, ZipRollup } from '../../types';
-
-// Shape of the @svg-maps/usa default export (see vite-env.d.ts).
-interface UsaSvgMapLocation { name: string; id: string; path: string }
-interface UsaSvgMap { label: string; viewBox: string; locations: UsaSvgMapLocation[] }
-
-// USPS (lowercase) -> FIPS-2 map. Values are intrinsic per-state constants,
-// NOT tenant-configurable — a state's FIPS code is an act of Congress, not a
-// customer setting. The *set of active* entries is filtered at render time
-// by the `FootprintProvider` so each tenant sees only their footprint's
-// counties light up as drillable.
-//
-// Keep all 50 states here because FIPS is stable geography metadata, not demo
-// scope. The current tenant footprint and live gold rollups decide which
-// states are active.
-const USCODE_TO_FIPS: Record<string, string> = {
-  al: '01', ak: '02', az: '04', ar: '05', ca: '06', co: '08', ct: '09',
-  de: '10', dc: '11', fl: '12', ga: '13', hi: '15', id: '16', il: '17', in: '18',
-  ia: '19', ks: '20', ky: '21', la: '22', me: '23', md: '24', ma: '25',
-  mi: '26', mn: '27', ms: '28', mo: '29', mt: '30', ne: '31', nv: '32',
-  nh: '33', nj: '34', nm: '35', ny: '36', nc: '37', nd: '38', oh: '39',
-  ok: '40', or: '41', pa: '42', ri: '44', sc: '45', sd: '46', tn: '47',
-  tx: '48', ut: '49', vt: '50', va: '51', wa: '53', wv: '54', wi: '55',
-  wy: '56',
-};
+import {
+  SEGMENT_CODE_TO_NAME,
+  USCODE_TO_FIPS,
+  buildCountiesPayload,
+  buildLeadQueuePath,
+  buildQuantileBucketer,
+  countyDisplayName,
+  lvlFromCount,
+  type CountiesPayload,
+  type HoverState,
+  type Level,
+  type Selected,
+  type StateFacts,
+  type UsaSvgMap,
+} from './USChoroplethMap.utils';
+import { USChoroplethMapTooltip } from './USChoroplethMapTooltip';
 
 // Slice13-accuracy-validation: county + ZIP hover numbers now come from
 // /api/geo/county-rollups + /api/geo/zip-rollups (backed by
@@ -38,52 +29,6 @@ const USCODE_TO_FIPS: Record<string, string> = {
 // local county/ZIP fixture literals are gone -- any county / ZIP not
 // returned in the payload renders "—" on hover (honest null).
 // The fill-level bucket is derived from addressable_borrowers below.
-
-/** Fixed-threshold fallback used only when no distribution is available.
- *  The real map uses `buildQuantileBucketer` below so the
- *  gradient reads visually regardless of the absolute count range
- *  (Cotality TX counties are in the tens of thousands; synthetic demo
- *  counties are in the hundreds). */
-function lvlFromCount(count: number | null | undefined): 1 | 2 | 3 | 4 {
-  if (count === null || count === undefined || count <= 0) return 1;
-  if (count >= 500) return 4;
-  if (count >= 250) return 3;
-  if (count >= 100) return 2;
-  return 1;
-}
-
-/** Build a quantile-based bucketer from the live count distribution for
- *  the currently-drilled layer (counties of the active state, or ZIPs
- *  of the active county). Splits non-zero counts into 4 equal-size
- *  buckets: top 25% → lvl-4, next 25% → lvl-3, next 25% → lvl-2,
- *  bottom 25% → lvl-1. Zero / missing stays at lvl-1 (the CSS floor)
- *  but those regions render "—" in the hover card, so the visual still
- *  distinguishes "no data" from "low density."
- *
- *  Rationale: the synthetic-demo thresholds (>=500, >=250, >=100) bucket
- *  every real Cotality TX county into lvl-4 because every county has
- *  10k+ marketable borrowers. A quantile bucketer keeps the gradient
- *  readable whether the underlying numbers are in the hundreds or the
- *  hundred-thousands. */
-function buildQuantileBucketer(counts: number[]): (count: number | null | undefined) => 1 | 2 | 3 | 4 {
-  const nonZero = counts.filter((c) => c > 0).sort((a, b) => a - b);
-  if (nonZero.length < 4) {
-    // Too few data points for meaningful quantiles — fall back to the
-    // fixed scale.
-    return lvlFromCount;
-  }
-  const q = (p: number) => nonZero[Math.min(nonZero.length - 1, Math.floor(nonZero.length * p))];
-  const q25 = q(0.25);
-  const q50 = q(0.5);
-  const q75 = q(0.75);
-  return (count) => {
-    if (count === null || count === undefined || count <= 0) return 1;
-    if (count >= q75) return 4;
-    if (count >= q50) return 3;
-    if (count >= q25) return 2;
-    return 1;
-  };
-}
 
 /**
  * USChoroplethMap — real interactive US state map with click-to-drill.
@@ -104,104 +49,6 @@ function buildQuantileBucketer(counts: number[]): (count: number | null | undefi
  */
 
 // ---------- Live per-state facts ----------
-
-interface StateFacts {
-  count: number;
-  avgScore: number;
-  lvl: 1 | 2 | 3 | 4;
-  topSegment?: string;
-}
-
-// Map segment code (from activeSegs / segmentFilter) → user-facing names.
-// Used for filter hints and, when available, top-segment dim logic.
-const SEGMENT_CODE_TO_NAME: Record<string, string> = {
-  itm: 'In the Money',
-  listed: 'Listed',
-  permit: 'Permit Activity',
-  investor: 'Investor',
-  equity: 'Home Equity',
-  retention: 'Retention',
-};
-
-function countyDisplayName(rollup: CountyRollup): string {
-  const raw = rollup.county_name?.trim();
-  if (raw) {
-    return raw.toLowerCase().endsWith('county') ? raw : `${raw} County`;
-  }
-  return rollup.fips_5;
-}
-
-type Level = 'state' | 'county' | 'zip';
-
-interface Selected {
-  level: Level;
-  id: string;
-  name: string;
-}
-
-// Real-county feature (post-topojson decode). Coordinates are planar Albers
-// pixel space because us-counties.json was trimmed from the "-albers-"
-// variant of us-atlas — so we can build SVG paths directly without d3-geo.
-interface CountyFeature {
-  id: string; // 5-digit county FIPS
-  name: string;
-  paths: string; // compound SVG path `d` built from rings
-  cx: number;
-  cy: number;
-}
-
-interface CountiesPayload {
-  state: string;      // lowercase USPS code
-  features: CountyFeature[];
-  viewBox: string;    // pre-computed bbox margin applied
-}
-
-/**
- * Walk a GeoJSON Polygon / MultiPolygon and produce an SVG compound path `d`
- * string. Handles MultiPolygon by concatenating with a space between sub-
- * polygons — each sub-polygon is M-L-...-Z.
- */
-function geometryToPath(geom: Geometry): string {
-  if (geom.type === 'Polygon') {
-    return geom.coordinates.map(ringToPath).join(' ');
-  }
-  if (geom.type === 'MultiPolygon') {
-    return geom.coordinates
-      .map((poly) => poly.map(ringToPath).join(' '))
-      .join(' ');
-  }
-  return '';
-}
-function ringToPath(ring: number[][]): string {
-  if (ring.length === 0) return '';
-  const [x0, y0] = ring[0];
-  let d = `M${x0.toFixed(1)},${y0.toFixed(1)}`;
-  for (let i = 1; i < ring.length; i += 1) {
-    const [x, y] = ring[i];
-    d += `L${x.toFixed(1)},${y.toFixed(1)}`;
-  }
-  return `${d}Z`;
-}
-function featureBBox(f: Feature): [number, number, number, number] {
-  let minX = Infinity;
-  let minY = Infinity;
-  let maxX = -Infinity;
-  let maxY = -Infinity;
-  const visit = (ring: number[][]) => {
-    for (const [x, y] of ring) {
-      if (x < minX) minX = x;
-      if (y < minY) minY = y;
-      if (x > maxX) maxX = x;
-      if (y > maxY) maxY = y;
-    }
-  };
-  if (f.geometry.type === 'Polygon') {
-    f.geometry.coordinates.forEach(visit);
-  } else if (f.geometry.type === 'MultiPolygon') {
-    f.geometry.coordinates.forEach((poly) => poly.forEach(visit));
-  }
-  return [minX, minY, maxX, maxY];
-}
 
 /** Selection payload emitted on every state/county/ZIP click. State is
  *  2-char uppercase USPS code so consumers can run predicates against
@@ -230,20 +77,6 @@ interface USChoroplethMapProps {
    *  filter the LeadTable). `"navigate"` deep-links to
    *  `/lead-queue?state=XX` so the home-page map acts as a teaser. */
   drillBehavior?: 'filter' | 'navigate';
-}
-
-interface HoverState {
-  x: number;
-  y: number;
-  name: string;
-  /** `null` means "we don't have a rollup for this geometry". The
-   *  tooltip renders "—" instead of fabricating a number. Used at the
-   *  county + ZIP levels where we don't have gold-backed rollups. */
-  count: number | null;
-  avgScore: number | null;
-  topSegment?: string;
-  /** Source label displayed in the hover card footer. */
-  sourceHint?: string;
 }
 
 /**
@@ -319,19 +152,7 @@ export function USChoroplethMap({
   );
   const leadQueuePath = useMemo(() => {
     return (geo: { state?: string; county?: string; zip?: string }) => {
-      const params = new URLSearchParams();
-      if (geo.state) params.set('state', geo.state);
-      if (geo.county) params.set('county', geo.county);
-      if (geo.zip) params.set('zip', geo.zip);
-      if (segmentFilter && segmentFilter.length > 0) {
-        params.set('segment_codes', segmentFilter.join(','));
-        params.set('segment_mode', segmentFilterMode);
-      }
-      Object.entries(portfolioCriteria ?? {}).forEach(([key, value]) => {
-        if (value === undefined || value === null || value === '') return;
-        params.set(key, String(value));
-      });
-      return `/lead-queue?${params.toString()}`;
+      return buildLeadQueuePath({ geo, segmentFilter, segmentFilterMode, portfolioCriteria });
     };
   }, [portfolioCriteria, segmentFilter, segmentFilterMode]);
 
@@ -495,48 +316,13 @@ export function USChoroplethMap({
           topology,
           topology.objects.counties,
         ) as unknown as FeatureCollection;
-        const stateFeatures = fc.features.filter(
-          (f) => typeof f.id === 'string' && f.id.startsWith(fips),
-        );
         // Empty features set = this state is in the footprint but not in
         // the shipped TopoJSON. Skip storing a payload so the live-rollup
         // fallback in renderCountyLevel takes over. Without this guard we'd
         // store an empty CountiesPayload with an Infinity viewBox and render
         // a blank SVG.
-        if (stateFeatures.length === 0) return;
-        // Aggregate bbox across the state's counties → viewBox with 12px pad.
-        let minX = Infinity;
-        let minY = Infinity;
-        let maxX = -Infinity;
-        let maxY = -Infinity;
-        for (const f of stateFeatures) {
-          const [x0, y0, x1, y1] = featureBBox(f);
-          if (x0 < minX) minX = x0;
-          if (y0 < minY) minY = y0;
-          if (x1 > maxX) maxX = x1;
-          if (y1 > maxY) maxY = y1;
-        }
-        const pad = 12;
-        const vx = minX - pad;
-        const vy = minY - pad;
-        const vw = maxX - minX + pad * 2;
-        const vh = maxY - minY + pad * 2;
-        const viewBox = `${vx.toFixed(1)} ${vy.toFixed(1)} ${vw.toFixed(1)} ${vh.toFixed(1)}`;
-        const features: CountyFeature[] = stateFeatures.map((f) => {
-          const [x0, y0, x1, y1] = featureBBox(f);
-          return {
-            id: String(f.id),
-            name: (f.properties as { name?: string } | null)?.name ?? '',
-            paths: geometryToPath(f.geometry),
-            cx: (x0 + x1) / 2,
-            cy: (y0 + y1) / 2,
-          };
-        });
-        const payload: CountiesPayload = {
-          state: countyStateId,
-          features,
-          viewBox,
-        };
+        const payload = buildCountiesPayload(fc, countyStateId, fips);
+        if (!payload) return;
         if (!cancelled) {
           setCountiesByState((cur) => ({ ...cur, [countyStateId]: payload }));
         }
@@ -1173,73 +959,7 @@ export function USChoroplethMap({
           would be misleading now that the number IS the filtered count.
           A small "filtered by …" hint stays so the user remembers the
           context, but it's a single-line clarifier, not a disclaimer. */}
-      {hover &&
-        createPortal(
-          <div
-            className="map-tip"
-            style={{
-              position: 'fixed',
-              left: Math.max(160, Math.min(window.innerWidth - 160, hover.x)),
-              top: hover.y - 4,
-            }}
-          >
-            <div className="map-tip__name">{hover.name}</div>
-            <div className="map-tip__kpis">
-              <div className="map-tip__kpi">
-                {/* "Marketable borrowers" — the count IS now segment-
-                    aware when a filter is active (FIX G, 2026-05-04),
-                    so the prior "(all segments)" suffix is gone.
-                    A small filtered-by hint appears in the footer
-                    instead, and the count itself reflects the filter. */}
-                <div className="map-tip__kpi-label">Marketable borrowers</div>
-                <div className="map-tip__kpi-value">
-                  {hover.count !== null ? hover.count.toLocaleString() : '—'}
-                </div>
-              </div>
-              <div className="map-tip__kpi">
-                {/* Label was "Avg. score" — too ambiguous (score of what?).
-                    Now "Avg. opportunity score" so the metric ties to the
-                    same fn_lead_score primitive used everywhere else.
-                    2026-05-04 user feedback. */}
-                <div className="map-tip__kpi-label">Avg. opportunity score</div>
-                <div className="map-tip__kpi-value">
-                  {hover.avgScore !== null ? hover.avgScore : '—'}
-                </div>
-              </div>
-            </div>
-            {hover.topSegment && (
-              <div className="map-tip__seg">
-                <span className="map-tip__seg-label">Top segment</span>
-                <span className="map-tip__seg-value">{hover.topSegment}</span>
-              </div>
-            )}
-            {/* Filter hint — present when a segment filter is active.
-                Reminds the reader the shown count is the segment-
-                filtered population, not the cross-segment total.
-                FIX G, 2026-05-04: the count itself is now segment-
-                aware (was just "all segments" before), so the copy
-                reads "filtered by …" not "shading by …". */}
-            {activeSegNames !== null && (
-              <div
-                className="map-tip__row map-tip__row--compact map-tip__row--muted"
-              >
-                <span>Filter</span>
-                <span className="v map-tip__value--small">
-                  filtered by {Array.from(activeSegNames).join(', ')}
-                </span>
-              </div>
-            )}
-            <div
-              className="map-tip__row map-tip__row--compact"
-            >
-              <span>Source</span>
-              <span className="v mono map-tip__value--small">
-                {hover.sourceHint ?? 'mip.gold'}
-              </span>
-            </div>
-          </div>,
-          document.body,
-        )}
+      {hover && <USChoroplethMapTooltip hover={hover} activeSegNames={activeSegNames} />}
     </div>
   );
 }

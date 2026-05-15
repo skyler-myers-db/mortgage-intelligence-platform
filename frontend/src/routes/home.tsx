@@ -12,7 +12,7 @@ import { Icon } from '../components/Icon';
 import { Reveal } from '../components/fx/Reveal';
 import { api } from '../lib/api';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
-import { queryKeys } from '../lib/queryClient';
+import { queryKeys } from '../lib/queryKeys';
 import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 import { useApp } from '../components/AppContext';
 import { useOptionalHealth } from '../components/HealthProvider';

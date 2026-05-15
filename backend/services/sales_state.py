@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import Counter
 from datetime import datetime
-from typing import Any
+from typing import Annotated, Any
 from uuid import uuid4
 
 from fastapi import Depends
@@ -37,9 +37,10 @@ def get_sales_lakebase() -> LakebaseClient:
     return get_lakebase_client()
 
 
-def get_sales_state_store(
-    client: LakebaseClient = Depends(get_lakebase_client),
-) -> "SalesStateStore":
+LakebaseDep = Annotated[LakebaseClient, Depends(get_lakebase_client)]
+
+
+def get_sales_state_store(client: LakebaseDep) -> SalesStateStore:
     return SalesStateStore(client)
 
 

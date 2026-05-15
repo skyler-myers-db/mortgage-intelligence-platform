@@ -1,11 +1,11 @@
 import {
   createContext,
   useContext,
-  useEffect,
   useMemo,
-  useState,
   type PropsWithChildren,
 } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { queryKeys } from '../lib/queryKeys';
 
 /**
  * FootprintProvider — one `/api/config/footprint` hydration, shared via context.
@@ -133,72 +133,38 @@ export function FootprintProvider({
   fetchFootprint = defaultFetchFootprint,
   children,
 }: PropsWithChildren<FootprintProviderProps>) {
-  const [states, setStates] = useState<FootprintState[]>(FALLBACK_STATES);
-  const [ready, setReady] = useState<boolean>(false);
-  const [usingFallback, setUsingFallback] = useState<boolean>(false);
-  const [dataScope, setDataScope] = useState<GeographyScopePayload | null>(null);
-
-  useEffect(() => {
-    const ctrl = new AbortController();
-    let cancelled = false;
-
-    // Retry once with a 1s backoff before falling back. The previous
-    // single-shot fetch pinned the UI to fallback metadata whenever the
-    // warehouse cold-started and the first /api/config/footprint request
-    // returned 503. One retry is
-    // enough to ride out most cold-start hiccups; anything longer
-    // belongs in the service-level warm-start loop, not here.
-    const attempt = async (): Promise<FootprintPayload> => {
-      try {
-        return await fetchFootprint(ctrl.signal);
-      } catch (err) {
-        if (ctrl.signal.aborted) throw err;
-        if (err instanceof Error && err.name === 'AbortError') throw err;
-        // Wait 1s and retry once. If the controller aborts during the
-        // delay, bail immediately.
-        await new Promise<void>((resolve, reject) => {
-          const t = setTimeout(resolve, 1000);
-          ctrl.signal.addEventListener('abort', () => {
-            clearTimeout(t);
-            reject(new DOMException('Aborted', 'AbortError'));
-          }, { once: true });
-        });
-        return await fetchFootprint(ctrl.signal);
+  // Retry once with a 1s backoff before falling back. The previous
+  // single-shot fetch pinned the UI to fallback metadata whenever the
+  // warehouse cold-started and the first /api/config/footprint request
+  // returned 503. One retry is enough to ride out most cold-start
+  // hiccups; anything longer belongs in the service-level warm-start
+  // loop, not here.
+  const query = useQuery({
+    queryKey: queryKeys.footprint(),
+    queryFn: async ({ signal }) => {
+      const payload = await fetchFootprint(signal);
+      if (!payload?.states || payload.states.length === 0) {
+        throw new Error('empty footprint payload');
       }
-    };
+      return {
+        ...payload,
+        states: [...payload.states].sort((a, b) => a.display_order - b.display_order),
+      };
+    },
+    retry: (failureCount, err) =>
+      failureCount < 1 && !(err instanceof Error && err.name === 'AbortError'),
+    retryDelay: 1000,
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+  });
 
-    (async () => {
-      try {
-        const payload = await attempt();
-        if (cancelled) return;
-        if (!payload?.states || payload.states.length === 0) {
-          throw new Error('empty footprint payload');
-        }
-        const sorted = [...payload.states].sort(
-          (a, b) => a.display_order - b.display_order,
-        );
-        setStates(sorted);
-        setDataScope(payload.geography_scope ?? null);
-        setUsingFallback(Boolean(payload.using_fallback));
-      } catch (err) {
-        if (cancelled) return;
-        if (err instanceof Error && err.name === 'AbortError') return;
-        // Fall back — the map + dropdowns must render, but the Topbar
-        // surfaces `usingFallback` as a muted chip so operators are not
-        // silently misled about the tenant footprint.
-        setStates(FALLBACK_STATES);
-        setDataScope(null);
-        setUsingFallback(true);
-      } finally {
-        if (!cancelled) setReady(true);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-      ctrl.abort();
-    };
-  }, [fetchFootprint]);
+  const states = query.data?.states ?? FALLBACK_STATES;
+  const ready = query.status !== 'pending';
+  // Fall back — the map + dropdowns must render, but the Topbar
+  // surfaces `usingFallback` as a muted chip so operators are not
+  // silently misled about the tenant footprint.
+  const usingFallback = query.isError ? true : Boolean(query.data?.using_fallback);
+  const dataScope = query.data?.geography_scope ?? null;
 
   const value = useMemo<FootprintContextValue>(
     () => ({

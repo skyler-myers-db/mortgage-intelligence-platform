@@ -50,7 +50,10 @@ from backend.services.genie_client import GenieClientError
 from backend.services.lakebase import LakebaseClient, LakebaseError, get_lakebase_client
 from backend.services.pii_redaction import normalize_public_lender_ref
 from backend.services.repositories import BorrowerRepository, GenieAnswerRepository
-from backend.services.repositories.factory import get_borrower_repository, get_genie_answer_repository
+from backend.services.repositories.factory import (
+    get_borrower_repository,
+    get_genie_answer_repository,
+)
 from backend.services.resilience import DependencyDownError
 from backend.services.sales_state import SalesStateStore
 from backend.services.state_footprint import get_state_footprint_resolver
@@ -1203,7 +1206,7 @@ def _sales_ops_genie_response(
         week_start = datetime.now(UTC).date() - timedelta(days=datetime.now(UTC).date().weekday())
         source_assets = ["mip_app.call_dispositions"]
         lo_filter = "AND lo_email = ANY(%(lo_emails)s)" if visible_lo_emails is not None else ""
-        sql_query = """
+        sql_query = f"""
 SELECT lo_email AS group_key,
        COUNT(*) AS calls_attempted,
        COUNT(*) FILTER (WHERE outcome IN ('connected','callback_scheduled','application_started')) AS contacts_reached,
@@ -1219,7 +1222,7 @@ ORDER BY CASE WHEN COUNT(*) = 0 THEN 0
          applications_started DESC,
          calls_attempted DESC
 LIMIT 10
-""".format(lo_filter=lo_filter)
+"""
         raw_rows = lakebase.fetchall(
             sql_query,
             {"week_start": week_start.isoformat(), "lo_emails": sorted(visible_lo_emails or [])},
@@ -1256,13 +1259,13 @@ LIMIT 10
         week_start = datetime.now(UTC).date() - timedelta(days=datetime.now(UTC).date().weekday())
         source_assets = ["mip_app.call_dispositions"]
         lo_filter = "AND lo_email = ANY(%(lo_emails)s)" if visible_lo_emails is not None else ""
-        sql_query = """
+        sql_query = f"""
 SELECT COUNT(*) FILTER (WHERE outcome = 'application_started') AS applications_started,
        COUNT(*) AS calls_attempted
 FROM mip_app.call_dispositions
 WHERE occurred_at >= %(week_start)s::date
   {lo_filter}
-""".format(lo_filter=lo_filter)
+"""
         raw_rows = lakebase.fetchall(
             sql_query,
             {"week_start": week_start.isoformat(), "lo_emails": sorted(visible_lo_emails or [])},
@@ -1280,7 +1283,7 @@ WHERE occurred_at >= %(week_start)s::date
         yesterday = (datetime.now(UTC).date() - timedelta(days=1)).isoformat()
         source_assets = ["mip_app.call_dispositions"]
         lo_filter = "AND lo_email = ANY(%(lo_emails)s)" if visible_lo_emails is not None else ""
-        sql_query = """
+        sql_query = f"""
 SELECT lo_email, outcome, COUNT(*) AS n
 FROM mip_app.call_dispositions
 WHERE occurred_at >= %(day)s::date
@@ -1288,7 +1291,7 @@ WHERE occurred_at >= %(day)s::date
   {lo_filter}
 GROUP BY lo_email, outcome
 ORDER BY lo_email, outcome
-""".format(lo_filter=lo_filter)
+"""
         raw_rows = lakebase.fetchall(
             sql_query,
             {"day": yesterday, "lo_emails": sorted(visible_lo_emails or [])},
@@ -1308,14 +1311,14 @@ ORDER BY lo_email, outcome
     elif kind == "queue":
         source_assets = ["mip_app.lead_assignments", "mip.gold.borrower_360"]
         lo_filter = "AND assigned_to_email = ANY(%(lo_emails)s)" if visible_lo_emails is not None else ""
-        sql_query = """
+        sql_query = f"""
 SELECT borrower_id, assigned_to_email, assigned_at
 FROM mip_app.lead_assignments
 WHERE released_at IS NULL
   {lo_filter}
 ORDER BY assigned_at ASC
 LIMIT 10
-""".format(lo_filter=lo_filter)
+"""
         rows = [
             {
                 "borrower_id": row.get("borrower_id"),
@@ -1336,7 +1339,7 @@ LIMIT 10
             if visible_lo_emails is not None
             else ""
         )
-        sql_query = """
+        sql_query = f"""
 WITH latest_approval AS (
   SELECT DISTINCT ON (borrower_id) borrower_id, action, decided_at
   FROM mip_app.approvals
@@ -1360,7 +1363,7 @@ WHERE a.action = 'approve'
   AND a.decided_at <= now() - interval '7 days'
 ORDER BY a.decided_at ASC
 LIMIT 100
-""".format(lo_filter=lo_filter)
+"""
         rows = []
         for row in lakebase.fetchall(sql_query, {"lo_emails": sorted(visible_lo_emails or [])}, limit=100):
             borrower_id = str(row.get("borrower_id") or "")

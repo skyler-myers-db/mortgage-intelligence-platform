@@ -3,7 +3,7 @@ import { api, type AuditEventRow } from '../../lib/api';
 import { useWarmingUpRetry } from '../../lib/useWarmingUpRetry';
 import { WarmingUpBlock } from '../ui/WarmingUpBlock';
 import { useOptionalHealth } from '../HealthProvider';
-import { queryKeys } from '../../lib/queryClient';
+import { queryKeys } from '../../lib/queryKeys';
 
 /**
  * AgentActivityLog — prototype `.audit` BEM. Pulls events from
@@ -16,11 +16,12 @@ import { queryKeys } from '../../lib/queryClient';
  * The footer renders a live telemetry strip built from the shared
  * HealthProvider (round-2 hole-finder #21, 2026-04-23) — warehouse +
  * Genie dependency state and a monotonic wall-clock probe latency.
- * Values are not synthesized: `status`, `dependencies`, and
- * `circuit_breakers` come straight from the health endpoint; the
- * `probe_ms` is the wall-clock cost of the most recent probe that
- * produced them. This is the operator-honesty beat the talk track
- * calls out: if the warehouse is warming up, the activity log says so.
+ * Values are not synthesized: `status` and `dependencies` come straight
+ * from the browser health endpoint; optional `circuit_breakers` are only
+ * appended when an ops-gated payload provides them. `probe_ms` is the
+ * wall-clock cost of the most recent probe. This is the operator-honesty
+ * beat the talk track calls out: if the warehouse is warming up, the
+ * activity log says so.
  */
 
 type AuditEvent = AuditEventRow;

@@ -71,11 +71,12 @@ function friendlyDependencyName(dep: string): string {
   return FRIENDLY_DEP_NAMES[dep] ?? dep;
 }
 
-function degradedDependency(health: HealthPayload | null): string | null {
+export function degradedDependency(health: HealthPayload | null): string | null {
   if (!health) return null;
   const deps = health.dependencies ?? {};
   if (deps.warehouse === 'down') return 'warehouse';
   if (deps.lakebase === 'down') return 'lakebase';
+  if (deps.genie === 'down') return 'genie';
   // Open breaker without a concrete dep ping-down still counts.
   const breakers = health.circuit_breakers ?? {};
   for (const [name, state] of Object.entries(breakers)) {
@@ -91,10 +92,12 @@ function degradedDependency(health: HealthPayload | null): string | null {
  * shared provider snapshot instead.
  */
 function useStandaloneHealth({
+  enabled,
   pollIntervalOkMs,
   pollIntervalDegradedMs,
   fetchHealth,
 }: {
+  enabled: boolean;
   pollIntervalOkMs: number;
   pollIntervalDegradedMs: number;
   fetchHealth: () => Promise<HealthPayload>;
@@ -103,6 +106,7 @@ function useStandaloneHealth({
   const degradedRef = useRef(false);
 
   useEffect(() => {
+    if (!enabled) return undefined;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
 
@@ -132,9 +136,16 @@ function useStandaloneHealth({
       cancelled = true;
       if (timer !== null) clearTimeout(timer);
     };
-  }, [fetchHealth, pollIntervalDegradedMs, pollIntervalOkMs]);
+  }, [enabled, fetchHealth, pollIntervalDegradedMs, pollIntervalOkMs]);
 
   return health;
+}
+
+export function shouldUseStandaloneHealth(
+  hasInjectedFetcher: boolean,
+  hasProviderContext: boolean,
+): boolean {
+  return hasInjectedFetcher || !hasProviderContext;
 }
 
 export function DegradedBanner({
@@ -143,15 +154,17 @@ export function DegradedBanner({
   fetchHealth,
 }: DegradedBannerProps = {}) {
   // When a caller injects a fetcher, run the legacy standalone loop so
-  // existing unit tests keep exercising the banner. Otherwise read the
-  // shared HealthProvider snapshot.
-  const isStandalone = fetchHealth !== undefined;
+  // existing unit tests keep exercising the banner. When mounted inside
+  // AppShell, use the shared HealthProvider poll and do not start another
+  // `/api/health` interval.
+  const providerCtx = useOptionalHealth();
+  const isStandalone = shouldUseStandaloneHealth(fetchHealth !== undefined, providerCtx !== null);
   const standaloneHealth = useStandaloneHealth({
+    enabled: isStandalone,
     pollIntervalOkMs,
     pollIntervalDegradedMs,
     fetchHealth: fetchHealth ?? defaultFetchHealth,
   });
-  const providerCtx = useOptionalHealth();
   const providerHealth = (providerCtx?.health as HealthPayload | null) ?? null;
   const health = isStandalone ? standaloneHealth : providerHealth;
 

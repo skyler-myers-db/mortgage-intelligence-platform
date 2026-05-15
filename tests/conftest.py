@@ -29,13 +29,26 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 
-from backend.main import app
+from backend.api.config import _reset_config_cache_for_tests
+from backend.main import _backpressure_controller, app
 from backend.services.admin_rules import (
     AdminRulesService,
+    _reset_admin_rules_service_for_tests,
     get_admin_rules_service,
 )
-from backend.services.audit_store import InMemoryAuditStore, get_audit_store
-from backend.services.lakebase import get_lakebase_client
+from backend.services.audit_store import (
+    InMemoryAuditStore,
+    _reset_audit_store_for_tests,
+    get_audit_store,
+)
+from backend.services.databricks_sql import _reset_sql_client_for_tests
+from backend.services.genie_client import _reset_genie_client_for_tests
+from backend.services.lakebase import (
+    _reset_client_for_tests as _reset_lakebase_client_for_tests,
+)
+from backend.services.lakebase import (
+    get_lakebase_client,
+)
 from backend.services.repositories import (
     get_borrower_repository,
     get_genie_answer_repository,
@@ -46,8 +59,11 @@ from backend.services.repositories import (
     get_portfolio_repository,
     get_segment_repository,
 )
+from backend.services.repositories.factory import _reset_singletons_for_tests
+from backend.services.resilience import _reset_breakers_for_tests
 from backend.services.workspace_store import (
     InMemoryWorkspaceStore,
+    _reset_workspace_store_for_tests,
     get_workspace_store,
 )
 from tests.fixtures.in_process_repos import (
@@ -388,7 +404,7 @@ class _FakeLakebaseClient:
             def __init__(self) -> None:
                 self._last: dict[str, Any] | None = None
 
-            def __enter__(self) -> "_Cursor":
+            def __enter__(self) -> _Cursor:
                 return self
 
             def __exit__(self, *_exc: object) -> None:
@@ -558,6 +574,20 @@ class _FakeAdminSqlClient:
 
 
 _ADMIN_HEADERS: dict[str, str] = {"X-Forwarded-Groups": "mip-admin"}
+_BASE_DEPENDENCY_OVERRIDES: dict[Any, Any] = {}
+
+
+def _reset_runtime_singletons_for_tests() -> None:
+    _backpressure_controller.clear()
+    _reset_singletons_for_tests()
+    _reset_sql_client_for_tests()
+    _reset_lakebase_client_for_tests()
+    _reset_genie_client_for_tests()
+    _reset_audit_store_for_tests()
+    _reset_workspace_store_for_tests()
+    _reset_admin_rules_service_for_tests()
+    _reset_config_cache_for_tests()
+    _reset_breakers_for_tests()
 
 
 def _wrap_testclient_with_admin_headers() -> None:
@@ -616,7 +646,38 @@ def _install_dependency_overrides() -> Iterator[None]:
     app.dependency_overrides[get_lakebase_client] = lambda: lakebase
     app.dependency_overrides[get_workspace_store] = lambda: workspace
     app.dependency_overrides[get_admin_rules_service] = lambda: admin_rules
+    _BASE_DEPENDENCY_OVERRIDES.clear()
+    _BASE_DEPENDENCY_OVERRIDES.update(app.dependency_overrides)
     try:
         yield
     finally:
         app.dependency_overrides.clear()
+        _BASE_DEPENDENCY_OVERRIDES.clear()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_fastapi_dependency_state() -> Iterator[None]:
+    """Keep per-test FastAPI overrides and breakers from leaking.
+
+    A few live-gated integration tests intentionally clear
+    ``app.dependency_overrides`` to exercise production wiring. If a
+    setup failure happens before their local ``finally`` runs, later unit
+    tests can accidentally hit live Lakebase / warehouse factories. The
+    suite also uses process-global repository/client singletons and
+    circuit breakers, so a singleton built during one test can poison an
+    unrelated endpoint assertion. Reset the production singleton caches
+    around every test; the shared fake service instances themselves are
+    preserved by the session fixture.
+    """
+
+    # Restore from the canonical in-process baseline, not from whatever
+    # an earlier test may have accidentally left in the global dict.
+    app.dependency_overrides.clear()
+    app.dependency_overrides.update(_BASE_DEPENDENCY_OVERRIDES)
+    _reset_runtime_singletons_for_tests()
+    try:
+        yield
+    finally:
+        app.dependency_overrides.clear()
+        app.dependency_overrides.update(_BASE_DEPENDENCY_OVERRIDES)
+        _reset_runtime_singletons_for_tests()

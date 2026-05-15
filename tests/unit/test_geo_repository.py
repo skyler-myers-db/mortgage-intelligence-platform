@@ -23,7 +23,11 @@ from backend.schemas.geo import (
     StateRollupResponse,
     ZipRollupResponse,
 )
-from backend.services.repositories.databricks_repo import DatabricksGeoRepository
+from backend.services.repositories.databricks_repo import (
+    DatabricksGeoRepository,
+    DatabricksSegmentRepository,
+)
+from backend.services.resilience import TTLCache
 
 
 class _FakeSqlClient:
@@ -34,12 +38,15 @@ class _FakeSqlClient:
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict[str, Any]]] = []
         self.responses: list[tuple[str, list[dict[str, Any]]]] = []
+        self.error: Exception | None = None
 
     def execute(
         self,
         statement: str,
         parameters: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
+        if self.error is not None:
+            raise self.error
         self.calls.append((statement, parameters or {}))
         for marker, rows in self.responses:
             if marker in statement:
@@ -59,6 +66,44 @@ def _make_repo() -> tuple[DatabricksGeoRepository, _FakeSqlClient]:
     client = _FakeSqlClient()
     repo = DatabricksGeoRepository(client, cache_ttl_s=60.0)
     return repo, client
+
+
+def test_segment_list_expired_cache_failure_propagates() -> None:
+    """Segment list keeps fail-visible behavior when an expired refresh fails."""
+    clock = [0.0]
+    client = _FakeSqlClient()
+    client.responses = [
+        (
+            ".gold.segment_population",
+            [
+                {
+                    "segment_code": "itm",
+                    "name": "In the money",
+                    "count": 1,
+                    "delta_vs_prior": "+0%",
+                    "avg_score": 80,
+                    "description": "Ready",
+                    "color": "#000000",
+                }
+            ],
+        )
+    ]
+    repo = DatabricksSegmentRepository(
+        client,
+        cache=TTLCache(now=lambda: clock[0]),
+        cache_ttl_s=10.0,
+    )
+
+    assert repo.list(None)[0].code == "itm"
+    clock[0] = 11.0
+    client.error = RuntimeError("warehouse down")
+
+    try:
+        repo.list(None)
+    except RuntimeError as exc:
+        assert str(exc) == "warehouse down"
+    else:  # pragma: no cover - assertion clarity
+        raise AssertionError("expired segment cache must not mask refresh failures")
 
 
 # ---------------------------------------------------------------------------

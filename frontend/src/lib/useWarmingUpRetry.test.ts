@@ -14,6 +14,9 @@ import { planForReason } from './useWarmingUpRetry';
  *                          CircuitBreaker cooldown so we don't hammer
  *                          an open breaker.
  *   - "retries_exhausted": stop immediately; surface the error.
+ *   - "rate_limited":      30s × 2 fallback when the exact Retry-After
+ *                          header is unavailable at this layer.
+ *   - "dependency_saturated": short bounded retry for concurrent overload.
  */
 
 const DEFAULTS = { intervalMs: 5000, maxAttempts: 6 };
@@ -37,6 +40,22 @@ describe('planForReason', () => {
     expect(plan.stop).toBe(true);
     expect(plan.maxAttempts).toBe(0);
     expect(plan.label.toLowerCase()).toContain('lakebase');
+  });
+
+  it('rate_limited -> backpressure cadence, not warming cadence', () => {
+    const plan = planForReason('rate_limited', 'warehouse', DEFAULTS);
+    expect(plan.intervalMs).toBe(30_000);
+    expect(plan.maxAttempts).toBe(2);
+    expect(plan.stop).toBe(false);
+    expect(plan.label.toLowerCase()).toContain('budget');
+  });
+
+  it('dependency_saturated -> short bounded concurrency cadence', () => {
+    const plan = planForReason('dependency_saturated', 'warehouse', DEFAULTS);
+    expect(plan.intervalMs).toBe(5000);
+    expect(plan.maxAttempts).toBe(3);
+    expect(plan.stop).toBe(false);
+    expect(plan.label.toLowerCase()).toContain('saturated');
   });
 
   it('warming_up -> defaults (5s × 6)', () => {

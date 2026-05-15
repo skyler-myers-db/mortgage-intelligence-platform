@@ -67,8 +67,16 @@ validate/plan/deploy, app snapshot promotion, refresh jobs, Genie rebinding,
 and smoke checks. For narrow resource-only recovery, `make bundle-validate`,
 `make bundle-plan`, and `make bundle-deploy` are safe because they run
 `tools/databricks/bundle_env.py`.
-Do not run bare `databricks bundle deploy` for a real app deploy; without
-the env-aware wrapper the app can try to bind placeholder resources.
+
+The Entrada dev target also supports the plain Databricks bundle path:
+
+```bash
+databricks bundle deploy -t dev --profile DEFAULT
+```
+
+That path is resource-only; run `databricks apps deploy mip-app --mode SNAPSHOT`
+afterward if you need to promote a freshly built app snapshot without running the
+full deploy script.
 
 ## Agentic coding setup
 

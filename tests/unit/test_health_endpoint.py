@@ -27,6 +27,10 @@ from backend.main import app
 from backend.services import resilience
 
 client = TestClient(app)
+ADMIN_HEADERS = {
+    "X-Forwarded-Email": "ops@example.com",
+    "X-Forwarded-Groups": "mip-admin",
+}
 
 
 @pytest.fixture(autouse=True)
@@ -46,7 +50,7 @@ def test_health_returns_ok_when_both_deps_up(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr(health_mod, "_probe_lakebase", lambda: True)
     monkeypatch.setattr(health_mod, "_probe_genie", lambda: True)
 
-    res = client.get("/api/health", headers={"X-Forwarded-Email": "ops@example.com"})
+    res = client.get("/api/admin/health", headers=ADMIN_HEADERS)
     assert res.status_code == 200
     payload: dict[str, Any] = res.json()
     assert payload["status"] == "ok"
@@ -85,7 +89,7 @@ def test_health_reports_open_breaker_state(monkeypatch: pytest.MonkeyPatch) -> N
     cb.record_failure()
     assert cb.state == "open"
 
-    res = client.get("/api/health", headers={"X-Forwarded-Email": "ops@example.com"})
+    res = client.get("/api/admin/health", headers=ADMIN_HEADERS)
     payload = res.json()
     assert payload["circuit_breakers"]["warehouse"] == "open"
 
@@ -125,7 +129,11 @@ def test_dependency_down_exception_translates_to_structured_503(
     class _BoomSegmentRepo:
         def list(self, **kwargs: object) -> list:
             _ = kwargs
-            raise DependencyDownError("warehouse", reason="circuit breaker is open")
+            raise DependencyDownError(
+                "warehouse",
+                reason="state=FAILED statement_id=01abc secret predicate",
+                kind=DependencyDownError.KIND_BREAKER_OPEN,
+            )
 
     # Layer a one-off override on top of the session-scoped stub.
     previous = app.dependency_overrides.get(get_segment_repository)
@@ -137,7 +145,11 @@ def test_dependency_down_exception_translates_to_structured_503(
         body = res.json()
         assert body["retryable"] is True
         assert body["dependency"] == "warehouse"
+        assert body["reason"] == "breaker_open"
+        assert body["correlation_id"]
         assert "warehouse" in body["detail"]
+        assert "statement_id" not in body["detail"]
+        assert "secret predicate" not in body["detail"]
     finally:
         if previous is None:
             del app.dependency_overrides[get_segment_repository]
@@ -222,7 +234,8 @@ def test_health_returns_cached_value_during_stale_window(
 
 # ---------------------------------------------------------------------------
 # R6-09: anonymous callers get a minimal probe-friendly body; authenticated
-# callers get the full diagnostic body. The LB probe path stays 200 in both.
+# callers get UI-safe runtime detail. Full diagnostics are admin-only.
+# The LB probe path stays 200 in both.
 # ---------------------------------------------------------------------------
 
 
@@ -259,11 +272,11 @@ def test_health_anonymous_degraded_still_minimal(monkeypatch: pytest.MonkeyPatch
     assert body["status"] == "degraded"
 
 
-def test_health_authenticated_returns_full_diagnostics(
+def test_health_authenticated_returns_runtime_status_only(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A request with ``X-Forwarded-Email`` set gets the full diagnostic
-    body: dependencies, circuit_breakers, counters, log_export posture."""
+    """A non-admin workspace user gets the runtime state needed by the UI
+    without ops diagnostics such as warehouse IDs or process-local counters."""
     monkeypatch.setattr(health_mod, "_probe_warehouse", lambda: True)
     monkeypatch.setattr(health_mod, "_probe_lakebase", lambda: True)
     monkeypatch.setattr(health_mod, "_probe_genie", lambda: True)
@@ -271,7 +284,36 @@ def test_health_authenticated_returns_full_diagnostics(
     res = client.get("/api/health", headers={"X-Forwarded-Email": "skyler@entrada.ai"})
     assert res.status_code == 200
     body = res.json()
-    # Contract: every diagnostic field is present for authenticated callers.
+    assert set(body.keys()) == {
+        "status",
+        "mode",
+        "dependencies",
+        "circuit_breakers",
+        "actor_cache_key",
+    }
+    assert body["dependencies"] == {"warehouse": "up", "lakebase": "up", "genie": "up"}
+    assert set(body["circuit_breakers"].keys()) >= {"warehouse", "lakebase", "genie"}
+    assert "warehouse_id" not in body
+    assert "app_env" not in body
+    assert "log_export" not in body
+    assert "fallback_identity_fallbacks_total" not in body
+    assert body["actor_cache_key"].startswith("actor_")
+    assert "skyler" not in body["actor_cache_key"].lower()
+    assert "entrada" not in body["actor_cache_key"].lower()
+
+
+def test_health_admin_endpoint_returns_full_diagnostics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The full diagnostic body is available only through admin RBAC."""
+    monkeypatch.setattr(health_mod, "_probe_warehouse", lambda: True)
+    monkeypatch.setattr(health_mod, "_probe_lakebase", lambda: True)
+    monkeypatch.setattr(health_mod, "_probe_genie", lambda: True)
+
+    res = client.get("/api/admin/health", headers=ADMIN_HEADERS)
+    assert res.status_code == 200
+    body = res.json()
+    # Contract: every diagnostic field is present for admin callers.
     for key in [
         "status",
         "mode",
@@ -279,6 +321,7 @@ def test_health_authenticated_returns_full_diagnostics(
         "warehouse_id",
         "dependencies",
         "circuit_breakers",
+        "actor_cache_key",
         "breaker_state_changes_last_hour",
         "recent_errors_count",
         "counters_persistence",
@@ -286,6 +329,54 @@ def test_health_authenticated_returns_full_diagnostics(
         "fallback_identity_fallbacks_total",
     ]:
         assert key in body, f"authenticated body must surface {key}"
+    assert body["actor_cache_key"].startswith("actor_")
+    assert "ops" not in body["actor_cache_key"].lower()
+    assert "example" not in body["actor_cache_key"].lower()
+
+
+def test_health_admin_endpoint_rejects_non_admin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(health_mod, "_probe_warehouse", lambda: True)
+    monkeypatch.setattr(health_mod, "_probe_lakebase", lambda: True)
+    monkeypatch.setattr(health_mod, "_probe_genie", lambda: True)
+    monkeypatch.setattr(health_mod.settings, "admin_emails", "")
+
+    res = client.get(
+        "/api/admin/health",
+        headers={"X-Forwarded-Email": "user@example.com", "X-Forwarded-Groups": ""},
+    )
+    assert res.status_code == 403
+
+
+def test_health_actor_cache_key_changes_by_actor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(health_mod, "_probe_warehouse", lambda: True)
+    monkeypatch.setattr(health_mod, "_probe_lakebase", lambda: True)
+    monkeypatch.setattr(health_mod, "_probe_genie", lambda: True)
+
+    first = client.get("/api/health", headers={"X-Forwarded-Email": "ops@example.com"}).json()
+    second = client.get("/api/health", headers={"X-Forwarded-Email": "skyler@entrada.ai"}).json()
+
+    assert first["actor_cache_key"].startswith("actor_")
+    assert second["actor_cache_key"].startswith("actor_")
+    assert first["actor_cache_key"] != second["actor_cache_key"]
+
+
+def test_health_ignores_forwarded_actor_when_headers_are_untrusted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(health_mod, "_probe_warehouse", lambda: True)
+    monkeypatch.setattr(health_mod, "_probe_lakebase", lambda: True)
+    monkeypatch.setattr(health_mod, "_probe_genie", lambda: True)
+    monkeypatch.setattr(health_mod.settings, "trust_forwarded_headers", False)
+
+    res = client.get("/api/health", headers={"X-Forwarded-Email": "spoofed@example.com"})
+    assert res.status_code == 200
+    body = res.json()
+    assert set(body.keys()) == {"status", "mode"}
+    assert body == {"status": "ok", "mode": "live"}
 
 
 def test_health_forces_sync_reprobe_after_hard_ttl(

@@ -49,6 +49,15 @@ describe('layout containment contracts', () => {
     expect(css).toMatch(/\.data-estate__asset\s*\{[^}]*cursor:\s*pointer;/s);
     expect(css).toContain('.trusted-asset--button');
     expect(css).toMatch(/\.trusted-asset--button\s*\{[^}]*width:\s*100%;/s);
+    expect(css).toContain('.trusted-asset--button.is-active');
+  });
+
+  it('shows Ask Genie sample chips inside the composer grid', () => {
+    const css = designCss();
+
+    expect(css).toContain('.genie-composer__samples');
+    expect(css).toMatch(/\.genie-composer__samples\s*\{[^}]*display:\s*grid;/s);
+    expect(css).toMatch(/\.genie-composer__samples\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\);/s);
   });
 
   it('renders skeleton placeholders for slow lead and data-estate loads', () => {

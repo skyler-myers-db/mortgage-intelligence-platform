@@ -2,7 +2,8 @@ import { describe, it, expect } from 'vitest';
 // @ts-expect-error Frontend app types intentionally exclude Node globals; this
 // unit test reads the design-system CSS text under Vitest only.
 import { readFileSync } from 'node:fs';
-import { inferChartFromRows, stripQuestionRestatement } from './GenieAnswer';
+import { stripQuestionRestatement } from './GenieAnswer';
+import { inferChartFromRows } from './GenieAnswer.logic';
 
 const designCss = () => readFileSync(
   new URL('../../design-system/components.css', import.meta.url),

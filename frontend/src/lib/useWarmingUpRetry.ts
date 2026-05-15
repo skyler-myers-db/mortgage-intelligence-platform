@@ -2,9 +2,10 @@ import { useCallback, useMemo } from 'react';
 import { useQuery, type QueryKey } from '@tanstack/react-query';
 import {
   ApiError,
-  dependencyLabel,
   isWarmingUpError,
 } from './api';
+import { DEFAULT_QUERY_STALE_MS } from './queryClient';
+import { planForReason, type RetryPlan } from './retryPlan';
 
 /**
  * useWarmingUpRetry — shared cold-start retry loop for any API call that
@@ -51,66 +52,8 @@ import {
  * prevents a stale response from clobbering a newer one).
  */
 
-/**
- * Cycle-13 cadence plan, derived from the 503 body's `reason` field.
- * Exported so tests can assert the branching without reaching into the
- * hook's internal state.
- */
-export interface RetryPlan {
-  /** "warming_up" | "breaker_open" | "retries_exhausted" | unknown. */
-  reason: string | null;
-  /** Human label for the WarmingUpBlock header. */
-  label: string;
-  /** Interval between attempts, in ms. */
-  intervalMs: number;
-  /** Maximum attempt count (1-indexed ceiling). */
-  maxAttempts: number;
-  /** When true, do not schedule another attempt — surface the error. */
-  stop: boolean;
-}
-
-/** Map a 503 reason + dependency to a retry plan. */
-export function planForReason(
-  reason: string | null,
-  dependency: string | null,
-  defaults: { intervalMs: number; maxAttempts: number },
-): RetryPlan {
-  const depName = dependencyLabel(dependency);
-  if (reason === 'breaker_open') {
-    // Backend CircuitBreaker cools for 30s before it will probe the
-    // dependency again. Retrying every 5s just posts 5 requests into
-    // the open breaker and burns our attempt budget. Pace ourselves
-    // to the cooldown and probe at the boundary + once more.
-    return {
-      reason,
-      label: `${depName} circuit breaker cooling`,
-      intervalMs: 30_000,
-      maxAttempts: 2,
-      stop: false,
-    };
-  }
-  if (reason === 'retries_exhausted') {
-    // Backend already burned its internal retry budget on this call.
-    // Client-side retry cannot fix that — surface the error so the
-    // user sees a real failure state (with a Retry button) instead of
-    // a 30s warming-up facade.
-    return {
-      reason,
-      label: `${depName} unavailable`,
-      intervalMs: defaults.intervalMs,
-      maxAttempts: 0,
-      stop: true,
-    };
-  }
-  // "warming_up", null, or any unknown reason -> default cadence.
-  return {
-    reason,
-    label: `${depName} warming up`,
-    intervalMs: defaults.intervalMs,
-    maxAttempts: defaults.maxAttempts,
-    stop: false,
-  };
-}
+export { planForReason };
+export type { RetryPlan };
 
 export interface WarmingUpState {
   /** Which dependency returned 503 — "warehouse", "lakebase", "genie", … */
@@ -159,17 +102,13 @@ export function useWarmingUpRetry<T>(
   const intervalMs = opts.intervalMs ?? 5000;
   const enabled = opts.enabled ?? true;
 
-  const queryKey = useMemo<QueryKey>(
-    () => opts.queryKey ?? ['warming-up-retry', ...deps],
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [opts.queryKey, ...deps],
-  );
+  const queryKey: QueryKey = opts.queryKey ?? ['warming-up-retry', ...deps];
 
   const query = useQuery<T, ApiError | Error>({
     queryKey,
     enabled,
     queryFn: ({ signal }) => fetcher(signal),
-    staleTime: opts.staleTime,
+    staleTime: opts.staleTime ?? DEFAULT_QUERY_STALE_MS,
     refetchOnWindowFocus: opts.refetchOnWindowFocus,
     retry: (failureCount, err) => {
       if (!isWarmingUpError(err)) return false;

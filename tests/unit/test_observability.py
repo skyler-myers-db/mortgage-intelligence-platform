@@ -10,6 +10,7 @@ Covers:
 
 Every test is stdlib-only and deterministic -- no sleeps, no network.
 """
+
 from __future__ import annotations
 
 import io
@@ -48,8 +49,14 @@ def test_structured_formatter_emits_valid_json() -> None:
     log = logging.getLogger("test.obs.format")
     buf = _capture(log)
     try:
-        obs.emit(log, "warehouse_query_end", dependency="warehouse",
-                 duration_ms=42.5, outcome="ok", rows_returned=7)
+        obs.emit(
+            log,
+            "warehouse_query_end",
+            dependency="warehouse",
+            duration_ms=42.5,
+            outcome="ok",
+            rows_returned=7,
+        )
         lines = [ln for ln in buf.getvalue().splitlines() if ln]
         assert len(lines) == 1
         record = json.loads(lines[0])
@@ -109,13 +116,31 @@ def test_pii_denylist_walks_nested_dict() -> None:
                 "clip_id": "CL-123",
                 "owner_name_hash": "dead-beef",
                 "mailing_city": "Denver",
+                "x-api-key": "SECRET_DIRECT",
+                "headers": {
+                    "dd-api-key": "SECRET_DD",
+                    "access-token": "SECRET_ACCESS",
+                    "client_secret": "SECRET_CLIENT",
+                    "cookie": "SECRET_COOKIE",
+                },
             },
         )
         record = json.loads(buf.getvalue().splitlines()[0])
         ctx = record["context"]
-        assert ctx["clip_id"] == "CL-123"
+        assert ctx["clip_id"] == "CL-<redacted>"
         assert ctx["owner_name_hash"] == "<redacted>"
         assert ctx["mailing_city"] == "<redacted>"
+        assert ctx["x-api-key"] == "<redacted>"
+        assert ctx["headers"]["dd-api-key"] == "<redacted>"
+        assert ctx["headers"]["access-token"] == "<redacted>"
+        assert ctx["headers"]["client_secret"] == "<redacted>"
+        assert ctx["headers"]["cookie"] == "<redacted>"
+        rendered = json.dumps(record)
+        assert "SECRET_DIRECT" not in rendered
+        assert "SECRET_DD" not in rendered
+        assert "SECRET_ACCESS" not in rendered
+        assert "SECRET_CLIENT" not in rendered
+        assert "SECRET_COOKIE" not in rendered
     finally:
         log.handlers.clear()
         log.propagate = True
@@ -237,9 +262,7 @@ def test_http_request_log_uses_templated_route_path() -> None:
         # And, defensively, the raw ID NEVER appears on ANY log record.
         for rec in records:
             flat = json.dumps(rec)
-            assert "B-00042" not in flat, (
-                f"borrower id leaked into log record: {rec}"
-            )
+            assert "B-00042" not in flat, f"borrower id leaked into log record: {rec}"
     finally:
         log.handlers.clear()
         log.propagate = True
@@ -270,16 +293,13 @@ def test_health_exposes_observability_counters(
     monkeypatch.setattr(health_mod, "_probe_lakebase", lambda: True)
     monkeypatch.setattr(health_mod, "_probe_genie", lambda: True)
     obs._reset_counters_for_tests()
-    obs.record_breaker_state_change(
-        name="warehouse", from_state="closed", to_state="open"
-    )
+    obs.record_breaker_state_change(name="warehouse", from_state="closed", to_state="open")
     obs.record_error(dependency="warehouse", exc_type="DatabricksSqlError")
-    # R6-09: the diagnostic counters are gated behind X-Forwarded-Email;
-    # anonymous callers only see {status, mode}. Operators reading these
-    # counters always come in as an authenticated workspace user, so the
-    # test simulates that with the forwarded-email header.
+    # R6-09/Tranche-1: diagnostic counters are admin-only; plain health
+    # stays runtime-minimal for non-admin workspace users.
     res = client.get(
-        "/api/health", headers={"X-Forwarded-Email": "ops@example.com"}
+        "/api/admin/health",
+        headers={"X-Forwarded-Email": "ops@example.com", "X-Forwarded-Groups": "mip-admin"},
     )
     payload: dict[str, Any] = res.json()
     assert payload["breaker_state_changes_last_hour"] >= 1
@@ -316,6 +336,61 @@ def test_structured_formatter_handles_adhoc_log_call() -> None:
         log.propagate = True
 
 
+def test_structured_formatter_redacts_secret_shaped_adhoc_messages() -> None:
+    """Ad-hoc logs should not ship obvious token fragments to stdout/OTLP."""
+    log = logging.getLogger("test.obs.adhoc_secret")
+    buf = _capture(log)
+    try:
+        log.warning(
+            "collector failed authorization=Bearer SECRET_TOKEN "
+            "url=https://user:password@example.com/v1/logs?token=query-secret "
+            "api_key=SECRET_KEY"
+        )
+        record = json.loads(buf.getvalue().splitlines()[0])
+        message = record["message"]
+        assert "SECRET_TOKEN" not in message
+        assert "SECRET_KEY" not in message
+        assert "user:password" not in message
+        assert "authorization=<redacted>" in message
+        assert "api_key=<redacted>" in message
+        assert "https://user:password@example.com" not in message
+    finally:
+        log.handlers.clear()
+        log.propagate = True
+
+
+def test_emit_scrubs_secret_and_pii_shaped_string_values() -> None:
+    """Structured fields like exc_msg/last_error_str are not safe by key alone."""
+    log = logging.getLogger("test.obs.structured_secret_values")
+    buf = _capture(log)
+    try:
+        obs.emit(
+            log,
+            "dependency_down_handled",
+            exc_msg=(
+                "failed authorization=Bearer SECRET_TOKEN for B-102FL7THC6Q3L "
+                "clip CL-1234567890 email alice@example.com at 123 Main St "
+                "phone 555-212-3456 ssn 123-45-6789"
+            ),
+            last_error_str="api_key=SECRET_KEY url=https://user:pass@example.com/v1/logs",
+        )
+        record = json.loads(buf.getvalue().splitlines()[0])
+        rendered = json.dumps(record)
+        assert "SECRET_TOKEN" not in rendered
+        assert "SECRET_KEY" not in rendered
+        assert "B-102FL7THC6Q3L" not in rendered
+        assert "CL-1234567890" not in rendered
+        assert "alice@example.com" not in rendered
+        assert "123 Main St" not in rendered
+        assert "555-212-3456" not in rendered
+        assert "123-45-6789" not in rendered
+        assert "user:pass" not in rendered
+        assert record["exc_msg"].startswith("failed authorization=<redacted>")
+    finally:
+        log.handlers.clear()
+        log.propagate = True
+
+
 # ---------------------------------------------------------------------------
 # Slice-13 follow-up: optional OTLP log exporter (env-gated)
 # ---------------------------------------------------------------------------
@@ -324,7 +399,7 @@ def test_structured_formatter_handles_adhoc_log_call() -> None:
 def test_health_exposes_counters_persistence_and_log_export(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The durable-path posture must be visible in /api/health.
+    """The durable-path posture must be visible in /api/admin/health.
 
     Operators look at the body to tell (a) whether the rolling-hour
     counters are trustworthy across a restart (they're not; the label is
@@ -335,11 +410,11 @@ def test_health_exposes_counters_persistence_and_log_export(
     monkeypatch.setattr(health_mod, "_probe_warehouse", lambda: True)
     monkeypatch.setattr(health_mod, "_probe_lakebase", lambda: True)
     monkeypatch.setattr(health_mod, "_probe_genie", lambda: True)
-    # R6-09: the `counters_persistence` + `log_export` diagnostic fields
-    # are now gated behind X-Forwarded-Email. This is the ops-facing path
-    # anyway -- operators come in through the logged-in workspace browser.
+    # R6-09/Tranche-1: `counters_persistence` + `log_export` diagnostic
+    # fields are admin-only.
     res = client.get(
-        "/api/health", headers={"X-Forwarded-Email": "ops@example.com"}
+        "/api/admin/health",
+        headers={"X-Forwarded-Email": "ops@example.com", "X-Forwarded-Groups": "mip-admin"},
     )
     assert res.status_code == 200
     payload = res.json()
@@ -385,7 +460,10 @@ def test_configure_logging_logs_warning_when_otel_dep_missing(
     from backend.config.settings import settings
 
     monkeypatch.setattr(
-        settings, "mip_otel_endpoint", "http://127.0.0.1:9999", raising=False
+        settings,
+        "mip_otel_endpoint",
+        "https://user:secret@127.0.0.1:9999/v1/logs?token=query-secret",
+        raising=False,
     )
     monkeypatch.setattr(settings, "mip_otel_headers", None, raising=False)
 
@@ -407,13 +485,13 @@ def test_configure_logging_logs_warning_when_otel_dep_missing(
         assert obs.get_otel_handler() is None
         lines = [ln for ln in buf.getvalue().splitlines() if ln]
         # At least one WARNING-level line referencing the endpoint.
-        warning_lines = [
-            json.loads(ln) for ln in lines if '"level":"WARNING"' in ln
-        ]
+        warning_lines = [json.loads(ln) for ln in lines if '"level":"WARNING"' in ln]
         assert any(
-            "127.0.0.1:9999" in (rec.get("message", "") or "")
-            for rec in warning_lines
+            "127.0.0.1:9999" in (rec.get("message", "") or "") for rec in warning_lines
         ), f"expected warning about missing opentelemetry wheel; saw {lines}"
+        all_text = "\n".join(lines)
+        assert "secret" not in all_text
+        assert "query-secret" not in all_text
     finally:
         warn_log.handlers.clear()
         warn_log.propagate = True
@@ -438,15 +516,14 @@ def test_otel_handler_attached_when_exporter_mocked(
 
     from backend.config.settings import settings
 
-    monkeypatch.setattr(
-        settings, "mip_otel_endpoint", "http://127.0.0.1:4318/v1/logs", raising=False
-    )
+    raw_endpoint = "http://user:secret@127.0.0.1:4318/v1/logs?token=query-secret"
+    monkeypatch.setattr(settings, "mip_otel_endpoint", raw_endpoint, raising=False)
     from pydantic import SecretStr
 
     monkeypatch.setattr(
         settings,
         "mip_otel_headers",
-        SecretStr("x-api-key=fake,team=mip"),
+        SecretStr("x-api-key=SECRET_HEADER_VALUE,team=mip"),
         raising=False,
     )
 
@@ -455,7 +532,7 @@ def test_otel_handler_attached_when_exporter_mocked(
     # records how it was called.
     import types
 
-    calls: dict[str, Any] = {"headers": None, "endpoint": None}
+    calls: dict[str, Any] = {"headers": None, "endpoint": None, "bodies": []}
 
     class _FakeExporter:
         def __init__(self, *, endpoint: str, headers: Any = None) -> None:
@@ -483,8 +560,8 @@ def test_otel_handler_attached_when_exporter_mocked(
             super().__init__(level=level)
             self._provider = logger_provider
 
-        def emit(self, _record: logging.LogRecord) -> None:
-            pass
+        def emit(self, record: logging.LogRecord) -> None:
+            calls["bodies"].append(self.format(record))
 
     def _set_logger_provider(_p: Any) -> None:
         pass
@@ -492,9 +569,7 @@ def test_otel_handler_attached_when_exporter_mocked(
     otel_logs = types.ModuleType("opentelemetry._logs")
     otel_logs.set_logger_provider = _set_logger_provider  # type: ignore[attr-defined]
 
-    exporter_mod = types.ModuleType(
-        "opentelemetry.exporter.otlp.proto.http._log_exporter"
-    )
+    exporter_mod = types.ModuleType("opentelemetry.exporter.otlp.proto.http._log_exporter")
     exporter_mod.OTLPLogExporter = _FakeExporter  # type: ignore[attr-defined]
 
     sdk_logs = types.ModuleType("opentelemetry.sdk._logs")
@@ -525,11 +600,37 @@ def test_otel_handler_attached_when_exporter_mocked(
         handler = obs.get_otel_handler()
         assert isinstance(handler, _FakeLoggingHandler)
         # Endpoint passed through verbatim.
-        assert calls["endpoint"] == "http://127.0.0.1:4318/v1/logs"
+        assert calls["endpoint"] == raw_endpoint
         # Headers parsed from ``k=v,k2=v2`` into a dict.
-        assert calls["headers"] == {"x-api-key": "fake", "team": "mip"}
+        assert calls["headers"] == {"x-api-key": "SECRET_HEADER_VALUE", "team": "mip"}
         # Handler actually sits on the root logger.
         assert handler in logging.getLogger().handlers
+
+        # Self-contained collector proof lane: a structured log emitted
+        # through the regular root logger path reaches the OTLP handler
+        # as the same scrubbed JSON body that stdout receives.
+        proof_log = logging.getLogger("mip.otel.proof")
+        obs.emit(
+            proof_log,
+            "otlp_self_test",
+            authorization="Bearer SECRET_AUTH_VALUE",
+            token="SECRET_TOKEN_VALUE",
+            safe_field="visible",
+        )
+        parsed_bodies = [json.loads(body) for body in calls["bodies"]]
+        proof_records = [body for body in parsed_bodies if body.get("event") == "otlp_self_test"]
+        assert proof_records
+        proof = proof_records[-1]
+        assert proof["authorization"] == "<redacted>"
+        assert proof["token"] == "<redacted>"
+        assert proof["safe_field"] == "visible"
+
+        all_handler_text = "\n".join(calls["bodies"])
+        assert "SECRET_HEADER_VALUE" not in all_handler_text
+        assert "SECRET_AUTH_VALUE" not in all_handler_text
+        assert "SECRET_TOKEN_VALUE" not in all_handler_text
+        assert "query-secret" not in all_handler_text
+        assert "user:secret" not in all_handler_text
     finally:
         obs._reset_configured_for_tests()
         obs.configure_logging()
@@ -552,9 +653,7 @@ def test_boot_smoke_with_otel_env_and_missing_wheel(
 
     from backend.config.settings import settings
 
-    monkeypatch.setattr(
-        settings, "mip_otel_endpoint", "http://127.0.0.1:9999", raising=False
-    )
+    monkeypatch.setattr(settings, "mip_otel_endpoint", "http://127.0.0.1:9999", raising=False)
     real_import = builtins.__import__
 
     def _blocking_import(name: str, *args: Any, **kwargs: Any) -> Any:
@@ -571,9 +670,10 @@ def test_boot_smoke_with_otel_env_and_missing_wheel(
         monkeypatch.setattr(health_mod, "_probe_warehouse", lambda: True)
         monkeypatch.setattr(health_mod, "_probe_lakebase", lambda: True)
         monkeypatch.setattr(health_mod, "_probe_genie", lambda: True)
-        # R6-09: `log_export` is only surfaced to authenticated callers.
+        # R6-09/Tranche-1: `log_export` is only surfaced to admin callers.
         res = client.get(
-            "/api/health", headers={"X-Forwarded-Email": "ops@example.com"}
+            "/api/admin/health",
+            headers={"X-Forwarded-Email": "ops@example.com", "X-Forwarded-Groups": "mip-admin"},
         )
         assert res.status_code == 200
         assert res.json()["log_export"] == "stdout-only"

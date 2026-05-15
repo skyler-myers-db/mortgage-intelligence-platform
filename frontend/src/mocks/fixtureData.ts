@@ -155,12 +155,3 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
     signals: [],
   },
 };
-
-/** Fallback agent-activity events for Home when /api/audit/events is empty.
- *  TODO: wire to /api/audit/events (already exists) — this is only the
- *  starter feed so the Home page isn't blank before any action runs. */
-export const fallbackAgentActivity = [
-  { event_id: 'evt-start', actor: 'System',   action: 'Session started on Databricks One',       entity_type: 'session', entity_id: '—',   payload_json: {}, evidence_ids: [],                       created_at: '2026-04-20T10:24:07Z' },
-  { event_id: 'evt-load',  actor: 'Pipeline', action: 'Loaded Cotality Public Records via Delta Share', entity_type: 'pipeline', entity_id: 'deed_and_mortgage', payload_json: {}, evidence_ids: [], created_at: '2026-04-20T10:24:31Z' },
-  { event_id: 'evt-score', actor: 'Agent · Lead Portfolio', action: 'Scored demo borrower population; marked the current in-the-money subset', entity_type: 'scoring', entity_id: 'mip.gold.lead_scores', payload_json: {}, evidence_ids: ['ev-001'], created_at: '2026-04-20T10:25:04Z' },
-];

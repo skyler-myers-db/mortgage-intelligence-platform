@@ -15,7 +15,7 @@ import { Icon } from '../components/Icon';
 import { FilterSelect } from '../components/ui/FilterSelect';
 import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 import { useFootprint } from '../components/FootprintProvider';
-import { queryKeys } from '../lib/queryClient';
+import { queryKeys } from '../lib/queryKeys';
 
 /**
  * Segment Intelligence — prototype composition: segment cards across the top

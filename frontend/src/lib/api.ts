@@ -64,6 +64,7 @@ export interface HealthPayload {
   app_env?: string;
   dependencies?: Record<string, string>;
   circuit_breakers?: Record<string, string>;
+  actor_cache_key?: string | null;
 }
 
 export interface ApproveResult {
@@ -176,17 +177,25 @@ function appendPortfolioCriteria(params: URLSearchParams, criteria?: GeoQueryCri
 }
 
 /**
- * Resilience reason codes surfaced in 503 bodies by the backend's
- * `_dependency_down_handler` (cycle 13, 2026-04-23). Used by
- * `useWarmingUpRetry` to choose a cadence:
+ * Resilience/backpressure reason codes surfaced by the backend's transient
+ * failure contracts. Dependency-down responses use HTTP 503; backpressure
+ * responses use HTTP 429 plus Retry-After.
  *
  *   - "warming_up"        — dependency is initialising after idle; poll 5s.
  *   - "breaker_open"      — circuit breaker tripped; respect the 30s
  *                           cooldown before probing again.
  *   - "retries_exhausted" — backend already burned its retry budget;
  *                           further client retries will not help.
+ *   - "rate_limited"      — request budget exhausted; Retry-After is the
+ *                           source of truth when present.
+ *   - "dependency_saturated" — concurrency guard is full for a dependency.
  */
-export type ApiErrorReason = 'warming_up' | 'breaker_open' | 'retries_exhausted';
+export type ApiErrorReason =
+  | 'warming_up'
+  | 'breaker_open'
+  | 'retries_exhausted'
+  | 'rate_limited'
+  | 'dependency_saturated';
 
 export interface ApiValidationIssue {
   field: string;
@@ -204,8 +213,8 @@ export class ApiError extends Error {
   readonly aborted: boolean;
   readonly validationIssues: ApiValidationIssue[];
   /**
-   * 503 classification from the backend resilience layer, or `null`
-   * when the body did not include one. See `ApiErrorReason`.
+   * Transient classification from the backend resilience/backpressure layer,
+   * or `null` when the body did not include one. See `ApiErrorReason`.
    */
   readonly reason: ApiErrorReason | string | null;
 
@@ -249,16 +258,11 @@ export function isWarmingUpError(err: unknown): err is ApiError {
   if (err.aborted) return false;
   if (err.status !== 503) return false;
   if (!err.retryable) return false;
-  // 2026-04-25 incident: an expired SDK-minted OAuth token caused the
-  // warehouse path to fail with HTTP 403 forever; the resilience layer
-  // wraps that as DependencyDownError(kind="retries_exhausted") and
-  // the breaker eventually opens (kind="breaker_open"). Both reasons
-  // arrive on the wire as 503+retryable=true, so the prior "any 503
-  // counts as warming-up" rule retried forever and never surfaced the
-  // real problem to the user. Only the explicit "warming_up" classifi-
-  // cation should drive the warming-up UX. Unknown/null reason still
-  // counts as warming-up so older backends keep working.
-  if (err.reason === 'breaker_open' || err.reason === 'retries_exhausted') {
+  // `retries_exhausted` means the backend already spent its retry budget;
+  // another client-side warming loop hides a real failure. `breaker_open`
+  // is still a transient dependency state, but `planForReason` slows it to
+  // the backend breaker cooldown rather than hammering every few seconds.
+  if (err.reason === 'retries_exhausted') {
     return false;
   }
   return true;
@@ -284,15 +288,13 @@ export function isAbortError(err: unknown): boolean {
 }
 
 /**
- * Slice-6 retry protocol for `retryable: true` 503 responses.
+ * Slice-6 retry protocol for `retryable: true` transient responses.
  *
  * The backend's resilience layer (CircuitBreaker + Resilient wrapper)
  * returns HTTP 503 with `{detail, retryable: true, dependency}` when a
- * dependency's circuit is open or all retries exhausted. We treat
- * that as a transient signal and re-fetch with exponential backoff
- * (mirroring the backend's 0.2s/0.4s/0.8s cadence). The DegradedBanner
- * is powered by `/api/health` polling in parallel so the user sees
- * "backend is warming up" while these retries run.
+ * dependency's circuit is open or all retries exhausted. Backpressure
+ * returns HTTP 429 with `{retryable: true}` plus `Retry-After`. We treat
+ * both as transient signals and re-fetch with bounded backoff.
  */
 
 function _sleep(ms: number, signal?: AbortSignal): Promise<void> {
@@ -345,6 +347,7 @@ export interface Retryable503Parsed {
   dependency: string | null;
   detail: string | null;
   correlationId: string | null;
+  retryAfterMs: number | null;
   /**
    * Cycle-13 resilience classification: "warming_up" | "breaker_open" |
    * "retries_exhausted", or null if the backend didn't include one.
@@ -354,9 +357,10 @@ export interface Retryable503Parsed {
 }
 
 /**
- * Parse a 503 body emitted by `_dependency_down_handler`. Exported so
+ * Parse a transient 503/429 body emitted by `_dependency_down_handler`
+ * or `BackpressureMiddleware`. Exported so
  * tests can exercise the classification logic without mocking `fetch`.
- * Returns a fully-null parse for any non-503 response.
+ * Returns a fully-null parse for any non-transient response.
  */
 export async function _parseRetryableBody(res: Response): Promise<Retryable503Parsed> {
   const empty: Retryable503Parsed = {
@@ -364,9 +368,10 @@ export async function _parseRetryableBody(res: Response): Promise<Retryable503Pa
     dependency: null,
     detail: null,
     correlationId: null,
+    retryAfterMs: null,
     reason: null,
   };
-  if (res.status !== 503) return empty;
+  if (res.status !== 503 && res.status !== 429) return empty;
   try {
     const body = (await res.clone().json()) as {
       retryable?: boolean;
@@ -380,11 +385,21 @@ export async function _parseRetryableBody(res: Response): Promise<Retryable503Pa
       dependency: body?.dependency ?? null,
       detail: body?.detail ?? null,
       correlationId: body?.correlation_id ?? null,
+      retryAfterMs: _parseRetryAfterMs(res.headers.get('Retry-After')),
       reason: body?.reason ?? null,
     };
   } catch {
     return empty;
   }
+}
+
+function _parseRetryAfterMs(headerValue: string | null): number | null {
+  if (!headerValue) return null;
+  const seconds = Number.parseFloat(headerValue);
+  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
+  const dateMs = Date.parse(headerValue);
+  if (!Number.isFinite(dateMs)) return null;
+  return Math.max(0, dateMs - Date.now());
 }
 
 function _fieldFromLoc(loc: unknown): { field: string; location: string[] } {
@@ -455,8 +470,10 @@ async function _fetchWithRetry(
     if (!parsed.retryable) return res;
     lastRes = res;
     if (i === attempts - 1) break;
-    const delay = Math.min(2000, 200 * 2 ** i);
-    const jittered = delay * (0.5 + Math.random());
+    const delay = parsed.retryAfterMs ?? Math.min(2000, 200 * 2 ** i);
+    const jittered = parsed.retryAfterMs === null
+      ? delay * (0.5 + Math.random())
+      : delay;
     await _sleep(jittered, signal);
   }
   return lastRes as Response;

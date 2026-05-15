@@ -11,6 +11,12 @@ router = APIRouter(prefix="/api/config", tags=["config"])
 _CONFIG_CACHE = TTLCache()
 
 
+class _UncacheableConfig(RuntimeError):
+    def __init__(self, payload: dict[str, object]) -> None:
+        super().__init__("config payload is not cacheable")
+        self.payload = payload
+
+
 def _reset_config_cache_for_tests() -> None:
     _CONFIG_CACHE.clear()
 
@@ -66,29 +72,37 @@ def _geography_options(scope: GeographyScope | None) -> tuple[list[str], str]:
 @router.get("/options")
 def get_config_options() -> dict[str, object]:
     cache_key = "config.options.v1"
-    cached = _CONFIG_CACHE.get(cache_key)
-    if cached is not None:
-        return cached
 
-    target_lenders, target_lenders_status = _target_lender_options()
-    geo_scope = _live_geography_scope()
-    geographies, geographies_status = _geography_options(geo_scope)
-    payload = {
-        "lender_name": settings.mip_lender_name,
-        "geographies": geographies,
-        "geographies_status": geographies_status,
-        "geography_scope": geo_scope.to_api_dict() if geo_scope else None,
-        "occupancy": ["Owner-occupied", "Non-owner-occupied", "All"],
-        "lien_status": ["Open 1st lien", "Open HELOC", "Free & clear", "Any"],
-        "lender_relationships": ["All", "Current customer", "Former customer", "Competitor customer"],
-        "products": ["All products", "Refi", "HELOC", "Cash-out", "Purchase", "Retention"],
-        "equity_thresholds": ["≥ 15%", "≥ 25%", "≥ 40%", "Any"],
-        "target_lender_refs": target_lenders,
-        "target_lender_refs_status": target_lenders_status,
-    }
-    if target_lenders_status != "unavailable" and geographies_status != "unavailable":
-        _CONFIG_CACHE.set(cache_key, payload, settings.mip_cache_ttl_s)
-    return payload
+    def build() -> dict[str, object]:
+        target_lenders, target_lenders_status = _target_lender_options()
+        geo_scope = _live_geography_scope()
+        geographies, geographies_status = _geography_options(geo_scope)
+        payload = {
+            "lender_name": settings.mip_lender_name,
+            "geographies": geographies,
+            "geographies_status": geographies_status,
+            "geography_scope": geo_scope.to_api_dict() if geo_scope else None,
+            "occupancy": ["Owner-occupied", "Non-owner-occupied", "All"],
+            "lien_status": ["Open 1st lien", "Open HELOC", "Free & clear", "Any"],
+            "lender_relationships": ["All", "Current customer", "Former customer", "Competitor customer"],
+            "products": ["All products", "Refi", "HELOC", "Cash-out", "Purchase", "Retention"],
+            "equity_thresholds": ["≥ 15%", "≥ 25%", "≥ 40%", "Any"],
+            "target_lender_refs": target_lenders,
+            "target_lender_refs_status": target_lenders_status,
+        }
+        if target_lenders_status == "unavailable" or geographies_status == "unavailable":
+            raise _UncacheableConfig(payload)
+        return payload
+
+    try:
+        return _CONFIG_CACHE.get_or_set(
+            cache_key,
+            build,
+            ttl_s=settings.mip_cache_ttl_s,
+            stale_if_error=False,
+        )
+    except _UncacheableConfig as exc:
+        return exc.payload
 
 
 @router.get("/footprint")
@@ -114,26 +128,34 @@ def get_config_footprint() -> dict[str, object]:
     Hole-finder round-2 #20.
     """
     cache_key = "config.footprint.v1"
-    cached = _CONFIG_CACHE.get(cache_key)
-    if cached is not None:
-        return cached
 
-    resolver = get_state_footprint_resolver()
-    rows = resolver.list()
-    geo_scope = _live_geography_scope()
-    payload = {
-        "states": [
-            {
-                "state_code": r.state_code,
-                "state_name": r.state_name,
-                "display_order": r.display_order,
-                "is_default_state": r.is_default_state,
-            }
-            for r in rows
-        ],
-        "geography_scope": geo_scope.to_api_dict() if geo_scope else None,
-        "using_fallback": resolver.using_fallback(),
-    }
-    if rows and geo_scope is not None and not resolver.using_fallback():
-        _CONFIG_CACHE.set(cache_key, payload, settings.mip_cache_ttl_s)
-    return payload
+    def build() -> dict[str, object]:
+        resolver = get_state_footprint_resolver()
+        rows = resolver.list()
+        geo_scope = _live_geography_scope()
+        payload = {
+            "states": [
+                {
+                    "state_code": r.state_code,
+                    "state_name": r.state_name,
+                    "display_order": r.display_order,
+                    "is_default_state": r.is_default_state,
+                }
+                for r in rows
+            ],
+            "geography_scope": geo_scope.to_api_dict() if geo_scope else None,
+            "using_fallback": resolver.using_fallback(),
+        }
+        if not rows or geo_scope is None or resolver.using_fallback():
+            raise _UncacheableConfig(payload)
+        return payload
+
+    try:
+        return _CONFIG_CACHE.get_or_set(
+            cache_key,
+            build,
+            ttl_s=settings.mip_cache_ttl_s,
+            stale_if_error=False,
+        )
+    except _UncacheableConfig as exc:
+        return exc.payload

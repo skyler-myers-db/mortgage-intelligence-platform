@@ -53,10 +53,8 @@ jobs:
       LAKEBASE_HOST: ${{ secrets.LAKEBASE_HOST }}
       LAKEBASE_USER: ${{ secrets.LAKEBASE_USER }}
       LAKEBASE_PASSWORD: ${{ secrets.LAKEBASE_PASSWORD }}
-      LAKEBASE_DATABASE_NAME: ${{ secrets.LAKEBASE_DATABASE_NAME }}
+      LAKEBASE_DATABASE: ${{ secrets.LAKEBASE_DATABASE }}
       LAKEBASE_INTEGRATION: '1'   # opt-in flag Slice 5 requires
-      # Live-UC tests MUST NOT run against mock repos.
-      MIP_MOCK_MODE: 'false'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -177,7 +175,6 @@ jobs:
       # startup — one auth story for every environment, and no stale
       # LAKEBASE_PASSWORD secret to rotate.
       LAKEBASE_INTEGRATION: '1'
-      MIP_MOCK_MODE: 'false'
       E2E_LIVE: '1'
       # real_data.spec.ts uses this to flip the force-degraded flag.
       MIP_FORCE_DEGRADED_TOKEN: ${{ secrets.MIP_FORCE_DEGRADED_TOKEN }}
@@ -207,7 +204,7 @@ jobs:
           fi
       - name: Install Playwright browsers
         working-directory: frontend
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install --with-deps chromium firefox webkit
       - name: Detect deployed-URL path
         # This job intentionally has one path:
         #   deployed -> mint an M2M Bearer, hit the real Databricks App
@@ -280,15 +277,30 @@ jobs:
             tests/e2e/demo_visual.spec.ts \
             tests/e2e/accessibility.spec.ts \
             tests/e2e/responsive.spec.ts \
+            tests/e2e/genie_proof_layout.spec.ts \
+            tests/e2e/route_performance.spec.ts \
             --reporter=list --workers=1
-      - name: Upload Playwright report + traces on failure
-        if: failure()
+      - name: Run procurement accessibility and browser/device matrix
+        # Separate from the golden path so the standard live suite stays
+        # Chromium-focused, while this gate expands only the procurement
+        # specs across Chromium, Firefox, WebKit, phone, and tablet projects.
+        working-directory: frontend
+        env:
+          E2E_BROWSER_MATRIX: '1'
+        run: |
+          npx playwright test \
+            tests/e2e/accessibility_procurement.spec.ts \
+            tests/e2e/cross_browser_matrix.spec.ts \
+            --reporter=list --workers=1
+      - name: Upload Playwright report on failure
+        # Live Playwright runs carry bearer-authenticated requests and real
+        # borrower/audit surfaces. Do not upload DOM/video/trace artifacts by
+        # default; enable only for a controlled, redacted operator run.
+        if: failure() && env.E2E_LIVE_FAILURE_ARTIFACTS == '1'
         uses: actions/upload-artifact@v4
         with:
           name: playwright-report-live
-          path: |
-            frontend/playwright-report
-            test-results
+          path: frontend/playwright-report
           if-no-files-found: ignore
           retention-days: 14
 
@@ -310,8 +322,7 @@ jobs:
       LAKEBASE_HOST: ${{ secrets.LAKEBASE_HOST }}
       LAKEBASE_USER: ${{ secrets.LAKEBASE_USER }}
       LAKEBASE_PASSWORD: ${{ secrets.LAKEBASE_PASSWORD }}
-      LAKEBASE_DATABASE_NAME: ${{ secrets.LAKEBASE_DATABASE_NAME }}
-      MIP_MOCK_MODE: 'false'
+      LAKEBASE_DATABASE: ${{ secrets.LAKEBASE_DATABASE }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -375,7 +386,6 @@ jobs:
       # Scope it to this job only; do NOT promote to workflow-env.
       MIP_KILL_DRILL_ALLOW_REAL: '1'
       MIP_APP_URL: ${{ secrets.MIP_APP_URL }}
-      MIP_MOCK_MODE: 'false'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -448,7 +458,6 @@ jobs:
       DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
       DATABRICKS_WAREHOUSE_ID: ${{ secrets.DATABRICKS_WAREHOUSE_ID }}
       GENIE_SPACE_ID: ${{ secrets.GENIE_SPACE_ID }}
-      MIP_MOCK_MODE: 'false'
       # 200 examples/family is the spec. An operator who wants a
       # smaller targeted rerun can override this via the Actions UI's
       # "Run workflow" dialog (after wiring up an input), or by forking

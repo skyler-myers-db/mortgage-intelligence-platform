@@ -12,7 +12,6 @@ from backend.schemas.common import (
     validate_public_opaque_id,
 )
 
-
 AssignmentStrategy = Literal["manual", "round_robin", "score_balanced"]
 OutreachStatus = Literal["none", "queued", "actioned", "sent", "bounced", "replied"]
 CallDispositionOutcome = Literal[
@@ -170,7 +169,7 @@ class DispositionRequest(BaseModel):
         return validate_public_opaque_id(value)
 
     @model_validator(mode="after")
-    def _callback_required(self) -> "DispositionRequest":
+    def _callback_required(self) -> DispositionRequest:
         if self.outcome == "callback_scheduled" and self.callback_at is None:
             raise ValueError("callback_at is required for callback_scheduled")
         return self

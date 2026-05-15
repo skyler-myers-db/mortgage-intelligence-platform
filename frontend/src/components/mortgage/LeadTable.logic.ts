@@ -1,0 +1,134 @@
+import type { LeadSummary } from '../../types';
+import { LEAD_ROW_ESTIMATE_PX, LEAD_ROW_OVERSCAN } from './LeadTable.constants';
+import type { LeadVirtualRange, SortKey } from './LeadTable.types';
+
+export function computeLeadVirtualRange(
+  totalRows: number,
+  scrollTop: number,
+  viewportHeight: number,
+  enabled: boolean,
+  rowEstimatePx = LEAD_ROW_ESTIMATE_PX,
+  overscan = LEAD_ROW_OVERSCAN,
+): LeadVirtualRange {
+  if (!enabled || totalRows <= 0) {
+    return { start: 0, end: totalRows, top: 0, bottom: 0 };
+  }
+  const start = Math.max(0, Math.floor(Math.max(0, scrollTop) / rowEstimatePx) - overscan);
+  const visibleCount = Math.ceil(Math.max(1, viewportHeight) / rowEstimatePx) + overscan * 2;
+  const end = Math.min(totalRows, start + visibleCount);
+  return {
+    start,
+    end,
+    top: start * rowEstimatePx,
+    bottom: Math.max(0, (totalRows - end) * rowEstimatePx),
+  };
+}
+
+/**
+ * Return true when `el` is an editable element that the window-level
+ * hotkey handler must skip over. Exported for unit tests.
+ */
+export function isEditableTarget(el: Element | null | undefined): boolean {
+  if (!el) return false;
+  const tag = (el as HTMLElement).tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
+  return (el as HTMLElement).isContentEditable === true;
+}
+
+/**
+ * Chunk a list into groups of `size`. Used by the bulk-approve loop to
+ * bound in-flight POSTs to the approve endpoint without inventing a
+ * server-side bulk API.
+ */
+export function chunk<T>(items: T[], size: number): T[][] {
+  if (size <= 0) return [items];
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) {
+    out.push(items.slice(i, i + size));
+  }
+  return out;
+}
+
+export function _newBulkId(): string {
+  const c = typeof globalThis !== 'undefined' ? globalThis.crypto : undefined;
+  if (c && typeof c.randomUUID === 'function') return c.randomUUID();
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (ch) => {
+    const n = ch === 'x' ? Math.floor(Math.random() * 16) : 8 + Math.floor(Math.random() * 4);
+    return n.toString(16);
+  });
+}
+
+export function relationshipLabel(lead: LeadSummary): string {
+  if (lead.is_current_customer) return 'Current';
+  if (lead.is_former_customer) return 'Former';
+  if (lead.is_competitor_lien) return 'Competitor';
+  return 'Other';
+}
+
+export function relationshipVariant(lead: LeadSummary): 'success' | 'warning' | 'neutral' {
+  if (lead.is_current_customer) return 'success';
+  if (lead.is_competitor_lien) return 'warning';
+  return 'neutral';
+}
+
+export function sortValue(lead: LeadSummary, key: SortKey): string | number {
+  if (key === 'relationship') return relationshipLabel(lead);
+  if (key === 'assignment') return lead.assigned_to_label ?? lead.assigned_to_email ?? 'Unassigned';
+  if (key === 'outreach') return lead.outreach_status ?? 'none';
+  if (key === 'equity') return lead.equity_estimate;
+  if (key === 'rate') return lead.rate_spread_bps;
+  if (key === 'score') return lead.opportunity_score;
+  if (key === 'confidence') return lead.confidence;
+  return 0;
+}
+
+export function outreachLabel(status?: string | null): string {
+  if (!status || status === 'none') return 'None';
+  return status.charAt(0).toUpperCase() + status.slice(1);
+}
+
+export function outreachVariant(status?: string | null): 'success' | 'warning' | 'neutral' {
+  if (status === 'sent' || status === 'replied' || status === 'actioned') return 'success';
+  if (status === 'queued' || status === 'bounced') return 'warning';
+  return 'neutral';
+}
+
+export function isTerminalApproval(status?: string | null): boolean {
+  return status === 'approved' || status === 'rejected' || status === 'hold';
+}
+
+function isNonWorkableApproval(status?: string | null): boolean {
+  return status === 'rejected' || status === 'hold';
+}
+
+export function isLeadSelectableForSalesOps(status?: string | null, localStatus?: string | null): boolean {
+  return !isNonWorkableApproval(status) && !isNonWorkableApproval(localStatus);
+}
+
+export function isLeadApprovalEligible(status?: string | null, localStatus?: string | null): boolean {
+  return !localStatus && !isTerminalApproval(status);
+}
+
+export function dispositionLabel(outcome?: string | null): string {
+  if (!outcome) return 'Untouched';
+  return outcome.split('_').map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(' ');
+}
+
+export function dispositionVariant(outcome?: string | null): 'success' | 'warning' | 'neutral' | 'danger' {
+  if (outcome === 'application_started' || outcome === 'callback_scheduled' || outcome === 'connected') return 'success';
+  if (outcome === 'called_no_answer' || outcome === 'called_left_voicemail' || outcome === 'not_now') return 'warning';
+  if (outcome === 'dead' || outcome === 'not_interested') return 'danger';
+  return 'neutral';
+}
+
+export function formatDateTimeShort(value?: string | null): string {
+  if (!value) return '—';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}

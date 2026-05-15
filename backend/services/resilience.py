@@ -32,9 +32,10 @@ import logging
 import random
 import threading
 import time
+from collections import OrderedDict
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from threading import Lock
+from threading import Event, Lock
 from typing import Any, Generic, TypeVar
 
 from backend.services.observability import (
@@ -435,31 +436,44 @@ def with_retry(
 
 
 class TTLCache:
-    """Simple per-key TTL cache. No size bound -- the app's read-mostly
-    traffic shape keeps key cardinality small.
+    """Bounded per-key TTL cache with optional single-flight refresh.
 
-    Each entry stores (value, expiry_monotonic). A missed or expired
-    lookup returns None; the caller must then compute + ``set`` the
-    fresh value. We log at DEBUG on expiry so cache behaviour is
-    inspectable in operator logs.
+    Legacy callers can keep using ``get`` + ``set``. New hot aggregate
+    paths should prefer ``get_or_set`` so a burst of callers for the
+    same expired key runs the expensive factory once, while followers
+    wait for that result instead of stampeding the warehouse.
+
+    Expired entries are retained until eviction so ``stale_if_error``
+    can serve the last-good aggregate when a read-only refresh fails.
+    Mutable workflow endpoints should not use that option.
     """
 
-    def __init__(self, now: Callable[[], float] = time.monotonic) -> None:
-        self._entries: dict[str, tuple[Any, float]] = {}
+    def __init__(
+        self,
+        now: Callable[[], float] = time.monotonic,
+        *,
+        max_entries: int = 256,
+    ) -> None:
+        if max_entries < 1:
+            raise ValueError("max_entries must be >= 1")
+        self._entries: OrderedDict[str, tuple[Any, float]] = OrderedDict()
+        self._inflight: dict[str, Event] = {}
         self._lock = Lock()
         self._now = now
+        self._max_entries = max_entries
 
     def get(self, key: str) -> Any | None:
         with self._lock:
             entry = self._entries.get(key)
             if entry is None:
+                self._emit_cache_event("ttl_cache_miss", key, reason="empty")
                 return None
             value, expires_at = entry
+            self._entries.move_to_end(key)
             if self._now() >= expires_at:
-                # Drop expired entry so repeat misses don't grow the map.
-                del self._entries[key]
-                log.debug("ttl_cache miss (expired): %s", key)
+                self._emit_cache_event("ttl_cache_miss", key, reason="expired")
                 return None
+            self._emit_cache_event("ttl_cache_hit", key)
             return value
 
     def set(self, key: str, value: Any, ttl_s: float) -> None:
@@ -469,14 +483,101 @@ class TTLCache:
             return
         with self._lock:
             self._entries[key] = (value, self._now() + ttl_s)
+            self._entries.move_to_end(key)
+            self._evict_locked()
+
+    def get_or_set(
+        self,
+        key: str,
+        factory: Callable[[], Any],
+        *,
+        ttl_s: float,
+        stale_if_error: bool = False,
+        wait_timeout_s: float = 30.0,
+    ) -> Any:
+        cached = self.get(key)
+        if cached is not None:
+            return cached
+
+        leader = False
+        with self._lock:
+            entry = self._entries.get(key)
+            if entry is not None:
+                value, expires_at = entry
+                self._entries.move_to_end(key)
+                if self._now() < expires_at:
+                    self._emit_cache_event("ttl_cache_hit", key, reason="double_check")
+                    return value
+            event = self._inflight.get(key)
+            if event is None:
+                event = Event()
+                self._inflight[key] = event
+                leader = True
+
+        if not leader:
+            self._emit_cache_event("ttl_cache_wait", key)
+            if event.wait(timeout=wait_timeout_s):
+                cached = self.get(key)
+                if cached is not None:
+                    return cached
+                if stale_if_error:
+                    stale = self.get_stale(key)
+                    if stale is not None:
+                        self._emit_cache_event("ttl_cache_stale_hit", key, reason="leader_failed")
+                        return stale
+            # The leader timed out or failed without a stale value.
+            # Compute rather than returning a false empty state.
+            self._emit_cache_event("ttl_cache_miss", key, reason="singleflight_fallback")
+
+        try:
+            value = factory()
+        except Exception:
+            if stale_if_error:
+                stale = self.get_stale(key)
+                if stale is not None:
+                    self._emit_cache_event("ttl_cache_stale_hit", key, reason="factory_error")
+                    return stale
+            raise
+        else:
+            self.set(key, value, ttl_s)
+            return value
+        finally:
+            if leader:
+                with self._lock:
+                    finished = self._inflight.pop(key, None)
+                    if finished is not None:
+                        finished.set()
+
+    def get_stale(self, key: str) -> Any | None:
+        with self._lock:
+            entry = self._entries.get(key)
+            if entry is None:
+                return None
+            self._entries.move_to_end(key)
+            return entry[0]
 
     def invalidate(self, key: str) -> None:
         with self._lock:
             self._entries.pop(key, None)
+            event = self._inflight.pop(key, None)
+            if event is not None:
+                event.set()
 
     def clear(self) -> None:
         with self._lock:
             self._entries.clear()
+            for event in self._inflight.values():
+                event.set()
+            self._inflight.clear()
+
+    def _evict_locked(self) -> None:
+        while len(self._entries) > self._max_entries:
+            evicted_key, _ = self._entries.popitem(last=False)
+            self._emit_cache_event("ttl_cache_eviction", evicted_key, reason="max_entries")
+
+    @staticmethod
+    def _emit_cache_event(event: str, key: str, **extra: Any) -> None:
+        emit(log, event, level=logging.DEBUG, cache_key=key, **extra)
 
 
 # ---------------------------------------------------------------------------

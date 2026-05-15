@@ -284,6 +284,12 @@ code, kbd, .mono { font-family: var(--font-mono); }
 a { color: inherit; }
 button, input, select, textarea { font: inherit; }
 
+input[type="checkbox"] {
+  inline-size: var(--sp-6);
+  block-size: var(--sp-6);
+  accent-color: var(--accent);
+}
+
 /* ---------- Focus ---------- */
 :focus-visible {
   outline: 2px solid var(--accent);

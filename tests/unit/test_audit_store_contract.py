@@ -301,14 +301,14 @@ def test_default_actor_increments_counter() -> None:
 
 
 def test_health_reports_fallback_counter() -> None:
-    """``/api/health`` exposes the counter as
+    """``/api/admin/health`` exposes the counter as
     ``fallback_identity_fallbacks_process_total`` (R6-08 rename; legacy
     ``fallback_identity_fallbacks_total`` still emitted for one cycle)
     so operators can surface it in dashboards without an extra scrape
     target.
 
-    R6-09: the diagnostic body is gated behind ``X-Forwarded-Email``,
-    so we send the header to exercise the authenticated branch.
+    R6-09/Tranche-1: the diagnostic body is admin-gated, so we send
+    both actor and group headers.
     """
     _reset_fallback_counter_for_tests()
     # Bump it twice via the service-level API so the test doesn't depend
@@ -317,8 +317,8 @@ def test_health_reports_fallback_counter() -> None:
     resolve_actor(None)
     client = TestClient(app)
     response = client.get(
-        "/api/health",
-        headers={"X-Forwarded-Email": "ops@example.com"},
+        "/api/admin/health",
+        headers={"X-Forwarded-Email": "ops@example.com", "X-Forwarded-Groups": "mip-admin"},
     )
     assert response.status_code == 200, response.text
     body = response.json()

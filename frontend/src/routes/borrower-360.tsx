@@ -16,7 +16,7 @@ import { Reveal } from '../components/fx/Reveal';
 import { descriptorFor, descriptorForEvidence } from '../lib/drawerSources';
 import { segmentByCode } from '../lib/segmentMetadata';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
-import { queryKeys } from '../lib/queryClient';
+import { queryKeys } from '../lib/queryKeys';
 import { useApp } from '../components/AppContext';
 
 /**

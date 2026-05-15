@@ -52,10 +52,9 @@ jobs:
       - name: pytest
         # Unit + integration under the default pytest config; integration
         # tests that require workspace creds skip themselves when env is
-        # absent. Set MIP_MOCK_MODE=true so the repository-seam unit tests
-        # pick the in-process mock implementations explicitly.
-        env:
-          MIP_MOCK_MODE: 'true'
+        # absent. Repository-seam tests install their in-process fixtures
+        # explicitly through pytest fixtures; there is no runtime mock-mode
+        # switch in production code.
         run: pytest -q
 
   frontend-tests:
@@ -81,6 +80,7 @@ jobs:
       - run: npm --prefix frontend run lint
       - run: npm --prefix frontend run test
       - run: npm --prefix frontend run build
+      - run: npm --prefix frontend run budget
 
   bundle-syntax-check:
     # `databricks bundle validate` unavoidably performs a
@@ -182,7 +182,9 @@ jobs:
     #      `.gitleaks.toml` at repo root.
     #   2. bandit    -- Python SAST across backend/tools/jobs/pipelines
     #      at medium+ severity. `.bandit` silences test-only noise.
-    #   3. npm audit -- frontend dependency CVE scan at high+ severity.
+    #   3. pip-audit -- Python dependency CVE scan from requirements.txt.
+    #   4. npm audit -- frontend dependency CVE scan at high+ severity,
+    #      including dev/build tooling because it runs in CI and build hosts.
     # Each step has a single responsibility and runs independently so
     # CI output points directly at the failing rail.
     name: security (gitleaks + bandit + npm audit)
@@ -214,10 +216,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install bandit
+      - name: Install Python security tools
         run: |
           python -m pip install --upgrade pip
-          pip install 'bandit[toml]==1.7.9'
+          pip install 'bandit[toml]==1.7.9' 'pip-audit==2.9.0'
 
       - name: bandit (Python SAST)
         # Two-step: a wide-net informational run (medium+ severity,
@@ -230,10 +232,13 @@ jobs:
           bandit -c .bandit -r backend tools jobs pipelines -x tests -ll -ii -f txt || true
           bandit -c .bandit -r backend tools jobs pipelines -x tests --severity-level high --confidence-level high -q
 
-      - name: npm audit (frontend deps)
+      - name: pip-audit (Python deps)
+        run: pip-audit -r requirements.txt --strict
+
+      - name: npm audit (frontend prod + dev deps)
         # `--audit-level=high` means only high/critical CVEs fail the
-        # job; moderate/low findings print but don't block. npm audit
-        # is notoriously noisy on transitive dev deps; tighten later
-        # once baseline is clean.
-        run: npm --prefix frontend audit --audit-level=high --omit=dev
+        # job; moderate/low findings print but don't block. We include
+        # devDependencies because Vite, Vitest, Playwright, and build
+        # plugins execute in CI / bundle-production contexts.
+        run: npm --prefix frontend audit --audit-level=high
         continue-on-error: false

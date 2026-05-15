@@ -11,6 +11,15 @@
 
 ## Headline result
 
+### Current status — 2026-05-14
+
+This audit document preserves the original findings below for traceability, but the current app state has moved past the original LOW deferrals.
+
+- **Lead Queue virtualization is closed.** The default 500-row queue renders a bounded virtual window while preserving table semantics and row metadata.
+- **TanStack Query adoption is closed for audit-safe reads.** QueryClient is installed with 30s stale time and request de-duplication; automatic focus refetch is disabled by default because several reads intentionally write governed audit rows. Operational mutation invalidation marks active query families stale with `refetchType: 'none'` so approve/reject/assign/disposition actions do not trigger extra `VIEW_LEADS` or `VIEW_BORROWER` rows.
+- **Current source build is code-split.** The latest local production build emits `index-D3Dyrd2m.js` at 270.30 kB decoded / 86.62 kB gzip, plus route chunks. The older 510,768-byte monolithic bundle references below are retained as historical baseline evidence.
+- **Remaining performance work is now a thermometer, not a known gap:** per-borrower server latency/hot-cache and further large-route/module decomposition.
+
 ### Engineering re-validation addendum — 2026-05-13
 
 Engineering re-validation confirmed all three MEDIUM findings were real in the repo and remediated them. The remediated build was deployed and validated live as deployment `01f14f0eab05174883666f28bc800a1b`.
@@ -24,18 +33,18 @@ Additional LOW cleanup completed: unused extreme Geist weights were removed from
 Post-remediation validation:
 
 - Focused unit tests passed for config caching, static gzip/cache headers, route contracts, and dynamic footprint behavior.
-- Frontend production build passed. The built JS remains 510,768 bytes uncompressed and 146,919 bytes gzip; the browser now receives it gzip-compressed when it sends `Accept-Encoding: gzip`.
+- Frontend production build passed. At that remediation point the built JS was 510,768 bytes uncompressed and 146,919 bytes gzip; later code-splitting reduced the current initial JS to 270.30 kB decoded / 86.62 kB gzip.
 - Live probe of `/assets/index-rRq1wSDS.js` returned `Content-Encoding: gzip`, `Vary: Accept-Encoding`, `Cache-Control: public, max-age=31536000, immutable`, and a 146,482-byte encoded transfer for the 510,768-byte JS bundle.
 - Live repeat calls showed config endpoint cache hits: `/api/config/footprint` dropped from 2.87 s to 0.41 s, and `/api/config/options` dropped from 2.07 s to 0.38 s.
 - `@media print` is present in both source CSS and the built CSS.
 
-Remaining performance thermometers are intentionally deferred: Lead Queue virtualization, broader query-client adoption, and deeper borrower-dossier latency work remain production-onboarding scale items rather than Module 0 blockers.
+Subsequent follow-up closed the original Lead Queue virtualization and broader query-client adoption deferrals. Deeper borrower-dossier latency work remains a production SLI thermometer.
 
 ---
 
 **Performance is good for an enterprise desktop SPA at 1440×900**: cold home page hits `loadEvent` in **994 ms** with 9 parallel API fetches; Lead Queue renders 501 rows in **~5 seconds** end-to-end including warehouse fetch; per-borrower dossier is consistent at **3.3–3.5 s** warm; under 10 concurrent users the system holds breakers closed with zero recent errors; cache speedup on hot KPI endpoints is **2-14x**; the warehouse path has no N+1 patterns (dossier data is pre-joined as `ARRAY<STRUCT>` columns at the gold layer); frontend uses extensive `useMemo` / `useCallback` (54 hook usages just in `LeadTable.tsx`). Hard server-side cap at `limit=5000` on `/api/leads` prevents accidental DoS.
 
-**Original result: zero P0 / P1, three MEDIUM findings, four LOW findings. Engineering remediation has closed all three MEDIUM items; the LOWs below remain scale/onboarding decisions.**
+**Original result: zero P0 / P1, three MEDIUM findings, four LOW findings. Engineering remediation has closed all three MEDIUM items and later follow-up closed LOW 1 / LOW 4. The original findings below are retained as historical audit context.**
 
 ✅ **MEDIUM 1 — Fixed** — **No HTTP compression on the JS/CSS bundle.** The 499 KB JS file previously shipped uncompressed. FastAPI now installs `GZipMiddleware`; local ASGI probes show `Content-Encoding: gzip` and `Vary: Accept-Encoding`.
 
@@ -43,13 +52,13 @@ Remaining performance thermometers are intentionally deferred: Lead Queue virtua
 
 ✅ **MEDIUM 3 — Fixed** — **Hashed assets had ETag but no `Cache-Control: immutable`.** `/assets/*` now receives `Cache-Control: public, max-age=31536000, immutable`; `index.html` remains no-store.
 
-🟡 **LOW 1** — `/api/leads` at `limit=500` ships **628 KB JSON in ~3-5 s**. The hard cap at 5000 prevents catastrophic loads; the practical concern is the frontend renders all 500 rows without virtualization (32,930 DOM nodes for 500 rows, 46 MB JS heap). A virtual scroller would slim the DOM 10× and free perceptual budget.
+✅ **LOW 1 — Closed in follow-up** — `/api/leads` at `limit=500` ships **628 KB JSON in ~3-5 s**. The hard cap at 5000 prevents catastrophic loads; the original concern was that the frontend rendered all 500 rows without virtualization (32,930 DOM nodes for 500 rows, 46 MB JS heap). Follow-up virtualization now bounds DOM/heap growth.
 
 ✅ **LOW 2 — Partially fixed** — **Geist webfont artifacts trimmed.** Source imports now keep the weights the design system actually uses: Geist 400/500/600/700 and Geist Mono 400/500/600. The built font artifact count drops from 20 files to 14.
 
 ✅ **LOW 3 — Fixed** — **No `@media print` stylesheet.** `frontend/src/design-system/print.css` now removes workspace chrome and normalizes the page to system print colors for audit-binder output.
 
-🟡 **LOW 4** — **Frontend uses raw `fetch` + `api.ts` wrapper, not TanStack Query / SWR.** No automatic cross-component dedup, no refetch-on-window-focus, no stale-time policy. Acceptable given the API-level cache layer, but a future scale event (many concurrent components requesting the same KPI) would benefit from a real query client.
+✅ **LOW 4 — Closed in follow-up** — **Frontend originally used raw `fetch` + `api.ts` wrapper, not TanStack Query / SWR.** Follow-up work installed QueryClient for safe read paths, with audit-safe defaults that avoid automatic governed-read refetch.
 
 ---
 
@@ -150,8 +159,8 @@ Spot-checked the two heaviest read paths:
 
 - `frontend/src/components/mortgage/LeadTable.tsx`: **54 hook usages**, with `useMemo` for `leadsById`, `displayLeads`, `sortedLeads`, `selectableIds`; `useCallback` for `approveLead`, `rejectLead`, `submitReject`, `toggleSelect`, `clearSelection`. Heavy table component with proper memoization.
 - `frontend/src/components/mortgage/EvidenceDrawer.tsx`: 4 hook usages — light, no heavy derived state.
-- Frontend does NOT use TanStack Query / SWR. Raw `fetch` via the `api.ts` wrapper. No automatic cross-component dedup or stale-time management.
-- 11 responsive `@media (max-width:...)` / `(min-width:...)` rules in `design-system/components.css`. Zero `@media print` rules — no print stylesheet.
+- Original finding: the frontend did not use TanStack Query / SWR and relied on raw `fetch` via the `api.ts` wrapper. Follow-up work now uses TanStack Query for audit-safe read paths.
+- Original finding: 11 responsive `@media (max-width:...)` / `(min-width:...)` rules in `design-system/components.css`, with no print stylesheet. Follow-up work added `frontend/src/design-system/print.css`.
 
 ### 8. Compression / cache headers
 
@@ -250,13 +259,13 @@ Further aggressive subsetting to only woff2 or fewer mono weights can remain a C
 
 The new print stylesheet removes the rail, topbar, route nav, console, Genie, drawer, floating actions, and controls, while preserving the evidence surfaces and table content.
 
-### 🟡 LOW 4 — Frontend uses raw `fetch` + custom wrapper, not TanStack Query / SWR
+### ✅ LOW 4 — Closed in follow-up: frontend query client
 
-**Observation:** `grep -E "@tanstack/react-query|swr"` in `frontend/package.json` returns zero matches. The frontend uses raw `fetch` via `api.ts`. No automatic stale-time, no automatic refetch-on-window-focus, no cross-component request dedup.
+**Original observation:** the frontend used raw `fetch` via `api.ts`, with no cross-component request dedup or stale-time policy.
 
-**Why this is LOW:** the API-level cache (`TTLCache` + `StaleWhileRevalidateCache`) handles most of the staleness pressure server-side. The frontend's lack of a query client is a simplicity-vs-features trade-off that's defensible at Module 0 scale.
+**Current state:** the frontend now uses TanStack Query for audit-safe reads. Automatic focus refetch is disabled by default because several reads intentionally write governed audit rows. Mutation invalidation marks operational query families stale with `refetchType: 'none'`, so user actions do not force active governed-read refetches.
 
-**Future consideration:** if the app grows to many simultaneous components requesting the same KPIs (e.g., a dashboard with 20 KPI cards each fetching segments), a query client would coalesce requests and reduce API call counts. Not needed for Module 0.
+**Future consideration:** keep this audit-safe posture when adding new query keys: no protected-data prefetch and no automatic governed-read refresh unless a user explicitly requests it.
 
 ---
 
@@ -270,12 +279,12 @@ The new print stylesheet removes the rail, topbar, route nav, console, Genie, dr
 - **Concurrent-user behavior is graceful.** 10 parallel calls don't degrade per-call latency; breakers stay closed.
 - **Source maps disabled in prod.** `.js.map` and `.css.map` return 404.
 - **HTML shell has explicit `no-cache, no-store, must-revalidate`** preventing stale `index.html` from pinning users to an old asset hash after deploy.
-- **Hashed asset filenames** (`index-VRjXTfb9.js`) make cache invalidation safe; `/assets/*` now emits the immutable cache header.
+- **Hashed asset filenames** make cache invalidation safe; `/assets/*` now emits the immutable cache header.
 - **ETag present** on hashed assets — enables conditional revalidation as a fallback even without `immutable`.
-- **Bundle size is reasonable.** 499 KB uncompressed for a feature-complete enterprise SPA with React + Vite + a design system is solid. With active gzip it is roughly 147 KB on the wire.
+- **Bundle size is reasonable.** The current initial JS is 270.30 kB decoded / 86.62 kB gzip after route code-splitting.
 - **`/api/health` is SWR-cached** so health probes stay flat at ~0.4 s and don't burden the warehouse.
 - **Warehouse latency is consistent** — no cold-start outliers across 8 borrower probes.
-- **Single bundle, no code splitting.** Defensible at this scale; the bundle isn't large enough yet to require chunking. Easy to add when the time comes.
+- **Route code splitting is active.** Home no longer downloads every route module before first render.
 
 ---
 
@@ -302,8 +311,8 @@ The new print stylesheet removes the rail, topbar, route nav, console, Genie, dr
 | LeadTable memoization | useMemo / useCallback present | 54 hook usages, multiple useMemo / useCallback | ✅ |
 | Print stylesheet | present | present | ✅ LOW 3 fixed |
 | Webfont weight count | minimal | 14 files after trimming unused extreme Geist weights | ✅ LOW 2 partially fixed |
-| Large-list virtualization | present at scale | absent (renders all 500 rows) | 🟡 LOW 1 |
-| Query client (TanStack / SWR) | acceptable absence | absent | 🟡 LOW 4 |
+| Large-list virtualization | present at scale | virtual window with bounded DOM | ✅ LOW 1 closed |
+| Query client (TanStack / SWR) | present with audit-safe defaults | present; focus refetch disabled by default | ✅ LOW 4 closed |
 | Vite dev source-map exposure | none in prod | confirmed 404 on `.map` | ✅ |
 | Concurrent serial-cache speedup | parallelizes well | 10 parallel = 0.6 s wall-clock (vs 5.4 s serial) | ✅ |
 
@@ -463,8 +472,8 @@ This is the single biggest perf win of the entire remediation. The leads payload
 - **MEDIUM 3 (immutable cache headers) — closed.** `/assets/*` now ships `public, max-age=31536000, immutable`. Browsers will cache hashed assets indefinitely; no more `If-None-Match` revalidation round-trips per navigation.
 - **LOW 2 (font trimming) — closed.** Geist weights trimmed to 400/500/600/700 + mono 400/500/600. Built artifact count 20 → 14 (-30%). Source imports updated.
 - **LOW 3 (print stylesheet) — closed.** `print.css` added, imported, and built into the live CSS bundle. Uses `@page` margins and system `Canvas`/`CanvasText` colors. Compliance reviewers can now print Borrower 360 dossier cleanly.
-- **LOW 1 (Lead Queue virtualization) — deferred** as scale-onboarding item. Default 500-row render works at 1440×900 desktop.
-- **LOW 4 (TanStack Query / SWR) — deferred** as scale-onboarding item. API-level cache continues to handle staleness server-side.
+- **LOW 1 (Lead Queue virtualization) — superseded by follow-up below.** Default 500-row render worked at 1440×900 desktop; follow-up made the table scale-safe anyway.
+- **LOW 4 (TanStack Query / SWR) — superseded by follow-up below.** API-level cache handled staleness server-side; follow-up added QueryClient with audit-safe defaults anyway.
 
 The product is **production-ready and audit-clean on the performance dimension** on deployment `01f14f0eab05174883666f28bc800a1b`. All three MEDIUM quick wins shipped together cut cold-load wire weight ~72% and Home `loadEvent` 21%. The two remaining LOW deferrals are tracked production-onboarding decisions, not blockers.
 
@@ -476,10 +485,10 @@ Follow-up direction: close the scale-onboarding deferrals immediately rather tha
 
 ### Additional changes shipped
 
-- Added a shared TanStack Query client with 30s default `staleTime`, 5m garbage-collection window, focus refetch for stale queries, and retry behavior keyed to the backend's governed `retryable: true` 503 contract.
+- Added a shared TanStack Query client with 30s default `staleTime`, 5m garbage-collection window, focus refetch disabled by default, and retry behavior keyed to the backend's governed `retryable: true` 503 contract.
 - Re-backed `useWarmingUpRetry` with TanStack Query so the existing warming-up UX remains intact while route reads gain cache sharing, request de-duplication, and route-change safety.
 - Added semantic query keys for borrower dossiers, leads, segments, audit events, sales snapshots, Genie answers, portfolio previews, admin state, and data-estate proof.
-- Added cache invalidation after approve / reject / assign / disposition; bulk approve invalidates once per batch instead of once per row.
+- Added cache invalidation after approve / reject / assign / disposition; operational invalidation marks active families stale with `refetchType: 'none'`, and bulk approve invalidates once per batch instead of once per row.
 - Added Lead Queue virtual windowing. The table now renders only the visible rows plus overscan while preserving the existing table markup, row expansion, bulk selection, and keyboard shortcuts.
 - Added route-level code splitting with `React.lazy` + `Suspense`, so Home no longer downloads every route module before first render.
 - Migrated Home preview/data-estate, Lead Queue sales snapshot/team, Ask Genie start, and all `useWarmingUpRetry` route fetches onto the query layer.
@@ -543,7 +552,7 @@ The Lead Queue default 500-row response now renders 33 `<tbody>` rows plus one s
 ### Final status
 
 - **LOW 1 (Lead Queue virtualization) — closed.** DOM and heap growth are bounded at the UI layer; the existing 500-row default now renders as a virtual window, and the implementation is covered by a pure range test.
-- **LOW 4 (TanStack Query / SWR) — closed.** Route reads now share a query client, semantic cache keys, request de-duplication, focus refresh, and mutation invalidation.
+- **LOW 4 (TanStack Query / SWR) — closed.** Route reads now share a query client, semantic cache keys, request de-duplication, focus refetch disabled by default, and audit-safe mutation invalidation.
 - **Additional future-proofing — closed.** Route code-splitting keeps the first-load bundle small as the route surface grows.
 
 The remaining thermometers are now true future items rather than known implementation gaps: per-borrower server latency/hot-cache and deeper Offer Orchestrator query refactoring can be tracked independently.
@@ -558,8 +567,8 @@ After engineering shipped all three of the deferred items in a single pass (TanS
 
 ### Source-of-truth checks
 
-- ✅ `frontend/src/lib/queryClient.ts` — `createMipQueryClient()` with `staleTime: 30s`, `gcTime: 5m`, `refetchOnWindowFocus: true`, retry config keyed to `isWarmingUpError(error)` with the same `planForReason` cadence the warming-up UX uses. Namespaced `queryKeys` registry. `invalidateOperationalQueries` prefix-invalidates `leads`, `borrower`, `sales`, `audit`, `portfolio`, `segments` after a mutation.
-- ✅ `frontend/src/components/mortgage/LeadTable.tsx:13, 644, 700, 835, 879, 1008` — invalidation is wired in 5 distinct call sites (single approve, bulk approve, reject, assign, disposition). Bulk-approve uses a `suppressInvalidation` flag for per-row calls and invalidates once at the end of the bulk loop — avoids hammering the cache during a multi-row operation.
+- ✅ `frontend/src/lib/queryClient.ts` — `createMipQueryClient()` with `staleTime: 30s`, `gcTime: 5m`, `refetchOnWindowFocus: false`, retry config keyed to `isWarmingUpError(error)` with the same `planForReason` cadence the warming-up UX uses. Namespaced `queryKeys` registry. `invalidateOperationalQueries` marks `leads`, `borrower`, `sales`, `audit`, `portfolio`, and `segments` stale with `refetchType: 'none'` after a mutation.
+- ✅ `frontend/src/components/mortgage/LeadTable.tsx` — invalidation is wired into single approve, bulk approve, reject, assign, and disposition. Bulk-approve uses a `suppressInvalidation` flag for per-row calls and invalidates once at the end of the bulk loop; `refetchType: 'none'` avoids active governed-read refetch inflation during the mutation.
 - ✅ `frontend/src/components/mortgage/LeadTable.tsx:99-119` — DIY virtualization via pure `computeLeadVirtualRange(totalRows, scrollTop, viewportHeight, enabled, rowEstimatePx=86, overscan=12)` function. Returns `{ start, end, top, bottom }` for windowed slice + spacer heights. Exported for unit testing.
 - ✅ `frontend/src/components/mortgage/LeadTable.tsx:524` — `shouldVirtualize = sortedLeads.length > 120` (threshold). Small queues bypass virtualization entirely; large queues get windowed.
 - ✅ `frontend/src/components/mortgage/LeadTable.tsx:580-595` — scroll listener (passive) + `ResizeObserver` for viewport size sync. Both cleaned up on unmount.
@@ -717,10 +726,10 @@ Lower priority than accessibility because the target viewport is well-defined an
 ### Deploy automation + bundle hygiene
 
 **Why it keeps showing up:**
-- Every recent signoff mentions: *"databricks bundle deploy still hits the existing app permission 403, so I deployed the uploaded bundle source directly with databricks apps deploy."*
-- This is a recurring operational papercut. If the customer is going to operate this themselves, the `bundle deploy` path needs to work — that's the documented self-contained zero-click deploy CLAUDE.md calls out as a completion criterion.
+- Resolved 2026-05-14: the recurring `databricks bundle deploy -t dev --profile DEFAULT` app-update 403 was caused by the dev target inheriting the CI placeholder `genie_space_id`; Databricks Apps reported that invalid Genie binding as an opaque "Can View" permission error.
+- The dev target now pins the governed `mortgage_lead_intelligence` Genie space id, and the bare bundle deploy path completed successfully with the live app reporting `warehouse/lakebase/genie=up`.
 
-Audit scope: `databricks.yml`, `resources/*.yml`, `jobs/*.yml`, the app permission stanza, the deploy pipeline. Figure out the 403 root cause, fix it, document it.
+Residual: customer/prod targets still need their own provisioned Genie space id supplied by target variable, `BUNDLE_VAR_genie_space_id`, or the deploy script after first-run provisioning. Do not reuse the Entrada dev space for customer deployments.
 
 ### Smaller follow-ups surfaced by this v2 re-validation
 

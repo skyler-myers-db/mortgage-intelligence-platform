@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { ApiError, api } from '../lib/api';
@@ -12,8 +12,14 @@ import { GenieAnswer } from '../components/mortgage/GenieAnswer';
 import { GenieProgress } from '../components/mortgage/GenieProgress';
 import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 import { descriptorFor, drawerForAsset } from '../lib/drawerSources';
+import {
+  GENIE_CONVERSATION_RESET_EVENT,
+  clearGenieConversationState,
+  readGenieConversationId,
+  writeGenieConversationId,
+} from '../lib/genieConversation';
 import { isGenieFollowUpQuestion } from '../lib/genieSession';
-import { queryKeys } from '../lib/queryClient';
+import { queryKeys } from '../lib/queryKeys';
 
 /**
  * Ask Genie — deep-dive view with trusted-asset list and backend-provided
@@ -41,6 +47,10 @@ const TRUSTED_ASSETS: Array<{ label: string; path: string }> = [
   { label: 'Borrower opportunity view',    path: 'mip.semantics.borrower_opportunity_metric_view' },
 ];
 
+export function buildTrustedAssetQuestion(asset: { label: string; path: string }): string {
+  return `Using ${asset.path}, summarize what this trusted asset can answer for Module 0 and show the most useful fields for ${asset.label.toLowerCase()}.`;
+}
+
 const NON_PERSISTABLE_SOURCES = new Set([
   'degraded',
   'policy_blocked',
@@ -56,15 +66,11 @@ function shouldPersistConversation(payload: GenieAnswerShape): boolean {
 export default function AskGenie() {
   const navigate = useNavigate();
   const { refreshWorkspace, setDrawer } = useApp();
+  const questionRef = useRef<HTMLTextAreaElement>(null);
   const [question, setQuestion] = useState('');
   const [sampleQuestions, setSampleQuestions] = useState<string[]>([]);
-  const [conversationId, setConversationId] = useState<string | null>(() => {
-    try {
-      return window.localStorage.getItem('mip.genie.conversationId');
-    } catch {
-      return null;
-    }
-  });
+  const [activeAssetPath, setActiveAssetPath] = useState<string | null>(null);
+  const [conversationId, setConversationId] = useState<string | null>(() => readGenieConversationId());
 
   const genieStartQuery = useQuery({
     queryKey: queryKeys.genieStart(),
@@ -80,11 +86,7 @@ export default function AskGenie() {
     if (conversationId) return;
     if (!result.conversation_id) return;
     setConversationId(result.conversation_id);
-    try {
-      window.localStorage.setItem('mip.genie.conversationId', result.conversation_id);
-    } catch {
-      // ignore
-    }
+    writeGenieConversationId(result.conversation_id);
   }, [conversationId, genieStartQuery.data]);
   const [actionStatus, setActionStatus] = useState<string | null>(null);
   // `submittedQuestion` drives the warming-up-wrapped fetch. Typing in
@@ -127,12 +129,23 @@ export default function AskGenie() {
     if (!(error instanceof ApiError) || error.status !== 403) return;
     setConversationId(null);
     setSubmittedConversationId(null);
-    try {
-      window.localStorage.removeItem('mip.genie.conversationId');
-    } catch {
-      // ignore
-    }
+    clearGenieConversationState();
   }, [error]);
+
+  useEffect(() => {
+    const onActorBoundaryReset = () => {
+      setConversationId(null);
+      setSubmittedConversationId(null);
+      setSubmittedQuestion(null);
+      setQuestion('');
+      setActiveAssetPath(null);
+      setActionStatus(null);
+    };
+    window.addEventListener(GENIE_CONVERSATION_RESET_EVENT, onActorBoundaryReset);
+    return () => {
+      window.removeEventListener(GENIE_CONVERSATION_RESET_EVENT, onActorBoundaryReset);
+    };
+  }, []);
 
   function ask(q: string) {
     const trimmed = q.trim();
@@ -142,13 +155,10 @@ export default function AskGenie() {
     setSubmittedConversationId(nextConversationId);
     setSubmittedQuestion(trimmed);
     setSubmitToken((n) => n + 1);
+    setActiveAssetPath(null);
     setActionStatus(null);
     if (!nextConversationId) {
-      try {
-        window.localStorage.removeItem('mip.genie.conversationId');
-      } catch {
-        // ignore
-      }
+      clearGenieConversationState();
     }
   }
 
@@ -156,23 +166,24 @@ export default function AskGenie() {
     setConversationId(null);
     setSubmittedConversationId(null);
     setSubmittedQuestion(null);
+    setActiveAssetPath(null);
     setActionStatus('Started a new Genie thread.');
-    try {
-      window.localStorage.removeItem('mip.genie.conversationId');
-    } catch {
-      // ignore
-    }
+    clearGenieConversationState();
+  }
+
+  function scopeToTrustedAsset(asset: { label: string; path: string }) {
+    const scopedQuestion = buildTrustedAssetQuestion(asset);
+    setDrawer(descriptorFor(asset.path));
+    setQuestion(scopedQuestion);
+    setActiveAssetPath(asset.path);
+    questionRef.current?.focus();
   }
 
   useEffect(() => {
     if (!payload?.conversation_id || !shouldPersistConversation(payload)) return;
     const nextConversationId = payload.conversation_id;
     setConversationId(nextConversationId);
-    try {
-      window.localStorage.setItem('mip.genie.conversationId', nextConversationId);
-    } catch {
-      // ignore
-    }
+    writeGenieConversationId(nextConversationId);
   }, [payload]);
 
   async function runAction(action: GenieActionSuggestion) {
@@ -237,6 +248,7 @@ export default function AskGenie() {
   // was confusing per 2026-05-04 user feedback). Governed refusal/degraded
   // chips also render inert (the chip text is the explanation).
   const drawerForSource = sourceChip ? drawerForAsset(sourceChip) : null;
+  const composerSampleQuestions = sampleQuestions.slice(0, 4);
 
   return (
     <PageShell
@@ -253,9 +265,13 @@ export default function AskGenie() {
           </div>
           <div className="surface__body">
             <textarea
+              ref={questionRef}
               aria-label="Ask Genie — question"
               value={question}
-              onChange={(e) => setQuestion(e.target.value)}
+              onChange={(e) => {
+                setQuestion(e.target.value);
+                setActiveAssetPath(null);
+              }}
               onKeyDown={(e) => {
                 // 2026-05-04 (FIX Δ1): standard chat keymap — Enter
                 // submits, Shift+Enter inserts a newline. Match how
@@ -279,6 +295,21 @@ export default function AskGenie() {
               }}
               className="route-textarea"
             />
+            {composerSampleQuestions.length > 0 && (
+              <div className="genie-composer__samples" aria-label="Suggested Genie questions">
+                {composerSampleQuestions.map((q) => (
+                  <button
+                    key={q}
+                    type="button"
+                    className="filter filter--question"
+                    onClick={() => ask(q)}
+                  >
+                    <Icon name="sparkle" size={11} />
+                    <span className="filter__text">{q}</span>
+                  </button>
+                ))}
+              </div>
+            )}
             <div className="section-actions">
               <Button
                 variant="primary"
@@ -339,21 +370,6 @@ export default function AskGenie() {
                     <p className="genie-empty__copy">
                       Trusted SQL, source assets, freshness, and approval-safe actions appear with each answer.
                     </p>
-                    {sampleQuestions.length > 0 && (
-                      <div className="genie-empty__suggestions" aria-label="Suggested Genie questions">
-                        {sampleQuestions.slice(0, 4).map((q) => (
-                          <button
-                            key={q}
-                            type="button"
-                            className="filter filter--question"
-                            onClick={() => ask(q)}
-                          >
-                            <Icon name="sparkle" size={11} />
-                            <span className="filter__text">{q}</span>
-                          </button>
-                        ))}
-                      </div>
-                    )}
                   </div>
                 </div>
               </div>
@@ -417,8 +433,9 @@ export default function AskGenie() {
                   key={a.path}
                   title={a.path}
                   type="button"
-                  className="trusted-asset trusted-asset--button"
-                  onClick={() => setDrawer(descriptorFor(a.path))}
+                  className={`trusted-asset trusted-asset--button${activeAssetPath === a.path ? ' is-active' : ''}`}
+                  onClick={() => scopeToTrustedAsset(a)}
+                  aria-pressed={activeAssetPath === a.path}
                 >
                   <div className="trusted-asset__label">{a.label}</div>
                   <div className="trusted-asset__path">{a.path}</div>
@@ -427,31 +444,6 @@ export default function AskGenie() {
             </div>
           </div>
 
-          <div className="surface">
-            <div className="surface__hdr">
-              <Icon name="sparkle" size={14} className="icon-accent" />
-              <div className="h-4">Suggested questions</div>
-            </div>
-            <div className="surface__body trusted-asset-list">
-              {sampleQuestions.length > 0 ? (
-                sampleQuestions.map((q) => (
-                  <button
-                    key={q}
-                    type="button"
-                    className="filter filter--question"
-                    onClick={() => ask(q)}
-                  >
-                    <Icon name="sparkle" size={11} />
-                    <span className="filter__text">{q}</span>
-                  </button>
-                ))
-              ) : (
-                <p className="body muted flush">
-                  Prompt suggestions load from the configured Genie space.
-                </p>
-              )}
-            </div>
-          </div>
         </div>
       </div>
     </PageShell>

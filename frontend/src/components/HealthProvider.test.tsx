@@ -59,6 +59,16 @@ describe('computeDegraded', () => {
     ).toBe(true);
   });
 
+  it('returns true when Genie is down even if warehouse and Lakebase are up', () => {
+    expect(
+      computeDegraded({
+        status: 'ok',
+        mode: 'live',
+        dependencies: { warehouse: 'up', lakebase: 'up', genie: 'down' },
+      }),
+    ).toBe(true);
+  });
+
   it('returns false for an ok payload with closed breakers', () => {
     expect(
       computeDegraded({

@@ -1,4 +1,5 @@
 import logging
+import os
 import re
 import time
 from collections.abc import AsyncIterator
@@ -31,6 +32,7 @@ from backend.api import (
     portfolio,
     sales,
     segments,
+    telemetry,
     workspace,
 )
 from backend.config.settings import (
@@ -38,6 +40,7 @@ from backend.config.settings import (
     check_trust_boundary_at_startup,
     settings,
 )
+from backend.services.backpressure import BackpressureController, BackpressureMiddleware
 from backend.services.observability import (
     configure_logging,
     emit,
@@ -90,10 +93,17 @@ def _warm_lakebase() -> None:
     """
     from backend.services.lakebase import get_lakebase_client
 
-    # If Lakebase creds are absent, skip silently -- the audit router
-    # already surfaces 503 on its own when the creds are missing, and
-    # we don't want to duplicate that signal at startup.
-    if not settings.lakebase_host or not settings.lakebase_user:
+    # If Lakebase connection hints are absent, skip silently -- the
+    # audit router already surfaces 503 on its own when the creds are
+    # missing, and we don't want to duplicate that signal at startup.
+    #
+    # Deployed Databricks Apps may provide PGHOST / PGUSER plus a
+    # workspace-token password provider instead of LAKEBASE_* vars, so
+    # the warm-start gate must mirror the Lakebase client resolver's
+    # supported connection hints rather than only settings fields.
+    host_hint = settings.lakebase_host or os.environ.get("PGHOST")
+    user_hint = settings.lakebase_user or os.environ.get("PGUSER")
+    if not host_hint or not user_hint:
         log.info("lakebase warm-start skipped (no creds configured)")
         return
     start = time.monotonic()
@@ -305,8 +315,11 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         return response
 
 
-app.add_middleware(SecurityHeadersMiddleware)
+_backpressure_controller = BackpressureController()
+
+app.add_middleware(BackpressureMiddleware, controller=_backpressure_controller)
 app.add_middleware(CorrelationIdMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 
@@ -393,6 +406,7 @@ for router in [
     geo.router,
     genie.router,
     audit.router,
+    telemetry.router,
     workspace.router,
 ]:
     app.include_router(router)

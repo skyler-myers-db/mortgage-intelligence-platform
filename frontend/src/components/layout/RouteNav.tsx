@@ -1,6 +1,7 @@
 import { NavLink } from 'react-router-dom';
 import { Icon, type IconName } from '../Icon';
 import { useApp } from '../AppContext';
+import { preloadRouteForPath } from '../../lib/routePreloaders';
 
 /**
  * Secondary route nav — chip strip matching the prototype's `.filter` /
@@ -54,6 +55,8 @@ export function RouteNav() {
             key={i.to}
             to={i.to}
             end={end}
+            onMouseEnter={() => preloadRouteForPath(i.to)}
+            onFocus={() => preloadRouteForPath(i.to)}
             className={({ isActive }) => `filter ${isActive ? 'is-active' : ''}`}
           >
             <Icon name={i.icon} size={12} />

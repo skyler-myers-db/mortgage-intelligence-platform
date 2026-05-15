@@ -5,9 +5,13 @@ import {
   useEffect,
   useMemo,
   useState,
+  type Dispatch,
   type PropsWithChildren,
+  type SetStateAction,
 } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { api } from '../lib/api';
+import { queryKeys } from '../lib/queryKeys';
 import type { SavedDraft, SavedDraftInput, SavedLead, SavedLeadInput } from '../types';
 
 /**
@@ -52,6 +56,7 @@ interface AppCtxValue {
   setApproval: (borrowerId: string, state: 'approved' | 'rejected') => void;
   lastBorrowerId: string | null;
   setLastBorrowerId: (borrowerId: string | null) => void;
+  clearActorScopedState: () => void;
   savedLeads: Record<string, SavedLead>;
   saveLead: (lead: SavedLeadInput) => void;
   removeSavedLead: (borrowerId: string) => void;
@@ -89,19 +94,33 @@ function readStoredBool(key: string, fallback: boolean): boolean {
   return fallback;
 }
 
-function readStoredString(key: string): string | null {
-  if (typeof window === 'undefined') return null;
-  try {
-    const raw = window.localStorage.getItem(key);
-    return raw && raw.trim().length > 0 ? raw : null;
-  } catch {
-    return null;
-  }
-}
-
 const THEMES: readonly Theme[] = ['dark', 'light'];
 const ACCENTS: readonly Accent[] = ['bright', 'teal', 'navy', 'red'];
 const DENSITIES: readonly Density[] = ['comfortable', 'compact'];
+
+interface ActorScopedResetSetters {
+  setApprovals: Dispatch<SetStateAction<Record<string, 'approved' | 'rejected'>>>;
+  setDrawer: Dispatch<SetStateAction<DrawerSource | null>>;
+  setGenieOpen: Dispatch<SetStateAction<boolean>>;
+  setLastBorrowerIdState: Dispatch<SetStateAction<string | null>>;
+  setSavedLeads: Dispatch<SetStateAction<Record<string, SavedLead>>>;
+  setSavedDrafts: Dispatch<SetStateAction<Record<string, SavedDraft>>>;
+  setWorkspaceStatus: Dispatch<SetStateAction<'loading' | 'ready' | 'error'>>;
+  setWorkspaceError: Dispatch<SetStateAction<string | null>>;
+  setWorkspaceReloadToken: Dispatch<SetStateAction<number>>;
+}
+
+export function resetActorScopedAppState(setters: ActorScopedResetSetters): void {
+  setters.setApprovals({});
+  setters.setDrawer(null);
+  setters.setGenieOpen(false);
+  setters.setLastBorrowerIdState(null);
+  setters.setSavedLeads({});
+  setters.setSavedDrafts({});
+  setters.setWorkspaceStatus('loading');
+  setters.setWorkspaceError(null);
+  setters.setWorkspaceReloadToken((n) => n + 1);
+}
 
 function mapByBorrower<T extends { borrower_id: string }>(items: T[]): Record<string, T> {
   return Object.fromEntries(items.map((item) => [item.borrower_id, item]));
@@ -134,14 +153,17 @@ export function AppProvider({ children }: PropsWithChildren) {
   const [drawer, setDrawer] = useState<DrawerSource | null>(null);
   const [genieOpen, setGenieOpen] = useState(false);
   const [approvals, setApprovals] = useState<Record<string, 'approved' | 'rejected'>>({});
-  const [lastBorrowerIdState, setLastBorrowerIdState] = useState<string | null>(() =>
-    readStoredString('mip.lastBorrowerId'),
-  );
+  const [lastBorrowerIdState, setLastBorrowerIdState] = useState<string | null>(null);
   const [savedLeads, setSavedLeads] = useState<Record<string, SavedLead>>({});
   const [savedDrafts, setSavedDrafts] = useState<Record<string, SavedDraft>>({});
   const [workspaceStatus, setWorkspaceStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
   const [workspaceReloadToken, setWorkspaceReloadToken] = useState(0);
+  const workspaceQuery = useQuery({
+    queryKey: [...queryKeys.workspace(), workspaceReloadToken],
+    queryFn: ({ signal }) => api.workspace(signal),
+    retry: false,
+  });
 
   useEffect(() => {
     const root = document.documentElement;
@@ -169,38 +191,32 @@ export function AppProvider({ children }: PropsWithChildren) {
   }, [consoleOpen]);
 
   useEffect(() => {
-    try {
-      if (lastBorrowerIdState) {
-        window.localStorage.setItem('mip.lastBorrowerId', lastBorrowerIdState);
-      } else {
-        window.localStorage.removeItem('mip.lastBorrowerId');
-      }
-    } catch {
-      // ignore
+    if (workspaceQuery.isPending) {
+      setWorkspaceStatus((cur) => (cur === 'ready' ? cur : 'loading'));
+      return;
     }
-  }, [lastBorrowerIdState]);
-
-  useEffect(() => {
-    const ctrl = new AbortController();
-    setWorkspaceStatus((cur) => (cur === 'ready' ? cur : 'loading'));
-    void api.workspace(ctrl.signal)
-      .then((workspace) => {
-        setSavedLeads(mapByBorrower(workspace.saved_leads));
-        setSavedDrafts(mapDraftsByBorrowerChannel(workspace.saved_drafts));
-        setWorkspaceStatus('ready');
-        setWorkspaceError(null);
-      })
-      .catch((err: unknown) => {
-        if (err instanceof Error && err.name === 'AbortError') return;
-        setWorkspaceStatus('error');
-        setWorkspaceError(
-          err instanceof Error
-            ? `Couldn't load saved workspace: ${err.message}`
-            : "Couldn't load saved workspace.",
-        );
-      });
-    return () => ctrl.abort();
-  }, [workspaceReloadToken]);
+    if (workspaceQuery.isSuccess) {
+      setSavedLeads(mapByBorrower(workspaceQuery.data.saved_leads));
+      setSavedDrafts(mapDraftsByBorrowerChannel(workspaceQuery.data.saved_drafts));
+      setWorkspaceStatus('ready');
+      setWorkspaceError(null);
+      return;
+    }
+    if (workspaceQuery.isError) {
+      setWorkspaceStatus('error');
+      setWorkspaceError(
+        workspaceQuery.error instanceof Error
+          ? `Couldn't load saved workspace: ${workspaceQuery.error.message}`
+          : "Couldn't load saved workspace.",
+      );
+    }
+  }, [
+    workspaceQuery.data,
+    workspaceQuery.error,
+    workspaceQuery.isError,
+    workspaceQuery.isPending,
+    workspaceQuery.isSuccess,
+  ]);
 
   const setTheme = useCallback((t: Theme) => setThemeState(t), []);
   const setAccent = useCallback((a: Accent) => setAccentState(a), []);
@@ -212,6 +228,19 @@ export function AppProvider({ children }: PropsWithChildren) {
   const setLastBorrowerId = useCallback((borrowerId: string | null) => {
     const next = borrowerId?.trim();
     setLastBorrowerIdState(next && next.length > 0 ? next : null);
+  }, []);
+  const clearActorScopedState = useCallback(() => {
+    resetActorScopedAppState({
+      setApprovals,
+      setDrawer,
+      setGenieOpen,
+      setLastBorrowerIdState,
+      setSavedLeads,
+      setSavedDrafts,
+      setWorkspaceStatus,
+      setWorkspaceError,
+      setWorkspaceReloadToken,
+    });
   }, []);
   const saveLead = useCallback((lead: SavedLeadInput) => {
     if (!lead.borrower_id) return;
@@ -337,6 +366,7 @@ export function AppProvider({ children }: PropsWithChildren) {
       });
   }, []);
   const refreshWorkspace = useCallback(() => {
+    setWorkspaceStatus((cur) => (cur === 'ready' ? cur : 'loading'));
     setWorkspaceReloadToken((n) => n + 1);
   }, []);
 
@@ -354,6 +384,7 @@ export function AppProvider({ children }: PropsWithChildren) {
       approvals, setApproval,
       lastBorrowerId: lastBorrowerIdState,
       setLastBorrowerId,
+      clearActorScopedState,
       savedLeads,
       saveLead,
       removeSavedLead,
@@ -369,7 +400,7 @@ export function AppProvider({ children }: PropsWithChildren) {
       theme, setTheme, accent, setAccent, density, setDensity,
       lender, showEvidence, showConfidence, consoleOpen, setConsoleOpen,
       drawer, genieOpen, approvals, setApproval,
-      lastBorrowerIdState, setLastBorrowerId,
+      lastBorrowerIdState, setLastBorrowerId, clearActorScopedState,
       savedLeads, saveLead, removeSavedLead, isLeadSaved,
       savedDrafts, saveDraft, removeSavedDraft,
       workspaceStatus, workspaceError, refreshWorkspace,

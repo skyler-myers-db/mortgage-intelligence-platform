@@ -113,11 +113,12 @@ warehouse warm-up time diagnosing it.
 
 **Deploy lifecycle.** The Databricks App lifecycle still has two API
 phases — direct bundle resource deploy, then app snapshot promotion —
-but `./scripts/deploy.sh` runs both. The bundle phase must go through
-`tools/databricks/bundle_env.py` because it maps `.env.local` to
-`BUNDLE_VAR_*` and runs the direct deployment plan before apply; bare
-`databricks bundle deploy` can bind placeholder resources and fail with
-misleading permission errors.
+but `./scripts/deploy.sh` runs both. Use the script for customer first
+deploys because it provisions/rebinds Genie, maps `.env.local` to
+`BUNDLE_VAR_*`, and runs the direct deployment plan before apply. The
+Entrada dev target also pins its governed Genie space id, so plain
+`databricks bundle deploy -t dev --profile DEFAULT` is safe for
+resource-only recovery in Entrada's workspace.
 
 ```bash
 # One command: env-aware direct bundle validate/plan/deploy, app promotion, jobs, refreshes, and Genie provision
@@ -143,21 +144,34 @@ echo "GENIE_SPACE_ID=$(cat genie/space_id.txt)" >> .env.local
 
 ```bash
 # 1. Find the app URL
-databricks apps get mip-app | jq -r .url
+databricks apps get mip-app --profile DEFAULT | jq -r .url
 # Example: https://mip-app-<id>.<region>.databricksapps.com
 
-export MIP_APP_URL=$(databricks apps get mip-app | jq -r .url)
+export MIP_APP_URL=$(databricks apps get mip-app --profile DEFAULT | jq -r .url)
+export MIP_BEARER_TOKEN=$(databricks auth token --profile DEFAULT -o json | jq -r .access_token)
 
-# 2. Health probe (cold-start: retry 3x, 10 s apart)
+# 2. Authenticated health probe (cold-start: retry 3x, 10 s apart)
 for i in 1 2 3; do
-  curl -sSf "$MIP_APP_URL/api/health" | jq '{status, warehouse, lakebase, genie}'
+  curl -sSf -H "Authorization: Bearer $MIP_BEARER_TOKEN" "$MIP_APP_URL/api/health" \
+    | jq -e '{
+      status,
+      warehouse: .dependencies.warehouse,
+      lakebase: .dependencies.lakebase,
+      genie: .dependencies.genie,
+      warehouse_breaker: .circuit_breakers.warehouse,
+      lakebase_breaker: .circuit_breakers.lakebase,
+      genie_breaker: .circuit_breakers.genie
+    }'
   sleep 10
 done
 # Expected final state:
-#   {"status": "ok", "warehouse": "up", "lakebase": "up", "genie": "up"}
+#   {"status": "ok", "warehouse": "up", "lakebase": "up", "genie": "up",
+#    "warehouse_breaker": "closed", "lakebase_breaker": "closed", "genie_breaker": "closed"}
 
 # 3. End-to-end smoke
 ./scripts/smoke_live.sh
+# Expected health line includes:
+# "[smoke] health ok · warehouse/lakebase/genie all up · breaker states present"
 # Expected last line: "[smoke] PASS · <target app url>"
 ```
 
@@ -265,11 +279,12 @@ completed but the browser cached the prior bundle.
 
 ```bash
 # Verify phase 2 actually ran
-databricks apps get mip-app | jq '{state, active_deployment_id, pending_deployment_id}'
-# Expect: state SUCCEEDED, active_deployment_id populated.
+databricks apps get mip-app --profile DEFAULT -o json \
+  | jq '{app_status: .app_status.state, compute_status: .compute_status.state, active_deployment: .active_deployment.deployment_id}'
+# Expect: app_status RUNNING, compute_status ACTIVE, active_deployment populated.
 
 # If the state is CREATED but never DEPLOYED, phase 2 never ran:
-databricks apps deploy mip-app
+databricks apps deploy mip-app --profile DEFAULT
 ```
 
 If phase 2 shows SUCCEEDED but the browser still serves stale JS, hard-

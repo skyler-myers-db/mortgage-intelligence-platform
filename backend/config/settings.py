@@ -9,6 +9,7 @@ test processes (detected via ``PYTEST_CURRENT_TEST``), which inject
 stub repositories through FastAPI dependency overrides and therefore
 never open a warehouse connection.
 """
+
 from __future__ import annotations
 
 import os
@@ -47,6 +48,7 @@ def _running_under_pytest() -> bool:
     # Fallback: the pytest runner imports ``pytest`` before any user
     # code; if it's in sys.modules we're in a test process.
     import sys
+
     return "pytest" in sys.modules
 
 
@@ -183,18 +185,20 @@ class Settings(BaseSettings):
     # durable copy. Docs/observability.md walks through the common sinks.
     #
     # When unset, the app behaves exactly as before -- stdout JSON only.
-    # The extra dependencies (``opentelemetry-sdk`` +
-    # ``opentelemetry-exporter-otlp``) are intentionally OPTIONAL: if the
-    # env var is set but the packages are not importable the runtime
-    # logs a warning and keeps serving traffic. This keeps the zero-
-    # dependency-on-wheels promise on Databricks Apps while giving
-    # operators a single-env-var switch to turn on durable logs.
+    # The production App image includes the OTLP exporter wheels. Minimal
+    # local installs may omit them; if the env var is set but the packages
+    # are not importable the runtime logs a warning and keeps serving
+    # traffic on stdout-only.
     #
     # ``MIP_OTEL_HEADERS`` is a comma-separated ``k=v,k2=v2`` string the
     # exporter passes as OTLP metadata (typically the Splunk HEC token
     # or the Datadog API key). We never log the value.
     mip_otel_endpoint: str | None = None
     mip_otel_headers: SecretStr | None = Field(default=None, repr=False)
+    # Browser Real User Monitoring. The client sends only sanitized route
+    # patterns and aggregate performance metrics; no query strings,
+    # borrower IDs, UUIDs, email addresses, or free-form text are accepted.
+    mip_rum_enabled: bool = True
     # Slice-13 performance follow-up: portfolio preview is an expensive
     # aggregate over 5.16M rows; its cache-miss cost shows up as a
     # p95 ~1.1 s tail on /api/portfolio/preview (load-baseline.md). The
@@ -204,6 +208,28 @@ class Settings(BaseSettings):
     # `mip_cache_ttl_s` on dev laptops where snappier dev UX trumps
     # warehouse-query minimisation.
     mip_portfolio_preview_ttl_s: float = 120.0
+
+    # App-level load protection. These are process-local guards, not a
+    # replacement for Databricks workspace quotas. They prevent one
+    # authenticated browser or automation loop from saturating expensive
+    # dependencies before the request reaches the warehouse/Lakebase/Genie
+    # client. Over-budget callers receive HTTP 429 + Retry-After.
+    mip_backpressure_enabled: bool = True
+    mip_rate_limit_default_per_minute: int = 600
+    mip_rate_limit_expensive_per_minute: int = 180
+    mip_rate_limit_mutation_per_minute: int = 120
+    mip_rate_limit_genie_per_minute: int = 30
+    mip_rate_limit_telemetry_per_minute: int = 1200
+    mip_warehouse_concurrency_limit: int = 24
+    mip_lakebase_concurrency_limit: int = 16
+    mip_genie_concurrency_limit: int = 4
+    # Lakebase connection pooling. Connections use short-lived workspace
+    # OAuth credentials in Databricks Apps, so reuse is bounded by a max
+    # lifetime comfortably below the token expiry. Set max size to 0 to
+    # force one-connection-per-call behavior for local diagnostics.
+    mip_lakebase_pool_max_size: int = 8
+    mip_lakebase_pool_timeout_s: float = 2.0
+    mip_lakebase_pool_max_lifetime_s: float = 3000.0
 
     def require_databricks_creds(self) -> tuple[str, Callable[[], str], str]:
         """Return ``(host, token_provider, warehouse_id)`` or raise at startup.
@@ -276,6 +302,7 @@ def _build_workspace_identity_provider(host: str) -> Callable[[], str] | None:
     environment fails at startup rather than on the first request.
     """
     import sys  # local; only needed on the auth-debug path
+
     try:
         from databricks.sdk.core import Config as _Config  # pragma: no cover
 
@@ -284,7 +311,9 @@ def _build_workspace_identity_provider(host: str) -> Callable[[], str] | None:
         # request. The SDK caches the result; the next call from
         # ``provider()`` will be a no-op cache hit until expiry.
         probe_headers: dict[str, str] = cfg.authenticate()
-        probe_auth = probe_headers.get("Authorization", "") if isinstance(probe_headers, dict) else ""
+        probe_auth = (
+            probe_headers.get("Authorization", "") if isinstance(probe_headers, dict) else ""
+        )
         if not probe_auth.startswith("Bearer "):
             print(
                 f"[mip-runtime] workspace-identity auth returned no Bearer header; "
@@ -308,9 +337,7 @@ def _build_workspace_identity_provider(host: str) -> Callable[[], str] | None:
             headers = cfg.authenticate()
             auth = headers.get("Authorization", "") if isinstance(headers, dict) else ""
             if not auth.startswith("Bearer "):
-                raise RuntimeError(
-                    "Databricks SDK auth returned no Bearer header on refresh"
-                )
+                raise RuntimeError("Databricks SDK auth returned no Bearer header on refresh")
             return auth.removeprefix("Bearer ").strip()
 
         return provider
@@ -345,10 +372,7 @@ def looks_like_databricks_app_deploy() -> bool:
     log line. We bias toward false positives to avoid log spam on the
     real production path.
     """
-    return bool(
-        os.environ.get("DATABRICKS_APP_PORT")
-        or os.environ.get("DATABRICKS_APP_URL")
-    )
+    return bool(os.environ.get("DATABRICKS_APP_PORT") or os.environ.get("DATABRICKS_APP_URL"))
 
 
 def check_trust_boundary_at_startup() -> None:

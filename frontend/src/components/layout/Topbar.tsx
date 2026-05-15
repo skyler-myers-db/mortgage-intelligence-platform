@@ -20,13 +20,12 @@ import type { LeadSummary } from '../../types';
  * the operator can drill in without burning persistent screen real
  * estate.
  */
-function SystemStatusPill({
-  envLabel,
-  health,
-}: {
-  envLabel: string;
-  health: HealthPayload | null;
-}) {
+export function systemStatusViewModel(health: HealthPayload | null): {
+  dotClass: string;
+  label: 'Probing' | 'Live' | 'Degraded';
+  tooltip: string;
+  ariaLabel: string;
+} {
   // Health states:
   //   probing  → no payload yet; gray dot, tooltip "first probe in flight"
   //   live     → status==="ok" + every tracked dep === "up"
@@ -34,12 +33,22 @@ function SystemStatusPill({
   const isProbing = !health;
   const deps = health?.dependencies ?? {};
   const breakers = health?.circuit_breakers ?? {};
+  const depEntries = [
+    ['warehouse', deps.warehouse],
+    ['lakebase', deps.lakebase],
+    ['genie', deps.genie],
+  ] as const;
+  const hasDependencyDetails = depEntries.some(([, state]) => state !== undefined);
   const allUp =
     deps.warehouse === 'up' && deps.lakebase === 'up' && deps.genie === 'up';
   const anyBreakerOpen = Object.values(breakers).some(
     (s) => s === 'open' || s === 'half_open',
   );
-  const live = !isProbing && allUp && !anyBreakerOpen && health?.status !== 'degraded';
+  const live =
+    !isProbing &&
+    health?.status !== 'degraded' &&
+    !anyBreakerOpen &&
+    (hasDependencyDetails ? allUp : health?.status === 'ok');
 
   const dotClass = isProbing
     ? 'dot amber'
@@ -48,30 +57,39 @@ function SystemStatusPill({
       : 'dot danger';
   const label = isProbing ? 'Probing' : live ? 'Live' : 'Degraded';
 
-  // Per-dep breakdown for the tooltip. Compact and grep-able so the
-  // tooltip reads like a one-line health summary an operator could
-  // paste into Slack.
-  const depLine = (name: string, state: string | undefined): string =>
-    `${name}=${state ?? '?'}`;
+  const dependencySummary = hasDependencyDetails
+    ? depEntries.map(([name, state]) => `${name}=${state ?? 'not reported'}`).join(' · ')
+    : 'dependency details not reported';
+  const breakerSummary = Object.entries(breakers)
+    .map(([k, v]) => `${k}=${v}`)
+    .join(' / ');
   const tooltip = isProbing
-    ? `System status · probing — first /api/health probe still in flight (env: ${envLabel}).`
+    ? 'System status · probing — first /api/health probe still in flight.'
     : `System status · ${live ? 'live' : 'degraded'}\n` +
-      `env=${envLabel} · ${depLine('warehouse', deps.warehouse)} · ` +
-      `${depLine('lakebase', deps.lakebase)} · ${depLine('genie', deps.genie)} · ` +
-      `breakers ${Object.entries(breakers)
-        .map(([k, v]) => `${k}=${v}`)
-        .join(' / ') || 'unknown'}`;
+      dependencySummary +
+      (breakerSummary ? `\nbreakers ${breakerSummary}` : '');
+
+  return {
+    dotClass,
+    label,
+    tooltip,
+    ariaLabel: `System status: ${label}.`,
+  };
+}
+
+function SystemStatusPill({ health }: { health: HealthPayload | null }) {
+  const status = systemStatusViewModel(health);
 
   return (
     <div
       className="topbar__pill"
-      title={tooltip}
-      aria-label={`System status: ${label}. Environment: ${envLabel}.`}
+      title={status.tooltip}
+      aria-label={status.ariaLabel}
       data-testid="system-status-pill"
     >
-      <span className={dotClass} aria-hidden="true" />
+      <span className={status.dotClass} aria-hidden="true" />
       <span className="topbar__pill-label">
-        {label}
+        {status.label}
       </span>
     </div>
   );
@@ -226,8 +244,6 @@ export function Topbar() {
     }
   };
 
-  const envLabel = (health?.app_env ?? 'loading').toLowerCase();
-
   return (
     <header className="topbar" role="banner">
       <div className="topbar__crumbs">
@@ -310,7 +326,7 @@ export function Topbar() {
         the title tooltip on hover. The dot color carries the severity
         signal (green=live, amber=degraded, gray=probing).
       */}
-      <SystemStatusPill envLabel={envLabel} health={health} />
+      <SystemStatusPill health={health} />
       {footprintFallback && mountGraceOver && (
         <span
           className="chip chip--warning"

@@ -3,7 +3,8 @@
  *
  * Runs axe-core against every public route in BOTH dark and light themes.
  * Asserts zero `serious` or `critical` violations; `moderate` / `minor`
- * are logged as TODOs but do not fail the test.
+ * are reported as informational smoke output. The stricter procurement
+ * gate lives in `accessibility_procurement.spec.ts`.
  *
  * Why both themes: a prior audit (2026-04-22) found 5 light-theme-only
  * contrast blockers that dark-only runs would never catch. The
@@ -105,7 +106,7 @@ async function runAxeAndAssertClean(page: import('@playwright/test').Page, label
   if (moderate.length || minor.length) {
     // eslint-disable-next-line no-console
     console.log(
-      `[a11y TODO] ${label}: ${moderate.length} moderate + ${minor.length} minor.\n` +
+      `[a11y smoke] ${label}: ${moderate.length} moderate + ${minor.length} minor.\n` +
         [...moderate, ...minor]
           .map(
             (v) =>

@@ -41,6 +41,12 @@ INTERNAL_DOCS = (
     "docs/validation/segment-count-parity.md",
 )
 
+OTLP_DOCS = (
+    "docs/deployment.md",
+    "docs/observability.md",
+    "docs/modernization-todo.md",
+)
+
 GENIE_DOCS = (
     "genie/instructions.md",
     "genie/mortgage_lead_intelligence_space.yml",
@@ -86,6 +92,48 @@ def test_public_docs_do_not_claim_unshipped_or_retired_behavior(
     text = (REPO / relative_path).read_text(encoding="utf-8")
 
     assert re.search(pattern, text, flags=re.IGNORECASE | re.DOTALL) is None, reason
+
+
+@pytest.mark.parametrize("relative_path", OTLP_DOCS)
+def test_otlp_docs_keep_customer_retention_claims_gated(relative_path: str) -> None:
+    text = (REPO / relative_path).read_text(encoding="utf-8")
+
+    forbidden_patterns = (
+        r"durable (?:customer )?(?:log )?retention (?:is|has been|was) "
+        r"(?:enabled|proven|closed|complete|certified)",
+        r"customer durable retention (?:is|has been|was) "
+        r"(?:enabled|proven|closed|complete|certified)",
+    )
+    for pattern in forbidden_patterns:
+        assert re.search(pattern, text, flags=re.IGNORECASE) is None
+
+    assert re.search(r"customer-owned\s+collector", text, flags=re.IGNORECASE)
+    assert re.search(r"retention/acl\s+(?:proof|evidence)", text, flags=re.IGNORECASE)
+    assert re.search(
+        r"collector\s+(?:query proof|query that finds)",
+        text,
+        flags=re.IGNORECASE,
+    )
+
+
+def test_otlp_docs_name_the_customer_retention_evidence_gate() -> None:
+    text = (REPO / "docs" / "observability.md").read_text(encoding="utf-8")
+
+    assert "tools/databricks/otlp_customer_retention_gate.py" in text
+    assert "--min-retention-days" in text
+
+
+@pytest.mark.parametrize("relative_path", OTLP_DOCS)
+def test_otlp_docs_do_not_show_plaintext_header_values(relative_path: str) -> None:
+    text = (REPO / relative_path).read_text(encoding="utf-8")
+
+    forbidden_patterns = (
+        r"MIP_OTEL_HEADERS\s*=\s*authorization",
+        r"MIP_OTEL_HEADERS\s*=\s*dd-api-key",
+        r"Bearer\s+<token>",
+    )
+    for pattern in forbidden_patterns:
+        assert re.search(pattern, text, flags=re.IGNORECASE) is None
 
 
 @pytest.mark.parametrize("relative_path", PUBLIC_DOCS)
