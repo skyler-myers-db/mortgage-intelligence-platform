@@ -58,6 +58,12 @@ python -m backend.runtime
 
 ## Databricks deploy
 
+For a customer fork, first rebind the bundle's single workspace-host anchor:
+
+```bash
+./scripts/configure-workspace.sh https://<customer-workspace>.cloud.databricks.com
+```
+
 ```bash
 make deploy-dev
 ```

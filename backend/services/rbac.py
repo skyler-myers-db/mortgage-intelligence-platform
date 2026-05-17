@@ -38,6 +38,7 @@ from fastapi import Depends, HTTPException, Request
 
 from backend.config.settings import settings
 from backend.services.audit_store import resolve_actor
+from backend.services.observability import emit
 
 log = logging.getLogger(__name__)
 
@@ -119,13 +120,15 @@ def require_admin(request: Request) -> str:
     if actor and actor.lower() in admin_emails:
         return actor
 
-    # Deny — log at INFO for forensic traceability; never log the raw
-    # header value (can contain PII / group-name attack surface).
-    log.info(
-        "rbac.require_admin: deny actor=%s groups_present=%d admin_group=%s",
-        actor,
-        len(groups),
-        settings.admin_group_name,
+    # Deny: log at INFO for forensic traceability; never log the raw
+    # group header value, which can contain PII / group-name attack surface.
+    emit(
+        log,
+        "admin_access_denied",
+        outcome="denied",
+        actor_present=bool(actor),
+        groups_present=len(groups),
+        admin_group=settings.admin_group_name,
     )
     raise HTTPException(status_code=403, detail="forbidden")
 

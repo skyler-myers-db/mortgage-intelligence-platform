@@ -189,7 +189,7 @@ type ChatMsg =
   | { who: 'user'; text: string }
   | { who: 'ai'; payload: GenieAnswerShape; sources?: string[] };
 
-function sourceAssetsFor(payload: GenieAnswerShape): string[] {
+export function sourceAssetsFor(payload: GenieAnswerShape): string[] {
   const seen = new Set<string>();
   const assets = [
     ...(payload.proof?.source_assets ?? []),
@@ -210,16 +210,20 @@ const NON_PERSISTABLE_SOURCES = new Set([
   'out_of_footprint',
 ]);
 
-function shouldPersistConversation(payload: GenieAnswerShape): boolean {
+export function shouldPersistConversation(payload: GenieAnswerShape): boolean {
   return Boolean(payload.conversation_id && !NON_PERSISTABLE_SOURCES.has(String(payload.source ?? '')));
 }
 
-function warningLabelForSource(source: string | undefined): string | null {
+export function warningLabelForSource(source: string | undefined): string | null {
   if (source === 'degraded') return 'Genie reconnecting';
   if (source === 'policy_blocked' || source === 'refused') return 'Governed refusal';
   if (source === 'data_gap') return 'Pending source feed';
   if (source === 'out_of_footprint') return 'Outside footprint';
   return null;
+}
+
+export function shouldRenderGenieSourceAssets(payload: GenieAnswerShape): boolean {
+  return warningLabelForSource(payload.source) === null && sourceAssetsFor(payload).length > 0;
 }
 
 export function GenieChat() {
@@ -789,8 +793,7 @@ export function GenieChat() {
                     </Chip>
                   </div>
                 )}
-                {!warningLabelForSource(m.payload.source) &&
-                  sourceAssetsFor(m.payload).length > 0 && (
+                {shouldRenderGenieSourceAssets(m.payload) && (
                   <div className="sources">
                     {(m.sources && m.sources.length > 0 ? m.sources : sourceAssetsFor(m.payload)).map((s, j) => {
                       const drawer = drawerForAsset(s);

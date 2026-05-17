@@ -26,7 +26,23 @@ import logging
 from dataclasses import dataclass
 from threading import Lock
 
+from backend.schemas._validators import set_state_footprint_provider
+from backend.services.observability import emit
+
 log = logging.getLogger(__name__)
+
+
+def _emit_footprint_warning(event: str, exc: BaseException, *, posture: str) -> None:
+    emit(
+        log,
+        event,
+        level=logging.WARNING,
+        dependency="warehouse",
+        outcome="degraded",
+        exc_type=type(exc).__name__,
+        exc_msg=str(exc)[:500],
+        posture=posture,
+    )
 
 US_STATE_NAME_BY_CODE: dict[str, str] = {
     "AL": "Alabama",
@@ -162,20 +178,19 @@ class StateFootprintResolver:
             client = get_sql_client()
         except (DependencyDownError, DatabricksSqlError, RuntimeError, OSError) as exc:
             if not self._warned_fallback:
-                log.warning(
-                    "StateFootprintResolver: UC client load failed (%s: %s); "
-                    "falling back to in-process _FOOTPRINT_FALLBACK.",
-                    type(exc).__name__,
+                _emit_footprint_warning(
+                    "state_footprint_uc_client_failed",
                     exc,
+                    posture="fallback_footprint",
                 )
                 self._warned_fallback = True
             return None
         except Exception as exc:  # noqa: BLE001
             if not self._warned_fallback:
-                log.warning(
-                    "StateFootprintResolver: unexpected UC client error (%s); "
-                    "using fallback footprint.",
+                _emit_footprint_warning(
+                    "state_footprint_uc_client_unexpected",
                     exc,
+                    posture="fallback_footprint",
                 )
                 self._warned_fallback = True
             return None
@@ -188,20 +203,19 @@ class StateFootprintResolver:
             )
         except (DependencyDownError, DatabricksSqlError, RuntimeError, OSError) as exc:
             if not self._warned_fallback:
-                log.warning(
-                    "StateFootprintResolver: state metadata load failed (%s: %s); "
-                    "will use live coverage names when possible.",
-                    type(exc).__name__,
+                _emit_footprint_warning(
+                    "state_footprint_metadata_failed",
                     exc,
+                    posture="live_coverage_names",
                 )
                 self._warned_fallback = True
             rows = []
         except Exception as exc:  # noqa: BLE001
             if not self._warned_fallback:
-                log.warning(
-                    "StateFootprintResolver: unexpected state metadata error (%s); "
-                    "will use live coverage names when possible.",
+                _emit_footprint_warning(
+                    "state_footprint_metadata_unexpected",
                     exc,
+                    posture="live_coverage_names",
                 )
                 self._warned_fallback = True
             rows = []
@@ -217,10 +231,10 @@ class StateFootprintResolver:
             )
         except Exception as exc:  # noqa: BLE001
             if not self._warned_fallback:
-                log.warning(
-                    "StateFootprintResolver: county coverage load failed (%s); "
-                    "using metadata-only degraded geography.",
+                _emit_footprint_warning(
+                    "state_footprint_coverage_failed",
                     exc,
+                    posture="metadata_only_geography",
                 )
                 self._warned_fallback = True
             coverage_rows = []
@@ -359,3 +373,12 @@ def _reset_state_footprint_resolver_for_tests(
     global _RESOLVER
     with _RESOLVER_LOCK:
         _RESOLVER = resolver
+
+
+def _schema_state_footprint_provider() -> tuple[tuple[tuple[str, str], ...], bool]:
+    resolver = get_state_footprint_resolver()
+    states = tuple((state.state_code, state.state_name) for state in resolver.list())
+    return states, resolver.using_fallback()
+
+
+set_state_footprint_provider(_schema_state_footprint_provider)

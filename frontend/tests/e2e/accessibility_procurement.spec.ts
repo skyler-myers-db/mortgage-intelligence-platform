@@ -1,15 +1,26 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 
 const LIVE = process.env.E2E_LIVE === '1';
 test.skip(!LIVE, 'Set E2E_LIVE=1 to run procurement accessibility canaries.');
 
 const APP_URL = process.env.MIP_APP_URL || 'http://127.0.0.1:5173';
+const API_URL = process.env.MIP_API_URL || APP_URL.replace(':5173', ':8000');
 const BEARER = process.env.MIP_BEARER_TOKEN || process.env.DATABRICKS_TOKEN || '';
 const AUTH_HEADERS: Record<string, string> = BEARER ? { Authorization: `Bearer ${BEARER}` } : {};
 
 test.use({ baseURL: APP_URL, extraHTTPHeaders: AUTH_HEADERS });
 
 const CORE_ROUTES = ['/', '/lead-queue', '/segment-intelligence', '/ask-genie', '/admin-config'] as const;
+const BORROWER_DETAIL_ROUTE_PREFIXES = ['/borrower-360', '/offer-orchestrator'] as const;
+
+async function fetchFirstLeadId(request: APIRequestContext): Promise<string> {
+  const resp = await request.get(`${API_URL}/api/leads?limit=1`, { headers: AUTH_HEADERS });
+  expect(resp.status(), 'GET /api/leads returned non-200').toBe(200);
+  const rows = (await resp.json()) as Array<{ borrower_id?: string }>;
+  const id = rows[0]?.borrower_id;
+  expect(id, 'need a live borrower id for Borrower 360 touch-target coverage').toBeTruthy();
+  return id!;
+}
 
 function parseAriaRowCount(raw: string | null): number {
   expect(raw, 'Lead Queue table must expose aria-rowcount').not.toBeNull();
@@ -36,6 +47,9 @@ test.describe('procurement accessibility canaries', () => {
     await page.goto('/');
     await page.keyboard.press('Tab');
     await expect(page.locator('.sr-skip-link').first()).toBeFocused();
+    const skipLinkBox = await page.locator('.sr-skip-link').first().boundingBox();
+    expect(skipLinkBox?.width ?? 0, 'focused skip link should meet the WCAG 2.2 AA target-size floor').toBeGreaterThanOrEqual(24);
+    expect(skipLinkBox?.height ?? 0, 'focused skip link should meet the WCAG 2.2 AA target-size floor').toBeGreaterThanOrEqual(24);
     await page.keyboard.press('Enter');
     await expect(page.locator('#main-content')).toBeFocused();
   });
@@ -108,8 +122,14 @@ test.describe('procurement accessibility canaries', () => {
     expect(new Set(focused).size, 'tab order should advance instead of trapping on one control').toBeGreaterThan(8);
   });
 
-  test('interactive controls meet the WCAG 2.2 AA target-size floor @a11y', async ({ page }) => {
-    for (const path of CORE_ROUTES) {
+  test('interactive controls meet the WCAG 2.2 AA target-size floor @a11y', async ({ page, request }) => {
+    const borrowerId = await fetchFirstLeadId(request);
+    const routes = [
+      ...CORE_ROUTES,
+      ...BORROWER_DETAIL_ROUTE_PREFIXES.map((prefix) => `${prefix}/${borrowerId}`),
+    ] as const;
+
+    for (const path of routes) {
       await page.goto(path);
       await expect(page.locator('#main-content')).toBeVisible({ timeout: 20_000 });
       const undersized = await page.evaluate(() => {
@@ -120,6 +140,7 @@ test.describe('procurement accessibility canaries', () => {
           'textarea',
           'a[href]',
           '[role="button"]',
+          '[tabindex="0"]',
           '.filter',
         ];
         const controls = Array.from(document.querySelectorAll<HTMLElement>(selectors.join(',')));
@@ -131,6 +152,11 @@ test.describe('procurement accessibility canaries', () => {
             if (rect.width < 1 || rect.height < 1) return false;
             if (el.closest('[aria-hidden="true"]')) return false;
             if (el.classList.contains('sr-skip-link')) return false;
+            // SVG geography regions preserve exact state/county shapes. They
+            // are keyboard reachable and visibly focusable, but target-size
+            // remediation would distort the map geometry; track the exception
+            // explicitly instead of hiding it behind a class selector.
+            if (el.dataset.targetSizeExempt === 'geographic-shape') return false;
             return rect.width < 24 || rect.height < 24;
           })
           .map((el) => {

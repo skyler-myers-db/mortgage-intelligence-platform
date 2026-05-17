@@ -21,13 +21,20 @@ FastAPI serves `frontend/dist` automatically if present.
 ## Databricks App
 
 1. Fill `.env.local` with workspace and warehouse values.
-2. Run the deployment script. It builds the frontend, provisions Genie if
+2. For a customer fork, rebind the bundle's single workspace-host anchor
+   before any deploy:
+
+```bash
+./scripts/configure-workspace.sh https://<customer-workspace>.cloud.databricks.com
+```
+
+3. Run the deployment script. It builds the frontend, provisions Genie if
    needed, validates/plans/deploys the direct bundle through the env-aware wrapper,
    promotes the uploaded source to the running Databricks App, and runs
    the refresh/smoke steps.
 
 ```bash
-./scripts/deploy.sh
+./scripts/deploy.sh -t dev
 ```
 
 The Entrada dev target also supports the plain Databricks bundle resource path:

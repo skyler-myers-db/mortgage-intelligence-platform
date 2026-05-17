@@ -1,8 +1,8 @@
 from fastapi.testclient import TestClient
 
-from backend.api import health as health_mod
 from backend.config.settings import settings
 from backend.main import _backpressure_controller, app
+from backend.services import health_probes
 from backend.services.backpressure import BackpressureController
 
 
@@ -79,10 +79,10 @@ def test_backpressure_classifies_admin_health_as_health() -> None:
 
 def test_backpressure_middleware_returns_429_with_retry_after(monkeypatch) -> None:
     monkeypatch.setattr(settings, "mip_rate_limit_default_per_minute", 1)
-    monkeypatch.setattr(health_mod, "_probe_warehouse", lambda: True)
-    monkeypatch.setattr(health_mod, "_probe_lakebase", lambda: True)
-    monkeypatch.setattr(health_mod, "_probe_genie", lambda: True)
-    health_mod._probe_cache.clear()
+    monkeypatch.setattr(health_probes, "probe_warehouse", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_lakebase", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_genie", lambda: True)
+    health_probes._probe_cache.clear()
     _backpressure_controller.clear()
 
     client = TestClient(app, raise_server_exceptions=False)
@@ -111,10 +111,10 @@ def test_backpressure_middleware_returns_429_with_retry_after(monkeypatch) -> No
 
 def test_backpressure_middleware_is_opt_in_under_pytest(monkeypatch) -> None:
     monkeypatch.setattr(settings, "mip_rate_limit_default_per_minute", 1)
-    monkeypatch.setattr(health_mod, "_probe_warehouse", lambda: True)
-    monkeypatch.setattr(health_mod, "_probe_lakebase", lambda: True)
-    monkeypatch.setattr(health_mod, "_probe_genie", lambda: True)
-    health_mod._probe_cache.clear()
+    monkeypatch.setattr(health_probes, "probe_warehouse", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_lakebase", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_genie", lambda: True)
+    health_probes._probe_cache.clear()
     _backpressure_controller.clear()
 
     client = TestClient(app, raise_server_exceptions=False)

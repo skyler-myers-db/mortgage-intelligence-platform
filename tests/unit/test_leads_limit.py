@@ -377,8 +377,9 @@ def test_leads_route_replays_portfolio_builder_criteria_to_repository() -> None:
 
 
 def test_leads_route_audits_safe_portfolio_criteria() -> None:
-    from backend.services.audit_store import InMemoryAuditStore, get_audit_store
+    from backend.services.audit_store import get_audit_store
     from backend.services.repositories import get_lead_repository
+    from tests.fixtures.in_memory_audit_store import InMemoryAuditStore
 
     audit = InMemoryAuditStore()
     prior_audit = app.dependency_overrides.get(get_audit_store)
@@ -575,8 +576,9 @@ def test_leads_route_passes_genie_borrower_id_cohort_to_repository() -> None:
 
 
 def test_leads_route_audits_genie_cohort_filters() -> None:
-    from backend.services.audit_store import InMemoryAuditStore, get_audit_store
+    from backend.services.audit_store import get_audit_store
     from backend.services.repositories import get_lead_repository
+    from tests.fixtures.in_memory_audit_store import InMemoryAuditStore
 
     audit = InMemoryAuditStore()
     prior_audit = app.dependency_overrides.get(get_audit_store)

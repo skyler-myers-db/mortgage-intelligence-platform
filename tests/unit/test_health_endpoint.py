@@ -24,7 +24,7 @@ from fastapi.testclient import TestClient
 
 from backend.api import health as health_mod
 from backend.main import app
-from backend.services import resilience
+from backend.services import health_probes, resilience
 
 client = TestClient(app)
 ADMIN_HEADERS = {
@@ -42,13 +42,13 @@ def _reset_breakers() -> None:
     # see stale results (all "up"/all "down") because the v1 cached
     # booleans stay valid under the hard TTL. Drop between tests so
     # every monkeypatched probe is exercised cleanly.
-    health_mod._probe_cache.clear()
+    health_probes._probe_cache.clear()
 
 
 def test_health_returns_ok_when_both_deps_up(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(health_mod, "_probe_warehouse", lambda: True)
-    monkeypatch.setattr(health_mod, "_probe_lakebase", lambda: True)
-    monkeypatch.setattr(health_mod, "_probe_genie", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_warehouse", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_lakebase", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_genie", lambda: True)
 
     res = client.get("/api/admin/health", headers=ADMIN_HEADERS)
     assert res.status_code == 200
@@ -62,9 +62,9 @@ def test_health_returns_ok_when_both_deps_up(monkeypatch: pytest.MonkeyPatch) ->
 def test_health_returns_degraded_when_warehouse_down(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(health_mod, "_probe_warehouse", lambda: False)
-    monkeypatch.setattr(health_mod, "_probe_lakebase", lambda: True)
-    monkeypatch.setattr(health_mod, "_probe_genie", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_warehouse", lambda: False)
+    monkeypatch.setattr(health_probes, "probe_lakebase", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_genie", lambda: True)
 
     res = client.get("/api/health", headers={"X-Forwarded-Email": "ops@example.com"})
     # Degraded state STILL returns 200 so load balancers don't pull
@@ -80,9 +80,9 @@ def test_health_returns_degraded_when_warehouse_down(
 
 
 def test_health_reports_open_breaker_state(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(health_mod, "_probe_warehouse", lambda: True)
-    monkeypatch.setattr(health_mod, "_probe_lakebase", lambda: True)
-    monkeypatch.setattr(health_mod, "_probe_genie", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_warehouse", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_lakebase", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_genie", lambda: True)
 
     # Register the warehouse breaker and force it open.
     cb = resilience.get_breaker("warehouse", failure_threshold=1, cooldown_s=60)
@@ -100,9 +100,9 @@ def test_health_reports_genie_down_and_degrades_status(
     """Slice-7: Genie is the third dependency. When its ping fails the
     body flips to degraded even if warehouse + Lakebase are up. Status
     is still HTTP 200 so the LB doesn't pull the container."""
-    monkeypatch.setattr(health_mod, "_probe_warehouse", lambda: True)
-    monkeypatch.setattr(health_mod, "_probe_lakebase", lambda: True)
-    monkeypatch.setattr(health_mod, "_probe_genie", lambda: False)
+    monkeypatch.setattr(health_probes, "probe_warehouse", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_lakebase", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_genie", lambda: False)
 
     res = client.get("/api/health", headers={"X-Forwarded-Email": "ops@example.com"})
     assert res.status_code == 200
@@ -182,9 +182,9 @@ def test_health_bursts_share_one_probe_per_dependency(
         counts[name] += 1
         return True
 
-    monkeypatch.setattr(health_mod, "_probe_warehouse", lambda: _probe("warehouse"))
-    monkeypatch.setattr(health_mod, "_probe_lakebase", lambda: _probe("lakebase"))
-    monkeypatch.setattr(health_mod, "_probe_genie", lambda: _probe("genie"))
+    monkeypatch.setattr(health_probes, "probe_warehouse", lambda: _probe("warehouse"))
+    monkeypatch.setattr(health_probes, "probe_lakebase", lambda: _probe("lakebase"))
+    monkeypatch.setattr(health_probes, "probe_genie", lambda: _probe("genie"))
 
     for _ in range(5):
         res = client.get("/api/health", headers={"X-Forwarded-Email": "ops@example.com"})
@@ -204,9 +204,9 @@ def test_health_returns_cached_value_during_stale_window(
     probe now returns down. The next-generation value only materialises
     after the background refresh stores it."""
     # First hit seeds the cache with up=True.
-    monkeypatch.setattr(health_mod, "_probe_warehouse", lambda: True)
-    monkeypatch.setattr(health_mod, "_probe_lakebase", lambda: True)
-    monkeypatch.setattr(health_mod, "_probe_genie", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_warehouse", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_lakebase", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_genie", lambda: True)
     res = client.get("/api/health", headers={"X-Forwarded-Email": "ops@example.com"})
     assert res.json()["status"] == "ok"
 
@@ -215,7 +215,7 @@ def test_health_returns_cached_value_during_stale_window(
     # without time.sleep(). We cheat by rewriting the tuple directly
     # under the cache's lock -- the public API doesn't expose time
     # travel.
-    cache = health_mod._probe_cache
+    cache = health_probes._probe_cache
     with cache._lock:
         value, hard_expiry, _soft_expiry, in_flight = cache._entries["warehouse"]
         # Soft expiry in the past, hard expiry in the future.
@@ -226,7 +226,7 @@ def test_health_returns_cached_value_during_stale_window(
     # a worker thread so it may or may not be done when we check -- but
     # the contract is "the request thread sees the cached value", which
     # is up=True.
-    monkeypatch.setattr(health_mod, "_probe_warehouse", lambda: False)
+    monkeypatch.setattr(health_probes, "probe_warehouse", lambda: False)
     res = client.get("/api/health", headers={"X-Forwarded-Email": "ops@example.com"})
     # Cached value wins for this call.
     assert res.json()["dependencies"]["warehouse"] == "up"
@@ -244,9 +244,9 @@ def test_health_anonymous_returns_minimal_body(monkeypatch: pytest.MonkeyPatch) 
     ``{status, mode}`` so an attacker probing the public Databricks Apps
     URL doesn't get breaker state, app_env, or identity-fallback counters
     for free."""
-    monkeypatch.setattr(health_mod, "_probe_warehouse", lambda: True)
-    monkeypatch.setattr(health_mod, "_probe_lakebase", lambda: True)
-    monkeypatch.setattr(health_mod, "_probe_genie", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_warehouse", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_lakebase", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_genie", lambda: True)
 
     res = client.get("/api/health")
     assert res.status_code == 200
@@ -261,9 +261,9 @@ def test_health_anonymous_returns_minimal_body(monkeypatch: pytest.MonkeyPatch) 
 def test_health_anonymous_degraded_still_minimal(monkeypatch: pytest.MonkeyPatch) -> None:
     """Degraded anonymous probes stay 200 with the minimal body. The LB
     contract is preserved (degraded != unhealthy)."""
-    monkeypatch.setattr(health_mod, "_probe_warehouse", lambda: False)
-    monkeypatch.setattr(health_mod, "_probe_lakebase", lambda: True)
-    monkeypatch.setattr(health_mod, "_probe_genie", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_warehouse", lambda: False)
+    monkeypatch.setattr(health_probes, "probe_lakebase", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_genie", lambda: True)
 
     res = client.get("/api/health")
     assert res.status_code == 200
@@ -277,9 +277,9 @@ def test_health_authenticated_returns_runtime_status_only(
 ) -> None:
     """A non-admin workspace user gets the runtime state needed by the UI
     without ops diagnostics such as warehouse IDs or process-local counters."""
-    monkeypatch.setattr(health_mod, "_probe_warehouse", lambda: True)
-    monkeypatch.setattr(health_mod, "_probe_lakebase", lambda: True)
-    monkeypatch.setattr(health_mod, "_probe_genie", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_warehouse", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_lakebase", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_genie", lambda: True)
 
     res = client.get("/api/health", headers={"X-Forwarded-Email": "skyler@entrada.ai"})
     assert res.status_code == 200
@@ -306,9 +306,9 @@ def test_health_admin_endpoint_returns_full_diagnostics(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The full diagnostic body is available only through admin RBAC."""
-    monkeypatch.setattr(health_mod, "_probe_warehouse", lambda: True)
-    monkeypatch.setattr(health_mod, "_probe_lakebase", lambda: True)
-    monkeypatch.setattr(health_mod, "_probe_genie", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_warehouse", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_lakebase", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_genie", lambda: True)
 
     res = client.get("/api/admin/health", headers=ADMIN_HEADERS)
     assert res.status_code == 200
@@ -337,9 +337,9 @@ def test_health_admin_endpoint_returns_full_diagnostics(
 def test_health_admin_endpoint_rejects_non_admin(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(health_mod, "_probe_warehouse", lambda: True)
-    monkeypatch.setattr(health_mod, "_probe_lakebase", lambda: True)
-    monkeypatch.setattr(health_mod, "_probe_genie", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_warehouse", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_lakebase", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_genie", lambda: True)
     monkeypatch.setattr(health_mod.settings, "admin_emails", "")
 
     res = client.get(
@@ -352,9 +352,9 @@ def test_health_admin_endpoint_rejects_non_admin(
 def test_health_actor_cache_key_changes_by_actor(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(health_mod, "_probe_warehouse", lambda: True)
-    monkeypatch.setattr(health_mod, "_probe_lakebase", lambda: True)
-    monkeypatch.setattr(health_mod, "_probe_genie", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_warehouse", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_lakebase", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_genie", lambda: True)
 
     first = client.get("/api/health", headers={"X-Forwarded-Email": "ops@example.com"}).json()
     second = client.get("/api/health", headers={"X-Forwarded-Email": "skyler@entrada.ai"}).json()
@@ -367,9 +367,9 @@ def test_health_actor_cache_key_changes_by_actor(
 def test_health_ignores_forwarded_actor_when_headers_are_untrusted(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(health_mod, "_probe_warehouse", lambda: True)
-    monkeypatch.setattr(health_mod, "_probe_lakebase", lambda: True)
-    monkeypatch.setattr(health_mod, "_probe_genie", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_warehouse", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_lakebase", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_genie", lambda: True)
     monkeypatch.setattr(health_mod.settings, "trust_forwarded_headers", False)
 
     res = client.get("/api/health", headers={"X-Forwarded-Email": "spoofed@example.com"})
@@ -392,16 +392,16 @@ def test_health_forces_sync_reprobe_after_hard_ttl(
         counts["n"] += 1
         return True
 
-    monkeypatch.setattr(health_mod, "_probe_warehouse", probe_up)
-    monkeypatch.setattr(health_mod, "_probe_lakebase", lambda: True)
-    monkeypatch.setattr(health_mod, "_probe_genie", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_warehouse", probe_up)
+    monkeypatch.setattr(health_probes, "probe_lakebase", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_genie", lambda: True)
 
     # Seed the cache.
     client.get("/api/health")
     assert counts["n"] == 1
 
     # Force hard-TTL expiry by setting both expiries into the past.
-    cache = health_mod._probe_cache
+    cache = health_probes._probe_cache
     with cache._lock:
         value, _hard, _soft, in_flight = cache._entries["warehouse"]
         cache._entries["warehouse"] = (value, 0.0, 0.0, in_flight)
@@ -409,7 +409,7 @@ def test_health_forces_sync_reprobe_after_hard_ttl(
     # Flip the probe to return down. Because the cache is past the hard
     # TTL, this request must re-probe synchronously and see the new
     # value.
-    monkeypatch.setattr(health_mod, "_probe_warehouse", lambda: False)
+    monkeypatch.setattr(health_probes, "probe_warehouse", lambda: False)
     res = client.get("/api/health", headers={"X-Forwarded-Email": "ops@example.com"})
     assert res.json()["dependencies"]["warehouse"] == "down"
     assert res.json()["status"] == "degraded"

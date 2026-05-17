@@ -15,7 +15,8 @@ from fastapi.testclient import TestClient
 
 from backend.config.settings import settings
 from backend.main import app
-from backend.services.audit_store import InMemoryAuditStore, get_audit_store
+from backend.services.audit_store import get_audit_store
+from tests.fixtures.in_memory_audit_store import InMemoryAuditStore
 
 
 @pytest.fixture()

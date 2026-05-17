@@ -20,7 +20,7 @@ from backend.schemas.portfolio import (
     CampaignSummary,
     PortfolioCreateRequest,
 )
-from backend.services.audit_store import AuditMetadataValueViolation, InMemoryAuditStore
+from backend.services.audit_store import AuditMetadataValueViolation
 from backend.services.disclosures import MissingTenantDisclosureError, resolve_tenant_disclosure
 from backend.services.repositories import (
     get_lead_repository,
@@ -28,6 +28,7 @@ from backend.services.repositories import (
     get_portfolio_repository,
 )
 from tests.fixtures import mock_population
+from tests.fixtures.in_memory_audit_store import InMemoryAuditStore
 
 
 class _SingleBorrowerOutreachRepo:

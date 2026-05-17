@@ -33,6 +33,14 @@ describe('layout containment contracts', () => {
     expect(css).toMatch(/\.lead-table__segments\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\);/s);
   });
 
+  it('keeps small interactive chips at the WCAG 2.2 AA touch-target floor', () => {
+    const css = designCss();
+
+    expect(css).toMatch(/\.evidence-chip\s*\{[^}]*min-block-size:\s*calc\(var\(--sp-6\) \+ var\(--sp-1\)\);/s);
+    expect(css).toMatch(/\.chip--compact\s*\{[^}]*min-block-size:\s*var\(--sp-6\);/s);
+    expect(css).toMatch(/\.tbl__sort\s*\{[^}]*min-block-size:\s*var\(--sp-6\);/s);
+  });
+
   it('lets evidence drawer signal rows wrap long source and value text', () => {
     const css = designCss();
 

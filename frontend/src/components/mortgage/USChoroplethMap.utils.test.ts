@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import { feature as topoFeature } from 'topojson-client';
+import statesTopology from 'us-atlas/states-albers-10m.json';
 import {
+  buildUsaStateMapPayload,
   buildCountiesPayload,
   buildLeadQueuePath,
   buildQuantileBucketer,
@@ -127,5 +130,47 @@ describe('USChoroplethMap geography helpers', () => {
       cy: 3,
     });
     expect(buildCountiesPayload(fc, 'xx', '99')).toBeNull();
+  });
+
+  it('adapts us-atlas state topology into the existing USPS-keyed map shape', () => {
+    const topology = statesTopology as {
+      objects: { states: unknown };
+    };
+    const fc = topoFeature(
+      topology as never,
+      topology.objects.states as never,
+    ) as unknown as FeatureCollection;
+
+    const payload = buildUsaStateMapPayload(fc);
+    const [x, y, width, height] = payload.viewBox.split(' ').map(Number);
+    const ids = new Set(payload.locations.map((location) => location.id));
+
+    expect(payload.label).toBe('United States');
+    expect(payload.locations).toHaveLength(51);
+    expect([x, y, width, height].every(Number.isFinite)).toBe(true);
+    expect(width).toBeGreaterThan(0);
+    expect(height).toBeGreaterThan(0);
+    expect(ids.has('il')).toBe(true);
+    expect(ids.has('ca')).toBe(true);
+    expect(ids.has('tx')).toBe(true);
+    expect(ids.has('dc')).toBe(true);
+    expect(payload.locations.find((location) => location.id === 'dc')?.name).toBe(
+      'Washington, DC',
+    );
+    expect(payload.locations.every((location) => location.path.startsWith('M'))).toBe(true);
+  });
+
+  it('keeps Genie state-map lookups aligned with normalized USPS values', () => {
+    const topology = statesTopology as {
+      objects: { states: unknown };
+    };
+    const fc = topoFeature(
+      topology as never,
+      topology.objects.states as never,
+    ) as unknown as FeatureCollection;
+    const payload = buildUsaStateMapPayload(fc);
+    const illinois = payload.locations.find((location) => location.name === 'Illinois');
+
+    expect(illinois?.id.toUpperCase()).toBe('IL');
   });
 });

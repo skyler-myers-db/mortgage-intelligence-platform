@@ -29,6 +29,7 @@ from backend.services.lakebase import (
 from backend.services.lakebase import (
     get_lakebase_client as _get_lakebase_client_default,
 )
+from backend.services.observability import emit, get_correlation_id
 from backend.services.resilience import TTLCache
 
 log = logging.getLogger(__name__)
@@ -212,7 +213,7 @@ class DatabricksPortfolioRepository:
     inserted_audit AS (
       INSERT INTO mip_app.action_audit (
         event_type, actor_email, entity_type, entity_id,
-        request_id, evidence_ids, metadata
+        request_id, correlation_id, evidence_ids, metadata
       )
       SELECT
         'PORTFOLIO_CREATE',
@@ -220,6 +221,7 @@ class DatabricksPortfolioRepository:
         'campaign',
         inserted_campaign.campaign_id::text,
         %(request_id)s,
+        %(correlation_id)s,
         ARRAY[]::TEXT[],
         %(metadata)s::jsonb
       FROM inserted_campaign
@@ -276,13 +278,15 @@ class DatabricksPortfolioRepository:
     ),
     inserted_audit AS (
       INSERT INTO mip_app.action_audit (
-        event_type, actor_email, entity_type, entity_id, evidence_ids, metadata
+        event_type, actor_email, entity_type, entity_id,
+        correlation_id, evidence_ids, metadata
       )
       SELECT
         'CAMPAIGN_STATUS_UPDATE',
         %(actor)s,
         'campaign',
         updated_campaign.campaign_id,
+        %(correlation_id)s,
         ARRAY[]::TEXT[],
         %(metadata)s::jsonb
       FROM updated_campaign
@@ -327,7 +331,15 @@ class DatabricksPortfolioRepository:
         try:
             rows = self._client.execute(self._TREND_SQL) or []
         except Exception as exc:  # noqa: BLE001 -- surface unavailable, don't invent trends
-            log.warning("portfolio funnel snapshot query failed: %s", exc)
+            emit(
+                log,
+                "portfolio_funnel_snapshot_query_failed",
+                level=logging.WARNING,
+                dependency="warehouse",
+                outcome="degraded",
+                exc_type=type(exc).__name__,
+                exc_msg=str(exc)[:500],
+            )
             return (
                 {},
                 {},
@@ -514,6 +526,7 @@ class DatabricksPortfolioRepository:
                 if payload.roi_assumptions is not None
                 else "null",
                 "request_id": f"portfolio-create-{uuid.uuid4()}",
+                "correlation_id": get_correlation_id(),
                 "metadata": json.dumps(
                     {
                         "source": "portfolio_builder",
@@ -626,6 +639,7 @@ class DatabricksPortfolioRepository:
                 "campaign_id": portfolio_id,
                 "status": payload.status,
                 "actor": actor or "unknown",
+                "correlation_id": get_correlation_id(),
                 "metadata": json.dumps(
                     {
                         "action": "campaign.status_update",

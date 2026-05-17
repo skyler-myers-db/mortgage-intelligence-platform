@@ -1,22 +1,2 @@
-fastapi==0.136.1
-uvicorn[standard]==0.34.0
-pydantic==2.10.4
-pydantic-settings==2.7.1
-python-dotenv==1.2.2
-httpx==0.28.1
-databricks-sdk==0.103.0
-databricks-sql-connector==3.7.0
-psycopg[binary]>=3.2.10,<3.4
-pytest==9.0.3
-pytest-cov==6.0.0
-ruff==0.8.6
-# Genie fuzz testing (tests/integration/test_genie_fuzz.py). Required
-# in CI so self-tests run; live fuzz runs skip without Genie creds.
-hypothesis==6.123.7
-
-# Production OTLP log-exporter. The handler still stays env-gated by
-# MIP_OTEL_ENDPOINT, but the deployed App image must carry these wheels so
-# turning on a collector results in log_export=otlp instead of a safe
-# stdout-only fallback.
-opentelemetry-sdk>=1.27,<2
-opentelemetry-exporter-otlp>=1.27,<2
+-c uv.lock
+-r requirements.in

@@ -125,8 +125,14 @@ def _projection_has_wildcard_expansion(term: str) -> bool:
         ".",
         re.sub(r"\s+", " ", term.replace("`", "")).strip(),
     ).lower()
+    compact = re.sub(
+        r"\b(?:count|approx_count_distinct)\s*\(\s*\*\s*\)",
+        "safe_count_star()",
+        compact,
+        flags=re.IGNORECASE,
+    )
     if re.fullmatch(
-        r"(?:count|approx_count_distinct)\s*\(\s*\*\s*\)(?:\s+as\s+[a-z_][a-z0-9_]*)?",
+        r"safe_count_star\(\)(?:\s+as\s+[a-z_][a-z0-9_]*)?",
         compact,
     ):
         return False
@@ -297,7 +303,7 @@ def _sql_mentions_pii_columns(sql: str | None) -> bool:
     )
     if select_match is not None:
         select_list = select_match.group("select")
-        projected_terms = [term.strip() for term in select_list.split(",")]
+        projected_terms = [term.strip() for term in _split_top_level_commas(select_list)]
         for term in projected_terms:
             if _projection_has_wildcard_expansion(term):
                 return True

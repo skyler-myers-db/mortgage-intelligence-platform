@@ -31,10 +31,11 @@ from fastapi.testclient import TestClient
 from backend.api import outreach as outreach_mod
 from backend.main import app
 from backend.services import job_trigger, lakebase_bootstrap
-from backend.services.audit_store import InMemoryAuditStore, get_audit_store
+from backend.services.audit_store import get_audit_store
 from backend.services.lakebase import LakebaseError, get_lakebase_client
 from backend.services.lakebase_bootstrap import _reset_bootstrap_for_tests
 from backend.services.resilience import _reset_breakers_for_tests
+from tests.fixtures.in_memory_audit_store import InMemoryAuditStore
 
 
 def _disclosure_row(params: dict[str, Any] | None = None) -> dict[str, str]:

@@ -16,8 +16,9 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 from backend.main import app
-from backend.services.audit_store import InMemoryAuditStore, get_audit_store
+from backend.services.audit_store import get_audit_store
 from backend.services.lakebase import get_lakebase_client
+from tests.fixtures.in_memory_audit_store import InMemoryAuditStore
 
 client = TestClient(app)
 

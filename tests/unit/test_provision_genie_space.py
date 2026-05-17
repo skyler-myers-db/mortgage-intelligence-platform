@@ -35,6 +35,11 @@ if str(TOOLS_DIR) not in sys.path:
 
 from databricks import provision_genie_space as pgs  # noqa: E402
 
+from backend.services.genie_trusted_assets import trusted_assets  # noqa: E402
+from backend.services.repositories.databricks_genie_trust import (  # noqa: E402
+    _TRUSTED_GENIE_ASSETS,
+)
+
 EXPECTED_ASSETS = {
     "mip.gold.lead_population",
     "mip.gold.segment_population",
@@ -73,6 +78,11 @@ def test_genie_allowlist_docs_match_provisioned_assets() -> None:
     for asset in EXPECTED_ASSETS:
         assert asset in instructions
         assert asset in trusted_assets_doc
+
+
+def test_backend_genie_allowlists_match_provisioned_assets() -> None:
+    assert set(trusted_assets()) >= EXPECTED_ASSETS
+    assert set(_TRUSTED_GENIE_ASSETS) >= EXPECTED_ASSETS
 
 
 def test_genie_in_the_money_threshold_matches_module0_contract() -> None:

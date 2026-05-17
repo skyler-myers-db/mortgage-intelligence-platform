@@ -53,6 +53,11 @@ def test_nbo_product_labels_covers_all_eight_codes() -> None:
     assert set(NBO_PRODUCT_LABELS.keys()) == _EXPECTED_CODES
 
 
+def test_nbo_product_labels_match_golden_fixture() -> None:
+    """Production-owned label constants must stay pinned to the golden fixture."""
+    assert FIXTURE["product_labels"] == NBO_PRODUCT_LABELS
+
+
 def test_all_null_signals_with_real_thresholds_land_in_nurture() -> None:
     """All-NULL signal row with live thresholds must fall through to 'nurture'.
 

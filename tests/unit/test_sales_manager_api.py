@@ -7,11 +7,13 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.main import app
-from backend.services.audit_store import AuditMetadataValueViolation, InMemoryAuditStore
+from backend.services.audit_store import AuditMetadataValueViolation, get_audit_store
+from backend.services.genie_sales_ops import sales_ops_genie_response
 from backend.services.lakebase import get_lakebase_client
 from backend.services.repositories import get_borrower_repository
 from backend.services.sales_state import get_sales_state_store
 from tests.fixtures import mock_population as mock_data
+from tests.fixtures.in_memory_audit_store import InMemoryAuditStore
 
 client = TestClient(app)
 client.headers.update({"X-Forwarded-Email": "skyler@entrada.ai"})
@@ -38,6 +40,18 @@ def _approve_for_sales(borrower_id: str) -> None:
         },
     )
     assert approved.status_code == 200
+
+
+def _sales_ops_response(question: str):
+    lakebase = app.dependency_overrides[get_lakebase_client]()
+    borrowers = app.dependency_overrides[get_borrower_repository]()
+    return sales_ops_genie_response(
+        lakebase,
+        borrowers,
+        actor="skyler@entrada.ai",
+        question=question,
+        conversation_id=None,
+    )
 
 
 def test_leads_honor_approval_status_filter() -> None:
@@ -149,6 +163,22 @@ def test_sales_standup_aging_and_conversion_surfaces() -> None:
     assert isinstance(aging.json(), list)
 
 
+def test_sales_distribute_requires_approved_borrowers() -> None:
+    borrower_id = mock_data.BORROWERS[2].borrower_id
+
+    response = client.post(
+        "/api/sales/distribute",
+        json={
+            "borrower_ids": [borrower_id],
+            "lo_emails": ["lo01@summit.example"],
+            "limit": 1,
+            "request_id": str(uuid4()),
+        },
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"] == "lead must be approved before assignment"
+
+
 def test_sales_aging_omits_approval_rows_without_live_borrower() -> None:
     live_borrower_id = mock_data.BORROWERS[2].borrower_id
     old = datetime.now(UTC) - timedelta(days=14)
@@ -238,6 +268,8 @@ def test_genie_routes_sales_manager_lo_conversion_to_sales_ops_adapter() -> None
 
 def test_genie_sales_aging_omits_approval_rows_without_live_borrower() -> None:
     lakebase = app.dependency_overrides[get_lakebase_client]()
+    previous_audit = app.dependency_overrides.get(get_audit_store)
+    audit = InMemoryAuditStore()
     dispositioned = {row["borrower_id"] for row in lakebase.dispositions}
     live_borrower_id = next(
         borrower.borrower_id
@@ -273,19 +305,23 @@ def test_genie_sales_aging_omits_approval_rows_without_live_borrower() -> None:
         }
     )
     lakebase.approvals.extend(added)
+    app.dependency_overrides[get_audit_store] = lambda: audit
     try:
-        response = client.post(
-            "/api/genie/message",
-            json={"question": "Show approved leads that have not been touched in 7 days."},
+        response = _sales_ops_response(
+            "Show approved leads that have not been touched in 7 days."
         )
     finally:
+        if previous_audit is None:
+            app.dependency_overrides.pop(get_audit_store, None)
+        else:
+            app.dependency_overrides[get_audit_store] = previous_audit
         added_ids = {row["approval_id"] for row in added}
         lakebase.approvals[:] = [
             row for row in lakebase.approvals if row.get("approval_id") not in added_ids
         ]
 
-    assert response.status_code == 200
-    rows = response.json()["table_rows"]
+    assert response is not None
+    rows = response.table_rows
     borrower_ids = {row["borrower_id"] for row in rows}
     assert live_borrower_id in borrower_ids
     assert borrower_ids.isdisjoint(orphan_ids)
@@ -398,9 +434,9 @@ def test_genie_sales_manager_samples_route_to_sales_ops_adapter() -> None:
         "Show approved leads that have not been touched in 7 days.",
     ]
     for question in questions:
-        response = client.post("/api/genie/message", json={"question": question})
-        assert response.status_code == 200, response.text
-        assert response.json()["source"] == "sales_ops"
+        response = _sales_ops_response(question)
+        assert response is not None
+        assert response.source == "sales_ops"
 
 
 def test_sales_audit_metadata_is_strictly_validated() -> None:

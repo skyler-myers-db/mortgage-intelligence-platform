@@ -361,6 +361,53 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
+  genie-fuzz-standard:
+    name: Genie standard fuzz (scheduled)
+    # Standard 15-example/family fuzz is part of the scheduled nightly
+    # safety signal. It runs in its own job so the broad live parity gate
+    # keeps its timeout budget. The heavier 200-example/family deep fuzz
+    # remains workflow-dispatch only below.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+      DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+      DATABRICKS_WAREHOUSE_ID: ${{ secrets.DATABRICKS_WAREHOUSE_ID }}
+      GENIE_SPACE_ID: ${{ secrets.GENIE_SPACE_ID }}
+      MIP_GENIE_FUZZ_EXAMPLES: '15'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Fail fast if required secrets are missing
+        run: |
+          missing=""
+          for v in DATABRICKS_HOST DATABRICKS_TOKEN GENIE_SPACE_ID; do
+            if [ -z "${!v}" ]; then
+              missing="$missing $v"
+            fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Missing required secrets:$missing"
+            exit 1
+          fi
+      - name: Run standard Genie fuzz
+        run: pytest -q tests/integration/test_genie_fuzz.py -m integration
+      - name: Upload fuzz failure artefacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: genie-fuzz-standard-failures
+          path: tests/integration/genie_fuzz_failures/
+          if-no-files-found: ignore
+          retention-days: 30
+
   kill-drill-real-infra:
     name: Credential-kill drill (REAL infra -- opt-in)
     # Opt-in rehearsal. Only runs on manual workflow_dispatch WITH the
@@ -507,7 +554,7 @@ jobs:
 
   notify-on-failure:
     name: File issue on failure
-    needs: [parity-live, playwright-e2e-live, kill-drill-simulated]
+    needs: [parity-live, playwright-e2e-live, kill-drill-simulated, genie-fuzz-standard]
     if: failure()
     runs-on: ubuntu-latest
     steps:

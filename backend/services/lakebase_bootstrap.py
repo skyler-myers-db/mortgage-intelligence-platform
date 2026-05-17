@@ -165,10 +165,15 @@ def ensure_approval_idempotency_column(client: LakebaseClient) -> None:
             # subsequent INSERT silently failed on an index that didn't
             # exist. Since every statement is IF NOT EXISTS, retrying
             # on the next request is safe and self-healing.
-            log.warning(
-                "lakebase_bootstrap failed: migration=r5_01_approvals_request_id "
-                "exc=%s",
-                type(exc).__name__,
+            emit(
+                log,
+                "lakebase_bootstrap_failed",
+                level=logging.WARNING,
+                dependency="lakebase",
+                outcome="error",
+                migration="r5_01_approvals_request_id",
+                exc_type=type(exc).__name__,
+                exc_msg=str(exc)[:500],
             )
             _release_advisory_lock(client, lock_acquired)
             return
@@ -177,10 +182,15 @@ def ensure_approval_idempotency_column(client: LakebaseClient) -> None:
             # next call. A persistent outage will log every request, but
             # that is the intended signal; silently latching success is
             # the worse failure mode.
-            log.warning(
-                "lakebase_bootstrap unexpected failure: migration=r5_01_approvals_request_id "
-                "exc=%s",
-                type(exc).__name__,
+            emit(
+                log,
+                "lakebase_bootstrap_unexpected_failure",
+                level=logging.WARNING,
+                dependency="lakebase",
+                outcome="error",
+                migration="r5_01_approvals_request_id",
+                exc_type=type(exc).__name__,
+                exc_msg=str(exc)[:500],
             )
             _release_advisory_lock(client, lock_acquired)
             return
@@ -224,16 +234,28 @@ def ensure_sales_workflow_request_id_columns(client: LakebaseClient) -> None:
             for stmt in _SALES_WORKFLOW_REQUEST_ID_DDL:
                 client.execute(stmt)
         except LakebaseError as exc:
-            log.warning(
-                "lakebase_bootstrap failed: migration=sales_workflow_request_id exc=%s",
-                type(exc).__name__,
+            emit(
+                log,
+                "lakebase_bootstrap_failed",
+                level=logging.WARNING,
+                dependency="lakebase",
+                outcome="error",
+                migration="sales_workflow_request_id",
+                exc_type=type(exc).__name__,
+                exc_msg=str(exc)[:500],
             )
             _release_advisory_lock_with_key(client, lock_acquired, _SALES_WORKFLOW_REQUEST_ID_KEY)
             return
         except Exception as exc:  # noqa: BLE001 -- bootstrap must never crash request path
-            log.warning(
-                "lakebase_bootstrap unexpected failure: migration=sales_workflow_request_id exc=%s",
-                type(exc).__name__,
+            emit(
+                log,
+                "lakebase_bootstrap_unexpected_failure",
+                level=logging.WARNING,
+                dependency="lakebase",
+                outcome="error",
+                migration="sales_workflow_request_id",
+                exc_type=type(exc).__name__,
+                exc_msg=str(exc)[:500],
             )
             _release_advisory_lock_with_key(client, lock_acquired, _SALES_WORKFLOW_REQUEST_ID_KEY)
             return
@@ -292,10 +314,15 @@ def _release_advisory_lock_with_key(client: LakebaseClient, acquired: bool, key:
             {"key": key},
         )
     except Exception as exc:  # noqa: BLE001 -- unlock failure is informational
-        log.warning(
-            "lakebase_bootstrap advisory_unlock failed: key=%s exc=%s",
-            key,
-            type(exc).__name__,
+        emit(
+            log,
+            "lakebase_bootstrap_advisory_unlock_failed",
+            level=logging.WARNING,
+            dependency="lakebase",
+            outcome="error",
+            key=key,
+            exc_type=type(exc).__name__,
+            exc_msg=str(exc)[:500],
         )
 
 

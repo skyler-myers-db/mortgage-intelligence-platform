@@ -154,6 +154,49 @@ def test_audit_events_accepts_limit_at_cap() -> None:
     assert response.status_code == 200, response.text
 
 
+def test_audit_events_filters_by_correlation_id() -> None:
+    correlation_id = "audit-corr-filter-001"
+    created = client.post(
+        "/api/audit/event",
+        headers={"X-Correlation-ID": correlation_id},
+        json={
+            "actor": "anonymous",
+            "action": "view.custom",
+            "entity_type": "lead_queue",
+            "entity_id": "manual",
+        },
+    )
+
+    assert created.status_code == 200, created.text
+    assert created.json()["correlation_id"] == correlation_id
+
+    response = client.get(f"/api/audit/events?correlation_id={correlation_id}")
+    assert response.status_code == 200, response.text
+    events = response.json()
+    assert events
+    assert {event["correlation_id"] for event in events} == {correlation_id}
+
+
+@pytest.mark.parametrize(
+    "unsafe_correlation_id",
+    [
+        "555-212-3333",
+        "trace123456789",
+        "trace1778869254",
+        "req_1778869254",
+        "abc555-212-3333xyz",
+        "abcB-102FL7THC6Q3Lxyz",
+        "xCL-123456789y",
+    ],
+)
+def test_audit_events_rejects_pii_shaped_correlation_filter(
+    unsafe_correlation_id: str,
+) -> None:
+    response = client.get(f"/api/audit/events?correlation_id={unsafe_correlation_id}")
+
+    assert response.status_code == 422
+
+
 def test_public_audit_event_cannot_forge_genie_actions() -> None:
     response = client.post(
         "/api/audit/event",

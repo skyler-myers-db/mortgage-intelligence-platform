@@ -12,6 +12,12 @@ def test_required_routes_exist_and_respond():
         ("post", "/api/portfolio/preview", {"criteria": {}}, 200),
         ("post", "/api/portfolio/create", {"name": "Sample"}, 200),
         ("get", "/api/portfolio/11111111-1111-4111-8111-111111111111", None, 200),
+        (
+            "patch",
+            "/api/portfolio/11111111-1111-4111-8111-111111111111",
+            {"status": "pending_review"},
+            200,
+        ),
         ("get", "/api/segments?portfolio_id=11111111-1111-4111-8111-111111111111", None, 200),
         ("get", "/api/leads?portfolio_id=11111111-1111-4111-8111-111111111111&segment=itm", None, 200),
         ("get", "/api/leads?segment_codes=itm,equity&segment_mode=all", None, 200),
@@ -52,6 +58,7 @@ def test_required_routes_exist_and_respond():
         ("get", "/api/admin/rules", None, 200),
         # App-local threshold edits are rejected; rules are UC-governed.
         ("put", "/api/admin/rules", {"attempted_change": {"x": "y"}}, 410),
+        ("get", "/api/not-a-real-route", None, 404),
     ]
 
     for method, path, payload, expected in checks:

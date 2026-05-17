@@ -64,6 +64,11 @@ def _portfolio_criteria_from_query(
         fields["min_equity_pct"] = min_equity_pct
     if not fields:
         return None
+    # Segment Intelligence treats omitted contactability as "Any"; the
+    # PortfolioCriteria default stays eligible-only for governed outreach and
+    # lead workflows.
+    if "marketing_eligibility" not in fields:
+        fields["marketing_eligibility"] = "Any"
     return PortfolioCriteria(**fields)
 
 
@@ -83,7 +88,7 @@ def list_segments(
     min_equity_pct: float | None = None,
     owner_link: str | None = None,
     purchase_intent: str | None = None,
-    marketing_eligibility: str = "Eligible only",
+    marketing_eligibility: str | None = None,
     consent_status: str | None = None,
     recency: str | None = None,
 ) -> list[SegmentSummary]:

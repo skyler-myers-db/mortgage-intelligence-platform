@@ -16,8 +16,9 @@ Usage:
   python tools/databricks/bundle_env.py plan     -t dev
   python tools/databricks/bundle_env.py deploy   -t dev
 
-Set ``MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS=1`` only for the Summit demo target.
-For any non-dev target, this wrapper refuses that flag unless
+The dev target defaults to Summit demo first-party feeds so the public demo
+keeps governed contactability / Lead Queue data after a refresh. For any
+non-dev target, this wrapper refuses that flag unless
 ``MIP_ALLOW_DEMO_FIRST_PARTY_IN_PROD=1`` is also set.
 """
 
@@ -83,6 +84,19 @@ def _demo_feeds_allowed_for_target(
     if target == "dev":
         return True
     return _truthy(env.get("MIP_ALLOW_DEMO_FIRST_PARTY_IN_PROD"))
+
+
+def _demo_first_party_flag_for_target(env: dict[str, str], *, target: str) -> str | None:
+    """Resolve the SQL render flag, mirroring scripts/deploy.sh.
+
+    A bare render remains fail-closed; this deployment wrapper is target-aware.
+    The Summit dev demo needs synthetic first-party feeds enabled so governed
+    lead/contactability surfaces are populated after each gold refresh.
+    """
+    raw = env.get("MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS")
+    if raw:
+        return raw
+    return "1" if target == "dev" else "0"
 
 
 def main() -> int:
@@ -161,7 +175,7 @@ def main() -> int:
     env["BUNDLE_VAR_uc_catalog"] = catalog
     try:
         demo_first_party_enabled = render_sql._parse_bool(
-            env.get("MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS"),
+            _demo_first_party_flag_for_target(env, target=target),
             default=False,
         )
     except ValueError as exc:

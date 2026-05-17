@@ -21,10 +21,9 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from backend.api import health as health_mod
 from backend.main import app
+from backend.services import health_probes, resilience
 from backend.services import observability as obs
-from backend.services import resilience
 
 client = TestClient(app)
 
@@ -204,9 +203,9 @@ def test_timed_dependency_emits_error_on_exception() -> None:
 def test_middleware_mints_correlation_id_when_absent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(health_mod, "_probe_warehouse", lambda: True)
-    monkeypatch.setattr(health_mod, "_probe_lakebase", lambda: True)
-    monkeypatch.setattr(health_mod, "_probe_genie", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_warehouse", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_lakebase", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_genie", lambda: True)
     res = client.get("/api/health")
     assert res.status_code == 200
     cid = res.headers.get("X-Correlation-ID")
@@ -219,15 +218,46 @@ def test_middleware_mints_correlation_id_when_absent(
 def test_middleware_echoes_client_correlation_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(health_mod, "_probe_warehouse", lambda: True)
-    monkeypatch.setattr(health_mod, "_probe_lakebase", lambda: True)
-    monkeypatch.setattr(health_mod, "_probe_genie", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_warehouse", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_lakebase", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_genie", lambda: True)
     res = client.get(
         "/api/health",
         headers={"X-Correlation-ID": "trace-abc-123"},
     )
     assert res.status_code == 200
     assert res.headers["X-Correlation-ID"] == "trace-abc-123"
+
+
+@pytest.mark.parametrize(
+    "unsafe_cid",
+    [
+        "555-212-3333",
+        "123-45-6789",
+        "trace123456789",
+        "trace1778869254",
+        "req_1778869254",
+        "abc555-212-3333xyz",
+        "abcB-102FL7THC6Q3Lxyz",
+        "xCL-123456789y",
+        "alice@example.com",
+        "B-0OXOBYLW8MNCK",
+        "CL-1234567890",
+    ],
+)
+def test_middleware_rejects_pii_shaped_correlation_id(
+    monkeypatch: pytest.MonkeyPatch,
+    unsafe_cid: str,
+) -> None:
+    monkeypatch.setattr(health_probes, "probe_warehouse", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_lakebase", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_genie", lambda: True)
+    res = client.get("/api/health", headers={"X-Correlation-ID": unsafe_cid})
+    assert res.status_code == 200
+    echoed = res.headers["X-Correlation-ID"]
+    assert echoed != unsafe_cid
+    assert len(echoed) == 32
+    assert all(c in "0123456789abcdef" for c in echoed)
 
 
 # ---------------------------------------------------------------------------
@@ -271,6 +301,8 @@ def test_http_request_log_uses_templated_route_path() -> None:
     for raw, expected in (
         ("/api/borrowers/B-00042", "/api/borrowers/{id}"),
         ("/api/borrowers/B-00042/evidence", "/api/borrowers/{id}/evidence"),
+        ("/api/borrowers/B-0OXOBYLW8MNCK", "/api/borrowers/{id}"),
+        ("/not-routed/B-102FL7THC6Q3L/evidence", "/not-routed/{id}/evidence"),
         ("/api/leads/12345678/evidence", "/api/leads/{id}/evidence"),
         ("/api/leads/CL-abc123", "/api/leads/{id}"),
         # Non-id segments are untouched.
@@ -289,9 +321,9 @@ def test_http_request_log_uses_templated_route_path() -> None:
 def test_health_exposes_observability_counters(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(health_mod, "_probe_warehouse", lambda: True)
-    monkeypatch.setattr(health_mod, "_probe_lakebase", lambda: True)
-    monkeypatch.setattr(health_mod, "_probe_genie", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_warehouse", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_lakebase", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_genie", lambda: True)
     obs._reset_counters_for_tests()
     obs.record_breaker_state_change(name="warehouse", from_state="closed", to_state="open")
     obs.record_error(dependency="warehouse", exc_type="DatabricksSqlError")
@@ -370,7 +402,8 @@ def test_emit_scrubs_secret_and_pii_shaped_string_values() -> None:
             exc_msg=(
                 "failed authorization=Bearer SECRET_TOKEN for B-102FL7THC6Q3L "
                 "clip CL-1234567890 email alice@example.com at 123 Main St "
-                "phone 555-212-3456 ssn 123-45-6789"
+                "phone 555-212-3456 ssn 123-45-6789 trace trace1778869254 "
+                "embedded abc555-212-3333xyz"
             ),
             last_error_str="api_key=SECRET_KEY url=https://user:pass@example.com/v1/logs",
         )
@@ -384,6 +417,8 @@ def test_emit_scrubs_secret_and_pii_shaped_string_values() -> None:
         assert "123 Main St" not in rendered
         assert "555-212-3456" not in rendered
         assert "123-45-6789" not in rendered
+        assert "trace1778869254" not in rendered
+        assert "abc555-212-3333xyz" not in rendered
         assert "user:pass" not in rendered
         assert record["exc_msg"].startswith("failed authorization=<redacted>")
     finally:
@@ -407,9 +442,9 @@ def test_health_exposes_counters_persistence_and_log_export(
     vs ``stdout-only``). If either key disappears we've broken the
     contract documented in docs/observability.md.
     """
-    monkeypatch.setattr(health_mod, "_probe_warehouse", lambda: True)
-    monkeypatch.setattr(health_mod, "_probe_lakebase", lambda: True)
-    monkeypatch.setattr(health_mod, "_probe_genie", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_warehouse", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_lakebase", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_genie", lambda: True)
     # R6-09/Tranche-1: `counters_persistence` + `log_export` diagnostic
     # fields are admin-only.
     res = client.get(
@@ -487,7 +522,7 @@ def test_configure_logging_logs_warning_when_otel_dep_missing(
         # At least one WARNING-level line referencing the endpoint.
         warning_lines = [json.loads(ln) for ln in lines if '"level":"WARNING"' in ln]
         assert any(
-            "127.0.0.1:9999" in (rec.get("message", "") or "") for rec in warning_lines
+            "127.0.0.1:9999" in (rec.get("endpoint", "") or "") for rec in warning_lines
         ), f"expected warning about missing opentelemetry wheel; saw {lines}"
         all_text = "\n".join(lines)
         assert "secret" not in all_text
@@ -667,9 +702,9 @@ def test_boot_smoke_with_otel_env_and_missing_wheel(
         # Must not raise.
         obs.configure_logging()
         # And the app's TestClient must still answer /api/health.
-        monkeypatch.setattr(health_mod, "_probe_warehouse", lambda: True)
-        monkeypatch.setattr(health_mod, "_probe_lakebase", lambda: True)
-        monkeypatch.setattr(health_mod, "_probe_genie", lambda: True)
+        monkeypatch.setattr(health_probes, "probe_warehouse", lambda: True)
+        monkeypatch.setattr(health_probes, "probe_lakebase", lambda: True)
+        monkeypatch.setattr(health_probes, "probe_genie", lambda: True)
         # R6-09/Tranche-1: `log_export` is only surfaced to admin callers.
         res = client.get(
             "/api/admin/health",

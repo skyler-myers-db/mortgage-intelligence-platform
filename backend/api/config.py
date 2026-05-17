@@ -1,9 +1,9 @@
 from fastapi import APIRouter
 
 from backend.config.settings import settings
+from backend.schemas._validators import normalize_public_lender_ref
 from backend.services.databricks_sql_helpers import qualify
 from backend.services.geography_scope import GeographyScope, load_geography_scope
-from backend.services.pii_redaction import normalize_public_lender_ref
 from backend.services.resilience import TTLCache
 from backend.services.state_footprint import get_state_footprint_resolver
 

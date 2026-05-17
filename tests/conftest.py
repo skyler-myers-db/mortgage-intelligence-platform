@@ -37,7 +37,6 @@ from backend.services.admin_rules import (
     get_admin_rules_service,
 )
 from backend.services.audit_store import (
-    InMemoryAuditStore,
     _reset_audit_store_for_tests,
     get_audit_store,
 )
@@ -62,10 +61,11 @@ from backend.services.repositories import (
 from backend.services.repositories.factory import _reset_singletons_for_tests
 from backend.services.resilience import _reset_breakers_for_tests
 from backend.services.workspace_store import (
-    InMemoryWorkspaceStore,
     _reset_workspace_store_for_tests,
     get_workspace_store,
 )
+from tests.fixtures.in_memory_audit_store import InMemoryAuditStore
+from tests.fixtures.in_memory_workspace_store import InMemoryWorkspaceStore
 from tests.fixtures.in_process_repos import (
     InProcessMockBorrowerRepository,
     InProcessMockGenieAnswerRepository,
@@ -88,9 +88,6 @@ class _FakeLakebaseClient:
     """
 
     def __init__(self) -> None:
-        self.executes: list[tuple[str, dict[str, Any]]] = []
-        self.fetchones: list[tuple[str, dict[str, Any]]] = []
-        self.fetchalls: list[tuple[str, dict[str, Any], int]] = []
         self.sales_team: list[dict[str, Any]] = [
             {
                 "email": "skyler@entrada.ai",
@@ -120,6 +117,12 @@ class _FakeLakebaseClient:
                 "active": True,
             },
         ]
+        self.reset_for_test()
+
+    def reset_for_test(self) -> None:
+        self.executes: list[tuple[str, dict[str, Any]]] = []
+        self.fetchones: list[tuple[str, dict[str, Any]]] = []
+        self.fetchalls: list[tuple[str, dict[str, Any], int]] = []
         self.assignments: list[dict[str, Any]] = []
         self.dispositions: list[dict[str, Any]] = []
         self.approvals: list[dict[str, Any]] = []
@@ -590,6 +593,16 @@ def _reset_runtime_singletons_for_tests() -> None:
     _reset_breakers_for_tests()
 
 
+def _reset_fake_dependency_state_for_tests() -> None:
+    factory = _BASE_DEPENDENCY_OVERRIDES.get(get_lakebase_client)
+    if factory is None:
+        return
+    client = factory()
+    reset = getattr(client, "reset_for_test", None)
+    if callable(reset):
+        reset()
+
+
 def _wrap_testclient_with_admin_headers() -> None:
     """One-shot wrap of ``TestClient.__init__`` applied at conftest load.
 
@@ -674,10 +687,12 @@ def _isolate_fastapi_dependency_state() -> Iterator[None]:
     # an earlier test may have accidentally left in the global dict.
     app.dependency_overrides.clear()
     app.dependency_overrides.update(_BASE_DEPENDENCY_OVERRIDES)
+    _reset_fake_dependency_state_for_tests()
     _reset_runtime_singletons_for_tests()
     try:
         yield
     finally:
         app.dependency_overrides.clear()
         app.dependency_overrides.update(_BASE_DEPENDENCY_OVERRIDES)
+        _reset_fake_dependency_state_for_tests()
         _reset_runtime_singletons_for_tests()

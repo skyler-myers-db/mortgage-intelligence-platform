@@ -19,7 +19,7 @@ class StateRollup(BaseModel):
     """One state's addressable + high-intent + top-tier count + avg score.
 
     ``state`` is the 2-char USPS code (uppercase) — the map component
-    lowercases it to match ``@svg-maps/usa`` location ids.
+    lowercases it to match the state topology location ids.
 
     Fields map 1:1 to ``funnel_snapshot_daily`` columns so the UI never
     has to re-aggregate: ``addressable`` is the borrower count for the

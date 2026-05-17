@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 
 from backend.main import app
 from backend.schemas.portfolio import PortfolioCriteria
-from backend.services.audit_store import InMemoryAuditStore, get_audit_store
+from backend.services.audit_store import get_audit_store
 from backend.services.databricks_sql import DatabricksSqlClient
 from backend.services.repositories import (
     get_geo_repository,
@@ -27,6 +27,7 @@ from backend.services.repositories.databricks_repo import (
     DatabricksLeadRepository,
     DatabricksPortfolioRepository,
 )
+from tests.fixtures.in_memory_audit_store import InMemoryAuditStore
 from tests.integration.test_gold_data_truth import _creds, _run_sql_rows
 
 

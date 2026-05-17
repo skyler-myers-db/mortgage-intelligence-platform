@@ -16,6 +16,7 @@ from typing import Any
 
 from fastapi.testclient import TestClient
 
+from backend.config.settings import settings
 from backend.main import app
 from backend.services.admin_rules import (
     AdminRulesService,
@@ -76,6 +77,15 @@ def test_get_rules_version_is_deterministic_hash_of_values() -> None:
     r1 = client.get("/api/admin/rules").json()
     r2 = client.get("/api/admin/rules").json()
     assert r1["offer_rules_version"] == r2["offer_rules_version"]
+
+
+def test_get_settings_exposes_runtime_configuration_for_admins() -> None:
+    response = client.get("/api/admin/settings")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["app_env"] == settings.app_env
+    assert body["lender_name"] == settings.mip_lender_name
+    assert body["catalog"] == settings.mip_default_catalog
 
 
 def test_get_rules_returns_503_on_dependency_down() -> None:

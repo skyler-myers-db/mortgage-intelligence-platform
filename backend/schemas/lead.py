@@ -4,9 +4,9 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
+from backend.schemas._validators import normalize_public_lender_ref
 from backend.schemas.common import EvidenceEvent
 from backend.schemas.why import WhyPanel
-from backend.services.pii_redaction import normalize_public_lender_ref
 
 SegmentCode = Literal["itm", "listed", "permit", "investor", "equity", "retention"]
 # Round-4 hole-finder R4-19: `hold` is a valid 4th state — jobs/sync_lifecycle_state.py

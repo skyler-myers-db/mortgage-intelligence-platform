@@ -15,6 +15,7 @@ from backend.schemas.offer import (
 )
 from backend.services.audit_store import AuditStore, get_audit_store, resolve_actor
 from backend.services.lakebase import LakebaseError
+from backend.services.observability import emit
 from backend.services.repositories import (
     BorrowerRepository,
     OfferRepository,
@@ -36,7 +37,15 @@ def _safe_audit_write(store: AuditStore, **kwargs: object) -> None:
     try:
         store.write(**kwargs)  # type: ignore[arg-type]
     except LakebaseError as exc:
-        log.warning("audit.write dropped: %s", exc)
+        emit(
+            log,
+            "audit_write_dropped",
+            level=logging.WARNING,
+            dependency="lakebase",
+            outcome="error",
+            exc_type=type(exc).__name__,
+            exc_msg=str(exc)[:500],
+        )
 
 # The eight codes ``fn_next_best_offer`` returns are all valid OfferType
 # literals. This cast is safe because NBO_PRODUCT_LABELS is the contract.

@@ -163,3 +163,14 @@ def test_dependency_down_handler_includes_correlation_id() -> None:
             del app.dependency_overrides[get_segment_repository]
         else:
             app.dependency_overrides[get_segment_repository] = previous
+
+
+def test_request_validation_error_body_includes_correlation_id() -> None:
+    """422 bodies should carry the trace id, not only the response header."""
+
+    res = client.get("/api/leads?limit=99999", headers={"X-Correlation-ID": "obs-422-test"})
+    assert res.status_code == 422
+    body = res.json()
+    assert "detail" in body
+    assert body["correlation_id"] == "obs-422-test"
+    assert res.headers["X-Correlation-ID"] == "obs-422-test"

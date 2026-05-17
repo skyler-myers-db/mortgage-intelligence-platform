@@ -24,6 +24,12 @@ def test_bundle_env_refuses_demo_feeds_for_non_dev_without_override() -> None:
 
     assert bundle_env._target_from_args(["-t", "prod"]) == "prod"
     assert bundle_env._target_from_args(["--target=customer"]) == "customer"
+    assert bundle_env._demo_first_party_flag_for_target({}, target="dev") == "1"
+    assert bundle_env._demo_first_party_flag_for_target({}, target="prod") == "0"
+    assert bundle_env._demo_first_party_flag_for_target(
+        {"MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS": "0"},
+        target="dev",
+    ) == "0"
     assert bundle_env._demo_feeds_allowed_for_target(
         target="dev",
         enabled=True,

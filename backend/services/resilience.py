@@ -203,7 +203,6 @@ class CircuitBreaker:
     def record_success(self) -> None:
         with self._lock:
             if self._state == self.HALF_OPEN:
-                log.info("circuit_breaker[%s]: HALF_OPEN -> CLOSED on success", self._name)
                 emit(
                     log,
                     "circuit_breaker_state_change",
@@ -231,12 +230,6 @@ class CircuitBreaker:
         with self._lock:
             if self._state == self.HALF_OPEN:
                 # One failed probe re-opens and restarts the cool-down.
-                log.warning(
-                    "circuit_breaker[%s]: HALF_OPEN probe failed, "
-                    "re-opening for %.1fs",
-                    self._name,
-                    self._cooldown_s,
-                )
                 emit(
                     log,
                     "circuit_breaker_state_change",
@@ -263,11 +256,6 @@ class CircuitBreaker:
             # CLOSED
             self._failure_count += 1
             if self._failure_count >= self._failure_threshold:
-                log.warning(
-                    "circuit_breaker[%s]: CLOSED -> OPEN after %d failures",
-                    self._name,
-                    self._failure_count,
-                )
                 emit(
                     log,
                     "circuit_breaker_state_change",
@@ -338,11 +326,6 @@ class CircuitBreaker:
         with self._lock:
             if self._state == self.CLOSED:
                 return False
-            log.info(
-                "circuit_breaker[%s]: config-changed close (was %s)",
-                self._name,
-                self._state,
-            )
             emit(
                 log,
                 "circuit_breaker_state_change",
@@ -598,7 +581,7 @@ _SWR_EXECUTOR_LOCK = Lock()
 
 # Per-probe ceiling: the SWR background worker wraps each probe in a
 # ``Thread.join(timeout=_SWR_PROBE_TIMEOUT_S)``. Matches
-# ``backend/api/health.py::_PROBE_TIMEOUT_S`` so the async refresh path has
+# ``backend/services/health_probes.py::_PROBE_TIMEOUT_S`` so the async refresh path has
 # the same latency ceiling as the sync-miss path. A probe that exceeds this
 # is a TCP black hole: we clear the in-flight flag so the slot frees up,
 # log ``event=swr_probe_timeout``, and let the orphaned daemon thread die

@@ -39,7 +39,7 @@ test.describe('Module 0 — golden path', () => {
     await expectKpiValue(page, 'Offers recommended', '6,250');
 
     // Slice 9: assert Illinois since it's the anchor metro for the county
-    // drill (Chicago/Cook County). @svg-maps/usa ships aria-labels for every
+    // drill (Chicago/Cook County). State topology ships aria-labels for every
     // state; picking IL aligns the test with the product narrative.
     await expect(page.locator('[aria-label="Illinois"]').first()).toBeVisible({ timeout: 5_000 });
     await expect(page.locator('.surface', { hasText: /agent|activity/i }).first()).toBeVisible();

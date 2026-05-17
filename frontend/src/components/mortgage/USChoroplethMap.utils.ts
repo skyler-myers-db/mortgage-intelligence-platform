@@ -1,7 +1,9 @@
 import type { Feature, FeatureCollection, Geometry } from 'geojson';
 import type { CountyRollup } from '../../types';
 
-// Shape of the @svg-maps/usa default export (see vite-env.d.ts).
+// Shared shape consumed by the state-level map renderers. The payload is
+// built from us-atlas state TopoJSON, keeping IDs in the existing lowercase
+// USPS format so rollup lookups and drill links do not change.
 export interface UsaSvgMapLocation { name: string; id: string; path: string }
 export interface UsaSvgMap { label: string; viewBox: string; locations: UsaSvgMapLocation[] }
 
@@ -17,6 +19,64 @@ export const USCODE_TO_FIPS: Record<string, string> = {
   tx: '48', ut: '49', vt: '50', va: '51', wa: '53', wv: '54', wi: '55',
   wy: '56',
 };
+
+export const FIPS_TO_USCODE: Record<string, string> = Object.fromEntries(
+  Object.entries(USCODE_TO_FIPS).map(([code, fips]) => [fips, code]),
+);
+
+function stateDisplayName(name: string, code: string): string {
+  if (code === 'dc') return 'Washington, DC';
+  return name;
+}
+
+/** Convert us-atlas state features into the map payload used by the UI. */
+export function buildUsaStateMapPayload(fc: FeatureCollection, pad = 0): UsaSvgMap {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  const locations: UsaSvgMapLocation[] = [];
+
+  for (const feature of fc.features) {
+    const fips = String(feature.id ?? '').padStart(2, '0');
+    const code = FIPS_TO_USCODE[fips];
+    if (!code || !feature.geometry) continue;
+    const path = geometryToPath(feature.geometry);
+    if (!path) continue;
+    const [x0, y0, x1, y1] = featureBBox(feature);
+    if (!Number.isFinite(x0) || !Number.isFinite(y0) || !Number.isFinite(x1) || !Number.isFinite(y1)) {
+      continue;
+    }
+    if (x0 < minX) minX = x0;
+    if (y0 < minY) minY = y0;
+    if (x1 > maxX) maxX = x1;
+    if (y1 > maxY) maxY = y1;
+    const rawName = (feature.properties as { name?: string } | null)?.name ?? code.toUpperCase();
+    locations.push({
+      id: code,
+      name: stateDisplayName(rawName, code),
+      path,
+    });
+  }
+
+  locations.sort((a, b) => a.id.localeCompare(b.id));
+  if (locations.length === 0) {
+    return {
+      label: 'United States',
+      viewBox: '0 0 1 1',
+      locations: [],
+    };
+  }
+  const vx = minX - pad;
+  const vy = minY - pad;
+  const vw = maxX - minX + pad * 2;
+  const vh = maxY - minY + pad * 2;
+  return {
+    label: 'United States',
+    viewBox: `${vx.toFixed(1)} ${vy.toFixed(1)} ${vw.toFixed(1)} ${vh.toFixed(1)}`,
+    locations,
+  };
+}
 
 /** Fixed-threshold fallback used only when no distribution is available. */
 export function lvlFromCount(count: number | null | undefined): 1 | 2 | 3 | 4 {

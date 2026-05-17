@@ -1,0 +1,881 @@
+"""Governed Genie action confirmation and persistence helpers."""
+from __future__ import annotations
+
+import base64
+import hashlib
+import hmac
+import json
+import re
+import secrets
+import time
+from typing import Any
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from uuid import uuid4
+
+from fastapi import HTTPException
+
+from backend.config.settings import settings
+from backend.schemas._validators import normalize_public_lender_ref
+from backend.schemas.common import validate_public_borrower_id
+from backend.schemas.portfolio import PortfolioCriteria
+from backend.services.audit_store import (
+    _assert_allowlisted,
+    _assert_no_pii,
+    _assert_public_safe_values,
+    _sanitize_metadata,
+)
+from backend.services.error_sanitizer import safe_dependency_detail
+from backend.services.genie_answers import (
+    GenieActionRequest,
+    GenieActionResponse,
+    GenieMessageResponse,
+)
+from backend.services.genie_trusted_assets import trusted_assets
+from backend.services.lakebase import LakebaseClient, LakebaseError
+from backend.services.observability import get_correlation_id
+from backend.services.workspace_store import WorkspaceStore
+
+_ALLOWED_ACTION_TYPES = frozenset(
+    {
+        "open_cohort",
+        "save_borrowers",
+        "create_draft_campaign",
+        "compare_offer_strategies",
+        "show_rationale",
+    }
+)
+
+_ACTION_TOKEN_TTL_S = 2 * 60 * 60
+_PROCESS_ACTION_SECRET = secrets.token_urlsafe(32)
+_MAX_ACTION_FILTER_VALUES = 500
+_MAX_ACTION_STATE_VALUES = 56
+
+_CAMPAIGN_INSERT_SQL = """
+WITH existing_audit AS (
+  SELECT audit_id, entity_id, metadata
+  FROM mip_app.action_audit
+  WHERE actor_email = %(owner_email)s
+    AND request_id = %(request_id)s
+    AND event_type = 'GENIE_ACTION_CREATE_DRAFT_CAMPAIGN'
+  LIMIT 1
+),
+inserted_campaign AS (
+  INSERT INTO mip_app.campaigns (name, owner_email, status, criteria)
+  SELECT
+    %(name)s,
+    %(owner_email)s,
+    'draft',
+    %(criteria)s::jsonb
+  WHERE NOT EXISTS (SELECT 1 FROM existing_audit)
+  RETURNING campaign_id
+),
+inserted_audit AS (
+  INSERT INTO mip_app.action_audit (
+    event_type, actor_email, entity_type, entity_id,
+    request_id, correlation_id, evidence_ids, metadata
+  )
+  SELECT
+    'GENIE_ACTION_CREATE_DRAFT_CAMPAIGN',
+    %(owner_email)s,
+    'campaign',
+    inserted_campaign.campaign_id::text,
+    %(request_id)s,
+    %(correlation_id)s,
+    ARRAY[]::TEXT[],
+    jsonb_set(
+      %(metadata)s::jsonb,
+      '{campaign_id}',
+      to_jsonb(inserted_campaign.campaign_id::text),
+      true
+    )
+  FROM inserted_campaign
+  ON CONFLICT (actor_email, request_id, event_type)
+    WHERE request_id IS NOT NULL AND left(event_type, 13) = 'GENIE_ACTION_'
+    DO NOTHING
+  RETURNING audit_id, entity_id, metadata
+)
+SELECT
+  COALESCE(
+    NULLIF((SELECT entity_id FROM inserted_audit), ''),
+    NULLIF((SELECT entity_id FROM existing_audit), ''),
+    NULLIF((SELECT metadata ->> 'campaign_id' FROM existing_audit), '')
+  ) AS campaign_id,
+  COALESCE(
+    (SELECT audit_id FROM inserted_audit),
+    (SELECT audit_id FROM existing_audit)
+  ) AS audit_id
+"""
+
+_ACTION_AUDIT_BY_REQUEST_ID_SQL = """
+SELECT audit_id, event_type, entity_id, metadata
+FROM mip_app.action_audit
+WHERE request_id = %(request_id)s
+  AND actor_email = %(actor_email)s
+  AND event_type = %(event_type)s
+  AND metadata ->> 'action_type' = %(action_type)s
+ORDER BY event_at DESC
+LIMIT 1
+"""
+
+_GENIE_ACTION_AUDIT_INSERT_SQL = """
+WITH inserted_audit AS (
+  INSERT INTO mip_app.action_audit (
+    event_type, actor_email, entity_type, entity_id,
+    request_id, correlation_id, evidence_ids, metadata
+  ) VALUES (
+    %(event_type)s,
+    %(actor_email)s,
+    'genie_action',
+    %(entity_id)s,
+    %(request_id)s,
+    %(correlation_id)s,
+    ARRAY[]::TEXT[],
+    %(metadata)s::jsonb
+  )
+  ON CONFLICT (actor_email, request_id, event_type)
+    WHERE request_id IS NOT NULL AND left(event_type, 13) = 'GENIE_ACTION_'
+    DO NOTHING
+  RETURNING audit_id, entity_id, metadata
+),
+existing_audit AS (
+  SELECT audit_id, entity_id, metadata
+  FROM mip_app.action_audit
+  WHERE actor_email = %(actor_email)s
+    AND request_id = %(request_id)s
+    AND event_type = %(event_type)s
+    AND NOT EXISTS (SELECT 1 FROM inserted_audit)
+  LIMIT 1
+)
+SELECT audit_id, entity_id, metadata
+FROM inserted_audit
+UNION ALL
+SELECT audit_id, entity_id, metadata
+FROM existing_audit
+LIMIT 1
+"""
+
+_GENIE_COHORT_INSERT_SQL = """
+WITH inserted_cohort AS (
+  INSERT INTO mip_app.genie_cohorts (
+    actor_email, request_id, conversation_id, message_id, question_hash,
+    route_filters, source_assets, sql_hash, row_count
+  ) VALUES (
+    %(actor_email)s,
+    %(request_id)s,
+    %(conversation_id)s,
+    %(message_id)s,
+    %(question_hash)s,
+    %(route_filters)s::jsonb,
+    %(source_assets)s,
+    %(sql_hash)s,
+    %(row_count)s
+  )
+  ON CONFLICT (actor_email, request_id) DO NOTHING
+  RETURNING cohort_id
+),
+existing_cohort AS (
+  SELECT cohort_id
+  FROM mip_app.genie_cohorts
+  WHERE actor_email = %(actor_email)s
+    AND request_id = %(request_id)s
+    AND NOT EXISTS (SELECT 1 FROM inserted_cohort)
+  LIMIT 1
+)
+SELECT cohort_id FROM inserted_cohort
+UNION ALL
+SELECT cohort_id FROM existing_cohort
+LIMIT 1
+"""
+
+_GENIE_COHORT_MEMBER_INSERT_SQL = """
+INSERT INTO mip_app.genie_cohort_members (cohort_id, borrower_id, rank_order)
+VALUES (%(cohort_id)s, %(borrower_id)s, %(rank_order)s)
+ON CONFLICT (cohort_id, borrower_id) DO UPDATE SET
+  rank_order = LEAST(mip_app.genie_cohort_members.rank_order, EXCLUDED.rank_order)
+"""
+
+
+def borrower_ids(ids: list[str]) -> list[str]:
+    out: list[str] = []
+    for value in ids:
+        try:
+            borrower_id = validate_public_borrower_id(str(value))
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail="Genie action includes invalid borrower id",
+            ) from exc
+        if borrower_id not in out:
+            out.append(borrower_id)
+    if len(out) > _MAX_ACTION_FILTER_VALUES:
+        raise HTTPException(
+            status_code=400,
+            detail="Genie action returned too many borrower filters to replay safely",
+        )
+    return out
+
+
+def _genie_event_type(action_type: str) -> str:
+    return f"GENIE_ACTION_{action_type.upper()}"
+
+
+def _reviewed_audit_metadata(action: str, payload: dict[str, Any]) -> str:
+    metadata = _sanitize_metadata({"action": action, **payload})
+    _assert_no_pii(metadata)
+    _assert_allowlisted(metadata)
+    _assert_public_safe_values(metadata)
+    return json.dumps(metadata)
+
+
+def criteria_summary(criteria: dict[str, Any]) -> tuple[str, list[str], list[str], str | None]:
+    """Return the audited digest for reviewed Genie action criteria."""
+
+    source_assets = _validated_source_assets(criteria)
+    criteria_keys = sorted(str(k) for k in criteria)
+    canonical_payload = {
+        str(k): criteria[k]
+        for k in sorted(criteria, key=lambda value: str(value))
+    }
+    canonical = json.dumps(
+        canonical_payload,
+        sort_keys=True,
+        default=str,
+        separators=(",", ":"),
+    )
+    criteria_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+    visualization_kind = criteria.get("visualization_kind")
+    return (
+        criteria_hash,
+        criteria_keys,
+        source_assets,
+        str(visualization_kind) if visualization_kind else None,
+    )
+
+
+def _validated_source_assets(criteria: dict[str, Any]) -> list[str]:
+    assets = [str(v) for v in criteria.get("source_assets", []) if isinstance(v, str)]
+    trusted = set(trusted_assets())
+    invalid = [asset for asset in assets if asset not in trusted]
+    if invalid:
+        raise HTTPException(status_code=400, detail="Genie action includes untrusted source assets")
+    return assets[:10]
+
+
+def _action_token_secret() -> bytes:
+    configured = settings.mip_genie_action_secret
+    if configured is not None:
+        value = configured.get_secret_value().strip()
+        if value:
+            return value.encode("utf-8")
+    return _PROCESS_ACTION_SECRET.encode("utf-8")
+
+
+def _b64url_encode(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _b64url_decode(value: str) -> bytes:
+    padded = value + ("=" * (-len(value) % 4))
+    return base64.urlsafe_b64decode(padded.encode("ascii"))
+
+
+def _action_token_claims(
+    *,
+    actor: str,
+    action_type: str,
+    borrower_ids: list[str],
+    criteria: dict[str, Any],
+    route: str | None,
+    conversation_id: str | None,
+    message_id: str | None,
+    question_hash: str | None,
+    request_id: str,
+    expires_at: int,
+    nonce: str,
+) -> dict[str, Any]:
+    criteria_hash, _criteria_keys, source_assets, _visualization_kind = criteria_summary(criteria)
+    return {
+        "v": 1,
+        "actor": actor,
+        "action_type": action_type,
+        "borrower_ids": sorted(set(borrower_ids)),
+        "conversation_id": conversation_id or "",
+        "criteria_hash": criteria_hash,
+        "exp": expires_at,
+        "message_id": message_id or "",
+        "nonce": nonce,
+        "question_hash": question_hash or "",
+        "request_id": request_id,
+        "route": route or "",
+        "trusted_assets": sorted(set(source_assets)),
+    }
+
+
+def _sign_action_claims(claims: dict[str, Any]) -> str:
+    canonical = json.dumps(claims, sort_keys=True, separators=(",", ":"), default=str)
+    body = _b64url_encode(canonical.encode("utf-8"))
+    sig = hmac.new(
+        _action_token_secret(),
+        body.encode("ascii"),
+        hashlib.sha256,
+    ).digest()
+    return f"{body}.{_b64url_encode(sig)}"
+
+
+def issue_response_action_tokens(
+    response: GenieMessageResponse,
+    *,
+    actor: str,
+) -> None:
+    for action in response.actions:
+        expires_at = int(time.time()) + _ACTION_TOKEN_TTL_S
+        request_id = action.request_id or f"genie-action-{uuid4()}"
+        action.request_id = request_id
+        claims = _action_token_claims(
+            actor=actor,
+            action_type=action.action_type,
+            borrower_ids=borrower_ids(action.borrower_ids),
+            criteria=action.criteria,
+            route=action.route,
+            conversation_id=response.conversation_id,
+            message_id=response.message_id,
+            question_hash=response.question_hash,
+            request_id=request_id,
+            expires_at=expires_at,
+            nonce=secrets.token_urlsafe(12),
+        )
+        action.confirmation_token = _sign_action_claims(claims)
+
+
+def _decode_action_token(token: str) -> dict[str, Any]:
+    try:
+        body, supplied_sig = token.split(".", 1)
+        expected_sig = hmac.new(
+            _action_token_secret(),
+            body.encode("ascii"),
+            hashlib.sha256,
+        ).digest()
+        actual_sig = _b64url_decode(supplied_sig)
+        if not hmac.compare_digest(actual_sig, expected_sig):
+            raise ValueError("bad signature")
+        claims = json.loads(_b64url_decode(body).decode("utf-8"))
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="Genie action confirmation token is invalid",
+        ) from exc
+    if not isinstance(claims, dict):
+        raise HTTPException(status_code=400, detail="Genie action confirmation token is invalid")
+    return claims
+
+
+def _lookup_existing_genie_action(
+    lakebase: LakebaseClient,
+    *,
+    request_id: str | None,
+    actor: str,
+    action_type: str,
+) -> GenieActionResponse | None:
+    """Return the prior result for a replayed Genie action request."""
+
+    if not request_id:
+        return None
+    try:
+        row = lakebase.fetchone(
+            _ACTION_AUDIT_BY_REQUEST_ID_SQL,
+            {
+                "request_id": request_id,
+                "actor_email": actor,
+                "event_type": _genie_event_type(action_type),
+                "action_type": action_type,
+            },
+        )
+    except LakebaseError:
+        return None
+    if row is None or "metadata" not in row:
+        return None
+    metadata = row.get("metadata") or {}
+    if isinstance(metadata, str):
+        try:
+            metadata = json.loads(metadata)
+        except json.JSONDecodeError:
+            metadata = {}
+    if not isinstance(metadata, dict):
+        metadata = {}
+    campaign_id = metadata.get("campaign_id")
+    if not campaign_id and action_type == "create_draft_campaign":
+        campaign_id = row.get("entity_id")
+    saved_count = metadata.get("saved_count")
+    try:
+        parsed_saved_count = int(saved_count or 0)
+    except (TypeError, ValueError):
+        parsed_saved_count = 0
+    return GenieActionResponse(
+        ok=True,
+        action_type=action_type,
+        audit_event_id=str(row.get("audit_id") or ""),
+        route=str(metadata.get("route") or "") or None,
+        saved_count=parsed_saved_count,
+        campaign_id=str(campaign_id) if campaign_id else None,
+        message="Genie action was already recorded for this request.",
+    )
+
+
+def _validate_action_confirmation(payload: GenieActionRequest, *, actor: str) -> dict[str, Any]:
+    if not payload.confirmed:
+        raise HTTPException(status_code=400, detail="Genie action requires explicit confirmation")
+    if not payload.confirmation_token:
+        raise HTTPException(status_code=400, detail="Genie action confirmation token is invalid")
+    claims = _decode_action_token(payload.confirmation_token)
+    if claims.get("exp") is None:
+        raise HTTPException(status_code=400, detail="Genie action confirmation token is invalid")
+    try:
+        expires_at = int(claims["exp"])
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="Genie action confirmation token is invalid",
+        ) from exc
+    if expires_at < int(time.time()):
+        raise HTTPException(status_code=400, detail="Genie action confirmation token expired")
+    token_request_id = str(claims.get("request_id") or "")
+    if not token_request_id:
+        raise HTTPException(status_code=400, detail="Genie action confirmation token is invalid")
+    if payload.request_id != token_request_id:
+        raise HTTPException(status_code=400, detail="Genie action confirmation token is invalid")
+    expected_claims = _action_token_claims(
+        actor=actor,
+        action_type=payload.action_type,
+        borrower_ids=borrower_ids(payload.borrower_ids),
+        criteria=payload.criteria,
+        route=payload.route,
+        conversation_id=payload.conversation_id,
+        message_id=payload.message_id,
+        question_hash=payload.question_hash,
+        request_id=token_request_id,
+        expires_at=expires_at,
+        nonce=str(claims.get("nonce") or ""),
+    )
+    for key, expected_value in expected_claims.items():
+        if claims.get(key) != expected_value:
+            raise HTTPException(status_code=400, detail="Genie action confirmation token is invalid")
+    if claims.get("v") != 1 or not claims.get("nonce"):
+        raise HTTPException(status_code=400, detail="Genie action confirmation token is invalid")
+    return claims
+
+
+def _audit_payload(payload: GenieActionRequest, *, saved_count: int = 0, campaign_id: str | None = None) -> dict[str, Any]:
+    criteria_hash, criteria_keys, source_assets, visualization_kind = criteria_summary(payload.criteria)
+    rendered_borrower_ids = borrower_ids(payload.borrower_ids)
+    out: dict[str, Any] = {
+        "action_type": payload.action_type,
+        "conversation_id": payload.conversation_id,
+        "message_id": payload.message_id,
+        "question_hash": payload.question_hash,
+        "rendered_borrower_ids": rendered_borrower_ids,
+        "row_count": int(payload.criteria.get("row_count") or len(rendered_borrower_ids) or 0),
+        "saved_count": saved_count,
+        "campaign_id": campaign_id,
+        "source": str(payload.criteria.get("source") or "genie"),
+        "criteria_hash": criteria_hash,
+        "criteria_keys": criteria_keys,
+        "source_assets": source_assets,
+        "visualization_kind": visualization_kind,
+        "route": payload.route,
+    }
+    result_filters = _cohort_route_filters(payload, [])
+    if result_filters:
+        out["result_filters"] = result_filters
+    sql_hash = payload.criteria.get("sql_hash")
+    if sql_hash:
+        out["sql_hash"] = str(sql_hash)
+    return out
+
+
+def _campaign_criteria(payload: GenieActionRequest) -> dict[str, Any]:
+    payload_borrower_ids = borrower_ids(payload.borrower_ids)
+    criteria_hash, criteria_keys, source_assets, visualization_kind = criteria_summary(payload.criteria)
+    out: dict[str, Any] = {
+        "source": str(payload.criteria.get("source") or "genie"),
+        "borrower_ids": payload_borrower_ids,
+        "criteria_hash": criteria_hash,
+        "criteria_keys": criteria_keys,
+        "source_assets": source_assets,
+        "visualization_kind": visualization_kind,
+        "conversation_id": payload.conversation_id,
+        "message_id": payload.message_id,
+        "question_hash": payload.question_hash,
+        "row_count": int(payload.criteria.get("row_count") or len(payload_borrower_ids) or 0),
+        "route": payload.route,
+    }
+    result_filters = _cohort_route_filters(payload, [])
+    if result_filters:
+        out["result_filters"] = result_filters
+    sql_hash = payload.criteria.get("sql_hash")
+    if sql_hash:
+        out["sql_hash"] = str(sql_hash)
+    return out
+
+
+def _list_filter(
+    raw: Any,
+    *,
+    field: str,
+    max_items: int,
+    pattern: re.Pattern[str],
+) -> list[str]:
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Genie cohort {field} filter must be a reviewed list",
+        )
+    out: list[str] = []
+    for item in raw:
+        value = str(item).strip()
+        if not pattern.fullmatch(value):
+            raise HTTPException(
+                status_code=400,
+                detail="Genie cohort includes invalid replay filter",
+            )
+        value = value.upper() if pattern.pattern != r"^\d{5}$" else value
+        if value not in out:
+            if len(out) >= max_items:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Genie cohort includes too many replay filters",
+                )
+            out.append(value)
+    return out
+
+
+def _cohort_route_filters(payload: GenieActionRequest, payload_borrower_ids: list[str]) -> dict[str, Any]:
+    """Return the reviewed, lead-queue-replayable filter subset."""
+
+    filters_raw = payload.criteria.get("result_filters")
+    if filters_raw is not None and not isinstance(filters_raw, dict):
+        raise HTTPException(
+            status_code=400,
+            detail="Genie cohort result_filters must be a reviewed object",
+        )
+    filters = filters_raw if isinstance(filters_raw, dict) else {}
+    out: dict[str, Any] = {}
+    source = str(payload.criteria.get("source") or "genie")
+
+    zips = _list_filter(
+        filters.get("zips"),
+        field="zips",
+        max_items=_MAX_ACTION_FILTER_VALUES,
+        pattern=re.compile(r"^\d{5}$"),
+    )
+    if zips:
+        out["zips"] = zips
+    county_raw = str(filters.get("county") or "").strip()
+    if county_raw:
+        if not re.fullmatch(r"^\d{5}$", county_raw):
+            raise HTTPException(
+                status_code=400,
+                detail="Genie cohort includes invalid county filter",
+            )
+        out["county"] = county_raw
+    counties = _list_filter(
+        filters.get("counties"),
+        field="counties",
+        max_items=_MAX_ACTION_FILTER_VALUES,
+        pattern=re.compile(r"^\d{5}$"),
+    )
+    if counties:
+        out["counties"] = counties
+    states = _list_filter(
+        filters.get("states"),
+        field="states",
+        max_items=_MAX_ACTION_STATE_VALUES,
+        pattern=re.compile(r"^[A-Za-z]{2}$"),
+    )
+    if states:
+        out["states"] = states
+    segment_codes = _list_filter(
+        filters.get("segment_codes"),
+        field="segment_codes",
+        max_items=6,
+        pattern=re.compile(r"^(itm|listed|permit|investor|equity|retention)$", re.IGNORECASE),
+    )
+    if segment_codes:
+        out["segment_codes"] = [s.lower() for s in segment_codes]
+        mode = str(filters.get("segment_mode") or "any").lower()
+        if mode not in {"any", "all"}:
+            raise HTTPException(
+                status_code=400,
+                detail="Genie cohort includes invalid segment mode",
+            )
+        out["segment_mode"] = mode
+    target_lender_ref = str(filters.get("target_lender_ref") or "").strip()
+    if target_lender_ref:
+        try:
+            target_lender_ref = normalize_public_lender_ref(
+                target_lender_ref,
+                allow_all=True,
+            ) or ""
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail="Genie cohort includes unsafe lender alias",
+            ) from exc
+    if target_lender_ref and target_lender_ref != "All":
+        out["target_lender_ref"] = target_lender_ref
+
+    portfolio_raw = filters.get("portfolio_criteria")
+    if portfolio_raw is None:
+        portfolio_raw = payload.criteria.get("portfolio_criteria")
+    if portfolio_raw is not None and not isinstance(portfolio_raw, dict):
+        raise HTTPException(
+            status_code=400,
+            detail="Genie cohort includes unreviewed portfolio criteria",
+        )
+    if isinstance(portfolio_raw, dict):
+        try:
+            portfolio_model = PortfolioCriteria(**portfolio_raw)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail="Genie cohort includes unreviewed portfolio criteria",
+            ) from exc
+        if not portfolio_model.has_effective_predicate(count_default_marketing=False):
+            raise HTTPException(
+                status_code=400,
+                detail="Genie cohort includes unreviewed portfolio criteria",
+            )
+        portfolio_criteria = portfolio_model.model_dump(exclude_none=True)
+        if portfolio_criteria:
+            out["portfolio_criteria"] = portfolio_criteria
+
+    if payload_borrower_ids:
+        out["borrower_ids"] = payload_borrower_ids
+    if out and source in {"genie", "trusted_sql"}:
+        out["source"] = source
+    _assert_no_pii(out)
+    _assert_allowlisted({"result_filters": out})
+    return out
+
+
+def _route_with_cohort(
+    route: str | None,
+    *,
+    cohort_id: str,
+    filters: dict[str, Any],
+) -> str:
+    base = route or "/lead-queue"
+    parts = urlsplit(base)
+    path = parts.path or "/lead-queue"
+    if path != "/lead-queue":
+        path = "/lead-queue"
+    query = dict(parse_qsl(parts.query, keep_blank_values=False))
+    for key in ("zips", "states", "counties", "segment_codes", "borrower_ids"):
+        values = filters.get(key)
+        if isinstance(values, list) and values:
+            query[key] = ",".join(str(v) for v in values)
+    if "county" in filters:
+        query["county"] = str(filters["county"])
+    if "segment_mode" in filters:
+        query["segment_mode"] = str(filters["segment_mode"])
+    if "target_lender_ref" in filters:
+        query["target_lender_ref"] = str(filters["target_lender_ref"])
+    query["cohort_id"] = cohort_id
+    return urlunsplit(("", "", path, urlencode(query), ""))
+
+
+def _materialize_genie_cohort(
+    lakebase: LakebaseClient,
+    *,
+    actor: str,
+    request_id: str,
+    payload: GenieActionRequest,
+    payload_borrower_ids: list[str],
+) -> tuple[str, dict[str, Any]]:
+    route_filters = _cohort_route_filters(payload, payload_borrower_ids)
+    if not route_filters:
+        raise HTTPException(
+            status_code=400,
+            detail="Genie cohort action has no replayable lead filters",
+        )
+    criteria_hash, _criteria_keys, source_assets, _visualization_kind = criteria_summary(payload.criteria)
+    _ = criteria_hash
+    row = lakebase.fetchone(
+        _GENIE_COHORT_INSERT_SQL,
+        {
+            "actor_email": actor,
+            "request_id": request_id,
+            "conversation_id": payload.conversation_id,
+            "message_id": payload.message_id,
+            "question_hash": payload.question_hash,
+            "route_filters": json.dumps(route_filters, sort_keys=True),
+            "source_assets": source_assets,
+            "sql_hash": str(payload.criteria.get("sql_hash") or "") or None,
+            "row_count": int(payload.criteria.get("row_count") or len(payload_borrower_ids) or 0),
+        },
+    )
+    if row is None or not row.get("cohort_id"):
+        raise LakebaseError("genie cohort insert returned no row")
+    cohort_id = str(row["cohort_id"])
+    if payload_borrower_ids:
+        lakebase.executemany(
+            _GENIE_COHORT_MEMBER_INSERT_SQL,
+            [
+                {
+                    "cohort_id": cohort_id,
+                    "borrower_id": borrower_id,
+                    "rank_order": rank,
+                }
+                for rank, borrower_id in enumerate(payload_borrower_ids, start=1)
+            ],
+        )
+    return cohort_id, route_filters
+
+
+def handle_genie_action(
+    payload: GenieActionRequest,
+    *,
+    actor: str,
+    workspace: WorkspaceStore,
+    lakebase: LakebaseClient,
+) -> GenieActionResponse:
+    payload_borrower_ids = borrower_ids(payload.borrower_ids)
+    action_type = payload.action_type
+    if action_type not in _ALLOWED_ACTION_TYPES:
+        raise HTTPException(status_code=400, detail="unsupported Genie action")
+    claims = _validate_action_confirmation(payload, actor=actor)
+    request_id = str(claims["request_id"])
+    existing = _lookup_existing_genie_action(
+        lakebase,
+        request_id=request_id,
+        actor=actor,
+        action_type=action_type,
+    )
+    if existing is not None:
+        return existing
+
+    try:
+        if action_type == "save_borrowers":
+            audit_metadata = _audit_payload(payload, saved_count=len(payload_borrower_ids))
+            saved, audit_event_id = workspace.save_leads_from_genie_action(
+                actor=actor,
+                borrower_ids=payload_borrower_ids,
+                request_id=request_id,
+                entity_id=payload.message_id or payload.conversation_id or request_id,
+                metadata=audit_metadata,
+            )
+            return GenieActionResponse(
+                ok=True,
+                action_type=action_type,
+                audit_event_id=audit_event_id,
+                route=payload.route,
+                saved_count=saved,
+                message=f"Saved {saved} borrower{'' if saved == 1 else 's'} to the governed workspace.",
+            )
+
+        if action_type == "open_cohort":
+            cohort_id, route_filters = _materialize_genie_cohort(
+                lakebase,
+                actor=actor,
+                request_id=request_id,
+                payload=payload,
+                payload_borrower_ids=payload_borrower_ids,
+            )
+            route = _route_with_cohort(payload.route, cohort_id=cohort_id, filters=route_filters)
+            metadata = {
+                **_audit_payload(payload),
+                "cohort_id": cohort_id,
+                "route": route,
+                "result_filters": route_filters,
+            }
+            row = lakebase.fetchone(
+                _GENIE_ACTION_AUDIT_INSERT_SQL,
+                {
+                    "event_type": _genie_event_type(action_type),
+                    "actor_email": actor,
+                    "entity_id": cohort_id,
+                    "request_id": request_id,
+                    "correlation_id": get_correlation_id(),
+                    "metadata": _reviewed_audit_metadata(
+                        "genie.open_cohort",
+                        metadata,
+                    ),
+                },
+            )
+            if row is None:
+                raise LakebaseError("genie cohort action audit insert returned no row")
+            return GenieActionResponse(
+                ok=True,
+                action_type=action_type,
+                audit_event_id=str(row.get("audit_id") or ""),
+                route=route,
+                saved_count=0,
+                message="Opened a Lakebase-governed cohort in the lead queue.",
+            )
+
+        if action_type == "create_draft_campaign":
+            campaign_payload = _campaign_criteria(payload)
+            if not campaign_payload.get("borrower_ids") and not campaign_payload.get("result_filters"):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Genie campaign action has no replayable lead filters",
+                )
+            metadata = {
+                **_audit_payload(payload),
+            }
+            row = lakebase.fetchone(
+                _CAMPAIGN_INSERT_SQL,
+                {
+                    "name": "Genie strategy draft",
+                    "owner_email": actor,
+                    "criteria": json.dumps(campaign_payload),
+                    "request_id": request_id,
+                    "correlation_id": get_correlation_id(),
+                    "metadata": _reviewed_audit_metadata(
+                        "genie.create_draft_campaign",
+                        metadata,
+                    ),
+                },
+            )
+            if row is None:
+                raise LakebaseError("campaign insert returned no row")
+            return GenieActionResponse(
+                ok=True,
+                action_type=action_type,
+                audit_event_id=str(row.get("audit_id") or ""),
+                route=payload.route or "/lead-queue",
+                campaign_id=str(row.get("campaign_id") or ""),
+                message="Created a Lakebase draft campaign from this Genie result.",
+            )
+
+        row = lakebase.fetchone(
+            _GENIE_ACTION_AUDIT_INSERT_SQL,
+            {
+                "event_type": _genie_event_type(action_type),
+                "actor_email": actor,
+                "entity_id": payload.message_id or payload.conversation_id or request_id,
+                "request_id": request_id,
+                "correlation_id": get_correlation_id(),
+                "metadata": _reviewed_audit_metadata(
+                    f"genie.{action_type}",
+                    _audit_payload(payload),
+                ),
+            },
+        )
+        if row is None:
+            raise LakebaseError("genie action audit insert returned no row")
+    except LakebaseError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=safe_dependency_detail("lakebase"),
+        ) from exc
+
+    return GenieActionResponse(
+        ok=True,
+        action_type=action_type,
+        audit_event_id=str(row.get("audit_id") or ""),
+        route=payload.route,
+        saved_count=0,
+        message="Genie action recorded to the governed audit ledger.",
+    )

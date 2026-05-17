@@ -1,12 +1,12 @@
 #!/usr/bin/env python
 """Build the county TopoJSON used by the app's geography drill-down.
 
-Module 0's USChoroplethMap renders state-level polygons from
-@svg-maps/usa, then drills into county polygons read from the
-TopoJSON shipped at `frontend/public/us-counties.json`. The upstream
-us-atlas counties file weighs less than 1 MB and contains every US county;
-shipping the full national file means a broader Cotality share does not
-require a code edit before county drill-down works.
+Module 0's USChoroplethMap renders state-level polygons from us-atlas
+state TopoJSON, then drills into county polygons read from the TopoJSON
+shipped at `frontend/public/us-counties.json`. The upstream us-atlas
+counties file weighs less than 1 MB and contains every US county; shipping
+the full national file means a broader Cotality share does not require a
+code edit before county drill-down works.
 
 USAGE
 =====
@@ -21,10 +21,11 @@ USAGE
 WHY ALBERS
 ==========
 
-The frontend's choropleth (state level) uses @svg-maps/usa, which is
-already projected. The county TopoJSON has to share that projection
-or the polygons won't align with the state outline they drill from.
-us-atlas ships counties-albers-10m.json with that exact projection.
+The frontend's choropleth (state level) uses us-atlas
+states-albers-10m.json, which is already projected. The county TopoJSON
+has to share that projection or the polygons won't align with the state
+outline they drill from. us-atlas ships counties-albers-10m.json with that
+same projection.
 
 WHY A SCRIPT (vs commit-only output)
 ====================================

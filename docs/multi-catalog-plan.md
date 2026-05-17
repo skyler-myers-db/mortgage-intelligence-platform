@@ -9,7 +9,11 @@ remain the review-of-record.
 
 ## Problem
 
-CLAUDE.md mandates a zero-click deploy: `databricks bundle deploy -t dev` must provision every resource the app needs, with no manual UI steps and no out-of-band preprocessing. That promise was violated for any customer whose UC catalog is not named `mip`.
+CLAUDE.md mandates a zero-click deploy through `./scripts/deploy.sh -t dev`
+(or `make deploy-dev`): the command of record must provision, populate,
+promote, and smoke-check every resource the app needs, with no manual UI steps
+and no out-of-band preprocessing. That promise was violated for any customer
+whose UC catalog is not named `mip`.
 
 - The Python layer was already multi-catalog safe via `backend/services/databricks_sql_helpers.qualify(schema, table)` — `MIP_DEFAULT_CATALOG=mip_prod` reroutes every backend SQL caller.
 - The SQL layer was NOT. `docs/runbook-multi-catalog.md` documented a `sed` preprocessing workaround that had to be run outside the bundle deploy. That is a packaging bug per CLAUDE.md ("Manual click-ops in the Databricks UI are a packaging bug" generalizes to manual preprocessing steps).

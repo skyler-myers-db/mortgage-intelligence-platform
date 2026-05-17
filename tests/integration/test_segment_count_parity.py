@@ -494,6 +494,46 @@ def _latest_mortgage30us_fraction(
     return float(rate_fraction)
 
 
+def test_borrower_360_market_rate_matches_latest_fred(
+    warehouse: tuple[str, str, str],
+) -> None:
+    """Gold borrower scoring must be rebuilt after each FRED market-rate refresh.
+
+    A stale ``borrower_360.market_rate_fraction`` can leave the row count and
+    schema perfectly valid while pushing threshold-adjacent ITM borrowers across
+    the 75 bps boundary. This guard fails with an operationally useful message
+    before the broader segment-count parity assertion reports state-level drift.
+    """
+    host, token, wh = warehouse
+    latest = _latest_mortgage30us_fraction(host, token, wh)
+    rows = _run_sql(
+        host,
+        token,
+        wh,
+        """
+        SELECT
+          MIN(CAST(market_rate_fraction AS DOUBLE)) AS min_gold_market,
+          MAX(CAST(market_rate_fraction AS DOUBLE)) AS max_gold_market,
+          MIN(refreshed_at) AS min_refreshed_at,
+          MAX(refreshed_at) AS max_refreshed_at,
+          COUNT(*) AS row_count
+        FROM mip.gold.borrower_360
+        """,
+    )
+    assert rows, "borrower_360 market-rate freshness probe returned no rows"
+    min_gold, max_gold, min_refreshed, max_refreshed, row_count = rows[0]
+    assert int(row_count) > 0, "mip.gold.borrower_360 is empty"
+    assert float(min_gold) == pytest.approx(latest, abs=1e-12)
+    assert float(max_gold) == pytest.approx(latest, abs=1e-12), (
+        "mip.gold.borrower_360 was not rebuilt after the latest FRED "
+        "MORTGAGE30US refresh: "
+        f"latest={latest}, gold_min={min_gold}, gold_max={max_gold}, "
+        f"gold_refreshed_at={min_refreshed}..{max_refreshed}. "
+        "Run `databricks bundle run mip_refresh_scores -t dev --profile DEFAULT` "
+        "after `mip_fred_rates_ingest`."
+    )
+
+
 @pytest.fixture(scope="module")
 def counts(warehouse: tuple[str, str, str]) -> dict[str, dict[str, dict[str, int]]]:
     """Returns ``counts[segment][path][state] -> int``.

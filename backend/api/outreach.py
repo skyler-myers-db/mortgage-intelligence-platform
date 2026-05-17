@@ -30,13 +30,13 @@ from backend.schemas.offer import (
     OutreachRejectRequest,
     OutreachRejectResponse,
 )
+from backend.services.audit_lakebase_store import write_audit_event_in_transaction
 from backend.services.audit_store import (
     AuditMetadataViolation,
     AuditPIIError,
     AuditStore,
     get_audit_store,
     resolve_actor,
-    write_audit_event_in_transaction,
 )
 from backend.services.disclosures import (
     MissingTenantDisclosureError,

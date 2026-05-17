@@ -22,7 +22,7 @@ from uuid import uuid4
 
 import pytest
 
-from backend.services.audit_store import LakebaseAuditStore
+from backend.services.audit_lakebase_store import LakebaseAuditStore
 from backend.services.lakebase import LakebaseClient
 
 # Only run when the operator has explicitly opted in via

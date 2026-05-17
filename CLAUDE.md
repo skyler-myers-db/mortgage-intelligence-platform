@@ -22,7 +22,7 @@ Remember these exact product anchors:
 - Enterprise product polish at 1440×900.
 - Fast page loads, stable interactions, real data under the hood.
 - Source evidence visible on every score/recommendation — traced to live Unity Catalog rows.
-- **Self-contained, zero-click deploy.** `databricks bundle deploy -t dev` must provision every resource the app needs — UC catalog + schemas, silver/gold tables, Lakeflow pipelines, Lakebase instance + migrations, FRED ingest job, Genie Space, Databricks App — with no manual UI steps, no "now go click this" setup docs, no secret dances beyond one `.env.local` fill-in. Customers should see a working app on first deploy.
+- **Self-contained, zero-click deploy.** `./scripts/deploy.sh -t dev` (or `make deploy-dev`) is the command of record for first deploys and roll-forwards. It must provision, populate, promote, and smoke-check every resource the app needs — UC catalog + schemas, silver/gold tables, Lakeflow pipelines, Lakebase instance + migrations, FRED ingest job, Genie Space, Databricks App — with no manual UI steps, no "now go click this" setup docs, no secret dances beyond one `.env.local` fill-in. `databricks bundle deploy -t dev` is the lower-level resource apply; it does not run the full population/promotion workflow by itself. Customers should see a working app after the deploy script completes.
 - Clear separation of frontend, backend, SQL, Databricks resources, and agent docs.
 - Small files, strong types, easy-to-review commits.
 - Repeatable validation after every slice.
@@ -67,9 +67,9 @@ npm --prefix frontend run build                                # tsc -b && vite 
 
 # Scaffold + bundle
 python tools/verify_scaffold.py
-databricks bundle validate -t dev
-databricks bundle deploy -t dev
-databricks bundle run refresh_silver -t dev
+make deploy-dev                                                 # full one-command deploy
+databricks bundle validate -t dev                              # resource-level validation
+databricks bundle deploy -t dev                                # resource-level apply only
 
 # Makefile aggregates: make setup | dev-api | dev-ui | test | lint | build | validate
 ```
@@ -82,7 +82,7 @@ If a command fails, fix the root cause before moving to another feature. Do not 
 - **Backend layers — keep this separation:**
   - `backend/api/*` — thin FastAPI routers, one per domain (portfolio, segments, leads, borrowers, offers, outreach, genie, audit, admin, health).
   - `backend/services/*` — Databricks SQL, Lakebase, Genie, Cotality MCP, evidence, scoring, mock data. Routers call services, not each other.
-  - `backend/agents/*` — deterministic orchestrator plus per-task agents (lead portfolio, borrower dossier, offer strategy, outreach writer, supervisor).
+  - Agentic orchestration is currently deterministic and service-backed (`backend/api/genie.py`, `backend/services/genie_*`, `backend/services/repositories/databricks_genie*`). A future Agent Bricks/Supervisor extension may add `backend/agents/*`, but that directory is not part of Module 0 today.
   - `backend/schemas/*` — Pydantic contracts shared between routers and services.
 - **Data plane (Unity Catalog, default catalog `mip`):** raw share → `sql/transformations/silver_*.sql` → `sql/transformations/gold_*.sql` → `sql/metric_views/*` consumed by the app and Genie. UC SQL functions in `sql/uc_functions/` (`fn_in_the_money`, `fn_lead_score`, `fn_next_best_offer`, `fn_rate_spread`) are the canonical scoring primitives — keep Python scoring in `backend/services/scoring.py` consistent with them.
 - **App state:** Lakebase Postgres (`lakebase/schema.sql`) holds campaigns, approvals, agent sessions, audit, feedback. Sample-lender seed in `lakebase/seed_campaigns.sql`.
@@ -125,7 +125,7 @@ Hard rules for UI work:
 - Do not wire automatic email/SMS sending.
 - Do not introduce a mock fallback in the running app. The app runs on real Unity Catalog data or it fails visibly. Handle flakiness with resilience engineering (retries, warm-start, cache, circuit breaker, degraded-state UI) — never with silent mock substitution.
 - Do not filter real data to a single metro. The product must follow the current refreshed Cotality coverage dynamically; geography drill-down is a hero surface, not a nice-to-have.
-- Do not add out-of-band setup steps. Any new infrastructure (UC object, secret scope, job, pipeline, Lakebase migration, seed file) must be provisionable from `databricks bundle deploy -t dev` plus a documented `.env.local` template. Manual click-ops in the Databricks UI are a packaging bug.
+- Do not add out-of-band setup steps. Any new infrastructure (UC object, secret scope, job, pipeline, Lakebase migration, seed file) must be declared in the bundle or an idempotent deploy helper and must be reachable from `./scripts/deploy.sh -t dev` plus a documented `.env.local` template. Bare `databricks bundle deploy -t dev` may apply lower-level resources only; the customer/operator contract is the deploy script. Manual click-ops in the Databricks UI are a packaging bug.
 - Do not rely on external APIs being reachable at deploy-time. FRED and any future public-data sources must have a repo-committed seed file so the first app boot has data even before the first scheduled refresh runs.
 - Do not put secrets in source, `.env`, `app.yaml`, screenshots, notebooks, or logs.
 - Do not change the app to Streamlit unless the user explicitly chooses the emergency fallback.

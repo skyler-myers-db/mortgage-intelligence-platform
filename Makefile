@@ -4,7 +4,7 @@ PYTHON ?= $(shell [ -x .venv/bin/python ] && echo .venv/bin/python || echo pytho
 
 .PHONY: setup dev-api dev-ui test test-e2e lint build validate bundle-validate bundle-plan bundle-deploy zip \
         provision-genie bundle-validate-env bundle-deploy-dev deploy-dev check-workspace-host \
-        render-sql
+        configure-workspace render-sql
 
 setup:
 	python3 -m venv .venv
@@ -111,6 +111,13 @@ bundle-deploy-dev: render-sql
 # ---------------------------------------------------------------------------
 deploy-dev:
 	./scripts/deploy.sh
+
+# Rebind the one workspace.host YAML anchor in databricks.yml for a customer
+# fork. Usage:
+#   make configure-workspace HOST=https://<customer-workspace>
+configure-workspace:
+	@test -n "$${HOST:-}" || { echo "usage: make configure-workspace HOST=https://<customer-workspace>"; exit 2; }
+	./scripts/configure-workspace.sh "$${HOST}"
 
 # ---------------------------------------------------------------------------
 # Forkability safeguard (audit R5-24, 2026-04-23).

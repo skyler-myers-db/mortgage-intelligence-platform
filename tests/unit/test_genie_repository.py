@@ -1030,6 +1030,27 @@ def test_struct_wildcard_nested_pii_is_policy_blocked() -> None:
     assert result.table_rows == []
 
 
+def test_count_star_inside_function_args_is_not_wildcard_blocked() -> None:
+    live = GenieResponse(
+        answer_text="There are 0.284 million eligible borrowers in this cohort.",
+        sql_query=(
+            "SELECT ROUND(COUNT(*) / 1000000.0, 3) AS eligible_borrowers_millions "
+            "FROM mip.gold.lead_population"
+        ),
+        sql_result_rows=[{"eligible_borrowers_millions": "0.284"}],
+        conversation_id="conv-count-star-function",
+        message_id="msg-count-star-function",
+    )
+    stub = _StubClient(_make_breaker("closed"), response=live)
+    repo = DatabricksGenieRepository(stub)  # type: ignore[arg-type]
+
+    result = repo.respond("Summarize the returned cohort in millions.")
+
+    assert result.source == "genie"
+    assert result.sql_query == live.sql_query
+    assert result.table_rows == live.sql_result_rows
+
+
 @pytest.mark.parametrize(
     "column",
     [
@@ -1075,6 +1096,271 @@ def test_pii_answer_text_is_policy_blocked() -> None:
     assert result.sql_query is None
     assert result.table_rows == []
     assert "raw@example.com" not in result.answer
+
+
+def test_trusted_genie_answer_with_matching_numeric_claim_passes() -> None:
+    live = GenieResponse(
+        answer_text="There are 123 borrowers in this trusted cohort.",
+        sql_query="SELECT 123 AS borrowers FROM mip.gold.borrower_360",
+        sql_result_rows=[{"borrowers": 123}],
+        conversation_id="conv-numeric-match",
+        message_id="msg-numeric-match",
+    )
+    stub = _StubClient(_make_breaker("closed"), response=live)
+    repo = DatabricksGenieRepository(stub)  # type: ignore[arg-type]
+
+    result = repo.respond("Summarize the trusted cohort.")
+
+    assert result.source == "genie"
+    assert result.answer == live.answer_text
+    assert result.table_rows == [{"borrowers": 123}]
+
+
+def test_trusted_genie_answer_with_unsupported_numeric_claim_is_policy_blocked() -> None:
+    live = GenieResponse(
+        answer_text="There are 999 borrowers in this trusted cohort.",
+        sql_query="SELECT 123 AS borrowers FROM mip.gold.borrower_360",
+        sql_result_rows=[{"borrowers": 123}],
+        conversation_id="conv-numeric-mismatch",
+        message_id="msg-numeric-mismatch",
+    )
+    stub = _StubClient(_make_breaker("closed"), response=live)
+    repo = DatabricksGenieRepository(stub)  # type: ignore[arg-type]
+
+    result = repo.respond("Summarize the trusted cohort.")
+
+    assert result.source == "policy_blocked"
+    assert result.sql_query is None
+    assert result.table_rows == []
+    assert result.visualization is None
+    assert result.actions == []
+    assert "999" not in result.answer
+    assert result.proof is not None
+    assert result.proof.trusted is False
+    assert result.proof.known_data_gaps
+
+
+def test_trusted_genie_numeric_check_accepts_rounded_percent_claim() -> None:
+    live = GenieResponse(
+        answer_text="The high-equity share is 17% of borrowers.",
+        sql_query="SELECT 0.173 AS high_equity_share FROM mip.gold.borrower_360",
+        sql_result_rows=[{"high_equity_share": 0.173}],
+        conversation_id="conv-percent-rounded",
+        message_id="msg-percent-rounded",
+    )
+    stub = _StubClient(_make_breaker("closed"), response=live)
+    repo = DatabricksGenieRepository(stub)  # type: ignore[arg-type]
+
+    result = repo.respond("What share of borrowers are high equity?")
+
+    assert result.source == "genie"
+    assert result.table_rows == [{"high_equity_share": 0.173}]
+
+
+def test_trusted_genie_numeric_check_accepts_sum_across_rows() -> None:
+    live = GenieResponse(
+        answer_text="The two returned states contain 300 borrowers.",
+        sql_query=(
+            "SELECT state, borrowers FROM mip.gold.borrower_360 GROUP BY state, borrowers"
+        ),
+        sql_result_rows=[
+            {"state": "IL", "borrowers": 100},
+            {"state": "CA", "borrowers": 200},
+        ],
+        conversation_id="conv-sum-supported",
+        message_id="msg-sum-supported",
+    )
+    stub = _StubClient(_make_breaker("closed"), response=live)
+    repo = DatabricksGenieRepository(stub)  # type: ignore[arg-type]
+
+    result = repo.respond("Summarize the returned states.")
+
+    assert result.source == "genie"
+    assert result.row_count == 2
+
+
+def test_trusted_genie_numeric_check_accepts_string_backed_row_numbers() -> None:
+    live = GenieResponse(
+        answer_text=(
+            "This week's distribution peaks at score 50 with 47,089 borrowers "
+            "and reaches 1 borrower at score 88."
+        ),
+        sql_query=(
+            "SELECT opportunity_score, COUNT(*) AS borrower_count "
+            "FROM mip.gold.lead_population GROUP BY opportunity_score"
+        ),
+        sql_result_rows=[
+            {"opportunity_score": "50", "borrower_count": "47089"},
+            {"opportunity_score": "88", "borrower_count": "1"},
+        ],
+        conversation_id="conv-string-numeric",
+        message_id="msg-string-numeric",
+    )
+    stub = _StubClient(_make_breaker("closed"), response=live)
+    repo = DatabricksGenieRepository(stub)  # type: ignore[arg-type]
+
+    result = repo.respond("Compare this week's lead score distribution to last week's.")
+
+    assert result.source == "genie"
+    assert result.table_rows == live.sql_result_rows
+
+
+def test_trusted_genie_numeric_check_scales_word_suffix_claims() -> None:
+    live = GenieResponse(
+        answer_text="There are 1.2 million borrowers in this returned cohort.",
+        sql_query="SELECT 1200000 AS borrowers FROM mip.gold.borrower_360",
+        sql_result_rows=[{"borrowers": 1_200_000}],
+        conversation_id="conv-word-suffix-supported",
+        message_id="msg-word-suffix-supported",
+    )
+    stub = _StubClient(_make_breaker("closed"), response=live)
+    repo = DatabricksGenieRepository(stub)  # type: ignore[arg-type]
+
+    result = repo.respond("Summarize the returned cohort.")
+
+    assert result.source == "genie"
+    assert result.table_rows == live.sql_result_rows
+
+
+def test_trusted_genie_numeric_check_accepts_rounded_word_suffix_claims() -> None:
+    live = GenieResponse(
+        answer_text="There are 0.28 million eligible borrowers in this cohort.",
+        sql_query="SELECT 284475 AS borrowers FROM mip.gold.borrower_360",
+        sql_result_rows=[{"borrowers": 284_475}],
+        conversation_id="conv-word-suffix-rounded",
+        message_id="msg-word-suffix-rounded",
+    )
+    stub = _StubClient(_make_breaker("closed"), response=live)
+    repo = DatabricksGenieRepository(stub)  # type: ignore[arg-type]
+
+    result = repo.respond("Summarize the returned cohort in millions.")
+
+    assert result.source == "genie"
+    assert result.table_rows == live.sql_result_rows
+
+
+def test_trusted_genie_numeric_check_scales_unit_bearing_columns() -> None:
+    live = GenieResponse(
+        answer_text="There are 0.284 million eligible borrowers in this cohort.",
+        sql_query=(
+            "SELECT ROUND(COUNT(*) / 1000000.0, 3) AS eligible_borrowers_millions "
+            "FROM mip.gold.lead_population"
+        ),
+        sql_result_rows=[{"eligible_borrowers_millions": "0.284"}],
+        conversation_id="conv-unit-column-supported",
+        message_id="msg-unit-column-supported",
+    )
+    stub = _StubClient(_make_breaker("closed"), response=live)
+    repo = DatabricksGenieRepository(stub)  # type: ignore[arg-type]
+
+    result = repo.respond("Summarize the returned cohort in millions.")
+
+    assert result.source == "genie"
+    assert result.table_rows == live.sql_result_rows
+
+
+def test_trusted_genie_numeric_check_ignores_borrower_360_product_label() -> None:
+    live = GenieResponse(
+        answer_text="There are 5.156 million borrowers in Borrower 360.",
+        sql_query="SELECT COUNT(*) AS borrowers FROM mip.gold.borrower_360",
+        sql_result_rows=[{"borrowers": 5_155_960}],
+        conversation_id="conv-borrower-360-label",
+        message_id="msg-borrower-360-label",
+    )
+    stub = _StubClient(_make_breaker("closed"), response=live)
+    repo = DatabricksGenieRepository(stub)  # type: ignore[arg-type]
+
+    result = repo.respond("How many borrowers are currently in Borrower 360?")
+
+    assert result.source == "genie"
+    assert result.table_rows == live.sql_result_rows
+
+
+def test_trusted_genie_numeric_check_ignores_week_date_parts() -> None:
+    live = GenieResponse(
+        answer_text=(
+            "The average lead score rose from 45.1 for the week of April 20, "
+            "2026, to 45.7 for the week of May 11, 2026."
+        ),
+        sql_query=(
+            "SELECT DATE_TRUNC('WEEK', snapshot_date) AS snapshot_week, "
+            "ROUND(AVG(avg_opportunity_score), 1) AS avg_lead_score "
+            "FROM mip.gold.funnel_snapshot_daily GROUP BY 1"
+        ),
+        sql_result_rows=[
+            {"snapshot_week": "2026-04-20T00:00:00.000Z", "avg_lead_score": "45.1"},
+            {"snapshot_week": "2026-05-04T00:00:00.000Z", "avg_lead_score": "45.3"},
+            {"snapshot_week": "2026-05-11T00:00:00.000Z", "avg_lead_score": "45.7"},
+        ],
+        conversation_id="conv-week-date-parts",
+        message_id="msg-week-date-parts",
+        trusted_assets=["mip.gold.funnel_snapshot_daily"],
+    )
+    stub = _StubClient(_make_breaker("closed"), response=live)
+    repo = DatabricksGenieRepository(stub)  # type: ignore[arg-type]
+
+    result = repo.respond("Show the weekly trend in average lead score by snapshot week.")
+
+    assert result.source == "genie"
+    assert result.table_rows == live.sql_result_rows
+
+
+def test_trusted_genie_numeric_check_rejects_unscaled_word_suffix_claims() -> None:
+    live = GenieResponse(
+        answer_text="There are 1.2 million borrowers in this returned cohort.",
+        sql_query="SELECT 1.2 AS avg_score FROM mip.gold.borrower_360",
+        sql_result_rows=[{"avg_score": 1.2}],
+        conversation_id="conv-word-suffix-unsupported",
+        message_id="msg-word-suffix-unsupported",
+    )
+    stub = _StubClient(_make_breaker("closed"), response=live)
+    repo = DatabricksGenieRepository(stub)  # type: ignore[arg-type]
+
+    result = repo.respond("Summarize the returned cohort.")
+
+    assert result.source == "policy_blocked"
+    assert result.table_rows == []
+
+
+def test_trusted_genie_numeric_check_ignores_identifier_dates_and_query_limits() -> None:
+    live = GenieResponse(
+        answer_text=(
+            "Top 10 ZIP 60617 refreshed in 2026 has 123 borrowers."
+        ),
+        sql_query=(
+            "SELECT zip, refreshed_at, borrowers FROM mip.gold.borrower_360 LIMIT 10"
+        ),
+        sql_result_rows=[
+            {"zip": "60617", "refreshed_at": "2026-05-16T01:00:00Z", "borrowers": 123}
+        ],
+        conversation_id="conv-identifier-number",
+        message_id="msg-identifier-number",
+    )
+    stub = _StubClient(_make_breaker("closed"), response=live)
+    repo = DatabricksGenieRepository(stub)  # type: ignore[arg-type]
+
+    result = repo.respond("Show the top 10 ZIPs by borrower count.")
+
+    assert result.source == "genie"
+    assert result.table_rows == live.sql_result_rows
+
+
+def test_trusted_genie_numeric_check_blocks_nonzero_claim_on_empty_rows() -> None:
+    live = GenieResponse(
+        answer_text="There are 10 borrowers in the returned cohort.",
+        sql_query="SELECT state, COUNT(*) AS borrowers FROM mip.gold.borrower_360 GROUP BY state",
+        sql_result_rows=[],
+        conversation_id="conv-empty-numeric",
+        message_id="msg-empty-numeric",
+    )
+    stub = _StubClient(_make_breaker("closed"), response=live)
+    repo = DatabricksGenieRepository(stub)  # type: ignore[arg-type]
+
+    result = repo.respond("Summarize this empty cohort.")
+
+    assert result.source == "policy_blocked"
+    assert result.table_rows == []
+    assert "10" not in result.answer
 
 
 def test_backtick_quoted_trusted_sql_is_accepted() -> None:

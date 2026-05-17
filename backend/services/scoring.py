@@ -24,25 +24,23 @@ and the boolean arguments of ``next_best_offer``).
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
 _INT32_MIN = -2_147_483_648
 _INT32_MAX = 2_147_483_647
 
-_NBO_FIXTURE_PATH = (
-    Path(__file__).resolve().parents[2]
-    / "tests"
-    / "fixtures"
-    / "next_best_offer_golden.json"
-)
-with _NBO_FIXTURE_PATH.open() as _f:
-    _NBO_FIXTURE = json.load(_f)
-
 # Human labels for the eight offer_codes. Source of truth for the
-# OfferRecommendation.product_label rendered at the API boundary — the
-# scoring primitive itself only returns the lowercase code.
-NBO_PRODUCT_LABELS: dict[str, str] = dict(_NBO_FIXTURE["product_labels"])
+# OfferRecommendation.product_label rendered at the API boundary; tests assert
+# parity with ``tests/fixtures/next_best_offer_golden.json`` without requiring
+# production code to import from test fixtures at module load.
+NBO_PRODUCT_LABELS: dict[str, str] = {
+    "purchase": "Purchase Mortgage",
+    "refi_plus_heloc": "Refinance + HELOC",
+    "heloc": "HELOC",
+    "refi": "Refinance",
+    "cash_out": "Cash-out Refi",
+    "investor": "Investor Product",
+    "retention": "Retention",
+    "nurture": "Nurture",
+}
 
 
 # ---------------------------------------------------------------------------

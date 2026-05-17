@@ -4,7 +4,11 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from backend.services.pii_redaction import normalize_public_lender_ref
+from backend.schemas._validators import (
+    normalize_public_lender_ref,
+    reviewed_geography_labels,
+    reviewed_state_codes,
+)
 
 _OCCUPANCY_LABELS: frozenset[str] = frozenset(
     {"Owner-occupied", "Non-owner-occupied", "All"},
@@ -104,18 +108,6 @@ _PUBLIC_TITLECASE_PHRASE_ALLOWLIST: tuple[str, ...] = (
     "West Virginia",
     "United States",
 )
-
-
-def _allowed_geography_labels() -> set[str]:
-    from backend.services.state_footprint import get_state_footprint_resolver
-
-    resolver = get_state_footprint_resolver()
-    if resolver.using_fallback():
-        return {"all"}
-    states = resolver.list()
-    labels = {"all", *(s.state_name.lower() for s in states)}
-    labels.add(f"all {len(states)} states")
-    return labels
 
 
 def _validate_optional_label(
@@ -275,7 +267,7 @@ class PortfolioCriteria(BaseModel):
         stripped = value.strip()
         if not stripped:
             return None
-        if stripped.lower() not in _allowed_geography_labels():
+        if stripped.lower() not in reviewed_geography_labels():
             raise ValueError("geography must be one of the reviewed Portfolio Builder options")
         return stripped
 
@@ -284,10 +276,7 @@ class PortfolioCriteria(BaseModel):
     def _states_are_reviewed_codes(cls, value: list[str] | None) -> list[str] | None:
         if value is None:
             return None
-        from backend.services.state_footprint import get_state_footprint_resolver
-
-        resolver = get_state_footprint_resolver()
-        allowed = {s.state_code for s in resolver.list()} if not resolver.using_fallback() else set()
+        allowed = reviewed_state_codes()
         reviewed: list[str] = []
         for raw in value:
             code = (raw or "").strip().upper()

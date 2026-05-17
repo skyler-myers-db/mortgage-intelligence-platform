@@ -3,8 +3,9 @@
 # scripts/smoke_live.sh -- operator "is real UC actually reachable?" smoke
 #
 # Slice 9 of the real-data migration closes the self-contained loop: after
-# a `databricks bundle deploy -t dev`, the operator should be able to run
-# this script and see 200s from every canonical endpoint in under ~30s.
+# `./scripts/deploy.sh -t dev` (or a resource deploy plus app promotion and
+# refresh jobs), the operator should be able to run this script and see 200s
+# from every canonical endpoint in under ~30s.
 #
 # Behaviour:
 #   1. Boots uvicorn (backend) + vite (frontend) locally IF MIP_APP_URL is

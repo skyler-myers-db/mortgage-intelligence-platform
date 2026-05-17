@@ -21,6 +21,7 @@ import {
   type StateFacts,
   type UsaSvgMap,
 } from './USChoroplethMap.utils';
+import { loadUsaStateMap } from './USStateMapData';
 import { USChoroplethMapTooltip } from './USChoroplethMapTooltip';
 
 // Slice13-accuracy-validation: county + ZIP hover numbers now come from
@@ -39,8 +40,8 @@ import { USChoroplethMapTooltip } from './USChoroplethMapTooltip';
  *   - level state: 'state' → 'county' → 'zip' → Lead Queue deep-link.
  *
  * Upgrade vs. prototype: the prototype used hand-drawn stylized polygons. We
- * use @svg-maps/usa (Albers USA pre-projected paths, ~141 KB raw / ~30 KB
- * gzipped) for real US geography so it reads as a product, not a sketch.
+ * use us-atlas state TopoJSON (Albers USA pre-projected paths) for real US
+ * geography so it reads as a product, not a sketch.
  *
  * Geography scope is data-driven. Click a populated state to drill into
  * whatever counties are present in the live gold rollups, then ZIP-level
@@ -111,7 +112,7 @@ export function USChoroplethMap({
   // Per-state rollups from /api/geo/state-rollups. `null` = loading; `{}`
   // = API unreachable. We keep the static geography interactive, but do
   // not surface static borrower counts while live rollups are loading.
-  // Keyed by lowercase state code to match @svg-maps/usa location ids.
+  // Keyed by lowercase state code to match state map location ids.
   const [liveStateFacts, setLiveStateFacts] = useState<Record<string, StateRollup> | null>(null);
   // Per-state county rollups lazy-loaded on drill. Keyed by uppercase
   // state code. Each value is a dict keyed by 5-char FIPS so the map's
@@ -163,12 +164,12 @@ export function USChoroplethMap({
     setCountyScopeByState({});
   }, [segmentFilterKey, segmentFilterMode, portfolioCriteriaKey]);
 
-  // Lazy-load the @svg-maps/usa data so the ~140 KB of path strings lands
-  // in its own code-split chunk instead of the main bundle.
+  // Lazy-load the state geography so the TopoJSON conversion lands in its
+  // own code-split chunk instead of the main bundle.
   useEffect(() => {
     let cancelled = false;
-    import('@svg-maps/usa').then((mod) => {
-      if (!cancelled) setUsaMap(mod.default as UsaSvgMap);
+    loadUsaStateMap().then((map) => {
+      if (!cancelled) setUsaMap(map);
     });
     return () => {
       cancelled = true;
@@ -450,7 +451,7 @@ export function USChoroplethMap({
     return 0;
   }, [level, countyStateId, selected, liveStateFacts, liveCountyFacts, liveZipFacts]);
 
-  // ----- STATE level: real US paths via @svg-maps/usa ----------------------
+  // ----- STATE level: real US paths via us-atlas ---------------------------
   const renderStateLevel = () => {
     if (!usaMap) {
       return (
@@ -486,6 +487,7 @@ export function USChoroplethMap({
             style={dim ? { opacity: 0.3 } : undefined}
             role="button"
             tabIndex={0}
+            data-target-size-exempt="geographic-shape"
             aria-label={loc.name}
             // Always show a tooltip on hover. In-footprint states surface
             // the live rollup; out-of-footprint states surface an honest
@@ -676,6 +678,7 @@ export function USChoroplethMap({
               className={classes}
               role="button"
               tabIndex={0}
+              data-target-size-exempt="geographic-shape"
               aria-label={`${f.name} County`}
               onMouseEnter={(e) =>
                 setHover({

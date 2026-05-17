@@ -37,6 +37,9 @@ import re
 from threading import Lock
 from typing import Any
 
+from backend.schemas._validators import is_public_lender_ref, normalize_public_lender_ref
+from backend.services.observability import emit
+
 log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -154,20 +157,29 @@ class LenderRefResolver:
             )
         except (DependencyDownError, DatabricksSqlError, RuntimeError, OSError) as exc:
             if not self._warned_fallback:
-                log.warning(
-                    "LenderRefResolver: UC load failed (%s: %s); "
-                    "falling back to in-process _LENDER_REF_MAP.",
-                    type(exc).__name__,
-                    exc,
+                emit(
+                    log,
+                    "lender_ref_dictionary_load_failed",
+                    level=logging.WARNING,
+                    dependency="warehouse",
+                    outcome="degraded",
+                    exc_type=type(exc).__name__,
+                    exc_msg=str(exc)[:500],
+                    posture="fallback_dictionary",
                 )
                 self._warned_fallback = True
             return None
         except Exception as exc:  # noqa: BLE001 -- paranoid fallback path
             if not self._warned_fallback:
-                log.warning(
-                    "LenderRefResolver: unexpected UC error (%s); "
-                    "using fallback dictionary.",
-                    exc,
+                emit(
+                    log,
+                    "lender_ref_dictionary_unexpected_error",
+                    level=logging.WARNING,
+                    dependency="warehouse",
+                    outcome="degraded",
+                    exc_type=type(exc).__name__,
+                    exc_msg=str(exc)[:500],
+                    posture="fallback_dictionary",
                 )
                 self._warned_fallback = True
             return None
@@ -273,7 +285,6 @@ _FORBIDDEN_OUTPUT_KEYS: frozenset[str] = frozenset(
 _STREET_NUMBER_PATTERN = re.compile(r"\d")
 _TRUE_ENV_VALUES: frozenset[str] = frozenset({"1", "true", "yes", "y", "on"})
 _ID_MASK_NAMESPACE = "mip-cotality-id-mask-v1"
-_PUBLIC_LENDER_REF_RE = re.compile(r"^(Summit Mortgage|Competitor ([A-Z]|Other))$")
 _CONSENT_STATUS_VALUES: frozenset[str] = frozenset({"opt_in", "opt_out", "unknown"})
 
 
@@ -309,37 +320,6 @@ def _public_lender_ref(raw: Any) -> str | None:
 def _consent_status(raw: Any) -> str:
     value = str(raw or "").strip().lower()
     return value if value in _CONSENT_STATUS_VALUES else "unknown"
-
-
-def is_public_lender_ref(value: str | None, *, allow_all: bool = False) -> bool:
-    """Return TRUE when ``value`` is from the public-safe lender vocabulary."""
-    if value is None:
-        return False
-    stripped = value.strip()
-    if allow_all and stripped == "All":
-        return True
-    return bool(_PUBLIC_LENDER_REF_RE.fullmatch(stripped))
-
-
-def normalize_public_lender_ref(
-    value: str | None,
-    *,
-    allow_all: bool = False,
-) -> str | None:
-    """Validate a caller-provided lender filter without generalizing raw input.
-
-    Redaction may map raw servicer strings to aliases, but URL/API filters are
-    untrusted input and must already be public-safe. Accepting arbitrary lender
-    names here would leak them back through chips and audit metadata.
-    """
-    if value is None:
-        return None
-    stripped = value.strip()
-    if not stripped:
-        return None
-    if is_public_lender_ref(stripped, allow_all=allow_all):
-        return stripped
-    raise ValueError("target_lender_ref must be a public-safe lender alias")
 
 
 def expose_raw_cotality_ids() -> bool:

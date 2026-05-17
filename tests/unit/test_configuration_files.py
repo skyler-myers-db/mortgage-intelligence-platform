@@ -1,4 +1,5 @@
 import re
+import subprocess
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
@@ -60,9 +61,11 @@ def test_runtime_requirements_include_otlp_exporter_wheels():
     App image must carry the exporter packages so production can turn on a
     collector with deployment env vars or app.yaml env/resource wiring.
     """
+    files = ("requirements.txt", "requirements.in")
     lines = [
         line.strip()
-        for line in (REPO / "requirements.txt").read_text(encoding="utf-8").splitlines()
+        for filename in files
+        for line in (REPO / filename).read_text(encoding="utf-8").splitlines()
         if line.strip() and not line.lstrip().startswith("#")
     ]
 
@@ -87,3 +90,50 @@ def test_prod_otlp_target_wires_secret_resource_without_global_app_yaml_secret()
     assert "secret:" in bundle
     assert "scope: ${var.otel_headers_secret_scope}" in bundle
     assert "key: ${var.otel_headers_secret_key}" in bundle
+
+
+def test_workspace_host_configuration_script_rewrites_only_anchor(tmp_path):
+    source = REPO / "databricks.yml"
+    target = tmp_path / "databricks.yml"
+    target.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+
+    script = REPO / "scripts" / "configure-workspace.sh"
+    result = subprocess.run(
+        [
+            str(script),
+            "--file",
+            str(target),
+            "adb-1234567890123456.7.azuredatabricks.net",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    content = target.read_text(encoding="utf-8")
+    assert "[configure-workspace] updated workspace.host anchor." in result.stdout
+    assert "host: &default_host https://adb-1234567890123456.7.azuredatabricks.net" in content
+    assert "https://dbc-3aa503a9-4fa8.cloud.databricks.com" not in content
+    assert len(re.findall(r"^  host: &default_host ", content, re.MULTILINE)) == 1
+    assert len(re.findall(r"host: \*default_host", content)) >= 4
+
+
+def test_workspace_host_configuration_script_rejects_non_origin_url(tmp_path):
+    target = tmp_path / "databricks.yml"
+    target.write_text((REPO / "databricks.yml").read_text(encoding="utf-8"), encoding="utf-8")
+
+    script = REPO / "scripts" / "configure-workspace.sh"
+    result = subprocess.run(
+        [
+            str(script),
+            "--file",
+            str(target),
+            "https://adb-1234567890123456.7.azuredatabricks.net/?token=bad",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "workspace host must be only the workspace origin" in result.stderr

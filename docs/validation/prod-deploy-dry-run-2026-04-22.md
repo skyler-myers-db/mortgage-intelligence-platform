@@ -153,7 +153,8 @@ The `[dev skyler]` prefix is the DAB `mode: development` automatic sandboxing (p
 
 ## Zero-click checklist
 
-Required per CLAUDE.md: `databricks bundle deploy -t <target>` + one `.env.local` fill-in must provision everything.
+Required per CLAUDE.md: `./scripts/deploy.sh -t <target>` + one `.env.local`
+fill-in must provision and populate everything.
 
 | Provisioned by bundle? | Resource | Notes |
 |---|---|---|

@@ -30,13 +30,16 @@
 # workstation keeps the source of truth in-repo where code review lives.
 #
 # Usage:
-#   ./scripts/deploy.sh                 # full deploy
-#   ./scripts/deploy.sh --dry-run       # print the plan, make no changes
-#   ./scripts/deploy.sh --skip-silver   # skip silver refresh (FRED + share)
-#   ./scripts/deploy.sh --skip-smoke    # skip the post-deploy curl smoke test
-#   ALLOW_SMOKE_FAILURE=1 ./scripts/deploy.sh
+#   ./scripts/deploy.sh -t dev             # full dev deploy
+#   ./scripts/deploy.sh -t dev --dry-run   # print the plan, make no changes
+#   ./scripts/deploy.sh -t dev --skip-silver
+#                                          # skip silver refresh (FRED + share)
+#   ./scripts/deploy.sh -t dev --skip-smoke
+#                                          # skip the post-deploy curl smoke test
+#   ALLOW_SMOKE_FAILURE=1 ./scripts/deploy.sh -t dev
 #                                       # emergency/manual deploy only: warn instead of fail
-#   ./scripts/deploy.sh --no-confirm    # skip the y/N prompt before deploy
+#   ./scripts/deploy.sh -t dev --no-confirm
+#                                       # skip the y/N prompt before deploy
 #
 # Environment:
 #   .env.local must set at minimum DATABRICKS_HOST, DATABRICKS_WAREHOUSE_ID.

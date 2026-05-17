@@ -38,6 +38,7 @@ class AuditEvent(BaseModel):
     subject_clip: str | None = None
     subject_segment: str | None = None
     request_id: str | None = None
+    correlation_id: str | None = None
 
 
 class AuditEventCreateRequest(BaseModel):

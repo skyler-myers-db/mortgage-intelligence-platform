@@ -5,8 +5,9 @@
 > assumptions intended for implementation operators only.
 
 **Audience.** The Entrada/Databricks SE (or customer workspace admin) who
-runs `databricks bundle deploy -t dev|prod` against a fresh customer
-workspace. This file is the runbook — every SQL block below is
+runs `./scripts/deploy.sh -t dev|prod` against a fresh customer workspace.
+That script wraps the Databricks bundle resource deploy plus app promotion and
+population jobs. This file is the runbook — every SQL block below is
 copy-paste-able and every click path is linear.
 
 **Precondition.** The bundle has been deployed once (`databricks bundle

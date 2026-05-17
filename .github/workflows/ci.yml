@@ -49,13 +49,29 @@ jobs:
           pip install -r requirements.txt
       - name: ruff
         run: ruff check backend tests tools jobs pipelines
-      - name: pytest
+      - name: pytest (parallel + coverage gate)
         # Unit + integration under the default pytest config; integration
         # tests that require workspace creds skip themselves when env is
         # absent. Repository-seam tests install their in-process fixtures
         # explicitly through pytest fixtures; there is no runtime mock-mode
-        # switch in production code.
-        run: pytest -q
+        # switch in production code. The coverage floor is set to the
+        # current measured suite baseline and should only move upward.
+        run: |
+          pytest -q -n auto --dist=loadscope \
+            --cov=backend \
+            --cov-report=term-missing:skip-covered \
+            --cov-report=xml:coverage.xml \
+            --cov-report=html:coverage/html \
+            --cov-fail-under=83
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-coverage
+          path: |
+            coverage.xml
+            coverage/html
+          if-no-files-found: ignore
 
   frontend-tests:
     name: frontend (lint + test + build)

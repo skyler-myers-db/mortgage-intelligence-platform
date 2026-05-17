@@ -29,15 +29,16 @@ from fastapi.testclient import TestClient
 
 from backend.config.settings import settings
 from backend.main import app
+from backend.services import audit_lakebase_store as lakebase_audit_mod
 from backend.services import audit_store as audit_mod
+from backend.services.audit_lakebase_store import LakebaseAuditStore
 from backend.services.audit_store import (
-    InMemoryAuditStore,
-    LakebaseAuditStore,
     _coerce_event_type,
     _reset_fallback_counter_for_tests,
     get_fallback_identity_count,
     resolve_actor,
 )
+from tests.fixtures.in_memory_audit_store import InMemoryAuditStore
 
 
 class _FakeRequest:
@@ -90,6 +91,7 @@ def test_write_issues_insert_with_named_params() -> None:
         "subject_clip",
         "subject_segment",
         "request_id",
+        "correlation_id",
         "evidence_ids",
         "metadata",
     ):
@@ -97,6 +99,7 @@ def test_write_issues_insert_with_named_params() -> None:
     assert params["actor_email"] == "skyler@entrada.ai"
     assert params["event_type"] == "VIEW_BORROWER"
     assert re.fullmatch(r"clip_ref_[0-9a-f]{12}", params["subject_clip"])
+    assert params["correlation_id"]
     assert params["evidence_ids"] == ["ev-1", "ev-2"]
     assert "opportunity_score" in params["metadata"]  # JSON-serialized
     # Round-tripped AuditEvent.
@@ -116,6 +119,22 @@ def test_action_audit_schema_has_statement_level_append_only_trigger() -> None:
     assert "CREATE TRIGGER trg_action_audit_append_only" in schema_sql
     assert "BEFORE UPDATE OR DELETE ON mip_app.action_audit" in schema_sql
     assert "FOR EACH STATEMENT" in schema_sql
+    assert "ADD COLUMN IF NOT EXISTS correlation_id TEXT" in schema_sql
+    assert "CREATE INDEX IF NOT EXISTS idx_action_audit_correlation" in schema_sql
+
+
+def test_every_backend_action_audit_insert_carries_correlation_id() -> None:
+    """Every app-authored audit row must be joinable to request logs."""
+
+    for path in Path("backend").rglob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        for match in re.finditer(
+            r"INSERT\s+INTO\s+mip_app\.action_audit\s*\((?P<cols>.*?)\)",
+            text,
+            flags=re.IGNORECASE | re.DOTALL,
+        ):
+            cols = match.group("cols")
+            assert "correlation_id" in cols, f"{path}:{match.start()} missing correlation_id"
 
 
 def test_list_issues_select_ordered_desc_with_limit() -> None:
@@ -167,6 +186,7 @@ def test_list_hydrates_rows_into_audit_events() -> None:
             "subject_clip": "clip_ref_abc123def456",
             "subject_segment": None,
             "request_id": None,
+            "correlation_id": "audit-contract-cid",
             "evidence_ids": ["ev-1"],
             "metadata": {"action": "view_borrower_360", "score": 92},
             "event_at": now,
@@ -182,6 +202,7 @@ def test_list_hydrates_rows_into_audit_events() -> None:
     assert e.action == "view_borrower_360"
     assert e.event_type == "VIEW_BORROWER"
     assert e.subject_clip == "clip_ref_abc123def456"
+    assert e.correlation_id == "audit-contract-cid"
     assert e.evidence_ids == ["ev-1"]
     # metadata "action" key is popped so it doesn't duplicate at
     # payload_json; the score survives.
@@ -209,6 +230,7 @@ def test_list_masks_legacy_raw_subject_clip_values() -> None:
             "subject_clip": "1234567890",
             "subject_segment": None,
             "request_id": None,
+            "correlation_id": None,
             "evidence_ids": [],
             "metadata": {"action": "view_borrower_360"},
             "event_at": now,
@@ -235,7 +257,7 @@ def test_resolve_actor_falls_back_to_default_with_warning(
         actor = resolve_actor(req)
     assert actor == settings.default_actor
     assert any(
-        "no X-Forwarded-Email" in rec.getMessage()
+        getattr(rec, "mip_event", None) == "identity_fallback"
         for rec in caplog.records
     )
 
@@ -273,8 +295,8 @@ def test_default_actor_emits_warning_log(
 ) -> None:
     """The fallback path emits a structured WARNING so operators see
     un-attributed calls in stdout JSON and OTLP logs. The record carries
-    an ``event=identity_fallback`` extra so filtering is cheap in the
-    sink.
+    the ``mip_event`` field consumed by ``StructuredFormatter`` so
+    filtering is cheap in the sink.
     """
     _reset_fallback_counter_for_tests()
     with caplog.at_level(logging.WARNING, logger="backend.services.audit_store"):
@@ -282,8 +304,8 @@ def test_default_actor_emits_warning_log(
     warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
     assert warnings, "expected at least one WARNING record"
     assert any(
-        getattr(rec, "event", None) == "identity_fallback" for rec in warnings
-    ), "expected structured extra with event=identity_fallback"
+        getattr(rec, "mip_event", None) == "identity_fallback" for rec in warnings
+    ), "expected structured event identity_fallback"
 
 
 def test_default_actor_increments_counter() -> None:
@@ -340,7 +362,7 @@ def test_get_audit_store_returns_the_lakebase_impl_by_default(
     """
     audit_mod._reset_audit_store_for_tests()
     stub_client: Any = MagicMock()
-    monkeypatch.setattr(audit_mod, "get_lakebase_client", lambda: stub_client)
+    monkeypatch.setattr(lakebase_audit_mod, "get_lakebase_client", lambda: stub_client)
     try:
         store = audit_mod.get_audit_store()
         assert isinstance(store, LakebaseAuditStore)

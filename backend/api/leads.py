@@ -15,13 +15,13 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response
 
+from backend.schemas._validators import normalize_public_lender_ref
 from backend.schemas.common import validate_internal_staff_email, validate_public_borrower_id
 from backend.schemas.lead import LeadSummary
 from backend.schemas.portfolio import PortfolioCriteria
 from backend.services.audit_store import AuditStore, get_audit_store, resolve_actor
 from backend.services.lakebase import LakebaseError, get_lakebase_client
 from backend.services.observability import emit
-from backend.services.pii_redaction import normalize_public_lender_ref
 from backend.services.rbac import require_admin
 from backend.services.repositories import LeadRepository, get_lead_repository
 from backend.services.sales_state import (

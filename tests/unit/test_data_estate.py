@@ -1,7 +1,20 @@
 from __future__ import annotations
 
+from fastapi.testclient import TestClient
+
+from backend.main import app
 from backend.services.admin_rules import SourceRow
 from backend.services.data_estate import build_data_estate_response
+
+client = TestClient(app)
+
+
+def test_data_estate_route_returns_lane_inventory() -> None:
+    response = client.get("/api/data-estate")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["public_demo_masking"] is True
+    assert isinstance(body["lanes"], list)
 
 
 def test_data_estate_separates_first_party_from_live_cotality() -> None:

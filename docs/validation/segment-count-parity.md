@@ -11,6 +11,27 @@
 **Share:** `cotality_mortgage_data.corelogic` (last updated 2026-10-29 per gap analysis).
 **Pass/fail summary:** Live gate compares all unblocked segments across every refreshed coverage state discovered from gold rollups. BLOCKED segments (`listed`, `permit`) correctly return 0 on both sides until their Cotality feeds arrive.
 
+**2026-05-15 remediation note:** A live parity failure on `itm/CA`
+(`ref=16706`, `gold=16544`) was traced to a stale gold refresh, not predicate
+drift. `mip.silver.market_rates_weekly` had advanced the latest FRED
+`MORTGAGE30US` row to `0.0636`, while `mip.gold.borrower_360` was still
+materialized with `market_rate_fraction=0.0637` from the previous scoring run.
+Running `databricks bundle run mip_refresh_scores -t dev --profile DEFAULT`
+rebuilt gold at `0.0636`, restored CA ITM to `16,706`, and made
+`tests/integration/test_segment_count_parity.py` pass. The test now includes an
+explicit `borrower_360.market_rate_fraction` freshness guard so the next FRED
+refresh without a gold refresh fails with that root cause directly.
+
+Follow-up live smoke found the dev bundle had been deployed with rendered
+Summit first-party demo feeds disabled, which made all contactability fields
+empty after the refresh (`marketing_eligible=0`, `consent_status='unknown'`)
+and caused the default Lead Queue to return no rows. The remediation was to
+redeploy the dev bundle with `MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS=1`, rerun
+`mip_refresh_scores`, and align `tools/databricks/bundle_env.py` with
+`scripts/deploy.sh` so dev-target bundle deploys render the Summit demo feed
+enabled by default while non-dev targets stay fail-closed unless explicitly
+overridden.
+
 The test that locks this in place lives at
 [tests/integration/test_segment_count_parity.py](../../tests/integration/test_segment_count_parity.py).
 It is GATED on live warehouse credentials (same pattern as

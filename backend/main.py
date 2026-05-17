@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -46,6 +48,7 @@ from backend.services.observability import (
     emit,
     get_correlation_id,
     reset_correlation_id,
+    sanitize_correlation_id,
     set_correlation_id,
 )
 
@@ -79,9 +82,23 @@ def _warm_warehouse() -> None:
         client = get_sql_client()
         client.execute_one("SELECT 1 AS warm")
         took_ms = int((time.monotonic() - start) * 1000)
-        log.info("warehouse warm (took %dms)", took_ms)
+        emit(
+            log,
+            "warehouse_warm_start_succeeded",
+            dependency="warehouse",
+            outcome="success",
+            duration_ms=took_ms,
+        )
     except Exception as exc:  # noqa: BLE001 -- log-and-continue is the contract
-        log.warning("warehouse warm-start failed (non-fatal): %s", exc)
+        emit(
+            log,
+            "warehouse_warm_start_failed",
+            level=logging.WARNING,
+            dependency="warehouse",
+            outcome="error",
+            exc_type=type(exc).__name__,
+            exc_msg=str(exc)[:500],
+        )
 
 
 def _warm_lakebase() -> None:
@@ -104,16 +121,36 @@ def _warm_lakebase() -> None:
     host_hint = settings.lakebase_host or os.environ.get("PGHOST")
     user_hint = settings.lakebase_user or os.environ.get("PGUSER")
     if not host_hint or not user_hint:
-        log.info("lakebase warm-start skipped (no creds configured)")
+        emit(
+            log,
+            "lakebase_warm_start_skipped",
+            dependency="lakebase",
+            outcome="skipped",
+            reason="missing_connection_hints",
+        )
         return
     start = time.monotonic()
     try:
         client = get_lakebase_client()
         client.fetchone("SELECT 1 AS warm")
         took_ms = int((time.monotonic() - start) * 1000)
-        log.info("lakebase warm (took %dms)", took_ms)
+        emit(
+            log,
+            "lakebase_warm_start_succeeded",
+            dependency="lakebase",
+            outcome="success",
+            duration_ms=took_ms,
+        )
     except Exception as exc:  # noqa: BLE001 -- log-and-continue is the contract
-        log.warning("lakebase warm-start failed (non-fatal): %s", exc)
+        emit(
+            log,
+            "lakebase_warm_start_failed",
+            level=logging.WARNING,
+            dependency="lakebase",
+            outcome="error",
+            exc_type=type(exc).__name__,
+            exc_msg=str(exc)[:500],
+        )
 
 
 @asynccontextmanager
@@ -198,30 +235,28 @@ class CorrelationIdMiddleware(BaseHTTPMiddleware):
     #   * charset: [A-Za-z0-9._-] only (matches RFC 4122 UUIDs + common
     #     trace ids without admitting control characters / whitespace)
     #   * length: 1..128 so a burst of huge headers can't bloat log lines
+    #   * value must not be shaped like PII; correlation ids are persisted
+    #     into the audit ledger, response bodies, and logs, so a caller trying
+    #     to use an SSN/phone/email/borrower id as a trace id gets a fresh id.
     #   * anything that fails either check is dropped silently and we
     #     mint a fresh correlation id, keeping the middleware invariant
     #     that every request has exactly one id.
-    _CID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
-
     # Fallback path normaliser for unrouted paths. Matches the two
     # borrower-id shapes the product currently emits -- masked borrower
     # IDs and Cotality CLIP strings (numeric, >= 6 digits per the
     # Cotality data contract). Conservative on purpose: we would rather
     # under-normalise an unknown path than over-normalise a real UC
     # object name that happens to match a loose pattern.
-    _ID_SEGMENT_PATTERN = re.compile(r"/(?:B-\d{3,}|CL-[A-Za-z0-9]+|\d{6,})(?=/|$)")
+    _ID_SEGMENT_PATTERN = re.compile(
+        r"/(?:B-[A-Za-z0-9][A-Za-z0-9_-]{0,126}|CL-[A-Za-z0-9]+|\d{6,})(?=/|$)"
+    )
 
     def __init__(self, app: ASGIApp) -> None:
         super().__init__(app)
 
     @classmethod
     def _sanitize_correlation_id(cls, raw: str | None) -> str | None:
-        if raw is None:
-            return None
-        trimmed = raw.strip()
-        if cls._CID_PATTERN.match(trimmed):
-            return trimmed
-        return None
+        return sanitize_correlation_id(raw)
 
     @classmethod
     def _templated_path(cls, request: StarletteRequest) -> str:
@@ -390,6 +425,29 @@ async def _dependency_down_handler(_request: Request, exc: DependencyDownError) 
         },
     )
 
+
+@app.exception_handler(RequestValidationError)
+async def _request_validation_handler(
+    _request: Request,
+    exc: RequestValidationError,
+) -> JSONResponse:
+    """Mirror FastAPI's 422 shape while adding the request correlation id.
+
+    Operators usually receive pasted JSON bodies in incident threads, not
+    response headers. Keeping ``detail`` unchanged preserves existing client
+    parsing, and the top-level ``correlation_id`` gives support a direct log
+    join key for malformed request probes.
+    """
+
+    return JSONResponse(
+        status_code=422,
+        content={
+            "detail": jsonable_encoder(exc.errors()),
+            "correlation_id": get_correlation_id(),
+        },
+    )
+
+
 for router in [
     health.router,
     config.router,
@@ -494,9 +552,6 @@ if _FRONTEND_DIST.is_dir() and (_FRONTEND_DIST / "index.html").is_file():
             # match. The path is capped at 256 chars to bound log line
             # size; longer probe strings are truncated with an ellipsis.
             attempted = full_path if len(full_path) <= 256 else full_path[:256] + "..."
-            log.warning(
-                "spa_fallback: path_traversal_blocked path=%s", attempted
-            )
             emit(
                 log,
                 "spa_path_traversal_blocked",

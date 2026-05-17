@@ -280,6 +280,17 @@ def test_genie_numeric_eval_ranges_have_canonical_sql() -> None:
         assert item.get("canonical_column"), f"{item.get('id')} numeric range lacks canonical_column"
 
 
+def test_nightly_runs_standard_genie_fuzz_and_keeps_deep_fuzz_manual() -> None:
+    text = (REPO / ".github" / "workflows" / "nightly.yml").read_text(encoding="utf-8")
+
+    assert "genie-fuzz-standard:" in text
+    assert "pytest -q tests/integration/test_genie_fuzz.py -m integration" in text
+    assert "MIP_GENIE_FUZZ_EXAMPLES: '15'" in text
+    assert "genie-fuzz-deep:" in text
+    assert "if: ${{ github.event_name == 'workflow_dispatch' }}" in text
+    assert "pytest -m genie_fuzz_deep tests/integration/test_genie_fuzz.py -q" in text
+
+
 @pytest.mark.parametrize(
     "relative_path",
     (

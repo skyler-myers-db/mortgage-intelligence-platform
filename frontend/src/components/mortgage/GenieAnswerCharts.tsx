@@ -7,9 +7,8 @@ import {
   normalizeState,
   type ChartRow,
 } from './GenieAnswer.logic';
-
-interface UsaSvgMapLocation { name: string; id: string; path: string }
-interface UsaSvgMap { label: string; viewBox: string; locations: UsaSvgMapLocation[] }
+import { loadUsaStateMap } from './USStateMapData';
+import type { UsaSvgMap } from './USChoroplethMap.utils';
 
 /**
  * Inline horizontal bar chart. Dependency-free SVG so we don't pull
@@ -152,8 +151,8 @@ export function GenieMapChart({
   const [usaMap, setUsaMap] = useState<UsaSvgMap | null>(null);
   useEffect(() => {
     let live = true;
-    import('@svg-maps/usa').then((mod) => {
-      if (live) setUsaMap(mod.default as UsaSvgMap);
+    loadUsaStateMap().then((map) => {
+      if (live) setUsaMap(map);
     });
     return () => {
       live = false;

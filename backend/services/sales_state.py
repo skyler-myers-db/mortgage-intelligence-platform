@@ -15,7 +15,7 @@ from backend.schemas.sales import (
     LeadAssignment,
     SalesTeamMember,
 )
-from backend.services.audit_store import _build_insert_params
+from backend.services.audit_lakebase_store import _build_insert_params
 from backend.services.lakebase import LakebaseClient, LakebaseError, get_lakebase_client
 from backend.services.pii_redaction import scrub_free_text
 
@@ -23,11 +23,11 @@ _SALES_AUDIT_INSERT_SQL = """
 INSERT INTO mip_app.action_audit (
     event_type, actor_email, entity_type, entity_id,
     subject_clip, subject_segment, request_id,
-    evidence_ids, metadata
+    correlation_id, evidence_ids, metadata
 ) VALUES (
     %(event_type)s, %(actor_email)s, %(entity_type)s, %(entity_id)s,
     %(subject_clip)s, %(subject_segment)s, %(request_id)s,
-    %(evidence_ids)s, %(metadata)s::jsonb
+    %(correlation_id)s, %(evidence_ids)s, %(metadata)s::jsonb
 )
 RETURNING audit_id, event_at
 """

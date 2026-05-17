@@ -252,10 +252,13 @@ CREATE TABLE IF NOT EXISTS mip_app.action_audit (
     subject_clip    TEXT,
     subject_segment TEXT,
     request_id      TEXT,
+    correlation_id  TEXT,
     evidence_ids    TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
     metadata        JSONB NOT NULL DEFAULT '{}'::jsonb,
     event_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE mip_app.action_audit
+    ADD COLUMN IF NOT EXISTS correlation_id TEXT;
 CREATE INDEX IF NOT EXISTS idx_action_audit_event_at
     ON mip_app.action_audit (event_at DESC);
 CREATE INDEX IF NOT EXISTS idx_action_audit_event_type
@@ -265,6 +268,9 @@ CREATE INDEX IF NOT EXISTS idx_action_audit_actor
 CREATE INDEX IF NOT EXISTS idx_action_audit_subject_clip
     ON mip_app.action_audit (subject_clip)
     WHERE subject_clip IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_action_audit_correlation
+    ON mip_app.action_audit (correlation_id)
+    WHERE correlation_id IS NOT NULL;
 -- Genie action idempotency: the server issues request ids inside the
 -- HMAC confirmation token, and Lakebase enforces one audited mutation per
 -- actor/request/event. The partial predicate keeps legacy non-Genie audit

@@ -69,6 +69,37 @@ from urllib.parse import urlsplit, urlunsplit
 
 correlation_id_var: ContextVar[str | None] = ContextVar("mip_correlation_id", default=None)
 
+_CORRELATION_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
+_EMAIL_RE = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+", re.IGNORECASE)
+_SSN_RE = re.compile(r"(?<!\d)\d{3}-\d{2}-\d{4}(?!\d)")
+_PHONE_RE = re.compile(r"(?<!\d)(?:\+?1[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?)\d{3}[-.\s]?\d{4}(?!\d)")
+_BORROWER_ID_RE = re.compile(r"B-[A-Za-z0-9][A-Za-z0-9_-]{0,126}")
+_CLIP_ID_RE = re.compile(r"CL-[A-Za-z0-9][A-Za-z0-9_-]{1,126}")
+_LONG_DIGIT_RE = re.compile(r"\d{9,}")
+_CORRELATION_ID_PII_PATTERNS: tuple[re.Pattern[str], ...] = (
+    _EMAIL_RE,
+    _SSN_RE,
+    _PHONE_RE,
+    _BORROWER_ID_RE,
+    _CLIP_ID_RE,
+    _LONG_DIGIT_RE,
+)
+
+
+def is_safe_correlation_id(value: str) -> bool:
+    """Return whether ``value`` is a safe caller-supplied correlation ID."""
+    return bool(_CORRELATION_ID_PATTERN.fullmatch(value)) and not any(
+        pattern.search(value) for pattern in _CORRELATION_ID_PII_PATTERNS
+    )
+
+
+def sanitize_correlation_id(raw: str | None) -> str | None:
+    """Return a stripped safe correlation ID, or ``None`` when unsafe."""
+    if raw is None:
+        return None
+    value = raw.strip()
+    return value if is_safe_correlation_id(value) else None
+
 
 def get_correlation_id() -> str:
     """Return the current correlation ID, minting a fresh UUID if absent.
@@ -142,24 +173,28 @@ _SECRET_TEXT_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
         r"\1<redacted>@",
     ),
     (
-        re.compile(r"\bB-[A-Za-z0-9][A-Za-z0-9_-]{0,126}\b"),
+        _BORROWER_ID_RE,
         "B-<redacted>",
     ),
     (
-        re.compile(r"\bCL-[A-Za-z0-9][A-Za-z0-9_-]{1,126}\b"),
+        _CLIP_ID_RE,
         "CL-<redacted>",
     ),
     (
-        re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+"),
+        _EMAIL_RE,
         "<email-redacted>",
     ),
     (
-        re.compile(r"\b\d{3}-\d{2}-\d{4}\b"),
+        _SSN_RE,
         "<ssn-redacted>",
     ),
     (
-        re.compile(r"\b(?:\+?1[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?)\d{3}[-.\s]?\d{4}\b"),
+        _PHONE_RE,
         "<phone-redacted>",
+    ),
+    (
+        _LONG_DIGIT_RE,
+        "<numeric-id-redacted>",
     ),
     (
         re.compile(
@@ -557,13 +592,13 @@ def _install_otel_handler_if_configured(root: logging.Logger, level_value: int) 
         # Optional dep absent. Warn loudly and keep going -- the caller
         # turned OTEL on intentionally, but the runtime isn't allowed to
         # crash because of a missing wheel.
-        logging.getLogger("mip.observability").warning(
-            "MIP_OTEL_ENDPOINT=%s is set but opentelemetry packages are "
-            "not importable (%s). Falling back to stdout-only logs. "
-            "Install `opentelemetry-sdk` and `opentelemetry-exporter-otlp` "
-            "to enable durable log export.",
-            endpoint_label,
-            exc,
+        emit(
+            logging.getLogger("mip.observability"),
+            "otel_exporter_missing_dependency",
+            level=logging.WARNING,
+            outcome="stdout_only",
+            endpoint=endpoint_label,
+            exc_type=type(exc).__name__,
         )
         return
 
@@ -593,16 +628,21 @@ def _install_otel_handler_if_configured(root: logging.Logger, level_value: int) 
         handler.setFormatter(StructuredFormatter())
         root.addHandler(handler)
         _OTEL_HANDLER = handler
-        logging.getLogger("mip.observability").info(
-            "OTLP log exporter installed (endpoint=%s, header_keys=%s)",
-            endpoint_label,
-            sorted(headers.keys()),
+        emit(
+            logging.getLogger("mip.observability"),
+            "otel_exporter_installed",
+            outcome="installed",
+            endpoint=endpoint_label,
+            header_keys=sorted(headers.keys()),
         )
     except Exception as exc:  # noqa: BLE001 -- see comment above
-        logging.getLogger("mip.observability").warning(
-            "OTLP exporter wiring failed (non-fatal; endpoint=%s): %s",
-            endpoint_label,
-            type(exc).__name__,
+        emit(
+            logging.getLogger("mip.observability"),
+            "otel_exporter_wiring_failed",
+            level=logging.WARNING,
+            outcome="stdout_only",
+            endpoint=endpoint_label,
+            exc_type=type(exc).__name__,
         )
 
 
@@ -684,11 +724,13 @@ __all__ = [
     "emit",
     "get_correlation_id",
     "get_otel_handler",
+    "is_safe_correlation_id",
     "record_breaker_state_change",
     "record_error",
     "recent_breaker_state_changes",
     "recent_error_count",
     "reset_correlation_id",
+    "sanitize_correlation_id",
     "set_correlation_id",
     "timed_dependency",
 ]

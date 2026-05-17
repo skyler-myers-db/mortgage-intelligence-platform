@@ -56,8 +56,9 @@ three secrets to the GitHub repo — runs from a single Python tool:
 #      an admin PAT in ~/.databrickscfg DEFAULT profile).
 #   2. `gh auth login` against the repo owner. Used to push the three
 #      GitHub secrets via stdin.
-#   3. `databricks bundle deploy -t dev` has been run at least once so
-#      the deployed App resource (`mip-app`) exists in the workspace.
+#   3. `./scripts/deploy.sh -t dev` has been run at least once, or the
+#      lower-level bundle resource deploy plus app promotion has created the
+#      deployed App resource (`mip-app`) in the workspace.
 
 python tools/databricks/provision_m2m_oauth.py \
     --sp-name mip-nightly-ci-sp \

@@ -93,7 +93,7 @@ works, columns resolve, row count fits the chart type). Five things the
 Lakeview renderer decides that still need a human look:
 
 For **each dashboard** (`Executive`, `Segment`) open it after
-`databricks bundle deploy -t dev` and check:
+`./scripts/deploy.sh -t dev` and check:
 
 1. **Colors and theme** — Lakeview renders the workspace default palette.
    Verify the 6 segments in `chart_equity_vs_spread` / `chart_top_segments_per_state`

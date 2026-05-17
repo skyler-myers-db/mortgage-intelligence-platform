@@ -26,6 +26,26 @@ class _CaptureSegmentRepo:
         ]
 
 
+def test_segments_api_default_uses_unfiltered_gold_rollup() -> None:
+    repo = _CaptureSegmentRepo()
+    prior = app.dependency_overrides.get(get_segment_repository)
+    app.dependency_overrides[get_segment_repository] = lambda: repo
+    try:
+        response = TestClient(app).get("/api/segments")
+    finally:
+        if prior is None:
+            app.dependency_overrides.pop(get_segment_repository, None)
+        else:
+            app.dependency_overrides[get_segment_repository] = prior
+
+    assert response.status_code == 200
+    assert repo.calls
+    call = repo.calls[-1]
+    assert call["segment_codes"] is None
+    assert call["segment_mode"] == "any"
+    assert call["portfolio_criteria"] is None
+
+
 def test_segments_api_passes_segment_and_portfolio_filters_to_repository() -> None:
     repo = _CaptureSegmentRepo()
     prior = app.dependency_overrides.get(get_segment_repository)
@@ -51,3 +71,24 @@ def test_segments_api_passes_segment_and_portfolio_filters_to_repository() -> No
     assert criteria.occupancy == "Owner-occupied"
     assert criteria.lien_status == "Open HELOC"
     assert criteria.min_equity_pct_label == "≥ 25%"
+    assert criteria.marketing_eligibility == "Any"
+
+
+def test_segments_api_preserves_explicit_marketing_eligibility_filter() -> None:
+    repo = _CaptureSegmentRepo()
+    prior = app.dependency_overrides.get(get_segment_repository)
+    app.dependency_overrides[get_segment_repository] = lambda: repo
+    try:
+        response = TestClient(app).get(
+            "/api/segments?marketing_eligibility=Eligible%20only",
+        )
+    finally:
+        if prior is None:
+            app.dependency_overrides.pop(get_segment_repository, None)
+        else:
+            app.dependency_overrides[get_segment_repository] = prior
+
+    assert response.status_code == 200
+    assert repo.calls
+    criteria = repo.calls[-1]["portfolio_criteria"]
+    assert criteria.marketing_eligibility == "Eligible only"

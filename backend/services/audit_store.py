@@ -21,12 +21,10 @@ routers read ``Request`` -> call ``resolve_actor`` -> pass to
 """
 from __future__ import annotations
 
-import json
 import logging
 import re
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any, Protocol, runtime_checkable
-from uuid import uuid4
 
 from fastapi import Request
 
@@ -43,9 +41,8 @@ from backend.schemas.common import (
     validate_public_campaign_label,
     validate_public_opaque_id,
 )
-from backend.services.lakebase import LakebaseClient, get_lakebase_client
+from backend.services.observability import emit
 from backend.services.pii_redaction import (
-    mask_cotality_id,
     normalize_public_lender_ref,
     scrub_free_text,
 )
@@ -227,6 +224,7 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         "notes",
         # Genie control-layer actions
         "action_type",
+        "refusal_reason",
         "conversation_id",
         "message_id",
         "question_hash",
@@ -278,6 +276,9 @@ _SALES_DISPOSITION_OUTCOMES: frozenset[str] = frozenset(
         "not_now",
         "dead",
     }
+)
+_GENIE_REFUSAL_REASONS: frozenset[str] = frozenset(
+    {"protected_class", "instruction_override", "pii_request", "scope_bypass", "out_of_scope"}
 )
 
 _ALLOWED_OFFER_CODES: frozenset[str] = frozenset(NBO_PRODUCT_LABELS) | {"recapture"}
@@ -518,6 +519,9 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
     for field, value in _metadata_values_for(metadata, {"outcome"}):
         if value is not None and str(value) not in _SALES_DISPOSITION_OUTCOMES:
             raise AuditMetadataValueViolation(field, "must be a governed call disposition outcome")
+    for field, value in _metadata_values_for(metadata, {"refusal_reason"}):
+        if value is not None and str(value) not in _GENIE_REFUSAL_REASONS:
+            raise AuditMetadataValueViolation(field, "must be a governed Genie refusal reason")
     for field, value in _metadata_values_for(metadata, {"per_lo_counts"}):
         if value is None:
             continue
@@ -773,6 +777,7 @@ class AuditStore(Protocol):
         borrower_id: str | None = None,
         subject_clip: str | None = None,
         event_type: str | None = None,
+        correlation_id: str | None = None,
         since: datetime | None = None,
         until: datetime | None = None,
     ) -> list[AuditEvent]: ...
@@ -822,15 +827,13 @@ def resolve_actor(request: Request | None) -> str:
     # emitted for one cycle; R6-08 rename).
     global _FALLBACK_IDENTITY_COUNT
     _FALLBACK_IDENTITY_COUNT += 1
-    log.warning(
-        "audit_store.resolve_actor: no X-Forwarded-Email header -- "
-        "falling back to settings.default_actor=%s",
-        settings.default_actor,
-        extra={
-            "event": "identity_fallback",
-            "default_actor": settings.default_actor,
-            "fallback_count": _FALLBACK_IDENTITY_COUNT,
-        },
+    emit(
+        log,
+        "identity_fallback",
+        level=logging.WARNING,
+        default_actor=settings.default_actor,
+        fallback_count=_FALLBACK_IDENTITY_COUNT,
+        message="audit_store.resolve_actor: no forwarded identity header",
     )
     return settings.default_actor
 
@@ -848,420 +851,6 @@ def _coerce_event_type(event_type: str | None, action: str) -> str:
 
 
 # ----------------------------------------------------------------------
-# In-memory store -- kept for unit tests and as a reference impl. The
-# production factory always returns ``LakebaseAuditStore``; tests that
-# want a fast, no-network audit surface instantiate this directly and
-# inject via FastAPI dependency_overrides.
-# ----------------------------------------------------------------------
-
-
-class InMemoryAuditStore:
-    """Deterministic in-memory audit ledger. Tests only."""
-
-    def __init__(self) -> None:
-        self._events: list[AuditEvent] = []
-
-    def write(
-        self,
-        *,
-        actor: str,
-        action: str,
-        entity_type: str,
-        entity_id: str,
-        payload_json: dict[str, Any] | None = None,
-        evidence_ids: list[str] | None = None,
-        event_type: str | None = None,
-        subject_clip: str | None = None,
-        subject_segment: str | None = None,
-        request_id: str | None = None,
-    ) -> AuditEvent:
-        payload = payload_json or {}
-        # Governance: denylist PII keys at write time, not read time.
-        # Applies equally to the in-memory store so unit tests exercise
-        # the guard without needing Lakebase.
-        metadata = _sanitize_metadata({**payload, "action": action})
-        payload = {k: v for k, v in metadata.items() if k != "action"}
-        _assert_no_pii(metadata)
-        # R6-20: allowlist complement to the denylist. Fails loudly on
-        # any key that isn't explicitly reviewed in
-        # ``_ALLOWED_METADATA_KEYS``.
-        _assert_allowlisted(metadata)
-        _assert_public_safe_values(metadata)
-        safe_event_type = _coerce_event_type(event_type, action)
-        (
-            safe_action,
-            safe_entity_type,
-            safe_entity_id,
-            safe_event_type,
-            safe_subject_segment,
-            safe_request_id,
-        ) = _validate_top_level_audit_columns(
-            action=action,
-            entity_type=entity_type,
-            entity_id=entity_id,
-            event_type=safe_event_type,
-            subject_segment=subject_segment,
-            request_id=request_id,
-        )
-        event = AuditEvent(
-            event_id=f"evt-{uuid4().hex[:12]}",
-            actor=actor,
-            action=safe_action,
-            entity_type=safe_entity_type,
-            entity_id=safe_entity_id,
-            payload_json=payload,
-            evidence_ids=evidence_ids or [],
-            created_at=datetime.now(UTC).isoformat(),
-            event_type=safe_event_type,
-            subject_clip=(
-                mask_cotality_id("clip", subject_clip)
-                if subject_clip is not None
-                else None
-            ),
-            subject_segment=safe_subject_segment,
-            request_id=safe_request_id,
-        )
-        self._events.append(event)
-        return event
-
-    def list(
-        self,
-        limit: int = 50,
-        *,
-        actor: str | None = None,
-        action: str | None = None,
-        entity_id: str | None = None,
-        borrower_id: str | None = None,
-        subject_clip: str | None = None,
-        event_type: str | None = None,
-        since: datetime | None = None,
-        until: datetime | None = None,
-    ) -> list[AuditEvent]:
-        filtered = self._events
-        if actor:
-            filtered = [e for e in filtered if e.actor == actor]
-        if action:
-            filtered = [e for e in filtered if e.action == action]
-        if entity_id:
-            filtered = [e for e in filtered if e.entity_id == entity_id]
-        if borrower_id:
-            filtered = [
-                e for e in filtered
-                if e.entity_id == borrower_id
-                or str((e.payload_json or {}).get("borrower_id") or "") == borrower_id
-            ]
-        if subject_clip:
-            filtered = [e for e in filtered if e.subject_clip == subject_clip]
-        if event_type:
-            filtered = [e for e in filtered if e.event_type == event_type]
-        if since:
-            filtered = [
-                e for e in filtered
-                if datetime.fromisoformat(e.created_at.replace("Z", "+00:00")) >= since
-            ]
-        if until:
-            filtered = [
-                e for e in filtered
-                if datetime.fromisoformat(e.created_at.replace("Z", "+00:00")) <= until
-            ]
-        return list(reversed(filtered[-limit:]))
-
-
-# ----------------------------------------------------------------------
-# Lakebase-backed store -- production path.
-# ----------------------------------------------------------------------
-
-
-_INSERT_SQL = """
-INSERT INTO mip_app.action_audit (
-    event_type, actor_email, entity_type, entity_id,
-    subject_clip, subject_segment, request_id,
-    evidence_ids, metadata
-) VALUES (
-    %(event_type)s, %(actor_email)s, %(entity_type)s, %(entity_id)s,
-    %(subject_clip)s, %(subject_segment)s, %(request_id)s,
-    %(evidence_ids)s, %(metadata)s::jsonb
-)
-RETURNING audit_id, event_at
-"""
-
-_SELECT_SQL_TEMPLATE = """
-SELECT audit_id, event_type, actor_email, entity_type, entity_id,
-       subject_clip, subject_segment, request_id,
-       evidence_ids, metadata, event_at
-FROM mip_app.action_audit
-{where_clause}
-ORDER BY event_at DESC
-LIMIT %(limit)s
-"""
-
-
-def _build_insert_params(
-    *,
-    actor: str,
-    action: str,
-    entity_type: str,
-    entity_id: str,
-    payload_json: dict[str, Any] | None = None,
-    evidence_ids: list[str] | None = None,
-    event_type: str | None = None,
-    subject_clip: str | None = None,
-    subject_segment: str | None = None,
-    request_id: str | None = None,
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    payload = payload_json or {}
-    metadata = _sanitize_metadata({**payload, "action": action})
-    payload = {k: v for k, v in metadata.items() if k != "action"}
-    _assert_no_pii(metadata)
-    _assert_allowlisted(metadata)
-    _assert_public_safe_values(metadata)
-    safe_event_type = _coerce_event_type(event_type, action)
-    (
-        safe_action,
-        safe_entity_type,
-        safe_entity_id,
-        safe_event_type,
-        safe_subject_segment,
-        safe_request_id,
-    ) = _validate_top_level_audit_columns(
-        action=action,
-        entity_type=entity_type,
-        entity_id=entity_id,
-        event_type=safe_event_type,
-        subject_segment=subject_segment,
-        request_id=request_id,
-    )
-    safe_subject_clip = (
-        mask_cotality_id("clip", subject_clip)
-        if subject_clip is not None
-        else None
-    )
-    params: dict[str, Any] = {
-        "event_type": safe_event_type,
-        "actor_email": actor,
-        "entity_type": safe_entity_type,
-        "entity_id": safe_entity_id,
-        "subject_clip": safe_subject_clip,
-        "subject_segment": safe_subject_segment,
-        "request_id": safe_request_id,
-        "evidence_ids": list(evidence_ids or []),
-        "metadata": json.dumps(metadata),
-    }
-    _ = safe_action
-    return payload, params
-
-
-def _audit_event_from_row(
-    row: dict[str, Any],
-    *,
-    actor: str,
-    action: str,
-    entity_type: str,
-    entity_id: str,
-    payload_json: dict[str, Any],
-    evidence_ids: list[str] | None = None,
-    event_type: str | None = None,
-    subject_clip: str | None = None,
-    subject_segment: str | None = None,
-    request_id: str | None = None,
-) -> AuditEvent:
-    event_at = row["event_at"]
-    created_at = event_at.isoformat() if hasattr(event_at, "isoformat") else str(event_at)
-    return AuditEvent(
-        event_id=str(row["audit_id"]),
-        actor=actor,
-        action=action,
-        entity_type=entity_type,
-        entity_id=entity_id,
-        payload_json=payload_json,
-        evidence_ids=evidence_ids or [],
-        created_at=created_at,
-        event_type=_coerce_event_type(event_type, action),
-        subject_clip=subject_clip,
-        subject_segment=subject_segment,
-        request_id=request_id,
-    )
-
-
-def write_audit_event_in_transaction(
-    conn: Any,
-    *,
-    actor: str,
-    action: str,
-    entity_type: str,
-    entity_id: str,
-    payload_json: dict[str, Any] | None = None,
-    evidence_ids: list[str] | None = None,
-    event_type: str | None = None,
-    subject_clip: str | None = None,
-    subject_segment: str | None = None,
-    request_id: str | None = None,
-) -> AuditEvent:
-    """Insert one audit row using an already-open Lakebase transaction."""
-    payload, params = _build_insert_params(
-        actor=actor,
-        action=action,
-        entity_type=entity_type,
-        entity_id=entity_id,
-        payload_json=payload_json,
-        evidence_ids=evidence_ids,
-        event_type=event_type,
-        subject_clip=subject_clip,
-        subject_segment=subject_segment,
-        request_id=request_id,
-    )
-    row = conn.execute(_INSERT_SQL, params).fetchone()
-    if row is None:
-        raise RuntimeError("Lakebase INSERT returned no row")
-    return _audit_event_from_row(
-        dict(row),
-        actor=actor,
-        action=action,
-        entity_type=entity_type,
-        entity_id=entity_id,
-        payload_json=payload,
-        evidence_ids=evidence_ids,
-        event_type=event_type,
-        subject_clip=params["subject_clip"],
-        subject_segment=subject_segment,
-        request_id=request_id,
-    )
-
-
-class LakebaseAuditStore:
-    """Audit store backed by the Lakebase ``mip_app.action_audit`` table.
-
-    Each ``write`` opens a short transaction, INSERTs one row, and
-    returns the AuditEvent with the server-assigned UUID + timestamp.
-    ``list`` selects ORDER BY event_at DESC LIMIT N.
-    """
-
-    def __init__(self, client: LakebaseClient | None = None) -> None:
-        # Accept an injected client for unit testability; default to
-        # the process-singleton.
-        self._client = client or get_lakebase_client()
-
-    def write(
-        self,
-        *,
-        actor: str,
-        action: str,
-        entity_type: str,
-        entity_id: str,
-        payload_json: dict[str, Any] | None = None,
-        evidence_ids: list[str] | None = None,
-        event_type: str | None = None,
-        subject_clip: str | None = None,
-        subject_segment: str | None = None,
-        request_id: str | None = None,
-    ) -> AuditEvent:
-        payload, params = _build_insert_params(
-            actor=actor,
-            action=action,
-            entity_type=entity_type,
-            entity_id=entity_id,
-            payload_json=payload_json,
-            evidence_ids=evidence_ids,
-            event_type=event_type,
-            subject_clip=subject_clip,
-            subject_segment=subject_segment,
-            request_id=request_id,
-        )
-        row = self._client.fetchone(_INSERT_SQL, params)
-        if row is None:
-            # Should be impossible with RETURNING, but guard anyway --
-            # the Protocol promises an AuditEvent, not None.
-            raise RuntimeError("Lakebase INSERT returned no row")
-        return _audit_event_from_row(
-            row,
-            actor=actor,
-            action=action,
-            entity_type=entity_type,
-            entity_id=entity_id,
-            payload_json=payload,
-            evidence_ids=list(evidence_ids or []),
-            event_type=params["event_type"],
-            subject_clip=params["subject_clip"],
-            subject_segment=subject_segment,
-            request_id=request_id,
-        )
-
-    def list(
-        self,
-        limit: int = 50,
-        *,
-        actor: str | None = None,
-        action: str | None = None,
-        entity_id: str | None = None,
-        borrower_id: str | None = None,
-        subject_clip: str | None = None,
-        event_type: str | None = None,
-        since: datetime | None = None,
-        until: datetime | None = None,
-    ) -> list[AuditEvent]:
-        clauses: list[str] = []
-        params: dict[str, Any] = {"limit": limit}
-        if actor:
-            clauses.append("actor_email = %(actor)s")
-            params["actor"] = actor
-        if entity_id:
-            clauses.append("entity_id = %(entity_id)s")
-            params["entity_id"] = entity_id
-        if borrower_id:
-            clauses.append("(entity_id = %(borrower_id)s OR metadata->>'borrower_id' = %(borrower_id)s)")
-            params["borrower_id"] = borrower_id
-        if subject_clip:
-            clauses.append("subject_clip = %(subject_clip)s")
-            params["subject_clip"] = mask_cotality_id("clip", subject_clip)
-        if event_type:
-            clauses.append("event_type = %(event_type)s")
-            params["event_type"] = event_type
-        if action:
-            clauses.append("metadata->>'action' = %(action)s")
-            params["action"] = action
-        if since:
-            clauses.append("event_at >= %(since)s")
-            params["since"] = since
-        if until:
-            clauses.append("event_at <= %(until)s")
-            params["until"] = until
-        where_clause = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-        sql = _SELECT_SQL_TEMPLATE.format(where_clause=where_clause)
-        rows = self._client.fetchall(sql, params, limit=limit)
-        out: list[AuditEvent] = []
-        for row in rows:
-            metadata = row.get("metadata") or {}
-            if isinstance(metadata, str):
-                # psycopg usually returns JSONB as dict, but fall back.
-                try:
-                    metadata = json.loads(metadata)
-                except json.JSONDecodeError:
-                    metadata = {}
-            action = metadata.pop("action", row["event_type"])
-            out.append(
-                AuditEvent(
-                    event_id=str(row["audit_id"]),
-                    actor=row["actor_email"],
-                    action=action,
-                    entity_type=row.get("entity_type") or "",
-                    entity_id=row.get("entity_id") or "",
-                    payload_json=metadata,
-                    evidence_ids=list(row.get("evidence_ids") or []),
-                    created_at=row["event_at"].isoformat(),
-                    event_type=row["event_type"],
-                    subject_clip=(
-                        mask_cotality_id("clip", row.get("subject_clip"))
-                        if row.get("subject_clip") is not None
-                        else None
-                    ),
-                    subject_segment=row.get("subject_segment"),
-                    request_id=row.get("request_id"),
-                )
-            )
-        return out
-
-
-# ----------------------------------------------------------------------
 # Factory -- single choke point for the FastAPI dependency graph.
 # ----------------------------------------------------------------------
 
@@ -1274,11 +863,13 @@ def get_audit_store() -> AuditStore:
 
     Production path constructs a ``LakebaseAuditStore`` backed by the
     Lakebase client singleton. Tests override this factory in
-    ``tests/conftest.py`` with an ``InMemoryAuditStore`` so unit tests
+    ``tests/conftest.py`` with the test fixture audit store so unit tests
     never touch Postgres.
     """
     global _AUDIT_STORE
     if _AUDIT_STORE is None:
+        from backend.services.audit_lakebase_store import LakebaseAuditStore
+
         _AUDIT_STORE = LakebaseAuditStore()
     return _AUDIT_STORE
 

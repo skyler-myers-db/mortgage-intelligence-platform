@@ -13,16 +13,16 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from backend.services.audit_lakebase_store import LakebaseAuditStore
 from backend.services.audit_store import (
     AuditMetadataValueViolation,
     AuditMetadataViolation,
     AuditPIIError,
-    InMemoryAuditStore,
-    LakebaseAuditStore,
     _assert_allowlisted,
     _assert_no_pii,
     _assert_public_safe_values,
 )
+from tests.fixtures.in_memory_audit_store import InMemoryAuditStore
 
 # ---------------------------------------------------------------------------
 # _assert_no_pii

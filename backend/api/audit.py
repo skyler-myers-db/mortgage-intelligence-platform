@@ -14,6 +14,7 @@ from backend.schemas.common import validate_public_borrower_id
 from backend.services.audit_store import AuditStore, get_audit_store, resolve_actor
 from backend.services.error_sanitizer import safe_dependency_detail
 from backend.services.lakebase import LakebaseClient, LakebaseError, get_lakebase_client
+from backend.services.observability import is_safe_correlation_id
 from backend.services.rbac import AdminDep
 
 router = APIRouter(prefix="/api/audit", tags=["audit"])
@@ -46,10 +47,14 @@ _ROUTER_OWNED_EVENT_TYPES: frozenset[str] = frozenset(
         "LEAD_DISTRIBUTE",
     }
 )
-
-
 def _event_type_for_payload(payload: AuditEventCreateRequest) -> str:
     return (payload.event_type or payload.action).replace(".", "_").replace("-", "_").upper()
+
+
+def _validate_correlation_filter(value: str) -> str:
+    if not is_safe_correlation_id(value):
+        raise ValueError("correlation_id must be a non-PII request correlation id")
+    return value
 
 
 @router.get("/events", response_model=list[AuditEvent])
@@ -63,6 +68,7 @@ def list_events(
     borrower_id: Annotated[str | None, Query(max_length=64)] = None,
     subject_clip: Annotated[str | None, Query(max_length=128)] = None,
     event_type: Annotated[str | None, Query(max_length=128)] = None,
+    correlation_id: Annotated[str | None, Query(max_length=128)] = None,
     since: datetime | None = None,
     until: datetime | None = None,
 ) -> list[AuditEvent]:
@@ -71,6 +77,11 @@ def list_events(
             validate_public_borrower_id(borrower_id)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail="invalid borrower_id") from exc
+    if correlation_id is not None:
+        try:
+            correlation_id = _validate_correlation_filter(correlation_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="invalid correlation_id") from exc
     try:
         return store.list(
             limit=limit,
@@ -80,6 +91,7 @@ def list_events(
             borrower_id=borrower_id,
             subject_clip=subject_clip,
             event_type=event_type,
+            correlation_id=correlation_id,
             since=since,
             until=until,
         )

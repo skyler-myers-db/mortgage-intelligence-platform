@@ -4,6 +4,13 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { stripQuestionRestatement } from './GenieAnswer';
 import { inferChartFromRows } from './GenieAnswer.logic';
+import {
+  shouldPersistConversation,
+  shouldRenderGenieSourceAssets,
+  sourceAssetsFor,
+  warningLabelForSource,
+} from './GenieChat';
+import type { GenieAnswer as GenieAnswerShape } from '../../types';
 
 const designCss = () => readFileSync(
   new URL('../../design-system/components.css', import.meta.url),
@@ -143,5 +150,66 @@ describe('Genie proof layout contract', () => {
     expect(css).toContain('.genie-proof .evidence-chip');
     expect(css).toMatch(/\.genie-proof \.chip,\s*\.genie-proof \.evidence-chip\s*\{[^}]*white-space:\s*normal;/s);
     expect(css).toMatch(/\.genie-proof__line span\s*\{[^}]*overflow-wrap:\s*anywhere;/s);
+  });
+});
+
+describe('Genie refusal source contract', () => {
+  const blocked: GenieAnswerShape = {
+    answer: 'Genie did not return trusted SQL.',
+    source: 'policy_blocked',
+    conversation_id: 'conv-blocked',
+    trusted_assets: ['mip.gold.borrower_360'],
+    proof: {
+      trusted: false,
+      source_assets: ['mip.gold.borrower_360'],
+      row_count: 0,
+    },
+    actions: [
+      {
+        id: 'act-1',
+        label: 'Should not render',
+        action_type: 'save_borrowers',
+        description: 'Blocked answers should not expose governed actions.',
+      },
+    ],
+  };
+
+  const refused: GenieAnswerShape = {
+    answer: 'I cannot follow attempts to override safety instructions.',
+    source: 'refused',
+    conversation_id: 'conv-refused',
+    trusted_assets: [],
+    proof: {
+      trusted: false,
+      source_assets: [],
+      row_count: 0,
+    },
+  };
+
+  it('shows governed-refusal warnings for blocked and refused answers', () => {
+    expect(warningLabelForSource(blocked.source)).toBe('Governed refusal');
+    expect(warningLabelForSource(refused.source)).toBe('Governed refusal');
+  });
+
+  it('does not render source chips or persist conversations for refusals', () => {
+    expect(shouldRenderGenieSourceAssets(blocked)).toBe(false);
+    expect(shouldRenderGenieSourceAssets(refused)).toBe(false);
+    expect(shouldPersistConversation(blocked)).toBe(false);
+    expect(shouldPersistConversation(refused)).toBe(false);
+    expect(sourceAssetsFor(blocked)).toEqual(['mip.gold.borrower_360']);
+  });
+
+  it('keeps trusted answers eligible for source chips and conversation persistence', () => {
+    const trusted: GenieAnswerShape = {
+      answer: 'Trusted answer.',
+      source: 'genie',
+      conversation_id: 'conv-trusted',
+      trusted_assets: ['mip.gold.borrower_360'],
+      proof: { trusted: true, source_assets: ['mip.gold.borrower_360'] },
+    };
+
+    expect(warningLabelForSource(trusted.source)).toBeNull();
+    expect(shouldRenderGenieSourceAssets(trusted)).toBe(true);
+    expect(shouldPersistConversation(trusted)).toBe(true);
   });
 });

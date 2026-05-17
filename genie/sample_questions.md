@@ -88,7 +88,7 @@ Each entry has:
    SQL hint: `SELECT borrower_id, equity_estimate, recommended_offer FROM mip.gold.borrower_360 WHERE recommended_offer_code IN ('cash_out','heloc','refi_plus_heloc') ORDER BY equity_estimate DESC LIMIT 10`.
    Source: `mip.gold.borrower_360`.
 
-8. **Top 20 investors by property count in the Investor/Multi-Property segment.**
+8. **Show the top 20 masked borrower IDs in the Investor/Multi-Property segment by related property count.**
    Intent: investor / multi-property prioritization (Owner Link surfaces multi-property).
    Expected skeleton: 20 rows `{borrower_id, related_property_count}`,
    related_property_count ≥ 2.

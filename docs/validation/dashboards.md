@@ -124,6 +124,6 @@ Flagged for a future slice:
   emoji, warehouse-id guards.
 - `databricks bundle validate -t ci` — bundle-level schema check.
 - Visual: open each dashboard in the Databricks workspace after
-  `databricks bundle deploy -t dev`; the bundle resource takes a minute
-  to materialize because the Lakeview warehouse warm-starts on first
+  `./scripts/deploy.sh -t dev`; the dashboard bundle resource can take a
+  minute to materialize because the Lakeview warehouse warm-starts on first
   query.

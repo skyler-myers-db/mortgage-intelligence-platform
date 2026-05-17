@@ -95,8 +95,8 @@ New bundle job `mip_ref_seed` runs two SQL tasks:
 
 The same two SQL tasks are also inlined in `mip_refresh_silver` between
 `init_catalog_schemas` and `refresh_silver_pipeline`, so
-`databricks bundle deploy -t dev` lands a populated dictionary on first
-deploy with zero manual steps — consistent with the
+`./scripts/deploy.sh -t dev` lands a populated dictionary on first deploy
+with zero manual steps — consistent with the
 "self-contained, zero-click deploy" posture in CLAUDE.md.
 
 ### Fallback behavior

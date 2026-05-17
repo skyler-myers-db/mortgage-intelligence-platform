@@ -398,19 +398,20 @@ def check_trust_boundary_at_startup() -> None:
     # the current value.
     trust = get_settings().trust_forwarded_headers
     if trust and not looks_like_databricks_app_deploy():
-        log.warning(
-            "rbac_trust_boundary_unclear: trust_forwarded_headers=True "
-            "but runtime does not look like a Databricks Apps deploy "
-            "(no DATABRICKS_APP_PORT / DATABRICKS_APP_URL env var). "
-            "Client-supplied X-Forwarded-Email / X-Forwarded-Groups "
-            "headers will be trusted as identity; if no upstream proxy "
-            "strips them, a caller can forge any identity. Set "
-            "MIP_TRUST_FORWARDED_HEADERS=false to fail closed on this "
-            "deploy shape. See docs/security/GRANTS.md #10.",
+        log.log(
+            logging.WARNING,
+            "rbac_trust_boundary_unclear",
             extra={
                 "event": "rbac_trust_boundary_unclear",
                 "trust_forwarded_headers": trust,
                 "databricks_app_marker": False,
+                "mip_event": "rbac_trust_boundary_unclear",
+                "mip_extras": {
+                    "trust_forwarded_headers": trust,
+                    "databricks_app_marker": False,
+                    "recommended_action": "set MIP_TRUST_FORWARDED_HEADERS=false outside Databricks Apps unless an upstream proxy strips forwarded identity headers",
+                    "docs_ref": "docs/security/GRANTS.md#10",
+                },
             },
         )
 

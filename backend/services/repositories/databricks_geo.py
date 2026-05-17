@@ -19,6 +19,7 @@ from backend.services.county_names import county_name_for_fips
 from backend.services.databricks_sql import DatabricksSqlClient
 from backend.services.databricks_sql_helpers import qualify
 from backend.services.geography_scope import GeographyScope, load_geography_scope
+from backend.services.observability import emit
 from backend.services.repositories.databricks_portfolio import DatabricksPortfolioRepository
 from backend.services.repositories.databricks_shared import _SEGMENT_COLUMNS
 from backend.services.resilience import TTLCache
@@ -675,7 +676,15 @@ class DatabricksGeoRepository:
         try:
             scope = load_geography_scope(self._client)
         except Exception as exc:  # noqa: BLE001 -- scope copy is non-critical
-            log.warning("geo scope discovery failed: %s", exc)
+            emit(
+                log,
+                "geo_scope_discovery_failed",
+                level=logging.WARNING,
+                dependency="warehouse",
+                outcome="degraded",
+                exc_type=type(exc).__name__,
+                exc_msg=str(exc)[:500],
+            )
             return None
         self._cache.set(self._SCOPE_CACHE_KEY, scope, self._cache_ttl_s)
         return scope
@@ -757,4 +766,3 @@ class DatabricksGeoRepository:
         )
         self._cache.set(cache_key, response, self._cache_ttl_s)
         return response
-

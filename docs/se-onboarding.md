@@ -26,6 +26,19 @@ On your laptop:
 - [ ] `gh auth status` green (needed if you will rotate CI secrets — not required for deploy).
 - [ ] `git clone git@github.com:skyler-myers-db/mortgage-intelligence-platform.git && cd mortgage-intelligence-platform`.
 
+Supported demo browsers:
+
+- Chrome / Edge 111+.
+- Safari 16.4+.
+- Firefox 121+.
+
+The SPA intentionally uses modern CSS (`container` queries, `:has()`,
+`color-mix()`, logical sizing, and native `accent-color`) rather than a
+legacy transpilation chain. If a customer mandates an older locked-down
+browser or Firefox ESR below 121, run the browser matrix in §5 before
+the customer demo and treat any CSS fallback work as a customer-specific
+deployment requirement.
+
 On the customer workspace, before you start the clock:
 
 - [ ] Your user (or a paired customer admin) has **metastore admin** on
@@ -93,6 +106,16 @@ by default. If the customer uses a different profile name, edit the
 `profile:` line in [`databricks.yml`](../databricks.yml) lines 32 / 52
 to match, or pass `--profile` explicitly.
 
+If this is a customer fork, rebind the bundle's single workspace-host anchor
+once so every target points at the customer workspace:
+
+```bash
+./scripts/configure-workspace.sh "$DATABRICKS_HOST"
+```
+
+The helper normalizes the URL, updates only the `&default_host` line in
+[`databricks.yml`](../databricks.yml), and runs `make check-workspace-host`.
+
 ---
 
 ## 3. Apply UC grants (5 minutes — BEFORE `bundle deploy`)
@@ -122,7 +145,7 @@ resource-only recovery in Entrada's workspace.
 
 ```bash
 # One command: env-aware direct bundle validate/plan/deploy, app promotion, jobs, refreshes, and Genie provision
-./scripts/deploy.sh
+./scripts/deploy.sh -t dev
 # Expected last line: "[deploy] complete."
 ```
 

@@ -71,9 +71,11 @@ targets:
   prod:
     mode: production
     # CUSTOMER-SE CHECKLIST BEFORE FIRST `bundle deploy -t prod`:
-    #   1. `workspace.host` inherits from the DEFAULT CLI profile (or
-    #      `BUNDLE_VAR_workspace_host`). Point the CLI at the customer's
-    #      production workspace before deploy; no code edit needed.
+    #   1. `workspace.host` dereferences the root `&default_host` YAML anchor.
+    #      Before customer deploy, run:
+    #        ./scripts/configure-workspace.sh https://<customer-workspace>
+    #      (or make the same one-line anchor edit manually). Then point the
+    #      DEFAULT CLI profile at that same customer workspace.
     #   2. Decide catalog isolation: share `mip` with dev in a single
     #      workspace, or set `variables.uc_catalog.default` to `mip_prod`
     #      for separation. Both are valid; pick one and document.
@@ -863,8 +865,8 @@ variables:
   # (api.stlouisfed.org/fred/series/observations, which requires
   # api_key=...), and (b) the zero-click-deploy story documented in
   # CLAUDE.md is honoured: any future secret is reachable from
-  # `databricks bundle deploy -t dev` + a `.env.local` fill-in, never
-  # from click-ops in the Databricks UI. When that upgrade happens, the
+  # `./scripts/deploy.sh -t dev` + a `.env.local` fill-in, never from
+  # click-ops in the Databricks UI. When that upgrade happens, the
   # ingest script will read `os.environ.get("FRED_API_KEY", "")` and
   # log-at-warn when missing (fall back to fredgraph.csv), so an empty
   # default here is correct. Override via `BUNDLE_VAR_fred_api_key` or
