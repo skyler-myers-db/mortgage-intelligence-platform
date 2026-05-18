@@ -88,7 +88,8 @@ class Settings(BaseSettings):
 
     # In-the-money contract: matches tests/fixtures/rate_spread_golden.json
     # (market_rate_constant) and tests/fixtures/in_the_money_golden.json
-    # (default_thresholds). Overridable via admin config at runtime.
+    # (default_thresholds). These are Python/local defaults; deployed gold
+    # scoring reads mip.ref.offer_rules_config at refresh time.
     mip_market_rate: float = 0.04875
     mip_min_spread_bps: int = 75
     mip_min_equity_pct: int = 15

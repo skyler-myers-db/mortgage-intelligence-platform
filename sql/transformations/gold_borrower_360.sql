@@ -43,10 +43,11 @@
 -- land, the `BLOCKED` literals become real joins and this comment block is
 -- the only place to update.
 --
--- Threshold convention: default thresholds live in data-contract §5 + UDF headers.
--- We apply them here as bound inputs to fn_in_the_money. When admin-config
--- thresholds land (Slice 5), these literals become a CROSS JOIN against
--- mip_app.thresholds.
+-- Threshold convention: default thresholds live in data-contract §5 + UDF headers
+-- and are seeded into mip.ref.offer_rules_config. The CTAS reads that governed
+-- ref table once per refresh, falling back to contract defaults only if a row is
+-- missing. Operators retune scoring by updating the ref table, then refreshing
+-- gold; no SQL-code deploy is required for threshold changes.
 --
 -- Market rate: one row from silver.market_rates_weekly where is_latest=TRUE
 -- and series_id='MORTGAGE30US'. This is a CROSS-like join via the CTE
@@ -81,6 +82,15 @@ refresh_anchor AS (
   FROM mip.ref.refresh_run_state
   ORDER BY captured_at DESC
   LIMIT 1
+),
+rules AS (
+  SELECT
+    CAST(COALESCE(MAX(CASE WHEN key = 'mip_min_spread_bps'           THEN value END), 75.0) AS INT) AS min_spread_bps,
+    CAST(COALESCE(MAX(CASE WHEN key = 'mip_min_equity_pct'           THEN value END), 15.0) AS INT) AS min_equity_pct,
+    CAST(COALESCE(MAX(CASE WHEN key = 'mip_heloc_equity_min_pct'     THEN value END), 35.0) AS INT) AS heloc_equity_min_pct,
+    CAST(COALESCE(MAX(CASE WHEN key = 'mip_cashout_equity_min_pct'   THEN value END), 25.0) AS INT) AS cashout_equity_min_pct,
+    CAST(COALESCE(MAX(CASE WHEN key = 'mip_retention_min_spread_bps' THEN value END), 50.0) AS INT) AS retention_min_spread_bps
+  FROM mip.ref.offer_rules_config
 ),
 -- Recent-event aggregates per CLIP feeding intent_trigger (last 90 days).
 -- Intent_trigger itself is computed in gold.lead_scores, not here, but the
@@ -384,21 +394,18 @@ enriched AS (
   LEFT JOIN first_party_products AS fpp
     ON fpp.borrower_id = b.borrower_id
 ),
--- Scored rows: bring the default thresholds inline and call the frozen
--- UDFs for ITM + next-best-offer.
+-- Scored rows: bind the governed threshold row and call the frozen UDFs
+-- for ITM + next-best-offer.
 scored AS (
   SELECT
     e.*,
-    -- Default thresholds (data-contract §5 + frozen fixtures). Hardcoded
-    -- here; when admin-config lands (Slice 5) these become a CROSS JOIN
-    -- against mip_app.thresholds.
-    75  AS min_spread_bps_applied,
-    15  AS min_equity_pct_applied,
-    35  AS heloc_equity_min_applied,
-    25  AS cashout_equity_min_applied,
-    50  AS retention_min_spread_applied,
+    r.min_spread_bps           AS min_spread_bps_applied,
+    r.min_equity_pct           AS min_equity_pct_applied,
+    r.heloc_equity_min_pct     AS heloc_equity_min_applied,
+    r.cashout_equity_min_pct   AS cashout_equity_min_applied,
+    r.retention_min_spread_bps AS retention_min_spread_applied,
     mip.gold.fn_in_the_money(
-      e.rate_spread_bps, e.equity_pct, 75, 15
+      e.rate_spread_bps, e.equity_pct, r.min_spread_bps, r.min_equity_pct
     ) AS in_the_money,
     mip.gold.fn_next_best_offer(
       e.rate_spread_bps,
@@ -408,9 +415,14 @@ scored AS (
       e.is_investor,
       e.is_current_customer,
       e.is_competitor_lien,
-      75, 15, 35, 25, 50
+      r.min_spread_bps,
+      r.min_equity_pct,
+      r.heloc_equity_min_pct,
+      r.cashout_equity_min_pct,
+      r.retention_min_spread_bps
     ) AS recommended_offer_code
   FROM enriched AS e
+  CROSS JOIN rules AS r
 ),
 -- Segment codes array (order matters for the segment stripe rendering).
 with_segments AS (
@@ -423,10 +435,10 @@ with_segments AS (
         CASE WHEN s.has_permit                              THEN 'permit'    END,
         CASE WHEN s.is_investor                             THEN 'investor'  END,
         -- Cotality can express "no second-position balance" as NULL or 0.
-        CASE WHEN s.equity_pct >= 35 AND COALESCE(s.second_pos_amount, 0) = 0
+        CASE WHEN s.equity_pct >= s.heloc_equity_min_applied AND COALESCE(s.second_pos_amount, 0) = 0
                                                             THEN 'equity'    END,
         CASE WHEN s.is_current_customer
-              AND (s.rate_spread_bps >= 50
+              AND (s.rate_spread_bps >= s.retention_min_spread_applied
                    OR s.is_competitor_lien
                    OR s.listed_for_sale)                    THEN 'retention' END
       ),
@@ -435,12 +447,13 @@ with_segments AS (
   FROM scored AS s
 ),
 -- Evidence counts per CLIP (feeds the `evidence` sub-score in lead_scores,
--- but we also need a rough count here to populate evidence_ids). Only the
--- LIVE signal_types (no 'permit' / 'listing') are counted.
+-- but we also need a rough count here to populate evidence_ids). Exclude
+-- blocked feed placeholders and compliance-only rationale rows so adding
+-- explainability evidence does not retune opportunity scores.
 evidence_counts AS (
   SELECT clip, COUNT(*) AS evidence_event_count
   FROM mip.gold.evidence_events
-  WHERE signal_type NOT IN ('permit', 'listing')
+  WHERE signal_type NOT IN ('permit', 'listing', 'loan_type_fit')
   GROUP BY clip
 ),
 -- Top-3 evidence timeline per CLIP, pre-materialized as JSON to avoid
@@ -702,6 +715,9 @@ SELECT
   w.owner_name_hash,
   w.min_spread_bps_applied,
   w.min_equity_pct_applied,
+  w.heloc_equity_min_applied,
+  w.cashout_equity_min_applied,
+  w.retention_min_spread_applied,
   w.in_the_money,
   COALESCE(tl.trigger_timeline_json, '[]')                                           AS trigger_timeline_json,
   -- refresh_at comes from mip.ref.refresh_run_state (captured once per run

@@ -60,12 +60,13 @@ TBLPROPERTIES (
 -- Purpose:   Governed threshold vocabulary consumed by the Offer Orchestrator
 --            decision tree (`fn_next_best_offer`), the In-the-Money flag
 --            (`fn_in_the_money`), and the Admin surface (/api/admin/rules).
---            One row per tunable knob. Values mirror the defaults baked into
---            the UC functions' headers -- changing a row here does NOT retune
---            UC compute (the thresholds are passed as explicit args by the
---            application layer); the row is the single canonical source the
---            admin UI reads + the product of record for "what is the active
---            ruleset" on a given day.
+--            One row per tunable knob. Values mirror the defaults documented
+--            in the UC functions' headers. The gold CTAS chain reads these
+--            rows at refresh time and passes values as explicit UDF args, so
+--            changing a governed row retunes scoring on the next gold refresh
+--            without changing UDF code. The row is also the single canonical
+--            source the admin UI reads + the product of record for "what is
+--            the active ruleset" on a given day.
 --
 -- Grain:     One row per knob `key`. `key` is the stable identifier the
 --            backend uses (e.g. `mip_min_spread_bps`); labels / descriptions

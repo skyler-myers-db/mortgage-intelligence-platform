@@ -101,13 +101,12 @@
 --            `heloc_equity_min_pct > min_equity_pct` is intentional: HELOC
 --            underwriting demands more equity cushion than plain refi.
 --
--- NULLs:     Per the task contract, numeric NULLs coerce to 0 and boolean
---            NULLs coerce to FALSE. A completely-NULL row therefore lands in
---            'nurture', which is the safe lane — "no signal == no action."
---            This is stricter than fn_in_the_money (which returns FALSE on
---            any NULL) because an all-NULL row still produces a valid offer
---            label, keeping the `recommended_offer` column NOT NULL for
---            downstream grouping and counts.
+-- NULLs:     Borrower-signal numeric NULLs coerce to 0 and boolean NULLs
+--            coerce to FALSE. Threshold NULLs do NOT coerce to zero: a missing
+--            threshold is a configuration failure, and the function returns
+--            'nurture' before evaluating the tree. This keeps "no signal" and
+--            "missing rules" in the no-action lane instead of allowing
+--            0 >= 0 to qualify a borrower for a positive offer.
 --
 -- Sample borrowers (under default thresholds and the chosen inputs pinned
 -- in tests/fixtures/next_best_offer_golden.json):
@@ -149,26 +148,32 @@ CREATE OR REPLACE FUNCTION mip.gold.fn_next_best_offer(
 )
 RETURNS STRING
 DETERMINISTIC
-COMMENT 'Module 0 canonical Next-Best-Offer primitive. Returns one of eight lowercase product codes via a priority-ordered decision tree over rate spread, equity, permit, listing, investor, customer, and competitor-lien signals. NULL numerics -> 0, NULL booleans -> FALSE; all-NULL rows land in ''nurture''. Thresholds passed explicitly; see tests/fixtures/next_best_offer_golden.json for parity fixtures and product_labels map.'
+COMMENT 'Module 0 canonical Next-Best-Offer primitive. Returns one of eight lowercase product codes via a priority-ordered decision tree over rate spread, equity, permit, listing, investor, customer, and competitor-lien signals. Signal NULL numerics -> 0, signal NULL booleans -> FALSE; threshold NULLs return nurture. Thresholds passed explicitly; see tests/fixtures/next_best_offer_golden.json for parity fixtures and product_labels map.'
 RETURN
   CASE
+    WHEN min_spread_bps       IS NULL
+      OR min_equity_pct       IS NULL
+      OR heloc_equity_min_pct IS NULL
+      OR cashout_equity_min   IS NULL
+      OR retention_min_spread IS NULL
+      THEN 'nurture'
     WHEN COALESCE(listed_for_sale, FALSE)
       THEN 'purchase'
-    WHEN COALESCE(rate_spread_bps, 0) >= COALESCE(min_spread_bps,       0)
-     AND COALESCE(equity_pct,      0) >= COALESCE(heloc_equity_min_pct, 0)
+    WHEN COALESCE(rate_spread_bps, 0) >= min_spread_bps
+     AND COALESCE(equity_pct,      0) >= heloc_equity_min_pct
       THEN 'refi_plus_heloc'
     WHEN COALESCE(has_permit, FALSE)
-     AND COALESCE(equity_pct, 0) >= COALESCE(heloc_equity_min_pct, 0)
+     AND COALESCE(equity_pct, 0) >= heloc_equity_min_pct
       THEN 'heloc'
-    WHEN COALESCE(rate_spread_bps, 0) >= COALESCE(min_spread_bps, 0)
-     AND COALESCE(equity_pct,      0) >= COALESCE(min_equity_pct, 0)
+    WHEN COALESCE(rate_spread_bps, 0) >= min_spread_bps
+     AND COALESCE(equity_pct,      0) >= min_equity_pct
       THEN 'refi'
-    WHEN COALESCE(equity_pct, 0) >= COALESCE(cashout_equity_min, 0)
+    WHEN COALESCE(equity_pct, 0) >= cashout_equity_min
       THEN 'cash_out'
     WHEN COALESCE(is_investor, FALSE)
       THEN 'investor'
     WHEN COALESCE(is_current_customer, FALSE)
-     AND ( COALESCE(rate_spread_bps, 0) >= COALESCE(retention_min_spread, 0)
+     AND ( COALESCE(rate_spread_bps, 0) >= retention_min_spread
         OR COALESCE(is_competitor_lien, FALSE) )
       THEN 'retention'
     ELSE 'nurture'

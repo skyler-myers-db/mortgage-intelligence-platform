@@ -217,6 +217,9 @@ CREATE TABLE IF NOT EXISTS mip.gold.borrower_360 (
   owner_name_hash           STRING    NOT NULL COMMENT 'sha2 hash from silver; internal only, router strips.',
   min_spread_bps_applied    INT       NOT NULL COMMENT 'Threshold this refresh.',
   min_equity_pct_applied    INT       NOT NULL COMMENT 'Threshold this refresh.',
+  heloc_equity_min_applied  INT       NOT NULL COMMENT 'HELOC equity threshold this refresh.',
+  cashout_equity_min_applied INT      NOT NULL COMMENT 'Cash-out equity threshold this refresh.',
+  retention_min_spread_applied INT    NOT NULL COMMENT 'Retention spread threshold this refresh.',
   in_the_money              BOOLEAN   NOT NULL COMMENT 'fn_in_the_money output.',
   trigger_timeline_json     STRING    NOT NULL COMMENT 'JSON-encoded top-3 evidence rows.',
   refreshed_at              TIMESTAMP NOT NULL COMMENT 'Refresh timestamp.'
@@ -648,6 +651,9 @@ CREATE TABLE IF NOT EXISTS mip.gold.borrower_dossier (
   owner_name_hash           STRING    NOT NULL COMMENT 'sha2 hash from silver; internal only, router strips.',
   min_spread_bps_applied    INT       NOT NULL COMMENT 'Threshold this refresh.',
   min_equity_pct_applied    INT       NOT NULL COMMENT 'Threshold this refresh.',
+  heloc_equity_min_applied  INT       NOT NULL COMMENT 'HELOC equity threshold this refresh.',
+  cashout_equity_min_applied INT      NOT NULL COMMENT 'Cash-out equity threshold this refresh.',
+  retention_min_spread_applied INT    NOT NULL COMMENT 'Retention spread threshold this refresh.',
   in_the_money              BOOLEAN   NOT NULL COMMENT 'fn_in_the_money output.',
   trigger_timeline_json     STRING    NOT NULL COMMENT 'JSON-encoded top-3 evidence rows (carried from borrower_360 for parity).',
   evidence_events           ARRAY<STRUCT<evidence_id: STRING, source_product: STRING, source_table: STRING, signal_type: STRING, signal_value: STRING, display_text: STRING, confidence: DOUBLE, `timestamp`: STRING, signal_rank: INT>>

@@ -22,20 +22,22 @@
 -- borrower_360 CTAS is changed in the same patch; drift between the two
 -- app-facing scoring surfaces is a data-truth failure.
 --
--- evidence sub-score: 10 * live evidence rows plus bounded second-position
--- balance tail, with BLOCKED signal types excluded.
+-- evidence sub-score: 10 * live scoring evidence rows plus bounded
+-- second-position balance tail. BLOCKED signal types and compliance-only
+-- rationale rows are excluded so explainability additions do not retune scores.
 --
--- Threshold convention matches borrower_360.sql: default thresholds are
--- baked here as literals. When admin-config thresholds land (Slice 5),
--- both transformations swap to a CROSS JOIN against mip_app.thresholds
--- simultaneously -- drift is a parity test failure by construction.
+-- Threshold convention matches borrower_360.sql: thresholds are read from
+-- mip.ref.offer_rules_config during the borrower_360 refresh, then carried
+-- forward as *_applied columns. This CTAS consumes those applied values rather
+-- than re-baking literals, so lead_scores and borrower_360 cannot drift when a
+-- governed threshold is retuned and gold is refreshed.
 -- =============================================================================
 
 CREATE OR REPLACE TABLE mip.gold.lead_scores AS
 WITH evidence_counts AS (
   SELECT clip, COUNT(*) AS evidence_event_count
   FROM mip.gold.evidence_events
-  WHERE signal_type NOT IN ('permit', 'listing')
+  WHERE signal_type NOT IN ('permit', 'listing', 'loan_type_fit')
   GROUP BY clip
 ),
 -- Historical tenant-lender relationships per owner_link_id for the
@@ -99,7 +101,10 @@ base AS (
     -- owner-level DISTINCT-CLIP count at the tenant lender (post-slice13 semantics).
     COALESCE(ht.historical_distinct_clips_at_lender, 0) AS historical_tenant_distinct_clips,
     b.min_spread_bps_applied,
-    b.min_equity_pct_applied
+    b.min_equity_pct_applied,
+    b.heloc_equity_min_applied,
+    b.cashout_equity_min_applied,
+    b.retention_min_spread_applied
   FROM mip.gold.borrower_360 AS b
   LEFT JOIN mip.silver.property_master AS pm ON pm.clip = b.clip
   LEFT JOIN evidence_counts   AS ec ON ec.clip = b.clip
@@ -203,7 +208,9 @@ SELECT
     s.is_competitor_lien,
     s.min_spread_bps_applied,
     s.min_equity_pct_applied,
-    35, 25, 50
+    s.heloc_equity_min_applied,
+    s.cashout_equity_min_applied,
+    s.retention_min_spread_applied
   ) AS recommended_offer_code,
   s.rate_spread_bps,
   s.equity_pct,
@@ -220,9 +227,9 @@ SELECT
   COALESCE(s.first_party_synthetic_demo, FALSE) AS first_party_synthetic_demo,
   s.min_spread_bps_applied,
   s.min_equity_pct_applied,
-  35 AS heloc_equity_min_applied,
-  25 AS cashout_equity_min_applied,
-  50 AS retention_min_spread_applied,
+  s.heloc_equity_min_applied,
+  s.cashout_equity_min_applied,
+  s.retention_min_spread_applied,
   -- Shared refresh_at captured once per run. See audit-holes-round-3 #7.
   (SELECT refresh_at FROM mip.ref.refresh_run_state ORDER BY captured_at DESC LIMIT 1) AS refreshed_at
 FROM subscores AS s;

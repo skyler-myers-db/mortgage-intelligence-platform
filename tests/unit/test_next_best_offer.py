@@ -85,6 +85,27 @@ def test_all_null_signals_with_real_thresholds_land_in_nurture() -> None:
     )
 
 
+def test_null_thresholds_fail_closed_to_nurture() -> None:
+    """Missing threshold config must not let 0>=0 qualify a borrower."""
+    assert (
+        next_best_offer(
+            rate_spread_bps=None,
+            equity_pct=None,
+            has_permit=None,
+            listed_for_sale=None,
+            is_investor=None,
+            is_current_customer=None,
+            is_competitor_lien=None,
+            min_spread_bps=None,
+            min_equity_pct=None,
+            heloc_equity_min_pct=None,
+            cashout_equity_min=None,
+            retention_min_spread=None,
+        )
+        == "nurture"
+    )
+
+
 def test_next_best_offer_importable_from_scoring_module() -> None:
     """The primitive and label map must both live in backend.services.scoring."""
     from backend.services import scoring

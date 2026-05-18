@@ -201,10 +201,10 @@ class OfferRepository(Protocol):
     Returns the boolean + numeric columns from ``gold.borrower_360``
     that feed ``fn_next_best_offer`` (rate_spread_bps, equity_pct,
     has_permit, listed_for_sale, is_investor, is_current_customer,
-    is_competitor_lien) plus the precomputed ``offer_code``. Rationale
-    / alternatives / sources composition remains in the router, since
-    those are configured against ``backend.config.settings`` thresholds
-    and would not come from gold unchanged.
+    is_competitor_lien) plus the precomputed ``offer_code`` and the five
+    refresh-applied thresholds. Rationale / alternatives / sources
+    composition remains in the router, but the numbers it displays and
+    audits must match the gold row that produced the offer code.
     """
 
     def get_offer_inputs(self, borrower_id: str) -> dict[str, object] | None:

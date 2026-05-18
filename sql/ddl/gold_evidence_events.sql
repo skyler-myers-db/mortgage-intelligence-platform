@@ -21,7 +21,8 @@
 --
 -- Source unions (the transformation file executes these; this DDL declares
 -- the target shape):
---   - silver.lien_current      -> rate_spread, equity, competitor_lien signals.
+--   - silver.lien_current      -> rate_spread, equity, loan_type_fit,
+--                                 competitor_lien signals.
 --   - silver.mortgage_events   -> recent_refi, recent_payoff signals.
 --   - silver.owner_transfer_events -> recent_sale signals.
 --   - gold.property_owner_bridge   -> multi_property, absentee_mailing,
@@ -64,7 +65,7 @@ CREATE TABLE IF NOT EXISTS mip.gold.evidence_events (
   evidence_id    STRING NOT NULL COMMENT 'Deterministic: "ev-" || substr(sha2(clip || signal_type || timestamp, 256), 1, 12). Stable across refreshes so Borrower360.evidence_ids stays consistent.',
   source_product STRING NOT NULL COMMENT 'Human label: Voluntary Lien / AVM / Owner Link / Property / Mortgage Domain / Owner Transfer / Market Rates.',
   source_table   STRING NOT NULL COMMENT 'Real UC path. Shown verbatim in EvidenceDrawer -- must be a resolvable mip.silver.* or mip.gold.* path.',
-  signal_type    STRING NOT NULL COMMENT 'Controlled vocab: rate_spread / equity / competitor_lien / multi_property / absentee_mailing / corporate_owner / foreclosure_stage / recent_refi / recent_payoff / recent_sale / market_trend. BLOCKED vocab (permit, listing) NEVER emitted.',
+  signal_type    STRING NOT NULL COMMENT 'Controlled vocab: rate_spread / equity / loan_type_fit / competitor_lien / multi_property / absentee_mailing / corporate_owner / foreclosure_stage / recent_refi / recent_payoff / recent_sale / market_trend. BLOCKED vocab (permit, listing) NEVER emitted.',
   signal_value   STRING NOT NULL COMMENT 'Human-readable value: "+88 bps", "$285K", "3 properties", "competitor refi".',
   display_text   STRING NOT NULL COMMENT 'One-sentence deterministic template per signal_type. No PII.',
   confidence     DOUBLE NOT NULL COMMENT '0..1. Per-signal: AVM uses upstream confidence_score_mktg; count-based rows 0.85-0.92 (see header).',

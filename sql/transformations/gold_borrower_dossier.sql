@@ -28,7 +28,7 @@
 --     No per-client grants beyond the ones already baked in for gold.
 --
 -- Evidence cap (20 rows per CLIP):
---   The gold.evidence_events controlled vocabulary has 12 live signal types
+--   The gold.evidence_events controlled vocabulary has 13 live signal types
 --   (permit / listing are BLOCKED); a single CLIP in the live warehouse
 --   carries up to ~7–10 rows today. 20 is a comfortable ceiling that
 --   covers all conceivable live signals per borrower with headroom for
@@ -188,6 +188,9 @@ SELECT
   b.owner_name_hash,
   b.min_spread_bps_applied,
   b.min_equity_pct_applied,
+  b.heloc_equity_min_applied,
+  b.cashout_equity_min_applied,
+  b.retention_min_spread_applied,
   b.in_the_money,
   b.trigger_timeline_json,
   -- New dossier-only columns: pre-joined evidence payload.

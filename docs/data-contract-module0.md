@@ -380,8 +380,11 @@ All gold tables: Delta, managed, partition/cluster tuned for the Module 0 querie
 | `second_pos_amount` | BIGINT | Y | `lien_current.second_pos_amount` | `second_pos_amount` | 2nd-lien balance. `NULL` and `0` both mean no active second-position balance for the equity segment predicate. |
 | `first_pos_loan_type` | STRING | Y | `lien_current.first_pos_loan_type` | — | Feeds `fit`. |
 | `owner_name_hash` | STRING | N | `property_master.owner_name_hash` | — | See §7. |
-| `min_spread_bps_applied` | INT | N | constant `75` until admin-config refresh binding lands | — | Threshold provenance for WhyPanel. |
-| `min_equity_pct_applied` | INT | N | constant `15` until admin-config refresh binding lands | — | Threshold provenance for WhyPanel. |
+| `min_spread_bps_applied` | INT | N | `mip.ref.offer_rules_config['mip_min_spread_bps']`, fallback `75` | — | Threshold provenance for WhyPanel and offer proof. |
+| `min_equity_pct_applied` | INT | N | `mip.ref.offer_rules_config['mip_min_equity_pct']`, fallback `15` | — | Threshold provenance for WhyPanel and offer proof. |
+| `heloc_equity_min_applied` | INT | N | `mip.ref.offer_rules_config['mip_heloc_equity_min_pct']`, fallback `35` | — | Threshold provenance for `fn_next_best_offer` and the equity segment. |
+| `cashout_equity_min_applied` | INT | N | `mip.ref.offer_rules_config['mip_cashout_equity_min_pct']`, fallback `25` | — | Threshold provenance for `fn_next_best_offer`. |
+| `retention_min_spread_applied` | INT | N | `mip.ref.offer_rules_config['mip_retention_min_spread_bps']`, fallback `50` | — | Threshold provenance for `fn_next_best_offer` and the retention segment. |
 | `in_the_money` | BOOLEAN | N | `mip.gold.fn_in_the_money(rate_spread_bps, equity_pct, min_spread_bps_applied, min_equity_pct_applied)` | — | Materialized ITM flag. |
 | `trigger_timeline_json` | STRING | N | JSON-encoded top-3 `gold.evidence_events` rows | `trigger_timeline` | Pre-materialized to avoid per-row fan-out at read; service decodes to `list[EvidenceEvent]`. |
 | `refreshed_at` | TIMESTAMP | N | latest `mip.ref.refresh_run_state.refresh_at` | — | Shared timestamp captured once per refresh run. |
@@ -413,17 +416,17 @@ All gold tables: Delta, managed, partition/cluster tuned for the Module 0 querie
 | `first_party_recent_interactions` | INT | N | `borrower_360.first_party_recent_interactions` | Recent positive interaction count from the first-party engagement feed. |
 | `first_party_recent_application` | BOOLEAN | N | `borrower_360.first_party_recent_application` | TRUE when recent first-party LOS/application activity exists. |
 | `first_party_synthetic_demo` | BOOLEAN | N | `borrower_360.first_party_synthetic_demo` | Disclosure flag for Summit demo rows; must not be described as real lender data. |
-| `min_spread_bps_applied` | INT | N | from `mip_app.thresholds` view or constant `75` | Carried so `WhyPanel.min_spread_bps` reflects the run. |
-| `min_equity_pct_applied` | INT | N | constant `15` (or admin override) | |
-| `heloc_equity_min_applied` | INT | N | constant `35` until admin-config refresh binding lands | |
-| `cashout_equity_min_applied` | INT | N | constant `25` until admin-config refresh binding lands | |
-| `retention_min_spread_applied` | INT | N | constant `50` until admin-config refresh binding lands | |
+| `min_spread_bps_applied` | INT | N | from `borrower_360.min_spread_bps_applied` | Carried so `WhyPanel.min_spread_bps` reflects the run. |
+| `min_equity_pct_applied` | INT | N | from `borrower_360.min_equity_pct_applied` | |
+| `heloc_equity_min_applied` | INT | N | from `borrower_360.heloc_equity_min_applied` | |
+| `cashout_equity_min_applied` | INT | N | from `borrower_360.cashout_equity_min_applied` | |
+| `retention_min_spread_applied` | INT | N | from `borrower_360.retention_min_spread_applied` | |
 | `refreshed_at` | TIMESTAMP | N | latest `mip.ref.refresh_run_state.refresh_at` | |
 
 ### 3.4 `mip.gold.evidence_events`
 
 - **Grain:** one row per (`clip`, `evidence_id`) — each row IS an `EvidenceEvent`.
-- **Source:** unioned from `silver.lien_current` (rate_spread, equity, competitor_lien), `silver.market_rates_weekly` (market_trend), `silver.mortgage_events` (last refi/payoff), `silver.owner_transfer_events` (last sale), `gold.property_owner_bridge` (multi-property). Permit and listing signal types are blocked pending-feed states only; no permit/listing evidence rows are emitted until the Cotality Building Permits and MLS/Listings Delta Shares land.
+- **Source:** unioned from `silver.lien_current` (rate_spread, equity, loan_type_fit, competitor_lien), `silver.market_rates_weekly` (market_trend), `silver.mortgage_events` (last refi/payoff), `silver.owner_transfer_events` (last sale), `gold.property_owner_bridge` (multi-property). Permit and listing signal types are blocked pending-feed states only; no permit/listing evidence rows are emitted until the Cotality Building Permits and MLS/Listings Delta Shares land.
 - **PK:** `(clip, evidence_id)`.
 - **Clustering:** liquid on `clip`; timeline ordering is by `signal_rank` / timestamp in the query layer.
 - **Refresh:** daily.
@@ -435,7 +438,7 @@ All gold tables: Delta, managed, partition/cluster tuned for the Module 0 querie
 | `evidence_id` | STRING | N | `CONCAT('ev-', SUBSTR(sha2(CONCAT(clip, '\|', signal_type, '\|', timestamp), 256), 1, 12))` | `evidence_id` | Stable across refreshes — decoupled from row order so `Borrower360.evidence_ids` lists stay stable. |
 | `source_product` | STRING | N | literal per source (`'Voluntary Lien'`, `'AVM'`, `'Owner Link'`, `'Property'`, `'Mortgage Domain'`, `'Owner Transfer'`, `'Market Rates'`) | `source_product` | |
 | `source_table` | STRING | N | literal UC path (e.g. `'mip.silver.lien_current'`) | `source_table` | **Must be a real UC path** — the EvidenceDrawer shows it. |
-| `signal_type` | STRING | N | controlled vocab: `rate_spread`, `equity`, `competitor_lien`, `multi_property`, `absentee_mailing`, `corporate_owner`, `foreclosure_stage`, `recent_refi`, `recent_payoff`, `recent_sale`, `permit` (BLOCKED), `listing` (BLOCKED), `market_trend` | `signal_type` | |
+| `signal_type` | STRING | N | controlled vocab: `rate_spread`, `equity`, `loan_type_fit`, `competitor_lien`, `multi_property`, `absentee_mailing`, `corporate_owner`, `foreclosure_stage`, `recent_refi`, `recent_payoff`, `recent_sale`, `permit` (BLOCKED), `listing` (BLOCKED), `market_trend` | `signal_type` | `loan_type_fit` is compliance-visible rationale for the symmetric CONV/FHA/VA fit branch and is excluded from the evidence sub-score. |
 | `signal_value` | STRING | N | string-cast of the computed value (`'+88 bps'`, `'$285K'`, `'3 properties'`, `'competitor refi'`) | `signal_value` | Human-readable and deterministic. |
 | `display_text` | STRING | N | one-sentence template per `signal_type` | `display_text` | Deterministic; no PII. |
 | `confidence` | DOUBLE | N | per-signal: AVM `confidence_score_mktg`; rate_spread and market_trend `0.92`; Owner-Link derived `0.85`; recent events and competitor/foreclosure signals `0.89`. | `confidence` | 0..1 per `EvidenceEvent` constraint. |
@@ -488,10 +491,10 @@ Segment codes match `Literal["itm", "listed", "permit", "investor", "equity", "r
 
 | `segment_code` | Predicate (SQL, evaluated on `gold.borrower_360`) | Shippable now? |
 |---|---|---|
-| `itm` | `mip.gold.fn_in_the_money(rate_spread_bps, equity_pct, 75, 15) = TRUE` | Yes |
-| `equity` | `equity_pct >= 35 AND COALESCE(second_pos_amount, 0) = 0` (clean 1st-lien, HELOC-grade equity) | Yes |
+| `itm` | `in_the_money = TRUE` where `in_the_money` uses `min_spread_bps_applied` and `min_equity_pct_applied` | Yes |
+| `equity` | `equity_pct >= heloc_equity_min_applied AND COALESCE(second_pos_amount, 0) = 0` (clean 1st-lien, HELOC-grade equity) | Yes |
 | `investor` | `related_property_count >= 2 OR is_corporate_owner OR is_absentee` | Yes |
-| `retention` | `is_current_customer = TRUE AND (rate_spread_bps >= 50 OR is_competitor_lien OR listed_for_sale)` | Yes (customer-flag side) / Partial (listed) |
+| `retention` | `is_current_customer = TRUE AND (rate_spread_bps >= retention_min_spread_applied OR is_competitor_lien OR listed_for_sale)` | Yes (customer-flag side) / Partial (listed) |
 | `listed` | `listed_for_sale = TRUE` | **BLOCKED — needs MLS** (§9) |
 | `permit` | `has_permit = TRUE` | **BLOCKED — needs Permits** (§9) |
 
@@ -513,11 +516,11 @@ CAST(LEAST(100, GREATEST(0,
 )) AS INT)
 ```
 
-**intent_trigger** (weight 0.30): deterministic current-state signal mix from competitor lien, investor, rate-spread, equity, and current-customer flags. MLS/listing and permit inputs remain blocked false until the corresponding Cotality shares arrive.
+**intent_trigger** (weight 0.30): deterministic current-state signal mix from competitor lien, related-property count, rate-spread, equity, and current-customer flags. MLS/listing and permit inputs remain blocked false until the corresponding Cotality shares arrive.
 ```
 LEAST(100, GREATEST(0,
     20 * CAST(is_competitor_lien AS INT)
-  + 20 * CAST(is_investor AS INT)
+  + LEAST(25, GREATEST(0, (COALESCE(related_property_count, 1) - 1) * 10))
   + LEAST(30, CAST(ROUND(2 * sqrt(GREATEST(0, rate_spread_bps))) AS INT))
   + LEAST(10, GREATEST(0, CAST(equity_pct / 10 AS INT)))
   + 8 * CAST(is_current_customer AS INT)
@@ -572,7 +575,7 @@ recent application activity. The historical count is distinct CLIPs per
 `owner_link_id`, not repeat mortgage events on one property, and the tenant
 lender comes from `mip.ref.lender_dictionary`.
 
-**evidence** (weight 0.10): direct count of contributing rows in `gold.evidence_events` plus a bounded second-lien evidence tail.
+**evidence** (weight 0.10): direct count of scoring evidence rows in `gold.evidence_events` plus a bounded second-lien evidence tail. `permit`, `listing`, and `loan_type_fit` rows are excluded from this count; the first two are blocked feed placeholders and `loan_type_fit` is explainability-only.
 ```
 LEAST(100, GREATEST(0,
   10 * evidence_event_count
@@ -583,6 +586,28 @@ LEAST(100, GREATEST(0,
     END
 ))
 ```
+
+### 5.1 Fair-Lending Posture For Scoring Inputs
+
+No protected-class attribute is an input to the Module 0 scoring primitives or
+sub-scores. The scoring surface does not consume race, color, religion,
+national origin, sex, marital status, age, receipt of public assistance,
+consumer-protection exercise, FICO, or credit-bureau tradeline data.
+
+CONV/FHA/VA parity is a contract: owner-occupied `CONV`, `FHA`, and `VA`
+first-position loan types receive identical fit treatment (`70` before
+property-size additions). Future changes must not rank those three loan types
+asymmetrically without a signed lender fair-lending review. The
+`loan_type_fit` evidence row exists so a compliance reviewer can see when this
+symmetric branch contributed to the dossier rationale; it is excluded from the
+evidence sub-score so explainability does not retune scores.
+
+The `is_current_customer` relationship boost is a retention/recapture signal,
+not a protected-class feature. The customer compliance team should explicitly
+review it for each deploying lender because historical customer books can
+reflect prior market access and underwriting patterns. Customer compliance
+sign-off should explicitly bless the `is_current_customer THEN 70`
+relationship branch before production use.
 
 ---
 

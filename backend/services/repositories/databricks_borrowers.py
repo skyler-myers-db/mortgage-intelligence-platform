@@ -7,6 +7,7 @@ to review in isolation.
 
 from __future__ import annotations
 
+import logging
 import re
 
 from backend.config.settings import settings
@@ -16,6 +17,7 @@ from backend.schemas.why import WhyPanel, WhyPanelSource
 from backend.services.county_names import county_fips_for_name
 from backend.services.databricks_sql import DatabricksSqlClient
 from backend.services.databricks_sql_helpers import qualify
+from backend.services.observability import emit
 from backend.services.pii_redaction import (
     redact_borrower_row,
     redact_evidence_row,
@@ -35,6 +37,8 @@ from backend.services.scoring import (
     in_the_money,
     source_display_label,
 )
+
+log = logging.getLogger(__name__)
 
 
 class DatabricksBorrowerRepository:
@@ -216,15 +220,30 @@ class DatabricksBorrowerRepository:
             evidence_events=evidence_events,
             why_panel=why,
         )
-        # Defence in depth: belt-and-suspenders ITM check against the
-        # Python primitive so a row where gold drifted from Python
-        # can't serialise without being caught in dev.
-        _ = in_the_money(
+        # Defence in depth: compare gold's materialized ITM flag against the
+        # canonical Python primitive using the same applied thresholds. Do not
+        # break a borrower read in production; emit a structured warning so
+        # operators can triage scoring drift without losing the dossier.
+        expected_itm = in_the_money(
             borrower.rate_spread_bps,
             int(row.get("equity_pct") or 0),
             why.min_spread_bps,
             why.min_equity_pct,
         )
+        if expected_itm != borrower.why_panel.in_the_money:
+            emit(
+                log,
+                "borrower_itm_parity_drift",
+                level=logging.WARNING,
+                dependency="warehouse",
+                outcome="error",
+                expected_itm=expected_itm,
+                actual_itm=borrower.why_panel.in_the_money,
+                rate_spread_bps=borrower.rate_spread_bps,
+                equity_pct=int(row.get("equity_pct") or 0),
+                min_spread_bps=why.min_spread_bps,
+                min_equity_pct=why.min_equity_pct,
+            )
         if self._cache_ttl_s > 0:
             self._cache.set(cache_key, borrower, self._cache_ttl_s)
         return borrower.model_copy(deep=True)
@@ -319,7 +338,9 @@ class DatabricksOfferRepository:
         "SELECT "
         "  rate_spread_bps, equity_pct, has_permit, listed_for_sale, "
         "  is_investor, is_current_customer, is_competitor_lien, "
-        "  recommended_offer_code "
+        "  recommended_offer_code, min_spread_bps_applied, min_equity_pct_applied, "
+        "  heloc_equity_min_applied, cashout_equity_min_applied, "
+        "  retention_min_spread_applied "
         f"FROM {qualify('gold', 'borrower_360')} "
         "WHERE borrower_id = :borrower_id "
         "LIMIT 1"
@@ -343,6 +364,11 @@ class DatabricksOfferRepository:
             "is_current_customer": _coerce_bool(row.get("is_current_customer")),
             "is_competitor_lien": _coerce_bool(row.get("is_competitor_lien")),
             "offer_code": code,
+            "min_spread_bps": int(row.get("min_spread_bps_applied") or 75),
+            "min_equity_pct": int(row.get("min_equity_pct_applied") or 15),
+            "heloc_equity_min_pct": int(row.get("heloc_equity_min_applied") or 35),
+            "cashout_equity_min_pct": int(row.get("cashout_equity_min_applied") or 25),
+            "retention_min_spread_bps": int(row.get("retention_min_spread_applied") or 50),
         }
 
 

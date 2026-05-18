@@ -7,7 +7,6 @@ from typing import Annotated, cast
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 
-from backend.config.settings import settings
 from backend.schemas.offer import (
     OfferAlternative,
     OfferRecommendation,
@@ -279,11 +278,11 @@ def recommend_offer(
         raise HTTPException(status_code=500, detail=f"Invalid offer_code '{code}' from next_best_offer")
 
     thresholds_applied = {
-        "min_spread_bps": settings.mip_min_spread_bps,
-        "min_equity_pct": settings.mip_min_equity_pct,
-        "heloc_equity_min_pct": settings.mip_heloc_equity_min_pct,
-        "cashout_equity_min_pct": settings.mip_cashout_equity_min_pct,
-        "retention_min_spread_bps": settings.mip_retention_min_spread_bps,
+        "min_spread_bps": cast(int, inputs["min_spread_bps"]),
+        "min_equity_pct": cast(int, inputs["min_equity_pct"]),
+        "heloc_equity_min_pct": cast(int, inputs["heloc_equity_min_pct"]),
+        "cashout_equity_min_pct": cast(int, inputs["cashout_equity_min_pct"]),
+        "retention_min_spread_bps": cast(int, inputs["retention_min_spread_bps"]),
     }
 
     background.add_task(
@@ -324,11 +323,11 @@ def recommend_offer(
             investor=cast(bool, inputs["is_investor"]),
             customer=cast(bool, inputs["is_current_customer"]),
             competitor_lien=cast(bool, inputs["is_competitor_lien"]),
-            min_sp=settings.mip_min_spread_bps,
-            min_eq=settings.mip_min_equity_pct,
-            heloc_min=settings.mip_heloc_equity_min_pct,
-            cashout_min=settings.mip_cashout_equity_min_pct,
-            retention_min=settings.mip_retention_min_spread_bps,
+            min_sp=thresholds_applied["min_spread_bps"],
+            min_eq=thresholds_applied["min_equity_pct"],
+            heloc_min=thresholds_applied["heloc_equity_min_pct"],
+            cashout_min=thresholds_applied["cashout_equity_min_pct"],
+            retention_min=thresholds_applied["retention_min_spread_bps"],
         ),
         evidence_ids=borrower.evidence_ids,
         sources=sources,
@@ -337,7 +336,7 @@ def recommend_offer(
             code,
             equity=cast(int, inputs["equity_pct"]),
             permit=cast(bool, inputs["has_permit"]),
-            heloc_min=settings.mip_heloc_equity_min_pct,
+            heloc_min=thresholds_applied["heloc_equity_min_pct"],
         ),
         thresholds_applied=thresholds_applied,
     )

@@ -11,11 +11,12 @@
 --
 -- Provenance:
 --            Every row mirrors a default documented inline in the UC function
---            headers under `sql/uc_functions/`. Changing a value here does
---            NOT retune UC compute -- the thresholds are passed as explicit
---            args by the application layer at query time. The row is the
---            single canonical source the admin UI reads + the product of
---            record for "what is the active ruleset" on a given day.
+--            headers under `sql/uc_functions/`. The gold CTAS chain reads
+--            this table at refresh time and passes the values as explicit UDF
+--            args. Changing a value here or in a governed table update retunes
+--            gold after the next refresh without changing UDF code. The row is
+--            also the single canonical source the admin UI reads + the product
+--            of record for "what is the active ruleset" on a given day.
 --
 --            Pin points (keep in lock-step with UC headers):
 --              mip_min_spread_bps            = 75     (fn_in_the_money.sql L28, fn_next_best_offer.sql L92)

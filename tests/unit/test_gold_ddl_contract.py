@@ -442,6 +442,55 @@ def test_sentinel_wired_in_bundle_definitions() -> None:
         )
 
 
+def test_uc_functions_are_wired_before_gold_ctas() -> None:
+    """The gold refresh job must apply UC function DDL before CTAS tasks.
+
+    Golden-fixture parity only means something if deploy refreshes the UDFs.
+    A missing task here leaves old function bodies live while Python fixtures
+    pass locally, which is exactly the failure this guard prevents.
+    """
+    expected_tasks = (
+        "init_fn_rate_spread",
+        "init_fn_in_the_money",
+        "init_fn_lead_score",
+        "init_fn_next_best_offer",
+    )
+    expected_rendered_paths = (
+        "sql/_rendered/uc_functions/fn_rate_spread.sql",
+        "sql/_rendered/uc_functions/fn_in_the_money.sql",
+        "sql/_rendered/uc_functions/fn_lead_score.sql",
+        "sql/_rendered/uc_functions/fn_next_best_offer.sql",
+    )
+    expected_resource_paths = (
+        "../sql/uc_functions/fn_rate_spread.sql",
+        "../sql/uc_functions/fn_in_the_money.sql",
+        "../sql/uc_functions/fn_lead_score.sql",
+        "../sql/uc_functions/fn_next_best_offer.sql",
+    )
+
+    bundle = (REPO_ROOT / "databricks.yml").read_text(encoding="utf-8")
+    resources = (REPO_ROOT / "resources" / "jobs.yml").read_text(encoding="utf-8")
+
+    for task_key in expected_tasks:
+        assert f"task_key: {task_key}" in bundle
+        assert f"task_key: {task_key}" in resources
+
+    for path in expected_rendered_paths:
+        assert path in bundle
+    for path in expected_resource_paths:
+        assert path in resources
+
+    init_gold_match = re.search(
+        r"- task_key:\s*init_gold_ddl\s*.*?depends_on:\s*(.*?)\n\s*sql_task:",
+        bundle,
+        re.DOTALL,
+    )
+    assert init_gold_match, "databricks.yml init_gold_ddl must depend on all UC function tasks."
+    init_gold_depends = init_gold_match.group(1)
+    for task_key in expected_tasks:
+        assert f"task_key: {task_key}" in init_gold_depends
+
+
 def test_downstream_ctas_depend_on_sentinel() -> None:
     """The canonical bundle definition (databricks.yml) must route every
     scoring / rollup / dossier task through the sentinel instead of
@@ -530,3 +579,150 @@ def test_evidence_event_source_table_literals_are_uc_paths() -> None:
         )
 
     assert "'Voluntary Lien + Market Rates'                  AS source_product" in text
+
+
+def test_offer_thresholds_are_ref_table_sourced_and_materialized() -> None:
+    """The five next-best-offer thresholds must come from the governed ref table.
+
+    This pins the Slice-5 business contract: operators retune offer aggressiveness
+    in mip.ref.offer_rules_config, then refresh gold. The UDF still receives all
+    thresholds explicitly; the CTAS, not the UDF, owns configuration lookup.
+    """
+    borrower_sql = (TRANSFORM_DIR / "gold_borrower_360.sql").read_text(encoding="utf-8")
+    lead_scores_sql = (TRANSFORM_DIR / "gold_lead_scores.sql").read_text(encoding="utf-8")
+    borrower_ddl = (DDL_DIR / "gold_borrower_360.sql").read_text(encoding="utf-8")
+
+    assert "FROM mip.ref.offer_rules_config" in borrower_sql
+    for key in (
+        "mip_min_spread_bps",
+        "mip_min_equity_pct",
+        "mip_heloc_equity_min_pct",
+        "mip_cashout_equity_min_pct",
+        "mip_retention_min_spread_bps",
+    ):
+        assert key in borrower_sql
+
+    for column in (
+        "min_spread_bps_applied",
+        "min_equity_pct_applied",
+        "heloc_equity_min_applied",
+        "cashout_equity_min_applied",
+        "retention_min_spread_applied",
+    ):
+        assert column in borrower_sql
+        assert column in lead_scores_sql
+        assert column in borrower_ddl
+
+    assert "s.heloc_equity_min_applied" in lead_scores_sql
+    assert "s.cashout_equity_min_applied" in lead_scores_sql
+    assert "s.retention_min_spread_applied" in lead_scores_sql
+    assert not re.search(
+        r"fn_next_best_offer\([\s\S]*?75\s*,\s*15\s*,\s*35\s*,\s*25\s*,\s*50",
+        borrower_sql,
+        re.IGNORECASE,
+    )
+    assert not re.search(
+        r"fn_next_best_offer\([\s\S]*?35\s*,\s*25\s*,\s*50",
+        lead_scores_sql,
+        re.IGNORECASE,
+    )
+
+
+def test_next_best_offer_udf_fails_closed_on_null_thresholds() -> None:
+    """A missing threshold row is a configuration failure, not a positive offer."""
+    udf_sql = (REPO_ROOT / "sql" / "uc_functions" / "fn_next_best_offer.sql").read_text(
+        encoding="utf-8"
+    )
+    fixture_text = (REPO_ROOT / "tests" / "fixtures" / "next_best_offer_golden.json").read_text(
+        encoding="utf-8"
+    )
+    validation_sql = (
+        REPO_ROOT / "sql" / "fixtures" / "next_best_offer_validation.sql"
+    ).read_text(encoding="utf-8")
+
+    assert "threshold is a configuration failure" in udf_sql
+    assert re.search(
+        r"min_spread_bps\s+IS\s+NULL.*?THEN\s+'nurture'",
+        udf_sql,
+        re.IGNORECASE | re.DOTALL,
+    )
+    assert "case_16_null_thresholds_fail_closed_to_nurture" in fixture_text
+    assert "case_16_null_thresholds_fail_closed_to_nurture" in validation_sql
+
+
+def test_fit_loan_type_parity_and_explainability_contract() -> None:
+    """CONV/FHA/VA must remain symmetric and compliance-visible.
+
+    FHA/VA treatment is acceptable here because it is inclusive and equal to
+    CONV. If this ever becomes asymmetric, it needs a lender fair-lending review.
+    """
+    borrower_sql = (TRANSFORM_DIR / "gold_borrower_360.sql").read_text(encoding="utf-8")
+    lead_scores_sql = (TRANSFORM_DIR / "gold_lead_scores.sql").read_text(encoding="utf-8")
+    evidence_sql = (TRANSFORM_DIR / "gold_evidence_events.sql").read_text(encoding="utf-8")
+    docs = (REPO_ROOT / "docs" / "data-contract-module0.md").read_text(encoding="utf-8")
+
+    parity_pattern = r"first_pos_loan_type\s+IN\s+\('CONV','FHA','VA'\)\s+THEN\s+70"
+    assert re.search(parity_pattern, borrower_sql)
+    assert re.search(parity_pattern, lead_scores_sql)
+    assert "'loan_type_fit'                                  AS signal_type" in evidence_sql
+    assert "first_pos_loan_type IN ('CONV','FHA','VA')" in evidence_sql
+    assert "signal_type NOT IN ('permit', 'listing', 'loan_type_fit')" in borrower_sql
+    assert "signal_type NOT IN ('permit', 'listing', 'loan_type_fit')" in lead_scores_sql
+    assert "CONV/FHA/VA parity is a contract" in docs
+    assert "customer compliance team should explicitly review" in re.sub(r"\s+", " ", docs)
+
+
+def test_borrower_360_and_lead_scores_subscore_terms_stay_aligned() -> None:
+    """Pin the mirrored sub-score clauses that feed lead_score.
+
+    The two CTAS files intentionally recompute the same five sub-scores at
+    different grains. This static guard catches the high-risk drift modes:
+    changing weights, branch constants, or first-party relationship terms in
+    one CTAS but not the other.
+    """
+    borrower_sql = (TRANSFORM_DIR / "gold_borrower_360.sql").read_text(encoding="utf-8")
+    lead_scores_sql = (TRANSFORM_DIR / "gold_lead_scores.sql").read_text(encoding="utf-8")
+
+    aligned_terms = (
+        ("LEAST(55, CAST(ROUND(3 * sqrt(GREATEST(0, w.rate_spread_bps))) AS INT))",
+         "LEAST(55, CAST(ROUND(3 * sqrt(GREATEST(0, b.rate_spread_bps))) AS INT))"),
+        ("LEAST(50, CAST(ROUND(0.5 * LEAST(100, GREATEST(0, w.equity_pct))) AS INT))",
+         "LEAST(50, CAST(ROUND(0.5 * LEAST(100, GREATEST(0, b.equity_pct))) AS INT))"),
+        ("20 * CASE WHEN w.is_competitor_lien THEN 1 ELSE 0 END",
+         "20 * CASE WHEN b.is_competitor_lien THEN 1 ELSE 0 END"),
+        ("LEAST(25, GREATEST(0, (COALESCE(w.related_property_count, 1) - 1) * 10))",
+         "LEAST(25, GREATEST(0, (COALESCE(b.related_property_count, 1) - 1) * 10))"),
+        ("LEAST(30, CAST(ROUND(2 * sqrt(GREATEST(0, w.rate_spread_bps))) AS INT))",
+         "LEAST(30, CAST(ROUND(2 * sqrt(GREATEST(0, b.rate_spread_bps))) AS INT))"),
+        ("LEAST(10, GREATEST(0, CAST(w.equity_pct / 10 AS INT)))",
+         "LEAST(10, GREATEST(0, CAST(b.equity_pct / 10 AS INT)))"),
+        ("CASE WHEN w.is_current_customer THEN 8 ELSE 0 END",
+         "CASE WHEN b.is_current_customer THEN 8 ELSE 0 END"),
+        ("WHEN w.is_current_customer", "WHEN b.is_current_customer"),
+        ("THEN 70", "THEN 70"),
+        ("WHEN w.is_former_customer", "WHEN b.is_former_customer"),
+        ("THEN 60", "THEN 60"),
+        ("WHEN w.is_competitor_lien", "WHEN b.is_competitor_lien"),
+        ("THEN 55", "THEN 55"),
+        ("WHEN COALESCE(w.related_property_count, 1) > 1", "WHEN COALESCE(b.related_property_count, 1) > 1"),
+        ("THEN 45", "THEN 45"),
+        ("ELSE 35", "ELSE 35"),
+        ("THEN LEAST(25, 5 * LEAST(5, w.historical_tenant_distinct_clips))",
+         "THEN LEAST(25, 5 * LEAST(5, b.historical_tenant_distinct_clips))"),
+        ("ELSE LEAST(25, GREATEST(0, (COALESCE(w.related_property_count, 1) - 1) * 5))",
+         "ELSE LEAST(25, GREATEST(0, (COALESCE(b.related_property_count, 1) - 1) * 5))"),
+        ("LEAST(12, 3 * COALESCE(w.fp_relationship_depth, 0))",
+         "LEAST(12, 3 * COALESCE(b.first_party_relationship_depth, 0))"),
+        ("LEAST(8, 4 * COALESCE(w.fp_recent_positive_interactions, 0))",
+         "LEAST(8, 4 * COALESCE(b.first_party_recent_interactions, 0))"),
+        ("CASE WHEN w.fp_has_recent_application THEN 5 ELSE 0 END",
+         "CASE WHEN b.first_party_recent_application THEN 5 ELSE 0 END"),
+        ("10 * COALESCE(ec.evidence_event_count, 0)",
+         "10 * b.evidence_event_count"),
+        ("THEN LEAST(20, CAST(ROUND(sqrt(w.second_pos_amount / 1000.0)) AS INT))",
+         "THEN LEAST(20, CAST(ROUND(sqrt(b.second_pos_amount / 1000.0)) AS INT))"),
+    )
+
+    for borrower_term, lead_scores_term in aligned_terms:
+        assert borrower_term in borrower_sql
+        assert lead_scores_term in lead_scores_sql

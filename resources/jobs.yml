@@ -22,7 +22,32 @@ resources:
         slice: slice13-accuracy
       max_concurrent_runs: 1
       tasks:
+        - task_key: init_fn_rate_spread
+          sql_task:
+            warehouse_id: ${var.sql_warehouse_id}
+            file:
+              path: ../sql/uc_functions/fn_rate_spread.sql
+        - task_key: init_fn_in_the_money
+          sql_task:
+            warehouse_id: ${var.sql_warehouse_id}
+            file:
+              path: ../sql/uc_functions/fn_in_the_money.sql
+        - task_key: init_fn_lead_score
+          sql_task:
+            warehouse_id: ${var.sql_warehouse_id}
+            file:
+              path: ../sql/uc_functions/fn_lead_score.sql
+        - task_key: init_fn_next_best_offer
+          sql_task:
+            warehouse_id: ${var.sql_warehouse_id}
+            file:
+              path: ../sql/uc_functions/fn_next_best_offer.sql
         - task_key: init_gold_ddl
+          depends_on:
+            - task_key: init_fn_rate_spread
+            - task_key: init_fn_in_the_money
+            - task_key: init_fn_lead_score
+            - task_key: init_fn_next_best_offer
           sql_task:
             warehouse_id: ${var.sql_warehouse_id}
             file:

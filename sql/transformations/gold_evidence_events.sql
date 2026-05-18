@@ -29,6 +29,7 @@
 --   1  rate_spread
 --   2  equity
 --   3  market_trend
+--   4  loan_type_fit
 --   5  competitor_lien
 --   6  multi_property
 --   7  absentee_mailing
@@ -154,7 +155,27 @@ market_trend_rows AS (
   CROSS JOIN market AS m
   WHERE lc.situs_state IS NOT NULL
 ),
--- 4. competitor_lien: current servicer known and not a tenant-lender alias.
+-- 4. loan_type_fit: compliance-visible explanation for the fit sub-score's
+--    symmetric CONV/FHA/VA owner-occupant boost. This row is intentionally
+--    excluded from the evidence sub-score in borrower_360/lead_scores so adding
+--    rationale does not retune opportunity scores.
+loan_type_fit_rows AS (
+  SELECT
+    lc.clip,
+    'Voluntary Lien'                                 AS source_product,
+    'mip.silver.lien_current'                        AS source_table,
+    'loan_type_fit'                                  AS signal_type,
+    CONCAT(COALESCE(lc.first_pos_loan_type, 'unknown'), ' owner-occupied fit') AS signal_value,
+    'Owner-occupied CONV/FHA/VA loan type receives symmetric product-fit treatment.' AS display_text,
+    0.89                                             AS confidence,
+    CAST(lc.ingest_ts AS STRING)                     AS `timestamp`,
+    4                                                AS signal_rank
+  FROM mip.silver.lien_current AS lc
+  WHERE COALESCE(lc.owner_occupancy_code, '') = 'O'
+    AND lc.first_pos_loan_type IN ('CONV','FHA','VA')
+    AND lc.situs_state IS NOT NULL
+),
+-- 5. competitor_lien: current servicer known and not a tenant-lender alias.
 competitor_lien_rows AS (
   SELECT
     lc.clip,
@@ -313,6 +334,7 @@ unioned AS (
   SELECT * FROM rate_spread_rows      UNION ALL
   SELECT * FROM equity_rows           UNION ALL
   SELECT * FROM market_trend_rows     UNION ALL
+  SELECT * FROM loan_type_fit_rows    UNION ALL
   SELECT * FROM competitor_lien_rows  UNION ALL
   SELECT * FROM multi_property_rows   UNION ALL
   SELECT * FROM absentee_rows         UNION ALL

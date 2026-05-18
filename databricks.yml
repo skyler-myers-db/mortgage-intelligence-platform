@@ -395,8 +395,37 @@ resources:
         slice: slice13-accuracy
       max_concurrent_runs: 1
       tasks:
+        - task_key: init_fn_rate_spread
+          description: "CREATE OR REPLACE mip.gold.fn_rate_spread before any scoring CTAS."
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/_rendered/uc_functions/fn_rate_spread.sql
+        - task_key: init_fn_in_the_money
+          description: "CREATE OR REPLACE mip.gold.fn_in_the_money before any scoring CTAS."
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/_rendered/uc_functions/fn_in_the_money.sql
+        - task_key: init_fn_lead_score
+          description: "CREATE OR REPLACE mip.gold.fn_lead_score before any scoring CTAS."
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/_rendered/uc_functions/fn_lead_score.sql
+        - task_key: init_fn_next_best_offer
+          description: "CREATE OR REPLACE mip.gold.fn_next_best_offer before any scoring CTAS."
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/_rendered/uc_functions/fn_next_best_offer.sql
         - task_key: init_gold_ddl
           description: "Idempotent CREATE TABLE IF NOT EXISTS for every mip.gold.* table."
+          depends_on:
+            - task_key: init_fn_rate_spread
+            - task_key: init_fn_in_the_money
+            - task_key: init_fn_lead_score
+            - task_key: init_fn_next_best_offer
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:

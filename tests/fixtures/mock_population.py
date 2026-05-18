@@ -373,6 +373,11 @@ def _build_borrower(spec: dict) -> tuple[Borrower360, dict]:
         "is_current_customer": spec["customer"],
         "is_competitor_lien": spec["comp_lien"],
         "offer_code": code,
+        "min_spread_bps": _MIN_SP,
+        "min_equity_pct": _MIN_EQ,
+        "heloc_equity_min_pct": _HELOC_MIN,
+        "cashout_equity_min_pct": _CASHOUT_MIN,
+        "retention_min_spread_bps": _RETENTION_MIN,
     }
     return borrower, offer_inputs
 
