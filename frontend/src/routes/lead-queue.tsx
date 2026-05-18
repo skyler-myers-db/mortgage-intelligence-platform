@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router-dom';
 import { api, ApiError, type LeadsPageResult } from '../lib/api';
+import { useConfigOptionsQuery } from '../lib/configOptionsQuery';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
 import type { PortfolioPreview, SalesAgingLead, SalesConversionResponse, SalesStandupResponse, SalesTeamMember, SegmentCode } from '../types';
 import { PageShell } from '../components/layout/PageShell';
@@ -12,6 +13,7 @@ import { FilterSelect } from '../components/ui/FilterSelect';
 import { useFootprint } from '../components/FootprintProvider';
 import { Skeleton } from '../components/ui/Skeleton';
 import { queryKeys } from '../lib/queryKeys';
+import { isPublicLenderRef } from './portfolio-builder.logic';
 
 /**
  * Lead Queue — deep-dive table route. Full borrower list (filtered by segment
@@ -44,7 +46,6 @@ const RECENCY_FILTER_OPTIONS = ['Any', 'Untouched 30d', 'Untouched 60d', 'Untouc
 const APPROVAL_FILTER_OPTIONS = ['Any approval', 'Approved', 'Pending', 'Rejected', 'Hold'] as const;
 const OUTREACH_FILTER_OPTIONS = ['Any outreach', 'None', 'Queued', 'Actioned', 'Sent', 'Bounced', 'Replied'] as const;
 const AGING_FILTER_OPTIONS = ['Any age', 'Aged >7d', 'Aged >14d', 'Aged >30d'] as const;
-const PUBLIC_LENDER_REF_RE = /^(All|Summit Mortgage|Competitor ([A-Z]|Other))$/;
 const PORTFOLIO_FILTER_KEYS = [
   'occupancy',
   'lien_status',
@@ -121,11 +122,11 @@ function parseBorrowerIds(raw: string | null): string[] {
   return out;
 }
 
-function parseTargetLenderRef(raw: string | null): string | undefined {
+function parseTargetLenderRef(raw: string | null, allowedLenderRefs: readonly string[]): string | undefined {
   const value = raw?.trim();
   if (!value) return undefined;
   if (value === 'All') return undefined;
-  return PUBLIC_LENDER_REF_RE.test(value) ? value : undefined;
+  return isPublicLenderRef(value, allowedLenderRefs) ? value : undefined;
 }
 
 const PORTFOLIO_FILTER_VALUE_SETS: Partial<Record<PortfolioFilterKey, Set<string>>> = {
@@ -141,12 +142,15 @@ const PORTFOLIO_FILTER_VALUE_SETS: Partial<Record<PortfolioFilterKey, Set<string
   recency: new Set(['Any', 'Untouched 30d', 'Untouched 60d', 'Untouched 90d']),
 };
 
-function sanitizePortfolioCriteria(raw: Record<string, string | undefined>): Record<string, string> | undefined {
+function sanitizePortfolioCriteria(
+  raw: Record<string, string | undefined>,
+  allowedLenderRefs: readonly string[] = [],
+): Record<string, string> | undefined {
   const criteria: Record<string, string> = {};
   for (const key of PORTFOLIO_FILTER_KEYS) {
     const value = raw[key]?.trim();
     if (!value) continue;
-    if (key === 'target_lender_ref' && !PUBLIC_LENDER_REF_RE.test(value)) continue;
+    if (key === 'target_lender_ref' && !isPublicLenderRef(value, allowedLenderRefs)) continue;
     const allowedValues = PORTFOLIO_FILTER_VALUE_SETS[key];
     if (allowedValues && !allowedValues.has(value)) continue;
     criteria[key] = value;
@@ -154,9 +158,13 @@ function sanitizePortfolioCriteria(raw: Record<string, string | undefined>): Rec
   return Object.keys(criteria).length > 0 ? criteria : undefined;
 }
 
-function parsePortfolioCriteria(sp: URLSearchParams): Record<string, string> | undefined {
+function parsePortfolioCriteria(
+  sp: URLSearchParams,
+  allowedLenderRefs: readonly string[],
+): Record<string, string> | undefined {
   return sanitizePortfolioCriteria(
     Object.fromEntries(PORTFOLIO_FILTER_KEYS.map((key) => [key, sp.get(key) ?? undefined])),
+    allowedLenderRefs,
   );
 }
 
@@ -194,6 +202,7 @@ export interface LeadQueueExportFiltersInput {
   borrowerIdFilters?: string[];
   countyFilter?: string;
   targetLenderRef?: string;
+  targetLenderRefs?: readonly string[];
   portfolioCriteria?: Record<string, string>;
   approvalStatus?: string;
   outreachStatus?: string;
@@ -219,12 +228,14 @@ export function buildLeadQueueExportFilters(input: LeadQueueExportFiltersInput):
   if (input.countyFilter && /^\d{5}$/.test(input.countyFilter)) {
     params.set('county', input.countyFilter);
   }
-  if (input.targetLenderRef) params.set('target_lender_ref', input.targetLenderRef);
+  if (input.targetLenderRef && isPublicLenderRef(input.targetLenderRef, input.targetLenderRefs ?? [])) {
+    params.set('target_lender_ref', input.targetLenderRef);
+  }
   if (input.approvalStatus && input.approvalStatus !== 'any') params.set('approval_status', input.approvalStatus);
   if (input.outreachStatus && input.outreachStatus !== 'any') params.set('outreach_status', input.outreachStatus);
   if (input.assignedTo) params.set('assigned_to', input.assignedTo);
   if (input.agedDays) params.set('aged_days', String(input.agedDays));
-  const safePortfolioCriteria = sanitizePortfolioCriteria(input.portfolioCriteria ?? {});
+  const safePortfolioCriteria = sanitizePortfolioCriteria(input.portfolioCriteria ?? {}, input.targetLenderRefs ?? []);
   for (const key of PORTFOLIO_FILTER_KEYS) {
     const value = safePortfolioCriteria?.[key];
     if (value) params.set(key, value);
@@ -324,10 +335,15 @@ export default function LeadQueue() {
     [searchParams],
   );
   const countyFilter = (searchParams.get('county') ?? '').trim() || undefined;
-  const targetLenderRef = parseTargetLenderRef(searchParams.get('target_lender_ref'));
+  const configOptionsQuery = useConfigOptionsQuery();
+  const targetLenderOptions = useMemo(() => {
+    const values = configOptionsQuery.data?.target_lender_refs?.filter(Boolean);
+    return values && values.length > 0 ? values : ['All'];
+  }, [configOptionsQuery.data?.target_lender_refs]);
+  const targetLenderRef = parseTargetLenderRef(searchParams.get('target_lender_ref'), targetLenderOptions);
   const portfolioCriteria = useMemo(
-    () => parsePortfolioCriteria(searchParams),
-    [searchParams],
+    () => parsePortfolioCriteria(searchParams, targetLenderOptions),
+    [searchParams, targetLenderOptions],
   );
   const portfolioFilters = useMemo(
     () => portfolioFilterEntries(portfolioCriteria),
@@ -545,6 +561,7 @@ export default function LeadQueue() {
         borrowerIdFilters,
         countyFilter,
         targetLenderRef,
+        targetLenderRefs: targetLenderOptions,
         portfolioCriteria,
         approvalStatus: approvalStatus === 'any' ? undefined : approvalStatus,
         outreachStatus: outreachStatus === 'any' ? undefined : outreachStatus,
@@ -568,6 +585,7 @@ export default function LeadQueue() {
     stateFilter,
     stateFilters,
     targetLenderRef,
+    targetLenderOptions,
     approvalStatus,
     outreachStatus,
     assignedTo,

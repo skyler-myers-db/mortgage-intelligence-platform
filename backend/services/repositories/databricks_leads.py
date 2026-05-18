@@ -7,6 +7,10 @@ compatibility import remains ``backend.services.repositories.databricks_repo``.
 
 from __future__ import annotations
 
+import json
+from typing import Any
+
+from backend.config.settings import settings
 from backend.schemas.common import validate_public_borrower_id
 from backend.schemas.lead import LeadSummary
 from backend.schemas.portfolio import PortfolioCriteria
@@ -18,6 +22,7 @@ from backend.services.repositories.databricks_shared import (
     _LEAD_POPULATION_SELECT_FROM_B360,
     _LEAD_POPULATION_SELECT_FROM_LP,
 )
+from backend.services.resilience import TTLCache
 from backend.services.state_footprint import get_state_footprint_resolver
 
 
@@ -46,8 +51,16 @@ class DatabricksLeadRepository:
     DEFAULT_LIMIT: int = 500
     MAX_LIMIT: int = 5000
 
-    def __init__(self, client: DatabricksSqlClient) -> None:
+    def __init__(
+        self,
+        client: DatabricksSqlClient,
+        *,
+        cache: TTLCache | None = None,
+        cache_ttl_s: float | None = None,
+    ) -> None:
         self._client = client
+        self._cache = cache if cache is not None else TTLCache()
+        self._cache_ttl_s = settings.mip_cache_ttl_s if cache_ttl_s is None else cache_ttl_s
 
     _LIST_BASE_SQL_TEMPLATE = (
         f"SELECT {_LEAD_POPULATION_SELECT_FROM_LP} "
@@ -155,6 +168,32 @@ class DatabricksLeadRepository:
     ) -> list[LeadSummary]:
         _ = (portfolio_id, cohort_id)
         bounded = self._bound_limit(limit)
+        cache_key = self._cache_key(
+            "lead_list",
+            {
+                "segment": segment,
+                "portfolio_id": portfolio_id,
+                "limit": bounded,
+                "state": state,
+                "zip_code": zip_code,
+                "county_fips": county_fips,
+                "county_fipses": county_fipses,
+                "state_codes": state_codes,
+                "zip_codes": zip_codes,
+                "borrower_ids": borrower_ids,
+                "segment_codes": segment_codes,
+                "segment_mode": segment_mode,
+                "target_lender_ref": target_lender_ref,
+                "cohort_id": cohort_id,
+                "portfolio_criteria": self._criteria_key(portfolio_criteria),
+                "approval_status": approval_status,
+                "outreach_status": outreach_status,
+                "aged_days": aged_days,
+            },
+        )
+        cached = self._get_cached_leads(cache_key)
+        if cached is not None:
+            return cached
         segment_clause, segment_params = self._segment_filter_clause(
             segment=segment,
             segment_codes=segment_codes,
@@ -239,7 +278,10 @@ class DatabricksLeadRepository:
                 limit=bounded,
             )
             rows = self._client.execute(sql, params)
-            return [LeadSummary(**redact_lead_row(r)) for r in rows]
+            return self._store_cached_leads(
+                cache_key,
+                [LeadSummary(**redact_lead_row(r)) for r in rows],
+            )
 
         lifecycle_clause, lifecycle_params = self._lifecycle_filter_clause(
             source_alias="lp",
@@ -264,7 +306,10 @@ class DatabricksLeadRepository:
                 limit=bounded,
             )
             rows = self._client.execute(sql, lifecycle_params)
-        return [LeadSummary(**redact_lead_row(r)) for r in rows]
+        return self._store_cached_leads(
+            cache_key,
+            [LeadSummary(**redact_lead_row(r)) for r in rows],
+        )
 
     def count(
         self,
@@ -287,6 +332,32 @@ class DatabricksLeadRepository:
         aged_days: int | None = None,
     ) -> int:
         _ = (portfolio_id, cohort_id)
+        cache_key = self._cache_key(
+            "lead_count",
+            {
+                "segment": segment,
+                "portfolio_id": portfolio_id,
+                "state": state,
+                "zip_code": zip_code,
+                "county_fips": county_fips,
+                "county_fipses": county_fipses,
+                "state_codes": state_codes,
+                "zip_codes": zip_codes,
+                "borrower_ids": borrower_ids,
+                "segment_codes": segment_codes,
+                "segment_mode": segment_mode,
+                "target_lender_ref": target_lender_ref,
+                "cohort_id": cohort_id,
+                "portfolio_criteria": self._criteria_key(portfolio_criteria),
+                "approval_status": approval_status,
+                "outreach_status": outreach_status,
+                "aged_days": aged_days,
+            },
+        )
+        if self._cache_ttl_s > 0:
+            cached = self._cache.get(cache_key)
+            if isinstance(cached, int):
+                return cached
         segment_clause, segment_params = self._segment_filter_clause(
             segment=segment,
             segment_codes=segment_codes,
@@ -354,7 +425,7 @@ class DatabricksLeadRepository:
                 lifecycle_clause=lifecycle_clause_geo,
             )
             row = self._client.execute_one(sql, params)
-            return int((row or {}).get("n") or 0)
+            return self._store_cached_count(cache_key, int((row or {}).get("n") or 0))
         lifecycle_clause, lifecycle_params = self._lifecycle_filter_clause(
             source_alias="lp",
             approval_status=approval_status,
@@ -370,12 +441,49 @@ class DatabricksLeadRepository:
                 ),
                 segment_params,
             )
-            return int((row or {}).get("n") or 0)
+            return self._store_cached_count(cache_key, int((row or {}).get("n") or 0))
         row = self._client.execute_one(
             self._COUNT_BASE_SQL.format(lifecycle_clause=lifecycle_clause),
             lifecycle_params,
         )
-        return int((row or {}).get("n") or 0)
+        return self._store_cached_count(cache_key, int((row or {}).get("n") or 0))
+
+    @staticmethod
+    def _criteria_key(criteria: PortfolioCriteria | None) -> dict[str, Any] | None:
+        if criteria is None:
+            return None
+        return criteria.model_dump(mode="json", exclude_none=True)
+
+    @staticmethod
+    def _cache_key(prefix: str, payload: dict[str, Any]) -> str:
+        stable = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+        return f"{prefix}:{stable}"
+
+    @staticmethod
+    def _copy_leads(rows: list[LeadSummary]) -> list[LeadSummary]:
+        return [row.model_copy(deep=True) for row in rows]
+
+    def _get_cached_leads(self, cache_key: str) -> list[LeadSummary] | None:
+        if self._cache_ttl_s <= 0:
+            return None
+        cached = self._cache.get(cache_key)
+        if isinstance(cached, list) and all(isinstance(row, LeadSummary) for row in cached):
+            return self._copy_leads(cached)
+        return None
+
+    def _store_cached_leads(
+        self,
+        cache_key: str,
+        rows: list[LeadSummary],
+    ) -> list[LeadSummary]:
+        if self._cache_ttl_s > 0:
+            self._cache.set(cache_key, self._copy_leads(rows), self._cache_ttl_s)
+        return self._copy_leads(rows)
+
+    def _store_cached_count(self, cache_key: str, value: int) -> int:
+        if self._cache_ttl_s > 0:
+            self._cache.set(cache_key, value, self._cache_ttl_s)
+        return value
 
     @staticmethod
     def _normalise_states(

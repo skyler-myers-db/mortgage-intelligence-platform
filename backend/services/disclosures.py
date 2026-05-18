@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from backend.config.settings import settings
 from backend.schemas.common import contains_pii_marker
 from backend.services.lakebase import LakebaseClient
 
@@ -85,15 +86,16 @@ def resolve_tenant_disclosure(
     *,
     state: str,
     channel: str,
-    tenant_id: str = "summit",
+    tenant_id: str | None = None,
 ) -> DisclosureBlock:
     """Return the active disclosure block or raise fail-closed."""
 
     normalized_state = (state or "").strip().upper()[:2] or "_ALL"
+    tenant_key = tenant_id or settings.effective_tenant_id()
     row = lakebase.fetchone(
         _DISCLOSURE_SELECT_SQL,
         {
-            "tenant_id": tenant_id,
+            "tenant_id": tenant_key,
             "state": normalized_state,
             "channel": channel,
         },

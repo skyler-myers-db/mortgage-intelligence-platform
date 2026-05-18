@@ -32,7 +32,7 @@ from backend.services.sales_state import (
 
 log = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api", tags=["leads"])
+router = APIRouter(tags=["leads"])
 
 # Kept in sync with DatabricksLeadRepository.{DEFAULT_LIMIT, MAX_LIMIT}.
 # Exposed as module-level constants so the router's Query() annotations
@@ -393,7 +393,7 @@ def list_leads(
         Query(
             alias="target_lender_ref",
             max_length=64,
-            description="Optional public-demo-safe current-lender ref such as Summit Mortgage or Competitor A.",
+            description="Optional public-demo-safe current-lender ref such as the configured tenant lender or Competitor A.",
         ),
     ] = None,
     geography: Annotated[
@@ -628,7 +628,7 @@ def list_leads(
     except ValueError as exc:
         raise HTTPException(
             status_code=422,
-            detail="target_lender_ref must be Summit Mortgage or a public-safe Competitor alias",
+            detail="target_lender_ref must be the configured tenant lender, a public-safe Competitor alias, or All",
         ) from exc
     if target_lender_ref == "All":
         target_lender_ref = None

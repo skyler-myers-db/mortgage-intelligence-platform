@@ -90,6 +90,14 @@ targets:
       root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
     run_as:
       user_name: ${workspace.current_user.userName}
+    resources:
+      database_instances:
+        mip_app_state:
+          # Production posture: keep the dev-sized single-node Lakebase as
+          # the base resource, but attach readable secondaries for customer
+          # targets so transient primary maintenance fails over instead of
+          # surfacing as an app-wide degraded state.
+          enable_readable_secondaries: true
   prod_otlp:
     mode: production
     # Production-retention target for environments that have a
@@ -105,6 +113,9 @@ targets:
     run_as:
       user_name: ${workspace.current_user.userName}
     resources:
+      database_instances:
+        mip_app_state:
+          enable_readable_secondaries: true
       apps:
         mip_app:
           resources:
@@ -632,6 +643,7 @@ resources:
           environment_key: py_default
           spark_python_task:
             python_file: jobs/sync_lifecycle_state.py
+            parameters: ["--catalog=${var.uc_catalog}"]
           max_retries: 2
           retry_on_timeout: true
         - task_key: record_funnel_snapshot
@@ -734,7 +746,9 @@ resources:
           environment_key: py_default
           spark_python_task:
             python_file: jobs/fred_rates_ingest.py
-            parameters: ["--mode=seed"]
+            parameters:
+              - "--mode=seed"
+              - "--table=${var.uc_catalog}.silver.market_rates_weekly"
           max_retries: 2
           retry_on_timeout: true
         - task_key: refresh_from_fred
@@ -744,7 +758,9 @@ resources:
           environment_key: py_default
           spark_python_task:
             python_file: jobs/fred_rates_ingest.py
-            parameters: ["--mode=fred"]
+            parameters:
+              - "--mode=fred"
+              - "--table=${var.uc_catalog}.silver.market_rates_weekly"
           max_retries: 2
           retry_on_timeout: true
 

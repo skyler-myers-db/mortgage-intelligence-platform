@@ -1,3 +1,5 @@
+import { apiPath } from './apiPaths';
+
 type RumMetric =
   | 'navigation_load'
   | 'route_change'
@@ -100,11 +102,11 @@ export function flushRum(): void {
   queue = queue.slice(MAX_BATCH);
   const body = JSON.stringify({ events: batch });
   const blob = new Blob([body], { type: 'application/json' });
-  if (navigator.sendBeacon && navigator.sendBeacon('/api/telemetry/rum', blob)) {
+  if (navigator.sendBeacon && navigator.sendBeacon(apiPath('/telemetry/rum'), blob)) {
     if (queue.length > 0) flushRum();
     return;
   }
-  void fetch('/api/telemetry/rum', {
+  void fetch(apiPath('/telemetry/rum'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body,

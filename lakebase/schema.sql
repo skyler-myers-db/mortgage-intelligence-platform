@@ -26,6 +26,15 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 CREATE SCHEMA IF NOT EXISTS mip_app;
 SET search_path TO mip_app, public;
 
+-- Migration ledger ------------------------------------------------------
+-- Operators must be able to answer "which Lakebase schema did this
+-- customer instance reach?" without diffing catalog metadata by hand.
+CREATE TABLE IF NOT EXISTS mip_app.schema_migrations (
+    version     TEXT PRIMARY KEY,
+    description TEXT NOT NULL,
+    applied_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- Campaigns -----------------------------------------------------------
 -- One row per marketing campaign the user has built with the portfolio
 -- builder. `criteria` JSONB stores the segment-filter payload; it MUST
@@ -77,6 +86,9 @@ CREATE TABLE IF NOT EXISTS mip_app.campaign_message_variants (
 );
 
 CREATE TABLE IF NOT EXISTS mip_app.tenant_disclosures (
+    -- Per-deployment disclosure namespace. Summit dev seeds use "summit";
+    -- customer deploys should set MIP_TENANT_ID or use the slug derived
+    -- from MIP_LENDER_NAME and seed their own approved disclosures.
     tenant_id           TEXT NOT NULL DEFAULT 'summit',
     state               TEXT NOT NULL,
     channel             TEXT NOT NULL CHECK (channel IN ('email','sms','direct_mail')),
@@ -271,6 +283,24 @@ CREATE INDEX IF NOT EXISTS idx_action_audit_subject_clip
 CREATE INDEX IF NOT EXISTS idx_action_audit_correlation
     ON mip_app.action_audit (correlation_id)
     WHERE correlation_id IS NOT NULL;
+
+-- Audit archival run ledger --------------------------------------------
+-- The action_audit table remains append-only. Archive jobs copy old rows to
+-- governed cold storage, then record the run here instead of deleting from
+-- action_audit without a compliance-approved retention change.
+CREATE TABLE IF NOT EXISTS mip_app.action_audit_archive_runs (
+    archive_run_id      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    cutoff_event_at     TIMESTAMPTZ NOT NULL,
+    destination_uri     TEXT NOT NULL,
+    row_count           BIGINT NOT NULL DEFAULT 0 CHECK (row_count >= 0),
+    requested_by        TEXT NOT NULL DEFAULT 'system@databricks-apps',
+    status              TEXT NOT NULL DEFAULT 'completed'
+                        CHECK (status IN ('completed','failed')),
+    metadata            JSONB NOT NULL DEFAULT '{}'::jsonb,
+    completed_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_action_audit_archive_runs_completed
+    ON mip_app.action_audit_archive_runs (completed_at DESC);
 -- Genie action idempotency: the server issues request ids inside the
 -- HMAC confirmation token, and Lakebase enforces one audited mutation per
 -- actor/request/event. The partial predicate keeps legacy non-Genie audit
@@ -411,3 +441,10 @@ CREATE TABLE IF NOT EXISTS mip_app.feedback (
 );
 CREATE INDEX IF NOT EXISTS idx_feedback_event_type
     ON mip_app.feedback (event_type, recorded_at DESC);
+
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_05_18_dr_backup_contract',
+    'Lakebase DR backup contract: schema_migrations and audit archive run ledger'
+)
+ON CONFLICT (version) DO NOTHING;

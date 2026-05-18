@@ -35,11 +35,3 @@ export type SortKey =
   | 'confidence';
 
 export type SortDir = 'asc' | 'desc';
-
-export interface LeadVirtualRange {
-  start: number;
-  end: number;
-  top: number;
-  bottom: number;
-}
-

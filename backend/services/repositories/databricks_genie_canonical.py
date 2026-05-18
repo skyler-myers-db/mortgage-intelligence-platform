@@ -3,36 +3,41 @@ from __future__ import annotations
 
 import re
 
-_CANONICAL_ITM_COUNT_SQL = """
+from backend.services.databricks_sql_helpers import qualify
+
+_BORROWER_360 = qualify("gold", "borrower_360")
+_EVIDENCE_EVENTS = qualify("gold", "evidence_events")
+
+_CANONICAL_ITM_COUNT_SQL = f"""
 SELECT COUNT(*) AS in_the_money_borrowers
      , MAX(refreshed_at) AS refreshed_at
-FROM mip.gold.borrower_360
+FROM {_BORROWER_360}
 WHERE in_the_money = TRUE
 """.strip()
 
-_CANONICAL_ITM_COUNT_BY_STATE_SQL = """
+_CANONICAL_ITM_COUNT_BY_STATE_SQL = f"""
 SELECT COUNT(*) AS in_the_money_borrowers
      , MAX(refreshed_at) AS refreshed_at
-FROM mip.gold.borrower_360
+FROM {_BORROWER_360}
 WHERE in_the_money = TRUE
   AND state = :state
 """.strip()
 
-_CANONICAL_ITM_COUNT_BY_CITY_SQL = """
+_CANONICAL_ITM_COUNT_BY_CITY_SQL = f"""
 SELECT COUNT(*) AS in_the_money_borrowers
      , MAX(refreshed_at) AS refreshed_at
-FROM mip.gold.borrower_360
+FROM {_BORROWER_360}
 WHERE in_the_money = TRUE
   AND LOWER(city) = LOWER(:city)
 """.strip()
 
-_CANONICAL_ITM_TOP_ZIPS_SQL = """
+_CANONICAL_ITM_TOP_ZIPS_SQL = f"""
 SELECT zip
      , state
      , COUNT(*) AS in_the_money_borrowers
      , CAST(ROUND(AVG(opportunity_score), 1) AS DOUBLE) AS avg_score
      , MAX(refreshed_at) AS refreshed_at
-FROM mip.gold.borrower_360
+FROM {_BORROWER_360}
 WHERE in_the_money = TRUE
   AND zip IS NOT NULL
   AND TRIM(zip) <> ''
@@ -41,18 +46,18 @@ ORDER BY in_the_money_borrowers DESC, avg_score DESC, zip ASC
 LIMIT 10
 """.strip()
 
-_CANONICAL_CURRENT_CUSTOMER_RETENTION_RISK_SQL = """
+_CANONICAL_CURRENT_CUSTOMER_RETENTION_RISK_SQL = f"""
 SELECT COUNT(*) AS retention_risk_borrowers
      , MAX(refreshed_at) AS refreshed_at
-FROM mip.gold.borrower_360
+FROM {_BORROWER_360}
 WHERE is_current_customer = TRUE
   AND (
     array_contains(segment_codes, 'retention')
     OR recommended_offer_code = 'retention'
-  )
+)
 """.strip()
 
-_CANONICAL_RETENTION_COMPETITOR_LIEN_LIST_SQL = """
+_CANONICAL_RETENTION_COMPETITOR_LIEN_LIST_SQL = f"""
 WITH matches AS (
   SELECT b.borrower_id
        , b.city
@@ -60,8 +65,8 @@ WITH matches AS (
        , b.recommended_offer_code
        , b.opportunity_score
        , MAX(to_timestamp(e.`timestamp`)) AS latest_competitor_lien_at
-  FROM mip.gold.borrower_360 AS b
-  JOIN mip.gold.evidence_events AS e
+  FROM {_BORROWER_360} AS b
+  JOIN {_EVIDENCE_EVENTS} AS e
     ON e.clip = b.clip
   WHERE array_contains(b.segment_codes, 'retention')
     AND e.signal_type = 'competitor_lien'
@@ -96,14 +101,14 @@ ORDER BY latest_competitor_lien_at DESC
 LIMIT 50
 """.strip()
 
-_CANONICAL_MSA_SCORE_SQL = """
+_CANONICAL_MSA_SCORE_SQL = f"""
 WITH borrower_markets AS (
   SELECT situs_cbsa_code
        , COALESCE(NULLIF(city, ''), 'Unknown') AS city
        , state
        , opportunity_score
        , refreshed_at
-  FROM mip.gold.borrower_360
+  FROM {_BORROWER_360}
   WHERE situs_cbsa_code IS NOT NULL
     AND TRIM(situs_cbsa_code) <> ''
 ),

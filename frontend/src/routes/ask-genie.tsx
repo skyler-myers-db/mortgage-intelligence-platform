@@ -31,21 +31,31 @@ import { queryKeys } from '../lib/queryKeys';
  * surface identically here and in the floating chat.
  */
 
-// Friendly-name + technical-path tuple. Friendly is what a business user
-// reads; the UC path sits in the title tooltip for governance/ops.
-const TRUSTED_ASSETS: Array<{ label: string; path: string }> = [
-  { label: 'Borrower population',          path: 'mip.gold.lead_population' },
-  { label: 'Segment rollups',              path: 'mip.gold.segment_population' },
-  { label: 'Opportunity scores',           path: 'mip.gold.lead_scores' },
-  { label: 'Borrower 360 profile',         path: 'mip.gold.borrower_360' },
-  { label: 'Borrower dossier',             path: 'mip.gold.borrower_dossier' },
-  { label: 'Source evidence',              path: 'mip.gold.evidence_events' },
-  { label: 'Source readiness',             path: 'mip.gold.source_readiness' },
-  { label: 'Lock-in cohort',               path: 'mip.gold.lockin_cohort' },
-  { label: 'Lead-generation metric view',  path: 'mip.semantics.lead_generation_metric_view' },
-  { label: 'Segment performance view',     path: 'mip.semantics.segment_performance_metric_view' },
-  { label: 'Borrower opportunity view',    path: 'mip.semantics.borrower_opportunity_metric_view' },
+// Friendly name + catalog-relative suffix. The backend returns the concrete
+// catalog-qualified paths for this deployment on /api/genie/start.
+const TRUSTED_ASSET_DEFS: Array<{ label: string; suffix: string }> = [
+  { label: 'Borrower population',          suffix: 'gold.lead_population' },
+  { label: 'Segment rollups',              suffix: 'gold.segment_population' },
+  { label: 'Opportunity scores',           suffix: 'gold.lead_scores' },
+  { label: 'Borrower 360 profile',         suffix: 'gold.borrower_360' },
+  { label: 'Borrower dossier',             suffix: 'gold.borrower_dossier' },
+  { label: 'Source evidence',              suffix: 'gold.evidence_events' },
+  { label: 'Source readiness',             suffix: 'gold.source_readiness' },
+  { label: 'Lock-in cohort',               suffix: 'gold.lockin_cohort' },
+  { label: 'Lead-generation metric view',  suffix: 'semantics.lead_generation_metric_view' },
+  { label: 'Segment performance view',     suffix: 'semantics.segment_performance_metric_view' },
+  { label: 'Borrower opportunity view',    suffix: 'semantics.borrower_opportunity_metric_view' },
 ];
+
+export function trustedAssetsForCatalog(
+  startAssets: string[] | undefined,
+): Array<{ label: string; path: string }> {
+  return TRUSTED_ASSET_DEFS.map((asset) => ({
+    label: asset.label,
+    path: startAssets?.find((path) => path.endsWith(`.${asset.suffix}`))
+      ?? asset.suffix,
+  }));
+}
 
 export function buildTrustedAssetQuestion(asset: { label: string; path: string }): string {
   return `Using ${asset.path}, summarize what this trusted asset can answer for Module 0 and show the most useful fields for ${asset.label.toLowerCase()}.`;
@@ -88,6 +98,7 @@ export default function AskGenie() {
     setConversationId(result.conversation_id);
     writeGenieConversationId(result.conversation_id);
   }, [conversationId, genieStartQuery.data]);
+  const trustedAssets = trustedAssetsForCatalog(genieStartQuery.data?.trusted_assets);
   const [actionStatus, setActionStatus] = useState<string | null>(null);
   // `submittedQuestion` drives the warming-up-wrapped fetch. Typing in
   // the textarea updates `question`; clicking Ask commits the current
@@ -428,7 +439,7 @@ export default function AskGenie() {
               <div className="h-4">Trusted assets</div>
             </div>
             <div className="surface__body trusted-asset-list">
-              {TRUSTED_ASSETS.map((a) => (
+              {trustedAssets.map((a) => (
                 <button
                   key={a.path}
                   title={a.path}

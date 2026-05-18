@@ -8,8 +8,8 @@ from datetime import UTC, datetime
 from typing import Any
 
 from backend.services.databricks_sql import DatabricksSqlClient, DatabricksSqlError
-from backend.services.databricks_sql_helpers import qualify
 from backend.services.genie_answers import GenieDataFreshness, GenieProof
+from backend.services.genie_trusted_assets import trusted_assets
 from backend.services.observability import emit
 from backend.services.repositories.databricks_genie_policy import (
     _extract_asset_refs,
@@ -37,27 +37,9 @@ def _sql_uses_stale_evidence_signal_enum(sql_query: str | None) -> bool:
 
 
 def _trusted_genie_asset_names() -> frozenset[str]:
-    """Return explicit trusted assets for the configured and demo catalogs."""
+    """Return explicit trusted assets for the configured catalog."""
 
-    pairs = (
-        ("gold", "lead_population"),
-        ("gold", "segment_population"),
-        ("gold", "lead_scores"),
-        ("gold", "borrower_360"),
-        ("gold", "borrower_dossier"),
-        ("gold", "evidence_events"),
-        ("gold", "source_readiness"),
-        ("gold", "lockin_cohort"),
-        ("gold", "funnel_snapshot_daily"),
-        ("gold", "county_rollup"),
-        ("gold", "zip_rollup"),
-        ("semantics", "lead_generation_metric_view"),
-        ("semantics", "segment_performance_metric_view"),
-        ("semantics", "borrower_opportunity_metric_view"),
-    )
-    assets = {qualify(schema, table) for schema, table in pairs}
-    assets.update(qualify(schema, table, catalog="mip") for schema, table in pairs)
-    return frozenset(assets)
+    return frozenset(trusted_assets())
 
 
 _TRUSTED_GENIE_ASSETS: frozenset[str] = _trusted_genie_asset_names()
@@ -106,10 +88,11 @@ def _trusted_sql_policy_core(
     allow_stale_evidence_enum: bool,
 ) -> bool:
     refs = _extract_asset_refs(sql)
+    allowed_assets = _trusted_genie_asset_names()
     return (
         bool(refs)
-        and all(asset in _TRUSTED_GENIE_ASSETS for asset in refs)
-        and all(asset in _TRUSTED_GENIE_ASSETS for asset in trusted_assets)
+        and all(asset in allowed_assets for asset in refs)
+        and all(asset in allowed_assets for asset in trusted_assets)
         and _is_select_only(sql)
         and not _sql_mentions_pii_columns(sql)
         and not _sql_has_unqualified_relations(_scrub_sql_for_policy(sql) or "")

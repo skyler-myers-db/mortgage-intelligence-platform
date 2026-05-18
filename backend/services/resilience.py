@@ -421,6 +421,12 @@ def with_retry(
 class TTLCache:
     """Bounded per-key TTL cache with optional single-flight refresh.
 
+    The cache is intentionally process-local. Databricks Apps runs this
+    Module 0 deployment as a single app instance, so a local cache avoids
+    warehouse stampedes without introducing another dependency. If a
+    customer scales the app horizontally, each replica will keep its own
+    cache and the load-test baseline must be re-captured under that shape.
+
     Legacy callers can keep using ``get`` + ``set``. New hot aggregate
     paths should prefer ``get_or_set`` so a burst of callers for the
     same expired key runs the expensive factory once, while followers

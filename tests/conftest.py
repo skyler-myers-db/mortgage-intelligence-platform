@@ -20,6 +20,8 @@ dict.
 """
 from __future__ import annotations
 
+# ruff: noqa: E402,I001
+
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
@@ -28,6 +30,13 @@ from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+
+from backend.config.settings import settings
+
+# Unit tests assert the canonical Module 0 catalog paths unless a specific
+# test overrides them. Pin before importing the FastAPI app and repositories
+# because several Genie canonical SQL constants are built at module import.
+settings.mip_default_catalog = "mip"
 
 from backend.api.config import _reset_config_cache_for_tests
 from backend.main import _backpressure_controller, app
@@ -689,9 +698,12 @@ def _isolate_fastapi_dependency_state() -> Iterator[None]:
     app.dependency_overrides.update(_BASE_DEPENDENCY_OVERRIDES)
     _reset_fake_dependency_state_for_tests()
     _reset_runtime_singletons_for_tests()
+    original_catalog = settings.mip_default_catalog
+    settings.mip_default_catalog = "mip"
     try:
         yield
     finally:
+        settings.mip_default_catalog = original_catalog
         app.dependency_overrides.clear()
         app.dependency_overrides.update(_BASE_DEPENDENCY_OVERRIDES)
         _reset_fake_dependency_state_for_tests()

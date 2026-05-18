@@ -19,6 +19,7 @@ from fastapi.responses import Response
 from fastapi.testclient import TestClient
 from starlette.middleware.gzip import GZipMiddleware
 
+import backend.api.config as config_api
 import backend.api.data_estate as data_estate_api
 import backend.services.databricks_sql as databricks_sql
 from backend.api.config import _target_lender_options
@@ -47,6 +48,18 @@ def test_unmatched_api_route_returns_json_404_not_html() -> None:
     )
     body = response.json()
     assert body == {"detail": "not found"}
+
+
+def test_versioned_api_route_is_primary_and_emits_api_version_header() -> None:
+    response = client.get("/api/v1/health")
+    assert response.status_code == 200, response.text
+    assert response.headers["x-api-version"] == "v1"
+
+
+def test_unversioned_api_route_stays_as_compatibility_alias() -> None:
+    response = client.get("/api/health")
+    assert response.status_code == 200, response.text
+    assert response.headers["x-api-version"] == "v1"
 
 
 def test_unmatched_api_route_with_trailing_segments_also_404() -> None:
@@ -259,11 +272,13 @@ def test_public_audit_event_rejects_name_shaped_top_level_values() -> None:
 
 
 def test_config_target_lender_options_drop_raw_lender_names(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(config_api.settings, "mip_lender_name", "Acme Mortgage")
+
     class _Client:
         def execute(self, sql: str) -> list[dict[str, object]]:
             _ = sql
             return [
-                {"current_lender_ref": "Summit Mortgage"},
+                {"current_lender_ref": "Acme Mortgage"},
                 {"current_lender_ref": "Wells Fargo Bank"},
                 {"current_lender_ref": "Competitor B"},
             ]
@@ -273,4 +288,22 @@ def test_config_target_lender_options_drop_raw_lender_names(monkeypatch: pytest.
     values, status = _target_lender_options()
 
     assert status == "live"
-    assert values == ["All", "Summit Mortgage", "Competitor B"]
+    assert values == ["All", "Acme Mortgage", "Competitor B"]
+
+
+def test_config_target_lender_options_include_configured_tenant_when_gold_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(config_api.settings, "mip_lender_name", "Acme Mortgage")
+
+    class _Client:
+        def execute(self, sql: str) -> list[dict[str, object]]:
+            _ = sql
+            return []
+
+    monkeypatch.setattr(databricks_sql, "get_sql_client", lambda: _Client())
+
+    values, status = _target_lender_options()
+
+    assert status == "configured_empty"
+    assert values == ["All", "Acme Mortgage"]

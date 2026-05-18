@@ -1,10 +1,10 @@
-"""Sync Lakebase approvals + outreach state into `mip.gold.borrower_lifecycle_state`.
+"""Sync Lakebase approvals + outreach state into the configured gold catalog.
 
 Runs as a Databricks Jobs Spark-Python task (``mip_sync_lifecycle_state``
 in ``databricks.yml``). Reads the authoritative approval + outreach state
 from Lakebase (``mip_app.approvals`` + ``mip_app.action_audit`` filtered
 to outreach events) and writes a keyed-by-borrower_id mirror into
-``mip.gold.borrower_lifecycle_state`` so UC metric views can expose
+``<catalog>.gold.borrower_lifecycle_state`` so UC metric views can expose
 ``approval_rate`` and ``outreach_rate`` without a runtime federated join.
 
 Authority model (non-negotiable):
@@ -35,10 +35,41 @@ Exit codes:
 """
 from __future__ import annotations
 
+import argparse
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any
+
+_UC_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _catalog_default() -> str:
+    return (os.environ.get("MIP_DEFAULT_CATALOG") or "mip").strip() or "mip"
+
+
+def _quote_uc_identifier(value: str, *, field: str) -> str:
+    """Return a backtick-quoted Unity Catalog identifier, failing closed."""
+    normalized = value.strip()
+    if not _UC_IDENTIFIER_RE.fullmatch(normalized):
+        print(
+            f"[sync-lifecycle] invalid {field} identifier {value!r}; "
+            "expected letters, digits, and underscores.",
+            file=sys.stderr,
+        )
+        sys.exit(3)
+    return f"`{normalized}`"
+
+
+def _qualified_uc_table(catalog: str, schema: str, table: str) -> str:
+    return ".".join(
+        [
+            _quote_uc_identifier(catalog, field="catalog"),
+            _quote_uc_identifier(schema, field="schema"),
+            _quote_uc_identifier(table, field="table"),
+        ]
+    )
 
 
 def _resolve_connection() -> dict:
@@ -198,8 +229,8 @@ def _get_spark() -> Any:
     return spark
 
 
-def _write_gold(rows: list[dict[str, Any]]) -> None:
-    """Write the rows into mip.gold.borrower_lifecycle_state.
+def _write_gold(rows: list[dict[str, Any]], *, catalog: str) -> None:
+    """Write the rows into the configured gold.borrower_lifecycle_state.
 
     Full rewrite is acceptable at Module 0 scale (~10k borrowers). The table
     must pre-exist (created by sql/ddl/003_gold_tables.sql §7). A missing
@@ -209,6 +240,8 @@ def _write_gold(rows: list[dict[str, Any]]) -> None:
     record for them yet.
     """
     spark = _get_spark()
+    borrower_table = _qualified_uc_table(catalog, "gold", "borrower_360")
+    lifecycle_table = _qualified_uc_table(catalog, "gold", "borrower_lifecycle_state")
     # Local imports: pyspark isn't available off-Databricks; keep import out of
     # module scope so the file remains importable by lint/tests.
     from pyspark.sql import Row  # type: ignore[import-not-found]
@@ -241,18 +274,18 @@ def _write_gold(rows: list[dict[str, Any]]) -> None:
     # population. Lakebase can contain historical sandbox probes or stale
     # deleted-population rows; those stay in Lakebase/audit history but must
     # not create phantom borrowers in the gold lifecycle table.
-    spark.sql("""
+    spark.sql(f"""
         CREATE OR REPLACE TEMP VIEW _mip_lifecycle_valid AS
         SELECT l.*
         FROM _mip_lifecycle_lakebase AS l
-        INNER JOIN mip.gold.borrower_360 AS b
+        INNER JOIN {borrower_table} AS b
           ON b.borrower_id = l.borrower_id
     """)
 
     # Seed every known borrower to the default. A LEFT ANTI against the
     # valid Lakebase rows guarantees no duplicate.
-    spark.sql("""
-        CREATE OR REPLACE TABLE mip.gold.borrower_lifecycle_state AS
+    spark.sql(f"""
+        CREATE OR REPLACE TABLE {lifecycle_table} AS
         WITH sync_anchor AS (
           SELECT CURRENT_TIMESTAMP() AS mirror_refreshed_at
         )
@@ -277,14 +310,34 @@ def _write_gold(rows: list[dict[str, Any]]) -> None:
             CAST(NULL AS TIMESTAMP)    AS outreach_at,
             a.mirror_refreshed_at      AS synced_at,
             a.mirror_refreshed_at      AS refreshed_at
-        FROM mip.gold.borrower_360 AS b
+        FROM {borrower_table} AS b
         CROSS JOIN sync_anchor AS a
         LEFT ANTI JOIN _mip_lifecycle_valid AS l
           ON l.borrower_id = b.borrower_id
     """)
 
 
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="sync_lifecycle_state",
+        description=(
+            "Mirror Lakebase approval/outreach state into the configured "
+            "gold.borrower_lifecycle_state table."
+        ),
+    )
+    parser.add_argument(
+        "--catalog",
+        default=_catalog_default(),
+        help=(
+            "Unity Catalog catalog for gold tables "
+            "(default: MIP_DEFAULT_CATALOG or mip)."
+        ),
+    )
+    return parser
+
+
+def main(argv: list[str] | None = None) -> None:
+    args = build_parser().parse_args(argv)
     conn_kwargs = _resolve_connection()
     try:
         rows = _fetch_lakebase_rows(conn_kwargs)
@@ -293,7 +346,7 @@ def main() -> None:
         sys.exit(2)
 
     print(f"[sync-lifecycle] read {len(rows)} rows from Lakebase")
-    _write_gold(rows)
+    _write_gold(rows, catalog=args.catalog)
     print("[sync-lifecycle] gold mirror refreshed")
 
 

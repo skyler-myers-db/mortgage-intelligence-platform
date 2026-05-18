@@ -88,6 +88,7 @@ class BackpressureController:
 
     def classify(self, method: str, path: str) -> RouteBudget | None:
         """Return a budget for the request, or None for unthrottled paths."""
+        path = self._canonical_path(path)
         if not path.startswith("/api/"):
             return None
         if path in {"/api/health", "/api/admin/health"}:
@@ -121,6 +122,14 @@ class BackpressureController:
         )):
             return RouteBudget("warehouse-read", settings.mip_rate_limit_expensive_per_minute, "warehouse")
         return RouteBudget("default", settings.mip_rate_limit_default_per_minute, None)
+
+    @staticmethod
+    def _canonical_path(path: str) -> str:
+        if path == "/api/v1":
+            return "/api"
+        if path.startswith("/api/v1/"):
+            return "/api" + path[len("/api/v1") :]
+        return path
 
     def check_rate(self, actor: str, budget: RouteBudget) -> int | None:
         """Return retry-after seconds when over budget, otherwise None."""

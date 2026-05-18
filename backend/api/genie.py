@@ -24,6 +24,7 @@ from backend.services.audit_store import (
     get_audit_store,
     resolve_actor,
 )
+from backend.services.databricks_sql_helpers import qualify
 from backend.services.error_sanitizer import safe_dependency_detail
 from backend.services.genie_actions import handle_genie_action, issue_response_action_tokens
 from backend.services.genie_answers import (
@@ -31,6 +32,7 @@ from backend.services.genie_answers import (
     GenieActionResponse,
     GenieMessageResponse,
     GenieProof,
+    GenieStartResponse,
     load_sample_questions,
 )
 from backend.services.genie_client import GenieClientError
@@ -69,7 +71,7 @@ from backend.services.repositories.factory import (
 from backend.services.resilience import DependencyDownError
 from backend.services.workspace_store import WorkspaceStore, get_workspace_store
 
-router = APIRouter(prefix="/api/genie", tags=["genie"])
+router = APIRouter(prefix="/genie", tags=["genie"])
 
 # Annotated[...] variant of Depends so ruff's B008 stays quiet (Depends
 # is not a default *value*; it's FastAPI's dependency marker).
@@ -329,17 +331,22 @@ _CREDIT_SOURCE_GAP_RE = re.compile(
 )
 
 
+def _source_readiness_asset() -> str:
+    return qualify("gold", "source_readiness")
+
+
 def _source_gap_answer(question: str, source_gap_match: str) -> str:
+    source = _source_readiness_asset()
     if _CREDIT_SOURCE_GAP_RE.search(question) or _CREDIT_SOURCE_GAP_RE.search(source_gap_match):
         return (
             "Credit-bureau and FICO score feeds are not live in this workspace yet. "
             "I will not infer credit-score eligibility or count the missing feed as "
-            "zero demand. Source: mip.gold.source_readiness."
+            f"zero demand. Source: {source}."
         )
     return (
         "Cotality MLS/listing and Building Permits feeds are pending and "
         "are not live in this workspace yet. I will not count the missing "
-        "feed as zero demand. Source: mip.gold.source_readiness."
+        f"feed as zero demand. Source: {source}."
     )
 
 
@@ -355,19 +362,19 @@ def _is_outreach_writer_request(question: str) -> bool:
 
 
 
-@router.post("/start")
+@router.post("/start", response_model=GenieStartResponse)
 def genie_start(
     request: Request,
     lakebase: LakebaseDep,
     payload: dict[str, object] | None = None,
-) -> dict[str, object]:
+) -> GenieStartResponse:
     _ = payload
     actor = resolve_actor(request)
-    return {
-        "conversation_id": _latest_genie_conversation(lakebase, actor=actor),
-        "trusted_assets": trusted_assets(),
-        "sample_questions": load_sample_questions()[:4],
-    }
+    return GenieStartResponse(
+        conversation_id=_latest_genie_conversation(lakebase, actor=actor),
+        trusted_assets=trusted_assets(),
+        sample_questions=load_sample_questions()[:4],
+    )
 
 
 @router.post("/message", response_model=GenieMessageResponse)
@@ -530,6 +537,7 @@ def genie_message(
     source_gap_match = _source_gap_prompt_match(payload.question)
     if source_gap_match:
         question_hash = hashlib.sha256(payload.question.encode("utf-8")).hexdigest()[:16]
+        source_readiness_asset = _source_readiness_asset()
         _ = background
         _required_audit_write(
             audit,
@@ -542,7 +550,7 @@ def genie_message(
                 "message_id": None,
                 "question_hash": question_hash,
                 "row_count": 0,
-                "source_assets": ["mip.gold.source_readiness"],
+                "source_assets": [source_readiness_asset],
                 "visualization_kind": None,
                 "action_type": "source_gap",
             },
@@ -553,11 +561,11 @@ def genie_message(
             question=payload.question,
             answer=_source_gap_answer(payload.question, source_gap_match),
             source="data_gap",
-            trusted_assets=["mip.gold.source_readiness"],
+            trusted_assets=[source_readiness_asset],
             question_hash=question_hash,
             row_count=0,
             proof=GenieProof(
-                source_assets=["mip.gold.source_readiness"],
+                source_assets=[source_readiness_asset],
                 row_count=0,
                 trusted=False,
                 filters=[],

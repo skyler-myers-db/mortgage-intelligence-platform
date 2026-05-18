@@ -11,6 +11,7 @@ for the audit path specifically.
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
@@ -23,12 +24,11 @@ from backend.services.repositories import BorrowerRepository, get_borrower_repos
 from backend.services.sales_state import (
     SalesStateStore,
     get_sales_state_store,
-    hydrate_leads_with_sales_state,
 )
 
 log = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/borrowers", tags=["borrowers"])
+router = APIRouter(prefix="/borrowers", tags=["borrowers"])
 
 RepoDep = Annotated[BorrowerRepository, Depends(get_borrower_repository)]
 StoreDep = Annotated[AuditStore, Depends(get_audit_store)]
@@ -73,6 +73,55 @@ def _safe_audit_write(store: AuditStore, **kwargs: object) -> None:
         )
 
 
+def _hydrate_borrower_sales_state(
+    borrower: Borrower360,
+    *,
+    sales_state: SalesStateStore,
+    actor: str,
+) -> Borrower360:
+    try:
+        visible_lo_emails = sales_state.visible_lo_emails(actor=actor)
+    except KeyError:
+        visible_lo_emails = set()
+    if visible_lo_emails == set():
+        return borrower
+    lifecycle = sales_state.lifecycle_for(borrower.borrower_id)
+    update: dict[str, object] = {
+        "approval_status": lifecycle.get("approval_status") or borrower.approval_status,
+        "outreach_status": lifecycle.get("outreach_status") or borrower.outreach_status,
+        "approved_at": lifecycle.get("approved_at"),
+        "outreach_at": lifecycle.get("outreach_at"),
+    }
+    assignment = lifecycle.get("assignment")
+    if assignment is not None and (
+        visible_lo_emails is None or assignment.assigned_to_email in visible_lo_emails
+    ):
+        update.update(
+            {
+                "assigned_to_email": assignment.assigned_to_email,
+                "assigned_to_label": assignment.assigned_to_label,
+                "assigned_at": assignment.assigned_at,
+                "assignment_expires_at": assignment.expires_at,
+            }
+        )
+    disposition = lifecycle.get("latest_disposition")
+    if disposition is not None and (
+        visible_lo_emails is None or disposition.lo_email in visible_lo_emails
+    ):
+        update.update(
+            {
+                "latest_disposition_outcome": disposition.outcome,
+                "latest_disposition_at": disposition.occurred_at,
+                "latest_callback_at": disposition.callback_at,
+            }
+        )
+    approved_at = update.get("approved_at")
+    if hasattr(approved_at, "tzinfo"):
+        age = datetime.now(tz=approved_at.tzinfo) - approved_at
+        update["aging_days"] = max(0, age.days)
+    return borrower.model_copy(update=update)
+
+
 @router.get("/search", response_model=list[LeadSummary])
 def search_borrowers(
     repo: RepoDep,
@@ -98,20 +147,12 @@ def get_borrower(
     borrower = repo.get(borrower_id)
     if borrower is None:
         raise HTTPException(status_code=404, detail=f"Borrower {borrower_id} not found")
+    actor = resolve_actor(request)
     try:
-        lifecycle = sales_state.lifecycle_for(borrower_id)
-        hydrated = hydrate_leads_with_sales_state(
-            [borrower],
-            sales_state,
-            actor=resolve_actor(request),
-        )[0]
-        borrower = hydrated.model_copy(
-            update={
-                "approval_status": lifecycle.get("approval_status") or hydrated.approval_status,
-                "outreach_status": lifecycle.get("outreach_status") or hydrated.outreach_status,
-                "approved_at": lifecycle.get("approved_at"),
-                "outreach_at": lifecycle.get("outreach_at"),
-            }
+        borrower = _hydrate_borrower_sales_state(
+            borrower,
+            sales_state=sales_state,
+            actor=actor,
         )
     except Exception as exc:  # noqa: BLE001 -- dossier read should remain available
         emit(
@@ -127,7 +168,7 @@ def get_borrower(
     background.add_task(
         _safe_audit_write,
         audit,
-        actor=resolve_actor(request),
+        actor=actor,
         action="view_borrower_360",
         entity_type="borrower",
         entity_id=borrower.borrower_id,

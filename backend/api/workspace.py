@@ -34,7 +34,7 @@ from backend.services.repositories import (
 )
 from backend.services.workspace_store import WorkspaceStore, get_workspace_store
 
-router = APIRouter(prefix="/api/workspace", tags=["workspace"])
+router = APIRouter(prefix="/workspace", tags=["workspace"])
 
 WorkspaceDep = Annotated[WorkspaceStore, Depends(get_workspace_store)]
 LeadRepoDep = Annotated[LeadRepository, Depends(get_lead_repository)]

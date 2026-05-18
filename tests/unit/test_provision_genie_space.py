@@ -21,12 +21,16 @@ against the DEFAULT profile. Here we verify:
 
 from __future__ import annotations
 
+import importlib
 import json
 import re
 import sys
 from pathlib import Path
 
 import pytest
+
+from backend.config.settings import settings  # noqa: E402
+from backend.services.genie_trusted_assets import trusted_assets  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TOOLS_DIR = REPO_ROOT / "tools"
@@ -35,29 +39,36 @@ if str(TOOLS_DIR) not in sys.path:
 
 from databricks import provision_genie_space as pgs  # noqa: E402
 
-from backend.services.genie_trusted_assets import trusted_assets  # noqa: E402
-from backend.services.repositories.databricks_genie_trust import (  # noqa: E402
-    _TRUSTED_GENIE_ASSETS,
+EXPECTED_ASSET_PAIRS = (
+    ("gold", "lead_population"),
+    ("gold", "segment_population"),
+    ("gold", "lead_scores"),
+    ("gold", "borrower_360"),
+    ("gold", "borrower_dossier"),
+    ("gold", "evidence_events"),
+    ("gold", "source_readiness"),
+    ("gold", "lockin_cohort"),
+    ("gold", "funnel_snapshot_daily"),
+    ("gold", "county_rollup"),
+    ("gold", "zip_rollup"),
+    ("semantics", "lead_generation_metric_view"),
+    ("semantics", "segment_performance_metric_view"),
+    ("semantics", "borrower_opportunity_metric_view"),
 )
 
-EXPECTED_ASSETS = {
-    "mip.gold.lead_population",
-    "mip.gold.segment_population",
-    "mip.gold.lead_scores",
-    "mip.gold.borrower_360",
-    "mip.gold.borrower_dossier",
-    "mip.gold.evidence_events",
-    "mip.gold.source_readiness",
-    "mip.gold.lockin_cohort",
-    "mip.gold.funnel_snapshot_daily",
-    "mip.gold.county_rollup",
-    "mip.gold.zip_rollup",
-    "mip.semantics.lead_generation_metric_view",
-    "mip.semantics.segment_performance_metric_view",
-    "mip.semantics.borrower_opportunity_metric_view",
-}
-
 HEX32 = re.compile(r"^[0-9a-f]{32}$")
+
+
+def _expected_assets(catalog: str = "mip") -> set[str]:
+    return {f"{catalog}.{schema}.{table}" for schema, table in EXPECTED_ASSET_PAIRS}
+
+
+@pytest.fixture(autouse=True)
+def _default_catalog(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MIP_DEFAULT_CATALOG", "mip")
+    monkeypatch.setattr(settings, "mip_default_catalog", "mip")
 
 
 def test_spec_loads_all_trusted_assets_and_questions() -> None:
@@ -65,7 +76,7 @@ def test_spec_loads_all_trusted_assets_and_questions() -> None:
     assert spec.name == "Mortgage Lead Intelligence"
     assert spec.catalog == "mip"
     names = {a.get("name") for a in spec.trusted_assets}
-    assert names == EXPECTED_ASSETS
+    assert names == _expected_assets()
     assert len(spec.sample_questions) == 10
     assert len(spec.example_question_sqls) >= 5
     assert "measures" in spec.sql_snippets
@@ -75,14 +86,18 @@ def test_genie_allowlist_docs_match_provisioned_assets() -> None:
     instructions = (REPO_ROOT / "genie" / "instructions.md").read_text(encoding="utf-8")
     trusted_assets_doc = (REPO_ROOT / "genie" / "trusted_assets.md").read_text(encoding="utf-8")
 
-    for asset in EXPECTED_ASSETS:
+    for asset in _expected_assets():
         assert asset in instructions
         assert asset in trusted_assets_doc
 
 
 def test_backend_genie_allowlists_match_provisioned_assets() -> None:
-    assert set(trusted_assets()) >= EXPECTED_ASSETS
-    assert set(_TRUSTED_GENIE_ASSETS) >= EXPECTED_ASSETS
+    from backend.services.repositories import databricks_genie_trust as trust_mod
+
+    trust = importlib.reload(trust_mod)
+    assert set(trusted_assets()) >= _expected_assets()
+    assert set(trust._trusted_genie_asset_names()) >= _expected_assets()
+    assert set(trust._TRUSTED_GENIE_ASSETS) >= _expected_assets()
 
 
 def test_genie_in_the_money_threshold_matches_module0_contract() -> None:
@@ -149,6 +164,80 @@ def test_strategy_example_derives_offer_mix_from_borrower_360() -> None:
     assert "then 'retention review'" not in sql_nc
 
 
+def test_space_spec_substitutes_configured_tenant_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MIP_LENDER_NAME", "Acme Mortgage")
+
+    spec = pgs.SpaceSpec.load(pgs.SPACE_YAML)
+    serialized = json.loads(spec.to_serialized_payload())
+    instruction_text = "\n".join(
+        part
+        for item in serialized["instructions"]["text_instructions"]
+        for part in item["content"]
+    )
+    instruction_words = re.sub(r"\s+", " ", instruction_text)
+
+    example_questions = {str(item.get("question") or "") for item in spec.example_question_sqls}
+    assert (
+        "Where should Acme Mortgage spend its next 10000 outreach touches this week, and why?"
+        in example_questions
+    )
+    assert "tenant is Acme Mortgage" in instruction_words
+    assert "{tenant_name}" not in instruction_text
+
+
+def test_space_spec_substitutes_configured_catalog(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MIP_DEFAULT_CATALOG", "acme_mip")
+
+    spec = pgs.SpaceSpec.load(pgs.SPACE_YAML)
+    serialized = json.loads(spec.to_serialized_payload())
+    serialized_text = json.dumps(serialized)
+    instruction_text = "\n".join(
+        part
+        for item in serialized["instructions"]["text_instructions"]
+        for part in item["content"]
+    )
+    table_ids = {
+        str(table.get("identifier"))
+        for table in serialized["data_sources"]["tables"]
+    }
+
+    assert spec.catalog == "acme_mip"
+    assert table_ids
+    assert all(asset.startswith("acme_mip.") for asset in table_ids)
+    assert "acme_mip.gold.borrower_360" in instruction_text
+    assert "trusted `acme_mip.gold`" in instruction_text
+    assert "other than `acme_mip`" in instruction_text
+    assert re.search(r"(?<![A-Za-z0-9_])mip\.gold\.", serialized_text) is None
+    assert re.search(r"(?<![A-Za-z0-9_])mip\.semantics\.", serialized_text) is None
+    assert re.search(r"(?<![A-Za-z0-9_])mip(?![A-Za-z0-9_])", serialized_text) is None
+
+
+def test_backend_genie_trust_and_canonical_sql_follow_configured_catalog(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.services.repositories import databricks_genie_canonical as canonical_mod
+    from backend.services.repositories import databricks_genie_trust as trust_mod
+
+    original_catalog = settings.mip_default_catalog
+    monkeypatch.setattr(settings, "mip_default_catalog", "acme_mip")
+    try:
+        trust = importlib.reload(trust_mod)
+        canonical = importlib.reload(canonical_mod)
+
+        assert "acme_mip.gold.borrower_360" in trust._TRUSTED_GENIE_ASSETS
+        assert "mip.gold.borrower_360" not in trust._TRUSTED_GENIE_ASSETS
+        assert "FROM acme_mip.gold.borrower_360" in canonical._CANONICAL_ITM_COUNT_SQL
+        assert "FROM mip.gold.borrower_360" not in canonical._CANONICAL_ITM_COUNT_SQL
+    finally:
+        monkeypatch.setattr(settings, "mip_default_catalog", original_catalog)
+        importlib.reload(trust_mod)
+        importlib.reload(canonical_mod)
+
+
 def test_genie_geography_zero_count_is_not_zero_demand() -> None:
     space_text = pgs.SPACE_YAML.read_text(encoding="utf-8")
     mirror_text = (REPO_ROOT / "genie" / "instructions.md").read_text(encoding="utf-8")
@@ -164,15 +253,23 @@ def test_genie_geography_zero_count_is_not_zero_demand() -> None:
 def test_genie_cross_lender_customer_questions_are_out_of_scope() -> None:
     space_text = pgs.SPACE_YAML.read_text(encoding="utf-8")
     mirror_text = (REPO_ROOT / "genie" / "instructions.md").read_text(encoding="utf-8")
+    serialized = json.loads(pgs.SpaceSpec.load(pgs.SPACE_YAML).to_serialized_payload())
+    instruction_text = "\n".join(
+        part
+        for item in serialized["instructions"]["text_instructions"]
+        for part in item["content"]
+    )
+    instruction_words = re.sub(r"\s+", " ", instruction_text)
 
     assert "third-party lender or lead-vendor-owned" in space_text
     assert "configured tenant lender" in space_text
-    assert "tenant is Summit\n     Mortgage" in space_text
+    assert "tenant is\n     {tenant_name}" in space_text
+    assert "tenant is Summit Mortgage" in instruction_words
     assert "LendingTree-sourced borrower" in space_text
     assert "Rocket\n     Mortgage customers" in space_text
     assert "Quicken Loans customers" in space_text
     assert "third-party lender or\n  lead-vendor-owned customers" in mirror_text
-    assert "tenant is Summit\n  Mortgage" in mirror_text
+    assert "tenant is\n  {tenant_name}" in mirror_text
     assert "LendingTree-sourced borrower" in mirror_text
     assert "Rocket Mortgage customers" in mirror_text
 
@@ -218,7 +315,7 @@ def test_serialized_text_instruction_allowlist_names_every_trusted_asset() -> No
         "- `mip.ref.state_footprint`",
         1,
     )[0]
-    for asset in EXPECTED_ASSETS:
+    for asset in _expected_assets():
         assert asset in allowlist_section
 
 
@@ -242,7 +339,7 @@ def test_serialized_payload_matches_discovered_schema() -> None:
     tables = parsed["data_sources"]["tables"]
     assert isinstance(tables, list)
     identifiers = {t["identifier"] for t in tables}
-    assert identifiers == EXPECTED_ASSETS
+    assert identifiers == _expected_assets()
     for t in tables:
         # The server rejects bare-string descriptions; they must be arrays.
         if "description" in t:

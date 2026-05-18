@@ -54,6 +54,29 @@ def test_dev_bundle_pins_real_genie_space_for_bare_deploy():
     assert "genie_space_id: 00000000PLACEHOLDER" not in dev_body
 
 
+def test_python_jobs_receive_bundle_catalog_variable():
+    """Spark Python jobs must follow the same catalog as rendered SQL."""
+    content = (REPO / "databricks.yml").read_text(encoding="utf-8")
+
+    sync_match = re.search(
+        r"(?ms)python_file: jobs/sync_lifecycle_state.py\n"
+        r"\s+parameters: \[\"--catalog=\$\{var\.uc_catalog\}\"\]",
+        content,
+    )
+    assert sync_match, "lifecycle sync must receive --catalog=${var.uc_catalog}"
+
+    for mode in ("seed", "fred"):
+        pattern = (
+            rf"(?ms)python_file: jobs/fred_rates_ingest.py\n"
+            rf"\s+parameters:\n"
+            rf"\s+- \"--mode={mode}\"\n"
+            rf"\s+- \"--table=\$\{{var\.uc_catalog\}}\.silver\.market_rates_weekly\""
+        )
+        assert re.search(pattern, content), (
+            f"FRED {mode} task must target ${{var.uc_catalog}}.silver.market_rates_weekly"
+        )
+
+
 def test_runtime_requirements_include_otlp_exporter_wheels():
     """A configured collector must produce log_export=otlp, not fallback.
 

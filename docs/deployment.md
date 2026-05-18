@@ -20,7 +20,18 @@ FastAPI serves `frontend/dist` automatically if present.
 
 ## Databricks App
 
-1. Fill `.env.local` with workspace and warehouse values.
+1. Fill `.env.local` with workspace, warehouse, and lender values. Customer
+   forks should set the public brand before deploy:
+
+```bash
+MIP_LENDER_NAME="Acme Mortgage"
+# Optional; defaults from MIP_LENDER_NAME when unset.
+MIP_TENANT_ID="acme_mortgage"
+MIP_DEFAULT_CATALOG="acme_mip"
+```
+
+   See [`docs/se-onboarding.md`](se-onboarding.md) for the full
+   one-workspace-one-lender tenancy checklist.
 2. For a customer fork, rebind the bundle's single workspace-host anchor
    before any deploy:
 
@@ -55,6 +66,12 @@ For a narrow resource-only recovery, `make bundle-validate`,
 After a resource-only deploy, promote the uploaded source with
 `databricks apps deploy mip-app --mode SNAPSHOT`.
 
+For disaster-recovery rollback paths, including Lakebase point-in-time
+restore, prior app snapshots, source-regression rollback via
+`git checkout <prior-good-sha>`, Genie space re-provisioning, audit archival,
+and governed-action HMAC key rotation, use
+[`docs/disaster-recovery.md`](disaster-recovery.md).
+
 ## Resources
 
 Databricks App resources expected by `app.yaml`:
@@ -77,7 +94,7 @@ MIP_OTEL_ENDPOINT=https://<otlp-collector>/v1/logs
 ```
 
 The endpoint must be a customer-owned collector reachable from the
-Databricks App container. Without an endpoint, `/api/admin/health` should honestly
+Databricks App container. Without an endpoint, `/api/v1/admin/health` should honestly
 report `"log_export": "stdout-only"`. With them configured and the
 OpenTelemetry exporter wheels present in `requirements.txt`, it should
 report `"log_export": "otlp"`; then verify the collector has a fresh
@@ -88,7 +105,7 @@ on `mip-app`. CLI/API evidence shows active deployment
 `01f14ff2c4cd10b99ebad8f8785c307f` is `SUCCEEDED`, the app is `RUNNING`,
 and only the warehouse, Genie, Lakebase, and lifecycle job resources are
 attached; no app secret resource is attached for collector headers.
-`/api/admin/health` returns
+`/api/v1/admin/health` returns
 `log_export: stdout-only`. The Databricks CLI `apps deploy` command in
 use here (`0.299.1`) has no top-level `--env` flag, but the underlying
 API accepts deployment `env_vars` via `--json`. That list replaces the
@@ -99,7 +116,7 @@ deployment payload with `value_from: otel_headers`; do not paste
 collector tokens into `app.yaml`, a bundle var, or shell history.
 
 App-side proof was completed on 2026-05-14 with temporary deployment
-`01f14fe0164a1b6388f9d240679492db`: `/api/admin/health` reported
+`01f14fe0164a1b6388f9d240679492db`: `/api/v1/admin/health` reported
 `log_export: otlp`, a sanitized RUM request returned correlation id
 `b07b2f0825a043188fda96e041a14d19`, and the external collector received
 the matching OTLP HTTP protobuf payload. The sandbox was then restored to
@@ -111,7 +128,7 @@ resolved through Databricks App resource `value_from: otel_headers`,
 backed by a temporary non-sensitive `mip/otel-headers` secret. The
 external collector received request `d64260ce-232a-498e-bb9a-4bf65306c090`
 with proof header `x-mip-otel-proof=proof-20260515T000246Z` and a
-matching `/api/telemetry/rum` log body for correlation id
+matching `/api/v1/telemetry/rum` log body for correlation id
 `c864cd1bbbf44779874fdb235ae7c6bf`. The sandbox was restored to
 deployment `01f14ff2c4cd10b99ebad8f8785c307f` with no OTLP env vars, the
 temporary app secret resource removed, and the temporary Databricks
@@ -140,7 +157,7 @@ The app runs on live Unity Catalog + Lakebase in every environment — there is 
 - Warehouse ID + Genie space ID are set (`BUNDLE_VAR_sql_warehouse_id`, `BUNDLE_VAR_genie_space_id`).
 - Lakebase schema + `mip_app.action_audit` table exist.
 - Genie space is curated against `mip.semantics.*` metric views only.
-- `/api/health` returns `status: ok`; `/api/admin/health` reports
+- `/api/v1/health` returns `status: ok`; `/api/v1/admin/health` reports
   `warehouse: up`, `genie: up`, `lakebase: up`, all circuits `closed`,
   and the current `log_export` posture.
 - Resilience is observable: degraded banner renders when a dependency drops; Approve writes a real row to `mip_app.action_audit`.
@@ -149,7 +166,7 @@ The app runs on live Unity Catalog + Lakebase in every environment — there is 
   deployment changes.
 - Optional production observability gate: if external log durability is
   required, `MIP_OTEL_ENDPOINT` and any required `MIP_OTEL_HEADERS` are
-  configured, `/api/admin/health` reports `log_export: otlp`, and the
+  configured, `/api/v1/admin/health` reports `log_export: otlp`, and the
   collector has a fresh deployed-app log line. Validate the customer
   evidence packet with
   `python tools/databricks/otlp_customer_retention_gate.py <evidence.json>`

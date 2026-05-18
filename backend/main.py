@@ -1,3 +1,5 @@
+"""FastAPI application assembly, middleware, routers, and exception handlers."""
+
 import logging
 import os
 import re
@@ -11,6 +13,7 @@ from fastapi import FastAPI
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse
+from fastapi.routing import APIRoute
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.gzip import GZipMiddleware
@@ -51,14 +54,26 @@ from backend.services.observability import (
     sanitize_correlation_id,
     set_correlation_id,
 )
+from backend.version import api_version
 
 log = logging.getLogger("mip-runtime")
+API_VERSION = "v1"
+CANONICAL_API_PREFIX = f"/api/{API_VERSION}"
+COMPAT_API_PREFIX = "/api"
 
 # Slice-13: install structured logging on import so every module that
 # logs during startup (warehouse warm, Lakebase warm) produces JSON
 # lines. configure_logging() is idempotent so a second call during tests
 # is a safe no-op.
 configure_logging()
+
+
+def _operation_id(route: APIRoute) -> str:
+    """Stable OpenAPI operation ids across versioned + compatibility routes."""
+
+    methods = "_".join(sorted((route.methods or set()) - {"HEAD", "OPTIONS"})).lower()
+    path = re.sub(r"[^0-9A-Za-z]+", "_", route.path_format).strip("_").lower()
+    return f"{methods}_{path}_{route.name}"
 
 
 def _warm_warehouse() -> None:
@@ -189,10 +204,12 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(
     title="Mortgage Intelligence Platform API",
+    version=api_version(),
     lifespan=_lifespan,
     docs_url="/docs" if settings.mip_expose_openapi else None,
     redoc_url="/redoc" if settings.mip_expose_openapi else None,
     openapi_url="/openapi.json" if settings.mip_expose_openapi else None,
+    generate_unique_id_function=_operation_id,
 )
 
 
@@ -342,6 +359,8 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "geolocation=(), camera=(), microphone=()",
         )
         response.headers.setdefault("Content-Security-Policy", self._CSP)
+        if request.url.path.startswith("/api/"):
+            response.headers.setdefault("X-API-Version", API_VERSION)
         if request.url.path.startswith("/assets/"):
             response.headers.setdefault(
                 "Cache-Control",
@@ -448,7 +467,7 @@ async def _request_validation_handler(
     )
 
 
-for router in [
+API_ROUTERS = [
     health.router,
     config.router,
     data_estate.router,
@@ -466,8 +485,13 @@ for router in [
     audit.router,
     telemetry.router,
     workspace.router,
-]:
-    app.include_router(router)
+]
+
+for router in API_ROUTERS:
+    app.include_router(router, prefix=CANONICAL_API_PREFIX)
+
+for router in API_ROUTERS:
+    app.include_router(router, prefix=COMPAT_API_PREFIX, deprecated=True)
 
 
 if not settings.mip_expose_openapi:
@@ -475,15 +499,15 @@ if not settings.mip_expose_openapi:
     # SPA catch-all. Returning the same compact 404 shape as unmatched /api/*
     # paths avoids leaking whether the generated docs are merely hidden or
     # absent from this deployment.
-    @app.get("/openapi.json", response_model=None)
+    @app.get("/openapi.json", response_model=None, include_in_schema=False)
     def _openapi_disabled() -> JSONResponse:
         return JSONResponse(status_code=404, content={"detail": "not found"})
 
-    @app.get("/docs", response_model=None)
+    @app.get("/docs", response_model=None, include_in_schema=False)
     def _docs_disabled() -> JSONResponse:
         return JSONResponse(status_code=404, content={"detail": "not found"})
 
-    @app.get("/redoc", response_model=None)
+    @app.get("/redoc", response_model=None, include_in_schema=False)
     def _redoc_disabled() -> JSONResponse:
         return JSONResponse(status_code=404, content={"detail": "not found"})
 
@@ -495,7 +519,7 @@ if not settings.mip_expose_openapi:
 # clients parse (they expect {"detail":"not found"}). Registering this
 # route unconditionally keeps the contract stable across local dev,
 # CI, and Databricks Apps deploys.
-@app.get("/api/{full_path:path}", response_model=None)
+@app.get("/api/{full_path:path}", response_model=None, include_in_schema=False)
 def _api_404(full_path: str) -> JSONResponse:  # noqa: ARG001
     return JSONResponse(status_code=404, content={"detail": "not found"})
 

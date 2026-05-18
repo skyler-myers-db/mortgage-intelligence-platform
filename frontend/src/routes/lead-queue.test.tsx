@@ -6,9 +6,11 @@ describe('buildLeadQueueExportFilters', () => {
   it('exports only normalized allowlisted filters', () => {
     const filters = buildLeadQueueExportFilters({
       stateFilters: ['IL'],
-      targetLenderRef: 'Competitor A',
+      targetLenderRef: 'Acme Mortgage',
+      targetLenderRefs: ['All', 'Acme Mortgage'],
       portfolioCriteria: {
         product: 'Cash-out',
+        target_lender_ref: 'Acme Mortgage',
         owner_name: 'Alice',
         raw_clip: '9154364327',
         street_address: '123 Main Street',
@@ -17,7 +19,7 @@ describe('buildLeadQueueExportFilters', () => {
     });
 
     expect(filters).toContain('states=IL');
-    expect(filters).toContain('target_lender_ref=Competitor+A');
+    expect(filters).toContain('target_lender_ref=Acme+Mortgage');
     expect(filters).toContain('product=Cash-out');
     expect(filters).toContain('cohort_id=f2366c18-e9d7-4354-8400-a29cf212a2fd');
     expect(filters).not.toContain('owner_name');
@@ -29,6 +31,10 @@ describe('buildLeadQueueExportFilters', () => {
 
   it('drops unreviewed cohort ids and renders none when no safe filters exist', () => {
     expect(buildLeadQueueExportFilters({ cohortId: 'raw_clip=9154364327' })).toBe('none');
+  });
+
+  it('does not export unadvertised tenant lender names', () => {
+    expect(buildLeadQueueExportFilters({ targetLenderRef: 'Acme Mortgage' })).toBe('none');
   });
 
   it('drops unreviewed portfolio filter values even for allowed keys', () => {
@@ -52,7 +58,7 @@ describe('buildLeadQueueExportFilters', () => {
 describe('formatLeadQueueLoadError', () => {
   it('turns 422 validation responses into filter guidance instead of a raw HTTP code', () => {
     const state = formatLeadQueueLoadError(new ApiError('aged_days: Input should be less than or equal to 90', {
-      path: '/api/leads',
+      path: '/api/v1/leads',
       status: 422,
       validationIssues: [
         {
@@ -71,7 +77,7 @@ describe('formatLeadQueueLoadError', () => {
 
   it('keeps retry semantics for non-validation errors', () => {
     const state = formatLeadQueueLoadError(new ApiError('Warehouse unavailable', {
-      path: '/api/leads',
+      path: '/api/v1/leads',
       status: 503,
     }));
 

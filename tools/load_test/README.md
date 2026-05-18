@@ -1,10 +1,10 @@
 # Module 0 load-test harness
 
-Operator-only harness for probing the five hottest Module 0 API
-endpoints under realistic concurrent load. Not a runtime dependency,
-not wired into CI — use it when you want a latency baseline for the
-app in a specific environment (local uvicorn, dev Databricks App,
-staging Databricks App).
+Operator-only harness for probing the hottest Module 0 API endpoints
+under realistic concurrent load. Not a runtime dependency, not wired
+into CI — use it when you want a latency baseline for the app in a
+specific environment (local uvicorn, dev Databricks App, staging
+Databricks App).
 
 ## What it exercises
 
@@ -22,6 +22,19 @@ The borrower task chains off the leads response — it picks a random
 `borrower_id` from the most recent `/api/leads` body instead of
 hardcoding fixture IDs. That keeps the IDs grounded in whatever the
 live warehouse actually returns and avoids 404 noise.
+
+Write paths are intentionally **off by default**. Set
+`MIP_LOAD_TEST_WRITE=1` to add three weight-1 tasks:
+
+| Task | Endpoints | Why it exists |
+|---|---|---|
+| Outreach approval | `POST /api/v1/outreach/draft` then `/approve` | Exercises the governed approval + audit-ledger transaction. |
+| Portfolio create | `POST /api/v1/portfolio/create` | Exercises campaign creation and Lakebase state writes. |
+| Genie confirm | `POST /api/v1/genie/message` then `/actions` | Exercises action-token issuance, HMAC confirmation, and cohort/campaign/audit writes. |
+
+These calls create real rows in Lakebase and the immutable audit ledger.
+Use them only against dev/staging or an explicitly approved production
+drill window.
 
 ## Install (one-time)
 
@@ -56,16 +69,39 @@ spawn rate), writes a timestamped CSV + HTML into
 `tools/load_test/results/`, and prints a per-endpoint latency table on
 exit.
 
+Before the measured Locust window starts, `run.sh` performs a warmup
+pass against health, segments, portfolio preview, the default lead
+queue, each supported segment filter, and the first 50 borrower dossiers
+from the ranked queue. That matches the documented "sustained warm
+load" baseline rather than measuring warehouse cold-start and first-key
+cache misses. Set `MIP_LOAD_TEST_SKIP_WARMUP=1` only when you explicitly
+want a cold-start load run.
+
 Tune the load with env vars:
 
 ```bash
 MIP_USERS=50 MIP_RUN_TIME=5m MIP_SPAWN_RATE=10 bash tools/load_test/run.sh
 ```
 
+The borrower drill-down task samples from the first 50 ranked borrowers
+by default, which mirrors visible first-page operator behavior while
+keeping per-ID stats coalesced. Override with
+`MIP_LOAD_TEST_BORROWER_POOL_SIZE=100` when you intentionally want a
+wider dossier-cache churn test.
+
+The harness targets canonical `/api/v1` paths by default. Override only
+when validating the temporary unversioned compatibility alias:
+
+```bash
+MIP_API_PREFIX=/api MIP_API_URL=http://localhost:8000 bash tools/load_test/run.sh
+```
+
 ## Run against a deployed app
 
 ```bash
-MIP_API_URL=https://<app-host>.databricksapps.com bash tools/load_test/run.sh
+MIP_API_URL=https://<app-host>.databricksapps.com \
+MIP_BEARER_TOKEN="$(databricks auth token --host "$DATABRICKS_HOST" | jq -r .access_token)" \
+bash tools/load_test/run.sh
 ```
 
 Two things to know before you do this:
@@ -75,12 +111,9 @@ Two things to know before you do this:
    fine; at 200 VUs you're a noisy neighbour. Don't point this at a
    shared prod warehouse without a heads-up.
 2. **Auth.** Deployed Databricks Apps sit behind workspace SSO. Locust
-   does not ride a browser cookie for you. For headless runs against a
-   deployed URL, hit a service-principal-authed route or run from a
-   network that has app-level allowlist access. A trivial bootstrap is
-   to add `--headers "Authorization: Bearer <token>"` via a custom
-   Locust hook; this harness leaves auth open by design because the
-   local baseline doesn't need it.
+   does not ride a browser cookie for you. `run.sh`/`locustfile.py`
+   read `MIP_BEARER_TOKEN` and attach it as an `Authorization: Bearer`
+   header. Mint one with `databricks auth token --host "$DATABRICKS_HOST"`.
 
 ## k6 alternative
 
@@ -112,6 +145,17 @@ Error-rate threshold: `http_req_failed < 2%`. A cold-start 503 from
 the circuit breaker counts; a 404 from a stale borrower_id does not
 (the harness marks those as success — see `locustfile.py`).
 
+Write-path budgets are intentionally looser because they hit Lakebase
+transactions and sometimes Genie:
+
+| Endpoint | p95 target |
+|---|---:|
+| `POST /api/v1/outreach/draft` | 2000 ms |
+| `POST /api/v1/outreach/approve` | 2000 ms |
+| `POST /api/v1/portfolio/create` | 5000 ms |
+| `POST /api/v1/genie/message` | 30000 ms |
+| `POST /api/v1/genie/actions` | 5000 ms |
+
 ## Reading the output
 
 `tools/load_test/results/<timestamp>_stats.csv` is the file to keep.
@@ -125,6 +169,42 @@ The console summary at the end of `run.sh` pretty-prints the same
 numbers. The HTML report (`<timestamp>.html`) has per-endpoint
 time-series charts — easy to attach to a PR.
 
+## Baseline comparison
+
+`tools/load_test/baseline.json` is the machine-readable companion to
+`docs/load-baseline.md`. `run.sh` compares every endpoint in the latest
+`_stats.csv` against:
+
+- the endpoint p95 budget,
+- the 2% failure-rate budget, and
+- a 25% p95 regression tolerance from the committed baseline when a
+  measured baseline exists.
+
+When `MIP_LOAD_TEST_WRITE=1`, the comparator still enforces failure
+rate for every endpoint, but p95 budget/tolerance checks apply only to
+the write endpoints. The mixed write drill includes a small read sample
+only to keep a real borrower pool; it must not overwrite or fail the
+sustained 20-user read baseline.
+
+By default, regressions are printed as warnings so an exploratory load
+test still finishes. To fail the shell on any regression:
+
+```bash
+MIP_LOAD_TEST_FAIL_ON_BASELINE_REGRESSION=1 bash tools/load_test/run.sh
+```
+
+To intentionally refresh the JSON baseline after a coordinated warm
+staging run:
+
+```bash
+MIP_LOAD_TEST_WRITE_BASELINE=1 bash tools/load_test/run.sh
+```
+
+For write-path baseline capture, include `MIP_LOAD_TEST_WRITE=1` and use
+a short approved window. Commit the refreshed JSON only when the new
+numbers are expected and the HTML/CSV evidence is attached to the
+release PR.
+
 ## When to re-run
 
 - After any change to `backend/services/scoring.py`,
@@ -133,5 +213,6 @@ time-series charts — easy to attach to a PR.
 - Before cutting a release candidate.
 
 Baseline numbers (env + percentile table) live in
-`docs/load-baseline.md`; the short validation companion lives in
-`docs/validation/load-baseline.md`.
+`docs/load-baseline.md`; the scriptable baseline lives in
+`tools/load_test/baseline.json`; the short validation companion lives
+in `docs/validation/load-baseline.md`.

@@ -11,6 +11,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
+from backend.config.settings import settings
 from backend.schemas.portfolio import (
     PortfolioCreateRequest,
     PortfolioCriteria,
@@ -95,6 +96,19 @@ def test_target_lender_ref_predicate_is_parameterized() -> None:
 
     assert where == "WHERE current_lender_ref = :target_lender_ref"
     assert params == {"target_lender_ref": "Competitor B"}
+
+
+def test_target_lender_ref_accepts_configured_tenant_lender(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "mip_lender_name", "Acme Mortgage")
+
+    where, params = _where_for(
+        _any_contactability(target_lender_ref="Acme Mortgage"),
+    )
+
+    assert where == "WHERE current_lender_ref = :target_lender_ref"
+    assert params == {"target_lender_ref": "Acme Mortgage"}
 
 
 def test_target_lender_ref_all_is_not_a_predicate() -> None:

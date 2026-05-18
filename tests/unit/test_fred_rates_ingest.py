@@ -264,6 +264,14 @@ def test_cli_seed_dry_run_returns_zero(caplog: pytest.LogCaptureFixture) -> None
     assert any("parsed" in m and "rows from" in m for m in caplog.messages)
 
 
+def test_cli_default_table_honors_catalog_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MIP_DEFAULT_CATALOG", "customer_catalog")
+
+    args = fred_ingest.build_parser().parse_args(["--mode=seed", "--dry-run"])
+
+    assert args.table == "customer_catalog.silver.market_rates_weekly"
+
+
 def test_cli_fred_dry_run_no_network(monkeypatch: pytest.MonkeyPatch) -> None:
     """Stub fetch_fred_csv so the dry-run never touches the network."""
     stub = (

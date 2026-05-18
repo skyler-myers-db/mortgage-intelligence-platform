@@ -23,7 +23,7 @@ from backend.services.lakebase import LakebaseError
 from backend.services.rbac import require_admin
 from backend.services.repositories import PortfolioRepository, get_portfolio_repository
 
-router = APIRouter(prefix="/api/campaigns", tags=["campaigns"])
+router = APIRouter(prefix="/campaigns", tags=["campaigns"])
 RepoDep = Annotated[PortfolioRepository, Depends(get_portfolio_repository)]
 
 

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { api, ApiError, isWarmingUpError, _parseHttpErrorBody, _parseRetryableBody } from './api';
+import { apiPath } from './apiPaths';
 import type { SegmentCode } from '../types';
 
 /**
@@ -32,6 +33,14 @@ function jsonResponseWithHeaders(status: number, body: unknown, headers: Record<
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
+});
+
+describe('apiPath', () => {
+  it('centralizes the canonical API version prefix', () => {
+    expect(apiPath('/health')).toBe('/api/v1/health');
+    expect(apiPath('/api/health')).toBe('/api/v1/health');
+    expect(apiPath('/api/v1/health')).toBe('/api/v1/health');
+  });
 });
 
 describe('_parseRetryableBody', () => {
@@ -198,7 +207,7 @@ describe('_parseHttpErrorBody', () => {
 describe('ApiError', () => {
   it('carries the reason field through to callers', () => {
     const err = new ApiError('warehouse cooling', {
-      path: '/api/segments',
+      path: '/api/v1/segments',
       status: 503,
       retryable: true,
       dependency: 'warehouse',
@@ -211,13 +220,13 @@ describe('ApiError', () => {
   });
 
   it('defaults reason to null when the caller omits it', () => {
-    const err = new ApiError('boom', { path: '/api/leads', status: 500 });
+    const err = new ApiError('boom', { path: '/api/v1/leads', status: 500 });
     expect(err.reason).toBeNull();
   });
 
   it('carries validation issues through to route-level error copy', () => {
     const err = new ApiError('aged_days: Input should be less than or equal to 90', {
-      path: '/api/leads',
+      path: '/api/v1/leads',
       status: 422,
       validationIssues: [
         {
@@ -240,7 +249,7 @@ describe('isWarmingUpError', () => {
     ['retries_exhausted', false],
   ])('classifies reason=%s as warmingUp=%s', (reason, expected) => {
     const err = new ApiError('dependency unavailable', {
-      path: '/api/segments',
+      path: '/api/v1/segments',
       status: 503,
       retryable: true,
       dependency: 'warehouse',
@@ -250,9 +259,9 @@ describe('isWarmingUpError', () => {
   });
 
   it('rejects aborted, non-503, and non-retryable errors', () => {
-    expect(isWarmingUpError(new ApiError('abort', { path: '/api/x', aborted: true }))).toBe(false);
-    expect(isWarmingUpError(new ApiError('boom', { path: '/api/x', status: 500 }))).toBe(false);
-    expect(isWarmingUpError(new ApiError('no retry', { path: '/api/x', status: 503 }))).toBe(false);
+    expect(isWarmingUpError(new ApiError('abort', { path: '/api/v1/x', aborted: true }))).toBe(false);
+    expect(isWarmingUpError(new ApiError('boom', { path: '/api/v1/x', status: 500 }))).toBe(false);
+    expect(isWarmingUpError(new ApiError('no retry', { path: '/api/v1/x', status: 503 }))).toBe(false);
   });
 });
 
@@ -288,12 +297,12 @@ describe('workspace API client', () => {
     });
     await api.deleteWorkspaceLead('B-123');
 
-    expect(calls[0].path).toBe('/api/workspace/leads/B-123');
+    expect(calls[0].path).toBe('/api/v1/workspace/leads/B-123');
     expect(calls[0].init?.method).toBe('PUT');
     expect(JSON.parse(String(calls[0].init?.body))).toMatchObject({
       borrower_id: 'B-123',
     });
-    expect(calls[1].path).toBe('/api/workspace/leads/B-123');
+    expect(calls[1].path).toBe('/api/v1/workspace/leads/B-123');
     expect(calls[1].init?.method).toBe('DELETE');
   });
 });
@@ -332,7 +341,7 @@ describe('lead queue API client', () => {
     );
 
     const url = new URL(calls[0].path, 'http://localhost');
-    expect(url.pathname).toBe('/api/leads');
+    expect(url.pathname).toBe('/api/v1/leads');
     expect(url.searchParams.get('states')).toBe('IL,TX');
     expect(url.searchParams.get('zips')).toBe('60617,75217');
     expect(url.searchParams.get('borrower_ids')).toBe('B-11111,B-22222');
@@ -371,7 +380,7 @@ describe('lead queue API client', () => {
     );
 
     const url = new URL(calls[0].path, 'http://localhost');
-    expect(url.pathname).toBe('/api/leads');
+    expect(url.pathname).toBe('/api/v1/leads');
     expect(url.searchParams.get('state')).toBe('FL');
     expect(url.searchParams.get('county')).toBe('12011');
     expect(url.searchParams.get('zip')).toBe('33311');
@@ -400,7 +409,7 @@ describe('segment API client', () => {
     );
 
     const url = new URL(calls[0].path, 'http://localhost');
-    expect(url.pathname).toBe('/api/segments');
+    expect(url.pathname).toBe('/api/v1/segments');
     expect(url.searchParams.get('segment_codes')).toBe('itm,equity');
     expect(url.searchParams.get('segment_mode')).toBe('all');
     expect(url.searchParams.get('occupancy')).toBe('Owner-occupied');
@@ -447,18 +456,18 @@ describe('geo API client', () => {
     );
 
     const stateUrl = new URL(calls[0].path, 'http://localhost');
-    expect(stateUrl.pathname).toBe('/api/geo/state-rollups');
+    expect(stateUrl.pathname).toBe('/api/v1/geo/state-rollups');
     expect(stateUrl.searchParams.get('segment_codes')).toBe('itm,investor,equity,retention');
     expect(stateUrl.searchParams.get('segment_mode')).toBe('all');
 
     const countyUrl = new URL(calls[1].path, 'http://localhost');
-    expect(countyUrl.pathname).toBe('/api/geo/county-rollups');
+    expect(countyUrl.pathname).toBe('/api/v1/geo/county-rollups');
     expect(countyUrl.searchParams.get('state')).toBe('FL');
     expect(countyUrl.searchParams.get('segment_codes')).toBe('itm,investor,equity,retention');
     expect(countyUrl.searchParams.get('segment_mode')).toBe('all');
 
     const zipUrl = new URL(calls[2].path, 'http://localhost');
-    expect(zipUrl.pathname).toBe('/api/geo/zip-rollups');
+    expect(zipUrl.pathname).toBe('/api/v1/geo/zip-rollups');
     expect(zipUrl.searchParams.get('county_fips')).toBe('12011');
     expect(zipUrl.searchParams.get('segment_codes')).toBe('itm,investor,equity,retention');
     expect(zipUrl.searchParams.get('segment_mode')).toBe('all');
@@ -490,7 +499,7 @@ describe('data estate API client', () => {
 
     const result = await api.dataEstate();
 
-    expect(calls[0].path).toBe('/api/data-estate');
+    expect(calls[0].path).toBe('/api/v1/data-estate');
     expect(result.public_demo_masking).toBe(true);
   });
 });
@@ -511,7 +520,7 @@ describe('genie API client', () => {
 
     expect(result.conversation_id).toBe('conv-123');
     expect(result.sample_questions).toEqual(['How many borrowers are currently in-the-money?']);
-    expect(calls[0].path).toBe('/api/genie/start');
+    expect(calls[0].path).toBe('/api/v1/genie/start');
     expect(JSON.parse(String(calls[0].init?.body))).toEqual({ context: {} });
   });
 
@@ -529,7 +538,7 @@ describe('genie API client', () => {
 
     await api.genie('show that by ZIP', 'conv-123');
 
-    expect(calls[0].path).toBe('/api/genie/message');
+    expect(calls[0].path).toBe('/api/v1/genie/message');
     expect(JSON.parse(String(calls[0].init?.body))).toMatchObject({
       question: 'show that by ZIP',
       conversation_id: 'conv-123',
@@ -562,7 +571,7 @@ describe('genie API client', () => {
       question_hash: 'abc',
     });
 
-    expect(calls[0].path).toBe('/api/genie/actions');
+    expect(calls[0].path).toBe('/api/v1/genie/actions');
     const body = JSON.parse(String(calls[0].init?.body));
     expect(body).toMatchObject({
       action_type: 'save_borrowers',

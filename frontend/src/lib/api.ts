@@ -30,6 +30,7 @@ import type {
   WorkspaceMutationResult,
   WorkspaceState,
 } from '../types';
+import { apiPath } from './apiPaths';
 
 /**
  * API client — calls the FastAPI backend and surfaces errors honestly.
@@ -511,32 +512,35 @@ function _wrapFetchError(err: unknown, path: string): ApiError {
 }
 
 async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
+  const requestPath = apiPath(path);
   let res: Response;
   try {
-    res = await _fetchWithRetry(path, undefined, 3, signal);
+    res = await _fetchWithRetry(requestPath, undefined, 3, signal);
   } catch (err) {
-    throw _wrapFetchError(err, path);
+    throw _wrapFetchError(err, requestPath);
   }
-  if (!res.ok) await _throwFromResponse(res, path);
+  if (!res.ok) await _throwFromResponse(res, requestPath);
   return (await res.json()) as T;
 }
 
 async function getJsonWithHeaders<T>(path: string, signal?: AbortSignal): Promise<{ data: T; headers: Headers }> {
+  const requestPath = apiPath(path);
   let res: Response;
   try {
-    res = await _fetchWithRetry(path, undefined, 3, signal);
+    res = await _fetchWithRetry(requestPath, undefined, 3, signal);
   } catch (err) {
-    throw _wrapFetchError(err, path);
+    throw _wrapFetchError(err, requestPath);
   }
-  if (!res.ok) await _throwFromResponse(res, path);
+  if (!res.ok) await _throwFromResponse(res, requestPath);
   return { data: (await res.json()) as T, headers: res.headers };
 }
 
 async function postJson<T, B>(path: string, body: B, signal?: AbortSignal): Promise<T> {
+  const requestPath = apiPath(path);
   let res: Response;
   try {
     res = await _fetchWithRetry(
-      path,
+      requestPath,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -546,17 +550,18 @@ async function postJson<T, B>(path: string, body: B, signal?: AbortSignal): Prom
       signal,
     );
   } catch (err) {
-    throw _wrapFetchError(err, path);
+    throw _wrapFetchError(err, requestPath);
   }
-  if (!res.ok) await _throwFromResponse(res, path);
+  if (!res.ok) await _throwFromResponse(res, requestPath);
   return (await res.json()) as T;
 }
 
 async function putJson<T, B>(path: string, body: B, signal?: AbortSignal): Promise<T> {
+  const requestPath = apiPath(path);
   let res: Response;
   try {
     res = await _fetchWithRetry(
-      path,
+      requestPath,
       {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -566,17 +571,18 @@ async function putJson<T, B>(path: string, body: B, signal?: AbortSignal): Promi
       signal,
     );
   } catch (err) {
-    throw _wrapFetchError(err, path);
+    throw _wrapFetchError(err, requestPath);
   }
-  if (!res.ok) await _throwFromResponse(res, path);
+  if (!res.ok) await _throwFromResponse(res, requestPath);
   return (await res.json()) as T;
 }
 
 async function patchJson<T, B>(path: string, body: B, signal?: AbortSignal): Promise<T> {
+  const requestPath = apiPath(path);
   let res: Response;
   try {
     res = await _fetchWithRetry(
-      path,
+      requestPath,
       {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -586,25 +592,26 @@ async function patchJson<T, B>(path: string, body: B, signal?: AbortSignal): Pro
       signal,
     );
   } catch (err) {
-    throw _wrapFetchError(err, path);
+    throw _wrapFetchError(err, requestPath);
   }
-  if (!res.ok) await _throwFromResponse(res, path);
+  if (!res.ok) await _throwFromResponse(res, requestPath);
   return (await res.json()) as T;
 }
 
 async function deleteJson<T>(path: string, signal?: AbortSignal): Promise<T> {
+  const requestPath = apiPath(path);
   let res: Response;
   try {
     res = await _fetchWithRetry(
-      path,
+      requestPath,
       { method: 'DELETE' },
       3,
       signal,
     );
   } catch (err) {
-    throw _wrapFetchError(err, path);
+    throw _wrapFetchError(err, requestPath);
   }
-  if (!res.ok) await _throwFromResponse(res, path);
+  if (!res.ok) await _throwFromResponse(res, requestPath);
   return (await res.json()) as T;
 }
 

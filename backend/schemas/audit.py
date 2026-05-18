@@ -7,7 +7,7 @@ use ``action`` / ``entity_type`` / ``entity_id`` continue to work --
 ``event_type`` defaults to the same string as ``action`` when omitted,
 preserving the pre-Slice-5 contract.
 """
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -39,6 +39,14 @@ class AuditEvent(BaseModel):
     subject_segment: str | None = None
     request_id: str | None = None
     correlation_id: str | None = None
+
+
+class AuditRollupResponse(BaseModel):
+    bucket_start: str
+    event_type: str | None = None
+    group_by: Literal["event_type", "actor", "action"]
+    group_key: str | None = None
+    event_count: int
 
 
 class AuditEventCreateRequest(BaseModel):

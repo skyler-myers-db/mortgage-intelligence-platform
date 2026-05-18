@@ -134,6 +134,42 @@ def test_lead_repository_applies_portfolio_criteria_to_borrower_360_path() -> No
     }
 
 
+def test_lead_repository_caches_identical_list_and_count_reads() -> None:
+    calls: dict[str, int] = {"execute": 0, "execute_one": 0}
+
+    class _Client:
+        def execute(
+            self,
+            sql: str,
+            params: dict[str, object] | None = None,
+        ) -> list[dict[str, object]]:
+            _ = (sql, params)
+            calls["execute"] += 1
+            return [_lead("B-CACHE").model_dump(mode="python")]
+
+        def execute_one(
+            self,
+            sql: str,
+            params: dict[str, object] | None = None,
+        ) -> dict[str, object]:
+            _ = (sql, params)
+            calls["execute_one"] += 1
+            return {"n": 1}
+
+    repo = DatabricksLeadRepository(_Client(), cache_ttl_s=60.0)  # type: ignore[arg-type]
+
+    first = repo.list(segment=None, portfolio_id=None, limit=10)
+    first[0].segment_codes.append("listed")
+    second = repo.list(segment=None, portfolio_id=None, limit=10)
+
+    assert calls["execute"] == 1
+    assert second[0].borrower_id == "B-CACHE"
+    assert second[0].segment_codes == ["itm"]
+    assert repo.count(segment=None, portfolio_id=None) == 1
+    assert repo.count(segment=None, portfolio_id=None) == 1
+    assert calls["execute_one"] == 1
+
+
 def test_segment_filter_clause_supports_multi_select_all_mode():
     """Segments-page multi-select is a narrowing filter: selecting ITM
     plus equity should require both segment codes, not either one."""

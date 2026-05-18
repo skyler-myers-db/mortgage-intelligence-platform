@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildLeadCsv,
-  computeLeadVirtualRange,
   isEditableTarget,
   isLeadApprovalEligible,
   isLeadSelectableForSalesOps,
@@ -120,31 +119,6 @@ describe('Sales Manager approval-state guards', () => {
   it('keeps rejected rows locked out of sales work', () => {
     expect(isLeadApprovalEligible('rejected')).toBe(false);
     expect(isLeadSelectableForSalesOps('rejected')).toBe(false);
-  });
-});
-
-describe('computeLeadVirtualRange', () => {
-  it('returns the full range when virtualization is disabled', () => {
-    expect(computeLeadVirtualRange(80, 500, 400, false)).toEqual({
-      start: 0,
-      end: 80,
-      top: 0,
-      bottom: 0,
-    });
-  });
-
-  it('windows a large table with overscan and spacer heights', () => {
-    const range = computeLeadVirtualRange(500, 860, 430, true, 86, 4);
-    expect(range.start).toBe(6);
-    expect(range.end).toBe(19);
-    expect(range.top).toBe(516);
-    expect(range.bottom).toBe(41366);
-  });
-
-  it('clamps the bottom range instead of over-rendering past the dataset', () => {
-    const range = computeLeadVirtualRange(500, 42_600, 430, true, 86, 4);
-    expect(range.end).toBe(500);
-    expect(range.bottom).toBe(0);
   });
 });
 

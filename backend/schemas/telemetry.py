@@ -1,3 +1,5 @@
+"""Sanitized browser RUM telemetry request contracts."""
+
 from __future__ import annotations
 
 import re

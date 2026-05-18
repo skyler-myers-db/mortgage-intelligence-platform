@@ -417,6 +417,30 @@ def test_campaign_create_accepts_marketing_controls() -> None:
     assert payload.holdout == {"method": "hash_modulo", "size_pct": 10.0}
 
 
+def test_campaign_create_accepts_configured_lender_phrase(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.config.settings import settings
+
+    monkeypatch.setattr(settings, "mip_lender_name", "Acme Mortgage")
+
+    payload = PortfolioCreateRequest(
+        name="Acme Mortgage recapture",
+        message_variants=[
+            {
+                "variant_name": "Acme Mortgage Review",
+                "channel": "email",
+                "subject": "Acme Mortgage review",
+                "body": "Governed copy for licensed review",
+                "weight_pct": 50,
+            }
+        ],
+    )
+
+    assert payload.name == "Acme Mortgage recapture"
+    assert payload.message_variants[0]["subject"] == "Acme Mortgage review"
+
+
 def test_campaign_owner_filters_are_fail_closed_for_non_admin() -> None:
     client = TestClient(app)
     response = client.get(

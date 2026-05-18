@@ -9,7 +9,7 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
-from backend.schemas.audit import AuditEvent, AuditEventCreateRequest
+from backend.schemas.audit import AuditEvent, AuditEventCreateRequest, AuditRollupResponse
 from backend.schemas.common import validate_public_borrower_id
 from backend.services.audit_store import AuditStore, get_audit_store, resolve_actor
 from backend.services.error_sanitizer import safe_dependency_detail
@@ -17,7 +17,7 @@ from backend.services.lakebase import LakebaseClient, LakebaseError, get_lakebas
 from backend.services.observability import is_safe_correlation_id
 from backend.services.rbac import AdminDep
 
-router = APIRouter(prefix="/api/audit", tags=["audit"])
+router = APIRouter(prefix="/audit", tags=["audit"])
 
 StoreDep = Annotated[AuditStore, Depends(get_audit_store)]
 LakebaseDep = Annotated[LakebaseClient, Depends(get_lakebase_client)]
@@ -106,7 +106,7 @@ def list_events(
         ) from exc
 
 
-@router.get("/rollups")
+@router.get("/rollups", response_model=list[AuditRollupResponse])
 def audit_rollups(
     _actor: AdminDep,
     lakebase: LakebaseDep,
@@ -117,7 +117,7 @@ def audit_rollups(
     ] = "event_type",
     since: datetime | None = None,
     until: datetime | None = None,
-) -> list[dict[str, object]]:
+) -> list[AuditRollupResponse]:
     """Approval/rejection counts by period for committee review.
 
     The endpoint reads the governed Lakebase audit ledger directly and
@@ -160,17 +160,17 @@ def audit_rollups(
             status_code=503, detail=safe_dependency_detail("lakebase")
         ) from exc
     return [
-        {
-            "bucket_start": (
+        AuditRollupResponse(
+            bucket_start=(
                 row["bucket_start"].isoformat()
                 if hasattr(row.get("bucket_start"), "isoformat")
                 else str(row.get("bucket_start"))
             ),
-            "event_type": row.get("group_key") if group_by == "event_type" else None,
-            "group_by": group_by,
-            "group_key": row.get("group_key"),
-            "event_count": int(row.get("event_count") or 0),
-        }
+            event_type=str(row.get("group_key")) if group_by == "event_type" else None,
+            group_by=group_by,
+            group_key=str(row.get("group_key")) if row.get("group_key") is not None else None,
+            event_count=int(row.get("event_count") or 0),
+        )
         for row in rows
     ]
 

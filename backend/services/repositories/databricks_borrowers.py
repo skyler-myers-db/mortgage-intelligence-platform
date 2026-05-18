@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 
+from backend.config.settings import settings
 from backend.schemas.common import EvidenceEvent
 from backend.schemas.lead import Borrower360, LeadSummary
 from backend.schemas.why import WhyPanel, WhyPanelSource
@@ -28,6 +29,7 @@ from backend.services.repositories.databricks_shared import (
     _parse_timeline,
     _redact_evidence_list,
 )
+from backend.services.resilience import TTLCache
 from backend.services.scoring import (
     NBO_PRODUCT_LABELS,
     in_the_money,
@@ -47,8 +49,16 @@ class DatabricksBorrowerRepository:
     p95 toward the 2-s load-test target.
     """
 
-    def __init__(self, client: DatabricksSqlClient) -> None:
+    def __init__(
+        self,
+        client: DatabricksSqlClient,
+        *,
+        cache: TTLCache | None = None,
+        cache_ttl_s: float | None = None,
+    ) -> None:
         self._client = client
+        self._cache = cache if cache is not None else TTLCache()
+        self._cache_ttl_s = settings.mip_cache_ttl_s if cache_ttl_s is None else cache_ttl_s
 
     _GET_SQL = (
         f"SELECT {_BORROWER_DOSSIER_COLUMNS} "
@@ -113,6 +123,12 @@ class DatabricksBorrowerRepository:
     )
 
     def get(self, borrower_id: str) -> Borrower360 | None:
+        cache_key = f"borrower_dossier:{borrower_id}"
+        if self._cache_ttl_s > 0:
+            cached = self._cache.get(cache_key)
+            if isinstance(cached, Borrower360):
+                return cached.model_copy(deep=True)
+
         # Single-statement indexed lookup on the dossier cluster key
         # (borrower_id). Evidence + trigger timeline are both pre-joined
         # as ARRAY<STRUCT> columns, so no fan-out is needed.
@@ -209,7 +225,9 @@ class DatabricksBorrowerRepository:
             why.min_spread_bps,
             why.min_equity_pct,
         )
-        return borrower
+        if self._cache_ttl_s > 0:
+            self._cache.set(cache_key, borrower, self._cache_ttl_s)
+        return borrower.model_copy(deep=True)
 
     def evidence(self, borrower_id: str) -> list[EvidenceEvent] | None:
         # Prefer reading from the dossier's pre-joined evidence array --

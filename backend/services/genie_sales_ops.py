@@ -10,6 +10,7 @@ from uuid import uuid4
 
 from fastapi import HTTPException
 
+from backend.services.databricks_sql_helpers import qualify
 from backend.services.genie_answers import GenieMessageResponse, GenieProof
 from backend.services.lakebase import LakebaseClient
 from backend.services.repositories import BorrowerRepository
@@ -166,7 +167,8 @@ ORDER BY lo_email, outcome
             f"and {apps} applications started. Source: governed Sales Ops state in Lakebase."
         )
     elif kind == "queue":
-        source_assets = ["mip_app.lead_assignments", "mip.gold.borrower_360"]
+        borrower_asset = qualify("gold", "borrower_360")
+        source_assets = ["mip_app.lead_assignments", borrower_asset]
         lo_filter = "AND assigned_to_email = ANY(%(lo_emails)s)" if visible_lo_emails is not None else ""
         sql_query = f"""
 SELECT borrower_id, assigned_to_email, assigned_at
@@ -187,7 +189,7 @@ LIMIT 10
         answer = (
             "Open Lead Queue with `assigned_to=<lo email>&approval_status=approved&outreach_status=queued` "
             "to rank an LO's current queue by aging, score, and equity. The backend keeps assignment state "
-            "in Lakebase and borrower rank in `mip.gold.borrower_360`."
+            f"in Lakebase and borrower rank in `{borrower_asset}`."
         )
     else:
         source_assets = ["mip_app.approvals", "mip_app.lead_assignments", "mip_app.call_dispositions"]

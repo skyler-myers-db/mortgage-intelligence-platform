@@ -2,7 +2,7 @@
 
 Scope: how logs leave the Mortgage Intelligence Platform Databricks App
 and reach a queryable sink, and what to do when the rolling-hour
-counters on `/api/health` look odd after a restart.
+counters on `/api/v1/health` look odd after a restart.
 
 ## 1. Log format
 
@@ -84,7 +84,7 @@ pip install 'opentelemetry-sdk>=1.27,<2' 'opentelemetry-exporter-otlp>=1.27,<2'
 
 If `MIP_OTEL_ENDPOINT` is set but the wheels are absent, the backend
 logs one `WARNING` line at boot and keeps running on stdout-only —
-the app does NOT crash. The `/api/admin/health` body's `log_export` key is the
+the app does NOT crash. The `/api/v1/admin/health` body's `log_export` key is the
 at-a-glance status:
 
 | `log_export` value | Meaning                                                |
@@ -121,7 +121,7 @@ MIP_BYPASS_STARTUP_CHECKS=1 MIP_OTEL_ENDPOINT=http://127.0.0.1:9999 \
 This does **not** prove a deployed external collector. Close that gate
 only after a real Databricks App has `MIP_OTEL_ENDPOINT` configured
 (`MIP_OTEL_HEADERS` too when the collector requires auth),
-`/api/admin/health` reports `"log_export": "otlp"`, and the target
+`/api/v1/admin/health` reports `"log_export": "otlp"`, and the target
 collector shows a fresh `correlation_id` from the deployed app.
 
 ### Deployed sandbox status — 2026-05-15
@@ -134,7 +134,7 @@ collector endpoint is supplied for a deployment:
   app `RUNNING` and only
   `sql_warehouse`, `genie_space`, `database`, and `lifecycle_sync_job`
   resources. No secret or collector resource is attached.
-- `curl -H "Authorization: Bearer $(databricks auth token --profile DEFAULT -o json | jq -r .access_token)" "$MIP_APP_URL/api/admin/health"`
+- `curl -H "Authorization: Bearer $(databricks auth token --profile DEFAULT -o json | jq -r .access_token)" "$MIP_APP_URL/api/v1/admin/health"`
   returned `status=ok`, `warehouse/lakebase/genie=up`,
   `counters_persistence=process-local`, and `log_export=stdout-only`.
 - `databricks apps deploy --help` on CLI `0.299.1` exposes no top-level
@@ -148,7 +148,7 @@ collector endpoint is supplied for a deployment:
   Grafana, or HEC secret key names.
 At that point, the external collector proof was still bounded by the
 missing collector endpoint. The app-side transport proof requires runtime
-env wiring, `/api/admin/health` showing `log_export=otlp`, and
+env wiring, `/api/v1/admin/health` showing `log_export=otlp`, and
 collector-side receipt from the deployed app. Durable production retention
 also requires a customer-owned collector plus Databricks-managed secrets
 for any collector headers.
@@ -161,16 +161,16 @@ posture:
 
 - Proof deployment `01f14fe0164a1b6388f9d240679492db` included the base
   app env/resource bindings plus `MIP_OTEL_ENDPOINT` pointing at a
-  temporary collector. `/api/admin/health` returned `log_export=otlp`,
+  temporary collector. `/api/v1/admin/health` returned `log_export=otlp`,
   `warehouse/lakebase/genie=up`, and all breakers closed.
-- A sanitized `POST /api/telemetry/rum` probe returned `202` with
+- A sanitized `POST /api/v1/telemetry/rum` probe returned `202` with
   correlation id `b07b2f0825a043188fda96e041a14d19`.
 - The collector received an OTLP HTTP protobuf POST containing the same
   `http_request` log body and correlation id for
-  `/api/telemetry/rum`; collector request id
+  `/api/v1/telemetry/rum`; collector request id
   `f080e74e-2771-4db5-b895-4e9e186dca14`.
 - The sandbox was then redeployed without OTLP env vars as deployment
-  `01f14fee2c4415e2b8e4eed4d192e950`; `/api/admin/health` again reports
+  `01f14fee2c4415e2b8e4eed4d192e950`; `/api/v1/admin/health` again reports
   `log_export=stdout-only`.
 
 This closes the app-side OTLP transport proof. A customer production
@@ -191,16 +191,16 @@ without committing or printing a header value:
 - Temporary deployment `01f14ff1cb5513a9824b1e040701141d` used a full
   `env_vars` payload with `MIP_OTEL_HEADERS` set through
   `value_from=otel_headers`, not a plaintext value.
-- `/api/admin/health` returned `log_export=otlp`,
+- `/api/v1/admin/health` returned `log_export=otlp`,
   `warehouse/lakebase/genie=up`, and all breakers closed.
-- A sanitized `POST /api/telemetry/rum` probe returned `202` with
+- A sanitized `POST /api/v1/telemetry/rum` probe returned `202` with
   correlation id `c864cd1bbbf44779874fdb235ae7c6bf`.
 - The collector received OTLP request
   `d64260ce-232a-498e-bb9a-4bf65306c090` with a matching
-  `/api/telemetry/rum` log body and inbound request header
+  `/api/v1/telemetry/rum` log body and inbound request header
   `x-mip-otel-proof=proof-20260515T000246Z`.
 - The sandbox was then redeployed without OTLP env vars as deployment
-  `01f14ff2c4cd10b99ebad8f8785c307f`; `/api/admin/health` again reports
+  `01f14ff2c4cd10b99ebad8f8785c307f`; `/api/v1/admin/health` again reports
   `log_export=stdout-only`; the temporary app secret resource was removed;
   and the temporary Databricks Secret was deleted.
 
@@ -250,7 +250,7 @@ databricks apps deploy mip-app \
 MIP_APP_URL="$(databricks apps get mip-app --profile DEFAULT -o json | jq -r .url)"
 TOK="$(databricks auth token --profile DEFAULT -o json | jq -r .access_token)"
 curl -sS -H "Authorization: Bearer $TOK" \
-  "$MIP_APP_URL/api/admin/health" \
+  "$MIP_APP_URL/api/v1/admin/health" \
   | jq '{status, dependencies, counters_persistence, log_export}'
 
 # 5. Prove receipt in the collector using the fresh deployed-app
@@ -341,7 +341,7 @@ the final translation to Loki's native protocol.
 
 ## 4. Rolling-hour counters — intentional ephemerality
 
-`/api/admin/health` exposes two process-local rolling counters:
+`/api/v1/admin/health` exposes two process-local rolling counters:
 
 ```json
 {
@@ -380,7 +380,7 @@ reasoning:
 
 ### What operators should do instead
 
-If the counter on `/api/admin/health` looks suspiciously clean after a
+If the counter on `/api/v1/admin/health` looks suspiciously clean after a
 restart:
 
 - Grep the durable log sink for `event=circuit_breaker_state_change`
@@ -394,8 +394,8 @@ development and demo; it is not a production durability story.
 
 ## 5. API contract (frozen)
 
-The unauthenticated `/api/health` load-balancer path returns only
-coarse runtime status. Admin diagnostics live at `/api/admin/health`.
+The unauthenticated `/api/v1/health` load-balancer path returns only
+coarse runtime status. Admin diagnostics live at `/api/v1/admin/health`.
 The admin body MUST continue to return:
 
 - `status` — `"ok" | "degraded"`

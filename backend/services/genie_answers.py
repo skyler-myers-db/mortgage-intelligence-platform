@@ -86,6 +86,12 @@ class GenieActionResponse(BaseModel):
     message: str
 
 
+class GenieStartResponse(BaseModel):
+    conversation_id: str | None = None
+    trusted_assets: list[str] = Field(default_factory=list)
+    sample_questions: list[str] = Field(default_factory=list)
+
+
 class GenieMessageResponse(BaseModel):
     """Wire contract returned by `/api/genie/message`."""
 

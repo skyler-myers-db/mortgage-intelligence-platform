@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Icon } from '../Icon';
 import { useOptionalHealth } from '../HealthProvider';
+import { apiPath } from '../../lib/apiPaths';
 
 /**
  * DegradedBanner — Slice-6 resilience surface.
@@ -37,12 +38,12 @@ interface DegradedBannerProps {
   /** Optional override for polling interval in ms. */
   pollIntervalOkMs?: number;
   pollIntervalDegradedMs?: number;
-  /** Injected fetcher, for tests. Defaults to `fetch('/api/health')`. */
+  /** Injected fetcher, for tests. Defaults to the canonical health endpoint. */
   fetchHealth?: () => Promise<HealthPayload>;
 }
 
 async function defaultFetchHealth(): Promise<HealthPayload> {
-  const res = await fetch('/api/health');
+  const res = await fetch(apiPath('/health'));
   if (!res.ok) {
     // A non-2xx on /api/health is itself a degraded signal -- we
     // surface a synthetic payload so the banner still renders.

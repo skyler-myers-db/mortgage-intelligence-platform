@@ -15,19 +15,19 @@ Capture those values from the deployed app and API immediately before recording.
 
 2. Run the rehearsal checklist in
    [module0-rehearsal-checklist.md](module0-rehearsal-checklist.md). Do not
-   start the recording until `/api/health`, `/api/data-estate`, `/api/leads`,
+   start the recording until `/api/v1/health`, `/api/v1/data-estate`, `/api/v1/leads`,
    and the first selected Borrower 360 route return live data or an explicit
    degraded state.
 3. Confirm public masking is on before any public recording:
 
    ```bash
-   curl "$APP_URL/api/data-estate" | jq '.public_demo_masking'
+   curl "$APP_URL/api/v1/data-estate" | jq '.public_demo_masking'
    ```
 
 4. Use the current top-ranked borrower from the live lead queue, not a fixture:
 
    ```bash
-   curl "$APP_URL/api/leads?limit=1" | jq '.[0].borrower_id'
+   curl "$APP_URL/api/v1/leads?limit=1" | jq '.[0].borrower_id'
    ```
 
 5. If a count is material to the narration, open the source chip/proof drawer
@@ -283,7 +283,7 @@ expected.
 
 ## Do Not Say
 
-- Do not say every asset is live if `/api/data-estate` shows unconnected or
+- Do not say every asset is live if `/api/v1/data-estate` shows unconnected or
   pending assets.
 - Do not quote borrower names, raw CLIP, raw Owner Link, or unmasked addresses
   in a public recording.

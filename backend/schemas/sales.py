@@ -1,3 +1,5 @@
+"""Sales assignment, disposition, aging, and conversion contracts."""
+
 from __future__ import annotations
 
 import re

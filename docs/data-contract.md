@@ -31,7 +31,7 @@ reviewers should use this document as the stable entry point.
 - Customer/prod workspaces should set `MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS=0`
   before running `tools/render_sql.py` / deploy and before connecting real LOS,
   servicing, CRM, interaction, and product-balance feeds.
-- Source-readiness and `/api/data-estate` must disclose the synthetic demo
+- Source-readiness and `/api/v1/data-estate` must disclose the synthetic demo
   lane; it must not be described as real customer data.
 
 ## Non-Negotiables

@@ -1,3 +1,5 @@
+"""Data-estate readiness endpoint for source and dependency proof."""
+
 from __future__ import annotations
 
 from typing import Annotated
@@ -9,7 +11,7 @@ from backend.services.admin_rules import AdminRulesService, get_admin_rules_serv
 from backend.services.data_estate import build_data_estate_response
 from backend.services.health_probes import cached_probe, probe_genie, probe_lakebase
 
-router = APIRouter(prefix="/api/data-estate", tags=["data-estate"])
+router = APIRouter(prefix="/data-estate", tags=["data-estate"])
 
 AdminRulesServiceDep = Annotated[AdminRulesService, Depends(get_admin_rules_service)]
 

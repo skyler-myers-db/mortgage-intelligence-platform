@@ -1,3 +1,5 @@
+"""Portfolio criteria, preview, campaign, and saved-build contracts."""
+
 import re
 from datetime import datetime
 from typing import Literal
@@ -5,6 +7,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from backend.schemas._validators import (
+    configured_public_lender_name,
     normalize_public_lender_ref,
     reviewed_geography_labels,
     reviewed_state_codes,
@@ -155,7 +158,7 @@ def _assert_public_campaign_text(value: object, *, field_name: str, max_length: 
     if any(re.search(pattern, text, re.IGNORECASE) for pattern in _PUBLIC_TEXT_DENYLIST):
         raise ValueError(f"{field_name} cannot contain PII, raw identifiers, or unresolved placeholders")
     name_scan_text = text
-    for allowed in _PUBLIC_TITLECASE_PHRASE_ALLOWLIST:
+    for allowed in (*_PUBLIC_TITLECASE_PHRASE_ALLOWLIST, configured_public_lender_name()):
         name_scan_text = name_scan_text.replace(allowed, "")
     if _HUMAN_NAME_SHAPE_RE.search(name_scan_text):
         raise ValueError(f"{field_name} cannot contain human-name-shaped text")
@@ -480,7 +483,10 @@ class PortfolioCreateRequest(BaseModel):
         )
         if any(re.search(pattern, cleaned, re.IGNORECASE) for pattern in pii_patterns):
             raise ValueError("name cannot contain PII, raw identifiers, or street addresses")
-        if re.search(r"\b[A-Z][a-z]{1,30}\s+(?:[A-Z]\s+)?[A-Z][a-z]{1,30}\b", cleaned):
+        name_scan = cleaned
+        for allowed in (*_PUBLIC_TITLECASE_PHRASE_ALLOWLIST, configured_public_lender_name()):
+            name_scan = name_scan.replace(allowed, "")
+        if re.search(r"\b[A-Z][a-z]{1,30}\s+(?:[A-Z]\s+)?[A-Z][a-z]{1,30}\b", name_scan):
             raise ValueError("name cannot contain PII, raw identifiers, or street addresses")
         return cleaned
 

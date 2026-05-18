@@ -22,9 +22,4 @@ _TRUSTED_ASSET_PAIRS = (
 
 
 def trusted_assets() -> list[str]:
-    assets = [qualify(schema, table) for schema, table in _TRUSTED_ASSET_PAIRS]
-    for schema, table in _TRUSTED_ASSET_PAIRS:
-        asset = qualify(schema, table, catalog="mip")
-        if asset not in assets:
-            assets.append(asset)
-    return assets
+    return [qualify(schema, table) for schema, table in _TRUSTED_ASSET_PAIRS]

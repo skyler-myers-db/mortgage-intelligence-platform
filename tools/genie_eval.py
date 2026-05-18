@@ -51,6 +51,7 @@ REPORT_DIR = REPO_ROOT / "docs" / "genie_eval"
 BASELINE_PATH = REPORT_DIR / "baseline.json"
 LATEST_PATH = REPORT_DIR / "latest.json"
 REGRESSION_THRESHOLD = 10.0  # points
+DEFAULT_CATALOG = "mip"
 
 log = logging.getLogger("genie_eval")
 
@@ -100,7 +101,28 @@ def _load_questions() -> list[dict[str, Any]]:
     questions = data.get("questions") or []
     if not isinstance(questions, list):
         raise ValueError(f"{QUESTIONS_PATH} 'questions' must be a list")
-    return questions
+    return _render_catalog_templates(questions, catalog=_configured_catalog())
+
+
+def _configured_catalog() -> str:
+    return (os.environ.get("MIP_DEFAULT_CATALOG") or DEFAULT_CATALOG).strip() or DEFAULT_CATALOG
+
+
+def _render_catalog_templates(value: Any, *, catalog: str) -> Any:
+    if isinstance(value, str):
+        rendered = value.replace("{catalog}", catalog)
+        if catalog != DEFAULT_CATALOG:
+            for schema in ("gold", "semantics", "silver", "ref", "raw"):
+                rendered = rendered.replace(
+                    f"{DEFAULT_CATALOG}.{schema}",
+                    f"{catalog}.{schema}",
+                )
+        return rendered
+    if isinstance(value, list):
+        return [_render_catalog_templates(item, catalog=catalog) for item in value]
+    if isinstance(value, dict):
+        return {key: _render_catalog_templates(item, catalog=catalog) for key, item in value.items()}
+    return value
 
 
 def _ask(base: str, token: str | None, question: str, timeout_s: int) -> tuple[

@@ -350,7 +350,7 @@ def test_draft_outreach_is_relationship_and_channel_aware() -> None:
     )
     assert current.status_code == 200, current.text
     current_body = current.json()["body"]
-    assert "As a Summit Mortgage customer" in current_body
+    assert "As a customer of Summit Mortgage" in current_body
     assert "public-record signals" not in current_body
     assert "[first name]" not in current_body
     assert "NMLS #123456" in current_body
@@ -368,6 +368,25 @@ def test_draft_outreach_is_relationship_and_channel_aware() -> None:
     assert len(sms_body) <= 160
     assert "STOP" in sms_body
     assert "\n" not in sms_body
+
+
+def test_draft_outreach_uses_configured_lender_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(outreach_mod.settings, "mip_lender_name", "Acme Mortgage")
+    monkeypatch.setattr(outreach_mod.settings, "mip_tenant_id", "summit")
+
+    response = TestClient(app).post(
+        "/api/outreach/draft",
+        json={"borrower_id": "B-65102", "channel": "email"},
+        headers={"X-Forwarded-Email": "lo@example.com"},
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()["body"]
+    assert response.json()["subject"].startswith("Review your Acme Mortgage")
+    assert "As a customer of Acme Mortgage" in body
+    assert "As a customer of Summit Mortgage" not in body
 
 
 def test_atomic_decision_rolls_back_if_audit_insert_fails(

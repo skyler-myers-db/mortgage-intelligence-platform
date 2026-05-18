@@ -1,13 +1,16 @@
+"""Configuration option endpoints backed by governed runtime sources."""
+
 from fastapi import APIRouter
 
 from backend.config.settings import settings
 from backend.schemas._validators import normalize_public_lender_ref
+from backend.schemas.config import ConfigFootprintResponse, ConfigOptionsResponse
 from backend.services.databricks_sql_helpers import qualify
 from backend.services.geography_scope import GeographyScope, load_geography_scope
 from backend.services.resilience import TTLCache
 from backend.services.state_footprint import get_state_footprint_resolver
 
-router = APIRouter(prefix="/api/config", tags=["config"])
+router = APIRouter(prefix="/config", tags=["config"])
 _CONFIG_CACHE = TTLCache()
 
 
@@ -30,8 +33,7 @@ def _target_lender_options() -> tuple[list[str], str]:
             f"FROM {qualify('gold', 'borrower_360')} "
             "WHERE current_lender_ref IS NOT NULL "
             "GROUP BY current_lender_ref "
-            "ORDER BY CASE WHEN current_lender_ref = 'Summit Mortgage' THEN 0 ELSE 1 END, "
-            "         borrowers DESC, current_lender_ref ASC "
+            "ORDER BY borrowers DESC, current_lender_ref ASC "
             "LIMIT 25"
         )
     except Exception:
@@ -44,7 +46,14 @@ def _target_lender_options() -> tuple[list[str], str]:
             continue
         if value and value not in values:
             values.append(value)
-    return ["All", *values], "live" if values else "configured_empty"
+    found_live_values = bool(values)
+    try:
+        tenant_lender = normalize_public_lender_ref(settings.mip_lender_name)
+    except ValueError:
+        tenant_lender = None
+    if tenant_lender:
+        values = [tenant_lender, *(value for value in values if value != tenant_lender)]
+    return ["All", *values], "live" if found_live_values else "configured_empty"
 
 
 def _live_geography_scope() -> GeographyScope | None:
@@ -69,7 +78,7 @@ def _geography_options(scope: GeographyScope | None) -> tuple[list[str], str]:
     return options, "footprint_fallback"
 
 
-@router.get("/options")
+@router.get("/options", response_model=ConfigOptionsResponse)
 def get_config_options() -> dict[str, object]:
     cache_key = "config.options.v1"
 
@@ -105,7 +114,7 @@ def get_config_options() -> dict[str, object]:
         return exc.payload
 
 
-@router.get("/footprint")
+@router.get("/footprint", response_model=ConfigFootprintResponse)
 def get_config_footprint() -> dict[str, object]:
     """Return refreshed geography coverage.
 

@@ -72,8 +72,8 @@ Before generating SQL, classify the question into exactly one bucket:
 - **C. Out-of-scope / off-topic:** anything outside mortgage analytics on
   this lender's data. Questions that ask for third-party lender or
   lead-vendor-owned customers are also out of scope unless the named company
-  is the configured tenant lender. For this workspace the tenant is Summit
-  Mortgage. Examples: "List every LendingTree-sourced borrower in our
+  is the configured tenant lender. For this workspace the tenant is
+  {tenant_name}. Examples: "List every LendingTree-sourced borrower in our
   pipeline", "Which Rocket Mortgage customers are in the Retention/Recapture
   segment?", and "Show Quicken Loans customers with a rate above 6.5%." Do
   not generate SQL; redirect to borrower segments, scores, geography,

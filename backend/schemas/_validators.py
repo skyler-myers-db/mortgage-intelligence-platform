@@ -4,9 +4,35 @@ from __future__ import annotations
 import re
 from collections.abc import Callable, Sequence
 
-_PUBLIC_LENDER_REF_RE = re.compile(r"^(Summit Mortgage|Competitor ([A-Z]|Other))$")
+_DEFAULT_PUBLIC_LENDER_NAME = "Summit Mortgage"
+_PUBLIC_COMPETITOR_REF_RE = re.compile(r"^Competitor ([A-Z]|Other)$")
+_PublicLenderNameProvider = Callable[[], str]
 _StateFootprintProvider = Callable[[], tuple[Sequence[tuple[str, str]], bool]]
+_public_lender_name_provider: _PublicLenderNameProvider | None = None
 _state_footprint_provider: _StateFootprintProvider | None = None
+
+
+def set_public_lender_name_provider(provider: _PublicLenderNameProvider | None) -> None:
+    """Register the configured tenant lender without importing runtime settings."""
+
+    global _public_lender_name_provider
+    _public_lender_name_provider = provider
+
+
+def _configured_public_lender_name() -> str:
+    if _public_lender_name_provider is None:
+        return _DEFAULT_PUBLIC_LENDER_NAME
+    try:
+        configured = _public_lender_name_provider().strip()
+    except Exception:
+        return _DEFAULT_PUBLIC_LENDER_NAME
+    return configured or _DEFAULT_PUBLIC_LENDER_NAME
+
+
+def configured_public_lender_name() -> str:
+    """Return the public display name for the configured tenant lender."""
+
+    return _configured_public_lender_name()
 
 
 def set_state_footprint_provider(provider: _StateFootprintProvider | None) -> None:
@@ -50,7 +76,9 @@ def is_public_lender_ref(value: str | None, *, allow_all: bool = False) -> bool:
     stripped = value.strip()
     if allow_all and stripped == "All":
         return True
-    return bool(_PUBLIC_LENDER_REF_RE.fullmatch(stripped))
+    if stripped == _configured_public_lender_name():
+        return True
+    return bool(_PUBLIC_COMPETITOR_REF_RE.fullmatch(stripped))
 
 
 def normalize_public_lender_ref(

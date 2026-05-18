@@ -219,6 +219,13 @@ if [[ "$DRY_RUN" -eq 0 && "$NO_CONFIRM" -eq 0 ]]; then
   fi
 fi
 
+# Resolve deployment-scoped controls before any helper can read .env.local.
+# bundle_env.py intentionally ignores stale local MIP_DEFAULT_CATALOG values
+# unless the caller exports one; provision_genie_space.py loads .env.local via
+# python-dotenv, so export the same normalized value here to keep the bundle,
+# SQL renderer, Python jobs, and Genie table bindings pointed at one catalog.
+export MIP_DEFAULT_CATALOG="${MIP_DEFAULT_CATALOG:-mip}"
+
 # -----------------------------------------------------------------------------
 # Step 0a: ensure the bundle has a real Genie space id before app resource apply
 # -----------------------------------------------------------------------------

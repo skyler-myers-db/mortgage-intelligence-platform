@@ -444,8 +444,15 @@ def redact_borrower_row(row: dict[str, Any]) -> dict[str, Any]:
     state = row.get("state")
     zip5 = row.get("zip")
 
+    borrower_id = str(row["borrower_id"])
+    clip_id = mask_cotality_id("clip", row.get("clip")) or f"clip_demo_{borrower_id}"
+    owner_link_id = (
+        mask_cotality_id("owner_link", row.get("owner_link_id"))
+        or f"ol_demo_{borrower_id}"
+    )
+
     output: dict[str, Any] = {
-        "borrower_id": row["borrower_id"],
+        "borrower_id": borrower_id,
         "display_name": synthesize_display_name(row.get("owner_name_hash")),
         "city": city,
         "state": state,
@@ -464,11 +471,11 @@ def redact_borrower_row(row: dict[str, Any]) -> dict[str, Any]:
         "approved_at": row.get("approved_at"),
         "outreach_at": row.get("outreach_at"),
         # Borrower360 additions:
-        "clip_id": mask_cotality_id("clip", row.get("clip")),  # <-- rename + mask at boundary
+        "clip_id": clip_id,  # <-- rename + mask at boundary
         # Cotality owner_1_identifier arrives as BIGINT from silver; the
         # schema is STRING so we coerce at the boundary. Empty-string on
         # NULL keeps the Pydantic contract tight.
-        "owner_link_id": mask_cotality_id("owner_link", row.get("owner_link_id")),
+        "owner_link_id": owner_link_id,
         "subject_property": synthesize_subject_property(city, state, zip5),
         "avm_value": int(row.get("avm_value") or 0),
         "current_lien_balance": int(row.get("current_lien_balance") or 0),

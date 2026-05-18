@@ -22,6 +22,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 
+from backend.config.settings import settings
 from backend.schemas.offer import (
     OutreachApproveRequest,
     OutreachApproveResponse,
@@ -50,11 +51,12 @@ from backend.services.lakebase_bootstrap import ensure_approval_idempotency_colu
 from backend.services.observability import emit
 from backend.services.pii_redaction import scrub_free_text
 from backend.services.repositories import OutreachRepository, get_outreach_repository
+from backend.services.sales_state import clear_sales_state_cache
 from backend.services.scoring import NBO_PRODUCT_LABELS
 
 log = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/outreach", tags=["outreach"])
+router = APIRouter(prefix="/outreach", tags=["outreach"])
 
 RepoDep = Annotated[OutreachRepository, Depends(get_outreach_repository)]
 AuditDep = Annotated[AuditStore, Depends(get_audit_store)]
@@ -371,11 +373,22 @@ def _resolve_disclosure_or_http(lakebase: LakebaseClient, *, borrower: Any, chan
             lakebase,
             state=str(getattr(borrower, "state", "") or ""),
             channel=channel,
+            tenant_id=settings.effective_tenant_id(),
         )
     except MissingTenantDisclosureError as exc:
         raise HTTPException(status_code=412, detail=str(exc)) from exc
     except LakebaseError as exc:
         raise HTTPException(status_code=503, detail=safe_dependency_detail("lakebase")) from exc
+
+
+def _sms_lender_label(lender_name: str) -> str:
+    """Return a compact tenant label for 160-character SMS drafts."""
+
+    normalized = " ".join(lender_name.split())
+    if len(normalized) <= 18:
+        return normalized
+    first_word = re.sub(r"[^A-Za-z0-9&.-]", "", normalized.split()[0])
+    return first_word[:18] or "Lender"
 
 
 def _compose_outreach_body(*, borrower: Any, channel: str, disclosure: Any) -> tuple[str | None, str]:
@@ -394,16 +407,18 @@ def _compose_outreach_body(*, borrower: Any, channel: str, disclosure: Any) -> t
     is_customer = bool(getattr(borrower, "is_current_customer", False))
     is_competitor = bool(getattr(borrower, "is_competitor_lien", False))
     why_now = str(getattr(borrower, "why_now", "") or "").strip()
+    lender_name = (settings.mip_lender_name or "configured lender").strip() or "configured lender"
+    sms_lender = _sms_lender_label(lender_name)
 
     if channel == "sms":
         if is_customer:
-            body = f"Summit Mortgage: review your {offer}. Reply YES. {disclosure.body}"
+            body = f"{lender_name}: review your {offer}. Reply YES. {disclosure.body}"
         elif is_competitor:
-            body = f"Summit Mortgage: {offer} may fit your profile. Reply YES. {disclosure.body}"
+            body = f"{lender_name}: {offer} may fit your profile. Reply YES. {disclosure.body}"
         else:
-            body = f"Summit Mortgage: mortgage review available. Reply YES. {disclosure.body}"
+            body = f"{lender_name}: mortgage review available. Reply YES. {disclosure.body}"
         if len(body) > 160:
-            body = f"Summit: mortgage review. Reply YES. {disclosure.body}"
+            body = f"{sms_lender}: mortgage review. Reply YES. {disclosure.body}"
         if len(body) > 160:
             body = disclosure.body
         if len(body) > 160:
@@ -416,7 +431,7 @@ def _compose_outreach_body(*, borrower: Any, channel: str, disclosure: Any) -> t
     if channel == "direct_mail":
         subject = f"{offer} review"
         opening = (
-            "As a Summit Mortgage customer, your current loan profile is ready for review."
+            f"As a customer of {lender_name}, your current loan profile is ready for review."
             if is_customer
             else f"Your property profile{f' in {city_state}' if city_state else ''} may qualify for {offer}."
         )
@@ -429,14 +444,14 @@ def _compose_outreach_body(*, borrower: Any, channel: str, disclosure: Any) -> t
         return subject, body
 
     if is_customer:
-        subject = f"Review your Summit Mortgage {offer} option"
-        intro = "As a Summit Mortgage customer, your current loan profile is ready for a human review."
+        subject = f"Review your {lender_name} {offer} option"
+        intro = f"As a customer of {lender_name}, your current loan profile is ready for a human review."
         if code in {"retention", "refi", "refi_plus_heloc", "cash_out", "heloc"}:
             pitch = (
                 f"We can review whether {offer} improves the fit of your existing mortgage relationship."
             )
         else:
-            pitch = "A licensed Summit Mortgage loan officer can review your current mortgage options."
+            pitch = f"A licensed {lender_name} loan officer can review your current mortgage options."
     elif is_competitor:
         subject = f"{offer} opportunity for your property"
         location = f" in {city_state}" if city_state else ""
@@ -714,6 +729,7 @@ def approve_outreach(
         raise HTTPException(
             status_code=503, detail=safe_dependency_detail("lakebase")
         ) from exc
+    clear_sales_state_cache()
     # The approval row is now committed in Lakebase. Kick the
     # ``mip_sync_lifecycle_state`` job to mirror it into
     # ``mip.gold.borrower_lifecycle_state`` so metric views + Genie
@@ -862,6 +878,7 @@ def reject_outreach(
         raise HTTPException(
             status_code=503, detail=safe_dependency_detail("lakebase")
         ) from exc
+    clear_sales_state_cache()
     # Same debounced fire-and-forget sync the approve path uses -- the
     # funnel / lifecycle views need to reflect rejected-borrower counts
     # without waiting on the daily cron.

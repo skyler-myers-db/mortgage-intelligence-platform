@@ -197,6 +197,13 @@ def test_redact_borrower_row_masks_owner_link_id() -> None:
     assert re.fullmatch(r"owner_link_ref_[0-9a-f]{12}", out["owner_link_id"])
 
 
+def test_redact_borrower_row_falls_back_to_public_ids_when_raw_ids_missing() -> None:
+    out = redact_borrower_row(_sample_borrower_row(clip=None, owner_link_id=None))
+
+    assert out["clip_id"] == "clip_demo_B-12345"
+    assert out["owner_link_id"] == "ol_demo_B-12345"
+
+
 def test_mask_cotality_id_preserves_synthetic_demo_refs() -> None:
     assert mask_cotality_id("clip", "clip_demo_48291") == "clip_demo_48291"
     assert mask_cotality_id("owner_link", "ol_demo_48291") == "ol_demo_48291"

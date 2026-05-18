@@ -44,7 +44,18 @@ export const BASE_DEFAULT_FILTERS: Record<string, string> = {
   recency: 'Any',
 };
 
-export const PUBLIC_LENDER_REF_RE = /^(All|Summit Mortgage|Competitor ([A-Z]|Other))$/;
+const COMPETITOR_LENDER_REF_RE = /^Competitor ([A-Z]|Other)$/;
+const DEFAULT_CAMPAIGN_LENDER_NAME = 'configured lender';
+
+export function isPublicLenderRef(
+  value: string | undefined | null,
+  allowedRefs: readonly string[] = [],
+): boolean {
+  const trimmed = value?.trim();
+  if (!trimmed) return false;
+  if (trimmed === 'All' || COMPETITOR_LENDER_REF_RE.test(trimmed)) return true;
+  return allowedRefs.includes(trimmed);
+}
 
 /**
  * URL search-param keys we round-trip. One per filter + the reload
@@ -78,19 +89,26 @@ export type CampaignSetupState = {
   mailCost: string;
 };
 
-export const DEFAULT_CAMPAIGN_SETUP: CampaignSetupState = {
-  subjectA: 'Summit Mortgage review for your current loan options',
-  subjectB: 'A refinance review may improve your mortgage fit',
-  bodyA: 'Review current mortgage fit with Summit Mortgage using the governed relationship-aware template.',
-  bodyB: 'Highlight rate, equity, and human review using the governed relationship-aware template.',
-  holdoutPct: '10',
-  startLocal: '09:00',
-  endLocal: '16:00',
-  budget: '',
-  emailCost: '1.20',
-  smsCost: '0.08',
-  mailCost: '0.86',
-};
+export function buildDefaultCampaignSetup(
+  lenderName: string = DEFAULT_CAMPAIGN_LENDER_NAME,
+): CampaignSetupState {
+  const label = lenderName.trim() || DEFAULT_CAMPAIGN_LENDER_NAME;
+  return {
+    subjectA: `${label} review for your current loan options`,
+    subjectB: 'A refinance review may improve your mortgage fit',
+    bodyA: `Review current mortgage fit with ${label} using the governed relationship-aware template.`,
+    bodyB: 'Highlight rate, equity, and human review using the governed relationship-aware template.',
+    holdoutPct: '10',
+    startLocal: '09:00',
+    endLocal: '16:00',
+    budget: '',
+    emailCost: '1.20',
+    smsCost: '0.08',
+    mailCost: '0.86',
+  };
+}
+
+export const DEFAULT_CAMPAIGN_SETUP: CampaignSetupState = buildDefaultCampaignSetup();
 
 /**
  * Build the GEO-dropdown options for the current tenant footprint.
@@ -118,12 +136,13 @@ export function defaultGeographyForOptions(geoOptions: readonly string[]): strin
 export function parseFiltersFromUrl(
   sp: URLSearchParams,
   defaults: Record<string, string>,
+  allowedLenderRefs: readonly string[] = [],
 ): Record<string, string> {
   const out: Record<string, string> = { ...defaults };
   for (const k of URL_FILTER_KEYS) {
     const v = sp.get(k);
     if (v !== null && v.length > 0) {
-      if (k === 'target_lender_ref' && !PUBLIC_LENDER_REF_RE.test(v.trim())) {
+      if (k === 'target_lender_ref' && !isPublicLenderRef(v, allowedLenderRefs)) {
         continue;
       }
       out[k] = v;
@@ -136,6 +155,7 @@ export function buildUrlFromFilters(
   filters: Record<string, string>,
   defaults: Record<string, string>,
   stateCodes: readonly string[],
+  allowedLenderRefs: readonly string[] = [],
 ): URLSearchParams {
   const sp = new URLSearchParams();
   if (stateCodes.length > 0) {
@@ -147,7 +167,7 @@ export function buildUrlFromFilters(
     // who hasn't touched a filter won't have 6 redundant params in
     // their address bar.
     if (v !== undefined && v !== defaults[k]) {
-      if (k === 'target_lender_ref' && !PUBLIC_LENDER_REF_RE.test(v.trim())) {
+      if (k === 'target_lender_ref' && !isPublicLenderRef(v, allowedLenderRefs)) {
         continue;
       }
       sp.set(k, v);
@@ -168,6 +188,7 @@ export function buildPreviewCriteria(
 export function buildLeadQueueUrlFromFilters(
   filters: Record<string, string>,
   stateCodes: readonly string[],
+  allowedLenderRefs: readonly string[] = [],
 ): string {
   const sp = new URLSearchParams();
   if (stateCodes.length > 0) {
@@ -176,7 +197,7 @@ export function buildLeadQueueUrlFromFilters(
   for (const k of URL_FILTER_KEYS) {
     const v = filters[k];
     if (v !== undefined && v.length > 0) {
-      if (k === 'target_lender_ref' && !PUBLIC_LENDER_REF_RE.test(v.trim())) {
+      if (k === 'target_lender_ref' && !isPublicLenderRef(v, allowedLenderRefs)) {
         continue;
       }
       sp.set(k, v);

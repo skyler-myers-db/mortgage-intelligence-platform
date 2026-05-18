@@ -8,6 +8,9 @@ from backend.services.repositories.databricks_repo import (
     _sql_uses_stale_evidence_signal_enum,
 )
 
+BORROWER_360 = "mip.gold.borrower_360"
+EVIDENCE_EVENTS = "mip.gold.evidence_events"
+
 
 class _SqlClient:
     def __init__(self) -> None:
@@ -70,11 +73,11 @@ def test_genie_repairs_impossible_current_customer_competitor_lien_retention_que
     result = GenieResponse(
         answer_text="There are 0 current Summit customers at risk.",
         sql_query=(
-            "SELECT COUNT(*) FROM mip.gold.borrower_360 "
+            f"SELECT COUNT(*) FROM {BORROWER_360} "
             "WHERE is_current_customer = TRUE AND is_competitor_lien = TRUE"
         ),
         sql_result_rows=[{"count": 0}],
-        trusted_assets=["mip.gold.borrower_360"],
+        trusted_assets=[BORROWER_360],
         conversation_id="conv-retention",
         message_id="msg-retention",
     )
@@ -104,11 +107,11 @@ def test_genie_repairs_retention_risk_phrase_without_current_customer_wording() 
     result = GenieResponse(
         answer_text="There are 0 retention-risk borrowers.",
         sql_query=(
-            "SELECT COUNT(*) FROM mip.gold.borrower_360 "
+            f"SELECT COUNT(*) FROM {BORROWER_360} "
             "WHERE is_current_customer = TRUE AND is_competitor_lien = TRUE"
         ),
         sql_result_rows=[{"count": 0}],
-        trusted_assets=["mip.gold.borrower_360"],
+        trusted_assets=[BORROWER_360],
         conversation_id="conv-retention-risk",
         message_id="msg-retention-risk",
     )
@@ -129,13 +132,13 @@ def test_genie_retention_list_uses_canonical_row_lookup_not_count_metric() -> No
         answer_text="Rows.",
         sql_query=(
             "SELECT b.borrower_id, e.signal_type "
-            "FROM mip.gold.borrower_360 b "
-            "JOIN mip.gold.evidence_events e ON b.clip = e.clip "
+            f"FROM {BORROWER_360} b "
+            f"JOIN {EVIDENCE_EVENTS} e ON b.clip = e.clip "
             "WHERE array_contains(b.segment_codes, 'retention') "
             "AND e.signal_type = 'competitor_lien'"
         ),
         sql_result_rows=[{"borrower_id": "B-102FL7THC6Q3L", "signal_type": "competitor_lien"}],
-        trusted_assets=["mip.gold.borrower_360", "mip.gold.evidence_events"],
+        trusted_assets=[BORROWER_360, EVIDENCE_EVENTS],
         conversation_id="conv-retention-list",
         message_id="msg-retention-list",
     )
@@ -168,14 +171,14 @@ def test_genie_retention_list_uses_canonical_competitor_lien_signal() -> None:
         answer_text="No rows.",
         sql_query=(
             "SELECT b.borrower_id "
-            "FROM mip.gold.borrower_360 b "
-            "JOIN mip.gold.evidence_events e ON b.clip = e.clip "
+            f"FROM {BORROWER_360} b "
+            f"JOIN {EVIDENCE_EVENTS} e ON b.clip = e.clip "
             "WHERE array_contains(b.segment_codes, 'retention') "
             "AND e.signal_type = 'lien-change' "
             "AND e.signal_value = 'competitor'"
         ),
         sql_result_rows=[],
-        trusted_assets=["mip.gold.borrower_360", "mip.gold.evidence_events"],
+        trusted_assets=[BORROWER_360, EVIDENCE_EVENTS],
         conversation_id="conv-retention-list",
         message_id="msg-retention-list",
     )
@@ -183,14 +186,14 @@ def test_genie_retention_list_uses_canonical_competitor_lien_signal() -> None:
         answer_text="Rows.",
         sql_query=(
             "SELECT b.borrower_id "
-            "FROM mip.gold.borrower_360 b "
-            "JOIN mip.gold.evidence_events e ON b.clip = e.clip "
+            f"FROM {BORROWER_360} b "
+            f"JOIN {EVIDENCE_EVENTS} e ON b.clip = e.clip "
             "WHERE array_contains(b.segment_codes, 'retention') "
             "AND e.signal_type = 'competitor_lien' "
             "AND to_timestamp(e.`timestamp`) >= current_timestamp() - interval 30 days"
         ),
         sql_result_rows=[{"borrower_id": "B-102FL7THC6Q3L"}],
-        trusted_assets=["mip.gold.borrower_360", "mip.gold.evidence_events"],
+        trusted_assets=[BORROWER_360, EVIDENCE_EVENTS],
         conversation_id="conv-retention-list",
         message_id="msg-retention-list-repaired",
     )
@@ -231,23 +234,23 @@ def test_genie_retention_list_uses_canonical_competitor_lien_signal() -> None:
 
 def test_genie_repairs_and_blocks_stale_evidence_signal_enums() -> None:
     assert _sql_uses_stale_evidence_signal_enum(
-        "SELECT * FROM mip.gold.evidence_events WHERE signal_type = 'lien-change'"
+        f"SELECT * FROM {EVIDENCE_EVENTS} WHERE signal_type = 'lien-change'"
     )
     assert _sql_uses_stale_evidence_signal_enum(
-        "SELECT * FROM mip.gold.evidence_events WHERE signal_type IN ('rate_spread', 'competitor')"
+        f"SELECT * FROM {EVIDENCE_EVENTS} WHERE signal_type IN ('rate_spread', 'competitor')"
     )
     assert not _sql_uses_stale_evidence_signal_enum(
-        "SELECT * FROM mip.gold.evidence_events WHERE signal_type = 'competitor_lien'"
+        f"SELECT * FROM {EVIDENCE_EVENTS} WHERE signal_type = 'competitor_lien'"
     )
 
     result = GenieResponse(
         answer_text="Rows.",
         sql_query=(
-            "SELECT borrower_id FROM mip.gold.evidence_events "
+            f"SELECT borrower_id FROM {EVIDENCE_EVENTS} "
             "WHERE signal_type = 'lien-change'"
         ),
         sql_result_rows=[{"borrower_id": "B-102FL7THC6Q3L"}],
-        trusted_assets=["mip.gold.evidence_events"],
+        trusted_assets=[EVIDENCE_EVENTS],
         conversation_id="conv-stale-enum",
         message_id="msg-stale-enum",
     )
@@ -268,14 +271,14 @@ def test_genie_retention_risk_repairs_wrong_evidence_enums() -> None:
     bad_result = GenieResponse(
         answer_text="There are 0 current Summit customers at risk.",
         sql_query=(
-            "SELECT COUNT(*) FROM mip.gold.borrower_360 b "
-            "JOIN mip.gold.evidence_events e ON b.clip = e.clip "
+            f"SELECT COUNT(*) FROM {BORROWER_360} b "
+            f"JOIN {EVIDENCE_EVENTS} e ON b.clip = e.clip "
             "WHERE b.is_current_customer = TRUE "
             "AND e.signal_type = 'lien-change' "
             "AND e.signal_value = 'competitor'"
         ),
         sql_result_rows=[{"count": 0}],
-        trusted_assets=["mip.gold.borrower_360", "mip.gold.evidence_events"],
+        trusted_assets=[BORROWER_360, EVIDENCE_EVENTS],
         conversation_id="conv-retention",
         message_id="msg-retention",
     )
@@ -283,12 +286,12 @@ def test_genie_retention_risk_repairs_wrong_evidence_enums() -> None:
         answer_text="There are 6,638 current Summit customers in the retention-risk cohort.",
         sql_query=(
             "SELECT COUNT(*) AS retention_risk_borrowers "
-            "FROM mip.gold.borrower_360 "
+            f"FROM {BORROWER_360} "
             "WHERE is_current_customer = TRUE "
             "AND array_contains(segment_codes, 'retention')"
         ),
         sql_result_rows=[{"retention_risk_borrowers": 6638}],
-        trusted_assets=["mip.gold.borrower_360"],
+        trusted_assets=[BORROWER_360],
         conversation_id="conv-retention",
         message_id="msg-retention-repaired",
     )

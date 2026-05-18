@@ -7,6 +7,7 @@ import re
 from datetime import UTC, datetime
 from typing import Any
 
+from backend.config.settings import settings
 from backend.services.databricks_sql import DatabricksSqlClient, DatabricksSqlError
 from backend.services.databricks_sql_helpers import qualify
 from backend.services.genie_answers import (
@@ -311,15 +312,17 @@ def _sql_uses_impossible_retention_conjunction(question: str, sql_query: str | N
 
 
 def _trusted_sql_repair_prompt(question: str) -> str:
+    catalog = settings.mip_default_catalog
+    borrower_asset = qualify("gold", "borrower_360")
     return (
         "Regenerate the following Mortgage Intelligence Platform data question "
         "as a governed analytics answer. Produce a read-only SQL SELECT query "
-        "attachment over the trusted mip.gold or mip.semantics assets, execute "
+        f"attachment over the trusted {catalog}.gold or {catalog}.semantics assets, execute "
         "it, return the result rows, and cite the source asset. Do not answer "
         "from narrative alone, do not use PII or protected-class criteria, and "
-        "do not use catalogs outside mip. For current-customer retention or "
+        f"do not use catalogs outside {catalog}. For current-customer retention or "
         "recapture-risk questions, use the retention risk signal already modeled "
-        "in mip.gold.borrower_360 (segment_codes contains 'retention' or "
+        f"in {borrower_asset} (segment_codes contains 'retention' or "
         "recommended_offer_code = 'retention') instead of requiring "
         "is_current_customer and is_competitor_lien to both be true. For evidence "
         "trigger questions, use the governed signal_type enum exactly as modeled; "
@@ -507,6 +510,9 @@ def _canonical_genie_answer(
     """
     if sql_client is None:
         return None
+    borrower_asset = qualify("gold", "borrower_360")
+    evidence_asset = qualify("gold", "evidence_events")
+    lender_name = (settings.mip_lender_name or "configured lender").strip() or "configured lender"
     if _retention_competitor_lien_list_question(question):
         try:
             rows = (
@@ -519,8 +525,8 @@ def _canonical_genie_answer(
             _emit_genie_warning("canonical_genie_retention_competitor_lien_failed", exc=exc)
             return None
         trusted_assets = [
-            qualify("gold", "borrower_360", catalog="mip"),
-            qualify("gold", "evidence_events", catalog="mip"),
+            borrower_asset,
+            evidence_asset,
         ]
         question_hash = _genie_question_hash(question)
         proof = _build_genie_proof(
@@ -553,13 +559,13 @@ def _canonical_genie_answer(
                     f"competitor-lien evidence in the last 30 days; showing the first "
                     f"{shown_count:,} by latest evidence timestamp and opportunity score. "
                     "The result uses the governed `competitor_lien` signal_type from "
-                    "mip.gold.evidence_events."
+                    f"{evidence_asset}."
                 )
             else:
                 answer = (
                     f"I found {shown_count:,} retention-list borrowers with competitor-lien "
                     "evidence in the last 30 days. The result uses the governed "
-                    "`competitor_lien` signal_type from mip.gold.evidence_events."
+                    f"`competitor_lien` signal_type from {evidence_asset}."
                 )
         else:
             answer = (
@@ -602,7 +608,7 @@ def _canonical_genie_answer(
                 "refreshed_at": row.get("refreshed_at"),
             }
         ]
-        trusted_assets = [qualify("gold", "borrower_360", catalog="mip")]
+        trusted_assets = [borrower_asset]
         question_hash = _genie_question_hash(question)
         proof = _build_genie_proof(
             sql_query=_CANONICAL_CURRENT_CUSTOMER_RETENTION_RISK_SQL,
@@ -626,8 +632,8 @@ def _canonical_genie_answer(
             source="trusted_sql",
         )
         answer = (
-            f"There are {count_int:,} current Summit customers in the retention-risk "
-            "cohort. This uses the modeled retention signal in mip.gold.borrower_360 "
+            f"There are {count_int:,} current {lender_name} customers in the retention-risk "
+            f"cohort. This uses the modeled retention signal in {borrower_asset} "
             "rather than the mutually exclusive current-customer and competitor-lien "
             "flags."
         )
@@ -655,7 +661,7 @@ def _canonical_genie_answer(
             _emit_genie_warning("canonical_genie_itm_zips_failed", exc=exc)
             return None
         rows = _redact_genie_rows(rows) or []
-        trusted_assets = [qualify("gold", "borrower_360", catalog="mip")]
+        trusted_assets = [borrower_asset]
         question_hash = _genie_question_hash(question)
         proof = _build_genie_proof(
             sql_query=_CANONICAL_ITM_TOP_ZIPS_SQL,
@@ -682,7 +688,7 @@ def _canonical_genie_answer(
             top = rows[0]
             answer = (
                 "I ranked ZIP codes by unique borrowers currently in-the-money "
-                "for refinance from mip.gold.borrower_360. "
+                f"for refinance from {borrower_asset}. "
                 f"The current leader is ZIP {top.get('zip')} ({top.get('state')}) "
                 f"with {int(top.get('in_the_money_borrowers') or 0):,} borrowers; "
                 "the cohort action below carries these ZIP filters into Lead Queue."
@@ -715,7 +721,7 @@ def _canonical_genie_answer(
             _emit_genie_warning("canonical_genie_msa_score_failed", exc=exc)
             return None
         rows = _redact_genie_rows(rows) or []
-        trusted_assets = [qualify("gold", "borrower_360", catalog="mip")]
+        trusted_assets = [borrower_asset]
         question_hash = _genie_question_hash(question)
         proof = _build_genie_proof(
             sql_query=_CANONICAL_MSA_SCORE_SQL,
@@ -742,7 +748,7 @@ def _canonical_genie_answer(
             answer = (
                 "I used Cotality's `situs_cbsa_code` as the MSA identifier and "
                 "ranked the top five markets by borrower volume, then calculated "
-                "mean lead score at the unique borrower grain from mip.gold.borrower_360."
+                f"mean lead score at the unique borrower grain from {borrower_asset}."
             )
         else:
             answer = (
@@ -796,7 +802,7 @@ def _canonical_genie_answer(
                 "refreshed_at": row.get("refreshed_at"),
             }
         ]
-        trusted_assets = [qualify("gold", "borrower_360", catalog="mip")]
+        trusted_assets = [borrower_asset]
         question_hash = _genie_question_hash(question)
         proof = _build_genie_proof(
             sql_query=_CANONICAL_ITM_COUNT_BY_CITY_SQL,
@@ -822,7 +828,7 @@ def _canonical_genie_answer(
         answer = (
             f"There are {count_int:,} borrowers currently in-the-money in {city_scope} "
             f"within the current {_current_footprint_label()} evaluation-share scope. "
-            "This is a city-scoped unique borrower count from mip.gold.borrower_360; "
+            f"This is a city-scoped unique borrower count from {borrower_asset}; "
             "it is not the overall share total."
         )
         return GenieMessageResponse(
@@ -860,7 +866,7 @@ def _canonical_genie_answer(
     rows = [{"in_the_money_borrowers": count_int, "refreshed_at": row.get("refreshed_at")}]
     if state_scope:
         rows[0]["state"] = state_scope[1]
-    trusted_assets = [qualify("gold", "borrower_360", catalog="mip")]
+    trusted_assets = [borrower_asset]
     question_hash = _genie_question_hash(question)
     proof = _build_genie_proof(
         sql_query=sql_query,
@@ -886,7 +892,7 @@ def _canonical_genie_answer(
     geo_text = f" in {state_scope[0]} ({state_scope[1]})" if state_scope else ""
     answer = (
         f"There are {count_int:,} borrowers currently in-the-money{geo_text}. "
-        "This is a unique borrower count from mip.gold.borrower_360 at the "
+        f"This is a unique borrower count from {borrower_asset} at the "
         "gold borrower grain, so multi-segment borrowers are counted once."
     )
     return GenieMessageResponse(

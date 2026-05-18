@@ -1,28 +1,5 @@
 import type { LeadSummary } from '../../types';
-import { LEAD_ROW_ESTIMATE_PX, LEAD_ROW_OVERSCAN } from './LeadTable.constants';
-import type { LeadVirtualRange, SortKey } from './LeadTable.types';
-
-export function computeLeadVirtualRange(
-  totalRows: number,
-  scrollTop: number,
-  viewportHeight: number,
-  enabled: boolean,
-  rowEstimatePx = LEAD_ROW_ESTIMATE_PX,
-  overscan = LEAD_ROW_OVERSCAN,
-): LeadVirtualRange {
-  if (!enabled || totalRows <= 0) {
-    return { start: 0, end: totalRows, top: 0, bottom: 0 };
-  }
-  const start = Math.max(0, Math.floor(Math.max(0, scrollTop) / rowEstimatePx) - overscan);
-  const visibleCount = Math.ceil(Math.max(1, viewportHeight) / rowEstimatePx) + overscan * 2;
-  const end = Math.min(totalRows, start + visibleCount);
-  return {
-    start,
-    end,
-    top: start * rowEstimatePx,
-    bottom: Math.max(0, (totalRows - end) * rowEstimatePx),
-  };
-}
+import type { SortKey } from './LeadTable.types';
 
 /**
  * Return true when `el` is an editable element that the window-level

@@ -13,11 +13,14 @@ never open a warehouse connection.
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Callable
 from functools import lru_cache
 
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from backend.schemas._validators import set_public_lender_name_provider
 
 # Documented, shared error message so every fail-fast site reads the
 # same -- helps operators who see it in a container log.
@@ -61,6 +64,7 @@ class Settings(BaseSettings):
 
     app_env: str = "local"
     mip_lender_name: str = "Summit Mortgage"
+    mip_tenant_id: str | None = None
     mip_default_catalog: str = "mip"
     mip_default_schema: str = "gold"
     mip_lakebase_schema: str = "mip_app"
@@ -69,6 +73,18 @@ class Settings(BaseSettings):
     # off by default for demo/customer deploys; developers can opt in
     # locally with MIP_EXPOSE_OPENAPI=1 when they need schema browsing.
     mip_expose_openapi: bool = False
+
+    def effective_tenant_id(self) -> str:
+        """Return the Lakebase disclosure namespace for this deployment."""
+
+        configured = (self.mip_tenant_id or "").strip()
+        if configured:
+            return configured
+        lender_name = (self.mip_lender_name or "").strip()
+        if lender_name == "Summit Mortgage":
+            return "summit"
+        slug = re.sub(r"[^a-z0-9]+", "_", lender_name.lower()).strip("_")
+        return slug or "tenant"
 
     # In-the-money contract: matches tests/fixtures/rate_spread_golden.json
     # (market_rate_constant) and tests/fixtures/in_the_money_golden.json
@@ -101,12 +117,21 @@ class Settings(BaseSettings):
     # per-environment space id.
     genie_space_id: str | None = None
 
-    # Server-side HMAC key for Genie action confirmation tokens. When
-    # unset, the app generates a process-local key at boot, which keeps
-    # tokens unforgeable but invalidates outstanding confirmations after
-    # a restart. Set MIP_GENIE_ACTION_SECRET in production to preserve
-    # still-visible answer actions across app restarts.
+    # Server-side HMAC key for Genie action confirmation tokens. The
+    # rotation-aware path uses MIP_GENIE_ACTION_SECRET_CURRENT +
+    # MIP_GENIE_ACTION_SECRET_PREVIOUS with key ids below. The legacy
+    # MIP_GENIE_ACTION_SECRET remains accepted as the current key so older
+    # deploys can move to the rotation contract without a flag day.
+    #
+    # When no configured key exists, the app generates a process-local key
+    # at boot, which keeps tokens unforgeable but invalidates outstanding
+    # confirmations after a restart. Shared/customer deploys should set a
+    # stable current key.
     mip_genie_action_secret: SecretStr | None = Field(default=None, repr=False)
+    mip_genie_action_secret_current: SecretStr | None = Field(default=None, repr=False)
+    mip_genie_action_secret_previous: SecretStr | None = Field(default=None, repr=False)
+    mip_genie_action_secret_kid: str = "v1"
+    mip_genie_action_secret_previous_kid: str | None = None
 
     # Lakebase Postgres credentials -- required for the durable audit
     # trail introduced in Slice 5. Missing values make the audit write
@@ -171,11 +196,19 @@ class Settings(BaseSettings):
     # deployment shapes where flipping this matters.
     trust_forwarded_headers: bool = True
 
-    # Slice-6 TTL cache: short-window memoization on aggregate KPIs that
-    # tolerate staleness (segments count, portfolio preview). Fresh-only
-    # endpoints (audit, outreach, borrower dossier) never consult the
-    # cache. Set to 0 to disable caching entirely (tests do this).
-    mip_cache_ttl_s: float = 30.0
+    # Slice-6 TTL cache: short-window memoization on gold-layer reads that
+    # tolerate staleness (segments count, portfolio preview, lead queue,
+    # borrower dossier projection). Fresh Lakebase workflow state is still
+    # hydrated after cached gold reads, and audit/outreach writes never use
+    # the cache. Set to 0 to disable caching entirely (tests do this).
+    # Five minutes covers the sustained warm-load harness including its
+    # pre-measurement cache warmup while staying much shorter than the
+    # warehouse gold-refresh cadence.
+    mip_cache_ttl_s: float = 300.0
+    # Shorter TTL for Lakebase sales workflow read-through state (assignment,
+    # disposition, approval rollups). Mutating sales-state paths clear this
+    # process-local cache immediately; the TTL covers out-of-band updates.
+    mip_sales_state_cache_ttl_s: float = 600.0
 
     # Slice-13 follow-up: optional OTLP log exporter.
     #
@@ -216,18 +249,27 @@ class Settings(BaseSettings):
     # client. Over-budget callers receive HTTP 429 + Retry-After.
     mip_backpressure_enabled: bool = True
     mip_rate_limit_default_per_minute: int = 600
-    mip_rate_limit_expensive_per_minute: int = 180
+    # The default 20-user Locust profile produces roughly 270 lead/segment
+    # reads per minute under warm load. Keep the app-side token bucket above
+    # that supported release gate while the warehouse semaphore still caps
+    # simultaneous SQL work.
+    mip_rate_limit_expensive_per_minute: int = 360
     mip_rate_limit_mutation_per_minute: int = 120
     mip_rate_limit_genie_per_minute: int = 30
     mip_rate_limit_telemetry_per_minute: int = 1200
     mip_warehouse_concurrency_limit: int = 24
     mip_lakebase_concurrency_limit: int = 16
-    mip_genie_concurrency_limit: int = 4
+    # Six concurrent Genie turns covers demo-panel usage without letting
+    # LLM calls swamp the warehouse/Lakebase lanes. Customer targets can
+    # raise this with MIP_GENIE_CONCURRENCY_LIMIT after quota review.
+    mip_genie_concurrency_limit: int = 6
     # Lakebase connection pooling. Connections use short-lived workspace
     # OAuth credentials in Databricks Apps, so reuse is bounded by a max
-    # lifetime comfortably below the token expiry. Set max size to 0 to
-    # force one-connection-per-call behavior for local diagnostics.
-    mip_lakebase_pool_max_size: int = 8
+    # lifetime comfortably below the token expiry. The default max size
+    # intentionally matches mip_lakebase_concurrency_limit so pool checkout
+    # does not bottleneck before the app-side semaphore. Set max size to 0
+    # to force one-connection-per-call behavior for local diagnostics.
+    mip_lakebase_pool_max_size: int = 16
     mip_lakebase_pool_timeout_s: float = 2.0
     mip_lakebase_pool_max_lifetime_s: float = 3000.0
 
@@ -422,3 +464,4 @@ def get_settings() -> Settings:
 
 
 settings = get_settings()
+set_public_lender_name_provider(lambda: settings.mip_lender_name)

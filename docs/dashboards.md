@@ -61,7 +61,7 @@ this doc and point at `mip.gold.funnel_snapshot_daily` row count + dates.
 The snapshot table is populated by the `mip_sync_lifecycle_state` job
 in `databricks.yml`. Trigger model (as of 2026-04-22):
 
-1. **Event-triggered** from the backend. `POST /api/outreach/approve`
+1. **Event-triggered** from the backend. `POST /api/v1/outreach/approve`
    fires `backend.services.job_trigger.trigger_lifecycle_sync` via
    `BackgroundTasks`, which calls `WorkspaceClient.jobs.run_now(...)`
    non-blocking. Triggers are debounced to 60 s so a reviewer clicking

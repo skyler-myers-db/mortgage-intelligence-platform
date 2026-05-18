@@ -261,13 +261,63 @@ def _validated_source_assets(criteria: dict[str, Any]) -> list[str]:
     return assets[:10]
 
 
-def _action_token_secret() -> bytes:
-    configured = settings.mip_genie_action_secret
+def _configured_secret_bytes(configured: Any) -> bytes | None:
     if configured is not None:
         value = configured.get_secret_value().strip()
         if value:
             return value.encode("utf-8")
-    return _PROCESS_ACTION_SECRET.encode("utf-8")
+    return None
+
+
+def _action_token_key_id() -> str:
+    value = (settings.mip_genie_action_secret_kid or "").strip()
+    return value or "v1"
+
+
+def _current_action_token_key() -> tuple[str, bytes]:
+    configured = settings.mip_genie_action_secret_current or settings.mip_genie_action_secret
+    secret = _configured_secret_bytes(configured)
+    if secret is not None:
+        return _action_token_key_id(), secret
+    return "process", _PROCESS_ACTION_SECRET.encode("utf-8")
+
+
+def _previous_action_token_key() -> tuple[str, bytes] | None:
+    secret = _configured_secret_bytes(settings.mip_genie_action_secret_previous)
+    if secret is None:
+        return None
+    key_id = (settings.mip_genie_action_secret_previous_kid or "").strip() or "previous"
+    return key_id, secret
+
+
+def _action_token_keys(*, kid_hint: str | None = None) -> list[tuple[str, bytes]]:
+    keys = [_current_action_token_key()]
+    previous = _previous_action_token_key()
+    if previous is not None:
+        keys.append(previous)
+    if kid_hint:
+        matching = [item for item in keys if item[0] == kid_hint]
+        nonmatching = [item for item in keys if item[0] != kid_hint]
+        return matching + nonmatching
+    return keys
+
+
+def _action_token_secret() -> bytes:
+    """Return the current signing secret.
+
+    Kept as a small compatibility helper for tests and adjacent modules; new
+    verification code uses ``_action_token_keys`` so previous-key grace windows
+    can validate in-flight tokens during rotation.
+    """
+
+    _key_id, secret = _current_action_token_key()
+    return secret
+
+
+def current_action_token_secret_for_cache() -> str:
+    """Return a stable, non-logged secret string for actor-cache hashing."""
+
+    return _action_token_secret().decode("utf-8")
 
 
 def _b64url_encode(raw: bytes) -> str:
@@ -292,9 +342,10 @@ def _action_token_claims(
     request_id: str,
     expires_at: int,
     nonce: str,
+    key_id: str | None = None,
 ) -> dict[str, Any]:
     criteria_hash, _criteria_keys, source_assets, _visualization_kind = criteria_summary(criteria)
-    return {
+    claims = {
         "v": 1,
         "actor": actor,
         "action_type": action_type,
@@ -309,6 +360,9 @@ def _action_token_claims(
         "route": route or "",
         "trusted_assets": sorted(set(source_assets)),
     }
+    if key_id is not None:
+        claims["kid"] = key_id
+    return claims
 
 
 def _sign_action_claims(claims: dict[str, Any]) -> str:
@@ -331,6 +385,7 @@ def issue_response_action_tokens(
         expires_at = int(time.time()) + _ACTION_TOKEN_TTL_S
         request_id = action.request_id or f"genie-action-{uuid4()}"
         action.request_id = request_id
+        key_id, _secret = _current_action_token_key()
         claims = _action_token_claims(
             actor=actor,
             action_type=action.action_type,
@@ -343,6 +398,7 @@ def issue_response_action_tokens(
             request_id=request_id,
             expires_at=expires_at,
             nonce=secrets.token_urlsafe(12),
+            key_id=key_id,
         )
         action.confirmation_token = _sign_action_claims(claims)
 
@@ -350,15 +406,21 @@ def issue_response_action_tokens(
 def _decode_action_token(token: str) -> dict[str, Any]:
     try:
         body, supplied_sig = token.split(".", 1)
-        expected_sig = hmac.new(
-            _action_token_secret(),
-            body.encode("ascii"),
-            hashlib.sha256,
-        ).digest()
-        actual_sig = _b64url_decode(supplied_sig)
-        if not hmac.compare_digest(actual_sig, expected_sig):
-            raise ValueError("bad signature")
         claims = json.loads(_b64url_decode(body).decode("utf-8"))
+        if not isinstance(claims, dict):
+            raise ValueError("claims body is not an object")
+        actual_sig = _b64url_decode(supplied_sig)
+        kid_hint = str(claims.get("kid") or "") or None
+        for _key_id, secret in _action_token_keys(kid_hint=kid_hint):
+            expected_sig = hmac.new(
+                secret,
+                body.encode("ascii"),
+                hashlib.sha256,
+            ).digest()
+            if hmac.compare_digest(actual_sig, expected_sig):
+                break
+        else:
+            raise ValueError("bad signature")
     except Exception as exc:
         raise HTTPException(
             status_code=400,
@@ -455,6 +517,7 @@ def _validate_action_confirmation(payload: GenieActionRequest, *, actor: str) ->
         request_id=token_request_id,
         expires_at=expires_at,
         nonce=str(claims.get("nonce") or ""),
+        key_id=str(claims["kid"]) if claims.get("kid") is not None else None,
     )
     for key, expected_value in expected_claims.items():
         if claims.get(key) != expected_value:

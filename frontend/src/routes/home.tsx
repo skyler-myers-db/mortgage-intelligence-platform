@@ -47,7 +47,7 @@ function dataEstateFallback(lender: string): DataEstateResponse {
         assets: [
           {
             name: 'Data-estate API',
-            label: '/api/data-estate',
+            label: '/api/v1/data-estate',
             status: 'error',
             note: 'Do not claim source proof until this endpoint recovers.',
           },
@@ -69,7 +69,7 @@ function formatDelta(trend: KpiTrend | undefined): string | undefined {
 }
 
 export default function Home() {
-  // Home KPIs read straight from /api/portfolio/preview. While the request is
+  // Home KPIs read straight from /api/v1/portfolio/preview. While the request is
   // in flight we show skeletons rather than design-time numbers or em-dashes,
   // so normal loading is visually distinct from a genuinely unknown value.
   const { lender } = useApp();

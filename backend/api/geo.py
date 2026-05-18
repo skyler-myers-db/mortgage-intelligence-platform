@@ -28,7 +28,7 @@ from backend.schemas.geo import (
 from backend.schemas.portfolio import PortfolioCriteria
 from backend.services.repositories import GeoRepository, get_geo_repository
 
-router = APIRouter(prefix="/api/geo", tags=["geo"])
+router = APIRouter(prefix="/geo", tags=["geo"])
 
 RepoDep = Annotated[GeoRepository, Depends(get_geo_repository)]
 _ALLOWED_SEGMENT_CODES: frozenset[str] = frozenset(

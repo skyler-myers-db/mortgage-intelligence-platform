@@ -64,7 +64,6 @@ ROUTE_TEST_MANIFEST: dict[tuple[str, str], str] = {
     ("PUT", "/api/workspace/drafts/{borrower_id}"): "tests/unit/test_workspace_api.py",
     ("DELETE", "/api/workspace/leads/{borrower_id}"): "tests/unit/test_workspace_api.py",
     ("PUT", "/api/workspace/leads/{borrower_id}"): "tests/unit/test_workspace_api.py",
-    ("GET", "/api/{full_path:path}"): "tests/unit/test_api_routes.py",
 }
 
 
@@ -75,11 +74,29 @@ def _py_files(path: Path) -> list[Path]:
 def _registered_api_routes() -> set[tuple[str, str]]:
     routes: set[tuple[str, str]] = set()
     for route in app.routes:
-        if not isinstance(route, APIRoute) or not route.path.startswith("/api/"):
+        if (
+            not isinstance(route, APIRoute)
+            or not route.include_in_schema
+            or not route.path.startswith("/api/")
+        ):
             continue
         methods = (route.methods or set()) - {"HEAD", "OPTIONS"}
         routes.update((method, route.path) for method in methods)
     return routes
+
+
+def _canonical_manifest_key(route: tuple[str, str]) -> tuple[str, str] | None:
+    method, path = route
+    if path.startswith("/api/v1/"):
+        return method, "/api" + path[len("/api/v1") :]
+    return None
+
+
+def _compat_manifest_key(route: tuple[str, str]) -> tuple[str, str] | None:
+    method, path = route
+    if path.startswith("/api/") and not path.startswith("/api/v1/"):
+        return method, path
+    return None
 
 
 def _route_literal_candidates(path_template: str) -> set[str]:
@@ -87,7 +104,6 @@ def _route_literal_candidates(path_template: str) -> set[str]:
         "{borrower_id}": "B-48291",
         "{campaign_id}": "11111111-1111-4111-8111-111111111111",
         "{portfolio_id}": "11111111-1111-4111-8111-111111111111",
-        "{full_path:path}": "not-a-real-route",
     }
     concrete = path_template
     for placeholder, value in replacements.items():
@@ -247,12 +263,23 @@ def test_api_route_smoke_contract_stays_registered() -> None:
 def test_registered_api_routes_have_explicit_test_manifest() -> None:
     registered = _registered_api_routes()
     manifested = set(ROUTE_TEST_MANIFEST)
+    expected_canonical = manifested - {("GET", "/api/{full_path:path}")}
+    canonical = {
+        key for route in registered if (key := _canonical_manifest_key(route)) is not None
+    }
+    compat = {
+        key for route in registered if (key := _compat_manifest_key(route)) is not None
+    }
 
-    missing = sorted(registered - manifested)
-    stale = sorted(manifested - registered)
+    missing_canonical = sorted(expected_canonical - canonical)
+    stale_canonical = sorted(canonical - expected_canonical)
+    missing_compat = sorted(manifested - compat)
+    stale_compat = sorted(compat - manifested)
 
-    assert missing == []
-    assert stale == []
+    assert missing_canonical == []
+    assert stale_canonical == []
+    assert missing_compat == []
+    assert stale_compat == []
 
     missing_files = sorted(
         {
@@ -270,3 +297,16 @@ def test_registered_api_routes_have_explicit_test_manifest() -> None:
         if not any(candidate in text for candidate in candidates):
             missing_route_literals.append(f"{route[0]} {route[1]} -> {test_path}")
     assert missing_route_literals == []
+
+
+def test_unversioned_api_routes_are_marked_deprecated_aliases() -> None:
+    violations: list[str] = []
+    for route in app.routes:
+        if not isinstance(route, APIRoute) or not route.include_in_schema:
+            continue
+        if not route.path.startswith("/api/") or route.path.startswith("/api/v1/"):
+            continue
+        if route.deprecated is not True:
+            methods = ",".join(sorted((route.methods or set()) - {"HEAD", "OPTIONS"}))
+            violations.append(f"{methods} {route.path}")
+    assert violations == []

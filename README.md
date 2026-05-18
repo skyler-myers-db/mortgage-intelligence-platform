@@ -44,7 +44,11 @@ uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
 Frontend: <http://localhost:5173>  
-Backend: <http://localhost:8000/api/health>
+Backend: <http://localhost:8000/api/v1/health>
+
+The canonical API surface is `/api/v1/*`; legacy `/api/*` routes are
+deprecated compatibility aliases during the Module 0 transition window. API
+responses emit `X-API-Version: v1`.
 
 ## Build and run as a Databricks App
 
@@ -58,10 +62,14 @@ python -m backend.runtime
 
 ## Databricks deploy
 
-For a customer fork, first rebind the bundle's single workspace-host anchor:
+For a customer fork, first rebind the bundle's single workspace-host anchor
+and set the lender identity in `.env.local`:
 
 ```bash
 ./scripts/configure-workspace.sh https://<customer-workspace>.cloud.databricks.com
+MIP_LENDER_NAME="Acme Mortgage"
+# Optional; defaults from MIP_LENDER_NAME when unset.
+MIP_TENANT_ID="acme_mortgage"
 ```
 
 ```bash
@@ -83,6 +91,27 @@ databricks bundle deploy -t dev --profile DEFAULT
 That path is resource-only; run `databricks apps deploy mip-app --mode SNAPSHOT`
 afterward if you need to promote a freshly built app snapshot without running the
 full deploy script.
+
+## Documentation map
+
+- [`docs/se-onboarding.md`](docs/se-onboarding.md) — customer SE deployment
+  checklist, tenancy posture, first-boot verification, and handover.
+- [`docs/deployment.md`](docs/deployment.md) — local, app, bundle, OTLP, and
+  release-checklist details.
+- [`docs/runbook.md`](docs/runbook.md) — operator diagnostics for cold starts,
+  dependency breakers, caches, auth, Lakebase, Genie, and geo/footprint issues.
+- [`docs/disaster-recovery.md`](docs/disaster-recovery.md) — Lakebase PITR,
+  gold rebuild, app rollback, Genie re-provisioning, audit archival, RTO/RPO.
+- [`docs/runbook-multi-catalog.md`](docs/runbook-multi-catalog.md) —
+  non-default catalog deployment and `MIP_DEFAULT_CATALOG` workflow.
+- [`docs/load-baseline.md`](docs/load-baseline.md) — committed read/write load
+  baseline and how to rerun `tools/load_test/`.
+- [`docs/security-and-compliance.md`](docs/security-and-compliance.md) and
+  [`SECURITY.md`](SECURITY.md) — security controls and disclosure process.
+- [`CHANGELOG.md`](CHANGELOG.md) — release notes and API/operator-visible
+  changes.
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — PR workflow, CI gates, API/data/Genie
+  change procedure, and release policy.
 
 ## Agentic coding setup
 

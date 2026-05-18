@@ -39,6 +39,7 @@ from typing import Any
 from fastapi import APIRouter, Request
 
 from backend.config.settings import settings
+from backend.schemas.health import AdminHealthResponse, HealthResponse
 from backend.services.audit_store import get_fallback_identity_count
 from backend.services.health_probes import breaker_states, probe_snapshot
 from backend.services.observability import (
@@ -48,7 +49,7 @@ from backend.services.observability import (
 )
 from backend.services.rbac import AdminDep
 
-router = APIRouter(prefix="/api")
+router = APIRouter()
 
 _PROCESS_ACTOR_CACHE_SECRET = secrets.token_urlsafe(32)
 
@@ -56,11 +57,10 @@ _PROCESS_ACTOR_CACHE_SECRET = secrets.token_urlsafe(32)
 def _actor_cache_key(actor_email: str) -> str:
     """Return a non-reversible actor/session discriminator for browser caches."""
 
-    secret = (
-        settings.mip_genie_action_secret.get_secret_value()
-        if settings.mip_genie_action_secret
-        else _PROCESS_ACTOR_CACHE_SECRET
-    )
+    configured_secret = settings.mip_genie_action_secret_current or settings.mip_genie_action_secret
+    secret = configured_secret.get_secret_value().strip() if configured_secret else ""
+    if not secret:
+        secret = _PROCESS_ACTOR_CACHE_SECRET
     digest = hmac.new(
         secret.encode("utf-8"),
         actor_email.strip().lower().encode("utf-8"),
@@ -139,7 +139,7 @@ def _diagnostic_body(status: str, deps: dict[str, str], actor_email: str) -> dic
     }
 
 
-@router.get("/health")
+@router.get("/health", response_model=HealthResponse, response_model_exclude_unset=True)
 def health(request: Request) -> dict[str, Any]:
     """Return probe-friendly health with only runtime status.
 
@@ -181,7 +181,7 @@ def health(request: Request) -> dict[str, Any]:
     }
 
 
-@router.get("/admin/health")
+@router.get("/admin/health", response_model=AdminHealthResponse)
 def admin_health(_actor: AdminDep) -> dict[str, Any]:
     """Return ops diagnostics behind admin RBAC."""
     status, deps = probe_snapshot()

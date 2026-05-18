@@ -1,3 +1,5 @@
+"""Borrower segment summary endpoint for Module 0 segment intelligence."""
+
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -6,7 +8,7 @@ from backend.schemas.lead import SegmentSummary
 from backend.schemas.portfolio import PortfolioCriteria
 from backend.services.repositories import SegmentRepository, get_segment_repository
 
-router = APIRouter(prefix="/api", tags=["segments"])
+router = APIRouter(tags=["segments"])
 
 RepoDep = Annotated[SegmentRepository, Depends(get_segment_repository)]
 

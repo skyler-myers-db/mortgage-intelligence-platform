@@ -1,6 +1,10 @@
+"""Shared validation helpers and common API schema fragments."""
+
 import re
 
 from pydantic import BaseModel, Field
+
+from backend.schemas._validators import configured_public_lender_name
 
 PUBLIC_BORROWER_ID_PATTERN = re.compile(r"^B-[A-Za-z0-9][A-Za-z0-9_-]{0,126}$")
 PUBLIC_UUID_PATTERN = re.compile(
@@ -154,7 +158,7 @@ def validate_public_campaign_label(value: str, *, field_name: str = "variant_nam
     if not PUBLIC_CAMPAIGN_LABEL_PATTERN.fullmatch(label):
         raise ValueError(f"{field_name} must be a public-safe campaign label")
     name_scan = label
-    for phrase in _PUBLIC_CAMPAIGN_LABEL_PHRASE_ALLOWLIST:
+    for phrase in (*_PUBLIC_CAMPAIGN_LABEL_PHRASE_ALLOWLIST, configured_public_lender_name()):
         name_scan = name_scan.replace(phrase, "")
     for match in _HUMAN_NAME_SHAPE_PATTERN.finditer(name_scan):
         words = [part.strip() for part in match.group(0).split() if part.strip()]

@@ -11,6 +11,7 @@ import {
 } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../lib/api';
+import { useConfigOptionsQuery } from '../lib/configOptionsQuery';
 import { queryKeys } from '../lib/queryKeys';
 import type { SavedDraft, SavedDraftInput, SavedLead, SavedLeadInput } from '../types';
 
@@ -141,7 +142,8 @@ export function AppProvider({ children }: PropsWithChildren) {
   // Module 0 does not support arbitrary client-side lender switching.
   // The tenant label is display-only; lender predicates are resolved by
   // backend configuration and the Unity Catalog gold views.
-  const lender = 'Summit Mortgage';
+  const configOptionsQuery = useConfigOptionsQuery();
+  const lender = configOptionsQuery.data?.lender_name?.trim() || 'Configured lender';
   const [showEvidence, setShowEvidence] = useState(true);
   const [showConfidence, setShowConfidence] = useState(true);
   // Console is opt-in so the first demo viewport uses the full prototype

@@ -1,9 +1,10 @@
-import { type ChangeEvent, useCallback, useEffect, useMemo, useState } from 'react';
+import { type ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router-dom';
 import { api } from '../lib/api';
+import { useConfigOptionsQuery } from '../lib/configOptionsQuery';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
-import type { CampaignListResponse, CampaignSummary, ConfigOptions, PortfolioPreview } from '../types';
+import type { CampaignListResponse, CampaignSummary, PortfolioPreview } from '../types';
 import { PageShell } from '../components/layout/PageShell';
 import { KpiCard } from '../components/mortgage/KpiCard';
 import { Button } from '../components/Primitives';
@@ -20,6 +21,7 @@ import {
   NON_GEO_FILTER_GROUPS,
   URL_FILTER_KEYS,
   buildCampaignConfig,
+  buildDefaultCampaignSetup,
   buildGeoOptions,
   buildLeadQueueUrlFromFilters,
   buildPreviewCriteria,
@@ -44,11 +46,7 @@ import {
 export default function PortfolioBuilder() {
   const [searchParams, setSearchParams] = useSearchParams();
   const footprint = useFootprint();
-  const configOptionsQuery = useQuery<ConfigOptions>({
-    queryKey: queryKeys.configOptions(),
-    queryFn: ({ signal }) => api.configOptions(signal),
-    retry: false,
-  });
+  const configOptionsQuery = useConfigOptionsQuery();
   const targetLenderOptions = useMemo(() => {
     const values = configOptionsQuery.data?.target_lender_refs?.filter(Boolean);
     return values && values.length > 0 ? values : ['All'];
@@ -56,6 +54,7 @@ export default function PortfolioBuilder() {
   const targetLenderStatus = configOptionsQuery.isError
     ? 'unavailable'
     : configOptionsQuery.data?.target_lender_refs_status ?? 'loading';
+  const lenderName = configOptionsQuery.data?.lender_name?.trim() || 'configured lender';
   // Build the GEO dropdown from the tenant footprint. Memoised so the
   // FilterSelect doesn't get a fresh options array on every render (it
   // would be identity-stable for same-footprint re-renders).
@@ -102,6 +101,11 @@ export default function PortfolioBuilder() {
   const [copyHint, setCopyHint] = useState<'idle' | 'copied' | 'failed'>('idle');
   const [saveHint, setSaveHint] = useState<'idle' | 'saved' | 'failed'>('idle');
   const [campaignSetup, setCampaignSetup] = useState<CampaignSetupState>(DEFAULT_CAMPAIGN_SETUP);
+  const campaignSetupDefaultRef = useRef<CampaignSetupState>(DEFAULT_CAMPAIGN_SETUP);
+  const currentDefaultCampaignSetup = useMemo(
+    () => buildDefaultCampaignSetup(lenderName),
+    [lenderName],
+  );
   const {
     data: campaignsData,
     isPending: campaignsLoading,
@@ -157,10 +161,10 @@ export default function PortfolioBuilder() {
    * change (which would pollute browser history with every keystroke).
    */
   const onRunBuild = useCallback(() => {
-    setSearchParams(buildUrlFromFilters(filters, defaultFilters, stateCodes), { replace: false });
+    setSearchParams(buildUrlFromFilters(filters, defaultFilters, stateCodes, targetLenderOptions), { replace: false });
     setCommittedFilters(filters);
     setCommittedStateCodes(stateCodes);
-  }, [defaultFilters, filters, setSearchParams, stateCodes]);
+  }, [defaultFilters, filters, setSearchParams, stateCodes, targetLenderOptions]);
 
   /**
    * Copy the current URL to the clipboard. Falls back to a failed
@@ -208,14 +212,24 @@ export default function PortfolioBuilder() {
     return () => window.clearTimeout(t);
   }, [saveHint]);
 
+  useEffect(() => {
+    const previousDefault = campaignSetupDefaultRef.current;
+    campaignSetupDefaultRef.current = currentDefaultCampaignSetup;
+    setCampaignSetup((current) => (
+      JSON.stringify(current) === JSON.stringify(previousDefault)
+        ? currentDefaultCampaignSetup
+        : current
+    ));
+  }, [currentDefaultCampaignSetup]);
+
   // When the URL changes (browser back/forward), reconcile local state
   // and refetch so the KPI grid reflects the navigation. We only
   // refetch if the URL-derived filters actually differ from local
   // state — otherwise setState from onRunBuild would cause an
   // unnecessary second fetch.
   const urlFilters = useMemo(
-    () => parseFiltersFromUrl(searchParams, defaultFilters),
-    [defaultFilters, searchParams],
+    () => parseFiltersFromUrl(searchParams, defaultFilters, targetLenderOptions),
+    [defaultFilters, searchParams, targetLenderOptions],
   );
   const urlStateCodes = useMemo(
     () => parseStateCodesFromUrl(searchParams, footprint.states),
@@ -244,8 +258,8 @@ export default function PortfolioBuilder() {
   }, [footprint.states, geoOptionsKey]);
 
   const leadQueueUrl = useMemo(() => {
-    return buildLeadQueueUrlFromFilters(committedFilters, committedStateCodes);
-  }, [committedFilters, committedStateCodes]);
+    return buildLeadQueueUrlFromFilters(committedFilters, committedStateCodes, targetLenderOptions);
+  }, [committedFilters, committedStateCodes, targetLenderOptions]);
 
   return (
     <PageShell

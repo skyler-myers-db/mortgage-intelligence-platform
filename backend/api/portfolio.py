@@ -1,3 +1,5 @@
+"""Portfolio preview, save, list, and status endpoints."""
+
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -18,7 +20,7 @@ from backend.services.lakebase import LakebaseError
 from backend.services.rbac import require_admin
 from backend.services.repositories import PortfolioRepository, get_portfolio_repository
 
-router = APIRouter(prefix="/api/portfolio", tags=["portfolio"])
+router = APIRouter(prefix="/portfolio", tags=["portfolio"])
 
 # The Annotated form is the FastAPI-recommended DI pattern and keeps
 # ruff's B008 quiet (Depends(...) is not a *value* default; it's the
@@ -98,7 +100,7 @@ def list_portfolios(
         ) from exc
 
 
-@router.get("/{portfolio_id}")
+@router.get("/{portfolio_id}", response_model=CampaignSummary)
 def get_portfolio(portfolio_id: str, request: Request, repo: RepoDep) -> dict[str, object]:
     try:
         validate_public_opaque_id(portfolio_id)

@@ -154,7 +154,7 @@ questions:
 
   - id: executive_strategy_board
     category: strategy
-    question: Where should Summit Mortgage spend its next 10000 outreach touches this week, and why?
+    question: Where should the configured tenant lender spend its next 10000 outreach touches this week, and why?
     must_cite:
       - mip.gold
     forbid_keywords:

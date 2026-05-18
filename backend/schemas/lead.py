@@ -1,3 +1,5 @@
+"""Lead, borrower, segment, and evidence API contracts."""
+
 import re
 from datetime import datetime
 from typing import Literal

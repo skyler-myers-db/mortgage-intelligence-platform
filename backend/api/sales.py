@@ -1,3 +1,5 @@
+"""Sales-team assignment, disposition, aging, and conversion endpoints."""
+
 from __future__ import annotations
 
 from collections import Counter
@@ -34,7 +36,7 @@ from backend.services.repositories import (
 )
 from backend.services.sales_state import SalesStateStore, get_sales_state_store
 
-router = APIRouter(prefix="/api", tags=["sales"])
+router = APIRouter(tags=["sales"])
 
 BorrowerRepoDep = Annotated[BorrowerRepository, Depends(get_borrower_repository)]
 LeadRepoDep = Annotated[LeadRepository, Depends(get_lead_repository)]

@@ -62,6 +62,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -96,6 +97,9 @@ DEFAULT_SPACE_NAME = "Mortgage Lead Intelligence"
 DEFAULT_PROFILE = "DEFAULT"
 DEFAULT_SMOKE_QUESTION = "How many borrowers are currently in-the-money?"
 SMOKE_TIMEOUT_SECONDS = 60
+DEFAULT_TENANT_NAME = "Summit Mortgage"
+DEFAULT_CATALOG = "mip"
+_UC_SCHEMAS = ("gold", "semantics", "silver", "ref", "raw")
 
 
 def _hex_id(*parts: str) -> str:
@@ -129,6 +133,43 @@ def _sort_snippet_groups(value: Any, *, path: str = "sql_snippets") -> Any:
 
 def _is_hex32(value: str) -> bool:
     return len(value) == 32 and all(ch in "0123456789abcdef" for ch in value)
+
+
+def _tenant_name() -> str:
+    return (os.environ.get("MIP_LENDER_NAME") or DEFAULT_TENANT_NAME).strip() or DEFAULT_TENANT_NAME
+
+
+def _catalog_name() -> str:
+    return (os.environ.get("MIP_DEFAULT_CATALOG") or DEFAULT_CATALOG).strip() or DEFAULT_CATALOG
+
+
+def _render_space_templates(value: Any, *, tenant_name: str, catalog_name: str) -> Any:
+    if isinstance(value, str):
+        rendered = value.replace("{tenant_name}", tenant_name).replace("{catalog}", catalog_name)
+        if catalog_name != DEFAULT_CATALOG:
+            schema_group = "|".join(re.escape(schema) for schema in _UC_SCHEMAS)
+            rendered = re.sub(
+                rf"(?<![A-Za-z0-9_]){re.escape(DEFAULT_CATALOG)}\.({schema_group})\b",
+                lambda match: f"{catalog_name}.{match.group(1)}",
+                rendered,
+            )
+            rendered = re.sub(
+                rf"(?<![A-Za-z0-9_]){re.escape(DEFAULT_CATALOG)}(?![A-Za-z0-9_])",
+                catalog_name,
+                rendered,
+            )
+        return rendered
+    if isinstance(value, list):
+        return [
+            _render_space_templates(item, tenant_name=tenant_name, catalog_name=catalog_name)
+            for item in value
+        ]
+    if isinstance(value, dict):
+        return {
+            key: _render_space_templates(item, tenant_name=tenant_name, catalog_name=catalog_name)
+            for key, item in value.items()
+        }
+    return value
 
 
 def _column_config_v2(config: dict[str, Any]) -> dict[str, Any]:
@@ -165,6 +206,11 @@ class SpaceSpec:
         raw = yaml.safe_load(path.read_text())
         if not isinstance(raw, dict):
             raise ValueError(f"{path} is not a YAML mapping")
+        raw = _render_space_templates(
+            raw,
+            tenant_name=_tenant_name(),
+            catalog_name=_catalog_name(),
+        )
         return cls(
             name=str(raw.get("name", DEFAULT_SPACE_NAME)).strip(),
             description=str(raw.get("description", "")).strip(),

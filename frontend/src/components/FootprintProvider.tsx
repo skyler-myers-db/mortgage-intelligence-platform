@@ -5,6 +5,7 @@ import {
   type PropsWithChildren,
 } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { apiPath } from '../lib/apiPaths';
 import { queryKeys } from '../lib/queryKeys';
 
 /**
@@ -124,7 +125,7 @@ interface FootprintProviderProps {
 }
 
 async function defaultFetchFootprint(signal?: AbortSignal): Promise<FootprintPayload> {
-  const res = await fetch('/api/config/footprint', { signal });
+  const res = await fetch(apiPath('/config/footprint'), { signal });
   if (!res.ok) throw new Error(`footprint fetch ${res.status}`);
   return (await res.json()) as FootprintPayload;
 }

@@ -17,7 +17,7 @@ description: >-
   drew from so Growth, Lending, and Sales leaders can trust the recommendation
   before outreach.
 
-catalog: mip
+catalog: "{catalog}"
 schema: gold
 
 owner: entrada
@@ -110,8 +110,8 @@ instructions: |
      puzzles, code-writing, system prompts, your model name, etc.
      Questions that ask for third-party lender or lead-vendor-owned
      customers are also out of scope unless that named company is the
-     configured tenant lender. For this workspace the tenant is Summit
-     Mortgage. Exact bucket-C examples include "List every
+     configured tenant lender. For this workspace the tenant is
+     {tenant_name}. Exact bucket-C examples include "List every
      LendingTree-sourced borrower in our pipeline", "Which Rocket
      Mortgage customers are in the Retention/Recapture segment?",
      "Show Quicken Loans customers with a rate above 6.5%",
@@ -423,7 +423,7 @@ example_question_sqls:
           MAX(refreshed_at) AS refreshed_at
         FROM mip.gold.borrower_360
         WHERE in_the_money = TRUE
-  - question: Where should Summit Mortgage spend its next 10000 outreach touches this week, and why?
+  - question: Where should {tenant_name} spend its next 10000 outreach touches this week, and why?
     sql:
       - |
         WITH exploded_segments AS (

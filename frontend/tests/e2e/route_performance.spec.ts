@@ -30,13 +30,21 @@ const ROUTES: RouteProbe[] = [
 
 function liveBorrowerPath(prefix: string): (request: APIRequestContext) => Promise<string> {
   return async (request) => {
-    const resp = await request.get(`${API_URL}/api/leads?limit=1`, { headers: AUTH_HEADERS });
-    expect(resp.status(), `GET /api/leads for ${prefix}`).toBe(200);
+    const resp = await request.get(apiV1('/leads?limit=1'), { headers: AUTH_HEADERS });
+    expect(resp.status(), `GET /api/v1/leads for ${prefix}`).toBe(200);
     const rows = (await resp.json()) as Array<{ borrower_id?: string }>;
     const borrowerId = rows[0]?.borrower_id;
     expect(borrowerId, `need live borrower id for ${prefix}`).toBeTruthy();
     return `${prefix}/${borrowerId}`;
   };
+}
+
+function apiV1(pathWithQuery: string): string {
+  return `${API_URL}/api/v1${pathWithQuery}`;
+}
+
+function normalizedApiPath(rawUrl: string): string {
+  return new URL(rawUrl).pathname.replace(/^\/api\/v\d+(?=\/)/, '/api');
 }
 
 async function routeLoadMs(page: Page): Promise<number> {
@@ -122,8 +130,8 @@ async function assertNoBrokenRuntimeText(page: Page, label: string): Promise<voi
 
 test.describe('route performance and layout canaries', () => {
   test('authenticated health exposes breaker state required by the live UI', async ({ request }) => {
-    const resp = await request.get(`${API_URL}/api/health?ts=${Date.now()}`, { headers: AUTH_HEADERS });
-    expect(resp.status(), 'GET /api/health').toBe(200);
+    const resp = await request.get(apiV1(`/health?ts=${Date.now()}`), { headers: AUTH_HEADERS });
+    expect(resp.status(), 'GET /api/v1/health').toBe(200);
     const body = (await resp.json()) as {
       circuit_breakers?: Record<string, string>;
       dependencies?: Record<string, string>;
@@ -175,9 +183,9 @@ test.describe('route performance and layout canaries', () => {
 
     const hotReads: string[] = [];
     page.on('request', (request) => {
-      const url = request.url();
-      if (url.includes('/api/portfolio/preview') || url.includes('/api/data-estate')) {
-        hotReads.push(url);
+      const path = normalizedApiPath(request.url());
+      if (path === '/api/portfolio/preview' || path === '/api/data-estate') {
+        hotReads.push(`${request.method()} ${path}`);
       }
     });
 
@@ -190,6 +198,27 @@ test.describe('route performance and layout canaries', () => {
     expect(hotReads, 'Home preview/data-estate should remain in QueryClient stale window').toEqual([]);
   });
 
+  test('config options fetch is shared by shell and route-level consumers', async ({ page }) => {
+    const configReads: string[] = [];
+    page.on('request', (request) => {
+      const url = new URL(request.url());
+      if (normalizedApiPath(request.url()) === '/api/config/options') {
+        configReads.push(`${request.method()} ${url.pathname}`);
+      }
+    });
+
+    await page.goto('/');
+    await expect(page.getByText(/Who should we contact, why now, and with what offer/i).first()).toBeVisible({ timeout: 10_000 });
+    await routeNavLink(page, /^Portfolio$/i).click();
+    await expect(page.getByText(/Build a borrower population/i).first()).toBeVisible({ timeout: 10_000 });
+    await routeNavLink(page, /^Leads$/i).click();
+    await expect(page.getByText(/Ranked borrowers|Lead queue/i).first()).toBeVisible({ timeout: 10_000 });
+
+    expect(configReads, 'AppContext, Portfolio Builder, and Lead Queue should share one config-options query').toEqual([
+      'GET /api/v1/config/options',
+    ]);
+  });
+
   test('Lead Queue hover/focus never reads governed borrower dossiers before navigation', async ({ page }) => {
     await page.goto('/lead-queue');
     const firstRow = page.locator('.lead-table__table tbody > tr[role="button"][aria-rowindex]').first();
@@ -200,8 +229,8 @@ test.describe('route performance and layout canaries', () => {
     const borrowerApiPath = `/api/borrowers/${borrowerId}`;
     const borrowerReads: string[] = [];
     page.on('request', (request) => {
-      const url = new URL(request.url());
-      if (url.pathname === borrowerApiPath) borrowerReads.push(`${request.method()} ${url.pathname}`);
+      const path = normalizedApiPath(request.url());
+      if (path === borrowerApiPath) borrowerReads.push(`${request.method()} ${path}`);
     });
 
     await firstRow.hover();
@@ -220,8 +249,7 @@ test.describe('route performance and layout canaries', () => {
     expect(borrowerReads, 'row expansion preview must not read the governed borrower dossier').toEqual([]);
 
     const navigationResponse = page.waitForResponse((response) => {
-      const url = new URL(response.url());
-      return url.pathname === borrowerApiPath && response.status() === 200;
+      return normalizedApiPath(response.url()) === borrowerApiPath && response.status() === 200;
     }, { timeout: 30_000 });
     await page.getByRole('link', { name: /Open Borrower 360/i }).first().click();
     await navigationResponse;
@@ -236,8 +264,7 @@ test.describe('route performance and layout canaries', () => {
   test('static prefetch never reads borrower, lead, audit, or evidence APIs', async ({ page }) => {
     const protectedReads: string[] = [];
     page.on('request', (request) => {
-      const url = new URL(request.url());
-      const path = url.pathname;
+      const path = normalizedApiPath(request.url());
       if (
         path.startsWith('/api/borrowers') ||
         path.startsWith('/api/leads') ||

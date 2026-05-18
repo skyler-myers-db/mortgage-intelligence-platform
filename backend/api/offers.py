@@ -1,3 +1,5 @@
+"""Offer recommendation endpoint with audit-backed recommendation proof."""
+
 from __future__ import annotations
 
 import logging
@@ -26,7 +28,7 @@ from backend.services.scoring import NBO_PRODUCT_LABELS, source_display_label
 
 log = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/offers", tags=["offers"])
+router = APIRouter(prefix="/offers", tags=["offers"])
 
 BorrowerRepoDep = Annotated[BorrowerRepository, Depends(get_borrower_repository)]
 OfferRepoDep = Annotated[OfferRepository, Depends(get_offer_repository)]

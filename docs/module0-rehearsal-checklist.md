@@ -26,7 +26,7 @@ against `mip.gold.borrower_360` immediately after.
 ## 2. Probe app health — expect full green
 
 ```bash
-curl -s "$MIP_APP_URL/api/health" | jq
+curl -s "$MIP_APP_URL/api/v1/health" | jq
 ```
 
 (The deployed App authenticates via workspace-identity Bearer — no PAT
@@ -46,14 +46,14 @@ cold first request may take ~1 s while it spins up the dependency probes;
 every subsequent call in the next 2 s returns instantly from the cache
 while a background refresh runs off the request thread. Warm p95 is
 **130 ms** against the deployed app (see [docs/load-baseline.md](load-baseline.md) —
-the full Module 0 perf arc dropped `/api/health` p95 from 1,100 ms to
+the full Module 0 perf arc dropped `/api/v1/health` p95 from 1,100 ms to
 130 ms, -93 % from baseline). If the probe is returning >500 ms on a
 second call, something's off — investigate before going on stage.
 
 ## 3. Cold-start probe the Genie space
 
 ```bash
-curl -s -X POST https://<databricks-app-host>/api/genie/message \
+curl -s -X POST https://<databricks-app-host>/api/v1/genie/message \
   -H 'content-type: application/json' \
   -d '{"question":"How many borrowers across the current Cotality data coverage are currently in-the-money, and what is the average rate spread?"}'
 ```
@@ -61,17 +61,20 @@ curl -s -X POST https://<databricks-app-host>/api/genie/message \
 First call on a cold Genie space can take 10–30 s. A second call against the
 same question after the first returns will be snappy — that's the warm path
 the audience sees. Verify the response `source` is `"genie"`, not `"degraded"`.
+The app currently allows six concurrent Genie turns before backpressure
+kicks in. For panel demos, warm one question yourself and ask the room to
+avoid all firing Genie simultaneously until the space is warm.
 
 ## 4. Verify Lakebase write path via a benign audit row
 
 Load the app in an incognito tab, open Lead Queue, choose the first available
 borrower row, open its Borrower 360 dossier, and confirm a row appears in
-`/api/audit` within a second or two. This proves the Lakebase write path is
+`/api/v1/audit` within a second or two. This proves the Lakebase write path is
 open; an expired auth token will cause a quiet 500 if you find out during the
 approval beat instead.
 
 ```bash
-curl -s https://<databricks-app-host>/api/audit/events?limit=5 | jq '.[0]'
+curl -s https://<databricks-app-host>/api/v1/audit/events?limit=5 | jq '.[0]'
 ```
 
 ## 5. Frontend sanity check — no DegradedBanner
@@ -92,7 +95,7 @@ compact density**. Expect:
   fan-out. If you're seeing 3-second-plus dossier loads, the CTAS may
   not have refreshed; re-run `databricks bundle run mip_refresh_scores -t dev`.
 
-If the DegradedBanner is showing, something upstream failed the `/api/health`
+If the DegradedBanner is showing, something upstream failed the `/api/v1/health`
 probe — step back to (2) and do not start the walkthrough.
 
 ## 6. Dry-run the Genie degraded path (once)
@@ -118,10 +121,10 @@ Re-run step (3) in a minute and the Genie space will have warmed up.
 If the frontend dies mid-walkthrough, the API still works. Pre-load these in a second
 terminal or browser tab:
 
-- `curl "$MIP_APP_URL/api/leads?limit=5" | jq`
-- `BORROWER_ID="$(curl -s "$MIP_APP_URL/api/leads?limit=1" | jq -r '.[0].borrower_id')"`
-- `curl "$MIP_APP_URL/api/borrowers/$BORROWER_ID" | jq`
-- `curl "$MIP_APP_URL/api/segments" | jq`
+- `curl "$MIP_APP_URL/api/v1/leads?limit=5" | jq`
+- `BORROWER_ID="$(curl -s "$MIP_APP_URL/api/v1/leads?limit=1" | jq -r '.[0].borrower_id')"`
+- `curl "$MIP_APP_URL/api/v1/borrowers/$BORROWER_ID" | jq`
+- `curl "$MIP_APP_URL/api/v1/segments" | jq`
 
 The dossier endpoint contains everything the Borrower 360 page renders — you
 can narrate from JSON if the UI goes dark.

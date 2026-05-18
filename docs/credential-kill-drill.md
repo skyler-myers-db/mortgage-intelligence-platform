@@ -33,7 +33,7 @@ major release dry-run. Run the real-infra pair before major release
 dry-runs **only** — stopping real infra in production hours is a
 user-visible outage. Run immediately after any change to:
 - `backend/services/resilience.py`
-- `backend/api/health.py`
+- `backend/api/v1/health.py`
 - `backend/services/databricks_sql.py` / `backend/services/lakebase.py` / `backend/services/genie_client.py`
 - `frontend/src/components/mortgage/DegradedBanner.tsx`
 
@@ -48,7 +48,7 @@ Before kicking off any drill:
       prod is a governance violation.
 - [ ] The backend is running locally (`uvicorn backend.main:app ...`)
       or the `MIP_APP_URL` target is reachable.
-- [ ] `/api/health` currently returns `status: "ok"` with every
+- [ ] `/api/v1/health` currently returns `status: "ok"` with every
       dependency `up`. Starting from a degraded state means you can't
       observe the transition — the very thing the drill is proving.
 - [ ] You have the Databricks CLI authenticated for the target
@@ -63,18 +63,18 @@ Before kicking off any drill:
 
 Every target follows the same five beats:
 
-1. **Pre-state probe.** Capture `/api/health` while everything is
+1. **Pre-state probe.** Capture `/api/v1/health` while everything is
    green. This row anchors the evidence log.
 2. **Induce failure.** Either the operator stops real infrastructure
    (warehouse, Lakebase) or the drill script forks a private backend
    on port 8001 with a poisoned env (Genie, token).
-3. **Assert degraded signal.** `/api/health` transitions to
+3. **Assert degraded signal.** `/api/v1/health` transitions to
    `status: degraded` with the targeted dependency reporting `down`
    and/or its circuit breaker `open`.
 4. **Assert data endpoints fail visibly.** The canonical routes backing
    the UI return 503 (or an explicit degraded-shape 200), never
    suspicious "looks real" rows.
-5. **Recovery.** Restore the dependency, wait for `/api/health` to
+5. **Recovery.** Restore the dependency, wait for `/api/v1/health` to
    close the breaker and flip back to `ok`.
 
 All four drills write to `tools/kill_drill/evidence/drill_<target>_<timestamp>.log`.
@@ -110,11 +110,11 @@ Expect `STOPPED` or `STOPPING`. Type `done` in the drill prompt.
 
 | Signal | Expected value |
 |---|---|
-| `/api/health` `status` | `degraded` (within ~20 s) |
-| `/api/health` `dependencies.warehouse` | `down` |
-| `/api/health` `circuit_breakers.warehouse` | `open` after 5 failures |
-| `/api/leads?limit=5` | HTTP 503 with `retryable: true` |
-| `/api/portfolio/kpis` / `/preview` | HTTP 503 |
+| `/api/v1/health` `status` | `degraded` (within ~20 s) |
+| `/api/v1/health` `dependencies.warehouse` | `down` |
+| `/api/v1/health` `circuit_breakers.warehouse` | `open` after 5 failures |
+| `/api/v1/leads?limit=5` | HTTP 503 with `retryable: true` |
+| `/api/v1/portfolio/kpis` / `/preview` | HTTP 503 |
 | UI (while drill is in flight) | `DegradedBanner` visible on every route, no borrower rows rendered |
 
 **Recovery**
@@ -146,15 +146,15 @@ breaker identically and is easier to reverse.
 
 | Signal | Expected value |
 |---|---|
-| `/api/health` `status` | `degraded` |
-| `/api/health` `dependencies.lakebase` | `down` |
-| `/api/audit/events` | HTTP 503 |
+| `/api/v1/health` `status` | `degraded` |
+| `/api/v1/health` `dependencies.lakebase` | `down` |
+| `/api/v1/audit/events` | HTTP 503 |
 | `/api/approvals` (POST) | HTTP 503, audit row NOT written |
 | UI Approvals panel | Degraded state, "Recovering" copy, no approve button |
 
 **Recovery**
 
-Start the database instance, or restore the password. `/api/health`
+Start the database instance, or restore the password. `/api/v1/health`
 flips back to `ok` within ~30 s.
 
 ---
@@ -173,15 +173,15 @@ It:
 
 1. Exports `GENIE_SPACE_ID=00000000-0000-0000-0000-000000000000`.
 2. Starts a private uvicorn on port 8001.
-3. POSTs a question to `/api/genie/message` and verifies the response is
+3. POSTs a question to `/api/v1/genie/message` and verifies the response is
    either a 503 or a 200 with `source: "degraded"`.
 
 **Expected signals**
 
 | Signal | Expected value |
 |---|---|
-| `/api/health` (port 8001) `dependencies.genie` | `down` after first probe |
-| `/api/genie/message` | HTTP 503 or HTTP 200 with `source: "degraded"` |
+| `/api/v1/health` (port 8001) `dependencies.genie` | `down` after first probe |
+| `/api/v1/genie/message` | HTTP 503 or HTTP 200 with `source: "degraded"` |
 | Never | HTTP 200 with `source: "genie"` and hallucinated metrics |
 
 The explicit `source: "degraded"` response is the contract: no fake rows, no
@@ -212,7 +212,7 @@ Two outcomes — both are PASSES:
    credentials.
 2. **Backend boots and degrades.** If a future refactor allows boot
    with a partial cred set, the script still verifies that
-   `/api/leads` returns 503 and the warehouse breaker trips. That
+   `/api/v1/leads` returns 503 and the warehouse breaker trips. That
    outcome is a PASS, but flag it for review — we prefer outcome 1.
 
 **Never acceptable:** backend boots and serves 200s with real-looking
@@ -225,7 +225,7 @@ merge.
 
 Stops the real SQL warehouse via `w.warehouses.stop(id)`, asserts the
 degraded contract on the already-running backend, then restarts via
-`w.warehouses.start_and_wait(id)` and waits for `/api/health` to close
+`w.warehouses.start_and_wait(id)` and waits for `/api/v1/health` to close
 the breaker. This is the strongest real-world evidence the degraded
 path works end-to-end — but it causes a 30–90 s user-visible outage
 during the drill window.
@@ -244,16 +244,16 @@ from taking production down.
 
 | Signal                                               | Expected value |
 | ---------------------------------------------------- | -------------- |
-| Pre-probe `/api/health`                              | `status: "ok"` |
-| During drill `/api/health`                           | `status: "degraded"`, `dependencies.warehouse: "down"` |
-| During drill `/api/leads?limit=5`                    | HTTP 503 with `retryable: true` |
+| Pre-probe `/api/v1/health`                              | `status: "ok"` |
+| During drill `/api/v1/health`                           | `status: "degraded"`, `dependencies.warehouse: "down"` |
+| During drill `/api/v1/leads?limit=5`                    | HTTP 503 with `retryable: true` |
 | After SDK `start_and_wait(...)` returns              | warehouse state `RUNNING` |
-| Post-probe `/api/health` (within 60 s)               | `status: "ok"`, `dependencies.warehouse: "up"` |
+| Post-probe `/api/v1/health` (within 60 s)               | `status: "ok"`, `dependencies.warehouse: "up"` |
 | Evidence log                                         | `tools/kill_drill/evidence/drill_warehouse-real_<ts>.log` |
 
 **Failure modes that exit 1 (real regression)**
 
-- Warehouse stopped but `/api/health` never reported degraded → the
+- Warehouse stopped but `/api/v1/health` never reported degraded → the
   resilience contract is broken.
 - Warehouse restart timed out (default 300 s) → **real infra may still
   be stopped**. The operator must investigate immediately; the script
@@ -288,10 +288,10 @@ flag.
 
 | Signal                                               | Expected value |
 | ---------------------------------------------------- | -------------- |
-| During drill `/api/health`                           | `dependencies.lakebase: "down"` |
-| During drill `/api/audit/events?limit=5`             | HTTP 503 |
+| During drill `/api/v1/health`                           | `dependencies.lakebase: "down"` |
+| During drill `/api/v1/audit/events?limit=5`             | HTTP 503 |
 | Post-probe Lakebase state                            | `DatabaseInstanceState.AVAILABLE` |
-| Post-probe `/api/health`                             | `status: "ok"`, `dependencies.lakebase: "up"` |
+| Post-probe `/api/v1/health`                             | `status: "ok"`, `dependencies.lakebase: "up"` |
 | Evidence log                                         | `tools/kill_drill/evidence/drill_lakebase-real_<ts>.log` |
 
 **Recovery SLA**
@@ -346,7 +346,7 @@ backend's port:
 The verifier hits every route and asserts:
 
 - The frontend HTML shell responds 200 (the app is still reachable).
-- `/api/health` is degraded (sanity check that the drill is active).
+- `/api/v1/health` is degraded (sanity check that the drill is active).
 - Every data endpoint behind every route returns 503, or a
   self-declared degraded shape, or an empty collection — **never** a
   non-empty 200 payload that looks like real data.
@@ -361,12 +361,12 @@ Attach that file to the governance record. The log contains:
 ```
 [drill/<target>] drill started at <UTC ts> against app_url=<url>
 [drill/<target>] Pre-state probe (expecting all 'up' before the drill)
-  <raw /api/health body>
+  <raw /api/v1/health body>
 [drill/<target>] OPERATOR CONFIRMATION REQUIRED
   Stop the SQL warehouse, then confirm.
 [drill/<target>] health attempt 1: status=degraded warehouse=down breaker=open
-[drill/<target>] GET /api/leads?limit=5 -> HTTP 503
-[drill/<target>] PASS: /api/leads?limit=5 returned 503 with retryable=true
+[drill/<target>] GET /api/v1/leads?limit=5 -> HTTP 503
+[drill/<target>] PASS: /api/v1/leads?limit=5 returned 503 with retryable=true
 [drill/<target>] OPERATOR CONFIRMATION REQUIRED
   Restart the warehouse, then confirm.
 [drill/<target>] RECOVERED: warehouse=up, status=ok after 14s
@@ -396,7 +396,7 @@ is serving fake data during a dependency outage.** Do not merge. Do
 not ship. Open an incident using the post-mortem template in
 `docs/runbook.md` and:
 
-1. Pin the symptom: `/api/health` stayed green? 200 with real-looking
+1. Pin the symptom: `/api/v1/health` stayed green? 200 with real-looking
    rows? Banner didn't render?
 2. Trace from the failing endpoint back through the service — which
    repository, which breaker, which fallback path.

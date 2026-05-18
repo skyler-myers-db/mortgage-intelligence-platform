@@ -69,20 +69,20 @@ npm --prefix frontend run build
 Endpoints:
 
 ```text
-GET  /api/health
-GET  /api/config/options
-POST /api/portfolio/preview
-POST /api/portfolio/create
-GET  /api/segments
-GET  /api/leads
-GET  /api/borrowers/{borrower_id}
-GET  /api/borrowers/{borrower_id}/evidence
+GET  /api/v1/health
+GET  /api/v1/config/options
+POST /api/v1/portfolio/preview
+POST /api/v1/portfolio/create
+GET  /api/v1/segments
+GET  /api/v1/leads
+GET  /api/v1/borrowers/{borrower_id}
+GET  /api/v1/borrowers/{borrower_id}/evidence
 POST /api/offers/recommend
-POST /api/outreach/draft
-POST /api/outreach/approve
-POST /api/genie/message
-GET  /api/audit/events
-POST /api/audit/event
+POST /api/v1/outreach/draft
+POST /api/v1/outreach/approve
+POST /api/v1/genie/message
+GET  /api/v1/audit/events
+POST /api/v1/audit/event
 ```
 
 Implementation rules:
@@ -95,7 +95,7 @@ Implementation rules:
 Validation:
 ```bash
 pytest -q
-curl http://localhost:8000/api/health
+curl http://localhost:8000/api/v1/health
 ```
 
 ## Phase 3 — Data foundation
@@ -110,7 +110,7 @@ Create SQL models:
 6. `segment_population`: segment rollups (one row per segment_code/state + national `_ALL`).
 7. `lead_scores`: deterministic score components.
 8. `borrower_360`: joined borrower story; carries `segment_codes` (ARRAY<STRING>), `recommended_offer_code`, `recommended_offer` inline — next-best-offer is a column, not its own table.
-9. `borrower_dossier`: 1:1 with `borrower_360`; pre-joins evidence_events as ARRAY<STRUCT> for single-row `/api/borrowers/{id}` reads.
+9. `borrower_dossier`: 1:1 with `borrower_360`; pre-joins evidence_events as ARRAY<STRUCT> for single-row `/api/v1/borrowers/{id}` reads.
 10. `evidence_events`: traceable source evidence.
 11. `lockin_cohort`: 2020-2022 sub-3% originations — retention/HELOC/cash-out addressable cohort.
 

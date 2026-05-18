@@ -50,6 +50,7 @@ def test_config_options_uses_short_ttl_cache(monkeypatch) -> None:
     second = config_api.get_config_options()
 
     assert first == second
+    assert first["lender_name"] == config_api.settings.mip_lender_name
     assert calls == {"lenders": 1, "scope": 1}
 
 

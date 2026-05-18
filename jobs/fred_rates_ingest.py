@@ -1,4 +1,4 @@
-"""FRED MORTGAGE30US ingest for mip.silver.market_rates_weekly.
+"""FRED MORTGAGE30US ingest for the configured silver.market_rates_weekly table.
 
 This file is executed as a Databricks Jobs Python task in three modes, each
 a separate task in the `mip_fred_rates_ingest` bundle job:
@@ -9,7 +9,7 @@ a separate task in the `mip_fred_rates_ingest` bundle job:
                     self-sufficient when run locally.
 
     --mode=seed     Loads data/seeds/fred_mortgage30us_seed.csv INTO
-                    mip.silver.market_rates_weekly IF the table is
+                    the configured silver.market_rates_weekly table IF it is
                     empty. This is the "first boot works offline" guarantee
                     -- the committed seed ships with the repo so
                     `databricks bundle deploy -t dev` lands a populated
@@ -38,8 +38,9 @@ Contract references:
 Runtime assumptions:
     - Databricks Runtime with PySpark + `spark` session in scope.
     - For local `--dry-run` execution, only stdlib + urllib.request is used.
-    - `--table` defaults to `mip.silver.market_rates_weekly`; override
-      in a non-default catalog by passing `--table <catalog>.<schema>.<name>`.
+    - `--table` defaults to
+      `${MIP_DEFAULT_CATALOG:-mip}.silver.market_rates_weekly`; override
+      explicitly with `--table <catalog>.<schema>.<name>`.
     - `--seed-path` defaults to the repo-relative
       `data/seeds/fred_mortgage30us_seed.csv`.
 """
@@ -64,12 +65,22 @@ FRED_CSV_URL = (
     "https://fred.stlouisfed.org/graph/fredgraph.csv"
     "?id=MORTGAGE30US&cosd=2021-01-01"
 )
-DEFAULT_TABLE = "mip.silver.market_rates_weekly"
+DEFAULT_CATALOG = "mip"
+DEFAULT_TABLE_SCHEMA = "silver"
+DEFAULT_TABLE_NAME = "market_rates_weekly"
 DEFAULT_SEED_PATH = "data/seeds/fred_mortgage30us_seed.csv"
 DEFAULT_SERIES = "MORTGAGE30US"
 STALENESS_DAYS = 21  # FRED publishes weekly; two missed weeks -> fail loud.
 
 log = logging.getLogger("fred_rates_ingest")
+
+
+def default_table() -> str:
+    """Return the target table, honoring the deploy catalog environment."""
+    catalog = (os.environ.get("MIP_DEFAULT_CATALOG") or DEFAULT_CATALOG).strip()
+    if not catalog:
+        catalog = DEFAULT_CATALOG
+    return f"{catalog}.{DEFAULT_TABLE_SCHEMA}.{DEFAULT_TABLE_NAME}"
 
 
 # ---------------------------------------------------------------------------
@@ -510,9 +521,10 @@ def run_fred(table: str, batch_id: str, dry_run: bool, staleness_days: int) -> i
 
 
 def build_parser() -> argparse.ArgumentParser:
+    target_default = default_table()
     p = argparse.ArgumentParser(
         prog="fred_rates_ingest",
-        description="Ingest FRED MORTGAGE30US into mip.silver.market_rates_weekly.",
+        description="Ingest FRED MORTGAGE30US into silver.market_rates_weekly.",
     )
     p.add_argument(
         "--mode",
@@ -522,8 +534,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--table",
-        default=DEFAULT_TABLE,
-        help=f"Target table (default: {DEFAULT_TABLE}).",
+        default=target_default,
+        help=f"Target table (default: {target_default}; honors MIP_DEFAULT_CATALOG).",
     )
     p.add_argument(
         "--seed-path",

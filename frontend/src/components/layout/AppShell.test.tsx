@@ -9,6 +9,8 @@ import {
 } from './AppShell';
 import { systemStatusViewModel } from './Topbar';
 import { createMipQueryClient } from '../../lib/queryClient';
+import { queryKeys } from '../../lib/queryKeys';
+import type { ConfigOptions } from '../../types';
 
 /**
  * AppShell skip-link + landmark contract (R6-13, R6-16, 2026-04-23).
@@ -27,8 +29,25 @@ import { createMipQueryClient } from '../../lib/queryClient';
  *   4. Rail is `<nav>` labelled "Primary navigation".
  */
 
-function renderShell(): string {
+const ACME_CONFIG_OPTIONS: ConfigOptions = {
+  lender_name: 'Acme Mortgage',
+  geographies: ['All'],
+  geographies_status: 'live',
+  geography_scope: null,
+  occupancy: [],
+  lien_status: [],
+  lender_relationships: [],
+  products: [],
+  equity_thresholds: [],
+  target_lender_refs: ['All', 'Acme Mortgage', 'Competitor A'],
+  target_lender_refs_status: 'live',
+};
+
+function renderShell(configOptions?: ConfigOptions): string {
   const queryClient = createMipQueryClient();
+  if (configOptions) {
+    queryClient.setQueryData(queryKeys.configOptions(), configOptions);
+  }
   return renderToStaticMarkup(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter initialEntries={['/']}>
@@ -87,6 +106,14 @@ describe('AppShell skip-link + landmarks', () => {
     const mainMatch = html.match(/<main[^>]*>([\s\S]*)<\/main>/);
     expect(mainMatch).not.toBeNull();
     expect(mainMatch![1]).toContain('hello');
+  });
+
+  it('renders the configured lender from backend config in the tenant pill', () => {
+    const html = renderShell(ACME_CONFIG_OPTIONS);
+
+    expect(html).toContain('Acme Mortgage');
+    expect(html).toContain('Configured tenant: Acme Mortgage');
+    expect(html).not.toContain('Configured tenant: Summit Mortgage');
   });
 });
 

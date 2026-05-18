@@ -10,7 +10,9 @@ def test_backpressure_controller_rate_limits_by_actor_and_scope() -> None:
     now = {"t": 0.0}
     controller = BackpressureController(now=lambda: now["t"])
     budget = controller.classify("GET", "/api/borrowers/B-102FL7THC6Q3L")
+    versioned_budget = controller.classify("GET", "/api/v1/borrowers/B-102FL7THC6Q3L")
     assert budget is not None
+    assert versioned_budget == budget
     object.__setattr__(budget, "requests_per_minute", 2)
 
     assert controller.check_rate("sam@summit.example", budget) is None

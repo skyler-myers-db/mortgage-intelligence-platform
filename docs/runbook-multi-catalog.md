@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-Module 0 defaults its UC catalog to `mip`. Customers who require a different catalog name (`mip_prod`, `lender_uc`, `cotality_mip`, …) set one variable and deploy. Both the Python API layer and the SQL transformation layer are now multi-catalog safe — there is no manual preprocessing step.
+Module 0 defaults its UC catalog to `mip`. Customers who require a different catalog name (`mip_prod`, `lender_uc`, `cotality_mip`, …) set one variable and deploy. The Python API layer, Spark Python jobs, and SQL transformation layer are now multi-catalog safe — there is no manual preprocessing step.
 
 ```bash
 # In .env.local on the SE's laptop:
@@ -23,7 +23,7 @@ databricks bundle deploy -t prod \
     --var="lakebase_instance=mip-prod-lakebase"
 ```
 
-(`uc_catalog` is the bundle-side variable consumed by `pipelines.mip_feature_pipeline.catalog`; `MIP_DEFAULT_CATALOG` drives the SQL renderer and the Python runtime. Keep them equal.)
+(`uc_catalog` is the bundle-side variable consumed by `pipelines.mip_feature_pipeline.catalog` and the Spark Python job parameters; `MIP_DEFAULT_CATALOG` drives the SQL renderer and the Python runtime. Keep them equal.)
 
 ## Python layer — multi-catalog safe since hole-finder R2 #19
 
@@ -39,12 +39,12 @@ sql = f"SELECT count(*) FROM {qualify('gold', 'borrower_360')}"
 Refactored call-sites:
 
 - `backend/services/repositories/databricks_repo.py` (portfolio / segment / lead / borrower / offer / geo readers)
-- `backend/services/admin_rules.py` (`/api/admin/rules` + sources)
+- `backend/services/admin_rules.py` (`/api/v1/admin/rules` + sources)
 - `backend/services/genie_answers.py` (Genie wire models + prompt suggestions)
 - `backend/services/pii_redaction.py` (`lender_dictionary` lookup)
 - `backend/services/state_footprint.py` (`state_footprint` lookup)
 - `backend/api/offers.py` (offer-evidence citation)
-- `backend/api/genie.py` (trusted-asset list on /start)
+- Genie router trusted-asset list on `/api/v1/genie/start`
 
 `backend/services/scoring.py` keeps `SOURCE_DISPLAY_LABELS` keyed on the default `mip.*` prefix for back-compat, but `source_display_label()` falls back to a `schema.object` lookup so business labels still resolve when the catalog is renamed.
 
@@ -76,10 +76,40 @@ make render-sql                                # honours MIP_DEFAULT_CATALOG
 python tools/render_sql.py --catalog <name>    # ad-hoc one-off
 ```
 
+## Spark Python jobs — multi-catalog safe since 2026-05-17
+
+Two bundle jobs execute Python against Unity Catalog tables instead of SQL files:
+
+- `mip_sync_lifecycle_state` runs `jobs/sync_lifecycle_state.py` with `--catalog=${var.uc_catalog}` and writes `${var.uc_catalog}.gold.borrower_lifecycle_state`.
+- `mip_fred_rates_ingest` runs `jobs/fred_rates_ingest.py` with `--table=${var.uc_catalog}.silver.market_rates_weekly` for both seed and live FRED refresh tasks.
+
+This closes the last non-SQL path that could otherwise land state in `mip.*` during a renamed-catalog customer deploy.
+
+## Genie space and eval — multi-catalog safe since 2026-05-17
+
+`tools/databricks/provision_genie_space.py` renders both tenant and catalog
+placeholders before publishing `genie/mortgage_lead_intelligence_space.yml`.
+For `MIP_DEFAULT_CATALOG=acme_mortgage`, trusted assets, instructions, and
+example SQL are published as `acme_mortgage.gold.*` /
+`acme_mortgage.semantics.*`.
+
+The backend Genie runtime uses the same catalog through `qualify()`:
+
+- `/api/v1/genie/start` returns configured-catalog trusted assets.
+- Trusted-SQL policy checks use `backend/services/genie_trusted_assets.py`.
+- Canonical answer/repair SQL in `databricks_genie_canonical.py` is generated
+  from `settings.mip_default_catalog` at app boot.
+- Source-gap responses cite `{catalog}.gold.source_readiness`.
+- The Ask Genie route renders the backend-provided trusted assets instead of a
+  hardcoded `mip.*` list.
+- `tools/genie_eval.py` rewrites expected citations and canonical SQL from
+  `MIP_DEFAULT_CATALOG`, so customer-catalog evals do not fail on default
+  `mip.*` expectations.
+
 ## Out-of-scope names that still hold
 
 - **Lakebase schema (`mip_app`)** lives in Postgres, not Unity Catalog. It has its own name and is governed by `settings.mip_lakebase_schema`. The renderer's word-boundary + known-schema regex deliberately does NOT match it.
-- **Bundle resource blocks in `databricks.yml`** already reference `${var.uc_catalog}` for pipeline `catalog:` fields; no change needed.
+- **Bundle resource blocks in `databricks.yml`** already reference `${var.uc_catalog}` for pipeline `catalog:` fields and Spark Python job task parameters; no change needed.
 - **Admin rules seed (`ref.offer_rules_config`)** — the Python reader qualifies through `qualify('ref', 'offer_rules_config')` and the seed SQL in `sql/ref/` is now covered by the renderer.
 
 ## Validation
@@ -105,11 +135,16 @@ grep 'CREATE OR REPLACE TABLE' sql/_rendered/transformations/gold_borrower_360.s
 # Bundle validate reads from the rendered tree.
 databricks bundle validate -t ci   # Validation OK!
 
+# Confirm Spark Python jobs receive the same catalog variable.
+grep -n -- '--catalog=${var.uc_catalog}' databricks.yml
+grep -n -- '--table=${var.uc_catalog}.silver.market_rates_weekly' databricks.yml
+
 # Confirm admin /settings reports the right catalog at runtime:
-curl -s http://localhost:8000/api/admin/settings | jq .catalog
+curl -s http://localhost:8000/api/v1/admin/settings | jq .catalog
 ```
 
 ## Changelog
 
 - 2026-04-23 — hole-finder round-2 #19: introduced `qualify()` helper; refactored the Python API layer; documented the SQL-layer gap.
 - 2026-04-23 — R6-01 rollout: shipped `tools/render_sql.py`; `databricks.yml` and `Makefile` now consume `sql/_rendered/**`; retired the manual `sed` workaround.
+- 2026-05-17 — multi-tenant audit remediation: wired Spark Python lifecycle and FRED jobs to `${var.uc_catalog}` so renamed-catalog deploys stay isolated outside SQL-task paths too.

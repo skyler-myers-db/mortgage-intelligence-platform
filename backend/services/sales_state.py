@@ -1,12 +1,16 @@
+"""Lakebase-backed sales lifecycle state helpers with short-lived caches."""
+
 from __future__ import annotations
 
 from collections import Counter
+from copy import deepcopy
 from datetime import datetime
 from typing import Annotated, Any
 from uuid import uuid4
 
 from fastapi import Depends
 
+from backend.config.settings import settings
 from backend.schemas.lead import LeadSummary
 from backend.schemas.sales import (
     AssignmentStrategy,
@@ -18,6 +22,9 @@ from backend.schemas.sales import (
 from backend.services.audit_lakebase_store import _build_insert_params
 from backend.services.lakebase import LakebaseClient, LakebaseError, get_lakebase_client
 from backend.services.pii_redaction import scrub_free_text
+from backend.services.resilience import TTLCache
+
+_SALES_STATE_CACHE = TTLCache(max_entries=1024)
 
 _SALES_AUDIT_INSERT_SQL = """
 INSERT INTO mip_app.action_audit (
@@ -42,6 +49,38 @@ LakebaseDep = Annotated[LakebaseClient, Depends(get_lakebase_client)]
 
 def get_sales_state_store(client: LakebaseDep) -> SalesStateStore:
     return SalesStateStore(client)
+
+
+def clear_sales_state_cache() -> None:
+    _SALES_STATE_CACHE.clear()
+
+
+def _sales_state_ttl_s() -> float:
+    return settings.mip_sales_state_cache_ttl_s
+
+
+def _cache_get(key: str) -> Any | None:
+    if _sales_state_ttl_s() <= 0:
+        return None
+    return _SALES_STATE_CACHE.get(key)
+
+
+def _cache_set(key: str, value: Any) -> None:
+    ttl_s = _sales_state_ttl_s()
+    if ttl_s > 0:
+        _SALES_STATE_CACHE.set(key, deepcopy(value), ttl_s)
+
+
+def _copy_assignment(value: LeadAssignment | None) -> LeadAssignment | None:
+    return value.model_copy(deep=True) if value is not None else None
+
+
+def _copy_disposition(value: CallDisposition | None) -> CallDisposition | None:
+    return value.model_copy(deep=True) if value is not None else None
+
+
+def _copy_member(value: SalesTeamMember) -> SalesTeamMember:
+    return value.model_copy(deep=True)
 
 
 def _iso_or_none(value: Any) -> str | None:
@@ -96,6 +135,10 @@ class SalesStateStore:
         self._client = client or get_sales_lakebase()
 
     def list_team(self, *, actor: str | None = None) -> list[SalesTeamMember]:
+        cache_key = f"sales_state:list_team:{actor or '_all'}"
+        cached = _cache_get(cache_key)
+        if isinstance(cached, list) and all(isinstance(member, SalesTeamMember) for member in cached):
+            return [member.model_copy(deep=True) for member in cached]
         actor_member = self.require_active_team_member(actor) if actor else None
         rows = self._client.fetchall(
             """
@@ -108,16 +151,26 @@ class SalesStateStore:
         )
         members = [SalesTeamMember(**row) for row in rows]
         if actor_member is None or actor_member.role == "admin":
-            return members
-        if actor_member.role == "sales_manager":
-            return [
+            out = members
+        elif actor_member.role == "sales_manager":
+            out = [
                 member
                 for member in members
                 if member.email == actor_member.email or member.manager_email == actor_member.email
             ]
-        return [member for member in members if member.email == actor_member.email]
+        else:
+            out = [member for member in members if member.email == actor_member.email]
+        _cache_set(cache_key, out)
+        return [member.model_copy(deep=True) for member in out]
 
     def require_active_team_member(self, email: str) -> SalesTeamMember:
+        normalized_email = email.lower()
+        cache_key = f"sales_state:team_member:{normalized_email}"
+        cached = _cache_get(cache_key)
+        if cached == "__missing__":
+            raise KeyError(email)
+        if isinstance(cached, SalesTeamMember):
+            return _copy_member(cached)
         row = self._client.fetchone(
             """
             SELECT email, display_label, role, region, manager_email, capacity_per_day, active
@@ -125,11 +178,14 @@ class SalesStateStore:
             WHERE email = %(email)s AND active = true
             LIMIT 1
             """,
-            {"email": email.lower()},
+            {"email": normalized_email},
         )
         if row is None:
+            _cache_set(cache_key, "__missing__")
             raise KeyError(email)
-        return SalesTeamMember(**row)
+        member = SalesTeamMember(**row)
+        _cache_set(cache_key, member)
+        return _copy_member(member)
 
     def require_manager_actor(self, actor: str) -> SalesTeamMember:
         member = self.require_active_team_member(actor)
@@ -174,13 +230,24 @@ class SalesStateStore:
 
     def visible_lo_emails(self, *, actor: str) -> set[str] | None:
         """Return LO emails visible to actor; None means admin/all."""
+        cache_key = f"sales_state:visible_lo_emails:{actor.lower()}"
+        cached = _cache_get(cache_key)
+        if cached == "__all__":
+            return None
+        if isinstance(cached, set):
+            return set(cached)
         actor_member = self.require_active_team_member(actor)
         if actor_member.role == "admin":
+            _cache_set(cache_key, "__all__")
             return None
         if actor_member.role == "loan_officer":
-            return {actor_member.email}
+            out = {actor_member.email}
+            _cache_set(cache_key, out)
+            return set(out)
         members = self.list_team(actor=actor)
-        return {member.email for member in members if member.role == "loan_officer"}
+        out = {member.email for member in members if member.role == "loan_officer"}
+        _cache_set(cache_key, out)
+        return set(out)
 
     def _insert_audit_event(
         self,
@@ -213,7 +280,13 @@ class SalesStateStore:
         return str(audit_id)
 
     def active_assignment_for(self, borrower_id: str) -> LeadAssignment | None:
-        return _assignment_from_row(
+        cache_key = f"sales_state:active_assignment:{borrower_id}"
+        cached = _cache_get(cache_key)
+        if cached == "__none__":
+            return None
+        if isinstance(cached, LeadAssignment):
+            return cached.model_copy(deep=True)
+        assignment = _assignment_from_row(
             self._client.fetchone(
                 """
                 SELECT a.assignment_id, a.borrower_id, a.assigned_to_email,
@@ -229,9 +302,17 @@ class SalesStateStore:
                 {"borrower_id": borrower_id},
             )
         )
+        _cache_set(cache_key, assignment if assignment is not None else "__none__")
+        return _copy_assignment(assignment)
 
     def latest_disposition_for(self, borrower_id: str) -> CallDisposition | None:
-        return _disposition_from_row(
+        cache_key = f"sales_state:latest_disposition:{borrower_id}"
+        cached = _cache_get(cache_key)
+        if cached == "__none__":
+            return None
+        if isinstance(cached, CallDisposition):
+            return cached.model_copy(deep=True)
+        disposition = _disposition_from_row(
             self._client.fetchone(
                 """
                 SELECT disposition_id, borrower_id, lo_email, outcome, attempt_number,
@@ -244,10 +325,17 @@ class SalesStateStore:
                 {"borrower_id": borrower_id},
             )
         )
+        _cache_set(cache_key, disposition if disposition is not None else "__none__")
+        return _copy_disposition(disposition)
 
     def assignments_for(self, borrower_ids: list[str]) -> dict[str, LeadAssignment]:
         if not borrower_ids:
             return {}
+        normalized = sorted({str(borrower_id) for borrower_id in borrower_ids})
+        cache_key = "sales_state:assignments:" + ",".join(normalized)
+        cached = _cache_get(cache_key)
+        if isinstance(cached, dict) and all(isinstance(v, LeadAssignment) for v in cached.values()):
+            return {str(k): v.model_copy(deep=True) for k, v in cached.items()}
         rows = self._client.fetchall(
             """
             SELECT a.assignment_id, a.borrower_id, a.assigned_to_email,
@@ -259,14 +347,16 @@ class SalesStateStore:
               AND a.released_at IS NULL
             ORDER BY a.borrower_id, a.assigned_at DESC
             """,
-            {"borrower_ids": borrower_ids},
-            limit=max(len(borrower_ids), 1),
+            {"borrower_ids": normalized},
+            limit=max(len(normalized), 1),
         )
         out: dict[str, LeadAssignment] = {}
         for row in rows:
             borrower_id = str(row["borrower_id"])
             out.setdefault(borrower_id, _assignment_from_row(row))  # type: ignore[arg-type]
-        return {k: v for k, v in out.items() if v is not None}
+        result = {k: v for k, v in out.items() if v is not None}
+        _cache_set(cache_key, result)
+        return {k: v.model_copy(deep=True) for k, v in result.items()}
 
     def assignments_for_request(self, request_id: str | None) -> list[LeadAssignment]:
         if not request_id:
@@ -294,6 +384,11 @@ class SalesStateStore:
     def latest_dispositions_for(self, borrower_ids: list[str]) -> dict[str, CallDisposition]:
         if not borrower_ids:
             return {}
+        normalized = sorted({str(borrower_id) for borrower_id in borrower_ids})
+        cache_key = "sales_state:latest_dispositions:" + ",".join(normalized)
+        cached = _cache_get(cache_key)
+        if isinstance(cached, dict) and all(isinstance(v, CallDisposition) for v in cached.values()):
+            return {str(k): v.model_copy(deep=True) for k, v in cached.items()}
         rows = self._client.fetchall(
             """
             SELECT DISTINCT ON (borrower_id)
@@ -303,14 +398,17 @@ class SalesStateStore:
             WHERE borrower_id = ANY(%(borrower_ids)s)
             ORDER BY borrower_id, occurred_at DESC, created_at DESC
             """,
-            {"borrower_ids": borrower_ids},
-            limit=max(len(borrower_ids), 1),
+            {"borrower_ids": normalized},
+            limit=max(len(normalized), 1),
         )
-        return {
+        result = {
             str(row["borrower_id"]): _disposition_from_row(row)  # type: ignore[dict-item]
             for row in rows
             if row.get("borrower_id")
         }
+        result = {k: v for k, v in result.items() if v is not None}
+        _cache_set(cache_key, result)
+        return {k: v.model_copy(deep=True) for k, v in result.items()}
 
     def borrower_ids_for_assignee(self, assigned_to_email: str | None) -> list[str] | None:
         if assigned_to_email is None:
@@ -413,6 +511,7 @@ class SalesStateStore:
                 subject_clip=subject_clip,
                 request_id=request_id,
             )
+        clear_sales_state_cache()
         return assignment, audit_event_id
 
     def distribute(
@@ -504,6 +603,7 @@ class SalesStateStore:
                 event_type="LEAD_DISTRIBUTE",
                 request_id=request_id,
             )
+        clear_sales_state_cache()
         return assignments, audit_event_id
 
     def log_disposition(
@@ -591,9 +691,14 @@ class SalesStateStore:
                 """,
                 {"audit_event_id": audit_event_id, "disposition_id": disposition.disposition_id},
             )
+        clear_sales_state_cache()
         return disposition.model_copy(update={"audit_event_id": audit_event_id}), audit_event_id
 
     def lifecycle_for(self, borrower_id: str) -> dict[str, Any]:
+        cache_key = f"sales_state:lifecycle:{borrower_id}"
+        cached = _cache_get(cache_key)
+        if isinstance(cached, dict):
+            return deepcopy(cached)
         row = self._client.fetchone(
             """
             WITH latest_approval AS (
@@ -630,7 +735,7 @@ class SalesStateStore:
             """,
             {"borrower_id": borrower_id},
         ) or {}
-        return {
+        result = {
             "borrower_id": borrower_id,
             "approval_status": row.get("approval_status") or "pending",
             "outreach_status": row.get("outreach_status") or "none",
@@ -640,6 +745,8 @@ class SalesStateStore:
             "assignment": self.active_assignment_for(borrower_id),
             "latest_disposition": self.latest_disposition_for(borrower_id),
         }
+        _cache_set(cache_key, result)
+        return deepcopy(result)
 
     def aging(self, *, older_than_days: int, limit: int = 50) -> list[dict[str, Any]]:
         rows = self._client.fetchall(
@@ -779,6 +886,15 @@ def hydrate_leads_with_sales_state(
             visible_lo_emails = store.visible_lo_emails(actor=actor)
         except KeyError:
             visible_lo_emails = set()
+    if visible_lo_emails == set():
+        hydrated: list[LeadSummary] = []
+        for lead in leads:
+            update: dict[str, Any] = {}
+            if lead.approved_at is not None:
+                age = datetime.now(tz=lead.approved_at.tzinfo) - lead.approved_at
+                update["aging_days"] = max(0, age.days)
+            hydrated.append(lead.model_copy(update=update))
+        return hydrated
     borrower_ids = [lead.borrower_id for lead in leads]
     assignments = store.assignments_for(borrower_ids)
     dispositions = store.latest_dispositions_for(borrower_ids)

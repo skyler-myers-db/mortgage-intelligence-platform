@@ -2,11 +2,13 @@ import { describe, expect, it } from 'vitest';
 import {
   BASE_DEFAULT_FILTERS,
   DEFAULT_CAMPAIGN_SETUP,
+  buildDefaultCampaignSetup,
   buildCampaignConfig,
   buildLeadQueueUrlFromFilters,
   buildPreviewCriteria,
   buildUrlFromFilters,
   defaultGeographyForOptions,
+  isPublicLenderRef,
   parseFiltersFromUrl,
   parseStateCodesFromUrl,
 } from './portfolio-builder.logic';
@@ -32,6 +34,25 @@ describe('portfolio builder URL helpers', () => {
       min_equity_pct_label: '≥ 25%',
       target_lender_ref: 'All',
     });
+  });
+
+  it('accepts configured tenant lender refs only when the backend advertises them', () => {
+    const searchParams = new URLSearchParams({
+      target_lender_ref: 'Acme Mortgage',
+    });
+
+    expect(parseFiltersFromUrl(searchParams, BASE_DEFAULT_FILTERS)).toMatchObject({
+      target_lender_ref: 'All',
+    });
+    expect(parseFiltersFromUrl(
+      searchParams,
+      BASE_DEFAULT_FILTERS,
+      ['All', 'Acme Mortgage'],
+    )).toMatchObject({
+      target_lender_ref: 'Acme Mortgage',
+    });
+    expect(isPublicLenderRef('Acme Mortgage', ['All', 'Acme Mortgage'])).toBe(true);
+    expect(isPublicLenderRef('raw_lender_123', ['All', 'Acme Mortgage'])).toBe(false);
   });
 
   it('keeps default URL compact and carries criteria states only when selected', () => {
@@ -69,6 +90,14 @@ describe('portfolio builder URL helpers', () => {
 });
 
 describe('portfolio campaign config', () => {
+  it('derives default campaign copy from the configured lender label', () => {
+    const setup = buildDefaultCampaignSetup('Acme Mortgage');
+
+    expect(setup.subjectA).toContain('Acme Mortgage');
+    expect(setup.bodyA).toContain('Acme Mortgage');
+    expect(setup.subjectA).not.toContain('Summit Mortgage');
+  });
+
   it('preserves suppression, holdout, cascade, and ROI defaults', () => {
     const config = buildCampaignConfig(DEFAULT_CAMPAIGN_SETUP);
 

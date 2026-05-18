@@ -503,7 +503,7 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
         except ValueError as exc:
             raise AuditMetadataValueViolation(
                 field,
-                "must be Summit Mortgage, Competitor A-Z, Competitor Other, or All",
+                "must be the configured tenant lender, Competitor A-Z, Competitor Other, or All",
             ) from exc
     for _, portfolio_criteria in _metadata_values_for(metadata, {"portfolio_criteria"}):
         if portfolio_criteria is None:

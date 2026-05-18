@@ -26,18 +26,24 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException
 
 from backend.config.settings import settings
+from backend.schemas.admin import (
+    AdminRulesResponse,
+    AdminRulesUpdateResponse,
+    AdminSettingsResponse,
+    AdminSourceResponse,
+)
 from backend.services.admin_rules import AdminRulesService, get_admin_rules_service
 from backend.services.databricks_sql import DatabricksSqlError
 from backend.services.error_sanitizer import safe_dependency_detail
 from backend.services.rbac import AdminDep
 from backend.services.resilience import DependencyDownError
 
-router = APIRouter(prefix="/api/admin", tags=["admin"])
+router = APIRouter(prefix="/admin", tags=["admin"])
 
 ServiceDep = Annotated[AdminRulesService, Depends(get_admin_rules_service)]
 
 
-@router.get("/rules")
+@router.get("/rules", response_model=AdminRulesResponse)
 def get_rules(service: ServiceDep, _actor: AdminDep) -> dict[str, Any]:
     """Return the active offer-rule threshold vocabulary.
 
@@ -63,7 +69,7 @@ def get_rules(service: ServiceDep, _actor: AdminDep) -> dict[str, Any]:
     return payload
 
 
-@router.put("/rules")
+@router.put("/rules", response_model=AdminRulesUpdateResponse)
 def put_rules(
     _actor: AdminDep,
 ) -> dict[str, object]:
@@ -84,7 +90,7 @@ def put_rules(
     )
 
 
-@router.get("/sources")
+@router.get("/sources", response_model=list[AdminSourceResponse])
 def get_sources(service: ServiceDep, _actor: AdminDep) -> list[dict[str, Any]]:
     """Return per-source readiness rows.
 
@@ -121,7 +127,7 @@ def get_sources(service: ServiceDep, _actor: AdminDep) -> list[dict[str, Any]]:
     return [r.to_dict() for r in rows]
 
 
-@router.get("/settings")
+@router.get("/settings", response_model=AdminSettingsResponse)
 def get_settings(_actor: AdminDep) -> dict[str, object]:
     return {
         "app_env": settings.app_env,

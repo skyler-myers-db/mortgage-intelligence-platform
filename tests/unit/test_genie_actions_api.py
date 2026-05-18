@@ -6,7 +6,7 @@ import json
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
-from pydantic import ValidationError
+from pydantic import SecretStr, ValidationError
 
 from backend.api.genie import (
     _cross_lender_prompt_match,
@@ -16,8 +16,10 @@ from backend.api.genie import (
     _scope_bypass_prompt_match,
     _source_gap_prompt_match,
 )
+from backend.config.settings import settings
 from backend.main import app
 from backend.services.audit_store import get_audit_store
+from backend.services.databricks_sql_helpers import qualify
 from backend.services.genie_actions import (
     _CAMPAIGN_INSERT_SQL,
     _cohort_route_filters,
@@ -66,6 +68,11 @@ def teardown_function(_func: object) -> None:
     _reset_state_footprint_resolver_for_tests(None)
 
 
+@pytest.fixture(autouse=True)
+def _default_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "mip_default_catalog", "mip")
+
+
 def _confirmed_payload_for_action(action_type: str) -> dict[str, object]:
     message = client.post(
         "/api/genie/message",
@@ -104,8 +111,8 @@ def test_genie_start_lists_current_trusted_assets_without_fake_session() -> None
     assert res.status_code == 200
     body = res.json()
     assert body["conversation_id"] is None
-    assert "mip.gold.lead_population" in body["trusted_assets"]
-    assert "mip.gold.segment_population" in body["trusted_assets"]
+    assert qualify("gold", "lead_population") in body["trusted_assets"]
+    assert qualify("gold", "segment_population") in body["trusted_assets"]
     assert "mip.gold.lead_segment_membership" not in body["trusted_assets"]
     assert body["sample_questions"]
     assert all(isinstance(q, str) and q.strip() for q in body["sample_questions"])
@@ -459,7 +466,7 @@ def test_genie_message_guardrails_fire_before_repository(
     else:
         events = audit.list(action="genie.source_gap")
         assert len(events) == 1
-        assert events[0].payload_json["source_assets"] == ["mip.gold.source_readiness"]
+        assert events[0].payload_json["source_assets"] == [qualify("gold", "source_readiness")]
 
 
 def test_fico_source_gap_copy_names_credit_data_not_permits() -> None:
@@ -835,6 +842,44 @@ def test_genie_actions_reject_invalid_confirmation_token() -> None:
 
     assert res.status_code == 400
     assert res.json()["detail"] == "Genie action confirmation token is invalid"
+
+
+def test_genie_action_token_carries_rotation_key_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "mip_genie_action_secret", None)
+    monkeypatch.setattr(settings, "mip_genie_action_secret_current", SecretStr("current-secret"))
+    monkeypatch.setattr(settings, "mip_genie_action_secret_previous", None)
+    monkeypatch.setattr(settings, "mip_genie_action_secret_kid", "v17")
+
+    payload = _confirmed_payload()
+    claims = _decode_action_token(str(payload["confirmation_token"]))
+
+    assert claims["kid"] == "v17"
+    assert claims["v"] == 1
+
+
+def test_genie_action_token_accepts_previous_secret_during_rotation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "mip_genie_action_secret", None)
+    monkeypatch.setattr(settings, "mip_genie_action_secret_current", SecretStr("old-secret"))
+    monkeypatch.setattr(settings, "mip_genie_action_secret_previous", None)
+    monkeypatch.setattr(settings, "mip_genie_action_secret_kid", "v1")
+
+    payload = _confirmed_payload()
+
+    monkeypatch.setattr(settings, "mip_genie_action_secret_current", SecretStr("new-secret"))
+    monkeypatch.setattr(settings, "mip_genie_action_secret_previous", SecretStr("old-secret"))
+    monkeypatch.setattr(settings, "mip_genie_action_secret_kid", "v2")
+    monkeypatch.setattr(settings, "mip_genie_action_secret_previous_kid", "v1")
+
+    res = client.post(
+        "/api/genie/actions",
+        json=payload,
+        headers=ACTOR_HEADERS,
+    )
+
+    assert res.status_code == 200
+    assert res.json()["ok"] is True
 
 
 def test_genie_actions_reject_expired_confirmation_token() -> None:

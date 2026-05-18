@@ -14,6 +14,22 @@ workspace grant inventories stay in the internal implementation packet.
 **Budget.** 45 minutes of hands-on + ~15 minutes of bundle-run wall time
 (silver refresh + gold CTAS against an idle 2X-Small warehouse).
 
+**Tenancy posture.** Module 0 is a per-deployment product, not a shared
+row-level multi-tenant SaaS. One customer workspace maps to one UC catalog,
+one Lakebase state database, one Genie space, one app URL, and one configured
+lender identity. Isolation is enforced at the Databricks deployment boundary;
+`mip.ref.lender_dictionary` is the tenant-lender override point for gold
+transformations, and `MIP_LENDER_NAME` / optional `MIP_TENANT_ID` drive the
+app label and governed disclosure namespace. `MIP_DEFAULT_CATALOG` drives the
+SQL renderer, backend `qualify()` calls, Spark Python jobs, and Genie
+provisioning, so keep it equal to the bundle `uc_catalog` variable. A future
+shared-SaaS deployment would need explicit row-level tenant predicates and RLS;
+that is out of scope for Module 0.
+
+**API paths.** Operator commands use canonical `/api/v1/*` paths. Deprecated
+`/api/*` aliases still work during the Module 0 transition window, but new
+customer procedures should not depend on them.
+
 ---
 
 ## 0. Prerequisites (5 minutes — do before the customer call)
@@ -80,11 +96,17 @@ GENIE_SPACE_ID=
 # for this catalog before the bundle runs, so CTAS lands in the right place
 # on first deploy. See docs/runbook-multi-catalog.md for details.
 # MIP_DEFAULT_CATALOG=summit_mortgage
+# Customer-facing display name shown in the app and used by governed draft copy.
+MIP_LENDER_NAME=<customer display name, e.g. Acme Mortgage>
+# Optional: override the Lakebase disclosure namespace. If unset, the app
+# derives it from MIP_LENDER_NAME; Summit dev keeps the seeded "summit"
+# namespace for backwards compatibility.
+# MIP_TENANT_ID=acme_mortgage
 EOF
 ```
 
 Env-var names are authoritative in
-[`backend/config/settings.py`](../backend/config/settings.py) lines 84–94.
+[`backend/config/settings.py`](../backend/config/settings.py).
 The `BUNDLE_VAR_*` mapping (`DATABRICKS_WAREHOUSE_ID` →
 `BUNDLE_VAR_sql_warehouse_id`, `GENIE_SPACE_ID` →
 `BUNDLE_VAR_genie_space_id`) happens inside
@@ -175,7 +197,7 @@ export MIP_BEARER_TOKEN=$(databricks auth token --profile DEFAULT -o json | jq -
 
 # 2. Authenticated health probe (cold-start: retry 3x, 10 s apart)
 for i in 1 2 3; do
-  curl -sSf -H "Authorization: Bearer $MIP_BEARER_TOKEN" "$MIP_APP_URL/api/health" \
+  curl -sSf -H "Authorization: Bearer $MIP_BEARER_TOKEN" "$MIP_APP_URL/api/v1/health" \
     | jq -e '{
       status,
       warehouse: .dependencies.warehouse,
@@ -209,7 +231,7 @@ evidence chip to prove the drawer opens and cites `mip.gold.*` rows.
 ### 6.1 Warehouse warm-start (~30 s)
 
 The 2X-Small serverless warehouse auto-stops after 15 min idle. The
-first query after deploy is a cold start — 30–60 s. `/api/health` may
+first query after deploy is a cold start — 30–60 s. `/api/v1/health` may
 flap `warehouse: "down"` → `"up"` during this window; the circuit
 breaker opens and closes once. **Do not redeploy.** The retry loop in §5
 handles it.
@@ -217,12 +239,12 @@ handles it.
 ### 6.2 Lakebase cold start
 
 Lakebase Postgres also has a cold start (~10 s). First
-`POST /api/outreach/approve` after a cold window may return 503 once;
+`POST /api/v1/outreach/approve` after a cold window may return 503 once;
 the frontend retries automatically.
 
 ### 6.3 Genie first-ask
 
-First `/api/genie/message` call after Genie space creation takes 10–30 s.
+First `/api/v1/genie/message` call after Genie space creation takes 10–30 s.
 The app returns `source: "degraded"` with no fabricated metrics during that
 window. To prime the space before a demo, see [`docs/runbook.md`](runbook.md)
 §1.3.
@@ -253,7 +275,7 @@ metastore-admin identity. Re-run the internal workspace-grants packet as a
 metastore admin and re-run §5 verification here. No redeploy needed — grants
 take effect on the next SQL statement.
 
-### 7.2 `/api/health` reports `warehouse: "down"` for > 60 s
+### 7.2 `/api/v1/health` reports `warehouse: "down"` for > 60 s
 
 Check `DATABRICKS_WAREHOUSE_ID` in `.env.local` matches the actual
 warehouse id:
@@ -268,7 +290,7 @@ If the values differ, fix `.env.local`, re-run `./scripts/deploy.sh`
 warehouse id is the single most common cause of a persistent red
 health probe.
 
-### 7.3 `/api/audit/events` returns 503; POST `/api/outreach/approve` fails
+### 7.3 `/api/v1/audit/events` returns 503; POST `/api/v1/outreach/approve` fails
 
 Lakebase creds are missing or the Lakebase role has not been
 provisioned. Run:
@@ -277,12 +299,12 @@ provisioned. Run:
 databricks bundle run mip_lakebase_migrate -t dev
 ```
 
-Then re-probe `/api/health` — `lakebase` should flip to `"up"` within
+Then re-probe `/api/v1/health` — `lakebase` should flip to `"up"` within
 30 s. If it stays down, check that the Lakebase instance is RUNNING
 (`databricks database list-instances`) and bounce if STOPPED
 (customer-side billing can auto-stop instances).
 
-### 7.4 `/api/genie/message` always returns `source: "degraded"`
+### 7.4 `/api/v1/genie/message` always returns `source: "degraded"`
 
 Three possible causes, in order of likelihood:
 
