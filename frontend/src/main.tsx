@@ -9,12 +9,6 @@ import "./design-system/components.css";
 import "./design-system/print.css";
 
 const queryClient = createMipQueryClient();
-void import("./lib/rum")
-  .then(({ installRum }) => installRum())
-  .catch(() => {
-    // RUM is best-effort. A telemetry chunk load failure must never
-    // block the app shell or change user-visible behavior.
-  });
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { resetActorScopedAppState } from './AppContext';
+import { resetActorScopedAppState, shouldInstallRum } from './AppContext';
 
 type ResetSetters = Parameters<typeof resetActorScopedAppState>[0];
 
@@ -36,5 +36,13 @@ describe('resetActorScopedAppState', () => {
     const reloadArg = vi.mocked(setWorkspaceReloadToken).mock.calls[0]?.[0];
     expect(typeof reloadArg).toBe('function');
     expect((reloadArg as (n: number) => number)(41)).toBe(42);
+  });
+});
+
+describe('shouldInstallRum', () => {
+  it('treats browser RUM as explicit opt-in configuration', () => {
+    expect(shouldInstallRum(undefined)).toBe(false);
+    expect(shouldInstallRum({ rum_enabled: false })).toBe(false);
+    expect(shouldInstallRum({ rum_enabled: true })).toBe(true);
   });
 });

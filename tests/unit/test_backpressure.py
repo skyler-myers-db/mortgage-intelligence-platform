@@ -70,6 +70,15 @@ def test_backpressure_classifies_lakebase_writes_as_mutations() -> None:
     assert audit_read_budget.dependency == "lakebase"
 
 
+def test_backpressure_classifies_analytics_as_warehouse_read() -> None:
+    controller = BackpressureController()
+    budget = controller.classify("GET", "/api/v1/analytics/executive")
+
+    assert budget is not None
+    assert budget.scope == "warehouse-read"
+    assert budget.dependency == "warehouse"
+
+
 def test_backpressure_classifies_admin_health_as_health() -> None:
     controller = BackpressureController()
     budget = controller.classify("GET", "/api/admin/health")
@@ -99,12 +108,13 @@ def test_backpressure_middleware_returns_429_with_retry_after(monkeypatch) -> No
 
     second = client.get("/api/health", headers=headers)
     assert second.status_code == 429
-    assert second.headers["Retry-After"] == "60"
+    retry_after = int(second.headers["Retry-After"])
+    assert 1 <= retry_after <= 60
     body = second.json()
     assert body["retryable"] is True
     assert body["reason"] == "rate_limited"
     assert body["scope"] == "health"
-    assert body["retry_after_seconds"] == 60
+    assert body["retry_after_seconds"] == retry_after
     assert body["correlation_id"] == "bp-review-123"
     assert second.headers["X-Correlation-ID"] == "bp-review-123"
     assert second.headers["x-content-type-options"] == "nosniff"

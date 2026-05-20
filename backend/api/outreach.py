@@ -31,6 +31,7 @@ from backend.schemas.offer import (
     OutreachRejectRequest,
     OutreachRejectResponse,
 )
+from backend.services.audit_decision_inputs import decision_inputs_from_borrower
 from backend.services.audit_lakebase_store import write_audit_event_in_transaction
 from backend.services.audit_store import (
     AuditMetadataViolation,
@@ -662,6 +663,7 @@ def approve_outreach(
         "channel": payload.channel,
         "campaign_id": payload.campaign_id,
         "variant_name": payload.variant_name,
+        "decision_inputs": decision_inputs_from_borrower(borrower),
         **_marketing_audit_payload(borrower),
         **disclosure_audit_payload(disclosure),
     }

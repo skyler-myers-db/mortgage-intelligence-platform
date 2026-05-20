@@ -42,6 +42,16 @@ MAX_LEAD_LIMIT: int = 5000
 _ALLOWED_SEGMENT_CODES: frozenset[str] = frozenset(
     {"itm", "listed", "permit", "investor", "equity", "retention"}
 )
+_ALLOWED_FUNNEL_STAGES: frozenset[str] = frozenset(
+    {
+        "addressable",
+        "in_the_money",
+        "high_opportunity",
+        "offer_recommended",
+        "approved",
+        "actioned",
+    }
+)
 
 _COHORT_FILTER_SELECT_SQL = """
 SELECT route_filters
@@ -517,6 +527,25 @@ def list_leads(
             description="Optional Lakebase persisted cohort id produced by a governed Genie action.",
         ),
     ] = None,
+    funnel_stage: Annotated[
+        Literal[
+            "addressable",
+            "in_the_money",
+            "high_opportunity",
+            "offer_recommended",
+            "approved",
+            "actioned",
+        ] | None,
+        Query(
+            alias="funnel_stage",
+            description=(
+                "Exact native-analytics Lead Funnel drilldown. When present, "
+                "the repository applies the same gold.borrower_360 predicate "
+                "used by the funnel snapshot so X-Total-Matching equals the "
+                "clicked stage count."
+            ),
+        ),
+    ] = None,
     limit: Annotated[
         int,
         Query(
@@ -541,8 +570,30 @@ def list_leads(
         segment = segment.strip().lower()
         if segment not in _ALLOWED_SEGMENT_CODES:
             raise HTTPException(status_code=422, detail="segment contains an unknown segment")
+    analytics_drilldown = any(
+        (
+            funnel_stage,
+            state,
+            zip_code,
+            county,
+            states,
+            zips,
+            counties,
+            borrower_ids,
+            segment,
+            segment_codes,
+        )
+    )
+    marketing_param_present = "marketing_eligibility" in request.query_params
+    effective_marketing_eligibility = marketing_eligibility
+    if analytics_drilldown and not marketing_param_present:
+        effective_marketing_eligibility = None
+
+    if funnel_stage and funnel_stage not in _ALLOWED_FUNNEL_STAGES:
+        raise HTTPException(status_code=422, detail="funnel_stage contains an unknown stage")
+
     if _requires_marketing_override_admin(
-        marketing_eligibility=marketing_eligibility,
+        marketing_eligibility=effective_marketing_eligibility,
         consent_status=consent_status,
     ):
         require_admin(request)
@@ -684,7 +735,7 @@ def list_leads(
                 min_equity_pct=min_equity_pct,
                 owner_link=owner_link,
                 purchase_intent=purchase_intent,
-                marketing_eligibility=marketing_eligibility,
+                marketing_eligibility=effective_marketing_eligibility,
                 consent_status=consent_status,
                 recency=recency,
             )
@@ -717,6 +768,7 @@ def list_leads(
         segment_mode=segment_mode,
         target_lender_ref=target_lender_ref,
         cohort_id=cohort_id,
+        funnel_stage=funnel_stage,
         approval_status=None if approval_status == "any" else approval_status,
         outreach_status=None if outreach_status == "any" else outreach_status,
         aged_days=aged_days,
@@ -741,6 +793,7 @@ def list_leads(
             segment_mode=segment_mode,
             target_lender_ref=target_lender_ref,
             cohort_id=cohort_id,
+            funnel_stage=funnel_stage,
             approval_status=None if approval_status == "any" else approval_status,
             outreach_status=None if outreach_status == "any" else outreach_status,
             aged_days=aged_days,
@@ -788,6 +841,8 @@ def list_leads(
         audit_payload["target_lender_ref"] = target_lender_ref
     if cohort_id:
         audit_payload["cohort_id"] = cohort_id
+    if funnel_stage:
+        audit_payload["funnel_stage"] = funnel_stage
     if approval_status != "any":
         audit_payload["approval_status"] = approval_status
     if outreach_status != "any":

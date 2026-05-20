@@ -109,6 +109,7 @@ class BackpressureController:
         if self._ASSIGNMENT_RE.match(path):
             return RouteBudget("mutation", settings.mip_rate_limit_mutation_per_minute, "lakebase")
         if path.startswith((
+            "/api/analytics",
             "/api/leads",
             "/api/segments",
             "/api/portfolio",

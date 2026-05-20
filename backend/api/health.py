@@ -38,7 +38,7 @@ from typing import Any
 
 from fastapi import APIRouter, Request
 
-from backend.config.settings import settings
+from backend.config.settings import looks_like_databricks_app_deploy, settings
 from backend.schemas.health import AdminHealthResponse, HealthResponse
 from backend.services.audit_store import get_fallback_identity_count
 from backend.services.health_probes import breaker_states, probe_snapshot
@@ -85,6 +85,21 @@ def _trusted_health_actor(request: Request) -> str | None:
 
 
 def _diagnostic_body(status: str, deps: dict[str, str], actor_email: str) -> dict[str, Any]:
+    boundary_warning = None
+    if settings.trust_forwarded_headers and not looks_like_databricks_app_deploy():
+        boundary_warning = {
+            "code": "rbac_trust_boundary_unclear",
+            "severity": "warning",
+            "message": (
+                "Forwarded identity headers are trusted, but this process does not "
+                "look like a Databricks Apps deployment."
+            ),
+            "recommended_action": (
+                "Set MIP_TRUST_FORWARDED_HEADERS=false outside Databricks Apps "
+                "unless an upstream proxy strips forwarded identity headers."
+            ),
+            "docs_ref": "docs/security/GRANTS.md#10",
+        }
     return {
         "status": status,
         "mode": "live",
@@ -136,6 +151,7 @@ def _diagnostic_body(status: str, deps: dict[str, str], actor_email: str) -> dic
         # pass once downstream consumers cut over.
         "fallback_identity_fallbacks_process_total": get_fallback_identity_count(),
         "fallback_identity_fallbacks_total": get_fallback_identity_count(),
+        "boundary_warning": boundary_warning,
     }
 
 

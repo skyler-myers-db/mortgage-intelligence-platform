@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router-dom';
-import { api, ApiError, type LeadsPageResult } from '../lib/api';
+import { api, ApiError, type LeadFunnelStage, type LeadsPageResult } from '../lib/api';
 import { useConfigOptionsQuery } from '../lib/configOptionsQuery';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
 import type { PortfolioPreview, SalesAgingLead, SalesConversionResponse, SalesStandupResponse, SalesTeamMember, SegmentCode } from '../types';
@@ -46,6 +46,17 @@ const RECENCY_FILTER_OPTIONS = ['Any', 'Untouched 30d', 'Untouched 60d', 'Untouc
 const APPROVAL_FILTER_OPTIONS = ['Any approval', 'Approved', 'Pending', 'Rejected', 'Hold'] as const;
 const OUTREACH_FILTER_OPTIONS = ['Any outreach', 'None', 'Queued', 'Actioned', 'Sent', 'Bounced', 'Replied'] as const;
 const AGING_FILTER_OPTIONS = ['Any age', 'Aged >7d', 'Aged >14d', 'Aged >30d'] as const;
+const FUNNEL_STAGE_LABELS: Record<LeadFunnelStage, string> = {
+  addressable: 'Addressable',
+  in_the_money: 'In the Money',
+  high_opportunity: 'High Opportunity',
+  offer_recommended: 'Offer Recommended',
+  approved: 'Approved',
+  actioned: 'Actioned',
+};
+const FUNNEL_STAGES = new Set<LeadFunnelStage>(
+  Object.keys(FUNNEL_STAGE_LABELS) as LeadFunnelStage[],
+);
 const PORTFOLIO_FILTER_KEYS = [
   'occupancy',
   'lien_status',
@@ -120,6 +131,11 @@ function parseBorrowerIds(raw: string | null): string[] {
     if (out.length >= 20) break;
   }
   return out;
+}
+
+function parseFunnelStage(raw: string | null): LeadFunnelStage | undefined {
+  const value = raw?.trim() as LeadFunnelStage | undefined;
+  return value && FUNNEL_STAGES.has(value) ? value : undefined;
 }
 
 function parseTargetLenderRef(raw: string | null, allowedLenderRefs: readonly string[]): string | undefined {
@@ -209,6 +225,7 @@ export interface LeadQueueExportFiltersInput {
   assignedTo?: string;
   agedDays?: number | null;
   cohortId?: string;
+  funnelStage?: LeadFunnelStage;
 }
 
 export function buildLeadQueueExportFilters(input: LeadQueueExportFiltersInput): string {
@@ -235,6 +252,7 @@ export function buildLeadQueueExportFilters(input: LeadQueueExportFiltersInput):
   if (input.outreachStatus && input.outreachStatus !== 'any') params.set('outreach_status', input.outreachStatus);
   if (input.assignedTo) params.set('assigned_to', input.assignedTo);
   if (input.agedDays) params.set('aged_days', String(input.agedDays));
+  if (input.funnelStage) params.set('funnel_stage', input.funnelStage);
   const safePortfolioCriteria = sanitizePortfolioCriteria(input.portfolioCriteria ?? {}, input.targetLenderRefs ?? []);
   for (const key of PORTFOLIO_FILTER_KEYS) {
     const value = safePortfolioCriteria?.[key];
@@ -350,6 +368,7 @@ export default function LeadQueue() {
     [portfolioCriteria],
   );
   const cohortId = (searchParams.get('cohort_id') ?? '').trim() || undefined;
+  const funnelStage = parseFunnelStage(searchParams.get('funnel_stage'));
   const stateOptions = useMemo(() => {
     const states = footprint.ready && !footprint.usingFallback
       ? footprint.states.map((s) => s.state_code).sort()
@@ -358,7 +377,12 @@ export default function LeadQueue() {
   }, [footprint.ready, footprint.states, footprint.usingFallback]);
   const relationshipFilter = portfolioCriteria?.lender_relationship ?? 'All';
   const productFilter = portfolioCriteria?.product ?? 'All products';
-  const contactabilityFilter = portfolioCriteria?.marketing_eligibility ?? 'Eligible only';
+  const analyticsScopeActive = Boolean(
+    funnelStage || segment || segmentCodes.length > 0 || stateFilter || zipFilter || countyFilter
+    || stateFilters.length > 0 || zipFilters.length > 0 || borrowerIdFilters.length > 0,
+  );
+  const contactabilityFilter = portfolioCriteria?.marketing_eligibility
+    ?? (analyticsScopeActive ? 'Any' : 'Eligible only');
   const consentFilter = portfolioCriteria?.consent_status ?? 'Any';
   const recencyFilter = portfolioCriteria?.recency ?? 'Any';
   const approvalStatus = (searchParams.get('approval_status') ?? 'any').toLowerCase();
@@ -445,6 +469,7 @@ export default function LeadQueue() {
         segmentMode,
         targetLenderRef,
         cohortId,
+        funnelStage,
         portfolioCriteria,
         approvalStatus: approvalStatus === 'any' ? 'any' : approvalStatus as 'pending' | 'approved' | 'rejected' | 'hold',
         outreachStatus: outreachStatus === 'any' ? 'any' : outreachStatus as 'none' | 'queued' | 'actioned' | 'sent' | 'bounced' | 'replied',
@@ -465,6 +490,7 @@ export default function LeadQueue() {
       targetLenderRef,
       JSON.stringify(portfolioCriteria ?? {}),
       cohortId,
+      funnelStage,
       approvalStatus,
       outreachStatus,
       assignedTo,
@@ -485,6 +511,7 @@ export default function LeadQueue() {
         targetLenderRef ?? '',
         JSON.stringify(portfolioCriteria ?? {}),
         cohortId ?? '',
+        funnelStage ?? '',
         approvalStatus,
         outreachStatus,
         assignedTo ?? '',
@@ -568,6 +595,7 @@ export default function LeadQueue() {
         assignedTo,
         agedDays,
         cohortId,
+        funnelStage,
       }),
       refreshedAt: exportRefreshedAt,
       rulesVersion,
@@ -575,6 +603,7 @@ export default function LeadQueue() {
   }, [
     borrowerIdFilters,
     cohortId,
+    funnelStage,
     countyFilter,
     exportRefreshedAt,
     portfolioCriteria,
@@ -600,7 +629,7 @@ export default function LeadQueue() {
       title="Ranked borrowers"
       lede="Click a row to expand the borrower preview. Approve, reject, assign to LOs, log call outcomes, or open Borrower 360 for the full dossier. Keyboard: A approves, R rejects the expanded row."
       heroRight={
-        segment || segmentCodes.length > 0 || stateFilter || zipFilter || stateFilters.length > 0 || zipFilters.length > 0 || borrowerIdFilters.length > 0 || countyFilter || targetLenderRef || portfolioCriteria || cohortId || approvalStatus !== 'any' || outreachStatus !== 'any' || assignedTo || agedDays ? (
+        segment || segmentCodes.length > 0 || stateFilter || zipFilter || stateFilters.length > 0 || zipFilters.length > 0 || borrowerIdFilters.length > 0 || countyFilter || targetLenderRef || portfolioCriteria || cohortId || funnelStage || approvalStatus !== 'any' || outreachStatus !== 'any' || assignedTo || agedDays ? (
           <>
             {segment && <Chip variant="neutral">segment = {segment}</Chip>}
             {segmentCodes.length > 0 && <Chip variant="neutral">segments = {segmentCodes.join(', ')}</Chip>}
@@ -611,6 +640,7 @@ export default function LeadQueue() {
             {borrowerIdFilters.length > 0 && <Chip variant="neutral">borrowers = {borrowerIdFilters.length} selected</Chip>}
             {countyFilter && <Chip variant="neutral">county = {countyFilter}</Chip>}
             {targetLenderRef && <Chip variant="neutral">lender = {targetLenderRef}</Chip>}
+            {funnelStage && <Chip variant="success">funnel = {FUNNEL_STAGE_LABELS[funnelStage]}</Chip>}
             {portfolioFilters.map((filter) => (
               <Chip key={filter.key} variant="neutral">
                 {filter.label} = {filter.value}
@@ -642,6 +672,19 @@ export default function LeadQueue() {
           </button>
         </div>
         <div className="surface__body">
+          {(funnelStage || zipFilter || countyFilter || stateFilter || stateFilters.length > 0 || zipFilters.length > 0 || borrowerIdFilters.length > 0) && (
+            <div className="lead-queue-scope" aria-label="Active analytics drilldown filters">
+              {funnelStage && (
+                <span className="lead-queue-scope__pill">Funnel stage: {FUNNEL_STAGE_LABELS[funnelStage]}</span>
+              )}
+              {stateFilter && <span className="lead-queue-scope__pill">State: {stateFilter}</span>}
+              {zipFilter && <span className="lead-queue-scope__pill">ZIP: {zipFilter}</span>}
+              {countyFilter && <span className="lead-queue-scope__pill">County FIPS: {countyFilter}</span>}
+              {stateFilters.length > 0 && <span className="lead-queue-scope__pill">States: {stateFilters.join(', ')}</span>}
+              {zipFilters.length > 0 && <span className="lead-queue-scope__pill">ZIPs: {zipFilters.join(', ')}</span>}
+              {borrowerIdFilters.length > 0 && <span className="lead-queue-scope__pill">Borrowers: {borrowerIdFilters.length}</span>}
+            </div>
+          )}
           <div className="filter-row">
             <FilterSelect
               label="STATE"
@@ -674,7 +717,10 @@ export default function LeadQueue() {
               label="CONTACTABILITY"
               value={contactabilityFilter}
               options={[...CONTACTABILITY_FILTER_OPTIONS]}
-              onChange={(v) => updateParam('marketing_eligibility', v)}
+              onChange={(v) => updateParam(
+                'marketing_eligibility',
+                analyticsScopeActive && v === 'Any' ? null : v,
+              )}
             />
             <FilterSelect
               label="CONSENT"

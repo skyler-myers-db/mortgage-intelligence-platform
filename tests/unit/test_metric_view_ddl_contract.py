@@ -220,6 +220,9 @@ class TestBorrowerOpportunityMetricView:
         assert "LATERAL VIEW EXPLODE" not in sql_nc
         assert "b.segment_codes" in sql_nc
         assert re.search(r"\bAS\s+primary_segment\b", sql_nc, re.IGNORECASE)
+        assert re.search(r"\bAS\s+segment\b", sql_nc, re.IGNORECASE), (
+            "view must expose deprecated `segment` alias for stale dashboard / Genie SQL"
+        )
 
     def test_has_semantic_comment(self) -> None:
         raw, _ = _read_sql(self.view_path)

@@ -82,10 +82,10 @@ GRANT USE SCHEMA, SELECT ON SCHEMA mip.ref TO `mip-app`;
 anchor for deterministic `refreshed_at` across the gold DAG).
 
 **What breaks if missing.** Lender names redact to the raw uppercase
-share string (ugly but non-fatal). Offer rules fall through to the
-hard-coded defaults in `backend/config/settings.py` — meaning admin
-overrides configured via `/api/admin/rules` do not apply. The
-`refresh_run_state` read fails silently and every gold table's
+share string (ugly but non-fatal). Offer rules cannot be read from the
+governed Unity Catalog rules table, so the admin rules surface and gold
+refresh path fail visibly instead of silently applying stale thresholds.
+The `refresh_run_state` read fails silently and every gold table's
 `refreshed_at` chip drifts by seconds.
 
 ---
@@ -339,6 +339,9 @@ a Databricks Apps deploy (no `DATABRICKS_APP_PORT` / `DATABRICKS_APP_URL`
 env var). Operators should treat that log line as a deploy-shape
 smell test: either the Apps marker env var wasn't plumbed through, or
 the deploy genuinely is non-Apps and the flag needs attention.
+The same condition is surfaced on `/api/v1/admin/health` as
+`boundary_warning` so admins do not have to discover the issue only in
+stdout logs.
 
 **What to do.** On a non-Apps deploy, set
 `MIP_TRUST_FORWARDED_HEADERS=false` in the environment fronting the

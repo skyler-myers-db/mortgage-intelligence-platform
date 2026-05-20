@@ -78,6 +78,7 @@ describe('invalidateOperationalQueries', () => {
       { queryKey: ['mip', 'audit'], refetchType: 'none' },
       { queryKey: ['mip', 'portfolio'], refetchType: 'none' },
       { queryKey: ['mip', 'segments'], refetchType: 'none' },
+      { queryKey: ['mip', 'analytics'], refetchType: 'none' },
     ]);
 
     const invalidated = invalidate.mock.calls

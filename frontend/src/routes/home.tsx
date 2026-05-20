@@ -28,6 +28,7 @@ const FUTURE_MODULES = [
 ];
 
 export const HOME_PORTFOLIO_PREVIEW_CRITERIA = { marketing_eligibility: 'Any' } as const;
+export const APPROVAL_QUEUE_STATE_LABEL = 'current lifecycle state';
 
 export function requestHomePortfolioPreview(signal?: AbortSignal) {
   return api.portfolioPreview(HOME_PORTFOLIO_PREVIEW_CRITERIA, signal);
@@ -273,7 +274,7 @@ export default function Home() {
                   preview?.approved_count ?? 0
                 ).toLocaleString()} approved and ${(
                   preview?.in_outreach_count ?? 0
-                ).toLocaleString()} in outreach in the latest snapshot.`
+                ).toLocaleString()} in outreach in ${APPROVAL_QUEUE_STATE_LABEL}.`
               : 'High-intent borrowers ready for loan-officer review.'}
           </div>
         </div>

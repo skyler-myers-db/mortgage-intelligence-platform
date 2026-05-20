@@ -91,7 +91,7 @@ def test_save_lead_is_single_statement_with_audit_insert() -> None:
     assert metadata == {
         "action": "workspace.save_lead",
         "borrower_id": "B-123",
-        "offer_code": "Refinance + HELOC",
+        "recommended_offer": "Refinance + HELOC",
         "request_id": params["request_id"],
     }
 
@@ -120,7 +120,7 @@ def test_save_draft_scrubs_body_before_storage_and_audit_is_bodyless() -> None:
     assert metadata == {
         "action": "workspace.save_draft",
         "borrower_id": "B-123",
-        "offer_code": "OFFER-123",
+        "workspace_offer_code": "OFFER-123",
         "channel": "email",
         "request_id": params["request_id"],
     }

@@ -36,6 +36,7 @@ from __future__ import annotations
 import logging
 
 from backend.services.lakebase import get_lakebase_client  # noqa: F401 - compatibility seam
+from backend.services.repositories.databricks_analytics import DatabricksAnalyticsRepository
 from backend.services.repositories.databricks_borrowers import (
     DatabricksBorrowerRepository,
     DatabricksOfferRepository,
@@ -157,10 +158,8 @@ log = logging.getLogger(__name__)
 # Repositories
 # ---------------------------------------------------------------------------
 
-
-
-
 __all__ = [
+    "DatabricksAnalyticsRepository",
     "DatabricksBorrowerRepository",
     "DatabricksGenieRepository",
     "DatabricksGeoRepository",

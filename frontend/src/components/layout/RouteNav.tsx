@@ -20,6 +20,7 @@ interface NavItem {
 
 const BASE_ITEMS: NavItem[] = [
   { to: '/',                      label: 'Home',            icon: 'home' },
+  { to: '/analytics',             label: 'Analytics',       icon: 'flow' },
   { to: '/portfolio-builder',     label: 'Portfolio',       icon: 'target' },
   { to: '/segment-intelligence',  label: 'Segments',        icon: 'layers' },
   { to: '/lead-queue',            label: 'Leads',           icon: 'user' },
@@ -42,9 +43,9 @@ export function RouteNav() {
     },
   ];
   const items = [
-    ...BASE_ITEMS.slice(0, 4),
+    ...BASE_ITEMS.slice(0, 5),
     ...detailItems,
-    ...BASE_ITEMS.slice(4),
+    ...BASE_ITEMS.slice(5),
   ];
   return (
     <nav aria-label="Main navigation" className="route-nav">

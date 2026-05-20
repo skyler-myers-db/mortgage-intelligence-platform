@@ -13,6 +13,14 @@ class HealthResponse(BaseModel):
     actor_cache_key: str | None = None
 
 
+class BoundaryWarning(BaseModel):
+    code: str
+    severity: str = "warning"
+    message: str
+    recommended_action: str
+    docs_ref: str
+
+
 class AdminHealthResponse(HealthResponse):
     app_env: str | None = None
     warehouse_id: str | None = None
@@ -22,3 +30,4 @@ class AdminHealthResponse(HealthResponse):
     log_export: str = "stdout-only"
     fallback_identity_fallbacks_process_total: int = 0
     fallback_identity_fallbacks_total: int = 0
+    boundary_warning: BoundaryWarning | None = None

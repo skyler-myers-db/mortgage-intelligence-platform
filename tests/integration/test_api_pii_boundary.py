@@ -25,6 +25,13 @@ from typing import Any
 from fastapi.testclient import TestClient
 
 from backend.main import app
+from backend.schemas.analytics import (
+    EconomicsAnalyticsResponse,
+    ExecutiveAnalyticsResponse,
+    GeographyAnalyticsResponse,
+    SegmentAnalyticsResponse,
+    SignalAnalyticsResponse,
+)
 from backend.schemas.common import EvidenceEvent
 from backend.schemas.lead import Borrower360, LeadSummary, SegmentSummary
 from backend.schemas.portfolio import PortfolioPreview
@@ -50,6 +57,27 @@ _FORBIDDEN_KEYS: frozenset[str] = frozenset(
         "trigger_timeline_json",     # raw JSON string; UI gets parsed struct
         "buyer_1_full_name",
         "buyer_full_name_raw",
+    }
+)
+
+_ANALYTICS_FORBIDDEN_KEYS: frozenset[str] = frozenset(
+    {
+        "clip",
+        "clip_id",
+        "raw_clip",
+        "subject_clip",
+        "owner_link_id",
+        "owner_link_raw",
+        "owner_name_hash",
+        "owner_1_full_name",
+        "owner_full_name_raw",
+        "situs_street_address",
+        "mailing_street_address",
+        "email",
+        "actor_email",
+        "lender",
+        "lender_ref",
+        "target_lender_refs",
     }
 )
 
@@ -88,6 +116,15 @@ def _assert_no_forbidden_keys(payload: Any, *, route: str) -> None:
     )
 
 
+def _assert_no_analytics_forbidden_keys(payload: Any, *, route: str) -> None:
+    seen = _walk_keys(payload)
+    leaks = _ANALYTICS_FORBIDDEN_KEYS.intersection(seen)
+    assert not leaks, (
+        f"{route} leaked analytics-forbidden PII keys: {sorted(leaks)} "
+        f"(full keyset: {sorted(seen)})"
+    )
+
+
 def _assert_no_raw_cotality_ids(payload: Any, *, route: str) -> None:
     for key, value in _walk_pairs(payload):
         if value in (None, ""):
@@ -101,6 +138,13 @@ def _assert_no_raw_cotality_ids(payload: Any, *, route: str) -> None:
             assert text.startswith(("owner_link_ref_", "ol_demo_")), (
                 f"{route} exposed raw Owner Link value: {text!r}"
             )
+
+
+def _assert_schema_subset(payload: Any, *, route: str, schema: type[Any]) -> None:
+    allowed = set(schema.model_fields.keys())
+    assert set(payload.keys()).issubset(allowed), (
+        f"{route} has extra top-level keys: {set(payload.keys()) - allowed}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -183,3 +227,78 @@ def test_portfolio_preview_has_only_schema_keys() -> None:
     _assert_no_forbidden_keys(body, route="/api/portfolio/preview")
     allowed = set(PortfolioPreview.model_fields.keys())
     assert set(body.keys()).issubset(allowed)
+
+
+# ---------------------------------------------------------------------------
+# /api/v1/analytics/*
+# ---------------------------------------------------------------------------
+
+
+def test_analytics_executive_has_only_schema_keys_and_no_raw_pii() -> None:
+    resp = client.get("/api/v1/analytics/executive")
+    assert resp.status_code == 200
+    body = resp.json()
+    _assert_no_forbidden_keys(body, route="/api/v1/analytics/executive")
+    _assert_no_analytics_forbidden_keys(body, route="/api/v1/analytics/executive")
+    _assert_no_raw_cotality_ids(body, route="/api/v1/analytics/executive")
+    _assert_schema_subset(
+        body,
+        route="/api/v1/analytics/executive",
+        schema=ExecutiveAnalyticsResponse,
+    )
+
+
+def test_analytics_geography_has_only_schema_keys_and_no_raw_pii() -> None:
+    resp = client.get("/api/v1/analytics/geography")
+    assert resp.status_code == 200
+    body = resp.json()
+    _assert_no_forbidden_keys(body, route="/api/v1/analytics/geography")
+    _assert_no_analytics_forbidden_keys(body, route="/api/v1/analytics/geography")
+    _assert_no_raw_cotality_ids(body, route="/api/v1/analytics/geography")
+    _assert_schema_subset(
+        body,
+        route="/api/v1/analytics/geography",
+        schema=GeographyAnalyticsResponse,
+    )
+
+
+def test_analytics_economics_has_only_schema_keys_and_no_raw_pii() -> None:
+    resp = client.get("/api/v1/analytics/economics")
+    assert resp.status_code == 200
+    body = resp.json()
+    _assert_no_forbidden_keys(body, route="/api/v1/analytics/economics")
+    _assert_no_analytics_forbidden_keys(body, route="/api/v1/analytics/economics")
+    _assert_no_raw_cotality_ids(body, route="/api/v1/analytics/economics")
+    _assert_schema_subset(
+        body,
+        route="/api/v1/analytics/economics",
+        schema=EconomicsAnalyticsResponse,
+    )
+
+
+def test_analytics_segments_has_only_schema_keys_and_no_raw_pii() -> None:
+    resp = client.get("/api/v1/analytics/segments")
+    assert resp.status_code == 200
+    body = resp.json()
+    _assert_no_forbidden_keys(body, route="/api/v1/analytics/segments")
+    _assert_no_analytics_forbidden_keys(body, route="/api/v1/analytics/segments")
+    _assert_no_raw_cotality_ids(body, route="/api/v1/analytics/segments")
+    _assert_schema_subset(
+        body,
+        route="/api/v1/analytics/segments",
+        schema=SegmentAnalyticsResponse,
+    )
+
+
+def test_analytics_signals_has_only_schema_keys_and_no_raw_pii() -> None:
+    resp = client.get("/api/v1/analytics/signals")
+    assert resp.status_code == 200
+    body = resp.json()
+    _assert_no_forbidden_keys(body, route="/api/v1/analytics/signals")
+    _assert_no_analytics_forbidden_keys(body, route="/api/v1/analytics/signals")
+    _assert_no_raw_cotality_ids(body, route="/api/v1/analytics/signals")
+    _assert_schema_subset(
+        body,
+        route="/api/v1/analytics/signals",
+        schema=SignalAnalyticsResponse,
+    )

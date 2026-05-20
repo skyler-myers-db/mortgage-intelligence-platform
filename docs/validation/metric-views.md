@@ -115,32 +115,24 @@ Publishes:
   runs, the authoritative Lakebase state flows into `funnel_snapshot_daily`
   and segment-level KPIs on the Segment dashboard can source from the
   metric view.
-- **Segment dashboard** `table_segment_overview` — the existing
-  placeholder text referencing Lakebase authority can be replaced in a
-  follow-up slice by surfacing `approval_rate` + `outreach_rate` from
-  `segment_performance_metric_view`. This slice publishes the columns;
-  the widget JSON edit is intentionally NOT part of this change so the
-  dashboards agent's next wave owns the widget wiring.
+- **Segment dashboard** `table_segment_overview` — now surfaces
+  `approval_rate` + `outreach_rate` from
+  `segment_performance_metric_view` alongside segment size and economics.
 
 ## What's still a follow-up
 
-1. **Wiring the new columns into dashboard widgets.** The dashboards
-   JSON files in `dashboards/` still don't reference `approval_rate`
-   / `outreach_rate` / `delta_vs_prior_*` — that's the dashboards
-   agent's next move. This slice published the columns; the JSON edit
-   is a separate concern.
-2. **YoY / QoQ on executive KPIs.** The snapshot table now supports
+1. **YoY / QoQ on executive KPIs.** The snapshot table now supports
    it, but the executive dashboard's `ds_funnel_totals` dataset still
    queries `borrower_360` directly. Swapping it to read from
    `funnel_snapshot_daily` with a `snapshot_date = CURRENT_DATE()`
    predicate and a second join for `CURRENT_DATE() - INTERVAL 90 DAYS`
    (QoQ) or `- INTERVAL 365 DAYS` (YoY) is a 10-line dashboard edit.
-3. **Federated-catalog swap.** When UC foreign-catalog federation
+2. **Federated-catalog swap.** When UC foreign-catalog federation
    over Lakebase Postgres lands, `sql/transformations/gold_borrower_lifecycle_state.sql`
    can become a CTAS against the foreign catalog and the Python
    `sync_lifecycle_state.py` job can retire. Column contract on the
    gold table does not change.
-4. **mean_rate_spread_bps / mean_equity_pct as measures on
+3. **mean_rate_spread_bps / mean_equity_pct as measures on
    `segment_performance_metric_view`.** Still computed by the
    `ds_segment_overview` dataset via a runtime aggregation against
    `borrower_opportunity_metric_view`. Promoting them into

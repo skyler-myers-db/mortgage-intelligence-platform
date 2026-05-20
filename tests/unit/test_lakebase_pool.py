@@ -201,6 +201,34 @@ def test_lakebase_warm_start_uses_databricks_app_pg_env_hints(
     assert calls == ["SELECT 1 AS warm"]
 
 
+def test_lakebase_health_probe_uses_bound_host_without_pguser(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The deployed Apps path may expose the database binding as PGHOST only.
+
+    ``get_lakebase_client`` resolves the user and token through the Databricks
+    SDK, so the health probe must not short-circuit to down just because
+    PGUSER is absent.
+    """
+    from backend.services import health_probes
+
+    calls: list[str] = []
+
+    class _WarmClient:
+        def fetchone(self, sql: str) -> dict[str, int]:
+            calls.append(sql)
+            return {"one": 1}
+
+    monkeypatch.setattr(health_probes.settings, "lakebase_host", "")
+    monkeypatch.setattr(health_probes.settings, "lakebase_user", "")
+    monkeypatch.setenv("PGHOST", "lakebase.bound.databricks.local")
+    monkeypatch.delenv("PGUSER", raising=False)
+    monkeypatch.setattr(lakebase_mod, "get_lakebase_client", lambda: _WarmClient())
+
+    assert health_probes.probe_lakebase() is True
+    assert calls == ["SELECT 1 AS one"]
+
+
 def test_resilient_lakebase_transaction_refuses_when_breaker_open() -> None:
     breaker = CircuitBreaker("lakebase-test", failure_threshold=1, cooldown_s=60)
     breaker.record_failure()

@@ -7,6 +7,9 @@ import type {
   ConfigOptions,
   CountyRollupResponse,
   DataEstateResponse,
+  EconomicsAnalyticsResponse,
+  ExecutiveAnalyticsResponse,
+  GeographyAnalyticsResponse,
   LeadSummary,
   LeadAssignment,
   OfferRecommendation,
@@ -18,7 +21,9 @@ import type {
   SalesAgingLead,
   SalesConversionResponse,
   SalesStandupResponse,
+  SegmentAnalyticsResponse,
   StateRollupResponse,
+  SignalAnalyticsResponse,
   SavedDraft,
   SavedDraftInput,
   SavedLead,
@@ -131,11 +136,20 @@ export interface AuditEventRow {
  * additional selected card narrows the ranked borrowers and map.
  */
 export type SegmentFilterMode = 'any' | 'all';
+export type LeadFunnelStage =
+  | 'addressable'
+  | 'in_the_money'
+  | 'high_opportunity'
+  | 'offer_recommended'
+  | 'approved'
+  | 'actioned';
 
 export interface LeadQueryOptions {
   segmentCodes?: SegmentCode[];
   /** `all` means borrowers must match every code in `segmentCodes`. */
   segmentMode?: SegmentFilterMode;
+  /** Exact native Analytics Lead Funnel drilldown stage. */
+  funnelStage?: LeadFunnelStage | null;
   targetLenderRef?: string | null;
   cohortId?: string | null;
   portfolioCriteria?: GeoQueryCriteria;
@@ -632,6 +646,21 @@ export const api = {
     }
   },
 
+  analyticsExecutive: (signal?: AbortSignal) =>
+    getJson<ExecutiveAnalyticsResponse>('/api/analytics/executive', signal),
+
+  analyticsGeography: (signal?: AbortSignal) =>
+    getJson<GeographyAnalyticsResponse>('/api/analytics/geography', signal),
+
+  analyticsEconomics: (signal?: AbortSignal) =>
+    getJson<EconomicsAnalyticsResponse>('/api/analytics/economics', signal),
+
+  analyticsSegments: (signal?: AbortSignal) =>
+    getJson<SegmentAnalyticsResponse>('/api/analytics/segments', signal),
+
+  analyticsSignals: (signal?: AbortSignal) =>
+    getJson<SignalAnalyticsResponse>('/api/analytics/signals', signal),
+
   portfolioPreview: (
     criteria: Record<string, unknown> = {},
     signal?: AbortSignal,
@@ -779,6 +808,7 @@ export const api = {
       params.set('segment_codes', opts.segmentCodes.join(','));
       params.set('segment_mode', opts.segmentMode ?? 'any');
     }
+    if (opts.funnelStage) params.set('funnel_stage', opts.funnelStage);
     if (opts.limit) params.set('limit', String(opts.limit));
     if (geo?.state) params.set('state', geo.state);
     if (geo?.zip) params.set('zip', geo.zip);

@@ -24,6 +24,7 @@ class GeographyScopePayload(BaseModel):
 
 class ConfigOptionsResponse(BaseModel):
     lender_name: str
+    rum_enabled: bool = False
     geographies: list[str]
     geographies_status: str
     geography_scope: GeographyScopePayload | None = None

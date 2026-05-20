@@ -16,6 +16,7 @@ Assertions:
 """
 from __future__ import annotations
 
+import inspect
 import logging
 import re
 from datetime import UTC, datetime
@@ -135,6 +136,60 @@ def test_every_backend_action_audit_insert_carries_correlation_id() -> None:
         ):
             cols = match.group("cols")
             assert "correlation_id" in cols, f"{path}:{match.start()} missing correlation_id"
+
+
+_MUTATION_AUDIT_EXPECTATIONS: dict[str, tuple[str, ...]] = {
+    # Explicit non-mutating POST/PUT surfaces.
+    "put_rules": ("status_code=410", "Offer rules are governed"),
+    "preview_portfolio": ("repo.preview",),
+    "genie_start": ("_latest_genie_conversation",),
+    "record_rum": ("mip_rum_enabled",),
+    # Governed writes or audit-emitting reads.
+    "create_portfolio": ("repo.create(",),
+    "patch_portfolio": ("repo.patch_status(",),
+    "patch_campaign": ("repo.patch_status(",),
+    "recommend_offer": ("_safe_audit_write",),
+    "draft_outreach": ("_safe_audit_write",),
+    "approve_outreach": ("_commit_outreach_decision_atomic(", "audit.write("),
+    "reject_outreach": ("_commit_outreach_decision_atomic(", "audit.write("),
+    "assign_lead": ("store.assign_lead(",),
+    "distribute_leads": ("store.distribute(",),
+    "log_disposition": ("store.log_disposition(",),
+    "genie_message": ("_required_audit_write",),
+    "genie_action": ("handle_genie_action(",),
+    "log_event": ("store.write(",),
+    "save_lead": ("store.save_lead(",),
+    "delete_lead": ("store.delete_lead(",),
+    "save_draft": ("store.save_draft(",),
+    "delete_draft": ("store.delete_draft(",),
+}
+
+
+def test_every_mutation_route_has_audit_coverage_or_explicit_exemption() -> None:
+    """New state-changing routes must update this reviewed audit manifest."""
+
+    seen: set[object] = set()
+    covered: set[str] = set()
+    mutating = {"POST", "PUT", "PATCH", "DELETE"}
+    for route in app.routes:
+        endpoint = getattr(route, "endpoint", None)
+        methods = getattr(route, "methods", set()) or set()
+        if endpoint is None or endpoint in seen or not (methods & mutating):
+            continue
+        seen.add(endpoint)
+        name = getattr(endpoint, "__name__", "")
+        assert name in _MUTATION_AUDIT_EXPECTATIONS, (
+            f"{getattr(route, 'path', '<unknown>')} maps to {name!r}; "
+            "add an audit write or an explicit exemption to this manifest"
+        )
+        source = inspect.getsource(endpoint)
+        missing = [
+            token for token in _MUTATION_AUDIT_EXPECTATIONS[name] if token not in source
+        ]
+        assert not missing, f"{name} missing audit/exemption evidence tokens: {missing}"
+        covered.add(name)
+
+    assert set(_MUTATION_AUDIT_EXPECTATIONS) == covered
 
 
 def test_list_issues_select_ordered_desc_with_limit() -> None:

@@ -7,12 +7,9 @@ from typing import Any
 
 from backend.schemas.audit import AuditEvent
 from backend.services.audit_store import (
-    _assert_allowlisted,
-    _assert_no_pii,
-    _assert_public_safe_values,
     _coerce_event_type,
-    _sanitize_metadata,
     _validate_top_level_audit_columns,
+    build_safe_audit_metadata,
 )
 from backend.services.lakebase import LakebaseClient, get_lakebase_client
 from backend.services.observability import get_correlation_id
@@ -56,11 +53,8 @@ def _build_insert_params(
     request_id: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     payload = payload_json or {}
-    metadata = _sanitize_metadata({**payload, "action": action})
+    metadata = build_safe_audit_metadata(payload, action=action)
     payload = {k: v for k, v in metadata.items() if k != "action"}
-    _assert_no_pii(metadata)
-    _assert_allowlisted(metadata)
-    _assert_public_safe_values(metadata)
     safe_event_type = _coerce_event_type(event_type, action)
     (
         safe_action,

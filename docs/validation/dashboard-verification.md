@@ -2,6 +2,13 @@
 
 # Lakeview dashboards — widget verification report
 
+The native app route `/analytics` is the end-user dashboard experience.
+This Lakeview verification report exists for operator-side Databricks
+dashboards only: it proves the companion AI/BI assets still resolve, but
+release readiness for app users also requires the `/analytics` route and
+`/api/v1/analytics/*` endpoints to pass their own tests and browser
+walkthrough.
+
 This doc pairs every widget shipped in `dashboards/*.lvdash.json` with
 an automated verdict from
 [`tests/integration/test_dashboard_widgets_resolve.py`](../../tests/integration/test_dashboard_widgets_resolve.py)
@@ -46,7 +53,7 @@ the authoritative live status is the output of the nightly run (see
 
 | Widget | Type | Dataset | Purpose | Verdict |
 |---|---|---|---|---|
-| `map_state_opportunity` | symbol-map | `ds_state_opportunity` | Current refreshed coverage states colored by mean opportunity score, sized by borrower count. | 🟢 |
+| `chart_state_opportunity` | bar | `ds_state_opportunity` | Current refreshed coverage states by borrower count, colored by mean opportunity score. | 🟢 |
 | `chart_state_avm_value` | bar | `ds_state_avm_value` | Total AVM value per state. | 🟢 |
 | `table_top_zips` | table | `ds_top_zips_itm` | 20 densest in-the-money ZIPs with city, borrower count, ITM count, mean score, mean rate spread. | 🟢 |
 
@@ -74,14 +81,14 @@ the authoritative live status is the output of the nightly run (see
 
 | Widget | Type | Dataset | Purpose | Verdict |
 |---|---|---|---|---|
-| `pivot_segment_by_state` | pivot | `ds_segment_by_state` | Rows = state, cols = segment, cell = borrower count. | 🟢 |
+| `pivot_segment_by_state` | pivot | `ds_segment_by_state` | Rows = state, cols = segment, cell = borrower count using Lakeview v3 multi-cell encoding. | 🟢 |
 | `chart_top_segments_per_state` | bar | `ds_top_segments_per_state` | Top 3 segments per state, colored by segment. | 🟢 |
 
 ### Page — Triggers
 
 | Widget | Type | Dataset | Purpose | Verdict |
 |---|---|---|---|---|
-| `chart_evidence_daily` | line | `ds_evidence_daily` | 30-day daily evidence-event volume, colored by `signal_type`. | 🟢 |
+| `chart_evidence_daily` | line | `ds_evidence_daily` | 30-day refresh-date evidence-event volume, colored by `signal_type`. | 🟢 |
 | `chart_evidence_by_signal` | bar | `ds_evidence_by_signal` | Evidence counts by `signal_type`, colored by `source_product`. Demonstrates the `permit` / `listing` gap until those Cotality products are licensed. | 🟢 |
 
 ---
@@ -95,10 +102,10 @@ Lakeview renderer decides that still need a human look:
 For **each dashboard** (`Executive`, `Segment`) open it after
 `./scripts/deploy.sh -t dev` and check:
 
-1. **Colors and theme** — Lakeview renders the workspace default palette.
+1. **Colors and theme** — Lakeview renders the MIP/Entrada AI/BI palette.
    Verify the 6 segments in `chart_equity_vs_spread` / `chart_top_segments_per_state`
-   are visually distinguishable and that the symbol-map color ramp on
-   `map_state_opportunity` is monotonic (not banded).
+   are visually distinguishable and that the state opportunity bar uses a
+   monotonic score color ramp.
 2. **Axis labels** — every chart's `displayName` (e.g., "Rate Spread vs
    Market (bps, 25-bp bins)") actually appears on the rendered axis,
    not the underlying field name. Lakeview occasionally drops the
@@ -106,9 +113,9 @@ For **each dashboard** (`Executive`, `Segment`) open it after
 3. **Legend placement** — scatter (`chart_equity_vs_spread`) and grouped
    bar (`chart_top_segments_per_state`, `chart_evidence_by_signal`) have
    a legend visible without scrolling.
-4. **Tooltip content** — hovering a point on the symbol-map or scatter
+4. **Tooltip content** — hovering a point on the scatter or state bar
    shows every encoded field (state, borrower_count, mean_opportunity_score
-   on the map; equity_pct, rate_spread_bps, segment, state, opportunity_score
+   on the state bar; equity_pct, rate_spread_bps, segment, state, opportunity_score
    on the scatter). If a tooltip is missing a field, the `fields` array
    in the widget's query block is out of sync with the encodings.
 5. **Tab and frame titles** — every widget carries `frame.title` and
@@ -144,8 +151,8 @@ pytest tests/integration/test_dashboard_widgets_resolve.py -q --tb=short
 - Skips cleanly when `DATABRICKS_HOST` / `DATABRICKS_TOKEN` /
   `DATABRICKS_WAREHOUSE_ID` are not set (PR CI stays green).
 - Executes once per dataset (16 datasets total; results cached
-  across the per-widget assertions so the warehouse is not hit 26
-  times for 26 widgets).
+  across the per-widget assertions so the warehouse is not hit once
+  per widget).
 - Fails the job when any widget encodes a column not present in the
   dataset schema, or when a `bar` / `line` chart returns < 2 distinct
   x values (except for the documented cold-start widgets).

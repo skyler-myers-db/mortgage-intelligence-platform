@@ -7,8 +7,34 @@ from backend.api import telemetry as telemetry_mod
 from backend.main import app
 
 
-def test_rum_endpoint_accepts_sanitized_batch() -> None:
+def test_rum_endpoint_is_disabled_by_default() -> None:
     client = TestClient(app, raise_server_exceptions=False)
+
+    response = client.post(
+        "/api/telemetry/rum",
+        json={
+            "events": [
+                {
+                    "metric": "lcp",
+                    "value": 1234.5,
+                    "rating": "good",
+                    "route": "/borrower-360/:borrower_id",
+                    "navigation_type": "navigate",
+                    "details": {"ttfb_ms": 120},
+                }
+            ]
+        },
+    )
+
+    assert response.status_code == 202
+    assert response.json() == {"accepted": 0, "enabled": False}
+
+
+def test_rum_endpoint_accepts_sanitized_batch_when_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = TestClient(app, raise_server_exceptions=False)
+    monkeypatch.setattr(telemetry_mod.settings, "mip_rum_enabled", True)
 
     response = client.post(
         "/api/telemetry/rum",
@@ -178,6 +204,7 @@ def test_rum_endpoint_actor_class_honors_trust_boundary(
 
     monkeypatch.setattr(telemetry_mod, "emit", _emit)
     monkeypatch.setattr(telemetry_mod.settings, "trust_forwarded_headers", True)
+    monkeypatch.setattr(telemetry_mod.settings, "mip_rum_enabled", True)
 
     payload = {
         "events": [

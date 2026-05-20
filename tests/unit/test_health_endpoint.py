@@ -334,6 +334,38 @@ def test_health_admin_endpoint_returns_full_diagnostics(
     assert "example" not in body["actor_cache_key"].lower()
 
 
+def test_health_admin_endpoint_surfaces_trust_boundary_warning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(health_probes, "probe_warehouse", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_lakebase", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_genie", lambda: True)
+    monkeypatch.setattr(health_mod.settings, "trust_forwarded_headers", True)
+    monkeypatch.delenv("DATABRICKS_APP_PORT", raising=False)
+    monkeypatch.delenv("DATABRICKS_APP_URL", raising=False)
+
+    res = client.get("/api/admin/health", headers=ADMIN_HEADERS)
+    assert res.status_code == 200
+    warning = res.json()["boundary_warning"]
+    assert warning["code"] == "rbac_trust_boundary_unclear"
+    assert warning["severity"] == "warning"
+    assert "MIP_TRUST_FORWARDED_HEADERS=false" in warning["recommended_action"]
+
+
+def test_health_admin_endpoint_clears_trust_boundary_warning_for_apps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(health_probes, "probe_warehouse", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_lakebase", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_genie", lambda: True)
+    monkeypatch.setattr(health_mod.settings, "trust_forwarded_headers", True)
+    monkeypatch.setenv("DATABRICKS_APP_PORT", "8080")
+
+    res = client.get("/api/admin/health", headers=ADMIN_HEADERS)
+    assert res.status_code == 200
+    assert res.json()["boundary_warning"] is None
+
+
 def test_health_admin_endpoint_rejects_non_admin(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

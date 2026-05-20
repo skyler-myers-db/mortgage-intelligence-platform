@@ -33,9 +33,11 @@ MAX_AUDIT_LIMIT: int = 500
 _ROUTER_OWNED_EVENT_TYPES: frozenset[str] = frozenset(
     {
         "APPROVE",
+        "CAMPAIGN_STATUS_UPDATE",
         "DRAFT_OUTREACH",
         "OUTREACH_APPROVE",
         "OUTREACH_REJECT",
+        "PORTFOLIO_CREATE",
         "RECOMMEND_OFFER",
         "RUN_GENIE",
         "SAVE_DRAFT",
@@ -45,6 +47,8 @@ _ROUTER_OWNED_EVENT_TYPES: frozenset[str] = frozenset(
         "CALL_DISPOSITION",
         "LEAD_ASSIGN",
         "LEAD_DISTRIBUTE",
+        "VIEW_BORROWER",
+        "VIEW_LEADS",
     }
 )
 def _event_type_for_payload(payload: AuditEventCreateRequest) -> str:

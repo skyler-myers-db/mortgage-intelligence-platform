@@ -88,6 +88,7 @@ def get_config_options() -> dict[str, object]:
         geographies, geographies_status = _geography_options(geo_scope)
         payload = {
             "lender_name": settings.mip_lender_name,
+            "rum_enabled": settings.mip_rum_enabled,
             "geographies": geographies,
             "geographies_status": geographies_status,
             "geography_scope": geo_scope.to_api_dict() if geo_scope else None,

@@ -8,6 +8,7 @@ compatibility import remains ``backend.services.repositories.databricks_repo``.
 from __future__ import annotations
 
 import json
+import time
 from typing import Any
 
 from backend.config.settings import settings
@@ -111,7 +112,8 @@ class DatabricksLeadRepository:
         f"LEFT JOIN {qualify('gold', 'borrower_lifecycle_state')} ls "
         "  ON ls.borrower_id = b.borrower_id "
         "WHERE 1=1 {state_clause} {zip_clause} {county_clause} {borrower_clause} "
-        "{segment_clause} {lender_clause} {portfolio_clause} {lifecycle_clause}"
+        "{segment_clause} {funnel_stage_clause} {lender_clause} {portfolio_clause} "
+        "{lifecycle_clause} {freshness_clause}"
     )
 
     # 2026-05-04 FIX β: when the caller filters by state and/or zip we
@@ -140,7 +142,8 @@ class DatabricksLeadRepository:
         f"LEFT JOIN {qualify('gold', 'borrower_lifecycle_state')} ls "
         "  ON ls.borrower_id = b.borrower_id "
         "WHERE 1=1 {state_clause} {zip_clause} {county_clause} {borrower_clause} "
-        "{segment_clause} {lender_clause} {portfolio_clause} {lifecycle_clause} "
+        "{segment_clause} {funnel_stage_clause} {lender_clause} {portfolio_clause} "
+        "{lifecycle_clause} {freshness_clause} "
         "ORDER BY b.opportunity_score DESC, b.borrower_id ASC "
         "LIMIT {limit}"
     )
@@ -161,6 +164,7 @@ class DatabricksLeadRepository:
         segment_mode: str = "any",
         target_lender_ref: str | None = None,
         cohort_id: str | None = None,
+        funnel_stage: str | None = None,
         portfolio_criteria: PortfolioCriteria | None = None,
         approval_status: str | None = None,
         outreach_status: str | None = None,
@@ -168,6 +172,7 @@ class DatabricksLeadRepository:
     ) -> list[LeadSummary]:
         _ = (portfolio_id, cohort_id)
         bounded = self._bound_limit(limit)
+        sql_limit = self._sql_fetch_limit(bounded)
         cache_key = self._cache_key(
             "lead_list",
             {
@@ -185,6 +190,7 @@ class DatabricksLeadRepository:
                 "segment_mode": segment_mode,
                 "target_lender_ref": target_lender_ref,
                 "cohort_id": cohort_id,
+                "funnel_stage": funnel_stage,
                 "portfolio_criteria": self._criteria_key(portfolio_criteria),
                 "approval_status": approval_status,
                 "outreach_status": outreach_status,
@@ -228,12 +234,15 @@ class DatabricksLeadRepository:
         if "target_lender_ref" in portfolio_params:
             lender_clause = ""
             lender_params = {}
+        funnel_stage_clause = self._funnel_stage_filter_clause(funnel_stage)
+        freshness_clause = self._freshness_clause()
 
         if (
             normalised_states
             or normalised_zips
             or normalised_county
             or normalised_borrower_ids
+            or funnel_stage
             or lender_clause
             or portfolio_clause
         ):
@@ -272,15 +281,17 @@ class DatabricksLeadRepository:
                 county_clause=county_clause,
                 borrower_clause=borrower_clause,
                 segment_clause=geo_segment_clause,
+                funnel_stage_clause=funnel_stage_clause,
                 lender_clause=lender_clause,
                 portfolio_clause=portfolio_clause,
                 lifecycle_clause=lifecycle_clause,
-                limit=bounded,
+                freshness_clause=freshness_clause,
+                limit=sql_limit,
             )
             rows = self._client.execute(sql, params)
             return self._store_cached_leads(
                 cache_key,
-                [LeadSummary(**redact_lead_row(r)) for r in rows],
+                [LeadSummary(**redact_lead_row(r)) for r in rows[:bounded]],
             )
 
         lifecycle_clause, lifecycle_params = self._lifecycle_filter_clause(
@@ -297,18 +308,18 @@ class DatabricksLeadRepository:
             sql = self._LIST_FILTERED_SQL_TEMPLATE.format(
                 segment_clause=segment_clause,
                 lifecycle_clause=lifecycle_clause,
-                limit=bounded,
+                limit=sql_limit,
             )
             rows = self._client.execute(sql, segment_params)
         else:
             sql = self._LIST_BASE_SQL_TEMPLATE.format(
                 lifecycle_clause=lifecycle_clause,
-                limit=bounded,
+                limit=sql_limit,
             )
             rows = self._client.execute(sql, lifecycle_params)
         return self._store_cached_leads(
             cache_key,
-            [LeadSummary(**redact_lead_row(r)) for r in rows],
+            [LeadSummary(**redact_lead_row(r)) for r in rows[:bounded]],
         )
 
     def count(
@@ -326,6 +337,7 @@ class DatabricksLeadRepository:
         segment_mode: str = "any",
         target_lender_ref: str | None = None,
         cohort_id: str | None = None,
+        funnel_stage: str | None = None,
         portfolio_criteria: PortfolioCriteria | None = None,
         approval_status: str | None = None,
         outreach_status: str | None = None,
@@ -348,6 +360,7 @@ class DatabricksLeadRepository:
                 "segment_mode": segment_mode,
                 "target_lender_ref": target_lender_ref,
                 "cohort_id": cohort_id,
+                "funnel_stage": funnel_stage,
                 "portfolio_criteria": self._criteria_key(portfolio_criteria),
                 "approval_status": approval_status,
                 "outreach_status": outreach_status,
@@ -388,11 +401,14 @@ class DatabricksLeadRepository:
         if "target_lender_ref" in portfolio_params:
             lender_clause = ""
             lender_params = {}
+        funnel_stage_clause = self._funnel_stage_filter_clause(funnel_stage)
+        freshness_clause = self._freshness_clause()
         if (
             normalised_states
             or normalised_zips
             or normalised_county
             or normalised_borrower_ids
+            or funnel_stage
             or lender_clause
             or portfolio_clause
         ):
@@ -420,9 +436,11 @@ class DatabricksLeadRepository:
                     params=params,
                 ),
                 segment_clause=f"AND {segment_clause}" if segment_clause else "",
+                funnel_stage_clause=funnel_stage_clause,
                 lender_clause=lender_clause,
                 portfolio_clause=portfolio_clause,
                 lifecycle_clause=lifecycle_clause_geo,
+                freshness_clause=freshness_clause,
             )
             row = self._client.execute_one(sql, params)
             return self._store_cached_count(cache_key, int((row or {}).get("n") or 0))
@@ -570,6 +588,28 @@ class DatabricksLeadRepository:
         return "AND " + " AND ".join(clauses), params
 
     @staticmethod
+    def _funnel_stage_filter_clause(funnel_stage: str | None) -> str:
+        """Return the exact gold-funnel predicate used by analytics drilldowns."""
+
+        stage = str(funnel_stage or "").strip().lower()
+        if not stage or stage == "addressable":
+            return ""
+        if stage == "in_the_money":
+            return "AND b.in_the_money = TRUE"
+        if stage == "high_opportunity":
+            return "AND b.opportunity_score >= 75"
+        if stage == "offer_recommended":
+            return (
+                "AND b.recommended_offer_code IS NOT NULL "
+                "AND b.recommended_offer_code <> 'nurture'"
+            )
+        if stage == "approved":
+            return "AND COALESCE(ls.approval_status, 'pending') = 'approved'"
+        if stage == "actioned":
+            return "AND COALESCE(ls.outreach_status, 'none') = 'actioned'"
+        raise ValueError(f"unsupported funnel_stage: {funnel_stage}")
+
+    @staticmethod
     def _in_clause(
         *,
         column: str,
@@ -642,3 +682,29 @@ class DatabricksLeadRepository:
         if limit is None or limit <= 0:
             return cls.DEFAULT_LIMIT
         return min(int(limit), cls.MAX_LIMIT)
+
+    @classmethod
+    def _sql_fetch_limit(cls, bounded_limit: int) -> int:
+        """Fetch one extra row while preserving the public row cap.
+
+        The route still returns at most ``bounded_limit`` rows. Internally
+        selecting one additional row avoids reusing stale warehouse result
+        cache entries keyed to a previous exact ``LIMIT 500`` query during a
+        gold/lifecycle refresh window.
+        """
+
+        return min(int(bounded_limit) + 1, cls.MAX_LIMIT + 1)
+
+    @staticmethod
+    def _freshness_clause() -> str:
+        """Break warehouse result-cache reuse for interactive drilldowns.
+
+        Drilldowns read ``gold.borrower_360`` joined to the lifecycle mirror,
+        which can change during deploy-time syncs while query text stays
+        otherwise identical. An app-generated no-op literal predicate prevents
+        Databricks SQL from serving a stale exact-query result; the app's
+        short ``TTLCache`` remains the bounded reuse layer.
+        """
+
+        marker = time.time_ns()
+        return f"AND {marker} = {marker}"

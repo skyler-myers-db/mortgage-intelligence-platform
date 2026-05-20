@@ -108,6 +108,7 @@ function SystemStatusPill({ health }: { health: HealthPayload | null }) {
 
 const ROUTE_CRUMBS: Record<string, string> = {
   '/':                       'Home',
+  '/analytics':              'Analytics',
   '/portfolio-builder':      'Portfolio Builder',
   '/segment-intelligence':   'Segment Intelligence',
   '/lead-queue':             'Lead Queue',

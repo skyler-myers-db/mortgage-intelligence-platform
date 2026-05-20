@@ -41,10 +41,15 @@ class _StubClient:
         preview_row: dict[str, Any],
         trend_rows: list[dict[str, Any]],
         day_zero_row: dict[str, Any] | None = None,
+        workflow_row: dict[str, Any] | None = None,
     ):
         self._preview_row = preview_row
         self._trend_rows = trend_rows
         self._day_zero_row = day_zero_row if day_zero_row is not None else {"day_zero": False}
+        self._workflow_row = workflow_row if workflow_row is not None else {
+            "approved_count": 0,
+            "in_outreach_count": 0,
+        }
         self.preview_calls: int = 0
         self.statements: list[str] = []
         self.parameters: list[dict[str, Any] | None] = []
@@ -57,6 +62,8 @@ class _StubClient:
         self.parameters.append(params)
         if "funnel_snapshot_daily" in sql:
             return self._trend_rows
+        if "borrower_lifecycle_state" in sql:
+            return [self._workflow_row]
         if self._is_day_zero_sql(sql):
             return [self._day_zero_row]
         return [self._preview_row]
@@ -66,6 +73,8 @@ class _StubClient:
         self.parameters.append(params)
         if "funnel_snapshot_daily" in sql:
             return self._trend_rows[0] if self._trend_rows else {}
+        if "borrower_lifecycle_state" in sql:
+            return self._workflow_row
         if self._is_day_zero_sql(sql):
             return self._day_zero_row
         self.preview_calls += 1
@@ -452,6 +461,26 @@ def test_filtered_preview_suppresses_national_trends():
     assert preview.in_outreach_count is None
 
 
+def test_unfiltered_preview_uses_live_workflow_counts_over_snapshot():
+    """Workflow counts should match current lifecycle state, not stale daily snapshots."""
+    trend = _trend_row("2026-04-22T18:30:00")
+    trend["approved_count"] = 23
+    trend["in_outreach_count"] = 0
+    client = _StubClient(
+        _preview_row(),
+        [trend],
+        workflow_row={"approved_count": 23, "in_outreach_count": 1},
+    )
+    repo = DatabricksPortfolioRepository(client)  # type: ignore[arg-type]
+
+    preview = repo.preview(None)
+
+    assert preview.approved_count == 23
+    assert preview.in_outreach_count == 1
+    workflow_sql = next(sql for sql in client.statements if "borrower_lifecycle_state" in sql)
+    assert "mip.gold.borrower_360" in workflow_sql
+
+
 def test_create_uses_submitted_criteria_for_population_count(monkeypatch):
     """Saved portfolio size must match the reviewed criteria, not the national default."""
     client = _StubClient(_preview_row(), [])
@@ -484,11 +513,13 @@ def test_create_uses_submitted_criteria_for_population_count(monkeypatch):
     )
     metadata = json.loads(str(lakebase.rows[0]["params"]["metadata"]))
     assert metadata["source"] == "portfolio_builder"
-    assert metadata["criteria"] == {
+    assert metadata["portfolio_criteria"] == {
         "occupancy": "Owner-occupied",
         "marketing_eligibility": "Eligible only",
         "min_equity_pct_label": "≥ 25%",
     }
+    assert "criteria" not in metadata
+    assert metadata["action"] == "portfolio.create"
     assert metadata["marketable_population"] == 1000
 
 
@@ -526,7 +557,9 @@ def test_campaign_status_accepts_reviewed_eligible_only_policy_shapes(
     assert len(patch_calls) == 1
     patch_call = patch_calls[0]
     assert "INSERT INTO mip_app.action_audit" in str(patch_call["sql"])
+    assert "request_id" in str(patch_call["sql"])
     assert patch_call["params"]["actor"] == "skyler@entrada.ai"
+    assert str(patch_call["params"]["request_id"]).startswith("campaign-status-")
     metadata = json.loads(str(patch_call["params"]["metadata"]))
     assert metadata == {
         "action": "campaign.status_update",

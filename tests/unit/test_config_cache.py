@@ -51,6 +51,7 @@ def test_config_options_uses_short_ttl_cache(monkeypatch) -> None:
 
     assert first == second
     assert first["lender_name"] == config_api.settings.mip_lender_name
+    assert first["rum_enabled"] is config_api.settings.mip_rum_enabled
     assert calls == {"lenders": 1, "scope": 1}
 
 

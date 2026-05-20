@@ -24,6 +24,16 @@ from backend.services.audit_store import (
 )
 from tests.fixtures.in_memory_audit_store import InMemoryAuditStore
 
+DECISION_INPUTS = {
+    "rate_spread_bps": 88,
+    "equity_pct": 39,
+    "has_permit": False,
+    "listed_for_sale": False,
+    "is_investor": False,
+    "is_current_customer": False,
+    "is_competitor_lien": False,
+}
+
 # ---------------------------------------------------------------------------
 # _assert_no_pii
 # ---------------------------------------------------------------------------
@@ -170,6 +180,7 @@ def test_allowlist_permits_known_keys() -> None:
             "opportunity_score": 92,
             "confidence": 0.87,
             "thresholds_applied": {"min_spread_bps": 75},
+            "decision_inputs": DECISION_INPUTS,
         }
     )
 
@@ -264,6 +275,37 @@ def test_audit_public_safe_values_reject_pii_like_bulk_id() -> None:
         _assert_public_safe_values({"bulk_id": "555-212-3333"})
     with pytest.raises(AuditMetadataValueViolation):
         _assert_public_safe_values({"request_id": "req-123-45-6789"})
+
+
+def test_audit_decision_inputs_require_reviewed_exact_shape() -> None:
+    _assert_public_safe_values({"decision_inputs": DECISION_INPUTS})
+    with pytest.raises(AuditMetadataValueViolation):
+        _assert_public_safe_values(
+            {
+                "decision_inputs": {
+                    **DECISION_INPUTS,
+                    "credit_score": 740,
+                }
+            }
+        )
+    with pytest.raises(AuditMetadataValueViolation):
+        _assert_public_safe_values(
+            {
+                "decision_inputs": {
+                    **DECISION_INPUTS,
+                    "equity_pct": "39",
+                }
+            }
+        )
+    with pytest.raises(AuditMetadataValueViolation):
+        _assert_public_safe_values(
+            {
+                "decision_inputs": {
+                    **DECISION_INPUTS,
+                    "listed_for_sale": "false",
+                }
+            }
+        )
 
 
 @pytest.mark.parametrize(
@@ -434,6 +476,7 @@ def test_historical_payload_shapes_all_pass_allowlist() -> None:
             "confidence": 0.87,
             "segment_codes": ["itm"],
             "recommended_offer": "refi",
+            "decision_inputs": DECISION_INPUTS,
         },
     )
     # outreach.py::draft_outreach
@@ -452,6 +495,7 @@ def test_historical_payload_shapes_all_pass_allowlist() -> None:
             "borrower_id": "B-1",
             "request_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
             "draft_body": "Hi there...",
+            "decision_inputs": DECISION_INPUTS,
         },
     )
     # outreach.py::reject_outreach
@@ -489,5 +533,6 @@ def test_historical_payload_shapes_all_pass_allowlist() -> None:
             "offer_code": "refi",
             "confidence": 0.87,
             "thresholds_applied": {"min_spread_bps": 75},
+            "decision_inputs": DECISION_INPUTS,
         },
     )

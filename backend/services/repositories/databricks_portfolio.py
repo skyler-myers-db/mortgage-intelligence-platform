@@ -21,6 +21,7 @@ from backend.schemas.portfolio import (
     PortfolioPreview,
     PortfolioPreviewRequest,
 )
+from backend.services.audit_store import build_safe_audit_metadata
 from backend.services.databricks_sql import DatabricksSqlClient
 from backend.services.databricks_sql_helpers import qualify
 from backend.services.lakebase import (
@@ -179,6 +180,17 @@ class DatabricksPortfolioRepository:
         "LIMIT 7"
     )
 
+    _LIVE_WORKFLOW_COUNTS_SQL = (
+        "SELECT "
+        "  CAST(SUM(CASE WHEN COALESCE(ls.approval_status, 'pending') = 'approved' THEN 1 ELSE 0 END) "
+        "    AS INT) AS approved_count, "
+        "  CAST(SUM(CASE WHEN COALESCE(ls.outreach_status, 'none') = 'actioned' THEN 1 ELSE 0 END) "
+        "    AS INT) AS in_outreach_count "
+        f"FROM {qualify('gold', 'borrower_360')} AS b "
+        f"LEFT JOIN {qualify('gold', 'borrower_lifecycle_state')} AS ls "
+        "  ON ls.borrower_id = b.borrower_id"
+    )
+
     _PREVIEW_CACHE_KEY = "portfolio.preview.all"
     _DAY_ZERO_CACHE_KEY = "portfolio.day_zero"
 
@@ -279,13 +291,14 @@ class DatabricksPortfolioRepository:
     inserted_audit AS (
       INSERT INTO mip_app.action_audit (
         event_type, actor_email, entity_type, entity_id,
-        correlation_id, evidence_ids, metadata
+        request_id, correlation_id, evidence_ids, metadata
       )
       SELECT
         'CAMPAIGN_STATUS_UPDATE',
         %(actor)s,
         'campaign',
         updated_campaign.campaign_id,
+        %(request_id)s,
         %(correlation_id)s,
         ARRAY[]::TEXT[],
         %(metadata)s::jsonb
@@ -376,6 +389,33 @@ class DatabricksPortfolioRepository:
             trends[key] = self._build_trend(points)
         return trends, latest, "live", None
 
+    def _load_live_workflow_counts(self) -> dict[str, int]:
+        """Return current approval/outreach counts from the lifecycle mirror.
+
+        The daily funnel snapshot is still the trend source, but workflow
+        state can change after the scoring refresh. Reading the live mirror
+        keeps Home and Analytics consistent with Borrower 360 chips and Lead
+        Queue drilldowns.
+        """
+
+        try:
+            row = self._client.execute_one(self._LIVE_WORKFLOW_COUNTS_SQL) or {}
+        except Exception as exc:  # noqa: BLE001 -- fall back to snapshot counts
+            emit(
+                log,
+                "portfolio_workflow_counts_query_failed",
+                level=logging.WARNING,
+                dependency="warehouse",
+                outcome="degraded",
+                exc_type=type(exc).__name__,
+                exc_msg=str(exc)[:500],
+            )
+            return {}
+        return {
+            "approved_count": int(row.get("approved_count") or 0),
+            "in_outreach_count": int(row.get("in_outreach_count") or 0),
+        }
+
     @staticmethod
     def _coerce_datetime(value: Any) -> datetime | None:
         """Normalise ``MAX(snapshot_at)`` into a tz-aware UTC ``datetime``.
@@ -462,6 +502,7 @@ class DatabricksPortfolioRepository:
             trends, latest, trend_status, trend_note = self._load_funnel(
                 include_trends=not bool(where_clause),
             )
+            workflow_counts = self._load_live_workflow_counts() if not where_clause else {}
             return PortfolioPreview(
                 marketable_population=int(row.get("marketable_population") or 0),
                 high_intent_leads=int(row.get("high_intent_leads") or 0),
@@ -477,12 +518,12 @@ class DatabricksPortfolioRepository:
                 ),
                 avg_score=(int(row["avg_score"]) if row.get("avg_score") is not None else None),
                 approved_count=(
-                    int(latest["approved_count"])
+                    workflow_counts.get("approved_count", int(latest["approved_count"]))
                     if not where_clause and latest.get("approved_count") is not None
                     else None
                 ),
                 in_outreach_count=(
-                    int(latest["in_outreach_count"])
+                    workflow_counts.get("in_outreach_count", int(latest["in_outreach_count"]))
                     if not where_clause and latest.get("in_outreach_count") is not None
                     else None
                 ),
@@ -528,16 +569,19 @@ class DatabricksPortfolioRepository:
                 "request_id": f"portfolio-create-{uuid.uuid4()}",
                 "correlation_id": get_correlation_id(),
                 "metadata": json.dumps(
-                    {
-                        "source": "portfolio_builder",
-                        "criteria": payload.criteria.model_dump(exclude_none=True),
-                        "suppression_policy": payload.suppression_policy,
-                        "channel_cascade": payload.channel_cascade,
-                        "send_window": payload.send_window,
-                        "holdout": payload.holdout,
-                        "roi_assumptions": payload.roi_assumptions,
-                        "marketable_population": preview.marketable_population,
-                    },
+                    build_safe_audit_metadata(
+                        {
+                            "source": "portfolio_builder",
+                            "portfolio_criteria": payload.criteria.model_dump(exclude_none=True),
+                            "suppression_policy": payload.suppression_policy,
+                            "channel_cascade": payload.channel_cascade,
+                            "send_window": payload.send_window,
+                            "holdout": payload.holdout,
+                            "roi_assumptions": payload.roi_assumptions,
+                            "marketable_population": preview.marketable_population,
+                        },
+                        action="portfolio.create",
+                    ),
                     sort_keys=True,
                 ),
             },
@@ -639,13 +683,16 @@ class DatabricksPortfolioRepository:
                 "campaign_id": portfolio_id,
                 "status": payload.status,
                 "actor": actor or "unknown",
+                "request_id": f"campaign-status-{uuid.uuid4()}",
                 "correlation_id": get_correlation_id(),
                 "metadata": json.dumps(
-                    {
-                        "action": "campaign.status_update",
-                        "status": payload.status,
-                        "rationale": payload.rationale,
-                    },
+                    build_safe_audit_metadata(
+                        {
+                            "status": payload.status,
+                            "rationale": payload.rationale,
+                        },
+                        action="campaign.status_update",
+                    ),
                     sort_keys=True,
                 ),
             },

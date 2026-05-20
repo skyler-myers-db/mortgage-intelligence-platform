@@ -9,6 +9,11 @@ def test_required_routes_exist_and_respond():
     checks = [
         ("get", "/api/health", None, 200),
         ("get", "/api/config/options", None, 200),
+        ("get", "/api/analytics/executive", None, 200),
+        ("get", "/api/analytics/geography", None, 200),
+        ("get", "/api/analytics/economics", None, 200),
+        ("get", "/api/analytics/segments", None, 200),
+        ("get", "/api/analytics/signals", None, 200),
         ("post", "/api/portfolio/preview", {"criteria": {}}, 200),
         ("post", "/api/portfolio/create", {"name": "Sample"}, 200),
         ("get", "/api/portfolio/11111111-1111-4111-8111-111111111111", None, 200),
@@ -47,12 +52,12 @@ def test_required_routes_exist_and_respond():
         (
             "post",
             "/api/audit/event",
-            {
-                "actor": "anonymous",
-                "action": "view.leads",
-                "entity_type": "lead_queue",
-                "entity_id": "itm",
-            },
+                {
+                    "actor": "anonymous",
+                    "action": "view.custom",
+                    "entity_type": "lead_queue",
+                    "entity_id": "itm",
+                },
             200,
         ),
         ("get", "/api/admin/rules", None, 200),

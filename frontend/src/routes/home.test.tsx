@@ -14,6 +14,7 @@ vi.mock('../lib/api', () => ({
 }));
 
 import {
+  APPROVAL_QUEUE_STATE_LABEL,
   HOME_PORTFOLIO_PREVIEW_CRITERIA,
   requestHomePortfolioPreview,
 } from './home';
@@ -30,5 +31,9 @@ describe('Home portfolio preview request contract', () => {
       { marketing_eligibility: 'Any' },
       signal,
     );
+  });
+
+  it('describes approval metrics as current lifecycle state, not snapshot state', () => {
+    expect(APPROVAL_QUEUE_STATE_LABEL).toBe('current lifecycle state');
   });
 });

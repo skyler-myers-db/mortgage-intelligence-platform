@@ -696,7 +696,7 @@ def live_genie_client() -> GenieClient:
     host, token, space_id = creds
     # Cold-start can take 5-15s; allow a generous timeout since the
     # suite fires 50 prompts sequentially.
-    return GenieClient(host=host, token=token, space_id=space_id, timeout_s=90)
+    return GenieClient(host=host, token=token, space_id=space_id, timeout_s=120)
 
 
 # Genie API rate limits (observed Apr 2026): ~15 requests per minute per
@@ -725,7 +725,7 @@ def _ask_with_backoff(
 ) -> GenieResponse:
     """Fire a Genie question with transient-error retry.
 
-    Two retryable failure modes observed on live runs against the
+    Retryable failure modes observed on live runs against the
     deployed space:
 
     - ``HTTP 429 REQUEST_LIMIT_EXCEEDED`` — rate limit; wait the
@@ -733,6 +733,9 @@ def _ask_with_backoff(
     - ``Genie message terminated in state 'FAILED'`` — a per-message
       backend error that clears on re-ask (cold warehouse, transient
       compiler, etc.). One retry after a short pause is enough.
+    - ``Genie message polling timed out`` while the message is still
+      ``EXECUTING_QUERY`` — transient query-worker slowness. One retry is
+      allowed so nightly CI does not fail on a single backend stall.
 
     Any GenieClientError outside those two categories, OR a second
     failure on the same question, re-raises so the test surfaces the
@@ -748,6 +751,11 @@ def _ask_with_backoff(
             _time.sleep(_GENIE_429_RETRY_WAIT_S)
         elif "terminated in state 'FAILED'" in msg or "state='FAILED'" in msg:
             # Transient per-message failure; short pause and retry.
+            _time.sleep(8.0)
+        elif "polling timed out" in msg and (
+            "EXECUTING_QUERY" in msg or getattr(exc, "state", None) == "EXECUTING_QUERY"
+        ):
+            # Transient query-worker stall; retry once from a new conversation.
             _time.sleep(8.0)
         else:
             raise

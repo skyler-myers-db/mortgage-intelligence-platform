@@ -8,9 +8,8 @@ workspace.
 This module centralises the ``{catalog}.{schema}.{table}`` construction
 so Python callers only name ``(schema, table)`` pairs. The catalog is
 resolved from ``backend.config.settings.settings.mip_default_catalog``
-(env var ``MIP_DEFAULT_CATALOG``, also aliased via ``MIP_UC_CATALOG`` in
-deploy templates) at call time, so a single env-var flip reroutes the
-whole app at boot.
+(env var ``MIP_DEFAULT_CATALOG``) at call time, so a single env-var flip
+reroutes the whole app at boot.
 
 Scope note: only the Python side is covered here. SQL files under
 ``sql/transformations/`` and ``sql/ddl/`` still hardcode ``mip.*`` --

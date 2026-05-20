@@ -1,7 +1,11 @@
 from fastapi.testclient import TestClient
 
 from backend.main import app
+from backend.services.audit_decision_inputs import DECISION_INPUT_KEYS
+from backend.services.audit_store import get_audit_store
 from backend.services.repositories import get_offer_repository
+from tests.fixtures import mock_population
+from tests.fixtures.in_memory_audit_store import InMemoryAuditStore
 
 client = TestClient(app)
 
@@ -59,3 +63,31 @@ def test_offers_router_uses_refresh_applied_thresholds_from_offer_inputs() -> No
     assert body["alternatives"][0]["reason_not_chosen"] == (
         "Equity 39% is below the HELOC threshold (42%); cross-sell would not underwrite."
     )
+
+
+def test_recommend_offer_audit_captures_decision_inputs() -> None:
+    audit = InMemoryAuditStore()
+    previous = app.dependency_overrides.get(get_audit_store)
+    app.dependency_overrides[get_audit_store] = lambda: audit
+    try:
+        response = client.post(
+            "/api/offers/recommend",
+            json={"borrower_id": "B-48291"},
+            headers={"X-Correlation-ID": "forensic-offer-audit"},
+        )
+    finally:
+        if previous is None:
+            app.dependency_overrides.pop(get_audit_store, None)
+        else:
+            app.dependency_overrides[get_audit_store] = previous
+
+    assert response.status_code == 200, response.text
+    events = audit.list(limit=10, event_type="RECOMMEND_OFFER")
+    assert len(events) == 1
+    metadata = events[0].payload_json
+    assert events[0].correlation_id == response.headers["X-Correlation-ID"]
+    assert set(metadata["decision_inputs"]) == set(DECISION_INPUT_KEYS)
+    expected = mock_population.BORROWER_OFFER_INPUTS["B-48291"]
+    assert metadata["decision_inputs"] == {
+        key: expected[key] for key in DECISION_INPUT_KEYS
+    }

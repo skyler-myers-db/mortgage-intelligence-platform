@@ -154,14 +154,10 @@ def _resolve_connection() -> dict:
     }
 
 
-# Latest approval per borrower, plus a flag for whether an outreach event
-# has been recorded in the append-only action_audit ledger. outreach_status
-# is 'actioned' when any event with event_type starting with 'OUTREACH_' has
-# fired for that borrower, 'queued' when an approve exists but no outreach
-# yet, and 'none' otherwise. action_audit.subject_clip is a hash of the
-# CLIP -- outreach_actions isn't a dedicated table, so we key on
-# approvals.borrower_id and correlate against action_audit.entity_id which
-# the router writes as the borrower_id for outreach events.
+# Latest approval and latest sales disposition per borrower. This mirrors
+# SalesStateStore.lifecycle_for(): outreach_status is 'actioned' when a
+# call_dispositions row exists, 'queued' when an approval exists but no
+# disposition has been recorded, and 'none' otherwise.
 _LAKEBASE_QUERY = """
 WITH latest_approvals AS (
     SELECT DISTINCT ON (a.borrower_id)
@@ -172,19 +168,15 @@ WITH latest_approvals AS (
     FROM mip_app.approvals a
     ORDER BY a.borrower_id, a.decided_at DESC
 ),
-latest_outreach AS (
-    SELECT
-        entity_id AS borrower_id,
-        MAX(event_at) AS outreach_at
-    FROM mip_app.action_audit
-    WHERE event_type LIKE 'OUTREACH_%'
-      AND entity_type = 'borrower'
-      AND entity_id IS NOT NULL
-      AND entity_id <> ''
-    GROUP BY entity_id
+latest_dispositions AS (
+    SELECT DISTINCT ON (d.borrower_id)
+        d.borrower_id,
+        d.occurred_at AS outreach_at
+    FROM mip_app.call_dispositions d
+    ORDER BY d.borrower_id, d.occurred_at DESC, d.created_at DESC
 )
 SELECT
-    COALESCE(a.borrower_id, o.borrower_id)              AS borrower_id,
+    COALESCE(a.borrower_id, d.borrower_id)              AS borrower_id,
     CASE
         WHEN a.action = 'approve' THEN 'approved'
         WHEN a.action = 'reject'  THEN 'rejected'
@@ -192,7 +184,7 @@ SELECT
         ELSE 'pending'
     END                                                  AS approval_status,
     CASE
-        WHEN o.outreach_at IS NOT NULL          THEN 'actioned'
+        WHEN d.outreach_at IS NOT NULL          THEN 'actioned'
         WHEN a.action = 'approve'               THEN 'queued'
         ELSE 'none'
     END                                                  AS outreach_status,
@@ -200,9 +192,9 @@ SELECT
     CASE WHEN a.action = 'approve' THEN a.decided_at
          ELSE NULL
     END                                                  AS approved_at,
-    o.outreach_at                                        AS outreach_at
+    d.outreach_at                                        AS outreach_at
 FROM latest_approvals a
-FULL OUTER JOIN latest_outreach o USING (borrower_id)
+FULL OUTER JOIN latest_dispositions d USING (borrower_id)
 """
 
 

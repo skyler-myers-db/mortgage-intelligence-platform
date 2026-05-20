@@ -25,6 +25,16 @@
             ],
             "title": "App Env"
           },
+          "boundary_warning": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BoundaryWarning"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "breaker_state_changes_last_hour": {
             "default": 0,
             "title": "Breaker State Changes Last Hour",
@@ -1171,6 +1181,39 @@
         "title": "BorrowerLifecycleResponse",
         "type": "object"
       },
+      "BoundaryWarning": {
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "docs_ref": {
+            "title": "Docs Ref",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "recommended_action": {
+            "title": "Recommended Action",
+            "type": "string"
+          },
+          "severity": {
+            "default": "warning",
+            "title": "Severity",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "recommended_action",
+          "docs_ref"
+        ],
+        "title": "BoundaryWarning",
+        "type": "object"
+      },
       "CallDisposition": {
         "properties": {
           "attempt_number": {
@@ -1507,6 +1550,11 @@
             },
             "title": "Products",
             "type": "array"
+          },
+          "rum_enabled": {
+            "default": false,
+            "title": "Rum Enabled",
+            "type": "boolean"
           },
           "target_lender_refs": {
             "items": {
@@ -2059,6 +2107,136 @@
         "title": "DistributeLeadsResponse",
         "type": "object"
       },
+      "EconomicsAnalyticsResponse": {
+        "properties": {
+          "equity_vs_spread": {
+            "items": {
+              "$ref": "#/components/schemas/EquitySpreadPoint"
+            },
+            "title": "Equity Vs Spread",
+            "type": "array"
+          },
+          "rate_spread_histogram": {
+            "items": {
+              "$ref": "#/components/schemas/RateSpreadBucket"
+            },
+            "title": "Rate Spread Histogram",
+            "type": "array"
+          },
+          "top_borrowers": {
+            "items": {
+              "$ref": "#/components/schemas/TopBorrowerAnalyticsRow"
+            },
+            "title": "Top Borrowers",
+            "type": "array"
+          }
+        },
+        "required": [
+          "rate_spread_histogram",
+          "equity_vs_spread",
+          "top_borrowers"
+        ],
+        "title": "EconomicsAnalyticsResponse",
+        "type": "object"
+      },
+      "EquitySpreadPoint": {
+        "properties": {
+          "equity_pct": {
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Equity Pct",
+            "type": "integer"
+          },
+          "opportunity_score": {
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Opportunity Score",
+            "type": "integer"
+          },
+          "rate_spread_bps": {
+            "title": "Rate Spread Bps",
+            "type": "integer"
+          },
+          "segment": {
+            "title": "Segment",
+            "type": "string"
+          },
+          "state": {
+            "maxLength": 2,
+            "minLength": 2,
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "segment",
+          "state",
+          "equity_pct",
+          "rate_spread_bps",
+          "opportunity_score"
+        ],
+        "title": "EquitySpreadPoint",
+        "type": "object"
+      },
+      "EvidenceBySignalRow": {
+        "properties": {
+          "event_count": {
+            "minimum": 0.0,
+            "title": "Event Count",
+            "type": "integer"
+          },
+          "mean_confidence": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mean Confidence"
+          },
+          "signal_type": {
+            "title": "Signal Type",
+            "type": "string"
+          },
+          "source_product": {
+            "title": "Source Product",
+            "type": "string"
+          }
+        },
+        "required": [
+          "signal_type",
+          "source_product",
+          "event_count"
+        ],
+        "title": "EvidenceBySignalRow",
+        "type": "object"
+      },
+      "EvidenceDailyRow": {
+        "properties": {
+          "event_count": {
+            "minimum": 0.0,
+            "title": "Event Count",
+            "type": "integer"
+          },
+          "event_date": {
+            "title": "Event Date",
+            "type": "string"
+          },
+          "signal_type": {
+            "title": "Signal Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "event_date",
+          "signal_type",
+          "event_count"
+        ],
+        "title": "EvidenceDailyRow",
+        "type": "object"
+      },
       "EvidenceEvent": {
         "properties": {
           "confidence": {
@@ -2109,6 +2287,34 @@
         "title": "EvidenceEvent",
         "type": "object"
       },
+      "ExecutiveAnalyticsResponse": {
+        "properties": {
+          "score_distribution": {
+            "items": {
+              "$ref": "#/components/schemas/ScoreBucket"
+            },
+            "title": "Score Distribution",
+            "type": "array"
+          },
+          "stages": {
+            "items": {
+              "$ref": "#/components/schemas/FunnelStage"
+            },
+            "title": "Stages",
+            "type": "array"
+          },
+          "totals": {
+            "$ref": "#/components/schemas/FunnelTotals"
+          }
+        },
+        "required": [
+          "totals",
+          "stages",
+          "score_distribution"
+        ],
+        "title": "ExecutiveAnalyticsResponse",
+        "type": "object"
+      },
       "FootprintState": {
         "properties": {
           "display_order": {
@@ -2135,6 +2341,84 @@
           "is_default_state"
         ],
         "title": "FootprintState",
+        "type": "object"
+      },
+      "FunnelStage": {
+        "properties": {
+          "borrower_count": {
+            "minimum": 0.0,
+            "title": "Borrower Count",
+            "type": "integer"
+          },
+          "stage": {
+            "title": "Stage",
+            "type": "string"
+          },
+          "stage_order": {
+            "minimum": 1.0,
+            "title": "Stage Order",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "stage",
+          "stage_order",
+          "borrower_count"
+        ],
+        "title": "FunnelStage",
+        "type": "object"
+      },
+      "FunnelTotals": {
+        "properties": {
+          "actioned_borrowers": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Actioned Borrowers",
+            "type": "integer"
+          },
+          "addressable_borrowers": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Addressable Borrowers",
+            "type": "integer"
+          },
+          "approved_borrowers": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Approved Borrowers",
+            "type": "integer"
+          },
+          "high_opportunity_borrowers": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "High Opportunity Borrowers",
+            "type": "integer"
+          },
+          "in_the_money_borrowers": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "In The Money Borrowers",
+            "type": "integer"
+          },
+          "offer_recommended_borrowers": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Offer Recommended Borrowers",
+            "type": "integer"
+          },
+          "snapshot_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Snapshot Date"
+          }
+        },
+        "title": "FunnelTotals",
         "type": "object"
       },
       "GenieActionRequest": {
@@ -2822,6 +3106,38 @@
           "kind"
         ],
         "title": "GenieVisualizationSpec",
+        "type": "object"
+      },
+      "GeographyAnalyticsResponse": {
+        "properties": {
+          "state_avm_values": {
+            "items": {
+              "$ref": "#/components/schemas/StateAvmValueRow"
+            },
+            "title": "State Avm Values",
+            "type": "array"
+          },
+          "state_opportunities": {
+            "items": {
+              "$ref": "#/components/schemas/StateOpportunityRow"
+            },
+            "title": "State Opportunities",
+            "type": "array"
+          },
+          "top_zips": {
+            "items": {
+              "$ref": "#/components/schemas/TopZipOpportunityRow"
+            },
+            "title": "Top Zips",
+            "type": "array"
+          }
+        },
+        "required": [
+          "state_opportunities",
+          "state_avm_values",
+          "top_zips"
+        ],
+        "title": "GeographyAnalyticsResponse",
         "type": "object"
       },
       "GeographyScopeCounty": {
@@ -4407,6 +4723,25 @@
         "title": "PortfolioPreviewRequest",
         "type": "object"
       },
+      "RateSpreadBucket": {
+        "properties": {
+          "borrower_count": {
+            "minimum": 0.0,
+            "title": "Borrower Count",
+            "type": "integer"
+          },
+          "spread_bucket_bps": {
+            "title": "Spread Bucket Bps",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "spread_bucket_bps",
+          "borrower_count"
+        ],
+        "title": "RateSpreadBucket",
+        "type": "object"
+      },
       "RumAcceptedResponse": {
         "properties": {
           "accepted": {
@@ -5062,6 +5397,247 @@
         "title": "SavedLeadInput",
         "type": "object"
       },
+      "ScoreBucket": {
+        "properties": {
+          "borrower_count": {
+            "minimum": 0.0,
+            "title": "Borrower Count",
+            "type": "integer"
+          },
+          "score_bucket": {
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Score Bucket",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "score_bucket",
+          "borrower_count"
+        ],
+        "title": "ScoreBucket",
+        "type": "object"
+      },
+      "SegmentAnalyticsResponse": {
+        "properties": {
+          "average_scores": {
+            "items": {
+              "$ref": "#/components/schemas/SegmentMetricRow"
+            },
+            "title": "Average Scores",
+            "type": "array"
+          },
+          "by_state": {
+            "items": {
+              "$ref": "#/components/schemas/SegmentByStateRow"
+            },
+            "title": "By State",
+            "type": "array"
+          },
+          "counts": {
+            "items": {
+              "$ref": "#/components/schemas/SegmentMetricRow"
+            },
+            "title": "Counts",
+            "type": "array"
+          },
+          "overview": {
+            "items": {
+              "$ref": "#/components/schemas/SegmentOverviewRow"
+            },
+            "title": "Overview",
+            "type": "array"
+          },
+          "top_segments_by_state": {
+            "items": {
+              "$ref": "#/components/schemas/TopSegmentByStateRow"
+            },
+            "title": "Top Segments By State",
+            "type": "array"
+          }
+        },
+        "required": [
+          "overview",
+          "counts",
+          "average_scores",
+          "by_state",
+          "top_segments_by_state"
+        ],
+        "title": "SegmentAnalyticsResponse",
+        "type": "object"
+      },
+      "SegmentByStateRow": {
+        "properties": {
+          "borrower_count": {
+            "minimum": 0.0,
+            "title": "Borrower Count",
+            "type": "integer"
+          },
+          "segment_code": {
+            "enum": [
+              "itm",
+              "listed",
+              "permit",
+              "investor",
+              "equity",
+              "retention"
+            ],
+            "title": "Segment Code",
+            "type": "string"
+          },
+          "segment_name": {
+            "title": "Segment Name",
+            "type": "string"
+          },
+          "state": {
+            "maxLength": 2,
+            "minLength": 2,
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "segment_code",
+          "segment_name",
+          "borrower_count"
+        ],
+        "title": "SegmentByStateRow",
+        "type": "object"
+      },
+      "SegmentMetricRow": {
+        "properties": {
+          "segment_code": {
+            "enum": [
+              "itm",
+              "listed",
+              "permit",
+              "investor",
+              "equity",
+              "retention"
+            ],
+            "title": "Segment Code",
+            "type": "string"
+          },
+          "segment_name": {
+            "title": "Segment Name",
+            "type": "string"
+          },
+          "value": {
+            "minimum": 0.0,
+            "title": "Value",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "segment_code",
+          "segment_name",
+          "value"
+        ],
+        "title": "SegmentMetricRow",
+        "type": "object"
+      },
+      "SegmentOverviewRow": {
+        "properties": {
+          "approval_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approval Rate"
+          },
+          "borrower_count": {
+            "minimum": 0.0,
+            "title": "Borrower Count",
+            "type": "integer"
+          },
+          "delta_vs_prior_label": {
+            "title": "Delta Vs Prior Label",
+            "type": "string"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "in_the_money_borrowers": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "In The Money Borrowers",
+            "type": "integer"
+          },
+          "mean_equity_pct": {
+            "anyOf": [
+              {
+                "maximum": 100.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mean Equity Pct"
+          },
+          "mean_opportunity_score": {
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Mean Opportunity Score",
+            "type": "integer"
+          },
+          "mean_rate_spread_bps": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mean Rate Spread Bps"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "outreach_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outreach Rate"
+          },
+          "segment_code": {
+            "enum": [
+              "itm",
+              "listed",
+              "permit",
+              "investor",
+              "equity",
+              "retention"
+            ],
+            "title": "Segment Code",
+            "type": "string"
+          }
+        },
+        "required": [
+          "segment_code",
+          "name",
+          "borrower_count",
+          "mean_opportunity_score",
+          "delta_vs_prior_label",
+          "description"
+        ],
+        "title": "SegmentOverviewRow",
+        "type": "object"
+      },
       "SegmentSummary": {
         "properties": {
           "avg_score": {
@@ -5115,6 +5691,30 @@
         "title": "SegmentSummary",
         "type": "object"
       },
+      "SignalAnalyticsResponse": {
+        "properties": {
+          "evidence_by_signal": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceBySignalRow"
+            },
+            "title": "Evidence By Signal",
+            "type": "array"
+          },
+          "evidence_daily": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceDailyRow"
+            },
+            "title": "Evidence Daily",
+            "type": "array"
+          }
+        },
+        "required": [
+          "evidence_daily",
+          "evidence_by_signal"
+        ],
+        "title": "SignalAnalyticsResponse",
+        "type": "object"
+      },
       "SourceLabel": {
         "description": "A Unity Catalog source reference with a business-friendly label.\n\nAdded 2026-04-22 to fix the \"evidence chip renders raw function\nnames\" blocker. ``name`` stays the authoritative UC FQN so the\nevidence drawer can follow the lineage link; ``display_label`` is\nwhat the chip renders on the compliance-visible surface (Borrower\n360 rationale, Offer Orchestrator sources, Genie trusted-assets).",
         "properties": {
@@ -5132,6 +5732,73 @@
           "display_label"
         ],
         "title": "SourceLabel",
+        "type": "object"
+      },
+      "StateAvmValueRow": {
+        "properties": {
+          "state": {
+            "maxLength": 2,
+            "minLength": 2,
+            "title": "State",
+            "type": "string"
+          },
+          "total_avm_value_usd": {
+            "minimum": 0.0,
+            "title": "Total Avm Value Usd",
+            "type": "integer"
+          },
+          "total_equity_usd": {
+            "minimum": 0.0,
+            "title": "Total Equity Usd",
+            "type": "integer"
+          },
+          "total_lien_balance_usd": {
+            "minimum": 0.0,
+            "title": "Total Lien Balance Usd",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "state",
+          "total_avm_value_usd",
+          "total_lien_balance_usd",
+          "total_equity_usd"
+        ],
+        "title": "StateAvmValueRow",
+        "type": "object"
+      },
+      "StateOpportunityRow": {
+        "properties": {
+          "borrower_count": {
+            "minimum": 0.0,
+            "title": "Borrower Count",
+            "type": "integer"
+          },
+          "in_the_money_borrowers": {
+            "minimum": 0.0,
+            "title": "In The Money Borrowers",
+            "type": "integer"
+          },
+          "mean_opportunity_score": {
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Mean Opportunity Score",
+            "type": "integer"
+          },
+          "state": {
+            "maxLength": 2,
+            "minLength": 2,
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "borrower_count",
+          "mean_opportunity_score",
+          "in_the_money_borrowers"
+        ],
+        "title": "StateOpportunityRow",
         "type": "object"
       },
       "StateRollup": {
@@ -5212,6 +5879,175 @@
           "rollups"
         ],
         "title": "StateRollupResponse",
+        "type": "object"
+      },
+      "TopBorrowerAnalyticsRow": {
+        "properties": {
+          "borrower_id": {
+            "title": "Borrower Id",
+            "type": "string"
+          },
+          "city": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "City"
+          },
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "equity_pct": {
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Equity Pct",
+            "type": "integer"
+          },
+          "opportunity_score": {
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Opportunity Score",
+            "type": "integer"
+          },
+          "rank_overall": {
+            "minimum": 1.0,
+            "title": "Rank Overall",
+            "type": "integer"
+          },
+          "rate_spread_bps": {
+            "title": "Rate Spread Bps",
+            "type": "integer"
+          },
+          "recommended_offer": {
+            "title": "Recommended Offer",
+            "type": "string"
+          },
+          "state": {
+            "maxLength": 2,
+            "minLength": 2,
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "borrower_id",
+          "display_name",
+          "state",
+          "opportunity_score",
+          "rate_spread_bps",
+          "equity_pct",
+          "recommended_offer",
+          "rank_overall"
+        ],
+        "title": "TopBorrowerAnalyticsRow",
+        "type": "object"
+      },
+      "TopSegmentByStateRow": {
+        "properties": {
+          "borrower_count": {
+            "minimum": 0.0,
+            "title": "Borrower Count",
+            "type": "integer"
+          },
+          "segment_code": {
+            "enum": [
+              "itm",
+              "listed",
+              "permit",
+              "investor",
+              "equity",
+              "retention"
+            ],
+            "title": "Segment Code",
+            "type": "string"
+          },
+          "segment_name": {
+            "title": "Segment Name",
+            "type": "string"
+          },
+          "state": {
+            "maxLength": 2,
+            "minLength": 2,
+            "title": "State",
+            "type": "string"
+          },
+          "state_rank": {
+            "maximum": 3.0,
+            "minimum": 1.0,
+            "title": "State Rank",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "state",
+          "segment_code",
+          "segment_name",
+          "borrower_count",
+          "state_rank"
+        ],
+        "title": "TopSegmentByStateRow",
+        "type": "object"
+      },
+      "TopZipOpportunityRow": {
+        "properties": {
+          "borrower_count": {
+            "minimum": 0.0,
+            "title": "Borrower Count",
+            "type": "integer"
+          },
+          "city": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "City"
+          },
+          "in_the_money_borrowers": {
+            "minimum": 0.0,
+            "title": "In The Money Borrowers",
+            "type": "integer"
+          },
+          "mean_opportunity_score": {
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Mean Opportunity Score",
+            "type": "integer"
+          },
+          "mean_rate_spread_bps": {
+            "title": "Mean Rate Spread Bps",
+            "type": "integer"
+          },
+          "state": {
+            "maxLength": 2,
+            "minLength": 2,
+            "title": "State",
+            "type": "string"
+          },
+          "zip": {
+            "maxLength": 5,
+            "minLength": 5,
+            "title": "Zip",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "zip",
+          "borrower_count",
+          "in_the_money_borrowers",
+          "mean_opportunity_score",
+          "mean_rate_spread_bps"
+        ],
+        "title": "TopZipOpportunityRow",
         "type": "object"
       },
       "ValidationError": {
@@ -5607,6 +6443,116 @@
         "summary": "Get Sources",
         "tags": [
           "admin"
+        ]
+      }
+    },
+    "/api/analytics/economics": {
+      "get": {
+        "deprecated": true,
+        "operationId": "get_api_analytics_economics_economics",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EconomicsAnalyticsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Economics",
+        "tags": [
+          "analytics"
+        ]
+      }
+    },
+    "/api/analytics/executive": {
+      "get": {
+        "deprecated": true,
+        "operationId": "get_api_analytics_executive_executive",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExecutiveAnalyticsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Executive",
+        "tags": [
+          "analytics"
+        ]
+      }
+    },
+    "/api/analytics/geography": {
+      "get": {
+        "deprecated": true,
+        "operationId": "get_api_analytics_geography_geography",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GeographyAnalyticsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Geography",
+        "tags": [
+          "analytics"
+        ]
+      }
+    },
+    "/api/analytics/segments": {
+      "get": {
+        "deprecated": true,
+        "operationId": "get_api_analytics_segments_segments",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SegmentAnalyticsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Segments",
+        "tags": [
+          "analytics"
+        ]
+      }
+    },
+    "/api/analytics/signals": {
+      "get": {
+        "deprecated": true,
+        "operationId": "get_api_analytics_signals_signals",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignalAnalyticsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Signals",
+        "tags": [
+          "analytics"
         ]
       }
     },
@@ -7780,6 +8726,32 @@
             }
           },
           {
+            "description": "Exact native-analytics Lead Funnel drilldown. When present, the repository applies the same gold.borrower_360 predicate used by the funnel snapshot so X-Total-Matching equals the clicked stage count.",
+            "in": "query",
+            "name": "funnel_stage",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "addressable",
+                    "in_the_money",
+                    "high_opportunity",
+                    "offer_recommended",
+                    "approved",
+                    "actioned"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Exact native-analytics Lead Funnel drilldown. When present, the repository applies the same gold.borrower_360 predicate used by the funnel snapshot so X-Total-Matching equals the clicked stage count.",
+              "title": "Funnel Stage"
+            }
+          },
+          {
             "description": "Maximum leads to return. Defaults to 500; max 5000. When the resultset hits this cap the response sets `X-Truncated-At` so the UI can render 'Showing N \u2014 refine filters'.",
             "in": "query",
             "name": "limit",
@@ -9091,6 +10063,111 @@
         "summary": "Get Sources",
         "tags": [
           "admin"
+        ]
+      }
+    },
+    "/api/v1/analytics/economics": {
+      "get": {
+        "operationId": "get_api_v1_analytics_economics_economics",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EconomicsAnalyticsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Economics",
+        "tags": [
+          "analytics"
+        ]
+      }
+    },
+    "/api/v1/analytics/executive": {
+      "get": {
+        "operationId": "get_api_v1_analytics_executive_executive",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExecutiveAnalyticsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Executive",
+        "tags": [
+          "analytics"
+        ]
+      }
+    },
+    "/api/v1/analytics/geography": {
+      "get": {
+        "operationId": "get_api_v1_analytics_geography_geography",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GeographyAnalyticsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Geography",
+        "tags": [
+          "analytics"
+        ]
+      }
+    },
+    "/api/v1/analytics/segments": {
+      "get": {
+        "operationId": "get_api_v1_analytics_segments_segments",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SegmentAnalyticsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Segments",
+        "tags": [
+          "analytics"
+        ]
+      }
+    },
+    "/api/v1/analytics/signals": {
+      "get": {
+        "operationId": "get_api_v1_analytics_signals_signals",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignalAnalyticsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Signals",
+        "tags": [
+          "analytics"
         ]
       }
     },
@@ -11240,6 +12317,32 @@
               ],
               "description": "Optional Lakebase persisted cohort id produced by a governed Genie action.",
               "title": "Cohort Id"
+            }
+          },
+          {
+            "description": "Exact native-analytics Lead Funnel drilldown. When present, the repository applies the same gold.borrower_360 predicate used by the funnel snapshot so X-Total-Matching equals the clicked stage count.",
+            "in": "query",
+            "name": "funnel_stage",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "addressable",
+                    "in_the_money",
+                    "high_opportunity",
+                    "offer_recommended",
+                    "approved",
+                    "actioned"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Exact native-analytics Lead Funnel drilldown. When present, the repository applies the same gold.borrower_360 predicate used by the funnel snapshot so X-Total-Matching equals the clicked stage count.",
+              "title": "Funnel Stage"
             }
           },
           {

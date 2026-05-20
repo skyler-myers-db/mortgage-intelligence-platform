@@ -18,6 +18,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, R
 
 from backend.schemas.common import EvidenceEvent, validate_public_borrower_id
 from backend.schemas.lead import Borrower360, LeadSummary
+from backend.services.audit_decision_inputs import decision_inputs_from_borrower
 from backend.services.audit_store import AuditStore, get_audit_store, resolve_actor
 from backend.services.observability import emit
 from backend.services.repositories import BorrowerRepository, get_borrower_repository
@@ -177,6 +178,7 @@ def get_borrower(
             "confidence": borrower.confidence,
             "segment_codes": borrower.segment_codes,
             "recommended_offer": borrower.recommended_offer,
+            "decision_inputs": decision_inputs_from_borrower(borrower),
         },
         evidence_ids=list(borrower.evidence_ids),
         event_type="VIEW_BORROWER",

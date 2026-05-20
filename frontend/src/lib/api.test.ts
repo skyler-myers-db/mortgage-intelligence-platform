@@ -43,6 +43,30 @@ describe('apiPath', () => {
   });
 });
 
+describe('analytics API client', () => {
+  it('routes native analytics reads through the canonical API version', async () => {
+    const calls: Array<{ path: string; init?: RequestInit }> = [];
+    vi.stubGlobal('fetch', async (path: string, init?: RequestInit) => {
+      calls.push({ path, init });
+      return jsonResponse(200, {});
+    });
+
+    await api.analyticsExecutive();
+    await api.analyticsGeography();
+    await api.analyticsEconomics();
+    await api.analyticsSegments();
+    await api.analyticsSignals();
+
+    expect(calls.map((call) => new URL(call.path, 'http://localhost').pathname)).toEqual([
+      '/api/v1/analytics/executive',
+      '/api/v1/analytics/geography',
+      '/api/v1/analytics/economics',
+      '/api/v1/analytics/segments',
+      '/api/v1/analytics/signals',
+    ]);
+  });
+});
+
 describe('_parseRetryableBody', () => {
   it('extracts reason="breaker_open" from a 503 body', async () => {
     const res = jsonResponse(503, {
@@ -386,6 +410,31 @@ describe('lead queue API client', () => {
     expect(url.searchParams.get('zip')).toBe('33311');
     expect(url.searchParams.get('segment_codes')).toBe('itm,investor,equity,retention');
     expect(url.searchParams.get('segment_mode')).toBe('all');
+  });
+
+  it('serializes every exact analytics funnel drilldown into the leads query string', async () => {
+    const calls: Array<{ path: string; init?: RequestInit }> = [];
+    vi.stubGlobal('fetch', async (path: string, init?: RequestInit) => {
+      calls.push({ path, init });
+      return jsonResponse(200, []);
+    });
+
+    const stages = ['addressable', 'in_the_money', 'high_opportunity', 'offer_recommended', 'approved', 'actioned'] as const;
+
+    for (const funnelStage of stages) {
+      await api.leads(undefined, undefined, undefined, {
+        funnelStage,
+        limit: 50,
+      });
+    }
+
+    calls.forEach((call, index) => {
+      const url = new URL(call.path, 'http://localhost');
+      expect(url.pathname).toBe('/api/v1/leads');
+      expect(url.searchParams.get('funnel_stage')).toBe(stages[index]);
+      expect(url.searchParams.get('approval_status')).toBeNull();
+      expect(url.searchParams.get('marketing_eligibility')).toBeNull();
+    });
   });
 });
 

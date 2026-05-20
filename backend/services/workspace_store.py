@@ -21,7 +21,7 @@ from backend.schemas.workspace import (
     WorkspaceMutationResponse,
     WorkspaceState,
 )
-from backend.services.audit_store import _assert_allowlisted, _assert_no_pii
+from backend.services.audit_store import build_safe_audit_metadata
 from backend.services.lakebase import LakebaseClient, get_lakebase_client
 from backend.services.observability import get_correlation_id
 from backend.services.pii_redaction import scrub_free_text
@@ -64,10 +64,7 @@ def _iso(value: Any) -> str:
 
 
 def _audit_metadata(action: str, payload: dict[str, Any] | None = None) -> str:
-    metadata = {"action": action, **(payload or {})}
-    _assert_no_pii(metadata)
-    _assert_allowlisted(metadata)
-    return json.dumps(metadata)
+    return json.dumps(build_safe_audit_metadata(payload, action=action))
 
 
 def _lead_from_row(row: dict[str, Any]) -> SavedLead:
@@ -336,7 +333,7 @@ class LakebaseWorkspaceStore:
                 "workspace.save_lead",
                 {
                     "borrower_id": lead.borrower_id,
-                    "offer_code": lead.recommended_offer,
+                    "recommended_offer": lead.recommended_offer,
                     "request_id": request_id,
                 },
             ),
@@ -404,7 +401,7 @@ class LakebaseWorkspaceStore:
                 "workspace.save_draft",
                 {
                     "borrower_id": draft.borrower_id,
-                    "offer_code": draft.offer_code,
+                    "workspace_offer_code": draft.offer_code,
                     "channel": draft.channel,
                     "request_id": request_id,
                 },

@@ -31,6 +31,7 @@ from fastapi.testclient import TestClient
 from backend.api import outreach as outreach_mod
 from backend.main import app
 from backend.services import job_trigger, lakebase_bootstrap
+from backend.services.audit_decision_inputs import DECISION_INPUT_KEYS
 from backend.services.audit_store import get_audit_store
 from backend.services.lakebase import LakebaseError, get_lakebase_client
 from backend.services.lakebase_bootstrap import _reset_bootstrap_for_tests
@@ -494,6 +495,42 @@ def test_atomic_conflict_rejects_request_id_for_different_decision(
     assert lakebase.committed_approvals == []
     assert audit.list(limit=10) == []
     assert trigger_calls == []
+
+
+def test_approve_audit_captures_decision_inputs(
+    override_deps,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    audit = InMemoryAuditStore()
+    fake_lakebase = MagicMock()
+    fake_lakebase.execute = MagicMock()
+    fake_lakebase.fetchone.side_effect = _fetchone_none_or_disclosure
+    monkeypatch.setattr(
+        outreach_mod,
+        "enqueue_lifecycle_trigger",
+        lambda background, *, reason="approval": None,
+    )
+    override_deps(audit=audit, lakebase=fake_lakebase)
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/outreach/approve",
+        json={
+            "borrower_id": "B-48291",
+            "offer_code": "heloc",
+            "draft_body": APPROVAL_DRAFT_BODY,
+        },
+        headers={
+            "X-Forwarded-Email": "lo@example.com",
+            "X-Correlation-ID": "forensic-approve-audit",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    events = audit.list(limit=10, event_type="APPROVE")
+    assert len(events) == 1
+    assert events[0].correlation_id == response.headers["X-Correlation-ID"]
+    assert set(events[0].payload_json["decision_inputs"]) == set(DECISION_INPUT_KEYS)
 
 
 def test_reject_schedules_lifecycle_sync_trigger(

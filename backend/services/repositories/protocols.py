@@ -21,6 +21,13 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
+from backend.schemas.analytics import (
+    EconomicsAnalyticsResponse,
+    ExecutiveAnalyticsResponse,
+    GeographyAnalyticsResponse,
+    SegmentAnalyticsResponse,
+    SignalAnalyticsResponse,
+)
 from backend.schemas.common import EvidenceEvent
 from backend.schemas.geo import (
     CountyRollupResponse,
@@ -38,6 +45,32 @@ from backend.schemas.portfolio import (
     PortfolioPreview,
     PortfolioPreviewRequest,
 )
+
+
+@runtime_checkable
+class AnalyticsRepository(Protocol):
+    """Native in-app analytics read model.
+
+    Slice backing: ``mip.gold`` and ``mip.semantics`` projections used by
+    the Lakeview dashboards. The API returns app-safe aggregates and
+    public borrower ids only, so app users can work inside MIP without
+    navigating to Databricks dashboards.
+    """
+
+    def executive(self) -> ExecutiveAnalyticsResponse:
+        ...
+
+    def geography(self) -> GeographyAnalyticsResponse:
+        ...
+
+    def economics(self) -> EconomicsAnalyticsResponse:
+        ...
+
+    def segments(self) -> SegmentAnalyticsResponse:
+        ...
+
+    def signals(self) -> SignalAnalyticsResponse:
+        ...
 
 
 @runtime_checkable
@@ -120,6 +153,7 @@ class LeadRepository(Protocol):
         segment_mode: str = "any",
         target_lender_ref: str | None = None,
         cohort_id: str | None = None,
+        funnel_stage: str | None = None,
         portfolio_criteria: PortfolioCriteria | None = None,
         approval_status: str | None = None,
         outreach_status: str | None = None,
@@ -163,6 +197,7 @@ class LeadRepository(Protocol):
         segment_mode: str = "any",
         target_lender_ref: str | None = None,
         cohort_id: str | None = None,
+        funnel_stage: str | None = None,
         portfolio_criteria: PortfolioCriteria | None = None,
         approval_status: str | None = None,
         outreach_status: str | None = None,

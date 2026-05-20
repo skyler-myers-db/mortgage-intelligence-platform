@@ -7,6 +7,7 @@ export const queryKeys = {
   configOptions: () => ['mip', 'config', 'options'] as const,
   homePreview: () => ['mip', 'portfolio', 'preview', 'home'] as const,
   dataEstate: () => ['mip', 'data-estate'] as const,
+  analytics: (scope: string) => ['mip', 'analytics', scope] as const,
   segments: (criteria: readonly unknown[]) => ['mip', 'segments', ...criteria] as const,
   leads: (criteria: readonly unknown[]) => ['mip', 'leads', ...criteria] as const,
   borrower: (borrowerId: string | null | undefined) => ['mip', 'borrower', borrowerId ?? ''] as const,
@@ -51,6 +52,10 @@ export function invalidateOperationalQueries(queryClient: QueryClient): Promise<
     }),
     queryClient.invalidateQueries({
       queryKey: ['mip', 'segments'] satisfies QueryKey,
+      refetchType: 'none',
+    }),
+    queryClient.invalidateQueries({
+      queryKey: ['mip', 'analytics'] satisfies QueryKey,
       refetchType: 'none',
     }),
   ]).then(() => undefined);

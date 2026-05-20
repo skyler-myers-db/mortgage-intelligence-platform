@@ -5,6 +5,7 @@ import { RouteNav } from './components/layout/RouteNav';
 import { Skeleton } from './components/ui/Skeleton';
 import {
   AdminConfigRoute,
+  AnalyticsRoute,
   AskGenieRoute,
   Borrower360Route,
   HomeRoute,
@@ -44,6 +45,7 @@ function RouteTransition() {
       <Suspense fallback={<RouteFallback />}>
         <Routes>
           <Route path="/" element={<HomeRoute />} />
+          <Route path="/analytics" element={<AnalyticsRoute />} />
           <Route path="/portfolio-builder" element={<PortfolioBuilderRoute />} />
           <Route path="/segment-intelligence" element={<SegmentIntelligenceRoute />} />
           <Route path="/lead-queue" element={<LeadQueueRoute />} />

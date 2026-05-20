@@ -12,11 +12,16 @@ The app uses live Cotality public-record, lien, ownership, valuation, and mortga
 
 1. Open `/` and explain the full platform vision: Module 0 lead generation, Module 1 pipeline, Module 2 LO workbench, Module 3 underwriting, Module 4 risk/retention.
 2. Go to `/portfolio-builder` and build a lead population from geography, occupancy, open lien, lender relationship, target product, and assumptions.
-3. Go to `/segment-intelligence` and show the map + segment cards.
-4. Go to `/lead-queue` and expand a high-scoring borrower.
-5. Go to `/borrower-360/:id` and show masked property/owner refs, liens, equity, related properties, triggers, and evidence.
-6. Go to `/offer-orchestrator/:id` and approve a human-in-the-loop action.
-7. Go to `/ask-genie` and ask one curated question over Module 0 gold tables.
+3. Go to `/analytics` for the in-app executive, geography, economics,
+   segment, and signal-mix views. This is the primary user-facing analytics
+   surface; app users do not need Lakeview, SQL Warehouse, Data Explorer, or
+   other Databricks workspace UI access. Access to the app itself still follows
+   Databricks Apps sharing/SSO until an external auth front door exists.
+4. Go to `/segment-intelligence` and show the map + segment cards.
+5. Go to `/lead-queue` and expand a high-scoring borrower.
+6. Go to `/borrower-360/:id` and show masked property/owner refs, liens, equity, related properties, triggers, and evidence.
+7. Go to `/offer-orchestrator/:id` and approve a human-in-the-loop action.
+8. Go to `/ask-genie` and ask one curated question over Module 0 gold tables.
 
 ## Stack
 
@@ -24,7 +29,9 @@ The app uses live Cotality public-record, lien, ownership, valuation, and mortga
 - UI: CSS tokens from the design prototype, shadcn/Radix-ready structure
 - Backend: FastAPI + Pydantic + Databricks SDK and SQL connector (live Unity Catalog)
 - Runtime: Databricks Apps
-- Analytics: Unity Catalog Delta tables + SQL Warehouse
+- Analytics: in-app React analytics route backed by typed FastAPI responses
+  over Unity Catalog Delta tables + SQL Warehouse. Databricks AI/BI dashboards
+  remain an operator/admin companion, not the required user path.
 - Semantics: Unity Catalog metric views
 - Conversational analytics: Genie App resource / Genie API wrapper
 - Transactional state: Lakebase Postgres for campaigns, approvals, feedback, audit

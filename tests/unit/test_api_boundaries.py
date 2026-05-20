@@ -226,6 +226,45 @@ def test_public_audit_event_cannot_forge_genie_actions() -> None:
     assert response.json()["detail"] == "event type is owned by a governed server route"
 
 
+@pytest.mark.parametrize(
+    "server_owned_event_type",
+    [
+        "APPROVE",
+        "CAMPAIGN_STATUS_UPDATE",
+        "CALL_DISPOSITION",
+        "DELETE_DRAFT",
+        "DRAFT_OUTREACH",
+        "LEAD_ASSIGN",
+        "LEAD_DISTRIBUTE",
+        "OUTREACH_REJECT",
+        "PORTFOLIO_CREATE",
+        "RECOMMEND_OFFER",
+        "RUN_GENIE",
+        "SAVE_DRAFT",
+        "SAVE_LEAD",
+        "UNSAVE_LEAD",
+        "VIEW_BORROWER",
+        "VIEW_LEADS",
+    ],
+)
+def test_public_audit_event_cannot_forge_server_owned_events(
+    server_owned_event_type: str,
+) -> None:
+    response = client.post(
+        "/api/audit/event",
+        json={
+            "actor": "attacker@example.com",
+            "action": "view.custom",
+            "entity_type": "lead_queue",
+            "entity_id": "manual",
+            "event_type": server_owned_event_type,
+        },
+    )
+
+    assert response.status_code == 400, server_owned_event_type
+    assert response.json()["detail"] == "event type is owned by a governed server route"
+
+
 def test_public_audit_event_masks_subject_clip() -> None:
     response = client.post(
         "/api/audit/event",

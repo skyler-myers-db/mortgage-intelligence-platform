@@ -323,7 +323,24 @@ run "$PYTHON" tools/databricks/bundle_env.py deploy -t "$TARGET"
 # -----------------------------------------------------------------------------
 APP_NAME="${MIP_APP_NAME:-mip-app}"
 step "deploy Databricks App snapshot from uploaded bundle source"
-run databricks apps deploy "$APP_NAME" --mode SNAPSHOT --timeout 20m
+APP_DEPLOY_META="$(databricks bundle summary -t "$TARGET" -o json | "$PYTHON" -c 'import json,sys; data=json.load(sys.stdin); ws=data.get("workspace") or {}; print((data.get("resources") or {}).get("apps", {}).get("mip_app", {}).get("source_code_path") or ws.get("file_path") or ""); print((ws.get("current_user") or {}).get("userName") or "")')"
+APP_SOURCE_PATH="$(printf '%s\n' "$APP_DEPLOY_META" | sed -n '1p')"
+APP_CURRENT_USER="$(printf '%s\n' "$APP_DEPLOY_META" | sed -n '2p')"
+if [[ -z "$APP_SOURCE_PATH" ]]; then
+  echo "${RED}[deploy] bundle summary did not expose the uploaded app source path.${RST}" >&2
+  exit 1
+fi
+APP_DEPLOY_PAYLOAD="$(mktemp -t mip-app-deploy.XXXXXX.json)"
+"$PYTHON" tools/databricks/app_deploy_payload.py \
+  --source-code-path "$APP_SOURCE_PATH" \
+  --target "$TARGET" \
+  --current-user-email "$APP_CURRENT_USER" \
+  --app-env sandbox \
+  --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
+  --schema "${MIP_DEFAULT_SCHEMA:-gold}" \
+  > "$APP_DEPLOY_PAYLOAD"
+run databricks apps deploy "$APP_NAME" --json "@$APP_DEPLOY_PAYLOAD" --timeout 20m
+rm -f "$APP_DEPLOY_PAYLOAD"
 
 if [[ "$DRY_RUN" -eq 0 && -z "${MIP_APP_URL:-}" ]]; then
   DEPLOYED_APP_URL="$(databricks apps get "$APP_NAME" -o json | "$PYTHON" -c 'import json,sys; print(json.load(sys.stdin).get("url",""))')"

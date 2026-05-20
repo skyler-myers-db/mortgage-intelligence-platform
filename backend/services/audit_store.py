@@ -130,18 +130,22 @@ _PII_DENYLIST_KEYS: frozenset[str] = frozenset(
 # site in backend/api/* as of 2026-04-23:
 #
 #   backend/api/borrowers.py::read_borrower_360
-#     opportunity_score, confidence, segment_codes, recommended_offer
+#     opportunity_score, confidence, segment_codes, recommended_offer,
+#     decision_inputs
 #   backend/api/outreach.py::draft_outreach
 #     channel, offer_code
 #   backend/api/outreach.py::approve_outreach
 #     approval_id, offer_code, borrower_id, request_id, draft_body,
-#     rationale, bulk_id, bulk_rationale
+#     rationale, bulk_id, bulk_rationale, decision_inputs
 #   backend/api/outreach.py::reject_outreach
 #     approval_id, offer_code, borrower_id, request_id, rationale, rationale_code
 #   backend/api/leads.py::list_leads_ranked
 #     rendered_borrower_ids, portfolio_id, segment, segment_mode, limit
 #   backend/api/offers.py::recommend_offer
-#     offer_code, confidence, thresholds_applied
+#     offer_code, confidence, thresholds_applied, decision_inputs
+#   backend/services/repositories/databricks_portfolio.py
+#     portfolio_criteria, suppression_policy, channel_cascade, send_window,
+#     holdout, roi_assumptions, marketable_population, status
 # Plus two keys injected by the audit layer itself:
 #   action      -- canonical verb, added by LakebaseAuditStore.write
 #   evidence_ids -- some flows may pass it inside payload_json (legacy)
@@ -164,6 +168,7 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         "confidence",
         "segment_codes",
         "recommended_offer",
+        "workspace_offer_code",
         # Outreach draft / approve / reject
         "channel",
         "offer_code",
@@ -243,6 +248,16 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         "footprint_states",
         # Offers
         "thresholds_applied",
+        "decision_inputs",
+        # Portfolio/campaign write paths that insert inside a Lakebase
+        # transaction but still use the central audit metadata policy.
+        "suppression_policy",
+        "channel_cascade",
+        "send_window",
+        "holdout",
+        "roi_assumptions",
+        "marketable_population",
+        "status",
     }
 )
 
@@ -259,7 +274,9 @@ _BORROWER_ID_METADATA_KEYS: frozenset[str] = frozenset({"borrower_id"})
 _OPAQUE_ID_METADATA_KEYS: frozenset[str] = frozenset(
     {"approval_id", "bulk_id", "campaign_id", "request_id", "assignment_id", "disposition_id"}
 )
-_CAMPAIGN_LABEL_METADATA_KEYS: frozenset[str] = frozenset({"variant_name"})
+_CAMPAIGN_LABEL_METADATA_KEYS: frozenset[str] = frozenset(
+    {"variant_name", "recommended_offer", "workspace_offer_code"}
+)
 _INTERNAL_STAFF_EMAIL_METADATA_KEYS: frozenset[str] = frozenset(
     {"assigned_to_email", "assigned_by", "lo_email"}
 )
@@ -311,6 +328,17 @@ _ALLOWED_RESULT_FILTER_KEYS: frozenset[str] = frozenset(
 )
 _MAX_RESULT_FILTER_VALUES = 500
 _MAX_RESULT_FILTER_STATES = 56
+_DECISION_INPUT_KEYS: frozenset[str] = frozenset(
+    {
+        "rate_spread_bps",
+        "equity_pct",
+        "has_permit",
+        "listed_for_sale",
+        "is_investor",
+        "is_current_customer",
+        "is_competitor_lien",
+    }
+)
 
 _ALLOWED_SEGMENT_CODES: frozenset[str] = frozenset(
     {"itm", "listed", "permit", "investor", "equity", "retention"}
@@ -513,6 +541,10 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
         if result_filters is None:
             continue
         _assert_result_filters_value_policy(result_filters)
+    for _, decision_inputs in _metadata_values_for(metadata, {"decision_inputs"}):
+        if decision_inputs is None:
+            continue
+        _assert_decision_inputs_value_policy(decision_inputs)
     for field, value in _metadata_values_for(metadata, {"strategy"}):
         if value is not None and str(value) not in _SALES_STRATEGIES:
             raise AuditMetadataValueViolation(field, "must be a governed sales assignment strategy")
@@ -718,6 +750,43 @@ def _assert_result_filters_value_policy(value: Any) -> None:
         raise AuditMetadataValueViolation("result_filters.source", "must be genie or trusted_sql")
 
 
+def _assert_decision_inputs_value_policy(value: Any) -> None:
+    if not isinstance(value, dict):
+        raise AuditMetadataValueViolation(
+            "decision_inputs",
+            "must be an object with the reviewed scoring input keys",
+        )
+    keys = {str(key) for key in value}
+    missing = _DECISION_INPUT_KEYS - keys
+    extra = keys - _DECISION_INPUT_KEYS
+    if missing or extra:
+        detail: list[str] = []
+        if missing:
+            detail.append("missing " + ", ".join(sorted(missing)))
+        if extra:
+            detail.append("unreviewed " + ", ".join(sorted(extra)))
+        raise AuditMetadataValueViolation("decision_inputs", "; ".join(detail))
+    for field in ("rate_spread_bps", "equity_pct"):
+        item = value[field]
+        if isinstance(item, bool) or not isinstance(item, int):
+            raise AuditMetadataValueViolation(f"decision_inputs.{field}", "must be an integer")
+    equity_pct = int(value["equity_pct"])
+    if equity_pct < 0 or equity_pct > 100:
+        raise AuditMetadataValueViolation(
+            "decision_inputs.equity_pct",
+            "must be a percentage between 0 and 100",
+        )
+    for field in (
+        "has_permit",
+        "listed_for_sale",
+        "is_investor",
+        "is_current_customer",
+        "is_competitor_lien",
+    ):
+        if not isinstance(value[field], bool):
+            raise AuditMetadataValueViolation(f"decision_inputs.{field}", "must be boolean")
+
+
 def _sanitize_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     """Return reviewed audit metadata with known free-text values scrubbed.
 
@@ -739,6 +808,27 @@ def _sanitize_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
                     "must not contain human-name-shaped text or unresolved placeholders",
                 )
     return cleaned
+
+
+def build_safe_audit_metadata(
+    payload_json: dict[str, Any] | None,
+    *,
+    action: str,
+) -> dict[str, Any]:
+    """Return metadata after the shared audit safety policy has run.
+
+    Most writes flow through ``LakebaseAuditStore.write``. A few Lakebase
+    repository methods insert the business row and the audit row in one
+    SQL statement for atomicity; those paths still need the same metadata
+    scrub, denylist, allowlist, and value validation before binding JSONB.
+    """
+
+    validate_public_audit_action(action)
+    metadata = _sanitize_metadata({**(payload_json or {}), "action": action})
+    _assert_no_pii(metadata)
+    _assert_allowlisted(metadata)
+    _assert_public_safe_values(metadata)
+    return metadata
 
 
 # ----------------------------------------------------------------------

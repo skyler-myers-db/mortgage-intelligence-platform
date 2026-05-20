@@ -15,12 +15,44 @@ the-money borrowers regardless of their book size. These tests pin:
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi.testclient import TestClient
 
 from backend.api.leads import DEFAULT_LEAD_LIMIT, MAX_LEAD_LIMIT
 from backend.main import app
 from backend.schemas.lead import LeadSummary
 from backend.services.repositories.databricks_repo import DatabricksLeadRepository
+
+FUNNEL_STAGE_PREDICATES = {
+    "addressable": "",
+    "in_the_money": "b.in_the_money = TRUE",
+    "high_opportunity": "b.opportunity_score >= 75",
+    "offer_recommended": (
+        "b.recommended_offer_code IS NOT NULL "
+        "AND b.recommended_offer_code <> 'nurture'"
+    ),
+    "approved": "COALESCE(ls.approval_status, 'pending') = 'approved'",
+    "actioned": "COALESCE(ls.outreach_status, 'none') = 'actioned'",
+}
+
+FUNNEL_SNAPSHOT_EXPRESSIONS = {
+    "addressable": "CAST(COUNT(*) AS INT)                                                       AS addressable_borrowers",
+    "in_the_money": (
+        "CAST(SUM(CASE WHEN in_the_money THEN 1 ELSE 0 END) AS INT)                  "
+        "AS in_the_money_borrowers"
+    ),
+    "high_opportunity": (
+        "CAST(SUM(CASE WHEN opportunity_score >= 75 THEN 1 ELSE 0 END) AS INT)       "
+        "AS high_opportunity_borrowers"
+    ),
+    "offer_recommended": (
+        "recommended_offer_code IS NOT NULL\n"
+        "                     AND recommended_offer_code <> 'nurture'"
+    ),
+    "approved": "CAST(SUM(CASE WHEN approval_status = 'approved' THEN 1 ELSE 0 END) AS INT)",
+    "actioned": "CAST(SUM(CASE WHEN outreach_status = 'actioned' THEN 1 ELSE 0 END) AS INT)",
+}
 
 
 def _lead(
@@ -132,6 +164,98 @@ def test_lead_repository_applies_portfolio_criteria_to_borrower_360_path() -> No
         "product_1": "refi_plus_heloc",
         "equity_floor": 25,
     }
+
+
+def test_lead_repository_applies_exact_funnel_stage_predicates_to_borrower_360() -> None:
+    captured: dict[str, object] = {}
+
+    class _Client:
+        def execute_one(
+            self,
+            sql: str,
+            params: dict[str, object] | None = None,
+        ) -> dict[str, object]:
+            captured["sql"] = sql
+            captured["params"] = params or {}
+            return {"n": 23}
+
+    repo = DatabricksLeadRepository(_Client(), cache_ttl_s=0)  # type: ignore[arg-type]
+
+    assert repo.count(segment=None, portfolio_id=None, funnel_stage="approved") == 23
+
+    sql = str(captured["sql"])
+    assert "borrower_360" in sql
+    assert "lead_population" not in sql
+    assert FUNNEL_STAGE_PREDICATES["approved"] in sql
+    assert captured["params"] == {}
+
+
+def test_lead_repository_pins_every_funnel_stage_to_snapshot_predicate() -> None:
+    class _Client:
+        def execute_one(
+            self,
+            sql: str,
+            params: dict[str, object] | None = None,
+        ) -> dict[str, object]:
+            _ = (sql, params)
+            return {"n": 1}
+
+    repo = DatabricksLeadRepository(_Client(), cache_ttl_s=0)  # type: ignore[arg-type]
+    snapshot_sql = Path("sql/transformations/gold_funnel_snapshot_daily.sql").read_text()
+
+    for stage, predicate in FUNNEL_STAGE_PREDICATES.items():
+        clause = repo._funnel_stage_filter_clause(stage)
+        assert clause == (f"AND {predicate}" if predicate else "")
+        assert FUNNEL_SNAPSHOT_EXPRESSIONS[stage] in snapshot_sql
+
+
+def test_lead_repository_applies_all_funnel_stages_through_borrower_360() -> None:
+    captured_sql: dict[str, str] = {}
+
+    class _Client:
+        def execute_one(
+            self,
+            sql: str,
+            params: dict[str, object] | None = None,
+        ) -> dict[str, object]:
+            _ = params
+            captured_sql[current_stage] = sql
+            return {"n": 1}
+
+    repo = DatabricksLeadRepository(_Client(), cache_ttl_s=0)  # type: ignore[arg-type]
+
+    for current_stage in FUNNEL_STAGE_PREDICATES:
+        assert repo.count(segment=None, portfolio_id=None, funnel_stage=current_stage) == 1
+        sql = captured_sql[current_stage]
+        assert "borrower_360" in sql
+        assert "lead_population" not in sql
+        predicate = FUNNEL_STAGE_PREDICATES[current_stage]
+        if predicate:
+            assert predicate in sql
+
+
+def test_lead_repository_addressable_funnel_stage_uses_full_borrower_360_population() -> None:
+    captured: dict[str, object] = {}
+
+    class _Client:
+        def execute_one(
+            self,
+            sql: str,
+            params: dict[str, object] | None = None,
+        ) -> dict[str, object]:
+            captured["sql"] = sql
+            captured["params"] = params or {}
+            return {"n": 5160000}
+
+    repo = DatabricksLeadRepository(_Client(), cache_ttl_s=0)  # type: ignore[arg-type]
+
+    assert repo.count(segment=None, portfolio_id=None, funnel_stage="addressable") == 5160000
+
+    sql = str(captured["sql"])
+    assert "borrower_360" in sql
+    assert "lead_population" not in sql
+    assert "recommended_offer_code" not in sql
+    assert captured["params"] == {}
 
 
 def test_lead_repository_caches_identical_list_and_count_reads() -> None:
@@ -549,6 +673,148 @@ def test_leads_route_passes_county_filter_to_repository() -> None:
     assert captured["county_fips"] == "12011"
     assert captured["segment_codes"] == ["itm", "equity"]
     assert captured["segment_mode"] == "all"
+
+
+def test_leads_route_passes_exact_funnel_stage_without_loose_status_filter() -> None:
+    from backend.services.repositories import get_lead_repository
+
+    captured: dict[str, object] = {}
+
+    class _FunnelRepo:
+        def list(self, **kwargs: object) -> list[LeadSummary]:
+            captured["list"] = kwargs
+            return [_lead("B-FUN01")]
+
+        def count(self, **kwargs: object) -> int:
+            captured["count"] = kwargs
+            return 23
+
+    prior = app.dependency_overrides.get(get_lead_repository)
+    app.dependency_overrides[get_lead_repository] = _FunnelRepo
+    try:
+        response = TestClient(app).get("/api/leads?funnel_stage=approved&limit=50")
+    finally:
+        if prior is None:
+            app.dependency_overrides.pop(get_lead_repository, None)
+        else:
+            app.dependency_overrides[get_lead_repository] = prior
+
+    assert response.status_code == 200, response.text
+    assert response.headers["X-Total-Matching"] == "23"
+    assert captured["list"]["funnel_stage"] == "approved"
+    assert captured["count"]["funnel_stage"] == "approved"
+    assert captured["list"]["approval_status"] is None
+    assert "portfolio_criteria" not in captured["list"]
+
+
+def test_funnel_stage_default_limit_fetches_one_extra_and_slices(monkeypatch) -> None:
+    """Default 500-row drilldowns should not depend on exact ``LIMIT 500`` SQL.
+
+    Databricks SQL result caching can briefly retain an exact-limit result
+    during a gold/lifecycle refresh. The repository asks SQL for one extra row
+    and slices back to the public cap, which keeps the API contract unchanged
+    while avoiding stale exact-limit cache collisions.
+    """
+
+    captured: dict[str, object] = {}
+
+    class _Client:
+        def execute(
+            self,
+            sql: str,
+            params: dict[str, object] | None = None,
+        ) -> list[dict[str, object]]:
+            captured["sql"] = sql
+            captured["params"] = params or {}
+            return [
+                _lead(f"B-{i:05d}").model_dump(mode="python")
+                for i in range(25)
+            ]
+
+        def execute_one(
+            self,
+            sql: str,
+            params: dict[str, object] | None = None,
+        ) -> dict[str, object]:
+            _ = (sql, params)
+            return {"n": 25}
+
+    monkeypatch.setattr(
+        "backend.services.repositories.databricks_leads.time.time_ns",
+        lambda: 123456789,
+    )
+    repo = DatabricksLeadRepository(_Client(), cache_ttl_s=0)  # type: ignore[arg-type]
+
+    rows = repo.list(segment=None, portfolio_id=None, funnel_stage="approved")
+
+    assert len(rows) == 25
+    assert "LIMIT 501" in str(captured["sql"])
+    assert "LIMIT 500" not in str(captured["sql"])
+    assert "AND 123456789 = 123456789" in str(captured["sql"])
+
+
+def test_funnel_stage_count_uses_freshness_clause(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class _Client:
+        def execute(
+            self,
+            sql: str,
+            params: dict[str, object] | None = None,
+        ) -> list[dict[str, object]]:
+            _ = (sql, params)
+            return []
+
+        def execute_one(
+            self,
+            sql: str,
+            params: dict[str, object] | None = None,
+        ) -> dict[str, object]:
+            captured["sql"] = sql
+            captured["params"] = params or {}
+            return {"n": 23}
+
+    monkeypatch.setattr(
+        "backend.services.repositories.databricks_leads.time.time_ns",
+        lambda: 987654321,
+    )
+    repo = DatabricksLeadRepository(_Client(), cache_ttl_s=0)  # type: ignore[arg-type]
+
+    assert repo.count(segment=None, portfolio_id=None, funnel_stage="approved") == 23
+    assert "AND 987654321 = 987654321" in str(captured["sql"])
+    assert "COALESCE(ls.approval_status, 'pending') = 'approved'" in str(captured["sql"])
+
+
+def test_repository_internal_extra_fetch_preserves_requested_cap() -> None:
+    captured: dict[str, object] = {}
+
+    class _Client:
+        def execute(
+            self,
+            sql: str,
+            params: dict[str, object] | None = None,
+        ) -> list[dict[str, object]]:
+            captured["sql"] = sql
+            _ = params
+            return [
+                _lead(f"B-{i:05d}").model_dump(mode="python")
+                for i in range(11)
+            ]
+
+        def execute_one(
+            self,
+            sql: str,
+            params: dict[str, object] | None = None,
+        ) -> dict[str, object]:
+            _ = (sql, params)
+            return {"n": 11}
+
+    repo = DatabricksLeadRepository(_Client(), cache_ttl_s=0)  # type: ignore[arg-type]
+
+    rows = repo.list(segment=None, portfolio_id=None, limit=10)
+
+    assert len(rows) == 10
+    assert "LIMIT 11" in str(captured["sql"])
 
 
 def test_leads_route_passes_genie_borrower_id_cohort_to_repository() -> None:

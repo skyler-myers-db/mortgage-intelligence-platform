@@ -454,8 +454,163 @@ export interface DataEstateResponse {
   proof_assets: string[];
 }
 
+export interface FunnelTotals {
+  snapshot_date?: string | null;
+  addressable_borrowers: number;
+  in_the_money_borrowers: number;
+  high_opportunity_borrowers: number;
+  offer_recommended_borrowers: number;
+  approved_borrowers: number;
+  actioned_borrowers: number;
+}
+
+export interface FunnelStage {
+  stage: string;
+  stage_order: number;
+  borrower_count: number;
+}
+
+export interface ScoreBucket {
+  score_bucket: number;
+  borrower_count: number;
+}
+
+export interface ExecutiveAnalyticsResponse {
+  totals: FunnelTotals;
+  stages: FunnelStage[];
+  score_distribution: ScoreBucket[];
+}
+
+export interface StateOpportunityRow {
+  state: string;
+  borrower_count: number;
+  mean_opportunity_score: number;
+  in_the_money_borrowers: number;
+}
+
+export interface StateAvmValueRow {
+  state: string;
+  total_avm_value_usd: number;
+  total_lien_balance_usd: number;
+  total_equity_usd: number;
+}
+
+export interface TopZipOpportunityRow {
+  state: string;
+  zip: string;
+  city?: string | null;
+  borrower_count: number;
+  in_the_money_borrowers: number;
+  mean_opportunity_score: number;
+  mean_rate_spread_bps: number;
+}
+
+export interface GeographyAnalyticsResponse {
+  state_opportunities: StateOpportunityRow[];
+  state_avm_values: StateAvmValueRow[];
+  top_zips: TopZipOpportunityRow[];
+}
+
+export interface RateSpreadBucket {
+  spread_bucket_bps: number;
+  borrower_count: number;
+}
+
+export interface EquitySpreadPoint {
+  borrower_id: string;
+  display_name: string;
+  segment: string;
+  state: string;
+  equity_pct: number;
+  rate_spread_bps: number;
+  opportunity_score: number;
+}
+
+export interface TopBorrowerAnalyticsRow {
+  borrower_id: string;
+  display_name: string;
+  state: string;
+  city?: string | null;
+  opportunity_score: number;
+  rate_spread_bps: number;
+  equity_pct: number;
+  recommended_offer: string;
+  rank_overall: number;
+}
+
+export interface EconomicsAnalyticsResponse {
+  rate_spread_histogram: RateSpreadBucket[];
+  equity_vs_spread: EquitySpreadPoint[];
+  top_borrowers: TopBorrowerAnalyticsRow[];
+}
+
+export interface SegmentOverviewRow {
+  segment_code: SegmentCode;
+  name: string;
+  borrower_count: number;
+  mean_opportunity_score: number;
+  delta_vs_prior_label: string;
+  description: string;
+  approval_rate?: number | null;
+  outreach_rate?: number | null;
+  mean_rate_spread_bps?: number | null;
+  mean_equity_pct?: number | null;
+  in_the_money_borrowers: number;
+}
+
+export interface SegmentMetricRow {
+  segment_code: SegmentCode;
+  segment_name: string;
+  value: number;
+}
+
+export interface SegmentByStateRow {
+  state: string;
+  segment_code: SegmentCode;
+  segment_name: string;
+  borrower_count: number;
+}
+
+export interface TopSegmentByStateRow extends SegmentByStateRow {
+  state_rank: number;
+}
+
+export interface AnalyticsScope {
+  code: string;
+  label: string;
+  description: string;
+}
+
+export interface SegmentAnalyticsResponse {
+  scope: AnalyticsScope;
+  overview: SegmentOverviewRow[];
+  counts: SegmentMetricRow[];
+  average_scores: SegmentMetricRow[];
+  by_state: SegmentByStateRow[];
+  top_segments_by_state: TopSegmentByStateRow[];
+}
+
+export interface EvidenceDailyRow {
+  event_date: string;
+  signal_type: string;
+  event_count: number;
+}
+
+export interface EvidenceBySignalRow {
+  signal_type: string;
+  source_product: string;
+  event_count: number;
+  mean_confidence?: number | null;
+}
+
+export interface SignalAnalyticsResponse {
+  evidence_daily: EvidenceDailyRow[];
+  evidence_by_signal: EvidenceBySignalRow[];
+}
+
 export interface ConfigOptions {
   lender_name: string;
+  rum_enabled?: boolean;
   geographies: string[];
   geographies_status?: string;
   geography_scope?: {

@@ -15,6 +15,7 @@ from __future__ import annotations
 from threading import Lock
 
 from backend.services.repositories.protocols import (
+    AnalyticsRepository,
     BorrowerRepository,
     GenieAnswerRepository,
     GeoRepository,
@@ -29,6 +30,7 @@ from backend.services.repositories.protocols import (
 # on repeat calls so SQL client pools / keep-alive sockets persist
 # across requests. Test processes bypass these via dependency_overrides.
 _PORTFOLIO_REPO: PortfolioRepository | None = None
+_ANALYTICS_REPO: AnalyticsRepository | None = None
 _SEGMENT_REPO: SegmentRepository | None = None
 _LEAD_REPO: LeadRepository | None = None
 _BORROWER_REPO: BorrowerRepository | None = None
@@ -37,6 +39,26 @@ _OUTREACH_REPO: OutreachRepository | None = None
 _GENIE_REPO: GenieAnswerRepository | None = None
 _GEO_REPO: GeoRepository | None = None
 _LOCK = Lock()
+
+
+def get_analytics_repository() -> AnalyticsRepository:
+    """Return the Databricks-backed native analytics repository."""
+    global _ANALYTICS_REPO
+    if _ANALYTICS_REPO is not None:
+        return _ANALYTICS_REPO
+    from backend.config.settings import settings
+    from backend.services.databricks_sql import get_sql_client
+    from backend.services.repositories.databricks_repo import (
+        DatabricksAnalyticsRepository,
+    )
+
+    with _LOCK:
+        if _ANALYTICS_REPO is None:
+            _ANALYTICS_REPO = DatabricksAnalyticsRepository(
+                get_sql_client(),
+                cache_ttl_s=settings.mip_cache_ttl_s,
+            )
+        return _ANALYTICS_REPO
 
 
 def _live_borrower_repo() -> BorrowerRepository:
@@ -208,10 +230,12 @@ def _reset_singletons_for_tests() -> None:
     ``tests/conftest.py`` can rewire dependency_overrides cleanly.
     NOT for production use.
     """
-    global _PORTFOLIO_REPO, _SEGMENT_REPO, _LEAD_REPO, _BORROWER_REPO
+    global _PORTFOLIO_REPO, _ANALYTICS_REPO, _SEGMENT_REPO, _LEAD_REPO
+    global _BORROWER_REPO
     global _OFFER_REPO, _OUTREACH_REPO, _GENIE_REPO, _GEO_REPO
     with _LOCK:
         _PORTFOLIO_REPO = None
+        _ANALYTICS_REPO = None
         _SEGMENT_REPO = None
         _LEAD_REPO = None
         _BORROWER_REPO = None

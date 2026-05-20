@@ -6,6 +6,7 @@ describe('buildLeadQueueExportFilters', () => {
   it('exports only normalized allowlisted filters', () => {
     const filters = buildLeadQueueExportFilters({
       stateFilters: ['IL'],
+      funnelStage: 'approved',
       targetLenderRef: 'Acme Mortgage',
       targetLenderRefs: ['All', 'Acme Mortgage'],
       portfolioCriteria: {
@@ -19,6 +20,7 @@ describe('buildLeadQueueExportFilters', () => {
     });
 
     expect(filters).toContain('states=IL');
+    expect(filters).toContain('funnel_stage=approved');
     expect(filters).toContain('target_lender_ref=Acme+Mortgage');
     expect(filters).toContain('product=Cash-out');
     expect(filters).toContain('cohort_id=f2366c18-e9d7-4354-8400-a29cf212a2fd');

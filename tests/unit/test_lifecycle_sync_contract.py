@@ -32,6 +32,16 @@ def test_lifecycle_sync_writes_non_null_refreshed_at_boundary() -> None:
     assert "AS synced_at" in text
 
 
+def test_lifecycle_sync_mirrors_call_disposition_actioned_semantics() -> None:
+    text = (REPO / "jobs" / "sync_lifecycle_state.py").read_text(encoding="utf-8")
+
+    assert "FROM mip_app.call_dispositions d" in text
+    assert "ORDER BY d.borrower_id, d.occurred_at DESC, d.created_at DESC" in text
+    assert "WHEN d.outreach_at IS NOT NULL          THEN 'actioned'" in text
+    assert "FULL OUTER JOIN latest_dispositions d USING (borrower_id)" in text
+    assert "event_type LIKE 'OUTREACH_%'" not in text
+
+
 def test_lifecycle_sync_qualifies_tables_with_configured_catalog() -> None:
     assert (
         sync_lifecycle._qualified_uc_table(

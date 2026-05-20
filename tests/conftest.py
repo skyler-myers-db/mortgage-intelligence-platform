@@ -58,6 +58,7 @@ from backend.services.lakebase import (
     get_lakebase_client,
 )
 from backend.services.repositories import (
+    get_analytics_repository,
     get_borrower_repository,
     get_genie_answer_repository,
     get_geo_repository,
@@ -76,6 +77,7 @@ from backend.services.workspace_store import (
 from tests.fixtures.in_memory_audit_store import InMemoryAuditStore
 from tests.fixtures.in_memory_workspace_store import InMemoryWorkspaceStore
 from tests.fixtures.in_process_repos import (
+    InProcessMockAnalyticsRepository,
     InProcessMockBorrowerRepository,
     InProcessMockGenieAnswerRepository,
     InProcessMockGeoRepository,
@@ -644,6 +646,7 @@ def _install_dependency_overrides() -> Iterator[None]:
     pytest can be re-entered cleanly in watch mode.
     """
     portfolio = InProcessMockPortfolioRepository()
+    analytics = InProcessMockAnalyticsRepository()
     segment = InProcessMockSegmentRepository()
     lead = InProcessMockLeadRepository()
     borrower = InProcessMockBorrowerRepository()
@@ -657,6 +660,7 @@ def _install_dependency_overrides() -> Iterator[None]:
     admin_rules = AdminRulesService(_FakeAdminSqlClient())
 
     app.dependency_overrides[get_portfolio_repository] = lambda: portfolio
+    app.dependency_overrides[get_analytics_repository] = lambda: analytics
     app.dependency_overrides[get_segment_repository] = lambda: segment
     app.dependency_overrides[get_lead_repository] = lambda: lead
     app.dependency_overrides[get_borrower_repository] = lambda: borrower

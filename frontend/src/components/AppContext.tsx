@@ -13,7 +13,7 @@ import { useQuery } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import { useConfigOptionsQuery } from '../lib/configOptionsQuery';
 import { queryKeys } from '../lib/queryKeys';
-import type { SavedDraft, SavedDraftInput, SavedLead, SavedLeadInput } from '../types';
+import type { ConfigOptions, SavedDraft, SavedDraftInput, SavedLead, SavedLeadInput } from '../types';
 
 /**
  * AppContext — theme, accent, density, configured tenant, drawer, Genie, approvals,
@@ -99,6 +99,10 @@ const THEMES: readonly Theme[] = ['dark', 'light'];
 const ACCENTS: readonly Accent[] = ['bright', 'teal', 'navy', 'red'];
 const DENSITIES: readonly Density[] = ['comfortable', 'compact'];
 
+export function shouldInstallRum(configOptions: Pick<ConfigOptions, 'rum_enabled'> | undefined): boolean {
+  return configOptions?.rum_enabled === true;
+}
+
 interface ActorScopedResetSetters {
   setApprovals: Dispatch<SetStateAction<Record<string, 'approved' | 'rejected'>>>;
   setDrawer: Dispatch<SetStateAction<DrawerSource | null>>;
@@ -144,6 +148,7 @@ export function AppProvider({ children }: PropsWithChildren) {
   // backend configuration and the Unity Catalog gold views.
   const configOptionsQuery = useConfigOptionsQuery();
   const lender = configOptionsQuery.data?.lender_name?.trim() || 'Configured lender';
+  const rumEnabled = shouldInstallRum(configOptionsQuery.data);
   const [showEvidence, setShowEvidence] = useState(true);
   const [showConfidence, setShowConfidence] = useState(true);
   // Console is opt-in so the first demo viewport uses the full prototype
@@ -166,6 +171,22 @@ export function AppProvider({ children }: PropsWithChildren) {
     queryFn: ({ signal }) => api.workspace(signal),
     retry: false,
   });
+
+  useEffect(() => {
+    if (!rumEnabled) return;
+    let cancelled = false;
+    void import('../lib/rum')
+      .then(({ installRum }) => {
+        if (!cancelled) installRum();
+      })
+      .catch(() => {
+        // RUM is best-effort and opt-in. A telemetry chunk load failure must
+        // never block the app shell or change user-visible behavior.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [rumEnabled]);
 
   useEffect(() => {
     const root = document.documentElement;

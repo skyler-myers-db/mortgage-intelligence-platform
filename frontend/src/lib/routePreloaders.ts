@@ -2,6 +2,7 @@ import { lazyWithPreload, preloadBestEffort } from './lazyPreload';
 import { createIdlePreloader } from './prefetch';
 
 export const HomeRoute = lazyWithPreload(() => import('../routes/home'));
+export const AnalyticsRoute = lazyWithPreload(() => import('../routes/analytics'));
 export const PortfolioBuilderRoute = lazyWithPreload(() => import('../routes/portfolio-builder'));
 export const SegmentIntelligenceRoute = lazyWithPreload(() => import('../routes/segment-intelligence'));
 export const LeadQueueRoute = lazyWithPreload(() => import('../routes/lead-queue'));
@@ -12,6 +13,7 @@ export const AdminConfigRoute = lazyWithPreload(() => import('../routes/admin-co
 
 export const routePreloaders = {
   '/': HomeRoute.preload,
+  '/analytics': AnalyticsRoute.preload,
   '/portfolio-builder': PortfolioBuilderRoute.preload,
   '/segment-intelligence': SegmentIntelligenceRoute.preload,
   '/lead-queue': LeadQueueRoute.preload,
@@ -24,6 +26,7 @@ export const routePreloaders = {
 export const preloadLikelyNextRoutes = createIdlePreloader(async () => {
   await Promise.all([
     routePreloaders['/portfolio-builder'](),
+    routePreloaders['/analytics'](),
     routePreloaders['/segment-intelligence'](),
     routePreloaders['/lead-queue'](),
   ]);

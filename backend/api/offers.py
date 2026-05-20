@@ -14,6 +14,7 @@ from backend.schemas.offer import (
     OfferType,
     SourceLabel,
 )
+from backend.services.audit_decision_inputs import decision_inputs_from_offer_inputs
 from backend.services.audit_store import AuditStore, get_audit_store, resolve_actor
 from backend.services.lakebase import LakebaseError
 from backend.services.observability import emit
@@ -284,6 +285,7 @@ def recommend_offer(
         "cashout_equity_min_pct": cast(int, inputs["cashout_equity_min_pct"]),
         "retention_min_spread_bps": cast(int, inputs["retention_min_spread_bps"]),
     }
+    decision_inputs = decision_inputs_from_offer_inputs(inputs)
 
     background.add_task(
         _safe_audit_write,
@@ -296,6 +298,7 @@ def recommend_offer(
             "offer_code": code,
             "confidence": borrower.confidence,
             "thresholds_applied": thresholds_applied,
+            "decision_inputs": decision_inputs,
         },
         evidence_ids=list(borrower.evidence_ids),
         event_type="RECOMMEND_OFFER",

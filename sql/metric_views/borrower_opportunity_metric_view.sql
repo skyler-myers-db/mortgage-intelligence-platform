@@ -19,6 +19,9 @@
 --   segment_codes      — array<SegmentCode>; preserves all borrower segment
 --                        memberships without multiplying borrower rows.
 --   primary_segment    — first segment code when present; otherwise 'none'.
+--   segment            — deprecated display alias for primary_segment. Kept
+--                        for stale Lakeview / Genie SQL while segment_codes
+--                        remains the membership contract.
 --   loan_purpose       — first_pos_loan_type (proxy for loan_purpose; CONV/
 --                        FHA/VA etc. from share).
 --   is_investor        — boolean.
@@ -49,6 +52,10 @@ SELECT
     WHEN SIZE(b.segment_codes) > 0 THEN b.segment_codes[0]
     ELSE 'none'
   END                                               AS primary_segment,
+  CASE
+    WHEN SIZE(b.segment_codes) > 0 THEN b.segment_codes[0]
+    ELSE 'none'
+  END                                               AS segment,
   b.first_pos_loan_type                             AS loan_purpose,
   b.is_investor,
   b.is_current_customer,
@@ -60,4 +67,4 @@ SELECT
 FROM mip.gold.borrower_360 AS b;
 
 COMMENT ON VIEW mip.semantics.borrower_opportunity_metric_view IS
-  'Genie + dashboard borrower-grain metric view over gold.borrower_360. Dimensions: state, segment_codes, primary_segment, loan_purpose, is_investor, is_current_customer. Measures: avg_rate_spread_bps, avg_equity_pct, count_itm, sum_loan_amount, count_total, avg_opportunity_score. See docs/data-contract-module0.md §3.2.';
+  'Genie + dashboard borrower-grain metric view over gold.borrower_360. Dimensions: state, segment_codes, primary_segment, deprecated segment alias, loan_purpose, is_investor, is_current_customer. Measures: avg_rate_spread_bps, avg_equity_pct, count_itm, sum_loan_amount, count_total, avg_opportunity_score. See docs/data-contract-module0.md §3.2.';

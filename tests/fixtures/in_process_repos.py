@@ -13,6 +13,29 @@ synthetic population in ``tests/fixtures/mock_population.py``.
 """
 from __future__ import annotations
 
+from backend.schemas.analytics import (
+    AnalyticsScope,
+    EconomicsAnalyticsResponse,
+    EquitySpreadPoint,
+    EvidenceBySignalRow,
+    EvidenceDailyRow,
+    ExecutiveAnalyticsResponse,
+    FunnelStage,
+    FunnelTotals,
+    GeographyAnalyticsResponse,
+    RateSpreadBucket,
+    ScoreBucket,
+    SegmentAnalyticsResponse,
+    SegmentByStateRow,
+    SegmentMetricRow,
+    SegmentOverviewRow,
+    SignalAnalyticsResponse,
+    StateAvmValueRow,
+    StateOpportunityRow,
+    TopBorrowerAnalyticsRow,
+    TopSegmentByStateRow,
+    TopZipOpportunityRow,
+)
 from backend.schemas.common import EvidenceEvent
 from backend.schemas.geo import (
     CountyRollup,
@@ -103,6 +126,232 @@ class InProcessMockPortfolioRepository:
         return self._campaign(portfolio_id).model_copy(update={"status": payload.status})
 
 
+class InProcessMockAnalyticsRepository:
+    """Test fixture implementing ``AnalyticsRepository`` from synthetic rows."""
+
+    @staticmethod
+    def _is_itm(borrower: Borrower360) -> bool:
+        return "itm" in borrower.segment_codes
+
+    def executive(self) -> ExecutiveAnalyticsResponse:
+        borrowers = list(mock_data.BORROWERS)
+        addressable = len(borrowers)
+        itm = sum(1 for b in borrowers if self._is_itm(b))
+        high = sum(1 for b in borrowers if b.opportunity_score >= 75)
+        recommended = sum(1 for b in borrowers if b.recommended_offer_code != "nurture")
+        totals = FunnelTotals(
+            snapshot_date="2026-05-18",
+            addressable_borrowers=addressable,
+            in_the_money_borrowers=itm,
+            high_opportunity_borrowers=high,
+            offer_recommended_borrowers=recommended,
+            approved_borrowers=0,
+            actioned_borrowers=0,
+        )
+        stages = [
+            FunnelStage(stage="Addressable", stage_order=1, borrower_count=addressable),
+            FunnelStage(stage="In the Money", stage_order=2, borrower_count=itm),
+            FunnelStage(stage="High Opportunity", stage_order=3, borrower_count=high),
+            FunnelStage(stage="Offer Recommended", stage_order=4, borrower_count=recommended),
+            FunnelStage(stage="Approved", stage_order=5, borrower_count=0),
+            FunnelStage(stage="Actioned", stage_order=6, borrower_count=0),
+        ]
+        buckets: dict[int, int] = {}
+        for borrower in borrowers:
+            bucket = int(borrower.opportunity_score // 5 * 5)
+            buckets[bucket] = buckets.get(bucket, 0) + 1
+        return ExecutiveAnalyticsResponse(
+            totals=totals,
+            stages=stages,
+            score_distribution=[
+                ScoreBucket(score_bucket=bucket, borrower_count=count)
+                for bucket, count in sorted(buckets.items())
+            ],
+        )
+
+    def geography(self) -> GeographyAnalyticsResponse:
+        borrowers = list(mock_data.BORROWERS)
+        by_state: dict[str, list[Borrower360]] = {}
+        by_zip: dict[tuple[str, str, str], list[Borrower360]] = {}
+        for borrower in borrowers:
+            by_state.setdefault(borrower.state, []).append(borrower)
+            by_zip.setdefault((borrower.state, borrower.zip, borrower.city), []).append(borrower)
+
+        return GeographyAnalyticsResponse(
+            state_opportunities=[
+                StateOpportunityRow(
+                    state=state,
+                    borrower_count=len(rows),
+                    mean_opportunity_score=round(sum(b.opportunity_score for b in rows) / len(rows)),
+                    in_the_money_borrowers=sum(1 for b in rows if self._is_itm(b)),
+                )
+                for state, rows in sorted(by_state.items())
+            ],
+            state_avm_values=[
+                StateAvmValueRow(
+                    state=state,
+                    total_avm_value_usd=sum(b.avm_value for b in rows),
+                    total_lien_balance_usd=sum(b.current_lien_balance for b in rows),
+                    total_equity_usd=sum(b.equity_estimate for b in rows),
+                )
+                for state, rows in sorted(by_state.items())
+            ],
+            top_zips=[
+                TopZipOpportunityRow(
+                    state=state,
+                    zip=zip_code,
+                    city=city,
+                    borrower_count=len(rows),
+                    in_the_money_borrowers=sum(1 for b in rows if self._is_itm(b)),
+                    mean_opportunity_score=round(sum(b.opportunity_score for b in rows) / len(rows)),
+                    mean_rate_spread_bps=round(sum(b.rate_spread_bps for b in rows) / len(rows)),
+                )
+                for (state, zip_code, city), rows in sorted(
+                    by_zip.items(),
+                    key=lambda item: sum(1 for b in item[1] if self._is_itm(b)),
+                    reverse=True,
+                )[:20]
+                if any(self._is_itm(b) for b in rows)
+            ],
+        )
+
+    def economics(self) -> EconomicsAnalyticsResponse:
+        borrowers = list(mock_data.BORROWERS)
+        spread_buckets: dict[int, int] = {}
+        for borrower in borrowers:
+            if -100 <= borrower.rate_spread_bps <= 400:
+                bucket = int((borrower.rate_spread_bps // 25) * 25)
+                spread_buckets[bucket] = spread_buckets.get(bucket, 0) + 1
+
+        return EconomicsAnalyticsResponse(
+            rate_spread_histogram=[
+                RateSpreadBucket(spread_bucket_bps=bucket, borrower_count=count)
+                for bucket, count in sorted(spread_buckets.items())
+            ],
+            equity_vs_spread=[
+                EquitySpreadPoint(
+                    borrower_id=borrower.borrower_id,
+                    display_name=borrower.display_name,
+                    segment=borrower.segment_codes[0] if borrower.segment_codes else "none",
+                    state=borrower.state,
+                    equity_pct=max(0, min(100, int(round(100.0 * borrower.equity_estimate / borrower.avm_value)))),
+                    rate_spread_bps=borrower.rate_spread_bps,
+                    opportunity_score=borrower.opportunity_score,
+                )
+                for borrower in borrowers
+                if -100 <= borrower.rate_spread_bps <= 400
+            ],
+            top_borrowers=[
+                TopBorrowerAnalyticsRow(
+                    borrower_id=borrower.borrower_id,
+                    display_name=borrower.display_name,
+                    state=borrower.state,
+                    city=borrower.city,
+                    opportunity_score=borrower.opportunity_score,
+                    rate_spread_bps=borrower.rate_spread_bps,
+                    equity_pct=max(0, min(100, int(round(100.0 * borrower.equity_estimate / borrower.avm_value)))),
+                    recommended_offer=borrower.recommended_offer,
+                    rank_overall=idx,
+                )
+                for idx, borrower in enumerate(
+                    sorted(borrowers, key=lambda b: b.opportunity_score, reverse=True)[:10],
+                    start=1,
+                )
+            ],
+        )
+
+    def segments(self) -> SegmentAnalyticsResponse:
+        segments = list(mock_data.SEGMENTS)
+        by_state: dict[tuple[str, str], int] = {}
+        for borrower in mock_data.BORROWERS:
+            for code in borrower.segment_codes:
+                key = (borrower.state, code)
+                by_state[key] = by_state.get(key, 0) + 1
+
+        overview = [
+            SegmentOverviewRow(
+                segment_code=segment.code,
+                name=segment.name,
+                borrower_count=segment.count,
+                mean_opportunity_score=segment.avg_score,
+                delta_vs_prior_label=segment.delta,
+                description=segment.description,
+                approval_rate=0.0,
+                outreach_rate=0.0,
+                mean_rate_spread_bps=None,
+                mean_equity_pct=None,
+                in_the_money_borrowers=0,
+            )
+            for segment in segments
+        ]
+        by_state_rows = [
+            SegmentByStateRow(
+                state=state,
+                segment_code=code,
+                segment_name=next((s.name for s in segments if s.code == code), code),
+                borrower_count=count,
+            )
+            for (state, code), count in sorted(by_state.items())
+        ]
+        top_rows: list[TopSegmentByStateRow] = []
+        states = sorted({state for state, _code in by_state})
+        for state in states:
+            ranked = sorted(
+                [row for row in by_state_rows if row.state == state],
+                key=lambda row: row.borrower_count,
+                reverse=True,
+            )[:3]
+            for idx, row in enumerate(ranked, start=1):
+                top_rows.append(TopSegmentByStateRow(**row.model_dump(), state_rank=idx))
+
+        return SegmentAnalyticsResponse(
+            scope=AnalyticsScope(
+                code="full_population_pre_suppression",
+                label="Full population · pre-suppression",
+                description=(
+                    "Synthetic analytics fixture mirrors the full-population "
+                    "segment scope used by the Databricks repository."
+                ),
+            ),
+            overview=overview,
+            counts=[
+                SegmentMetricRow(segment_code=s.code, segment_name=s.name, value=s.count)
+                for s in segments
+            ],
+            average_scores=[
+                SegmentMetricRow(segment_code=s.code, segment_name=s.name, value=s.avg_score)
+                for s in sorted(segments, key=lambda item: item.avg_score, reverse=True)
+            ],
+            by_state=by_state_rows,
+            top_segments_by_state=top_rows,
+        )
+
+    def signals(self) -> SignalAnalyticsResponse:
+        daily_counts: dict[tuple[str, str], int] = {}
+        signal_counts: dict[tuple[str, str], list[float]] = {}
+        for evidence in mock_data.EVIDENCE:
+            day = evidence.timestamp[:10]
+            daily_key = (day, evidence.signal_type)
+            daily_counts[daily_key] = daily_counts.get(daily_key, 0) + 1
+            signal_key = (evidence.signal_type, evidence.source_product)
+            signal_counts.setdefault(signal_key, []).append(float(evidence.confidence or 0.0))
+        return SignalAnalyticsResponse(
+            evidence_daily=[
+                EvidenceDailyRow(event_date=day, signal_type=signal, event_count=count)
+                for (day, signal), count in sorted(daily_counts.items())
+            ],
+            evidence_by_signal=[
+                EvidenceBySignalRow(
+                    signal_type=signal,
+                    source_product=source,
+                    event_count=len(values),
+                    mean_confidence=round(sum(values) / len(values), 3) if values else None,
+                )
+                for (signal, source), values in sorted(signal_counts.items())
+            ],
+        )
+
+
 class InProcessMockSegmentRepository:
     """Test fixture implementing ``SegmentRepository`` from the synthetic population."""
 
@@ -180,6 +429,7 @@ class InProcessMockLeadRepository:
         segment_mode: str = "any",
         target_lender_ref: str | None = None,
         cohort_id: str | None = None,
+        funnel_stage: str | None = None,
         portfolio_criteria: PortfolioCriteria | None = None,
         approval_status: str | None = None,
         outreach_status: str | None = None,
@@ -193,6 +443,8 @@ class InProcessMockLeadRepository:
             leads = [lead for lead in leads if lead.outreach_status == outreach_status]
         if aged_days is not None:
             leads = [lead for lead in leads if (lead.aging_days or 0) >= aged_days]
+        if funnel_stage:
+            leads = self._filter_funnel_stage(leads, funnel_stage)
         if portfolio_criteria is not None:
             if portfolio_criteria.occupancy == "Owner-occupied":
                 leads = [lead for lead in leads if lead.is_owner_occupied is True]
@@ -276,6 +528,7 @@ class InProcessMockLeadRepository:
         segment_mode: str = "any",
         target_lender_ref: str | None = None,
         cohort_id: str | None = None,
+        funnel_stage: str | None = None,
         portfolio_criteria: PortfolioCriteria | None = None,
         approval_status: str | None = None,
         outreach_status: str | None = None,
@@ -297,11 +550,31 @@ class InProcessMockLeadRepository:
             segment_mode=segment_mode,
             target_lender_ref=target_lender_ref,
             cohort_id=cohort_id,
+            funnel_stage=funnel_stage,
             portfolio_criteria=portfolio_criteria,
             approval_status=approval_status,
             outreach_status=outreach_status,
             aged_days=aged_days,
         ))
+
+    @staticmethod
+    def _filter_funnel_stage(leads: list[LeadSummary], funnel_stage: str) -> list[LeadSummary]:
+        if funnel_stage == "addressable":
+            return leads
+        if funnel_stage == "in_the_money":
+            return [lead for lead in leads if "itm" in lead.segment_codes]
+        if funnel_stage == "high_opportunity":
+            return [lead for lead in leads if lead.opportunity_score >= 75]
+        if funnel_stage == "offer_recommended":
+            return [
+                lead for lead in leads
+                if lead.recommended_offer_code and lead.recommended_offer_code != "nurture"
+            ]
+        if funnel_stage == "approved":
+            return [lead for lead in leads if lead.approval_status == "approved"]
+        if funnel_stage == "actioned":
+            return [lead for lead in leads if lead.outreach_status == "actioned"]
+        return []
 
 
 class InProcessMockBorrowerRepository:

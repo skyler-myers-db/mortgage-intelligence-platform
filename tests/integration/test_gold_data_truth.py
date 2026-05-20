@@ -104,6 +104,33 @@ def test_lead_scores_match_borrower_360_app_scores(
     assert confidence_mismatches == 0
 
 
+def test_lead_population_score_columns_match_borrower_360(
+    warehouse: tuple[str, str, str],
+) -> None:
+    """Ranked lead rows must not drift from the borrower dossier score surface."""
+    host, token, wid = warehouse
+    rows = _run_sql_rows(
+        host,
+        token,
+        wid,
+        """
+        SELECT
+          COUNT(*) AS compared,
+          SUM(CASE WHEN lp.opportunity_score <> b.opportunity_score THEN 1 ELSE 0 END) AS score_mismatches,
+          SUM(CASE WHEN lp.rate_spread_bps <> b.rate_spread_bps THEN 1 ELSE 0 END) AS spread_mismatches,
+          SUM(CASE WHEN lp.equity_pct <> b.equity_pct THEN 1 ELSE 0 END) AS equity_mismatches
+        FROM mip.gold.lead_population AS lp
+        JOIN mip.gold.borrower_360 AS b USING (clip)
+        """,
+    )
+    assert rows, "lead population parity query returned no rows"
+    compared, score_mismatches, spread_mismatches, equity_mismatches = map(int, rows[0])
+    assert compared > 0
+    assert score_mismatches == 0
+    assert spread_mismatches == 0
+    assert equity_mismatches == 0
+
+
 def test_borrower_opportunity_metric_view_is_borrower_grain(
     warehouse: tuple[str, str, str],
 ) -> None:

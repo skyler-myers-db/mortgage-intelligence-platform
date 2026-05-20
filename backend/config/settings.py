@@ -17,7 +17,7 @@ import re
 from collections.abc import Callable
 from functools import lru_cache
 
-from pydantic import Field, SecretStr
+from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from backend.schemas._validators import set_public_lender_name_provider
@@ -60,6 +60,7 @@ class Settings(BaseSettings):
         env_file=(".env", ".env.local"),
         env_file_encoding="utf-8",
         extra="ignore",
+        populate_by_name=True,
     )
 
     app_env: str = "local"
@@ -160,7 +161,10 @@ class Settings(BaseSettings):
     # the system, not a user". The audit writer still logs a warning
     # every time the fallback kicks in so operators see it in structured
     # logs. Overrideable via the MIP_DEFAULT_ACTOR env var.
-    default_actor: str = "system@databricks-apps"
+    default_actor: str = Field(
+        default="system@databricks-apps",
+        validation_alias=AliasChoices("MIP_DEFAULT_ACTOR", "DEFAULT_ACTOR"),
+    )
 
     # Admin RBAC gate for /api/admin/* endpoints. Two recognition paths
     # in ``backend/services/rbac.py::require_admin``:
@@ -169,11 +173,18 @@ class Settings(BaseSettings):
     #    the hard-coded fallback ``"admins"``. Overrideable via
     #    ``MIP_ADMIN_GROUP_NAME``.
     # 2. Email allowlist — ``X-Forwarded-Email`` is in the comma-
-    #    separated list below. Primary path for day-0 customer deploys
-    #    where workspace groups aren't pre-provisioned. Overrideable
-    #    via ``MIP_ADMIN_EMAILS``.
-    admin_group_name: str = "mip-admin"
-    admin_emails: str = "skyler@entrada.ai"
+    #    separated list below. Day-0 customer deploys may opt into this
+    #    path with ``MIP_ADMIN_EMAILS`` before workspace groups are
+    #    provisioned. The default is intentionally empty so a customer
+    #    deploy never inherits Entrada developer admin access.
+    admin_group_name: str = Field(
+        default="mip-admin",
+        validation_alias=AliasChoices("MIP_ADMIN_GROUP_NAME", "ADMIN_GROUP_NAME"),
+    )
+    admin_emails: str = Field(
+        default="",
+        validation_alias=AliasChoices("MIP_ADMIN_EMAILS", "ADMIN_EMAILS"),
+    )
 
     # R5-09 trust boundary. Databricks Apps is the authoritative
     # identity edge: it strips inbound ``X-Forwarded-*`` headers and
@@ -195,7 +206,10 @@ class Settings(BaseSettings):
     #
     # See ``docs/security/GRANTS.md`` §Trust boundary for the
     # deployment shapes where flipping this matters.
-    trust_forwarded_headers: bool = True
+    trust_forwarded_headers: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("MIP_TRUST_FORWARDED_HEADERS", "TRUST_FORWARDED_HEADERS"),
+    )
 
     # Slice-6 TTL cache: short-window memoization on gold-layer reads that
     # tolerate staleness (segments count, portfolio preview, lead queue,
@@ -232,7 +246,7 @@ class Settings(BaseSettings):
     # Browser Real User Monitoring. The client sends only sanitized route
     # patterns and aggregate performance metrics; no query strings,
     # borrower IDs, UUIDs, email addresses, or free-form text are accepted.
-    mip_rum_enabled: bool = True
+    mip_rum_enabled: bool = False
     # Slice-13 performance follow-up: portfolio preview is an expensive
     # aggregate over 5.16M rows; its cache-miss cost shows up as a
     # p95 ~1.1 s tail on /api/portfolio/preview (load-baseline.md). The

@@ -27,10 +27,11 @@ describe('preloadRouteForPath', () => {
   it('maps exact route paths to their static route chunk preloader', async () => {
     const calls = stubRoutePreloaders();
 
+    preloadRouteForPath('/analytics');
     preloadRouteForPath('/lead-queue');
     await Promise.resolve();
 
-    expect(calls).toEqual(['/lead-queue']);
+    expect(calls).toEqual(['/analytics', '/lead-queue']);
   });
 
   it('maps deep-linked borrower and offer routes by prefix', async () => {

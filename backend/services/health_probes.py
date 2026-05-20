@@ -78,8 +78,7 @@ def probe_lakebase() -> bool:
     """Return True when a 1s ``SELECT 1`` against Lakebase succeeds."""
 
     host = settings.lakebase_host or os.environ.get("PGHOST") or ""
-    user = settings.lakebase_user or os.environ.get("PGUSER") or ""
-    if not host or not user:
+    if not host:
         return settings.app_env == "local"
     try:
         from backend.services.lakebase import get_lakebase_client
