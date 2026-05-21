@@ -156,7 +156,7 @@ export function AgentActivityLog({ limit = 12 }: { limit?: number }) {
         <Icon name="audit" size={14} className="icon-accent" />
         <div className="h-4">Agent action audit log</div>
       </div>
-      <div className="audit-panel">
+      <div className="audit-panel" tabIndex={0} aria-label="Agent action audit events">
         {feedState === 'warming' && warmingUp && (
           <div className="audit-panel__pad">
             <WarmingUpBlock

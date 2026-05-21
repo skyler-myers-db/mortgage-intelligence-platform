@@ -25,7 +25,7 @@
  * anchor matrix stays gated the same way; the offline CI job still
  * collects these specs via `playwright test --list` for a syntax check.
  */
-import { test, expect, type APIRequestContext } from '@playwright/test';
+import { test, expect, type APIRequestContext, type Locator } from '@playwright/test';
 
 const LIVE = process.env.E2E_LIVE === '1';
 
@@ -81,6 +81,18 @@ const ANCHORS: Anchor[] = [
 
 function countTracks(columns: string): number {
   return columns.split(' ').filter((x) => x.trim().length > 0).length;
+}
+
+async function expectGridColumns(locator: Locator, expected: number, message: string) {
+  await expect
+    .poll(
+      async () => {
+        const columns = await locator.evaluate((el) => getComputedStyle(el).gridTemplateColumns);
+        return countTracks(columns);
+      },
+      { message, timeout: 5_000 },
+    )
+    .toBe(expected);
 }
 
 test.describe('Module 0 — theme / density / narrow canaries', () => {
@@ -274,12 +286,11 @@ test.describe('Module 0 — responsive anchor matrix', () => {
       // Borrower 360 has multiple .layoutA-grid blocks; just take the first.
       await expect(page.locator('.layoutA-grid').first()).toBeVisible({ timeout: 30_000 });
 
-      const layoutCols = await page.locator('.layoutA-grid').first().evaluate((el) => {
-        return getComputedStyle(el).gridTemplateColumns
-          .split(' ')
-          .filter((x) => x.trim().length > 0).length;
-      });
-      expect(layoutCols, `Borrower 360 .layoutA-grid at ${anchor.label}`).toBe(anchor.layoutACols);
+      await expectGridColumns(
+        page.locator('.layoutA-grid').first(),
+        anchor.layoutACols,
+        `Borrower 360 .layoutA-grid at ${anchor.label}`,
+      );
     });
   }
 });
