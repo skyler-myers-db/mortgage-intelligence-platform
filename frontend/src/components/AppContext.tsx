@@ -33,6 +33,10 @@ export interface DrawerSource {
   updatedAt?: string;
   eventDate?: string;
   short?: string;
+  assetKey?: string;
+  assetPath?: string;
+  usedIn?: string[];
+  notExposed?: string;
 }
 
 interface AppCtxValue {

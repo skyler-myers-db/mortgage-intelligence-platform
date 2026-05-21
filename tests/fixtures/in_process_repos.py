@@ -65,6 +65,7 @@ from backend.services.genie_answers import (
     GenieVisualizationSpec,
     default_follow_up_questions,
 )
+from backend.services.repositories.databricks_borrowers import _build_borrower_proof
 from tests.fixtures import mock_population as mock_data
 
 
@@ -617,6 +618,29 @@ class InProcessMockBorrowerRepository:
         if borrower is None:
             return None
         return borrower.evidence_events
+
+    def proof(self, borrower_id: str):
+        borrower = self.get(borrower_id)
+        if borrower is None:
+            return None
+        inputs = mock_data.BORROWER_OFFER_INPUTS[borrower_id]
+        components = mock_data.BORROWER_SCORE_COMPONENTS[borrower_id]
+        row = {
+            **borrower.model_dump(),
+            **inputs,
+            **components,
+            "score_opportunity_score": borrower.opportunity_score,
+            "score_signal_strength": borrower.confidence,
+            "min_spread_bps_applied": inputs["min_spread_bps"],
+            "min_equity_pct_applied": inputs["min_equity_pct"],
+            "heloc_equity_min_applied": inputs["heloc_equity_min_pct"],
+            "cashout_equity_min_applied": inputs["cashout_equity_min_pct"],
+            "retention_min_spread_applied": inputs["retention_min_spread_bps"],
+            "market_rate_fraction": borrower.why_panel.market_rate,
+            "dossier_refreshed_at": "2026-04-20T06:12:00Z",
+            "score_refreshed_at": "2026-04-20T06:12:00Z",
+        }
+        return _build_borrower_proof(row)
 
     def search(self, query: str, limit: int = 10) -> list[LeadSummary]:
         q = query.strip().upper()

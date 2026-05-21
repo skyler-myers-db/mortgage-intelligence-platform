@@ -18,9 +18,11 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, R
 
 from backend.schemas.common import EvidenceEvent, validate_public_borrower_id
 from backend.schemas.lead import Borrower360, LeadSummary
+from backend.schemas.proof import BorrowerProof
 from backend.services.audit_decision_inputs import decision_inputs_from_borrower
 from backend.services.audit_store import AuditStore, get_audit_store, resolve_actor
 from backend.services.observability import emit
+from backend.services.proof_policy import hash_sql
 from backend.services.repositories import BorrowerRepository, get_borrower_repository
 from backend.services.sales_state import (
     SalesStateStore,
@@ -194,3 +196,36 @@ def get_borrower_evidence(borrower_id: str, repo: RepoDep) -> list[EvidenceEvent
     if events is None:
         raise HTTPException(status_code=404, detail=f"Borrower {borrower_id} not found")
     return events
+
+
+@router.get("/{borrower_id}/proof", response_model=BorrowerProof)
+def get_borrower_proof(
+    borrower_id: str,
+    request: Request,
+    background: BackgroundTasks,
+    repo: RepoDep,
+    audit: StoreDep,
+) -> BorrowerProof:
+    borrower_id = _path_borrower_id(borrower_id)
+    proof = repo.proof(borrower_id)
+    if proof is None:
+        raise HTTPException(status_code=404, detail=f"Borrower {borrower_id} not found")
+    actor = resolve_actor(request)
+    proof_sql_hash = hash_sql("|".join(query.sql_hash for query in proof.reproduce))
+    background.add_task(
+        _safe_audit_write,
+        audit,
+        actor=actor,
+        action="view_borrower_proof",
+        entity_type="borrower",
+        entity_id=proof.borrower_id,
+        payload_json={
+            "borrower_id": proof.borrower_id,
+            "source_assets": proof.source_assets,
+            "sql_hash": proof_sql_hash,
+            "row_count": 1,
+        },
+        evidence_ids=[event.evidence_id for event in proof.evidence_rows],
+        event_type="VIEW_BORROWER_PROOF",
+    )
+    return proof

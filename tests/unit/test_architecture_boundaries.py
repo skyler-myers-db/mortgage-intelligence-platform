@@ -16,6 +16,7 @@ FRONTEND_SRC = ROOT / "frontend" / "src"
 ROUTE_TEST_MANIFEST: dict[tuple[str, str], str] = {
     ("GET", "/api/admin/health"): "tests/unit/test_health_endpoint.py",
     ("GET", "/api/admin/rules"): "tests/unit/test_admin_rules.py",
+    ("GET", "/api/admin/assets/{asset_key}/metadata"): "tests/unit/test_asset_metadata.py",
     ("PUT", "/api/admin/rules"): "tests/unit/test_admin_rules.py",
     ("GET", "/api/admin/settings"): "tests/unit/test_admin_rules.py",
     ("GET", "/api/admin/sources"): "tests/unit/test_admin_rules.py",
@@ -30,6 +31,7 @@ ROUTE_TEST_MANIFEST: dict[tuple[str, str], str] = {
     ("GET", "/api/borrowers/search"): "tests/unit/test_borrowers_router.py",
     ("GET", "/api/borrowers/{borrower_id}"): "tests/unit/test_borrowers_router.py",
     ("GET", "/api/borrowers/{borrower_id}/evidence"): "tests/unit/test_borrowers_router.py",
+    ("GET", "/api/borrowers/{borrower_id}/proof"): "tests/unit/test_borrowers_router.py",
     ("GET", "/api/borrowers/{borrower_id}/lifecycle"): "tests/unit/test_sales_manager_api.py",
     ("GET", "/api/campaigns"): "tests/unit/test_campaigns_router.py",
     ("GET", "/api/campaigns/{campaign_id}"): "tests/unit/test_campaigns_router.py",
@@ -109,6 +111,7 @@ def _route_literal_candidates(path_template: str) -> set[str]:
         "{borrower_id}": "B-48291",
         "{campaign_id}": "11111111-1111-4111-8111-111111111111",
         "{portfolio_id}": "11111111-1111-4111-8111-111111111111",
+        "{asset_key}": "lead_population",
     }
     concrete = path_template
     for placeholder, value in replacements.items():

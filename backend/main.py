@@ -24,6 +24,7 @@ from starlette.types import ASGIApp
 from backend.api import (
     admin,
     analytics,
+    assets,
     audit,
     borrowers,
     campaigns,
@@ -473,6 +474,7 @@ API_ROUTERS = [
     config.router,
     data_estate.router,
     admin.router,
+    assets.router,
     analytics.router,
     portfolio.router,
     campaigns.router,

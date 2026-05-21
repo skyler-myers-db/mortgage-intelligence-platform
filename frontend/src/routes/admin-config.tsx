@@ -672,12 +672,12 @@ export default function AdminConfig() {
                 type="button"
               />
             </Row>
-            <Row label="Show confidence meters">
+            <Row label="Show signal meters">
               <button
                 className={`switch ${showConfidence ? 'on' : ''}`}
                 onClick={() => setShowConfidence(!showConfidence)}
                 aria-pressed={showConfidence}
-                aria-label="Toggle confidence meters"
+                aria-label="Toggle signal strength meters"
                 type="button"
               />
             </Row>

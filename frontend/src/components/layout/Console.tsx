@@ -5,7 +5,7 @@ import { Chip } from '../Primitives';
 
 /**
  * Console — the right-side tweaks panel from the prototype. Theme, accent,
- * density, evidence / confidence toggles, configured tenant. Opens from the
+ * density, evidence / signal-strength toggles, configured tenant. Opens from the
  * topbar tweak icon. Uses `.tweaks` BEM from the prototype so a single class
  * controls positioning + animation.
  */
@@ -180,12 +180,12 @@ export function Console() {
         </div>
         <div className="tweak-row">
           <div className="row">
-            <label>Show confidence meters</label>
+            <label>Show signal meters</label>
             <button
               className={`switch ${showConfidence ? 'on' : ''}`}
               onClick={() => setShowConfidence(!showConfidence)}
               aria-pressed={showConfidence}
-              aria-label="Toggle confidence meters"
+              aria-label="Toggle signal strength meters"
               type="button"
             />
           </div>

@@ -25,6 +25,7 @@ const BASE_ITEMS: NavItem[] = [
   { to: '/segment-intelligence',  label: 'Segments',        icon: 'layers' },
   { to: '/lead-queue',            label: 'Leads',           icon: 'user' },
   { to: '/ask-genie',             label: 'Ask Genie',       icon: 'sparkle' },
+  { to: '/glossary',              label: 'Glossary',        icon: 'info' },
   { to: '/admin-config',          label: 'Admin',           icon: 'settings' },
 ];
 

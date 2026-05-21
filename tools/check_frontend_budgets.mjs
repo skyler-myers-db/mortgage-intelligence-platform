@@ -12,14 +12,17 @@ const KiB = 1024;
 const budgets = {
   initialJsBytes: 300 * KiB,
   initialJsGzipBytes: 90 * KiB,
-  initialCssBytes: 90 * KiB,
+  // The May 2026 explainability tranches added a first-class glossary,
+  // borrower proof drawer, and governed asset detail route. Keep the increase
+  // bounded while preserving initial JS, gzip, largest-route, and font gates.
+  initialCssBytes: 100 * KiB,
   initialCssGzipBytes: 18 * KiB,
   // Route-level decomposition introduces a few KiB of lazy-module boundary
   // overhead while leaving initial load and largest-route gates unchanged.
   // Keep this aggregate cap tight enough to catch accidental asset growth
   // without forcing large components back into single-file maintenance debt.
-  totalJsBytes: 780 * KiB,
-  totalJsGzipBytes: 262 * KiB,
+  totalJsBytes: 815 * KiB,
+  totalJsGzipBytes: 270 * KiB,
   maxLazyJsBytes: 160 * KiB,
   maxLazyJsGzipBytes: 60 * KiB,
   fontAssetCount: 14,

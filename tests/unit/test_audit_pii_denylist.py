@@ -199,6 +199,48 @@ def test_audit_target_lender_ref_accepts_public_alias() -> None:
     _assert_public_safe_values({"target_lender_ref": "Competitor B"})
 
 
+def test_audit_proof_metadata_accepts_reviewed_assets_hash_and_row_count() -> None:
+    _assert_allowlisted(
+        {
+            "borrower_id": "B-48291",
+            "action": "view_borrower_proof",
+            "source_assets": [
+                "mip.gold.borrower_dossier",
+                "mip.gold.lead_scores",
+                "mip.gold.evidence_events",
+                "mip.gold.fn_lead_score",
+            ],
+            "sql_hash": "0123456789abcdef",
+            "row_count": 1,
+        }
+    )
+    _assert_public_safe_values(
+        {
+            "borrower_id": "B-48291",
+            "action": "view_borrower_proof",
+            "source_assets": [
+                "mip.gold.borrower_dossier",
+                "mip.gold.lead_scores",
+                "mip.gold.evidence_events",
+                "mip.gold.fn_lead_score",
+            ],
+            "sql_hash": "0123456789abcdef",
+            "row_count": 1,
+        }
+    )
+
+
+def test_audit_proof_metadata_rejects_unsafe_assets_and_hashes() -> None:
+    with pytest.raises(AuditMetadataValueViolation):
+        _assert_public_safe_values({"source_assets": ["mip.silver.property_master"]})
+    with pytest.raises(AuditMetadataValueViolation):
+        _assert_public_safe_values({"source_assets": ["system.query.history"]})
+    with pytest.raises(AuditMetadataValueViolation):
+        _assert_public_safe_values({"action": "view_borrower_proof", "sql_hash": "not-a-hash"})
+    with pytest.raises(AuditMetadataValueViolation):
+        _assert_public_safe_values({"row_count": -1})
+
+
 def test_audit_portfolio_criteria_accepts_reviewed_safe_keys() -> None:
     _assert_allowlisted(
         {

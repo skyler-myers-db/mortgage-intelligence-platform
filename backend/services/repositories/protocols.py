@@ -46,6 +46,7 @@ from backend.schemas.portfolio import (
     PortfolioPreview,
     PortfolioPreviewRequest,
 )
+from backend.schemas.proof import BorrowerProof
 
 
 @runtime_checkable
@@ -223,6 +224,10 @@ class BorrowerRepository(Protocol):
         ...
 
     def evidence(self, borrower_id: str) -> list[EvidenceEvent] | None:
+        ...
+
+    def proof(self, borrower_id: str) -> BorrowerProof | None:
+        """Return the borrower-specific proof payload for governed explanations."""
         ...
 
     def search(self, query: str, limit: int = 10) -> list[LeadSummary]:

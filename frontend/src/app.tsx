@@ -7,7 +7,9 @@ import {
   AdminConfigRoute,
   AnalyticsRoute,
   AskGenieRoute,
+  AssetRoute,
   Borrower360Route,
+  GlossaryRoute,
   HomeRoute,
   LeadQueueRoute,
   OfferOrchestratorRoute,
@@ -46,11 +48,13 @@ function RouteTransition() {
         <Routes>
           <Route path="/" element={<HomeRoute />} />
           <Route path="/analytics" element={<AnalyticsRoute />} />
+          <Route path="/data-estate/assets/:assetKey" element={<AssetRoute />} />
           <Route path="/portfolio-builder" element={<PortfolioBuilderRoute />} />
           <Route path="/segment-intelligence" element={<SegmentIntelligenceRoute />} />
           <Route path="/lead-queue" element={<LeadQueueRoute />} />
           <Route path="/borrower-360" element={<Borrower360Route />} />
           <Route path="/borrower-360/:id" element={<Borrower360Route />} />
+          <Route path="/glossary" element={<GlossaryRoute />} />
           <Route path="/offer-orchestrator" element={<OfferOrchestratorRoute />} />
           <Route path="/offer-orchestrator/:id" element={<OfferOrchestratorRoute />} />
           <Route path="/ask-genie" element={<AskGenieRoute />} />

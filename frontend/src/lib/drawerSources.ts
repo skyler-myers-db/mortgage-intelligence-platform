@@ -1,5 +1,51 @@
 import type { DrawerSource } from '../components/AppContext';
 
+const ASSET_KEYS_BY_SOURCE: Record<string, string> = {
+  'mip.gold.lead_population': 'lead_population',
+  'mip.gold.segment_population': 'segment_population',
+  'mip.gold.lead_scores': 'lead_scores',
+  'mip.gold.borrower_360': 'borrower_360',
+  'mip.gold.borrower_dossier': 'borrower_dossier',
+  'mip.gold.evidence_events': 'evidence_events',
+  'mip.gold.source_readiness': 'source_readiness',
+  'mip.gold.lockin_cohort': 'lockin_cohort',
+  'mip.gold.funnel_snapshot_daily': 'funnel_snapshot_daily',
+  'mip.gold.county_rollup': 'county_rollup',
+  'mip.gold.zip_rollup': 'zip_rollup',
+  'mip.semantics.lead_generation_metric_view': 'lead_generation_metric_view',
+  'mip.semantics.segment_performance_metric_view': 'segment_performance_metric_view',
+  'mip.semantics.borrower_opportunity_metric_view': 'borrower_opportunity_metric_view',
+  'mip.ref.offer_rules_config': 'offer_rules_config',
+  'mip.ref.lender_dictionary': 'lender_dictionary',
+};
+
+export function assetKeyForSource(rawSource?: string | null): string | null {
+  if (!rawSource) return null;
+  const key = rawSource.trim().replace(/`/g, '').toLowerCase();
+  if (ASSET_KEYS_BY_SOURCE[key]) return ASSET_KEYS_BY_SOURCE[key];
+  const parts = key.split('.');
+  const tail = parts[parts.length - 1];
+  return ASSET_KEYS_BY_SOURCE[`mip.gold.${tail}`] ??
+    ASSET_KEYS_BY_SOURCE[`mip.semantics.${tail}`] ??
+    ASSET_KEYS_BY_SOURCE[`mip.ref.${tail}`] ??
+    null;
+}
+
+export function assetHrefForSource(rawSource?: string | null): string | null {
+  const assetKey = assetKeyForSource(rawSource);
+  return assetKey ? assetDetailHref(assetKey) : null;
+}
+
+export function assetDetailHref(assetKey: string): string {
+  return `/data-estate/assets/${encodeURIComponent(assetKey)}`;
+}
+
+function enrichAsset(source: DrawerSource): DrawerSource {
+  if (source.assetKey) return source;
+  const assetKey = source.assetKey ?? assetKeyForSource(source.assetPath ?? source.short);
+  return assetKey ? { ...source, assetKey } : source;
+}
+
 /**
  * Route a raw UC source (e.g. `mip.gold.fn_in_the_money`, `cotality.permits.building`)
  * to the matching DRAWER_SOURCES entry. Falls back to a neutral descriptor that
@@ -24,20 +70,21 @@ export function descriptorFor(rawSource: string): DrawerSource {
 export function drawerForAsset(rawSource: string): DrawerSource | null {
   const key = rawSource.toLowerCase();
 
-  if (key.includes('fn_rate_spread')) return DRAWER_SOURCES.marketRate;
-  if (key.includes('rate_spread')) return DRAWER_SOURCES.rateSpread;
-  if (key.includes('fn_in_the_money') || key.includes('itm')) return DRAWER_SOURCES.itm;
-  if (key.includes('fn_lead_score') || key.includes('lead_scores')) return DRAWER_SOURCES.leadScore;
-  if (key.includes('fn_next_best_offer') || key.includes('nbo')) return DRAWER_SOURCES.nbo;
-  if (key.includes('segment_performance_metric_view')) return DRAWER_SOURCES.segmentPerformanceView;
-  if (key.includes('borrower_opportunity_metric_view')) return DRAWER_SOURCES.borrowerOpportunityView;
-  if (key.includes('lead_generation_metric_view')) return DRAWER_SOURCES.leadGenerationView;
-  if (key.includes('lead_population')) return DRAWER_SOURCES.leadPopulation;
-  if (key.includes('segment_population')) return DRAWER_SOURCES.segmentPopulation;
-  if (key.includes('borrower_360') || key.includes('borrower_dossier')) return DRAWER_SOURCES.borrower360;
-  if (key.includes('evidence_events')) return DRAWER_SOURCES.evidenceStream;
-  if (key.includes('source_readiness')) return DRAWER_SOURCES.sourceReadiness;
-  if (key.includes('lockin_cohort')) return DRAWER_SOURCES.lockinCohort;
+  if (key.includes('fn_rate_spread')) return enrichAsset(DRAWER_SOURCES.marketRate);
+  if (key.includes('rate_spread')) return enrichAsset(DRAWER_SOURCES.rateSpread);
+  if (key.includes('fn_in_the_money') || key.includes('itm')) return enrichAsset(DRAWER_SOURCES.itm);
+  if (key.includes('fn_lead_score') || key.includes('lead_scores')) return enrichAsset(DRAWER_SOURCES.leadScore);
+  if (key.includes('fn_next_best_offer') || key.includes('nbo')) return enrichAsset(DRAWER_SOURCES.nbo);
+  if (key.includes('segment_performance_metric_view')) return enrichAsset(DRAWER_SOURCES.segmentPerformanceView);
+  if (key.includes('borrower_opportunity_metric_view')) return enrichAsset(DRAWER_SOURCES.borrowerOpportunityView);
+  if (key.includes('lead_generation_metric_view')) return enrichAsset(DRAWER_SOURCES.leadGenerationView);
+  if (key.includes('lead_population')) return enrichAsset(DRAWER_SOURCES.leadPopulation);
+  if (key.includes('segment_population')) return enrichAsset(DRAWER_SOURCES.segmentPopulation);
+  if (key.includes('borrower_dossier')) return enrichAsset(DRAWER_SOURCES.borrowerDossier);
+  if (key.includes('borrower_360')) return enrichAsset(DRAWER_SOURCES.borrower360);
+  if (key.includes('evidence_events')) return enrichAsset(DRAWER_SOURCES.evidenceStream);
+  if (key.includes('source_readiness')) return enrichAsset(DRAWER_SOURCES.sourceReadiness);
+  if (key.includes('lockin_cohort')) return enrichAsset(DRAWER_SOURCES.lockinCohort);
   if (key.includes('property_owner_bridge') || key.includes('owner_link')) return DRAWER_SOURCES.ownerGraph;
   if (key.includes('property_master')) return DRAWER_SOURCES.propertyProfile;
   if (key.includes('mortgage_events') || key.includes('mortgage_domain')) return DRAWER_SOURCES.mortgageDomain;
@@ -142,11 +189,15 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
   leadPopulation: {
     title: 'Ranked lead population',
     short: 'mip.gold.lead_population',
+    assetKey: 'lead_population',
+    assetPath: 'mip.gold.lead_population',
+    usedIn: ['Lead Queue', 'Borrower 360', 'Offer workflow', 'Analytics'],
+    notExposed: 'Raw CLIP, owner names, street addresses, source-table paths, and lender raw strings.',
     description:
       'Gold Lead Queue population: the ranked, quality-filtered subset of borrower_360 where opportunity_score is at least 50. It carries borrower-safe display fields, segment codes, evidence IDs, recommended offer, rank, and approval state for outreach workflows.',
     lineage: [
       { layer: 'FEATURES', name: 'mip.gold.borrower_360', meta: 'borrower-grain Cotality + first-party features' },
-      { layer: 'SCORE', name: 'mip.gold.lead_scores', meta: 'opportunity_score and confidence components' },
+      { layer: 'SCORE', name: 'mip.gold.lead_scores', meta: 'opportunity_score and signal-strength components' },
       { layer: 'GOLD', name: 'mip.gold.lead_population', meta: 'opportunity_score >= 50, ranked by score' },
       { layer: 'APP', name: 'Lead Queue / approval workflow', meta: 'evidence_ids and approval_status preserved' },
     ],
@@ -161,6 +212,9 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
   segmentPopulation: {
     title: 'Segment population',
     short: 'mip.gold.segment_population',
+    assetKey: 'segment_population',
+    assetPath: 'mip.gold.segment_population',
+    usedIn: ['Segment Intelligence', 'Analytics', 'Genie'],
     description:
       'Gold segment rollup used by Segment Intelligence. It preserves the configured segment predicates, AND/OR mode, geography, and average score at the population-rollup grain.',
     lineage: [
@@ -214,6 +268,10 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
   borrower360: {
     title: 'Borrower 360 feature set',
     short: 'mip.gold.borrower_360',
+    assetKey: 'borrower_360',
+    assetPath: 'mip.gold.borrower_360',
+    usedIn: ['Borrower 360', 'Offer workflow', 'Analytics', 'Proof layer'],
+    notExposed: 'Raw CLIP, owner identity, street address, raw lender values, and upstream source paths.',
     description:
       'Canonical borrower-level feature table used by the dossier, offer logic, lead queue, and Genie trusted assets. It combines property, Owner Link, lien, AVM, market-rate, and first-party relationship fields at borrower grain.',
     lineage: [
@@ -228,6 +286,29 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
       { label: 'Owner graph ref', source: 'property_owner_bridge.owner_link_id', value: 'masked Owner Link ref' },
       { label: 'Borrower economics', source: 'lien_current + market_rates_weekly', value: 'rate spread, LTV, equity' },
       { label: 'First-party lens', source: 'demo first-party feeds when configured', value: 'relationship flags' },
+    ],
+  },
+
+  borrowerDossier: {
+    title: 'Borrower dossier proof table',
+    short: 'mip.gold.borrower_dossier',
+    assetKey: 'borrower_dossier',
+    assetPath: 'mip.gold.borrower_dossier',
+    usedIn: ['Borrower 360 proof drawer', 'Offer workflow', 'Reproduce SQL'],
+    notExposed: 'Raw CLIP, owner identity, street address, raw lender values, upstream source paths, and nested source-table names.',
+    description:
+      'Governed borrower-proof table used to reconcile the displayed dossier, score math, decision inputs, evidence rows, and reproduce-SQL templates for a single borrower.',
+    lineage: [
+      { layer: 'FEATURES', name: 'mip.gold.borrower_360', meta: 'borrower-grain feature projection' },
+      { layer: 'SCORE', name: 'mip.gold.lead_scores', meta: 'opportunity score and signal-strength components' },
+      { layer: 'EVIDENCE', name: 'mip.gold.evidence_events', meta: 'display-safe evidence rows' },
+      { layer: 'GOLD', name: 'mip.gold.borrower_dossier', meta: 'proof-ready borrower dossier projection' },
+    ],
+    signals: [
+      { label: 'Displayed dossier', source: 'borrower_dossier.borrower_id', value: 'masked borrower id' },
+      { label: 'Score reconciliation', source: 'borrower_dossier.opportunity_score', value: 'compared with fn_lead_score' },
+      { label: 'Decision inputs', source: 'borrower_dossier.rate_spread_bps / equity_pct', value: 'recomputed in proof' },
+      { label: 'Evidence rows', source: 'borrower_dossier.evidence_events', value: 'nested fields redacted where sensitive' },
     ],
   },
 
@@ -319,8 +400,12 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
   evidenceStream: {
     title: 'Evidence stream',
     short: 'mip.gold.evidence_events',
+    assetKey: 'evidence_events',
+    assetPath: 'mip.gold.evidence_events',
+    usedIn: ['Borrower proof', 'Lineage drawers', 'Genie citations', 'Audit review'],
+    notExposed: 'Raw CLIP and source table internals are removed at the API boundary.',
     description:
-      'Borrower-safe evidence-event table. Each row is a source-backed signal with source product, UC table, signal type, display text, confidence, and timestamp. Raw CLIP is used only for joins and is removed at the API boundary.',
+      'Borrower-safe evidence-event table. Each row is a source-backed signal with source product, UC table, signal type, display text, evidence confidence, and timestamp. Raw CLIP is used only for joins and is removed at the API boundary.',
     lineage: [
       { layer: 'SILVER', name: 'mip.silver.lien_current', meta: 'rate, lien and AVM evidence' },
       { layer: 'SILVER', name: 'mip.silver.market_rates_weekly', meta: 'FRED market-rate observation for market_trend evidence' },
@@ -332,13 +417,16 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
     signals: [
       { label: 'Controlled vocab', source: 'evidence_events.signal_type', value: 'no permit/listing until shares land' },
       { label: 'Display text', source: 'evidence_events.display_text', value: 'deterministic, no PII' },
-      { label: 'Confidence', source: 'evidence_events.confidence', value: '0..1 per signal' },
+      { label: 'Evidence confidence', source: 'evidence_events.confidence', value: '0..1 per signal' },
     ],
   },
 
   sourceReadiness: {
     title: 'Source readiness',
     short: 'mip.gold.source_readiness',
+    assetKey: 'source_readiness',
+    assetPath: 'mip.gold.source_readiness',
+    usedIn: ['Data estate', 'Admin source readiness', 'Genie data-gap answers'],
     description:
       'Non-PII readiness ledger showing which Cotality, FRED, first-party, and gold assets are live, synthetic-demo, pending, empty, or blocked. Used for governed data-gap answers so missing feeds are not treated as zero demand.',
     lineage: [
@@ -415,6 +503,9 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
   leadGenerationView: {
     title: 'Lead-generation metric view',
     short: 'mip.semantics.lead_generation_metric_view',
+    assetKey: 'lead_generation_metric_view',
+    assetPath: 'mip.semantics.lead_generation_metric_view',
+    usedIn: ['Home', 'Genie', 'Executive analytics'],
     description:
       'Curated semantic view for executive lead-generation questions: marketable population, ranked borrowers, top geographies, score bands, and offer-ready funnel measures.',
     lineage: [
@@ -431,6 +522,9 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
   segmentPerformanceView: {
     title: 'Segment performance metric view',
     short: 'mip.semantics.segment_performance_metric_view',
+    assetKey: 'segment_performance_metric_view',
+    assetPath: 'mip.semantics.segment_performance_metric_view',
+    usedIn: ['Analytics segments', 'Genie'],
     description:
       'Curated semantic view for segment comparison questions. It uses the same segment predicates as the app and preserves pending-feed behavior for MLS and permit segments.',
     lineage: [
@@ -448,6 +542,9 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
   borrowerOpportunityView: {
     title: 'Borrower opportunity metric view',
     short: 'mip.semantics.borrower_opportunity_metric_view',
+    assetKey: 'borrower_opportunity_metric_view',
+    assetPath: 'mip.semantics.borrower_opportunity_metric_view',
+    usedIn: ['Analytics economics', 'Geography drilldowns', 'Genie'],
     description:
       'Curated borrower-level semantic view used by Genie for drill-down questions about cohorts, geographies, scores, and next-best-offer rationale.',
     lineage: [
@@ -465,6 +562,9 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
   leadScore: {
     title: 'Lead score model',
     short: 'mip.gold.lead_scores',
+    assetKey: 'lead_scores',
+    assetPath: 'mip.gold.lead_scores',
+    usedIn: ['Opportunity score', 'Signal strength', 'Borrower proof'],
     description:
       'Canonical 0-100 opportunity score. The score is a deterministic weighted blend of five sub-scores and is parity-pinned between UC SQL, backend scoring, and golden fixtures.',
     lineage: [
@@ -485,6 +585,9 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
   lockinCohort: {
     title: 'Lock-in cohort',
     short: 'mip.gold.lockin_cohort',
+    assetKey: 'lockin_cohort',
+    assetPath: 'mip.gold.lockin_cohort',
+    usedIn: ['Genie', 'Rate-lock analysis'],
     description:
       'Gold cohort table used for rate-lock and refi-sensitivity questions. It is derived from borrower economics and market-rate comparisons, not from synthetic workflow counters.',
     lineage: [
@@ -502,6 +605,9 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
   nbo: {
     title: 'Next-Best-Offer logic',
     short: 'mip.gold.borrower_360',
+    assetKey: 'borrower_360',
+    assetPath: 'mip.gold.borrower_360',
+    usedIn: ['Next-best-offer', 'Outreach approvals', 'Borrower proof'],
     description:
       'Deterministic decision tree over Cotality-derived signals. Output is a categorical product code. No ML model - the logic is transparent and auditable in sql/uc_functions/fn_next_best_offer.sql.',
     lineage: [

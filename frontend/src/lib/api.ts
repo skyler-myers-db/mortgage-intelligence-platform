@@ -1,5 +1,6 @@
 import type {
   Borrower360,
+  BorrowerProof,
   BorrowerLifecycle,
   CallDisposition,
   CampaignListResponse,
@@ -7,6 +8,7 @@ import type {
   ConfigOptions,
   CountyRollupResponse,
   DataEstateResponse,
+  AssetMetadataResponse,
   EconomicsAnalyticsResponse,
   ExecutiveAnalyticsResponse,
   GeographyAnalyticsResponse,
@@ -876,6 +878,9 @@ export const api = {
   borrower: (id: string, signal?: AbortSignal) =>
     getJson<Borrower360>(`/api/borrowers/${id}`, signal),
 
+  borrowerProof: (id: string, signal?: AbortSignal) =>
+    getJson<BorrowerProof>(`/api/borrowers/${id}/proof`, signal),
+
   borrowerLifecycle: (id: string, signal?: AbortSignal) =>
     getJson<BorrowerLifecycle>(`/api/borrowers/${id}/lifecycle`, signal),
 
@@ -1267,6 +1272,12 @@ export const api = {
 
   dataEstate: (signal?: AbortSignal) =>
     getJson<DataEstateResponse>('/api/data-estate', signal),
+
+  assetMetadata: (assetKey: string, signal?: AbortSignal) =>
+    getJson<AssetMetadataResponse>(
+      `/api/admin/assets/${encodeURIComponent(assetKey)}/metadata`,
+      signal,
+    ),
 
   configOptions: (signal?: AbortSignal) =>
     getJson<ConfigOptions>('/api/config/options', signal),

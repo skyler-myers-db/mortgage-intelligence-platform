@@ -839,7 +839,7 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
               <th className="tbl-cell--right">{renderSortHeader('rate', 'Rate Δ (bps)')}</th>
               <th>Next-best-offer</th>
               <th className="tbl-cell--right">{renderSortHeader('score', 'Score')}</th>
-              <th>{renderSortHeader('confidence', 'Confidence')}</th>
+              <th>{renderSortHeader('confidence', 'Signal')}</th>
               <th>Approval</th>
             </tr>
           </thead>

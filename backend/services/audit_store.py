@@ -41,6 +41,11 @@ from backend.schemas.common import (
     validate_public_campaign_label,
     validate_public_opaque_id,
 )
+from backend.services.audit_metadata_value_policy import (
+    validate_row_count,
+    validate_source_assets,
+    validate_sql_hash,
+)
 from backend.services.observability import emit
 from backend.services.pii_redaction import (
     normalize_public_lender_ref,
@@ -283,16 +288,7 @@ _INTERNAL_STAFF_EMAIL_METADATA_KEYS: frozenset[str] = frozenset(
 _INTERNAL_STAFF_EMAIL_LIST_METADATA_KEYS: frozenset[str] = frozenset({"lo_emails"})
 _SALES_STRATEGIES: frozenset[str] = frozenset({"manual", "round_robin", "score_balanced"})
 _SALES_DISPOSITION_OUTCOMES: frozenset[str] = frozenset(
-    {
-        "called_no_answer",
-        "called_left_voicemail",
-        "connected",
-        "callback_scheduled",
-        "application_started",
-        "not_interested",
-        "not_now",
-        "dead",
-    }
+    {"called_no_answer", "called_left_voicemail", "connected", "callback_scheduled", "application_started", "not_interested", "not_now", "dead"}
 )
 _GENIE_REFUSAL_REASONS: frozenset[str] = frozenset(
     {"protected_class", "instruction_override", "pii_request", "scope_bypass", "out_of_scope"}
@@ -313,31 +309,12 @@ def _metadata_values_for(
     return [(key, value) for key, value in metadata.items() if key.lower() in lowered]
 
 _ALLOWED_RESULT_FILTER_KEYS: frozenset[str] = frozenset(
-    {
-        "zips",
-        "states",
-        "county",
-        "counties",
-        "segment_codes",
-        "segment_mode",
-        "target_lender_ref",
-        "borrower_ids",
-        "portfolio_criteria",
-        "source",
-    }
+    {"zips", "states", "county", "counties", "segment_codes", "segment_mode", "target_lender_ref", "borrower_ids", "portfolio_criteria", "source"}
 )
 _MAX_RESULT_FILTER_VALUES = 500
 _MAX_RESULT_FILTER_STATES = 56
 _DECISION_INPUT_KEYS: frozenset[str] = frozenset(
-    {
-        "rate_spread_bps",
-        "equity_pct",
-        "has_permit",
-        "listed_for_sale",
-        "is_investor",
-        "is_current_customer",
-        "is_competitor_lien",
-    }
+    {"rate_spread_bps", "equity_pct", "has_permit", "listed_for_sale", "is_investor", "is_current_customer", "is_competitor_lien"}
 )
 
 _ALLOWED_SEGMENT_CODES: frozenset[str] = frozenset(
@@ -554,6 +531,27 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
     for field, value in _metadata_values_for(metadata, {"refusal_reason"}):
         if value is not None and str(value) not in _GENIE_REFUSAL_REASONS:
             raise AuditMetadataValueViolation(field, "must be a governed Genie refusal reason")
+    for field, value in _metadata_values_for(metadata, {"source_assets"}):
+        if value is None:
+            continue
+        try:
+            validate_source_assets(value)
+        except ValueError as exc:
+            raise AuditMetadataValueViolation(field, str(exc)) from exc
+    strict_sql_hash = str(metadata.get("action") or "") == "view_borrower_proof"
+    for field, value in _metadata_values_for(metadata, {"sql_hash"}):
+        if value is not None and strict_sql_hash:
+            try:
+                validate_sql_hash(value)
+            except ValueError as exc:
+                raise AuditMetadataValueViolation(field, str(exc)) from exc
+    for field, value in _metadata_values_for(metadata, {"row_count"}):
+        if value is None:
+            continue
+        try:
+            validate_row_count(value)
+        except ValueError as exc:
+            raise AuditMetadataValueViolation(field, str(exc)) from exc
     for field, value in _metadata_values_for(metadata, {"per_lo_counts"}):
         if value is None:
             continue

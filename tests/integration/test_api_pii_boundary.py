@@ -20,11 +20,13 @@ seam (for example, a new route that hand-rolls a ``SELECT *``).
 """
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from fastapi.testclient import TestClient
 
 from backend.main import app
+from backend.schemas.assets import AssetMetadataResponse
 from backend.schemas.analytics import (
     EconomicsAnalyticsResponse,
     ExecutiveAnalyticsResponse,
@@ -35,6 +37,7 @@ from backend.schemas.analytics import (
 from backend.schemas.common import EvidenceEvent
 from backend.schemas.lead import Borrower360, LeadSummary, SegmentSummary
 from backend.schemas.portfolio import PortfolioPreview
+from backend.schemas.proof import BorrowerProof
 
 client = TestClient(app)
 
@@ -179,6 +182,45 @@ def test_borrower_evidence_has_only_schema_keys() -> None:
         assert set(ev.keys()).issubset(allowed), (
             f"EvidenceEvent has extra keys: {set(ev.keys()) - allowed}"
         )
+
+
+def test_borrower_proof_has_only_schema_keys_and_no_raw_pii() -> None:
+    resp = client.get("/api/borrowers/B-48291/proof")
+    assert resp.status_code == 200
+    body = resp.json()
+    _assert_no_forbidden_keys(body, route="/api/borrowers/{id}/proof")
+    _assert_no_raw_cotality_ids(body, route="/api/borrowers/{id}/proof")
+    _assert_schema_subset(body, route="/api/borrowers/{id}/proof", schema=BorrowerProof)
+    assert "confidence" not in body
+    assert body["signal_strength_note"]
+    assert body["evidence_confidence_note"]
+    for evidence in body["evidence_rows"]:
+        assert "source_table" not in evidence
+    for query in body["reproduce"]:
+        assert "SELECT *" not in query["sql"].upper()
+        assert "owner_name_hash" not in query["sql"].lower()
+        assert "source_table" not in query["sql"].lower()
+        assert ";" not in query["sql"]
+
+
+def test_asset_metadata_has_only_schema_keys_and_no_raw_pii() -> None:
+    resp = client.get("/api/admin/assets/lead_population/metadata")
+    assert resp.status_code == 200
+    body = resp.json()
+    _assert_no_forbidden_keys(body, route="/api/admin/assets/{asset_key}/metadata")
+    _assert_no_raw_cotality_ids(body, route="/api/admin/assets/{asset_key}/metadata")
+    _assert_schema_subset(
+        body,
+        route="/api/admin/assets/{asset_key}/metadata",
+        schema=AssetMetadataResponse,
+    )
+
+    rendered = json.dumps(body).lower()
+    assert "owner_name_hash" not in rendered
+    assert "source_table" not in rendered
+    assert "dbfs:/" not in rendered
+    assert "s3://" not in rendered
+    assert "mip.silver" not in rendered
 
 
 # ---------------------------------------------------------------------------

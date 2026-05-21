@@ -19,6 +19,24 @@ def test_borrowers_router_returns_dossier_and_evidence() -> None:
     assert evidence.status_code == 200
     assert isinstance(evidence.json(), list)
 
+    proof = client.get("/api/borrowers/B-48291/proof")
+    assert proof.status_code == 200
+    proof_body = proof.json()
+    assert proof_body["borrower_id"] == "B-48291"
+    assert proof_body["trusted"] is True
+    assert proof_body["opportunity_score"] == body["opportunity_score"]
+    assert proof_body["signal_strength"] == body["confidence"]
+    assert len(proof_body["score_components"]) == 5
+    assert {item["key"] for item in proof_body["score_components"]} == {
+        "economic_incentive",
+        "intent_trigger",
+        "fit",
+        "relationship",
+        "evidence",
+    }
+    assert all(query["sql_hash"] for query in proof_body["reproduce"])
+    assert all("SELECT *" not in query["sql"].upper() for query in proof_body["reproduce"])
+
 
 def test_borrowers_router_search_and_lifecycle_surfaces() -> None:
     search = client.get("/api/borrowers/search?q=Chicago")
@@ -59,3 +77,29 @@ def test_borrower_view_audit_carries_correlation_and_decision_inputs() -> None:
     assert len(events) == 1
     assert events[0].correlation_id == response.headers["X-Correlation-ID"]
     assert set(events[0].payload_json["decision_inputs"]) == set(DECISION_INPUT_KEYS)
+
+
+def test_borrower_proof_view_audit_uses_safe_metadata() -> None:
+    audit = InMemoryAuditStore()
+    previous = app.dependency_overrides.get(get_audit_store)
+    app.dependency_overrides[get_audit_store] = lambda: audit
+    try:
+        response = client.get(
+            "/api/borrowers/B-48291/proof",
+            headers={"X-Correlation-ID": "proof-view-audit"},
+        )
+    finally:
+        if previous is None:
+            app.dependency_overrides.pop(get_audit_store, None)
+        else:
+            app.dependency_overrides[get_audit_store] = previous
+
+    assert response.status_code == 200, response.text
+    events = audit.list(limit=10, event_type="VIEW_BORROWER_PROOF")
+    assert len(events) == 1
+    assert events[0].correlation_id == response.headers["X-Correlation-ID"]
+    assert events[0].payload_json["borrower_id"] == "B-48291"
+    assert events[0].payload_json["source_assets"]
+    assert events[0].payload_json["sql_hash"]
+    assert events[0].payload_json["row_count"] == 1
+    assert "sql" not in events[0].payload_json

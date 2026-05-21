@@ -31,14 +31,14 @@ export function RowPreview({ lead }: { lead: LeadSummary }) {
   return (
     <div className="tbl__expand-inner tbl__expand-inner--lead">
       <div>
-        <div className="eyebrow mb-2">Customer 360 preview</div>
+        <div className="eyebrow mb-2">Borrower 360 preview</div>
         <div className="preview-grid">
           <Cell k="Property ref"  v={propertyRef} mono />
           <Cell k="Location"      v={`${lead.city}, ${lead.state} · ${lead.zip}`} />
           <Cell k="Equity"        v={`$${(lead.equity_estimate / 1000).toFixed(0)}k`} mono />
           <Cell k="Rate spread"   v={`+${lead.rate_spread_bps} bps`} mono />
           <Cell k="Score"         v={`${lead.opportunity_score}`} mono />
-          <Cell k="Confidence"    v={`${lead.confidence}%`} mono />
+          <Cell k="Signal"        v={`${lead.confidence}%`} mono />
           <Cell k="Approval"      v={lead.approval_status ?? 'pending'} />
           <Cell k="Outreach"      v={outreachLabel(lead.outreach_status)} />
           <Cell k="Assigned to"   v={lead.assigned_to_label ?? lead.assigned_to_email ?? 'Unassigned'} />
@@ -93,7 +93,7 @@ export function RowPreview({ lead }: { lead: LeadSummary }) {
             <ScoreBadge value={lead.opportunity_score} />
           </div>
           <div className="muted fs-12 mt-1">
-            Confidence <ConfidenceMeter value={lead.confidence} compact />
+            Signal <ConfidenceMeter value={lead.confidence} compact />
           </div>
           <div className="chip-row mt-3">
             <Link
@@ -134,4 +134,3 @@ function Cell({ k, v, mono }: { k: string; v: string; mono?: boolean }) {
     </div>
   );
 }
-

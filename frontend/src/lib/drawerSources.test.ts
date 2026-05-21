@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { descriptorFor, descriptorForEvidence, drawerForAsset, DRAWER_SOURCES } from './drawerSources';
+import { assetHrefForSource, assetKeyForSource, descriptorFor, descriptorForEvidence, drawerForAsset, DRAWER_SOURCES } from './drawerSources';
 
 describe('descriptorFor', () => {
   it('routes lead score lineage to the lead score drawer', () => {
@@ -77,6 +77,9 @@ describe('descriptorFor', () => {
   it('maps Genie trusted assets to specific curated drawers', () => {
     expect(drawerForAsset('mip.gold.segment_population')).toBe(DRAWER_SOURCES.segmentPopulation);
     expect(drawerForAsset('mip.gold.lead_population')).toBe(DRAWER_SOURCES.leadPopulation);
+    expect(drawerForAsset('mip.gold.borrower_dossier')).toBe(DRAWER_SOURCES.borrowerDossier);
+    expect(assetKeyForSource('mip.gold.borrower_dossier')).toBe('borrower_dossier');
+    expect(assetHrefForSource('mip.gold.borrower_dossier')).toBe('/data-estate/assets/borrower_dossier');
     expect(drawerForAsset('mip.gold.evidence_events')).toBe(DRAWER_SOURCES.evidenceStream);
     expect(drawerForAsset('mip.gold.source_readiness')).toBe(DRAWER_SOURCES.sourceReadiness);
     expect(drawerForAsset('mip.gold.lockin_cohort')).toBe(DRAWER_SOURCES.lockinCohort);
@@ -86,6 +89,13 @@ describe('descriptorFor', () => {
     expect(drawerForAsset('mip.semantics.segment_performance_metric_view')).toBe(DRAWER_SOURCES.segmentPerformanceView);
     expect(drawerForAsset('mip.semantics.borrower_opportunity_metric_view')).toBe(DRAWER_SOURCES.borrowerOpportunityView);
     expect(drawerForAsset('mip_app.action_audit')).toBeNull();
+  });
+
+  it('maps only trusted app proof assets to in-app asset detail routes', () => {
+    expect(assetKeyForSource('mip.gold.lead_population')).toBe('lead_population');
+    expect(assetHrefForSource('mip.semantics.borrower_opportunity_metric_view')).toBe('/data-estate/assets/borrower_opportunity_metric_view');
+    expect(assetKeyForSource('mip.silver.lien_current')).toBeNull();
+    expect(assetHrefForSource('mip.first_party.loan_applications')).toBeNull();
   });
 
   it('carries event timestamps as event dates, not source freshness', () => {
@@ -116,6 +126,7 @@ describe('descriptorFor', () => {
       DRAWER_SOURCES.ownerTransfer,
       DRAWER_SOURCES.evidenceStream,
       DRAWER_SOURCES.sourceReadiness,
+      DRAWER_SOURCES.borrowerDossier,
       DRAWER_SOURCES.itm,
       DRAWER_SOURCES.marketRate,
       DRAWER_SOURCES.leadScore,

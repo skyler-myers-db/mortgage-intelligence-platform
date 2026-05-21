@@ -5,6 +5,7 @@
 import { useEffect, useId, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { Icon } from '../components/Icon';
+import { GlossaryTerm } from '../components/GlossaryTerm';
 import { PageShell } from '../components/layout/PageShell';
 import { KpiCard } from '../components/mortgage/KpiCard';
 import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
@@ -918,7 +919,7 @@ function EvidenceExamplesTable({ rows }: { rows: SignalEvidenceExample[] }) {
         { key: 'borrower', label: 'Borrower', render: (row) => <Link to={`/borrower-360/${row.borrower_id}`}>{borrowerDisplay(row)}</Link> },
         { key: 'signal', label: 'Signal', render: (row) => signalLabel(row.signal_type) },
         { key: 'value', label: 'Value', render: (row) => row.signal_value },
-        { key: 'confidence', label: 'Confidence', render: (row) => row.confidence.toFixed(3) },
+        { key: 'confidence', label: 'Evidence confidence', render: (row) => row.confidence.toFixed(3) },
         { key: 'source', label: 'Source', render: (row) => row.source_product },
       ]}
     />
@@ -1153,8 +1154,8 @@ function SignalsView({
           <div>
             <h2 className="h-3">Evidence by Signal Type</h2>
             <p className="analytics-panel-note">
-              Rows count governed evidence events by signal and Cotality source. Confidence is the mean of
-              <span className="mono"> confidence</span> in the same gold table.
+              Rows count governed evidence events by signal and Cotality source. <GlossaryTerm term="evidenceConfidence" />
+              {' '}is the mean of <span className="mono">confidence</span> in the same gold table.
             </p>
           </div>
           <ScopeChip title="Grouped from mip.gold.evidence_events">mip.gold.evidence_events</ScopeChip>
@@ -1164,7 +1165,7 @@ function SignalsView({
             rows={data.evidence_by_signal}
             value={(row) => row.event_count}
             label={(row) => signalLabel(row.signal_type)}
-            sublabel={(row) => `${row.source_product} · ${row.source_table} · ${row.mean_confidence === null || row.mean_confidence === undefined ? '—' : row.mean_confidence.toFixed(3)} mean confidence`}
+            sublabel={(row) => `${row.source_product} · ${row.source_table} · ${row.mean_confidence === null || row.mean_confidence === undefined ? '—' : row.mean_confidence.toFixed(3)} mean evidence confidence`}
             href={(row) => analyticsHref({
               states: filterParams.states,
               segment_codes: filterParams.segmentCodes,
@@ -1180,7 +1181,7 @@ function SignalsView({
           <div>
             <h2 className="h-3">Evidence Drilldown</h2>
             <p className="analytics-panel-note">
-              Highest-confidence matching rows with borrower links. Each row is one evidence event attached to a borrower dossier.
+              Highest evidence-confidence matching rows with borrower links. Each row is one evidence event attached to a borrower dossier.
             </p>
           </div>
           <ScopeChip>Top 25</ScopeChip>

@@ -1,4 +1,4 @@
-import { useEffect, type CSSProperties, type ReactElement } from 'react';
+import { useEffect, useState, type CSSProperties, type ReactElement, type ReactNode } from 'react';
 import { Link, Navigate, useParams } from 'react-router-dom';
 import { api, ApiError } from '../lib/api';
 import type { Borrower360 as Borrower360Type } from '../types';
@@ -8,7 +8,9 @@ import { TriggerTimeline } from '../components/mortgage/TriggerTimeline';
 import { ScoreBadge } from '../components/mortgage/ScoreBadge';
 import { ConfidenceMeter } from '../components/mortgage/ConfidenceMeter';
 import { BorrowerTruthFlags } from '../components/mortgage/BorrowerTruthFlags';
+import { BorrowerProofDrawer } from '../components/mortgage/BorrowerProofDrawer';
 import { Button, Chip, EvidenceChip } from '../components/Primitives';
+import { GlossaryTerm } from '../components/GlossaryTerm';
 import { Icon } from '../components/Icon';
 import { Skeleton } from '../components/ui/Skeleton';
 import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
@@ -59,6 +61,7 @@ function formatDateTimeShort(value?: string | null): string {
 export default function Borrower360() {
   const { id } = useParams();
   const { lastBorrowerId, setLastBorrowerId, saveLead, isLeadSaved } = useApp();
+  const [proofOpen, setProofOpen] = useState(false);
 
   useEffect(() => {
     if (id) setLastBorrowerId(id);
@@ -106,7 +109,7 @@ export default function Borrower360() {
           </div>
           <div className="surface__body surface__body--stack-sm">
             <div className="chip-row">
-              <Chip variant="neutral" icon="user">Customer 360</Chip>
+              <Chip variant="neutral" icon="user">Borrower dossier</Chip>
               <Chip variant="neutral" icon="bolt">Trigger timeline</Chip>
               <Chip variant="neutral" icon="shield">Why-now rationale</Chip>
               <Chip variant="neutral" icon="layers">Supporting evidence</Chip>
@@ -275,18 +278,18 @@ export default function Borrower360() {
       }
     >
       <div className="layoutA-grid">
-        {/* Left column — Customer 360 + trigger timeline stacked */}
+        {/* Left column — Borrower dossier + trigger timeline stacked */}
         <div className="stack-grid">
           <div className="surface">
             <div className="surface__hdr">
               <div className="surface__icon">
                 <Icon name="user" size={14} />
               </div>
-              <div className="h-4">Customer 360</div>
+              <div className="h-4">Borrower dossier</div>
             </div>
             <div className="surface__body field-grid">
-              <Field k="Property ref" v={b.clip_id} mono />
-              <Field k="Owner graph ref" v={b.owner_link_id} mono />
+              <Field k={<GlossaryTerm term="clip">Property ref</GlossaryTerm>} v={b.clip_id} mono />
+              <Field k={<GlossaryTerm term="ownerLink">Owner graph ref</GlossaryTerm>} v={b.owner_link_id} mono />
               <Field
                 k="Property address"
                 v=""
@@ -300,7 +303,7 @@ export default function Borrower360() {
                 }
               />
               <Field
-                k="AVM"
+                k={<GlossaryTerm term="avm">AVM</GlossaryTerm>}
                 v=""
                 childEl={
                   hasAvm ? (
@@ -315,7 +318,7 @@ export default function Borrower360() {
               />
               <Field k="Current lien" v={`${currency(b.current_lien_balance)} · ${b.current_rate}%`} mono />
               <Field
-                k="LTV / Equity"
+                k={<><GlossaryTerm term="ltv">LTV</GlossaryTerm> / Equity</>}
                 v=""
                 childEl={
                   hasAvm ? (
@@ -423,7 +426,7 @@ export default function Borrower360() {
             <div className="surface__body">
               <div className="chip-row mb-3">
                 <Chip variant={b.why_panel.in_the_money ? 'success' : 'warning'}>
-                  {b.why_panel.in_the_money ? 'In-the-money' : 'Not in the money'}
+                  {b.why_panel.in_the_money ? <GlossaryTerm term="inTheMoney">In-the-money</GlossaryTerm> : 'Not in the money'}
                 </Chip>
                 <span className="mono num text-1">
                   +{b.why_panel.rate_spread_bps} bps
@@ -454,6 +457,14 @@ export default function Borrower360() {
                     </EvidenceChip>
                   );
                 })}
+                <Button
+                  size="sm"
+                  icon="audit"
+                  onClick={() => setProofOpen(true)}
+                  aria-label={`Show proof for borrower ${b.borrower_id}`}
+                >
+                  Show proof
+                </Button>
               </div>
             </div>
           </div>
@@ -461,7 +472,7 @@ export default function Borrower360() {
           <div className="surface">
             <div className="surface__hdr">
               <Icon name="bolt" size={14} className="icon-accent" />
-              <div className="h-4">Next-best-offer</div>
+              <div className="h-4"><GlossaryTerm term="nextBestOffer">Next-best-offer</GlossaryTerm></div>
             </div>
             <div className="surface__body">
               <div className="split-row">
@@ -487,6 +498,14 @@ export default function Borrower360() {
                 >
                   {saved ? 'Saved' : 'Save lead'}
                 </Button>
+                <Button
+                  variant="ghost"
+                  icon="audit"
+                  onClick={() => setProofOpen(true)}
+                  aria-label={`Show scoring math for borrower ${b.borrower_id}`}
+                >
+                  Show math
+                </Button>
               </div>
             </div>
           </div>
@@ -494,7 +513,7 @@ export default function Borrower360() {
           <div className="surface">
             <div className="surface__hdr">
               <Icon name="layers" size={14} className="icon-accent" />
-              <div className="h-4">Supporting evidence</div>
+              <div className="h-4"><GlossaryTerm term="supportingEvidence">Supporting evidence</GlossaryTerm></div>
             </div>
             <div className="surface__body surface__body--stack-sm">
               {b.evidence_events.map((e) => (
@@ -507,11 +526,16 @@ export default function Borrower360() {
           </div>
         </div>
       </div>
+      <BorrowerProofDrawer
+        borrowerId={b.borrower_id}
+        open={proofOpen}
+        onClose={() => setProofOpen(false)}
+      />
     </PageShell>
   );
 }
 
-function Field({ k, v, mono, childEl }: { k: string; v: string; mono?: boolean; childEl?: ReactElement }) {
+function Field({ k, v, mono, childEl }: { k: ReactNode; v: string; mono?: boolean; childEl?: ReactElement }) {
   return (
     <div>
       <div className="field__label">{k}</div>

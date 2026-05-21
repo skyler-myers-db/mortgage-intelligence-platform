@@ -3,10 +3,12 @@ import { createIdlePreloader } from './prefetch';
 
 export const HomeRoute = lazyWithPreload(() => import('../routes/home'));
 export const AnalyticsRoute = lazyWithPreload(() => import('../routes/analytics'));
+export const AssetRoute = lazyWithPreload(() => import('../routes/asset'));
 export const PortfolioBuilderRoute = lazyWithPreload(() => import('../routes/portfolio-builder'));
 export const SegmentIntelligenceRoute = lazyWithPreload(() => import('../routes/segment-intelligence'));
 export const LeadQueueRoute = lazyWithPreload(() => import('../routes/lead-queue'));
 export const Borrower360Route = lazyWithPreload(() => import('../routes/borrower-360'));
+export const GlossaryRoute = lazyWithPreload(() => import('../routes/glossary'));
 export const OfferOrchestratorRoute = lazyWithPreload(() => import('../routes/offer-orchestrator'));
 export const AskGenieRoute = lazyWithPreload(() => import('../routes/ask-genie'));
 export const AdminConfigRoute = lazyWithPreload(() => import('../routes/admin-config'));
@@ -14,10 +16,12 @@ export const AdminConfigRoute = lazyWithPreload(() => import('../routes/admin-co
 export const routePreloaders = {
   '/': HomeRoute.preload,
   '/analytics': AnalyticsRoute.preload,
+  '/data-estate/assets': AssetRoute.preload,
   '/portfolio-builder': PortfolioBuilderRoute.preload,
   '/segment-intelligence': SegmentIntelligenceRoute.preload,
   '/lead-queue': LeadQueueRoute.preload,
   '/borrower-360': Borrower360Route.preload,
+  '/glossary': GlossaryRoute.preload,
   '/offer-orchestrator': OfferOrchestratorRoute.preload,
   '/ask-genie': AskGenieRoute.preload,
   '/admin-config': AdminConfigRoute.preload,

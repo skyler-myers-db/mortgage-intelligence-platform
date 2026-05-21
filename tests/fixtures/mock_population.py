@@ -385,6 +385,9 @@ def _build_borrower(spec: dict) -> tuple[Borrower360, dict]:
 _BUILT = [_build_borrower(s) for s in _BORROWER_SPECS]
 BORROWERS: list[Borrower360] = [b for b, _ in _BUILT]
 BORROWER_OFFER_INPUTS: dict[str, dict] = {b.borrower_id: inputs for b, inputs in _BUILT}
+BORROWER_SCORE_COMPONENTS: dict[str, dict[str, int]] = {
+    spec["bid"]: dict(spec["components"]) for spec in _BORROWER_SPECS
+}
 
 # Back-compat: the three pinned offer codes are exported by name so any
 # downstream reference (tests, the offers router) keeps working.

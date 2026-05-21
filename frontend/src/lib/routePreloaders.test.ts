@@ -28,10 +28,12 @@ describe('preloadRouteForPath', () => {
     const calls = stubRoutePreloaders();
 
     preloadRouteForPath('/analytics');
+    preloadRouteForPath('/data-estate/assets/lead_population');
+    preloadRouteForPath('/glossary');
     preloadRouteForPath('/lead-queue');
     await Promise.resolve();
 
-    expect(calls).toEqual(['/analytics', '/lead-queue']);
+    expect(calls).toEqual(['/analytics', '/data-estate/assets', '/glossary', '/lead-queue']);
   });
 
   it('maps deep-linked borrower and offer routes by prefix', async () => {

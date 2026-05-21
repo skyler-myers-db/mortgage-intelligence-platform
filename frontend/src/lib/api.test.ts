@@ -67,6 +67,21 @@ describe('analytics API client', () => {
   });
 });
 
+describe('borrower proof API client', () => {
+  it('routes proof reads through canonical API v1', async () => {
+    const calls: Array<{ path: string; init?: RequestInit }> = [];
+    vi.stubGlobal('fetch', async (path: string, init?: RequestInit) => {
+      calls.push({ path, init });
+      return jsonResponse(200, { borrower_id: 'B-123' });
+    });
+
+    await api.borrowerProof('B-123');
+
+    expect(calls[0].path).toBe('/api/v1/borrowers/B-123/proof');
+    expect(calls[0].init?.method).toBeUndefined();
+  });
+});
+
 describe('_parseRetryableBody', () => {
   it('extracts reason="breaker_open" from a 503 body', async () => {
     const res = jsonResponse(503, {
@@ -580,6 +595,38 @@ describe('data estate API client', () => {
 
     expect(calls[0].path).toBe('/api/v1/data-estate');
     expect(result.public_demo_masking).toBe(true);
+  });
+
+  it('fetches admin-gated governed asset metadata by asset key', async () => {
+    const calls: Array<{ path: string; init?: RequestInit }> = [];
+    vi.stubGlobal('fetch', async (path: string, init?: RequestInit) => {
+      calls.push({ path, init });
+      return jsonResponse(200, {
+        asset_path: 'mip.gold.lead_population',
+        title: 'Gold Lead Queue Population',
+        description: 'Ranked lead queue table',
+        object_type: 'table',
+        status: 'live',
+        freshness: 'fresh',
+        catalog: 'mip',
+        schema_name: 'gold',
+        object_name: 'lead_population',
+        uc_object: 'mip.gold.lead_population',
+        generated_at: '2026-05-20T00:00:00Z',
+        row_count_source: 'source_readiness',
+        tags: [],
+        properties: [],
+        columns: [],
+        ddl_redacted_lines: 0,
+        lineage: [],
+        known_data_gaps: [],
+      });
+    });
+
+    const result = await api.assetMetadata('lead_population');
+
+    expect(calls[0].path).toBe('/api/v1/admin/assets/lead_population/metadata');
+    expect(result.asset_path).toBe('mip.gold.lead_population');
   });
 });
 

@@ -14,6 +14,16 @@ export interface EvidenceEvent {
   timestamp: string;
 }
 
+export interface ProofEvidenceEvent {
+  evidence_id: string;
+  source_product: string;
+  signal_type: string;
+  signal_value: string;
+  display_text: string;
+  confidence: number;
+  timestamp: string;
+}
+
 export interface SegmentSummary {
   code: SegmentCode;
   name: string;
@@ -255,6 +265,71 @@ export interface Borrower360 extends LeadSummary {
   why_panel: WhyPanel;
 }
 
+export interface ProofFormulaLine {
+  label: string;
+  expression: string;
+  result: string;
+  source?: string | null;
+}
+
+export type ProofScoreComponentKey =
+  | 'economic_incentive'
+  | 'intent_trigger'
+  | 'fit'
+  | 'relationship'
+  | 'evidence';
+
+export interface ProofScoreComponent {
+  key: ProofScoreComponentKey;
+  label: string;
+  value: number;
+  weight: number;
+  weighted_points: number;
+  explanation: string;
+  source_fields: string[];
+  fair_lending_note?: string | null;
+}
+
+export interface ProofOfferBranch {
+  code: string;
+  label: string;
+  passed: boolean;
+  selected: boolean;
+  reason: string;
+}
+
+export interface ProofReproduceQuery {
+  title: string;
+  sql: string;
+  sql_hash: string;
+  note: string;
+  databricks_sql_url?: string | null;
+}
+
+export interface BorrowerProof {
+  borrower_id: string;
+  trusted: boolean;
+  known_data_gaps: string[];
+  generated_from: string;
+  source_refresh_at?: string | null;
+  opportunity_score: number;
+  signal_strength: number;
+  signal_strength_note: string;
+  evidence_confidence_note: string;
+  score_components: ProofScoreComponent[];
+  score_formula: ProofFormulaLine;
+  signal_strength_formula: ProofFormulaLine;
+  rate_spread_formula: ProofFormulaLine;
+  equity_formula: ProofFormulaLine;
+  ltv_formula: ProofFormulaLine;
+  offer_code: string;
+  offer_label: string;
+  offer_branches: ProofOfferBranch[];
+  evidence_rows: ProofEvidenceEvent[];
+  source_assets: string[];
+  reproduce: ProofReproduceQuery[];
+}
+
 export interface KpiTrend {
   series: number[];
   delta_pct: number | null;
@@ -452,6 +527,68 @@ export interface DataEstateResponse {
   lanes: DataEstateLane[];
   known_data_gaps: string[];
   proof_assets: string[];
+}
+
+export type AssetFreshness = 'fresh' | 'aging' | 'stale' | 'unavailable';
+export type AssetObjectType = 'table' | 'view' | 'function';
+export type AssetLineageDirection = 'upstream' | 'downstream' | 'observed';
+
+export interface AssetColumn {
+  name: string;
+  data_type?: string | null;
+  comment?: string | null;
+  ordinal_position?: number | null;
+  redacted?: boolean;
+}
+
+export interface AssetTag {
+  name: string;
+  value?: string | null;
+}
+
+export interface AssetProperty {
+  name: string;
+  value?: string | null;
+}
+
+export interface AssetLineageNode {
+  direction: AssetLineageDirection;
+  asset_path: string;
+  label: string;
+  object_type?: string | null;
+  event_time?: string | null;
+  source: string;
+}
+
+export interface AssetMetadataResponse {
+  asset_path: string;
+  title: string;
+  description: string;
+  object_type: AssetObjectType;
+  status: DataEstateStatus | 'unknown';
+  freshness: AssetFreshness;
+  catalog: string;
+  schema_name: string;
+  object_name: string;
+  uc_object: string;
+  generated_at: string;
+  last_updated?: string | null;
+  delta_last_modified?: string | null;
+  row_count?: number | null;
+  row_count_source: 'source_readiness' | 'delta_stats' | 'count' | 'unavailable';
+  num_files?: number | null;
+  size_in_bytes?: number | null;
+  size_label?: string | null;
+  catalog_explorer_url?: string | null;
+  source_note?: string | null;
+  checked_at?: string | null;
+  tags: AssetTag[];
+  properties: AssetProperty[];
+  columns: AssetColumn[];
+  ddl?: string | null;
+  ddl_redacted_lines: number;
+  lineage: AssetLineageNode[];
+  known_data_gaps: string[];
 }
 
 export interface FunnelTotals {

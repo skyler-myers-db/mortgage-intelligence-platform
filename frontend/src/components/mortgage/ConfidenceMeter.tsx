@@ -3,8 +3,9 @@ import { useApp } from '../AppContext';
 /**
  * ConfidenceMeter — prototype `.conf` + `.conf__bars` BEM. Five bars; number
  * of filled bars = round(value / 20). Tier classifies color (>=80 green,
- * >=60 amber, else red). Hides itself when showConfidence is toggled off in
- * the Console.
+ * >=60 amber, else red). The user-facing label is "signal" because this is a
+ * deterministic average of sub-scores, not a statistical confidence interval.
+ * Hides itself when showConfidence is toggled off in the Console.
  */
 
 interface ConfidenceMeterProps {
@@ -20,15 +21,15 @@ export function ConfidenceMeter({ value, compact }: ConfidenceMeterProps) {
   return (
     <span
       className={`conf conf--${tier}`}
-      title="Confidence reflects source coverage and model certainty for this recommendation."
-      aria-label={`Recommendation confidence ${value} percent.`}
+      title="Signal strength is a deterministic average of the five scoring sub-scores, not a statistical confidence interval."
+      aria-label={`Recommendation signal strength ${value} percent.`}
     >
       <span className="conf__bars">
         {[0, 1, 2, 3, 4].map((i) => (
           <span key={i} className={`conf__bar ${i < filled ? 'on' : ''}`} />
         ))}
       </span>
-      {!compact && <span>{value}% conf.</span>}
+      {!compact && <span>Signal {value}%</span>}
     </span>
   );
 }

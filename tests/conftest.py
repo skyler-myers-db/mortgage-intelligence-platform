@@ -45,6 +45,11 @@ from backend.services.admin_rules import (
     _reset_admin_rules_service_for_tests,
     get_admin_rules_service,
 )
+from backend.services.asset_metadata import (
+    AssetMetadataService,
+    _reset_asset_metadata_service_for_tests,
+    get_asset_metadata_service,
+)
 from backend.services.audit_store import (
     _reset_audit_store_for_tests,
     get_audit_store,
@@ -566,6 +571,102 @@ class _FakeAdminSqlClient:
         return rows[0] if rows else None
 
 
+class _FakeAssetSqlClient:
+    """Test-only SQL client for governed asset metadata."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, Any]] = []
+
+    def execute(self, statement: str, parameters: Any = None) -> list[dict[str, Any]]:
+        self.calls.append((statement, parameters))
+        s = statement.strip().upper()
+        if "SYSTEM.INFORMATION_SCHEMA.TABLES" in s:
+            return [
+                {
+                    "table_catalog": "mip",
+                    "table_schema": "gold",
+                    "table_name": "lead_population",
+                    "table_type": "MANAGED",
+                    "comment": "Ranked lead population",
+                }
+            ]
+        if "GOLD.SOURCE_READINESS" in s:
+            return [
+                {
+                    "source_name": "UC Gold Lead Population",
+                    "status": "live",
+                    "row_count": 5156184,
+                    "last_updated": "2026-05-20 12:00:00",
+                    "checked_at": "2026-05-20 12:30:00",
+                    "note": "Ranked lead queue table · refreshed",
+                    "source_table": "mip.gold.lead_population",
+                }
+            ]
+        if s.startswith("DESCRIBE DETAIL"):
+            return [
+                {
+                    "numRecords": 5156184,
+                    "numFiles": 42,
+                    "sizeInBytes": 987654321,
+                    "lastModified": "2026-05-20T12:15:00.000Z",
+                    "location": "dbfs:/not-returned",
+                }
+            ]
+        if "SYSTEM.INFORMATION_SCHEMA.COLUMNS" in s:
+            return [
+                {
+                    "column_name": "borrower_id",
+                    "ordinal_position": 1,
+                    "full_data_type": "STRING",
+                    "data_type": "STRING",
+                    "is_nullable": "NO",
+                    "comment": "Masked borrower id",
+                },
+                {
+                    "column_name": "opportunity_score",
+                    "ordinal_position": 2,
+                    "full_data_type": "INT",
+                    "data_type": "INT",
+                    "is_nullable": "YES",
+                    "comment": "Deterministic score",
+                },
+                {
+                    "column_name": "owner_name_hash",
+                    "ordinal_position": 3,
+                    "full_data_type": "STRING",
+                    "data_type": "STRING",
+                    "is_nullable": "YES",
+                    "comment": "sensitive",
+                },
+            ]
+        if "SYSTEM.INFORMATION_SCHEMA.TABLE_TAGS" in s:
+            return [
+                {"tag_name": "data_classification", "tag_value": "masked"},
+                {"tag_name": "owner_email", "tag_value": "person@example.com"},
+            ]
+        if s.startswith("SHOW TBLPROPERTIES"):
+            return [
+                {"key": "quality", "value": "gold"},
+                {"key": "path", "value": "dbfs:/secret"},
+            ]
+        if "SYSTEM.ACCESS.TABLE_LINEAGE" in s:
+            return [
+                {
+                    "source_table_full_name": "mip.gold.borrower_360",
+                    "target_table_full_name": "mip.gold.lead_population",
+                    "event_time": "2026-05-20 12:15:00",
+                    "event_count": 2,
+                }
+            ]
+        if "COUNT(*)" in s and "FROM" in s:
+            return [{"row_count": 5156184}]
+        return []
+
+    def execute_one(self, statement: str, parameters: Any = None) -> dict[str, Any] | None:
+        rows = self.execute(statement, parameters)
+        return rows[0] if rows else None
+
+
 # -----------------------------------------------------------------------
 # Admin-header auto-injection. Slice-RBAC wired ``require_admin`` onto
 # every ``/api/admin/*`` route, so unit tests that hit the admin surface
@@ -600,6 +701,7 @@ def _reset_runtime_singletons_for_tests() -> None:
     _reset_audit_store_for_tests()
     _reset_workspace_store_for_tests()
     _reset_admin_rules_service_for_tests()
+    _reset_asset_metadata_service_for_tests()
     _reset_config_cache_for_tests()
     _reset_breakers_for_tests()
 
@@ -658,6 +760,7 @@ def _install_dependency_overrides() -> Iterator[None]:
     lakebase = _FakeLakebaseClient()
     workspace = InMemoryWorkspaceStore()
     admin_rules = AdminRulesService(_FakeAdminSqlClient())
+    asset_metadata = AssetMetadataService(_FakeAssetSqlClient())
 
     app.dependency_overrides[get_portfolio_repository] = lambda: portfolio
     app.dependency_overrides[get_analytics_repository] = lambda: analytics
@@ -672,6 +775,7 @@ def _install_dependency_overrides() -> Iterator[None]:
     app.dependency_overrides[get_lakebase_client] = lambda: lakebase
     app.dependency_overrides[get_workspace_store] = lambda: workspace
     app.dependency_overrides[get_admin_rules_service] = lambda: admin_rules
+    app.dependency_overrides[get_asset_metadata_service] = lambda: asset_metadata
     _BASE_DEPENDENCY_OVERRIDES.clear()
     _BASE_DEPENDENCY_OVERRIDES.update(app.dependency_overrides)
     try:

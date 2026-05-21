@@ -1,9 +1,10 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import type { DataEstateAsset, DataEstateLane, DataEstateResponse, DataEstateStatus } from '../../types';
 import { Chip } from '../Primitives';
 import { Icon } from '../Icon';
 import { useApp } from '../AppContext';
-import { descriptorFor, DRAWER_SOURCES } from '../../lib/drawerSources';
+import { assetHrefForSource, descriptorFor, DRAWER_SOURCES } from '../../lib/drawerSources';
 import { Skeleton } from '../ui/Skeleton';
 
 function statusLabel(status: DataEstateStatus): string {
@@ -195,6 +196,7 @@ function AssetDetail({
   setDrawer: ReturnType<typeof useApp>['setDrawer'];
 }) {
   const proofed = asset.uc_object ? proofAssets.includes(asset.uc_object) : false;
+  const assetHref = assetHrefForSource(asset.uc_object);
 
   return (
     <div className="data-estate__asset-detail" id={`data-estate-asset-${assetKey}`}>
@@ -226,6 +228,12 @@ function AssetDetail({
           <Icon name="link" size={12} />
           Open lineage
         </button>
+        {assetHref && (
+          <Link className="btn btn--ghost btn--sm" to={assetHref}>
+            <Icon name="db" size={12} />
+            Asset details
+          </Link>
+        )}
         <span className={`chip chip--${proofed ? 'success' : 'neutral'}`}>
           {proofed ? 'Proof asset' : 'No proof asset'}
         </span>
