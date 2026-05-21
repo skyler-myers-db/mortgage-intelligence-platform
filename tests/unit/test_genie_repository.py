@@ -312,6 +312,112 @@ def test_singular_state_ranked_question_routes_to_top_state_only() -> None:
     }
 
 
+def test_cash_out_state_text_only_answer_uses_canonical_trusted_sql() -> None:
+    live = GenieResponse(
+        answer_text="Illinois has about 1.1 million cash-out opportunities.",
+        sql_query=None,
+        sql_result_rows=[],
+        conversation_id="conv-cash-out-canonical",
+        message_id="msg-cash-out-canonical",
+    )
+    stub = _StubClient(_make_breaker("closed"), response=[live, live])
+    sql = _StubSqlClient(
+        [
+            {
+                "state": "IL",
+                "cash_out_borrowers": 1124230,
+                "refreshed_at": "2026-05-21T00:00:00Z",
+            }
+        ]
+    )
+    repo = DatabricksGenieRepository(stub, sql_client=sql)  # type: ignore[arg-type]
+
+    result = repo.respond("Which state has the most cash-out opportunity right now?")
+
+    assert result.source == "trusted_sql"
+    assert result.proof is not None
+    assert result.proof.trusted is True
+    assert result.sql_query is not None
+    assert "recommended_offer_code = 'cash_out'" in result.sql_query
+    assert "GROUP BY state" in result.sql_query
+    assert result.table_rows == [
+        {
+            "state": "IL",
+            "cash_out_borrowers": 1124230,
+            "refreshed_at": "2026-05-21T00:00:00Z",
+        }
+    ]
+    action = next(row for row in result.actions if row.id == "open-cohort")
+    assert action.route == "/lead-queue?states=IL&product=Cash-out"
+
+
+def test_heloc_zip_text_only_answer_uses_equity_canonical_trusted_sql() -> None:
+    live = GenieResponse(
+        answer_text="Genie found HELOC ZIP opportunities, but did not attach SQL.",
+        sql_query=None,
+        sql_result_rows=[],
+        conversation_id="conv-heloc-canonical",
+        message_id="msg-heloc-canonical",
+    )
+    stub = _StubClient(_make_breaker("closed"), response=[live, live])
+    rows = [
+        {
+            "zip": "60617",
+            "state": "IL",
+            "heloc_eligible_borrowers": 1000,
+            "avg_equity_pct": 42.0,
+            "avg_score": 71.1,
+            "refreshed_at": "2026-05-21T00:00:00Z",
+        },
+        {
+            "zip": "60628",
+            "state": "IL",
+            "heloc_eligible_borrowers": 900,
+            "avg_equity_pct": 40.5,
+            "avg_score": 70.2,
+            "refreshed_at": "2026-05-21T00:00:00Z",
+        },
+        {
+            "zip": "60629",
+            "state": "IL",
+            "heloc_eligible_borrowers": 800,
+            "avg_equity_pct": 39.7,
+            "avg_score": 69.8,
+            "refreshed_at": "2026-05-21T00:00:00Z",
+        },
+        {
+            "zip": "77084",
+            "state": "TX",
+            "heloc_eligible_borrowers": 700,
+            "avg_equity_pct": 38.4,
+            "avg_score": 68.9,
+            "refreshed_at": "2026-05-21T00:00:00Z",
+        },
+        {
+            "zip": "33186",
+            "state": "FL",
+            "heloc_eligible_borrowers": 600,
+            "avg_equity_pct": 37.2,
+            "avg_score": 67.5,
+            "refreshed_at": "2026-05-21T00:00:00Z",
+        },
+    ]
+    sql = _StubSqlClient(rows)
+    repo = DatabricksGenieRepository(stub, sql_client=sql)  # type: ignore[arg-type]
+
+    result = repo.respond("Which ZIPs have the most HELOC-eligible borrowers with equity >= 35%?")
+
+    assert result.source == "trusted_sql"
+    assert result.proof is not None
+    assert result.proof.trusted is True
+    assert result.sql_query is not None
+    assert "equity_pct >= 35" in result.sql_query
+    assert "GROUP BY zip, state" in result.sql_query
+    assert result.row_count == 5
+    assert result.table_rows == rows
+    assert "Building Permits signals remain pending" in result.answer
+
+
 def test_numeric_zip_rows_are_padded_before_cohort_routing() -> None:
     live = GenieResponse(
         answer_text="ZIP 02139 has the most borrowers.",

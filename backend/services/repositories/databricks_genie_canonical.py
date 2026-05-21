@@ -46,6 +46,33 @@ ORDER BY in_the_money_borrowers DESC, avg_score DESC, zip ASC
 LIMIT 10
 """.strip()
 
+_CANONICAL_HELOC_TOP_ZIPS_SQL = f"""
+SELECT zip
+     , state
+     , COUNT(*) AS heloc_eligible_borrowers
+     , CAST(ROUND(AVG(equity_pct), 1) AS DOUBLE) AS avg_equity_pct
+     , CAST(ROUND(AVG(opportunity_score), 1) AS DOUBLE) AS avg_score
+     , MAX(refreshed_at) AS refreshed_at
+FROM {_BORROWER_360}
+WHERE equity_pct >= 35
+  AND zip IS NOT NULL
+  AND TRIM(zip) <> ''
+GROUP BY zip, state
+ORDER BY heloc_eligible_borrowers DESC, avg_equity_pct DESC, zip ASC
+LIMIT 5
+""".strip()
+
+_CANONICAL_CASH_OUT_TOP_STATE_SQL = f"""
+SELECT state
+     , COUNT(*) AS cash_out_borrowers
+     , MAX(refreshed_at) AS refreshed_at
+FROM {_BORROWER_360}
+WHERE recommended_offer_code = 'cash_out'
+GROUP BY state
+ORDER BY cash_out_borrowers DESC, state ASC
+LIMIT 1
+""".strip()
+
 _CANONICAL_CURRENT_CUSTOMER_RETENTION_RISK_SQL = f"""
 SELECT COUNT(*) AS retention_risk_borrowers
      , MAX(refreshed_at) AS refreshed_at
@@ -361,4 +388,33 @@ def _canonical_itm_zip_scope(question: str) -> bool:
         and any(term in q for term in rank_terms)
         and any(term in q for term in refi_terms)
         and any(term in q for term in ("borrower", "lead", "candidate"))
+    )
+
+
+def _canonical_heloc_zip_scope(question: str) -> bool:
+    q = re.sub(r"[^a-z0-9\s-]+", " ", question.lower())
+    q = re.sub(r"\s+", " ", q).strip()
+    if any(term in q for term in ("permit", "permits", "listing", "listings", "mls")):
+        return False
+    zip_terms = ("zip", "zips", "zipcode", "zipcodes", "zip code", "zip codes", "postal")
+    rank_terms = ("top", "most", "highest", "rank", "ranked", "which", "show", "list", "by zip")
+    heloc_terms = ("heloc", "home equity", "equity line")
+    equity_terms = ("equity", "eligible", "eligibility", "candidate", "borrower", "lead")
+    return (
+        any(term in q for term in heloc_terms)
+        and any(term in q for term in zip_terms)
+        and any(term in q for term in rank_terms)
+        and any(term in q for term in equity_terms)
+    )
+
+
+def _canonical_cash_out_state_scope(question: str) -> bool:
+    q = re.sub(r"[^a-z0-9\s-]+", " ", question.lower())
+    q = re.sub(r"\s+", " ", q).strip()
+    cash_out_terms = ("cash-out", "cash out", "cashout")
+    rank_terms = ("top", "most", "highest", "rank", "ranked", "which", "show")
+    return (
+        any(term in q for term in cash_out_terms)
+        and "state" in q
+        and any(term in q for term in rank_terms)
     )

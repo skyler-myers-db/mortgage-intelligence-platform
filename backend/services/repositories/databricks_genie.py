@@ -34,13 +34,17 @@ from backend.services.repositories.databricks_genie_actions import (
     _total_matching_from_rows,
 )
 from backend.services.repositories.databricks_genie_canonical import (
+    _CANONICAL_CASH_OUT_TOP_STATE_SQL,
     _CANONICAL_CURRENT_CUSTOMER_RETENTION_RISK_SQL,
+    _CANONICAL_HELOC_TOP_ZIPS_SQL,
     _CANONICAL_ITM_COUNT_BY_CITY_SQL,
     _CANONICAL_ITM_COUNT_BY_STATE_SQL,
     _CANONICAL_ITM_COUNT_SQL,
     _CANONICAL_ITM_TOP_ZIPS_SQL,
     _CANONICAL_MSA_SCORE_SQL,
     _CANONICAL_RETENTION_COMPETITOR_LIEN_LIST_SQL,
+    _canonical_cash_out_state_scope,
+    _canonical_heloc_zip_scope,
     _canonical_in_the_money_count_scope,
     _canonical_itm_city_scope,
     _canonical_itm_zip_scope,
@@ -712,6 +716,130 @@ def _canonical_genie_answer(
             proof=proof,
             visualization=visualization,
             actions=actions,
+            table_rows=rows,
+        )
+    if _canonical_heloc_zip_scope(question):
+        try:
+            rows = sql_client.execute(_CANONICAL_HELOC_TOP_ZIPS_SQL)
+        except DatabricksSqlError as exc:
+            _emit_genie_warning("canonical_genie_heloc_zips_failed", exc=exc)
+            return None
+        rows = _redact_genie_rows(rows) or []
+        trusted_assets = [borrower_asset]
+        question_hash = _genie_question_hash(question)
+        proof = _build_genie_proof(
+            sql_query=_CANONICAL_HELOC_TOP_ZIPS_SQL,
+            trusted_assets=trusted_assets,
+            rows=rows,
+            question=question,
+            conversation_id=result.conversation_id,
+            message_id=result.message_id,
+            elapsed_ms=result.elapsed_ms,
+        )
+        visualization = _plan_genie_visualization(question, rows)
+        actions = _suggest_genie_actions(
+            question=question,
+            rows=rows,
+            trusted_assets=trusted_assets,
+            visualization=visualization,
+            conversation_id=result.conversation_id,
+            message_id=result.message_id,
+            question_hash=question_hash,
+            sql_query=_CANONICAL_HELOC_TOP_ZIPS_SQL,
+            source="trusted_sql",
+        )
+        if rows:
+            top = rows[0]
+            answer = (
+                "I ranked ZIP codes by HELOC-eligible borrowers with equity_pct "
+                f"at or above 35% from {borrower_asset}. "
+                f"The current leader is ZIP {top.get('zip')} ({top.get('state')}) "
+                f"with {int(top.get('heloc_eligible_borrowers') or 0):,} borrowers. "
+                "This is an equity-only HELOC eligibility view; Building Permits "
+                "signals remain pending and are not used as triggers here."
+            )
+        else:
+            answer = (
+                "The trusted borrower table returned no equity-only HELOC ZIP rows "
+                "for the current refreshed data coverage. Building Permits signals "
+                "remain pending and are not treated as zero demand."
+            )
+        return GenieMessageResponse(
+            conversation_id=result.conversation_id,
+            message_id=result.message_id,
+            elapsed_ms=result.elapsed_ms,
+            question_hash=question_hash,
+            question=question,
+            answer=answer,
+            source="trusted_sql",
+            trusted_assets=trusted_assets,
+            sql_query=_CANONICAL_HELOC_TOP_ZIPS_SQL,
+            row_count=len(rows),
+            proof=proof,
+            visualization=visualization,
+            actions=actions,
+            table_rows=rows,
+        )
+    if _canonical_cash_out_state_scope(question):
+        try:
+            rows = sql_client.execute(_CANONICAL_CASH_OUT_TOP_STATE_SQL)
+        except DatabricksSqlError as exc:
+            _emit_genie_warning("canonical_genie_cash_out_state_failed", exc=exc)
+            return None
+        rows = _redact_genie_rows(rows) or []
+        trusted_assets = [borrower_asset]
+        question_hash = _genie_question_hash(question)
+        proof = _build_genie_proof(
+            sql_query=_CANONICAL_CASH_OUT_TOP_STATE_SQL,
+            trusted_assets=trusted_assets,
+            rows=rows,
+            question=question,
+            conversation_id=result.conversation_id,
+            message_id=result.message_id,
+            elapsed_ms=result.elapsed_ms,
+        )
+        visualization = _plan_genie_visualization(question, rows)
+        actions = _suggest_genie_actions(
+            question=question,
+            rows=rows,
+            trusted_assets=trusted_assets,
+            visualization=visualization,
+            conversation_id=result.conversation_id,
+            message_id=result.message_id,
+            question_hash=question_hash,
+            sql_query=_CANONICAL_CASH_OUT_TOP_STATE_SQL,
+            source="trusted_sql",
+        )
+        if rows:
+            top = rows[0]
+            count_int = int(top.get("cash_out_borrowers") or 0)
+            answer = (
+                f"{top.get('state')} has the most cash-out opportunity right now "
+                f"with {count_int:,} borrowers. This uses recommended_offer_code = "
+                f"'cash_out' at the unique borrower grain from {borrower_asset}."
+            )
+            metric_value = f"{count_int:,}"
+        else:
+            answer = (
+                "The trusted borrower table returned no cash-out state rows for "
+                "the current refreshed data coverage."
+            )
+            metric_value = None
+        return GenieMessageResponse(
+            conversation_id=result.conversation_id,
+            message_id=result.message_id,
+            elapsed_ms=result.elapsed_ms,
+            question_hash=question_hash,
+            question=question,
+            answer=answer,
+            source="trusted_sql",
+            trusted_assets=trusted_assets,
+            sql_query=_CANONICAL_CASH_OUT_TOP_STATE_SQL,
+            row_count=len(rows),
+            proof=proof,
+            visualization=visualization,
+            actions=actions,
+            metric_value=metric_value,
             table_rows=rows,
         )
     if _canonical_msa_score_scope(question):

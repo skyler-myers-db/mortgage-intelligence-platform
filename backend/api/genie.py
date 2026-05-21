@@ -463,6 +463,52 @@ def genie_message(
             known_gap="prompt refused before Genie execution due instruction-override pattern",
         )
         return _finalize_genie_response(lakebase, actor=actor, response=response)
+    if _is_outreach_writer_request(payload.question):
+        question_hash = hashlib.sha256(payload.question.encode("utf-8")).hexdigest()[:16]
+        _ = background
+        _required_audit_write(
+            audit,
+            actor=actor,
+            action="genie.outreach_guardrail",
+            entity_type="genie_message",
+            entity_id=payload.conversation_id or question_hash,
+            payload_json={
+                "conversation_id": payload.conversation_id,
+                "message_id": None,
+                "question_hash": question_hash,
+                "row_count": 0,
+                "source_assets": [],
+                "visualization_kind": None,
+                "action_type": "outreach_guardrail",
+            },
+            event_type="RUN_GENIE",
+        )
+        response = GenieMessageResponse(
+            conversation_id=payload.conversation_id or "",
+            question=payload.question,
+            answer=(
+                "Use governed outreach workflow for borrower communications. "
+                "Genie can size the cohort, explain why borrowers qualify, and "
+                "create an audited draft campaign, but borrower-specific email "
+                "or SMS copy must stay in the Offer Orchestrator / outreach "
+                "review path with explicit human approval."
+            ),
+            source="refused",
+            trusted_assets=[],
+            question_hash=question_hash,
+            row_count=0,
+            proof=GenieProof(
+                source_assets=[],
+                row_count=0,
+                trusted=False,
+                filters=[],
+                known_data_gaps=[],
+                conversation_id=payload.conversation_id,
+            ),
+            follow_up_questions=load_sample_questions()[:2],
+            table_rows=[],
+        )
+        return _finalize_genie_response(lakebase, actor=actor, response=response)
     pii_match = _pii_prompt_match(payload.question)
     if pii_match:
         question_hash = hashlib.sha256(payload.question.encode("utf-8")).hexdigest()[:16]
@@ -730,9 +776,9 @@ def genie_message(
             question=payload.question,
             answer=(
                 f"{state_name} ({state_code}) is outside the current refreshed data "
-                f"coverage ({footprint_label}). I will not treat that coverage gap "
-                f"as zero borrower demand. Ask for one of the covered states, or "
-                f"ask for the {footprint_view}."
+                f"footprint coverage ({footprint_label}). I will not treat that "
+                f"coverage gap as zero borrower demand. Ask for one of the covered "
+                f"states, or ask for the {footprint_view}."
             ),
             source="out_of_footprint",
             trusted_assets=[],
@@ -746,52 +792,6 @@ def genie_message(
                 known_data_gaps=[
                     f"{state_code} is outside the current refreshed data coverage: {footprint_label}"
                 ],
-                conversation_id=payload.conversation_id,
-            ),
-            follow_up_questions=load_sample_questions()[:2],
-            table_rows=[],
-        )
-        return _finalize_genie_response(lakebase, actor=actor, response=response)
-    if _is_outreach_writer_request(payload.question):
-        question_hash = hashlib.sha256(payload.question.encode("utf-8")).hexdigest()[:16]
-        _ = background
-        _required_audit_write(
-            audit,
-            actor=actor,
-            action="genie.outreach_guardrail",
-            entity_type="genie_message",
-            entity_id=payload.conversation_id or question_hash,
-            payload_json={
-                "conversation_id": payload.conversation_id,
-                "message_id": None,
-                "question_hash": question_hash,
-                "row_count": 0,
-                "source_assets": [],
-                "visualization_kind": None,
-                "action_type": "outreach_guardrail",
-            },
-            event_type="RUN_GENIE",
-        )
-        response = GenieMessageResponse(
-            conversation_id=payload.conversation_id or "",
-            question=payload.question,
-            answer=(
-                "Use governed outreach workflow for borrower communications. "
-                "Genie can size the cohort, explain why borrowers qualify, and "
-                "create an audited draft campaign, but borrower-specific email "
-                "or SMS copy must stay in the Offer Orchestrator / outreach "
-                "review path with explicit human approval."
-            ),
-            source="refused",
-            trusted_assets=[],
-            question_hash=question_hash,
-            row_count=0,
-            proof=GenieProof(
-                source_assets=[],
-                row_count=0,
-                trusted=False,
-                filters=[],
-                known_data_gaps=[],
                 conversation_id=payload.conversation_id,
             ),
             follow_up_questions=load_sample_questions()[:2],

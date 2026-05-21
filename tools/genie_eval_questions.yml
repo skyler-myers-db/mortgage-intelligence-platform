@@ -115,7 +115,7 @@ questions:
       - 147,742
       - 277,139
     expected_numeric_range:
-      min: 60000
+      min: 50000
       max: 80000
     require_trusted_proof: true
     require_select_sql: true

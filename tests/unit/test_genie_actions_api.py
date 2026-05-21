@@ -558,10 +558,58 @@ def test_genie_message_flags_outside_footprint_geography() -> None:
     assert res.status_code == 200
     body = res.json()
     assert body["source"] == "out_of_footprint"
-    assert "outside the current refreshed data coverage" in body["answer"]
+    assert "outside the current refreshed data footprint coverage" in body["answer"]
     assert "will not treat that coverage gap as zero borrower demand" in body["answer"]
     assert body["row_count"] == 0
     assert body["table_rows"] == []
+
+
+def test_genie_message_routes_outreach_copy_requests_to_governed_workflow() -> None:
+    class _ExplodingRepo:
+        calls = 0
+
+        def respond(
+            self,
+            question: str,
+            conversation_id: str | None = None,
+        ) -> GenieMessageResponse:
+            _ = question, conversation_id
+            self.calls += 1
+            raise AssertionError("outreach copy prompt reached Genie repository")
+
+    repo = _ExplodingRepo()
+    audit = InMemoryAuditStore()
+    prior_repo = app.dependency_overrides.get(get_genie_answer_repository)
+    prior_audit = app.dependency_overrides.get(get_audit_store)
+    app.dependency_overrides[get_genie_answer_repository] = lambda: repo
+    app.dependency_overrides[get_audit_store] = lambda: audit
+    try:
+        res = client.post(
+            "/api/genie/message",
+            json={"question": "Write an email for borrowers in the cash-out segment."},
+            headers={"X-Forwarded-Email": "lo@example.com"},
+        )
+    finally:
+        if prior_repo is None:
+            app.dependency_overrides.pop(get_genie_answer_repository, None)
+        else:
+            app.dependency_overrides[get_genie_answer_repository] = prior_repo
+        if prior_audit is None:
+            app.dependency_overrides.pop(get_audit_store, None)
+        else:
+            app.dependency_overrides[get_audit_store] = prior_audit
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["source"] == "refused"
+    assert body["table_rows"] == []
+    assert body["proof"]["trusted"] is False
+    assert "governed outreach workflow" in body["answer"]
+    assert "outreach review path" in body["answer"]
+    assert repo.calls == 0
+    events = audit.list(action="genie.outreach_guardrail")
+    assert len(events) == 1
+    assert events[0].payload_json["action_type"] == "outreach_guardrail"
 
 
 def test_genie_message_flags_known_city_outside_footprint_geography() -> None:
