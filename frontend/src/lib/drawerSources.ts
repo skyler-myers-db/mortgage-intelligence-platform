@@ -169,7 +169,7 @@ export function descriptorForEvidence(event: {
 export const DRAWER_SOURCES: Record<string, DrawerSource> = {
   population: {
     title: 'Marketable population',
-    short: 'cotality.public_records',
+    short: 'Marketable population',
     description:
       'Deed and mortgage records joined to voluntary liens and the Owner Link graph, filtered by the lender configuration.',
     lineage: [
@@ -188,7 +188,7 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
 
   leadPopulation: {
     title: 'Ranked lead population',
-    short: 'mip.gold.lead_population',
+    short: 'Ranked lead population',
     assetKey: 'lead_population',
     assetPath: 'mip.gold.lead_population',
     usedIn: ['Lead Queue', 'Borrower 360', 'Offer workflow', 'Analytics'],
@@ -211,7 +211,7 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
 
   segmentPopulation: {
     title: 'Segment population',
-    short: 'mip.gold.segment_population',
+    short: 'Segment population',
     assetKey: 'segment_population',
     assetPath: 'mip.gold.segment_population',
     usedIn: ['Segment Intelligence', 'Analytics', 'Genie'],
@@ -231,7 +231,7 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
 
   ownerGraph: {
     title: 'Property + owner graph',
-    short: 'CLIP + Owner Link',
+    short: 'Property + owner graph',
     description:
       'Property records mastered to CLIP and connected through Owner Link so the app can identify ownership relationships, related properties, occupancy posture, and investor patterns.',
     lineage: [
@@ -267,7 +267,7 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
 
   borrower360: {
     title: 'Borrower 360 feature set',
-    short: 'mip.gold.borrower_360',
+    short: 'Borrower 360 feature set',
     assetKey: 'borrower_360',
     assetPath: 'mip.gold.borrower_360',
     usedIn: ['Borrower 360', 'Offer workflow', 'Analytics', 'Proof layer'],
@@ -314,7 +314,7 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
 
   lien: {
     title: 'Voluntary lien',
-    short: 'cotality.liens.voluntary_lien',
+    short: 'Voluntary lien',
     description:
       'Current open-lien status, lien balance, lender reference, lien rate, and lien-derived relationship flags. This is the lien evidence behind rate spread, current-customer, competitor-lien, and open-lien filters.',
     lineage: [
@@ -336,7 +336,7 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
 
   rateSpread: {
     title: 'Rate spread evidence',
-    short: 'lien_current + market_rates_weekly',
+    short: 'Rate spread evidence',
     description:
       'Derived evidence comparing the borrower current lien rate from Cotality voluntary lien data with the current market-rate reference. This chip is not Cotality-only; it combines lien data with the market-rate feed.',
     lineage: [
@@ -399,7 +399,7 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
 
   evidenceStream: {
     title: 'Evidence stream',
-    short: 'mip.gold.evidence_events',
+    short: 'Evidence stream',
     assetKey: 'evidence_events',
     assetPath: 'mip.gold.evidence_events',
     usedIn: ['Borrower proof', 'Lineage drawers', 'Genie citations', 'Audit review'],
@@ -445,7 +445,7 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
 
   avm: {
     title: 'AVM equity',
-    short: 'Cotality AVM',
+    short: 'AVM equity',
     description:
       'AVM-backed property value and lien-balance math used to estimate borrower equity, CLTV/LTV, and the equity leg of In-the-Money and HELOC eligibility.',
     lineage: [
@@ -463,7 +463,7 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
 
   itm: {
     title: 'In-the-Money logic',
-    short: 'UC function - fn_in_the_money',
+    short: 'In-the-Money logic',
     description:
       'Flags a borrower when lien rate is at least 75 bps above par refi rate and equity is at least 15%. Deterministic UC SQL function, parity-pinned to backend/services/scoring.py.',
     lineage: [
@@ -483,7 +483,7 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
 
   marketRate: {
     title: 'Market rate comparison',
-    short: 'UC function - fn_rate_spread',
+    short: 'Market rate comparison',
     description:
       "Computes the basis-point spread between a borrower's current lien rate and the market par-refinance rate. Output feeds In-the-Money logic and is also surfaced standalone.",
     lineage: [
@@ -502,7 +502,7 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
 
   leadGenerationView: {
     title: 'Lead-generation metric view',
-    short: 'mip.semantics.lead_generation_metric_view',
+    short: 'Lead-generation metric view',
     assetKey: 'lead_generation_metric_view',
     assetPath: 'mip.semantics.lead_generation_metric_view',
     usedIn: ['Home', 'Genie', 'Executive analytics'],
@@ -521,7 +521,7 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
 
   segmentPerformanceView: {
     title: 'Segment performance metric view',
-    short: 'mip.semantics.segment_performance_metric_view',
+    short: 'Segment performance metric view',
     assetKey: 'segment_performance_metric_view',
     assetPath: 'mip.semantics.segment_performance_metric_view',
     usedIn: ['Analytics segments', 'Genie'],
@@ -541,7 +541,7 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
 
   borrowerOpportunityView: {
     title: 'Borrower opportunity metric view',
-    short: 'mip.semantics.borrower_opportunity_metric_view',
+    short: 'Borrower opportunity metric view',
     assetKey: 'borrower_opportunity_metric_view',
     assetPath: 'mip.semantics.borrower_opportunity_metric_view',
     usedIn: ['Analytics economics', 'Geography drilldowns', 'Genie'],
@@ -561,7 +561,7 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
 
   leadScore: {
     title: 'Lead score model',
-    short: 'mip.gold.lead_scores',
+    short: 'Lead score model',
     assetKey: 'lead_scores',
     assetPath: 'mip.gold.lead_scores',
     usedIn: ['Opportunity score', 'Signal strength', 'Borrower proof'],
@@ -604,7 +604,7 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
 
   nbo: {
     title: 'Next-Best-Offer logic',
-    short: 'mip.gold.borrower_360',
+    short: 'Next-Best-Offer logic',
     assetKey: 'borrower_360',
     assetPath: 'mip.gold.borrower_360',
     usedIn: ['Next-best-offer', 'Outreach approvals', 'Borrower proof'],

@@ -24,13 +24,12 @@
   --entrada-red:    #FF3621;
 
   /* ---------- Signal colors ----------
-   * Dark-theme defaults. The `[data-theme="light"]` block below darkens
-   * --signal-danger so the `.kpi__delta.down` text clears WCAG AA (4.5:1)
-   * against the white surface. axe-core flagged 4.19 on the light theme.
+   * Dark-theme defaults. The danger shade is lighter than the brand red so
+   * `.kpi__delta.down` clears WCAG AA on dark KPI cards.
    */
   --signal-success: #10B981;
   --signal-warning: #F59E0B;
-  --signal-danger:  #EF4444;
+  --signal-danger:  #F87171;
   --signal-info:    #66C5FF;
 
   /* ---------- Segment palette (chips, map fills) ---------- */
@@ -160,7 +159,7 @@
 
   --text-1: #EAF3FA;  /* primary */
   --text-2: #BACBD8;  /* secondary */
-  --text-3: #7F96A7;  /* tertiary */
+  --text-3: #93AABD;  /* tertiary */
   --text-4: #4E6578;  /* disabled */
 
   --chip-bg:   rgba(102,197,255,0.10);
@@ -195,7 +194,7 @@
 
   --text-1: #021F34;
   --text-2: #254A66;
-  --text-3: #4F6F86;
+  --text-3: #34536B;
   --text-4: #96ADBF;
 
   --chip-bg:   rgba(2,80,128,0.06);
@@ -259,6 +258,7 @@
 :root { --accent-ink: var(--accent); }
 [data-theme="light"][data-accent="bright"] { --accent-ink: #014E80; }
 [data-theme="light"][data-accent="teal"]   { --accent-ink: #045D62; }
+[data-theme="light"][data-accent="red"]    { --accent-ink: #B42318; }
 
 /* ---------- Density ----------
  * Comfortable is the default (carried on :root).

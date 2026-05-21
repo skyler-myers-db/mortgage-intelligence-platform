@@ -26,7 +26,7 @@ function intersects(a: Box, b: Box): boolean {
 }
 
 async function mockGenieProofAnswer(page: Page) {
-  await page.route('**/api/genie/start', async (route) => {
+  await page.route(/\/api\/(?:v1\/)?genie\/start$/, async (route) => {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -36,7 +36,7 @@ async function mockGenieProofAnswer(page: Page) {
       }),
     });
   });
-  await page.route('**/api/genie/message', async (route) => {
+  await page.route(/\/api\/(?:v1\/)?genie\/message$/, async (route) => {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',

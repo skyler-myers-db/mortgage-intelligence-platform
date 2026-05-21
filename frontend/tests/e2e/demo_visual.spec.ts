@@ -56,9 +56,20 @@ async function discoverMapDrillTarget(
   );
   expect(countyResp.status(), 'county rollups target discovery').toBe(200);
   const countyPayload = await countyResp.json();
-  const county = countyPayload.rollups.find((row: { fips_5?: string; addressable_borrowers?: number }) =>
-    row.fips_5 && Number(row.addressable_borrowers ?? 0) > 0,
-  );
+  let county: { fips_5?: string; county_name?: string; addressable_borrowers?: number } | undefined;
+  for (const row of countyPayload.rollups as Array<{ fips_5?: string; county_name?: string; addressable_borrowers?: number }>) {
+    if (!row.fips_5 || Number(row.addressable_borrowers ?? 0) <= 0) continue;
+    const zipResp = await request.get(
+      `${API_URL}/api/geo/zip-rollups?county_fips=${row.fips_5}${params.toString() ? `&${params.toString()}` : ''}`,
+      { headers: AUTH_HEADERS },
+    );
+    if (zipResp.status() !== 200) continue;
+    const zipPayload = await zipResp.json();
+    if (Array.isArray(zipPayload.rollups) && zipPayload.rollups.length > 0) {
+      county = row;
+      break;
+    }
+  }
   expect(county, 'county rollups should expose a populated county').toBeTruthy();
   const rawCountyName = String(county.county_name || county.fips_5);
   return {

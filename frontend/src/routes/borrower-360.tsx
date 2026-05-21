@@ -285,7 +285,7 @@ export default function Borrower360() {
               <div className="surface__icon">
                 <Icon name="user" size={14} />
               </div>
-              <div className="h-4">Borrower dossier</div>
+              <div className="h-4">Customer 360 dossier</div>
             </div>
             <div className="surface__body field-grid">
               <Field k={<GlossaryTerm term="clip">Property ref</GlossaryTerm>} v={b.clip_id} mono />

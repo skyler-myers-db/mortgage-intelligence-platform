@@ -9,6 +9,10 @@ const designCss = () => readFileSync(
   new URL('./components.css', import.meta.url),
   'utf8',
 );
+const tokensCss = () => readFileSync(
+  new URL('./tokens.css', import.meta.url),
+  'utf8',
+);
 
 describe('layout containment contracts', () => {
   it('keeps component CSS free of hard-coded color literals', () => {
@@ -102,5 +106,33 @@ describe('layout containment contracts', () => {
 
     expect(css).toMatch(/\.topbar,[\s\S]*?\.topbar__icon-btn\s*\{[^}]*transition:/s);
     expect(css).toMatch(/@media \(prefers-reduced-motion:\s*reduce\)\s*\{[\s\S]*?\.topbar,[\s\S]*?transition:\s*none;/s);
+  });
+
+  it('uses readable accent ink for light-theme active and hover text', () => {
+    const css = designCss();
+    const tokens = tokensCss();
+
+    expect(tokens).toContain('[data-theme="light"][data-accent="bright"] { --accent-ink: #014E80; }');
+    expect(tokens).toContain('[data-theme="light"][data-accent="teal"]   { --accent-ink: #045D62; }');
+    expect(tokens).toContain('[data-theme="light"][data-accent="red"]    { --accent-ink: #B42318; }');
+    expect(css).toMatch(/\.rail__item\.is-active\s*\{[^}]*color:\s*var\(--accent-ink\);/s);
+    expect(css).toMatch(/\.topbar__icon-btn\.is-active\s*\{[^}]*color:\s*var\(--accent-ink\);/s);
+    expect(css).toMatch(/\.filter\.is-active\s*\{[^}]*color:\s*var\(--accent-ink\);/s);
+    expect(css).toMatch(/\.proof-tab\.is-active,[^{]+\{[^}]*color:\s*var\(--accent-ink\);/s);
+    expect(css).toMatch(/\.filter-menu__item\.is-selected\s*\{[^}]*color:\s*var\(--accent-ink\);/s);
+    expect(css).toMatch(/\.text-accent\s*\{[^}]*color:\s*var\(--accent-ink\);/s);
+    expect(css).toMatch(/\.icon-accent\s*\{[^}]*color:\s*var\(--accent-ink\);/s);
+  });
+
+  it('lets segment cards wrap content instead of clipping labels or pending copy', () => {
+    const css = designCss();
+
+    expect(css).toMatch(/\.seg-card\s*\{[^}]*min-block-size:\s*178px;/s);
+    expect(css).toMatch(/\.seg-card__hdr\s*\{[^}]*min-inline-size:\s*0;/s);
+    expect(css).toMatch(/\.seg-card__title\s*\{[^}]*overflow-wrap:\s*anywhere;/s);
+    expect(css).toMatch(/\.seg-card__count\s*\{[^}]*overflow-wrap:\s*anywhere;/s);
+    expect(css).toMatch(/\.seg-card__sub\s*\{[^}]*overflow-wrap:\s*anywhere;/s);
+    expect(css).toMatch(/\.seg-card__meta\s*\{[^}]*flex-wrap:\s*wrap;/s);
+    expect(css).toMatch(/\.seg-card__meta-item\s*\{[^}]*overflow-wrap:\s*anywhere;/s);
   });
 });

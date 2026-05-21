@@ -245,7 +245,7 @@
   cursor: pointer; transition: all var(--dur-fast) var(--ease);
 }
 .topbar__icon-btn:hover { background: var(--bg-3); color: var(--text-1); border-color: var(--line-2); }
-.topbar__icon-btn.is-active { background: var(--accent-soft); color: var(--accent); border-color: var(--chip-line); }
+.topbar__icon-btn.is-active { background: var(--accent-soft); color: var(--accent-ink); border-color: var(--chip-line); }
 
 .route-nav {
   display: flex;
@@ -302,7 +302,7 @@
 .rail__item.is-active {
   background: var(--accent-soft);
   border-color: var(--chip-line);
-  color: var(--accent);
+  color: var(--accent-ink);
 }
 .rail__item.is-active::before {
   content:''; position:absolute; left:-10px; top:14px; bottom:14px; width:3px;
@@ -399,7 +399,7 @@
   height: 28px;
   border-radius: var(--r-md);
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--accent-ink);
   display: grid;
   place-items: center;
   flex: 0 0 auto;
@@ -535,7 +535,7 @@ kbd {
   min-block-size: calc(var(--sp-6) + var(--sp-1));
   max-inline-size: 100%;
 }
-.evidence-chip:hover { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.evidence-chip:hover { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-ink); }
 .evidence-chip .e-ico { font-size: 9px; opacity: 0.7; }
 .evidence-chip__label {
   min-inline-size: 0;
@@ -680,6 +680,7 @@ kbd {
   overflow: hidden;
   text-align: left;
   width: 100%;
+  min-block-size: 178px;
   color: inherit;
   font-family: inherit;
 }
@@ -698,27 +699,55 @@ kbd {
   border-color: var(--seg-color, var(--accent));
   box-shadow: 0 0 0 1px var(--seg-color, var(--accent)), 0 10px 30px -12px color-mix(in oklab, var(--seg-color, var(--accent)) 40%, transparent);
 }
-.seg-card__hdr { display: flex; align-items: center; gap: var(--sp-2); margin-bottom: var(--sp-3); }
+.seg-card__hdr {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-3);
+  min-inline-size: 0;
+}
 .seg-card__badge {
   width: 26px; height: 26px; border-radius: 7px;
   display: grid; place-items: center;
   background: color-mix(in oklab, var(--seg-color, var(--accent)) 18%, transparent);
-  color: var(--seg-color, var(--accent));
+  color: var(--seg-ink, var(--seg-color, var(--accent)));
   font-size: 13px;
+  flex: 0 0 26px;
 }
-.seg-card__title { font-size: var(--fs-14); font-weight: 600; color: var(--text-1); }
+.seg-card__title {
+  min-inline-size: 0;
+  font-size: var(--fs-14);
+  font-weight: 600;
+  color: var(--text-1);
+  line-height: var(--lh-snug);
+  overflow-wrap: anywhere;
+}
 .seg-card__count {
   font-family: var(--font-sans); font-weight: 600;
   font-size: var(--fs-28); letter-spacing: var(--tracking-tight);
-  color: var(--text-1); font-variant-numeric: tabular-nums; line-height: 1;
+  color: var(--text-1); font-variant-numeric: tabular-nums; line-height: var(--lh-tight);
+  overflow-wrap: anywhere;
 }
-.seg-card__sub { margin-top: 6px; font-size: var(--fs-12); color: var(--text-3); }
+.seg-card__sub {
+  margin-top: 6px;
+  font-size: var(--fs-12);
+  color: var(--text-3);
+  line-height: var(--lh-snug);
+  overflow-wrap: anywhere;
+}
 .seg-card__meta {
-  display: flex; gap: var(--sp-3); margin-top: var(--sp-3);
+  display: flex;
+  row-gap: var(--sp-1);
+  column-gap: var(--sp-3);
+  margin-top: var(--sp-3);
   font-size: var(--fs-11); color: var(--text-3);
   font-family: var(--font-mono);
+  flex-wrap: wrap;
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
 }
 .seg-card__meta .up { color: var(--signal-success); }
+[data-theme="light"] .seg-card { --seg-ink: var(--text-1); }
 
 /* Pending-source variant — see SegmentCard.tsx + the gold rollup CTAS
  * comment block. The card is a non-button when its predicate is blocked
@@ -745,7 +774,13 @@ kbd {
   text-transform: uppercase;
 }
 .seg-card__meta--pending { color: var(--signal-warning); }
-.seg-card__meta-item { display: inline-flex; align-items: center; gap: var(--sp-1); }
+.seg-card__meta-item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+}
 
 /* ============================================================
    SCORE BADGE
@@ -1222,7 +1257,7 @@ kbd {
   width: 32px;
   height: 32px;
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--accent-ink);
   border-radius: var(--r-md);
 }
 .drawer__title { font-size: var(--fs-13); font-weight: 600; }
@@ -1389,14 +1424,14 @@ kbd {
 .proof-tabs,.proof-status-row,.proof-component__meta,.proof-evidence-row__meta,.proof-component__fields{display:flex;flex-wrap:wrap;gap:var(--sp-2)}
 .proof-tabs{padding:var(--sp-3) var(--sp-5);border-bottom:1px solid var(--line-1);overflow-x:auto}
 .proof-tab{display:inline-flex;align-items:center;gap:var(--sp-2);min-block-size:var(--sp-8);padding:0 var(--sp-3);border:1px solid var(--line-1);border-radius:var(--r-md);background:var(--bg-2);color:var(--text-2);font-family:var(--font-mono);font-size:var(--fs-12);cursor:pointer}
-.proof-tab.is-active,.proof-tab:hover,.proof-tab:focus-visible{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
+.proof-tab.is-active,.proof-tab:hover,.proof-tab:focus-visible{border-color:var(--accent);color:var(--accent-ink);background:var(--accent-soft)}
 .proof-callout,.proof-formula,.proof-component,.proof-branch,.proof-evidence-row,.proof-sql-card{padding:var(--sp-3);border:1px solid var(--line-1);border-radius:var(--r-md);background:var(--bg-2)}
 .proof-callout{color:var(--text-2)}.proof-callout--warning{border-color:color-mix(in oklab,var(--signal-warning) 55%,var(--line-2));background:color-mix(in oklab,var(--signal-warning) 8%,var(--bg-2))}.proof-callout--subtle{background:color-mix(in oklab,var(--accent) 5%,transparent);font-size:var(--fs-12)}
 .proof-list{margin:var(--sp-2) 0 0;padding-inline-start:var(--sp-5);color:var(--text-2)}
 .proof-formula-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--sp-3)}
 .proof-formula__expr,.proof-formula__result,.proof-formula__source{margin-top:var(--sp-2);overflow-wrap:anywhere}.proof-formula__expr{color:var(--text-2)}.proof-formula__result,.proof-component__label,.proof-branch__label,.proof-sql-card__title,.proof-evidence-row__title{color:var(--text-1);font-weight:700}.proof-formula__source,.proof-component__meta,.proof-evidence-row__meta{color:var(--text-3);font-size:var(--fs-11)}
 .proof-component,.proof-branch,.proof-evidence-row,.proof-sql-card{background:color-mix(in oklab,var(--bg-2) 80%,transparent)}
-.proof-component__top{display:flex;justify-content:space-between;gap:var(--sp-3)}.proof-component__score{color:var(--accent);font-size:var(--fs-18);font-weight:700}
+.proof-component__top{display:flex;justify-content:space-between;gap:var(--sp-3)}.proof-component__score{color:var(--accent-ink);font-size:var(--fs-18);font-weight:700}
 .proof-component__bar{position:relative;block-size:var(--sp-2);margin-top:var(--sp-3);overflow:hidden;border-radius:var(--r-pill);background:var(--bg-3)}.proof-component__bar>span{position:absolute;inset:0 auto 0 0;inline-size:var(--bar-pct,0%);background:linear-gradient(90deg,var(--seg-itm),var(--accent));border-radius:inherit}
 .proof-component__fields{margin-top:var(--sp-2)}.proof-component__fields>span,.proof-sql-card__hash{padding:var(--sp-1) var(--sp-2);border:1px solid var(--line-1);border-radius:var(--r-sm);background:var(--bg-3);color:var(--text-2);font-size:var(--fs-11)}
 .proof-branch.is-selected{border-color:var(--signal-success);box-shadow:0 0 0 1px color-mix(in oklab,var(--signal-success) 35%,transparent)}.proof-branch.is-passed:not(.is-selected){border-color:var(--line-2)}
@@ -1501,7 +1536,7 @@ kbd {
 }
 .genie__resize:active {
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--accent-ink);
 }
 
 /* FIX ζ2 (2026-05-04): 7 invisible edge / corner pointer-targets so
@@ -1569,7 +1604,7 @@ kbd {
 .genie__avatar::before {
   content: '\2726'; position: absolute; inset: 0;
   display: grid; place-items: center;
-  z-index: 1; color: var(--accent); font-size: 14px;
+  z-index: 1; color: var(--accent-ink); font-size: 14px;
 }
 .genie__title { font-size: var(--fs-13); font-weight: 600; color: var(--text-1); }
 .genie__sub { font-size: var(--fs-11); color: var(--text-3); }
@@ -1639,7 +1674,7 @@ kbd {
   border: 1px solid var(--line-3);
   border-radius: var(--r-md);
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--accent-ink);
   flex: 0 0 auto;
 }
 .genie-empty__title {
@@ -1725,7 +1760,7 @@ kbd {
 .audit__ico {
   width: 22px; height: 22px; border-radius: 6px;
   display: grid; place-items: center;
-  background: var(--accent-soft); color: var(--accent); font-size: 12px;
+  background: var(--accent-soft); color: var(--accent-ink); font-size: 12px;
 }
 .audit__ico.green { background: var(--status-success-soft); color: var(--status-success-ink); }
 .audit__ico.amber { background: var(--status-warning-soft); color: var(--signal-warning); }
@@ -1797,10 +1832,10 @@ kbd {
   font-family: var(--font-sans);
 }
 .filter:hover { border-color: var(--line-2); color: var(--text-1); }
-.filter.is-active { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+.filter.is-active { border-color: var(--accent); color: var(--accent-ink); background: var(--accent-soft); }
 .filter__label { color: var(--text-3); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; margin-right: 2px; }
 .filter__value { font-weight: 500; color: var(--text-1); font-family: var(--font-mono); font-size: var(--fs-12); }
-.filter.is-active .filter__value { color: var(--accent); }
+.filter.is-active .filter__value { color: var(--accent-ink); }
 .filter--question {
   width: 100%;
   text-align: left;
@@ -1817,6 +1852,7 @@ kbd {
  * the accent hue in dark and to a darker navy in light-with-bright/teal
  * accent so text clears AA while the border/fill (drawn from --accent
  * and --accent-soft) keeps the "active" color affordance. */
+[data-theme="light"] .filter.is-active .filter__label,
 [data-theme="light"] .filter.is-active .filter__value { color: var(--accent-ink); }
 
 /* Route nav chips sit over Home's dark hero surface during theme flips.
@@ -2149,7 +2185,7 @@ kbd {
   border-bottom: 1px solid var(--line-1);
   display: flex; align-items: center;
 }
-.tweaks__hdr-icon { color: var(--accent); }
+.tweaks__hdr-icon { color: var(--accent-ink); }
 .tweaks__title { font-size: var(--fs-13); font-weight: 600; }
 .tweaks__body { padding: var(--sp-4); display: flex; flex-direction: column; gap: var(--sp-4); }
 .tweak-row label { font-size: 11px; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.06em; display: block; margin-bottom: 6px; }
@@ -2425,7 +2461,7 @@ kbd {
   text-decoration: none;
 }
 .analytics-bars__row--link:hover .analytics-bars__label {
-  color: var(--accent);
+  color: var(--accent-ink);
 }
 .analytics-bars__label {
   min-width: 0;
@@ -2621,7 +2657,7 @@ kbd {
   font-weight: 600;
 }
 .analytics-table a {
-  color: var(--accent);
+  color: var(--accent-ink);
   text-decoration: none;
 }
 .analytics-table a:hover {
@@ -2798,7 +2834,7 @@ kbd {
 }
 .filter-menu__item:hover,
 .filter-menu__item.is-focused { background: var(--bg-3); color: var(--text-1); }
-.filter-menu__item.is-selected { color: var(--accent); }
+.filter-menu__item.is-selected { color: var(--accent-ink); }
 .filter-menu__item:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
@@ -3150,7 +3186,7 @@ kbd {
    vocabulary. These are intentionally small and reusable across the
    eight route surfaces.
    ============================================================ */
-.text-accent { color: var(--accent); }
+.text-accent { color: var(--accent-ink); }
 .text-1 { color: var(--text-1); }
 .text-2 { color: var(--text-2); }
 .text-3 { color: var(--text-3); }
@@ -3187,7 +3223,7 @@ kbd {
 .field__label { color: var(--text-3); font-size: var(--fs-11); }
 .field__value { color: var(--text-1); font-size: var(--fs-13); }
 .field__sub { color: var(--text-3); font-size: 10px; margin-top: 2px; }
-.icon-accent { color: var(--accent); }
+.icon-accent { color: var(--accent-ink); }
 .status-callout {
   margin-bottom: var(--gap-grid);
   padding: var(--sp-3) var(--sp-3);
@@ -3808,7 +3844,7 @@ kbd {
   margin-top: var(--sp-2);
   font-family: var(--font-mono);
   font-size: var(--fs-18);
-  color: var(--accent);
+  color: var(--accent-ink);
 }
 .genie-proof-toggle {
   display: flex;
@@ -3921,7 +3957,7 @@ kbd {
   padding: var(--sp-2);
 }
 .genie-proof__trace-kind {
-  color: var(--accent);
+  color: var(--accent-ink);
   font-size: var(--fs-11);
   font-family: var(--font-mono);
   margin-bottom: var(--sp-1);

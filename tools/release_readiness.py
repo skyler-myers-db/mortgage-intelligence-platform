@@ -261,22 +261,25 @@ def cannot_claim(checks: dict[str, Evidence]) -> list[str]:
             "the Cotality Building Permits feed is available and source readiness is proven."
         )
 
-    live_checks = (
+    release_checks = (
+        "package_hygiene",
         "bundle_validate",
+        "sql_python_parity",
         "lakebase_round_trip",
+        "genie_eval",
         "genie_live",
         "playwright_live",
         "source_readiness",
     )
-    missing_live = [
+    missing_release = [
         CHECK_LABELS[name]
-        for name in live_checks
+        for name in release_checks
         if checks[name].status in {"unknown", "not_run"}
     ]
-    if missing_live:
+    if missing_release:
         blocked.append(
-            "Cannot claim full live Databricks release readiness while these checks lack "
-            f"run evidence: {', '.join(missing_live)}."
+            "Cannot claim full Module 0 release readiness while these checks lack "
+            f"run evidence: {', '.join(missing_release)}."
         )
 
     failed = [CHECK_LABELS[name] for name, evidence in checks.items() if evidence.status == "failed"]

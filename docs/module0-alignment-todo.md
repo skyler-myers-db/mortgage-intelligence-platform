@@ -102,8 +102,8 @@ Scope: Close the gaps found when comparing the Module 0 requirements document an
   - Verified: live smoke passed against `https://mip-app-2543889327043640.aws.databricksapps.com`.
   - Verified browser: Playwright real-data suite passed 21 tests with 1 intentional degraded-mode skip; visual suite passed 4 tests.
   - Verified Genie semantics: `docs/genie_eval/2026-05-07T01-10-00Z.md` passed 15/15 with 100.0/100, including ZIP identifier handling, canonical SQL reconciliation, protected-class refusal, out-of-footprint refusal, and pending-permit gap handling.
-- [x] Obtain independent reviewer signoff after tests and live proof complete.
-  - Verified: independent Cotality-gap truth, live SQL/API truth, browser workflow, and production-safety review lanes are gated on deployment `01f14d00b90b15bba16e412e31a8edbd`.
+- [ ] Obtain independent reviewer signoff after tests and live proof complete.
+  - Current status: not signed off. The 2026-05-21 hardening review requires a fresh green deployed Playwright matrix, Genie eval proof, authenticated non-admin RBAC proof, and reviewer convergence before this can be marked complete again.
 
 ## Scope Limitations Still Explicit
 

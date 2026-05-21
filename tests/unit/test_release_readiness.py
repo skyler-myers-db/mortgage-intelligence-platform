@@ -97,12 +97,15 @@ def test_missing_live_evidence_stays_not_run_or_unknown(tmp_path: Path) -> None:
 
     assert report["checks"]["package_hygiene"]["status"] == "unknown"
     assert report["checks"]["bundle_validate"]["status"] == "not_run"
+    assert report["checks"]["sql_python_parity"]["status"] == "not_run"
     assert report["checks"]["lakebase_round_trip"]["status"] == "not_run"
+    assert report["checks"]["genie_eval"]["status"] == "not_run"
     assert report["checks"]["genie_live"]["status"] == "not_run"
     assert report["checks"]["playwright_live"]["status"] == "not_run"
     assert report["checks"]["source_readiness"]["status"] == "not_run"
     assert report["checks"]["mls_listing_status"]["status"] == "unknown"
-    assert any("Cannot claim full live Databricks release readiness" in item for item in report["cannot_claim"])
+    assert any("Cannot claim full Module 0 release readiness" in item for item in report["cannot_claim"])
+    assert any("Genie eval" in item for item in report["cannot_claim"])
 
 
 def test_bad_zip_fails_package_hygiene_without_hiding_other_unknowns(tmp_path: Path) -> None:
