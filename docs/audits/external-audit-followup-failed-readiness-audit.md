@@ -1,13 +1,14 @@
-# Follow-up Audit — ChatGPT external-audit remediation re-verification
+# Failed Readiness Audit — ChatGPT external-audit remediation re-verification
 
 > **Internal validation artifact — not approved for public release.**
+> **This is not a signoff. Do not cite it as approval to ship, demo, or claim readiness.**
 
 **Date:** 2026-05-21  
 **Branch:** `hardening/module0-release-readiness`  
 **Hardening commit:** `9bb5cf7 fix: harden module0 release readiness`  
 **Live app:** `https://mip-app-2543889327043640.aws.databricksapps.com`  
 **Deployment ID:** `01f1553bcc5b1be4a6a4ee8804c93190`  
-**Verdict:** fixes are committed and deployed, but final product signoff is **blocked** by live Playwright failures and pending MLS/permit data shares.
+**Verdict:** fixes are committed and deployed, but readiness is **failed/blocked** by live Playwright failures and pending MLS/permit data shares.
 
 ## Headline
 
@@ -18,8 +19,7 @@ present in the committed tree and deployed to the Databricks App.
 
 However, the required live browser walkthrough is **not green**. The deployed API
 smoke and live integration checks passed, but the deployed Chromium Playwright
-matrix failed 15 tests. This audit therefore cannot sign off the app as
-ship-ready.
+matrix failed 15 tests. This audit is a failed readiness record, not a signoff.
 
 ## Deployment Evidence
 
@@ -160,13 +160,16 @@ The artifact records package hygiene, bundle validation, SQL/live integration,
 Lakebase smoke, Genie live, and source readiness as passed; Genie eval as not
 run; Playwright live as failed; MLS/Listings and Building Permits as pending.
 
-## Verdict
+## Final Readiness Result
 
-The original process violation is corrected for this branch: the hardening work
-is committed, deployed, smoke-tested, integration-tested, and browser-tested
-against the live Databricks App.
+The original process violation is partially corrected for this branch: the
+hardening work is committed, deployed, smoke-tested, integration-tested, and
+browser-tested against the live Databricks App.
 
-The product still cannot receive a final ship/demo signoff. The blockers are now
-specific and live-proven: Playwright failures, pending MLS/permit data shares,
-missing non-admin authenticated eligibility proof, missing standalone Genie eval,
-unwired file-size gate, and low-risk audit exception-string cleanup.
+The product receives **no signoff**. The blockers are specific and live-proven:
+Playwright failures, pending MLS/permit data shares, missing non-admin
+authenticated eligibility proof, missing standalone Genie eval, unwired
+file-size gate, and low-risk audit exception-string cleanup.
+
+Future signoff requires all blockers closed, full live browser walkthroughs
+green, and independent critical review lanes converging on a readiness judgment.
