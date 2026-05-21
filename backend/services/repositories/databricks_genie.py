@@ -43,12 +43,14 @@ from backend.services.repositories.databricks_genie_canonical import (
     _CANONICAL_ITM_TOP_ZIPS_SQL,
     _CANONICAL_MSA_SCORE_SQL,
     _CANONICAL_RETENTION_COMPETITOR_LIEN_LIST_SQL,
+    _CANONICAL_TOP_BORROWERS_BY_STATE_SQL,
     _canonical_cash_out_state_scope,
     _canonical_heloc_zip_scope,
     _canonical_in_the_money_count_scope,
     _canonical_itm_city_scope,
     _canonical_itm_zip_scope,
     _canonical_msa_score_scope,
+    _canonical_top_borrowers_state_scope,
     _current_footprint_label,
     _retention_competitor_lien_list_question,
     _retention_risk_question,
@@ -515,8 +517,73 @@ def _canonical_genie_answer(
     if sql_client is None:
         return None
     borrower_asset = qualify("gold", "borrower_360")
+    lead_population_asset = qualify("gold", "lead_population")
     evidence_asset = qualify("gold", "evidence_events")
     lender_name = (settings.mip_lender_name or "configured lender").strip() or "configured lender"
+    top_borrower_state_scope = _canonical_top_borrowers_state_scope(question)
+    if top_borrower_state_scope is not None:
+        state_name, state_code = top_borrower_state_scope
+        try:
+            rows = sql_client.execute(
+                _CANONICAL_TOP_BORROWERS_BY_STATE_SQL,
+                {"state": state_code},
+            )
+        except DatabricksSqlError as exc:
+            _emit_genie_warning("canonical_genie_top_borrowers_state_failed", exc=exc)
+            return None
+        rows = _redact_genie_rows(rows) or []
+        trusted_assets = [lead_population_asset]
+        question_hash = _genie_question_hash(question)
+        proof = _build_genie_proof(
+            sql_query=_CANONICAL_TOP_BORROWERS_BY_STATE_SQL,
+            trusted_assets=trusted_assets,
+            rows=rows,
+            question=question,
+            conversation_id=result.conversation_id,
+            message_id=result.message_id,
+            elapsed_ms=result.elapsed_ms,
+        )
+        visualization = _plan_genie_visualization(question, rows)
+        actions = _suggest_genie_actions(
+            question=question,
+            rows=rows,
+            trusted_assets=trusted_assets,
+            visualization=visualization,
+            conversation_id=result.conversation_id,
+            message_id=result.message_id,
+            question_hash=question_hash,
+            sql_query=_CANONICAL_TOP_BORROWERS_BY_STATE_SQL,
+            source="trusted_sql",
+        )
+        if rows:
+            top = rows[0]
+            answer = (
+                f"I ranked the top {len(rows)} {state_name} ({state_code}) borrowers "
+                f"by lead score from {lead_population_asset}. "
+                f"The current leader is masked borrower {top.get('borrower_id')} "
+                f"with lead score {int(top.get('lead_score') or 0):,}."
+            )
+        else:
+            answer = (
+                f"The trusted lead population returned no {state_name} ({state_code}) "
+                "borrowers for the current refreshed data coverage."
+            )
+        return GenieMessageResponse(
+            conversation_id=result.conversation_id,
+            message_id=result.message_id,
+            elapsed_ms=result.elapsed_ms,
+            question_hash=question_hash,
+            question=question,
+            answer=answer,
+            source="trusted_sql",
+            trusted_assets=trusted_assets,
+            sql_query=_CANONICAL_TOP_BORROWERS_BY_STATE_SQL,
+            row_count=len(rows),
+            proof=proof,
+            visualization=visualization,
+            actions=actions,
+            table_rows=rows,
+        )
     if _retention_competitor_lien_list_question(question):
         try:
             rows = (

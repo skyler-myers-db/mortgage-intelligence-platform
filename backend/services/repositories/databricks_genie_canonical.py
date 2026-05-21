@@ -7,6 +7,7 @@ from backend.services.databricks_sql_helpers import qualify
 
 _BORROWER_360 = qualify("gold", "borrower_360")
 _EVIDENCE_EVENTS = qualify("gold", "evidence_events")
+_LEAD_POPULATION = qualify("gold", "lead_population")
 
 _CANONICAL_ITM_COUNT_SQL = f"""
 SELECT COUNT(*) AS in_the_money_borrowers
@@ -71,6 +72,23 @@ WHERE recommended_offer_code = 'cash_out'
 GROUP BY state
 ORDER BY cash_out_borrowers DESC, state ASC
 LIMIT 1
+""".strip()
+
+_CANONICAL_TOP_BORROWERS_BY_STATE_SQL = f"""
+SELECT borrower_id
+     , display_name
+     , city
+     , state
+     , zip
+     , opportunity_score AS lead_score
+     , recommended_offer_code
+     , recommended_offer
+     , rank_within_state
+     , refreshed_at
+FROM {_LEAD_POPULATION}
+WHERE state = :state
+ORDER BY opportunity_score DESC, rank_within_state ASC, borrower_id ASC
+LIMIT 10
 """.strip()
 
 _CANONICAL_CURRENT_CUSTOMER_RETENTION_RISK_SQL = f"""
@@ -418,3 +436,15 @@ def _canonical_cash_out_state_scope(question: str) -> bool:
         and "state" in q
         and any(term in q for term in rank_terms)
     )
+
+
+def _canonical_top_borrowers_state_scope(question: str) -> tuple[str, str] | None:
+    q = re.sub(r"[^a-z0-9\s-]+", " ", question.lower())
+    q = re.sub(r"\s+", " ", q).strip()
+    if not any(term in q for term in ("top", "highest", "rank", "ranked", "show", "list")):
+        return None
+    if not any(term in q for term in ("borrower", "borrowers", "lead", "leads")):
+        return None
+    if not any(term in q for term in ("lead score", "opportunity score", "score")):
+        return None
+    return _canonical_itm_state_scope(question)

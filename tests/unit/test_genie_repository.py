@@ -351,6 +351,48 @@ def test_cash_out_state_text_only_answer_uses_canonical_trusted_sql() -> None:
     assert action.route == "/lead-queue?states=IL&product=Cash-out"
 
 
+def test_top_borrowers_by_state_uses_canonical_lead_population_rows() -> None:
+    live = GenieResponse(
+        answer_text="The top borrower has score 91, but no rows were attached.",
+        sql_query=None,
+        sql_result_rows=[],
+        conversation_id="conv-top-state",
+        message_id="msg-top-state",
+    )
+    rows = [
+        {
+            "borrower_id": f"B-IL{i:03d}",
+            "display_name": f"Borrower {i}",
+            "city": "Chicago",
+            "state": "IL",
+            "zip": "60617",
+            "lead_score": 90 - i,
+            "recommended_offer_code": "refi",
+            "recommended_offer": "Rate Refi",
+            "rank_within_state": i + 1,
+            "refreshed_at": "2026-05-21T00:00:00Z",
+        }
+        for i in range(10)
+    ]
+    stub = _StubClient(_make_breaker("closed"), response=[live, live])
+    sql = _StubSqlClient(rows)
+    repo = DatabricksGenieRepository(stub, sql_client=sql)  # type: ignore[arg-type]
+
+    result = repo.respond("Show me the top 10 borrowers by lead score in Illinois.")
+
+    assert result.source == "trusted_sql"
+    assert result.trusted_assets == ["mip.gold.lead_population"]
+    assert result.proof is not None
+    assert result.proof.trusted is True
+    assert result.sql_query is not None
+    assert "FROM mip.gold.lead_population" in result.sql_query
+    assert "state = :state" in result.sql_query
+    assert sql.parameters == [{"state": "IL"}]
+    assert result.row_count == 10
+    assert result.table_rows == rows
+    assert "masked borrower B-IL000" in result.answer
+
+
 def test_heloc_zip_text_only_answer_uses_equity_canonical_trusted_sql() -> None:
     live = GenieResponse(
         answer_text="Genie found HELOC ZIP opportunities, but did not attach SQL.",
