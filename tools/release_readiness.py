@@ -28,6 +28,8 @@ CHECK_LABELS = {
     "genie_eval": "Genie eval",
     "genie_live": "Genie live",
     "playwright_live": "Playwright live",
+    "resilience_drill": "Resilience/degraded drill",
+    "non_admin_auth": "Authenticated non-admin proof",
     "source_readiness": "Source readiness",
     "mls_listing_status": "MLS/listing feed",
     "building_permit_status": "Building permit feed",
@@ -225,6 +227,18 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
             "No live Playwright result was supplied.",
             "Live Playwright product flow passed",
         ),
+        "resilience_drill": _status_evidence(
+            args.resilience_drill,
+            args.resilience_drill_evidence,
+            "No live resilience or degraded-banner drill result was supplied.",
+            "Resilience/degraded-mode drill passed",
+        ),
+        "non_admin_auth": _status_evidence(
+            args.non_admin_auth,
+            args.non_admin_auth_evidence,
+            "No authenticated non-admin token proof was supplied.",
+            "Authenticated non-admin authorization proof passed",
+        ),
         "source_readiness": _status_evidence(
             args.source_readiness,
             args.source_readiness_evidence,
@@ -269,6 +283,8 @@ def cannot_claim(checks: dict[str, Evidence]) -> list[str]:
         "genie_eval",
         "genie_live",
         "playwright_live",
+        "resilience_drill",
+        "non_admin_auth",
         "source_readiness",
     )
     missing_release = [
@@ -353,6 +369,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "genie-eval",
         "genie-live",
         "playwright-live",
+        "resilience-drill",
+        "non-admin-auth",
         "source-readiness",
     ):
         parser.add_argument(f"--{name}", choices=VALID_CHECK_STATUSES, default="not_run")

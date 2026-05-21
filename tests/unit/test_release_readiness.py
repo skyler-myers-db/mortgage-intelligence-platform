@@ -55,6 +55,10 @@ def test_writes_json_and_markdown_with_supplied_evidence(tmp_path: Path) -> None
             "passed",
             "--playwright-live",
             "passed",
+            "--resilience-drill",
+            "passed",
+            "--non-admin-auth",
+            "passed",
             "--source-readiness",
             "passed",
             "--mls-listing-status",
@@ -102,6 +106,8 @@ def test_missing_live_evidence_stays_not_run_or_unknown(tmp_path: Path) -> None:
     assert report["checks"]["genie_eval"]["status"] == "not_run"
     assert report["checks"]["genie_live"]["status"] == "not_run"
     assert report["checks"]["playwright_live"]["status"] == "not_run"
+    assert report["checks"]["resilience_drill"]["status"] == "not_run"
+    assert report["checks"]["non_admin_auth"]["status"] == "not_run"
     assert report["checks"]["source_readiness"]["status"] == "not_run"
     assert report["checks"]["mls_listing_status"]["status"] == "unknown"
     assert any("Cannot claim full Module 0 release readiness" in item for item in report["cannot_claim"])
