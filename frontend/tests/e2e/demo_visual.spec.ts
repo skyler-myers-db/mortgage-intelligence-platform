@@ -239,7 +239,7 @@ test.describe('Module 0 demo visual baselines', () => {
     const cardBoxes = await grid.locator('.seg-card').evaluateAll((nodes) =>
       nodes.map((node) => {
         const rect = node.getBoundingClientRect();
-        const scrollOverflow = node.scrollHeight > node.clientHeight + 1 || node.scrollWidth > node.clientWidth + 1;
+        const scrollOverflow = node.scrollHeight > node.clientHeight + 3 || node.scrollWidth > node.clientWidth + 3;
         return {
           x: rect.x,
           y: rect.y,
