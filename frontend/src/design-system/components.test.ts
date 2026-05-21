@@ -127,7 +127,7 @@ describe('layout containment contracts', () => {
   it('lets segment cards wrap content instead of clipping labels or pending copy', () => {
     const css = designCss();
 
-    expect(css).toMatch(/\.seg-card\s*\{[^}]*min-block-size:\s*178px;/s);
+    expect(css).toMatch(/\.seg-card\s*\{[^}]*min-block-size:\s*184px;/s);
     expect(css).toMatch(/\.seg-card__hdr\s*\{[^}]*min-inline-size:\s*0;/s);
     expect(css).toMatch(/\.seg-card__title\s*\{[^}]*overflow-wrap:\s*anywhere;/s);
     expect(css).toMatch(/\.seg-card__count\s*\{[^}]*overflow-wrap:\s*anywhere;/s);

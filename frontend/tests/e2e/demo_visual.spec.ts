@@ -121,11 +121,15 @@ async function clickSvgRegion(page: Page, target: Locator, label: string) {
 async function drillToZipLayer(page: Page, target: MapDrillTarget) {
   const map = page.locator('.map-wrap').first();
   await bringMapIntoViewport(page);
-  const state = map.getByRole('button', { name: new RegExp(`^${escapeRegExp(target.stateName)}$`) }).first();
+  const state = map.locator(
+    `svg.map-svg-stage [role="button"][aria-label="${target.stateName}"]`,
+  ).first();
   await clickSvgRegion(page, state, target.stateName);
 
   await bringMapIntoViewport(page);
-  const county = map.getByRole('button', { name: new RegExp(escapeRegExp(target.countyName), 'i') }).first();
+  const county = map.locator(
+    `svg.map-svg-stage [role="button"][aria-label="${target.countyName}"]`,
+  ).first();
   await expect(county).toBeVisible({ timeout: 10_000 });
   await county.click({ force: true });
 }

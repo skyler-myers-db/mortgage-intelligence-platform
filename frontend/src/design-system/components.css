@@ -691,7 +691,7 @@ kbd {
   overflow: hidden;
   text-align: left;
   width: 100%;
-  min-block-size: 178px;
+  min-block-size: 184px;
   color: inherit;
   font-family: inherit;
 }
