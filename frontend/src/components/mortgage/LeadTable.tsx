@@ -64,7 +64,7 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
 
   const queryClient = useQueryClient();
   const tableWrapRef = useRef<HTMLDivElement | null>(null);
-  const [expanded, setExpanded] = useState<string | null>(leads[0]?.borrower_id ?? null);
+  const [expanded, setExpanded] = useState<string | null>(null);
   const [sortKey, setSortKey] = useState<SortKey>('rank');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
   const [pendingReject, setPendingReject] = useState<string | null>(null);

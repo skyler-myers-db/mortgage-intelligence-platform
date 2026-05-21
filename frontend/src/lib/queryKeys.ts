@@ -7,7 +7,7 @@ export const queryKeys = {
   configOptions: () => ['mip', 'config', 'options'] as const,
   homePreview: () => ['mip', 'portfolio', 'preview', 'home'] as const,
   dataEstate: () => ['mip', 'data-estate'] as const,
-  analytics: (scope: string) => ['mip', 'analytics', scope] as const,
+  analytics: (scope: string, criteria: readonly unknown[] = []) => ['mip', 'analytics', scope, ...criteria] as const,
   segments: (criteria: readonly unknown[]) => ['mip', 'segments', ...criteria] as const,
   leads: (criteria: readonly unknown[]) => ['mip', 'leads', ...criteria] as const,
   borrower: (borrowerId: string | null | undefined) => ['mip', 'borrower', borrowerId ?? ''] as const,

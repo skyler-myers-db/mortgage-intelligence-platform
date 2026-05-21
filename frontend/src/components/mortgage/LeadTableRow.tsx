@@ -130,7 +130,7 @@ export function LeadTableRow({
           </div>
         </td>
         <td>
-          <div className="chip-stack lead-table__last-touch" onClick={stop}>
+          <div className="chip-stack lead-table__last-touch">
             <Chip variant={dispositionVariant(lead.latest_disposition_outcome)}>
               {dispositionLabel(lead.latest_disposition_outcome)}
             </Chip>

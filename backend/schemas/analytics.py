@@ -8,9 +8,21 @@ not cross this boundary.
 """
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 from backend.schemas.lead import SegmentCode
+
+
+class AnalyticsFilters(BaseModel):
+    """Validated filter bag shared by the native analytics endpoints."""
+
+    states: list[str] = Field(default_factory=list)
+    segment_codes: list[SegmentCode] = Field(default_factory=list)
+    segment_mode: Literal["any", "all"] = "any"
+    signal_types: list[str] = Field(default_factory=list)
+    days: int = Field(default=30, ge=1, le=90)
 
 
 class FunnelTotals(BaseModel):
@@ -158,10 +170,25 @@ class EvidenceDailyRow(BaseModel):
 class EvidenceBySignalRow(BaseModel):
     signal_type: str
     source_product: str
+    source_table: str
     event_count: int = Field(ge=0)
     mean_confidence: float | None = None
+    confidence_source: str
+
+
+class SignalEvidenceExample(BaseModel):
+    borrower_id: str
+    display_name: str
+    state: str = Field(min_length=2, max_length=2)
+    signal_type: str
+    source_product: str
+    signal_value: str
+    display_text: str
+    confidence: float = Field(ge=0, le=1)
+    timestamp: str
 
 
 class SignalAnalyticsResponse(BaseModel):
     evidence_daily: list[EvidenceDailyRow]
     evidence_by_signal: list[EvidenceBySignalRow]
+    evidence_examples: list[SignalEvidenceExample]

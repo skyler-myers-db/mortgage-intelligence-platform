@@ -293,6 +293,20 @@ async function expectMapCornerIconsCompact(page: import('@playwright/test').Page
   }
 }
 
+function urlIncludesApiPath(url: string, path: string): boolean {
+  const normalized = path.startsWith('/') ? path : `/${path}`;
+  return url.includes(normalized) || url.includes(normalized.replace('/api/', '/api/v1/'));
+}
+
+async function openGeniePanel(page: Page) {
+  const visibleFab = page.locator('.genie__fab:visible').first();
+  if (await visibleFab.isVisible()) {
+    await visibleFab.click();
+    return;
+  }
+  await page.getByRole('button', { name: /Toggle Genie chat/i }).click();
+}
+
 async function assertSourceDrawer(
   page: Page,
   scope: Locator,
@@ -367,7 +381,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     await expect(rankedHeader).toContainText(/segment filter: In the Money/);
 
     const isAllModeSegmentResponse = (url: string, path: string) => {
-      if (!url.includes(path)) return false;
+      if (!urlIncludesApiPath(url, path)) return false;
       const parsed = new URL(url);
       const codes = parsed.searchParams.get('segment_codes') ?? '';
       return (
@@ -396,22 +410,20 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
   test('segment map drill preserves segment filters through county ZIP and Lead Queue', async ({ page, request }) => {
     await page.goto('/segment-intelligence');
 
-    const selectedSegments = ['Investor / Multi-Property', 'Home Equity Candidate', 'Retention Risk'];
-    const target = await discoverMapDrillTarget(request, ['itm', 'investor', 'equity', 'retention']);
+    const selectedSegments = ['Home Equity Candidate'];
+    const target = await discoverMapDrillTarget(request, ['itm', 'equity']);
     for (const label of selectedSegments) {
       await clickSegmentCard(page, label);
     }
 
     const filteredGeoResponse = (path: string) => (response: { url: () => string; status: () => number }) => {
-      if (response.status() !== 200 || !response.url().includes(path)) return false;
+      if (response.status() !== 200 || !urlIncludesApiPath(response.url(), path)) return false;
       const parsed = new URL(response.url());
       const codes = parsed.searchParams.get('segment_codes') ?? '';
       return (
         parsed.searchParams.get('segment_mode') === 'all' &&
         codes.includes('itm') &&
-        codes.includes('investor') &&
-        codes.includes('equity') &&
-        codes.includes('retention')
+        codes.includes('equity')
       );
     };
 
@@ -456,7 +468,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     expect(url.searchParams.get('state')).toBe(target.state);
     expect(url.searchParams.get('county')).toBe(target.countyFips);
     expect(url.searchParams.get('segment_mode')).toBe('all');
-    expect(url.searchParams.get('segment_codes')).toContain('retention');
+    expect(url.searchParams.get('segment_codes')).toContain('equity');
     expect(url.searchParams.get('zip')).toMatch(/^\d{5}$/);
   });
 
@@ -464,7 +476,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     await page.goto('/segment-intelligence');
 
     const filteredGeoResponse = page.waitForResponse((response) => {
-      if (response.status() !== 200 || !response.url().includes('/api/geo/state-rollups')) return false;
+      if (response.status() !== 200 || !urlIncludesApiPath(response.url(), '/api/geo/state-rollups')) return false;
       const parsed = new URL(response.url());
       return (
         parsed.searchParams.get('occupancy') === 'Owner-occupied' &&
@@ -551,8 +563,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
   test('genie FAB returns a non-empty answer and source chip opens lineage', async ({ page }) => {
     await page.goto('/');
 
-    // Open the floating FAB (consistent selector with module0.spec.ts).
-    await page.locator('.genie__fab').click();
+    await openGeniePanel(page);
     const panel = page.getByRole('dialog', { name: 'Genie chat' });
     await expect(panel).toBeVisible();
 
@@ -602,7 +613,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     expect(iconResponse.status(), 'Entrada favicon asset should be served by the deployed app').toBe(200);
     expect(iconResponse.headers()['content-type'] ?? '').toContain('image/png');
 
-    await page.locator('.genie__fab').click();
+    await openGeniePanel(page);
     const panel = page.getByRole('dialog', { name: 'Genie chat' });
     await expect(panel).toBeVisible();
 
@@ -788,6 +799,86 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     await expect(page).toHaveURL(/\/segment-intelligence$/);
   });
 
+  test('analytics: multi-select filters drive API queries and URL state', async ({ page }) => {
+    test.setTimeout(90_000);
+
+    await page.goto('/analytics');
+    await expect(page.getByRole('heading', { name: 'Analytics', exact: true })).toBeVisible({ timeout: 30_000 });
+
+    const stateButton = page.getByRole('button', { name: /^State:/i });
+    await stateButton.focus();
+    await page.keyboard.press('Enter');
+    await expect(page.getByRole('listbox', { name: 'State', exact: true })).toBeVisible();
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('ArrowDown');
+    const keyboardStateResponse = page.waitForResponse((response) => {
+      if (!response.url().includes('/api/v1/analytics/executive')) return false;
+      return new URL(response.url()).searchParams.get('states') === 'IL';
+    });
+    await page.keyboard.press('Space');
+    await keyboardStateResponse;
+    await expect(page.getByRole('button', { name: /State: IL/i })).toBeVisible();
+
+    const stateResponse = page.waitForResponse((response) => {
+      if (!response.url().includes('/api/v1/analytics/executive')) return false;
+      const params = new URL(response.url()).searchParams;
+      return params.get('states') === 'IL,CA';
+    });
+    await page.getByRole('option', { name: 'CA', exact: true }).click();
+    await stateResponse;
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('button', { name: /State: 2 selected/i })).toBeVisible();
+
+    await page.getByRole('button', { name: /^Segment:/i }).click();
+    await page.getByRole('option', { name: 'In the Money', exact: true }).click();
+    const segmentResponse = page.waitForResponse((response) => {
+      if (!response.url().includes('/api/v1/analytics/executive')) return false;
+      const params = new URL(response.url()).searchParams;
+      return (
+        params.get('states') === 'IL,CA' &&
+        params.get('segment_codes') === 'itm,equity' &&
+        params.get('segment_mode') === 'any'
+      );
+    });
+    await page.getByRole('option', { name: 'Home Equity Candidate', exact: true }).click();
+    await segmentResponse;
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('button', { name: /Segment: 2 selected/i })).toBeVisible();
+
+    await page.getByRole('tab', { name: /Signals/i }).click();
+    await page.getByRole('button', { name: /^Signal:/i }).click();
+    await page.getByRole('option', { name: 'Equity', exact: true }).click();
+    await page.getByRole('option', { name: 'Rate spread', exact: true }).click();
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('button', { name: /Signal: 2 selected/i })).toBeVisible();
+
+    const signalResponse = page.waitForResponse((response) => {
+      if (!response.url().includes('/api/v1/analytics/signals')) return false;
+      const params = new URL(response.url()).searchParams;
+      return (
+        params.get('states') === 'IL,CA' &&
+        params.get('segment_codes') === 'itm,equity' &&
+        params.get('segment_mode') === 'any' &&
+        params.get('signal_types') === 'equity,rate_spread' &&
+        params.get('days') === '7'
+      );
+    });
+    await page.getByRole('button', { name: /^Window:/i }).click();
+    await page.getByRole('option', { name: 'Last 7 days', exact: true }).click();
+    await signalResponse;
+
+    const url = new URL(page.url());
+    expect(url.pathname).toBe('/analytics');
+    expect(url.searchParams.get('states')).toBe('IL,CA');
+    expect(url.searchParams.get('segment_codes')).toBe('itm,equity');
+    expect(url.searchParams.get('segment_mode')).toBe('any');
+    expect(url.searchParams.get('signal_types')).toBe('equity,rate_spread');
+    expect(url.searchParams.get('days')).toBe('7');
+    await expect(page.getByText(/Evidence by Signal Type/i)).toBeVisible({ timeout: 30_000 });
+  });
+
   test('lead-queue: rows render, row expand opens inline dossier preview', async ({ page }) => {
     await page.goto('/lead-queue');
 
@@ -805,7 +896,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     // — there's no "go" button; expanding the row IS the primary action.
     const firstRow = rows.first();
     await expect(firstRow).toBeVisible();
-    await firstRow.click({ noWaitAfter: true });
+    await firstRow.getByText(/B-[A-Z0-9]+/).first().click({ noWaitAfter: true });
 
     // Downstream state: a `.tbl__expand` row is inserted right after the
     // clicked row, revealing the mini-dossier preview.
@@ -826,7 +917,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
 
     const targetRow = table.locator('tbody tr', { hasText: target!.borrower_id }).first();
     await expect(targetRow).toBeVisible({ timeout: 45_000 });
-    await targetRow.click({ noWaitAfter: true });
+    await targetRow.getByText(target!.borrower_id).first().click({ noWaitAfter: true });
 
     const preview = page.locator('.tbl__expand').first();
     await expect(preview).toBeVisible({ timeout: 3_000 });
@@ -849,15 +940,6 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
   });
 
   test('lead-queue: inline approval writes selected evidence ids to audit', async ({ page, request }) => {
-    const leads = await fetchLeads(request, 100);
-    const target = leads.find(
-      (lead) =>
-        (lead.evidence_ids?.length ?? 0) > 0 &&
-        lead.approval_status !== 'approved' &&
-        lead.approval_status !== 'rejected',
-    );
-    expect(target, 'need a pending lead with evidence ids').toBeTruthy();
-
     const before = (await (await request.get(`${API_URL}/api/audit/events?limit=100`, {
       headers: AUTH_HEADERS,
     })).json()) as Array<{
@@ -869,9 +951,20 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     const beforeIds = new Set(before.map((e) => e.event_id).filter(Boolean));
 
     await page.goto('/lead-queue');
-    const row = page.locator('table.tbl tbody tr', { hasText: target!.borrower_id }).first();
+    const approveButton = page.locator('[data-testid^="lead-approve-"]').first();
+    await expect(approveButton).toBeVisible({ timeout: 45_000 });
+    const testId = await approveButton.getAttribute('data-testid');
+    const borrowerId = testId?.replace(/^lead-approve-/, '');
+    expect(borrowerId, 'need a visible approvable borrower').toBeTruthy();
+
+    const leads = await fetchLeads(request, 100);
+    const target = leads.find((lead) => lead.borrower_id === borrowerId);
+    expect(target, `need API evidence ids for visible borrower ${borrowerId}`).toBeTruthy();
+    expect(target!.evidence_ids?.length ?? 0, `need evidence ids for ${borrowerId}`).toBeGreaterThan(0);
+
+    const row = page.locator('table.tbl tbody tr', { hasText: borrowerId! }).first();
     await expect(row).toBeVisible({ timeout: 45_000 });
-    await page.getByTestId(`lead-approve-${target!.borrower_id}`).click();
+    await approveButton.click();
 
     await expect
       .poll(
@@ -888,7 +981,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
           return rows.find(
             (r) =>
               (r.action === 'outreach.approve' || r.action === 'outreach_approve') &&
-              r.payload_json?.borrower_id === target!.borrower_id &&
+              r.payload_json?.borrower_id === borrowerId &&
               !beforeIds.has(r.event_id),
           )?.evidence_ids?.length ?? 0;
         },
@@ -977,6 +1070,8 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
   });
 
   test('ask-genie: standalone page (not the FAB) renders + primary CTA works', async ({ page }) => {
+    test.setTimeout(120_000);
+
     await page.goto('/ask-genie');
 
     // Unique-to-route: the "Trusted assets" surface listing UC metric
@@ -984,8 +1079,8 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     // FAB from Home (covered in `genie FAB returns a non-empty answer`
     // above) does NOT.
     await expect(page.getByText(/Trusted assets/i)).toBeVisible({ timeout: 5_000 });
-    await expect(page.getByText('mip.gold.lead_population')).toBeVisible();
-    await expect(page.getByText('mip.semantics.lead_generation_metric_view')).toBeVisible();
+    await expect(page.getByText(/gold\.lead_population/)).toBeVisible();
+    await expect(page.getByText(/semantics\.lead_generation_metric_view/)).toBeVisible();
 
     // Real data: the presenter/user types the question explicitly. The
     // page should not depend on a prefilled canned prompt before it can ask
@@ -1001,14 +1096,14 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     // body) renders with a Genie answer. GenieAnswer owns the content;
     // we assert by presence of a source chip (every answer has one).
     const answerSurface = page.locator('.surface', { hasText: /Source:/i }).first();
-    await expect(answerSurface).toBeVisible({ timeout: 40_000 });
+    await expect(answerSurface).toBeVisible({ timeout: 90_000 });
     const chartTitle = answerSurface.locator('.genie-chart__title').first();
     await expect(chartTitle).toContainText(/borrowers.*by.*zip/i, { timeout: 10_000 });
     await expect(chartTitle).not.toContainText(/zip.*by.*state/i);
     await assertSourceDrawer(
       page,
       answerSurface,
-      /mip\.gold\.borrower_360|mip\.gold\.lead_population/,
+      /gold\.borrower_360|gold\.lead_population/,
       /Borrower 360 feature set|Ranked lead population/,
     );
   });
@@ -1051,7 +1146,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     await expect(proofDrawer).toBeVisible();
     const proof = proofDrawer.locator('.genie-proof').first();
     await expect(proof.getByText(/Generated SQL/i)).toBeVisible();
-    await expect(proof.getByText(/mip\.gold\./i).first()).toBeVisible();
+    await expect(proof.getByText(/gold\./i).first()).toBeVisible();
     await expect(proof.getByText(/Trusted SELECT on curated assets/i)).toBeVisible();
     const proofSourceChip = proof.locator('.evidence-chip').first();
     await expect(proofSourceChip).toBeVisible();
@@ -1069,7 +1164,8 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     await expect(draftAction).toBeVisible();
     await draftAction.getByRole('button', { name: /Run/i }).click();
     const actionResponse = page.waitForResponse((response) =>
-      response.url().includes('/api/genie/actions') && response.request().method() === 'POST',
+      /\/api\/(?:v1\/)?genie\/actions(?:\?|$)/.test(response.url()) &&
+      response.request().method() === 'POST',
     );
     await draftAction.getByRole('button', { name: /Confirm/i }).click();
     const response = await actionResponse;

@@ -467,6 +467,36 @@ describe('segment API client', () => {
   });
 });
 
+describe('analytics API client', () => {
+  it('serializes analytics state segment signal and evidence-window filters', async () => {
+    const calls: Array<{ path: string; init?: RequestInit }> = [];
+    vi.stubGlobal('fetch', async (path: string, init?: RequestInit) => {
+      calls.push({ path, init });
+      return jsonResponse(200, {
+        evidence_daily: [],
+        evidence_by_signal: [],
+        evidence_examples: [],
+      });
+    });
+
+    await api.analyticsSignals(undefined, {
+      states: ['il', 'ca'],
+      segmentCodes: ['itm', 'equity'] as SegmentCode[],
+      segmentMode: 'any',
+      signalTypes: ['equity', 'rate_spread'],
+      days: 7,
+    });
+
+    const url = new URL(calls[0].path, 'http://localhost');
+    expect(url.pathname).toBe('/api/v1/analytics/signals');
+    expect(url.searchParams.get('states')).toBe('IL,CA');
+    expect(url.searchParams.get('segment_codes')).toBe('itm,equity');
+    expect(url.searchParams.get('segment_mode')).toBe('any');
+    expect(url.searchParams.get('signal_types')).toBe('equity,rate_spread');
+    expect(url.searchParams.get('days')).toBe('7');
+  });
+});
+
 describe('geo API client', () => {
   it('serializes segment and secondary portfolio filters through geo rollups', async () => {
     const calls: Array<{ path: string; init?: RequestInit }> = [];

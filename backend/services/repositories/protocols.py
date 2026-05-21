@@ -22,6 +22,7 @@ from __future__ import annotations
 from typing import Protocol, runtime_checkable
 
 from backend.schemas.analytics import (
+    AnalyticsFilters,
     EconomicsAnalyticsResponse,
     ExecutiveAnalyticsResponse,
     GeographyAnalyticsResponse,
@@ -57,19 +58,19 @@ class AnalyticsRepository(Protocol):
     navigating to Databricks dashboards.
     """
 
-    def executive(self) -> ExecutiveAnalyticsResponse:
+    def executive(self, filters: AnalyticsFilters | None = None) -> ExecutiveAnalyticsResponse:
         ...
 
-    def geography(self) -> GeographyAnalyticsResponse:
+    def geography(self, filters: AnalyticsFilters | None = None) -> GeographyAnalyticsResponse:
         ...
 
-    def economics(self) -> EconomicsAnalyticsResponse:
+    def economics(self, filters: AnalyticsFilters | None = None) -> EconomicsAnalyticsResponse:
         ...
 
-    def segments(self) -> SegmentAnalyticsResponse:
+    def segments(self, filters: AnalyticsFilters | None = None) -> SegmentAnalyticsResponse:
         ...
 
-    def signals(self) -> SignalAnalyticsResponse:
+    def signals(self, filters: AnalyticsFilters | None = None) -> SignalAnalyticsResponse:
         ...
 
 

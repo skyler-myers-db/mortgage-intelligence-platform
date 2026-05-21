@@ -160,6 +160,16 @@ export interface LeadQueryOptions {
   limit?: number;
 }
 
+export interface AnalyticsQueryOptions {
+  states?: string[] | null;
+  state?: string | null;
+  segmentCodes?: SegmentCode[] | null;
+  segmentMode?: SegmentFilterMode;
+  signalTypes?: string[] | null;
+  signalType?: string | null;
+  days?: number | null;
+}
+
 export interface AssignmentResponse {
   assignment: LeadAssignment;
   audit_event_id?: string | null;
@@ -189,6 +199,21 @@ function appendPortfolioCriteria(params: URLSearchParams, criteria?: GeoQueryCri
     }
     params.set(key, String(value));
   });
+}
+
+function analyticsPath(scope: string, opts: AnalyticsQueryOptions = {}): string {
+  const params = new URLSearchParams();
+  const states = opts.states?.length ? opts.states : opts.state ? [opts.state] : [];
+  if (states.length > 0) params.set('states', states.map((state) => state.toUpperCase()).join(','));
+  if (opts.segmentCodes && opts.segmentCodes.length > 0) {
+    params.set('segment_codes', opts.segmentCodes.join(','));
+    params.set('segment_mode', opts.segmentMode ?? 'any');
+  }
+  const signalTypes = opts.signalTypes?.length ? opts.signalTypes : opts.signalType ? [opts.signalType] : [];
+  if (signalTypes.length > 0) params.set('signal_types', signalTypes.join(','));
+  if (opts.days) params.set('days', String(opts.days));
+  const qs = params.toString();
+  return qs ? `/api/analytics/${scope}?${qs}` : `/api/analytics/${scope}`;
 }
 
 /**
@@ -646,20 +671,20 @@ export const api = {
     }
   },
 
-  analyticsExecutive: (signal?: AbortSignal) =>
-    getJson<ExecutiveAnalyticsResponse>('/api/analytics/executive', signal),
+  analyticsExecutive: (signal?: AbortSignal, opts: AnalyticsQueryOptions = {}) =>
+    getJson<ExecutiveAnalyticsResponse>(analyticsPath('executive', opts), signal),
 
-  analyticsGeography: (signal?: AbortSignal) =>
-    getJson<GeographyAnalyticsResponse>('/api/analytics/geography', signal),
+  analyticsGeography: (signal?: AbortSignal, opts: AnalyticsQueryOptions = {}) =>
+    getJson<GeographyAnalyticsResponse>(analyticsPath('geography', opts), signal),
 
-  analyticsEconomics: (signal?: AbortSignal) =>
-    getJson<EconomicsAnalyticsResponse>('/api/analytics/economics', signal),
+  analyticsEconomics: (signal?: AbortSignal, opts: AnalyticsQueryOptions = {}) =>
+    getJson<EconomicsAnalyticsResponse>(analyticsPath('economics', opts), signal),
 
-  analyticsSegments: (signal?: AbortSignal) =>
-    getJson<SegmentAnalyticsResponse>('/api/analytics/segments', signal),
+  analyticsSegments: (signal?: AbortSignal, opts: AnalyticsQueryOptions = {}) =>
+    getJson<SegmentAnalyticsResponse>(analyticsPath('segments', opts), signal),
 
-  analyticsSignals: (signal?: AbortSignal) =>
-    getJson<SignalAnalyticsResponse>('/api/analytics/signals', signal),
+  analyticsSignals: (signal?: AbortSignal, opts: AnalyticsQueryOptions = {}) =>
+    getJson<SignalAnalyticsResponse>(analyticsPath('signals', opts), signal),
 
   portfolioPreview: (
     criteria: Record<string, unknown> = {},

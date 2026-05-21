@@ -599,13 +599,28 @@ export interface EvidenceDailyRow {
 export interface EvidenceBySignalRow {
   signal_type: string;
   source_product: string;
+  source_table: string;
   event_count: number;
   mean_confidence?: number | null;
+  confidence_source: string;
+}
+
+export interface SignalEvidenceExample {
+  borrower_id: string;
+  display_name: string;
+  state: string;
+  signal_type: string;
+  source_product: string;
+  signal_value: string;
+  display_text: string;
+  confidence: number;
+  timestamp: string;
 }
 
 export interface SignalAnalyticsResponse {
   evidence_daily: EvidenceDailyRow[];
   evidence_by_signal: EvidenceBySignalRow[];
+  evidence_examples: SignalEvidenceExample[];
 }
 
 export interface ConfigOptions {

@@ -12,6 +12,7 @@ from datetime import date, datetime
 from typing import Any
 
 from backend.schemas.analytics import (
+    AnalyticsFilters,
     AnalyticsScope,
     EconomicsAnalyticsResponse,
     EquitySpreadPoint,
@@ -28,6 +29,7 @@ from backend.schemas.analytics import (
     SegmentMetricRow,
     SegmentOverviewRow,
     SignalAnalyticsResponse,
+    SignalEvidenceExample,
     StateAvmValueRow,
     StateOpportunityRow,
     TopBorrowerAnalyticsRow,
@@ -61,6 +63,32 @@ def _float_or_none(value: object) -> float | None:
     return float(value)
 
 
+def _filters(filters: AnalyticsFilters | None) -> AnalyticsFilters:
+    return filters or AnalyticsFilters()
+
+
+def _filter_key(filters: AnalyticsFilters) -> str:
+    states = ",".join(filters.states)
+    segments = ",".join(filters.segment_codes)
+    signals = ",".join(filters.signal_types)
+    return (
+        f"states={states or '*'}|segments={segments or '*'}|"
+        f"mode={filters.segment_mode}|signals={signals or '*'}|days={filters.days}"
+    )
+
+
+def _confidence_source(signal_type: str) -> str:
+    if signal_type == "equity":
+        return (
+            "AVG(mip.gold.evidence_events.confidence); equity rows inherit AVM "
+            "confidence when present, clipped to 0..1."
+        )
+    return (
+        "AVG(mip.gold.evidence_events.confidence); this signal uses the governed "
+        "deterministic confidence assigned in gold_evidence_events.sql."
+    )
+
+
 class DatabricksAnalyticsRepository:
     """Typed analytics read model over UC gold/semantic tables."""
 
@@ -85,6 +113,47 @@ class DatabricksAnalyticsRepository:
         self._cache = cache if cache is not None else TTLCache()
         self._cache_ttl_s = cache_ttl_s
 
+    @staticmethod
+    def _borrower_predicates(
+        filters: AnalyticsFilters,
+        *,
+        alias: str = "b",
+        params: dict[str, object] | None = None,
+    ) -> tuple[list[str], dict[str, object]]:
+        out_params = dict(params or {})
+        predicates: list[str] = []
+        if filters.states:
+            state_keys: list[str] = []
+            for idx, state in enumerate(filters.states):
+                key = f"state_{idx}"
+                out_params[key] = state
+                state_keys.append(f":{key}")
+            predicates.append(f"{alias}.state IN (" + ", ".join(state_keys) + ")")
+        if filters.segment_codes:
+            segment_predicates: list[str] = []
+            for idx, code in enumerate(filters.segment_codes):
+                key = f"segment_{idx}"
+                out_params[key] = code
+                segment_predicates.append(f"array_contains({alias}.segment_codes, :{key})")
+            joiner = " AND " if filters.segment_mode == "all" else " OR "
+            predicates.append("(" + joiner.join(segment_predicates) + ")")
+        return predicates, out_params
+
+    @classmethod
+    def _where(
+        cls,
+        filters: AnalyticsFilters,
+        *,
+        alias: str = "b",
+        extra: list[str] | None = None,
+        params: dict[str, object] | None = None,
+    ) -> tuple[str, dict[str, object]]:
+        predicates, out_params = cls._borrower_predicates(filters, alias=alias, params=params)
+        predicates = [*(extra or []), *predicates]
+        if not predicates:
+            return "", out_params
+        return "WHERE " + " AND ".join(predicates), out_params
+
     _FUNNEL_TOTALS_SQL = (
         "SELECT "
         "  snapshot_date, "
@@ -98,6 +167,24 @@ class DatabricksAnalyticsRepository:
         "WHERE state = '_ALL' AND segment_code = '_ALL' "
         "ORDER BY snapshot_date DESC, snapshot_at DESC "
         "LIMIT 1"
+    )
+
+    _LIVE_FUNNEL_SQL = (
+        "SELECT "
+        "  CAST(MAX(DATE(b.refreshed_at)) AS STRING) AS snapshot_date, "
+        "  CAST(COUNT(*) AS INT) AS addressable_borrowers, "
+        "  CAST(SUM(CASE WHEN b.in_the_money THEN 1 ELSE 0 END) AS INT) AS in_the_money_borrowers, "
+        "  CAST(SUM(CASE WHEN b.opportunity_score >= 75 THEN 1 ELSE 0 END) AS INT) AS high_opportunity_borrowers, "
+        "  CAST(SUM(CASE WHEN LOWER(b.recommended_offer_code) <> 'nurture' THEN 1 ELSE 0 END) AS INT) "
+        "    AS offer_recommended_borrowers, "
+        "  CAST(SUM(CASE WHEN COALESCE(ls.approval_status, 'pending') = 'approved' THEN 1 ELSE 0 END) AS INT) "
+        "    AS approved_borrowers, "
+        "  CAST(SUM(CASE WHEN COALESCE(ls.outreach_status, 'none') = 'actioned' THEN 1 ELSE 0 END) AS INT) "
+        "    AS actioned_borrowers "
+        f"FROM {qualify('gold', 'borrower_360')} AS b "
+        f"LEFT JOIN {qualify('gold', 'borrower_lifecycle_state')} AS ls "
+        "  ON ls.borrower_id = b.borrower_id "
+        "{where}"
     )
 
     _LIVE_WORKFLOW_COUNTS_SQL = (
@@ -115,7 +202,8 @@ class DatabricksAnalyticsRepository:
         "SELECT "
         "  CAST(FLOOR(opportunity_score / 5) * 5 AS INT) AS score_bucket, "
         "  COUNT(*) AS borrower_count "
-        f"FROM {qualify('gold', 'borrower_360')} "
+        f"FROM {qualify('gold', 'borrower_360')} AS b "
+        "{where} "
         "GROUP BY CAST(FLOOR(opportunity_score / 5) * 5 AS INT) "
         "ORDER BY score_bucket"
     )
@@ -126,8 +214,8 @@ class DatabricksAnalyticsRepository:
         "  COUNT(DISTINCT clip) AS borrower_count, "
         "  CAST(ROUND(AVG(opportunity_score)) AS INT) AS mean_opportunity_score, "
         "  SUM(CASE WHEN in_the_money THEN 1 ELSE 0 END) AS in_the_money_borrowers "
-        f"FROM {qualify('semantics', 'borrower_opportunity_metric_view')} "
-        "WHERE state IS NOT NULL AND state <> '' "
+        f"FROM {qualify('semantics', 'borrower_opportunity_metric_view')} AS v "
+        "{where} "
         "GROUP BY state "
         "ORDER BY in_the_money_borrowers DESC, mean_opportunity_score DESC"
     )
@@ -138,8 +226,8 @@ class DatabricksAnalyticsRepository:
         "  CAST(SUM(avm_value) AS BIGINT) AS total_avm_value_usd, "
         "  CAST(SUM(current_lien_balance) AS BIGINT) AS total_lien_balance_usd, "
         "  CAST(SUM(equity_estimate) AS BIGINT) AS total_equity_usd "
-        f"FROM {qualify('gold', 'borrower_360')} "
-        "WHERE state IS NOT NULL AND state <> '' "
+        f"FROM {qualify('gold', 'borrower_360')} AS b "
+        "{where} "
         "GROUP BY state "
         "ORDER BY total_avm_value_usd DESC"
     )
@@ -147,8 +235,8 @@ class DatabricksAnalyticsRepository:
     _TOP_ZIPS_ITM_SQL = (
         "WITH zip_base AS ( "
         "  SELECT state, zip, city, in_the_money, opportunity_score, rate_spread_bps "
-        f"  FROM {qualify('gold', 'borrower_360')} "
-        "  WHERE zip IS NOT NULL AND LENGTH(zip) = 5 "
+        f"  FROM {qualify('gold', 'borrower_360')} AS b "
+        "  {where} "
         ") "
         "SELECT "
         "  state AS state, "
@@ -169,50 +257,49 @@ class DatabricksAnalyticsRepository:
         "SELECT "
         "  CAST(FLOOR(rate_spread_bps / 25) * 25 AS INT) AS spread_bucket_bps, "
         "  COUNT(*) AS borrower_count "
-        f"FROM {qualify('gold', 'borrower_360')} "
-        "WHERE rate_spread_bps BETWEEN -100 AND 400 "
+        f"FROM {qualify('gold', 'borrower_360')} AS b "
+        "{where} "
         "GROUP BY CAST(FLOOR(rate_spread_bps / 25) * 25 AS INT) "
         "ORDER BY spread_bucket_bps"
     )
 
     _EQUITY_VS_SPREAD_SQL = (
         "SELECT "
-        "  borrower_id AS borrower_id, "
-        "  display_name AS display_name, "
+        "  b.borrower_id AS borrower_id, "
+        "  b.display_name AS display_name, "
         "  CASE "
-        "    WHEN SIZE(segment_codes) = 0 THEN 'None / Unsegmented' "
-        "    WHEN segment_codes[0] = 'equity' THEN 'Home Equity Candidate' "
-        "    WHEN segment_codes[0] = 'itm' THEN 'In the Money' "
-        "    WHEN segment_codes[0] = 'investor' THEN 'Investor / Multi-Property' "
-        "    WHEN segment_codes[0] = 'listed' THEN 'Listed for Sale' "
-        "    WHEN segment_codes[0] = 'permit' THEN 'Permit Activity' "
-        "    WHEN segment_codes[0] = 'retention' THEN 'Retention Risk' "
+        "    WHEN SIZE(b.segment_codes) = 0 THEN 'None / Unsegmented' "
+        "    WHEN b.segment_codes[0] = 'equity' THEN 'Home Equity Candidate' "
+        "    WHEN b.segment_codes[0] = 'itm' THEN 'In the Money' "
+        "    WHEN b.segment_codes[0] = 'investor' THEN 'Investor / Multi-Property' "
+        "    WHEN b.segment_codes[0] = 'listed' THEN 'Listed for Sale' "
+        "    WHEN b.segment_codes[0] = 'permit' THEN 'Permit Activity' "
+        "    WHEN b.segment_codes[0] = 'retention' THEN 'Retention Risk' "
         "    ELSE 'None / Unsegmented' "
         "  END AS segment, "
-        "  state AS state, "
-        "  equity_pct AS equity_pct, "
-        "  rate_spread_bps AS rate_spread_bps, "
-        "  opportunity_score AS opportunity_score "
-        f"FROM {qualify('gold', 'borrower_360')} "
-        "WHERE rate_spread_bps BETWEEN -100 AND 400 "
-        "  AND equity_pct BETWEEN 0 AND 100 "
+        "  b.state AS state, "
+        "  b.equity_pct AS equity_pct, "
+        "  b.rate_spread_bps AS rate_spread_bps, "
+        "  b.opportunity_score AS opportunity_score "
+        f"FROM {qualify('gold', 'borrower_360')} AS b "
+        "{where} "
         "LIMIT 5000"
     )
 
     _TOP_BORROWERS_SQL = (
         "WITH ranked AS ( "
         "  SELECT "
-        "    borrower_id AS borrower_id, "
-        "    display_name AS display_name, "
-        "    state AS state, "
-        "    city AS city, "
-        "    opportunity_score AS opportunity_score, "
-        "    rate_spread_bps AS rate_spread_bps, "
-        "    equity_pct AS equity_pct, "
-        "    recommended_offer AS recommended_offer, "
-        "    ROW_NUMBER() OVER (ORDER BY opportunity_score DESC, clip) AS rank_overall "
-        f"  FROM {qualify('gold', 'borrower_360')} "
-        "  WHERE opportunity_score >= 50 "
+        "    b.borrower_id AS borrower_id, "
+        "    b.display_name AS display_name, "
+        "    b.state AS state, "
+        "    b.city AS city, "
+        "    b.opportunity_score AS opportunity_score, "
+        "    b.rate_spread_bps AS rate_spread_bps, "
+        "    b.equity_pct AS equity_pct, "
+        "    b.recommended_offer AS recommended_offer, "
+        "    ROW_NUMBER() OVER (ORDER BY b.opportunity_score DESC, b.clip) AS rank_overall "
+        f"  FROM {qualify('gold', 'borrower_360')} AS b "
+        "  {where} "
         ") "
         "SELECT borrower_id, display_name, state, city, opportunity_score, rate_spread_bps, "
         "       equity_pct, recommended_offer, rank_overall "
@@ -222,54 +309,115 @@ class DatabricksAnalyticsRepository:
     )
 
     _SEGMENT_OVERVIEW_SQL = (
-        "SELECT "
-        "  sp.segment_code AS segment_code, "
-        "  sp.name AS name, "
-        "  sp.count AS borrower_count, "
-        "  sp.avg_score AS mean_opportunity_score, "
-        "  sp.delta_vs_prior AS delta_vs_prior_label, "
-        "  sp.description AS description, "
-        "  sp.approval_rate AS approval_rate, "
-        "  sp.outreach_rate AS outreach_rate, "
-        "  agg.mean_rate_spread_bps AS mean_rate_spread_bps, "
-        "  agg.mean_equity_pct AS mean_equity_pct, "
-        "  agg.in_the_money_borrowers AS in_the_money_borrowers "
-        f"FROM {qualify('semantics', 'segment_performance_metric_view')} AS sp "
-        "LEFT JOIN ( "
+        "WITH segment_dim AS ( "
+        "  SELECT * FROM VALUES "
+        "    ('itm', 'In the Money', 'Borrowers meeting rate-spread and equity thresholds.'), "
+        "    ('equity', 'Home Equity Candidate', 'Borrowers with clean equity capacity.'), "
+        "    ('investor', 'Investor / Multi-Property', 'Borrowers linked to investor or multi-property signals.'), "
+        "    ('retention', 'Retention Risk', 'Current-customer retention opportunities.'), "
+        "    ('listed', 'Listed for Sale', 'Blocked until the Cotality listings product is licensed.'), "
+        "    ('permit', 'Permit Activity', 'Blocked until the Cotality permits product is licensed.') "
+        "  AS segment_dim(segment_code, name, description) "
+        "), filtered AS ( "
+        "  SELECT b.*, COALESCE(ls.approval_status, 'pending') AS lifecycle_approval_status, "
+        "         COALESCE(ls.outreach_status, 'none') AS lifecycle_outreach_status "
+        f"  FROM {qualify('gold', 'borrower_360')} AS b "
+        f"  LEFT JOIN {qualify('gold', 'borrower_lifecycle_state')} AS ls "
+        "    ON ls.borrower_id = b.borrower_id "
+        "  {where} "
+        "), exploded AS ( "
+        "  SELECT seg.segment_code, f.opportunity_score, f.rate_spread_bps, f.equity_pct, "
+        "         f.in_the_money, f.lifecycle_approval_status AS approval_status, "
+        "         f.lifecycle_outreach_status AS outreach_status "
+        "  FROM filtered AS f "
+        "  LATERAL VIEW EXPLODE(f.segment_codes) seg AS segment_code "
+        "), agg AS ( "
         "  SELECT "
-        "    segment_code AS segment_code, "
+        "    segment_code, "
+        "    COUNT(*) AS borrower_count, "
+        "    CAST(ROUND(AVG(opportunity_score)) AS INT) AS mean_opportunity_score, "
         "    CAST(ROUND(AVG(rate_spread_bps)) AS INT) AS mean_rate_spread_bps, "
         "    CAST(ROUND(AVG(equity_pct)) AS INT) AS mean_equity_pct, "
-        "    SUM(CASE WHEN in_the_money THEN 1 ELSE 0 END) AS in_the_money_borrowers "
-        f"  FROM {qualify('semantics', 'borrower_opportunity_metric_view')} "
-        "  LATERAL VIEW EXPLODE(segment_codes) seg AS segment_code "
+        "    SUM(CASE WHEN in_the_money THEN 1 ELSE 0 END) AS in_the_money_borrowers, "
+        "    CAST(ROUND(100.0 * SUM(CASE WHEN approval_status = 'approved' THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS DOUBLE) AS approval_rate, "
+        "    CAST(ROUND(100.0 * SUM(CASE WHEN outreach_status = 'actioned' THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS DOUBLE) AS outreach_rate "
+        "  FROM exploded "
         "  GROUP BY segment_code "
-        ") AS agg ON sp.segment_code = agg.segment_code "
-        "WHERE sp.state = '_ALL' "
-        "ORDER BY sp.count DESC"
+        ") "
+        "SELECT "
+        "  d.segment_code AS segment_code, "
+        "  d.name AS name, "
+        "  COALESCE(a.borrower_count, 0) AS borrower_count, "
+        "  COALESCE(a.mean_opportunity_score, 0) AS mean_opportunity_score, "
+        "  '+0%' AS delta_vs_prior_label, "
+        "  d.description AS description, "
+        "  a.approval_rate AS approval_rate, "
+        "  a.outreach_rate AS outreach_rate, "
+        "  a.mean_rate_spread_bps AS mean_rate_spread_bps, "
+        "  a.mean_equity_pct AS mean_equity_pct, "
+        "  COALESCE(a.in_the_money_borrowers, 0) AS in_the_money_borrowers "
+        "FROM segment_dim AS d "
+        "LEFT JOIN agg AS a ON d.segment_code = a.segment_code "
+        "ORDER BY borrower_count DESC, d.name"
     )
 
     _SEGMENT_BY_STATE_SQL = (
+        "WITH filtered AS ( "
+        f"  SELECT b.state, b.segment_codes FROM {qualify('gold', 'borrower_360')} AS b "
+        "  {where} "
+        "), exploded AS ( "
+        "  SELECT state, seg.segment_code "
+        "  FROM filtered "
+        "  LATERAL VIEW EXPLODE(segment_codes) seg AS segment_code "
+        ") "
         "SELECT "
         "  state AS state, "
         "  segment_code AS segment_code, "
-        "  name AS segment_name, "
-        "  count AS borrower_count "
-        f"FROM {qualify('semantics', 'segment_performance_metric_view')} "
-        "WHERE state <> '_ALL' "
-        "ORDER BY state, count DESC"
+        "  CASE "
+        "    WHEN segment_code = 'itm' THEN 'In the Money' "
+        "    WHEN segment_code = 'equity' THEN 'Home Equity Candidate' "
+        "    WHEN segment_code = 'investor' THEN 'Investor / Multi-Property' "
+        "    WHEN segment_code = 'retention' THEN 'Retention Risk' "
+        "    WHEN segment_code = 'listed' THEN 'Listed for Sale' "
+        "    WHEN segment_code = 'permit' THEN 'Permit Activity' "
+        "    ELSE segment_code "
+        "  END AS segment_name, "
+        "  COUNT(*) AS borrower_count "
+        "FROM exploded "
+        "WHERE state IS NOT NULL AND state <> '' "
+        "GROUP BY state, segment_code "
+        "ORDER BY state, borrower_count DESC"
     )
 
     _TOP_SEGMENTS_BY_STATE_SQL = (
-        "WITH ranked AS ( "
+        "WITH filtered AS ( "
+        f"  SELECT b.state, b.segment_codes FROM {qualify('gold', 'borrower_360')} AS b "
+        "  {where} "
+        "), by_state AS ( "
+        "  SELECT "
+        "    state, "
+        "    seg.segment_code AS segment_code, "
+        "    COUNT(*) AS borrower_count "
+        "  FROM filtered "
+        "  LATERAL VIEW EXPLODE(segment_codes) seg AS segment_code "
+        "  WHERE state IS NOT NULL AND state <> '' "
+        "  GROUP BY state, seg.segment_code "
+        "), ranked AS ( "
         "  SELECT "
         "    state, "
         "    segment_code, "
-        "    name AS segment_name, "
-        "    count AS borrower_count, "
-        "    ROW_NUMBER() OVER (PARTITION BY state ORDER BY count DESC) AS state_rank "
-        f"  FROM {qualify('semantics', 'segment_performance_metric_view')} "
-        "  WHERE state <> '_ALL' "
+        "    CASE "
+        "      WHEN segment_code = 'itm' THEN 'In the Money' "
+        "      WHEN segment_code = 'equity' THEN 'Home Equity Candidate' "
+        "      WHEN segment_code = 'investor' THEN 'Investor / Multi-Property' "
+        "      WHEN segment_code = 'retention' THEN 'Retention Risk' "
+        "      WHEN segment_code = 'listed' THEN 'Listed for Sale' "
+        "      WHEN segment_code = 'permit' THEN 'Permit Activity' "
+        "      ELSE segment_code "
+        "    END AS segment_name, "
+        "    borrower_count, "
+        "    ROW_NUMBER() OVER (PARTITION BY state ORDER BY borrower_count DESC, segment_code) AS state_rank "
+        "  FROM by_state "
         ") "
         "SELECT state, segment_code, segment_name, borrower_count, state_rank "
         "FROM ranked "
@@ -279,47 +427,99 @@ class DatabricksAnalyticsRepository:
 
     _EVIDENCE_DAILY_SQL = (
         "SELECT "
-        "  TO_DATE(`timestamp`) AS event_date, "
-        "  signal_type AS signal_type, "
+        "  TO_DATE(e.`timestamp`) AS event_date, "
+        "  e.signal_type AS signal_type, "
         "  COUNT(*) AS event_count "
-        f"FROM {qualify('gold', 'evidence_events')} "
-        "WHERE TO_DATE(`timestamp`) >= CURRENT_DATE() - INTERVAL 30 DAYS "
-        "GROUP BY TO_DATE(`timestamp`), signal_type "
-        "ORDER BY event_date, signal_type"
+        f"FROM {qualify('gold', 'evidence_events')} AS e "
+        f"JOIN {qualify('gold', 'borrower_360')} AS b ON b.clip = e.clip "
+        "{where} "
+        "GROUP BY TO_DATE(e.`timestamp`), e.signal_type "
+        "ORDER BY event_date, e.signal_type"
     )
 
     _EVIDENCE_BY_SIGNAL_SQL = (
         "SELECT "
-        "  signal_type AS signal_type, "
-        "  source_product AS source_product, "
+        "  e.signal_type AS signal_type, "
+        "  e.source_product AS source_product, "
+        "  MIN(e.source_table) AS source_table, "
         "  COUNT(*) AS event_count, "
-        "  CAST(ROUND(AVG(confidence), 3) AS DOUBLE) AS mean_confidence "
-        f"FROM {qualify('gold', 'evidence_events')} "
-        "GROUP BY signal_type, source_product "
+        "  CAST(ROUND(AVG(e.confidence), 3) AS DOUBLE) AS mean_confidence "
+        f"FROM {qualify('gold', 'evidence_events')} AS e "
+        f"JOIN {qualify('gold', 'borrower_360')} AS b ON b.clip = e.clip "
+        "{where} "
+        "GROUP BY e.signal_type, e.source_product "
         "ORDER BY event_count DESC"
+    )
+
+    _EVIDENCE_EXAMPLES_SQL = (
+        "SELECT "
+        "  b.borrower_id AS borrower_id, "
+        "  b.display_name AS display_name, "
+        "  b.state AS state, "
+        "  e.signal_type AS signal_type, "
+        "  e.source_product AS source_product, "
+        "  e.signal_value AS signal_value, "
+        "  e.display_text AS display_text, "
+        "  CAST(e.confidence AS DOUBLE) AS confidence, "
+        "  e.`timestamp` AS timestamp "
+        f"FROM {qualify('gold', 'evidence_events')} AS e "
+        f"JOIN {qualify('gold', 'borrower_360')} AS b ON b.clip = e.clip "
+        "{where} "
+        "ORDER BY e.confidence DESC, e.`timestamp` DESC, b.borrower_id "
+        "LIMIT 25"
     )
 
     def _cached(self, key: str, builder: Callable[[], Any]) -> Any:
         return self._cache.get_or_set(key, builder, ttl_s=self._cache_ttl_s)
 
-    def executive(self) -> ExecutiveAnalyticsResponse:
+    def _execute_template(
+        self,
+        template: str,
+        filters: AnalyticsFilters,
+        *,
+        alias: str = "b",
+        extra: list[str] | None = None,
+        params: dict[str, object] | None = None,
+    ) -> list[dict[str, Any]]:
+        where, bound = self._where(filters, alias=alias, extra=extra, params=params)
+        statement = template.format(where=where)
+        return self._client.execute(statement, bound or None)
+
+    def _signal_where(self, filters: AnalyticsFilters) -> tuple[str, dict[str, object]]:
+        extra = ["TO_DATE(e.`timestamp`) >= DATE_SUB(CURRENT_DATE(), :days)"]
+        params: dict[str, object] = {"days": filters.days}
+        if filters.signal_types:
+            signal_keys: list[str] = []
+            for idx, signal_type in enumerate(filters.signal_types):
+                key = f"signal_type_{idx}"
+                params[key] = signal_type
+                signal_keys.append(f":{key}")
+            extra.append("e.signal_type IN (" + ", ".join(signal_keys) + ")")
+        return self._where(filters, alias="b", extra=extra, params=params)
+
+    def _execute_signal_template(
+        self,
+        template: str,
+        filters: AnalyticsFilters,
+    ) -> list[dict[str, Any]]:
+        where, bound = self._signal_where(filters)
+        statement = template.format(where=where)
+        return self._client.execute(statement, bound)
+
+    def executive(self, filters: AnalyticsFilters | None = None) -> ExecutiveAnalyticsResponse:
+        analytics_filters = _filters(filters)
         def build() -> ExecutiveAnalyticsResponse:
-            totals_row = (self._client.execute(self._FUNNEL_TOTALS_SQL) or [{}])[0]
-            workflow_row = (self._client.execute(self._LIVE_WORKFLOW_COUNTS_SQL) or [{}])[0]
+            totals_row = (
+                self._execute_template(self._LIVE_FUNNEL_SQL, analytics_filters) or [{}]
+            )[0]
             totals = FunnelTotals(
                 snapshot_date=_date_text(totals_row.get("snapshot_date")),
                 addressable_borrowers=_int(totals_row.get("addressable_borrowers")),
                 in_the_money_borrowers=_int(totals_row.get("in_the_money_borrowers")),
                 high_opportunity_borrowers=_int(totals_row.get("high_opportunity_borrowers")),
                 offer_recommended_borrowers=_int(totals_row.get("offer_recommended_borrowers")),
-                approved_borrowers=_int(
-                    workflow_row.get("approved_borrowers"),
-                    _int(totals_row.get("approved_borrowers")),
-                ),
-                actioned_borrowers=_int(
-                    workflow_row.get("actioned_borrowers"),
-                    _int(totals_row.get("actioned_borrowers")),
-                ),
+                approved_borrowers=_int(totals_row.get("approved_borrowers")),
+                actioned_borrowers=_int(totals_row.get("actioned_borrowers")),
             )
             stages = [
                 FunnelStage(stage="Addressable", stage_order=1, borrower_count=totals.addressable_borrowers),
@@ -334,7 +534,10 @@ class DatabricksAnalyticsRepository:
                     score_bucket=_int(row.get("score_bucket")),
                     borrower_count=_int(row.get("borrower_count")),
                 )
-                for row in self._client.execute(self._SCORE_DISTRIBUTION_SQL)
+                for row in self._execute_template(
+                    self._SCORE_DISTRIBUTION_SQL,
+                    analytics_filters,
+                )
             ]
             return ExecutiveAnalyticsResponse(
                 totals=totals,
@@ -342,9 +545,11 @@ class DatabricksAnalyticsRepository:
                 score_distribution=score_distribution,
             )
 
-        return self._cached("analytics.executive", build)
+        return self._cached(f"analytics.executive:{_filter_key(analytics_filters)}", build)
 
-    def geography(self) -> GeographyAnalyticsResponse:
+    def geography(self, filters: AnalyticsFilters | None = None) -> GeographyAnalyticsResponse:
+        analytics_filters = _filters(filters)
+
         def build() -> GeographyAnalyticsResponse:
             return GeographyAnalyticsResponse(
                 state_opportunities=[
@@ -354,7 +559,12 @@ class DatabricksAnalyticsRepository:
                         mean_opportunity_score=_int(row.get("mean_opportunity_score")),
                         in_the_money_borrowers=_int(row.get("in_the_money_borrowers")),
                     )
-                    for row in self._client.execute(self._STATE_OPPORTUNITY_SQL)
+                    for row in self._execute_template(
+                        self._STATE_OPPORTUNITY_SQL,
+                        analytics_filters,
+                        alias="v",
+                        extra=["v.state IS NOT NULL", "v.state <> ''"],
+                    )
                 ],
                 state_avm_values=[
                     StateAvmValueRow(
@@ -363,7 +573,11 @@ class DatabricksAnalyticsRepository:
                         total_lien_balance_usd=_int(row.get("total_lien_balance_usd")),
                         total_equity_usd=_int(row.get("total_equity_usd")),
                     )
-                    for row in self._client.execute(self._STATE_AVM_VALUE_SQL)
+                    for row in self._execute_template(
+                        self._STATE_AVM_VALUE_SQL,
+                        analytics_filters,
+                        extra=["b.state IS NOT NULL", "b.state <> ''"],
+                    )
                 ],
                 top_zips=[
                     TopZipOpportunityRow(
@@ -375,13 +589,19 @@ class DatabricksAnalyticsRepository:
                         mean_opportunity_score=_int(row.get("mean_opportunity_score")),
                         mean_rate_spread_bps=_int(row.get("mean_rate_spread_bps")),
                     )
-                    for row in self._client.execute(self._TOP_ZIPS_ITM_SQL)
+                    for row in self._execute_template(
+                        self._TOP_ZIPS_ITM_SQL,
+                        analytics_filters,
+                        extra=["b.zip IS NOT NULL", "LENGTH(b.zip) = 5"],
+                    )
                 ],
             )
 
-        return self._cached("analytics.geography", build)
+        return self._cached(f"analytics.geography:{_filter_key(analytics_filters)}", build)
 
-    def economics(self) -> EconomicsAnalyticsResponse:
+    def economics(self, filters: AnalyticsFilters | None = None) -> EconomicsAnalyticsResponse:
+        analytics_filters = _filters(filters)
+
         def build() -> EconomicsAnalyticsResponse:
             return EconomicsAnalyticsResponse(
                 rate_spread_histogram=[
@@ -389,7 +609,11 @@ class DatabricksAnalyticsRepository:
                         spread_bucket_bps=_int(row.get("spread_bucket_bps")),
                         borrower_count=_int(row.get("borrower_count")),
                     )
-                    for row in self._client.execute(self._RATE_SPREAD_HIST_SQL)
+                    for row in self._execute_template(
+                        self._RATE_SPREAD_HIST_SQL,
+                        analytics_filters,
+                        extra=["b.rate_spread_bps BETWEEN -100 AND 400"],
+                    )
                 ],
                 equity_vs_spread=[
                     EquitySpreadPoint(
@@ -401,7 +625,14 @@ class DatabricksAnalyticsRepository:
                         rate_spread_bps=_int(row.get("rate_spread_bps")),
                         opportunity_score=_int(row.get("opportunity_score")),
                     )
-                    for row in self._client.execute(self._EQUITY_VS_SPREAD_SQL)
+                    for row in self._execute_template(
+                        self._EQUITY_VS_SPREAD_SQL,
+                        analytics_filters,
+                        extra=[
+                            "b.rate_spread_bps BETWEEN -100 AND 400",
+                            "b.equity_pct BETWEEN 0 AND 100",
+                        ],
+                    )
                 ],
                 top_borrowers=[
                     TopBorrowerAnalyticsRow(
@@ -415,13 +646,19 @@ class DatabricksAnalyticsRepository:
                         recommended_offer=str(row.get("recommended_offer") or "Nurture"),
                         rank_overall=max(1, _int(row.get("rank_overall"), 1)),
                     )
-                    for row in self._client.execute(self._TOP_BORROWERS_SQL)
+                    for row in self._execute_template(
+                        self._TOP_BORROWERS_SQL,
+                        analytics_filters,
+                        extra=["b.opportunity_score >= 50"],
+                    )
                 ],
             )
 
-        return self._cached("analytics.economics", build)
+        return self._cached(f"analytics.economics:{_filter_key(analytics_filters)}", build)
 
-    def segments(self) -> SegmentAnalyticsResponse:
+    def segments(self, filters: AnalyticsFilters | None = None) -> SegmentAnalyticsResponse:
+        analytics_filters = _filters(filters)
+
         def build() -> SegmentAnalyticsResponse:
             overview = [
                 SegmentOverviewRow(
@@ -443,7 +680,7 @@ class DatabricksAnalyticsRepository:
                     ),
                     in_the_money_borrowers=_int(row.get("in_the_money_borrowers")),
                 )
-                for row in self._client.execute(self._SEGMENT_OVERVIEW_SQL)
+                for row in self._execute_template(self._SEGMENT_OVERVIEW_SQL, analytics_filters)
             ]
             return SegmentAnalyticsResponse(
                 scope=self._SEGMENT_SCOPE,
@@ -471,7 +708,7 @@ class DatabricksAnalyticsRepository:
                         segment_name=str(row.get("segment_name") or row.get("segment_code") or ""),
                         borrower_count=_int(row.get("borrower_count")),
                     )
-                    for row in self._client.execute(self._SEGMENT_BY_STATE_SQL)
+                    for row in self._execute_template(self._SEGMENT_BY_STATE_SQL, analytics_filters)
                 ],
                 top_segments_by_state=[
                     TopSegmentByStateRow(
@@ -481,13 +718,15 @@ class DatabricksAnalyticsRepository:
                         borrower_count=_int(row.get("borrower_count")),
                         state_rank=_int(row.get("state_rank"), 1),
                     )
-                    for row in self._client.execute(self._TOP_SEGMENTS_BY_STATE_SQL)
+                    for row in self._execute_template(self._TOP_SEGMENTS_BY_STATE_SQL, analytics_filters)
                 ],
             )
 
-        return self._cached("analytics.segments", build)
+        return self._cached(f"analytics.segments:{_filter_key(analytics_filters)}", build)
 
-    def signals(self) -> SignalAnalyticsResponse:
+    def signals(self, filters: AnalyticsFilters | None = None) -> SignalAnalyticsResponse:
+        analytics_filters = _filters(filters)
+
         def build() -> SignalAnalyticsResponse:
             return SignalAnalyticsResponse(
                 evidence_daily=[
@@ -496,17 +735,33 @@ class DatabricksAnalyticsRepository:
                         signal_type=str(row.get("signal_type") or ""),
                         event_count=_int(row.get("event_count")),
                     )
-                    for row in self._client.execute(self._EVIDENCE_DAILY_SQL)
+                    for row in self._execute_signal_template(self._EVIDENCE_DAILY_SQL, analytics_filters)
                 ],
                 evidence_by_signal=[
                     EvidenceBySignalRow(
                         signal_type=str(row.get("signal_type") or ""),
                         source_product=str(row.get("source_product") or ""),
+                        source_table=str(row.get("source_table") or "mip.gold.evidence_events"),
                         event_count=_int(row.get("event_count")),
                         mean_confidence=_float_or_none(row.get("mean_confidence")),
+                        confidence_source=_confidence_source(str(row.get("signal_type") or "")),
                     )
-                    for row in self._client.execute(self._EVIDENCE_BY_SIGNAL_SQL)
+                    for row in self._execute_signal_template(self._EVIDENCE_BY_SIGNAL_SQL, analytics_filters)
+                ],
+                evidence_examples=[
+                    SignalEvidenceExample(
+                        borrower_id=str(row.get("borrower_id") or ""),
+                        display_name=str(row.get("display_name") or "Borrower"),
+                        state=str(row.get("state") or ""),
+                        signal_type=str(row.get("signal_type") or ""),
+                        source_product=str(row.get("source_product") or ""),
+                        signal_value=str(row.get("signal_value") or ""),
+                        display_text=str(row.get("display_text") or ""),
+                        confidence=float(row.get("confidence") or 0.0),
+                        timestamp=str(row.get("timestamp") or ""),
+                    )
+                    for row in self._execute_signal_template(self._EVIDENCE_EXAMPLES_SQL, analytics_filters)
                 ],
             )
 
-        return self._cached("analytics.signals", build)
+        return self._cached(f"analytics.signals:{_filter_key(analytics_filters)}", build)

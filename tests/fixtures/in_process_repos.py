@@ -14,6 +14,7 @@ synthetic population in ``tests/fixtures/mock_population.py``.
 from __future__ import annotations
 
 from backend.schemas.analytics import (
+    AnalyticsFilters,
     AnalyticsScope,
     EconomicsAnalyticsResponse,
     EquitySpreadPoint,
@@ -30,6 +31,7 @@ from backend.schemas.analytics import (
     SegmentMetricRow,
     SegmentOverviewRow,
     SignalAnalyticsResponse,
+    SignalEvidenceExample,
     StateAvmValueRow,
     StateOpportunityRow,
     TopBorrowerAnalyticsRow,
@@ -133,7 +135,8 @@ class InProcessMockAnalyticsRepository:
     def _is_itm(borrower: Borrower360) -> bool:
         return "itm" in borrower.segment_codes
 
-    def executive(self) -> ExecutiveAnalyticsResponse:
+    def executive(self, filters: AnalyticsFilters | None = None) -> ExecutiveAnalyticsResponse:
+        _ = filters
         borrowers = list(mock_data.BORROWERS)
         addressable = len(borrowers)
         itm = sum(1 for b in borrowers if self._is_itm(b))
@@ -169,7 +172,8 @@ class InProcessMockAnalyticsRepository:
             ],
         )
 
-    def geography(self) -> GeographyAnalyticsResponse:
+    def geography(self, filters: AnalyticsFilters | None = None) -> GeographyAnalyticsResponse:
+        _ = filters
         borrowers = list(mock_data.BORROWERS)
         by_state: dict[str, list[Borrower360]] = {}
         by_zip: dict[tuple[str, str, str], list[Borrower360]] = {}
@@ -215,7 +219,8 @@ class InProcessMockAnalyticsRepository:
             ],
         )
 
-    def economics(self) -> EconomicsAnalyticsResponse:
+    def economics(self, filters: AnalyticsFilters | None = None) -> EconomicsAnalyticsResponse:
+        _ = filters
         borrowers = list(mock_data.BORROWERS)
         spread_buckets: dict[int, int] = {}
         for borrower in borrowers:
@@ -260,7 +265,8 @@ class InProcessMockAnalyticsRepository:
             ],
         )
 
-    def segments(self) -> SegmentAnalyticsResponse:
+    def segments(self, filters: AnalyticsFilters | None = None) -> SegmentAnalyticsResponse:
+        _ = filters
         segments = list(mock_data.SEGMENTS)
         by_state: dict[tuple[str, str], int] = {}
         for borrower in mock_data.BORROWERS:
@@ -326,7 +332,8 @@ class InProcessMockAnalyticsRepository:
             top_segments_by_state=top_rows,
         )
 
-    def signals(self) -> SignalAnalyticsResponse:
+    def signals(self, filters: AnalyticsFilters | None = None) -> SignalAnalyticsResponse:
+        _ = filters
         daily_counts: dict[tuple[str, str], int] = {}
         signal_counts: dict[tuple[str, str], list[float]] = {}
         for evidence in mock_data.EVIDENCE:
@@ -344,10 +351,29 @@ class InProcessMockAnalyticsRepository:
                 EvidenceBySignalRow(
                     signal_type=signal,
                     source_product=source,
+                    source_table="mip.gold.evidence_events",
                     event_count=len(values),
                     mean_confidence=round(sum(values) / len(values), 3) if values else None,
+                    confidence_source=(
+                        "AVG(mip.gold.evidence_events.confidence); synthetic fixture mirrors "
+                        "gold_evidence_events.sql confidence semantics."
+                    ),
                 )
                 for (signal, source), values in sorted(signal_counts.items())
+            ],
+            evidence_examples=[
+                SignalEvidenceExample(
+                    borrower_id=mock_data.BORROWERS[0].borrower_id,
+                    display_name=mock_data.BORROWERS[0].display_name,
+                    state=mock_data.BORROWERS[0].state,
+                    signal_type=evidence.signal_type,
+                    source_product=evidence.source_product,
+                    signal_value=evidence.signal_value,
+                    display_text=evidence.display_text,
+                    confidence=float(evidence.confidence or 0.0),
+                    timestamp=evidence.timestamp,
+                )
+                for evidence in mock_data.EVIDENCE[:5]
             ],
         )
 

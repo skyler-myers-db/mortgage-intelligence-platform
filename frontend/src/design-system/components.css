@@ -1734,7 +1734,7 @@ kbd {
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   align-items: start;
   gap: var(--sp-3);
-  margin: var(--sp-3) var(--sp-4) 0;
+  margin: var(--sp-3) var(--sp-4) var(--sp-5);
   pointer-events: none;
 }
 .map-crumbs {
@@ -2202,6 +2202,9 @@ kbd {
 .analytics-tab {
   appearance: none;
 }
+.analytics-filters {
+  margin-block: 0 var(--gap-grid);
+}
 .analytics-grid,
 .analytics-section {
   margin-top: var(--gap-grid);
@@ -2214,6 +2217,13 @@ kbd {
 }
 .analytics-scope-chip {
   white-space: nowrap;
+}
+.analytics-panel-note {
+  margin: var(--sp-1) 0 0;
+  max-inline-size: 760px;
+  color: var(--text-3);
+  font-size: var(--fs-12);
+  line-height: var(--lh-snug);
 }
 .analytics-state {
   display: flex;
@@ -2607,18 +2617,26 @@ kbd {
 }
 .filter-menu__item {
   display: flex; align-items: center; justify-content: space-between;
+  width: 100%;
   padding: var(--sp-2) var(--sp-3);
+  border: 0;
+  background: transparent;
   font-size: var(--fs-12);
   color: var(--text-2);
   border-radius: var(--r-sm);
   cursor: pointer;
   font-family: var(--font-sans);
+  text-align: left;
   transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
   white-space: nowrap;
 }
 .filter-menu__item:hover,
 .filter-menu__item.is-focused { background: var(--bg-3); color: var(--text-1); }
 .filter-menu__item.is-selected { color: var(--accent); }
+.filter-menu__item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
 
 /* ============================================================
    ROUTE TRANSITION (fade between routes; only the inner .main content)

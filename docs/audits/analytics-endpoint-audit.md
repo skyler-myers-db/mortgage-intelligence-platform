@@ -423,3 +423,151 @@ an informational question about the per-day evidence chart's magnitude, which
 predates this tranche and is non-blocking.
 
 Sign-off: ready to commit. Safe to demo.
+
+---
+
+## v3 independent verification — 2026-05-20 (URL-backed filters tranche)
+
+Re-audited the new analytics filter system end to end — code reads plus an
+exhaustive live Chrome filter exercise (the user flagged "playing with the
+filters" as extra important) against deployment `01f1547d9bce1e5081a41e2d9074d24d`.
+
+### Filter security + code verification
+
+| Aspect | Verified | Where |
+|---|---|---|
+| Input validation | `state` 2-char + uppercased; `segment_codes` each checked against `SegmentCode` allowlist (422 on unknown); `segment_mode` regex `^(any\|all)$`; `signal_type` checked against a 12-value `_ALLOWED_SIGNAL_TYPES` allowlist (422 on unknown); `days` bounded `ge=1, le=90`. | `backend/api/analytics.py:27-95` |
+| SQL injection surface | **None.** Filter values reach SQL only as **bound parameters** (`:state`, `:segment_0`, `:signal_type`, `:days`) via an `out_params` dict; f-strings interpolate only the controlled table alias and bind-param names, never user values. | `databricks_analytics.py:_borrower_predicates`, `_where`, `_signal_where:482-488` |
+| Cache correctness | Cache key includes a per-filter-combination hash (`_filter_key`), so each filter set caches independently — no cross-filter cache poisoning. | `databricks_analytics.py:71-74,538` |
+| Funnel now live + filterable | `executive()` uses `_LIVE_FUNNEL_SQL` over `borrower_360` + `borrower_lifecycle_state` with the filter WHERE applied (carries the v2 actioned-reconciliation fix into the filtered path). | `databricks_analytics.py:499-538` |
+
+### Live filter exercise (every filter, every combination)
+
+| Test | Result |
+|---|---|
+| **State filter** (→ IL) | URL `?state=IL`; all KPIs updated — Addressable 1.85M, In the Money **67.86K**, Offers 1.51M, Approved 6 / 2 actioned; score-distribution chart rescaled. |
+| **Deep-link persistence** | Reloading `?state=IL` fully restored the IL filter + numbers (URL-backed state survives reload). |
+| **Stacked state + segment** (IL + In the Money) | URL `?state=IL&segment_codes=itm&segment_mode=any`; KPIs correctly collapsed to **67.86K** across Addressable/In-the-Money/Offers (segment restricts population to exactly the ITM cohort). |
+| **Clear filters** | Reset both chips to "All", cleared the query string, KPIs back to 5.16M / 135.52K / 4.47M. |
+| **Signal-type filter** (via bar click → Equity) | URL `?signal_type=equity`; SIGNAL chip updated; both Evidence charts refiltered to equity only (4.18M). |
+| **Window filter** (→ Last 90 days) | URL `?signal_type=equity&days=90`; combined two filters cleanly. |
+| **Signal-bar drilldown** | Clicking the Equity bar set the signal filter and surfaced the Evidence Drilldown table. |
+| **Borrower drilldown** | Evidence Drilldown row `"Owner 524e12fe · ZG2P"` → `/borrower-360/B-0005HPNPLZG2P` (suffix matches the ID). |
+| **Console** | Zero errors across the entire filter exercise (including the one transient Chrome-extension disconnect, which recovered and did not corrupt state). |
+
+### Filtered data-consistency checks
+
+| Check | Result |
+|---|---|
+| IL in-the-money under `state=IL` | **67.86K** — matches the Geography tab **and** Genie's 67,858 exactly (triple-consistent). |
+| IL addressable under `state=IL` | 1.85M — matches the Geography "Opportunity by State" IL addressable subtitle. |
+| Stacked IL + ITM | Addressable = In the Money = Offers = 67.86K (coherent: segment filter collapses the funnel cuts onto the ITM population). |
+| Clear → unfiltered | 5.16M / 135.52K / 4.47M — matches Home + the unfiltered Analytics baseline. |
+
+### Other v3 fixes verified live
+
+| Fix | Result |
+|---|---|
+| Evidence-per-day blank-day fill + mid-axis labels | X-axis shows **May 11 / 13 / 15 / 17 / 19 / 20**; subtitle: "Source-event dates from mip.gold.evidence_events.timestamp; blank days are shown as zero." The chart now honestly shows the gap instead of misleading interpolation — this **resolves the v2 informational note** about the smooth cumulative-looking line. |
+| Evidence provenance copy | Evidence by Signal Type subtitle explains rows count governed events from the gold table and confidence is the mean; a **`mip.gold.evidence_events` source chip** sits on the panel — the per-panel provenance I recommended in v1. |
+| Confidence provenance | Equity rows cite `AVM · mip.silver.lien_current`; drilldown shows individual AVM confidences (0.990 at the top, sorted DESC) averaging to the 0.787 mean shown on the bar — internally consistent. |
+
+### No-regression on v2 fixes
+
+All v2 fixes still hold this session: Executive panel is **"Pipeline Metrics / Independent cuts"**, **Actioned = 3**, title is **"Analytics"**, and the segment scope chip ("Full population · pre-suppression") and ITM-scoped ZIP averages remain (code unchanged). Hero borrower still reads 88.
+
+### v3 verdict
+
+**Findings: 0 P0, 0 P1, 0 HIGH, 0 MEDIUM, 0 LOW.**
+
+The URL-backed filter system is well-built and safe: allowlisted/bounded
+inputs, fully parameterized SQL (no injection surface even before the
+allowlist), per-filter cache isolation, correct URL state with deep-link
+persistence and clear-all, working signal and borrower drilldowns that
+preserve context, and internally + cross-surface consistent numbers under
+every filter combination I exercised (state, segment, signal type, window,
+and their combinations). The evidence-per-day chart's blank-day fill +
+mid-axis labels resolve the only remaining informational note from v2. Zero
+console errors. No prior fix regressed.
+
+The one honest caveat from the engineering signoff stands and is appropriate:
+the Computer Use MCP tool gate could not run (server exited), so this
+verification used the Claude-in-Chrome browser tools instead — same deployed
+app, same authenticated session, full interactive coverage.
+
+Sign-off: ready to commit. Safe to demo — including live filter play.
+
+---
+
+## v4 independent verification — 2026-05-20 (multi-select + keyboard a11y tranche)
+
+Re-audited the multi-select filter migration + keyboard accessibility + the
+adjacent CI-failure fixes, with an exhaustive live Chrome exercise against
+deployment `01f154a31e5b1db2aa46fbd9e4d1158f`.
+
+### Multi-select code verification
+
+| Aspect | Verified | Where |
+|---|---|---|
+| Plural params | `states`, `segment_codes`, `signal_types` are comma-separated multi-value; `state` + `signal_type` retained as **deprecated single aliases** (old deep-links still resolve). | `backend/api/analytics.py:88-132` |
+| Per-value validation | `_parse_states` (2 alpha chars, 422 otherwise), `_parse_segment_codes` (allowlist), `_parse_signal_types` (allowlist); all dedup. | `analytics.py:57-86` |
+| SQL safety | Multi-value reaches SQL as bound IN-lists — `state IN (:state_0, :state_1, …)` and `signal_type IN (:signal_type_0, …)`; segment codes via `array_contains(segment_codes, :segment_N)`. No value interpolation. | `databricks_analytics.py:125-137, 491-494` |
+
+### Live multi-select exercise
+
+| Test | Result |
+|---|---|
+| Select 3 states (CA + FL + IL) | Chip → **"3 selected"**; URL `?states=CA,FL,IL`; KPIs aggregated. |
+| **Aggregation accuracy** | In the Money = **103.57K** = CA 16,706 + FL 19,010 + IL 67,858 = 103,574 — exact sum of the per-state Geography/Genie counts. |
+| Deep-link persistence | Reloading `?states=CA,FL,IL` restored "3 selected" + aggregated KPIs. |
+| Clear filters | Reset to "All states / All segments", clean URL, baseline KPIs. |
+
+### Keyboard accessibility (the new a11y surface)
+
+| Step | Result |
+|---|---|
+| Focus State button | `document.activeElement` = the State filter button. |
+| `Return` | Opened the dropdown (options exposed with `role=option`). |
+| `Down Down` | Navigated options with a **visible focus ring** on the highlighted option. |
+| `Space` | Toggled a selection **without closing** the dropdown (URL updated live to `?states=CA,IL`, chip → "2 selected") — correct multi-select behavior. |
+| `Escape` | Closed the dropdown (`role=option` gone) **and returned focus to the State button**. |
+
+### Adjacent fix verification
+
+| Fix | Result |
+|---|---|
+| Lead Queue row-expansion | Live `/lead-queue` loaded with **no auto-expanded first row** (all rows collapsed), table renders cleanly, deterministic — the cached-data auto-expand bug is fixed. |
+| CI-fix-touched surfaces | Lead Queue, Analytics, and the Segments scope chip all render without regression; the offer/genie/admin/map CI fixes are test-harness/selector changes (relayed as passing in the signoff's 22-pass Playwright run). |
+
+### No-regression sweep (v1→v3 fixes still hold)
+
+| Fix | Status this session |
+|---|---|
+| Pipeline Metrics / Independent cuts | OK |
+| Actioned = 3 | OK |
+| "Analytics" title | OK |
+| Segment scope chip "Full population · pre-suppression" | OK (re-confirmed live after the multi-select refactor) |
+| ITM-scoped ZIP averages | OK (code unchanged) |
+| Hero score 88 | OK |
+| Date axis "May 11/13/15/17/19/20" + provenance | OK |
+| Single-state + stacked filters | OK (backward-compat aliases preserved) |
+| Console errors | **Zero** across the entire v4 walkthrough |
+
+### v4 verdict
+
+**Findings: 0 P0, 0 P1, 0 HIGH, 0 MEDIUM, 0 LOW.**
+
+The multi-select filter migration is correct and safe: plural params with
+backward-compatible single aliases, per-value allowlist validation,
+fully-parameterized IN-list SQL (no injection surface), accurate aggregation
+(CA+FL+IL in-the-money sums exactly to 103.57K), URL-backed multi-value state
+with deep-link persistence, and genuine keyboard accessibility (open / arrow-
+navigate with focus ring / Space-toggle-without-close / Escape-close-and-
+restore-focus). The Lead Queue auto-expand regression is fixed. No prior
+analytics fix regressed and there were zero console errors throughout.
+
+The Computer Use MCP caveat remains honestly stated in the signoff (Codex
+transport closed); this verification used the Claude-in-Chrome tools against
+the same deployed app with full interactive + keyboard coverage.
+
+Sign-off: ready to commit. Safe to demo — multi-select and keyboard paths included.

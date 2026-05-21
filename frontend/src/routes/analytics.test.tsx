@@ -86,12 +86,14 @@ describe('analytics chart readability', () => {
 
     expect(rows).toEqual([
       { event_date: '2026-05-18', event_count: 10 },
+      { event_date: '2026-05-19', event_count: 0 },
       { event_date: '2026-05-20', event_count: 5 },
     ]);
 
     const html = renderToStaticMarkup(<DailyEvidenceLineChart rows={rows} />);
 
     expect(html).toContain('May 18');
+    expect(html).toContain('May 19');
     expect(html).toContain('May 20');
     expect(html).toContain('Event date');
     expect(html).toContain('Events');

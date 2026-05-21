@@ -320,6 +320,29 @@
         "title": "AdminSourceResponse",
         "type": "object"
       },
+      "AnalyticsScope": {
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "label",
+          "description"
+        ],
+        "title": "AnalyticsScope",
+        "type": "object"
+      },
       "AssignLeadRequest": {
         "additionalProperties": false,
         "properties": {
@@ -2141,6 +2164,14 @@
       },
       "EquitySpreadPoint": {
         "properties": {
+          "borrower_id": {
+            "title": "Borrower Id",
+            "type": "string"
+          },
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
           "equity_pct": {
             "maximum": 100.0,
             "minimum": 0.0,
@@ -2169,6 +2200,8 @@
           }
         },
         "required": [
+          "borrower_id",
+          "display_name",
           "segment",
           "state",
           "equity_pct",
@@ -2180,6 +2213,10 @@
       },
       "EvidenceBySignalRow": {
         "properties": {
+          "confidence_source": {
+            "title": "Confidence Source",
+            "type": "string"
+          },
           "event_count": {
             "minimum": 0.0,
             "title": "Event Count",
@@ -2203,12 +2240,18 @@
           "source_product": {
             "title": "Source Product",
             "type": "string"
+          },
+          "source_table": {
+            "title": "Source Table",
+            "type": "string"
           }
         },
         "required": [
           "signal_type",
           "source_product",
-          "event_count"
+          "source_table",
+          "event_count",
+          "confidence_source"
         ],
         "title": "EvidenceBySignalRow",
         "type": "object"
@@ -5448,6 +5491,9 @@
             "title": "Overview",
             "type": "array"
           },
+          "scope": {
+            "$ref": "#/components/schemas/AnalyticsScope"
+          },
           "top_segments_by_state": {
             "items": {
               "$ref": "#/components/schemas/TopSegmentByStateRow"
@@ -5457,6 +5503,7 @@
           }
         },
         "required": [
+          "scope",
           "overview",
           "counts",
           "average_scores",
@@ -5706,13 +5753,78 @@
             },
             "title": "Evidence Daily",
             "type": "array"
+          },
+          "evidence_examples": {
+            "items": {
+              "$ref": "#/components/schemas/SignalEvidenceExample"
+            },
+            "title": "Evidence Examples",
+            "type": "array"
           }
         },
         "required": [
           "evidence_daily",
-          "evidence_by_signal"
+          "evidence_by_signal",
+          "evidence_examples"
         ],
         "title": "SignalAnalyticsResponse",
+        "type": "object"
+      },
+      "SignalEvidenceExample": {
+        "properties": {
+          "borrower_id": {
+            "title": "Borrower Id",
+            "type": "string"
+          },
+          "confidence": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Confidence",
+            "type": "number"
+          },
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "display_text": {
+            "title": "Display Text",
+            "type": "string"
+          },
+          "signal_type": {
+            "title": "Signal Type",
+            "type": "string"
+          },
+          "signal_value": {
+            "title": "Signal Value",
+            "type": "string"
+          },
+          "source_product": {
+            "title": "Source Product",
+            "type": "string"
+          },
+          "state": {
+            "maxLength": 2,
+            "minLength": 2,
+            "title": "State",
+            "type": "string"
+          },
+          "timestamp": {
+            "title": "Timestamp",
+            "type": "string"
+          }
+        },
+        "required": [
+          "borrower_id",
+          "display_name",
+          "state",
+          "signal_type",
+          "source_product",
+          "signal_value",
+          "display_text",
+          "confidence",
+          "timestamp"
+        ],
+        "title": "SignalEvidenceExample",
         "type": "object"
       },
       "SourceLabel": {
@@ -6450,6 +6562,127 @@
       "get": {
         "deprecated": true,
         "operationId": "get_api_analytics_economics_economics",
+        "parameters": [
+          {
+            "description": "Deprecated single-state alias. Prefer states.",
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 2,
+                  "minLength": 2,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Deprecated single-state alias. Prefer states.",
+              "title": "State"
+            }
+          },
+          {
+            "description": "Optional comma-separated 2-letter state filters.",
+            "in": "query",
+            "name": "states",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated 2-letter state filters.",
+              "title": "States"
+            }
+          },
+          {
+            "description": "Optional comma-separated segment code filter.",
+            "in": "query",
+            "name": "segment_codes",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated segment code filter.",
+              "title": "Segment Codes"
+            }
+          },
+          {
+            "description": "Segment filter mode for multi-select codes.",
+            "in": "query",
+            "name": "segment_mode",
+            "required": false,
+            "schema": {
+              "default": "any",
+              "description": "Segment filter mode for multi-select codes.",
+              "pattern": "^(any|all)$",
+              "title": "Segment Mode",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Deprecated single-signal alias. Prefer signal_types.",
+            "in": "query",
+            "name": "signal_type",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Deprecated single-signal alias. Prefer signal_types.",
+              "title": "Signal Type"
+            }
+          },
+          {
+            "description": "Optional comma-separated evidence signal filters for the Signals tab.",
+            "in": "query",
+            "name": "signal_types",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated evidence signal filters for the Signals tab.",
+              "title": "Signal Types"
+            }
+          },
+          {
+            "description": "Evidence lookback window for the Signals tab.",
+            "in": "query",
+            "name": "days",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "description": "Evidence lookback window for the Signals tab.",
+              "maximum": 90,
+              "minimum": 1,
+              "title": "Days",
+              "type": "integer"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -6460,6 +6693,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "summary": "Economics",
@@ -6472,6 +6715,127 @@
       "get": {
         "deprecated": true,
         "operationId": "get_api_analytics_executive_executive",
+        "parameters": [
+          {
+            "description": "Deprecated single-state alias. Prefer states.",
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 2,
+                  "minLength": 2,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Deprecated single-state alias. Prefer states.",
+              "title": "State"
+            }
+          },
+          {
+            "description": "Optional comma-separated 2-letter state filters.",
+            "in": "query",
+            "name": "states",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated 2-letter state filters.",
+              "title": "States"
+            }
+          },
+          {
+            "description": "Optional comma-separated segment code filter.",
+            "in": "query",
+            "name": "segment_codes",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated segment code filter.",
+              "title": "Segment Codes"
+            }
+          },
+          {
+            "description": "Segment filter mode for multi-select codes.",
+            "in": "query",
+            "name": "segment_mode",
+            "required": false,
+            "schema": {
+              "default": "any",
+              "description": "Segment filter mode for multi-select codes.",
+              "pattern": "^(any|all)$",
+              "title": "Segment Mode",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Deprecated single-signal alias. Prefer signal_types.",
+            "in": "query",
+            "name": "signal_type",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Deprecated single-signal alias. Prefer signal_types.",
+              "title": "Signal Type"
+            }
+          },
+          {
+            "description": "Optional comma-separated evidence signal filters for the Signals tab.",
+            "in": "query",
+            "name": "signal_types",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated evidence signal filters for the Signals tab.",
+              "title": "Signal Types"
+            }
+          },
+          {
+            "description": "Evidence lookback window for the Signals tab.",
+            "in": "query",
+            "name": "days",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "description": "Evidence lookback window for the Signals tab.",
+              "maximum": 90,
+              "minimum": 1,
+              "title": "Days",
+              "type": "integer"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -6482,6 +6846,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "summary": "Executive",
@@ -6494,6 +6868,127 @@
       "get": {
         "deprecated": true,
         "operationId": "get_api_analytics_geography_geography",
+        "parameters": [
+          {
+            "description": "Deprecated single-state alias. Prefer states.",
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 2,
+                  "minLength": 2,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Deprecated single-state alias. Prefer states.",
+              "title": "State"
+            }
+          },
+          {
+            "description": "Optional comma-separated 2-letter state filters.",
+            "in": "query",
+            "name": "states",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated 2-letter state filters.",
+              "title": "States"
+            }
+          },
+          {
+            "description": "Optional comma-separated segment code filter.",
+            "in": "query",
+            "name": "segment_codes",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated segment code filter.",
+              "title": "Segment Codes"
+            }
+          },
+          {
+            "description": "Segment filter mode for multi-select codes.",
+            "in": "query",
+            "name": "segment_mode",
+            "required": false,
+            "schema": {
+              "default": "any",
+              "description": "Segment filter mode for multi-select codes.",
+              "pattern": "^(any|all)$",
+              "title": "Segment Mode",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Deprecated single-signal alias. Prefer signal_types.",
+            "in": "query",
+            "name": "signal_type",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Deprecated single-signal alias. Prefer signal_types.",
+              "title": "Signal Type"
+            }
+          },
+          {
+            "description": "Optional comma-separated evidence signal filters for the Signals tab.",
+            "in": "query",
+            "name": "signal_types",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated evidence signal filters for the Signals tab.",
+              "title": "Signal Types"
+            }
+          },
+          {
+            "description": "Evidence lookback window for the Signals tab.",
+            "in": "query",
+            "name": "days",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "description": "Evidence lookback window for the Signals tab.",
+              "maximum": 90,
+              "minimum": 1,
+              "title": "Days",
+              "type": "integer"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -6504,6 +6999,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "summary": "Geography",
@@ -6516,6 +7021,127 @@
       "get": {
         "deprecated": true,
         "operationId": "get_api_analytics_segments_segments",
+        "parameters": [
+          {
+            "description": "Deprecated single-state alias. Prefer states.",
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 2,
+                  "minLength": 2,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Deprecated single-state alias. Prefer states.",
+              "title": "State"
+            }
+          },
+          {
+            "description": "Optional comma-separated 2-letter state filters.",
+            "in": "query",
+            "name": "states",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated 2-letter state filters.",
+              "title": "States"
+            }
+          },
+          {
+            "description": "Optional comma-separated segment code filter.",
+            "in": "query",
+            "name": "segment_codes",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated segment code filter.",
+              "title": "Segment Codes"
+            }
+          },
+          {
+            "description": "Segment filter mode for multi-select codes.",
+            "in": "query",
+            "name": "segment_mode",
+            "required": false,
+            "schema": {
+              "default": "any",
+              "description": "Segment filter mode for multi-select codes.",
+              "pattern": "^(any|all)$",
+              "title": "Segment Mode",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Deprecated single-signal alias. Prefer signal_types.",
+            "in": "query",
+            "name": "signal_type",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Deprecated single-signal alias. Prefer signal_types.",
+              "title": "Signal Type"
+            }
+          },
+          {
+            "description": "Optional comma-separated evidence signal filters for the Signals tab.",
+            "in": "query",
+            "name": "signal_types",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated evidence signal filters for the Signals tab.",
+              "title": "Signal Types"
+            }
+          },
+          {
+            "description": "Evidence lookback window for the Signals tab.",
+            "in": "query",
+            "name": "days",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "description": "Evidence lookback window for the Signals tab.",
+              "maximum": 90,
+              "minimum": 1,
+              "title": "Days",
+              "type": "integer"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -6526,6 +7152,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "summary": "Segments",
@@ -6538,6 +7174,127 @@
       "get": {
         "deprecated": true,
         "operationId": "get_api_analytics_signals_signals",
+        "parameters": [
+          {
+            "description": "Deprecated single-state alias. Prefer states.",
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 2,
+                  "minLength": 2,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Deprecated single-state alias. Prefer states.",
+              "title": "State"
+            }
+          },
+          {
+            "description": "Optional comma-separated 2-letter state filters.",
+            "in": "query",
+            "name": "states",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated 2-letter state filters.",
+              "title": "States"
+            }
+          },
+          {
+            "description": "Optional comma-separated segment code filter.",
+            "in": "query",
+            "name": "segment_codes",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated segment code filter.",
+              "title": "Segment Codes"
+            }
+          },
+          {
+            "description": "Segment filter mode for multi-select codes.",
+            "in": "query",
+            "name": "segment_mode",
+            "required": false,
+            "schema": {
+              "default": "any",
+              "description": "Segment filter mode for multi-select codes.",
+              "pattern": "^(any|all)$",
+              "title": "Segment Mode",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Deprecated single-signal alias. Prefer signal_types.",
+            "in": "query",
+            "name": "signal_type",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Deprecated single-signal alias. Prefer signal_types.",
+              "title": "Signal Type"
+            }
+          },
+          {
+            "description": "Optional comma-separated evidence signal filters for the Signals tab.",
+            "in": "query",
+            "name": "signal_types",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated evidence signal filters for the Signals tab.",
+              "title": "Signal Types"
+            }
+          },
+          {
+            "description": "Evidence lookback window for the Signals tab.",
+            "in": "query",
+            "name": "days",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "description": "Evidence lookback window for the Signals tab.",
+              "maximum": 90,
+              "minimum": 1,
+              "title": "Days",
+              "type": "integer"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -6548,6 +7305,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "summary": "Signals",
@@ -10069,6 +10836,127 @@
     "/api/v1/analytics/economics": {
       "get": {
         "operationId": "get_api_v1_analytics_economics_economics",
+        "parameters": [
+          {
+            "description": "Deprecated single-state alias. Prefer states.",
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 2,
+                  "minLength": 2,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Deprecated single-state alias. Prefer states.",
+              "title": "State"
+            }
+          },
+          {
+            "description": "Optional comma-separated 2-letter state filters.",
+            "in": "query",
+            "name": "states",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated 2-letter state filters.",
+              "title": "States"
+            }
+          },
+          {
+            "description": "Optional comma-separated segment code filter.",
+            "in": "query",
+            "name": "segment_codes",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated segment code filter.",
+              "title": "Segment Codes"
+            }
+          },
+          {
+            "description": "Segment filter mode for multi-select codes.",
+            "in": "query",
+            "name": "segment_mode",
+            "required": false,
+            "schema": {
+              "default": "any",
+              "description": "Segment filter mode for multi-select codes.",
+              "pattern": "^(any|all)$",
+              "title": "Segment Mode",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Deprecated single-signal alias. Prefer signal_types.",
+            "in": "query",
+            "name": "signal_type",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Deprecated single-signal alias. Prefer signal_types.",
+              "title": "Signal Type"
+            }
+          },
+          {
+            "description": "Optional comma-separated evidence signal filters for the Signals tab.",
+            "in": "query",
+            "name": "signal_types",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated evidence signal filters for the Signals tab.",
+              "title": "Signal Types"
+            }
+          },
+          {
+            "description": "Evidence lookback window for the Signals tab.",
+            "in": "query",
+            "name": "days",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "description": "Evidence lookback window for the Signals tab.",
+              "maximum": 90,
+              "minimum": 1,
+              "title": "Days",
+              "type": "integer"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -10079,6 +10967,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "summary": "Economics",
@@ -10090,6 +10988,127 @@
     "/api/v1/analytics/executive": {
       "get": {
         "operationId": "get_api_v1_analytics_executive_executive",
+        "parameters": [
+          {
+            "description": "Deprecated single-state alias. Prefer states.",
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 2,
+                  "minLength": 2,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Deprecated single-state alias. Prefer states.",
+              "title": "State"
+            }
+          },
+          {
+            "description": "Optional comma-separated 2-letter state filters.",
+            "in": "query",
+            "name": "states",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated 2-letter state filters.",
+              "title": "States"
+            }
+          },
+          {
+            "description": "Optional comma-separated segment code filter.",
+            "in": "query",
+            "name": "segment_codes",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated segment code filter.",
+              "title": "Segment Codes"
+            }
+          },
+          {
+            "description": "Segment filter mode for multi-select codes.",
+            "in": "query",
+            "name": "segment_mode",
+            "required": false,
+            "schema": {
+              "default": "any",
+              "description": "Segment filter mode for multi-select codes.",
+              "pattern": "^(any|all)$",
+              "title": "Segment Mode",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Deprecated single-signal alias. Prefer signal_types.",
+            "in": "query",
+            "name": "signal_type",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Deprecated single-signal alias. Prefer signal_types.",
+              "title": "Signal Type"
+            }
+          },
+          {
+            "description": "Optional comma-separated evidence signal filters for the Signals tab.",
+            "in": "query",
+            "name": "signal_types",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated evidence signal filters for the Signals tab.",
+              "title": "Signal Types"
+            }
+          },
+          {
+            "description": "Evidence lookback window for the Signals tab.",
+            "in": "query",
+            "name": "days",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "description": "Evidence lookback window for the Signals tab.",
+              "maximum": 90,
+              "minimum": 1,
+              "title": "Days",
+              "type": "integer"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -10100,6 +11119,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "summary": "Executive",
@@ -10111,6 +11140,127 @@
     "/api/v1/analytics/geography": {
       "get": {
         "operationId": "get_api_v1_analytics_geography_geography",
+        "parameters": [
+          {
+            "description": "Deprecated single-state alias. Prefer states.",
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 2,
+                  "minLength": 2,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Deprecated single-state alias. Prefer states.",
+              "title": "State"
+            }
+          },
+          {
+            "description": "Optional comma-separated 2-letter state filters.",
+            "in": "query",
+            "name": "states",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated 2-letter state filters.",
+              "title": "States"
+            }
+          },
+          {
+            "description": "Optional comma-separated segment code filter.",
+            "in": "query",
+            "name": "segment_codes",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated segment code filter.",
+              "title": "Segment Codes"
+            }
+          },
+          {
+            "description": "Segment filter mode for multi-select codes.",
+            "in": "query",
+            "name": "segment_mode",
+            "required": false,
+            "schema": {
+              "default": "any",
+              "description": "Segment filter mode for multi-select codes.",
+              "pattern": "^(any|all)$",
+              "title": "Segment Mode",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Deprecated single-signal alias. Prefer signal_types.",
+            "in": "query",
+            "name": "signal_type",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Deprecated single-signal alias. Prefer signal_types.",
+              "title": "Signal Type"
+            }
+          },
+          {
+            "description": "Optional comma-separated evidence signal filters for the Signals tab.",
+            "in": "query",
+            "name": "signal_types",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated evidence signal filters for the Signals tab.",
+              "title": "Signal Types"
+            }
+          },
+          {
+            "description": "Evidence lookback window for the Signals tab.",
+            "in": "query",
+            "name": "days",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "description": "Evidence lookback window for the Signals tab.",
+              "maximum": 90,
+              "minimum": 1,
+              "title": "Days",
+              "type": "integer"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -10121,6 +11271,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "summary": "Geography",
@@ -10132,6 +11292,127 @@
     "/api/v1/analytics/segments": {
       "get": {
         "operationId": "get_api_v1_analytics_segments_segments",
+        "parameters": [
+          {
+            "description": "Deprecated single-state alias. Prefer states.",
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 2,
+                  "minLength": 2,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Deprecated single-state alias. Prefer states.",
+              "title": "State"
+            }
+          },
+          {
+            "description": "Optional comma-separated 2-letter state filters.",
+            "in": "query",
+            "name": "states",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated 2-letter state filters.",
+              "title": "States"
+            }
+          },
+          {
+            "description": "Optional comma-separated segment code filter.",
+            "in": "query",
+            "name": "segment_codes",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated segment code filter.",
+              "title": "Segment Codes"
+            }
+          },
+          {
+            "description": "Segment filter mode for multi-select codes.",
+            "in": "query",
+            "name": "segment_mode",
+            "required": false,
+            "schema": {
+              "default": "any",
+              "description": "Segment filter mode for multi-select codes.",
+              "pattern": "^(any|all)$",
+              "title": "Segment Mode",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Deprecated single-signal alias. Prefer signal_types.",
+            "in": "query",
+            "name": "signal_type",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Deprecated single-signal alias. Prefer signal_types.",
+              "title": "Signal Type"
+            }
+          },
+          {
+            "description": "Optional comma-separated evidence signal filters for the Signals tab.",
+            "in": "query",
+            "name": "signal_types",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated evidence signal filters for the Signals tab.",
+              "title": "Signal Types"
+            }
+          },
+          {
+            "description": "Evidence lookback window for the Signals tab.",
+            "in": "query",
+            "name": "days",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "description": "Evidence lookback window for the Signals tab.",
+              "maximum": 90,
+              "minimum": 1,
+              "title": "Days",
+              "type": "integer"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -10142,6 +11423,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "summary": "Segments",
@@ -10153,6 +11444,127 @@
     "/api/v1/analytics/signals": {
       "get": {
         "operationId": "get_api_v1_analytics_signals_signals",
+        "parameters": [
+          {
+            "description": "Deprecated single-state alias. Prefer states.",
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 2,
+                  "minLength": 2,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Deprecated single-state alias. Prefer states.",
+              "title": "State"
+            }
+          },
+          {
+            "description": "Optional comma-separated 2-letter state filters.",
+            "in": "query",
+            "name": "states",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated 2-letter state filters.",
+              "title": "States"
+            }
+          },
+          {
+            "description": "Optional comma-separated segment code filter.",
+            "in": "query",
+            "name": "segment_codes",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated segment code filter.",
+              "title": "Segment Codes"
+            }
+          },
+          {
+            "description": "Segment filter mode for multi-select codes.",
+            "in": "query",
+            "name": "segment_mode",
+            "required": false,
+            "schema": {
+              "default": "any",
+              "description": "Segment filter mode for multi-select codes.",
+              "pattern": "^(any|all)$",
+              "title": "Segment Mode",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Deprecated single-signal alias. Prefer signal_types.",
+            "in": "query",
+            "name": "signal_type",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Deprecated single-signal alias. Prefer signal_types.",
+              "title": "Signal Type"
+            }
+          },
+          {
+            "description": "Optional comma-separated evidence signal filters for the Signals tab.",
+            "in": "query",
+            "name": "signal_types",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated evidence signal filters for the Signals tab.",
+              "title": "Signal Types"
+            }
+          },
+          {
+            "description": "Evidence lookback window for the Signals tab.",
+            "in": "query",
+            "name": "days",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "description": "Evidence lookback window for the Signals tab.",
+              "maximum": 90,
+              "minimum": 1,
+              "title": "Days",
+              "type": "integer"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -10163,6 +11575,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "summary": "Signals",
