@@ -78,11 +78,28 @@ function isNonWorkableApproval(status?: string | null): boolean {
   return status === 'rejected' || status === 'hold';
 }
 
-export function isLeadSelectableForSalesOps(status?: string | null, localStatus?: string | null): boolean {
+export function isLeadMarketingActionable(
+  lead?: Pick<LeadSummary, 'marketing_eligible' | 'consent_status'> | null,
+): boolean {
+  if (!lead) return true;
+  return lead.marketing_eligible !== false && (lead.consent_status ?? 'opt_in') === 'opt_in';
+}
+
+export function isLeadSelectableForSalesOps(
+  status?: string | null,
+  localStatus?: string | null,
+  lead?: Pick<LeadSummary, 'marketing_eligible' | 'consent_status'> | null,
+): boolean {
+  if (!isLeadMarketingActionable(lead)) return false;
   return !isNonWorkableApproval(status) && !isNonWorkableApproval(localStatus);
 }
 
-export function isLeadApprovalEligible(status?: string | null, localStatus?: string | null): boolean {
+export function isLeadApprovalEligible(
+  status?: string | null,
+  localStatus?: string | null,
+  lead?: Pick<LeadSummary, 'marketing_eligible' | 'consent_status'> | null,
+): boolean {
+  if (!isLeadMarketingActionable(lead)) return false;
   return !localStatus && !isTerminalApproval(status);
 }
 

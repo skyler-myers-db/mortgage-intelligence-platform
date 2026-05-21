@@ -9395,6 +9395,18 @@
             }
           },
           {
+            "description": "Admin-only analytics override. When true, clears the default Eligible only marketing gate so suppressed/non-opt-in rows can be counted or inspected without making them campaign-actionable.",
+            "in": "query",
+            "name": "include_suppressed_for_analytics",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Admin-only analytics override. When true, clears the default Eligible only marketing gate so suppressed/non-opt-in rows can be counted or inspected without making them campaign-actionable.",
+              "title": "Include Suppressed For Analytics",
+              "type": "boolean"
+            }
+          },
+          {
             "description": "Sales workflow approval state filter.",
             "in": "query",
             "name": "approval_status",
@@ -13641,6 +13653,18 @@
               ],
               "description": "Optional touch-recency filter: Untouched 30d/60d/90d or Any.",
               "title": "Recency"
+            }
+          },
+          {
+            "description": "Admin-only analytics override. When true, clears the default Eligible only marketing gate so suppressed/non-opt-in rows can be counted or inspected without making them campaign-actionable.",
+            "in": "query",
+            "name": "include_suppressed_for_analytics",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Admin-only analytics override. When true, clears the default Eligible only marketing gate so suppressed/non-opt-in rows can be counted or inspected without making them campaign-actionable.",
+              "title": "Include Suppressed For Analytics",
+              "type": "boolean"
             }
           },
           {

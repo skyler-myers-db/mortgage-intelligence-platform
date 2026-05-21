@@ -3,6 +3,7 @@ import {
   buildLeadCsv,
   isEditableTarget,
   isLeadApprovalEligible,
+  isLeadMarketingActionable,
   isLeadSelectableForSalesOps,
 } from './LeadTable';
 import type { LeadSummary } from '../../types';
@@ -119,6 +120,25 @@ describe('Sales Manager approval-state guards', () => {
   it('keeps rejected rows locked out of sales work', () => {
     expect(isLeadApprovalEligible('rejected')).toBe(false);
     expect(isLeadSelectableForSalesOps('rejected')).toBe(false);
+  });
+
+  it('keeps suppressed rows out of approval and sales-work selections', () => {
+    const lead = { marketing_eligible: false, consent_status: 'opt_in' as const };
+    expect(isLeadMarketingActionable(lead)).toBe(false);
+    expect(isLeadApprovalEligible('pending', null, lead)).toBe(false);
+    expect(isLeadSelectableForSalesOps('pending', null, lead)).toBe(false);
+  });
+
+  it('keeps non-opt-in rows out of approval and sales-work selections', () => {
+    const optOut = { marketing_eligible: true, consent_status: 'opt_out' as const };
+    const unknown = { marketing_eligible: true, consent_status: 'unknown' as const };
+
+    expect(isLeadMarketingActionable(optOut)).toBe(false);
+    expect(isLeadApprovalEligible('pending', null, optOut)).toBe(false);
+    expect(isLeadSelectableForSalesOps('pending', null, optOut)).toBe(false);
+    expect(isLeadMarketingActionable(unknown)).toBe(false);
+    expect(isLeadApprovalEligible('pending', null, unknown)).toBe(false);
+    expect(isLeadSelectableForSalesOps('pending', null, unknown)).toBe(false);
   });
 });
 

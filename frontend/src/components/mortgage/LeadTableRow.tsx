@@ -24,6 +24,7 @@ interface LeadTableRowProps {
   approval: string | undefined;
   isSelected: boolean;
   isSelectable: boolean;
+  isApprovalEligible: boolean;
   bulkApproving: boolean;
   salesBusy: boolean;
   salesTeamCount: number;
@@ -42,6 +43,7 @@ export function LeadTableRow({
   approval,
   isSelected,
   isSelectable,
+  isApprovalEligible,
   bulkApproving,
   salesBusy,
   salesTeamCount,
@@ -193,7 +195,8 @@ export function LeadTableRow({
           {approval === 'approved' && <Chip variant="success" icon="check">Approved</Chip>}
           {approval === 'rejected' && <Chip variant="danger" icon="cross">Rejected</Chip>}
           {approval === 'hold' && <Chip variant="warning" icon="shield">Hold</Chip>}
-          {!approval && (
+          {!approval && !isApprovalEligible && <Chip variant="warning" icon="shield">Not actionable</Chip>}
+          {!approval && isApprovalEligible && (
             <div className="lead-table__approval-actions" onClick={stop}>
               <Button
                 variant="primary"

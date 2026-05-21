@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 // @ts-expect-error Frontend app types intentionally exclude Node globals; this
 // unit test reads the design-system CSS text under Vitest only.
 import { readFileSync } from 'node:fs';
+// @ts-expect-error CSS lint helper is an ESM Node script used by lint/tests only.
+import { findCssLiteralViolations } from '../../../tools/lint_css_literals.mjs';
 
 const designCss = () => readFileSync(
   new URL('./components.css', import.meta.url),
@@ -9,6 +11,10 @@ const designCss = () => readFileSync(
 );
 
 describe('layout containment contracts', () => {
+  it('keeps component CSS free of hard-coded color literals', () => {
+    expect(findCssLiteralViolations()).toEqual([]);
+  });
+
   it('keeps topbar borrower search visibly actionable', () => {
     const css = designCss();
 

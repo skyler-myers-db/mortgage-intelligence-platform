@@ -704,7 +704,8 @@ def test_leads_route_passes_exact_funnel_stage_without_loose_status_filter() -> 
     assert captured["list"]["funnel_stage"] == "approved"
     assert captured["count"]["funnel_stage"] == "approved"
     assert captured["list"]["approval_status"] is None
-    assert "portfolio_criteria" not in captured["list"]
+    criteria = captured["list"]["portfolio_criteria"]
+    assert criteria.marketing_eligibility == "Eligible only"
 
 
 def test_funnel_stage_default_limit_fetches_one_extra_and_slices(monkeypatch) -> None:

@@ -275,14 +275,20 @@ def _requires_marketing_override_admin(
     *,
     marketing_eligibility: str | None,
     consent_status: str | None,
+    include_suppressed_for_analytics: bool = False,
 ) -> bool:
     """Return true when a lead-list request may expose suppressed rows."""
 
-    normalized_marketing = (marketing_eligibility or "Eligible only").strip()
-    normalized_consent = (consent_status or "").strip()
-    if normalized_marketing and normalized_marketing != "Eligible only":
+    def normalize(value: str | None) -> str:
+        return (value or "").strip().lower().replace("_", " ").replace("-", " ")
+
+    if include_suppressed_for_analytics:
         return True
-    return normalized_consent in {"Opt-out", "Unknown"}
+    normalized_marketing = normalize(marketing_eligibility or "Eligible only")
+    normalized_consent = normalize(consent_status)
+    if normalized_marketing and normalized_marketing not in {"eligible only", "eligible"}:
+        return True
+    return normalized_consent in {"opt out", "unknown"}
 
 
 @router.get("/leads", response_model=list[LeadSummary])
@@ -503,6 +509,17 @@ def list_leads(
             description="Optional touch-recency filter: Untouched 30d/60d/90d or Any.",
         ),
     ] = None,
+    include_suppressed_for_analytics: Annotated[
+        bool,
+        Query(
+            alias="include_suppressed_for_analytics",
+            description=(
+                "Admin-only analytics override. When true, clears the default "
+                "Eligible only marketing gate so suppressed/non-opt-in rows can "
+                "be counted or inspected without making them campaign-actionable."
+            ),
+        ),
+    ] = False,
     approval_status: Annotated[
         Literal["pending", "approved", "rejected", "hold", "any"],
         Query(alias="approval_status", description="Sales workflow approval state filter."),
@@ -570,23 +587,8 @@ def list_leads(
         segment = segment.strip().lower()
         if segment not in _ALLOWED_SEGMENT_CODES:
             raise HTTPException(status_code=422, detail="segment contains an unknown segment")
-    analytics_drilldown = any(
-        (
-            funnel_stage,
-            state,
-            zip_code,
-            county,
-            states,
-            zips,
-            counties,
-            borrower_ids,
-            segment,
-            segment_codes,
-        )
-    )
-    marketing_param_present = "marketing_eligibility" in request.query_params
     effective_marketing_eligibility = marketing_eligibility
-    if analytics_drilldown and not marketing_param_present:
+    if include_suppressed_for_analytics:
         effective_marketing_eligibility = None
 
     if funnel_stage and funnel_stage not in _ALLOWED_FUNNEL_STAGES:
@@ -595,6 +597,7 @@ def list_leads(
     if _requires_marketing_override_admin(
         marketing_eligibility=effective_marketing_eligibility,
         consent_status=consent_status,
+        include_suppressed_for_analytics=include_suppressed_for_analytics,
     ):
         require_admin(request)
     actor = resolve_actor(request)

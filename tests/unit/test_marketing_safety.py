@@ -294,6 +294,37 @@ def test_leads_default_to_eligible_only_contactability() -> None:
     assert criteria.marketing_eligibility == "Eligible only"
 
 
+def test_leads_drilldown_filters_keep_eligible_only_contactability() -> None:
+    repo = _CaptureLeadRepo()
+    prior = app.dependency_overrides.get(get_lead_repository)
+    app.dependency_overrides[get_lead_repository] = lambda: repo
+    try:
+        response = TestClient(app).get("/api/leads?state=IL&segment_codes=itm&funnel_stage=addressable")
+    finally:
+        _restore_override(get_lead_repository, prior)
+
+    assert response.status_code == 200, response.text
+    criteria = repo.calls[0]["portfolio_criteria"]
+    assert criteria.marketing_eligibility == "Eligible only"
+
+
+def test_leads_explicit_eligible_contactability_does_not_require_admin() -> None:
+    repo = _CaptureLeadRepo()
+    prior = app.dependency_overrides.get(get_lead_repository)
+    app.dependency_overrides[get_lead_repository] = lambda: repo
+    try:
+        response = TestClient(app).get(
+            "/api/leads?marketing_eligibility=Eligible%20only",
+            headers={"X-Forwarded-Groups": ""},
+        )
+    finally:
+        _restore_override(get_lead_repository, prior)
+
+    assert response.status_code == 200, response.text
+    criteria = repo.calls[0]["portfolio_criteria"]
+    assert criteria.marketing_eligibility == "Eligible only"
+
+
 def test_leads_suppression_override_requires_admin_group() -> None:
     response = TestClient(app).get(
         "/api/leads?marketing_eligibility=Any",
@@ -301,6 +332,51 @@ def test_leads_suppression_override_requires_admin_group() -> None:
     )
 
     assert response.status_code == 403
+
+
+def test_leads_suppressed_only_requires_admin_group() -> None:
+    response = TestClient(app).get(
+        "/api/leads?marketing_eligibility=Suppressed%20only",
+        headers={"X-Forwarded-Groups": ""},
+    )
+
+    assert response.status_code == 403
+
+
+@pytest.mark.parametrize("consent_status", ["Opt-out", "Unknown"])
+def test_leads_non_opt_in_consent_filters_require_admin_group(consent_status: str) -> None:
+    response = TestClient(app).get(
+        "/api/leads",
+        params={"consent_status": consent_status},
+        headers={"X-Forwarded-Groups": ""},
+    )
+
+    assert response.status_code == 403
+
+
+def test_leads_include_suppressed_for_analytics_requires_admin_group() -> None:
+    response = TestClient(app).get(
+        "/api/leads?include_suppressed_for_analytics=true",
+        headers={"X-Forwarded-Groups": ""},
+    )
+
+    assert response.status_code == 403
+
+
+def test_leads_include_suppressed_for_analytics_clears_default_for_admin() -> None:
+    repo = _CaptureLeadRepo()
+    prior = app.dependency_overrides.get(get_lead_repository)
+    app.dependency_overrides[get_lead_repository] = lambda: repo
+    try:
+        response = TestClient(app).get(
+            "/api/leads?state=IL&include_suppressed_for_analytics=true",
+            headers={"X-Forwarded-Groups": "mip-admin"},
+        )
+    finally:
+        _restore_override(get_lead_repository, prior)
+
+    assert response.status_code == 200, response.text
+    assert "portfolio_criteria" not in repo.calls[0]
 
 
 def test_campaigns_can_be_listed_and_status_updated() -> None:

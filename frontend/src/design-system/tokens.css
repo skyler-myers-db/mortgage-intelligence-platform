@@ -107,6 +107,37 @@
   --dur-burst: 720ms;
   --dur-emanate: 1200ms;
   --dur-mesh: 60s;
+
+  /* ---------- Component semantic colors ---------- */
+  --surface-scrim: rgba(2, 16, 31, 0.55);
+  --surface-inset-shadow: rgba(255,255,255,0.15);
+  --surface-key-shadow: rgba(0, 0, 0, 0.18);
+  --text-on-solid: #FFFFFF;
+
+  --status-success-soft: rgba(16,185,129,0.14);
+  --status-success-soft-muted: rgba(16,185,129,0.12);
+  --status-success-line: rgba(16,185,129,0.32);
+  --status-success-line-strong: rgba(16,185,129,0.35);
+  --status-success-ink: #6EE7B7;
+  --status-warning-soft: rgba(245,158,11,0.14);
+  --status-warning-soft-muted: rgba(245,158,11,0.12);
+  --status-warning-soft-strong: rgba(245,158,11,0.18);
+  --status-warning-line: rgba(245,158,11,0.30);
+  --status-warning-line-strong: rgba(245,158,11,0.35);
+  --status-warning-ink: #FCD34D;
+  --status-danger-soft: rgba(239,68,68,0.14);
+  --status-danger-soft-muted: rgba(239,68,68,0.12);
+  --status-danger-soft-subtle: rgba(239,68,68,0.10);
+  --status-danger-line-strong: rgba(239,68,68,0.35);
+  --status-danger-ink: #FCA5A5;
+
+  --approval-bg: linear-gradient(90deg, rgba(245,158,11,0.08), rgba(245,158,11,0.02));
+  --degraded-bg: linear-gradient(90deg, rgba(245,158,11,0.10), rgba(245,158,11,0.02));
+  --map-wrap-bg:
+    radial-gradient(800px 500px at 20% 30%, rgba(2,80,128,0.22), transparent 60%),
+    radial-gradient(600px 400px at 80% 70%, rgba(92,225,230,0.10), transparent 60%),
+    var(--bg-2);
+  --map-region-fill: var(--bg-3);
 }
 
 /* ============================================================
@@ -190,6 +221,12 @@
   --shadow-sm: 0 1px 2px rgba(2,31,52,0.06);
   --shadow-md: 0 8px 24px -12px rgba(2,31,52,0.14);
   --shadow-lg: 0 24px 60px -20px rgba(2,31,52,0.18);
+
+  --map-wrap-bg:
+    radial-gradient(800px 500px at 20% 30%, rgba(2,80,128,0.06), transparent 60%),
+    radial-gradient(600px 400px at 80% 70%, rgba(92,225,230,0.08), transparent 60%),
+    #F8FBFD;
+  --map-region-fill: #E4EDF4;
 }
 
 /* ---------- Accent overrides applied at runtime ---------- */

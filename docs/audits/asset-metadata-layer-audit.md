@@ -1,5 +1,7 @@
 # Audit — Governed Asset Metadata Layer (Module 0)
 
+> **Internal validation artifact — not approved for public release.**
+
 **Date:** 2026-05-21
 **Scope:** The new (uncommitted) Asset Metadata feature shipped after the Proof
 Layer — `backend/api/assets.py`, `backend/services/asset_metadata.py`,

@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { useRef, useState, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../../lib/api';
+import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { queryKeys } from '../../lib/queryKeys';
 import type { BorrowerProof, ProofFormulaLine, ProofReproduceQuery } from '../../types';
 import { Button, Chip } from '../Primitives';
@@ -24,15 +25,6 @@ const TABS: Array<{ id: ProofTab; label: string; icon: 'audit' | 'layers' | 'flo
   { id: 'reproduce', label: 'Reproduce', icon: 'db' },
 ];
 
-const FOCUSABLE_SELECTOR = [
-  'button:not([disabled])',
-  '[href]',
-  'input:not([disabled])',
-  'textarea:not([disabled])',
-  'select:not([disabled])',
-  '[tabindex]:not([tabindex="-1"])',
-].join(', ');
-
 function formatWeight(value: number): string {
   return `${Math.round(value * 100)}%`;
 }
@@ -52,7 +44,6 @@ export function BorrowerProofDrawer({ borrowerId, open, onClose }: BorrowerProof
   const [copiedHash, setCopiedHash] = useState<string | null>(null);
   const closeBtnRef = useRef<HTMLButtonElement | null>(null);
   const panelRef = useRef<HTMLElement | null>(null);
-  const lastFocusedRef = useRef<HTMLElement | null>(null);
   const proofQuery = useQuery({
     queryKey: queryKeys.borrowerProof(borrowerId),
     queryFn: ({ signal }) => api.borrowerProof(borrowerId, signal),
@@ -60,45 +51,7 @@ export function BorrowerProofDrawer({ borrowerId, open, onClose }: BorrowerProof
     staleTime: 60_000,
   });
 
-  useEffect(() => {
-    if (!open) {
-      if (lastFocusedRef.current && typeof lastFocusedRef.current.focus === 'function') {
-        lastFocusedRef.current.focus();
-        lastFocusedRef.current = null;
-      }
-      return undefined;
-    }
-    lastFocusedRef.current = document.activeElement as HTMLElement | null;
-    queueMicrotask(() => closeBtnRef.current?.focus());
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        onClose();
-        return;
-      }
-      if (event.key === 'Tab' && panelRef.current) {
-        const focusables = Array.from(
-          panelRef.current.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR),
-        );
-        if (focusables.length === 0) return;
-        const first = focusables[0];
-        const last = focusables[focusables.length - 1];
-        const active = document.activeElement as HTMLElement | null;
-        if (!active || !panelRef.current.contains(active)) {
-          event.preventDefault();
-          first.focus();
-        } else if (event.shiftKey && active === first) {
-          event.preventDefault();
-          last.focus();
-        } else if (!event.shiftKey && active === last) {
-          event.preventDefault();
-          first.focus();
-        }
-      }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [open, onClose]);
+  useFocusTrap({ open, containerRef: panelRef, initialFocusRef: closeBtnRef, onClose });
 
   const proof = proofQuery.data;
   const copySql = async (query: ProofReproduceQuery) => {

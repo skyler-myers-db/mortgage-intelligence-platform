@@ -428,15 +428,15 @@
 .btn:hover { background: var(--bg-3); border-color: var(--line-3); }
 .btn--primary {
   background: var(--accent); color: var(--accent-contrast); border-color: transparent;
-  box-shadow: 0 1px 0 rgba(255,255,255,0.15) inset, 0 4px 14px -4px var(--accent);
+  box-shadow: 0 1px 0 var(--surface-inset-shadow) inset, 0 4px 14px -4px var(--accent);
 }
 .btn--primary:hover { background: var(--accent-hover); }
 .btn--ghost { border-color: transparent; color: var(--text-2); }
 .btn--ghost:hover { color: var(--text-1); background: var(--bg-3); }
 .btn--sm { padding: 5px 10px; min-block-size: var(--sp-6); font-size: var(--fs-12); border-radius: var(--r-sm); }
-.btn--danger { color: var(--signal-danger); border-color: rgba(239,68,68,0.35); }
-.btn--danger:hover { background: rgba(239,68,68,0.10); }
-.btn--success { background: var(--signal-success); border-color: transparent; color: white; }
+.btn--danger { color: var(--signal-danger); border-color: var(--status-danger-line-strong); }
+.btn--danger:hover { background: var(--status-danger-soft-subtle); }
+.btn--success { background: var(--signal-success); border-color: transparent; color: var(--text-on-solid); }
 .btn[disabled] { opacity: 0.55; cursor: not-allowed; }
 
 /* ============================================================
@@ -465,7 +465,7 @@ kbd {
   line-height: 1.4;
   letter-spacing: 0;
   white-space: nowrap;
-  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.18);
+  box-shadow: 0 1px 0 var(--surface-key-shadow);
 }
 
 /* ============================================================
@@ -490,12 +490,12 @@ kbd {
   text-overflow: ellipsis;
 }
 .chip--neutral { background: var(--bg-3); border-color: var(--line-1); color: var(--text-2); }
-.chip--success { background: rgba(16,185,129,0.12); border-color: rgba(16,185,129,0.35); color: #6EE7B7; }
-.chip--warning { background: rgba(245,158,11,0.12); border-color: rgba(245,158,11,0.35); color: #FCD34D; }
-.chip--danger  { background: rgba(239,68,68,0.12); border-color: rgba(239,68,68,0.35); color: #FCA5A5; }
-[data-theme="light"] .chip--success { color: #047857; }
-[data-theme="light"] .chip--warning { color: #B45309; }
-[data-theme="light"] .chip--danger { color: #B91C1C; }
+.chip--success { background: var(--status-success-soft-muted); border-color: var(--status-success-line-strong); color: var(--status-success-ink); }
+.chip--warning { background: var(--status-warning-soft-muted); border-color: var(--status-warning-line-strong); color: var(--status-warning-ink); }
+.chip--danger  { background: var(--status-danger-soft-muted); border-color: var(--status-danger-line-strong); color: var(--status-danger-ink); }
+[data-theme="light"] .chip--success { color: var(--signal-success); }
+[data-theme="light"] .chip--warning { color: var(--entrada-navy); }
+[data-theme="light"] .chip--danger { color: var(--signal-danger); }
 
 /* Segment-hued chip. Component sets --chip-hue as an inline var (segment
  * palette entry) and leaves border + fill to color-mix. Text color is
@@ -758,11 +758,11 @@ kbd {
   font-variant-numeric: tabular-nums;
   border: 1px solid transparent;
 }
-.score--high    { background: rgba(16,185,129,0.14); color: #6EE7B7; border-color: rgba(16,185,129,0.32); }
-.score--med     { background: rgba(245,158,11,0.14); color: #FCD34D; border-color: rgba(245,158,11,0.32); }
-.score--low     { background: rgba(178,189,194,0.12); color: var(--text-3); border-color: var(--line-1); }
-[data-theme="light"] .score--high { color: #047857; }
-[data-theme="light"] .score--med  { color: #B45309; }
+.score--high    { background: var(--status-success-soft); color: var(--status-success-ink); border-color: var(--status-success-line); }
+.score--med     { background: var(--status-warning-soft); color: var(--status-warning-ink); border-color: var(--status-warning-line); }
+.score--low     { background: var(--chip-bg); color: var(--text-3); border-color: var(--line-1); }
+[data-theme="light"] .score--high { color: var(--signal-success); }
+[data-theme="light"] .score--med  { color: var(--entrada-navy); }
 .score__dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 
 /* ============================================================
@@ -1125,13 +1125,13 @@ kbd {
   display: flex; align-items: center; gap: var(--sp-4);
   padding: var(--sp-3) var(--sp-4);
   border-radius: var(--r-lg);
-  background: linear-gradient(90deg, rgba(245,158,11,0.08), rgba(245,158,11,0.02));
-  border: 1px solid rgba(245,158,11,0.30);
+  background: var(--approval-bg);
+  border: 1px solid var(--status-warning-line);
   color: var(--text-1);
 }
 .approval__ico {
   width: 32px; height: 32px; border-radius: 8px;
-  background: rgba(245,158,11,0.18); color: var(--signal-warning);
+  background: var(--status-warning-soft-strong); color: var(--signal-warning);
   display: grid; place-items: center; font-size: 16px;
   flex: 0 0 auto;
 }
@@ -1153,14 +1153,14 @@ kbd {
   display: flex; align-items: center; gap: var(--sp-4);
   padding: var(--sp-3) var(--sp-4);
   border-radius: var(--r-lg);
-  background: linear-gradient(90deg, rgba(245,158,11,0.10), rgba(245,158,11,0.02));
-  border: 1px solid rgba(245,158,11,0.30);
+  background: var(--degraded-bg);
+  border: 1px solid var(--status-warning-line);
   color: var(--text-1);
   margin: 0 var(--sp-6) var(--sp-4);
 }
 .degraded-banner__ico {
   width: 32px; height: 32px; border-radius: 8px;
-  background: rgba(245,158,11,0.18); color: var(--signal-warning);
+  background: var(--status-warning-soft-strong); color: var(--signal-warning);
   display: grid; place-items: center; font-size: 16px;
   flex: 0 0 auto;
 }
@@ -1184,7 +1184,7 @@ kbd {
    ============================================================ */
 .drawer-scrim {
   position: fixed; inset: 0;
-  background: rgba(2, 16, 31, 0.55);
+  background: var(--surface-scrim);
   backdrop-filter: blur(2px);
   opacity: 0; pointer-events: none;
   transition: opacity var(--dur-base) var(--ease);
@@ -1610,8 +1610,8 @@ kbd {
   position: fixed; bottom: var(--sp-4); right: var(--sp-4);
   width: 52px; height: 52px; border-radius: 50%;
   background: linear-gradient(135deg, var(--entrada-navy), var(--entrada-teal));
-  border: 1px solid rgba(255,255,255,0.15);
-  color: white; display: none; place-items: center;
+  border: 1px solid var(--surface-inset-shadow);
+  color: var(--text-on-solid); display: none; place-items: center;
   cursor: pointer;
   box-shadow: 0 8px 24px -8px var(--entrada-teal);
   z-index: 29;
@@ -1727,11 +1727,11 @@ kbd {
   display: grid; place-items: center;
   background: var(--accent-soft); color: var(--accent); font-size: 12px;
 }
-.audit__ico.green { background: rgba(16,185,129,0.14); color: #6EE7B7; }
-.audit__ico.amber { background: rgba(245,158,11,0.14); color: var(--signal-warning); }
-.audit__ico.red   { background: rgba(239,68,68,0.14); color: #FCA5A5; }
-[data-theme="light"] .audit__ico.green { color: #047857; }
-[data-theme="light"] .audit__ico.red   { color: #B91C1C; }
+.audit__ico.green { background: var(--status-success-soft); color: var(--status-success-ink); }
+.audit__ico.amber { background: var(--status-warning-soft); color: var(--signal-warning); }
+.audit__ico.red   { background: var(--status-danger-soft); color: var(--status-danger-ink); }
+[data-theme="light"] .audit__ico.green { color: var(--signal-success); }
+[data-theme="light"] .audit__ico.red   { color: var(--signal-danger); }
 .audit__body { min-width: 0; }
 .audit__what { color: var(--text-1); font-weight: 500; }
 .audit__who { color: var(--text-3); font-size: 11px; }
@@ -1838,19 +1838,10 @@ kbd {
   position: relative;
   display: flex;
   flex-direction: column;
-  background:
-    radial-gradient(800px 500px at 20% 30%, rgba(2,80,128,0.22), transparent 60%),
-    radial-gradient(600px 400px at 80% 70%, rgba(92,225,230,0.10), transparent 60%),
-    var(--bg-2);
+  background: var(--map-wrap-bg);
   border: 1px solid var(--line-1);
   border-radius: var(--r-lg);
   overflow: hidden;
-}
-[data-theme="light"] .map-wrap {
-  background:
-    radial-gradient(800px 500px at 20% 30%, rgba(2,80,128,0.06), transparent 60%),
-    radial-gradient(600px 400px at 80% 70%, rgba(92,225,230,0.08), transparent 60%),
-    #F8FBFD;
 }
 .map-wrap .map-svg-stage { display: block; width: 100%; height: 100%; }
 .map-corner-chips .chip svg {
@@ -1937,13 +1928,13 @@ kbd {
   line-height: var(--lh-snug);
 }
 .map-region {
-  fill: var(--bg-3);
+  fill: var(--map-region-fill);
   stroke: color-mix(in oklab, var(--accent) 50%, transparent);
   stroke-width: 0.9;
   cursor: pointer;
   transition: fill var(--dur-fast) var(--ease), stroke var(--dur-fast) var(--ease);
 }
-[data-theme="light"] .map-region { fill: #E4EDF4; stroke: color-mix(in oklab, var(--entrada-navy) 35%, transparent); }
+[data-theme="light"] .map-region { stroke: color-mix(in oklab, var(--entrada-navy) 35%, transparent); }
 /* Hover brighten: users reported the prior 1.2px accent stroke was easy
    to miss on dense map layers. Bump stroke weight, add a soft accent
    glow, and lift the hovered path into the stacking context so its

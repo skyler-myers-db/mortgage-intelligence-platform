@@ -14,7 +14,7 @@
     "budget": "node ../tools/check_frontend_budgets.mjs",
     "preview": "vite preview --host 0.0.0.0",
     "test": "vitest run",
-    "lint": "eslint . --max-warnings 0",
+    "lint": "eslint . --max-warnings 0 && node ../tools/lint_css_literals.mjs",
     "e2e": "playwright test",
     "e2e:ci": "playwright test --reporter=list --workers=1"
   },

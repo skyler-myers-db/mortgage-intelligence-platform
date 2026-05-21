@@ -56,7 +56,7 @@ bundle-deploy: render-sql
 	$(PYTHON) tools/databricks/bundle_env.py deploy -t dev
 
 zip:
-	cd .. && zip -r mortgage-intelligence-platform.zip mortgage-intelligence-platform -x '*/node_modules/*' '*/.venv/*' '*/frontend/dist/*'
+	./scripts/package_source.sh
 
 # ---------------------------------------------------------------------------
 # Genie Space + env-wired bundle targets

@@ -1,10 +1,11 @@
-import { Fragment, useEffect, useRef } from 'react';
+import { Fragment, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { useApp } from '../AppContext';
 import { Icon } from '../Icon';
 import { api } from '../../lib/api';
 import { assetDetailHref, assetHrefForSource } from '../../lib/drawerSources';
+import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { queryKeys } from '../../lib/queryKeys';
 import type { AssetFreshness, AssetMetadataResponse } from '../../types';
 
@@ -50,7 +51,7 @@ export function EvidenceDrawer() {
   const open = !!drawer;
   const d = drawer;
   const closeBtnRef = useRef<HTMLButtonElement | null>(null);
-  const lastFocusedRef = useRef<HTMLElement | null>(null);
+  const drawerRef = useRef<HTMLElement | null>(null);
   const metadataQuery = useQuery({
     queryKey: queryKeys.assetMetadata(d?.assetKey),
     queryFn: ({ signal }) => api.assetMetadata(d?.assetKey ?? '', signal),
@@ -59,28 +60,12 @@ export function EvidenceDrawer() {
   });
   const metadata = metadataQuery.data;
   const assetHref = d?.assetKey ? assetDetailHref(d.assetKey) : null;
-
-  // A11y: ESC closes; focus lands on the close button on open and returns
-  // to the element that triggered the open on close.
-  useEffect(() => {
-    if (open) {
-      lastFocusedRef.current = document.activeElement as HTMLElement | null;
-      queueMicrotask(() => closeBtnRef.current?.focus());
-      const onKey = (e: KeyboardEvent) => {
-        if (e.key === 'Escape') {
-          e.preventDefault();
-          setDrawer(null);
-        }
-      };
-      window.addEventListener('keydown', onKey);
-      return () => window.removeEventListener('keydown', onKey);
-    }
-    if (lastFocusedRef.current && typeof lastFocusedRef.current.focus === 'function') {
-      lastFocusedRef.current.focus();
-      lastFocusedRef.current = null;
-    }
-    return undefined;
-  }, [open, setDrawer]);
+  useFocusTrap({
+    open,
+    containerRef: drawerRef,
+    initialFocusRef: closeBtnRef,
+    onClose: () => setDrawer(null),
+  });
 
   return (
     <>
@@ -90,6 +75,7 @@ export function EvidenceDrawer() {
         aria-hidden={!open}
       />
       <aside
+        ref={drawerRef}
         className={`drawer ${open ? 'is-open' : ''}`}
         role="dialog"
         aria-modal="true"

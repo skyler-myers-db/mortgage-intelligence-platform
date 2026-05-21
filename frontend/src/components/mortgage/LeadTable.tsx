@@ -33,6 +33,7 @@ export { buildLeadCsv } from './LeadTable.csv';
 export {
   isEditableTarget,
   isLeadApprovalEligible,
+  isLeadMarketingActionable,
   isLeadSelectableForSalesOps,
 } from './LeadTable.logic';
 export type { LeadExportContext } from './LeadTable.types';
@@ -338,12 +339,12 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
   // Rejected and hold rows remain locked out so operations do not
   // accidentally work a dropped or governance-held borrower.
   const selectableIds = displayLeads
-    .filter((l) => isLeadSelectableForSalesOps(l.approval_status, approvals[l.borrower_id]))
+    .filter((l) => isLeadSelectableForSalesOps(l.approval_status, approvals[l.borrower_id], l))
     .map((l) => l.borrower_id);
   const approvalEligibleIds = displayLeads
     .filter((l) => {
       const localStatus = approvals[l.borrower_id];
-      return isLeadApprovalEligible(l.approval_status, localStatus);
+      return isLeadApprovalEligible(l.approval_status, localStatus, l);
     })
     .map((l) => l.borrower_id);
 
@@ -638,7 +639,7 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
       const expandedLead = leadsById.get(expanded);
       const expandedStatus = approvals[expanded] ?? expandedLead?.approval_status;
       if (key === 'a') {
-        if (isTerminalApproval(expandedStatus)) return;
+        if (!isLeadApprovalEligible(expandedStatus, approvals[expanded], expandedLead)) return;
         e.preventDefault();
         void approveLead(expanded);
       } else if (key === 'r') {
@@ -861,7 +862,8 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
                     ? serverStatus
                     : undefined);
               const isSelected = selectedIds.has(lead.borrower_id);
-              const isSelectable = isLeadSelectableForSalesOps(serverStatus, approval);
+              const isSelectable = isLeadSelectableForSalesOps(serverStatus, approval, lead);
+              const isApprovalEligible = isLeadApprovalEligible(serverStatus, approval, lead);
               return (
                 <LeadTableRow
                   key={lead.borrower_id}
@@ -871,6 +873,7 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
                   approval={approval}
                   isSelected={isSelected}
                   isSelectable={isSelectable}
+                  isApprovalEligible={isApprovalEligible}
                   bulkApproving={bulkApproving}
                   salesBusy={salesBusy}
                   salesTeamCount={salesTeam.length}

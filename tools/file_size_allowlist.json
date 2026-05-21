@@ -1,0 +1,17 @@
+{
+  "expires": {
+    "backend/api/outreach.py": "2026-06-21",
+    "backend/services/audit_store.py": "2026-06-21",
+    "backend/services/genie_actions.py": "2026-06-21",
+    "backend/services/repositories/databricks_genie.py": "2026-06-21",
+    "backend/services/repositories/databricks_portfolio.py": "2026-06-21",
+    "backend/services/resilience.py": "2026-06-21",
+    "backend/services/sales_state.py": "2026-06-21",
+    "frontend/src/components/mortgage/LeadTable.tsx": "2026-06-21",
+    "frontend/src/components/mortgage/USChoroplethMap.tsx": "2026-06-21",
+    "frontend/src/design-system/components.css": "2026-06-21",
+    "frontend/src/lib/api.ts": "2026-06-21",
+    "frontend/src/routes/analytics.tsx": "2026-06-21",
+    "tools/e2e_borrower_audit.py": "2026-06-21"
+  }
+}
