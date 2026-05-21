@@ -23,6 +23,11 @@ export function ConfidenceMeter({ value, compact }: ConfidenceMeterProps) {
       className={`conf conf--${tier}`}
       title="Signal strength is a deterministic average of the five scoring sub-scores, not a statistical confidence interval."
       aria-label={`Recommendation signal strength ${value} percent.`}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={value}
+      aria-valuetext={`Recommendation signal strength ${value} percent.`}
+      role="meter"
     >
       <span className="conf__bars">
         {[0, 1, 2, 3, 4].map((i) => (

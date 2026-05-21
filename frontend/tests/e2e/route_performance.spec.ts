@@ -221,10 +221,11 @@ test.describe('route performance and layout canaries', () => {
 
   test('Lead Queue hover/focus never reads governed borrower dossiers before navigation', async ({ page }) => {
     await page.goto('/lead-queue');
-    const firstRow = page.locator('.lead-table__table tbody > tr[role="button"][aria-rowindex]').first();
-    await expect(firstRow).toBeVisible({ timeout: 30_000 });
+    const firstButton = page.locator('.lead-table__borrower-btn').first();
+    await expect(firstButton).toBeVisible({ timeout: 30_000 });
+    const firstRow = firstButton.locator('xpath=ancestor::tr[1]');
 
-    const borrowerId = (await firstRow.locator('.lead-table__borrower').innerText()).trim();
+    const borrowerId = (await firstButton.locator('.lead-table__borrower').innerText()).trim();
     expect(borrowerId, 'first visible Lead Queue row should expose a borrower id').toMatch(/^B-[0-9A-Z]+$/);
     const borrowerApiPath = `/api/borrowers/${borrowerId}`;
     const borrowerReads: string[] = [];
@@ -235,15 +236,15 @@ test.describe('route performance and layout canaries', () => {
 
     await firstRow.hover();
     await page.waitForTimeout(500);
-    await firstRow.focus();
+    await firstButton.focus();
     await page.waitForTimeout(500);
     expect(
       borrowerReads,
       'hover/focus intent must stay static-module-only because /api/borrowers records VIEW_BORROWER audit events',
     ).toEqual([]);
 
-    if ((await firstRow.getAttribute('aria-expanded')) !== 'true') {
-      await firstRow.click();
+    if ((await firstButton.getAttribute('aria-expanded')) !== 'true') {
+      await firstButton.click();
     }
     await expect(page.locator('.tbl__expand').first()).toBeVisible({ timeout: 10_000 });
     expect(borrowerReads, 'row expansion preview must not read the governed borrower dossier').toEqual([]);
