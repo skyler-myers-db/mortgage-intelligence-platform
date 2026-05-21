@@ -249,7 +249,7 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
 
   propertyProfile: {
     title: 'Property profile',
-    short: 'mip.silver.property_master',
+    short: 'Property profile',
     description:
       'CLIP-grain property attributes used for geography, occupancy posture, corporate-owner signals, mailing/situs mismatch, and foreclosure-stage snapshots. Raw owner and address identifiers are masked before API response.',
     lineage: [
@@ -291,7 +291,7 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
 
   borrowerDossier: {
     title: 'Borrower dossier proof table',
-    short: 'mip.gold.borrower_dossier',
+    short: 'Borrower dossier proof table',
     assetKey: 'borrower_dossier',
     assetPath: 'mip.gold.borrower_dossier',
     usedIn: ['Borrower 360 proof drawer', 'Offer workflow', 'Reproduce SQL'],
@@ -363,7 +363,7 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
 
   mortgageDomain: {
     title: 'Mortgage Domain events',
-    short: 'mip.silver.mortgage_events',
+    short: 'Mortgage Domain events',
     description:
       'Cotality mortgage transaction history used for recent refinance, payoff, release, and lifecycle signals. These are event-backed signals and do not expose borrower names or raw property identifiers in the app.',
     lineage: [
@@ -382,7 +382,7 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
 
   ownerTransfer: {
     title: 'Owner Transfer events',
-    short: 'mip.silver.owner_transfer_events',
+    short: 'Owner Transfer events',
     description:
       'Cotality owner-transfer and sale events used to identify recent sale activity and ownership lifecycle changes. The app surfaces sanitized event evidence only.',
     lineage: [
@@ -423,7 +423,7 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
 
   sourceReadiness: {
     title: 'Source readiness',
-    short: 'mip.gold.source_readiness',
+    short: 'Source readiness',
     assetKey: 'source_readiness',
     assetPath: 'mip.gold.source_readiness',
     usedIn: ['Data estate', 'Admin source readiness', 'Genie data-gap answers'],
@@ -437,7 +437,7 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
       { layer: 'FIRST PARTY', name: 'Summit demo feeds', meta: 'synthetic-demo lender data' },
     ],
     signals: [
-      { label: 'Status', source: 'source_readiness.status', value: 'live / pending / demo_synthetic / blocked' },
+      { label: 'Status', source: 'source_readiness.status', value: 'live / roadmap / demo_synthetic / blocked' },
       { label: 'Rows', source: 'source_readiness.row_count', value: 'source-specific row proof' },
       { label: 'Checked at', source: 'source_readiness.checked_at', value: 'refresh timestamp' },
     ],
@@ -584,7 +584,7 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
 
   lockinCohort: {
     title: 'Lock-in cohort',
-    short: 'mip.gold.lockin_cohort',
+    short: 'Lock-in cohort',
     assetKey: 'lockin_cohort',
     assetPath: 'mip.gold.lockin_cohort',
     usedIn: ['Genie', 'Rate-lock analysis'],
@@ -628,7 +628,7 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
 
   permit: {
     title: 'Permit signal',
-    short: 'Cotality Building Permits - pending',
+    short: 'Building Permits - pending',
     description:
       'Cotality Building Permits share is pending. The signal is modeled but blocked false until the feed lands, so permit-sourced borrower counts remain 0 today.',
     lineage: [
@@ -645,7 +645,7 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
 
   mls: {
     title: 'MLS listing signal',
-    short: 'Cotality MLS - pending',
+    short: 'MLS - pending',
     description:
       'Cotality MLS listing share is pending. Listed-for-sale predicates are blocked false until the Delta Share lands, so listing chips read as a source-dependency state rather than live listing evidence.',
     lineage: [

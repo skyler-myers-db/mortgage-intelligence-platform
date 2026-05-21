@@ -38,7 +38,7 @@ interface LeadTableRowProps {
 
 export function LeadTableRow({
   lead,
-  virtualIndex,
+  virtualIndex: _virtualIndex,
   isOpen,
   approval,
   isSelected,
@@ -60,22 +60,7 @@ export function LeadTableRow({
     <Fragment>
       <tr
         className={isOpen ? 'is-expanded' : ''}
-        tabIndex={0}
-        role="button"
-        aria-rowindex={virtualIndex + 2}
-        aria-expanded={isOpen}
-        aria-label={`Lead ${lead.borrower_id}, ${isOpen ? 'expanded' : 'collapsed'}. Press Enter or Space to toggle preview; A to approve, R to reject.`}
         onClick={() => onToggleRow(lead, isOpen)}
-        onKeyDown={(e) => {
-          // R5-10 (2026-04-23): make rows toggleable from the keyboard so
-          // A/R hotkeys work without a prior mouse click. Nested controls keep
-          // their own handlers because we only intercept row-targeted events.
-          if (e.target !== e.currentTarget) return;
-          if (e.key === 'Enter' || e.key === ' ') {
-            e.preventDefault();
-            onToggleRow(lead, isOpen);
-          }
-        }}
       >
         <td className="tbl-cell--select" onClick={stop}>
           <input
@@ -92,10 +77,21 @@ export function LeadTableRow({
           <Icon name={isOpen ? 'down' : 'chevright'} size={14} className="muted" />
         </td>
         <td className="is-primary">
-          <div className="mono lead-table__borrower">{lead.borrower_id}</div>
-          <div className="mono muted lead-table__clip">
-            {lead.clip && lead.clip.length > 0 ? lead.clip : 'property_ref_unavailable'}
-          </div>
+          <button
+            type="button"
+            className="lead-table__borrower-btn"
+            aria-expanded={isOpen}
+            aria-label={`Toggle preview for lead ${lead.borrower_id}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleRow(lead, isOpen);
+            }}
+          >
+            <span className="mono lead-table__borrower">{lead.borrower_id}</span>
+            <span className="mono muted lead-table__clip">
+              {lead.clip && lead.clip.length > 0 ? lead.clip : 'property_ref_unavailable'}
+            </span>
+          </button>
         </td>
         <td>
           {lead.city}, {lead.state}

@@ -30,6 +30,7 @@ async function discoverMapDrillTarget(
     params.set('segment_codes', segmentCodes.join(','));
     params.set('segment_mode', 'all');
   }
+  params.set('marketing_eligibility', 'Eligible only');
   const suffix = params.toString() ? `?${params.toString()}` : '';
   const statesResp = await request.get(`${API_URL}/api/geo/state-rollups${suffix}`, {
     headers: AUTH_HEADERS,
@@ -230,6 +231,7 @@ test.describe('Module 0 demo visual baselines', () => {
     const grid = page.locator('.seg-grid');
     await expect(grid).toBeVisible({ timeout: 20_000 });
     await expect(grid.locator('.seg-card')).toHaveCount(6);
+    await page.evaluate(() => document.fonts.ready);
     const cardBoxes = await grid.locator('.seg-card').evaluateAll((nodes) =>
       nodes.map((node) => {
         const rect = node.getBoundingClientRect();
@@ -262,10 +264,10 @@ test.describe('Module 0 demo visual baselines', () => {
 
 	  test('Segment geography drill header keeps breadcrumbs clickable at ZIP layer', async ({ page, request }) => {
 	    await page.goto('/segment-intelligence');
-	    for (const label of ['Investor / Multi-Property', 'Home Equity Candidate', 'Retention Risk']) {
+	    for (const label of ['Investor / Multi-Property', 'Home Equity Candidate']) {
 	      await clickSegmentCard(page, label);
 	    }
-      const target = await discoverMapDrillTarget(request, ['itm', 'investor', 'equity', 'retention']);
+      const target = await discoverMapDrillTarget(request, ['itm', 'investor', 'equity']);
 	    await drillToZipLayer(page, target);
 	    await expect(page.locator('.zip-tiles')).toBeVisible({ timeout: 10_000 });
 

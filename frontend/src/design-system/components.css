@@ -437,7 +437,18 @@
 .btn--danger { color: var(--signal-danger); border-color: var(--status-danger-line-strong); }
 .btn--danger:hover { background: var(--status-danger-soft-subtle); }
 .btn--success { background: var(--signal-success); border-color: transparent; color: var(--text-on-solid); }
-.btn[disabled] { opacity: 0.55; cursor: not-allowed; }
+.btn[disabled] {
+  cursor: not-allowed;
+  box-shadow: none;
+  background: var(--bg-3);
+  border-color: var(--line-2);
+  color: var(--text-2);
+}
+.btn--primary[disabled] {
+  background: var(--bg-3);
+  border-color: var(--line-2);
+  color: var(--text-1);
+}
 
 /* ============================================================
    KEYBOARD HINT
@@ -990,6 +1001,22 @@ kbd {
 }
 .lead-table__rate--positive { color: var(--signal-success); }
 .lead-table__rate--neutral { color: var(--text-2); }
+.lead-table__borrower-btn {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-1);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+.lead-table__borrower-btn:hover .lead-table__borrower {
+  color: var(--accent-ink);
+}
 .lead-table__approval-actions {
   display: inline-flex;
   align-items: center;

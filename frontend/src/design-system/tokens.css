@@ -204,12 +204,9 @@
   /* Darker danger so .kpi__delta.down clears 4.5:1 AA against the
    * white surface (--bg-1 = #FFFFFF). #DC2626 reads at ~4.83:1. */
   --signal-danger: #DC2626;
-  /* Darker success so .kpi__delta.up (the +%/-% text on KPI cards) and
-   * .seg-card__meta .up clear AA against white. The default #10B981 reads
-   * at ~2.54:1 and axe-core flagged it on the 2026-04-22 light-theme
-   * audit. #047857 (same shade already used for .chip--success in light)
-   * reads at ~5.1:1. */
-  --signal-success: #047857;
+  /* Darker success so .kpi__delta.up, .chip--success, and segment meta
+   * clear AA against light success fills and white surfaces. */
+  --signal-success: #045D46;
 
   --accent:        #025080;
   --accent-hover:  #013354;
