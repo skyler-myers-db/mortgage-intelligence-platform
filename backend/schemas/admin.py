@@ -41,4 +41,4 @@ class AdminSettingsResponse(BaseModel):
     catalog: str
     gold_schema: str
     lakebase_schema: str
-    warehouse_id: str
+    warehouse_id: str | None = None
