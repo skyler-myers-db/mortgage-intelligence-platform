@@ -255,12 +255,11 @@ jobs:
           echo "MIP_APP_URL=$APP_URL" >> "$GITHUB_ENV"
           echo "MIP_API_URL=$APP_URL" >> "$GITHUB_ENV"
           echo "::notice::Nightly Playwright will target deployed app at $APP_URL."
-      - name: Set Playwright Bearer token
-        # Prefer M2M OAuth when the repo secrets are provisioned. If not,
-        # use the same workspace PAT already required for the live UC gates;
-        # Databricks Apps accepts it as a Bearer token through the OAuth
-        # proxy, and this keeps live Playwright from depending on an optional
-        # second credential set.
+      - name: Set Playwright Bearer tokens
+        # Full Playwright uses the workspace PAT so admin-only audit review
+        # gates can prove Lakebase writes through /api/audit. When M2M OAuth
+        # is provisioned, also mint a separate service-principal bearer for
+        # the non-admin smoke step below.
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
@@ -268,20 +267,23 @@ jobs:
           DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
         run: |
           set -euo pipefail
+          NON_ADMIN_BEARER=""
           if [ -n "${DATABRICKS_CLIENT_ID:-}" ] && [ -n "${DATABRICKS_CLIENT_SECRET:-}" ]; then
-            # Token is short-lived (~1h) but a full Playwright run is
-            # 5-10 min, so a single mint per job is enough. Redirect the
-            # helper's stdout (the token itself) into a variable; stderr
-            # lines go to the Actions log for operator triage.
-            BEARER=$(python tools/oauth_m2m_mint.py)
-            echo "::notice::Using M2M OAuth Bearer for deployed Playwright."
-          else
-            if [ -z "${DATABRICKS_TOKEN:-}" ]; then
-              echo "::error::Missing DATABRICKS_TOKEN; cannot authenticate deployed Playwright."
+            NON_ADMIN_BEARER=$(python tools/oauth_m2m_mint.py)
+            echo "::add-mask::$NON_ADMIN_BEARER"
+            echo "MIP_NON_ADMIN_BEARER_TOKEN=$NON_ADMIN_BEARER" >> "$GITHUB_ENV"
+            echo "::notice::Minted M2M OAuth Bearer for non-admin deployed-app smoke."
+          fi
+          if [ -z "${DATABRICKS_TOKEN:-}" ]; then
+            if [ -z "$NON_ADMIN_BEARER" ]; then
+              echo "::error::Missing DATABRICKS_TOKEN and M2M OAuth token; cannot authenticate deployed Playwright."
               exit 1
             fi
+            BEARER="$NON_ADMIN_BEARER"
+            echo "::warning::Using M2M OAuth Bearer for Playwright because workspace PAT is absent; admin audit specs may fail closed."
+          else
             BEARER="$DATABRICKS_TOKEN"
-            echo "::notice::M2M OAuth secrets absent; using workspace PAT Bearer for deployed Playwright."
+            echo "::notice::Using workspace PAT Bearer for deployed Playwright admin audit gates."
           fi
           if [ -z "$BEARER" ]; then
             echo "::error::Bearer token was empty"
@@ -289,6 +291,47 @@ jobs:
           fi
           echo "::add-mask::$BEARER"
           echo "MIP_BEARER_TOKEN=$BEARER" >> "$GITHUB_ENV"
+      - name: Authenticated non-admin smoke (M2M)
+        run: |
+          if [ -z "${MIP_NON_ADMIN_BEARER_TOKEN:-}" ]; then
+            echo "::notice::M2M OAuth secrets absent; non-admin smoke skipped."
+            exit 0
+          fi
+          python - <<'PY'
+          from __future__ import annotations
+
+          import os
+          import urllib.error
+          import urllib.request
+
+          app_url = os.environ["MIP_APP_URL"].rstrip("/")
+          token = os.environ["MIP_NON_ADMIN_BEARER_TOKEN"]
+
+          def status(path: str) -> int:
+              req = urllib.request.Request(
+                  app_url + path,
+                  headers={"Authorization": f"Bearer {token}"},
+              )
+              try:
+                  with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310
+                      return int(resp.status)
+              except urllib.error.HTTPError as exc:
+                  return int(exc.code)
+
+          checks = {
+              "/api/leads?limit=1": 200,
+              "/api/audit/events?limit=1": 403,
+              "/api/admin/rules": 403,
+          }
+          failed = []
+          for path, expected in checks.items():
+              actual = status(path)
+              print(f"{path} -> {actual}")
+              if actual != expected:
+                  failed.append(f"{path}: expected {expected}, got {actual}")
+          if failed:
+              raise SystemExit("; ".join(failed))
+          PY
       - name: Genie semantic eval scorecard (deployed app)
         run: python tools/genie_eval.py --base "$MIP_APP_URL" --token "$MIP_BEARER_TOKEN" --timeout 120
       - name: Run real-UC Playwright specs

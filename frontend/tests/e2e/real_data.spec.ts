@@ -76,6 +76,14 @@ type BorrowerDossier = LeadRow & {
   evidence_events?: EvidenceEventRow[];
 };
 
+type AuditRow = {
+  event_id?: string;
+  entity_id?: string;
+  action?: string;
+  evidence_ids?: string[];
+  payload_json?: { borrower_id?: string };
+};
+
 type MapDrillTarget = {
   state: string;
   stateName: string;
@@ -101,6 +109,16 @@ async function fetchBorrower(request: APIRequestContext, borrowerId: string): Pr
   });
   expect(resp.status(), `GET /api/borrowers/${borrowerId} returned non-200`).toBe(200);
   return (await resp.json()) as BorrowerDossier;
+}
+
+async function fetchAuditEvents(request: APIRequestContext, limit = 100): Promise<AuditRow[]> {
+  const resp = await request.get(`${API_URL}/api/audit/events?limit=${limit}`, {
+    headers: AUTH_HEADERS,
+  });
+  expect(resp.status(), 'GET /api/audit/events returned non-200; this deployed check requires an admin bearer').toBe(200);
+  const payload = await resp.json();
+  expect(Array.isArray(payload), 'GET /api/audit/events should return an array').toBe(true);
+  return payload as AuditRow[];
 }
 
 async function findBorrowerWithEvidenceProducts(
@@ -640,11 +658,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     expect(leads.length).toBeGreaterThan(0);
     const target = leads[0].borrower_id;
 
-    const before = (await (await request.get(`${API_URL}/api/audit/events?limit=100`)).json()) as Array<{
-      event_id?: string;
-      entity_id?: string;
-      action?: string;
-    }>;
+    const before = await fetchAuditEvents(request, 100);
     const beforeIds = new Set(before.map((e) => e.event_id).filter(Boolean));
 
     await page.goto(`/offer-orchestrator/${target}`);
@@ -670,16 +684,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     await expect
       .poll(
         async () => {
-          const resp = await request.get(
-            `${API_URL}/api/audit/events?limit=100`,
-            { headers: AUTH_HEADERS },
-          );
-          const rows = (await resp.json()) as Array<{
-            event_id?: string;
-            entity_id?: string;
-            action?: string;
-            payload_json?: { borrower_id?: string };
-          }>;
+          const rows = await fetchAuditEvents(request, 100);
           return rows.find(
             (r) =>
               (r.action === 'outreach.approve' ||
@@ -940,14 +945,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
   });
 
   test('lead-queue: inline approval writes selected evidence ids to audit', async ({ page, request }) => {
-    const before = (await (await request.get(`${API_URL}/api/audit/events?limit=100`, {
-      headers: AUTH_HEADERS,
-    })).json()) as Array<{
-      event_id?: string;
-      action?: string;
-      evidence_ids?: string[];
-      payload_json?: { borrower_id?: string };
-    }>;
+    const before = await fetchAuditEvents(request, 100);
     const beforeIds = new Set(before.map((e) => e.event_id).filter(Boolean));
 
     await page.goto('/lead-queue');
@@ -969,15 +967,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     await expect
       .poll(
         async () => {
-          const resp = await request.get(`${API_URL}/api/audit/events?limit=100`, {
-            headers: AUTH_HEADERS,
-          });
-          const rows = (await resp.json()) as Array<{
-            event_id?: string;
-            action?: string;
-            evidence_ids?: string[];
-            payload_json?: { borrower_id?: string };
-          }>;
+          const rows = await fetchAuditEvents(request, 100);
           return rows.find(
             (r) =>
               (r.action === 'outreach.approve' || r.action === 'outreach_approve') &&
@@ -1216,7 +1206,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     await page.goto('/admin-config');
 
     // Unique-to-route: the source-readiness and per-user appearance surfaces.
-    await expect(page.getByText(/Data source readiness/i)).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByText('Data source readiness', { exact: true })).toBeVisible({ timeout: 5_000 });
     const appearanceToggle = page.getByRole('button', { name: /Workspace appearance/i });
     await expect(appearanceToggle).toBeVisible({ timeout: 5_000 });
     await expect(page.getByText(/grant needed|read error/i)).toHaveCount(0);
