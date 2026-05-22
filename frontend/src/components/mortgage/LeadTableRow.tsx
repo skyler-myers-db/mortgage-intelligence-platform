@@ -1,4 +1,4 @@
-import { Fragment, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react';
+import { Fragment, type CSSProperties, type MouseEvent as ReactMouseEvent } from 'react';
 import type { LeadSummary } from '../../types';
 import { DRAWER_SOURCES } from '../../lib/drawerSources';
 import { segmentColor, segmentName } from '../../lib/segmentMetadata';
@@ -54,25 +54,15 @@ export function LeadTableRow({
   onReject,
   onOpenDisposition,
 }: LeadTableRowProps) {
-  const stop = (e: ReactKeyboardEvent | ReactMouseEvent) => e.stopPropagation();
+  const stop = (e: ReactMouseEvent) => e.stopPropagation();
   const toggleRow = () => onToggleRow(lead, isOpen);
-  const handleRowKeyDown = (event: ReactKeyboardEvent<HTMLTableRowElement>) => {
-    if (event.key !== 'Enter' && event.key !== ' ') return;
-    event.preventDefault();
-    toggleRow();
-  };
 
   return (
     <Fragment>
       <tr
         className={isOpen ? 'is-expanded' : ''}
-        role="button"
-        tabIndex={0}
-        aria-expanded={isOpen}
         aria-rowindex={virtualIndex + 2}
-        aria-label={`Toggle preview for lead ${lead.borrower_id}`}
         onClick={toggleRow}
-        onKeyDown={handleRowKeyDown}
       >
         <td className="tbl-cell--select" onClick={stop}>
           <input

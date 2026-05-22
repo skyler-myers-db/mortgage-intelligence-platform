@@ -210,20 +210,25 @@ test.describe('procurement accessibility canaries', () => {
       await skipOnlyWhenLeadQueueIsExplicitlyEmpty(page);
       expect(totalRows, 'Lead Queue keyboard gate requires live rows unless the UI is explicitly empty').toBeGreaterThan(1);
     }
-    const firstRow = page.locator('.lead-table__table tbody > tr[role="button"][aria-rowindex]').first();
+    const firstRow = page.locator('.lead-table__table tbody > tr[aria-rowindex]').first();
     await expect(firstRow).toBeVisible({ timeout: 30_000 });
-    await firstRow.focus();
-    await expect(firstRow).toBeFocused();
-    const initiallyExpanded = (await firstRow.getAttribute('aria-expanded')) === 'true';
-    await firstRow.press('Enter');
-    await expect(firstRow).toHaveAttribute('aria-expanded', initiallyExpanded ? 'false' : 'true');
+    const rowIndex = await firstRow.getAttribute('aria-rowindex');
+    expect(rowIndex, 'data row should keep stable virtual row metadata').toMatch(/^\d+$/);
+
+    const toggle = firstRow.locator('.lead-table__borrower-btn').first();
+    await expect(toggle).toBeVisible();
+    await toggle.focus();
+    await expect(toggle).toBeFocused();
+    const initiallyExpanded = (await toggle.getAttribute('aria-expanded')) === 'true';
+    await toggle.press('Enter');
+    await expect(toggle).toHaveAttribute('aria-expanded', initiallyExpanded ? 'false' : 'true');
     if (initiallyExpanded) {
       await expect(page.locator('.tbl__expand')).toHaveCount(0);
     } else {
       await expect(page.locator('.tbl__expand').first()).toBeVisible();
     }
-    await firstRow.press('Space');
-    await expect(firstRow).toHaveAttribute('aria-expanded', initiallyExpanded ? 'true' : 'false');
+    await toggle.press('Space');
+    await expect(toggle).toHaveAttribute('aria-expanded', initiallyExpanded ? 'true' : 'false');
     if (initiallyExpanded) {
       await expect(page.locator('.tbl__expand').first()).toBeVisible();
     } else {
