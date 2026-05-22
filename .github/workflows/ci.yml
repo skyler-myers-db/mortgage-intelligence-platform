@@ -278,11 +278,21 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
 
       - name: gitleaks (secret scan)
-        # v2 uses GITLEAKS_LICENSE for orgs; public repos don't need it.
-        # The action reads `.gitleaks.toml` automatically if present.
-        uses: zricethezav/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          GITLEAKS_VERSION="8.28.0"
+          mkdir -p "$HOME/.local/bin"
+          GITLEAKS_BIN="$(command -v gitleaks || true)"
+          if [ -z "$GITLEAKS_BIN" ]; then
+            curl -fsSL \
+              "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+              -o /tmp/gitleaks.tar.gz
+            tar -xzf /tmp/gitleaks.tar.gz -C "$HOME/.local/bin" gitleaks
+            chmod +x "$HOME/.local/bin/gitleaks"
+            echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+            GITLEAKS_BIN="$HOME/.local/bin/gitleaks"
+          fi
+          "$GITLEAKS_BIN" detect --source . --config .gitleaks.toml --redact --verbose
 
       - name: Install Python security tools
         run: |
