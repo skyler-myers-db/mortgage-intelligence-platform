@@ -59,6 +59,7 @@ DRILL_BACKEND_PID=""
 EVIDENCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/evidence"
 TS="$(date -u +%Y%m%dT%H%M%SZ)"
 I_REALLY_MEAN_IT=0
+HEALTH_ACTOR_HEADER="X-Forwarded-Email: resilience-drill@databricks.local"
 # Recovery timeout for the warehouse-real / lakebase-real targets: how
 # long to poll for RUNNING/AVAILABLE after the drill restarts the
 # infrastructure. Configurable via --real-recovery-seconds (explicit)
@@ -203,7 +204,7 @@ trap cleanup EXIT INT TERM
 
 probe_health() {
   local base_url="$1"
-  curl -sf --max-time 5 "$base_url/api/health" || true
+  curl -sf --max-time 5 -H "$HEALTH_ACTOR_HEADER" "$base_url/api/health" || true
 }
 
 probe_endpoint() {

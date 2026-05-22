@@ -27,6 +27,10 @@ on:
         description: "Run the real-infra kill drills (stops + restarts warehouse/Lakebase)"
         type: boolean
         default: false
+      run_deep_genie_fuzz:
+        description: "Run the 200-example/family deep Genie fuzz suite"
+        type: boolean
+        default: false
 
 concurrency:
   group: nightly-${{ github.ref }}
@@ -61,10 +65,16 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          npm --prefix frontend ci
       - name: Fail fast if required secrets are missing
         # Catches the "secrets were rotated and nobody updated the repo"
         # class of failure explicitly instead of letting pytest emit a
@@ -85,6 +95,10 @@ jobs:
         run: |
           curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
           databricks --version
+      - name: Prepare bundle sync inputs
+        run: |
+          python tools/render_sql.py --catalog "${MIP_DEFAULT_CATALOG:-mip}"
+          npm --prefix frontend run build
       - name: databricks bundle validate (dev target, real creds)
         # The real validate moved here from PR CI because it unavoidably
         # calls /api/2.0/preview/scim/v2/Me which requires a real token.
@@ -98,15 +112,15 @@ jobs:
           DATABRICKS_AUTH_TYPE: pat
           BUNDLE_VAR_sql_warehouse_id: ${{ secrets.DATABRICKS_WAREHOUSE_ID }}
           BUNDLE_VAR_genie_space_id: ${{ secrets.GENIE_SPACE_ID }}
-          BUNDLE_VAR_lakebase_instance: mip-app-state
         run: |
           {
             echo "[DEFAULT]"
             echo "host  = ${DATABRICKS_HOST}"
             echo "token = ${DATABRICKS_TOKEN}"
+            echo "auth_type = pat"
           } > "$HOME/.databrickscfg"
           chmod 600 "$HOME/.databrickscfg"
-          databricks bundle validate -t dev
+          databricks bundle validate -t dev --profile DEFAULT
       - name: SQL <-> Python parity
         run: pytest -q tests/integration/test_sql_python_parity.py
       - name: Lakeview widgets resolve (dashboards)
@@ -497,7 +511,7 @@ jobs:
     # the coverage assertion. The deep tests share the
     # `_ADVERSARIAL_TEMPLATE_HITS` counter in-process, so a single
     # pytest invocation collects coverage for all three families.
-    if: ${{ github.event_name == 'workflow_dispatch' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_deep_genie_fuzz == true }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
