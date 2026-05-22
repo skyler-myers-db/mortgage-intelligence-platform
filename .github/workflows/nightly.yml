@@ -54,10 +54,8 @@ jobs:
       DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
       DATABRICKS_WAREHOUSE_ID: ${{ secrets.DATABRICKS_WAREHOUSE_ID }}
       GENIE_SPACE_ID: ${{ secrets.GENIE_SPACE_ID }}
-      LAKEBASE_HOST: ${{ secrets.LAKEBASE_HOST }}
-      LAKEBASE_USER: ${{ secrets.LAKEBASE_USER }}
-      LAKEBASE_PASSWORD: ${{ secrets.LAKEBASE_PASSWORD }}
       LAKEBASE_DATABASE: ${{ secrets.LAKEBASE_DATABASE || 'mip_app_state' }}
+      LAKEBASE_INSTANCE_NAME: mip-app-state
       LAKEBASE_INTEGRATION: '1'   # opt-in flag Slice 5 requires
     steps:
       - uses: actions/checkout@v4
@@ -78,11 +76,13 @@ jobs:
       - name: Fail fast if required secrets are missing
         # Catches the "secrets were rotated and nobody updated the repo"
         # class of failure explicitly instead of letting pytest emit a
-        # SKIP that a human has to decode.
+        # SKIP that a human has to decode. Lakebase intentionally uses the
+        # Databricks database credential endpoint below instead of static
+        # LAKEBASE_PASSWORD secrets, matching the deployed app/migrate path.
         run: |
           missing=""
           for v in DATABRICKS_HOST DATABRICKS_TOKEN DATABRICKS_WAREHOUSE_ID \
-                   GENIE_SPACE_ID LAKEBASE_HOST LAKEBASE_USER LAKEBASE_PASSWORD; do
+                   GENIE_SPACE_ID; do
             if [ -z "${!v}" ]; then
               missing="$missing $v"
             fi

@@ -161,6 +161,46 @@ def test_lakebase_pool_closes_connection_after_psycopg_error(
     assert len(created) == 2
 
 
+def test_lakebase_execute_without_params_does_not_bind_empty_dict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sentinel = object()
+    calls: list[tuple[str, object]] = []
+
+    class _Cursor:
+        def __enter__(self) -> _Cursor:
+            return self
+
+        def __exit__(self, *_exc: Any) -> bool:
+            return False
+
+        def execute(self, sql: str, params: object = sentinel) -> None:
+            calls.append((sql, params))
+
+    class _Connection(_FakeConnection):
+        def cursor(self) -> _Cursor:
+            return _Cursor()
+
+    def _connect(_dsn: str, *, row_factory: Any = None) -> _Connection:
+        _ = row_factory
+        return _Connection("c1")
+
+    monkeypatch.setattr(lakebase_mod.psycopg, "connect", _connect)
+    client = LakebaseClient(
+        host="lakebase.local",
+        port=5432,
+        database="mip_app_state",
+        user="mip",
+        password="secret",
+        pool_max_size=0,
+    )
+
+    sql = "DO $$ BEGIN RAISE EXCEPTION 'append-only; % is blocked'; END $$;"
+    client.execute(sql)
+
+    assert calls == [(sql, sentinel)]
+
+
 def test_reset_client_for_tests_closes_cached_client(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

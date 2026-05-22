@@ -367,7 +367,10 @@ class LakebaseClient:
         stmt_hash, start = _emit_start("execute", sql)
         try:
             with self.transaction() as conn, conn.cursor() as cur:
-                cur.execute(sql, params or {})
+                if params is None:
+                    cur.execute(sql)
+                else:
+                    cur.execute(sql, params)
         except psycopg.Error as exc:
             _emit_err("execute", stmt_hash, start, exc)
             raise LakebaseError(f"Lakebase execute failed: {exc}") from exc
@@ -393,7 +396,10 @@ class LakebaseClient:
         stmt_hash, start = _emit_start("fetchone", sql)
         try:
             with self.transaction() as conn, conn.cursor() as cur:
-                cur.execute(sql, params or {})
+                if params is None:
+                    cur.execute(sql)
+                else:
+                    cur.execute(sql, params)
                 row = cur.fetchone()
                 if row is None:
                     _emit_end("fetchone", stmt_hash, start, rows_returned=0)
@@ -422,7 +428,10 @@ class LakebaseClient:
         stmt_hash, start = _emit_start("fetchall", sql)
         try:
             with self.transaction() as conn, conn.cursor() as cur:
-                cur.execute(sql, params or {})
+                if params is None:
+                    cur.execute(sql)
+                else:
+                    cur.execute(sql, params)
                 rows = cur.fetchmany(size=limit)
                 result = [dict(r) for r in rows]
         except psycopg.Error as exc:
