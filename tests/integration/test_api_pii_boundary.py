@@ -26,7 +26,6 @@ from typing import Any
 from fastapi.testclient import TestClient
 
 from backend.main import app
-from backend.schemas.assets import AssetMetadataResponse
 from backend.schemas.analytics import (
     EconomicsAnalyticsResponse,
     ExecutiveAnalyticsResponse,
@@ -34,6 +33,7 @@ from backend.schemas.analytics import (
     SegmentAnalyticsResponse,
     SignalAnalyticsResponse,
 )
+from backend.schemas.assets import AssetMetadataResponse
 from backend.schemas.common import EvidenceEvent
 from backend.schemas.lead import Borrower360, LeadSummary, SegmentSummary
 from backend.schemas.portfolio import PortfolioPreview

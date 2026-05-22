@@ -16,8 +16,8 @@ from backend.schemas.common import EvidenceEvent
 from backend.schemas.lead import Borrower360, LeadSummary
 from backend.schemas.proof import (
     BorrowerProof,
-    ProofFormulaLine,
     ProofEvidenceEvent,
+    ProofFormulaLine,
     ProofOfferBranch,
     ProofReproduceQuery,
     ProofScoreComponent,
