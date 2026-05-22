@@ -437,9 +437,12 @@ example_question_sqls:
             refreshed_at
           FROM mip.gold.borrower_360
           LATERAL VIEW explode(segment_codes) seg AS segment_code
-          WHERE state IS NOT NULL
+          WHERE marketing_eligible = TRUE
+            AND consent_status = 'opt_in'
+            AND state IS NOT NULL
             AND TRIM(state) <> ''
             AND segment_code IN ('itm', 'equity', 'investor', 'retention')
+            AND recommended_offer_code <> 'nurture'
         ),
         segment_geo AS (
           SELECT

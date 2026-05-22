@@ -155,6 +155,9 @@ def test_strategy_example_derives_offer_mix_from_borrower_360() -> None:
     sql_nc = re.sub(r"\s+", " ", sql).lower()
 
     assert "from mip.gold.borrower_360" in sql_nc
+    assert "marketing_eligible = true" in sql_nc
+    assert "consent_status = 'opt_in'" in sql_nc
+    assert "recommended_offer_code <> 'nurture'" in sql_nc
     assert "recommended_offer" in sql_nc
     assert "recommended_offer_code" in sql_nc
     assert "leading_recommended_offer" in sql_nc

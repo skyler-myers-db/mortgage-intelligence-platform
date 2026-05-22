@@ -103,6 +103,7 @@ from backend.services.repositories.databricks_genie_canonical import (  # noqa: 
     _CANONICAL_ITM_TOP_ZIPS_SQL,
     _CANONICAL_MSA_SCORE_SQL,
     _CANONICAL_RETENTION_COMPETITOR_LIEN_LIST_SQL,
+    _CANONICAL_STRATEGY_BOARD_SQL,
     _US_STATE_FILTERS,  # noqa: F401 - compatibility re-export
     _ambiguous_state_code_match_is_contextual,  # noqa: F401 - compatibility re-export
     _canonical_in_the_money_count_scope,  # noqa: F401 - compatibility re-export
@@ -110,6 +111,7 @@ from backend.services.repositories.databricks_genie_canonical import (  # noqa: 
     _canonical_itm_state_scope,  # noqa: F401 - compatibility re-export
     _canonical_itm_zip_scope,  # noqa: F401 - compatibility re-export
     _canonical_msa_score_scope,  # noqa: F401 - compatibility re-export
+    _canonical_strategy_board_scope,  # noqa: F401 - compatibility re-export
     _current_footprint_label,
     _retention_competitor_lien_list_question,  # noqa: F401 - compatibility re-export
     _retention_risk_question,  # noqa: F401 - compatibility re-export

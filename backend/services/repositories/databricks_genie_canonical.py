@@ -74,6 +74,64 @@ ORDER BY cash_out_borrowers DESC, state ASC
 LIMIT 1
 """.strip()
 
+_CANONICAL_STRATEGY_BOARD_SQL = f"""
+WITH exploded_segments AS (
+  SELECT state
+       , segment_code
+       , borrower_id
+       , opportunity_score
+       , recommended_offer_code
+       , recommended_offer
+       , refreshed_at
+  FROM {_BORROWER_360}
+  LATERAL VIEW explode(segment_codes) seg AS segment_code
+  WHERE marketing_eligible = TRUE
+    AND consent_status = 'opt_in'
+    AND state IS NOT NULL
+    AND TRIM(state) <> ''
+    AND segment_code IN ('itm', 'equity', 'investor', 'retention')
+    AND recommended_offer_code <> 'nurture'
+),
+segment_geo AS (
+  SELECT state
+       , segment_code
+       , COUNT(DISTINCT borrower_id) AS marketable_borrowers
+       , CAST(ROUND(AVG(opportunity_score), 1) AS DOUBLE) AS avg_score
+       , MAX(refreshed_at) AS refreshed_at
+  FROM exploded_segments
+  GROUP BY state, segment_code
+),
+offer_mix AS (
+  SELECT state
+       , segment_code
+       , recommended_offer_code
+       , recommended_offer
+       , COUNT(DISTINCT borrower_id) AS offer_borrowers
+       , ROW_NUMBER() OVER (
+           PARTITION BY state, segment_code
+           ORDER BY COUNT(DISTINCT borrower_id) DESC, recommended_offer_code ASC
+         ) AS offer_rank
+  FROM exploded_segments
+  GROUP BY state, segment_code, recommended_offer_code, recommended_offer
+)
+SELECT sg.state
+     , sg.segment_code
+     , sg.marketable_borrowers
+     , sg.avg_score
+     , om.recommended_offer_code AS leading_offer_code
+     , om.recommended_offer AS leading_recommended_offer
+     , om.offer_borrowers AS leading_offer_borrowers
+     , sg.refreshed_at
+FROM segment_geo AS sg
+LEFT JOIN offer_mix AS om
+  ON sg.state = om.state
+ AND sg.segment_code = om.segment_code
+ AND om.offer_rank = 1
+WHERE sg.marketable_borrowers > 0
+ORDER BY sg.avg_score DESC, sg.marketable_borrowers DESC, sg.state ASC, sg.segment_code ASC
+LIMIT 12
+""".strip()
+
 _CANONICAL_TOP_BORROWERS_BY_STATE_SQL = f"""
 SELECT borrower_id
      , display_name
@@ -435,6 +493,20 @@ def _canonical_cash_out_state_scope(question: str) -> bool:
         any(term in q for term in cash_out_terms)
         and "state" in q
         and any(term in q for term in rank_terms)
+    )
+
+
+def _canonical_strategy_board_scope(question: str) -> bool:
+    q = re.sub(r"[^a-z0-9\s]+", " ", question.lower())
+    q = re.sub(r"\s+", " ", q).strip()
+    spend_terms = ("spend", "allocate", "prioritize", "focus", "deploy")
+    touch_terms = ("outreach touch", "outreach touches", "touches", "contacts", "campaign")
+    strategy_terms = ("strategy", "where should", "which state", "which segment")
+    has_touch_count = "10000" in q or "10 000" in q or "10k" in q
+    return (
+        any(term in q for term in spend_terms)
+        and any(term in q for term in touch_terms)
+        and (has_touch_count or any(term in q for term in strategy_terms))
     )
 
 

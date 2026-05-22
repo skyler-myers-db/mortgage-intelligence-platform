@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from backend.services.genie_client import GenieResponse
 from backend.services.repositories.databricks_repo import (
+    _CANONICAL_STRATEGY_BOARD_SQL,
     DatabricksGenieRepository,
     _adapt_genie_response,
+    _canonical_strategy_board_scope,
     _needs_genie_sql_repair,
     _sql_uses_stale_evidence_signal_enum,
 )
@@ -36,6 +38,49 @@ class _SqlClient:
     ) -> list[dict[str, object]]:
         _ = params
         self.executed_sql = sql
+        if "exploded_segments" in sql:
+            return [
+                {
+                    "state": "IL",
+                    "segment_code": "itm",
+                    "marketable_borrowers": 8200,
+                    "avg_score": 91.2,
+                    "leading_offer_code": "refi_plus_heloc",
+                    "leading_recommended_offer": "Refinance + HELOC",
+                    "leading_offer_borrowers": 5100,
+                    "refreshed_at": "2026-05-09T00:00:00Z",
+                },
+                {
+                    "state": "CA",
+                    "segment_code": "equity",
+                    "marketable_borrowers": 7400,
+                    "avg_score": 89.7,
+                    "leading_offer_code": "heloc",
+                    "leading_recommended_offer": "HELOC",
+                    "leading_offer_borrowers": 4600,
+                    "refreshed_at": "2026-05-09T00:00:00Z",
+                },
+                {
+                    "state": "TX",
+                    "segment_code": "investor",
+                    "marketable_borrowers": 4300,
+                    "avg_score": 86.5,
+                    "leading_offer_code": "dscr",
+                    "leading_recommended_offer": "DSCR Review",
+                    "leading_offer_borrowers": 2100,
+                    "refreshed_at": "2026-05-09T00:00:00Z",
+                },
+                {
+                    "state": "FL",
+                    "segment_code": "retention",
+                    "marketable_borrowers": 3900,
+                    "avg_score": 84.8,
+                    "leading_offer_code": "retention",
+                    "leading_recommended_offer": "Retention Review",
+                    "leading_offer_borrowers": 1800,
+                    "refreshed_at": "2026-05-09T00:00:00Z",
+                },
+            ]
         return [
             {
                 "borrower_id": "B-102FL7THC6Q3L",
@@ -66,6 +111,44 @@ class _GenieClient:
         _ = conversation_id
         self.questions.append(question)
         return self.responses.pop(0)
+
+
+def test_genie_strategy_board_uses_canonical_marketable_offer_lanes() -> None:
+    question = (
+        "Where should the configured tenant lender spend its next 10000 "
+        "outreach touches this week, and why?"
+    )
+    result = GenieResponse(
+        answer_text="Use a segment strategy board.",
+        sql_query=None,
+        sql_result_rows=[],
+        trusted_assets=[],
+        conversation_id="conv-strategy",
+        message_id="msg-strategy",
+    )
+
+    assert _canonical_strategy_board_scope(question) is True
+
+    sql = _SqlClient()
+    response = _adapt_genie_response(question, result, sql_client=sql)  # type: ignore[arg-type]
+
+    assert response.source == "trusted_sql"
+    assert response.row_count == 4
+    assert response.sql_query == _CANONICAL_STRATEGY_BOARD_SQL
+    assert sql.executed_sql == response.sql_query
+    assert response.trusted_assets == [BORROWER_360]
+    assert response.proof is not None
+    assert response.proof.trusted is True
+    assert response.visualization is not None
+    assert response.visualization.kind == "strategy_board"
+    answer_lc = response.answer.lower()
+    assert "state" in answer_lc
+    assert "segment" in answer_lc
+    assert "offer" in answer_lc
+    assert "marketing_eligible = TRUE" in (response.sql_query or "")
+    assert "consent_status = 'opt_in'" in (response.sql_query or "")
+    assert "recommended_offer_code <> 'nurture'" in (response.sql_query or "")
+    assert response.table_rows and len(response.table_rows) >= 4
 
 
 def test_genie_repairs_impossible_current_customer_competitor_lien_retention_query() -> None:
