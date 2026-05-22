@@ -287,7 +287,11 @@ def test_nightly_runs_standard_genie_fuzz_and_keeps_deep_fuzz_manual() -> None:
     assert "pytest -q tests/integration/test_genie_fuzz.py -m integration" in text
     assert "MIP_GENIE_FUZZ_EXAMPLES: '15'" in text
     assert "genie-fuzz-deep:" in text
-    assert "if: ${{ github.event_name == 'workflow_dispatch' }}" in text
+    assert "run_deep_genie_fuzz:" in text
+    assert (
+        "if: ${{ github.event_name == 'workflow_dispatch' && "
+        "inputs.run_deep_genie_fuzz == true }}"
+    ) in text
     assert "pytest -m genie_fuzz_deep tests/integration/test_genie_fuzz.py -q" in text
 
 
