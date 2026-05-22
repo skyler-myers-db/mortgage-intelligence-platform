@@ -266,6 +266,7 @@ jobs:
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
           DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
           DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
+          ADMIN_BEARER: ${{ secrets.MIP_ADMIN_BEARER_TOKEN }}
         run: |
           set -euo pipefail
           missing=""
@@ -284,9 +285,14 @@ jobs:
             exit 1
           fi
           echo "::add-mask::$BEARER"
-          echo "::add-mask::$DATABRICKS_TOKEN"
+          if [ -n "${ADMIN_BEARER:-}" ]; then
+            echo "::add-mask::$ADMIN_BEARER"
+            echo "MIP_ADMIN_BEARER_TOKEN=$ADMIN_BEARER" >> "$GITHUB_ENV"
+            echo "::notice::Using explicit app-admin Bearer for the bounded degraded-banner drill."
+          else
+            echo "::notice::MIP_ADMIN_BEARER_TOKEN is not set; the bounded admin degraded-banner Playwright case will skip."
+          fi
           {
-            echo "MIP_ADMIN_BEARER_TOKEN=$DATABRICKS_TOKEN"
             echo "MIP_NON_ADMIN_BEARER_TOKEN=$BEARER"
             echo "MIP_BEARER_TOKEN=$BEARER"
           } >> "$GITHUB_ENV"

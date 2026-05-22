@@ -33,7 +33,7 @@ var.
 | Secret | What it is | How to obtain |
 |---|---|---|
 | `DATABRICKS_HOST` | Workspace URL (e.g. `https://<id>.cloud.databricks.com`). | Databricks UI → workspace URL in browser address bar. |
-| `DATABRICKS_TOKEN` | Personal Access Token with permissions to read `mip.*`, run statements on the dev warehouse, and call admin-gated app drill endpoints. | Databricks UI → User Settings → Developer → Access Tokens → Generate new token. Rotate every 90 days (see `docs/runbook.md` §5). |
+| `DATABRICKS_TOKEN` | Personal Access Token with permissions to read `mip.*` and run statements on the dev warehouse. It is not treated as an app-admin token. | Databricks UI → User Settings → Developer → Access Tokens → Generate new token. Rotate every 90 days (see `docs/runbook.md` §5). |
 | `DATABRICKS_WAREHOUSE_ID` | ID of the dev serverless SQL warehouse. Same value `databricks bundle validate` resolves from `databricks.yml`. | Databricks UI → SQL Warehouses → click the warehouse → copy from URL or Connection Details. |
 | `GENIE_SPACE_ID` | Mortgage Lead Intelligence Genie Space ID. | Databricks UI → Genie → open the space → copy ID from URL. Also tracked at `genie/space_id.txt`. |
 | `DATABRICKS_CLIENT_ID` | Non-admin service-principal OAuth client ID used by deployed Playwright and the non-admin RBAC smoke. | Provision with `tools/databricks/provision_m2m_oauth.py` or `docs/security/m2m-oauth-setup.md`. |
@@ -44,6 +44,7 @@ var.
 | Secret | What it enables | Notes |
 |---|---|---|
 | `MIP_APP_URL` | Explicit deployed Databricks App URL for live Playwright and real-infra drill jobs. | If unset for Playwright, the workflow resolves `mip-app` through the Databricks Apps API. The opt-in real-infra drill still requires this secret. |
+| `MIP_ADMIN_BEARER_TOKEN` | Enables the bounded `/api/admin/force-degraded` Playwright proof in GitHub Actions. | Must belong to an app-admin principal. If unset, that one admin-drill browser case skips; the drill must be run from an authenticated admin workstation before release signoff. |
 | `LAKEBASE_DATABASE` | Lakebase database the `mip_app` schema lives in. | Defaults to `mip_app_state`; the app and live tests use workspace-identity Lakebase credentials, not static Lakebase password secrets. |
 
 ## No-secret jobs (run on every PR)
