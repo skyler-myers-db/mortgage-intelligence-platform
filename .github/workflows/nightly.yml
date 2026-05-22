@@ -329,6 +329,11 @@ jobs:
               raise SystemExit("; ".join(failed))
           PY
       - name: Genie semantic eval scorecard (deployed app)
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+          DATABRICKS_WAREHOUSE_ID: ${{ secrets.DATABRICKS_WAREHOUSE_ID }}
+          GENIE_SPACE_ID: ${{ secrets.GENIE_SPACE_ID }}
         run: python tools/genie_eval.py --base "$MIP_APP_URL" --token "$MIP_BEARER_TOKEN" --timeout 120
       - name: Run real-UC Playwright specs
         # Config + specs both live under `frontend/` so `@playwright/test`
