@@ -1,4 +1,5 @@
 fastapi==0.136.1
+starlette==1.0.1  # security floor for PYSEC-2026-161; FastAPI only sets a lower bound
 uvicorn[standard]==0.47.0
 pydantic==2.10.4
 pydantic-settings==2.7.1

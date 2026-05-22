@@ -175,8 +175,10 @@ six==1.17.0
     # via python-dateutil
 sortedcontainers==2.4.0
     # via hypothesis
-starlette==1.0.0
-    # via fastapi
+starlette==1.0.1
+    # via
+    #   -r requirements.in
+    #   fastapi
 thrift==0.22.0
     # via databricks-sql-connector
 typing-extensions==4.15.0
