@@ -197,7 +197,7 @@ def test_live_geo_api_matches_independent_sql_for_multisegment_filters(
         wid,
         f"""
         WITH filtered AS (
-          SELECT b.state, b.county_fips_5, b.zip
+          SELECT b.state, b.county_fips_5, b.zip, b.marketing_eligible
           FROM mip.gold.borrower_360 AS b
           WHERE {segment_clause}
             AND b.state IS NOT NULL
@@ -223,15 +223,20 @@ def test_live_geo_api_matches_independent_sql_for_multisegment_filters(
           (SELECT state FROM top_state) AS state,
           (SELECT borrowers FROM top_state) AS state_borrowers,
           (SELECT county_fips_5 FROM top_county) AS county_fips_5,
-          (SELECT borrowers FROM top_county) AS county_borrowers
+          (SELECT borrowers FROM top_county) AS county_borrowers,
+          (SELECT COUNT(*)
+           FROM filtered
+           WHERE state = (SELECT state FROM top_state)
+             AND marketing_eligible = TRUE) AS eligible_state_borrowers
         """,
     )
 
     assert rows, "multisegment fixture query returned no rows"
-    state, state_count, county_fips, county_count = rows[0]
+    state, state_count, county_fips, county_count, eligible_state_count = rows[0]
     assert state and county_fips
     assert int(state_count) > 0
     assert int(county_count) > 0
+    assert int(eligible_state_count) >= 0
 
     qs = "segment_codes=itm,investor,equity,retention&segment_mode=all"
     with live_api_client(warehouse) as client:
@@ -259,8 +264,10 @@ def test_live_geo_api_matches_independent_sql_for_multisegment_filters(
         )
         assert leads_resp.status_code == 200, leads_resp.text
         leads = leads_resp.json()
-        assert len(leads) == min(int(state_count), 5000)
-        assert {row["state"] for row in leads} == {state}
+        # `/api/leads` is an actionable queue and therefore defaults to
+        # marketing-eligible rows only; geo rollups remain analytic counts.
+        assert len(leads) == min(int(eligible_state_count), 5000)
+        assert all(row["state"] == state for row in leads)
         assert all(set(SEGMENT_ALL).issubset(set(row["segment_codes"])) for row in leads)
 
 
@@ -312,6 +319,7 @@ def test_live_portfolio_preview_and_lead_queue_match_independent_sql(
         FROM mip.gold.borrower_360
         WHERE is_owner_occupied = TRUE
           AND equity_pct >= 25
+          AND marketing_eligible = TRUE
         """,
     )
 
