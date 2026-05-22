@@ -20,7 +20,7 @@
   },
   "dependencies": {
     "@fontsource/geist": "5.2.8",
-    "@fontsource/geist-mono": "5.2.7",
+    "@fontsource/geist-mono": "5.2.8",
     "@tanstack/react-query": "5.100.10",
     "@tanstack/react-virtual": "3.13.24",
     "react": "19.2.5",
