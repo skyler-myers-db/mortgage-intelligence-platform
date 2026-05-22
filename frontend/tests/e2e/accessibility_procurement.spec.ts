@@ -217,9 +217,18 @@ test.describe('procurement accessibility canaries', () => {
     const initiallyExpanded = (await firstRow.getAttribute('aria-expanded')) === 'true';
     await firstRow.press('Enter');
     await expect(firstRow).toHaveAttribute('aria-expanded', initiallyExpanded ? 'false' : 'true');
+    if (initiallyExpanded) {
+      await expect(page.locator('.tbl__expand')).toHaveCount(0);
+    } else {
+      await expect(page.locator('.tbl__expand').first()).toBeVisible();
+    }
     await firstRow.press('Space');
     await expect(firstRow).toHaveAttribute('aria-expanded', initiallyExpanded ? 'true' : 'false');
-    await expect(page.locator('.tbl__expand').first()).toBeVisible();
+    if (initiallyExpanded) {
+      await expect(page.locator('.tbl__expand').first()).toBeVisible();
+    } else {
+      await expect(page.locator('.tbl__expand')).toHaveCount(0);
+    }
   });
 
   test('prefers-reduced-motion collapses app transitions and animations @a11y', async ({ page }) => {
