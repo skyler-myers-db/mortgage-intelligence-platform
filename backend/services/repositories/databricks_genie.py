@@ -38,7 +38,6 @@ from backend.services.repositories.databricks_genie_canonical import (
     _CANONICAL_ITM_TOP_ZIPS_SQL,
     _CANONICAL_MSA_SCORE_SQL,
     _CANONICAL_RETENTION_COMPETITOR_LIEN_LIST_SQL,
-    _CANONICAL_STRATEGY_BOARD_SQL,
     _CANONICAL_TOP_BORROWERS_BY_STATE_SQL,
     _canonical_cash_out_state_scope,
     _canonical_heloc_zip_scope,
@@ -46,7 +45,6 @@ from backend.services.repositories.databricks_genie_canonical import (
     _canonical_itm_city_scope,
     _canonical_itm_zip_scope,
     _canonical_msa_score_scope,
-    _canonical_strategy_board_scope,
     _canonical_top_borrowers_state_scope,
     _current_footprint_label,
     _retention_competitor_lien_list_question,
@@ -72,6 +70,9 @@ from backend.services.repositories.databricks_genie_policy_helpers import (
     _redact_genie_rows,
     _sql_uses_impossible_retention_conjunction,  # noqa: F401 - compatibility re-export
     _trusted_sql_repair_prompt,
+)
+from backend.services.repositories.databricks_genie_strategy import (
+    _canonical_strategy_board_answer,
 )
 from backend.services.repositories.databricks_genie_trust import (
     _TRUSTED_GENIE_ASSETS,  # noqa: F401 - compatibility re-export
@@ -108,24 +109,12 @@ from backend.services.resilience import DependencyDownError
 
 
 class DatabricksGenieRepository:
-    """Real Genie, then an honest "warming up" degraded message.
+    """Real Genie, then an honest warming-up message when the breaker opens.
 
-    Control flow:
-
-    1. If the ``genie`` circuit breaker is OPEN, return the honest
-       "Genie is warming up — try again in a few seconds" message.
-    2. Otherwise call ``ResilientGenieClient.ask(question)``. On
-       success, adapt ``GenieResponse`` into the ``GenieMessageResponse``
-       wire contract (``source="genie"``).
-    3. If the call fails with ``DependencyDownError`` (breaker just
-       opened on us), return the warming-up message — same path as (1).
-    4. On any other exception, re-raise so the router's 503 translation
-       engages — we never swallow to a mock answer.
-
-    No path ever fabricates data. When Genie is unreachable we show the
-    user a single honest message and let them retry; no answer body,
-    metric, table row, or recommendation is generated without live Genie
-    or trusted SQL proof.
+    No path fabricates data. Unavailable Genie returns a degraded message only;
+    data-bearing answers require live Genie output or executed trusted SQL proof.
+    Unexpected Genie failures re-raise so the router returns the dependency-down
+    response rather than silently replaying analytic content.
     """
 
     _WARMING_MESSAGE = (
@@ -406,69 +395,14 @@ def _canonical_genie_answer(
     lead_population_asset = qualify("gold", "lead_population")
     evidence_asset = qualify("gold", "evidence_events")
     lender_name = (settings.mip_lender_name or "configured lender").strip() or "configured lender"
-    if _canonical_strategy_board_scope(question):
-        try:
-            rows = sql_client.execute(_CANONICAL_STRATEGY_BOARD_SQL)
-        except DatabricksSqlError as exc:
-            _emit_genie_warning("canonical_genie_strategy_board_failed", exc=exc)
-            return None
-        rows = _redact_genie_rows(rows) or []
-        trusted_assets = [borrower_asset]
-        question_hash = _genie_question_hash(question)
-        proof = _build_genie_proof(
-            sql_query=_CANONICAL_STRATEGY_BOARD_SQL,
-            trusted_assets=trusted_assets,
-            rows=rows,
-            question=question,
-            conversation_id=result.conversation_id,
-            message_id=result.message_id,
-            elapsed_ms=result.elapsed_ms,
-        )
-        visualization = _plan_genie_visualization(question, rows)
-        actions = _suggest_genie_actions(
-            question=question,
-            rows=rows,
-            trusted_assets=trusted_assets,
-            visualization=visualization,
-            conversation_id=result.conversation_id,
-            message_id=result.message_id,
-            question_hash=question_hash,
-            sql_query=_CANONICAL_STRATEGY_BOARD_SQL,
-            source="trusted_sql",
-        )
-        if rows:
-            top = rows[0]
-            answer = (
-                f"Use {borrower_asset} to prioritize the next 10,000 outreach touches "
-                "by state, segment, and offer. "
-                f"The top lane is state {top.get('state')}, segment "
-                f"{top.get('segment_code')}, with "
-                f"{int(top.get('marketable_borrowers') or 0):,} marketable borrowers "
-                f"and leading offer {top.get('leading_recommended_offer') or top.get('leading_offer_code')}. "
-                "The table ranks the remaining state-segment-offer lanes by average "
-                "opportunity score and marketable borrower volume."
-            )
-        else:
-            answer = (
-                "The trusted borrower table returned no opt-in, marketing-eligible "
-                "state-segment-offer lanes for the current refreshed data coverage."
-            )
-        return GenieMessageResponse(
-            conversation_id=result.conversation_id,
-            message_id=result.message_id,
-            elapsed_ms=result.elapsed_ms,
-            question_hash=question_hash,
-            question=question,
-            answer=answer,
-            source="trusted_sql",
-            trusted_assets=trusted_assets,
-            sql_query=_CANONICAL_STRATEGY_BOARD_SQL,
-            row_count=len(rows),
-            proof=proof,
-            visualization=visualization,
-            actions=actions,
-            table_rows=rows,
-        )
+    strategy_answer = _canonical_strategy_board_answer(
+        question=question,
+        result=result,
+        sql_client=sql_client,
+        borrower_asset=borrower_asset,
+    )
+    if strategy_answer is not None:
+        return strategy_answer
     top_borrower_state_scope = _canonical_top_borrowers_state_scope(question)
     if top_borrower_state_scope is not None:
         state_name, state_code = top_borrower_state_scope
