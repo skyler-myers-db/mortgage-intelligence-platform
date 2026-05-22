@@ -38,7 +38,7 @@ interface LeadTableRowProps {
 
 export function LeadTableRow({
   lead,
-  virtualIndex: _virtualIndex,
+  virtualIndex,
   isOpen,
   approval,
   isSelected,
@@ -55,12 +55,24 @@ export function LeadTableRow({
   onOpenDisposition,
 }: LeadTableRowProps) {
   const stop = (e: ReactKeyboardEvent | ReactMouseEvent) => e.stopPropagation();
+  const toggleRow = () => onToggleRow(lead, isOpen);
+  const handleRowKeyDown = (event: ReactKeyboardEvent<HTMLTableRowElement>) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    event.preventDefault();
+    toggleRow();
+  };
 
   return (
     <Fragment>
       <tr
         className={isOpen ? 'is-expanded' : ''}
-        onClick={() => onToggleRow(lead, isOpen)}
+        role="button"
+        tabIndex={0}
+        aria-expanded={isOpen}
+        aria-rowindex={virtualIndex + 2}
+        aria-label={`Toggle preview for lead ${lead.borrower_id}`}
+        onClick={toggleRow}
+        onKeyDown={handleRowKeyDown}
       >
         <td className="tbl-cell--select" onClick={stop}>
           <input
