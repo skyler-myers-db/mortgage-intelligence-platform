@@ -1,19 +1,22 @@
-# Cotality preview — zero-to-hero walkthrough
+# Cotality preview — archived zero-to-hero walkthrough
 
-> Sample of the DAIS demo. 45–60 minutes. Mixed technical + business audience.
-> Prepared 2026-05-18 against deployment `01f1532b4e1314e7964cb093feade193`.
-> Every screen below has been live-walked tonight; every number quoted is what
-> the live app showed during that walk.
+> **Archived rehearsal snapshot — do not use as the live demo teleprompter.**
+> This file was prepared 2026-05-18 against deployment
+> `01f1532b4e1314e7964cb093feade193`. The fixed borrower IDs, counts, rates,
+> scores, and Genie answers below are historical evidence from that rehearsal
+> only. For any customer/demo conversation, use `docs/module0-talk-track.md`,
+> `docs/module0-rehearsal-checklist.md`, and the current release-readiness
+> artifact instead. Re-read live app values immediately before presenting.
 
 ---
 
-## How to read this doc
+## How to read this archived doc
 
-The doc is structured so you can use it three ways:
+This doc is retained for historical context only:
 
-1. **Cover-to-cover the night before** — learn the product end to end.
-2. **Skim before the meeting** — read the "Cheat sheet" + each scenario's "what you do" lines.
-3. **In the room** — keep it open as a teleprompter; the bold "say this" lines are speakable verbatim, the italic lines are stage directions.
+1. **Product narrative reference** — useful for understanding the rehearsal flow.
+2. **Historical evidence review** — useful for seeing what the app showed on May 18, 2026.
+3. **Not a source for current figures** — do not quote any number, borrower metric, deployment ID, or Genie answer from this file unless it has just been revalidated live.
 
 If the Cotality audience asks a question outside your comfort zone, the "If they ask…" callouts at the end of each scenario give you the answer.
 
@@ -78,17 +81,17 @@ When a Cotality skeptic asks "is this just a marketing dashboard?" the answer is
 
 ---
 
-## Part 2 — The cheat sheet (one page)
+## Part 2 — Historical cheat sheet (do not quote without live refresh)
 
 | | |
 |---|---|
-| **Demo URL** | https://mip-app-2543889327043640.aws.databricksapps.com |
-| **Hero borrower** | `B-102FL7THC6Q3L` — Calumet City, IL · score **88** · Refinance + HELOC · 91% equity · 391 bps spread · 346 related properties via Owner Link · Competitor lien (currently with a competitor, ripe for capture) |
-| **Backup borrower** | `B-1AT5CXZZ1NI2N` — North Lauderdale, FL · same segments · in case the first one's been touched |
-| **Headline KPIs (Home)** | Marketable population: **5,156,184** · High-intent leads: **135,520** · Top-tier: **4,351** · Offers recommended: **4,472,667** |
-| **Genie suggested prompt** | "Break down in-the-money borrowers by current coverage state; which state leads?" → answer is **IL: 67,858** leading, FL/TX/CA/WA/CO follow |
-| **Top-tier source chip** | `mip.gold.lead_scores` |
-| **Hero numbers to drop** | 5.16M marketable; 135K high-intent; 4,351 top-tier; **91% equity, +391 bps**; IL leads at 67,858 |
+| **Demo URL** | Historical target: https://mip-app-2543889327043640.aws.databricksapps.com |
+| **Hero borrower** | Historical snapshot: `B-102FL7THC6Q3L` — Calumet City, IL · score **88** · Refinance + HELOC · 91% equity · 391 bps spread · 346 related properties via Owner Link · Competitor lien |
+| **Backup borrower** | Historical snapshot: `B-1AT5CXZZ1NI2N` — North Lauderdale, FL · same segments |
+| **Headline KPIs (Home)** | Historical snapshot: Marketable population: **5,156,184** · High-intent leads: **135,520** · Top-tier: **4,351** · Offers recommended: **4,472,667** |
+| **Genie suggested prompt** | Historical snapshot: "Break down in-the-money borrowers by current coverage state; which state leads?" → answer was **IL: 67,858** leading, FL/TX/CA/WA/CO follow |
+| **Top-tier source chip** | Historical snapshot: `mip.gold.lead_scores` |
+| **Hero numbers to drop** | **Do not drop these numbers unless refreshed live.** |
 
 ---
 
@@ -131,6 +134,11 @@ You don't need to draw this. You just need to know that when someone says "how d
 ---
 
 ## Part 4 — The four scenarios (in demo order)
+
+> **Current-use warning:** every count, borrower metric, rate, score, and Genie
+> answer in the scenarios below is a 2026-05-18 rehearsal value. Before any live
+> presentation, replace these figures with the current app values or speak from
+> `docs/module0-talk-track.md` instead.
 
 The scenarios are designed to take ~10 minutes each, with 5 minutes for setup/intro and 5 minutes at the end. **Do not skip Scenario 1** — it's the entire data-estate story and Cotality cares about this more than anyone else.
 
@@ -401,10 +409,10 @@ You have three closing options depending on the room's energy.
 
 - **Don't say "we have MLS data"** — the segment card explicitly says AWAITING FEED. The audience will read it.
 - **Don't say "the lender data is real"** — it's `demo synthetic`. The badge is visible on every first-party row.
-- **Don't say "every borrower in the country"** — the universe is what Cotality's coverage refreshes today (5.16M marketable rows under default filters).
+- **Don't say "every borrower in the country"** — the universe is whatever Cotality's current live coverage refresh returns under the active default filters.
 - **Don't read borrower IDs out loud as if they're real names** — they're masked. "Borrower B-102…" or "the Calumet City borrower" is the right register.
 - **Don't click Approve** in the Offer Orchestrator on a live customer-visible deployment. It writes a real audit row. Click Reject if you want to demo the path; clicking Approve in front of customers without it being expected is a small but real governance leak.
-- **Don't quote stale numbers** — every figure in this doc is what the live app showed tonight. If the demo is more than 48 hours later, do a 30-second walk and refresh the numbers in your head.
+- **Don't quote stale numbers from this archived file** — every figure here is a 2026-05-18 rehearsal value. Use the current live app, `docs/module0-talk-track.md`, and the latest release-readiness artifact for current claims.
 
 ---
 
