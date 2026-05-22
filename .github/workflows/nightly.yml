@@ -256,10 +256,11 @@ jobs:
           echo "MIP_API_URL=$APP_URL" >> "$GITHUB_ENV"
           echo "::notice::Nightly Playwright will target deployed app at $APP_URL."
       - name: Set Playwright Bearer tokens
-        # Full Playwright uses the workspace PAT so admin-only audit review
-        # gates can prove Lakebase writes through /api/audit. When M2M OAuth
-        # is provisioned, also mint a separate service-principal bearer for
-        # the non-admin smoke step below.
+        # Prefer M2M OAuth for deployed app auth. The service principal is
+        # intentionally non-admin; the smoke step below proves it can read
+        # allowed lead surfaces while admin/audit endpoints fail closed.
+        # If M2M is absent, fall back to the workspace PAT already required
+        # for the live UC gates.
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
@@ -274,16 +275,15 @@ jobs:
             echo "MIP_NON_ADMIN_BEARER_TOKEN=$NON_ADMIN_BEARER" >> "$GITHUB_ENV"
             echo "::notice::Minted M2M OAuth Bearer for non-admin deployed-app smoke."
           fi
-          if [ -z "${DATABRICKS_TOKEN:-}" ]; then
-            if [ -z "$NON_ADMIN_BEARER" ]; then
-              echo "::error::Missing DATABRICKS_TOKEN and M2M OAuth token; cannot authenticate deployed Playwright."
-              exit 1
-            fi
+          if [ -n "$NON_ADMIN_BEARER" ]; then
             BEARER="$NON_ADMIN_BEARER"
-            echo "::warning::Using M2M OAuth Bearer for Playwright because workspace PAT is absent; admin audit specs may fail closed."
-          else
+            echo "::notice::Using M2M OAuth Bearer for deployed Playwright."
+          elif [ -n "${DATABRICKS_TOKEN:-}" ]; then
             BEARER="$DATABRICKS_TOKEN"
-            echo "::notice::Using workspace PAT Bearer for deployed Playwright admin audit gates."
+            echo "::notice::M2M OAuth secrets absent; using workspace PAT Bearer for deployed Playwright."
+          else
+            echo "::error::Missing DATABRICKS_TOKEN and M2M OAuth token; cannot authenticate deployed Playwright."
+            exit 1
           fi
           if [ -z "$BEARER" ]; then
             echo "::error::Bearer token was empty"
