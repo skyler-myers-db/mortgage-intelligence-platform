@@ -28,9 +28,9 @@ Grading:
 
 No state is mutated; conversations auto-expire on the workspace side.
 
-At 4s pacing the 50-prompt suite runs in ~3.5 minutes of wall-clock
+At 5s pacing the 50-prompt suite runs in ~4.2 minutes of wall-clock
 Genie time plus cold-start; the 65s 429 backoff only fires if the
-warehouse has been hammered by a parallel run.
+warehouse has been hammered by another run.
 """
 from __future__ import annotations
 
@@ -707,11 +707,12 @@ def live_genie_client() -> GenieClient:
 
 # Genie API rate limits (observed Apr 2026): ~15 requests per minute per
 # space; beyond that `HTTP 429 REQUEST_LIMIT_EXCEEDED: retry after 60s`.
-# 50 prompts at 4s pacing -> 200s of pacing + ~5s/call backend time
-# ~= ~7.5 min total, well under the 30-min nightly job budget. The 429
-# backoff clears a minute of requests in one hop.
-_GENIE_PROMPT_PACING_S: float = 4.0
+# 50 prompts at 5s pacing -> 250s of pacing + ~5s/call backend time
+# ~= ~8.5 min total, well under the 30-min nightly job budget. A repeated
+# 429 still fails once the published cooldown has been honored twice.
+_GENIE_PROMPT_PACING_S: float = 5.0
 _GENIE_429_RETRY_WAIT_S: float = 65.0
+_GENIE_429_MAX_ATTEMPTS: int = 3
 
 
 @pytest.fixture(autouse=True)
@@ -743,29 +744,41 @@ def _ask_with_backoff(
       ``EXECUTING_QUERY`` — transient query-worker slowness. One retry is
       allowed so nightly CI does not fail on a single backend stall.
 
-    Any GenieClientError outside those two categories, OR a second
-    failure on the same question, re-raises so the test surfaces the
+    Any GenieClientError outside those categories, OR repeated failure
+    after the allowed retry window, re-raises so the test surfaces the
     real regression.
     """
     import time as _time
-    try:
-        return client.ask(question)
-    except GenieClientError as exc:
-        msg = str(exc)
-        status = getattr(exc, "status_code", None)
-        if status == 429:
-            _time.sleep(_GENIE_429_RETRY_WAIT_S)
-        elif "terminated in state 'FAILED'" in msg or "state='FAILED'" in msg:
-            # Transient per-message failure; short pause and retry.
-            _time.sleep(8.0)
-        elif "polling timed out" in msg and (
-            "EXECUTING_QUERY" in msg or getattr(exc, "state", None) == "EXECUTING_QUERY"
-        ):
-            # Transient query-worker stall; retry once from a new conversation.
-            _time.sleep(8.0)
-        else:
+    attempt = 1
+    transient_retried = False
+    while True:
+        try:
+            return client.ask(question)
+        except GenieClientError as exc:
+            msg = str(exc)
+            status = getattr(exc, "status_code", None)
+            if status == 429 and attempt < _GENIE_429_MAX_ATTEMPTS:
+                attempt += 1
+                _time.sleep(_GENIE_429_RETRY_WAIT_S)
+                continue
+            if (
+                not transient_retried
+                and (
+                    "terminated in state 'FAILED'" in msg
+                    or "state='FAILED'" in msg
+                    or (
+                        "polling timed out" in msg
+                        and (
+                            "EXECUTING_QUERY" in msg
+                            or getattr(exc, "state", None) == "EXECUTING_QUERY"
+                        )
+                    )
+                )
+            ):
+                transient_retried = True
+                _time.sleep(8.0)
+                continue
             raise
-        return client.ask(question)
 
 
 # ---------------------------------------------------------------------------

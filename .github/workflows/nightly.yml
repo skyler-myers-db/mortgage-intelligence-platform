@@ -392,9 +392,11 @@ jobs:
   genie-fuzz-standard:
     name: Genie standard fuzz (scheduled)
     # Standard 15-example/family fuzz is part of the scheduled nightly
-    # safety signal. It runs in its own job so the broad live parity gate
-    # keeps its timeout budget. The heavier 200-example/family deep fuzz
-    # remains workflow-dispatch only below.
+    # safety signal. It runs after the broad live parity + Playwright
+    # gates so the shared Genie Space is not rate-limited by concurrent
+    # prompt suites. The heavier 200-example/family deep fuzz remains
+    # workflow-dispatch only below.
+    needs: playwright-e2e-live
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -515,6 +517,7 @@ jobs:
 
   genie-fuzz-deep:
     name: Genie deep fuzz (200 examples/family)
+    needs: genie-fuzz-standard
     # Workflow-dispatch only: this burns ~90 min of real Genie quota
     # (3 families × 200 examples × ~5s avg response + 4s pacing). Kept
     # off the standard nightly cron so it never runs unexpectedly and

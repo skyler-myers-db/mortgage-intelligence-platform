@@ -43,14 +43,14 @@ retained, and a ``latest.jsonl`` symlink is maintained so an operator
 can reproduce the failure set without hunting for the newest
 timestamp.
 
-Same rate-limit posture as the curated suite: 4s pacing between
-calls, 65s backoff-and-retry on HTTP 429, one retry on transient
-``state='FAILED'``.
+Same rate-limit posture as the curated suite: 5s pacing between
+calls, repeated 65s backoff-and-retry on HTTP 429, one retry on
+transient ``state='FAILED'``.
 
 Two execution modes share this file:
 
 - **Default (``pytest -m integration``).** 15 examples per family. At
-  4s pacing × ~5s per Genie call, one family ≈ 2.5 minutes, total
+  5s pacing × ~5s per Genie call, one family ≈ 2.5 minutes, total
   ≈ 7.5 minutes. This is the nightly gate.
 - **Deep (``pytest -m genie_fuzz_deep``).** 200 examples per family,
   ~30 minutes per family, ~90 minutes total. Workflow-dispatch only
@@ -250,29 +250,38 @@ def live_genie_client() -> GenieClient:
 # ---------------------------------------------------------------------------
 
 
-_GENIE_PROMPT_PACING_S: float = 4.0
+_GENIE_PROMPT_PACING_S: float = 5.0
 _GENIE_429_RETRY_WAIT_S: float = 65.0
+_GENIE_429_MAX_ATTEMPTS: int = 3
 
 
 def _ask_with_backoff(client: GenieClient, question: str) -> GenieResponse:
     """Fire a Genie question, tolerating the two retryable classes.
 
-    Mirrors ``test_genie_regression._ask_with_backoff``: HTTP 429 waits
-    65s and retries once; ``state='FAILED'`` waits 8s and retries once.
-    Any other error or a second failure re-raises.
+    Mirrors ``test_genie_regression._ask_with_backoff``: HTTP 429 honors
+    repeated published 60s windows; ``state='FAILED'`` waits 8s and
+    retries once. Any other error or exhausted retry re-raises.
     """
-    try:
-        return client.ask(question)
-    except GenieClientError as exc:
-        msg = str(exc)
-        status = getattr(exc, "status_code", None)
-        if status == 429:
-            time.sleep(_GENIE_429_RETRY_WAIT_S)
-        elif "terminated in state 'FAILED'" in msg or "state='FAILED'" in msg:
-            time.sleep(8.0)
-        else:
+    attempt = 1
+    transient_retried = False
+    while True:
+        try:
+            return client.ask(question)
+        except GenieClientError as exc:
+            msg = str(exc)
+            status = getattr(exc, "status_code", None)
+            if status == 429 and attempt < _GENIE_429_MAX_ATTEMPTS:
+                attempt += 1
+                time.sleep(_GENIE_429_RETRY_WAIT_S)
+                continue
+            if (
+                not transient_retried
+                and ("terminated in state 'FAILED'" in msg or "state='FAILED'" in msg)
+            ):
+                transient_retried = True
+                time.sleep(8.0)
+                continue
             raise
-        return client.ask(question)
 
 
 # ---------------------------------------------------------------------------
