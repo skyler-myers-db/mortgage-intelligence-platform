@@ -12,5 +12,5 @@ jobs:
       - uses: actions/setup-python@v6
         with: { python-version: '3.11' }
       - run: npm --prefix frontend ci && npm --prefix frontend run build
-      - run: pip install databricks-cli
+      - run: curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
       - run: echo "Run databricks bundle validate/deploy here after configuring workspace secrets."

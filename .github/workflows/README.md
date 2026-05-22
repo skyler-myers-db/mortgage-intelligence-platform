@@ -31,7 +31,7 @@ to abort with a clear `::error::` pointing at the offending var.
 | Secret | What it is | How to obtain |
 |---|---|---|
 | `DATABRICKS_HOST` | Workspace URL (e.g. `https://<id>.cloud.databricks.com`). | Databricks UI → workspace URL in browser address bar. |
-| `DATABRICKS_TOKEN` | Personal Access Token with permissions to read `mip.*` and run statements on the dev warehouse. | Databricks UI → User Settings → Developer → Access Tokens → Generate new token. Rotate every 90 days (see `docs/runbook.md` §5). |
+| `DATABRICKS_TOKEN` | Personal Access Token with permissions to read `mip.*`, run statements on the dev warehouse, and call admin-gated app drill endpoints. | Databricks UI → User Settings → Developer → Access Tokens → Generate new token. Rotate every 90 days (see `docs/runbook.md` §5). |
 | `DATABRICKS_WAREHOUSE_ID` | ID of the dev serverless SQL warehouse. Same value `databricks bundle validate` resolves from `databricks.yml`. | Databricks UI → SQL Warehouses → click the warehouse → copy from URL or Connection Details. |
 | `GENIE_SPACE_ID` | Mortgage Lead Intelligence Genie Space ID. | Databricks UI → Genie → open the space → copy ID from URL. Also tracked at `genie/space_id.txt`. |
 | `DATABRICKS_CLIENT_ID` | Service-principal client ID used by the live Playwright app smoke. | Databricks service principal configured for the dev app workspace. |
@@ -47,7 +47,6 @@ to abort with a clear `::error::` pointing at the offending var.
 | Secret | What it enables | Notes |
 |---|---|---|
 | `MIP_API_URL` | API origin if different from `MIP_APP_URL` (e.g. you run the backend on a different subdomain). | If unset, derived from `MIP_APP_URL` by swapping `:5173`→`:8000`. |
-| `MIP_FORCE_DEGRADED_TOKEN` | Admin token used by the Playwright spec to flip the "force degraded" feature flag and prove the DegradedBanner surfaces on real infra. | Spec's `forcing a 503` test self-skips without this secret; nightly still passes. |
 
 ## No-secret jobs (run on every PR)
 

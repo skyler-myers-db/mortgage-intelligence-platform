@@ -710,19 +710,19 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
   });
 
   test('forcing a 503 surfaces the DegradedBanner within 5s', async ({ page, request }) => {
-    // Preconditions: the nightly workflow sets MIP_FORCE_DEGRADED_TOKEN so
-    // the dev-only admin endpoint can flip the feature flag. We leave the app
-    // in forced-degraded state briefly, assert the banner, then un-flip.
-    const forceToken = process.env.MIP_FORCE_DEGRADED_TOKEN;
+    // Preconditions: the nightly workflow sets MIP_ADMIN_BEARER_TOKEN to an
+    // admin-scoped PAT. We leave the app in forced-degraded state briefly,
+    // assert the banner, then un-flip.
+    const adminBearer = process.env.MIP_ADMIN_BEARER_TOKEN;
     test.skip(
-      !forceToken,
-      'Requires MIP_FORCE_DEGRADED_TOKEN to invoke the admin force-degraded endpoint.',
+      !adminBearer,
+      'Requires MIP_ADMIN_BEARER_TOKEN to invoke the admin force-degraded endpoint.',
     );
 
     const flip = async (state: 'on' | 'off') => {
       const resp = await request.post(`${API_URL}/api/admin/force-degraded`, {
-        headers: { 'X-Admin-Token': forceToken! },
-        data: { state },
+        headers: { Authorization: `Bearer ${adminBearer!}` },
+        data: { state, dependency: 'warehouse', ttl_s: 30 },
       });
       // The admin endpoint returns 200/204 on success; accept either.
       expect([200, 204]).toContain(resp.status());

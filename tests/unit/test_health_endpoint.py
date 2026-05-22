@@ -25,6 +25,7 @@ from fastapi.testclient import TestClient
 from backend.api import health as health_mod
 from backend.main import app
 from backend.services import health_probes, resilience
+from backend.services.forced_degraded import _reset_forced_degraded_for_tests
 
 client = TestClient(app)
 ADMIN_HEADERS = {
@@ -36,6 +37,7 @@ ADMIN_HEADERS = {
 @pytest.fixture(autouse=True)
 def _reset_breakers() -> None:
     resilience._reset_breakers_for_tests()
+    _reset_forced_degraded_for_tests()
     # Slice-13 perf cache: /api/health caches each probe result with a
     # stale-while-revalidate policy (2 s soft TTL, 10 s hard TTL). That
     # cache leaks across tests and would make the second-test-onward
@@ -109,6 +111,42 @@ def test_health_reports_genie_down_and_degrades_status(
     payload = res.json()
     assert payload["status"] == "degraded"
     assert payload["dependencies"]["genie"] == "down"
+
+
+def test_admin_force_degraded_overlays_authenticated_health(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Admin-only force switch proves the deployed banner without stopping infra."""
+
+    monkeypatch.setattr(health_probes, "probe_warehouse", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_lakebase", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_genie", lambda: True)
+
+    forced = client.post(
+        "/api/admin/force-degraded",
+        headers=ADMIN_HEADERS,
+        json={"state": "on", "dependency": "warehouse", "ttl_s": 30},
+    )
+    assert forced.status_code == 200, forced.text
+    assert forced.json()["forced"] is True
+
+    res = client.get("/api/health", headers={"X-Forwarded-Email": "ops@example.com"})
+    assert res.status_code == 200
+    payload = res.json()
+    assert payload["status"] == "degraded"
+    assert payload["dependencies"]["warehouse"] == "down"
+    assert payload["dependencies"]["lakebase"] == "up"
+
+    cleared = client.post(
+        "/api/admin/force-degraded",
+        headers=ADMIN_HEADERS,
+        json={"state": "off"},
+    )
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["forced"] is False
+
+    recovered = client.get("/api/health", headers={"X-Forwarded-Email": "ops@example.com"})
+    assert recovered.json()["status"] == "ok"
 
 
 def test_dependency_down_exception_translates_to_structured_503(

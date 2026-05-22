@@ -61,6 +61,18 @@ def test_admin_rejects_non_admin_group(client: TestClient) -> None:
     assert response.json() == {"detail": "forbidden"}
 
 
+def test_force_degraded_rejects_non_admin_group(client: TestClient) -> None:
+    """The drill switch is admin-only because it affects every live user."""
+
+    response = client.post(
+        "/api/admin/force-degraded",
+        headers={"X-Forwarded-Groups": "analysts,loan-officers"},
+        json={"state": "on", "dependency": "warehouse", "ttl_s": 30},
+    )
+    assert response.status_code == 403
+    assert response.json() == {"detail": "forbidden"}
+
+
 def test_admin_custom_group_name_from_settings(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:

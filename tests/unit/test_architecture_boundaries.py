@@ -17,6 +17,7 @@ ROUTE_TEST_MANIFEST: dict[tuple[str, str], str] = {
     ("GET", "/api/admin/health"): "tests/unit/test_health_endpoint.py",
     ("GET", "/api/admin/rules"): "tests/unit/test_admin_rules.py",
     ("GET", "/api/admin/assets/{asset_key}/metadata"): "tests/unit/test_asset_metadata.py",
+    ("POST", "/api/admin/force-degraded"): "tests/unit/test_health_endpoint.py",
     ("PUT", "/api/admin/rules"): "tests/unit/test_admin_rules.py",
     ("GET", "/api/admin/settings"): "tests/unit/test_admin_rules.py",
     ("GET", "/api/admin/sources"): "tests/unit/test_admin_rules.py",

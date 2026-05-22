@@ -144,6 +144,9 @@ _MUTATION_AUDIT_EXPECTATIONS: dict[str, tuple[str, ...]] = {
     "preview_portfolio": ("repo.preview",),
     "genie_start": ("_latest_genie_conversation",),
     "record_rum": ("mip_rum_enabled",),
+    # Temporary in-process operator drill switch. It does not persist business
+    # state; access is covered by admin RBAC tests and the health endpoint test.
+    "post_force_degraded": ("set_forced_degraded(",),
     # Governed writes or audit-emitting reads.
     "create_portfolio": ("repo.create(",),
     "patch_portfolio": ("repo.patch_status(",),

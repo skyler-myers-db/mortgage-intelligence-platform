@@ -41,6 +41,7 @@ from fastapi import APIRouter, Request
 from backend.config.settings import looks_like_databricks_app_deploy, settings
 from backend.schemas.health import AdminHealthResponse, HealthResponse
 from backend.services.audit_store import get_fallback_identity_count
+from backend.services.forced_degraded import apply_forced_degraded
 from backend.services.health_probes import breaker_states, probe_snapshot
 from backend.services.observability import (
     get_otel_handler,
@@ -174,7 +175,7 @@ def health(request: Request) -> dict[str, Any]:
     HTTP status stays 200 in both shapes even when ``status=="degraded"``
     so the LB probe contract (degraded != unhealthy) is preserved.
     """
-    status, deps = probe_snapshot()
+    status, deps = apply_forced_degraded(*probe_snapshot())
 
     # Anonymous caller (LB / external probe): minimal body only. Use the
     # same trust boundary as audit actor resolution without calling
@@ -200,5 +201,5 @@ def health(request: Request) -> dict[str, Any]:
 @router.get("/admin/health", response_model=AdminHealthResponse)
 def admin_health(_actor: AdminDep) -> dict[str, Any]:
     """Return ops diagnostics behind admin RBAC."""
-    status, deps = probe_snapshot()
+    status, deps = apply_forced_degraded(*probe_snapshot())
     return _diagnostic_body(status, deps, _actor)

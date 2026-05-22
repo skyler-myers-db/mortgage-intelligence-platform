@@ -696,6 +696,17 @@ real_infra() {
   "$pybin" "$REPO_ROOT/tools/kill_drill/real_infra.py" "$@"
 }
 
+real_infra_logged() {
+  # Preserve the Python helper's stderr/stdout in the drill evidence log.
+  # Without this wrapper, a failed SDK stop/start only leaves a generic
+  # "returned non-zero" line in the uploaded artifact.
+  set +e
+  real_infra "$@" 2>&1 | tee -a "$LOG"
+  local rc=${PIPESTATUS[0]}
+  set -e
+  return "$rc"
+}
+
 drill_warehouse_real() {
   log "Target: SQL warehouse (REAL -- SDK-driven stop/start)"
 
@@ -726,16 +737,17 @@ EOF
   log "drill start_ts=$TS warehouse_id=$whid timeout_s=$REAL_INFRA_RECOVERY_TIMEOUT"
 
   log "Stopping warehouse $whid via SDK..."
-  if ! real_infra stop warehouse "$whid" --timeout "$REAL_INFRA_RECOVERY_TIMEOUT"; then
-    log "FAIL: real_infra stop warehouse returned non-zero"
-    return 1
+  local stop_rc=0
+  real_infra_logged stop warehouse "$whid" --timeout "$REAL_INFRA_RECOVERY_TIMEOUT" || stop_rc=$?
+  if (( stop_rc != 0 )); then
+    log "WARNING: real_infra stop warehouse returned non-zero; probing anyway, then forcing recovery."
   fi
 
   log "Probing /api/health for degraded signal..."
   if ! assert_degraded_health "$APP_URL" warehouse 30; then
     log "FAIL: warehouse stopped but backend never reported degraded state"
     # Try to restart anyway so we don't leave real infra down.
-    real_infra start warehouse "$whid" --timeout "$REAL_INFRA_RECOVERY_TIMEOUT" || true
+    real_infra_logged start warehouse "$whid" --timeout "$REAL_INFRA_RECOVERY_TIMEOUT" || true
     return 1
   fi
 
@@ -744,7 +756,7 @@ EOF
   assert_data_endpoint_degraded "$APP_URL" "/api/leads?limit=5" && data_ok=1
 
   log "Restarting warehouse $whid via SDK..."
-  if ! real_infra start warehouse "$whid" --timeout "$REAL_INFRA_RECOVERY_TIMEOUT"; then
+  if ! real_infra_logged start warehouse "$whid" --timeout "$REAL_INFRA_RECOVERY_TIMEOUT"; then
     log "FAIL: warehouse did not return to RUNNING within ${REAL_INFRA_RECOVERY_TIMEOUT}s"
     log "  !!! real infra may still be stopped -- investigate immediately !!!"
     return 1
@@ -799,15 +811,16 @@ EOF
   log "drill start_ts=$TS lakebase_instance=$instance timeout_s=$REAL_INFRA_RECOVERY_TIMEOUT"
 
   log "Stopping Lakebase instance $instance via SDK (PATCH stopped=true)..."
-  if ! real_infra stop lakebase "$instance" --timeout "$REAL_INFRA_RECOVERY_TIMEOUT"; then
-    log "FAIL: real_infra stop lakebase returned non-zero"
-    return 1
+  local stop_rc=0
+  real_infra_logged stop lakebase "$instance" --timeout "$REAL_INFRA_RECOVERY_TIMEOUT" || stop_rc=$?
+  if (( stop_rc != 0 )); then
+    log "WARNING: real_infra stop lakebase returned non-zero; probing anyway, then forcing recovery."
   fi
 
   log "Probing /api/health for degraded signal..."
   if ! assert_degraded_health "$APP_URL" lakebase 30; then
     log "FAIL: Lakebase stopped but backend never reported degraded state"
-    real_infra start lakebase "$instance" --timeout "$REAL_INFRA_RECOVERY_TIMEOUT" || true
+    real_infra_logged start lakebase "$instance" --timeout "$REAL_INFRA_RECOVERY_TIMEOUT" || true
     return 1
   fi
 
@@ -816,7 +829,7 @@ EOF
   assert_data_endpoint_degraded "$APP_URL" "/api/audit/events?limit=5" && data_ok=1
 
   log "Restarting Lakebase instance $instance via SDK..."
-  if ! real_infra start lakebase "$instance" --timeout "$REAL_INFRA_RECOVERY_TIMEOUT"; then
+  if ! real_infra_logged start lakebase "$instance" --timeout "$REAL_INFRA_RECOVERY_TIMEOUT"; then
     log "FAIL: Lakebase did not return to AVAILABLE within ${REAL_INFRA_RECOVERY_TIMEOUT}s"
     log "  !!! real infra may still be stopped -- investigate immediately !!!"
     return 1

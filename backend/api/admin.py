@@ -21,9 +21,10 @@ configuration and gold refresh path actually changed.
 """
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 
 from backend.config.settings import settings
 from backend.schemas.admin import (
@@ -35,12 +36,25 @@ from backend.schemas.admin import (
 from backend.services.admin_rules import AdminRulesService, get_admin_rules_service
 from backend.services.databricks_sql import DatabricksSqlError
 from backend.services.error_sanitizer import safe_dependency_detail
+from backend.services.forced_degraded import set_forced_degraded
 from backend.services.rbac import AdminDep
 from backend.services.resilience import DependencyDownError
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
 ServiceDep = Annotated[AdminRulesService, Depends(get_admin_rules_service)]
+
+
+class ForceDegradedRequest(BaseModel):
+    state: Literal["on", "off"]
+    dependency: Literal["warehouse", "lakebase", "genie", "all"] = "warehouse"
+    ttl_s: int = Field(default=60, ge=1, le=300)
+
+
+class ForceDegradedResponse(BaseModel):
+    forced: bool
+    dependency: Literal["warehouse", "lakebase", "genie", "all"]
+    expires_in_s: int
 
 
 @router.get("/rules", response_model=AdminRulesResponse)
@@ -137,3 +151,22 @@ def get_settings(_actor: AdminDep) -> dict[str, object]:
         "lakebase_schema": settings.mip_lakebase_schema,
         "warehouse_id": settings.databricks_warehouse_id,
     }
+
+
+@router.post("/force-degraded", response_model=ForceDegradedResponse)
+def post_force_degraded(
+    payload: ForceDegradedRequest,
+    _actor: AdminDep,
+) -> ForceDegradedResponse:
+    """Temporarily force /api/health into a degraded state for UI proof drills."""
+
+    snapshot = set_forced_degraded(
+        active=payload.state == "on",
+        dependency=payload.dependency,
+        ttl_s=payload.ttl_s,
+    )
+    return ForceDegradedResponse(
+        forced=snapshot.active,
+        dependency=snapshot.dependency,
+        expires_in_s=snapshot.expires_in_s,
+    )

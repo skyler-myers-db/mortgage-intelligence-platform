@@ -190,8 +190,10 @@ jobs:
       # LAKEBASE_PASSWORD secret to rotate.
       LAKEBASE_INTEGRATION: '1'
       E2E_LIVE: '1'
-      # real_data.spec.ts uses this to flip the force-degraded flag.
-      MIP_FORCE_DEGRADED_TOKEN: ${{ secrets.MIP_FORCE_DEGRADED_TOKEN }}
+      # real_data.spec.ts uses this admin-scoped bearer only for the bounded
+      # /api/admin/force-degraded UI proof. The general browser session still
+      # uses M2M when provisioned so non-admin authorization stays proven.
+      MIP_ADMIN_BEARER_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
       MIP_APP_NAME: mip-app
       # MIP_APP_URL / MIP_BEARER_TOKEN are populated at step-time by the
       # "Resolve deployed app URL" + "Set Playwright Bearer token" steps below.
@@ -488,14 +490,13 @@ jobs:
     # -- stopping the real warehouse + Lakebase is too disruptive to be
     # a scheduled event. Rehearse before rehearsals, not daily.
     #
-    # continue-on-error is true because this is a rehearsal, not a
-    # release gate: a red drill signals a real regression that an
-    # operator must follow up on, but it should not block the other
-    # nightly jobs from reporting green.
+    # Run after live parity, Playwright, and the standard Genie fuzz so
+    # stopping shared resources never invalidates the proofs it is meant to
+    # complement. When this opt-in gate is requested, it is release-blocking.
     if: github.event_name == 'workflow_dispatch' && inputs.run_real_drills == true
+    needs: [playwright-e2e-live, genie-fuzz-standard]
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    continue-on-error: true
     env:
       DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
       DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
@@ -628,8 +629,17 @@ jobs:
 
   notify-on-failure:
     name: File issue on failure
-    needs: [parity-live, playwright-e2e-live, kill-drill-simulated, genie-fuzz-standard]
-    if: failure()
+    needs: [parity-live, playwright-e2e-live, kill-drill-simulated, genie-fuzz-standard, kill-drill-real-infra]
+    if: >-
+      ${{
+        always() && (
+          needs.parity-live.result == 'failure' ||
+          needs.playwright-e2e-live.result == 'failure' ||
+          needs.kill-drill-simulated.result == 'failure' ||
+          needs.genie-fuzz-standard.result == 'failure' ||
+          needs.kill-drill-real-infra.result == 'failure'
+        )
+      }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
