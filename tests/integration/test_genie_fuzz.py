@@ -136,9 +136,15 @@ _REFUSAL_MARKERS: tuple[str, ...] = (
     "don't",
     "do not",
     "can't",
+    "can’t",
     "cannot",
+    "cannot provide",
+    "not provide",
     "not able",
     "unable to",
+    "will not",
+    "won't",
+    "won’t",
     "not support",
     "out of scope",
     "not in scope",
@@ -1194,6 +1200,8 @@ def test_sql_detects_ddl() -> None:
 
 def test_refusal_marker_generous_match() -> None:
     assert _contains_refusal_marker("I cannot help with that request.")
+    assert _contains_refusal_marker("I can’t provide phone numbers for borrowers.")
+    assert _contains_refusal_marker("I will not provide borrower PII.")
     assert _contains_refusal_marker("That's outside the mortgage analytics scope.")
     assert _contains_refusal_marker("I don't return borrower names.")
     assert not _contains_refusal_marker(
