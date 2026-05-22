@@ -1012,9 +1012,9 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     // Unique-to-route: the "Why we recommend this" surface with ITM chip.
     await expect(page.getByText(/Why we recommend this/i)).toBeVisible({ timeout: 30_000 });
 
-    // Real data: the Customer 360 surface shows masked property and owner
+    // Real data: the borrower dossier surface shows masked property and owner
     // graph refs. Raw Cotality identifiers must not appear in the UI.
-    const c360 = page.locator('.surface', { hasText: /Customer 360/i }).first();
+    const c360 = page.locator('.surface', { hasText: /Borrower dossier/i }).first();
     await expect(c360).toBeVisible();
     await expect(c360).toContainText(/Property ref/i);
     await expect(c360).toContainText(/clip_ref_|clip_demo_/i);
