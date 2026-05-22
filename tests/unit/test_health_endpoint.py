@@ -17,6 +17,9 @@ Databricks App load-balancer doesn't yank the container.
 """
 from __future__ import annotations
 
+import base64
+import json
+import time
 from typing import Any
 
 import pytest
@@ -25,7 +28,11 @@ from fastapi.testclient import TestClient
 from backend.api import health as health_mod
 from backend.main import app
 from backend.services import health_probes, resilience
-from backend.services.forced_degraded import _reset_forced_degraded_for_tests
+from backend.services.forced_degraded import (
+    FORCED_DEGRADED_COOKIE_NAME,
+    FORCED_DEGRADED_SOURCE,
+    _reset_forced_degraded_for_tests,
+)
 
 client = TestClient(app)
 ADMIN_HEADERS = {
@@ -164,6 +171,40 @@ def test_admin_force_degraded_overlays_authenticated_health(
     recovered = client.get("/api/health", headers={"X-Forwarded-Email": "ops@example.com"})
     assert recovered.json()["status"] == "ok"
     assert recovered.json().get("forced_degraded") is None
+
+
+def test_unsigned_force_degraded_cookie_is_ignored(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A non-admin cannot forge the admin proof by hand-crafting a cookie."""
+
+    monkeypatch.setattr(health_probes, "probe_warehouse", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_lakebase", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_genie", lambda: True)
+    raw = json.dumps(
+        {
+            "v": 1,
+            "dependency": "warehouse",
+            "expires_at": int(time.time()) + 60,
+            "source": FORCED_DEGRADED_SOURCE,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    forged = base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+    res = client.get(
+        "/api/health",
+        headers={
+            "X-Forwarded-Email": "analyst@example.com",
+            "Cookie": f"{FORCED_DEGRADED_COOKIE_NAME}={forged}",
+        },
+    )
+    assert res.status_code == 200
+    payload = res.json()
+    assert payload["status"] == "ok"
+    assert payload["dependencies"]["warehouse"] == "up"
+    assert payload.get("forced_degraded") is None
 
 
 def test_dependency_down_exception_translates_to_structured_503(

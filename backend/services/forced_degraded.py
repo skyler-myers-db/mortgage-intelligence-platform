@@ -10,10 +10,15 @@ app replicas and cannot make other users see a false outage.
 from __future__ import annotations
 
 import base64
+import hashlib
+import hmac
 import json
+import secrets
 import time
 from dataclasses import dataclass
 from typing import Any
+
+from backend.config.settings import settings
 
 _ALLOWED_DEPENDENCIES = {"warehouse", "lakebase", "genie", "all"}
 FORCED_DEGRADED_COOKIE_NAME = "mip_force_degraded"
@@ -21,6 +26,7 @@ FORCED_DEGRADED_COOKIE_PATH = "/api"
 FORCED_DEGRADED_SOURCE = "admin_drill_cookie"
 _DEFAULT_TTL_S = 60
 _MAX_TTL_S = 300
+_PROCESS_FORCED_DEGRADED_SECRET = secrets.token_urlsafe(32).encode("utf-8")
 
 
 @dataclass(frozen=True)
@@ -56,6 +62,65 @@ def _b64_decode(value: str) -> dict[str, Any]:
     return payload
 
 
+def _configured_secret_bytes(configured: Any) -> bytes | None:
+    if configured is None:
+        return None
+    value = configured.get_secret_value().strip()
+    if not value:
+        return None
+    return value.encode("utf-8")
+
+
+def _current_cookie_key() -> tuple[str, bytes]:
+    configured = settings.mip_genie_action_secret_current or settings.mip_genie_action_secret
+    secret = _configured_secret_bytes(configured)
+    key_id = (settings.mip_genie_action_secret_kid or "").strip() or "v1"
+    if secret is not None:
+        return key_id, secret
+    return "process", _PROCESS_FORCED_DEGRADED_SECRET
+
+
+def _previous_cookie_key() -> tuple[str, bytes] | None:
+    secret = _configured_secret_bytes(settings.mip_genie_action_secret_previous)
+    if secret is None:
+        return None
+    key_id = (settings.mip_genie_action_secret_previous_kid or "").strip() or "previous"
+    return key_id, secret
+
+
+def _cookie_keys(*, kid_hint: str | None = None) -> list[tuple[str, bytes]]:
+    keys = [_current_cookie_key()]
+    previous = _previous_cookie_key()
+    if previous is not None:
+        keys.append(previous)
+    if kid_hint:
+        matching = [item for item in keys if item[0] == kid_hint]
+        nonmatching = [item for item in keys if item[0] != kid_hint]
+        return matching + nonmatching
+    return keys
+
+
+def _sign_claims(claims: dict[str, Any]) -> str:
+    body = _b64_encode(claims)
+    _kid, secret = _current_cookie_key()
+    sig = hmac.new(secret, body.encode("ascii"), hashlib.sha256).digest()
+    return f"{body}.{base64.urlsafe_b64encode(sig).decode('ascii').rstrip('=')}"
+
+
+def _decode_signed_claims(value: str) -> dict[str, Any]:
+    body, supplied_sig = value.split(".", 1)
+    claims = _b64_decode(body)
+    supplied = base64.urlsafe_b64decode(
+        (supplied_sig + ("=" * (-len(supplied_sig) % 4))).encode("ascii")
+    )
+    kid_hint = str(claims.get("kid") or "") or None
+    for _kid, secret in _cookie_keys(kid_hint=kid_hint):
+        expected = hmac.new(secret, body.encode("ascii"), hashlib.sha256).digest()
+        if hmac.compare_digest(supplied, expected):
+            return claims
+    raise ValueError("forced-degraded cookie signature mismatch")
+
+
 def build_forced_degraded_cookie(
     dependency: str = "warehouse",
     ttl_s: int = _DEFAULT_TTL_S,
@@ -65,10 +130,13 @@ def build_forced_degraded_cookie(
     normalized = _normalize_dependency(dependency)
     ttl = _clamp_ttl(ttl_s)
     expires_at = int(time.time()) + ttl
-    value = _b64_encode(
+    kid, _secret = _current_cookie_key()
+    value = _sign_claims(
         {
+            "v": 1,
             "dependency": normalized,
             "expires_at": expires_at,
+            "kid": kid,
             "source": FORCED_DEGRADED_SOURCE,
         }
     )
@@ -87,11 +155,14 @@ def forced_degraded_snapshot_from_cookie(
     if not cookie_value:
         return ForcedDegradedSnapshot(active=False)
     try:
-        payload = _b64_decode(cookie_value)
+        payload = _decode_signed_claims(cookie_value)
+        version = int(payload.get("v") or 0)
         dependency = _normalize_dependency(str(payload.get("dependency") or "warehouse"))
         source = str(payload.get("source") or "")
         expires_at = int(payload.get("expires_at") or 0)
-    except (TypeError, ValueError, json.JSONDecodeError):
+    except Exception:
+        return ForcedDegradedSnapshot(active=False)
+    if version != 1:
         return ForcedDegradedSnapshot(active=False)
     if source != FORCED_DEGRADED_SOURCE:
         return ForcedDegradedSnapshot(active=False)

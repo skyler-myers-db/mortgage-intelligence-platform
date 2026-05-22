@@ -50,10 +50,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
-      DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
-      DATABRICKS_WAREHOUSE_ID: ${{ secrets.DATABRICKS_WAREHOUSE_ID }}
-      GENIE_SPACE_ID: ${{ secrets.GENIE_SPACE_ID }}
       LAKEBASE_DATABASE: ${{ secrets.LAKEBASE_DATABASE || 'mip_app_state' }}
       LAKEBASE_INSTANCE_NAME: mip-app-state
       LAKEBASE_INTEGRATION: '1'   # opt-in flag Slice 5 requires
@@ -68,17 +64,29 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
           cache-dependency-path: frontend/package-lock.json
+      - uses: databricks/setup-cli@v1.0.0
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           npm --prefix frontend ci
-      - name: Fail fast if required secrets are missing
+      - name: Verify Databricks CLI
+        run: databricks --version
+      - name: Prepare bundle sync inputs
+        run: |
+          python tools/render_sql.py --catalog "${MIP_DEFAULT_CATALOG:-mip}"
+          npm --prefix frontend run build
+      - name: Export live Databricks test env
         # Catches the "secrets were rotated and nobody updated the repo"
         # class of failure explicitly instead of letting pytest emit a
         # SKIP that a human has to decode. Lakebase intentionally uses the
         # Databricks database credential endpoint below instead of static
         # LAKEBASE_PASSWORD secrets, matching the deployed app/migrate path.
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+          DATABRICKS_WAREHOUSE_ID: ${{ secrets.DATABRICKS_WAREHOUSE_ID }}
+          GENIE_SPACE_ID: ${{ secrets.GENIE_SPACE_ID }}
         run: |
           missing=""
           for v in DATABRICKS_HOST DATABRICKS_TOKEN DATABRICKS_WAREHOUSE_ID \
@@ -91,14 +99,12 @@ jobs:
             echo "::error::Missing required secrets:$missing"
             exit 1
           fi
-      - name: Install Databricks CLI (v2)
-        run: |
-          curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
-          databricks --version
-      - name: Prepare bundle sync inputs
-        run: |
-          python tools/render_sql.py --catalog "${MIP_DEFAULT_CATALOG:-mip}"
-          npm --prefix frontend run build
+          {
+            echo "DATABRICKS_HOST=$DATABRICKS_HOST"
+            echo "DATABRICKS_TOKEN=$DATABRICKS_TOKEN"
+            echo "DATABRICKS_WAREHOUSE_ID=$DATABRICKS_WAREHOUSE_ID"
+            echo "GENIE_SPACE_ID=$GENIE_SPACE_ID"
+          } >> "$GITHUB_ENV"
       - name: databricks bundle validate (dev target, real creds)
         # The real validate moved here from PR CI because it unavoidably
         # calls /api/2.0/preview/scim/v2/Me which requires a real token.
@@ -174,10 +180,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
-      DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
-      DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
-      DATABRICKS_WAREHOUSE_ID: ${{ secrets.DATABRICKS_WAREHOUSE_ID }}
-      GENIE_SPACE_ID: ${{ secrets.GENIE_SPACE_ID }}
       # Deliberately omit LAKEBASE_HOST / _USER / _PASSWORD here so the
       # backend's `_resolve_lakebase_connection_params` takes the SDK
       # workspace-identity path: it calls `/api/2.0/database/instances/
@@ -190,17 +192,12 @@ jobs:
       # LAKEBASE_PASSWORD secret to rotate.
       LAKEBASE_INTEGRATION: '1'
       E2E_LIVE: '1'
-      # real_data.spec.ts uses this admin-scoped bearer only for the bounded
-      # /api/admin/force-degraded UI proof. The general browser session still
-      # uses M2M when provisioned so non-admin authorization stays proven.
-      MIP_ADMIN_BEARER_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
       MIP_APP_NAME: mip-app
       # MIP_APP_URL / MIP_BEARER_TOKEN are populated at step-time by the
       # "Resolve deployed app URL" + "Set Playwright Bearer token" steps below.
       # This job is the deployed-app release gate, so missing Databricks
-      # workspace credentials fail fast instead of silently falling back to
-      # localhost. M2M OAuth is preferred when provisioned; otherwise the
-      # workflow uses the existing workspace PAT that already gates live UC.
+      # workspace credentials or missing M2M OAuth secrets fail fast instead
+      # of silently falling back to localhost or an admin PAT.
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -232,6 +229,8 @@ jobs:
         # not fail just because an easily-derived URL secret was omitted.
         env:
           _URL: ${{ secrets.MIP_APP_URL }}
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
         run: |
           set -euo pipefail
           if [ -z "${DATABRICKS_HOST:-}" ] || [ -z "${DATABRICKS_TOKEN:-}" ]; then
@@ -285,8 +284,12 @@ jobs:
             exit 1
           fi
           echo "::add-mask::$BEARER"
-          echo "MIP_NON_ADMIN_BEARER_TOKEN=$BEARER" >> "$GITHUB_ENV"
-          echo "MIP_BEARER_TOKEN=$BEARER" >> "$GITHUB_ENV"
+          echo "::add-mask::$DATABRICKS_TOKEN"
+          {
+            echo "MIP_ADMIN_BEARER_TOKEN=$DATABRICKS_TOKEN"
+            echo "MIP_NON_ADMIN_BEARER_TOKEN=$BEARER"
+            echo "MIP_BEARER_TOKEN=$BEARER"
+          } >> "$GITHUB_ENV"
           echo "::notice::Using non-admin M2M OAuth Bearer for deployed Playwright."
       - name: Authenticated non-admin smoke (M2M)
         run: |
@@ -379,13 +382,6 @@ jobs:
     # retryable=true, no silent mock fallback). A drill failure IS a
     # release blocker -- continue-on-error stays default (false).
     env:
-      DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
-      DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
-      DATABRICKS_WAREHOUSE_ID: ${{ secrets.DATABRICKS_WAREHOUSE_ID }}
-      GENIE_SPACE_ID: ${{ secrets.GENIE_SPACE_ID }}
-      LAKEBASE_HOST: ${{ secrets.LAKEBASE_HOST }}
-      LAKEBASE_USER: ${{ secrets.LAKEBASE_USER }}
-      LAKEBASE_PASSWORD: ${{ secrets.LAKEBASE_PASSWORD }}
       LAKEBASE_DATABASE: ${{ secrets.LAKEBASE_DATABASE || 'mip_app_state' }}
     steps:
       - uses: actions/checkout@v6
@@ -401,6 +397,25 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq jq lsof
+      - name: Export simulated drill env
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+          DATABRICKS_WAREHOUSE_ID: ${{ secrets.DATABRICKS_WAREHOUSE_ID }}
+          GENIE_SPACE_ID: ${{ secrets.GENIE_SPACE_ID }}
+          LAKEBASE_HOST: ${{ secrets.LAKEBASE_HOST }}
+          LAKEBASE_USER: ${{ secrets.LAKEBASE_USER }}
+          LAKEBASE_PASSWORD: ${{ secrets.LAKEBASE_PASSWORD }}
+        run: |
+          {
+            echo "DATABRICKS_HOST=$DATABRICKS_HOST"
+            echo "DATABRICKS_TOKEN=$DATABRICKS_TOKEN"
+            echo "DATABRICKS_WAREHOUSE_ID=$DATABRICKS_WAREHOUSE_ID"
+            echo "GENIE_SPACE_ID=$GENIE_SPACE_ID"
+            echo "LAKEBASE_HOST=$LAKEBASE_HOST"
+            echo "LAKEBASE_USER=$LAKEBASE_USER"
+            echo "LAKEBASE_PASSWORD=$LAKEBASE_PASSWORD"
+          } >> "$GITHUB_ENV"
       # Each drill boots a private backend on :8001, so they must run
       # sequentially (not matrix-parallel) to avoid port contention.
       # `if: always()` lets later drills run even if an earlier one
@@ -436,10 +451,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
-      DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
-      DATABRICKS_WAREHOUSE_ID: ${{ secrets.DATABRICKS_WAREHOUSE_ID }}
-      GENIE_SPACE_ID: ${{ secrets.GENIE_SPACE_ID }}
       MIP_GENIE_FUZZ_EXAMPLES: '15'
     steps:
       - uses: actions/checkout@v6
@@ -451,7 +462,12 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-      - name: Fail fast if required secrets are missing
+      - name: Export Genie live env
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+          DATABRICKS_WAREHOUSE_ID: ${{ secrets.DATABRICKS_WAREHOUSE_ID }}
+          GENIE_SPACE_ID: ${{ secrets.GENIE_SPACE_ID }}
         run: |
           missing=""
           for v in DATABRICKS_HOST DATABRICKS_TOKEN GENIE_SPACE_ID; do
@@ -463,6 +479,12 @@ jobs:
             echo "::error::Missing required secrets:$missing"
             exit 1
           fi
+          {
+            echo "DATABRICKS_HOST=$DATABRICKS_HOST"
+            echo "DATABRICKS_TOKEN=$DATABRICKS_TOKEN"
+            echo "DATABRICKS_WAREHOUSE_ID=$DATABRICKS_WAREHOUSE_ID"
+            echo "GENIE_SPACE_ID=$GENIE_SPACE_ID"
+          } >> "$GITHUB_ENV"
       - name: Run standard Genie fuzz
         run: pytest -q tests/integration/test_genie_fuzz.py -m integration
       - name: Upload fuzz failure artefacts
@@ -489,15 +511,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
-      DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
-      DATABRICKS_WAREHOUSE_ID: ${{ secrets.DATABRICKS_WAREHOUSE_ID }}
       LAKEBASE_INSTANCE_NAME: mip-app-state
       # Explicit allow-flag. The run_drill.sh script refuses to stop
       # real infra unless this is set OR --i-really-mean-it is passed.
       # Scope it to this job only; do NOT promote to workflow-env.
       MIP_KILL_DRILL_ALLOW_REAL: '1'
-      MIP_APP_URL: ${{ secrets.MIP_APP_URL }}
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -512,7 +530,12 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq jq lsof
-      - name: Fail fast on missing inputs
+      - name: Export real-infra drill env
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+          DATABRICKS_WAREHOUSE_ID: ${{ secrets.DATABRICKS_WAREHOUSE_ID }}
+          MIP_APP_URL: ${{ secrets.MIP_APP_URL }}
         run: |
           missing=""
           for v in DATABRICKS_HOST DATABRICKS_TOKEN DATABRICKS_WAREHOUSE_ID MIP_APP_URL; do
@@ -524,6 +547,12 @@ jobs:
             echo "::error::Missing required secrets for real-infra drill:$missing"
             exit 1
           fi
+          {
+            echo "DATABRICKS_HOST=$DATABRICKS_HOST"
+            echo "DATABRICKS_TOKEN=$DATABRICKS_TOKEN"
+            echo "DATABRICKS_WAREHOUSE_ID=$DATABRICKS_WAREHOUSE_ID"
+            echo "MIP_APP_URL=$MIP_APP_URL"
+          } >> "$GITHUB_ENV"
       # Each real-infra drill must complete stop+restart before the next
       # starts so we don't overlap outages. Sequential, not matrix.
       - name: Drill - warehouse-real (SDK stop/start)
@@ -567,10 +596,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
-      DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
-      DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
-      DATABRICKS_WAREHOUSE_ID: ${{ secrets.DATABRICKS_WAREHOUSE_ID }}
-      GENIE_SPACE_ID: ${{ secrets.GENIE_SPACE_ID }}
       # 200 examples/family is the spec. An operator who wants a
       # smaller targeted rerun can override this via the Actions UI's
       # "Run workflow" dialog (after wiring up an input), or by forking
@@ -589,7 +614,12 @@ jobs:
           # Hypothesis is a `.[fuzz]` extra; install it explicitly here
           # in case requirements.txt drops the pin.
           pip install "hypothesis>=6.123,<7"
-      - name: Fail fast if required secrets are missing
+      - name: Export deep Genie live env
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+          DATABRICKS_WAREHOUSE_ID: ${{ secrets.DATABRICKS_WAREHOUSE_ID }}
+          GENIE_SPACE_ID: ${{ secrets.GENIE_SPACE_ID }}
         run: |
           missing=""
           for v in DATABRICKS_HOST DATABRICKS_TOKEN GENIE_SPACE_ID; do
@@ -601,6 +631,12 @@ jobs:
             echo "::error::Missing required secrets:$missing"
             exit 1
           fi
+          {
+            echo "DATABRICKS_HOST=$DATABRICKS_HOST"
+            echo "DATABRICKS_TOKEN=$DATABRICKS_TOKEN"
+            echo "DATABRICKS_WAREHOUSE_ID=$DATABRICKS_WAREHOUSE_ID"
+            echo "GENIE_SPACE_ID=$GENIE_SPACE_ID"
+          } >> "$GITHUB_ENV"
       - name: Run deep Genie fuzz
         # `-m genie_fuzz_deep` selects only the 200-example variants
         # plus the template-coverage assertion. The standard 15-example
@@ -651,10 +687,32 @@ jobs:
               '',
               '**Triage:** docs/runbook.md §3 (parity-red) and §8 (CI failure triage).',
             ].join('\n');
-            await github.rest.issues.create({
+
+            const labels = ['ci-failure', 'nightly'];
+            const existing = await github.paginate(github.rest.issues.listForRepo, {
               owner: context.repo.owner,
               repo: context.repo.repo,
-              title,
-              body,
-              labels: ['ci-failure', 'nightly'],
+              state: 'open',
+              labels: labels.join(','),
+              per_page: 100,
             });
+
+            const match = existing.find((issue) => issue.title === title && !issue.pull_request);
+            if (match) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: match.number,
+                body: `Another nightly real-UC workflow failed. Run: ${runUrl}`,
+              });
+              core.notice(`Updated existing nightly failure issue #${match.number}`);
+            } else {
+              const created = await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body,
+                labels,
+              });
+              core.notice(`Created nightly failure issue #${created.data.number}`);
+            }

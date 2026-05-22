@@ -116,9 +116,14 @@ async function fetchBorrower(request: APIRequestContext, borrowerId: string): Pr
   return (await resp.json()) as BorrowerDossier;
 }
 
-async function fetchAuditEvents(request: APIRequestContext, limit = 100): Promise<AuditRow[] | null> {
+async function fetchAuditEvents(
+  request: APIRequestContext,
+  limit = 100,
+  bearer = BEARER,
+): Promise<AuditRow[] | null> {
+  const headers = bearer ? { Authorization: `Bearer ${bearer}` } : AUTH_HEADERS;
   const resp = await request.get(`${API_URL}/api/audit/events?limit=${limit}`, {
-    headers: AUTH_HEADERS,
+    headers,
   });
   if (resp.status() === 403) return null;
   expect(resp.status(), 'GET /api/audit/events returned non-200').toBe(200);
@@ -767,7 +772,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
       await expect
         .poll(
           async () => {
-            const rows = await fetchAuditEvents(request, 20);
+            const rows = await fetchAuditEvents(request, 20, adminBearer!);
             return rows?.some(
               (row) =>
                 row.event_type === 'FORCE_DEGRADED' &&

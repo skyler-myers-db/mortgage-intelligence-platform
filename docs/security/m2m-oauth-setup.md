@@ -188,10 +188,11 @@ From the GitHub repo:
 | `DATABRICKS_CLIENT_SECRET` | The `client_secret` from step 2. (Redacted in all Actions logs.) |
 | `MIP_APP_URL`              | `https://mip-app-2543889327043640.aws.databricksapps.com`        |
 
-The nightly workflow checks that **all three** are present before
-switching into the deployed-URL path. If any is missing it falls back to
-the current localhost-on-runner path so the nightly stays green during
-the gap between admin setup and the first scheduled run.
+The nightly workflow requires all three for deployed-app proof. If
+`DATABRICKS_CLIENT_ID` or `DATABRICKS_CLIENT_SECRET` is missing, the
+`playwright-e2e-live` job fails before Playwright starts. It must not
+fall back to localhost or to the admin PAT, because the release gate is
+also the non-admin authorization proof.
 
 **`DATABRICKS_HOST` is already in repo secrets** from the existing
 parity-live job (`${{ secrets.DATABRICKS_HOST }}`); the mint helper
@@ -224,9 +225,10 @@ have `CAN USE` on the app — go back to step 3.
 
 Once the secrets are in place, the next nightly run (or a manual
 `workflow_dispatch`) will automatically pick them up. The
-`playwright-e2e-live` job emits an explicit `::notice::` line stating
-whether it used the deployed URL or the localhost fallback, so you can
-confirm from the Actions run summary.
+`playwright-e2e-live` job emits explicit `::notice::` lines with the
+deployed app URL and the non-admin M2M bearer path, so you can confirm
+from the Actions run summary that it hit the live Databricks App rather
+than a local runner.
 
 ---
 

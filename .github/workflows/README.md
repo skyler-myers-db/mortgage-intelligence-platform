@@ -1,11 +1,13 @@
 # GitHub Actions — Workflow map + required secrets
 
-This repo runs two workflows:
+This repo runs four workflows:
 
 | File | Trigger | Credentials |
 |---|---|---|
 | [`ci.yml`](ci.yml) | `pull_request`, `push` to `main` / `feature/*` | **None.** Every job is credential-free. |
 | [`nightly.yml`](nightly.yml) | `schedule` (10:00 UTC daily) + `workflow_dispatch` | Required — see below. |
+| [`deploy-dev.yml`](deploy-dev.yml) | `workflow_dispatch` | Required — Databricks dev deployment credentials. |
+| [`deploy-prod.yml`](deploy-prod.yml) | `workflow_dispatch` | Required — Databricks production deployment credentials. |
 
 The PR workflow (`ci.yml`) is designed to stay green for any contributor
 including fork-based PRs: it uses placeholder BUNDLE_VARs and pytest
