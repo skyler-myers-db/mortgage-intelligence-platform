@@ -53,6 +53,11 @@ def test_nbo_product_labels_covers_all_eight_codes() -> None:
     assert set(NBO_PRODUCT_LABELS.keys()) == _EXPECTED_CODES
 
 
+def test_nbo_product_labels_match_golden_fixture() -> None:
+    """Production-owned label constants must stay pinned to the golden fixture."""
+    assert FIXTURE["product_labels"] == NBO_PRODUCT_LABELS
+
+
 def test_all_null_signals_with_real_thresholds_land_in_nurture() -> None:
     """All-NULL signal row with live thresholds must fall through to 'nurture'.
 
@@ -80,6 +85,27 @@ def test_all_null_signals_with_real_thresholds_land_in_nurture() -> None:
     )
 
 
+def test_null_thresholds_fail_closed_to_nurture() -> None:
+    """Missing threshold config must not let 0>=0 qualify a borrower."""
+    assert (
+        next_best_offer(
+            rate_spread_bps=None,
+            equity_pct=None,
+            has_permit=None,
+            listed_for_sale=None,
+            is_investor=None,
+            is_current_customer=None,
+            is_competitor_lien=None,
+            min_spread_bps=None,
+            min_equity_pct=None,
+            heloc_equity_min_pct=None,
+            cashout_equity_min=None,
+            retention_min_spread=None,
+        )
+        == "nurture"
+    )
+
+
 def test_next_best_offer_importable_from_scoring_module() -> None:
     """The primitive and label map must both live in backend.services.scoring."""
     from backend.services import scoring
@@ -87,3 +113,11 @@ def test_next_best_offer_importable_from_scoring_module() -> None:
     assert hasattr(scoring, "next_best_offer")
     assert hasattr(scoring, "NBO_PRODUCT_LABELS")
     assert scoring.NBO_PRODUCT_LABELS["refi_plus_heloc"] == "Refinance + HELOC"
+
+
+def test_e2e_borrower_audit_reuses_canonical_offer_label_map() -> None:
+    audit_tool = Path(__file__).resolve().parents[2] / "tools" / "e2e_borrower_audit.py"
+    text = audit_tool.read_text(encoding="utf-8")
+
+    assert "OFFER_LABELS =" not in text
+    assert "NBO_PRODUCT_LABELS" in text

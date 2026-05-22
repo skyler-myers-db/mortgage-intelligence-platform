@@ -35,11 +35,11 @@ test.describe('Module 0 — golden path', () => {
 
     await expectKpiValue(page, 'Marketable population', '89,553');
     await expectKpiValue(page, 'High-intent leads', '12,840');
-    await expectKpiValue(page, 'Cost per contact (est.)', '$2.18');
-    await expectKpiValue(page, 'Projected contact → app', /9\.7/);
+    await expectKpiValue(page, 'Top-tier opportunities', '4,120');
+    await expectKpiValue(page, 'Offers recommended', '6,250');
 
     // Slice 9: assert Illinois since it's the anchor metro for the county
-    // drill (Chicago/Cook County). @svg-maps/usa ships aria-labels for every
+    // drill (Chicago/Cook County). State topology ships aria-labels for every
     // state; picking IL aligns the test with the product narrative.
     await expect(page.locator('[aria-label="Illinois"]').first()).toBeVisible({ timeout: 5_000 });
     await expect(page.locator('.surface', { hasText: /agent|activity/i }).first()).toBeVisible();
@@ -90,6 +90,14 @@ test.describe('Module 0 — golden path', () => {
   });
 
   test('segment intelligence: six cards, ITM preselected, toggle + clear', async ({ page }) => {
+    const segmentRequests: string[] = [];
+    page.on('request', (request) => {
+      const url = request.url();
+      if (url.includes('/api/leads') || url.includes('/api/geo/state-rollups')) {
+        segmentRequests.push(url);
+      }
+    });
+
     await page.goto('/segment-intelligence');
 
     for (const name of [
@@ -107,10 +115,33 @@ test.describe('Module 0 — golden path', () => {
     // footer + sample Genie questions that also say "N borrowers").
     const rankedHeader = page.locator('.h-2').filter({ hasText: /borrowers/ }).first();
     await expect(rankedHeader).toBeVisible();
-    await expect(rankedHeader).toContainText(/filtered by itm/);
+    await expect(rankedHeader).toContainText(/segment filter: In the Money/);
 
     await page.getByText('Listed for Sale', { exact: true }).click();
-    await expect(rankedHeader).toContainText(/filtered by .*listed/);
+    await expect(rankedHeader).toContainText(/segment filter: In the Money \+ Listed for Sale/);
+
+    await page.getByText('Home Equity Candidate', { exact: true }).click();
+    await expect(rankedHeader).toContainText(/must match every selected segment/);
+    await expect
+      .poll(() =>
+        segmentRequests.some(
+          (url) =>
+            url.includes('/api/leads') &&
+            url.includes('segment_codes=') &&
+            url.includes('segment_mode=all'),
+        ),
+      )
+      .toBe(true);
+    await expect
+      .poll(() =>
+        segmentRequests.some(
+          (url) =>
+            url.includes('/api/geo/state-rollups') &&
+            url.includes('segment_codes=') &&
+            url.includes('segment_mode=all'),
+        ),
+      )
+      .toBe(true);
 
     await page.getByRole('button', { name: /Clear filters/ }).click();
     await expect(rankedHeader).not.toContainText(/filtered by/);
@@ -224,8 +255,10 @@ test.describe('Module 0 — golden path', () => {
     await panel.getByLabel('Ask Genie').fill('How many HELOC candidates?');
     await panel.getByRole('button', { name: /Ask/i }).click();
 
-    // Deterministic fallback surfaces metric_value = "4,108".
-    await expect(panel.getByText('4,108').first()).toBeVisible({ timeout: 5_000 });
+    // Permit-specific HELOC counts are blocked until Cotality shares the
+    // Building Permits feed; fallback and live paths must not fabricate
+    // positive permit-derived borrower volume.
+    await expect(panel.getByText(/Building Permits share lands|pending permit/i).first()).toBeVisible({ timeout: 5_000 });
     await expect(panel.locator('.evidence-chip').first()).toBeVisible();
 
     const followUp = panel.locator('.genie-answer__followups .filter').first();
@@ -236,5 +269,194 @@ test.describe('Module 0 — golden path', () => {
     await expect(panel.locator('.genie__msg--user').last()).toContainText(
       followUpText.replace(/^Ask\s*/, '').trim().slice(0, 20),
     );
+  });
+
+  test('ask-genie action: borrower-list cohort opens exact filtered lead queue', async ({ page }) => {
+    const borrowerIds = ['B-11111', 'B-22222'];
+    const leadUrls: string[] = [];
+    await page.route('**/api/genie/start', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ conversation_id: null, trusted_assets: ['mip.gold.borrower_360'] }),
+      });
+    });
+    await page.route('**/api/genie/message', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          conversation_id: 'conv-exact',
+          message_id: 'msg-exact',
+          question_hash: 'hash-exact',
+          question: 'Show the top borrowers by score.',
+          answer: 'The top borrower rows are returned from borrower_360.',
+          source: 'genie',
+          trusted_assets: ['mip.gold.borrower_360'],
+          row_count: 2,
+          proof: {
+            source_assets: ['mip.gold.borrower_360'],
+            row_count: 2,
+            trusted: true,
+            filters: [],
+            known_data_gaps: [],
+          },
+          visualization: {
+            kind: 'borrower_list',
+            title: 'Borrower drill-down',
+            x: 'borrower_id',
+            y: 'opportunity_score',
+          },
+          table_rows: [
+            { borrower_id: borrowerIds[0], city: 'Seattle', state: 'WA', zip: '98118', opportunity_score: 92 },
+            { borrower_id: borrowerIds[1], city: 'Chicago', state: 'IL', zip: '60617', opportunity_score: 91 },
+          ],
+          actions: [
+            {
+              id: 'open-cohort',
+              label: 'Open this cohort in Lead Queue',
+              action_type: 'open_cohort',
+              description: 'Navigate into the lead queue with this Genie result audited.',
+              route: `/lead-queue?borrower_ids=${encodeURIComponent(borrowerIds.join(','))}`,
+              borrower_ids: borrowerIds,
+              criteria: {
+                source: 'genie',
+                source_assets: ['mip.gold.borrower_360'],
+                visualization_kind: 'borrower_list',
+                row_count: 2,
+                result_filters: {
+                  borrower_ids: borrowerIds,
+                },
+                sql_hash: 'hash-sql',
+              },
+              request_id: 'req-exact',
+              confirmation_token: 'token-exact',
+            },
+          ],
+        }),
+      });
+    });
+    await page.route('**/api/genie/actions', async (route) => {
+      const posted = route.request().postDataJSON() as { route?: string | null; borrower_ids?: string[] };
+      expect(posted.borrower_ids).toEqual(borrowerIds);
+      expect(posted.route).toContain('borrower_ids=');
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ok: true,
+          action_type: 'open_cohort',
+          audit_event_id: 'audit-exact',
+          route: posted.route,
+          saved_count: 0,
+          message: 'Genie action recorded to the governed audit ledger.',
+        }),
+      });
+    });
+    await page.route('**/api/leads**', async (route) => {
+      leadUrls.push(route.request().url());
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(
+          borrowerIds.map((borrowerId, i) => ({
+            borrower_id: borrowerId,
+            display_name: 'Owner synthetic',
+            city: i === 0 ? 'Seattle' : 'Chicago',
+            state: i === 0 ? 'WA' : 'IL',
+            zip: i === 0 ? '98118' : '60617',
+            segment_codes: ['itm'],
+            equity_estimate: 500000,
+            rate_spread_bps: 150,
+            opportunity_score: 92 - i,
+            confidence: 86,
+            recommended_offer: 'Refinance + HELOC',
+            why_now: 'test',
+            evidence_ids: [],
+            approval_status: 'pending',
+          })),
+        ),
+      });
+    });
+
+    await page.goto('/ask-genie');
+    await page.locator('textarea[aria-label="Ask Genie — question"]').fill('Show the top borrowers by score.');
+    await page.getByRole('button', { name: /^Ask Genie$/i }).first().click();
+    const cohortAction = page.locator('.genie-action', { hasText: /Open this cohort in Lead Queue/i }).first();
+    await expect(cohortAction).toBeVisible();
+    await cohortAction.getByRole('button', { name: /Run/i }).click();
+    await cohortAction.getByRole('button', { name: /Confirm/i }).click();
+
+    await expect(page).toHaveURL(/\/lead-queue\?.*borrower_ids=/);
+    await expect.poll(() => leadUrls.some((url) =>
+      new URL(url, 'http://localhost').searchParams.get('borrower_ids') === borrowerIds.join(','),
+    )).toBe(true);
+    await expect(page.locator('table.tbl tbody')).toContainText(borrowerIds[0]);
+    await expect(page.locator('table.tbl tbody')).toContainText(borrowerIds[1]);
+  });
+
+  test('ask-genie action: failed confirmation is visible and does not navigate', async ({ page }) => {
+    await page.route('**/api/genie/start', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ conversation_id: null, trusted_assets: ['mip.gold.borrower_360'] }),
+      });
+    });
+    await page.route('**/api/genie/message', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          conversation_id: 'conv-fail',
+          message_id: 'msg-fail',
+          question_hash: 'hash-fail',
+          question: 'Show borrowers.',
+          answer: 'Borrower rows.',
+          source: 'genie',
+          trusted_assets: ['mip.gold.borrower_360'],
+          row_count: 1,
+          proof: { source_assets: ['mip.gold.borrower_360'], row_count: 1, trusted: true },
+          table_rows: [{ borrower_id: 'B-11111', opportunity_score: 92 }],
+          actions: [
+            {
+              id: 'open-cohort',
+              label: 'Open this cohort in Lead Queue',
+              action_type: 'open_cohort',
+              description: 'Navigate into the lead queue with this Genie result audited.',
+              route: '/lead-queue?borrower_ids=B-11111',
+              borrower_ids: ['B-11111'],
+              criteria: { source: 'genie', source_assets: ['mip.gold.borrower_360'], row_count: 1 },
+              request_id: 'req-fail',
+              confirmation_token: 'token-fail',
+            },
+          ],
+        }),
+      });
+    });
+    await page.route('**/api/genie/actions', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ok: false,
+          action_type: 'open_cohort',
+          route: '/lead-queue?borrower_ids=B-11111',
+          saved_count: 0,
+          message: 'Confirmation token rejected.',
+        }),
+      });
+    });
+
+    await page.goto('/ask-genie');
+    await page.locator('textarea[aria-label="Ask Genie — question"]').fill('Show borrowers.');
+    await page.getByRole('button', { name: /^Ask Genie$/i }).first().click();
+    const cohortAction = page.locator('.genie-action', { hasText: /Open this cohort in Lead Queue/i }).first();
+    await expect(cohortAction).toBeVisible();
+    await cohortAction.getByRole('button', { name: /Run/i }).click();
+    await cohortAction.getByRole('button', { name: /Confirm/i }).click();
+
+    await expect(page.getByText(/Action failed: Confirmation token rejected/i)).toBeVisible();
+    await expect(page).toHaveURL(/\/ask-genie$/);
   });
 });

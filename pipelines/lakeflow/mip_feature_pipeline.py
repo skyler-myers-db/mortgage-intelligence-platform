@@ -8,8 +8,9 @@ Declares the five silver tables lifted from `cotality_mortgage_data.corelogic`:
     * silver.owner_transfer_events    (event-grain from owner_transfer_domain_v1)
     * silver.owner_property_bridge    (Owner-Link rollup from silver.property_master + lien_current)
 
-All tables are filtered to the 6-state share footprint
-(IL / CA / FL / TX / WA / CO) per CLAUDE.md + docs/data-contract-module0.md §2.
+All tables retain every valid source state present in the Cotality share. The
+app derives its current footprint from refreshed gold coverage, so expanding or
+narrowing the share must not require a code change.
 Raw owner names and street addresses are NEVER projected into silver
 (governance-real-data-review §1); the only owner-identity column that lands
 is `owner_name_hash` on property_master, computed inside this pipeline from
@@ -27,7 +28,7 @@ Runtime contract:
   `_read_share_table` helper for the one-line swap.
 
 Slice 2 non-negotiables checked here:
-- Multi-state filter baked into every @dlt.table (no single-metro cells).
+- Dynamic geography coverage: every non-null two-letter source state is retained.
 - No raw PII columns in any projected row.
 - Idempotency: DLT table identities are declared by @dlt.table name; reruns
   are managed by the DLT runtime via CHECKPOINT and transaction log.
@@ -59,10 +60,17 @@ except ImportError:  # pragma: no cover -- local parse-only
 # Constants
 # ---------------------------------------------------------------------------
 
-# The 6-state share footprint. Hardcoded here -- if we ever need to broaden or
-# narrow the footprint, update docs/data-contract-module0.md §2 first, then
-# this tuple, then re-run the slice-2 contract test.
-SIX_STATE_FOOTPRINT: tuple[str, ...] = ("IL", "CA", "FL", "TX", "WA", "CO")
+LEADING_ZERO_ZIP_STATES: tuple[str, ...] = (
+    "CT",
+    "MA",
+    "ME",
+    "NH",
+    "NJ",
+    "RI",
+    "VT",
+    "PR",
+    "VI",
+)
 
 # PII salt. In the deployed workspace this is read from the Databricks secret
 # scope `mip`, key `pii-salt-v1` (per governance-real-data-review §1 and
@@ -123,9 +131,34 @@ def _pii_salt_expr():  # pragma: no cover -- Databricks-runtime only
     )
 
 
-def _in_six_states(col):  # pragma: no cover -- Databricks-runtime only
-    """Column expression: TRUE when `col` is in the 6-state footprint."""
-    return col.isin(*SIX_STATE_FOOTPRINT)
+def _valid_state(col):  # pragma: no cover -- Databricks-runtime only
+    """Column expression: TRUE when `col` is a normalized two-letter state."""
+    return F.upper(F.trim(col)).rlike("^[A-Z]{2}$")
+
+
+def _y_flag(col_name: str):  # pragma: no cover -- Databricks-runtime only
+    """Column expression: TRUE only when a Cotality Y/N flag equals 'Y'."""
+    return F.upper(
+        F.trim(F.coalesce(F.col(col_name).cast("string"), F.lit("")))
+    ) == F.lit("Y")
+
+
+def _zip5(col_name: str, state_col: str = "situs_state"):  # pragma: no cover -- Databricks-runtime only
+    """Normalize Cotality ZIP/ZIP+4 strings to the Module 0 ZIP5 contract."""
+    digits = F.regexp_replace(
+        F.coalesce(F.col(col_name).cast("string"), F.lit("")),
+        "[^0-9]",
+        "",
+    )
+    state = F.upper(F.trim(F.col(state_col)))
+    return (
+        F.when(F.length(digits) >= 5, F.substring(digits, 1, 5))
+        .when(
+            (F.length(digits) == 4) & state.isin(*LEADING_ZERO_ZIP_STATES),
+            F.lpad(digits, 5, "0"),
+        )
+        .otherwise(F.lit(None).cast("string"))
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -137,8 +170,8 @@ def _in_six_states(col):  # pragma: no cover -- Databricks-runtime only
     name="property_master",
     comment=(
         "CLIP-grain property snapshot from entrada_eval_property_domain_v3, "
-        "filtered to IN (IL,CA,FL,TX,WA,CO). Raw owner names + street "
-        "addresses never land here; see docs/data-contract-module0.md §2.2."
+        "retaining every valid source state. Raw owner names + street addresses "
+        "never land here; see docs/data-contract-module0.md §2.2."
     ),
     table_properties={
         "quality": "silver",
@@ -149,18 +182,22 @@ def _in_six_states(col):  # pragma: no cover -- Databricks-runtime only
     cluster_by=["situs_state", "situs_cbsa_code", "clip"],
 )
 @dlt.expect_or_fail("valid_clip", "clip IS NOT NULL")
-@dlt.expect("valid_state", "situs_state IN ('IL','CA','FL','TX','WA','CO')")
+@dlt.expect("valid_state", "situs_state RLIKE '^[A-Z]{2}$'")
+@dlt.expect("zip_is_zip5_or_null", "situs_zip_code IS NULL OR length(situs_zip_code) = 5")
 def silver_property_master() -> DataFrame:  # pragma: no cover
     src = _read_share_table(_SHARE_PROPERTY_V3)
     return (
-        src.filter(_in_six_states(F.col("situs_state")))
+        src.filter(_valid_state(F.col("situs_state")))
         .filter(F.col("clip").isNotNull())
         .select(
             F.col("clip"),
             F.col("fips_county_code"),
             F.col("situs_state"),
             F.col("situs_city"),
-            F.col("situs_zip_code"),
+            # Data contract §2.2 requires ZIP5. Cotality frequently ships
+            # ZIP+4; normalize in the live Lakeflow path, not just the
+            # warehouse MERGE fallback.
+            _zip5("situs_zip_code").alias("situs_zip_code"),
             F.col("situs_core_based_statistical_area_cbsa").alias("situs_cbsa_code"),
             F.col("block_level_latitude").cast("double").alias("situs_lat"),
             F.col("block_level_longitude").cast("double").alias("situs_lon"),
@@ -175,9 +212,7 @@ def silver_property_master() -> DataFrame:  # pragma: no cover
                 ),
                 256,
             ).alias("owner_name_hash"),
-            F.coalesce(F.col("owner_1_corporate_indicator"), F.lit(0))
-                .cast("boolean")
-                .alias("owner_is_corporate"),
+            _y_flag("owner_1_corporate_indicator").alias("owner_is_corporate"),
             F.col("owner_occupancy_code"),
             F.col("mailing_city"),
             F.col("mailing_state"),
@@ -213,8 +248,8 @@ def silver_property_master() -> DataFrame:  # pragma: no cover
     name="lien_current",
     comment=(
         "CLIP-grain lien + rates snapshot from entrada_eval_voluntary_lien_"
-        "status_marketing_v2 filtered to IN (IL,CA,FL,TX,WA,CO). THE SPINE "
-        "of Module 0 scoring. See docs/data-contract-module0.md §2.1."
+        "status_marketing_v2 retaining every valid source state. THE SPINE of "
+        "Module 0 scoring. See docs/data-contract-module0.md §2.1."
     ),
     table_properties={
         "quality": "silver",
@@ -225,29 +260,46 @@ def silver_property_master() -> DataFrame:  # pragma: no cover
     cluster_by=["situs_state", "clip"],
 )
 @dlt.expect_or_fail("valid_clip", "clip IS NOT NULL")
-@dlt.expect("valid_state", "situs_state IN ('IL','CA','FL','TX','WA','CO')")
-@dlt.expect("rate_is_fractional", "first_pos_rate IS NULL OR first_pos_rate BETWEEN 0 AND 0.25")
+@dlt.expect("valid_state", "situs_state RLIKE '^[A-Z]{2}$'")
+@dlt.expect("zip_is_zip5_or_null", "situs_zip_code IS NULL OR length(situs_zip_code) = 5")
+@dlt.expect("rate_is_fractional", "first_pos_rate IS NULL OR first_pos_rate BETWEEN 0.01 AND 0.15")
 def silver_lien_current() -> DataFrame:  # pragma: no cover
     src = _read_share_table(_SHARE_VOLUNTARY_LIEN)
-    # Fractional rate expression: share rate is DOUBLE in percent form; divide
-    # by 100 and coerce <= 0 to NULL. Applied to both first- and second-pos.
+    # Fractional rate expression: share rate is DOUBLE in percent form. Bound
+    # first- and second-position rates to a defensible 1%-15% APR range before
+    # scoring; values below 1% are treated as missing, generator outliers above
+    # 15% clamp to 15%.
     first_pos_rate_frac = F.when(
         F.col("first_position_mortgage_interest_rate").isNull()
-        | (F.col("first_position_mortgage_interest_rate").cast("double") <= 0),
+        | (F.col("first_position_mortgage_interest_rate").cast("double") < 1),
         F.lit(None).cast("double"),
-    ).otherwise(F.col("first_position_mortgage_interest_rate").cast("double") / F.lit(100.0))
+    ).otherwise(
+        F.least(
+            F.col("first_position_mortgage_interest_rate").cast("double"),
+            F.lit(15.0),
+        )
+        / F.lit(100.0)
+    )
     second_pos_rate_frac = F.when(
         F.col("second_position_mortgage_interest_rate").isNull()
-        | (F.col("second_position_mortgage_interest_rate").cast("double") <= 0),
+        | (F.col("second_position_mortgage_interest_rate").cast("double") < 1),
         F.lit(None).cast("double"),
-    ).otherwise(F.col("second_position_mortgage_interest_rate").cast("double") / F.lit(100.0))
+    ).otherwise(
+        F.least(
+            F.col("second_position_mortgage_interest_rate").cast("double"),
+            F.lit(15.0),
+        )
+        / F.lit(100.0)
+    )
     return (
-        src.filter(_in_six_states(F.col("situs_state")))
+        src.filter(_valid_state(F.col("situs_state")))
         .filter(F.col("clip").isNotNull())
         .select(
             F.col("clip"),
             F.col("situs_state"),
-            F.col("situs_zip_code"),
+            # Data contract §2.1 requires ZIP5. Keep the DLT path in parity
+            # with sql/transformations/silver_lien_current.sql.
+            _zip5("situs_zip_code").alias("situs_zip_code"),
             F.col("owner_occupancy_code"),
             F.col("total_number_of_open_mortgage_liens").cast("int").alias("total_open_liens"),
             F.col("total_amount_of_open_mortgage_liens").cast("bigint").alias("total_open_lien_balance"),
@@ -296,8 +348,8 @@ def silver_lien_current() -> DataFrame:  # pragma: no cover
     name="mortgage_events",
     comment=(
         "Event-grain mortgage history from entrada_eval_mortgage_domain_v1 "
-        "filtered to deed_situs_state_static IN (IL,CA,FL,TX,WA,CO). "
-        "Feeds intent_trigger + gold.evidence_events. "
+        "retaining every valid deed_situs_state_static value. Feeds "
+        "intent_trigger + gold.evidence_events. "
         "See docs/data-contract-module0.md §2.3."
     ),
     table_properties={
@@ -310,14 +362,14 @@ def silver_lien_current() -> DataFrame:  # pragma: no cover
 )
 @dlt.expect_or_fail("valid_clip", "clip IS NOT NULL")
 @dlt.expect_or_fail("valid_txn_id", "mortgage_txn_id IS NOT NULL")
-@dlt.expect("valid_state", "situs_state IN ('IL','CA','FL','TX','WA','CO')")
+@dlt.expect("valid_state", "situs_state RLIKE '^[A-Z]{2}$'")
 def silver_mortgage_events() -> DataFrame:  # pragma: no cover
     src = _read_share_table(_SHARE_MORTGAGE_DOMAIN)
     event_date_expr = F.expr(
         "try_to_date(cast(nullif(mortgage_derived_date, 0) as string), 'yyyyMMdd')"
     )
     return (
-        src.filter(_in_six_states(F.col("deed_situs_state_static")))
+        src.filter(_valid_state(F.col("deed_situs_state_static")))
         .filter(F.col("mortgage_composite_transaction_id").isNotNull())
         .filter(F.col("clip").isNotNull())
         .select(
@@ -357,8 +409,8 @@ def silver_mortgage_events() -> DataFrame:  # pragma: no cover
     name="owner_transfer_events",
     comment=(
         "Event-grain owner-transfer history from entrada_eval_owner_transfer_"
-        "domain_v1 filtered to deed_situs_state_static IN (IL,CA,FL,TX,WA,"
-        "CO). Buyer names NEVER landed. See docs/data-contract-module0.md §2.4."
+        "domain_v1 retaining every valid deed_situs_state_static value. Buyer "
+        "names NEVER landed. See docs/data-contract-module0.md §2.4."
     ),
     table_properties={
         "quality": "silver",
@@ -370,14 +422,14 @@ def silver_mortgage_events() -> DataFrame:  # pragma: no cover
 )
 @dlt.expect_or_fail("valid_clip", "clip IS NOT NULL")
 @dlt.expect_or_fail("valid_txn_id", "transfer_txn_id IS NOT NULL")
-@dlt.expect("valid_state", "situs_state IN ('IL','CA','FL','TX','WA','CO')")
+@dlt.expect("valid_state", "situs_state RLIKE '^[A-Z]{2}$'")
 def silver_owner_transfer_events() -> DataFrame:  # pragma: no cover
     src = _read_share_table(_SHARE_OWNER_TRANSFER)
     sale_date_expr = F.expr(
         "try_to_date(cast(nullif(sale_derived_date, 0) as string), 'yyyyMMdd')"
     )
     return (
-        src.filter(_in_six_states(F.col("deed_situs_state_static")))
+        src.filter(_valid_state(F.col("deed_situs_state_static")))
         .filter(F.col("owner_transfer_composite_transaction_id").isNotNull())
         .filter(F.col("clip").isNotNull())
         .select(
@@ -441,10 +493,9 @@ def silver_owner_property_bridge() -> DataFrame:  # pragma: no cover
         pm.alias("pm")
         .join(lc.alias("lc"), F.col("pm.clip") == F.col("lc.clip"), "left")
         .where(F.col("pm.owner_link_id").isNotNull())
-        # Defense-in-depth 6-state filter (upstream silver already filters,
-        # but asserting here guards any future backfill where an un-filtered
-        # property_master batch is produced).
-        .where(_in_six_states(F.col("pm.situs_state")))
+        # Defense-in-depth dynamic state check. Silver retains every valid
+        # source state, and this bridge must not reintroduce fixed geography.
+        .where(_valid_state(F.col("pm.situs_state")))
         .select(
             F.col("pm.owner_link_id").alias("owner_link_id"),
             F.col("pm.clip").alias("clip"),

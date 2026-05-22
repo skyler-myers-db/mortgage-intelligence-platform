@@ -17,82 +17,60 @@
 -- was retired in slice13-accuracy; the authoritative materialisation path
 -- is this CTAS chain under `mip_refresh_scores`.)
 --
--- intent_trigger formula on the real-data path (BLOCKED terms = 0):
---   LEAST(100,
---       20 * recent_refi_count_90d
---     + 15 * recent_payoff_count_90d
---     +  0 * listed_for_sale                          -- BLOCKED
---     +  0 * has_permit                               -- BLOCKED
---     + 15 * is_competitor_lien
---     + 10 * (recent_avm_uplift_flag)                 -- approximated FALSE on real
---                                                     -- data (no AVM history yet).
---   )
--- 90-day windows are deliberately tight: longer windows pick up more
--- events but dilute "recency." We use 90d to match fixture behavior;
--- tenants wanting a wider net can widen to 180d here.
+-- Sub-score formulas intentionally mirror gold_borrower_360's formulas.
+-- Do not add alternate intent, relationship, or fit terms here unless the
+-- borrower_360 CTAS is changed in the same patch; drift between the two
+-- app-facing scoring surfaces is a data-truth failure.
 --
--- economic_incentive, fit, relationship formulas: identical to those in
--- gold_borrower_360's CTAS subscores CTE. They are recomputed here to keep
--- gold.lead_scores self-contained (so the parity test can verify them
--- independently of borrower_360).
+-- evidence sub-score: 10 * live scoring evidence rows plus bounded
+-- second-position balance tail. BLOCKED signal types and compliance-only
+-- rationale rows are excluded so explainability additions do not retune scores.
 --
--- evidence sub-score: LEAST(100, 20 * evidence_row_count_for_clip) with
--- BLOCKED signal types excluded.
---
--- Threshold convention matches borrower_360.sql: default thresholds are
--- baked here as literals. When admin-config thresholds land (Slice 5),
--- both transformations swap to a CROSS JOIN against mip_app.thresholds
--- simultaneously -- drift is a parity test failure by construction.
+-- Threshold convention matches borrower_360.sql: thresholds are read from
+-- mip.ref.offer_rules_config during the borrower_360 refresh, then carried
+-- forward as *_applied columns. This CTAS consumes those applied values rather
+-- than re-baking literals, so lead_scores and borrower_360 cannot drift when a
+-- governed threshold is retuned and gold is refreshed.
 -- =============================================================================
 
 CREATE OR REPLACE TABLE mip.gold.lead_scores AS
-WITH market AS (
-  SELECT rate_fraction AS market_rate_fraction
-  FROM mip.silver.market_rates_weekly
-  WHERE series_id = 'MORTGAGE30US' AND is_latest = TRUE
-  LIMIT 1
-),
--- Recent 90d event counts per CLIP for intent_trigger. Real data:
--- listed_for_sale and has_permit are BLOCKED, so their terms drop out.
-recent_events AS (
-  SELECT
-    clip,
-    SUM(CASE WHEN is_refinance AND event_date >= DATE_SUB(CURRENT_DATE(), 90) THEN 1 ELSE 0 END) AS recent_refi_count_90d,
-    SUM(CASE WHEN release_date IS NOT NULL AND release_date >= DATE_SUB(CURRENT_DATE(), 90) THEN 1 ELSE 0 END) AS recent_payoff_count_90d
-  FROM mip.silver.mortgage_events
-  WHERE situs_state IN ('IL','CA','FL','TX','WA','CO')
-  GROUP BY clip
-),
-evidence_counts AS (
+WITH evidence_counts AS (
   SELECT clip, COUNT(*) AS evidence_event_count
   FROM mip.gold.evidence_events
-  WHERE signal_type NOT IN ('permit', 'listing')
+  WHERE signal_type NOT IN ('permit', 'listing', 'loan_type_fit')
   GROUP BY clip
 ),
--- Historical Summit *relationships* per owner_link_id for the relationship
--- sub-score boost (data-contract §5 branch 1).
+-- Historical tenant-lender relationships per owner_link_id for the
+-- relationship sub-score boost (data-contract §5 branch 1).
 --
 -- BUG FIX (slice13-accuracy): previous implementation counted mortgage-
--- event rows per CLIP, so a CLIP with 3 Summit lien events (e.g. purchase
+-- event rows per CLIP, so a CLIP with 3 tenant-lender events (e.g. purchase
 -- + refi + release) reported `historical_mortgage_count_at_lender = 3`
 -- and triggered the >= 2 branch on a single property. The relationship
 -- score branch is meant to reward owners with MULTIPLE DISTINCT PROPERTIES
--- previously financed by Summit, not repeat events on one property.
+-- previously financed by the tenant lender, not repeat events on one property.
 --
 -- Fix: group by owner_link_id and COUNT(DISTINCT clip) among CLIPs that
--- ever had a Summit lender event. Each borrower row then picks up the
+-- ever had a tenant-lender event. Each borrower row then picks up the
 -- owner-level count via property_master. CLIPs lacking an owner_link_id
 -- fall through to 0 (LEFT JOIN in `base`), which is correct -- we cannot
 -- attribute ownership of multiple properties without the link.
-historical_summit AS (
+lender_ref AS (
+  SELECT
+    UPPER(TRIM(raw_key)) AS raw_key,
+    is_competitor
+  FROM mip.ref.lender_dictionary
+),
+historical_tenant AS (
   SELECT
     pm.owner_link_id,
     COUNT(DISTINCT me.clip) AS historical_distinct_clips_at_lender
   FROM mip.silver.mortgage_events AS me
   JOIN mip.silver.property_master AS pm ON pm.clip = me.clip
+  JOIN lender_ref AS lr ON lr.raw_key = UPPER(TRIM(me.lender_name))
   WHERE me.lender_name IS NOT NULL
-    AND UPPER(me.lender_name) LIKE '%SUMMIT%'
-    AND me.situs_state IN ('IL','CA','FL','TX','WA','CO')
+    AND COALESCE(NOT lr.is_competitor, FALSE)
+    AND me.situs_state IS NOT NULL
     AND pm.owner_link_id IS NOT NULL
   GROUP BY pm.owner_link_id
 ),
@@ -105,90 +83,90 @@ base AS (
     b.listed_for_sale,
     b.is_investor,
     b.is_current_customer,
+    b.is_former_customer,
     b.is_competitor_lien,
+    b.has_first_party_relationship,
+    b.first_party_relationship_depth,
+    b.first_party_recent_interactions,
+    b.first_party_recent_application,
+    b.first_party_synthetic_demo,
     b.is_owner_occupied,
     b.is_corporate_owner,
+    b.related_property_count,
     b.first_pos_loan_type,
     b.second_pos_amount,  -- for evidence sub-score (parity with borrower_360 2026-04-22)
-    -- year_built etc. not carried; bedrooms/bathrooms not on borrower_360;
-    -- approximate fit on the available columns.
-    COALESCE(re.recent_refi_count_90d,   0) AS recent_refi_count_90d,
-    COALESCE(re.recent_payoff_count_90d, 0) AS recent_payoff_count_90d,
+    pm.bedrooms,
+    pm.bathrooms,
     COALESCE(ec.evidence_event_count,    0) AS evidence_event_count,
-    -- owner-level DISTINCT-CLIP count at Summit (post-slice13 semantics).
-    COALESCE(hs.historical_distinct_clips_at_lender, 0) AS historical_summit_distinct_clips,
+    -- owner-level DISTINCT-CLIP count at the tenant lender (post-slice13 semantics).
+    COALESCE(ht.historical_distinct_clips_at_lender, 0) AS historical_tenant_distinct_clips,
     b.min_spread_bps_applied,
-    b.min_equity_pct_applied
+    b.min_equity_pct_applied,
+    b.heloc_equity_min_applied,
+    b.cashout_equity_min_applied,
+    b.retention_min_spread_applied
   FROM mip.gold.borrower_360 AS b
-  LEFT JOIN recent_events     AS re ON re.clip = b.clip
+  LEFT JOIN mip.silver.property_master AS pm ON pm.clip = b.clip
   LEFT JOIN evidence_counts   AS ec ON ec.clip = b.clip
-  LEFT JOIN historical_summit AS hs ON hs.owner_link_id = b.owner_link_id
+  LEFT JOIN historical_tenant AS ht ON ht.owner_link_id = b.owner_link_id
 ),
 -- Sub-score formulas: continuous blends (fix/copilot-batch-post-merge
 -- 2026-04-22). Tiered CASE statements collapsed 5.16M borrowers into a
 -- handful of discrete sub-score buckets and, via fn_lead_score, into only
 -- 3 unique opportunity_score values across the top 500. These formulas
--- mirror the 1:1 changes in sql/transformations/gold_borrower_360.sql;
--- drift between the two is a parity failure by construction.
+-- align with sql/transformations/gold_borrower_360.sql where the same
+-- source fields are available.
 subscores AS (
   SELECT
     b.*,
     -- economic_incentive: continuous blend of spread + equity that
     -- saturates gently. See gold_borrower_360.sql for rationale; the
-    -- formula here must stay 1:1 with that CTAS -- drift is a parity
-    -- failure by construction.
+    -- formula here must stay aligned with that CTAS.
     CAST(LEAST(100, GREATEST(0,
         LEAST(55, CAST(ROUND(3 * sqrt(GREATEST(0, b.rate_spread_bps))) AS INT))
       + LEAST(50, CAST(ROUND(0.5 * LEAST(100, GREATEST(0, b.equity_pct))) AS INT))
     )) AS INT) AS economic_incentive,
-    -- intent_trigger: mirrors gold_borrower_360 (must stay 1:1). Real
-    -- recent-event counts (refi/payoff) keep their contributions;
-    -- BLOCKED signals (permit, listing, avm uplift) stay 0. Sqrt on the
-    -- rate-drift term keeps the top tail separable.
+    -- intent_trigger: exact mirror of gold_borrower_360. BLOCKED signals
+    -- (permit, listing, avm uplift) stay 0 until the Cotality shares land.
+    -- Sqrt on the rate-drift term keeps the top tail separable.
     CAST(LEAST(100, GREATEST(0,
-        CAST(20 * b.recent_refi_count_90d AS INT)
-      + CAST(15 * b.recent_payoff_count_90d AS INT)
-      + 20 * CASE WHEN b.is_competitor_lien THEN 1 ELSE 0 END
-      + CASE WHEN b.is_investor THEN 20 ELSE 0 END
+        20 * CASE WHEN b.is_competitor_lien THEN 1 ELSE 0 END
+      + LEAST(25, GREATEST(0, (COALESCE(b.related_property_count, 1) - 1) * 10))
       + LEAST(30, CAST(ROUND(2 * sqrt(GREATEST(0, b.rate_spread_bps))) AS INT))
       + LEAST(10, GREATEST(0, CAST(b.equity_pct / 10 AS INT)))
       + CASE WHEN b.is_current_customer THEN 8 ELSE 0 END
     )) AS INT) AS intent_trigger,
-    -- fit: continuous over available property signals. lead_scores has
-    -- no bedrooms/bathrooms columns (they live on borrower_360), so we
-    -- approximate with the owner-occupancy tier + loan-type flag plus
-    -- a small jitter via is_investor (reduces fit for pure investor
-    -- rows so the ranked queue prioritises owner-occupants).
+    -- fit: exact mirror of gold_borrower_360. Bedrooms/bathrooms come
+    -- from the same silver property master row used by borrower_360.
     CAST(LEAST(100, GREATEST(0,
       CASE
-        WHEN b.is_owner_occupied AND b.first_pos_loan_type IN ('CONV','FHA','VA') THEN 78
-        WHEN b.is_owner_occupied                                                  THEN 68
-        WHEN b.is_corporate_owner                                                 THEN 58
-        ELSE 50
+        WHEN b.is_owner_occupied AND b.first_pos_loan_type IN ('CONV','FHA','VA') THEN 70
+        WHEN b.is_owner_occupied                                                  THEN 60
+        WHEN b.is_corporate_owner                                                 THEN 50
+        ELSE 40
       END
-      - CASE WHEN b.is_investor AND NOT b.is_owner_occupied THEN 10 ELSE 0 END
+      + LEAST(20, 4 * COALESCE(b.bedrooms, 0))
+      + LEAST(10, 3 * CAST(COALESCE(b.bathrooms, 0) AS INT))
     )) AS INT) AS fit,
-    -- relationship: must stay 1:1 with gold_borrower_360. lead_scores
-    -- does not carry related_property_count directly, but b.is_investor
-    -- is already derived from multi-property >= 2. For non-investor
-    -- rows we fall back to 0 bump; this is a known minor parity gap
-    -- (related_property_count in borrower_360 vs is_investor boolean
-    -- here) that drops a ~5pt contribution at most. The overall spread
-    -- is driven by economic_incentive + intent_trigger.
+    -- relationship: exact mirror of gold_borrower_360. Current/former
+    -- customers get an owner-level distinct tenant CLIP bonus; other
+    -- borrowers get the related-property count tail.
     CAST(LEAST(100, GREATEST(0,
       CASE
         WHEN b.is_current_customer THEN 70
+        WHEN b.is_former_customer  THEN 60
         WHEN b.is_competitor_lien  THEN 55
-        WHEN b.is_investor         THEN 45
+        WHEN COALESCE(b.related_property_count, 1) > 1 THEN 45
         ELSE 35
       END
       + CASE
-          WHEN b.is_current_customer
-            THEN LEAST(25, 5 * LEAST(5, b.historical_summit_distinct_clips))
-          WHEN b.is_investor
-            THEN 10
-          ELSE 0
+          WHEN b.is_current_customer OR b.is_former_customer
+            THEN LEAST(25, 5 * LEAST(5, b.historical_tenant_distinct_clips))
+          ELSE LEAST(25, GREATEST(0, (COALESCE(b.related_property_count, 1) - 1) * 5))
         END
+      + LEAST(12, 3 * COALESCE(b.first_party_relationship_depth, 0))
+      + LEAST(8, 4 * COALESCE(b.first_party_recent_interactions, 0))
+      + CASE WHEN b.first_party_recent_application THEN 5 ELSE 0 END
     )) AS INT) AS relationship,
     -- evidence: 10 pts per live event (was 20 -- saturated >=50% of
     -- rows) plus a continuous second_pos_amount term so dossier-rich
@@ -230,7 +208,9 @@ SELECT
     s.is_competitor_lien,
     s.min_spread_bps_applied,
     s.min_equity_pct_applied,
-    35, 25, 50
+    s.heloc_equity_min_applied,
+    s.cashout_equity_min_applied,
+    s.retention_min_spread_applied
   ) AS recommended_offer_code,
   s.rate_spread_bps,
   s.equity_pct,
@@ -238,12 +218,18 @@ SELECT
   s.listed_for_sale,
   s.is_investor,
   s.is_current_customer,
+  s.is_former_customer,
   s.is_competitor_lien,
+  s.has_first_party_relationship,
+  COALESCE(s.first_party_relationship_depth, 0) AS first_party_relationship_depth,
+  COALESCE(s.first_party_recent_interactions, 0) AS first_party_recent_interactions,
+  COALESCE(s.first_party_recent_application, FALSE) AS first_party_recent_application,
+  COALESCE(s.first_party_synthetic_demo, FALSE) AS first_party_synthetic_demo,
   s.min_spread_bps_applied,
   s.min_equity_pct_applied,
-  35 AS heloc_equity_min_applied,
-  25 AS cashout_equity_min_applied,
-  50 AS retention_min_spread_applied,
+  s.heloc_equity_min_applied,
+  s.cashout_equity_min_applied,
+  s.retention_min_spread_applied,
   -- Shared refresh_at captured once per run. See audit-holes-round-3 #7.
   (SELECT refresh_at FROM mip.ref.refresh_run_state ORDER BY captured_at DESC LIMIT 1) AS refreshed_at
 FROM subscores AS s;

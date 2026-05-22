@@ -22,4 +22,4 @@ Recommended fixes before converting to React routes:
 6. Replace stylized SVG map with MapLibre + GeoJSON only if time allows; stylized map is acceptable as a presentation-safe fallback.
 7. Keep the evidence drawer and approval banner mandatory on all recommendation/action pages.
 8. Use synthetic borrower names and no real contact info.
-9. Ensure all numbers shown in mock mode are internally consistent with the backend seed data.
+9. Ensure every KPI, score, and segment count on screen resolves to a real `mip.gold.*` row through the evidence chip — there is no mock-mode runtime path (see [CLAUDE.md](../CLAUDE.md) "Negative prompting").

@@ -90,7 +90,14 @@ WITH golden (
     ('case_15_custom_threshold_shifts_branch_refi_plus_heloc_to_cash_out',
         120,  45, FALSE, FALSE, FALSE, FALSE, FALSE,
        150, 15, 35, 25, 50,
-        'cash_out')
+        'cash_out'),
+    ('case_16_null_thresholds_fail_closed_to_nurture',
+        CAST(NULL AS INT), CAST(NULL AS INT),
+        CAST(NULL AS BOOLEAN), CAST(NULL AS BOOLEAN), CAST(NULL AS BOOLEAN),
+        CAST(NULL AS BOOLEAN), CAST(NULL AS BOOLEAN),
+        CAST(NULL AS INT), CAST(NULL AS INT), CAST(NULL AS INT),
+        CAST(NULL AS INT), CAST(NULL AS INT),
+        'nurture')
 )
 SELECT
   id,

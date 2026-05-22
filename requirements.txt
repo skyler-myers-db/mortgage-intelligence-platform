@@ -1,23 +1,2 @@
-fastapi==0.115.6
-uvicorn[standard]==0.34.0
-pydantic==2.10.4
-pydantic-settings==2.7.1
-python-dotenv==1.0.1
-httpx==0.28.1
-databricks-sdk==0.103.0
-databricks-sql-connector==3.7.0
-psycopg[binary]>=3.2.10,<3.4
-pytest==8.3.4
-pytest-cov==6.0.0
-ruff==0.8.6
-# Genie fuzz testing (tests/integration/test_genie_fuzz.py). Required
-# in CI so self-tests run; live fuzz runs skip without Genie creds.
-hypothesis==6.123.7
-
-# Optional OTLP log-exporter. Install with ``pip install .[otel]`` or
-# uncomment here to ship logs to Splunk / Datadog / Loki when
-# MIP_OTEL_ENDPOINT is set. Leaving commented keeps the Databricks Apps
-# wheel footprint minimal; the backend logs a warning and falls back to
-# stdout JSON if the env var is set but the packages aren't installed.
-# opentelemetry-sdk>=1.27,<2
-# opentelemetry-exporter-otlp>=1.27,<2
+-c uv.lock
+-r requirements.in

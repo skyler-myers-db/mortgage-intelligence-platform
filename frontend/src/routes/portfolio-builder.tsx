@@ -1,14 +1,40 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { type ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router-dom';
-import { api, isAbortError } from '../lib/api';
-import type { PortfolioPreview } from '../types';
+import { api } from '../lib/api';
+import { useConfigOptionsQuery } from '../lib/configOptionsQuery';
+import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
+import type { CampaignListResponse, CampaignSummary, PortfolioPreview } from '../types';
 import { PageShell } from '../components/layout/PageShell';
 import { KpiCard } from '../components/mortgage/KpiCard';
 import { Button } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { FilterSelect } from '../components/ui/FilterSelect';
+import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 import { DRAWER_SOURCES } from '../lib/drawerSources';
 import { useFootprint } from '../components/FootprintProvider';
+import { queryKeys } from '../lib/queryKeys';
+import { StateMultiSelect } from './portfolio-builder.components';
+import {
+  BASE_DEFAULT_FILTERS,
+  DEFAULT_CAMPAIGN_SETUP,
+  NON_GEO_FILTER_GROUPS,
+  URL_FILTER_KEYS,
+  buildCampaignConfig,
+  buildDefaultCampaignSetup,
+  buildGeoOptions,
+  buildLeadQueueUrlFromFilters,
+  buildPreviewCriteria,
+  buildUrlFromFilters,
+  campaignCriteriaSummary,
+  dayZeroSafe,
+  defaultGeographyForOptions,
+  formatDelta,
+  isDayZero,
+  parseFiltersFromUrl,
+  parseStateCodesFromUrl,
+  type CampaignSetupState,
+} from './portfolio-builder.logic';
 
 /**
  * Portfolio Builder — prototype `.surface` + `.filter-row` composition.
@@ -17,200 +43,116 @@ import { useFootprint } from '../components/FootprintProvider';
  * primary forward motion into segment intelligence.
  */
 
-// Non-GEO filter groups are tenant-invariant. The GEO group is built at
-// render time from the FootprintProvider (see `buildGeoOptions` below) so
-// the "All N states" label and the state-triple presets reflect the
-// tenant's real footprint rather than a hardcoded 6-state literal.
-// Keys MUST match PortfolioCriteria in backend/schemas/portfolio.py. The
-// earlier mismatch (`geo` vs `geography`, `occ` vs `occupancy`, etc.) made
-// every filter a no-op because Pydantic silently ignored unknown fields.
-const NON_GEO_FILTER_GROUPS: Array<{ label: string; key: string; options: string[] }> = [
-  { label: 'OCCUPANCY',    key: 'occupancy',            options: ['Owner-occupied', 'Non-owner-occupied', 'All'] },
-  { label: 'LIEN STATUS',  key: 'lien_status',          options: ['Open 1st lien', 'Open HELOC', 'Free & clear', 'Any'] },
-  { label: 'RELATIONSHIP', key: 'lender_relationship',  options: ['All', 'Current customer', 'Former customer', 'Competitor customer'] },
-  { label: 'PRODUCT',      key: 'product',              options: ['All products', 'Refi', 'HELOC', 'Cash-out', 'Purchase', 'Retention'] },
-  { label: 'EQUITY',       key: 'min_equity_pct_label', options: ['≥ 15%', '≥ 25%', '≥ 40%', 'Any'] },
-];
-
-/**
- * Build the GEO-dropdown options for the current tenant footprint.
- *
- * Emits (in order):
- *   1. The curated "Chicago MSA" anchor (only if IL is in the footprint;
- *      Summit's default tenant leads with Chicago so this entry preserves
- *      the established UX).
- *   2. "All N states" — the whole-footprint option, where N is the live
- *      count (so a 4-state tenant sees "All 4 states", not "All 6").
- *   3. Each state by its backend-provided state_name (so TX is "Texas",
- *      CA is "California", etc.). This replaces the prior hardcoded
- *      per-state entries ("Texas") + ad-hoc triples ("CA + FL + TX",
- *      "IL + CA + WA") that were only meaningful for Summit.
- */
-function buildGeoOptions(
-  states: ReadonlyArray<{ state_code: string; state_name: string }>,
-): string[] {
-  const opts: string[] = [];
-  const hasIllinois = states.some((s) => s.state_code.toUpperCase() === 'IL');
-  if (hasIllinois) opts.push('Chicago MSA');
-  opts.push(`All ${states.length} states`);
-  for (const s of states) opts.push(s.state_name);
-  return opts;
-}
-
-// Default filter values keyed by the short codes the existing local
-// state uses. Keeping these keys stable is a guardrail from the
-// round-2 audit — the backend schema already ignores unknown fields,
-// and renaming them mid-slice would be a scope creep.
-const DEFAULT_FILTERS: Record<string, string> = {
-  geo: 'Chicago MSA',
-  occ: 'Owner-occupied',
-  lien: 'Open 1st lien',
-  rel: 'All',
-  product: 'All products',
-  equity: '≥ 15%',
-};
-
-/**
- * URL search-param keys we round-trip. One per filter + the reload
- * token so the "Run build" commit is reproducible from a deep link.
- * These match the field names in DEFAULT_FILTERS so the URL reads
- * naturally ("?geo=Chicago+MSA&occ=Owner-occupied&..."). Unknown
- * params are ignored on parse; defaults fill in the rest.
- */
-const URL_FILTER_KEYS = ['geo', 'occ', 'lien', 'rel', 'product', 'equity'] as const;
-
-function parseFiltersFromUrl(sp: URLSearchParams): Record<string, string> {
-  const out: Record<string, string> = { ...DEFAULT_FILTERS };
-  for (const k of URL_FILTER_KEYS) {
-    const v = sp.get(k);
-    if (v !== null && v.length > 0) out[k] = v;
-  }
-  return out;
-}
-
-function buildUrlFromFilters(filters: Record<string, string>): URLSearchParams {
-  const sp = new URLSearchParams();
-  for (const k of URL_FILTER_KEYS) {
-    const v = filters[k];
-    // Skip defaults so the URL stays compact and shareable — a user
-    // who hasn't touched a filter won't have 6 redundant params in
-    // their address bar.
-    if (v !== undefined && v !== DEFAULT_FILTERS[k]) {
-      sp.set(k, v);
-    }
-  }
-  return sp;
-}
-
-function formatDelta(pct: number | null | undefined): string | undefined {
-  if (pct === null || pct === undefined) return undefined;
-  const sign = pct > 0 ? '+' : '';
-  return `${sign}${pct.toFixed(1)}% vs 7d ago`;
-}
-
-/**
- * When the preview is Day-0 (zero population + no refresh timestamp) the
- * raw value would be `0` — a plausible-but-wrong signal. Swap it for
- * `null` so KpiCard renders an em-dash and the banner explains why.
- * Hole-finder round 2 #13, 2026-04-23.
- */
-function isDayZero(preview: PortfolioPreview | null): boolean {
-  if (preview === null) return false;
-  // R5-20: prefer the server flag; fall back to the two-field inference
-  // only when the server didn't emit ``day_zero`` (pre-R5-20 clients).
-  if (preview.day_zero === true) return true;
-  if (preview.day_zero === false) return false;
-  return preview.marketable_population === 0 && preview.data_refreshed_at === null;
-}
-
-function dayZeroSafe(
-  preview: PortfolioPreview | null,
-  value: number | null | undefined,
-): number | null {
-  if (isDayZero(preview)) {
-    return null;
-  }
-  return value ?? null;
-}
-
 export default function PortfolioBuilder() {
   const [searchParams, setSearchParams] = useSearchParams();
   const footprint = useFootprint();
+  const configOptionsQuery = useConfigOptionsQuery();
+  const targetLenderOptions = useMemo(() => {
+    const values = configOptionsQuery.data?.target_lender_refs?.filter(Boolean);
+    return values && values.length > 0 ? values : ['All'];
+  }, [configOptionsQuery.data?.target_lender_refs]);
+  const targetLenderStatus = configOptionsQuery.isError
+    ? 'unavailable'
+    : configOptionsQuery.data?.target_lender_refs_status ?? 'loading';
+  const lenderName = configOptionsQuery.data?.lender_name?.trim() || 'configured lender';
   // Build the GEO dropdown from the tenant footprint. Memoised so the
   // FilterSelect doesn't get a fresh options array on every render (it
   // would be identity-stable for same-footprint re-renders).
   const geoOptions = useMemo(
-    () => buildGeoOptions(footprint.states),
-    [footprint.states],
+    () => buildGeoOptions(
+      footprint.ready && !footprint.usingFallback ? footprint.states : [],
+    ),
+    [footprint.ready, footprint.states, footprint.usingFallback],
   );
+  const defaultFilters = useMemo(
+    () => ({ ...BASE_DEFAULT_FILTERS }),
+    [],
+  );
+  const geoOptionsKey = useMemo(() => geoOptions.join('\u0000'), [geoOptions]);
+  const defaultGeo = useMemo(() => defaultGeographyForOptions(geoOptions), [geoOptions]);
   const filterGroups = useMemo(
     () => [
-      { label: 'GEO', key: 'geography', options: geoOptions },
-      ...NON_GEO_FILTER_GROUPS,
+      ...NON_GEO_FILTER_GROUPS.slice(0, 3),
+      { label: 'TARGET LIEN HOLDER', key: 'target_lender_ref', options: targetLenderOptions },
+      ...NON_GEO_FILTER_GROUPS.slice(3),
     ],
-    [geoOptions],
+    [targetLenderOptions],
   );
   // Initialize from URL so deep-links and browser back/forward work. On
   // mount we also trigger a build, so a shared link reproduces the
   // exact KPI grid the sender saw. Round-2 hole-finder #16, 2026-04-23.
   const [filters, setFilters] = useState<Record<string, string>>(() =>
-    parseFiltersFromUrl(searchParams),
+    parseFiltersFromUrl(searchParams, defaultFilters),
   );
-  const [preview, setPreview] = useState<PortfolioPreview | null>(null);
-  const [previewError, setPreviewError] = useState<string | null>(null);
-  const [building, setBuilding] = useState<boolean>(false);
+  const [stateCodes, setStateCodes] = useState<string[]>(() =>
+    parseStateCodesFromUrl(searchParams, footprint.states),
+  );
+  // The "committed" filter payload drives the useWarmingUpRetry hook.
+  // `filters` tracks the dropdown state, `committedFilters` is what the
+  // KPI grid reflects — only updated via onRunBuild or URL navigation.
+  // This preserves the prototype UX: filter changes don't refetch; the
+  // "Run build" button is the explicit commit point.
+  const [committedFilters, setCommittedFilters] = useState<Record<string, string>>(
+    () => parseFiltersFromUrl(searchParams, defaultFilters),
+  );
+  const [committedStateCodes, setCommittedStateCodes] = useState<string[]>(() =>
+    parseStateCodesFromUrl(searchParams, footprint.states),
+  );
   const [copyHint, setCopyHint] = useState<'idle' | 'copied' | 'failed'>('idle');
-
-  // Keep an AbortController live across calls so a rapid second click on
-  // "Run build" cancels the first request instead of letting it
-  // race-write stale data into state. Round-2 hole-finder #10/#11,
-  // 2026-04-23.
-  const inflightRef = useRef<AbortController | null>(null);
-
-  const runBuild = useCallback(
-    (criteria: Record<string, string>) => {
-      inflightRef.current?.abort();
-      const ctrl = new AbortController();
-      inflightRef.current = ctrl;
-      setBuilding(true);
-      setPreviewError(null);
-      api
-        .portfolioPreview(criteria, ctrl.signal)
-        .then((p) => {
-          if (ctrl.signal.aborted) return;
-          setPreview(p);
-        })
-        .catch((err: unknown) => {
-          if (isAbortError(err) || ctrl.signal.aborted) return;
-          setPreview(null);
-          setPreviewError(
-            err instanceof Error
-              ? `Couldn't load portfolio preview: ${err.message}`
-              : "Couldn't load portfolio preview.",
-          );
-        })
-        .finally(() => {
-          if (ctrl.signal.aborted) return;
-          setBuilding(false);
-        });
-    },
-    [],
+  const [saveHint, setSaveHint] = useState<'idle' | 'saved' | 'failed'>('idle');
+  const [campaignSetup, setCampaignSetup] = useState<CampaignSetupState>(DEFAULT_CAMPAIGN_SETUP);
+  const campaignSetupDefaultRef = useRef<CampaignSetupState>(DEFAULT_CAMPAIGN_SETUP);
+  const currentDefaultCampaignSetup = useMemo(
+    () => buildDefaultCampaignSetup(lenderName),
+    [lenderName],
   );
+  const {
+    data: campaignsData,
+    isPending: campaignsLoading,
+    isError: campaignsIsError,
+    refetch: refetchCampaigns,
+  } = useQuery<CampaignListResponse>({
+    queryKey: queryKeys.campaigns(),
+    queryFn: ({ signal }) => api.campaigns(signal),
+    retry: false,
+  });
+  const campaigns: CampaignSummary[] = campaignsData?.campaigns ?? [];
+  const campaignsError = campaignsIsError ? 'Saved campaigns unavailable' : null;
 
-  // Initial build on mount using whatever filters came in from the URL.
-  useEffect(() => {
-    runBuild(filters);
-    return () => {
-      inflightRef.current?.abort();
-    };
-    // Intentionally runs once on mount; user drives subsequent runs via
-    // "Run build" (which also pushes to the URL). We don't refetch on
-    // every filter dropdown change — the "Run build" button is the
-    // explicit commit point per the prototype UX.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // Cold-start warming-up loop. Re-runs whenever committedFilters
+  // changes (via Run build or URL navigation). 6 retries / 5s apart =
+  // 30s of auto-retry before surfacing the red error path.
+  const committedKey = useMemo(
+    () => JSON.stringify({ filters: committedFilters, stateCodes: committedStateCodes }),
+    [committedFilters, committedStateCodes],
+  );
+  const {
+    data: preview,
+    warmingUp,
+    error,
+    manualRetry: retryBuild,
+  } = useWarmingUpRetry<PortfolioPreview>(
+    (signal) => api.portfolioPreview(buildPreviewCriteria(committedFilters, committedStateCodes), signal),
+    [committedKey],
+    { queryKey: queryKeys.portfolioPreview([committedKey]) },
+  );
+  const building = preview === null && warmingUp === null && error === null;
+  const previewError = error
+    ? error instanceof Error
+      ? `Couldn't load portfolio preview: ${error.message}`
+      : "Couldn't load portfolio preview."
+    : null;
 
   const setFilter = (key: string) => (next: string) => setFilters((f) => ({ ...f, [key]: next }));
+  const setCampaignField = (key: keyof CampaignSetupState) => (
+    event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>,
+  ) => setCampaignSetup((current) => ({ ...current, [key]: event.target.value }));
+  const buildDirty = useMemo(
+    () =>
+      JSON.stringify({ filters, stateCodes }) !==
+      JSON.stringify({ filters: committedFilters, stateCodes: committedStateCodes }),
+    [committedFilters, committedStateCodes, filters, stateCodes],
+  );
 
   /**
    * Commit the current filter state: push to URL, then refetch. The
@@ -219,9 +161,10 @@ export default function PortfolioBuilder() {
    * change (which would pollute browser history with every keystroke).
    */
   const onRunBuild = useCallback(() => {
-    setSearchParams(buildUrlFromFilters(filters), { replace: false });
-    runBuild(filters);
-  }, [filters, runBuild, setSearchParams]);
+    setSearchParams(buildUrlFromFilters(filters, defaultFilters, stateCodes, targetLenderOptions), { replace: false });
+    setCommittedFilters(filters);
+    setCommittedStateCodes(stateCodes);
+  }, [defaultFilters, filters, setSearchParams, stateCodes, targetLenderOptions]);
 
   /**
    * Copy the current URL to the clipboard. Falls back to a failed
@@ -230,13 +173,32 @@ export default function PortfolioBuilder() {
    * because onRunBuild wrote to it.
    */
   const onCopyLink = useCallback(async () => {
+    if (buildDirty) return;
     try {
       await navigator.clipboard.writeText(window.location.href);
       setCopyHint('copied');
     } catch {
       setCopyHint('failed');
     }
-  }, []);
+  }, [buildDirty]);
+
+  const onSaveBuild = useCallback(async () => {
+    if (buildDirty) return;
+    const defaultName = `Portfolio build ${new Date().toLocaleString()}`;
+    const name = window.prompt('Name this build', defaultName)?.trim();
+    if (!name) return;
+    try {
+      await api.portfolioCreate(
+        name,
+        buildPreviewCriteria(committedFilters, committedStateCodes),
+        buildCampaignConfig(campaignSetup),
+      );
+      await refetchCampaigns();
+      setSaveHint('saved');
+    } catch {
+      setSaveHint('failed');
+    }
+  }, [buildDirty, campaignSetup, committedFilters, committedStateCodes, refetchCampaigns]);
 
   useEffect(() => {
     if (copyHint === 'idle') return;
@@ -244,23 +206,60 @@ export default function PortfolioBuilder() {
     return () => window.clearTimeout(t);
   }, [copyHint]);
 
+  useEffect(() => {
+    if (saveHint === 'idle') return;
+    const t = window.setTimeout(() => setSaveHint('idle'), 2200);
+    return () => window.clearTimeout(t);
+  }, [saveHint]);
+
+  useEffect(() => {
+    const previousDefault = campaignSetupDefaultRef.current;
+    campaignSetupDefaultRef.current = currentDefaultCampaignSetup;
+    setCampaignSetup((current) => (
+      JSON.stringify(current) === JSON.stringify(previousDefault)
+        ? currentDefaultCampaignSetup
+        : current
+    ));
+  }, [currentDefaultCampaignSetup]);
+
   // When the URL changes (browser back/forward), reconcile local state
   // and refetch so the KPI grid reflects the navigation. We only
   // refetch if the URL-derived filters actually differ from local
   // state — otherwise setState from onRunBuild would cause an
   // unnecessary second fetch.
   const urlFilters = useMemo(
-    () => parseFiltersFromUrl(searchParams),
-    [searchParams],
+    () => parseFiltersFromUrl(searchParams, defaultFilters, targetLenderOptions),
+    [defaultFilters, searchParams, targetLenderOptions],
+  );
+  const urlStateCodes = useMemo(
+    () => parseStateCodesFromUrl(searchParams, footprint.states),
+    [footprint.states, searchParams],
   );
   useEffect(() => {
     const differs = URL_FILTER_KEYS.some((k) => urlFilters[k] !== filters[k]);
-    if (differs) {
+    const stateDiffers = urlStateCodes.join(',') !== stateCodes.join(',');
+    if (differs || stateDiffers) {
       setFilters(urlFilters);
-      runBuild(urlFilters);
+      setCommittedFilters(urlFilters);
+      setStateCodes(urlStateCodes);
+      setCommittedStateCodes(urlStateCodes);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [urlFilters]);
+  }, [urlFilters, urlStateCodes]);
+
+  useEffect(() => {
+    const allowed = new Set(footprint.states.map((state) => state.state_code));
+    const sanitize = (codes: string[]) => {
+      const next = codes.filter((code) => allowed.has(code));
+      return next.length === footprint.states.length ? [] : next;
+    };
+    setStateCodes(sanitize);
+    setCommittedStateCodes(sanitize);
+  }, [footprint.states, geoOptionsKey]);
+
+  const leadQueueUrl = useMemo(() => {
+    return buildLeadQueueUrlFromFilters(committedFilters, committedStateCodes, targetLenderOptions);
+  }, [committedFilters, committedStateCodes, targetLenderOptions]);
 
   return (
     <PageShell
@@ -269,24 +268,14 @@ export default function PortfolioBuilder() {
       lede="Apply geography, occupancy, lien, relationship, product, and equity filters, then run the build. The KPI grid shows size, average score, and projected conversion."
     >
       <div className="surface">
-        <div className="surface__hdr" style={{ justifyContent: 'space-between' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <div
-              style={{
-                width: 28,
-                height: 28,
-                borderRadius: 8,
-                background: 'var(--accent-soft)',
-                color: 'var(--accent)',
-                display: 'grid',
-                placeItems: 'center',
-              }}
-            >
+        <div className="surface__hdr surface__hdr--split">
+          <div className="surface__hdr-main">
+            <div className="surface__icon">
               <Icon name="target" size={14} />
             </div>
             <div>
               <div className="h-4">Filters</div>
-              <div className="muted" style={{ fontSize: 12 }}>
+              <div className="muted fs-12">
                 Filter the population, run the build, review KPIs.
               </div>
             </div>
@@ -294,6 +283,13 @@ export default function PortfolioBuilder() {
         </div>
         <div className="surface__body">
           <div className="filter-row">
+            <StateMultiSelect
+              label="GEO"
+              allLabel={defaultGeo}
+              states={footprint.ready && !footprint.usingFallback ? footprint.states : []}
+              value={stateCodes}
+              onChange={setStateCodes}
+            />
             {filterGroups.map((g) => (
               <FilterSelect
                 key={g.key}
@@ -303,12 +299,13 @@ export default function PortfolioBuilder() {
                 onChange={setFilter(g.key)}
               />
             ))}
-            <div style={{ flex: 1 }} />
+            <div className="filter-row__spacer" />
             <Button
               variant="ghost"
               size="default"
               icon="link"
               onClick={() => void onCopyLink()}
+              disabled={buildDirty}
               aria-label="Copy shareable URL for the current build"
               data-testid="portfolio-copy-link"
             >
@@ -316,7 +313,26 @@ export default function PortfolioBuilder() {
                 ? 'Link copied'
                 : copyHint === 'failed'
                 ? 'Copy failed'
+                : buildDirty
+                ? 'Run before sharing'
                 : 'Share this build'}
+            </Button>
+            <Button
+              variant="ghost"
+              size="default"
+              icon="doc"
+              onClick={() => void onSaveBuild()}
+              disabled={buildDirty || building}
+              aria-label="Save current portfolio build"
+              data-testid="portfolio-save-build"
+            >
+              {saveHint === 'saved'
+                ? 'Build saved'
+                : saveHint === 'failed'
+                ? 'Save failed'
+                : buildDirty
+                ? 'Run before saving'
+                : 'Save build'}
             </Button>
             <Button
               variant="primary"
@@ -328,20 +344,35 @@ export default function PortfolioBuilder() {
               {building ? 'Running…' : 'Run build'}
             </Button>
           </div>
+          {targetLenderStatus !== 'live' && (
+            <div className="filter-row__hint muted">
+              Target lien holder options are limited until live borrower lender aliases finish refreshing.
+            </div>
+          )}
 
-          {previewError && (
+          {warmingUp && (
+            <div className="mt-4">
+              <WarmingUpBlock
+                state={warmingUp}
+                title="Portfolio preview loading"
+                compact
+              />
+            </div>
+          )}
+          {previewError && !warmingUp && (
             <div
               role="alert"
-              style={{
-                marginTop: 14,
-                padding: '10px 12px',
-                border: '1px solid var(--signal-danger)',
-                borderRadius: 'var(--r-md)',
-                color: 'var(--signal-danger)',
-                fontSize: 12,
-              }}
+              className="status-callout status-callout--danger mt-4"
             >
-              {previewError}
+              <span>{previewError}</span>
+              <button
+                type="button"
+                className="btn btn--ghost btn--sm"
+                onClick={retryBuild}
+                aria-label="Retry portfolio preview"
+              >
+                Retry
+              </button>
             </div>
           )}
 
@@ -355,100 +386,262 @@ export default function PortfolioBuilder() {
           {isDayZero(preview) && (
             <div
               role="status"
-              style={{
-                marginTop: 14,
-                padding: '12px 14px',
-                border: '1px solid var(--line-2)',
-                borderRadius: 'var(--r-md)',
-                background: 'var(--bg-1)',
-                fontSize: 13,
-                color: 'var(--text-1)',
-              }}
+              className="status-callout status-callout--day-zero mt-4"
             >
               <strong>First data refresh pending.</strong>{' '}
               Unity Catalog gold tables are empty. Run{' '}
-              <code
-                style={{
-                  fontFamily: 'var(--font-mono)',
-                  fontSize: 12,
-                  padding: '1px 6px',
-                  borderRadius: 4,
-                  background: 'var(--bg-2)',
-                }}
-              >
+              <code className="callout-code">
                 databricks bundle run mip_refresh_scores -t dev
               </code>{' '}
               to populate them.
             </div>
           )}
+          {!isDayZero(preview) && preview?.trend_note && (
+            <div
+              role="status"
+              className="status-callout status-callout--info mt-4"
+            >
+              {preview.trend_note}
+            </div>
+          )}
 
-          <div className="kpi-row" style={{ marginTop: 20 }}>
+          <div className="kpi-row kpi-row--spaced">
             <KpiCard
               label="Marketable population"
               valueAnimated={dayZeroSafe(preview, preview?.marketable_population)}
               trend={preview?.trends?.marketable_population?.series}
-              delta={formatDelta(preview?.trends?.marketable_population?.delta_pct)}
+              delta={formatDelta(preview?.trends?.marketable_population)}
               deltaDir={preview?.trends?.marketable_population?.direction}
+              trendNote={preview?.trends?.marketable_population?.note}
+              loading={building}
               source={DRAWER_SOURCES.population}
             />
             <KpiCard
               label="Avg. borrower score"
               valueAnimated={dayZeroSafe(preview, preview?.avg_score)}
               trend={preview?.trends?.avg_score?.series}
-              delta={formatDelta(preview?.trends?.avg_score?.delta_pct)}
+              delta={formatDelta(preview?.trends?.avg_score)}
               deltaDir={preview?.trends?.avg_score?.direction}
-              source={DRAWER_SOURCES.nbo}
+              trendNote={preview?.trends?.avg_score?.note}
+              loading={building}
+              source={DRAWER_SOURCES.leadScore}
             />
             <KpiCard
               label="Top-tier opportunities"
               valueAnimated={dayZeroSafe(preview, preview?.top_tier_opportunities)}
               trend={preview?.trends?.top_tier_opportunities?.series}
-              delta={formatDelta(preview?.trends?.top_tier_opportunities?.delta_pct)}
+              delta={formatDelta(preview?.trends?.top_tier_opportunities)}
               deltaDir={preview?.trends?.top_tier_opportunities?.direction}
-              source={DRAWER_SOURCES.nbo}
+              trendNote={preview?.trends?.top_tier_opportunities?.note}
+              loading={building}
+              source={DRAWER_SOURCES.leadScore}
             />
             <KpiCard
               label="Offers recommended"
               valueAnimated={dayZeroSafe(preview, preview?.offers_recommended)}
               trend={preview?.trends?.offers_recommended?.series}
-              delta={formatDelta(preview?.trends?.offers_recommended?.delta_pct)}
+              delta={formatDelta(preview?.trends?.offers_recommended)}
               deltaDir={preview?.trends?.offers_recommended?.direction}
+              trendNote={preview?.trends?.offers_recommended?.note}
+              loading={building}
               source={DRAWER_SOURCES.nbo}
             />
           </div>
         </div>
       </div>
 
+      <div className="surface mt-4">
+        <div className="surface__hdr surface__hdr--split">
+          <div className="surface__hdr-main">
+            <div className="surface__icon">
+              <Icon name="send" size={14} />
+            </div>
+            <div>
+              <div className="h-4">Campaign setup</div>
+              <div className="muted fs-12">
+                Eligible-only suppression, channel sequence, holdout, send window, and ROI inputs.
+              </div>
+            </div>
+          </div>
+          <span className="chip chip--success">eligible only · 30d cap</span>
+        </div>
+        <div className="surface__body">
+          <div className="campaign-setup">
+            <label className="campaign-setup__field">
+              <span>Subject A</span>
+              <input
+                className="form-input"
+                value={campaignSetup.subjectA}
+                onChange={setCampaignField('subjectA')}
+                maxLength={120}
+              />
+            </label>
+            <label className="campaign-setup__field">
+              <span>Subject B</span>
+              <input
+                className="form-input"
+                value={campaignSetup.subjectB}
+                onChange={setCampaignField('subjectB')}
+                maxLength={120}
+              />
+            </label>
+            <label className="campaign-setup__field campaign-setup__field--wide">
+              <span>Body angle A</span>
+              <textarea
+                className="form-input campaign-setup__textarea"
+                value={campaignSetup.bodyA}
+                onChange={setCampaignField('bodyA')}
+                maxLength={700}
+              />
+            </label>
+            <label className="campaign-setup__field campaign-setup__field--wide">
+              <span>Body angle B</span>
+              <textarea
+                className="form-input campaign-setup__textarea"
+                value={campaignSetup.bodyB}
+                onChange={setCampaignField('bodyB')}
+                maxLength={700}
+              />
+            </label>
+            <label className="campaign-setup__field">
+              <span>Holdout %</span>
+              <input
+                className="form-input"
+                inputMode="decimal"
+                value={campaignSetup.holdoutPct}
+                onChange={setCampaignField('holdoutPct')}
+              />
+            </label>
+            <label className="campaign-setup__field">
+              <span>Send start</span>
+              <input
+                className="form-input"
+                type="time"
+                value={campaignSetup.startLocal}
+                onChange={setCampaignField('startLocal')}
+              />
+            </label>
+            <label className="campaign-setup__field">
+              <span>Send end</span>
+              <input
+                className="form-input"
+                type="time"
+                value={campaignSetup.endLocal}
+                onChange={setCampaignField('endLocal')}
+              />
+            </label>
+            <label className="campaign-setup__field">
+              <span>Budget</span>
+              <input
+                className="form-input"
+                inputMode="decimal"
+                value={campaignSetup.budget}
+                onChange={setCampaignField('budget')}
+                placeholder="optional"
+              />
+            </label>
+            <label className="campaign-setup__field">
+              <span>Email cost</span>
+              <input
+                className="form-input"
+                inputMode="decimal"
+                value={campaignSetup.emailCost}
+                onChange={setCampaignField('emailCost')}
+              />
+            </label>
+            <label className="campaign-setup__field">
+              <span>SMS cost</span>
+              <input
+                className="form-input"
+                inputMode="decimal"
+                value={campaignSetup.smsCost}
+                onChange={setCampaignField('smsCost')}
+              />
+            </label>
+            <label className="campaign-setup__field">
+              <span>Mail cost</span>
+              <input
+                className="form-input"
+                inputMode="decimal"
+                value={campaignSetup.mailCost}
+                onChange={setCampaignField('mailCost')}
+              />
+            </label>
+          </div>
+          <div className="campaign-setup__meta">
+            <span>Email → SMS after 3 days → direct mail after 10 days</span>
+            <span>Tue-Thu · borrower local time</span>
+          </div>
+        </div>
+      </div>
+
+      <div className="surface mt-4">
+        <div className="surface__hdr surface__hdr--split">
+          <div className="surface__hdr-main">
+            <div className="surface__icon">
+              <Icon name="doc" size={14} />
+            </div>
+            <div>
+              <div className="h-4">Saved campaigns</div>
+              <div className="muted fs-12">Drafts and review status for portfolio builds.</div>
+            </div>
+          </div>
+          <Button
+            variant="ghost"
+            size="sm"
+            icon="tweak"
+            onClick={() => void refetchCampaigns()}
+            aria-label="Refresh saved campaigns"
+          >
+            Refresh
+          </Button>
+        </div>
+        <div className="surface__body">
+          {campaignsLoading ? (
+            <div className="muted fs-12">Loading campaigns…</div>
+          ) : campaignsError ? (
+            <div className="status-callout status-callout--danger">{campaignsError}</div>
+          ) : campaigns.length === 0 ? (
+            <div className="muted fs-12">No saved campaigns.</div>
+          ) : (
+            <div className="saved-workspace">
+              <div className="saved-workspace__summary">
+                <span>{campaigns.length.toLocaleString()} saved</span>
+                <span>eligible-only policy required before approval</span>
+              </div>
+              {campaigns.slice(0, 8).map((campaign) => (
+                <div key={campaign.campaign_id} className="saved-workspace__item">
+                  <span className="status-dot status-dot--ok" aria-hidden="true" />
+                  <div className="saved-workspace__body">
+                    <span className="text-1">{campaign.name}</span>
+                    <span>{campaign.status.replace(/_/g, ' ')} · {campaignCriteriaSummary(campaign)}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
       {preview?.high_intent_leads !== undefined && preview.high_intent_leads > 0 && (
-        <div
-          style={{
-            marginTop: 'var(--gap-grid)',
-            padding: '14px 16px',
-            border: '1px solid var(--line-1)',
-            borderRadius: 'var(--r-md)',
-            background: 'var(--bg-1)',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 14,
-          }}
-        >
-          <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 13, color: 'var(--text-1)' }}>
+        <div className="lead-cta">
+          <div className="lead-cta__body">
+            <div className="lead-cta__title">
               {preview.high_intent_leads.toLocaleString()} high-intent borrower
               {preview.high_intent_leads === 1 ? '' : 's'} match the current filters.
             </div>
-            <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
+            <div className="lead-cta__sub">
               Open the lead queue to review evidence and approve outreach per borrower.
             </div>
           </div>
-          <Link to="/lead-queue" className="btn btn--primary">
+          <Link to={leadQueueUrl} className="btn btn--primary">
             Open lead queue
             <Icon name="chevright" size={14} />
           </Link>
         </div>
       )}
 
-      <div style={{ marginTop: 'var(--gap-grid)', display: 'flex', gap: 12 }}>
+      <div className="section-actions">
         <Link to="/segment-intelligence" className="btn">
           Next: segments
           <Icon name="chevright" size={14} />

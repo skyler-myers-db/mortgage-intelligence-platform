@@ -1,4 +1,8 @@
+> **Internal implementation artifact. Not approved for public release.**
+
 # UX Walkthrough + Accessibility Validation
+
+> **Note:** This document records a past state. `MIP_MOCK_MODE` has since been removed in the live-data cutover (commit `2f09424`). The text below is preserved for audit traceability.
 
 **Date:** 2026-04-22
 **Branch:** `fix/ci-bundle-auth-and-playwright`
@@ -58,7 +62,7 @@ That 503 is an expected consequence of the local env, not a product bug.
 | Critical axe violations (across all routes) | 1 pattern, ~5 node hits |
 
 **Verdict:** **non-blocking issues found, not release-blocking**. Two real bugs
-worth filing (B1 borrower-360 fixture fallback, B2 density toggle no-op),
+worth filing from the historical run (B1 borrower-360 no-ID landing, B2 density toggle no-op),
 one Run-build-is-decorative UX observation, and the standing a11y violations
 already known to the team from `accessibility.spec.ts`.
 
@@ -69,7 +73,7 @@ already known to the team from `accessibility.spec.ts`.
 ### 1. Home (`/`)
 
 - **Primary CTAs per prototype:** `Start: build a portfolio`, `Build a lead portfolio`, `Jump to segments`, `Ask Genie`, KPI evidence chips, `Open Genie` (floating).
-- **Renders:** pass. Real KPI values from live warehouse — Marketable population **89,553**, High-intent leads **12,840**, Cost per contact **$2.18**, Projected contact→app **9.7%**.
+- **Renders:** pass. KPI values came from the live warehouse for that run; exact figures are intentionally not pinned in this historical note because they change with refresh scope and metric contracts.
 - **Console errors:** only the two expected baselines (audit 503 + favicon 404). Zero non-trivial errors.
 - **Primary CTA click (`Start: build a portfolio`):** navigates to `/portfolio-builder`.
 - **Screenshot:** `docs/validation/screenshots/ux-walkthrough/home.png`.
@@ -110,10 +114,10 @@ already known to the team from `accessibility.spec.ts`.
 ### 5. Borrower 360 (`/borrower-360`)
 
 - **Primary CTAs per prototype:** `Build outreach draft`, evidence chips, `Open Genie`.
-- **Default (no-ID) landing render:** **fail, but non-blocking**. The route defaults to borrower id `B-48291` (`frontend/src/routes/borrower-360.tsx:24`), which does **not** exist in the live `mip.gold` data. The backend returns `404 {"detail": "Borrower B-48291 not found"}`, but the UI still renders a **hardcoded fixture** dossier — "James & Maria Rodriguez, Chicago, IL 60611" — because `borrower-360.tsx:14` imports `DRAWER_SOURCES, mockSegments` from `src/mocks/fixtureData.ts` and falls back to that when the API 404s. See critical bug B1.
+- **Default (no-ID) landing render:** **pass after remediation**. The route now renders an explicit empty-state page, or returns to the last borrower selected in the current browser session. It no longer defaults to a fixture borrower or renders a dossier after a 404.
 - **Parametrized (real-ID) render:** pass. Navigated to `/borrower-360/B-0STSZHO4O5J04` and the API returned the real borrower "Owner d1a3a065, CHICAGO, IL" — CLIP 4707924298, Owner Link 1100000134187756, AVM $299,480, LTV 21%, score 68 — all live from the warehouse.
-- **Console errors on `/borrower-360`:** `404` on `/api/borrowers/B-48291` (fixture ID) × 2 retries.
-- **Screenshots:** `borrower-360.png` (fixture fallback view) and `borrower-360-real-id.png` (live data).
+- **Console errors on `/borrower-360`:** none expected on the no-ID empty-state route.
+- **Screenshots:** `borrower-360.png` (empty-state view) and `borrower-360-real-id.png` (live data).
 - **axe:** 1 critical (`label` on Genie input).
 
 ### 6. Offer Orchestrator (`/offer-orchestrator`)
@@ -219,12 +223,10 @@ apply on live UC data, which they do.)
 
 ## Real bugs found
 
-### B1 — Borrower 360 default-landing uses fixture data instead of a real borrower (non-blocking, should fix before wider demo)
+### B1 — Borrower 360 default-landing no-ID behavior (fixed)
 
-- `frontend/src/routes/borrower-360.tsx:14` imports `DRAWER_SOURCES, mockSegments` from `src/mocks/fixtureData.ts`. CLAUDE.md is explicit: "Production routers do NOT import them. There is no `MIP_MOCK_MODE` runtime toggle."
-- `frontend/src/routes/borrower-360.tsx:24` `const { id = 'B-48291' } = useParams();` defaults to a fixture ID that only exists in `src/mocks/fixtureData.ts:43`.
-- Effect: navigating to `/borrower-360` (no ID) shows **"James & Maria Rodriguez, Chicago, IL 60611, 88% conf"** — a hardcoded fixture — even though the backend correctly 404s on that ID. The dossier page never degrades to a real-data selector / empty-state.
-- Suggested fix (no fixture import): default the route to either (a) redirect to `/lead-queue` when no ID is provided, or (b) fetch the first borrower from `/api/leads?limit=1` and redirect to `/borrower-360/:real_id`. Same pattern applies to `offer-orchestrator.tsx:63` which has the identical default.
+- Current state: navigating to `/borrower-360` with no borrower id renders an explicit empty-state page or restores the last selected borrower from the browser session. It does not default to a fixture borrower and does not render a dossier after a 404.
+- Offer Orchestrator follows the same pattern: no borrower id means an empty-state page or the last selected borrower, not a local dossier.
 
 ### B2 — Density toggle is a visual no-op (non-blocking)
 
@@ -244,7 +246,7 @@ apply on live UC data, which they do.)
 - Created: 12 screenshots under `docs/validation/screenshots/ux-walkthrough/`:
   - `home.png`, `home-light-theme.png`, `home-accent-red.png`, `home-mobile-375.png`
   - `portfolio-builder.png`, `segment-intelligence.png`, `lead-queue.png`
-  - `borrower-360.png` (fixture-fallback view), `borrower-360-real-id.png` (real-data view)
+  - `borrower-360.png` (empty-state view), `borrower-360-real-id.png` (real-data view)
   - `offer-orchestrator.png`, `ask-genie.png`, `admin-config.png`
 - No source code or test files modified.
 
@@ -261,24 +263,22 @@ apply on live UC data, which they do.)
 
 - This walk did **not** exercise the deployed Apps URL. If there is drift between local and Apps (different CSP, different warehouse pool, Apps-injected env), it won't be caught here. Recommendation: after B1/B2 are addressed, re-run Option B with a working personal OAuth token against the deployed URL to confirm parity.
 - Lakebase-dependent features (audit log tail, approval persistence) were validated only as "degraded-state UI renders correctly". Full write-path behavior (approval → Lakebase row) requires a working local Postgres or the deployed Lakebase instance.
-- The `B-48291` fixture-fallback bug is the only issue that directly violates a CLAUDE.md "do not" rule ("Production routers do NOT import [fixtures]"). All other findings are polish / UX / a11y.
+- The old no-ID dossier bug has been fixed. Remaining findings in this historical walkthrough are polish / UX / a11y unless separately re-opened by a fresh validation run.
 
 ## Verdict
 
-**Non-blocking issues found.** The product flow works end-to-end on live
-Unity Catalog data across 7/8 routes; the 8th (Borrower 360 no-ID landing)
-falls back to a hardcoded fixture which is a real bug but not a release
-blocker because navigating with a real borrower ID (the actual user flow
-from Lead Queue → dossier) produces real data. Theme and accent toggles
-work. Density toggle is a CSS regression worth fixing. Accessibility
-violations match what `accessibility.spec.ts` already tracks — nothing new
-was introduced by the live-data migration.
+**Historical report superseded in part.** The product flow works end-to-end on
+live Unity Catalog data, and the Borrower 360 no-ID landing now renders an
+empty state or restores the last selected borrower instead of showing fixture
+data. Theme and accent toggles work. Density toggle is a CSS regression worth
+fixing. Accessibility violations match what `accessibility.spec.ts` already
+tracks — nothing new was introduced by the live-data migration.
 
 ## Next recommended action
 
 Open 2 PRs against `main`:
 
-1. **`fix(frontend): drop fixture fallback in Borrower 360 + Offer Orchestrator default routes`** — remove the `import { DRAWER_SOURCES, mockSegments } from '../mocks/fixtureData'` lines in `borrower-360.tsx` and `offer-orchestrator.tsx`, replace the `id = 'B-48291'` defaults with either a redirect to `/lead-queue` or an async redirect to the first live borrower ID.
+1. **Closed:** Borrower 360 + Offer Orchestrator default routes now use empty-state / last-selected borrower behavior instead of local dossier data.
 2. **`fix(css): density toggle selector order in tokens.css`** — move `[data-density="comfortable"]` to bind only to the attribute (not also `:root`) and reorder so `compact` wins when the attribute is present. Add a small `tests/e2e/density.spec.ts` that asserts `--pad-card` actually changes between states.
 
 Both are small, reviewable, and close the gaps found here without touching

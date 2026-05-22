@@ -1,10 +1,10 @@
-"""Sync Lakebase approvals + outreach state into `mip.gold.borrower_lifecycle_state`.
+"""Sync Lakebase approvals + outreach state into the configured gold catalog.
 
 Runs as a Databricks Jobs Spark-Python task (``mip_sync_lifecycle_state``
 in ``databricks.yml``). Reads the authoritative approval + outreach state
 from Lakebase (``mip_app.approvals`` + ``mip_app.action_audit`` filtered
 to outreach events) and writes a keyed-by-borrower_id mirror into
-``mip.gold.borrower_lifecycle_state`` so UC metric views can expose
+``<catalog>.gold.borrower_lifecycle_state`` so UC metric views can expose
 ``approval_rate`` and ``outreach_rate`` without a runtime federated join.
 
 Authority model (non-negotiable):
@@ -35,10 +35,41 @@ Exit codes:
 """
 from __future__ import annotations
 
+import argparse
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any
+
+_UC_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _catalog_default() -> str:
+    return (os.environ.get("MIP_DEFAULT_CATALOG") or "mip").strip() or "mip"
+
+
+def _quote_uc_identifier(value: str, *, field: str) -> str:
+    """Return a backtick-quoted Unity Catalog identifier, failing closed."""
+    normalized = value.strip()
+    if not _UC_IDENTIFIER_RE.fullmatch(normalized):
+        print(
+            f"[sync-lifecycle] invalid {field} identifier {value!r}; "
+            "expected letters, digits, and underscores.",
+            file=sys.stderr,
+        )
+        sys.exit(3)
+    return f"`{normalized}`"
+
+
+def _qualified_uc_table(catalog: str, schema: str, table: str) -> str:
+    return ".".join(
+        [
+            _quote_uc_identifier(catalog, field="catalog"),
+            _quote_uc_identifier(schema, field="schema"),
+            _quote_uc_identifier(table, field="table"),
+        ]
+    )
 
 
 def _resolve_connection() -> dict:
@@ -123,14 +154,10 @@ def _resolve_connection() -> dict:
     }
 
 
-# Latest approval per borrower, plus a flag for whether an outreach event
-# has been recorded in the append-only action_audit ledger. outreach_status
-# is 'actioned' when any event with event_type starting with 'OUTREACH_' has
-# fired for that borrower, 'queued' when an approve exists but no outreach
-# yet, and 'none' otherwise. action_audit.subject_clip is a hash of the
-# CLIP -- outreach_actions isn't a dedicated table, so we key on
-# approvals.borrower_id and correlate against action_audit.entity_id which
-# the router writes as the borrower_id for outreach events.
+# Latest approval and latest sales disposition per borrower. This mirrors
+# SalesStateStore.lifecycle_for(): outreach_status is 'actioned' when a
+# call_dispositions row exists, 'queued' when an approval exists but no
+# disposition has been recorded, and 'none' otherwise.
 _LAKEBASE_QUERY = """
 WITH latest_approvals AS (
     SELECT DISTINCT ON (a.borrower_id)
@@ -141,19 +168,15 @@ WITH latest_approvals AS (
     FROM mip_app.approvals a
     ORDER BY a.borrower_id, a.decided_at DESC
 ),
-latest_outreach AS (
-    SELECT
-        entity_id AS borrower_id,
-        MAX(event_at) AS outreach_at
-    FROM mip_app.action_audit
-    WHERE event_type LIKE 'OUTREACH_%'
-      AND entity_type = 'borrower'
-      AND entity_id IS NOT NULL
-      AND entity_id <> ''
-    GROUP BY entity_id
+latest_dispositions AS (
+    SELECT DISTINCT ON (d.borrower_id)
+        d.borrower_id,
+        d.occurred_at AS outreach_at
+    FROM mip_app.call_dispositions d
+    ORDER BY d.borrower_id, d.occurred_at DESC, d.created_at DESC
 )
 SELECT
-    COALESCE(a.borrower_id, o.borrower_id)              AS borrower_id,
+    COALESCE(a.borrower_id, d.borrower_id)              AS borrower_id,
     CASE
         WHEN a.action = 'approve' THEN 'approved'
         WHEN a.action = 'reject'  THEN 'rejected'
@@ -161,7 +184,7 @@ SELECT
         ELSE 'pending'
     END                                                  AS approval_status,
     CASE
-        WHEN o.outreach_at IS NOT NULL          THEN 'actioned'
+        WHEN d.outreach_at IS NOT NULL          THEN 'actioned'
         WHEN a.action = 'approve'               THEN 'queued'
         ELSE 'none'
     END                                                  AS outreach_status,
@@ -169,9 +192,9 @@ SELECT
     CASE WHEN a.action = 'approve' THEN a.decided_at
          ELSE NULL
     END                                                  AS approved_at,
-    o.outreach_at                                        AS outreach_at
+    d.outreach_at                                        AS outreach_at
 FROM latest_approvals a
-FULL OUTER JOIN latest_outreach o USING (borrower_id)
+FULL OUTER JOIN latest_dispositions d USING (borrower_id)
 """
 
 
@@ -198,8 +221,8 @@ def _get_spark() -> Any:
     return spark
 
 
-def _write_gold(rows: list[dict[str, Any]]) -> None:
-    """Write the rows into mip.gold.borrower_lifecycle_state.
+def _write_gold(rows: list[dict[str, Any]], *, catalog: str) -> None:
+    """Write the rows into the configured gold.borrower_lifecycle_state.
 
     Full rewrite is acceptable at Module 0 scale (~10k borrowers). The table
     must pre-exist (created by sql/ddl/003_gold_tables.sql §7). A missing
@@ -209,13 +232,12 @@ def _write_gold(rows: list[dict[str, Any]]) -> None:
     record for them yet.
     """
     spark = _get_spark()
+    borrower_table = _qualified_uc_table(catalog, "gold", "borrower_360")
+    lifecycle_table = _qualified_uc_table(catalog, "gold", "borrower_lifecycle_state")
     # Local imports: pyspark isn't available off-Databricks; keep import out of
     # module scope so the file remains importable by lint/tests.
-    from datetime import UTC, datetime
-
     from pyspark.sql import Row  # type: ignore[import-not-found]
 
-    now = datetime.now(UTC)
     # Build the Lakebase-side DataFrame.
     lakebase_rows = [
         Row(
@@ -225,7 +247,6 @@ def _write_gold(rows: list[dict[str, Any]]) -> None:
             offer_code=(str(r["offer_code"]) if r.get("offer_code") else None),
             approved_at=r.get("approved_at"),
             outreach_at=r.get("outreach_at"),
-            synced_at=now,
         )
         for r in rows
         if r.get("borrower_id")
@@ -236,25 +257,41 @@ def _write_gold(rows: list[dict[str, Any]]) -> None:
     # is the same for empty-input and populated-input cases.
     _LIFECYCLE_SCHEMA = (
         "borrower_id STRING, approval_status STRING, outreach_status STRING, "
-        "offer_code STRING, approved_at TIMESTAMP, outreach_at TIMESTAMP, "
-        "synced_at TIMESTAMP"
+        "offer_code STRING, approved_at TIMESTAMP, outreach_at TIMESTAMP"
     )
     lb_df = spark.createDataFrame(lakebase_rows, schema=_LIFECYCLE_SCHEMA)
     lb_df.createOrReplaceTempView("_mip_lifecycle_lakebase")
 
+    # Only mirror decisions that reconcile to the current gold borrower
+    # population. Lakebase can contain historical sandbox probes or stale
+    # deleted-population rows; those stay in Lakebase/audit history but must
+    # not create phantom borrowers in the gold lifecycle table.
+    spark.sql(f"""
+        CREATE OR REPLACE TEMP VIEW _mip_lifecycle_valid AS
+        SELECT l.*
+        FROM _mip_lifecycle_lakebase AS l
+        INNER JOIN {borrower_table} AS b
+          ON b.borrower_id = l.borrower_id
+    """)
+
     # Seed every known borrower to the default. A LEFT ANTI against the
-    # Lakebase rows guarantees no duplicate.
-    spark.sql("""
-        CREATE OR REPLACE TABLE mip.gold.borrower_lifecycle_state AS
+    # valid Lakebase rows guarantees no duplicate.
+    spark.sql(f"""
+        CREATE OR REPLACE TABLE {lifecycle_table} AS
+        WITH sync_anchor AS (
+          SELECT CURRENT_TIMESTAMP() AS mirror_refreshed_at
+        )
         SELECT
-            borrower_id,
-            approval_status,
-            outreach_status,
-            offer_code,
-            approved_at,
-            outreach_at,
-            synced_at
-        FROM _mip_lifecycle_lakebase
+            l.borrower_id,
+            l.approval_status,
+            l.outreach_status,
+            l.offer_code,
+            l.approved_at,
+            l.outreach_at,
+            a.mirror_refreshed_at AS synced_at,
+            a.mirror_refreshed_at AS refreshed_at
+        FROM _mip_lifecycle_valid AS l
+        CROSS JOIN sync_anchor AS a
         UNION ALL
         SELECT
             b.borrower_id,
@@ -263,14 +300,36 @@ def _write_gold(rows: list[dict[str, Any]]) -> None:
             CAST(NULL AS STRING)       AS offer_code,
             CAST(NULL AS TIMESTAMP)    AS approved_at,
             CAST(NULL AS TIMESTAMP)    AS outreach_at,
-            CURRENT_TIMESTAMP()        AS synced_at
-        FROM mip.gold.borrower_360 AS b
-        LEFT ANTI JOIN _mip_lifecycle_lakebase AS l
+            a.mirror_refreshed_at      AS synced_at,
+            a.mirror_refreshed_at      AS refreshed_at
+        FROM {borrower_table} AS b
+        CROSS JOIN sync_anchor AS a
+        LEFT ANTI JOIN _mip_lifecycle_valid AS l
           ON l.borrower_id = b.borrower_id
     """)
 
 
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="sync_lifecycle_state",
+        description=(
+            "Mirror Lakebase approval/outreach state into the configured "
+            "gold.borrower_lifecycle_state table."
+        ),
+    )
+    parser.add_argument(
+        "--catalog",
+        default=_catalog_default(),
+        help=(
+            "Unity Catalog catalog for gold tables "
+            "(default: MIP_DEFAULT_CATALOG or mip)."
+        ),
+    )
+    return parser
+
+
+def main(argv: list[str] | None = None) -> None:
+    args = build_parser().parse_args(argv)
     conn_kwargs = _resolve_connection()
     try:
         rows = _fetch_lakebase_rows(conn_kwargs)
@@ -279,7 +338,7 @@ def main() -> None:
         sys.exit(2)
 
     print(f"[sync-lifecycle] read {len(rows)} rows from Lakebase")
-    _write_gold(rows)
+    _write_gold(rows, catalog=args.catalog)
     print("[sync-lifecycle] gold mirror refreshed")
 
 

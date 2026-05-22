@@ -5,14 +5,18 @@
 --            vocabulary that drives the Offer Orchestrator decision tree
 --            (`fn_next_best_offer`), the In-the-Money flag
 --            (`fn_in_the_money`), and the Admin surface (/api/admin/rules).
+--            The market-rate denominator is deliberately not seeded here:
+--            production reads latest FRED MORTGAGE30US from
+--            `mip.silver.market_rates_weekly`.
 --
 -- Provenance:
 --            Every row mirrors a default documented inline in the UC function
---            headers under `sql/uc_functions/`. Changing a value here does
---            NOT retune UC compute -- the thresholds are passed as explicit
---            args by the application layer at query time. The row is the
---            single canonical source the admin UI reads + the product of
---            record for "what is the active ruleset" on a given day.
+--            headers under `sql/uc_functions/`. The gold CTAS chain reads
+--            this table at refresh time and passes the values as explicit UDF
+--            args. Changing a value here or in a governed table update retunes
+--            gold after the next refresh without changing UDF code. The row is
+--            also the single canonical source the admin UI reads + the product
+--            of record for "what is the active ruleset" on a given day.
 --
 --            Pin points (keep in lock-step with UC headers):
 --              mip_min_spread_bps            = 75     (fn_in_the_money.sql L28, fn_next_best_offer.sql L92)
@@ -20,13 +24,15 @@
 --              mip_heloc_equity_min_pct      = 35     (fn_next_best_offer.sql L94)
 --              mip_cashout_equity_min_pct    = 25     (fn_next_best_offer.sql L95)
 --              mip_retention_min_spread_bps  = 50     (fn_next_best_offer.sql L96)
---              mip_market_rate               = 0.04875 (fn_rate_spread.sql L36)
 --
 -- Idempotency: MERGE on key. Re-running this file (as part of the
 --            `mip_ref_seed` + `mip_refresh_silver` bundle jobs) is a no-op
 --            for unchanged rows and refreshes `last_updated` for any row
 --            whose value / unit / label / description / sort_order changed.
 -- =============================================================================
+
+DELETE FROM mip.ref.offer_rules_config
+WHERE key = 'mip_market_rate';
 
 MERGE INTO mip.ref.offer_rules_config AS t
 USING (
@@ -47,9 +53,7 @@ USING (
     ('mip_cashout_equity_min_pct',   25.0,    'pct',           'Cash-out equity floor (%)',
      'Equity floor required for cash-out refi eligibility when rate economics are absent.',    4),
     ('mip_retention_min_spread_bps', 50.0,    'bps',           'Retention min spread (bps)',
-     'Lowered spread bar used for retention outreach on existing customers.',                  5),
-    ('mip_market_rate',              0.04875, 'rate_fraction', 'Market rate reference',
-     'Par / market rate baseline used by fn_rate_spread for spread calculations.',             6)
+     'Lowered spread bar used for retention outreach on existing customers.',                  5)
 ) AS s
 ON t.key = s.key
 WHEN MATCHED THEN UPDATE SET

@@ -78,7 +78,7 @@ export function FilterSelect({ label, value, options, onChange }: FilterSelectPr
   };
 
   return (
-    <div ref={rootRef} style={{ position: 'relative' }}>
+    <div ref={rootRef} className="filter-root">
       <button
         ref={btnRef}
         type="button"

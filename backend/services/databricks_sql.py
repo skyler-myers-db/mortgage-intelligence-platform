@@ -31,6 +31,7 @@ import logging
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from threading import Lock
 from typing import Any
 
@@ -73,19 +74,35 @@ class DatabricksSqlClient:
     short-lived, so per-request Request objects are fine); the single
     shared instance is safe to call from concurrent FastAPI handlers
     because each call builds its own Request.
+
+    Token handling: ``token`` may be a literal string (PAT path) or a
+    zero-arg callable that returns a fresh string (workspace-identity
+    OAuth path). The callable form is required on Databricks Apps,
+    where the SDK-minted bearer token has a ~1h lifetime and must be
+    re-minted on each request — caching the string at construction
+    makes every warehouse call return HTTP 403 ``Invalid Token`` once
+    the initial token expires, and there is no recovery without an
+    app restart. 2026-04-25 incident.
     """
 
     def __init__(
         self,
         host: str,
-        token: str,
+        token: str | Callable[[], str],
         warehouse_id: str,
         timeout_s: int = 30,
     ) -> None:
         if not host.startswith("http"):
             host = "https://" + host
         self._host = host.rstrip("/")
-        self._token = token
+        # Normalise to a callable so the per-request _post path is
+        # uniform. A literal string is wrapped in a `lambda: token` so
+        # the call site below never branches on type.
+        if callable(token):
+            self._token_provider: Callable[[], str] = token
+        else:
+            literal = token
+            self._token_provider = lambda: literal
         self._warehouse_id = warehouse_id
         self._timeout_s = timeout_s
 
@@ -225,12 +242,17 @@ class DatabricksSqlClient:
 
     def _post(self, url: str, body: dict[str, Any]) -> dict[str, Any]:
         payload = json.dumps(body).encode("utf-8")
+        # Mint/refresh the bearer per request. For a PAT we hand back
+        # the stored literal; for SDK-minted workspace identity the
+        # SDK's Config.authenticate() callback caches and refreshes
+        # internally so this is a fast call in the common case.
+        bearer = self._token_provider()
         req = urllib.request.Request(
             url,
             data=payload,
             method="POST",
             headers={
-                "Authorization": f"Bearer {self._token}",
+                "Authorization": f"Bearer {bearer}",
                 "Content-Type": "application/json",
             },
         )
@@ -354,10 +376,10 @@ def get_sql_client() -> DatabricksSqlClient:
     with _CLIENT_LOCK:
         if _CLIENT is not None:
             return _CLIENT
-        host, token, warehouse_id = settings.require_databricks_creds()
+        host, token_provider, warehouse_id = settings.require_databricks_creds()
         bare = DatabricksSqlClient(
             host=host,
-            token=token.get_secret_value(),
+            token=token_provider,
             warehouse_id=warehouse_id,
             timeout_s=settings.databricks_timeout_s,
         )

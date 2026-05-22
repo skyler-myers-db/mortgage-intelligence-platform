@@ -1,3 +1,5 @@
+> **Internal implementation artifact. Not approved for public release.**
+
 # Validation — Credential-Kill Drill
 
 **Validates:** the Module 0 "no silent mock fallback" posture —
@@ -39,7 +41,7 @@ A PASS for any target requires **every** item below:
    reports `down` (or `circuit_breakers.<name>` reports `open`).
 2. Every data endpoint that backs the affected feature returns an
    explicit failure — 503 (ideally with `retryable: true`), 5xx, or a
-   200 self-declaring `degraded: true` / `source: fallback`.
+   200 self-declaring `degraded: true` / `source: "degraded"`.
 3. No endpoint returns a non-empty 200 payload carrying real-looking
    rows during the outage. This is the regression signal: a green
    response in a broken state = silent mock fallback.
@@ -132,11 +134,11 @@ infra; out of scope for this task).
 - Exit code: `0`
 - Probe outcomes:
   - `/api/health` → `status=degraded genie=down breaker=closed` on first poll.
-  - `GET /api/genie/ask` → HTTP 200 (SPA HTML shell; route doesn't
+  - `GET /api/genie/message` → HTTP 200 (SPA HTML shell; route doesn't
     exist — drill script targets the wrong path, see Known
     limitations below). Actual Genie endpoints are
     `/api/genie/start` + `/api/genie/message`.
-  - `POST /api/genie/ask` → HTTP 405 (Method Not Allowed — again,
+  - `POST /api/genie/message` → HTTP 405 (Method Not Allowed — again,
     wrong path; real POST at `/api/genie/message`).
   - Verdict: **PASS** on the health-state signal (`genie=down`
     within one poll). The endpoint-shape probe is a no-op for this
@@ -197,7 +199,7 @@ section of `docs/credential-kill-drill.md` for when they should run.
 
 ## Known limitations (added 2026-04-22)
 
-- The genie drill harness posts to `/api/genie/ask`, which is not the
+- The genie drill harness posts to `/api/genie/message`, which is not the
   live endpoint (the real paths are `/api/genie/start` and
   `/api/genie/message`). The health-state signal still proves the
   breaker flips correctly, so the drill is conclusive, but the

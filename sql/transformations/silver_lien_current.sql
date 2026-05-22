@@ -3,12 +3,14 @@
 -- -----------------------------------------------------------------------------
 -- Purpose:   Idempotent MERGE that populates `mip.silver.lien_current`
 --            from `cotality_mortgage_data.corelogic.entrada_eval_voluntary_
---            lien_status_marketing_v2`, filtered to the 6-state footprint.
+--            lien_status_marketing_v2`. Coverage follows whatever states are
+--            present in the source share; no fixed-state filter is applied.
 --            THE SPINE of Module 0.
 --
 -- Grain:     One row per CLIP (1:1 with source).
 -- PK (MERGE key): clip.
--- Geography filter: WHERE situs_state IN ('IL','CA','FL','TX','WA','CO').
+-- Geography contract: keep rows with a non-null situs_state; downstream
+-- geography rollups discover state/county/ZIP coverage from the data.
 -- Slice:     module0-real-data-slice2.
 -- Data contract: docs/data-contract-module0.md §2.1.
 --
@@ -40,11 +42,18 @@ USING (
   SELECT
     clip,
     situs_state,
-    -- Data contract §2.1 says situs_zip_code is 5-digit; share frequently
-    -- emits ZIP+4. Truncate at silver so gold/api stay contract-clean
-    -- (slice13 Wave-2 fix).
-    SUBSTR(REGEXP_REPLACE(CAST(situs_zip_code AS STRING), '[^0-9]', ''), 1, 5)
-                                                                    AS situs_zip_code,
+    -- Data contract §2.1 says situs_zip_code is ZIP5. ZIP+4 rows are
+    -- truncated; short non-leading-zero-state fragments are nulled so gold
+    -- never displays invalid 4-digit ZIPs. Four-digit values are only left-
+    -- padded for jurisdictions whose real ZIPs can start with zero.
+    CASE
+      WHEN LENGTH(REGEXP_REPLACE(CAST(situs_zip_code AS STRING), '[^0-9]', '')) >= 5
+        THEN SUBSTR(REGEXP_REPLACE(CAST(situs_zip_code AS STRING), '[^0-9]', ''), 1, 5)
+      WHEN LENGTH(REGEXP_REPLACE(CAST(situs_zip_code AS STRING), '[^0-9]', '')) = 4
+       AND UPPER(TRIM(situs_state)) IN ('CT','MA','ME','NH','NJ','RI','VT','PR','VI')
+        THEN LPAD(REGEXP_REPLACE(CAST(situs_zip_code AS STRING), '[^0-9]', ''), 5, '0')
+      ELSE NULL
+    END                                                             AS situs_zip_code,
     owner_occupancy_code,
     CAST(total_number_of_open_mortgage_liens AS INT)                 AS total_open_liens,
     CAST(total_amount_of_open_mortgage_liens AS BIGINT)              AS total_open_lien_balance,
@@ -52,7 +61,8 @@ USING (
     CAST(estimated_value_high_mktg   AS BIGINT)                      AS avm_value_high,
     CAST(estimated_value_low_mktg    AS BIGINT)                      AS avm_value_low,
     CAST(confidence_score_mktg       AS DOUBLE)                      AS avm_confidence,
-    TRY_TO_DATE(CAST(value_as_of_date_mktg AS STRING))               AS avm_as_of_date,
+    TRY_TO_DATE(NULLIF(CAST(value_as_of_date_mktg AS STRING), '0'), 'yyyyMMdd')
+      AS avm_as_of_date,
     CAST(estimated_equity AS BIGINT)                                 AS estimated_equity,
     CAST(estimated_combined_ltv_loan_to_value AS DOUBLE)             AS estimated_cltv,
     CAST(purchase_amount AS BIGINT)                                  AS purchase_amount,
@@ -63,10 +73,13 @@ USING (
       AS first_pos_date,
     CAST(first_position_mortgage_amount AS BIGINT)                   AS first_pos_amount,
     -- Share rate is DOUBLE in percent form (6.40 == 6.40%). Convert to
-    -- fractional; coerce rates <= 0 to NULL per data-contract §2.1.
+    -- fractional and bound to a defensible mortgage APR range. Source
+    -- generator outliers above 15% clamp to 15%; sub-1% values are treated
+    -- as missing rather than as a real refi signal.
     CASE
       WHEN first_position_mortgage_interest_rate IS NULL THEN NULL
-      WHEN CAST(first_position_mortgage_interest_rate AS DOUBLE) <= 0 THEN NULL
+      WHEN CAST(first_position_mortgage_interest_rate AS DOUBLE) < 1 THEN NULL
+      WHEN CAST(first_position_mortgage_interest_rate AS DOUBLE) > 15 THEN 0.15
       ELSE CAST(first_position_mortgage_interest_rate AS DOUBLE) / 100.0
     END                                                              AS first_pos_rate,
     first_position_mortgage_interest_rate_type_code                  AS first_pos_rate_type,
@@ -79,7 +92,8 @@ USING (
     CAST(second_position_mortgage_amount AS BIGINT)                  AS second_pos_amount,
     CASE
       WHEN second_position_mortgage_interest_rate IS NULL THEN NULL
-      WHEN CAST(second_position_mortgage_interest_rate AS DOUBLE) <= 0 THEN NULL
+      WHEN CAST(second_position_mortgage_interest_rate AS DOUBLE) < 1 THEN NULL
+      WHEN CAST(second_position_mortgage_interest_rate AS DOUBLE) > 15 THEN 0.15
       ELSE CAST(second_position_mortgage_interest_rate AS DOUBLE) / 100.0
     END                                                              AS second_pos_rate,
     second_position_mortgage_purpose_code                            AS second_pos_purpose,
@@ -87,7 +101,7 @@ USING (
     CURRENT_TIMESTAMP()                                              AS ingest_ts,
     CAST(:batch_id AS STRING)                                        AS _meta_batch_id
   FROM cotality_mortgage_data.corelogic.entrada_eval_voluntary_lien_status_marketing_v2
-  WHERE situs_state IN ('IL','CA','FL','TX','WA','CO')
+  WHERE situs_state IS NOT NULL
     AND clip IS NOT NULL
 ) AS s
   ON t.clip = s.clip

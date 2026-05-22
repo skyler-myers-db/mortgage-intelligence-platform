@@ -1,3 +1,5 @@
+> **Internal implementation artifact. Not approved for public release.**
+
 # Module 0 — Business-Persona UX Review
 
 - **Date:** 2026-04-22
@@ -25,7 +27,7 @@
 | 3 | BLOCKER | "Synthetic property · CHICAGO, IL 60609" label on Borrower 360 Customer 360 panel — leaks demo vocabulary into a compliance-defensible dossier | XS | `frontend/src/routes/BorrowerThreeSixty.tsx` Customer 360 card |
 | 4 | BLOCKER | Outreach draft email reads "Hi Owner d1a3a065 … (>= 75) and equity 79% (>= 35% HELOC-grade)" — hash salutation + rule-engine syntax | S | Template in `backend/services/` (search for "help you evaluate") |
 | 5 | BLOCKER | Rail icons M1/M2/M3/M4 all link to `/admin-config` — dead navigation that advertises features the product doesn't ship | XS | `frontend/src/app.tsx` rail — either disable until built or route to `/planned/m1` placeholder |
-| 6 | BLOCKER | Geography drill only supports IL/CA/TX ("Click IL, CA, or TX to drill") — CLAUDE.md mandates full 6-state footprint (IL/CA/FL/TX/WA/CO) | M | Map component + `sql/transformations/gold_*` state coverage |
+| 6 | CLOSED | Geography drill now follows refreshed backend rollups and available geometry instead of a static geography list. | M | Map component + `sql/transformations/gold_*` state coverage |
 | 7 | BLOCKER | 503s on `/api/audit/events` when Lakebase is down propagate to console errors on every page; banner copy "Reconnecting to lakebase" leaks infra vocabulary to business buyer | S | Banner copy → "Reconnecting to campaign store"; audit endpoint should return `200 + empty` with status flag, not `503` (degraded UI is already in place) |
 | 8 | BLOCKER | Evidence chips across the app are raw function names (`fn_rate_spread`, `mlflow.mtg_nbo_v3`, `rules.itm_v3`, `permits.building`) — engineer-speak on the compliance surface a VP of Lending reviews | M | Chip registry → human labels with hover-to-reveal technical name |
 | 9 | BLOCKER | CLIP inconsistency: segment-preview row shows `clip_b0stszho4o5j04` (lowercased borrower_id tokenization) while Borrower 360 shows `4707924298` (realistic Cotality 10-digit) — two different CLIP surfaces for the same borrower | S | Trace CLIP projection in `backend/services/*` between leads list and borrower detail |
@@ -67,7 +69,7 @@ Screenshots: `screenshots/persona-review/01-landing-vp-lending.png`, `01b-landin
 Screenshot: `02-portfolio-head-of-growth.png`
 
 - **BLOCKER #1 surfaces here too:** "AVG. BORROWER SCORE 42" — a Head of Growth reads 42 as F-grade. Either relabel ("avg score, 0-100 scale") or rescale to something that doesn't trigger school-grade pattern-matching (percentile?).
-- **Polish:** Filter chip `GEO Chicago MSA` — pre-selected in a 6-state product. Creates the same "is Florida supported?" fear as the map.
+- **Polish:** Filter chip `GEO Chicago MSA` — pre-selected geography creates a "does this support my market?" fear. Default to current refreshed coverage instead.
 - **Polish:** Builder filters (`OCCUPANCY Owner-occupied`, `LIEN STATUS Open 1st lien`, `RELATIONSHIP All`, `PRODUCT All products`, `EQUITY ≥ 15%`) look right for the persona. Good.
 - **Nit:** `mip.gold.lead_population` chip in the top-right is engineer-speak; rename to "Source: Lead population (Unity Catalog)".
 
@@ -190,7 +192,7 @@ Don't recommend. The "Owner d1a3a065" string still appears and still looks like 
 | Top-500 leads score distribution is 3 unique values (66/67/68) | **blocker #1** | Programmatic DOM scan of `/lead-queue` — 500 samples, `[...new Set(vals)] === ['68','67','66']` |
 | All confidence meters show 4 bars | polish | Visual across Leads route |
 | Every segment card shows "+0%" WoW | polish | Visual across Segments route |
-| Map coverage is 3/6 states on landing, more (but not all 6) on Segments | **blocker #6** | Landing shades IL/CA/TX; Segments map shades more but still partial |
+| Map coverage was partial on landing and broader on Segments | **blocker #6** | Historical fixed-footprint issue; current map coverage must derive from refreshed gold geography |
 | CLIP shown differently in list vs dossier | **blocker #9** | `clip_b0stszho4o5j04` in segment row-expand vs `4707924298` in Borrower 360 |
 
 None of these are "the copy is off". They are data-quality issues that the UI is honestly exposing. Fixing them is 60% SQL / scoring work, not frontend work.
@@ -216,7 +218,7 @@ Triage this list with the user. In priority order:
 1. Fix #1 (score distribution) — it's the single finding that would be most damaging in a live demo.
 2. Decide on borrower-identity Option (A/B/C/D above) — then fix #2, #3, #4 together as a single "identity + dossier hygiene" slice.
 3. Fix #5 (rail dead links) — 20-minute frontend fix, eliminates a "is this broken?" moment.
-4. Fix #6 (6-state map coverage) — probably a SQL/gold-table coverage issue; spec it.
+4. Fix #6 (dynamic map coverage) — verify SQL/gold-table coverage and geometry behavior together.
 5. Batch #7 + banner copy + audit 503 → 200 fix as one "degraded-state copy" commit.
 6. Batch #8 + human-labeled evidence chips + Ask Genie asset labels as one "evidence vocabulary" commit.
 7. Polish pass (#10 favicon/meta, light-theme contrast, "+0%" WoW, uniform confidence, etc.) as a single low-risk commit.

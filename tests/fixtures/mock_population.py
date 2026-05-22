@@ -20,12 +20,12 @@ through the same primitives that UC functions mirror, so every
 ``recommended_offer`` is derived — never hardcoded.
 
 The population is designed so every branch of ``fn_next_best_offer``
-fires on at least two borrowers, geography spans the 6-state Delta
+fires on at least two borrowers, geography spans the configured Delta
 Share footprint (IL/CA/FL/TX/WA/CO per docs/data-sources-gap-analysis
 §1) with Chicago as the anchor metro per data-contract §10, and
 ``opportunity_score`` spreads from ~45 to ~96 — the ranked-borrower
 table and segment counts look like a real book of business.
-``SEGMENTS`` aggregate counts (e.g. 12,840 ITM) remain population-level
+``SEGMENTS`` aggregate counts remain population-level
 estimates of Summit Mortgage's marketable book — the 25 rows here are
 the ranked sample the orchestrator surfaces first.
 """
@@ -83,11 +83,11 @@ def _pick_evidence(ids: list[str]) -> list[EvidenceEvent]:
 # ---------------------------------------------------------------------------
 SEGMENTS = [
     SegmentSummary(code="itm", name="In the Money", count=12840, delta="+18%", avg_score=82, description="Lien rate >= 75 bps above par and equity >= 15%.", color="#5CE1E6"),
-    SegmentSummary(code="listed", name="Listed for Sale", count=2614, delta="+9%", avg_score=74, description="Active listing, likely purchase mortgage opportunity.", color="#F59E0B"),
-    SegmentSummary(code="permit", name="Permit Activity", count=4108, delta="+11%", avg_score=71, description="Recent high-value permits indicate HELOC/cash-out demand.", color="#A78BFA"),
+    SegmentSummary(code="listed", name="Listed for Sale", count=0, delta="pending", avg_score=0, description="Pending Cotality MLS share; blocked false until landed.", color="#F59E0B"),
+    SegmentSummary(code="permit", name="Permit Activity", count=0, delta="pending", avg_score=0, description="Pending Cotality Building Permits share; blocked false until landed.", color="#A78BFA"),
     SegmentSummary(code="investor", name="Investor / Multi-Property", count=1892, delta="+6%", avg_score=79, description="Owner Link shows 2+ properties or repeat behavior.", color="#F472B6"),
     SegmentSummary(code="equity", name="Home Equity Candidate", count=6320, delta="+14%", avg_score=76, description="Strong equity and prior cash-out/HELOC propensity.", color="#66C5FF"),
-    SegmentSummary(code="retention", name="Retention Risk", count=3471, delta="+4%", avg_score=88, description="Current customer showing refi/listing/competitor signals.", color="#34D399"),
+    SegmentSummary(code="retention", name="Retention Risk", count=3471, delta="+4%", avg_score=88, description="Current customer with rate spread above the retention threshold; listing and competitor overlays join only when live evidence exists.", color="#34D399"),
 ]
 
 
@@ -325,20 +325,31 @@ def _build_borrower(spec: dict) -> tuple[Borrower360, dict]:
     clip_demo = f"clip_demo_{spec['bid'].replace('B-', '')}"
     borrower = Borrower360(
         borrower_id=spec["bid"],
-        display_name=spec["name"],
+        display_name=f"Owner {spec['bid'].replace('B-', '').lower()}",
         city=spec["city"], state=spec["state"], zip=spec["zip"],
-        # LeadSummary.clip (added 2026-04-22) must match clip_id so tests
-        # and in-process fixtures surface the same CLIP across routes.
+        # LeadSummary.clip must match clip_id so tests and in-process
+        # fixtures surface the same display-safe property ref across routes.
         clip=clip_demo,
         segment_codes=spec["segs"],
         equity_estimate=equity_estimate,
         rate_spread_bps=spread,
         opportunity_score=score,
         confidence=confidence,
+        recommended_offer_code=code,
         recommended_offer=NBO_PRODUCT_LABELS[code],
         why_now=spec["why_now"],
         evidence_ids=spec["evidence_ids"],
         approval_status="pending",
+        marketing_eligible=True,
+        consent_status="opt_in",
+        suppression_reason=None,
+        is_owner_occupied=not bool(spec["investor"]),
+        is_investor=bool(spec["investor"]),
+        is_current_customer=bool(spec["customer"]),
+        is_competitor_lien=bool(spec["comp_lien"]),
+        has_permit=bool(spec["permit"]),
+        listed_for_sale=bool(spec["listed"]),
+        second_pos_amount=0,
         clip_id=clip_demo,
         owner_link_id=f"ol_demo_{spec['bid'].replace('B-', '')}",
         subject_property=f"Synthetic property · {spec['city']}, {spec['state']} {spec['zip']}",
@@ -347,6 +358,7 @@ def _build_borrower(spec: dict) -> tuple[Borrower360, dict]:
         current_rate=current_rate_pct,
         ltv=ltv,
         related_property_count=spec["related_props"],
+        current_lender_ref="Summit Mortgage" if spec["customer"] else "Competitor Other",
         trigger_timeline=evidence_events or EVIDENCE[:1],
         evidence_events=evidence_events,
         why_panel=why,
@@ -361,6 +373,11 @@ def _build_borrower(spec: dict) -> tuple[Borrower360, dict]:
         "is_current_customer": spec["customer"],
         "is_competitor_lien": spec["comp_lien"],
         "offer_code": code,
+        "min_spread_bps": _MIN_SP,
+        "min_equity_pct": _MIN_EQ,
+        "heloc_equity_min_pct": _HELOC_MIN,
+        "cashout_equity_min_pct": _CASHOUT_MIN,
+        "retention_min_spread_bps": _RETENTION_MIN,
     }
     return borrower, offer_inputs
 
@@ -368,6 +385,9 @@ def _build_borrower(spec: dict) -> tuple[Borrower360, dict]:
 _BUILT = [_build_borrower(s) for s in _BORROWER_SPECS]
 BORROWERS: list[Borrower360] = [b for b, _ in _BUILT]
 BORROWER_OFFER_INPUTS: dict[str, dict] = {b.borrower_id: inputs for b, inputs in _BUILT}
+BORROWER_SCORE_COMPONENTS: dict[str, dict[str, int]] = {
+    spec["bid"]: dict(spec["components"]) for spec in _BORROWER_SPECS
+}
 
 # Back-compat: the three pinned offer codes are exported by name so any
 # downstream reference (tests, the offers router) keeps working.
@@ -376,4 +396,4 @@ B48294_OFFER_CODE = BORROWER_OFFER_INPUTS["B-48294"]["offer_code"]
 B48295_OFFER_CODE = BORROWER_OFFER_INPUTS["B-48295"]["offer_code"]
 
 
-PORTFOLIO = PortfolioPreview(marketable_population=89553, high_intent_leads=12840, avg_score=81, projected_contact_to_app=9.7, cost_per_contact=2.18)
+PORTFOLIO = PortfolioPreview(marketable_population=89553, high_intent_leads=12840, avg_score=81)

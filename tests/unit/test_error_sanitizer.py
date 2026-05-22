@@ -101,7 +101,8 @@ def test_dependency_down_handler_leaks_no_warehouse_substrings() -> None:
     field, and that the ``dependency`` field is still populated.
     """
     class _BoomSegmentRepo:
-        def list(self, portfolio_id: str | None = None) -> list:
+        def list(self, **kwargs: object) -> list:
+            _ = kwargs
             _raise_wrapped_warehouse_error()
             return []  # unreachable, keeps type-checker happy
 
@@ -142,7 +143,8 @@ def test_dependency_down_handler_includes_correlation_id() -> None:
     can stitch a client-visible 503 to the server-side structured log
     line that carries the full ``str(exc)``."""
     class _BoomSegmentRepo:
-        def list(self, portfolio_id: str | None = None) -> list:
+        def list(self, **kwargs: object) -> list:
+            _ = kwargs
             raise DependencyDownError("warehouse", reason="circuit breaker is open")
 
     previous = app.dependency_overrides.get(get_segment_repository)
@@ -161,3 +163,14 @@ def test_dependency_down_handler_includes_correlation_id() -> None:
             del app.dependency_overrides[get_segment_repository]
         else:
             app.dependency_overrides[get_segment_repository] = previous
+
+
+def test_request_validation_error_body_includes_correlation_id() -> None:
+    """422 bodies should carry the trace id, not only the response header."""
+
+    res = client.get("/api/leads?limit=99999", headers={"X-Correlation-ID": "obs-422-test"})
+    assert res.status_code == 422
+    body = res.json()
+    assert "detail" in body
+    assert body["correlation_id"] == "obs-422-test"
+    assert res.headers["X-Correlation-ID"] == "obs-422-test"

@@ -14,35 +14,35 @@ golden-fixture JSON that the SQL side validates against the same inputs:
                             (cases 04/05 pin the inclusive ``>=`` boundary).
 - ``next_best_offer``    -> ``sql/uc_functions/fn_next_best_offer.sql``
                             + ``tests/fixtures/next_best_offer_golden.json``
-                            (case_12 pins the B-48294 'refi_plus_heloc' shift;
+                            (case_12 pins the fixture refi_plus_heloc shift;
                             cases 09/10 pin the HELOC-equity boundary).
 
 Weights for ``lead_score`` (non-negotiable): 0.35 / 0.30 / 0.15 / 0.10 / 0.10.
-NULL (``None``) components coerce to 0 (or ``False`` for ``in_the_money``
-and the boolean arguments of ``next_best_offer``).
+NULL (``None``) score components coerce to 0. ``in_the_money`` returns
+``False`` on any NULL input. ``next_best_offer`` coerces missing borrower
+signals to 0/FALSE, but returns ``nurture`` when any threshold is NULL so
+misconfigured decisioning cannot become a positive outreach lane.
 """
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
 _INT32_MIN = -2_147_483_648
 _INT32_MAX = 2_147_483_647
 
-_NBO_FIXTURE_PATH = (
-    Path(__file__).resolve().parents[2]
-    / "tests"
-    / "fixtures"
-    / "next_best_offer_golden.json"
-)
-with _NBO_FIXTURE_PATH.open() as _f:
-    _NBO_FIXTURE = json.load(_f)
-
 # Human labels for the eight offer_codes. Source of truth for the
-# OfferRecommendation.product_label rendered at the API boundary — the
-# scoring primitive itself only returns the lowercase code.
-NBO_PRODUCT_LABELS: dict[str, str] = dict(_NBO_FIXTURE["product_labels"])
+# OfferRecommendation.product_label rendered at the API boundary; tests assert
+# parity with ``tests/fixtures/next_best_offer_golden.json`` without requiring
+# production code to import from test fixtures at module load.
+NBO_PRODUCT_LABELS: dict[str, str] = {
+    "purchase": "Purchase Mortgage",
+    "refi_plus_heloc": "Refinance + HELOC",
+    "heloc": "HELOC",
+    "refi": "Refinance",
+    "cash_out": "Cash-out Refi",
+    "investor": "Investor Product",
+    "retention": "Retention",
+    "nurture": "Nurture",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -76,12 +76,12 @@ SOURCE_DISPLAY_LABELS: dict[str, str] = {
     "mip.gold.lead_scores":         "Lead scores",
     "mip.gold.evidence_events":     "Evidence stream",
     "mip.gold.property_owner_bridge": "Owner Link bridge",
-    # Short aliases used on RowPreview / historical code paths
+    # Short aliases used on RowPreview and app proof chips.
     "fn_rate_spread":               "Market rate comparison",
     "fn_in_the_money":              "In-the-money rule",
     "fn_next_best_offer":           "Next-best-offer model",
     "fn_lead_score":                "Lead score model",
-    "rules.itm_v3":                 "Rate + equity ruleset",
+    "rules.itm_v3":                 "In-the-Money logic",
     "mlflow.mtg_nbo_v3":            "Next-best-offer model v3",
     "permits.building":             "Building permit signal",
     "borrower_dossier":             "Borrower dossier",
@@ -209,10 +209,20 @@ def next_best_offer(
     Mirrors ``mip.gold.fn_next_best_offer``. First match wins across
     the priority-ordered decision tree documented in the SQL header:
     listed -> refi_plus_heloc -> heloc -> refi -> cash_out -> investor
-    -> retention -> nurture. Numeric ``None`` coerces to 0 and boolean
-    ``None`` coerces to ``False`` to match ``COALESCE(..., 0/FALSE)`` —
-    so an all-NULL row lands in ``'nurture'`` (the safe lane).
+    -> retention -> nurture. Borrower-signal ``None`` coerces to 0/FALSE,
+    but threshold ``None`` returns ``'nurture'`` before the tree runs.
+    A missing threshold is a configuration failure, not permission to
+    treat 0 >= 0 as a positive eligibility signal.
     """
+    if (
+        min_spread_bps is None
+        or min_equity_pct is None
+        or heloc_equity_min_pct is None
+        or cashout_equity_min is None
+        or retention_min_spread is None
+    ):
+        return "nurture"
+
     spread = rate_spread_bps or 0
     equity = equity_pct or 0
     permit = bool(has_permit)
@@ -220,11 +230,11 @@ def next_best_offer(
     investor = bool(is_investor)
     customer = bool(is_current_customer)
     competitor_lien = bool(is_competitor_lien)
-    min_sp = min_spread_bps or 0
-    min_eq = min_equity_pct or 0
-    heloc_min = heloc_equity_min_pct or 0
-    cashout_min = cashout_equity_min or 0
-    retention_min = retention_min_spread or 0
+    min_sp = min_spread_bps
+    min_eq = min_equity_pct
+    heloc_min = heloc_equity_min_pct
+    cashout_min = cashout_equity_min
+    retention_min = retention_min_spread
 
     if listed:
         return "purchase"

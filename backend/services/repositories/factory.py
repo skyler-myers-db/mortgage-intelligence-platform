@@ -2,8 +2,9 @@
 
 FastAPI routers inject one of these helpers via ``Depends(...)``. The
 factories resolve the process-wide ``Databricks*Repository`` instances
-(Slice 4 and onward); Genie stays on the in-process deterministic
-catalog until Slice 7 grounds it against the real semantic views.
+(Slice 4 and onward); Genie is wired to the Databricks Conversation API
+and fails visibly through the degraded-state path instead of substituting
+local answer data.
 
 Test processes override every factory through FastAPI's
 ``app.dependency_overrides[get_*_repository]`` so unit tests never
@@ -14,6 +15,7 @@ from __future__ import annotations
 from threading import Lock
 
 from backend.services.repositories.protocols import (
+    AnalyticsRepository,
     BorrowerRepository,
     GenieAnswerRepository,
     GeoRepository,
@@ -28,6 +30,7 @@ from backend.services.repositories.protocols import (
 # on repeat calls so SQL client pools / keep-alive sockets persist
 # across requests. Test processes bypass these via dependency_overrides.
 _PORTFOLIO_REPO: PortfolioRepository | None = None
+_ANALYTICS_REPO: AnalyticsRepository | None = None
 _SEGMENT_REPO: SegmentRepository | None = None
 _LEAD_REPO: LeadRepository | None = None
 _BORROWER_REPO: BorrowerRepository | None = None
@@ -36,6 +39,26 @@ _OUTREACH_REPO: OutreachRepository | None = None
 _GENIE_REPO: GenieAnswerRepository | None = None
 _GEO_REPO: GeoRepository | None = None
 _LOCK = Lock()
+
+
+def get_analytics_repository() -> AnalyticsRepository:
+    """Return the Databricks-backed native analytics repository."""
+    global _ANALYTICS_REPO
+    if _ANALYTICS_REPO is not None:
+        return _ANALYTICS_REPO
+    from backend.config.settings import settings
+    from backend.services.databricks_sql import get_sql_client
+    from backend.services.repositories.databricks_repo import (
+        DatabricksAnalyticsRepository,
+    )
+
+    with _LOCK:
+        if _ANALYTICS_REPO is None:
+            _ANALYTICS_REPO = DatabricksAnalyticsRepository(
+                get_sql_client(),
+                cache_ttl_s=settings.mip_cache_ttl_s,
+            )
+        return _ANALYTICS_REPO
 
 
 def _live_borrower_repo() -> BorrowerRepository:
@@ -158,8 +181,7 @@ def get_geo_repository() -> GeoRepository:
 
     Used by ``/api/geo/state-rollups`` to feed the USChoroplethMap
     hover/fill with real numbers from ``mip.gold.funnel_snapshot_daily``
-    instead of the hardcoded STATE_FACTS literal the component shipped
-    with in Slice 9.
+    and current geography rollups.
     """
     global _GEO_REPO
     if _GEO_REPO is not None:
@@ -179,17 +201,16 @@ def get_genie_answer_repository() -> GenieAnswerRepository:
     """Return the live Genie repository backed by the real Mortgage
     Lead Intelligence space.
 
-    Slice 7 swap: hits the Databricks Genie Conversation API through
-    ``ResilientGenieClient`` (breaker key ``"genie"``). The curated
-    catalog in ``backend.services.genie_answers`` degrades to a safe-
-    corpus fallback only when the breaker is OPEN -- happy path always
-    queries the real space. Unknown questions with an open breaker
-    return a honest "warming up" degraded message; they do NOT
-    fabricate data.
+    Hits the Databricks Genie Conversation API through
+    ``ResilientGenieClient`` (breaker key ``"genie"``). If Genie is
+    unavailable, the repository returns an honest "warming up" degraded
+    message with static follow-up suggestions only; it does not serve a
+    local answer body or table rows.
     """
     global _GENIE_REPO
     if _GENIE_REPO is not None:
         return _GENIE_REPO
+    from backend.services.databricks_sql import get_sql_client
     from backend.services.genie_client import get_genie_client
     from backend.services.repositories.databricks_repo import (
         DatabricksGenieRepository,
@@ -197,7 +218,10 @@ def get_genie_answer_repository() -> GenieAnswerRepository:
 
     with _LOCK:
         if _GENIE_REPO is None:
-            _GENIE_REPO = DatabricksGenieRepository(get_genie_client())
+            _GENIE_REPO = DatabricksGenieRepository(
+                get_genie_client(),
+                get_sql_client(),
+            )
         return _GENIE_REPO
 
 
@@ -206,10 +230,12 @@ def _reset_singletons_for_tests() -> None:
     ``tests/conftest.py`` can rewire dependency_overrides cleanly.
     NOT for production use.
     """
-    global _PORTFOLIO_REPO, _SEGMENT_REPO, _LEAD_REPO, _BORROWER_REPO
+    global _PORTFOLIO_REPO, _ANALYTICS_REPO, _SEGMENT_REPO, _LEAD_REPO
+    global _BORROWER_REPO
     global _OFFER_REPO, _OUTREACH_REPO, _GENIE_REPO, _GEO_REPO
     with _LOCK:
         _PORTFOLIO_REPO = None
+        _ANALYTICS_REPO = None
         _SEGMENT_REPO = None
         _LEAD_REPO = None
         _BORROWER_REPO = None

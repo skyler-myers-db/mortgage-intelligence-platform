@@ -73,7 +73,7 @@ export function ApprovalBanner({
     >
       <div className="approval__ico"><Icon name="shield" size={16} /></div>
       <div className="approval__body">
-        <div className="approval__title">Pending review</div>
+        <div className="approval__title">Human approval required before outreach</div>
         <div className="approval__sub">{sub}</div>
       </div>
       <div className="approval__actions">

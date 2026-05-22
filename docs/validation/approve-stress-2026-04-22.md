@@ -1,3 +1,5 @@
+> **Internal implementation artifact. Not approved for public release.**
+
 # Approve-path stress test — 2026-04-22
 
 **Scenario:** 50 sequential `POST /api/outreach/approve` calls from a single caller (realistic sales-ops burst: one operator working a queue for ~5 minutes).
@@ -137,7 +139,7 @@ No duplicate-audit issue or pool-exhaustion is expected given the architecture (
 
 ## Teardown safety
 
-The test uses `B-STRESS-<uuid[:12]>` borrower IDs that cannot collide with real `B-#####` fixtures. Cleanup runs in a `finally:` block and attempts to DELETE rows matching `borrower_id LIKE 'B-STRESS-%'` and `entity_id = ANY(approval_ids)`. Per `lakebase/schema.sql:102`, PUBLIC has DELETE revoked on `action_audit`, so the audit-row cleanup is best-effort — orphaned rows can be swept later by the operator via:
+The test uses `B-STRESS-<uuid[:12]>` borrower IDs that cannot collide with real masked borrower IDs. Cleanup runs in a `finally:` block and attempts to DELETE rows matching `borrower_id LIKE 'B-STRESS-%'` and `entity_id = ANY(approval_ids)`. Per `lakebase/schema.sql:102`, PUBLIC has DELETE revoked on `action_audit`, so the audit-row cleanup is best-effort — orphaned rows can be swept later by the operator via:
 
 ```sql
 SELECT audit_id, event_at FROM mip_app.action_audit

@@ -1,4 +1,8 @@
+> **Internal implementation artifact. Not approved for public release.**
+
 # Source-tree copy audit — 2026-04-22
+
+> **Note:** This document records a past state. `MIP_MOCK_MODE` has since been removed in the live-data cutover (commit `2f09424`). The text below is preserved for audit traceability.
 
 **Branch:** `fix/copilot-batch-post-merge`
 **Scope:** every `frontend/src/**`, `backend/**/*.py`, `docs/**/*.md`, plus
@@ -71,8 +75,8 @@ flagged below for a follow-up sweep.
 | C-P13 | `frontend/src/routes/offer-orchestrator.tsx:319` (header "Thresholds applied") | fine on its own, but the rendered value `Object.entries(rec.thresholds_applied)` is run through `humanizeThresholdKey`; any *unknown* key falls back to snake_case→Title. Add a test to pin this. | add unit test |
 | C-P14 | `frontend/src/routes/segment-intelligence.tsx:26,140` | "TODO: wire to backend when MSA / county rollups land" | drop or externalize |
 | C-P15 | `frontend/src/mocks/fixtureData.ts:157` | `TODO: wire to /api/audit/events` | fine but belongs in a card, not in-file |
-| C-P16 | `backend/api/genie.py:5,15` | docstring mentions "safe-corpus fallback … silent-mock-fallback regression" | trim the self-referential forensics |
-| C-P17 | `backend/services/repositories/databricks_repo.py:581,622,635,650` | several "fallback"/"catalog-fallback"/"safe-corpus" in comments | fine internally but overuses the word; tighten |
+| C-P16 | `backend/api/genie.py:5,15` | docstring mentions old local-answer fallback forensics | trim the self-referential forensics |
+| C-P17 | `backend/services/repositories/databricks_repo.py:581,622,635,650` | several old local-answer fallback comments | fine internally but overuses the word; tighten |
 | C-P18 | `backend/services/genie_client.py:493` | "Read the committed `genie/space_id.txt` as a fallback" | fine |
 | C-P19 | `backend/services/observability.py:267` | "``msg`` terse for non-JSON fallback handlers (e.g. pytest capture)" | fine |
 | C-P20 | `backend/services/pii_redaction.py` | 15+ "fallback" hits in a single file | fine (real engineering concept) but consider "default dictionary" vocabulary |

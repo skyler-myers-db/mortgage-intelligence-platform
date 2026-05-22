@@ -9,11 +9,24 @@ def test_required_routes_exist_and_respond():
     checks = [
         ("get", "/api/health", None, 200),
         ("get", "/api/config/options", None, 200),
+        ("get", "/api/analytics/executive", None, 200),
+        ("get", "/api/analytics/geography", None, 200),
+        ("get", "/api/analytics/economics", None, 200),
+        ("get", "/api/analytics/segments", None, 200),
+        ("get", "/api/analytics/signals", None, 200),
         ("post", "/api/portfolio/preview", {"criteria": {}}, 200),
         ("post", "/api/portfolio/create", {"name": "Sample"}, 200),
-        ("get", "/api/portfolio/p1", None, 200),
-        ("get", "/api/segments?portfolio_id=p1", None, 200),
-        ("get", "/api/leads?portfolio_id=p1&segment=itm", None, 200),
+        ("get", "/api/portfolio/11111111-1111-4111-8111-111111111111", None, 200),
+        (
+            "patch",
+            "/api/portfolio/11111111-1111-4111-8111-111111111111",
+            {"status": "pending_review"},
+            200,
+        ),
+        ("get", "/api/segments?portfolio_id=11111111-1111-4111-8111-111111111111", None, 200),
+        ("get", "/api/leads?portfolio_id=11111111-1111-4111-8111-111111111111&segment=itm", None, 200),
+        ("get", "/api/leads?segment_codes=itm,equity&segment_mode=all", None, 200),
+        ("get", "/api/geo/state-rollups?segment_codes=itm,equity&segment_mode=all", None, 200),
         ("get", "/api/borrowers/B-48291", None, 200),
         ("get", "/api/borrowers/B-48291/evidence", None, 200),
         ("post", "/api/offers/recommend", {"borrower_id": "B-48291"}, 200),
@@ -21,7 +34,11 @@ def test_required_routes_exist_and_respond():
         (
             "post",
             "/api/outreach/approve",
-            {"borrower_id": "B-48291", "actor": "anonymous"},
+            {
+                "borrower_id": "B-48291",
+                "actor": "anonymous",
+                "draft_body": "Governed approval body. Summit Mortgage, NMLS #123456. Equal Housing Lender. Reply unsubscribe to opt out.",
+            },
             200,
         ),
         ("post", "/api/genie/start", {"context": {}}, 200),
@@ -35,17 +52,18 @@ def test_required_routes_exist_and_respond():
         (
             "post",
             "/api/audit/event",
-            {
-                "actor": "anonymous",
-                "action": "view.leads",
-                "entity_type": "lead_queue",
-                "entity_id": "itm",
-            },
+                {
+                    "actor": "anonymous",
+                    "action": "view.custom",
+                    "entity_type": "lead_queue",
+                    "entity_id": "itm",
+                },
             200,
         ),
         ("get", "/api/admin/rules", None, 200),
-        # Round-3 hole-finder #17: PUT body is now Pydantic-validated.
-        ("put", "/api/admin/rules", {"overrides": {"x": "y"}}, 200),
+        # App-local threshold edits are rejected; rules are UC-governed.
+        ("put", "/api/admin/rules", {"attempted_change": {"x": "y"}}, 410),
+        ("get", "/api/not-a-real-route", None, 404),
     ]
 
     for method, path, payload, expected in checks:

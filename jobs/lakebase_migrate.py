@@ -6,7 +6,7 @@ Runs as a Databricks Jobs Python task (``mip_lakebase_migrate`` in
 
     1. ``lakebase/schema.sql`` -- idempotent DDL (CREATE ... IF NOT
        EXISTS, CREATE INDEX IF NOT EXISTS) for campaigns, approvals,
-       action_audit, agent_sessions, feedback.
+       action_audit, archive-run/migration ledgers, agent_sessions, feedback.
     2. ``lakebase/seed_campaigns.sql`` -- idempotent seed (stable
        UUIDs + ON CONFLICT DO NOTHING) for the Summit Mortgage
        campaigns + five sample approvals.

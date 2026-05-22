@@ -1,4 +1,32 @@
-import type { GenieAnswer as GenieAnswerShape } from '../../types';
+import { useState } from 'react';
+import { createPortal } from 'react-dom';
+import type {
+  GenieActionSuggestion,
+  GenieAnswer as GenieAnswerShape,
+} from '../../types';
+import { Icon } from '../Icon';
+import { useApp } from '../AppContext';
+import { GenieActions } from './GenieAnswerActions';
+import {
+  GenieBarChart,
+  GenieBorrowerList,
+  GenieLineChart,
+  GenieMapChart,
+  GenieStrategyBoard,
+} from './GenieAnswerCharts';
+import { MarkdownAnswer, stripQuestionRestatement } from './GenieAnswer.markdown';
+import { GenieProofPanel } from './GenieAnswerProof';
+import {
+  formatCell,
+  humanizeKey,
+  isIdentifierColumn,
+  MAX_TABLE_COLS,
+  MAX_TABLE_ROWS,
+  pickPlan,
+} from './GenieAnswer.logic';
+
+export { stripQuestionRestatement } from './GenieAnswer.markdown';
+export { inferChartFromRows } from './GenieAnswer.logic';
 
 /**
  * GenieAnswer — renders the widened Genie payload: metric_value (big tabular
@@ -6,39 +34,86 @@ import type { GenieAnswer as GenieAnswerShape } from '../../types';
  * 10), and follow_up_questions (clickable .filter chips). Used inside both
  * the floating GenieChat bubble and the Ask Genie deep-dive route, so the
  * presenter experience is identical regardless of entry point.
+ *
+ * 2026-05-04 polish (user feedback "Genie output is weird"):
+ *   - The Genie space frequently restates the question as the first
+ *     sentence ("You want to see which ZIPs..."). That's filler the
+ *     reader already knows — `stripQuestionRestatement` drops it.
+ *   - Bold (**x**), inline code (`x`), and bullet lists ("- item")
+ *     are rendered as real markup so emphasized ZIP codes / segment
+ *     names actually pop instead of reading as raw asterisks.
+ *   - Charts: the Genie API does support attachment-based charts but
+ *     the message endpoint returns them as separate attachment IDs
+ *     that have to be fetched via a follow-up call. Not wired today;
+ *     the follow-up question chips below let the user pivot to a
+ *     more visual question (e.g. "show as a bar chart") and the
+ *     table_rows path covers the most common "list me N things" ask.
  */
-
-const MAX_TABLE_ROWS = 10;
-const MAX_TABLE_COLS = 4;
 
 interface GenieAnswerProps {
   payload: GenieAnswerShape;
   onFollowUp?: (q: string) => void;
+  onAction?: (action: GenieActionSuggestion) => void | Promise<void>;
   /** Compact mode (used inside the floating chat bubble). */
   dense?: boolean;
+  /** Render an inline chart when the table_rows shape is chartable.
+   *  Off by default so the floating GenieChat bubble stays compact;
+   *  the Ask Genie deep-dive route opts in. (FIX Δ3, 2026-05-04). */
+  withChart?: boolean;
 }
 
-export function GenieAnswer({ payload, onFollowUp, dense = false }: GenieAnswerProps) {
-  const { answer, metric_value, table_rows, follow_up_questions } = payload;
+export function GenieAnswer({
+  payload,
+  onFollowUp,
+  onAction,
+  dense = false,
+  withChart = false,
+}: GenieAnswerProps) {
+  const { answer, metric_value, table_rows, follow_up_questions, actions } = payload;
+  const { setDrawer } = useApp();
+  const [showProof, setShowProof] = useState(false);
   const rows = Array.isArray(table_rows) ? table_rows : [];
   const visibleRows = rows.slice(0, MAX_TABLE_ROWS);
   const hiddenRows = Math.max(0, rows.length - MAX_TABLE_ROWS);
   const columns = visibleRows[0] ? Object.keys(visibleRows[0]).slice(0, MAX_TABLE_COLS) : [];
+  const chartColumns = rows[0] ? Object.keys(rows[0]) : [];
+  const cleanedAnswer = answer ? stripQuestionRestatement(answer) : '';
+  // Chart is optional and only computed from structured table_rows.
+  // Answer prose is never parsed into visualization data.
+  const plan = withChart ? pickPlan(payload, rows, chartColumns) : { kind: 'none', chart: null, viz: null };
+  const chart = plan.chart;
 
   return (
     <div>
-      {metric_value && (
+      {metric_value !== null && metric_value !== undefined && metric_value !== '' && (
         <div
-          className="genie-answer__metric"
-          style={dense ? { fontSize: 'var(--fs-22)' } : undefined}
+          className={`genie-answer__metric ${dense ? 'genie-answer__metric--dense' : ''}`}
         >
           {metric_value}
         </div>
       )}
-      {answer && (
-        <p style={{ margin: 0, fontSize: 'var(--fs-13)', color: 'var(--text-1)', lineHeight: 1.5 }}>
-          {answer}
-        </p>
+      {cleanedAnswer && <MarkdownAnswer text={cleanedAnswer} />}
+      {/* FIX Δ3: chart renders BEFORE the underlying table so the user
+          sees the visual summary first; the table stays as the
+          authoritative data source below. Only renders when withChart
+          is true (Ask Genie deep-dive route only) AND the data shape
+          is chartable (1 categorical + 1 numeric column). */}
+      {plan.kind === 'strategy_board' && (
+        <GenieStrategyBoard rows={rows} x={plan.viz?.x} y={plan.viz?.y} />
+      )}
+      {plan.kind === 'borrower_list' && <GenieBorrowerList rows={rows} />}
+      {plan.kind === 'map' && (
+        <GenieMapChart rows={rows} x={plan.viz?.x ?? chart?.labelCol} y={plan.viz?.y ?? chart?.valueCol} />
+      )}
+      {plan.kind === 'line' && chart && (
+        <GenieLineChart data={chart.rows} labelCol={chart.labelCol} valueCol={chart.valueCol} />
+      )}
+      {(plan.kind === 'bar' || plan.kind === 'funnel' || (!['strategy_board', 'borrower_list', 'map', 'line'].includes(plan.kind) && chart)) && chart && (
+        <GenieBarChart
+          data={chart.rows}
+          labelCol={chart.labelCol}
+          valueCol={chart.valueCol}
+        />
       )}
       {visibleRows.length > 0 && columns.length > 0 && (
         <>
@@ -55,10 +130,10 @@ export function GenieAnswer({ payload, onFollowUp, dense = false }: GenieAnswerP
                 <tr key={i}>
                   {columns.map((c) => {
                     const v = row[c];
-                    const isNum = typeof v === 'number';
+                    const isNum = typeof v === 'number' && !isIdentifierColumn(c);
                     return (
                       <td key={c} className={isNum ? 'num' : undefined}>
-                        {formatCell(v)}
+                        {formatCell(c, v)}
                       </td>
                     );
                   })}
@@ -71,32 +146,80 @@ export function GenieAnswer({ payload, onFollowUp, dense = false }: GenieAnswerP
           )}
         </>
       )}
+      {payload.proof && (
+        <div className="genie-proof-toggle">
+          <button type="button" className="btn btn--ghost btn--sm" onClick={() => setShowProof((cur) => !cur)}>
+            <Icon name="audit" size={12} />
+            {showProof ? 'Hide proof' : 'Show proof'}
+          </button>
+          {payload.proof.trusted !== undefined && (
+            <span className={payload.proof.trusted ? 'chip chip--success' : 'chip chip--warning'}>
+              {payload.proof.trusted ? 'trusted' : 'review'}
+            </span>
+          )}
+        </div>
+      )}
+      {payload.proof && showProof && typeof document !== 'undefined' && createPortal(
+        <>
+          <div
+            className="drawer-scrim is-open"
+            onClick={() => setShowProof(false)}
+            aria-hidden="true"
+          />
+          <aside
+            className="drawer genie-proof-drawer is-open"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Genie answer proof"
+          >
+            <div className="drawer__hdr">
+              <div className="drawer__source-icon">
+                <Icon name="audit" size={16} />
+              </div>
+              <div>
+                <div className="drawer__title">Answer proof</div>
+                <div className="drawer__subtitle">{payload.question_hash ?? payload.message_id ?? 'Genie result'}</div>
+              </div>
+              <button
+                className="drawer__close"
+                onClick={() => setShowProof(false)}
+                aria-label="Close Genie proof"
+                type="button"
+              >
+                <Icon name="close" size={14} />
+              </button>
+            </div>
+            <div className="drawer__body">
+              <GenieProofPanel
+                payload={payload}
+                onOpenSource={(source) => {
+                  setShowProof(false);
+                  setDrawer(source);
+                }}
+              />
+            </div>
+          </aside>
+        </>,
+        document.body,
+      )}
       {follow_up_questions && follow_up_questions.length > 0 && onFollowUp && (
         <div className="genie-answer__followups">
           {follow_up_questions.slice(0, 3).map((q) => (
             <button
               key={q}
               type="button"
-              className="filter"
+              className="filter filter--question"
               onClick={() => onFollowUp(q)}
-              style={{ textAlign: 'left' }}
             >
               <span className="filter__label">Ask</span>
-              <span className="filter__value" style={{ fontFamily: 'var(--font-sans)', color: 'var(--text-1)' }}>{q}</span>
+              <span className="filter__value filter__value--question">{q}</span>
             </button>
           ))}
         </div>
       )}
+      {actions && actions.length > 0 && onAction && (
+        <GenieActions actions={actions} onAction={onAction} />
+      )}
     </div>
   );
-}
-
-function humanizeKey(k: string): string {
-  return k.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
-}
-
-function formatCell(v: unknown): string {
-  if (v === null || v === undefined) return '—';
-  if (typeof v === 'number') return Number.isInteger(v) ? v.toLocaleString() : v.toFixed(2);
-  return String(v);
 }

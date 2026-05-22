@@ -1,9 +1,15 @@
 /* ============================================================
    Entrada × Cotality × Databricks — Mortgage Intelligence Platform
-   Design Tokens — verbatim port from design_files/index.html
+   Design Tokens — prototype port plus app accessibility extensions
    ============================================================ */
 
-@import url('https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700;800;900&family=Geist+Mono:wght@400;500;600&display=swap');
+@import '@fontsource/geist/latin-400.css';
+@import '@fontsource/geist/latin-500.css';
+@import '@fontsource/geist/latin-600.css';
+@import '@fontsource/geist/latin-700.css';
+@import '@fontsource/geist-mono/latin-400.css';
+@import '@fontsource/geist-mono/latin-500.css';
+@import '@fontsource/geist-mono/latin-600.css';
 
 :root {
   /* ---------- Brand (Entrada AI) ---------- */
@@ -15,15 +21,15 @@
   --entrada-light:  #CFEFFF;
   --entrada-grey:   #B2BDC2;
   --entrada-teal:   #5CE1E6;
+  --entrada-red:    #FF3621;
 
   /* ---------- Signal colors ----------
-   * Dark-theme defaults. The `[data-theme="light"]` block below darkens
-   * --signal-danger so the `.kpi__delta.down` text clears WCAG AA (4.5:1)
-   * against the white surface. axe-core flagged 4.19 on the light theme.
+   * Dark-theme defaults. The danger shade is lighter than the brand red so
+   * `.kpi__delta.down` clears WCAG AA on dark KPI cards.
    */
   --signal-success: #10B981;
   --signal-warning: #F59E0B;
-  --signal-danger:  #EF4444;
+  --signal-danger:  #F87171;
   --signal-info:    #66C5FF;
 
   /* ---------- Segment palette (chips, map fills) ---------- */
@@ -100,6 +106,37 @@
   --dur-burst: 720ms;
   --dur-emanate: 1200ms;
   --dur-mesh: 60s;
+
+  /* ---------- Component semantic colors ---------- */
+  --surface-scrim: rgba(2, 16, 31, 0.55);
+  --surface-inset-shadow: rgba(255,255,255,0.15);
+  --surface-key-shadow: rgba(0, 0, 0, 0.18);
+  --text-on-solid: #FFFFFF;
+
+  --status-success-soft: rgba(16,185,129,0.14);
+  --status-success-soft-muted: rgba(16,185,129,0.12);
+  --status-success-line: rgba(16,185,129,0.32);
+  --status-success-line-strong: rgba(16,185,129,0.35);
+  --status-success-ink: #6EE7B7;
+  --status-warning-soft: rgba(245,158,11,0.14);
+  --status-warning-soft-muted: rgba(245,158,11,0.12);
+  --status-warning-soft-strong: rgba(245,158,11,0.18);
+  --status-warning-line: rgba(245,158,11,0.30);
+  --status-warning-line-strong: rgba(245,158,11,0.35);
+  --status-warning-ink: #FCD34D;
+  --status-danger-soft: rgba(239,68,68,0.14);
+  --status-danger-soft-muted: rgba(239,68,68,0.12);
+  --status-danger-soft-subtle: rgba(239,68,68,0.10);
+  --status-danger-line-strong: rgba(239,68,68,0.35);
+  --status-danger-ink: #FCA5A5;
+
+  --approval-bg: linear-gradient(90deg, rgba(245,158,11,0.08), rgba(245,158,11,0.02));
+  --degraded-bg: linear-gradient(90deg, rgba(245,158,11,0.10), rgba(245,158,11,0.02));
+  --map-wrap-bg:
+    radial-gradient(800px 500px at 20% 30%, rgba(2,80,128,0.22), transparent 60%),
+    radial-gradient(600px 400px at 80% 70%, rgba(92,225,230,0.10), transparent 60%),
+    var(--bg-2);
+  --map-region-fill: var(--bg-3);
 }
 
 /* ============================================================
@@ -122,7 +159,7 @@
 
   --text-1: #EAF3FA;  /* primary */
   --text-2: #BACBD8;  /* secondary */
-  --text-3: #7F96A7;  /* tertiary */
+  --text-3: #93AABD;  /* tertiary */
   --text-4: #4E6578;  /* disabled */
 
   --chip-bg:   rgba(102,197,255,0.10);
@@ -157,7 +194,7 @@
 
   --text-1: #021F34;
   --text-2: #254A66;
-  --text-3: #5A7890;
+  --text-3: #34536B;
   --text-4: #96ADBF;
 
   --chip-bg:   rgba(2,80,128,0.06);
@@ -167,12 +204,9 @@
   /* Darker danger so .kpi__delta.down clears 4.5:1 AA against the
    * white surface (--bg-1 = #FFFFFF). #DC2626 reads at ~4.83:1. */
   --signal-danger: #DC2626;
-  /* Darker success so .kpi__delta.up (the +%/-% text on KPI cards) and
-   * .seg-card__meta .up clear AA against white. The default #10B981 reads
-   * at ~2.54:1 and axe-core flagged it on the 2026-04-22 light-theme
-   * audit. #047857 (same shade already used for .chip--success in light)
-   * reads at ~5.1:1. */
-  --signal-success: #047857;
+  /* Darker success so .kpi__delta.up, .chip--success, and segment meta
+   * clear AA against light success fills and white surfaces. */
+  --signal-success: #045D46;
 
   --accent:        #025080;
   --accent-hover:  #013354;
@@ -183,6 +217,12 @@
   --shadow-sm: 0 1px 2px rgba(2,31,52,0.06);
   --shadow-md: 0 8px 24px -12px rgba(2,31,52,0.14);
   --shadow-lg: 0 24px 60px -20px rgba(2,31,52,0.18);
+
+  --map-wrap-bg:
+    radial-gradient(800px 500px at 20% 30%, rgba(2,80,128,0.06), transparent 60%),
+    radial-gradient(600px 400px at 80% 70%, rgba(92,225,230,0.08), transparent 60%),
+    #F8FBFD;
+  --map-region-fill: #E4EDF4;
 }
 
 /* ---------- Accent overrides applied at runtime ---------- */
@@ -215,6 +255,7 @@
 :root { --accent-ink: var(--accent); }
 [data-theme="light"][data-accent="bright"] { --accent-ink: #014E80; }
 [data-theme="light"][data-accent="teal"]   { --accent-ink: #045D62; }
+[data-theme="light"][data-accent="red"]    { --accent-ink: #B42318; }
 
 /* ---------- Density ----------
  * Comfortable is the default (carried on :root).
@@ -256,6 +297,15 @@ body {
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   position: relative;
+  transition:
+    background-color var(--dur-base) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body {
+    transition: none;
+  }
 }
 
 /* Ambient animated radial-halo backgrounds removed 2026-04-23. They were
@@ -267,6 +317,12 @@ body {
 code, kbd, .mono { font-family: var(--font-mono); }
 a { color: inherit; }
 button, input, select, textarea { font: inherit; }
+
+input[type="checkbox"] {
+  inline-size: var(--sp-6);
+  block-size: var(--sp-6);
+  accent-color: var(--accent);
+}
 
 /* ---------- Focus ---------- */
 :focus-visible {

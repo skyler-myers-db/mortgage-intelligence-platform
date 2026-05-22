@@ -1,5 +1,9 @@
 # Slice 13 — Accuracy + Robustness Validation Report
 
+> **Internal implementation artifact. Not approved for public release.**
+> Contains provider/share/table inventory and validation methodology intended
+> for Entrada, Databricks, and Cotality implementation reviewers only.
+
 **Branch:** `slice13-accuracy-validation`
 **Author:** master Claude Code agent + 11 subagent workstreams (Wave 1 + Wave 2)
 **Date:** 2026-04-21
@@ -22,10 +26,10 @@ and the known-residual honest-gap list — is below.
 ### 1.1 Segment counts match the raw share to ±0 rows
 
 - Independent reference queries against `cotality_mortgage_data.corelogic.*`
-  for 30 `(segment × state)` cells across the 5 unblocked segments and 6
-  states: **every cell matches `mip.gold.borrower_360` with Δ=0**.
-- Total row parity also Δ=0: `gold.borrower_360 = 5,156,184 = raw share
-  6-state filter = 5,156,184`.
+  compare each unblocked segment across the refreshed coverage states:
+  **every cell must match `mip.gold.borrower_360` with Δ=0**.
+- Total row parity compares `gold.borrower_360` to the raw share rows with
+  non-null state and CLIP keys; no fixed state-list filter is allowed.
 - Regression test: [tests/integration/test_segment_count_parity.py](../tests/integration/test_segment_count_parity.py)
   — 39 parametrised cases, gated on live warehouse creds, runs ~14 s warm.
 - Full methodology + per-cell numbers:
@@ -33,7 +37,7 @@ and the known-residual honest-gap list — is below.
 
 ### 1.2 Every column on the borrower page arithmetic-matches the raw share
 
-- Twenty random CLIPs stratified across IL/CA/FL/TX/WA/CO × high/mid/low
+- Twenty random CLIPs stratified across current coverage states × high/mid/low
   opportunity_score, traced raw → silver → gold → `/api/borrowers/{id}`:
   **20/20 CLIPs match to the penny** after the Wave 2 fixes.
 - Verified columns: `rate_spread_bps`, `equity_pct`, `equity_estimate`, `ltv`,
@@ -108,8 +112,8 @@ outputs. Runs in the `parity-live` nightly job.
 ### 1.8 Supply-chain + secret hygiene gated in PR CI
 
 - New `security-scan` job on [.github/workflows/ci.yml](../.github/workflows/ci.yml):
-  - **gitleaks v2** with a curated `.gitleaks.toml` allowlist (synthetic
-    `B-#####` borrower IDs, CI placeholder warehouse/space IDs, doc paths).
+  - **gitleaks v2** with a curated `.gitleaks.toml` allowlist (masked
+    borrower IDs, CI placeholder warehouse/space IDs, doc paths).
   - **bandit** two-pass (medium informational + high gate) with a
     documented `.bandit` skip list; all four pre-existing weak-hash
     findings are log fingerprints or cache keys, not secrets, and are
@@ -207,7 +211,7 @@ Post-rebuild verification (live UC, this branch):
 
 - `gold.lead_population` now reflects `opportunity_score >= 50`
   across the full footprint (no 10 K cap).
-- `gold.borrower_360` row count = **5,156,184** (6-state raw share).
+- `gold.borrower_360` row count = **5,156,184** (configured raw share).
 - `gold.lockin_cohort` (new this slice) = **669,320 rows**, identical
   to the independent raw-share reference query (Δ = 0).
 - Gated integration suite (`segment_count_parity`, `borrower_id_
@@ -361,10 +365,10 @@ Nothing to fix — just a natural 24-hour wait.
 ### 3.6 Fixture Python golden-borrower IDs are not CLIP-derived
 
 The 20 test fixtures in `tests/fixtures/*_golden.json` use hand-authored
-IDs like `B-48291` that do not map to any CLIP. The Wave 2 ID widening
+IDs that do not map to any CLIP. The Wave 2 ID widening
 targeted the CLIP-derived gold formula only; fixture IDs stay narrow for
 test-readability. This is intentional but worth knowing — a test failure
-that references `B-48291` is a fixture test, not a real CLIP.
+that references a fixture borrower id is a fixture test, not a real CLIP.
 
 ---
 
@@ -455,8 +459,8 @@ evidence (§1), we can now credibly assert to a prospective customer:
   rebuild."
 - "The opportunity score and recommended offer on any borrower page
   reproduce from raw data through seven independently-authored layers
-  to the same value, on 20 random CLIPs stratified across all six
-  states."
+  to the same value, on random CLIPs stratified across the current
+  source coverage states."
 - "The 2020-2022 sub-3% lock-in cohort is **669,320 borrowers**,
   materialised as `mip.gold.lockin_cohort` and cross-checked against
   the raw Cotality share with Δ=0. Genie answers sample question 5

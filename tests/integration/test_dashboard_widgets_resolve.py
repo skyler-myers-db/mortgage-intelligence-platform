@@ -16,14 +16,15 @@ Databricks Lakeview UI:
 This suite is the strongest automated proxy for "open it in the Lakeview
 UI and eyeball it". For each dashboard it:
 
-- Parses every dataset and extracts the SQL from ``queryLines`` (or falls
+- Parses every dataset and extracts the SQL from ``queryLines`` using the same
+  concat semantics Databricks Lakeview applies at render time (or falls
   back to ``SELECT * FROM <table> LIMIT 1`` if a dataset references a
   table without embedded SQL -- a format we don't use today but guard
   against so future Lakeview-format additions don't silently pass).
 - Runs the SQL against the real warehouse.
 - For every widget, asserts every column referenced in ``spec.encodings``
-  (x, y, color, size, region, region-color, region-size, value, cell,
-  rows[*], columns[*]) is present in the dataset's result schema.
+    (x, y, color, size, value, cell.fields[*], extra[*], rows[*],
+    columns[*]) is present in the dataset's result schema.
 - Applies widget-type-specific row-shape rules:
     * ``counter`` / single-value -- exactly 1 row.
     * ``bar`` / ``line`` -- >= 2 distinct x values (otherwise the chart
@@ -179,14 +180,14 @@ _TABLE_REF = re.compile(r"\bmip\.[a-zA-Z_]+\.[a-zA-Z_0-9]+\b")
 def _dataset_sql(dataset: dict[str, Any]) -> str:
     """Extract the SQL for a Lakeview dataset.
 
-    The authored format uses ``queryLines: [str, ...]`` which join with
-    newlines. A future format variant may put the SQL in ``query_text``
-    (single string) or reference a UC table by name only (``table`` key).
-    We support all three so a format shift doesn't silently pass.
+    Databricks Lakeview concatenates ``queryLines`` entries directly. The
+    dashboard files therefore keep each dataset as one newline-bearing string.
+    Joining here with newlines would mask the exact ``borrower_countFROM``
+    failure mode seen in the hosted Lakeview renderer.
     """
     lines = dataset.get("queryLines")
     if lines:
-        return "\n".join(lines)
+        return "".join(lines)
     text = dataset.get("query_text") or dataset.get("queryText")
     if text:
         return text
@@ -223,10 +224,10 @@ def _widget_encoded_columns(widget: dict[str, Any]) -> list[str]:
 
     Covers the encoding keys Lakeview uses today:
       - cartesian (bar/line/scatter): x, y, color, size, label
-      - symbol-map: region, color, size
       - counter / single-value: value
       - table: columns[*]
       - pivot: rows[*], columns[*], cell
+      - scatter/table tooltip extras: extra[*]
     Each may be either a single object or a list.
     """
     cols: list[str] = []
@@ -244,9 +245,11 @@ def _widget_encoded_columns(widget: dict[str, Any]) -> list[str]:
             fn = obj.get("fieldName")
             if isinstance(fn, str) and fn:
                 cols.append(fn)
+            for value in obj.values():
+                _collect(value)
 
     for key in ("x", "y", "color", "size", "label", "value", "region",
-                "cell"):
+                "cell", "extra"):
         _collect(enc.get(key))
     _collect(enc.get("columns"))
     _collect(enc.get("rows"))
@@ -389,11 +392,26 @@ def test_widget_encodes_resolve(
     )
 
     cols, rows = _resolve_dataset(warehouse, dashboard, ds_name)
-    schema = {c.lower() for c in cols}
+    # Encodings may point either at a raw dataset column or at an aggregate
+    # field produced by the widget query itself, e.g. a Lakeview v3 pivot
+    # encodes ``sum(borrower_count)`` while the underlying dataset returns
+    # ``borrower_count``. Validate both surfaces.
+    query_field_names = {
+        field.get("name", "")
+        for query in widget.get("queries", [])
+        for field in (query.get("query") or {}).get("fields", [])
+        if isinstance(field.get("name"), str)
+    }
+    schema = {c.lower() for c in cols} | {name.lower() for name in query_field_names}
+    encoded_columns = _widget_encoded_columns(widget)
+    assert encoded_columns, (
+        f"{dashboard.name}:{wname} has no encoded fieldName values; "
+        "Lakeview renders this state as 'Visualization has no fields selected'."
+    )
 
     # 1. Every encoded column must be present in the result schema.
     missing: list[str] = []
-    for encoded in _widget_encoded_columns(widget):
+    for encoded in encoded_columns:
         if encoded.lower() not in schema:
             missing.append(encoded)
     assert not missing, (
@@ -433,7 +451,7 @@ def test_widget_encodes_resolve(
                         f"distinct x values on '{x_field}' -- chart will "
                         "render broken."
                     )
-    # Table / pivot / scatter / symbol-map have no hard row-count rule;
+    # Table / pivot / scatter have no hard row-count rule;
     # the encoded-columns check above is enough.
 
 

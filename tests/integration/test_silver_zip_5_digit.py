@@ -16,7 +16,9 @@ defensive SUBSTR.
 
 Assertion
 ---------
-``MAX(LENGTH(situs_zip_code)) <= 5`` on both silver tables.
+``situs_zip_code IS NULL OR LENGTH(situs_zip_code) = 5`` on both silver
+tables. Four-digit fragments are invalid unless they can be safely restored
+as leading-zero ZIPs at ingest time.
 """
 from __future__ import annotations
 
@@ -24,12 +26,20 @@ import json
 import os
 import urllib.error
 import urllib.request
+from dataclasses import dataclass, field
 from typing import Any
 
 import pytest
 
 
-def _creds() -> tuple[str, str, str] | None:
+@dataclass(frozen=True)
+class WarehouseCreds:
+    host: str
+    token: str = field(repr=False)
+    warehouse_id: str
+
+
+def _creds() -> WarehouseCreds | None:
     host = os.environ.get("DATABRICKS_HOST") or os.environ.get(
         "DATABRICKS_SERVER_HOSTNAME"
     )
@@ -39,7 +49,7 @@ def _creds() -> tuple[str, str, str] | None:
         return None
     if not host.startswith("http"):
         host = "https://" + host
-    return host.rstrip("/"), token, warehouse_id
+    return WarehouseCreds(host=host.rstrip("/"), token=token, warehouse_id=warehouse_id)
 
 
 def _run_sql_rows(
@@ -82,7 +92,7 @@ def _run_sql_rows(
 
 
 @pytest.fixture(scope="module")
-def warehouse() -> tuple[str, str, str]:
+def warehouse() -> WarehouseCreds:
     creds = _creds()
     if creds is None:
         pytest.skip(
@@ -97,8 +107,8 @@ def warehouse() -> tuple[str, str, str]:
     "silver_table",
     ["mip.silver.property_master", "mip.silver.lien_current"],
 )
-def test_silver_zip_is_five_digits_or_fewer(
-    warehouse: tuple[str, str, str],
+def test_silver_zip_is_five_digits_or_null(
+    warehouse: WarehouseCreds,
     silver_table: str,
 ) -> None:
     """If silver ever emits a 6+ char ZIP, gold's geography surfaces drift.
@@ -107,17 +117,16 @@ def test_silver_zip_is_five_digits_or_fewer(
     ``LENGTH(situs_zip_code) > 5`` indicates the slice13 Wave-2 truncation
     regressed in the silver transformation for this table.
     """
-    host, token, wid = warehouse
     rows = _run_sql_rows(
-        host,
-        token,
-        wid,
-        f"SELECT COALESCE(MAX(LENGTH(situs_zip_code)), 0) AS max_len "
-        f"FROM {silver_table}",
+        warehouse.host,
+        warehouse.token,
+        warehouse.warehouse_id,
+        f"SELECT COUNT(*) AS bad_rows FROM {silver_table} "
+        "WHERE situs_zip_code IS NOT NULL AND LENGTH(situs_zip_code) != 5",
     )
     assert rows, f"no row returned from {silver_table} zip-length probe"
-    max_len = int(rows[0][0])
-    assert max_len <= 5, (
-        f"{silver_table}.situs_zip_code MAX(LENGTH) = {max_len}, expected <= 5. "
-        "slice13 Wave-2 silver-side truncation has regressed."
+    bad_rows = int(rows[0][0])
+    assert bad_rows == 0, (
+        f"{silver_table}.situs_zip_code has {bad_rows} non-null non-ZIP5 rows. "
+        "silver-side ZIP normalization has regressed."
     )

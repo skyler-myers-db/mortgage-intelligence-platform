@@ -30,6 +30,20 @@ if str(JOBS_DIR) not in sys.path:
 fred_ingest = importlib.import_module("fred_rates_ingest")
 
 
+class _FakeResponse:
+    def __init__(self, payload: bytes) -> None:
+        self._payload = payload
+
+    def read(self) -> bytes:
+        return self._payload
+
+    def __enter__(self) -> _FakeResponse:
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        return None
+
+
 # ---------------------------------------------------------------------------
 # to_week_monday — normalizes any weekday to the Monday of that ISO week
 # ---------------------------------------------------------------------------
@@ -99,6 +113,63 @@ def test_parse_fred_csv_skips_malformed_rows() -> None:
     rows = fred_ingest.parse_fred_csv(payload)
     assert len(rows) == 1
     assert rows[0].rate_pct == pytest.approx(5.900)
+
+
+def test_fetch_fred_csv_uses_no_custom_user_agent_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[urllib.request.Request] = []
+
+    def fake_urlopen(req: urllib.request.Request, timeout: int):  # type: ignore[no-untyped-def]
+        captured.append(req)
+        return _FakeResponse(b"observation_date,MORTGAGE30US\n2026-04-30,6.30\n")
+
+    monkeypatch.delenv("FRED_USER_AGENT", raising=False)
+    monkeypatch.setattr(fred_ingest.urllib.request, "urlopen", fake_urlopen)
+
+    payload = fred_ingest.fetch_fred_csv(attempts=1)
+
+    assert "2026-04-30" in payload
+    assert captured
+    assert "User-agent" not in captured[0].headers
+    assert "User-Agent" not in captured[0].headers
+
+
+def test_fetch_fred_csv_honors_user_agent_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[urllib.request.Request] = []
+
+    def fake_urlopen(req: urllib.request.Request, timeout: int):  # type: ignore[no-untyped-def]
+        captured.append(req)
+        return _FakeResponse(b"observation_date,MORTGAGE30US\n2026-04-30,6.30\n")
+
+    monkeypatch.setenv("FRED_USER_AGENT", "curl/8.7.1")
+    monkeypatch.setattr(fred_ingest.urllib.request, "urlopen", fake_urlopen)
+
+    fred_ingest.fetch_fred_csv(attempts=1)
+
+    assert captured[0].headers["User-agent"] == "curl/8.7.1"
+
+
+def test_fetch_fred_csv_retries_transient_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = {"n": 0}
+
+    def flaky_urlopen(req: urllib.request.Request, timeout: int):  # type: ignore[no-untyped-def]
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise TimeoutError("simulated edge timeout")
+        return _FakeResponse(b"observation_date,MORTGAGE30US\n2026-04-30,6.30\n")
+
+    monkeypatch.setattr(fred_ingest.urllib.request, "urlopen", flaky_urlopen)
+    monkeypatch.setattr(fred_ingest.time, "sleep", lambda _: None)
+
+    payload = fred_ingest.fetch_fred_csv(attempts=2, backoff_s=0)
+
+    assert calls["n"] == 2
+    assert "2026-04-30" in payload
 
 
 # ---------------------------------------------------------------------------
@@ -191,6 +262,14 @@ def test_cli_seed_dry_run_returns_zero(caplog: pytest.LogCaptureFixture) -> None
     rc = fred_ingest.main(["--mode=seed", "--dry-run"])
     assert rc == 0
     assert any("parsed" in m and "rows from" in m for m in caplog.messages)
+
+
+def test_cli_default_table_honors_catalog_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MIP_DEFAULT_CATALOG", "customer_catalog")
+
+    args = fred_ingest.build_parser().parse_args(["--mode=seed", "--dry-run"])
+
+    assert args.table == "customer_catalog.silver.market_rates_weekly"
 
 
 def test_cli_fred_dry_run_no_network(monkeypatch: pytest.MonkeyPatch) -> None:

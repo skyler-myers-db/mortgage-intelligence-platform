@@ -1,18 +1,24 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { PageShell } from '../components/layout/PageShell';
 import { KpiCard } from '../components/mortgage/KpiCard';
 import { USChoroplethMap } from '../components/mortgage/USChoroplethMap';
 import { AgentActivityLog } from '../components/mortgage/AgentActivityLog';
+import { DataEstatePanel, DataEstatePanelSkeleton } from '../components/mortgage/DataEstatePanel';
 import { Button, Chip } from '../components/Primitives';
 import { DRAWER_SOURCES } from '../lib/drawerSources';
 import { Icon } from '../components/Icon';
 import { Reveal } from '../components/fx/Reveal';
-import { api, isAbortError } from '../lib/api';
+import { api } from '../lib/api';
+import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
+import { queryKeys } from '../lib/queryKeys';
+import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 import { useApp } from '../components/AppContext';
+import { useOptionalHealth } from '../components/HealthProvider';
 import { EntradaWordmark } from '../components/brand/Entrada';
 import { formatRefreshed } from '../lib/formatRefreshed';
-import type { PortfolioPreview } from '../types';
+import type { DataEstateResponse, KpiTrend, PortfolioPreview } from '../types';
 
 const FUTURE_MODULES = [
   { code: 'M1', title: 'Pipeline Optimization', desc: 'Lead → app → approval throughput and stalls.' },
@@ -21,80 +27,113 @@ const FUTURE_MODULES = [
   { code: 'M4', title: 'Risk & Retention',      desc: 'Portfolio-level retention and recapture.' },
 ];
 
+export const HOME_PORTFOLIO_PREVIEW_CRITERIA = { marketing_eligibility: 'Any' } as const;
+export const APPROVAL_QUEUE_STATE_LABEL = 'current lifecycle state';
+
+export function requestHomePortfolioPreview(signal?: AbortSignal) {
+  return api.portfolioPreview(HOME_PORTFOLIO_PREVIEW_CRITERIA, signal);
+}
+
+function dataEstateFallback(lender: string): DataEstateResponse {
+  return {
+    generated_at: new Date().toISOString(),
+    lender_name: lender,
+    public_demo_masking: true,
+    lanes: [
+      {
+        id: 'proof_unavailable',
+        title: 'Data-estate proof unavailable',
+        description: 'The app could not load the source-readiness proof surface.',
+        status: 'error',
+        assets: [
+          {
+            name: 'Data-estate API',
+            label: '/api/v1/data-estate',
+            status: 'error',
+            note: 'Do not claim source proof until this endpoint recovers.',
+          },
+        ],
+      },
+    ],
+    known_data_gaps: ['Data-estate proof API unavailable; do not claim source proof until it recovers.'],
+    proof_assets: [],
+  };
+}
+
 /** Format a signed percent-delta for the KPI delta slot. `null` → undefined
  * so the KpiCard simply hides the delta row. */
-function formatDelta(pct: number | null | undefined): string | undefined {
+function formatDelta(trend: KpiTrend | undefined): string | undefined {
+  const pct = trend?.delta_pct;
   if (pct === null || pct === undefined) return undefined;
   const sign = pct > 0 ? '+' : '';
-  return `${sign}${pct.toFixed(1)}% vs 7d ago`;
+  return `${sign}${pct.toFixed(1)}% ${trend?.comparison_label ?? 'vs prior snapshot'}`;
 }
 
 export default function Home() {
-  // Home KPIs read straight from /api/portfolio/preview. While the request is
-  // in flight we show an em-dash placeholder rather than design-time numbers
-  // so the surface never presents a plausible-but-fake value. The KpiCard
-  // component interprets a null `valueAnimated` as "render em-dash".
+  // Home KPIs read straight from /api/v1/portfolio/preview. While the request is
+  // in flight we show skeletons rather than design-time numbers or em-dashes,
+  // so normal loading is visually distinct from a genuinely unknown value.
   const { lender } = useApp();
-  const [preview, setPreview] = useState<PortfolioPreview | null>(null);
-  const [previewError, setPreviewError] = useState<string | null>(null);
-  // Reload token — incrementing it via the Retry button re-runs the
-  // portfolio-preview fetch without a full route reload. Hole-finder
-  // finding #1, 2026-04-23.
-  const [reloadToken, setReloadToken] = useState<number>(0);
+  const healthCtx = useOptionalHealth();
+  // True when the shared health poll has confirmed warehouse / lakebase is
+  // down. While that's the case we keep the warming-up tile visible
+  // instead of falling into a contradictory red error: the system-wide
+  // DegradedBanner already explains the situation, and the per-tile
+  // retry budget (30s) is shorter than a typical serverless-warehouse
+  // cold start (30-60s). User feedback 2026-04-25: showing both a
+  // "reconnecting" banner AND a "couldn't load" red tile makes the app
+  // look broken when it is correctly warming up.
+  const warehouseDown =
+    healthCtx?.health?.dependencies?.warehouse === 'down' ||
+    healthCtx?.health?.dependencies?.lakebase === 'down';
+  const previousWarehouseDown = useRef(warehouseDown);
+  const {
+    data: preview,
+    warmingUp: previewWarming,
+    error: previewErrorObj,
+    manualRetry: retryPreview,
+  } = useWarmingUpRetry<PortfolioPreview>(
+    requestHomePortfolioPreview,
+    ['home'],
+    { queryKey: queryKeys.homePreview() },
+  );
+  const previewError = previewErrorObj
+    ? previewErrorObj instanceof Error
+      ? previewErrorObj.message
+      : "Couldn't load portfolio KPIs."
+    : null;
+
+  const { data: dataEstate = null } = useQuery<DataEstateResponse>({
+    queryKey: queryKeys.dataEstate(),
+    queryFn: ({ signal }) => api.dataEstate(signal).catch(() => dataEstateFallback(lender)),
+  });
+
   useEffect(() => {
-    // AbortController replaces the legacy `cancelled` guard so an unmount
-    // or filter change actually cancels the in-flight fetch (not just the
-    // setState). Round-2 hole-finder #10/#11, 2026-04-23.
-    const ctrl = new AbortController();
-    api
-      .portfolioPreview({}, ctrl.signal)
-      .then((p) => {
-        setPreview(p);
-        setPreviewError(null);
-      })
-      .catch((err: unknown) => {
-        if (isAbortError(err)) return;
-        setPreview(null);
-        setPreviewError(
-          err instanceof Error ? err.message : "Couldn't load portfolio KPIs.",
-        );
-      });
-    return () => {
-      ctrl.abort();
-    };
-  }, [reloadToken]);
+    if (previousWarehouseDown.current && !warehouseDown && previewErrorObj) retryPreview();
+    previousWarehouseDown.current = warehouseDown;
+  }, [previewErrorObj, retryPreview, warehouseDown]);
 
   const queued = preview?.high_intent_leads ?? null;
+  const kpisLoading = preview === null && !previewError && !previewWarming;
 
-  // Day-0 detection (hole-finder round 2 #13, 2026-04-23): on a fresh
-  // customer workspace `mip.gold.funnel_snapshot_daily` is empty and
-  // `mip.gold.borrower_360` has no rows yet. The preview then comes back
-  // as zeroes with a null timestamp — which renders as "0 / 0 / 0 / 0"
-  // and looks like honest-but-sad real data. Catch that exact shape and
-  // show an empty-state banner so the presenter knows to run the bundle,
-  // not explain why the pipeline says nothing.
+  // Day-0 detection (R5-20): trust the server-authoritative
+  // ``day_zero`` flag on PortfolioPreview, which keys off
+  // ``COUNT(*) FROM mip.gold.lead_population``.
   //
-  // R5-20: prefer the server-authoritative ``day_zero`` flag, which
-  // keys off ``COUNT(*) FROM mip.gold.lead_population`` and is immune
-  // to the partial-CTAS-roll window where snapshot_at lags behind
-  // borrower_360. Fall back to the two-field inference for pre-R5-20
-  // servers that don't emit the flag.
-  const isDayZero =
-    preview !== null
-    && (
-      preview.day_zero === true
-      || (
-        preview.day_zero === undefined
-        && preview.marketable_population === 0
-        && preview.data_refreshed_at === null
-      )
-    );
+  // R6-06: the two-field fallback inference (marketable_population ===
+  // 0 && data_refreshed_at === null) was dead code -- the backend
+  // default is ``day_zero: false`` so the "older server" case cannot
+  // exist in practice. Dead code that returned a wrong answer when
+  // the server said False but the count happened to be 0 (e.g. a
+  // criteria that matched zero borrowers on a populated workspace),
+  // so the banner could lie. Removed; we trust the server.
+  const isDayZero = preview?.day_zero === true;
 
   return (
     <PageShell
       eyebrow={lender}
-      title="Today"
-      lede="Portfolio KPIs, geography drill-down, and the approval queue. Build a new portfolio, jump to segments, or open a borrower dossier from the map."
+      title="Who should we contact, why now, and with what offer?"
+      lede="Portfolio KPIs, geography drill-down, and the approval queue. Build a new portfolio, jump to segments, or open a filtered lead queue from the map."
       wideMap
       heroRight={
         <>
@@ -117,27 +156,41 @@ export default function Home() {
         </>
       }
     >
-      {previewError && (
+      {previewWarming && (
+        <WarmingUpBlock
+          state={previewWarming}
+          title="Portfolio KPIs loading"
+          compact
+        />
+      )}
+      {/* When the health poll confirms the warehouse / lakebase is down,
+          we keep the warming-up copy visible instead of dropping into
+          the red error. The system-wide DegradedBanner already says
+          "reconnecting"; a contradictory red tile underneath made the
+          app look broken when it was correctly cold-starting. The
+          tile auto-recovers when health flips back to up (effect
+          below increments reloadToken). */}
+      {previewError && !previewWarming && warehouseDown && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="status-callout"
+        >
+          Portfolio KPIs are waiting on the analytics warehouse. The page
+          will fetch them automatically once the warehouse finishes
+          warming up — typically 30–60 seconds after first request.
+        </div>
+      )}
+      {previewError && !previewWarming && !warehouseDown && (
         <div
           role="alert"
-          style={{
-            marginBottom: 'var(--gap-grid)',
-            padding: '10px 12px',
-            border: '1px solid var(--signal-danger)',
-            borderRadius: 'var(--r-md)',
-            color: 'var(--signal-danger)',
-            fontSize: 12,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: 12,
-          }}
+          className="status-callout status-callout--danger"
         >
           <span>Couldn&apos;t load portfolio KPIs: {previewError}</span>
           <button
             type="button"
             className="btn btn--ghost btn--sm"
-            onClick={() => setReloadToken((n) => n + 1)}
+            onClick={retryPreview}
             aria-label="Retry loading portfolio KPIs"
           >
             Retry
@@ -147,85 +200,99 @@ export default function Home() {
       {isDayZero && (
         <div
           role="status"
-          style={{
-            marginBottom: 'var(--gap-grid)',
-            padding: '12px 14px',
-            border: '1px solid var(--line-2)',
-            borderRadius: 'var(--r-md)',
-            background: 'var(--bg-1)',
-            fontSize: 13,
-            color: 'var(--text-1)',
-          }}
+          className="status-callout status-callout--day-zero"
         >
           <strong>First data refresh pending.</strong>{' '}
           Unity Catalog gold tables are empty. Run{' '}
-          <code
-            style={{
-              fontFamily: 'var(--font-mono)',
-              fontSize: 12,
-              padding: '1px 6px',
-              borderRadius: 4,
-              background: 'var(--bg-2)',
-            }}
-          >
+          <code className="callout-code">
             databricks bundle run mip_refresh_scores -t dev
           </code>{' '}
           to populate them.
         </div>
       )}
-      {!isDayZero && (
+      {!isDayZero && !previewWarming && preview?.trend_note && (
+        <div role="status" className="status-callout status-callout--info">
+          {preview.trend_note}
+        </div>
+      )}
+      {!isDayZero && !previewWarming && (
         <div className="kpi-row">
           <KpiCard
             label="Marketable population"
             valueAnimated={preview?.marketable_population ?? null}
             trend={preview?.trends?.marketable_population?.series}
-            delta={formatDelta(preview?.trends?.marketable_population?.delta_pct)}
+            delta={formatDelta(preview?.trends?.marketable_population)}
             deltaDir={preview?.trends?.marketable_population?.direction}
+            trendNote={preview?.trends?.marketable_population?.note}
+            loading={kpisLoading}
             source={DRAWER_SOURCES.population}
           />
           <KpiCard
             label="High-intent leads"
             valueAnimated={preview?.high_intent_leads ?? null}
             trend={preview?.trends?.high_intent_leads?.series}
-            delta={formatDelta(preview?.trends?.high_intent_leads?.delta_pct)}
+            delta={formatDelta(preview?.trends?.high_intent_leads)}
             deltaDir={preview?.trends?.high_intent_leads?.direction}
+            trendNote={preview?.trends?.high_intent_leads?.note}
+            loading={kpisLoading}
             source={DRAWER_SOURCES.itm}
           />
           <KpiCard
             label="Top-tier opportunities"
             valueAnimated={preview?.top_tier_opportunities ?? null}
             trend={preview?.trends?.top_tier_opportunities?.series}
-            delta={formatDelta(preview?.trends?.top_tier_opportunities?.delta_pct)}
+            delta={formatDelta(preview?.trends?.top_tier_opportunities)}
             deltaDir={preview?.trends?.top_tier_opportunities?.direction}
-            source={DRAWER_SOURCES.nbo}
+            trendNote={preview?.trends?.top_tier_opportunities?.note}
+            loading={kpisLoading}
+            source={DRAWER_SOURCES.leadScore}
           />
           <KpiCard
             label="Offers recommended"
             valueAnimated={preview?.offers_recommended ?? null}
             trend={preview?.trends?.offers_recommended?.series}
-            delta={formatDelta(preview?.trends?.offers_recommended?.delta_pct)}
+            delta={formatDelta(preview?.trends?.offers_recommended)}
             deltaDir={preview?.trends?.offers_recommended?.direction}
+            trendNote={preview?.trends?.offers_recommended?.note}
+            loading={kpisLoading}
             source={DRAWER_SOURCES.nbo}
           />
         </div>
       )}
 
       <div
-        className="approval"
         role="region"
         aria-label="Approval queue"
-        style={{ marginTop: 'var(--gap-grid)' }}
+        className="approval mt-grid"
       >
         <div className="approval__ico"><Icon name="shield" size={16} /></div>
         <div className="approval__body">
           <div className="approval__title">Approval queue</div>
           <div className="approval__sub">
             {queued !== null
-              ? `${queued.toLocaleString()} borrowers awaiting loan-officer approval.`
-              : 'Borrowers awaiting loan-officer approval.'}
+              ? `${queued.toLocaleString()} high-intent borrowers ready for loan-officer review. ${(
+                  preview?.approved_count ?? 0
+                ).toLocaleString()} approved and ${(
+                  preview?.in_outreach_count ?? 0
+                ).toLocaleString()} in outreach in ${APPROVAL_QUEUE_STATE_LABEL}.`
+              : 'High-intent borrowers ready for loan-officer review.'}
           </div>
         </div>
+        <Link to="/lead-queue?segment=itm" className="btn btn--sm btn--primary">
+          Open review queue
+          <Icon name="chevright" size={13} />
+        </Link>
       </div>
+
+      {dataEstate ? (
+        <Reveal>
+          <DataEstatePanel estate={dataEstate} />
+        </Reveal>
+      ) : (
+        <Reveal>
+          <DataEstatePanelSkeleton />
+        </Reveal>
+      )}
 
       <div className="section-hdr">
         <div>
@@ -234,7 +301,10 @@ export default function Home() {
         </div>
       </div>
       <div className="layoutA-grid">
-        <USChoroplethMap drillBehavior="navigate" />
+        {/* Home map drills in-place through state/county/ZIP and then opens
+            the filtered Lead Queue. Lead Queue remains the source-of-truth
+            index for borrower selection. */}
+        <USChoroplethMap drillBehavior="filter" />
         <Reveal>
           <AgentActivityLog />
         </Reveal>
@@ -247,26 +317,20 @@ export default function Home() {
             <div className="h-2">Planned modules</div>
           </div>
         </div>
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
-            gap: 'var(--gap-grid)',
-          }}
-        >
+        <div className="roadmap-grid">
           {FUTURE_MODULES.map((m) => (
             <div className="surface" key={m.code}>
               <div className="surface__body">
                 <div className="eyebrow">{m.code} · planned</div>
-                <div className="h-3" style={{ marginTop: 6 }}>{m.title}</div>
-                <p className="body" style={{ marginTop: 6 }}>{m.desc}</p>
+                <div className="h-3 mt-2">{m.title}</div>
+                <p className="body mt-2">{m.desc}</p>
               </div>
             </div>
           ))}
         </div>
       </Reveal>
 
-      <div style={{ marginTop: 'var(--gap-grid)', display: 'flex', gap: 12 }}>
+      <div className="section-actions">
         <Link to="/portfolio-builder" className="btn btn--primary" aria-label="Build a lead portfolio">
           Build a lead portfolio
         </Link>
@@ -280,7 +344,7 @@ export default function Home() {
 
       <Reveal>
         <div className="brand-signature" aria-hidden="true">
-          <EntradaWordmark fontSize={36} />
+          <EntradaWordmark height={44} />
         </div>
       </Reveal>
     </PageShell>

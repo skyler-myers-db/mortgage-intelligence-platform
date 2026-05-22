@@ -49,7 +49,7 @@ import os
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import pytest
 
@@ -69,12 +69,24 @@ from backend.services.scoring import (
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 
 
+class WarehouseCreds(NamedTuple):
+    host: str
+    token: str
+    warehouse_id: str
+
+    def __repr__(self) -> str:
+        return (
+            "WarehouseCreds("
+            f"host={self.host!r}, token='<redacted>', warehouse_id={self.warehouse_id!r})"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Databricks SQL Statement Execution API client (stdlib only)
 # ---------------------------------------------------------------------------
 
 
-def _creds() -> tuple[str, str, str] | None:
+def _creds() -> WarehouseCreds | None:
     """Return (host, token, warehouse_id) when all three env vars are set.
 
     Returns ``None`` to signal SKIP. ``DATABRICKS_SERVER_HOSTNAME`` is
@@ -92,7 +104,7 @@ def _creds() -> tuple[str, str, str] | None:
     if not host.startswith("http"):
         host = "https://" + host
     host = host.rstrip("/")
-    return host, token, warehouse_id
+    return WarehouseCreds(host, token, warehouse_id)
 
 
 def _run_sql(host: str, token: str, warehouse_id: str, statement: str) -> Any:
@@ -187,7 +199,7 @@ def _load_next_best_offer_cases() -> list[dict[str, Any]]:
 
 
 @pytest.fixture(scope="module")
-def warehouse() -> tuple[str, str, str]:
+def warehouse() -> WarehouseCreds:
     creds = _creds()
     if creds is None:
         pytest.skip(

@@ -1,4 +1,8 @@
+> **Internal implementation artifact. Not approved for public release.**
+
 # Real-data walkthrough — 2026-04-22
+
+> **Note:** This document records a past state. `MIP_MOCK_MODE` has since been removed in the live-data cutover (commit `2f09424`). The text below is preserved for audit traceability.
 
 Evidence for the "app runs on real Unity Catalog data end to end" claim
 after the Slice-13 exhaustive validation work landed.
@@ -48,7 +52,7 @@ Screenshots live in
 - "Run build" button (B4 walkthrough-fix) is clickable + wired; click
   triggers a fresh POST with the current filter state (see
   `frontend/src/routes/portfolio-builder.tsx`).
-- Filter row renders all six filter dropdowns.
+- Filter row renders every configured filter dropdown.
 
 ### 3. Segment Intelligence (`/segment-intelligence`) — **pass**
 
@@ -61,7 +65,7 @@ Screenshots live in
   - Retention Risk: **749**
 - LeadTable renders 500 real synthetic-named borrowers (e.g.
   "Owner d1a3a065 · B-0STSZHO4O5J04 · Chicago IL 60609") — none of
-  them match the fixture ids `B-48291/94/95`.
+  them match test-only fixture ids.
 
 ### 4. Lead Queue (`/lead-queue`) — **pass**
 
@@ -105,15 +109,13 @@ Screenshots live in
 
 A real regression was found and fixed during this walk:
 
-- **Before**: `/api/genie/message` delegated directly to
-  `backend.services.genie_answers.respond()` — the SAFE-CORPUS
-  fallback. Every question returned `conversation_id: "fallback-conv"`
-  and the canned "12,840 borrowers" answer, even though live gold
-  carries 147,742. Effectively a silent mock fallback on the happy path.
+- **Before**: `/api/genie/message` bypassed the live Genie path.
+  Every question returned the same static borrower-volume response even
+  though live gold carried a different count. Effectively a silent mock
+  fallback on the happy path.
 - **Root cause**: the Slice-7 `DatabricksGenieRepository`
-  (which wraps live Genie with breaker-gated corpus fallback) was
-  never actually called by the router. The router short-circuited
-  to the corpus.
+  was never actually called by the router. The router short-circuited
+  to local content.
 - **Fix (landed in this session)**: rewrote
   `backend/api/genie.py::genie_message` to depend-inject the
   `GenieAnswerRepository` from `get_genie_answer_repository()`.

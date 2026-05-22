@@ -1,3 +1,5 @@
+> **Internal implementation artifact. Not approved for public release.**
+
 # Production deploy dry-run — 2026-04-22
 
 **Target:** `prod` (mode: production)
@@ -151,7 +153,8 @@ The `[dev skyler]` prefix is the DAB `mode: development` automatic sandboxing (p
 
 ## Zero-click checklist
 
-Required per CLAUDE.md: `databricks bundle deploy -t <target>` + one `.env.local` fill-in must provision everything.
+Required per CLAUDE.md: `./scripts/deploy.sh -t <target>` + one `.env.local`
+fill-in must provision and populate everything.
 
 | Provisioned by bundle? | Resource | Notes |
 |---|---|---|

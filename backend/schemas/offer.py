@@ -1,6 +1,14 @@
+"""Offer recommendation request and response contracts."""
+
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+from backend.schemas.common import (
+    validate_public_borrower_id,
+    validate_public_campaign_label,
+    validate_public_opaque_id,
+)
 
 # The eight lowercase codes returned by fn_next_best_offer plus 'recapture'
 # (forward-compat alias — no current analog in the decision tree).
@@ -70,31 +78,69 @@ class OfferRecommendation(BaseModel):
 class OfferRecommendRequest(BaseModel):
     borrower_id: str
 
+    @field_validator("borrower_id")
+    @classmethod
+    def _borrower_id_is_public_safe(cls, value: str) -> str:
+        return validate_public_borrower_id(value)
+
+
+OutreachChannel = Literal["email", "sms", "direct_mail"]
+
 
 class OutreachDraft(BaseModel):
     borrower_id: str
     offer_code: str
-    channel: Literal["email", "sms"]
+    channel: OutreachChannel
     subject: str | None = None
     body: str
     status: Literal["draft"] = "draft"
+    disclosure_version: str
+    disclosure_state: str
+    marketing_eligible: bool
 
 
 class OutreachDraftRequest(BaseModel):
     borrower_id: str
-    channel: Literal["email", "sms"] = "email"
+    channel: OutreachChannel = "email"
+    campaign_id: str | None = Field(default=None, max_length=64)
+    variant_name: str | None = Field(default=None, max_length=64)
+
+    @field_validator("borrower_id")
+    @classmethod
+    def _borrower_id_is_public_safe(cls, value: str) -> str:
+        return validate_public_borrower_id(value)
+
+    @field_validator("campaign_id")
+    @classmethod
+    def _campaign_id_is_public_safe(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        return validate_public_opaque_id(value)
+
+    @field_validator("variant_name")
+    @classmethod
+    def _variant_name_is_public_safe(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        return validate_public_campaign_label(value)
 
 
 class OutreachApproveRequest(BaseModel):
     borrower_id: str
-    offer_code: str | None = None
+    offer_code: OfferType | None = None
+    channel: OutreachChannel = "email"
+    campaign_id: str | None = Field(default=None, max_length=64)
+    variant_name: str | None = Field(default=None, max_length=64)
     actor: str = "anonymous"
     evidence_ids: list[str] = []
-    # 2026-04-22 governance follow-up: the approver may edit the draft
-    # body before approving. We forward the final text into the audit
-    # metadata so compliance can reconstruct exactly what was approved,
-    # not just the borrower + offer code. Optional for back-compat with
-    # callers that haven't been updated yet.
+    rationale: str | None = Field(default=None, max_length=500)
+    bulk_id: str | None = Field(default=None, max_length=64)
+    bulk_rationale: str | None = Field(default=None, max_length=500)
+    # Governance approval boundary: the endpoint requires the final
+    # approver-visible draft body to include the configured tenant
+    # disclosure before writing the decision. The schema keeps this
+    # nullable so FastAPI can return the endpoint's clearer 422 detail
+    # instead of a generic request-body parse failure.
     draft_body: str | None = None
     # R5-01 idempotency key. When present, the router short-circuits a
     # retry that arrived after a successful INSERT whose response was
@@ -105,6 +151,32 @@ class OutreachApproveRequest(BaseModel):
     # chars to match the DDL column width; None keeps legacy callers
     # working at pre-R5-01 semantics (no duplicate protection).
     request_id: str | None = Field(default=None, max_length=64)
+
+    @field_validator("borrower_id")
+    @classmethod
+    def _borrower_id_is_public_safe(cls, value: str) -> str:
+        return validate_public_borrower_id(value)
+
+    @field_validator("bulk_id", "request_id")
+    @classmethod
+    def _opaque_id_is_public_safe(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        return validate_public_opaque_id(value)
+
+    @field_validator("campaign_id")
+    @classmethod
+    def _campaign_id_is_public_safe(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        return validate_public_opaque_id(value)
+
+    @field_validator("variant_name")
+    @classmethod
+    def _variant_name_is_public_safe(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        return validate_public_campaign_label(value)
 
 
 class OutreachApproveResponse(BaseModel):
@@ -124,13 +196,57 @@ class OutreachRejectRequest(BaseModel):
     """
 
     borrower_id: str
-    offer_code: str | None = None
+    offer_code: OfferType | None = None
+    channel: OutreachChannel = "email"
+    campaign_id: str | None = Field(default=None, max_length=64)
+    variant_name: str | None = Field(default=None, max_length=64)
     actor: str = "anonymous"
     evidence_ids: list[str] = []
-    rationale: str | None = None
+    rationale_code: Literal[
+        "out_of_footprint",
+        "do_not_call",
+        "opt_out",
+        "fair_lending_review",
+        "low_intent",
+        "data_quality",
+        "other_with_text",
+    ]
+    rationale: str | None = Field(default=None, max_length=500)
     # R5-01 idempotency key -- see ``OutreachApproveRequest.request_id``.
     # Reject carries the same retry-safety contract as approve.
     request_id: str | None = Field(default=None, max_length=64)
+
+    @field_validator("borrower_id")
+    @classmethod
+    def _borrower_id_is_public_safe(cls, value: str) -> str:
+        return validate_public_borrower_id(value)
+
+    @field_validator("request_id")
+    @classmethod
+    def _opaque_id_is_public_safe(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        return validate_public_opaque_id(value)
+
+    @field_validator("campaign_id")
+    @classmethod
+    def _campaign_id_is_public_safe(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        return validate_public_opaque_id(value)
+
+    @field_validator("variant_name")
+    @classmethod
+    def _variant_name_is_public_safe(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        return validate_public_campaign_label(value)
+
+    @model_validator(mode="after")
+    def _other_requires_text(self) -> "OutreachRejectRequest":
+        if self.rationale_code == "other_with_text" and not (self.rationale or "").strip():
+            raise ValueError("other_with_text requires a rationale")
+        return self
 
 
 class OutreachRejectResponse(BaseModel):

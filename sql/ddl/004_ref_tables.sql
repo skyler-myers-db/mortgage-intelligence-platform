@@ -60,12 +60,13 @@ TBLPROPERTIES (
 -- Purpose:   Governed threshold vocabulary consumed by the Offer Orchestrator
 --            decision tree (`fn_next_best_offer`), the In-the-Money flag
 --            (`fn_in_the_money`), and the Admin surface (/api/admin/rules).
---            One row per tunable knob. Values mirror the defaults baked into
---            the UC functions' headers -- changing a row here does NOT retune
---            UC compute (the thresholds are passed as explicit args by the
---            application layer); the row is the single canonical source the
---            admin UI reads + the product of record for "what is the active
---            ruleset" on a given day.
+--            One row per tunable knob. Values mirror the defaults documented
+--            in the UC functions' headers. The gold CTAS chain reads these
+--            rows at refresh time and passes values as explicit UDF args, so
+--            changing a governed row retunes scoring on the next gold refresh
+--            without changing UDF code. The row is also the single canonical
+--            source the admin UI reads + the product of record for "what is
+--            the active ruleset" on a given day.
 --
 -- Grain:     One row per knob `key`. `key` is the stable identifier the
 --            backend uses (e.g. `mip_min_spread_bps`); labels / descriptions
@@ -112,16 +113,15 @@ TBLPROPERTIES (
 -- ---------------------------------------------------------------------------
 -- state_footprint
 -- ---------------------------------------------------------------------------
--- Purpose:   Single source of truth for the tenant's operational footprint
---            (the set of US states where the lender writes business). The
---            footprint was previously hardcoded in 5 places (backend
---            _STATE_SETS, frontend SUPPORTED_COUNTY_STATES,
---            LOCATION_TO_STATES, portfolio-builder GEO dropdown, and the
---            `WHERE situs_state IN (...)` literal in gold_borrower_360.sql).
---            Any tenant with a different mix (e.g. NY/NJ/PA) silently broke.
+-- Purpose:   State display metadata/fallback labels. The current data-bearing
+--            coverage scope is discovered from mip.gold.county_rollup and
+--            mip.gold.zip_rollup, not this table. These rows only enrich
+--            live coverage with names/default metadata and support truthful
+--            degraded UI chrome when gold coverage is unavailable.
 --
--- Grain:     One row per 2-char USPS `state_code`. Exactly one row has
---            `is_default_state = TRUE` (the UI anchor state).
+-- Grain:     One row per 2-char USPS `state_code`. `is_default_state` is
+--            optional single-state anchor metadata; user-facing pages default
+--            to the dynamic "All N states" footprint option.
 --
 -- Posture:   CREATE ... IF NOT EXISTS. Idempotent; safe to run on every
 --            bundle deploy. The companion seed SQL
@@ -134,13 +134,13 @@ CREATE TABLE IF NOT EXISTS mip.ref.state_footprint (
   state_code       STRING    NOT NULL COMMENT '2-char USPS state code (uppercase). PK.',
   state_name       STRING    NOT NULL COMMENT 'Human-readable state name, e.g. "Illinois".',
   display_order    INT       NOT NULL COMMENT 'Sort order in UI lists (1 = first).',
-  is_default_state BOOLEAN   NOT NULL COMMENT 'Exactly one row TRUE. Default anchor state for empty-filter cases.',
+  is_default_state BOOLEAN   NOT NULL COMMENT 'Optional single-state anchor metadata. Not a user-facing page default.',
   last_updated     TIMESTAMP          COMMENT 'CURRENT_TIMESTAMP() on seed/MERGE.',
-  source           STRING             COMMENT 'Provenance: manual_seed | analyst_contribution | tenant_override.',
+  source           STRING             COMMENT 'Provenance: us_state_metadata_seed | analyst_contribution | tenant_override.',
   CONSTRAINT state_footprint_pk PRIMARY KEY (state_code)
 )
 USING DELTA
-COMMENT 'Tenant operational footprint. Single source of truth for backend filter builders, frontend map/dropdown hydration, and gold_borrower_360 situs filter.'
+COMMENT 'US state display metadata for geography coverage. Not a data-bearing coverage whitelist.'
 TBLPROPERTIES (
   'delta.enableChangeDataFeed'      = 'false',
   'delta.autoOptimize.optimizeWrite' = 'true',

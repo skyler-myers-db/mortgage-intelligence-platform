@@ -1,3 +1,5 @@
+> **Internal implementation artifact. Not approved for public release.**
+
 # Data Corrections — Slice13 Accuracy
 
 Two data-plane corrections landed on branch `slice13-accuracy-validation`.
@@ -28,7 +30,7 @@ SELECT pm.owner_link_id, COUNT(DISTINCT me.clip) AS historical_distinct_clips_at
 FROM mip.silver.mortgage_events me
 JOIN mip.silver.property_master pm ON pm.clip = me.clip
 WHERE UPPER(me.lender_name) LIKE '%SUMMIT%'
-  AND me.situs_state IN ('IL','CA','FL','TX','WA','CO')
+  AND me.situs_state IS NOT NULL
   AND pm.owner_link_id IS NOT NULL
 GROUP BY pm.owner_link_id
 ```
@@ -93,8 +95,8 @@ New bundle job `mip_ref_seed` runs two SQL tasks:
 
 The same two SQL tasks are also inlined in `mip_refresh_silver` between
 `init_catalog_schemas` and `refresh_silver_pipeline`, so
-`databricks bundle deploy -t dev` lands a populated dictionary on first
-deploy with zero manual steps — consistent with the
+`./scripts/deploy.sh -t dev` lands a populated dictionary on first deploy
+with zero manual steps — consistent with the
 "self-contained, zero-click deploy" posture in CLAUDE.md.
 
 ### Fallback behavior
@@ -159,7 +161,7 @@ live tables were produced under the old definitions.
 
 The formula
 `CONCAT('B-', LPAD(CAST((ABS(XXHASH64(clip)) % 99999) + 10000 AS STRING), 5, '0'))`
-collapsed ~5.16M CLIPs into ~90K synthetic `B-#####` ids (avg 57
+collapsed ~5.16M CLIPs into ~90K five-digit synthetic ids (avg 57
 collisions per id, worst observed 688). The router's
 `get(borrower_id)` path in
 `backend/services/repositories/databricks_repo.py` queries
@@ -195,7 +197,7 @@ Everything else keeps working: the router, the
 `_BORROWER_360_COLUMNS` projection, the `LeadSummary` / `Borrower360`
 Pydantic schemas, and `gold.lead_population` all already treat
 `borrower_id` as an opaque `str`. The Python test fixture IDs
-(`B-48291` etc.) are hand-authored golden fixtures — they are NOT
+are hand-authored golden fixtures — they are NOT
 derived from CLIP hashing and are deliberately left alone to preserve
 `tests/fixtures/*_golden.json` pinning.
 
@@ -232,8 +234,8 @@ again.
   trap.
 - `tests/integration/test_silver_coercion.py` — new; gated regression
   that asserts at least one row in `mip.silver.property_master` has
-  `owner_is_corporate = TRUE` (a floor the 6-state footprint easily
-  clears when the coercion works).
+  `owner_is_corporate = TRUE` when refreshed coverage contains corporate
+  owners.
 
 ### Wave-2 GAP 3 — silver `situs_zip_code` was 9-digit (ZIP+4)
 

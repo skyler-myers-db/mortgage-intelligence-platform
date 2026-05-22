@@ -7,9 +7,10 @@ see timing + outcome + breaker transitions in one stream.
 
 Design constraints:
 
-* **Stdlib only.** The Databricks Apps runtime refuses new wheels; no
-  ``structlog`` / ``opentelemetry``. We reuse ``logging.LogRecord`` +
-  a custom ``Formatter`` and carry correlation IDs through ``ContextVar``.
+* **Stdlib logging core.** We reuse ``logging.LogRecord`` + a custom
+  ``Formatter`` and carry correlation IDs through ``ContextVar``. When
+  ``MIP_OTEL_ENDPOINT`` is configured, the optional OTLP handler ships the
+  same structured records to an external collector.
 * **Drop-in addition.** Every existing ``logging.getLogger(__name__)``
   keeps working -- this module layers on top via a root ``Formatter``.
   Ad-hoc callers see structured output "for free"; callers that opt in
@@ -45,10 +46,12 @@ Public surface:
 * :func:`recent_breaker_state_changes` / :func:`recent_error_count`
   -- rolling-hour read helpers for health payload.
 """
+
 from __future__ import annotations
 
 import json
 import logging
+import re
 import threading
 import time
 import uuid
@@ -58,14 +61,44 @@ from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 # ---------------------------------------------------------------------------
 # Correlation-ID context
 # ---------------------------------------------------------------------------
 
-correlation_id_var: ContextVar[str | None] = ContextVar(
-    "mip_correlation_id", default=None
+correlation_id_var: ContextVar[str | None] = ContextVar("mip_correlation_id", default=None)
+
+_CORRELATION_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
+_EMAIL_RE = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+", re.IGNORECASE)
+_SSN_RE = re.compile(r"(?<!\d)\d{3}-\d{2}-\d{4}(?!\d)")
+_PHONE_RE = re.compile(r"(?<!\d)(?:\+?1[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?)\d{3}[-.\s]?\d{4}(?!\d)")
+_BORROWER_ID_RE = re.compile(r"B-[A-Za-z0-9][A-Za-z0-9_-]{0,126}")
+_CLIP_ID_RE = re.compile(r"CL-[A-Za-z0-9][A-Za-z0-9_-]{1,126}")
+_LONG_DIGIT_RE = re.compile(r"\d{9,}")
+_CORRELATION_ID_PII_PATTERNS: tuple[re.Pattern[str], ...] = (
+    _EMAIL_RE,
+    _SSN_RE,
+    _PHONE_RE,
+    _BORROWER_ID_RE,
+    _CLIP_ID_RE,
+    _LONG_DIGIT_RE,
 )
+
+
+def is_safe_correlation_id(value: str) -> bool:
+    """Return whether ``value`` is a safe caller-supplied correlation ID."""
+    return bool(_CORRELATION_ID_PATTERN.fullmatch(value)) and not any(
+        pattern.search(value) for pattern in _CORRELATION_ID_PII_PATTERNS
+    )
+
+
+def sanitize_correlation_id(raw: str | None) -> str | None:
+    """Return a stripped safe correlation ID, or ``None`` when unsafe."""
+    if raw is None:
+        return None
+    value = raw.strip()
+    return value if is_safe_correlation_id(value) else None
 
 
 def get_correlation_id() -> str:
@@ -124,10 +157,75 @@ _DENYLIST_PREFIXES: tuple[str, ...] = (
 
 _REDACTED = "<redacted>"
 
+_SECRET_TEXT_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (
+        re.compile(r"(?i)\b(authorization\s*[:=]\s*)(?:bearer\s+)?[^\s,;]+"),
+        r"\1<redacted>",
+    ),
+    (
+        re.compile(
+            r"(?i)\b(token|password|api[_-]?key|apikey|secret|set-cookie|cookie)(\s*[:=]\s*)[^\s,;]+"
+        ),
+        r"\1\2<redacted>",
+    ),
+    (
+        re.compile(r"(?i)(https?://)[^/@\s]+@"),
+        r"\1<redacted>@",
+    ),
+    (
+        _BORROWER_ID_RE,
+        "B-<redacted>",
+    ),
+    (
+        _CLIP_ID_RE,
+        "CL-<redacted>",
+    ),
+    (
+        _EMAIL_RE,
+        "<email-redacted>",
+    ),
+    (
+        _SSN_RE,
+        "<ssn-redacted>",
+    ),
+    (
+        _PHONE_RE,
+        "<phone-redacted>",
+    ),
+    (
+        _LONG_DIGIT_RE,
+        "<numeric-id-redacted>",
+    ),
+    (
+        re.compile(
+            r"\b\d{1,6}\s+[A-Za-z0-9 .'-]+"
+            r"(?:street|st|avenue|ave|road|rd|drive|dr|lane|ln|boulevard|blvd|"
+            r"court|ct|way|place|pl)\b",
+            re.IGNORECASE,
+        ),
+        "<street-redacted>",
+    ),
+)
+
 
 def _is_denylisted(key: str) -> bool:
     k = key.lower()
-    return any(k.startswith(p) for p in _DENYLIST_PREFIXES)
+    if any(k.startswith(p) for p in _DENYLIST_PREFIXES):
+        return True
+
+    normalized = re.sub(r"[^a-z0-9]+", "_", k).strip("_")
+    if any(normalized.startswith(p.replace("-", "_")) for p in _DENYLIST_PREFIXES):
+        return True
+    if normalized in {"authorization", "cookie", "set_cookie", "token", "password", "secret"}:
+        return True
+    return (
+        normalized.endswith("_token")
+        or normalized.endswith("_password")
+        or normalized.endswith("_secret")
+        or normalized.endswith("_cookie")
+        or "api_key" in normalized
+        or "apikey" in normalized
+    )
 
 
 def _scrub(value: Any) -> Any:
@@ -150,6 +248,8 @@ def _scrub(value: Any) -> Any:
     if isinstance(value, list | tuple):
         scrubbed = [_scrub(v) for v in value]
         return scrubbed if isinstance(value, list) else tuple(scrubbed)
+    if isinstance(value, str):
+        return _scrub_text(value)
     return value
 
 
@@ -165,6 +265,14 @@ def _filter_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
         else:
             out[k] = _scrub(v)
     return out
+
+
+def _scrub_text(value: str) -> str:
+    """Redact obvious secret fragments in ad-hoc log messages."""
+    scrubbed = value
+    for pattern, replacement in _SECRET_TEXT_PATTERNS:
+        scrubbed = pattern.sub(replacement, scrubbed)
+    return scrubbed
 
 
 # ---------------------------------------------------------------------------
@@ -221,7 +329,7 @@ class StructuredFormatter(logging.Formatter):
         # Pull the rendered message in only when no structured event was
         # set -- otherwise ``msg`` duplicates ``event``.
         if "mip_event" not in record.__dict__:
-            payload["message"] = record.getMessage()
+            payload["message"] = _scrub_text(record.getMessage())
 
         # If there's an exc_info, include a short summary. Don't dump the
         # full traceback at INFO; callers opt in via logger.exception.
@@ -230,7 +338,7 @@ class StructuredFormatter(logging.Formatter):
             if exc_type is not None:
                 payload["exc_type"] = exc_type.__name__
                 if exc_val is not None:
-                    payload["exc_msg"] = str(exc_val)[:500]
+                    payload["exc_msg"] = _scrub_text(str(exc_val)[:500])
 
         return json.dumps(payload, default=str, separators=(",", ":"))
 
@@ -308,11 +416,7 @@ def timed_dependency(
     ctx: dict[str, Any] = dict(extra)
     # Ensure every call has a correlation ID even if no middleware ran
     # (e.g. background warm-start).
-    token = (
-        set_correlation_id(get_correlation_id())
-        if correlation_id_var.get() is None
-        else None
-    )
+    token = set_correlation_id(get_correlation_id()) if correlation_id_var.get() is None else None
 
     emit(log, "dependency_call_start", dependency=name, operation=operation, **ctx)
     start = time.monotonic()
@@ -364,6 +468,46 @@ _CONFIGURE_LOCK = threading.Lock()
 _OTEL_HANDLER: logging.Handler | None = None
 
 
+def _safe_otel_endpoint_for_log(endpoint: str) -> str:
+    """Return a non-secret endpoint label for boot diagnostics.
+
+    OTLP credentials belong in ``MIP_OTEL_HEADERS``, but operators
+    sometimes paste tokens into URL userinfo, query strings, fragments,
+    or path segments. Boot logs must never preserve those accidental
+    secrets. Keep only scheme + host + port, and indicate that a path
+    existed without printing it.
+    """
+    try:
+        parts = urlsplit(endpoint)
+    except ValueError:
+        return "<configured>"
+
+    if not parts.scheme or not parts.hostname:
+        return "<configured>"
+
+    netloc = parts.hostname
+    if parts.port is not None:
+        netloc = f"{netloc}:{parts.port}"
+    path_marker = "/..." if parts.path and parts.path != "/" else ""
+    return urlunsplit((parts.scheme, netloc, path_marker, "", ""))
+
+
+def _parse_otel_headers(raw_headers: str) -> dict[str, str]:
+    """Parse ``MIP_OTEL_HEADERS`` without logging values."""
+    headers: dict[str, str] = {}
+    if not raw_headers:
+        return headers
+    for part in raw_headers.split(","):
+        if "=" not in part:
+            continue
+        k, _, v = part.partition("=")
+        k = k.strip()
+        v = v.strip()
+        if k:
+            headers[k] = v
+    return headers
+
+
 def configure_logging(level: str | int = "INFO") -> None:
     """Install :class:`StructuredFormatter` on the root handler.
 
@@ -408,9 +552,7 @@ def configure_logging(level: str | int = "INFO") -> None:
         _CONFIGURED = True
 
 
-def _install_otel_handler_if_configured(
-    root: logging.Logger, level_value: int
-) -> None:
+def _install_otel_handler_if_configured(root: logging.Logger, level_value: int) -> None:
     """Attach an OTLP log-exporter handler when ``MIP_OTEL_ENDPOINT`` is set.
 
     This is a best-effort hook. When the env var is unset we do nothing
@@ -436,6 +578,7 @@ def _install_otel_handler_if_configured(
     endpoint = _settings.mip_otel_endpoint
     if not endpoint:
         return
+    endpoint_label = _safe_otel_endpoint_for_log(endpoint)
 
     try:
         from opentelemetry._logs import set_logger_provider
@@ -449,33 +592,25 @@ def _install_otel_handler_if_configured(
         # Optional dep absent. Warn loudly and keep going -- the caller
         # turned OTEL on intentionally, but the runtime isn't allowed to
         # crash because of a missing wheel.
-        logging.getLogger("mip.observability").warning(
-            "MIP_OTEL_ENDPOINT=%s is set but opentelemetry packages are "
-            "not importable (%s). Falling back to stdout-only logs. "
-            "Install `opentelemetry-sdk` and `opentelemetry-exporter-otlp` "
-            "to enable durable log export.",
-            endpoint,
-            exc,
+        emit(
+            logging.getLogger("mip.observability"),
+            "otel_exporter_missing_dependency",
+            level=logging.WARNING,
+            outcome="stdout_only",
+            endpoint=endpoint_label,
+            exc_type=type(exc).__name__,
         )
         return
 
     # Compose headers from the SecretStr env var (``k=v,k2=v2``). The
     # raw value never touches a log line -- we hand it straight to the
     # exporter.
-    headers: dict[str, str] = {}
     raw_headers = (
         _settings.mip_otel_headers.get_secret_value()
         if _settings.mip_otel_headers is not None
         else ""
     )
-    if raw_headers:
-        for part in raw_headers.split(","):
-            if "=" in part:
-                k, _, v = part.partition("=")
-                k = k.strip()
-                v = v.strip()
-                if k:
-                    headers[k] = v
+    headers = _parse_otel_headers(raw_headers)
 
     try:
         resource = Resource.create(
@@ -493,16 +628,21 @@ def _install_otel_handler_if_configured(
         handler.setFormatter(StructuredFormatter())
         root.addHandler(handler)
         _OTEL_HANDLER = handler
-        logging.getLogger("mip.observability").info(
-            "OTLP log exporter installed (endpoint=%s, header_keys=%s)",
-            endpoint,
-            sorted(headers.keys()),
+        emit(
+            logging.getLogger("mip.observability"),
+            "otel_exporter_installed",
+            outcome="installed",
+            endpoint=endpoint_label,
+            header_keys=sorted(headers.keys()),
         )
     except Exception as exc:  # noqa: BLE001 -- see comment above
-        logging.getLogger("mip.observability").warning(
-            "OTLP exporter wiring failed (non-fatal): %s: %s",
-            type(exc).__name__,
-            exc,
+        emit(
+            logging.getLogger("mip.observability"),
+            "otel_exporter_wiring_failed",
+            level=logging.WARNING,
+            outcome="stdout_only",
+            endpoint=endpoint_label,
+            exc_type=type(exc).__name__,
         )
 
 
@@ -541,9 +681,7 @@ def _prune_locked(q: deque[Any], now: float) -> None:
         q.popleft()
 
 
-def record_breaker_state_change(
-    *, name: str, from_state: str, to_state: str
-) -> None:
+def record_breaker_state_change(*, name: str, from_state: str, to_state: str) -> None:
     """Remember a breaker state change for the last-hour health counter."""
     now = time.monotonic()
     with _COUNTER_LOCK:
@@ -586,11 +724,13 @@ __all__ = [
     "emit",
     "get_correlation_id",
     "get_otel_handler",
+    "is_safe_correlation_id",
     "record_breaker_state_change",
     "record_error",
     "recent_breaker_state_changes",
     "recent_error_count",
     "reset_correlation_id",
+    "sanitize_correlation_id",
     "set_correlation_id",
     "timed_dependency",
 ]

@@ -44,9 +44,18 @@ USING (
     LEFT JOIN mip.gold.borrower_lifecycle_state AS ls
       ON ls.borrower_id = b.borrower_id
     LATERAL VIEW EXPLODE(b.segment_codes) s AS sc
+    -- 2026-05-04 (FIX α, round 3): revert the score >= 50 filter that
+    -- round 2 (FIX F) added here. The funnel snapshot drives the home
+    -- KPIs and the per-state choropleth tooltip; both should report
+    -- the FULL addressable population, matching the borrower_360-direct
+    -- portfolio-preview KPI ("Marketable population: 5.16M"). The Lead
+    -- Queue alignment is now done in LeadRepository.list (FIX β) by
+    -- filtering borrower_360 server-side on state/zip, no score floor.
   ),
   -- Each borrower also contributes to the '_ALL' segment row, so dashboards
-  -- can read a single cross-segment line per state per day.
+  -- can read a single cross-segment line per state per day. No score floor
+  -- here either (FIX α revert, 2026-05-04 round 3) so the '_ALL' count
+  -- equals the home-page Marketable Population KPI.
   all_segments AS (
     SELECT
       b.borrower_id,

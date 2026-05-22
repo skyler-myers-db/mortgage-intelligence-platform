@@ -1,4 +1,8 @@
+> **Internal implementation artifact. Not approved for public release.**
+
 # Audit holes — round 4 (2026-04-23)
+
+> **Note:** This document records a past state. `MIP_MOCK_MODE` has since been removed in the live-data cutover (commit `2f09424`). The text below is preserved for audit traceability.
 
 **Scope.** Rounds 1/2/3 surfaced 50+ findings across scoring parity, error
 paths, copy, tests, a11y, admin PUT contract, runbook, CTAS ordering.
@@ -217,13 +221,11 @@ decorators. Clean — a Round-4 negative finding worth logging so Round
 
 `tests/integration/test_genie_regression.py` + `test_genie_live.py` +
 `test_genie_fuzz.py` all skip without creds. What runs in PR CI for
-Genie is `tests/unit/test_genie_fallback.py` (currently failing in
-HEAD's uncommitted tree — see Gates section) and `test_genie_repository.py`.
-Neither exercises the curated 25 sample questions. A regression in the
-fallback corpus (bad metric_value, wrong source chip) ships to PR
-without signal. Recommend: add a fallback-corpus shape test that loads
-`backend/services/genie_answers.py` and asserts every canned answer
-has a non-None `source`, `rationale`, `metric_value`.
+Genie is `tests/unit/test_genie_fallback.py` and
+`test_genie_repository.py`. Current policy is stricter than this April
+finding: production modules must not contain any local analytic response path.
+The replacement guard asserts `backend/services/genie_answers.py` only carries
+wire models and prompt-suggestion helpers.
 
 ---
 

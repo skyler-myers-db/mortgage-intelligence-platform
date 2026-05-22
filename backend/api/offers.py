@@ -1,3 +1,5 @@
+"""Offer recommendation endpoint with audit-backed recommendation proof."""
+
 from __future__ import annotations
 
 import logging
@@ -5,7 +7,6 @@ from typing import Annotated, cast
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 
-from backend.config.settings import settings
 from backend.schemas.offer import (
     OfferAlternative,
     OfferRecommendation,
@@ -13,8 +14,10 @@ from backend.schemas.offer import (
     OfferType,
     SourceLabel,
 )
+from backend.services.audit_decision_inputs import decision_inputs_from_offer_inputs
 from backend.services.audit_store import AuditStore, get_audit_store, resolve_actor
 from backend.services.lakebase import LakebaseError
+from backend.services.observability import emit
 from backend.services.repositories import (
     BorrowerRepository,
     OfferRepository,
@@ -25,7 +28,7 @@ from backend.services.scoring import NBO_PRODUCT_LABELS, source_display_label
 
 log = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/offers", tags=["offers"])
+router = APIRouter(prefix="/offers", tags=["offers"])
 
 BorrowerRepoDep = Annotated[BorrowerRepository, Depends(get_borrower_repository)]
 OfferRepoDep = Annotated[OfferRepository, Depends(get_offer_repository)]
@@ -36,7 +39,15 @@ def _safe_audit_write(store: AuditStore, **kwargs: object) -> None:
     try:
         store.write(**kwargs)  # type: ignore[arg-type]
     except LakebaseError as exc:
-        log.warning("audit.write dropped: %s", exc)
+        emit(
+            log,
+            "audit_write_dropped",
+            level=logging.WARNING,
+            dependency="lakebase",
+            outcome="error",
+            exc_type=type(exc).__name__,
+            exc_msg=str(exc)[:500],
+        )
 
 # The eight codes ``fn_next_best_offer`` returns are all valid OfferType
 # literals. This cast is safe because NBO_PRODUCT_LABELS is the contract.
@@ -268,12 +279,13 @@ def recommend_offer(
         raise HTTPException(status_code=500, detail=f"Invalid offer_code '{code}' from next_best_offer")
 
     thresholds_applied = {
-        "min_spread_bps": settings.mip_min_spread_bps,
-        "min_equity_pct": settings.mip_min_equity_pct,
-        "heloc_equity_min_pct": settings.mip_heloc_equity_min_pct,
-        "cashout_equity_min_pct": settings.mip_cashout_equity_min_pct,
-        "retention_min_spread_bps": settings.mip_retention_min_spread_bps,
+        "min_spread_bps": cast(int, inputs["min_spread_bps"]),
+        "min_equity_pct": cast(int, inputs["min_equity_pct"]),
+        "heloc_equity_min_pct": cast(int, inputs["heloc_equity_min_pct"]),
+        "cashout_equity_min_pct": cast(int, inputs["cashout_equity_min_pct"]),
+        "retention_min_spread_bps": cast(int, inputs["retention_min_spread_bps"]),
     }
+    decision_inputs = decision_inputs_from_offer_inputs(inputs)
 
     background.add_task(
         _safe_audit_write,
@@ -286,6 +298,7 @@ def recommend_offer(
             "offer_code": code,
             "confidence": borrower.confidence,
             "thresholds_applied": thresholds_applied,
+            "decision_inputs": decision_inputs,
         },
         evidence_ids=list(borrower.evidence_ids),
         event_type="RECOMMEND_OFFER",
@@ -313,11 +326,11 @@ def recommend_offer(
             investor=cast(bool, inputs["is_investor"]),
             customer=cast(bool, inputs["is_current_customer"]),
             competitor_lien=cast(bool, inputs["is_competitor_lien"]),
-            min_sp=settings.mip_min_spread_bps,
-            min_eq=settings.mip_min_equity_pct,
-            heloc_min=settings.mip_heloc_equity_min_pct,
-            cashout_min=settings.mip_cashout_equity_min_pct,
-            retention_min=settings.mip_retention_min_spread_bps,
+            min_sp=thresholds_applied["min_spread_bps"],
+            min_eq=thresholds_applied["min_equity_pct"],
+            heloc_min=thresholds_applied["heloc_equity_min_pct"],
+            cashout_min=thresholds_applied["cashout_equity_min_pct"],
+            retention_min=thresholds_applied["retention_min_spread_bps"],
         ),
         evidence_ids=borrower.evidence_ids,
         sources=sources,
@@ -326,7 +339,7 @@ def recommend_offer(
             code,
             equity=cast(int, inputs["equity_pct"]),
             permit=cast(bool, inputs["has_permit"]),
-            heloc_min=settings.mip_heloc_equity_min_pct,
+            heloc_min=thresholds_applied["heloc_equity_min_pct"],
         ),
         thresholds_applied=thresholds_applied,
     )

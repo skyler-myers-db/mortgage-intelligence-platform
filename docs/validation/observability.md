@@ -1,3 +1,5 @@
+> **Internal implementation artifact. Not approved for public release.**
+
 # Observability validation — Slice 13
 
 ## Scope

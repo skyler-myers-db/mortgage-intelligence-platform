@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from backend.services.scoring import lead_score
+from backend.services.scoring import lead_score, source_display_label
 
 FIXTURE_PATH = (
     Path(__file__).resolve().parents[2]
@@ -50,3 +50,8 @@ def test_lead_score_is_importable_from_services() -> None:
     from backend.services import scoring
 
     assert callable(scoring.lead_score)
+
+
+def test_itm_ruleset_label_matches_lineage_drawer_title() -> None:
+    """The RowPreview chip should not imply a different source than the drawer."""
+    assert source_display_label("rules.itm_v3") == "In-the-Money logic"

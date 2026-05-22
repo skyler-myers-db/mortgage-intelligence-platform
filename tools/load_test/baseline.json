@@ -1,0 +1,142 @@
+{
+  "endpoints": {
+    "GET /api/v1/borrowers/{id}": {
+      "failure_count": 0.0,
+      "failure_rate_budget_pct": 2.0,
+      "failure_rate_pct": 0.0,
+      "p50_ms": 100.0,
+      "p95_budget_ms": 2000,
+      "p95_ms": 150.0,
+      "p99_ms": 270.0,
+      "profile": "read",
+      "request_count": 269.0,
+      "requests_per_second": 2.248503358363121
+    },
+    "GET /api/v1/health": {
+      "failure_count": 0.0,
+      "failure_rate_budget_pct": 2.0,
+      "failure_rate_pct": 0.0,
+      "p50_ms": 100.0,
+      "p95_budget_ms": 500,
+      "p95_ms": 140.0,
+      "p99_ms": 1500.0,
+      "profile": "read",
+      "request_count": 72.0,
+      "requests_per_second": 0.6018298951752591
+    },
+    "GET /api/v1/leads": {
+      "failure_count": 0.0,
+      "failure_rate_budget_pct": 2.0,
+      "failure_rate_pct": 0.0,
+      "p50_ms": 330.0,
+      "p95_budget_ms": 1500,
+      "p95_ms": 780.0,
+      "p99_ms": 3100.0,
+      "profile": "read",
+      "request_count": 398.0,
+      "requests_per_second": 3.326781920552127
+    },
+    "GET /api/v1/segments": {
+      "failure_count": 0.0,
+      "failure_rate_budget_pct": 2.0,
+      "failure_rate_pct": 0.0,
+      "p50_ms": 100.0,
+      "p95_budget_ms": 1000,
+      "p95_ms": 170.0,
+      "p99_ms": 490.0,
+      "profile": "read",
+      "request_count": 131.0,
+      "requests_per_second": 1.0949960592772077
+    },
+    "POST /api/v1/genie/actions": {
+      "failure_count": 0.0,
+      "failure_rate_budget_pct": 2.0,
+      "failure_rate_pct": 0.0,
+      "p50_ms": 980.0,
+      "p95_budget_ms": 5000,
+      "p95_ms": 1000.0,
+      "p99_ms": 1000.0,
+      "profile": "write-opt-in",
+      "regression_tolerance_pct": 100.0,
+      "request_count": 5.0,
+      "requests_per_second": 0.0842726020197003
+    },
+    "POST /api/v1/genie/message": {
+      "failure_count": 0.0,
+      "failure_rate_budget_pct": 2.0,
+      "failure_rate_pct": 0.0,
+      "p50_ms": 12000.0,
+      "p95_budget_ms": 30000,
+      "p95_ms": 15000.0,
+      "p99_ms": 15000.0,
+      "profile": "write-opt-in",
+      "regression_tolerance_pct": 100.0,
+      "request_count": 5.0,
+      "requests_per_second": 0.0842726020197003
+    },
+    "POST /api/v1/outreach/approve": {
+      "failure_count": 0.0,
+      "failure_rate_budget_pct": 2.0,
+      "failure_rate_pct": 0.0,
+      "p50_ms": 1500.0,
+      "p95_budget_ms": 2000,
+      "p95_ms": 1700.0,
+      "p99_ms": 1700.0,
+      "profile": "write-opt-in",
+      "regression_tolerance_pct": 100.0,
+      "request_count": 6.0,
+      "requests_per_second": 0.10112712242364034
+    },
+    "POST /api/v1/outreach/draft": {
+      "failure_count": 0.0,
+      "failure_rate_budget_pct": 2.0,
+      "failure_rate_pct": 0.0,
+      "p50_ms": 600.0,
+      "p95_budget_ms": 2000,
+      "p95_ms": 1100.0,
+      "p99_ms": 1100.0,
+      "profile": "write-opt-in",
+      "regression_tolerance_pct": 100.0,
+      "request_count": 6.0,
+      "requests_per_second": 0.10112712242364034
+    },
+    "POST /api/v1/portfolio/create": {
+      "failure_count": 0.0,
+      "failure_rate_budget_pct": 2.0,
+      "failure_rate_pct": 0.0,
+      "p50_ms": 2700.0,
+      "p95_budget_ms": 5000,
+      "p95_ms": 2700.0,
+      "p99_ms": 2700.0,
+      "profile": "write-opt-in",
+      "regression_tolerance_pct": 100.0,
+      "request_count": 2.0,
+      "requests_per_second": 0.03370904080788012
+    },
+    "POST /api/v1/portfolio/preview": {
+      "failure_count": 0.0,
+      "failure_rate_budget_pct": 2.0,
+      "failure_rate_pct": 0.0,
+      "p50_ms": 100.0,
+      "p95_budget_ms": 1000,
+      "p95_ms": 150.0,
+      "p99_ms": 290.0,
+      "profile": "read",
+      "request_count": 202.0,
+      "requests_per_second": 1.6884672059083659
+    }
+  },
+  "generated_at": "2026-05-18T19:06:14.865694+00:00",
+  "global_failure_rate_budget_pct": 2.0,
+  "notes": "Read baselines are warm deployed-app values from the 20-user read profile; write opt-in baselines are measured from a short governed-write drill and use endpoint budgets plus relaxed per-endpoint tolerance because they create real Lakebase/audit rows.",
+  "platform": {
+    "machine": "arm64",
+    "python": "3.13.13",
+    "release": "25.5.0",
+    "system": "Darwin"
+  },
+  "profile": "mixed-read-write",
+  "regression_tolerance_pct": 25.0,
+  "schema_version": 1,
+  "target": "https://mip-app-2543889327043640.aws.databricksapps.com/api/v1"
+}

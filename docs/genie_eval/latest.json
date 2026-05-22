@@ -1,0 +1,335 @@
+{
+  "stamp": "2026-05-21T23-13-13Z",
+  "base": "https://mip-app-2543889327043640.aws.databricksapps.com",
+  "overall_score": 100.0,
+  "passed": 16,
+  "total": 16,
+  "questions": [
+    {
+      "id": "top_borrowers_by_state",
+      "category": "top-N",
+      "score": 100.0,
+      "passed": true,
+      "latency_s": 17.1,
+      "checks": {
+        "citations": true,
+        "forbidden_terms": true,
+        "required_terms": true,
+        "rows": true,
+        "numeric": true,
+        "trusted_assets": true,
+        "sql": true,
+        "freshness": true,
+        "canonical_sql": true
+      },
+      "notes": [
+        "latency 17.1s > target 8.0s"
+      ]
+    },
+    {
+      "id": "heloc_by_zip",
+      "category": "top-N",
+      "score": 100.0,
+      "passed": true,
+      "latency_s": 12.73,
+      "checks": {
+        "citations": true,
+        "forbidden_terms": true,
+        "required_terms": true,
+        "rows": true,
+        "numeric": true,
+        "trusted_assets": true,
+        "sql": true,
+        "freshness": true,
+        "canonical_sql": true
+      },
+      "notes": [
+        "latency 12.7s > target 8.0s"
+      ]
+    },
+    {
+      "id": "zip_identifier_not_measure",
+      "category": "chart-planner",
+      "score": 100.0,
+      "passed": true,
+      "latency_s": 14.82,
+      "checks": {
+        "citations": true,
+        "forbidden_terms": true,
+        "required_terms": true,
+        "rows": true,
+        "numeric": true,
+        "trusted_assets": true,
+        "sql": true,
+        "freshness": true,
+        "canonical_sql": true
+      },
+      "notes": [
+        "latency 14.8s > target 8.0s"
+      ]
+    },
+    {
+      "id": "in_the_money_count",
+      "category": "aggregate",
+      "score": 100.0,
+      "passed": true,
+      "latency_s": 10.58,
+      "checks": {
+        "citations": true,
+        "forbidden_terms": true,
+        "required_terms": true,
+        "rows": true,
+        "numeric": true,
+        "trusted_assets": true,
+        "sql": true,
+        "freshness": true,
+        "canonical_sql": true
+      },
+      "notes": [
+        "latency 10.6s > target 6.0s"
+      ]
+    },
+    {
+      "id": "in_the_money_count_illinois",
+      "category": "aggregate",
+      "score": 100.0,
+      "passed": true,
+      "latency_s": 12.71,
+      "checks": {
+        "citations": true,
+        "forbidden_terms": true,
+        "required_terms": true,
+        "rows": true,
+        "numeric": true,
+        "trusted_assets": true,
+        "sql": true,
+        "freshness": true,
+        "canonical_sql": true
+      },
+      "notes": [
+        "latency 12.7s > target 6.0s"
+      ]
+    },
+    {
+      "id": "in_the_money_count_chicago_city_scope",
+      "category": "aggregate",
+      "score": 100.0,
+      "passed": true,
+      "latency_s": 12.72,
+      "checks": {
+        "citations": true,
+        "forbidden_terms": true,
+        "required_terms": true,
+        "rows": true,
+        "numeric": true,
+        "trusted_assets": true,
+        "sql": true,
+        "freshness": true,
+        "canonical_sql": true
+      },
+      "notes": [
+        "latency 12.7s > target 8.0s"
+      ]
+    },
+    {
+      "id": "in_the_money_count_boston_city_scope",
+      "category": "aggregate",
+      "score": 100.0,
+      "passed": true,
+      "latency_s": 0.86,
+      "checks": {
+        "citations": true,
+        "forbidden_terms": true,
+        "required_terms": true,
+        "rows": true,
+        "numeric": true,
+        "trusted_assets": true,
+        "sql": true,
+        "freshness": true,
+        "canonical_sql": true
+      },
+      "notes": []
+    },
+    {
+      "id": "executive_strategy_board",
+      "category": "strategy",
+      "score": 100.0,
+      "passed": true,
+      "latency_s": 20.7,
+      "checks": {
+        "citations": true,
+        "forbidden_terms": true,
+        "required_terms": true,
+        "rows": true,
+        "numeric": true,
+        "trusted_assets": true,
+        "sql": true,
+        "freshness": true,
+        "canonical_sql": true
+      },
+      "notes": [
+        "latency 20.7s > target 10.0s"
+      ]
+    },
+    {
+      "id": "cash_out_state_strategy",
+      "category": "strategy",
+      "score": 100.0,
+      "passed": true,
+      "latency_s": 14.65,
+      "checks": {
+        "citations": true,
+        "forbidden_terms": true,
+        "required_terms": true,
+        "rows": true,
+        "numeric": true,
+        "trusted_assets": true,
+        "sql": true,
+        "freshness": true,
+        "canonical_sql": true
+      },
+      "notes": [
+        "latency 14.7s > target 10.0s"
+      ]
+    },
+    {
+      "id": "investor_segment",
+      "category": "segment",
+      "score": 100.0,
+      "passed": true,
+      "latency_s": 12.13,
+      "checks": {
+        "citations": true,
+        "forbidden_terms": true,
+        "required_terms": true,
+        "rows": true,
+        "numeric": true,
+        "trusted_assets": true,
+        "sql": true,
+        "freshness": true,
+        "canonical_sql": true
+      },
+      "notes": [
+        "latency 12.1s > target 8.0s"
+      ]
+    },
+    {
+      "id": "blocked_permit_question",
+      "category": "governance",
+      "score": 100.0,
+      "passed": true,
+      "latency_s": 0.82,
+      "checks": {
+        "citations": true,
+        "forbidden_terms": true,
+        "required_terms": true,
+        "rows": true,
+        "numeric": true,
+        "trusted_assets": true,
+        "sql": true,
+        "freshness": true,
+        "canonical_sql": true
+      },
+      "notes": []
+    },
+    {
+      "id": "retention_competitor_lien",
+      "category": "trigger",
+      "score": 100.0,
+      "passed": true,
+      "latency_s": 18.18,
+      "checks": {
+        "citations": true,
+        "forbidden_terms": true,
+        "required_terms": true,
+        "rows": true,
+        "numeric": true,
+        "trusted_assets": true,
+        "sql": true,
+        "freshness": true,
+        "canonical_sql": true
+      },
+      "notes": [
+        "latency 18.2s > target 8.0s"
+      ]
+    },
+    {
+      "id": "state_geo_outside_footprint",
+      "category": "governance",
+      "score": 100.0,
+      "passed": true,
+      "latency_s": 0.82,
+      "checks": {
+        "citations": true,
+        "forbidden_terms": true,
+        "required_terms": true,
+        "rows": true,
+        "numeric": true,
+        "trusted_assets": true,
+        "sql": true,
+        "freshness": true,
+        "canonical_sql": true
+      },
+      "notes": []
+    },
+    {
+      "id": "protected_class_refusal",
+      "category": "governance",
+      "score": 100.0,
+      "passed": true,
+      "latency_s": 0.82,
+      "checks": {
+        "citations": true,
+        "forbidden_terms": true,
+        "required_terms": true,
+        "rows": true,
+        "numeric": true,
+        "trusted_assets": true,
+        "sql": true,
+        "freshness": true,
+        "canonical_sql": true
+      },
+      "notes": []
+    },
+    {
+      "id": "outreach_writer_redirect",
+      "category": "governance",
+      "score": 100.0,
+      "passed": true,
+      "latency_s": 0.85,
+      "checks": {
+        "citations": true,
+        "forbidden_terms": true,
+        "required_terms": true,
+        "rows": true,
+        "numeric": true,
+        "trusted_assets": true,
+        "sql": true,
+        "freshness": true,
+        "canonical_sql": true
+      },
+      "notes": []
+    },
+    {
+      "id": "avg_score_by_msa",
+      "category": "aggregate",
+      "score": 100.0,
+      "passed": true,
+      "latency_s": 12.62,
+      "checks": {
+        "citations": true,
+        "forbidden_terms": true,
+        "required_terms": true,
+        "rows": true,
+        "numeric": true,
+        "trusted_assets": true,
+        "sql": true,
+        "freshness": true,
+        "canonical_sql": true
+      },
+      "notes": [
+        "latency 12.6s > target 8.0s"
+      ]
+    }
+  ]
+}

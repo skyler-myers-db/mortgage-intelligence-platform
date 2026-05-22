@@ -3,7 +3,8 @@
  *
  * Runs axe-core against every public route in BOTH dark and light themes.
  * Asserts zero `serious` or `critical` violations; `moderate` / `minor`
- * are logged as TODOs but do not fail the test.
+ * are reported as informational smoke output. The stricter procurement
+ * gate lives in `accessibility_procurement.spec.ts`.
  *
  * Why both themes: a prior audit (2026-04-22) found 5 light-theme-only
  * contrast blockers that dark-only runs would never catch. The
@@ -24,14 +25,30 @@
  * the test on localhost (same code, real backends) sidesteps the
  * OAuth-flow flakiness.
  */
-import { test, expect } from '@playwright/test';
+import { test, expect, type APIRequestContext } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
 
 const LIVE = process.env.E2E_LIVE === '1';
 test.skip(!LIVE, 'Set E2E_LIVE=1 to run accessibility smoke against the live app.');
 
 const APP_URL = process.env.MIP_APP_URL || 'http://127.0.0.1:5173';
-test.use({ baseURL: APP_URL });
+const API_URL = process.env.MIP_API_URL || APP_URL.replace(':5173', ':8000');
+const BEARER = process.env.MIP_BEARER_TOKEN || process.env.DATABRICKS_TOKEN || '';
+const AUTH_HEADERS: Record<string, string> = BEARER
+  ? { Authorization: `Bearer ${BEARER}` }
+  : {};
+test.use({ baseURL: APP_URL, extraHTTPHeaders: AUTH_HEADERS });
+
+async function fetchFirstLeadId(request: APIRequestContext): Promise<string> {
+  const resp = await request.get(`${API_URL}/api/leads?limit=1`, {
+    headers: AUTH_HEADERS,
+  });
+  expect(resp.status(), 'GET /api/leads returned non-200').toBe(200);
+  const rows = (await resp.json()) as Array<{ borrower_id?: string }>;
+  const id = rows[0]?.borrower_id;
+  expect(id, 'need a live borrower id for a11y deep-link coverage').toBeTruthy();
+  return id!;
+}
 
 /**
  * Every public route + the deep-link variants that carry an id. We run
@@ -48,7 +65,7 @@ const ROUTES: Array<{ path: string; readySelector?: RegExp | string }> = [
   { path: '/segment-intelligence',   readySelector: /borrower segment/i },
   { path: '/lead-queue',             readySelector: /Lead queue|Ranked borrower queue/i },
   { path: '/ask-genie',              readySelector: /Ask a question|Ask Genie/i },
-  { path: '/outreach-composer',      readySelector: /Outreach/i },
+  { path: '/offer-orchestrator',     readySelector: /Offer Orchestrator|Choose a borrower/i },
   { path: '/admin-config',           readySelector: /Lender|Admin|Config/i },
 ];
 
@@ -89,7 +106,7 @@ async function runAxeAndAssertClean(page: import('@playwright/test').Page, label
   if (moderate.length || minor.length) {
     // eslint-disable-next-line no-console
     console.log(
-      `[a11y TODO] ${label}: ${moderate.length} moderate + ${minor.length} minor.\n` +
+      `[a11y smoke] ${label}: ${moderate.length} moderate + ${minor.length} minor.\n` +
         [...moderate, ...minor]
           .map(
             (v) =>
@@ -140,7 +157,8 @@ test.describe('Module 0 — accessibility (nightly)', () => {
         });
       }
 
-      test(`borrower-360 (deep-linked real id) has zero serious/critical violations (${theme})`, async ({ page }) => {
+      test(`borrower-360 (deep-linked real id) has zero serious/critical violations (${theme})`, async ({ page, request }) => {
+        const id = await fetchFirstLeadId(request);
         await page.addInitScript((t) => {
           try {
             window.localStorage.setItem('mip.theme', t as string);
@@ -148,19 +166,14 @@ test.describe('Module 0 — accessibility (nightly)', () => {
             // ignore
           }
         }, theme);
-        await page.goto('/lead-queue');
+        await page.goto(`/borrower-360/${id}`);
         await setTheme(page, theme);
-        const firstRow = page.locator('tbody tr').first();
-        await expect(firstRow).toBeVisible({ timeout: 30_000 });
-        const href = await firstRow.locator('a[href*="/borrower-360/"]').first().getAttribute('href');
-        if (!href) test.skip(true, 'No borrower id available to deep-link.');
-        await page.goto(href!);
-        await setTheme(page, theme);
-        await expect(page.getByText(/Customer 360|Why we recommend/i)).toBeVisible({ timeout: 20_000 });
+        await expect(page.getByText(/Customer 360|Why we recommend/i).first()).toBeVisible({ timeout: 20_000 });
         await runAxeAndAssertClean(page, `/borrower-360/:id [${theme}]`);
       });
 
-      test(`offer-orchestrator (deep-linked real id) has zero serious/critical violations (${theme})`, async ({ page }) => {
+      test(`offer-orchestrator (deep-linked real id) has zero serious/critical violations (${theme})`, async ({ page, request }) => {
+        const id = await fetchFirstLeadId(request);
         await page.addInitScript((t) => {
           try {
             window.localStorage.setItem('mip.theme', t as string);
@@ -168,16 +181,9 @@ test.describe('Module 0 — accessibility (nightly)', () => {
             // ignore
           }
         }, theme);
-        await page.goto('/lead-queue');
-        await setTheme(page, theme);
-        const firstRow = page.locator('tbody tr').first();
-        await expect(firstRow).toBeVisible({ timeout: 30_000 });
-        const href = await firstRow.locator('a[href*="/borrower-360/"]').first().getAttribute('href');
-        if (!href) test.skip(true, 'No borrower id available to deep-link.');
-        const id = href!.split('/').pop();
         await page.goto(`/offer-orchestrator/${id}`);
         await setTheme(page, theme);
-        await expect(page.getByText(/Draft outreach|Recommended offer/i)).toBeVisible({ timeout: 30_000 });
+        await expect(page.getByText(/Draft outreach|Recommended offer/i).first()).toBeVisible({ timeout: 30_000 });
         await runAxeAndAssertClean(page, `/offer-orchestrator/:id [${theme}]`);
       });
     });

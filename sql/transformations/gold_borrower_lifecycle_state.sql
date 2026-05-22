@@ -43,12 +43,17 @@
 -- =============================================================================
 
 CREATE OR REPLACE TABLE mip.gold.borrower_lifecycle_state AS
+WITH sync_anchor AS (
+  SELECT CURRENT_TIMESTAMP() AS mirror_refreshed_at
+)
 SELECT
-  borrower_id,
+  b.borrower_id,
   CAST('pending' AS STRING)   AS approval_status,
   CAST('none'    AS STRING)   AS outreach_status,
   CAST(NULL AS STRING)        AS offer_code,
   CAST(NULL AS TIMESTAMP)     AS approved_at,
   CAST(NULL AS TIMESTAMP)     AS outreach_at,
-  CURRENT_TIMESTAMP()         AS synced_at
-FROM mip.gold.borrower_360;
+  a.mirror_refreshed_at       AS synced_at,
+  a.mirror_refreshed_at       AS refreshed_at
+FROM mip.gold.borrower_360 AS b
+CROSS JOIN sync_anchor AS a;

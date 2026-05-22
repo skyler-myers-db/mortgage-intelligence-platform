@@ -4,9 +4,9 @@
 -- Purpose:   DDL for `mip.gold.county_rollup` -- per-county aggregate of the
 --            addressable borrower population, keyed on 5-char FIPS + snapshot
 --            date. Feeds `/api/geo/county-rollups` so the USChoroplethMap can
---            render real hover numbers on every county in the six-state
---            footprint (IL / CA / FL / TX / WA / CO), not just the handful of
---            anchor counties the component shipped with in Slice 9.
+--            render real hover numbers for counties in the refreshed source
+--            footprint, not just the handful of
+--            discovered counties the component shipped with in Slice 9.
 --
 -- Grain:     (fips_5, snapshot_date). One row per county per refresh day.
 -- PK:        (fips_5, snapshot_date).

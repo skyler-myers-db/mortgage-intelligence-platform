@@ -1,5 +1,9 @@
 import { defineConfig, devices } from '@playwright/test';
 
+const liveE2E = process.env.E2E_LIVE === '1';
+const browserMatrix = process.env.E2E_BROWSER_MATRIX === '1';
+const liveFailureArtifacts = process.env.E2E_LIVE_FAILURE_ARTIFACTS === '1' && !process.env.CI;
+
 /**
  * Playwright config for the Module 0 product golden path.
  *
@@ -30,6 +34,8 @@ import { defineConfig, devices } from '@playwright/test';
 export default defineConfig({
   testDir: './tests/e2e',
   testMatch: /.*\.spec\.ts$/,
+  timeout: liveE2E ? 90_000 : 30_000,
+  snapshotPathTemplate: '{testDir}/{testFilePath}-snapshots/{arg}{-projectName}{ext}',
   fullyParallel: false,
   workers: 1,
   forbidOnly: !!process.env.CI,
@@ -38,18 +44,51 @@ export default defineConfig({
   use: {
     baseURL: 'http://localhost:5173',
     viewport: { width: 1440, height: 900 },
-    video: 'retain-on-failure',
-    screenshot: 'only-on-failure',
-    trace: 'retain-on-failure',
-    actionTimeout: 10_000,
-    navigationTimeout: 15_000,
+    video: liveE2E && !liveFailureArtifacts ? 'off' : 'retain-on-failure',
+    screenshot: liveE2E && !liveFailureArtifacts ? 'off' : 'only-on-failure',
+    trace: liveE2E && !liveFailureArtifacts ? 'off' : 'retain-on-failure',
+    actionTimeout: liveE2E ? 20_000 : 10_000,
+    navigationTimeout: liveE2E ? 30_000 : 15_000,
   },
-  projects: [
-    {
-      name: 'chromium',
-      use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 900 } },
-    },
-  ],
+  projects: browserMatrix
+    ? [
+        {
+          name: 'chromium',
+          grep: /@desktop|@a11y/,
+          use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 900 } },
+        },
+        {
+          name: 'firefox',
+          grep: /@desktop/,
+          use: { ...devices['Desktop Firefox'], viewport: { width: 1440, height: 900 } },
+        },
+        {
+          name: 'webkit',
+          grep: /@desktop/,
+          use: { ...devices['Desktop Safari'], viewport: { width: 1440, height: 900 } },
+        },
+        {
+          name: 'mobile-chrome',
+          grep: /@device/,
+          use: { ...devices['Pixel 7'] },
+        },
+        {
+          name: 'mobile-safari',
+          grep: /@device/,
+          use: { ...devices['iPhone 15'] },
+        },
+        {
+          name: 'tablet-safari',
+          grep: /@device/,
+          use: { ...devices['iPad Pro 11 landscape'] },
+        },
+      ]
+    : [
+        {
+          name: 'chromium',
+          use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 900 } },
+        },
+      ],
   // Only boot local uvicorn + vite when the spec isn't already pointing
   // at a deployed origin. A Playwright run against a Databricks App URL
   // doesn't need (and can't use) a local backend.
@@ -57,14 +96,15 @@ export default defineConfig({
     ? undefined
     : [
         {
-          command: 'uvicorn backend.main:app --host 0.0.0.0 --port 8000',
+          command: '.venv/bin/python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000',
           cwd: '..',
           url: 'http://localhost:8000/api/health',
           reuseExistingServer: !process.env.CI,
           timeout: 120_000,
         },
         {
-          command: 'npm run dev',
+          command: 'npm --prefix frontend run dev',
+          cwd: '..',
           url: 'http://localhost:5173',
           reuseExistingServer: !process.env.CI,
           timeout: 120_000,

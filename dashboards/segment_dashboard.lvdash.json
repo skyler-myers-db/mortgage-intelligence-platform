@@ -4,117 +4,49 @@
       "name": "ds_segment_overview",
       "displayName": "Segment overview (national rollup)",
       "queryLines": [
-        "SELECT",
-        "  sp.segment_code                        AS segment_code,",
-        "  sp.name                                AS name,",
-        "  sp.count                               AS borrower_count,",
-        "  sp.avg_score                           AS mean_opportunity_score,",
-        "  sp.delta_vs_prior                      AS delta_vs_prior_label,",
-        "  sp.description                         AS description,",
-        "  agg.mean_rate_spread_bps               AS mean_rate_spread_bps,",
-        "  agg.mean_equity_pct                    AS mean_equity_pct,",
-        "  agg.in_the_money_borrowers             AS in_the_money_borrowers",
-        "FROM mip.semantics.segment_performance_metric_view AS sp",
-        "LEFT JOIN (",
-        "  SELECT",
-        "    segment                              AS segment_code,",
-        "    CAST(ROUND(AVG(rate_spread_bps)) AS INT) AS mean_rate_spread_bps,",
-        "    CAST(ROUND(AVG(equity_pct))     AS INT)  AS mean_equity_pct,",
-        "    SUM(CASE WHEN in_the_money THEN 1 ELSE 0 END) AS in_the_money_borrowers",
-        "  FROM mip.semantics.borrower_opportunity_metric_view",
-        "  GROUP BY segment",
-        ") AS agg",
-        "  ON sp.segment_code = agg.segment_code",
-        "WHERE sp.state = '_ALL'",
-        "ORDER BY sp.count DESC"
+        "SELECT\n  sp.segment_code                        AS segment_code,\n  sp.name                                AS name,\n  sp.count                               AS borrower_count,\n  sp.avg_score                           AS mean_opportunity_score,\n  sp.delta_vs_prior                      AS delta_vs_prior_label,\n  sp.description                         AS description,\n  sp.approval_rate                       AS approval_rate,\n  sp.outreach_rate                       AS outreach_rate,\n  agg.mean_rate_spread_bps               AS mean_rate_spread_bps,\n  agg.mean_equity_pct                    AS mean_equity_pct,\n  agg.in_the_money_borrowers             AS in_the_money_borrowers\nFROM mip.semantics.segment_performance_metric_view AS sp\nLEFT JOIN (\n  SELECT\n    segment_code                         AS segment_code,\n    CAST(ROUND(AVG(rate_spread_bps)) AS INT) AS mean_rate_spread_bps,\n    CAST(ROUND(AVG(equity_pct))     AS INT)  AS mean_equity_pct,\n    SUM(CASE WHEN in_the_money THEN 1 ELSE 0 END) AS in_the_money_borrowers\n  FROM mip.semantics.borrower_opportunity_metric_view\n  LATERAL VIEW EXPLODE(segment_codes) seg AS segment_code\n  GROUP BY segment_code\n) AS agg\n  ON sp.segment_code = agg.segment_code\nWHERE sp.state = '_ALL'\nORDER BY sp.count DESC"
       ]
     },
     {
       "name": "ds_segment_counts",
       "displayName": "Segment counts (national rollup)",
       "queryLines": [
-        "SELECT",
-        "  segment_code                     AS segment_code,",
-        "  name                             AS segment_name,",
-        "  count                            AS borrower_count",
-        "FROM mip.semantics.segment_performance_metric_view",
-        "WHERE state = '_ALL'",
-        "ORDER BY count DESC"
+        "SELECT\n  segment_code                     AS segment_code,\n  name                             AS segment_name,\n  count                            AS borrower_count\nFROM mip.semantics.segment_performance_metric_view\nWHERE state = '_ALL'\nORDER BY count DESC"
       ]
     },
     {
       "name": "ds_segment_avg_score",
       "displayName": "Segment mean opportunity score",
       "queryLines": [
-        "SELECT",
-        "  segment_code                     AS segment_code,",
-        "  name                             AS segment_name,",
-        "  avg_score                        AS mean_opportunity_score",
-        "FROM mip.semantics.segment_performance_metric_view",
-        "WHERE state = '_ALL'",
-        "ORDER BY avg_score DESC"
+        "SELECT\n  segment_code                     AS segment_code,\n  name                             AS segment_name,\n  avg_score                        AS mean_opportunity_score\nFROM mip.semantics.segment_performance_metric_view\nWHERE state = '_ALL'\nORDER BY avg_score DESC"
       ]
     },
     {
       "name": "ds_segment_by_state",
       "displayName": "Segment counts by state",
       "queryLines": [
-        "SELECT",
-        "  state                            AS state,",
-        "  segment_code                     AS segment_code,",
-        "  name                             AS segment_name,",
-        "  count                            AS borrower_count",
-        "FROM mip.semantics.segment_performance_metric_view",
-        "WHERE state <> '_ALL'",
-        "ORDER BY state, count DESC"
+        "SELECT\n  state                            AS state,\n  segment_code                     AS segment_code,\n  name                             AS segment_name,\n  count                            AS borrower_count\nFROM mip.semantics.segment_performance_metric_view\nWHERE state <> '_ALL'\nORDER BY state, count DESC"
       ]
     },
     {
       "name": "ds_top_segments_per_state",
       "displayName": "Top 3 segments per state",
       "queryLines": [
-        "WITH ranked AS (",
-        "  SELECT",
-        "    state,",
-        "    segment_code,",
-        "    name                              AS segment_name,",
-        "    count                             AS borrower_count,",
-        "    ROW_NUMBER() OVER (PARTITION BY state ORDER BY count DESC) AS state_rank",
-        "  FROM mip.semantics.segment_performance_metric_view",
-        "  WHERE state <> '_ALL'",
-        ")",
-        "SELECT state, segment_code, segment_name, borrower_count, state_rank",
-        "FROM ranked",
-        "WHERE state_rank <= 3",
-        "ORDER BY state, state_rank"
+        "WITH ranked AS (\n  SELECT\n    state,\n    segment_code,\n    name                              AS segment_name,\n    count                             AS borrower_count,\n    ROW_NUMBER() OVER (PARTITION BY state ORDER BY count DESC) AS state_rank\n  FROM mip.semantics.segment_performance_metric_view\n  WHERE state <> '_ALL'\n)\nSELECT state, segment_code, segment_name, borrower_count, state_rank\nFROM ranked\nWHERE state_rank <= 3\nORDER BY state, state_rank"
       ]
     },
     {
       "name": "ds_evidence_daily",
       "displayName": "Evidence events per day (last 30 days)",
       "queryLines": [
-        "SELECT",
-        "  SUBSTRING(`timestamp`, 1, 10)    AS event_date,",
-        "  signal_type                      AS signal_type,",
-        "  COUNT(*)                         AS event_count",
-        "FROM mip.gold.evidence_events",
-        "WHERE `timestamp` >= DATE_FORMAT(CURRENT_DATE() - INTERVAL 30 DAYS, 'yyyy-MM-dd')",
-        "GROUP BY SUBSTRING(`timestamp`, 1, 10), signal_type",
-        "ORDER BY event_date, signal_type"
+        "SELECT\n  TO_DATE(`timestamp`)              AS event_date,\n  signal_type                       AS signal_type,\n  COUNT(*)                          AS event_count\nFROM mip.gold.evidence_events\nWHERE TO_DATE(`timestamp`) >= CURRENT_DATE() - INTERVAL 30 DAYS\nGROUP BY TO_DATE(`timestamp`), signal_type\nORDER BY event_date, signal_type"
       ]
     },
     {
       "name": "ds_evidence_by_signal",
       "displayName": "Evidence events by signal type",
       "queryLines": [
-        "SELECT",
-        "  signal_type                      AS signal_type,",
-        "  source_product                   AS source_product,",
-        "  COUNT(*)                         AS event_count,",
-        "  CAST(ROUND(AVG(confidence), 3) AS DOUBLE) AS mean_confidence",
-        "FROM mip.gold.evidence_events",
-        "GROUP BY signal_type, source_product",
-        "ORDER BY event_count DESC"
+        "SELECT\n  signal_type                      AS signal_type,\n  source_product                   AS source_product,\n  COUNT(*)                         AS event_count,\n  CAST(ROUND(AVG(confidence), 3) AS DOUBLE) AS mean_confidence\nFROM mip.gold.evidence_events\nGROUP BY signal_type, source_product\nORDER BY event_count DESC"
       ]
     }
   ],
@@ -132,44 +64,244 @@
                 "query": {
                   "datasetName": "ds_segment_overview",
                   "fields": [
-                    { "name": "segment_code", "expression": "`segment_code`" },
-                    { "name": "name", "expression": "`name`" },
-                    { "name": "borrower_count", "expression": "`borrower_count`" },
-                    { "name": "mean_opportunity_score", "expression": "`mean_opportunity_score`" },
-                    { "name": "mean_rate_spread_bps", "expression": "`mean_rate_spread_bps`" },
-                    { "name": "mean_equity_pct", "expression": "`mean_equity_pct`" },
-                    { "name": "in_the_money_borrowers", "expression": "`in_the_money_borrowers`" },
-                    { "name": "delta_vs_prior_label", "expression": "`delta_vs_prior_label`" },
-                    { "name": "description", "expression": "`description`" }
+                    {
+                      "name": "segment_code",
+                      "expression": "`segment_code`"
+                    },
+                    {
+                      "name": "name",
+                      "expression": "`name`"
+                    },
+                    {
+                      "name": "borrower_count",
+                      "expression": "`borrower_count`"
+                    },
+                    {
+                      "name": "mean_opportunity_score",
+                      "expression": "`mean_opportunity_score`"
+                    },
+                    {
+                      "name": "mean_rate_spread_bps",
+                      "expression": "`mean_rate_spread_bps`"
+                    },
+                    {
+                      "name": "mean_equity_pct",
+                      "expression": "`mean_equity_pct`"
+                    },
+                    {
+                      "name": "in_the_money_borrowers",
+                      "expression": "`in_the_money_borrowers`"
+                    },
+                    {
+                      "name": "approval_rate",
+                      "expression": "`approval_rate`"
+                    },
+                    {
+                      "name": "outreach_rate",
+                      "expression": "`outreach_rate`"
+                    },
+                    {
+                      "name": "delta_vs_prior_label",
+                      "expression": "`delta_vs_prior_label`"
+                    },
+                    {
+                      "name": "description",
+                      "expression": "`description`"
+                    }
                   ],
                   "disaggregated": true
                 }
               }
             ],
             "spec": {
-              "version": 1,
+              "version": 2,
               "widgetType": "table",
               "encodings": {
                 "columns": [
-                  { "fieldName": "name", "displayName": "Segment" },
-                  { "fieldName": "borrower_count", "displayName": "Borrowers" },
-                  { "fieldName": "mean_opportunity_score", "displayName": "Mean Opportunity Score" },
-                  { "fieldName": "mean_rate_spread_bps", "displayName": "Mean Rate Spread (bps)" },
-                  { "fieldName": "mean_equity_pct", "displayName": "Mean Equity (%)" },
-                  { "fieldName": "in_the_money_borrowers", "displayName": "In-the-Money Borrowers" },
-                  { "fieldName": "delta_vs_prior_label", "displayName": "Quarter-over-Quarter Change" },
-                  { "fieldName": "description", "displayName": "Description" }
+                  {
+                    "fieldName": "name",
+                    "displayName": "Segment",
+                    "style": {
+                      "type": "basic",
+                      "rules": [
+                        {
+                          "condition": {
+                            "operand": {
+                              "type": "data-value",
+                              "value": "Home Equity Candidate"
+                            },
+                            "operator": "="
+                          },
+                          "backgroundColor": "#66C5FF",
+                          "foregroundColor": "#04101F"
+                        },
+                        {
+                          "condition": {
+                            "operand": {
+                              "type": "data-value",
+                              "value": "In the Money"
+                            },
+                            "operator": "="
+                          },
+                          "backgroundColor": "#5CE1E6",
+                          "foregroundColor": "#04101F"
+                        },
+                        {
+                          "condition": {
+                            "operand": {
+                              "type": "data-value",
+                              "value": "Investor / Multi-Property"
+                            },
+                            "operator": "="
+                          },
+                          "backgroundColor": "#F472B6",
+                          "foregroundColor": "#04101F"
+                        },
+                        {
+                          "condition": {
+                            "operand": {
+                              "type": "data-value",
+                              "value": "Listed for Sale"
+                            },
+                            "operator": "="
+                          },
+                          "backgroundColor": "#F59E0B",
+                          "foregroundColor": "#04101F"
+                        },
+                        {
+                          "condition": {
+                            "operand": {
+                              "type": "data-value",
+                              "value": "Permit Activity"
+                            },
+                            "operator": "="
+                          },
+                          "backgroundColor": "#A78BFA",
+                          "foregroundColor": "#04101F"
+                        },
+                        {
+                          "condition": {
+                            "operand": {
+                              "type": "data-value",
+                              "value": "Retention Risk"
+                            },
+                            "operator": "="
+                          },
+                          "backgroundColor": "#34D399",
+                          "foregroundColor": "#04101F"
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "fieldName": "borrower_count",
+                    "displayName": "Borrowers",
+                    "format": {
+                      "type": "number-plain",
+                      "decimalPlaces": {
+                        "type": "exact",
+                        "places": 0
+                      },
+                      "abbreviation": "compact"
+                    }
+                  },
+                  {
+                    "fieldName": "mean_opportunity_score",
+                    "displayName": "Mean Score",
+                    "format": {
+                      "type": "number-plain",
+                      "decimalPlaces": {
+                        "type": "exact",
+                        "places": 0
+                      },
+                      "abbreviation": "none"
+                    }
+                  },
+                  {
+                    "fieldName": "mean_rate_spread_bps",
+                    "displayName": "Mean Spread (bps)",
+                    "format": {
+                      "type": "number-plain",
+                      "decimalPlaces": {
+                        "type": "exact",
+                        "places": 0
+                      },
+                      "abbreviation": "none"
+                    }
+                  },
+                  {
+                    "fieldName": "mean_equity_pct",
+                    "displayName": "Mean Equity %",
+                    "format": {
+                      "type": "number-plain",
+                      "decimalPlaces": {
+                        "type": "exact",
+                        "places": 0
+                      },
+                      "abbreviation": "none"
+                    }
+                  },
+                  {
+                    "fieldName": "in_the_money_borrowers",
+                    "displayName": "ITM Borrowers",
+                    "format": {
+                      "type": "number-plain",
+                      "decimalPlaces": {
+                        "type": "exact",
+                        "places": 0
+                      },
+                      "abbreviation": "compact"
+                    }
+                  },
+                  {
+                    "fieldName": "approval_rate",
+                    "displayName": "Approval Rate %",
+                    "format": {
+                      "type": "number-plain",
+                      "decimalPlaces": {
+                        "type": "exact",
+                        "places": 2
+                      },
+                      "abbreviation": "none"
+                    }
+                  },
+                  {
+                    "fieldName": "outreach_rate",
+                    "displayName": "Outreach Rate %",
+                    "format": {
+                      "type": "number-plain",
+                      "decimalPlaces": {
+                        "type": "exact",
+                        "places": 2
+                      },
+                      "abbreviation": "none"
+                    }
+                  },
+                  {
+                    "fieldName": "delta_vs_prior_label",
+                    "displayName": "QoQ Change"
+                  },
+                  {
+                    "fieldName": "description",
+                    "displayName": "Definition"
+                  }
                 ]
               },
               "frame": {
                 "title": "Segment Performance - National Rollup",
-                "description": "Per-segment size and economics. Approval rate and outreach rate are authoritative in Lakebase and are not joined here; see Approvals dashboard in the app for those measures.",
+                "description": "Per-segment size, economics, approval rate, outreach rate, and refresh-period delta",
                 "showTitle": true,
                 "showDescription": true
-              }
+              },
+              "rowsPerPage": 10
             }
           },
-          "position": { "x": 0, "y": 0, "width": 6, "height": 6 }
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 12,
+            "height": 5
+          }
         },
         {
           "widget": {
@@ -180,8 +312,18 @@
                 "query": {
                   "datasetName": "ds_segment_counts",
                   "fields": [
-                    { "name": "segment_name", "expression": "`segment_name`" },
-                    { "name": "borrower_count", "expression": "`borrower_count`" }
+                    {
+                      "name": "segment_name",
+                      "expression": "`segment_name`"
+                    },
+                    {
+                      "name": "borrower_count",
+                      "expression": "`borrower_count`"
+                    },
+                    {
+                      "name": "segment_code",
+                      "expression": "`segment_code`"
+                    }
                   ],
                   "disaggregated": false
                 }
@@ -191,18 +333,118 @@
               "version": 3,
               "widgetType": "bar",
               "encodings": {
-                "x": { "fieldName": "segment_name", "scale": { "type": "categorical", "sort": { "by": "borrower_count", "direction": "descending" } }, "displayName": "Segment" },
-                "y": { "fieldName": "borrower_count", "scale": { "type": "quantitative" }, "displayName": "Borrowers" }
+                "x": {
+                  "fieldName": "borrower_count",
+                  "displayName": "Borrowers",
+                  "format": {
+                    "type": "number-plain",
+                    "decimalPlaces": {
+                      "type": "exact",
+                      "places": 0
+                    },
+                    "abbreviation": "compact"
+                  },
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "y": {
+                  "fieldName": "segment_name",
+                  "displayName": "Segment",
+                  "scale": {
+                    "type": "categorical",
+                    "sort": {
+                      "by": "borrower_count",
+                      "direction": "descending"
+                    }
+                  }
+                },
+                "color": {
+                  "fieldName": "segment_code",
+                  "displayName": "Segment",
+                  "legend": {
+                    "position": "bottom"
+                  },
+                  "scale": {
+                    "type": "categorical",
+                    "mappings": [
+                      {
+                        "value": "Home Equity Candidate",
+                        "color": "#66C5FF"
+                      },
+                      {
+                        "value": "In the Money",
+                        "color": "#5CE1E6"
+                      },
+                      {
+                        "value": "Investor / Multi-Property",
+                        "color": "#F472B6"
+                      },
+                      {
+                        "value": "Listed for Sale",
+                        "color": "#F59E0B"
+                      },
+                      {
+                        "value": "Permit Activity",
+                        "color": "#A78BFA"
+                      },
+                      {
+                        "value": "Retention Risk",
+                        "color": "#34D399"
+                      },
+                      {
+                        "value": "None / Unsegmented",
+                        "color": "#94A3B8"
+                      },
+                      {
+                        "value": "equity",
+                        "color": "#66C5FF"
+                      },
+                      {
+                        "value": "itm",
+                        "color": "#5CE1E6"
+                      },
+                      {
+                        "value": "investor",
+                        "color": "#F472B6"
+                      },
+                      {
+                        "value": "listed",
+                        "color": "#F59E0B"
+                      },
+                      {
+                        "value": "permit",
+                        "color": "#A78BFA"
+                      },
+                      {
+                        "value": "retention",
+                        "color": "#34D399"
+                      },
+                      {
+                        "value": "none",
+                        "color": "#94A3B8"
+                      }
+                    ]
+                  }
+                },
+                "label": {
+                  "show": true
+                }
               },
               "frame": {
                 "title": "Segment Size",
-                "description": "Borrower count per segment across the 6-state footprint",
+                "description": "Borrower count per segment across current Cotality data coverage",
                 "showTitle": true,
                 "showDescription": true
               }
             }
           },
-          "position": { "x": 0, "y": 6, "width": 3, "height": 5 }
+          "position": {
+            "x": 0,
+            "y": 5,
+            "width": 6,
+            "height": 6
+          }
         },
         {
           "widget": {
@@ -213,8 +455,18 @@
                 "query": {
                   "datasetName": "ds_segment_avg_score",
                   "fields": [
-                    { "name": "segment_name", "expression": "`segment_name`" },
-                    { "name": "mean_opportunity_score", "expression": "`mean_opportunity_score`" }
+                    {
+                      "name": "segment_name",
+                      "expression": "`segment_name`"
+                    },
+                    {
+                      "name": "mean_opportunity_score",
+                      "expression": "`mean_opportunity_score`"
+                    },
+                    {
+                      "name": "segment_code",
+                      "expression": "`segment_code`"
+                    }
                   ],
                   "disaggregated": false
                 }
@@ -224,8 +476,103 @@
               "version": 3,
               "widgetType": "bar",
               "encodings": {
-                "x": { "fieldName": "segment_name", "scale": { "type": "categorical", "sort": { "by": "mean_opportunity_score", "direction": "descending" } }, "displayName": "Segment" },
-                "y": { "fieldName": "mean_opportunity_score", "scale": { "type": "quantitative" }, "displayName": "Mean Opportunity Score" }
+                "x": {
+                  "fieldName": "mean_opportunity_score",
+                  "displayName": "Mean Opportunity Score",
+                  "format": {
+                    "type": "number-plain",
+                    "decimalPlaces": {
+                      "type": "exact",
+                      "places": 0
+                    },
+                    "abbreviation": "none"
+                  },
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "y": {
+                  "fieldName": "segment_name",
+                  "displayName": "Segment",
+                  "scale": {
+                    "type": "categorical",
+                    "sort": {
+                      "by": "mean_opportunity_score",
+                      "direction": "descending"
+                    }
+                  }
+                },
+                "color": {
+                  "fieldName": "segment_code",
+                  "displayName": "Segment",
+                  "legend": {
+                    "position": "bottom"
+                  },
+                  "scale": {
+                    "type": "categorical",
+                    "mappings": [
+                      {
+                        "value": "Home Equity Candidate",
+                        "color": "#66C5FF"
+                      },
+                      {
+                        "value": "In the Money",
+                        "color": "#5CE1E6"
+                      },
+                      {
+                        "value": "Investor / Multi-Property",
+                        "color": "#F472B6"
+                      },
+                      {
+                        "value": "Listed for Sale",
+                        "color": "#F59E0B"
+                      },
+                      {
+                        "value": "Permit Activity",
+                        "color": "#A78BFA"
+                      },
+                      {
+                        "value": "Retention Risk",
+                        "color": "#34D399"
+                      },
+                      {
+                        "value": "None / Unsegmented",
+                        "color": "#94A3B8"
+                      },
+                      {
+                        "value": "equity",
+                        "color": "#66C5FF"
+                      },
+                      {
+                        "value": "itm",
+                        "color": "#5CE1E6"
+                      },
+                      {
+                        "value": "investor",
+                        "color": "#F472B6"
+                      },
+                      {
+                        "value": "listed",
+                        "color": "#F59E0B"
+                      },
+                      {
+                        "value": "permit",
+                        "color": "#A78BFA"
+                      },
+                      {
+                        "value": "retention",
+                        "color": "#34D399"
+                      },
+                      {
+                        "value": "none",
+                        "color": "#94A3B8"
+                      }
+                    ]
+                  }
+                },
+                "label": {
+                  "show": true
+                }
               },
               "frame": {
                 "title": "Mean Opportunity Score by Segment",
@@ -235,7 +582,12 @@
               }
             }
           },
-          "position": { "x": 3, "y": 6, "width": 3, "height": 5 }
+          "position": {
+            "x": 6,
+            "y": 5,
+            "width": 6,
+            "height": 6
+          }
         }
       ]
     },
@@ -252,31 +604,92 @@
                 "query": {
                   "datasetName": "ds_segment_by_state",
                   "fields": [
-                    { "name": "state", "expression": "`state`" },
-                    { "name": "segment_name", "expression": "`segment_name`" },
-                    { "name": "borrower_count", "expression": "`borrower_count`" }
+                    {
+                      "name": "state",
+                      "expression": "`state`"
+                    },
+                    {
+                      "name": "segment_name",
+                      "expression": "`segment_name`"
+                    },
+                    {
+                      "name": "sum(borrower_count)",
+                      "expression": "SUM(`borrower_count`)"
+                    }
                   ],
-                  "disaggregated": true
+                  "disaggregated": false,
+                  "orders": [
+                    {
+                      "direction": "ASC",
+                      "expression": "`state`"
+                    },
+                    {
+                      "direction": "ASC",
+                      "expression": "`segment_name`"
+                    }
+                  ]
                 }
               }
             ],
             "spec": {
-              "version": 1,
+              "version": 3,
               "widgetType": "pivot",
               "encodings": {
-                "rows":    [{ "fieldName": "state",        "displayName": "State" }],
-                "columns": [{ "fieldName": "segment_name", "displayName": "Segment" }],
-                "cell":     { "fieldName": "borrower_count", "displayName": "Borrowers", "aggregation": "sum" }
+                "rows": [
+                  {
+                    "fieldName": "state",
+                    "displayName": "State",
+                    "displayTotal": true
+                  }
+                ],
+                "columns": [
+                  {
+                    "fieldName": "segment_name",
+                    "displayName": "Segment",
+                    "displayTotal": true
+                  }
+                ],
+                "cell": {
+                  "type": "multi-cell",
+                  "fields": [
+                    {
+                      "fieldName": "sum(borrower_count)",
+                      "displayName": "Borrowers",
+                      "format": {
+                        "type": "number-plain",
+                        "decimalPlaces": {
+                          "type": "exact",
+                          "places": 0
+                        },
+                        "abbreviation": "compact"
+                      },
+                      "style": {
+                        "type": "color-scale",
+                        "backgroundColor": {
+                          "scale": {
+                            "type": "quantitative"
+                          }
+                        }
+                      },
+                      "cellType": "text"
+                    }
+                  ]
+                }
               },
               "frame": {
-                "title": "Segment by State",
-                "description": "Borrower count pivot - states as rows, segments as columns",
+                "title": "Segment Mix by State",
+                "description": "Borrower count matrix by state and segment; totals expose over- and under-indexed markets",
                 "showTitle": true,
                 "showDescription": true
               }
             }
           },
-          "position": { "x": 0, "y": 0, "width": 6, "height": 6 }
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 12,
+            "height": 5
+          }
         },
         {
           "widget": {
@@ -287,10 +700,22 @@
                 "query": {
                   "datasetName": "ds_top_segments_per_state",
                   "fields": [
-                    { "name": "state", "expression": "`state`" },
-                    { "name": "segment_name", "expression": "`segment_name`" },
-                    { "name": "borrower_count", "expression": "`borrower_count`" },
-                    { "name": "state_rank", "expression": "`state_rank`" }
+                    {
+                      "name": "state",
+                      "expression": "`state`"
+                    },
+                    {
+                      "name": "segment_name",
+                      "expression": "`segment_name`"
+                    },
+                    {
+                      "name": "borrower_count",
+                      "expression": "`borrower_count`"
+                    },
+                    {
+                      "name": "state_rank",
+                      "expression": "`state_rank`"
+                    }
                   ],
                   "disaggregated": true
                 }
@@ -300,9 +725,99 @@
               "version": 3,
               "widgetType": "bar",
               "encodings": {
-                "x":     { "fieldName": "state", "scale": { "type": "categorical" }, "displayName": "State" },
-                "y":     { "fieldName": "borrower_count", "scale": { "type": "quantitative" }, "displayName": "Borrowers" },
-                "color": { "fieldName": "segment_name", "scale": { "type": "categorical" }, "displayName": "Segment" }
+                "x": {
+                  "fieldName": "state",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "State"
+                },
+                "y": {
+                  "fieldName": "borrower_count",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Borrowers",
+                  "format": {
+                    "type": "number-plain",
+                    "decimalPlaces": {
+                      "type": "exact",
+                      "places": 0
+                    },
+                    "abbreviation": "compact"
+                  }
+                },
+                "color": {
+                  "fieldName": "segment_name",
+                  "displayName": "Segment",
+                  "legend": {
+                    "position": "right"
+                  },
+                  "scale": {
+                    "type": "categorical",
+                    "mappings": [
+                      {
+                        "value": "Home Equity Candidate",
+                        "color": "#66C5FF"
+                      },
+                      {
+                        "value": "In the Money",
+                        "color": "#5CE1E6"
+                      },
+                      {
+                        "value": "Investor / Multi-Property",
+                        "color": "#F472B6"
+                      },
+                      {
+                        "value": "Listed for Sale",
+                        "color": "#F59E0B"
+                      },
+                      {
+                        "value": "Permit Activity",
+                        "color": "#A78BFA"
+                      },
+                      {
+                        "value": "Retention Risk",
+                        "color": "#34D399"
+                      },
+                      {
+                        "value": "None / Unsegmented",
+                        "color": "#94A3B8"
+                      },
+                      {
+                        "value": "equity",
+                        "color": "#66C5FF"
+                      },
+                      {
+                        "value": "itm",
+                        "color": "#5CE1E6"
+                      },
+                      {
+                        "value": "investor",
+                        "color": "#F472B6"
+                      },
+                      {
+                        "value": "listed",
+                        "color": "#F59E0B"
+                      },
+                      {
+                        "value": "permit",
+                        "color": "#A78BFA"
+                      },
+                      {
+                        "value": "retention",
+                        "color": "#34D399"
+                      },
+                      {
+                        "value": "none",
+                        "color": "#94A3B8"
+                      }
+                    ]
+                  }
+                },
+                "label": {
+                  "show": true
+                }
               },
               "frame": {
                 "title": "Top 3 Segments per State",
@@ -312,7 +827,12 @@
               }
             }
           },
-          "position": { "x": 0, "y": 6, "width": 6, "height": 6 }
+          "position": {
+            "x": 0,
+            "y": 5,
+            "width": 12,
+            "height": 6
+          }
         }
       ]
     },
@@ -329,9 +849,18 @@
                 "query": {
                   "datasetName": "ds_evidence_daily",
                   "fields": [
-                    { "name": "event_date", "expression": "`event_date`" },
-                    { "name": "signal_type", "expression": "`signal_type`" },
-                    { "name": "event_count", "expression": "`event_count`" }
+                    {
+                      "name": "event_date",
+                      "expression": "`event_date`"
+                    },
+                    {
+                      "name": "signal_type",
+                      "expression": "`signal_type`"
+                    },
+                    {
+                      "name": "event_count",
+                      "expression": "`event_count`"
+                    }
                   ],
                   "disaggregated": true
                 }
@@ -341,19 +870,106 @@
               "version": 3,
               "widgetType": "line",
               "encodings": {
-                "x":     { "fieldName": "event_date", "scale": { "type": "temporal" }, "displayName": "Date" },
-                "y":     { "fieldName": "event_count", "scale": { "type": "quantitative" }, "displayName": "Evidence Events" },
-                "color": { "fieldName": "signal_type", "scale": { "type": "categorical" }, "displayName": "Signal Type" }
+                "x": {
+                  "fieldName": "event_date",
+                  "displayName": "Event Date",
+                  "scale": {
+                    "type": "temporal"
+                  }
+                },
+                "y": {
+                  "fieldName": "event_count",
+                  "displayName": "Evidence Events",
+                  "format": {
+                    "type": "number-plain",
+                    "decimalPlaces": {
+                      "type": "exact",
+                      "places": 0
+                    },
+                    "abbreviation": "compact"
+                  },
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "color": {
+                  "fieldName": "signal_type",
+                  "displayName": "Signal Type",
+                  "legend": {
+                    "position": "right"
+                  },
+                  "scale": {
+                    "type": "categorical",
+                    "mappings": [
+                      {
+                        "value": "absentee_mailing",
+                        "color": "#66C5FF"
+                      },
+                      {
+                        "value": "competitor_lien",
+                        "color": "#F59E0B"
+                      },
+                      {
+                        "value": "corporate_owner",
+                        "color": "#34D399"
+                      },
+                      {
+                        "value": "equity",
+                        "color": "#5CE1E6"
+                      },
+                      {
+                        "value": "foreclosure_stage",
+                        "color": "#A78BFA"
+                      },
+                      {
+                        "value": "loan_type_fit",
+                        "color": "#8CEEF2"
+                      },
+                      {
+                        "value": "market_trend",
+                        "color": "#F472B6"
+                      },
+                      {
+                        "value": "multi_property",
+                        "color": "#34D399"
+                      },
+                      {
+                        "value": "rate_spread",
+                        "color": "#ECF6FF"
+                      },
+                      {
+                        "value": "recent_payoff",
+                        "color": "#94A3B8"
+                      },
+                      {
+                        "value": "recent_refi",
+                        "color": "#1A3E68"
+                      },
+                      {
+                        "value": "recent_sale",
+                        "color": "#D0F0FF"
+                      }
+                    ]
+                  }
+                },
+                "label": {
+                  "show": false
+                }
               },
               "frame": {
-                "title": "Evidence Events per Day by Signal Type",
-                "description": "Daily volume of evidence events over the last 30 days - operational freshness check",
+                "title": "Evidence Events by Refresh Date",
+                "description": "Event volume by signal type across the last 30 days; spikes reflect daily source refresh cadence",
                 "showTitle": true,
                 "showDescription": true
               }
             }
           },
-          "position": { "x": 0, "y": 0, "width": 6, "height": 6 }
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 12,
+            "height": 6
+          }
         },
         {
           "widget": {
@@ -364,10 +980,22 @@
                 "query": {
                   "datasetName": "ds_evidence_by_signal",
                   "fields": [
-                    { "name": "signal_type", "expression": "`signal_type`" },
-                    { "name": "event_count", "expression": "`event_count`" },
-                    { "name": "mean_confidence", "expression": "`mean_confidence`" },
-                    { "name": "source_product", "expression": "`source_product`" }
+                    {
+                      "name": "signal_type",
+                      "expression": "`signal_type`"
+                    },
+                    {
+                      "name": "event_count",
+                      "expression": "`event_count`"
+                    },
+                    {
+                      "name": "mean_confidence",
+                      "expression": "`mean_confidence`"
+                    },
+                    {
+                      "name": "source_product",
+                      "expression": "`source_product`"
+                    }
                   ],
                   "disaggregated": true
                 }
@@ -377,21 +1005,135 @@
               "version": 3,
               "widgetType": "bar",
               "encodings": {
-                "x":     { "fieldName": "signal_type", "scale": { "type": "categorical", "sort": { "by": "event_count", "direction": "descending" } }, "displayName": "Signal Type" },
-                "y":     { "fieldName": "event_count", "scale": { "type": "quantitative" }, "displayName": "Evidence Events" },
-                "color": { "fieldName": "source_product", "scale": { "type": "categorical" }, "displayName": "Cotality Source" }
+                "x": {
+                  "fieldName": "event_count",
+                  "displayName": "Evidence Events",
+                  "format": {
+                    "type": "number-plain",
+                    "decimalPlaces": {
+                      "type": "exact",
+                      "places": 0
+                    },
+                    "abbreviation": "compact"
+                  },
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "y": {
+                  "fieldName": "signal_type",
+                  "displayName": "Signal Type",
+                  "scale": {
+                    "type": "categorical",
+                    "sort": {
+                      "by": "event_count",
+                      "direction": "descending"
+                    }
+                  }
+                },
+                "color": {
+                  "fieldName": "source_product",
+                  "displayName": "Cotality Source",
+                  "legend": {
+                    "position": "right"
+                  },
+                  "scale": {
+                    "type": "categorical",
+                    "mappings": [
+                      {
+                        "value": "AVM",
+                        "color": "#66C5FF"
+                      },
+                      {
+                        "value": "Market Rates",
+                        "color": "#F59E0B"
+                      },
+                      {
+                        "value": "Mortgage Domain",
+                        "color": "#34D399"
+                      },
+                      {
+                        "value": "Owner Link",
+                        "color": "#F472B6"
+                      },
+                      {
+                        "value": "Owner Transfer",
+                        "color": "#A78BFA"
+                      },
+                      {
+                        "value": "Property",
+                        "color": "#8CEEF2"
+                      },
+                      {
+                        "value": "Voluntary Lien",
+                        "color": "#5CE1E6"
+                      },
+                      {
+                        "value": "Voluntary Lien + Market Rates",
+                        "color": "#ECF6FF"
+                      }
+                    ]
+                  }
+                },
+                "label": {
+                  "show": true
+                }
               },
               "frame": {
                 "title": "Evidence Events by Signal Type",
-                "description": "Mix of Cotality signals backing the segmentation - rate_spread / equity / multi_property / competitor_lien / recent_refi / market_trend / foreclosure_stage. permit and listing are BLOCKED until those Cotality products are licensed.",
+                "description": "Signal mix backing segmentation; permit and listing stay absent until the licensed Cotality products land",
                 "showTitle": true,
                 "showDescription": true
               }
             }
           },
-          "position": { "x": 0, "y": 6, "width": 6, "height": 6 }
+          "position": {
+            "x": 0,
+            "y": 6,
+            "width": 12,
+            "height": 6
+          }
         }
       ]
     }
-  ]
+  ],
+  "uiSettings": {
+    "theme": {
+      "canvasBackgroundColor": {
+        "light": "#04101F",
+        "dark": "#04101F"
+      },
+      "widgetBackgroundColor": {
+        "light": "#071A2F",
+        "dark": "#071A2F"
+      },
+      "widgetBorderColor": {
+        "light": "#1A3E68",
+        "dark": "#1A3E68"
+      },
+      "fontColor": {
+        "light": "#ECF6FF",
+        "dark": "#ECF6FF"
+      },
+      "selectionColor": {
+        "light": "#5CE1E6",
+        "dark": "#5CE1E6"
+      },
+      "visualizationColors": [
+        "#5CE1E6",
+        "#66C5FF",
+        "#34D399",
+        "#F472B6",
+        "#F59E0B",
+        "#A78BFA",
+        "#8CEEF2",
+        "#94A3B8",
+        "#1A3E68",
+        "#ECF6FF"
+      ],
+      "widgetHeaderAlignment": "LEFT",
+      "fontFamily": "Geist, Geist Mono, Inter, Arial, sans-serif"
+    },
+    "applyModeEnabled": true
+  }
 }

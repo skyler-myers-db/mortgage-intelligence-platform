@@ -1,3 +1,5 @@
+> **Internal implementation artifact. Not approved for public release.**
+
 # Validation: perf-borrower-dossier
 
 Closes the `/api/borrowers/{id}` p95 gap called out in
@@ -40,7 +42,9 @@ Photon, same order as `lead_population` and `lockin_cohort`.
 
 ## How to verify
 
-1. `databricks bundle deploy -t dev` — provisions the DDL §10 table.
+1. `./scripts/deploy.sh -t dev` — provisions the DDL §10 table as part
+   of the full deploy flow. For resource-only recovery, the lower-level
+   `databricks bundle deploy -t dev` path also applies the table resource.
 2. `databricks bundle run mip_refresh_scores -t dev` — executes the new
    `ctas_borrower_dossier` task alongside the existing chain.
 3. `DATABRICKS_HOST=... DATABRICKS_TOKEN=... DATABRICKS_WAREHOUSE_ID=... \

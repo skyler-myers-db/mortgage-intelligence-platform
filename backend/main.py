@@ -1,4 +1,7 @@
+"""FastAPI application assembly, middleware, routers, and exception handlers."""
+
 import logging
+import os
 import re
 import time
 from collections.abc import AsyncIterator
@@ -7,18 +10,26 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse
+from fastapi.routing import APIRoute
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.gzip import GZipMiddleware
 from starlette.requests import Request as StarletteRequest
 from starlette.responses import Response as StarletteResponse
 from starlette.types import ASGIApp
 
 from backend.api import (
     admin,
+    analytics,
+    assets,
     audit,
     borrowers,
+    campaigns,
     config,
+    data_estate,
     genie,
     geo,
     health,
@@ -26,24 +37,45 @@ from backend.api import (
     offers,
     outreach,
     portfolio,
+    sales,
     segments,
+    telemetry,
+    workspace,
 )
-from backend.config.settings import _running_under_pytest, settings
+from backend.config.settings import (
+    _running_under_pytest,
+    check_trust_boundary_at_startup,
+    settings,
+)
+from backend.services.backpressure import BackpressureController, BackpressureMiddleware
 from backend.services.observability import (
     configure_logging,
     emit,
     get_correlation_id,
     reset_correlation_id,
+    sanitize_correlation_id,
     set_correlation_id,
 )
+from backend.version import api_version
 
 log = logging.getLogger("mip-runtime")
+API_VERSION = "v1"
+CANONICAL_API_PREFIX = f"/api/{API_VERSION}"
+COMPAT_API_PREFIX = "/api"
 
 # Slice-13: install structured logging on import so every module that
 # logs during startup (warehouse warm, Lakebase warm) produces JSON
 # lines. configure_logging() is idempotent so a second call during tests
 # is a safe no-op.
 configure_logging()
+
+
+def _operation_id(route: APIRoute) -> str:
+    """Stable OpenAPI operation ids across versioned + compatibility routes."""
+
+    methods = "_".join(sorted((route.methods or set()) - {"HEAD", "OPTIONS"})).lower()
+    path = re.sub(r"[^0-9A-Za-z]+", "_", route.path_format).strip("_").lower()
+    return f"{methods}_{path}_{route.name}"
 
 
 def _warm_warehouse() -> None:
@@ -67,9 +99,23 @@ def _warm_warehouse() -> None:
         client = get_sql_client()
         client.execute_one("SELECT 1 AS warm")
         took_ms = int((time.monotonic() - start) * 1000)
-        log.info("warehouse warm (took %dms)", took_ms)
+        emit(
+            log,
+            "warehouse_warm_start_succeeded",
+            dependency="warehouse",
+            outcome="success",
+            duration_ms=took_ms,
+        )
     except Exception as exc:  # noqa: BLE001 -- log-and-continue is the contract
-        log.warning("warehouse warm-start failed (non-fatal): %s", exc)
+        emit(
+            log,
+            "warehouse_warm_start_failed",
+            level=logging.WARNING,
+            dependency="warehouse",
+            outcome="error",
+            exc_type=type(exc).__name__,
+            exc_msg=str(exc)[:500],
+        )
 
 
 def _warm_lakebase() -> None:
@@ -81,20 +127,47 @@ def _warm_lakebase() -> None:
     """
     from backend.services.lakebase import get_lakebase_client
 
-    # If Lakebase creds are absent, skip silently -- the audit router
-    # already surfaces 503 on its own when the creds are missing, and
-    # we don't want to duplicate that signal at startup.
-    if not settings.lakebase_host or not settings.lakebase_user:
-        log.info("lakebase warm-start skipped (no creds configured)")
+    # If Lakebase connection hints are absent, skip silently -- the
+    # audit router already surfaces 503 on its own when the creds are
+    # missing, and we don't want to duplicate that signal at startup.
+    #
+    # Deployed Databricks Apps may provide PGHOST / PGUSER plus a
+    # workspace-token password provider instead of LAKEBASE_* vars, so
+    # the warm-start gate must mirror the Lakebase client resolver's
+    # supported connection hints rather than only settings fields.
+    host_hint = settings.lakebase_host or os.environ.get("PGHOST")
+    user_hint = settings.lakebase_user or os.environ.get("PGUSER")
+    if not host_hint or not user_hint:
+        emit(
+            log,
+            "lakebase_warm_start_skipped",
+            dependency="lakebase",
+            outcome="skipped",
+            reason="missing_connection_hints",
+        )
         return
     start = time.monotonic()
     try:
         client = get_lakebase_client()
         client.fetchone("SELECT 1 AS warm")
         took_ms = int((time.monotonic() - start) * 1000)
-        log.info("lakebase warm (took %dms)", took_ms)
+        emit(
+            log,
+            "lakebase_warm_start_succeeded",
+            dependency="lakebase",
+            outcome="success",
+            duration_ms=took_ms,
+        )
     except Exception as exc:  # noqa: BLE001 -- log-and-continue is the contract
-        log.warning("lakebase warm-start failed (non-fatal): %s", exc)
+        emit(
+            log,
+            "lakebase_warm_start_failed",
+            level=logging.WARNING,
+            dependency="lakebase",
+            outcome="error",
+            exc_type=type(exc).__name__,
+            exc_msg=str(exc)[:500],
+        )
 
 
 @asynccontextmanager
@@ -120,12 +193,26 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
         # vars is missing. The exception propagates through FastAPI
         # lifespan and terminates the uvicorn process.
         settings.require_databricks_creds()
+        # R6-10 trust boundary guard: emit WARNING when the default
+        # `trust_forwarded_headers=True` is active but the runtime
+        # doesn't look like a Databricks Apps deploy (so no upstream
+        # header-stripping edge). Non-fatal; operators read the
+        # structured log line and decide whether to flip the flag.
+        check_trust_boundary_at_startup()
         _warm_warehouse()
         _warm_lakebase()
     yield
 
 
-app = FastAPI(title="Mortgage Intelligence Platform API", lifespan=_lifespan)
+app = FastAPI(
+    title="Mortgage Intelligence Platform API",
+    version=api_version(),
+    lifespan=_lifespan,
+    docs_url="/docs" if settings.mip_expose_openapi else None,
+    redoc_url="/redoc" if settings.mip_expose_openapi else None,
+    openapi_url="/openapi.json" if settings.mip_expose_openapi else None,
+    generate_unique_id_function=_operation_id,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -167,30 +254,28 @@ class CorrelationIdMiddleware(BaseHTTPMiddleware):
     #   * charset: [A-Za-z0-9._-] only (matches RFC 4122 UUIDs + common
     #     trace ids without admitting control characters / whitespace)
     #   * length: 1..128 so a burst of huge headers can't bloat log lines
+    #   * value must not be shaped like PII; correlation ids are persisted
+    #     into the audit ledger, response bodies, and logs, so a caller trying
+    #     to use an SSN/phone/email/borrower id as a trace id gets a fresh id.
     #   * anything that fails either check is dropped silently and we
     #     mint a fresh correlation id, keeping the middleware invariant
     #     that every request has exactly one id.
-    _CID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
-
     # Fallback path normaliser for unrouted paths. Matches the two
-    # borrower-id shapes the product currently emits -- B-##### synthetic
+    # borrower-id shapes the product currently emits -- masked borrower
     # IDs and Cotality CLIP strings (numeric, >= 6 digits per the
     # Cotality data contract). Conservative on purpose: we would rather
     # under-normalise an unknown path than over-normalise a real UC
     # object name that happens to match a loose pattern.
-    _ID_SEGMENT_PATTERN = re.compile(r"/(?:B-\d{3,}|CL-[A-Za-z0-9]+|\d{6,})(?=/|$)")
+    _ID_SEGMENT_PATTERN = re.compile(
+        r"/(?:B-[A-Za-z0-9][A-Za-z0-9_-]{0,126}|CL-[A-Za-z0-9]+|\d{6,})(?=/|$)"
+    )
 
     def __init__(self, app: ASGIApp) -> None:
         super().__init__(app)
 
     @classmethod
     def _sanitize_correlation_id(cls, raw: str | None) -> str | None:
-        if raw is None:
-            return None
-        trimmed = raw.strip()
-        if cls._CID_PATTERN.match(trimmed):
-            return trimmed
-        return None
+        return sanitize_correlation_id(raw)
 
     @classmethod
     def _templated_path(cls, request: StarletteRequest) -> str:
@@ -237,7 +322,61 @@ class CorrelationIdMiddleware(BaseHTTPMiddleware):
             reset_correlation_id(token)
 
 
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Attach browser security headers to every app response.
+
+    The Databricks Apps edge owns authentication and may add its own
+    platform headers after this middleware runs. These headers cover the
+    application-controlled browser posture: no content sniffing, no
+    framing, conservative referrer behavior, no ambient device APIs, and
+    a CSP tuned for the static Vite SPA served from this same origin.
+    """
+
+    _CSP = (
+        "default-src 'self'; "
+        "base-uri 'self'; "
+        "object-src 'none'; "
+        "frame-ancestors 'none'; "
+        "script-src 'self'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data: blob:; "
+        "font-src 'self' data:; "
+        "connect-src 'self'; "
+        "form-action 'self'"
+    )
+
+    async def dispatch(  # type: ignore[override]
+        self, request: StarletteRequest, call_next: Any
+    ) -> StarletteResponse:
+        response = await call_next(request)
+        response.headers.setdefault(
+            "Strict-Transport-Security",
+            "max-age=31536000; includeSubDomains",
+        )
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+        response.headers.setdefault(
+            "Permissions-Policy",
+            "geolocation=(), camera=(), microphone=()",
+        )
+        response.headers.setdefault("Content-Security-Policy", self._CSP)
+        if request.url.path.startswith("/api/"):
+            response.headers.setdefault("X-API-Version", API_VERSION)
+        if request.url.path.startswith("/assets/"):
+            response.headers.setdefault(
+                "Cache-Control",
+                "public, max-age=31536000, immutable",
+            )
+        return response
+
+
+_backpressure_controller = BackpressureController()
+
+app.add_middleware(BackpressureMiddleware, controller=_backpressure_controller)
 app.add_middleware(CorrelationIdMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 
 # Slice-6: translate ``DependencyDownError`` (breaker open or all retries
@@ -281,6 +420,7 @@ async def _dependency_down_handler(_request: Request, exc: DependencyDownError) 
         level=logging.WARNING,
         dependency=exc.dependency,
         reason=exc.reason,
+        kind=exc.kind,
         # ``last_error_str`` is the full upstream message; kept in the
         # structured log line so ops can still pull state=/statement_id=/
         # err_msg from Splunk/Datadog/etc. without the browser seeing it.
@@ -294,25 +434,86 @@ async def _dependency_down_handler(_request: Request, exc: DependencyDownError) 
             "detail": safe_dependency_detail(exc.dependency),
             "retryable": True,
             "dependency": exc.dependency,
+            # R6-05: additive machine-readable classification. Values are
+            # ``"warming_up"`` (cold-start, fast retry OK), ``"breaker_open"``
+            # (breaker already tripped -- back off to cooldown window before
+            # retrying), ``"retries_exhausted"`` (retry budget blown, harder
+            # failure). The legacy ``retryable: true`` stays for
+            # backward compatibility; the frontend (parallel cycle) can key
+            # off ``reason`` for a smarter backoff curve.
+            "reason": exc.kind,
             "correlation_id": get_correlation_id(),
         },
     )
 
-for router in [
+
+@app.exception_handler(RequestValidationError)
+async def _request_validation_handler(
+    _request: Request,
+    exc: RequestValidationError,
+) -> JSONResponse:
+    """Mirror FastAPI's 422 shape while adding the request correlation id.
+
+    Operators usually receive pasted JSON bodies in incident threads, not
+    response headers. Keeping ``detail`` unchanged preserves existing client
+    parsing, and the top-level ``correlation_id`` gives support a direct log
+    join key for malformed request probes.
+    """
+
+    return JSONResponse(
+        status_code=422,
+        content={
+            "detail": jsonable_encoder(exc.errors()),
+            "correlation_id": get_correlation_id(),
+        },
+    )
+
+
+API_ROUTERS = [
     health.router,
     config.router,
+    data_estate.router,
     admin.router,
+    assets.router,
+    analytics.router,
     portfolio.router,
+    campaigns.router,
     segments.router,
     leads.router,
     borrowers.router,
     offers.router,
     outreach.router,
+    sales.router,
     geo.router,
     genie.router,
     audit.router,
-]:
-    app.include_router(router)
+    telemetry.router,
+    workspace.router,
+]
+
+for router in API_ROUTERS:
+    app.include_router(router, prefix=CANONICAL_API_PREFIX)
+
+for router in API_ROUTERS:
+    app.include_router(router, prefix=COMPAT_API_PREFIX, deprecated=True)
+
+
+if not settings.mip_expose_openapi:
+    # Keep FastAPI's schema/documentation routes from falling through to the
+    # SPA catch-all. Returning the same compact 404 shape as unmatched /api/*
+    # paths avoids leaking whether the generated docs are merely hidden or
+    # absent from this deployment.
+    @app.get("/openapi.json", response_model=None, include_in_schema=False)
+    def _openapi_disabled() -> JSONResponse:
+        return JSONResponse(status_code=404, content={"detail": "not found"})
+
+    @app.get("/docs", response_model=None, include_in_schema=False)
+    def _docs_disabled() -> JSONResponse:
+        return JSONResponse(status_code=404, content={"detail": "not found"})
+
+    @app.get("/redoc", response_model=None, include_in_schema=False)
+    def _redoc_disabled() -> JSONResponse:
+        return JSONResponse(status_code=404, content={"detail": "not found"})
 
 
 # R5-15 (continued): a dedicated /api/* 404 handler that always runs,
@@ -322,7 +523,7 @@ for router in [
 # clients parse (they expect {"detail":"not found"}). Registering this
 # route unconditionally keeps the contract stable across local dev,
 # CI, and Databricks Apps deploys.
-@app.get("/api/{full_path:path}", response_model=None)
+@app.get("/api/{full_path:path}", response_model=None, include_in_schema=False)
 def _api_404(full_path: str) -> JSONResponse:  # noqa: ARG001
     return JSONResponse(status_code=404, content={"detail": "not found"})
 
@@ -367,6 +568,24 @@ if _FRONTEND_DIST.is_dir() and (_FRONTEND_DIST / "index.html").is_file():
             # Path-traversal guard: candidate must stay inside dist/.
             candidate.relative_to(_FRONTEND_DIST.resolve())
         except ValueError:
+            # R6-14: a candidate outside dist/ means a traversal attempt
+            # (``../../etc/passwd``-style). Serving index.html is still
+            # the correct SPA behaviour -- React Router will resolve the
+            # client route, or show its own 404 for a bogus path -- but
+            # we MUST surface the probe to ops. Without this log line an
+            # attacker's recon of the static surface is completely silent
+            # in the structured log trail. We log the attempted path at
+            # WARNING + emit ``event=spa_path_traversal_blocked`` with
+            # the original raw path so SOC/SIEM dashboards can pattern-
+            # match. The path is capped at 256 chars to bound log line
+            # size; longer probe strings are truncated with an ellipsis.
+            attempted = full_path if len(full_path) <= 256 else full_path[:256] + "..."
+            emit(
+                log,
+                "spa_path_traversal_blocked",
+                level=logging.WARNING,
+                path=attempted,
+            )
             candidate = _FRONTEND_DIST / "index.html"
         if candidate.is_file() and candidate.name != "index.html":
             return FileResponse(candidate)

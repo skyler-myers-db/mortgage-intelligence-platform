@@ -49,14 +49,29 @@ jobs:
           pip install -r requirements.txt
       - name: ruff
         run: ruff check backend tests tools jobs pipelines
-      - name: pytest
+      - name: pytest (parallel + coverage gate)
         # Unit + integration under the default pytest config; integration
         # tests that require workspace creds skip themselves when env is
-        # absent. Set MIP_MOCK_MODE=true so the repository-seam unit tests
-        # pick the in-process mock implementations explicitly.
-        env:
-          MIP_MOCK_MODE: 'true'
-        run: pytest -q
+        # absent. Repository-seam tests install their in-process fixtures
+        # explicitly through pytest fixtures; there is no runtime mock-mode
+        # switch in production code. The coverage floor is set to the
+        # current measured suite baseline and should only move upward.
+        run: |
+          pytest -q -n auto --dist=loadscope \
+            --cov=backend \
+            --cov-report=term-missing:skip-covered \
+            --cov-report=xml:coverage.xml \
+            --cov-report=html:coverage/html \
+            --cov-fail-under=83
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-coverage
+          path: |
+            coverage.xml
+            coverage/html
+          if-no-files-found: ignore
 
   frontend-tests:
     name: frontend (lint + test + build)
@@ -81,6 +96,7 @@ jobs:
       - run: npm --prefix frontend run lint
       - run: npm --prefix frontend run test
       - run: npm --prefix frontend run build
+      - run: npm --prefix frontend run budget
 
   bundle-syntax-check:
     # `databricks bundle validate` unavoidably performs a
@@ -142,6 +158,40 @@ jobs:
         # directly at the file + count.
         run: python tools/talk_track_wc.py
 
+  release-hygiene:
+    name: release source hygiene
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Build source zip
+        run: make zip
+      - name: Inspect source zip
+        run: python tools/release_hygiene.py dist/mortgage-intelligence-platform.zip
+      - name: gitleaks --no-git on source artifact
+        run: |
+          set -euo pipefail
+          if ! command -v gitleaks >/dev/null 2>&1; then
+            curl -sSfL https://raw.githubusercontent.com/gitleaks/gitleaks/master/scripts/install.sh | sh -s -- -b "$HOME/.local/bin"
+            echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+            export PATH="$HOME/.local/bin:$PATH"
+          fi
+          if command -v gitleaks >/dev/null 2>&1; then
+            rm -rf dist/source-hygiene
+            mkdir -p dist/source-hygiene
+            unzip -q dist/mortgage-intelligence-platform.zip -d dist/source-hygiene
+            root="$PWD"
+            cd dist/source-hygiene/mortgage-intelligence-platform
+            gitleaks detect --no-git --source . --config "$root/.gitleaks.toml" --redact --verbose
+          else
+            echo "::warning::gitleaks is unavailable; release_hygiene.py already validated banned artifact paths"
+          fi
+
   playwright-spec-parse:
     # Post-cutover the backend refuses to boot without live Databricks
     # credentials (see backend/runtime.py::_preflight_credentials), which
@@ -182,7 +232,9 @@ jobs:
     #      `.gitleaks.toml` at repo root.
     #   2. bandit    -- Python SAST across backend/tools/jobs/pipelines
     #      at medium+ severity. `.bandit` silences test-only noise.
-    #   3. npm audit -- frontend dependency CVE scan at high+ severity.
+    #   3. pip-audit -- Python dependency CVE scan from requirements.txt.
+    #   4. npm audit -- frontend dependency CVE scan at high+ severity,
+    #      including dev/build tooling because it runs in CI and build hosts.
     # Each step has a single responsibility and runs independently so
     # CI output points directly at the failing rail.
     name: security (gitleaks + bandit + npm audit)
@@ -214,10 +266,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install bandit
+      - name: Install Python security tools
         run: |
           python -m pip install --upgrade pip
-          pip install 'bandit[toml]==1.7.9'
+          pip install 'bandit[toml]==1.7.9' 'pip-audit==2.9.0'
 
       - name: bandit (Python SAST)
         # Two-step: a wide-net informational run (medium+ severity,
@@ -230,10 +282,13 @@ jobs:
           bandit -c .bandit -r backend tools jobs pipelines -x tests -ll -ii -f txt || true
           bandit -c .bandit -r backend tools jobs pipelines -x tests --severity-level high --confidence-level high -q
 
-      - name: npm audit (frontend deps)
+      - name: pip-audit (Python deps)
+        run: pip-audit -r requirements.txt --strict
+
+      - name: npm audit (frontend prod + dev deps)
         # `--audit-level=high` means only high/critical CVEs fail the
-        # job; moderate/low findings print but don't block. npm audit
-        # is notoriously noisy on transitive dev deps; tighten later
-        # once baseline is clean.
-        run: npm --prefix frontend audit --audit-level=high --omit=dev
+        # job; moderate/low findings print but don't block. We include
+        # devDependencies because Vite, Vitest, Playwright, and build
+        # plugins execute in CI / bundle-production contexts.
+        run: npm --prefix frontend audit --audit-level=high
         continue-on-error: false

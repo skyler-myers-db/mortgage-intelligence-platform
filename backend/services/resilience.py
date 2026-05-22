@@ -32,9 +32,10 @@ import logging
 import random
 import threading
 import time
+from collections import OrderedDict
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from threading import Lock
+from threading import Event, Lock
 from typing import Any, Generic, TypeVar
 
 from backend.services.observability import (
@@ -56,8 +57,22 @@ class DependencyDownError(RuntimeError):
 
     ``dependency`` is the short name the UI shows ("warehouse",
     "lakebase"); ``reason`` is the operator-facing string (underlying
-    exception or "breaker open").
+    exception or "breaker open"); ``kind`` is the machine-readable
+    classification the frontend keys on to pick a retry cadence.
+
+    R6-05: ``kind`` distinguishes "warming_up" (first-request cold-start
+    against a suspended warehouse, fast retry OK) from "breaker_open"
+    (breaker already tripped by prior flap, give it the cooldown window
+    before retrying) from "retries_exhausted" (retry budget blown by a
+    harder outage). The legacy ``retryable: true`` field stays on the
+    wire so existing UI code keeps working; the additive ``kind`` lets
+    the frontend (in a parallel cycle) pick a smarter backoff.
     """
+
+    KIND_WARMING_UP = "warming_up"
+    KIND_BREAKER_OPEN = "breaker_open"
+    KIND_RETRIES_EXHAUSTED = "retries_exhausted"
+    _ALLOWED_KINDS = frozenset({KIND_WARMING_UP, KIND_BREAKER_OPEN, KIND_RETRIES_EXHAUSTED})
 
     def __init__(
         self,
@@ -65,11 +80,15 @@ class DependencyDownError(RuntimeError):
         *,
         reason: str,
         last_error: BaseException | None = None,
+        kind: str = KIND_WARMING_UP,
     ) -> None:
         super().__init__(f"{dependency} dependency is down: {reason}")
         self.dependency = dependency
         self.reason = reason
         self.last_error = last_error
+        # Defensively clamp to the allowed set so a typo in a future
+        # call site can't ship a freeform string to the frontend.
+        self.kind = kind if kind in self._ALLOWED_KINDS else self.KIND_WARMING_UP
 
 
 # ---------------------------------------------------------------------------
@@ -184,7 +203,6 @@ class CircuitBreaker:
     def record_success(self) -> None:
         with self._lock:
             if self._state == self.HALF_OPEN:
-                log.info("circuit_breaker[%s]: HALF_OPEN -> CLOSED on success", self._name)
                 emit(
                     log,
                     "circuit_breaker_state_change",
@@ -212,12 +230,6 @@ class CircuitBreaker:
         with self._lock:
             if self._state == self.HALF_OPEN:
                 # One failed probe re-opens and restarts the cool-down.
-                log.warning(
-                    "circuit_breaker[%s]: HALF_OPEN probe failed, "
-                    "re-opening for %.1fs",
-                    self._name,
-                    self._cooldown_s,
-                )
                 emit(
                     log,
                     "circuit_breaker_state_change",
@@ -244,11 +256,6 @@ class CircuitBreaker:
             # CLOSED
             self._failure_count += 1
             if self._failure_count >= self._failure_threshold:
-                log.warning(
-                    "circuit_breaker[%s]: CLOSED -> OPEN after %d failures",
-                    self._name,
-                    self._failure_count,
-                )
                 emit(
                     log,
                     "circuit_breaker_state_change",
@@ -292,6 +299,55 @@ class CircuitBreaker:
             self._opened_at = self._now()
             self._probes_in_flight = 0
 
+    def force_close_if_config_changed(self, predicate: Callable[[], bool]) -> bool:
+        """Force CLOSED when ``predicate()`` returns True.
+
+        R6-18 escape hatch. ``force_open_for_placeholder_config`` jams the
+        breaker OPEN at boot when a placeholder config value (e.g.
+        ``GENIE_SPACE_ID=00000000PLACEHOLDER``) would guaranteed-fail. The
+        cooldown is irrelevant: every half-open probe will still fail on
+        the same placeholder, so the breaker flip-flops until the process
+        restarts.
+
+        But Databricks Apps supports env-var rotation WITHOUT a restart.
+        When the operator fixes the config at runtime, the breaker has no
+        way to notice unless we probe it. This method lets the Genie
+        client (or any other caller) evaluate a cheap predicate before
+        ``allow()`` and, if the predicate now returns True, close the
+        breaker and let the next real probe through.
+
+        ``predicate`` should be a pure read of the current config (e.g.
+        ``lambda: not is_placeholder_space_id(settings.genie_space_id)``).
+        Returns True when the breaker was actually closed -- callers can
+        use that to emit a structured recovery log.
+        """
+        if not predicate():
+            return False
+        with self._lock:
+            if self._state == self.CLOSED:
+                return False
+            emit(
+                log,
+                "circuit_breaker_state_change",
+                dependency=self._name,
+                from_state=self._state,
+                to_state=self.CLOSED,
+                name=self._name,
+                failure_count=self._failure_count,
+                cooldown_s=self._cooldown_s,
+                reason="config_changed",
+            )
+            record_breaker_state_change(
+                name=self._name,
+                from_state=self._state,
+                to_state=self.CLOSED,
+            )
+            self._state = self.CLOSED
+            self._failure_count = 0
+            self._opened_at = None
+            self._probes_in_flight = 0
+            return True
+
 
 # ---------------------------------------------------------------------------
 # Retry with exponential backoff + decorrelated jitter.
@@ -322,6 +378,14 @@ def with_retry(
     Raises the *last* exception when all attempts are exhausted. A
     ``retry_on`` miss (e.g. ``DependencyDownError``) short-circuits to
     the original exception immediately.
+
+    R6-15: ``DependencyDownError`` is ALWAYS excluded from retry,
+    regardless of ``retry_on``. It's the canonical "a nested Resilient
+    already did its retries, stop" signal -- retrying it in an outer
+    call would compound 3x3=9 real attempts per user request against a
+    dependency that already gave up. Explicit subclass check (not just
+    tuple membership) so callers that pass a broader ``retry_on`` like
+    ``(Exception,)`` still benefit.
     """
     if attempts < 1:
         raise ValueError("attempts must be >= 1")
@@ -329,6 +393,11 @@ def with_retry(
     for attempt in range(attempts):
         try:
             return fn()
+        except DependencyDownError:
+            # R6-15: never retry a DependencyDownError -- it means a
+            # nested Resilient has already exhausted its own retry
+            # budget (or the breaker is OPEN). Propagate immediately.
+            raise
         except BaseException as exc:  # noqa: BLE001 -- re-raised below
             if not isinstance(exc, retry_on):
                 raise
@@ -350,31 +419,50 @@ def with_retry(
 
 
 class TTLCache:
-    """Simple per-key TTL cache. No size bound -- the app's read-mostly
-    traffic shape keeps key cardinality small.
+    """Bounded per-key TTL cache with optional single-flight refresh.
 
-    Each entry stores (value, expiry_monotonic). A missed or expired
-    lookup returns None; the caller must then compute + ``set`` the
-    fresh value. We log at DEBUG on expiry so cache behaviour is
-    inspectable in operator logs.
+    The cache is intentionally process-local. Databricks Apps runs this
+    Module 0 deployment as a single app instance, so a local cache avoids
+    warehouse stampedes without introducing another dependency. If a
+    customer scales the app horizontally, each replica will keep its own
+    cache and the load-test baseline must be re-captured under that shape.
+
+    Legacy callers can keep using ``get`` + ``set``. New hot aggregate
+    paths should prefer ``get_or_set`` so a burst of callers for the
+    same expired key runs the expensive factory once, while followers
+    wait for that result instead of stampeding the warehouse.
+
+    Expired entries are retained until eviction so ``stale_if_error``
+    can serve the last-good aggregate when a read-only refresh fails.
+    Mutable workflow endpoints should not use that option.
     """
 
-    def __init__(self, now: Callable[[], float] = time.monotonic) -> None:
-        self._entries: dict[str, tuple[Any, float]] = {}
+    def __init__(
+        self,
+        now: Callable[[], float] = time.monotonic,
+        *,
+        max_entries: int = 256,
+    ) -> None:
+        if max_entries < 1:
+            raise ValueError("max_entries must be >= 1")
+        self._entries: OrderedDict[str, tuple[Any, float]] = OrderedDict()
+        self._inflight: dict[str, Event] = {}
         self._lock = Lock()
         self._now = now
+        self._max_entries = max_entries
 
     def get(self, key: str) -> Any | None:
         with self._lock:
             entry = self._entries.get(key)
             if entry is None:
+                self._emit_cache_event("ttl_cache_miss", key, reason="empty")
                 return None
             value, expires_at = entry
+            self._entries.move_to_end(key)
             if self._now() >= expires_at:
-                # Drop expired entry so repeat misses don't grow the map.
-                del self._entries[key]
-                log.debug("ttl_cache miss (expired): %s", key)
+                self._emit_cache_event("ttl_cache_miss", key, reason="expired")
                 return None
+            self._emit_cache_event("ttl_cache_hit", key)
             return value
 
     def set(self, key: str, value: Any, ttl_s: float) -> None:
@@ -384,14 +472,101 @@ class TTLCache:
             return
         with self._lock:
             self._entries[key] = (value, self._now() + ttl_s)
+            self._entries.move_to_end(key)
+            self._evict_locked()
+
+    def get_or_set(
+        self,
+        key: str,
+        factory: Callable[[], Any],
+        *,
+        ttl_s: float,
+        stale_if_error: bool = False,
+        wait_timeout_s: float = 30.0,
+    ) -> Any:
+        cached = self.get(key)
+        if cached is not None:
+            return cached
+
+        leader = False
+        with self._lock:
+            entry = self._entries.get(key)
+            if entry is not None:
+                value, expires_at = entry
+                self._entries.move_to_end(key)
+                if self._now() < expires_at:
+                    self._emit_cache_event("ttl_cache_hit", key, reason="double_check")
+                    return value
+            event = self._inflight.get(key)
+            if event is None:
+                event = Event()
+                self._inflight[key] = event
+                leader = True
+
+        if not leader:
+            self._emit_cache_event("ttl_cache_wait", key)
+            if event.wait(timeout=wait_timeout_s):
+                cached = self.get(key)
+                if cached is not None:
+                    return cached
+                if stale_if_error:
+                    stale = self.get_stale(key)
+                    if stale is not None:
+                        self._emit_cache_event("ttl_cache_stale_hit", key, reason="leader_failed")
+                        return stale
+            # The leader timed out or failed without a stale value.
+            # Compute rather than returning a false empty state.
+            self._emit_cache_event("ttl_cache_miss", key, reason="singleflight_fallback")
+
+        try:
+            value = factory()
+        except Exception:
+            if stale_if_error:
+                stale = self.get_stale(key)
+                if stale is not None:
+                    self._emit_cache_event("ttl_cache_stale_hit", key, reason="factory_error")
+                    return stale
+            raise
+        else:
+            self.set(key, value, ttl_s)
+            return value
+        finally:
+            if leader:
+                with self._lock:
+                    finished = self._inflight.pop(key, None)
+                    if finished is not None:
+                        finished.set()
+
+    def get_stale(self, key: str) -> Any | None:
+        with self._lock:
+            entry = self._entries.get(key)
+            if entry is None:
+                return None
+            self._entries.move_to_end(key)
+            return entry[0]
 
     def invalidate(self, key: str) -> None:
         with self._lock:
             self._entries.pop(key, None)
+            event = self._inflight.pop(key, None)
+            if event is not None:
+                event.set()
 
     def clear(self) -> None:
         with self._lock:
             self._entries.clear()
+            for event in self._inflight.values():
+                event.set()
+            self._inflight.clear()
+
+    def _evict_locked(self) -> None:
+        while len(self._entries) > self._max_entries:
+            evicted_key, _ = self._entries.popitem(last=False)
+            self._emit_cache_event("ttl_cache_eviction", evicted_key, reason="max_entries")
+
+    @staticmethod
+    def _emit_cache_event(event: str, key: str, **extra: Any) -> None:
+        emit(log, event, level=logging.DEBUG, cache_key=key, **extra)
 
 
 # ---------------------------------------------------------------------------
@@ -412,7 +587,7 @@ _SWR_EXECUTOR_LOCK = Lock()
 
 # Per-probe ceiling: the SWR background worker wraps each probe in a
 # ``Thread.join(timeout=_SWR_PROBE_TIMEOUT_S)``. Matches
-# ``backend/api/health.py::_PROBE_TIMEOUT_S`` so the async refresh path has
+# ``backend/services/health_probes.py::_PROBE_TIMEOUT_S`` so the async refresh path has
 # the same latency ceiling as the sync-miss path. A probe that exceeds this
 # is a TCP black hole: we clear the in-flight flag so the slot frees up,
 # log ``event=swr_probe_timeout``, and let the orphaned daemon thread die
@@ -715,9 +890,14 @@ class Resilient(Generic[T]):
 
     def call(self, fn: Callable[[], T]) -> T:
         if not self._breaker.allow():
+            # R6-05: the breaker is already OPEN (or HALF_OPEN with no
+            # probe slot). Tag ``kind=breaker_open`` so the frontend can
+            # back off longer than the warming-up default; hammering a
+            # known-open breaker just burns the client retry budget.
             raise DependencyDownError(
                 self._name,
                 reason="circuit breaker is open",
+                kind=DependencyDownError.KIND_BREAKER_OPEN,
             )
         # Slice-13: wrap every dependency call in a structured span so
         # operators can correlate a request with every downstream SQL /
@@ -737,10 +917,16 @@ class Resilient(Generic[T]):
             self._breaker.record_failure()
             if isinstance(exc, DependencyDownError):
                 raise
+            # R6-05: the call went through the breaker but the
+            # retry budget is exhausted -- tag as retries_exhausted so
+            # the frontend knows a plain retry likely won't help and
+            # the UI can show an operator-oriented message instead of
+            # the "warming up" copy.
             raise DependencyDownError(
                 self._name,
                 reason=f"{type(exc).__name__}: {exc}",
                 last_error=exc,
+                kind=DependencyDownError.KIND_RETRIES_EXHAUSTED,
             ) from exc
         self._breaker.record_success()
         return result

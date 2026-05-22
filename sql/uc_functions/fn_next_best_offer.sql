@@ -15,8 +15,9 @@
 --              "Listed for Sale = purchase mortgage opportunity."
 --              "Investor/Multi-Property = Owner Link shows multiple properties
 --               and transaction history."
---              "Retention/Recapture = current/former customers or competitor
---               refinance/lien activity."
+--              "Retention/Recapture = current customer retention now;
+--               former-customer recapture requires an upstream relationship
+--               signal to be encoded before this frozen UDF is called."
 --              "In the Money = economic incentive to transact, usually rate
 --               spread and equity/LTV based."
 --            This function is the single source of truth for turning those
@@ -31,7 +32,7 @@
 --              'refi'            — Refinance
 --              'cash_out'        — Cash-out Refi
 --              'investor'        — Investor Product
---              'retention'       — Retention (current customer, soft signal)
+--              'retention'       — Retention (customer relationship signal)
 --              'nurture'         — Nurture / no-action
 --
 -- Priority: First match wins. The ordering is deliberate and encodes the
@@ -76,9 +77,12 @@
 --   7. is_current_customer AND (rate_spread_bps >= retention_min
 --                               OR is_competitor_lien)
 --        Retention. Lower rate bar (retention_min < min_spread) so we can
---        reach out earlier on existing relationships, and a competitor lien
---        on the Owner Link is a direct recapture trigger even without a
---        rate spread.
+--        reach out earlier on existing relationships. The UDF also allows
+--        an upstream recapture model to pass both is_current_customer=TRUE
+--        and is_competitor_lien=TRUE; the current borrower_360 refresh path
+--        derives both from the same current-servicer string, so those flags
+--        are mutually exclusive there and the branch behaves as
+--        current-customer rate-drift retention.
 --
 --   8. else
 --        Nurture. No-action lane; keep in the funnel, do not surface to
@@ -97,21 +101,20 @@
 --            `heloc_equity_min_pct > min_equity_pct` is intentional: HELOC
 --            underwriting demands more equity cushion than plain refi.
 --
--- NULLs:     Per the task contract, numeric NULLs coerce to 0 and boolean
---            NULLs coerce to FALSE. A completely-NULL row therefore lands in
---            'nurture', which is the safe lane — "no signal == no action."
---            This is stricter than fn_in_the_money (which returns FALSE on
---            any NULL) because an all-NULL row still produces a valid offer
---            label, keeping the `recommended_offer` column NOT NULL for
---            downstream grouping and counts.
+-- NULLs:     Borrower-signal numeric NULLs coerce to 0 and boolean NULLs
+--            coerce to FALSE. Threshold NULLs do NOT coerce to zero: a missing
+--            threshold is a configuration failure, and the function returns
+--            'nurture' before evaluating the tree. This keeps "no signal" and
+--            "missing rules" in the no-action lane instead of allowing
+--            0 >= 0 to qualify a borrower for a positive offer.
 --
 -- Sample borrowers (under default thresholds and the chosen inputs pinned
 -- in tests/fixtures/next_best_offer_golden.json):
---   B-48291 (Rodriguez): spread=88, equity=46, permit=F, listed=F, inv=F,
+--   fixture case A: spread=88, equity=46, permit=F, listed=F, inv=F,
 --                        cust=F, comp=F
 --                        -> branch 2 fires (88>=75 AND 46>=35)
 --                        -> 'refi_plus_heloc' = "Refinance + HELOC"  ✓
---   B-48294 (Park):      spread=188, equity=39, permit=T, listed=F, inv=F,
+--   fixture case B: spread=188, equity=39, permit=T, listed=F, inv=F,
 --                        cust=F, comp=F
 --                        -> branch 2 fires (188>=75 AND 39>=35)
 --                        -> 'refi_plus_heloc' = "Refinance + HELOC"
@@ -122,7 +125,7 @@
 --                        cross-sell is the correct product — a pure HELOC
 --                        leaves refi revenue on the table. The backend
 --                        engineer will update mock_data.py to match.
---   B-48295 (Thompson):  listed=T  -> branch 1 -> 'purchase' = "Purchase
+--   fixture case C: listed=T  -> branch 1 -> 'purchase' = "Purchase
 --                        Mortgage"  ✓
 --
 -- Determinism: Pure boolean/arithmetic CASE. No nondeterministic calls.
@@ -145,26 +148,32 @@ CREATE OR REPLACE FUNCTION mip.gold.fn_next_best_offer(
 )
 RETURNS STRING
 DETERMINISTIC
-COMMENT 'Module 0 canonical Next-Best-Offer primitive. Returns one of eight lowercase product codes via a priority-ordered decision tree over rate spread, equity, permit, listing, investor, customer, and competitor-lien signals. NULL numerics -> 0, NULL booleans -> FALSE; all-NULL rows land in ''nurture''. Thresholds passed explicitly; see tests/fixtures/next_best_offer_golden.json for parity fixtures and product_labels map.'
+COMMENT 'Module 0 canonical Next-Best-Offer primitive. Returns one of eight lowercase product codes via a priority-ordered decision tree over rate spread, equity, permit, listing, investor, customer, and competitor-lien signals. Signal NULL numerics -> 0, signal NULL booleans -> FALSE; threshold NULLs return nurture. Thresholds passed explicitly; see tests/fixtures/next_best_offer_golden.json for parity fixtures and product_labels map.'
 RETURN
   CASE
+    WHEN min_spread_bps       IS NULL
+      OR min_equity_pct       IS NULL
+      OR heloc_equity_min_pct IS NULL
+      OR cashout_equity_min   IS NULL
+      OR retention_min_spread IS NULL
+      THEN 'nurture'
     WHEN COALESCE(listed_for_sale, FALSE)
       THEN 'purchase'
-    WHEN COALESCE(rate_spread_bps, 0) >= COALESCE(min_spread_bps,       0)
-     AND COALESCE(equity_pct,      0) >= COALESCE(heloc_equity_min_pct, 0)
+    WHEN COALESCE(rate_spread_bps, 0) >= min_spread_bps
+     AND COALESCE(equity_pct,      0) >= heloc_equity_min_pct
       THEN 'refi_plus_heloc'
     WHEN COALESCE(has_permit, FALSE)
-     AND COALESCE(equity_pct, 0) >= COALESCE(heloc_equity_min_pct, 0)
+     AND COALESCE(equity_pct, 0) >= heloc_equity_min_pct
       THEN 'heloc'
-    WHEN COALESCE(rate_spread_bps, 0) >= COALESCE(min_spread_bps, 0)
-     AND COALESCE(equity_pct,      0) >= COALESCE(min_equity_pct, 0)
+    WHEN COALESCE(rate_spread_bps, 0) >= min_spread_bps
+     AND COALESCE(equity_pct,      0) >= min_equity_pct
       THEN 'refi'
-    WHEN COALESCE(equity_pct, 0) >= COALESCE(cashout_equity_min, 0)
+    WHEN COALESCE(equity_pct, 0) >= cashout_equity_min
       THEN 'cash_out'
     WHEN COALESCE(is_investor, FALSE)
       THEN 'investor'
     WHEN COALESCE(is_current_customer, FALSE)
-     AND ( COALESCE(rate_spread_bps, 0) >= COALESCE(retention_min_spread, 0)
+     AND ( COALESCE(rate_spread_bps, 0) >= retention_min_spread
         OR COALESCE(is_competitor_lien, FALSE) )
       THEN 'retention'
     ELSE 'nurture'

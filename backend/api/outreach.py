@@ -12,12 +12,17 @@ Slice 5 landmarks:
 """
 from __future__ import annotations
 
+import hashlib
 import logging
+import re
+import time
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 from uuid import uuid4
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 
+from backend.config.settings import settings
 from backend.schemas.offer import (
     OutreachApproveRequest,
     OutreachApproveResponse,
@@ -26,7 +31,20 @@ from backend.schemas.offer import (
     OutreachRejectRequest,
     OutreachRejectResponse,
 )
-from backend.services.audit_store import AuditStore, get_audit_store, resolve_actor
+from backend.services.audit_decision_inputs import decision_inputs_from_borrower
+from backend.services.audit_lakebase_store import write_audit_event_in_transaction
+from backend.services.audit_store import (
+    AuditMetadataViolation,
+    AuditPIIError,
+    AuditStore,
+    get_audit_store,
+    resolve_actor,
+)
+from backend.services.disclosures import (
+    MissingTenantDisclosureError,
+    disclosure_audit_payload,
+    resolve_tenant_disclosure,
+)
 from backend.services.error_sanitizer import safe_dependency_detail
 from backend.services.job_trigger import enqueue_lifecycle_trigger
 from backend.services.lakebase import LakebaseClient, LakebaseError, get_lakebase_client
@@ -34,10 +52,12 @@ from backend.services.lakebase_bootstrap import ensure_approval_idempotency_colu
 from backend.services.observability import emit
 from backend.services.pii_redaction import scrub_free_text
 from backend.services.repositories import OutreachRepository, get_outreach_repository
+from backend.services.sales_state import clear_sales_state_cache
+from backend.services.scoring import NBO_PRODUCT_LABELS
 
 log = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/outreach", tags=["outreach"])
+router = APIRouter(prefix="/outreach", tags=["outreach"])
 
 RepoDep = Annotated[OutreachRepository, Depends(get_outreach_repository)]
 AuditDep = Annotated[AuditStore, Depends(get_audit_store)]
@@ -70,34 +90,88 @@ def _safe_audit_write(store: AuditStore, **kwargs: Any) -> None:
 
 _APPROVAL_INSERT = """
 INSERT INTO mip_app.approvals (
-    approval_id, borrower_id, offer_code, action,
+    approval_id, campaign_id, borrower_id, offer_code, action,
     actor_email, rationale, request_id
 ) VALUES (
-    %(approval_id)s, %(borrower_id)s, %(offer_code)s, %(action)s,
+    %(approval_id)s, %(campaign_id)s, %(borrower_id)s, %(offer_code)s, %(action)s,
     %(actor_email)s, %(rationale)s, %(request_id)s
 )
 ON CONFLICT (request_id) WHERE request_id IS NOT NULL DO NOTHING
 """
 
 
+_APPROVAL_INSERT_RETURNING = """
+INSERT INTO mip_app.approvals (
+    approval_id, campaign_id, borrower_id, offer_code, action,
+    actor_email, rationale, request_id
+) VALUES (
+    %(approval_id)s, %(campaign_id)s, %(borrower_id)s, %(offer_code)s, %(action)s,
+    %(actor_email)s, %(rationale)s, %(request_id)s
+)
+ON CONFLICT (request_id) WHERE request_id IS NOT NULL DO NOTHING
+RETURNING approval_id
+"""
+
+
 _APPROVAL_LOOKUP_BY_REQUEST_ID = """
-SELECT approval_id
+SELECT approval_id, borrower_id, action, actor_email
 FROM mip_app.approvals
 WHERE request_id = %(request_id)s
 LIMIT 1
 """
 
 
+def _derive_fallback_request_id(
+    *,
+    actor: str,
+    borrower_id: str,
+    action: str,
+    now_s: float | None = None,
+) -> str:
+    """Generate a deterministic fallback ``request_id`` for legacy clients.
+
+    R6-19: the partial unique index on ``mip_app.approvals.request_id``
+    only covers rows WHERE ``request_id IS NOT NULL``. A legacy caller
+    that POSTs ``/approve`` or ``/reject`` without a ``request_id`` (no
+    Idempotency-Key header plumbing, older mobile build, retry storm
+    from a watchdog) therefore bypasses the idempotency contract
+    completely: a double-submit writes two approvals.
+
+    We close the loop by deriving a deterministic key from
+    ``(actor, borrower_id, action, minute-bucket)`` and hashing to a
+    stable 32-hex-char digest. Two requests from the same actor for the
+    same borrower + action within the SAME minute collapse to one row
+    (matches operator intent: a user who double-clicks Approve wants
+    one approval). Two requests 61 seconds apart are treated as
+    distinct (matches operator intent: a user who explicitly re-submits
+    after waiting wants a new decision).
+
+    ``now_s`` is injectable so tests can pin the minute bucket; in
+    production it defaults to ``time.time()``.
+    """
+    t = now_s if now_s is not None else time.time()
+    minute_bucket = int(t // 60)
+    material = f"{actor}|{borrower_id}|{action}|{minute_bucket}"
+    digest = hashlib.sha256(material.encode("utf-8")).hexdigest()[:32]  # noqa: S324 -- not a secret
+    # Prefix so audit review can tell server-derived keys apart from
+    # client-sent ones (which are typically UUIDs / opaque tokens).
+    return f"auto-{digest}"
+
+
 def _lookup_existing_approval(
-    lakebase: LakebaseClient, request_id: str | None
+    lakebase: LakebaseClient,
+    request_id: str | None,
+    *,
+    actor: str,
+    borrower_id: str,
+    action: str,
 ) -> str | None:
     """Return an existing approval_id for this request_id, or None.
 
     R5-01: the idempotency contract is "same request_id => same
-    approval_id, no duplicate write". Callers that want the retry-safe
-    guarantee pass a ``request_id``; when they do and we already have a
-    row in ``mip_app.approvals``, we return its approval_id without
-    issuing a second INSERT or a second audit write.
+    actor + borrower + action => same approval_id, no duplicate write".
+    Reusing the same request_id for a different decision is rejected
+    instead of silently returning another user's or borrower's approval.
 
     Safe to short-circuit with None when ``request_id`` is falsy --
     legacy callers keep their pre-R5-01 behaviour.
@@ -114,10 +188,349 @@ def _lookup_existing_approval(
         # "we don't know if there's a duplicate"; the INSERT's ON
         # CONFLICT clause is the second line of defence.
         return None
+    return _existing_approval_id_or_conflict(
+        row,
+        actor=actor,
+        borrower_id=borrower_id,
+        action=action,
+    )
+
+
+def _existing_approval_id_or_conflict(
+    row: dict[str, Any] | None,
+    *,
+    actor: str,
+    borrower_id: str,
+    action: str,
+) -> str | None:
     if row is None:
         return None
     approval_id = row.get("approval_id")
+    same_actor = str(row.get("actor_email") or "") == actor
+    same_borrower = str(row.get("borrower_id") or "") == borrower_id
+    same_action = str(row.get("action") or "") == action
+    if not (same_actor and same_borrower and same_action):
+        raise HTTPException(
+            status_code=409,
+            detail="request_id already belongs to a different outreach decision",
+        )
     return str(approval_id) if approval_id else None
+
+
+def _supports_atomic_outreach_write(lakebase: LakebaseClient) -> bool:
+    return getattr(lakebase, "_supports_atomic_transactions", False) is True and callable(
+        getattr(lakebase, "transaction", None)
+    )
+
+
+def _commit_outreach_decision_atomic(
+    lakebase: LakebaseClient,
+    *,
+    approval_id: str,
+    actor: str,
+    action: str,
+    borrower_id: str,
+    campaign_id: str | None,
+    offer_code: str | None,
+    rationale: str | None,
+    request_id: str,
+    audit_payload: dict[str, Any],
+    evidence_ids: list[str],
+    event_action: str,
+    event_type: str,
+    audit_request_id: str | None,
+    subject_clip: str | None = None,
+) -> tuple[str, str]:
+    """Write approval + audit in one Lakebase transaction."""
+    try:
+        with lakebase.transaction() as conn:
+            row = conn.execute(
+                _APPROVAL_INSERT_RETURNING,
+                {
+                    "approval_id": approval_id,
+                    "campaign_id": campaign_id,
+                    "borrower_id": borrower_id,
+                    "offer_code": offer_code,
+                    "action": action,
+                    "actor_email": actor,
+                    "rationale": rationale,
+                    "request_id": request_id,
+                },
+            ).fetchone()
+            if row is None:
+                existing = conn.execute(
+                    _APPROVAL_LOOKUP_BY_REQUEST_ID, {"request_id": request_id}
+                ).fetchone()
+                existing_id = _existing_approval_id_or_conflict(
+                    existing,
+                    actor=actor,
+                    borrower_id=borrower_id,
+                    action=action,
+                )
+                if existing_id:
+                    return existing_id, ""
+                raise LakebaseError("Lakebase approval insert returned no row")
+
+            row_approval_id = str(row.get("approval_id") or approval_id)
+            payload_for_audit = {**audit_payload, "approval_id": row_approval_id}
+            event = write_audit_event_in_transaction(
+                conn,
+                actor=actor,
+                action=event_action,
+                entity_type="approval",
+                entity_id=row_approval_id,
+                payload_json=payload_for_audit,
+                evidence_ids=evidence_ids,
+                event_type=event_type,
+                subject_clip=subject_clip,
+                request_id=audit_request_id,
+            )
+            return row_approval_id, event.event_id
+    except (AuditMetadataViolation, AuditPIIError):
+        raise
+    except HTTPException:
+        raise
+    except LakebaseError:
+        raise
+    except Exception as exc:  # noqa: BLE001 -- normalize raw psycopg/fake-client errors
+        raise LakebaseError("Lakebase atomic outreach decision failed") from exc
+
+
+def _safe_offer_code(raw: str | None) -> str:
+    code = str(raw or "nurture").strip()
+    return code if code in NBO_PRODUCT_LABELS else "nurture"
+
+
+def _offer_label(code: str, fallback: str | None = None) -> str:
+    return NBO_PRODUCT_LABELS.get(code) or fallback or "mortgage review"
+
+
+def _coerce_datetime(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=UTC)
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+    return None
+
+
+def _assert_marketing_eligible(borrower: Any) -> None:
+    consent_status = str(getattr(borrower, "consent_status", "unknown") or "unknown")
+    suppression_reason = getattr(borrower, "suppression_reason", None)
+    recontact_at = _coerce_datetime(getattr(borrower, "eligible_recontact_at", None))
+    last_touch_at = _coerce_datetime(getattr(borrower, "last_touch_at", None))
+    now = datetime.now(UTC)
+    if consent_status != "opt_in":
+        raise HTTPException(
+            status_code=422,
+            detail=f"borrower is not marketing-eligible: consent_status={consent_status}",
+        )
+    if recontact_at and recontact_at > now:
+        raise HTTPException(
+            status_code=409,
+            detail=f"borrower hit frequency cap; earliest re-contact {recontact_at.date().isoformat()}",
+        )
+    if last_touch_at and last_touch_at > now - timedelta(days=30):
+        earliest = last_touch_at + timedelta(days=30)
+        raise HTTPException(
+            status_code=409,
+            detail=f"borrower hit frequency cap; earliest re-contact {earliest.date().isoformat()}",
+        )
+    if getattr(borrower, "marketing_eligible", False) is not True:
+        reason = suppression_reason or "eligibility_not_proven"
+        raise HTTPException(
+            status_code=422,
+            detail=f"borrower is not marketing-eligible: {reason}",
+        )
+
+
+def _marketing_audit_payload(borrower: Any) -> dict[str, Any]:
+    last_touch_at = _coerce_datetime(getattr(borrower, "last_touch_at", None))
+    eligible_recontact_at = _coerce_datetime(
+        getattr(borrower, "eligible_recontact_at", None)
+    )
+    return {
+        "marketing_eligible": bool(getattr(borrower, "marketing_eligible", False)),
+        "consent_status": str(getattr(borrower, "consent_status", "unknown") or "unknown"),
+        "suppression_reason": getattr(borrower, "suppression_reason", None),
+        "last_touch_at": last_touch_at.isoformat() if last_touch_at else None,
+        "eligible_recontact_at": (
+            eligible_recontact_at.isoformat() if eligible_recontact_at else None
+        ),
+    }
+
+
+def _resolve_disclosure_or_http(lakebase: LakebaseClient, *, borrower: Any, channel: str):
+    try:
+        return resolve_tenant_disclosure(
+            lakebase,
+            state=str(getattr(borrower, "state", "") or ""),
+            channel=channel,
+            tenant_id=settings.effective_tenant_id(),
+        )
+    except MissingTenantDisclosureError as exc:
+        raise HTTPException(status_code=412, detail=str(exc)) from exc
+    except LakebaseError as exc:
+        raise HTTPException(status_code=503, detail=safe_dependency_detail("lakebase")) from exc
+
+
+def _sms_lender_label(lender_name: str) -> str:
+    """Return a compact tenant label for 160-character SMS drafts."""
+
+    normalized = " ".join(lender_name.split())
+    if len(normalized) <= 18:
+        return normalized
+    first_word = re.sub(r"[^A-Za-z0-9&.-]", "", normalized.split()[0])
+    return first_word[:18] or "Lender"
+
+
+def _compose_outreach_body(*, borrower: Any, channel: str, disclosure: Any) -> tuple[str | None, str]:
+    """Return relationship-aware, channel-specific human-review copy.
+
+    This is still a draft; the product does not send messages. Copy avoids
+    literal personalization placeholders and branches on the governed
+    borrower relationship flags so current customers do not receive cold
+    acquisition language.
+    """
+    code = _safe_offer_code(getattr(borrower, "recommended_offer_code", None))
+    offer = _offer_label(code, getattr(borrower, "recommended_offer", None))
+    city_state = ", ".join(
+        part for part in (getattr(borrower, "city", ""), getattr(borrower, "state", "")) if part
+    )
+    is_customer = bool(getattr(borrower, "is_current_customer", False))
+    is_competitor = bool(getattr(borrower, "is_competitor_lien", False))
+    why_now = str(getattr(borrower, "why_now", "") or "").strip()
+    lender_name = (settings.mip_lender_name or "configured lender").strip() or "configured lender"
+    sms_lender = _sms_lender_label(lender_name)
+
+    if channel == "sms":
+        if is_customer:
+            body = f"{lender_name}: review your {offer}. Reply YES. {disclosure.body}"
+        elif is_competitor:
+            body = f"{lender_name}: {offer} may fit your profile. Reply YES. {disclosure.body}"
+        else:
+            body = f"{lender_name}: mortgage review available. Reply YES. {disclosure.body}"
+        if len(body) > 160:
+            body = f"{sms_lender}: mortgage review. Reply YES. {disclosure.body}"
+        if len(body) > 160:
+            body = disclosure.body
+        if len(body) > 160:
+            raise HTTPException(
+                status_code=412,
+                detail="tenant SMS disclosure exceeds 160 characters; configure shorter SMS disclosure",
+            )
+        return None, body
+
+    if channel == "direct_mail":
+        subject = f"{offer} review"
+        opening = (
+            f"As a customer of {lender_name}, your current loan profile is ready for review."
+            if is_customer
+            else f"Your property profile{f' in {city_state}' if city_state else ''} may qualify for {offer}."
+        )
+        body = (
+            f"{opening}\n\n"
+            f"{why_now or 'A licensed officer can review whether the current profile fits.'}\n\n"
+            "This draft is for governed human review only; no external mail has been sent.\n\n"
+            f"{disclosure.body}"
+        )
+        return subject, body
+
+    if is_customer:
+        subject = f"Review your {lender_name} {offer} option"
+        intro = f"As a customer of {lender_name}, your current loan profile is ready for a human review."
+        if code in {"retention", "refi", "refi_plus_heloc", "cash_out", "heloc"}:
+            pitch = (
+                f"We can review whether {offer} improves the fit of your existing mortgage relationship."
+            )
+        else:
+            pitch = f"A licensed {lender_name} loan officer can review your current mortgage options."
+    elif is_competitor:
+        subject = f"{offer} opportunity for your property"
+        location = f" in {city_state}" if city_state else ""
+        intro = f"Based on public-record mortgage signals{location}, you may qualify for {offer}."
+        pitch = why_now or "The current lien and equity profile suggests a timely review."
+    else:
+        subject = f"{offer} opportunity for your property"
+        location = f" in {city_state}" if city_state else ""
+        intro = f"Your property profile{location} may qualify for {offer}."
+        pitch = why_now or "A licensed officer can review whether the current profile fits."
+
+    body = (
+        f"Hello,\n\n"
+        f"{intro} {pitch}\n\n"
+        "Reply to this note and a licensed officer will follow up. "
+        "This draft is for human review only; no outreach has been sent.\n\n"
+        f"{disclosure.body}"
+    )
+    return subject, body
+
+
+def _compose_reject_rationale(code: str, note: str | None) -> str:
+    label = code.replace("_", " ")
+    clean_note = scrub_free_text(note) if note else None
+    return f"{label}: {clean_note}" if clean_note else label
+
+
+_DRAFT_PLACEHOLDER_PATTERNS: tuple[str, ...] = (
+    r"\[(?:first|last|full)[_\s-]?name\]",
+    r"\{(?:first|last|full)[_\s-]?name\}",
+    r"\binsert governed\b",
+)
+
+
+def _assert_disclosure_backed_draft_body(
+    *,
+    draft_body: str | None,
+    disclosure: Any,
+    channel: str,
+) -> str:
+    """Require the approved body to be a concrete disclosure-backed draft.
+
+    Approval is the governance boundary before an operator can queue outreach.
+    A caller must approve the actual body shown to the human reviewer, and that
+    body must carry the tenant disclosure block resolved for the borrower's
+    state/channel. We reject instead of silently scrubbing when the body still
+    contains unresolved placeholders or obvious PII-like text.
+    """
+
+    body = (draft_body or "").strip()
+    if not body:
+        raise HTTPException(
+            status_code=422,
+            detail="approved draft_body is required and must come from /api/outreach/draft",
+        )
+    lowered = body.lower()
+    if any(re.search(pattern, lowered, re.IGNORECASE) for pattern in _DRAFT_PLACEHOLDER_PATTERNS):
+        raise HTTPException(
+            status_code=422,
+            detail="approved draft_body contains unresolved placeholder copy",
+        )
+    disclosure_body = str(getattr(disclosure, "body", "") or "").strip()
+    if not disclosure_body or disclosure_body not in body:
+        raise HTTPException(
+            status_code=422,
+            detail="approved draft_body must include the configured tenant disclosure",
+        )
+    if scrub_free_text(body) != body:
+        raise HTTPException(
+            status_code=422,
+            detail="approved draft_body contains PII-like text and cannot be audited",
+        )
+    if channel == "sms" and len(body) > 160:
+        raise HTTPException(
+            status_code=422,
+            detail="approved SMS draft_body must be 160 characters or fewer",
+        )
+    return body
 
 
 @router.post("/draft", response_model=OutreachDraft)
@@ -127,17 +540,18 @@ def draft_outreach(
     background: BackgroundTasks,
     repo: RepoDep,
     audit: AuditDep,
+    lakebase: LakebaseDep,
 ) -> OutreachDraft:
     b = repo.find_borrower(payload.borrower_id)
     if b is None:
         raise HTTPException(status_code=404, detail=f"Borrower {payload.borrower_id} not found")
-    subject = f"{b.recommended_offer} opportunity for {b.display_name}"
-    body = (
-        f"Hi {b.display_name.split(' & ')[0]},\n\n"
-        f"Based on recent public-record signals in {b.city}, {b.state}, you may qualify for "
-        f"{b.recommended_offer}. {b.why_now}\n\n"
-        "Reply to this note and a licensed officer will follow up. "
-        "This draft is for human review only; no outreach has been sent."
+    _assert_marketing_eligible(b)
+    disclosure = _resolve_disclosure_or_http(lakebase, borrower=b, channel=payload.channel)
+    offer_code = _safe_offer_code(getattr(b, "recommended_offer_code", None))
+    subject, body = _compose_outreach_body(
+        borrower=b,
+        channel=payload.channel,
+        disclosure=disclosure,
     )
     background.add_task(
         _safe_audit_write,
@@ -148,17 +562,24 @@ def draft_outreach(
         entity_id=b.borrower_id,
         payload_json={
             "channel": payload.channel,
-            "offer_code": b.recommended_offer,
+            "offer_code": offer_code,
+            "campaign_id": payload.campaign_id,
+            "variant_name": payload.variant_name,
+            **_marketing_audit_payload(b),
+            **disclosure_audit_payload(disclosure),
         },
         event_type="DRAFT_OUTREACH",
         subject_clip=b.clip_id,
     )
     return OutreachDraft(
         borrower_id=b.borrower_id,
-        offer_code=f"OFFER-{b.borrower_id}",
+        offer_code=offer_code,
         channel=payload.channel,
-        subject=subject if payload.channel == "email" else None,
+        subject=subject if payload.channel in {"email", "direct_mail"} else None,
         body=body,
+        disclosure_version=disclosure.disclosure_version,
+        disclosure_state=disclosure.state,
+        marketing_eligible=True,
     )
 
 
@@ -167,15 +588,25 @@ def approve_outreach(
     payload: OutreachApproveRequest,
     request: Request,
     background: BackgroundTasks,
+    repo: RepoDep,
     audit: AuditDep,
     lakebase: LakebaseDep,
 ) -> OutreachApproveResponse:
-    # Approval is a governed, auditable decision: a failure must 503
-    # (not silently fall through). Actor attribution: prefer the
-    # authenticated workspace user from X-Forwarded-Email; fall back
-    # to the caller-supplied ``actor`` only when we're running in a
-    # test/dev path without the header.
-    actor = payload.actor if payload.actor != "anonymous" else resolve_actor(request)
+    # R6 actor-spoof fix: attribution is always the edge-authenticated
+    # identity from X-Forwarded-Email (via ``resolve_actor``). The
+    # ``payload.actor`` body field is retained for backwards compatibility
+    # with existing clients but is IGNORED for the audit row — a caller
+    # that passes ``actor: "ceo@..."`` cannot masquerade. In local dev /
+    # test paths without the header, ``resolve_actor`` returns
+    # ``settings.default_actor`` and emits a structured warning so ops
+    # sees the fallback in the log trail.
+    actor = resolve_actor(request)
+    borrower = repo.find_borrower(payload.borrower_id)
+    if borrower is None:
+        raise HTTPException(status_code=404, detail=f"Borrower {payload.borrower_id} not found")
+    offer_code = payload.offer_code or _safe_offer_code(
+        getattr(borrower, "recommended_offer_code", None)
+    )
     # R5-01 idempotency pre-check: if the caller sent a request_id and
     # we already wrote a row for it (the previous attempt succeeded
     # server-side but its 200 response was lost in flight), return the
@@ -184,70 +615,114 @@ def approve_outreach(
     # the backstop; this SELECT is the fast path that avoids emitting
     # a duplicate audit event for a retry.
     ensure_approval_idempotency_column(lakebase)
-    existing = _lookup_existing_approval(lakebase, payload.request_id)
+    # R6-19: legacy callers that omit ``request_id`` used to bypass the
+    # idempotency index entirely, so a retry storm from a watchdog that
+    # never learned Idempotency-Key would double-book an approval. We
+    # derive a deterministic fallback from (actor, borrower_id, action,
+    # minute-bucket) so same-minute duplicates collapse; cross-minute
+    # retries are treated as distinct (see helper docstring).
+    effective_request_id = payload.request_id or _derive_fallback_request_id(
+        actor=actor, borrower_id=payload.borrower_id, action="approve",
+    )
+    existing = _lookup_existing_approval(
+        lakebase,
+        effective_request_id,
+        actor=actor,
+        borrower_id=payload.borrower_id,
+        action="approve",
+    )
     if existing is not None:
         return OutreachApproveResponse(
             approved=True,
             approval_id=existing,
             audit_event_id="",
         )
+    _assert_marketing_eligible(borrower)
+    disclosure = _resolve_disclosure_or_http(lakebase, borrower=borrower, channel=payload.channel)
+    approved_draft_body = _assert_disclosure_backed_draft_body(
+        draft_body=payload.draft_body,
+        disclosure=disclosure,
+        channel=payload.channel,
+    )
     # lakebase/schema.sql §approvals: approval_id is UUID, not an
     # `apr-<hex12>` synthetic. Passing the raw UUID string satisfies
     # Postgres's UUID cast; truncating it to 12 hex chars produced
     # `invalid input syntax for type uuid: "apr-..."` on INSERT.
     approval_id = str(uuid4())
-    # Governance §4: approvals live in both the ``approvals`` table
-    # (durable decision record, queryable by campaign) AND the
-    # ``action_audit`` table (append-only ledger). We write approvals
-    # first so the audit row's ``entity_id`` (the approval_id) is a
-    # valid FK-equivalent pointer.
+    safe_rationale = scrub_free_text(payload.rationale) if payload.rationale else None
+    safe_bulk_rationale = scrub_free_text(payload.bulk_rationale) if payload.bulk_rationale else None
+    approval_rationale = (
+        safe_rationale
+        or safe_bulk_rationale
+        or "Approved with governed recommendation and human review."
+    )
+    audit_payload: dict[str, Any] = {
+        "approval_id": approval_id,
+        "offer_code": offer_code,
+        "borrower_id": payload.borrower_id,
+        "channel": payload.channel,
+        "campaign_id": payload.campaign_id,
+        "variant_name": payload.variant_name,
+        "decision_inputs": decision_inputs_from_borrower(borrower),
+        **_marketing_audit_payload(borrower),
+        **disclosure_audit_payload(disclosure),
+    }
+    if payload.request_id:
+        # Persist the idempotency key in the audit metadata too --
+        # retrospective auditors can correlate "same client request,
+        # same approval_id" across the decision ledger and audit log.
+        audit_payload["request_id"] = payload.request_id
+    audit_payload["draft_body"] = approved_draft_body
+    audit_payload["rationale"] = approval_rationale
+    if payload.bulk_id:
+        audit_payload["bulk_id"] = payload.bulk_id
+    if safe_bulk_rationale:
+        audit_payload["bulk_rationale"] = safe_bulk_rationale
     try:
-        lakebase.execute(
-            _APPROVAL_INSERT,
-            {
-                "approval_id": approval_id,
-                "borrower_id": payload.borrower_id,
-                "offer_code": payload.offer_code,
-                "action": "approve",
-                "actor_email": actor,
-                "rationale": None,
-                "request_id": payload.request_id,
-            },
-        )
-        # Governance §4: the audit metadata mirrors what the approver
-        # saw + what they committed to. ``draft_body`` (when supplied)
-        # lets compliance reconstruct the exact outreach copy that was
-        # released; we keep it out of the ``approvals`` table to avoid
-        # bloating the decision ledger and because action_audit is the
-        # append-only surface governance queries against.
-        audit_payload: dict[str, Any] = {
-            "approval_id": approval_id,
-            "offer_code": payload.offer_code,
-            "borrower_id": payload.borrower_id,
-        }
-        if payload.request_id:
-            # Persist the idempotency key in the audit metadata too --
-            # retrospective auditors can then correlate "same client
-            # request, same approval_id" across the decision ledger and
-            # the append-only audit log.
-            audit_payload["request_id"] = payload.request_id
-        if payload.draft_body:
-            # Defence-in-depth: scrub obvious PII markers (SSN / phone / email /
-            # street address) before the free-text body lands in the append-only
-            # audit ledger. Governance posture says approvers shouldn't paste PII
-            # into the draft in the first place, but an accidental paste
-            # shouldn't become a durable PII leak.
-            audit_payload["draft_body"] = scrub_free_text(payload.draft_body)
-        event = audit.write(
-            actor=actor,
-            action="outreach.approve",
-            entity_type="approval",
-            entity_id=approval_id,
-            payload_json=audit_payload,
-            evidence_ids=payload.evidence_ids,
-            event_type="APPROVE",
-            request_id=payload.request_id,
-        )
+        if _supports_atomic_outreach_write(lakebase):
+            approval_id, audit_event_id = _commit_outreach_decision_atomic(
+                lakebase,
+                approval_id=approval_id,
+                actor=actor,
+                action="approve",
+                borrower_id=payload.borrower_id,
+                campaign_id=payload.campaign_id,
+                offer_code=offer_code,
+                rationale=approval_rationale,
+                request_id=effective_request_id,
+                audit_payload=audit_payload,
+                evidence_ids=payload.evidence_ids,
+                event_action="outreach.approve",
+                event_type="APPROVE",
+                audit_request_id=payload.request_id,
+                subject_clip=borrower.clip_id,
+            )
+        else:
+            lakebase.execute(
+                _APPROVAL_INSERT,
+                {
+                    "approval_id": approval_id,
+                    "campaign_id": payload.campaign_id,
+                    "borrower_id": payload.borrower_id,
+                    "offer_code": offer_code,
+                    "action": "approve",
+                    "actor_email": actor,
+                    "rationale": approval_rationale,
+                    "request_id": effective_request_id,
+                },
+            )
+            event = audit.write(
+                actor=actor,
+                action="outreach.approve",
+                entity_type="approval",
+                entity_id=approval_id,
+                payload_json=audit_payload,
+                evidence_ids=payload.evidence_ids,
+                event_type="APPROVE",
+                subject_clip=borrower.clip_id,
+                request_id=payload.request_id,
+            )
+            audit_event_id = event.event_id
     except LakebaseError as exc:
         # No silent fallback. The UI surfaces 503 as a retry banner;
         # the operator's next move is to check Lakebase status.
@@ -256,6 +731,7 @@ def approve_outreach(
         raise HTTPException(
             status_code=503, detail=safe_dependency_detail("lakebase")
         ) from exc
+    clear_sales_state_cache()
     # The approval row is now committed in Lakebase. Kick the
     # ``mip_sync_lifecycle_state`` job to mirror it into
     # ``mip.gold.borrower_lifecycle_state`` so metric views + Genie
@@ -266,11 +742,12 @@ def approve_outreach(
     # between response commit and task execution drops the call
     # silently (BackgroundTasks has no drain) -- the enqueue log is
     # the breadcrumb and the daily 04:00 cron is the safety net.
-    enqueue_lifecycle_trigger(background, reason="approval")
+    if audit_event_id:
+        enqueue_lifecycle_trigger(background, reason="approval")
     return OutreachApproveResponse(
         approved=True,
         approval_id=approval_id,
-        audit_event_id=event.event_id,
+        audit_event_id=audit_event_id,
     )
 
 
@@ -279,6 +756,7 @@ def reject_outreach(
     payload: OutreachRejectRequest,
     request: Request,
     background: BackgroundTasks,
+    repo: RepoDep,
     audit: AuditDep,
     lakebase: LakebaseDep,
 ) -> OutreachRejectResponse:
@@ -305,12 +783,32 @@ def reject_outreach(
     Failures raise 503 (same contract as approve) so the UI's retry
     banner + resilience layer get to act; no silent fallback.
     """
-    actor = payload.actor if payload.actor != "anonymous" else resolve_actor(request)
+    # R6 actor-spoof fix: same as /approve — attribution is always
+    # ``resolve_actor(request)`` from the edge-authenticated identity.
+    # Body ``payload.actor`` is retained for backcompat but ignored.
+    actor = resolve_actor(request)
+    borrower = repo.find_borrower(payload.borrower_id)
+    if borrower is None:
+        raise HTTPException(status_code=404, detail=f"Borrower {payload.borrower_id} not found")
+    offer_code = payload.offer_code or _safe_offer_code(
+        getattr(borrower, "recommended_offer_code", None)
+    )
     # R5-01 idempotency: same contract as /approve. A re-POSTed reject
     # with the same ``request_id`` returns the existing approval_id
     # instead of writing a second decision row + duplicate audit event.
     ensure_approval_idempotency_column(lakebase)
-    existing = _lookup_existing_approval(lakebase, payload.request_id)
+    # R6-19: server-derived fallback for legacy clients that omit
+    # ``request_id`` (see /approve for the full rationale).
+    effective_request_id = payload.request_id or _derive_fallback_request_id(
+        actor=actor, borrower_id=payload.borrower_id, action="reject",
+    )
+    existing = _lookup_existing_approval(
+        lakebase,
+        effective_request_id,
+        actor=actor,
+        borrower_id=payload.borrower_id,
+        action="reject",
+    )
     if existing is not None:
         return OutreachRejectResponse(
             rejected=True,
@@ -318,48 +816,78 @@ def reject_outreach(
             audit_event_id="",
         )
     approval_id = str(uuid4())
+    safe_rationale = _compose_reject_rationale(payload.rationale_code, payload.rationale)
+    audit_payload: dict[str, Any] = {
+        "approval_id": approval_id,
+        "offer_code": offer_code,
+        "borrower_id": payload.borrower_id,
+        "channel": payload.channel,
+        "campaign_id": payload.campaign_id,
+        "variant_name": payload.variant_name,
+        "rationale_code": payload.rationale_code,
+        **_marketing_audit_payload(borrower),
+    }
+    if payload.request_id:
+        audit_payload["request_id"] = payload.request_id
+    if safe_rationale:
+        audit_payload["rationale"] = safe_rationale
     try:
-        lakebase.execute(
-            _APPROVAL_INSERT,
-            {
-                "approval_id": approval_id,
-                "borrower_id": payload.borrower_id,
-                "offer_code": payload.offer_code,
-                "action": "reject",
-                "actor_email": actor,
-                "rationale": payload.rationale,
-                "request_id": payload.request_id,
-            },
-        )
-        audit_payload: dict[str, Any] = {
-            "approval_id": approval_id,
-            "offer_code": payload.offer_code,
-            "borrower_id": payload.borrower_id,
-        }
-        if payload.request_id:
-            audit_payload["request_id"] = payload.request_id
-        if payload.rationale:
-            audit_payload["rationale"] = payload.rationale
-        event = audit.write(
-            actor=actor,
-            action="outreach.reject",
-            entity_type="approval",
-            entity_id=approval_id,
-            payload_json=audit_payload,
-            evidence_ids=payload.evidence_ids,
-            event_type="OUTREACH_REJECT",
-            request_id=payload.request_id,
-        )
+        if _supports_atomic_outreach_write(lakebase):
+            approval_id, audit_event_id = _commit_outreach_decision_atomic(
+                lakebase,
+                approval_id=approval_id,
+                actor=actor,
+                action="reject",
+                borrower_id=payload.borrower_id,
+                campaign_id=payload.campaign_id,
+                offer_code=offer_code,
+                rationale=safe_rationale,
+                request_id=effective_request_id,
+                audit_payload=audit_payload,
+                evidence_ids=payload.evidence_ids,
+                event_action="outreach.reject",
+                event_type="OUTREACH_REJECT",
+                audit_request_id=payload.request_id,
+                subject_clip=borrower.clip_id,
+            )
+        else:
+            lakebase.execute(
+                _APPROVAL_INSERT,
+                {
+                    "approval_id": approval_id,
+                    "campaign_id": payload.campaign_id,
+                    "borrower_id": payload.borrower_id,
+                    "offer_code": offer_code,
+                    "action": "reject",
+                    "actor_email": actor,
+                    "rationale": safe_rationale,
+                    "request_id": effective_request_id,
+                },
+            )
+            event = audit.write(
+                actor=actor,
+                action="outreach.reject",
+                entity_type="approval",
+                entity_id=approval_id,
+                payload_json=audit_payload,
+                evidence_ids=payload.evidence_ids,
+                event_type="OUTREACH_REJECT",
+                subject_clip=borrower.clip_id,
+                request_id=payload.request_id,
+            )
+            audit_event_id = event.event_id
     except LakebaseError as exc:
         raise HTTPException(
             status_code=503, detail=safe_dependency_detail("lakebase")
         ) from exc
+    clear_sales_state_cache()
     # Same debounced fire-and-forget sync the approve path uses -- the
     # funnel / lifecycle views need to reflect rejected-borrower counts
     # without waiting on the daily cron.
-    enqueue_lifecycle_trigger(background, reason="rejection")
+    if audit_event_id:
+        enqueue_lifecycle_trigger(background, reason="rejection")
     return OutreachRejectResponse(
         rejected=True,
         approval_id=approval_id,
-        audit_event_id=event.event_id,
+        audit_event_id=audit_event_id,
     )

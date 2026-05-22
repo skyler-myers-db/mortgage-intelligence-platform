@@ -90,6 +90,22 @@ def test_trigger_fires_run_now_once(monkeypatch: pytest.MonkeyPatch) -> None:
     assert kwargs == {"job_id": 42}
 
 
+def test_trigger_uses_bound_job_id_env_before_listing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Databricks App resource binding supplies the job id directly.
+
+    The app service principal may only have CAN_MANAGE_RUN on that specific
+    job, so it should not need workspace-wide jobs.list visibility.
+    """
+    ws = _stub_workspace(job_id=42)
+    _install_fake_sdk(monkeypatch, ws)
+    monkeypatch.setenv("MIP_LIFECYCLE_SYNC_JOB_ID", "98765")
+
+    job_trigger.trigger_lifecycle_sync(reason="approval")
+
+    ws.jobs.list.assert_not_called()
+    assert ws.jobs.run_now.call_args.kwargs == {"job_id": 98765}
+
+
 def test_trigger_debounces_clustered_calls(monkeypatch: pytest.MonkeyPatch) -> None:
     """Two approvals inside the debounce window produce ONE run_now."""
     ws = _stub_workspace()
@@ -188,8 +204,9 @@ def test_approval_endpoint_schedules_trigger(monkeypatch: pytest.MonkeyPatch) ->
         "/api/outreach/approve",
         json={
             "borrower_id": "B-48291",
-            "offer_code": "HELOC-STD",
+            "offer_code": "heloc",
             "actor": "anonymous",
+            "draft_body": "Governed approval body. Summit Mortgage, NMLS #123456. Equal Housing Lender. Reply unsubscribe to opt out.",
         },
     )
     assert resp.status_code == 200, resp.text

@@ -26,6 +26,15 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 CREATE SCHEMA IF NOT EXISTS mip_app;
 SET search_path TO mip_app, public;
 
+-- Migration ledger ------------------------------------------------------
+-- Operators must be able to answer "which Lakebase schema did this
+-- customer instance reach?" without diffing catalog metadata by hand.
+CREATE TABLE IF NOT EXISTS mip_app.schema_migrations (
+    version     TEXT PRIMARY KEY,
+    description TEXT NOT NULL,
+    applied_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- Campaigns -----------------------------------------------------------
 -- One row per marketing campaign the user has built with the portfolio
 -- builder. `criteria` JSONB stores the segment-filter payload; it MUST
@@ -37,10 +46,131 @@ CREATE TABLE IF NOT EXISTS mip_app.campaigns (
     owner_email  TEXT NOT NULL,
     status       TEXT NOT NULL DEFAULT 'draft',
     criteria     JSONB NOT NULL DEFAULT '{}'::jsonb,
+    suppression_policy JSONB NOT NULL DEFAULT '{}'::jsonb,
+    message_variants JSONB NOT NULL DEFAULT '[]'::jsonb,
+    channel_cascade JSONB NOT NULL DEFAULT '[]'::jsonb,
+    send_window JSONB NOT NULL DEFAULT '{}'::jsonb,
+    holdout JSONB,
+    roi_assumptions JSONB,
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE mip_app.campaigns
+    ADD COLUMN IF NOT EXISTS suppression_policy JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE mip_app.campaigns
+    ADD COLUMN IF NOT EXISTS message_variants JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE mip_app.campaigns
+    ADD COLUMN IF NOT EXISTS channel_cascade JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE mip_app.campaigns
+    ADD COLUMN IF NOT EXISTS send_window JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE mip_app.campaigns
+    ADD COLUMN IF NOT EXISTS holdout JSONB;
+ALTER TABLE mip_app.campaigns
+    ADD COLUMN IF NOT EXISTS roi_assumptions JSONB;
+ALTER TABLE mip_app.campaigns
+    ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
 CREATE INDEX IF NOT EXISTS idx_campaigns_owner
     ON mip_app.campaigns (owner_email, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_campaigns_status
+    ON mip_app.campaigns (status, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS mip_app.campaign_message_variants (
+    campaign_id  UUID NOT NULL REFERENCES mip_app.campaigns(campaign_id) ON DELETE CASCADE,
+    variant_name TEXT NOT NULL,
+    channel      TEXT NOT NULL CHECK (channel IN ('email','sms','direct_mail')),
+    subject      TEXT,
+    body         TEXT NOT NULL CHECK (length(body) <= 5000),
+    weight_pct   NUMERIC,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (campaign_id, variant_name, channel)
+);
+
+CREATE TABLE IF NOT EXISTS mip_app.tenant_disclosures (
+    -- Per-deployment disclosure namespace. Summit dev seeds use "summit";
+    -- customer deploys should set MIP_TENANT_ID or use the slug derived
+    -- from MIP_LENDER_NAME and seed their own approved disclosures.
+    tenant_id           TEXT NOT NULL DEFAULT 'summit',
+    state               TEXT NOT NULL,
+    channel             TEXT NOT NULL CHECK (channel IN ('email','sms','direct_mail')),
+    disclosure_version  TEXT NOT NULL,
+    body                TEXT NOT NULL CHECK (length(body) BETWEEN 20 AND 2000),
+    active              BOOLEAN NOT NULL DEFAULT true,
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (tenant_id, state, channel, disclosure_version)
+);
+CREATE INDEX IF NOT EXISTS idx_tenant_disclosures_active
+    ON mip_app.tenant_disclosures (tenant_id, state, channel, active, updated_at DESC);
+
+-- Sales operations ----------------------------------------------------
+-- Thin Module 0 work-management layer for the named Sales Manager
+-- persona. These tables store internal staff identity and synthetic
+-- borrower ids only. Borrower names, emails, phone numbers, street
+-- addresses, and raw Cotality identifiers do not belong here.
+CREATE TABLE IF NOT EXISTS mip_app.sales_team (
+    email            TEXT PRIMARY KEY,
+    display_label    TEXT NOT NULL,
+    role             TEXT NOT NULL DEFAULT 'loan_officer'
+                     CHECK (role IN ('loan_officer','sales_manager','admin')),
+    manager_email    TEXT,
+    region           TEXT,
+    capacity_per_day INTEGER NOT NULL DEFAULT 35
+                     CHECK (capacity_per_day BETWEEN 0 AND 250),
+    active           BOOLEAN NOT NULL DEFAULT true,
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_sales_team_manager
+    ON mip_app.sales_team (manager_email, active, display_label);
+
+CREATE TABLE IF NOT EXISTS mip_app.lead_assignments (
+    assignment_id     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    borrower_id       TEXT NOT NULL,
+    assigned_to_email TEXT NOT NULL REFERENCES mip_app.sales_team(email),
+    assigned_by       TEXT NOT NULL,
+    assigned_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at        TIMESTAMPTZ,
+    released_at       TIMESTAMPTZ,
+    strategy          TEXT NOT NULL DEFAULT 'manual'
+                      CHECK (strategy IN ('manual','round_robin','score_balanced')),
+    request_id        TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_lead_assignments_active_borrower
+    ON mip_app.lead_assignments (borrower_id)
+    WHERE released_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_lead_assignments_assignee
+    ON mip_app.lead_assignments (assigned_to_email, assigned_at DESC)
+    WHERE released_at IS NULL;
+DROP INDEX IF EXISTS mip_app.idx_lead_assignments_request_id;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_lead_assignments_request_borrower
+    ON mip_app.lead_assignments (request_id, borrower_id)
+    WHERE request_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS mip_app.call_dispositions (
+    disposition_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    borrower_id    TEXT NOT NULL,
+    lo_email       TEXT NOT NULL REFERENCES mip_app.sales_team(email),
+    outcome        TEXT NOT NULL CHECK (
+        outcome IN (
+            'called_no_answer','called_left_voicemail','connected',
+            'callback_scheduled','application_started','not_interested',
+            'not_now','dead'
+        )
+    ),
+    attempt_number INTEGER NOT NULL DEFAULT 1 CHECK (attempt_number > 0),
+    occurred_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    callback_at    TIMESTAMPTZ,
+    notes          TEXT CHECK (notes IS NULL OR length(notes) <= 500),
+    audit_event_id UUID,
+    request_id     TEXT,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_call_dispositions_borrower
+    ON mip_app.call_dispositions (borrower_id, occurred_at DESC);
+CREATE INDEX IF NOT EXISTS idx_call_dispositions_lo
+    ON mip_app.call_dispositions (lo_email, occurred_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_call_dispositions_request_id
+    ON mip_app.call_dispositions (request_id)
+    WHERE request_id IS NOT NULL;
 
 -- Approvals -----------------------------------------------------------
 -- One row per human-in-the-loop decision on an outreach draft.
@@ -72,6 +202,50 @@ CREATE INDEX IF NOT EXISTS idx_approvals_campaign
 CREATE INDEX IF NOT EXISTS idx_approvals_borrower
     ON mip_app.approvals (borrower_id, decided_at DESC);
 
+-- Saved workspace ----------------------------------------------------
+-- Actor-scoped saved leads and draft outreach copy. These tables back
+-- the in-app inbox/workspace; they intentionally store synthetic
+-- borrower ids plus coarse location / offer metadata only. Raw names,
+-- street addresses, emails, phone numbers, and raw Cotality CLIPs do
+-- not belong here.
+CREATE TABLE IF NOT EXISTS mip_app.saved_leads (
+    actor_email       TEXT NOT NULL,
+    borrower_id       TEXT NOT NULL,
+    city              TEXT,
+    state             TEXT,
+    zip               TEXT,
+    recommended_offer TEXT,
+    opportunity_score INTEGER CHECK (opportunity_score BETWEEN 0 AND 100),
+    confidence        INTEGER CHECK (confidence BETWEEN 0 AND 100),
+    saved_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    deleted_at        TIMESTAMPTZ,
+    PRIMARY KEY (actor_email, borrower_id)
+);
+CREATE INDEX IF NOT EXISTS idx_saved_leads_actor_updated
+    ON mip_app.saved_leads (actor_email, updated_at DESC)
+    WHERE deleted_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS mip_app.outreach_drafts (
+    actor_email  TEXT NOT NULL,
+    borrower_id  TEXT NOT NULL,
+    offer_code   TEXT,
+    channel      TEXT NOT NULL DEFAULT 'email' CHECK (channel IN ('email','sms','direct_mail')),
+    body         TEXT NOT NULL CHECK (length(body) <= 5000),
+    status       TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','released')),
+    saved_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    deleted_at   TIMESTAMPTZ,
+    PRIMARY KEY (actor_email, borrower_id, channel)
+);
+ALTER TABLE mip_app.outreach_drafts
+    DROP CONSTRAINT IF EXISTS outreach_drafts_channel_check;
+ALTER TABLE mip_app.outreach_drafts
+    ADD CONSTRAINT outreach_drafts_channel_check CHECK (channel IN ('email','sms','direct_mail'));
+CREATE INDEX IF NOT EXISTS idx_outreach_drafts_actor_updated
+    ON mip_app.outreach_drafts (actor_email, updated_at DESC)
+    WHERE deleted_at IS NULL;
+
 -- Action audit --------------------------------------------------------
 -- The append-only ledger governance §4 requires. `event_type` is the
 -- canonical verb: VIEW_BORROWER, VIEW_LEADS, APPROVE, DRAFT_OUTREACH,
@@ -90,10 +264,13 @@ CREATE TABLE IF NOT EXISTS mip_app.action_audit (
     subject_clip    TEXT,
     subject_segment TEXT,
     request_id      TEXT,
+    correlation_id  TEXT,
     evidence_ids    TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
     metadata        JSONB NOT NULL DEFAULT '{}'::jsonb,
     event_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE mip_app.action_audit
+    ADD COLUMN IF NOT EXISTS correlation_id TEXT;
 CREATE INDEX IF NOT EXISTS idx_action_audit_event_at
     ON mip_app.action_audit (event_at DESC);
 CREATE INDEX IF NOT EXISTS idx_action_audit_event_type
@@ -103,6 +280,128 @@ CREATE INDEX IF NOT EXISTS idx_action_audit_actor
 CREATE INDEX IF NOT EXISTS idx_action_audit_subject_clip
     ON mip_app.action_audit (subject_clip)
     WHERE subject_clip IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_action_audit_correlation
+    ON mip_app.action_audit (correlation_id)
+    WHERE correlation_id IS NOT NULL;
+
+-- Audit archival run ledger --------------------------------------------
+-- The action_audit table remains append-only. Archive jobs copy old rows to
+-- governed cold storage, then record the run here instead of deleting from
+-- action_audit without a compliance-approved retention change.
+CREATE TABLE IF NOT EXISTS mip_app.action_audit_archive_runs (
+    archive_run_id      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    cutoff_event_at     TIMESTAMPTZ NOT NULL,
+    destination_uri     TEXT NOT NULL,
+    row_count           BIGINT NOT NULL DEFAULT 0 CHECK (row_count >= 0),
+    requested_by        TEXT NOT NULL DEFAULT 'system@databricks-apps',
+    status              TEXT NOT NULL DEFAULT 'completed'
+                        CHECK (status IN ('completed','failed')),
+    metadata            JSONB NOT NULL DEFAULT '{}'::jsonb,
+    completed_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_action_audit_archive_runs_completed
+    ON mip_app.action_audit_archive_runs (completed_at DESC);
+-- Genie action idempotency: the server issues request ids inside the
+-- HMAC confirmation token, and Lakebase enforces one audited mutation per
+-- actor/request/event. The partial predicate keeps legacy non-Genie audit
+-- rows append-only while giving governed Genie actions retry safety.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_action_audit_genie_request_actor_event
+    ON mip_app.action_audit (actor_email, request_id, event_type)
+    WHERE request_id IS NOT NULL AND event_type LIKE 'GENIE_ACTION_%';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_action_audit_genie_request_actor_event_v2
+    ON mip_app.action_audit (actor_email, request_id, event_type)
+    WHERE request_id IS NOT NULL AND left(event_type, 13) = 'GENIE_ACTION_';
+
+-- Append-only enforcement must not rely solely on GRANT shape. The
+-- Databricks Apps / migration identity can own or receive broader table
+-- privileges on bundle-provisioned Lakebase, so a statement-level trigger
+-- blocks UPDATE/DELETE even when Postgres would otherwise authorize them.
+-- Statement-level is intentional: UPDATE ... WHERE false and DELETE ...
+-- WHERE false still prove mutation privilege and must be rejected.
+CREATE OR REPLACE FUNCTION mip_app.prevent_action_audit_mutation()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    RAISE EXCEPTION 'mip_app.action_audit is append-only; % is not allowed', TG_OP
+        USING ERRCODE = '42501';
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_action_audit_append_only ON mip_app.action_audit;
+CREATE TRIGGER trg_action_audit_append_only
+    BEFORE UPDATE OR DELETE ON mip_app.action_audit
+    FOR EACH STATEMENT
+    EXECUTE FUNCTION mip_app.prevent_action_audit_mutation();
+
+-- Genie sessions ------------------------------------------------------
+-- Durable state for Databricks Genie conversations. These tables store
+-- conversation/message identifiers and proof metadata only; they do NOT
+-- store raw user prompts or answer text, because those fields can contain
+-- free-form PII-like content. The app can recover the latest conversation
+-- after reload while the append-only action_audit ledger remains the
+-- governed proof of each read/action.
+CREATE TABLE IF NOT EXISTS mip_app.genie_sessions (
+    actor_email        TEXT NOT NULL,
+    conversation_id    TEXT NOT NULL,
+    last_message_id    TEXT,
+    last_question_hash TEXT,
+    source             TEXT,
+    trusted_assets     TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (actor_email, conversation_id)
+);
+CREATE INDEX IF NOT EXISTS idx_genie_sessions_actor_updated
+    ON mip_app.genie_sessions (actor_email, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS mip_app.genie_messages (
+    conversation_id    TEXT NOT NULL,
+    message_id         TEXT NOT NULL,
+    actor_email        TEXT NOT NULL,
+    question_hash      TEXT NOT NULL,
+    source             TEXT NOT NULL,
+    row_count          INTEGER NOT NULL DEFAULT 0 CHECK (row_count >= 0),
+    visualization_kind TEXT,
+    trusted_assets     TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+    request_id         TEXT,
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (conversation_id, message_id)
+);
+CREATE INDEX IF NOT EXISTS idx_genie_messages_actor_created
+    ON mip_app.genie_messages (actor_email, created_at DESC);
+
+-- Genie-governed cohorts ---------------------------------------------
+-- One row per confirmed "open this cohort" action. The cohort stores
+-- only reviewed filters and optional synthetic borrower ids from the
+-- Genie result, never owner names, raw CLIPs, addresses, emails, or
+-- phone numbers. Lead Queue replays this Lakebase row by cohort_id so
+-- a governed Genie action cannot degrade into the generic lead queue.
+CREATE TABLE IF NOT EXISTS mip_app.genie_cohorts (
+    cohort_id       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    actor_email     TEXT NOT NULL,
+    request_id      TEXT NOT NULL,
+    conversation_id TEXT,
+    message_id      TEXT,
+    question_hash   TEXT,
+    route_filters   JSONB NOT NULL DEFAULT '{}'::jsonb,
+    source_assets   TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+    sql_hash        TEXT,
+    row_count       INTEGER NOT NULL DEFAULT 0 CHECK (row_count >= 0),
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (actor_email, request_id)
+);
+CREATE INDEX IF NOT EXISTS idx_genie_cohorts_actor_created
+    ON mip_app.genie_cohorts (actor_email, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS mip_app.genie_cohort_members (
+    cohort_id   UUID NOT NULL REFERENCES mip_app.genie_cohorts(cohort_id) ON DELETE CASCADE,
+    borrower_id TEXT NOT NULL,
+    rank_order  INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (cohort_id, borrower_id)
+);
+CREATE INDEX IF NOT EXISTS idx_genie_cohort_members_borrower
+    ON mip_app.genie_cohort_members (borrower_id);
 
 -- Immutability: app writer has INSERT + SELECT only; revoke UPDATE/DELETE.
 -- The role may not yet exist at schema-install time; the REVOKE is a no-op
@@ -142,3 +441,10 @@ CREATE TABLE IF NOT EXISTS mip_app.feedback (
 );
 CREATE INDEX IF NOT EXISTS idx_feedback_event_type
     ON mip_app.feedback (event_type, recorded_at DESC);
+
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_05_18_dr_backup_contract',
+    'Lakebase DR backup contract: schema_migrations and audit archive run ledger'
+)
+ON CONFLICT (version) DO NOTHING;

@@ -4,6 +4,18 @@
 reviewing dashboards on day one, the on-call engineer looking at a panel
 that reads `0` or `pending` and wondering if it is broken.
 
+**User-facing contract:** Module 0 users should not need Lakeview, SQL
+Warehouse, Data Explorer, or other Databricks workspace UI access to
+answer executive, geography, economics, segment, or signal-mix questions.
+The app's native `/analytics` route is the primary analytics surface: it
+reads typed `/api/v1/analytics/*` responses, renders the charts inside
+the React app, and links directly into Lead Queue, Borrower 360, Segment
+Intelligence, and Ask Genie. Access to the app itself still follows
+Databricks Apps sharing/SSO until an external auth front door exists. The
+Lakeview dashboards in `dashboards/*.lvdash.json` remain an
+operator/admin companion for Databricks-native review, not the required
+end-user path.
+
 **What this codifies:** which dashboard widgets depend on state that only
 populates over time (snapshot cadence, lender approvals), what those
 widgets should display on a brand-new deploy, and how to verify the
@@ -61,7 +73,7 @@ this doc and point at `mip.gold.funnel_snapshot_daily` row count + dates.
 The snapshot table is populated by the `mip_sync_lifecycle_state` job
 in `databricks.yml`. Trigger model (as of 2026-04-22):
 
-1. **Event-triggered** from the backend. `POST /api/outreach/approve`
+1. **Event-triggered** from the backend. `POST /api/v1/outreach/approve`
    fires `backend.services.job_trigger.trigger_lifecycle_sync` via
    `BackgroundTasks`, which calls `WorkspaceClient.jobs.run_now(...)`
    non-blocking. Triggers are debounced to 60 s so a reviewer clicking
@@ -131,7 +143,7 @@ Specifically:
 | `outreach_rate` (same) | `0.0` |
 | `approved_borrowers` (executive dashboard `ds_funnel_totals` / `ds_funnel_stages`) | `0` |
 | `actioned_borrowers` (same) | `0` |
-| `approval_rate` / `outreach_rate` (segment-performance metric view — the segment dashboard overview table) | `NULL` (the metric view carries placeholder text acknowledging these are Lakebase-authoritative; see [`docs/validation/dashboards.md`](validation/dashboards.md) §Follow-up) |
+| `approval_rate` / `outreach_rate` (segment-performance metric view — the segment dashboard overview table) | `0.0` |
 
 These populate as operators use the app. Every click on the "Approve"
 button in the Approval Queue writes a row to `mip_app.approvals` in

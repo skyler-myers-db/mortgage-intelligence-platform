@@ -58,16 +58,21 @@ prior AS (
   FROM mip.gold.funnel_snapshot_daily
   WHERE snapshot_date = (SELECT snapshot_date FROM prior_snapshot)
 ),
-exploded AS (
+lead_rows AS (
   SELECT
     lp.clip,
     lp.state,
-    segment                                 AS segment,
+    lp.segment_codes                          AS segment_codes,
+    CASE
+      WHEN SIZE(lp.segment_codes) > 0 THEN lp.segment_codes[0]
+      ELSE 'none'
+    END                                     AS primary_segment,
     CASE
       WHEN lp.rank_overall <= 10    THEN 'top_10'
       WHEN lp.rank_overall <= 100   THEN 'top_100'
       WHEN lp.rank_overall <= 1000  THEN 'top_1000'
-      ELSE                               'top_10000'
+      WHEN lp.rank_overall <= 10000 THEN 'top_10000'
+      ELSE                               'outside_top_10000'
     END                                     AS rank_bucket,
     lp.rank_overall,
     lp.rank_within_state,
@@ -82,35 +87,35 @@ exploded AS (
   FROM mip.gold.lead_population AS lp
   LEFT JOIN mip.gold.borrower_lifecycle_state AS ls
     ON ls.borrower_id = lp.borrower_id
-  LATERAL VIEW EXPLODE(lp.segment_codes) seg AS segment
 )
 SELECT
-  e.clip,
-  e.state,
-  e.segment,
-  e.rank_bucket,
-  e.rank_overall,
-  e.rank_within_state,
-  e.opportunity_score,
-  e.equity_estimate,
-  e.rate_spread_bps,
-  e.population_version,
-  e.refreshed_at,
-  e.approval_status,
-  e.outreach_status,
+  l.clip,
+  l.state,
+  l.segment_codes,
+  l.primary_segment,
+  l.rank_bucket,
+  l.rank_overall,
+  l.rank_within_state,
+  l.opportunity_score,
+  l.equity_estimate,
+  l.rate_spread_bps,
+  l.population_version,
+  l.refreshed_at,
+  l.approval_status,
+  l.outreach_status,
   CAST(
     ROUND(
-      100.0 * COUNT(CASE WHEN e.approval_status = 'approved' THEN 1 END)
-        OVER (PARTITION BY e.state, e.segment)
-        / NULLIF(COUNT(*) OVER (PARTITION BY e.state, e.segment), 0),
+      100.0 * COUNT(CASE WHEN l.approval_status = 'approved' THEN 1 END)
+        OVER (PARTITION BY l.state)
+        / NULLIF(COUNT(*) OVER (PARTITION BY l.state), 0),
       2
     ) AS DOUBLE
   )                                           AS approval_rate,
   CAST(
     ROUND(
-      100.0 * COUNT(CASE WHEN e.outreach_status = 'actioned' THEN 1 END)
-        OVER (PARTITION BY e.state, e.segment)
-        / NULLIF(COUNT(*) OVER (PARTITION BY e.state, e.segment), 0),
+      100.0 * COUNT(CASE WHEN l.outreach_status = 'actioned' THEN 1 END)
+        OVER (PARTITION BY l.state)
+        / NULLIF(COUNT(*) OVER (PARTITION BY l.state), 0),
       2
     ) AS DOUBLE
   )                                           AS outreach_rate,
@@ -121,12 +126,12 @@ SELECT
       2
     ) AS DOUBLE
   )                                           AS delta_vs_prior_count
-FROM exploded AS e
-LEFT JOIN today AS t ON t.state = e.state AND t.segment_code = e.segment
-LEFT JOIN prior AS p ON p.state = e.state AND p.segment_code = e.segment;
+FROM lead_rows AS l
+LEFT JOIN today AS t ON t.state = l.state AND t.segment_code = '_ALL'
+LEFT JOIN prior AS p ON p.state = l.state AND p.segment_code = '_ALL';
 
 COMMENT ON VIEW mip.semantics.lead_generation_metric_view IS
-  'Genie + dashboard metric view over gold.lead_population + gold.borrower_lifecycle_state + gold.funnel_snapshot_daily. Dimensions: segment, state, rank_bucket. Row measures: approval_status, outreach_status. Aggregate measures: count_top10, count_top100, sum_marketable_population, approval_rate, outreach_rate, delta_vs_prior_count. See docs/data-contract-module0.md §3.5 + docs/validation/metric-views.md.';
+  'Genie + dashboard borrower-grain metric view over gold.lead_population + gold.borrower_lifecycle_state + gold.funnel_snapshot_daily. Dimensions: segment_codes, primary_segment, state, rank_bucket. Row measures: approval_status, outreach_status. Aggregate measures must COUNT(DISTINCT clip); approval_rate/outreach_rate/delta_vs_prior_count are state-level. See docs/data-contract-module0.md §3.5 + docs/validation/metric-views.md.';
 
 
 -- -----------------------------------------------------------------------------
@@ -225,7 +230,15 @@ CREATE OR REPLACE VIEW mip.semantics.borrower_opportunity_metric_view AS
 SELECT
   b.clip,
   b.state,
-  segment                                           AS segment,
+  b.segment_codes,
+  CASE
+    WHEN SIZE(b.segment_codes) > 0 THEN b.segment_codes[0]
+    ELSE 'none'
+  END                                               AS primary_segment,
+  CASE
+    WHEN SIZE(b.segment_codes) > 0 THEN b.segment_codes[0]
+    ELSE 'none'
+  END                                               AS segment,
   b.first_pos_loan_type                             AS loan_purpose,
   b.is_investor,
   b.is_current_customer,
@@ -234,8 +247,7 @@ SELECT
   b.in_the_money,
   b.current_lien_balance,
   b.opportunity_score
-FROM mip.gold.borrower_360 AS b
-LATERAL VIEW EXPLODE(b.segment_codes) seg AS segment;
+FROM mip.gold.borrower_360 AS b;
 
 COMMENT ON VIEW mip.semantics.borrower_opportunity_metric_view IS
-  'Genie + dashboard metric view over gold.borrower_360. Dimensions: state, segment, loan_purpose, is_investor, is_current_customer. Measures: avg_rate_spread_bps, avg_equity_pct, count_itm, sum_loan_amount, count_total, avg_opportunity_score. See docs/data-contract-module0.md §3.2.';
+  'Genie + dashboard borrower-grain metric view over gold.borrower_360. Dimensions: state, segment_codes, primary_segment, deprecated segment alias, loan_purpose, is_investor, is_current_customer. Measures: avg_rate_spread_bps, avg_equity_pct, count_itm, sum_loan_amount, count_total, avg_opportunity_score. See docs/data-contract-module0.md §3.2.';

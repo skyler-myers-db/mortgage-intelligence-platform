@@ -10,17 +10,15 @@ export const mockPortfolio: PortfolioPreview = {
   approved_count: 432,
   in_outreach_count: 318,
   data_refreshed_at: '2026-04-23T12:00:00Z',
-  projected_contact_to_app: null,
-  cost_per_contact: null,
 };
 
 export const mockSegments: SegmentSummary[] = [
-  { code: 'itm', name: 'In the Money', count: 12840, delta: '+18%', avg_score: 82, description: 'Lien rate ≥ 75 bps above par and equity ≥ 15%.', color: '#5CE1E6' },
-  { code: 'listed', name: 'Listed for Sale', count: 2614, delta: '+9%', avg_score: 74, description: 'Active listing, likely purchase mortgage opportunity.', color: '#F59E0B' },
-  { code: 'permit', name: 'Permit Activity', count: 4108, delta: '+11%', avg_score: 71, description: 'Recent high-value permits indicate HELOC/cash-out demand.', color: '#A78BFA' },
-  { code: 'investor', name: 'Investor / Multi-Property', count: 1892, delta: '+6%', avg_score: 79, description: 'Owner Link shows 2+ properties or repeat behavior.', color: '#F472B6' },
-  { code: 'equity', name: 'Home Equity Candidate', count: 6320, delta: '+14%', avg_score: 76, description: 'Strong equity and prior cash-out/HELOC propensity.', color: '#66C5FF' },
-  { code: 'retention', name: 'Retention Risk', count: 3471, delta: '+4%', avg_score: 88, description: 'Current customer showing refi/listing/competitor signals.', color: '#34D399' }
+  { code: 'itm', name: 'In the Money', count: 12840, delta: '+18%', avg_score: 82, description: 'Lien rate ≥ 75 bps above par and equity ≥ 15%.', color: 'var(--seg-itm)' },
+  { code: 'listed', name: 'Listed for Sale', count: 0, delta: 'pending', avg_score: 0, description: 'Pending Cotality MLS share; blocked false until landed.', color: 'var(--seg-listed)' },
+  { code: 'permit', name: 'Permit Activity', count: 0, delta: 'pending', avg_score: 0, description: 'Pending Cotality Building Permits share; blocked false until landed.', color: 'var(--seg-permit)' },
+  { code: 'investor', name: 'Investor / Multi-Property', count: 1892, delta: '+6%', avg_score: 79, description: 'Owner Link shows 2+ properties or repeat behavior.', color: 'var(--seg-investor)' },
+  { code: 'equity', name: 'Home Equity Candidate', count: 6320, delta: '+14%', avg_score: 76, description: 'Strong equity and prior cash-out/HELOC propensity.', color: 'var(--seg-equity)' },
+  { code: 'retention', name: 'Retention Risk', count: 3471, delta: '+4%', avg_score: 88, description: 'Current customer with rate spread above the retention threshold; listing and competitor overlays join only when live evidence exists.', color: 'var(--seg-retention)' }
 ];
 
 // icon keyed by segment code — matches the prototype's SEGMENTS icon column
@@ -45,7 +43,7 @@ const evidence = [
 // file is test-only per CLAUDE.md; production routes never import it.
 export const mockBorrowers: Borrower360[] = [
   {
-    borrower_id: 'B-48291', clip: 'clip_fixture_48291', display_name: 'James & Maria Rodriguez', city: 'Chicago', state: 'IL', zip: '60611',
+    borrower_id: 'B-48291', clip: 'clip_demo_48291', display_name: 'Owner 48291', city: 'Chicago', state: 'IL', zip: '60611',
     segment_codes: ['itm', 'equity'], equity_estimate: 285000, rate_spread_bps: 88, opportunity_score: 94, confidence: 88,
     recommended_offer: 'Refinance + HELOC', why_now: 'Lien matures in 4 months, strong equity, and local refi activity is rising.', evidence_ids: ['ev-001', 'ev-002', 'ev-003'], approval_status: 'pending',
     clip_id: 'clip_demo_48291', owner_link_id: 'ol_demo_48291', subject_property: 'Synthetic property · Chicago, IL 60611', avm_value: 625000, current_lien_balance: 340000, current_rate: 5.75, ltv: 54, related_property_count: 1,
@@ -53,7 +51,7 @@ export const mockBorrowers: Borrower360[] = [
     why_panel: { rate_spread_bps: 88, market_rate: 0.04875, equity_pct: 46, in_the_money: true, in_the_money_reason: '+88 bps spread (>= 75) AND 46% equity (>= 15%)', min_spread_bps: 75, min_equity_pct: 15, sources: ['mip.gold.fn_rate_spread', 'mip.gold.fn_in_the_money'] }
   },
   {
-    borrower_id: 'B-48294', clip: 'clip_fixture_48294', display_name: 'David Park', city: 'Chicago', state: 'IL', zip: '60647',
+    borrower_id: 'B-48294', clip: 'clip_demo_48294', display_name: 'Owner 48294', city: 'Chicago', state: 'IL', zip: '60647',
     segment_codes: ['permit', 'equity'], equity_estimate: 218000, rate_spread_bps: 188, opportunity_score: 87, confidence: 82,
     recommended_offer: 'HELOC', why_now: 'Recent high-value permit and strong equity position indicate renovation financing need.', evidence_ids: ['ev-002'], approval_status: 'pending',
     clip_id: 'clip_demo_48294', owner_link_id: 'ol_demo_48294', subject_property: 'Synthetic property · Chicago, IL 60647', avm_value: 560000, current_lien_balance: 342000, current_rate: 6.75, ltv: 61, related_property_count: 1,
@@ -61,7 +59,7 @@ export const mockBorrowers: Borrower360[] = [
     why_panel: { rate_spread_bps: 188, market_rate: 0.04875, equity_pct: 39, in_the_money: true, in_the_money_reason: '+188 bps spread (>= 75) AND 39% equity (>= 15%)', min_spread_bps: 75, min_equity_pct: 15, sources: ['mip.gold.fn_rate_spread', 'mip.gold.fn_in_the_money'] }
   },
   {
-    borrower_id: 'B-48295', clip: 'clip_fixture_48295', display_name: 'Lisa Thompson', city: 'Chicago', state: 'IL', zip: '60613',
+    borrower_id: 'B-48295', clip: 'clip_demo_48295', display_name: 'Owner 48295', city: 'Chicago', state: 'IL', zip: '60613',
     segment_codes: ['listed', 'retention'], equity_estimate: 405000, rate_spread_bps: 162, opportunity_score: 82, confidence: 79,
     recommended_offer: 'Purchase Mortgage', why_now: 'Listed-for-sale trigger suggests a purchase mortgage opportunity.', evidence_ids: ['ev-003'], approval_status: 'pending',
     clip_id: 'clip_demo_48295', owner_link_id: 'ol_demo_48295', subject_property: 'Synthetic property · Chicago, IL 60613', avm_value: 725000, current_lien_balance: 320000, current_rate: 6.50, ltv: 44, related_property_count: 1,
@@ -136,16 +134,16 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
   permit: {
     title: 'Permit signal',
     short: 'permits.building',
-    description: 'Cotality Building Permits records tagged to CLIP; flag triggers on permit value ≥ $25k in last 180 days.',
+    description: 'Cotality Building Permits share is pending; permit signals are blocked false until the feed lands.',
     lineage: [
-      { layer: 'SOURCE',   name: 'cotality.permits.building', meta: '4.8M active records' },
-      { layer: 'JOIN',     name: 'join.permit_to_clip',       meta: 'via address canonicalization' },
-      { layer: 'SEMANTIC', name: 'metrics.permit_signal',     meta: 'UC metric view' },
+      { layer: 'SOURCE',   name: 'cotality.permits.building', meta: 'Delta Share · pending' },
+      { layer: 'JOIN',     name: 'join.permit_to_clip',       meta: 'pending feed arrival' },
+      { layer: 'SEMANTIC', name: 'metrics.permit_signal',     meta: 'blocked false until landed' },
     ],
     signals: [
-      { label: 'Permit type',   source: 'permits.type',     value: 'Kitchen remodel' },
-      { label: 'Filed value',   source: 'permits.value',    value: '$48,000' },
-      { label: 'Filed',         source: 'permits.filed_at', value: '2026-03-17' },
+      { label: 'Readiness',     source: 'admin.sources',    value: 'roadmap' },
+      { label: 'has_permit',    source: 'borrower_360',     value: 'blocked false' },
+      { label: 'Permit rows',   source: 'permits.building', value: 'pending share' },
     ],
     updatedAt: '2026-04-20 06:12 UTC',
   },
@@ -157,12 +155,3 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
     signals: [],
   },
 };
-
-/** Fallback agent-activity events for Home when /api/audit/events is empty.
- *  TODO: wire to /api/audit/events (already exists) — this is only the
- *  starter feed so the Home page isn't blank before any action runs. */
-export const fallbackAgentActivity = [
-  { event_id: 'evt-start', actor: 'System',   action: 'Session started on Databricks One',       entity_type: 'session', entity_id: '—',   payload_json: {}, evidence_ids: [],                       created_at: '2026-04-20T10:24:07Z' },
-  { event_id: 'evt-load',  actor: 'Pipeline', action: 'Loaded Cotality Public Records via Delta Share', entity_type: 'pipeline', entity_id: 'deed_and_mortgage', payload_json: {}, evidence_ids: [], created_at: '2026-04-20T10:24:31Z' },
-  { event_id: 'evt-score', actor: 'Agent · Lead Portfolio', action: 'Scored 89,553 borrowers; 12,840 marked in-the-money', entity_type: 'scoring', entity_id: 'mip.gold.lead_scores', payload_json: {}, evidence_ids: ['ev-001'], created_at: '2026-04-20T10:25:04Z' },
-];

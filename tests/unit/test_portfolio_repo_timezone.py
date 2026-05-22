@@ -10,11 +10,18 @@ offset and bring the drift back.
 """
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta, timezone
 from typing import Any
 
 import pytest
 
+from backend.schemas.portfolio import (
+    CampaignStatusPatchRequest,
+    PortfolioCreateRequest,
+    PortfolioCriteria,
+    PortfolioPreviewRequest,
+)
 from backend.services.repositories.databricks_repo import (
     DatabricksPortfolioRepository,
 )
@@ -34,31 +41,117 @@ class _StubClient:
         preview_row: dict[str, Any],
         trend_rows: list[dict[str, Any]],
         day_zero_row: dict[str, Any] | None = None,
+        workflow_row: dict[str, Any] | None = None,
     ):
         self._preview_row = preview_row
         self._trend_rows = trend_rows
         self._day_zero_row = day_zero_row if day_zero_row is not None else {"day_zero": False}
+        self._workflow_row = workflow_row if workflow_row is not None else {
+            "approved_count": 0,
+            "in_outreach_count": 0,
+        }
         self.preview_calls: int = 0
+        self.statements: list[str] = []
+        self.parameters: list[dict[str, Any] | None] = []
 
     def _is_day_zero_sql(self, sql: str) -> bool:
         return "lead_population" in sql and "day_zero" in sql
 
     def execute(self, sql: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
-        _ = params
+        self.statements.append(sql)
+        self.parameters.append(params)
         if "funnel_snapshot_daily" in sql:
             return self._trend_rows
+        if "borrower_lifecycle_state" in sql:
+            return [self._workflow_row]
         if self._is_day_zero_sql(sql):
             return [self._day_zero_row]
         return [self._preview_row]
 
     def execute_one(self, sql: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        _ = params
+        self.statements.append(sql)
+        self.parameters.append(params)
         if "funnel_snapshot_daily" in sql:
             return self._trend_rows[0] if self._trend_rows else {}
+        if "borrower_lifecycle_state" in sql:
+            return self._workflow_row
         if self._is_day_zero_sql(sql):
             return self._day_zero_row
         self.preview_calls += 1
         return self._preview_row
+
+
+class _StubLakebase:
+    def __init__(self) -> None:
+        self.rows: list[dict[str, object]] = []
+
+    def fetchone(self, sql: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        self.rows.append({"sql": sql, "params": params or {}})
+        return {
+            "campaign_id": "11111111-1111-1111-1111-111111111111",
+            "audit_id": "22222222-2222-2222-2222-222222222222",
+        }
+
+
+class _CampaignListLakebase:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    def fetchall(
+        self,
+        sql: str,
+        params: dict[str, Any] | None = None,
+        *,
+        limit: int | None = None,
+    ) -> list[dict[str, Any]]:
+        self.calls.append({"sql": sql, "params": params or {}, "limit": limit})
+        return [
+            {
+                "campaign_id": "11111111-1111-4111-8111-111111111111",
+                "name": "Maya QA CA recapture",
+                "owner_email": "skyler@entrada.ai",
+                "status": "draft",
+                "criteria": {},
+                "suppression_policy": {},
+                "message_variants": [],
+                "channel_cascade": [],
+                "send_window": {},
+                "holdout": None,
+                "roi_assumptions": None,
+                "created_at": datetime(2026, 5, 12, 12, 0, tzinfo=UTC),
+                "updated_at": datetime(2026, 5, 12, 12, 1, tzinfo=UTC),
+            }
+        ]
+
+
+class _CampaignPatchLakebase:
+    def __init__(self, *, suppression_policy: dict[str, object]) -> None:
+        self.suppression_policy = suppression_policy
+        self.calls: list[dict[str, object]] = []
+
+    def _row(self, *, status: str = "draft") -> dict[str, object]:
+        return {
+            "campaign_id": "11111111-1111-4111-8111-111111111111",
+            "name": "Maya QA CA recapture",
+            "owner_email": "skyler@entrada.ai",
+            "status": status,
+            "criteria": {"marketing_eligibility": "Eligible only"},
+            "suppression_policy": self.suppression_policy,
+            "message_variants": [],
+            "channel_cascade": [],
+            "send_window": {},
+            "holdout": None,
+            "roi_assumptions": None,
+        }
+
+    def fetchone(self, sql: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        self.calls.append({"sql": sql, "params": params or {}})
+        if "UPDATE mip_app.campaigns" in sql:
+            return self._row(status=str((params or {}).get("status") or "pending_review"))  # type: ignore[return-value]
+        return self._row()  # type: ignore[return-value]
+
+    def execute(self, sql: str, params: dict[str, Any] | None = None) -> None:
+        self.calls.append({"sql": sql, "params": params or {}})
 
 
 def _preview_row() -> dict[str, Any]:
@@ -71,15 +164,21 @@ def _preview_row() -> dict[str, Any]:
     }
 
 
-def _trend_row(snapshot_at: Any) -> dict[str, Any]:
+def _trend_row(
+    snapshot_at: Any,
+    *,
+    snapshot_date: str = "2026-04-22",
+    top_tier_opportunities: int = 120,
+    avg_score: int = 72,
+) -> dict[str, Any]:
     return {
-        "snapshot_date": "2026-04-22",
+        "snapshot_date": snapshot_date,
         "snapshot_at": snapshot_at,
         "marketable_population": 1000,
         "high_intent_leads": 300,
-        "top_tier_opportunities": 120,
+        "top_tier_opportunities": top_tier_opportunities,
         "offers_recommended": 250,
-        "avg_score": 72,
+        "avg_score": avg_score,
         "approved_count": 0,
         "in_outreach_count": 0,
     }
@@ -198,10 +297,15 @@ def test_day_zero_false_when_lead_population_has_rows():
     assert preview.day_zero is False
 
 
-def test_day_zero_defaults_false_when_probe_raises():
-    """Safe default: an incorrect ``True`` would hide real data, so on
-    any failure probing ``lead_population`` we return ``False`` and let
-    the caller see whatever row counts came back from the warehouse."""
+def test_day_zero_probe_failure_propagates():
+    """R6-07: a warehouse failure on the day-zero probe must propagate.
+
+    The prior implementation silently returned ``False`` on exception,
+    which surfaced a misleading preview -- a degraded banner on top of
+    a "there IS data, it's just 0" KPI grid. Now the exception bubbles
+    to the router so the caller sees one honest 503 and the warming-up
+    banner instead of a half-rendered page.
+    """
 
     class _FailingClient(_StubClient):
         def execute_one(
@@ -213,8 +317,8 @@ def test_day_zero_defaults_false_when_probe_raises():
 
     client = _FailingClient(_preview_row(), [_trend_row("2026-04-22T18:30:00")])
     repo = DatabricksPortfolioRepository(client)  # type: ignore[arg-type]
-    preview = repo.preview(None)
-    assert preview.day_zero is False
+    with pytest.raises(RuntimeError, match="warehouse probe failed"):
+        repo.preview(None)
 
 
 # ---------------------------------------------------------------------------
@@ -246,14 +350,10 @@ def test_preview_second_call_same_order_hits_cache():
     """Functional: two calls with semantically-equivalent criteria must
     share the same cache entry. The second call should NOT re-run the
     preview SELECT on the stub client."""
-    from backend.schemas.portfolio import PortfolioCriteria, PortfolioPreviewRequest
-
     client = _StubClient(_preview_row(), [_trend_row("2026-04-22T18:30:00")])
     repo = DatabricksPortfolioRepository(client)  # type: ignore[arg-type]
 
-    req = PortfolioPreviewRequest(
-        criteria=PortfolioCriteria(geography="Texas", min_equity_pct=25)
-    )
+    req = PortfolioPreviewRequest(criteria=PortfolioCriteria(min_equity_pct=25))
     repo.preview(req)
     calls_after_first = client.preview_calls
     repo.preview(req)
@@ -261,3 +361,226 @@ def test_preview_second_call_same_order_hits_cache():
     assert calls_after_first == calls_after_second == 1, (
         f"second call should have hit cache; saw {calls_after_second} preview SELECTs"
     )
+
+
+def test_campaign_list_is_fresh_lakebase_state_not_preview_cache(monkeypatch):
+    """GET /api/portfolio is the campaign list, not the KPI preview cache.
+
+    Resilience audits should benchmark POST /api/portfolio/preview for
+    aggregate cache behavior. Campaign list reads are mutation-adjacent
+    Lakebase state, so each call intentionally reaches Lakebase.
+    """
+    lakebase = _CampaignListLakebase()
+    monkeypatch.setattr(
+        "backend.services.repositories.databricks_repo.get_lakebase_client",
+        lambda: lakebase,
+    )
+    repo = DatabricksPortfolioRepository(
+        _StubClient(_preview_row(), [_trend_row("2026-04-22T18:30:00")])
+    )  # type: ignore[arg-type]
+
+    first = repo.list_campaigns(owner_email="skyler@entrada.ai")
+    second = repo.list_campaigns(owner_email="skyler@entrada.ai")
+
+    assert len(first.campaigns) == len(second.campaigns) == 1
+    assert len(lakebase.calls) == 2
+    assert all("mip_app.campaigns" in str(call["sql"]) for call in lakebase.calls)
+
+
+def test_trend_delta_uses_exact_snapshot_date_and_drops_bootstrap_zero():
+    """A bootstrap 0 row must not become a fake percent change baseline."""
+    trend_rows = [
+        _trend_row(
+            "2026-05-04T19:48:14",
+            snapshot_date="2026-05-04",
+            top_tier_opportunities=3074,
+        ),
+        _trend_row(
+            "2026-04-23T19:48:14",
+            snapshot_date="2026-04-23",
+            top_tier_opportunities=3081,
+        ),
+        _trend_row(
+            "2026-04-22T19:48:14",
+            snapshot_date="2026-04-22",
+            top_tier_opportunities=0,
+        ),
+    ]
+    client = _StubClient(_preview_row(), trend_rows)
+    repo = DatabricksPortfolioRepository(client)  # type: ignore[arg-type]
+
+    preview = repo.preview(None)
+    trend = preview.trends["top_tier_opportunities"]
+
+    assert trend.series == [3081.0, 3074.0]
+    assert trend.comparison_label == "vs 2026-04-23"
+    assert trend.delta_pct == -0.2
+    assert trend.note == "Comparison starts on 2026-04-23 because earlier snapshots predate this metric."
+
+
+def test_trend_step_change_adds_presenter_caution_note():
+    trend_rows = [
+        _trend_row(
+            "2026-05-08T19:48:14",
+            snapshot_date="2026-05-08",
+            top_tier_opportunities=4320,
+        ),
+        _trend_row(
+            "2026-05-07T19:48:14",
+            snapshot_date="2026-05-07",
+            top_tier_opportunities=4542,
+        ),
+        _trend_row(
+            "2026-05-06T19:48:14",
+            snapshot_date="2026-05-06",
+            top_tier_opportunities=3074,
+        ),
+    ]
+    client = _StubClient(_preview_row(), trend_rows)
+    repo = DatabricksPortfolioRepository(client)  # type: ignore[arg-type]
+
+    preview = repo.preview(None)
+    trend = preview.trends["top_tier_opportunities"]
+
+    assert trend.note is not None
+    assert "Material step change on 2026-05-07" in trend.note
+
+
+def test_filtered_preview_suppresses_national_trends():
+    """Filtered KPIs must not reuse the _ALL/_ALL national trend line."""
+    client = _StubClient(_preview_row(), [_trend_row("2026-04-22T18:30:00")])
+    repo = DatabricksPortfolioRepository(client)  # type: ignore[arg-type]
+    req = PortfolioPreviewRequest(criteria=PortfolioCriteria(min_equity_pct=25))
+
+    preview = repo.preview(req)
+
+    assert preview.trends == {}
+    assert preview.trend_status == "not_applicable"
+    assert preview.trend_note is not None
+    assert preview.approved_count is None
+    assert preview.in_outreach_count is None
+
+
+def test_unfiltered_preview_uses_live_workflow_counts_over_snapshot():
+    """Workflow counts should match current lifecycle state, not stale daily snapshots."""
+    trend = _trend_row("2026-04-22T18:30:00")
+    trend["approved_count"] = 23
+    trend["in_outreach_count"] = 0
+    client = _StubClient(
+        _preview_row(),
+        [trend],
+        workflow_row={"approved_count": 23, "in_outreach_count": 1},
+    )
+    repo = DatabricksPortfolioRepository(client)  # type: ignore[arg-type]
+
+    preview = repo.preview(None)
+
+    assert preview.approved_count == 23
+    assert preview.in_outreach_count == 1
+    workflow_sql = next(sql for sql in client.statements if "borrower_lifecycle_state" in sql)
+    assert "mip.gold.borrower_360" in workflow_sql
+
+
+def test_create_uses_submitted_criteria_for_population_count(monkeypatch):
+    """Saved portfolio size must match the reviewed criteria, not the national default."""
+    client = _StubClient(_preview_row(), [])
+    lakebase = _StubLakebase()
+    monkeypatch.setattr(
+        "backend.services.repositories.databricks_repo.get_lakebase_client",
+        lambda: lakebase,
+    )
+    repo = DatabricksPortfolioRepository(client)  # type: ignore[arg-type]
+
+    repo.create(
+        PortfolioCreateRequest(
+            name="Owner occupied",
+            criteria=PortfolioCriteria(occupancy="Owner-occupied", min_equity_pct_label="≥ 25%"),
+        )
+    )
+
+    preview_index = next(i for i, sql in enumerate(client.statements) if "borrower_360" in sql)
+    preview_sql = client.statements[preview_index]
+    preview_params = client.parameters[preview_index]
+    assert "is_owner_occupied = TRUE" in preview_sql
+    assert "equity_pct >= :equity_floor" in preview_sql
+    assert "marketing_eligible = TRUE" in preview_sql
+    assert preview_params == {"equity_floor": 25}
+    assert lakebase.rows
+    assert "mip_app.action_audit" in lakebase.rows[0]["sql"]
+    assert lakebase.rows[0]["params"]["criteria"] == (
+        '{"occupancy": "Owner-occupied", "marketing_eligibility": "Eligible only", '
+        '"min_equity_pct_label": "\\u2265 25%"}'
+    )
+    metadata = json.loads(str(lakebase.rows[0]["params"]["metadata"]))
+    assert metadata["source"] == "portfolio_builder"
+    assert metadata["portfolio_criteria"] == {
+        "occupancy": "Owner-occupied",
+        "marketing_eligibility": "Eligible only",
+        "min_equity_pct_label": "≥ 25%",
+    }
+    assert "criteria" not in metadata
+    assert metadata["action"] == "portfolio.create"
+    assert metadata["marketable_population"] == 1000
+
+
+@pytest.mark.parametrize(
+    "suppression_policy",
+    [
+        {"default": "eligible_only", "frequency_cap_days": 30},
+        {"require_marketing_eligible": True, "frequency_cap_days": 30},
+        {"marketing_eligibility": "Eligible only", "frequency_cap_days": 30},
+        {"marketing_eligibility": "eligible_only", "frequency_cap_days": 30},
+    ],
+)
+def test_campaign_status_accepts_reviewed_eligible_only_policy_shapes(
+    monkeypatch,
+    suppression_policy: dict[str, object],
+):
+    lakebase = _CampaignPatchLakebase(suppression_policy=suppression_policy)
+    monkeypatch.setattr(
+        "backend.services.repositories.databricks_repo.get_lakebase_client",
+        lambda: lakebase,
+    )
+    repo = DatabricksPortfolioRepository(_StubClient(_preview_row(), []))  # type: ignore[arg-type]
+
+    summary = repo.patch_status(
+        "11111111-1111-4111-8111-111111111111",
+        CampaignStatusPatchRequest(status="pending_review"),
+        actor="skyler@entrada.ai",
+    )
+
+    assert summary.status == "pending_review"
+    patch_calls = [
+        call for call in lakebase.calls
+        if "UPDATE mip_app.campaigns" in str(call["sql"])
+    ]
+    assert len(patch_calls) == 1
+    patch_call = patch_calls[0]
+    assert "INSERT INTO mip_app.action_audit" in str(patch_call["sql"])
+    assert "request_id" in str(patch_call["sql"])
+    assert patch_call["params"]["actor"] == "skyler@entrada.ai"
+    assert str(patch_call["params"]["request_id"]).startswith("campaign-status-")
+    metadata = json.loads(str(patch_call["params"]["metadata"]))
+    assert metadata == {
+        "action": "campaign.status_update",
+        "rationale": None,
+        "status": "pending_review",
+    }
+
+
+def test_empty_filtered_cohort_keeps_avg_score_null_not_zero():
+    client = _StubClient(
+        {
+            "marketable_population": 0,
+            "high_intent_leads": 0,
+            "top_tier_opportunities": None,
+            "offers_recommended": None,
+            "avg_score": None,
+        },
+        [_trend_row("2026-04-22T18:30:00")],
+    )
+    repo = DatabricksPortfolioRepository(client)  # type: ignore[arg-type]
+
+    preview = repo.preview(None)
+
+    assert preview.avg_score is None

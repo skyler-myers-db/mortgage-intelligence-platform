@@ -1,8 +1,13 @@
 # Unity Catalog grants for the MIP app service principal
 
+> **Internal implementation artifact. Not approved for public release.**
+> Contains workspace object names, grant SQL, and provider/share access
+> assumptions intended for implementation operators only.
+
 **Audience.** The Entrada/Databricks SE (or customer workspace admin) who
-runs `databricks bundle deploy -t dev|prod` against a fresh customer
-workspace. This file is the runbook — every SQL block below is
+runs `./scripts/deploy.sh -t dev|prod` against a fresh customer workspace.
+That script wraps the Databricks bundle resource deploy plus app promotion and
+population jobs. This file is the runbook — every SQL block below is
 copy-paste-able and every click path is linear.
 
 **Precondition.** The bundle has been deployed once (`databricks bundle
@@ -72,34 +77,39 @@ GRANT USE SCHEMA, SELECT ON SCHEMA mip.ref TO `mip-app`;
 
 **Objects covered.** `lender_dictionary` (PII redaction vocabulary),
 `offer_rules_config` (admin-tunable offer thresholds), `state_footprint`
-(the 6-state IL/CA/FL/TX/WA/CO whitelist), `refresh_run_state` (one-row
+(US-state display metadata; live coverage comes from gold rollups),
+`refresh_run_state` (one-row
 anchor for deterministic `refreshed_at` across the gold DAG).
 
 **What breaks if missing.** Lender names redact to the raw uppercase
-share string (ugly but non-fatal). Offer rules fall through to the
-hard-coded defaults in `backend/config/settings.py` — meaning admin
-overrides configured via `/api/admin/rules` do not apply. The
-`refresh_run_state` read fails silently and every gold table's
+share string (ugly but non-fatal). Offer rules cannot be read from the
+governed Unity Catalog rules table, so the admin rules surface and gold
+refresh path fail visibly instead of silently applying stale thresholds.
+The `refresh_run_state` read fails silently and every gold table's
 `refreshed_at` chip drifts by seconds.
 
 ---
 
-## 4. Schema `mip.silver` (admin/sources — optional)
+## 4. Schema `mip.silver` (ETL only — do not grant to the App)
+
+The running Databricks App service principal should not receive direct
+`SELECT` on `mip.silver.*`. The Admin → Sources panel reads
+`mip.gold.source_readiness`, a non-PII summary produced by the gold
+refresh job. That keeps source readiness live without weakening the
+governance boundary that prevents the app from accidentally querying
+raw/silver fields.
+
+Grant silver access to the ETL/deploy identity that runs
+`mip_refresh_silver` and `mip_refresh_scores`, not to `mip-app`:
 
 ```sql
-GRANT USE SCHEMA, SELECT ON SCHEMA mip.silver TO `mip-app`;
+GRANT USE SCHEMA, SELECT ON SCHEMA mip.silver TO `sp-mip-etl`;
 ```
 
-**Objects covered.** `property_master`, `lien_current`,
-`mortgage_events`, `owner_transfer_events`, `market_rates_weekly`,
-`owner_property_bridge`.
-
-**What breaks if missing.** The `/api/admin/sources` endpoint degrades
-per-source with `status: "permission_denied"` on each silver row. The
-Admin → Sources page renders a red chip per table instead of row counts
-+ last-refreshed timestamps. The product flow itself (portfolio → leads
-→ borrower → approve) is unaffected because the app reads gold, not
-silver. **Grant this on prod; it is optional on dev.**
+**What breaks if missing.** The refresh jobs cannot rebuild gold tables
+or `mip.gold.source_readiness`. The product flow then goes stale or
+fails at refresh time. The app itself still only needs `mip.gold` and
+`mip.ref` reads.
 
 ---
 
@@ -124,16 +134,29 @@ Lakebase — the bundle deploy plus the `mip_lakebase_migrate` job
 idempotently applies `lakebase/schema.sql` + `lakebase/seed_campaigns.sql`
 using workspace-identity short-lived credentials. If you are coming from
 a customer whose Lakebase is external (not the bundle-provisioned
-instance), grant the SP `USAGE` on the `mip_app` schema and
-`SELECT, INSERT, UPDATE, DELETE` on every table in it:
+instance), grant the SP only the table permissions its runtime paths
+need. The audit ledger is append-only: `mip-app` gets `SELECT, INSERT`
+there and must not receive `UPDATE` or `DELETE`. `lakebase/schema.sql`
+also installs `trg_action_audit_append_only`, a statement-level trigger
+that rejects `UPDATE` / `DELETE` even if a bundle-provisioned identity owns
+the table or receives broader grants.
 
 ```sql
 -- Only for externally-managed Lakebase. The bundle-provisioned
 -- instance grants the app binding automatically via CAN_CONNECT_AND_CREATE.
 GRANT USAGE ON SCHEMA mip_app TO "mip-app";
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA mip_app TO "mip-app";
-ALTER DEFAULT PRIVILEGES IN SCHEMA mip_app
-  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO "mip-app";
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE mip_app.campaigns TO "mip-app";
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE mip_app.approvals TO "mip-app";
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE mip_app.saved_leads TO "mip-app";
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE mip_app.outreach_drafts TO "mip-app";
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE mip_app.genie_sessions TO "mip-app";
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE mip_app.genie_messages TO "mip-app";
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE mip_app.genie_cohorts TO "mip-app";
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE mip_app.genie_cohort_members TO "mip-app";
+GRANT SELECT, INSERT ON TABLE mip_app.action_audit TO "mip-app";
+REVOKE UPDATE, DELETE ON TABLE mip_app.action_audit FROM "mip-app";
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE mip_app.agent_sessions TO "mip-app";
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE mip_app.feedback TO "mip-app";
 ```
 
 **What breaks if missing.** `/api/audit/events` returns 503. Approval
@@ -159,15 +182,18 @@ shared tables via a provider catalog (typically named
 3. **Create catalog from share** → name it `cotality_mortgage_data` (or
    whatever `pipelines/lakeflow/mip_feature_pipeline.py` references —
    grep the pipeline for the literal catalog name before naming).
-4. On the new provider catalog: **Permissions → Grant → `mip-app` →
-   `USE CATALOG`, `SELECT`**.
+4. On the new provider catalog: **Permissions → Grant → the ETL/deploy
+   identity that runs `mip_refresh_silver` → `USE CATALOG`, `SELECT`**.
+   Do not grant the running `mip-app` service principal direct read access
+   to Cotality provider/raw catalogs; the app reads curated `mip.gold` and
+   `mip.ref` surfaces only.
 
 **SQL equivalent** (metastore admin):
 
 ```sql
-GRANT USE PROVIDER ON METASTORE TO `mip-app`;
-GRANT USE CATALOG ON CATALOG cotality_mortgage_data TO `mip-app`;
-GRANT USE SCHEMA, SELECT ON SCHEMA cotality_mortgage_data.corelogic TO `mip-app`;
+GRANT USE PROVIDER ON METASTORE TO `sp-mip-etl`;
+GRANT USE CATALOG ON CATALOG cotality_mortgage_data TO `sp-mip-etl`;
+GRANT USE SCHEMA, SELECT ON SCHEMA cotality_mortgage_data.corelogic TO `sp-mip-etl`;
 ```
 
 **What breaks if missing.** The `mip_refresh_silver` Lakeflow pipeline
@@ -198,10 +224,10 @@ reporting `"silver_max_ingested_at": null`.
 SQL form; use the UI or the Databricks REST API
 `/api/2.0/genie/spaces/{space_id}/permissions`).
 
-**What breaks if missing.** `/api/genie/ask` returns `source: "fallback"`
-for every question (safe corpus answers them with a provenance chip).
-Not an outage — the degraded posture is by design — but the product
-demo loses its "real Genie" proof point.
+**What breaks if missing.** `/api/genie/message` returns `source: "degraded"`
+for every question. Not an outage — the degraded posture is by design and
+does not fabricate metrics — but the product demo loses its "real Genie"
+proof point.
 
 **Genie's own grants.** The Genie space itself queries the semantics
 views as the space owner. If the space owner is a human user who leaves
@@ -237,11 +263,10 @@ Run after completing §§1–8 to confirm every grant is live:
 SHOW GRANTS `mip-app` ON CATALOG mip;
 SHOW GRANTS `mip-app` ON SCHEMA mip.gold;
 SHOW GRANTS `mip-app` ON SCHEMA mip.ref;
-SHOW GRANTS `mip-app` ON SCHEMA mip.silver;
 SHOW GRANTS `mip-app` ON SCHEMA mip_app_state.public;
 
--- Cotality share (catalog name depends on customer)
-SHOW GRANTS `mip-app` ON CATALOG cotality_mortgage_data;
+-- Cotality share (catalog name depends on customer) -- ETL/deploy identity only
+SHOW GRANTS `sp-mip-etl` ON CATALOG cotality_mortgage_data;
 
 -- Warehouse
 SHOW GRANTS ON WAREHOUSE `mip_serverless_sql`;
@@ -249,7 +274,8 @@ SHOW GRANTS ON WAREHOUSE `mip_serverless_sql`;
 -- Concrete round-trip
 SELECT COUNT(*) FROM mip.gold.borrower_360;     -- expect > 0 after refresh
 SELECT COUNT(*) FROM mip.ref.offer_rules_config; -- expect > 0 after seed
-SELECT COUNT(*) FROM mip.silver.property_master; -- optional; §4 gate
+-- Optional ETL-only proof; run as `sp-mip-etl`, not `mip-app`.
+SELECT COUNT(*) FROM mip.silver.property_master;
 ```
 
 ---
@@ -294,12 +320,52 @@ Flip this flag only if you cannot guarantee the edge strips
 it for an Apps-hosted deploy will make the product unusable without
 gaining any real safety.
 
+### 10a. Non-Databricks-Apps deploys — explicit guidance
+
+A handful of customers run the FastAPI process outside Databricks Apps
+(Azure App Service, GKE, a VM fronted by NGINX). That is a legitimate
+but unusual shape, and the `trust_forwarded_headers=True` default is
+**unsafe** there: without the Apps edge, there is no guarantee the
+upstream proxy strips client-supplied `X-Forwarded-Email` /
+`X-Forwarded-Groups` headers. A caller can then send any email and
+claim any identity — audit rows become forgeable, and if your proxy
+also doesn't strip `X-Forwarded-Groups`, the admin surface is as well.
+
+**Boot-time warning.** On process start
+(`backend/config/settings.py::check_trust_boundary_at_startup`), the
+app emits a structured WARNING `event=rbac_trust_boundary_unclear`
+when `trust_forwarded_headers=True` and the runtime does NOT look like
+a Databricks Apps deploy (no `DATABRICKS_APP_PORT` / `DATABRICKS_APP_URL`
+env var). Operators should treat that log line as a deploy-shape
+smell test: either the Apps marker env var wasn't plumbed through, or
+the deploy genuinely is non-Apps and the flag needs attention.
+The same condition is surfaced on `/api/v1/admin/health` as
+`boundary_warning` so admins do not have to discover the issue only in
+stdout logs.
+
+**What to do.** On a non-Apps deploy, set
+`MIP_TRUST_FORWARDED_HEADERS=false` in the environment fronting the
+Python process. The product shifts to a fail-closed posture:
+
+- Audit rows attribute to `unknown-actor@untrusted-edge` (a distinct,
+  greppable string) rather than a caller-supplied email.
+- The admin surface closes entirely — only the email allowlist can
+  admit, and with the email header ignored, no caller passes.
+- The startup WARNING stops firing on the next boot because trust is
+  now explicitly off.
+
+This is the correct posture when the edge is not trusted. If your
+non-Apps deploy has a reverse proxy that DOES strip inbound
+`X-Forwarded-*` (verify with an e2e test that spoofed headers are
+dropped), you can leave trust enabled — but document that boundary
+assumption in your runbook.
+
 ---
 
 ## 11. Negative grants (things you should NOT give the app SP)
 
-- **`MANAGE` or `ALL PRIVILEGES`** on `mip` catalog. The app only reads
-  gold/ref/silver and writes to `mip_app` — never DDL. A leaked app
+-- **`MANAGE` or `ALL PRIVILEGES`** on `mip` catalog. The app only reads
+  gold/ref and writes to `mip_app` — never DDL. A leaked app
   credential should not be able to drop tables.
 - **`MODIFY`** on `mip.gold` / `mip.silver`. Gold/silver are
   materialized by bundle jobs under a separate jobs SP; the app SP

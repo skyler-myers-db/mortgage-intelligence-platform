@@ -12,17 +12,23 @@ on-call engineer during a live session or after a production deploy.
   pending-state behaviour. Read this before explaining to a partner
   why a `delta_vs_prior_*` column is blank or an approval-rate cell is
   `0` on a first-day deploy.
+- [`docs/disaster-recovery.md`](disaster-recovery.md) — recovery for
+  corrupted Lakebase state, bad app snapshots, bundle resource regressions,
+  deleted Genie spaces, audit archival, and HMAC action-secret rotation.
 
 The Module 0 app runs on live Unity Catalog + Lakebase — there is no
 mock fallback in the deployed app. Everything below assumes the
 operator can hit both the app URL and the Databricks workspace CLI.
+Use canonical `/api/v1/*` paths in every operator command. Deprecated
+`/api/*` aliases still work today for compatibility, but new runbooks
+and customer procedures should not depend on them.
 
 ---
 
 ## 1. Session morning-of
 
 Run [`docs/module0-rehearsal-checklist.md`](module0-rehearsal-checklist.md)
-end-to-end. It warms the SQL warehouse, probes `/api/health`, cold-starts
+end-to-end. It warms the SQL warehouse, probes `/api/v1/health`, cold-starts
 Genie, verifies a Lakebase write, and walks the click path. If the
 checklist returns all-green, skip to §4 (deploy-from-scratch is only for
 a clean workspace).
@@ -30,7 +36,7 @@ a clean workspace).
 If any step on the checklist fails, the three highest-likelihood
 cold-start problems — and their one-line recovery commands — are:
 
-### 1.1 Warehouse cold / `warehouse: down` in `/api/health`
+### 1.1 Warehouse cold / `warehouse: down` in `/api/v1/health`
 
 The 2X-Small serverless warehouse auto-stops after 15 min idle. First
 query after a cold window is 30–60 s.
@@ -50,7 +56,7 @@ databricks api post /api/2.0/sql/statements \
 
 ### 1.2 Lakebase cold / auth token expired
 
-`/api/health` → `"lakebase": "down"` or `/api/audit` returns a 500.
+`/api/v1/health` → `"lakebase": "down"` or `/api/v1/audit` returns a 500.
 
 ```bash
 # Re-issue workspace identity; token auto-refresh on the deployed app,
@@ -67,18 +73,60 @@ If the Lakebase instance itself is stopped, bounce it:
 databricks bundle run mip_lakebase_migrate -t dev
 ```
 
-### 1.3 Genie cold / first ask returns `source: "fallback"`
+### 1.3 Genie cold / first ask returns `source: "degraded"`
 
-A cold Genie space takes 10–30 s on the first conversation. The safe
-corpus in `backend/services/genie_answers.py` catches this invisibly,
-but you probably want the real space for the audience pitch. Prime it:
+A cold Genie space takes 10–30 s on the first conversation. The app now
+returns an honest degraded response with no fabricated metrics until the
+real space is available. Prime it before the audience pitch:
 
 ```bash
-curl -s -X POST "$MIP_APP_URL/api/genie/ask" \
+curl -s -X POST "$MIP_APP_URL/api/v1/genie/message" \
   -H 'content-type: application/json' \
-  -d '{"question":"How many borrowers across the 6-state footprint are currently in-the-money?"}' \
+  -d '{"question":"How many borrowers across the current Cotality data coverage are currently in-the-money?"}' \
   | jq '{source, metric_value}'
 # Once `source == "genie"`, cached and fast for the session.
+```
+
+### 1.4 Load posture before a high-traffic walkthrough
+
+The backend process protects live dependencies with app-side token
+buckets plus per-dependency semaphores. Current defaults are:
+
+| Dependency | Limit | Operator note |
+|---|---:|---|
+| Warehouse reads | 24 concurrent | Slightly above the 2X-Small serverless scheduler so the warehouse queues short bursts. |
+| Lakebase reads/writes | 16 concurrent | Matches the Lakebase connection-pool max size; pool checkout should not bottleneck before the semaphore. |
+| Genie turns | 6 concurrent | Enough for a demo panel; ask the room to avoid everyone firing Genie at once. |
+
+Short-TTL caches (`TTLCache` / stale-while-revalidate health cache) are
+**process-local by design**. Databricks Apps runs Module 0 as a single
+app instance today, so local caches reduce warehouse pressure without a
+Redis-style dependency. If a customer scales the app to more than one
+replica, each replica has its own cache and `tools/load_test/run.sh`
+must be re-run against that deployment before signoff.
+
+For walkthrough planning, say this plainly: the app supports six
+concurrent Genie turns before it starts applying backpressure.
+
+Use the load harness before major customer sessions:
+
+```bash
+MIP_API_URL="$MIP_APP_URL" MIP_BEARER_TOKEN="$(databricks auth token --host "$DATABRICKS_HOST" | jq -r .access_token)" \
+  bash tools/load_test/run.sh
+```
+
+`run.sh` warms the read caches before its measured window by default
+(health, segments, portfolio preview, lead keys, and the first 50
+borrower dossiers). Set `MIP_LOAD_TEST_SKIP_WARMUP=1` only when you
+want a cold-start stress run rather than the sustained warm-load
+baseline.
+
+Write-path load is opt-in because it creates real Lakebase rows:
+
+```bash
+MIP_LOAD_TEST_WRITE=1 MIP_USERS=5 MIP_RUN_TIME=1m \
+  MIP_API_URL="$MIP_APP_URL" MIP_BEARER_TOKEN="$MIP_BEARER_TOKEN" \
+  bash tools/load_test/run.sh
 ```
 
 ---
@@ -87,7 +135,7 @@ curl -s -X POST "$MIP_APP_URL/api/genie/ask" \
 
 ### 2.1 The DegradedBanner appeared at the top of the page
 
-**What it means:** `/api/health` flipped to `status: "degraded"` — one
+**What it means:** `/api/v1/health` flipped to `status: "degraded"` — one
 of warehouse / Lakebase / Genie is `down` or a breaker is `open`. The
 frontend auto-retries; the banner clears itself when the breaker
 closes (typically 30 s after recovery).
@@ -102,31 +150,31 @@ Back in a moment."*
    single probe; one success closes it.
 2. If the banner persists > 60 s, narrate from the second-monitor API
    endpoints (see §2.3) and come back to the UI after.
-3. Operator: in a side terminal, run `curl -s $MIP_APP_URL/api/health | jq`
+3. Operator: in a side terminal, run `curl -s $MIP_APP_URL/api/v1/health | jq`
    to see which dependency is down. That tells you whether to re-warm
    the warehouse (§1.1), refresh the Lakebase token (§1.2), or wait out
    Genie (§1.3).
 
-### 2.2 A Genie answer returned `source: "fallback"`
+### 2.2 A Genie answer returned `source: "degraded"`
 
-The Genie circuit breaker is open; the safe corpus answered instead.
-Audience sees a structured answer with a provenance chip. **Do not
-re-ask the same question on-stage** — the breaker's cool-down is 30 s
-and re-asking just re-opens it.
+The Genie circuit breaker is open. The app did not display fabricated
+analytics. **Do not re-ask the same question on-stage** — the breaker's
+cool-down is 30 s and re-asking just re-opens it.
 
-**What to say:** *"Our safe corpus just answered that — ten canonical
-questions pinned to sample_questions.md, always available even if the
-Genie space is cold-starting. The provenance chip is real."*
+**What to say:** *"Genie is reconnecting, and the app is refusing to show
+unsourced analytics. We'll use the already-loaded proof-backed surfaces and
+come back to Genie once the live space is warm."*
 
 ### 2.3 Whole UI is gone
 
 Swap to the second-monitor terminal and pre-loaded tabs:
 
 ```bash
-curl -s $MIP_APP_URL/api/leads?limit=5 | jq
-curl -s $MIP_APP_URL/api/borrowers/B-48291 | jq
-curl -s $MIP_APP_URL/api/segments | jq
-curl -s $MIP_APP_URL/api/audit/events?limit=5 | jq '.[0]'
+curl -s $MIP_APP_URL/api/v1/leads?limit=5 | jq
+BORROWER_ID="$(curl -s "$MIP_APP_URL/api/v1/leads?limit=1" | jq -r '.[0].borrower_id')"
+curl -s "$MIP_APP_URL/api/v1/borrowers/$BORROWER_ID" | jq
+curl -s $MIP_APP_URL/api/v1/segments | jq
+curl -s $MIP_APP_URL/api/v1/audit/events?limit=5 | jq '.[0]'
 ```
 
 **What to say:** *"The UI is the skin, not the substance — here's the
@@ -192,7 +240,7 @@ specific step.
 
 ```bash
 # 0. Prereqs: .env.local populated with DATABRICKS_HOST + DATABRICKS_WAREHOUSE_ID.
-#    The Genie space id is written by step 8 on first run.
+#    If GENIE_SPACE_ID is blank, deploy.sh provisions it before bundle deploy.
 
 # One command:
 ./scripts/deploy.sh
@@ -204,43 +252,50 @@ That single invocation executes:
 
 1. `npm --prefix frontend run build` — the bundle sync uploads
    `frontend/dist/**` so the FastAPI runtime can serve the SPA.
-2. `databricks bundle validate -t dev` (via `tools/databricks/bundle_env.py`
-   so `.env.local` maps to `BUNDLE_VAR_sql_warehouse_id` / `BUNDLE_VAR_genie_space_id`).
-3. `databricks bundle deploy -t dev` — SQL warehouse, app, jobs,
+2. `tools/databricks/bundle_env.py validate -t dev`
+   (env-aware wrapper around `databricks bundle validate`; it maps
+   `.env.local` to `BUNDLE_VAR_sql_warehouse_id` / `BUNDLE_VAR_genie_space_id`).
+3. `tools/databricks/bundle_env.py plan -t dev` — read-only direct
+   deployment plan. Review this output before a real app/customer deploy.
+4. `tools/databricks/bundle_env.py deploy -t dev` — env-aware wrapper
+   around direct `databricks bundle deploy`; SQL warehouse, app, jobs,
    pipelines, Lakebase instance, MLflow experiment, dashboards.
-4. `databricks bundle run mip_fred_rates_ingest -t dev` — FRED
+5. `databricks apps deploy mip-app --mode SNAPSHOT` — promotes the
+   uploaded bundle source to the running app compute.
+6. `databricks bundle run mip_fred_rates_ingest -t dev` — FRED
    MORTGAGE30US into `silver.market_rates_weekly`.
-5. `databricks bundle run mip_refresh_silver -t dev` — Cotality Delta
-   Share → `mip.silver.*`, 6-state filtered.
-6. `databricks bundle run mip_lakebase_migrate -t dev` — Postgres
+7. `databricks bundle run mip_refresh_silver -t dev` — Cotality Delta
+   Share → `mip.silver.*`; geography coverage is discovered from source
+   rows with non-null states.
+8. `databricks bundle run mip_lakebase_migrate -t dev` — Postgres
    `schema.sql` + `seed_campaigns.sql` (both idempotent).
-7. `databricks bundle run mip_refresh_scores -t dev` — CTAS chain:
+9. `databricks bundle run mip_refresh_scores -t dev` — CTAS chain:
    `property_owner_bridge` → `evidence_events` → `borrower_360` →
    `lead_scores` → `lead_population` → `segment_population` →
    `lockin_cohort` → `borrower_dossier` → **`refresh_semantics_views`**
    (the three `mip.semantics.*` metric views Genie binds to).
-8. `databricks bundle run mip_sync_lifecycle_state -t dev` — initial
+10. `databricks bundle run mip_sync_lifecycle_state -t dev` — initial
    seed run so `mip.gold.borrower_lifecycle_state` has a row per
    borrower and `delta_vs_prior_*` columns can start resolving. After
    deploy, this job is **event-triggered** from the backend approval
-   path (POST `/api/outreach/approve` fires
+   path (POST `/api/v1/outreach/approve` fires
    `backend.services.job_trigger.trigger_lifecycle_sync` via FastAPI
    `BackgroundTasks`, debounced 60 s). A daily 04:00 America/Chicago
    fallback cron catches any dropped trigger + records the funnel
    snapshot so WoW deltas keep advancing. Not hourly — no reason to
    refresh when nothing has changed.
-9. `python tools/databricks/provision_genie_space.py` — reads
+11. `python tools/databricks/provision_genie_space.py` — reads
    `genie/mortgage_lead_intelligence_space.yml`, creates or updates
    the Genie Space, binds trusted assets, writes `genie/space_id.txt`.
-10. `./scripts/smoke_live.sh` — verify the app and all four deps up.
+12. `./scripts/smoke_live.sh` — verify the app and all four deps up.
 
 Flags on `scripts/deploy.sh` for partial re-runs:
 
 | Flag | Effect |
 |---|---|
 | `--dry-run` | print the plan, make no changes |
-| `--skip-silver` | skip steps 4–5 (fast path when silver is already fresh) |
-| `--skip-smoke` | skip step 10 |
+| `--skip-silver` | skip steps 5–6 (fast path when silver is already fresh) |
+| `--skip-smoke` | skip step 11 |
 | `--no-confirm` | skip the interactive `y/N` prompt |
 
 Every step is idempotent — re-running `./scripts/deploy.sh` is safe
@@ -249,7 +304,7 @@ and picks up where a previous run stopped.
 **No manual UI step anywhere.** The previous runbook called for
 opening the Databricks UI to rebind the Genie space's trusted assets
 after a metric view rename; that is no longer required. Step 7
-publishes the views, step 9 binds them, and re-running `deploy.sh`
+publishes the views, step 10 binds them, and re-running `deploy.sh`
 re-runs both.
 
 On a brand-new deploy, the dashboards render but a handful of widgets
@@ -313,14 +368,16 @@ API calls return data.
 ```bash
 ./scripts/smoke_live.sh
 # or to target a different host:
-MIP_APP_URL="https://mip-dev.databricksapps.com" ./scripts/smoke_live.sh
+MIP_APP_URL="$(databricks apps get mip-app -o json | jq -r '.url')" ./scripts/smoke_live.sh
 ```
 
 The script boots a local uvicorn + vite if `MIP_APP_URL` is unset, waits
-for `/api/health` to go green, then exercises `/api/portfolio/preview`,
-`/api/leads`, `/api/borrowers/B-48291`, `/api/borrowers/B-48291/evidence`,
-and `/api/genie/ask`. Any non-200 response or a `"down"` dependency
-exits non-zero and prints the failing call.
+for `/api/v1/health` to go green, then exercises `/api/v1/portfolio/preview`,
+`/api/v1/leads`, a dynamically selected `/api/v1/borrowers/{borrower_id}`,
+`/api/v1/borrowers/{borrower_id}/evidence`, and `/api/v1/genie/message`.
+It also verifies Cotality property/owner identifiers are masked on the
+lead and borrower payloads. Any non-200 response, unmasked identifier, or
+non-up dependency exits non-zero and prints the failing call.
 
 This is the operator's "is real UC actually reachable from this laptop"
 check — run it after §4 deploy-from-scratch and after any cred rotation.
@@ -357,7 +414,7 @@ dry-run.*
 ## 9. Credential-kill drill
 
 **When to run:** before every release dry-run, and after any change
-to `backend/services/resilience.py`, `backend/api/health.py`, the
+to `backend/services/resilience.py`, `backend/api/v1/health.py`, the
 warehouse / Lakebase / Genie client modules, or
 `frontend/src/components/mortgage/DegradedBanner.tsx`.
 
@@ -440,7 +497,7 @@ If any fail, route to data-modeler + principal-architect before release.
 
 ## 11. Admin RBAC header for local dev
 
-The `/api/admin/*` endpoints are gated by
+The `/api/v1/admin/*` endpoints are gated by
 [`backend/services/rbac.py`](../backend/services/rbac.py). Admission is
 a match against the configured admin group (default `mip-admin`, env
 override `MIP_ADMIN_GROUP_NAME`) or the hard-coded fallback `admins`.
@@ -456,25 +513,29 @@ every local admin call:
 ```bash
 curl -s -H "X-Forwarded-Groups: mip-admin" \
      -H "X-Forwarded-Email: you@entrada.ai" \
-     http://localhost:8000/api/admin/rules | jq .
+     http://localhost:8000/api/v1/admin/rules | jq .
 
 curl -s -X PUT -H "X-Forwarded-Groups: mip-admin" \
      -H "X-Forwarded-Email: you@entrada.ai" \
      -H "Content-Type: application/json" \
      -d '{"overrides":{"note":"local test"}}' \
-     http://localhost:8000/api/admin/rules | jq .
+     http://localhost:8000/api/v1/admin/rules | jq .
 ```
 
 Missing header returns `403 {"detail": "forbidden"}` — that exact body
 string is what the frontend's admin 403 banner keys off of.
 
-Signals to watch in `/api/health` response:
+Signals to watch in `/api/v1/health` response:
 
-- `fallback_identity_fallbacks_total` — non-zero in a production
-  deploy means Databricks Apps is not forwarding `X-Forwarded-Email`
-  on some path, and audit rows are landing under `settings.default_actor`
-  instead of the real user. Treat as a governance regression and route
-  to governance-security-reviewer.
+- `fallback_identity_fallbacks_process_total` (canonical as of R6-08;
+  the legacy `fallback_identity_fallbacks_total` key is still emitted
+  for one cycle for dashboard compatibility) — non-zero in a
+  production deploy means Databricks Apps is not forwarding
+  `X-Forwarded-Email` on some path, and audit rows are landing under
+  `settings.default_actor` instead of the real user. Treat as a
+  governance regression and route to governance-security-reviewer.
+  The `_process_` infix signals per-replica scope: on a multi-replica
+  deploy each replica emits its own count, not a global total.
 
 ---
 
@@ -490,7 +551,7 @@ you at it instead of duplicating.
 
 **Symptom:** the four headline KPIs on the home dashboard (marketable
 population, high-intent leads, top-tier opportunities, offers
-recommended) render as `0` or `—` instead of the expected 6-state totals.
+recommended) render as `0` or `—` instead of the expected evaluation-share totals.
 
 **Likely causes, in order:**
 
@@ -529,7 +590,7 @@ recommended) render as `0` or `—` instead of the expected 6-state totals.
 
    Confirm:
    ```bash
-   curl -s "$MIP_APP_URL/api/health" | jq '{deps: .dependencies, breakers: .circuit_breakers}'
+   curl -s "$MIP_APP_URL/api/v1/health" | jq '{deps: .dependencies, breakers: .circuit_breakers}'
    ```
    If `circuit_breakers.warehouse` is `open` or `half_open`, or
    `dependencies.warehouse == "down"`, that's your cause. Fix: follow
@@ -550,7 +611,7 @@ row.
 
    Confirm:
    ```bash
-   curl -s "$MIP_APP_URL/api/health" \
+   curl -s "$MIP_APP_URL/api/v1/health" \
      | jq '{lakebase_dep: .dependencies.lakebase, lakebase_breaker: .circuit_breakers.lakebase}'
    ```
    `lakebase == "down"` is the smoking gun. Fix: §1.2 (re-auth /
@@ -558,17 +619,18 @@ row.
 
 2. **RBAC denied the approval call** — the analyst isn't in the admin
    group, or the Databricks Apps edge isn't forwarding
-   `X-Forwarded-Groups`, so `POST /api/outreach/approve` returns 403.
+   `X-Forwarded-Groups`, so `POST /api/v1/outreach/approve` returns 403.
 
    Confirm in the browser devtools Network panel: the approve POST
    should be 200. If it's 403 with body `{"detail":"forbidden"}`, RBAC
    is rejecting. Replay from a trusted host:
    ```bash
-   curl -s -X POST "$MIP_APP_URL/api/outreach/approve" \
+   BORROWER_ID="$(curl -s "$MIP_APP_URL/api/v1/leads?limit=1" | jq -r '.[0].borrower_id')"
+   curl -s -X POST "$MIP_APP_URL/api/v1/outreach/approve" \
      -H "X-Forwarded-Groups: mip-admin" \
      -H "X-Forwarded-Email: you@entrada.ai" \
      -H "Content-Type: application/json" \
-     -d '{"borrower_id":"B-48291","offer_code":"RATE_TERM_REFI"}' | jq
+     -d "{\"borrower_id\":\"$BORROWER_ID\",\"offer_code\":\"RATE_TERM_REFI\"}" | jq
    ```
    Fix: see §11 for the header contract; for production the edge should
    be forwarding both headers automatically — if it isn't, route to
@@ -585,9 +647,11 @@ row.
    psql "host=$LAKEBASE_HOST user=$LAKEBASE_USER dbname=$LAKEBASE_DATABASE sslmode=require" \
      -c "SELECT actor_email, action, borrower_id, created_at FROM mip_app.audit_events ORDER BY created_at DESC LIMIT 5"
    ```
-   Then check the identity-fallback counter:
+   Then check the identity-fallback counter (canonical key as of R6-08
+   is `fallback_identity_fallbacks_process_total`; the legacy
+   `_total` key is still emitted for one cycle):
    ```bash
-   curl -s "$MIP_APP_URL/api/health" | jq .fallback_identity_fallbacks_total
+   curl -s "$MIP_APP_URL/api/v1/health" | jq .fallback_identity_fallbacks_process_total
    ```
    A non-zero value means Databricks Apps dropped the header on one of
    the two paths. Fix: see §11's identity-fallback note — governance
@@ -600,14 +664,14 @@ county layer hangs on "Loading counties…" or shows no data.
 
 **Likely causes, in order:**
 
-1. **`/api/geo/county-rollups` is 503** — warehouse down, warehouse
+1. **`/api/v1/geo/county-rollups` is 503** — warehouse down, warehouse
    breaker open, or `mip.gold.county_rollup` empty.
 
    Confirm:
    ```bash
    curl -s -o /dev/null -w '%{http_code}\n' \
-     "$MIP_APP_URL/api/geo/county-rollups?state=IL"
-   curl -s "$MIP_APP_URL/api/health" \
+     "$MIP_APP_URL/api/v1/geo/county-rollups?state=IL"
+   curl -s "$MIP_APP_URL/api/v1/health" \
      | jq '{warehouse_dep: .dependencies.warehouse, warehouse_breaker: .circuit_breakers.warehouse}'
    databricks api post /api/2.0/sql/statements \
      --json '{"statement":"SELECT state_code, COUNT(*) AS n FROM mip.gold.county_rollup GROUP BY state_code","warehouse_id":"'"$DATABRICKS_WAREHOUSE_ID"'"}' | jq
@@ -623,13 +687,12 @@ county layer hangs on "Loading counties…" or shows no data.
 
    Confirm:
    ```bash
-   curl -s "$MIP_APP_URL/api/portfolio/preview" | jq '.footprint'
+   curl -s "$MIP_APP_URL/api/v1/portfolio/preview" | jq '.footprint'
    ```
-   Cross-check the footprint states against the SQL query above. Fix:
-   the canonical footprint is `{IL, CA, FL, TX, WA, CO}` — if the
-   session is showing something else, the portfolio builder has drifted;
-   reset the session (re-run portfolio builder) and route the drift to
-   data-modeler.
+   Cross-check discovered states/counties against the SQL query above. The app
+   should disclose whatever county coverage is present after the latest gold
+   refresh; if the session shows a different state set, route the drift to
+   data-modeler and do not record the demo until gold/UI coverage agrees.
 
 3. **`/us-counties.json` TopoJSON returning HTML** — the SPA catch-all
    route is serving `index.html` at that asset path instead of the
@@ -647,4 +710,3 @@ county layer hangs on "Loading counties…" or shows no data.
    regressed. Fix: redeploy (`./scripts/deploy.sh`) and verify the
    frontend build's `frontend/dist/us-counties.json` is present in the
    bundle sync.
-

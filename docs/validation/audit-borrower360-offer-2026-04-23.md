@@ -1,3 +1,5 @@
+> **Internal implementation artifact. Not approved for public release.**
+
 # Audit — Borrower 360 + Offer Orchestrator (2026-04-23)
 
 Scope: `frontend/src/routes/borrower-360.tsx`, `frontend/src/routes/offer-orchestrator.tsx`, and the components they render (`TriggerTimeline`, `EvidenceChip`, `ScoreBadge`, `ConfidenceMeter`, `ApprovalBanner`, `Skeleton`).
@@ -50,8 +52,8 @@ Wiring key:
 | Primary offer | `productLabel` | From `rec.product_label` (fallback `b.recommended_offer`) | LIVE | offer-orchestrator.tsx:108 |
 | Primary offer | Rationale text | From `rec.rationale` (fallback `b.why_now`) | LIVE | offer-orchestrator.tsx:207-208 |
 | Primary offer | Source chips | `rec.source_labels[idx].display_label` with fallback to short UC; clicking opens drawer via `descriptorFor(s)` | LIVE | offer-orchestrator.tsx:219-235 |
-| Draft outreach | `<textarea>` with `defaultValue={defaultDraft}` | **Hardcoded JSX template literal in component.** Backend has `/api/outreach/draft` that returns real subject + body; UI never calls it. | STUB (hardcoded template) | offer-orchestrator.tsx:109-117 (template), 245-262 (textarea). Backend endpoint exists at backend/api/outreach.py:58-97 but is unreached by this route. |
-| Draft outreach | Textarea input | `defaultValue` only — edits are lost on re-render; no state binding; nothing is submitted anywhere on approve. | BROKEN | offer-orchestrator.tsx:245-262 — `defaultValue` (uncontrolled, no onChange, no ref, no submit). |
+| Draft outreach | `<textarea>` hydrated by `/api/outreach/draft` | Historical local-template finding was fixed; the current route fails closed if the backend draft endpoint is unavailable. | LIVE | offer-orchestrator.tsx current source; backend/api/outreach.py |
+| Draft outreach | Textarea input | Controlled by backend-loaded draft state; approval is disabled until the audited draft is present. | LIVE | offer-orchestrator.tsx current source |
 | Draft outreach | "Email channel" chip | Decorative — no channel toggle, backend `OutreachDraftRequest.channel` literal union never surfaced in UI | STUB (decorative) | offer-orchestrator.tsx:267 |
 | Draft outreach | "LO call follow-up within 5 days" chip | Decorative — pure label | STUB (decorative) | offer-orchestrator.tsx:268 |
 | Considered alternatives | `rec.alternatives` list | Render from payload | LIVE | offer-orchestrator.tsx:285-313 |

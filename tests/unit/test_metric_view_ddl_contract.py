@@ -172,6 +172,8 @@ class TestLeadGenerationMetricView:
     def test_publishes_row_and_aggregate_columns(self) -> None:
         _, sql_nc = _read_sql(self.view_path)
         for col in (
+            "segment_codes",
+            "primary_segment",
             "approval_status",
             "outreach_status",
             "approval_rate",
@@ -182,9 +184,49 @@ class TestLeadGenerationMetricView:
                 f"lead_generation_metric_view must expose `{col}` column"
             )
 
+    def test_preserves_borrower_grain_without_segment_explode(self) -> None:
+        _, sql_nc = _read_sql(self.view_path)
+        assert "LATERAL VIEW EXPLODE" not in sql_nc.upper()
+        assert "lp.segment_codes" in sql_nc
+
     def test_has_semantic_comment(self) -> None:
         raw, _ = _read_sql(self.view_path)
         assert "COMMENT ON VIEW mip.semantics.lead_generation_metric_view" in raw
+
+    def test_rank_bucket_does_not_mislabel_rows_outside_top_10000(self) -> None:
+        _, sql_nc = _read_sql(self.view_path)
+        assert "WHEN lp.rank_overall <= 10000 THEN 'top_10000'" in sql_nc
+        assert "ELSE                               'outside_top_10000'" in sql_nc
+
+
+# -----------------------------------------------------------------------------
+# borrower_opportunity_metric_view.sql
+# -----------------------------------------------------------------------------
+class TestBorrowerOpportunityMetricView:
+    view_path = METRIC_VIEW_DIR / "borrower_opportunity_metric_view.sql"
+
+    def test_file_is_non_empty(self) -> None:
+        assert self.view_path.exists(), "borrower_opportunity_metric_view.sql missing"
+        assert self.view_path.stat().st_size > 200
+
+    def test_declares_borrower_grain_view(self) -> None:
+        _, sql_nc = _read_sql(self.view_path)
+        assert re.search(
+            r"CREATE\s+OR\s+REPLACE\s+VIEW\s+mip\.semantics\.borrower_opportunity_metric_view",
+            sql_nc,
+            re.IGNORECASE,
+        )
+        assert "mip.gold.borrower_360" in sql_nc
+        assert "LATERAL VIEW EXPLODE" not in sql_nc
+        assert "b.segment_codes" in sql_nc
+        assert re.search(r"\bAS\s+primary_segment\b", sql_nc, re.IGNORECASE)
+        assert re.search(r"\bAS\s+segment\b", sql_nc, re.IGNORECASE), (
+            "view must expose deprecated `segment` alias for stale dashboard / Genie SQL"
+        )
+
+    def test_has_semantic_comment(self) -> None:
+        raw, _ = _read_sql(self.view_path)
+        assert "COMMENT ON VIEW mip.semantics.borrower_opportunity_metric_view" in raw
 
 
 # -----------------------------------------------------------------------------
@@ -220,6 +262,7 @@ class TestGoldDdlAdditions:
             "approved_at",
             "outreach_at",
             "synced_at",
+            "refreshed_at",
         ):
             assert col in body, f"lifecycle_state missing column `{col}`"
 

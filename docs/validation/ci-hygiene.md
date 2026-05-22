@@ -1,3 +1,5 @@
+> **Internal implementation artifact. Not approved for public release.**
+
 # CI hygiene — Wave 1 cleanup (2026-04-21)
 
 Post-Wave-1 hardening on `slice13-accuracy-validation`. Two CI-adjacent gaps were

@@ -18,11 +18,15 @@ serverless SQL warehouse referenced in `databricks.yml`.
 | `mip.gold.lead_scores` | table | one row per borrower | Canonical lead score — parity-pinned between `fn_lead_score.sql` and `backend/services/scoring.py`. |
 | `mip.gold.borrower_360` | table | one row per borrower | Feeds the Borrower 360 route, the Evidence Drawer, and the dossier preview rail. |
 | `mip.gold.borrower_dossier` | table | one row per borrower (denormalised) | Pre-joined single-row payload for `/api/borrowers/{id}`; carries an ARRAY<STRUCT> of up to 20 recent evidence events + top-3 trigger timeline. |
-| `mip.gold.evidence_events` | table | append-only event ledger | The "why now" signal — trigger events with UTC timestamps, confidence, and source citations. |
+| `mip.gold.evidence_events` | table | refreshed trigger evidence table | The "why now" signal — trigger events with UTC timestamps, confidence, and source citations. |
+| `mip.gold.source_readiness` | table | one row per source/feed | Non-PII readiness ledger for explaining live, pending, empty, synthetic-demo, and blocked feeds; use for data-gap answers instead of returning fake zero demand. |
 | `mip.gold.lockin_cohort` | table | one row per borrower in the sub-3% 2020–2022 cohort | Size + composition of the rate-lock-in cohort that is retention / HELOC / cash-out addressable but will not rate-and-term refi. |
-| `mip.semantics.lead_generation_metric_view` | metric view | funnel-wide | Executive + Head-of-Growth funnel KPIs: addressable → eligible → scored → approved → actioned. |
+| `mip.gold.funnel_snapshot_daily` | table | state × segment × snapshot date | Daily scored-population, approval, and outreach snapshots. Use for trends over time instead of inventing trend lines from current borrower rows. |
+| `mip.gold.county_rollup` | table | county geography rollup | Current discovered county coverage and marketable borrower rollups. |
+| `mip.gold.zip_rollup` | table | ZIP geography rollup | Current discovered ZIP coverage and marketable borrower rollups; ZIPs are identifiers, not measures. |
+| `mip.semantics.lead_generation_metric_view` | metric view | one row per eligible borrower | Executive + Head-of-Growth funnel KPIs over the ranked lead queue. Segment filters must use `array_contains(segment_codes, '<segment_code>')`; aggregate counts must use `COUNT(DISTINCT clip)`. |
 | `mip.semantics.segment_performance_metric_view` | metric view | segment | Segment strategy and A/B decisions: mean score, rate spread, equity, approval rate, outreach rate. |
-| `mip.semantics.borrower_opportunity_metric_view` | metric view | region × product × trigger | Territory planning and campaign-budget allocation. |
+| `mip.semantics.borrower_opportunity_metric_view` | metric view | state × product × trigger | Territory planning and campaign-budget allocation. Use `mip.gold.borrower_360.situs_cbsa_code` for MSA/CBSA questions. |
 
 ## Why each asset matters for Module 0
 
@@ -38,7 +42,7 @@ QoQ delta, plus a per-segment national `_ALL` row. Segment codes:
 membership is evaluated once in `gold.borrower_360.segment_codes` (the
 `BLOCKED` predicates for listed/permit are forced false there); this
 table is a straight aggregate over the resulting array so a Head of
-Growth can answer "how big is each segment in Texas" without a runtime
+Growth can answer "how big is each segment by coverage state" without a runtime
 EXPLODE. The rules themselves live in
 `sql/transformations/gold_borrower_360.sql` and
 `sql/uc_functions/fn_in_the_money.sql`.
@@ -53,13 +57,21 @@ routes. It must stay pinned between the SQL function
 ### `gold.borrower_360`
 Unified borrower profile — property details, mortgage state, owner
 relationships, and behavioral signals — denormalized for fast single-
-borrower reads. This is the source of truth for the Evidence Drawer.
+borrower reads. This is the source of truth for the Evidence Drawer and
+for unique borrower counts such as "how many borrowers are currently
+in-the-money?"
 
 ### `gold.evidence_events`
-Append-only event ledger. Every card in the UI that shows "why now" reads
-from this table (via `backend/services/evidence.py`). Trigger types
-include rate-drop, equity-crossed, permit-filed, listed-for-sale,
-lien-change. Each row carries a `source_table` citation back to the
+Refreshed trigger evidence table rebuilt by the gold refresh job. Every card
+in the UI that shows "why now" reads from this table through the borrower
+dossier and evidence repository paths. Governed trigger `signal_type` values
+are `rate_spread`, `equity`, `market_trend`, `competitor_lien`,
+`multi_property`, `absentee_mailing`, `corporate_owner`, `recent_refi`,
+`recent_payoff`, `recent_sale`, and `foreclosure_stage`. Competitor-lien
+evidence is always `signal_type = 'competitor_lien'`; no alias is valid. MLS
+listing and building-permit trigger feeds are pending Cotality delivery and are
+blocked false today; answers must disclose that gap instead of treating missing
+feed data as zero demand. Each row carries a `source_table` citation back to the
 Cotality silver layer.
 
 ### `gold.borrower_dossier`
@@ -84,6 +96,14 @@ source, but silver is out-of-scope for this space per the rules below.
 Refreshed by `mip_refresh_scores` from
 `sql/transformations/gold_lockin_cohort.sql`.
 
+### `gold.county_rollup` / `gold.zip_rollup`
+Geography scope assets. These let Genie and the app discover what the current
+tenant/data-share coverage actually contains instead of relying on hardcoded
+demo geography. Use them for coverage checks, maps, and drill-down questions.
+Use `gold.county_rollup`, `gold.zip_rollup`, and `gold.borrower_360` to infer
+current data coverage. `ref.state_footprint` is app fallback metadata only; it
+is not a trusted Genie source or a fixed state whitelist for answers.
+
 ### `semantics.lead_generation_metric_view`
 The funnel metric view the Executive Dashboard and Head-of-Growth questions
 resolve to. Defines the canonical funnel stages so every surface (app,
@@ -95,13 +115,14 @@ approval rate, outreach rate. Powers the Segment Intelligence cards and
 answers "which segment should I invest in next quarter".
 
 ### `semantics.borrower_opportunity_metric_view`
-Borrower-opportunity rollups sliced by region (MSA/ZIP), product, and
-trigger type. Powers the geography drill-down map and territory-planning
-questions.
+Borrower-opportunity rollups sliced by state, product, and trigger type.
+Powers territory-planning questions. MSA/CBSA and ZIP questions should use
+`mip.gold.borrower_360` directly because `situs_cbsa_code` and `zip` live on
+the gold borrower profile.
 
 ## Out of scope for this space
 
-Anything outside `mip.gold.*` and `mip.semantics.*` is
+Anything outside the trusted assets listed above is
 **not** trusted for this space, specifically:
 
 - `mip.raw.*` — Cotality-share raw tables. Too wide, too noisy for

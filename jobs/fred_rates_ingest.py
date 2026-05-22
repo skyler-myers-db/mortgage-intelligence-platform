@@ -1,4 +1,4 @@
-"""FRED MORTGAGE30US ingest for mip.silver.market_rates_weekly.
+"""FRED MORTGAGE30US ingest for the configured silver.market_rates_weekly table.
 
 This file is executed as a Databricks Jobs Python task in three modes, each
 a separate task in the `mip_fred_rates_ingest` bundle job:
@@ -9,7 +9,7 @@ a separate task in the `mip_fred_rates_ingest` bundle job:
                     self-sufficient when run locally.
 
     --mode=seed     Loads data/seeds/fred_mortgage30us_seed.csv INTO
-                    mip.silver.market_rates_weekly IF the table is
+                    the configured silver.market_rates_weekly table IF it is
                     empty. This is the "first boot works offline" guarantee
                     -- the committed seed ships with the repo so
                     `databricks bundle deploy -t dev` lands a populated
@@ -38,8 +38,9 @@ Contract references:
 Runtime assumptions:
     - Databricks Runtime with PySpark + `spark` session in scope.
     - For local `--dry-run` execution, only stdlib + urllib.request is used.
-    - `--table` defaults to `mip.silver.market_rates_weekly`; override
-      in a non-default catalog by passing `--table <catalog>.<schema>.<name>`.
+    - `--table` defaults to
+      `${MIP_DEFAULT_CATALOG:-mip}.silver.market_rates_weekly`; override
+      explicitly with `--table <catalog>.<schema>.<name>`.
     - `--seed-path` defaults to the repo-relative
       `data/seeds/fred_mortgage30us_seed.csv`.
 """
@@ -52,6 +53,7 @@ import io
 import logging
 import os
 import sys
+import time
 import urllib.error
 import urllib.request
 from collections.abc import Iterable
@@ -63,12 +65,22 @@ FRED_CSV_URL = (
     "https://fred.stlouisfed.org/graph/fredgraph.csv"
     "?id=MORTGAGE30US&cosd=2021-01-01"
 )
-DEFAULT_TABLE = "mip.silver.market_rates_weekly"
+DEFAULT_CATALOG = "mip"
+DEFAULT_TABLE_SCHEMA = "silver"
+DEFAULT_TABLE_NAME = "market_rates_weekly"
 DEFAULT_SEED_PATH = "data/seeds/fred_mortgage30us_seed.csv"
 DEFAULT_SERIES = "MORTGAGE30US"
 STALENESS_DAYS = 21  # FRED publishes weekly; two missed weeks -> fail loud.
 
 log = logging.getLogger("fred_rates_ingest")
+
+
+def default_table() -> str:
+    """Return the target table, honoring the deploy catalog environment."""
+    catalog = (os.environ.get("MIP_DEFAULT_CATALOG") or DEFAULT_CATALOG).strip()
+    if not catalog:
+        catalog = DEFAULT_CATALOG
+    return f"{catalog}.{DEFAULT_TABLE_SCHEMA}.{DEFAULT_TABLE_NAME}"
 
 
 # ---------------------------------------------------------------------------
@@ -180,11 +192,59 @@ def parse_seed_csv(path: Path) -> list[RateRow]:
     return rows
 
 
-def fetch_fred_csv(url: str = FRED_CSV_URL, timeout: int = 30) -> str:
-    """Fetch the FRED graph CSV. Raises urllib.error.URLError on network failure."""
-    req = urllib.request.Request(url, headers={"User-Agent": "mip-ingest/0.1"})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
-        return resp.read().decode("utf-8")
+def fetch_fred_csv(
+    url: str = FRED_CSV_URL,
+    timeout: int = 30,
+    *,
+    attempts: int = 3,
+    backoff_s: float = 0.5,
+    user_agent: str | None = None,
+) -> str:
+    """Fetch the FRED graph CSV with small retry/backoff.
+
+    2026-05-06 production blocker: FRED/Akamai started hanging on the
+    bespoke ``mip-ingest/0.1`` user-agent while the same endpoint replied
+    immediately to vanilla urllib/curl clients. The default path now sends
+    no custom user-agent. Operators can set ``FRED_USER_AGENT`` if their
+    network edge requires one, but the committed default intentionally
+    avoids a custom fingerprint.
+    """
+    last_exc: BaseException | None = None
+    headers: dict[str, str] = {}
+    resolved_user_agent = (
+        os.environ.get("FRED_USER_AGENT", "").strip()
+        if user_agent is None
+        else user_agent.strip()
+    )
+    if resolved_user_agent:
+        headers["User-Agent"] = resolved_user_agent
+
+    for attempt in range(1, max(1, attempts) + 1):
+        req = urllib.request.Request(url, headers=headers)
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
+                text = resp.read().decode("utf-8")
+            if not text.strip():
+                raise urllib.error.URLError("FRED returned an empty CSV payload")
+            return text
+        except (TimeoutError, urllib.error.URLError, OSError) as exc:
+            last_exc = exc
+            if attempt >= max(1, attempts):
+                raise
+            sleep_for = backoff_s * (2 ** (attempt - 1))
+            log.warning(
+                "FRED fetch attempt %d/%d failed: %s; retrying in %.1fs",
+                attempt,
+                max(1, attempts),
+                exc,
+                sleep_for,
+            )
+            if sleep_for > 0:
+                time.sleep(sleep_for)
+
+    # Unreachable, but keeps type-checkers honest if attempts <= 0 drifted.
+    assert last_exc is not None
+    raise last_exc
 
 
 # ---------------------------------------------------------------------------
@@ -408,7 +468,7 @@ def run_fred(table: str, batch_id: str, dry_run: bool, staleness_days: int) -> i
     """Fetch FRED, MERGE into silver. Resilient to FRED outage if silver is fresh."""
     try:
         payload = fetch_fred_csv()
-    except (urllib.error.URLError, TimeoutError) as exc:
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
         log.warning("FRED fetch failed: %s", exc)
         if dry_run:
             log.info("[dry-run] would check staleness and exit 0 or 1")
@@ -461,9 +521,10 @@ def run_fred(table: str, batch_id: str, dry_run: bool, staleness_days: int) -> i
 
 
 def build_parser() -> argparse.ArgumentParser:
+    target_default = default_table()
     p = argparse.ArgumentParser(
         prog="fred_rates_ingest",
-        description="Ingest FRED MORTGAGE30US into mip.silver.market_rates_weekly.",
+        description="Ingest FRED MORTGAGE30US into silver.market_rates_weekly.",
     )
     p.add_argument(
         "--mode",
@@ -473,8 +534,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--table",
-        default=DEFAULT_TABLE,
-        help=f"Target table (default: {DEFAULT_TABLE}).",
+        default=target_default,
+        help=f"Target table (default: {target_default}; honors MIP_DEFAULT_CATALOG).",
     )
     p.add_argument(
         "--seed-path",

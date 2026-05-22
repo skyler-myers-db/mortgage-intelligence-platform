@@ -2,8 +2,9 @@
 # only `python3` is on PATH. Override by running `make PYTHON=python3 …`.
 PYTHON ?= $(shell [ -x .venv/bin/python ] && echo .venv/bin/python || echo python3)
 
-.PHONY: setup dev-api dev-ui test test-e2e lint build validate bundle-validate bundle-deploy zip \
-        provision-genie bundle-validate-env bundle-deploy-dev deploy-dev check-workspace-host
+.PHONY: setup dev-api dev-ui test test-e2e lint build validate bundle-validate bundle-plan bundle-deploy zip \
+        provision-genie bundle-validate-env bundle-deploy-dev deploy-dev check-workspace-host \
+        configure-workspace render-sql
 
 setup:
 	python3 -m venv .venv
@@ -24,7 +25,7 @@ test:
 # Assumes uvicorn + vite are already running (or Playwright's `webServer`
 # block in playwright.config.ts will boot them). Run from the repo root.
 test-e2e:
-	npx playwright test -c playwright.config.ts
+	npm --prefix frontend run e2e
 
 lint:
 	ruff check backend tests tools
@@ -38,14 +39,24 @@ validate:
 	pytest -q
 	npm --prefix frontend run build
 
-bundle-validate:
-	databricks bundle validate -t dev
+# `render-sql` materializes sql/_rendered/** from sql/** for the target UC
+# catalog. The bundle's SQL tasks read from sql/_rendered/** so a customer
+# who sets MIP_DEFAULT_CATALOG=<their_catalog> gets CTAS statements that
+# write to the right place without any manual sed step. Idempotent.
+render-sql:
+	$(PYTHON) tools/render_sql.py --catalog "$${MIP_DEFAULT_CATALOG:-mip}"
 
-bundle-deploy:
-	databricks bundle deploy -t dev
+bundle-validate: render-sql
+	$(PYTHON) tools/databricks/bundle_env.py validate -t dev
+
+bundle-plan: render-sql
+	$(PYTHON) tools/databricks/bundle_env.py plan -t dev
+
+bundle-deploy: render-sql
+	$(PYTHON) tools/databricks/bundle_env.py deploy -t dev
 
 zip:
-	cd .. && zip -r mortgage-intelligence-platform.zip mortgage-intelligence-platform -x '*/node_modules/*' '*/.venv/*' '*/frontend/dist/*'
+	./scripts/package_source.sh
 
 # ---------------------------------------------------------------------------
 # Genie Space + env-wired bundle targets
@@ -69,10 +80,10 @@ provision-genie:
 # angle-bracket placeholder values). It maps DATABRICKS_WAREHOUSE_ID and
 # GENIE_SPACE_ID to BUNDLE_VAR_sql_warehouse_id / BUNDLE_VAR_genie_space_id
 # before invoking the Databricks CLI.
-bundle-validate-env:
+bundle-validate-env: render-sql
 	@$(PYTHON) tools/databricks/bundle_env.py validate -t dev
 
-bundle-deploy-dev:
+bundle-deploy-dev: render-sql
 	@read -p "About to DEPLOY to your workspace. Continue? [y/N] " ans; \
 	  test "$$ans" = "y" || { echo "aborted."; exit 1; }; \
 	  $(PYTHON) tools/databricks/bundle_env.py deploy -t dev
@@ -100,6 +111,13 @@ bundle-deploy-dev:
 # ---------------------------------------------------------------------------
 deploy-dev:
 	./scripts/deploy.sh
+
+# Rebind the one workspace.host YAML anchor in databricks.yml for a customer
+# fork. Usage:
+#   make configure-workspace HOST=https://<customer-workspace>
+configure-workspace:
+	@test -n "$${HOST:-}" || { echo "usage: make configure-workspace HOST=https://<customer-workspace>"; exit 2; }
+	./scripts/configure-workspace.sh "$${HOST}"
 
 # ---------------------------------------------------------------------------
 # Forkability safeguard (audit R5-24, 2026-04-23).

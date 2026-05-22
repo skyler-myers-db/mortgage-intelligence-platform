@@ -30,8 +30,12 @@ export default [
     },
     rules: {
       ...tsPlugin.configs.recommended.rules,
-      "react-hooks/rules-of-hooks": "error",
-      "react-hooks/exhaustive-deps": "warn",
+      ...reactHooks.configs["recommended-latest"].rules,
+      // The current route layer still has legitimate external-system sync
+      // effects while the remaining query-layer migration is in progress.
+      // Keep compiler-safety rules on, but do not fail CI on this advisory
+      // rule until those effects are converted to query/mutation ownership.
+      "react-hooks/set-state-in-effect": "off",
       "@typescript-eslint/no-unused-vars": ["warn", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }],
     },
   },

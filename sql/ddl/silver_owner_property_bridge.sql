@@ -18,14 +18,9 @@
 --            metric views without duplicating the aggregation.
 --
 -- Slice:     module0-real-data-slice2 (silver lift from the Cotality share).
--- Source:    silver.property_master (CLIP-grain, state-filtered) ⟕
---            silver.lien_current    (CLIP-grain, state-filtered).
---            Both upstreams are themselves state-filtered to IN (IL, CA,
---            FL, TX, WA, CO), so the 6-state footprint is inherited via the
---            join and does NOT need to be re-filtered here. The
---            transformation file still includes the state-filter comment so
---            the slice-2 contract test can detect the intent at the
---            transformation layer for every silver table.
+-- Source:    silver.property_master (CLIP-grain) ⟕
+--            silver.lien_current    (CLIP-grain).
+--            Geography coverage is inherited from refreshed source rows.
 --
 -- PII posture:
 --            No PII columns -- this is a rollup of opaque owner_link_id's
@@ -45,9 +40,8 @@
 --            ingest_ts, _meta_batch_id   Audit metadata.
 --
 -- Clustering: Liquid cluster on (owner_link_id) -- gold joins 1:1 on this
---            column. Row count is ~3.44M distinct Owner-Link IDs across the
---            6-state footprint (gap-analysis §1), so clustering beats
---            partitioning.
+--            column. Row count can grow with source coverage, so clustering
+--            beats partitioning.
 --
 -- Idempotency: CREATE TABLE IF NOT EXISTS. Transformation MERGEs on
 --            `owner_link_id`.
@@ -55,7 +49,7 @@
 
 CREATE TABLE IF NOT EXISTS mip.silver.owner_property_bridge (
   owner_link_id              STRING    NOT NULL COMMENT 'Cotality Owner Link (property_master.owner_link_id). PK.',
-  related_property_count     INT       NOT NULL COMMENT 'Count of distinct CLIPs tied to this Owner Link in the 6-state footprint.',
+  related_property_count     INT       NOT NULL COMMENT 'Count of distinct CLIPs tied to this Owner Link in refreshed source coverage.',
   corporate_property_count   INT       NOT NULL COMMENT 'Number of related properties with owner_is_corporate=TRUE.',
   absentee_property_count    INT       NOT NULL COMMENT 'Number of related properties with is_absentee=TRUE.',
   distinct_states_count      INT       NOT NULL COMMENT 'Number of distinct situs_state values across related properties.',
@@ -69,7 +63,7 @@ CREATE TABLE IF NOT EXISTS mip.silver.owner_property_bridge (
 )
 USING DELTA
 CLUSTER BY (owner_link_id)
-COMMENT 'Owner-Link rollup derived from silver.property_master and silver.lien_current. Feeds gold.property_owner_bridge and investor-segment signals. 6-state filter is inherited from upstream silver. See docs/data-contract-module0.md §3.1.'
+COMMENT 'Owner-Link rollup derived from silver.property_master and silver.lien_current. Feeds gold.property_owner_bridge and investor-segment signals. Geography coverage is inherited from upstream silver. See docs/data-contract-module0.md §3.1.'
 TBLPROPERTIES (
   'delta.enableChangeDataFeed' = 'false',
   'delta.autoOptimize.optimizeWrite' = 'true',

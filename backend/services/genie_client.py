@@ -4,8 +4,8 @@ Module 0 Slice 7 flips ``/ask-genie`` onto the real `mortgage_lead_
 intelligence` Genie space provisioned at space id
 ``01f13d4968af1b249dc388fd5b18b195`` in the DEFAULT workspace. This
 module is the HTTP seam; ``backend.services.repositories.databricks_repo
-.DatabricksGenieRepository`` wraps it with a safe-corpus fallback that
-only activates when the ``genie`` circuit breaker is OPEN.
+.DatabricksGenieRepository`` wraps it with an honest degraded response
+when the ``genie`` circuit breaker is OPEN.
 
 Design notes:
 
@@ -33,10 +33,12 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from threading import Lock
 from typing import Any, Literal
@@ -44,6 +46,10 @@ from typing import Any, Literal
 from backend.services.observability import emit
 
 log = logging.getLogger(__name__)
+
+_UC_REF_RE = re.compile(
+    r"\b([A-Za-z_][\w-]*)\s*\.\s*([A-Za-z_][\w-]*)\s*\.\s*([A-Za-z_][\w-]*)\b"
+)
 
 
 def _question_hash(q: str) -> str:
@@ -55,6 +61,43 @@ def _question_hash(q: str) -> str:
     latency analysis without leaking content.
     """
     return hashlib.sha1(q.encode("utf-8")).hexdigest()[:16]  # noqa: S324 -- not a secret
+
+
+def _normalise_uc_ref(raw: str) -> str:
+    return raw.replace("`", "").replace(" ", "").lower()
+
+
+def _collect_uc_refs(value: Any) -> list[str]:
+    """Collect three-part UC refs from arbitrary Genie metadata.
+
+    The Genie API can declare trusted data sources inside query text,
+    natural-language source notes, `query.parameters`, or exposed query
+    thoughts. This helper is intentionally generic so a minor response-shape
+    change does not turn a valid answer into `policy_blocked`.
+    """
+    refs: list[str] = []
+    if value is None:
+        return refs
+    if isinstance(value, str):
+        for match in _UC_REF_RE.finditer(value):
+            ref = _normalise_uc_ref(".".join(match.groups()))
+            if ref not in refs:
+                refs.append(ref)
+        return refs
+    if isinstance(value, dict):
+        for child in value.values():
+            _extend_unique(refs, _collect_uc_refs(child))
+        return refs
+    if isinstance(value, list | tuple | set):
+        for child in value:
+            _extend_unique(refs, _collect_uc_refs(child))
+    return refs
+
+
+def _extend_unique(target: list[str], values: list[str]) -> None:
+    for value in values:
+        if value not in target:
+            target.append(value)
 
 # Terminal Genie message states. The API docs list COMPLETED as the
 # happy path; FAILED / CANCELED / EXPIRED are terminal errors; SUBMITTED
@@ -107,9 +150,11 @@ class GenieResponse:
     sql_result_rows: list[dict[str, Any]] | None
     conversation_id: str
     message_id: str
-    source: Literal["genie", "fallback"] = "genie"
+    source: Literal["genie"] = "genie"
     elapsed_ms: int = 0
     trusted_assets: list[str] = field(default_factory=list)
+    query_attachment_id: str | None = None
+    thoughts: list[dict[str, str]] = field(default_factory=list)
 
 
 class GenieClient:
@@ -134,14 +179,22 @@ class GenieClient:
     def __init__(
         self,
         host: str,
-        token: str,
+        token: str | Callable[[], str],
         space_id: str,
         timeout_s: int = 45,
     ) -> None:
         if not host.startswith("http"):
             host = "https://" + host
         self._host = host.rstrip("/")
-        self._token = token
+        # See DatabricksSqlClient: store a token PROVIDER, not a string.
+        # Caching the literal at construction caused the warehouse path
+        # to 403 forever once the SDK-minted OAuth token expired (~1h).
+        # The same pattern protects the Genie client.
+        if callable(token):
+            self._token_provider: Callable[[], str] = token
+        else:
+            literal = token
+            self._token_provider = lambda: literal
         self._space_id = space_id
         self._timeout_s = timeout_s
 
@@ -185,10 +238,14 @@ class GenieClient:
                 msg_id = self._append_message(conv_id, question)
 
             message = self._poll_message(conv_id, msg_id)
-            answer_text, sql_query = self._extract_text_and_sql(message)
+            extracted = self._extract_message_payload(message)
             sql_rows: list[dict[str, Any]] | None = None
-            if sql_query:
-                sql_rows = self._fetch_query_result(conv_id, msg_id)
+            if extracted["sql_query"]:
+                sql_rows = self._fetch_query_result(
+                    conv_id,
+                    msg_id,
+                    attachment_id=extracted["query_attachment_id"],
+                )
         except BaseException as exc:
             emit(
                 log,
@@ -213,17 +270,28 @@ class GenieClient:
             statement_hash=q_hash,
             duration_ms=elapsed_ms,
             outcome="ok",
-            has_sql=sql_query is not None,
+            has_sql=extracted["sql_query"] is not None,
             rows_returned=len(sql_rows) if sql_rows else 0,
         )
         return GenieResponse(
-            answer_text=answer_text,
-            sql_query=sql_query,
+            answer_text=str(extracted["answer_text"] or ""),
+            sql_query=(
+                str(extracted["sql_query"])
+                if extracted["sql_query"] is not None
+                else None
+            ),
             sql_result_rows=sql_rows,
             conversation_id=conv_id,
             message_id=msg_id,
             source="genie",
             elapsed_ms=elapsed_ms,
+            trusted_assets=list(extracted["trusted_assets"]),
+            query_attachment_id=(
+                str(extracted["query_attachment_id"])
+                if extracted["query_attachment_id"] is not None
+                else None
+            ),
+            thoughts=list(extracted["thoughts"]),
         )
 
     def ping(self) -> bool:
@@ -316,6 +384,8 @@ class GenieClient:
         self,
         conversation_id: str,
         message_id: str,
+        *,
+        attachment_id: str | None = None,
     ) -> list[dict[str, Any]] | None:
         """Fetch the SQL result rows for a completed message, if any.
 
@@ -325,14 +395,30 @@ class GenieClient:
         empty result is not an error -- some messages are
         text-only and that's fine.
         """
-        url = (
+        base = (
             f"{self._host}/api/2.0/genie/spaces/{self._space_id}"
             f"/conversations/{conversation_id}/messages/{message_id}/query-result"
         )
-        try:
-            body = self._get(url)
-        except GenieClientError:
-            # 404 on query-result is normal for text-only responses.
+        urls = [f"{base}/{attachment_id}"] if attachment_id else []
+        # Backward-compatible fallback for older workspaces that accepted
+        # the query-result route without the attachment id.
+        urls.append(base)
+        body: dict[str, Any] | None = None
+        for idx, url in enumerate(urls):
+            try:
+                body = self._get(url)
+                break
+            except GenieClientError as exc:
+                # 404 on query-result is normal for text-only responses.
+                if exc.status_code == 404:
+                    continue
+                # If the attachment-id route is unsupported by an older
+                # workspace, it normally returns 404. Permission, auth, and
+                # server errors are real failures and should not be hidden.
+                if idx == 0 and attachment_id:
+                    raise
+                raise
+        if body is None:
             return None
         sr = body.get("statement_response") or {}
         result = sr.get("result") or {}
@@ -354,28 +440,58 @@ class GenieClient:
         return rows
 
     @staticmethod
-    def _extract_text_and_sql(message: dict[str, Any]) -> tuple[str, str | None]:
+    def _extract_message_payload(message: dict[str, Any]) -> dict[str, Any]:
         """Pull the answer text + optional SQL from a completed message.
 
-        Genie's message shape contains an ``attachments`` array; each
-        attachment is either ``{"text": {"content": "..."}}`` or
-        ``{"query": {"query": "SELECT ...", "description": "..."}}``.
-        We concatenate all text attachments (preserving order) and
-        surface the first SQL attachment.
+        Genie's message shape contains an ``attachments`` array. Current
+        responses can carry:
+
+        - ``{"text": {"content": "..."}}`` for the natural-language answer.
+        - ``{"query": {"query": "SELECT ...", "thoughts": [...]}}`` for
+          the SQL attachment and exposed Genie planning trace.
+        - ``attachment_id`` next to the query attachment; the current API
+          expects this id on the query-result endpoint.
+
+        We concatenate all text attachments, surface the first SQL attachment,
+        and retain the first query attachment id plus any UC asset references
+        Genie declared in parameters/thoughts/text. The repository still
+        enforces the final allowlist.
         """
         attachments = message.get("attachments") or []
         text_parts: list[str] = []
         sql_query: str | None = None
+        query_attachment_id: str | None = None
+        thoughts: list[dict[str, str]] = []
+        trusted_assets: list[str] = []
         for att in attachments:
             text = att.get("text") or {}
             if isinstance(text, dict) and text.get("content"):
-                text_parts.append(str(text["content"]).strip())
+                content = str(text["content"]).strip()
+                text_parts.append(content)
+                _extend_unique(trusted_assets, _collect_uc_refs(content))
             query = att.get("query") or {}
-            if isinstance(query, dict) and query.get("query") and sql_query is None:
-                sql_query = str(query["query"]).strip()
+            if isinstance(query, dict):
+                _extend_unique(trusted_assets, _collect_uc_refs(query.get("parameters")))
+                _extend_unique(trusted_assets, _collect_uc_refs(query.get("description")))
+                for raw_thought in query.get("thoughts") or []:
+                    if not isinstance(raw_thought, dict):
+                        continue
+                    kind = str(raw_thought.get("thought_type") or "thought").strip()
+                    content = str(raw_thought.get("content") or "").strip()
+                    if not content:
+                        continue
+                    thoughts.append({"kind": kind, "content": content})
+                    _extend_unique(trusted_assets, _collect_uc_refs(content))
+                if query.get("query") and sql_query is None:
+                    sql_query = str(query["query"]).strip()
+                    _extend_unique(trusted_assets, _collect_uc_refs(sql_query))
+                    att_id = att.get("attachment_id")
+                    if att_id:
+                        query_attachment_id = str(att_id)
                 desc = query.get("description")
                 if desc and not text_parts:
                     text_parts.append(str(desc).strip())
+            _extend_unique(trusted_assets, _collect_uc_refs(att.get("query_attachments")))
         # Fallback: some responses put free text under message.content
         # directly (older API shape). Honour it if attachments were
         # empty so no response bubbles up as empty string.
@@ -383,8 +499,15 @@ class GenieClient:
             content = message.get("content")
             if isinstance(content, str) and content.strip():
                 text_parts.append(content.strip())
+                _extend_unique(trusted_assets, _collect_uc_refs(content))
         answer_text = "\n\n".join(p for p in text_parts if p) or ""
-        return answer_text, sql_query
+        return {
+            "answer_text": answer_text,
+            "sql_query": sql_query,
+            "query_attachment_id": query_attachment_id,
+            "trusted_assets": trusted_assets,
+            "thoughts": thoughts,
+        }
 
     # ------------------------------------------------------------------
     # HTTP helpers
@@ -392,22 +515,24 @@ class GenieClient:
 
     def _post(self, url: str, body: dict[str, Any]) -> dict[str, Any]:
         payload = json.dumps(body).encode("utf-8")
+        bearer = self._token_provider()
         req = urllib.request.Request(
             url,
             data=payload,
             method="POST",
             headers={
-                "Authorization": f"Bearer {self._token}",
+                "Authorization": f"Bearer {bearer}",
                 "Content-Type": "application/json",
             },
         )
         return self._send(req)
 
     def _get(self, url: str, *, timeout_s: float | None = None) -> dict[str, Any]:
+        bearer = self._token_provider()
         req = urllib.request.Request(
             url,
             method="GET",
-            headers={"Authorization": f"Bearer {self._token}"},
+            headers={"Authorization": f"Bearer {bearer}"},
         )
         return self._send(req, timeout_s=timeout_s)
 
@@ -473,6 +598,17 @@ class ResilientGenieClient:
         question: str,
         conversation_id: str | None = None,
     ) -> GenieResponse:
+        # R6-18: when the breaker was force-opened at boot because
+        # GENIE_SPACE_ID was a placeholder string, we give ourselves a
+        # chance to notice a runtime config rotation (Databricks Apps
+        # supports env-var rotation without a restart). If the placeholder
+        # is gone, close the breaker and let the next probe through --
+        # otherwise the breaker flip-flops on placeholder probes until
+        # the process dies. Predicate is a cheap module-local read, so
+        # this costs almost nothing per request.
+        self._resilient.breaker.force_close_if_config_changed(
+            lambda: not is_placeholder_space_id(self._client.space_id)
+        )
         return self._resilient.call(
             lambda: self._client.ask(question, conversation_id=conversation_id)
         )
@@ -511,9 +647,9 @@ def _load_space_id_from_file() -> str | None:
 
 # Placeholder values defined by the bundle's default var (docs/runbook §2).
 # When the space id is still one of these strings we deliberately trip the
-# breaker at boot so the safe-corpus fallback answers /api/genie/message
-# instead of the live client 500-ing on the first request (hole-finder
-# round 3 #18, 2026-04-23).
+# breaker at boot so /api/genie/message returns the explicit degraded response
+# instead of the live client 500-ing on the first request (hole-finder round 3
+# #18, 2026-04-23).
 _PLACEHOLDER_SPACE_IDS: frozenset[str] = frozenset({
     "00000000PLACEHOLDER",
     "PLACEHOLDER",
@@ -556,11 +692,11 @@ def get_genie_client() -> ResilientGenieClient:
     with _CLIENT_LOCK:
         if _CLIENT is not None:
             return _CLIENT
-        host, token, _warehouse_id = settings.require_databricks_creds()
+        host, token_provider, _warehouse_id = settings.require_databricks_creds()
         space_id = _resolve_space_id()
         bare = GenieClient(
             host=host,
-            token=token.get_secret_value(),
+            token=token_provider,
             space_id=space_id,
             timeout_s=settings.databricks_timeout_s + 15,
         )
@@ -568,8 +704,7 @@ def get_genie_client() -> ResilientGenieClient:
         # Round-3 hole-finder #18: when GENIE_SPACE_ID is still one of the
         # bundle-default placeholder strings, the upstream Databricks call
         # will 500 on the first query. Trip the breaker open at boot so the
-        # repository's safe-corpus fallback answers immediately; no user-
-        # visible "warming up" message on day 0 of a fresh customer deploy.
+        # repository returns the explicit degraded response immediately.
         if is_placeholder_space_id(space_id):
             breaker.force_open_for_placeholder_config()
         resilient = Resilient[Any](

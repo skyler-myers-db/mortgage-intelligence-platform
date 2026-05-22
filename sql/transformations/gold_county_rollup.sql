@@ -26,6 +26,13 @@
 --            county rollup row has no meaningful identity.
 -- =============================================================================
 
+-- 2026-05-04 (FIX α, round 3): revert the score >= 50 filter introduced
+-- in round 2 (FIX F). Aligning the county count to the Lead Queue's
+-- score-quality floor broke the alignment with the home-page Marketable
+-- Population KPI, which reads borrower_360 unfiltered. The right
+-- semantic is "addressable population per county"; the Lead Queue
+-- alignment is implemented in LeadRepository.list (FIX β) by querying
+-- borrower_360 directly when filtered to a geo.
 CREATE OR REPLACE TABLE mip.gold.county_rollup AS
 WITH base AS (
   SELECT

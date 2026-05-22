@@ -1,12 +1,13 @@
 """Unit tests for `backend.services.state_footprint` + `/api/config/footprint`.
 
-Covers hole-finder round-2 #20: the tenant footprint moved from 5
-hardcoded copies to a single UC-backed source of truth.
+Covers the geography-coverage contract: live gold rollups are data-bearing
+scope; reference rows are metadata/fallback only.
 """
 from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
+from backend.api.config import _reset_config_cache_for_tests
 from backend.main import app
 from backend.services.state_footprint import (
     FootprintState,
@@ -28,20 +29,23 @@ def _resolver_with_uc_rows(
     return resolver
 
 
-def test_fallback_preserves_default_six_state_footprint() -> None:
-    """UC unavailable => resolver yields the canonical Summit footprint.
+def test_fallback_uses_generic_us_state_dictionary() -> None:
+    """UC unavailable => resolver yields generic geography metadata.
 
-    Guard against a regression that silently empties the dropdown when
-    the seed hasn't run yet on first deploy.
+    Guard against a regression that silently pins an unhydrated workspace to
+    the Summit evaluation-share footprint.
     """
     resolver = _resolver_with_uc_rows(None)
     codes = resolver.state_codes()
-    assert codes == ["IL", "CA", "FL", "TX", "WA", "CO"]
-    assert resolver.default_state_code() == "IL"
+    assert len(codes) == 50
+    assert codes[:5] == ["AL", "AK", "AZ", "AR", "CA"]
+    assert "IL" in codes
+    assert "DC" not in codes
+    assert resolver.default_state_code() == "AL"
 
 
-def test_uc_rows_override_fallback_and_preserve_order() -> None:
-    """Live UC rows win; `display_order` drives the list order."""
+def test_uc_metadata_rows_override_generic_fallback_when_no_gold_coverage() -> None:
+    """Metadata rows win over generic fallback but are still degraded scope."""
     uc_rows = [
         FootprintState("NY", "New York",     1, True),
         FootprintState("NJ", "New Jersey",   2, False),
@@ -50,8 +54,98 @@ def test_uc_rows_override_fallback_and_preserve_order() -> None:
     resolver = _resolver_with_uc_rows(uc_rows)
     assert resolver.state_codes() == ["NY", "NJ", "PA"]
     assert resolver.default_state_code() == "NY"
-    # A tenant with a 3-state footprint should see exactly 3 rows, not 6.
     assert len(resolver.list()) == 3
+
+
+def test_metadata_only_scope_is_treated_as_fallback(monkeypatch) -> None:
+    """Metadata-only rows must not authorize data-bearing state answers."""
+
+    class FakeClient:
+        def execute(self, sql: str):
+            if "ref.state_footprint" in sql:
+                return [
+                    {
+                        "state_code": "NY",
+                        "state_name": "New York",
+                        "display_order": 1,
+                        "is_default_state": True,
+                    }
+                ]
+            if "gold.county_rollup" in sql:
+                return []
+            raise AssertionError(sql)
+
+    import backend.services.databricks_sql as databricks_sql
+
+    monkeypatch.setattr(databricks_sql, "get_sql_client", lambda: FakeClient())
+
+    resolver = StateFootprintResolver(ttl_s=60.0)
+    assert resolver.state_codes() == ["NY"]
+    assert resolver.using_fallback() is True
+
+
+def test_live_county_coverage_is_authoritative_over_metadata(monkeypatch) -> None:
+    """Cotality coverage expands or contracts without code or seed edits.
+
+    The ref table supplies names only. If coverage no longer contains a
+    metadata state, that state is not returned.
+    """
+
+    class FakeClient:
+        def execute(self, sql: str):
+            if "ref.state_footprint" in sql:
+                return [
+                    {
+                        "state_code": "IL",
+                        "state_name": "Illinois",
+                        "display_order": 1,
+                        "is_default_state": True,
+                    }
+                ]
+            if "gold.county_rollup" in sql:
+                return [
+                    {"state": "NY", "addressable_borrowers": 1000},
+                    {"state": "GA", "addressable_borrowers": 500},
+                ]
+            raise AssertionError(sql)
+
+    import backend.services.databricks_sql as databricks_sql
+
+    monkeypatch.setattr(databricks_sql, "get_sql_client", lambda: FakeClient())
+
+    resolver = StateFootprintResolver(ttl_s=60.0)
+    rows = resolver.list()
+
+    assert [row.state_code for row in rows] == ["NY", "GA"]
+    assert [row.state_name for row in rows] == ["New York", "Georgia"]
+    assert resolver.default_state_code() == "NY"
+    assert resolver.using_fallback() is False
+
+
+def test_county_coverage_can_drive_footprint_when_ref_table_empty(monkeypatch) -> None:
+    """A fresh workspace should still expose discovered coverage states."""
+
+    class FakeClient:
+        def execute(self, sql: str):
+            if "ref.state_footprint" in sql:
+                return []
+            if "gold.county_rollup" in sql:
+                return [
+                    {"state": "TX", "addressable_borrowers": 1000},
+                    {"state": "CA", "addressable_borrowers": 900},
+                ]
+            raise AssertionError(sql)
+
+    import backend.services.databricks_sql as databricks_sql
+
+    monkeypatch.setattr(databricks_sql, "get_sql_client", lambda: FakeClient())
+
+    resolver = StateFootprintResolver(ttl_s=60.0)
+    rows = resolver.list()
+
+    assert [row.state_code for row in rows] == ["TX", "CA"]
+    assert rows[0].is_default_state is True
+    assert resolver.default_state_code() == "TX"
 
 
 def test_default_state_falls_back_to_first_when_no_row_flagged() -> None:
@@ -79,12 +173,12 @@ def test_config_footprint_endpoint_returns_resolver_payload() -> None:
     ]
     fake = _resolver_with_uc_rows(uc_rows)
     _reset_state_footprint_resolver_for_tests(fake)
+    _reset_config_cache_for_tests()
     try:
         client = TestClient(app)
         resp = client.get("/api/config/footprint")
         assert resp.status_code == 200
         payload = resp.json()
-        assert payload["default_state_code"] == "NY"
         codes = [row["state_code"] for row in payload["states"]]
         assert codes == ["NY", "NJ", "PA"]
         # Shape guard: schema contract the frontend hydration depends on.
@@ -97,6 +191,7 @@ def test_config_footprint_endpoint_returns_resolver_payload() -> None:
         }
     finally:
         _reset_state_footprint_resolver_for_tests(None)
+        _reset_config_cache_for_tests()
 
 
 def test_singleton_get_state_footprint_resolver_is_stable() -> None:

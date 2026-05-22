@@ -1,11 +1,36 @@
 # Segment-Count Parity Validation
 
+> **Internal implementation artifact. Not approved for public release.**
+> Contains provider/share/table inventory and validation methodology intended
+> for Entrada, Databricks, and Cotality implementation reviewers only.
+
 **Slice:** 13 — Accuracy Validation.
 **Date run:** 2026-04-21.
 **Warehouse:** `da02d15a9490650b` (serverless).
 **Catalog:** `mip`.
 **Share:** `cotality_mortgage_data.corelogic` (last updated 2026-10-29 per gap analysis).
-**Pass/fail summary:** **PASS on all 5 unblocked segments × 6 states = 30 cells** (exact match across the board). BLOCKED segments (`listed`, `permit`) correctly return 0 on both sides.
+**Pass/fail summary:** Live gate compares all unblocked segments across every refreshed coverage state discovered from gold rollups. BLOCKED segments (`listed`, `permit`) correctly return 0 on both sides until their Cotality feeds arrive.
+
+**2026-05-15 remediation note:** A live parity failure on `itm/CA`
+(`ref=16706`, `gold=16544`) was traced to a stale gold refresh, not predicate
+drift. `mip.silver.market_rates_weekly` had advanced the latest FRED
+`MORTGAGE30US` row to `0.0636`, while `mip.gold.borrower_360` was still
+materialized with `market_rate_fraction=0.0637` from the previous scoring run.
+Running `databricks bundle run mip_refresh_scores -t dev --profile DEFAULT`
+rebuilt gold at `0.0636`, restored CA ITM to `16,706`, and made
+`tests/integration/test_segment_count_parity.py` pass. The test now includes an
+explicit `borrower_360.market_rate_fraction` freshness guard so the next FRED
+refresh without a gold refresh fails with that root cause directly.
+
+Follow-up live smoke found the dev bundle had been deployed with rendered
+Summit first-party demo feeds disabled, which made all contactability fields
+empty after the refresh (`marketing_eligible=0`, `consent_status='unknown'`)
+and caused the default Lead Queue to return no rows. The remediation was to
+redeploy the dev bundle with `MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS=1`, rerun
+`mip_refresh_scores`, and align `tools/databricks/bundle_env.py` with
+`scripts/deploy.sh` so dev-target bundle deploys render the Summit demo feed
+enabled by default while non-dev targets stay fail-closed unless explicitly
+overridden.
 
 The test that locks this in place lives at
 [tests/integration/test_segment_count_parity.py](../../tests/integration/test_segment_count_parity.py).
@@ -18,7 +43,7 @@ they are absent.
 ## 1. Method
 
 For each segment (`itm`, `equity`, `investor`, `retention`, `listed`,
-`permit`) × each state (IL, CA, FL, TX, WA, CO) we ran TWO queries:
+`permit`) × each refreshed coverage state we run TWO queries:
 
 1. **Reference** — an INDEPENDENT SQL statement written against
    `cotality_mortgage_data.corelogic.*` that re-implements the segment
@@ -37,10 +62,12 @@ Thresholds (match data-contract §5):
 - `heloc_equity_min = 35`
 - `retention_min_spread = 50`
 
-Market rate: **MORTGAGE30US = 0.063 (6.30%)** — probed live from
-`mip.silver.market_rates_weekly WHERE is_latest = TRUE` on the
-validation run. Stored inline in the test as a constant so the
-reference query does not re-use the silver market-rate path.
+Market rate: the live parity test now reads the current reviewed
+`MORTGAGE30US` row from
+`mip.silver.market_rates_weekly WHERE is_latest = TRUE`, and fails if
+that row is not `source='fred'` or is more than 21 days old. This avoids
+stale hard-coded rate constants after weekly FRED publishes while still
+keeping the Cotality segment predicates independent of gold outputs.
 
 ### Tolerance
 
@@ -76,12 +103,12 @@ WITH src AS (
     CAST(total_amount_of_open_mortgage_liens AS BIGINT) AS lien,
     CAST(estimated_combined_ltv_loan_to_value AS DOUBLE) AS cltv
   FROM cotality_mortgage_data.corelogic.entrada_eval_voluntary_lien_status_marketing_v2
-  WHERE situs_state IN ('IL','CA','FL','TX','WA','CO') AND clip IS NOT NULL
+  WHERE situs_state IS NOT NULL AND clip IS NOT NULL
 ),
 calc AS (
   SELECT
     state, clip,
-    CAST(ROUND((rate_frac - 0.063) * 10000.0) AS INT) AS rate_spread_bps,
+    CAST(ROUND((rate_frac - <latest_mortgage30us_fraction>) * 10000.0) AS INT) AS rate_spread_bps,
     CAST(GREATEST(0, LEAST(100, CASE
       WHEN cltv IS NOT NULL AND cltv > 0 THEN ROUND(100 - cltv)
       WHEN avm  IS NOT NULL AND avm  > 0 THEN ROUND(100.0 * (avm - COALESCE(lien, 0)) / avm)
@@ -107,7 +134,7 @@ WITH src AS (
     CAST(estimated_combined_ltv_loan_to_value AS DOUBLE) AS cltv,
     CAST(second_position_mortgage_amount AS BIGINT) AS second_pos
   FROM cotality_mortgage_data.corelogic.entrada_eval_voluntary_lien_status_marketing_v2
-  WHERE situs_state IN ('IL','CA','FL','TX','WA','CO') AND clip IS NOT NULL
+  WHERE situs_state IS NOT NULL AND clip IS NOT NULL
 ),
 calc AS (
   SELECT
@@ -137,7 +164,7 @@ WITH prop6 AS (
     (mailing_state IS NOT NULL
      AND UPPER(TRIM(mailing_state)) <> UPPER(TRIM(situs_state))) AS is_absentee
   FROM cotality_mortgage_data.corelogic.entrada_eval_property_domain_v3
-  WHERE situs_state IN ('IL','CA','FL','TX','WA','CO') AND clip IS NOT NULL
+  WHERE situs_state IS NOT NULL AND clip IS NOT NULL
 ),
 bridge AS (
   SELECT owner_1_identifier AS owner_link, COUNT(*) AS related_n
@@ -149,7 +176,7 @@ SELECT p.state, COUNT(*)
 FROM cotality_mortgage_data.corelogic.entrada_eval_voluntary_lien_status_marketing_v2 l
 JOIN prop6 p ON p.clip = l.clip
 LEFT JOIN bridge b ON b.owner_link = p.owner_link
-WHERE l.situs_state IN ('IL','CA','FL','TX','WA','CO') AND l.clip IS NOT NULL
+WHERE l.situs_state IS NOT NULL AND l.clip IS NOT NULL
   AND (COALESCE(b.related_n, 1) >= 2 OR p.is_corp OR p.is_absentee)
 GROUP BY p.state ORDER BY p.state;
 ```
@@ -178,10 +205,10 @@ WITH calc AS (
         WHEN first_position_mortgage_interest_rate IS NULL THEN NULL
         WHEN CAST(first_position_mortgage_interest_rate AS DOUBLE) <= 0 THEN NULL
         ELSE CAST(first_position_mortgage_interest_rate AS DOUBLE) / 100.0
-      END - 0.063) * 10000.0
+      END - <latest_mortgage30us_fraction>) * 10000.0
     ) AS INT) AS spread_bps
   FROM cotality_mortgage_data.corelogic.entrada_eval_voluntary_lien_status_marketing_v2
-  WHERE situs_state IN ('IL','CA','FL','TX','WA','CO') AND clip IS NOT NULL
+  WHERE situs_state IS NOT NULL AND clip IS NOT NULL
 )
 SELECT state, COUNT(*) FROM calc
 WHERE is_summit AND spread_bps >= 50
@@ -252,13 +279,12 @@ AS listed_for_sale` literal without wiring MLS first) fails loudly.
 
 | Metric | Count |
 |---|---:|
-| `cotality_mortgage_data.corelogic.entrada_eval_voluntary_lien_status_marketing_v2` (6-state, clip NOT NULL) | 5,156,184 |
+| `cotality_mortgage_data.corelogic.entrada_eval_voluntary_lien_status_marketing_v2` (current refreshed coverage, clip NOT NULL) | 5,156,184 |
 | `mip.gold.borrower_360` | 5,156,184 |
 | **Δ** | **0** |
 
 The 2 rows dropped relative to the raw share (5,156,186 → 5,156,184)
-are rows outside the 6-state footprint (the raw share is already ~99.9%
-inside IL/CA/FL/TX/WA/CO).
+are rows outside the current refreshed coverage scope.
 
 ---
 
@@ -343,9 +369,9 @@ pytest tests/integration/test_segment_count_parity.py -v
 pytest tests/integration/ -v
 ```
 
-**Expected output on a clean pass:** `39 passed` (6 states × 6 segments
-= 36 parametrized cases + 3 bonus tests: total-row parity, segment_
-population consistency, lead_population score floor).
+**Expected output on a clean pass:** all discovered coverage-state segment
+cells pass, plus the bonus parity checks for total rows, segment population,
+and lead-population score floor.
 
 When creds are not present, the test SKIPs with a descriptive message
 and CI stays green.

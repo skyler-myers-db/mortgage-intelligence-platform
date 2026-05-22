@@ -13,10 +13,11 @@
 -- Source:    cotality_mortgage_data.corelogic.entrada_eval_property_domain_v3
 --            (5.19M rows, CLIP 1:1).
 --
--- Geography filter (non-negotiable, CLAUDE.md + data-contract-module0 §2):
---            WHERE situs_state IN ('IL','CA','FL','TX','WA','CO')
+-- Geography contract:
+--            WHERE situs_state IS NOT NULL
 --            -- Applied in sql/transformations/silver_property_master.sql.
---            Single-metro footprints are explicitly forbidden.
+--            Downstream geography rollups discover state/county/ZIP coverage
+--            from the refreshed data.
 --
 -- PII posture (NON-NEGOTIABLE, governance-real-data-review §1):
 --            - `owner_1_full_name`            : HASHED at ingest to
@@ -37,8 +38,7 @@
 --
 --            clip                    CLIP spine, 1:1 with lien_current.
 --            fips_county_code        5-char FIPS for geo rollups.
---            situs_state             6-state filter guarantees ('IL','CA',
---                                    'FL','TX','WA','CO').
+--            situs_state             Source-state coverage.
 --            situs_city, situs_zip_code
 --                                    Non-street geography for gold/UI.
 --            situs_cbsa_code         Metro code used for geography drill-down.
@@ -48,7 +48,7 @@
 --            owner_name_hash         sha2() of owner_1_full_name; see
 --                                    transformation for salt sourcing.
 --                                    Derived IN SILVER; raw name never lands.
---            owner_is_corporate      Corporate-owner flag from 1/0 indicator.
+--            owner_is_corporate      Corporate-owner flag from Y/N indicator.
 --            owner_occupancy_code    'O'/'A'/'T' per CoreLogic dictionary.
 --            mailing_state, mailing_city
 --                                    Kept so `is_absentee` is computable in
@@ -69,10 +69,9 @@
 --            _meta_batch_id          Lakeflow run correlation id (NULL-OK).
 --
 -- Clustering: Liquid clustering on (situs_state, situs_cbsa_code, clip) --
---            the gold projection always filters on state (6-state footprint)
---            and frequently drills to CBSA. At 5M rows clustering beats
---            partitioning; partitioning by situs_state would create 6
---            large partitions and hurt selective CBSA-level queries.
+--            the gold projection and UI often group/filter by state and CBSA.
+--            Clustering stays useful whether the share has a small pilot
+--            footprint or broader national coverage.
 --
 -- Idempotency: CREATE TABLE IF NOT EXISTS. The Lakeflow pipeline and the
 --            transformation file produce the same schema and merge on the
@@ -82,7 +81,7 @@
 CREATE TABLE IF NOT EXISTS mip.silver.property_master (
   clip                    STRING    NOT NULL COMMENT 'Cotality mastered property ID. PK, 1:1 with lien_current.',
   fips_county_code        STRING             COMMENT '5-char FIPS county code for geo rollups.',
-  situs_state             STRING    NOT NULL COMMENT '2-char state code. Filter guarantees IN (IL, CA, FL, TX, WA, CO).',
+  situs_state             STRING    NOT NULL COMMENT '2-char state code from the source share.',
   situs_city              STRING             COMMENT 'Situs city (non-PII at cohort granularity).',
   situs_zip_code          STRING             COMMENT '5-digit situs ZIP (STRING to preserve leading zeros).',
   situs_cbsa_code         STRING             COMMENT 'Core-Based Statistical Area (metro) code.',
@@ -90,7 +89,7 @@ CREATE TABLE IF NOT EXISTS mip.silver.property_master (
   situs_lon               DOUBLE             COMMENT 'Block-level longitude from share; gold snaps to ZIP centroid before UI.',
   owner_link_id           STRING             COMMENT 'Cotality Owner Link (owner_1_identifier). 83% coverage.',
   owner_name_hash         STRING             COMMENT 'sha2(LOWER(TRIM(owner_1_full_name)) || salt, 256). Raw name never persisted.',
-  owner_is_corporate      BOOLEAN            COMMENT 'Derived from owner_1_corporate_indicator (BIGINT 1/0).',
+  owner_is_corporate      BOOLEAN            COMMENT 'Derived from owner_1_corporate_indicator (STRING Y/N).',
   owner_occupancy_code    STRING             COMMENT 'Owner-occupancy code: O=owner-occupied, A=absentee, T=tenant.',
   mailing_city            STRING             COMMENT 'Mailing city (kept for investor-flag derivation).',
   mailing_state           STRING             COMMENT 'Mailing state (kept for is_absentee derivation only; no street).',
@@ -110,7 +109,7 @@ CREATE TABLE IF NOT EXISTS mip.silver.property_master (
 )
 USING DELTA
 CLUSTER BY (situs_state, situs_cbsa_code, clip)
-COMMENT 'CLIP-grain property snapshot lifted from cotality_mortgage_data.corelogic.entrada_eval_property_domain_v3 filtered to IN (IL, CA, FL, TX, WA, CO). Raw owner names + street addresses never land in silver; see docs/data-contract-module0.md §2.2 and docs/governance-real-data-review.md §1.'
+COMMENT 'CLIP-grain property snapshot lifted from the Cotality source share for all non-null source states. Raw owner names + street addresses never land in silver; see docs/data-contract-module0.md §2.2 and docs/governance-real-data-review.md §1.'
 TBLPROPERTIES (
   'delta.enableChangeDataFeed' = 'false',
   'delta.autoOptimize.optimizeWrite' = 'true',

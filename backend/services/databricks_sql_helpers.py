@@ -8,9 +8,8 @@ workspace.
 This module centralises the ``{catalog}.{schema}.{table}`` construction
 so Python callers only name ``(schema, table)`` pairs. The catalog is
 resolved from ``backend.config.settings.settings.mip_default_catalog``
-(env var ``MIP_DEFAULT_CATALOG``, also aliased via ``MIP_UC_CATALOG`` in
-deploy templates) at call time, so a single env-var flip reroutes the
-whole app at boot.
+(env var ``MIP_DEFAULT_CATALOG``) at call time, so a single env-var flip
+reroutes the whole app at boot.
 
 Scope note: only the Python side is covered here. SQL files under
 ``sql/transformations/`` and ``sql/ddl/`` still hardcode ``mip.*`` --
@@ -21,7 +20,49 @@ separate follow-up with its own risk surface.
 """
 from __future__ import annotations
 
+import re
+
 from backend.config.settings import settings
+
+_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+_ALLOWED_RELATIONS: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("first_party", "crm_campaign_membership"),
+        ("first_party", "customer_interactions"),
+        ("first_party", "loan_applications"),
+        ("first_party", "product_balances"),
+        ("first_party", "servicing_portfolio"),
+        ("gold", "borrower_360"),
+        ("gold", "borrower_dossier"),
+        ("gold", "borrower_lifecycle_state"),
+        ("gold", "county_rollup"),
+        ("gold", "evidence_events"),
+        ("gold", "fn_in_the_money"),
+        ("gold", "fn_lead_score"),
+        ("gold", "fn_next_best_offer"),
+        ("gold", "fn_rate_spread"),
+        ("gold", "funnel_snapshot_daily"),
+        ("gold", "lead_population"),
+        ("gold", "lead_scores"),
+        ("gold", "lockin_cohort"),
+        ("gold", "segment_population"),
+        ("gold", "source_readiness"),
+        ("gold", "state_top_segment"),
+        ("gold", "zip_rollup"),
+        ("ref", "lender_dictionary"),
+        ("ref", "offer_rules_config"),
+        ("ref", "state_footprint"),
+        ("semantics", "borrower_opportunity_metric_view"),
+        ("semantics", "lead_generation_metric_view"),
+        ("semantics", "segment_performance_metric_view"),
+        ("silver", "lien_current"),
+        ("silver", "market_rates_weekly"),
+        ("silver", "mortgage_events"),
+        ("silver", "owner_property_bridge"),
+        ("silver", "property_master"),
+    }
+)
 
 
 def qualify(schema: str, table: str, *, catalog: str | None = None) -> str:
@@ -32,10 +73,19 @@ def qualify(schema: str, table: str, *, catalog: str | None = None) -> str:
     non-default workspace (e.g. cross-workspace read of a lender's own
     catalog).
 
-    The function performs no validation -- Unity Catalog identifier
-    rules (dots, reserved words) are upstream of this helper and each
-    caller already vends short stable string literals rather than
-    user-input.
+    Each identifier part must be a plain Unity Catalog identifier and
+    every schema/table pair must be one of the public Module 0 assets
+    the app is allowed to query.
     """
     cat = catalog if catalog is not None else settings.mip_default_catalog
+    _validate_identifier("catalog", cat)
+    _validate_identifier("schema", schema)
+    _validate_identifier("table", table)
+    if (schema.lower(), table.lower()) not in _ALLOWED_RELATIONS:
+        raise ValueError(f"Unknown Unity Catalog relation: {schema}.{table}")
     return f"{cat}.{schema}.{table}"
+
+
+def _validate_identifier(label: str, value: str) -> None:
+    if not isinstance(value, str) or not _IDENTIFIER_RE.fullmatch(value):
+        raise ValueError(f"Invalid Unity Catalog {label} identifier: {value!r}")

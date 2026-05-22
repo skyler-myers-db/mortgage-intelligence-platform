@@ -1,3 +1,5 @@
+> **Internal implementation artifact. Not approved for public release.**
+
 # Loan-Officer & Light-Theme Review — 2026-04-22
 
 Branch: `fix/copilot-batch-post-merge`

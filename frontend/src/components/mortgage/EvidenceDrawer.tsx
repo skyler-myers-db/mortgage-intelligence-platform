@@ -1,46 +1,71 @@
-import { Fragment, useEffect, useRef } from 'react';
+import { Fragment, useRef } from 'react';
+import { Link } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import { useApp } from '../AppContext';
 import { Icon } from '../Icon';
+import { api } from '../../lib/api';
+import { assetDetailHref, assetHrefForSource } from '../../lib/drawerSources';
+import { useFocusTrap } from '../../hooks/useFocusTrap';
+import { queryKeys } from '../../lib/queryKeys';
+import type { AssetFreshness, AssetMetadataResponse } from '../../types';
 
 /**
- * Data source / evidence drawer — `.drawer` BEM from the prototype.
- * Slides in from the right with scrim, shows lineage nodes + signal rows
- * for whatever drawer source is currently set on AppContext.
- *
- * Any page can open it via `useApp().setDrawer(SOURCE)`.
+ * Data source / evidence drawer — fast context for a source chip.
+ * The drawer starts with human explanation and, when the source maps to a
+ * trusted Module 0 asset, enriches itself with governed UC metadata.
  */
+
+function formatNumber(value: number | null | undefined): string {
+  if (value === null || value === undefined) return 'Unavailable';
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(2)}M`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(2)}K`;
+  return value.toLocaleString();
+}
+
+function freshnessLabel(freshness: AssetFreshness | undefined): string {
+  if (freshness === 'fresh') return 'Fresh';
+  if (freshness === 'aging') return 'Aging';
+  if (freshness === 'stale') return 'Stale';
+  return 'Freshness unavailable';
+}
+
+function freshnessHelp(freshness: AssetFreshness | undefined): string {
+  if (freshness === 'fresh') return 'Updated within 7 days.';
+  if (freshness === 'aging') return 'Updated 7-30 days ago.';
+  if (freshness === 'stale') return 'Updated more than 30 days ago.';
+  return 'No backend refresh timestamp is available for this source.';
+}
+
+function metadataStatRows(metadata?: AssetMetadataResponse) {
+  if (!metadata) return [];
+  return [
+    ['Rows', formatNumber(metadata.row_count)],
+    ['Files', formatNumber(metadata.num_files)],
+    ['Size', metadata.size_label ?? 'Unavailable'],
+    ['Modified', metadata.delta_last_modified ?? 'Unavailable'],
+  ];
+}
 
 export function EvidenceDrawer() {
   const { drawer, setDrawer } = useApp();
   const open = !!drawer;
   const d = drawer;
   const closeBtnRef = useRef<HTMLButtonElement | null>(null);
-  const lastFocusedRef = useRef<HTMLElement | null>(null);
-
-  // A11y: ESC closes; focus lands on the close button on open and returns
-  // to the element that triggered the open on close. Prevents sighted
-  // keyboard users from being stranded in the dialog.
-  useEffect(() => {
-    if (open) {
-      lastFocusedRef.current = document.activeElement as HTMLElement | null;
-      // Defer to next frame so the element is visible + focusable.
-      queueMicrotask(() => closeBtnRef.current?.focus());
-      const onKey = (e: KeyboardEvent) => {
-        if (e.key === 'Escape') {
-          e.preventDefault();
-          setDrawer(null);
-        }
-      };
-      window.addEventListener('keydown', onKey);
-      return () => window.removeEventListener('keydown', onKey);
-    }
-    // When drawer closes, restore focus to whatever opened it.
-    if (lastFocusedRef.current && typeof lastFocusedRef.current.focus === 'function') {
-      lastFocusedRef.current.focus();
-      lastFocusedRef.current = null;
-    }
-    return undefined;
-  }, [open, setDrawer]);
+  const drawerRef = useRef<HTMLElement | null>(null);
+  const metadataQuery = useQuery({
+    queryKey: queryKeys.assetMetadata(d?.assetKey),
+    queryFn: ({ signal }) => api.assetMetadata(d?.assetKey ?? '', signal),
+    enabled: open && !!d?.assetKey,
+    retry: false,
+  });
+  const metadata = metadataQuery.data;
+  const assetHref = d?.assetKey ? assetDetailHref(d.assetKey) : null;
+  useFocusTrap({
+    open,
+    containerRef: drawerRef,
+    initialFocusRef: closeBtnRef,
+    onClose: () => setDrawer(null),
+  });
 
   return (
     <>
@@ -50,6 +75,7 @@ export function EvidenceDrawer() {
         aria-hidden={!open}
       />
       <aside
+        ref={drawerRef}
         className={`drawer ${open ? 'is-open' : ''}`}
         role="dialog"
         aria-modal="true"
@@ -57,89 +83,165 @@ export function EvidenceDrawer() {
         aria-hidden={!open}
       >
         <div className="drawer__hdr">
-          <div
-            style={{
-              display: 'grid',
-              placeItems: 'center',
-              width: 32,
-              height: 32,
-              background: 'var(--accent-soft)',
-              color: 'var(--accent)',
-              borderRadius: 8,
-            }}
-          >
+          <div className="drawer__source-icon">
             <Icon name="db" size={16} />
           </div>
-          <div>
-            <div style={{ fontSize: 13, fontWeight: 600 }}>Data source & lineage</div>
-            <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{d?.title ?? '—'}</div>
+          <div className="drawer__hdr-main">
+            <div className="drawer__title">{d?.title ?? 'Data source'}</div>
+            <div className="drawer__subtitle">{d?.short ?? d?.assetPath ?? 'Source proof'}</div>
           </div>
           <button ref={closeBtnRef} className="drawer__close" onClick={() => setDrawer(null)} aria-label="Close drawer" type="button">
             <Icon name="close" size={14} />
           </button>
         </div>
         <div className="drawer__body">
-          <div
-            className="freshness-legend"
-            aria-label="Source freshness legend"
-            title="Fresh: updated within 7 days · Aging: 7–30 days · Stale: over 30 days or unknown"
-            style={{ marginBottom: 10 }}
-          >
-            <span className="freshness-legend__item">
-              <span className="freshness-legend__dot freshness-legend__dot--fresh" aria-hidden="true" />
-              Fresh
-            </span>
-            <span className="freshness-legend__item">
-              <span className="freshness-legend__dot freshness-legend__dot--aging" aria-hidden="true" />
-              Aging
-            </span>
-            <span className="freshness-legend__item">
-              <span className="freshness-legend__dot freshness-legend__dot--stale" aria-hidden="true" />
-              Stale
-            </span>
-          </div>
-          {d?.description && <p className="body" style={{ marginTop: 0 }}>{d.description}</p>}
-          {d?.lineage && d.lineage.length > 0 && (
+          {d ? (
             <>
-              <div className="eyebrow" style={{ marginTop: 16, marginBottom: 8 }}>Lineage</div>
-              {d.lineage.map((n, i) => (
-                <Fragment key={`${n.name}-${i}`}>
-                  <div className="lineage-node">
-                    <div className="lineage-node__label">{n.layer}</div>
-                    <div className="lineage-node__name">{n.name}</div>
-                    {n.meta && (
-                      <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 4 }}>{n.meta}</div>
-                    )}
-                  </div>
-                  {d.lineage && i < d.lineage.length - 1 && <div className="lineage-arrow">↓</div>}
-                </Fragment>
-              ))}
-            </>
-          )}
-          {d?.signals && d.signals.length > 0 && (
-            <>
-              <div className="eyebrow" style={{ marginTop: 20, marginBottom: 8 }}>Raw signals</div>
-              {d.signals.map((s, i) => (
-                <div
-                  key={`${s.label}-${i}`}
-                  className="lineage-node"
-                  style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}
-                >
-                  <div>
-                    <div className="lineage-node__label">{s.label}</div>
-                    <div className="lineage-node__name">{s.source}</div>
-                  </div>
-                  <div className="mono num" style={{ color: 'var(--text-1)', fontSize: 13 }}>{s.value}</div>
+              <div className="source-summary">
+                <div className="source-summary__top">
+                  <span className={`source-freshness source-freshness--${metadata?.freshness ?? 'unavailable'}`}>
+                    {freshnessLabel(metadata?.freshness)}
+                  </span>
+                  {metadata?.status && <span className="chip chip--neutral">{metadata.status}</span>}
                 </div>
-              ))}
+                <p className="body flush">{d.description}</p>
+                <p className="muted fs-12 flush">{freshnessHelp(metadata?.freshness)}</p>
+              </div>
+
+              {metadataQuery.isFetching && (
+                <div className="source-card" role="status" aria-live="polite">
+                  Loading governed asset metadata…
+                </div>
+              )}
+
+              {metadataQuery.isError && d.assetKey && (
+                <div className="source-card source-card--warning">
+                  Governed asset metadata requires admin access or the warehouse is warming. The source explanation above remains available.
+                </div>
+              )}
+
+              {metadata && (
+                <div className="source-stat-grid" aria-label="Governed asset metadata">
+                  {metadataStatRows(metadata).map(([label, value]) => (
+                    <div key={label} className="source-stat">
+                      <span>{label}</span>
+                      <strong>{value}</strong>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {d.usedIn && d.usedIn.length > 0 && (
+                <>
+                  <div className="eyebrow mt-4 mb-2">Used in Module 0</div>
+                  <div className="chip-row">
+                    {d.usedIn.map((use) => (
+                      <span key={use} className="chip chip--neutral">{use}</span>
+                    ))}
+                  </div>
+                </>
+              )}
+
+              {d.lineage && d.lineage.length > 0 && (
+                <>
+                  <div className="eyebrow mt-4 mb-2">Lineage</div>
+                  {d.lineage.map((n, i) => (
+                    <Fragment key={`${n.name}-${i}`}>
+                      <div className="lineage-node">
+                        <div className="lineage-node__label">{n.layer}</div>
+                        <div className="lineage-node__name">{n.name}</div>
+                        {n.meta && <div className="lineage-node__meta">{n.meta}</div>}
+                      </div>
+                      {d.lineage && i < d.lineage.length - 1 && <div className="lineage-arrow">↓</div>}
+                    </Fragment>
+                  ))}
+                </>
+              )}
+
+              {metadata?.lineage && metadata.lineage.length > 0 && (
+                <>
+                  <div className="eyebrow mt-5 mb-2">Observed UC lineage</div>
+                  {metadata.lineage.map((n) => {
+                    const lineageHref = assetHrefForSource(n.asset_path);
+                    if (!lineageHref) {
+                      return (
+                        <div key={`${n.direction}-${n.asset_path}`} className="lineage-node">
+                          <div className="lineage-node__label">{n.direction}</div>
+                          <div className="lineage-node__name">{n.label}</div>
+                          {n.event_time && <div className="lineage-node__meta">{n.event_time}</div>}
+                        </div>
+                      );
+                    }
+                    return (
+                      <Link
+                        key={`${n.direction}-${n.asset_path}`}
+                        to={lineageHref}
+                        className="lineage-node lineage-node--link"
+                        onClick={() => setDrawer(null)}
+                      >
+                        <div className="lineage-node__label">{n.direction}</div>
+                        <div className="lineage-node__name">{n.label}</div>
+                        {n.event_time && <div className="lineage-node__meta">{n.event_time}</div>}
+                      </Link>
+                    );
+                  })}
+                </>
+              )}
+
+              {d.signals && d.signals.length > 0 && (
+                <>
+                  <div className="eyebrow mt-5 mb-2">Sanitized signals</div>
+                  {d.signals.map((s, i) => (
+                    <div key={`${s.label}-${i}`} className="lineage-node lineage-node--signal">
+                      <div>
+                        <div className="lineage-node__label">{s.label}</div>
+                        <div className="lineage-node__name">{s.source}</div>
+                      </div>
+                      <div className="mono num lineage-node__value">{s.value}</div>
+                    </div>
+                  ))}
+                </>
+              )}
+
+              <div className="source-card source-card--subtle">
+                <div className="eyebrow mb-1">Not exposed here</div>
+                <p className="muted flush">
+                  {d.notExposed ?? 'Raw identities, owner names, street addresses, credentials, grants, storage locations, and raw source paths stay behind governed Unity Catalog boundaries.'}
+                </p>
+              </div>
+
+              <div className="drawer__actions">
+                {assetHref && (
+                  <Link className="btn btn--primary btn--sm" to={assetHref} onClick={() => setDrawer(null)}>
+                    <Icon name="db" size={12} />
+                    View asset details
+                  </Link>
+                )}
+                {metadata?.catalog_explorer_url && (
+                  <a
+                    className="btn btn--ghost btn--sm"
+                    href={metadata.catalog_explorer_url}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    <Icon name="export" size={12} />
+                    Catalog Explorer
+                  </a>
+                )}
+              </div>
+
+              {d.eventDate && (
+                <div className="drawer__updated">
+                  Evidence event date: {d.eventDate}
+                </div>
+              )}
+              {metadata?.last_updated && (
+                <div className="drawer__updated">
+                  Business refresh: {metadata.last_updated}
+                </div>
+              )}
             </>
-          )}
-          {d?.updatedAt && (
-            <div style={{ marginTop: 16, fontSize: 11, color: 'var(--text-3)' }}>
-              Last refresh: {d.updatedAt} · via Delta Share
-            </div>
-          )}
-          {!d && (
+          ) : (
             <p className="muted">Tap any evidence chip or KPI source line to inspect the lineage.</p>
           )}
         </div>

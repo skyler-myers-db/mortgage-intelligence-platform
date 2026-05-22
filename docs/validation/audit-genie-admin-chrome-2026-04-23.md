@@ -1,3 +1,5 @@
+> **Internal implementation artifact. Not approved for public release.**
+
 # Audit — Ask Genie, Admin Config, and shared chrome
 
 _Dated 2026-04-23. Auditor: `qa-test-engineer` subagent._
@@ -205,37 +207,17 @@ curl -sS -X POST -H "Content-Type: application/json" \
   http://localhost:8000/api/genie/message
 ```
 
-Response:
-
-```json
-{
-  "conversation_id": "fallback-conv",
-  "question": "Which zips have the most in-the-money refi candidates?",
-  "answer": "The top in-the-money ZIPs are 60611 Chicago (~1,420 borrowers), 78704 Austin (~1,180), 94110 San Francisco (~960), 98103 Seattle (~720), and 33132 Miami (~640). Together they cover about 38% of the 6-state ITM book.",
-  "source": "fallback",
-  "trusted_assets": ["mip.gold.lead_population", "mip.semantics.lead_generation_metric_view"],
-  "metric_value": null,
-  "table_rows": [
-    {"zip": "60611", "city": "Chicago, IL", "itm_borrowers": "~1,420"},
-    {"zip": "78704", "city": "Austin, TX", "itm_borrowers": "~1,180"},
-    {"zip": "94110", "city": "San Francisco, CA", "itm_borrowers": "~960"},
-    {"zip": "98103", "city": "Seattle, WA", "itm_borrowers": "~720"},
-    {"zip": "33132", "city": "Miami, FL", "itm_borrowers": "~640"}
-  ],
-  "follow_up_questions": [
-    "How many in-the-money borrowers in Travis County?",
-    "Where is the biggest HELOC opportunity by state?",
-    "Who in Austin is in the money?"
-  ]
-}
-```
+Historical note: this April 23 local probe originally captured a canned
+degraded Genie answer. That behavior is retired. Current degraded Genie
+responses contain only an explicit reconnecting message and static prompt
+suggestions; no local answer body, metric, table row, borrower example, or
+source claim is served without live Genie or trusted SQL proof.
 
 Observations:
 
-- **Endpoint is wired.** `/api/genie/message` accepts the payload and returns a valid `GenieMessageResponse` shape (answer, source, trusted_assets, table_rows, follow_up_questions).
-- **Returned via `ResilientGenieClient` fallback path.** `source: "fallback"` and `conversation_id: "fallback-conv"` indicate the `genie` circuit breaker is open locally (no `DATABRICKS_GENIE_SPACE_ID` configured in the dev shell). The answer came from the curated `genie_answers` corpus — this is the documented degraded-path behavior (see `backend/api/genie.py:1–16` header comment and `/api/health`'s `circuit_breakers.genie`). In a production deploy with the Genie space configured, this same call path produces a live Databricks Genie answer with generated SQL.
-- **Answer references real metric views.** `trusted_assets` includes `mip.gold.lead_population` and `mip.semantics.lead_generation_metric_view`, which match the real UC objects declared in `databricks.yml` / `resources/`.
-- **SQL generation:** not present in the fallback response. `GenieMessageResponse` has no `sql` field today. If the main agent wants to surface live-generated SQL on the Ask Genie page, that requires a schema extension on the response model and the live (non-fallback) Genie client path to be exercised.
+- **Endpoint is wired.** `/api/genie/message` accepts the payload and returns a valid `GenieMessageResponse` shape.
+- **Current degraded posture.** If Genie is unavailable, the response must be `source="degraded"`, with no table rows and no trusted-asset claim. Prompt suggestions are allowed; analytic content is not.
+- **SQL generation:** present only on live Genie/trusted-SQL answers.
 
 ## 6. Validation commands run
 

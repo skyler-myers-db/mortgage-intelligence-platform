@@ -8,9 +8,9 @@ This repo runs two workflows:
 | [`nightly.yml`](nightly.yml) | `schedule` (10:00 UTC daily) + `workflow_dispatch` | Required — see below. |
 
 The PR workflow (`ci.yml`) is designed to stay green for any contributor
-including fork-based PRs: it uses placeholder BUNDLE_VARs, mock-mode
-pytest, and Playwright driven by the in-process repositories in
-`tests/fixtures/in_process_repos.py`. No real workspace is touched.
+including fork-based PRs: it uses placeholder BUNDLE_VARs and pytest
+fixtures that explicitly install in-process repositories where needed.
+No real workspace is touched.
 
 The nightly workflow (`nightly.yml`) intentionally talks to the real
 dev Databricks workspace so drift between the SQL UDFs + Python
@@ -34,16 +34,18 @@ to abort with a clear `::error::` pointing at the offending var.
 | `DATABRICKS_TOKEN` | Personal Access Token with permissions to read `mip.*` and run statements on the dev warehouse. | Databricks UI → User Settings → Developer → Access Tokens → Generate new token. Rotate every 90 days (see `docs/runbook.md` §5). |
 | `DATABRICKS_WAREHOUSE_ID` | ID of the dev serverless SQL warehouse. Same value `databricks bundle validate` resolves from `databricks.yml`. | Databricks UI → SQL Warehouses → click the warehouse → copy from URL or Connection Details. |
 | `GENIE_SPACE_ID` | Mortgage Lead Intelligence Genie Space ID. | Databricks UI → Genie → open the space → copy ID from URL. Also tracked at `genie/space_id.txt`. |
+| `DATABRICKS_CLIENT_ID` | Service-principal client ID used by the live Playwright app smoke. | Databricks service principal configured for the dev app workspace. |
+| `DATABRICKS_CLIENT_SECRET` | Service-principal client secret used by the live Playwright app smoke. | Databricks service principal secret. Rotate with the same cadence as the workspace token. |
+| `MIP_APP_URL` | Deployed Databricks App URL for the live Playwright spec (for example `https://mip-dev.databricksapps.com`). | `databricks apps get <app-name> --profile DEFAULT -o json` or the Databricks Apps UI. |
 | `LAKEBASE_HOST` | Lakebase Postgres endpoint hostname. | Databricks UI → Lakebase instance → Connection Details → Host. |
 | `LAKEBASE_USER` | Lakebase Postgres user. | Same Connection Details panel. |
 | `LAKEBASE_PASSWORD` | Lakebase Postgres password (or workspace identity token if using identity auth). | Same Connection Details panel. |
-| `LAKEBASE_DATABASE_NAME` | Lakebase database the `mip_app` schema lives in. | Defaults to `mip_app_db`; confirm in bundle outputs. |
+| `LAKEBASE_DATABASE` | Lakebase database the `mip_app` schema lives in. | Defaults to `mip_app_state`; confirm in bundle outputs. |
 
 ## Optional secrets (nightly, gated features)
 
 | Secret | What it enables | Notes |
 |---|---|---|
-| `MIP_APP_URL` | Points the live Playwright spec at the deployed Databricks App URL (e.g. `https://mip-dev.databricksapps.com`). | If unset, the live spec boots a local uvicorn + vite pair — useful for ad-hoc runs but not the customer-facing URL. |
 | `MIP_API_URL` | API origin if different from `MIP_APP_URL` (e.g. you run the backend on a different subdomain). | If unset, derived from `MIP_APP_URL` by swapping `:5173`→`:8000`. |
 | `MIP_FORCE_DEGRADED_TOKEN` | Admin token used by the Playwright spec to flip the "force degraded" feature flag and prove the DegradedBanner surfaces on real infra. | Spec's `forcing a 503` test self-skips without this secret; nightly still passes. |
 

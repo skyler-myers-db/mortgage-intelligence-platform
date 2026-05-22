@@ -563,33 +563,32 @@ drill_genie() {
     return 1
   fi
 
-  # Hit the Genie endpoint to trip the breaker. /api/genie/ask is the
-  # documented shape; it must return 503 or declare degraded when the
+  # Hit the Genie endpoint to trip the breaker. /api/genie/message is
+  # the app contract; it must return 503 or declare degraded when the
   # space id is invalid.
   log "Asking a Genie question with bogus space id..."
-  assert_data_endpoint_degraded "$DRILL_APP_URL" "/api/genie/ask" || {
-    # /api/genie/ask is POST-only; try POST explicitly.
-    local code body
-    body="$(mktemp)"
-    code=$(curl -s --max-time 10 -o "$body" -w '%{http_code}' \
-      -X POST -H 'content-type: application/json' \
-      -d '{"question":"How many in-the-money borrowers?"}' \
-      "$DRILL_APP_URL/api/genie/ask" || echo '000')
-    log "POST /api/genie/ask -> HTTP $code"
-    log "body (head): $(head -c 400 "$body")"
-    if [[ "$code" == "200" ]]; then
-      # Safe corpus fallback is an accepted degraded behaviour -- the
-      # contract is that `source` is explicit, not a silent pretend.
-      if jq -e '.source == "fallback" or .source == "corpus"' "$body" >/dev/null 2>&1; then
-        log "PASS: Genie fell through to safe corpus with explicit source"
-      else
-        log "FAIL: Genie returned 200 but did not declare fallback source"
-        rm -f "$body"
-        return 1
-      fi
+  local code body
+  body="$(mktemp)"
+  code=$(curl -s --max-time 10 -o "$body" -w '%{http_code}' \
+    -X POST -H 'content-type: application/json' \
+    -d '{"question":"How many in-the-money borrowers?"}' \
+    "$DRILL_APP_URL/api/genie/message" || echo '000')
+  log "POST /api/genie/message -> HTTP $code"
+  log "body (head): $(head -c 400 "$body")"
+  if [[ "$code" == "200" ]]; then
+    if jq -e '.source == "degraded"' "$body" >/dev/null 2>&1; then
+      log "PASS: Genie returned honest degraded response"
+    else
+      log "FAIL: Genie returned 200 but did not declare degraded source"
+      rm -f "$body"
+      return 1
     fi
+  elif [[ "$code" != "503" && "$code" != "500" && "$code" != "502" && "$code" != "504" ]]; then
+    log "FAIL: expected degraded Genie status, got HTTP $code"
     rm -f "$body"
-  }
+    return 1
+  fi
+  rm -f "$body"
 
   log "Probing /api/health for genie=down or breaker=open..."
   assert_degraded_health "$DRILL_APP_URL" genie 15 || log "note: genie probe may be lazy; continuing"

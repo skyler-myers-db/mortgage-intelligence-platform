@@ -1,14 +1,42 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent } from 'react';
-import { Link } from 'react-router-dom';
-import type { LeadSummary } from '../../types';
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import { useVirtualizer } from '@tanstack/react-virtual';
+import type { CallDisposition, LeadSummary } from '../../types';
 import { Icon } from '../Icon';
-import { Chip, Button, EvidenceChip } from '../Primitives';
-import { ScoreBadge } from './ScoreBadge';
-import { ConfidenceMeter } from './ConfidenceMeter';
+import { Chip, Button } from '../Primitives';
 import { useApp } from '../AppContext';
 import { api, ApiError, isAbortError } from '../../lib/api';
-import { DRAWER_SOURCES } from '../../lib/drawerSources';
-import { segmentColor, segmentName } from '../../lib/segmentMetadata';
+import { invalidateOperationalQueries } from '../../lib/queryKeys';
+import { buildLeadCsv } from './LeadTable.csv';
+import {
+  BULK_APPROVE_CONCURRENCY,
+  LEAD_ROW_ESTIMATE_PX,
+  LEAD_ROW_OVERSCAN,
+  LEAD_TABLE_COL_COUNT,
+  LEAD_VIRTUALIZATION_THRESHOLD,
+} from './LeadTable.constants';
+import {
+  _newBulkId,
+  chunk,
+  dispositionLabel,
+  isEditableTarget,
+  isLeadApprovalEligible,
+  isLeadSelectableForSalesOps,
+  isTerminalApproval,
+  sortValue,
+} from './LeadTable.logic';
+import { LeadTableRow } from './LeadTableRow';
+import { LeadDispositionPanel, LeadRejectPanel } from './LeadTableDecisionPanels';
+import type { LeadTableProps, RejectReasonCode, SortDir, SortKey } from './LeadTable.types';
+
+export { buildLeadCsv } from './LeadTable.csv';
+export {
+  isEditableTarget,
+  isLeadApprovalEligible,
+  isLeadMarketingActionable,
+  isLeadSelectableForSalesOps,
+} from './LeadTable.logic';
+export type { LeadExportContext } from './LeadTable.types';
 
 /**
  * LeadTable — prototype `.surface` + `.tbl` BEM. Sticky thead, hover, row
@@ -32,117 +60,65 @@ import { segmentColor, segmentName } from '../../lib/segmentMetadata';
  * when the table has focus; plain A still approves only the expanded row.
  */
 
-/** Concurrency cap for the bulk-approve client-side loop. */
-const BULK_APPROVE_CONCURRENCY = 3;
+export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exportContext, salesTeam = [] }: LeadTableProps) {
+  'use no memo';
 
-/**
- * Return true when `el` is an editable element that the window-level
- * hotkey handler must skip over. Exported for unit tests — the
- * actual hotkey listener uses both this and `document.activeElement`
- * so typing "a" into a text field can never trigger bulk-approve.
- * R5-12 (2026-04-23).
- */
-export function isEditableTarget(el: Element | null | undefined): boolean {
-  if (!el) return false;
-  const tag = (el as HTMLElement).tagName;
-  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
-  return (el as HTMLElement).isContentEditable === true;
-}
-
-/**
- * Chunk a list into groups of `size`. Used by the bulk-approve loop to
- * bound in-flight POSTs to the approve endpoint without inventing a
- * server-side bulk API.
- */
-function chunk<T>(items: T[], size: number): T[][] {
-  if (size <= 0) return [items];
-  const out: T[][] = [];
-  for (let i = 0; i < items.length; i += size) {
-    out.push(items.slice(i, i + size));
-  }
-  return out;
-}
-
-function RowPreview({ lead }: { lead: LeadSummary }) {
-  // Prefer the real Cotality CLIP projected by the backend (2026-04-22
-  // contract addition). Fall back to a borrower-id derived placeholder
-  // only for rows predating that projection (empty string).
-  const clipValue = lead.clip && lead.clip.length > 0
-    ? lead.clip
-    : `clip_${lead.borrower_id.toLowerCase().replace('-', '')}`;
-  return (
-    <div className="tbl__expand-inner" style={{ display: 'grid', gridTemplateColumns: '1.1fr 1fr 1fr', gap: 20 }}>
-      <div>
-        <div className="eyebrow" style={{ marginBottom: 8 }}>Customer 360 preview</div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-          <Cell k="CLIP"          v={clipValue} mono />
-          <Cell k="Location"      v={`${lead.city}, ${lead.state} · ${lead.zip}`} />
-          <Cell k="Equity"        v={`$${(lead.equity_estimate / 1000).toFixed(0)}k`} mono />
-          <Cell k="Rate spread"   v={`+${lead.rate_spread_bps} bps`} mono />
-          <Cell k="Score"         v={`${lead.opportunity_score}`} mono />
-          <Cell k="Confidence"    v={`${lead.confidence}%`} mono />
-        </div>
-        <div className="eyebrow" style={{ marginTop: 18, marginBottom: 8 }}>Segments</div>
-        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-          {lead.segment_codes.map((sid) => {
-            const color = segmentColor(sid);
-            const style: CSSProperties = {
-              color,
-              background: `color-mix(in oklab, ${color} 14%, transparent)`,
-              borderColor: `color-mix(in oklab, ${color} 35%, transparent)`,
-            };
-            return (
-              <span key={sid} className="chip" style={style}>
-                {segmentName(sid)}
-              </span>
-            );
-          })}
-        </div>
-      </div>
-
-      <div>
-        <div className="eyebrow" style={{ marginBottom: 8 }}>Why now</div>
-        <p className="body" style={{ marginTop: 0 }}>{lead.why_now}</p>
-        <div style={{ marginTop: 12, display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-          <span className="muted" style={{ fontSize: 11 }}>Evidence:</span>
-          <EvidenceChip source={DRAWER_SOURCES.itm}>Rate + equity ruleset</EvidenceChip>
-          <EvidenceChip source={DRAWER_SOURCES.nbo}>Next-best-offer model</EvidenceChip>
-        </div>
-      </div>
-
-      <div>
-        <div className="eyebrow" style={{ marginBottom: 8 }}>Next-best-offer</div>
-        <div className="surface" style={{ padding: '14px 16px', background: 'var(--bg-1)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <div style={{ fontSize: 16, fontWeight: 600, letterSpacing: '-0.01em' }}>{lead.recommended_offer}</div>
-            <ScoreBadge value={lead.opportunity_score} />
-          </div>
-          <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
-            Confidence <ConfidenceMeter value={lead.confidence} compact />
-          </div>
-          <div style={{ marginTop: 12 }}>
-            <Link className="btn btn--primary btn--sm" to={`/borrower-360/${lead.borrower_id}`}>
-              Open Borrower 360
-            </Link>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function Cell({ k, v, mono }: { k: string; v: string; mono?: boolean }) {
-  return (
-    <div>
-      <div className="muted" style={{ fontSize: 11 }}>{k}</div>
-      <div className={mono ? 'mono num' : ''} style={{ fontSize: 13, color: 'var(--text-1)' }}>{v}</div>
-    </div>
-  );
-}
-
-export function LeadTable({ leads }: { leads: LeadSummary[] }) {
-  const [expanded, setExpanded] = useState<string | null>(leads[0]?.borrower_id ?? null);
-  const { approvals, setApproval } = useApp();
+  const queryClient = useQueryClient();
+  const tableWrapRef = useRef<HTMLDivElement | null>(null);
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [sortKey, setSortKey] = useState<SortKey>('rank');
+  const [sortDir, setSortDir] = useState<SortDir>('desc');
+  const [pendingReject, setPendingReject] = useState<string | null>(null);
+  const [rejectReasonCode, setRejectReasonCode] = useState<RejectReasonCode>('low_intent');
+  const [rejectRationale, setRejectRationale] = useState('');
+  const [bulkRationaleOpen, setBulkRationaleOpen] = useState(false);
+  const [bulkRationale, setBulkRationale] = useState('');
+  const [selectedAssignee, setSelectedAssignee] = useState<string>('');
+  const [salesToast, setSalesToast] = useState<string | null>(null);
+  const [salesBusy, setSalesBusy] = useState(false);
+  const [salesOverrides, setSalesOverrides] = useState<Record<string, Partial<LeadSummary>>>({});
+  const [pendingDisposition, setPendingDisposition] = useState<string | null>(null);
+  const [dispositionOutcome, setDispositionOutcome] = useState<CallDisposition['outcome']>('called_left_voicemail');
+  const [dispositionLo, setDispositionLo] = useState<string>('');
+  const [dispositionCallbackAt, setDispositionCallbackAt] = useState('');
+  const [dispositionNotes, setDispositionNotes] = useState('');
+  const { approvals, setApproval, setLastBorrowerId } = useApp();
+  const displayLeads = leads.map((lead) => ({ ...lead, ...(salesOverrides[lead.borrower_id] ?? {}) }));
+  const leadsById = new Map(displayLeads.map((lead) => [lead.borrower_id, lead]));
+  const sortedLeads = sortKey === 'rank'
+    ? displayLeads
+    : [...displayLeads].sort((a, b) => {
+        const direction = sortDir === 'asc' ? 1 : -1;
+        const av = sortValue(a, sortKey);
+        const bv = sortValue(b, sortKey);
+        if (typeof av === 'number' && typeof bv === 'number') {
+          return (av - bv) * direction;
+        }
+        return String(av).localeCompare(String(bv)) * direction;
+      });
+  const shouldVirtualize = sortedLeads.length > LEAD_VIRTUALIZATION_THRESHOLD;
+  // TanStack Virtual returns imperative instance methods tied to the scroll
+  // element. The hook stays local to this table and its methods are not passed
+  // into memoized children, so React Compiler's library advisory is expected.
+  // eslint-disable-next-line react-hooks/incompatible-library
+  const rowVirtualizer = useVirtualizer({
+    count: sortedLeads.length,
+    enabled: shouldVirtualize,
+    estimateSize: () => LEAD_ROW_ESTIMATE_PX,
+    getScrollElement: () => tableWrapRef.current,
+    overscan: LEAD_ROW_OVERSCAN,
+  });
+  const virtualItems = shouldVirtualize ? rowVirtualizer.getVirtualItems() : [];
+  const visibleRows = shouldVirtualize
+    ? virtualItems.map((item) => ({
+        lead: sortedLeads[item.index],
+        virtualIndex: item.index,
+      }))
+    : sortedLeads.map((lead, virtualIndex) => ({ lead, virtualIndex }));
+  const topSpacerHeight = virtualItems[0]?.start ?? 0;
+  const bottomSpacerHeight = virtualItems.length > 0
+    ? Math.max(0, rowVirtualizer.getTotalSize() - virtualItems[virtualItems.length - 1].end)
+    : 0;
   const [pendingApproval, setPendingApproval] = useState<Record<string, boolean>>({});
   const [approvalError, setApprovalError] = useState<string | null>(null);
   // Bulk-approve state. `selectedIds` is a Set so toggling is O(1); we
@@ -171,16 +147,18 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
   //
   // `aborted` rows fall in an ambiguous state: the client cancelled the
   // POST mid-flight on unmount, but the server may have already
-  // committed the audit row. We surface these as a distinct "check the
-  // audit log" message rather than pushing retry language, because a
-  // blind retry can produce a duplicate audit row. R5-21 (2026-04-23).
-  //
-  // TODO: once R5-01 (server-side idempotency keys on /api/outreach/
-  // approve) lands, aborted becomes safe to retry and this branch can
-  // collapse back into the network-retry path.
+  // committed the audit row. Server-side idempotency protects retries
+  // that reuse the original request_id; this bulk UI does not persist
+  // those per-row ids after unmount, so the honest operator guidance is
+  // still to check the audit log instead of blindly retrying. R5-21
+  // (2026-04-23).
   const [bulkToast, setBulkToast] = useState<
     { ok: number; fail: number; network: number; aborted: number } | null
   >(null);
+
+  useEffect(() => {
+    if (expanded) setLastBorrowerId(expanded);
+  }, [expanded, setLastBorrowerId]);
 
   /**
    * Approve from the queue without leaving the page. Uses the same
@@ -192,43 +170,64 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
    * drop ("request never reached the audit table") from a backend
    * rejection ("server said no"). Hole-finder finding #2, 2026-04-23.
    */
-  const approveLead = useCallback(
-    async (borrowerId: string, signal?: AbortSignal): Promise<'ok' | 'network' | 'backend' | 'aborted' | 'duplicate'> => {
-      // R5-04: synchronous latch check. setState is async, so a rapid
-      // second click could slip in before `pendingApproval[id]` flips
-      // to true and produce a second audit row. The ref flips
-      // immediately.
-      if (rowInFlightRef.current[borrowerId]) return 'duplicate';
-      rowInFlightRef.current[borrowerId] = true;
-      setApprovalError(null);
-      setPendingApproval((p) => ({ ...p, [borrowerId]: true }));
-      try {
-        const res = await api.approve(borrowerId, {}, signal);
-        if (res.approved) {
-          setApproval(borrowerId, 'approved');
-          return 'ok';
-        }
-        setApprovalError(`Approve failed for ${borrowerId}: endpoint returned approved=false.`);
-        return 'backend';
-      } catch (err: unknown) {
-        if (isAbortError(err)) return 'aborted';
-        const isNetwork = err instanceof ApiError && err.status === null;
-        setApprovalError(
-          err instanceof Error
-            ? `Couldn't approve ${borrowerId}: ${err.message}`
-            : `Couldn't approve ${borrowerId}.`,
-        );
-        return isNetwork ? 'network' : 'backend';
-      } finally {
-        rowInFlightRef.current[borrowerId] = false;
-        setPendingApproval((p) => {
-          const { [borrowerId]: _discard, ...rest } = p;
-          return rest;
-        });
+  async function approveLead(
+    borrowerId: string,
+    signal?: AbortSignal,
+    extras: {
+      rationale?: string | null;
+      bulk_id?: string | null;
+      bulk_rationale?: string | null;
+      suppressInvalidation?: boolean;
+    } = {},
+  ): Promise<'ok' | 'network' | 'backend' | 'aborted' | 'duplicate'> {
+    // R5-04: synchronous latch check. setState is async, so a rapid
+    // second click could slip in before `pendingApproval[id]` flips
+    // to true and produce a second audit row. The ref flips
+    // immediately.
+    if (rowInFlightRef.current[borrowerId]) return 'duplicate';
+    rowInFlightRef.current[borrowerId] = true;
+    setApprovalError(null);
+    setPendingApproval((p) => ({ ...p, [borrowerId]: true }));
+    try {
+      const lead = leadsById.get(borrowerId);
+      const draft = await api.draftOutreach(borrowerId, 'email', signal);
+      const res = await api.approve(
+        borrowerId,
+        {
+          evidence_ids: lead?.evidence_ids ?? [],
+          offer_code: draft.offer_code ?? lead?.recommended_offer_code ?? null,
+          draft_body: draft.body,
+          channel: 'email',
+          rationale: extras.rationale ?? null,
+          bulk_id: extras.bulk_id ?? null,
+          bulk_rationale: extras.bulk_rationale ?? null,
+        },
+        signal,
+      );
+      if (res.approved) {
+        setApproval(borrowerId, 'approved');
+        if (!extras.suppressInvalidation) void invalidateOperationalQueries(queryClient);
+        return 'ok';
       }
-    },
-    [setApproval],
-  );
+      setApprovalError(`Approve failed for ${borrowerId}: endpoint returned approved=false.`);
+      return 'backend';
+    } catch (err: unknown) {
+      if (isAbortError(err)) return 'aborted';
+      const isNetwork = err instanceof ApiError && err.status === null;
+      setApprovalError(
+        err instanceof Error
+          ? `Couldn't approve ${borrowerId}: ${err.message}`
+          : `Couldn't approve ${borrowerId}.`,
+      );
+      return isNetwork ? 'network' : 'backend';
+    } finally {
+      rowInFlightRef.current[borrowerId] = false;
+      setPendingApproval((p) => {
+        const { [borrowerId]: _discard, ...rest } = p;
+        return rest;
+      });
+    }
+  }
 
   /**
    * Reject from the queue without leaving the page. Audit finding
@@ -241,91 +240,230 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
    * On failure we surface the error but do NOT flip the local state,
    * so the user can retry. Matches the approve flow's error posture.
    */
-  const rejectLead = useCallback(
-    async (borrowerId: string) => {
-      // R5-04: synchronous latch — see approveLead above.
-      if (rowInFlightRef.current[borrowerId]) return;
-      rowInFlightRef.current[borrowerId] = true;
-      setApprovalError(null);
-      setPendingApproval((p) => ({ ...p, [borrowerId]: true }));
-      try {
-        const res = await api.reject(borrowerId);
-        if (res.rejected) {
-          setApproval(borrowerId, 'rejected');
-        } else {
-          setApprovalError(`Reject failed for ${borrowerId}: endpoint returned rejected=false.`);
-        }
-      } catch (err: unknown) {
-        if (isAbortError(err)) return;
-        setApprovalError(
-          err instanceof Error
-            ? `Couldn't reject ${borrowerId}: ${err.message}`
-            : `Couldn't reject ${borrowerId}.`,
-        );
-      } finally {
-        rowInFlightRef.current[borrowerId] = false;
-        setPendingApproval((p) => {
-          const { [borrowerId]: _discard, ...rest } = p;
-          return rest;
-        });
+  async function rejectLead(
+    borrowerId: string,
+    reasonCode: RejectReasonCode,
+    rationale: string | null = null,
+  ): Promise<boolean> {
+    // R5-04: synchronous latch — see approveLead above.
+    if (rowInFlightRef.current[borrowerId]) return false;
+    rowInFlightRef.current[borrowerId] = true;
+    setApprovalError(null);
+    setPendingApproval((p) => ({ ...p, [borrowerId]: true }));
+    try {
+      const lead = leadsById.get(borrowerId);
+      const res = await api.reject(
+        borrowerId,
+        {
+          evidence_ids: lead?.evidence_ids ?? [],
+          offer_code: lead?.recommended_offer_code ?? null,
+          rationale_code: reasonCode,
+          rationale,
+        },
+      );
+      if (res.rejected) {
+        setApproval(borrowerId, 'rejected');
+        void invalidateOperationalQueries(queryClient);
+        return true;
       }
-    },
-    [setApproval],
-  );
+      setApprovalError(`Reject failed for ${borrowerId}: endpoint returned rejected=false.`);
+      return false;
+    } catch (err: unknown) {
+      if (isAbortError(err)) return false;
+      setApprovalError(
+        err instanceof Error
+          ? `Couldn't reject ${borrowerId}: ${err.message}`
+          : `Couldn't reject ${borrowerId}.`,
+      );
+      return false;
+    } finally {
+      rowInFlightRef.current[borrowerId] = false;
+      setPendingApproval((p) => {
+        const { [borrowerId]: _discard, ...rest } = p;
+        return rest;
+      });
+    }
+  }
+
+  async function submitReject() {
+    if (!pendingReject) return;
+    const rejected = await rejectLead(pendingReject, rejectReasonCode, rejectRationale.trim() || null);
+    if (rejected) {
+      setPendingReject(null);
+      setRejectRationale('');
+      setRejectReasonCode('low_intent');
+    }
+  }
 
   /**
    * Toggle one row's selection. Called by the row checkbox onChange; the
    * checkbox click is stopped from bubbling in the markup so the row
    * still expands/collapses independently.
    */
-  const toggleSelect = useCallback((borrowerId: string) => {
+  function toggleSelect(borrowerId: string) {
     setSelectedIds((cur) => {
       const next = new Set(cur);
       if (next.has(borrowerId)) next.delete(borrowerId);
       else next.add(borrowerId);
       return next;
     });
-  }, []);
+  }
 
-  const clearSelection = useCallback(() => {
+  function clearSelection() {
     setSelectedIds(new Set());
-  }, []);
+  }
 
-  // IDs that are actually eligible for bulk approval: not already approved
-  // or rejected. The "select all" header checkbox targets this subset so
-  // already-decided rows don't get bulk-approved again.
-  const eligibleIds = useMemo(
-    () =>
-      leads
-        .filter((l) => {
-          const serverDecided = l.approval_status === 'approved' || l.approval_status === 'rejected';
-          return !approvals[l.borrower_id] && !serverDecided;
-        })
-        .map((l) => l.borrower_id),
-    [leads, approvals],
-  );
+  useEffect(() => {
+    if (!selectedAssignee && salesTeam.length > 0) {
+      setSelectedAssignee(salesTeam[0].email);
+    }
+  }, [salesTeam, selectedAssignee]);
+
+  function openDisposition(borrowerId: string) {
+    const lead = leadsById.get(borrowerId);
+    setPendingDisposition(borrowerId);
+    setDispositionLo(lead?.assigned_to_email ?? selectedAssignee ?? salesTeam[0]?.email ?? '');
+    setDispositionOutcome('called_left_voicemail');
+    setDispositionCallbackAt('');
+    setDispositionNotes('');
+  }
+
+  useEffect(() => {
+    if (!salesToast) return;
+    const t = window.setTimeout(() => setSalesToast(null), 4000);
+    return () => window.clearTimeout(t);
+  }, [salesToast]);
+
+  // Sales Manager selection is broader than approval eligibility: already
+  // approved rows must still be selectable for assignment/distribution.
+  // Rejected and hold rows remain locked out so operations do not
+  // accidentally work a dropped or governance-held borrower.
+  const selectableIds = displayLeads
+    .filter((l) => isLeadSelectableForSalesOps(l.approval_status, approvals[l.borrower_id], l))
+    .map((l) => l.borrower_id);
+  const approvalEligibleIds = displayLeads
+    .filter((l) => {
+      const localStatus = approvals[l.borrower_id];
+      return isLeadApprovalEligible(l.approval_status, localStatus, l);
+    })
+    .map((l) => l.borrower_id);
+
+  function applyAssignmentOverrides(assignments: { borrower_id: string; assigned_to_email: string; assigned_to_label?: string | null; assigned_at: string; expires_at?: string | null }[]) {
+    setSalesOverrides((current) => {
+      const next = { ...current };
+      assignments.forEach((assignment) => {
+        next[assignment.borrower_id] = {
+          ...(next[assignment.borrower_id] ?? {}),
+          assigned_to_email: assignment.assigned_to_email,
+          assigned_to_label: assignment.assigned_to_label ?? assignment.assigned_to_email,
+          assigned_at: assignment.assigned_at,
+          assignment_expires_at: assignment.expires_at ?? null,
+        };
+      });
+      return next;
+    });
+  }
+
+  async function assignSelected(mode: 'selected-lo' | 'round-robin') {
+    if (salesBusy) return;
+    const borrowerIds = [...selectedIds].filter((id) => selectableIds.includes(id));
+    if (borrowerIds.length === 0) return;
+    const loEmails = mode === 'round-robin'
+      ? salesTeam.map((member) => member.email)
+      : selectedAssignee
+        ? [selectedAssignee]
+        : [];
+    if (loEmails.length === 0) {
+      setApprovalError('No active loan officers are available for assignment.');
+      return;
+    }
+    setSalesBusy(true);
+    setApprovalError(null);
+    try {
+      const result = borrowerIds.length === 1 && loEmails.length === 1
+        ? {
+            assigned_count: 1,
+            assignments: [(await api.assignLead(borrowerIds[0], loEmails[0])).assignment],
+          }
+        : await api.distributeLeads(borrowerIds, loEmails, mode === 'round-robin' ? 'round_robin' : 'score_balanced');
+      applyAssignmentOverrides(result.assignments);
+      void invalidateOperationalQueries(queryClient);
+      setSalesToast(`${result.assigned_count} ${result.assigned_count === 1 ? 'lead' : 'leads'} assigned`);
+      setSelectedIds(new Set());
+    } catch (err: unknown) {
+      setApprovalError(
+        err instanceof Error
+          ? `Couldn't assign selected leads: ${err.message}`
+          : "Couldn't assign selected leads.",
+      );
+    } finally {
+      setSalesBusy(false);
+    }
+  }
+
+  async function submitDisposition() {
+    if (!pendingDisposition) return;
+    if (!dispositionLo) {
+      setApprovalError('Choose the loan officer who worked this lead.');
+      return;
+    }
+    if (dispositionOutcome === 'callback_scheduled' && !dispositionCallbackAt) {
+      setApprovalError('Callback scheduled dispositions require a callback time.');
+      return;
+    }
+    setSalesBusy(true);
+    setApprovalError(null);
+    try {
+      const result = await api.logDisposition(pendingDisposition, {
+        lo_email: dispositionLo,
+        outcome: dispositionOutcome,
+        callback_at: dispositionCallbackAt ? new Date(dispositionCallbackAt).toISOString() : null,
+        notes: dispositionNotes.trim() || null,
+      });
+      setSalesOverrides((current) => ({
+        ...current,
+        [pendingDisposition]: {
+          ...(current[pendingDisposition] ?? {}),
+          assigned_to_email: current[pendingDisposition]?.assigned_to_email ?? leadsById.get(pendingDisposition)?.assigned_to_email ?? dispositionLo,
+          latest_disposition_outcome: result.disposition.outcome,
+          latest_disposition_at: result.disposition.occurred_at,
+          latest_callback_at: result.disposition.callback_at ?? null,
+        },
+      }));
+      setSalesToast(`${dispositionLabel(result.disposition.outcome)} logged for ${pendingDisposition}`);
+      void invalidateOperationalQueries(queryClient);
+      setPendingDisposition(null);
+    } catch (err: unknown) {
+      setApprovalError(
+        err instanceof Error
+          ? `Couldn't log disposition: ${err.message}`
+          : "Couldn't log disposition.",
+      );
+    } finally {
+      setSalesBusy(false);
+    }
+  }
 
   // Indeterminate state for the header checkbox: some (but not all)
   // eligible rows selected. We also reflect "all eligible selected" as
   // the checked state.
-  const headerCheckboxState = useMemo(() => {
-    if (eligibleIds.length === 0) return { checked: false, indeterminate: false };
-    const selectedEligibleCount = eligibleIds.filter((id) => selectedIds.has(id)).length;
-    if (selectedEligibleCount === 0) return { checked: false, indeterminate: false };
-    if (selectedEligibleCount === eligibleIds.length) return { checked: true, indeterminate: false };
-    return { checked: false, indeterminate: true };
-  }, [eligibleIds, selectedIds]);
+  const selectedEligibleCount = selectableIds.filter((id) => selectedIds.has(id)).length;
+  const headerCheckboxState = selectableIds.length === 0 || selectedEligibleCount === 0
+    ? { checked: false, indeterminate: false }
+    : selectedEligibleCount === selectableIds.length
+      ? { checked: true, indeterminate: false }
+      : { checked: false, indeterminate: true };
 
-  const toggleSelectAll = useCallback(() => {
+  function toggleSelectAll() {
     setSelectedIds((cur) => {
-      // If any eligible rows remain unselected, select all eligible. Else
+      // If any selectable rows remain unselected, select all selectable. Else
       // clear the selection.
       const allEligibleSelected =
-        eligibleIds.length > 0 && eligibleIds.every((id) => cur.has(id));
+        selectableIds.length > 0 && selectableIds.every((id) => cur.has(id));
       if (allEligibleSelected) return new Set();
-      return new Set(eligibleIds);
+      return new Set(selectableIds);
     });
-  }, [eligibleIds]);
+  }
 
   /**
    * Bulk-approve: loop `api.approve()` per selected id in chunks of
@@ -335,7 +473,7 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
    * Successes drop out of the selection set; failures stay selected so
    * the operator can retry. A compact toast summarizes ok/fail counts.
    */
-  const bulkApprove = useCallback(async () => {
+  async function bulkApprove() {
     // R5-04: synchronous latch. React setState is async, so two rapid
     // clicks can both read `bulkApproving=false` before either commit
     // schedules — producing two parallel loops with the same selection
@@ -343,8 +481,16 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
     if (bulkInFlightRef.current || bulkApproving) return;
     bulkInFlightRef.current = true;
     // Snapshot which ids to run: skip already-decided rows silently.
-    const ids = [...selectedIds].filter((id) => !approvals[id]);
+    const eligibleForApproval = new Set(approvalEligibleIds);
+    const ids = [...selectedIds].filter((id) => eligibleForApproval.has(id));
     if (ids.length === 0) {
+      bulkInFlightRef.current = false;
+      return;
+    }
+    const bulkId = ids.length > 1 ? _newBulkId() : null;
+    const sharedRationale = ids.length > 1 ? bulkRationale.trim() : '';
+    if (ids.length > 1 && sharedRationale.length === 0) {
+      setBulkRationaleOpen(true);
       bulkInFlightRef.current = false;
       return;
     }
@@ -372,7 +518,11 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
         abortedIds.push(...group);
         continue;
       }
-      const results = await Promise.all(group.map((id) => approveLead(id, ctrl.signal)));
+      const results = await Promise.all(group.map((id) => approveLead(id, ctrl.signal, {
+        bulk_id: bulkId,
+        bulk_rationale: sharedRationale || null,
+        suppressInvalidation: true,
+      })));
       results.forEach((outcome, i) => {
         if (outcome === 'ok') {
           ok += 1;
@@ -409,11 +559,14 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
     // server may have committed them and a blind re-click would
     // duplicate the audit row. R5-21 (2026-04-23).
     setSelectedIds(new Set(failedIds));
+    if (ok > 0) void invalidateOperationalQueries(queryClient);
+    setBulkRationaleOpen(false);
+    setBulkRationale('');
     setBulkApproving(false);
     setBulkToast({ ok, fail, network, aborted });
     bulkAbortRef.current = null;
     bulkInFlightRef.current = false;
-  }, [bulkApproving, selectedIds, approvals, approveLead]);
+  }
 
   // On mount: if the previous mount left a partial bulk-approve snapshot
   // in sessionStorage (user navigated away mid-loop), flash a compact
@@ -483,23 +636,26 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
         return;
       }
       if (!expanded) return;
+      const expandedLead = leadsById.get(expanded);
+      const expandedStatus = approvals[expanded] ?? expandedLead?.approval_status;
       if (key === 'a') {
-        if (approvals[expanded] === 'approved') return;
+        if (!isLeadApprovalEligible(expandedStatus, approvals[expanded], expandedLead)) return;
         e.preventDefault();
         void approveLead(expanded);
       } else if (key === 'r') {
-        if (approvals[expanded] === 'rejected') return;
+        if (isTerminalApproval(expandedStatus)) return;
         e.preventDefault();
-        void rejectLead(expanded);
+        setPendingReject(expanded);
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [expanded, approvals, approveLead, rejectLead, selectedIds, bulkApproving, bulkApprove]);
+  });
 
-  const stop = (e: ReactKeyboardEvent | React.MouseEvent) => e.stopPropagation();
+  const stop = (e: ReactKeyboardEvent | ReactMouseEvent) => e.stopPropagation();
 
   const selectionCount = selectedIds.size;
+  const selectedApprovalEligibleCount = approvalEligibleIds.filter((id) => selectedIds.has(id)).length;
 
   /**
    * Export the currently-visible leads as CSV. Client-side only: the
@@ -509,43 +665,9 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
    * export endpoint or synthesize fields the payload doesn't carry — so
    * PII stays suppressed by construction.
    */
-  const exportCsv = useCallback(() => {
+  function exportCsv() {
     if (leads.length === 0) return;
-    const header = [
-      'borrower_id',
-      'clip',
-      'city',
-      'state',
-      'zip',
-      'segments',
-      'equity_estimate',
-      'rate_spread_bps',
-      'opportunity_score',
-      'confidence',
-      'recommended_offer',
-      'approval_status',
-    ];
-    const escape = (v: string): string =>
-      /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
-    const rows = leads.map((l) =>
-      [
-        l.borrower_id,
-        l.clip ?? '',
-        l.city,
-        l.state,
-        l.zip,
-        l.segment_codes.join('|'),
-        String(l.equity_estimate),
-        String(l.rate_spread_bps),
-        String(l.opportunity_score),
-        String(l.confidence),
-        l.recommended_offer,
-        approvals[l.borrower_id] ?? l.approval_status ?? 'pending',
-      ]
-        .map(escape)
-        .join(','),
-    );
-    const csv = [header.join(','), ...rows].join('\n');
+    const csv = buildLeadCsv(leads, approvals, exportContext);
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -556,23 +678,71 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
-  }, [leads, approvals]);
+  }
+
+  function toggleSort(key: SortKey) {
+    if (key === 'rank') {
+      setSortKey('rank');
+      setSortDir('desc');
+      return;
+    }
+    setSortKey((current) => {
+      if (current === key) {
+        setSortDir((dir) => (dir === 'desc' ? 'asc' : 'desc'));
+        return current;
+      }
+      setSortDir('desc');
+      return key;
+    });
+  }
+
+  const renderSortHeader = (key: SortKey, label: string) => (
+    <button
+      type="button"
+      className="tbl__sort"
+      onClick={() => toggleSort(key)}
+      aria-label={`Sort by ${label}`}
+      aria-pressed={sortKey === key}
+    >
+      <span>{label}</span>
+      {sortKey === key && key !== 'rank' && (
+        <Icon name={sortDir === 'desc' ? 'down' : 'up'} size={10} />
+      )}
+    </button>
+  );
 
   return (
-    <div className="surface" style={{ overflow: 'hidden' }}>
-      <div className="surface__hdr" style={{ justifyContent: 'space-between' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <div style={{ width: 28, height: 28, borderRadius: 8, background: 'var(--accent-soft)', color: 'var(--accent)', display: 'grid', placeItems: 'center' }}>
+    // 2026-05-04 fix (alignment): removed inline `overflow: hidden`.
+    // It was establishing a new block formatting context that, combined
+    // with the table's intrinsic min-content width and the wrap div's
+    // overflowY: auto, was nudging the surface off the .main__inner
+    // left edge on the lead-queue page. The intended scroll behaviour
+    // for table-containing surfaces is provided by the
+    // `.surface:has(> div > .tbl) { overflow-x: auto }` rule in
+    // components.css; the inline override was both unnecessary and the
+    // proximate cause of the shift the user reported.
+    <div className="surface">
+      <div className="surface__hdr surface__hdr--split">
+        <div className="surface__hdr-main">
+          <div className="surface__icon">
             <Icon name="user" size={14} />
           </div>
           <div>
             <div className="h-4">Ranked borrowers</div>
-            <div className="muted" style={{ fontSize: 12 }}>
-              Click a row to expand the preview. Keyboard: <span className="mono">A</span> approve, <span className="mono">R</span> reject the expanded row.
+            <div className="muted fs-12">
+              {/*
+                Prototype-parity-audit P2 (2026-05-04): keyboard hints
+                were rendered as `.mono` spans, which read as inline code
+                rather than a keycap. Switching to `<kbd>` (styled in
+                design-system/components.css as a subtle keycap chip)
+                makes the affordance scannable — an LO scrolling the
+                queue can spot the shortcut without reading prose.
+              */}
+              Click a row to expand the preview. Keyboard: <kbd>A</kbd> approve, <kbd>R</kbd> reject the expanded row.
             </div>
           </div>
         </div>
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div className="lead-table__header-actions">
           <Chip variant="neutral" icon="shield">PII suppressed</Chip>
           <Button
             size="sm"
@@ -586,11 +756,65 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
           </Button>
         </div>
       </div>
-      <div style={{ maxHeight: 520, overflowY: 'auto', position: 'relative' }}>
-        <table className="tbl">
+      {pendingReject && (
+        <LeadRejectPanel
+          borrowerId={pendingReject}
+          reasonCode={rejectReasonCode}
+          rationale={rejectRationale}
+          onReasonChange={setRejectReasonCode}
+          onRationaleChange={setRejectRationale}
+          onCancel={() => {
+            setPendingReject(null);
+            setRejectRationale('');
+            setRejectReasonCode('low_intent');
+          }}
+          onSubmit={() => void submitReject()}
+        />
+      )}
+      {pendingDisposition && (
+        <LeadDispositionPanel
+          borrowerId={pendingDisposition}
+          salesTeam={salesTeam}
+          salesBusy={salesBusy}
+          loEmail={dispositionLo}
+          outcome={dispositionOutcome}
+          callbackAt={dispositionCallbackAt}
+          notes={dispositionNotes}
+          onLoChange={setDispositionLo}
+          onOutcomeChange={setDispositionOutcome}
+          onCallbackAtChange={setDispositionCallbackAt}
+          onNotesChange={setDispositionNotes}
+          onCancel={() => setPendingDisposition(null)}
+          onSubmit={() => void submitDisposition()}
+        />
+      )}
+      {salesToast && (
+        <div role="status" aria-live="polite" className="table-success">
+          {salesToast}
+        </div>
+      )}
+      <div ref={tableWrapRef} className="tbl-wrap" tabIndex={0} aria-label="Ranked borrowers table scroll region">
+        <table className="tbl lead-table__table" aria-rowcount={sortedLeads.length + 1}>
+          <colgroup>
+            <col className="lead-table__col-select" />
+            <col className="lead-table__col-expand" />
+            <col className="lead-table__col-borrower" />
+            <col className="lead-table__col-location" />
+            <col className="lead-table__col-relationship" />
+            <col className="lead-table__col-assignment" />
+            <col className="lead-table__col-outreach" />
+            <col className="lead-table__col-disposition" />
+            <col className="lead-table__col-segments" />
+            <col className="lead-table__col-equity" />
+            <col className="lead-table__col-rate" />
+            <col className="lead-table__col-offer" />
+            <col className="lead-table__col-score" />
+            <col className="lead-table__col-confidence" />
+            <col className="lead-table__col-approval" />
+          </colgroup>
           <thead>
             <tr>
-              <th style={{ paddingLeft: 20, width: 32 }}>
+              <th className="tbl-cell--select">
                 <input
                   type="checkbox"
                   aria-label="Select all eligible leads"
@@ -598,181 +822,78 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
                   ref={(el) => {
                     if (el) el.indeterminate = headerCheckboxState.indeterminate;
                   }}
-                  disabled={eligibleIds.length === 0 || bulkApproving}
+                  disabled={selectableIds.length === 0 || bulkApproving}
                   onChange={toggleSelectAll}
                   onClick={stop}
                   data-testid="lead-select-all"
                 />
               </th>
-              <th style={{ width: 32 }}></th>
+              <th className="tbl-cell--narrow"></th>
               <th>Borrower</th>
               <th>Location</th>
+              <th>{renderSortHeader('relationship', 'Relationship')}</th>
+              <th>{renderSortHeader('assignment', 'Assigned to')}</th>
+              <th>{renderSortHeader('outreach', 'Outreach')}</th>
+              <th>Last touch</th>
               <th>Segments</th>
-              <th style={{ textAlign: 'right' }}>Equity</th>
-              <th style={{ textAlign: 'right' }}>Rate Δ (bps)</th>
+              <th className="tbl-cell--right">{renderSortHeader('equity', 'Equity')}</th>
+              <th className="tbl-cell--right">{renderSortHeader('rate', 'Rate Δ (bps)')}</th>
               <th>Next-best-offer</th>
-              <th style={{ textAlign: 'right' }}>Score</th>
-              <th>Confidence</th>
+              <th className="tbl-cell--right">{renderSortHeader('score', 'Score')}</th>
+              <th>{renderSortHeader('confidence', 'Signal')}</th>
               <th>Approval</th>
             </tr>
           </thead>
           <tbody>
-            {leads.map((lead) => {
+            {shouldVirtualize && topSpacerHeight > 0 && (
+              <tr aria-hidden="true" className="lead-table__virtual-spacer">
+                <td colSpan={LEAD_TABLE_COL_COUNT} style={{ height: topSpacerHeight }} />
+              </tr>
+            )}
+            {visibleRows.map(({ lead, virtualIndex }) => {
               const isOpen = expanded === lead.borrower_id;
               // Prefer in-session AppContext override (set optimistically on
               // approve/reject); fall back to the server-projected
               // approval_status so a page reload doesn't make approved
               // borrowers look pending. Round-2 hole-finder #12, 2026-04-23.
               const serverStatus = lead.approval_status;
-              const approval = approvals[lead.borrower_id]
-                ?? (serverStatus === 'approved' || serverStatus === 'rejected'
+              const approval: string | undefined = approvals[lead.borrower_id]
+                ?? (isTerminalApproval(serverStatus)
                     ? serverStatus
                     : undefined);
               const isSelected = selectedIds.has(lead.borrower_id);
-              const isEligible = !approval;
+              const isSelectable = isLeadSelectableForSalesOps(serverStatus, approval, lead);
+              const isApprovalEligible = isLeadApprovalEligible(serverStatus, approval, lead);
               return (
-                <Fragment key={lead.borrower_id}>
-                  <tr
-                    className={isOpen ? 'is-expanded' : ''}
-                    tabIndex={0}
-                    role="button"
-                    aria-expanded={isOpen}
-                    aria-label={`Lead ${lead.borrower_id}, ${isOpen ? 'expanded' : 'collapsed'}. Press Enter or Space to toggle preview; A to approve, R to reject.`}
-                    onClick={() => setExpanded(isOpen ? null : lead.borrower_id)}
-                    onKeyDown={(e) => {
-                      // R5-10 (2026-04-23): make rows toggleable from
-                      // the keyboard so A/R hotkeys work without a
-                      // prior mouse click. We only intercept when the
-                      // focus target is the row itself — if focus is
-                      // on the nested checkbox or approve button,
-                      // their own handlers run and we bail.
-                      if (e.target !== e.currentTarget) return;
-                      if (e.key === 'Enter' || e.key === ' ') {
-                        e.preventDefault();
-                        setExpanded(isOpen ? null : lead.borrower_id);
-                      }
-                    }}
-                  >
-                    <td style={{ paddingLeft: 20 }} onClick={stop}>
-                      <input
-                        type="checkbox"
-                        aria-label={`Select lead ${lead.borrower_id}`}
-                        checked={isSelected}
-                        disabled={!isEligible || bulkApproving}
-                        onChange={() => toggleSelect(lead.borrower_id)}
-                        onClick={stop}
-                        data-testid={`lead-select-${lead.borrower_id}`}
-                      />
-                    </td>
-                    <td>
-                      <Icon name={isOpen ? 'down' : 'chevright'} size={14} className="muted" />
-                    </td>
-                    <td className="is-primary">
-                      <div className="mono" style={{ fontSize: 12, color: 'var(--text-1)' }}>{lead.borrower_id}</div>
-                      <div className="mono muted" style={{ fontSize: 10 }}>
-                        {lead.clip && lead.clip.length > 0
-                          ? lead.clip
-                          : `clip_${lead.borrower_id.toLowerCase().replace(/-/g, '')}`}
-                      </div>
-                    </td>
-                    <td>
-                      {lead.city}, {lead.state}
-                      <div className="muted mono" style={{ fontSize: 11 }}>{lead.zip}</div>
-                    </td>
-                    <td>
-                      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                        {lead.segment_codes.slice(0, 2).map((sid) => {
-                          const color = segmentColor(sid);
-                          const style: CSSProperties = {
-                            padding: '2px 6px',
-                            fontSize: 10,
-                            color,
-                            background: `color-mix(in oklab, ${color} 12%, transparent)`,
-                            borderColor: `color-mix(in oklab, ${color} 30%, transparent)`,
-                          };
-                          return (
-                            <span key={sid} className="chip" style={style}>
-                              {segmentName(sid)}
-                            </span>
-                          );
-                        })}
-                        {lead.segment_codes.length > 2 && (
-                          <span className="chip chip--neutral" style={{ padding: '2px 6px', fontSize: 10 }}>
-                            +{lead.segment_codes.length - 2}
-                          </span>
-                        )}
-                      </div>
-                    </td>
-                    <td className="num" style={{ textAlign: 'right' }}>${(lead.equity_estimate / 1000).toFixed(0)}k</td>
-                    <td
-                      className="num"
-                      style={{
-                        textAlign: 'right',
-                        color: lead.rate_spread_bps >= 75 ? 'var(--signal-success)' : 'var(--text-2)',
-                      }}
-                    >
-                      +{lead.rate_spread_bps}
-                    </td>
-                    <td>
-                      <span className="mono" style={{ fontSize: 12, color: 'var(--text-1)' }}>{lead.recommended_offer}</span>{' '}
-                      <EvidenceChip source={DRAWER_SOURCES.nbo}>nbo_v3</EvidenceChip>
-                    </td>
-                    <td style={{ textAlign: 'right' }}><ScoreBadge value={lead.opportunity_score} /></td>
-                    <td><ConfidenceMeter value={lead.confidence} compact /></td>
-                    <td
-                      style={{ paddingRight: 16 }}
-                      data-testid={`lead-approval-cell-${lead.borrower_id}`}
-                    >
-                      {approval === 'approved' && <Chip variant="success" icon="check">Approved</Chip>}
-                      {approval === 'rejected' && <Chip variant="danger" icon="cross">Rejected</Chip>}
-                      {!approval && (
-                        <div
-                          style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
-                          onClick={stop}
-                        >
-                          <Button
-                            variant="primary"
-                            size="sm"
-                            icon="check"
-                            disabled={Boolean(pendingApproval[lead.borrower_id])}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              void approveLead(lead.borrower_id);
-                            }}
-                            aria-label={`Approve ${lead.borrower_id}`}
-                            data-testid={`lead-approve-${lead.borrower_id}`}
-                          >
-                            {pendingApproval[lead.borrower_id] ? 'Approving…' : 'Approve'}
-                          </Button>
-                          <button
-                            type="button"
-                            className="btn btn--sm"
-                            aria-label={`Reject ${lead.borrower_id}`}
-                            title="Reject"
-                            disabled={Boolean(pendingApproval[lead.borrower_id])}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              void rejectLead(lead.borrower_id);
-                            }}
-                            data-testid={`lead-reject-${lead.borrower_id}`}
-                            style={{ padding: '4px 8px' }}
-                          >
-                            <Icon name="cross" size={12} />
-                          </button>
-                        </div>
-                      )}
-                    </td>
-                  </tr>
-                  {isOpen && (
-                    <tr className="tbl__expand">
-                      <td colSpan={11}>
-                        <RowPreview lead={lead} />
-                      </td>
-                    </tr>
-                  )}
-                </Fragment>
+                <LeadTableRow
+                  key={lead.borrower_id}
+                  lead={lead}
+                  virtualIndex={virtualIndex}
+                  isOpen={isOpen}
+                  approval={approval}
+                  isSelected={isSelected}
+                  isSelectable={isSelectable}
+                  isApprovalEligible={isApprovalEligible}
+                  bulkApproving={bulkApproving}
+                  salesBusy={salesBusy}
+                  salesTeamCount={salesTeam.length}
+                  pendingApproval={Boolean(pendingApproval[lead.borrower_id])}
+                  onToggleRow={(row, open) => {
+                    setLastBorrowerId(row.borrower_id);
+                    setExpanded(open ? null : row.borrower_id);
+                  }}
+                  onToggleSelect={toggleSelect}
+                  onApprove={(borrowerId) => void approveLead(borrowerId)}
+                  onReject={setPendingReject}
+                  onOpenDisposition={openDisposition}
+                />
               );
             })}
+            {shouldVirtualize && bottomSpacerHeight > 0 && (
+              <tr aria-hidden="true" className="lead-table__virtual-spacer">
+                <td colSpan={LEAD_TABLE_COL_COUNT} style={{ height: bottomSpacerHeight }} />
+              </tr>
+            )}
           </tbody>
         </table>
       </div>
@@ -781,37 +902,74 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
           role="toolbar"
           aria-label="Bulk actions"
           data-testid="lead-bulk-actions"
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: 12,
-            padding: '10px 16px',
-            borderTop: '1px solid var(--line-1)',
-            background: 'var(--bg-1)',
-            position: 'sticky',
-            bottom: 0,
-            zIndex: 2,
-          }}
+          className="bulk-actions"
         >
-          <div style={{ fontSize: 13, color: 'var(--text-1)' }}>
+          <div className="bulk-actions__label">
             <span className="mono num">{selectionCount}</span> {selectionCount === 1 ? 'lead' : 'leads'} selected
           </div>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          {selectionCount > 1 && bulkRationaleOpen && (
+            <label className="bulk-actions__rationale">
+              <span className="field__label">Shared approval rationale</span>
+              <input
+                value={bulkRationale}
+                onChange={(e) => setBulkRationale(e.target.value)}
+                maxLength={500}
+                placeholder="Example: Q3 retention sweep, all reviewed against current rules."
+              />
+            </label>
+          )}
+          <div className="bulk-actions__controls">
+            {salesTeam.length > 0 && (
+              <>
+                <label className="bulk-actions__assignee">
+                  <span className="field__label">Assign to</span>
+                  <select
+                    value={selectedAssignee}
+                    onChange={(e) => setSelectedAssignee(e.target.value)}
+                    disabled={salesBusy}
+                    aria-label="Loan officer assignment target"
+                  >
+                    {salesTeam.map((member) => (
+                      <option key={member.email} value={member.email}>
+                        {member.display_label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <Button
+                  variant="default"
+                  size="sm"
+                  icon="user"
+                  onClick={() => void assignSelected('selected-lo')}
+                  disabled={salesBusy || !selectedAssignee || selectionCount === 0}
+                  aria-label={`Assign ${selectionCount} selected leads to selected loan officer`}
+                >
+                  {salesBusy ? 'Assigning…' : 'Assign'}
+                </Button>
+                <Button
+                  variant="default"
+                  size="sm"
+                  icon="layers"
+                  onClick={() => void assignSelected('round-robin')}
+                  disabled={salesBusy || salesTeam.length === 0 || selectionCount === 0}
+                  aria-label={`Distribute ${selectionCount} selected leads across active loan officers`}
+                >
+                  Distribute
+                </Button>
+              </>
+            )}
             {bulkToast && (
               <span
                 role="status"
                 aria-live="polite"
                 data-testid="lead-bulk-toast"
-                style={{
-                  fontSize: 12,
-                  color:
-                    bulkToast.aborted > 0 || bulkToast.network > 0
-                      ? 'var(--signal-danger)'
-                      : bulkToast.fail > 0
-                      ? 'var(--signal-warning)'
-                      : 'var(--signal-success)',
-                }}
+                className={`bulk-actions__toast ${
+                  bulkToast.aborted > 0 || bulkToast.network > 0
+                    ? 'bulk-actions__toast--danger'
+                    : bulkToast.fail > 0
+                      ? 'bulk-actions__toast--warn'
+                      : 'bulk-actions__toast--ok'
+                }`}
               >
                 {bulkToast.ok} approved
                 {bulkToast.fail > 0 ? `, ${bulkToast.fail} failed` : ''}
@@ -819,11 +977,10 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
                   ? ` (${bulkToast.network} network dropped — retry)`
                   : ''}
                 {/*
-                  R5-21: aborted rows are in an ambiguous state — the
-                  client cancelled the POST but the server may have
-                  committed. Do NOT encourage retry; direct the user to
-                  the audit log instead. TODO: once R5-01 (server-side
-                  idempotency) lands, retry becomes safe.
+                  R5-21: aborted rows are in an ambiguous state. Server
+                  idempotency is safe only when the same request_id is
+                  reused; this bulk toast no longer owns those ids after
+                  unmount, so direct the user to the audit log instead.
                 */}
                 {bulkToast.aborted > 0
                   ? ` · ${bulkToast.aborted} cancelled in flight — unknown state, check the audit log`
@@ -844,11 +1001,11 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
               size="sm"
               icon={bulkApproving ? undefined : 'check'}
               onClick={() => void bulkApprove()}
-              disabled={bulkApproving || selectionCount === 0}
+              disabled={bulkApproving || selectedApprovalEligibleCount === 0}
               data-testid="lead-bulk-approve"
-              aria-label={`Approve ${selectionCount} leads`}
+              aria-label={`Approve ${selectedApprovalEligibleCount} eligible leads`}
             >
-              {bulkApproving ? 'Approving…' : `Approve ${selectionCount} leads`}
+              {bulkApproving ? 'Approving…' : `Approve ${selectedApprovalEligibleCount} eligible`}
             </Button>
           </div>
         </div>
@@ -856,18 +1013,21 @@ export function LeadTable({ leads }: { leads: LeadSummary[] }) {
       {approvalError && (
         <div
           role="alert"
-          style={{
-            padding: '8px 16px',
-            color: 'var(--signal-danger)',
-            fontSize: 12,
-            borderTop: '1px solid var(--line-1)',
-          }}
+          className="table-error"
         >
           {approvalError}
         </div>
       )}
       <div className="surface__ft">
-        Showing {leads.length.toLocaleString()} borrower{leads.length === 1 ? '' : 's'}
+        Showing {leads.length.toLocaleString()} ranked borrower{leads.length === 1 ? '' : 's'}
+        {totalMatching !== null && (
+          <>
+            {' '}of {totalMatching.toLocaleString()} total matching filters
+          </>
+        )}
+        {truncatedAt !== null && totalMatching !== null && totalMatching > leads.length && (
+          <span className="muted"> · capped at {truncatedAt.toLocaleString()}</span>
+        )}
       </div>
     </div>
   );

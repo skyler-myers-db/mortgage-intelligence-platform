@@ -1,0 +1,129 @@
+/* Print-only evidence view.
+   Keeps Borrower 360 and other audit surfaces readable in paper binders by
+   removing workspace chrome while preserving the same token vocabulary. */
+
+@media print {
+  @page {
+    margin: 0.5in;
+  }
+
+  :root,
+  [data-theme="dark"],
+  [data-theme="light"] {
+    --bg-0: Canvas;
+    --bg-1: Canvas;
+    --bg-2: Canvas;
+    --bg-3: Canvas;
+    --bg-4: Canvas;
+    --bg-gradient: none;
+    --line-1: color-mix(in srgb, CanvasText 18%, transparent);
+    --line-2: color-mix(in srgb, CanvasText 28%, transparent);
+    --line-3: color-mix(in srgb, CanvasText 38%, transparent);
+    --text-1: CanvasText;
+    --text-2: CanvasText;
+    --text-3: color-mix(in srgb, CanvasText 72%, transparent);
+    --text-4: color-mix(in srgb, CanvasText 52%, transparent);
+    --chip-bg: Canvas;
+    --chip-line: var(--line-2);
+    --chip-text: CanvasText;
+    --accent: CanvasText;
+    --accent-hover: CanvasText;
+    --accent-soft: Canvas;
+    --accent-contrast: Canvas;
+    --kpi-glow: none;
+    --shadow-sm: none;
+    --shadow-md: none;
+    --shadow-lg: none;
+  }
+
+  html,
+  body,
+  #root {
+    block-size: auto;
+    min-block-size: auto;
+    overflow: visible;
+    color: CanvasText;
+    background: Canvas;
+    background-image: none;
+  }
+
+  .app-shell,
+  .main,
+  .main__inner,
+  .main__content,
+  .route-transition {
+    display: block;
+    inline-size: auto;
+    block-size: auto;
+    max-inline-size: none;
+    padding: 0;
+    overflow: visible;
+    background: Canvas;
+  }
+
+  .rail,
+  .topbar,
+  .route-nav,
+  .tweaks,
+  .genie,
+  .drawer,
+  .fab,
+  .degraded-banner,
+  .sr-skip-link,
+  .btn,
+  .surface__icon,
+  .tbl__expand {
+    display: none;
+  }
+
+  .surface {
+    break-inside: avoid;
+    margin-block-end: var(--sp-4);
+    border: 1pt solid var(--line-2);
+    box-shadow: none;
+    background: Canvas;
+  }
+
+  .surface__hdr,
+  .surface__body,
+  .surface__ft {
+    padding: var(--sp-3);
+  }
+
+  .surface__hdr,
+  .surface__ft,
+  .tbl th,
+  .tbl td {
+    border-color: var(--line-2);
+  }
+
+  .grid,
+  .grid-2,
+  .grid-3,
+  .layout-2,
+  .layout-3,
+  .cols-2,
+  .cols-3 {
+    display: block;
+  }
+
+  .tbl {
+    inline-size: 100%;
+    border-collapse: collapse;
+  }
+
+  .tbl th,
+  .tbl td {
+    white-space: normal;
+  }
+
+  .chip,
+  .evidence-chip,
+  .score,
+  .confidence {
+    color: CanvasText;
+    background: Canvas;
+    border-color: var(--line-2);
+    box-shadow: none;
+  }
+}

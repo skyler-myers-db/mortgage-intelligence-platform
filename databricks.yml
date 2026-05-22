@@ -1,5 +1,10 @@
 bundle:
   name: mortgage-intelligence-platform
+  databricks_cli_version: ">= 0.279.0"
+  # Direct deployment is the Databricks-recommended bundle engine for new
+  # projects. This product has no customer-installed Terraform bundle state to
+  # migrate, so the bundle defaults to direct from first deploy.
+  engine: direct
 
 # `workspace.host` must be literal — the Databricks CLI resolves it at
 # bundle-load time (before variables), so `${var.*}` is rejected here.
@@ -29,9 +34,21 @@ workspace:
 # the FastAPI SPA fallback serves the React bundle. The operator runs
 # `npm --prefix frontend run build` before `bundle deploy` — a one-line
 # wrapper in Makefile's `bundle-deploy-dev` guards this.
+#
+# 2026-05-04: also include `sql/_rendered/**`. The render_sql tool writes
+# UC-catalog-substituted SQL into `sql/_rendered/` (gitignored — never
+# committed), and every job task in this file references those rendered
+# paths (`sql/_rendered/ddl/001_catalogs_schemas.sql`,
+# `sql/_rendered/transformations/gold_segment_population.sql`, etc.).
+# Without this include, `databricks bundle deploy` honors the gitignore
+# and the workspace ends up missing every rendered SQL file, causing the
+# next `bundle run` to fail with "File ... not found." The deploy.sh
+# orchestrator runs render_sql in step 2 specifically so step 5
+# (bundle deploy) has the freshly-rendered files on disk to upload.
 sync:
   include:
     - frontend/dist/**
+    - sql/_rendered/**
 
 targets:
   dev:
@@ -41,13 +58,24 @@ targets:
       host: *default_host
       profile: DEFAULT
       root_path: ~/.bundle/${bundle.name}/${bundle.target}
+    variables:
+      # The Databricks Apps bundle schema requires app Genie bindings to carry
+      # a concrete space_id; it cannot resolve Genie spaces by name through a
+      # bundle lookup. Keep the root variable default as the CI placeholder, but
+      # pin the Entrada dev target to the governed mortgage_lead_intelligence
+      # space so plain `databricks bundle deploy -t dev --profile DEFAULT`
+      # never reaches Apps with the placeholder and returns the opaque 403
+      # "Can View" permission error.
+      genie_space_id: 01f13d4968af1b249dc388fd5b18b195
 
   prod:
     mode: production
     # CUSTOMER-SE CHECKLIST BEFORE FIRST `bundle deploy -t prod`:
-    #   1. `workspace.host` inherits from the DEFAULT CLI profile (or
-    #      `BUNDLE_VAR_workspace_host`). Point the CLI at the customer's
-    #      production workspace before deploy; no code edit needed.
+    #   1. `workspace.host` dereferences the root `&default_host` YAML anchor.
+    #      Before customer deploy, run:
+    #        ./scripts/configure-workspace.sh https://<customer-workspace>
+    #      (or make the same one-line anchor edit manually). Then point the
+    #      DEFAULT CLI profile at that same customer workspace.
     #   2. Decide catalog isolation: share `mip` with dev in a single
     #      workspace, or set `variables.uc_catalog.default` to `mip_prod`
     #      for separation. Both are valid; pick one and document.
@@ -62,7 +90,63 @@ targets:
       root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
     run_as:
       user_name: ${workspace.current_user.userName}
-
+    resources:
+      database_instances:
+        mip_app_state:
+          # Production posture: keep the dev-sized single-node Lakebase as
+          # the base resource, but attach readable secondaries for customer
+          # targets so transient primary maintenance fails over instead of
+          # surfacing as an app-wide degraded state.
+          enable_readable_secondaries: true
+  prod_otlp:
+    mode: production
+    # Production-retention target for environments that have a
+    # customer-owned OTLP collector and a Databricks Secret containing
+    # `MIP_OTEL_HEADERS`. This target intentionally is not the default:
+    # customer SEs must provision the secret and collector first, then
+    # deploy this target and promote with an env_vars payload that sets
+    # MIP_OTEL_ENDPOINT plus MIP_OTEL_HEADERS value_from=otel_headers.
+    workspace:
+      host: *default_host
+      profile: DEFAULT
+      root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
+    run_as:
+      user_name: ${workspace.current_user.userName}
+    resources:
+      database_instances:
+        mip_app_state:
+          enable_readable_secondaries: true
+      apps:
+        mip_app:
+          resources:
+            - name: sql_warehouse
+              description: "Serverless SQL Warehouse for gold-table queries."
+              sql_warehouse:
+                id: ${resources.sql_warehouses.mip_serverless_sql.id}
+                permission: CAN_USE
+            - name: genie_space
+              description: "Mortgage Lead Intelligence Genie Space."
+              genie_space:
+                name: mortgage_lead_intelligence
+                space_id: ${var.genie_space_id}
+                permission: CAN_RUN
+            - name: database
+              description: "Lakebase/Postgres app-state database."
+              database:
+                database_name: ${var.lakebase_database_name}
+                instance_name: ${resources.database_instances.mip_app_state.name}
+                permission: CAN_CONNECT_AND_CREATE
+            - name: lifecycle_sync_job
+              description: "Event-triggered lifecycle sync job for approval/outreach state."
+              job:
+                id: ${resources.jobs.mip_sync_lifecycle_state.id}
+                permission: CAN_MANAGE_RUN
+            - name: otel_headers
+              description: "Customer-owned OTLP collector header secret for durable log export."
+              secret:
+                scope: ${var.otel_headers_secret_scope}
+                key: ${var.otel_headers_secret_key}
+                permission: READ
   # `ci` target is for PR validation ONLY — never deploy against it. The
   # `dev` + `prod` targets both carry `mode:` + `${workspace.current_user
   # .userName}` templates that force the CLI to call
@@ -138,6 +222,11 @@ resources:
             database_name: ${var.lakebase_database_name}
             instance_name: ${resources.database_instances.mip_app_state.name}
             permission: CAN_CONNECT_AND_CREATE
+        - name: lifecycle_sync_job
+          description: "Event-triggered lifecycle sync job for approval/outreach state."
+          job:
+            id: ${resources.jobs.mip_sync_lifecycle_state.id}
+            permission: CAN_MANAGE_RUN
 
   sql_warehouses:
     mip_serverless_sql:
@@ -168,7 +257,7 @@ resources:
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
-              path: sql/ddl/001_catalogs_schemas.sql
+              path: sql/_rendered/ddl/001_catalogs_schemas.sql
         # Slice13-accuracy: create the mip.ref schema + lender_dictionary
         # table and seed the canonical lender vocabulary. Runs AFTER catalog
         # init (the schema lives under `mip`) and BEFORE the silver pipeline
@@ -181,7 +270,7 @@ resources:
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
-              path: sql/ddl/004_ref_tables.sql
+              path: sql/_rendered/ddl/004_ref_tables.sql
         - task_key: seed_ref_lender_dictionary
           description: "MERGE canonical lender vocabulary into mip.ref.lender_dictionary (idempotent)."
           depends_on:
@@ -189,7 +278,7 @@ resources:
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
-              path: sql/ref/lender_dictionary_seed.sql
+              path: sql/_rendered/ref/lender_dictionary_seed.sql
         - task_key: seed_ref_offer_rules_config
           description: "MERGE canonical offer-rule thresholds into mip.ref.offer_rules_config (idempotent)."
           depends_on:
@@ -197,7 +286,7 @@ resources:
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
-              path: sql/ref/offer_rules_config_seed.sql
+              path: sql/_rendered/ref/offer_rules_config_seed.sql
         - task_key: seed_ref_state_footprint
           description: "MERGE canonical state footprint into mip.ref.state_footprint (idempotent). Hole-finder #20."
           depends_on:
@@ -205,7 +294,7 @@ resources:
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
-              path: sql/ref/state_footprint_seed.sql
+              path: sql/_rendered/ref/state_footprint_seed.sql
         - task_key: refresh_silver_pipeline
           description: "Run the Lakeflow feature pipeline to materialize mip.silver.* from the Cotality share."
           depends_on:
@@ -214,7 +303,10 @@ resources:
             - task_key: seed_ref_state_footprint
           pipeline_task:
             pipeline_id: ${resources.pipelines.mip_feature_pipeline.id}
-            full_refresh: false
+            # Module 0 is not yet a customer incremental workload. Run silver as
+            # a full refresh so ZIP/lender/PII transformation fixes reprocess
+            # existing rows instead of leaving stale Delta output behind.
+            full_refresh: true
     # Slice13-accuracy: standalone ref-data seed job. Mirrors the two
     # tasks baked into mip_refresh_silver so analysts / ops can re-run
     # the lender-dictionary seed without kicking the full silver pipeline.
@@ -234,7 +326,7 @@ resources:
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
-              path: sql/ddl/004_ref_tables.sql
+              path: sql/_rendered/ddl/004_ref_tables.sql
         - task_key: seed_lender_dictionary
           description: "MERGE canonical lender vocabulary into mip.ref.lender_dictionary."
           depends_on:
@@ -242,7 +334,7 @@ resources:
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
-              path: sql/ref/lender_dictionary_seed.sql
+              path: sql/_rendered/ref/lender_dictionary_seed.sql
         - task_key: seed_offer_rules_config
           description: "MERGE canonical offer-rule thresholds into mip.ref.offer_rules_config."
           depends_on:
@@ -250,7 +342,7 @@ resources:
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
-              path: sql/ref/offer_rules_config_seed.sql
+              path: sql/_rendered/ref/offer_rules_config_seed.sql
         - task_key: seed_state_footprint
           description: "MERGE canonical state footprint into mip.ref.state_footprint. Hole-finder #20."
           depends_on:
@@ -258,7 +350,7 @@ resources:
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
-              path: sql/ref/state_footprint_seed.sql
+              path: sql/_rendered/ref/state_footprint_seed.sql
     # Gold-layer materialization. Runs the idempotent DDL manifest (adds
     # any new tables -- e.g. lockin_cohort -- on a bundle deploy), then
     # executes each gold CTAS file in dependency order. This CTAS-via-
@@ -270,7 +362,7 @@ resources:
     #
     # Dependency order (respected by the depends_on chain below):
     #   1. property_owner_bridge         (owner-link rollup; no deps)
-    #   2. evidence_events               (silver-derived; no gold deps)
+    #   2. evidence_events               (needs property_owner_bridge for multi-property evidence)
     #   3. borrower_360                  (needs property_owner_bridge + evidence_events)
     #   4. lead_scores                   (needs borrower_360 + evidence_events)
     #   5. lead_population               (needs borrower_360)
@@ -280,7 +372,8 @@ resources:
     #   9. county_rollup                 (needs borrower_360 -- geography rollup)
     #  10. zip_rollup                    (needs borrower_360 -- geography rollup)
     #  11. state_top_segment             (needs borrower_360 -- geography rollup)
-    #  12. refresh_semantics_views       (needs lead_population + segment_population + borrower_dossier)
+    #  12. source_readiness              (needs refreshed gold outputs + upstream probes; app-readable admin summary)
+    #  13. refresh_semantics_views       (needs lead_population + segment_population + borrower_dossier)
     #
     # The DDL manifest (003_gold_tables.sql) is CREATE TABLE IF NOT EXISTS,
     # so running it on every refresh is safe and picks up any newly-added
@@ -302,12 +395,41 @@ resources:
         slice: slice13-accuracy
       max_concurrent_runs: 1
       tasks:
-        - task_key: init_gold_ddl
-          description: "Idempotent CREATE TABLE IF NOT EXISTS for every mip.gold.* table."
+        - task_key: init_fn_rate_spread
+          description: "CREATE OR REPLACE mip.gold.fn_rate_spread before any scoring CTAS."
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
-              path: sql/ddl/003_gold_tables.sql
+              path: sql/_rendered/uc_functions/fn_rate_spread.sql
+        - task_key: init_fn_in_the_money
+          description: "CREATE OR REPLACE mip.gold.fn_in_the_money before any scoring CTAS."
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/_rendered/uc_functions/fn_in_the_money.sql
+        - task_key: init_fn_lead_score
+          description: "CREATE OR REPLACE mip.gold.fn_lead_score before any scoring CTAS."
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/_rendered/uc_functions/fn_lead_score.sql
+        - task_key: init_fn_next_best_offer
+          description: "CREATE OR REPLACE mip.gold.fn_next_best_offer before any scoring CTAS."
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/_rendered/uc_functions/fn_next_best_offer.sql
+        - task_key: init_gold_ddl
+          description: "Idempotent CREATE TABLE IF NOT EXISTS for every mip.gold.* table."
+          depends_on:
+            - task_key: init_fn_rate_spread
+            - task_key: init_fn_in_the_money
+            - task_key: init_fn_lead_score
+            - task_key: init_fn_next_best_offer
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/_rendered/ddl/003_gold_tables.sql
         # audit-holes-round-3 #7 fix: capture ONE deterministic refresh_at
         # timestamp at the top of the DAG. Every downstream CTAS reads
         # mip.ref.refresh_run_state to replace its own CURRENT_TIMESTAMP()
@@ -322,7 +444,15 @@ resources:
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
-              path: sql/transformations/capture_refresh_timestamp.sql
+              path: sql/_rendered/transformations/capture_refresh_timestamp.sql
+        - task_key: seed_demo_first_party_feeds
+          description: "Populate mip.first_party.* with explicit Summit Mortgage demo_synthetic feeds when enabled."
+          depends_on:
+            - task_key: ctas_property_owner_bridge
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/_rendered/transformations/demo_first_party_feeds.sql
         - task_key: ctas_property_owner_bridge
           description: "Rebuild mip.gold.property_owner_bridge via CTAS."
           depends_on:
@@ -330,24 +460,25 @@ resources:
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
-              path: sql/transformations/gold_property_owner_bridge.sql
+              path: sql/_rendered/transformations/gold_property_owner_bridge.sql
         - task_key: ctas_evidence_events
           description: "Rebuild mip.gold.evidence_events via CTAS."
           depends_on:
-            - task_key: capture_refresh_timestamp
+            - task_key: ctas_property_owner_bridge
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
-              path: sql/transformations/gold_evidence_events.sql
+              path: sql/_rendered/transformations/gold_evidence_events.sql
         - task_key: ctas_borrower_360
           description: "Rebuild mip.gold.borrower_360 via CTAS."
           depends_on:
             - task_key: ctas_property_owner_bridge
             - task_key: ctas_evidence_events
+            - task_key: seed_demo_first_party_feeds
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
-              path: sql/transformations/gold_borrower_360.sql
+              path: sql/_rendered/transformations/gold_borrower_360.sql
         # audit-holes-round-3 #8 fix: integrity gate between borrower_360
         # and every task that reads from it. Asserts the population is both
         # non-empty and freshly rebuilt in THIS run (within 30 minutes of
@@ -362,7 +493,7 @@ resources:
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
-              path: sql/transformations/assert_borrower_360_fresh.sql
+              path: sql/_rendered/transformations/assert_borrower_360_fresh.sql
         - task_key: ctas_lead_scores
           description: "Rebuild mip.gold.lead_scores via CTAS."
           depends_on:
@@ -370,7 +501,7 @@ resources:
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
-              path: sql/transformations/gold_lead_scores.sql
+              path: sql/_rendered/transformations/gold_lead_scores.sql
         - task_key: ctas_lead_population
           description: "Rebuild mip.gold.lead_population via CTAS."
           depends_on:
@@ -378,7 +509,7 @@ resources:
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
-              path: sql/transformations/gold_lead_population.sql
+              path: sql/_rendered/transformations/gold_lead_population.sql
         - task_key: ctas_segment_population
           description: "Rebuild mip.gold.segment_population via CTAS."
           depends_on:
@@ -386,7 +517,7 @@ resources:
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
-              path: sql/transformations/gold_segment_population.sql
+              path: sql/_rendered/transformations/gold_segment_population.sql
         - task_key: ctas_lockin_cohort
           description: "Rebuild mip.gold.lockin_cohort via CTAS (slice13-accuracy)."
           depends_on:
@@ -394,7 +525,7 @@ resources:
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
-              path: sql/transformations/gold_lockin_cohort.sql
+              path: sql/_rendered/transformations/gold_lockin_cohort.sql
         - task_key: ctas_borrower_dossier
           description: "Rebuild mip.gold.borrower_dossier via CTAS (slice13-accuracy perf)."
           depends_on:
@@ -403,7 +534,7 @@ resources:
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
-              path: sql/transformations/gold_borrower_dossier.sql
+              path: sql/_rendered/transformations/gold_borrower_dossier.sql
         # slice13-accuracy-validation: three geography rollup tables feed the
         # USChoroplethMap drill (state -> county -> ZIP). All three aggregate
         # from gold.borrower_360 directly -- no ZIP->county crosswalk seed
@@ -418,7 +549,7 @@ resources:
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
-              path: sql/transformations/gold_county_rollup.sql
+              path: sql/_rendered/transformations/gold_county_rollup.sql
         - task_key: ctas_zip_rollup
           description: "Rebuild mip.gold.zip_rollup via CTAS (per-ZIP aggregate + stable sample_borrower_id)."
           depends_on:
@@ -426,7 +557,7 @@ resources:
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
-              path: sql/transformations/gold_zip_rollup.sql
+              path: sql/_rendered/transformations/gold_zip_rollup.sql
         - task_key: ctas_state_top_segment
           description: "Rebuild mip.gold.state_top_segment via CTAS (per-state dominant SegmentCode + share %)."
           depends_on:
@@ -434,7 +565,18 @@ resources:
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
-              path: sql/transformations/gold_state_top_segment.sql
+              path: sql/_rendered/transformations/gold_state_top_segment.sql
+        - task_key: ctas_source_readiness
+          description: "Rebuild mip.gold.source_readiness via CTAS so the app Admin panel reads gold, not silver."
+          depends_on:
+            - task_key: ctas_lead_scores
+            - task_key: ctas_lead_population
+            - task_key: ctas_segment_population
+            - task_key: ctas_borrower_dossier
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/_rendered/transformations/gold_source_readiness.sql
         # Zero-click Genie provisioning — publish the three mip.semantics.*
         # views so the Genie trusted_assets list in
         # genie/mortgage_lead_intelligence_space.yml binds on first deploy.
@@ -450,7 +592,7 @@ resources:
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
-              path: sql/ddl/005_semantics_views.sql
+              path: sql/_rendered/ddl/005_semantics_views.sql
 
     # Event-triggered sync of Lakebase approval + outreach state into
     # mip.gold.borrower_lifecycle_state. Metric views (segment_
@@ -522,7 +664,7 @@ resources:
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
-              path: sql/transformations/gold_borrower_lifecycle_state.sql
+              path: sql/_rendered/transformations/gold_borrower_lifecycle_state.sql
         - task_key: sync_from_lakebase
           description: "Read mip_app.approvals + outreach events from Lakebase and overwrite mip.gold.borrower_lifecycle_state."
           depends_on:
@@ -530,6 +672,7 @@ resources:
           environment_key: py_default
           spark_python_task:
             python_file: jobs/sync_lifecycle_state.py
+            parameters: ["--catalog=${var.uc_catalog}"]
           max_retries: 2
           retry_on_timeout: true
         - task_key: record_funnel_snapshot
@@ -539,7 +682,7 @@ resources:
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
-              path: sql/transformations/gold_funnel_snapshot_daily.sql
+              path: sql/_rendered/transformations/gold_funnel_snapshot_daily.sql
 
     mip_snapshot_dashboards:
       name: mip_snapshot_dashboards
@@ -616,7 +759,7 @@ resources:
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
-              path: sql/ddl/001_catalogs_schemas.sql
+              path: sql/_rendered/ddl/001_catalogs_schemas.sql
         - task_key: init_silver_ddl
           description: "CREATE TABLE IF NOT EXISTS for silver.market_rates_weekly."
           depends_on:
@@ -624,7 +767,7 @@ resources:
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
-              path: sql/ddl/silver_market_rates_weekly.sql
+              path: sql/_rendered/ddl/silver_market_rates_weekly.sql
         - task_key: seed_if_empty
           description: "Load data/seeds/fred_mortgage30us_seed.csv iff silver table is empty."
           depends_on:
@@ -632,7 +775,9 @@ resources:
           environment_key: py_default
           spark_python_task:
             python_file: jobs/fred_rates_ingest.py
-            parameters: ["--mode=seed"]
+            parameters:
+              - "--mode=seed"
+              - "--table=${var.uc_catalog}.silver.market_rates_weekly"
           max_retries: 2
           retry_on_timeout: true
         - task_key: refresh_from_fred
@@ -642,7 +787,9 @@ resources:
           environment_key: py_default
           spark_python_task:
             python_file: jobs/fred_rates_ingest.py
-            parameters: ["--mode=fred"]
+            parameters:
+              - "--mode=fred"
+              - "--table=${var.uc_catalog}.silver.market_rates_weekly"
           max_retries: 2
           retry_on_timeout: true
 
@@ -714,14 +861,17 @@ variables:
   app_name:
     description: Databricks App display name
     default: mip-app
-  # sql_warehouse_id and genie_space_id are overridden per-invocation via the
-  # Databricks CLI BUNDLE_VAR_* mechanism. The Makefile targets
+  # sql_warehouse_id and genie_space_id can be overridden per-invocation via
+  # the Databricks CLI BUNDLE_VAR_* mechanism. The Makefile targets
   # `bundle-validate-env` and `bundle-deploy-dev` source .env.local and export
   # BUNDLE_VAR_sql_warehouse_id=$DATABRICKS_WAREHOUSE_ID and
-  # BUNDLE_VAR_genie_space_id=$GENIE_SPACE_ID before calling the CLI. The
-  # placeholder defaults below keep `databricks bundle validate` green in CI
-  # without secrets, and never reach a real deployment because a real deploy
-  # goes through the Makefile targets that inject the env-sourced values.
+  # BUNDLE_VAR_genie_space_id=$GENIE_SPACE_ID before calling the CLI.
+  #
+  # The root defaults stay as CI placeholders. The dev target above pins the
+  # governed Entrada Genie space explicitly so a plain
+  # `databricks bundle deploy -t dev --profile DEFAULT` is also safe. Customer
+  # targets should either set a target-specific Genie space id after
+  # provisioning or pass BUNDLE_VAR_genie_space_id / --var on deploy.
   sql_warehouse_id:
     description: >-
       Serverless SQL Warehouse ID. Override with BUNDLE_VAR_sql_warehouse_id
@@ -738,6 +888,17 @@ variables:
   lakebase_database_name:
     description: Lakebase Postgres database name backing Module 0 app state
     default: mip_app_state
+  otel_headers_secret_scope:
+    description: >-
+      Databricks Secret scope containing MIP_OTEL_HEADERS for the prod_otlp
+      target. The value is read by Databricks Apps through the otel_headers
+      app resource; never commit collector header values to the bundle.
+    default: mip
+  otel_headers_secret_key:
+    description: >-
+      Databricks Secret key containing comma-separated OTLP headers for
+      MIP_OTEL_HEADERS, for example "authorization=Bearer ...".
+    default: otel-headers
   # ---------------------------------------------------------------------------
   # FRED API key (audit R5-16, 2026-04-23)
   # ---------------------------------------------------------------------------
@@ -749,8 +910,8 @@ variables:
   # (api.stlouisfed.org/fred/series/observations, which requires
   # api_key=...), and (b) the zero-click-deploy story documented in
   # CLAUDE.md is honoured: any future secret is reachable from
-  # `databricks bundle deploy -t dev` + a `.env.local` fill-in, never
-  # from click-ops in the Databricks UI. When that upgrade happens, the
+  # `./scripts/deploy.sh -t dev` + a `.env.local` fill-in, never from
+  # click-ops in the Databricks UI. When that upgrade happens, the
   # ingest script will read `os.environ.get("FRED_API_KEY", "")` and
   # log-at-warn when missing (fall back to fredgraph.csv), so an empty
   # default here is correct. Override via `BUNDLE_VAR_fred_api_key` or

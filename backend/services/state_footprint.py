@@ -1,24 +1,24 @@
-"""State footprint resolver.
+"""State coverage resolver.
 
-Single source of truth for the tenant's operational footprint (the set of
-US states the lender writes business in). Reads from
-``mip.ref.state_footprint`` with a TTL-cached in-process copy, falling back
-to the canonical 6-state Summit footprint on UC unavailability so the app
-never ships an empty dropdown.
+Single source of truth for the geography currently present in the refreshed
+gold data. The authoritative data-bearing scope comes from
+``mip.gold.county_rollup``. ``mip.ref.state_footprint`` is only label/default
+metadata and an outage fallback; it must never keep stale states in scope when
+the Cotality share expands or contracts.
 
 Consumers:
 
 - ``backend/api/config.py`` (``/api/config/footprint``) — frontend hydration.
-- ``backend/services/repositories/databricks_repo.py`` — the
-  ``"all N states"`` option in ``_STATE_SETS`` reads from here rather than
-  hardcoding the 6-state literal.
+- ``backend/services/repositories/databricks_repo.py`` — the ``"all N
+  states"`` option reads from refreshed coverage rather than hardcoding a
+  state list.
 - Admin restart invalidates the cache (``invalidate()``), matching the
   manual-flush posture we use for ``LenderRefResolver``.
 
-The fallback mirrors ``sql/ref/state_footprint_seed.sql`` byte-for-byte
-so a UC outage on first boot still yields the correct behavior for the
-default tenant. A tenant with a different footprint MUST re-run the seed
-before the UC path activates.
+The generic fallback is not a license or data-coverage statement; it is only
+an outage posture. Normal product behavior comes from live gold geography
+rollups, with the ref table used only to improve labels/order when live rows
+exist.
 """
 from __future__ import annotations
 
@@ -26,18 +26,90 @@ import logging
 from dataclasses import dataclass
 from threading import Lock
 
+from backend.schemas._validators import set_state_footprint_provider
+from backend.services.observability import emit
+
 log = logging.getLogger(__name__)
 
 
-# Fallback footprint. Mirrors the rows seeded by
-# ``sql/ref/state_footprint_seed.sql`` — keep the two in lockstep.
-_FOOTPRINT_FALLBACK: tuple[tuple[str, str, int, bool], ...] = (
-    ("IL", "Illinois",   1, True),
-    ("CA", "California", 2, False),
-    ("FL", "Florida",    3, False),
-    ("TX", "Texas",      4, False),
-    ("WA", "Washington", 5, False),
-    ("CO", "Colorado",   6, False),
+def _emit_footprint_warning(event: str, exc: BaseException, *, posture: str) -> None:
+    emit(
+        log,
+        event,
+        level=logging.WARNING,
+        dependency="warehouse",
+        outcome="degraded",
+        exc_type=type(exc).__name__,
+        exc_msg=str(exc)[:500],
+        posture=posture,
+    )
+
+US_STATE_NAME_BY_CODE: dict[str, str] = {
+    "AL": "Alabama",
+    "AK": "Alaska",
+    "AZ": "Arizona",
+    "AR": "Arkansas",
+    "CA": "California",
+    "CO": "Colorado",
+    "CT": "Connecticut",
+    "DE": "Delaware",
+    "DC": "District of Columbia",
+    "FL": "Florida",
+    "GA": "Georgia",
+    "HI": "Hawaii",
+    "ID": "Idaho",
+    "IL": "Illinois",
+    "IN": "Indiana",
+    "IA": "Iowa",
+    "KS": "Kansas",
+    "KY": "Kentucky",
+    "LA": "Louisiana",
+    "ME": "Maine",
+    "MD": "Maryland",
+    "MA": "Massachusetts",
+    "MI": "Michigan",
+    "MN": "Minnesota",
+    "MS": "Mississippi",
+    "MO": "Missouri",
+    "MT": "Montana",
+    "NE": "Nebraska",
+    "NV": "Nevada",
+    "NH": "New Hampshire",
+    "NJ": "New Jersey",
+    "NM": "New Mexico",
+    "NY": "New York",
+    "NC": "North Carolina",
+    "ND": "North Dakota",
+    "OH": "Ohio",
+    "OK": "Oklahoma",
+    "OR": "Oregon",
+    "PA": "Pennsylvania",
+    "RI": "Rhode Island",
+    "SC": "South Carolina",
+    "SD": "South Dakota",
+    "TN": "Tennessee",
+    "TX": "Texas",
+    "UT": "Utah",
+    "VT": "Vermont",
+    "VA": "Virginia",
+    "WA": "Washington",
+    "WV": "West Virginia",
+    "WI": "Wisconsin",
+    "WY": "Wyoming",
+}
+
+
+# Generic fallback coverage metadata. This is stable geography metadata, not
+# the current lender footprint and not the current Cotality share scope. It is
+# used only when both live geography coverage and UC metadata are unreachable,
+# so the app can show an explicit degraded state without pretending fallback
+# rows are data-bearing scope.
+_FOOTPRINT_FALLBACK: tuple[tuple[str, str, int, bool], ...] = tuple(
+    (code, name, idx, False)
+    for idx, (code, name) in enumerate(
+        ((c, n) for c, n in US_STATE_NAME_BY_CODE.items() if c != "DC"),
+        start=1,
+    )
 )
 
 # 5-minute TTL per hole-finder #20 (300s). Admin restart invalidates; a
@@ -48,7 +120,7 @@ _FOOTPRINT_CACHE_KEY: str = "mip.ref.state_footprint"
 
 @dataclass(frozen=True)
 class FootprintState:
-    """One row of the tenant footprint."""
+    """One row of current geography coverage or fallback metadata."""
 
     state_code: str
     state_name: str
@@ -57,14 +129,16 @@ class FootprintState:
 
 
 class StateFootprintResolver:
-    """Resolve the tenant footprint from ``mip.ref.state_footprint``.
+    """Resolve current geography coverage from ``mip.gold.county_rollup``.
 
     Behavior mirrors ``LenderRefResolver`` in
     ``backend.services.pii_redaction``:
 
-    1. Cached UC result (TTL 300s) if UC is reachable.
-    2. ``_FOOTPRINT_FALLBACK`` tuple if UC is down. One WARNING per
-       resolver lifetime so logs don't spam.
+    1. Cached live gold coverage (TTL 300s) if refreshed coverage exists.
+    2. UC metadata rows only as degraded metadata when gold coverage is empty
+       or unavailable.
+    3. Generic ``_FOOTPRINT_FALLBACK`` if both UC sources are down. One
+       WARNING per resolver lifetime so logs don't spam.
 
     Never raises. Always returns a non-empty list.
     """
@@ -82,9 +156,17 @@ class StateFootprintResolver:
         self._fallback = fallback if fallback is not None else _FOOTPRINT_FALLBACK
         self._load_lock = Lock()
         self._warned_fallback = False
+        self._source_status = "unknown"
 
     def _load_from_uc(self) -> list[FootprintState] | None:
-        """Return the list pulled from UC, or ``None`` on any failure."""
+        """Return refreshed Cotality coverage when it exists.
+
+        ``mip.gold.county_rollup`` is authoritative for data-bearing scope.
+        ``mip.ref.state_footprint`` supplies optional display metadata only.
+        If coverage is unavailable but metadata exists, return metadata rows
+        with ``_source_status = "metadata_only"`` so consumers can render a
+        truthful degraded state without answering state-scoped data questions.
+        """
         try:
             from backend.services.databricks_sql import (
                 DatabricksSqlError,
@@ -94,6 +176,26 @@ class StateFootprintResolver:
             from backend.services.resilience import DependencyDownError
 
             client = get_sql_client()
+        except (DependencyDownError, DatabricksSqlError, RuntimeError, OSError) as exc:
+            if not self._warned_fallback:
+                _emit_footprint_warning(
+                    "state_footprint_uc_client_failed",
+                    exc,
+                    posture="fallback_footprint",
+                )
+                self._warned_fallback = True
+            return None
+        except Exception as exc:  # noqa: BLE001
+            if not self._warned_fallback:
+                _emit_footprint_warning(
+                    "state_footprint_uc_client_unexpected",
+                    exc,
+                    posture="fallback_footprint",
+                )
+                self._warned_fallback = True
+            return None
+
+        try:
             rows = client.execute(
                 "SELECT state_code, state_name, display_order, is_default_state "
                 f"FROM {qualify('ref', 'state_footprint')} "
@@ -101,27 +203,44 @@ class StateFootprintResolver:
             )
         except (DependencyDownError, DatabricksSqlError, RuntimeError, OSError) as exc:
             if not self._warned_fallback:
-                log.warning(
-                    "StateFootprintResolver: UC load failed (%s: %s); "
-                    "falling back to in-process _FOOTPRINT_FALLBACK.",
-                    type(exc).__name__,
+                _emit_footprint_warning(
+                    "state_footprint_metadata_failed",
                     exc,
+                    posture="live_coverage_names",
                 )
                 self._warned_fallback = True
-            return None
+            rows = []
         except Exception as exc:  # noqa: BLE001
             if not self._warned_fallback:
-                log.warning(
-                    "StateFootprintResolver: unexpected UC error (%s); "
-                    "using fallback footprint.",
+                _emit_footprint_warning(
+                    "state_footprint_metadata_unexpected",
                     exc,
+                    posture="live_coverage_names",
                 )
                 self._warned_fallback = True
-            return None
+            rows = []
 
-        if not rows:
-            return None
-        out: list[FootprintState] = []
+        try:
+            coverage_rows = client.execute(
+                "SELECT state, SUM(addressable_borrowers) AS addressable_borrowers "
+                f"FROM {qualify('gold', 'county_rollup')} "
+                f"WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM {qualify('gold', 'county_rollup')}) "
+                "  AND state IS NOT NULL "
+                "GROUP BY state "
+                "ORDER BY addressable_borrowers DESC, state ASC"
+            )
+        except Exception as exc:  # noqa: BLE001
+            if not self._warned_fallback:
+                _emit_footprint_warning(
+                    "state_footprint_coverage_failed",
+                    exc,
+                    posture="metadata_only_geography",
+                )
+                self._warned_fallback = True
+            coverage_rows = []
+
+        metadata: dict[str, FootprintState] = {}
+        metadata_rows: list[FootprintState] = []
         for row in rows:
             code = row.get("state_code")
             name = row.get("state_name")
@@ -129,15 +248,38 @@ class StateFootprintResolver:
             default = row.get("is_default_state")
             if not code or not name:
                 continue
-            out.append(
+            parsed = FootprintState(
+                state_code=str(code).strip().upper(),
+                state_name=str(name),
+                display_order=int(order) if order is not None else 0,
+                is_default_state=bool(default),
+            )
+            metadata[parsed.state_code] = parsed
+            metadata_rows.append(parsed)
+
+        coverage: list[FootprintState] = []
+        seen: set[str] = set()
+        for idx, row in enumerate(coverage_rows or [], start=1):
+            code = str(row.get("state") or "").strip().upper()[:2]
+            if len(code) != 2 or code in seen:
+                continue
+            meta = metadata.get(code)
+            coverage.append(
                 FootprintState(
-                    state_code=str(code).strip().upper(),
-                    state_name=str(name),
-                    display_order=int(order) if order is not None else 0,
-                    is_default_state=bool(default),
+                    state_code=code,
+                    state_name=meta.state_name if meta else US_STATE_NAME_BY_CODE.get(code, code),
+                    display_order=idx,
+                    is_default_state=len(coverage) == 0,
                 )
             )
-        return out or None
+            seen.add(code)
+        if coverage:
+            self._source_status = "live_coverage"
+            return coverage
+        if metadata_rows:
+            self._source_status = "metadata_only"
+            return metadata_rows
+        return None
 
     def _footprint(self) -> list[FootprintState]:
         cached = self._cache.get(_FOOTPRINT_CACHE_KEY)
@@ -153,32 +295,60 @@ class StateFootprintResolver:
                     FootprintState(code, name, order, default)
                     for code, name, order, default in self._fallback
                 ]
+                self._source_status = "fallback"
+            elif self._source_status == "unknown":
+                self._source_status = "live_coverage"
             self._cache.set(_FOOTPRINT_CACHE_KEY, loaded, self._ttl_s)
             return loaded
 
     def list(self) -> list[FootprintState]:
-        """Return the current footprint, sorted by ``display_order``."""
+        """Return current coverage rows, sorted by ``display_order``."""
         return list(self._footprint())
 
     def state_codes(self) -> list[str]:
         """Return just the USPS codes, sorted by ``display_order``."""
         return [s.state_code for s in self._footprint()]
 
+    def state_name_to_codes(self) -> dict[str, list[str]]:
+        """Return a lowercased ``state_name -> [state_code]`` map.
+
+        Used by the portfolio builder preview predicate to translate
+        frontend dropdown labels like "Florida" / "California" to the
+        2-char USPS codes emitted into the WHERE clause. Keys are
+        lowercased so the lookup is case-insensitive regardless of how
+        the UI cases the label. Each value is a single-element list so
+        callers can build SQL predicates without branching on shape.
+        """
+        return {s.state_name.lower(): [s.state_code] for s in self._footprint()}
+
     def default_state_code(self) -> str:
         """Return the USPS code of the row with ``is_default_state = TRUE``.
 
-        If no row is flagged default (should not happen — the seed
-        guarantees exactly one), return the first row by display order.
+        If no row is flagged default, return the first row by display order.
+        The UI's broad default is still "All N states"; this is only anchor
+        metadata for APIs that require a single state.
         """
         for s in self._footprint():
             if s.is_default_state:
                 return s.state_code
         return self._footprint()[0].state_code
 
+    def using_fallback(self) -> bool:
+        """Return TRUE when the active list is metadata only.
+
+        Metadata is useful for rendering degraded geography chrome during a
+        dependency outage, but it is not a Cotality coverage contract.
+        Data-bearing decisions, especially Genie out-of-footprint guards,
+        should treat this as unavailable scope rather than broadening answers.
+        """
+        self._footprint()
+        return self._source_status in {"fallback", "metadata_only"}
+
     def invalidate(self) -> None:
         """Drop the cached footprint so the next call re-fetches from UC."""
         self._cache.invalidate(_FOOTPRINT_CACHE_KEY)
         self._warned_fallback = False
+        self._source_status = "unknown"
 
 
 # Process-wide singleton, lazy.
@@ -203,3 +373,12 @@ def _reset_state_footprint_resolver_for_tests(
     global _RESOLVER
     with _RESOLVER_LOCK:
         _RESOLVER = resolver
+
+
+def _schema_state_footprint_provider() -> tuple[tuple[tuple[str, str], ...], bool]:
+    resolver = get_state_footprint_resolver()
+    states = tuple((state.state_code, state.state_name) for state in resolver.list())
+    return states, resolver.using_fallback()
+
+
+set_state_footprint_provider(_schema_state_footprint_provider)

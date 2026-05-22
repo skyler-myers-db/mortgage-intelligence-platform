@@ -7,11 +7,28 @@ demo to the customer's Head of Growth.
 
 **Scope.** First-time deploy. For recurring operator concerns
 (cold-start, Genie fallback, parity regression, credential rotation), see
-[`docs/runbook.md`](runbook.md). For UC grant details, see
-[`docs/security/GRANTS.md`](security/GRANTS.md). This doc links to both.
+[`docs/runbook.md`](runbook.md). Customer-facing security posture is summarized
+in [`docs/security-and-compliance.md`](security-and-compliance.md); detailed
+workspace grant inventories stay in the internal implementation packet.
 
 **Budget.** 45 minutes of hands-on + ~15 minutes of bundle-run wall time
 (silver refresh + gold CTAS against an idle 2X-Small warehouse).
+
+**Tenancy posture.** Module 0 is a per-deployment product, not a shared
+row-level multi-tenant SaaS. One customer workspace maps to one UC catalog,
+one Lakebase state database, one Genie space, one app URL, and one configured
+lender identity. Isolation is enforced at the Databricks deployment boundary;
+`mip.ref.lender_dictionary` is the tenant-lender override point for gold
+transformations, and `MIP_LENDER_NAME` / optional `MIP_TENANT_ID` drive the
+app label and governed disclosure namespace. `MIP_DEFAULT_CATALOG` drives the
+SQL renderer, backend `qualify()` calls, Spark Python jobs, and Genie
+provisioning, so keep it equal to the bundle `uc_catalog` variable. A future
+shared-SaaS deployment would need explicit row-level tenant predicates and RLS;
+that is out of scope for Module 0.
+
+**API paths.** Operator commands use canonical `/api/v1/*` paths. Deprecated
+`/api/*` aliases still work during the Module 0 transition window, but new
+customer procedures should not depend on them.
 
 ---
 
@@ -24,6 +41,19 @@ On your laptop:
 - [ ] `node --version` ≥ 20 and `npm --version` ≥ 10.
 - [ ] `gh auth status` green (needed if you will rotate CI secrets — not required for deploy).
 - [ ] `git clone git@github.com:skyler-myers-db/mortgage-intelligence-platform.git && cd mortgage-intelligence-platform`.
+
+Supported demo browsers:
+
+- Chrome / Edge 111+.
+- Safari 16.4+.
+- Firefox 121+.
+
+The SPA intentionally uses modern CSS (`container` queries, `:has()`,
+`color-mix()`, logical sizing, and native `accent-color`) rather than a
+legacy transpilation chain. If a customer mandates an older locked-down
+browser or Firefox ESR below 121, run the browser matrix in §5 before
+the customer demo and treat any CSS fallback work as a customer-specific
+deployment requirement.
 
 On the customer workspace, before you start the clock:
 
@@ -57,13 +87,26 @@ cat > .env.local <<'EOF'
 DATABRICKS_HOST=https://<customer-workspace>.cloud.databricks.com
 DATABRICKS_TOKEN=<PAT from workspace User Settings -> Developer -> Access Tokens>
 DATABRICKS_WAREHOUSE_ID=<serverless warehouse id from Compute -> SQL warehouses>
-# GENIE_SPACE_ID is written by step 4; leave blank on first deploy.
+# GENIE_SPACE_ID may be blank on first deploy; scripts/deploy.sh will
+# provision the space before applying the app resource and write
+# genie/space_id.txt.
 GENIE_SPACE_ID=
+# OPTIONAL: set the UC catalog name if the customer uses a non-default name
+# (default is "mip"). scripts/deploy.sh step 1a renders sql/_rendered/**
+# for this catalog before the bundle runs, so CTAS lands in the right place
+# on first deploy. See docs/runbook-multi-catalog.md for details.
+# MIP_DEFAULT_CATALOG=summit_mortgage
+# Customer-facing display name shown in the app and used by governed draft copy.
+MIP_LENDER_NAME=<customer display name, e.g. Acme Mortgage>
+# Optional: override the Lakebase disclosure namespace. If unset, the app
+# derives it from MIP_LENDER_NAME; Summit dev keeps the seeded "summit"
+# namespace for backwards compatibility.
+# MIP_TENANT_ID=acme_mortgage
 EOF
 ```
 
 Env-var names are authoritative in
-[`backend/config/settings.py`](../backend/config/settings.py) lines 84–94.
+[`backend/config/settings.py`](../backend/config/settings.py).
 The `BUNDLE_VAR_*` mapping (`DATABRICKS_WAREHOUSE_ID` →
 `BUNDLE_VAR_sql_warehouse_id`, `GENIE_SPACE_ID` →
 `BUNDLE_VAR_genie_space_id`) happens inside
@@ -85,16 +128,24 @@ by default. If the customer uses a different profile name, edit the
 `profile:` line in [`databricks.yml`](../databricks.yml) lines 32 / 52
 to match, or pass `--profile` explicitly.
 
+If this is a customer fork, rebind the bundle's single workspace-host anchor
+once so every target points at the customer workspace:
+
+```bash
+./scripts/configure-workspace.sh "$DATABRICKS_HOST"
+```
+
+The helper normalizes the URL, updates only the `&default_host` line in
+[`databricks.yml`](../databricks.yml), and runs `make check-workspace-host`.
+
 ---
 
 ## 3. Apply UC grants (5 minutes — BEFORE `bundle deploy`)
 
-Open [`docs/security/GRANTS.md`](security/GRANTS.md) and execute §§1–8 in
-order against the customer workspace (Databricks SQL editor, any
-warehouse). Sections 1, 2, 3, 5a, 6, 7 are required; 4 and 5b are
-conditional. The whole section is copy-paste-able; budget 5 minutes
-actual work + a few minutes if the metastore admin needs to switch
-seats.
+Open the internal workspace-grants packet and execute the required UC grants in
+order against the customer workspace (Databricks SQL editor, any warehouse).
+The whole section is copy-paste-able; budget 5 minutes actual work + a few
+minutes if the metastore admin needs to switch seats.
 
 **Do not skip this step.** `databricks bundle deploy` does not need the
 grants (it runs as your admin user) but the app's first boot does —
@@ -105,38 +156,28 @@ warehouse warm-up time diagnosing it.
 
 ## 4. Deploy (one command, ~15 minutes wall time)
 
-**Two-step deploy gotcha — read first.** The Databricks App lifecycle has
-two phases:
-
-1. `databricks bundle deploy -t dev` — **uploads** source and provisions
-   every non-app resource (warehouse, Lakebase, jobs, pipelines,
-   dashboards, MLflow experiment). The app resource is registered but
-   its compute is not started.
-2. `databricks apps deploy mip-app` — **promotes** the uploaded source
-   to the running app compute. Until this runs, the app URL serves the
-   previous revision (or 404 on first ever deploy).
-
-`./scripts/deploy.sh` runs phase 1. Phase 2 is a separate command the SE
-runs after the first bundle deploy succeeds. Forgetting phase 2 is the
-most common first-deploy mistake — you see a green CLI log and a 404 at
-the app URL.
+**Deploy lifecycle.** The Databricks App lifecycle still has two API
+phases — direct bundle resource deploy, then app snapshot promotion —
+but `./scripts/deploy.sh` runs both. Use the script for customer first
+deploys because it provisions/rebinds Genie, maps `.env.local` to
+`BUNDLE_VAR_*`, and runs the direct deployment plan before apply. The
+Entrada dev target also pins its governed Genie space id, so plain
+`databricks bundle deploy -t dev --profile DEFAULT` is safe for
+resource-only recovery in Entrada's workspace.
 
 ```bash
-# Phase 1: bundle deploy + jobs + silver/gold refresh + Genie provision
-./scripts/deploy.sh
-# Expected last line: "[deploy.sh] OK — all 10 steps complete."
-
-# Phase 2: promote uploaded source to running app compute
-databricks apps deploy mip-app
-# Expected: "deployment_id: ..." + state SUCCEEDED within ~2 min.
+# One command: env-aware direct bundle validate/plan/deploy, app promotion, jobs, refreshes, and Genie provision
+./scripts/deploy.sh -t dev
+# Expected last line: "[deploy] complete."
 ```
 
 What `scripts/deploy.sh` does is enumerated in
 [`docs/runbook.md`](runbook.md) §4 (steps 1–10). Re-running is
 idempotent — safe after a partial failure.
 
-On first deploy, step 9 (Genie provisioning) writes
-`genie/space_id.txt`. Append it to `.env.local`:
+On first deploy, Genie provisioning writes `genie/space_id.txt`.
+Keeping the value in `.env.local` makes later manual wrapper invocations
+more explicit:
 
 ```bash
 echo "GENIE_SPACE_ID=$(cat genie/space_id.txt)" >> .env.local
@@ -148,22 +189,35 @@ echo "GENIE_SPACE_ID=$(cat genie/space_id.txt)" >> .env.local
 
 ```bash
 # 1. Find the app URL
-databricks apps get mip-app | jq -r .url
+databricks apps get mip-app --profile DEFAULT | jq -r .url
 # Example: https://mip-app-<id>.<region>.databricksapps.com
 
-export MIP_APP_URL=$(databricks apps get mip-app | jq -r .url)
+export MIP_APP_URL=$(databricks apps get mip-app --profile DEFAULT | jq -r .url)
+export MIP_BEARER_TOKEN=$(databricks auth token --profile DEFAULT -o json | jq -r .access_token)
 
-# 2. Health probe (cold-start: retry 3x, 10 s apart)
+# 2. Authenticated health probe (cold-start: retry 3x, 10 s apart)
 for i in 1 2 3; do
-  curl -sSf "$MIP_APP_URL/api/health" | jq '{status, warehouse, lakebase, genie}'
+  curl -sSf -H "Authorization: Bearer $MIP_BEARER_TOKEN" "$MIP_APP_URL/api/v1/health" \
+    | jq -e '{
+      status,
+      warehouse: .dependencies.warehouse,
+      lakebase: .dependencies.lakebase,
+      genie: .dependencies.genie,
+      warehouse_breaker: .circuit_breakers.warehouse,
+      lakebase_breaker: .circuit_breakers.lakebase,
+      genie_breaker: .circuit_breakers.genie
+    }'
   sleep 10
 done
 # Expected final state:
-#   {"status": "ok", "warehouse": "up", "lakebase": "up", "genie": "up"}
+#   {"status": "ok", "warehouse": "up", "lakebase": "up", "genie": "up",
+#    "warehouse_breaker": "closed", "lakebase_breaker": "closed", "genie_breaker": "closed"}
 
 # 3. End-to-end smoke
 ./scripts/smoke_live.sh
-# Expected last line: "smoke_live.sh: OK — 5/5 endpoints green."
+# Expected health line includes:
+# "[smoke] health ok · warehouse/lakebase/genie all up · breaker states present"
+# Expected last line: "[smoke] PASS · <target app url>"
 ```
 
 Open the app URL in a browser. The Portfolio page loads on first hit,
@@ -177,7 +231,7 @@ evidence chip to prove the drawer opens and cites `mip.gold.*` rows.
 ### 6.1 Warehouse warm-start (~30 s)
 
 The 2X-Small serverless warehouse auto-stops after 15 min idle. The
-first query after deploy is a cold start — 30–60 s. `/api/health` may
+first query after deploy is a cold start — 30–60 s. `/api/v1/health` may
 flap `warehouse: "down"` → `"up"` during this window; the circuit
 breaker opens and closes once. **Do not redeploy.** The retry loop in §5
 handles it.
@@ -185,15 +239,15 @@ handles it.
 ### 6.2 Lakebase cold start
 
 Lakebase Postgres also has a cold start (~10 s). First
-`POST /api/outreach/approve` after a cold window may return 503 once;
+`POST /api/v1/outreach/approve` after a cold window may return 503 once;
 the frontend retries automatically.
 
 ### 6.3 Genie first-ask
 
-First `/api/genie/ask` call after Genie space creation takes 10–30 s.
-The safe corpus in `backend/services/genie_answers.py` answers invisibly
-with `source: "fallback"` during that window. To prime the space before
-a demo, see [`docs/runbook.md`](runbook.md) §1.3.
+First `/api/v1/genie/message` call after Genie space creation takes 10–30 s.
+The app returns `source: "degraded"` with no fabricated metrics during that
+window. To prime the space before a demo, see [`docs/runbook.md`](runbook.md)
+§1.3.
 
 ### 6.4 Frontend shell caches stale JS
 
@@ -217,11 +271,11 @@ customer.
 ### 7.1 "PERMISSION_DENIED" on `mip.gold.*` or `mip.silver.*`
 
 You skipped §3 or one of the `GRANT` statements ran under a non-
-metastore-admin identity. Re-run [`docs/security/GRANTS.md`](security/GRANTS.md)
-§§1–5 as a metastore admin and re-run §5 verification here. No
-redeploy needed — grants take effect on the next SQL statement.
+metastore-admin identity. Re-run the internal workspace-grants packet as a
+metastore admin and re-run §5 verification here. No redeploy needed — grants
+take effect on the next SQL statement.
 
-### 7.2 `/api/health` reports `warehouse: "down"` for > 60 s
+### 7.2 `/api/v1/health` reports `warehouse: "down"` for > 60 s
 
 Check `DATABRICKS_WAREHOUSE_ID` in `.env.local` matches the actual
 warehouse id:
@@ -236,7 +290,7 @@ If the values differ, fix `.env.local`, re-run `./scripts/deploy.sh`
 warehouse id is the single most common cause of a persistent red
 health probe.
 
-### 7.3 `/api/audit/events` returns 503; POST `/api/outreach/approve` fails
+### 7.3 `/api/v1/audit/events` returns 503; POST `/api/v1/outreach/approve` fails
 
 Lakebase creds are missing or the Lakebase role has not been
 provisioned. Run:
@@ -245,20 +299,20 @@ provisioned. Run:
 databricks bundle run mip_lakebase_migrate -t dev
 ```
 
-Then re-probe `/api/health` — `lakebase` should flip to `"up"` within
+Then re-probe `/api/v1/health` — `lakebase` should flip to `"up"` within
 30 s. If it stays down, check that the Lakebase instance is RUNNING
 (`databricks database list-instances`) and bounce if STOPPED
 (customer-side billing can auto-stop instances).
 
-### 7.4 `/api/genie/ask` always returns `source: "fallback"`
+### 7.4 `/api/v1/genie/message` always returns `source: "degraded"`
 
 Three possible causes, in order of likelihood:
 
 1. **`GENIE_SPACE_ID` not set.** Re-run
    `echo "GENIE_SPACE_ID=$(cat genie/space_id.txt)" >> .env.local`,
    re-run phase 1 deploy, re-run phase 2.
-2. **Service principal missing `CAN RUN` on the space.** Fix per
-   [`docs/security/GRANTS.md`](security/GRANTS.md) §7.
+2. **Service principal missing `CAN RUN` on the space.** Fix per the internal
+   workspace-grants packet.
 3. **Semantics views unbound.** Re-run
    `databricks bundle run mip_refresh_scores -t dev` — the
    `refresh_semantics_views` task rebinds Genie's trusted assets.
@@ -270,11 +324,12 @@ completed but the browser cached the prior bundle.
 
 ```bash
 # Verify phase 2 actually ran
-databricks apps get mip-app | jq '{state, active_deployment_id, pending_deployment_id}'
-# Expect: state SUCCEEDED, active_deployment_id populated.
+databricks apps get mip-app --profile DEFAULT -o json \
+  | jq '{app_status: .app_status.state, compute_status: .compute_status.state, active_deployment: .active_deployment.deployment_id}'
+# Expect: app_status RUNNING, compute_status ACTIVE, active_deployment populated.
 
 # If the state is CREATED but never DEPLOYED, phase 2 never ran:
-databricks apps deploy mip-app
+databricks apps deploy mip-app --profile DEFAULT
 ```
 
 If phase 2 shows SUCCEEDED but the browser still serves stale JS, hard-

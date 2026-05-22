@@ -17,8 +17,9 @@ Hard rules encoded here:
   no unit, no parcel id.
 - ``lat/lon``: block-level (the share's coarsest granularity); passed
   through without modification. Finer geo is not in gold.
-- Lender names: generalized through ``_LENDER_REF_MAP``. Unknown
-  lenders are title-cased. The raw uppercase servicer strings never
+- Lender names: generalized through ``_LENDER_REF_MAP``. Public-demo
+  competitor lenders use a controlled alias vocabulary. Unknown
+  lenders collapse to ``Competitor Other``. The raw uppercase servicer strings never
   cross the boundary.
 
 Forbidden keys (enforced by ``tests/unit/test_pii_redaction.py`` and
@@ -28,16 +29,24 @@ Forbidden keys (enforced by ``tests/unit/test_pii_redaction.py`` and
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
 import logging
+import os
 import re
 from threading import Lock
 from typing import Any
+
+from backend.schemas._validators import is_public_lender_ref, normalize_public_lender_ref
+from backend.services.observability import emit
 
 log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Lender vocabulary. Keys are the uppercase share strings; values are the
-# polished customer-facing labels. Unknown lenders fall back to title-case.
+# public-demo-safe customer-facing labels. Competitor servicers are aliases,
+# not public brand names, unless Cotality and the lender approve raw lender
+# display for an internal walkthrough.
 #
 # Slice13-accuracy: the authoritative source of truth is the Unity Catalog
 # table `mip.ref.lender_dictionary` (see `sql/ddl/004_ref_tables.sql` +
@@ -57,17 +66,20 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _LENDER_REF_MAP: dict[str, str] = {
-    "UNITED WHOLESALE MTG": "United Wholesale Mortgage",
-    "WELLS FARGO BK NA": "Wells Fargo Bank",
-    "JPMORGAN CHASE BK NA": "JPMorgan Chase",
-    "ROCKET MTG LLC": "Rocket Mortgage",
-    "QUICKEN LNS": "Quicken Loans",
-    "BANK OF AMERICA NA": "Bank of America",
-    "GUARANTEED RATE INC": "Guaranteed Rate",
-    "LOANDEPOT.COM LLC": "loanDepot",
-    "CALIBER HM LOANS INC": "Caliber Home Loans",
-    "FAIRWAY INDEPENDENT MTG CORP": "Fairway Independent Mortgage",
+    "UNITED WHOLESALE MTG": "Competitor A",
+    "WELLS FARGO BK NA": "Competitor B",
+    "JPMORGAN CHASE BK NA": "Competitor C",
+    "ROCKET MTG LLC": "Competitor D",
+    "QUICKEN LNS": "Competitor E",
+    "BANK OF AMERICA NA": "Competitor F",
+    "GUARANTEED RATE INC": "Competitor G",
+    "LOANDEPOT.COM LLC": "Competitor H",
+    "CALIBER HM LOANS INC": "Competitor I",
+    "FAIRWAY INDEPENDENT MTG CORP": "Competitor J",
     "SUMMIT MTG": "Summit Mortgage",
+    "SUMMIT MORTGAGE": "Summit Mortgage",
+    "SUMMIT MTG CORP": "Summit Mortgage",
+    "SUMMIT MORTGAGE CORP": "Summit Mortgage",
 }
 
 
@@ -97,7 +109,7 @@ class LenderRefResolver:
        in-process ``_LENDER_REF_MAP`` constant and log a single WARNING
        so operators know the live vocabulary is stale.
     3. On an unknown raw string (not in UC result, not in fallback),
-       return title-cased raw (existing behavior).
+       return ``Competitor Other`` rather than title-casing the raw name.
 
     Thread safety: ``TTLCache`` guards concurrent get/set. The "am I
     loading right now" flag is advisory -- a concurrent second loader
@@ -145,20 +157,29 @@ class LenderRefResolver:
             )
         except (DependencyDownError, DatabricksSqlError, RuntimeError, OSError) as exc:
             if not self._warned_fallback:
-                log.warning(
-                    "LenderRefResolver: UC load failed (%s: %s); "
-                    "falling back to in-process _LENDER_REF_MAP.",
-                    type(exc).__name__,
-                    exc,
+                emit(
+                    log,
+                    "lender_ref_dictionary_load_failed",
+                    level=logging.WARNING,
+                    dependency="warehouse",
+                    outcome="degraded",
+                    exc_type=type(exc).__name__,
+                    exc_msg=str(exc)[:500],
+                    posture="fallback_dictionary",
                 )
                 self._warned_fallback = True
             return None
         except Exception as exc:  # noqa: BLE001 -- paranoid fallback path
             if not self._warned_fallback:
-                log.warning(
-                    "LenderRefResolver: unexpected UC error (%s); "
-                    "using fallback dictionary.",
-                    exc,
+                emit(
+                    log,
+                    "lender_ref_dictionary_unexpected_error",
+                    level=logging.WARNING,
+                    dependency="warehouse",
+                    outcome="degraded",
+                    exc_type=type(exc).__name__,
+                    exc_msg=str(exc)[:500],
+                    posture="fallback_dictionary",
                 )
                 self._warned_fallback = True
             return None
@@ -198,7 +219,7 @@ class LenderRefResolver:
         mapping = self._dictionary()
         if key in mapping:
             return mapping[key]
-        return raw.strip().title()
+        return "Competitor Other"
 
     def invalidate(self) -> None:
         """Drop the cached dictionary so the next call re-fetches from UC.
@@ -262,6 +283,9 @@ _FORBIDDEN_OUTPUT_KEYS: frozenset[str] = frozenset(
 
 
 _STREET_NUMBER_PATTERN = re.compile(r"\d")
+_TRUE_ENV_VALUES: frozenset[str] = frozenset({"1", "true", "yes", "y", "on"})
+_ID_MASK_NAMESPACE = "mip-cotality-id-mask-v1"
+_CONSENT_STATUS_VALUES: frozenset[str] = frozenset({"opt_in", "opt_out", "unknown"})
 
 
 # ---------------------------------------------------------------------------
@@ -282,6 +306,69 @@ def generalize_lender(raw: str | None) -> str | None:
     unavailable. A UC glitch never breaks redaction.
     """
     return get_lender_resolver().resolve(raw)
+
+
+def _public_lender_ref(raw: Any) -> str | None:
+    value = str(raw or "").strip()
+    if not value:
+        return None
+    if is_public_lender_ref(value):
+        return value
+    return generalize_lender(value)
+
+
+def _consent_status(raw: Any) -> str:
+    value = str(raw or "").strip().lower()
+    return value if value in _CONSENT_STATUS_VALUES else "unknown"
+
+
+def expose_raw_cotality_ids() -> bool:
+    """Return TRUE only for explicit internal debugging.
+
+    Public-demo/customer deployments must leave this unset so every API,
+    CSV, and audit surface receives stable non-reversible refs instead of
+    raw Cotality CLIP / Owner Link identifiers.
+    """
+    return os.environ.get("MIP_EXPOSE_RAW_COTALITY_IDS", "").strip().lower() in _TRUE_ENV_VALUES
+
+
+def mask_cotality_id(kind: str, raw: Any) -> str:
+    """Return a stable display-safe surrogate for a Cotality identifier.
+
+    ``kind`` is ``"clip"`` or ``"owner_link"``. Existing synthetic demo
+    IDs and already-masked refs pass through so fixtures remain readable.
+    The public default is masked; setting ``MIP_EXPOSE_RAW_COTALITY_IDS=1``
+    is the intentional internal escape hatch.
+    """
+    value = str(raw or "").strip()
+    if not value:
+        return ""
+
+    if kind == "clip":
+        if value.startswith(("clip_ref_", "clip_demo_")):
+            return value
+        prefix = "clip_ref"
+    elif kind == "owner_link":
+        if value.startswith(("owner_link_ref_", "ol_demo_")):
+            return value
+        prefix = "owner_link_ref"
+    else:
+        raise ValueError(f"unknown Cotality id kind: {kind!r}")
+
+    if expose_raw_cotality_ids():
+        return value
+
+    secret = (
+        os.environ.get("MIP_COTALITY_ID_MASK_SECRET")
+        or os.environ.get("MIP_GENIE_ACTION_SECRET")
+        or _ID_MASK_NAMESPACE
+    )
+    digest = hmac.new(
+        secret.encode("utf-8"),
+        f"{kind}:{value}".encode(),
+        hashlib.sha256,
+    ).hexdigest()[:12]
+    return f"{prefix}_{digest}"
 
 
 def synthesize_display_name(owner_name_hash: str | None) -> str:
@@ -357,8 +444,15 @@ def redact_borrower_row(row: dict[str, Any]) -> dict[str, Any]:
     state = row.get("state")
     zip5 = row.get("zip")
 
+    borrower_id = str(row["borrower_id"])
+    clip_id = mask_cotality_id("clip", row.get("clip")) or f"clip_demo_{borrower_id}"
+    owner_link_id = (
+        mask_cotality_id("owner_link", row.get("owner_link_id"))
+        or f"ol_demo_{borrower_id}"
+    )
+
     output: dict[str, Any] = {
-        "borrower_id": row["borrower_id"],
+        "borrower_id": borrower_id,
         "display_name": synthesize_display_name(row.get("owner_name_hash")),
         "city": city,
         "state": state,
@@ -368,22 +462,59 @@ def redact_borrower_row(row: dict[str, Any]) -> dict[str, Any]:
         "rate_spread_bps": int(row.get("rate_spread_bps") or 0),
         "opportunity_score": int(row.get("opportunity_score") or 0),
         "confidence": int(row.get("confidence") or 0),
+        "recommended_offer_code": row.get("recommended_offer_code") or "nurture",
         "recommended_offer": row.get("recommended_offer") or "Nurture",
         "why_now": row.get("why_now") or "",
         "evidence_ids": row.get("evidence_ids") or [],
         "approval_status": row.get("approval_status") or "pending",
+        "outreach_status": row.get("outreach_status") or "none",
+        "approved_at": row.get("approved_at"),
+        "outreach_at": row.get("outreach_at"),
         # Borrower360 additions:
-        "clip_id": row["clip"],  # <-- rename at boundary
+        "clip_id": clip_id,  # <-- rename + mask at boundary
         # Cotality owner_1_identifier arrives as BIGINT from silver; the
         # schema is STRING so we coerce at the boundary. Empty-string on
         # NULL keeps the Pydantic contract tight.
-        "owner_link_id": str(row.get("owner_link_id") or ""),
+        "owner_link_id": owner_link_id,
         "subject_property": synthesize_subject_property(city, state, zip5),
         "avm_value": int(row.get("avm_value") or 0),
         "current_lien_balance": int(row.get("current_lien_balance") or 0),
         "current_rate": float(row.get("current_rate") or 0.0),
         "ltv": int(row.get("ltv") or 0),
         "related_property_count": int(row.get("related_property_count") or 1),
+        "situs_cbsa_code": row.get("situs_cbsa_code") or None,
+        "first_pos_loan_type": row.get("first_pos_loan_type") or None,
+        "is_owner_occupied": bool(row.get("is_owner_occupied") or False),
+        "is_absentee": bool(row.get("is_absentee") or False),
+        "is_corporate_owner": bool(row.get("is_corporate_owner") or False),
+        "is_investor": bool(row.get("is_investor") or False),
+        "is_current_customer": bool(row.get("is_current_customer") or False),
+        "is_former_customer": bool(row.get("is_former_customer") or False),
+        "is_competitor_lien": bool(row.get("is_competitor_lien") or False),
+        "second_pos_amount": int(row.get("second_pos_amount") or 0),
+        "has_permit": bool(row.get("has_permit") or False),
+        "listed_for_sale": bool(row.get("listed_for_sale") or False),
+        "has_first_party_relationship": bool(
+            row.get("has_first_party_relationship") or False
+        ),
+        "first_party_relationship_depth": int(
+            row.get("first_party_relationship_depth") or 0
+        ),
+        "first_party_recent_interactions": int(
+            row.get("first_party_recent_interactions") or 0
+        ),
+        "first_party_recent_application": bool(
+            row.get("first_party_recent_application") or False
+        ),
+        "first_party_synthetic_demo": bool(row.get("first_party_synthetic_demo") or False),
+        # Fail closed when the gold column is missing/null: marketing
+        # workflows must prove eligibility rather than assume it.
+        "marketing_eligible": bool(row.get("marketing_eligible") is True),
+        "consent_status": _consent_status(row.get("consent_status")),
+        "suppression_reason": row.get("suppression_reason") or None,
+        "last_touch_at": row.get("last_touch_at"),
+        "eligible_recontact_at": row.get("eligible_recontact_at"),
+        "current_lender_ref": _public_lender_ref(row.get("current_lender_ref")),
     }
     _enforce_no_forbidden_keys(output)
     return output
@@ -418,21 +549,23 @@ def redact_lead_row(row: dict[str, Any]) -> dict[str, Any]:
         "city": city,
         "state": state,
         "zip": zip5,
-        # Real Cotality CLIP on the list row (2026-04-22). Previously
-        # the frontend derived a fake CLIP from the synthetic borrower_id;
-        # the segment-row preview and the borrower dossier now agree.
-        # Empty string keeps the Pydantic contract tight when `clip` is
-        # missing from an older gold row.
-        "clip": str(row.get("clip") or ""),
+        # Display-safe Cotality property ref on the list row. Raw CLIP is
+        # masked by default; set MIP_EXPOSE_RAW_COTALITY_IDS=1 only for
+        # internal debugging on trusted deployments.
+        "clip": mask_cotality_id("clip", row.get("clip")),
         "segment_codes": row.get("segment_codes") or [],
         "equity_estimate": int(row.get("equity_estimate") or 0),
         "rate_spread_bps": int(row.get("rate_spread_bps") or 0),
         "opportunity_score": int(row.get("opportunity_score") or 0),
         "confidence": int(row.get("confidence") or 0),
+        "recommended_offer_code": row.get("recommended_offer_code") or "nurture",
         "recommended_offer": row.get("recommended_offer") or "Nurture",
         "why_now": row.get("why_now") or "",
         "evidence_ids": row.get("evidence_ids") or [],
         "approval_status": row.get("approval_status") or "pending",
+        "outreach_status": row.get("outreach_status") or "none",
+        "approved_at": row.get("approved_at"),
+        "outreach_at": row.get("outreach_at"),
         # Secondary-filter fields (2026-04-23). Optional in the schema and
         # safely-defaulted here so older gold rows (pre-DDL-extension) and
         # the in-process test fixtures (which build LeadSummary from a
@@ -440,11 +573,21 @@ def redact_lead_row(row: dict[str, Any]) -> dict[str, Any]:
         # same None-tolerant coercion used elsewhere in redaction.
         "is_owner_occupied": bool(row.get("is_owner_occupied") or False),
         "is_investor": bool(row.get("is_investor") or False),
+        "is_current_customer": bool(row.get("is_current_customer") or False),
+        "is_former_customer": bool(row.get("is_former_customer") or False),
+        "is_competitor_lien": bool(row.get("is_competitor_lien") or False),
         "related_property_count": int(row.get("related_property_count") or 1),
         "current_lien_balance": int(row.get("current_lien_balance") or 0),
         "second_pos_amount": int(row.get("second_pos_amount") or 0),
         "has_permit": bool(row.get("has_permit") or False),
         "listed_for_sale": bool(row.get("listed_for_sale") or False),
+        # Fail closed when source columns are missing/null.
+        "marketing_eligible": bool(row.get("marketing_eligible") is True),
+        "consent_status": _consent_status(row.get("consent_status")),
+        "suppression_reason": row.get("suppression_reason") or None,
+        "last_touch_at": row.get("last_touch_at"),
+        "eligible_recontact_at": row.get("eligible_recontact_at"),
+        "current_lender_ref": _public_lender_ref(row.get("current_lender_ref")),
     }
     _enforce_no_forbidden_keys(output)
     return output
@@ -535,6 +678,9 @@ __all__ = [
     "LenderRefResolver",
     "generalize_lender",
     "get_lender_resolver",
+    "expose_raw_cotality_ids",
+    "mask_cotality_id",
+    "normalize_public_lender_ref",
     "redact_borrower_row",
     "redact_evidence_row",
     "redact_lead_row",

@@ -22,12 +22,18 @@ frontend/dist/
 coverage/
 playwright-report/
 test-results/
+/dist/
 
 # Databricks
 .databricks/
 .bundle/
 # Resolved Genie space id written by tools/databricks/provision_genie_space.py
 genie/space_id.txt
+# Multi-catalog rendered SQL (build artifact produced by tools/render_sql.py
+# from sql/**/*.sql for the target UC catalog). Canonical sources live in
+# sql/** and stay committed; only the rendered copies under sql/_rendered
+# are gitignored. See docs/multi-catalog-plan.md + docs/runbook-multi-catalog.md.
+sql/_rendered/
 
 # Claude local
 .claude/settings.local.json
@@ -42,6 +48,7 @@ genie/space_id.txt
 # Kept untracked so the root tree stays clean between slices.
 .playwright-mcp/
 /*.png
+tsconfig.tsbuildinfo
 frontend/tsconfig.tsbuildinfo
 
 # Credential-kill-drill evidence logs -- one file per drill run, may embed

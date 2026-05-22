@@ -44,6 +44,7 @@ import json
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 
@@ -63,7 +64,7 @@ class RouteProbe:
     critical_endpoints: tuple[str, ...]
 
 
-ROUTES: tuple[RouteProbe, ...] = (
+BASE_ROUTES: tuple[RouteProbe, ...] = (
     RouteProbe("home", "/", ("/api/portfolio/preview", "/api/leads?limit=5")),
     RouteProbe("portfolio-builder", "/portfolio-builder", ("/api/portfolio/preview",)),
     RouteProbe(
@@ -72,15 +73,35 @@ ROUTES: tuple[RouteProbe, ...] = (
         ("/api/segments",),
     ),
     RouteProbe("lead-queue", "/lead-queue", ("/api/leads?limit=5",)),
-    RouteProbe("borrower-360", "/borrower-360/B-48291", ("/api/borrowers/B-48291",)),
-    RouteProbe(
-        "offer-orchestrator",
-        "/offer-orchestrator/B-48291",
-        ("/api/borrowers/B-48291",),
-    ),
+    RouteProbe("borrower-360", "/borrower-360", ()),
+    RouteProbe("offer-orchestrator", "/offer-orchestrator", ()),
     RouteProbe("ask-genie", "/ask-genie", ()),  # Genie is POST-only; skip fetch
     RouteProbe("admin-config", "/admin-config", ("/api/health",)),
 )
+
+
+def build_routes(borrower_id: str | None) -> tuple[RouteProbe, ...]:
+    """Return route probes without relying on a fixture borrower id.
+
+    The no-id Borrower 360 and Offer pages are valid empty-state routes. When
+    an operator wants per-borrower drill verification, they can pass a live
+    borrower id from the current tenant with ``--borrower-id``.
+    """
+    if not borrower_id:
+        return BASE_ROUTES
+    encoded = urllib.parse.quote(borrower_id, safe="")
+    return BASE_ROUTES + (
+        RouteProbe(
+            "borrower-360-detail",
+            f"/borrower-360/{encoded}",
+            (f"/api/borrowers/{encoded}",),
+        ),
+        RouteProbe(
+            "offer-orchestrator-detail",
+            f"/offer-orchestrator/{encoded}",
+            (f"/api/borrowers/{encoded}",),
+        ),
+    )
 
 
 class VerifierError(RuntimeError):
@@ -160,7 +181,7 @@ def check_endpoint_degraded(api_url: str, endpoint: str) -> tuple[bool, str]:
       * HTTP 500/502/504 (visible non-200 failure)
       * HTTP 200 with ``degraded: true`` or ``status: degraded``
       * HTTP 200 with an empty collection (no borrowers is not fake)
-      * HTTP 200 with ``source: fallback | corpus`` (Genie safe corpus)
+      * HTTP 200 with ``source: degraded`` (honest Genie reconnecting state)
 
     Unacceptable (regression signal):
       * HTTP 200 with non-empty, real-looking rows.
@@ -178,7 +199,7 @@ def check_endpoint_degraded(api_url: str, endpoint: str) -> tuple[bool, str]:
     if isinstance(payload, dict):
         if payload.get("degraded") is True or payload.get("status") == "degraded":
             return True, f"{endpoint} -> 200 with degraded=true"
-        if payload.get("source") in ("fallback", "corpus"):
+        if payload.get("source") == "degraded":
             return True, f"{endpoint} -> 200 with source={payload['source']}"
         items = payload.get("items")
         if isinstance(items, list) and len(items) == 0:
@@ -215,6 +236,14 @@ def main() -> int:
         action="store_true",
         help="Don't fail if /api/health reports fully healthy (dry-run).",
     )
+    parser.add_argument(
+        "--borrower-id",
+        default=None,
+        help=(
+            "Optional live borrower id to verify per-borrower detail routes. "
+            "When omitted, the verifier exercises the no-id empty-state routes."
+        ),
+    )
     args = parser.parse_args()
 
     print(f"[verify] api_url={args.api_url} frontend_url={args.frontend_url}")
@@ -237,7 +266,7 @@ def main() -> int:
 
     failures: list[str] = []
 
-    for route in ROUTES:
+    for route in build_routes(args.borrower_id):
         print(f"[verify] route={route.name} path={route.path}")
         if not args.skip_frontend and not check_frontend_shell(
             args.frontend_url, route.path

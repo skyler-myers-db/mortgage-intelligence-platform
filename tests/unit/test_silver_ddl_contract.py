@@ -5,12 +5,9 @@ file under `sql/transformations/silver_*.sql`) and asserts:
 
 1. DDL file is non-empty.
 2. `CREATE TABLE IF NOT EXISTS` is present (idempotent posture).
-3. The 6-state multi-state filter intent
-   (``IN ('IL','CA','FL','TX','WA','CO')``) is documented either:
-   - in the DDL header comments for the file, OR
-   - in the paired transformation file (which carries the actual WHERE
-     clause). We check the transformation side because that is where
-     the filter is enforced; the DDL itself can only document intent.
+3. No transformation hard-codes the current demo/evaluation state list.
+   Silver keeps every source row with a non-null state so the product can
+   adapt when the Cotality footprint changes.
 4. No raw PII column names appear anywhere in the silver DDL. Governance
    review (docs/governance-real-data-review.md §1) forbids landing these
    in silver when gold will not mask them. Forbidden set below.
@@ -32,6 +29,7 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DDL_DIR = REPO_ROOT / "sql" / "ddl"
 TRANSFORM_DIR = REPO_ROOT / "sql" / "transformations"
+PIPELINE_PATH = REPO_ROOT / "pipelines" / "lakeflow" / "mip_feature_pipeline.py"
 
 # The five silver tables landed by Slice 2. `silver_market_rates_weekly`
 # belongs to Slice 1 (FRED ingest) and is covered by its own tests; we
@@ -79,9 +77,7 @@ FORBIDDEN_PII_COLUMNS: tuple[str, ...] = (
     "mailing_street_raw",
 )
 
-# The 6-state footprint string. Accepts either single or double quotes and
-# tolerates whitespace variations; the canonical form is
-# ``IN ('IL','CA','FL','TX','WA','CO')``.
+# Hard-coded evaluation state filters are forbidden in the product pipeline.
 SIX_STATE_RE = re.compile(
     r"IN\s*\(\s*['\"]IL['\"]\s*,\s*"
     r"['\"]CA['\"]\s*,\s*"
@@ -189,20 +185,27 @@ def test_ddl_file_uses_create_table_if_not_exists(name: str) -> None:
 
 
 @pytest.mark.parametrize("name", SILVER_DDL_FILES)
-def test_six_state_filter_documented_or_enforced(name: str) -> None:
-    """Multi-state filter appears either in the DDL header or in the paired
-    transformation file (where the actual WHERE clause lives)."""
+def test_silver_transformations_do_not_hardcode_demo_state_filter(name: str) -> None:
+    """Silver must discover source coverage from data, not from a demo tuple."""
     ddl_text = _ddl_path(name).read_text(encoding="utf-8")
     transform_path = _transformation_path(name)
     transform_text = transform_path.read_text(encoding="utf-8") if transform_path.exists() else ""
 
     combined = ddl_text + "\n" + transform_text
-    assert SIX_STATE_RE.search(combined), (
-        f"{name}: the 6-state filter (IN ('IL','CA','FL','TX','WA','CO')) is "
-        f"not documented in the DDL header AND not enforced in the paired "
-        f"transformation file {transform_path}. Every silver table must "
-        f"carry this filter explicitly."
+    assert SIX_STATE_RE.search(combined) is None, (
+        f"{name}: found the old hard-coded evaluation state filter. Silver must "
+        f"retain all non-null source states so future Cotality coverage changes "
+        f"do not require a code change."
     )
+
+    if name in {
+        "silver_property_master.sql",
+        "silver_lien_current.sql",
+        "silver_owner_property_bridge.sql",
+    }:
+        assert "situs_state IS NOT NULL" in transform_text
+    else:
+        assert "deed_situs_state_static IS NOT NULL" in transform_text
 
 
 def _declared_column_names(body: str) -> list[str]:
@@ -273,3 +276,46 @@ def test_all_five_transformation_files_exist() -> None:
         f"missing Slice-2 silver transformation file(s): {missing}. The DDL "
         f"declares the schema; the transformation populates it."
     )
+
+
+def test_lakeflow_pipeline_normalizes_zip5_for_live_silver_path() -> None:
+    """Live silver refresh uses Lakeflow, so the DLT path must enforce ZIP5.
+
+    The warehouse MERGE SQL already truncates ZIP+4. This guard prevents the
+    pipeline implementation from drifting and reintroducing 9-digit ZIPs.
+    """
+    text = PIPELINE_PATH.read_text(encoding="utf-8")
+    assert "def _zip5" in text
+    assert "LEADING_ZERO_ZIP_STATES" in text
+    assert "F.lpad(digits, 5, \"0\")" in text
+    assert text.count('_zip5("situs_zip_code").alias("situs_zip_code")') >= 2
+    assert text.count('length(situs_zip_code) = 5') >= 2
+
+
+def test_lakeflow_pipeline_coerces_owner_corporate_indicator_as_yn_string() -> None:
+    """DLT path must match the warehouse property_master corporate flag rule."""
+    text = PIPELINE_PATH.read_text(encoding="utf-8")
+    assert "def _y_flag" in text
+    assert 'F.col(col_name).cast("string")' in text
+    assert 'F.lit("Y")' in text
+    assert '_y_flag("owner_1_corporate_indicator").alias("owner_is_corporate")' in text
+    assert 'F.coalesce(F.col("owner_1_corporate_indicator"), F.lit(0))' not in text
+
+
+def test_property_master_ddl_documents_owner_corporate_indicator_as_yn_string() -> None:
+    """Schema comments must not contradict the Y/N coercion contract."""
+    text = _ddl_path("silver_property_master.sql").read_text(encoding="utf-8")
+    assert "Corporate-owner flag from Y/N indicator" in text
+    assert "owner_1_corporate_indicator (STRING Y/N)" in text
+    assert "owner_1_corporate_indicator (BIGINT 1/0)" not in text
+    assert "Corporate-owner flag from 1/0 indicator" not in text
+
+
+def test_warehouse_silver_zip_normalization_rejects_short_non_zip5_fragments() -> None:
+    """Warehouse MERGE path must not leak 4-digit fragments into gold."""
+    for name in ("silver_property_master.sql", "silver_lien_current.sql"):
+        text = _transformation_path(name).read_text(encoding="utf-8")
+        assert "LENGTH(REGEXP_REPLACE(CAST(situs_zip_code AS STRING), '[^0-9]', '')) >= 5" in text
+        assert "LPAD(REGEXP_REPLACE(CAST(situs_zip_code AS STRING), '[^0-9]', ''), 5, '0')" in text
+        assert "UPPER(TRIM(situs_state)) IN ('CT','MA','ME','NH','NJ','RI','VT','PR','VI')" in text
+        assert "ELSE NULL" in text

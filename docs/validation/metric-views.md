@@ -1,3 +1,5 @@
+> **Internal implementation artifact. Not approved for public release.**
+
 # Metric-view contract — approval_rate, outreach_rate, delta_vs_prior
 
 Slice13-accuracy follow-up to `docs/validation/dashboards.md` §"Metric-view
@@ -23,7 +25,9 @@ into a small, borrower-keyed gold table and JOIN that.
   §7). One row per `borrower_id`. Columns: `approval_status`
   (`pending` / `approved` / `rejected` / `hold`), `outreach_status`
   (`none` / `queued` / `actioned`), `offer_code`, `approved_at`,
-  `outreach_at`, `synced_at`. Cluster BY `borrower_id`.
+  `outreach_at`, `synced_at`, `refreshed_at`. `refreshed_at` is the
+  Lakebase mirror refresh boundary for this lifecycle snapshot; it is not the
+  scoring gold refresh boundary. Cluster BY `borrower_id`.
 
 - **`mip.gold.funnel_snapshot_daily`** (DDL §8). One row per
   `(snapshot_date, state, segment_code)` incl. the `_ALL` rollups.
@@ -87,16 +91,21 @@ that want typed deltas.
 
 ### `mip.semantics.lead_generation_metric_view`
 
-Still explodes segments. Now LEFT JOINs `gold.borrower_lifecycle_state`
-keyed by `borrower_id`, with `COALESCE` falling back to `'pending'` /
-`'none'` so unreviewed borrowers still appear. Publishes:
+Preserves `gold.lead_population` borrower grain. Segment membership remains
+an array in `segment_codes`; segment filters must use
+`array_contains(segment_codes, '<segment_code>')`, and aggregate borrower
+counts must use `COUNT(DISTINCT clip)`. The view LEFT JOINs
+`gold.borrower_lifecycle_state` keyed by `borrower_id`, with `COALESCE`
+falling back to `'pending'` / `'none'` so unreviewed borrowers still appear.
+Publishes:
 
-- `approval_status` / `outreach_status` — per-row dimensions.
-- `approval_rate` / `outreach_rate` — partition-level aggregates
-  (window functions over `(state, segment)`), so widgets can display a
-  per-cell rate without re-aggregating.
+- `segment_codes` / `primary_segment` — per-row dimensions. `primary_segment`
+  is display-only; it is not a complete membership filter.
+- `approval_status` / `outreach_status` — per-row lifecycle dimensions.
+- `approval_rate` / `outreach_rate` — state-level window aggregates that keep
+  one row per borrower.
 - `delta_vs_prior_count` — WoW addressable delta sourced from the
-  funnel snapshot.
+  `_ALL` funnel snapshot by state.
 
 ## Widgets unblocked
 
@@ -106,32 +115,24 @@ keyed by `borrower_id`, with `COALESCE` falling back to `'pending'` /
   runs, the authoritative Lakebase state flows into `funnel_snapshot_daily`
   and segment-level KPIs on the Segment dashboard can source from the
   metric view.
-- **Segment dashboard** `table_segment_overview` — the existing
-  placeholder text referencing Lakebase authority can be replaced in a
-  follow-up slice by surfacing `approval_rate` + `outreach_rate` from
-  `segment_performance_metric_view`. This slice publishes the columns;
-  the widget JSON edit is intentionally NOT part of this change so the
-  dashboards agent's next wave owns the widget wiring.
+- **Segment dashboard** `table_segment_overview` — now surfaces
+  `approval_rate` + `outreach_rate` from
+  `segment_performance_metric_view` alongside segment size and economics.
 
 ## What's still a follow-up
 
-1. **Wiring the new columns into dashboard widgets.** The dashboards
-   JSON files in `dashboards/` still don't reference `approval_rate`
-   / `outreach_rate` / `delta_vs_prior_*` — that's the dashboards
-   agent's next move. This slice published the columns; the JSON edit
-   is a separate concern.
-2. **YoY / QoQ on executive KPIs.** The snapshot table now supports
+1. **YoY / QoQ on executive KPIs.** The snapshot table now supports
    it, but the executive dashboard's `ds_funnel_totals` dataset still
    queries `borrower_360` directly. Swapping it to read from
    `funnel_snapshot_daily` with a `snapshot_date = CURRENT_DATE()`
    predicate and a second join for `CURRENT_DATE() - INTERVAL 90 DAYS`
    (QoQ) or `- INTERVAL 365 DAYS` (YoY) is a 10-line dashboard edit.
-3. **Federated-catalog swap.** When UC foreign-catalog federation
+2. **Federated-catalog swap.** When UC foreign-catalog federation
    over Lakebase Postgres lands, `sql/transformations/gold_borrower_lifecycle_state.sql`
    can become a CTAS against the foreign catalog and the Python
    `sync_lifecycle_state.py` job can retire. Column contract on the
    gold table does not change.
-4. **mean_rate_spread_bps / mean_equity_pct as measures on
+3. **mean_rate_spread_bps / mean_equity_pct as measures on
    `segment_performance_metric_view`.** Still computed by the
    `ds_segment_overview` dataset via a runtime aggregation against
    `borrower_opportunity_metric_view`. Promoting them into

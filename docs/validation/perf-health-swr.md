@@ -1,3 +1,5 @@
+> **Internal implementation artifact. Not approved for public release.**
+
 # Validation: `/api/health` stale-while-revalidate cache
 
 Slice-13 follow-up. Closes the remaining p95 gap after the plain-TTL

@@ -109,6 +109,12 @@
       "inputs": {"rate_spread_bps": 120, "equity_pct": 45, "has_permit": false, "listed_for_sale": false, "is_investor": false, "is_current_customer": false, "is_competitor_lien": false, "min_spread_bps": 150, "min_equity_pct": 15, "heloc_equity_min_pct": 35, "cashout_equity_min": 25, "retention_min_spread": 50},
       "expected_offer": "cash_out",
       "note": "Same inputs as case_02 but min_spread_bps raised from 75 to 150. Branch 2 fails (120<150), branch 3 fails (no permit), branch 4 fails (120<150), branch 5 fires (45>=25) -> 'cash_out'. Proves thresholds come from the caller, not baked constants — a stricter admin config demotes a refi_plus_heloc lead to cash_out."
+    },
+    {
+      "id": "case_16_null_thresholds_fail_closed_to_nurture",
+      "inputs": {"rate_spread_bps": null, "equity_pct": null, "has_permit": null, "listed_for_sale": null, "is_investor": null, "is_current_customer": null, "is_competitor_lien": null, "min_spread_bps": null, "min_equity_pct": null, "heloc_equity_min_pct": null, "cashout_equity_min": null, "retention_min_spread": null},
+      "expected_offer": "nurture",
+      "note": "Threshold NULLs fail closed before the decision tree. Missing rules must not coerce to 0 and make 0>=0 qualify a borrower for refi_plus_heloc; the safe lane is nurture."
     }
   ]
 }
