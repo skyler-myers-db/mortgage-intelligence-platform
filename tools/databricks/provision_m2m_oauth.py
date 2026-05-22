@@ -40,7 +40,7 @@ Safety invariants
 SDK surface used (pinned to databricks-sdk shipped in requirements.txt)
 ----------------------------------------------------------------------
 * ``w.service_principals.list(filter=...)`` — idempotent lookup.
-* ``w.service_principals.create(ServicePrincipal(...))`` — create SP.
+* ``w.service_principals.create(display_name=..., active=True)`` — create SP.
 * ``w.service_principal_secrets_proxy.create(service_principal_id=...)``
   — mint the OAuth client_secret. Returns a
   ``CreateServicePrincipalSecretResponse`` whose ``.secret`` field is
@@ -182,12 +182,11 @@ def _find_existing_sp(client: Any, display_name: str) -> Any | None:
 
 def _create_sp(client: Any, display_name: str) -> Any:
     """Create a new SP with the requested display name."""
-    from databricks.sdk.service.iam import ServicePrincipal  # type: ignore
-
     _diag(f"creating service principal display_name={display_name!r}")
     try:
         return client.service_principals.create(
-            ServicePrincipal(display_name=display_name, active=True),
+            display_name=display_name,
+            active=True,
         )
     except Exception as exc:  # noqa: BLE001
         raise _wrap_admin_error(exc, step="create service_principal") from exc

@@ -178,7 +178,10 @@ def test_happy_path_creates_sp_grants_and_mints() -> None:
     assert "mip-nightly-ci-sp" in list_kwargs["filter"]
 
     # 2) create called once (SP didn't exist)
-    client.service_principals.create.assert_called_once()
+    client.service_principals.create.assert_called_once_with(
+        display_name="mip-nightly-ci-sp",
+        active=True,
+    )
 
     # 3) set_permissions called with CAN_USE + service_principal_name=app-id
     client.apps.set_permissions.assert_called_once()
