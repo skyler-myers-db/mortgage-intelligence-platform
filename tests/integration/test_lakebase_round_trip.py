@@ -49,7 +49,7 @@ def _client_from_env() -> LakebaseClient:
     return LakebaseClient(
         host=os.environ["LAKEBASE_HOST"],
         port=int(os.environ.get("LAKEBASE_PORT", "5432")),
-        database=os.environ.get("LAKEBASE_DATABASE", "mip_app_state"),
+        database=os.environ.get("LAKEBASE_DATABASE") or "mip_app_state",
         user=os.environ["LAKEBASE_USER"],
         password=os.environ["LAKEBASE_PASSWORD"],
         sslmode=os.environ.get("LAKEBASE_SSLMODE", "require"),

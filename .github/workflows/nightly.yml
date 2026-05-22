@@ -57,7 +57,7 @@ jobs:
       LAKEBASE_HOST: ${{ secrets.LAKEBASE_HOST }}
       LAKEBASE_USER: ${{ secrets.LAKEBASE_USER }}
       LAKEBASE_PASSWORD: ${{ secrets.LAKEBASE_PASSWORD }}
-      LAKEBASE_DATABASE: ${{ secrets.LAKEBASE_DATABASE }}
+      LAKEBASE_DATABASE: ${{ secrets.LAKEBASE_DATABASE || 'mip_app_state' }}
       LAKEBASE_INTEGRATION: '1'   # opt-in flag Slice 5 requires
     steps:
       - uses: actions/checkout@v4
@@ -336,7 +336,7 @@ jobs:
       LAKEBASE_HOST: ${{ secrets.LAKEBASE_HOST }}
       LAKEBASE_USER: ${{ secrets.LAKEBASE_USER }}
       LAKEBASE_PASSWORD: ${{ secrets.LAKEBASE_PASSWORD }}
-      LAKEBASE_DATABASE: ${{ secrets.LAKEBASE_DATABASE }}
+      LAKEBASE_DATABASE: ${{ secrets.LAKEBASE_DATABASE || 'mip_app_state' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
