@@ -43,12 +43,30 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
 
 _REQUIRED_ENV = (
     "DATABRICKS_HOST",
     "DATABRICKS_CLIENT_ID",
     "DATABRICKS_CLIENT_SECRET",
 )
+
+
+def _remove_tools_shadow_path() -> None:
+    """Avoid `tools/databricks/` shadowing the real Databricks SDK.
+
+    GitHub Actions executes this helper as `python tools/oauth_m2m_mint.py`,
+    which puts `<repo>/tools` at `sys.path[0]`. That directory contains this
+    repo's provisioning helpers under `tools/databricks/`; if left in front of
+    site-packages, `from databricks.sdk...` resolves against the helper package
+    instead of the installed `databricks-sdk` wheel.
+    """
+    tools_dir = str(Path(__file__).resolve().parent)
+    while tools_dir in sys.path:
+        sys.path.remove(tools_dir)
+
+
+_remove_tools_shadow_path()
 
 
 def _diag(msg: str) -> None:
