@@ -422,63 +422,65 @@ export default function SegmentIntelligence() {
       </div>
 
       <div
-        className="filter-row filter-row--spaced"
+        className="filter-row filter-row--spaced filter-row--stacked"
         aria-label="Secondary borrower filters"
       >
-        <FilterSelect
-          label="LOCATION"
-          value={chipFilters.location}
-          options={Object.keys(locationToStates)}
-          onChange={(v) => setChipFilters((f) => ({ ...f, location: v }))}
-        />
-        <FilterSelect
-          label="OCCUPANCY"
-          value={chipFilters.demographics}
-          options={[...OCCUPANCY_OPTIONS]}
-          onChange={(v) => setChipFilters((f) => ({ ...f, demographics: v }))}
-        />
-        <FilterSelect
-          label="LIEN"
-          value={chipFilters.lien}
-          options={[...LIEN_OPTIONS]}
-          onChange={(v) => setChipFilters((f) => ({ ...f, lien: v }))}
-        />
-        <FilterSelect
-          label="OWNER LINK"
-          value={chipFilters.ownerLink}
-          options={[...OWNER_LINK_OPTIONS]}
-          onChange={(v) => setChipFilters((f) => ({ ...f, ownerLink: v }))}
-        />
-        <FilterSelect
-          label="PURCHASE INTENT"
-          value={chipFilters.purchase}
-          options={[...PURCHASE_OPTIONS]}
-          onChange={(v) => setChipFilters((f) => ({ ...f, purchase: v }))}
-        />
-        <FilterSelect
-          label="CASH-OUT"
-          value={chipFilters.cashout}
-          options={Object.keys(EQUITY_FLOOR_USD)}
-          onChange={(v) => setChipFilters((f) => ({ ...f, cashout: v }))}
-        />
-        <FilterSelect
-          label="CONTACTABILITY"
-          value={chipFilters.contactability}
-          options={[...CONTACTABILITY_OPTIONS]}
-          onChange={(v) => setChipFilters((f) => ({ ...f, contactability: v }))}
-        />
-        <FilterSelect
-          label="CONSENT"
-          value={chipFilters.consent}
-          options={[...CONSENT_OPTIONS]}
-          onChange={(v) => setChipFilters((f) => ({ ...f, consent: v }))}
-        />
-        <FilterSelect
-          label="RECENCY"
-          value={chipFilters.recency}
-          options={[...RECENCY_OPTIONS]}
-          onChange={(v) => setChipFilters((f) => ({ ...f, recency: v }))}
-        />
+        <div className="filter-row__controls">
+          <FilterSelect
+            label="LOCATION"
+            value={chipFilters.location}
+            options={Object.keys(locationToStates)}
+            onChange={(v) => setChipFilters((f) => ({ ...f, location: v }))}
+          />
+          <FilterSelect
+            label="OCCUPANCY"
+            value={chipFilters.demographics}
+            options={[...OCCUPANCY_OPTIONS]}
+            onChange={(v) => setChipFilters((f) => ({ ...f, demographics: v }))}
+          />
+          <FilterSelect
+            label="LIEN"
+            value={chipFilters.lien}
+            options={[...LIEN_OPTIONS]}
+            onChange={(v) => setChipFilters((f) => ({ ...f, lien: v }))}
+          />
+          <FilterSelect
+            label="OWNER LINK"
+            value={chipFilters.ownerLink}
+            options={[...OWNER_LINK_OPTIONS]}
+            onChange={(v) => setChipFilters((f) => ({ ...f, ownerLink: v }))}
+          />
+          <FilterSelect
+            label="PURCHASE INTENT"
+            value={chipFilters.purchase}
+            options={[...PURCHASE_OPTIONS]}
+            onChange={(v) => setChipFilters((f) => ({ ...f, purchase: v }))}
+          />
+          <FilterSelect
+            label="CASH-OUT"
+            value={chipFilters.cashout}
+            options={Object.keys(EQUITY_FLOOR_USD)}
+            onChange={(v) => setChipFilters((f) => ({ ...f, cashout: v }))}
+          />
+          <FilterSelect
+            label="CONTACTABILITY"
+            value={chipFilters.contactability}
+            options={[...CONTACTABILITY_OPTIONS]}
+            onChange={(v) => setChipFilters((f) => ({ ...f, contactability: v }))}
+          />
+          <FilterSelect
+            label="CONSENT"
+            value={chipFilters.consent}
+            options={[...CONSENT_OPTIONS]}
+            onChange={(v) => setChipFilters((f) => ({ ...f, consent: v }))}
+          />
+          <FilterSelect
+            label="RECENCY"
+            value={chipFilters.recency}
+            options={[...RECENCY_OPTIONS]}
+            onChange={(v) => setChipFilters((f) => ({ ...f, recency: v }))}
+          />
+        </div>
         <div
           className="filter-row__hint filter-row__hint--full muted"
         >

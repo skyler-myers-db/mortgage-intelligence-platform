@@ -1827,8 +1827,19 @@ kbd {
   display: flex; flex-wrap: wrap; gap: var(--sp-2) var(--sp-3);
   align-items: flex-start;
 }
+.filter-row--stacked {
+  flex-direction: column;
+  align-items: stretch;
+}
 .filter-row--spaced { margin-top: var(--gap-grid); }
 .filter-row__spacer { flex: 1; }
+.filter-row__controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2) var(--sp-3);
+  align-items: flex-start;
+  inline-size: 100%;
+}
 .filter-row__group {
   display: inline-flex;
   flex-direction: column;

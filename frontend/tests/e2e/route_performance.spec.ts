@@ -180,6 +180,9 @@ test.describe('route performance and layout canaries', () => {
   test('QueryClient keeps hot Home reads cached during Home -> Segments -> Home', async ({ page }) => {
     await page.goto('/');
     await expect(page.getByText(/Who should we contact, why now, and with what offer/i).first()).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('.data-estate:not([aria-busy]) .data-estate__lane-proof').first()).toBeVisible({
+      timeout: 10_000,
+    });
 
     const hotReads: string[] = [];
     page.on('request', (request) => {
