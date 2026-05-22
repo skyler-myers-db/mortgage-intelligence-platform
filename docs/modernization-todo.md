@@ -151,10 +151,10 @@ This tracker captures the remaining work to keep Module 0 aligned with modern we
   - [x] Wire the deployed nightly job to run the procurement accessibility spec as the Chromium accessibility gate while browser/device coverage stays route-focused.
   - Validation: local Chromium live harness exposed and fixed focus-order, target-size, reduced-motion, and false-skip issues; deployed active app passed the authenticated procurement accessibility gate with live Lead Queue rows, including virtualized row metadata and keyboard expansion.
 
-- [x] **Dependency update automation**
-  - Add Dependabot with grouped PRs for frontend, root npm tooling, Python, and GitHub Actions.
-  - CI already enforces lockfile refresh, audit, lint, tests, build, bundle budget, and Playwright spec collection.
-  - Validation: `.github/dependabot.yml` parses as YAML and CI workflow gates cover generated PRs.
+- [x] **Dependency update automation disabled for branch hygiene**
+  - Dependabot version-update config was removed to preserve the repo contract that `main` stays the only persistent branch unless a human creates a bounded feature branch.
+  - Dependency updates remain manual, intentional feature-branch work covered by CI audit, lint, tests, build, bundle budget, source hygiene, and Playwright gates.
+  - Validation: no `.github/dependabot.yml` is present; `git ls-remote --heads origin` shows no Dependabot branches; `gh pr list --state open` shows no Dependabot PRs.
 
 - [x] **Interaction-affordance polish**
   - [x] Make Home data-estate lane chips and asset rows expandable/clickable with contract status, row count, freshness, governed object, proof status, and lineage drawer access using existing `/api/data-estate` data only.

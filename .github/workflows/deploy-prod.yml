@@ -6,6 +6,6 @@ jobs:
   prod-gate:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - run: python tools/verify_scaffold.py
       - run: echo "Production deployment requires manual approval and Databricks workspace variables."

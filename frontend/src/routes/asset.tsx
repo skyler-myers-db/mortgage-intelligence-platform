@@ -21,6 +21,18 @@ function freshnessCopy(freshness: AssetFreshness): string {
   return 'Freshness unavailable';
 }
 
+function formatDateTimeShort(value?: string | null): string {
+  if (!value) return 'Unavailable';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
+
 function statusVariant(status: AssetMetadataResponse['status']): 'success' | 'warning' | 'neutral' {
   if (status === 'live') return 'success';
   if (status === 'error' || status === 'permission_denied') return 'warning';
@@ -114,7 +126,7 @@ export default function AssetRoute() {
                 <MetricCard label="Size" value={asset.size_label ?? 'Unavailable'} detail="storage bytes" />
                 <MetricCard label="Freshness" value={freshnessCopy(asset.freshness)} detail={asset.last_updated ?? asset.delta_last_modified ?? 'No timestamp'} />
                 <MetricCard label="Catalog" value={asset.catalog} detail={`${asset.schema_name}.${asset.object_name}`} />
-                <MetricCard label="Generated" value={asset.generated_at} detail="metadata read time" />
+                <MetricCard label="Generated" value={formatDateTimeShort(asset.generated_at)} detail="metadata read time" />
               </div>
               <div className="asset-actions">
                 {asset.catalog_explorer_url && (
