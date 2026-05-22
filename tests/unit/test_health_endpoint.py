@@ -38,6 +38,7 @@ ADMIN_HEADERS = {
 def _reset_breakers() -> None:
     resilience._reset_breakers_for_tests()
     _reset_forced_degraded_for_tests()
+    client.cookies.clear()
     # Slice-13 perf cache: /api/health caches each probe result with a
     # stale-while-revalidate policy (2 s soft TTL, 10 s hard TTL). That
     # cache leaks across tests and would make the second-test-onward
@@ -136,6 +137,21 @@ def test_admin_force_degraded_overlays_authenticated_health(
     assert payload["status"] == "degraded"
     assert payload["dependencies"]["warehouse"] == "down"
     assert payload["dependencies"]["lakebase"] == "up"
+    forced_meta = payload["forced_degraded"]
+    assert forced_meta["active"] is True
+    assert forced_meta["dependency"] == "warehouse"
+    assert forced_meta["source"] == "admin_drill_cookie"
+    assert 1 <= forced_meta["expires_in_s"] <= 30
+
+    audit = client.get("/api/audit/events?limit=10", headers=ADMIN_HEADERS)
+    assert audit.status_code == 200
+    events = audit.json()
+    assert any(
+        event["event_type"] == "FORCE_DEGRADED"
+        and event["payload_json"]["forced_state"] == "on"
+        and event["payload_json"]["proof_scope"] == "browser_cookie"
+        for event in events
+    )
 
     cleared = client.post(
         "/api/admin/force-degraded",
@@ -147,6 +163,7 @@ def test_admin_force_degraded_overlays_authenticated_health(
 
     recovered = client.get("/api/health", headers={"X-Forwarded-Email": "ops@example.com"})
     assert recovered.json()["status"] == "ok"
+    assert recovered.json().get("forced_degraded") is None
 
 
 def test_dependency_down_exception_translates_to_structured_503(

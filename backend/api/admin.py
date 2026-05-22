@@ -21,9 +21,11 @@ configuration and gold refresh path actually changed.
 """
 from __future__ import annotations
 
+import logging
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 from backend.config.settings import settings
@@ -34,15 +36,24 @@ from backend.schemas.admin import (
     AdminSourceResponse,
 )
 from backend.services.admin_rules import AdminRulesService, get_admin_rules_service
+from backend.services.audit_store import AuditStore, get_audit_store
 from backend.services.databricks_sql import DatabricksSqlError
 from backend.services.error_sanitizer import safe_dependency_detail
-from backend.services.forced_degraded import set_forced_degraded
+from backend.services.forced_degraded import (
+    FORCED_DEGRADED_COOKIE_NAME,
+    FORCED_DEGRADED_COOKIE_PATH,
+    build_forced_degraded_cookie,
+)
+from backend.services.lakebase import LakebaseError
+from backend.services.observability import emit
 from backend.services.rbac import AdminDep
 from backend.services.resilience import DependencyDownError
 
+log = logging.getLogger(__name__)
 router = APIRouter(prefix="/admin", tags=["admin"])
 
 ServiceDep = Annotated[AdminRulesService, Depends(get_admin_rules_service)]
+AuditDep = Annotated[AuditStore, Depends(get_audit_store)]
 
 
 class ForceDegradedRequest(BaseModel):
@@ -156,14 +167,85 @@ def get_settings(_actor: AdminDep) -> dict[str, object]:
 @router.post("/force-degraded", response_model=ForceDegradedResponse)
 def post_force_degraded(
     payload: ForceDegradedRequest,
+    request: Request,
+    response: Response,
     _actor: AdminDep,
+    audit: AuditDep,
 ) -> ForceDegradedResponse:
-    """Temporarily force /api/health into a degraded state for UI proof drills."""
+    """Issue or clear a browser-local degraded-banner proof cookie.
 
-    snapshot = set_forced_degraded(
-        active=payload.state == "on",
+    This endpoint is an admin actuator and therefore writes Lakebase audit
+    before changing the browser-visible state. It does not mutate global health
+    or stop infrastructure.
+    """
+
+    ttl_s = payload.ttl_s if payload.state == "on" else 0
+    expires_at = datetime.now(UTC) + timedelta(seconds=ttl_s)
+    try:
+        audit.write(
+            actor=_actor,
+            action="admin.force_degraded",
+            entity_type="system",
+            entity_id="force-degraded",
+            event_type="FORCE_DEGRADED",
+            payload_json={
+                "forced_state": payload.state,
+                "forced_dependency": payload.dependency,
+                "ttl_s": ttl_s,
+                "expires_at": expires_at.isoformat(),
+                "proof_scope": "browser_cookie",
+                "route": "/api/admin/force-degraded",
+            },
+        )
+    except LakebaseError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=safe_dependency_detail("lakebase"),
+        ) from exc
+
+    secure_cookie = (
+        request.url.scheme == "https"
+        or request.headers.get("x-forwarded-proto", "").split(",", 1)[0].strip() == "https"
+    )
+
+    if payload.state == "off":
+        response.delete_cookie(
+            FORCED_DEGRADED_COOKIE_NAME,
+            path=FORCED_DEGRADED_COOKIE_PATH,
+            secure=secure_cookie,
+            samesite="lax",
+        )
+        emit(
+            log,
+            "forced_degraded_cookie_cleared",
+            dependency=payload.dependency,
+            proof_scope="browser_cookie",
+        )
+        return ForceDegradedResponse(
+            forced=False,
+            dependency=payload.dependency,
+            expires_in_s=0,
+        )
+
+    cookie_value, snapshot = build_forced_degraded_cookie(
         dependency=payload.dependency,
         ttl_s=payload.ttl_s,
+    )
+    response.set_cookie(
+        FORCED_DEGRADED_COOKIE_NAME,
+        cookie_value,
+        max_age=snapshot.expires_in_s,
+        httponly=True,
+        secure=secure_cookie,
+        samesite="lax",
+        path=FORCED_DEGRADED_COOKIE_PATH,
+    )
+    emit(
+        log,
+        "forced_degraded_cookie_issued",
+        dependency=snapshot.dependency,
+        expires_in_s=snapshot.expires_in_s,
+        proof_scope="browser_cookie",
     )
     return ForceDegradedResponse(
         forced=snapshot.active,

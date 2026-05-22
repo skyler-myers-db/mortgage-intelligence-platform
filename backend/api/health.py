@@ -41,7 +41,12 @@ from fastapi import APIRouter, Request
 from backend.config.settings import looks_like_databricks_app_deploy, settings
 from backend.schemas.health import AdminHealthResponse, HealthResponse
 from backend.services.audit_store import get_fallback_identity_count
-from backend.services.forced_degraded import apply_forced_degraded
+from backend.services.forced_degraded import (
+    FORCED_DEGRADED_COOKIE_NAME,
+    apply_forced_degraded,
+    forced_degraded_payload,
+    forced_degraded_snapshot_from_cookie,
+)
 from backend.services.health_probes import breaker_states, probe_snapshot
 from backend.services.observability import (
     get_otel_handler,
@@ -85,7 +90,24 @@ def _trusted_health_actor(request: Request) -> str | None:
     return request.headers.get("X-Forwarded-Email") or request.headers.get("X-Forwarded-User")
 
 
-def _diagnostic_body(status: str, deps: dict[str, str], actor_email: str) -> dict[str, Any]:
+def _apply_browser_forced_degraded(
+    request: Request,
+    status: str,
+    deps: dict[str, str],
+) -> tuple[str, dict[str, str], dict[str, object] | None]:
+    snapshot = forced_degraded_snapshot_from_cookie(
+        request.cookies.get(FORCED_DEGRADED_COOKIE_NAME)
+    )
+    next_status, next_deps = apply_forced_degraded(status, deps, snapshot)
+    return next_status, next_deps, forced_degraded_payload(snapshot)
+
+
+def _diagnostic_body(
+    status: str,
+    deps: dict[str, str],
+    actor_email: str,
+    forced_degraded: dict[str, object] | None = None,
+) -> dict[str, Any]:
     boundary_warning = None
     if settings.trust_forwarded_headers and not looks_like_databricks_app_deploy():
         boundary_warning = {
@@ -101,7 +123,7 @@ def _diagnostic_body(status: str, deps: dict[str, str], actor_email: str) -> dic
             ),
             "docs_ref": "docs/security/GRANTS.md#10",
         }
-    return {
+    body = {
         "status": status,
         "mode": "live",
         "app_env": settings.app_env,
@@ -154,6 +176,9 @@ def _diagnostic_body(status: str, deps: dict[str, str], actor_email: str) -> dic
         "fallback_identity_fallbacks_total": get_fallback_identity_count(),
         "boundary_warning": boundary_warning,
     }
+    if forced_degraded is not None:
+        body["forced_degraded"] = forced_degraded
+    return body
 
 
 @router.get("/health", response_model=HealthResponse, response_model_exclude_unset=True)
@@ -175,7 +200,7 @@ def health(request: Request) -> dict[str, Any]:
     HTTP status stays 200 in both shapes even when ``status=="degraded"``
     so the LB probe contract (degraded != unhealthy) is preserved.
     """
-    status, deps = apply_forced_degraded(*probe_snapshot())
+    status, deps = probe_snapshot()
 
     # Anonymous caller (LB / external probe): minimal body only. Use the
     # same trust boundary as audit actor resolution without calling
@@ -186,7 +211,8 @@ def health(request: Request) -> dict[str, Any]:
     if not authenticated:
         return {"status": status, "mode": "live"}
 
-    return {
+    status, deps, forced_degraded = _apply_browser_forced_degraded(request, status, deps)
+    body = {
         "status": status,
         "mode": "live",
         "dependencies": deps,
@@ -196,10 +222,14 @@ def health(request: Request) -> dict[str, Any]:
         "circuit_breakers": breaker_states(),
         "actor_cache_key": _actor_cache_key(actor_email or ""),
     }
+    if forced_degraded is not None:
+        body["forced_degraded"] = forced_degraded
+    return body
 
 
 @router.get("/admin/health", response_model=AdminHealthResponse)
-def admin_health(_actor: AdminDep) -> dict[str, Any]:
+def admin_health(request: Request, _actor: AdminDep) -> dict[str, Any]:
     """Return ops diagnostics behind admin RBAC."""
-    status, deps = apply_forced_degraded(*probe_snapshot())
-    return _diagnostic_body(status, deps, _actor)
+    status, deps = probe_snapshot()
+    status, deps, forced_degraded = _apply_browser_forced_degraded(request, status, deps)
+    return _diagnostic_body(status, deps, _actor, forced_degraded)

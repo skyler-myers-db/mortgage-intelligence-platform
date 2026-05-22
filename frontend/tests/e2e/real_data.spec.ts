@@ -16,9 +16,9 @@
  *      within 20s (first cold call can be 10-15s; we allow headroom).
  *   4. Approving an outreach produces a new row in /api/audit within 5s,
  *      proving the Lakebase audit write path.
- *   5. Mid-run, toggling the backend feature flag that forces a 503 causes
- *      the DegradedBanner to appear within 5s — the resilience story works
- *      on real infra, not just unit fixtures.
+ *   5. Mid-run, issuing the admin-gated browser-local degraded proof cookie
+ *      causes the DegradedBanner to appear within 5s — the resilience story
+ *      works on the deployed app without stopping shared infrastructure.
  *
  * Non-negotiables per CLAUDE.md:
  *   * No mock fallback. If the app can't reach UC, the spec fails — that is
@@ -80,8 +80,13 @@ type AuditRow = {
   event_id?: string;
   entity_id?: string;
   action?: string;
+  event_type?: string;
   evidence_ids?: string[];
-  payload_json?: { borrower_id?: string };
+  payload_json?: {
+    borrower_id?: string;
+    forced_state?: string;
+    proof_scope?: string;
+  };
 };
 
 type MapDrillTarget = {
@@ -711,8 +716,8 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
 
   test('forcing a 503 surfaces the DegradedBanner within 5s', async ({ page, request }) => {
     // Preconditions: the nightly workflow sets MIP_ADMIN_BEARER_TOKEN to an
-    // admin-scoped PAT. We leave the app in forced-degraded state briefly,
-    // assert the banner, then un-flip.
+    // admin-scoped PAT. The endpoint writes a Lakebase audit row and sets an
+    // HttpOnly, browser-local proof cookie; it does not mutate global health.
     const adminBearer = process.env.MIP_ADMIN_BEARER_TOKEN;
     test.skip(
       !adminBearer,
@@ -720,26 +725,71 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     );
 
     const flip = async (state: 'on' | 'off') => {
-      const resp = await request.post(`${API_URL}/api/admin/force-degraded`, {
-        headers: { Authorization: `Bearer ${adminBearer!}` },
-        data: { state, dependency: 'warehouse', ttl_s: 30 },
-      });
-      // The admin endpoint returns 200/204 on success; accept either.
-      expect([200, 204]).toContain(resp.status());
+      const status = await page.evaluate(async ({ apiUrl, bearer, nextState }) => {
+        const resp = await fetch(`${apiUrl}/api/admin/force-degraded`, {
+          method: 'POST',
+          credentials: 'include',
+          headers: {
+            Authorization: `Bearer ${bearer}`,
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({ state: nextState, dependency: 'warehouse', ttl_s: 30 }),
+        });
+        return resp.status;
+      }, { apiUrl: API_URL, bearer: adminBearer!, nextState: state });
+      expect([200, 204]).toContain(status);
     };
 
+    const forcedHealth = async () =>
+      page.evaluate(async ({ apiUrl }) => {
+        const resp = await fetch(`${apiUrl}/api/health`, { credentials: 'include' });
+        return resp.json();
+      }, { apiUrl: API_URL });
+
     try {
-      await flip('on');
       await page.goto('/');
+      await flip('on');
+      await page.reload({ waitUntil: 'domcontentloaded' });
+      await expect
+        .poll(
+          async () => {
+            const body = await forcedHealth();
+            return body.forced_degraded?.source;
+          },
+          { timeout: 5_000 },
+        )
+        .toBe('admin_drill_cookie');
+
+      const forced = await forcedHealth();
+      expect(forced.dependencies?.warehouse).toBe('down');
+      expect(forced.forced_degraded?.dependency).toBe('warehouse');
+
+      await expect
+        .poll(
+          async () => {
+            const rows = await fetchAuditEvents(request, 20);
+            return rows?.some(
+              (row) =>
+                row.event_type === 'FORCE_DEGRADED' &&
+                row.payload_json?.forced_state === 'on' &&
+                row.payload_json?.proof_scope === 'browser_cookie',
+            );
+          },
+          { timeout: 10_000 },
+        )
+        .toBe(true);
+
       // DegradedBanner convention: top-of-page strip with role="alert" and
       // class `degraded-banner` (or data-testid `degraded-banner`).
       const banner = page
         .locator('[data-testid="degraded-banner"], .degraded-banner, [role="alert"]')
         .first();
       await expect(banner).toBeVisible({ timeout: 5_000 });
-      await expect(banner).toContainText(/degraded|warming|unavailable/i);
+      await expect(banner).toContainText(/degraded|warming|unavailable|reconnecting/i);
     } finally {
-      await flip('off');
+      if (!page.isClosed()) {
+        await flip('off').catch(() => undefined);
+      }
     }
   });
 

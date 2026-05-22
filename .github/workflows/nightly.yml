@@ -258,11 +258,10 @@ jobs:
           echo "MIP_API_URL=$APP_URL" >> "$GITHUB_ENV"
           echo "::notice::Nightly Playwright will target deployed app at $APP_URL."
       - name: Set Playwright Bearer tokens
-        # Prefer M2M OAuth for deployed app auth. The service principal is
-        # intentionally non-admin; the smoke step below proves it can read
-        # allowed lead surfaces while admin/audit endpoints fail closed.
-        # If M2M is absent, fall back to the workspace PAT already required
-        # for the live UC gates.
+        # M2M OAuth is required for deployed app auth. The service principal
+        # is intentionally non-admin; the smoke step below proves it can read
+        # allowed lead surfaces while admin/audit endpoints fail closed. Do
+        # not fall back to the admin PAT for the normal browser session.
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
@@ -270,35 +269,27 @@ jobs:
           DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
         run: |
           set -euo pipefail
-          NON_ADMIN_BEARER=""
-          if [ -n "${DATABRICKS_CLIENT_ID:-}" ] && [ -n "${DATABRICKS_CLIENT_SECRET:-}" ]; then
-            NON_ADMIN_BEARER=$(python tools/oauth_m2m_mint.py)
-            echo "::add-mask::$NON_ADMIN_BEARER"
-            echo "MIP_NON_ADMIN_BEARER_TOKEN=$NON_ADMIN_BEARER" >> "$GITHUB_ENV"
-            echo "::notice::Minted M2M OAuth Bearer for non-admin deployed-app smoke."
-          fi
-          if [ -n "$NON_ADMIN_BEARER" ]; then
-            BEARER="$NON_ADMIN_BEARER"
-            echo "::notice::Using M2M OAuth Bearer for deployed Playwright."
-          elif [ -n "${DATABRICKS_TOKEN:-}" ]; then
-            BEARER="$DATABRICKS_TOKEN"
-            echo "::notice::M2M OAuth secrets absent; using workspace PAT Bearer for deployed Playwright."
-          else
-            echo "::error::Missing DATABRICKS_TOKEN and M2M OAuth token; cannot authenticate deployed Playwright."
+          missing=""
+          for v in DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET; do
+            if [ -z "${!v:-}" ]; then
+              missing="$missing $v"
+            fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Missing required M2M OAuth secret(s):$missing"
             exit 1
           fi
+          BEARER=$(python tools/oauth_m2m_mint.py)
           if [ -z "$BEARER" ]; then
-            echo "::error::Bearer token was empty"
+            echo "::error::M2M bearer token was empty"
             exit 1
           fi
           echo "::add-mask::$BEARER"
+          echo "MIP_NON_ADMIN_BEARER_TOKEN=$BEARER" >> "$GITHUB_ENV"
           echo "MIP_BEARER_TOKEN=$BEARER" >> "$GITHUB_ENV"
+          echo "::notice::Using non-admin M2M OAuth Bearer for deployed Playwright."
       - name: Authenticated non-admin smoke (M2M)
         run: |
-          if [ -z "${MIP_NON_ADMIN_BEARER_TOKEN:-}" ]; then
-            echo "::notice::M2M OAuth secrets absent; non-admin smoke skipped."
-            exit 0
-          fi
           python - <<'PY'
           from __future__ import annotations
 

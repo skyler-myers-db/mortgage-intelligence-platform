@@ -14,19 +14,19 @@ No real workspace is touched.
 
 The nightly workflow (`nightly.yml`) intentionally talks to the real
 dev Databricks workspace so drift between the SQL UDFs + Python
-scoring mirrors, Lakebase, and Genie is caught within 24 hours. It
-fails loudly — pytest tests that would normally SKIP on missing creds
-are gated behind a `fail-fast` step that exits non-zero if any
-secret is empty.
+scoring mirrors, Lakebase, Genie, deployed-app auth, and the
+degraded-banner proof is caught within 24 hours. It fails loudly:
+live jobs check their own required secrets and exit non-zero instead
+of silently skipping release gates.
 
 ---
 
 ## Required repo secrets (nightly only)
 
 All listed below must be set under **Settings → Secrets and variables
-→ Actions → Repository secrets**. Missing any one of them causes the
-`parity-live` job's `Fail fast if required secrets are missing` step
-to abort with a clear `::error::` pointing at the offending var.
+→ Actions → Repository secrets**. Missing any one of them aborts the
+job that needs it with a clear `::error::` pointing at the offending
+var.
 
 | Secret | What it is | How to obtain |
 |---|---|---|
@@ -34,19 +34,15 @@ to abort with a clear `::error::` pointing at the offending var.
 | `DATABRICKS_TOKEN` | Personal Access Token with permissions to read `mip.*`, run statements on the dev warehouse, and call admin-gated app drill endpoints. | Databricks UI → User Settings → Developer → Access Tokens → Generate new token. Rotate every 90 days (see `docs/runbook.md` §5). |
 | `DATABRICKS_WAREHOUSE_ID` | ID of the dev serverless SQL warehouse. Same value `databricks bundle validate` resolves from `databricks.yml`. | Databricks UI → SQL Warehouses → click the warehouse → copy from URL or Connection Details. |
 | `GENIE_SPACE_ID` | Mortgage Lead Intelligence Genie Space ID. | Databricks UI → Genie → open the space → copy ID from URL. Also tracked at `genie/space_id.txt`. |
-| `DATABRICKS_CLIENT_ID` | Service-principal client ID used by the live Playwright app smoke. | Databricks service principal configured for the dev app workspace. |
-| `DATABRICKS_CLIENT_SECRET` | Service-principal client secret used by the live Playwright app smoke. | Databricks service principal secret. Rotate with the same cadence as the workspace token. |
-| `MIP_APP_URL` | Deployed Databricks App URL for the live Playwright spec (for example `https://mip-dev.databricksapps.com`). | `databricks apps get <app-name> --profile DEFAULT -o json` or the Databricks Apps UI. |
-| `LAKEBASE_HOST` | Lakebase Postgres endpoint hostname. | Databricks UI → Lakebase instance → Connection Details → Host. |
-| `LAKEBASE_USER` | Lakebase Postgres user. | Same Connection Details panel. |
-| `LAKEBASE_PASSWORD` | Lakebase Postgres password (or workspace identity token if using identity auth). | Same Connection Details panel. |
-| `LAKEBASE_DATABASE` | Lakebase database the `mip_app` schema lives in. | Defaults to `mip_app_state`; confirm in bundle outputs. |
+| `DATABRICKS_CLIENT_ID` | Non-admin service-principal OAuth client ID used by deployed Playwright and the non-admin RBAC smoke. | Provision with `tools/databricks/provision_m2m_oauth.py` or `docs/security/m2m-oauth-setup.md`. |
+| `DATABRICKS_CLIENT_SECRET` | Secret for the non-admin OAuth client. Nightly fails if this is absent; it must not fall back to the admin PAT. | Rotate with the same cadence as the workspace token. |
 
 ## Optional secrets (nightly, gated features)
 
 | Secret | What it enables | Notes |
 |---|---|---|
-| `MIP_API_URL` | API origin if different from `MIP_APP_URL` (e.g. you run the backend on a different subdomain). | If unset, derived from `MIP_APP_URL` by swapping `:5173`→`:8000`. |
+| `MIP_APP_URL` | Explicit deployed Databricks App URL for live Playwright and real-infra drill jobs. | If unset for Playwright, the workflow resolves `mip-app` through the Databricks Apps API. The opt-in real-infra drill still requires this secret. |
+| `LAKEBASE_DATABASE` | Lakebase database the `mip_app` schema lives in. | Defaults to `mip_app_state`; the app and live tests use workspace-identity Lakebase credentials, not static Lakebase password secrets. |
 
 ## No-secret jobs (run on every PR)
 

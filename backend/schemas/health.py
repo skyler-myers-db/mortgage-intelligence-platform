@@ -5,12 +5,20 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 
+class ForcedDegradedInfo(BaseModel):
+    active: bool
+    dependency: str
+    source: str
+    expires_in_s: int
+
+
 class HealthResponse(BaseModel):
     status: str
     mode: str
     dependencies: dict[str, str] = Field(default_factory=dict)
     circuit_breakers: dict[str, str] = Field(default_factory=dict)
     actor_cache_key: str | None = None
+    forced_degraded: ForcedDegradedInfo | None = None
 
 
 class BoundaryWarning(BaseModel):

@@ -32,6 +32,12 @@ export interface HealthPayload {
   app_env?: string;
   dependencies?: Record<string, 'up' | 'down'>;
   circuit_breakers?: Record<string, 'closed' | 'open' | 'half_open'>;
+  forced_degraded?: {
+    active: boolean;
+    dependency: string;
+    source: string;
+    expires_in_s: number;
+  } | null;
 }
 
 interface DegradedBannerProps {

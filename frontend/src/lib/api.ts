@@ -73,6 +73,12 @@ export interface HealthPayload {
   dependencies?: Record<string, string>;
   circuit_breakers?: Record<string, string>;
   actor_cache_key?: string | null;
+  forced_degraded?: {
+    active: boolean;
+    dependency: string;
+    source: string;
+    expires_in_s: number;
+  } | null;
 }
 
 export interface ApproveResult {

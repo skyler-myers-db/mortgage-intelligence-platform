@@ -263,6 +263,11 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         "roi_assumptions",
         "marketable_population",
         "status",
+        # Admin degraded-banner proof drill
+        "forced_state",
+        "forced_dependency",
+        "ttl_s",
+        "proof_scope",
     }
 )
 
@@ -279,26 +284,18 @@ _BORROWER_ID_METADATA_KEYS: frozenset[str] = frozenset({"borrower_id"})
 _OPAQUE_ID_METADATA_KEYS: frozenset[str] = frozenset(
     {"approval_id", "bulk_id", "campaign_id", "request_id", "assignment_id", "disposition_id"}
 )
-_CAMPAIGN_LABEL_METADATA_KEYS: frozenset[str] = frozenset(
-    {"variant_name", "recommended_offer", "workspace_offer_code"}
-)
-_INTERNAL_STAFF_EMAIL_METADATA_KEYS: frozenset[str] = frozenset(
-    {"assigned_to_email", "assigned_by", "lo_email"}
-)
+_CAMPAIGN_LABEL_METADATA_KEYS: frozenset[str] = frozenset({"variant_name", "recommended_offer", "workspace_offer_code"})
+_INTERNAL_STAFF_EMAIL_METADATA_KEYS: frozenset[str] = frozenset({"assigned_to_email", "assigned_by", "lo_email"})
 _INTERNAL_STAFF_EMAIL_LIST_METADATA_KEYS: frozenset[str] = frozenset({"lo_emails"})
 _SALES_STRATEGIES: frozenset[str] = frozenset({"manual", "round_robin", "score_balanced"})
 _SALES_DISPOSITION_OUTCOMES: frozenset[str] = frozenset(
     {"called_no_answer", "called_left_voicemail", "connected", "callback_scheduled", "application_started", "not_interested", "not_now", "dead"}
 )
-_GENIE_REFUSAL_REASONS: frozenset[str] = frozenset(
-    {"protected_class", "instruction_override", "pii_request", "scope_bypass", "out_of_scope"}
-)
+_GENIE_REFUSAL_REASONS: frozenset[str] = frozenset({"protected_class", "instruction_override", "pii_request", "scope_bypass", "out_of_scope"})
 
 _ALLOWED_OFFER_CODES: frozenset[str] = frozenset(NBO_PRODUCT_LABELS) | {"recapture"}
 
-_BORROWER_ID_LIST_METADATA_KEYS: frozenset[str] = frozenset(
-    {"borrower_ids", "rendered_borrower_ids"}
-)
+_BORROWER_ID_LIST_METADATA_KEYS: frozenset[str] = frozenset({"borrower_ids", "rendered_borrower_ids"})
 
 
 def _metadata_values_for(
@@ -317,9 +314,8 @@ _DECISION_INPUT_KEYS: frozenset[str] = frozenset(
     {"rate_spread_bps", "equity_pct", "has_permit", "listed_for_sale", "is_investor", "is_current_customer", "is_competitor_lien"}
 )
 
-_ALLOWED_SEGMENT_CODES: frozenset[str] = frozenset(
-    {"itm", "listed", "permit", "investor", "equity", "retention"}
-)
+_ALLOWED_SEGMENT_CODES: frozenset[str] = frozenset({"itm", "listed", "permit", "investor", "equity", "retention"})
+_FORCED_DEGRADED_DEPENDENCIES: frozenset[str] = frozenset({"warehouse", "lakebase", "genie", "all"})
 
 
 class AuditPIIError(RuntimeError):
@@ -510,6 +506,17 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
                 field,
                 "must be the configured tenant lender, Competitor A-Z, Competitor Other, or All",
             ) from exc
+    for field, allowed in {
+        "forced_dependency": _FORCED_DEGRADED_DEPENDENCIES,
+        "forced_state": {"on", "off"},
+        "proof_scope": {"browser_cookie"},
+    }.items():
+        for _, value in _metadata_values_for(metadata, {field}):
+            if value is not None and str(value) not in allowed:
+                raise AuditMetadataValueViolation(field, "contains values outside the reviewed vocabulary")
+    for field, ttl_s in _metadata_values_for(metadata, {"ttl_s"}):
+        if not isinstance(ttl_s, int) or isinstance(ttl_s, bool) or ttl_s < 0 or ttl_s > 300:
+            raise AuditMetadataValueViolation(field, "must be an integer between 0 and 300")
     for _, portfolio_criteria in _metadata_values_for(metadata, {"portfolio_criteria"}):
         if portfolio_criteria is None:
             continue
