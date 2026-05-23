@@ -13,7 +13,7 @@ import { FilterSelect } from '../components/ui/FilterSelect';
 import { useFootprint } from '../components/FootprintProvider';
 import { Skeleton } from '../components/ui/Skeleton';
 import { queryKeys } from '../lib/queryKeys';
-import { isPublicLenderRef } from './portfolio-builder.logic';
+import { isPublicLenderRef, LENDER_RELATIONSHIP_OPTIONS } from '../lib/lenderFilters';
 
 /**
  * Lead Queue — deep-dive table route. Full borrower list (filtered by segment
@@ -38,7 +38,6 @@ const SEGMENT_OPTION_TO_CODE: Record<string, SegmentCode | null> = {
   'Home Equity Candidate': 'equity',
   'Retention Risk': 'retention',
 };
-const RELATIONSHIP_FILTER_OPTIONS = ['All', 'Current customer', 'Former customer', 'Competitor customer'] as const;
 const PRODUCT_FILTER_OPTIONS = ['All products', 'Refi', 'HELOC', 'Cash-out', 'Purchase', 'Retention'] as const;
 const CONTACTABILITY_FILTER_OPTIONS = ['Eligible only', 'Any', 'Suppressed only'] as const;
 const CONSENT_FILTER_OPTIONS = ['Any', 'Opt-in', 'Opt-out', 'Unknown'] as const;
@@ -148,7 +147,7 @@ function parseTargetLenderRef(raw: string | null, allowedLenderRefs: readonly st
 const PORTFOLIO_FILTER_VALUE_SETS: Partial<Record<PortfolioFilterKey, Set<string>>> = {
   occupancy: new Set(['Owner-occupied', 'Non-owner-occupied', 'All']),
   lien_status: new Set(['Any', 'Open 1st lien', 'Open first lien', 'Open HELOC', 'Free & clear', 'Free and clear']),
-  lender_relationship: new Set(['All', 'Current customer', 'Former customer', 'Competitor customer', 'Competitor']),
+  lender_relationship: new Set([...LENDER_RELATIONSHIP_OPTIONS, 'Competitor']),
   product: new Set(['All products', 'Refi', 'HELOC', 'Cash-out', 'Purchase', 'Retention']),
   min_equity_pct_label: new Set(['Any', '≥ 15%', '≥ 25%', '≥ 40%']),
   owner_link: new Set(['All', 'Single-property owner', 'Multi-property (2-4)', 'Portfolio investor (5+)']),
@@ -695,8 +694,14 @@ export default function LeadQueue() {
             <FilterSelect
               label="RELATIONSHIP"
               value={relationshipFilter}
-              options={[...RELATIONSHIP_FILTER_OPTIONS]}
+              options={[...LENDER_RELATIONSHIP_OPTIONS]}
               onChange={(v) => updateParam('lender_relationship', v)}
+            />
+            <FilterSelect
+              label="TARGET LIEN HOLDER"
+              value={targetLenderRef ?? 'All'}
+              options={targetLenderOptions}
+              onChange={(v) => updateParam('target_lender_ref', v)}
             />
             <FilterSelect
               label="SEGMENT"

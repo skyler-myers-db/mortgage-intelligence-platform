@@ -173,6 +173,8 @@ export interface AnalyticsQueryOptions {
   state?: string | null;
   segmentCodes?: SegmentCode[] | null;
   segmentMode?: SegmentFilterMode;
+  lenderRelationship?: string | null;
+  targetLenderRef?: string | null;
   signalTypes?: string[] | null;
   signalType?: string | null;
   days?: number | null;
@@ -216,6 +218,12 @@ function analyticsPath(scope: string, opts: AnalyticsQueryOptions = {}): string 
   if (opts.segmentCodes && opts.segmentCodes.length > 0) {
     params.set('segment_codes', opts.segmentCodes.join(','));
     params.set('segment_mode', opts.segmentMode ?? 'any');
+  }
+  if (opts.lenderRelationship && opts.lenderRelationship !== 'All') {
+    params.set('lender_relationship', opts.lenderRelationship);
+  }
+  if (opts.targetLenderRef && opts.targetLenderRef !== 'All') {
+    params.set('target_lender_ref', opts.targetLenderRef);
   }
   const signalTypes = opts.signalTypes?.length ? opts.signalTypes : opts.signalType ? [opts.signalType] : [];
   if (signalTypes.length > 0) params.set('signal_types', signalTypes.join(','));

@@ -8,6 +8,7 @@ import {
   buildDailyEvidenceTotals,
   compactScatterRows,
   leadQueueHrefForFunnelStage,
+  segmentIntelligenceHref,
 } from './analytics';
 
 describe('analytics drilldown links', () => {
@@ -18,6 +19,27 @@ describe('analytics drilldown links', () => {
     expect(leadQueueHrefForFunnelStage({ stage: 'Offer Recommended', stage_order: 4 })).toBe('/lead-queue?funnel_stage=offer_recommended');
     expect(leadQueueHrefForFunnelStage({ stage: 'Approved', stage_order: 5 })).toBe('/lead-queue?funnel_stage=approved');
     expect(leadQueueHrefForFunnelStage({ stage: 'Actioned', stage_order: 6 })).toBe('/lead-queue?funnel_stage=actioned');
+  });
+
+  it('preserves lender overlay filters in funnel drilldowns', () => {
+    const href = leadQueueHrefForFunnelStage(
+      { stage: 'Addressable', stage_order: 1 },
+      {
+        lender_relationship: 'Competitor customer',
+        target_lender_ref: 'Competitor B',
+      },
+    );
+
+    expect(href).toContain('funnel_stage=addressable');
+    expect(href).toContain('lender_relationship=Competitor+customer');
+    expect(href).toContain('target_lender_ref=Competitor+B');
+  });
+
+  it('preserves lender overlay filters when opening the segment map', () => {
+    expect(segmentIntelligenceHref({
+      lender_relationship: 'Competitor customer',
+      target_lender_ref: 'Competitor B',
+    })).toBe('/segment-intelligence?lender_relationship=Competitor+customer&target_lender_ref=Competitor+B');
   });
 });
 

@@ -56,6 +56,8 @@ def _portfolio_criteria_from_geo_query(
     *,
     occupancy: str | None = None,
     lien_status: str | None = None,
+    lender_relationship: str | None = None,
+    target_lender_ref: str | None = None,
     owner_link: str | None = None,
     purchase_intent: str | None = None,
     min_equity_pct_label: str | None = None,
@@ -69,6 +71,10 @@ def _portfolio_criteria_from_geo_query(
         fields["occupancy"] = occupancy
     if lien_status:
         fields["lien_status"] = lien_status
+    if lender_relationship:
+        fields["lender_relationship"] = lender_relationship
+    if target_lender_ref:
+        fields["target_lender_ref"] = target_lender_ref
     if owner_link:
         fields["owner_link"] = owner_link
     if purchase_intent:
@@ -118,6 +124,8 @@ def state_rollups(
     ] = "any",
     occupancy: Annotated[str | None, Query(alias="occupancy", max_length=64)] = None,
     lien_status: Annotated[str | None, Query(alias="lien_status", max_length=64)] = None,
+    lender_relationship: Annotated[str | None, Query(alias="lender_relationship", max_length=64)] = None,
+    target_lender_ref: Annotated[str | None, Query(alias="target_lender_ref", max_length=64)] = None,
     owner_link: Annotated[str | None, Query(alias="owner_link", max_length=64)] = None,
     purchase_intent: Annotated[str | None, Query(alias="purchase_intent", max_length=64)] = None,
     min_equity_pct_label: Annotated[str | None, Query(alias="min_equity_pct_label", max_length=32)] = None,
@@ -145,6 +153,8 @@ def state_rollups(
         portfolio_criteria=_portfolio_criteria_from_geo_query(
             occupancy=occupancy,
             lien_status=lien_status,
+            lender_relationship=lender_relationship,
+            target_lender_ref=target_lender_ref,
             owner_link=owner_link,
             purchase_intent=purchase_intent,
             min_equity_pct_label=min_equity_pct_label,
@@ -191,6 +201,8 @@ def county_rollups(
     ] = "any",
     occupancy: Annotated[str | None, Query(alias="occupancy", max_length=64)] = None,
     lien_status: Annotated[str | None, Query(alias="lien_status", max_length=64)] = None,
+    lender_relationship: Annotated[str | None, Query(alias="lender_relationship", max_length=64)] = None,
+    target_lender_ref: Annotated[str | None, Query(alias="target_lender_ref", max_length=64)] = None,
     owner_link: Annotated[str | None, Query(alias="owner_link", max_length=64)] = None,
     purchase_intent: Annotated[str | None, Query(alias="purchase_intent", max_length=64)] = None,
     min_equity_pct_label: Annotated[str | None, Query(alias="min_equity_pct_label", max_length=32)] = None,
@@ -214,6 +226,8 @@ def county_rollups(
         portfolio_criteria=_portfolio_criteria_from_geo_query(
             occupancy=occupancy,
             lien_status=lien_status,
+            lender_relationship=lender_relationship,
+            target_lender_ref=target_lender_ref,
             owner_link=owner_link,
             purchase_intent=purchase_intent,
             min_equity_pct_label=min_equity_pct_label,
@@ -261,6 +275,8 @@ def zip_rollups(
     ] = "any",
     occupancy: Annotated[str | None, Query(alias="occupancy", max_length=64)] = None,
     lien_status: Annotated[str | None, Query(alias="lien_status", max_length=64)] = None,
+    lender_relationship: Annotated[str | None, Query(alias="lender_relationship", max_length=64)] = None,
+    target_lender_ref: Annotated[str | None, Query(alias="target_lender_ref", max_length=64)] = None,
     owner_link: Annotated[str | None, Query(alias="owner_link", max_length=64)] = None,
     purchase_intent: Annotated[str | None, Query(alias="purchase_intent", max_length=64)] = None,
     min_equity_pct_label: Annotated[str | None, Query(alias="min_equity_pct_label", max_length=32)] = None,
@@ -283,6 +299,8 @@ def zip_rollups(
         portfolio_criteria=_portfolio_criteria_from_geo_query(
             occupancy=occupancy,
             lien_status=lien_status,
+            lender_relationship=lender_relationship,
+            target_lender_ref=target_lender_ref,
             owner_link=owner_link,
             purchase_intent=purchase_intent,
             min_equity_pct_label=min_equity_pct_label,

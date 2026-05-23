@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from backend.main import app
 from backend.schemas.analytics import AnalyticsFilters
@@ -163,19 +165,46 @@ def test_analytics_repository_binds_filters_without_string_interpolation() -> No
             states=["IL", "CA"],
             segment_codes=["itm"],
             signal_types=["equity", "rate_spread"],
+            lender_relationship="Competitor customer",
+            target_lender_ref="Competitor B",
             days=7,
         ),
     )
     assert filtered.evidence_by_signal[0].event_count == 3
     assert any("b.state IN (:state_0, :state_1)" in sql for sql in client.statements)
     assert any("array_contains(b.segment_codes, :segment_0)" in sql for sql in client.statements)
+    assert any("b.is_competitor_lien = TRUE" in sql for sql in client.statements)
+    assert any("b.current_lender_ref = :target_lender_ref" in sql for sql in client.statements)
     assert any("e.signal_type IN (:signal_type_0, :signal_type_1)" in sql for sql in client.statements)
-    assert all("IL" not in sql and "equity" not in sql for sql in client.statements)
+    assert all("IL" not in sql and "equity" not in sql and "Competitor B" not in sql for sql in client.statements)
     assert {
         "state_0": "IL",
         "state_1": "CA",
         "segment_0": "itm",
+        "target_lender_ref": "Competitor B",
         "signal_type_0": "equity",
         "signal_type_1": "rate_spread",
         "days": 7,
     } in client.parameters
+
+
+def test_analytics_routes_validate_lender_overlay_filters() -> None:
+    client = TestClient(app)
+
+    valid = client.get(
+        "/api/v1/analytics/executive?lender_relationship=Competitor%20customer&target_lender_ref=Competitor%20B",
+    )
+    assert valid.status_code == 200
+
+    raw_lender = client.get("/api/v1/analytics/executive?target_lender_ref=Wells%20Fargo%20Bank")
+    assert raw_lender.status_code == 422
+
+    bad_relationship = client.get("/api/v1/analytics/executive?lender_relationship=Wholesale%20partner")
+    assert bad_relationship.status_code == 422
+
+
+def test_analytics_filters_reject_raw_target_lender_ref_direct_construction() -> None:
+    with pytest.raises(ValidationError):
+        AnalyticsFilters(target_lender_ref="Wells Fargo Bank")
+
+    assert AnalyticsFilters(target_lender_ref="All").target_lender_ref is None

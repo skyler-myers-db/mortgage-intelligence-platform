@@ -49,6 +49,42 @@ def _operation_contract(operation: dict[str, Any]) -> dict[str, Any]:
     })
 
 
+def _operation_breaking_drift(
+    baseline_operation: dict[str, Any],
+    current_operation: dict[str, Any],
+) -> bool:
+    """Return TRUE when an operation removed or narrowed an existing contract.
+
+    Additive optional query parameters are intentionally non-breaking. The
+    baseline test's schema checks below still catch removed response fields,
+    newly-required fields, and enum narrowing.
+    """
+
+    baseline_contract = _operation_contract(baseline_operation)
+    current_contract = _operation_contract(current_operation)
+    if baseline_contract.get("requestBody") != current_contract.get("requestBody"):
+        return True
+    if baseline_contract.get("responses") != current_contract.get("responses"):
+        return True
+
+    current_params = {
+        (param.get("name"), param.get("in")): param
+        for param in current_contract.get("parameters", [])
+    }
+    baseline_param_keys = {
+        (param.get("name"), param.get("in"))
+        for param in baseline_contract.get("parameters", [])
+    }
+    for baseline_param in baseline_contract.get("parameters", []):
+        key = (baseline_param.get("name"), baseline_param.get("in"))
+        if current_params.get(key) != baseline_param:
+            return True
+    for key, current_param in current_params.items():
+        if key not in baseline_param_keys and current_param.get("required"):
+            return True
+    return False
+
+
 def _without_schema_titles(node: Any) -> Any:
     if isinstance(node, dict):
         return {
@@ -154,9 +190,7 @@ def test_openapi_wire_contract_has_no_breaking_changes() -> None:
     for path, baseline_methods in baseline_paths.items():
         current_methods = current_paths.get(path, {})
         for method in sorted(set(baseline_methods) & set(current_methods) & HTTP_METHODS):
-            if _operation_contract(baseline_methods[method]) != _operation_contract(
-                current_methods[method]
-            ):
+            if _operation_breaking_drift(baseline_methods[method], current_methods[method]):
                 operation_drift.append(f"{method.upper()} {path}")
     assert operation_drift == []
 

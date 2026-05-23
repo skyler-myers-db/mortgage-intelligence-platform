@@ -6,12 +6,14 @@ import {
   buildCampaignConfig,
   buildLeadQueueUrlFromFilters,
   buildPreviewCriteria,
+  buildSegmentIntelligenceUrlFromFilters,
   buildUrlFromFilters,
+  campaignCriteriaSummary,
   defaultGeographyForOptions,
-  isPublicLenderRef,
   parseFiltersFromUrl,
   parseStateCodesFromUrl,
 } from './portfolio-builder.logic';
+import { isPublicLenderRef } from '../lib/lenderFilters';
 
 const states = [
   { state_code: 'TX', state_name: 'Texas' },
@@ -81,6 +83,20 @@ describe('portfolio builder URL helpers', () => {
     expect(url).toContain('product=Retention');
   });
 
+  it('builds segment intelligence links from committed lender overlay filters', () => {
+    const url = buildSegmentIntelligenceUrlFromFilters(
+      {
+        ...BASE_DEFAULT_FILTERS,
+        lender_relationship: 'Competitor customer',
+        target_lender_ref: 'Competitor B',
+        product: 'Retention',
+      },
+      ['All', 'Competitor B'],
+    );
+
+    expect(url).toBe('/segment-intelligence?lender_relationship=Competitor+customer&target_lender_ref=Competitor+B');
+  });
+
   it('collapses all selected states to the whole-footprint default', () => {
     const searchParams = new URLSearchParams({ states: 'TX,CA,IL' });
 
@@ -115,5 +131,16 @@ describe('portfolio campaign config', () => {
       budget_usd: null,
       source: 'operator_configured',
     });
+  });
+
+  it('summarizes saved lender-overlay campaigns with the target lien holder', () => {
+    expect(campaignCriteriaSummary({
+      criteria: {
+        lender_relationship: 'Competitor customer',
+        target_lender_ref: 'Competitor B',
+        marketing_eligibility: 'Eligible only',
+      },
+      suppression_policy: { default: 'eligible_only' },
+    } as never)).toContain('Competitor B');
   });
 });

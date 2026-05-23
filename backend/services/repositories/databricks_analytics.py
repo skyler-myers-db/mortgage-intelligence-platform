@@ -73,7 +73,9 @@ def _filter_key(filters: AnalyticsFilters) -> str:
     signals = ",".join(filters.signal_types)
     return (
         f"states={states or '*'}|segments={segments or '*'}|"
-        f"mode={filters.segment_mode}|signals={signals or '*'}|days={filters.days}"
+        f"mode={filters.segment_mode}|relationship={filters.lender_relationship or '*'}|"
+        f"target_lender={filters.target_lender_ref or '*'}|"
+        f"signals={signals or '*'}|days={filters.days}"
     )
 
 
@@ -137,6 +139,15 @@ class DatabricksAnalyticsRepository:
                 segment_predicates.append(f"array_contains({alias}.segment_codes, :{key})")
             joiner = " AND " if filters.segment_mode == "all" else " OR "
             predicates.append("(" + joiner.join(segment_predicates) + ")")
+        if filters.lender_relationship == "Current customer":
+            predicates.append(f"{alias}.is_current_customer = TRUE")
+        elif filters.lender_relationship == "Former customer":
+            predicates.append(f"{alias}.is_former_customer = TRUE")
+        elif filters.lender_relationship == "Competitor customer":
+            predicates.append(f"{alias}.is_competitor_lien = TRUE")
+        if filters.target_lender_ref:
+            out_params["target_lender_ref"] = filters.target_lender_ref
+            predicates.append(f"{alias}.current_lender_ref = :target_lender_ref")
         return predicates, out_params
 
     @classmethod

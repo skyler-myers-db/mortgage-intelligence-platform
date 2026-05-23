@@ -1,4 +1,5 @@
 import type { CampaignSummary, KpiTrend, PortfolioPreview } from '../types';
+import { isPublicLenderRef, LENDER_RELATIONSHIP_OPTIONS } from '../lib/lenderFilters';
 
 export type FilterGroup = {
   label: string;
@@ -21,7 +22,7 @@ export type FootprintState = {
 export const NON_GEO_FILTER_GROUPS: FilterGroup[] = [
   { label: 'OCCUPANCY',    key: 'occupancy',            options: ['Owner-occupied', 'Non-owner-occupied', 'All'] },
   { label: 'LIEN STATUS',  key: 'lien_status',          options: ['Open 1st lien', 'Open HELOC', 'Free & clear', 'Any'] },
-  { label: 'RELATIONSHIP', key: 'lender_relationship',  options: ['All', 'Current customer', 'Former customer', 'Competitor customer'] },
+  { label: 'RELATIONSHIP', key: 'lender_relationship',  options: [...LENDER_RELATIONSHIP_OPTIONS] },
   { label: 'PRODUCT',      key: 'product',              options: ['All products', 'Refi', 'HELOC', 'Cash-out', 'Purchase', 'Retention'] },
   { label: 'EQUITY',       key: 'min_equity_pct_label', options: ['≥ 15%', '≥ 25%', '≥ 40%', 'Any'] },
   { label: 'CONTACTABILITY', key: 'marketing_eligibility', options: ['Eligible only', 'Any', 'Suppressed only'] },
@@ -44,18 +45,7 @@ export const BASE_DEFAULT_FILTERS: Record<string, string> = {
   recency: 'Any',
 };
 
-const COMPETITOR_LENDER_REF_RE = /^Competitor ([A-Z]|Other)$/;
 const DEFAULT_CAMPAIGN_LENDER_NAME = 'configured lender';
-
-export function isPublicLenderRef(
-  value: string | undefined | null,
-  allowedRefs: readonly string[] = [],
-): boolean {
-  const trimmed = value?.trim();
-  if (!trimmed) return false;
-  if (trimmed === 'All' || COMPETITOR_LENDER_REF_RE.test(trimmed)) return true;
-  return allowedRefs.includes(trimmed);
-}
 
 /**
  * URL search-param keys we round-trip. One per filter + the reload
@@ -207,12 +197,33 @@ export function buildLeadQueueUrlFromFilters(
   return query ? `/lead-queue?${query}` : '/lead-queue';
 }
 
+export function buildSegmentIntelligenceUrlFromFilters(
+  filters: Record<string, string>,
+  allowedLenderRefs: readonly string[] = [],
+): string {
+  const sp = new URLSearchParams();
+  const relationship = filters.lender_relationship;
+  if (relationship && relationship !== BASE_DEFAULT_FILTERS.lender_relationship) {
+    sp.set('lender_relationship', relationship);
+  }
+  const target = filters.target_lender_ref;
+  if (
+    target
+    && target !== BASE_DEFAULT_FILTERS.target_lender_ref
+    && isPublicLenderRef(target, allowedLenderRefs)
+  ) {
+    sp.set('target_lender_ref', target);
+  }
+  const query = sp.toString();
+  return query ? `/segment-intelligence?${query}` : '/segment-intelligence';
+}
+
 export function campaignCriteriaSummary(campaign: CampaignSummary): string {
   const criteria = campaign.criteria ?? {};
   const parts: string[] = [];
   const states = Array.isArray(criteria.states) ? criteria.states.map(String).filter(Boolean) : [];
   if (states.length > 0) parts.push(states.join(', '));
-  for (const key of ['lender_relationship', 'product', 'marketing_eligibility', 'consent_status', 'recency']) {
+  for (const key of ['lender_relationship', 'target_lender_ref', 'product', 'marketing_eligibility', 'consent_status', 'recency']) {
     const value = criteria[key];
     if (typeof value === 'string' && value && value !== 'All' && value !== 'Any') {
       parts.push(value);

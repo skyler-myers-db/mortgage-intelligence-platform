@@ -228,6 +228,16 @@ class TestBorrowerOpportunityMetricView:
         raw, _ = _read_sql(self.view_path)
         assert "COMMENT ON VIEW mip.semantics.borrower_opportunity_metric_view" in raw
 
+    def test_publishes_public_safe_lender_overlay_dimensions(self) -> None:
+        _, sql_nc = _read_sql(self.view_path)
+        for col in ("is_current_customer", "is_former_customer", "is_competitor_lien", "current_lender_ref"):
+            assert col in sql_nc, f"borrower opportunity view must expose `{col}`"
+
+    def test_deploy_manifest_stays_in_sync_for_lender_overlay_dimensions(self) -> None:
+        raw, _ = _read_sql(DDL_DIR / "005_semantics_views.sql")
+        for col in ("b.is_former_customer", "b.is_competitor_lien", "b.current_lender_ref"):
+            assert col in raw, f"005_semantics_views.sql missing `{col}`"
+
 
 # -----------------------------------------------------------------------------
 # Gold DDL additions (lifecycle_state + funnel_snapshot_daily)

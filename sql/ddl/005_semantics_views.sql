@@ -242,6 +242,9 @@ SELECT
   b.first_pos_loan_type                             AS loan_purpose,
   b.is_investor,
   b.is_current_customer,
+  b.is_former_customer,
+  b.is_competitor_lien,
+  b.current_lender_ref,
   b.rate_spread_bps,
   b.equity_pct,
   b.in_the_money,
@@ -250,4 +253,4 @@ SELECT
 FROM mip.gold.borrower_360 AS b;
 
 COMMENT ON VIEW mip.semantics.borrower_opportunity_metric_view IS
-  'Genie + dashboard borrower-grain metric view over gold.borrower_360. Dimensions: state, segment_codes, primary_segment, deprecated segment alias, loan_purpose, is_investor, is_current_customer. Measures: avg_rate_spread_bps, avg_equity_pct, count_itm, sum_loan_amount, count_total, avg_opportunity_score. See docs/data-contract-module0.md §3.2.';
+  'Genie + dashboard borrower-grain metric view over gold.borrower_360. Dimensions: state, segment_codes, primary_segment, deprecated segment alias, loan_purpose, is_investor, is_current_customer, is_former_customer, is_competitor_lien, current_lender_ref. Measures: avg_rate_spread_bps, avg_equity_pct, count_itm, sum_loan_amount, count_total, avg_opportunity_score. See docs/data-contract-module0.md §3.2.';

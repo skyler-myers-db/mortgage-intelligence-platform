@@ -375,7 +375,7 @@ def test_validation_notes_are_explicitly_internal_artifacts() -> None:
     for path in internal_docs:
         text = path.read_text(encoding="utf-8")
         assert "Internal" in text
-        lowered = text.lower()
+        lowered = " ".join(re.sub(r"\s*>\s*", " ", text.lower()).split())
         assert (
             "not approved for public release" in lowered
             or "not public release collateral" in lowered

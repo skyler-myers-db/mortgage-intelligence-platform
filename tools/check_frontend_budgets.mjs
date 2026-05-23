@@ -21,7 +21,10 @@ const budgets = {
   // overhead while leaving initial load and largest-route gates unchanged.
   // Keep this aggregate cap tight enough to catch accidental asset growth
   // without forcing large components back into single-file maintenance debt.
-  totalJsBytes: 815 * KiB,
+  // The governed lender overlay adds cross-route URL propagation and public-safe
+  // lender filter helpers. Keep the raw aggregate allowance bounded while
+  // preserving the stricter gzip, initial-load, lazy-route, CSS, and font gates.
+  totalJsBytes: 817 * KiB,
   totalJsGzipBytes: 270 * KiB,
   maxLazyJsBytes: 160 * KiB,
   maxLazyJsGzipBytes: 60 * KiB,

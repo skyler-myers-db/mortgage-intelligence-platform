@@ -100,6 +100,8 @@ def test_state_rollups_passes_secondary_portfolio_criteria_to_repository():
             "&segment_mode=all"
             "&occupancy=Owner-occupied"
             "&lien_status=Open%201st%20lien"
+            "&lender_relationship=Competitor%20customer"
+            "&target_lender_ref=Competitor%20B"
             "&owner_link=Portfolio%20investor%20%285%2B%29"
             "&purchase_intent=Listed%20for%20sale"
             "&min_equity_pct_label=%E2%89%A5%2025%25"
@@ -121,6 +123,8 @@ def test_state_rollups_passes_secondary_portfolio_criteria_to_repository():
     assert criteria is not None
     assert criteria.occupancy == "Owner-occupied"
     assert criteria.lien_status == "Open 1st lien"
+    assert criteria.lender_relationship == "Competitor customer"
+    assert criteria.target_lender_ref == "Competitor B"
     assert criteria.owner_link == "Portfolio investor (5+)"
     assert criteria.purchase_intent == "Listed for sale"
     assert criteria.min_equity_pct_label == "≥ 25%"
@@ -134,6 +138,13 @@ def test_state_rollups_reject_unknown_segment_codes():
 
     assert response.status_code == 422
     assert "unknown segment" in response.text
+
+
+def test_state_rollups_reject_raw_target_lender_ref():
+    response = client.get("/api/geo/state-rollups?target_lender_ref=Wells%20Fargo%20Bank")
+
+    assert response.status_code == 422
+    assert "target_lender_ref" in response.text
 
 
 def test_county_rollups_returns_counties_for_populated_state():
@@ -212,6 +223,8 @@ def test_county_rollups_passes_secondary_portfolio_criteria_to_repository():
             "&segment_mode=all"
             "&occupancy=Owner-occupied"
             "&lien_status=Open%201st%20lien"
+            "&lender_relationship=Competitor%20customer"
+            "&target_lender_ref=Competitor%20B"
             "&owner_link=Portfolio%20investor%20%285%2B%29"
             "&purchase_intent=Listed%20for%20sale"
             "&min_equity_pct_label=%E2%89%A5%2025%25"
@@ -234,6 +247,8 @@ def test_county_rollups_passes_secondary_portfolio_criteria_to_repository():
     assert criteria is not None
     assert criteria.occupancy == "Owner-occupied"
     assert criteria.lien_status == "Open 1st lien"
+    assert criteria.lender_relationship == "Competitor customer"
+    assert criteria.target_lender_ref == "Competitor B"
     assert criteria.owner_link == "Portfolio investor (5+)"
     assert criteria.purchase_intent == "Listed for sale"
     assert criteria.min_equity_pct_label == "≥ 25%"
@@ -307,6 +322,8 @@ def test_zip_rollups_passes_secondary_portfolio_criteria_to_repository():
             "&segment_mode=all"
             "&occupancy=Owner-occupied"
             "&lien_status=Open%201st%20lien"
+            "&lender_relationship=Competitor%20customer"
+            "&target_lender_ref=Competitor%20B"
             "&owner_link=Portfolio%20investor%20%285%2B%29"
             "&purchase_intent=Listed%20for%20sale"
             "&min_equity_pct_label=%E2%89%A5%2025%25"
@@ -329,6 +346,8 @@ def test_zip_rollups_passes_secondary_portfolio_criteria_to_repository():
     assert criteria is not None
     assert criteria.occupancy == "Owner-occupied"
     assert criteria.lien_status == "Open 1st lien"
+    assert criteria.lender_relationship == "Competitor customer"
+    assert criteria.target_lender_ref == "Competitor B"
     assert criteria.owner_link == "Portfolio investor (5+)"
     assert criteria.purchase_intent == "Listed for sale"
     assert criteria.min_equity_pct_label == "≥ 25%"

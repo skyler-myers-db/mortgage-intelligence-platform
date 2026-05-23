@@ -498,6 +498,8 @@ describe('analytics API client', () => {
       states: ['il', 'ca'],
       segmentCodes: ['itm', 'equity'] as SegmentCode[],
       segmentMode: 'any',
+      lenderRelationship: 'Competitor customer',
+      targetLenderRef: 'Competitor B',
       signalTypes: ['equity', 'rate_spread'],
       days: 7,
     });
@@ -507,6 +509,8 @@ describe('analytics API client', () => {
     expect(url.searchParams.get('states')).toBe('IL,CA');
     expect(url.searchParams.get('segment_codes')).toBe('itm,equity');
     expect(url.searchParams.get('segment_mode')).toBe('any');
+    expect(url.searchParams.get('lender_relationship')).toBe('Competitor customer');
+    expect(url.searchParams.get('target_lender_ref')).toBe('Competitor B');
     expect(url.searchParams.get('signal_types')).toBe('equity,rate_spread');
     expect(url.searchParams.get('days')).toBe('7');
   });
@@ -523,6 +527,8 @@ describe('geo API client', () => {
     const portfolioCriteria = {
       occupancy: 'Owner-occupied',
       lien_status: 'Open 1st lien',
+      lender_relationship: 'Competitor customer',
+      target_lender_ref: 'Competitor B',
       owner_link: 'Portfolio investor (5+)',
       purchase_intent: 'Listed for sale',
       min_equity_pct_label: '≥ 25%',
@@ -569,6 +575,8 @@ describe('geo API client', () => {
     for (const url of [stateUrl, countyUrl, zipUrl]) {
       expect(url.searchParams.get('occupancy')).toBe('Owner-occupied');
       expect(url.searchParams.get('lien_status')).toBe('Open 1st lien');
+      expect(url.searchParams.get('lender_relationship')).toBe('Competitor customer');
+      expect(url.searchParams.get('target_lender_ref')).toBe('Competitor B');
       expect(url.searchParams.get('owner_link')).toBe('Portfolio investor (5+)');
       expect(url.searchParams.get('purchase_intent')).toBe('Listed for sale');
       expect(url.searchParams.get('min_equity_pct_label')).toBe('≥ 25%');

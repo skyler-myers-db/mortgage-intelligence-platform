@@ -25,6 +25,7 @@ import {
   buildGeoOptions,
   buildLeadQueueUrlFromFilters,
   buildPreviewCriteria,
+  buildSegmentIntelligenceUrlFromFilters,
   buildUrlFromFilters,
   campaignCriteriaSummary,
   dayZeroSafe,
@@ -82,7 +83,7 @@ export default function PortfolioBuilder() {
   // mount we also trigger a build, so a shared link reproduces the
   // exact KPI grid the sender saw. Round-2 hole-finder #16, 2026-04-23.
   const [filters, setFilters] = useState<Record<string, string>>(() =>
-    parseFiltersFromUrl(searchParams, defaultFilters),
+    parseFiltersFromUrl(searchParams, defaultFilters, targetLenderOptions),
   );
   const [stateCodes, setStateCodes] = useState<string[]>(() =>
     parseStateCodesFromUrl(searchParams, footprint.states),
@@ -93,7 +94,7 @@ export default function PortfolioBuilder() {
   // This preserves the prototype UX: filter changes don't refetch; the
   // "Run build" button is the explicit commit point.
   const [committedFilters, setCommittedFilters] = useState<Record<string, string>>(
-    () => parseFiltersFromUrl(searchParams, defaultFilters),
+    () => parseFiltersFromUrl(searchParams, defaultFilters, targetLenderOptions),
   );
   const [committedStateCodes, setCommittedStateCodes] = useState<string[]>(() =>
     parseStateCodesFromUrl(searchParams, footprint.states),
@@ -260,6 +261,9 @@ export default function PortfolioBuilder() {
   const leadQueueUrl = useMemo(() => {
     return buildLeadQueueUrlFromFilters(committedFilters, committedStateCodes, targetLenderOptions);
   }, [committedFilters, committedStateCodes, targetLenderOptions]);
+  const segmentIntelligenceUrl = useMemo(() => {
+    return buildSegmentIntelligenceUrlFromFilters(committedFilters, targetLenderOptions);
+  }, [committedFilters, targetLenderOptions]);
 
   return (
     <PageShell
@@ -642,7 +646,7 @@ export default function PortfolioBuilder() {
       )}
 
       <div className="section-actions">
-        <Link to="/segment-intelligence" className="btn">
+        <Link to={segmentIntelligenceUrl} className="btn">
           Next: segments
           <Icon name="chevright" size={14} />
         </Link>

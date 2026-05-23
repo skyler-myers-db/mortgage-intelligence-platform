@@ -9,6 +9,7 @@ from typing import Annotated, get_args
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
+from backend.schemas._validators import normalize_public_lender_ref
 from backend.schemas.analytics import (
     AnalyticsFilters,
     EconomicsAnalyticsResponse,
@@ -38,6 +39,11 @@ _ALLOWED_SIGNAL_TYPES = {
     "recent_payoff",
     "recent_refi",
     "recent_sale",
+}
+_ALLOWED_LENDER_RELATIONSHIPS = {
+    "Current customer",
+    "Former customer",
+    "Competitor customer",
 }
 
 
@@ -86,6 +92,27 @@ def _parse_signal_types(raw: str | None) -> list[str]:
     return out
 
 
+def _parse_lender_relationship(raw: str | None) -> str | None:
+    if raw is None:
+        return None
+    value = raw.strip()
+    if not value or value == "All":
+        return None
+    if value not in _ALLOWED_LENDER_RELATIONSHIPS:
+        raise HTTPException(status_code=422, detail="lender_relationship must be a reviewed option")
+    return value
+
+
+def _parse_target_lender_ref(raw: str | None) -> str | None:
+    try:
+        value = normalize_public_lender_ref(raw, allow_all=True)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="target_lender_ref must be a public-safe lender alias") from exc
+    if value == "All":
+        return None
+    return value
+
+
 def _analytics_filters(
     state: Annotated[
         str | None,
@@ -106,6 +133,14 @@ def _analytics_filters(
         str,
         Query(pattern="^(any|all)$", description="Segment filter mode for multi-select codes."),
     ] = "any",
+    lender_relationship: Annotated[
+        str | None,
+        Query(description="Optional governed lender relationship filter."),
+    ] = None,
+    target_lender_ref: Annotated[
+        str | None,
+        Query(description="Optional public-safe current lien-holder alias."),
+    ] = None,
     signal_type: Annotated[
         str | None,
         Query(description="Deprecated single-signal alias. Prefer signal_types."),
@@ -129,6 +164,8 @@ def _analytics_filters(
         states=parsed_states,
         segment_codes=_parse_segment_codes(segment_codes),
         segment_mode="all" if segment_mode == "all" else "any",
+        lender_relationship=_parse_lender_relationship(lender_relationship),
+        target_lender_ref=_parse_target_lender_ref(target_lender_ref),
         signal_types=parsed_signals,
         days=days,
     )

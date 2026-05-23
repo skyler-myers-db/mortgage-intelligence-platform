@@ -12,8 +12,10 @@ import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 import { FilterSelect } from '../components/ui/FilterSelect';
 import { useFootprint } from '../components/FootprintProvider';
 import { api, type AnalyticsQueryOptions, type LeadFunnelStage } from '../lib/api';
+import { useConfigOptionsQuery } from '../lib/configOptionsQuery';
 import { queryKeys } from '../lib/queryKeys';
 import { useWarmingUpRetry, type UseWarmingUpRetryResult } from '../lib/useWarmingUpRetry';
+import { LENDER_RELATIONSHIP_OPTIONS } from '../lib/lenderFilters';
 import type {
   EconomicsAnalyticsResponse,
   EvidenceDailyRow,
@@ -61,7 +63,6 @@ const SEGMENT_CODE_TO_OPTION = Object.fromEntries(
 ) as Record<SegmentCode, string>;
 const SEGMENT_MULTI_OPTIONS = SEGMENT_FILTERS
   .flatMap(([label, value]) => (value ? [{ label, value }] : []));
-
 const SIGNAL_FILTERS = [
   ['All signals', null],
   ['Market trend', 'market_trend'],
@@ -118,16 +119,32 @@ function pct(n: number, total: number): number {
   return Math.max(0, Math.min(100, (n / total) * 100));
 }
 
-export function leadQueueHref(params: Record<string, string | number | null | undefined>): string {
+function routeHref(route: '/lead-queue' | '/segment-intelligence', params: Record<string, string | number | null | undefined>): string {
   const qs = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
     if (value !== null && value !== undefined && value !== '') qs.set(key, String(value));
   }
   const encoded = qs.toString();
-  return encoded ? `/lead-queue?${encoded}` : '/lead-queue';
+  return encoded ? `${route}?${encoded}` : route;
 }
 
-export function leadQueueHrefForFunnelStage(row: Pick<FunnelStage, 'stage' | 'stage_order'>): string {
+export function leadQueueHref(params: Record<string, string | number | null | undefined>): string {
+  return routeHref('/lead-queue', params);
+}
+
+export function segmentIntelligenceHref(params: Record<string, string | number | null | undefined>): string {
+  return routeHref('/segment-intelligence', params);
+}
+
+type LenderFilterParams = {
+  lender_relationship?: string | null;
+  target_lender_ref?: string | null;
+};
+
+export function leadQueueHrefForFunnelStage(
+  row: Pick<FunnelStage, 'stage' | 'stage_order'>,
+  leadParams: LenderFilterParams = {},
+): string {
   const byOrder: Record<number, LeadFunnelStage> = {
     1: 'addressable',
     2: 'in_the_money',
@@ -145,7 +162,7 @@ export function leadQueueHrefForFunnelStage(row: Pick<FunnelStage, 'stage' | 'st
     actioned: 'actioned',
   };
   const stage = byOrder[row.stage_order] ?? byLabel[row.stage.trim().toLowerCase()];
-  return leadQueueHref({ funnel_stage: stage ?? 'addressable' });
+  return leadQueueHref({ funnel_stage: stage ?? 'addressable', ...leadParams });
 }
 
 function makeTicks(min: number, max: number, count = 5): number[] {
@@ -406,13 +423,13 @@ function Bars<T>({
   );
 }
 
-function FunnelBars({ stages }: { stages: FunnelStage[] }) {
+function FunnelBars({ stages, leadParams = {} }: { stages: FunnelStage[]; leadParams?: LenderFilterParams }) {
   return (
     <Bars
       rows={[...stages].sort((a, b) => a.stage_order - b.stage_order)}
       value={(row) => row.borrower_count}
       label={(row) => row.stage}
-      href={leadQueueHrefForFunnelStage}
+      href={(row) => leadQueueHrefForFunnelStage(row, leadParams)}
     />
   );
 }
@@ -695,7 +712,7 @@ function DataTable<T>({
   );
 }
 
-function ExecutiveView({ data }: { data: ExecutiveAnalyticsResponse }) {
+function ExecutiveView({ data, leadParams }: { data: ExecutiveAnalyticsResponse; leadParams: LenderFilterParams }) {
   return (
     <>
       <div className="kpi-row">
@@ -708,7 +725,7 @@ function ExecutiveView({ data }: { data: ExecutiveAnalyticsResponse }) {
         <section className="surface">
           <div className="surface__hdr surface__hdr--split">
             <h2 className="h-3">Opportunity Score Distribution</h2>
-            <Link className="btn btn--sm" to="/lead-queue">Open queue</Link>
+            <Link className="btn btn--sm" to={leadQueueHref(leadParams)}>Open queue</Link>
           </div>
           <div className="surface__body analytics-chart-panel">
             <LineChart
@@ -726,7 +743,7 @@ function ExecutiveView({ data }: { data: ExecutiveAnalyticsResponse }) {
             <ScopeChip>Independent cuts</ScopeChip>
           </div>
           <div className="surface__body">
-            <FunnelBars stages={data.stages} />
+            <FunnelBars stages={data.stages} leadParams={leadParams} />
           </div>
         </section>
       </div>
@@ -734,10 +751,10 @@ function ExecutiveView({ data }: { data: ExecutiveAnalyticsResponse }) {
   );
 }
 
-function GeographyView({ data }: { data: GeographyAnalyticsResponse }) {
+function GeographyView({ data, leadParams }: { data: GeographyAnalyticsResponse; leadParams: LenderFilterParams }) {
   return (
     <>
-      <SectionHeader title="Geography" action={<Link className="btn btn--sm" to="/segment-intelligence">Open map</Link>} />
+      <SectionHeader title="Geography" action={<Link className="btn btn--sm" to={segmentIntelligenceHref(leadParams)}>Open map</Link>} />
       <div className="layoutA-grid analytics-grid">
         <section className="surface">
           <div className="surface__hdr"><h2 className="h-3">Opportunity by State</h2></div>
@@ -747,7 +764,7 @@ function GeographyView({ data }: { data: GeographyAnalyticsResponse }) {
               value={(row) => row.in_the_money_borrowers}
               label={(row) => row.state}
               sublabel={(row) => `${fmt(row.borrower_count)} addressable · ${row.mean_opportunity_score} avg score`}
-              href={(row) => leadQueueHref({ state: row.state })}
+              href={(row) => leadQueueHref({ state: row.state, ...leadParams })}
             />
           </div>
         </section>
@@ -759,7 +776,7 @@ function GeographyView({ data }: { data: GeographyAnalyticsResponse }) {
               value={(row) => row.total_avm_value_usd}
               label={(row) => row.state}
               sublabel={(row) => `${fmtCurrency(row.total_equity_usd)} equity`}
-              href={(row) => leadQueueHref({ state: row.state })}
+              href={(row) => leadQueueHref({ state: row.state, ...leadParams })}
             />
           </div>
         </section>
@@ -771,7 +788,7 @@ function GeographyView({ data }: { data: GeographyAnalyticsResponse }) {
             rows={data.top_zips}
             getKey={(row) => `${row.state}-${row.zip}`}
             columns={[
-              { key: 'zip', label: 'ZIP', render: (row) => <Link to={leadQueueHref({ state: row.state, zip: row.zip })}>{row.zip}</Link> },
+              { key: 'zip', label: 'ZIP', render: (row) => <Link to={leadQueueHref({ state: row.state, zip: row.zip, ...leadParams })}>{row.zip}</Link> },
               { key: 'place', label: 'Market', render: (row) => `${row.city ?? 'Unknown'}, ${row.state}` },
               { key: 'itm', label: 'In the Money', render: (row) => fmt(row.in_the_money_borrowers) },
               { key: 'score', label: 'ITM Avg Score', render: (row) => row.mean_opportunity_score },
@@ -826,7 +843,7 @@ function EconomicsView({ data }: { data: EconomicsAnalyticsResponse }) {
   );
 }
 
-function SegmentsView({ data }: { data: SegmentAnalyticsResponse }) {
+function SegmentsView({ data, leadParams }: { data: SegmentAnalyticsResponse; leadParams: LenderFilterParams }) {
   const topStates = data.top_segments_by_state.filter((row) => row.state_rank === 1);
   const scopeLabel = data.scope.label;
   const scopeDescription = data.scope.description;
@@ -842,7 +859,7 @@ function SegmentsView({ data }: { data: SegmentAnalyticsResponse }) {
             rows={data.overview}
             getKey={(row) => row.segment_code}
             columns={[
-              { key: 'segment', label: 'Segment', render: (row) => <Link to={leadQueueHref({ segment_codes: row.segment_code, segment_mode: 'all' })}>{row.name}</Link> },
+              { key: 'segment', label: 'Segment', render: (row) => <Link to={leadQueueHref({ segment_codes: row.segment_code, segment_mode: 'all', ...leadParams })}>{row.name}</Link> },
               { key: 'borrowers', label: 'Borrowers', render: (row) => fmt(row.borrower_count) },
               { key: 'score', label: 'Avg Score', render: (row) => row.mean_opportunity_score },
               { key: 'itm', label: 'In the Money', render: (row) => fmt(row.in_the_money_borrowers) },
@@ -862,7 +879,7 @@ function SegmentsView({ data }: { data: SegmentAnalyticsResponse }) {
               rows={data.counts}
               value={(row) => row.value}
               label={(row) => row.segment_name}
-              href={(row) => leadQueueHref({ segment_codes: row.segment_code, segment_mode: 'all' })}
+              href={(row) => leadQueueHref({ segment_codes: row.segment_code, segment_mode: 'all', ...leadParams })}
             />
           </div>
         </section>
@@ -876,7 +893,7 @@ function SegmentsView({ data }: { data: SegmentAnalyticsResponse }) {
               rows={data.average_scores}
               value={(row) => row.value}
               label={(row) => row.segment_name}
-              href={(row) => leadQueueHref({ segment_codes: row.segment_code, segment_mode: 'all' })}
+              href={(row) => leadQueueHref({ segment_codes: row.segment_code, segment_mode: 'all', ...leadParams })}
             />
           </div>
         </section>
@@ -891,7 +908,7 @@ function SegmentsView({ data }: { data: SegmentAnalyticsResponse }) {
             rows={topStates}
             value={(row) => row.borrower_count}
             label={(row) => `${row.state} · ${row.segment_name}`}
-            href={(row) => leadQueueHref({ state: row.state, segment_codes: row.segment_code, segment_mode: 'all' })}
+            href={(row) => leadQueueHref({ state: row.state, segment_codes: row.segment_code, segment_mode: 'all', ...leadParams })}
           />
         </div>
       </section>
@@ -1129,7 +1146,7 @@ function SignalsView({
   filterParams,
 }: {
   data: SignalAnalyticsResponse;
-  filterParams: { states: string[]; segmentCodes: SegmentCode[]; days: number };
+  filterParams: { states: string[]; segmentCodes: SegmentCode[]; days: number } & LenderFilterParams;
 }) {
   const dailyTotals = useMemo(() => buildDailyEvidenceTotals(data.evidence_daily), [data.evidence_daily]);
 
@@ -1170,6 +1187,8 @@ function SignalsView({
               states: filterParams.states,
               segment_codes: filterParams.segmentCodes,
               segment_mode: filterParams.segmentCodes.length ? 'any' : null,
+              lender_relationship: filterParams.lender_relationship,
+              target_lender_ref: filterParams.target_lender_ref,
               days: filterParams.days === 30 ? null : filterParams.days,
               signal_types: row.signal_type,
             })}
@@ -1198,11 +1217,25 @@ export default function AnalyticsRoute() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [tab, setTab] = useState<AnalyticsTab>('executive');
   const footprint = useFootprint();
+  const configOptionsQuery = useConfigOptionsQuery();
+  const targetLenderOptions = useMemo(() => {
+    const values = configOptionsQuery.data?.target_lender_refs?.filter(Boolean);
+    return values && values.length > 0 ? values : ['All'];
+  }, [configOptionsQuery.data?.target_lender_refs]);
   const states = parseCsvParam(searchParams.get('states') ?? searchParams.get('state'))
     .map((value) => value.toUpperCase())
     .filter((value, idx, all) => /^[A-Z]{2}$/.test(value) && all.indexOf(value) === idx);
   const segmentCodes = parseCsvParam(searchParams.get('segment_codes'))
     .filter((value, idx, all): value is SegmentCode => Boolean(SEGMENT_CODE_TO_OPTION[value as SegmentCode]) && all.indexOf(value) === idx);
+  const lenderRelationship = LENDER_RELATIONSHIP_OPTIONS.includes(searchParams.get('lender_relationship') as (typeof LENDER_RELATIONSHIP_OPTIONS)[number])
+    ? searchParams.get('lender_relationship')!
+    : 'All';
+  const targetLenderFromUrl = searchParams.get('target_lender_ref');
+  const targetLenderRef = targetLenderFromUrl
+    && targetLenderFromUrl !== 'All'
+    && targetLenderOptions.includes(targetLenderFromUrl)
+    ? targetLenderFromUrl
+    : null;
   const signalTypes = parseCsvParam(searchParams.get('signal_types') ?? searchParams.get('signal_type'))
     .map((value) => value.toLowerCase())
     .filter((value, idx, all) => Boolean(SIGNAL_TYPE_TO_OPTION[value]) && all.indexOf(value) === idx);
@@ -1220,15 +1253,36 @@ export default function AnalyticsRoute() {
     states,
     segmentCodes,
     segmentMode: 'any',
-  }), [segmentCodes, states]);
+    lenderRelationship: lenderRelationship !== 'All' ? lenderRelationship : null,
+    targetLenderRef,
+  }), [lenderRelationship, segmentCodes, states, targetLenderRef]);
   const signalFilters = useMemo<AnalyticsQueryOptions>(() => ({
     ...baseFilters,
     signalTypes,
     days,
   }), [baseFilters, days, signalTypes]);
-  const baseCriteria = [states.join(',') || 'all', segmentCodes.join(',') || 'all'];
+  const leadParams = useMemo(
+    () => ({
+      lender_relationship: lenderRelationship !== 'All' ? lenderRelationship : null,
+      target_lender_ref: targetLenderRef,
+    }),
+    [lenderRelationship, targetLenderRef],
+  );
+  const baseCriteria = [
+    states.join(',') || 'all',
+    segmentCodes.join(',') || 'all',
+    lenderRelationship,
+    targetLenderRef ?? 'all',
+  ];
   const signalCriteria = [...baseCriteria, signalTypes.join(',') || 'all', days];
-  const filtersActive = Boolean(states.length || segmentCodes.length || signalTypes.length || days !== 30);
+  const filtersActive = Boolean(
+    states.length
+    || segmentCodes.length
+    || lenderRelationship !== 'All'
+    || targetLenderRef
+    || signalTypes.length
+    || days !== 30,
+  );
 
   const setMultiFilterParam = (key: 'states' | 'segment_codes' | 'signal_types', values: readonly string[]) => {
     const next = new URLSearchParams(searchParams);
@@ -1250,6 +1304,13 @@ export default function AnalyticsRoute() {
     } else {
       next.set('days', String(EVIDENCE_WINDOW_TO_DAYS[value as (typeof EVIDENCE_WINDOW_OPTIONS)[number]] ?? 30));
     }
+    setSearchParams(next);
+  };
+
+  const setSingleFilterParam = (key: 'lender_relationship' | 'target_lender_ref', value: string) => {
+    const next = new URLSearchParams(searchParams);
+    if (!value || value === 'All') next.delete(key);
+    else next.set(key, value);
     setSearchParams(next);
   };
 
@@ -1316,6 +1377,18 @@ export default function AnalyticsRoute() {
           options={SEGMENT_MULTI_OPTIONS}
           onChange={(value) => setMultiFilterParam('segment_codes', value)}
         />
+        <FilterSelect
+          label="Relationship"
+          value={lenderRelationship}
+          options={[...LENDER_RELATIONSHIP_OPTIONS]}
+          onChange={(value) => setSingleFilterParam('lender_relationship', value)}
+        />
+        <FilterSelect
+          label="Target lien holder"
+          value={targetLenderRef ?? 'All'}
+          options={targetLenderOptions}
+          onChange={(value) => setSingleFilterParam('target_lender_ref', value)}
+        />
         {tab === 'signals' && (
           <>
             <MultiFilterSelect
@@ -1342,12 +1415,12 @@ export default function AnalyticsRoute() {
 
       {tab === 'executive' && (
         <LoadState query={executive} title="Executive analytics">
-          {(data) => <ExecutiveView data={data} />}
+          {(data) => <ExecutiveView data={data} leadParams={leadParams} />}
         </LoadState>
       )}
       {tab === 'geography' && (
         <LoadState query={geography} title="Geography analytics">
-          {(data) => <GeographyView data={data} />}
+          {(data) => <GeographyView data={data} leadParams={leadParams} />}
         </LoadState>
       )}
       {tab === 'economics' && (
@@ -1357,12 +1430,12 @@ export default function AnalyticsRoute() {
       )}
       {tab === 'segments' && (
         <LoadState query={segments} title="Segment analytics">
-          {(data) => <SegmentsView data={data} />}
+          {(data) => <SegmentsView data={data} leadParams={leadParams} />}
         </LoadState>
       )}
       {tab === 'signals' && (
         <LoadState query={signals} title="Signal analytics">
-          {(data) => <SignalsView data={data} filterParams={{ states, segmentCodes, days }} />}
+          {(data) => <SignalsView data={data} filterParams={{ states, segmentCodes, days, ...leadParams }} />}
         </LoadState>
       )}
     </PageShell>
