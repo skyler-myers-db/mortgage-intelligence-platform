@@ -695,6 +695,36 @@ def genie_message(
             ),
         )
         return _finalize_genie_response(lakebase, actor=actor, response=response)
+    try:
+        sales_ops_response = sales_ops_genie_response(
+            lakebase,
+            borrower_repo,
+            actor=actor,
+            question=payload.question,
+            conversation_id=payload.conversation_id,
+        )
+    except LakebaseError as exc:
+        raise HTTPException(status_code=503, detail=safe_dependency_detail("lakebase")) from exc
+    if sales_ops_response is not None:
+        _ = background
+        _required_audit_write(
+            audit,
+            actor=actor,
+            action="genie.sales_ops_query",
+            entity_type="genie_message",
+            entity_id=sales_ops_response.message_id or sales_ops_response.question_hash or "sales_ops",
+            payload_json={
+                "conversation_id": sales_ops_response.conversation_id,
+                "message_id": sales_ops_response.message_id,
+                "question_hash": sales_ops_response.question_hash,
+                "row_count": sales_ops_response.row_count or 0,
+                "source_assets": sales_ops_response.trusted_assets,
+                "visualization_kind": None,
+                "action_type": "sales_ops_query",
+            },
+            event_type="RUN_GENIE",
+        )
+        return _finalize_genie_response(lakebase, actor=actor, response=sales_ops_response)
     metadata_gap = _footprint_metadata_gap_match(payload.question)
     if metadata_gap is not None:
         state_name, state_code = metadata_gap
@@ -798,36 +828,6 @@ def genie_message(
             table_rows=[],
         )
         return _finalize_genie_response(lakebase, actor=actor, response=response)
-    try:
-        sales_ops_response = sales_ops_genie_response(
-            lakebase,
-            borrower_repo,
-            actor=actor,
-            question=payload.question,
-            conversation_id=payload.conversation_id,
-        )
-    except LakebaseError as exc:
-        raise HTTPException(status_code=503, detail=safe_dependency_detail("lakebase")) from exc
-    if sales_ops_response is not None:
-        _ = background
-        _required_audit_write(
-            audit,
-            actor=actor,
-            action="genie.sales_ops_query",
-            entity_type="genie_message",
-            entity_id=sales_ops_response.message_id or sales_ops_response.question_hash or "sales_ops",
-            payload_json={
-                "conversation_id": sales_ops_response.conversation_id,
-                "message_id": sales_ops_response.message_id,
-                "question_hash": sales_ops_response.question_hash,
-                "row_count": sales_ops_response.row_count or 0,
-                "source_assets": sales_ops_response.trusted_assets,
-                "visualization_kind": None,
-                "action_type": "sales_ops_query",
-            },
-            event_type="RUN_GENIE",
-        )
-        return _finalize_genie_response(lakebase, actor=actor, response=sales_ops_response)
     # repo.respond() returns a GenieMessageResponse by contract; the
     # protocol annotates `object` only to dodge a forward-import cycle.
     try:
