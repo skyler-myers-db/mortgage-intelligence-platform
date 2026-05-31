@@ -42,6 +42,7 @@ API_PREFIX="${API_PREFIX%/}"
 FRONTEND_URL="${MIP_FRONTEND_URL:-http://127.0.0.1:5173}"
 AUTH_TOKEN="${MIP_BEARER_TOKEN:-${DATABRICKS_TOKEN:-}}"
 BOOT_TIMEOUT=20
+REMOTE_BOOT_TIMEOUT="${MIP_REMOTE_BOOT_TIMEOUT:-240}"
 SKIP_GENIE=0
 BOOT_LOCAL=0
 BACKEND_PID=""
@@ -76,6 +77,15 @@ PY
   fi
 }
 
+health_ready() {
+  jq -e '
+    .status == "ok"
+    and .dependencies.warehouse == "up"
+    and .dependencies.lakebase == "up"
+    and .dependencies.genie == "up"
+  ' "$1" >/dev/null 2>&1
+}
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
@@ -88,7 +98,7 @@ cleanup() {
   if [[ -n "$FRONTEND_PID" ]] && kill -0 "$FRONTEND_PID" 2>/dev/null; then
     kill "$FRONTEND_PID" 2>/dev/null || true
   fi
-  exit $rc
+  exit "$rc"
 }
 trap cleanup EXIT INT TERM
 
@@ -124,9 +134,27 @@ fi
 
 # --- Health --------------------------------------------------------------
 echo "[smoke] GET $API_PREFIX/health"
-HEALTH="$(curl -sf "${CURL_AUTH_ARGS[@]}" "$APP_URL$API_PREFIX/health")" || {
-  echo "[smoke] $API_PREFIX/health failed" >&2; exit 1;
-}
+if [[ "$BOOT_LOCAL" == "0" ]]; then
+  waited=0
+  until curl -sf "${CURL_AUTH_ARGS[@]}" "$APP_URL$API_PREFIX/health" > /tmp/mip-smoke-health.json 2>/dev/null \
+    && health_ready /tmp/mip-smoke-health.json; do
+    sleep 5
+    waited=$((waited + 5))
+    if (( waited >= REMOTE_BOOT_TIMEOUT )); then
+      echo "[smoke] deployed app health was not ready within ${REMOTE_BOOT_TIMEOUT}s" >&2
+      if [[ -s /tmp/mip-smoke-health.json ]]; then
+        cat /tmp/mip-smoke-health.json >&2 || true
+      fi
+      exit 1
+    fi
+  done
+  echo "[smoke] deployed app health ready after ${waited}s"
+  HEALTH="$(cat /tmp/mip-smoke-health.json)"
+else
+  HEALTH="$(curl -sf "${CURL_AUTH_ARGS[@]}" "$APP_URL$API_PREFIX/health")" || {
+    echo "[smoke] $API_PREFIX/health failed" >&2; exit 1;
+  }
+fi
 
 STATUS=$(echo "$HEALTH" | jq -r '.status')
 if [[ "$STATUS" != "ok" ]]; then
