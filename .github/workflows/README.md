@@ -22,9 +22,16 @@ only because the refresh jobs, Genie prompts, and browser matrix burn real
 customer/workspace compute. It fails loudly: live jobs check their own required
 secrets and exit non-zero instead of silently skipping release gates.
 
+The dev deploy workflow (`deploy-dev.yml`) is also manual-only. It builds the
+current ref, creates an ephemeral `.env.local` from repository secrets, seeds a
+temporary `DEFAULT` Databricks CLI profile, runs `scripts/deploy.sh -t dev
+--no-confirm`, and keeps the deployed app smoke test enabled unless the
+operator explicitly selects `skip_smoke`. Run it before live validation when
+the code under review changes app, bundle, job, SQL, or frontend behavior.
+
 ---
 
-## Required repo secrets (live validation only)
+## Required repo secrets (dev deploy and live validation)
 
 All listed below must be set under **Settings → Secrets and variables
 → Actions → Repository secrets**. Missing any one of them aborts the
