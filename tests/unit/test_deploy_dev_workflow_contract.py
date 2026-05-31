@@ -56,5 +56,6 @@ def test_deploy_dev_requires_explicit_admin_rbac_and_mints_app_bearer() -> None:
     assert "Configure MIP_ADMIN_EMAILS or MIP_ADMIN_GROUP_NAME" in text
     assert "DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}" in text
     assert "DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}" in text
+    assert "MIP_ADMIN_BEARER_TOKEN: ${{ secrets.MIP_ADMIN_BEARER_TOKEN }}" in text
     assert "python tools/oauth_m2m_mint.py" in text
     assert "MIP_BEARER_TOKEN=$bearer" in text

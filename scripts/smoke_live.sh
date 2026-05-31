@@ -32,6 +32,7 @@
 #   MIP_API_PREFIX   API prefix. Default: /api/v1.
 #   MIP_FRONTEND_URL Frontend URL. Default: http://127.0.0.1:5173.
 #   MIP_BEARER_TOKEN Optional Databricks Apps OAuth bearer for deployed URLs.
+#   MIP_ADMIN_BEARER_TOKEN Optional app-admin OAuth bearer for admin-only probes.
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
@@ -41,6 +42,7 @@ API_PREFIX="/${API_PREFIX#/}"
 API_PREFIX="${API_PREFIX%/}"
 FRONTEND_URL="${MIP_FRONTEND_URL:-http://127.0.0.1:5173}"
 AUTH_TOKEN="${MIP_BEARER_TOKEN:-}"
+ADMIN_AUTH_TOKEN="${MIP_ADMIN_BEARER_TOKEN:-}"
 BOOT_TIMEOUT=20
 REMOTE_BOOT_TIMEOUT="${MIP_REMOTE_BOOT_TIMEOUT:-240}"
 SKIP_GENIE=0
@@ -50,6 +52,10 @@ FRONTEND_PID=""
 CURL_AUTH_ARGS=()
 if [[ -n "$AUTH_TOKEN" ]]; then
   CURL_AUTH_ARGS=(-H "Authorization: Bearer $AUTH_TOKEN")
+fi
+CURL_ADMIN_AUTH_ARGS=()
+if [[ -n "$ADMIN_AUTH_TOKEN" ]]; then
+  CURL_ADMIN_AUTH_ARGS=(-H "Authorization: Bearer $ADMIN_AUTH_TOKEN")
 fi
 
 while [[ $# -gt 0 ]]; do
@@ -204,6 +210,32 @@ probe() {
   echo "[smoke] ok · $label"
 }
 
+probe_admin_or_forbidden() {
+  local label="$1"; local path="$2"
+  local code
+
+  if [[ -z "$ADMIN_AUTH_TOKEN" ]]; then
+    code=$(curl -s -o /tmp/mip-smoke-out.json -w '%{http_code}' \
+      "${CURL_AUTH_ARGS[@]}" "$APP_URL$path")
+    if [[ "$code" != "403" ]]; then
+      echo "[smoke] $label admin gate returned $code for non-admin bearer (expected 403)" >&2
+      cat /tmp/mip-smoke-out.json >&2 || true
+      exit 1
+    fi
+    echo "[smoke] ok · $label admin gate rejects non-admin bearer"
+    return 10
+  fi
+
+  code=$(curl -s -o /tmp/mip-smoke-out.json -w '%{http_code}' \
+    "${CURL_ADMIN_AUTH_ARGS[@]}" "$APP_URL$path")
+  if [[ "$code" != "200" ]]; then
+    echo "[smoke] $label ($path) returned $code with admin bearer" >&2
+    cat /tmp/mip-smoke-out.json >&2 || true
+    exit 1
+  fi
+  echo "[smoke] ok · $label"
+}
+
 probe "portfolio preview" "$API_PREFIX/portfolio/preview" POST '{}'
 probe "ranked leads"      "$API_PREFIX/leads?limit=5"
 if ! jq -e 'all(.[]; (.clip // "" | test("^(clip_ref_|clip_demo_|$)")))' /tmp/mip-smoke-out.json >/dev/null; then
@@ -237,23 +269,24 @@ if ! jq -e '.public_demo_masking == true and (.proof_assets | length > 0) and an
   exit 1
 fi
 
-probe "source readiness" "$API_PREFIX/admin/sources"
-if ! jq -e '
-  . as $rows
-  |
-  length > 0
-  and (["Cotality Public Records","Voluntary Lien","MMA Mortgage Analytics","CLIP","Owner Link","AVM","FRED Market Rates","UC Gold Borrower 360","UC Gold Lead Scores","UC Gold Lead Population","UC Gold Segment Population","UC Gold Borrower Dossier"] as $core
-    | all($core[]; . as $name
-      | any($rows[]; .name == $name and .status == "live" and (.rows // 0) > 0 and (.last_updated // "") != "" and (.checked_at // "") != "")))
-  and (["First-party LOS / Applications","First-party Servicing Portfolio","First-party CRM / Campaigns","First-party Customer Interactions","First-party Product Balances"] as $firstparty
-    | all($firstparty[]; . as $name
-      | any($rows[]; .name == $name and (.status == "live" or .status == "demo_synthetic") and (.rows // 0) > 0 and (.last_updated // "") != "" and (.checked_at // "") != "")))
-  and all($rows[]; if (.name == "MLS" or .name == "Building Permits") then .status != "live" else true end)
-  and all($rows[]; if .synthetic_demo == true then .status == "demo_synthetic" else true end)
-' /tmp/mip-smoke-out.json >/dev/null; then
-  echo "[smoke] source readiness failed core-live/synthetic-disclosure checks" >&2
-  cat /tmp/mip-smoke-out.json >&2 || true
-  exit 1
+if probe_admin_or_forbidden "source readiness" "$API_PREFIX/admin/sources"; then
+  if ! jq -e '
+    . as $rows
+    |
+    length > 0
+    and (["Cotality Public Records","Voluntary Lien","MMA Mortgage Analytics","CLIP","Owner Link","AVM","FRED Market Rates","UC Gold Borrower 360","UC Gold Lead Scores","UC Gold Lead Population","UC Gold Segment Population","UC Gold Borrower Dossier"] as $core
+      | all($core[]; . as $name
+        | any($rows[]; .name == $name and .status == "live" and (.rows // 0) > 0 and (.last_updated // "") != "" and (.checked_at // "") != "")))
+    and (["First-party LOS / Applications","First-party Servicing Portfolio","First-party CRM / Campaigns","First-party Customer Interactions","First-party Product Balances"] as $firstparty
+      | all($firstparty[]; . as $name
+        | any($rows[]; .name == $name and (.status == "live" or .status == "demo_synthetic") and (.rows // 0) > 0 and (.last_updated // "") != "" and (.checked_at // "") != "")))
+    and all($rows[]; if (.name == "MLS" or .name == "Building Permits") then .status != "live" else true end)
+    and all($rows[]; if .synthetic_demo == true then .status == "demo_synthetic" else true end)
+  ' /tmp/mip-smoke-out.json >/dev/null; then
+    echo "[smoke] source readiness failed core-live/synthetic-disclosure checks" >&2
+    cat /tmp/mip-smoke-out.json >&2 || true
+    exit 1
+  fi
 fi
 
 probe "geo state rollups" "$API_PREFIX/geo/state-rollups?segment_codes=itm,equity&segment_mode=all"

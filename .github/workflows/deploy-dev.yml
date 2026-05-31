@@ -115,6 +115,7 @@ jobs:
           DATABRICKS_AUTH_TYPE: pat
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+          MIP_ADMIN_BEARER_TOKEN: ${{ secrets.MIP_ADMIN_BEARER_TOKEN }}
         run: |
           set -euo pipefail
           args=(-t dev --no-confirm)
