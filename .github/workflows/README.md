@@ -27,7 +27,9 @@ current ref, creates an ephemeral `.env.local` from repository secrets, seeds a
 temporary `DEFAULT` Databricks CLI profile, runs `scripts/deploy.sh -t dev
 --no-confirm`, and keeps the deployed app smoke test enabled unless the
 operator explicitly selects `skip_smoke`. Run it before live validation when
-the code under review changes app, bundle, job, SQL, or frontend behavior.
+the code under review changes app, bundle, job, SQL, or frontend behavior. The
+workflow has a single non-cancelling concurrency lane (`mip-dev-deploy`) because
+parallel deploys overlap expensive refresh jobs and app promotion.
 
 ---
 
@@ -46,6 +48,18 @@ var.
 | `GENIE_SPACE_ID` | Mortgage Lead Intelligence Genie Space ID. | Databricks UI → Genie → open the space → copy ID from URL. Also tracked at `genie/space_id.txt`. |
 | `DATABRICKS_CLIENT_ID` | Non-admin service-principal OAuth client ID used by deployed Playwright and the non-admin RBAC smoke. | Provision with `tools/databricks/provision_m2m_oauth.py` or `docs/security/m2m-oauth-setup.md`. |
 | `DATABRICKS_CLIENT_SECRET` | Secret for the non-admin OAuth client. Live validation fails if this is absent; it must not fall back to the admin PAT. | Rotate with the same cadence as the workspace token. |
+
+## Required repo or environment variables (dev deploy)
+
+At least one of these non-secret variables must be set under **Settings →
+Secrets and variables → Actions → Variables** before `deploy-dev.yml` runs. The
+workflow fails closed if both are empty, so dev deploys do not implicitly grant
+app-admin access to the Databricks PAT owner.
+
+| Variable | What it is | Notes |
+|---|---|---|
+| `MIP_ADMIN_EMAILS` | Comma-separated app-admin email allowlist for the dev app. | Use when a named operator must access `/api/v1/admin/*`. |
+| `MIP_ADMIN_GROUP_NAME` | Databricks group name admitted as app admin. | Prefer this for customer workspaces when a governed admin group exists. |
 
 ## Optional secrets (live validation, gated features)
 

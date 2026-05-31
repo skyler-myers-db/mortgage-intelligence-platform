@@ -36,3 +36,25 @@ def test_deploy_dev_seeds_databricks_auth_without_printing_secrets() -> None:
     assert "chmod 600 .env.local" in text
     assert "cat .env.local" not in text
     assert "echo \"$DATABRICKS_TOKEN\"" not in text
+
+
+def test_deploy_dev_has_cost_and_permission_guards() -> None:
+    text = DEPLOY_DEV.read_text(encoding="utf-8")
+
+    assert "permissions:" in text
+    assert "contents: read" in text
+    assert "concurrency:" in text
+    assert "group: mip-dev-deploy" in text
+    assert "cancel-in-progress: false" in text
+
+
+def test_deploy_dev_requires_explicit_admin_rbac_and_mints_app_bearer() -> None:
+    text = DEPLOY_DEV.read_text(encoding="utf-8")
+
+    assert "MIP_ADMIN_EMAILS: ${{ vars.MIP_ADMIN_EMAILS }}" in text
+    assert "MIP_ADMIN_GROUP_NAME: ${{ vars.MIP_ADMIN_GROUP_NAME }}" in text
+    assert "Configure MIP_ADMIN_EMAILS or MIP_ADMIN_GROUP_NAME" in text
+    assert "DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}" in text
+    assert "DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}" in text
+    assert "python tools/oauth_m2m_mint.py" in text
+    assert "MIP_BEARER_TOKEN=$bearer" in text

@@ -64,7 +64,10 @@ def test_app_deploy_payload_does_not_overlay_lakebase_dsn_fragments(monkeypatch)
     assert "LAKEBASE_SSLMODE" not in env
 
 
-def test_dev_payload_bootstraps_current_user_admin_without_changing_prod_default() -> None:
+def test_payload_does_not_bootstrap_current_user_admin(monkeypatch) -> None:
+    monkeypatch.delenv("MIP_ADMIN_EMAILS", raising=False)
+    monkeypatch.delenv("MIP_ADMIN_GROUP_NAME", raising=False)
+
     dev = build_payload(
         source_code_path="/Workspace/app/files",
         target="dev",
@@ -76,5 +79,16 @@ def test_dev_payload_bootstraps_current_user_admin_without_changing_prod_default
         current_user_email="skyler@entrada.ai",
     )
 
-    assert _env_map(dev)["MIP_ADMIN_EMAILS"]["value"] == "skyler@entrada.ai"
+    assert "MIP_ADMIN_EMAILS" not in _env_map(dev)
     assert "MIP_ADMIN_EMAILS" not in _env_map(prod)
+
+
+def test_payload_includes_explicit_admin_operator_vars(monkeypatch) -> None:
+    monkeypatch.setenv("MIP_ADMIN_EMAILS", "admin@example.com")
+    monkeypatch.setenv("MIP_ADMIN_GROUP_NAME", "risk-admin")
+
+    payload = build_payload(source_code_path="/Workspace/app/files", target="dev")
+    env = _env_map(payload)
+
+    assert env["MIP_ADMIN_EMAILS"]["value"] == "admin@example.com"
+    assert env["MIP_ADMIN_GROUP_NAME"]["value"] == "risk-admin"

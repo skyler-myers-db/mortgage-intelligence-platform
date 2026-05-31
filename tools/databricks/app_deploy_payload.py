@@ -98,13 +98,6 @@ def build_payload(
     for name in NON_SECRET_OPERATOR_VARS:
         _append_value(env_vars, name, _env_value(name, dotenv))
 
-    # Dev deploys need one deterministic admin identity so the smoke harness can
-    # exercise admin endpoints. Keep this deployment-scoped; production/customer
-    # deploys must set MIP_ADMIN_EMAILS or MIP_ADMIN_GROUP_NAME intentionally.
-    configured_admins = {item["name"]: item for item in env_vars}.get("MIP_ADMIN_EMAILS")
-    if target == "dev" and not configured_admins and current_user_email:
-        env_vars.append({"name": "MIP_ADMIN_EMAILS", "value": current_user_email})
-
     return {
         "source_code_path": source_code_path,
         "mode": mode,

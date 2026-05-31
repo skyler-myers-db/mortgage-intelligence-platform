@@ -11,6 +11,13 @@ on:
         type: boolean
         default: false
 
+permissions:
+  contents: read
+
+concurrency:
+  group: mip-dev-deploy
+  cancel-in-progress: false
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -34,6 +41,8 @@ jobs:
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
           DATABRICKS_WAREHOUSE_ID: ${{ secrets.DATABRICKS_WAREHOUSE_ID }}
           GENIE_SPACE_ID: ${{ secrets.GENIE_SPACE_ID }}
+          MIP_ADMIN_EMAILS: ${{ vars.MIP_ADMIN_EMAILS }}
+          MIP_ADMIN_GROUP_NAME: ${{ vars.MIP_ADMIN_GROUP_NAME }}
         run: |
           set -euo pipefail
           missing=""
@@ -44,6 +53,10 @@ jobs:
           done
           if [ -n "$missing" ]; then
             echo "::error::Missing required secrets:$missing"
+            exit 1
+          fi
+          if [ -z "${MIP_ADMIN_EMAILS:-}" ] && [ -z "${MIP_ADMIN_GROUP_NAME:-}" ]; then
+            echo "::error::Configure MIP_ADMIN_EMAILS or MIP_ADMIN_GROUP_NAME as a dev environment/repository variable before deploying."
             exit 1
           fi
 
@@ -63,8 +76,40 @@ jobs:
             echo "MIP_DEFAULT_CATALOG=mip"
             echo "MIP_DEFAULT_SCHEMA=gold"
             echo "MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS=1"
+            if [ -n "${MIP_ADMIN_EMAILS:-}" ]; then
+              echo "MIP_ADMIN_EMAILS=${MIP_ADMIN_EMAILS}"
+            fi
+            if [ -n "${MIP_ADMIN_GROUP_NAME:-}" ]; then
+              echo "MIP_ADMIN_GROUP_NAME=${MIP_ADMIN_GROUP_NAME}"
+            fi
           } > .env.local
           chmod 600 .env.local
+      - name: Mint deployed app bearer for smoke
+        if: ${{ inputs.skip_smoke == false }}
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+          DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
+          DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
+        run: |
+          set -euo pipefail
+          missing=""
+          for v in DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET; do
+            if [ -z "${!v:-}" ]; then
+              missing="$missing $v"
+            fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Missing required M2M OAuth secret(s) for deployed smoke:$missing"
+            exit 1
+          fi
+          bearer="$(python tools/oauth_m2m_mint.py)"
+          if [ -z "$bearer" ]; then
+            echo "::error::M2M bearer token was empty"
+            exit 1
+          fi
+          echo "::add-mask::$bearer"
+          echo "MIP_BEARER_TOKEN=$bearer" >> "$GITHUB_ENV"
       - name: Deploy dev Databricks App
         env:
           DATABRICKS_AUTH_TYPE: pat

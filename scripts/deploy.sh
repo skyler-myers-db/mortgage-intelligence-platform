@@ -397,7 +397,7 @@ if [[ "$SKIP_SMOKE" -eq 1 ]]; then
   step "live smoke — SKIPPED (--skip-smoke)"
 else
   if [[ -x scripts/smoke_live.sh ]]; then
-    if [[ "$DRY_RUN" -eq 0 && -n "${MIP_APP_URL:-}" && -z "${MIP_BEARER_TOKEN:-}" && -z "${DATABRICKS_TOKEN:-}" ]]; then
+    if [[ "$DRY_RUN" -eq 0 && -n "${MIP_APP_URL:-}" && -z "${MIP_BEARER_TOKEN:-}" ]]; then
       AUTH_HOST="${DATABRICKS_HOST:-$(dotenv_value DATABRICKS_HOST)}"
       if [[ -n "$AUTH_HOST" ]]; then
         export MIP_BEARER_TOKEN="$(databricks auth token --host "$AUTH_HOST" | "$PYTHON" -c 'import json,sys; print(json.load(sys.stdin).get("access_token",""))')"

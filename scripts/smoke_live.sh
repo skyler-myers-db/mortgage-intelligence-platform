@@ -31,7 +31,7 @@
 #   MIP_APP_URL      Override target URL. Default: http://127.0.0.1:8000.
 #   MIP_API_PREFIX   API prefix. Default: /api/v1.
 #   MIP_FRONTEND_URL Frontend URL. Default: http://127.0.0.1:5173.
-#   MIP_BEARER_TOKEN Optional Databricks Apps bearer token for deployed URLs.
+#   MIP_BEARER_TOKEN Optional Databricks Apps OAuth bearer for deployed URLs.
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
@@ -40,7 +40,7 @@ API_PREFIX="${MIP_API_PREFIX:-/api/v1}"
 API_PREFIX="/${API_PREFIX#/}"
 API_PREFIX="${API_PREFIX%/}"
 FRONTEND_URL="${MIP_FRONTEND_URL:-http://127.0.0.1:5173}"
-AUTH_TOKEN="${MIP_BEARER_TOKEN:-${DATABRICKS_TOKEN:-}}"
+AUTH_TOKEN="${MIP_BEARER_TOKEN:-}"
 BOOT_TIMEOUT=20
 REMOTE_BOOT_TIMEOUT="${MIP_REMOTE_BOOT_TIMEOUT:-240}"
 SKIP_GENIE=0
@@ -136,14 +136,20 @@ fi
 echo "[smoke] GET $API_PREFIX/health"
 if [[ "$BOOT_LOCAL" == "0" ]]; then
   waited=0
-  until curl -sf "${CURL_AUTH_ARGS[@]}" "$APP_URL$API_PREFIX/health" > /tmp/mip-smoke-health.json 2>/dev/null \
+  last_code="000"
+  until last_code="$(curl -sS "${CURL_AUTH_ARGS[@]}" -o /tmp/mip-smoke-health.json -w '%{http_code}' "$APP_URL$API_PREFIX/health" 2>/tmp/mip-smoke-health.err)" \
+    && [[ "$last_code" == "200" ]] \
     && health_ready /tmp/mip-smoke-health.json; do
     sleep 5
     waited=$((waited + 5))
     if (( waited >= REMOTE_BOOT_TIMEOUT )); then
       echo "[smoke] deployed app health was not ready within ${REMOTE_BOOT_TIMEOUT}s" >&2
+      echo "[smoke] last health HTTP status: ${last_code:-unknown}" >&2
       if [[ -s /tmp/mip-smoke-health.json ]]; then
         cat /tmp/mip-smoke-health.json >&2 || true
+      fi
+      if [[ -s /tmp/mip-smoke-health.err ]]; then
+        cat /tmp/mip-smoke-health.err >&2 || true
       fi
       exit 1
     fi
