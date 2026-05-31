@@ -1,8 +1,8 @@
 name: nightly (live UC)
 
-# Nightly workflow -- runs the real-UC integration + Playwright suites
-# against the dev Databricks workspace at ~05:00 CT (10:00 UTC). This is
-# the canary that catches:
+# Nightly workflow -- refreshes the governed dev UC snapshot, then runs the
+# real-UC integration + Playwright suites against the dev Databricks workspace
+# at ~05:00 CT (10:00 UTC). This is the canary that catches:
 #   - SQL<->Python parity drift (tests/integration/test_sql_python_parity.py)
 #   - Genie space regression (tests/integration/test_genie_live.py)
 #   - Lakebase schema/auth drift (tests/integration/test_lakebase_round_trip.py)
@@ -48,7 +48,7 @@ jobs:
   parity-live:
     name: SQL<->Python + Lakebase + Genie live
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 90
     env:
       LAKEBASE_DATABASE: ${{ secrets.LAKEBASE_DATABASE || 'mip_app_state' }}
       LAKEBASE_INSTANCE_NAME: mip-app-state
@@ -74,7 +74,8 @@ jobs:
         run: databricks --version
       - name: Prepare bundle sync inputs
         run: |
-          python tools/render_sql.py --catalog "${MIP_DEFAULT_CATALOG:-mip}"
+          MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS=1 \
+            python tools/render_sql.py --catalog "${MIP_DEFAULT_CATALOG:-mip}"
           npm --prefix frontend run build
       - name: Export live Databricks test env
         # Catches the "secrets were rotated and nobody updated the repo"
@@ -127,6 +128,34 @@ jobs:
           } > "$HOME/.databrickscfg"
           chmod 600 "$HOME/.databrickscfg"
           databricks bundle validate -t dev --profile DEFAULT
+      - name: Refresh live FRED market rates before validation
+        # The parity gate compares gold borrower scoring against the latest
+        # reviewed FRED MORTGAGE30US row. FRED publishes independently of repo
+        # deploys, so scheduled nightly must refresh rates before validating.
+        env:
+          DATABRICKS_AUTH_TYPE: pat
+          BUNDLE_VAR_sql_warehouse_id: ${{ secrets.DATABRICKS_WAREHOUSE_ID }}
+          BUNDLE_VAR_genie_space_id: ${{ secrets.GENIE_SPACE_ID }}
+        run: databricks bundle run mip_fred_rates_ingest -t dev --profile DEFAULT
+      - name: Refresh live Cotality silver features before validation
+        # The raw-share parity reference reads Cotality directly, while app gold
+        # reads mip.silver.*. Refresh silver here so raw-share expansions or
+        # corrections do not create the same stale-snapshot failure shape.
+        env:
+          DATABRICKS_AUTH_TYPE: pat
+          BUNDLE_VAR_sql_warehouse_id: ${{ secrets.DATABRICKS_WAREHOUSE_ID }}
+          BUNDLE_VAR_genie_space_id: ${{ secrets.GENIE_SPACE_ID }}
+        run: databricks bundle run mip_refresh_silver -t dev --profile DEFAULT
+      - name: Refresh live gold scoring snapshot before validation
+        # Rebuild borrower_360, lead_scores, segment_population, rollups, and
+        # source_readiness from the just-refreshed silver/reference inputs.
+        # Without this, weekly FRED/source-readiness changes make nightly fail
+        # until a human happens to run deploy.sh or mip_refresh_scores.
+        env:
+          DATABRICKS_AUTH_TYPE: pat
+          BUNDLE_VAR_sql_warehouse_id: ${{ secrets.DATABRICKS_WAREHOUSE_ID }}
+          BUNDLE_VAR_genie_space_id: ${{ secrets.GENIE_SPACE_ID }}
+        run: databricks bundle run mip_refresh_scores -t dev --profile DEFAULT
       - name: SQL <-> Python parity
         run: pytest -q tests/integration/test_sql_python_parity.py
       - name: Lakeview widgets resolve (dashboards)
@@ -691,9 +720,10 @@ jobs:
               `Nightly real-UC workflow failed. Run: ${runUrl}`,
               '',
               '**Likely causes (in order):**',
+              '- The new pre-validation refresh step failed (`mip_fred_rates_ingest`, `mip_refresh_silver`, or `mip_refresh_scores`). Inspect those logs first.',
               '- Databricks workspace credentials rotated (check repo secrets).',
               '- Serverless warehouse or Lakebase instance stopped.',
-              '- `fn_*` UDF redeployed without fixture update (see `docs/runbook.md` §3).',
+              '- A parity step failed after refresh, which now means real SQL/Python or raw-share/gold predicate drift.',
               '- Genie space deleted or its trusted-assets list pruned.',
               '',
               '**Triage:** docs/runbook.md §3 (parity-red) and §8 (CI failure triage).',
