@@ -1,9 +1,10 @@
-"""Contracts for the live-UC nightly workflow.
+"""Contracts for the live-UC validation workflow.
 
-The nightly is a release-readiness gate over live Databricks assets. It must
-refresh the governed snapshot before asserting raw-share/gold parity; otherwise
-weekly upstream FRED changes can make gold look wrong until a human manually
-reruns the scoring job.
+Live validation is a release-readiness gate over Databricks assets, not a daily
+meter burn. It must be manual-only, and when it runs it must refresh the
+governed snapshot before asserting raw-share/gold parity; otherwise weekly
+upstream FRED changes can make gold look wrong until a human manually reruns
+the scoring job.
 """
 
 from __future__ import annotations
@@ -14,7 +15,15 @@ REPO = Path(__file__).resolve().parents[2]
 NIGHTLY = REPO / ".github" / "workflows" / "nightly.yml"
 
 
-def test_nightly_refreshes_live_snapshot_before_live_parity() -> None:
+def test_live_validation_is_manual_only() -> None:
+    text = NIGHTLY.read_text(encoding="utf-8")
+
+    assert "workflow_dispatch:" in text
+    assert "\n  schedule:" not in text
+    assert "cron:" not in text
+
+
+def test_live_validation_refreshes_live_snapshot_before_live_parity() -> None:
     text = NIGHTLY.read_text(encoding="utf-8")
 
     validate_pos = text.index("databricks bundle validate -t dev --profile DEFAULT")
@@ -28,7 +37,7 @@ def test_nightly_refreshes_live_snapshot_before_live_parity() -> None:
     assert validate_pos < fred_pos < silver_pos < gold_pos < parity_pos < segment_pos < source_pos
 
 
-def test_nightly_refresh_steps_use_real_dev_bundle_profile() -> None:
+def test_live_validation_refresh_steps_use_real_dev_bundle_profile() -> None:
     text = NIGHTLY.read_text(encoding="utf-8")
 
     for step_name in (
@@ -46,7 +55,7 @@ def test_nightly_refresh_steps_use_real_dev_bundle_profile() -> None:
         assert "-t dev --profile DEFAULT" in block
 
 
-def test_nightly_renders_dev_demo_feeds_for_bundle_validation() -> None:
+def test_live_validation_renders_dev_demo_feeds_for_bundle_validation() -> None:
     text = NIGHTLY.read_text(encoding="utf-8")
 
     prepare_pos = text.index("- name: Prepare bundle sync inputs")

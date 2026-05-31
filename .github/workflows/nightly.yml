@@ -1,26 +1,27 @@
-name: nightly (live UC)
+name: live validation (on demand)
 
-# Nightly workflow -- refreshes the governed dev UC snapshot, then runs the
-# real-UC integration + Playwright suites against the dev Databricks workspace
-# at ~05:00 CT (10:00 UTC). This is the canary that catches:
+# On-demand live workflow -- refreshes the governed dev UC snapshot, then runs
+# the real-UC integration + Playwright suites against the dev Databricks
+# workspace. This is intentionally NOT scheduled: the Databricks refresh jobs,
+# Genie probes, browser matrix, and Lakebase checks are release/signoff gates,
+# not a daily meter burn for a product developed intermittently.
+#
+# It catches:
 #   - SQL<->Python parity drift (tests/integration/test_sql_python_parity.py)
 #   - Genie space regression (tests/integration/test_genie_live.py)
 #   - Lakebase schema/auth drift (tests/integration/test_lakebase_round_trip.py)
 #   - End-to-end live product path (tests/e2e/real_data.spec.ts)
 #
 # All jobs require repo secrets (see .github/workflows/README.md). A
-# manual `workflow_dispatch` trigger is wired so an engineer can re-run
-# after a workspace outage without waiting for the next cron fire.
+# Run it manually before a customer-facing release, after deploying Databricks
+# bundle/app changes, or when investigating a live workspace issue. Cheap
+# credential-free CI remains in ci.yml on every PR/push.
 #
 # On failure: a GitHub issue is created with the failing job name + a
 # link to the run. Slack/PagerDuty integration is deliberately deferred
 # until the user picks a notification channel.
 
 on:
-  schedule:
-    # 10:00 UTC = 05:00 CT (CDT) / 04:00 CT (CST). Early-morning run
-    # catches regressions before the workday starts.
-    - cron: '0 10 * * *'
   workflow_dispatch:
     inputs:
       run_real_drills:
@@ -33,7 +34,7 @@ on:
         default: false
 
 concurrency:
-  group: nightly-${{ github.ref }}
+  group: live-validation-${{ github.ref }}
   cancel-in-progress: false
 
 env:
@@ -131,7 +132,7 @@ jobs:
       - name: Refresh live FRED market rates before validation
         # The parity gate compares gold borrower scoring against the latest
         # reviewed FRED MORTGAGE30US row. FRED publishes independently of repo
-        # deploys, so scheduled nightly must refresh rates before validating.
+        # deploys, so this release gate refreshes rates before validating.
         env:
           DATABRICKS_AUTH_TYPE: pat
           BUNDLE_VAR_sql_warehouse_id: ${{ secrets.DATABRICKS_WAREHOUSE_ID }}
@@ -149,8 +150,9 @@ jobs:
       - name: Refresh live gold scoring snapshot before validation
         # Rebuild borrower_360, lead_scores, segment_population, rollups, and
         # source_readiness from the just-refreshed silver/reference inputs.
-        # Without this, weekly FRED/source-readiness changes make nightly fail
-        # until a human happens to run deploy.sh or mip_refresh_scores.
+        # Without this, weekly FRED/source-readiness changes can make live
+        # validation fail until a human happens to run deploy.sh or the app's
+        # Admin Operations refresh.
         env:
           DATABRICKS_AUTH_TYPE: pat
           BUNDLE_VAR_sql_warehouse_id: ${{ secrets.DATABRICKS_WAREHOUSE_ID }}
@@ -284,7 +286,7 @@ jobs:
           fi
           echo "MIP_APP_URL=$APP_URL" >> "$GITHUB_ENV"
           echo "MIP_API_URL=$APP_URL" >> "$GITHUB_ENV"
-          echo "::notice::Nightly Playwright will target deployed app at $APP_URL."
+          echo "::notice::Live Playwright will target deployed app at $APP_URL."
       - name: Set Playwright Bearer tokens
         # M2M OAuth is required for deployed app auth. The service principal
         # is intentionally non-admin; the smoke step below proves it can read
@@ -373,7 +375,7 @@ jobs:
       - name: Run real-UC Playwright specs
         # Config + specs both live under `frontend/` so `@playwright/test`
         # imports resolve against frontend/node_modules. E2E_LIVE-gated
-        # so this spec is nightly-only; the PR CI runs a --list parse
+        # so this spec is live-validation-only; PR CI runs a --list parse
         # check. MIP_APP_URL is required for this deployed path, so the
         # config's webServer block is disabled and real_data.spec.ts
         # attaches MIP_BEARER_TOKEN as an Authorization header.
@@ -481,12 +483,11 @@ jobs:
           retention-days: 30
 
   genie-fuzz-standard:
-    name: Genie standard fuzz (scheduled)
-    # Standard 15-example/family fuzz is part of the scheduled nightly
-    # safety signal. It runs after the broad live parity + Playwright
-    # gates so the shared Genie Space is not rate-limited by concurrent
-    # prompt suites. The heavier 200-example/family deep fuzz remains
-    # workflow-dispatch only below.
+    name: Genie standard fuzz
+    # Standard 15-example/family fuzz is part of the manual live release
+    # signal. It runs after the broad live parity + Playwright gates so
+    # the shared Genie Space is not rate-limited by concurrent prompt
+    # suites. The heavier 200-example/family deep fuzz remains opt-in below.
     needs: playwright-e2e-live
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -539,9 +540,8 @@ jobs:
   kill-drill-real-infra:
     name: Credential-kill drill (REAL infra -- opt-in)
     # Opt-in rehearsal. Only runs on manual workflow_dispatch WITH the
-    # run_real_drills input set to true. NEVER runs on the nightly cron
-    # -- stopping the real warehouse + Lakebase is too disruptive to be
-    # a scheduled event. Rehearse before rehearsals, not daily.
+    # run_real_drills input set to true. Stopping the real warehouse +
+    # Lakebase is too disruptive to run by default.
     #
     # Run after live parity, Playwright, and the standard Genie fuzz so
     # stopping shared resources never invalidates the proofs it is meant to
@@ -624,10 +624,10 @@ jobs:
     needs: genie-fuzz-standard
     # Workflow-dispatch only: this burns ~90 min of real Genie quota
     # (3 families × 200 examples × ~5s avg response + 4s pacing). Kept
-    # off the standard nightly cron so it never runs unexpectedly and
-    # never eats into the primary live-UC budget. Release-engineer
-    # fires it from the Actions UI ahead of a major release, or on an
-    # incident re-run. The 45-min timeout is deliberate: one family at
+    # off the default live gate so it never runs unexpectedly and never
+    # eats into the primary live-UC budget. A release engineer fires it
+    # from the Actions UI ahead of a major release, or on an incident
+    # re-run. The 45-min timeout is deliberate: one family at
     # 200 × ~9s ≈ 30 min, so the budget fits one family per run plus
     # the coverage assertion. The deep tests share the
     # `_ADVERSARIAL_TEMPLATE_HITS` counter in-process, so a single
@@ -715,9 +715,9 @@ jobs:
         with:
           script: |
             const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
-            const title = `nightly: live-UC check failed on ${new Date().toISOString().slice(0, 10)}`;
+            const title = `live validation: live-UC check failed on ${new Date().toISOString().slice(0, 10)}`;
             const body = [
-              `Nightly real-UC workflow failed. Run: ${runUrl}`,
+              `Manual live-UC workflow failed. Run: ${runUrl}`,
               '',
               '**Likely causes (in order):**',
               '- The new pre-validation refresh step failed (`mip_fred_rates_ingest`, `mip_refresh_silver`, or `mip_refresh_scores`). Inspect those logs first.',
@@ -729,7 +729,7 @@ jobs:
               '**Triage:** docs/runbook.md §3 (parity-red) and §8 (CI failure triage).',
             ].join('\n');
 
-            const labels = ['ci-failure', 'nightly'];
+            const labels = ['ci-failure', 'live-validation'];
             const existing = await github.paginate(github.rest.issues.listForRepo, {
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -744,9 +744,9 @@ jobs:
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: match.number,
-                body: `Another nightly real-UC workflow failed. Run: ${runUrl}`,
+                body: `Another manual live-UC workflow failed. Run: ${runUrl}`,
               });
-              core.notice(`Updated existing nightly failure issue #${match.number}`);
+              core.notice(`Updated existing live-validation failure issue #${match.number}`);
             } else {
               const created = await github.rest.issues.create({
                 owner: context.repo.owner,
@@ -755,5 +755,5 @@ jobs:
                 body,
                 labels,
               });
-              core.notice(`Created nightly failure issue #${created.data.number}`);
+              core.notice(`Created live-validation failure issue #${created.data.number}`);
             }

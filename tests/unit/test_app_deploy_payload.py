@@ -31,6 +31,10 @@ def test_app_deploy_payload_preserves_resource_bindings_and_safe_runtime_config(
     }
     assert env["GENIE_SPACE_ID"]["value_from"] == "genie_space"
     assert env["LAKEBASE_HOST"]["value_from"] == "database"
+    assert env["MIP_LIFECYCLE_SYNC_JOB_ID"]["value_from"] == "lifecycle_sync_job"
+    assert env["MIP_FRED_RATES_JOB_ID"]["value_from"] == "fred_rates_job"
+    assert env["MIP_SILVER_REFRESH_JOB_ID"]["value_from"] == "silver_refresh_job"
+    assert env["MIP_GOLD_REFRESH_JOB_ID"]["value_from"] == "gold_refresh_job"
     assert env["MIP_DEFAULT_CATALOG"]["value"] == "acme_mip"
     assert env["MIP_LENDER_NAME"]["value"] == "Acme Mortgage"
     assert env["MIP_TRUST_FORWARDED_HEADERS"]["value"] == "false"

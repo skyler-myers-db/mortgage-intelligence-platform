@@ -145,6 +145,7 @@ _MUTATION_AUDIT_EXPECTATIONS: dict[str, tuple[str, ...]] = {
     "genie_start": ("_latest_genie_conversation",),
     "record_rum": ("mip_rum_enabled",),
     "post_force_degraded": ("audit.write(", "FORCE_DEGRADED"),
+    "post_operation_run": ("_write_operation_audit(", "ADMIN_OPERATION_RUN"),
     # Governed writes or audit-emitting reads.
     "create_portfolio": ("repo.create(",),
     "patch_portfolio": ("repo.patch_status(",),

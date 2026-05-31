@@ -22,11 +22,16 @@ rebuilt gold at `0.0636`, restored CA ITM to `16,706`, and made
 explicit `borrower_360.market_rate_fraction` freshness guard so the next FRED
 refresh without a gold refresh fails with that root cause directly.
 
-**2026-05-31 operational hardening:** The scheduled nightly now runs
+**2026-05-31 operational hardening:** Manual live validation now runs
 `mip_fred_rates_ingest`, `mip_refresh_silver`, and `mip_refresh_scores` before
 any live parity, source-readiness, Genie, or Playwright assertions. This keeps
 the release gate validating the current governed snapshot instead of whatever
 silver/gold tables a human last refreshed during deploy or rehearsal.
+
+**2026-05-31 cost-control update:** The same live validation workflow is no
+longer scheduled daily. Operators can refresh data from the app Admin
+Operations panel, and release owners run the GitHub live gate only before
+customer-facing release/signoff events.
 
 Follow-up live smoke found the dev bundle had been deployed with rendered
 Summit first-party demo feeds disabled, which made all contactability fields

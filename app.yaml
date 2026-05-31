@@ -66,6 +66,16 @@ env:
   - name: MIP_LIFECYCLE_SYNC_JOB_ID
     valueFrom: lifecycle_sync_job
 
+  # Admin Operations can launch the same governed refresh jobs an engineer
+  # previously ran from the CLI. Resource bindings scope the app principal to
+  # these jobs only; the backend still allowlists job keys and audits every run.
+  - name: MIP_FRED_RATES_JOB_ID
+    valueFrom: fred_rates_job
+  - name: MIP_SILVER_REFRESH_JOB_ID
+    valueFrom: silver_refresh_job
+  - name: MIP_GOLD_REFRESH_JOB_ID
+    valueFrom: gold_refresh_job
+
   # Product overrides. Pin the canonical catalog + schema so the
   # runtime does not inherit a stale name from an older workspace env.
   - name: MIP_DEFAULT_CATALOG

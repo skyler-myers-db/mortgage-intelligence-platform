@@ -69,6 +69,16 @@
             "title": "Fallback Identity Fallbacks Total",
             "type": "integer"
           },
+          "forced_degraded": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ForcedDegradedInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "log_export": {
             "default": "stdout-only",
             "title": "Log Export",
@@ -104,6 +114,297 @@
           "mode"
         ],
         "title": "AdminHealthResponse",
+        "type": "object"
+      },
+      "AdminOperationJobStatus": {
+        "properties": {
+          "configured": {
+            "title": "Configured",
+            "type": "boolean"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "job_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job Id"
+          },
+          "job_name": {
+            "title": "Job Name",
+            "type": "string"
+          },
+          "key": {
+            "enum": [
+              "fred_rates",
+              "silver_refresh",
+              "gold_refresh",
+              "lifecycle_sync"
+            ],
+            "title": "Key",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "latest_run": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AdminOperationRun"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "run_order": {
+            "title": "Run Order",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "key",
+          "label",
+          "job_name",
+          "configured",
+          "description",
+          "run_order"
+        ],
+        "title": "AdminOperationJobStatus",
+        "type": "object"
+      },
+      "AdminOperationRun": {
+        "properties": {
+          "active": {
+            "default": false,
+            "title": "Active",
+            "type": "boolean"
+          },
+          "ended_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ended At"
+          },
+          "life_cycle_state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Life Cycle State"
+          },
+          "result_state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result State"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "run_page_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Page Url"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "state_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "State Message"
+          }
+        },
+        "title": "AdminOperationRun",
+        "type": "object"
+      },
+      "AdminOperationRunRequest": {
+        "properties": {
+          "confirm": {
+            "default": false,
+            "title": "Confirm",
+            "type": "boolean"
+          },
+          "job_key": {
+            "enum": [
+              "fred_rates",
+              "silver_refresh",
+              "gold_refresh",
+              "lifecycle_sync"
+            ],
+            "title": "Job Key",
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "enum": [
+                  "operator_refresh",
+                  "release_validation",
+                  "source_update",
+                  "support_triage"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          }
+        },
+        "required": [
+          "job_key"
+        ],
+        "title": "AdminOperationRunRequest",
+        "type": "object"
+      },
+      "AdminOperationRunResponse": {
+        "properties": {
+          "accepted": {
+            "title": "Accepted",
+            "type": "boolean"
+          },
+          "audit_event_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Audit Event Id"
+          },
+          "job_id": {
+            "title": "Job Id",
+            "type": "integer"
+          },
+          "job_name": {
+            "title": "Job Name",
+            "type": "string"
+          },
+          "key": {
+            "enum": [
+              "fred_rates",
+              "silver_refresh",
+              "gold_refresh",
+              "lifecycle_sync"
+            ],
+            "title": "Key",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "run_page_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Page Url"
+          }
+        },
+        "required": [
+          "accepted",
+          "key",
+          "label",
+          "job_name",
+          "job_id"
+        ],
+        "title": "AdminOperationRunResponse",
+        "type": "object"
+      },
+      "AdminOperationsResponse": {
+        "properties": {
+          "jobs": {
+            "items": {
+              "$ref": "#/components/schemas/AdminOperationJobStatus"
+            },
+            "title": "Jobs",
+            "type": "array"
+          }
+        },
+        "title": "AdminOperationsResponse",
         "type": "object"
       },
       "AdminRuleThreshold": {
@@ -244,8 +545,15 @@
             "type": "string"
           },
           "warehouse_id": {
-            "title": "Warehouse Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Warehouse Id"
           }
         },
         "required": [
@@ -253,8 +561,7 @@
           "lender_name",
           "catalog",
           "gold_schema",
-          "lakebase_schema",
-          "warehouse_id"
+          "lakebase_schema"
         ],
         "title": "AdminSettingsResponse",
         "type": "object"
@@ -341,6 +648,413 @@
           "description"
         ],
         "title": "AnalyticsScope",
+        "type": "object"
+      },
+      "AssetColumn": {
+        "properties": {
+          "comment": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Comment"
+          },
+          "data_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Type"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "ordinal_position": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ordinal Position"
+          },
+          "redacted": {
+            "default": false,
+            "title": "Redacted",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "AssetColumn",
+        "type": "object"
+      },
+      "AssetLineageNode": {
+        "properties": {
+          "asset_path": {
+            "title": "Asset Path",
+            "type": "string"
+          },
+          "direction": {
+            "enum": [
+              "upstream",
+              "downstream",
+              "observed"
+            ],
+            "title": "Direction",
+            "type": "string"
+          },
+          "event_time": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Event Time"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "object_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Object Type"
+          },
+          "source": {
+            "default": "system.access.table_lineage",
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "direction",
+          "asset_path",
+          "label"
+        ],
+        "title": "AssetLineageNode",
+        "type": "object"
+      },
+      "AssetMetadataResponse": {
+        "properties": {
+          "asset_path": {
+            "title": "Asset Path",
+            "type": "string"
+          },
+          "catalog": {
+            "title": "Catalog",
+            "type": "string"
+          },
+          "catalog_explorer_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Catalog Explorer Url"
+          },
+          "checked_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Checked At"
+          },
+          "columns": {
+            "items": {
+              "$ref": "#/components/schemas/AssetColumn"
+            },
+            "title": "Columns",
+            "type": "array"
+          },
+          "ddl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ddl"
+          },
+          "ddl_redacted_lines": {
+            "default": 0,
+            "title": "Ddl Redacted Lines",
+            "type": "integer"
+          },
+          "delta_last_modified": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delta Last Modified"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "freshness": {
+            "default": "unavailable",
+            "enum": [
+              "fresh",
+              "aging",
+              "stale",
+              "unavailable"
+            ],
+            "title": "Freshness",
+            "type": "string"
+          },
+          "generated_at": {
+            "format": "date-time",
+            "title": "Generated At",
+            "type": "string"
+          },
+          "known_data_gaps": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Known Data Gaps",
+            "type": "array"
+          },
+          "last_updated": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Updated"
+          },
+          "lineage": {
+            "items": {
+              "$ref": "#/components/schemas/AssetLineageNode"
+            },
+            "title": "Lineage",
+            "type": "array"
+          },
+          "num_files": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Num Files"
+          },
+          "object_name": {
+            "title": "Object Name",
+            "type": "string"
+          },
+          "object_type": {
+            "enum": [
+              "table",
+              "view",
+              "function"
+            ],
+            "title": "Object Type",
+            "type": "string"
+          },
+          "properties": {
+            "items": {
+              "$ref": "#/components/schemas/AssetProperty"
+            },
+            "title": "Properties",
+            "type": "array"
+          },
+          "row_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Row Count"
+          },
+          "row_count_source": {
+            "default": "unavailable",
+            "enum": [
+              "source_readiness",
+              "delta_stats",
+              "count",
+              "unavailable"
+            ],
+            "title": "Row Count Source",
+            "type": "string"
+          },
+          "schema_name": {
+            "title": "Schema Name",
+            "type": "string"
+          },
+          "size_in_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Size In Bytes"
+          },
+          "size_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Size Label"
+          },
+          "source_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Note"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "enum": [
+                  "live",
+                  "demo_synthetic",
+                  "configured_empty",
+                  "not_configured",
+                  "roadmap",
+                  "permission_denied",
+                  "error"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "unknown",
+                "type": "string"
+              }
+            ],
+            "default": "unknown",
+            "title": "Status"
+          },
+          "tags": {
+            "items": {
+              "$ref": "#/components/schemas/AssetTag"
+            },
+            "title": "Tags",
+            "type": "array"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "uc_object": {
+            "title": "Uc Object",
+            "type": "string"
+          }
+        },
+        "required": [
+          "asset_path",
+          "title",
+          "description",
+          "object_type",
+          "catalog",
+          "schema_name",
+          "object_name",
+          "uc_object",
+          "generated_at"
+        ],
+        "title": "AssetMetadataResponse",
+        "type": "object"
+      },
+      "AssetProperty": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "AssetProperty",
+        "type": "object"
+      },
+      "AssetTag": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "AssetTag",
         "type": "object"
       },
       "AssignLeadRequest": {
@@ -1202,6 +1916,142 @@
           "borrower_id"
         ],
         "title": "BorrowerLifecycleResponse",
+        "type": "object"
+      },
+      "BorrowerProof": {
+        "properties": {
+          "borrower_id": {
+            "title": "Borrower Id",
+            "type": "string"
+          },
+          "equity_formula": {
+            "$ref": "#/components/schemas/ProofFormulaLine"
+          },
+          "evidence_confidence_note": {
+            "title": "Evidence Confidence Note",
+            "type": "string"
+          },
+          "evidence_rows": {
+            "items": {
+              "$ref": "#/components/schemas/ProofEvidenceEvent"
+            },
+            "title": "Evidence Rows",
+            "type": "array"
+          },
+          "generated_from": {
+            "title": "Generated From",
+            "type": "string"
+          },
+          "known_data_gaps": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Known Data Gaps",
+            "type": "array"
+          },
+          "ltv_formula": {
+            "$ref": "#/components/schemas/ProofFormulaLine"
+          },
+          "offer_branches": {
+            "items": {
+              "$ref": "#/components/schemas/ProofOfferBranch"
+            },
+            "title": "Offer Branches",
+            "type": "array"
+          },
+          "offer_code": {
+            "title": "Offer Code",
+            "type": "string"
+          },
+          "offer_label": {
+            "title": "Offer Label",
+            "type": "string"
+          },
+          "opportunity_score": {
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Opportunity Score",
+            "type": "integer"
+          },
+          "rate_spread_formula": {
+            "$ref": "#/components/schemas/ProofFormulaLine"
+          },
+          "reproduce": {
+            "items": {
+              "$ref": "#/components/schemas/ProofReproduceQuery"
+            },
+            "title": "Reproduce",
+            "type": "array"
+          },
+          "score_components": {
+            "items": {
+              "$ref": "#/components/schemas/ProofScoreComponent"
+            },
+            "title": "Score Components",
+            "type": "array"
+          },
+          "score_formula": {
+            "$ref": "#/components/schemas/ProofFormulaLine"
+          },
+          "signal_strength": {
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Signal Strength",
+            "type": "integer"
+          },
+          "signal_strength_formula": {
+            "$ref": "#/components/schemas/ProofFormulaLine"
+          },
+          "signal_strength_note": {
+            "title": "Signal Strength Note",
+            "type": "string"
+          },
+          "source_assets": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Source Assets",
+            "type": "array"
+          },
+          "source_refresh_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Refresh At"
+          },
+          "trusted": {
+            "default": true,
+            "title": "Trusted",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "borrower_id",
+          "generated_from",
+          "opportunity_score",
+          "signal_strength",
+          "signal_strength_note",
+          "evidence_confidence_note",
+          "score_components",
+          "score_formula",
+          "signal_strength_formula",
+          "rate_spread_formula",
+          "equity_formula",
+          "ltv_formula",
+          "offer_code",
+          "offer_label",
+          "offer_branches",
+          "evidence_rows",
+          "source_assets",
+          "reproduce"
+        ],
+        "title": "BorrowerProof",
         "type": "object"
       },
       "BoundaryWarning": {
@@ -2386,6 +3236,98 @@
         "title": "FootprintState",
         "type": "object"
       },
+      "ForceDegradedRequest": {
+        "properties": {
+          "dependency": {
+            "default": "warehouse",
+            "enum": [
+              "warehouse",
+              "lakebase",
+              "genie",
+              "all"
+            ],
+            "title": "Dependency",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "on",
+              "off"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "ttl_s": {
+            "default": 60,
+            "maximum": 300.0,
+            "minimum": 1.0,
+            "title": "Ttl S",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "title": "ForceDegradedRequest",
+        "type": "object"
+      },
+      "ForceDegradedResponse": {
+        "properties": {
+          "dependency": {
+            "enum": [
+              "warehouse",
+              "lakebase",
+              "genie",
+              "all"
+            ],
+            "title": "Dependency",
+            "type": "string"
+          },
+          "expires_in_s": {
+            "title": "Expires In S",
+            "type": "integer"
+          },
+          "forced": {
+            "title": "Forced",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "forced",
+          "dependency",
+          "expires_in_s"
+        ],
+        "title": "ForceDegradedResponse",
+        "type": "object"
+      },
+      "ForcedDegradedInfo": {
+        "properties": {
+          "active": {
+            "title": "Active",
+            "type": "boolean"
+          },
+          "dependency": {
+            "title": "Dependency",
+            "type": "string"
+          },
+          "expires_in_s": {
+            "title": "Expires In S",
+            "type": "integer"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "active",
+          "dependency",
+          "source",
+          "expires_in_s"
+        ],
+        "title": "ForcedDegradedInfo",
+        "type": "object"
+      },
       "FunnelStage": {
         "properties": {
           "borrower_count": {
@@ -3319,6 +4261,16 @@
             },
             "title": "Dependencies",
             "type": "object"
+          },
+          "forced_degraded": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ForcedDegradedInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "mode": {
             "title": "Mode",
@@ -4764,6 +5716,227 @@
           }
         },
         "title": "PortfolioPreviewRequest",
+        "type": "object"
+      },
+      "ProofEvidenceEvent": {
+        "properties": {
+          "confidence": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Confidence",
+            "type": "number"
+          },
+          "display_text": {
+            "title": "Display Text",
+            "type": "string"
+          },
+          "evidence_id": {
+            "title": "Evidence Id",
+            "type": "string"
+          },
+          "signal_type": {
+            "title": "Signal Type",
+            "type": "string"
+          },
+          "signal_value": {
+            "title": "Signal Value",
+            "type": "string"
+          },
+          "source_product": {
+            "title": "Source Product",
+            "type": "string"
+          },
+          "timestamp": {
+            "title": "Timestamp",
+            "type": "string"
+          }
+        },
+        "required": [
+          "evidence_id",
+          "source_product",
+          "signal_type",
+          "signal_value",
+          "display_text",
+          "confidence",
+          "timestamp"
+        ],
+        "title": "ProofEvidenceEvent",
+        "type": "object"
+      },
+      "ProofFormulaLine": {
+        "properties": {
+          "expression": {
+            "title": "Expression",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "result": {
+            "title": "Result",
+            "type": "string"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          }
+        },
+        "required": [
+          "label",
+          "expression",
+          "result"
+        ],
+        "title": "ProofFormulaLine",
+        "type": "object"
+      },
+      "ProofOfferBranch": {
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "passed": {
+            "title": "Passed",
+            "type": "boolean"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "selected": {
+            "default": false,
+            "title": "Selected",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "code",
+          "label",
+          "passed",
+          "reason"
+        ],
+        "title": "ProofOfferBranch",
+        "type": "object"
+      },
+      "ProofReproduceQuery": {
+        "properties": {
+          "databricks_sql_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Databricks Sql Url"
+          },
+          "note": {
+            "title": "Note",
+            "type": "string"
+          },
+          "sql": {
+            "title": "Sql",
+            "type": "string"
+          },
+          "sql_hash": {
+            "title": "Sql Hash",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "sql",
+          "sql_hash",
+          "note"
+        ],
+        "title": "ProofReproduceQuery",
+        "type": "object"
+      },
+      "ProofScoreComponent": {
+        "properties": {
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          },
+          "fair_lending_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fair Lending Note"
+          },
+          "key": {
+            "enum": [
+              "economic_incentive",
+              "intent_trigger",
+              "fit",
+              "relationship",
+              "evidence"
+            ],
+            "title": "Key",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "source_fields": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Source Fields",
+            "type": "array"
+          },
+          "value": {
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Value",
+            "type": "integer"
+          },
+          "weight": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 1.0,
+            "title": "Weight",
+            "type": "number"
+          },
+          "weighted_points": {
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Weighted Points",
+            "type": "number"
+          }
+        },
+        "required": [
+          "key",
+          "label",
+          "value",
+          "weight",
+          "weighted_points",
+          "explanation"
+        ],
+        "title": "ProofScoreComponent",
         "type": "object"
       },
       "RateSpreadBucket": {
@@ -6445,6 +7618,93 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/admin/assets/{asset_key}/metadata": {
+      "get": {
+        "deprecated": true,
+        "description": "Return sanitized metadata for a registered Module 0 UC asset.\n\nThis route is intentionally admin-gated: it may include schema, DDL\ncontract, tags, and observed lineage. The service itself rejects any\nasset outside the fixed Module 0 registry before interpolating an\nidentifier into SQL.",
+        "operationId": "get_api_admin_assets_asset_key_metadata_get_asset_metadata",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "asset_key",
+            "required": true,
+            "schema": {
+              "title": "Asset Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssetMetadataResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Asset Metadata",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/admin/force-degraded": {
+      "post": {
+        "deprecated": true,
+        "description": "Issue or clear a browser-local degraded-banner proof cookie.\n\nThis endpoint is an admin actuator and therefore writes Lakebase audit\nbefore changing the browser-visible state. It does not mutate global health\nor stop infrastructure.",
+        "operationId": "post_api_admin_force_degraded_post_force_degraded",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ForceDegradedRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForceDegradedResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Post Force Degraded",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
     "/api/admin/health": {
       "get": {
         "deprecated": true,
@@ -6463,6 +7723,72 @@
           }
         },
         "summary": "Admin Health"
+      }
+    },
+    "/api/admin/operations": {
+      "get": {
+        "deprecated": true,
+        "description": "Return status for the allowlisted Databricks refresh jobs.\n\nThis is intentionally separate from ``/admin/sources``. Source readiness\nanswers \"is data fresh enough to use?\"; this endpoint answers \"what\noperator jobs are configured and what did they last do?\".",
+        "operationId": "get_api_admin_operations_get_operations",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminOperationsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Operations",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/admin/operations/run": {
+      "post": {
+        "deprecated": true,
+        "description": "Trigger one allowlisted Databricks refresh job.\n\nThe endpoint is admin-only, requires an explicit confirmation bit, and\nwrites Lakebase audit before touching Databricks Jobs. If audit is down,\nthe job is not launched.",
+        "operationId": "post_api_admin_operations_run_post_operation_run",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminOperationRunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminOperationRunResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Post Operation Run",
+        "tags": [
+          "admin"
+        ]
       }
     },
     "/api/admin/rules": {
@@ -6633,6 +7959,42 @@
             }
           },
           {
+            "description": "Optional governed lender relationship filter.",
+            "in": "query",
+            "name": "lender_relationship",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional governed lender relationship filter.",
+              "title": "Lender Relationship"
+            }
+          },
+          {
+            "description": "Optional public-safe current lien-holder alias.",
+            "in": "query",
+            "name": "target_lender_ref",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional public-safe current lien-holder alias.",
+              "title": "Target Lender Ref"
+            }
+          },
+          {
             "description": "Deprecated single-signal alias. Prefer signal_types.",
             "in": "query",
             "name": "signal_type",
@@ -6783,6 +8145,42 @@
               "pattern": "^(any|all)$",
               "title": "Segment Mode",
               "type": "string"
+            }
+          },
+          {
+            "description": "Optional governed lender relationship filter.",
+            "in": "query",
+            "name": "lender_relationship",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional governed lender relationship filter.",
+              "title": "Lender Relationship"
+            }
+          },
+          {
+            "description": "Optional public-safe current lien-holder alias.",
+            "in": "query",
+            "name": "target_lender_ref",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional public-safe current lien-holder alias.",
+              "title": "Target Lender Ref"
             }
           },
           {
@@ -6939,6 +8337,42 @@
             }
           },
           {
+            "description": "Optional governed lender relationship filter.",
+            "in": "query",
+            "name": "lender_relationship",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional governed lender relationship filter.",
+              "title": "Lender Relationship"
+            }
+          },
+          {
+            "description": "Optional public-safe current lien-holder alias.",
+            "in": "query",
+            "name": "target_lender_ref",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional public-safe current lien-holder alias.",
+              "title": "Target Lender Ref"
+            }
+          },
+          {
             "description": "Deprecated single-signal alias. Prefer signal_types.",
             "in": "query",
             "name": "signal_type",
@@ -7092,6 +8526,42 @@
             }
           },
           {
+            "description": "Optional governed lender relationship filter.",
+            "in": "query",
+            "name": "lender_relationship",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional governed lender relationship filter.",
+              "title": "Lender Relationship"
+            }
+          },
+          {
+            "description": "Optional public-safe current lien-holder alias.",
+            "in": "query",
+            "name": "target_lender_ref",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional public-safe current lien-holder alias.",
+              "title": "Target Lender Ref"
+            }
+          },
+          {
             "description": "Deprecated single-signal alias. Prefer signal_types.",
             "in": "query",
             "name": "signal_type",
@@ -7242,6 +8712,42 @@
               "pattern": "^(any|all)$",
               "title": "Segment Mode",
               "type": "string"
+            }
+          },
+          {
+            "description": "Optional governed lender relationship filter.",
+            "in": "query",
+            "name": "lender_relationship",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional governed lender relationship filter.",
+              "title": "Lender Relationship"
+            }
+          },
+          {
+            "description": "Optional public-safe current lien-holder alias.",
+            "in": "query",
+            "name": "target_lender_ref",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional public-safe current lien-holder alias.",
+              "title": "Target Lender Ref"
             }
           },
           {
@@ -7867,6 +9373,49 @@
         ]
       }
     },
+    "/api/borrowers/{borrower_id}/proof": {
+      "get": {
+        "deprecated": true,
+        "operationId": "get_api_borrowers_borrower_id_proof_get_borrower_proof",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "borrower_id",
+            "required": true,
+            "schema": {
+              "title": "Borrower Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BorrowerProof"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Borrower Proof",
+        "tags": [
+          "borrowers"
+        ]
+      }
+    },
     "/api/campaigns": {
       "get": {
         "deprecated": true,
@@ -8324,6 +9873,40 @@
           },
           {
             "in": "query",
+            "name": "lender_relationship",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lender Relationship"
+            }
+          },
+          {
+            "in": "query",
+            "name": "target_lender_ref",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Target Lender Ref"
+            }
+          },
+          {
+            "in": "query",
             "name": "owner_link",
             "required": false,
             "schema": {
@@ -8540,6 +10123,40 @@
                 }
               ],
               "title": "Lien Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "lender_relationship",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lender Relationship"
+            }
+          },
+          {
+            "in": "query",
+            "name": "target_lender_ref",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Target Lender Ref"
             }
           },
           {
@@ -8774,6 +10391,40 @@
                 }
               ],
               "title": "Lien Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "lender_relationship",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lender Relationship"
+            }
+          },
+          {
+            "in": "query",
+            "name": "target_lender_ref",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Target Lender Ref"
             }
           },
           {
@@ -10737,6 +12388,91 @@
         ]
       }
     },
+    "/api/v1/admin/assets/{asset_key}/metadata": {
+      "get": {
+        "description": "Return sanitized metadata for a registered Module 0 UC asset.\n\nThis route is intentionally admin-gated: it may include schema, DDL\ncontract, tags, and observed lineage. The service itself rejects any\nasset outside the fixed Module 0 registry before interpolating an\nidentifier into SQL.",
+        "operationId": "get_api_v1_admin_assets_asset_key_metadata_get_asset_metadata",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "asset_key",
+            "required": true,
+            "schema": {
+              "title": "Asset Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssetMetadataResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Asset Metadata",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/force-degraded": {
+      "post": {
+        "description": "Issue or clear a browser-local degraded-banner proof cookie.\n\nThis endpoint is an admin actuator and therefore writes Lakebase audit\nbefore changing the browser-visible state. It does not mutate global health\nor stop infrastructure.",
+        "operationId": "post_api_v1_admin_force_degraded_post_force_degraded",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ForceDegradedRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForceDegradedResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Post Force Degraded",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
     "/api/v1/admin/health": {
       "get": {
         "description": "Return ops diagnostics behind admin RBAC.",
@@ -10754,6 +12490,70 @@
           }
         },
         "summary": "Admin Health"
+      }
+    },
+    "/api/v1/admin/operations": {
+      "get": {
+        "description": "Return status for the allowlisted Databricks refresh jobs.\n\nThis is intentionally separate from ``/admin/sources``. Source readiness\nanswers \"is data fresh enough to use?\"; this endpoint answers \"what\noperator jobs are configured and what did they last do?\".",
+        "operationId": "get_api_v1_admin_operations_get_operations",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminOperationsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Operations",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/operations/run": {
+      "post": {
+        "description": "Trigger one allowlisted Databricks refresh job.\n\nThe endpoint is admin-only, requires an explicit confirmation bit, and\nwrites Lakebase audit before touching Databricks Jobs. If audit is down,\nthe job is not launched.",
+        "operationId": "post_api_v1_admin_operations_run_post_operation_run",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminOperationRunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminOperationRunResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Post Operation Run",
+        "tags": [
+          "admin"
+        ]
       }
     },
     "/api/v1/admin/rules": {
@@ -10919,6 +12719,42 @@
             }
           },
           {
+            "description": "Optional governed lender relationship filter.",
+            "in": "query",
+            "name": "lender_relationship",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional governed lender relationship filter.",
+              "title": "Lender Relationship"
+            }
+          },
+          {
+            "description": "Optional public-safe current lien-holder alias.",
+            "in": "query",
+            "name": "target_lender_ref",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional public-safe current lien-holder alias.",
+              "title": "Target Lender Ref"
+            }
+          },
+          {
             "description": "Deprecated single-signal alias. Prefer signal_types.",
             "in": "query",
             "name": "signal_type",
@@ -11068,6 +12904,42 @@
               "pattern": "^(any|all)$",
               "title": "Segment Mode",
               "type": "string"
+            }
+          },
+          {
+            "description": "Optional governed lender relationship filter.",
+            "in": "query",
+            "name": "lender_relationship",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional governed lender relationship filter.",
+              "title": "Lender Relationship"
+            }
+          },
+          {
+            "description": "Optional public-safe current lien-holder alias.",
+            "in": "query",
+            "name": "target_lender_ref",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional public-safe current lien-holder alias.",
+              "title": "Target Lender Ref"
             }
           },
           {
@@ -11223,6 +13095,42 @@
             }
           },
           {
+            "description": "Optional governed lender relationship filter.",
+            "in": "query",
+            "name": "lender_relationship",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional governed lender relationship filter.",
+              "title": "Lender Relationship"
+            }
+          },
+          {
+            "description": "Optional public-safe current lien-holder alias.",
+            "in": "query",
+            "name": "target_lender_ref",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional public-safe current lien-holder alias.",
+              "title": "Target Lender Ref"
+            }
+          },
+          {
             "description": "Deprecated single-signal alias. Prefer signal_types.",
             "in": "query",
             "name": "signal_type",
@@ -11375,6 +13283,42 @@
             }
           },
           {
+            "description": "Optional governed lender relationship filter.",
+            "in": "query",
+            "name": "lender_relationship",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional governed lender relationship filter.",
+              "title": "Lender Relationship"
+            }
+          },
+          {
+            "description": "Optional public-safe current lien-holder alias.",
+            "in": "query",
+            "name": "target_lender_ref",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional public-safe current lien-holder alias.",
+              "title": "Target Lender Ref"
+            }
+          },
+          {
             "description": "Deprecated single-signal alias. Prefer signal_types.",
             "in": "query",
             "name": "signal_type",
@@ -11524,6 +13468,42 @@
               "pattern": "^(any|all)$",
               "title": "Segment Mode",
               "type": "string"
+            }
+          },
+          {
+            "description": "Optional governed lender relationship filter.",
+            "in": "query",
+            "name": "lender_relationship",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional governed lender relationship filter.",
+              "title": "Lender Relationship"
+            }
+          },
+          {
+            "description": "Optional public-safe current lien-holder alias.",
+            "in": "query",
+            "name": "target_lender_ref",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional public-safe current lien-holder alias.",
+              "title": "Target Lender Ref"
             }
           },
           {
@@ -12142,6 +14122,48 @@
         ]
       }
     },
+    "/api/v1/borrowers/{borrower_id}/proof": {
+      "get": {
+        "operationId": "get_api_v1_borrowers_borrower_id_proof_get_borrower_proof",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "borrower_id",
+            "required": true,
+            "schema": {
+              "title": "Borrower Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BorrowerProof"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Borrower Proof",
+        "tags": [
+          "borrowers"
+        ]
+      }
+    },
     "/api/v1/campaigns": {
       "get": {
         "operationId": "get_api_v1_campaigns_list_campaigns",
@@ -12589,6 +14611,40 @@
           },
           {
             "in": "query",
+            "name": "lender_relationship",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lender Relationship"
+            }
+          },
+          {
+            "in": "query",
+            "name": "target_lender_ref",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Target Lender Ref"
+            }
+          },
+          {
+            "in": "query",
             "name": "owner_link",
             "required": false,
             "schema": {
@@ -12804,6 +14860,40 @@
                 }
               ],
               "title": "Lien Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "lender_relationship",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lender Relationship"
+            }
+          },
+          {
+            "in": "query",
+            "name": "target_lender_ref",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Target Lender Ref"
             }
           },
           {
@@ -13037,6 +15127,40 @@
                 }
               ],
               "title": "Lien Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "lender_relationship",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lender Relationship"
+            }
+          },
+          {
+            "in": "query",
+            "name": "target_lender_ref",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Target Lender Ref"
             }
           },
           {

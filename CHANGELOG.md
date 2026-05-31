@@ -6,6 +6,15 @@ This project follows an additive-first API contract: new optional fields and new
 versioned endpoints may be added in a minor release, while removals require a
 deprecation window first.
 
+## Unreleased
+
+- Added admin-only `/api/v1/admin/operations` and
+  `/api/v1/admin/operations/run` for audited Databricks refresh job status and
+  launch.
+- Moved live Databricks validation from a daily schedule to manual
+  `workflow_dispatch` so expensive refresh, Genie, and Playwright gates run
+  only for release/signoff events.
+
 ## 0.1.0 - 2026-05-17
 
 - Added canonical `/api/v1/*` API routes.

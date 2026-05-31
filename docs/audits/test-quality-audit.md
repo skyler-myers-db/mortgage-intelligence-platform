@@ -201,9 +201,9 @@ I executed two regression gates against the worktree from this audit's sandbox:
 Live integration tests gated on env-vars (`E2E_LIVE=1`, `DATABRICKS_HOST/TOKEN/WAREHOUSE_ID`, `GENIE_SPACE_ID`, `MIP_GENIE_FUZZ_EXAMPLES`, `MIP_BEARER_TOKEN`):
 
 - **PR CI**: runs credential-free pytest under xdist with backend coverage measurement; live-infra tests skip themselves when secrets are absent.
-- **Nightly** (`.github/workflows/nightly.yml`): runs the full integration suite + Playwright e2e + standard Genie fuzz with real workspace creds. Deep Genie fuzz (200-example) remains `workflow_dispatch` only.
+- **Manual live validation** (`.github/workflows/nightly.yml`, historical filename): runs the full integration suite + Playwright e2e + standard Genie fuzz with real workspace creds. Deep Genie fuzz (200-example) remains opt-in.
 
-This is the right split — fast PR feedback without burning warehouse quota, while nightly retains the full safety signal.
+This is the right split — fast PR feedback without burning warehouse quota, while live validation retains the full safety signal for release/signoff events.
 
 ---
 

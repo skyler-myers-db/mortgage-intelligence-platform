@@ -301,7 +301,27 @@ Flags on `scripts/deploy.sh` for partial re-runs:
 Every step is idempotent — re-running `./scripts/deploy.sh` is safe
 and picks up where a previous run stopped.
 
-**No manual UI step anywhere.** The previous runbook called for
+### Day-to-day refresh from the app
+
+Customer operators do not need the Databricks CLI for normal refreshes. The
+deployed app binds the FRED, silver, gold, and lifecycle jobs as app resources,
+and `/admin-config` exposes them under **Data operations**:
+
+1. **Refresh market rates** (`mip_fred_rates_ingest`) after FRED publishes or
+   when the Admin source-readiness panel shows stale market rates.
+2. **Refresh source features** (`mip_refresh_silver`) after Cotality or
+   first-party data shares update.
+3. **Rebuild scoring snapshot** (`mip_refresh_scores`) after either upstream
+   refresh so Borrower 360, Lead Queue, segment populations, source readiness,
+   and Genie metric views read the new snapshot.
+4. **Sync workflow state** (`mip_sync_lifecycle_state`) when approvals or
+   outreach state need to mirror into gold immediately.
+
+Each button is admin-only, writes a Lakebase audit row before launching
+compute, refuses duplicate active runs, and shows the latest Databricks run
+state. If the audit ledger is unavailable, the app does not launch the job.
+
+**No manual UI step is required for deploy/bootstrap.** The previous runbook called for
 opening the Databricks UI to rebind the Genie space's trusted assets
 after a metric view rename; that is no longer required. Step 7
 publishes the views, step 10 binds them, and re-running `deploy.sh`

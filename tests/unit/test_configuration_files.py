@@ -12,6 +12,10 @@ def test_app_yaml_contains_required_runtime_bindings():
         "DATABRICKS_WAREHOUSE_ID",
         "GENIE_SPACE_ID",
         "LAKEBASE_HOST",
+        "MIP_FRED_RATES_JOB_ID",
+        "MIP_SILVER_REFRESH_JOB_ID",
+        "MIP_GOLD_REFRESH_JOB_ID",
+        "MIP_LIFECYCLE_SYNC_JOB_ID",
         "APP_ENV",
     ]:
         assert token in content
@@ -24,6 +28,10 @@ def test_databricks_yml_contains_required_resource_names():
         "mip_serverless_sql",
         "mip_refresh_silver",
         "mip_refresh_scores",
+        "fred_rates_job",
+        "silver_refresh_job",
+        "gold_refresh_job",
+        "lifecycle_sync_job",
         "mip_snapshot_dashboards",
         "mip_feature_pipeline",
         "mip_executive_dashboard",

@@ -30,6 +30,9 @@ from pydantic import BaseModel, Field
 
 from backend.config.settings import settings
 from backend.schemas.admin import (
+    AdminOperationRunRequest,
+    AdminOperationRunResponse,
+    AdminOperationsResponse,
     AdminRulesResponse,
     AdminRulesUpdateResponse,
     AdminSettingsResponse,
@@ -37,6 +40,14 @@ from backend.schemas.admin import (
 )
 from backend.services.admin_rules import AdminRulesService, get_admin_rules_service
 from backend.services.audit_store import AuditStore, get_audit_store
+from backend.services.databricks_jobs import (
+    DatabricksJobOperations,
+    JobAlreadyRunningError,
+    JobOperationError,
+    ManagedJobRun,
+    ManagedJobStatus,
+    get_job_operations,
+)
 from backend.services.databricks_sql import DatabricksSqlError
 from backend.services.error_sanitizer import safe_dependency_detail
 from backend.services.forced_degraded import (
@@ -54,6 +65,14 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 
 ServiceDep = Annotated[AdminRulesService, Depends(get_admin_rules_service)]
 AuditDep = Annotated[AuditStore, Depends(get_audit_store)]
+JobsDep = Annotated[DatabricksJobOperations, Depends(get_job_operations)]
+
+_JOB_COOLDOWN_SECONDS: dict[str, int] = {
+    "fred_rates": 15 * 60,
+    "silver_refresh": 60 * 60,
+    "gold_refresh": 30 * 60,
+    "lifecycle_sync": 5 * 60,
+}
 
 
 class ForceDegradedRequest(BaseModel):
@@ -66,6 +85,93 @@ class ForceDegradedResponse(BaseModel):
     forced: bool
     dependency: Literal["warehouse", "lakebase", "genie", "all"]
     expires_in_s: int
+
+
+def _run_to_dict(run: ManagedJobRun | None) -> dict[str, object] | None:
+    if run is None:
+        return None
+    return {
+        "run_id": run.run_id,
+        "life_cycle_state": run.life_cycle_state,
+        "result_state": run.result_state,
+        "state_message": run.state_message,
+        "started_at": run.started_at,
+        "ended_at": run.ended_at,
+        "run_page_url": run.run_page_url,
+        "active": run.active,
+    }
+
+
+def _status_to_dict(status: ManagedJobStatus) -> dict[str, object]:
+    return {
+        "key": status.key,
+        "label": status.label,
+        "job_name": status.job_name,
+        "job_id": status.job_id,
+        "configured": status.configured,
+        "description": status.description,
+        "run_order": status.run_order,
+        "latest_run": _run_to_dict(status.latest_run),
+    }
+
+
+def _parse_audit_created_at(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _cooldown_remaining_s(audit: AuditStore, job_key: str) -> int:
+    cooldown_s = _JOB_COOLDOWN_SECONDS.get(job_key, 0)
+    if cooldown_s <= 0:
+        return 0
+    rows = audit.list(
+        limit=1,
+        action="admin.operation.run",
+        entity_id=job_key,
+    )
+    if not rows:
+        return 0
+    created_at = _parse_audit_created_at(rows[0].created_at)
+    if created_at is None:
+        return 0
+    age_s = (datetime.now(UTC) - created_at.astimezone(UTC)).total_seconds()
+    remaining = cooldown_s - int(age_s)
+    return max(0, remaining)
+
+
+def _operation_payload(
+    payload: AdminOperationRunRequest,
+    **extra: object,
+) -> dict[str, object]:
+    return {
+        "job_key": payload.job_key,
+        "reason": payload.reason or "operator_refresh",
+        **{key: value for key, value in extra.items() if value is not None},
+    }
+
+
+def _write_operation_audit(
+    audit: AuditStore,
+    *,
+    actor: str,
+    payload: AdminOperationRunRequest,
+    action: str,
+    event_type: str,
+    extra: dict[str, object] | None = None,
+) -> Any:
+    return audit.write(
+        actor=actor,
+        action=action,
+        entity_type="databricks_job",
+        entity_id=payload.job_key,
+        event_type=event_type,
+        request_id=payload.request_id,
+        payload_json=_operation_payload(payload, **(extra or {})),
+    )
 
 
 @router.get("/rules", response_model=AdminRulesResponse)
@@ -150,6 +256,181 @@ def get_sources(service: ServiceDep, _actor: AdminDep) -> list[dict[str, Any]]:
             status_code=503, detail=safe_dependency_detail("warehouse")
         ) from exc
     return [r.to_dict() for r in rows]
+
+
+@router.get("/operations", response_model=AdminOperationsResponse)
+def get_operations(jobs: JobsDep, _actor: AdminDep) -> dict[str, object]:
+    """Return status for the allowlisted Databricks refresh jobs.
+
+    This is intentionally separate from ``/admin/sources``. Source readiness
+    answers "is data fresh enough to use?"; this endpoint answers "what
+    operator jobs are configured and what did they last do?".
+    """
+
+    try:
+        statuses = jobs.list_statuses()
+    except JobOperationError as exc:
+        emit(
+            log,
+            "admin_operations_status_error",
+            level=logging.WARNING,
+            exc_type=type(exc).__name__,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail=safe_dependency_detail("jobs"),
+        ) from exc
+    return {"jobs": [_status_to_dict(status) for status in statuses]}
+
+
+@router.post("/operations/run", response_model=AdminOperationRunResponse, status_code=202)
+def post_operation_run(
+    payload: AdminOperationRunRequest,
+    _actor: AdminDep,
+    audit: AuditDep,
+    jobs: JobsDep,
+) -> dict[str, object]:
+    """Trigger one allowlisted Databricks refresh job.
+
+    The endpoint is admin-only, requires an explicit confirmation bit, and
+    writes Lakebase audit before touching Databricks Jobs. If audit is down,
+    the job is not launched.
+    """
+
+    if not payload.confirm:
+        raise HTTPException(status_code=400, detail="confirmation required")
+
+    try:
+        cooldown_s = _cooldown_remaining_s(audit, payload.job_key)
+    except LakebaseError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=safe_dependency_detail("lakebase"),
+        ) from exc
+    if cooldown_s > 0:
+        try:
+            _write_operation_audit(
+                audit,
+                actor=_actor,
+                payload=payload,
+                action="admin.operation.cooldown",
+                event_type="ADMIN_OPERATION_COOLDOWN",
+                extra={"cooldown_seconds": cooldown_s},
+            )
+        except LakebaseError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail=safe_dependency_detail("lakebase"),
+            ) from exc
+        raise HTTPException(
+            status_code=429,
+            detail="job cooldown active",
+            headers={"Retry-After": str(cooldown_s)},
+        )
+
+    try:
+        request_event = _write_operation_audit(
+            audit,
+            actor=_actor,
+            payload=payload,
+            action="admin.operation.requested",
+            event_type="ADMIN_OPERATION_REQUESTED",
+        )
+    except LakebaseError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=safe_dependency_detail("lakebase"),
+        ) from exc
+
+    try:
+        launch = jobs.run_now(payload.job_key)
+    except JobAlreadyRunningError as exc:
+        try:
+            _write_operation_audit(
+                audit,
+                actor=_actor,
+                payload=payload,
+                action="admin.operation.conflict",
+                event_type="ADMIN_OPERATION_CONFLICT",
+                extra={"run_id": exc.run_id},
+            )
+        except LakebaseError:
+            emit(
+                log,
+                "admin_operation_conflict_audit_dropped",
+                level=logging.WARNING,
+                job_key=payload.job_key,
+            )
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "job already running",
+                "job_key": exc.job_key,
+                "run_id": exc.run_id,
+            },
+        ) from exc
+    except JobOperationError as exc:
+        try:
+            _write_operation_audit(
+                audit,
+                actor=_actor,
+                payload=payload,
+                action="admin.operation.failed",
+                event_type="ADMIN_OPERATION_FAILED",
+            )
+        except LakebaseError:
+            emit(
+                log,
+                "admin_operation_failure_audit_dropped",
+                level=logging.WARNING,
+                job_key=payload.job_key,
+            )
+        emit(
+            log,
+            "admin_operation_run_error",
+            level=logging.WARNING,
+            job_key=payload.job_key,
+            exc_type=type(exc).__name__,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail=safe_dependency_detail("jobs"),
+        ) from exc
+
+    try:
+        accepted_event = _write_operation_audit(
+            audit,
+            actor=_actor,
+            payload=payload,
+            action="admin.operation.run",
+            event_type="ADMIN_OPERATION_RUN",
+            extra={
+                "job_name": launch.job_name,
+                "job_id": launch.job_id,
+                "run_id": launch.run_id,
+            },
+        )
+    except LakebaseError:
+        emit(
+            log,
+            "admin_operation_success_audit_dropped",
+            level=logging.WARNING,
+            job_key=payload.job_key,
+            job_id=launch.job_id,
+            run_id=launch.run_id,
+        )
+        accepted_event = request_event
+
+    return {
+        "accepted": True,
+        "key": launch.key,
+        "label": launch.label,
+        "job_name": launch.job_name,
+        "job_id": launch.job_id,
+        "run_id": launch.run_id,
+        "run_page_url": launch.run_page_url,
+        "audit_event_id": accepted_event.event_id,
+    }
 
 
 @router.get("/settings", response_model=AdminSettingsResponse)

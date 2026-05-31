@@ -268,6 +268,7 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         "forced_dependency",
         "ttl_s",
         "proof_scope",
+        "job_key", "job_name", "job_id", "run_id", "cooldown_seconds",
     }
 )
 
@@ -517,6 +518,9 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
     for field, ttl_s in _metadata_values_for(metadata, {"ttl_s"}):
         if not isinstance(ttl_s, int) or isinstance(ttl_s, bool) or ttl_s < 0 or ttl_s > 300:
             raise AuditMetadataValueViolation(field, "must be an integer between 0 and 300")
+    for field, seconds in _metadata_values_for(metadata, {"cooldown_seconds"}):
+        if not isinstance(seconds, int) or isinstance(seconds, bool) or seconds < 0 or seconds > 7200:
+            raise AuditMetadataValueViolation(field, "must be an integer between 0 and 7200")
     for _, portfolio_criteria in _metadata_values_for(metadata, {"portfolio_criteria"}):
         if portfolio_criteria is None:
             continue

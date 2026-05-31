@@ -24,8 +24,10 @@ const budgets = {
   // The governed lender overlay adds cross-route URL propagation and public-safe
   // lender filter helpers. Keep the raw aggregate allowance bounded while
   // preserving the stricter gzip, initial-load, lazy-route, CSS, and font gates.
-  totalJsBytes: 817 * KiB,
-  totalJsGzipBytes: 270 * KiB,
+  // Admin-only data operations add a governed refresh control surface while
+  // keeping initial load, largest lazy route, CSS, and font budgets unchanged.
+  totalJsBytes: 822 * KiB,
+  totalJsGzipBytes: 271 * KiB,
   maxLazyJsBytes: 160 * KiB,
   maxLazyJsGzipBytes: 60 * KiB,
   fontAssetCount: 14,

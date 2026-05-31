@@ -141,6 +141,21 @@ targets:
               job:
                 id: ${resources.jobs.mip_sync_lifecycle_state.id}
                 permission: CAN_MANAGE_RUN
+            - name: fred_rates_job
+              description: "Operator-triggered FRED market-rate refresh job."
+              job:
+                id: ${resources.jobs.mip_fred_rates_ingest.id}
+                permission: CAN_MANAGE_RUN
+            - name: silver_refresh_job
+              description: "Operator-triggered Cotality/first-party silver refresh job."
+              job:
+                id: ${resources.jobs.mip_refresh_silver.id}
+                permission: CAN_MANAGE_RUN
+            - name: gold_refresh_job
+              description: "Operator-triggered Module 0 gold scoring refresh job."
+              job:
+                id: ${resources.jobs.mip_refresh_scores.id}
+                permission: CAN_MANAGE_RUN
             - name: otel_headers
               description: "Customer-owned OTLP collector header secret for durable log export."
               secret:
@@ -226,6 +241,21 @@ resources:
           description: "Event-triggered lifecycle sync job for approval/outreach state."
           job:
             id: ${resources.jobs.mip_sync_lifecycle_state.id}
+            permission: CAN_MANAGE_RUN
+        - name: fred_rates_job
+          description: "Operator-triggered FRED market-rate refresh job."
+          job:
+            id: ${resources.jobs.mip_fred_rates_ingest.id}
+            permission: CAN_MANAGE_RUN
+        - name: silver_refresh_job
+          description: "Operator-triggered Cotality/first-party silver refresh job."
+          job:
+            id: ${resources.jobs.mip_refresh_silver.id}
+            permission: CAN_MANAGE_RUN
+        - name: gold_refresh_job
+          description: "Operator-triggered Module 0 gold scoring refresh job."
+          job:
+            id: ${resources.jobs.mip_refresh_scores.id}
             permission: CAN_MANAGE_RUN
 
   sql_warehouses:

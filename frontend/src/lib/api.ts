@@ -1284,6 +1284,20 @@ export const api = {
   adminSources: <T>(signal?: AbortSignal) =>
     getJson<T>('/api/admin/sources', signal),
 
+  adminOperations: <T>(signal?: AbortSignal) =>
+    getJson<T>('/api/admin/operations', signal),
+
+  adminRunOperation: <T>(
+    payload: {
+      job_key: string;
+      confirm: true;
+      reason?: string | null;
+      request_id: string;
+    },
+    signal?: AbortSignal,
+  ) =>
+    postJson<T, typeof payload>('/api/admin/operations/run', payload, signal),
+
   dataEstate: (signal?: AbortSignal) =>
     getJson<DataEstateResponse>('/api/data-estate', signal),
 

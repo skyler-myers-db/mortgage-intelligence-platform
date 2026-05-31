@@ -5,7 +5,7 @@ This repo runs four workflows:
 | File | Trigger | Credentials |
 |---|---|---|
 | [`ci.yml`](ci.yml) | `pull_request`, `push` to `main` / `feature/*` | **None.** Every job is credential-free. |
-| [`nightly.yml`](nightly.yml) | `schedule` (10:00 UTC daily) + `workflow_dispatch` | Required — see below. |
+| [`nightly.yml`](nightly.yml) | `workflow_dispatch` only | Required — see below. |
 | [`deploy-dev.yml`](deploy-dev.yml) | `workflow_dispatch` | Required — Databricks dev deployment credentials. |
 | [`deploy-prod.yml`](deploy-prod.yml) | `workflow_dispatch` | Required — Databricks production deployment credentials. |
 
@@ -14,16 +14,17 @@ including fork-based PRs: it uses placeholder BUNDLE_VARs and pytest
 fixtures that explicitly install in-process repositories where needed.
 No real workspace is touched.
 
-The nightly workflow (`nightly.yml`) intentionally talks to the real
-dev Databricks workspace so drift between the SQL UDFs + Python
-scoring mirrors, Lakebase, Genie, deployed-app auth, and the
-degraded-banner proof is caught within 24 hours. It fails loudly:
-live jobs check their own required secrets and exit non-zero instead
-of silently skipping release gates.
+The live validation workflow (`nightly.yml`, retained under its historical
+filename) intentionally talks to the real dev Databricks workspace so drift
+between the SQL UDFs + Python scoring mirrors, Lakebase, Genie, deployed-app
+auth, and the degraded-banner proof is caught before a release. It is manual
+only because the refresh jobs, Genie prompts, and browser matrix burn real
+customer/workspace compute. It fails loudly: live jobs check their own required
+secrets and exit non-zero instead of silently skipping release gates.
 
 ---
 
-## Required repo secrets (nightly only)
+## Required repo secrets (live validation only)
 
 All listed below must be set under **Settings → Secrets and variables
 → Actions → Repository secrets**. Missing any one of them aborts the
@@ -37,9 +38,9 @@ var.
 | `DATABRICKS_WAREHOUSE_ID` | ID of the dev serverless SQL warehouse. Same value `databricks bundle validate` resolves from `databricks.yml`. | Databricks UI → SQL Warehouses → click the warehouse → copy from URL or Connection Details. |
 | `GENIE_SPACE_ID` | Mortgage Lead Intelligence Genie Space ID. | Databricks UI → Genie → open the space → copy ID from URL. Also tracked at `genie/space_id.txt`. |
 | `DATABRICKS_CLIENT_ID` | Non-admin service-principal OAuth client ID used by deployed Playwright and the non-admin RBAC smoke. | Provision with `tools/databricks/provision_m2m_oauth.py` or `docs/security/m2m-oauth-setup.md`. |
-| `DATABRICKS_CLIENT_SECRET` | Secret for the non-admin OAuth client. Nightly fails if this is absent; it must not fall back to the admin PAT. | Rotate with the same cadence as the workspace token. |
+| `DATABRICKS_CLIENT_SECRET` | Secret for the non-admin OAuth client. Live validation fails if this is absent; it must not fall back to the admin PAT. | Rotate with the same cadence as the workspace token. |
 
-## Optional secrets (nightly, gated features)
+## Optional secrets (live validation, gated features)
 
 | Secret | What it enables | Notes |
 |---|---|---|
@@ -51,7 +52,7 @@ var.
 
 The PR workflow intentionally has no `secrets:` references. If you add
 a job that needs a secret, consider whether that job belongs in
-`nightly.yml` instead; PR jobs that fail for fork-based PRs due to
+manual live validation instead; PR jobs that fail for fork-based PRs due to
 missing secrets create friction with external contributors.
 
 ## Triage
@@ -62,5 +63,5 @@ missing secrets create friction with external contributors.
   depending on workspace activity; the failure issue auto-filed by the
   `notify-on-failure` job links directly to the workflow run.
 
-The auto-filed issue is labelled `ci-failure` + `nightly`; close it
-once the next nightly is green.
+The auto-filed issue is labelled `ci-failure` + `live-validation`; close it
+once the next manual live validation run is green.
