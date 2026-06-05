@@ -1,10 +1,10 @@
 import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { Chip } from '../Primitives';
 import { Icon } from '../Icon';
-import { WarmingUpBlock } from '../ui/WarmingUpBlock';
 import { api } from '../../lib/api';
+import { DEFAULT_QUERY_STALE_MS } from '../../lib/queryClient';
 import { queryKeys } from '../../lib/queryKeys';
-import { useWarmingUpRetry } from '../../lib/useWarmingUpRetry';
 
 type OperationJobKey = 'fred_rates' | 'silver_refresh' | 'gold_refresh' | 'lifecycle_sync';
 
@@ -160,16 +160,15 @@ export function DataOperationsPanel({ sources, sourcesLoading = false, sourcesEr
 
   const {
     data: operations,
-    warmingUp: operationsWarming,
     error: operationsErrorObj,
-    manualRetry: retryOperations,
-  } = useWarmingUpRetry<OperationsResponse>(
-    (signal) => api.adminOperations<OperationsResponse>(signal),
-    [],
-    { queryKey: queryKeys.adminOperations() },
-  );
-  const operationsLoading =
-    operations === null && operationsWarming === null && operationsErrorObj === null;
+    isLoading: operationsLoading,
+    refetch: retryOperations,
+  } = useQuery<OperationsResponse, Error>({
+    queryKey: queryKeys.adminOperations(),
+    queryFn: ({ signal }) => api.adminOperations<OperationsResponse>(signal),
+    staleTime: DEFAULT_QUERY_STALE_MS,
+    retry: false,
+  });
   const operationsError = operationsErrorObj
     ? operationsErrorObj instanceof Error
       ? operationsErrorObj.message
@@ -193,7 +192,7 @@ export function DataOperationsPanel({ sources, sourcesLoading = false, sourcesEr
         request_id: newRequestId(),
       });
       setOperationLaunch(launch);
-      retryOperations();
+      void retryOperations();
     } catch (err) {
       setOperationError(err instanceof Error ? err.message : 'Unable to start refresh job');
     } finally {
@@ -211,25 +210,20 @@ export function DataOperationsPanel({ sources, sourcesLoading = false, sourcesEr
           </div>
         </div>
         <Chip variant={operationsError ? 'warning' : activeOperationCount > 0 ? 'success' : 'neutral'}>
-          {operationsWarming
-            ? 'warming up...'
-            : operationsError
+          {operationsError
               ? 'unavailable'
               : operationsLoading
                 ? 'loading...'
                 : activeOperationCount > 0
                   ? `${activeOperationCount} running`
                   : 'ready'}
-        </Chip>
+              </Chip>
       </div>
       <div className="surface__body surface__body--stack-sm">
-        {operationsWarming && (
-          <WarmingUpBlock state={operationsWarming} title="Operations loading" compact />
-        )}
-        {!operationsWarming && operationsLoading && (
+        {operationsLoading && (
           <div className="muted body fs-12">Loading Databricks job status...</div>
         )}
-        {!operationsWarming && operationsError && (
+        {operationsError && (
           <div className="muted body fs-12">Data operations unavailable: {operationsError}</div>
         )}
         {operationError && (
@@ -268,7 +262,7 @@ export function DataOperationsPanel({ sources, sourcesLoading = false, sourcesEr
             </div>
           </div>
         )}
-        {!operationsWarming && !operationsError && operations && (
+        {!operationsError && operations && (
           <div className="chip-row" aria-label="Recommended refresh order">
             {operations.jobs
               .slice()
@@ -277,10 +271,10 @@ export function DataOperationsPanel({ sources, sourcesLoading = false, sourcesEr
                 <Chip key={job.key} variant={job.latest_run?.active ? 'success' : 'neutral'}>
                   {job.run_order}. {job.label}
                 </Chip>
-              ))}
+            ))}
           </div>
         )}
-        {!operationsWarming && !operationsError && operations?.jobs.map((job) => {
+        {!operationsError && operations?.jobs.map((job) => {
           const run = job.latest_run;
           const tone = operationStatusTone(job);
           const busy = operationRunningKey === job.key;
