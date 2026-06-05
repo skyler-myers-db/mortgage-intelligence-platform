@@ -7,6 +7,7 @@ import { Chip } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { EntradaWordmark } from '../components/brand/Entrada';
 import { DataOperationsPanel } from '../components/admin/DataOperationsPanel';
+import { ActivationOperationsPanel } from '../components/activation/ActivationLoopPanel';
 import { api } from '../lib/api';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
 import { queryKeys } from '../lib/queryKeys';
@@ -461,6 +462,8 @@ export default function AdminConfig() {
       </div>
 
       <DataOperationsPanel />
+
+      <ActivationOperationsPanel />
 
       <div className="surface mt-grid">
         <div className="surface__hdr surface__hdr--split">

@@ -26,8 +26,10 @@ const budgets = {
   // preserving the stricter gzip, initial-load, lazy-route, CSS, and font gates.
   // Admin-only data operations add a governed refresh control surface while
   // keeping initial load, largest lazy route, CSS, and font budgets unchanged.
-  totalJsBytes: 822 * KiB,
-  totalJsGzipBytes: 271 * KiB,
+  // The activation outbox adds a governed post-approval writeback loop; keep the
+  // increase bounded while preserving initial-load and largest-route gates.
+  totalJsBytes: 832 * KiB,
+  totalJsGzipBytes: 274 * KiB,
   maxLazyJsBytes: 160 * KiB,
   maxLazyJsGzipBytes: 60 * KiB,
   fontAssetCount: 14,

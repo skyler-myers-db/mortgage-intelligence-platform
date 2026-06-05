@@ -164,6 +164,7 @@ _MUTATION_AUDIT_EXPECTATIONS: dict[str, tuple[str, ...]] = {
     "delete_lead": ("store.delete_lead(",),
     "save_draft": ("store.save_draft(",),
     "delete_draft": ("store.delete_draft(",),
+    "stage_activation": ("store.stage_borrower(", "_assert_activation_eligible("),
 }
 
 

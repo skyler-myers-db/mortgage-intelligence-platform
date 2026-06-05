@@ -246,6 +246,120 @@ CREATE INDEX IF NOT EXISTS idx_outreach_drafts_actor_updated
     ON mip_app.outreach_drafts (actor_email, updated_at DESC)
     WHERE deleted_at IS NULL;
 
+-- Activation / customer writeback --------------------------------------
+-- Product boundary: Module 0 can stage an approved lead or campaign for a
+-- customer destination, but it does not auto-send email/SMS or write to an
+-- external CRM/CDP/LOS/POS until a customer-specific connector is configured
+-- and separately approved. These tables are the governed outbox contract:
+-- synthetic borrower ids, public-safe campaign/approval ids, offer/channel
+-- metadata, and delivery status only. Raw owner names, contact data, street
+-- addresses, raw CLIPs, account numbers, and destination credentials do not
+-- belong here.
+CREATE TABLE IF NOT EXISTS mip_app.activation_destinations (
+    destination_key  TEXT PRIMARY KEY,
+    destination_type TEXT NOT NULL CHECK (
+        destination_type IN ('salesforce','crm_cdp','los_pos','servicing','webhook')
+    ),
+    display_name     TEXT NOT NULL,
+    status           TEXT NOT NULL DEFAULT 'not_configured'
+                     CHECK (status IN ('not_configured','dry_run','connected','disabled')),
+    allowed_actions  TEXT[] NOT NULL DEFAULT ARRAY['stage_lead']::TEXT[],
+    pii_policy       JSONB NOT NULL DEFAULT '{"borrower_contact_fields":"blocked"}'::jsonb,
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_activation_destinations_status
+    ON mip_app.activation_destinations (status, destination_type);
+
+INSERT INTO mip_app.activation_destinations (
+    destination_key, destination_type, display_name, status, allowed_actions, pii_policy
+) VALUES
+    (
+        'salesforce_crm',
+        'salesforce',
+        'Salesforce CRM',
+        'not_configured',
+        ARRAY['stage_lead','stage_campaign']::TEXT[],
+        '{"borrower_contact_fields":"blocked","copy_mode":"approved_draft_reference_only"}'::jsonb
+    ),
+    (
+        'customer_cdp',
+        'crm_cdp',
+        'Customer CDP',
+        'not_configured',
+        ARRAY['stage_lead','stage_campaign']::TEXT[],
+        '{"borrower_contact_fields":"blocked","copy_mode":"approved_draft_reference_only"}'::jsonb
+    ),
+    (
+        'los_pos',
+        'los_pos',
+        'LOS / POS',
+        'not_configured',
+        ARRAY['stage_lead']::TEXT[],
+        '{"borrower_contact_fields":"blocked","application_event_fields":"hashed_only"}'::jsonb
+    ),
+    (
+        'servicing_platform',
+        'servicing',
+        'Servicing Platform',
+        'not_configured',
+        ARRAY['stage_lead']::TEXT[],
+        '{"borrower_contact_fields":"blocked","loan_account_fields":"hashed_only"}'::jsonb
+    )
+ON CONFLICT (destination_key) DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS mip_app.activation_outbox (
+    activation_id     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    destination_key   TEXT NOT NULL REFERENCES mip_app.activation_destinations(destination_key),
+    entity_type       TEXT NOT NULL CHECK (entity_type IN ('borrower','campaign','cohort')),
+    entity_id         TEXT NOT NULL,
+    borrower_id       TEXT NOT NULL,
+    campaign_id       UUID,
+    approval_id       UUID NOT NULL REFERENCES mip_app.approvals(approval_id),
+    offer_code        TEXT,
+    channel           TEXT NOT NULL CHECK (channel IN ('email','sms','direct_mail')),
+    status            TEXT NOT NULL DEFAULT 'dry_run'
+                      CHECK (status IN ('dry_run','staged','delivered','failed','cancelled')),
+    request_id        TEXT NOT NULL,
+    created_by        TEXT NOT NULL,
+    payload_json      JSONB NOT NULL DEFAULT '{}'::jsonb,
+    delivery_metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE mip_app.activation_outbox
+    ALTER COLUMN borrower_id SET NOT NULL;
+ALTER TABLE mip_app.activation_outbox
+    ALTER COLUMN approval_id SET NOT NULL;
+ALTER TABLE mip_app.activation_outbox
+    ALTER COLUMN channel SET NOT NULL;
+ALTER TABLE mip_app.activation_outbox
+    ALTER COLUMN request_id SET NOT NULL;
+ALTER TABLE mip_app.activation_outbox
+    DROP CONSTRAINT IF EXISTS activation_outbox_approval_fk;
+ALTER TABLE mip_app.activation_outbox
+    ADD CONSTRAINT activation_outbox_approval_fk
+    FOREIGN KEY (approval_id) REFERENCES mip_app.approvals(approval_id);
+ALTER TABLE mip_app.activation_outbox
+    DROP CONSTRAINT IF EXISTS activation_outbox_channel_check;
+ALTER TABLE mip_app.activation_outbox
+    ADD CONSTRAINT activation_outbox_channel_check
+    CHECK (channel IN ('email','sms','direct_mail'));
+DROP INDEX IF EXISTS mip_app.idx_activation_outbox_request_id;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_activation_outbox_request_id
+    ON mip_app.activation_outbox (request_id);
+DROP INDEX IF EXISTS mip_app.idx_activation_outbox_business_key;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_activation_outbox_business_key
+    ON mip_app.activation_outbox (destination_key, approval_id, borrower_id, channel)
+    WHERE status IN ('dry_run','staged','delivered');
+CREATE INDEX IF NOT EXISTS idx_activation_outbox_created
+    ON mip_app.activation_outbox (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_activation_outbox_borrower
+    ON mip_app.activation_outbox (borrower_id, created_at DESC)
+    WHERE borrower_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_activation_outbox_destination
+    ON mip_app.activation_outbox (destination_key, status, created_at DESC);
+
 -- Action audit --------------------------------------------------------
 -- The append-only ledger governance §4 requires. `event_type` is the
 -- canonical verb: VIEW_BORROWER, VIEW_LEADS, APPROVE, DRAFT_OUTREACH,

@@ -138,6 +138,7 @@ export interface BorrowerLifecycle {
   borrower_id: string;
   approval_status: ApprovalStatus;
   outreach_status: OutreachStatus;
+  approval_id?: string | null;
   approved_at?: string | null;
   outreach_at?: string | null;
   synced_at?: string | null;
@@ -218,6 +219,50 @@ export interface WorkspaceState {
 export interface WorkspaceMutationResult {
   ok: boolean;
   borrower_id: string;
+  audit_event_id?: string | null;
+}
+
+export type ActivationDestinationType = 'salesforce' | 'crm_cdp' | 'los_pos' | 'servicing' | 'webhook';
+export type ActivationDestinationStatus = 'not_configured' | 'dry_run' | 'connected' | 'disabled';
+export type ActivationOutboxStatus = 'dry_run' | 'staged' | 'delivered' | 'failed' | 'cancelled';
+
+export interface ActivationDestination {
+  destination_key: string;
+  destination_type: ActivationDestinationType;
+  display_name: string;
+  status: ActivationDestinationStatus;
+  allowed_actions: string[];
+  updated_at?: string | null;
+}
+
+export interface ActivationOutboxItem {
+  activation_id: string;
+  destination_key: string;
+  destination_type: ActivationDestinationType;
+  destination_display_name: string;
+  destination_status: ActivationDestinationStatus;
+  entity_type: 'borrower' | 'campaign' | 'cohort';
+  entity_id: string;
+  borrower_id: string;
+  campaign_id?: string | null;
+  approval_id: string;
+  offer_code?: string | null;
+  channel?: 'email' | 'sms' | 'direct_mail' | null;
+  status: ActivationOutboxStatus;
+  request_id: string;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ActivationSummary {
+  destinations: ActivationDestination[];
+  recent_outbox: ActivationOutboxItem[];
+}
+
+export interface ActivationStageResponse {
+  staged: boolean;
+  activation: ActivationOutboxItem;
   audit_event_id?: string | null;
 }
 

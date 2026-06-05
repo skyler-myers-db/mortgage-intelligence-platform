@@ -1,23 +1,8 @@
 """Audit store -- Lakebase-backed append-only ledger.
 
-Slice-5 cutover: replaces the in-memory list with a Postgres-backed
-writer against ``mip_app.action_audit``. The router contract is
-unchanged -- ``write(...)`` returns an ``AuditEvent`` and ``list(limit)``
-returns events in descending event-time order.
-
-No silent fallback: when Lakebase is unreachable, ``LakebaseAuditStore``
-methods raise ``LakebaseError`` (from ``backend.services.lakebase``).
-The audit router catches that and surfaces HTTP 503; Slice 6 adds the
-retry / circuit-breaker layer so transient network hiccups don't panic
-the UI.
-
-Actor attribution: governance §4 requires the real authenticated user,
-not ``"service-user"``. Databricks Apps forwards the workspace user in
-``X-Forwarded-Email``; ``resolve_actor(request)`` extracts it and falls
-back to ``settings.default_actor`` with a logged warning so operators
-can spot dev/test paths in production logs. The router chain is:
-routers read ``Request`` -> call ``resolve_actor`` -> pass to
-``audit_store.write(actor=...)``.
+Runtime writes through ``mip_app.action_audit``. ``resolve_actor`` reads the
+Databricks Apps ``X-Forwarded-Email`` header and emits an observable fallback
+warning when local/test paths use ``settings.default_actor``.
 """
 from __future__ import annotations
 
@@ -56,21 +41,8 @@ from backend.services.scoring import NBO_PRODUCT_LABELS
 log = logging.getLogger(__name__)
 
 
-# ----------------------------------------------------------------------
-# Fallback-identity counter. Slice-RBAC follow-up: when the Databricks
-# Apps edge does NOT forward ``X-Forwarded-Email`` (local dev, a broken
-# proxy, or a code path that didn't plumb the ``Request`` through), we
-# fall back to ``settings.default_actor``. Governance wants that event
-# to be observable -- every fallback is potentially an un-attributed
-# audit row, and a non-zero count in production is a regression signal
-# worth paging on.
-#
-# Implementation is a plain module-level integer incremented under a
-# (non-threadsafe, best-effort) counter. FastAPI workers are separate
-# processes; the number is process-local like the other counters in
-# ``backend/services/observability.py``. Tests exercise the counter via
+# Process-local count of identity-header fallbacks. Tests exercise it via
 # ``_reset_fallback_counter_for_tests`` + ``get_fallback_identity_count``.
-# ----------------------------------------------------------------------
 
 
 _FALLBACK_IDENTITY_COUNT: int = 0
@@ -269,6 +241,8 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         "ttl_s",
         "proof_scope",
         "job_key", "job_name", "job_id", "run_id", "cooldown_seconds",
+        # Governed customer activation / writeback outbox.
+        "activation_id", "destination_key", "destination_type", "activation_status",
     }
 )
 
@@ -283,7 +257,15 @@ _HUMAN_NAME_OR_PLACEHOLDER_PATTERN = re.compile(
 _BORROWER_ID_METADATA_KEYS: frozenset[str] = frozenset({"borrower_id"})
 
 _OPAQUE_ID_METADATA_KEYS: frozenset[str] = frozenset(
-    {"approval_id", "bulk_id", "campaign_id", "request_id", "assignment_id", "disposition_id"}
+    {
+        "approval_id",
+        "bulk_id",
+        "campaign_id",
+        "request_id",
+        "assignment_id",
+        "disposition_id",
+        "activation_id",
+    }
 )
 _CAMPAIGN_LABEL_METADATA_KEYS: frozenset[str] = frozenset({"variant_name", "recommended_offer", "workspace_offer_code"})
 _INTERNAL_STAFF_EMAIL_METADATA_KEYS: frozenset[str] = frozenset({"assigned_to_email", "assigned_by", "lo_email"})
@@ -317,6 +299,9 @@ _DECISION_INPUT_KEYS: frozenset[str] = frozenset(
 
 _ALLOWED_SEGMENT_CODES: frozenset[str] = frozenset({"itm", "listed", "permit", "investor", "equity", "retention"})
 _FORCED_DEGRADED_DEPENDENCIES: frozenset[str] = frozenset({"warehouse", "lakebase", "genie", "all"})
+_ACTIVATION_DESTINATION_TYPES: frozenset[str] = frozenset({"salesforce", "crm_cdp", "los_pos", "servicing", "webhook"})
+_ACTIVATION_STATUSES: frozenset[str] = frozenset({"dry_run", "staged", "delivered", "failed", "cancelled"})
+_ACTIVATION_DESTINATION_KEY_PATTERN = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
 
 
 class AuditPIIError(RuntimeError):
@@ -549,6 +534,15 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
             validate_source_assets(value)
         except ValueError as exc:
             raise AuditMetadataValueViolation(field, str(exc)) from exc
+    for field, value in _metadata_values_for(metadata, {"destination_key"}):
+        if value is not None and not _ACTIVATION_DESTINATION_KEY_PATTERN.fullmatch(str(value)):
+            raise AuditMetadataValueViolation(field, "must be a governed activation destination slug")
+    for field, value in _metadata_values_for(metadata, {"destination_type"}):
+        if value is not None and str(value) not in _ACTIVATION_DESTINATION_TYPES:
+            raise AuditMetadataValueViolation(field, "must be a governed activation destination type")
+    for field, value in _metadata_values_for(metadata, {"activation_status"}):
+        if value is not None and str(value) not in _ACTIVATION_STATUSES:
+            raise AuditMetadataValueViolation(field, "must be a governed activation outbox status")
     strict_sql_hash = str(metadata.get("action") or "") == "view_borrower_proof"
     for field, value in _metadata_values_for(metadata, {"sql_hash"}):
         if value is not None and strict_sql_hash:

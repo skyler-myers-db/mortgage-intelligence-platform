@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Link, Navigate, useParams } from 'react-router-dom';
 import { api, ApiError, isAbortError, isWarmingUpError, dependencyLabel } from '../lib/api';
 import type { WarmingUpState } from '../lib/useWarmingUpRetry';
-import type { Borrower360 as Borrower360Type, OfferRecommendation } from '../types';
+import type { ApprovalStatus, Borrower360 as Borrower360Type, BorrowerLifecycle, OfferRecommendation } from '../types';
 import { PageShell } from '../components/layout/PageShell';
 import { ApprovalBanner } from '../components/mortgage/ApprovalBanner';
 import { ScoreBadge } from '../components/mortgage/ScoreBadge';
@@ -11,6 +11,7 @@ import { ConfidenceMeter } from '../components/mortgage/ConfidenceMeter';
 import { Button, Chip } from '../components/Primitives';
 import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 import { useApp } from '../components/AppContext';
+import { ActivationLoopPanel } from '../components/activation/ActivationLoopPanel';
 import { invalidateOperationalQueries } from '../lib/queryKeys';
 import { BORROWER_CACHE, clearBorrowerCache, readBorrowerCache } from './offer-orchestrator.cache';
 import { DEFAULT_REJECT_REASON, type OutreachChannel, type RejectReasonCode } from './offer-orchestrator.constants';
@@ -29,6 +30,18 @@ import {
  * audit log stay in sync.
  */
 
+export function resolveOfferApprovalStatus(
+  local: ApprovalStatus | undefined,
+  lifecycleStatus: ApprovalStatus | undefined,
+  borrowerStatus: ApprovalStatus | undefined,
+): ApprovalStatus | undefined {
+  const durable = lifecycleStatus ?? borrowerStatus;
+  if (durable === 'approved' || durable === 'rejected' || durable === 'hold') {
+    return local ?? durable;
+  }
+  return local;
+}
+
 export default function OfferOrchestrator() {
   const { id } = useParams();
   const queryClient = useQueryClient();
@@ -43,6 +56,8 @@ export default function OfferOrchestrator() {
   const [warmingUp, setWarmingUp] = useState<WarmingUpState | null>(null);
   const [approveError, setApproveError] = useState<string | null>(null);
   const [auditId, setAuditId] = useState<string | null>(null);
+  const [approvalId, setApprovalId] = useState<string | null>(null);
+  const [lifecycle, setLifecycle] = useState<BorrowerLifecycle | null>(null);
   // R5-11 (2026-04-23): in-flight flag forwarded to ApprovalBanner so
   // the buttons disable while a POST is pending. Prevents a double
   // click from writing two audit rows.
@@ -115,6 +130,9 @@ export default function OfferOrchestrator() {
             : null;
       setB(cached.borrower);
       setRec(cached.recommendation);
+      setLifecycle(null);
+      setApprovalId(null);
+      setAuditId(null);
       setLoadError(null);
       setLoadErrorStatus(null);
       setWarmingUp(null);
@@ -130,6 +148,9 @@ export default function OfferOrchestrator() {
     } else {
       setB(null);
       setRec(null);
+      setLifecycle(null);
+      setApprovalId(null);
+      setAuditId(null);
       setLoadError(null);
       setLoadErrorStatus(null);
       setWarmingUp(null);
@@ -140,13 +161,18 @@ export default function OfferOrchestrator() {
     const runAttempt = async (attempt: number): Promise<void> => {
       if (cancelled) return;
       try {
-        const [borrower, recommendation] = await Promise.all([
+        const [borrower, recommendation, loadedLifecycle] = await Promise.all([
           api.borrower(id, ctrl.signal),
           api.recommendOffer(id, ctrl.signal),
+          api.borrowerLifecycle(id, ctrl.signal).catch(() => null),
         ]);
         if (cancelled) return;
         setB(borrower);
         setRec(recommendation);
+        setLifecycle(loadedLifecycle);
+        if (loadedLifecycle?.approval_id) {
+          setApprovalId(loadedLifecycle.approval_id);
+        }
         setWarmingUp(null);
         setLoadError(null);
         setLoadErrorStatus(null);
@@ -285,6 +311,11 @@ export default function OfferOrchestrator() {
   }
 
   const productLabel = rec?.product_label ?? b?.recommended_offer ?? '…';
+  const effectiveApproval = resolveOfferApprovalStatus(
+    approval,
+    lifecycle?.approval_status,
+    b?.approval_status,
+  );
   const draftText = draftLoaded ? draftBody : '';
   const draftReady = draftLoaded && draftText.trim().length > 0;
   const savedDraft = savedDraftKey ? savedDrafts[savedDraftKey] : undefined;
@@ -345,6 +376,7 @@ export default function OfferOrchestrator() {
       if (res.approved) {
         setApproval(id, 'approved');
         setAuditId(res.audit_event_id ?? null);
+        setApprovalId(res.approval_id ?? null);
         clearBorrowerCache(id);
         void invalidateOperationalQueries(queryClient);
       } else {
@@ -474,15 +506,15 @@ export default function OfferOrchestrator() {
               size="sm"
               icon="check"
               onClick={() => void onApprove()}
-              disabled={!rec || !draftReady || approval === 'approved'}
+              disabled={!rec || !draftReady || effectiveApproval === 'approved'}
               aria-label={
-                approval === 'approved'
+                effectiveApproval === 'approved'
                   ? `Borrower ${b.borrower_id} already approved`
                   : `Approve borrower ${b.borrower_id}`
               }
               data-testid="hero-approve"
             >
-              {approval === 'approved' ? 'Approved' : 'Approve'}
+              {effectiveApproval === 'approved' ? 'Approved' : 'Approve'}
             </Button>
           </>
         )
@@ -534,27 +566,39 @@ export default function OfferOrchestrator() {
 
       <OfferDetailsRows recommendation={rec} />
 
-      <div className="mt-grid">
-        <ApprovalBanner
-          text={`${b ? `Borrower ${b.borrower_id}` : 'Borrower'} pending review. Approve writes an audit event and places the decision in the governed internal queue.`}
-          onApprove={() => void onApprove()}
-          onReject={() => void onReject()}
-          disabled={!draftReady || approval === 'approved' || approval === 'rejected'}
-          isSubmitting={approving}
-        />
-      </div>
-
-      {approval === 'approved' && (
-        <div className="surface mt-grid">
-          <div className="surface__body surface__body--inline">
-            <span className="burst inline-flex">
-              <Chip variant="success" icon="check">Approved · governed internal queue</Chip>
-            </span>
-            {auditId && <span className="mono muted fs-11">audit: {auditId}</span>}
-          </div>
+      {effectiveApproval !== 'approved' && effectiveApproval !== 'rejected' && (
+        <div className="mt-grid">
+          <ApprovalBanner
+            text={`${b ? `Borrower ${b.borrower_id}` : 'Borrower'} pending review. Approve writes an audit event and places the decision in the governed internal queue.`}
+            onApprove={() => void onApprove()}
+            onReject={() => void onReject()}
+            disabled={!draftReady}
+            isSubmitting={approving}
+          />
         </div>
       )}
-      {approval === 'rejected' && (
+
+      {effectiveApproval === 'approved' && (
+        <>
+          <div className="surface mt-grid">
+            <div className="surface__body surface__body--inline">
+              <span className="burst inline-flex">
+                <Chip variant="success" icon="check">Approved · governed internal queue</Chip>
+              </span>
+              {auditId && <span className="mono muted fs-11">audit: {auditId}</span>}
+              {approvalId && <span className="mono muted fs-11">approval: {approvalId}</span>}
+            </div>
+          </div>
+          <ActivationLoopPanel
+            borrowerId={b?.borrower_id ?? id}
+            offerCode={rec?.offer_code ?? b?.recommended_offer_code ?? null}
+            channel={draftChannel}
+            approvalId={approvalId}
+            approved
+          />
+        </>
+      )}
+      {effectiveApproval === 'rejected' && (
         <div className="surface mt-grid">
           <div className="surface__body">
             <Chip variant="danger" icon="cross">Rejected</Chip>

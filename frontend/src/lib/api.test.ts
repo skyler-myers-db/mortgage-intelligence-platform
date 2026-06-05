@@ -82,6 +82,102 @@ describe('borrower proof API client', () => {
   });
 });
 
+describe('activation API client', () => {
+  it('posts activation staging through canonical API v1 with approval binding', async () => {
+    const calls: Array<{ path: string; init?: RequestInit }> = [];
+    vi.stubGlobal('fetch', async (path: string, init?: RequestInit) => {
+      calls.push({ path, init });
+      return jsonResponse(202, {
+        staged: true,
+        activation: {
+          activation_id: '33333333-3333-4333-8333-333333333333',
+          destination_key: 'salesforce_crm',
+          destination_type: 'salesforce',
+          destination_display_name: 'Salesforce CRM',
+          destination_status: 'not_configured',
+          entity_type: 'borrower',
+          entity_id: 'B-48291',
+          borrower_id: 'B-48291',
+          campaign_id: null,
+          approval_id: '11111111-1111-4111-8111-111111111111',
+          offer_code: 'refi',
+          channel: 'email',
+          status: 'dry_run',
+          request_id: '22222222-2222-4222-8222-222222222222',
+          created_by: 'skyler@entrada.ai',
+          created_at: '2026-06-01T00:00:00Z',
+          updated_at: '2026-06-01T00:00:00Z',
+        },
+        audit_event_id: '55555555-5555-4555-8555-555555555555',
+      });
+    });
+
+    await api.stageActivation({
+      borrower_id: 'B-48291',
+      destination_key: 'salesforce_crm',
+      offer_code: 'refi',
+      channel: 'email',
+      approval_id: '11111111-1111-4111-8111-111111111111',
+      request_id: '22222222-2222-4222-8222-222222222222',
+    });
+
+    expect(calls[0].path).toBe('/api/v1/activation/stage');
+    expect(calls[0].init?.method).toBe('POST');
+    const body = JSON.parse(String(calls[0].init?.body));
+    expect(body).toEqual({
+      borrower_id: 'B-48291',
+      destination_key: 'salesforce_crm',
+      offer_code: 'refi',
+      channel: 'email',
+      campaign_id: null,
+      approval_id: '11111111-1111-4111-8111-111111111111',
+      request_id: '22222222-2222-4222-8222-222222222222',
+    });
+  });
+
+  it('generates a request id when staging activation from the UI helper', async () => {
+    const calls: Array<{ path: string; init?: RequestInit }> = [];
+    vi.stubGlobal('fetch', async (path: string, init?: RequestInit) => {
+      calls.push({ path, init });
+      return jsonResponse(202, {
+        staged: true,
+        activation: {
+          activation_id: '33333333-3333-4333-8333-333333333333',
+          destination_key: 'salesforce_crm',
+          destination_type: 'salesforce',
+          destination_display_name: 'Salesforce CRM',
+          destination_status: 'not_configured',
+          entity_type: 'borrower',
+          entity_id: 'B-48291',
+          borrower_id: 'B-48291',
+          campaign_id: null,
+          approval_id: '11111111-1111-4111-8111-111111111111',
+          offer_code: 'refi',
+          channel: 'email',
+          status: 'dry_run',
+          request_id: 'generated-by-client',
+          created_by: 'skyler@entrada.ai',
+          created_at: '2026-06-01T00:00:00Z',
+          updated_at: '2026-06-01T00:00:00Z',
+        },
+        audit_event_id: '55555555-5555-4555-8555-555555555555',
+      });
+    });
+
+    await api.stageActivation({
+      borrower_id: 'B-48291',
+      destination_key: 'salesforce_crm',
+      offer_code: 'refi',
+      channel: 'email',
+      approval_id: '11111111-1111-4111-8111-111111111111',
+    });
+
+    const body = JSON.parse(String(calls[0].init?.body));
+    expect(body.request_id).toEqual(expect.any(String));
+    expect(body.request_id).toHaveLength(36);
+  });
+});
+
 describe('_parseRetryableBody', () => {
   it('extracts reason="breaker_open" from a 503 body', async () => {
     const res = jsonResponse(503, {

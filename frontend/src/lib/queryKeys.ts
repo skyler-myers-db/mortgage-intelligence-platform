@@ -24,6 +24,9 @@ export const queryKeys = {
   adminRules: () => ['mip', 'admin', 'rules'] as const,
   adminSources: () => ['mip', 'admin', 'sources'] as const,
   adminOperations: () => ['mip', 'admin', 'operations'] as const,
+  activationDestinations: () => ['mip', 'activation', 'destinations'] as const,
+  activationSummary: () => ['mip', 'activation', 'summary'] as const,
+  activationOutbox: (criteria: readonly unknown[]) => ['mip', 'activation', 'outbox', ...criteria] as const,
   auditEvents: (criteria: readonly unknown[]) => ['mip', 'audit', 'events', ...criteria] as const,
   auditRollups: (period: string, groupBy?: string | null) =>
     ['mip', 'audit', 'rollups', period, groupBy ?? 'event_type'] as const,
@@ -59,6 +62,10 @@ export function invalidateOperationalQueries(queryClient: QueryClient): Promise<
     }),
     queryClient.invalidateQueries({
       queryKey: ['mip', 'analytics'] satisfies QueryKey,
+      refetchType: 'none',
+    }),
+    queryClient.invalidateQueries({
+      queryKey: ['mip', 'activation'] satisfies QueryKey,
       refetchType: 'none',
     }),
   ]).then(() => undefined);

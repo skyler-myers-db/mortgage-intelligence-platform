@@ -22,6 +22,7 @@ from starlette.responses import Response as StarletteResponse
 from starlette.types import ASGIApp
 
 from backend.api import (
+    activation,
     admin,
     analytics,
     assets,
@@ -473,6 +474,7 @@ API_ROUTERS = [
     health.router,
     config.router,
     data_estate.router,
+    activation.router,
     admin.router,
     assets.router,
     analytics.router,
