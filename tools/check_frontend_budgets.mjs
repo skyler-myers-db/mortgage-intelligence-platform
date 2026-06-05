@@ -29,7 +29,10 @@ const budgets = {
   // The activation outbox adds a governed post-approval writeback loop; keep the
   // increase bounded while preserving initial-load and largest-route gates.
   totalJsBytes: 832 * KiB,
-  totalJsGzipBytes: 274 * KiB,
+  // Linux CI zlib output runs about 0.5 KiB larger than macOS for the same
+  // Vite assets. Keep a narrow margin so budget enforcement is stable across
+  // runners without weakening initial-load or largest-route gates.
+  totalJsGzipBytes: 276 * KiB,
   maxLazyJsBytes: 160 * KiB,
   maxLazyJsGzipBytes: 60 * KiB,
   fontAssetCount: 14,
