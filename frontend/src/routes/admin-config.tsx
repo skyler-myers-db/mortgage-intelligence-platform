@@ -461,7 +461,11 @@ export default function AdminConfig() {
         </div>
       </div>
 
-      <DataOperationsPanel />
+      <DataOperationsPanel
+        sources={sources ?? undefined}
+        sourcesLoading={sourcesLoading || Boolean(sourcesWarming)}
+        sourcesError={Boolean(sourcesError)}
+      />
 
       <ActivationOperationsPanel />
 

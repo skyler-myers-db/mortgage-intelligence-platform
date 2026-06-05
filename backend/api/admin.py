@@ -87,6 +87,20 @@ class ForceDegradedResponse(BaseModel):
     expires_in_s: int
 
 
+def _admin_audit_store(request: Request) -> AuditStore:
+    try:
+        factory = request.app.dependency_overrides.get(get_audit_store, get_audit_store)
+        return factory()
+    except LakebaseError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=safe_dependency_detail("lakebase"),
+        ) from exc
+
+
+AdminAuditDep = Annotated[AuditStore, Depends(_admin_audit_store)]
+
+
 def _run_to_dict(run: ManagedJobRun | None) -> dict[str, object] | None:
     if run is None:
         return None
@@ -102,7 +116,7 @@ def _run_to_dict(run: ManagedJobRun | None) -> dict[str, object] | None:
     }
 
 
-def _status_to_dict(status: ManagedJobStatus) -> dict[str, object]:
+def _status_to_dict(status: ManagedJobStatus, *, cooldown_remaining_s: int = 0) -> dict[str, object]:
     return {
         "key": status.key,
         "label": status.label,
@@ -111,6 +125,7 @@ def _status_to_dict(status: ManagedJobStatus) -> dict[str, object]:
         "configured": status.configured,
         "description": status.description,
         "run_order": status.run_order,
+        "cooldown_remaining_s": cooldown_remaining_s,
         "latest_run": _run_to_dict(status.latest_run),
     }
 
@@ -259,7 +274,7 @@ def get_sources(service: ServiceDep, _actor: AdminDep) -> list[dict[str, Any]]:
 
 
 @router.get("/operations", response_model=AdminOperationsResponse)
-def get_operations(jobs: JobsDep, _actor: AdminDep) -> dict[str, object]:
+def get_operations(_actor: AdminDep, jobs: JobsDep, audit: AdminAuditDep) -> dict[str, object]:
     """Return status for the allowlisted Databricks refresh jobs.
 
     This is intentionally separate from ``/admin/sources``. Source readiness
@@ -280,14 +295,28 @@ def get_operations(jobs: JobsDep, _actor: AdminDep) -> dict[str, object]:
             status_code=503,
             detail=safe_dependency_detail("jobs"),
         ) from exc
-    return {"jobs": [_status_to_dict(status) for status in statuses]}
+    try:
+        return {
+            "jobs": [
+                _status_to_dict(
+                    status,
+                    cooldown_remaining_s=_cooldown_remaining_s(audit, status.key),
+                )
+                for status in statuses
+            ]
+        }
+    except LakebaseError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=safe_dependency_detail("lakebase"),
+        ) from exc
 
 
 @router.post("/operations/run", response_model=AdminOperationRunResponse, status_code=202)
 def post_operation_run(
     payload: AdminOperationRunRequest,
     _actor: AdminDep,
-    audit: AuditDep,
+    audit: AdminAuditDep,
     jobs: JobsDep,
 ) -> dict[str, object]:
     """Trigger one allowlisted Databricks refresh job.

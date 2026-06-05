@@ -1,6 +1,7 @@
 """Admin Operations endpoints and Databricks job controls."""
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
 
@@ -81,7 +82,44 @@ def test_get_operations_returns_allowlisted_job_status() -> None:
     body = response.json()
     assert body["jobs"][0]["key"] == "gold_refresh"
     assert body["jobs"][0]["configured"] is True
+    assert isinstance(body["jobs"][0]["cooldown_remaining_s"], int)
     assert body["jobs"][0]["latest_run"]["result_state"] == "SUCCESS"
+
+
+def test_get_operations_surfaces_cooldown_state() -> None:
+    class _SilverOps(_FakeOps):
+        def list_statuses(self) -> list[ManagedJobStatus]:
+            return [
+                ManagedJobStatus(
+                    key="silver_refresh",
+                    label="Refresh source features",
+                    job_name="mip_refresh_silver",
+                    job_id=124,
+                    configured=True,
+                    description="Refresh silver.",
+                    run_order=2,
+                    latest_run=None,
+                )
+            ]
+
+    fake = _SilverOps()
+    audit = SimpleNamespace(
+        list=lambda **_: [
+            SimpleNamespace(created_at=datetime.now(UTC).isoformat())
+        ]
+    )
+    _override_jobs(fake)
+    app.dependency_overrides[get_audit_store] = lambda: audit
+    try:
+        response = client.get("/api/admin/operations")
+    finally:
+        _clear_jobs_override()
+        app.dependency_overrides.pop(get_audit_store, None)
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["jobs"][0]["key"] == "silver_refresh"
+    assert body["jobs"][0]["cooldown_remaining_s"] > 0
 
 
 def test_operations_require_admin() -> None:
@@ -94,6 +132,45 @@ def test_operations_require_admin() -> None:
         )
     finally:
         _clear_jobs_override()
+
+    assert response.status_code == 403
+
+
+def test_get_operations_audit_factory_failure_returns_sanitized_503() -> None:
+    fake = _FakeOps()
+
+    def _broken_audit() -> Any:
+        raise LakebaseError("connection string leaked here")
+
+    _override_jobs(fake)
+    app.dependency_overrides[get_audit_store] = _broken_audit
+    try:
+        response = client.get("/api/admin/operations")
+    finally:
+        _clear_jobs_override()
+        app.dependency_overrides.pop(get_audit_store, None)
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "lakebase is temporarily unavailable"
+    assert "connection string" not in response.text
+
+
+def test_get_operations_checks_admin_before_lakebase_resolution() -> None:
+    fake = _FakeOps()
+
+    def _broken_audit() -> Any:
+        raise AssertionError("audit dependency should not resolve before RBAC")
+
+    _override_jobs(fake)
+    app.dependency_overrides[get_audit_store] = _broken_audit
+    try:
+        response = client.get(
+            "/api/admin/operations",
+            headers={"X-Forwarded-Groups": ""},
+        )
+    finally:
+        _clear_jobs_override()
+        app.dependency_overrides.pop(get_audit_store, None)
 
     assert response.status_code == 403
 

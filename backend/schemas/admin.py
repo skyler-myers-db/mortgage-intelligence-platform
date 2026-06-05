@@ -75,6 +75,7 @@ class AdminOperationJobStatus(BaseModel):
     configured: bool
     description: str
     run_order: int
+    cooldown_remaining_s: int = 0
     latest_run: AdminOperationRun | None = None
 
 
