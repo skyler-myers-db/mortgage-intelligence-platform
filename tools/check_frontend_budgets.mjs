@@ -15,8 +15,11 @@ const budgets = {
   // The May 2026 explainability tranches added a first-class glossary,
   // borrower proof drawer, and governed asset detail route. Keep the increase
   // bounded while preserving initial JS, gzip, largest-route, and font gates.
-  initialCssBytes: 100 * KiB,
-  initialCssGzipBytes: 18 * KiB,
+  // The admin operations center now has phone-width shell/admin layout rules;
+  // Vite emits route CSS as one initial stylesheet, so keep the added allowance
+  // narrow and leave the JS, lazy-route, and font gates unchanged.
+  initialCssBytes: 102 * KiB,
+  initialCssGzipBytes: 18.25 * KiB,
   // Route-level decomposition introduces a few KiB of lazy-module boundary
   // overhead while leaving initial load and largest-route gates unchanged.
   // Keep this aggregate cap tight enough to catch accidental asset growth

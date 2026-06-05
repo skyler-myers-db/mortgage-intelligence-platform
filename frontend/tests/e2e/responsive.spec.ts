@@ -32,6 +32,7 @@ const LIVE = process.env.E2E_LIVE === '1';
 const APP_URL = process.env.MIP_APP_URL || 'http://127.0.0.1:5173';
 const API_URL = process.env.MIP_API_URL || APP_URL.replace(':5173', ':8000');
 const BEARER = process.env.MIP_BEARER_TOKEN || process.env.DATABRICKS_TOKEN || '';
+const ADMIN_BEARER = process.env.MIP_ADMIN_BEARER_TOKEN || '';
 const AUTH_HEADERS: Record<string, string> = BEARER
   ? { Authorization: `Bearer ${BEARER}` }
   : {};
@@ -194,6 +195,50 @@ test.describe('Module 0 — theme / density / narrow canaries', () => {
         .filter((x) => x.trim().length > 0).length;
     });
     expect(segCols, 'expected .seg-grid to render 6 columns at 1440px').toBe(6);
+  });
+
+  test('admin-config phone viewport stacks admin operations without clipping', async ({ page }) => {
+    test.skip(!ADMIN_BEARER, 'Requires MIP_ADMIN_BEARER_TOKEN for admin-only phone clipping canary.');
+
+    await page.setExtraHTTPHeaders({ Authorization: `Bearer ${ADMIN_BEARER}` });
+    await page.setViewportSize({ width: 390, height: 844 });
+    const operationsResponse = page.waitForResponse((response) => {
+      return response.url().includes('/api/v1/admin/operations') && response.status() === 200;
+    }, { timeout: 120_000 });
+    await page.goto('/admin-config');
+
+    await expect(page.getByRole('heading', { name: /Rules, data sources, and audit/i })).toBeVisible({
+      timeout: 30_000,
+    });
+    await operationsResponse;
+    await expect(page.getByLabel('Recommended refresh order')).toBeVisible({ timeout: 30_000 });
+
+    const adminGridCols = await page.locator('.admin-grid').first().evaluate((el) => {
+      return getComputedStyle(el).gridTemplateColumns
+        .split(' ')
+        .filter((x) => x.trim().length > 0).length;
+    });
+    expect(adminGridCols, 'admin summary cards should stack at phone width').toBe(1);
+
+    const clipped = await page.evaluate(() => {
+      const right = document.documentElement.clientWidth + 2;
+      return Array.from(
+        document.querySelectorAll(
+          '.proto-hero, .admin-grid, .main__inner > .surface, .source-status-row, .meta-row, .meta-row__status',
+        ),
+      )
+        .map((node) => {
+          const rect = node.getBoundingClientRect();
+          return {
+            className: (node as HTMLElement).className,
+            left: Math.round(rect.left),
+            right: Math.round(rect.right),
+            width: Math.round(rect.width),
+          };
+        })
+        .filter((rect) => rect.left < 0 || rect.right > right);
+    });
+    expect(clipped, 'admin route content should not clip outside phone viewport').toEqual([]);
   });
 });
 
