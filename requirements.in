@@ -7,6 +7,10 @@ python-dotenv==1.2.2
 httpx==0.28.1
 databricks-sdk==0.103.0
 databricks-sql-connector==4.2.6
+# Security floor for PYSEC-2026-175/PYSEC-2026-177/PYSEC-2026-178/PYSEC-2026-179.
+# databricks-sql-connector depends on PyJWT; keep the transitive pin explicit
+# so pip-audit failures have a first-party dependency contract to resolve.
+pyjwt==2.13.0
 psycopg[binary]>=3.2.10,<3.4
 pytest==9.0.3
 pytest-cov==6.0.0

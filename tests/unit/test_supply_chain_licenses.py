@@ -76,6 +76,7 @@ def test_python_requirements_use_real_transitive_lockfile() -> None:
     for required_pin in (
         "uvicorn==0.47.0",
         "databricks-sql-connector==4.2.6",
+        "pyjwt==2.13.0",
         "psycopg==3.3.4",
         "opentelemetry-sdk==1.41.1",
     ):
