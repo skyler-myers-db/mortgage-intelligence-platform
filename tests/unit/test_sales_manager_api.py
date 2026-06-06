@@ -243,21 +243,57 @@ def test_sales_aging_omits_approval_rows_without_live_borrower() -> None:
 
 
 def test_genie_routes_sales_manager_lo_conversion_to_sales_ops_adapter() -> None:
+    previous_lakebase = app.dependency_overrides.get(get_lakebase_client)
+    previous_audit = app.dependency_overrides.get(get_audit_store)
+    assert previous_lakebase is not None
+    isolated_lakebase = type(previous_lakebase())()
+    isolated_audit = InMemoryAuditStore()
+    app.dependency_overrides[get_lakebase_client] = lambda: isolated_lakebase
+    app.dependency_overrides[get_audit_store] = lambda: isolated_audit
+    isolated_client = TestClient(app)
+    isolated_client.headers.update({"X-Forwarded-Email": "skyler@entrada.ai"})
     borrower_id = mock_data.BORROWERS[2].borrower_id
-    _approve_for_sales(borrower_id)
-    client.post(
-        f"/api/leads/{borrower_id}/assign",
-        json={"assigned_to_email": "lo02@summit.example", "strategy": "manual"},
-    )
-    client.post(
-        f"/api/leads/{borrower_id}/disposition",
-        json={"lo_email": "lo02@summit.example", "outcome": "application_started"},
-    )
+    try:
+        draft = isolated_client.post(
+            "/api/outreach/draft",
+            json={"borrower_id": borrower_id, "channel": "email"},
+        )
+        assert draft.status_code == 200
+        approved = isolated_client.post(
+            "/api/outreach/approve",
+            json={
+                "borrower_id": borrower_id,
+                "offer_code": "refi_plus_heloc",
+                "channel": "email",
+                "draft_body": draft.json()["body"],
+                "request_id": str(uuid4()),
+            },
+        )
+        assert approved.status_code == 200
+        assign = isolated_client.post(
+            f"/api/leads/{borrower_id}/assign",
+            json={"assigned_to_email": "lo02@summit.example", "strategy": "manual"},
+        )
+        assert assign.status_code == 200
+        disposition = isolated_client.post(
+            f"/api/leads/{borrower_id}/disposition",
+            json={"lo_email": "lo02@summit.example", "outcome": "application_started"},
+        )
+        assert disposition.status_code == 200
 
-    response = client.post(
-        "/api/genie/message",
-        json={"question": "Which LO had the highest application-start rate this week?"},
-    )
+        response = isolated_client.post(
+            "/api/genie/message",
+            json={"question": "Which LO had the highest application-start rate this week?"},
+        )
+    finally:
+        if previous_lakebase is None:
+            app.dependency_overrides.pop(get_lakebase_client, None)
+        else:
+            app.dependency_overrides[get_lakebase_client] = previous_lakebase
+        if previous_audit is None:
+            app.dependency_overrides.pop(get_audit_store, None)
+        else:
+            app.dependency_overrides[get_audit_store] = previous_audit
     assert response.status_code == 200
     body = response.json()
     assert body["source"] == "sales_ops"
