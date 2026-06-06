@@ -21,7 +21,7 @@ function freshnessCopy(freshness: AssetFreshness): string {
   return 'Freshness unavailable';
 }
 
-function formatDateTimeShort(value?: string | null): string {
+export function formatDateTimeShort(value?: string | null): string {
   if (!value) return 'Unavailable';
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;

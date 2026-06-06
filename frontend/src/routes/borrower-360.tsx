@@ -28,6 +28,8 @@ import { useApp } from '../components/AppContext';
  * and forward link to the Offer Orchestrator.
  */
 
+export const BORROWER_DOSSIER_LABEL = 'Borrower dossier';
+
 function titleCaseStatus(status?: string | null, fallback = 'None'): string {
   if (!status) return fallback;
   return status.split('_').map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(' ');
@@ -109,7 +111,7 @@ export default function Borrower360() {
           </div>
           <div className="surface__body surface__body--stack-sm">
             <div className="chip-row">
-              <Chip variant="neutral" icon="user">Borrower dossier</Chip>
+              <Chip variant="neutral" icon="user">{BORROWER_DOSSIER_LABEL}</Chip>
               <Chip variant="neutral" icon="bolt">Trigger timeline</Chip>
               <Chip variant="neutral" icon="shield">Why-now rationale</Chip>
               <Chip variant="neutral" icon="layers">Supporting evidence</Chip>
@@ -285,7 +287,7 @@ export default function Borrower360() {
               <div className="surface__icon">
                 <Icon name="user" size={14} />
               </div>
-              <div className="h-4">Borrower dossier</div>
+              <div className="h-4">{BORROWER_DOSSIER_LABEL}</div>
             </div>
             <div className="surface__body field-grid">
               <Field k={<GlossaryTerm term="clip">Property ref</GlossaryTerm>} v={b.clip_id} mono />
