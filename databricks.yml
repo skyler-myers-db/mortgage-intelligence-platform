@@ -669,9 +669,10 @@ resources:
         owner: entrada
         slice: slice13-accuracy
       max_concurrent_runs: 1
-      # Paused safety-net cron. Event-trigger from the backend approval path
-      # and explicit Admin → Data operations clicks are the primary freshness
-      # drivers. Do not rely on target mode to unpause this by default.
+      # Schedule definition retained for explicitly approved isolated cadences.
+      # Event-trigger from the backend approval path and explicit Admin → Data
+      # operations clicks are the primary freshness drivers; every target ships
+      # PAUSED by default.
       schedule:
         quartz_cron_expression: "0 0 4 ? * * *"
         timezone_id: America/Chicago

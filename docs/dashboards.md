@@ -160,9 +160,9 @@ mirrors that row into `mip.gold.borrower_lifecycle_state` and runs
 `record_funnel_snapshot` to update the per-(state, segment) counts on
 `mip.gold.funnel_snapshot_daily`. The turnaround from a UI click to a
 lit-up dashboard cell is typically 1–3 minutes (Serverless job cold
-start + three tasks). The 04:00 fallback cron is available but paused by
-default; unpause it only after the customer approves a recurring cadence and
-the target writes to an isolated catalog.
+start + three tasks). The 04:00 schedule definition is retained but ships
+paused by default; unpause it only after the customer approves a recurring
+cadence and the target writes to an isolated catalog.
 
 **On-demand refresh:** if you need to demo a partially-lit dashboard on day
 one, the same job can be run from Admin **Data operations** or by an operator
