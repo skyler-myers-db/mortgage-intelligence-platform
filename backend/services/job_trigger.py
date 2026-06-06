@@ -239,8 +239,9 @@ def trigger_lifecycle_sync(*, reason: str = "approval") -> None:
 
     Safe to call from any FastAPI handler via ``BackgroundTasks``:
     never raises, never blocks on the job run, swallows every error
-    class. The daily fallback cron is the safety net for any call
-    that drops.
+    class. Operators can still launch the same sync from Admin Data
+    operations; bundle-declared fallback schedules ship paused until a
+    customer-approved cadence is configured.
 
     ``reason`` is stamped into the structured log line so an operator
     grepping ``job_trigger_fired`` sees which endpoint initiated the

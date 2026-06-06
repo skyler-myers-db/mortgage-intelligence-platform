@@ -35,7 +35,7 @@ excluded) was unchanged and correct. No new blockers were found.
 | Bad input guard | `states=CALIFORNIA` → 422. ✔ |
 | Cross-surface consistency | Hero borrower B-102FL7THC6Q3L shows **+376 bps** identically on the lead table, proof drawer, and Borrower 360; proof reconciles (88 opportunity / 85% signal / 376 bps / 91% equity / 9% LTV). ✔ |
 | No regression | Asset endpoint 200; segments 200; proof 200/trusted; lead queue renders (masked IDs, competitor chips, segments, score/signal, "PII suppressed", "500 of 3,901 · capped at 500"); a11y commits didn't break rendering. ✔ |
-| Non-admin auth gate | Now an **automated nightly CI gate**: mints an M2M OAuth bearer for an intentionally non-admin SP and runs an "Authenticated non-admin smoke" step (`nightly.yml`) — upgrade from the prior one-off SP. ✔ |
+| Non-admin auth gate | Previously live-verified with an M2M bearer for an intentionally non-admin SP. Under the cost-controlled validation posture, this remains an explicit/on-demand release gate rather than an always-on expensive nightly run. ✔ |
 
 ## Legitimate live-data movement (not a regression)
 National in-the-money holds at **111,885** (stable vs the prior re-audit); approved
