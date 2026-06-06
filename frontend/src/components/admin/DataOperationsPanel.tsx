@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useEffect, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Chip } from '../Primitives';
 import { Icon } from '../Icon';
 import { api } from '../../lib/api';
@@ -7,6 +7,9 @@ import { DEFAULT_QUERY_STALE_MS } from '../../lib/queryClient';
 import { queryKeys } from '../../lib/queryKeys';
 
 type OperationJobKey = 'fred_rates' | 'silver_refresh' | 'gold_refresh' | 'lifecycle_sync';
+
+const ACTIVE_OPERATION_POLL_MS = 5_000;
+const POST_LAUNCH_POLL_WINDOW_MS = 60_000;
 
 interface OperationRun {
   run_id: number | null;
@@ -154,9 +157,18 @@ function sourceFreshnessStats(sources: SourceSummary[] | undefined) {
 }
 
 export function DataOperationsPanel({ sources, sourcesLoading = false, sourcesError = false }: DataOperationsPanelProps) {
+  const queryClient = useQueryClient();
   const [operationRunningKey, setOperationRunningKey] = useState<OperationJobKey | null>(null);
   const [operationError, setOperationError] = useState<string | null>(null);
   const [operationLaunch, setOperationLaunch] = useState<OperationLaunchResponse | null>(null);
+  const [operationPolling, setOperationPolling] = useState(false);
+  const [operationPollGeneration, setOperationPollGeneration] = useState(0);
+
+  useEffect(() => {
+    if (!operationPolling) return undefined;
+    const timer = window.setTimeout(() => setOperationPolling(false), POST_LAUNCH_POLL_WINDOW_MS);
+    return () => window.clearTimeout(timer);
+  }, [operationPollGeneration, operationPolling]);
 
   const {
     data: operations,
@@ -168,6 +180,11 @@ export function DataOperationsPanel({ sources, sourcesLoading = false, sourcesEr
     queryFn: ({ signal }) => api.adminOperations<OperationsResponse>(signal),
     staleTime: DEFAULT_QUERY_STALE_MS,
     retry: false,
+    refetchInterval: (query) => {
+      const data = query.state.data as OperationsResponse | undefined;
+      const hasActiveRun = data?.jobs.some((job) => Boolean(job.latest_run?.active)) ?? false;
+      return hasActiveRun || operationPolling ? ACTIVE_OPERATION_POLL_MS : false;
+    },
   });
   const operationsError = operationsErrorObj
     ? operationsErrorObj instanceof Error
@@ -192,7 +209,12 @@ export function DataOperationsPanel({ sources, sourcesLoading = false, sourcesEr
         request_id: newRequestId(),
       });
       setOperationLaunch(launch);
+      setOperationPolling(true);
+      setOperationPollGeneration((value) => value + 1);
       void retryOperations();
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.adminSources(),
+      });
     } catch (err) {
       setOperationError(err instanceof Error ? err.message : 'Unable to start refresh job');
     } finally {

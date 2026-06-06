@@ -140,6 +140,7 @@ describe('DataOperationsPanel', () => {
   });
 
   it('disables cooldown jobs and launches available jobs with a UUID request id', async () => {
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
     await render();
 
     const buttons = Array.from(document.querySelectorAll('button'));
@@ -164,5 +165,8 @@ describe('DataOperationsPanel', () => {
     }));
     expect(document.body.textContent).toContain('started');
     expect(document.body.textContent).toContain('run 301');
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: ['mip', 'admin', 'sources'],
+    });
   });
 });
