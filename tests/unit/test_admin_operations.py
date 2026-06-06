@@ -367,6 +367,39 @@ def test_databricks_job_operations_uses_env_job_id_and_blocks_active_run(monkeyp
         raise AssertionError("expected active run to block a duplicate refresh")
 
 
+def test_databricks_job_operations_handles_run_now_waiter_shape(monkeypatch) -> None:
+    class _RunNowWaiter:
+        def __init__(self, run_id: int) -> None:
+            self._bind = {"run_id": run_id}
+
+        def __getattr__(self, key: str) -> Any:
+            return self._bind[key]
+
+        def bind(self) -> dict[str, int]:
+            return dict(self._bind)
+
+    monkeypatch.setenv("MIP_FRED_RATES_JOB_ID", "321")
+    monkeypatch.setattr(settings, "databricks_host", "")
+    workspace = SimpleNamespace(
+        _api=SimpleNamespace(
+            _cfg=SimpleNamespace(
+                host="https://dbc-example.cloud.databricks.com",
+                workspace_id="12345",
+            )
+        ),
+        jobs=SimpleNamespace(
+            list_runs=lambda **_: [],
+            run_now=lambda **_: _RunNowWaiter(999),
+        ),
+    )
+    ops = DatabricksJobOperations(workspace)
+
+    launch = ops.run_now("fred_rates")
+
+    assert launch.run_id == 999
+    assert launch.run_page_url == "https://dbc-example.cloud.databricks.com/?o=12345#job/321/run/999"
+
+
 def test_databricks_job_operations_deployed_app_does_not_fall_back_to_job_listing(
     monkeypatch,
 ) -> None:

@@ -180,6 +180,69 @@ def _allow_name_lookup_fallback() -> bool:
     return settings.app_env == "local"
 
 
+def _safe_attr(value: Any, name: str) -> Any | None:
+    try:
+        return getattr(value, name, None)
+    except (AttributeError, KeyError):
+        return None
+
+
+def _safe_bind_value(value: Any, name: str) -> Any | None:
+    bind = _safe_attr(value, "bind")
+    if not callable(bind):
+        return None
+    try:
+        bound = bind()
+    except Exception:  # noqa: BLE001
+        return None
+    if not isinstance(bound, dict):
+        return None
+    return bound.get(name)
+
+
+def _workspace_host(workspace: Any) -> str | None:
+    configured = (settings.databricks_host or "").strip()
+    candidates = [
+        configured,
+        _safe_attr(_safe_attr(workspace, "_config"), "host"),
+        _safe_attr(_safe_attr(workspace, "config"), "host"),
+        _safe_attr(_safe_attr(_safe_attr(workspace, "_api"), "_cfg"), "host"),
+    ]
+    for candidate in candidates:
+        if not candidate:
+            continue
+        host = str(candidate).strip()
+        if not host:
+            continue
+        if not host.startswith("http"):
+            host = f"https://{host}"
+        return host.rstrip("/")
+    return None
+
+
+def _workspace_org_id(workspace: Any) -> str | None:
+    candidates = [
+        _safe_attr(_safe_attr(workspace, "_config"), "workspace_id"),
+        _safe_attr(_safe_attr(workspace, "config"), "workspace_id"),
+        _safe_attr(_safe_attr(_safe_attr(workspace, "_api"), "_cfg"), "workspace_id"),
+    ]
+    for candidate in candidates:
+        if candidate:
+            return str(candidate).strip() or None
+    return None
+
+
+def _run_page_url(workspace: Any, *, job_id: int, run_id: int | None) -> str | None:
+    if run_id is None:
+        return None
+    host = _workspace_host(workspace)
+    if not host:
+        return None
+    org_id = _workspace_org_id(workspace)
+    org_query = f"?o={org_id}" if org_id else ""
+    return f"{host}/{org_query}#job/{job_id}/run/{run_id}"
+
+
 class DatabricksJobOperations:
     """Resolve and trigger the small allowlisted set of Module 0 jobs."""
 
@@ -231,7 +294,12 @@ class DatabricksJobOperations:
             )
             raise JobOperationError(f"{definition.job_name} run_now failed") from exc
 
-        run_id = _int_or_none(getattr(run, "run_id", None))
+        run_id = _int_or_none(_safe_attr(run, "run_id") or _safe_bind_value(run, "run_id"))
+        run_page_url = _safe_attr(run, "run_page_url") or _run_page_url(
+            workspace,
+            job_id=job_id,
+            run_id=run_id,
+        )
         emit(
             log,
             "databricks_job_run_started",
@@ -246,7 +314,7 @@ class DatabricksJobOperations:
             job_name=definition.job_name,
             job_id=job_id,
             run_id=run_id,
-            run_page_url=getattr(run, "run_page_url", None),
+            run_page_url=run_page_url,
         )
 
     def _client(self) -> Any:
@@ -335,15 +403,15 @@ def _int_or_none(value: Any) -> int | None:
 
 
 def _run_from_sdk(run: Any) -> ManagedJobRun:
-    state = getattr(run, "state", None)
+    state = _safe_attr(run, "state")
     return ManagedJobRun(
-        run_id=_int_or_none(getattr(run, "run_id", None)),
-        life_cycle_state=_enum_value(getattr(state, "life_cycle_state", None)),
-        result_state=_enum_value(getattr(state, "result_state", None)),
+        run_id=_int_or_none(_safe_attr(run, "run_id")),
+        life_cycle_state=_enum_value(_safe_attr(state, "life_cycle_state")),
+        result_state=_enum_value(_safe_attr(state, "result_state")),
         state_message=None,
-        started_at=_ms_to_iso(getattr(run, "start_time", None)),
-        ended_at=_ms_to_iso(getattr(run, "end_time", None)),
-        run_page_url=getattr(run, "run_page_url", None),
+        started_at=_ms_to_iso(_safe_attr(run, "start_time")),
+        ended_at=_ms_to_iso(_safe_attr(run, "end_time")),
+        run_page_url=_safe_attr(run, "run_page_url"),
     )
 
 
