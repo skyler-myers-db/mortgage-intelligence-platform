@@ -978,7 +978,8 @@ export const api = {
    * writes one row to `mip_app.approvals` (action='reject') + one to
    * `mip_app.action_audit` (event_type='OUTREACH_REJECT'). Fires the
    * same debounced lifecycle-sync trigger so the funnel snapshot
-   * reflects rejected counts without waiting on the daily cron.
+   * reflects rejected counts through the event-triggered lifecycle path
+   * or an explicit Admin Data operations repair run.
    */
   reject: (
     borrower_id: string,

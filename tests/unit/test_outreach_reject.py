@@ -538,7 +538,8 @@ def test_reject_schedules_lifecycle_sync_trigger(
 ) -> None:
     """The reject endpoint must fire the same debounced sync trigger
     the approve path uses, so the funnel metric view reflects
-    rejected-borrower counts without waiting on the daily cron."""
+    rejected-borrower counts through the event-triggered lifecycle path
+    or an explicit Admin Data operations repair run."""
     audit = InMemoryAuditStore()
     fake_lakebase = MagicMock()
     # R6-19: fetchone runs on every request now (server-derived fallback
