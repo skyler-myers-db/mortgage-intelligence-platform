@@ -362,8 +362,10 @@ class DatabricksJobOperations:
         return recent[0] if recent else None
 
     def _recent_runs(self, workspace: Any, job_id: int, *, limit: int) -> list[ManagedJobRun]:
+        if limit <= 0:
+            return []
         try:
-            runs = list(workspace.jobs.list_runs(job_id=job_id, limit=limit))
+            runs = _take_runs(workspace.jobs.list_runs(job_id=job_id, limit=limit), limit)
         except Exception as exc:  # noqa: BLE001
             emit(
                 log,
@@ -377,10 +379,10 @@ class DatabricksJobOperations:
 
     def _active_run(self, workspace: Any, job_id: int) -> ManagedJobRun | None:
         try:
-            runs = list(workspace.jobs.list_runs(job_id=job_id, active_only=True, limit=1))
+            runs = _take_runs(workspace.jobs.list_runs(job_id=job_id, active_only=True, limit=1), 1)
         except TypeError:
             runs = [
-                run for run in list(workspace.jobs.list_runs(job_id=job_id, limit=10))
+                run for run in _take_runs(workspace.jobs.list_runs(job_id=job_id, limit=10), 10)
                 if _run_from_sdk(run).active
             ][:1]
         except Exception as exc:  # noqa: BLE001
@@ -396,6 +398,15 @@ class DatabricksJobOperations:
             return None
         run = _run_from_sdk(runs[0])
         return run if run.active else None
+
+
+def _take_runs(runs: Any, limit: int) -> list[Any]:
+    bounded: list[Any] = []
+    for run in runs:
+        bounded.append(run)
+        if len(bounded) >= limit:
+            break
+    return bounded
 
 
 def _int_or_none(value: Any) -> int | None:
