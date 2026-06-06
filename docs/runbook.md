@@ -280,8 +280,8 @@ That single invocation executes:
    deploy, this job is **event-triggered** from the backend approval
    path (POST `/api/v1/outreach/approve` fires
    `backend.services.job_trigger.trigger_lifecycle_sync` via FastAPI
-   `BackgroundTasks`, debounced 60 s). A daily 04:00 America/Chicago
-   fallback cron is defined but ships **PAUSED in every target**. Only
+   `BackgroundTasks`, debounced 60 s). A fallback schedule is defined
+   but ships **PAUSED in every target**. Only
    unpause it for a customer-approved production cadence; otherwise
    use the Admin Data operations button when a refresh is needed.
 11. `python tools/databricks/provision_genie_space.py` — reads

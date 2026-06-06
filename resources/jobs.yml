@@ -189,7 +189,7 @@ resources:
     # files the single source of truth. Keep both blocks in sync.
     #
     # Trigger model (2026-04-22; hardened 2026-06-05): event-triggered from
-    # the backend approval path + paused daily 04:00 America/Chicago fallback.
+    # the backend approval path plus an explicitly paused fallback schedule.
     # Operators can deliberately unpause for a customer-approved cadence, but
     # every target ships PAUSED by default to control cost and avoid
     # cross-target table-write conflicts. See databricks.yml for rationale.

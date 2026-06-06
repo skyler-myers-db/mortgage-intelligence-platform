@@ -1,8 +1,10 @@
 """Fire-and-forget Databricks Jobs trigger for lifecycle sync.
 
-Module 0 runs ``mip_sync_lifecycle_state`` on a **daily** fallback cron
-(04:00 America/Chicago) plus on-demand event triggers from the backend
-approval path. The on-demand path is what this module provides.
+Module 0 mirrors lifecycle state through on-demand event triggers from
+the backend approval/rejection paths and through explicit Admin Data
+operations launches. The bundle also declares a fallback schedule, but
+it ships paused in every target until a customer-approved cadence is
+configured.
 
 Shutdown-drain caveat
 ---------------------
@@ -16,15 +18,15 @@ silently dropped. We deliberately accept this:
    :func:`enqueue_lifecycle_trigger` so dropped invocations leave an
    audit breadcrumb (the approval_id in Lakebase correlates with the
    absence of a later ``job_trigger_fired`` log).
-2. The daily 04:00 America/Chicago cron declared in
-   ``jobs/mip_sync_lifecycle_state.yml`` is the authoritative safety
-   net. At worst a dropped trigger means the gold lifecycle table is
-   stale until next 04:00 -- the metric views still recover, and the
-   UI's degraded-state semantics are unaffected.
+2. Operators can launch ``mip_sync_lifecycle_state`` from Admin Data
+   operations if a trigger is dropped or freshness needs to be repaired.
+   A scheduled fallback is only active after an explicit customer cadence
+   decision, so the default product posture does not assume unattended
+   cron recovery.
 
 A proper drain would require moving to starlette's lifespan-managed
 task queue or an external queue (RQ/Celery); both are materially
-heavier than the daily cron that already exists. Re-evaluate only if
+heavier than the current event-triggered path. Re-evaluate only if
 dropped triggers are observed in production telemetry.
 
 Why event-triggered, not hourly cron
@@ -42,8 +44,8 @@ Commercial posture
 
 MIP is a product we sell to mortgage lenders. Scheduled Serverless jobs
 the customer doesn't need are a packaging bug — the customer's cost
-line should only reflect real activity. Event-trigger + daily fallback
-gives a tight freshness SLA without baseline cost.
+line should only reflect real activity. Event-triggered sync and Admin
+Data operations provide freshness without baseline scheduled compute.
 
 Authority + safety model
 ------------------------
@@ -51,8 +53,9 @@ Authority + safety model
 * **Never blocks the approval response.** We fire the trigger as a
   FastAPI ``BackgroundTasks`` coroutine AFTER the Lakebase approval row
   has been committed.
-* **Swallows failures.** A broken trigger never fails an approval. The
-  daily cron is the safety net.
+* **Swallows failures.** A broken trigger never fails an approval.
+  Operators can use Admin Data operations to repair freshness; fallback
+  schedules remain paused unless explicitly enabled for a customer.
 * **Debounces.** A module-level ``_last_trigger_at`` timestamp keeps
   clustered approvals (same-minute bursts) from triggering multiple
   redundant sync runs. Default window: 60 s.
@@ -281,7 +284,8 @@ def trigger_lifecycle_sync(*, reason: str = "approval") -> None:
             return
         # ``run_now`` is non-blocking -- returns a ``RunNowResponse`` with
         # a ``run_id`` once the workspace has accepted the request. We
-        # don't wait on completion; the daily cron is the safety net.
+        # don't wait on completion; Admin Data operations is the operator
+        # repair path if a fire-and-forget trigger drops.
         try:
             run = workspace.jobs.run_now(job_id=job_id)
         except Exception as run_exc:  # noqa: BLE001 -- swallowed below

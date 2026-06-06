@@ -735,13 +735,12 @@ def approve_outreach(
     # The approval row is now committed in Lakebase. Kick the
     # ``mip_sync_lifecycle_state`` job to mirror it into
     # ``mip.gold.borrower_lifecycle_state`` so metric views + Genie
-    # see the new state within minutes instead of waiting for the
-    # 04:00 daily fallback cron. ``enqueue_lifecycle_trigger`` logs
+    # see the new state within minutes. ``enqueue_lifecycle_trigger`` logs
     # ``event=lifecycle_trigger_enqueued`` then schedules the trigger
     # on BackgroundTasks so the HTTP response ships first; a SIGTERM
     # between response commit and task execution drops the call
-    # silently (BackgroundTasks has no drain) -- the enqueue log is
-    # the breadcrumb and the daily 04:00 cron is the safety net.
+    # silently (BackgroundTasks has no drain). The enqueue log is the
+    # breadcrumb; Admin Data operations is the operator repair path.
     if audit_event_id:
         enqueue_lifecycle_trigger(background, reason="approval")
     return OutreachApproveResponse(
@@ -881,9 +880,8 @@ def reject_outreach(
             status_code=503, detail=safe_dependency_detail("lakebase")
         ) from exc
     clear_sales_state_cache()
-    # Same debounced fire-and-forget sync the approve path uses -- the
-    # funnel / lifecycle views need to reflect rejected-borrower counts
-    # without waiting on the daily cron.
+    # Same debounced fire-and-forget sync the approve path uses so the
+    # funnel / lifecycle views reflect rejected-borrower counts promptly.
     if audit_event_id:
         enqueue_lifecycle_trigger(background, reason="rejection")
     return OutreachRejectResponse(
