@@ -127,6 +127,7 @@ def _status_to_dict(status: ManagedJobStatus, *, cooldown_remaining_s: int = 0) 
         "run_order": status.run_order,
         "cooldown_remaining_s": cooldown_remaining_s,
         "latest_run": _run_to_dict(status.latest_run),
+        "recent_runs": [_run_to_dict(run) for run in status.recent_runs],
     }
 
 

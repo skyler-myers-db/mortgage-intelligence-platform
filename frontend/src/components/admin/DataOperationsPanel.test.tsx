@@ -46,6 +46,28 @@ const OPERATIONS = {
         run_page_url: 'https://example.com/runs/201',
         active: false,
       },
+      recent_runs: [
+        {
+          run_id: 201,
+          life_cycle_state: 'TERMINATED',
+          result_state: 'SUCCESS',
+          state_message: null,
+          started_at: '2026-06-05T16:00:00+00:00',
+          ended_at: '2026-06-05T16:02:00+00:00',
+          run_page_url: 'https://example.com/runs/201',
+          active: false,
+        },
+        {
+          run_id: 199,
+          life_cycle_state: 'TERMINATED',
+          result_state: 'FAILED',
+          state_message: 'failed',
+          started_at: '2026-06-05T15:00:00+00:00',
+          ended_at: '2026-06-05T15:01:00+00:00',
+          run_page_url: 'https://example.com/runs/199',
+          active: false,
+        },
+      ],
     },
     {
       key: 'gold_refresh',
@@ -57,6 +79,7 @@ const OPERATIONS = {
       run_order: 3,
       cooldown_remaining_s: 1800,
       latest_run: null,
+      recent_runs: [],
     },
   ],
 };
@@ -137,6 +160,7 @@ describe('DataOperationsPanel', () => {
     expect(document.body.textContent).toContain('cooldown 30m');
     expect(document.body.textContent).toContain('Run 201');
     expect(document.body.textContent).toContain('2m');
+    expect(document.body.textContent).toContain('2 recent runs');
   });
 
   it('disables cooldown jobs and launches available jobs with a UUID request id', async () => {

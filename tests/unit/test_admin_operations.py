@@ -367,6 +367,51 @@ def test_databricks_job_operations_uses_env_job_id_and_blocks_active_run(monkeyp
         raise AssertionError("expected active run to block a duplicate refresh")
 
 
+def test_databricks_job_operations_returns_recent_run_history(monkeypatch) -> None:
+    monkeypatch.setenv("MIP_FRED_RATES_JOB_ID", "123")
+    runs = [
+        SimpleNamespace(
+            run_id=456,
+            start_time=1_780_000_000_000,
+            end_time=1_780_000_060_000,
+            run_page_url="https://example.com/runs/456",
+            state=SimpleNamespace(
+                life_cycle_state="TERMINATED",
+                result_state="SUCCESS",
+                state_message="done",
+            ),
+        ),
+        SimpleNamespace(
+            run_id=455,
+            start_time=1_779_999_000_000,
+            end_time=1_779_999_120_000,
+            run_page_url="https://example.com/runs/455",
+            state=SimpleNamespace(
+                life_cycle_state="TERMINATED",
+                result_state="FAILED",
+                state_message="failed",
+            ),
+        ),
+    ]
+    calls: list[dict[str, Any]] = []
+    workspace = SimpleNamespace(
+        jobs=SimpleNamespace(
+            list_runs=lambda **kwargs: calls.append(kwargs) or runs,
+            run_now=lambda **kwargs: SimpleNamespace(run_id=999),
+        )
+    )
+    ops = DatabricksJobOperations(workspace)
+
+    status = ops.status_for("fred_rates")
+
+    assert calls == [{"job_id": 123, "limit": 5}]
+    assert status.latest_run is not None
+    assert status.latest_run.run_id == 456
+    assert [run.run_id for run in status.recent_runs] == [456, 455]
+    assert status.recent_runs[0].result_state == "SUCCESS"
+    assert status.recent_runs[1].result_state == "FAILED"
+
+
 def test_databricks_job_operations_handles_run_now_waiter_shape(monkeypatch) -> None:
     class _RunNowWaiter:
         def __init__(self, run_id: int) -> None:

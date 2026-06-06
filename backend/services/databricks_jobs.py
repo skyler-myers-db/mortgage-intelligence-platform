@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Literal
 
@@ -76,6 +76,7 @@ class ManagedJobStatus:
     description: str
     run_order: int
     latest_run: ManagedJobRun | None = None
+    recent_runs: list[ManagedJobRun] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -257,7 +258,8 @@ class DatabricksJobOperations:
         definition = MANAGED_JOBS[key]
         ws = workspace or self._client()
         job_id = self._resolve_job_id(ws, definition)
-        latest_run = self._latest_run(ws, job_id) if job_id is not None else None
+        recent_runs = self._recent_runs(ws, job_id, limit=5) if job_id is not None else []
+        latest_run = recent_runs[0] if recent_runs else None
         return ManagedJobStatus(
             key=definition.key,
             label=definition.label,
@@ -267,6 +269,7 @@ class DatabricksJobOperations:
             description=definition.description,
             run_order=definition.run_order,
             latest_run=latest_run,
+            recent_runs=recent_runs,
         )
 
     def run_now(self, key: ManagedJobKey) -> JobLaunch:
@@ -355,20 +358,22 @@ class DatabricksJobOperations:
         return None
 
     def _latest_run(self, workspace: Any, job_id: int) -> ManagedJobRun | None:
+        recent = self._recent_runs(workspace, job_id, limit=1)
+        return recent[0] if recent else None
+
+    def _recent_runs(self, workspace: Any, job_id: int, *, limit: int) -> list[ManagedJobRun]:
         try:
-            runs = list(workspace.jobs.list_runs(job_id=job_id, limit=1))
+            runs = list(workspace.jobs.list_runs(job_id=job_id, limit=limit))
         except Exception as exc:  # noqa: BLE001
             emit(
                 log,
-                "databricks_job_latest_run_error",
+                "databricks_job_recent_runs_error",
                 level=logging.WARNING,
                 job_id=job_id,
                 exc_type=type(exc).__name__,
             )
-            raise JobOperationError("latest job run lookup failed") from exc
-        if not runs:
-            return None
-        return _run_from_sdk(runs[0])
+            raise JobOperationError("recent job run lookup failed") from exc
+        return [_run_from_sdk(run) for run in runs]
 
     def _active_run(self, workspace: Any, job_id: int) -> ManagedJobRun | None:
         try:

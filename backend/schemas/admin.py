@@ -77,6 +77,7 @@ class AdminOperationJobStatus(BaseModel):
     run_order: int
     cooldown_remaining_s: int = 0
     latest_run: AdminOperationRun | None = None
+    recent_runs: list[AdminOperationRun] = Field(default_factory=list)
 
 
 class AdminOperationsResponse(BaseModel):

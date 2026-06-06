@@ -32,6 +32,7 @@ interface OperationJobStatus {
   run_order: number;
   cooldown_remaining_s?: number;
   latest_run: OperationRun | null;
+  recent_runs?: OperationRun[];
 }
 
 interface OperationsResponse {
@@ -110,6 +111,11 @@ function operationDuration(run: OperationRun | null): string {
   const minutes = Math.floor(seconds / 60);
   const remainder = seconds % 60;
   return remainder ? `${minutes}m ${remainder}s` : `${minutes}m`;
+}
+
+function operationHistorySummary(job: OperationJobStatus): string {
+  const runs = (job.recent_runs ?? []).filter((run) => run.run_id);
+  return runs.length ? `${runs.length} recent runs` : '';
 }
 
 function formatCooldown(seconds: number): string {
@@ -344,6 +350,9 @@ export function DataOperationsPanel({ sources, sourcesLoading = false, sourcesEr
                 </div>
                 <span className="muted fs-11">
                   {formatOperationRun(run)} · {operationDuration(run)}
+                </span>
+                <span className="muted fs-11">
+                  {operationHistorySummary(job)}
                 </span>
               </div>
             </div>
