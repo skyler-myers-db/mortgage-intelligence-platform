@@ -84,7 +84,11 @@ Repeated `bundle run mip_lakebase_migrate` is safe.
 
 This delivers the CLAUDE.md "first app boot has data even before the first scheduled refresh runs" promise. Verified at `jobs/fred_rates_ingest.py:9-23` and `databricks.yml:728-748`.
 
-The job runs on a Friday 06:00 America/Chicago schedule that auto-pauses in `mode: development` (dev target) and auto-unpauses in `mode: production` (prod target). No manual unpause needed.
+The job carries a Friday 06:00 America/Chicago schedule definition, but the
+schedule deploys `PAUSED` by default in every target. Operators can deliberately
+unpause it only after a customer-approved recurring cadence and isolated target
+catalog are in place; the Admin Data operations panel remains the product-facing
+refresh surface.
 
 ### 5. Secrets + .env.local contract
 

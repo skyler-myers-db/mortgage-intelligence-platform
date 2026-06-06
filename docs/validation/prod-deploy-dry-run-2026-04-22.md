@@ -57,11 +57,11 @@ Confirmed via `databricks bundle validate -t dev -o json`:
 mip_fred_rates_ingest: schedule={'pause_status': 'UNPAUSED', ...}
 ```
 
-This is the exact antipattern the author of `mip_sync_lifecycle_state` warned about at `databricks.yml:354-357` ("Do NOT hardcode `pause_status: UNPAUSED` here — that override also fires in dev and runs the job hourly against an empty Lakebase, which was observed and fixed 2026-04-22"). The sibling job correctly omits `pause_status` and relies on `mode: development` / `mode: production` to pause/unpause. The FRED job does not follow the same rule.
+This is the exact antipattern the author of `mip_sync_lifecycle_state` warned about at `databricks.yml:354-357` ("Do NOT hardcode `pause_status: UNPAUSED` here — that override also fires in dev and runs the job hourly against an empty Lakebase, which was observed and fixed 2026-04-22"). This older dry-run originally recommended relying on target mode for production unpause behavior; that guidance is now superseded. FRED and lifecycle schedules intentionally deploy `PAUSED` by default in every target and should be unpaused only for an explicitly approved customer cadence with catalog isolation.
 
-**Fix location:** `databricks.yml:455` and the sibling mirror at `resources/jobs.yml:171`. Drop `pause_status: UNPAUSED`. Rely on target mode.
+**Fix location:** `databricks.yml:455` and the sibling mirror at `resources/jobs.yml:171`. Replace any `UNPAUSED` default with `pause_status: PAUSED`; do not rely on target mode to unpause recurring refreshes.
 
-Impact in prod: neutral (prod wants UNPAUSED anyway, and the mode default gives us that). Impact in dev: FRED job fires every Friday 06:00 CT against the workspace regardless of whether an operator is actively developing — this is exactly the compute-burn regression the lifecycle comment describes.
+Impact in prod: intentional. Production still defaults to explicit/on-demand refresh through the app Admin Data operations panel, avoiding hidden recurring compute until a customer cadence is approved. Impact in dev: FRED does not fire on a schedule unless an operator deliberately unpauses it.
 
 ### B3. `prod` is the same workspace as `dev` — no isolation boundary
 
