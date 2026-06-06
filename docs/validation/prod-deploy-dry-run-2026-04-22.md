@@ -15,7 +15,7 @@ Running `databricks bundle validate -t prod` against the current `main` fails wi
 Error: target with 'mode: production' cannot include a pipeline with 'development: true'
 ```
 
-This is a single-line bundle-authoring bug that must be fixed before the first customer deploy. A second class of finding — jobs with hardcoded `pause_status: UNPAUSED` — does not block `validate` but does produce wrong behavior in *dev* (the jobs run hourly/weekly even when `mode: development` is supposed to auto-pause them) and is therefore already mis-modelled for prod's strict inverse. Both are packaging bugs per the CLAUDE.md rule "manual click-ops in the Databricks UI are a packaging bug."
+This is a single-line bundle-authoring bug that must be fixed before the first customer deploy. A second class of finding — refresh jobs that default to an active recurring schedule — does not block `validate` but does produce wrong behavior in *dev* (recurring runs can fire when the development target should stay idle) and is therefore already mis-modelled for prod. Current guidance supersedes this dry-run finding: FRED and lifecycle schedules deploy `PAUSED` by default in every target, and Admin Data operations is the product-facing refresh surface.
 
 `dev` target: `Validation OK!`
 `ci` target: `Validation OK!`
@@ -40,7 +40,7 @@ Databricks bundle validator refuses to include a `development: true` DLT pipelin
 
 **Fix location:** `databricks.yml:503`. Drop the `development: true` key. `continuous: false` is fine to keep (it's a genuine config, not a dev/prod toggle).
 
-### B2. `mip_fred_rates_ingest` hardcodes `pause_status: UNPAUSED` — wrong in both targets
+### B2. `mip_fred_rates_ingest` previously defaulted to an active schedule — wrong in both targets
 
 `databricks.yml:452-455`:
 
@@ -48,18 +48,18 @@ Databricks bundle validator refuses to include a `development: true` DLT pipelin
 schedule:
   quartz_cron_expression: "0 0 6 ? * FRI *"
   timezone_id: America/Chicago
-  pause_status: UNPAUSED       # <-- fires hourly in dev against empty workspace
+  pause_status: <active>       # <-- fires on a cadence against idle workspaces
 ```
 
 Confirmed via `databricks bundle validate -t dev -o json`:
 
 ```
-mip_fred_rates_ingest: schedule={'pause_status': 'UNPAUSED', ...}
+mip_fred_rates_ingest: schedule={'pause_status': '<active>', ...}
 ```
 
-This is the exact antipattern the author of `mip_sync_lifecycle_state` warned about at `databricks.yml:354-357` ("Do NOT hardcode `pause_status: UNPAUSED` here — that override also fires in dev and runs the job hourly against an empty Lakebase, which was observed and fixed 2026-04-22"). This older dry-run originally recommended relying on target mode for production unpause behavior; that guidance is now superseded. FRED and lifecycle schedules intentionally deploy `PAUSED` by default in every target and should be unpaused only for an explicitly approved customer cadence with catalog isolation.
+This is the exact antipattern the author of `mip_sync_lifecycle_state` warned about: do not hardcode an active schedule default. This older dry-run originally recommended relying on target mode for production unpause behavior; that guidance is now superseded. FRED and lifecycle schedules intentionally deploy `PAUSED` by default in every target and should be unpaused only for an explicitly approved customer cadence with catalog isolation.
 
-**Fix location:** `databricks.yml:455` and the sibling mirror at `resources/jobs.yml:171`. Replace any `UNPAUSED` default with `pause_status: PAUSED`; do not rely on target mode to unpause recurring refreshes.
+**Fix location:** `databricks.yml:455` and the sibling mirror at `resources/jobs.yml:171`. Replace any active schedule default with `pause_status: PAUSED`; do not rely on target mode to unpause recurring refreshes.
 
 Impact in prod: intentional. Production still defaults to explicit/on-demand refresh through the app Admin Data operations panel, avoiding hidden recurring compute until a customer cadence is approved. Impact in dev: FRED does not fire on a schedule unless an operator deliberately unpauses it.
 
@@ -136,13 +136,13 @@ Recommendation: add a `deploy-prod` target to the Makefile that wraps `scripts/d
 | `mip_app` | app | `mip-app` | `mip-app` | — | — | none |
 | `mip_feature_pipeline` | pipeline | `[dev skyler] mip_feature_pipeline` | (fails: dev=true) | — | — | **B1** |
 | `mip_serverless_sql` | warehouse | `[dev skyler] mip_serverless_sql`, 2X-Small | `mip_serverless_sql`, 2X-Small | — | — | F1 |
-| `mip_fred_rates_ingest` | job | `[dev skyler] mip_fred_rates_ingest` | `mip_fred_rates_ingest` | UNPAUSED (wrong) | UNPAUSED (intended) | **B2** |
+| `mip_fred_rates_ingest` | job | `[dev skyler] mip_fred_rates_ingest` | `mip_fred_rates_ingest` | PAUSED | PAUSED | schedule retained for approved customer cadence only |
 | `mip_lakebase_migrate` | job | `[dev skyler] mip_lakebase_migrate` | `mip_lakebase_migrate` | manual | manual | none |
 | `mip_ref_seed` | job | `[dev skyler] mip_ref_seed` | `mip_ref_seed` | manual | manual | none |
 | `mip_refresh_scores` | job | `[dev skyler] mip_refresh_scores` | `mip_refresh_scores` | manual | manual | none |
 | `mip_refresh_silver` | job | `[dev skyler] mip_refresh_silver` | `mip_refresh_silver` | manual | manual | none |
 | `mip_snapshot_dashboards` | job | `[dev skyler] mip_snapshot_dashboards` | `mip_snapshot_dashboards` | manual | manual | tasks list is empty (`tasks: []`) — does this job need to exist? |
-| `mip_sync_lifecycle_state` | job | `[dev skyler] mip_sync_lifecycle_state` | `mip_sync_lifecycle_state` | **PAUSED** (correct dev default) | UNPAUSED (mode auto) | correct |
+| `mip_sync_lifecycle_state` | job | `[dev skyler] mip_sync_lifecycle_state` | `mip_sync_lifecycle_state` | PAUSED | PAUSED | event/Admin-triggered by default |
 | `mip_app_state` | lakebase | `mip-app-state`, CU_1 | `mip-app-state`, CU_1 | — | — | F3 |
 | `mip_executive_dashboard` | dashboard | bundled | bundled | — | — | none |
 | `mip_segment_dashboard` | dashboard | bundled | bundled | — | — | none |
@@ -178,7 +178,7 @@ No README / setup doc was found telling the operator to "click X in the Databric
 ## Recommended follow-ups (main agent to triage)
 
 1. **Fix B1** (one-line edit: drop `development: true` from the pipeline). Re-run `databricks bundle validate -t prod` — should be green.
-2. **Fix B2** (drop two `pause_status: UNPAUSED` lines). Re-run `databricks bundle validate -t dev -o json` and confirm `mip_fred_rates_ingest.schedule.pause_status == 'PAUSED'` in dev.
+2. **Fix B2** (replace active refresh schedule defaults with `pause_status: PAUSED`). Re-run `databricks bundle validate -t dev -o json` and confirm `mip_fred_rates_ingest.schedule.pause_status == 'PAUSED'` in dev.
 3. **Decide on B3** (separate workspace vs separate catalog for prod). Author target-level variable override for `uc_catalog` and either `workspace.host` or a per-customer `.env.local` template.
 4. Add `deploy-prod` Makefile target that mirrors `deploy-dev` but with `--target prod` (F6 recommendation).
 5. Delete `mip_snapshot_dashboards` job (empty `tasks: []`) or populate it.

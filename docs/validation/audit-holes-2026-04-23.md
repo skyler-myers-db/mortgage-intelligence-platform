@@ -69,4 +69,4 @@ master agent.
 - No FIXME/XXX/HACK comments pointing to known-broken runtime behavior; the TODOs found were tracked enhancement notes.
 - No `<div onClick>` patterns standing in for `<button>` — SegmentCard / Topbar / Console / FilterSelect are all real buttons. The table rows using `<tr onClick>` are semantically fine for expandable rows.
 - No double-polling N+1 beyond the `/api/health` triplet already flagged.
-- No `schedule_quartz_cron_expression` on a continuous compute resource — Lakeflow pipelines are `continuous: false`; jobs respect dev-mode auto-pause.
+- No `schedule_quartz_cron_expression` on a continuous compute resource — Lakeflow pipelines are `continuous: false`; recurring refresh jobs now ship with explicit paused defaults.

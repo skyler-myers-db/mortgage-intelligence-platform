@@ -193,7 +193,7 @@ The only true click-op left is the workspace host edit on fork (LOW 2) and the i
 - **Forkability guarded** — `make check-workspace-host` prevents a customer SE from accidentally deploying to Entrada's workspace.
 - **First boot has data offline** — FRED seed CSV in-repo, idempotent `seed_if_empty` task. The app works without internet on first deploy.
 - **OAuth is the primary credential** — Lakebase password is minted at migration time from workspace identity, not stored in `.env.local`. App resource bindings inject every secret env var at runtime.
-- **Dev/prod target separation is real** — `mode: development` auto-pauses schedules, prefixes experiment paths with `[dev <user>]`, and gates demo first-party feeds. Production deploys can't accidentally enable Summit synthetic data without `MIP_ALLOW_DEMO_FIRST_PARTY_IN_PROD=1`.
+- **Dev/prod target separation is real** — development targets prefix experiment paths with `[dev <user>]`, recurring refresh schedules deploy `PAUSED` in every target, and production deploys can't accidentally enable Summit synthetic data without `MIP_ALLOW_DEMO_FIRST_PARTY_IN_PROD=1`.
 
 ---
 
