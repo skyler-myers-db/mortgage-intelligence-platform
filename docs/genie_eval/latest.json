@@ -1,5 +1,5 @@
 {
-  "stamp": "2026-05-21T23-13-13Z",
+  "stamp": "2026-06-05T23-54-45Z",
   "base": "https://mip-app-2543889327043640.aws.databricksapps.com",
   "overall_score": 100.0,
   "passed": 16,
@@ -10,7 +10,7 @@
       "category": "top-N",
       "score": 100.0,
       "passed": true,
-      "latency_s": 17.1,
+      "latency_s": 21.33,
       "checks": {
         "citations": true,
         "forbidden_terms": true,
@@ -23,7 +23,7 @@
         "canonical_sql": true
       },
       "notes": [
-        "latency 17.1s > target 8.0s"
+        "latency 21.3s > target 8.0s"
       ]
     },
     {
@@ -31,7 +31,7 @@
       "category": "top-N",
       "score": 100.0,
       "passed": true,
-      "latency_s": 12.73,
+      "latency_s": 12.59,
       "checks": {
         "citations": true,
         "forbidden_terms": true,
@@ -44,7 +44,7 @@
         "canonical_sql": true
       },
       "notes": [
-        "latency 12.7s > target 8.0s"
+        "latency 12.6s > target 8.0s"
       ]
     },
     {
@@ -52,70 +52,7 @@
       "category": "chart-planner",
       "score": 100.0,
       "passed": true,
-      "latency_s": 14.82,
-      "checks": {
-        "citations": true,
-        "forbidden_terms": true,
-        "required_terms": true,
-        "rows": true,
-        "numeric": true,
-        "trusted_assets": true,
-        "sql": true,
-        "freshness": true,
-        "canonical_sql": true
-      },
-      "notes": [
-        "latency 14.8s > target 8.0s"
-      ]
-    },
-    {
-      "id": "in_the_money_count",
-      "category": "aggregate",
-      "score": 100.0,
-      "passed": true,
-      "latency_s": 10.58,
-      "checks": {
-        "citations": true,
-        "forbidden_terms": true,
-        "required_terms": true,
-        "rows": true,
-        "numeric": true,
-        "trusted_assets": true,
-        "sql": true,
-        "freshness": true,
-        "canonical_sql": true
-      },
-      "notes": [
-        "latency 10.6s > target 6.0s"
-      ]
-    },
-    {
-      "id": "in_the_money_count_illinois",
-      "category": "aggregate",
-      "score": 100.0,
-      "passed": true,
-      "latency_s": 12.71,
-      "checks": {
-        "citations": true,
-        "forbidden_terms": true,
-        "required_terms": true,
-        "rows": true,
-        "numeric": true,
-        "trusted_assets": true,
-        "sql": true,
-        "freshness": true,
-        "canonical_sql": true
-      },
-      "notes": [
-        "latency 12.7s > target 6.0s"
-      ]
-    },
-    {
-      "id": "in_the_money_count_chicago_city_scope",
-      "category": "aggregate",
-      "score": 100.0,
-      "passed": true,
-      "latency_s": 12.72,
+      "latency_s": 12.67,
       "checks": {
         "citations": true,
         "forbidden_terms": true,
@@ -132,11 +69,74 @@
       ]
     },
     {
+      "id": "in_the_money_count",
+      "category": "aggregate",
+      "score": 100.0,
+      "passed": true,
+      "latency_s": 10.54,
+      "checks": {
+        "citations": true,
+        "forbidden_terms": true,
+        "required_terms": true,
+        "rows": true,
+        "numeric": true,
+        "trusted_assets": true,
+        "sql": true,
+        "freshness": true,
+        "canonical_sql": true
+      },
+      "notes": [
+        "latency 10.5s > target 6.0s"
+      ]
+    },
+    {
+      "id": "in_the_money_count_illinois",
+      "category": "aggregate",
+      "score": 100.0,
+      "passed": true,
+      "latency_s": 12.78,
+      "checks": {
+        "citations": true,
+        "forbidden_terms": true,
+        "required_terms": true,
+        "rows": true,
+        "numeric": true,
+        "trusted_assets": true,
+        "sql": true,
+        "freshness": true,
+        "canonical_sql": true
+      },
+      "notes": [
+        "latency 12.8s > target 6.0s"
+      ]
+    },
+    {
+      "id": "in_the_money_count_chicago_city_scope",
+      "category": "aggregate",
+      "score": 100.0,
+      "passed": true,
+      "latency_s": 13.72,
+      "checks": {
+        "citations": true,
+        "forbidden_terms": true,
+        "required_terms": true,
+        "rows": true,
+        "numeric": true,
+        "trusted_assets": true,
+        "sql": true,
+        "freshness": true,
+        "canonical_sql": true
+      },
+      "notes": [
+        "latency 13.7s > target 8.0s"
+      ]
+    },
+    {
       "id": "in_the_money_count_boston_city_scope",
       "category": "aggregate",
       "score": 100.0,
       "passed": true,
-      "latency_s": 0.86,
+      "latency_s": 0.98,
       "checks": {
         "citations": true,
         "forbidden_terms": true,
@@ -155,7 +155,7 @@
       "category": "strategy",
       "score": 100.0,
       "passed": true,
-      "latency_s": 20.7,
+      "latency_s": 19.0,
       "checks": {
         "citations": true,
         "forbidden_terms": true,
@@ -168,7 +168,7 @@
         "canonical_sql": true
       },
       "notes": [
-        "latency 20.7s > target 10.0s"
+        "latency 19.0s > target 10.0s"
       ]
     },
     {
@@ -176,7 +176,7 @@
       "category": "strategy",
       "score": 100.0,
       "passed": true,
-      "latency_s": 14.65,
+      "latency_s": 12.62,
       "checks": {
         "citations": true,
         "forbidden_terms": true,
@@ -189,7 +189,7 @@
         "canonical_sql": true
       },
       "notes": [
-        "latency 14.7s > target 10.0s"
+        "latency 12.6s > target 10.0s"
       ]
     },
     {
@@ -197,7 +197,7 @@
       "category": "segment",
       "score": 100.0,
       "passed": true,
-      "latency_s": 12.13,
+      "latency_s": 14.43,
       "checks": {
         "citations": true,
         "forbidden_terms": true,
@@ -210,7 +210,7 @@
         "canonical_sql": true
       },
       "notes": [
-        "latency 12.1s > target 8.0s"
+        "latency 14.4s > target 8.0s"
       ]
     },
     {
@@ -218,7 +218,7 @@
       "category": "governance",
       "score": 100.0,
       "passed": true,
-      "latency_s": 0.82,
+      "latency_s": 0.8,
       "checks": {
         "citations": true,
         "forbidden_terms": true,
@@ -237,7 +237,7 @@
       "category": "trigger",
       "score": 100.0,
       "passed": true,
-      "latency_s": 18.18,
+      "latency_s": 22.67,
       "checks": {
         "citations": true,
         "forbidden_terms": true,
@@ -250,7 +250,7 @@
         "canonical_sql": true
       },
       "notes": [
-        "latency 18.2s > target 8.0s"
+        "latency 22.7s > target 8.0s"
       ]
     },
     {
@@ -258,7 +258,7 @@
       "category": "governance",
       "score": 100.0,
       "passed": true,
-      "latency_s": 0.82,
+      "latency_s": 0.97,
       "checks": {
         "citations": true,
         "forbidden_terms": true,
@@ -277,7 +277,7 @@
       "category": "governance",
       "score": 100.0,
       "passed": true,
-      "latency_s": 0.82,
+      "latency_s": 0.86,
       "checks": {
         "citations": true,
         "forbidden_terms": true,
@@ -315,7 +315,7 @@
       "category": "aggregate",
       "score": 100.0,
       "passed": true,
-      "latency_s": 12.62,
+      "latency_s": 16.96,
       "checks": {
         "citations": true,
         "forbidden_terms": true,
@@ -328,7 +328,7 @@
         "canonical_sql": true
       },
       "notes": [
-        "latency 12.6s > target 8.0s"
+        "latency 17.0s > target 8.0s"
       ]
     }
   ]
