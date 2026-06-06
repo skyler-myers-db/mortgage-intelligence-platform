@@ -631,7 +631,8 @@ resources:
     # Lakebase remains authoritative; this job is a strictly
     # one-directional mirror.
     #
-    # Trigger model (changed 2026-04-22 from hourly cron; hardened 2026-06-05):
+    # Trigger model (changed 2026-04-22 from fixed-interval schedule;
+    # hardened 2026-06-05):
     #   1. **Event-triggered** from the backend. Every POST
     #      /api/outreach/approve fires backend.services.job_trigger.
     #      trigger_lifecycle_sync() via FastAPI BackgroundTasks, which
@@ -647,9 +648,9 @@ resources:
     #      concurrently. Why 04:00 when enabled: off-peak CST, well before
     #      any Monday business readout.
     #
-    # Rationale for removing the hourly cron: data only changes when
-    # an operator acts (approve / outreach). An hourly cron against an
-    # idle workspace was burning Serverless compute for nothing — the
+    # Rationale for removing the prior fixed-interval schedule: data only
+    # changes when an operator acts (approve / outreach). A schedule against
+    # an idle workspace was burning Serverless compute for nothing — the
     # product is sold to mortgage lenders and their cost line should
     # only reflect real activity.
     #

@@ -29,15 +29,16 @@ task queue or an external queue (RQ/Celery); both are materially
 heavier than the current event-triggered path. Re-evaluate only if
 dropped triggers are observed in production telemetry.
 
-Why event-triggered, not hourly cron
-------------------------------------
+Why event-triggered, not fixed-interval schedules
+-------------------------------------------------
 
 The lifecycle sync mirrors Lakebase approvals + outreach rows into
 ``mip.gold.borrower_lifecycle_state`` so UC metric views (segment +
 lead_generation) resolve ``approval_rate`` / ``outreach_rate`` without
 a federated runtime join. Data only changes when an operator approves
-or dispatches outreach — so an hourly cron against an idle workspace
-was burning Serverless compute for nothing (observed 2026-04-22).
+or dispatches outreach, so a fixed-interval schedule against an idle
+workspace was burning Serverless compute for nothing (observed
+2026-04-22).
 
 Commercial posture
 ------------------

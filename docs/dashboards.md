@@ -50,9 +50,12 @@ displayed `0` / "no prior period" label, depending on the Lakeview chart
 type's NULL rendering) until the `mip_sync_lifecycle_state` job has
 recorded at least two daily snapshot rows into
 `mip.gold.funnel_snapshot_daily`. On a brand-new deploy the very first
-invocation of that job writes row #1; the delta widgets first carry a
-non-NULL value 24 h later (row #2), after the hourly cron fires the
-next day's `record_funnel_snapshot` task.
+operator/app-triggered invocation of that job writes row #1. Later Admin Data
+operations runs or event-triggered lifecycle syncs can update the current-day
+snapshot, and customer-approved recurring cadences can add future daily rows
+only after the schedule is deliberately unpaused against an isolated catalog.
+Because the dashboard uses a 7-day-prior comparison, the delta widgets first
+carry a non-NULL value after a qualifying day-7 predecessor exists.
 
 Concretely, for a deploy that lands today (`CURRENT_DATE()` = today):
 - Today: row #1 with `snapshot_date = today` lands. All `delta_vs_prior_*`
