@@ -281,9 +281,9 @@ That single invocation executes:
    path (POST `/api/v1/outreach/approve` fires
    `backend.services.job_trigger.trigger_lifecycle_sync` via FastAPI
    `BackgroundTasks`, debounced 60 s). A daily 04:00 America/Chicago
-   fallback cron catches any dropped trigger + records the funnel
-   snapshot so WoW deltas keep advancing. Not hourly — no reason to
-   refresh when nothing has changed.
+   fallback cron is defined but ships **PAUSED in every target**. Only
+   unpause it for a customer-approved production cadence; otherwise
+   use the Admin Data operations button when a refresh is needed.
 11. `python tools/databricks/provision_genie_space.py` — reads
    `genie/mortgage_lead_intelligence_space.yml`, creates or updates
    the Genie Space, binds trusted assets, writes `genie/space_id.txt`.
@@ -320,6 +320,11 @@ and `/admin-config` exposes them under **Data operations**:
 Each button is admin-only, writes a Lakebase audit row before launching
 compute, refuses duplicate active runs, and shows the latest Databricks run
 state. If the audit ledger is unavailable, the app does not launch the job.
+The bundle-defined FRED and lifecycle fallback schedules deploy **paused by
+default** in dev, prod, and prod_otlp so intermittent development and demo
+workspaces do not burn recurring warehouse/Lakebase compute. If a customer
+later wants scheduled refreshes, unpause the schedule explicitly in that
+customer workspace and document the approved cadence.
 
 **No manual UI step is required for deploy/bootstrap.** The previous runbook called for
 opening the Databricks UI to rebind the Genie space's trusted assets

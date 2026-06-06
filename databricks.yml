@@ -631,7 +631,7 @@ resources:
     # Lakebase remains authoritative; this job is a strictly
     # one-directional mirror.
     #
-    # Trigger model (changed 2026-04-22 from hourly cron):
+    # Trigger model (changed 2026-04-22 from hourly cron; hardened 2026-06-05):
     #   1. **Event-triggered** from the backend. Every POST
     #      /api/outreach/approve fires backend.services.job_trigger.
     #      trigger_lifecycle_sync() via FastAPI BackgroundTasks, which
@@ -639,15 +639,13 @@ resources:
     #      Trigger is debounced to 60 s so a reviewer clicking through
     #      an approval queue produces one sync run, not N. See
     #      backend/services/job_trigger.py for the full contract.
-    #   2. **Daily fallback** (04:00 America/Chicago). Safety net for
-    #      any dropped trigger + records a funnel snapshot even on
-    #      idle days for the WoW delta_vs_prior_* dashboard measures
-    #      (those need ≥ 2 daily snapshot rows to compute). The `dev`
-    #      target's `mode: development` auto-pauses the schedule;
-    #      `mode: production` auto-UNPAUSES. Do NOT hardcode
-    #      `pause_status: UNPAUSED` here — that override also fires in
-    #      dev. Why 04:00: off-peak CST, well before any Monday
-    #      business readout.
+    #   2. **Paused fallback schedule** (04:00 America/Chicago). The cron
+    #      definition is retained so an operator can deliberately unpause it
+    #      for a customer-approved production cadence, but every target ships
+    #      PAUSED by default. This avoids recurring warehouse/Lakebase spend
+    #      and prevents multiple bundle targets from writing the same catalog
+    #      concurrently. Why 04:00 when enabled: off-peak CST, well before
+    #      any Monday business readout.
     #
     # Rationale for removing the hourly cron: data only changes when
     # an operator acts (approve / outreach). An hourly cron against an
@@ -670,12 +668,13 @@ resources:
         owner: entrada
         slice: slice13-accuracy
       max_concurrent_runs: 1
-      # Daily safety-net cron. Dev auto-pauses via mode: development;
-      # prod auto-UNPAUSES via mode: production. Event-trigger from
-      # the backend approval path is the primary freshness driver.
+      # Paused safety-net cron. Event-trigger from the backend approval path
+      # and explicit Admin → Data operations clicks are the primary freshness
+      # drivers. Do not rely on target mode to unpause this by default.
       schedule:
         quartz_cron_expression: "0 0 4 ? * * *"
         timezone_id: America/Chicago
+        pause_status: PAUSED
       environments:
         - environment_key: py_default
           spec:
@@ -774,15 +773,14 @@ resources:
             # Serverless Python env version 5 -- see comment on the
             # mip_sync_lifecycle_state job for the upgrade rationale.
             environment_version: "5"
-      # FRED publishes Thursdays; we run Fridays 06:00 America/Chicago so the
-      # refresh lands before any Monday business readout. Do NOT hardcode
-      # `pause_status: UNPAUSED` -- it overrides the `mode: development`
-      # auto-pause (same antipattern we just fixed on mip_sync_lifecycle_state
-      # 2026-04-22). Target mode flips the pause status: dev = PAUSED,
-      # prod = UNPAUSED.
+      # FRED publishes Thursdays. Keep the Friday 06:00 America/Chicago cron
+      # definition available for a customer-approved cadence, but ship every
+      # target PAUSED by default. Operators normally refresh rates from Admin
+      # → Data operations when FRED/source readiness says the row is stale.
       schedule:
         quartz_cron_expression: "0 0 6 ? * FRI *"
         timezone_id: America/Chicago
+        pause_status: PAUSED
       tasks:
         - task_key: init_ddl
           description: "Idempotent CREATE CATALOG/SCHEMA + silver.market_rates_weekly DDL."

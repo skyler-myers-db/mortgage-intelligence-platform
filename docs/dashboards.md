@@ -58,9 +58,9 @@ Concretely, for a deploy that lands today (`CURRENT_DATE()` = today):
 - Today: row #1 with `snapshot_date = today` lands. All `delta_vs_prior_*`
   measures resolve to `NULL` because the `prior_snapshot` CTE finds no
   row `<= today - INTERVAL 7 DAYS`.
-- Tomorrow: row #2 with `snapshot_date = tomorrow` lands. Measures still
-  `NULL` because the window is 7 days, not 1 — the prior-snapshot CTE
-  still finds no qualifying row.
+- Later operator/app-triggered syncs can add or rewrite the current-day row.
+  Measures still stay `NULL` until the snapshot table has a qualifying
+  day-7 predecessor; the window is 7 days, not 1.
 - Day 8: the first snapshot's date is now `<= today - INTERVAL 7 DAYS`,
   so the measures resolve to real WoW deltas for the first time.
 
@@ -71,18 +71,19 @@ this doc and point at `mip.gold.funnel_snapshot_daily` row count + dates.
 ### 1.1 How operators verify the snapshot cadence
 
 The snapshot table is populated by the `mip_sync_lifecycle_state` job
-in `databricks.yml`. Trigger model (as of 2026-04-22):
+in `databricks.yml`. Trigger model (as of 2026-06-05):
 
 1. **Event-triggered** from the backend. `POST /api/v1/outreach/approve`
    fires `backend.services.job_trigger.trigger_lifecycle_sync` via
    `BackgroundTasks`, which calls `WorkspaceClient.jobs.run_now(...)`
    non-blocking. Triggers are debounced to 60 s so a reviewer clicking
    through the queue produces one sync run, not N.
-2. **Daily fallback** at 04:00 America/Chicago (`0 0 4 ? * * *`). This
-   is the safety net for any dropped trigger + records a funnel
-   snapshot on idle days so WoW `delta_vs_prior_*` measures keep
-   advancing. Dev auto-pauses via `mode: development`; prod
-   auto-UNPAUSES via `mode: production`.
+2. **Paused fallback schedule** at 04:00 America/Chicago (`0 0 4 ? * * *`).
+   The cron definition is present so a customer can approve and unpause a
+   recurring cadence, but it ships `PAUSED` in every bundle target. Normal
+   refreshes happen through approval/rejection triggers or the Admin **Data
+   operations** button. This avoids recurring compute spend in intermittent
+   workspaces and prevents two bundle targets from writing the same catalog.
 
 The `record_funnel_snapshot` task is the one that MERGEs today's per-
 (state, segment) counts into `mip.gold.funnel_snapshot_daily`. Because
@@ -105,13 +106,16 @@ databricks api post /api/2.0/sql/statements --json '{
   "warehouse_id": "'"$DATABRICKS_WAREHOUSE_ID"'"
 }' | jq
 
-# 3. Confirm the cron job is unpaused + last success.
+# 3. Confirm the schedule is paused by default + inspect last success.
 databricks jobs list --name mip_sync_lifecycle_state
 databricks jobs get-run <run_id_from_above> | jq '{state, start_time, end_time}'
 ```
 
-A healthy deploy shows `COUNT(DISTINCT snapshot_date)` growing by 1 per
-calendar day; if it stalls, re-run the job manually:
+A healthy active workspace shows new snapshot rows when operators approve,
+reject, or explicitly run the lifecycle sync from Admin **Data operations**.
+If a customer-approved recurring cadence is unpaused, then
+`COUNT(DISTINCT snapshot_date)` should also advance by calendar day. If it
+stalls, re-run the job from the app or manually:
 
 ```bash
 databricks bundle run mip_sync_lifecycle_state -t dev
@@ -153,11 +157,13 @@ mirrors that row into `mip.gold.borrower_lifecycle_state` and runs
 `record_funnel_snapshot` to update the per-(state, segment) counts on
 `mip.gold.funnel_snapshot_daily`. The turnaround from a UI click to a
 lit-up dashboard cell is typically 1–3 minutes (Serverless job cold
-start + three tasks). The daily 04:00 fallback cron is the safety net.
+start + three tasks). The 04:00 fallback cron is available but paused by
+default; unpause it only after the customer approves a recurring cadence and
+the target writes to an isolated catalog.
 
-**Kill-switch for the impatient:** if you need to demo a partially-lit
-dashboard on day one without waiting for the cron, the same job can be
-run on demand:
+**On-demand refresh:** if you need to demo a partially-lit dashboard on day
+one, the same job can be run from Admin **Data operations** or by an operator
+with CLI access:
 
 ```bash
 databricks bundle run mip_sync_lifecycle_state -t dev

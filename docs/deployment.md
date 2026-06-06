@@ -143,6 +143,13 @@ full deployment `env_vars` list with `MIP_OTEL_HEADERS` set by
 `app.yaml`; that would make ordinary dev deploys depend on a secret that
 does not exist in every workspace.
 
+All MIP refresh schedules deploy paused by default, including `prod` and
+`prod_otlp`. The app's Admin **Data operations** panel is the normal
+customer-facing refresh surface. Only unpause FRED or lifecycle schedules
+after the customer approves a recurring cadence and confirms the target writes
+to an isolated catalog; otherwise multiple bundle targets can contend on the
+same Unity Catalog tables and burn avoidable compute.
+
 If OTLP is being added to an already-deployed app in the same workspace,
 avoid deploying a second bundle target that tries to recreate existing
 Lakebase or warehouse resources unless that target has imported/owns
