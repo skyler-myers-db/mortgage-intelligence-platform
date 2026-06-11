@@ -50,9 +50,32 @@
 --   mip.silver.owner_transfer_events
 --   mip.silver.market_rates_weekly
 --   mip.gold.property_owner_bridge
+--
+-- 2026-06-11 audit P2-8: CTAS re-declares clustering/comments/properties
+-- because COR TABLE drops DDL metadata on every refresh. Clustering, column
+-- COMMENTs, and TBLPROPERTIES mirror sql/ddl/gold_evidence_events.sql; the
+-- column list order matches the final SELECT projection 1:1.
 -- =============================================================================
 
-CREATE OR REPLACE TABLE mip.gold.evidence_events AS
+CREATE OR REPLACE TABLE mip.gold.evidence_events (
+  clip           COMMENT 'Cotality CLIP. Not in Pydantic EvidenceEvent (router strips); used for join / filter.',
+  evidence_id    COMMENT 'Deterministic: "ev-" || substr(sha2(clip || signal_type || timestamp, 256), 1, 12). Stable across refreshes so Borrower360.evidence_ids stays consistent.',
+  source_product COMMENT 'Human label: Voluntary Lien / AVM / Owner Link / Property / Mortgage Domain / Owner Transfer / Market Rates.',
+  source_table   COMMENT 'Real UC path. Shown verbatim in EvidenceDrawer -- must be a resolvable mip.silver.* or mip.gold.* path.',
+  signal_type    COMMENT 'Controlled vocab: rate_spread / equity / loan_type_fit / competitor_lien / multi_property / absentee_mailing / corporate_owner / foreclosure_stage / recent_refi / recent_payoff / recent_sale / market_trend. BLOCKED vocab (permit, listing) NEVER emitted.',
+  signal_value   COMMENT 'Human-readable value: "+88 bps", "$285K", "3 properties", "competitor refi".',
+  display_text   COMMENT 'One-sentence deterministic template per signal_type. No PII.',
+  confidence     COMMENT '0..1. Per-signal: AVM uses upstream confidence_score_mktg; count-based rows 0.85-0.92 (see header).',
+  `timestamp`    COMMENT 'ISO-8601 STRING (matches Pydantic EvidenceEvent.timestamp: str).',
+  signal_rank    COMMENT 'Deterministic priority order for Borrower360.evidence_ids: rate_spread=1, equity=2, market_trend=3, etc. Smaller = higher priority. Gold-only.'
+)
+CLUSTER BY (clip)
+TBLPROPERTIES (
+  'delta.enableChangeDataFeed' = 'false',
+  'delta.autoOptimize.optimizeWrite' = 'true',
+  'delta.autoOptimize.autoCompact'   = 'true'
+)
+AS
 WITH market AS (
   SELECT
     rate_fraction AS market_rate_fraction,

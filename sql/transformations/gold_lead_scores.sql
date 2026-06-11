@@ -31,9 +31,51 @@
 -- forward as *_applied columns. This CTAS consumes those applied values rather
 -- than re-baking literals, so lead_scores and borrower_360 cannot drift when a
 -- governed threshold is retuned and gold is refreshed.
+--
+-- 2026-06-11 audit P2-8: CTAS re-declares clustering/comments/properties
+-- because COR TABLE drops DDL metadata on every refresh. Clustering, column
+-- COMMENTs, and TBLPROPERTIES mirror sql/ddl/gold_lead_scores.sql; the column
+-- list order matches the final SELECT projection 1:1.
 -- =============================================================================
 
-CREATE OR REPLACE TABLE mip.gold.lead_scores AS
+CREATE OR REPLACE TABLE mip.gold.lead_scores (
+  clip                     COMMENT 'Cotality CLIP. PK. FK to gold.borrower_360.clip.',
+  economic_incentive       COMMENT '0..100 sub-score on rate_spread_bps + equity_pct. Weight 0.35 in fn_lead_score.',
+  intent_trigger           COMMENT '0..100 sub-score on recent mortgage events, competitor/investor signals, rate drift, equity proxy, and current-customer bump. Weight 0.30.',
+  fit                      COMMENT '0..100 sub-score on owner-occupancy + loan_type + corporate/investor fit. Weight 0.15.',
+  relationship             COMMENT '0..100 sub-score on customer / competitor / investor relationship ladder plus owner-level distinct tenant-lender CLIP history. Weight 0.10.',
+  evidence                 COMMENT '0..100: 10 pts per live evidence row plus bounded second-position balance tail. Weight 0.10.',
+  opportunity_score        COMMENT 'mip.gold.fn_lead_score(...) output. 0..100. Mirrors gold.borrower_360 for the same CLIP.',
+  confidence               COMMENT 'ROUND(mean(5 sub-scores)). Mirrors gold.borrower_360 for the same CLIP.',
+  in_the_money             COMMENT 'mip.gold.fn_in_the_money(rate_spread_bps, equity_pct, min_spread_bps_applied, min_equity_pct_applied).',
+  recommended_offer_code   COMMENT 'mip.gold.fn_next_best_offer(...) lowercase code.',
+  rate_spread_bps          COMMENT 'Input to fn_in_the_money / fn_next_best_offer. Carried here so the table is self-contained for parity testing.',
+  equity_pct               COMMENT 'Input to fn_in_the_money / fn_next_best_offer.',
+  has_permit               COMMENT 'BLOCKED -> FALSE; carried for parity test transparency.',
+  listed_for_sale          COMMENT 'BLOCKED -> FALSE; carried for parity test transparency.',
+  is_investor              COMMENT 'Carried from borrower_360.',
+  is_current_customer      COMMENT 'Carried from borrower_360.',
+  is_former_customer       COMMENT 'Carried from borrower_360. Distinct from competitor lien; requires historical tenant relationship and no current tenant lien.',
+  is_competitor_lien       COMMENT 'Carried from borrower_360.',
+  has_first_party_relationship COMMENT 'Carried from borrower_360. TRUE when optional first-party feeds resolve to this borrower.',
+  first_party_relationship_depth COMMENT 'Bounded count of resolved first-party feed categories.',
+  first_party_recent_interactions COMMENT 'Recent positive interaction count from the first-party engagement feed.',
+  first_party_recent_application COMMENT 'TRUE when a recent first-party LOS/application event exists.',
+  first_party_synthetic_demo     COMMENT 'TRUE only for rows touched by the Summit demo_synthetic first-party seed.',
+  min_spread_bps_applied   COMMENT 'Threshold applied this refresh.',
+  min_equity_pct_applied   COMMENT 'Threshold applied this refresh.',
+  heloc_equity_min_applied COMMENT 'HELOC equity threshold applied this refresh (fn_next_best_offer branch 2/3).',
+  cashout_equity_min_applied COMMENT 'Cash-out equity threshold applied this refresh (fn_next_best_offer branch 5).',
+  retention_min_spread_applied COMMENT 'Retention spread threshold applied this refresh (fn_next_best_offer branch 7).',
+  refreshed_at             COMMENT 'Refresh timestamp for audit / provenance.'
+)
+CLUSTER BY (clip)
+TBLPROPERTIES (
+  'delta.enableChangeDataFeed' = 'false',
+  'delta.autoOptimize.optimizeWrite' = 'true',
+  'delta.autoOptimize.autoCompact'   = 'true'
+)
+AS
 WITH evidence_counts AS (
   SELECT clip, COUNT(*) AS evidence_event_count
   FROM mip.gold.evidence_events

@@ -36,9 +36,30 @@
 --            grain. Stable
 --            across refreshes because the ordering is fully deterministic
 --            (opportunity_score is an INT, borrower_id is unique).
+--
+-- 2026-06-11 audit P2-8: CTAS re-declares clustering/comments/properties
+-- because COR TABLE drops DDL metadata on every refresh. Clustering, column
+-- COMMENTs, and TBLPROPERTIES mirror sql/ddl/gold_zip_rollup.sql.
 -- =============================================================================
 
-CREATE OR REPLACE TABLE mip.gold.zip_rollup AS
+CREATE OR REPLACE TABLE mip.gold.zip_rollup (
+  state                     COMMENT '2-char USPS state code (uppercase). PK part.',
+  county_fips_5             COMMENT '5-char county FIPS. Nullable when silver lacked a county geocode. PK part when present.',
+  zip                       COMMENT '5-digit ZIP (STRING preserves leading zeros). PK part.',
+  addressable_borrowers     COMMENT 'Population count for this ZIP on snapshot_date.',
+  avg_opportunity_score     COMMENT 'AVG(borrower_360.opportunity_score) rounded to int.',
+  top_segment_code          COMMENT 'Dominant segment_code by count. NULL when every borrower in the ZIP has empty segment_codes.',
+  sample_borrower_id        COMMENT 'Stable-ranked top borrower_id in the ZIP (ORDER BY opportunity_score DESC, borrower_id ASC). Used by UI deep-link.',
+  snapshot_date             COMMENT 'Refresh date; daily grain. PK part.',
+  snapshot_at               COMMENT 'Precise refresh timestamp.'
+)
+CLUSTER BY (state, zip)
+TBLPROPERTIES (
+  'delta.enableChangeDataFeed' = 'false',
+  'delta.autoOptimize.optimizeWrite' = 'true',
+  'delta.autoOptimize.autoCompact'   = 'true'
+)
+AS
 WITH base AS (
   SELECT
     b.zip,

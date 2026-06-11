@@ -57,6 +57,16 @@ USING (
   WHERE deed_situs_state_static IS NOT NULL
     AND mortgage_composite_transaction_id IS NOT NULL
     AND clip IS NOT NULL
+  -- dedup guard (audit P2-10): share refreshes occasionally land duplicate
+  -- mortgage_txn_id; keep the newest by event_date (the event's own recording
+  -- date), then release_date / mortgage_amount as deterministic tiebreaks.
+  -- Without this a duplicate key makes the MERGE fail (multiple source rows
+  -- match one target row). ingest_ts is a single run-wide CURRENT_TIMESTAMP(),
+  -- so it cannot order rows within a refresh.
+  QUALIFY ROW_NUMBER() OVER (
+    PARTITION BY mortgage_txn_id
+    ORDER BY event_date DESC, release_date DESC, mortgage_amount DESC
+  ) = 1
 ) AS s
   ON t.mortgage_txn_id = s.mortgage_txn_id
 WHEN MATCHED THEN UPDATE SET

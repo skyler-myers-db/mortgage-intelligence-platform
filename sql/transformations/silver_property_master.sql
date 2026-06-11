@@ -63,17 +63,18 @@ USING (
     CAST(block_level_longitude AS DOUBLE)                            AS situs_lon,
     owner_1_identifier                                               AS owner_link_id,
     -- PII HASH: raw owner_1_full_name is read here, hashed, and dropped.
-    -- Salt comes from the Databricks secret scope; fallback to the literal
-    -- named in data-contract-module0 §7 keeps this file runnable when the
-    -- secret is not yet provisioned in a fresh workspace.
+    -- Salt comes from the Databricks secret scope `mip`/`pii-salt-v1`,
+    -- provisioned by scripts/deploy.sh step 4d (create-if-missing, never
+    -- rotated). 2026-06-11 audit P1-4: the old COALESCE fallback to a
+    -- source-committed literal made hashing PREDICTABLE whenever the
+    -- secret was missing — silently. A missing secret now fails this
+    -- refresh visibly, matching the DLT path and the repo's
+    -- no-silent-fallback contract.
     sha2(
       CONCAT(
         LOWER(TRIM(COALESCE(owner_1_full_name, ''))),
         ':',
-        COALESCE(
-          TRY_CAST(secret('mip', 'pii-salt-v1') AS STRING),
-          'mip_pii_salt_v1'
-        )
+        secret('mip', 'pii-salt-v1')
       ),
       256
     )                                                                 AS owner_name_hash,
@@ -108,6 +109,16 @@ USING (
   FROM cotality_mortgage_data.corelogic.entrada_eval_property_domain_v3
   WHERE situs_state IS NOT NULL
     AND clip IS NOT NULL
+  -- dedup guard (audit P2-10): share refreshes occasionally land duplicate
+  -- clip; keep the newest by tax_year (the most recent assessment vintage on
+  -- the record), then last_foreclosure_date / calculated_total_value as
+  -- deterministic tiebreaks. Without this a duplicate key makes the MERGE fail
+  -- (multiple source rows match one target row). ingest_ts is a single run-wide
+  -- CURRENT_TIMESTAMP(), so it cannot order rows within a refresh.
+  QUALIFY ROW_NUMBER() OVER (
+    PARTITION BY clip
+    ORDER BY tax_year DESC, last_foreclosure_date DESC, calculated_total_value DESC
+  ) = 1
 ) AS s
   ON t.clip = s.clip
 WHEN MATCHED THEN UPDATE SET

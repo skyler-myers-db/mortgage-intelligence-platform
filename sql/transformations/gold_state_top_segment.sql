@@ -18,9 +18,25 @@
 --            array still emits one row with top_segment_code = 'none' +
 --            top_segment_share_pct = 0 so the frontend sees a predictable
 --            shape rather than a missing row.
+--
+-- 2026-06-11 audit P2-8: CTAS re-declares clustering/comments/properties
+-- because COR TABLE drops DDL metadata on every refresh. Clustering, column
+-- COMMENTs, and TBLPROPERTIES mirror sql/ddl/gold_state_top_segment.sql.
 -- =============================================================================
 
-CREATE OR REPLACE TABLE mip.gold.state_top_segment AS
+CREATE OR REPLACE TABLE mip.gold.state_top_segment (
+  state                    COMMENT '2-char USPS state code (uppercase). PK part.',
+  top_segment_code         COMMENT 'Dominant SegmentCode for this state on snapshot_date (itm/listed/permit/investor/equity/retention). "none" when no borrower in the state has a non-empty segment_codes array.',
+  top_segment_share_pct    COMMENT '0..100. Share of the state population in the top segment.',
+  snapshot_date            COMMENT 'Refresh date; daily grain. PK part.'
+)
+CLUSTER BY (state)
+TBLPROPERTIES (
+  'delta.enableChangeDataFeed' = 'false',
+  'delta.autoOptimize.optimizeWrite' = 'true',
+  'delta.autoOptimize.autoCompact'   = 'true'
+)
+AS
 WITH state_pop AS (
   SELECT
     state,

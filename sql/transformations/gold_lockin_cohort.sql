@@ -34,9 +34,41 @@
 -- Self-contained refresh: operator or job runs
 --   `databricks bundle run mip_refresh_scores -t dev`
 -- after silver is current; no out-of-bundle steps.
+--
+-- 2026-06-11 audit P2-8: CTAS re-declares clustering/comments/properties
+-- because COR TABLE drops DDL metadata on every refresh. Clustering, column
+-- COMMENTs, and TBLPROPERTIES mirror the mip.gold.lockin_cohort block in
+-- sql/ddl/003_gold_tables.sql (§9); the column list order matches the SELECT.
 -- =============================================================================
 
-CREATE OR REPLACE TABLE mip.gold.lockin_cohort AS
+CREATE OR REPLACE TABLE mip.gold.lockin_cohort (
+  clip                  COMMENT 'Cotality property identifier.',
+  borrower_id           COMMENT 'Synthetic B-###… id; matches borrower_360.borrower_id.',
+  state                 COMMENT '2-char state from refreshed source coverage.',
+  zip                   COMMENT '5-digit ZIP.',
+  situs_cbsa_code       COMMENT 'CBSA code for the property.',
+  city                  COMMENT 'Property city.',
+  segment_codes         COMMENT 'Segment tags from borrower_360.',
+  opportunity_score     COMMENT '0-100 opportunity score at refresh time.',
+  equity_estimate       COMMENT 'AVM - total open liens, floored at 0.',
+  equity_pct            COMMENT 'Equity %, [0,100].',
+  rate_spread_bps       COMMENT 'First-position rate vs MORTGAGE30US, bps.',
+  recommended_offer     COMMENT 'Human-readable next-best-offer label.',
+  origination_date      COMMENT 'first_pos_date from silver.lien_current.',
+  origination_rate      COMMENT 'first_pos_rate (fractional; < 0.03).',
+  first_pos_loan_type   COMMENT 'CONV / FHA / VA / other; from silver.',
+  first_pos_term_months COMMENT 'Loan term in months; from silver.',
+  origination_year      COMMENT 'YEAR(origination_date) for fast GROUP BY.',
+  cohort_tag            COMMENT 'Stable tag for GROUP BY; today always "sub3_2020_2022".',
+  refreshed_at          COMMENT 'CTAS refresh timestamp.'
+)
+CLUSTER BY (state, origination_year)
+TBLPROPERTIES (
+  'delta.enableChangeDataFeed' = 'false',
+  'delta.autoOptimize.optimizeWrite' = 'true',
+  'delta.autoOptimize.autoCompact'   = 'true'
+)
+AS
 SELECT
   b.clip,
   b.borrower_id,

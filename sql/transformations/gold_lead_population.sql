@@ -25,9 +25,59 @@
 --
 -- population_version: CONCAT(DATE_FORMAT(refreshed_at, 'yyyyMMdd'), '-v1').
 --   When the gold schema bumps, bump '-v1' to '-v2' etc. in one place here.
+--
+-- 2026-06-11 audit P2-8: CTAS re-declares clustering/comments/properties
+-- because COR TABLE drops DDL metadata on every refresh. Clustering, column
+-- COMMENTs, and TBLPROPERTIES mirror sql/ddl/gold_lead_population.sql; the
+-- column list order matches the final SELECT projection 1:1.
 -- =============================================================================
 
-CREATE OR REPLACE TABLE mip.gold.lead_population AS
+CREATE OR REPLACE TABLE mip.gold.lead_population (
+  clip                      COMMENT 'Cotality CLIP. PK.',
+  borrower_id               COMMENT 'From gold.borrower_360.borrower_id.',
+  display_name              COMMENT 'Synthesized label. No PII.',
+  city                      COMMENT 'Situs city.',
+  state                     COMMENT 'Situs state.',
+  zip                       COMMENT '5-digit situs ZIP.',
+  segment_codes             COMMENT 'Ordered SegmentCode list.',
+  equity_estimate           COMMENT 'From gold.borrower_360.',
+  equity_pct                COMMENT 'From gold.borrower_360 [0..100]. Used by executive dashboard top-borrower widget.',
+  rate_spread_bps           COMMENT 'From gold.borrower_360.',
+  opportunity_score         COMMENT 'fn_lead_score output 0..100.',
+  confidence                COMMENT 'Mean of 5 sub-scores 0..100.',
+  recommended_offer_code    COMMENT 'fn_next_best_offer output code; canonical offer enum for operational filters and audit grouping.',
+  recommended_offer         COMMENT 'Human label (resolved in gold via product_labels map).',
+  why_now                   COMMENT 'Deterministic template per offer code.',
+  evidence_ids              COMMENT 'Ordered evidence_ids (mirrors gold.borrower_360 for this CLIP).',
+  approval_status           COMMENT '"pending" by default; Lakebase is authoritative for actual state.',
+  current_lender_ref        COMMENT 'Public-demo-safe current-servicer reference from borrower_360. Never the raw Cotality lender string.',
+  is_owner_occupied         COMMENT 'From gold.borrower_360; drives /segment-intelligence DEMOGRAPHICS filter.',
+  is_investor               COMMENT 'Carried from gold.borrower_360 (derived: multi-property OR corporate OR absentee).',
+  is_current_customer       COMMENT 'From gold.borrower_360; current servicer or first-party servicing relationship to the tenant lender.',
+  is_former_customer        COMMENT 'From gold.borrower_360; historical tenant-lender relationship with no current tenant lien.',
+  is_competitor_lien        COMMENT 'From gold.borrower_360; current servicer is known and not the tenant lender.',
+  related_property_count    COMMENT 'From gold.borrower_360; drives /segment-intelligence OWNER LINK filter.',
+  current_lien_balance      COMMENT 'From gold.borrower_360; drives /segment-intelligence LIEN filter.',
+  second_pos_amount         COMMENT 'From gold.borrower_360; nullable (no second-position lien).',
+  has_permit                COMMENT 'BLOCKED: FALSE until Cotality Building Permits Delta share lands.',
+  listed_for_sale           COMMENT 'BLOCKED: FALSE until Cotality MLS Listings Delta share lands.',
+  marketing_eligible        COMMENT 'From gold.borrower_360; TRUE only when consent, suppression, and frequency-cap gates are clear.',
+  consent_status            COMMENT 'From gold.borrower_360; opt_in / opt_out / unknown.',
+  suppression_reason        COMMENT 'From gold.borrower_360; controlled suppression reason.',
+  last_touch_at             COMMENT 'From gold.borrower_360; most recent first-party marketing/contact touch.',
+  eligible_recontact_at     COMMENT 'From gold.borrower_360; earliest permitted re-contact time when capped.',
+  rank_overall              COMMENT 'DENSE_RANK OVER (ORDER BY opportunity_score DESC, clip). 1 = highest.',
+  rank_within_state         COMMENT 'DENSE_RANK OVER (PARTITION BY state ORDER BY opportunity_score DESC, clip). 1 = highest in state.',
+  population_version        COMMENT 'CONCAT(DATE_FORMAT(refreshed_at, "yyyyMMdd"), "-v1"). EvidenceDrawer footer uses this as a provenance chip.',
+  refreshed_at              COMMENT 'Refresh timestamp.'
+)
+CLUSTER BY (opportunity_score)
+TBLPROPERTIES (
+  'delta.enableChangeDataFeed' = 'false',
+  'delta.autoOptimize.optimizeWrite' = 'true',
+  'delta.autoOptimize.autoCompact'   = 'true'
+)
+AS
 WITH ranked AS (
   SELECT
     b.clip,

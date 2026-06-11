@@ -24,6 +24,10 @@
 -- Honest-null: county_fips_5 can be NULL for ~0.2% of rows (silver lacked a
 --            geocode) -- those rows are filtered out here since a NULL-key
 --            county rollup row has no meaningful identity.
+--
+-- 2026-06-11 audit P2-8: CTAS re-declares clustering/comments/properties
+-- because COR TABLE drops DDL metadata on every refresh. Clustering, column
+-- COMMENTs, and TBLPROPERTIES mirror sql/ddl/gold_county_rollup.sql.
 -- =============================================================================
 
 -- 2026-05-04 (FIX α, round 3): revert the score >= 50 filter introduced
@@ -33,7 +37,25 @@
 -- semantic is "addressable population per county"; the Lead Queue
 -- alignment is implemented in LeadRepository.list (FIX β) by querying
 -- borrower_360 directly when filtered to a geo.
-CREATE OR REPLACE TABLE mip.gold.county_rollup AS
+CREATE OR REPLACE TABLE mip.gold.county_rollup (
+  fips_5                       COMMENT '5-char FIPS: 2-char state + 3-char county. PK part.',
+  state                        COMMENT '2-char USPS state code (uppercase).',
+  county_name                  COMMENT 'Human county name. NULL until a FIPS->name crosswalk seed lands; UI falls back to fips_5.',
+  addressable_borrowers        COMMENT 'Population count for this county on snapshot_date.',
+  in_the_money_borrowers       COMMENT 'COUNT where borrower_360.in_the_money = TRUE.',
+  high_opportunity_borrowers   COMMENT 'COUNT where borrower_360.opportunity_score >= 75.',
+  avg_opportunity_score        COMMENT 'AVG(borrower_360.opportunity_score) rounded to int.',
+  top_segment_code             COMMENT 'Dominant segment_code by count. NULL when every borrower in the county has empty segment_codes.',
+  snapshot_date                COMMENT 'Refresh date; daily grain. PK part.',
+  snapshot_at                  COMMENT 'Precise refresh timestamp.'
+)
+CLUSTER BY (state, fips_5)
+TBLPROPERTIES (
+  'delta.enableChangeDataFeed' = 'false',
+  'delta.autoOptimize.optimizeWrite' = 'true',
+  'delta.autoOptimize.autoCompact'   = 'true'
+)
+AS
 WITH base AS (
   SELECT
     b.county_fips_5                                AS fips_5,

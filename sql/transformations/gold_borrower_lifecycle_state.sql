@@ -40,9 +40,32 @@
 --                approval_status='pending' / outreach_status='none'. Joins
 --                LEFT JOIN + COALESCE so a borrower not yet reviewed counts
 --                correctly in the denominator.
+--
+-- 2026-06-11 audit P2-8: this manual-fallback CTAS re-declares clustering/
+-- comments/properties because COR TABLE drops DDL metadata on every refresh.
+-- Clustering, column COMMENTs, and TBLPROPERTIES mirror the
+-- mip.gold.borrower_lifecycle_state block in sql/ddl/003_gold_tables.sql (§7);
+-- the column list order matches the SELECT. jobs/sync_lifecycle_state.py owns
+-- the populated-state rewrite and must keep the same table shape.
 -- =============================================================================
 
-CREATE OR REPLACE TABLE mip.gold.borrower_lifecycle_state AS
+CREATE OR REPLACE TABLE mip.gold.borrower_lifecycle_state (
+  borrower_id       COMMENT 'Masked borrower id; matches borrower_360.borrower_id.',
+  approval_status   COMMENT 'pending / approved / rejected / hold. Derived from latest decided_at row in mip_app.approvals.',
+  outreach_status   COMMENT 'queued / actioned / none. Derived from latest outreach state.',
+  offer_code        COMMENT 'Latest offer_code associated with the approval decision.',
+  approved_at       COMMENT 'decided_at for the latest approve action; NULL when not approved.',
+  outreach_at       COMMENT 'Timestamp of latest outreach action.',
+  synced_at         COMMENT 'Last sync run that touched this row.',
+  refreshed_at      COMMENT 'Lakebase mirror refresh boundary for this lifecycle snapshot; distinct from the scoring gold refresh boundary.'
+)
+CLUSTER BY (borrower_id)
+TBLPROPERTIES (
+  'delta.enableChangeDataFeed' = 'false',
+  'delta.autoOptimize.optimizeWrite' = 'true',
+  'delta.autoOptimize.autoCompact'   = 'true'
+)
+AS
 WITH sync_anchor AS (
   SELECT CURRENT_TIMESTAMP() AS mirror_refreshed_at
 )

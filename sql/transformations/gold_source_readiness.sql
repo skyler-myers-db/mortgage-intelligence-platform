@@ -6,9 +6,30 @@
 --            Databricks App principal direct access to `mip.silver.*`.
 --
 -- Pattern:   CREATE OR REPLACE TABLE ... AS SELECT.
+--
+-- 2026-06-11 audit P2-8: CTAS re-declares clustering/comments/properties
+-- because COR TABLE drops DDL metadata on every refresh. Clustering, column
+-- COMMENTs, and TBLPROPERTIES mirror sql/ddl/gold_source_readiness.sql.
 -- =============================================================================
 
-CREATE OR REPLACE TABLE mip.gold.source_readiness AS
+CREATE OR REPLACE TABLE mip.gold.source_readiness (
+  source_name   COMMENT 'Admin panel display name.',
+  status        COMMENT 'live / demo_synthetic / configured_empty / not_configured / roadmap / error.',
+  row_count     COMMENT 'Source row count when live.',
+  last_updated  COMMENT 'Latest source ingest timestamp when live.',
+  note          COMMENT 'Human-readable source note.',
+  source_table  COMMENT 'UC source table used by ETL; null for roadmap sources.',
+  synthetic_demo COMMENT 'TRUE when rows come from the explicit Summit demo_synthetic first-party seed.',
+  sort_order    COMMENT 'Stable Admin panel order.',
+  checked_at    COMMENT 'Gold refresh anchor used for this readiness snapshot.'
+)
+CLUSTER BY (sort_order)
+TBLPROPERTIES (
+  'delta.enableChangeDataFeed' = 'false',
+  'delta.autoOptimize.optimizeWrite' = 'true',
+  'delta.autoOptimize.autoCompact'   = 'true'
+)
+AS
 WITH refresh_anchor AS (
   SELECT refresh_at AS checked_at
   FROM mip.ref.refresh_run_state

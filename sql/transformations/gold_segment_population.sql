@@ -94,7 +94,30 @@ WHEN NOT MATCHED THEN INSERT (
 -- Permits Delta Share" pending state instead of disappearing entirely.
 -- Honest UX: zero counts mean zero counts, but the segment is still
 -- visible so the demo narrative ("you'll see 6 segments") holds.
-CREATE OR REPLACE TABLE mip.gold.segment_population AS
+--
+-- 2026-06-11 audit P2-8: CTAS re-declares clustering/comments/properties
+-- because COR TABLE drops DDL metadata on every refresh. Clustering, column
+-- COMMENTs, and TBLPROPERTIES mirror sql/ddl/gold_segment_population.sql; the
+-- column list order matches the final SELECT projection 1:1. (The prior-period
+-- MERGE above writes segment_population_prior, whose metadata MERGE preserves.)
+CREATE OR REPLACE TABLE mip.gold.segment_population (
+  segment_code    COMMENT 'itm / listed / permit / investor / equity / retention. Matches SegmentCode Literal exactly.',
+  state           COMMENT '2-char state code from refreshed source coverage or "_ALL" for national rollup.',
+  name            COMMENT 'Static label per segment_code (e.g., "In the Money").',
+  count           COMMENT 'Member count for this (segment, state) cell.',
+  delta_vs_prior  COMMENT 'Quarter-over-quarter delta as "+NN%" / "-NN%". Router maps to SegmentSummary.delta. "+0%" on first refresh.',
+  avg_score       COMMENT 'CAST(ROUND(AVG(opportunity_score)) AS INT) over the segment cell.',
+  description     COMMENT 'Static description per segment_code.',
+  color           COMMENT 'Hex color for segment tile.',
+  refreshed_at    COMMENT 'Refresh timestamp.'
+)
+CLUSTER BY (segment_code)
+TBLPROPERTIES (
+  'delta.enableChangeDataFeed' = 'false',
+  'delta.autoOptimize.optimizeWrite' = 'true',
+  'delta.autoOptimize.autoCompact'   = 'true'
+)
+AS
 WITH exploded AS (
   SELECT
     b.state,
