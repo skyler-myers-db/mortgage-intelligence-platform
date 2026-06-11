@@ -493,6 +493,29 @@ def test_campaign_create_accepts_marketing_controls() -> None:
     assert payload.holdout == {"method": "hash_modulo", "size_pct": 10.0}
 
 
+def test_campaign_roi_null_budget_means_omitted_not_rejected() -> None:
+    """Re-audit #3 follow-up (2026-06-12, observed live): the builder's
+    Budget input is optional and the client sends budget_usd: null when
+    blank — float(None) raised TypeError and EVERY default save 422'd
+    ("roi_assumptions.budget_usd must be numeric"). Explicit null must
+    behave exactly like omitting the key."""
+    payload = PortfolioCreateRequest(
+        name="Q3 recapture",
+        roi_assumptions={
+            "budget_usd": None,
+            "cost_per_contact_usd": {"email": 1.2, "sms": 0.08, "direct_mail": 0.86},
+        },
+    )
+    assert payload.roi_assumptions is not None
+    assert "budget_usd" not in payload.roi_assumptions
+
+    with pytest.raises(ValidationError, match="must be numeric"):
+        PortfolioCreateRequest(
+            name="Q3 recapture",
+            roi_assumptions={"budget_usd": "a lot"},
+        )
+
+
 def test_campaign_create_accepts_configured_lender_phrase(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
