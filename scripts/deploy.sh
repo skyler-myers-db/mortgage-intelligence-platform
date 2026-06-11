@@ -319,6 +319,20 @@ step "deploy bundle (app + warehouse + jobs + pipelines + Lakebase)"
 run "$PYTHON" tools/databricks/bundle_env.py deploy -t "$TARGET"
 
 # -----------------------------------------------------------------------------
+# Step 4b: Lakebase migration — BEFORE the app snapshot restart
+# -----------------------------------------------------------------------------
+# Ordering matters (2026-06-11, observed live): when migration ran AFTER the
+# app snapshot promotion, the freshly restarted app raced the migrate job's
+# schema work, tripped the lakebase circuit breaker, and showed the audit
+# feed's degraded banner for ~30s. Migrating first means the restarted app
+# boots against an already-migrated schema. Bonus: the migrate job's runtime
+# gives the bundle-triggered app deployment time to settle, so the
+# wait_for_app_deployable() poll below usually finds a clear runway.
+# Requires only step 4 (the bundle apply defines the job + Lakebase instance).
+step "migrate Lakebase — schema.sql + seed_campaigns.sql (idempotent)"
+run databricks bundle run mip_lakebase_migrate -t "$TARGET"
+
+# -----------------------------------------------------------------------------
 # Step 5: promote uploaded source to the running Databricks App
 # -----------------------------------------------------------------------------
 APP_NAME="${MIP_APP_NAME:-mip-app}"
@@ -400,10 +414,8 @@ else
 fi
 
 # -----------------------------------------------------------------------------
-# Step 7: Lakebase migration
-# -----------------------------------------------------------------------------
-step "migrate Lakebase — schema.sql + seed_campaigns.sql (idempotent)"
-run databricks bundle run mip_lakebase_migrate -t "$TARGET"
+# (Step 7 removed: Lakebase migration moved to Step 4b, before the app
+#  snapshot restart, so the restarted app never races the schema work.)
 
 # -----------------------------------------------------------------------------
 # Step 8: gold refresh (CTAS chain, ends with refresh_semantics_views)
