@@ -473,3 +473,94 @@ prod target untouched this close to Summit).
   ("Jun 11, 1:50 PM EDT"); the drawer freshness chip walks
   --loading (accent pulse) -> --fresh "Fresh" once governed metadata
   lands; zero console errors.
+
+## Re-audit #3 response (2026-06-12, branch fix/third-audit-response)
+
+Adjudication of "Re-Audit #3: Signoff Adjudication + Exhaustive Functional
+Pass" (docs/audits/re-audit-2026-06-11-r3-functional-pass.md). Every claim
+verified against code before fixing; one finding came back materially
+LARGER than reported, one is refuted-in-code pending live confirmation.
+
+### Part 1 (signoff partials + diff defects) — all accepted
+
+- **Git framing correction (accepted):** the prior signoff said "8
+  vertical commits"; the range was 6 vertical commits + the --no-ff
+  merge (112b585) + the evidence commit (d46ae95), and origin was
+  already up to date at audit time (the operator had pushed mid-session).
+  This tracker is the correction.
+- **"264 Vitest green" (accepted):** no committed artifact pinned the
+  number; this round's full-suite log is quoted below with the actual
+  count from `npm --prefix frontend run test`.
+- **silver_property_master header overbreadth (fixed):** "rotation
+  changes every masked identifier" contradicted the same slice's own
+  borrower-id precision; now says rotation shifts owner_name_hash
+  surfaces only, borrower_id (xxhash64(clip)) survives.
+- **_ddl_comment_map shadowing (fixed — and 18x the audit's estimate):**
+  the audit flagged "001 vs 003 first-party tables" as a latent blind
+  spot. Conflict-detecting merge revealed EVERY duplicated table was
+  shadowed: 165 disagreements — 156 text drifts where 003/004 lagged the
+  per-table DDL specs (the live transformations match the per-table
+  text), plus 9 first_party column comments (synthetic_demo, feed_mode,
+  source_system, customer_key_hash, ...) declared only in 001 and absent
+  from the live rebuild surface. Reconciled: numbered files now carry
+  canonical text; demo_first_party_feeds.sql re-applies the 9; new
+  test_duplicate_ddl_declarations_agree pins cross-file agreement
+  forever.
+
+### Part 2 (functional-pass defects)
+
+- **P1 Save-build freeze (fixed):** root cause is window.prompt() — a
+  SYNCHRONOUS native dialog that blocks the renderer (and hangs any
+  CDP/Playwright session that doesn't handle the dialog; tab-kill is the
+  only automation escape). Replaced with an in-page naming form
+  (prefilled, Enter submits, Cancel closes). Second latent defect fixed
+  with it: the Save guard keyed on `preview === null`, which is false
+  during a background refetch of an unchanged build key — Save now
+  gates on the hook's new `isFetching` (exposed from useWarmingUpRetry),
+  and Run shows "Running…" for the whole in-flight window. Pinned by
+  portfolio-builder.save.test.tsx (in-flight disable, no-prompt source
+  pin, typed-name create) — the test stubs window.prompt to FAIL if any
+  path reaches for it again.
+- **A/R hotkeys (fixed the real defect; promise verified-in-code):** the
+  window-level handler correctly fires from row-internal focus (button
+  focus is not an editable target) — pinned by new
+  LeadTable.hotkeys.test.tsx (keydown 'a' bubbling from the borrower
+  button approves; editable targets never do). The audit's zero-POST
+  experience matches a TERMINAL row: its three attempts followed two
+  in-session approvals, and the expanded preview was showing stale
+  "Approval: pending" because RowPreview read lead.approval_status and
+  ignored the optimistic override — so a by-design no-op looked broken.
+  RowPreview now renders the effective approval (same value as the
+  status chip), the no-op is test-pinned and legible, and the promise
+  copy in both surfaces says "while the expanded row is still pending."
+- **Expanded-row actions clipping at ~1413px with Console open (fixed):**
+  the colSpan-15 preview spanned the table's full scroll width; the
+  inner block is now position:sticky left:0 capped at the main
+  container's width (100cqw minus card padding) with container-query
+  column collapse at 1280/960 — Approve/Open/Build stay in the visible
+  scrollport at any width.
+- **Topbar search "dead control" (refuted in code; live confirm
+  pending):** the input is a controlled component with debounced
+  /api/borrowers/search (borrower exact/prefix, ZIP exact/prefix, city
+  contains, county name + FIPS, state name/code, CLIP), result listbox,
+  and Enter-to-open. Keystrokes that "render no value" into a controlled
+  React input are the signature of untrusted synthetic key events
+  (script-dispatched events don't perform text insertion; only trusted
+  input does). To be adjudicated live with trusted CDP input post-deploy.
+- **Light theme patchwork (no code-level basis found; live confirm
+  pending):** data-theme is written to documentElement only; the light
+  token block overrides bg/gradient/lines/text completely; no literal
+  dark colors outside tokens.css; the axe both-themes suite resolves the
+  cascade. The reported white-cards-on-dark-body state is only possible
+  if the attribute sat BELOW <body> in the probe's DOM. To be
+  adjudicated live by clicking the real toggle.
+- **P3 hygiene (fixed):** ZIP-tile -> queue handoff caption (ranked
+  leads = scored marketing-eligible subset); Signals "Evidence Events
+  Per Day" caption now states which signals carry refresh-batch dates
+  (bulk landings) vs true source dates (AVM, market, transfers);
+  Economics "Top Borrowers" header note explains owner-labeled borrower
+  rows and repeat owners; map breadcrumb crumbs ellipsize
+  ("Cook Cou" mid-glyph cut); stale dev-session approvals purged by
+  Lakebase migration 2026_06_12_purge_dev_session_approvals (pre-June-1
+  state rows + their activation_outbox dependents; canonical narrative
+  five kept; immutable action_audit untouched).

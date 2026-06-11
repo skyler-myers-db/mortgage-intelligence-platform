@@ -1,0 +1,43 @@
+# Module 0 — Re-Audit #3: Signoff Adjudication + Exhaustive Functional Pass
+
+> **Internal validation artifact — not approved for public release.**
+> Scope: (1) adversarial verification of the third remediation signoff (merge `112b585`,
+> evidence `d46ae95`); (2) a full interactive walkthrough of every product surface —
+> filters, sorts, drill-downs, approvals, Genie, themes, search — with data-accuracy
+> assertions. Live session ~12:00–12:30 PM EDT, Jun 11, authenticated, viewport ~1413×840.
+> No code modified. Companion: `full-stack-audit-2026-06-11.md`, `re-audit-2026-06-11-post-remediation.md`, `docs/modernization-todo.md`.
+
+## Part 1 — Verdict on signoff #3
+
+**Accepted: 10 of 12 verifiable claims CONFIRMED, 2 PARTIAL, 0 refuted.** Both of its "amplifications" of my re-audit were honest (the mypy concession is now pinned by `test_typecheck_ratchet.py` — executed live, 3/3 PASS: grow-block, wildcard-block, stale-ledger-block; the FAB concession is recorded in CSS + tracker). The salt-rotation precision (borrower_id = salt-independent `xxhash64(clip)`; owner-name surfaces shift) is correct and documented.
+
+Partials, for the record: **(a)** git framing — the range contains **6 vertical commits + merge + evidence**, not "8 vertical commits," and main was **0 ahead of origin** at audit time (the push had already landed; signoff text was stale on both counts). **(b)** "264 Vitest green" — 252 committed `it/test` declarations (+ `.each` expansions make ≈264 plausible); no committed artifact pins the number. Code-level verification confirmed: equity+ltv complementarity (SQL identity + test PASS), lifecycle CTAS metadata + 8/8 comments, comment-guard both-directions incl. demo feeds with `ARRAY<STRUCT>`/quoted-`<` parser handling (4/4 tests executed PASS), admin timestamps via `lib/time`, `--loading`/`--error` chip states (reduced-motion safe), aria-sort render test, Genie space loan-age=origination instructions wired to deploy rebind, grants 3× retry, hermeticity scan over `jobs/`+`tests/`.
+
+Two small new defects from the diff (doc-only / latent): the `silver_property_master.sql` header still says salt rotation "changes every masked identifier" (overbroad — contradicts the same slice's own correction), and `_ddl_comment_map` lets later-sorted DDL files shadow earlier declarations of the same table (001 vs 003 first-party tables), a guard blind spot.
+
+## Part 2 — Exhaustive functional pass
+
+**Verified working end-to-end (all on live UC data, zero console errors across the entire session):**
+full geography drill chain Home → US → Illinois → Cook County → ZIP 60617 → Lead Queue with `?state=IL&county=17031&zip=60617` and matching filter chips; out-of-coverage map tooltip ("Vermont — Outside Cotality evaluation scope") with honest em-dashes; keyboard drill hints (Enter/Space + breadcrumbs); column sorting with live `aria-sort` and strictly ordered values; row expand with rationale + decision-input chips; **approve via row button — two approvals POSTed 200, audit events (`outreach.approve` + auto `draft_outreach`) landed, and the Approved-outreach KPI advanced 31 → 35 across surfaces in real time**; Offer page state propagation; all five Analytics tabs (Executive / Geography / Economics / Segments / Signals) rendering live tables and charts; segment **multi-select AND** (In the Money ∩ Investor = 1,286; sibling cards re-scope; ranked table re-queries; header explains "must match every selected segment"); Portfolio **Run build** (deterministic 79,730 across runs); Genie "average loan age" exemption answering with sourced table (semantics now origination-based per space instructions — spot-check on stage per tracker note); FRED 283 rows; versioned offer rules + live audit explorer; glossary (categorized, "in this app" + "how to verify" per term); Console rail (theme/accent/density/tenant/24 saved leads); dark theme, accents, compact density.
+
+**Cross-surface data-accuracy assertions (all exact):** Σ state-rollup in-the-money = **117,189** = Home KPI = Genie's state breakdown (third independent surface, API-level); Geography tab IL 58.36K = Genie 58,361; ITM∩Investor ≤ min(ITM, Investor) with re-scoped cards; funnel monotone (5.16M ≥ 117.19K ≥ 3.99K; 4.47M offers; 35 approved ≥ 3 actioned); proof-drawer recompute equality and dossier LTV/equity/AVM arithmetic verified earlier in-session. My API-level equity+ltv sweep was inconclusive (wrong endpoint shape — returned 0 rows); the committed complementarity test + the signoff's 5.16M-row SQL sweep stand as evidence.
+
+### New defects found (none previously reported anywhere)
+
+**P1 — "Save build" during an in-flight build permanently freezes the tab.** Reproduced 2/2 (first incidentally, then deliberately in a fresh foreground tab): `/portfolio-builder` → Run build → Save build within ~1s → renderer hard-frozen (CDP unresponsive >45–90s, never recovers; tab must be killed). Run build alone is fine (~6s). This is a natural on-stage click sequence. Fix before June 15 (disable Save while a build is in flight, or make the save path async-safe).
+
+**P2 — The global topbar search is a dead control.** Present on every page, placeholder "Search borrower, ZIP, city, county, state." With the input focused (element-ref click), keystrokes are swallowed — no value renders, no suggestions, Enter does nothing on two routes. Either wire it or remove it before someone types into it on stage.
+
+**P2 — Light theme applies as a patchwork.** With `data-theme="light"` set (verified via DOM), `body` still computes `rgb(4,16,31)` and at least one `.surface` stays `rgb(12,35,64)`: white content cards sit on dark page gutters, dark left rail, dark hero band. Observed on two routes in two separate sessions. The axe both-themes suite passes contrast per-element, so it can't catch a half-applied canvas. Fix the body/rail/hero token application or keep the demo on dark.
+
+**P2 — The advertised A/R keyboard shortcuts don't fire in realistic focus states.** The page header and table both promise "Keyboard: A approves, R rejects the expanded row." Three live attempts (focus on the row's borrower button — the default state right after clicking a row — and on a row cell) produced zero approve POSTs; only the explicit button works. Fix the key-handler focus scope or remove the promise from the UI copy.
+
+**P3 (polish/demo-hygiene):** expanded-row preview shows stale "Approval: pending" after a successful approve (status chip updates, preview doesn't re-render); with the Console rail open the expanded row's action buttons clip off-canvas behind a horizontal scroll at ~1413px; ZIP-tile → queue handoff jumps metrics without labeling (tile "30,833" marketable → queue "1,379" ranked leads; the 4.5% ratio is consistent with the global funnel but unexplained on screen); Signals "Evidence Events Per Day" reads as refresh-batch archaeology (12.88M events on Jun 11, ~0 on Jun 4–9) rather than real-world event dates — semantics worth a caption or a better date column; Economics "Top Borrowers" labels rows `Owner <hash> · XXXX` while every other surface uses `B-` IDs (column says BORROWER, rows are owner-keyed; one owner appears twice — correct but unexplained); 28 aging test approvals (50d/30d) surface in the stale-approved queue under `Any` contactability — purge or backdate-tag seed-era approvals before the booth; "Cook Cou" breadcrumb chip truncates without ellipsis at the ZIP level; first `/v1/leads` hit after idle remains ~2.6s (known, accepted as process-local warm).
+
+### Session constraints, disclosed
+
+Backend pytest/mypy still can't execute in the audit sandbox (Python 3.10 vs ≥3.11) — ratchet/guard/complementarity tests **were** executed live this round via the verification agent (all PASS); the full suite remains CI-attested. Mac desktop verification: two desktop frames were captured and inspected earlier in the session (including the live Genie answer); later capture attempts found Safari/VS Code frontmost on both displays — you were using the machine, and I didn't steal focus. Two frozen `/portfolio-builder` tabs from the P1 repro were closed at session end.
+
+## Bottom line
+
+The remediation chain is real and compounding: across three audit rounds, every fix verified at code level has also verified live, the data is internally consistent to the row count across three independent surfaces, and the audit/approval governance loop now has my fingerprints in it from API, UI, and Genie paths alike. **Remaining before June 15:** the four interaction defects above (one P1 freeze, three P2s — search, light-theme canvas, keyboard promise), plus the P3 hygiene list. All are small, isolated, and demo-relevant — they exist precisely in the seams no prior round had clicked.
