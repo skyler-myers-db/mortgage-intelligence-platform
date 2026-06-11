@@ -27,7 +27,10 @@ WITH golden (id, economic_incentive, intent_trigger, fit, relationship, evidence
     ('case_09_null_component_coerced_to_zero',    100, 100, CAST(NULL AS INT), 100, 100,  85),
     ('case_10_all_nulls_return_zero_not_null',    CAST(NULL AS INT), CAST(NULL AS INT), CAST(NULL AS INT), CAST(NULL AS INT), CAST(NULL AS INT), 0),
     ('case_11_mid_itm_realistic',                  78,  62,  70,  55,  65,  68),
-    ('case_12_mid_heloc_realistic',                55,  88,  72,  60,  70,  69)
+    ('case_12_mid_heloc_realistic',                55,  88,  72,  60,  70,  69),
+    -- Float-drift sentinel (2026-06-11 audit P1-1): exact decimal 85.5 -> 86.
+    -- A float-based scorer drifts to 85.4999... and emits 85. SQL must say 86.
+    ('case_13_float_drift_zone_exact_half',        92,  94,  94,  85,  25,  86)
 )
 SELECT
   id,

@@ -16,10 +16,15 @@
 --              evidence           : 0.10
 --
 -- Rounding:  Round-half-to-even (banker's rounding) via Databricks `bround`.
---            The Python scorer (backend/services/scoring.py) MUST use
---            Python 3's built-in `round()`, which also bankers-rounds, to
---            stay identical. Golden fixtures in
---            tests/fixtures/lead_score_golden.json pin both.
+--            The SQL weight literals (0.35 etc.) are DECIMAL in Spark, so
+--            this function computes the weighted sum EXACTLY and brounds the
+--            exact value. The Python scorer (backend/services/scoring.py)
+--            MUST therefore use decimal.Decimal + ROUND_HALF_EVEN — NOT
+--            float + round(), which bankers-rounds a drifted binary float
+--            and diverged on ~0.67% of inputs (2026-06-11 audit P1-1; e.g.
+--            (92,94,94,85,25): exact 85.5 -> 86, float 85.4999... -> 85).
+--            Golden fixtures in tests/fixtures/lead_score_golden.json pin
+--            both, including drift-zone case_13.
 --
 -- Clipping:  Final value clipped to [0, 100]. In-range inputs cannot
 --            mathematically exceed 100, but the clip is defense-in-depth
