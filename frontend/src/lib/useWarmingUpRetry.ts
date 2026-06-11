@@ -76,6 +76,15 @@ export interface UseWarmingUpRetryResult<T> {
   error: ApiError | Error | null;
   /** Force a retry — resets attempt counter. */
   manualRetry: () => void;
+  /**
+   * True while ANY fetch is in flight — including a background refetch of
+   * an unchanged key where `data` is still the previous (stale) payload.
+   * Re-audit #3 (2026-06-12, P1): callers that gate mutations on
+   * "`data === null` means loading" miss exactly that refetch window —
+   * portfolio-builder's Save stayed clickable ~0s into a re-run build.
+   * Gate on `isFetching` for anything that must not race an in-flight load.
+   */
+  isFetching: boolean;
 }
 
 export interface UseWarmingUpRetryOpts {
@@ -155,5 +164,6 @@ export function useWarmingUpRetry<T>(
     warmingUp,
     error: query.error ?? null,
     manualRetry,
+    isFetching: query.isFetching,
   };
 }
