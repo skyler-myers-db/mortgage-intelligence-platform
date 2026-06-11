@@ -396,3 +396,65 @@ Decisions recorded:
     inspected.
   - Home "Ask Genie" CTA: SPA navigation, 0 full reloads.
   - Lead queue: 7 `th[aria-sort]` columnheaders; zero console errors.
+
+## 2026-06-11 Re-Audit Response (adversarial verification of the signoff)
+
+The re-audit (`docs/audits/re-audit-2026-06-11-post-remediation.md`)
+adjudicated the remediation signoff: 15 confirmed / 4 partial / 1 signoff
+claim refuted, 4 of 5 original-audit refutations sustained, 1 overturned.
+Every correction and new finding was independently re-verified and fixed
+on `fix/re-audit-2026-06-11-response`. Verdicts on its claims: ALL
+sustained — including two it understated:
+
+- **mypy wildcard (worse than stated):** my "backend/api is clean" probe
+  had auto-loaded pyproject, so the `backend.api.*` wildcard suppressed
+  its own evidence; removal exposed 43 errors in 12 routers. Honest
+  ratchet now: 12 routers enumerated explicitly (scheduled with the
+  post-Summit P2-4 router slice — same files), adoption ledger corrected
+  to 33 modules / 116 errors, and `test_typecheck_ratchet.py` fails on
+  any addition, wildcard, or stale ledger (60caf58).
+- **Genie FAB (overturned, conceded):** the prototype renders the fixed
+  FAB at ALL widths (Module 0 Prototype.html:773-785) — my earlier
+  validator conflated "topbar entry exists" with "FAB absent." The
+  desktop hide is reclassified as a documented deviation-by-choice
+  (34e58d4); tracker + CSS comment corrected.
+- **CTAS-metadata escapes closed (ee03ebd):** the lifecycle sync job's
+  bare rebuild (which deploy runs right AFTER the gold refresh restores
+  metadata) now re-declares clustering/properties and re-applies the DDL
+  comments; demo_first_party_feeds re-applies all five tables' table+
+  column comments. NEW `test_gold_column_comment_guard.py` pins
+  transformation/job comments == DDL both directions for every rebuild
+  surface — its first runs caught real pre-existing equity/ltv DDL drift
+  plus two parser traps (multiline ARRAY<STRUCT> and a `'< 0.03'`
+  comment that defeated bracket counting).
+- **equity + ltv = 101 (ee03ebd):** Spark ROUND is half-up, so an
+  exact-.5 CLTV rounded both ways; equity_pct is now
+  100 - <the same clamped/rounded ltv expression> (complement by
+  construction, no-signal default stays 0), DDL + COMMENT wording
+  aligned, construction test-pinned.
+- **Frontend truth (34e58d4):** admin-config's zone-naive clock formatter
+  routed through lib/time (the re-audit's "every clock time" gap);
+  freshness chip gains distinct --loading (accent pulse, reduced-motion
+  safe) and --error (warning) states; committed aria-sort render test
+  (7 columnheaders, none -> descending -> ascending walk).
+- **Deploy + Genie (a7a9117):** grants step retries 3x to absorb
+  warehouse warm-up before declaring authority failure; the Genie space
+  defines loan age = time since ORIGINATION (lockin_cohort), bans
+  refresh/ingest timestamps as loan-age inputs (live answer had returned
+  0.00 years from the refresh date). STAGE NOTE: avoid loan-age
+  questions in the booth demo until the rebound space is spot-checked.
+- **Docs truth (6ef050b):** silver_property_master header + data-contract
+  §7 no longer describe the removed salt fallback or call rotation
+  acceptable (borrower_id is salt-independent xxhash64(clip) — precision
+  the re-audit's own wording missed); .env.example documents the salt's
+  secret-scope home; leads freshness docstring carries the honest ~2x-TTL
+  compounded staleness bound; CLAUDE.md says eleven route modules; the
+  data-modeler memory that taught the live-parse-error CTAS syntax as
+  "working" is rewritten around the proven COMMENT ON COLUMN pattern;
+  hermeticity guard scans jobs/ + tests/ too.
+
+Re-audit notes accepted without code change: warm-after-idle first hit
+(~2.6s after app restarts — the rewarm loop is process-local by design;
+steady-state repeats are the booth path), and the prod run_as
+deploy-from-CI-as-SP recommendation (pre-existing checklist guidance,
+prod target untouched this close to Summit).
