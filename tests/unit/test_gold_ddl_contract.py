@@ -465,24 +465,15 @@ def test_uc_functions_are_wired_before_gold_ctas() -> None:
         "sql/_rendered/uc_functions/fn_lead_score.sql",
         "sql/_rendered/uc_functions/fn_next_best_offer.sql",
     )
-    expected_resource_paths = (
-        "../sql/uc_functions/fn_rate_spread.sql",
-        "../sql/uc_functions/fn_in_the_money.sql",
-        "../sql/uc_functions/fn_lead_score.sql",
-        "../sql/uc_functions/fn_next_best_offer.sql",
-    )
-
+    # 2026-06-11 audit P2-9: resources/jobs.yml mirror deleted —
+    # databricks.yml is the single source of bundle truth.
     bundle = (REPO_ROOT / "databricks.yml").read_text(encoding="utf-8")
-    resources = (REPO_ROOT / "resources" / "jobs.yml").read_text(encoding="utf-8")
 
     for task_key in expected_tasks:
         assert f"task_key: {task_key}" in bundle
-        assert f"task_key: {task_key}" in resources
 
     for path in expected_rendered_paths:
         assert path in bundle
-    for path in expected_resource_paths:
-        assert path in resources
 
     init_gold_match = re.search(
         r"- task_key:\s*init_gold_ddl\s*.*?depends_on:\s*(.*?)\n\s*sql_task:",
