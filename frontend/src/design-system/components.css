@@ -3449,12 +3449,17 @@ kbd {
   gap: var(--sp-2);
 }
 .data-estate__asset {
-  display: grid;
-  /* Name column keeps a readable floor; the auto-fit lane floor above
-     guarantees (7.5rem + meta + gaps) always fits inside a lane. */
-  grid-template-columns: minmax(7.5rem, 1fr) auto;
-  align-items: start;
-  gap: var(--sp-2);
+  /* Flex-with-wrap, not a 2-col grid (overflow probe 2026-06-11): the
+     first-party lane's meta carries the "demo synthetic" GOVERNANCE chip,
+     which overflowed a floor-width lane by ~80px and painted into the
+     neighbor. Ellipsizing a governance chip would hide its meaning, so
+     when the meta doesn't fit beside the name it wraps to its own
+     right-aligned line instead. */
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: var(--sp-1) var(--sp-2);
   min-width: 0;
   width: 100%;
   margin: calc(-1 * var(--sp-1));
@@ -3482,6 +3487,7 @@ kbd {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
+  flex: 1 1 7.5rem;
   min-width: 0;
   color: var(--text-2);
 }
@@ -3490,10 +3496,14 @@ kbd {
   line-height: var(--lh-snug);
 }
 .data-estate__asset-meta {
-  flex: 0 0 auto;
+  flex: 0 1 auto;
   display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  max-width: 100%;
+  margin-left: auto;
   align-items: center;
-  gap: var(--sp-2);
+  gap: var(--sp-1) var(--sp-2);
   color: var(--text-3);
   font-family: var(--font-mono);
 }
