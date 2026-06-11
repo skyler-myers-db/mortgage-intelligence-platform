@@ -57,6 +57,7 @@ from backend.services.observability import (
     sanitize_correlation_id,
     set_correlation_id,
 )
+from backend.services.static_assets import select_asset_variant
 from backend.version import api_version
 
 log = logging.getLogger("mip-runtime")
@@ -377,7 +378,12 @@ _backpressure_controller = BackpressureController()
 app.add_middleware(BackpressureMiddleware, controller=_backpressure_controller)
 app.add_middleware(CorrelationIdMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
-app.add_middleware(GZipMiddleware, minimum_size=1024)
+# compresslevel=6 (not the library default 9): dynamic JSON responses sit on
+# the request path, and levels 7-9 buy ~1-2% extra ratio for ~2x the CPU.
+# Static assets no longer rely on this middleware at all -- they are
+# precompressed at build time (brotli q11 / gzip 9) and served by the
+# negotiated /assets route below. 2026-06-10 perf slice.
+app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=6)
 
 
 # Slice-6: translate ``DependencyDownError`` (breaker open or all retries
@@ -538,8 +544,35 @@ def _api_404(full_path: str) -> JSONResponse:  # noqa: ARG001
 _FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
 
 if _FRONTEND_DIST.is_dir() and (_FRONTEND_DIST / "index.html").is_file():
-    # Hashed Vite assets.
-    app.mount("/assets", StaticFiles(directory=_FRONTEND_DIST / "assets"), name="assets")
+    # Hashed Vite assets — explicit route instead of a StaticFiles mount so
+    # we can serve the build-time precompressed ``.br``/``.gz`` siblings
+    # emitted by ``tools/precompress_assets.mjs`` (2026-06-10 perf slice).
+    # The request path never pays compression CPU for immutable assets and
+    # brotli's smaller payloads reach the wire. Identity fallback keeps the
+    # pre-precompress behaviour: GZipMiddleware compresses dynamically
+    # (Starlette skips responses that already carry Content-Encoding, so
+    # nothing is double-compressed). SecurityHeadersMiddleware continues to
+    # stamp the immutable Cache-Control for every /assets/ response.
+    _ASSETS_DIR = _FRONTEND_DIST / "assets"
+
+    @app.get("/assets/{asset_path:path}", response_model=None, include_in_schema=False)
+    def _hashed_asset(asset_path: str, request: Request) -> FileResponse | JSONResponse:
+        variant = select_asset_variant(
+            _ASSETS_DIR,
+            asset_path,
+            request.headers.get("accept-encoding"),
+        )
+        if variant is None:
+            return JSONResponse(status_code=404, content={"detail": "not found"})
+        headers = {"Vary": "Accept-Encoding"}
+        if variant.content_encoding is not None:
+            headers["Content-Encoding"] = variant.content_encoding
+        return FileResponse(
+            variant.path,
+            media_type=variant.media_type,
+            headers=headers,
+        )
+
     # Brand artwork (Entrada mark SVG + future brand assets).
     _BRAND_DIR = _FRONTEND_DIST / "brand"
     if _BRAND_DIR.is_dir():
