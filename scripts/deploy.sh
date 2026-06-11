@@ -415,13 +415,25 @@ if [[ -z "$_GRANTS_WAREHOUSE_ID" ]]; then
 fi
 while IFS= read -r _grant_stmt; do
   [[ -z "$_grant_stmt" ]] && continue
-  _grant_resp="$(databricks api post /api/2.0/sql/statements/ --json "$(
-    "$PYTHON" -c 'import json,sys; print(json.dumps({"warehouse_id": sys.argv[1], "statement": sys.argv[2], "wait_timeout": "50s", "on_wait_timeout": "CANCEL"}))' \
-      "$_GRANTS_WAREHOUSE_ID" "$_grant_stmt"
-  )")"
-  _grant_state="$(printf '%s' "$_grant_resp" | "$PYTHON" -c 'import json,sys; d=json.load(sys.stdin); print(d.get("status",{}).get("state",""))')"
+  # Re-audit 2026-06-11: a single 50s/CANCEL attempt reported a cold or
+  # queued warehouse as a misleading "grant failed". Retry the statement
+  # up to 3 attempts (the wait_timeout API ceiling is 50s per call) so
+  # warm-up latency is absorbed; a genuine authority failure still exits.
+  _grant_state=""
+  for _grant_try in 1 2 3; do
+    _grant_resp="$(databricks api post /api/2.0/sql/statements/ --json "$(
+      "$PYTHON" -c 'import json,sys; print(json.dumps({"warehouse_id": sys.argv[1], "statement": sys.argv[2], "wait_timeout": "50s", "on_wait_timeout": "CANCEL"}))' \
+        "$_GRANTS_WAREHOUSE_ID" "$_grant_stmt"
+    )")"
+    _grant_state="$(printf '%s' "$_grant_resp" | "$PYTHON" -c 'import json,sys; d=json.load(sys.stdin); print(d.get("status",{}).get("state",""))')"
+    [[ "$_grant_state" == "SUCCEEDED" ]] && break
+    if [[ "$_grant_try" -lt 3 ]]; then
+      echo "  grant attempt ${_grant_try} ended ${_grant_state:-no-state} (warehouse warming?) — retrying"
+      sleep 5
+    fi
+  done
   if [[ "$_grant_state" != "SUCCEEDED" ]]; then
-    echo "${RED}[deploy] UC grant failed (${_grant_state:-no-state}): ${_grant_stmt}${RST}" >&2
+    echo "${RED}[deploy] UC grant failed after 3 attempts (${_grant_state:-no-state}): ${_grant_stmt}${RST}" >&2
     printf '%s\n' "$_grant_resp" | "$PYTHON" -c 'import json,sys; d=json.load(sys.stdin); print(json.dumps(d.get("status",{}).get("error",{}), indent=2)[:600])' >&2 || true
     echo "  Likely cause: the deploying identity lacks GRANT authority on catalog '${_GRANTS_CATALOG}'." >&2
     echo "  A metastore admin can apply docs/security/GRANTS.md once; reruns are idempotent." >&2

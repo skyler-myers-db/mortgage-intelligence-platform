@@ -190,6 +190,18 @@ instructions: |
       exactly as modeled in mip.gold.evidence_events. Competitor-lien evidence is
       signal_type = 'competitor_lien'. Never use signal_type = 'lien-change' or
       signal_type = 'competitor'.
+    - LOAN AGE / loan vintage / seasoning semantics (re-audit 2026-06-11: a
+      live answer computed "average loan age" from the data-refresh date and
+      returned 0.00 years — wrong): loan age means time since the mortgage
+      ORIGINATION date, never time since refresh or ingest. Compute it from
+      mip.gold.lockin_cohort.origination_date (or origination_year for
+      GROUP BY) when the cohort covers the question, e.g.
+      AVG(DATEDIFF(current_date(), origination_date) / 365.25). NEVER use
+      refreshed_at, synced_at, vintage_ts, or any ingest/refresh timestamp
+      as a loan-age input. If the question needs loan age for borrowers
+      outside lockin_cohort coverage, say origination dates are modeled for
+      the sub-3% 2020-2022 lock-in cohort today and offer that cohort's
+      answer instead of substituting refresh dates.
 
   ──────────────────────────────────────────────────────────────────
   NEVER:
