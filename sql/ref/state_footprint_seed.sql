@@ -80,7 +80,15 @@ USING (
     ('WA', 'Washington',     47, FALSE),
     ('WV', 'West Virginia',  48, FALSE),
     ('WI', 'Wisconsin',      49, FALSE),
-    ('WY', 'Wyoming',        50, FALSE)
+    ('WY', 'Wyoming',        50, FALSE),
+    -- 2026-06-11 audit P3: display names for non-state jurisdictions that
+    -- appear in public-record property data. Coverage stays data-driven
+    -- (this table is labels, not footprint); without these rows a share
+    -- refresh containing DC/PR/VI parcels would render bare codes in the
+    -- geography drill-down.
+    ('DC', 'District of Columbia', 51, FALSE),
+    ('PR', 'Puerto Rico',          52, FALSE),
+    ('VI', 'U.S. Virgin Islands',  53, FALSE)
 ) AS s
 ON t.state_code = s.state_code
 WHEN MATCHED THEN UPDATE SET

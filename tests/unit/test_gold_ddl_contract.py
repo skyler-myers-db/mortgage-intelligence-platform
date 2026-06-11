@@ -421,11 +421,15 @@ def test_assert_borrower_360_fresh_sentinel_exists() -> None:
 
 
 def test_sentinel_wired_in_bundle_definitions() -> None:
-    """Both databricks.yml and resources/jobs.yml must declare the sentinel
-    task (`assert_borrower_360_fresh`) and the seed task
+    """databricks.yml must declare the sentinel task
+    (`assert_borrower_360_fresh`) and the seed task
     (`capture_refresh_timestamp`) inside the `mip_refresh_scores` job
-    definition. A future edit that reverts either wiring should fail CI."""
-    for name in ("databricks.yml", "resources/jobs.yml"):
+    definition. A future edit that reverts either wiring should fail CI.
+
+    2026-06-11 audit P2-9: resources/jobs.yml was a dead, drifting mirror
+    (databricks.yml has no `include:`), so it was deleted and dropped from
+    this loop — databricks.yml is the single source of bundle truth."""
+    for name in ("databricks.yml",):
         text = (REPO_ROOT / name).read_text(encoding="utf-8")
         assert "capture_refresh_timestamp" in text, (
             f"{name}: missing capture_refresh_timestamp task "

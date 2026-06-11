@@ -5,3 +5,5 @@
 - [Gold Lakeflow DLT retired](project_gold_pipeline_delegates_to_sql.md) — mip_gold_pipeline.py deleted in slice13-accuracy; CTAS chain in mip_refresh_scores is authoritative.
 - [Slice13 accuracy — two data gaps](project_slice13_accuracy.md) — historical-lender dedup fix + mip.ref.lender_dictionary promotion on 2026-04-21.
 - [R6-12 retention fix](project_r612_retention_fix.md) — lender dict equi-JOIN missed Summit variants; LIKE fallback restored 2026-04-23.
+- [Gold CTAS re-declares DDL metadata](project_gold_ctas_redeclares_ddl_metadata.md) — COR TABLE drops CLUSTER BY/COMMENT/TBLPROPERTIES each refresh; re-declare via typeless column-COMMENT list before AS (audit P2-8).
+- [Gold refresh forbids CURRENT_TIMESTAMP](project_gold_refresh_forbids_current_timestamp.md) — refreshed_at/snapshot_at must read mip.ref.refresh_run_state; test_gold_ddl_contract pins no CURRENT_TIMESTAMP( in body.

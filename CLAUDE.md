@@ -87,15 +87,15 @@ If a command fails, fix the root cause before moving to another feature. Do not 
 - **Data plane (Unity Catalog, default catalog `mip`):** raw share → `sql/transformations/silver_*.sql` → `sql/transformations/gold_*.sql` → `sql/metric_views/*` consumed by the app and Genie. UC SQL functions in `sql/uc_functions/` (`fn_in_the_money`, `fn_lead_score`, `fn_next_best_offer`, `fn_rate_spread`) are the canonical scoring primitives — keep Python scoring in `backend/services/scoring.py` consistent with them.
 - **App state:** Lakebase Postgres (`lakebase/schema.sql`) holds campaigns, approvals, agent sessions, audit, feedback. Sample-lender seed in `lakebase/seed_campaigns.sql`.
 - **Test fixtures (not a runtime mode):** `tests/fixtures/mock_population.py` and `frontend/src/mocks/fixtureData.ts` exist for unit tests and Storybook only. Production routers do NOT import them. There is no `MIP_MOCK_MODE` runtime toggle — the app runs on live Unity Catalog + Lakebase in every environment. Real-world flakiness is handled by `backend/services/resilience.py` (retry, warm-start, short-TTL cache, circuit breaker) and by explicit degraded-state UI, never by silent mock fallback.
-- **Frontend:** Vite + React Router. Eight routes in `frontend/src/routes/` map 1:1 to the product flow; shared UI in `components/mortgage/` (EvidenceDrawer, KpiCard, LeadTable, SegmentCard, ApprovalBanner, TriggerTimeline). Design tokens live in `design-system/tokens.css` — don't inline colors.
-- **Databricks bundle:** `databricks.yml` declares app, serverless SQL warehouse, jobs, pipelines, dashboards, Genie space, Lakebase instance, MLflow experiment. Per-resource YAML lives in `resources/`, `jobs/`, `pipelines/lakeflow/`.
+- **Frontend:** Vite + React Router. Twelve routes in `frontend/src/routes/` (the eight contracted product-flow routes plus analytics, asset detail, glossary, admin-config); shared UI in `components/mortgage/` (EvidenceDrawer, KpiCard, LeadTable, SegmentCard, ApprovalBanner, TriggerTimeline). Design tokens live in `design-system/tokens.css` — don't inline colors.
+- **Databricks bundle:** `databricks.yml` declares ALL resources inline (app, serverless SQL warehouse, jobs, pipelines, dashboards, Genie space, Lakebase instance, MLflow experiment). Job task source files live in `jobs/` and `pipelines/lakeflow/`; do not add YAML mirrors of bundle resources — mirrors buy drift, not modularity.
 
 ## Start here when a task is vague
 
 - Nav + routes:        `frontend/src/app.tsx`
 - API surface:         `backend/main.py` (router registry)
 - Scoring truth:       `sql/uc_functions/fn_lead_score.sql` + `backend/services/scoring.py`
-- Test fixtures:       `tests/fixtures/mock_population.py`, `frontend/src/mocks/demoData.ts` (test-only; not imported by production routers)
+- Test fixtures:       `tests/fixtures/mock_population.py`, `frontend/src/mocks/fixtureData.ts` (test-only; not imported by production routers)
 - **Design truth:**    `design_files/` (see "Design source of truth" below — load before any UI work)
 - Build plan:          `docs/implementation-plan.md`
 - Talk track:          `docs/module0-talk-track.md`
@@ -183,5 +183,5 @@ The product is ready when:
 - Frontend build passes.
 - Unit tests pass (scoring primitives pinned by golden fixtures) AND integration tests pass against real UC (nightly parity run green).
 - Playwright e2e passes against the live app, exercising the full product flow on real data.
-- `databricks bundle validate` passes with the real `sql_warehouse_id` and `genie_space_id`.
+- `databricks bundle validate -t dev` passes (warehouse + Genie space ids resolve from `.env.local` / bundle vars).
 - `docs/module0-talk-track.md` supports a 6–8 minute presentation grounded in the multi-state real-data story.

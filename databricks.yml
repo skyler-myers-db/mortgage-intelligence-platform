@@ -715,10 +715,6 @@ resources:
             file:
               path: sql/_rendered/transformations/gold_funnel_snapshot_daily.sql
 
-    mip_snapshot_dashboards:
-      name: mip_snapshot_dashboards
-      tasks: []
-
     # Slice 5 real-data migration: apply Lakebase DDL + seed sample
     # campaigns. Python task invokes jobs/lakebase_migrate.py which
     # opens a psycopg3 connection to the instance created above and

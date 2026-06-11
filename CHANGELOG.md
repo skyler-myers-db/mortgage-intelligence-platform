@@ -8,6 +8,31 @@ deprecation window first.
 
 ## Unreleased
 
+### 2026-06-11 full-stack audit remediation
+
+- **Behavioral:** `lead_score` now computes in exact decimal arithmetic to
+  match `fn_lead_score`'s Spark DECIMAL semantics — Python scores shift by
+  ±1 on ~0.67% of inputs (exact-.5 boundaries), eliminating false
+  "integrity gap" warnings in the borrower proof drawer.
+- Added optional `MIP_APPROVER_EMAILS` allowlist; when set,
+  `/api/outreach/approve|reject` return 403 for non-approver, non-admin
+  callers (empty default preserves the permissive Module 0 demo posture).
+- Added `MIP_LEADS_WARM_INTERVAL_S` (default 240): startup +
+  refresh-ahead warming of the default `/api/leads` page so hero-route
+  loads hit cache instead of a 3.6-6.6s cold warehouse query.
+- Fair-lending prompt guard now exempts loan-attribute vocabulary
+  ("average loan age") and geographic proper nouns ("White Plains");
+  protected-class usage still refuses.
+- Lakebase narrative seed approvals reference real `gold.borrower_360`
+  IDs; `mip_app.approvals.borrower_id` gains a `B-[0-9A-Z]{13}` CHECK.
+- `deploy.sh` now applies UC + Lakebase grants and provisions the
+  `mip/pii-salt-v1` secret scope itself (fresh-workspace zero-click).
+- Gold CTAS refreshes re-declare clustering, column comments, and
+  TBLPROPERTIES; `borrower_360.ltv` now prefers Cotality CLTV exactly
+  like `equity_pct`.
+
+### Earlier unreleased
+
 - Added admin-only `/api/v1/admin/operations` and
   `/api/v1/admin/operations/run` for audited Databricks refresh job status and
   launch.

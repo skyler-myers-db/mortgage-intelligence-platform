@@ -145,12 +145,17 @@ source_rows AS (
       WHEN COUNT_IF(series_id = 'MORTGAGE30US' AND is_latest) > 0 THEN 'error'
       ELSE 'configured_empty'
     END AS status,
-    COUNT_IF(series_id = 'MORTGAGE30US' AND is_latest) AS row_count,
+    -- 2026-06-11 audit P3: row_count is data VOLUME (all MORTGAGE30US
+    -- weekly observations), consistent with every sibling source row.
+    -- The old COUNT_IF(... AND is_latest) was always 0/1 and rendered as
+    -- a confusing "1 rows" in Admin readiness; latest-snapshot freshness
+    -- still drives status/last_updated/note below.
+    COUNT_IF(series_id = 'MORTGAGE30US') AS row_count,
     MAX(CASE WHEN series_id = 'MORTGAGE30US' AND is_latest THEN vintage_ts END) AS last_updated,
     CASE
       WHEN COUNT_IF(series_id = 'MORTGAGE30US' AND is_latest AND source = 'fred'
         AND observation_week >= current_date() - INTERVAL 14 DAYS) > 0
-      THEN 'FRED MORTGAGE30US weekly market rate · live'
+      THEN 'FRED MORTGAGE30US weekly observations · scoring uses the single is_latest snapshot · live'
       WHEN COUNT_IF(series_id = 'MORTGAGE30US' AND is_latest AND source <> 'fred') > 0
       THEN 'Latest MORTGAGE30US row is seed or non-FRED; refresh required'
       WHEN COUNT_IF(series_id = 'MORTGAGE30US' AND is_latest) > 0
