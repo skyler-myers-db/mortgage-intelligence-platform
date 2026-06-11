@@ -44,6 +44,22 @@ from typing import Any
 
 _UC_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
+# Re-audit 2026-06-11: this job's CREATE OR REPLACE TABLE rebuild dropped
+# the DDL column comments on every hourly sync (the audit-P2-8 fix covered
+# the transformations CTAS but not this job). Re-applied after the rebuild;
+# MUST stay byte-identical to sql/ddl/003_gold_tables.sql §7 — parity is
+# pinned by tests/unit/test_gold_column_comment_guard.py.
+LIFECYCLE_COLUMN_COMMENTS: dict[str, str] = {
+    "borrower_id": "Masked borrower id; matches borrower_360.borrower_id.",
+    "approval_status": "pending / approved / rejected / hold. Derived from latest decided_at row in mip_app.approvals.",
+    "outreach_status": "queued / actioned / none. Derived from latest outreach state.",
+    "offer_code": "Latest offer_code associated with the approval decision.",
+    "approved_at": "decided_at for the latest approve action; NULL when not approved.",
+    "outreach_at": "Timestamp of latest outreach action.",
+    "synced_at": "Last sync run that touched this row.",
+    "refreshed_at": "Lakebase mirror refresh boundary for this lifecycle snapshot; distinct from the scoring gold refresh boundary.",
+}
+
 
 def _catalog_default() -> str:
     return (os.environ.get("MIP_DEFAULT_CATALOG") or "mip").strip() or "mip"
@@ -276,8 +292,22 @@ def _write_gold(rows: list[dict[str, Any]], *, catalog: str) -> None:
 
     # Seed every known borrower to the default. A LEFT ANTI against the
     # valid Lakebase rows guarantees no duplicate.
+    #
+    # Re-audit 2026-06-11: this CTAS re-declares CLUSTER BY/TBLPROPERTIES
+    # and re-applies column COMMENTs below, mirroring
+    # sql/ddl/003_gold_tables.sql §7 — the audit-P2-8 fix covered the
+    # sql/transformations CTAS but THIS job also rebuilds the table (deploy
+    # step right after the gold refresh) and was silently dropping the
+    # metadata again.
     spark.sql(f"""
-        CREATE OR REPLACE TABLE {lifecycle_table} AS
+        CREATE OR REPLACE TABLE {lifecycle_table}
+        CLUSTER BY (borrower_id)
+        TBLPROPERTIES (
+          'delta.enableChangeDataFeed' = 'false',
+          'delta.autoOptimize.optimizeWrite' = 'true',
+          'delta.autoOptimize.autoCompact'   = 'true'
+        )
+        AS
         WITH sync_anchor AS (
           SELECT CURRENT_TIMESTAMP() AS mirror_refreshed_at
         )
@@ -307,6 +337,13 @@ def _write_gold(rows: list[dict[str, Any]], *, catalog: str) -> None:
         LEFT ANTI JOIN _mip_lifecycle_valid AS l
           ON l.borrower_id = b.borrower_id
     """)
+
+    # Column comments survive the rebuild (Genie grounding + asset page).
+    for column, comment in LIFECYCLE_COLUMN_COMMENTS.items():
+        escaped = comment.replace("'", "''")
+        spark.sql(
+            f"COMMENT ON COLUMN {lifecycle_table}.{column} IS '{escaped}'"
+        )
 
 
 def build_parser() -> argparse.ArgumentParser:

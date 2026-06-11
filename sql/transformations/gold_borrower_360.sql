@@ -299,27 +299,32 @@ enriched AS (
     m.market_rate_fraction,
     -- Rate spread via frozen UDF. Both sides fractional.
     mip.gold.fn_rate_spread(b.first_pos_rate, m.market_rate_fraction) AS rate_spread_bps,
-    -- Equity % derived preferentially from estimated_cltv (Cotality-computed
-    -- CLTV is authoritative when present), with fallback to avm / lien math.
-    -- Result clipped to [0, 100].
-    CAST(
-      GREATEST(0, LEAST(100, CASE
+    -- Equity % is the EXACT COMPLEMENT of the rounded ltv expression below
+    -- (re-audit 2026-06-11: independently rounding equity and ltv made an
+    -- exact-.5 CLTV render equity + ltv = 101 in the dossier — Spark ROUND
+    -- is half-up, so e.g. cltv 74.5 gave ltv 75 AND equity 26). Computing
+    -- equity as 100 - <the same clamped/rounded ltv> guarantees the pair
+    -- always sums to 100 whenever loan data exists. The no-signal default
+    -- stays 0, NOT the complement — "no data" must never read as
+    -- "free and clear" on a contact-prioritization surface.
+    CAST(CASE
+      WHEN (b.estimated_cltv IS NOT NULL AND b.estimated_cltv > 0)
+        OR (b.avm_value IS NOT NULL AND b.avm_value > 0)
+      THEN 100 - GREATEST(0, LEAST(100, CASE
         WHEN b.estimated_cltv IS NOT NULL AND b.estimated_cltv > 0
-          THEN ROUND(100 - b.estimated_cltv)
-        WHEN b.avm_value IS NOT NULL AND b.avm_value > 0
-          THEN ROUND(100.0 * (b.avm_value - COALESCE(b.total_open_lien_balance, 0)) / b.avm_value)
-        ELSE 0
+          THEN ROUND(b.estimated_cltv)
+        ELSE ROUND(100.0 * COALESCE(b.total_open_lien_balance, 0) / b.avm_value)
       END))
-    AS INT) AS equity_pct,
+      ELSE 0
+    END AS INT) AS equity_pct,
     CAST(GREATEST(0, COALESCE(b.avm_value, 0) - COALESCE(b.total_open_lien_balance, 0)) AS BIGINT)
       AS equity_estimate,
-    -- LTV: mirror equity_pct's source preference so the dossier can never show
-    -- equity and LTV derived from different inputs. Both prefer the Cotality-
-    -- modeled estimated_cltv when present and positive; both fall back to the
-    -- AVM/lien math otherwise. Result clipped to [0, 100]. (Audit P2-11: the
-    -- prior implementation always used lien/avm while equity_pct preferred
-    -- estimated_cltv, so equity_pct and ltv could come from different sources
-    -- and (ltv + equity_pct) was not guaranteed to be 100.)
+    -- LTV: prefers the Cotality-modeled estimated_cltv when present and
+    -- positive; falls back to AVM/lien math. Clipped to [0, 100].
+    -- equity_pct above is derived as 100 - THIS expression, so the dossier
+    -- pair is complementary by construction (audit P2-11 + re-audit
+    -- 2026-06-11 exact-.5 rounding fix). Keep the CASE branches here and
+    -- in equity_pct identical when editing.
     CAST(
       GREATEST(0, LEAST(100, CASE
         WHEN b.estimated_cltv IS NOT NULL AND b.estimated_cltv > 0
@@ -763,7 +768,7 @@ COMMENT ON COLUMN mip.gold.borrower_360.situs_cbsa_code IS 'CBSA metro code. Gol
 COMMENT ON COLUMN mip.gold.borrower_360.county_fips_5 IS '5-char FIPS county code (2-char state + 3-char county) from silver.property_master.fips_county_code. Feeds gold.county_rollup + gold.zip_rollup. NULL for the ~0.2% of rows where silver has no county geocode.';
 COMMENT ON COLUMN mip.gold.borrower_360.segment_codes IS 'Ordered list of SegmentCode Literals (itm/listed/permit/investor/equity/retention) this borrower belongs to.';
 COMMENT ON COLUMN mip.gold.borrower_360.equity_estimate IS 'USD: GREATEST(0, avm_value - total_open_lien_balance).';
-COMMENT ON COLUMN mip.gold.borrower_360.equity_pct IS '0..100. CAST(100 - estimated_cltv AS INT) fallback to derived avm/lien. Feeds fn_in_the_money + fn_next_best_offer.';
+COMMENT ON COLUMN mip.gold.borrower_360.equity_pct IS '0..100 int. Exact complement of ltv (100 - rounded ltv) whenever loan data exists, so equity + ltv always sums to 100; 0 when no CLTV/AVM signal. Feeds fn_in_the_money + fn_next_best_offer.';
 COMMENT ON COLUMN mip.gold.borrower_360.rate_spread_bps IS 'fn_rate_spread(first_pos_rate, market_rate_fraction). Positive = above market = refi opportunity.';
 COMMENT ON COLUMN mip.gold.borrower_360.market_rate_fraction IS 'Fractional market rate from silver.market_rates_weekly WHERE is_latest=TRUE. Router maps to WhyPanel.market_rate.';
 COMMENT ON COLUMN mip.gold.borrower_360.opportunity_score IS 'fn_lead_score output. 0..100.';
