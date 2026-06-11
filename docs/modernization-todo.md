@@ -564,3 +564,47 @@ LARGER than reported, one is refuted-in-code pending live confirmation.
   Lakebase migration 2026_06_12_purge_dev_session_approvals (pre-June-1
   state rows + their activation_outbox dependents; canonical narrative
   five kept; immutable action_audit untouched).
+
+### Re-audit #3 response deployed evidence (2026-06-11, merges b21c02d + budget-fix)
+
+- Validation: pytest exit 0; **Vitest 270/270 (50 files)** — the committed
+  answer to the "264 uncommitted" partial; ruff/mypy/eslint/CSS-literal
+  clean; tsc+vite build exit 0; bundle validate OK.
+- Deploy: ./scripts/deploy.sh -t dev --no-confirm exit 0 — migrate,
+  silver, FRED, scores, lifecycle sync all TERMINATED SUCCESS; smoke
+  PASS. (First attempt failed at preflight: the interactive confirm
+  read EOF under a non-TTY shell — operator note: use --no-confirm in
+  automation.) Budget-fix app snapshot redeployed: SUCCEEDED.
+- **P1 freeze dead (live)**: Run build -> immediate Save leaves the
+  renderer responsive (evaluate proves the loop alive; the old prompt()
+  hung CDP here); inline naming form opens; full save roundtrip
+  POST /api/v1/portfolio/create -> 200 with campaign id + audit_event_id
+  after the budget fix. Live-found defect fixed along the way: the
+  optional Budget field sent budget_usd: null and the schema 422'd EVERY
+  default save ("must be numeric") — null now means omitted, pinned in
+  test_marketing_safety.py. Verification campaign archived via PATCH
+  (status=archived, rationale on record).
+- **A/R hotkeys (live, trusted input)**: borrower-button focus + key 'a'
+  -> POST /v1/outreach/draft 200 -> /v1/outreach/approve 200 -> cell
+  flips "Approved", preview shows the effective state. The audit's
+  zero-POST experience reproduces only on terminal rows (by-design
+  no-op), which the stale preview had mislabeled.
+- **Topbar search REFUTED as dead (live, trusted input)**: typed value
+  renders ("Cook"), suggestions listbox opens, "60617" + Enter navigates
+  to borrower-360. The audit's swallowed keystrokes match untrusted
+  synthetic events, which cannot insert text into a controlled input.
+- **Light theme REFUTED as patchwork (live, real toggle)**: html
+  data-theme=light with body rgb(244,247,250), rail + surface white —
+  full-canvas flip, screenshot on file; toggled back to dark for booth.
+- Clipping: expanded-row primary action right edge 274px inside a
+  1413px viewport with Console open. Crumbs: US/Illinois/Cook County all
+  computed text-overflow: ellipsis at ZIP depth.
+- Purge proof: /api/leads?funnel_stage=approved&aged_days=14 -> 0 rows.
+- **Genie loan-age stage note CLEARED**: "What is the average loan age?"
+  -> 5.25 years via DATEDIFF(current_date(), origination_date)/365.25
+  FROM mip.gold.lockin_cohort (refresh date is provenance only). The
+  broader phrasing ("across the portfolio") fail-closes via the numeric-
+  claims verifier rather than guessing — honest, but stick to the plain
+  phrasing on stage.
+- Console: the single page error during verification was the
+  since-fixed portfolio-create 422; the budget fix removes its trigger.
