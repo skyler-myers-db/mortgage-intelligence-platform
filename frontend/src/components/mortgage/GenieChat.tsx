@@ -657,6 +657,7 @@ export function GenieChat() {
         role="dialog"
         aria-modal="true"
         aria-label="Genie chat"
+        aria-keyshortcuts="Escape"
         aria-hidden={!genieOpen}
         style={{
           // FIX Δ2 (size) + FIX ε2 (position). Inline size always wins
@@ -756,6 +757,7 @@ export function GenieChat() {
               setGenieOpen(false);
             }}
             aria-label="Close Genie"
+            title="Close (Esc)"
             type="button"
           >
             <Icon name="close" size={14} />

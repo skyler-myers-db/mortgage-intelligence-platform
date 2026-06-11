@@ -1,4 +1,4 @@
-import type { ButtonHTMLAttributes, PropsWithChildren } from 'react';
+import type { ButtonHTMLAttributes, PropsWithChildren, Ref } from 'react';
 import { Icon, type IconName } from './Icon';
 import { useApp, type DrawerSource } from './AppContext';
 
@@ -38,6 +38,10 @@ interface BtnProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   size?: ButtonSize;
   icon?: IconName;
   iconEnd?: IconName;
+  // React 19 passes `ref` as a normal prop; forwarding it lets callers
+  // capture the underlying <button> (e.g. LeadTable focus restoration)
+  // without wrapping the primitive in forwardRef.
+  ref?: Ref<HTMLButtonElement>;
 }
 
 export function Button({ variant = 'default', size = 'default', icon, iconEnd, children, className, ...rest }: BtnProps) {

@@ -10,7 +10,7 @@
   },
   "scripts": {
     "dev": "vite --host 0.0.0.0",
-    "build": "tsc -b && vite build",
+    "build": "tsc -b && vite build && node ../tools/precompress_assets.mjs",
     "budget": "node ../tools/check_frontend_budgets.mjs",
     "preview": "vite preview --host 0.0.0.0",
     "test": "vitest run",

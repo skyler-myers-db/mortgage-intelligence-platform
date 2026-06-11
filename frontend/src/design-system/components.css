@@ -2148,6 +2148,36 @@ kbd {
   margin-top: var(--sp-1);
   line-height: var(--lh-snug);
 }
+/* Keyboard discoverability hint for the focusable geographies. Always
+   present in the DOM so screen readers announce it as part of the legend,
+   but visually hidden (mirrors the .sr-skip-link technique) until a map
+   region takes keyboard focus — then .map-wrap:focus-within reveals it so
+   sighted keyboard users learn the drill affordance. */
+.map-legend__hint {
+  display: block;
+  margin-top: var(--sp-1);
+  font-size: 10px;
+  color: var(--text-3);
+  line-height: var(--lh-snug);
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  overflow: hidden;
+  white-space: nowrap;
+  width: 1px;
+  height: 1px;
+}
+.map-legend__hint kbd {
+  font-size: 10px;
+  color: var(--text-1);
+}
+.map-wrap:focus-within .map-legend__hint {
+  clip: auto;
+  clip-path: none;
+  overflow: visible;
+  white-space: normal;
+  width: auto;
+  height: auto;
+}
 
 /* ZIP-tile grid — the drill's ZIP layer for non-Cook counties. Rendered as
    an HTML/CSS grid (not SVG) so tiles use design-system tokens and land

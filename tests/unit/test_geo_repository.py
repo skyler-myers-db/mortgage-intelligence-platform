@@ -483,3 +483,175 @@ def test_zip_rollups_filtered_all_mode_reads_borrower_360_with_fips() -> None:
         "segment_3": "retention",
         "fips_5": "12011",
     }
+
+
+# ---------------------------------------------------------------------------
+# Cache semantics: single-flight + stale-if-error (perf slice 2026-06-10).
+# The geo rollups are read-only visualization aggregates, so they follow the
+# portfolio-preview precedent (serve last-good on transient refresh failure)
+# rather than the segment-list fail-visible precedent. A COLD cache still
+# fails visibly -- no fabricated empty map, per the no-mock-fallback posture.
+# ---------------------------------------------------------------------------
+
+
+class _SlowFakeSqlClient(_FakeSqlClient):
+    """Fake client whose first execute blocks long enough for concurrent
+    callers to pile onto the same cache key, proving single-flight."""
+
+    def __init__(self, delay_s: float = 0.1) -> None:
+        super().__init__()
+        self._delay_s = delay_s
+
+    def execute(
+        self,
+        statement: str,
+        parameters: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        import time as _time
+
+        _time.sleep(self._delay_s)
+        return super().execute(statement, parameters)
+
+
+_STATE_ROWS = [
+    {
+        "state": "IL",
+        "addressable": 1860,
+        "in_the_money": 720,
+        "top_tier_opportunities": 420,
+        "avg_score": 84,
+        "snapshot_date": "2026-04-22",
+        "top_segment_code": "itm",
+    },
+]
+
+_COUNTY_ROWS = [
+    {
+        "fips_5": "17031",
+        "state": "IL",
+        "county_name": "Cook",
+        "addressable_borrowers": 900,
+        "in_the_money_borrowers": 400,
+        "high_opportunity_borrowers": 200,
+        "avg_opportunity_score": 82,
+        "top_segment_code": "itm",
+        "snapshot_date": "2026-04-22",
+    },
+]
+
+_ZIP_ROWS = [
+    {
+        "zip": "60601",
+        "state": "IL",
+        "county_fips_5": "17031",
+        "addressable_borrowers": 120,
+        "avg_opportunity_score": 81,
+        "top_segment_code": "itm",
+        "sample_borrower_id": "B-0000000000001",
+        "snapshot_date": "2026-04-22",
+    },
+]
+
+
+def test_state_rollups_singleflight_coalesces_concurrent_misses() -> None:
+    """A burst of concurrent callers on a cold key must issue ONE
+    warehouse query; followers wait for the leader instead of stampeding."""
+    import threading
+
+    client = _SlowFakeSqlClient(delay_s=0.1)
+    client.responses = [(".gold.funnel_snapshot_daily", list(_STATE_ROWS))]
+    repo = DatabricksGeoRepository(client, cache_ttl_s=60.0)
+
+    results: list[StateRollupResponse] = []
+    errors: list[BaseException] = []
+
+    def _call() -> None:
+        try:
+            results.append(repo.state_rollups())
+        except BaseException as exc:  # noqa: BLE001 -- surfaced in assertion
+            errors.append(exc)
+
+    threads = [threading.Thread(target=_call) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=5.0)
+
+    assert not errors, errors
+    assert len(results) == 4
+    assert all(r.rollups[0].state == "IL" for r in results)
+    # The whole point: one SQL round-trip, not four.
+    assert len(client.calls) == 1, [c[0][:60] for c in client.calls]
+
+
+def test_state_rollups_serves_stale_on_expired_refresh_failure() -> None:
+    """Expired key + warehouse flap => last-good frame, not a blank map."""
+    clock = [0.0]
+    client = _FakeSqlClient()
+    client.responses = [(".gold.funnel_snapshot_daily", list(_STATE_ROWS))]
+    repo = DatabricksGeoRepository(
+        client,
+        cache=TTLCache(now=lambda: clock[0]),
+        cache_ttl_s=10.0,
+    )
+
+    first = repo.state_rollups()
+    assert first.rollups[0].addressable == 1860
+
+    clock[0] = 11.0  # past TTL
+    client.error = RuntimeError("warehouse down")
+    second = repo.state_rollups()
+    assert second.rollups[0].addressable == 1860
+    assert second.rollups[0].state == "IL"
+
+
+def test_state_rollups_cold_cache_failure_propagates() -> None:
+    """No prior value => the failure surfaces (503 path), never an
+    empty fabricated response."""
+    import pytest
+
+    client = _FakeSqlClient()
+    client.error = RuntimeError("warehouse down")
+    repo = DatabricksGeoRepository(client, cache_ttl_s=60.0)
+
+    with pytest.raises(RuntimeError, match="warehouse down"):
+        repo.state_rollups()
+
+
+def test_county_rollups_serve_stale_on_expired_refresh_failure() -> None:
+    clock = [0.0]
+    client = _FakeSqlClient()
+    client.responses = [(".gold.county_rollup", list(_COUNTY_ROWS))]
+    repo = DatabricksGeoRepository(
+        client,
+        cache=TTLCache(now=lambda: clock[0]),
+        cache_ttl_s=10.0,
+    )
+
+    first = repo.county_rollups("il")
+    assert first.rollups[0].fips_5 == "17031"
+
+    clock[0] = 11.0
+    client.error = RuntimeError("warehouse down")
+    second = repo.county_rollups("il")
+    assert second.rollups[0].fips_5 == "17031"
+    assert second.rollups[0].addressable_borrowers == 900
+
+
+def test_zip_rollups_serve_stale_on_expired_refresh_failure() -> None:
+    clock = [0.0]
+    client = _FakeSqlClient()
+    client.responses = [(".gold.zip_rollup", list(_ZIP_ROWS))]
+    repo = DatabricksGeoRepository(
+        client,
+        cache=TTLCache(now=lambda: clock[0]),
+        cache_ttl_s=10.0,
+    )
+
+    first = repo.zip_rollups("17031")
+    assert first.rollups[0].zip == "60601"
+
+    clock[0] = 11.0
+    client.error = RuntimeError("warehouse down")
+    second = repo.zip_rollups("17031")
+    assert second.rollups[0].zip == "60601"

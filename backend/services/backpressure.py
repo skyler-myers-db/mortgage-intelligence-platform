@@ -54,7 +54,6 @@ class BackpressureController:
     """Token-bucket rate limiter + non-blocking dependency semaphores."""
 
     _BORROWER_ID_RE = re.compile(r"/api/borrowers/[^/]+$")
-    _ASSIGNMENT_RE = re.compile(r"/api/leads/[^/]+/(?:assign|disposition)$")
 
     def __init__(
         self,
@@ -106,8 +105,9 @@ class BackpressureController:
             return RouteBudget("lakebase-read", settings.mip_rate_limit_default_per_minute, "lakebase")
         if self._BORROWER_ID_RE.match(path):
             return RouteBudget("borrower-dossier", settings.mip_rate_limit_expensive_per_minute, "warehouse")
-        if self._ASSIGNMENT_RE.match(path):
-            return RouteBudget("mutation", settings.mip_rate_limit_mutation_per_minute, "lakebase")
+        # NOTE: lead assign/disposition calls are POSTs, so they are already
+        # classified by the mutation branch above -- a dedicated pattern here
+        # would be unreachable dead code (removed 2026-06-10 audit).
         if path.startswith((
             "/api/analytics",
             "/api/leads",

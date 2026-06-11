@@ -449,29 +449,55 @@ class DatabricksGeoRepository:
                 f"{self._STATE_CACHE_KEY}:filtered:{segment_mode}:"
                 f"{','.join(normalised)}:{portfolio_key}"
             )
-            cached = self._cache.get(cache_key)
-            if cached is not None:
-                return cached
-            filter_clause, params = self._geo_filter_clause(
-                normalised,
-                segment_mode=segment_mode,
-                portfolio_criteria=portfolio_criteria,
-            )
-            sql = self._STATE_FILTER_SQL_TPL.format(
-                filter_clause=filter_clause,
-            )
-            rows = (
-                self._client.execute(
-                    sql,
-                    params,
+            def build_filtered() -> StateRollupResponse:
+                filter_clause, params = self._geo_filter_clause(
+                    normalised,
+                    segment_mode=segment_mode,
+                    portfolio_criteria=portfolio_criteria,
                 )
-                or []
+                sql = self._STATE_FILTER_SQL_TPL.format(
+                    filter_clause=filter_clause,
+                )
+                rows = (
+                    self._client.execute(
+                        sql,
+                        params,
+                    )
+                    or []
+                )
+                # in_the_money + top_segment_code aren't carried by the
+                # filtered query (they would require an extra join the
+                # tooltip doesn't surface). Set sentinel zeros so the
+                # response shape stays stable; the FE only reads
+                # `addressable` for the filtered tooltip path.
+                rollups = [
+                    StateRollup(
+                        state=str(r.get("state") or "").upper()[:2],
+                        addressable=int(r.get("addressable") or 0),
+                        in_the_money=int(r.get("in_the_money") or 0),
+                        top_tier_opportunities=int(r.get("top_tier_opportunities") or 0),
+                        avg_score=int(r.get("avg_score") or 0),
+                        top_segment_code=None,
+                    )
+                    for r in rows
+                    if r.get("state") and str(r.get("state")) != "_ALL"
+                ]
+                return StateRollupResponse(rollups=rollups, snapshot_date=None)
+
+            # Single-flight + stale-if-error: a burst of map interactions
+            # hitting an expired key runs ONE warehouse query while the
+            # followers wait; a warehouse flap serves the last-good frame
+            # instead of blanking the map. Read-only aggregate => safe.
+            return self._cache.get_or_set(
+                cache_key,
+                build_filtered,
+                ttl_s=self._cache_ttl_s,
+                stale_if_error=True,
             )
-            # in_the_money + top_segment_code aren't carried by the
-            # filtered query (they would require an extra join the
-            # tooltip doesn't surface). Set sentinel zeros so the
-            # response shape stays stable; the FE only reads
-            # `addressable` for the filtered tooltip path.
+
+        # Unfiltered path — same data shape, plus snapshot_date carried.
+        def build_unfiltered() -> StateRollupResponse:
+            rows = self._client.execute(self._STATE_SQL) or []
             rollups = [
                 StateRollup(
                     state=str(r.get("state") or "").upper()[:2],
@@ -479,41 +505,25 @@ class DatabricksGeoRepository:
                     in_the_money=int(r.get("in_the_money") or 0),
                     top_tier_opportunities=int(r.get("top_tier_opportunities") or 0),
                     avg_score=int(r.get("avg_score") or 0),
-                    top_segment_code=None,
+                    top_segment_code=(
+                        str(r["top_segment_code"]) if r.get("top_segment_code") else None
+                    ),
                 )
                 for r in rows
                 if r.get("state") and str(r.get("state")) != "_ALL"
             ]
-            response = StateRollupResponse(rollups=rollups, snapshot_date=None)
-            self._cache.set(cache_key, response, self._cache_ttl_s)
-            return response
+            snapshot_date: str | None = None
+            if rows:
+                raw = rows[0].get("snapshot_date")
+                snapshot_date = str(raw) if raw is not None else None
+            return StateRollupResponse(rollups=rollups, snapshot_date=snapshot_date)
 
-        # Unfiltered path — unchanged behaviour.
-        cached = self._cache.get(self._STATE_CACHE_KEY)
-        if cached is not None:
-            return cached
-        rows = self._client.execute(self._STATE_SQL) or []
-        rollups = [
-            StateRollup(
-                state=str(r.get("state") or "").upper()[:2],
-                addressable=int(r.get("addressable") or 0),
-                in_the_money=int(r.get("in_the_money") or 0),
-                top_tier_opportunities=int(r.get("top_tier_opportunities") or 0),
-                avg_score=int(r.get("avg_score") or 0),
-                top_segment_code=(
-                    str(r["top_segment_code"]) if r.get("top_segment_code") else None
-                ),
-            )
-            for r in rows
-            if r.get("state") and str(r.get("state")) != "_ALL"
-        ]
-        snapshot_date: str | None = None
-        if rows:
-            raw = rows[0].get("snapshot_date")
-            snapshot_date = str(raw) if raw is not None else None
-        response = StateRollupResponse(rollups=rollups, snapshot_date=snapshot_date)
-        self._cache.set(self._STATE_CACHE_KEY, response, self._cache_ttl_s)
-        return response
+        return self._cache.get_or_set(
+            self._STATE_CACHE_KEY,
+            build_unfiltered,
+            ttl_s=self._cache_ttl_s,
+            stale_if_error=True,
+        )
 
     @staticmethod
     def _state_segment_filter_clause(
@@ -619,62 +629,74 @@ class DatabricksGeoRepository:
             if use_filtered_path
             else f"geo.county_rollups:{normalised}"
         )
-        cached = self._cache.get(cache_key)
-        if cached is not None:
-            return cached
-        if use_filtered_path:
-            filter_clause, params = self._geo_filter_clause(
-                normalised_segments,
-                segment_mode=segment_mode,
-                portfolio_criteria=portfolio_criteria,
+        def build() -> CountyRollupResponse:
+            if use_filtered_path:
+                filter_clause, params = self._geo_filter_clause(
+                    normalised_segments,
+                    segment_mode=segment_mode,
+                    portfolio_criteria=portfolio_criteria,
+                )
+                params["state"] = normalised
+                sql = self._COUNTY_FILTER_SQL_TPL.format(
+                    filter_clause=filter_clause,
+                )
+                rows = self._client.execute(sql, params) or []
+            else:
+                rows = self._client.execute(self._COUNTY_SQL, {"state": normalised}) or []
+            rollups = [
+                CountyRollup(
+                    fips_5=str(r.get("fips_5") or "")[:5],
+                    state=str(r.get("state") or "").upper()[:2] or normalised,
+                    county_name=(str(r["county_name"]) if r.get("county_name") else None)
+                    or county_name_for_fips(str(r.get("fips_5") or "")[:5]),
+                    addressable_borrowers=int(r.get("addressable_borrowers") or 0),
+                    in_the_money_borrowers=int(r.get("in_the_money_borrowers") or 0),
+                    high_opportunity_borrowers=int(r.get("high_opportunity_borrowers") or 0),
+                    avg_opportunity_score=int(r.get("avg_opportunity_score") or 0),
+                    top_segment_code=(
+                        str(r["top_segment_code"]) if r.get("top_segment_code") else None
+                    ),
+                )
+                for r in rows
+                if r.get("fips_5") and len(str(r.get("fips_5"))) == 5
+            ]
+            snapshot_date: str | None = None
+            if rows:
+                raw = rows[0].get("snapshot_date")
+                snapshot_date = str(raw) if raw is not None else None
+            scope_note = self._scope_note_for_state(
+                normalised,
+                returned_count=len(rollups),
             )
-            params["state"] = normalised
-            sql = self._COUNTY_FILTER_SQL_TPL.format(
-                filter_clause=filter_clause,
+            return CountyRollupResponse(
+                state=normalised,
+                rollups=rollups,
+                snapshot_date=snapshot_date,
+                scope_note=scope_note if rollups else None,
             )
-            rows = self._client.execute(sql, params) or []
-        else:
-            rows = self._client.execute(self._COUNTY_SQL, {"state": normalised}) or []
-        rollups = [
-            CountyRollup(
-                fips_5=str(r.get("fips_5") or "")[:5],
-                state=str(r.get("state") or "").upper()[:2] or normalised,
-                county_name=(str(r["county_name"]) if r.get("county_name") else None)
-                or county_name_for_fips(str(r.get("fips_5") or "")[:5]),
-                addressable_borrowers=int(r.get("addressable_borrowers") or 0),
-                in_the_money_borrowers=int(r.get("in_the_money_borrowers") or 0),
-                high_opportunity_borrowers=int(r.get("high_opportunity_borrowers") or 0),
-                avg_opportunity_score=int(r.get("avg_opportunity_score") or 0),
-                top_segment_code=(
-                    str(r["top_segment_code"]) if r.get("top_segment_code") else None
-                ),
-            )
-            for r in rows
-            if r.get("fips_5") and len(str(r.get("fips_5"))) == 5
-        ]
-        snapshot_date: str | None = None
-        if rows:
-            raw = rows[0].get("snapshot_date")
-            snapshot_date = str(raw) if raw is not None else None
-        scope_note = self._scope_note_for_state(
-            normalised,
-            returned_count=len(rollups),
+
+        # Single-flight + stale-if-error: county drill is the hottest map
+        # interaction; one expired key must not fan out N identical
+        # warehouse queries, and a flap serves last-good (read-only).
+        return self._cache.get_or_set(
+            cache_key,
+            build,
+            ttl_s=self._cache_ttl_s,
+            stale_if_error=True,
         )
-        response = CountyRollupResponse(
-            state=normalised,
-            rollups=rollups,
-            snapshot_date=snapshot_date,
-            scope_note=scope_note if rollups else None,
-        )
-        self._cache.set(cache_key, response, self._cache_ttl_s)
-        return response
 
     def _geography_scope(self) -> GeographyScope | None:
-        cached = self._cache.get(self._SCOPE_CACHE_KEY)
-        if cached is not None:
-            return cached
         try:
-            scope = load_geography_scope(self._client)
+            # Single-flight + stale-if-error: every county/zip rollup calls
+            # this; without coalescing an expired scope key multiplies the
+            # discovery query per concurrent drill. Stale scope copy is
+            # cosmetically fine (it labels coverage notes only).
+            return self._cache.get_or_set(
+                self._SCOPE_CACHE_KEY,
+                lambda: load_geography_scope(self._client),
+                ttl_s=self._cache_ttl_s,
+                stale_if_error=True,
+            )
         except Exception as exc:  # noqa: BLE001 -- scope copy is non-critical
             emit(
                 log,
@@ -686,8 +708,6 @@ class DatabricksGeoRepository:
                 exc_msg=str(exc)[:500],
             )
             return None
-        self._cache.set(self._SCOPE_CACHE_KEY, scope, self._cache_ttl_s)
-        return scope
 
     def _scope_note_for_state(self, state: str, *, returned_count: int) -> str | None:
         scope = self._geography_scope()
@@ -722,47 +742,51 @@ class DatabricksGeoRepository:
             if use_filtered_path
             else f"geo.zip_rollups:{normalised}"
         )
-        cached = self._cache.get(cache_key)
-        if cached is not None:
-            return cached
-        if use_filtered_path:
-            filter_clause, params = self._geo_filter_clause(
-                normalised_segments,
-                segment_mode=segment_mode,
-                portfolio_criteria=portfolio_criteria,
+        def build() -> ZipRollupResponse:
+            if use_filtered_path:
+                filter_clause, params = self._geo_filter_clause(
+                    normalised_segments,
+                    segment_mode=segment_mode,
+                    portfolio_criteria=portfolio_criteria,
+                )
+                params["fips_5"] = normalised
+                sql = self._ZIP_FILTER_SQL_TPL.format(
+                    filter_clause=filter_clause,
+                )
+                rows = self._client.execute(sql, params) or []
+            else:
+                rows = self._client.execute(self._ZIP_SQL, {"fips_5": normalised}) or []
+            rollups = [
+                ZipRollup(
+                    zip=str(r.get("zip") or "")[:5],
+                    state=str(r.get("state") or "").upper()[:2],
+                    county_fips_5=(str(r["county_fips_5"]) if r.get("county_fips_5") else None),
+                    addressable_borrowers=int(r.get("addressable_borrowers") or 0),
+                    avg_opportunity_score=int(r.get("avg_opportunity_score") or 0),
+                    top_segment_code=(
+                        str(r["top_segment_code"]) if r.get("top_segment_code") else None
+                    ),
+                    sample_borrower_id=(
+                        str(r["sample_borrower_id"]) if r.get("sample_borrower_id") else None
+                    ),
+                )
+                for r in rows
+                if r.get("zip") and len(str(r.get("zip"))) == 5
+            ]
+            snapshot_date: str | None = None
+            if rows:
+                raw = rows[0].get("snapshot_date")
+                snapshot_date = str(raw) if raw is not None else None
+            return ZipRollupResponse(
+                fips_5=normalised,
+                rollups=rollups,
+                snapshot_date=snapshot_date,
             )
-            params["fips_5"] = normalised
-            sql = self._ZIP_FILTER_SQL_TPL.format(
-                filter_clause=filter_clause,
-            )
-            rows = self._client.execute(sql, params) or []
-        else:
-            rows = self._client.execute(self._ZIP_SQL, {"fips_5": normalised}) or []
-        rollups = [
-            ZipRollup(
-                zip=str(r.get("zip") or "")[:5],
-                state=str(r.get("state") or "").upper()[:2],
-                county_fips_5=(str(r["county_fips_5"]) if r.get("county_fips_5") else None),
-                addressable_borrowers=int(r.get("addressable_borrowers") or 0),
-                avg_opportunity_score=int(r.get("avg_opportunity_score") or 0),
-                top_segment_code=(
-                    str(r["top_segment_code"]) if r.get("top_segment_code") else None
-                ),
-                sample_borrower_id=(
-                    str(r["sample_borrower_id"]) if r.get("sample_borrower_id") else None
-                ),
-            )
-            for r in rows
-            if r.get("zip") and len(str(r.get("zip"))) == 5
-        ]
-        snapshot_date: str | None = None
-        if rows:
-            raw = rows[0].get("snapshot_date")
-            snapshot_date = str(raw) if raw is not None else None
-        response = ZipRollupResponse(
-            fips_5=normalised,
-            rollups=rollups,
-            snapshot_date=snapshot_date,
+
+        # Single-flight + stale-if-error, same rationale as county_rollups.
+        return self._cache.get_or_set(
+            cache_key,
+            build,
+            ttl_s=self._cache_ttl_s,
+            stale_if_error=True,
         )
-        self._cache.set(cache_key, response, self._cache_ttl_s)
-        return response

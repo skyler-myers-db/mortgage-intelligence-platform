@@ -23,6 +23,16 @@ const LazyGenieChat = lazyWithPreload(() =>
 
 const preloadConsole = createIdlePreloader(() => LazyConsole.preload(), 5000);
 const preloadGenieChat = createIdlePreloader(() => LazyGenieChat.preload(), 5000);
+// NOTE (2026-06-10 perf audit): rolldown reports INEFFECTIVE_DYNAMIC_IMPORT
+// here because drawerSources is also statically imported by several
+// lazy-side components (EvidenceDrawer, GenieChat, LeadRowPreview, ...),
+// so it lives in their SHARED lazy chunk rather than a chunk of its own.
+// That is fine — the intent of this idle import() is to warm whichever
+// chunk carries the evidence/source mapping before the first drawer
+// open, and it does exactly that at runtime. Initial JS is unaffected
+// (verified: index-*.js byte-stable with/without this line). Do not
+// "fix" the warning by removing the preload or by forcing a separate
+// chunk; both make first-drawer-open slower.
 const preloadDrawerSources = createIdlePreloader(() => import('../../lib/drawerSources'), 5000);
 
 /**

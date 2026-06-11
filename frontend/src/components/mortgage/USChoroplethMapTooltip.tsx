@@ -1,6 +1,26 @@
 import { createPortal } from 'react-dom';
 import type { HoverState } from './USChoroplethMap.utils';
 
+/**
+ * Floating map hover card. BEM block: `map-tip`.
+ *
+ * DESIGN-CONTRACT DEVIATION (called out per CLAUDE.md "deviations must be
+ * called out"): the prototype's `map-tip` block in
+ * `design_files/Module 0 Prototype.html` (see `.map-tip__name` /
+ * `.map-tip__row` / `.v`, ~lines 1875-1878 of that file) only documents a
+ * name + flat label/value rows. This component extends that vocabulary with
+ * `map-tip__kpis` / `map-tip__kpi` / `map-tip__kpi-label` / `map-tip__kpi-value`
+ * (a two-up infographic KPI grid) and `map-tip__seg` / `map-tip__seg-label` /
+ * `map-tip__seg-value` (a top-segment row). The extension is intentional —
+ * the real product surfaces richer per-region facts (marketable borrowers,
+ * avg. opportunity score, top segment) than the prototype sketch. All of
+ * these extended classes have backing CSS in
+ * `frontend/src/design-system/components.css` (`.map-tip__kpi*` and
+ * `.map-tip__seg*`) and use design tokens only — no class was invented
+ * without a matching rule. Do NOT rename back to the prototype's flatter
+ * vocabulary; that would drop the KPI grid styling.
+ */
+
 interface USChoroplethMapTooltipProps {
   hover: HoverState;
   activeSegNames: Set<string> | null;
