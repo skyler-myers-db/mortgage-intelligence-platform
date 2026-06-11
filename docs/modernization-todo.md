@@ -458,3 +458,18 @@ Re-audit notes accepted without code change: warm-after-idle first hit
 steady-state repeats are the booth path), and the prod run_as
 deploy-from-CI-as-SP recommendation (pre-existing checklist guidance,
 prod target untouched this close to Summit).
+
+### Re-audit response deployed evidence (2026-06-11)
+
+- Deploy: full pipeline, exit 0, smoke 12/12 PASS; `mip_refresh_scores`
+  and `mip_sync_lifecycle_state` TERMINATED SUCCESS (the sync job's new
+  CLUSTER BY/TBLPROPERTIES + COMMENT ON statements parse and run live).
+- Complementarity at population scale: 5,156,184 borrower_360 rows —
+  4,347,482 sum equity+ltv = 100 exactly, 808,702 no-signal (0+0),
+  **0 violations** (the 101% class is dead).
+- Lifecycle table after its rebuild: clustering ["borrower_id"],
+  autoOptimize properties present, 8/8 column comments.
+- Browser (authenticated Chromium): admin audit rows render zoned
+  ("Jun 11, 1:50 PM EDT"); the drawer freshness chip walks
+  --loading (accent pulse) -> --fresh "Fresh" once governed metadata
+  lands; zero console errors.
