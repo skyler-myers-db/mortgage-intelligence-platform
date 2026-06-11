@@ -217,13 +217,24 @@ probe_admin_or_forbidden() {
   if [[ -z "$ADMIN_AUTH_TOKEN" ]]; then
     code=$(curl -s -o /tmp/mip-smoke-out.json -w '%{http_code}' \
       "${CURL_AUTH_ARGS[@]}" "$APP_URL$path")
-    if [[ "$code" != "403" ]]; then
-      echo "[smoke] $label admin gate returned $code for non-admin bearer (expected 403)" >&2
-      cat /tmp/mip-smoke-out.json >&2 || true
-      exit 1
+    # Posture-aware (2026-06-11): the default bearer's identity may or may
+    # not be in the deployed MIP_ADMIN_EMAILS allowlist — both are valid
+    # operator decisions. 403 proves the deny path; 200 means the deployer
+    # is a configured admin, so fall through and let the caller run the
+    # full governed-payload contract checks (stronger than skipping). Any
+    # other status is a real failure. The deny path for non-admin
+    # identities stays covered by the rbac unit suite.
+    if [[ "$code" == "403" ]]; then
+      echo "[smoke] ok · $label admin gate rejects non-admin bearer"
+      return 10
     fi
-    echo "[smoke] ok · $label admin gate rejects non-admin bearer"
-    return 10
+    if [[ "$code" == "200" ]]; then
+      echo "[smoke] ok · $label admin gate admits configured admin bearer"
+      return 0
+    fi
+    echo "[smoke] $label admin gate returned $code (expected 403 for non-admin or 200 for configured admin)" >&2
+    cat /tmp/mip-smoke-out.json >&2 || true
+    exit 1
   fi
 
   code=$(curl -s -o /tmp/mip-smoke-out.json -w '%{http_code}' \
