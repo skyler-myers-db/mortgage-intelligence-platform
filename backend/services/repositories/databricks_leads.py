@@ -704,16 +704,19 @@ class DatabricksLeadRepository:
         Databricks SQL from serving a stale exact-query result; the app's
         short ``TTLCache`` remains the bounded reuse layer.
 
-        2026-06-11 audit P1-6 refinement: the marker is bucketed to the
-        repository cache TTL instead of nanosecond-unique. The app cache
-        already serves results up to ``cache_ttl_s`` old, so a warehouse
-        result reused within the same TTL window adds ZERO staleness beyond
-        the existing contract — but sibling app processes/workers (each
-        with their own in-process TTLCache) can now reuse the warehouse
+        2026-06-11 audit P1-6 refinement (staleness wording corrected per
+        re-audit): the marker is bucketed to the repository cache TTL
+        instead of nanosecond-unique, so sibling app processes/workers
+        (each with their own in-process TTLCache) can reuse the warehouse
         result cache instead of re-scanning borrower_360 (5.16M rows,
-        3.6-6.6s measured live). With app caching disabled (ttl <= 0) the
-        marker stays nanosecond-unique, preserving the original
-        always-fresh behaviour.
+        3.6-6.6s measured live). Staleness bound: the LAYERS COMPOUND — a
+        warehouse result computed at the start of a marker window can be
+        stored into the app cache at the end of it, so worst-case data age
+        is ~2x ``cache_ttl_s`` (~10 min at the 300s default), not 1x. That
+        remains far below the gold-refresh cadence, which is the actual
+        data-change rate. With app caching disabled (ttl <= 0) the marker
+        stays nanosecond-unique, preserving the original always-fresh
+        behaviour.
         """
 
         if self._cache_ttl_s <= 0:
