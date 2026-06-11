@@ -1,0 +1,297 @@
+// Pure helpers, constants, and types extracted from analytics.tsx.
+// No React: this module contains no hooks/components, so it needs no
+// 'use no memo' React Compiler pragma (unlike analytics.sections.tsx).
+import type { LeadFunnelStage } from '../lib/api';
+import type {
+  EquitySpreadPoint,
+  EvidenceDailyRow,
+  FunnelStage,
+  SegmentCode,
+  TopBorrowerAnalyticsRow,
+} from '../types';
+
+export type AnalyticsTab = 'executive' | 'geography' | 'economics' | 'segments' | 'signals';
+
+export const TABS: Array<{ id: AnalyticsTab; label: string; icon: 'flow' | 'map' | 'money' | 'layers' | 'audit' }> = [
+  { id: 'executive', label: 'Executive', icon: 'flow' },
+  { id: 'geography', label: 'Geography', icon: 'map' },
+  { id: 'economics', label: 'Economics', icon: 'money' },
+  { id: 'segments', label: 'Segments', icon: 'layers' },
+  { id: 'signals', label: 'Signals', icon: 'audit' },
+];
+
+export const SEGMENT_FILTERS = [
+  ['All segments', null],
+  ['In the Money', 'itm'],
+  ['Home Equity Candidate', 'equity'],
+  ['Investor / Multi-Property', 'investor'],
+  ['Retention Risk', 'retention'],
+  ['Listed for Sale', 'listed'],
+  ['Permit Activity', 'permit'],
+] as const satisfies ReadonlyArray<readonly [string, SegmentCode | null]>;
+export const SEGMENT_CODE_TO_OPTION = Object.fromEntries(
+  SEGMENT_FILTERS.filter(([, value]) => value !== null).map(([label, value]) => [value, label]),
+) as Record<SegmentCode, string>;
+export const SEGMENT_MULTI_OPTIONS = SEGMENT_FILTERS
+  .flatMap(([label, value]) => (value ? [{ label, value }] : []));
+export const SIGNAL_FILTERS = [
+  ['All signals', null],
+  ['Market trend', 'market_trend'],
+  ['Equity', 'equity'],
+  ['Competitor lien', 'competitor_lien'],
+  ['Rate spread', 'rate_spread'],
+  ['Multi-property', 'multi_property'],
+  ['Corporate owner', 'corporate_owner'],
+  ['Loan type fit', 'loan_type_fit'],
+  ['Recent sale', 'recent_sale'],
+  ['Absentee mailing', 'absentee_mailing'],
+  ['Recent payoff', 'recent_payoff'],
+  ['Recent refi', 'recent_refi'],
+  ['Foreclosure stage', 'foreclosure_stage'],
+] as const satisfies ReadonlyArray<readonly [string, string | null]>;
+export const SIGNAL_TYPE_TO_OPTION = Object.fromEntries(
+  SIGNAL_FILTERS.filter(([, value]) => value !== null).map(([label, value]) => [value, label]),
+) as Record<string, string>;
+export const SIGNAL_MULTI_OPTIONS = SIGNAL_FILTERS
+  .flatMap(([label, value]) => (value ? [{ label, value }] : []));
+export const EVIDENCE_WINDOWS = [['Last 7 days', 7], ['Last 30 days', 30], ['Last 90 days', 90]] as const;
+export const EVIDENCE_WINDOW_OPTIONS = EVIDENCE_WINDOWS.map(([label]) => label);
+export const EVIDENCE_WINDOW_TO_DAYS = Object.fromEntries(EVIDENCE_WINDOWS) as Record<string, number>;
+
+export const COMPACT_FORMAT = new Intl.NumberFormat('en-US', {
+  notation: 'compact',
+  maximumFractionDigits: 2,
+});
+export const MAX_SCATTER_POINTS = 1_200;
+export const SCATTER_SPREAD_BUCKET_BPS = 25;
+
+export type PreparedScatterPoint = {
+  row: EquitySpreadPoint;
+  xPct: number;
+  yPct: number;
+};
+
+export type LenderFilterParams = {
+  lender_relationship?: string | null;
+  target_lender_ref?: string | null;
+};
+
+export type MultiFilterOption<T extends string> = {
+  label: string;
+  value: T;
+};
+
+export type DailyEvidenceTotal = {
+  event_date: string;
+  event_count: number;
+};
+
+export function fmt(n: number | null | undefined): string {
+  if (n === null || n === undefined) return '—';
+  return COMPACT_FORMAT.format(n);
+}
+
+export function fmtCurrency(n: number | null | undefined): string {
+  if (n === null || n === undefined) return '—';
+  return `$${COMPACT_FORMAT.format(n)}`;
+}
+
+export function borrowerDisplay(row: Pick<TopBorrowerAnalyticsRow, 'display_name' | 'borrower_id'>): string {
+  return `${row.display_name} · ${row.borrower_id.slice(-4)}`;
+}
+
+export function pct(n: number, total: number): number {
+  if (!Number.isFinite(n) || !Number.isFinite(total) || total <= 0) return 0;
+  return Math.max(0, Math.min(100, (n / total) * 100));
+}
+
+function routeHref(route: '/lead-queue' | '/segment-intelligence', params: Record<string, string | number | null | undefined>): string {
+  const qs = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== null && value !== undefined && value !== '') qs.set(key, String(value));
+  }
+  const encoded = qs.toString();
+  return encoded ? `${route}?${encoded}` : route;
+}
+
+export function leadQueueHref(params: Record<string, string | number | null | undefined>): string {
+  return routeHref('/lead-queue', params);
+}
+
+export function segmentIntelligenceHref(params: Record<string, string | number | null | undefined>): string {
+  return routeHref('/segment-intelligence', params);
+}
+
+export function leadQueueHrefForFunnelStage(
+  row: Pick<FunnelStage, 'stage' | 'stage_order'>,
+  leadParams: LenderFilterParams = {},
+): string {
+  const byOrder: Record<number, LeadFunnelStage> = {
+    1: 'addressable',
+    2: 'in_the_money',
+    3: 'high_opportunity',
+    4: 'offer_recommended',
+    5: 'approved',
+    6: 'actioned',
+  };
+  const byLabel: Record<string, LeadFunnelStage> = {
+    addressable: 'addressable',
+    'in the money': 'in_the_money',
+    'high opportunity': 'high_opportunity',
+    'offer recommended': 'offer_recommended',
+    approved: 'approved',
+    actioned: 'actioned',
+  };
+  const stage = byOrder[row.stage_order] ?? byLabel[row.stage.trim().toLowerCase()];
+  return leadQueueHref({ funnel_stage: stage ?? 'addressable', ...leadParams });
+}
+
+export function makeTicks(min: number, max: number, count = 5): number[] {
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return [];
+  if (max === min) return [min];
+  const ticks: number[] = [];
+  const steps = Math.max(1, count - 1);
+  for (let i = 0; i <= steps; i += 1) {
+    ticks.push(min + ((max - min) * i) / steps);
+  }
+  return ticks;
+}
+
+export function formatAxisTick(value: number, compact = false): string {
+  if (!Number.isFinite(value)) return '';
+  const rounded = Math.round(value);
+  return compact ? fmt(rounded) : rounded.toLocaleString();
+}
+
+export function formatShortDate(value: string): string {
+  const [year, month, day] = value.split('-').map((part) => Number(part));
+  if (!year || !month || !day) return value;
+  return new Intl.DateTimeFormat('en-US', {
+    month: 'short',
+    day: 'numeric',
+    timeZone: 'UTC',
+  }).format(new Date(Date.UTC(year, month - 1, day)));
+}
+
+function dateToUtc(value: string): number | null {
+  const [year, month, day] = value.split('-').map((part) => Number(part));
+  if (!year || !month || !day) return null;
+  return Date.UTC(year, month - 1, day);
+}
+
+function utcToIsoDate(value: number): string {
+  return new Date(value).toISOString().slice(0, 10);
+}
+
+export function signalLabel(value: string): string {
+  return SIGNAL_TYPE_TO_OPTION[value] ?? value.replace(/_/g, ' ');
+}
+
+export function parseCsvParam(value: string | null): string[] {
+  if (!value) return [];
+  const out: string[] = [];
+  value.split(',').forEach((part) => {
+    const trimmed = part.trim();
+    if (trimmed && !out.includes(trimmed)) out.push(trimmed);
+  });
+  return out;
+}
+
+export function toggleSelected<T extends string>(selected: readonly T[], value: T): T[] {
+  return selected.includes(value)
+    ? selected.filter((item) => item !== value)
+    : [...selected, value];
+}
+
+export function buildDailyEvidenceTotals(rows: EvidenceDailyRow[]): DailyEvidenceTotal[] {
+  const byDate = new Map<string, number>();
+  for (const row of rows) {
+    byDate.set(row.event_date, (byDate.get(row.event_date) ?? 0) + row.event_count);
+  }
+  const observed = [...byDate.entries()]
+    .map(([event_date, event_count]) => ({ event_date, event_count }))
+    .sort((a, b) => a.event_date.localeCompare(b.event_date));
+  if (observed.length <= 1) return observed;
+  const start = dateToUtc(observed[0].event_date);
+  const end = dateToUtc(observed[observed.length - 1].event_date);
+  if (start === null || end === null || end <= start) return observed;
+  const dayMs = 24 * 60 * 60 * 1000;
+  const filled: DailyEvidenceTotal[] = [];
+  for (let cursor = start; cursor <= end; cursor += dayMs) {
+    const event_date = utcToIsoDate(cursor);
+    filled.push({ event_date, event_count: byDate.get(event_date) ?? 0 });
+  }
+  return filled;
+}
+
+export function categoricalTickIndexes(length: number, maxTicks = 6): number[] {
+  if (length <= 0) return [];
+  if (length <= maxTicks) return Array.from({ length }, (_, idx) => idx);
+  const step = Math.ceil((length - 1) / (maxTicks - 1));
+  const indexes = new Set<number>([0, length - 1]);
+  for (let idx = step; idx < length - 1; idx += step) indexes.add(idx);
+  return [...indexes].sort((a, b) => a - b);
+}
+
+export function segmentClass(value: string): string {
+  const text = value.toLowerCase();
+  if (text.includes('equity')) return 'analytics-segment--equity';
+  if (text.includes('money') || text === 'itm') return 'analytics-segment--itm';
+  if (text.includes('investor')) return 'analytics-segment--investor';
+  if (text.includes('listed')) return 'analytics-segment--listed';
+  if (text.includes('permit')) return 'analytics-segment--permit';
+  if (text.includes('retention')) return 'analytics-segment--retention';
+  return 'analytics-segment--none';
+}
+
+export function compactScatterRows(rows: EquitySpreadPoint[], limit = MAX_SCATTER_POINTS): EquitySpreadPoint[] {
+  const byBucket = new Map<string, EquitySpreadPoint>();
+  const ordered = [...rows].sort((a, b) => (
+    b.opportunity_score - a.opportunity_score || a.borrower_id.localeCompare(b.borrower_id)
+  ));
+  for (const row of ordered) {
+    const key = [
+      Math.round(row.equity_pct),
+      Math.round(row.rate_spread_bps / SCATTER_SPREAD_BUCKET_BPS) * SCATTER_SPREAD_BUCKET_BPS,
+      row.segment,
+    ].join(':');
+    if (!byBucket.has(key)) byBucket.set(key, row);
+    if (byBucket.size >= limit) break;
+  }
+  return [...byBucket.values()].sort((a, b) => a.equity_pct - b.equity_pct || a.rate_spread_bps - b.rate_spread_bps);
+}
+
+export function prepareScatterPoints(rows: EquitySpreadPoint[], minSpread: number, maxSpread: number): PreparedScatterPoint[] {
+  const points = compactScatterRows(rows).map((row) => ({
+    row,
+    xPct: pct(row.equity_pct, 100),
+    yPct: 100 - pct(row.rate_spread_bps - minSpread, maxSpread - minSpread),
+  }));
+  const groups = new Map<string, PreparedScatterPoint[]>();
+  for (const point of points) {
+    const key = `${point.xPct.toFixed(2)}:${point.yPct.toFixed(2)}`;
+    groups.set(key, [...(groups.get(key) ?? []), point]);
+  }
+  for (const group of groups.values()) {
+    if (group.length <= 1) continue;
+    const radiusX = Math.min(1.2, 0.35 + group.length * 0.1);
+    const radiusY = Math.min(2.8, 0.8 + group.length * 0.22);
+    group.forEach((point, idx) => {
+      const angle = (Math.PI * 2 * idx) / group.length;
+      point.xPct = Math.max(0, Math.min(100, point.xPct + Math.cos(angle) * radiusX));
+      point.yPct = Math.max(0, Math.min(100, point.yPct + Math.sin(angle) * radiusY));
+    });
+  }
+  return points;
+}
+
+export function analyticsHref(params: Record<string, string | number | readonly string[] | null | undefined>): string {
+  const qs = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (Array.isArray(value)) {
+      if (value.length > 0) qs.set(key, value.join(','));
+    } else if (value !== null && value !== undefined && value !== '') qs.set(key, String(value));
+  }
+  const encoded = qs.toString();
+  return encoded ? `/analytics?${encoded}` : '/analytics';
+}
