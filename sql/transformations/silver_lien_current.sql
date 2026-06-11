@@ -103,6 +103,16 @@ USING (
   FROM cotality_mortgage_data.corelogic.entrada_eval_voluntary_lien_status_marketing_v2
   WHERE situs_state IS NOT NULL
     AND clip IS NOT NULL
+  -- dedup guard (audit P2-10): share refreshes occasionally land duplicate
+  -- clip; keep the newest by avm_as_of_date (the freshest valuation snapshot),
+  -- then first_pos_date / total_open_lien_balance as deterministic tiebreaks.
+  -- Without this a duplicate key makes the MERGE fail (multiple source rows
+  -- match one target row). ingest_ts is a single run-wide CURRENT_TIMESTAMP(),
+  -- so it cannot order rows within a refresh.
+  QUALIFY ROW_NUMBER() OVER (
+    PARTITION BY clip
+    ORDER BY avm_as_of_date DESC, first_pos_date DESC, total_open_lien_balance DESC
+  ) = 1
 ) AS s
   ON t.clip = s.clip
 WHEN MATCHED THEN UPDATE SET

@@ -198,12 +198,12 @@ class LenderRefResolver:
         """Return the active dict -- cached UC result OR the fallback."""
         cached = self._cache.get(_LENDER_RESOLVER_CACHE_KEY)
         if cached is not None:
-            return cached  # type: ignore[no-any-return]
+            return cached
         with self._load_lock:
             # Double-checked: another thread may have just loaded.
             cached = self._cache.get(_LENDER_RESOLVER_CACHE_KEY)
             if cached is not None:
-                return cached  # type: ignore[no-any-return]
+                return cached
             loaded = self._load_from_uc()
             active = loaded if loaded is not None else dict(self._fallback)
             self._cache.set(_LENDER_RESOLVER_CACHE_KEY, active, self._ttl_s)

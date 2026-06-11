@@ -49,6 +49,8 @@ jobs:
           pip install -r requirements.txt
       - name: ruff
         run: ruff check backend tests tools jobs pipelines
+      - name: mypy (ratcheted type gate — audit P2-14)
+        run: python -m mypy backend
       - name: pytest (parallel + coverage gate)
         # Unit + integration under the default pytest config; integration
         # tests that require workspace creds skip themselves when env is

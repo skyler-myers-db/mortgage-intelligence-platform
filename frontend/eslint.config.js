@@ -35,6 +35,10 @@ export default [
       // effects while the remaining query-layer migration is in progress.
       // Keep compiler-safety rules on, but do not fail CI on this advisory
       // rule until those effects are converted to query/mutation ownership.
+      // TODO(2026-07-15, audit P2-14): re-enable after the post-Summit
+      // query-layer migration (tracked in docs/modernization-todo.md
+      // alongside the LeadTable/analytics 'use no memo' pragmas — same
+      // root cause, same removal slice).
       "react-hooks/set-state-in-effect": "off",
       "@typescript-eslint/no-unused-vars": ["warn", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }],
     },

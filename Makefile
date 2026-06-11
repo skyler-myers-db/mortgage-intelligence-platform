@@ -31,6 +31,11 @@ lint:
 	ruff check backend tests tools
 	npm --prefix frontend run lint
 
+# 2026-06-11 audit P2-14: ratcheted mypy gate — exemption list in
+# pyproject.toml [tool.mypy] overrides may only shrink.
+typecheck:
+	$(PYTHON) -m mypy backend
+
 build:
 	npm --prefix frontend run build
 

@@ -62,6 +62,16 @@ USING (
   WHERE deed_situs_state_static IS NOT NULL
     AND owner_transfer_composite_transaction_id IS NOT NULL
     AND clip IS NOT NULL
+  -- dedup guard (audit P2-10): share refreshes occasionally land duplicate
+  -- transfer_txn_id; keep the newest by sale_date (the transfer's own recording
+  -- date), then sale_amount / clip as deterministic tiebreaks. Without this a
+  -- duplicate key makes the MERGE fail (multiple source rows match one target
+  -- row). ingest_ts is a single run-wide CURRENT_TIMESTAMP(), so it cannot
+  -- order rows within a refresh.
+  QUALIFY ROW_NUMBER() OVER (
+    PARTITION BY transfer_txn_id
+    ORDER BY sale_date DESC, sale_amount DESC, clip ASC
+  ) = 1
 ) AS s
   ON t.transfer_txn_id = s.transfer_txn_id
 WHEN MATCHED THEN UPDATE SET

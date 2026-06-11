@@ -32,7 +32,6 @@ def test_databricks_yml_contains_required_resource_names():
         "silver_refresh_job",
         "gold_refresh_job",
         "lifecycle_sync_job",
-        "mip_snapshot_dashboards",
         "mip_feature_pipeline",
         "mip_executive_dashboard",
         "mip_segment_dashboard",

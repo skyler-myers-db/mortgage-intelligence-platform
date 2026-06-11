@@ -137,3 +137,46 @@ def require_admin(request: Request) -> str:
 # across ``backend/api/admin.py``. ``AdminDep`` evaluates to ``str``
 # (the admitted actor email).
 AdminDep = Annotated[str, Depends(require_admin)]
+
+
+def require_approver(request: Request) -> str:
+    """Optional approver gate for human-decision endpoints (audit P2-5).
+
+    Module 0's demo contract: any authenticated workspace user may
+    approve / reject — attribution is always recorded via
+    ``resolve_actor`` and the booth flow must not depend on a
+    pre-provisioned approver roster. That permissive default is a
+    DOCUMENTED product decision, not an oversight.
+
+    Customers opt INTO enforcement by setting ``MIP_APPROVER_EMAILS``
+    (comma-separated). Once non-empty:
+
+    * listed emails are admitted;
+    * admins (``require_admin``: group or admin-email path) are admitted
+      too, so the deploying operator can never lock themselves out of
+      the decision surface they administer (lesson from the 2026-06-11
+      empty-admin-allowlist incident);
+    * everyone else gets the same ``403 {"detail": "forbidden"}`` body
+      the admin surface uses (frontend banner copy is shared).
+    """
+    approver_emails = _parse_admin_emails(getattr(settings, "approver_emails", None))
+    actor = resolve_actor(request)
+    if not approver_emails:
+        return actor
+    if actor and actor.lower() in approver_emails:
+        return actor
+    try:
+        return require_admin(request)
+    except HTTPException:
+        emit(
+            log,
+            "approver_access_denied",
+            outcome="denied",
+            actor_present=bool(actor),
+            allowlist_size=len(approver_emails),
+        )
+        raise HTTPException(status_code=403, detail="forbidden") from None
+
+
+# ``ApproverDep`` evaluates to ``str`` (the admitted decision-maker email).
+ApproverDep = Annotated[str, Depends(require_approver)]

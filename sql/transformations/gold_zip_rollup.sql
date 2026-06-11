@@ -36,9 +36,20 @@
 --            grain. Stable
 --            across refreshes because the ordering is fully deterministic
 --            (opportunity_score is an INT, borrower_id is unique).
+--
+-- 2026-06-11 audit P2-8: CTAS re-declares clustering/comments/properties
+-- because COR TABLE drops DDL metadata on every refresh. Clustering, column
+-- COMMENTs, and TBLPROPERTIES mirror sql/ddl/gold_zip_rollup.sql.
 -- =============================================================================
 
-CREATE OR REPLACE TABLE mip.gold.zip_rollup AS
+CREATE OR REPLACE TABLE mip.gold.zip_rollup
+CLUSTER BY (state, zip)
+TBLPROPERTIES (
+  'delta.enableChangeDataFeed' = 'false',
+  'delta.autoOptimize.optimizeWrite' = 'true',
+  'delta.autoOptimize.autoCompact'   = 'true'
+)
+AS
 WITH base AS (
   SELECT
     b.zip,
@@ -132,3 +143,19 @@ LEFT JOIN sample_borrower_per_zip AS sb
   ON sb.state = a.state
  AND COALESCE(sb.county_fips_5, '') = COALESCE(a.county_fips_5, '')
  AND sb.zip = a.zip;
+
+-- Column comments re-applied post-CTAS (2026-06-11 audit P2-8 follow-up):
+-- CREATE OR REPLACE drops DDL column comments on every refresh, and the
+-- typeless CTAS column list is a PARSE_SYNTAX_ERROR on DBSQL (observed
+-- live, run 2026-06-11). COMMENT ON COLUMN keeps the Genie grounding /
+-- asset-page comments refresh-stable; the SQL file task executes the
+-- statements in order.
+COMMENT ON COLUMN mip.gold.zip_rollup.state IS '2-char USPS state code (uppercase). PK part.';
+COMMENT ON COLUMN mip.gold.zip_rollup.county_fips_5 IS '5-char county FIPS. Nullable when silver lacked a county geocode. PK part when present.';
+COMMENT ON COLUMN mip.gold.zip_rollup.zip IS '5-digit ZIP (STRING preserves leading zeros). PK part.';
+COMMENT ON COLUMN mip.gold.zip_rollup.addressable_borrowers IS 'Population count for this ZIP on snapshot_date.';
+COMMENT ON COLUMN mip.gold.zip_rollup.avg_opportunity_score IS 'AVG(borrower_360.opportunity_score) rounded to int.';
+COMMENT ON COLUMN mip.gold.zip_rollup.top_segment_code IS 'Dominant segment_code by count. NULL when every borrower in the ZIP has empty segment_codes.';
+COMMENT ON COLUMN mip.gold.zip_rollup.sample_borrower_id IS 'Stable-ranked top borrower_id in the ZIP (ORDER BY opportunity_score DESC, borrower_id ASC). Used by UI deep-link.';
+COMMENT ON COLUMN mip.gold.zip_rollup.snapshot_date IS 'Refresh date; daily grain. PK part.';
+COMMENT ON COLUMN mip.gold.zip_rollup.snapshot_at IS 'Precise refresh timestamp.';

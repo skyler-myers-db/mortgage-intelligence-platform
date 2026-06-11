@@ -42,3 +42,49 @@ ignore = ["E501"]
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
+
+# ---------------------------------------------------------------------------
+# 2026-06-11 audit P2-14: Python type-checking gate ("strong types" goal had
+# no enforcement step). Policy: a RATCHET, not theater —
+#   * every module is checked by default (new code is born type-checked);
+#   * the override list below exempts the 21 modules that carried 73
+#     pre-existing errors at adoption. The list may ONLY SHRINK. Fix a
+#     module -> delete its line in the same commit. Never add a line
+#     without a dated rationale comment.
+# Run: make typecheck  (wired into CI next to ruff).
+# ---------------------------------------------------------------------------
+[tool.mypy]
+files = ["backend"]
+python_version = "3.11"
+ignore_missing_imports = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+no_implicit_optional = true
+
+[[tool.mypy.overrides]]
+# Adoption-time exemptions (audit P2-14). SHRINK ONLY.
+module = [
+    "backend.api.*",
+    "backend.schemas.portfolio",
+    "backend.services.activation_state",
+    "backend.services.asset_metadata",
+    "backend.services.audit_lakebase_store",
+    "backend.services.audit_store",
+    "backend.services.databricks_sql",
+    "backend.services.genie_client",
+    "backend.services.genie_prompt_guardrails",
+    "backend.services.lakebase",
+    "backend.services.repositories.databricks_analytics",
+    "backend.services.repositories.databricks_genie",
+    "backend.services.repositories.databricks_genie_numeric",
+    "backend.services.repositories.databricks_genie_policy",
+    "backend.services.repositories.databricks_genie_trust",
+    "backend.services.repositories.databricks_genie_visualization",
+    "backend.services.repositories.databricks_geo",
+    "backend.services.repositories.databricks_leads",
+    "backend.services.repositories.protocols",
+    "backend.services.sales_state",
+    "backend.services.state_footprint",
+    "backend.services.workspace_store",
+]
+ignore_errors = true

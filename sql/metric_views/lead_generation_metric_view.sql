@@ -31,16 +31,20 @@
 --                       Lakebase mip_app.approvals). Missing → 'pending'.
 --   outreach_status   — queued / actioned / none.
 --
--- Cell-level measures (read in dashboard/Genie aggregations):
---   count_top10                — COUNT(*) FILTER (rank_overall <= 10).
---   count_top100               — COUNT(*) FILTER (rank_overall <= 100).
---   sum_marketable_population  — COUNT(DISTINCT clip) (size of the ranked population).
---   approval_rate              — COUNT(approved) / COUNT(*) * 100, 2dp.
---   outreach_rate              — COUNT(actioned) / COUNT(*) * 100, 2dp.
+-- Materialized aggregate columns (computed per row as state-partitioned
+-- windows; every borrower row in a state carries that state's value):
+--   approval_rate              — 100 * COUNT(approved) / COUNT(*) OVER state, 2dp.
+--   outreach_rate              — 100 * COUNT(actioned) / COUNT(*) OVER state, 2dp.
 --   delta_vs_prior_count       — (addressable_today - addressable_prior_week)
 --                                / addressable_prior_week * 100, 2dp. Sourced
 --                                from mip.gold.funnel_snapshot_daily keyed by
 --                                (snapshot_date, state, segment_code).
+--
+-- Read-time aggregations (NOT columns — dashboards / Genie compute these over
+-- the exposed columns; do not SELECT them as if they exist):
+--   count_top10                — COUNT(*) FILTER (rank_overall <= 10).
+--   count_top100               — COUNT(*) FILTER (rank_overall <= 100).
+--   sum_marketable_population  — COUNT(DISTINCT clip) (size of the ranked population).
 -- =============================================================================
 
 CREATE OR REPLACE VIEW mip.semantics.lead_generation_metric_view AS
@@ -139,4 +143,4 @@ LEFT JOIN today AS t ON t.state = l.state AND t.segment_code = '_ALL'
 LEFT JOIN prior AS p ON p.state = l.state AND p.segment_code = '_ALL';
 
 COMMENT ON VIEW mip.semantics.lead_generation_metric_view IS
-  'Genie + dashboard borrower-grain metric view over gold.lead_population + gold.borrower_lifecycle_state + gold.funnel_snapshot_daily. Dimensions: segment_codes, primary_segment, state, rank_bucket. Row measures: approval_status, outreach_status. Aggregate measures must COUNT(DISTINCT clip); approval_rate/outreach_rate/delta_vs_prior_count are state-level. See docs/data-contract-module0.md §3.5 + docs/validation/metric-views.md.';
+  'Genie + dashboard borrower-grain metric view over gold.lead_population + gold.borrower_lifecycle_state + gold.funnel_snapshot_daily (one row per clip in the ranked cut). Exposed columns: clip, state, segment_codes, primary_segment, rank_bucket, rank_overall, rank_within_state, opportunity_score, equity_estimate, rate_spread_bps, population_version, refreshed_at, approval_status, outreach_status, approval_rate, outreach_rate, delta_vs_prior_count. approval_rate / outreach_rate / delta_vs_prior_count ARE materialized columns (state-partitioned windows, so they repeat per borrower row in a state). count_top10 / count_top100 / sum_marketable_population are NOT columns — they are read-time aggregations the dashboard or Genie computes over the exposed columns (and must COUNT(DISTINCT clip)). See docs/data-contract-module0.md §3.5 + docs/validation/metric-views.md.';

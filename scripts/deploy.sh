@@ -195,7 +195,7 @@ step "preflight — check .env.local, databricks CLI, venv"
 
 if [[ ! -f .env.local ]]; then
   echo "${RED}[deploy] .env.local missing.${RST}" >&2
-  echo "  copy .env.local.example if present, then fill in DATABRICKS_HOST + DATABRICKS_WAREHOUSE_ID." >&2
+  echo "  copy .env.example to .env.local, then fill in DATABRICKS_HOST + DATABRICKS_WAREHOUSE_ID." >&2
   exit 2
 fi
 
@@ -252,6 +252,31 @@ if [[ -z "$_ADMIN_EMAILS_RESOLVED" ]]; then
   echo "${YLW}  (or export it for this run) and redeploy.${RST}" >&2
 else
   echo "  admin allowlist: configured (MIP_ADMIN_EMAILS set)"
+fi
+
+# Cotality ID-mask HMAC visibility check (audit P3, 2026-06-11). When
+# MIP_COTALITY_ID_MASK_SECRET is unset, backend/services/pii_redaction.py
+# falls back to a source-committed constant — masked IDs are still stable,
+# but anyone with repo access can recompute the mapping. Fine for the
+# synthetic-data sandbox; never acceptable for a customer deploy. Warn,
+# don't block (mirrors the MIP_ADMIN_EMAILS posture above).
+_ID_MASK_RESOLVED="${MIP_COTALITY_ID_MASK_SECRET:-$("$PYTHON" - <<'PYEOF'
+from pathlib import Path
+try:
+    from dotenv import dotenv_values
+    values = dotenv_values(Path(".env.local"))
+    print((values.get("MIP_COTALITY_ID_MASK_SECRET")
+           or values.get("MIP_GENIE_ACTION_SECRET") or "").strip())
+except Exception:
+    print("")
+PYEOF
+)}"
+if [[ -z "$_ID_MASK_RESOLVED" ]]; then
+  echo "${YLW}[deploy] WARNING: MIP_COTALITY_ID_MASK_SECRET is not set (env or .env.local).${RST}" >&2
+  echo "${YLW}  Cotality ID masking will use the source-committed fallback constant —${RST}" >&2
+  echo "${YLW}  acceptable for the synthetic-data sandbox, NOT for customer deploys.${RST}" >&2
+else
+  echo "  cotality id-mask secret: configured"
 fi
 
 # -----------------------------------------------------------------------------
@@ -359,6 +384,88 @@ run "$PYTHON" tools/databricks/bundle_env.py deploy -t "$TARGET"
 # Requires only step 4 (the bundle apply defines the job + Lakebase instance).
 step "migrate Lakebase — schema.sql + seed_campaigns.sql (idempotent)"
 run databricks bundle run mip_lakebase_migrate -t "$TARGET"
+
+# -----------------------------------------------------------------------------
+# Step 4c: UC grants for the app service principal (audit P1-3, zero-click)
+# -----------------------------------------------------------------------------
+# On a FRESH workspace the bundle creates the app + its service principal,
+# but nothing granted that SP read access to the UC objects — the app booted
+# to PERMISSION_DENIED on every endpoint and docs/security/GRANTS.md was a
+# manual copy-paste runbook (CLAUDE.md calls that exact pattern a packaging
+# bug). This step applies the GRANTS.md §catalog/§gold/§ref statements
+# idempotently (GRANT is a no-op when already granted) against the deploy
+# warehouse, addressed to the SP's client id. Failures are FATAL with a
+# pointer to GRANTS.md: a deploy that cannot grant is a deploy whose app
+# cannot read, and hiding that would violate the fail-visibly contract.
+# GRANTS.md remains the audit-readable matrix; Lakebase role grants are
+# applied by jobs/lakebase_migrate.py in step 4b.
+step "apply UC grants to the app service principal (idempotent)"
+_GRANTS_APP_NAME="${MIP_APP_NAME:-mip-app}"
+_GRANTS_WAREHOUSE_ID="${DATABRICKS_WAREHOUSE_ID:-$(dotenv_value DATABRICKS_WAREHOUSE_ID)}"
+_GRANTS_CATALOG="${MIP_DEFAULT_CATALOG:-mip}"
+APP_SP_CLIENT_ID="$(databricks apps get "$_GRANTS_APP_NAME" -o json 2>/dev/null | "$PYTHON" -c 'import json,sys; print((json.load(sys.stdin).get("service_principal_client_id") or "").strip())' || true)"
+if [[ -z "$APP_SP_CLIENT_ID" ]]; then
+  echo "${RED}[deploy] could not resolve service_principal_client_id for app '$_GRANTS_APP_NAME'.${RST}" >&2
+  echo "  The bundle apply (step 4) should have created the app. Inspect 'databricks apps get $_GRANTS_APP_NAME'." >&2
+  exit 4
+fi
+if [[ -z "$_GRANTS_WAREHOUSE_ID" ]]; then
+  echo "${RED}[deploy] DATABRICKS_WAREHOUSE_ID missing (env or .env.local) — cannot apply UC grants.${RST}" >&2
+  exit 4
+fi
+while IFS= read -r _grant_stmt; do
+  [[ -z "$_grant_stmt" ]] && continue
+  _grant_resp="$(databricks api post /api/2.0/sql/statements/ --json "$(
+    "$PYTHON" -c 'import json,sys; print(json.dumps({"warehouse_id": sys.argv[1], "statement": sys.argv[2], "wait_timeout": "50s", "on_wait_timeout": "CANCEL"}))' \
+      "$_GRANTS_WAREHOUSE_ID" "$_grant_stmt"
+  )")"
+  _grant_state="$(printf '%s' "$_grant_resp" | "$PYTHON" -c 'import json,sys; d=json.load(sys.stdin); print(d.get("status",{}).get("state",""))')"
+  if [[ "$_grant_state" != "SUCCEEDED" ]]; then
+    echo "${RED}[deploy] UC grant failed (${_grant_state:-no-state}): ${_grant_stmt}${RST}" >&2
+    printf '%s\n' "$_grant_resp" | "$PYTHON" -c 'import json,sys; d=json.load(sys.stdin); print(json.dumps(d.get("status",{}).get("error",{}), indent=2)[:600])' >&2 || true
+    echo "  Likely cause: the deploying identity lacks GRANT authority on catalog '${_GRANTS_CATALOG}'." >&2
+    echo "  A metastore admin can apply docs/security/GRANTS.md once; reruns are idempotent." >&2
+    exit 4
+  fi
+  echo "  granted: ${_grant_stmt}"
+done <<GRANTS_EOF
+GRANT USE CATALOG ON CATALOG ${_GRANTS_CATALOG} TO \`${APP_SP_CLIENT_ID}\`
+GRANT USE SCHEMA, SELECT ON SCHEMA ${_GRANTS_CATALOG}.gold TO \`${APP_SP_CLIENT_ID}\`
+GRANT USE SCHEMA, SELECT ON SCHEMA ${_GRANTS_CATALOG}.ref TO \`${APP_SP_CLIENT_ID}\`
+GRANTS_EOF
+
+# -----------------------------------------------------------------------------
+# Step 4d: provision the PII-salt secret scope (audit P1-4, zero-click)
+# -----------------------------------------------------------------------------
+# pipelines/lakeflow/mip_feature_pipeline.py and the silver warehouse path
+# hash PII columns with secret('mip', 'pii-salt-v1'). Nothing provisioned
+# that scope: on a fresh workspace the DLT path failed mid-silver-refresh
+# with an unexplained secret error, and the SQL path silently fell back to
+# a source-committed constant (predictable hashing — worse than failing).
+# Create-if-missing ONLY; an existing salt is NEVER rotated, because
+# rotating it changes every masked identifier across refreshes and breaks
+# join stability between gold snapshots.
+step "provision pii-salt secret scope (create-if-missing, never rotate)"
+# CLI JSON shape note (observed live 2026-06-11): `databricks secrets
+# list-scopes -o json` / `list-secrets -o json` emit a BARE ARRAY on
+# current CLI versions and a wrapped object on older ones — accept both.
+if ! databricks secrets list-scopes -o json | "$PYTHON" -c 'import json,sys
+data = json.load(sys.stdin)
+items = data.get("scopes", []) if isinstance(data, dict) else (data or [])
+names = {s.get("name") for s in items if isinstance(s, dict)}
+sys.exit(0 if "mip" in names else 1)'; then
+  run databricks secrets create-scope mip
+fi
+if ! databricks secrets list-secrets mip -o json 2>/dev/null | "$PYTHON" -c 'import json,sys
+data = json.load(sys.stdin)
+items = data.get("secrets", []) if isinstance(data, dict) else (data or [])
+keys = {s.get("key") for s in items if isinstance(s, dict)}
+sys.exit(0 if "pii-salt-v1" in keys else 1)'; then
+  echo "  generating pii-salt-v1 (random 64-hex, write-once)"
+  databricks secrets put-secret mip pii-salt-v1 --string-value "$(openssl rand -hex 32)"
+else
+  echo "  pii-salt-v1 already present — leaving untouched (rotation would break masked-ID stability)"
+fi
 
 # -----------------------------------------------------------------------------
 # Step 5: promote uploaded source to the running Databricks App

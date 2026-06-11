@@ -232,7 +232,7 @@ class AdminRulesService:
     def get_rules(self) -> RulesPayload:
         cached = self._cache.get(self._RULES_CACHE_KEY)
         if cached is not None:
-            return cached  # type: ignore[no-any-return]
+            return cached
         payload = self._load_rules()
         self._cache.set(self._RULES_CACHE_KEY, payload, self._ttl)
         return payload
@@ -323,7 +323,7 @@ class AdminRulesService:
     def get_sources(self) -> tuple[SourceRow, ...]:
         cached = self._cache.get(self._SOURCES_CACHE_KEY)
         if cached is not None:
-            return cached  # type: ignore[no-any-return]
+            return cached
         payload = self._load_sources()
         self._cache.set(self._SOURCES_CACHE_KEY, payload, self._ttl)
         return payload

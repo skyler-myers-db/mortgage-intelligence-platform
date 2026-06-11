@@ -50,9 +50,21 @@
 --   mip.silver.owner_transfer_events
 --   mip.silver.market_rates_weekly
 --   mip.gold.property_owner_bridge
+--
+-- 2026-06-11 audit P2-8: CTAS re-declares clustering/comments/properties
+-- because COR TABLE drops DDL metadata on every refresh. Clustering, column
+-- COMMENTs, and TBLPROPERTIES mirror sql/ddl/gold_evidence_events.sql; the
+-- column list order matches the final SELECT projection 1:1.
 -- =============================================================================
 
-CREATE OR REPLACE TABLE mip.gold.evidence_events AS
+CREATE OR REPLACE TABLE mip.gold.evidence_events
+CLUSTER BY (clip)
+TBLPROPERTIES (
+  'delta.enableChangeDataFeed' = 'false',
+  'delta.autoOptimize.optimizeWrite' = 'true',
+  'delta.autoOptimize.autoCompact'   = 'true'
+)
+AS
 WITH market AS (
   SELECT
     rate_fraction AS market_rate_fraction,
@@ -358,3 +370,20 @@ SELECT
 FROM unioned AS u
 JOIN borrower_spine AS bs
   ON bs.clip = u.clip;
+
+-- Column comments re-applied post-CTAS (2026-06-11 audit P2-8 follow-up):
+-- CREATE OR REPLACE drops DDL column comments on every refresh, and the
+-- typeless CTAS column list is a PARSE_SYNTAX_ERROR on DBSQL (observed
+-- live, run 2026-06-11). COMMENT ON COLUMN keeps the Genie grounding /
+-- asset-page comments refresh-stable; the SQL file task executes the
+-- statements in order.
+COMMENT ON COLUMN mip.gold.evidence_events.clip IS 'Cotality CLIP. Not in Pydantic EvidenceEvent (router strips); used for join / filter.';
+COMMENT ON COLUMN mip.gold.evidence_events.evidence_id IS 'Deterministic: "ev-" || substr(sha2(clip || signal_type || timestamp, 256), 1, 12). Stable across refreshes so Borrower360.evidence_ids stays consistent.';
+COMMENT ON COLUMN mip.gold.evidence_events.source_product IS 'Human label: Voluntary Lien / AVM / Owner Link / Property / Mortgage Domain / Owner Transfer / Market Rates.';
+COMMENT ON COLUMN mip.gold.evidence_events.source_table IS 'Real UC path. Shown verbatim in EvidenceDrawer -- must be a resolvable mip.silver.* or mip.gold.* path.';
+COMMENT ON COLUMN mip.gold.evidence_events.signal_type IS 'Controlled vocab: rate_spread / equity / loan_type_fit / competitor_lien / multi_property / absentee_mailing / corporate_owner / foreclosure_stage / recent_refi / recent_payoff / recent_sale / market_trend. BLOCKED vocab (permit, listing) NEVER emitted.';
+COMMENT ON COLUMN mip.gold.evidence_events.signal_value IS 'Human-readable value: "+88 bps", "$285K", "3 properties", "competitor refi".';
+COMMENT ON COLUMN mip.gold.evidence_events.display_text IS 'One-sentence deterministic template per signal_type. No PII.';
+COMMENT ON COLUMN mip.gold.evidence_events.confidence IS '0..1. Per-signal: AVM uses upstream confidence_score_mktg; count-based rows 0.85-0.92 (see header).';
+COMMENT ON COLUMN mip.gold.evidence_events.`timestamp` IS 'ISO-8601 STRING (matches Pydantic EvidenceEvent.timestamp: str).';
+COMMENT ON COLUMN mip.gold.evidence_events.signal_rank IS 'Deterministic priority order for Borrower360.evidence_ids: rate_spread=1, equity=2, market_trend=3, etc. Smaller = higher priority. Gold-only.';

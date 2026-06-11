@@ -237,3 +237,162 @@ Latest browser-gate collection:
 Remaining open items before declaring the whole modernization tracker closed:
 
 - None in repo. Customer durable log retention, Cotality MLS/Permits, and per-release customer evidence are external/environment gates tracked in `docs/observability.md`, `docs/data-sources-gap-analysis.md`, and `docs/enterprise-readiness-checklist.md`.
+
+## 2026-06-11 Full-Stack Audit Response (independent validation + remediation)
+
+An external full-stack audit (now committed, marked Internal, at
+`docs/audits/full-stack-audit-2026-06-11.md`) was independently validated
+claim-by-claim — three read-only validation agents (backend / SQL+bundle /
+frontend+hygiene) plus first-party reproduction — and every claim judged
+valid was remediated on `fix/audit-2026-06-11-remediation`. Scorecard:
+**of the 6 P1s: 5 confirmed + fixed, 1 split (P1-2 is a decision, recorded
+below). Of the P2/P3 set: most confirmed + fixed; 5 claims REFUTED with
+evidence; 2 deliberately deferred with rationale.**
+
+Confirmed + fixed (commit refs):
+- P1-1 scoring parity (e9d08c5): reproduced exactly — float sum
+  85.49999999999999 vs exact 85.5 on (92,94,94,85,25); 0.666% lattice
+  divergence. `lead_score` now computes in `decimal.Decimal` +
+  ROUND_HALF_EVEN; drift-zone golden case_13 pinned in JSON + SQL harness;
+  200k seeded sweep + exhaustive half-boundary lattice vs an independent
+  integer-hundredths oracle.
+- P1-5 narrative seed (99705ff): five REAL `gold.borrower_360` IDs
+  (state-consistent with their campaigns; rationale stats match live
+  dossiers), schema migration purges legacy `B-\d{5}` rows + NOT
+  VALID→validate CHECK on the masked-ID format, deterministic re-selection
+  helper `tools/select_narrative_borrowers.sql`, contract tests.
+- P1-6 leads hot path (fdb3fdc): measured live 6.6/4.3s cold vs 0.95s warm.
+  Root causes: the fail-closed `marketing_eligibility="Eligible only"`
+  default routes even filterless requests down the borrower_360 5.16M-row
+  path, AND the freshness marker embedded `time_ns()` making every query
+  textually unique (warehouse result cache useless). Fixed with
+  startup + refresh-ahead warming of the exact route-default cache keys
+  (parity pinned by a zero-extra-SQL test) and TTL-bucketed freshness
+  markers (zero added staleness; cross-worker warehouse-cache reuse).
+  Plus the home Genie CTA full-page reload → SPA navigate.
+- P1-3/P1-4 fresh-workspace deploy (cfa359a): deploy.sh step 4c applies
+  UC grants to the app SP (client id resolved from `databricks apps get`,
+  fatal-with-pointer on failure), the Lakebase migrate runner applies the
+  GRANTS.md role matrix (pg_roles discovery, append-only audit preserved),
+  step 4d provisions `mip`/`pii-salt-v1` create-if-missing/never-rotate;
+  the SQL path's silent fallback to a source-committed salt literal was
+  REMOVED (predictable hashing, silently — worse than failing); dead DLT
+  fallback constant + phantom "preflight" comment cleaned.
+- P2-5 approver gate (ebb7cb9): optional `MIP_APPROVER_EMAILS` allowlist
+  on /outreach/approve|reject — empty default preserves the documented
+  Module 0 demo posture; admins always pass (allowlist-incident lesson).
+- P2-7 fair-lending over-blocking (ebb7cb9): safe-phrase masking (loan-age
+  vocabulary, protected-token+geographic-noun compounds) before the
+  protected-term scan; phrase-local so protected usage still refuses;
+  12-case allow/refuse matrix pinned.
+- P2-8/10/11/12 SQL plane (045f9e8): all 13 gold CTAS re-declare CLUSTER
+  BY / column COMMENTs / TBLPROPERTIES (programmatic DDL parity check);
+  QUALIFY dedup guards on 4 silver MERGEs; `ltv` now prefers CLTV exactly
+  like `equity_pct`; metric-view COMMENTs distinguish real columns from
+  read-time aggregations.
+- P2-1 data-estate shredding (fd0c36f): live-reproduced (65px label
+  column, 5–6 line mid-word wraps with Console open — overruling a
+  validator's INVALID verdict); lanes now auto-fit with a 13.5rem floor.
+- P2-9 dead mirrors (8257662, 626d0d9): resources/*.yml + jobs/*.yml
+  mirrors deleted; anti-regression guard keeps them dead; CLAUDE.md
+  updated; empty `mip_snapshot_dashboards` removed; bundle validates.
+- P2-14 type gate (a23d24d): ratcheted mypy across all 106 backend
+  modules in CI/make — 21-module shrink-only exemption list for the 73
+  pre-existing errors; 7 stale type-ignores removed.
+- P2-15 + P3 batch (fd0c36f, 8257662): documented --text-3 WCAG-AA
+  divergence both themes; dated TODO on the eslint disable; aria-sort on
+  the <th> columnheader (the audit's suggested button placement would be
+  invalid ARIA); aria-modal removed from the non-modal Genie panel;
+  intentional desktop-hidden FAB documented; DC/PR/VI display labels;
+  FRED readiness row_count now observation volume; FILE_MANIFEST deleted;
+  tsbuildinfo untracked; dead frontend files removed; CHANGELOG +
+  CLAUDE.md drift corrected; deploy env-template name fixed;
+  MIP_COTALITY_ID_MASK_SECRET preflight warning; file-size allowlist
+  expiry documented as the deliberate post-Summit forcing function.
+
+REFUTED audit claims (evidence, no change made):
+- P2-6 "audit INSERT not idempotent under retry": the approval INSERT is
+  `ON CONFLICT (request_id) DO NOTHING RETURNING` and the audit event is
+  written in the SAME transaction only when the row actually inserted
+  (`backend/api/outreach.py:104-288`); retries return the existing
+  approval id with NO second audit row. Pinned since R5-01 by
+  `test_outreach_reject.py:458/632/706/764`.
+- P3 "TTLCache can't cache falsy": `resilience.py` uses `is not None`
+  sentinels throughout; empty lists/0 cache correctly.
+- P2-13 "prod run_as drift": the cited comment is a customer-SE checklist
+  instruction, not a claim about current state.
+- P3 "Genie FAB 0x0 at desktop": parity with the prototype's topbar
+  entry (Module 0 Prototype.html:1237); now documented at the CSS site.
+- P2-7(session) "each panel open fires /genie/start": `genie_start` is a
+  lightweight Lakebase latest-conversation read + static content; no
+  remote Genie conversation is created until first message. Working as
+  designed.
+
+Found BEYOND the audit (its sandbox could not run pytest):
+- Import-time `load_dotenv` in `provision_genie_space.py` poisoned the
+  whole pytest process with the operator's `.env.local` (which now
+  contains MIP_ADMIN_EMAILS per deploy docs) — flipping the fail-closed
+  settings contract and no-bootstrap payload tests on dev machines while
+  CI stayed green. Fixed by moving the overlay under the true `__main__`
+  guard (an intermediate fix inside `main(argv)` reproduced the leak via
+  the dry-run test — proven empirically), a dotfile seam + operator-var
+  scrub in the payload tests, and a new AST guardrail banning
+  module-scope `load_dotenv` (28fd452).
+
+Decisions recorded:
+- P1-2 design fork: per CLAUDE.md, `design_files/` IS the design
+  contract; the claude.ai share link's current iteration (Acme Lending —
+  which violates the Summit Mortgage naming rule — different hero/KPIs)
+  is treated as a divergent draft, NOT canonical. OPERATOR ACTION: update
+  the share link to match the repo snapshot before side-by-side demos
+  (John West Thu/Fri, Movement Tue 3p), or explicitly bless its deltas
+  through the normal design_files change process.
+- P2-2 awaiting-feed framing: already decided in
+  `docs/module0-talk-track.md` (honest pending-feed cards + "predicates
+  auto-unblock" language); chasing the Cotality MLS/permits shares
+  remains an external partner item.
+- P2-4 router-layer drift (~3k lines): pure-move refactors deliberately
+  DEFERRED past Summit — churn risk with zero user-visible gain days
+  before the booth; scheduled with the 2026-06-21 file-size-allowlist
+  forcing function.
+- P3 dependency bumps: deferred post-Summit per the audit's own
+  recommendation.
+- Legacy `module0.spec.ts` still pins fixture-era B-48291 values and
+  cannot pass against real data (pre-existing); superseded by the
+  real-data nightly spec — post-Summit cleanup candidate.
+
+### 2026-06-11 audit-remediation deployed evidence (signoff ritual)
+
+- Deploy: `./scripts/deploy.sh -t dev --no-confirm` — full 15-step pipeline.
+  Two real failures found AND fixed by the run itself: (1) `databricks
+  secrets list-scopes -o json` emits a bare array on current CLI (parser now
+  accepts both shapes); (2) the typeless CTAS column-COMMENT list is a
+  PARSE_SYNTAX_ERROR on DBSQL — first live gold run failed exactly as the
+  data-modeler agent's risk note warned; rewritten to bare CTAS (CLUSTER BY
+  + TBLPROPERTIES retained) + post-CTAS `COMMENT ON COLUMN` statements (269
+  across 13 files), proven by `mip_refresh_scores` TERMINATED SUCCESS.
+- New deploy steps proven live: Lakebase migrate applied schema + real-ID
+  seed + app-role grants (`pg_roles` discovery hit the SP client-id role);
+  UC grants step issued all three GRANTs through the warehouse;
+  pii-salt step short-circuited on the existing secret ("never rotate");
+  MIP_COTALITY_ID_MASK_SECRET preflight warning fired (expected: sandbox).
+- P2-8 proven by DESCRIBE after refresh: `property_owner_bridge` clustering
+  ["owner_link_id"], borrower_360 ["state","clip"], autoOptimize
+  TBLPROPERTIES present, 61 commented columns on borrower_360.
+- Final smoke: 12/12 ok + PASS against the deployed app.
+- Verification battery (live, authenticated):
+  - `/api/v1/leads` ×3: 2175ms → 144ms → 159ms (audit baseline: 3.6-5.4s on
+    EVERY load); boot warm + refresh-ahead active.
+  - P1-1 proof sweep: 25 live borrowers, 0 integrity gaps, 0 non-200s.
+  - Seed trio resolves as real dossiers: B-0CPWBTJMAPFY2 (IL, 70),
+    B-1IB0UGBTFYM20 (TX, 69), B-102FL7THC6Q3L (IL, 88).
+  - Fair-lending live: "average loan age in Illinois" → source=genie
+    (answered); "Average borrower age" → source=refused.
+  - Data-estate with Console rail open: worst label 3 word-boundary lines @
+    108px (was 6 mid-word lines @ 65px). A second live probe then caught the
+    "demo synthetic" governance chip overflowing floor-width lanes by
+    68-81px — fixed (meta wraps under the name; chip never ellipsized) and
+    re-proven: zero overflow elements, zero chip overlaps; screenshot
+    inspected.
+  - Home "Ask Genie" CTA: SPA navigation, 0 full reloads.
+  - Lead queue: 7 `th[aria-sort]` columnheaders; zero console errors.

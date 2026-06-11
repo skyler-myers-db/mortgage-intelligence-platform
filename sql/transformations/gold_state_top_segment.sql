@@ -18,9 +18,20 @@
 --            array still emits one row with top_segment_code = 'none' +
 --            top_segment_share_pct = 0 so the frontend sees a predictable
 --            shape rather than a missing row.
+--
+-- 2026-06-11 audit P2-8: CTAS re-declares clustering/comments/properties
+-- because COR TABLE drops DDL metadata on every refresh. Clustering, column
+-- COMMENTs, and TBLPROPERTIES mirror sql/ddl/gold_state_top_segment.sql.
 -- =============================================================================
 
-CREATE OR REPLACE TABLE mip.gold.state_top_segment AS
+CREATE OR REPLACE TABLE mip.gold.state_top_segment
+CLUSTER BY (state)
+TBLPROPERTIES (
+  'delta.enableChangeDataFeed' = 'false',
+  'delta.autoOptimize.optimizeWrite' = 'true',
+  'delta.autoOptimize.autoCompact'   = 'true'
+)
+AS
 WITH state_pop AS (
   SELECT
     state,
@@ -69,3 +80,14 @@ SELECT
   CURRENT_DATE()                                                                AS snapshot_date
 FROM state_pop AS sp
 LEFT JOIN top_segment AS ts ON ts.state = sp.state;
+
+-- Column comments re-applied post-CTAS (2026-06-11 audit P2-8 follow-up):
+-- CREATE OR REPLACE drops DDL column comments on every refresh, and the
+-- typeless CTAS column list is a PARSE_SYNTAX_ERROR on DBSQL (observed
+-- live, run 2026-06-11). COMMENT ON COLUMN keeps the Genie grounding /
+-- asset-page comments refresh-stable; the SQL file task executes the
+-- statements in order.
+COMMENT ON COLUMN mip.gold.state_top_segment.state IS '2-char USPS state code (uppercase). PK part.';
+COMMENT ON COLUMN mip.gold.state_top_segment.top_segment_code IS 'Dominant SegmentCode for this state on snapshot_date (itm/listed/permit/investor/equity/retention). "none" when no borrower in the state has a non-empty segment_codes array.';
+COMMENT ON COLUMN mip.gold.state_top_segment.top_segment_share_pct IS '0..100. Share of the state population in the top segment.';
+COMMENT ON COLUMN mip.gold.state_top_segment.snapshot_date IS 'Refresh date; daily grain. PK part.';

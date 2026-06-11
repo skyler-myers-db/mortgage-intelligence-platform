@@ -695,16 +695,29 @@ class DatabricksLeadRepository:
 
         return min(int(bounded_limit) + 1, cls.MAX_LIMIT + 1)
 
-    @staticmethod
-    def _freshness_clause() -> str:
-        """Break warehouse result-cache reuse for interactive drilldowns.
+    def _freshness_clause(self) -> str:
+        """Bound warehouse result-cache reuse for interactive drilldowns.
 
         Drilldowns read ``gold.borrower_360`` joined to the lifecycle mirror,
         which can change during deploy-time syncs while query text stays
         otherwise identical. An app-generated no-op literal predicate prevents
         Databricks SQL from serving a stale exact-query result; the app's
         short ``TTLCache`` remains the bounded reuse layer.
+
+        2026-06-11 audit P1-6 refinement: the marker is bucketed to the
+        repository cache TTL instead of nanosecond-unique. The app cache
+        already serves results up to ``cache_ttl_s`` old, so a warehouse
+        result reused within the same TTL window adds ZERO staleness beyond
+        the existing contract — but sibling app processes/workers (each
+        with their own in-process TTLCache) can now reuse the warehouse
+        result cache instead of re-scanning borrower_360 (5.16M rows,
+        3.6-6.6s measured live). With app caching disabled (ttl <= 0) the
+        marker stays nanosecond-unique, preserving the original
+        always-fresh behaviour.
         """
 
-        marker = time.time_ns()
+        if self._cache_ttl_s <= 0:
+            marker: int = time.time_ns()
+        else:
+            marker = int(time.time() // self._cache_ttl_s)
         return f"AND {marker} = {marker}"

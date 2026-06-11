@@ -25,9 +25,21 @@
 --
 -- population_version: CONCAT(DATE_FORMAT(refreshed_at, 'yyyyMMdd'), '-v1').
 --   When the gold schema bumps, bump '-v1' to '-v2' etc. in one place here.
+--
+-- 2026-06-11 audit P2-8: CTAS re-declares clustering/comments/properties
+-- because COR TABLE drops DDL metadata on every refresh. Clustering, column
+-- COMMENTs, and TBLPROPERTIES mirror sql/ddl/gold_lead_population.sql; the
+-- column list order matches the final SELECT projection 1:1.
 -- =============================================================================
 
-CREATE OR REPLACE TABLE mip.gold.lead_population AS
+CREATE OR REPLACE TABLE mip.gold.lead_population
+CLUSTER BY (opportunity_score)
+TBLPROPERTIES (
+  'delta.enableChangeDataFeed' = 'false',
+  'delta.autoOptimize.optimizeWrite' = 'true',
+  'delta.autoOptimize.autoCompact'   = 'true'
+)
+AS
 WITH ranked AS (
   SELECT
     b.clip,
@@ -126,3 +138,47 @@ SELECT
 -- `clip_${borrower_id.toLowerCase()...}`. Surfaces the real Cotality
 -- CLIP so the segment-row preview and Borrower 360 agree.)
 FROM ranked;
+
+-- Column comments re-applied post-CTAS (2026-06-11 audit P2-8 follow-up):
+-- CREATE OR REPLACE drops DDL column comments on every refresh, and the
+-- typeless CTAS column list is a PARSE_SYNTAX_ERROR on DBSQL (observed
+-- live, run 2026-06-11). COMMENT ON COLUMN keeps the Genie grounding /
+-- asset-page comments refresh-stable; the SQL file task executes the
+-- statements in order.
+COMMENT ON COLUMN mip.gold.lead_population.clip IS 'Cotality CLIP. PK.';
+COMMENT ON COLUMN mip.gold.lead_population.borrower_id IS 'From gold.borrower_360.borrower_id.';
+COMMENT ON COLUMN mip.gold.lead_population.display_name IS 'Synthesized label. No PII.';
+COMMENT ON COLUMN mip.gold.lead_population.city IS 'Situs city.';
+COMMENT ON COLUMN mip.gold.lead_population.state IS 'Situs state.';
+COMMENT ON COLUMN mip.gold.lead_population.zip IS '5-digit situs ZIP.';
+COMMENT ON COLUMN mip.gold.lead_population.segment_codes IS 'Ordered SegmentCode list.';
+COMMENT ON COLUMN mip.gold.lead_population.equity_estimate IS 'From gold.borrower_360.';
+COMMENT ON COLUMN mip.gold.lead_population.equity_pct IS 'From gold.borrower_360 [0..100]. Used by executive dashboard top-borrower widget.';
+COMMENT ON COLUMN mip.gold.lead_population.rate_spread_bps IS 'From gold.borrower_360.';
+COMMENT ON COLUMN mip.gold.lead_population.opportunity_score IS 'fn_lead_score output 0..100.';
+COMMENT ON COLUMN mip.gold.lead_population.confidence IS 'Mean of 5 sub-scores 0..100.';
+COMMENT ON COLUMN mip.gold.lead_population.recommended_offer_code IS 'fn_next_best_offer output code; canonical offer enum for operational filters and audit grouping.';
+COMMENT ON COLUMN mip.gold.lead_population.recommended_offer IS 'Human label (resolved in gold via product_labels map).';
+COMMENT ON COLUMN mip.gold.lead_population.why_now IS 'Deterministic template per offer code.';
+COMMENT ON COLUMN mip.gold.lead_population.evidence_ids IS 'Ordered evidence_ids (mirrors gold.borrower_360 for this CLIP).';
+COMMENT ON COLUMN mip.gold.lead_population.approval_status IS '"pending" by default; Lakebase is authoritative for actual state.';
+COMMENT ON COLUMN mip.gold.lead_population.current_lender_ref IS 'Public-demo-safe current-servicer reference from borrower_360. Never the raw Cotality lender string.';
+COMMENT ON COLUMN mip.gold.lead_population.is_owner_occupied IS 'From gold.borrower_360; drives /segment-intelligence DEMOGRAPHICS filter.';
+COMMENT ON COLUMN mip.gold.lead_population.is_investor IS 'Carried from gold.borrower_360 (derived: multi-property OR corporate OR absentee).';
+COMMENT ON COLUMN mip.gold.lead_population.is_current_customer IS 'From gold.borrower_360; current servicer or first-party servicing relationship to the tenant lender.';
+COMMENT ON COLUMN mip.gold.lead_population.is_former_customer IS 'From gold.borrower_360; historical tenant-lender relationship with no current tenant lien.';
+COMMENT ON COLUMN mip.gold.lead_population.is_competitor_lien IS 'From gold.borrower_360; current servicer is known and not the tenant lender.';
+COMMENT ON COLUMN mip.gold.lead_population.related_property_count IS 'From gold.borrower_360; drives /segment-intelligence OWNER LINK filter.';
+COMMENT ON COLUMN mip.gold.lead_population.current_lien_balance IS 'From gold.borrower_360; drives /segment-intelligence LIEN filter.';
+COMMENT ON COLUMN mip.gold.lead_population.second_pos_amount IS 'From gold.borrower_360; nullable (no second-position lien).';
+COMMENT ON COLUMN mip.gold.lead_population.has_permit IS 'BLOCKED: FALSE until Cotality Building Permits Delta share lands.';
+COMMENT ON COLUMN mip.gold.lead_population.listed_for_sale IS 'BLOCKED: FALSE until Cotality MLS Listings Delta share lands.';
+COMMENT ON COLUMN mip.gold.lead_population.marketing_eligible IS 'From gold.borrower_360; TRUE only when consent, suppression, and frequency-cap gates are clear.';
+COMMENT ON COLUMN mip.gold.lead_population.consent_status IS 'From gold.borrower_360; opt_in / opt_out / unknown.';
+COMMENT ON COLUMN mip.gold.lead_population.suppression_reason IS 'From gold.borrower_360; controlled suppression reason.';
+COMMENT ON COLUMN mip.gold.lead_population.last_touch_at IS 'From gold.borrower_360; most recent first-party marketing/contact touch.';
+COMMENT ON COLUMN mip.gold.lead_population.eligible_recontact_at IS 'From gold.borrower_360; earliest permitted re-contact time when capped.';
+COMMENT ON COLUMN mip.gold.lead_population.rank_overall IS 'DENSE_RANK OVER (ORDER BY opportunity_score DESC, clip). 1 = highest.';
+COMMENT ON COLUMN mip.gold.lead_population.rank_within_state IS 'DENSE_RANK OVER (PARTITION BY state ORDER BY opportunity_score DESC, clip). 1 = highest in state.';
+COMMENT ON COLUMN mip.gold.lead_population.population_version IS 'CONCAT(DATE_FORMAT(refreshed_at, "yyyyMMdd"), "-v1"). EvidenceDrawer footer uses this as a provenance chip.';
+COMMENT ON COLUMN mip.gold.lead_population.refreshed_at IS 'Refresh timestamp.';

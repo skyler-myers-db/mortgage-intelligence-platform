@@ -62,11 +62,27 @@ describe('layout containment contracts', () => {
     expect(css).toMatch(/\.lineage-node__value\s*\{[^}]*overflow-wrap:\s*anywhere;/s);
   });
 
+  it('keeps data-estate lanes from starving asset labels when the console rail opens', () => {
+    const css = designCss();
+
+    // 2026-06-11 audit P2-1 (live repro: 65px label column, 5-6 line
+    // mid-word wraps with the Console rail open). Lanes wrap to fewer
+    // columns instead of compressing below a readable floor, and the
+    // asset row is flex-with-wrap so a wide meta (the "demo synthetic"
+    // GOVERNANCE chip, which must never be ellipsized) drops to its own
+    // right-aligned line instead of overflowing into the next lane
+    // (overflow probe: chips painted 68-81px past the lane edge).
+    expect(css).toMatch(/\.data-estate__grid\s*\{[^}]*grid-template-columns:\s*repeat\(auto-fit,\s*minmax\(13\.5rem,\s*1fr\)\);/s);
+    expect(css).toMatch(/\.data-estate__asset\s*\{[^}]*flex-wrap:\s*wrap;/s);
+    expect(css).toMatch(/\.data-estate__asset-main\s*\{[^}]*flex:\s*1 1 7\.5rem;/s);
+    expect(css).toMatch(/\.data-estate__asset-meta\s*\{[^}]*flex-wrap:\s*wrap;/s);
+  });
+
   it('makes proof affordance rows visibly interactive without layout shifts', () => {
     const css = designCss();
 
     expect(css).toContain('.data-estate__lane-proof');
-    expect(css).toMatch(/\.data-estate__asset\s*\{[^}]*display:\s*grid;/s);
+    expect(css).toMatch(/\.data-estate__asset\s*\{[^}]*display:\s*flex;/s);
     expect(css).toMatch(/\.data-estate__asset\s*\{[^}]*cursor:\s*pointer;/s);
     expect(css).toContain('.trusted-asset--button');
     expect(css).toMatch(/\.trusted-asset--button\s*\{[^}]*width:\s*100%;/s);

@@ -16,6 +16,8 @@ pytest==9.0.3
 pytest-cov==6.0.0
 pytest-xdist==3.8.0
 ruff==0.8.6
+# 2026-06-11 audit P2-14: ratcheted type gate (see [tool.mypy] in pyproject.toml).
+mypy==2.1.0
 # Genie fuzz testing (tests/integration/test_genie_fuzz.py). Required
 # in CI so self-tests run; live fuzz runs skip without Genie creds.
 hypothesis==6.123.7

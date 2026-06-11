@@ -40,9 +40,23 @@
 --                approval_status='pending' / outreach_status='none'. Joins
 --                LEFT JOIN + COALESCE so a borrower not yet reviewed counts
 --                correctly in the denominator.
+--
+-- 2026-06-11 audit P2-8: this manual-fallback CTAS re-declares clustering/
+-- comments/properties because COR TABLE drops DDL metadata on every refresh.
+-- Clustering, column COMMENTs, and TBLPROPERTIES mirror the
+-- mip.gold.borrower_lifecycle_state block in sql/ddl/003_gold_tables.sql (§7);
+-- the column list order matches the SELECT. jobs/sync_lifecycle_state.py owns
+-- the populated-state rewrite and must keep the same table shape.
 -- =============================================================================
 
-CREATE OR REPLACE TABLE mip.gold.borrower_lifecycle_state AS
+CREATE OR REPLACE TABLE mip.gold.borrower_lifecycle_state
+CLUSTER BY (borrower_id)
+TBLPROPERTIES (
+  'delta.enableChangeDataFeed' = 'false',
+  'delta.autoOptimize.optimizeWrite' = 'true',
+  'delta.autoOptimize.autoCompact'   = 'true'
+)
+AS
 WITH sync_anchor AS (
   SELECT CURRENT_TIMESTAMP() AS mirror_refreshed_at
 )
@@ -57,3 +71,18 @@ SELECT
   a.mirror_refreshed_at       AS refreshed_at
 FROM mip.gold.borrower_360 AS b
 CROSS JOIN sync_anchor AS a;
+
+-- Column comments re-applied post-CTAS (2026-06-11 audit P2-8 follow-up):
+-- CREATE OR REPLACE drops DDL column comments on every refresh, and the
+-- typeless CTAS column list is a PARSE_SYNTAX_ERROR on DBSQL (observed
+-- live, run 2026-06-11). COMMENT ON COLUMN keeps the Genie grounding /
+-- asset-page comments refresh-stable; the SQL file task executes the
+-- statements in order.
+COMMENT ON COLUMN mip.gold.borrower_lifecycle_state.borrower_id IS 'Masked borrower id; matches borrower_360.borrower_id.';
+COMMENT ON COLUMN mip.gold.borrower_lifecycle_state.approval_status IS 'pending / approved / rejected / hold. Derived from latest decided_at row in mip_app.approvals.';
+COMMENT ON COLUMN mip.gold.borrower_lifecycle_state.outreach_status IS 'queued / actioned / none. Derived from latest outreach state.';
+COMMENT ON COLUMN mip.gold.borrower_lifecycle_state.offer_code IS 'Latest offer_code associated with the approval decision.';
+COMMENT ON COLUMN mip.gold.borrower_lifecycle_state.approved_at IS 'decided_at for the latest approve action; NULL when not approved.';
+COMMENT ON COLUMN mip.gold.borrower_lifecycle_state.outreach_at IS 'Timestamp of latest outreach action.';
+COMMENT ON COLUMN mip.gold.borrower_lifecycle_state.synced_at IS 'Last sync run that touched this row.';
+COMMENT ON COLUMN mip.gold.borrower_lifecycle_state.refreshed_at IS 'Lakebase mirror refresh boundary for this lifecycle snapshot; distinct from the scoring gold refresh boundary.';

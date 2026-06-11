@@ -290,10 +290,45 @@ def _finalize_genie_response(
     return response
 
 
+# ---------------------------------------------------------------------------
+# 2026-06-11 audit P2-7: context-aware exemptions for the fair-lending guard.
+# The word-boundary scan refused legitimate mortgage questions where a
+# protected token appears inside a loan attribute or a geographic proper
+# noun — "average loan AGE", "WHITE Plains", "Black Diamond, WA". Each
+# safe phrase below is masked (replaced with spaces, preserving offsets)
+# BEFORE the protected-term scan, so the remainder of the question is
+# still fully guarded: "white borrowers in White Plains" still refuses on
+# the standalone "white". The list is deliberately narrow — loan-age
+# vocabulary plus protected-token + geographic-noun compounds — and every
+# addition needs a test in tests/unit/test_genie_actions_api.py.
+# ---------------------------------------------------------------------------
+_SAFE_PHRASE_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"(?<![a-z0-9])loan ages?(?![a-z0-9])", re.IGNORECASE),
+    re.compile(r"(?<![a-z0-9])ages? of (?:the )?loans?(?![a-z0-9])", re.IGNORECASE),
+    re.compile(r"(?<![a-z0-9])loan aging(?![a-z0-9])", re.IGNORECASE),
+    re.compile(r"(?<![a-z0-9])lien ages?(?![a-z0-9])", re.IGNORECASE),
+    re.compile(
+        r"(?<![a-z0-9])(?:white|black)\s+"
+        r"(?:plains|settlement|salmon|center|creek|river|falls|rock|oaks?|"
+        r"haven|bluffs?|stone|mountain|hills?|city|county|lake|earth|water|"
+        r"sands?|house|hall|bear|fish|hawk|diamond)(?![a-z0-9])",
+        re.IGNORECASE,
+    ),
+)
+
+
+def _mask_safe_phrases(question: str) -> str:
+    masked = question
+    for pattern in _SAFE_PHRASE_PATTERNS:
+        masked = pattern.sub(lambda match: " " * len(match.group(0)), masked)
+    return masked
+
+
 def _protected_prompt_match(question: str) -> str | None:
+    scannable = _mask_safe_phrases(question)
     for term in _PROTECTED_PROMPT_TERMS:
         pattern = r"(?<![a-z0-9])" + re.escape(term) + r"(?![a-z0-9])"
-        if re.search(pattern, question, flags=re.IGNORECASE):
+        if re.search(pattern, scannable, flags=re.IGNORECASE):
             return term
     return None
 

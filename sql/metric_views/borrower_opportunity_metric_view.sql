@@ -31,12 +31,14 @@
 --   current_lender_ref — public-safe current-servicer alias from the governed
 --                        lender dictionary; never the raw lender string.
 --
--- Measures:
+-- Read-time aggregations (NOT materialized measure columns — this is a plain
+-- borrower-grain view; dashboards / Genie compute these over the exposed
+-- columns below):
 --   avg_rate_spread_bps        — AVG(rate_spread_bps).
 --   avg_equity_pct             — AVG(equity_pct).
 --   count_itm                  — COUNT(*) FILTER (in_the_money = TRUE).
 --   sum_loan_amount            — SUM(current_lien_balance).
---   count_total                — COUNT(*).
+--   count_total                — COUNT(*) / COUNT(DISTINCT clip).
 --   avg_opportunity_score      — AVG(opportunity_score).
 --
 -- Non-negotiables:
@@ -74,4 +76,4 @@ SELECT
 FROM mip.gold.borrower_360 AS b;
 
 COMMENT ON VIEW mip.semantics.borrower_opportunity_metric_view IS
-  'Genie + dashboard borrower-grain metric view over gold.borrower_360. Dimensions: state, segment_codes, primary_segment, deprecated segment alias, loan_purpose, is_investor, is_current_customer, is_former_customer, is_competitor_lien, current_lender_ref. Measures: avg_rate_spread_bps, avg_equity_pct, count_itm, sum_loan_amount, count_total, avg_opportunity_score. See docs/data-contract-module0.md §3.2.';
+  'Genie + dashboard borrower-grain metric view over gold.borrower_360 (one row per clip). Exposed columns: clip, state, segment_codes, primary_segment, deprecated segment alias, loan_purpose, is_investor, is_current_customer, is_former_customer, is_competitor_lien, current_lender_ref, rate_spread_bps, equity_pct, in_the_money, current_lien_balance, opportunity_score. These are plain columns, NOT materialized measures: the intended read-time aggregations are avg_rate_spread_bps = AVG(rate_spread_bps), avg_equity_pct = AVG(equity_pct), count_itm = COUNT(*) FILTER (in_the_money), sum_loan_amount = SUM(current_lien_balance), count_total = COUNT(DISTINCT clip), and avg_opportunity_score = AVG(opportunity_score), each computed by the dashboard or Genie query at read time. See docs/data-contract-module0.md §3.2.';

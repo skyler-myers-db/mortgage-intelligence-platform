@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { PageShell } from '../components/layout/PageShell';
 import { KpiCard } from '../components/mortgage/KpiCard';
 import { USChoroplethMap } from '../components/mortgage/USChoroplethMap';
@@ -74,6 +74,7 @@ export default function Home() {
   // in flight we show skeletons rather than design-time numbers or em-dashes,
   // so normal loading is visually distinct from a genuinely unknown value.
   const { lender } = useApp();
+  const navigate = useNavigate();
   const healthCtx = useOptionalHealth();
   // True when the shared health poll has confirmed warehouse / lakebase is
   // down. While that's the case we keep the warming-up tile visible
@@ -337,7 +338,9 @@ export default function Home() {
         <Link to="/segment-intelligence" className="btn">
           Jump to segments
         </Link>
-        <Button variant="ghost" size="default" onClick={() => (window.location.href = '/ask-genie')} icon="sparkle">
+        {/* SPA navigation (audit P1-6): window.location.href here was the only
+            full-page reload in the app — a visible white flash on a hero CTA. */}
+        <Button variant="ghost" size="default" onClick={() => navigate('/ask-genie')} icon="sparkle">
           Ask Genie
         </Button>
       </div>

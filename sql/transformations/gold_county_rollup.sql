@@ -24,6 +24,10 @@
 -- Honest-null: county_fips_5 can be NULL for ~0.2% of rows (silver lacked a
 --            geocode) -- those rows are filtered out here since a NULL-key
 --            county rollup row has no meaningful identity.
+--
+-- 2026-06-11 audit P2-8: CTAS re-declares clustering/comments/properties
+-- because COR TABLE drops DDL metadata on every refresh. Clustering, column
+-- COMMENTs, and TBLPROPERTIES mirror sql/ddl/gold_county_rollup.sql.
 -- =============================================================================
 
 -- 2026-05-04 (FIX α, round 3): revert the score >= 50 filter introduced
@@ -33,7 +37,14 @@
 -- semantic is "addressable population per county"; the Lead Queue
 -- alignment is implemented in LeadRepository.list (FIX β) by querying
 -- borrower_360 directly when filtered to a geo.
-CREATE OR REPLACE TABLE mip.gold.county_rollup AS
+CREATE OR REPLACE TABLE mip.gold.county_rollup
+CLUSTER BY (state, fips_5)
+TBLPROPERTIES (
+  'delta.enableChangeDataFeed' = 'false',
+  'delta.autoOptimize.optimizeWrite' = 'true',
+  'delta.autoOptimize.autoCompact'   = 'true'
+)
+AS
 WITH base AS (
   SELECT
     b.county_fips_5                                AS fips_5,
@@ -102,3 +113,20 @@ SELECT
 FROM aggregates AS a
 LEFT JOIN top_segment_per_county AS ts
   ON ts.fips_5 = a.fips_5;
+
+-- Column comments re-applied post-CTAS (2026-06-11 audit P2-8 follow-up):
+-- CREATE OR REPLACE drops DDL column comments on every refresh, and the
+-- typeless CTAS column list is a PARSE_SYNTAX_ERROR on DBSQL (observed
+-- live, run 2026-06-11). COMMENT ON COLUMN keeps the Genie grounding /
+-- asset-page comments refresh-stable; the SQL file task executes the
+-- statements in order.
+COMMENT ON COLUMN mip.gold.county_rollup.fips_5 IS '5-char FIPS: 2-char state + 3-char county. PK part.';
+COMMENT ON COLUMN mip.gold.county_rollup.state IS '2-char USPS state code (uppercase).';
+COMMENT ON COLUMN mip.gold.county_rollup.county_name IS 'Human county name. NULL until a FIPS->name crosswalk seed lands; UI falls back to fips_5.';
+COMMENT ON COLUMN mip.gold.county_rollup.addressable_borrowers IS 'Population count for this county on snapshot_date.';
+COMMENT ON COLUMN mip.gold.county_rollup.in_the_money_borrowers IS 'COUNT where borrower_360.in_the_money = TRUE.';
+COMMENT ON COLUMN mip.gold.county_rollup.high_opportunity_borrowers IS 'COUNT where borrower_360.opportunity_score >= 75.';
+COMMENT ON COLUMN mip.gold.county_rollup.avg_opportunity_score IS 'AVG(borrower_360.opportunity_score) rounded to int.';
+COMMENT ON COLUMN mip.gold.county_rollup.top_segment_code IS 'Dominant segment_code by count. NULL when every borrower in the county has empty segment_codes.';
+COMMENT ON COLUMN mip.gold.county_rollup.snapshot_date IS 'Refresh date; daily grain. PK part.';
+COMMENT ON COLUMN mip.gold.county_rollup.snapshot_at IS 'Precise refresh timestamp.';

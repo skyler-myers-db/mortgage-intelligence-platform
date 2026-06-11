@@ -11,7 +11,7 @@ local guard that:
    - never raw/silver tables, never a default-catalog identifier.
 4. No emojis leak into titles, descriptions, or SQL.
 5. No hardcoded warehouse id is present - the warehouse must come from the
-   bundle-level `warehouse_id` binding in `resources/dashboards.yml`.
+   bundle-level `warehouse_id` binding in `databricks.yml`'s dashboards block.
 
 These guards protect the Module 0 PII + provenance contracts. A dashboard
 that silently selects from a raw share table would skip the PII-safe gold
@@ -285,12 +285,12 @@ def test_no_hardcoded_warehouse_or_workspace_id(path: Path) -> None:
     spec = _load(path)
     text = path.read_text(encoding="utf-8")
     # The dashboard JSON must NOT pin a warehouse id. The bundle wires it at
-    # the dashboard resource level (resources/dashboards.yml) via
+    # the dashboard resource level (databricks.yml `dashboards:` block) via
     # `warehouse_id: ${var.sql_warehouse_id}`.
     for banned_key in ("warehouseId", "warehouse_id", "warehouseID"):
         assert banned_key not in text, (
             f"{path.name} contains key '{banned_key}' - warehouse id must "
-            "live in resources/dashboards.yml, not in the lvdash.json"
+            "live in databricks.yml's dashboard resource, not the lvdash.json"
         )
     # And no bare 32-hex workspace-id-looking token.
     hex_hits = HEX32_RE.findall(text)

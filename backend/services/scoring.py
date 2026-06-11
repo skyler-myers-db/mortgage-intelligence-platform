@@ -5,7 +5,9 @@ golden-fixture JSON that the SQL side validates against the same inputs:
 
 - ``lead_score``         -> ``sql/uc_functions/fn_lead_score.sql``
                             + ``tests/fixtures/lead_score_golden.json``
-                            (case_05 / case_07 lock banker's rounding).
+                            (case_05 / case_07 lock banker's rounding;
+                            case_13 locks exact-decimal arithmetic in the
+                            float-drift zone).
 - ``rate_spread_bps``    -> ``sql/uc_functions/fn_rate_spread.sql``
                             + ``tests/fixtures/rate_spread_golden.json``
                             (case_05 pins round-half-to-even at 162.5).
@@ -26,8 +28,26 @@ misconfigured decisioning cannot become a positive outreach lane.
 
 from __future__ import annotations
 
+from decimal import ROUND_HALF_EVEN, Decimal
+
 _INT32_MIN = -2_147_483_648
 _INT32_MAX = 2_147_483_647
+
+# fn_lead_score weights as EXACT decimals. Spark parses the SQL literals
+# (0.35 etc.) as DECIMAL, so the UDF computes the weighted sum exactly and
+# BROUNDs the exact value. Python float arithmetic drifts on ~0.67% of the
+# input lattice (e.g. (92,94,94,85,25): exact sum 85.5 -> 86, float sum
+# 85.49999999999999 -> 85), which surfaced as false "integrity gap" warnings
+# in the borrower proof drawer (2026-06-11 audit, P1-1). Decimal weights are
+# the parity fix; tests/unit/test_scoring.py sweeps the full boundary.
+_LEAD_SCORE_WEIGHTS = (
+    Decimal("0.35"),  # economic_incentive
+    Decimal("0.30"),  # intent_trigger
+    Decimal("0.15"),  # fit
+    Decimal("0.10"),  # relationship
+    Decimal("0.10"),  # evidence
+)
+_DECIMAL_ONE = Decimal("1")
 
 # Human labels for the eight offer_codes. Source of truth for the
 # OfferRecommendation.product_label rendered at the API boundary; tests assert
@@ -133,19 +153,24 @@ def lead_score(
 ) -> int:
     """Return the integer opportunity score in [0, 100].
 
-    Mirrors ``mip.gold.fn_lead_score``. Uses Python's built-in
-    ``round()`` which applies banker's rounding, matching Databricks
-    ``BROUND``. Any ``None`` component is treated as 0 to match the
-    SQL ``COALESCE(..., 0)`` contract.
+    Mirrors ``mip.gold.fn_lead_score`` EXACTLY: the SQL literals are
+    DECIMAL in Spark, so the UDF computes the weighted sum in exact
+    decimal arithmetic and ``BROUND``s (half-to-even) the exact value.
+    Python must therefore use ``decimal.Decimal`` — ``round()`` on a
+    binary float bankers-rounds a *different number* on exact-.5
+    boundaries (float drift), which diverged from SQL on ~0.67% of the
+    input lattice and rendered false integrity-gap warnings in the
+    borrower proof drawer. Any ``None`` component is treated as 0 to
+    match the SQL ``COALESCE(..., 0)`` contract.
     """
-    weighted_sum = (
-        0.35 * (economic_incentive or 0)
-        + 0.30 * (intent_trigger or 0)
-        + 0.15 * (fit or 0)
-        + 0.10 * (relationship or 0)
-        + 0.10 * (evidence or 0)
+    components = (economic_incentive, intent_trigger, fit, relationship, evidence)
+    weighted_sum = sum(
+        (weight * Decimal(component or 0)
+         for weight, component in zip(_LEAD_SCORE_WEIGHTS, components, strict=True)),
+        start=Decimal(0),
     )
-    return max(0, min(100, round(weighted_sum)))
+    rounded = int(weighted_sum.quantize(_DECIMAL_ONE, rounding=ROUND_HALF_EVEN))
+    return max(0, min(100, rounded))
 
 
 def rate_spread_bps(

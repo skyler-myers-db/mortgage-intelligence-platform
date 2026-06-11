@@ -159,6 +159,11 @@
 
   --text-1: #EAF3FA;  /* primary */
   --text-2: #BACBD8;  /* secondary */
+  /* DELIBERATE divergence from design_files/index.html (#7F96A7): tertiary
+     text sits on --bg-2/--bg-3 surfaces (chips, table meta, drawer stats)
+     where the prototype value fell below WCAG AA 4.5:1; lightened to
+     #93AABD on the same hue ramp. 2026-06-11 audit P2-15: every prototype
+     deviation carries its rationale — this one previously didn't. */
   --text-3: #93AABD;  /* tertiary */
   --text-4: #4E6578;  /* disabled */
 
@@ -194,6 +199,9 @@
 
   --text-1: #021F34;
   --text-2: #254A66;
+  /* DELIBERATE divergence from design_files/index.html (#5A7890): darkened
+     for WCAG AA on the light theme's tinted surfaces — same rationale as
+     the dark-theme --text-3 note above (2026-06-11 audit P2-15). */
   --text-3: #34536B;
   --text-4: #96ADBF;
 

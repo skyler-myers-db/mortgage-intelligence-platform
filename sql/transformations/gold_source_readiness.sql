@@ -6,9 +6,20 @@
 --            Databricks App principal direct access to `mip.silver.*`.
 --
 -- Pattern:   CREATE OR REPLACE TABLE ... AS SELECT.
+--
+-- 2026-06-11 audit P2-8: CTAS re-declares clustering/comments/properties
+-- because COR TABLE drops DDL metadata on every refresh. Clustering, column
+-- COMMENTs, and TBLPROPERTIES mirror sql/ddl/gold_source_readiness.sql.
 -- =============================================================================
 
-CREATE OR REPLACE TABLE mip.gold.source_readiness AS
+CREATE OR REPLACE TABLE mip.gold.source_readiness
+CLUSTER BY (sort_order)
+TBLPROPERTIES (
+  'delta.enableChangeDataFeed' = 'false',
+  'delta.autoOptimize.optimizeWrite' = 'true',
+  'delta.autoOptimize.autoCompact'   = 'true'
+)
+AS
 WITH refresh_anchor AS (
   SELECT refresh_at AS checked_at
   FROM mip.ref.refresh_run_state
@@ -124,12 +135,17 @@ source_rows AS (
       WHEN COUNT_IF(series_id = 'MORTGAGE30US' AND is_latest) > 0 THEN 'error'
       ELSE 'configured_empty'
     END AS status,
-    COUNT_IF(series_id = 'MORTGAGE30US' AND is_latest) AS row_count,
+    -- 2026-06-11 audit P3: row_count is data VOLUME (all MORTGAGE30US
+    -- weekly observations), consistent with every sibling source row.
+    -- The old COUNT_IF(... AND is_latest) was always 0/1 and rendered as
+    -- a confusing "1 rows" in Admin readiness; latest-snapshot freshness
+    -- still drives status/last_updated/note below.
+    COUNT_IF(series_id = 'MORTGAGE30US') AS row_count,
     MAX(CASE WHEN series_id = 'MORTGAGE30US' AND is_latest THEN vintage_ts END) AS last_updated,
     CASE
       WHEN COUNT_IF(series_id = 'MORTGAGE30US' AND is_latest AND source = 'fred'
         AND observation_week >= current_date() - INTERVAL 14 DAYS) > 0
-      THEN 'FRED MORTGAGE30US weekly market rate · live'
+      THEN 'FRED MORTGAGE30US weekly observations · scoring uses the single is_latest snapshot · live'
       WHEN COUNT_IF(series_id = 'MORTGAGE30US' AND is_latest AND source <> 'fred') > 0
       THEN 'Latest MORTGAGE30US row is seed or non-FRED; refresh required'
       WHEN COUNT_IF(series_id = 'MORTGAGE30US' AND is_latest) > 0
@@ -365,3 +381,19 @@ SELECT
   sort_order,
   (SELECT checked_at FROM refresh_anchor) AS checked_at
 FROM source_rows;
+
+-- Column comments re-applied post-CTAS (2026-06-11 audit P2-8 follow-up):
+-- CREATE OR REPLACE drops DDL column comments on every refresh, and the
+-- typeless CTAS column list is a PARSE_SYNTAX_ERROR on DBSQL (observed
+-- live, run 2026-06-11). COMMENT ON COLUMN keeps the Genie grounding /
+-- asset-page comments refresh-stable; the SQL file task executes the
+-- statements in order.
+COMMENT ON COLUMN mip.gold.source_readiness.source_name IS 'Admin panel display name.';
+COMMENT ON COLUMN mip.gold.source_readiness.status IS 'live / demo_synthetic / configured_empty / not_configured / roadmap / error.';
+COMMENT ON COLUMN mip.gold.source_readiness.row_count IS 'Source row count when live.';
+COMMENT ON COLUMN mip.gold.source_readiness.last_updated IS 'Latest source ingest timestamp when live.';
+COMMENT ON COLUMN mip.gold.source_readiness.note IS 'Human-readable source note.';
+COMMENT ON COLUMN mip.gold.source_readiness.source_table IS 'UC source table used by ETL; null for roadmap sources.';
+COMMENT ON COLUMN mip.gold.source_readiness.synthetic_demo IS 'TRUE when rows come from the explicit Summit demo_synthetic first-party seed.';
+COMMENT ON COLUMN mip.gold.source_readiness.sort_order IS 'Stable Admin panel order.';
+COMMENT ON COLUMN mip.gold.source_readiness.checked_at IS 'Gold refresh anchor used for this readiness snapshot.';
