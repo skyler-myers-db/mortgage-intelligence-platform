@@ -196,7 +196,7 @@ class BackpressureMiddleware(BaseHTTPMiddleware):
         super().__init__(app)
         self._controller = controller or BackpressureController()
 
-    async def dispatch(self, request: Request, call_next: Any) -> Response:  # type: ignore[override]
+    async def dispatch(self, request: Request, call_next: Any) -> Response:
         if not settings.mip_backpressure_enabled:
             return await call_next(request)
         # Unit-test suites create many TestClient instances against the

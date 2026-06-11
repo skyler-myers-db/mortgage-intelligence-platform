@@ -360,7 +360,7 @@ class CorrelationIdMiddleware(BaseHTTPMiddleware):
             return template
         return cls._ID_SEGMENT_PATTERN.sub("/{id}", request.url.path)
 
-    async def dispatch(  # type: ignore[override]
+    async def dispatch(
         self, request: StarletteRequest, call_next: Any
     ) -> StarletteResponse:
         incoming = self._sanitize_correlation_id(request.headers.get(self.HEADER))
@@ -409,7 +409,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         "form-action 'self'"
     )
 
-    async def dispatch(  # type: ignore[override]
+    async def dispatch(
         self, request: StarletteRequest, call_next: Any
     ) -> StarletteResponse:
         response = await call_next(request)
