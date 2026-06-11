@@ -97,9 +97,9 @@ TBLPROPERTIES (
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS mip.ref.refresh_run_state (
-  run_id       STRING             COMMENT 'Databricks job run_id (or ad-hoc marker). NULL tolerated for dev hand-runs.',
-  refresh_at   TIMESTAMP NOT NULL COMMENT 'Deterministic refresh timestamp shared by every gold CTAS in the run.',
-  captured_at  TIMESTAMP NOT NULL COMMENT 'When the seed row was written. Tiebreaker for MAX() when two rows share refresh_at.',
+  run_id       STRING             COMMENT 'Databricks job run_id (or ad-hoc marker) that produced the row. NULL tolerated for dev hand-runs.',
+  refresh_at   TIMESTAMP NOT NULL COMMENT 'Deterministic refresh timestamp shared by every gold CTAS in the run. Captured once at the top of the DAG.',
+  captured_at  TIMESTAMP NOT NULL COMMENT 'When the seed row was written (CURRENT_TIMESTAMP at INSERT). Used as the tiebreaker for MAX() when two rows share refresh_at.',
   source       STRING             COMMENT 'Provenance of the row: mip_refresh_scores | ad_hoc | backfill.'
 )
 USING DELTA

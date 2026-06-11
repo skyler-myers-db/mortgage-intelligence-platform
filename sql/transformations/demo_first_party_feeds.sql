@@ -251,3 +251,16 @@ COMMENT ON TABLE mip.first_party.product_balances IS 'Optional banking-product b
 COMMENT ON COLUMN mip.first_party.product_balances.source_system IS 'Customer source system name, e.g. core banking or demo seed.';
 COMMENT ON COLUMN mip.first_party.product_balances.feed_mode IS 'customer_connected or demo_synthetic.';
 COMMENT ON COLUMN mip.first_party.product_balances.synthetic_demo IS 'TRUE only for the Summit Mortgage public demo seed.';
+
+-- Re-audit #3 (2026-06-12): nine column comments declared only in
+-- 001_catalogs_schemas.sql never reached the live rebuild surface (the
+-- duplicate-DDL shadowing blind spot). Re-applied here like the rest.
+COMMENT ON COLUMN mip.first_party.loan_applications.borrower_id IS 'Synthetic MIP borrower id after governed resolution, when available.';
+COMMENT ON COLUMN mip.first_party.loan_applications.clip_ref IS 'Masked CLIP ref or null until Cotality resolution.';
+COMMENT ON COLUMN mip.first_party.loan_applications.customer_key_hash IS 'Customer or household hash supplied by the lender.';
+COMMENT ON COLUMN mip.first_party.loan_applications.feed_mode IS 'customer_connected or demo_synthetic.';
+COMMENT ON COLUMN mip.first_party.loan_applications.source_system IS 'Customer source system name, e.g. LOS vendor or demo seed.';
+COMMENT ON COLUMN mip.first_party.loan_applications.synthetic_demo IS 'TRUE only for the Summit Mortgage public demo seed.';
+COMMENT ON COLUMN mip.first_party.servicing_portfolio.feed_mode IS 'customer_connected or demo_synthetic.';
+COMMENT ON COLUMN mip.first_party.servicing_portfolio.source_system IS 'Customer source system name, e.g. servicing platform or demo seed.';
+COMMENT ON COLUMN mip.first_party.servicing_portfolio.synthetic_demo IS 'TRUE only for the Summit Mortgage public demo seed.';

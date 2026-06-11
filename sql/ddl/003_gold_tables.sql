@@ -52,18 +52,18 @@ COMMENT 'Optional customer-owned LOS, servicing, CRM, interaction, and product-b
 
 CREATE TABLE IF NOT EXISTS mip.first_party.loan_applications (
   application_id_hash STRING NOT NULL COMMENT 'Customer application id hash. No raw application id.',
-  customer_key_hash   STRING,
-  borrower_id         STRING,
-  clip_ref            STRING,
+  customer_key_hash   STRING COMMENT 'Customer or household hash supplied by the lender.',
+  borrower_id         STRING COMMENT 'Synthetic MIP borrower id after governed resolution, when available.',
+  clip_ref            STRING COMMENT 'Masked CLIP ref or null until Cotality resolution.',
   state               STRING,
   zip                 STRING,
   application_status  STRING,
   application_channel STRING,
   product_intent      STRING,
   application_at      TIMESTAMP,
-  source_system       STRING,
-  feed_mode           STRING,
-  synthetic_demo      BOOLEAN,
+  source_system       STRING COMMENT 'Customer source system name, e.g. LOS vendor or demo seed.',
+  feed_mode           STRING COMMENT 'customer_connected or demo_synthetic.',
+  synthetic_demo      BOOLEAN COMMENT 'TRUE only for the Summit Mortgage public demo seed.',
   refreshed_at        TIMESTAMP
 )
 USING DELTA
@@ -81,9 +81,9 @@ CREATE TABLE IF NOT EXISTS mip.first_party.servicing_portfolio (
   note_rate_pct          DOUBLE,
   delinquency_bucket     STRING,
   servicing_status       STRING,
-  source_system          STRING,
-  feed_mode              STRING,
-  synthetic_demo         BOOLEAN,
+  source_system          STRING COMMENT 'Customer source system name, e.g. servicing platform or demo seed.',
+  feed_mode              STRING COMMENT 'customer_connected or demo_synthetic.',
+  synthetic_demo         BOOLEAN COMMENT 'TRUE only for the Summit Mortgage public demo seed.',
   refreshed_at           TIMESTAMP
 )
 USING DELTA
@@ -143,13 +143,13 @@ COMMENT 'Optional banking-product balance feed. Uses bands and hashes, not accou
 -- -----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS mip.gold.property_owner_bridge (
   owner_link_id             STRING    NOT NULL COMMENT 'Cotality Owner Link. PK.',
-  related_property_count    INT       NOT NULL COMMENT 'Count of distinct CLIPs tied to this Owner Link.',
+  related_property_count    INT       NOT NULL COMMENT 'Count of distinct CLIPs tied to this Owner Link across refreshed source coverage. Drives Borrower360.related_property_count and the investor branch of fn_next_best_offer.',
   corporate_property_count  INT       NOT NULL COMMENT 'Number of related properties with owner_is_corporate = TRUE.',
   absentee_property_count   INT       NOT NULL COMMENT 'Number of related properties with is_absentee = TRUE.',
-  distinct_states_count     INT       NOT NULL COMMENT 'Number of distinct situs_state values.',
+  distinct_states_count     INT       NOT NULL COMMENT 'Number of distinct situs_state values. Multi-market investor signal.',
   distinct_cbsa_count       INT       NOT NULL COMMENT 'Number of distinct situs_cbsa_code values.',
-  primary_clip              STRING             COMMENT 'Owner-occupied CLIP; NULL when no owner-occupant.',
-  refreshed_at              TIMESTAMP NOT NULL COMMENT 'Refresh timestamp.'
+  primary_clip              STRING             COMMENT 'CLIP of the owner-occupied property for this Owner Link (if any). NULL when no owner-occupant in set.',
+  refreshed_at              TIMESTAMP NOT NULL COMMENT 'Refresh timestamp for audit / provenance chips.'
 )
 USING DELTA
 CLUSTER BY (owner_link_id)
@@ -165,64 +165,64 @@ TBLPROPERTIES (
 --    (see sql/ddl/gold_borrower_360.sql for column comments + PII posture)
 -- -----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS mip.gold.borrower_360 (
-  clip                      STRING    NOT NULL COMMENT 'CLIP. PK. Router maps to Borrower360.clip_id.',
-  borrower_id               STRING    NOT NULL COMMENT 'Synthetic id from CLIP hash.',
-  display_name              STRING    NOT NULL COMMENT 'Synthesized label; never a real name.',
-  city                      STRING             COMMENT 'Situs city.',
+  clip                      STRING    NOT NULL COMMENT 'Cotality CLIP. PK. Router maps to Borrower360.clip_id.',
+  borrower_id               STRING    NOT NULL COMMENT 'Synthetic stable id from CLIP: CONCAT("B-", LPAD(CONV(ABS(xxhash64(clip)), 10, 36), 13, "0")). Base36 encoding of the 64-bit hash, width 13 => 36^13 slots. No PII.',
+  display_name              STRING    NOT NULL COMMENT 'Synthesized label "Owner " || SUBSTR(owner_name_hash, 1, 8). Never a real name.',
+  city                      STRING             COMMENT 'Situs city from property_master.',
   state                     STRING    NOT NULL COMMENT 'Situs state from refreshed source coverage.',
   zip                       STRING             COMMENT '5-digit situs ZIP.',
-  situs_cbsa_code           STRING             COMMENT 'CBSA metro code.',
-  county_fips_5             STRING             COMMENT '5-char FIPS county code from silver.property_master.fips_county_code. Feeds gold.county_rollup + gold.zip_rollup.',
-  segment_codes             ARRAY<STRING> NOT NULL COMMENT 'Ordered SegmentCode list.',
-  equity_estimate           BIGINT    NOT NULL COMMENT 'USD.',
-  equity_pct                INT       NOT NULL COMMENT '0..100.',
-  rate_spread_bps           INT       NOT NULL COMMENT 'fn_rate_spread output.',
-  market_rate_fraction      DOUBLE    NOT NULL COMMENT 'Fractional market rate.',
-  opportunity_score         INT       NOT NULL COMMENT 'fn_lead_score output 0..100.',
-  confidence                INT       NOT NULL COMMENT 'Mean of 5 sub-scores.',
-  recommended_offer_code    STRING    NOT NULL COMMENT 'fn_next_best_offer code.',
-  recommended_offer         STRING    NOT NULL COMMENT 'Human label.',
-  why_now                   STRING    NOT NULL COMMENT 'Deterministic template per offer code.',
-  evidence_ids              ARRAY<STRING> NOT NULL COMMENT 'Ordered evidence ids.',
-  approval_status           STRING    NOT NULL COMMENT 'Default "pending"; Lakebase authoritative.',
-  owner_link_id             STRING             COMMENT 'Cotality Owner Link id.',
-  subject_property          STRING    NOT NULL COMMENT 'Synthetic city/state/ZIP5 string.',
-  avm_value                 BIGINT    NOT NULL COMMENT 'AVM value; 0 when missing.',
-  current_lien_balance      BIGINT    NOT NULL COMMENT 'Total open lien balance.',
-  current_rate              DOUBLE    NOT NULL COMMENT 'Percent form (5.75).',
-  ltv                       INT       NOT NULL COMMENT '0..100.',
-  related_property_count    INT       NOT NULL COMMENT 'From gold.property_owner_bridge.',
-  is_owner_occupied         BOOLEAN   NOT NULL COMMENT 'owner_occupancy_code = "O".',
-  is_absentee               BOOLEAN   NOT NULL COMMENT 'From silver.property_master.',
-  is_corporate_owner        BOOLEAN   NOT NULL COMMENT 'From silver.property_master.',
-  has_permit                BOOLEAN   NOT NULL COMMENT 'BLOCKED: FALSE until Cotality Building Permits lands.',
-  listed_for_sale           BOOLEAN   NOT NULL COMMENT 'BLOCKED: FALSE until Cotality MLS Listings lands.',
-  is_investor               BOOLEAN   NOT NULL COMMENT 'Derived: multi-property OR corporate OR absentee.',
-  is_current_customer       BOOLEAN   NOT NULL COMMENT 'Current servicer is a tenant-lender alias in ref.lender_dictionary.',
-  is_former_customer        BOOLEAN   NOT NULL COMMENT 'Historical tenant-lender relationship with no current tenant lien.',
-  is_competitor_lien        BOOLEAN   NOT NULL COMMENT 'Current servicer is known and not a tenant-lender alias.',
-  has_first_party_relationship BOOLEAN NOT NULL COMMENT 'TRUE when optional first-party feeds resolve to this borrower.',
-  first_party_relationship_depth INT   NOT NULL COMMENT 'Bounded count of resolved first-party feed categories.',
-  first_party_recent_interactions INT  NOT NULL COMMENT 'Recent interaction count from the first-party engagement feed.',
-  first_party_recent_application BOOLEAN NOT NULL COMMENT 'TRUE when a recent first-party LOS/application event exists.',
-  first_party_synthetic_demo     BOOLEAN NOT NULL COMMENT 'TRUE only for rows touched by the Summit demo_synthetic first-party seed.',
-  marketing_eligible      BOOLEAN   NOT NULL COMMENT 'TRUE only when latest first-party CRM consent is opt-in, no suppression exists, and the 30-day touch cap is clear.',
-  consent_status          STRING    NOT NULL COMMENT 'Controlled first-party CRM consent enum: opt_in / opt_out / unknown.',
-  suppression_reason      STRING             COMMENT 'Controlled first-party CRM suppression reason.',
-  last_touch_at           TIMESTAMP          COMMENT 'Most recent first-party marketing/contact touch timestamp.',
-  eligible_recontact_at   TIMESTAMP          COMMENT 'Earliest permitted re-contact time when capped.',
-  current_lender_ref        STRING             COMMENT 'Public-demo-safe current-servicer reference.',
-  second_pos_amount         BIGINT             COMMENT 'For "equity" segment predicate.',
-  first_pos_loan_type       STRING             COMMENT 'For fit sub-score.',
-  owner_name_hash           STRING    NOT NULL COMMENT 'sha2 hash from silver; internal only, router strips.',
-  min_spread_bps_applied    INT       NOT NULL COMMENT 'Threshold this refresh.',
-  min_equity_pct_applied    INT       NOT NULL COMMENT 'Threshold this refresh.',
-  heloc_equity_min_applied  INT       NOT NULL COMMENT 'HELOC equity threshold this refresh.',
-  cashout_equity_min_applied INT      NOT NULL COMMENT 'Cash-out equity threshold this refresh.',
-  retention_min_spread_applied INT    NOT NULL COMMENT 'Retention spread threshold this refresh.',
-  in_the_money              BOOLEAN   NOT NULL COMMENT 'fn_in_the_money output.',
-  trigger_timeline_json     STRING    NOT NULL COMMENT 'JSON-encoded top-3 evidence rows.',
-  refreshed_at              TIMESTAMP NOT NULL COMMENT 'Refresh timestamp.'
+  situs_cbsa_code           STRING             COMMENT 'CBSA metro code. Gold-only; used for geography drill-down.',
+  county_fips_5             STRING             COMMENT '5-char FIPS county code (2-char state + 3-char county) from silver.property_master.fips_county_code. Feeds gold.county_rollup + gold.zip_rollup. NULL for the ~0.2% of rows where silver has no county geocode.',
+  segment_codes             ARRAY<STRING> NOT NULL COMMENT 'Ordered list of SegmentCode Literals (itm/listed/permit/investor/equity/retention) this borrower belongs to.',
+  equity_estimate           BIGINT    NOT NULL COMMENT 'USD: GREATEST(0, avm_value - total_open_lien_balance).',
+  equity_pct                INT       NOT NULL COMMENT '0..100 int. Exact complement of ltv (100 - rounded ltv) whenever loan data exists, so equity + ltv always sums to 100; 0 when no CLTV/AVM signal. Feeds fn_in_the_money + fn_next_best_offer.',
+  rate_spread_bps           INT       NOT NULL COMMENT 'fn_rate_spread(first_pos_rate, market_rate_fraction). Positive = above market = refi opportunity.',
+  market_rate_fraction      DOUBLE    NOT NULL COMMENT 'Fractional market rate from silver.market_rates_weekly WHERE is_latest=TRUE. Router maps to WhyPanel.market_rate.',
+  opportunity_score         INT       NOT NULL COMMENT 'fn_lead_score output. 0..100.',
+  confidence                INT       NOT NULL COMMENT 'ROUND(mean(5 sub-scores)). 0..100. Matches mock_data._build_borrower.',
+  recommended_offer_code    STRING    NOT NULL COMMENT 'fn_next_best_offer output (lowercase code). Router resolves to human label via NBO_PRODUCT_LABELS.',
+  recommended_offer         STRING    NOT NULL COMMENT 'Human label for recommended_offer_code (resolved in SQL via product_labels map).',
+  why_now                   STRING    NOT NULL COMMENT 'Deterministic one-sentence template per offer_code. No PII. See data-contract §6.',
+  evidence_ids              ARRAY<STRING> NOT NULL COMMENT 'Ordered evidence_ids from gold.evidence_events (ORDER BY signal_rank).',
+  approval_status           STRING    NOT NULL COMMENT 'Default "pending"; Lakebase authoritative for actual state.',
+  owner_link_id             STRING             COMMENT 'Cotality Owner Link id. Opaque Cotality identifier; not a direct PII risk.',
+  subject_property          STRING    NOT NULL COMMENT 'Synthetic city/state/ZIP5 string. No street address.',
+  avm_value                 BIGINT    NOT NULL COMMENT 'COALESCE(avm_value, 0).',
+  current_lien_balance      BIGINT    NOT NULL COMMENT 'COALESCE(total_open_lien_balance, 0).',
+  current_rate              DOUBLE    NOT NULL COMMENT 'PERCENT form (5.75, not 0.0575). Matches Pydantic current_rate and mock_data convention.',
+  ltv                       INT       NOT NULL COMMENT '0..100 int. Mirrors equity_pct source preference: ROUND(estimated_cltv) when present, else ROUND(100 * total_open_lien_balance / avm_value).',
+  related_property_count    INT       NOT NULL COMMENT 'COALESCE(property_owner_bridge.related_property_count, 1).',
+  is_owner_occupied         BOOLEAN   NOT NULL COMMENT 'owner_occupancy_code = "O". Feeds fit sub-score.',
+  is_absentee               BOOLEAN   NOT NULL COMMENT 'property_master.is_absentee. Feeds investor branch.',
+  is_corporate_owner        BOOLEAN   NOT NULL COMMENT 'property_master.owner_is_corporate. Feeds investor branch.',
+  has_permit                BOOLEAN   NOT NULL COMMENT 'BLOCKED (data-contract §9) -- hardcoded FALSE until Cotality Building Permits product lands. intent_trigger permit term is 0.',
+  listed_for_sale           BOOLEAN   NOT NULL COMMENT 'BLOCKED (data-contract §9) -- hardcoded FALSE until Cotality MLS Listings lands. fn_next_best_offer purchase branch never fires on real data.',
+  is_investor               BOOLEAN   NOT NULL COMMENT 'Derived: related_property_count >= 2 OR is_corporate_owner OR is_absentee.',
+  is_current_customer       BOOLEAN   NOT NULL COMMENT 'Current-servicer relationship to tenant: governed lender_dictionary says non-competitor.',
+  is_former_customer        BOOLEAN   NOT NULL COMMENT 'Historical tenant-lender Owner Link relationship with no current tenant-serviced lien.',
+  is_competitor_lien        BOOLEAN   NOT NULL COMMENT 'Current servicer is known and not the tenant. Competitor/recapture signal; mutually exclusive with is_current_customer in the current CLIP-grain refresh path.',
+  has_first_party_relationship BOOLEAN NOT NULL COMMENT 'TRUE when LOS, servicing, CRM, interaction, or product-balance feeds resolve to this borrower.',
+  first_party_relationship_depth INT   NOT NULL COMMENT 'Bounded count of resolved first-party feed categories for relationship scoring.',
+  first_party_recent_interactions INT  NOT NULL COMMENT 'Recent call-center/digital interaction count resolved through first-party feeds.',
+  first_party_recent_application BOOLEAN NOT NULL COMMENT 'TRUE when a recent LOS/application event exists.',
+  first_party_synthetic_demo     BOOLEAN NOT NULL COMMENT 'TRUE only when resolved first-party rows come from the Summit demo_synthetic seed.',
+  marketing_eligible      BOOLEAN   NOT NULL COMMENT 'TRUE only when latest first-party CRM consent is opt-in, no suppression exists, and the 30-day touch cap is clear. Campaign and draft APIs fail closed on FALSE.',
+  consent_status          STRING    NOT NULL COMMENT 'Controlled first-party CRM consent enum: opt_in / opt_out / unknown. No raw contact data.',
+  suppression_reason      STRING             COMMENT 'Controlled first-party CRM suppression reason, e.g. do_not_contact or recent_contact_cap.',
+  last_touch_at           TIMESTAMP          COMMENT 'Most recent first-party marketing/contact touch timestamp used for frequency-cap enforcement.',
+  eligible_recontact_at   TIMESTAMP          COMMENT 'Earliest timestamp the borrower can be contacted again when a frequency cap is active.',
+  current_lender_ref        STRING             COMMENT 'Public-demo-safe current-servicer reference: Summit Mortgage, Competitor A/B/etc., or Competitor Other. Never the raw Cotality lender string.',
+  second_pos_amount         BIGINT             COMMENT '2nd-lien balance passthrough; NULL or 0 both mean no active 2nd-lien. Feeds the equity segment clean-lien predicate.',
+  first_pos_loan_type       STRING             COMMENT '1st-lien loan type code (CONV / FHA / VA / etc). Feeds fit sub-score.',
+  owner_name_hash           STRING    NOT NULL COMMENT 'sha2(LOWER(TRIM(name)) || salt, 256) propagated from silver.property_master. Internal only -- router strips before /api/*.',
+  min_spread_bps_applied    INT       NOT NULL COMMENT 'Threshold applied when computing ITM for THIS refresh. Carried so WhyPanel.min_spread_bps is the run-specific value.',
+  min_equity_pct_applied    INT       NOT NULL COMMENT 'Equity threshold applied this refresh.',
+  heloc_equity_min_applied  INT       NOT NULL COMMENT 'HELOC equity threshold applied this refresh (fn_next_best_offer branch 2/3 and equity segment).',
+  cashout_equity_min_applied INT      NOT NULL COMMENT 'Cash-out equity threshold applied this refresh (fn_next_best_offer branch 5).',
+  retention_min_spread_applied INT    NOT NULL COMMENT 'Retention spread threshold applied this refresh (fn_next_best_offer branch 7 and retention segment).',
+  in_the_money              BOOLEAN   NOT NULL COMMENT 'fn_in_the_money(rate_spread_bps, equity_pct, min_spread_bps_applied, min_equity_pct_applied).',
+  trigger_timeline_json     STRING    NOT NULL COMMENT 'JSON-encoded top-3 EvidenceEvent rows pre-materialized to avoid per-row fan-out at read. Router json_decodes into List[EvidenceEvent].',
+  refreshed_at              TIMESTAMP NOT NULL COMMENT 'Refresh timestamp; used as EvidenceDrawer footer provenance chip.'
 )
 USING DELTA
 CLUSTER BY (state, clip)
@@ -237,16 +237,16 @@ TBLPROPERTIES (
 -- 3. mip.gold.evidence_events
 -- -----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS mip.gold.evidence_events (
-  clip           STRING NOT NULL COMMENT 'CLIP; router strips.',
-  evidence_id    STRING NOT NULL COMMENT 'Deterministic ev-<12hex>.',
-  source_product STRING NOT NULL COMMENT 'Voluntary Lien / AVM / etc.',
-  source_table   STRING NOT NULL COMMENT 'Real UC path.',
-  signal_type    STRING NOT NULL COMMENT 'Controlled vocab; permit + listing BLOCKED.',
-  signal_value   STRING NOT NULL COMMENT 'Human-readable value.',
-  display_text   STRING NOT NULL COMMENT 'Deterministic template per signal_type.',
-  confidence     DOUBLE NOT NULL COMMENT '0..1.',
-  `timestamp`    STRING NOT NULL COMMENT 'ISO-8601 string.',
-  signal_rank    INT    NOT NULL COMMENT 'Priority order within CLIP.'
+  clip           STRING NOT NULL COMMENT 'Cotality CLIP. Not in Pydantic EvidenceEvent (router strips); used for join / filter.',
+  evidence_id    STRING NOT NULL COMMENT 'Deterministic: "ev-" || substr(sha2(clip || signal_type || timestamp, 256), 1, 12). Stable across refreshes so Borrower360.evidence_ids stays consistent.',
+  source_product STRING NOT NULL COMMENT 'Human label: Voluntary Lien / AVM / Owner Link / Property / Mortgage Domain / Owner Transfer / Market Rates.',
+  source_table   STRING NOT NULL COMMENT 'Real UC path. Shown verbatim in EvidenceDrawer -- must be a resolvable mip.silver.* or mip.gold.* path.',
+  signal_type    STRING NOT NULL COMMENT 'Controlled vocab: rate_spread / equity / loan_type_fit / competitor_lien / multi_property / absentee_mailing / corporate_owner / foreclosure_stage / recent_refi / recent_payoff / recent_sale / market_trend. BLOCKED vocab (permit, listing) NEVER emitted.',
+  signal_value   STRING NOT NULL COMMENT 'Human-readable value: "+88 bps", "$285K", "3 properties", "competitor refi".',
+  display_text   STRING NOT NULL COMMENT 'One-sentence deterministic template per signal_type. No PII.',
+  confidence     DOUBLE NOT NULL COMMENT '0..1. Per-signal: AVM uses upstream confidence_score_mktg; count-based rows 0.85-0.92 (see header).',
+  `timestamp`    STRING NOT NULL COMMENT 'ISO-8601 STRING (matches Pydantic EvidenceEvent.timestamp: str).',
+  signal_rank    INT    NOT NULL COMMENT 'Deterministic priority order for Borrower360.evidence_ids: rate_spread=1, equity=2, market_trend=3, etc. Smaller = higher priority. Gold-only.'
 )
 USING DELTA
 CLUSTER BY (clip)
@@ -284,23 +284,23 @@ TBLPROPERTIES (
 -- 5. mip.gold.lead_scores
 -- -----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS mip.gold.lead_scores (
-  clip                     STRING    NOT NULL COMMENT 'CLIP. PK.',
-  economic_incentive       INT       NOT NULL COMMENT '0..100 sub-score; weight 0.35.',
-  intent_trigger           INT       NOT NULL COMMENT '0..100 sub-score; weight 0.30.',
-  fit                      INT       NOT NULL COMMENT '0..100 sub-score; weight 0.15.',
-  relationship             INT       NOT NULL COMMENT '0..100 sub-score; weight 0.10.',
-  evidence                 INT       NOT NULL COMMENT '0..100 sub-score; weight 0.10.',
-  opportunity_score        INT       NOT NULL COMMENT 'fn_lead_score output.',
-  confidence               INT       NOT NULL COMMENT 'ROUND(mean(sub-scores)).',
-  in_the_money             BOOLEAN   NOT NULL COMMENT 'fn_in_the_money output.',
-  recommended_offer_code   STRING    NOT NULL COMMENT 'fn_next_best_offer output.',
-  rate_spread_bps          INT       NOT NULL COMMENT 'Input carried for parity transparency.',
-  equity_pct               INT       NOT NULL COMMENT 'Input carried for parity transparency.',
-  has_permit               BOOLEAN   NOT NULL COMMENT 'BLOCKED FALSE.',
-  listed_for_sale          BOOLEAN   NOT NULL COMMENT 'BLOCKED FALSE.',
+  clip                     STRING    NOT NULL COMMENT 'Cotality CLIP. PK. FK to gold.borrower_360.clip.',
+  economic_incentive       INT       NOT NULL COMMENT '0..100 sub-score on rate_spread_bps + equity_pct. Weight 0.35 in fn_lead_score.',
+  intent_trigger           INT       NOT NULL COMMENT '0..100 sub-score on recent mortgage events, competitor/investor signals, rate drift, equity proxy, and current-customer bump. Weight 0.30.',
+  fit                      INT       NOT NULL COMMENT '0..100 sub-score on owner-occupancy + loan_type + corporate/investor fit. Weight 0.15.',
+  relationship             INT       NOT NULL COMMENT '0..100 sub-score on customer / competitor / investor relationship ladder plus owner-level distinct tenant-lender CLIP history. Weight 0.10.',
+  evidence                 INT       NOT NULL COMMENT '0..100: 10 pts per live evidence row plus bounded second-position balance tail. Weight 0.10.',
+  opportunity_score        INT       NOT NULL COMMENT 'mip.gold.fn_lead_score(...) output. 0..100. Mirrors gold.borrower_360 for the same CLIP.',
+  confidence               INT       NOT NULL COMMENT 'ROUND(mean(5 sub-scores)). Mirrors gold.borrower_360 for the same CLIP.',
+  in_the_money             BOOLEAN   NOT NULL COMMENT 'mip.gold.fn_in_the_money(rate_spread_bps, equity_pct, min_spread_bps_applied, min_equity_pct_applied).',
+  recommended_offer_code   STRING    NOT NULL COMMENT 'mip.gold.fn_next_best_offer(...) lowercase code.',
+  rate_spread_bps          INT       NOT NULL COMMENT 'Input to fn_in_the_money / fn_next_best_offer. Carried here so the table is self-contained for parity testing.',
+  equity_pct               INT       NOT NULL COMMENT 'Input to fn_in_the_money / fn_next_best_offer.',
+  has_permit               BOOLEAN   NOT NULL COMMENT 'BLOCKED -> FALSE; carried for parity test transparency.',
+  listed_for_sale          BOOLEAN   NOT NULL COMMENT 'BLOCKED -> FALSE; carried for parity test transparency.',
   is_investor              BOOLEAN   NOT NULL COMMENT 'Carried from borrower_360.',
   is_current_customer      BOOLEAN   NOT NULL COMMENT 'Carried from borrower_360.',
-  is_former_customer       BOOLEAN   NOT NULL COMMENT 'Carried from borrower_360.',
+  is_former_customer       BOOLEAN   NOT NULL COMMENT 'Carried from borrower_360. Distinct from competitor lien; requires historical tenant relationship and no current tenant lien.',
   is_competitor_lien       BOOLEAN   NOT NULL COMMENT 'Carried from borrower_360.',
   has_first_party_relationship BOOLEAN NOT NULL COMMENT 'Carried from borrower_360. TRUE when optional first-party feeds resolve to this borrower.',
   first_party_relationship_depth INT   NOT NULL COMMENT 'Bounded count of resolved first-party feed categories.',
@@ -309,10 +309,10 @@ CREATE TABLE IF NOT EXISTS mip.gold.lead_scores (
   first_party_synthetic_demo     BOOLEAN NOT NULL COMMENT 'TRUE only for rows touched by the Summit demo_synthetic first-party seed.',
   min_spread_bps_applied   INT       NOT NULL COMMENT 'Threshold applied this refresh.',
   min_equity_pct_applied   INT       NOT NULL COMMENT 'Threshold applied this refresh.',
-  heloc_equity_min_applied INT       NOT NULL COMMENT 'HELOC equity threshold this refresh.',
-  cashout_equity_min_applied INT     NOT NULL COMMENT 'Cash-out equity threshold this refresh.',
-  retention_min_spread_applied INT   NOT NULL COMMENT 'Retention spread threshold this refresh.',
-  refreshed_at             TIMESTAMP NOT NULL COMMENT 'Refresh timestamp.'
+  heloc_equity_min_applied INT       NOT NULL COMMENT 'HELOC equity threshold applied this refresh (fn_next_best_offer branch 2/3).',
+  cashout_equity_min_applied INT     NOT NULL COMMENT 'Cash-out equity threshold applied this refresh (fn_next_best_offer branch 5).',
+  retention_min_spread_applied INT   NOT NULL COMMENT 'Retention spread threshold applied this refresh (fn_next_best_offer branch 7).',
+  refreshed_at             TIMESTAMP NOT NULL COMMENT 'Refresh timestamp for audit / provenance.'
 )
 USING DELTA
 CLUSTER BY (clip)
@@ -327,42 +327,42 @@ TBLPROPERTIES (
 -- 6. mip.gold.lead_population
 -- -----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS mip.gold.lead_population (
-  clip                      STRING    NOT NULL COMMENT 'CLIP. PK.',
-  borrower_id               STRING    NOT NULL COMMENT 'Synthetic id.',
-  display_name              STRING    NOT NULL COMMENT 'Synthesized label.',
+  clip                      STRING    NOT NULL COMMENT 'Cotality CLIP. PK.',
+  borrower_id               STRING    NOT NULL COMMENT 'From gold.borrower_360.borrower_id.',
+  display_name              STRING    NOT NULL COMMENT 'Synthesized label. No PII.',
   city                      STRING             COMMENT 'Situs city.',
   state                     STRING    NOT NULL COMMENT 'Situs state.',
-  zip                       STRING             COMMENT '5-digit ZIP.',
+  zip                       STRING             COMMENT '5-digit situs ZIP.',
   segment_codes             ARRAY<STRING> NOT NULL COMMENT 'Ordered SegmentCode list.',
-  equity_estimate           BIGINT    NOT NULL COMMENT 'USD.',
-  equity_pct                INT       NOT NULL COMMENT '0..100; carried from borrower_360 for dashboard top-borrower widgets.',
-  rate_spread_bps           INT       NOT NULL COMMENT 'bps.',
-  opportunity_score         INT       NOT NULL COMMENT '0..100.',
-  confidence                INT       NOT NULL COMMENT '0..100.',
-  recommended_offer_code    STRING    NOT NULL COMMENT 'fn_next_best_offer output code.',
-  recommended_offer         STRING    NOT NULL COMMENT 'Human label.',
-  why_now                   STRING    NOT NULL COMMENT 'Deterministic template.',
-  evidence_ids              ARRAY<STRING> NOT NULL COMMENT 'Evidence ids (ordered).',
-  approval_status           STRING    NOT NULL COMMENT 'Default "pending".',
-  current_lender_ref        STRING             COMMENT 'Public-demo-safe current-servicer reference.',
-  is_owner_occupied         BOOLEAN   NOT NULL COMMENT 'From borrower_360.',
-  is_investor               BOOLEAN   NOT NULL COMMENT 'From borrower_360.',
-  is_current_customer       BOOLEAN   NOT NULL COMMENT 'From borrower_360.',
-  is_former_customer        BOOLEAN   NOT NULL COMMENT 'From borrower_360.',
-  is_competitor_lien        BOOLEAN   NOT NULL COMMENT 'From borrower_360.',
-  related_property_count    INT       NOT NULL COMMENT 'From borrower_360.',
-  current_lien_balance      BIGINT    NOT NULL COMMENT 'From borrower_360.',
-  second_pos_amount         BIGINT             COMMENT 'From borrower_360.',
-  has_permit                BOOLEAN   NOT NULL COMMENT 'BLOCKED FALSE until Cotality Permits lands.',
-  listed_for_sale           BOOLEAN   NOT NULL COMMENT 'BLOCKED FALSE until Cotality MLS lands.',
-  marketing_eligible        BOOLEAN   NOT NULL COMMENT 'From borrower_360; TRUE only when consent, suppression, and frequency-cap gates are clear.',
-  consent_status            STRING    NOT NULL COMMENT 'From borrower_360; opt_in / opt_out / unknown.',
-  suppression_reason        STRING             COMMENT 'From borrower_360; controlled suppression reason.',
-  last_touch_at             TIMESTAMP          COMMENT 'From borrower_360; most recent first-party marketing/contact touch.',
-  eligible_recontact_at     TIMESTAMP          COMMENT 'From borrower_360; earliest permitted re-contact time when capped.',
-  rank_overall              INT       NOT NULL COMMENT 'DENSE_RANK across population.',
-  rank_within_state         INT       NOT NULL COMMENT 'DENSE_RANK within state.',
-  population_version        STRING    NOT NULL COMMENT 'YYYYMMDD-v1 provenance chip.',
+  equity_estimate           BIGINT    NOT NULL COMMENT 'From gold.borrower_360.',
+  equity_pct                INT       NOT NULL COMMENT 'From gold.borrower_360 [0..100]. Used by executive dashboard top-borrower widget.',
+  rate_spread_bps           INT       NOT NULL COMMENT 'From gold.borrower_360.',
+  opportunity_score         INT       NOT NULL COMMENT 'fn_lead_score output 0..100.',
+  confidence                INT       NOT NULL COMMENT 'Mean of 5 sub-scores 0..100.',
+  recommended_offer_code    STRING    NOT NULL COMMENT 'fn_next_best_offer output code; canonical offer enum for operational filters and audit grouping.',
+  recommended_offer         STRING    NOT NULL COMMENT 'Human label (resolved in gold via product_labels map).',
+  why_now                   STRING    NOT NULL COMMENT 'Deterministic template per offer code.',
+  evidence_ids              ARRAY<STRING> NOT NULL COMMENT 'Ordered evidence_ids (mirrors gold.borrower_360 for this CLIP).',
+  approval_status           STRING    NOT NULL COMMENT '"pending" by default; Lakebase is authoritative for actual state.',
+  current_lender_ref        STRING             COMMENT 'Public-demo-safe current-servicer reference from borrower_360. Never the raw Cotality lender string.',
+  is_owner_occupied         BOOLEAN   NOT NULL COMMENT 'From gold.borrower_360; drives /segment-intelligence DEMOGRAPHICS filter.',
+  is_investor               BOOLEAN   NOT NULL COMMENT 'Carried from gold.borrower_360 (derived: multi-property OR corporate OR absentee).',
+  is_current_customer       BOOLEAN   NOT NULL COMMENT 'From gold.borrower_360; current servicer or first-party servicing relationship to the tenant lender.',
+  is_former_customer        BOOLEAN   NOT NULL COMMENT 'From gold.borrower_360; historical tenant-lender relationship with no current tenant lien.',
+  is_competitor_lien        BOOLEAN   NOT NULL COMMENT 'From gold.borrower_360; current servicer is known and not the tenant lender.',
+  related_property_count    INT       NOT NULL COMMENT 'From gold.borrower_360; drives /segment-intelligence OWNER LINK filter.',
+  current_lien_balance      BIGINT    NOT NULL COMMENT 'From gold.borrower_360; drives /segment-intelligence LIEN filter.',
+  second_pos_amount         BIGINT             COMMENT 'From gold.borrower_360; nullable (no second-position lien).',
+  has_permit                BOOLEAN   NOT NULL COMMENT 'BLOCKED: FALSE until Cotality Building Permits Delta share lands.',
+  listed_for_sale           BOOLEAN   NOT NULL COMMENT 'BLOCKED: FALSE until Cotality MLS Listings Delta share lands.',
+  marketing_eligible        BOOLEAN   NOT NULL COMMENT 'From gold.borrower_360; TRUE only when consent, suppression, and frequency-cap gates are clear.',
+  consent_status            STRING    NOT NULL COMMENT 'From gold.borrower_360; opt_in / opt_out / unknown.',
+  suppression_reason        STRING             COMMENT 'From gold.borrower_360; controlled suppression reason.',
+  last_touch_at             TIMESTAMP          COMMENT 'From gold.borrower_360; most recent first-party marketing/contact touch.',
+  eligible_recontact_at     TIMESTAMP          COMMENT 'From gold.borrower_360; earliest permitted re-contact time when capped.',
+  rank_overall              INT       NOT NULL COMMENT 'DENSE_RANK OVER (ORDER BY opportunity_score DESC, clip). 1 = highest.',
+  rank_within_state         INT       NOT NULL COMMENT 'DENSE_RANK OVER (PARTITION BY state ORDER BY opportunity_score DESC, clip). 1 = highest in state.',
+  population_version        STRING    NOT NULL COMMENT 'CONCAT(DATE_FORMAT(refreshed_at, "yyyyMMdd"), "-v1"). EvidenceDrawer footer uses this as a provenance chip.',
   refreshed_at              TIMESTAMP NOT NULL COMMENT 'Refresh timestamp.'
 )
 USING DELTA
@@ -378,14 +378,14 @@ TBLPROPERTIES (
 -- 7. mip.gold.segment_population (+ segment_population_prior)
 -- -----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS mip.gold.segment_population (
-  segment_code    STRING    NOT NULL COMMENT 'itm/listed/permit/investor/equity/retention.',
-  state           STRING    NOT NULL COMMENT '2-char state or "_ALL".',
-  name            STRING    NOT NULL COMMENT 'Static label.',
-  count           INT       NOT NULL COMMENT 'Member count.',
-  delta_vs_prior  STRING    NOT NULL COMMENT 'QoQ delta "+NN%" / "-NN%"; "+0%" on first refresh.',
-  avg_score       INT       NOT NULL COMMENT 'AVG opportunity_score.',
-  description     STRING    NOT NULL COMMENT 'Static description.',
-  color           STRING    NOT NULL COMMENT 'Hex color.',
+  segment_code    STRING    NOT NULL COMMENT 'itm / listed / permit / investor / equity / retention. Matches SegmentCode Literal exactly.',
+  state           STRING    NOT NULL COMMENT '2-char state code from refreshed source coverage or "_ALL" for national rollup.',
+  name            STRING    NOT NULL COMMENT 'Static label per segment_code (e.g., "In the Money").',
+  count           INT       NOT NULL COMMENT 'Member count for this (segment, state) cell.',
+  delta_vs_prior  STRING    NOT NULL COMMENT 'Quarter-over-quarter delta as "+NN%" / "-NN%". Router maps to SegmentSummary.delta. "+0%" on first refresh.',
+  avg_score       INT       NOT NULL COMMENT 'CAST(ROUND(AVG(opportunity_score)) AS INT) over the segment cell.',
+  description     STRING    NOT NULL COMMENT 'Static description per segment_code.',
+  color           STRING    NOT NULL COMMENT 'Hex color for segment tile.',
   refreshed_at    TIMESTAMP NOT NULL COMMENT 'Refresh timestamp.'
 )
 USING DELTA
@@ -400,8 +400,8 @@ TBLPROPERTIES (
 CREATE TABLE IF NOT EXISTS mip.gold.segment_population_prior (
   segment_code    STRING    NOT NULL COMMENT 'Matches segment_population.segment_code.',
   state           STRING    NOT NULL COMMENT 'Matches segment_population.state.',
-  snapshot_date   DATE      NOT NULL COMMENT 'Daily snapshot date.',
-  count           INT       NOT NULL COMMENT 'Count on snapshot_date.',
+  snapshot_date   DATE      NOT NULL COMMENT 'Date the count was snapshotted (daily granularity).',
+  count           INT       NOT NULL COMMENT 'Member count on snapshot_date.',
   avg_score       INT       NOT NULL COMMENT 'Avg opportunity_score on snapshot_date.'
 )
 USING DELTA
@@ -532,15 +532,15 @@ TBLPROPERTIES (
 --     See sql/ddl/gold_county_rollup.sql for column comments.
 -- -----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS mip.gold.county_rollup (
-  fips_5                       STRING    NOT NULL COMMENT '5-char FIPS: 2-char state + 3-char county.',
-  state                        STRING    NOT NULL COMMENT '2-char USPS state code.',
-  county_name                  STRING             COMMENT 'Human county name; NULL until crosswalk seed lands.',
-  addressable_borrowers        INT       NOT NULL COMMENT 'Population count for this county.',
-  in_the_money_borrowers       INT       NOT NULL COMMENT 'COUNT where in_the_money = TRUE.',
-  high_opportunity_borrowers   INT       NOT NULL COMMENT 'COUNT where opportunity_score >= 75.',
-  avg_opportunity_score        INT       NOT NULL COMMENT 'AVG(opportunity_score) rounded to int.',
-  top_segment_code             STRING             COMMENT 'Dominant segment_code by count.',
-  snapshot_date                DATE      NOT NULL COMMENT 'Refresh date; daily grain.',
+  fips_5                       STRING    NOT NULL COMMENT '5-char FIPS: 2-char state + 3-char county. PK part.',
+  state                        STRING    NOT NULL COMMENT '2-char USPS state code (uppercase).',
+  county_name                  STRING             COMMENT 'Human county name. NULL until a FIPS->name crosswalk seed lands; UI falls back to fips_5.',
+  addressable_borrowers        INT       NOT NULL COMMENT 'Population count for this county on snapshot_date.',
+  in_the_money_borrowers       INT       NOT NULL COMMENT 'COUNT where borrower_360.in_the_money = TRUE.',
+  high_opportunity_borrowers   INT       NOT NULL COMMENT 'COUNT where borrower_360.opportunity_score >= 75.',
+  avg_opportunity_score        INT       NOT NULL COMMENT 'AVG(borrower_360.opportunity_score) rounded to int.',
+  top_segment_code             STRING             COMMENT 'Dominant segment_code by count. NULL when every borrower in the county has empty segment_codes.',
+  snapshot_date                DATE      NOT NULL COMMENT 'Refresh date; daily grain. PK part.',
   snapshot_at                  TIMESTAMP NOT NULL COMMENT 'Precise refresh timestamp.'
 )
 USING DELTA
@@ -559,14 +559,14 @@ TBLPROPERTIES (
 --     See sql/ddl/gold_zip_rollup.sql for column comments.
 -- -----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS mip.gold.zip_rollup (
-  state                     STRING    NOT NULL COMMENT '2-char USPS state code. PK part.',
-  county_fips_5             STRING             COMMENT '5-char county FIPS (nullable). PK part when present.',
-  zip                       STRING    NOT NULL COMMENT '5-digit ZIP. PK part.',
-  addressable_borrowers     INT       NOT NULL COMMENT 'Population count for this ZIP.',
-  avg_opportunity_score     INT       NOT NULL COMMENT 'AVG(opportunity_score) rounded to int.',
-  top_segment_code          STRING             COMMENT 'Dominant segment_code by count.',
-  sample_borrower_id        STRING             COMMENT 'Stable-ranked top borrower_id in the ZIP.',
-  snapshot_date             DATE      NOT NULL COMMENT 'Refresh date; daily grain.',
+  state                     STRING    NOT NULL COMMENT '2-char USPS state code (uppercase). PK part.',
+  county_fips_5             STRING             COMMENT '5-char county FIPS. Nullable when silver lacked a county geocode. PK part when present.',
+  zip                       STRING    NOT NULL COMMENT '5-digit ZIP (STRING preserves leading zeros). PK part.',
+  addressable_borrowers     INT       NOT NULL COMMENT 'Population count for this ZIP on snapshot_date.',
+  avg_opportunity_score     INT       NOT NULL COMMENT 'AVG(borrower_360.opportunity_score) rounded to int.',
+  top_segment_code          STRING             COMMENT 'Dominant segment_code by count. NULL when every borrower in the ZIP has empty segment_codes.',
+  sample_borrower_id        STRING             COMMENT 'Stable-ranked top borrower_id in the ZIP (ORDER BY opportunity_score DESC, borrower_id ASC). Used by UI deep-link.',
+  snapshot_date             DATE      NOT NULL COMMENT 'Refresh date; daily grain. PK part.',
   snapshot_at               TIMESTAMP NOT NULL COMMENT 'Precise refresh timestamp.'
 )
 USING DELTA
@@ -585,10 +585,10 @@ TBLPROPERTIES (
 --     See sql/ddl/gold_state_top_segment.sql for column comments.
 -- -----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS mip.gold.state_top_segment (
-  state                    STRING    NOT NULL COMMENT '2-char USPS state code.',
-  top_segment_code         STRING    NOT NULL COMMENT 'Dominant SegmentCode; "none" when empty.',
-  top_segment_share_pct    INT       NOT NULL COMMENT 'Share of state population in the top segment, 0..100.',
-  snapshot_date            DATE      NOT NULL COMMENT 'Refresh date; daily grain.'
+  state                    STRING    NOT NULL COMMENT '2-char USPS state code (uppercase). PK part.',
+  top_segment_code         STRING    NOT NULL COMMENT 'Dominant SegmentCode for this state on snapshot_date (itm/listed/permit/investor/equity/retention). "none" when no borrower in the state has a non-empty segment_codes array.',
+  top_segment_share_pct    INT       NOT NULL COMMENT '0..100. Share of the state population in the top segment.',
+  snapshot_date            DATE      NOT NULL COMMENT 'Refresh date; daily grain. PK part.'
 )
 USING DELTA
 CLUSTER BY (state)
