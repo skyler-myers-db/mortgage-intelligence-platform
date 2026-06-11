@@ -9,6 +9,7 @@ import { EntradaWordmark } from '../components/brand/Entrada';
 import { DataOperationsPanel } from '../components/admin/DataOperationsPanel';
 import { ActivationOperationsPanel } from '../components/activation/ActivationLoopPanel';
 import { api } from '../lib/api';
+import { formatTimestamp, parseBackendTimestamp, TIMESTAMP_UNAVAILABLE } from '../lib/time';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
 import { queryKeys } from '../lib/queryKeys';
 import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
@@ -768,34 +769,27 @@ function sourceStatusLabel(status: SourceStatus): string {
   return 'roadmap';
 }
 
-/** Best-effort ISO-timestamp prettifier. Lakebase returns ISO-8601 strings. */
+/**
+ * Audit-row clock times go through lib/time so the rendered label carries
+ * an explicit short zone name (re-audit 2026-06-11: this route still had
+ * a local zone-naive formatter — instants were correct, labels unzoned —
+ * contradicting the "every clock time through lib/time" slice contract).
+ */
 function formatAuditTimestamp(iso: string): string {
-  try {
-    const d = new Date(iso);
-    if (Number.isNaN(d.getTime())) return iso;
-    return `${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} ${d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}`;
-  } catch {
-    return iso;
-  }
+  return formatTimestamp(iso, { withYear: false });
 }
 
 /**
  * Rules `rules_edited_at` comes back as the Databricks CAST(timestamp AS
- * STRING) form ("YYYY-MM-DD HH:MM:SS" in UTC). Re-render in the user's
- * local locale.
+ * STRING) form ("YYYY-MM-DD HH:MM:SS" in UTC). Date-only display (no
+ * clock), so no zone suffix; parsing is delegated to lib/time, which
+ * pins the naive wire shape to UTC instead of viewer-local.
  */
 function formatEditedAt(stamp: string | null): string {
   if (!stamp) return 'Never';
-  // Databricks' CAST(timestamp AS STRING) uses a space separator; Date
-  // parses ISO-8601 reliably, so coerce to that form first.
-  const iso = stamp.includes('T') ? stamp : stamp.replace(' ', 'T') + 'Z';
-  try {
-    const d = new Date(iso);
-    if (Number.isNaN(d.getTime())) return stamp;
-    return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
-  } catch {
-    return stamp;
-  }
+  const parsed = parseBackendTimestamp(stamp);
+  if (!parsed) return TIMESTAMP_UNAVAILABLE;
+  return parsed.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
 }
 
 /** Pretty-print a DESCRIBE DETAIL lastModified stamp (ISO-8601). */

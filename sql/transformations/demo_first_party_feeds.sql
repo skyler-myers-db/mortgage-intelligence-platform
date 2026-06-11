@@ -226,3 +226,28 @@ SELECT
   refresh_ts AS refreshed_at
 FROM demo_first_party_base
 WHERE bucket BETWEEN 0 AND 37;
+
+-- ---------------------------------------------------------------------------
+-- Table + column comments re-applied post-CTAS (re-audit 2026-06-11): the
+-- five CREATE OR REPLACE TABLE statements above drop the DDL metadata
+-- (sql/ddl/003_gold_tables.sql) on every demo-feed refresh — same defect
+-- class as audit P2-8. Generated from the DDL; parity pinned by
+-- tests/unit/test_gold_column_comment_guard.py.
+-- ---------------------------------------------------------------------------
+
+COMMENT ON TABLE mip.first_party.loan_applications IS 'Optional lender LOS/application feed. No names, emails, phones, SSNs, or street addresses.';
+COMMENT ON COLUMN mip.first_party.loan_applications.application_id_hash IS 'Customer application id hash. No raw application id.';
+COMMENT ON TABLE mip.first_party.servicing_portfolio IS 'Optional lender servicing-book feed. Used for current-customer, retention, and recapture context when connected.';
+COMMENT ON COLUMN mip.first_party.servicing_portfolio.servicing_loan_id_hash IS 'Customer loan id hash. No raw account number.';
+COMMENT ON TABLE mip.first_party.crm_campaign_membership IS 'Optional CRM/campaign feed for suppression, recency, and outreach-history controls. PII-free.';
+COMMENT ON COLUMN mip.first_party.crm_campaign_membership.source_system IS 'Customer source system name, e.g. CRM or demo seed.';
+COMMENT ON COLUMN mip.first_party.crm_campaign_membership.feed_mode IS 'customer_connected or demo_synthetic.';
+COMMENT ON COLUMN mip.first_party.crm_campaign_membership.synthetic_demo IS 'TRUE only for the Summit Mortgage public demo seed.';
+COMMENT ON TABLE mip.first_party.customer_interactions IS 'Optional call-center/digital interaction feed. PII-free interaction metadata only.';
+COMMENT ON COLUMN mip.first_party.customer_interactions.source_system IS 'Customer source system name, e.g. contact-center or demo seed.';
+COMMENT ON COLUMN mip.first_party.customer_interactions.feed_mode IS 'customer_connected or demo_synthetic.';
+COMMENT ON COLUMN mip.first_party.customer_interactions.synthetic_demo IS 'TRUE only for the Summit Mortgage public demo seed.';
+COMMENT ON TABLE mip.first_party.product_balances IS 'Optional banking-product balance feed. Uses bands and hashes, not account numbers or precise balances.';
+COMMENT ON COLUMN mip.first_party.product_balances.source_system IS 'Customer source system name, e.g. core banking or demo seed.';
+COMMENT ON COLUMN mip.first_party.product_balances.feed_mode IS 'customer_connected or demo_synthetic.';
+COMMENT ON COLUMN mip.first_party.product_balances.synthetic_demo IS 'TRUE only for the Summit Mortgage public demo seed.';

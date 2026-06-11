@@ -20,10 +20,15 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 
+# Re-audit 2026-06-11: jobs/ (importable task sources, imported by unit
+# tests) and tests/ itself were omitted — a module-scope load_dotenv in
+# either would have evaded this guard exactly like the original incident.
 SCAN_ROOTS = (
     REPO / "backend",
     REPO / "tools",
     REPO / "pipelines",
+    REPO / "jobs",
+    REPO / "tests",
 )
 
 

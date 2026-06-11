@@ -16,11 +16,13 @@
 -- PII posture:
 --   - `owner_1_full_name` is HASHED at INSERT/UPDATE time into
 --     `owner_name_hash` using sha2(LOWER(TRIM(name)) || ':' || salt, 256).
---     The salt is read from secret scope `mip`, key `pii-salt-v1`
---     (governance-real-data-review §1 + data-contract §7). If the secret
---     is not configured, the MERGE uses the literal sentinel
---     `mip_pii_salt_v1` which is documented in the contract; rotating the
---     salt invalidates prior hashes (acceptable -- hashes are internal).
+--     The salt is read from secret scope `mip`, key `pii-salt-v1`,
+--     provisioned by scripts/deploy.sh step 4d (create-if-missing). There
+--     is NO literal fallback (removed 2026-06-11, audit P1-4 — a
+--     source-committed salt made hashing predictable, silently); a
+--     missing secret fails this refresh visibly. The salt is NEVER
+--     rotated: rotation changes every masked identifier across refreshes
+--     and breaks join stability between gold snapshots.
 --   - Raw `owner_1_full_name` is NEVER written to silver.
 --   - `situs_street_address` is NEVER projected (dropped at the SELECT).
 --   - `mailing_street_address` is NEVER projected; only `mailing_city` and
