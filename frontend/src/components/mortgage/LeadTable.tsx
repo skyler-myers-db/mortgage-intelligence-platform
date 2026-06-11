@@ -17,6 +17,7 @@ import {
 } from './LeadTable.constants';
 import {
   _newBulkId,
+  bulkActionFocusTarget,
   chunk,
   dispositionLabel,
   isEditableTarget,
@@ -31,6 +32,7 @@ import type { LeadTableProps, RejectReasonCode, SortDir, SortKey } from './LeadT
 
 export { buildLeadCsv } from './LeadTable.csv';
 export {
+  bulkActionFocusTarget,
   isEditableTarget,
   isLeadApprovalEligible,
   isLeadMarketingActionable,
@@ -65,6 +67,12 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
 
   const queryClient = useQueryClient();
   const tableWrapRef = useRef<HTMLDivElement | null>(null);
+  // A11y: the bulk-approve button is the launch point for the bulk flow.
+  // After the action settles we restore focus deterministically — to this
+  // button when it survives (partial outcome keeps the toolbar mounted) or
+  // to the table scroll region when a full success unmounts the toolbar.
+  // Without this, keyboard focus silently drops to <body> after a bulk run.
+  const bulkApproveBtnRef = useRef<HTMLButtonElement | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [sortKey, setSortKey] = useState<SortKey>('rank');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
@@ -566,6 +574,20 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
     setBulkToast({ ok, fail, network, aborted });
     bulkAbortRef.current = null;
     bulkInFlightRef.current = false;
+    // A11y: restore keyboard focus once React commits the cleared/retained
+    // selection. `failedIds` is exactly what drives the next selection, so
+    // we can pick the target synchronously, then defer the .focus() to the
+    // next frame so the toolbar's mount/unmount has settled. On a full
+    // success the toolbar unmounts -> focus the always-present table region;
+    // on a partial outcome the trigger button survives -> refocus it.
+    const focusTarget = bulkActionFocusTarget(failedIds.length);
+    requestAnimationFrame(() => {
+      if (focusTarget === 'trigger' && bulkApproveBtnRef.current) {
+        bulkApproveBtnRef.current.focus();
+      } else {
+        tableWrapRef.current?.focus();
+      }
+    });
   }
 
   // On mount: if the previous mount left a partial bulk-approve snapshot
@@ -997,6 +1019,7 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
               Clear selection
             </Button>
             <Button
+              ref={bulkApproveBtnRef}
               variant="primary"
               size="sm"
               icon={bulkApproving ? undefined : 'check'}

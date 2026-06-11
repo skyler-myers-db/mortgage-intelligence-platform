@@ -489,6 +489,7 @@ export function USChoroplethMap({
             tabIndex={0}
             data-target-size-exempt="geographic-shape"
             aria-label={loc.name}
+            aria-keyshortcuts="Enter"
             // Always show a tooltip on hover. In-footprint states surface
             // the live rollup; out-of-footprint states surface an honest
             // "outside Cotality evaluation scope" card so the user never
@@ -680,6 +681,7 @@ export function USChoroplethMap({
               tabIndex={0}
               data-target-size-exempt="geographic-shape"
               aria-label={`${f.name} County`}
+              aria-keyshortcuts="Enter"
               onMouseEnter={(e) =>
                 setHover({
                   x: e.clientX,
@@ -942,6 +944,14 @@ export function USChoroplethMap({
               ? `opportunity within ${segmentFilter.join(', ')}`
               : 'marketable population'}
           </span>
+        </div>
+        {/* Keyboard affordance: always in the DOM for screen readers,
+            revealed visually by .map-wrap:focus-within when a region is
+            focused. Copy matches the actual handlers — Enter/Space drill
+            in (onKeyDown on each geography); there is no Esc handler, so
+            backing out is via the breadcrumb trail above the map. */}
+        <div className="map-legend__hint">
+          <kbd>Enter</kbd> or <kbd>Space</kbd> drills in · use the breadcrumbs to go back
         </div>
       </div>
 

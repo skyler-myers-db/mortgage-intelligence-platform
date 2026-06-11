@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildLeadCsv,
+  bulkActionFocusTarget,
   isEditableTarget,
   isLeadApprovalEligible,
   isLeadMarketingActionable,
@@ -103,6 +104,30 @@ describe('synchronous in-flight latch shape', () => {
     latch.release();
     expect(latch.snapshot()).toBe(false);
     expect(latch.tryEnter()).toBe(true);
+  });
+});
+
+/**
+ * Bulk-action focus restoration (a11y).
+ *
+ * After a bulk approve/reject settles, keyboard focus must land somewhere
+ * deterministic instead of dropping to <body>. The bulk-action toolbar only
+ * renders while a selection exists: a full success clears the selection and
+ * unmounts the trigger button, so focus has to fall back to the always-
+ * mounted table scroll region; a partial outcome leaves rows selected, so the
+ * trigger button survives and is the right place to return focus for a retry.
+ * The runtime call wires `requestAnimationFrame(() => el.focus())`; the pure
+ * decision is covered here (the repo runs Vitest under `environment: 'node'`
+ * and does not mount components).
+ */
+describe('bulkActionFocusTarget (post-bulk focus restoration)', () => {
+  it('focuses the trigger button when rows remain selected (partial outcome)', () => {
+    expect(bulkActionFocusTarget(1)).toBe('trigger');
+    expect(bulkActionFocusTarget(12)).toBe('trigger');
+  });
+
+  it('falls back to the table region when the selection is cleared (full success)', () => {
+    expect(bulkActionFocusTarget(0)).toBe('tableRegion');
   });
 });
 

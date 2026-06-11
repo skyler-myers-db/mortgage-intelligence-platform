@@ -26,6 +26,28 @@ export function chunk<T>(items: T[], size: number): T[][] {
   return out;
 }
 
+/**
+ * Where keyboard focus should land after a bulk approve/reject action
+ * settles. Pure so it can be unit-tested under the node environment
+ * (the repo deliberately does not mount components in Vitest).
+ *
+ * The bulk-action toolbar only renders while `selectionCount > 0`. On a
+ * full success the selection is cleared, so the toolbar — and the button
+ * the user clicked — unmounts; refocusing that button would drop focus to
+ * `<body>`. On a partial outcome (failed/aborted rows stay selected) the
+ * toolbar persists, so the triggering button is still in the DOM and is
+ * the least-surprising place to return focus for a retry.
+ *
+ * @param remainingSelectionCount selected rows left AFTER the action settles.
+ * @returns `'trigger'`     — refocus the button that launched the action.
+ *          `'tableRegion'` — focus the always-mounted table scroll region.
+ */
+export function bulkActionFocusTarget(
+  remainingSelectionCount: number,
+): 'trigger' | 'tableRegion' {
+  return remainingSelectionCount > 0 ? 'trigger' : 'tableRegion';
+}
+
 export function _newBulkId(): string {
   const c = typeof globalThis !== 'undefined' ? globalThis.crypto : undefined;
   if (c && typeof c.randomUUID === 'function') return c.randomUUID();
