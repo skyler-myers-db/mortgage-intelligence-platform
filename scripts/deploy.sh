@@ -446,10 +446,21 @@ GRANTS_EOF
 # rotating it changes every masked identifier across refreshes and breaks
 # join stability between gold snapshots.
 step "provision pii-salt secret scope (create-if-missing, never rotate)"
-if ! databricks secrets list-scopes -o json | "$PYTHON" -c 'import json,sys; scopes={s.get("name") for s in json.load(sys.stdin).get("scopes",[])}; sys.exit(0 if "mip" in scopes else 1)'; then
+# CLI JSON shape note (observed live 2026-06-11): `databricks secrets
+# list-scopes -o json` / `list-secrets -o json` emit a BARE ARRAY on
+# current CLI versions and a wrapped object on older ones — accept both.
+if ! databricks secrets list-scopes -o json | "$PYTHON" -c 'import json,sys
+data = json.load(sys.stdin)
+items = data.get("scopes", []) if isinstance(data, dict) else (data or [])
+names = {s.get("name") for s in items if isinstance(s, dict)}
+sys.exit(0 if "mip" in names else 1)'; then
   run databricks secrets create-scope mip
 fi
-if ! databricks secrets list-secrets mip -o json 2>/dev/null | "$PYTHON" -c 'import json,sys; keys={s.get("key") for s in json.load(sys.stdin).get("secrets",[])}; sys.exit(0 if "pii-salt-v1" in keys else 1)'; then
+if ! databricks secrets list-secrets mip -o json 2>/dev/null | "$PYTHON" -c 'import json,sys
+data = json.load(sys.stdin)
+items = data.get("secrets", []) if isinstance(data, dict) else (data or [])
+keys = {s.get("key") for s in items if isinstance(s, dict)}
+sys.exit(0 if "pii-salt-v1" in keys else 1)'; then
   echo "  generating pii-salt-v1 (random 64-hex, write-once)"
   databricks secrets put-secret mip pii-salt-v1 --string-value "$(openssl rand -hex 32)"
 else
