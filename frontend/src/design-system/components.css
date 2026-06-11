@@ -1346,6 +1346,21 @@ kbd {
 .source-freshness--fresh::before { background: var(--signal-success); }
 .source-freshness--aging::before { background: var(--signal-warning); }
 .source-freshness--stale::before { background: var(--signal-danger); }
+/* Distinct chip states for the drawer's metadata fetch lifecycle
+   (re-audit 2026-06-11): 'checking' pulses on the accent, 'fetch failed'
+   warns — neither may wear the unavailable/no-timestamp look. */
+.source-freshness--loading::before {
+  background: var(--accent);
+  animation: freshness-pulse 1.2s ease-in-out infinite;
+}
+.source-freshness--error::before { background: var(--signal-warning); }
+@keyframes freshness-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .source-freshness--loading::before { animation: none; }
+}
 .source-stat-grid,
 .asset-card-grid {
   display: grid;
@@ -1675,12 +1690,13 @@ kbd {
   outline: none;
 }
 .genie__input input:focus { border-color: var(--accent); }
-/* INTENTIONAL (2026-06-11 audit P3): the FAB is display:none at desktop —
-   the prototype's desktop Genie entry is the topbar icon (Module 0
-   Prototype.html:1237), and a fixed FAB would collide with table/map
-   content at 1440. The max-width:720px media block below restores the FAB
-   as the mobile entrypoint. An "is the FAB 0x0?" finding here is parity,
-   not a bug. */
+/* DELIBERATE DEVIATION from the prototype (re-audit 2026-06-11 corrected
+   the earlier "parity" claim): Module 0 Prototype.html:773-785 renders the
+   fixed FAB at ALL widths (display: grid, no hiding media query). We hide
+   it at desktop because a fixed bottom-right FAB collides with the lead
+   table and choropleth at 1440, and the topbar Genie icon is the desktop
+   entry; the max-width:720px block below restores the FAB on mobile.
+   Pinned by components.test.ts as a documented deviation-by-choice. */
 .genie__fab {
   position: fixed; bottom: var(--sp-4); right: var(--sp-4);
   width: 52px; height: 52px; border-radius: 50%;

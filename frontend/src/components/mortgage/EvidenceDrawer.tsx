@@ -129,7 +129,12 @@ export function EvidenceDrawer() {
             <>
               <div className="source-summary">
                 <div className="source-summary__top">
-                  <span className={`source-freshness source-freshness--${metadata?.freshness ?? 'unavailable'}`}>
+                  {/* Modifier keys off the VIEW state, not metadata.freshness:
+                      'loading' and 'error' previously fell through to the
+                      --unavailable style, visually conflating "checking" /
+                      "fetch failed" with "no timestamp" (re-audit 2026-06-11
+                      cosmetic finding). */}
+                  <span className={`source-freshness source-freshness--${freshnessView ?? 'unavailable'}`}>
                     {freshnessLabel(freshnessView)}
                   </span>
                   {metadata?.status && <span className="chip chip--neutral">{metadata.status}</span>}

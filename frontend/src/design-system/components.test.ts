@@ -106,6 +106,17 @@ describe('layout containment contracts', () => {
     expect(css).toContain('.data-estate__asset--skeleton');
   });
 
+  it('gives the drawer freshness chip distinct loading and error states', () => {
+    const css = designCss();
+
+    // Re-audit 2026-06-11: 'checking' and 'fetch failed' wore the
+    // unavailable/no-timestamp style. Loading pulses on the accent
+    // (motion-reduced safe); error warns.
+    expect(css).toMatch(/\.source-freshness--loading::before\s*\{[^}]*background:\s*var\(--accent\);/s);
+    expect(css).toMatch(/\.source-freshness--error::before\s*\{[^}]*background:\s*var\(--signal-warning\);/s);
+    expect(css).toMatch(/@media \(prefers-reduced-motion:\s*reduce\)\s*\{[\s\S]*?\.source-freshness--loading::before\s*\{\s*animation:\s*none;/s);
+  });
+
   it('keeps long error messages wrapped inside callouts', () => {
     const css = designCss();
 
