@@ -166,7 +166,7 @@ def lead_score(
     components = (economic_incentive, intent_trigger, fit, relationship, evidence)
     weighted_sum = sum(
         (weight * Decimal(component or 0)
-         for weight, component in zip(_LEAD_SCORE_WEIGHTS, components)),
+         for weight, component in zip(_LEAD_SCORE_WEIGHTS, components, strict=True)),
         start=Decimal(0),
     )
     rounded = int(weighted_sum.quantize(_DECIMAL_ONE, rounding=ROUND_HALF_EVEN))

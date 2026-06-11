@@ -1,11 +1,12 @@
 """FastAPI application assembly, middleware, routers, and exception handlers."""
 
+import asyncio
 import logging
 import os
 import re
 import time
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any
 
@@ -172,6 +173,50 @@ def _warm_lakebase() -> None:
         )
 
 
+def _warm_hot_lead_cache() -> None:
+    """Populate the default `/api/leads` cache entry (list + count).
+
+    2026-06-11 audit P1-6: the default lead page is the slowest hot-path
+    query (3.6-6.6s cold) and fronts both hero routes. Warming it at
+    startup — and re-warming on a cadence below the cache TTL via
+    ``_lead_cache_rewarm_loop`` — means booth/demo loads always hit the
+    repository cache (~sub-second). Same log-and-continue posture as
+    ``_warm_warehouse``: a failed warm degrades to the pre-existing
+    cold-query behaviour, never a boot refusal.
+    """
+    from backend.services.lead_warm import warm_default_lead_page
+
+    start = time.monotonic()
+    try:
+        result = warm_default_lead_page()
+        emit(
+            log,
+            "lead_cache_warm_succeeded",
+            dependency="warehouse",
+            outcome="success",
+            duration_ms=int((time.monotonic() - start) * 1000),
+            leads=result["leads"],
+            total=result["total"],
+        )
+    except Exception as exc:  # noqa: BLE001 -- log-and-continue is the contract
+        emit(
+            log,
+            "lead_cache_warm_failed",
+            level=logging.WARNING,
+            dependency="warehouse",
+            outcome="error",
+            exc_type=type(exc).__name__,
+            exc_msg=str(exc)[:500],
+        )
+
+
+async def _lead_cache_rewarm_loop(interval_s: float) -> None:
+    """Refresh-ahead: keep the default lead page permanently warm."""
+    while True:
+        await asyncio.sleep(interval_s)
+        await asyncio.to_thread(_warm_hot_lead_cache)
+
+
 @asynccontextmanager
 async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     """Validate warehouse credentials + warm dependencies before serving.
@@ -188,7 +233,13 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
       Lakebase so the first user request doesn't eat cold-start
       latency. Failure is a warning, not a boot-refusal -- circuit
       breakers + the frontend degraded banner cover the gap.
+
+    2026-06-11 audit P1-6:
+    * Warm the default `/api/leads` page (slowest hot-path query) and
+      keep it warm with a refresh-ahead loop so hero-route loads hit
+      the repository cache instead of a 3.6-6.6s cold warehouse query.
     """
+    rewarm_task: asyncio.Task[None] | None = None
     if not _running_under_pytest():
         # ``require_databricks_creds`` raises RuntimeError with a
         # clear operator-facing message when any of the three env
@@ -203,7 +254,18 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
         check_trust_boundary_at_startup()
         _warm_warehouse()
         _warm_lakebase()
-    yield
+        _warm_hot_lead_cache()
+        if settings.mip_leads_warm_interval_s > 0:
+            rewarm_task = asyncio.create_task(
+                _lead_cache_rewarm_loop(settings.mip_leads_warm_interval_s)
+            )
+    try:
+        yield
+    finally:
+        if rewarm_task is not None:
+            rewarm_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await rewarm_task
 
 
 app = FastAPI(

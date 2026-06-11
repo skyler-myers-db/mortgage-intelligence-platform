@@ -220,6 +220,13 @@ class Settings(BaseSettings):
     # pre-measurement cache warmup while staying much shorter than the
     # warehouse gold-refresh cadence.
     mip_cache_ttl_s: float = 300.0
+    # 2026-06-11 audit P1-6: refresh-ahead interval for the default lead
+    # page (the slowest hot-path query, 3.6-6.6s cold). backend.main warms
+    # the default `/api/leads` list + count at startup and re-warms every
+    # this-many seconds. MUST stay below `mip_cache_ttl_s` so the cache
+    # entry is refreshed before it expires and hero-route loads never pay
+    # the cold query. Set to 0 to disable the re-warm loop (tests do).
+    mip_leads_warm_interval_s: float = 240.0
     # Shorter TTL for Lakebase sales workflow read-through state (assignment,
     # disposition, approval rollups). Mutating sales-state paths clear this
     # process-local cache immediately; the TTL covers out-of-band updates.

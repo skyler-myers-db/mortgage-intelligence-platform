@@ -37,7 +37,7 @@ def _module_scope_statements(tree: ast.Module):
     stack: list[ast.stmt] = list(tree.body)
     while stack:
         node = stack.pop()
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
             continue
         yield node
         for child in ast.iter_child_nodes(node):
@@ -68,7 +68,7 @@ def test_no_module_scope_load_dotenv() -> None:
             tree = ast.parse(text, filename=str(path))
             for stmt in _module_scope_statements(tree):
                 # Imports of the symbol are fine; calling it is not.
-                if isinstance(stmt, (ast.Import, ast.ImportFrom)):
+                if isinstance(stmt, ast.Import | ast.ImportFrom):
                     continue
                 if _calls_load_dotenv(stmt):
                     offenders.append(
