@@ -718,19 +718,28 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
     });
   }
 
-  const renderSortHeader = (key: SortKey, label: string) => (
-    <button
-      type="button"
-      className="tbl__sort"
-      onClick={() => toggleSort(key)}
-      aria-label={`Sort by ${label}`}
-      aria-pressed={sortKey === key}
+  // 2026-06-11 audit P3 a11y: renderSortHeader returns the full <th> so
+  // `aria-sort` lives on the columnheader role (the only role where the
+  // ARIA spec defines it — putting it on the inner button would be
+  // invalid ARIA and ignored by screen readers).
+  const renderSortHeader = (key: SortKey, label: string, thClassName?: string) => (
+    <th
+      className={thClassName}
+      aria-sort={sortKey === key ? (sortDir === 'desc' ? 'descending' : 'ascending') : 'none'}
     >
-      <span>{label}</span>
-      {sortKey === key && key !== 'rank' && (
-        <Icon name={sortDir === 'desc' ? 'down' : 'up'} size={10} />
-      )}
-    </button>
+      <button
+        type="button"
+        className="tbl__sort"
+        onClick={() => toggleSort(key)}
+        aria-label={`Sort by ${label}`}
+        aria-pressed={sortKey === key}
+      >
+        <span>{label}</span>
+        {sortKey === key && key !== 'rank' && (
+          <Icon name={sortDir === 'desc' ? 'down' : 'up'} size={10} />
+        )}
+      </button>
+    </th>
   );
 
   return (
@@ -853,16 +862,16 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
               <th className="tbl-cell--narrow"></th>
               <th>Borrower</th>
               <th>Location</th>
-              <th>{renderSortHeader('relationship', 'Relationship')}</th>
-              <th>{renderSortHeader('assignment', 'Assigned to')}</th>
-              <th>{renderSortHeader('outreach', 'Outreach')}</th>
+              {renderSortHeader('relationship', 'Relationship')}
+              {renderSortHeader('assignment', 'Assigned to')}
+              {renderSortHeader('outreach', 'Outreach')}
               <th>Last touch</th>
               <th>Segments</th>
-              <th className="tbl-cell--right">{renderSortHeader('equity', 'Equity')}</th>
-              <th className="tbl-cell--right">{renderSortHeader('rate', 'Rate Δ (bps)')}</th>
+              {renderSortHeader('equity', 'Equity', 'tbl-cell--right')}
+              {renderSortHeader('rate', 'Rate Δ (bps)', 'tbl-cell--right')}
               <th>Next-best-offer</th>
-              <th className="tbl-cell--right">{renderSortHeader('score', 'Score')}</th>
-              <th>{renderSortHeader('confidence', 'Signal')}</th>
+              {renderSortHeader('score', 'Score', 'tbl-cell--right')}
+              {renderSortHeader('confidence', 'Signal')}
               <th>Approval</th>
             </tr>
           </thead>

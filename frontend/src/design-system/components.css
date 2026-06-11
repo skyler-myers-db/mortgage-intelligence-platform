@@ -1675,6 +1675,12 @@ kbd {
   outline: none;
 }
 .genie__input input:focus { border-color: var(--accent); }
+/* INTENTIONAL (2026-06-11 audit P3): the FAB is display:none at desktop —
+   the prototype's desktop Genie entry is the topbar icon (Module 0
+   Prototype.html:1237), and a fixed FAB would collide with table/map
+   content at 1440. The max-width:720px media block below restores the FAB
+   as the mobile entrypoint. An "is the FAB 0x0?" finding here is parity,
+   not a bug. */
 .genie__fab {
   position: fixed; bottom: var(--sp-4); right: var(--sp-4);
   width: 52px; height: 52px; border-radius: 50%;
@@ -3380,7 +3386,13 @@ kbd {
 }
 .data-estate__grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  /* 2026-06-11 audit P2-1 (live repro): four fixed columns starved the
+     asset-name column to ~65px when the Console rail opened, and
+     overflow-wrap:anywhere then shredded labels into 5-6 mid-word lines
+     ("Loan originat/ion"). auto-fit lanes drop to 3/2 columns instead of
+     compressing below a readable floor. (No prototype counterpart — the
+     data-estate panel is a post-prototype lineage-visibility surface.) */
+  grid-template-columns: repeat(auto-fit, minmax(13.5rem, 1fr));
   gap: var(--sp-3);
 }
 .data-estate__lane {
@@ -3438,7 +3450,9 @@ kbd {
 }
 .data-estate__asset {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  /* Name column keeps a readable floor; the auto-fit lane floor above
+     guarantees (7.5rem + meta + gaps) always fits inside a lane. */
+  grid-template-columns: minmax(7.5rem, 1fr) auto;
   align-items: start;
   gap: var(--sp-2);
   min-width: 0;

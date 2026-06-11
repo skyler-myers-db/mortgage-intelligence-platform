@@ -62,6 +62,17 @@ describe('layout containment contracts', () => {
     expect(css).toMatch(/\.lineage-node__value\s*\{[^}]*overflow-wrap:\s*anywhere;/s);
   });
 
+  it('keeps data-estate lanes from starving asset labels when the console rail opens', () => {
+    const css = designCss();
+
+    // 2026-06-11 audit P2-1 (live repro: 65px label column, 5-6 line
+    // mid-word wraps with the Console rail open). Lanes wrap to fewer
+    // columns instead of compressing below a readable floor, and the
+    // asset-name column keeps its own minimum.
+    expect(css).toMatch(/\.data-estate__grid\s*\{[^}]*grid-template-columns:\s*repeat\(auto-fit,\s*minmax\(13\.5rem,\s*1fr\)\);/s);
+    expect(css).toMatch(/\.data-estate__asset\s*\{[^}]*grid-template-columns:\s*minmax\(7\.5rem,\s*1fr\) auto;/s);
+  });
+
   it('makes proof affordance rows visibly interactive without layout shifts', () => {
     const css = designCss();
 

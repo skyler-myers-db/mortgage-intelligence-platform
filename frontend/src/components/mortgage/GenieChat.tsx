@@ -655,7 +655,10 @@ export function GenieChat() {
         ref={panelRef}
         className={`genie ${genieOpen ? 'is-open' : ''} ${pos ? 'is-undocked' : ''}`}
         role="dialog"
-        aria-modal="true"
+        // 2026-06-11 audit P3 a11y: NO aria-modal here. The floating panel
+        // is a NON-modal dialog — no focus trap, no scrim, the page behind
+        // stays fully interactive. aria-modal="true" told screen readers
+        // the rest of the app was inert, which was a lie.
         aria-label="Genie chat"
         aria-keyshortcuts="Escape"
         aria-hidden={!genieOpen}
