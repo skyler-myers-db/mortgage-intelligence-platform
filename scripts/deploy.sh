@@ -322,6 +322,39 @@ run "$PYTHON" tools/databricks/bundle_env.py deploy -t "$TARGET"
 # Step 5: promote uploaded source to the running Databricks App
 # -----------------------------------------------------------------------------
 APP_NAME="${MIP_APP_NAME:-mip-app}"
+
+# Make the snapshot deploy deterministic (2026-06-10 audit fix). Two platform
+# races were observed in the wild, each failing this step on a fresh run:
+#   1. App STOPPED (idle auto-stop / manual stop) -> "Cannot deploy app ...
+#      as it is not in RUNNING state."
+#   2. The bundle deploy in the previous step triggers its OWN app deployment
+#      (the app is a bundle resource), so an immediate `apps deploy` here
+#      collides with it -> "active/pending deployment in progress."
+# Both are waitable states, not errors. Start the app if needed, then poll
+# until no deployment is in flight before promoting the snapshot.
+wait_for_app_deployable() {
+  local compute pend active i
+  compute="$(databricks apps get "$APP_NAME" -o json 2>/dev/null | "$PYTHON" -c 'import json,sys; print((json.load(sys.stdin).get("compute_status") or {}).get("state",""))' || true)"
+  if [[ "$compute" == "STOPPED" || "$compute" == "STOPPING" ]]; then
+    step "app compute is ${compute} — starting before snapshot deploy"
+    run databricks apps start "$APP_NAME"
+  fi
+  for i in $(seq 1 90); do
+    pend="$(databricks apps get "$APP_NAME" -o json 2>/dev/null | "$PYTHON" -c 'import json,sys; d=json.load(sys.stdin); print(((d.get("pending_deployment") or {}).get("status") or {}).get("state","NONE"))' || echo "UNKNOWN")"
+    active="$(databricks apps get "$APP_NAME" -o json 2>/dev/null | "$PYTHON" -c 'import json,sys; d=json.load(sys.stdin); print(((d.get("active_deployment") or {}).get("status") or {}).get("state","NONE"))' || echo "UNKNOWN")"
+    if [[ "$pend" == "NONE" && "$active" != "IN_PROGRESS" ]]; then
+      return 0
+    fi
+    echo "  waiting for in-flight app deployment to settle (pending=${pend}, active=${active}) [${i}/90]"
+    sleep 10
+  done
+  echo "${RED}[deploy] app deployment still in flight after 15 minutes; aborting snapshot deploy.${RST}" >&2
+  return 1
+}
+if [[ "$DRY_RUN" -eq 0 ]]; then
+  wait_for_app_deployable
+fi
+
 step "deploy Databricks App snapshot from uploaded bundle source"
 APP_DEPLOY_META="$(databricks bundle summary -t "$TARGET" -o json | "$PYTHON" -c 'import json,sys; data=json.load(sys.stdin); ws=data.get("workspace") or {}; print((data.get("resources") or {}).get("apps", {}).get("mip_app", {}).get("source_code_path") or ws.get("file_path") or ""); print((ws.get("current_user") or {}).get("userName") or "")')"
 APP_SOURCE_PATH="$(printf '%s\n' "$APP_DEPLOY_META" | sed -n '1p')"
