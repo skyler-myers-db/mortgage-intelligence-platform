@@ -635,6 +635,14 @@ class PortfolioCreateRequest(BaseModel):
         }
         normalized = dict(value)
         for key in numeric_keys & normalized.keys():
+            # Re-audit #3 follow-up (2026-06-12, observed live): the builder's
+            # Budget field is optional and the client sends budget_usd: null
+            # when it is left blank — float(None) raised TypeError and the
+            # whole save 422'd. An explicit null is "not provided", exactly
+            # like omitting the key; drop it instead of rejecting the save.
+            if normalized[key] is None:
+                normalized.pop(key)
+                continue
             try:
                 numeric = float(normalized[key])
             except (TypeError, ValueError) as exc:
