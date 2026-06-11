@@ -231,7 +231,7 @@ export function LeadTableRow({
       {isOpen && (
         <tr className="tbl__expand">
           <td colSpan={15}>
-            <RowPreview lead={lead} />
+            <RowPreview lead={lead} approval={approval} />
           </td>
         </tr>
       )}

@@ -608,3 +608,46 @@ VALUES (
     'Audit P1-5: purge legacy 5-digit seed approvals; CHECK borrower_id ~ ^B-[0-9A-Z]{13}$; seed re-inserts canonical trio with real gold borrower_360 IDs'
 )
 ON CONFLICT (version) DO NOTHING;
+
+-- ---------------------------------------------------------------------
+-- Re-audit #3 P3 (2026-06-12): ~28 approvals accumulated from April/May
+-- dev sessions (50d/30d old at audit time) surfaced in the stale-approved
+-- queue as "aging" rows — test detritus reading as operational neglect at
+-- the booth. Purge operational STATE older than the demo-prep era
+-- (2026-06-01), keeping the five canonical narrative approvals from
+-- seed_campaigns.sql. The immutable mip_app.action_audit event log is
+-- deliberately untouched — history stays reconstructable; this clears
+-- workflow state only. activation_outbox rows referencing purged
+-- approvals go first (FK activation_outbox_approval_fk). Naturally
+-- idempotent: re-runs match zero rows, and post-purge approvals all
+-- carry decided_at >= the cutoff.
+-- ---------------------------------------------------------------------
+DELETE FROM mip_app.activation_outbox
+WHERE approval_id IN (
+    SELECT approval_id FROM mip_app.approvals
+    WHERE decided_at < TIMESTAMPTZ '2026-06-01 00:00:00+00'
+      AND approval_id NOT IN (
+        '44444444-4444-4444-8444-444444444441',
+        '44444444-4444-4444-8444-444444444442',
+        '44444444-4444-4444-8444-444444444443',
+        '44444444-4444-4444-8444-444444444444',
+        '44444444-4444-4444-8444-444444444445'
+      )
+);
+
+DELETE FROM mip_app.approvals
+WHERE decided_at < TIMESTAMPTZ '2026-06-01 00:00:00+00'
+  AND approval_id NOT IN (
+    '44444444-4444-4444-8444-444444444441',
+    '44444444-4444-4444-8444-444444444442',
+    '44444444-4444-4444-8444-444444444443',
+    '44444444-4444-4444-8444-444444444444',
+    '44444444-4444-4444-8444-444444444445'
+  );
+
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_06_12_purge_dev_session_approvals',
+    'Re-audit #3 P3: purge pre-2026-06-01 dev-session approvals (and their activation_outbox rows) so the stale-approved queue shows demo-era state only; canonical narrative five kept; action_audit untouched'
+)
+ON CONFLICT (version) DO NOTHING;

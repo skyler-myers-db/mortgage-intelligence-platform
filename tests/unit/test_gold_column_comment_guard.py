@@ -69,8 +69,21 @@ def _flatten_generics(body: str) -> str:
 
 
 def _ddl_comment_map() -> dict[str, dict[str, str]]:
-    """{table_fqn: {column: 'comment literal'}} from every DDL file."""
+    """{table_fqn: {column: 'comment literal'}} from every DDL file.
+
+    Re-audit #3 (2026-06-12): every gold table is declared in TWO DDL
+    files (the numbered bootstrap 001/003/004 AND its per-table
+    ``gold_*.sql`` / ``silver_*.sql`` spec). The old ``tables[fqn] = cols``
+    let whichever file sorts LAST silently shadow the other, so the guard
+    validated each table against only one of its two declarations — a
+    drift between the duplicates was invisible. Now duplicate
+    declarations are MERGED and any disagreement (different text, or a
+    column commented in one file and bare in the other while both
+    declare comments) fails loudly.
+    """
     tables: dict[str, dict[str, str]] = {}
+    sources: dict[str, str] = {}
+    conflicts: list[str] = []
     for ddl_path in sorted(DDL_DIR.glob("*.sql")):
         text = ddl_path.read_text(encoding="utf-8")
         for match in re.finditer(
@@ -84,9 +97,42 @@ def _ddl_comment_map() -> dict[str, dict[str, str]]:
                 for col_match in DDL_COL_RE.finditer(body)
                 if col_match.group("col") not in {"NOT", "COMMENT", "USING"}
             }
-            if cols:
-                tables[match.group("fqn")] = cols
+            if not cols:
+                continue
+            fqn = match.group("fqn")
+            if fqn not in tables:
+                tables[fqn] = dict(cols)
+                sources[fqn] = ddl_path.name
+                continue
+            prior_name = sources[fqn]
+            prior = tables[fqn]
+            for col in sorted(set(prior) | set(cols)):
+                if col not in prior:
+                    conflicts.append(
+                        f"{fqn}.{col}: commented in {ddl_path.name} but not in {prior_name}"
+                    )
+                elif col not in cols:
+                    conflicts.append(
+                        f"{fqn}.{col}: commented in {prior_name} but not in {ddl_path.name}"
+                    )
+                elif prior[col] != cols[col]:
+                    conflicts.append(
+                        f"{fqn}.{col}: comment text differs between "
+                        f"{prior_name} and {ddl_path.name}"
+                    )
+            prior.update(cols)
+    assert conflicts == [], (
+        "duplicate DDL declarations disagree — align the per-table spec and "
+        "the numbered bootstrap file byte-for-byte:\n" + "\n".join(conflicts)
+    )
     return tables
+
+
+def test_duplicate_ddl_declarations_agree() -> None:
+    """Direct hook for the merge-conflict assertion inside
+    ``_ddl_comment_map`` so a disagreement is reported as its own failure
+    (not just as collateral noise in whichever parity test runs first)."""
+    _ddl_comment_map()
 
 
 def _statement_comment_map(text: str) -> dict[str, dict[str, str]]:

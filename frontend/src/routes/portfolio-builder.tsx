@@ -101,6 +101,14 @@ export default function PortfolioBuilder() {
   );
   const [copyHint, setCopyHint] = useState<'idle' | 'copied' | 'failed'>('idle');
   const [saveHint, setSaveHint] = useState<'idle' | 'saved' | 'failed'>('idle');
+  // Inline naming form for "Save build". Re-audit #3 P1 (2026-06-12): the
+  // previous native prompt() dialog is SYNCHRONOUS — it blocks the renderer
+  // main thread (a hard freeze under any CDP/Playwright session, and an
+  // un-themeable OS dialog for humans). Enterprise polish + e2e testability
+  // both want this in-page async form instead. A source pin in
+  // portfolio-builder.save.test.tsx keeps the blocking API out for good.
+  const [savePanelOpen, setSavePanelOpen] = useState(false);
+  const [saveName, setSaveName] = useState('');
   const [campaignSetup, setCampaignSetup] = useState<CampaignSetupState>(DEFAULT_CAMPAIGN_SETUP);
   const campaignSetupDefaultRef = useRef<CampaignSetupState>(DEFAULT_CAMPAIGN_SETUP);
   const currentDefaultCampaignSetup = useMemo(
@@ -132,12 +140,18 @@ export default function PortfolioBuilder() {
     warmingUp,
     error,
     manualRetry: retryBuild,
+    isFetching: previewFetching,
   } = useWarmingUpRetry<PortfolioPreview>(
     (signal) => api.portfolioPreview(buildPreviewCriteria(committedFilters, committedStateCodes), signal),
     [committedKey],
     { queryKey: queryKeys.portfolioPreview([committedKey]) },
   );
   const building = preview === null && warmingUp === null && error === null;
+  // Re-audit #3 P1 (2026-06-12): `building` is false during a background
+  // refetch of an UNCHANGED build key (stale preview still rendered), so
+  // "Run build → Save build within ~1s" found Save enabled mid-build.
+  // Everything that must not race an in-flight build gates on this.
+  const buildInFlight = building || previewFetching;
   const previewError = error
     ? error instanceof Error
       ? `Couldn't load portfolio preview: ${error.message}`
@@ -165,6 +179,9 @@ export default function PortfolioBuilder() {
     setSearchParams(buildUrlFromFilters(filters, defaultFilters, stateCodes, targetLenderOptions), { replace: false });
     setCommittedFilters(filters);
     setCommittedStateCodes(stateCodes);
+    // A new run invalidates any in-progress naming: the criteria the save
+    // would capture are about to change under the operator's cursor.
+    setSavePanelOpen(false);
   }, [defaultFilters, filters, setSearchParams, stateCodes, targetLenderOptions]);
 
   /**
@@ -183,11 +200,16 @@ export default function PortfolioBuilder() {
     }
   }, [buildDirty]);
 
-  const onSaveBuild = useCallback(async () => {
-    if (buildDirty) return;
-    const defaultName = `Portfolio build ${new Date().toLocaleString()}`;
-    const name = window.prompt('Name this build', defaultName)?.trim();
+  const onOpenSavePanel = useCallback(() => {
+    if (buildDirty || buildInFlight) return;
+    setSaveName(`Portfolio build ${new Date().toLocaleString()}`);
+    setSavePanelOpen(true);
+  }, [buildDirty, buildInFlight]);
+
+  const onConfirmSave = useCallback(async () => {
+    const name = saveName.trim();
     if (!name) return;
+    setSavePanelOpen(false);
     try {
       await api.portfolioCreate(
         name,
@@ -199,7 +221,7 @@ export default function PortfolioBuilder() {
     } catch {
       setSaveHint('failed');
     }
-  }, [buildDirty, campaignSetup, committedFilters, committedStateCodes, refetchCampaigns]);
+  }, [campaignSetup, committedFilters, committedStateCodes, refetchCampaigns, saveName]);
 
   useEffect(() => {
     if (copyHint === 'idle') return;
@@ -252,7 +274,16 @@ export default function PortfolioBuilder() {
     const allowed = new Set(footprint.states.map((state) => state.state_code));
     const sanitize = (codes: string[]) => {
       const next = codes.filter((code) => allowed.has(code));
-      return next.length === footprint.states.length ? [] : next;
+      const collapsed =
+        footprint.states.length > 0 && next.length === footprint.states.length ? [] : next;
+      // Identity-preserving no-op guard (re-audit #3, 2026-06-12): always
+      // returning a fresh array re-renders on every effect pass, which
+      // turns into an unbounded setState loop if a provider hands back
+      // unstable identities (a test mock did exactly that). Same values
+      // in -> same reference out.
+      return collapsed.length === codes.length && collapsed.every((c, i) => c === codes[i])
+        ? codes
+        : collapsed;
     };
     setStateCodes(sanitize);
     setCommittedStateCodes(sanitize);
@@ -325,9 +356,10 @@ export default function PortfolioBuilder() {
               variant="ghost"
               size="default"
               icon="doc"
-              onClick={() => void onSaveBuild()}
-              disabled={buildDirty || building}
+              onClick={onOpenSavePanel}
+              disabled={buildDirty || buildInFlight}
               aria-label="Save current portfolio build"
+              aria-expanded={savePanelOpen}
               data-testid="portfolio-save-build"
             >
               {saveHint === 'saved'
@@ -336,18 +368,61 @@ export default function PortfolioBuilder() {
                 ? 'Save failed'
                 : buildDirty
                 ? 'Run before saving'
+                : buildInFlight
+                ? 'Build running…'
                 : 'Save build'}
             </Button>
             <Button
               variant="primary"
               icon="play"
               onClick={onRunBuild}
-              disabled={building}
-              aria-busy={building}
+              disabled={buildInFlight}
+              aria-busy={buildInFlight}
             >
-              {building ? 'Running…' : 'Run build'}
+              {buildInFlight ? 'Running…' : 'Run build'}
             </Button>
           </div>
+          {savePanelOpen && (
+            <form
+              className="save-build-form"
+              onSubmit={(e) => {
+                e.preventDefault();
+                void onConfirmSave();
+              }}
+            >
+              <label className="save-build-form__label" htmlFor="portfolio-save-name">
+                Build name
+              </label>
+              <input
+                id="portfolio-save-name"
+                className="form-input save-build-form__input"
+                value={saveName}
+                onChange={(e) => setSaveName(e.target.value)}
+                maxLength={120}
+                autoFocus
+                data-testid="portfolio-save-name"
+              />
+              <Button
+                variant="primary"
+                size="sm"
+                type="submit"
+                icon="check"
+                disabled={saveName.trim().length === 0}
+                data-testid="portfolio-save-confirm"
+              >
+                Save
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                type="button"
+                onClick={() => setSavePanelOpen(false)}
+                data-testid="portfolio-save-cancel"
+              >
+                Cancel
+              </Button>
+            </form>
+          )}
           {targetLenderStatus !== 'live' && (
             <div className="filter-row__hint muted">
               Target lien holder options are limited until live borrower lender aliases finish refreshing.

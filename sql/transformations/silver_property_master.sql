@@ -21,8 +21,10 @@
 --     is NO literal fallback (removed 2026-06-11, audit P1-4 — a
 --     source-committed salt made hashing predictable, silently); a
 --     missing secret fails this refresh visibly. The salt is NEVER
---     rotated: rotation changes every masked identifier across refreshes
---     and breaks join stability between gold snapshots.
+--     rotated: rotation changes every owner_name_hash across refreshes
+--     and breaks owner-identity join stability between gold snapshots.
+--     (borrower_id is salt-INDEPENDENT — xxhash64(clip) base-36 — so it
+--     survives rotation; only owner-name-derived surfaces shift.)
 --   - Raw `owner_1_full_name` is NEVER written to silver.
 --   - `situs_street_address` is NEVER projected (dropped at the SELECT).
 --   - `mailing_street_address` is NEVER projected; only `mailing_city` and

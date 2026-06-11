@@ -894,6 +894,22 @@ kbd {
   display: grid;
   grid-template-columns: 1.1fr 1fr 1fr;
   gap: var(--sp-5);
+  /* Re-audit #3 P3 (2026-06-12): the expanded cell spans all 15 nowrap
+     columns, so when the table is wider than its scrollport (Console
+     open at ~1413px) the preview's action buttons rendered past the
+     visible edge, reachable only via horizontal scroll. Pinning the
+     inner block to the scrollport's left edge and capping it at the
+     `main` container width keeps Approve/Open/Build visible without
+     scrolling; the grid collapses via the container queries below. */
+  position: sticky;
+  left: 0;
+  max-inline-size: calc(100cqw - 2 * var(--pad-card));
+}
+@container main (max-width: 1280px) {
+  .tbl__expand-inner--lead { grid-template-columns: 1.1fr 1fr; }
+}
+@container main (max-width: 960px) {
+  .tbl__expand-inner--lead { grid-template-columns: 1fr; }
 }
 .tbl-wrap {
   max-height: 520px;
@@ -1889,6 +1905,24 @@ kbd {
   min-inline-size: 100%;
   max-inline-size: 100%;
 }
+/* Inline "Save build" naming form. Re-audit #3 P1 (2026-06-12): replaces
+   window.prompt(), whose synchronous native dialog froze the renderer
+   under automation and broke the enterprise-product posture. */
+.save-build-form {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-3);
+  flex-wrap: wrap;
+}
+.save-build-form__label {
+  font-size: var(--fs-12);
+  color: var(--text-3);
+}
+.save-build-form__input {
+  flex: 0 1 22rem;
+  min-inline-size: 12rem;
+}
 .filter-root { position: relative; }
 .filter {
   display: inline-flex; align-items: center; gap: 6px;
@@ -2015,6 +2049,16 @@ kbd {
   pointer-events: auto;
 }
 .map-crumbs__trail { font-size: var(--fs-12); }
+/* Re-audit #3 P3 (2026-06-12): the trail container clips at its edge
+   ("Cook Cou" cut mid-glyph at the ZIP level). Let each crumb shrink and
+   ellipsize its own label instead of being guillotined by the wrapper. */
+.map-crumbs__trail .filter { min-inline-size: 0; max-inline-size: 100%; }
+.map-crumbs__trail .filter__value {
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .filter--compact { padding: 3px 8px; }
 .map-corner-chips {
   display: flex;
@@ -2778,6 +2822,13 @@ kbd {
   color: var(--chip-text);
   font-family: var(--font-mono);
   font-size: var(--fs-11);
+}
+/* Geo-handoff caption (re-audit #3 P3): sits on its own full row under
+   the drilldown pills so the tile→queue population narrowing is labeled. */
+.lead-queue-scope__note {
+  flex: 0 0 100%;
+  line-height: var(--lh-snug);
+  max-inline-size: 72ch;
 }
 
 /* LayoutA — 2-col on design target (hero map + activity log, borrower

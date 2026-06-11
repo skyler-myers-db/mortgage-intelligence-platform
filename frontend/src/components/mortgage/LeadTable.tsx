@@ -769,7 +769,7 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
                 makes the affordance scannable — an LO scrolling the
                 queue can spot the shortcut without reading prose.
               */}
-              Click a row to expand the preview. Keyboard: <kbd>A</kbd> approve, <kbd>R</kbd> reject the expanded row.
+              Click a row to expand the preview. Keyboard: <kbd>A</kbd> approve, <kbd>R</kbd> reject the expanded row while it is still pending.
             </div>
           </div>
         </div>
