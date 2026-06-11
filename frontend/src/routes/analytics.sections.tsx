@@ -154,7 +154,19 @@ export function EconomicsView({ data }: { data: EconomicsAnalyticsResponse }) {
           </div>
         </section>
         <section className="surface">
-          <div className="surface__hdr"><h2 className="h-3">Top Borrowers</h2></div>
+          <div className="surface__hdr">
+            <h2 className="h-3">Top Borrowers</h2>
+            {/* Re-audit #3 P3 (2026-06-12): rows are borrower records (one
+                per property lien) but the display label is the masked Owner
+                Link identity — without this note, the owner-styled labels
+                read as a mismatch with the B- ids used everywhere else, and
+                a multi-property owner appearing twice looks like a dupe. */}
+            <p className="analytics-panel-note">
+              One row per borrower record (property lien), labeled by its masked
+              Owner Link identity plus the borrower id&apos;s last 4. An owner
+              holding multiple properties can appear more than once.
+            </p>
+          </div>
           <div className="surface__body">
             <DataTable<TopBorrowerAnalyticsRow>
               rows={data.top_borrowers}
@@ -479,7 +491,11 @@ export function SignalsView({
           <div>
             <h2 className="h-3">Evidence Events Per Day</h2>
             <p className="analytics-panel-note">
-              Source-event dates from <span className="mono">mip.gold.evidence_events.timestamp</span>; blank days are shown as zero.
+              Dates from <span className="mono">mip.gold.evidence_events.timestamp</span>; blank days are shown as zero.
+              Lien, equity, and owner-graph signals carry their latest Cotality
+              refresh-batch date — so those events land in bulk on refresh days —
+              while AVM, market-rate, and ownership-transfer events carry true
+              source dates.
             </p>
           </div>
           <ScopeChip>{data.evidence_daily.length} signal/date buckets</ScopeChip>

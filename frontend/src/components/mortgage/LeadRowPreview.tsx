@@ -9,7 +9,15 @@ import { ConfidenceMeter } from './ConfidenceMeter';
 import { ScoreBadge } from './ScoreBadge';
 import { dispositionLabel, outreachLabel } from './LeadTable.logic';
 
-export function RowPreview({ lead }: { lead: LeadSummary }) {
+/**
+ * @param approval Effective approval state — the in-session optimistic
+ *   override merged with the server projection (the same value the row's
+ *   status chip renders). Re-audit #3 (2026-06-12): the preview read only
+ *   `lead.approval_status`, so right after an approve the chip said
+ *   "Approved" while this panel still said "pending" — which then made
+ *   the (correctly no-op'ing) A/R hotkeys look broken on a terminal row.
+ */
+export function RowPreview({ lead, approval }: { lead: LeadSummary; approval?: string }) {
   const { setLastBorrowerId, saveLead, isLeadSaved } = useApp();
   // Prefer the display-safe Cotality property ref projected by the
   // backend. Raw CLIP is masked server-side for public demo safety.
@@ -39,7 +47,7 @@ export function RowPreview({ lead }: { lead: LeadSummary }) {
           <Cell k="Rate spread"   v={`+${lead.rate_spread_bps} bps`} mono />
           <Cell k="Score"         v={`${lead.opportunity_score}`} mono />
           <Cell k="Signal"        v={`${lead.confidence}%`} mono />
-          <Cell k="Approval"      v={lead.approval_status ?? 'pending'} />
+          <Cell k="Approval"      v={approval ?? lead.approval_status ?? 'pending'} />
           <Cell k="Outreach"      v={outreachLabel(lead.outreach_status)} />
           <Cell k="Assigned to"   v={lead.assigned_to_label ?? lead.assigned_to_email ?? 'Unassigned'} />
           <Cell k="Last touch"    v={dispositionLabel(lead.latest_disposition_outcome)} />

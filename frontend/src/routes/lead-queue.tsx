@@ -626,7 +626,7 @@ export default function LeadQueue() {
     <PageShell
       eyebrow="Lead Queue"
       title="Ranked borrowers"
-      lede="Click a row to expand the borrower preview. Approve, reject, assign to LOs, log call outcomes, or open Borrower 360 for the full dossier. Keyboard: A approves, R rejects the expanded row."
+      lede="Click a row to expand the borrower preview. Approve, reject, assign to LOs, log call outcomes, or open Borrower 360 for the full dossier. Keyboard: while the expanded row is still pending, A approves and R rejects."
       heroRight={
         segment || segmentCodes.length > 0 || stateFilter || zipFilter || stateFilters.length > 0 || zipFilters.length > 0 || borrowerIdFilters.length > 0 || countyFilter || targetLenderRef || portfolioCriteria || cohortId || funnelStage || approvalStatus !== 'any' || outreachStatus !== 'any' || assignedTo || agedDays ? (
           <>
@@ -682,6 +682,15 @@ export default function LeadQueue() {
               {stateFilters.length > 0 && <span className="lead-queue-scope__pill">States: {stateFilters.join(', ')}</span>}
               {zipFilters.length > 0 && <span className="lead-queue-scope__pill">ZIPs: {zipFilters.join(', ')}</span>}
               {borrowerIdFilters.length > 0 && <span className="lead-queue-scope__pill">Borrowers: {borrowerIdFilters.length}</span>}
+              {/* Re-audit #3 P3 (2026-06-12): the map tile counts MARKETABLE
+                  borrowers; this queue ranks the scored high-intent subset.
+                  Without the caption the handoff reads as a numbers jump
+                  (e.g. 30,833 on the ZIP tile → 1,379 ranked rows). */}
+              <span className="lead-queue-scope__note muted fs-11">
+                Ranked leads are the scored, marketing-eligible subset of this
+                geography&apos;s marketable borrowers — intentionally smaller than
+                the map tile&apos;s population count.
+              </span>
             </div>
           )}
           <div className="filter-row">
