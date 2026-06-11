@@ -47,7 +47,7 @@ indent-style = "space"
 # 2026-06-11 audit P2-14: Python type-checking gate ("strong types" goal had
 # no enforcement step). Policy: a RATCHET, not theater —
 #   * every module is checked by default (new code is born type-checked);
-#   * the override list below exempts the 21 modules that carried 73
+#   * the override list below exempts the 33 modules that carried 116
 #     pre-existing errors at adoption. The list may ONLY SHRINK. Fix a
 #     module -> delete its line in the same commit. Never add a line
 #     without a dated rationale comment.
@@ -62,9 +62,26 @@ warn_redundant_casts = true
 no_implicit_optional = true
 
 [[tool.mypy.overrides]]
-# Adoption-time exemptions (audit P2-14). SHRINK ONLY.
+# Adoption-time exemptions (audit P2-14). SHRINK ONLY — the list is pinned
+# by tests/unit/test_typecheck_ratchet.py, which fails on ANY addition or
+# wildcard. Re-audit 2026-06-11: the original "backend.api.*" wildcard
+# silently exempted every future api module; replaced with the 12 actual
+# dirty api modules (43 errors), enumerated below and scheduled for the
+# post-Summit router slice (same files as the P2-4 pure-move refactor).
+# Total at adoption: 33 modules / 116 errors.
 module = [
-    "backend.api.*",
+    "backend.api.activation",
+    "backend.api.admin",
+    "backend.api.analytics",
+    "backend.api.borrowers",
+    "backend.api.campaigns",
+    "backend.api.config",
+    "backend.api.genie",
+    "backend.api.geo",
+    "backend.api.health",
+    "backend.api.leads",
+    "backend.api.sales",
+    "backend.api.segments",
     "backend.schemas.portfolio",
     "backend.services.activation_state",
     "backend.services.asset_metadata",
