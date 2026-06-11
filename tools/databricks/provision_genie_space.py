@@ -81,17 +81,26 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SPACE_YAML = REPO_ROOT / "genie" / "mortgage_lead_intelligence_space.yml"
 SPACE_ID_FILE = REPO_ROOT / "genie" / "space_id.txt"
 
-# Load .env.local (if present) so DATABRICKS_HOST / DATABRICKS_WAREHOUSE_ID /
-# GENIE_SPACE_ID flow through to the SDK. python-dotenv tolerates unquoted
-# spaces and angle-bracket placeholders that plain bash sourcing chokes on.
-try:
-    from dotenv import load_dotenv
+def _load_env_local() -> None:
+    """Overlay .env.local onto the process env for SUBPROCESS CLI runs ONLY.
 
-    _env_local = REPO_ROOT / ".env.local"
-    if _env_local.exists():
-        load_dotenv(_env_local, override=False)
-except ImportError:  # pragma: no cover — dotenv is pinned in requirements.txt
-    pass
+    Called exclusively from the ``__main__`` guard — never at import time
+    and never from ``main(argv)``, which unit tests invoke in-process. An
+    import-time ``load_dotenv`` mutated ``os.environ`` for the whole pytest
+    process and poisoned the fail-closed settings contract test on any
+    operator machine with a populated ``.env.local`` (2026-06-11 incident:
+    MIP_ADMIN_EMAILS leaked); moving it merely into ``main()`` reproduced
+    the same leak through the dry-run test. python-dotenv tolerates
+    unquoted spaces and angle-bracket placeholders that bash sourcing
+    chokes on.
+    """
+    try:
+        from dotenv import load_dotenv
+    except ImportError:  # pragma: no cover — dotenv is pinned in requirements.txt
+        return
+    env_local = REPO_ROOT / ".env.local"
+    if env_local.exists():
+        load_dotenv(env_local, override=False)
 
 DEFAULT_SPACE_NAME = "Mortgage Lead Intelligence"
 DEFAULT_PROFILE = "DEFAULT"
@@ -740,4 +749,5 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
+    _load_env_local()
     raise SystemExit(main())

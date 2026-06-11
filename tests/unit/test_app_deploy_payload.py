@@ -1,6 +1,27 @@
 from __future__ import annotations
 
+import pytest
+
+from tools.databricks import app_deploy_payload
 from tools.databricks.app_deploy_payload import build_payload
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_operator_config(monkeypatch, tmp_path):
+    """Isolate every test from the operator's real machine configuration.
+
+    ``build_payload`` deliberately overlays the repo-root ``.env.local`` and
+    the process environment (that's the production deploy contract). But the
+    TESTS must not change verdict based on what a developer machine has
+    configured — the 2026-06-11 audit-response run found the no-bootstrap
+    governance tests failing solely because the operator had added
+    MIP_ADMIN_EMAILS to .env.local, exactly as deploy docs instruct.
+    """
+    monkeypatch.setattr(
+        app_deploy_payload, "ENV_LOCAL", tmp_path / ".env.local.absent"
+    )
+    for name in app_deploy_payload.NON_SECRET_OPERATOR_VARS:
+        monkeypatch.delenv(name, raising=False)
 
 
 def _env_map(payload: dict[str, object]) -> dict[str, dict[str, str]]:
