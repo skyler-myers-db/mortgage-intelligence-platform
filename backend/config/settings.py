@@ -185,6 +185,17 @@ class Settings(BaseSettings):
         default="",
         validation_alias=AliasChoices("MIP_ADMIN_EMAILS", "ADMIN_EMAILS"),
     )
+    # 2026-06-11 audit P2-5: OPTIONAL approver allowlist for the human
+    # decision endpoints (/outreach/approve|reject). Module 0's demo
+    # contract is that any authenticated workspace user may decide (with
+    # full audit attribution), so the default stays permissive. Customers
+    # opt INTO enforcement by listing approver emails; admins always pass
+    # so the deploying operator cannot lock themselves out of the surface
+    # they administer.
+    approver_emails: str = Field(
+        default="",
+        validation_alias=AliasChoices("MIP_APPROVER_EMAILS", "APPROVER_EMAILS"),
+    )
 
     # R5-09 trust boundary. Databricks Apps is the authoritative
     # identity edge: it strips inbound ``X-Forwarded-*`` headers and

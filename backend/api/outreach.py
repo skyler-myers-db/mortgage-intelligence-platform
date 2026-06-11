@@ -51,6 +51,7 @@ from backend.services.lakebase import LakebaseClient, LakebaseError, get_lakebas
 from backend.services.lakebase_bootstrap import ensure_approval_idempotency_column
 from backend.services.observability import emit
 from backend.services.pii_redaction import scrub_free_text
+from backend.services.rbac import require_approver
 from backend.services.repositories import OutreachRepository, get_outreach_repository
 from backend.services.sales_state import clear_sales_state_cache
 from backend.services.scoring import NBO_PRODUCT_LABELS
@@ -600,7 +601,12 @@ def approve_outreach(
     # test paths without the header, ``resolve_actor`` returns
     # ``settings.default_actor`` and emits a structured warning so ops
     # sees the fallback in the log trail.
-    actor = resolve_actor(request)
+    #
+    # 2026-06-11 audit P2-5: ``require_approver`` gates the decision when
+    # the operator sets MIP_APPROVER_EMAILS; with the default empty
+    # allowlist it admits every authenticated workspace user (documented
+    # Module 0 demo posture) and returns the same edge-resolved actor.
+    actor = require_approver(request)
     borrower = repo.find_borrower(payload.borrower_id)
     if borrower is None:
         raise HTTPException(status_code=404, detail=f"Borrower {payload.borrower_id} not found")
@@ -785,7 +791,8 @@ def reject_outreach(
     # R6 actor-spoof fix: same as /approve — attribution is always
     # ``resolve_actor(request)`` from the edge-authenticated identity.
     # Body ``payload.actor`` is retained for backcompat but ignored.
-    actor = resolve_actor(request)
+    # 2026-06-11 audit P2-5: optional approver allowlist, same as /approve.
+    actor = require_approver(request)
     borrower = repo.find_borrower(payload.borrower_id)
     if borrower is None:
         raise HTTPException(status_code=404, detail=f"Borrower {payload.borrower_id} not found")
