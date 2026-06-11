@@ -41,27 +41,7 @@
 -- sql/ddl/003_gold_tables.sql (§9); the column list order matches the SELECT.
 -- =============================================================================
 
-CREATE OR REPLACE TABLE mip.gold.lockin_cohort (
-  clip                  COMMENT 'Cotality property identifier.',
-  borrower_id           COMMENT 'Synthetic B-###… id; matches borrower_360.borrower_id.',
-  state                 COMMENT '2-char state from refreshed source coverage.',
-  zip                   COMMENT '5-digit ZIP.',
-  situs_cbsa_code       COMMENT 'CBSA code for the property.',
-  city                  COMMENT 'Property city.',
-  segment_codes         COMMENT 'Segment tags from borrower_360.',
-  opportunity_score     COMMENT '0-100 opportunity score at refresh time.',
-  equity_estimate       COMMENT 'AVM - total open liens, floored at 0.',
-  equity_pct            COMMENT 'Equity %, [0,100].',
-  rate_spread_bps       COMMENT 'First-position rate vs MORTGAGE30US, bps.',
-  recommended_offer     COMMENT 'Human-readable next-best-offer label.',
-  origination_date      COMMENT 'first_pos_date from silver.lien_current.',
-  origination_rate      COMMENT 'first_pos_rate (fractional; < 0.03).',
-  first_pos_loan_type   COMMENT 'CONV / FHA / VA / other; from silver.',
-  first_pos_term_months COMMENT 'Loan term in months; from silver.',
-  origination_year      COMMENT 'YEAR(origination_date) for fast GROUP BY.',
-  cohort_tag            COMMENT 'Stable tag for GROUP BY; today always "sub3_2020_2022".',
-  refreshed_at          COMMENT 'CTAS refresh timestamp.'
-)
+CREATE OR REPLACE TABLE mip.gold.lockin_cohort
 CLUSTER BY (state, origination_year)
 TBLPROPERTIES (
   'delta.enableChangeDataFeed' = 'false',
@@ -101,3 +81,29 @@ WHERE lc.first_pos_rate IS NOT NULL
   AND lc.first_pos_rate < 0.03
   AND lc.first_pos_date >= DATE'2020-01-01'
   AND lc.first_pos_date <= DATE'2022-12-31';
+
+-- Column comments re-applied post-CTAS (2026-06-11 audit P2-8 follow-up):
+-- CREATE OR REPLACE drops DDL column comments on every refresh, and the
+-- typeless CTAS column list is a PARSE_SYNTAX_ERROR on DBSQL (observed
+-- live, run 2026-06-11). COMMENT ON COLUMN keeps the Genie grounding /
+-- asset-page comments refresh-stable; the SQL file task executes the
+-- statements in order.
+COMMENT ON COLUMN mip.gold.lockin_cohort.clip IS 'Cotality property identifier.';
+COMMENT ON COLUMN mip.gold.lockin_cohort.borrower_id IS 'Synthetic B-###… id; matches borrower_360.borrower_id.';
+COMMENT ON COLUMN mip.gold.lockin_cohort.state IS '2-char state from refreshed source coverage.';
+COMMENT ON COLUMN mip.gold.lockin_cohort.zip IS '5-digit ZIP.';
+COMMENT ON COLUMN mip.gold.lockin_cohort.situs_cbsa_code IS 'CBSA code for the property.';
+COMMENT ON COLUMN mip.gold.lockin_cohort.city IS 'Property city.';
+COMMENT ON COLUMN mip.gold.lockin_cohort.segment_codes IS 'Segment tags from borrower_360.';
+COMMENT ON COLUMN mip.gold.lockin_cohort.opportunity_score IS '0-100 opportunity score at refresh time.';
+COMMENT ON COLUMN mip.gold.lockin_cohort.equity_estimate IS 'AVM - total open liens, floored at 0.';
+COMMENT ON COLUMN mip.gold.lockin_cohort.equity_pct IS 'Equity %, [0,100].';
+COMMENT ON COLUMN mip.gold.lockin_cohort.rate_spread_bps IS 'First-position rate vs MORTGAGE30US, bps.';
+COMMENT ON COLUMN mip.gold.lockin_cohort.recommended_offer IS 'Human-readable next-best-offer label.';
+COMMENT ON COLUMN mip.gold.lockin_cohort.origination_date IS 'first_pos_date from silver.lien_current.';
+COMMENT ON COLUMN mip.gold.lockin_cohort.origination_rate IS 'first_pos_rate (fractional; < 0.03).';
+COMMENT ON COLUMN mip.gold.lockin_cohort.first_pos_loan_type IS 'CONV / FHA / VA / other; from silver.';
+COMMENT ON COLUMN mip.gold.lockin_cohort.first_pos_term_months IS 'Loan term in months; from silver.';
+COMMENT ON COLUMN mip.gold.lockin_cohort.origination_year IS 'YEAR(origination_date) for fast GROUP BY.';
+COMMENT ON COLUMN mip.gold.lockin_cohort.cohort_tag IS 'Stable tag for GROUP BY; today always "sub3_2020_2022".';
+COMMENT ON COLUMN mip.gold.lockin_cohort.refreshed_at IS 'CTAS refresh timestamp.';

@@ -71,66 +71,7 @@
 -- list order matches the final SELECT projection 1:1.
 -- =============================================================================
 
-CREATE OR REPLACE TABLE mip.gold.borrower_360 (
-  clip                      COMMENT 'Cotality CLIP. PK. Router maps to Borrower360.clip_id.',
-  borrower_id               COMMENT 'Synthetic stable id from CLIP: CONCAT("B-", LPAD(CONV(ABS(xxhash64(clip)), 10, 36), 13, "0")). Base36 encoding of the 64-bit hash, width 13 => 36^13 slots. No PII.',
-  display_name              COMMENT 'Synthesized label "Owner " || SUBSTR(owner_name_hash, 1, 8). Never a real name.',
-  city                      COMMENT 'Situs city from property_master.',
-  state                     COMMENT 'Situs state from refreshed source coverage.',
-  zip                       COMMENT '5-digit situs ZIP.',
-  situs_cbsa_code           COMMENT 'CBSA metro code. Gold-only; used for geography drill-down.',
-  county_fips_5             COMMENT '5-char FIPS county code (2-char state + 3-char county) from silver.property_master.fips_county_code. Feeds gold.county_rollup + gold.zip_rollup. NULL for the ~0.2% of rows where silver has no county geocode.',
-  segment_codes             COMMENT 'Ordered list of SegmentCode Literals (itm/listed/permit/investor/equity/retention) this borrower belongs to.',
-  equity_estimate           COMMENT 'USD: GREATEST(0, avm_value - total_open_lien_balance).',
-  equity_pct                COMMENT '0..100. CAST(100 - estimated_cltv AS INT) fallback to derived avm/lien. Feeds fn_in_the_money + fn_next_best_offer.',
-  rate_spread_bps           COMMENT 'fn_rate_spread(first_pos_rate, market_rate_fraction). Positive = above market = refi opportunity.',
-  market_rate_fraction      COMMENT 'Fractional market rate from silver.market_rates_weekly WHERE is_latest=TRUE. Router maps to WhyPanel.market_rate.',
-  opportunity_score         COMMENT 'fn_lead_score output. 0..100.',
-  confidence                COMMENT 'ROUND(mean(5 sub-scores)). 0..100. Matches mock_data._build_borrower.',
-  recommended_offer_code    COMMENT 'fn_next_best_offer output (lowercase code). Router resolves to human label via NBO_PRODUCT_LABELS.',
-  recommended_offer         COMMENT 'Human label for recommended_offer_code (resolved in SQL via product_labels map).',
-  why_now                   COMMENT 'Deterministic one-sentence template per offer_code. No PII. See data-contract §6.',
-  evidence_ids              COMMENT 'Ordered evidence_ids from gold.evidence_events (ORDER BY signal_rank).',
-  approval_status           COMMENT 'Default "pending"; Lakebase authoritative for actual state.',
-  owner_link_id             COMMENT 'Cotality Owner Link id. Opaque Cotality identifier; not a direct PII risk.',
-  subject_property          COMMENT 'Synthetic city/state/ZIP5 string. No street address.',
-  avm_value                 COMMENT 'COALESCE(avm_value, 0).',
-  current_lien_balance      COMMENT 'COALESCE(total_open_lien_balance, 0).',
-  current_rate              COMMENT 'PERCENT form (5.75, not 0.0575). Matches Pydantic current_rate and mock_data convention.',
-  ltv                       COMMENT '0..100 int. Mirrors equity_pct source preference: ROUND(estimated_cltv) when present, else ROUND(100 * total_open_lien_balance / avm_value).',
-  related_property_count    COMMENT 'COALESCE(property_owner_bridge.related_property_count, 1).',
-  is_owner_occupied         COMMENT 'owner_occupancy_code = "O". Feeds fit sub-score.',
-  is_absentee               COMMENT 'property_master.is_absentee. Feeds investor branch.',
-  is_corporate_owner        COMMENT 'property_master.owner_is_corporate. Feeds investor branch.',
-  has_permit                COMMENT 'BLOCKED (data-contract §9) -- hardcoded FALSE until Cotality Building Permits product lands. intent_trigger permit term is 0.',
-  listed_for_sale           COMMENT 'BLOCKED (data-contract §9) -- hardcoded FALSE until Cotality MLS Listings lands. fn_next_best_offer purchase branch never fires on real data.',
-  is_investor               COMMENT 'Derived: related_property_count >= 2 OR is_corporate_owner OR is_absentee.',
-  is_current_customer       COMMENT 'Current-servicer relationship to tenant: governed lender_dictionary says non-competitor.',
-  is_former_customer        COMMENT 'Historical tenant-lender Owner Link relationship with no current tenant-serviced lien.',
-  is_competitor_lien        COMMENT 'Current servicer is known and not the tenant. Competitor/recapture signal; mutually exclusive with is_current_customer in the current CLIP-grain refresh path.',
-  has_first_party_relationship COMMENT 'TRUE when LOS, servicing, CRM, interaction, or product-balance feeds resolve to this borrower.',
-  first_party_relationship_depth COMMENT 'Bounded count of resolved first-party feed categories for relationship scoring.',
-  first_party_recent_interactions COMMENT 'Recent call-center/digital interaction count resolved through first-party feeds.',
-  first_party_recent_application COMMENT 'TRUE when a recent LOS/application event exists.',
-  first_party_synthetic_demo     COMMENT 'TRUE only when resolved first-party rows come from the Summit demo_synthetic seed.',
-  marketing_eligible      COMMENT 'TRUE only when latest first-party CRM consent is opt-in, no suppression exists, and the 30-day touch cap is clear. Campaign and draft APIs fail closed on FALSE.',
-  consent_status          COMMENT 'Controlled first-party CRM consent enum: opt_in / opt_out / unknown. No raw contact data.',
-  suppression_reason      COMMENT 'Controlled first-party CRM suppression reason, e.g. do_not_contact or recent_contact_cap.',
-  last_touch_at           COMMENT 'Most recent first-party marketing/contact touch timestamp used for frequency-cap enforcement.',
-  eligible_recontact_at   COMMENT 'Earliest timestamp the borrower can be contacted again when a frequency cap is active.',
-  current_lender_ref        COMMENT 'Public-demo-safe current-servicer reference: Summit Mortgage, Competitor A/B/etc., or Competitor Other. Never the raw Cotality lender string.',
-  second_pos_amount         COMMENT '2nd-lien balance passthrough; NULL or 0 both mean no active 2nd-lien. Feeds the equity segment clean-lien predicate.',
-  first_pos_loan_type       COMMENT '1st-lien loan type code (CONV / FHA / VA / etc). Feeds fit sub-score.',
-  owner_name_hash           COMMENT 'sha2(LOWER(TRIM(name)) || salt, 256) propagated from silver.property_master. Internal only -- router strips before /api/*.',
-  min_spread_bps_applied    COMMENT 'Threshold applied when computing ITM for THIS refresh. Carried so WhyPanel.min_spread_bps is the run-specific value.',
-  min_equity_pct_applied    COMMENT 'Equity threshold applied this refresh.',
-  heloc_equity_min_applied  COMMENT 'HELOC equity threshold applied this refresh (fn_next_best_offer branch 2/3 and equity segment).',
-  cashout_equity_min_applied COMMENT 'Cash-out equity threshold applied this refresh (fn_next_best_offer branch 5).',
-  retention_min_spread_applied COMMENT 'Retention spread threshold applied this refresh (fn_next_best_offer branch 7 and retention segment).',
-  in_the_money              COMMENT 'fn_in_the_money(rate_spread_bps, equity_pct, min_spread_bps_applied, min_equity_pct_applied).',
-  trigger_timeline_json     COMMENT 'JSON-encoded top-3 EvidenceEvent rows pre-materialized to avoid per-row fan-out at read. Router json_decodes into List[EvidenceEvent].',
-  refreshed_at              COMMENT 'Refresh timestamp; used as EvidenceDrawer footer provenance chip.'
-)
+CREATE OR REPLACE TABLE mip.gold.borrower_360
 CLUSTER BY (state, clip)
 TBLPROPERTIES (
   'delta.enableChangeDataFeed' = 'false',
@@ -805,3 +746,68 @@ SELECT
 FROM with_segments AS w
 LEFT JOIN subscores AS ss ON ss.clip = w.clip
 LEFT JOIN timeline  AS tl ON tl.clip = w.clip;
+
+-- Column comments re-applied post-CTAS (2026-06-11 audit P2-8 follow-up):
+-- CREATE OR REPLACE drops DDL column comments on every refresh, and the
+-- typeless CTAS column list is a PARSE_SYNTAX_ERROR on DBSQL (observed
+-- live, run 2026-06-11). COMMENT ON COLUMN keeps the Genie grounding /
+-- asset-page comments refresh-stable; the SQL file task executes the
+-- statements in order.
+COMMENT ON COLUMN mip.gold.borrower_360.clip IS 'Cotality CLIP. PK. Router maps to Borrower360.clip_id.';
+COMMENT ON COLUMN mip.gold.borrower_360.borrower_id IS 'Synthetic stable id from CLIP: CONCAT("B-", LPAD(CONV(ABS(xxhash64(clip)), 10, 36), 13, "0")). Base36 encoding of the 64-bit hash, width 13 => 36^13 slots. No PII.';
+COMMENT ON COLUMN mip.gold.borrower_360.display_name IS 'Synthesized label "Owner " || SUBSTR(owner_name_hash, 1, 8). Never a real name.';
+COMMENT ON COLUMN mip.gold.borrower_360.city IS 'Situs city from property_master.';
+COMMENT ON COLUMN mip.gold.borrower_360.state IS 'Situs state from refreshed source coverage.';
+COMMENT ON COLUMN mip.gold.borrower_360.zip IS '5-digit situs ZIP.';
+COMMENT ON COLUMN mip.gold.borrower_360.situs_cbsa_code IS 'CBSA metro code. Gold-only; used for geography drill-down.';
+COMMENT ON COLUMN mip.gold.borrower_360.county_fips_5 IS '5-char FIPS county code (2-char state + 3-char county) from silver.property_master.fips_county_code. Feeds gold.county_rollup + gold.zip_rollup. NULL for the ~0.2% of rows where silver has no county geocode.';
+COMMENT ON COLUMN mip.gold.borrower_360.segment_codes IS 'Ordered list of SegmentCode Literals (itm/listed/permit/investor/equity/retention) this borrower belongs to.';
+COMMENT ON COLUMN mip.gold.borrower_360.equity_estimate IS 'USD: GREATEST(0, avm_value - total_open_lien_balance).';
+COMMENT ON COLUMN mip.gold.borrower_360.equity_pct IS '0..100. CAST(100 - estimated_cltv AS INT) fallback to derived avm/lien. Feeds fn_in_the_money + fn_next_best_offer.';
+COMMENT ON COLUMN mip.gold.borrower_360.rate_spread_bps IS 'fn_rate_spread(first_pos_rate, market_rate_fraction). Positive = above market = refi opportunity.';
+COMMENT ON COLUMN mip.gold.borrower_360.market_rate_fraction IS 'Fractional market rate from silver.market_rates_weekly WHERE is_latest=TRUE. Router maps to WhyPanel.market_rate.';
+COMMENT ON COLUMN mip.gold.borrower_360.opportunity_score IS 'fn_lead_score output. 0..100.';
+COMMENT ON COLUMN mip.gold.borrower_360.confidence IS 'ROUND(mean(5 sub-scores)). 0..100. Matches mock_data._build_borrower.';
+COMMENT ON COLUMN mip.gold.borrower_360.recommended_offer_code IS 'fn_next_best_offer output (lowercase code). Router resolves to human label via NBO_PRODUCT_LABELS.';
+COMMENT ON COLUMN mip.gold.borrower_360.recommended_offer IS 'Human label for recommended_offer_code (resolved in SQL via product_labels map).';
+COMMENT ON COLUMN mip.gold.borrower_360.why_now IS 'Deterministic one-sentence template per offer_code. No PII. See data-contract §6.';
+COMMENT ON COLUMN mip.gold.borrower_360.evidence_ids IS 'Ordered evidence_ids from gold.evidence_events (ORDER BY signal_rank).';
+COMMENT ON COLUMN mip.gold.borrower_360.approval_status IS 'Default "pending"; Lakebase authoritative for actual state.';
+COMMENT ON COLUMN mip.gold.borrower_360.owner_link_id IS 'Cotality Owner Link id. Opaque Cotality identifier; not a direct PII risk.';
+COMMENT ON COLUMN mip.gold.borrower_360.subject_property IS 'Synthetic city/state/ZIP5 string. No street address.';
+COMMENT ON COLUMN mip.gold.borrower_360.avm_value IS 'COALESCE(avm_value, 0).';
+COMMENT ON COLUMN mip.gold.borrower_360.current_lien_balance IS 'COALESCE(total_open_lien_balance, 0).';
+COMMENT ON COLUMN mip.gold.borrower_360.current_rate IS 'PERCENT form (5.75, not 0.0575). Matches Pydantic current_rate and mock_data convention.';
+COMMENT ON COLUMN mip.gold.borrower_360.ltv IS '0..100 int. Mirrors equity_pct source preference: ROUND(estimated_cltv) when present, else ROUND(100 * total_open_lien_balance / avm_value).';
+COMMENT ON COLUMN mip.gold.borrower_360.related_property_count IS 'COALESCE(property_owner_bridge.related_property_count, 1).';
+COMMENT ON COLUMN mip.gold.borrower_360.is_owner_occupied IS 'owner_occupancy_code = "O". Feeds fit sub-score.';
+COMMENT ON COLUMN mip.gold.borrower_360.is_absentee IS 'property_master.is_absentee. Feeds investor branch.';
+COMMENT ON COLUMN mip.gold.borrower_360.is_corporate_owner IS 'property_master.owner_is_corporate. Feeds investor branch.';
+COMMENT ON COLUMN mip.gold.borrower_360.has_permit IS 'BLOCKED (data-contract §9) -- hardcoded FALSE until Cotality Building Permits product lands. intent_trigger permit term is 0.';
+COMMENT ON COLUMN mip.gold.borrower_360.listed_for_sale IS 'BLOCKED (data-contract §9) -- hardcoded FALSE until Cotality MLS Listings lands. fn_next_best_offer purchase branch never fires on real data.';
+COMMENT ON COLUMN mip.gold.borrower_360.is_investor IS 'Derived: related_property_count >= 2 OR is_corporate_owner OR is_absentee.';
+COMMENT ON COLUMN mip.gold.borrower_360.is_current_customer IS 'Current-servicer relationship to tenant: governed lender_dictionary says non-competitor.';
+COMMENT ON COLUMN mip.gold.borrower_360.is_former_customer IS 'Historical tenant-lender Owner Link relationship with no current tenant-serviced lien.';
+COMMENT ON COLUMN mip.gold.borrower_360.is_competitor_lien IS 'Current servicer is known and not the tenant. Competitor/recapture signal; mutually exclusive with is_current_customer in the current CLIP-grain refresh path.';
+COMMENT ON COLUMN mip.gold.borrower_360.has_first_party_relationship IS 'TRUE when LOS, servicing, CRM, interaction, or product-balance feeds resolve to this borrower.';
+COMMENT ON COLUMN mip.gold.borrower_360.first_party_relationship_depth IS 'Bounded count of resolved first-party feed categories for relationship scoring.';
+COMMENT ON COLUMN mip.gold.borrower_360.first_party_recent_interactions IS 'Recent call-center/digital interaction count resolved through first-party feeds.';
+COMMENT ON COLUMN mip.gold.borrower_360.first_party_recent_application IS 'TRUE when a recent LOS/application event exists.';
+COMMENT ON COLUMN mip.gold.borrower_360.first_party_synthetic_demo IS 'TRUE only when resolved first-party rows come from the Summit demo_synthetic seed.';
+COMMENT ON COLUMN mip.gold.borrower_360.marketing_eligible IS 'TRUE only when latest first-party CRM consent is opt-in, no suppression exists, and the 30-day touch cap is clear. Campaign and draft APIs fail closed on FALSE.';
+COMMENT ON COLUMN mip.gold.borrower_360.consent_status IS 'Controlled first-party CRM consent enum: opt_in / opt_out / unknown. No raw contact data.';
+COMMENT ON COLUMN mip.gold.borrower_360.suppression_reason IS 'Controlled first-party CRM suppression reason, e.g. do_not_contact or recent_contact_cap.';
+COMMENT ON COLUMN mip.gold.borrower_360.last_touch_at IS 'Most recent first-party marketing/contact touch timestamp used for frequency-cap enforcement.';
+COMMENT ON COLUMN mip.gold.borrower_360.eligible_recontact_at IS 'Earliest timestamp the borrower can be contacted again when a frequency cap is active.';
+COMMENT ON COLUMN mip.gold.borrower_360.current_lender_ref IS 'Public-demo-safe current-servicer reference: Summit Mortgage, Competitor A/B/etc., or Competitor Other. Never the raw Cotality lender string.';
+COMMENT ON COLUMN mip.gold.borrower_360.second_pos_amount IS '2nd-lien balance passthrough; NULL or 0 both mean no active 2nd-lien. Feeds the equity segment clean-lien predicate.';
+COMMENT ON COLUMN mip.gold.borrower_360.first_pos_loan_type IS '1st-lien loan type code (CONV / FHA / VA / etc). Feeds fit sub-score.';
+COMMENT ON COLUMN mip.gold.borrower_360.owner_name_hash IS 'sha2(LOWER(TRIM(name)) || salt, 256) propagated from silver.property_master. Internal only -- router strips before /api/*.';
+COMMENT ON COLUMN mip.gold.borrower_360.min_spread_bps_applied IS 'Threshold applied when computing ITM for THIS refresh. Carried so WhyPanel.min_spread_bps is the run-specific value.';
+COMMENT ON COLUMN mip.gold.borrower_360.min_equity_pct_applied IS 'Equity threshold applied this refresh.';
+COMMENT ON COLUMN mip.gold.borrower_360.heloc_equity_min_applied IS 'HELOC equity threshold applied this refresh (fn_next_best_offer branch 2/3 and equity segment).';
+COMMENT ON COLUMN mip.gold.borrower_360.cashout_equity_min_applied IS 'Cash-out equity threshold applied this refresh (fn_next_best_offer branch 5).';
+COMMENT ON COLUMN mip.gold.borrower_360.retention_min_spread_applied IS 'Retention spread threshold applied this refresh (fn_next_best_offer branch 7 and retention segment).';
+COMMENT ON COLUMN mip.gold.borrower_360.in_the_money IS 'fn_in_the_money(rate_spread_bps, equity_pct, min_spread_bps_applied, min_equity_pct_applied).';
+COMMENT ON COLUMN mip.gold.borrower_360.trigger_timeline_json IS 'JSON-encoded top-3 EvidenceEvent rows pre-materialized to avoid per-row fan-out at read. Router json_decodes into List[EvidenceEvent].';
+COMMENT ON COLUMN mip.gold.borrower_360.refreshed_at IS 'Refresh timestamp; used as EvidenceDrawer footer provenance chip.';

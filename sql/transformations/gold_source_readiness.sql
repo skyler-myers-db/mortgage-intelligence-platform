@@ -12,17 +12,7 @@
 -- COMMENTs, and TBLPROPERTIES mirror sql/ddl/gold_source_readiness.sql.
 -- =============================================================================
 
-CREATE OR REPLACE TABLE mip.gold.source_readiness (
-  source_name   COMMENT 'Admin panel display name.',
-  status        COMMENT 'live / demo_synthetic / configured_empty / not_configured / roadmap / error.',
-  row_count     COMMENT 'Source row count when live.',
-  last_updated  COMMENT 'Latest source ingest timestamp when live.',
-  note          COMMENT 'Human-readable source note.',
-  source_table  COMMENT 'UC source table used by ETL; null for roadmap sources.',
-  synthetic_demo COMMENT 'TRUE when rows come from the explicit Summit demo_synthetic first-party seed.',
-  sort_order    COMMENT 'Stable Admin panel order.',
-  checked_at    COMMENT 'Gold refresh anchor used for this readiness snapshot.'
-)
+CREATE OR REPLACE TABLE mip.gold.source_readiness
 CLUSTER BY (sort_order)
 TBLPROPERTIES (
   'delta.enableChangeDataFeed' = 'false',
@@ -391,3 +381,19 @@ SELECT
   sort_order,
   (SELECT checked_at FROM refresh_anchor) AS checked_at
 FROM source_rows;
+
+-- Column comments re-applied post-CTAS (2026-06-11 audit P2-8 follow-up):
+-- CREATE OR REPLACE drops DDL column comments on every refresh, and the
+-- typeless CTAS column list is a PARSE_SYNTAX_ERROR on DBSQL (observed
+-- live, run 2026-06-11). COMMENT ON COLUMN keeps the Genie grounding /
+-- asset-page comments refresh-stable; the SQL file task executes the
+-- statements in order.
+COMMENT ON COLUMN mip.gold.source_readiness.source_name IS 'Admin panel display name.';
+COMMENT ON COLUMN mip.gold.source_readiness.status IS 'live / demo_synthetic / configured_empty / not_configured / roadmap / error.';
+COMMENT ON COLUMN mip.gold.source_readiness.row_count IS 'Source row count when live.';
+COMMENT ON COLUMN mip.gold.source_readiness.last_updated IS 'Latest source ingest timestamp when live.';
+COMMENT ON COLUMN mip.gold.source_readiness.note IS 'Human-readable source note.';
+COMMENT ON COLUMN mip.gold.source_readiness.source_table IS 'UC source table used by ETL; null for roadmap sources.';
+COMMENT ON COLUMN mip.gold.source_readiness.synthetic_demo IS 'TRUE when rows come from the explicit Summit demo_synthetic first-party seed.';
+COMMENT ON COLUMN mip.gold.source_readiness.sort_order IS 'Stable Admin panel order.';
+COMMENT ON COLUMN mip.gold.source_readiness.checked_at IS 'Gold refresh anchor used for this readiness snapshot.';

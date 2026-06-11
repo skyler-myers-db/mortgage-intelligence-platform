@@ -49,16 +49,7 @@
 -- the populated-state rewrite and must keep the same table shape.
 -- =============================================================================
 
-CREATE OR REPLACE TABLE mip.gold.borrower_lifecycle_state (
-  borrower_id       COMMENT 'Masked borrower id; matches borrower_360.borrower_id.',
-  approval_status   COMMENT 'pending / approved / rejected / hold. Derived from latest decided_at row in mip_app.approvals.',
-  outreach_status   COMMENT 'queued / actioned / none. Derived from latest outreach state.',
-  offer_code        COMMENT 'Latest offer_code associated with the approval decision.',
-  approved_at       COMMENT 'decided_at for the latest approve action; NULL when not approved.',
-  outreach_at       COMMENT 'Timestamp of latest outreach action.',
-  synced_at         COMMENT 'Last sync run that touched this row.',
-  refreshed_at      COMMENT 'Lakebase mirror refresh boundary for this lifecycle snapshot; distinct from the scoring gold refresh boundary.'
-)
+CREATE OR REPLACE TABLE mip.gold.borrower_lifecycle_state
 CLUSTER BY (borrower_id)
 TBLPROPERTIES (
   'delta.enableChangeDataFeed' = 'false',
@@ -80,3 +71,18 @@ SELECT
   a.mirror_refreshed_at       AS refreshed_at
 FROM mip.gold.borrower_360 AS b
 CROSS JOIN sync_anchor AS a;
+
+-- Column comments re-applied post-CTAS (2026-06-11 audit P2-8 follow-up):
+-- CREATE OR REPLACE drops DDL column comments on every refresh, and the
+-- typeless CTAS column list is a PARSE_SYNTAX_ERROR on DBSQL (observed
+-- live, run 2026-06-11). COMMENT ON COLUMN keeps the Genie grounding /
+-- asset-page comments refresh-stable; the SQL file task executes the
+-- statements in order.
+COMMENT ON COLUMN mip.gold.borrower_lifecycle_state.borrower_id IS 'Masked borrower id; matches borrower_360.borrower_id.';
+COMMENT ON COLUMN mip.gold.borrower_lifecycle_state.approval_status IS 'pending / approved / rejected / hold. Derived from latest decided_at row in mip_app.approvals.';
+COMMENT ON COLUMN mip.gold.borrower_lifecycle_state.outreach_status IS 'queued / actioned / none. Derived from latest outreach state.';
+COMMENT ON COLUMN mip.gold.borrower_lifecycle_state.offer_code IS 'Latest offer_code associated with the approval decision.';
+COMMENT ON COLUMN mip.gold.borrower_lifecycle_state.approved_at IS 'decided_at for the latest approve action; NULL when not approved.';
+COMMENT ON COLUMN mip.gold.borrower_lifecycle_state.outreach_at IS 'Timestamp of latest outreach action.';
+COMMENT ON COLUMN mip.gold.borrower_lifecycle_state.synced_at IS 'Last sync run that touched this row.';
+COMMENT ON COLUMN mip.gold.borrower_lifecycle_state.refreshed_at IS 'Lakebase mirror refresh boundary for this lifecycle snapshot; distinct from the scoring gold refresh boundary.';

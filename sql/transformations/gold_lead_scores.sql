@@ -38,37 +38,7 @@
 -- list order matches the final SELECT projection 1:1.
 -- =============================================================================
 
-CREATE OR REPLACE TABLE mip.gold.lead_scores (
-  clip                     COMMENT 'Cotality CLIP. PK. FK to gold.borrower_360.clip.',
-  economic_incentive       COMMENT '0..100 sub-score on rate_spread_bps + equity_pct. Weight 0.35 in fn_lead_score.',
-  intent_trigger           COMMENT '0..100 sub-score on recent mortgage events, competitor/investor signals, rate drift, equity proxy, and current-customer bump. Weight 0.30.',
-  fit                      COMMENT '0..100 sub-score on owner-occupancy + loan_type + corporate/investor fit. Weight 0.15.',
-  relationship             COMMENT '0..100 sub-score on customer / competitor / investor relationship ladder plus owner-level distinct tenant-lender CLIP history. Weight 0.10.',
-  evidence                 COMMENT '0..100: 10 pts per live evidence row plus bounded second-position balance tail. Weight 0.10.',
-  opportunity_score        COMMENT 'mip.gold.fn_lead_score(...) output. 0..100. Mirrors gold.borrower_360 for the same CLIP.',
-  confidence               COMMENT 'ROUND(mean(5 sub-scores)). Mirrors gold.borrower_360 for the same CLIP.',
-  in_the_money             COMMENT 'mip.gold.fn_in_the_money(rate_spread_bps, equity_pct, min_spread_bps_applied, min_equity_pct_applied).',
-  recommended_offer_code   COMMENT 'mip.gold.fn_next_best_offer(...) lowercase code.',
-  rate_spread_bps          COMMENT 'Input to fn_in_the_money / fn_next_best_offer. Carried here so the table is self-contained for parity testing.',
-  equity_pct               COMMENT 'Input to fn_in_the_money / fn_next_best_offer.',
-  has_permit               COMMENT 'BLOCKED -> FALSE; carried for parity test transparency.',
-  listed_for_sale          COMMENT 'BLOCKED -> FALSE; carried for parity test transparency.',
-  is_investor              COMMENT 'Carried from borrower_360.',
-  is_current_customer      COMMENT 'Carried from borrower_360.',
-  is_former_customer       COMMENT 'Carried from borrower_360. Distinct from competitor lien; requires historical tenant relationship and no current tenant lien.',
-  is_competitor_lien       COMMENT 'Carried from borrower_360.',
-  has_first_party_relationship COMMENT 'Carried from borrower_360. TRUE when optional first-party feeds resolve to this borrower.',
-  first_party_relationship_depth COMMENT 'Bounded count of resolved first-party feed categories.',
-  first_party_recent_interactions COMMENT 'Recent positive interaction count from the first-party engagement feed.',
-  first_party_recent_application COMMENT 'TRUE when a recent first-party LOS/application event exists.',
-  first_party_synthetic_demo     COMMENT 'TRUE only for rows touched by the Summit demo_synthetic first-party seed.',
-  min_spread_bps_applied   COMMENT 'Threshold applied this refresh.',
-  min_equity_pct_applied   COMMENT 'Threshold applied this refresh.',
-  heloc_equity_min_applied COMMENT 'HELOC equity threshold applied this refresh (fn_next_best_offer branch 2/3).',
-  cashout_equity_min_applied COMMENT 'Cash-out equity threshold applied this refresh (fn_next_best_offer branch 5).',
-  retention_min_spread_applied COMMENT 'Retention spread threshold applied this refresh (fn_next_best_offer branch 7).',
-  refreshed_at             COMMENT 'Refresh timestamp for audit / provenance.'
-)
+CREATE OR REPLACE TABLE mip.gold.lead_scores
 CLUSTER BY (clip)
 TBLPROPERTIES (
   'delta.enableChangeDataFeed' = 'false',
@@ -275,3 +245,39 @@ SELECT
   -- Shared refresh_at captured once per run. See audit-holes-round-3 #7.
   (SELECT refresh_at FROM mip.ref.refresh_run_state ORDER BY captured_at DESC LIMIT 1) AS refreshed_at
 FROM subscores AS s;
+
+-- Column comments re-applied post-CTAS (2026-06-11 audit P2-8 follow-up):
+-- CREATE OR REPLACE drops DDL column comments on every refresh, and the
+-- typeless CTAS column list is a PARSE_SYNTAX_ERROR on DBSQL (observed
+-- live, run 2026-06-11). COMMENT ON COLUMN keeps the Genie grounding /
+-- asset-page comments refresh-stable; the SQL file task executes the
+-- statements in order.
+COMMENT ON COLUMN mip.gold.lead_scores.clip IS 'Cotality CLIP. PK. FK to gold.borrower_360.clip.';
+COMMENT ON COLUMN mip.gold.lead_scores.economic_incentive IS '0..100 sub-score on rate_spread_bps + equity_pct. Weight 0.35 in fn_lead_score.';
+COMMENT ON COLUMN mip.gold.lead_scores.intent_trigger IS '0..100 sub-score on recent mortgage events, competitor/investor signals, rate drift, equity proxy, and current-customer bump. Weight 0.30.';
+COMMENT ON COLUMN mip.gold.lead_scores.fit IS '0..100 sub-score on owner-occupancy + loan_type + corporate/investor fit. Weight 0.15.';
+COMMENT ON COLUMN mip.gold.lead_scores.relationship IS '0..100 sub-score on customer / competitor / investor relationship ladder plus owner-level distinct tenant-lender CLIP history. Weight 0.10.';
+COMMENT ON COLUMN mip.gold.lead_scores.evidence IS '0..100: 10 pts per live evidence row plus bounded second-position balance tail. Weight 0.10.';
+COMMENT ON COLUMN mip.gold.lead_scores.opportunity_score IS 'mip.gold.fn_lead_score(...) output. 0..100. Mirrors gold.borrower_360 for the same CLIP.';
+COMMENT ON COLUMN mip.gold.lead_scores.confidence IS 'ROUND(mean(5 sub-scores)). Mirrors gold.borrower_360 for the same CLIP.';
+COMMENT ON COLUMN mip.gold.lead_scores.in_the_money IS 'mip.gold.fn_in_the_money(rate_spread_bps, equity_pct, min_spread_bps_applied, min_equity_pct_applied).';
+COMMENT ON COLUMN mip.gold.lead_scores.recommended_offer_code IS 'mip.gold.fn_next_best_offer(...) lowercase code.';
+COMMENT ON COLUMN mip.gold.lead_scores.rate_spread_bps IS 'Input to fn_in_the_money / fn_next_best_offer. Carried here so the table is self-contained for parity testing.';
+COMMENT ON COLUMN mip.gold.lead_scores.equity_pct IS 'Input to fn_in_the_money / fn_next_best_offer.';
+COMMENT ON COLUMN mip.gold.lead_scores.has_permit IS 'BLOCKED -> FALSE; carried for parity test transparency.';
+COMMENT ON COLUMN mip.gold.lead_scores.listed_for_sale IS 'BLOCKED -> FALSE; carried for parity test transparency.';
+COMMENT ON COLUMN mip.gold.lead_scores.is_investor IS 'Carried from borrower_360.';
+COMMENT ON COLUMN mip.gold.lead_scores.is_current_customer IS 'Carried from borrower_360.';
+COMMENT ON COLUMN mip.gold.lead_scores.is_former_customer IS 'Carried from borrower_360. Distinct from competitor lien; requires historical tenant relationship and no current tenant lien.';
+COMMENT ON COLUMN mip.gold.lead_scores.is_competitor_lien IS 'Carried from borrower_360.';
+COMMENT ON COLUMN mip.gold.lead_scores.has_first_party_relationship IS 'Carried from borrower_360. TRUE when optional first-party feeds resolve to this borrower.';
+COMMENT ON COLUMN mip.gold.lead_scores.first_party_relationship_depth IS 'Bounded count of resolved first-party feed categories.';
+COMMENT ON COLUMN mip.gold.lead_scores.first_party_recent_interactions IS 'Recent positive interaction count from the first-party engagement feed.';
+COMMENT ON COLUMN mip.gold.lead_scores.first_party_recent_application IS 'TRUE when a recent first-party LOS/application event exists.';
+COMMENT ON COLUMN mip.gold.lead_scores.first_party_synthetic_demo IS 'TRUE only for rows touched by the Summit demo_synthetic first-party seed.';
+COMMENT ON COLUMN mip.gold.lead_scores.min_spread_bps_applied IS 'Threshold applied this refresh.';
+COMMENT ON COLUMN mip.gold.lead_scores.min_equity_pct_applied IS 'Threshold applied this refresh.';
+COMMENT ON COLUMN mip.gold.lead_scores.heloc_equity_min_applied IS 'HELOC equity threshold applied this refresh (fn_next_best_offer branch 2/3).';
+COMMENT ON COLUMN mip.gold.lead_scores.cashout_equity_min_applied IS 'Cash-out equity threshold applied this refresh (fn_next_best_offer branch 5).';
+COMMENT ON COLUMN mip.gold.lead_scores.retention_min_spread_applied IS 'Retention spread threshold applied this refresh (fn_next_best_offer branch 7).';
+COMMENT ON COLUMN mip.gold.lead_scores.refreshed_at IS 'Refresh timestamp for audit / provenance.';

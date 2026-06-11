@@ -100,17 +100,7 @@ WHEN NOT MATCHED THEN INSERT (
 -- COMMENTs, and TBLPROPERTIES mirror sql/ddl/gold_segment_population.sql; the
 -- column list order matches the final SELECT projection 1:1. (The prior-period
 -- MERGE above writes segment_population_prior, whose metadata MERGE preserves.)
-CREATE OR REPLACE TABLE mip.gold.segment_population (
-  segment_code    COMMENT 'itm / listed / permit / investor / equity / retention. Matches SegmentCode Literal exactly.',
-  state           COMMENT '2-char state code from refreshed source coverage or "_ALL" for national rollup.',
-  name            COMMENT 'Static label per segment_code (e.g., "In the Money").',
-  count           COMMENT 'Member count for this (segment, state) cell.',
-  delta_vs_prior  COMMENT 'Quarter-over-quarter delta as "+NN%" / "-NN%". Router maps to SegmentSummary.delta. "+0%" on first refresh.',
-  avg_score       COMMENT 'CAST(ROUND(AVG(opportunity_score)) AS INT) over the segment cell.',
-  description     COMMENT 'Static description per segment_code.',
-  color           COMMENT 'Hex color for segment tile.',
-  refreshed_at    COMMENT 'Refresh timestamp.'
-)
+CREATE OR REPLACE TABLE mip.gold.segment_population
 CLUSTER BY (segment_code)
 TBLPROPERTIES (
   'delta.enableChangeDataFeed' = 'false',
@@ -223,3 +213,19 @@ FROM grid           AS g
 LEFT JOIN meta      AS m USING (segment_code)
 LEFT JOIN current_counts AS c USING (segment_code, state)
 LEFT JOIN prior     AS p USING (segment_code, state);
+
+-- Column comments re-applied post-CTAS (2026-06-11 audit P2-8 follow-up):
+-- CREATE OR REPLACE drops DDL column comments on every refresh, and the
+-- typeless CTAS column list is a PARSE_SYNTAX_ERROR on DBSQL (observed
+-- live, run 2026-06-11). COMMENT ON COLUMN keeps the Genie grounding /
+-- asset-page comments refresh-stable; the SQL file task executes the
+-- statements in order.
+COMMENT ON COLUMN mip.gold.segment_population.segment_code IS 'itm / listed / permit / investor / equity / retention. Matches SegmentCode Literal exactly.';
+COMMENT ON COLUMN mip.gold.segment_population.state IS '2-char state code from refreshed source coverage or "_ALL" for national rollup.';
+COMMENT ON COLUMN mip.gold.segment_population.name IS 'Static label per segment_code (e.g., "In the Money").';
+COMMENT ON COLUMN mip.gold.segment_population.count IS 'Member count for this (segment, state) cell.';
+COMMENT ON COLUMN mip.gold.segment_population.delta_vs_prior IS 'Quarter-over-quarter delta as "+NN%" / "-NN%". Router maps to SegmentSummary.delta. "+0%" on first refresh.';
+COMMENT ON COLUMN mip.gold.segment_population.avg_score IS 'CAST(ROUND(AVG(opportunity_score)) AS INT) over the segment cell.';
+COMMENT ON COLUMN mip.gold.segment_population.description IS 'Static description per segment_code.';
+COMMENT ON COLUMN mip.gold.segment_population.color IS 'Hex color for segment tile.';
+COMMENT ON COLUMN mip.gold.segment_population.refreshed_at IS 'Refresh timestamp.';

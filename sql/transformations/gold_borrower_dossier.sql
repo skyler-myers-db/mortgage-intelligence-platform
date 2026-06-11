@@ -54,67 +54,7 @@
 -- SELECT projection 1:1 (every borrower_360 column + the two evidence arrays).
 -- =============================================================================
 
-CREATE OR REPLACE TABLE mip.gold.borrower_dossier (
-  clip                      COMMENT 'CLIP. 1:1 with borrower_360.clip.',
-  borrower_id               COMMENT 'Synthetic id; cluster key. Matches borrower_360.borrower_id.',
-  display_name              COMMENT 'Synthesized label; never a real name.',
-  city                      COMMENT 'Situs city.',
-  state                     COMMENT 'Situs state from refreshed source coverage.',
-  zip                       COMMENT '5-digit situs ZIP.',
-  situs_cbsa_code           COMMENT 'CBSA metro code.',
-  segment_codes             COMMENT 'Ordered SegmentCode list.',
-  equity_estimate           COMMENT 'USD.',
-  equity_pct                COMMENT '0..100.',
-  rate_spread_bps           COMMENT 'fn_rate_spread output.',
-  market_rate_fraction      COMMENT 'Fractional market rate.',
-  opportunity_score         COMMENT 'fn_lead_score output 0..100.',
-  confidence                COMMENT 'Mean of 5 sub-scores.',
-  recommended_offer_code    COMMENT 'fn_next_best_offer code.',
-  recommended_offer         COMMENT 'Human label.',
-  why_now                   COMMENT 'Deterministic template per offer code.',
-  evidence_ids              COMMENT 'Ordered evidence ids.',
-  approval_status           COMMENT 'Default "pending"; Lakebase authoritative.',
-  owner_link_id             COMMENT 'Cotality Owner Link id.',
-  subject_property          COMMENT 'Synthetic city/state/ZIP5 string.',
-  avm_value                 COMMENT 'AVM value; 0 when missing.',
-  current_lien_balance      COMMENT 'Total open lien balance.',
-  current_rate              COMMENT 'Percent form (5.75).',
-  ltv                       COMMENT '0..100.',
-  related_property_count    COMMENT 'From gold.property_owner_bridge.',
-  is_owner_occupied         COMMENT 'owner_occupancy_code = "O".',
-  is_absentee               COMMENT 'From silver.property_master.',
-  is_corporate_owner        COMMENT 'From silver.property_master.',
-  has_permit                COMMENT 'BLOCKED: FALSE until Cotality Building Permits lands.',
-  listed_for_sale           COMMENT 'BLOCKED: FALSE until Cotality MLS Listings lands.',
-  is_investor               COMMENT 'Derived: multi-property OR corporate OR absentee.',
-  is_current_customer       COMMENT 'Current servicer is a tenant-lender alias in ref.lender_dictionary.',
-  is_former_customer        COMMENT 'Historical tenant-lender relationship with no current tenant lien.',
-  is_competitor_lien        COMMENT 'Current servicer is known and not a tenant-lender alias.',
-  has_first_party_relationship COMMENT 'TRUE when optional first-party feeds resolve to this borrower.',
-  first_party_relationship_depth COMMENT 'Bounded count of resolved first-party feed categories.',
-  first_party_recent_interactions COMMENT 'Recent interaction count from the first-party engagement feed.',
-  first_party_recent_application COMMENT 'TRUE when a recent first-party LOS/application event exists.',
-  first_party_synthetic_demo     COMMENT 'TRUE only for rows touched by the Summit demo_synthetic first-party seed.',
-  marketing_eligible      COMMENT 'From borrower_360; TRUE only when consent, suppression, and frequency-cap gates are clear.',
-  consent_status          COMMENT 'From borrower_360; opt_in / opt_out / unknown.',
-  suppression_reason      COMMENT 'From borrower_360; controlled suppression reason.',
-  last_touch_at           COMMENT 'From borrower_360; most recent first-party marketing/contact touch.',
-  eligible_recontact_at   COMMENT 'From borrower_360; earliest permitted re-contact time when capped.',
-  current_lender_ref        COMMENT 'Public-demo-safe current-servicer reference.',
-  second_pos_amount         COMMENT 'For "equity" segment predicate.',
-  first_pos_loan_type       COMMENT 'For fit sub-score.',
-  owner_name_hash           COMMENT 'sha2 hash from silver; internal only, router strips.',
-  min_spread_bps_applied    COMMENT 'Threshold this refresh.',
-  min_equity_pct_applied    COMMENT 'Threshold this refresh.',
-  heloc_equity_min_applied  COMMENT 'HELOC equity threshold this refresh.',
-  cashout_equity_min_applied COMMENT 'Cash-out equity threshold this refresh.',
-  retention_min_spread_applied COMMENT 'Retention spread threshold this refresh.',
-  in_the_money              COMMENT 'fn_in_the_money output.',
-  trigger_timeline_json     COMMENT 'JSON-encoded top-3 evidence rows (carried from borrower_360 for parity).',
-  evidence_events           COMMENT 'Full evidence array (capped at 20 per CLIP) sorted by signal_rank.',
-  trigger_timeline          COMMENT 'Top-3 slice of evidence_events for the trigger timeline.',
-  refreshed_at              COMMENT 'Refresh timestamp.'
-)
+CREATE OR REPLACE TABLE mip.gold.borrower_dossier
 CLUSTER BY (borrower_id)
 TBLPROPERTIES (
   'delta.enableChangeDataFeed' = 'false',
@@ -274,3 +214,69 @@ SELECT
 FROM mip.gold.borrower_360 AS b
 LEFT JOIN evidence_full AS ef ON ef.clip = b.clip
 LEFT JOIN evidence_top3 AS et ON et.clip = b.clip;
+
+-- Column comments re-applied post-CTAS (2026-06-11 audit P2-8 follow-up):
+-- CREATE OR REPLACE drops DDL column comments on every refresh, and the
+-- typeless CTAS column list is a PARSE_SYNTAX_ERROR on DBSQL (observed
+-- live, run 2026-06-11). COMMENT ON COLUMN keeps the Genie grounding /
+-- asset-page comments refresh-stable; the SQL file task executes the
+-- statements in order.
+COMMENT ON COLUMN mip.gold.borrower_dossier.clip IS 'CLIP. 1:1 with borrower_360.clip.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.borrower_id IS 'Synthetic id; cluster key. Matches borrower_360.borrower_id.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.display_name IS 'Synthesized label; never a real name.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.city IS 'Situs city.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.state IS 'Situs state from refreshed source coverage.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.zip IS '5-digit situs ZIP.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.situs_cbsa_code IS 'CBSA metro code.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.segment_codes IS 'Ordered SegmentCode list.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.equity_estimate IS 'USD.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.equity_pct IS '0..100.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.rate_spread_bps IS 'fn_rate_spread output.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.market_rate_fraction IS 'Fractional market rate.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.opportunity_score IS 'fn_lead_score output 0..100.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.confidence IS 'Mean of 5 sub-scores.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.recommended_offer_code IS 'fn_next_best_offer code.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.recommended_offer IS 'Human label.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.why_now IS 'Deterministic template per offer code.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.evidence_ids IS 'Ordered evidence ids.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.approval_status IS 'Default "pending"; Lakebase authoritative.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.owner_link_id IS 'Cotality Owner Link id.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.subject_property IS 'Synthetic city/state/ZIP5 string.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.avm_value IS 'AVM value; 0 when missing.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.current_lien_balance IS 'Total open lien balance.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.current_rate IS 'Percent form (5.75).';
+COMMENT ON COLUMN mip.gold.borrower_dossier.ltv IS '0..100.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.related_property_count IS 'From gold.property_owner_bridge.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.is_owner_occupied IS 'owner_occupancy_code = "O".';
+COMMENT ON COLUMN mip.gold.borrower_dossier.is_absentee IS 'From silver.property_master.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.is_corporate_owner IS 'From silver.property_master.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.has_permit IS 'BLOCKED: FALSE until Cotality Building Permits lands.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.listed_for_sale IS 'BLOCKED: FALSE until Cotality MLS Listings lands.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.is_investor IS 'Derived: multi-property OR corporate OR absentee.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.is_current_customer IS 'Current servicer is a tenant-lender alias in ref.lender_dictionary.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.is_former_customer IS 'Historical tenant-lender relationship with no current tenant lien.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.is_competitor_lien IS 'Current servicer is known and not a tenant-lender alias.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.has_first_party_relationship IS 'TRUE when optional first-party feeds resolve to this borrower.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.first_party_relationship_depth IS 'Bounded count of resolved first-party feed categories.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.first_party_recent_interactions IS 'Recent interaction count from the first-party engagement feed.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.first_party_recent_application IS 'TRUE when a recent first-party LOS/application event exists.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.first_party_synthetic_demo IS 'TRUE only for rows touched by the Summit demo_synthetic first-party seed.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.marketing_eligible IS 'From borrower_360; TRUE only when consent, suppression, and frequency-cap gates are clear.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.consent_status IS 'From borrower_360; opt_in / opt_out / unknown.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.suppression_reason IS 'From borrower_360; controlled suppression reason.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.last_touch_at IS 'From borrower_360; most recent first-party marketing/contact touch.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.eligible_recontact_at IS 'From borrower_360; earliest permitted re-contact time when capped.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.current_lender_ref IS 'Public-demo-safe current-servicer reference.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.second_pos_amount IS 'For "equity" segment predicate.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.first_pos_loan_type IS 'For fit sub-score.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.owner_name_hash IS 'sha2 hash from silver; internal only, router strips.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.min_spread_bps_applied IS 'Threshold this refresh.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.min_equity_pct_applied IS 'Threshold this refresh.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.heloc_equity_min_applied IS 'HELOC equity threshold this refresh.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.cashout_equity_min_applied IS 'Cash-out equity threshold this refresh.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.retention_min_spread_applied IS 'Retention spread threshold this refresh.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.in_the_money IS 'fn_in_the_money output.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.trigger_timeline_json IS 'JSON-encoded top-3 evidence rows (carried from borrower_360 for parity).';
+COMMENT ON COLUMN mip.gold.borrower_dossier.evidence_events IS 'Full evidence array (capped at 20 per CLIP) sorted by signal_rank.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.trigger_timeline IS 'Top-3 slice of evidence_events for the trigger timeline.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.refreshed_at IS 'Refresh timestamp.';
