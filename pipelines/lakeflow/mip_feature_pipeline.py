@@ -72,14 +72,16 @@ LEADING_ZERO_ZIP_STATES: tuple[str, ...] = (
     "VI",
 )
 
-# PII salt. In the deployed workspace this is read from the Databricks secret
-# scope `mip`, key `pii-salt-v1` (per governance-real-data-review §1 and
-# data-contract §7). The literal fallback keeps the pipeline runnable on a
-# fresh workspace before the secret is provisioned; the fallback value is
-# also documented in the data-contract so rotations stay auditable.
+# PII salt. Read from the Databricks secret scope `mip`, key `pii-salt-v1`
+# (per governance-real-data-review §1 and data-contract §7). The scope/key
+# are provisioned by scripts/deploy.sh step 4d (create-if-missing, NEVER
+# rotated — rotation would change every masked identifier across refreshes).
+# 2026-06-11 audit P1-4: the old `_PII_SALT_FALLBACK` constant here was dead
+# code that implied a fallback this DLT path never had — the secret()
+# expression below fails hard when the scope is missing, which is the
+# intended fail-visible behaviour now that deploy guarantees provisioning.
 _PII_SALT_SCOPE = "mip"
 _PII_SALT_KEY = "pii-salt-v1"
-_PII_SALT_FALLBACK = "mip_pii_salt_v1"
 
 # Source share tables (full UC path).
 _SHARE_CATALOG = "cotality_mortgage_data.corelogic"
@@ -120,11 +122,11 @@ def _pii_salt_expr():  # pragma: no cover -- Databricks-runtime only
     rejects the scope/key args unless they're parsed as bare string
     literals at analyze time. The earlier ``try_cast(secret(...))``
     form defeated that check. Pass the literals directly and rely on
-    the pipeline's secret-scope preflight (scope `mip`, key
-    `pii-salt-v1`) to guarantee the secret exists at runtime. If the
-    scope / secret is ever missing, the @dlt.expect_or_fail on CLIP
-    will still surface a hard failure — there is no silent fallback
-    on the data path.
+    scripts/deploy.sh step 4d (provision pii-salt secret scope,
+    create-if-missing) to guarantee the secret exists at runtime. If
+    the scope / secret is ever missing, the @dlt.expect_or_fail on
+    CLIP will still surface a hard failure — there is no silent
+    fallback on the data path.
     """
     return F.expr(
         f"secret('{_PII_SALT_SCOPE}', '{_PII_SALT_KEY}')"

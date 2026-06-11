@@ -179,6 +179,85 @@ def _repo_root() -> Path:
         ) from exc
 
 
+# ---------------------------------------------------------------------------
+# 2026-06-11 audit P1-3 (Lakebase half): app-role grants used to live only in
+# docs/security/GRANTS.md as a manual psql runbook — a packaging bug on fresh
+# workspaces. After schema + seed, we grant the app's Postgres role the same
+# matrix GRANTS.md documents. Role discovery is defensive: depending on the
+# Databricks Apps database-binding version the provisioned role is named
+# after the app, the SP client id, or the SP numeric id — we grant to every
+# candidate that exists in pg_roles. action_audit stays append-only (REVOKE
+# UPDATE/DELETE). Missing roles are a WARNING, not a failure: on the very
+# first deploy ordering the binding may not have provisioned the role yet,
+# and the next deploy converges.
+# ---------------------------------------------------------------------------
+_APP_ROLE_GRANT_TEMPLATES = (
+    'GRANT USAGE ON SCHEMA mip_app TO {role}',
+    'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA mip_app TO {role}',
+    'REVOKE UPDATE, DELETE ON TABLE mip_app.action_audit FROM {role}',
+)
+
+
+def _candidate_app_roles() -> list[str]:
+    """Return plausible Postgres role names for the app identity."""
+    app_name = os.environ.get("MIP_APP_NAME", "mip-app")
+    candidates = [app_name]
+    try:
+        from databricks.sdk import WorkspaceClient
+
+        app = WorkspaceClient().apps.get(app_name)
+        for attr in ("service_principal_client_id", "service_principal_name"):
+            value = getattr(app, attr, None)
+            if value:
+                candidates.append(str(value))
+        numeric_id = getattr(app, "service_principal_id", None)
+        if numeric_id:
+            candidates.append(str(numeric_id))
+    except Exception as exc:  # noqa: BLE001 -- grants are best-effort here
+        print(f"[lakebase-migrate] app SP lookup skipped: {type(exc).__name__}")
+    # Preserve order, drop dups/empties.
+    seen: set[str] = set()
+    ordered = []
+    for cand in candidates:
+        if cand and cand not in seen:
+            seen.add(cand)
+            ordered.append(cand)
+    return ordered
+
+
+def _apply_app_role_grants(conn_kwargs: dict) -> None:
+    import psycopg
+    from psycopg import sql as psql
+
+    candidates = _candidate_app_roles()
+    conn = psycopg.connect(**conn_kwargs, autocommit=True)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT rolname FROM pg_roles WHERE rolname = ANY(%s)",
+                (candidates,),
+            )
+            present = [row[0] for row in cur.fetchall()]
+            if not present:
+                print(
+                    "[lakebase-migrate] WARNING: no app role found in pg_roles "
+                    f"(candidates: {candidates}); app-role grants skipped. "
+                    "Re-run the deploy (or apply docs/security/GRANTS.md "
+                    "§Lakebase) once the app's database binding has "
+                    "provisioned its role."
+                )
+                return
+            for role in present:
+                for template in _APP_ROLE_GRANT_TEMPLATES:
+                    statement = template.format(
+                        role=psql.Identifier(role).as_string(cur)
+                    )
+                    cur.execute(statement)
+                print(f"[lakebase-migrate] app-role grants applied to {role!r}")
+    finally:
+        conn.close()
+
+
 def main() -> None:
     conn_kwargs = _resolve_connection()
     repo_root = _repo_root()
@@ -195,6 +274,19 @@ def main() -> None:
     except Exception as exc:  # noqa: BLE001 -- operator-facing failure
         print(f"[lakebase-migrate] failed: {exc}", file=sys.stderr)
         sys.exit(2)
+
+    # Grants are applied after (and never instead of) schema + seed; a
+    # grant failure must not mask a successful migration, so it exits 0
+    # with a loud warning rather than failing the job.
+    try:
+        _apply_app_role_grants(conn_kwargs)
+    except Exception as exc:  # noqa: BLE001 -- best-effort, converges next run
+        print(
+            "[lakebase-migrate] WARNING: app-role grants failed "
+            f"({type(exc).__name__}: {exc}); schema+seed are applied. "
+            "See docs/security/GRANTS.md §Lakebase.",
+            file=sys.stderr,
+        )
 
 
 if __name__ == "__main__":

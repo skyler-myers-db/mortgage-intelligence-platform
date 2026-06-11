@@ -4,11 +4,26 @@
 > Contains workspace object names, grant SQL, and provider/share access
 > assumptions intended for implementation operators only.
 
+**Automation status (2026-06-11, audit P1-3).** This document is now the
+audit-readable MATRIX, no longer a required manual runbook:
+
+* §catalog/§gold/§ref grants to the app service principal are applied
+  idempotently by `scripts/deploy.sh` **step 4c** (resolves the SP client
+  id from `databricks apps get`, executes via the deploy warehouse, fails
+  the deploy loudly when the deploying identity lacks GRANT authority).
+* §Lakebase app-role grants are applied by `jobs/lakebase_migrate.py`
+  after schema + seed (role discovered from `pg_roles`; `action_audit`
+  stays append-only via REVOKE; missing role warns and converges on the
+  next deploy).
+* §provider/§silver (ETL identity) grants still require a metastore admin
+  when the deploying identity does not own the share — the deploy step's
+  failure message points here.
+
 **Audience.** The Entrada/Databricks SE (or customer workspace admin) who
 runs `./scripts/deploy.sh -t dev|prod` against a fresh customer workspace.
 That script wraps the Databricks bundle resource deploy plus app promotion and
-population jobs. This file is the runbook — every SQL block below is
-copy-paste-able and every click path is linear.
+population jobs. Every SQL block below remains copy-paste-able for manual
+recovery and review.
 
 **Precondition.** The bundle has been deployed once (`databricks bundle
 deploy -t dev`) so the `mip-app` resource, the SQL warehouse, the
