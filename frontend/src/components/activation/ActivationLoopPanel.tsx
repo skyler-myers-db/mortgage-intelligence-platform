@@ -3,6 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { api } from '../../lib/api';
 import { queryKeys } from '../../lib/queryKeys';
 import { useWarmingUpRetry } from '../../lib/useWarmingUpRetry';
+import { formatTimestamp } from '../../lib/time';
 import type {
   ActivationDestination,
   ActivationDestinationStatus,
@@ -33,9 +34,9 @@ function statusLabel(status: string): string {
 
 function formatWhen(value?: string | null): string {
   if (!value) return 'No timestamp';
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return value;
-  return `${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} ${d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}`;
+  // lib/time parses naive-UTC wire strings correctly and attaches an
+  // explicit timezone name (2026-06-11 audit fix).
+  return formatTimestamp(value);
 }
 
 export function ActivationLoopPanel({

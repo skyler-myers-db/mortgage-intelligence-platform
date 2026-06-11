@@ -5,6 +5,7 @@ import { Chip } from '../Primitives';
 import { Icon } from '../Icon';
 import { useApp } from '../AppContext';
 import { assetHrefForSource, descriptorFor, DRAWER_SOURCES } from '../../lib/drawerSources';
+import { formatTimestamp } from '../../lib/time';
 import { Skeleton } from '../ui/Skeleton';
 
 function statusLabel(status: DataEstateStatus): string {
@@ -211,7 +212,7 @@ function AssetDetail({
         </div>
         <div className="data-estate__detail-item">
           <span className="data-estate__detail-label">Freshness</span>
-          <span>{asset.last_updated ?? 'Freshness unavailable'}</span>
+          <span>{asset.last_updated ? formatTimestamp(asset.last_updated) : 'Freshness unavailable'}</span>
         </div>
         <div className="data-estate__detail-item">
           <span className="data-estate__detail-label">Governed object</span>

@@ -7,6 +7,7 @@ import { Skeleton } from '../components/ui/Skeleton';
 import { api, ApiError } from '../lib/api';
 import { assetHrefForSource } from '../lib/drawerSources';
 import { queryKeys } from '../lib/queryKeys';
+import { formatTimestamp } from '../lib/time';
 import type { AssetFreshness, AssetMetadataResponse } from '../types';
 
 function formatNumber(value: number | null | undefined): string {
@@ -23,14 +24,9 @@ function freshnessCopy(freshness: AssetFreshness): string {
 
 export function formatDateTimeShort(value?: string | null): string {
   if (!value) return 'Unavailable';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  });
+  // lib/time parses naive-UTC wire strings correctly and attaches an
+  // explicit timezone name (2026-06-11 audit fix).
+  return formatTimestamp(value);
 }
 
 function statusVariant(status: AssetMetadataResponse['status']): 'success' | 'warning' | 'neutral' {
@@ -124,7 +120,7 @@ export default function AssetRoute() {
                 <MetricCard label="Rows" value={formatNumber(asset.row_count)} detail={asset.row_count_source} />
                 <MetricCard label="Files" value={formatNumber(asset.num_files)} detail="Delta metadata" />
                 <MetricCard label="Size" value={asset.size_label ?? 'Unavailable'} detail="storage bytes" />
-                <MetricCard label="Freshness" value={freshnessCopy(asset.freshness)} detail={asset.last_updated ?? asset.delta_last_modified ?? 'No timestamp'} />
+                <MetricCard label="Freshness" value={freshnessCopy(asset.freshness)} detail={formatDateTimeShort(asset.last_updated ?? asset.delta_last_modified)} />
                 <MetricCard label="Catalog" value={asset.catalog} detail={`${asset.schema_name}.${asset.object_name}`} />
                 <MetricCard label="Generated" value={formatDateTimeShort(asset.generated_at)} detail="metadata read time" />
               </div>
