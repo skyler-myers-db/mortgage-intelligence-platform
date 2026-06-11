@@ -80,9 +80,18 @@ DO UPDATE SET
     updated_at = now();
 
 -- Approvals (5 sample rows) -------------------------------------------
--- Synthetic borrowers (B-48291 / B-48294 / B-48295) are the canonical
--- trio pinned by the product narrative; the two extra ids keep the
--- approvals list visually interesting without inventing PII.
+-- 2026-06-11 audit P1-5: these are REAL mip.gold.borrower_360 borrower
+-- IDs (CLIP-hash derived, masked, stable across refreshes while the
+-- source CLIPs remain in the Cotality share), selected live on
+-- 2026-06-11 so the canonical narrative trio joins to real dossiers and
+-- every stat in the rationale matches the proof drawer. The previous
+-- 5-digit placeholders (B-48291..B-48295) violated the B-[0-9A-Z]{13}
+-- contract, joined to nothing, and skewed approval-rate metrics; the
+-- schema.sql migration 2026_06_11_narrative_seed_real_ids deletes them
+-- and adds a CHECK so malformed IDs can never seed again. If a future
+-- share refresh drops one of these CLIPs, re-select with
+-- tools/select_narrative_borrowers.sql and update BOTH the IDs and the
+-- rationale stats together.
 INSERT INTO mip_app.approvals (
     approval_id, campaign_id, borrower_id, offer_code, action, actor_email, rationale, decided_at
 )
@@ -90,51 +99,51 @@ VALUES
     (
         '44444444-4444-4444-8444-444444444441',
         '11111111-1111-4111-8111-111111111111',
-        'B-48291',
+        'B-0CPWBTJMAPFY2',
         'refi',
         'approve',
         'skyler@entrada.ai',
-        'Rate spread +125 bps, in-the-money per fn_in_the_money; evidence chips all cited.',
+        'Rate spread +401 bps at 26% equity — in-the-money per fn_in_the_money (IL, campaign states); evidence chips all cited.',
         now() - interval '4 days'
     ),
     (
         '44444444-4444-4444-8444-444444444442',
         '22222222-2222-4222-8222-222222222222',
-        'B-48294',
+        'B-1IB0UGBTFYM20',
         'cash_out',
         'approve',
         'skyler@entrada.ai',
-        'Equity 42% clears cash-out threshold (25%), no refi incentive — cash-out is the fit.',
+        'Equity 100% (free-and-clear, TX) clears the 25% cash-out floor; +33 bps spread is below the refi bar — cash-out is the fit per fn_next_best_offer.',
         now() - interval '2 days'
     ),
     (
         '44444444-4444-4444-8444-444444444443',
         '33333333-3333-4333-8333-333333333333',
-        'B-48295',
-        'heloc',
+        'B-102FL7THC6Q3L',
+        'refi_plus_heloc',
         'approve',
         'skyler@entrada.ai',
-        'Permit on file + equity 39% clears HELOC bar; refi rate below threshold.',
+        'Equity 91% clears the 35% HELOC floor with +379 bps refi incentive (IL) — combined Refinance + HELOC per fn_next_best_offer; permit feed pending, equity-led lane.',
         now() - interval '1 day'
     ),
     (
         '44444444-4444-4444-8444-444444444444',
         '11111111-1111-4111-8111-111111111111',
-        'B-48292',
+        'B-1BCZXFQYCX715',
         'refi',
         'hold',
         'skyler@entrada.ai',
-        'Marginal spread — re-review after next FRED publish.',
+        'Marginal +87 bps spread at 18% equity (IL) — just over the 75 bps floor; re-review after next FRED publish.',
         now() - interval '12 hours'
     ),
     (
         '44444444-4444-4444-8444-444444444445',
         '22222222-2222-4222-8222-222222222222',
-        'B-48293',
+        'B-1VU4FO4XBQPC4',
         'cash_out',
         'reject',
         'skyler@entrada.ai',
-        'Owner Link shows multi-property investor behavior; routed to investor desk.',
+        'Owner Link resolves 3,564 related properties (TX) — institutional multi-property profile; routed to investor desk instead of consumer cash-out outreach.',
         now() - interval '6 hours'
     )
 ON CONFLICT (approval_id) DO NOTHING;

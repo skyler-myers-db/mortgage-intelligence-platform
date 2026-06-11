@@ -562,3 +562,49 @@ VALUES (
     'Lakebase DR backup contract: schema_migrations and audit archive run ledger'
 )
 ON CONFLICT (version) DO NOTHING;
+
+-- ---------------------------------------------------------------------
+-- 2026-06-11 audit P1-5: narrative seed used legacy 5-digit borrower IDs
+-- (B-48291..B-48295) that violate the B-[0-9A-Z]{13} contract and join
+-- to no gold.borrower_360 row — orphaning the "three high-value borrower
+-- examples" the Module 0 spec requires and skewing approval-rate
+-- metrics. Delete the malformed seed rows (the re-run of
+-- seed_campaigns.sql re-inserts the same approval_ids with REAL gold
+-- IDs), then enforce the format so malformed IDs can never seed again.
+-- The borrower-pattern guard makes the DELETE a no-op on every run after
+-- the new seed lands (same approval_ids, but 13-char borrower IDs).
+-- ---------------------------------------------------------------------
+DELETE FROM mip_app.approvals
+WHERE borrower_id ~ '^B-[0-9]{5}$';
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'approvals_borrower_id_format_chk'
+          AND conrelid = 'mip_app.approvals'::regclass
+    ) THEN
+        -- NOT VALID: enforce the format on every NEW write immediately,
+        -- without letting one unexpected legacy row fail the whole
+        -- migrate job (deploy step 4b). The block below upgrades to a
+        -- fully-validated constraint once the table is clean.
+        ALTER TABLE mip_app.approvals
+            ADD CONSTRAINT approvals_borrower_id_format_chk
+            CHECK (borrower_id ~ '^B-[0-9A-Z]{13}$') NOT VALID;
+    END IF;
+END $$;
+
+DO $$
+BEGIN
+    ALTER TABLE mip_app.approvals
+        VALIDATE CONSTRAINT approvals_borrower_id_format_chk;
+EXCEPTION WHEN OTHERS THEN
+    RAISE NOTICE 'approvals_borrower_id_format_chk left NOT VALID (new writes still enforced): %', SQLERRM;
+END $$;
+
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_06_11_narrative_seed_real_ids',
+    'Audit P1-5: purge legacy 5-digit seed approvals; CHECK borrower_id ~ ^B-[0-9A-Z]{13}$; seed re-inserts canonical trio with real gold borrower_360 IDs'
+)
+ON CONFLICT (version) DO NOTHING;
