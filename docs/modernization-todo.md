@@ -360,3 +360,39 @@ Decisions recorded:
 - Legacy `module0.spec.ts` still pins fixture-era B-48291 values and
   cannot pass against real data (pre-existing); superseded by the
   real-data nightly spec — post-Summit cleanup candidate.
+
+### 2026-06-11 audit-remediation deployed evidence (signoff ritual)
+
+- Deploy: `./scripts/deploy.sh -t dev --no-confirm` — full 15-step pipeline.
+  Two real failures found AND fixed by the run itself: (1) `databricks
+  secrets list-scopes -o json` emits a bare array on current CLI (parser now
+  accepts both shapes); (2) the typeless CTAS column-COMMENT list is a
+  PARSE_SYNTAX_ERROR on DBSQL — first live gold run failed exactly as the
+  data-modeler agent's risk note warned; rewritten to bare CTAS (CLUSTER BY
+  + TBLPROPERTIES retained) + post-CTAS `COMMENT ON COLUMN` statements (269
+  across 13 files), proven by `mip_refresh_scores` TERMINATED SUCCESS.
+- New deploy steps proven live: Lakebase migrate applied schema + real-ID
+  seed + app-role grants (`pg_roles` discovery hit the SP client-id role);
+  UC grants step issued all three GRANTs through the warehouse;
+  pii-salt step short-circuited on the existing secret ("never rotate");
+  MIP_COTALITY_ID_MASK_SECRET preflight warning fired (expected: sandbox).
+- P2-8 proven by DESCRIBE after refresh: `property_owner_bridge` clustering
+  ["owner_link_id"], borrower_360 ["state","clip"], autoOptimize
+  TBLPROPERTIES present, 61 commented columns on borrower_360.
+- Final smoke: 12/12 ok + PASS against the deployed app.
+- Verification battery (live, authenticated):
+  - `/api/v1/leads` ×3: 2175ms → 144ms → 159ms (audit baseline: 3.6-5.4s on
+    EVERY load); boot warm + refresh-ahead active.
+  - P1-1 proof sweep: 25 live borrowers, 0 integrity gaps, 0 non-200s.
+  - Seed trio resolves as real dossiers: B-0CPWBTJMAPFY2 (IL, 70),
+    B-1IB0UGBTFYM20 (TX, 69), B-102FL7THC6Q3L (IL, 88).
+  - Fair-lending live: "average loan age in Illinois" → source=genie
+    (answered); "Average borrower age" → source=refused.
+  - Data-estate with Console rail open: worst label 3 word-boundary lines @
+    108px (was 6 mid-word lines @ 65px). A second live probe then caught the
+    "demo synthetic" governance chip overflowing floor-width lanes by
+    68-81px — fixed (meta wraps under the name; chip never ellipsized) and
+    re-proven: zero overflow elements, zero chip overlaps; screenshot
+    inspected.
+  - Home "Ask Genie" CTA: SPA navigation, 0 full reloads.
+  - Lead queue: 7 `th[aria-sort]` columnheaders; zero console errors.
