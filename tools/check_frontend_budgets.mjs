@@ -9,37 +9,44 @@ const distDir = path.join(repoRoot, 'frontend', 'dist');
 const assetsDir = path.join(distDir, 'assets');
 
 const KiB = 1024;
+// ---------------------------------------------------------------------------
+// Budget headroom policy (2026-06-10 re-baseline)
+//
+// Every gate is the CURRENT MEASURED ACTUAL plus ~5% headroom, rounded up to
+// a whole KiB. ~5% absorbs hash-length jitter, lazy-boundary overhead, and
+// the ~0.5 KiB Linux-vs-macOS zlib variance on gzip dimensions, while still
+// failing CI on any real regression.
+//
+// Rules for changing a number here:
+//   1. A bump must name the feature that needs it and cite the new measured
+//      actuals from `npm run budget` — never bump just to turn CI green.
+//      (The prior comment-per-bump style ratcheted totalJsBytes to 0.03 KiB
+//      of headroom, which then tripped on a 0.4 KiB accessibility fix.)
+//   2. When a slice SHRINKS the bundle, ratchet the gate DOWN to the new
+//      actual + ~5% in the same commit so the win is locked in.
+//   3. fontAssetCount stays exact — a 15th font file is always a mistake
+//      (the Geist/Geist Mono subset list is fixed).
+//
+// Actuals at re-baseline (2026-06-10, post analytics decomposition + a11y
+// polish + precompression slice): initial JS 256.60 / gzip 79.03; initial
+// CSS 101.22 / gzip 18.13; total JS 832.42 / gzip 274.22 across 36 chunks;
+// largest lazy chunk (shared mortgage components + drawerSources) 98.40 /
+// gzip 32.06; fonts 14 files / 215.42 KiB. Build-time precompressed .br/.gz
+// siblings are excluded by the .endsWith() filters below — they are strictly
+// smaller duplicates served via content negotiation (see
+// tools/precompress_assets.mjs + backend/services/static_assets.py).
+// ---------------------------------------------------------------------------
 const budgets = {
-  initialJsBytes: 300 * KiB,
-  initialJsGzipBytes: 90 * KiB,
-  // The May 2026 explainability tranches added a first-class glossary,
-  // borrower proof drawer, and governed asset detail route. Keep the increase
-  // bounded while preserving initial JS, gzip, largest-route, and font gates.
-  // The admin operations center now has phone-width shell/admin layout rules;
-  // Vite emits route CSS as one initial stylesheet, so keep the added allowance
-  // narrow and leave the JS, lazy-route, and font gates unchanged.
-  initialCssBytes: 102 * KiB,
-  initialCssGzipBytes: 18.25 * KiB,
-  // Route-level decomposition introduces a few KiB of lazy-module boundary
-  // overhead while leaving initial load and largest-route gates unchanged.
-  // Keep this aggregate cap tight enough to catch accidental asset growth
-  // without forcing large components back into single-file maintenance debt.
-  // The governed lender overlay adds cross-route URL propagation and public-safe
-  // lender filter helpers. Keep the raw aggregate allowance bounded while
-  // preserving the stricter gzip, initial-load, lazy-route, CSS, and font gates.
-  // Admin-only data operations add a governed refresh control surface while
-  // keeping initial load, largest lazy route, CSS, and font budgets unchanged.
-  // The activation outbox adds a governed post-approval writeback loop; keep the
-  // increase bounded while preserving initial-load and largest-route gates.
-  totalJsBytes: 832 * KiB,
-  // Linux CI zlib output runs about 0.5 KiB larger than macOS for the same
-  // Vite assets. Keep a narrow margin so budget enforcement is stable across
-  // runners without weakening initial-load or largest-route gates.
-  totalJsGzipBytes: 276 * KiB,
-  maxLazyJsBytes: 160 * KiB,
-  maxLazyJsGzipBytes: 60 * KiB,
-  fontAssetCount: 14,
-  fontBytes: 230 * KiB,
+  initialJsBytes: 270 * KiB, // actual 256.60 (was 300 -- tightened)
+  initialJsGzipBytes: 83 * KiB, // actual 79.03 (was 90 -- tightened)
+  initialCssBytes: 107 * KiB, // actual 101.22 (was 102 -- real headroom)
+  initialCssGzipBytes: 19.1 * KiB, // actual 18.13 (was 18.25 -- real headroom)
+  totalJsBytes: 875 * KiB, // actual 832.42 (was 832 with 0.03 KiB slack)
+  totalJsGzipBytes: 288 * KiB, // actual 274.22 (was 276)
+  maxLazyJsBytes: 104 * KiB, // actual 98.40 (was 160 -- tightened)
+  maxLazyJsGzipBytes: 34 * KiB, // actual 32.06 (was 60 -- tightened)
+  fontAssetCount: 14, // exact by policy
+  fontBytes: 227 * KiB, // actual 215.42 (was 230 -- tightened)
 };
 
 function bytes(n) {
