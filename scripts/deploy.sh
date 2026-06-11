@@ -226,6 +226,34 @@ fi
 # SQL renderer, Python jobs, and Genie table bindings pointed at one catalog.
 export MIP_DEFAULT_CATALOG="${MIP_DEFAULT_CATALOG:-mip}"
 
+# Admin-allowlist visibility check (2026-06-11, observed live). Databricks
+# Apps deployment env_vars are a FULL REPLACEMENT, `admin_emails` defaults to
+# "" in code (no personal identities in source), and the deploy payload
+# deliberately does NOT bootstrap the deploying operator into admin (pinned
+# by tests/unit/test_app_deploy_payload.py). So a deploy without
+# MIP_ADMIN_EMAILS in the environment / .env.local ships an app where EVERY
+# admin surface — asset detail, the audit feed, admin ops — returns 403 for
+# everyone until the `mip-admin` workspace group exists. That is a valid
+# group-based posture, but it must never happen silently. Warn, don't block.
+_ADMIN_EMAILS_RESOLVED="${MIP_ADMIN_EMAILS:-$("$PYTHON" - <<'PYEOF'
+from pathlib import Path
+try:
+    from dotenv import dotenv_values
+    print((dotenv_values(Path(".env.local")).get("MIP_ADMIN_EMAILS") or "").strip())
+except Exception:
+    print("")
+PYEOF
+)}"
+if [[ -z "$_ADMIN_EMAILS_RESOLVED" ]]; then
+  echo "${YLW}[deploy] WARNING: MIP_ADMIN_EMAILS is not set (env or .env.local).${RST}" >&2
+  echo "${YLW}  Admin surfaces (asset detail, audit feed, admin ops) will 403 for every${RST}" >&2
+  echo "${YLW}  user unless they are in the '\${MIP_ADMIN_GROUP_NAME:-mip-admin}' workspace group.${RST}" >&2
+  echo "${YLW}  To grant explicit admin: add MIP_ADMIN_EMAILS=<operator@email> to .env.local${RST}" >&2
+  echo "${YLW}  (or export it for this run) and redeploy.${RST}" >&2
+else
+  echo "  admin allowlist: configured (MIP_ADMIN_EMAILS set)"
+fi
+
 # -----------------------------------------------------------------------------
 # Step 0a: ensure the bundle has a real Genie space id before app resource apply
 # -----------------------------------------------------------------------------
