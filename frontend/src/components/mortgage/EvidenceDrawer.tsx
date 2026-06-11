@@ -7,6 +7,7 @@ import { api } from '../../lib/api';
 import { assetDetailHref, assetHrefForSource } from '../../lib/drawerSources';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { queryKeys } from '../../lib/queryKeys';
+import { formatTimestamp } from '../../lib/time';
 import type { AssetFreshness, AssetMetadataResponse } from '../../types';
 
 /**
@@ -22,17 +23,32 @@ function formatNumber(value: number | null | undefined): string {
   return value.toLocaleString();
 }
 
-function freshnessLabel(freshness: AssetFreshness | undefined): string {
-  if (freshness === 'fresh') return 'Fresh';
-  if (freshness === 'aging') return 'Aging';
-  if (freshness === 'stale') return 'Stale';
+/**
+ * Freshness chip state. 'loading'/'error' are VIEW states (governed
+ * metadata request in flight / failed), distinct from "the source has no
+ * refresh timestamp" — conflating them made a 403 on the metadata read
+ * render as "Freshness Unavailable", which reads like a data problem
+ * (observed 2026-06-11 during the admin-allowlist incident).
+ */
+type FreshnessView = AssetFreshness | 'loading' | 'error' | undefined;
+
+function freshnessLabel(view: FreshnessView): string {
+  if (view === 'loading') return 'Checking freshness…';
+  if (view === 'error') return 'Metadata not loaded';
+  if (view === 'fresh') return 'Fresh';
+  if (view === 'aging') return 'Aging';
+  if (view === 'stale') return 'Stale';
   return 'Freshness unavailable';
 }
 
-function freshnessHelp(freshness: AssetFreshness | undefined): string {
-  if (freshness === 'fresh') return 'Updated within 7 days.';
-  if (freshness === 'aging') return 'Updated 7-30 days ago.';
-  if (freshness === 'stale') return 'Updated more than 30 days ago.';
+function freshnessHelp(view: FreshnessView): string {
+  if (view === 'loading') return 'Reading governed Unity Catalog metadata.';
+  if (view === 'error') {
+    return 'Governed freshness could not be read for this view — see the notice below. This does not mean the source is stale.';
+  }
+  if (view === 'fresh') return 'Updated within 7 days.';
+  if (view === 'aging') return 'Updated 7-30 days ago.';
+  if (view === 'stale') return 'Updated more than 30 days ago.';
   return 'No backend refresh timestamp is available for this source.';
 }
 
@@ -42,7 +58,12 @@ function metadataStatRows(metadata?: AssetMetadataResponse) {
     ['Rows', formatNumber(metadata.row_count)],
     ['Files', formatNumber(metadata.num_files)],
     ['Size', metadata.size_label ?? 'Unavailable'],
-    ['Modified', metadata.delta_last_modified ?? 'Unavailable'],
+    [
+      'Modified',
+      metadata.delta_last_modified
+        ? formatTimestamp(metadata.delta_last_modified)
+        : 'Unavailable',
+    ],
   ];
 }
 
@@ -59,6 +80,15 @@ export function EvidenceDrawer() {
     retry: false,
   });
   const metadata = metadataQuery.data;
+  // View-state for the freshness chip: only mapped assets ever issue the
+  // governed metadata read, so loading/error states are scoped to them.
+  const freshnessView: FreshnessView = d?.assetKey
+    ? metadataQuery.isError
+      ? 'error'
+      : metadataQuery.isPending
+        ? 'loading'
+        : metadata?.freshness
+    : metadata?.freshness;
   const assetHref = d?.assetKey ? assetDetailHref(d.assetKey) : null;
   useFocusTrap({
     open,
@@ -100,12 +130,12 @@ export function EvidenceDrawer() {
               <div className="source-summary">
                 <div className="source-summary__top">
                   <span className={`source-freshness source-freshness--${metadata?.freshness ?? 'unavailable'}`}>
-                    {freshnessLabel(metadata?.freshness)}
+                    {freshnessLabel(freshnessView)}
                   </span>
                   {metadata?.status && <span className="chip chip--neutral">{metadata.status}</span>}
                 </div>
                 <p className="body flush">{d.description}</p>
-                <p className="muted fs-12 flush">{freshnessHelp(metadata?.freshness)}</p>
+                <p className="muted fs-12 flush">{freshnessHelp(freshnessView)}</p>
               </div>
 
               {metadataQuery.isFetching && (
@@ -168,7 +198,7 @@ export function EvidenceDrawer() {
                         <div key={`${n.direction}-${n.asset_path}`} className="lineage-node">
                           <div className="lineage-node__label">{n.direction}</div>
                           <div className="lineage-node__name">{n.label}</div>
-                          {n.event_time && <div className="lineage-node__meta">{n.event_time}</div>}
+                          {n.event_time && <div className="lineage-node__meta">{formatTimestamp(n.event_time, { withYear: false })}</div>}
                         </div>
                       );
                     }
@@ -203,10 +233,14 @@ export function EvidenceDrawer() {
                 </>
               )}
 
+              {/* Disclosure, not an ACL denial: this card describes what the
+                  proof view deliberately omits for EVERY viewer. The prior
+                  heading ("Not exposed here") read like a permissions error
+                  to workspace admins (operator report, 2026-06-11). */}
               <div className="source-card source-card--subtle">
-                <div className="eyebrow mb-1">Not exposed here</div>
+                <div className="eyebrow mb-1">Privacy by design</div>
                 <p className="muted flush">
-                  {d.notExposed ?? 'Raw identities, owner names, street addresses, credentials, grants, storage locations, and raw source paths stay behind governed Unity Catalog boundaries.'}
+                  {d.notExposed ?? 'By design — and regardless of your workspace permissions — this proof view never displays raw identities, owner names, street addresses, credentials, grants, storage locations, or raw source paths. They stay behind governed Unity Catalog boundaries.'}
                 </p>
               </div>
 
@@ -237,7 +271,7 @@ export function EvidenceDrawer() {
               )}
               {metadata?.last_updated && (
                 <div className="drawer__updated">
-                  Business refresh: {metadata.last_updated}
+                  Business refresh: {formatTimestamp(metadata.last_updated)}
                 </div>
               )}
             </>

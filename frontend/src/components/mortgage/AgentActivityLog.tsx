@@ -1,6 +1,7 @@
 import { Icon, type IconName } from '../Icon';
 import { api, type AuditEventRow } from '../../lib/api';
 import { useWarmingUpRetry } from '../../lib/useWarmingUpRetry';
+import { formatTimeOfDay } from '../../lib/time';
 import { WarmingUpBlock } from '../ui/WarmingUpBlock';
 import { useOptionalHealth } from '../HealthProvider';
 import { queryKeys } from '../../lib/queryKeys';
@@ -42,13 +43,9 @@ function classify(action: string, entityType: string): { icon: IconName; color: 
 }
 
 function formatTime(iso: string): string {
-  try {
-    const d = new Date(iso);
-    if (!Number.isFinite(d.getTime())) return iso;
-    return d.toLocaleTimeString('en-US', { hour12: false });
-  } catch {
-    return iso;
-  }
+  // Dense 24h clock WITH an explicit timezone name; parses naive-UTC wire
+  // strings as UTC instead of viewer-local (2026-06-11 audit fix).
+  return formatTimeOfDay(iso);
 }
 
 /**

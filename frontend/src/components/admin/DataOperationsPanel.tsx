@@ -5,6 +5,7 @@ import { Icon } from '../Icon';
 import { api } from '../../lib/api';
 import { DEFAULT_QUERY_STALE_MS } from '../../lib/queryClient';
 import { queryKeys } from '../../lib/queryKeys';
+import { formatTimestamp, parseBackendTimestamp } from '../../lib/time';
 
 type OperationJobKey = 'fred_rates' | 'silver_refresh' | 'gold_refresh' | 'lifecycle_sync';
 
@@ -101,8 +102,8 @@ function formatOperationRun(run: OperationRun | null): string {
 
 function operationDuration(run: OperationRun | null): string {
   if (!run?.started_at || !run.ended_at) return 'Duration unavailable';
-  const started = new Date(run.started_at).getTime();
-  const ended = new Date(run.ended_at).getTime();
+  const started = parseBackendTimestamp(run.started_at)?.getTime() ?? Number.NaN;
+  const ended = parseBackendTimestamp(run.ended_at)?.getTime() ?? Number.NaN;
   if (!Number.isFinite(started) || !Number.isFinite(ended) || ended < started) {
     return 'Duration unavailable';
   }
@@ -127,15 +128,8 @@ function formatCooldown(seconds: number): string {
   return remainder ? `${hours}h ${remainder}m` : `${hours}h`;
 }
 
-function formatTimestamp(iso: string): string {
-  try {
-    const d = new Date(iso);
-    if (Number.isNaN(d.getTime())) return iso;
-    return `${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} ${d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}`;
-  } catch {
-    return iso;
-  }
-}
+// Timestamp rendering goes through lib/time (parses naive-UTC wire strings
+// correctly and always attaches a timezone name) — 2026-06-11 audit fix.
 
 function sourceFreshnessStats(sources: SourceSummary[] | undefined) {
   const rows = sources ?? [];
@@ -145,7 +139,7 @@ function sourceFreshnessStats(sources: SourceSummary[] | undefined) {
   const dated = liveRows
     .map((source) => ({
       ...source,
-      ts: source.last_updated ? new Date(source.last_updated).getTime() : Number.NaN,
+      ts: parseBackendTimestamp(source.last_updated)?.getTime() ?? Number.NaN,
     }))
     .filter((source) => Number.isFinite(source.ts))
     .sort((a, b) => b.ts - a.ts);

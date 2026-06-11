@@ -1490,7 +1490,12 @@ kbd {
 .lineage-node__meta { font-size: var(--fs-11); color: var(--text-3); margin-top: var(--sp-1); }
 .lineage-node--signal {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, auto);
+  /* fit-content(50%): the value column only takes the width it needs and
+     wraps past half the row, so a long value ("applied during gold refresh")
+     can never squeeze the label/source column into ugly mid-word wraps or
+     read as overlapping it (operator report 2026-06-11, "Configured tenant
+     lens" signal row). */
+  grid-template-columns: minmax(0, 1fr) fit-content(50%);
   align-items: start;
   gap: var(--sp-3);
 }

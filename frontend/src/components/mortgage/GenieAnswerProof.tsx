@@ -1,5 +1,6 @@
 import type { GenieAnswer as GenieAnswerShape } from '../../types';
 import { drawerForAsset } from '../../lib/drawerSources';
+import { formatTimestamp } from '../../lib/time';
 import type { DrawerSource } from '../AppContext';
 import { Chip, EvidenceChip } from '../Primitives';
 import { humanizeKey } from './GenieAnswer.logic';
@@ -57,7 +58,7 @@ export function GenieProofPanel({
           {proof.data_freshness.map((f) => (
             <div key={`${f.asset}-${f.refreshed_at ?? f.status}`} className="genie-proof__line">
               <span>{f.asset}</span>
-              <span>{f.refreshed_at ?? f.status}</span>
+              <span>{f.refreshed_at ? formatTimestamp(f.refreshed_at) : f.status}</span>
             </div>
           ))}
         </div>

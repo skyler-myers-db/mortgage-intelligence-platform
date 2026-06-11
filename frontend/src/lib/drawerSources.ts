@@ -170,6 +170,12 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
   population: {
     title: 'Marketable population',
     short: 'Marketable population',
+    // Governed anchor (2026-06-11): the marketable-population KPI is
+    // COUNT(*) over mip.gold.borrower_360, so this drawer reads that
+    // asset's governed metadata. Without an anchor the hero KPI's drawer
+    // showed "Freshness unavailable", implying a data gap that wasn't real.
+    assetKey: 'borrower_360',
+    assetPath: 'mip.gold.borrower_360',
     description:
       'Deed and mortgage records joined to voluntary liens and the Owner Link graph, filtered by the lender configuration.',
     lineage: [
@@ -464,6 +470,11 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
   itm: {
     title: 'In-the-Money logic',
     short: 'In-the-Money logic',
+    // Governed anchor (2026-06-11): the high-intent KPI sums the
+    // in_the_money column on mip.gold.borrower_360 — same rationale as
+    // the population entry above.
+    assetKey: 'borrower_360',
+    assetPath: 'mip.gold.borrower_360',
     description:
       'Flags a borrower when lien rate is at least 75 bps above par refi rate and equity is at least 15%. Deterministic UC SQL function, parity-pinned to backend/services/scoring.py.',
     lineage: [

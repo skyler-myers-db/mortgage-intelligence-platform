@@ -54,7 +54,10 @@ describe('layout containment contracts', () => {
   it('lets evidence drawer signal rows wrap long source and value text', () => {
     const css = designCss();
 
-    expect(css).toMatch(/\.lineage-node--signal\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\) minmax\(0,\s*auto\);/s);
+    // fit-content(50%) caps the value column so a long value can never
+    // squeeze the label/source column into mid-word wraps or visual
+    // collision (operator report 2026-06-11, "Configured tenant lens" row).
+    expect(css).toMatch(/\.lineage-node--signal\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\) fit-content\(50%\);/s);
     expect(css).toMatch(/\.lineage-node__name\s*\{[^}]*overflow-wrap:\s*anywhere;/s);
     expect(css).toMatch(/\.lineage-node__value\s*\{[^}]*overflow-wrap:\s*anywhere;/s);
   });
