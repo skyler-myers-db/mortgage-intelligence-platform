@@ -43,8 +43,13 @@ const budgets = {
   // palette (.cmdk*), portal evidence hover-card (.evidence-hovercard*),
   // sleek one-time KPI entrance (.kpi__value--enter / .spark__line--draw),
   // and the campaign ROI projector (.roi-projector*) — ~7 KiB of feature CSS.
-  initialCssBytes: 112 * KiB, // actual 108.28 (was 107 / 101.22 pre-tranche)
-  initialCssGzipBytes: 20 * KiB, // actual 19.21 (was 19.1 / 18.13 pre-tranche)
+  // Bumped 2026-06-12 for the final Buyer-Wow epic (funnel Sankey,
+  // morning briefing .briefing*, + the in-flight map/narrative/follow-up
+  // tranches). Sankey + briefing measured at CSS ~110.5 / gzip ~19.75;
+  // headroom raised so the remaining same-epic CSS features don't trip the
+  // gate mid-stream. Ratchet back down after the epic settles.
+  initialCssBytes: 116 * KiB, // actual ~110.5 (Sankey + briefing)
+  initialCssGzipBytes: 21 * KiB, // actual ~19.75 (was 20)
   totalJsBytes: 875 * KiB, // actual 832.42 (was 832 with 0.03 KiB slack)
   totalJsGzipBytes: 288 * KiB, // actual 274.22 (was 276)
   maxLazyJsBytes: 104 * KiB, // actual 98.40 (was 160 -- tightened)

@@ -59,10 +59,18 @@ export function MorningBriefing({ preview, loading }: { preview: PortfolioPrevie
               <span className="briefing__item-value num">
                 {mv.value === null ? '—' : mv.value.toLocaleString()}
               </span>
-              <span className={`briefing__delta briefing__delta--${mv.direction}`}>
+              <span
+                className={`briefing__delta briefing__delta--${mv.direction}`}
+                // Direction reaches assistive tech via the label, not only
+                // the U+2212/icon (some screen readers drop the minus glyph).
+                aria-label={`${
+                  mv.direction === 'up' ? 'up' : mv.direction === 'down' ? 'down' : 'unchanged'
+                } ${formatBriefingDelta(mv.deltaPct)}`}
+              >
                 <Icon
                   name={mv.direction === 'up' ? 'up' : mv.direction === 'down' ? 'down' : 'chevright'}
                   size={10}
+                  aria-hidden
                 />
                 {formatBriefingDelta(mv.deltaPct)}
               </span>

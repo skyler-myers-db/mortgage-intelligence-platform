@@ -33,6 +33,19 @@ describe('buildBriefing', () => {
     expect(buildBriefing(preview({ day_zero: true })).available).toBe(false);
     expect(buildBriefing(null).available).toBe(false);
     expect(buildBriefing(undefined).headline).toContain('First snapshot');
+    // The gate is presence-of-'live', not absence-of-'empty': an undefined
+    // trend_status must also be treated as pending.
+    expect(buildBriefing(preview({ trend_status: undefined as never })).available).toBe(false);
+  });
+
+  it('keeps a metric whose trend is absent (defaults to flat, no fake delta)', () => {
+    const p = preview();
+    delete p.trends!.top_tier_opportunities; // backend-shape drift: missing trend
+    const b = buildBriefing(p);
+    const tt = b.movements.find((m) => m.key === 'top_tier_opportunities')!;
+    expect(tt.value).toBe(3_878); // value still shown
+    expect(tt.direction).toBe('flat'); // no trend → flat
+    expect(tt.deltaPct).toBeNull(); // not a fabricated 0
   });
 
   it('summarizes the day with the biggest mover in the headline', () => {

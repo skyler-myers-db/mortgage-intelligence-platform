@@ -35,7 +35,7 @@ export interface Briefing {
 
 const BRIEFING_METRICS: ReadonlyArray<{ key: string; label: string; pick: (p: PortfolioPreview) => number | null }> = [
   { key: 'marketable_population', label: 'Marketable population', pick: (p) => p.marketable_population ?? null },
-  { key: 'high_intent_leads', label: 'In the money', pick: (p) => p.high_intent_leads ?? null },
+  { key: 'high_intent_leads', label: 'High-intent leads', pick: (p) => p.high_intent_leads ?? null },
   { key: 'top_tier_opportunities', label: 'Top-tier opportunities', pick: (p) => p.top_tier_opportunities ?? null },
   { key: 'offers_recommended', label: 'Offers recommended', pick: (p) => p.offers_recommended ?? null },
   { key: 'approved_count', label: 'Approved outreach', pick: (p) => p.approved_count ?? null },
