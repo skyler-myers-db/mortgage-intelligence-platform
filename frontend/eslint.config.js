@@ -41,6 +41,25 @@ export default [
       // root cause, same removal slice).
       "react-hooks/set-state-in-effect": "off",
       "@typescript-eslint/no-unused-vars": ["warn", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }],
+      // Re-audit #4 (2026-06-12): the Portfolio Builder save used to call
+      // window.prompt() — a synchronous native dialog that froze the
+      // renderer (hard hang under any CDP/Playwright session) and broke
+      // the enterprise posture. A one-file source-pin test caught that
+      // specific site; this bans the whole class repo-wide so no future
+      // surface can reintroduce alert/confirm/prompt. Use in-page forms,
+      // status callouts, and the ApprovalBanner pattern instead.
+      "no-restricted-globals": [
+        "error",
+        { name: "prompt", message: "Native prompt() blocks the renderer (it froze the Save flow and hangs automation). Use an in-page form — see the portfolio-builder save panel." },
+        { name: "alert", message: "Native alert() blocks the renderer and is un-themeable. Use a status callout / ApprovalBanner." },
+        { name: "confirm", message: "Native confirm() blocks the renderer and is un-themeable. Use an in-page confirm affordance (see pendingReject in LeadTable)." },
+      ],
+      "no-restricted-properties": [
+        "error",
+        { object: "window", property: "prompt", message: "window.prompt blocks the renderer. Use an in-page form." },
+        { object: "window", property: "alert", message: "window.alert blocks the renderer. Use a status callout." },
+        { object: "window", property: "confirm", message: "window.confirm blocks the renderer. Use an in-page confirm affordance." },
+      ],
     },
   },
   // Import-hygiene guard: production code (routes, lib, non-test components)

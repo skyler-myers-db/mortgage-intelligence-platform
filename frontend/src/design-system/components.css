@@ -1923,6 +1923,74 @@ kbd {
   flex: 0 1 22rem;
   min-inline-size: 12rem;
 }
+.save-build-form__error {
+  flex: 0 0 100%;
+  font-size: var(--fs-12);
+  color: var(--signal-danger);
+}
+
+/* Campaign ROI projector (re-audit #4 Buyer-Wow #7). Board-room headline
+   + tunable assumptions; pure client-side, tokens only. */
+.roi-projector__headline {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--sp-2) var(--sp-3);
+  margin-block-end: var(--sp-4);
+}
+.roi-projector__headline-figure {
+  font-size: var(--fs-36);
+  font-weight: 600;
+  letter-spacing: var(--tracking-tight);
+  line-height: var(--lh-tight);
+  color: var(--accent-ink);
+}
+.roi-projector__headline-label {
+  font-size: var(--fs-13);
+  color: var(--text-2);
+}
+.roi-projector__assumptions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr));
+  gap: var(--sp-3);
+  margin-block-end: var(--sp-4);
+}
+.roi-projector__field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  font-size: var(--fs-11);
+  color: var(--text-3);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+}
+.roi-projector__derived {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: var(--sp-3);
+}
+.roi-projector__stat {
+  padding: var(--sp-3);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-md);
+  background: var(--bg-2);
+}
+.roi-projector__stat--emphasis {
+  border-color: var(--line-3);
+  background: var(--accent-soft);
+}
+.roi-projector__stat-label {
+  font-size: var(--fs-11);
+  color: var(--text-3);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+  margin-block-end: var(--sp-1);
+}
+.roi-projector__stat-value {
+  font-size: var(--fs-18);
+  font-weight: 600;
+  color: var(--text-1);
+}
 .filter-root { position: relative; }
 .filter {
   display: inline-flex; align-items: center; gap: 6px;

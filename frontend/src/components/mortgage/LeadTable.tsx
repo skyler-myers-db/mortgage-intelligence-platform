@@ -636,43 +636,53 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
    * level but bail out if focus is inside an editable element so typing
    * in the Genie chat or a filter input never triggers approval.
    */
+  // The keydown logic closes over many per-render values (expanded,
+  // approvals, leadsById, the inline approveLead/bulkApprove closures).
+  // The original effect had NO dep array, so it removed+re-added the
+  // window listener on EVERY render (re-audit #4 nit). A dep array can't
+  // fix that cleanly — those closures have unstable identity, so the
+  // effect would still re-bind every render (or go stale if deps are
+  // omitted). The latest-handler ref binds the listener exactly once and
+  // always calls the freshest logic. (Pinned by LeadTable.hotkeys.test.)
+  const keyHandlerRef = useRef<(e: KeyboardEvent) => void>(() => {});
+  keyHandlerRef.current = (e: KeyboardEvent) => {
+    // R5-12 (2026-04-23): belt-and-suspenders check against both the
+    // event target AND document.activeElement. For window-level
+    // keydowns `e.target` is usually the focused element, but when
+    // nothing is focused it falls back to `document.body` — which
+    // would bypass an input check. Checking `activeElement` too
+    // means typing "a" in the Genie textarea can never trigger the
+    // approve hotkey.
+    if (isEditableTarget(e.target as Element | null)) return;
+    if (isEditableTarget(document.activeElement)) return;
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    const key = e.key.toLowerCase();
+    // Shift+A: bulk approve. Takes precedence over single-row A when
+    // any row is selected.
+    if (key === 'a' && e.shiftKey) {
+      if (selectedIds.size === 0 || bulkApproving) return;
+      e.preventDefault();
+      void bulkApprove();
+      return;
+    }
+    if (!expanded) return;
+    const expandedLead = leadsById.get(expanded);
+    const expandedStatus = approvals[expanded] ?? expandedLead?.approval_status;
+    if (key === 'a') {
+      if (!isLeadApprovalEligible(expandedStatus, approvals[expanded], expandedLead)) return;
+      e.preventDefault();
+      void approveLead(expanded);
+    } else if (key === 'r') {
+      if (isTerminalApproval(expandedStatus)) return;
+      e.preventDefault();
+      setPendingReject(expanded);
+    }
+  };
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      // R5-12 (2026-04-23): belt-and-suspenders check against both the
-      // event target AND document.activeElement. For window-level
-      // keydowns `e.target` is usually the focused element, but when
-      // nothing is focused it falls back to `document.body` — which
-      // would bypass an input check. Checking `activeElement` too
-      // means typing "a" in the Genie textarea can never trigger the
-      // approve hotkey.
-      if (isEditableTarget(e.target as Element | null)) return;
-      if (isEditableTarget(document.activeElement)) return;
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
-      const key = e.key.toLowerCase();
-      // Shift+A: bulk approve. Takes precedence over single-row A when
-      // any row is selected.
-      if (key === 'a' && e.shiftKey) {
-        if (selectedIds.size === 0 || bulkApproving) return;
-        e.preventDefault();
-        void bulkApprove();
-        return;
-      }
-      if (!expanded) return;
-      const expandedLead = leadsById.get(expanded);
-      const expandedStatus = approvals[expanded] ?? expandedLead?.approval_status;
-      if (key === 'a') {
-        if (!isLeadApprovalEligible(expandedStatus, approvals[expanded], expandedLead)) return;
-        e.preventDefault();
-        void approveLead(expanded);
-      } else if (key === 'r') {
-        if (isTerminalApproval(expandedStatus)) return;
-        e.preventDefault();
-        setPendingReject(expanded);
-      }
-    };
+    const onKey = (e: KeyboardEvent) => keyHandlerRef.current(e);
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  });
+  }, []);
 
   const stop = (e: ReactKeyboardEvent | ReactMouseEvent) => e.stopPropagation();
 

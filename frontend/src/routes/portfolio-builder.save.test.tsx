@@ -228,4 +228,16 @@ describe('PortfolioBuilder save-build flow', () => {
     );
     expect(source).not.toContain('window.prompt');
   });
+
+  it('bans the blocking-dialog class repo-wide via eslint config', () => {
+    // Re-audit #4: the source pin above guards ONE file; this pins the
+    // repo-wide eslint rule so no future surface can reintroduce
+    // prompt/alert/confirm. If the rule is removed, this fails before a
+    // regression can land.
+    const config = readFileSync(join(process.cwd(), 'eslint.config.js'), 'utf-8');
+    expect(config).toContain('no-restricted-globals');
+    for (const banned of ['prompt', 'alert', 'confirm']) {
+      expect(config).toContain(`name: "${banned}"`);
+    }
+  });
 });
