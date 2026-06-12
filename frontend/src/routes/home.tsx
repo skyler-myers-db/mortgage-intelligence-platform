@@ -4,6 +4,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { PageShell } from '../components/layout/PageShell';
 import { KpiCard } from '../components/mortgage/KpiCard';
 import { USChoroplethMap } from '../components/mortgage/USChoroplethMap';
+import { MorningBriefing } from '../components/mortgage/MorningBriefing';
 import { AgentActivityLog } from '../components/mortgage/AgentActivityLog';
 import { DataEstatePanel, DataEstatePanelSkeleton } from '../components/mortgage/DataEstatePanel';
 import { Button, Chip } from '../components/Primitives';
@@ -215,6 +216,12 @@ export default function Home() {
         <div role="status" className="status-callout status-callout--info">
           {preview.trend_note}
         </div>
+      )}
+      {/* Morning briefing (Buyer-Wow #6): the daily "since last refresh"
+          standing artifact, summarizing the day-over-day movement the
+          preview already carries. Hidden on day-zero (no funnel yet). */}
+      {!isDayZero && (
+        <MorningBriefing preview={preview ?? null} loading={kpisLoading} />
       )}
       {!isDayZero && !previewWarming && (
         <div className="kpi-row">
