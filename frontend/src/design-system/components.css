@@ -1300,6 +1300,106 @@ kbd {
 /* ============================================================
    APPROVAL BANNER (Human in the loop)
    ============================================================ */
+/* Morning briefing (Buyer-Wow #6) — the daily standing artifact on Home. */
+.briefing {
+  margin-block-end: var(--gap-grid);
+  padding: var(--sp-4);
+  border-radius: var(--r-lg);
+  background: var(--bg-1);
+  border: 1px solid var(--line-1);
+  box-shadow: var(--shadow-sm);
+}
+.briefing__hdr {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+.briefing__hdr-main { flex: 1; min-inline-size: 0; }
+.briefing__ico {
+  inline-size: 30px;
+  block-size: 30px;
+  border-radius: 8px;
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+.briefing__eyebrow {
+  font-size: var(--fs-11);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+  color: var(--text-3);
+}
+.briefing__headline {
+  font-size: var(--fs-14);
+  font-weight: 500;
+  color: var(--text-1);
+  line-height: var(--lh-snug);
+}
+.briefing__cta {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  font-size: var(--fs-12);
+  color: var(--accent-ink);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.briefing__headline-skeleton {
+  block-size: 16px;
+  inline-size: 18rem;
+  max-inline-size: 60vw;
+  border-radius: var(--r-sm);
+}
+.briefing__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr));
+  gap: var(--sp-3);
+  margin-block-start: var(--sp-4);
+}
+.briefing__item {
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-md);
+  background: var(--bg-2);
+}
+.briefing__item-label {
+  font-size: var(--fs-11);
+  color: var(--text-3);
+  margin-block-end: var(--sp-1);
+}
+.briefing__item-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+.briefing__item-value {
+  font-size: var(--fs-16);
+  font-weight: 600;
+  color: var(--text-1);
+}
+.briefing__delta {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: var(--fs-11);
+  font-family: var(--font-mono);
+}
+.briefing__delta--up { color: var(--signal-success); }
+.briefing__delta--down { color: var(--signal-danger); }
+.briefing__delta--flat { color: var(--text-3); }
+.briefing__note {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-1);
+  margin-block-start: var(--sp-1);
+  font-size: var(--fs-11);
+  color: var(--status-warning-ink);
+  line-height: var(--lh-snug);
+}
+
 .approval {
   display: flex; align-items: center; gap: var(--sp-4);
   padding: var(--sp-3) var(--sp-4);
