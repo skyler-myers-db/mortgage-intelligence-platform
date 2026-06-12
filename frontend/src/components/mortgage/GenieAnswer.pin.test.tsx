@@ -95,16 +95,37 @@ describe('GenieAnswer pin + fallback', () => {
     expect(container.querySelector('[data-testid="pin-to-home"]')!.textContent).toContain('Pinned to Home');
   });
 
-  it('does NOT show the pin button for a degraded (non-genie) answer', () => {
+  it('shows the pin button for a genuine trusted_sql answer (canonical booth demo set)', () => {
+    // The canonical demo questions (top borrowers by state, top ITM ZIPs, …)
+    // return source='trusted_sql', NOT 'genie'. They are fully trusted,
+    // source-cited, persisted answers and MUST be pinnable. Regression guard
+    // for the denylist boundary (was wrongly an `=== 'genie'` allowlist).
     act(() => root.render(
       <GenieAnswer
-        payload={payload({ source: 'policy_blocked', metric_value: null, answer: 'Result was not displayed.' })}
-        question="What is the average loan age?"
+        payload={payload({ source: 'trusted_sql' })}
+        question="Top borrowers by state?"
         onFollowUp={() => {}}
       />,
     ));
-    expect(container.querySelector('[data-testid="pin-to-home"]')).toBeNull();
+    const pinBtn = container.querySelector<HTMLButtonElement>('[data-testid="pin-to-home"]');
+    expect(pinBtn).not.toBeNull();
+    act(() => pinBtn!.click());
+    expect(storedPins()).toHaveLength(1);
   });
+
+  it.each(['policy_blocked', 'degraded', 'refused', 'data_gap', 'out_of_footprint'])(
+    'does NOT show the pin button for a degraded source (%s)',
+    (source) => {
+      act(() => root.render(
+        <GenieAnswer
+          payload={payload({ source, metric_value: null, answer: 'Result was not displayed.' })}
+          question="What is the average loan age?"
+          onFollowUp={() => {}}
+        />,
+      ));
+      expect(container.querySelector('[data-testid="pin-to-home"]')).toBeNull();
+    },
+  );
 
   it('does NOT show the pin button without a question (no provenance)', () => {
     act(() => root.render(<GenieAnswer payload={payload()} onFollowUp={() => {}} />));

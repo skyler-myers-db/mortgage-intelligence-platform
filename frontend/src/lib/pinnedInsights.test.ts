@@ -8,6 +8,7 @@ import {
   buildFallbackFollowUps,
   buildPinFromAnswer,
   clearPinnedInsights,
+  isTrustedGenieSource,
   pinInsight,
   unpinInsight,
 } from './pinnedInsights';
@@ -85,11 +86,14 @@ describe('pinned insights store', () => {
     expect(stored.map((p: { id: string }) => p.id)).toEqual([a.id, b.id]); // a moved to front, single copy
   });
 
-  it('caps the pin list at 6', () => {
+  it('caps the pin list at 6, keeping the newest and dropping the oldest', () => {
     for (let i = 0; i < 10; i += 1) {
       pinInsight(buildPinFromAnswer(answer({ question_hash: `h${i}` }), 's', `Q${i}`));
     }
-    expect(JSON.parse(window.localStorage.getItem(PINNED_INSIGHTS_KEY)!)).toHaveLength(6);
+    const stored = JSON.parse(window.localStorage.getItem(PINNED_INSIGHTS_KEY)!) as Array<{ id: string }>;
+    expect(stored).toHaveLength(6);
+    // Newest-first: h9 (last pinned) at front, h4 at the tail; h0..h3 dropped.
+    expect(stored.map((p) => p.id)).toEqual(['h9', 'h8', 'h7', 'h6', 'h5', 'h4']);
   });
 
   it('clearPinnedInsights empties the store (actor-change reset)', () => {
@@ -102,6 +106,27 @@ describe('pinned insights store', () => {
     const long = 'x'.repeat(500);
     const pin = buildPinFromAnswer(answer({ metric_value: null }), long, 'Q');
     expect(pin.summary.length).toBeLessThanOrEqual(220);
+  });
+});
+
+describe('isTrustedGenieSource (pin/persist trust boundary)', () => {
+  it('treats genuine, source-cited answer sources as trusted', () => {
+    // Not just `genie`: the canonical booth answers are `trusted_sql`/`sales_ops`.
+    for (const s of ['genie', 'trusted_sql', 'sales_ops']) {
+      expect(isTrustedGenieSource(s)).toBe(true);
+    }
+  });
+
+  it('treats degraded/caveat sources as non-trusted (denylist)', () => {
+    for (const s of ['degraded', 'policy_blocked', 'refused', 'data_gap', 'out_of_footprint']) {
+      expect(isTrustedGenieSource(s)).toBe(false);
+    }
+  });
+
+  it('treats empty/missing source as non-trusted', () => {
+    expect(isTrustedGenieSource('')).toBe(false);
+    expect(isTrustedGenieSource(null)).toBe(false);
+    expect(isTrustedGenieSource(undefined)).toBe(false);
   });
 });
 

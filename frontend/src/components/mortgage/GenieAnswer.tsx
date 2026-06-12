@@ -19,6 +19,7 @@ import { GenieProofPanel } from './GenieAnswerProof';
 import {
   buildFallbackFollowUps,
   buildPinFromAnswer,
+  isTrustedGenieSource,
   usePinnedInsights,
 } from '../../lib/pinnedInsights';
 import {
@@ -88,12 +89,14 @@ export function GenieAnswer({
   const columns = visibleRows[0] ? Object.keys(visibleRows[0]).slice(0, MAX_TABLE_COLS) : [];
   const chartColumns = rows[0] ? Object.keys(rows[0]) : [];
   const cleanedAnswer = answer ? stripQuestionRestatement(answer) : '';
-  // "Pin to Home" (Buyer-Wow #9): only a genuine, trusted (source==='genie')
-  // data answer is pinnable — never a degraded/policy-blocked caveat. The
+  // "Pin to Home" (Buyer-Wow #9): only a genuine, trusted data answer is
+  // pinnable — never a degraded/policy-blocked caveat. Trust is the app's
+  // denylist (`isTrustedGenieSource`), so canonical `trusted_sql`/`sales_ops`
+  // answers (the booth demo set) are pinnable too, not just `genie`. The
   // question comes from the conversation (the payload has no question field).
   const pinnable =
     Boolean(question) &&
-    payload.source === 'genie' &&
+    isTrustedGenieSource(payload.source) &&
     (Boolean(metric_value) || rows.length > 0 || cleanedAnswer.length > 0);
   const pinObject = pinnable ? buildPinFromAnswer(payload, cleanedAnswer, question!) : null;
   const isPinned = pinObject ? pins.some((p) => p.id === pinObject.id) : false;

@@ -27,6 +27,29 @@ export const PINNED_INSIGHTS_KEY = 'mip.pinnedInsights';
 const MAX_PINS = 6;
 const MAX_SUMMARY = 220;
 
+/**
+ * Degraded/non-trusted Genie answer sources — the app's single trust boundary.
+ * These are caveats/refusals, never persistable artifacts: they must not be
+ * pinned to Home, nor persisted as conversation history. Trust is a DENYLIST
+ * (anything not in this set is a genuine, source-cited answer — `genie`,
+ * `trusted_sql`, `sales_ops`, …), NOT an allowlist of one source. Mirrored by
+ * `shouldPersistConversation` in GenieChat, which imports this same set.
+ */
+export const NON_PERSISTABLE_SOURCES = new Set([
+  'degraded',
+  'policy_blocked',
+  'refused',
+  'data_gap',
+  'out_of_footprint',
+]);
+
+/** True when an answer's source is a genuine, trusted, source-cited result
+ *  (not a degraded/policy-blocked caveat) — the boundary for pin/persist. */
+export function isTrustedGenieSource(source: string | null | undefined): boolean {
+  const s = String(source ?? '').trim();
+  return s.length > 0 && !NON_PERSISTABLE_SOURCES.has(s);
+}
+
 function readStore(): PinnedInsight[] {
   if (typeof window === 'undefined') return [];
   try {
