@@ -771,3 +771,70 @@ EvidenceChip; Sparkline gradient id uses useId() so two KPIs can't collide.
 - #5 Funnel Sankey on Analytics Executive (M; new viz component).
 - #6 morning briefing card on Home (M-L; needs the delta-snapshot scaffolding).
 - #9 Genie follow-up chips + pin-to-Home (M; live-Genie dep).
+
+## Funnel Sankey tranche (2026-06-12, merge 4f7135d) — Buyer-Wow #5
+
+Took the next deterministic wow item with the same unanimous-signoff loop.
+
+### Why this one (and not the other four)
+Investigated all five remaining items for determinism: only #5 is cleanly
+deterministic. #5's funnel-stage data (addressable → in_the_money →
+high_opportunity → offer_recommended → approved → actioned) is ALREADY
+fetched and rendered by the existing Pipeline Metrics bars — a Sankey is a
+pure client-side re-viz, no new backend, no Genie. Deferred again: #6
+morning briefing (needs new backend snapshot-diff; dev has one snapshot so
+"deltas pending"), #4 map animation (the choropleth is architected for
+instant SVG/DOM swaps — cross-level tweening is unsafe), #3/#9 (live-Genie
+dependency). All against the deterministic-booth mandate.
+
+### Feature
+A flowing pipeline funnel on Analytics Executive: connected ribbons that
+narrow with each stage's drop-off, the value story at a glance. Pure SVG
+over the existing FunnelStage[]. Geometry is a pure, unit-pinned model
+(buildFunnelSankeyModel in analytics.lib); each stage is a keyboard-
+focusable SVG link (role=link, Enter/Space) routing to its slice of the
+lead queue via the existing leadQueueHrefForFunnelStage contract; ribbons
+draw in ONCE on first appearance (useFirstAppearance), reduced-motion off.
+The exact figures stay in the Pipeline Metrics bars below.
+
+### Non-monotonic conversion fix (caught by the gate)
+The real funnel is NOT monotonic: offer_recommended (4,467,395) balloons
+past high_opportunity (3,878) because the next-best-offer engine runs
+across the whole addressable base. The naive conversion=count/prev would
+have rendered "~115000%" at the booth. Three independent reviewers (qa,
+governance, architect) flagged it; fixed pre-merge — conversion shows a %
+only for a genuine narrowing (≤100%); a grown stage and divide-by-zero
+(prev=0) show no label, aria-label omits the clause. Node heights still
+reflect true counts. Confirmed live: only "2.2% / 3.5% / 0.0%" show; the
+offers balloon shows no label.
+
+### Unanimous independent-subagent signoff (fresh context each)
+- frontend/a11y: APPROVE — role=group + focusable role=link (Enter/Space,
+  aria-labels) is the correct accessible SVG pattern, consistent with the
+  repo's audited choropleth precedent; reduced-motion gated.
+- qa/test: APPROVE (after the conversion fix + new tests; re-confirmed via
+  MUTATION TESTING that reverting the >100% suppression, the prev=0 null,
+  the aria omission, or the one-time-draw gating each fails a test).
+- performance: APPROVE — thin renderer over a useMemo-keyed model, GPU-
+  friendly one-shot opacity draw, lazy analytics chunk, budget passes.
+- governance/security: APPROVE — aggregate-only funnel totals, no PII/
+  secret, reuses the existing nav contract, read-only, no new network.
+- principal-architect: APPROVE — clean layering (pure geometry in .lib,
+  renderer in .charts, wiring in .sections), deterministic, blast radius
+  contained to the Executive tab; keeping both Sankey + exact-figure bars
+  is the right call.
+
+### Validation + deployed evidence
+- pytest 0 (backend untouched); **Vitest 327/327 (56 files)** (+13 Sankey
+  geometry/render/a11y + CSS pin); lint/build/budget clean.
+- Deploy ./scripts/deploy.sh -t dev --no-confirm exit 0 — all jobs
+  TERMINATED SUCCESS; smoke PASS.
+- Live 7/7: Sankey renders on /analytics, 6 focusable stage links, NO
+  >100% conversion label (only 2.2%/3.5%/0.0% on narrowing stages),
+  aria-labels correct, In-the-Money node navigates to
+  /lead-queue?funnel_stage=in_the_money, Pipeline Metrics exact figures
+  retained, ZERO console errors. Screenshot on file.
+
+### Still deferred (Genie / new-surface bets, against the booth mandate)
+#3 Genie narrative, #4 map animation, #6 morning briefing (new snapshot-
+diff backend), #9 Genie follow-ups.
