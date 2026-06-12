@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { FeatureCollection } from 'geojson';
 import { Icon } from '../Icon';
@@ -782,7 +782,7 @@ export function USChoroplethMap({
     const visible = sorted.slice(0, 24);
     return (
       <div className="zip-tiles" role="list" aria-label={`ZIPs in ${countyName}`}>
-        {visible.map((rollup) => {
+        {visible.map((rollup, tileIndex) => {
           const count = rollup.addressable_borrowers ?? null;
           const avgScore = rollup.avg_opportunity_score ?? null;
           const topSegCode = rollup.top_segment_code ?? null;
@@ -802,6 +802,10 @@ export function USChoroplethMap({
               key={rollup.zip}
               type="button"
               className={classes}
+              // Staggered "settle into the grid" entrance (Buyer-Wow #4):
+              // the stage cap keeps later tiles from lagging; CSS gates the
+              // animation behind prefers-reduced-motion.
+              style={{ '--tile-i': Math.min(tileIndex, 24) } as CSSProperties}
               role="listitem"
               aria-label={`ZIP ${rollup.zip}, ${count !== null ? `${count.toLocaleString()} borrowers` : 'no data'}`}
               onMouseEnter={(e) =>
@@ -908,9 +912,18 @@ export function USChoroplethMap({
         </div>
       </div>
 
-      {level === 'state' && renderStateLevel()}
-      {level === 'county' && renderCountyLevel()}
-      {level === 'zip' && renderZipLevel()}
+      {/* Animated level transitions (Buyer-Wow #4): keying on `level`
+          re-mounts this wrapper on each drill so the CSS zoom/fade enter
+          replays (same pattern as the app's route-transition). `.map-levels`
+          preserves the flex layout — it occupies `.map-wrap`'s flex:1 slot
+          and its child stage fills it — so the wrapper never collapses the
+          map. Reduced-motion disables the animation. The drill state machine
+          (level + the three renderers) is untouched. */}
+      <div className="map-levels" key={level}>
+        {level === 'state' && renderStateLevel()}
+        {level === 'county' && renderCountyLevel()}
+        {level === 'zip' && renderZipLevel()}
+      </div>
 
       {/* Legend — explicit "Colored by" label so the user understands why
           the home map and the segments map can render different hues for

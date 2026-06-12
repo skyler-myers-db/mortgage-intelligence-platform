@@ -2378,6 +2378,33 @@ kbd {
   height: 10px;
   flex: 0 0 auto;
 }
+/* Animated level transitions (Buyer-Wow #4). `.map-levels` is the keyed
+   wrapper around the three drill stages. It MUST be flex-transparent: it
+   takes `.map-wrap`'s flex:1 slot and re-exposes it to the stage inside, so
+   wrapping never collapses the hero map. The enter animation is a subtle
+   GPU-friendly zoom/fade that replays each drill (the wrapper re-mounts on
+   `level` change); reduced-motion disables it. */
+.map-levels {
+  flex: 1 1 0;
+  min-block-size: 0;
+  display: flex;
+  flex-direction: column;
+  animation: map-level-in var(--dur-base) var(--ease);
+}
+.map-levels > .map-svg-stage,
+.map-levels > .map-stage,
+.map-levels > .zip-tiles {
+  flex: 1 1 0;
+  min-block-size: 0;
+}
+@keyframes map-level-in {
+  from { opacity: 0; transform: scale(0.985); }
+  to { opacity: 1; transform: scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .map-levels { animation: none; }
+}
+
 .map-svg-stage {
   flex: 1 1 0;
   min-height: 0;
@@ -2671,6 +2698,24 @@ kbd {
   cursor: pointer;
   transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease);
   min-height: 56px;
+  /* Staggered "settle into the grid" entrance (Buyer-Wow #4): each tile
+     fades in, delayed by its capped index (--tile-i), so borrowers settle
+     into the grid in sequence. OPACITY-ONLY by design — a `transform` in
+     this keyframe would be retained by the `both` fill-mode and permanently
+     override the :hover lift below (a real bug caught in signoff). The
+     zoom/scale feel comes from the .map-levels wrapper, which is not the
+     hovered element. Disabled under reduced motion. */
+  animation: zip-tile-in var(--dur-base) var(--ease) both;
+  animation-delay: calc(var(--tile-i, 0) * 16ms);
+}
+@keyframes zip-tile-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .zip-tile {
+    animation: none;
+  }
 }
 .zip-tile--lvl-1 { background: color-mix(in oklab, var(--accent) 6%, transparent); }
 .zip-tile--lvl-2 { background: color-mix(in oklab, var(--accent) 12%, transparent); }
