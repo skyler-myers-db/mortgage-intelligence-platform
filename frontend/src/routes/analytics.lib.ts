@@ -350,7 +350,15 @@ export function buildFunnelSankeyModel(
     const count = Math.max(0, s.borrower_count);
     const h = Math.max(minBarH, (count / maxCount) * maxBarH);
     const prev = i > 0 ? Math.max(0, ordered[i - 1].borrower_count) : null;
-    const conversion = prev && prev > 0 ? count / prev : i === 0 ? null : 0;
+    // Conversion is defined only as a narrowing from a non-empty prior
+    // stage. First stage → null; prev=0 → null (undefined, not a fake 0%).
+    // A stage that GREW vs its predecessor (the real funnel is
+    // non-monotonic — offer_recommended is computed across the whole
+    // addressable base, so it balloons past high_opportunity) keeps its raw
+    // ratio here; the formatter suppresses the >100% label rather than
+    // printing a nonsensical "115000%". Node height still honestly reflects
+    // the count.
+    const conversion = i === 0 ? null : prev && prev > 0 ? count / prev : null;
     return {
       stage: s.stage,
       stageOrder: s.stage_order,
@@ -382,9 +390,15 @@ export function buildFunnelSankeyModel(
   return { viewWidth: width, viewHeight: height, nodes, ribbons };
 }
 
-/** Compact percent for a conversion ratio (0.0427 → "4%"). */
+/**
+ * Compact percent for a conversion ratio (0.0427 → "4.3%"). Returns null —
+ * i.e. "show no conversion label" — for an undefined conversion (null) or a
+ * stage that GREW vs its predecessor (ratio > 1), where a "conversion"
+ * percentage is meaningless (the real funnel is non-monotonic at the offer
+ * stage). A stage that exactly held (100%) still shows.
+ */
 export function formatConversionPct(conversion: number | null): string | null {
-  if (conversion === null || !Number.isFinite(conversion)) return null;
+  if (conversion === null || !Number.isFinite(conversion) || conversion > 1.0001) return null;
   const pct = conversion * 100;
   return pct >= 10 ? `${Math.round(pct)}%` : `${pct.toFixed(1)}%`;
 }

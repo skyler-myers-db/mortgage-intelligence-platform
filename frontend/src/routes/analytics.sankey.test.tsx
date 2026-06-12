@@ -50,7 +50,25 @@ describe('buildFunnelSankeyModel (pure geometry)', () => {
     const [big, zero] = model.nodes;
     expect(big.height).toBeGreaterThan(zero.height);
     expect(zero.height).toBeGreaterThan(0); // never invisible
-    expect(zero.conversion).toBe(0);
+    expect(zero.conversion).toBe(0); // a real 0% drop from a non-empty prior
+  });
+
+  it('treats conversion from an empty prior stage as undefined (null), not a fake 0%', () => {
+    // Sliver-recovery: a zero stage followed by a non-zero stage. You can't
+    // divide by zero, so conversion is undefined, not 0%.
+    const model = buildFunnelSankeyModel([
+      { stage: 'Zero', stage_order: 1, borrower_count: 0 },
+      { stage: 'Recovered', stage_order: 2, borrower_count: 500 },
+    ]);
+    expect(model.nodes[1].conversion).toBeNull();
+  });
+
+  it('keeps the raw ratio for a stage that grew (non-monotonic real funnel)', () => {
+    // Mirrors production: offer_recommended (4.47M) balloons past
+    // high_opportunity (3,878). The model keeps the raw >1 ratio; the
+    // formatter is what suppresses the nonsensical label.
+    const model = buildFunnelSankeyModel(STAGES);
+    expect(model.nodes[3].conversion).toBeGreaterThan(1);
   });
 
   it('lays nodes left-to-right within the padded viewBox', () => {
@@ -67,11 +85,15 @@ describe('buildFunnelSankeyModel (pure geometry)', () => {
     expect(model.ribbons).toEqual([]);
   });
 
-  it('formats conversion percent compactly', () => {
+  it('formats conversion percent compactly and suppresses meaningless values', () => {
     expect(formatConversionPct(null)).toBeNull();
     expect(formatConversionPct(0.0427)).toBe('4.3%');
     expect(formatConversionPct(0.5)).toBe('50%');
     expect(formatConversionPct(0)).toBe('0.0%');
+    expect(formatConversionPct(1)).toBe('100%'); // a stage that exactly held
+    // A grown stage (>100%) shows NO label rather than "115000%".
+    expect(formatConversionPct(4_467_395 / 3_878)).toBeNull();
+    expect(formatConversionPct(1.5)).toBeNull();
   });
 });
 
@@ -82,12 +104,14 @@ vi.mock('react-router-dom', async (orig) => {
 });
 
 import { FunnelSankey } from './analytics.charts';
+import { __resetFirstAppearanceForTests } from '../lib/useFirstAppearance';
 
 describe('FunnelSankey (render + a11y)', () => {
   let container: HTMLDivElement;
   let root: Root;
   beforeEach(() => {
     vi.clearAllMocks();
+    __resetFirstAppearanceForTests(); // so the one-time draw class is deterministic
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
@@ -108,8 +132,26 @@ describe('FunnelSankey (render + a11y)', () => {
     const first = links[0];
     expect(first.getAttribute('aria-label')).toContain('Addressable');
     expect(first.getAttribute('aria-label')).toContain('Open in lead queue');
-    // The In-the-Money node announces its conversion from the prior stage.
+    // The In-the-Money node (a narrowing) announces its conversion.
     expect(links[1].getAttribute('aria-label')).toMatch(/from previous stage/);
+    // The first node never announces a conversion.
+    expect(first.getAttribute('aria-label')).not.toMatch(/from previous stage/);
+    // The grown Offer-Recommended node (>100%) omits the meaningless
+    // conversion rather than announcing "115000% from previous stage".
+    expect(links[3].getAttribute('aria-label')).not.toMatch(/from previous stage/);
+  });
+
+  it('animates the ribbon draw ONCE on first appearance, never on re-mount (no demo-ticker replay)', () => {
+    mount(STAGES);
+    expect(container.querySelector('svg')!.getAttribute('class')).toContain('funnel-sankey--enter');
+    // Re-mount with the same stage signature: no replay.
+    act(() => root.unmount());
+    container.remove();
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    mount(STAGES);
+    expect(container.querySelector('svg')!.getAttribute('class')).not.toContain('funnel-sankey--enter');
   });
 
   it('navigates to the stage slice of the lead queue on click', () => {
