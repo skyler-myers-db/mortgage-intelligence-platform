@@ -1,8 +1,9 @@
 /**
  * @vitest-environment happy-dom
  *
- * GenieAnswer "Pin to Home" gating + action (Buyer-Wow #9): a genuine
- * (source==='genie') answer WITH a question shows the pin button and pins to
+ * GenieAnswer "Pin to Home" gating + action (Buyer-Wow #9): a genuine,
+ * trusted answer (any source NOT on the degraded denylist — genie,
+ * trusted_sql, sales_ops, …) WITH a question shows the pin button and pins to
  * the shared store; a degraded/policy-blocked answer does not; and the
  * deterministic follow-up fallback fills in when Genie returns none.
  */
