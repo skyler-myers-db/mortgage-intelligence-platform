@@ -80,4 +80,39 @@ describe('buildBorrowerStory', () => {
     expect(story.unverifiedTokens).toContain('51');
     expect(story.allVerified).toBe(false);
   });
+
+  it('catches a stray number even when it collides with a claim value (count, not set)', () => {
+    // "District 41" + related_property_count 41: two "41"s in the prose, one
+    // claimed — the excess must be flagged (a set-membership check would miss it).
+    const story = buildBorrowerStory(dossier({ city: 'District 41', related_property_count: 41 }));
+    expect(story.unverifiedTokens).toContain('41');
+    expect(story.allVerified).toBe(false);
+  });
+
+  it('omits the rate-spread clause for a zero or negative (at/below-market) spread', () => {
+    const zero = buildBorrowerStory(dossier({ rate_spread_bps: 0 }));
+    expect(zero.sentences.join(' ')).not.toContain('bps above market');
+    expect(zero.allVerified).toBe(true);
+    const below = buildBorrowerStory(dossier({ rate_spread_bps: -120 }));
+    expect(below.sentences.join(' ')).not.toContain('above market');
+    expect(below.sentences.join(' ')).not.toContain('-120');
+    expect(below.allVerified).toBe(true); // no backwards prose, no false flag
+  });
+
+  it('omits the locale prefix when city/state are absent (no "undefined")', () => {
+    const story = buildBorrowerStory(dossier({ city: null as never, state: null as never }));
+    const prose = story.sentences.join(' ');
+    expect(prose).not.toContain('undefined');
+    expect(prose).toMatch(/^This investor/);
+  });
+
+  it('degrades cleanly on a sparse dossier with no fabricated figures', () => {
+    const story = buildBorrowerStory(dossier({
+      related_property_count: 1, is_investor: false,
+      current_rate: 0, rate_spread_bps: 0, current_lien_balance: 0, avm_value: 0,
+    }));
+    expect(story.claims).toEqual([]); // nothing to claim
+    expect(story.unverifiedTokens).toEqual([]);
+    expect(story.allVerified).toBe(true);
+  });
 });

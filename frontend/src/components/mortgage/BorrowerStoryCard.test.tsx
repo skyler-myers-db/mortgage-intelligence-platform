@@ -57,9 +57,16 @@ describe('BorrowerStoryCard', () => {
     expect(container.querySelector('.borrower-story__claim--unverified')).toBeNull();
   });
 
-  it('shows the needs-review verdict when a figure cannot be verified', () => {
+  it('shows the needs-review verdict and an unverified chip when a figure cannot be verified', () => {
     mount(dossier({ city: 'Area 51' }));
     act(() => container.querySelector<HTMLButtonElement>('[data-testid="tell-the-story"]')!.click());
     expect(container.textContent).toContain('Some figures could not be verified');
+  });
+
+  it('announces the revealed narrative to assistive tech', () => {
+    mount(dossier());
+    act(() => container.querySelector<HTMLButtonElement>('[data-testid="tell-the-story"]')!.click());
+    const body = container.querySelector('[data-testid="borrower-story-body"]')!;
+    expect(body.getAttribute('aria-live')).toBe('polite');
   });
 });

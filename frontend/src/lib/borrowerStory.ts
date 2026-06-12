@@ -74,13 +74,15 @@ export function buildBorrowerStory(b: Borrower360): BorrowerStory {
     return token;
   };
 
-  const city = `${b.city}, ${b.state}`;
+  // City/state can be null on a raw UC row — omit the locale rather than
+  // interpolating "undefined, undefined".
+  const locale = b.city && b.state ? `${b.city}, ${b.state} ` : '';
   const descriptor = ownerDescriptor(b);
   const props = b.related_property_count ?? 0;
 
   // Sentence 1 — who they are, with the owner-graph property count when it
   // is a real multi-property signal.
-  let s1 = `This ${city} ${descriptor}`;
+  let s1 = `This ${locale}${descriptor}`;
   if (props > 1) {
     s1 += ` holds ${register(`${props} properties`, 'Related properties', 'related_property_count', props)} via the owner graph`;
   }
@@ -91,7 +93,10 @@ export function buildBorrowerStory(b: Borrower360): BorrowerStory {
   if (typeof b.current_rate === 'number' && b.current_rate > 0) {
     parts.push(`carries a ${register(`${b.current_rate.toFixed(2)}%`, 'Current rate', 'current_rate', b.current_rate)} rate`);
   }
-  if (typeof b.rate_spread_bps === 'number') {
+  // Only claim "above market" for a genuine positive spread — a zero or
+  // negative spread (at/below market) is not an above-market trigger, and
+  // "-120 bps above market" would be backwards prose.
+  if (typeof b.rate_spread_bps === 'number' && b.rate_spread_bps > 0) {
     parts.push(`${register(`${b.rate_spread_bps} bps`, 'Rate spread', 'rate_spread_bps', b.rate_spread_bps)} above market`);
   }
   const eq = equityPct(b);
@@ -122,12 +127,27 @@ export function buildBorrowerStory(b: Borrower360): BorrowerStory {
   // it carries a categorical offer label ("5/1 ARM", "30-year refi") whose
   // digits are part of a product name, not a numeric claim about the
   // borrower, so they must not be flagged as unverified.
-  const claimNumbers = new Set(
-    claims.map((c) => c.token.replace(/[^0-9.]/g, '')),
-  );
+  //
+  // COUNT-based (not set-membership): if the same digit string appears in the
+  // prose more times than it is claimed (e.g. a city "District 41" colliding
+  // with a property count of 41), the EXCESS occurrence is flagged — a
+  // set-membership check would silently let the stray number ride on the
+  // claim. This is a template-bug tripwire for our closed token set, not a
+  // general adversarial guard.
+  const claimCounts = new Map<string, number>();
+  for (const c of claims) {
+    const n = c.token.replace(/[^0-9.]/g, '');
+    claimCounts.set(n, (claimCounts.get(n) ?? 0) + 1);
+  }
   const verifiableProse = [s1, s2].filter(Boolean).join(' ');
-  const proseNumbers = (verifiableProse.match(/\d+(?:\.\d+)?/g) ?? []);
-  const unverifiedTokens = proseNumbers.filter((n) => !claimNumbers.has(n));
+  const proseNumbers = verifiableProse.match(/\d+(?:\.\d+)?/g) ?? [];
+  const usedCounts = new Map<string, number>();
+  const unverifiedTokens: string[] = [];
+  for (const n of proseNumbers) {
+    const used = usedCounts.get(n) ?? 0;
+    if (used >= (claimCounts.get(n) ?? 0)) unverifiedTokens.push(n);
+    usedCounts.set(n, used + 1);
+  }
 
   const allVerified = claims.every((c) => c.verified) && unverifiedTokens.length === 0;
 

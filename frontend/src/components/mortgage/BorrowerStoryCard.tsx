@@ -42,7 +42,13 @@ export function BorrowerStoryCard({ borrower }: { borrower: Borrower360 }) {
         )}
       </div>
       {told && (
-        <div className="surface__body" data-testid="borrower-story-body">
+        <div
+          className="surface__body"
+          data-testid="borrower-story-body"
+          // Announce the narrative to screen readers on reveal (the button
+          // unmounts, so focus would otherwise drop silently to body).
+          aria-live="polite"
+        >
           <p className="borrower-story__narrative">{story.sentences.join(' ')}</p>
 
           <div className="borrower-story__claims" aria-label="Figures grounded in the dossier">
