@@ -72,10 +72,12 @@ export function KpiCard({
   }
 
   // Sleek one-time entrance: animate the first appearance of this KPI in the
-  // session (keyed by label + the resolved value, so it fires when the real
-  // number lands, not on the loading skeleton). Re-entry never replays it;
-  // reduced-motion users get the settled state with no animation (CSS).
-  const enterKey = `kpi:${label}:${display}`;
+  // session. Keyed by label ALONE (not the value): useFirstAppearance freezes
+  // `isFirst` at mount, so the loading→loaded transition within the same mount
+  // still animates when the real number lands, while a later live data REFRESH
+  // does not re-key and therefore never replays the entrance mid-walkthrough.
+  // Re-entry never replays it; reduced-motion users get the settled state (CSS).
+  const enterKey = `kpi:${label}`;
   const animateEntrance = useFirstAppearance(enterKey) && !loading && display !== '' && display !== '—';
 
   const sparkNode =

@@ -81,10 +81,14 @@ export function buildBriefing(preview: PortfolioPreview | null | undefined): Bri
       (a, b) => Math.abs(b.deltaPct ?? 0) - Math.abs(a.deltaPct ?? 0),
     )[0];
     const dir = biggest.direction === 'up' ? 'up' : 'down';
-    const mag = Math.abs(biggest.deltaPct ?? 0).toFixed(1);
+    // A mover can carry a direction without a finite magnitude (backend flags
+    // the move but omits delta_pct). Don't fabricate "up 0.0%" — state the
+    // direction and append the percent only when it's a real number.
+    const hasMag = biggest.deltaPct !== null && Number.isFinite(biggest.deltaPct);
+    const magText = hasMag ? ` ${Math.abs(biggest.deltaPct as number).toFixed(1)}%` : '';
     headline = `${movers.length} metric${movers.length > 1 ? 's' : ''} moved${
       comparisonLabel ? ` ${comparisonLabel}` : ''
-    } — ${biggest.label} ${dir} ${mag}%.`;
+    } — ${biggest.label} ${dir}${magText}.`;
   }
 
   return { available: true, comparisonLabel, headline, movements, moversCount: movers.length };

@@ -138,4 +138,32 @@ describe('GenieAnswer pin + fallback', () => {
     const chips = Array.from(container.querySelectorAll('.filter--question')).map((c) => c.textContent);
     expect(chips.some((t) => t?.includes('Break this down by state'))).toBe(true);
   });
+
+  it('does NOT synthesize fallback follow-ups on a governed refusal', () => {
+    // A fabricated "Which segments drive this?" under a fair-lending refusal
+    // reads as the product ignoring its own guardrail — the fallback is gated
+    // on the same trust boundary as the pin.
+    act(() => root.render(
+      <GenieAnswer
+        payload={payload({ source: 'policy_blocked', metric_value: null, table_rows: null, answer: 'Result was not displayed.', follow_up_questions: [] })}
+        question="What is the average borrower age in Illinois?"
+        onFollowUp={() => {}}
+      />,
+    ));
+    expect(container.querySelectorAll('.filter--question').length).toBe(0);
+  });
+
+  it('still honors backend-provided follow-ups even on a non-trusted source', () => {
+    // We only suppress SYNTHESIZED pivots; if the backend explicitly returns
+    // follow-ups they are intentional and rendered.
+    act(() => root.render(
+      <GenieAnswer
+        payload={payload({ source: 'degraded', metric_value: null, follow_up_questions: ['Retry the question'] })}
+        question="Q"
+        onFollowUp={() => {}}
+      />,
+    ));
+    const chips = Array.from(container.querySelectorAll('.filter--question')).map((c) => c.textContent);
+    expect(chips.some((t) => t?.includes('Retry the question'))).toBe(true);
+  });
 });

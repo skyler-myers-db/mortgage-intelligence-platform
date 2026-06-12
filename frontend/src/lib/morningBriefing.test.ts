@@ -57,6 +57,33 @@ describe('buildBriefing', () => {
     expect(b.headline).toBe('1 metric moved vs 2026-06-02 — Approved outreach down 74.2%.');
   });
 
+  it('states direction without a fake "0.0%" when a mover has a null delta', () => {
+    // Backend can flag a direction but omit delta_pct (e.g. a new metric with
+    // no comparable prior value). The headline must not read "down 0.0%".
+    const p = preview();
+    p.trends!.approved_count = {
+      series: [], delta_pct: null, direction: 'down', comparison_label: 'vs 2026-06-02', note: null,
+    } as never;
+    const b = buildBriefing(p);
+    expect(b.moversCount).toBe(1);
+    expect(b.headline).toBe('1 metric moved vs 2026-06-02 — Approved outreach down.');
+    expect(b.headline).not.toContain('0.0%');
+  });
+
+  it('prefers a finite-delta mover for the headline magnitude over a null-delta one', () => {
+    const p = preview();
+    // Two movers: one with a real magnitude, one direction-only (null delta).
+    p.trends!.approved_count = {
+      series: [], delta_pct: null, direction: 'up', comparison_label: 'vs 2026-06-02', note: null,
+    } as never;
+    p.trends!.in_outreach_count = {
+      series: [], delta_pct: 12.5, direction: 'up', comparison_label: 'vs 2026-06-02', note: null,
+    } as never;
+    const b = buildBriefing(p);
+    expect(b.moversCount).toBe(2);
+    expect(b.headline).toBe('2 metrics moved vs 2026-06-02 — In outreach up 12.5%.');
+  });
+
   it('says the portfolio is steady when nothing moved', () => {
     const flat = preview();
     // Force every trend to flat.

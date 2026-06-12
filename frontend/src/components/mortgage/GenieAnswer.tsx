@@ -101,11 +101,20 @@ export function GenieAnswer({
   const pinObject = pinnable ? buildPinFromAnswer(payload, cleanedAnswer, question!) : null;
   const isPinned = pinObject ? pins.some((p) => p.id === pinObject.id) : false;
   // Follow-up chips: Genie's own suggestions, or a deterministic fallback so
-  // the loop never dead-ends.
+  // the loop never dead-ends. Only the SYNTHESIZED fallback is gated on the
+  // trust boundary — never fabricate a "drill deeper" pivot on a governed
+  // refusal or degraded answer (a made-up "Which segments drive this?" under a
+  // fair-lending refusal reads as the product ignoring its own guardrail).
+  // Explicit backend follow_up_questions are deliberately STILL honored on any
+  // source: where the backend attaches them (e.g. warm-start `degraded`,
+  // outreach `refused`) they are generic governed sample questions, not
+  // refusal-referential pivots. Do not "tighten" this to drop them.
   const effectiveFollowUps =
     follow_up_questions && follow_up_questions.length > 0
       ? follow_up_questions
-      : buildFallbackFollowUps(payload);
+      : isTrustedGenieSource(payload.source)
+        ? buildFallbackFollowUps(payload)
+        : [];
   // Chart is optional and only computed from structured table_rows.
   // Answer prose is never parsed into visualization data.
   const plan = withChart ? pickPlan(payload, rows, chartColumns) : { kind: 'none', chart: null, viz: null };
