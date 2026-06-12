@@ -183,7 +183,10 @@ export function FunnelSankey({
   const gradientId = useId().replace(/:/g, '');
   const model = useMemo(() => buildFunnelSankeyModel(stages), [stages]);
   const total = useMemo(() => stages.reduce((sum, s) => sum + Math.max(0, s.borrower_count), 0), [stages]);
-  const animate = useFirstAppearance(`sankey:${model.nodes.map((n) => `${n.stageOrder}=${n.count}`).join(',')}`);
+  // One-time entrance keyed on the funnel's STRUCTURE (stage identity), not the
+  // volatile counts — so a live data refresh never re-keys and replays the
+  // draw-in mid-walkthrough (same class of fix as the KpiCard entrance, D5).
+  const animate = useFirstAppearance(`sankey:${model.nodes.map((n) => n.stage).join(',')}`);
 
   if (model.nodes.length === 0 || total === 0) {
     return (

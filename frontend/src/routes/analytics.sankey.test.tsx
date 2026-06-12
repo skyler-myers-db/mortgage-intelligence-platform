@@ -154,6 +154,23 @@ describe('FunnelSankey (render + a11y)', () => {
     expect(container.querySelector('svg')!.getAttribute('class')).not.toContain('funnel-sankey--enter');
   });
 
+  it('does NOT replay the draw when a live data REFRESH changes the counts (re-audit #5)', () => {
+    // The entrance is keyed on the funnel STRUCTURE, not the volatile counts —
+    // a refreshed snapshot (same stages, new numbers) that remounts the chart
+    // must not re-animate mid-walkthrough. Keying on counts (the prior bug)
+    // would re-key and replay here.
+    mount(STAGES);
+    expect(container.querySelector('svg')!.getAttribute('class')).toContain('funnel-sankey--enter');
+    act(() => root.unmount());
+    container.remove();
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    const refreshed = STAGES.map((s) => ({ ...s, borrower_count: s.borrower_count + 101 }));
+    mount(refreshed);
+    expect(container.querySelector('svg')!.getAttribute('class')).not.toContain('funnel-sankey--enter');
+  });
+
   it('navigates to the stage slice of the lead queue on click', () => {
     mount(STAGES);
     const itm = container.querySelectorAll('[role="link"]')[1];
