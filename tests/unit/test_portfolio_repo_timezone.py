@@ -387,6 +387,35 @@ def test_campaign_list_is_fresh_lakebase_state_not_preview_cache(monkeypatch):
     assert all("mip_app.campaigns" in str(call["sql"]) for call in lakebase.calls)
 
 
+def test_campaign_list_excludes_archived_by_default(monkeypatch):
+    """Re-audit #4 (2026-06-12): 'archived' is the hide-from-product status,
+    but the default listing returned every status — and a PATCH-to-archived
+    sets updated_at=now(), so archiving dev detritus (load-test + Genie-draft
+    rows) would have bumped it to the TOP of Saved Campaigns instead of
+    removing it. Default listing must exclude archived; an explicit
+    status='archived' query must still return them."""
+    lakebase = _CampaignListLakebase()
+    monkeypatch.setattr(
+        "backend.services.repositories.databricks_repo.get_lakebase_client",
+        lambda: lakebase,
+    )
+    repo = DatabricksPortfolioRepository(
+        _StubClient(_preview_row(), [_trend_row("2026-04-22T18:30:00")])
+    )  # type: ignore[arg-type]
+
+    repo.list_campaigns(owner_email="skyler@entrada.ai")
+    default_sql = str(lakebase.calls[-1]["sql"])
+    # The default (status=None) branch hides archived; the SQL carries the
+    # exclusion so the regression can't be silently removed.
+    assert "status <> 'archived'" in default_sql
+    assert lakebase.calls[-1]["params"]["status"] is None
+
+    repo.list_campaigns(owner_email="skyler@entrada.ai", status="archived")
+    # Explicit status is passed through unchanged (audit/admin can still see
+    # archived rows by asking for them).
+    assert lakebase.calls[-1]["params"]["status"] == "archived"
+
+
 def test_trend_delta_uses_exact_snapshot_date_and_drops_bootstrap_zero():
     """A bootstrap 0 row must not become a fake percent change baseline."""
     trend_rows = [

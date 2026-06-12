@@ -259,13 +259,26 @@ class DatabricksPortfolioRepository:
       weight_pct = EXCLUDED.weight_pct
     """
 
+    # Re-audit #4 (2026-06-12): 'archived' is the "hide from the product"
+    # status, but the default listing showed every status — so a governed
+    # PATCH-to-archived (which sets updated_at=now()) bumped the archived
+    # row to the TOP of Saved Campaigns instead of removing it. Default
+    # listing now excludes archived; an explicit status='archived' query
+    # still returns them (admin/audit). This is also what makes the booth
+    # Saved Campaigns panel show only real builds after dev detritus
+    # (load-test + Genie-draft rows) is archived.
     _CAMPAIGN_LIST_SQL = """
     SELECT campaign_id::text, name, owner_email, status, criteria,
            suppression_policy, message_variants, channel_cascade, send_window,
            holdout, roi_assumptions, created_at, updated_at
     FROM mip_app.campaigns
     WHERE (%(owner_email)s::text IS NULL OR owner_email = %(owner_email)s::text)
-      AND (%(status)s::text IS NULL OR status = %(status)s::text)
+      AND (
+        CASE
+          WHEN %(status)s::text IS NULL THEN status <> 'archived'
+          ELSE status = %(status)s::text
+        END
+      )
     ORDER BY updated_at DESC, created_at DESC
     LIMIT %(limit)s
     """
