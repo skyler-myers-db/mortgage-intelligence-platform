@@ -903,3 +903,88 @@ do not stop until all four are implemented, validated, and live-verified.
     trusted live answer; pinning surfaces it on the Home "Pinned insights"
     card (shared store), then unpins clean. This exercises the exact
     trusted-source boundary the architect blocker was about.
+
+## Re-Audit #5 remediation (2026-06-12) — buyer-wow stress findings
+
+Source: `docs/audits/re-audit-2026-06-12-r5-buyer-wow-stress.md` (live
+adversarial break-test, all findings P3, none blocking). Each claim was
+verified against code before fixing. Two independent reviewers (qa-test,
+governance) APPROVED the diff.
+
+### Fixed (valid)
+- **D1 — Pinned-card raw markdown + mid-token truncation (Home hero).**
+  `buildPinFromAnswer` now flattens the Genie markdown vocabulary (`**bold**`,
+  `` `code` ``, bullets) to plain text and truncates at a word boundary with
+  an ellipsis, trimming any dangling separator/open-bracket. No more literal
+  "**" or a dangling "(**" on the hero. Verified live (pinned summary asserted
+  markdown-free).
+- **D2 — Refusal answers offered a synthesized follow-up pivot.** The
+  deterministic fallback is now gated on the same `isTrustedGenieSource`
+  denylist as the pin — a governed/fair-lending refusal no longer suggests
+  "Which segments drive this?". Explicit backend follow-ups are still honored
+  (generic governed sample questions on warm-start `degraded`/outreach
+  `refused`, never refusal-referential). Verified live (refusal → no pin, no
+  follow-up chips).
+- **D5 — KPI one-time entrance replayed on a mid-session data refresh.** Keyed
+  on the label alone, not label+value; `useFirstAppearance` freezes `isFirst`
+  at mount so the loading→loaded transition still animates when the number
+  lands, but a later refresh never re-keys.
+- **D6a — Morning-briefing headline could read "up 0.0%"** for a direction-only
+  mover with a null delta. The headline now states direction, appends the
+  percent only when finite, and prefers a finite-delta mover.
+- **D6b — Deleted dead `useCountUp.ts`** (no importers).
+- **D6c — ROI projector had no upper money bound** ("$1000000.0B"). Implausible
+  avg-balance (>$100M) / cost-per-lead (>$100K) are now rejected as invalid →
+  "—" (consistent with `clampPct`, which rejects rather than clamps), and the
+  compact formatter gained a trillion tier.
+
+### Audit-MISSED (found while remediating)
+- **Funnel Sankey entrance had the identical D5 bug.** `useFirstAppearance` was
+  keyed on `${stageOrder}=${count}` (volatile), so a refreshed snapshot that
+  remounts the chart would replay the ribbon draw-in. Re-keyed on the stage
+  STRUCTURE. The existing once-only test only remounted with identical stages
+  (never exercised a refresh); strengthened it to remount with changed counts.
+
+### Adjudicated NON-fixes (verified or by-design, with rationale)
+- **D8 evidence hover (ledger #8) — NOT a defect.** Every Supporting-evidence
+  chip passes a non-null source; the hover-card open delay is 110 ms (far under
+  the audit's 1 s manual hover). Verified LIVE that the card attaches and
+  appears on a Supporting-evidence chip — the audit's single 2:30 AM hover was
+  transient. Added live regression coverage.
+- **Sankey mid-funnel balloon (ledger #3) — honest data relationship, kept.**
+  Offer-Recommended (4.47M) exceeds High-Opportunity (3.88K) because the
+  next-best-offer engine scores the whole addressable base, not the high-opp
+  subset. Node heights reflect TRUE counts; the conversion % is already
+  suppressed for grown stages (prior tranche fix) and the aria-label omits the
+  meaningless ratio. "Approved 0.0%" is a real rounding of a genuine narrowing.
+  Restructuring the funnel (branch offers in parallel) is a semantics redesign,
+  riskier and less honest 3 days pre-booth — this is a talk-track item.
+- **Pin roaming (headline #2 / ledger #7) — by design.** Pins are a client-side,
+  actor-scoped localStorage bookmark (the governance-approved #9 pattern), not a
+  governed Lakebase mutation; they don't roam machines. Operational note: pin on
+  the presenting machine. A roaming pin would need a backend endpoint + audit and
+  is arguably the wrong pattern for personal view-state.
+- **Denylist default-allow (ledger #7) — by design, errs safe.**
+  `isTrustedGenieSource` reuses the app's single-source `NON_PERSISTABLE_SOURCES`
+  denylist; degraded sources are enumerated and blocked, anything else is a
+  genuine answer. Both directions are test-pinned. A shared backend/frontend
+  enum or backend-parity test would harden it (future hardening, not a blocker).
+- **Briefing leads with the purge artifact (ledger #4) — operational.** The
+  headline is honest (it flags the step-change); re-seed approvals pre-booth.
+
+### Framing correction (from the audit)
+- The signoff this round only ever claimed the FOUR features it shipped
+  (accurate). On the broader annex, it is **9 of 10** implemented — kiosk mode
+  (#10) is deliberately deferred post-Summit and has no code.
+
+### Validation + deployed evidence
+- Vitest **387/387** (65 files, +11 regression tests across the fixes);
+  lint/build/budget green. Backend untouched (pure frontend).
+- Budget: the Buyer-Wow epic had already pushed initial JS gzip to 82.99 (the
+  83 ceiling, 79.03 baseline); the D1 sanitizer tipped it to 83.15 →
+  initialJsGzip bumped 83→87 (actual +~5%), documented.
+- Deploy `./scripts/deploy.sh -t dev --no-confirm` exit 0, **13/13 live smoke
+  PASS**; redeployed to roll the Sankey fix forward (deployed == HEAD).
+- **Live verification 5/5 PASS** (`buyer_wow_live.spec.ts`): the 4 features
+  plus D1 (markdown-free pinned summary), D2 (refusal → no pin/no follow-ups),
+  and D8 (evidence hover-card attaches to a Supporting-evidence chip).
