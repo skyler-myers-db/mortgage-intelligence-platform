@@ -15,6 +15,7 @@ import {
   writeGenieConversationId,
 } from '../../lib/genieConversation';
 import { isGenieFollowUpQuestion } from '../../lib/genieSession';
+import { NON_PERSISTABLE_SOURCES } from '../../lib/pinnedInsights';
 
 // 2026-05-04 (FIX Δ2): persisted size for the floating panel. The
 // ranges below cap at "still feels like a chat panel" — bigger than
@@ -201,14 +202,6 @@ export function sourceAssetsFor(payload: GenieAnswerShape): string[] {
   }
   return Array.from(seen).slice(0, 4);
 }
-
-const NON_PERSISTABLE_SOURCES = new Set([
-  'degraded',
-  'policy_blocked',
-  'refused',
-  'data_gap',
-  'out_of_footprint',
-]);
 
 export function shouldPersistConversation(payload: GenieAnswerShape): boolean {
   return Boolean(payload.conversation_id && !NON_PERSISTABLE_SOURCES.has(String(payload.source ?? '')));
@@ -775,6 +768,10 @@ export function GenieChat() {
                 <div className="bubble">
                   <GenieAnswer
                     payload={m.payload}
+                    question={(() => {
+                      const prev = msgs[i - 1];
+                      return prev && prev.who === 'user' ? prev.text : undefined;
+                    })()}
                     onFollowUp={ask}
                     onAction={(action) => runAction(action, m.payload)}
                     dense

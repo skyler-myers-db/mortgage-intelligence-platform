@@ -394,7 +394,7 @@ export default function AskGenie() {
                       auto-detected bar chart for top-N / per-state-style
                       table_rows payloads. The floating bubble does NOT
                       pass this prop, so its compact form is unchanged. */}
-                  <GenieAnswer payload={payload} onFollowUp={ask} onAction={runAction} withChart />
+                  <GenieAnswer payload={payload} question={submittedQuestion ?? undefined} onFollowUp={ask} onAction={runAction} withChart />
                   {actionStatus && (
                     <div className="status-callout status-callout--info mt-3">
                       {actionStatus}

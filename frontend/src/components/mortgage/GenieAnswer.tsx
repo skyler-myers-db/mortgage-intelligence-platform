@@ -17,6 +17,12 @@ import {
 import { MarkdownAnswer, stripQuestionRestatement } from './GenieAnswer.markdown';
 import { GenieProofPanel } from './GenieAnswerProof';
 import {
+  buildFallbackFollowUps,
+  buildPinFromAnswer,
+  isTrustedGenieSource,
+  usePinnedInsights,
+} from '../../lib/pinnedInsights';
+import {
   formatCell,
   humanizeKey,
   isIdentifierColumn,
@@ -54,6 +60,9 @@ interface GenieAnswerProps {
   payload: GenieAnswerShape;
   onFollowUp?: (q: string) => void;
   onAction?: (action: GenieActionSuggestion) => void | Promise<void>;
+  /** The question that produced this answer (lives in the conversation, not
+   *  the payload). When present on a genuine answer, enables "Pin to Home". */
+  question?: string;
   /** Compact mode (used inside the floating chat bubble). */
   dense?: boolean;
   /** Render an inline chart when the table_rows shape is chartable.
@@ -66,11 +75,13 @@ export function GenieAnswer({
   payload,
   onFollowUp,
   onAction,
+  question,
   dense = false,
   withChart = false,
 }: GenieAnswerProps) {
   const { answer, metric_value, table_rows, follow_up_questions, actions } = payload;
   const { setDrawer } = useApp();
+  const { pins, pin, unpin } = usePinnedInsights();
   const [showProof, setShowProof] = useState(false);
   const rows = Array.isArray(table_rows) ? table_rows : [];
   const visibleRows = rows.slice(0, MAX_TABLE_ROWS);
@@ -78,6 +89,23 @@ export function GenieAnswer({
   const columns = visibleRows[0] ? Object.keys(visibleRows[0]).slice(0, MAX_TABLE_COLS) : [];
   const chartColumns = rows[0] ? Object.keys(rows[0]) : [];
   const cleanedAnswer = answer ? stripQuestionRestatement(answer) : '';
+  // "Pin to Home" (Buyer-Wow #9): only a genuine, trusted data answer is
+  // pinnable — never a degraded/policy-blocked caveat. Trust is the app's
+  // denylist (`isTrustedGenieSource`), so canonical `trusted_sql`/`sales_ops`
+  // answers (the booth demo set) are pinnable too, not just `genie`. The
+  // question comes from the conversation (the payload has no question field).
+  const pinnable =
+    Boolean(question) &&
+    isTrustedGenieSource(payload.source) &&
+    (Boolean(metric_value) || rows.length > 0 || cleanedAnswer.length > 0);
+  const pinObject = pinnable ? buildPinFromAnswer(payload, cleanedAnswer, question!) : null;
+  const isPinned = pinObject ? pins.some((p) => p.id === pinObject.id) : false;
+  // Follow-up chips: Genie's own suggestions, or a deterministic fallback so
+  // the loop never dead-ends.
+  const effectiveFollowUps =
+    follow_up_questions && follow_up_questions.length > 0
+      ? follow_up_questions
+      : buildFallbackFollowUps(payload);
   // Chart is optional and only computed from structured table_rows.
   // Answer prose is never parsed into visualization data.
   const plan = withChart ? pickPlan(payload, rows, chartColumns) : { kind: 'none', chart: null, viz: null };
@@ -202,9 +230,9 @@ export function GenieAnswer({
         </>,
         document.body,
       )}
-      {follow_up_questions && follow_up_questions.length > 0 && onFollowUp && (
+      {onFollowUp && effectiveFollowUps.length > 0 && (
         <div className="genie-answer__followups">
-          {follow_up_questions.slice(0, 3).map((q) => (
+          {effectiveFollowUps.slice(0, 3).map((q) => (
             <button
               key={q}
               type="button"
@@ -215,6 +243,20 @@ export function GenieAnswer({
               <span className="filter__value filter__value--question">{q}</span>
             </button>
           ))}
+        </div>
+      )}
+      {pinObject && (
+        <div className="genie-answer__pin-row">
+          <button
+            type="button"
+            className={`btn btn--sm ${isPinned ? 'btn--ghost' : ''} genie-answer__pin`}
+            onClick={() => (isPinned ? unpin(pinObject.id) : pin(pinObject))}
+            aria-pressed={isPinned}
+            data-testid="pin-to-home"
+          >
+            <Icon name={isPinned ? 'check' : 'pin'} size={12} />
+            {isPinned ? 'Pinned to Home' : 'Pin to Home'}
+          </button>
         </div>
       )}
       {actions && actions.length > 0 && onAction && (

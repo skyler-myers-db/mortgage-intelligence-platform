@@ -5,6 +5,7 @@ import { PageShell } from '../components/layout/PageShell';
 import { KpiCard } from '../components/mortgage/KpiCard';
 import { USChoroplethMap } from '../components/mortgage/USChoroplethMap';
 import { MorningBriefing } from '../components/mortgage/MorningBriefing';
+import { PinnedInsights } from '../components/mortgage/PinnedInsights';
 import { AgentActivityLog } from '../components/mortgage/AgentActivityLog';
 import { DataEstatePanel, DataEstatePanelSkeleton } from '../components/mortgage/DataEstatePanel';
 import { Button, Chip } from '../components/Primitives';
@@ -226,6 +227,9 @@ export default function Home() {
       {!isDayZero && !previewWarming && !previewError && (
         <MorningBriefing preview={preview ?? null} loading={kpisLoading} />
       )}
+      {/* Pinned insights (Buyer-Wow #9): operator's pinned Genie answers —
+          renders nothing when empty, so it adds no chrome until used. */}
+      <PinnedInsights />
       {!isDayZero && !previewWarming && (
         <div className="kpi-row">
           <KpiCard

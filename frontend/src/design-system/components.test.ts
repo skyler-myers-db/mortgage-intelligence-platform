@@ -191,6 +191,13 @@ describe('layout containment contracts', () => {
     expect(css).toMatch(/\.borrower-story__verdict--warn\s*\{[^}]*color:\s*var\(--status-warning-ink\);/s);
   });
 
+  it('styles the pinned-insights card and the answer pin-row (Buyer-Wow #9)', () => {
+    const css = designCss();
+    expect(css).toContain('.pinned-insights__list');
+    expect(css).toMatch(/\.pinned-insights__unpin:hover\s*\{[^}]*color:\s*var\(--signal-danger\);/s);
+    expect(css).toContain('.genie-answer__pin-row');
+  });
+
   it('renders skeleton placeholders for slow lead and data-estate loads', () => {
     const css = designCss();
 
