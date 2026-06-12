@@ -39,8 +39,12 @@ const KiB = 1024;
 const budgets = {
   initialJsBytes: 270 * KiB, // actual 256.60 (was 300 -- tightened)
   initialJsGzipBytes: 83 * KiB, // actual 79.03 (was 90 -- tightened)
-  initialCssBytes: 107 * KiB, // actual 101.22 (was 102 -- real headroom)
-  initialCssGzipBytes: 19.1 * KiB, // actual 18.13 (was 18.25 -- real headroom)
+  // Bumped 2026-06-11 for the re-audit #4 Buyer-Wow tranche: ⌘K command
+  // palette (.cmdk*), portal evidence hover-card (.evidence-hovercard*),
+  // sleek one-time KPI entrance (.kpi__value--enter / .spark__line--draw),
+  // and the campaign ROI projector (.roi-projector*) — ~7 KiB of feature CSS.
+  initialCssBytes: 112 * KiB, // actual 108.28 (was 107 / 101.22 pre-tranche)
+  initialCssGzipBytes: 20 * KiB, // actual 19.21 (was 19.1 / 18.13 pre-tranche)
   totalJsBytes: 875 * KiB, // actual 832.42 (was 832 with 0.03 KiB slack)
   totalJsGzipBytes: 288 * KiB, // actual 274.22 (was 276)
   maxLazyJsBytes: 104 * KiB, // actual 98.40 (was 160 -- tightened)

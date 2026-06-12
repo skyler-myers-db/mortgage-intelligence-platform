@@ -1,3 +1,5 @@
+import { useId } from 'react';
+
 /**
  * Sparkline — zero-dep inline SVG mini line chart. Sized for the `.kpi__spark`
  * slot (bottom-right of a KPI card, per the prototype). Stroke uses the live
@@ -11,9 +13,19 @@ interface SparklineProps {
   width?: number;
   height?: number;
   direction?: 'up' | 'down' | 'flat';
+  /**
+   * When true, the stroke draws in left-to-right once (the KPI one-time
+   * entrance, re-audit #4 #2). Pure CSS via stroke-dasharray/offset; honors
+   * prefers-reduced-motion. Off by default so non-KPI usages are unchanged.
+   */
+  drawIn?: boolean;
 }
 
-export function Sparkline({ points, width = 64, height = 20, direction }: SparklineProps) {
+export function Sparkline({ points, width = 64, height = 20, direction, drawIn = false }: SparklineProps) {
+  // Unique per instance so two KPIs that happen to share their first three
+  // points + direction can't collide on the same gradient id (frontend
+  // signoff nit). useId is render-stable and SSR-safe.
+  const reactId = useId();
   if (!points || points.length < 2) return null;
 
   const min = Math.min(...points);
@@ -39,7 +51,7 @@ export function Sparkline({ points, width = 64, height = 20, direction }: Sparkl
   const stroke =
     dir === 'down' ? 'var(--signal-danger)' : dir === 'flat' ? 'var(--text-3)' : 'var(--accent)';
 
-  const gradientId = `spark-fill-${points.slice(0, 3).join('-').replace(/\./g, '_')}-${dir}`;
+  const gradientId = `spark-fill-${reactId.replace(/:/g, '')}-${dir}`;
 
   return (
     <svg
@@ -58,6 +70,7 @@ export function Sparkline({ points, width = 64, height = 20, direction }: Sparkl
       </defs>
       <path d={areaPath} fill={`url(#${gradientId})`} />
       <path
+        className={drawIn ? 'spark__line spark__line--draw' : 'spark__line'}
         d={path}
         fill="none"
         stroke={stroke}
