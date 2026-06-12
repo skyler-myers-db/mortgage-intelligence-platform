@@ -113,6 +113,34 @@ describe('layout containment contracts', () => {
     expect(css).toMatch(/\.genie-composer__samples\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\);/s);
   });
 
+  it('layers the ⌘K command palette above the Genie FAB and dims with a scrim (re-audit #4 #1)', () => {
+    const css = designCss();
+    // Genie FAB is z 900; the palette must sit above everything.
+    expect(css).toMatch(/\.cmdk\s*\{[^}]*z-index:\s*1000;/s);
+    expect(css).toMatch(/\.cmdk\s*\{[^}]*background:\s*var\(--surface-scrim\);/s);
+    expect(css).toContain('.cmdk__row.is-active');
+    // Entrance animation is disabled under reduced motion.
+    expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)\s*\{[^}]*\.cmdk[\s\S]*?animation:\s*none;/s);
+  });
+
+  it('portals the evidence hover-card with fixed coords and never lets it steal the click (re-audit #4 #8)', () => {
+    const css = designCss();
+    expect(css).toMatch(/\.evidence-hovercard\s*\{[^}]*position:\s*fixed;/s);
+    // pointer-events:none means the chip click underneath always wins.
+    expect(css).toMatch(/\.evidence-hovercard\s*\{[^}]*pointer-events:\s*none;/s);
+    expect(css).toContain('.evidence-hovercard--above');
+    expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)\s*\{[^}]*\.evidence-hovercard\s*\{\s*animation:\s*none;/s);
+  });
+
+  it('gives the KPI one-time entrance + sparkline draw a reduced-motion off-switch (re-audit #4 #2)', () => {
+    const css = designCss();
+    expect(css).toContain('.kpi__value--enter');
+    expect(css).toContain('@keyframes kpi-value-enter');
+    expect(css).toMatch(/\.spark__line--draw\s*\{[^}]*stroke-dashoffset:/s);
+    // Reduced motion: no entrance, sparkline fully drawn (offset 0).
+    expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?\.spark__line--draw\s*\{[^}]*stroke-dashoffset:\s*0;/s);
+  });
+
   it('renders skeleton placeholders for slow lead and data-estate loads', () => {
     const css = designCss();
 

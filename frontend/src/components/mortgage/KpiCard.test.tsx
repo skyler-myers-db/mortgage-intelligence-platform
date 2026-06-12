@@ -40,6 +40,24 @@ describe('KpiCard value rendering', () => {
     expect(html).toContain('$2.18');
   });
 
+  it('applies the one-time entrance class to a settled value, but not to loading/em-dash states (re-audit #4 #2)', () => {
+    // A real value on first appearance gets the sleek entrance class.
+    const settled = renderToStaticMarkup(
+      <KpiCard label="Marketable population A" valueAnimated={79730} />,
+    );
+    expect(settled).toContain('kpi__value--enter');
+    // A loading card renders skeletons, no value, no entrance.
+    const loadingCard = renderToStaticMarkup(
+      <KpiCard label="Marketable population B" valueAnimated={79730} loading />,
+    );
+    expect(loadingCard).not.toContain('kpi__value--enter');
+    // An em-dash (unknown/day-zero) must not animate a non-number.
+    const dash = renderToStaticMarkup(
+      <KpiCard label="Marketable population C" valueAnimated={null} />,
+    );
+    expect(dash).not.toContain('kpi__value--enter');
+  });
+
   it('renders an em-dash (not "0") for a zero value only when prop is null', () => {
     // Sanity check: valueAnimated={0} still renders "0". It's the PARENT
     // (home.tsx / portfolio-builder.tsx) that translates a Day-0 zero into

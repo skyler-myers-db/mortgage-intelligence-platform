@@ -573,6 +573,74 @@ kbd {
 .evidence-chip__dot--aging { background: var(--signal-warning); }
 .evidence-chip__dot--stale { background: var(--text-3); }
 
+/* Evidence hover micro-preview (re-audit #4 Buyer-Wow #8). Portal-rendered
+   to document.body with position:fixed coords, so it never clips inside the
+   lead table's overflow:auto. Decorative (aria-hidden); the drawer is the
+   real a11y path. */
+.evidence-hovercard {
+  position: fixed;
+  z-index: 1000;
+  inline-size: 15rem;
+  max-inline-size: calc(100vw - var(--sp-6));
+  transform: translateX(-50%);
+  padding: var(--sp-3);
+  background: var(--bg-1);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-md);
+  pointer-events: none; /* never intercepts the click that opens the drawer */
+  animation: evidence-hovercard-in var(--dur-fast) var(--ease);
+}
+.evidence-hovercard--above { transform: translate(-50%, -100%); }
+.evidence-hovercard__title {
+  font-size: var(--fs-12);
+  font-weight: 600;
+  color: var(--text-1);
+  margin-block-end: var(--sp-1);
+}
+.evidence-hovercard__row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  font-size: var(--fs-11);
+  color: var(--text-3);
+  margin-block-end: var(--sp-2);
+}
+.evidence-hovercard__dot {
+  inline-size: 6px;
+  block-size: 6px;
+  border-radius: 50%;
+  background: var(--text-3);
+  flex-shrink: 0;
+}
+.evidence-hovercard__dot--fresh { background: var(--signal-success); }
+.evidence-hovercard__dot--aging { background: var(--signal-warning); }
+.evidence-hovercard__dot--stale { background: var(--text-3); }
+.evidence-hovercard__signal {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  padding-block: var(--sp-1);
+  border-block-start: 1px solid var(--line-1);
+}
+.evidence-hovercard__signal-label { font-size: var(--fs-11); color: var(--text-3); }
+.evidence-hovercard__signal-value { font-size: var(--fs-12); color: var(--text-1); }
+.evidence-hovercard__cta {
+  margin-block-start: var(--sp-2);
+  font-size: var(--fs-11);
+  color: var(--accent-ink);
+}
+/* Opacity-only so the entrance never fights the placement transform
+   (translateX(-50%) for below, translate(-50%,-100%) for above). */
+@keyframes evidence-hovercard-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .evidence-hovercard { animation: none; }
+}
+
 /* Freshness legend — tiny inline rail used inside the evidence drawer
    header so operators learn the vocabulary without a tooltip. */
 .freshness-legend {
@@ -641,6 +709,37 @@ kbd {
   display: flex; align-items: baseline; gap: var(--sp-2);
 }
 .kpi__unit { font-size: var(--fs-kpi-unit); color: var(--text-3); font-weight: 500; }
+
+/* Sleek one-time KPI entrance (re-audit #4 #2). A brief settle — value
+   fades up, sparkline strokes in left-to-right — fired ONCE per KPI per
+   session (gated in JS by useFirstAppearance, so route re-entry never
+   replays it). Deliberately NOT a number-rolling count-up: this reads as
+   an enterprise metric settling, not a casino ticker. */
+.kpi__value--enter {
+  animation: kpi-value-enter var(--dur-slow) var(--ease) both;
+}
+@keyframes kpi-value-enter {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.spark__line--draw {
+  /* 220 is a safe over-estimate of the path length for the 64px spark;
+     the browser clamps the visible dash to the actual length. */
+  stroke-dasharray: 220;
+  stroke-dashoffset: 220;
+  animation: spark-draw 700ms var(--ease) 80ms forwards;
+}
+@keyframes spark-draw {
+  to { stroke-dashoffset: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .kpi__value--enter { animation: none; }
+  .spark__line--draw {
+    animation: none;
+    stroke-dasharray: none;
+    stroke-dashoffset: 0;
+  }
+}
 .kpi__delta {
   display: inline-flex; align-items: center; gap: 4px;
   margin-top: var(--sp-3);
@@ -1284,6 +1383,130 @@ kbd {
 }
 .drawer:not(.is-open) { visibility: hidden; }
 .drawer.is-open { transform: translateX(0); }
+
+/* ============================================================
+   ⌘K COMMAND PALETTE (re-audit #4 Buyer-Wow #1)
+   Above every surface, rail, drawer, and the Genie FAB (z 900).
+   ============================================================ */
+.cmdk {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-block-start: 14vh;
+  padding-inline: var(--sp-4);
+  background: var(--surface-scrim);
+  backdrop-filter: blur(3px);
+  animation: cmdk-scrim-in var(--dur-fast) var(--ease);
+}
+.cmdk__panel {
+  inline-size: min(40rem, 100%);
+  max-block-size: 70vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-1);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-lg), var(--kpi-glow);
+  overflow: hidden;
+  animation: cmdk-panel-in var(--dur-base) var(--ease);
+}
+.cmdk__search {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  border-block-end: 1px solid var(--line-1);
+  color: var(--text-3);
+}
+.cmdk__input {
+  flex: 1;
+  border: none;
+  background: transparent;
+  color: var(--text-1);
+  font-size: var(--fs-16);
+  outline: none;
+}
+.cmdk__input::placeholder { color: var(--text-4); }
+.cmdk__hint,
+.cmdk__footer kbd {
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+  color: var(--text-3);
+  background: var(--bg-3);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-sm);
+  padding: 1px var(--sp-1);
+}
+.cmdk__list {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--sp-2);
+}
+.cmdk__group + .cmdk__group { margin-block-start: var(--sp-2); }
+.cmdk__group-label {
+  font-size: var(--fs-11);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+  color: var(--text-3);
+  padding: var(--sp-2) var(--sp-2) var(--sp-1);
+}
+.cmdk__row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  inline-size: 100%;
+  padding: var(--sp-2) var(--sp-2);
+  border: none;
+  border-radius: var(--r-md);
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  text-align: start;
+  transition: background var(--dur-fast) var(--ease);
+}
+.cmdk__row.is-active { background: var(--accent-soft); color: var(--text-1); }
+.cmdk__row-icon { color: var(--text-3); flex-shrink: 0; }
+.cmdk__row.is-active .cmdk__row-icon { color: var(--accent-ink); }
+.cmdk__row-label { font-size: var(--fs-13); font-weight: 500; }
+.cmdk__row-hint {
+  margin-inline-start: auto;
+  font-size: var(--fs-11);
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-inline-size: 50%;
+}
+.cmdk__empty,
+.cmdk__status {
+  padding: var(--sp-4);
+  font-size: var(--fs-12);
+  color: var(--text-3);
+  text-align: center;
+}
+.cmdk__status--error { color: var(--signal-danger); }
+.cmdk__footer {
+  display: flex;
+  gap: var(--sp-4);
+  padding: var(--sp-2) var(--sp-4);
+  border-block-start: 1px solid var(--line-1);
+  font-size: var(--fs-11);
+  color: var(--text-3);
+}
+.cmdk__footer span { display: inline-flex; align-items: center; gap: var(--sp-1); }
+
+@keyframes cmdk-scrim-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes cmdk-panel-in {
+  from { opacity: 0; transform: translateY(-8px) scale(0.99); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cmdk,
+  .cmdk__panel { animation: none; }
+}
 .drawer__hdr {
   padding: var(--sp-4) var(--sp-5); border-bottom: 1px solid var(--line-1);
   display: flex; align-items: center; gap: var(--sp-3);

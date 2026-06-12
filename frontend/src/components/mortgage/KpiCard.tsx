@@ -3,6 +3,7 @@ import { Icon } from '../Icon';
 import { EvidenceChip } from '../Primitives';
 import type { DrawerSource } from '../AppContext';
 import { Sparkline } from './Sparkline';
+import { useFirstAppearance } from '../../lib/useFirstAppearance';
 
 /**
  * KpiCard — prototype `.kpi` BEM: label / value / unit / delta / source.
@@ -10,9 +11,12 @@ import { Sparkline } from './Sparkline';
  * Value paths:
  *   - `value: string` — static pre-formatted (e.g. "$2.18")
  *   - `valueAnimated: number | null` — numeric; formatted via `format` (default
- *     is `.toLocaleString()` rounded to int). Renders the final value directly
- *     (no count-up animation — it was running on every route navigation and
- *     came across as demo-ticker, not a settled enterprise metric).
+ *     is `.toLocaleString()` rounded to int). Renders the FINAL value directly
+ *     — there is no number-rolling count-up (that ran on every route nav and
+ *     read as a demo-ticker). Instead, the value gets a sleek ONE-TIME
+ *     entrance on first appearance this session (a brief fade-up; the
+ *     sparkline strokes in), via `useFirstAppearance`. Route re-entry does
+ *     NOT replay it, and `prefers-reduced-motion` disables it entirely.
  *   - `valueAnimated: null` — renders "—" (em dash) only for a real unknown
  *     or error state; ordinary loading should pass `loading`.
  *
@@ -67,7 +71,15 @@ export function KpiCard({
     display = value ?? '';
   }
 
-  const sparkNode = spark ?? (trend && trend.length >= 2 ? <Sparkline points={trend} direction={deltaDir} /> : null);
+  // Sleek one-time entrance: animate the first appearance of this KPI in the
+  // session (keyed by label + the resolved value, so it fires when the real
+  // number lands, not on the loading skeleton). Re-entry never replays it;
+  // reduced-motion users get the settled state with no animation (CSS).
+  const enterKey = `kpi:${label}:${display}`;
+  const animateEntrance = useFirstAppearance(enterKey) && !loading && display !== '' && display !== '—';
+
+  const sparkNode =
+    spark ?? (trend && trend.length >= 2 ? <Sparkline points={trend} direction={deltaDir} drawIn={animateEntrance} /> : null);
 
   if (loading) {
     return (
@@ -88,7 +100,7 @@ export function KpiCard({
   return (
     <div className="kpi">
       <div className="kpi__label">{label}</div>
-      <div className="kpi__value num">
+      <div className={`kpi__value num${animateEntrance ? ' kpi__value--enter' : ''}`}>
         {display}
         {unit && <span className="kpi__unit">{unit}</span>}
       </div>

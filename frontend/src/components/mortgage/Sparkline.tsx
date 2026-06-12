@@ -11,9 +11,15 @@ interface SparklineProps {
   width?: number;
   height?: number;
   direction?: 'up' | 'down' | 'flat';
+  /**
+   * When true, the stroke draws in left-to-right once (the KPI one-time
+   * entrance, re-audit #4 #2). Pure CSS via stroke-dasharray/offset; honors
+   * prefers-reduced-motion. Off by default so non-KPI usages are unchanged.
+   */
+  drawIn?: boolean;
 }
 
-export function Sparkline({ points, width = 64, height = 20, direction }: SparklineProps) {
+export function Sparkline({ points, width = 64, height = 20, direction, drawIn = false }: SparklineProps) {
   if (!points || points.length < 2) return null;
 
   const min = Math.min(...points);
@@ -58,6 +64,7 @@ export function Sparkline({ points, width = 64, height = 20, direction }: Sparkl
       </defs>
       <path d={areaPath} fill={`url(#${gradientId})`} />
       <path
+        className={drawIn ? 'spark__line spark__line--draw' : 'spark__line'}
         d={path}
         fill="none"
         stroke={stroke}

@@ -5,6 +5,7 @@ import { HealthProvider, useHealth } from '../HealthProvider';
 import { FootprintProvider } from '../FootprintProvider';
 import { Rail } from './Rail';
 import { Topbar } from './Topbar';
+import { CommandPalette } from '../command/CommandPalette';
 import { EvidenceDrawer } from '../mortgage/EvidenceDrawer';
 import { DegradedBanner } from '../mortgage/DegradedBanner';
 import { Icon } from '../Icon';
@@ -169,6 +170,7 @@ function AppShellInner({ children }: PropsWithChildren) {
       </a>
       <Rail />
       <Topbar />
+      <CommandPalette />
       <main id="main-content" tabIndex={-1} className="main">
         <DegradedBanner />
         {children}
