@@ -608,3 +608,92 @@ LARGER than reported, one is refuted-in-code pending live confirmation.
   phrasing on stage.
 - Console: the single page error during verification was the
   since-fixed portfolio-create 422; the budget fix removes its trigger.
+
+## Re-audit #4 response (2026-06-12, merge after 0887f76)
+
+Adjudication of "Re-Audit #4: Signoff Adjudication + Buyer-Wow Annex". The
+audit accepted signoff #4 and corrected three of MY framing inflations —
+all three conceded:
+
+- **Push state**: "main 9 ahead — push is yours" was stale; the operator
+  had already pushed and origin/main == HEAD. Verified before this round
+  (git rev-list origin/main..main = 0). I will state push state from a
+  live `git fetch`, not from my last local view.
+- **Commit count**: "7 vertical commits" double-counted the evidence
+  commit. Correct framing: N vertical + evidence + merges.
+- **Prompt ban breadth**: the prior guard was a one-file source pin, not a
+  repo-wide rule. Fixed this round (see eslint ban below).
+
+### Nits fixed (all real, all from the diff)
+
+- **Save-name discard on failure**: onConfirmSave closed the panel BEFORE
+  the await, so a failed save silently dropped the operator's typed name.
+  Now the panel stays open with the name + a "Save failed — your name is
+  kept" alert and a Saving… state; only a successful save closes it.
+  Live-verified (forced-abort probe: panel stayed open, name intact).
+- **Hotkey effect rebind**: the A/R keydown effect had no dep array and
+  re-bound the window listener every render. A dep array can't fix it
+  cleanly (unstable closure identity), so it now binds once via a
+  latest-handler ref. Covered by the existing hotkey test.
+- **Sticky-expand CSS had no pin**: added a components.test.ts assertion
+  for position:sticky/left:0/100cqw/container-collapse.
+- **Repo-wide dialog ban**: no-restricted-globals + no-restricted-
+  properties now ban prompt/alert/confirm everywhere (the prior pin was
+  one file); pinned by an eslint-config assertion in the save test.
+
+### Booth-hygiene bug found while acting on the audit's "archive the stray
+campaign" note
+
+The audit asked me to archive one default-named dev build. Doing so
+exposed a real bug: list_campaigns returned EVERY status, and a governed
+PATCH-to-archived sets updated_at=now() — so archiving junk would BUMP it
+to the top of Saved Campaigns rather than hide it (my own r3
+verification-campaign archive had been making it MORE visible). Fixed:
+default listing now excludes archived (explicit status='archived' still
+returns them); pinned by test_campaign_list_excludes_archived_by_default.
+Then archived 86 dev-detritus campaigns (70 load-test/Genie-draft +
+16 QA/validation fixtures) via governed PATCH — booth Saved Campaigns now
+leads with the three canonical Summit campaigns, no load-test noise.
+(Note: the PATCH rationale validator rejects two-capitalized-words as
+"human-name-shaped" — the sweep uses an all-lowercase rationale. Durable
+fix for test-created campaigns: a test marker/exclusion, post-Summit.)
+
+### Buyer-Wow Annex — adjudicated through a booth-stability lens
+
+- **#7 Campaign ROI projector — BUILT.** A transparent, fully client-side
+  projection in Portfolio Builder: leads × response rate → fundings;
+  × avg balance → volume; × revenue rate → gross; − outreach cost → net.
+  Every assumption is on screen and editable (conservative mortgage
+  defaults), recomputes live, guards invalid input with an em-dash (no
+  NaN), and never shows on day-zero/empty cohorts. 16 tests (13 calc +
+  3 render). Live: "$644K projected origination revenue from 3,157
+  high-intent leads"; doubling the response rate moved it to $1.3M live;
+  empty rate → em-dash.
+- **#2 KPI count-up — DECLINED.** Re-introduces a pattern the team
+  deliberately removed (KpiCard.tsx: "demo-ticker, not a settled
+  enterprise metric"). Reading the code first avoided "improving" a
+  known-rejected thing back in.
+- **#8 evidence hover-preview, #1 ⌘K palette, #3 Genie narrative,
+  #4 map animation, #5 Sankey, #6 morning briefing, #9 Genie follow-ups —
+  DEFERRED** as flagged next builds. #8 is mis-scoped as "S": EvidenceChip
+  is a ubiquitous primitive inside overflow:auto scroll containers (the
+  lead table), so a hover popover needs a portal with scroll-aware
+  positioning (M), and the chip already carries a native source+freshness
+  tooltip. #1 ⌘K is the highest-wow next build (search is already wired)
+  but is the largest new keyboard/focus/a11y surface — worth a dedicated
+  slice, not a rushed pre-booth add. #3/#9 add live-Genie dependencies and
+  #4 re-animates the hero map — both against the deterministic-booth
+  mandate days before DAIS.
+
+### Deployed + live-verified evidence (2026-06-11)
+
+- pytest exit 0; **Vitest 279/279 (51 files)** (+9 from ROI calc/render +
+  config-pin tests); ruff/mypy/eslint/CSS-literal clean; build exit 0;
+  bundle validate OK.
+- Deploy ./scripts/deploy.sh -t dev --no-confirm exit 0 — migrate, FRED,
+  silver, scores, lifecycle all TERMINATED SUCCESS; smoke PASS.
+- Live battery 5/6 PASS (the 6th is the test's own injected route-abort
+  showing as a console error, not a product defect): ROI projector
+  visible + recomputes live + invalid-guard; save-name retained on forced
+  failure; default campaigns list clean (11 rows, 0 archived, 0
+  load-test). Screenshots on file.
