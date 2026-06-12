@@ -47,25 +47,43 @@ export function CommandPalette() {
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
-  const close = useCallback(() => {
-    setOpen(false);
+  const resetTransient = useCallback(() => {
     setQuery('');
     setBorrowers([]);
     setSearchStatus('idle');
     setActiveIndex(0);
   }, []);
+  const close = useCallback(() => {
+    setOpen(false);
+    resetTransient();
+  }, [resetTransient]);
+  const openPalette = useCallback(() => {
+    // Reset on OPEN too, so a ⌘K toggle-open never flashes the previous
+    // query/results (frontend signoff: the old toggle bypassed teardown).
+    resetTransient();
+    setOpen(true);
+  }, [resetTransient]);
 
-  // Global ⌘K / Ctrl+K toggle. Bound once via a stable handler.
+  // The global listener is bound once, so it can't read `open` from a stale
+  // closure — track the latest value in a ref (updated in an effect, never
+  // during render).
+  const openRef = useRef(open);
+  useEffect(() => {
+    openRef.current = open;
+  }, [open]);
+
+  // Global ⌘K / Ctrl+K toggle, with symmetric teardown on both edges.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) {
         e.preventDefault();
-        setOpen((v) => !v);
+        if (openRef.current) close();
+        else openPalette();
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  }, [close, openPalette]);
 
   useFocusTrap({ open, containerRef, initialFocusRef: inputRef, onClose: close });
 

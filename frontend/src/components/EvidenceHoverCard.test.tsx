@@ -103,6 +103,32 @@ describe('useEvidenceHoverCard', () => {
     fire('focus');
     expect(card()).toBeNull();
   });
+
+  it('cancels the pending show when the pointer leaves before the intent delay', () => {
+    render(SOURCE);
+    fire('enter');
+    act(() => vi.advanceTimersByTime(80)); // before the 110ms delay
+    fire('leave');
+    act(() => vi.advanceTimersByTime(200)); // the original timer must NOT fire
+    expect(card()).toBeNull();
+  });
+
+  it('hides the card on scroll (it is position:fixed and would otherwise drift)', () => {
+    render(SOURCE);
+    fire('focus');
+    expect(card()).not.toBeNull();
+    // The hook listens in the capture phase; dispatch a window scroll.
+    act(() => window.dispatchEvent(new Event('scroll')));
+    expect(card()).toBeNull();
+  });
+
+  it('hides the card on resize', () => {
+    render(SOURCE);
+    fire('focus');
+    expect(card()).not.toBeNull();
+    act(() => window.dispatchEvent(new Event('resize')));
+    expect(card()).toBeNull();
+  });
 });
 
 describe('EvidenceChip click path is unaffected by the hover card', () => {

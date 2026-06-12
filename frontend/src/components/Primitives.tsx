@@ -84,11 +84,10 @@ export function EvidenceChip({
     else if (source) setDrawer(source);
   };
   // Re-audit #4 Buyer-Wow #8: the rich hover/focus micro-preview
-  // (useEvidenceHoverCard) supersedes the native `title` auto-tooltip when a
-  // source is present. We keep an explicit `title` override if a caller
-  // passed one, and fall back to the native tooltip only when there's no
-  // source for the card to read.
-  const fallbackTitle = title ?? (source ? undefined : undefined);
+  // (useEvidenceHoverCard) replaces the old native `title` auto-tooltip. We
+  // still honor an explicit `title` override if a caller passed one; the
+  // auto source-tooltip is gone (the card carries that info now).
+  const fallbackTitle = title;
   // Visible freshness dot: no hover required. Missing updatedAt renders
   // no dot (NOT a grey placeholder, per design spec).
   const bucket = freshnessBucket(source?.updatedAt);
