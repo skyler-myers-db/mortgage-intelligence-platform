@@ -836,5 +836,70 @@ offers balloon shows no label.
   retained, ZERO console errors. Screenshot on file.
 
 ### Still deferred (Genie / new-surface bets, against the booth mandate)
-#3 Genie narrative, #4 map animation, #6 morning briefing (new snapshot-
-diff backend), #9 Genie follow-ups.
+~~#3 Genie narrative, #4 map animation, #6 morning briefing, #9 Genie
+follow-ups.~~ → All four now shipped; see the tranche below.
+
+## Final Buyer-Wow tranche (2026-06-12) — #6, #4, #3, #9 (each its own merge)
+
+Overnight directive: take the four remaining buyer-wow items ONE BY ONE,
+each through the full unanimous independent-context subagent signoff loop,
+do not stop until all four are implemented, validated, and live-verified.
+
+### Features (each a `--no-ff` merge to main)
+- **#6 Morning briefing card on Home** (merge 87d75fa) — a "what changed
+  overnight" card driven by the live preview `trends` (delta_pct / direction
+  / comparison_label). Pure-frontend (`lib/morningBriefing.ts` +
+  `MorningBriefing.tsx`); shows an honest PENDING state on day-zero / when
+  trend_status != live, never a fabricated delta. No new backend (verified
+  the deltas already exist in the preview payload — 36 snapshots live).
+- **#4 Geography level-transition animation** (merge d441711) — keyed
+  `.map-levels` wrapper so state→county→ZIP transitions replay a one-shot
+  settle, plus a staggered ZIP-tile entrance. Additive CSS + flex-transparent
+  wrapper; NO cross-level geometry tweening (would risk the hero map).
+  Architect caught a hover-lift regression pre-merge (the `both` fill-mode
+  pinned `transform: scale(1)` over `:hover`) — fixed by making the keyframe
+  opacity-only. Reduced-motion gated.
+- **#3 Borrower 360 "Tell the story"** (merge b74ac7f) — a deterministic,
+  honestly-labeled 3-sentence narrative with a real numeric-claims verifier
+  (every figure in the prose is checked against the dossier; scale-aware
+  K/M parsing, 6% tolerance; unverifiable tokens flagged). Booth-safe: no
+  live-LLM dependency, labeled "grounded in this dossier's evidence."
+- **#9 Genie follow-ups + Pin-to-Home** (merge 6795263) — deterministic
+  follow-up FALLBACK when Genie returns none (never a dead end), plus a
+  client-side, actor-scoped Pin-to-Home (`useSyncExternalStore` over
+  localStorage) feeding a Home "Pinned insights" card. NOT a governed
+  mutation: no backend write, no outreach, no audit row — a personal
+  bookmark, cleared on actor change with the other actor-scoped state.
+
+### Unanimous independent-subagent signoff (fresh context each, all 4 items)
+- Every item passed a 5-reviewer loop: frontend/a11y, qa/test, performance,
+  governance/security, principal-architect — each in fresh context against
+  the branch diff, BLOCK/APPROVE.
+- **#9 architect BLOCK (corroborated by qa #1), fixed + re-reviewed:** the
+  Pin-to-Home gate used `source === 'genie'`, a stricter allowlist than the
+  app's trust boundary. It silently HID the pin button on `trusted_sql` /
+  `sales_ops` answers — exactly the canonical booth answers (top borrowers
+  by state, top ITM ZIPs). Fixed by centralizing `NON_PERSISTABLE_SOURCES`
+  + `isTrustedGenieSource` in `lib/pinnedInsights.ts` (single source of
+  truth, reused by `GenieChat.shouldPersistConversation`) and gating on the
+  denylist. Architect + qa re-reviewed → APPROVE. Boundary now pinned by
+  tests (trusted_sql pinnable, all five degraded sources not).
+
+### Validation + deployed evidence
+- Vitest **376/376** (63 files) on merged main (+8 from the #9 boundary
+  tests); lint/build/budget clean; backend untouched (pure frontend).
+- Deploy `./scripts/deploy.sh -t dev --no-confirm` exit 0 — Genie space
+  rebound (14 trusted assets), **13/13 live smoke PASS** (health, geo
+  state/county/zip rollups, outreach approval audit write, genie message).
+- **Live browser inspection 4/4 PASS** against the deployed app
+  (`tests/e2e/buyer_wow_live.spec.ts`, E2E_LIVE=1, workspace bearer):
+  - #6 briefing renders on Home (live grid or honest pending).
+  - #4 `.map-levels` keyed wrapper renders; drilling a dynamically-discovered
+    in-footprint state (out-of-footprint states are no-ops by design) grows
+    the breadcrumb trail and re-renders the wrapper without error.
+  - #3 "Tell the story" reveals a grounded narrative with ≥1 verified claim
+    chip on a real dossier.
+  - #9 Genie answer offers follow-up chips AND a Pin-to-Home button on the
+    trusted live answer; pinning surfaces it on the Home "Pinned insights"
+    card (shared store), then unpins clean. This exercises the exact
+    trusted-source boundary the architect blocker was about.

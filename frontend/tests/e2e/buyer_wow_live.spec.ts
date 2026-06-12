@@ -1,0 +1,161 @@
+/**
+ * Buyer-Wow live inspection (Module 0 re-audit items #3, #4, #6, #9).
+ *
+ * Exercises the four "buyer-wow" features against the DEPLOYED Databricks App
+ * on real Unity Catalog + Lakebase + Genie:
+ *   #6 Morning briefing card on Home (live trends or honest pending state)
+ *   #4 Geography map level-transition wrapper (`.map-levels`, keyed re-render)
+ *   #3 Borrower 360 "Tell the story" deterministic narrative + claim chips
+ *   #9 Genie follow-up chips + Pin-to-Home → Home "Pinned insights" card
+ *
+ * Gated behind E2E_LIVE=1 (like real_data.spec.ts). MIP_APP_URL points at the
+ * deployed app; a workspace Bearer token (MIP_BEARER_TOKEN / DATABRICKS_TOKEN)
+ * short-circuits the Apps OAuth redirect on every request.
+ */
+import { test, expect, type APIRequestContext, type Page } from '@playwright/test';
+
+const LIVE = process.env.E2E_LIVE === '1';
+test.skip(!LIVE, 'Set E2E_LIVE=1 to run the buyer-wow live inspection.');
+
+const APP_URL = process.env.MIP_APP_URL || 'http://127.0.0.1:5173';
+const API_URL = process.env.MIP_API_URL || APP_URL.replace(':5173', ':8000');
+const BEARER = process.env.MIP_BEARER_TOKEN || process.env.DATABRICKS_TOKEN || '';
+const AUTH_HEADERS: Record<string, string> = BEARER ? { Authorization: `Bearer ${BEARER}` } : {};
+
+test.use({ baseURL: APP_URL, extraHTTPHeaders: AUTH_HEADERS });
+
+async function firstBorrowerId(request: APIRequestContext): Promise<string> {
+  const resp = await request.get(`${API_URL}/api/leads?limit=10`, { headers: AUTH_HEADERS });
+  expect(resp.status(), 'GET /api/leads returned non-200').toBe(200);
+  const rows = (await resp.json()) as Array<{ borrower_id: string }>;
+  expect(rows.length, 'need >= 1 ranked borrower').toBeGreaterThan(0);
+  return rows[0].borrower_id;
+}
+
+// US state code → full name, to translate the in-footprint rollup codes into
+// the map region's accessible name. Static (does not change); the COVERAGE is
+// still discovered dynamically from /api/geo/state-rollups.
+const STATE_NAMES: Record<string, string> = {
+  AL: 'Alabama', AK: 'Alaska', AZ: 'Arizona', AR: 'Arkansas', CA: 'California',
+  CO: 'Colorado', CT: 'Connecticut', DE: 'Delaware', DC: 'Washington, DC',
+  FL: 'Florida', GA: 'Georgia', HI: 'Hawaii', ID: 'Idaho', IL: 'Illinois',
+  IN: 'Indiana', IA: 'Iowa', KS: 'Kansas', KY: 'Kentucky', LA: 'Louisiana',
+  ME: 'Maine', MD: 'Maryland', MA: 'Massachusetts', MI: 'Michigan',
+  MN: 'Minnesota', MS: 'Mississippi', MO: 'Missouri', MT: 'Montana',
+  NE: 'Nebraska', NV: 'Nevada', NH: 'New Hampshire', NJ: 'New Jersey',
+  NM: 'New Mexico', NY: 'New York', NC: 'North Carolina', ND: 'North Dakota',
+  OH: 'Ohio', OK: 'Oklahoma', OR: 'Oregon', PA: 'Pennsylvania',
+  RI: 'Rhode Island', SC: 'South Carolina', SD: 'South Dakota', TN: 'Tennessee',
+  TX: 'Texas', UT: 'Utah', VT: 'Vermont', VA: 'Virginia', WA: 'Washington',
+  WV: 'West Virginia', WI: 'Wisconsin', WY: 'Wyoming',
+};
+
+async function firstInFootprintStateName(request: APIRequestContext): Promise<string> {
+  const resp = await request.get(`${API_URL}/api/geo/state-rollups`, { headers: AUTH_HEADERS });
+  expect(resp.status(), 'GET /api/geo/state-rollups returned non-200').toBe(200);
+  const { rollups } = (await resp.json()) as { rollups: Array<{ state: string }> };
+  expect(rollups.length, 'need >= 1 in-footprint state to drill').toBeGreaterThan(0);
+  const name = STATE_NAMES[rollups[0].state.toUpperCase()];
+  expect(name, `unknown state code ${rollups[0].state}`).toBeTruthy();
+  return name;
+}
+
+async function openGeniePanel(page: Page) {
+  const fab = page.locator('.genie__fab:visible').first();
+  if (await fab.isVisible()) {
+    await fab.click();
+    return;
+  }
+  await page.getByRole('button', { name: /Toggle Genie chat/i }).click();
+}
+
+test.describe('Buyer-Wow live inspection @desktop', () => {
+  test('#6 morning briefing renders on Home (live grid or honest pending)', async ({ page }) => {
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    const briefing = page.locator('.briefing').first();
+    await expect(briefing).toBeVisible({ timeout: 30_000 });
+    // Eyebrow is always present; headline is non-empty in both live and pending.
+    await expect(briefing.locator('.briefing__eyebrow')).toHaveText(/Morning briefing/i);
+    await expect(briefing.locator('.briefing__headline')).not.toBeEmpty();
+    // If live, the metric grid renders; if pending (day-zero / no snapshot diff),
+    // the muted headline carries the honest explanation. Either is a pass — we
+    // only fail if the card is empty/broken.
+    const hasGrid = await briefing.locator('.briefing__grid').count();
+    const hasPending = await briefing.locator('.briefing__headline.muted').count();
+    expect(hasGrid + hasPending, 'briefing must be in a live or pending state').toBeGreaterThan(0);
+  });
+
+  test('#4 geography map renders the keyed level-transition wrapper and drills', async ({ page, request }) => {
+    await page.goto('/segment-intelligence', { waitUntil: 'domcontentloaded' });
+    const levels = page.locator('.map-levels').first();
+    await expect(levels).toBeVisible({ timeout: 30_000 });
+
+    // State level shows exactly one breadcrumb ("US"). Drill into a state that
+    // actually has Cotality coverage (out-of-footprint states are no-ops by
+    // design) — discovered dynamically so the test follows the live coverage.
+    const stateName = await firstInFootprintStateName(request);
+    const region = page.locator('.map-svg-stage').getByRole('button', { name: stateName, exact: true });
+    await expect(region).toBeVisible({ timeout: 20_000 });
+    const crumbsBefore = await page.locator('.map-crumbs button').count();
+    await region.click();
+    // Drill to county → breadcrumb trail grows (US > <State>) and the keyed
+    // `.map-levels` wrapper re-renders without crashing.
+    await expect
+      .poll(() => page.locator('.map-crumbs button').count(), { timeout: 15_000 })
+      .toBeGreaterThan(crumbsBefore);
+    await expect(page.locator('.map-crumbs')).toContainText(stateName);
+    await expect(page.locator('.map-levels').first()).toBeVisible();
+  });
+
+  test('#3 Borrower 360 "Tell the story" reveals a grounded narrative', async ({ page, request }) => {
+    const id = await firstBorrowerId(request);
+    await page.goto(`/borrower-360/${id}`, { waitUntil: 'domcontentloaded' });
+    const btn = page.locator('[data-testid="tell-the-story"]');
+    await expect(btn).toBeVisible({ timeout: 30_000 });
+    await btn.click();
+    const body = page.locator('[data-testid="borrower-story-body"]');
+    await expect(body).toBeVisible({ timeout: 10_000 });
+    await expect(body.locator('.borrower-story__narrative')).not.toBeEmpty();
+    // At least one figure is grounded against the dossier (claim chip rendered).
+    await expect
+      .poll(() => body.locator('.borrower-story__claim-token').count(), { timeout: 5_000 })
+      .toBeGreaterThan(0);
+  });
+
+  test('#9 Genie answer offers follow-ups + pins to Home', async ({ page }) => {
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    await openGeniePanel(page);
+    const panel = page.getByRole('dialog', { name: 'Genie chat' });
+    await expect(panel).toBeVisible();
+
+    const q = 'How many borrowers across current refreshed coverage are currently in-the-money?';
+    await panel.getByLabel('Ask Genie').fill(q);
+    await panel.getByRole('button', { name: /Ask/i }).click();
+    await expect(panel.getByRole('status')).toBeHidden({ timeout: 60_000 });
+
+    const aiMessage = panel.locator('.genie__msg--ai').last();
+    await expect(aiMessage.locator('.bubble')).toBeVisible({ timeout: 40_000 });
+
+    // Follow-up chips: Genie's own or the deterministic fallback — never a dead end.
+    await expect
+      .poll(() => aiMessage.locator('.filter--question').count(), { timeout: 10_000 })
+      .toBeGreaterThan(0);
+
+    // Pin-to-Home is present on this genuine, trusted answer (genie OR trusted_sql
+    // — the denylist boundary, not an `=== 'genie'` allowlist).
+    const pin = aiMessage.locator('[data-testid="pin-to-home"]');
+    await expect(pin).toBeVisible({ timeout: 10_000 });
+    await expect(pin).toContainText(/Pin to Home/i);
+    await pin.click();
+    await expect(pin).toContainText(/Pinned to Home/i);
+
+    // The pin shows up on the Home "Pinned insights" card (shared store).
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    const card = page.locator('.pinned-insights').first();
+    await expect(card).toBeVisible({ timeout: 15_000 });
+    await expect(card).toContainText(/in-the-money/i);
+
+    // Clean up: unpin so the inspection is idempotent across reruns.
+    await card.locator('.pinned-insights__unpin').first().click();
+  });
+});
