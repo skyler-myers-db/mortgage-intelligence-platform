@@ -168,12 +168,18 @@ describe('layout containment contracts', () => {
     // the map. This is the load-bearing assertion for the hero surface.
     expect(css).toMatch(/\.map-levels\s*\{[^}]*flex:\s*1 1 0;/s);
     expect(css).toMatch(/\.map-levels\s*\{[^}]*display:\s*flex;/s);
-    expect(css).toMatch(/\.map-levels\s*>\s*\.map-svg-stage[\s\S]*?flex:\s*1 1 0;/s);
+    // Airtight: the child-flex rule body itself (the `.map-levels > ...`
+    // selector group through its `{ ... }`) must carry flex:1 1 0 — scoped to
+    // the block so it can't satisfy itself against the standalone stage rule.
+    expect(css).toMatch(/\.map-levels\s*>\s*\.map-svg-stage,\s*\.map-levels\s*>\s*\.map-stage,\s*\.map-levels\s*>\s*\.zip-tiles\s*\{[^}]*flex:\s*1 1 0;/s);
     expect(css).toContain('@keyframes map-level-in');
     // Both the level transition and the ZIP tile stagger are reduced-motion off.
     expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)\s*\{[^}]*\.map-levels\s*\{[^}]*animation:\s*none;/s);
     expect(css).toMatch(/\.zip-tile\s*\{[^}]*animation:\s*zip-tile-in/s);
     expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)\s*\{[^}]*\.zip-tile\s*\{[^}]*animation:\s*none;/s);
+    // The tile entrance is opacity-only (a transform would be retained by the
+    // `both` fill and clobber the :hover lift — the signoff bug).
+    expect(css).toMatch(/@keyframes zip-tile-in\s*\{\s*from\s*\{\s*opacity:\s*0;\s*\}\s*to\s*\{\s*opacity:\s*1;\s*\}\s*\}/s);
   });
 
   it('renders skeleton placeholders for slow lead and data-estate loads', () => {

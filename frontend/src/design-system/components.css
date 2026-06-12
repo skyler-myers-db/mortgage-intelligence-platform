@@ -2699,15 +2699,18 @@ kbd {
   transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease);
   min-height: 56px;
   /* Staggered "settle into the grid" entrance (Buyer-Wow #4): each tile
-     fades + scales in, delayed by its capped index (--tile-i). Runs once on
-     mount; hover transform still works after (animation `both` settles to
-     scale 1). Disabled under reduced motion. */
+     fades in, delayed by its capped index (--tile-i), so borrowers settle
+     into the grid in sequence. OPACITY-ONLY by design — a `transform` in
+     this keyframe would be retained by the `both` fill-mode and permanently
+     override the :hover lift below (a real bug caught in signoff). The
+     zoom/scale feel comes from the .map-levels wrapper, which is not the
+     hovered element. Disabled under reduced motion. */
   animation: zip-tile-in var(--dur-base) var(--ease) both;
   animation-delay: calc(var(--tile-i, 0) * 16ms);
 }
 @keyframes zip-tile-in {
-  from { opacity: 0; transform: scale(0.9); }
-  to { opacity: 1; transform: scale(1); }
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 @media (prefers-reduced-motion: reduce) {
   .zip-tile {
