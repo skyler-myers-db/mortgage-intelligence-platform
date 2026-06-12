@@ -400,5 +400,10 @@ export function buildFunnelSankeyModel(
 export function formatConversionPct(conversion: number | null): string | null {
   if (conversion === null || !Number.isFinite(conversion) || conversion > 1.0001) return null;
   const pct = conversion * 100;
+  // A genuinely tiny-but-nonzero narrowing (e.g. 8 / 61,500 = 0.013%) would
+  // round to "0.0%" via toFixed(1) and read as "nothing converted" when in
+  // fact a small number did. Floor it to "<0.1%" so a real (shrunk) stage is
+  // never mislabelled as a flatline. A true zero stage still shows "0.0%".
+  if (pct > 0 && pct < 0.05) return '<0.1%';
   return pct >= 10 ? `${Math.round(pct)}%` : `${pct.toFixed(1)}%`;
 }

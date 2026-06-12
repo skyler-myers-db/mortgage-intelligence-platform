@@ -37,7 +37,11 @@ const KiB = 1024;
 // tools/precompress_assets.mjs + backend/services/static_assets.py).
 // ---------------------------------------------------------------------------
 const budgets = {
-  initialJsBytes: 270 * KiB, // actual 268.16 (Buyer-Wow epic; still < 270)
+  // Bumped 2026-06-12 (re-audit #6): raw initial JS actual reached 268.16 after
+  // the Buyer-Wow epic, leaving the 270 ceiling at only ~0.7% headroom — below
+  // this file's own ~5% policy in the tight direction, so the next small dep
+  // bump would trip CI mid demo-week. Restore ~5% on the measured actual.
+  initialJsBytes: 282 * KiB, // actual 268.16 (was 270 @ ~0.7% headroom)
   // Bumped 2026-06-12 (re-audit #5 remediation). The Buyer-Wow epic (⌘K
   // palette command module, pinned-insights store eagerly reachable from the
   // initial chunk via actorScopedBrowserState, Sankey/briefing wiring) grew

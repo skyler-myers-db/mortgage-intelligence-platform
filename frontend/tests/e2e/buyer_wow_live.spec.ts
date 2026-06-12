@@ -191,4 +191,19 @@ test.describe('Buyer-Wow live inspection @desktop', () => {
     await expect(aiMessage.locator('[data-testid="pin-to-home"]')).toHaveCount(0);
     await expect(aiMessage.locator('.filter--question')).toHaveCount(0);
   });
+
+  test('re-audit #6: Pin-to-Home is also present on the /ask-genie deep-dive', async ({ page }) => {
+    // The deep-dive passes `question` to the shared GenieAnswer, so a trusted
+    // answer is pinnable there too (re-audit #6 flagged a suspected panel-only
+    // gap — this asserts the affordance is present on the deep-dive surface).
+    await page.goto('/ask-genie', { waitUntil: 'domcontentloaded' });
+    await page
+      .locator('textarea[aria-label="Ask Genie — question"]')
+      .fill('How many borrowers across current refreshed coverage are currently in-the-money?');
+    await page.getByRole('button', { name: /^Ask Genie$/i }).first().click();
+
+    const answerSurface = page.locator('.surface', { hasText: /Source:/i }).first();
+    await expect(answerSurface).toBeVisible({ timeout: 90_000 });
+    await expect(page.locator('[data-testid="pin-to-home"]')).toBeVisible({ timeout: 10_000 });
+  });
 });

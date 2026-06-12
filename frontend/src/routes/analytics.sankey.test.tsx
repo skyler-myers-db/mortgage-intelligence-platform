@@ -89,11 +89,16 @@ describe('buildFunnelSankeyModel (pure geometry)', () => {
     expect(formatConversionPct(null)).toBeNull();
     expect(formatConversionPct(0.0427)).toBe('4.3%');
     expect(formatConversionPct(0.5)).toBe('50%');
-    expect(formatConversionPct(0)).toBe('0.0%');
+    expect(formatConversionPct(0)).toBe('0.0%'); // a true zero stage is honest
     expect(formatConversionPct(1)).toBe('100%'); // a stage that exactly held
     // A grown stage (>100%) shows NO label rather than "115000%".
     expect(formatConversionPct(4_467_395 / 3_878)).toBeNull();
     expect(formatConversionPct(1.5)).toBeNull();
+    // Re-audit #6: a tiny-but-REAL narrowing must not round to "0.0%" (which
+    // reads as a flatline). The live artifact: Approved 8 / 61,500.
+    expect(formatConversionPct(8 / 61_500)).toBe('<0.1%'); // 0.013%
+    expect(formatConversionPct(0.0004)).toBe('<0.1%'); // 0.04%
+    expect(formatConversionPct(0.0005)).toBe('0.1%'); // 0.05% still rounds to a real 0.1%
   });
 });
 
