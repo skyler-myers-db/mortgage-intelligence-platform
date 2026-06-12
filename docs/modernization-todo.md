@@ -988,3 +988,43 @@ governance) APPROVED the diff.
 - **Live verification 5/5 PASS** (`buyer_wow_live.spec.ts`): the 4 features
   plus D1 (markdown-free pinned summary), D2 (refusal → no pin/no follow-ups),
   and D8 (evidence hover-card attaches to a Supporting-evidence chip).
+
+## Re-Audit #6 adjudication response (2026-06-12)
+
+Source: r6 (adversarial verification of the r5 remediation). It accepted all
+six r5 fixes, overturned one adjudication, and raised small items.
+
+### Fixed
+- **Sankey "0.0%" (overturned r5 adjudication).** The r5 note said the funnel
+  artifact was by-design because the conversion % is suppressed for grown
+  stages — but that only covers GROWN stages. The live artifact is a SHRUNK
+  stage: Approved 8 / ≈61,500 = 0.013% → `toFixed(1)` → "0.0%", which reads as a
+  flatline. `formatConversionPct` now floors `0 < pct < 0.05` to **"<0.1%"**; a
+  true zero stage still shows "0.0%". The mixed-denominator BALLOON adjudication
+  stands (heights are true; grown-stage % suppressed) — only the rounding
+  artifact was a real defect. Unit-tested (8/61,500 → "<0.1%", 0.0005 → "0.1%").
+- **`initialJsBytes` budget headroom** was ~0.7% (270 vs actual 268.16) — below
+  this file's own ~5% policy in the tight direction. Bumped to 282.
+
+### Verified NON-defect (live)
+- **Pin-to-Home on `/ask-genie` (r6 residual #1).** The deep-dive passes
+  `question` to the shared `GenieAnswer` (ask-genie.tsx:397), so trusted answers
+  ARE pinnable there. r6's suspected panel-only gap was a false alarm (it
+  offered that possibility); **verified live** (`buyer_wow_live.spec.ts` asserts
+  the pin button on the deep-dive answer surface) and added as regression cover.
+
+### Operational (no code)
+- Briefing opener still leads with the purge artifact ("down 74.2%"); re-seed a
+  handful of approvals before Sunday so the morning briefing doesn't open on a
+  shrinkage story (r5/r6 operational item, stands).
+
+### Signoff hygiene (r6 process note, third occurrence)
+- r6 flagged the recurring "N commits await your push" stale ahead-count. Logged
+  to agent memory; future signoffs re-check `git status` immediately before
+  reporting, or omit push state (the push is user-owned regardless).
+
+### Validation + deployed evidence
+- Vitest **387/387** (added `<0.1%` boundary assertions); lint/build/budget
+  green. Deploy exit 0; **live 6/6 PASS** (`buyer_wow_live.spec.ts`): the 4
+  features + D2 refusal + the new `/ask-genie` deep-dive pin probe. Deployed ==
+  HEAD.
