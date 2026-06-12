@@ -5,6 +5,7 @@ import type { Borrower360 as Borrower360Type } from '../types';
 import { currency } from '../lib/formatters';
 import { PageShell } from '../components/layout/PageShell';
 import { TriggerTimeline } from '../components/mortgage/TriggerTimeline';
+import { BorrowerStoryCard } from '../components/mortgage/BorrowerStoryCard';
 import { ScoreBadge } from '../components/mortgage/ScoreBadge';
 import { ConfidenceMeter } from '../components/mortgage/ConfidenceMeter';
 import { BorrowerTruthFlags } from '../components/mortgage/BorrowerTruthFlags';
@@ -282,6 +283,10 @@ export default function Borrower360() {
       <div className="layoutA-grid">
         {/* Left column — Borrower dossier + trigger timeline stacked */}
         <div className="stack-grid">
+          {/* "Tell the story" (Buyer-Wow #3): the system explains the lead in
+              plain English, grounded + numerically verified against this
+              dossier. Sits above the raw dossier so the narrative frames it. */}
+          <BorrowerStoryCard borrower={b} />
           <div className="surface">
             <div className="surface__hdr">
               <div className="surface__icon">
