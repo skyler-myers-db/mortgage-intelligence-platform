@@ -12,6 +12,9 @@ import {
   defaultGeographyForOptions,
   parseFiltersFromUrl,
   parseStateCodesFromUrl,
+  DEFAULT_ROI_ASSUMPTIONS,
+  projectRoi,
+  formatUsdCompact,
 } from './portfolio-builder.logic';
 import { isPublicLenderRef } from '../lib/lenderFilters';
 
@@ -142,5 +145,41 @@ describe('portfolio campaign config', () => {
       },
       suppression_policy: { default: 'eligible_only' },
     } as never)).toContain('Competitor B');
+  });
+});
+
+describe('campaign ROI projector (Buyer-Wow #7)', () => {
+  it('computes the funnel arithmetic deterministically from visible assumptions', () => {
+    // 1,200 leads × 4% → 48 fundings; × $340k → $16.32M volume;
+    // × 1.5% → $244,800 gross; − 1,200 × $1.40 outreach ($1,680) → net.
+    const p = projectRoi({ leads: 1200, ...DEFAULT_ROI_ASSUMPTIONS });
+    expect(p.valid).toBe(true);
+    expect(p.fundings).toBeCloseTo(48, 6);
+    expect(p.originationVolumeUsd).toBeCloseTo(16_320_000, 2);
+    expect(p.grossRevenueUsd).toBeCloseTo(244_800, 2);
+    expect(p.outreachCostUsd).toBeCloseTo(1_680, 2);
+    expect(p.netRevenueUsd).toBeCloseTo(243_120, 2);
+  });
+
+  it('treats non-numeric or out-of-range assumptions as invalid (no NaN headline)', () => {
+    expect(projectRoi({ leads: 1000, ...DEFAULT_ROI_ASSUMPTIONS, responseRatePct: '' }).valid).toBe(false);
+    expect(projectRoi({ leads: 1000, ...DEFAULT_ROI_ASSUMPTIONS, responseRatePct: '120' }).valid).toBe(false);
+    expect(projectRoi({ leads: 1000, ...DEFAULT_ROI_ASSUMPTIONS, avgBalanceUsd: '-5' }).valid).toBe(false);
+    expect(projectRoi({ leads: 1000, ...DEFAULT_ROI_ASSUMPTIONS, responseRatePct: 'abc' }).grossRevenueUsd).toBe(0);
+  });
+
+  it('zeroes out a no-lead build instead of projecting phantom revenue', () => {
+    const p = projectRoi({ leads: 0, ...DEFAULT_ROI_ASSUMPTIONS });
+    expect(p.valid).toBe(true);
+    expect(p.grossRevenueUsd).toBe(0);
+    expect(p.fundings).toBe(0);
+  });
+
+  it('formats compact USD across magnitudes', () => {
+    expect(formatUsdCompact(244_800)).toBe('$245K');
+    expect(formatUsdCompact(16_320_000)).toBe('$16.3M');
+    expect(formatUsdCompact(2_300_000_000)).toBe('$2.3B');
+    expect(formatUsdCompact(-1_680)).toBe('-$2K');
+    expect(formatUsdCompact(940)).toBe('$940');
   });
 });
