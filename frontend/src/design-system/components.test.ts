@@ -161,6 +161,21 @@ describe('layout containment contracts', () => {
     expect(css).toMatch(/\.briefing__note\s*\{[^}]*color:\s*var\(--status-warning-ink\);/s);
   });
 
+  it('animates map level transitions without collapsing the hero map flex layout (Buyer-Wow #4)', () => {
+    const css = designCss();
+    // The keyed wrapper MUST be flex-transparent: it takes .map-wrap's flex:1
+    // slot AND re-exposes it to the stage inside, so wrapping never collapses
+    // the map. This is the load-bearing assertion for the hero surface.
+    expect(css).toMatch(/\.map-levels\s*\{[^}]*flex:\s*1 1 0;/s);
+    expect(css).toMatch(/\.map-levels\s*\{[^}]*display:\s*flex;/s);
+    expect(css).toMatch(/\.map-levels\s*>\s*\.map-svg-stage[\s\S]*?flex:\s*1 1 0;/s);
+    expect(css).toContain('@keyframes map-level-in');
+    // Both the level transition and the ZIP tile stagger are reduced-motion off.
+    expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)\s*\{[^}]*\.map-levels\s*\{[^}]*animation:\s*none;/s);
+    expect(css).toMatch(/\.zip-tile\s*\{[^}]*animation:\s*zip-tile-in/s);
+    expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)\s*\{[^}]*\.zip-tile\s*\{[^}]*animation:\s*none;/s);
+  });
+
   it('renders skeleton placeholders for slow lead and data-estate loads', () => {
     const css = designCss();
 
