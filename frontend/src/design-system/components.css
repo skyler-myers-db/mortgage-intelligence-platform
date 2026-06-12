@@ -2933,6 +2933,86 @@ kbd {
 .analytics-chart-panel {
   min-height: calc(var(--sp-16) + var(--sp-16) + var(--sp-16) + var(--sp-16));
 }
+
+/* Funnel Sankey (re-audit Buyer-Wow #5) — flowing pipeline funnel. Pure
+   SVG over existing FunnelStage data; tokens only. */
+.funnel-sankey {
+  display: block;
+  inline-size: 100%;
+  block-size: auto;
+  max-block-size: 17rem;
+  overflow: visible;
+}
+.funnel-sankey--empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-block-size: 8rem;
+}
+.funnel-sankey__ribbon {
+  transition: opacity var(--dur-base) var(--ease);
+}
+.funnel-sankey__bar {
+  fill: var(--accent);
+  transition: fill var(--dur-fast) var(--ease);
+}
+.funnel-sankey__count {
+  fill: var(--text-1);
+  font-family: var(--font-mono);
+  font-size: 15px;
+  font-weight: 600;
+}
+.funnel-sankey__conv {
+  fill: var(--text-3);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+.funnel-sankey__label {
+  fill: var(--text-2);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+}
+.funnel-sankey__node {
+  cursor: pointer;
+  outline: none;
+}
+.funnel-sankey__node:hover .funnel-sankey__bar,
+.funnel-sankey__node:focus-visible .funnel-sankey__bar {
+  fill: var(--accent-hover);
+}
+.funnel-sankey__node:hover .funnel-sankey__label,
+.funnel-sankey__node:focus-visible .funnel-sankey__label {
+  fill: var(--accent-ink);
+}
+.funnel-sankey__node:focus-visible .funnel-sankey__bar {
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+/* One-time draw on first appearance: ribbons fade in left-to-right. Gated
+   in JS by useFirstAppearance so it never replays on tab/route re-entry. */
+.funnel-sankey--enter .funnel-sankey__ribbon {
+  opacity: 0;
+  animation: funnel-ribbon-in var(--dur-slow) var(--ease) forwards;
+}
+/* Staggered left-to-right reveal. Module 0's funnel is a fixed 6 stages
+   (5 ribbons); a 7th stage would just snap its ribbon in at 0ms (harmless,
+   only un-staggered) until a 6th delay is added here. */
+.funnel-sankey--enter .funnel-sankey__ribbon:nth-of-type(1) { animation-delay: 40ms; }
+.funnel-sankey--enter .funnel-sankey__ribbon:nth-of-type(2) { animation-delay: 110ms; }
+.funnel-sankey--enter .funnel-sankey__ribbon:nth-of-type(3) { animation-delay: 180ms; }
+.funnel-sankey--enter .funnel-sankey__ribbon:nth-of-type(4) { animation-delay: 250ms; }
+.funnel-sankey--enter .funnel-sankey__ribbon:nth-of-type(5) { animation-delay: 320ms; }
+@keyframes funnel-ribbon-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .funnel-sankey--enter .funnel-sankey__ribbon {
+    opacity: 1;
+    animation: none;
+  }
+}
 .analytics-chart-panel--scatter {
   min-height: calc(var(--sp-16) + var(--sp-16) + var(--sp-16) + var(--sp-16) + var(--sp-16) + var(--sp-16) + var(--sp-16) + var(--sp-10));
 }

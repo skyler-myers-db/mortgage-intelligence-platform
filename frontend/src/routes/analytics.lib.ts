@@ -295,3 +295,110 @@ export function analyticsHref(params: Record<string, string | number | readonly 
   const encoded = qs.toString();
   return encoded ? `/analytics?${encoded}` : '/analytics';
 }
+
+// ---------------------------------------------------------------------------
+// Funnel Sankey geometry (re-audit Buyer-Wow #5). Pure, deterministic model
+// over the SAME FunnelStage[] the Pipeline Metrics bars already use — no new
+// data. Produces viewBox-space nodes + connecting ribbon paths so the SVG
+// component stays a thin renderer and the math is unit-pinnable.
+// ---------------------------------------------------------------------------
+export interface SankeyNode {
+  stage: string;
+  stageOrder: number;
+  count: number;
+  /** Conversion from the previous stage (0..1); null for the first stage. */
+  conversion: number | null;
+  xCenter: number;
+  yTop: number;
+  yBottom: number;
+  height: number;
+}
+
+export interface SankeyRibbon {
+  /** SVG path (filled) connecting node i to node i+1. */
+  path: string;
+  fromOrder: number;
+  toOrder: number;
+}
+
+export interface SankeyModel {
+  viewWidth: number;
+  viewHeight: number;
+  nodes: SankeyNode[];
+  ribbons: SankeyRibbon[];
+}
+
+export const SANKEY_VIEW = { width: 1000, height: 240, padX: 70, padY: 44, nodeWidth: 16 } as const;
+
+export function buildFunnelSankeyModel(
+  stages: ReadonlyArray<FunnelStage>,
+  view = SANKEY_VIEW,
+): SankeyModel {
+  const ordered = [...stages].sort((a, b) => a.stage_order - b.stage_order);
+  const { width, height, padX, padY, nodeWidth } = view;
+  const empty: SankeyModel = { viewWidth: width, viewHeight: height, nodes: [], ribbons: [] };
+  if (ordered.length === 0) return empty;
+
+  const maxCount = Math.max(...ordered.map((s) => Math.max(0, s.borrower_count)), 1);
+  const maxBarH = height - padY * 2;
+  const minBarH = 3; // a zero/near-zero stage stays visible as a sliver
+  const usableW = width - padX * 2;
+  const stepX = ordered.length > 1 ? usableW / (ordered.length - 1) : 0;
+  const midY = height / 2;
+
+  const nodes: SankeyNode[] = ordered.map((s, i) => {
+    const count = Math.max(0, s.borrower_count);
+    const h = Math.max(minBarH, (count / maxCount) * maxBarH);
+    const prev = i > 0 ? Math.max(0, ordered[i - 1].borrower_count) : null;
+    // Conversion is defined only as a narrowing from a non-empty prior
+    // stage. First stage → null; prev=0 → null (undefined, not a fake 0%).
+    // A stage that GREW vs its predecessor (the real funnel is
+    // non-monotonic — offer_recommended is computed across the whole
+    // addressable base, so it balloons past high_opportunity) keeps its raw
+    // ratio here; the formatter suppresses the >100% label rather than
+    // printing a nonsensical "115000%". Node height still honestly reflects
+    // the count.
+    const conversion = i === 0 ? null : prev && prev > 0 ? count / prev : null;
+    return {
+      stage: s.stage,
+      stageOrder: s.stage_order,
+      count,
+      conversion,
+      xCenter: padX + i * stepX,
+      yTop: midY - h / 2,
+      yBottom: midY + h / 2,
+      height: h,
+    };
+  });
+
+  const ribbons: SankeyRibbon[] = [];
+  for (let i = 0; i < nodes.length - 1; i += 1) {
+    const a = nodes[i];
+    const b = nodes[i + 1];
+    const x0 = a.xCenter + nodeWidth / 2;
+    const x1 = b.xCenter - nodeWidth / 2;
+    const cx = (x0 + x1) / 2; // control-point x for the smooth S-curve
+    // Top edge x0→x1, then down b's left edge, bottom edge x1→x0, close.
+    const path =
+      `M ${x0.toFixed(2)} ${a.yTop.toFixed(2)} ` +
+      `C ${cx.toFixed(2)} ${a.yTop.toFixed(2)}, ${cx.toFixed(2)} ${b.yTop.toFixed(2)}, ${x1.toFixed(2)} ${b.yTop.toFixed(2)} ` +
+      `L ${x1.toFixed(2)} ${b.yBottom.toFixed(2)} ` +
+      `C ${cx.toFixed(2)} ${b.yBottom.toFixed(2)}, ${cx.toFixed(2)} ${a.yBottom.toFixed(2)}, ${x0.toFixed(2)} ${a.yBottom.toFixed(2)} Z`;
+    ribbons.push({ path, fromOrder: a.stageOrder, toOrder: b.stageOrder });
+  }
+
+  return { viewWidth: width, viewHeight: height, nodes, ribbons };
+}
+
+/**
+ * Compact percent for a conversion ratio (0.0427 → "4.3%"). Returns null —
+ * i.e. "show no conversion label" — for an undefined conversion (null) or a
+ * stage that GREW vs its predecessor (ratio > 1), where a "conversion"
+ * percentage is meaningless (the real funnel is non-monotonic at the offer
+ * stage). A stage that exactly held (100%) still shows.
+ */
+export function formatConversionPct(conversion: number | null): string | null {
+  if (conversion === null || !Number.isFinite(conversion) || conversion > 1.0001) return null;
+  const pct = conversion * 100;
+  return pct >= 10 ? `${Math.round(pct)}%` : `${pct.toFixed(1)}%`;
+}
