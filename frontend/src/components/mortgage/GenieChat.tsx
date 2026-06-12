@@ -775,6 +775,10 @@ export function GenieChat() {
                 <div className="bubble">
                   <GenieAnswer
                     payload={m.payload}
+                    question={(() => {
+                      const prev = msgs[i - 1];
+                      return prev && prev.who === 'user' ? prev.text : undefined;
+                    })()}
                     onFollowUp={ask}
                     onAction={(action) => runAction(action, m.payload)}
                     dense
