@@ -4,7 +4,6 @@ import { Link, useNavigate } from 'react-router-dom';
 import { PageShell } from '../components/layout/PageShell';
 import { KpiCard } from '../components/mortgage/KpiCard';
 import { USChoroplethMap } from '../components/mortgage/USChoroplethMap';
-import { MorningBriefing } from '../components/mortgage/MorningBriefing';
 import { PinnedInsights } from '../components/mortgage/PinnedInsights';
 import { AgentActivityLog } from '../components/mortgage/AgentActivityLog';
 import { DataEstatePanel, DataEstatePanelSkeleton } from '../components/mortgage/DataEstatePanel';
@@ -217,15 +216,6 @@ export default function Home() {
         <div role="status" className="status-callout status-callout--info">
           {preview.trend_note}
         </div>
-      )}
-      {/* Morning briefing (Buyer-Wow #6): the daily "since last refresh"
-          standing artifact, summarizing the day-over-day movement the
-          preview already carries. Gated like the KPI row — never shown on
-          day-zero, while warming, or on error (where preview is null and the
-          "first snapshot" copy would be misleading; the warming/error
-          callouts above cover those states). */}
-      {!isDayZero && !previewWarming && !previewError && (
-        <MorningBriefing preview={preview ?? null} loading={kpisLoading} />
       )}
       {/* Pinned insights (Buyer-Wow #9): operator's pinned Genie answers —
           renders nothing when empty, so it adds no chrome until used. */}

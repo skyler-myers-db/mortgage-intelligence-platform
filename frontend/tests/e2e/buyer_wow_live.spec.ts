@@ -70,19 +70,18 @@ async function openGeniePanel(page: Page) {
 }
 
 test.describe('Buyer-Wow live inspection @desktop', () => {
-  test('#6 morning briefing renders on Home (live grid or honest pending)', async ({ page }) => {
+  test('#6 morning briefing is removed; Approval queue panel carries the honest nudge', async ({ page }) => {
+    // The morning briefing was cut: its only non-redundant content (workflow
+    // counts + Review CTA) is already the Approval queue panel, and no honest
+    // "what changed" signal exists in the current data (triggers are refresh-
+    // stamped, segment "movement" is a detection-rollout artifact). Guard that
+    // the redundant card stays gone and the real nudge remains.
     await page.goto('/', { waitUntil: 'domcontentloaded' });
-    const briefing = page.locator('.briefing').first();
-    await expect(briefing).toBeVisible({ timeout: 30_000 });
-    // Eyebrow is always present; headline is non-empty in both live and pending.
-    await expect(briefing.locator('.briefing__eyebrow')).toHaveText(/Morning briefing/i);
-    await expect(briefing.locator('.briefing__headline')).not.toBeEmpty();
-    // If live, the metric grid renders; if pending (day-zero / no snapshot diff),
-    // the muted headline carries the honest explanation. Either is a pass — we
-    // only fail if the card is empty/broken.
-    const hasGrid = await briefing.locator('.briefing__grid').count();
-    const hasPending = await briefing.locator('.briefing__headline.muted').count();
-    expect(hasGrid + hasPending, 'briefing must be in a live or pending state').toBeGreaterThan(0);
+    await expect(page.getByRole('heading', { name: /Who should we contact/i })).toBeVisible({ timeout: 30_000 });
+    await expect(page.locator('.briefing')).toHaveCount(0);
+    const queue = page.getByRole('region', { name: 'Approval queue' });
+    await expect(queue).toBeVisible({ timeout: 15_000 });
+    await expect(queue.getByRole('link', { name: /review queue/i })).toBeVisible();
   });
 
   test('#4 geography map renders the keyed level-transition wrapper and drills', async ({ page, request }) => {

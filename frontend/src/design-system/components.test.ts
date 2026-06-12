@@ -152,15 +152,6 @@ describe('layout containment contracts', () => {
     expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?\.funnel-sankey--enter \.funnel-sankey__ribbon\s*\{[^}]*opacity:\s*1;/s);
   });
 
-  it('styles the morning briefing card and its directional delta chips (Buyer-Wow #6)', () => {
-    const css = designCss();
-    expect(css).toContain('.briefing__grid');
-    expect(css).toMatch(/\.briefing__delta--up\s*\{[^}]*color:\s*var\(--signal-success\);/s);
-    expect(css).toMatch(/\.briefing__delta--down\s*\{[^}]*color:\s*var\(--signal-danger\);/s);
-    // The governance step-change note uses the warning ink so it reads as a caveat.
-    expect(css).toMatch(/\.briefing__note\s*\{[^}]*color:\s*var\(--status-warning-ink\);/s);
-  });
-
   it('animates map level transitions without collapsing the hero map flex layout (Buyer-Wow #4)', () => {
     const css = designCss();
     // The keyed wrapper MUST be flex-transparent: it takes .map-wrap's flex:1
