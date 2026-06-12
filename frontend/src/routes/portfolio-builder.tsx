@@ -14,7 +14,7 @@ import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 import { DRAWER_SOURCES } from '../lib/drawerSources';
 import { useFootprint } from '../components/FootprintProvider';
 import { queryKeys } from '../lib/queryKeys';
-import { StateMultiSelect } from './portfolio-builder.components';
+import { RoiProjector, StateMultiSelect } from './portfolio-builder.components';
 import {
   BASE_DEFAULT_FILTERS,
   DEFAULT_CAMPAIGN_SETUP,
@@ -206,10 +206,16 @@ export default function PortfolioBuilder() {
     setSavePanelOpen(true);
   }, [buildDirty, buildInFlight]);
 
+  const [saving, setSaving] = useState(false);
   const onConfirmSave = useCallback(async () => {
     const name = saveName.trim();
-    if (!name) return;
-    setSavePanelOpen(false);
+    if (!name || saving) return;
+    // Re-audit #4 (2026-06-12): the panel used to close BEFORE the await,
+    // so a failed save silently discarded the operator's typed name. Keep
+    // the panel (and the name) until the save actually succeeds; on failure
+    // the form stays open with the typed name and a "Save failed" hint so
+    // the operator can retry without re-typing.
+    setSaving(true);
     try {
       await api.portfolioCreate(
         name,
@@ -217,11 +223,14 @@ export default function PortfolioBuilder() {
         buildCampaignConfig(campaignSetup),
       );
       await refetchCampaigns();
+      setSavePanelOpen(false);
       setSaveHint('saved');
     } catch {
       setSaveHint('failed');
+    } finally {
+      setSaving(false);
     }
-  }, [campaignSetup, committedFilters, committedStateCodes, refetchCampaigns, saveName]);
+  }, [campaignSetup, committedFilters, committedStateCodes, refetchCampaigns, saveName, saving]);
 
   useEffect(() => {
     if (copyHint === 'idle') return;
@@ -407,20 +416,27 @@ export default function PortfolioBuilder() {
                 size="sm"
                 type="submit"
                 icon="check"
-                disabled={saveName.trim().length === 0}
+                disabled={saveName.trim().length === 0 || saving}
+                aria-busy={saving}
                 data-testid="portfolio-save-confirm"
               >
-                Save
+                {saving ? 'Saving…' : 'Save'}
               </Button>
               <Button
                 variant="ghost"
                 size="sm"
                 type="button"
                 onClick={() => setSavePanelOpen(false)}
+                disabled={saving}
                 data-testid="portfolio-save-cancel"
               >
                 Cancel
               </Button>
+              {saveHint === 'failed' && (
+                <span className="save-build-form__error" role="alert">
+                  Save failed — your name is kept; try again.
+                </span>
+              )}
             </form>
           )}
           {targetLenderStatus !== 'live' && (
@@ -528,6 +544,13 @@ export default function PortfolioBuilder() {
           </div>
         </div>
       </div>
+
+      {/* Projected economics (re-audit #4 Buyer-Wow #7): only once a real
+          build with high-intent leads exists — never on day-zero or an
+          empty cohort, where a dollar headline would be misleading. */}
+      {!isDayZero(preview) && (preview?.high_intent_leads ?? 0) > 0 && (
+        <RoiProjector leads={preview!.high_intent_leads} />
+      )}
 
       <div className="surface mt-4">
         <div className="surface__hdr surface__hdr--split">

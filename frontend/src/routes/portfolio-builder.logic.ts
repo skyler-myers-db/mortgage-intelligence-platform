@@ -342,6 +342,118 @@ export function isDayZero(preview: PortfolioPreview | null): boolean {
   return preview?.day_zero === true;
 }
 
+/**
+ * Campaign ROI projector (re-audit #4 Buyer-Wow #7).
+ *
+ * A transparent, fully client-side projection — every input is visible and
+ * editable, nothing is hidden. It turns the build's lead count into a
+ * dollar headline a CFO recognizes, without pretending to a precision the
+ * data doesn't have:
+ *
+ *   fundings = addressable leads × response rate
+ *   volume   = fundings × avg origination balance
+ *   gross    = volume × revenue rate (gain-on-sale + fees)
+ *   outreach = leads × per-lead blended contact cost
+ *   net      = gross − outreach
+ *
+ * `leads` comes from the build (preview.high_intent_leads); the rate and
+ * balance assumptions are operator-tunable with conservative mortgage
+ * defaults. Pure and deterministic so the demo never surprises and the
+ * math is unit-pinnable.
+ */
+export interface RoiAssumptionInputs {
+  /** Addressable high-intent leads from the current build. */
+  leads: number;
+  /** Expected response/funding rate, as a percent (e.g. 4.0). */
+  responseRatePct: string;
+  /** Average origination balance per funded loan, in dollars. */
+  avgBalanceUsd: string;
+  /** Lender revenue per origination (gain-on-sale + fees), as a percent. */
+  revenueRatePct: string;
+  /** Blended per-lead outreach cost across the channel cascade, in dollars. */
+  costPerLeadUsd: string;
+}
+
+export interface RoiProjection {
+  fundings: number;
+  originationVolumeUsd: number;
+  grossRevenueUsd: number;
+  outreachCostUsd: number;
+  netRevenueUsd: number;
+  /** True when every assumption parsed to a usable, in-range number. */
+  valid: boolean;
+}
+
+export const DEFAULT_ROI_ASSUMPTIONS: Omit<RoiAssumptionInputs, 'leads'> = {
+  // Conservative top-of-funnel response for governed, eligibility-suppressed
+  // mortgage outreach; tunable on screen.
+  responseRatePct: '4.0',
+  // ~U.S. average first-lien origination balance, rounded.
+  avgBalanceUsd: '340000',
+  // Blended gain-on-sale + origination fee revenue, as a share of balance.
+  revenueRatePct: '1.50',
+  // Blended per-lead cost across the email → SMS → mail cascade.
+  costPerLeadUsd: '1.40',
+};
+
+function clampPct(raw: string): number | null {
+  const n = Number.parseFloat(raw);
+  if (!Number.isFinite(n) || n < 0 || n > 100) return null;
+  return n;
+}
+
+function nonNegMoney(raw: string): number | null {
+  const n = Number.parseFloat(raw);
+  if (!Number.isFinite(n) || n < 0) return null;
+  return n;
+}
+
+export function projectRoi(inputs: RoiAssumptionInputs): RoiProjection {
+  const leads = Number.isFinite(inputs.leads) && inputs.leads > 0 ? inputs.leads : 0;
+  const responseRate = clampPct(inputs.responseRatePct);
+  const avgBalance = nonNegMoney(inputs.avgBalanceUsd);
+  const revenueRate = clampPct(inputs.revenueRatePct);
+  const costPerLead = nonNegMoney(inputs.costPerLeadUsd);
+  const valid =
+    responseRate !== null &&
+    avgBalance !== null &&
+    revenueRate !== null &&
+    costPerLead !== null;
+  if (!valid) {
+    return {
+      fundings: 0,
+      originationVolumeUsd: 0,
+      grossRevenueUsd: 0,
+      outreachCostUsd: 0,
+      netRevenueUsd: 0,
+      valid: false,
+    };
+  }
+  const fundings = leads * (responseRate / 100);
+  const originationVolumeUsd = fundings * avgBalance;
+  const grossRevenueUsd = originationVolumeUsd * (revenueRate / 100);
+  const outreachCostUsd = leads * costPerLead;
+  return {
+    fundings,
+    originationVolumeUsd,
+    grossRevenueUsd,
+    outreachCostUsd,
+    netRevenueUsd: grossRevenueUsd - outreachCostUsd,
+    valid: true,
+  };
+}
+
+/** Compact USD formatter for the projector headline ($2.3M, $940K, $1.2B). */
+export function formatUsdCompact(n: number): string {
+  if (!Number.isFinite(n)) return '—';
+  const abs = Math.abs(n);
+  const sign = n < 0 ? '-' : '';
+  if (abs >= 1_000_000_000) return `${sign}$${(abs / 1_000_000_000).toFixed(1)}B`;
+  if (abs >= 1_000_000) return `${sign}$${(abs / 1_000_000).toFixed(1)}M`;
+  if (abs >= 1_000) return `${sign}$${Math.round(abs / 1_000)}K`;
+  return `${sign}$${Math.round(abs)}`;
+}
+
 export function dayZeroSafe(
   preview: PortfolioPreview | null,
   value: number | null | undefined,

@@ -78,6 +78,22 @@ describe('layout containment contracts', () => {
     expect(css).toMatch(/\.data-estate__asset-meta\s*\{[^}]*flex-wrap:\s*wrap;/s);
   });
 
+  it('keeps the expanded lead-row actions inside the scrollport when the console is open', () => {
+    const css = designCss();
+
+    // Re-audit #3 P3 + #4 (live: with the Console open at ~1413px the
+    // colSpan-15 expanded preview spanned the table's full scroll width,
+    // pushing Approve/Open/Build off-canvas behind a horizontal scroll).
+    // The inner block sticks to the scrollport's left edge and caps at the
+    // main container width so the actions stay visible; the grid collapses
+    // via container queries at 1280/960. Pinned so the fix can't silently
+    // regress (re-audit #4 nit: this rule had no test).
+    expect(css).toMatch(/\.tbl__expand-inner--lead\s*\{[^}]*position:\s*sticky;/s);
+    expect(css).toMatch(/\.tbl__expand-inner--lead\s*\{[^}]*left:\s*0;/s);
+    expect(css).toMatch(/\.tbl__expand-inner--lead\s*\{[^}]*max-inline-size:\s*calc\(100cqw/s);
+    expect(css).toMatch(/@container main \(max-width: 960px\)\s*\{[^}]*\.tbl__expand-inner--lead\s*\{\s*grid-template-columns:\s*1fr;/s);
+  });
+
   it('makes proof affordance rows visibly interactive without layout shifts', () => {
     const css = designCss();
 
