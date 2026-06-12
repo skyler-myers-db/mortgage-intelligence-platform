@@ -2,11 +2,18 @@
 // Keep this route explicit: chart-scale derivations use targeted useMemo below.
 'use no memo';
 
-import { useId, useMemo, type CSSProperties, type ReactNode } from 'react';
-import { Link } from 'react-router-dom';
+import {
+  useId,
+  useMemo,
+  type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
+} from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import { Icon } from '../components/Icon';
 import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 import { type UseWarmingUpRetryResult } from '../lib/useWarmingUpRetry';
+import { useFirstAppearance } from '../lib/useFirstAppearance';
 import type {
   EquitySpreadPoint,
   FunnelStage,
@@ -14,9 +21,11 @@ import type {
   ScoreBucket,
 } from '../types';
 import {
+  buildFunnelSankeyModel,
   categoricalTickIndexes,
   fmt,
   formatAxisTick,
+  formatConversionPct,
   formatShortDate,
   leadQueueHrefForFunnelStage,
   makeTicks,
@@ -149,6 +158,107 @@ export function FunnelBars({ stages, leadParams = {} }: { stages: FunnelStage[];
       label={(row) => row.stage}
       href={(row) => leadQueueHrefForFunnelStage(row, leadParams)}
     />
+  );
+}
+
+/**
+ * FunnelSankey (re-audit Buyer-Wow #5) — the value story at a glance: a
+ * flowing pipeline funnel (addressable → in-the-money → high-opportunity →
+ * offers → approved → actioned) rendered as connected ribbons that narrow
+ * with each stage's drop-off. Pure client-side SVG over the SAME
+ * FunnelStage[] the Pipeline Metrics bars use — no new data, fully
+ * deterministic. Each stage is a keyboard-focusable link to its slice of
+ * the lead queue; the ribbons draw in ONCE on first appearance (gated by
+ * useFirstAppearance, disabled under prefers-reduced-motion). The exact
+ * figures stay in the Pipeline Metrics bars below.
+ */
+export function FunnelSankey({
+  stages,
+  leadParams = {},
+}: {
+  stages: FunnelStage[];
+  leadParams?: LenderFilterParams;
+}) {
+  const navigate = useNavigate();
+  const gradientId = useId().replace(/:/g, '');
+  const model = useMemo(() => buildFunnelSankeyModel(stages), [stages]);
+  const total = useMemo(() => stages.reduce((sum, s) => sum + Math.max(0, s.borrower_count), 0), [stages]);
+  const animate = useFirstAppearance(`sankey:${model.nodes.map((n) => `${n.stageOrder}=${n.count}`).join(',')}`);
+
+  if (model.nodes.length === 0 || total === 0) {
+    return (
+      <div className="funnel-sankey funnel-sankey--empty muted fs-12" role="status">
+        Pipeline funnel appears once the gold tables are populated.
+      </div>
+    );
+  }
+
+  const go = (node: (typeof model.nodes)[number]) =>
+    navigate(leadQueueHrefForFunnelStage({ stage: node.stage, stage_order: node.stageOrder }, leadParams));
+  const onKey = (node: (typeof model.nodes)[number]) => (e: ReactKeyboardEvent<SVGGElement>) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      go(node);
+    }
+  };
+
+  return (
+    <svg
+      className={`funnel-sankey${animate ? ' funnel-sankey--enter' : ''}`}
+      viewBox={`0 0 ${model.viewWidth} ${model.viewHeight}`}
+      role="group"
+      aria-label="Pipeline funnel — each stage links to its borrowers in the lead queue"
+      preserveAspectRatio="xMidYMid meet"
+    >
+      <defs>
+        <linearGradient id={`fs-${gradientId}`} x1="0" x2="1" y1="0" y2="0">
+          <stop offset="0%" stopColor="var(--accent)" stopOpacity="0.5" />
+          <stop offset="100%" stopColor="var(--seg-itm)" stopOpacity="0.28" />
+        </linearGradient>
+      </defs>
+      {model.ribbons.map((ribbon) => (
+        <path
+          key={`${ribbon.fromOrder}-${ribbon.toOrder}`}
+          className="funnel-sankey__ribbon"
+          d={ribbon.path}
+          fill={`url(#fs-${gradientId})`}
+        />
+      ))}
+      {model.nodes.map((node) => {
+        const conv = formatConversionPct(node.conversion);
+        return (
+          <g
+            key={node.stageOrder}
+            className="funnel-sankey__node"
+            role="link"
+            tabIndex={0}
+            aria-label={`${node.stage}: ${fmt(node.count)} borrowers${conv ? `, ${conv} from previous stage` : ''}. Open in lead queue.`}
+            onClick={() => go(node)}
+            onKeyDown={onKey(node)}
+          >
+            <rect
+              className="funnel-sankey__bar"
+              x={node.xCenter - 8}
+              y={node.yTop}
+              width={16}
+              height={node.height}
+              rx={3}
+            />
+            <text className="funnel-sankey__count" x={node.xCenter} y={node.yTop - 18} textAnchor="middle">
+              {fmt(node.count)}
+            </text>
+            {conv && (
+              <text className="funnel-sankey__conv" x={node.xCenter} y={node.yTop - 5} textAnchor="middle">
+                {conv}
+              </text>
+            )}
+            <text className="funnel-sankey__label" x={node.xCenter} y={node.yBottom + 18} textAnchor="middle">
+              {node.stage}
+            </text>
+          </g>
+        );
+      })}
+    </svg>
   );
 }
 

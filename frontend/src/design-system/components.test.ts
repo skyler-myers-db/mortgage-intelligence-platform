@@ -141,6 +141,17 @@ describe('layout containment contracts', () => {
     expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?\.spark__line--draw\s*\{[^}]*stroke-dashoffset:\s*0;/s);
   });
 
+  it('gives the funnel Sankey a focus-visible affordance and a reduced-motion off-switch (Buyer-Wow #5)', () => {
+    const css = designCss();
+    expect(css).toContain('.funnel-sankey__node');
+    // Keyboard focus is visible on the SVG node (stroke ring + accent label).
+    expect(css).toMatch(/\.funnel-sankey__node:focus-visible \.funnel-sankey__bar\s*\{[^}]*stroke:/s);
+    // One-time ribbon draw is fully disabled under reduced motion (ribbons
+    // visible, no animation) so it never becomes a distracting loop.
+    expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?\.funnel-sankey--enter \.funnel-sankey__ribbon\s*\{[^}]*animation:\s*none;/s);
+    expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?\.funnel-sankey--enter \.funnel-sankey__ribbon\s*\{[^}]*opacity:\s*1;/s);
+  });
+
   it('renders skeleton placeholders for slow lead and data-estate loads', () => {
     const css = designCss();
 

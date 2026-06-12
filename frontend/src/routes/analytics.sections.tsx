@@ -42,6 +42,7 @@ import {
   DailyEvidenceLineChart,
   DataTable,
   FunnelBars,
+  FunnelSankey,
   LineChart,
   ScatterPlot,
   ScopeChip,
@@ -57,6 +58,15 @@ export function ExecutiveView({ data, leadParams }: { data: ExecutiveAnalyticsRe
         <KpiCard label="Offers Recommended" value={fmt(data.totals.offer_recommended_borrowers)} delta="Next-best-offer ready" deltaDir="up" />
         <KpiCard label="Approved Outreach" value={fmt(data.totals.approved_borrowers)} delta={`${fmt(data.totals.actioned_borrowers)} actioned`} deltaDir="flat" />
       </div>
+      <section className="surface analytics-section">
+        <div className="surface__hdr surface__hdr--split">
+          <h2 className="h-3">Pipeline funnel</h2>
+          <Link className="btn btn--sm" to={leadQueueHref(leadParams)}>Open queue</Link>
+        </div>
+        <div className="surface__body">
+          <FunnelSankey stages={data.stages} leadParams={leadParams} />
+        </div>
+      </section>
       <div className="layoutA-grid analytics-grid">
         <section className="surface">
           <div className="surface__hdr surface__hdr--split">
@@ -76,7 +86,7 @@ export function ExecutiveView({ data, leadParams }: { data: ExecutiveAnalyticsRe
         <section className="surface">
           <div className="surface__hdr surface__hdr--split">
             <h2 className="h-3">Pipeline Metrics</h2>
-            <ScopeChip>Independent cuts</ScopeChip>
+            <ScopeChip>Exact figures</ScopeChip>
           </div>
           <div className="surface__body">
             <FunnelBars stages={data.stages} leadParams={leadParams} />
