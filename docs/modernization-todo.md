@@ -697,3 +697,77 @@ fix for test-created campaigns: a test marker/exclusion, post-Summit.)
   visible + recomputes live + invalid-guard; save-name retained on forced
   failure; default campaigns list clean (11 rows, 0 archived, 0
   load-test). Screenshots on file.
+
+## Buyer-Wow tranche (2026-06-11, merge 68cde41) — ⌘K palette, evidence hover-preview, sleek KPI entrance
+
+Built the two flagged next builds plus a sleek take on #2, all deterministic
+and booth-safe, gated by a UNANIMOUS independent-subagent signoff and live
+browser confirmation.
+
+### Features
+- **#1 ⌘K command palette** — keyboard-first launcher over the wired
+  borrower/geography search + a local action registry (every product-flow
+  route + workspace toggles). Accessible combobox/listbox with
+  aria-activedescendant, focus trap, Esc/⌘K close with symmetric teardown,
+  focus restore; the '/' topbar search shortcut is untouched. Mounted once
+  in AppShell; renders nothing while closed.
+- **#8 evidence hover micro-preview** — the safe version the deferral asked
+  for: a PORTAL card (document.body, position:fixed) so it never clips in
+  the lead table's overflow:auto; shows source + freshness + one signal on
+  hover/focus; pointer-events:none so it never steals the chip click that
+  opens the governed drawer; aria-hidden (the drawer is the a11y path);
+  touch-safe. freshnessBucket extracted to freshness.ts to break the
+  chip↔card import cycle.
+- **#2 sleek KPI entrance** — NOT the count-up the team removed. A one-time
+  fade-up of the settled value + left-to-right sparkline stroke-draw, gated
+  by useFirstAppearance so route re-entry never replays it, fully disabled
+  under prefers-reduced-motion. Reads as an enterprise metric settling, not
+  a ticker.
+
+### Unanimous independent-subagent signoff (fresh context each, BLOCK/APPROVE)
+- frontend/a11y: APPROVE — ARIA model, focus trap, token/BEM parity,
+  reduced-motion all solid.
+- performance: APPROVE (×2) — hover-card scroll/resize listeners attach
+  ONLY while a card is shown (not per-chip); palette idle-cost ~nil; all
+  animations GPU-friendly one-shot; CSS budget bump cites measured actuals.
+- governance/security: APPROVE — only masked/governed data (same fields as
+  the topbar search; masked borrower_id + city/state/zip), no PII/secrets,
+  evidence→drawer path intact, no mutation/outreach/approval bypass.
+- principal-architect: APPROVE — clean layering (pure logic split, hooks in
+  lib, CSS in design system), the freshness extraction genuinely breaks the
+  cycle, blast radius contained, booth-safe.
+- qa/test: BLOCK → APPROVE — the first pass correctly blocked on the
+  palette's borrower-search path and mouse-click activation being untested;
+  after I added them (live-rows-merge, Enter→dossier, click→dossier, MAX
+  cap, error-state, click-to-activate, backdrop-close, empty-state, ⌘K
+  reset-hygiene, hover-card scroll-hide + timer-cancel), the re-review
+  confirmed via MUTATION TESTING that each new test fails under regression,
+  then APPROVED.
+
+Also taken from signoff: ⌘K toggle-close now runs the same teardown as Esc
+(no stale-query flash); removed a dead double-undefined ternary in
+EvidenceChip; Sparkline gradient id uses useId() so two KPIs can't collide.
+
+### Validation + deployed evidence
+- pytest 0 (backend untouched); **Vitest 313/313 (55 files)** (+15 feature
+  tests + 3 CSS pins); ruff/mypy/eslint/CSS-literal clean; build 0; bundle
+  budget passes (CSS gate bumped to 112/20 KiB for the ~7 KiB feature CSS,
+  measured actuals 108.28/19.21).
+- Deploy ./scripts/deploy.sh -t dev --no-confirm exit 0 — migrate, FRED,
+  silver, scores, lifecycle all TERMINATED SUCCESS; smoke PASS.
+- Live battery 9/9 (one was a test-query timing artifact, re-confirmed):
+  ⌘K opens on chord, filters actions (Lead Queue top for "lead"),
+  borrower search "60611" renders the Borrowers group (6 masked rows,
+  CHICAGO IL · 60611), arrow+Enter routes to /borrower-360/B-0YDVKFE7GDEQ1,
+  Esc closes; evidence hover-card shows on hover, portaled to body +
+  aria-hidden, click still opens the drawer; KPI values settle; ZERO
+  console errors. Screenshots on file.
+
+### Remaining Buyer-Wow items (scoped for a future round, not this tranche)
+- #3 "Tell the story" Genie narrative on Borrower 360 (M; live-Genie dep —
+  route through the numeric-claims verifier).
+- #4 animated geography transitions + ZIP borrower constellation (M;
+  re-animates the hero map — needs care).
+- #5 Funnel Sankey on Analytics Executive (M; new viz component).
+- #6 morning briefing card on Home (M-L; needs the delta-snapshot scaffolding).
+- #9 Genie follow-up chips + pin-to-Home (M; live-Genie dep).
