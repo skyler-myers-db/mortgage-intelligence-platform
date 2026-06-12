@@ -37,8 +37,15 @@ const KiB = 1024;
 // tools/precompress_assets.mjs + backend/services/static_assets.py).
 // ---------------------------------------------------------------------------
 const budgets = {
-  initialJsBytes: 270 * KiB, // actual 256.60 (was 300 -- tightened)
-  initialJsGzipBytes: 83 * KiB, // actual 79.03 (was 90 -- tightened)
+  initialJsBytes: 270 * KiB, // actual 268.16 (Buyer-Wow epic; still < 270)
+  // Bumped 2026-06-12 (re-audit #5 remediation). The Buyer-Wow epic (⌘K
+  // palette command module, pinned-insights store eagerly reachable from the
+  // initial chunk via actorScopedBrowserState, Sankey/briefing wiring) grew
+  // initial JS gzip from the 2026-06-10 baseline (79.03) to 82.99 — already at
+  // the 83 ceiling. The re-audit #5 markdown-sanitized pin summary (toPlain
+  // /truncateAtWord in pinnedInsights, initial chunk) tipped it to 83.15.
+  // Restore ~5% headroom on the new measured actual.
+  initialJsGzipBytes: 87 * KiB, // actual 83.15 (was 83 @ 79.03 baseline)
   // Bumped 2026-06-11 for the re-audit #4 Buyer-Wow tranche: ⌘K command
   // palette (.cmdk*), portal evidence hover-card (.evidence-hovercard*),
   // sleek one-time KPI entrance (.kpi__value--enter / .spark__line--draw),

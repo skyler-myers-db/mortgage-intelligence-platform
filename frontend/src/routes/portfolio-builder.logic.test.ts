@@ -175,10 +175,20 @@ describe('campaign ROI projector (Buyer-Wow #7)', () => {
     expect(p.fundings).toBe(0);
   });
 
-  it('formats compact USD across magnitudes', () => {
+  it('rejects fat-fingered money inputs above a sane ceiling (no "$1000000.0B")', () => {
+    // Consistent with clampPct: implausible inputs are INVALID (→ "—"), not
+    // silently clamped, so the headline can never render a nonsense magnitude.
+    expect(projectRoi({ leads: 1000, ...DEFAULT_ROI_ASSUMPTIONS, avgBalanceUsd: '100000000001' }).valid).toBe(false);
+    expect(projectRoi({ leads: 1000, ...DEFAULT_ROI_ASSUMPTIONS, costPerLeadUsd: '100001' }).valid).toBe(false);
+    // A generous-but-real jumbo balance still computes.
+    expect(projectRoi({ leads: 1000, ...DEFAULT_ROI_ASSUMPTIONS, avgBalanceUsd: '5000000' }).valid).toBe(true);
+  });
+
+  it('formats compact USD across magnitudes (incl. trillions)', () => {
     expect(formatUsdCompact(244_800)).toBe('$245K');
     expect(formatUsdCompact(16_320_000)).toBe('$16.3M');
     expect(formatUsdCompact(2_300_000_000)).toBe('$2.3B');
+    expect(formatUsdCompact(1_500_000_000_000)).toBe('$1.5T');
     expect(formatUsdCompact(-1_680)).toBe('-$2K');
     expect(formatUsdCompact(940)).toBe('$940');
   });

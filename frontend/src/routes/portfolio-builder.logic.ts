@@ -402,18 +402,25 @@ function clampPct(raw: string): number | null {
   return n;
 }
 
-function nonNegMoney(raw: string): number | null {
+// Sane upper ceilings so a fat-fingered assumption can't produce a nonsense
+// headline ("$1000000.0B"). Generous — far above any real mortgage input —
+// and consistent with clampPct, which likewise REJECTS out-of-range (→ "—")
+// rather than silently clamping.
+const MAX_AVG_BALANCE_USD = 100_000_000; // $100M per funded loan (well past jumbo)
+const MAX_COST_PER_LEAD_USD = 100_000; // $100K blended per-lead cost
+
+function nonNegMoney(raw: string, max = Number.POSITIVE_INFINITY): number | null {
   const n = Number.parseFloat(raw);
-  if (!Number.isFinite(n) || n < 0) return null;
+  if (!Number.isFinite(n) || n < 0 || n > max) return null;
   return n;
 }
 
 export function projectRoi(inputs: RoiAssumptionInputs): RoiProjection {
   const leads = Number.isFinite(inputs.leads) && inputs.leads > 0 ? inputs.leads : 0;
   const responseRate = clampPct(inputs.responseRatePct);
-  const avgBalance = nonNegMoney(inputs.avgBalanceUsd);
+  const avgBalance = nonNegMoney(inputs.avgBalanceUsd, MAX_AVG_BALANCE_USD);
   const revenueRate = clampPct(inputs.revenueRatePct);
-  const costPerLead = nonNegMoney(inputs.costPerLeadUsd);
+  const costPerLead = nonNegMoney(inputs.costPerLeadUsd, MAX_COST_PER_LEAD_USD);
   const valid =
     responseRate !== null &&
     avgBalance !== null &&
@@ -443,11 +450,12 @@ export function projectRoi(inputs: RoiAssumptionInputs): RoiProjection {
   };
 }
 
-/** Compact USD formatter for the projector headline ($2.3M, $940K, $1.2B). */
+/** Compact USD formatter for the projector headline ($2.3M, $940K, $1.2B, $1.5T). */
 export function formatUsdCompact(n: number): string {
   if (!Number.isFinite(n)) return '—';
   const abs = Math.abs(n);
   const sign = n < 0 ? '-' : '';
+  if (abs >= 1_000_000_000_000) return `${sign}$${(abs / 1_000_000_000_000).toFixed(1)}T`;
   if (abs >= 1_000_000_000) return `${sign}$${(abs / 1_000_000_000).toFixed(1)}B`;
   if (abs >= 1_000_000) return `${sign}$${(abs / 1_000_000).toFixed(1)}M`;
   if (abs >= 1_000) return `${sign}$${Math.round(abs / 1_000)}K`;
