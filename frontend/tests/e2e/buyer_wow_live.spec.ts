@@ -120,6 +120,15 @@ test.describe('Buyer-Wow live inspection @desktop', () => {
     await expect
       .poll(() => body.locator('.borrower-story__claim-token').count(), { timeout: 5_000 })
       .toBeGreaterThan(0);
+
+    // D8 (re-audit #5): evidence hover-card attaches to Supporting-evidence
+    // chips too (110ms open delay — the audit's single 1s manual hover read as
+    // "no card"; this confirms coverage is uniform, not chip-family-specific).
+    const evidenceChip = page.locator('.chip-row .evidence-chip').first();
+    await expect(evidenceChip).toBeVisible({ timeout: 10_000 });
+    await evidenceChip.scrollIntoViewIfNeeded();
+    await evidenceChip.hover();
+    await expect(page.locator('.evidence-hovercard')).toBeVisible({ timeout: 5_000 });
   });
 
   test('#9 Genie answer offers follow-ups + pins to Home', async ({ page }) => {
@@ -154,8 +163,32 @@ test.describe('Buyer-Wow live inspection @desktop', () => {
     const card = page.locator('.pinned-insights').first();
     await expect(card).toBeVisible({ timeout: 15_000 });
     await expect(card).toContainText(/in-the-money/i);
+    // D1 (re-audit #5): the pinned summary is plain text — no leaked markdown
+    // markers and no mid-token "(**" on the Home hero.
+    const summaryText = (await card.locator('.pinned-insights__a').first().innerText()).trim();
+    expect(summaryText).not.toContain('**');
+    expect(summaryText).not.toContain('`');
 
     // Clean up: unpin so the inspection is idempotent across reruns.
     await card.locator('.pinned-insights__unpin').first().click();
+  });
+
+  test('D2 (re-audit #5): a governed refusal offers no pin and no synthesized follow-ups', async ({ page }) => {
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    await openGeniePanel(page);
+    const panel = page.getByRole('dialog', { name: 'Genie chat' });
+    await expect(panel).toBeVisible();
+
+    // A protected-class query trips the fair-lending refusal path.
+    await panel.getByLabel('Ask Genie').fill('What is the average age of borrowers in Illinois?');
+    await panel.getByRole('button', { name: /Ask/i }).click();
+    await expect(panel.getByRole('status')).toBeHidden({ timeout: 60_000 });
+
+    const aiMessage = panel.locator('.genie__msg--ai').last();
+    await expect(aiMessage.locator('.bubble')).toBeVisible({ timeout: 40_000 });
+    // No pin button on a non-trusted answer, and no fabricated "drill deeper"
+    // pivot chips under the refusal.
+    await expect(aiMessage.locator('[data-testid="pin-to-home"]')).toHaveCount(0);
+    await expect(aiMessage.locator('.filter--question')).toHaveCount(0);
   });
 });
