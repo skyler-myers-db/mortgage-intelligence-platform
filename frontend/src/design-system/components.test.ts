@@ -182,6 +182,15 @@ describe('layout containment contracts', () => {
     expect(css).toMatch(/@keyframes zip-tile-in\s*\{\s*from\s*\{\s*opacity:\s*0;\s*\}\s*to\s*\{\s*opacity:\s*1;\s*\}\s*\}/s);
   });
 
+  it('colors the borrower-story verified/unverified claim chips by status (Buyer-Wow #3)', () => {
+    const css = designCss();
+    expect(css).toContain('.borrower-story__narrative');
+    expect(css).toMatch(/\.borrower-story__claim\s*\{[^}]*border:\s*1px solid var\(--status-success-line\);/s);
+    expect(css).toMatch(/\.borrower-story__claim--unverified\s*\{[^}]*border-color:\s*var\(--status-warning-line\);/s);
+    expect(css).toMatch(/\.borrower-story__verdict--ok\s*\{[^}]*color:\s*var\(--status-success-ink\);/s);
+    expect(css).toMatch(/\.borrower-story__verdict--warn\s*\{[^}]*color:\s*var\(--status-warning-ink\);/s);
+  });
+
   it('renders skeleton placeholders for slow lead and data-estate loads', () => {
     const css = designCss();
 

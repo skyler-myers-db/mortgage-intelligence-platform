@@ -1300,6 +1300,45 @@ kbd {
 /* ============================================================
    APPROVAL BANNER (Human in the loop)
    ============================================================ */
+/* "Tell the story" borrower narrative (Buyer-Wow #3). */
+.borrower-story__narrative {
+  font-size: var(--fs-16);
+  line-height: var(--lh-body);
+  color: var(--text-1);
+  margin: 0 0 var(--sp-4);
+}
+.borrower-story__claims {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin-block-end: var(--sp-3);
+}
+.borrower-story__claim {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: 2px var(--sp-2);
+  border-radius: var(--r-pill);
+  border: 1px solid var(--status-success-line);
+  background: var(--status-success-soft);
+  color: var(--text-2);
+  font-size: var(--fs-11);
+}
+.borrower-story__claim--unverified {
+  border-color: var(--status-warning-line);
+  background: var(--status-warning-soft);
+}
+.borrower-story__claim-label { color: var(--text-3); }
+.borrower-story__claim-token { color: var(--text-1); font-weight: 600; }
+.borrower-story__verdict {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  font-size: var(--fs-12);
+}
+.borrower-story__verdict--ok { color: var(--status-success-ink); }
+.borrower-story__verdict--warn { color: var(--status-warning-ink); }
+
 /* Morning briefing (Buyer-Wow #6) — the daily standing artifact on Home. */
 .briefing {
   margin-block-end: var(--gap-grid);
