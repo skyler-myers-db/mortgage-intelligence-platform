@@ -61,8 +61,12 @@ const budgets = {
   // gate mid-stream. Ratchet back down after the epic settles.
   initialCssBytes: 116 * KiB, // actual ~110.5 (Sankey + briefing)
   initialCssGzipBytes: 21 * KiB, // actual ~19.75 (was 20)
-  totalJsBytes: 875 * KiB, // actual 832.42 (was 832 with 0.03 KiB slack)
-  totalJsGzipBytes: 288 * KiB, // actual 274.22 (was 276)
+  // Re-baselined 2026-06-12: the Buyer-Wow epic + "Your book today" summary
+  // (Feature A) + LO-assignment/follow-up routing (Feature C) grew total JS
+  // from the stale 832.42 baseline to 875.99 / gzip 288.42, tipping the old
+  // 875/288 gate. Reset to the measured actual + ~5% per this file's policy.
+  totalJsBytes: 920 * KiB, // actual 875.99
+  totalJsGzipBytes: 303 * KiB, // actual 288.42
   maxLazyJsBytes: 104 * KiB, // actual 98.40 (was 160 -- tightened)
   maxLazyJsGzipBytes: 34 * KiB, // actual 32.06 (was 60 -- tightened)
   fontAssetCount: 14, // exact by policy

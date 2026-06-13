@@ -35,6 +35,50 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe('outreach approve — loan-officer assignment + follow-up (Feature C)', () => {
+  it('forwards assigned_to_email and follow_up_in_days, and surfaces the echo', async () => {
+    const calls: Array<{ path: string; init?: RequestInit }> = [];
+    vi.stubGlobal('fetch', async (path: string, init?: RequestInit) => {
+      calls.push({ path, init });
+      return jsonResponse(200, {
+        approved: true,
+        approval_id: '11111111-1111-4111-8111-111111111111',
+        audit_event_id: '55555555-5555-4555-8555-555555555555',
+        assigned_to_email: 'stacy@summit.example',
+        follow_up_at: '2026-06-17T00:00:00Z',
+      });
+    });
+
+    const res = await api.approve('B-48291', {
+      offer_code: 'refi',
+      channel: 'email',
+      assigned_to_email: 'stacy@summit.example',
+      follow_up_in_days: 5,
+    });
+
+    expect(calls[0].path).toBe('/api/v1/outreach/approve');
+    const body = JSON.parse(String(calls[0].init?.body));
+    expect(body.assigned_to_email).toBe('stacy@summit.example');
+    expect(body.follow_up_in_days).toBe(5);
+    // The echo flows back so the UI can confirm the routing.
+    expect(res.assigned_to_email).toBe('stacy@summit.example');
+    expect(res.follow_up_at).toBe('2026-06-17T00:00:00Z');
+  });
+
+  it('sends nulls when no loan officer / no reminder is chosen (back-compat)', async () => {
+    const calls: Array<{ path: string; init?: RequestInit }> = [];
+    vi.stubGlobal('fetch', async (path: string, init?: RequestInit) => {
+      calls.push({ path, init });
+      return jsonResponse(200, { approved: true });
+    });
+
+    await api.approve('B-48291', { offer_code: 'refi' });
+    const body = JSON.parse(String(calls[0].init?.body));
+    expect(body.assigned_to_email).toBeNull();
+    expect(body.follow_up_in_days).toBeNull();
+  });
+});
+
 describe('apiPath', () => {
   it('centralizes the canonical API version prefix', () => {
     expect(apiPath('/health')).toBe('/api/v1/health');

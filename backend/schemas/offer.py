@@ -1,10 +1,12 @@
 """Offer recommendation request and response contracts."""
 
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from backend.schemas.common import (
+    validate_internal_staff_email,
     validate_public_borrower_id,
     validate_public_campaign_label,
     validate_public_opaque_id,
@@ -151,11 +153,34 @@ class OutreachApproveRequest(BaseModel):
     # chars to match the DDL column width; None keeps legacy callers
     # working at pre-R5-01 semantics (no duplicate protection).
     request_id: str | None = Field(default=None, max_length=64)
+    # Feature C: optional loan-officer assignment + "follow up in N days"
+    # reminder captured at approval time. Both are optional and None-able so
+    # the bulk approve path and legacy callers keep working. Reminder
+    # DELIVERY is out of scope -- the endpoint only persists the assignment
+    # and the computed follow_up_at timestamp.
+    #
+    # NOTE: this is a point-in-time SNAPSHOT of who owned this outreach
+    # decision -- it is domain-validated (internal staff email) but does NOT
+    # go through the gated routing path in backend/api/sales.py
+    # (POST /leads/{id}/assign), which enforces sales_team roster membership +
+    # contactability (approved + marketing_eligible + opt_in + not suppressed)
+    # and writes the authoritative, single-active mip_app.lead_assignments
+    # record. "Assigned" here is a weaker claim than "assigned" there; the two
+    # are intentionally not coupled.
+    assigned_to_email: str | None = Field(default=None, max_length=120)
+    follow_up_in_days: int | None = Field(default=None, ge=1, le=30)
 
     @field_validator("borrower_id")
     @classmethod
     def _borrower_id_is_public_safe(cls, value: str) -> str:
         return validate_public_borrower_id(value)
+
+    @field_validator("assigned_to_email")
+    @classmethod
+    def _assigned_to_email_is_staff(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        return validate_internal_staff_email(value)
 
     @field_validator("bulk_id", "request_id")
     @classmethod
@@ -183,6 +208,11 @@ class OutreachApproveResponse(BaseModel):
     approved: bool
     approval_id: str
     audit_event_id: str
+    # Feature C echo-back: the persisted loan-officer assignment and the
+    # computed follow-up timestamp (now + follow_up_in_days). Both are None
+    # when the approver did not request an assignment / reminder.
+    assigned_to_email: str | None = None
+    follow_up_at: datetime | None = None
 
 
 class OutreachRejectRequest(BaseModel):

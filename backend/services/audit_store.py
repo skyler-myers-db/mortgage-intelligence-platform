@@ -184,6 +184,11 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         "approval_status",
         "outreach_status",
         "assigned_to_email",
+        # Feature C: loan-officer assignment + follow-up reminder captured
+        # at approval time. ``assigned_to_email`` (above) is already
+        # internal-staff-email validated; ``follow_up_at`` is an ISO
+        # timestamp (now + N days), no PII.
+        "follow_up_at",
         "aged_days",
         "target_lender_ref",
         "portfolio_criteria",

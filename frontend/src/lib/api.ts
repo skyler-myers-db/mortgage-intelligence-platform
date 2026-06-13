@@ -89,6 +89,10 @@ export interface ApproveResult {
   approved: boolean;
   approval_id?: string | null;
   audit_event_id?: string | null;
+  /** Loan officer this outreach was assigned to (echoed from the request). */
+  assigned_to_email?: string | null;
+  /** Follow-up reminder timestamp (ISO), computed from follow_up_in_days. */
+  follow_up_at?: string | null;
 }
 
 export interface RejectResult {
@@ -928,6 +932,10 @@ export const api = {
       channel?: 'email' | 'sms' | 'direct_mail';
       campaign_id?: string | null;
       variant_name?: string | null;
+      /** Optional loan-officer assignment captured at approval time. */
+      assigned_to_email?: string | null;
+      /** Optional follow-up reminder window (1..30 days) persisted as follow_up_at. */
+      follow_up_in_days?: number | null;
       request_id?: string;
     } = {},
     signal?: AbortSignal,
@@ -946,6 +954,8 @@ export const api = {
         channel?: 'email' | 'sms' | 'direct_mail';
         campaign_id?: string | null;
         variant_name?: string | null;
+        assigned_to_email?: string | null;
+        follow_up_in_days?: number | null;
         request_id: string;
       }
     >(
@@ -962,6 +972,8 @@ export const api = {
         channel: opts.channel ?? 'email',
         campaign_id: opts.campaign_id ?? null,
         variant_name: opts.variant_name ?? null,
+        assigned_to_email: opts.assigned_to_email ?? null,
+        follow_up_in_days: opts.follow_up_in_days ?? null,
         // R5-01 idempotency: generate one UUID per user action and reuse
         // across any transparent retries inside _fetchWithRetry. The
         // backend has a unique index on mip_app.approvals(request_id)
