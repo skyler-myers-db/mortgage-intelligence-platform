@@ -1028,3 +1028,60 @@ six r5 fixes, overturned one adjudication, and raised small items.
   green. Deploy exit 0; **live 6/6 PASS** (`buyer_wow_live.spec.ts`): the 4
   features + D2 refusal + the new `/ask-genie` deep-dive pin probe. Deployed ==
   HEAD.
+
+## Cotality-demo commitments build-out (2026-06-12) — Features A, C, B
+
+Three items surfaced by the Cotality demo readiness review, each built as a
+vertical slice with a full unanimous 5-agent independent-context signoff loop
+(frontend/a11y, qa, governance, performance, architect) — 15 reviews, all
+APPROVE, review-driven hardening applied before each merge.
+
+### Feature A — "Your book today" current-state portfolio summary (merge e51beed)
+Honest replacement for the cut delta-briefing: a plain-English orientation of
+the book (marketable population, in-the-money count + DERIVED in-money share,
+top-tier opportunities, offers recommended), composed DETERMINISTICALLY from the
+PortfolioPreview already on Home (no new request, no live-LLM), every figure
+numeric-verified against its source via the borrower-story verifier, each
+grounded figure linking to its gold-table drawer. Labelled honestly as the
+current gold snapshot — NOT a live AI generation (the deliberate, signed-off
+booth-determinism call; a live-Genie variant remains an available follow-up).
+Lib `portfolioStory.ts` + `PortfolioSummaryCard.tsx`, gated like the KPI row.
+
+### Feature C — LO assignment + follow-up reminder persistence (merge b958cdd)
+The demoed-but-cosmetic "assign to a loan officer + remind in 5 days" now
+persists: `mip_app.approvals` gains `assigned_to_email` + `follow_up_at`
+(idempotent ADD COLUMN + runtime self-heal bootstrap); the approve contract +
+handler write both in the atomic transaction + audit allowlist; the offer
+orchestrator adds an LO picker (live sales-team roster) + follow-up select with
+a post-approval confirmation. Persist-only — reminder DELIVERY is explicitly out
+of scope (no scheduler, not claimed). `assigned_to_email` is internal-staff-only
+(validated), a point-in-time snapshot distinct from the gated `lead_assignments`
+routing (documented).
+
+### Feature B — minimal real Salesforce delivery adapter (merge 003a959)
+The activation outbox previously only STAGED. Adds a REAL Salesforce REST
+delivery path (`salesforce_client.py` stdlib-urllib OAuth + create_record,
+circuit-breakered; `activation_delivery.py`) gated to configured + connected
+destinations and run synchronously (non-fatal) inside /stage. HONEST DEGRADED:
+unconfigured (booth/dev default) = clean no-op, row stays staged, never marked
+delivered without a real 201. No-PII payload (masked B- id + offer + channel +
+request_id). Review hardening: non-idempotent write NOT auto-retried (no dup
+Tasks), request-path timeout lowered + configurable (`salesforce_timeout_s`),
+honest 502 on malformed-success. The existing ActivationLoopPanel surfaces
+delivered/staged/failed, so the outcome shows honestly with no frontend change.
+Operational: a live Salesforce demo needs `SALESFORCE_*` filled AND the
+destination flipped to `connected`; otherwise it honestly stays staged.
+
+### Validation + deployed evidence
+- Frontend **387**, backend **1560 pytest**, lint/ruff/build/budget all green
+  (total-JS budget re-baselined 875→920 / 288→303 gzip for cumulative epic
+  growth, actual 875.99/288.42).
+- Deploy `./scripts/deploy.sh -t dev --no-confirm` exit 0; Lakebase migrate
+  TERMINATED SUCCESS (Feature C columns); **13-step smoke PASS**.
+- **Live 8/8 PASS** (`buyer_wow_live.spec.ts`): Feature A summary (grounded +
+  verified verdict), Feature C routing controls (LO roster populated + "In 5
+  days"), plus the prior 6 (briefing-gone guard, map, Tell-the-story, Genie
+  pin, refusal, deep-dive pin). Deployed == HEAD.
+- Honesty posture held throughout: deterministic summary not claimed as AI;
+  persist-only (no reminder send); Salesforce never claims a delivery it didn't
+  make.

@@ -84,6 +84,34 @@ test.describe('Buyer-Wow live inspection @desktop', () => {
     await expect(queue.getByRole('link', { name: /review queue/i })).toBeVisible();
   });
 
+  test('Feature A: "Your book today" portfolio summary renders, grounded + verified', async ({ page }) => {
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    const summary = page.getByRole('region', { name: 'Portfolio summary' });
+    await expect(summary).toBeVisible({ timeout: 30_000 });
+    await expect(summary.getByText('Your book today')).toBeVisible();
+    // Real narrative (a grouped count appears) + grounded claim chips + verdict.
+    await expect(summary.locator('.portfolio-summary__narrative')).not.toBeEmpty();
+    await expect
+      .poll(() => summary.locator('.portfolio-summary__claim').count(), { timeout: 10_000 })
+      .toBeGreaterThan(0);
+    await expect(summary.locator('.portfolio-summary__verdict--ok')).toBeVisible();
+  });
+
+  test('Feature C: offer orchestrator exposes the LO-assignment + follow-up routing controls', async ({ page, request }) => {
+    const id = await firstBorrowerId(request);
+    await page.goto(`/offer-orchestrator/${id}`, { waitUntil: 'domcontentloaded' });
+    const routing = page.locator('[data-testid="outreach-routing"]');
+    await expect(routing).toBeVisible({ timeout: 30_000 });
+    // The loan-officer picker is populated from the live sales-team roster.
+    const loSelect = routing.locator('#lo-assign');
+    await expect(loSelect).toBeVisible();
+    await expect
+      .poll(() => loSelect.locator('option').count(), { timeout: 10_000 })
+      .toBeGreaterThan(1); // "Unassigned" + >=1 real loan officer
+    // Follow-up reminder options include "In 5 days".
+    await expect(routing.locator('#lo-followup option', { hasText: /In 5 days/i })).toHaveCount(1);
+  });
+
   test('#4 geography map renders the keyed level-transition wrapper and drills', async ({ page, request }) => {
     await page.goto('/segment-intelligence', { waitUntil: 'domcontentloaded' });
     const levels = page.locator('.map-levels').first();
