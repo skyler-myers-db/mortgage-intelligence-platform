@@ -1,0 +1,1 @@
+- [Verify audit findings](feedback_verify_audit_findings.md) — delegated Explore UX sweeps over-flag; spot-verify every finding against source before reporting

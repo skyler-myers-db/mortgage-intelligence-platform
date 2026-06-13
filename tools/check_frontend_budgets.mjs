@@ -59,8 +59,13 @@ const budgets = {
   // tranches). Sankey + briefing measured at CSS ~110.5 / gzip ~19.75;
   // headroom raised so the remaining same-epic CSS features don't trip the
   // gate mid-stream. Ratchet back down after the epic settles.
-  initialCssBytes: 116 * KiB, // actual ~110.5 (Sankey + briefing)
-  initialCssGzipBytes: 21 * KiB, // actual ~19.75 (was 20)
+  // Bumped 2026-06-13 for the auto-offer epic: portfolio summary + outreach
+  // routing + search ⌘K chip + the borrower-offer prototype mock grew initial
+  // CSS to 118.04 / gzip 20.56; slices 2-3 (indicative offer, personalized
+  // copy) add more. Headroom raised so same-epic CSS doesn't trip mid-stream;
+  // ratchet back down after the epic settles.
+  initialCssBytes: 124 * KiB, // actual 118.04
+  initialCssGzipBytes: 22 * KiB, // actual 20.56
   // Re-baselined 2026-06-12: the Buyer-Wow epic + "Your book today" summary
   // (Feature A) + LO-assignment/follow-up routing (Feature C) grew total JS
   // from the stale 832.42 baseline to 875.99 / gzip 288.42, tipping the old

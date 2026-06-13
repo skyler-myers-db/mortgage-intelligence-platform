@@ -182,6 +182,13 @@ describe('layout containment contracts', () => {
     expect(css).toMatch(/\.borrower-story__verdict--warn\s*\{[^}]*color:\s*var\(--status-warning-ink\);/s);
   });
 
+  it('styles the borrower offer prototype mock (watermark + warning banner)', () => {
+    const css = designCss();
+    expect(css).toContain('.offer-mock__watermark');
+    expect(css).toMatch(/\.offer-mock__banner\s*\{[^}]*color:\s*var\(--status-warning-ink\);/s);
+    expect(css).toMatch(/\.offer-mock-scrim\s*\{[^}]*background:\s*var\(--surface-scrim\);/s);
+  });
+
   it('styles the portfolio summary card claim chips + verdict ("Your book today")', () => {
     const css = designCss();
     expect(css).toContain('.portfolio-summary__narrative');

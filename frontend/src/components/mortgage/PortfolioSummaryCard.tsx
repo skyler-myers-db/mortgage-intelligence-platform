@@ -67,7 +67,7 @@ export function PortfolioSummaryCard({
           <div>
             <div className="h-4">Your book today</div>
             <div className="muted fs-12">
-              Plain-English summary of your current gold snapshot{asOf ? ` · as of ${asOf}` : ''}.
+              Summary of your current gold snapshot{asOf ? ` · as of ${asOf}` : ''}.
             </div>
           </div>
         </div>
@@ -82,9 +82,8 @@ export function PortfolioSummaryCard({
               <button
                 key={`${claim.label}-${claim.token}`}
                 type="button"
-                className={`portfolio-summary__claim${
-                  claim.verified ? '' : ' portfolio-summary__claim--unverified'
-                }`}
+                className={`portfolio-summary__claim${claim.verified ? '' : ' portfolio-summary__claim--unverified'
+                  }`}
                 onClick={() => setDrawer(src)}
                 title={`${claim.label}: ${claim.token} — open ${src.title} evidence`}
               >
@@ -97,9 +96,8 @@ export function PortfolioSummaryCard({
         </div>
 
         <div
-          className={`portfolio-summary__verdict${
-            story.allVerified ? ' portfolio-summary__verdict--ok' : ' portfolio-summary__verdict--warn'
-          }`}
+          className={`portfolio-summary__verdict${story.allVerified ? ' portfolio-summary__verdict--ok' : ' portfolio-summary__verdict--warn'
+            }`}
           role="status"
         >
           <Icon name={story.allVerified ? 'shield' : 'info'} size={11} />

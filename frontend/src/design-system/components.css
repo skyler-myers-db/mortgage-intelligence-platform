@@ -1556,6 +1556,110 @@ kbd {
 }
 .outreach-routing__confirm { display: flex; }
 
+/* Borrower offer experience PROTOTYPE (auto-offer Module 1 mock). Unmistakably
+   a mock: watermark + warning banner + legal disclaimer. */
+.offer-mock-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: var(--sp-4);
+  background: var(--surface-scrim);
+  backdrop-filter: blur(2px);
+}
+.offer-mock {
+  position: relative;
+  inline-size: min(34rem, 100%);
+  border-radius: var(--r-lg);
+  border: 1px solid var(--line-1);
+  background: var(--bg-1);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+}
+.offer-mock__watermark {
+  position: absolute;
+  inset-block-start: 40%;
+  inset-inline: 0;
+  text-align: center;
+  font-size: 4rem;
+  font-weight: 800;
+  letter-spacing: 0.18em;
+  color: color-mix(in srgb, var(--text-3) 16%, transparent);
+  transform: rotate(-12deg);
+  pointer-events: none;
+  user-select: none;
+}
+.offer-mock__banner {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-4);
+  font-size: var(--fs-11);
+  color: var(--status-warning-ink);
+  background: var(--status-warning-soft);
+  border-block-end: 1px solid var(--status-warning-line);
+}
+.offer-mock__close {
+  position: absolute;
+  inset-block-start: var(--sp-2);
+  inset-inline-end: var(--sp-2);
+  display: grid;
+  place-items: center;
+  inline-size: 26px;
+  block-size: 26px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line-1);
+  background: var(--bg-2);
+  color: var(--text-2);
+  cursor: pointer;
+}
+.offer-mock__close:hover { color: var(--text-1); }
+.offer-mock__card {
+  position: relative;
+  padding: var(--sp-6) var(--sp-5);
+  text-align: center;
+}
+.offer-mock__brand {
+  font-weight: 700;
+  color: var(--accent-ink);
+  margin-block-end: var(--sp-3);
+}
+.offer-mock__headline {
+  font-size: var(--fs-22);
+  margin: 0 0 var(--sp-2);
+  color: var(--text-1);
+}
+.offer-mock__sub {
+  color: var(--text-2);
+  margin: 0 auto var(--sp-4);
+  max-inline-size: 28rem;
+}
+.offer-mock__cta-row {
+  display: flex;
+  gap: var(--sp-3);
+  justify-content: center;
+  margin-block-end: var(--sp-4);
+}
+.offer-mock__yes { min-inline-size: 12rem; }
+.offer-mock__legal {
+  font-size: var(--fs-11);
+  color: var(--text-3);
+  margin: 0 auto;
+  max-inline-size: 30rem;
+  line-height: var(--lh-snug);
+}
+.offer-mock__check {
+  inline-size: 56px;
+  block-size: 56px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  margin: 0 auto var(--sp-3);
+  background: var(--status-success-soft);
+  color: var(--status-success-ink);
+}
+
 .approval {
   display: flex; align-items: center; gap: var(--sp-4);
   padding: var(--sp-3) var(--sp-4);

@@ -23,7 +23,7 @@ import { formatRefreshed } from '../lib/formatRefreshed';
 import type { DataEstateResponse, KpiTrend, PortfolioPreview } from '../types';
 
 const FUTURE_MODULES = [
-  { code: 'M1', title: 'Pipeline Optimization', desc: 'Lead → app → approval throughput and stalls.' },
+  { code: 'M1', title: 'Pre-Qualified Offer & Self-Serve Accept', desc: 'Borrower-facing pre-qualified offer with one-click accept → compliant application handoff (FCRA firm-offer + RESPA timing).' },
   { code: 'M2', title: 'LO Workbench',          desc: 'Officer assist with explainable next-best-action.' },
   { code: 'M3', title: 'Underwriting Copilot',  desc: 'Condition handling and exception triage.' },
   { code: 'M4', title: 'Risk & Retention',      desc: 'Portfolio-level retention and recapture.' },

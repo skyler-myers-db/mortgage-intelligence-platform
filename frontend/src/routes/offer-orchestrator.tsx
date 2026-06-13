@@ -6,6 +6,7 @@ import type { WarmingUpState } from '../lib/useWarmingUpRetry';
 import type { ApprovalStatus, Borrower360 as Borrower360Type, BorrowerLifecycle, OfferRecommendation, SalesTeamMember } from '../types';
 import { PageShell } from '../components/layout/PageShell';
 import { ApprovalBanner } from '../components/mortgage/ApprovalBanner';
+import { BorrowerOfferPreviewMock } from '../components/mortgage/BorrowerOfferPreviewMock';
 import { ScoreBadge } from '../components/mortgage/ScoreBadge';
 import { ConfidenceMeter } from '../components/mortgage/ConfidenceMeter';
 import { Button, Chip } from '../components/Primitives';
@@ -89,6 +90,8 @@ export default function OfferOrchestrator() {
   const [assignedTo, setAssignedTo] = useState<string>('');
   const [followUpDays, setFollowUpDays] = useState<number>(0); // 0 = no reminder
   const [routingConfirm, setRoutingConfirm] = useState<{ email: string | null; followUpAt: string | null } | null>(null);
+  // Auto-offer Module 1 (prototype): preview the borrower-facing offer experience.
+  const [borrowerPreviewOpen, setBorrowerPreviewOpen] = useState(false);
 
   // Load the loan-officer roster for the assignment picker (active LOs +
   // managers). Best-effort — the control degrades to "Unassigned" only if the
@@ -555,10 +558,24 @@ export default function OfferOrchestrator() {
             >
               {effectiveApproval === 'approved' ? 'Approved' : 'Approve'}
             </Button>
+            {/* Auto-offer Module 1 prototype: show the borrower-facing offer
+                experience (the "click yes" vision). Clearly a mock. */}
+            <Button
+              variant="ghost"
+              size="sm"
+              icon="user"
+              onClick={() => setBorrowerPreviewOpen(true)}
+              data-testid="preview-borrower-offer"
+            >
+              Preview borrower view
+            </Button>
           </>
         )
       }
     >
+      {borrowerPreviewOpen && b && (
+        <BorrowerOfferPreviewMock borrower={b} onClose={() => setBorrowerPreviewOpen(false)} />
+      )}
       {rejectReviewOpen && (
         <RejectRationalePanel
           reasonCode={rejectReasonCode}
