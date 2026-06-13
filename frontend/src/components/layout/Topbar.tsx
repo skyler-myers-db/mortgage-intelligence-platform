@@ -7,6 +7,22 @@ import { useFootprint } from '../FootprintProvider';
 import { api, type HealthPayload } from '../../lib/api';
 import type { LeadSummary } from '../../types';
 
+// Platform-aware command-palette shortcut label. Mac shows ⌘K; everyone else
+// Ctrl K. Computed once at module load (the platform doesn't change at runtime).
+const IS_MAC =
+  typeof navigator !== 'undefined' &&
+  /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent || '');
+const CMDK_LABEL = IS_MAC ? '⌘K' : 'Ctrl K';
+
+/** Open the ⌘K command palette by re-dispatching its global hotkey, so the
+ *  visible hint is actually functional (and stays in sync with the one listener
+ *  in CommandPalette). */
+function openCommandPalette(): void {
+  window.dispatchEvent(
+    new KeyboardEvent('keydown', { key: 'k', metaKey: IS_MAC, ctrlKey: !IS_MAC, bubbles: true }),
+  );
+}
+
 /**
  * Single status pill that consolidates env + dep state for the topbar.
  *
@@ -270,6 +286,15 @@ export function Topbar() {
           placeholder="Search borrower, ZIP, city, county, state"
           aria-label="Search borrowers"
         />
+        <button
+          type="button"
+          className="topbar__search-kbd"
+          onClick={openCommandPalette}
+          aria-label={`Open command palette (${CMDK_LABEL})`}
+          title={`Command palette · ${CMDK_LABEL}`}
+        >
+          {CMDK_LABEL}
+        </button>
         {searchOpen && borrowerQuery.trim().length >= 2 && (borrowerResults.length > 0 || borrowerSearchStatus !== 'idle') && (
           <div className="topbar__search-results" role="listbox">
             {borrowerResults.slice(0, 5).map((row) => (

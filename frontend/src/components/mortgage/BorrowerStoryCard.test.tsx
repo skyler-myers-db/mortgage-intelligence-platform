@@ -1,9 +1,9 @@
 /**
  * @vitest-environment happy-dom
  *
- * BorrowerStoryCard contract (Buyer-Wow #3): the narrative is hidden until
- * "Tell the story" is clicked; once revealed it shows the prose, the
- * grounded-claim chips, and an honest verified/needs-review verdict.
+ * BorrowerStoryCard contract (Buyer-Wow #3): the narrative renders
+ * AUTOMATICALLY (no click) and shows the prose, the grounded-claim chips, and
+ * an honest verified/needs-review verdict.
  */
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -39,10 +39,9 @@ describe('BorrowerStoryCard', () => {
   });
   const mount = (b: Borrower360) => act(() => root.render(<BorrowerStoryCard borrower={b} />));
 
-  it('hides the narrative until the button is clicked', () => {
+  it('renders the narrative automatically, with no reveal button', () => {
     mount(dossier());
-    expect(container.querySelector('[data-testid="borrower-story-body"]')).toBeNull();
-    act(() => container.querySelector<HTMLButtonElement>('[data-testid="tell-the-story"]')!.click());
+    expect(container.querySelector('[data-testid="tell-the-story"]')).toBeNull();
     const body = container.querySelector('[data-testid="borrower-story-body"]');
     expect(body).not.toBeNull();
     expect(body!.textContent).toContain('Chicago, IL investor');
@@ -51,7 +50,6 @@ describe('BorrowerStoryCard', () => {
 
   it('shows the verified verdict and grounded-claim chips for a clean dossier', () => {
     mount(dossier());
-    act(() => container.querySelector<HTMLButtonElement>('[data-testid="tell-the-story"]')!.click());
     expect(container.textContent).toContain('Every figure verified against the source dossier');
     expect(container.querySelectorAll('.borrower-story__claim').length).toBeGreaterThanOrEqual(4);
     expect(container.querySelector('.borrower-story__claim--unverified')).toBeNull();
@@ -59,14 +57,6 @@ describe('BorrowerStoryCard', () => {
 
   it('shows the needs-review verdict and an unverified chip when a figure cannot be verified', () => {
     mount(dossier({ city: 'Area 51' }));
-    act(() => container.querySelector<HTMLButtonElement>('[data-testid="tell-the-story"]')!.click());
     expect(container.textContent).toContain('Some figures could not be verified');
-  });
-
-  it('announces the revealed narrative to assistive tech', () => {
-    mount(dossier());
-    act(() => container.querySelector<HTMLButtonElement>('[data-testid="tell-the-story"]')!.click());
-    const body = container.querySelector('[data-testid="borrower-story-body"]')!;
-    expect(body.getAttribute('aria-live')).toBe('polite');
   });
 });

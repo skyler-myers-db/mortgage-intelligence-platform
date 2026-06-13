@@ -159,6 +159,31 @@
   font: inherit;
   font-size: var(--fs-12);
 }
+.topbar__search-kbd {
+  margin-inline-start: auto;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border: 1px solid var(--line-2, var(--line-1));
+  border-bottom-width: 2px;
+  border-radius: var(--r-sm, 4px);
+  background: var(--bg-3);
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.4;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-standard), border-color var(--dur-fast) var(--ease-standard);
+}
+.topbar__search-kbd:hover { color: var(--text-1); border-color: var(--accent); }
+.topbar__search-kbd:focus-visible {
+  outline: calc(var(--sp-1) / 2) solid var(--accent);
+  outline-offset: calc(var(--sp-1) / 2);
+}
+
 .topbar__search input:focus-visible {
   outline: calc(var(--sp-1) / 2) solid var(--accent);
   outline-offset: calc(var(--sp-1) / 2);
@@ -1437,7 +1462,10 @@ kbd {
    borrower "Tell the story" pattern: grounded narrative + verified claim
    chips, each linking to its gold-table source drawer. */
 .portfolio-summary {
-  margin-block-end: var(--gap-grid);
+  /* Match the standard inter-section gap on Home (the following Approval-queue
+     panel uses .mt-grid for the gap below us); a top margin keeps us from
+     crowding the KPI row above. */
+  margin-block-start: var(--gap-grid);
 }
 .portfolio-summary__narrative {
   font-size: var(--fs-16);

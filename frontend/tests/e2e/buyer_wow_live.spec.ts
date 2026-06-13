@@ -95,6 +95,8 @@ test.describe('Buyer-Wow live inspection @desktop', () => {
       .poll(() => summary.locator('.portfolio-summary__claim').count(), { timeout: 10_000 })
       .toBeGreaterThan(0);
     await expect(summary.locator('.portfolio-summary__verdict--ok')).toBeVisible();
+    // The topbar search advertises the command-palette hotkey (⌘K / Ctrl K).
+    await expect(page.locator('.topbar__search-kbd')).toBeVisible();
   });
 
   test('Feature C: offer orchestrator exposes the LO-assignment + follow-up routing controls', async ({ page, request }) => {
@@ -134,14 +136,13 @@ test.describe('Buyer-Wow live inspection @desktop', () => {
     await expect(page.locator('.map-levels').first()).toBeVisible();
   });
 
-  test('#3 Borrower 360 "Tell the story" reveals a grounded narrative', async ({ page, request }) => {
+  test('#3 Borrower 360 story renders automatically as a grounded narrative', async ({ page, request }) => {
     const id = await firstBorrowerId(request);
     await page.goto(`/borrower-360/${id}`, { waitUntil: 'domcontentloaded' });
-    const btn = page.locator('[data-testid="tell-the-story"]');
-    await expect(btn).toBeVisible({ timeout: 30_000 });
-    await btn.click();
+    // Renders automatically now (no "Tell the story" click).
+    await expect(page.locator('[data-testid="tell-the-story"]')).toHaveCount(0);
     const body = page.locator('[data-testid="borrower-story-body"]');
-    await expect(body).toBeVisible({ timeout: 10_000 });
+    await expect(body).toBeVisible({ timeout: 30_000 });
     await expect(body.locator('.borrower-story__narrative')).not.toBeEmpty();
     // At least one figure is grounded against the dossier (claim chip rendered).
     await expect
