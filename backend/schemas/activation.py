@@ -89,6 +89,10 @@ class ActivationOutboxItem(BaseModel):
     created_by: str
     created_at: datetime | str
     updated_at: datetime | str
+    # Honest record of delivery outcome. For a Salesforce destination this
+    # carries {delivered, salesforce_id|reason|error, sobject}. Never
+    # contains PII. Absent on rows read by older callers.
+    delivery_metadata: dict[str, object] | None = None
 
     @field_validator("activation_id", "campaign_id", "approval_id", "request_id")
     @classmethod
