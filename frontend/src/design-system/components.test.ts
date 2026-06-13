@@ -182,6 +182,14 @@ describe('layout containment contracts', () => {
     expect(css).toMatch(/\.borrower-story__verdict--warn\s*\{[^}]*color:\s*var\(--status-warning-ink\);/s);
   });
 
+  it('styles the portfolio summary card claim chips + verdict ("Your book today")', () => {
+    const css = designCss();
+    expect(css).toContain('.portfolio-summary__narrative');
+    expect(css).toMatch(/\.portfolio-summary__claim\s*\{[^}]*border:\s*1px solid var\(--status-success-line\);/s);
+    expect(css).toMatch(/\.portfolio-summary__claim--unverified\s*\{[^}]*border-color:\s*var\(--status-warning-line\);/s);
+    expect(css).toMatch(/\.portfolio-summary__verdict--ok\s*\{[^}]*color:\s*var\(--status-success-ink\);/s);
+  });
+
   it('styles the pinned-insights card and the answer pin-row (Buyer-Wow #9)', () => {
     const css = designCss();
     expect(css).toContain('.pinned-insights__list');
