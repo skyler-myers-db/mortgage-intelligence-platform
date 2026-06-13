@@ -99,6 +99,20 @@ test.describe('Buyer-Wow live inspection @desktop', () => {
     await expect(page.locator('.topbar__search-kbd')).toBeVisible();
   });
 
+  test('Auto-offer Slice 1: borrower-offer prototype mock is reachable + clearly labelled', async ({ page, request }) => {
+    const id = await firstBorrowerId(request);
+    await page.goto(`/offer-orchestrator/${id}`, { waitUntil: 'domcontentloaded' });
+    const preview = page.locator('[data-testid="preview-borrower-offer"]');
+    await expect(preview).toBeVisible({ timeout: 30_000 });
+    await preview.click();
+    const mock = page.locator('[data-testid="borrower-offer-mock"]');
+    await expect(mock).toBeVisible({ timeout: 10_000 });
+    await expect(mock.locator('.offer-mock__watermark')).toHaveText('PROTOTYPE');
+    await expect(mock).toContainText('not a firm offer of credit');
+    await mock.locator('[data-testid="offer-mock-accept"]').click();
+    await expect(mock).toContainText('no information was submitted');
+  });
+
   test('Feature C: offer orchestrator exposes the LO-assignment + follow-up routing controls', async ({ page, request }) => {
     const id = await firstBorrowerId(request);
     await page.goto(`/offer-orchestrator/${id}`, { waitUntil: 'domcontentloaded' });
