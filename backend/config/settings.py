@@ -148,6 +148,47 @@ class Settings(BaseSettings):
     lakebase_password: SecretStr | None = Field(default=None, repr=False)
     lakebase_sslmode: str = "require"
 
+    # Salesforce activation-delivery adapter (Feature B). OPTIONAL: when
+    # any required credential is absent the activation outbox stays in its
+    # honest staged/dry_run state and records
+    # ``delivery_metadata={delivered:false, reason:"salesforce_not_configured"}``
+    # -- the app NEVER claims a write happened without a real HTTP success.
+    # See ``backend/services/salesforce_client.py`` and
+    # ``backend/services/activation_delivery.py``.
+    #
+    # The minimal real flow is OAuth 2.0 username-password. Production
+    # should migrate to the JWT bearer flow (no password/security-token on
+    # the wire); see the client docstring.
+    salesforce_instance_url: str | None = None
+    salesforce_client_id: str | None = None
+    salesforce_client_secret: SecretStr | None = Field(default=None, repr=False)
+    salesforce_username: str | None = None
+    salesforce_password: SecretStr | None = Field(default=None, repr=False)
+    salesforce_security_token: SecretStr | None = Field(default=None, repr=False)
+    salesforce_api_version: str = "v60.0"
+    salesforce_sobject: str = "Task"
+    # Per-HTTP-call timeout for the Salesforce REST client. Kept short because
+    # delivery runs synchronously inside POST /activation/stage; the circuit
+    # breaker (failure_threshold=3) fast-fails after a few slow calls so a
+    # Salesforce outage can't stall the request path for long.
+    salesforce_timeout_s: float = 10.0
+
+    @property
+    def salesforce_configured(self) -> bool:
+        """True only when every credential the real OAuth + create-record
+        flow needs is present. The security token may legitimately be empty
+        for orgs that allowlist the app's IP, so it is NOT required here;
+        the OAuth call simply appends an empty string."""
+        return all(
+            (
+                self.salesforce_instance_url,
+                self.salesforce_client_id,
+                self.salesforce_client_secret,
+                self.salesforce_username,
+                self.salesforce_password,
+            )
+        )
+
     # Default actor identifier used when ``X-Forwarded-Email`` is absent.
     # In practice this fires for: (1) local dev / pytest paths that
     # don't install the X-Forwarded-Email header, (2) background tasks

@@ -47,7 +47,7 @@ SELECT o.activation_id, o.destination_key, d.destination_type,
        d.display_name AS destination_display_name, d.status AS destination_status,
        o.entity_type, o.entity_id, o.borrower_id, o.campaign_id, o.approval_id,
        o.offer_code, o.channel, o.status, o.request_id, o.created_by,
-       o.created_at, o.updated_at
+       o.created_at, o.updated_at, o.delivery_metadata
 FROM mip_app.activation_outbox AS o
 JOIN mip_app.activation_destinations AS d
   ON d.destination_key = o.destination_key
@@ -61,7 +61,7 @@ SELECT o.activation_id, o.destination_key, d.destination_type,
        d.display_name AS destination_display_name, d.status AS destination_status,
        o.entity_type, o.entity_id, o.borrower_id, o.campaign_id, o.approval_id,
        o.offer_code, o.channel, o.status, o.request_id, o.created_by,
-       o.created_at, o.updated_at
+       o.created_at, o.updated_at, o.delivery_metadata
 FROM mip_app.activation_outbox AS o
 JOIN mip_app.activation_destinations AS d
   ON d.destination_key = o.destination_key
@@ -74,7 +74,7 @@ SELECT o.activation_id, o.destination_key, d.destination_type,
        d.display_name AS destination_display_name, d.status AS destination_status,
        o.entity_type, o.entity_id, o.borrower_id, o.campaign_id, o.approval_id,
        o.offer_code, o.channel, o.status, o.request_id, o.created_by,
-       o.created_at, o.updated_at
+       o.created_at, o.updated_at, o.delivery_metadata
 FROM mip_app.activation_outbox AS o
 JOIN mip_app.activation_destinations AS d
   ON d.destination_key = o.destination_key
@@ -86,6 +86,18 @@ WHERE o.destination_key = %(destination_key)s
 ORDER BY o.created_at DESC
 LIMIT 1
 """
+
+_OUTBOX_UPDATE_DELIVERY = """
+UPDATE mip_app.activation_outbox
+SET status = %(status)s,
+    delivery_metadata = %(delivery_metadata)s::jsonb,
+    updated_at = now()
+WHERE activation_id = %(activation_id)s
+"""
+
+_OUTBOX_BY_ACTIVATION_ID = _OUTBOX_SELECT_BASE.format(
+    where_clause="WHERE o.activation_id = %(activation_id)s"
+)
 
 _APPROVAL_BY_ID = """
 SELECT approval_id, borrower_id, action, actor_email, offer_code, campaign_id, decided_at
@@ -149,7 +161,23 @@ def _outbox_from_row(row: dict[str, Any]) -> ActivationOutboxItem:
         created_by=str(row["created_by"]),
         created_at=row["created_at"],
         updated_at=row["updated_at"],
+        delivery_metadata=_coerce_delivery_metadata(row.get("delivery_metadata")),
     )
+
+
+def _coerce_delivery_metadata(value: Any) -> dict[str, Any] | None:
+    """psycopg returns jsonb as a dict; tests may pass a JSON string."""
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return None
+        return parsed if isinstance(parsed, dict) else None
+    return None
 
 
 def _approved_offer_code(
@@ -290,6 +318,36 @@ class ActivationStateStore:
             },
         )
         return _outbox_from_row(row) if row else None
+
+    def get_outbox_by_activation_id(self, activation_id: str) -> ActivationOutboxItem | None:
+        row = self._client.fetchone(
+            _OUTBOX_BY_ACTIVATION_ID, {"activation_id": activation_id, "limit": 1}
+        )
+        return _outbox_from_row(row) if row else None
+
+    def update_delivery_state(
+        self,
+        *,
+        activation_id: str,
+        status: str,
+        delivery_metadata: dict[str, Any],
+    ) -> ActivationOutboxItem | None:
+        """Persist a delivery outcome on an existing outbox row.
+
+        Used by the Salesforce delivery adapter AFTER a real REST call.
+        ``status`` is one of the ActivationOutboxStatus values ('delivered'
+        / 'failed'); ``delivery_metadata`` is the honest JSON record of what
+        actually happened. Returns the refreshed row or None if it vanished.
+        """
+        self._client.execute(
+            _OUTBOX_UPDATE_DELIVERY,
+            {
+                "activation_id": activation_id,
+                "status": status,
+                "delivery_metadata": json.dumps(delivery_metadata, sort_keys=True),
+            },
+        )
+        return self.get_outbox_by_activation_id(activation_id)
 
     def approved_decision_for(self, *, approval_id: str, borrower_id: str) -> dict[str, Any] | None:
         row = self._client.fetchone(_APPROVAL_BY_ID, {"approval_id": approval_id})

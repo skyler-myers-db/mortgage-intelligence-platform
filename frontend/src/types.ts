@@ -253,6 +253,9 @@ export interface ActivationOutboxItem {
   created_by: string;
   created_at: string;
   updated_at: string;
+  /** Salesforce delivery outcome (Feature B): { delivered, salesforce_id?,
+   *  reason?/error? }. Present once a delivery is attempted; absent = staged only. */
+  delivery_metadata?: Record<string, unknown> | null;
 }
 
 export interface ActivationSummary {

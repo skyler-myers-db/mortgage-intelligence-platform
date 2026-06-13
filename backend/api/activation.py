@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -20,6 +21,7 @@ from backend.services.activation_state import (
 from backend.services.audit_store import resolve_actor
 from backend.services.error_sanitizer import safe_dependency_detail
 from backend.services.lakebase import LakebaseError
+from backend.services.observability import emit
 from backend.services.repositories import (
     BorrowerRepository,
     get_borrower_repository,
@@ -149,8 +151,55 @@ def stage_activation(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except LakebaseError as exc:
         raise _lakebase_503(exc) from exc
+
+    activation = _maybe_deliver_salesforce(
+        activation=result.activation,
+        destination=destination,
+        store=store,
+    )
     return ActivationStageResponse(
         staged=True,
-        activation=result.activation,
+        activation=activation,
         audit_event_id=result.audit_event_id,
     )
+
+
+def _maybe_deliver_salesforce(
+    *,
+    activation: ActivationOutboxItem,
+    destination: ActivationDestination,
+    store: ActivationStateStore,
+) -> ActivationOutboxItem:
+    """Best-effort synchronous Salesforce delivery after staging.
+
+    Gated three ways: the destination must be a connected ``salesforce``
+    destination AND Salesforce must be configured. Otherwise this is a
+    no-op and the row stays staged/dry_run (the honest degraded path).
+
+    A delivery FAILURE must NEVER fail the /stage request: the row is
+    already durably staged and audited. We catch everything, log it, and
+    return the (possibly updated) row so the caller still gets a 202.
+    """
+    from backend.config.settings import settings
+
+    if destination.destination_type != "salesforce":
+        return activation
+    if destination.status != "connected":
+        return activation
+    if not settings.salesforce_configured:
+        return activation
+
+    try:
+        from backend.services.activation_delivery import deliver_to_salesforce
+
+        outcome = deliver_to_salesforce(activation, store=store)
+        return outcome.activation
+    except Exception as exc:  # noqa: BLE001 -- delivery must never fail the stage
+        emit(
+            logging.getLogger(__name__),
+            "salesforce_delivery_uncaught",
+            level=logging.WARNING,
+            activation_id=activation.activation_id,
+            exc_type=type(exc).__name__,
+        )
+        return activation
