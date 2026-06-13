@@ -5,6 +5,7 @@ import { PageShell } from '../components/layout/PageShell';
 import { KpiCard } from '../components/mortgage/KpiCard';
 import { USChoroplethMap } from '../components/mortgage/USChoroplethMap';
 import { PinnedInsights } from '../components/mortgage/PinnedInsights';
+import { PortfolioSummaryCard } from '../components/mortgage/PortfolioSummaryCard';
 import { AgentActivityLog } from '../components/mortgage/AgentActivityLog';
 import { DataEstatePanel, DataEstatePanelSkeleton } from '../components/mortgage/DataEstatePanel';
 import { Button, Chip } from '../components/Primitives';
@@ -263,6 +264,14 @@ export default function Home() {
             source={DRAWER_SOURCES.nbo}
           />
         </div>
+      )}
+
+      {/* "Your book today" — a current-state, plain-English orientation of the
+          portfolio, composed deterministically from the preview already loaded
+          (no new request, no live AI). Replaces the removed delta briefing with
+          an honest snapshot summary. Gated like the KPI row. */}
+      {!isDayZero && !previewWarming && !previewError && (
+        <PortfolioSummaryCard preview={preview ?? null} loading={kpisLoading} />
       )}
 
       <div
