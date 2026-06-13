@@ -197,6 +197,15 @@ ALTER TABLE mip_app.approvals
     ADD COLUMN IF NOT EXISTS request_id TEXT;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_approvals_request_id
     ON mip_app.approvals (request_id) WHERE request_id IS NOT NULL;
+-- Feature C (loan-officer assignment + follow-up reminder): persist the
+-- approver's chosen LO and an optional "follow up in N days" timestamp on
+-- the approval decision. Both are nullable so legacy callers (and the bulk
+-- approve path) keep inserting without them. Reminder DELIVERY is out of
+-- scope -- we only persist the assignment + the computed follow_up_at.
+ALTER TABLE mip_app.approvals
+    ADD COLUMN IF NOT EXISTS assigned_to_email TEXT;
+ALTER TABLE mip_app.approvals
+    ADD COLUMN IF NOT EXISTS follow_up_at TIMESTAMPTZ;
 CREATE INDEX IF NOT EXISTS idx_approvals_campaign
     ON mip_app.approvals (campaign_id, decided_at DESC);
 CREATE INDEX IF NOT EXISTS idx_approvals_borrower

@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Link, Navigate, useParams } from 'react-router-dom';
 import { api, ApiError, isAbortError, isWarmingUpError, dependencyLabel } from '../lib/api';
 import type { WarmingUpState } from '../lib/useWarmingUpRetry';
-import type { ApprovalStatus, Borrower360 as Borrower360Type, BorrowerLifecycle, OfferRecommendation } from '../types';
+import type { ApprovalStatus, Borrower360 as Borrower360Type, BorrowerLifecycle, OfferRecommendation, SalesTeamMember } from '../types';
 import { PageShell } from '../components/layout/PageShell';
 import { ApprovalBanner } from '../components/mortgage/ApprovalBanner';
 import { ScoreBadge } from '../components/mortgage/ScoreBadge';
@@ -83,6 +83,34 @@ export default function OfferOrchestrator() {
   const [draftWarming, setDraftWarming] = useState<WarmingUpState | null>(null);
   const [rejectReviewOpen, setRejectReviewOpen] = useState(false);
   const [rejectReasonCode, setRejectReasonCode] = useState<RejectReasonCode>(DEFAULT_REJECT_REASON);
+  // Feature C: optional loan-officer assignment + follow-up reminder captured
+  // at approval time and persisted on the approval row.
+  const [salesTeam, setSalesTeam] = useState<SalesTeamMember[]>([]);
+  const [assignedTo, setAssignedTo] = useState<string>('');
+  const [followUpDays, setFollowUpDays] = useState<number>(0); // 0 = no reminder
+  const [routingConfirm, setRoutingConfirm] = useState<{ email: string | null; followUpAt: string | null } | null>(null);
+
+  // Load the loan-officer roster for the assignment picker (active LOs +
+  // managers). Best-effort — the control degrades to "Unassigned" only if the
+  // roster can't load; approval itself never depends on it. Top-level hook
+  // (before any early return) so hook order is stable.
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .salesTeam()
+      .then((members) => {
+        if (cancelled) return;
+        setSalesTeam(
+          members.filter((m) => m.active && (m.role === 'loan_officer' || m.role === 'sales_manager')),
+        );
+      })
+      .catch(() => {
+        /* roster unavailable → picker stays "Unassigned"; non-fatal */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   const [rejectRationale, setRejectRationale] = useState('');
   const {
     setApproval,
@@ -372,11 +400,22 @@ export default function OfferOrchestrator() {
       const offer_code = rec?.offer_code ?? b?.recommended_offer_code ?? null;
       const evidence_ids = rec?.evidence_ids ?? b?.evidence_ids ?? [];
       const draft_body = draftText;
-      const res = await api.approve(id, { offer_code, evidence_ids, draft_body, channel: draftChannel });
+      const res = await api.approve(id, {
+        offer_code,
+        evidence_ids,
+        draft_body,
+        channel: draftChannel,
+        assigned_to_email: assignedTo || null,
+        follow_up_in_days: followUpDays > 0 ? followUpDays : null,
+      });
       if (res.approved) {
         setApproval(id, 'approved');
         setAuditId(res.audit_event_id ?? null);
         setApprovalId(res.approval_id ?? null);
+        setRoutingConfirm({
+          email: res.assigned_to_email ?? (assignedTo || null),
+          followUpAt: res.follow_up_at ?? null,
+        });
         clearBorrowerCache(id);
         void invalidateOperationalQueries(queryClient);
       } else {
@@ -567,14 +606,68 @@ export default function OfferOrchestrator() {
       <OfferDetailsRows recommendation={rec} />
 
       {effectiveApproval !== 'approved' && effectiveApproval !== 'rejected' && (
-        <div className="mt-grid">
-          <ApprovalBanner
-            text={`${b ? `Borrower ${b.borrower_id}` : 'Borrower'} pending review. Approve writes an audit event and places the decision in the governed internal queue.`}
-            onApprove={() => void onApprove()}
-            onReject={() => void onReject()}
-            disabled={!draftReady}
-            isSubmitting={approving}
-          />
+        <>
+          {/* Feature C: optional routing captured at approval time — which loan
+              officer owns this outreach and when to follow up. Persisted on the
+              approval row; approval never depends on it. */}
+          <div className="outreach-routing mt-grid" data-testid="outreach-routing">
+            <div className="outreach-routing__field">
+              <label htmlFor="lo-assign" className="outreach-routing__label">Assign to loan officer</label>
+              <select
+                id="lo-assign"
+                className="outreach-routing__select"
+                value={assignedTo}
+                onChange={(e) => setAssignedTo(e.target.value)}
+                disabled={approving}
+              >
+                <option value="">Unassigned</option>
+                {salesTeam.map((m) => (
+                  <option key={m.email} value={m.email}>
+                    {m.display_label}
+                    {m.region ? ` · ${m.region}` : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="outreach-routing__field">
+              <label htmlFor="lo-followup" className="outreach-routing__label">Follow-up reminder</label>
+              <select
+                id="lo-followup"
+                className="outreach-routing__select"
+                value={followUpDays}
+                onChange={(e) => setFollowUpDays(Number(e.target.value))}
+                disabled={approving}
+              >
+                <option value={0}>None</option>
+                <option value={3}>In 3 days</option>
+                <option value={5}>In 5 days</option>
+                <option value={7}>In 7 days</option>
+                <option value={14}>In 14 days</option>
+              </select>
+            </div>
+          </div>
+          <div className="mt-grid">
+            <ApprovalBanner
+              text={`${b ? `Borrower ${b.borrower_id}` : 'Borrower'} pending review. Approve writes an audit event and places the decision in the governed internal queue.`}
+              onApprove={() => void onApprove()}
+              onReject={() => void onReject()}
+              disabled={!draftReady}
+              isSubmitting={approving}
+            />
+          </div>
+        </>
+      )}
+      {routingConfirm && (routingConfirm.email || routingConfirm.followUpAt) && (
+        <div className="outreach-routing__confirm mt-grid" role="status" data-testid="routing-confirm">
+          <Chip variant="success">
+            {routingConfirm.email ? `Assigned to ${routingConfirm.email}` : 'Unassigned'}
+            {routingConfirm.followUpAt
+              ? ` · follow-up ${new Date(routingConfirm.followUpAt).toLocaleDateString(undefined, {
+                  month: 'short',
+                  day: 'numeric',
+                })}`
+              : ''}
+          </Chip>
         </div>
       )}
 

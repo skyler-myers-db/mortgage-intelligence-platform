@@ -48,7 +48,10 @@ from backend.services.disclosures import (
 from backend.services.error_sanitizer import safe_dependency_detail
 from backend.services.job_trigger import enqueue_lifecycle_trigger
 from backend.services.lakebase import LakebaseClient, LakebaseError, get_lakebase_client
-from backend.services.lakebase_bootstrap import ensure_approval_idempotency_column
+from backend.services.lakebase_bootstrap import (
+    ensure_approval_followup_columns,
+    ensure_approval_idempotency_column,
+)
 from backend.services.observability import emit
 from backend.services.pii_redaction import scrub_free_text
 from backend.services.rbac import require_approver
@@ -92,10 +95,10 @@ def _safe_audit_write(store: AuditStore, **kwargs: Any) -> None:
 _APPROVAL_INSERT = """
 INSERT INTO mip_app.approvals (
     approval_id, campaign_id, borrower_id, offer_code, action,
-    actor_email, rationale, request_id
+    actor_email, rationale, request_id, assigned_to_email, follow_up_at
 ) VALUES (
     %(approval_id)s, %(campaign_id)s, %(borrower_id)s, %(offer_code)s, %(action)s,
-    %(actor_email)s, %(rationale)s, %(request_id)s
+    %(actor_email)s, %(rationale)s, %(request_id)s, %(assigned_to_email)s, %(follow_up_at)s
 )
 ON CONFLICT (request_id) WHERE request_id IS NOT NULL DO NOTHING
 """
@@ -104,10 +107,10 @@ ON CONFLICT (request_id) WHERE request_id IS NOT NULL DO NOTHING
 _APPROVAL_INSERT_RETURNING = """
 INSERT INTO mip_app.approvals (
     approval_id, campaign_id, borrower_id, offer_code, action,
-    actor_email, rationale, request_id
+    actor_email, rationale, request_id, assigned_to_email, follow_up_at
 ) VALUES (
     %(approval_id)s, %(campaign_id)s, %(borrower_id)s, %(offer_code)s, %(action)s,
-    %(actor_email)s, %(rationale)s, %(request_id)s
+    %(actor_email)s, %(rationale)s, %(request_id)s, %(assigned_to_email)s, %(follow_up_at)s
 )
 ON CONFLICT (request_id) WHERE request_id IS NOT NULL DO NOTHING
 RETURNING approval_id
@@ -241,6 +244,8 @@ def _commit_outreach_decision_atomic(
     event_type: str,
     audit_request_id: str | None,
     subject_clip: str | None = None,
+    assigned_to_email: str | None = None,
+    follow_up_at: datetime | None = None,
 ) -> tuple[str, str]:
     """Write approval + audit in one Lakebase transaction."""
     try:
@@ -256,6 +261,8 @@ def _commit_outreach_decision_atomic(
                     "actor_email": actor,
                     "rationale": rationale,
                     "request_id": request_id,
+                    "assigned_to_email": assigned_to_email,
+                    "follow_up_at": follow_up_at,
                 },
             ).fetchone()
             if row is None:
@@ -621,6 +628,9 @@ def approve_outreach(
     # the backstop; this SELECT is the fast path that avoids emitting
     # a duplicate audit event for a retry.
     ensure_approval_idempotency_column(lakebase)
+    # Feature C: make sure the assignment + follow-up columns exist on
+    # already-deployed approvals tables before the INSERT references them.
+    ensure_approval_followup_columns(lakebase)
     # R6-19: legacy callers that omit ``request_id`` used to bypass the
     # idempotency index entirely, so a retry storm from a watchdog that
     # never learned Idempotency-Key would double-book an approval. We
@@ -655,6 +665,16 @@ def approve_outreach(
     # Postgres's UUID cast; truncating it to 12 hex chars produced
     # `invalid input syntax for type uuid: "apr-..."` on INSERT.
     approval_id = str(uuid4())
+    # Feature C: compute the follow-up timestamp from the requested window
+    # (validated 1..30 by the schema). None when the approver did not ask
+    # for a reminder. We only PERSIST this -- no scheduler/notification is
+    # wired here.
+    follow_up_at = (
+        datetime.now(UTC) + timedelta(days=payload.follow_up_in_days)
+        if payload.follow_up_in_days is not None
+        else None
+    )
+    assigned_to_email = payload.assigned_to_email
     safe_rationale = scrub_free_text(payload.rationale) if payload.rationale else None
     safe_bulk_rationale = scrub_free_text(payload.bulk_rationale) if payload.bulk_rationale else None
     approval_rationale = (
@@ -684,6 +704,14 @@ def approve_outreach(
         audit_payload["bulk_id"] = payload.bulk_id
     if safe_bulk_rationale:
         audit_payload["bulk_rationale"] = safe_bulk_rationale
+    # Feature C: record the assignment + follow-up in the audit metadata so
+    # the governance ledger shows who the borrower was routed to and when a
+    # follow-up was scheduled. ``assigned_to_email`` is internal-staff-email
+    # validated by the audit store; ``follow_up_at`` is an ISO timestamp.
+    if assigned_to_email:
+        audit_payload["assigned_to_email"] = assigned_to_email
+    if follow_up_at:
+        audit_payload["follow_up_at"] = follow_up_at.isoformat()
     try:
         if _supports_atomic_outreach_write(lakebase):
             approval_id, audit_event_id = _commit_outreach_decision_atomic(
@@ -702,6 +730,8 @@ def approve_outreach(
                 event_type="APPROVE",
                 audit_request_id=payload.request_id,
                 subject_clip=borrower.clip_id,
+                assigned_to_email=assigned_to_email,
+                follow_up_at=follow_up_at,
             )
         else:
             lakebase.execute(
@@ -715,6 +745,8 @@ def approve_outreach(
                     "actor_email": actor,
                     "rationale": approval_rationale,
                     "request_id": effective_request_id,
+                    "assigned_to_email": assigned_to_email,
+                    "follow_up_at": follow_up_at,
                 },
             )
             event = audit.write(
@@ -753,6 +785,8 @@ def approve_outreach(
         approved=True,
         approval_id=approval_id,
         audit_event_id=audit_event_id,
+        assigned_to_email=assigned_to_email,
+        follow_up_at=follow_up_at,
     )
 
 
@@ -868,6 +902,10 @@ def reject_outreach(
                     "actor_email": actor,
                     "rationale": safe_rationale,
                     "request_id": effective_request_id,
+                    # Feature C columns are approval-only; reject never
+                    # assigns an LO or schedules a follow-up.
+                    "assigned_to_email": None,
+                    "follow_up_at": None,
                 },
             )
             event = audit.write(

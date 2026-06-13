@@ -157,6 +157,8 @@ class _FakeLakebaseClient:
                     "rationale": params.get("rationale"),
                     "decided_at": datetime.now(UTC),
                     "request_id": params.get("request_id"),
+                    "assigned_to_email": params.get("assigned_to_email"),
+                    "follow_up_at": params.get("follow_up_at"),
                 }
             )
         if "UPDATE mip_app.call_dispositions" in sql and params:
@@ -449,6 +451,8 @@ class _FakeLakebaseClient:
                         "rationale": params.get("rationale"),
                         "decided_at": now,
                         "request_id": params.get("request_id"),
+                        "assigned_to_email": params.get("assigned_to_email"),
+                        "follow_up_at": params.get("follow_up_at"),
                     }
                     client.approvals.append(row)
                     self._last = {"approval_id": row["approval_id"]}
@@ -715,6 +719,19 @@ def _reset_fake_dependency_state_for_tests() -> None:
     reset = getattr(client, "reset_for_test", None)
     if callable(reset):
         reset()
+
+
+@pytest.fixture
+def fake_lakebase_client() -> _FakeLakebaseClient:
+    """Return the session-bound ``_FakeLakebaseClient`` for introspection.
+
+    Tests that need to assert what the approve/reject path wrote (e.g. the
+    Feature C assignment + follow-up columns) can read ``.approvals`` etc.
+    Per-test state is reset by ``_isolate_fastapi_dependency_state``.
+    """
+    factory = _BASE_DEPENDENCY_OVERRIDES.get(get_lakebase_client)
+    assert factory is not None, "lakebase override not installed"
+    return factory()
 
 
 def _wrap_testclient_with_admin_headers() -> None:

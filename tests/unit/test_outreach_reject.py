@@ -185,6 +185,10 @@ def _reset_trigger_state():
     # want to exercise the bootstrap itself call _reset_bootstrap_for_tests()
     # explicitly before their action.
     lakebase_bootstrap._APPROVAL_REQUEST_ID_BOOTSTRAPPED = True
+    # Feature C: same posture for the assignment/follow-up column bootstrap
+    # so the approve path doesn't emit its two ALTER statements and skew the
+    # execute-call-count assertions below.
+    lakebase_bootstrap._APPROVAL_FOLLOWUP_BOOTSTRAPPED = True
     job_trigger._reset_for_tests()
     yield
     _reset_breakers_for_tests()

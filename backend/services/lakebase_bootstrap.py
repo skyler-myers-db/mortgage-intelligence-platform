@@ -108,10 +108,25 @@ _SALES_WORKFLOW_REQUEST_ID_DDL: tuple[str, ...] = (
 )
 _SALES_WORKFLOW_REQUEST_ID_KEY: str = "mip_bootstrap_sales_workflow_request_id"
 
+# Feature C DDL -- loan-officer assignment + follow-up reminder columns on
+# the approval decision row. Existing demo workspaces already have
+# ``mip_app.approvals`` from an earlier deploy, so the table-level
+# ``CREATE IF NOT EXISTS`` in ``lakebase/schema.sql`` will NOT add these
+# columns to those tables; the runtime write path bootstraps them once per
+# process before the approve INSERT references them. Reminder delivery is
+# out of scope -- these columns only persist the assignment + computed
+# follow_up_at timestamp. Keep in sync with ``lakebase/schema.sql``.
+_APPROVAL_FOLLOWUP_DDL: tuple[str, ...] = (
+    "ALTER TABLE mip_app.approvals ADD COLUMN IF NOT EXISTS assigned_to_email TEXT",
+    "ALTER TABLE mip_app.approvals ADD COLUMN IF NOT EXISTS follow_up_at TIMESTAMPTZ",
+)
+_APPROVAL_FOLLOWUP_KEY: str = "mip_bootstrap_approvals_followup"
+
 
 _LOCK = Lock()
 _APPROVAL_REQUEST_ID_BOOTSTRAPPED: bool = False
 _SALES_WORKFLOW_REQUEST_ID_BOOTSTRAPPED: bool = False
+_APPROVAL_FOLLOWUP_BOOTSTRAPPED: bool = False
 
 
 def ensure_approval_idempotency_column(client: LakebaseClient) -> None:
@@ -269,6 +284,68 @@ def ensure_sales_workflow_request_id_columns(client: LakebaseClient) -> None:
         _SALES_WORKFLOW_REQUEST_ID_BOOTSTRAPPED = True
 
 
+def ensure_approval_followup_columns(client: LakebaseClient) -> None:
+    """Apply the Feature C assignment + follow-up DDL once per process.
+
+    Safe to call on every approve -- the per-process flag makes the
+    second and every subsequent call a pure no-op. Failures are logged
+    at WARNING and swallowed; the caller's INSERT is the next thing to
+    run and will surface any real outage as 503. Serialised across
+    processes via ``pg_advisory_lock`` so the app bootstrap and the
+    ``mip_lakebase_migrate`` job can't interleave the two
+    ``ADD COLUMN IF NOT EXISTS`` statements.
+    """
+    global _APPROVAL_FOLLOWUP_BOOTSTRAPPED
+    if _APPROVAL_FOLLOWUP_BOOTSTRAPPED:
+        return
+    with _LOCK:
+        if _APPROVAL_FOLLOWUP_BOOTSTRAPPED:
+            return
+        lock_acquired = False
+        try:
+            client.execute(
+                "SELECT pg_advisory_lock(hashtext(%(key)s))",
+                {"key": _APPROVAL_FOLLOWUP_KEY},
+            )
+            lock_acquired = True
+            for stmt in _APPROVAL_FOLLOWUP_DDL:
+                client.execute(stmt)
+        except LakebaseError as exc:
+            emit(
+                log,
+                "lakebase_bootstrap_failed",
+                level=logging.WARNING,
+                dependency="lakebase",
+                outcome="error",
+                migration="approvals_followup",
+                exc_type=type(exc).__name__,
+                exc_msg=str(exc)[:500],
+            )
+            _release_advisory_lock_with_key(client, lock_acquired, _APPROVAL_FOLLOWUP_KEY)
+            return
+        except Exception as exc:  # noqa: BLE001 -- bootstrap must never crash request path
+            emit(
+                log,
+                "lakebase_bootstrap_unexpected_failure",
+                level=logging.WARNING,
+                dependency="lakebase",
+                outcome="error",
+                migration="approvals_followup",
+                exc_type=type(exc).__name__,
+                exc_msg=str(exc)[:500],
+            )
+            _release_advisory_lock_with_key(client, lock_acquired, _APPROVAL_FOLLOWUP_KEY)
+            return
+        _release_advisory_lock_with_key(client, lock_acquired, _APPROVAL_FOLLOWUP_KEY)
+        emit(
+            log,
+            "lakebase_bootstrap_applied",
+            migration="approvals_followup",
+            statements=len(_APPROVAL_FOLLOWUP_DDL),
+        )
+        _APPROVAL_FOLLOWUP_BOOTSTRAPPED = True
+
+
 def _approval_request_id_already_applied(client: LakebaseClient) -> bool:
     """Return True when the migration shape already exists.
 
@@ -329,8 +406,10 @@ def _release_advisory_lock_with_key(client: LakebaseClient, acquired: bool, key:
 def _reset_bootstrap_for_tests() -> None:
     """Test helper -- clear the per-process flag between tests."""
     global _APPROVAL_REQUEST_ID_BOOTSTRAPPED, _SALES_WORKFLOW_REQUEST_ID_BOOTSTRAPPED
+    global _APPROVAL_FOLLOWUP_BOOTSTRAPPED
     _APPROVAL_REQUEST_ID_BOOTSTRAPPED = False
     _SALES_WORKFLOW_REQUEST_ID_BOOTSTRAPPED = False
+    _APPROVAL_FOLLOWUP_BOOTSTRAPPED = False
 
 
 def _bootstrap_state_for_tests() -> dict[str, Any]:

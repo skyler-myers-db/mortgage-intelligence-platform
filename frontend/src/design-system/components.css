@@ -1491,6 +1491,43 @@ kbd {
 .portfolio-summary__verdict--ok { color: var(--status-success-ink); }
 .portfolio-summary__verdict--warn { color: var(--status-warning-ink); }
 
+/* Outreach routing (Feature C): loan-officer assignment + follow-up reminder
+   captured at approval time. */
+.outreach-routing {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-4);
+  padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--r-lg);
+  background: var(--bg-1);
+  border: 1px solid var(--line-1);
+}
+.outreach-routing__field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  min-inline-size: 12rem;
+}
+.outreach-routing__label {
+  font-size: var(--fs-11);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+  color: var(--text-3);
+}
+.outreach-routing__select {
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--r-md);
+  border: 1px solid var(--line-2);
+  background: var(--bg-2);
+  color: var(--text-1);
+  font-size: var(--fs-13);
+}
+.outreach-routing__select:focus-visible {
+  outline: calc(var(--sp-1) / 2) solid var(--accent);
+  outline-offset: calc(var(--sp-1) / 2);
+}
+.outreach-routing__confirm { display: flex; }
+
 .approval {
   display: flex; align-items: center; gap: var(--sp-4);
   padding: var(--sp-3) var(--sp-4);
