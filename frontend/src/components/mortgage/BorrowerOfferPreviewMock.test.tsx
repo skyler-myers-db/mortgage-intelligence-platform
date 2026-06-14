@@ -54,6 +54,24 @@ describe('BorrowerOfferPreviewMock', () => {
     expect(mock.textContent).not.toMatch(/\bapr\b|\$\s?\d|\d\s?%|per month|monthly payment|interest rate/i);
   });
 
+  it('shows a qualitative, figure-free reason when a signal is present', () => {
+    act(() =>
+      root.render(
+        <BorrowerOfferPreviewMock borrower={dossier({ is_competitor_lien: true })} onClose={() => {}} />,
+      ),
+    );
+    const reason = document.body.querySelector('.offer-mock__reason')!;
+    expect(reason).not.toBeNull();
+    expect(reason.textContent).toContain('another lender');
+    // Borrower-facing → no TILA trigger terms in the reason.
+    expect(reason.textContent).not.toMatch(/\bapr\b|\$\s?\d|\d\s?%/i);
+  });
+
+  it('renders no reason line when no confident signal is present (never fabricates)', () => {
+    act(() => root.render(<BorrowerOfferPreviewMock borrower={dossier()} onClose={() => {}} />));
+    expect(document.body.querySelector('.offer-mock__reason')).toBeNull();
+  });
+
   it('on accept, confirms that nothing was submitted (no real offer made)', () => {
     act(() => root.render(<BorrowerOfferPreviewMock borrower={dossier()} onClose={() => {}} />));
     act(() => document.body.querySelector<HTMLButtonElement>('[data-testid="offer-mock-accept"]')!.click());

@@ -1630,6 +1630,16 @@ kbd {
   margin: 0 0 var(--sp-2);
   color: var(--text-1);
 }
+.offer-mock__reason {
+  display: inline-block;
+  margin: 0 auto var(--sp-3);
+  padding: var(--sp-1) var(--sp-3);
+  border-radius: var(--r-pill);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  font-size: var(--fs-13);
+  font-weight: 500;
+}
 .offer-mock__sub {
   color: var(--text-2);
   margin: 0 auto var(--sp-4);

@@ -53,11 +53,11 @@ from backend.services.lakebase_bootstrap import (
     ensure_approval_idempotency_column,
 )
 from backend.services.observability import emit
+from backend.services.outreach_copy import _compose_outreach_body, _safe_offer_code
 from backend.services.pii_redaction import scrub_free_text
 from backend.services.rbac import require_approver
 from backend.services.repositories import OutreachRepository, get_outreach_repository
 from backend.services.sales_state import clear_sales_state_cache
-from backend.services.scoring import NBO_PRODUCT_LABELS
 
 log = logging.getLogger(__name__)
 
@@ -304,15 +304,6 @@ def _commit_outreach_decision_atomic(
         raise LakebaseError("Lakebase atomic outreach decision failed") from exc
 
 
-def _safe_offer_code(raw: str | None) -> str:
-    code = str(raw or "nurture").strip()
-    return code if code in NBO_PRODUCT_LABELS else "nurture"
-
-
-def _offer_label(code: str, fallback: str | None = None) -> str:
-    return NBO_PRODUCT_LABELS.get(code) or fallback or "mortgage review"
-
-
 def _coerce_datetime(value: Any) -> datetime | None:
     if value is None:
         return None
@@ -388,98 +379,6 @@ def _resolve_disclosure_or_http(lakebase: LakebaseClient, *, borrower: Any, chan
         raise HTTPException(status_code=412, detail=str(exc)) from exc
     except LakebaseError as exc:
         raise HTTPException(status_code=503, detail=safe_dependency_detail("lakebase")) from exc
-
-
-def _sms_lender_label(lender_name: str) -> str:
-    """Return a compact tenant label for 160-character SMS drafts."""
-
-    normalized = " ".join(lender_name.split())
-    if len(normalized) <= 18:
-        return normalized
-    first_word = re.sub(r"[^A-Za-z0-9&.-]", "", normalized.split()[0])
-    return first_word[:18] or "Lender"
-
-
-def _compose_outreach_body(*, borrower: Any, channel: str, disclosure: Any) -> tuple[str | None, str]:
-    """Return relationship-aware, channel-specific human-review copy.
-
-    This is still a draft; the product does not send messages. Copy avoids
-    literal personalization placeholders and branches on the governed
-    borrower relationship flags so current customers do not receive cold
-    acquisition language.
-    """
-    code = _safe_offer_code(getattr(borrower, "recommended_offer_code", None))
-    offer = _offer_label(code, getattr(borrower, "recommended_offer", None))
-    city_state = ", ".join(
-        part for part in (getattr(borrower, "city", ""), getattr(borrower, "state", "")) if part
-    )
-    is_customer = bool(getattr(borrower, "is_current_customer", False))
-    is_competitor = bool(getattr(borrower, "is_competitor_lien", False))
-    why_now = str(getattr(borrower, "why_now", "") or "").strip()
-    lender_name = (settings.mip_lender_name or "configured lender").strip() or "configured lender"
-    sms_lender = _sms_lender_label(lender_name)
-
-    if channel == "sms":
-        if is_customer:
-            body = f"{lender_name}: review your {offer}. Reply YES. {disclosure.body}"
-        elif is_competitor:
-            body = f"{lender_name}: {offer} may fit your profile. Reply YES. {disclosure.body}"
-        else:
-            body = f"{lender_name}: mortgage review available. Reply YES. {disclosure.body}"
-        if len(body) > 160:
-            body = f"{sms_lender}: mortgage review. Reply YES. {disclosure.body}"
-        if len(body) > 160:
-            body = disclosure.body
-        if len(body) > 160:
-            raise HTTPException(
-                status_code=412,
-                detail="tenant SMS disclosure exceeds 160 characters; configure shorter SMS disclosure",
-            )
-        return None, body
-
-    if channel == "direct_mail":
-        subject = f"{offer} review"
-        opening = (
-            f"As a customer of {lender_name}, your current loan profile is ready for review."
-            if is_customer
-            else f"Your property profile{f' in {city_state}' if city_state else ''} may qualify for {offer}."
-        )
-        body = (
-            f"{opening}\n\n"
-            f"{why_now or 'A licensed officer can review whether the current profile fits.'}\n\n"
-            "This draft is for governed human review only; no external mail has been sent.\n\n"
-            f"{disclosure.body}"
-        )
-        return subject, body
-
-    if is_customer:
-        subject = f"Review your {lender_name} {offer} option"
-        intro = f"As a customer of {lender_name}, your current loan profile is ready for a human review."
-        if code in {"retention", "refi", "refi_plus_heloc", "cash_out", "heloc"}:
-            pitch = (
-                f"We can review whether {offer} improves the fit of your existing mortgage relationship."
-            )
-        else:
-            pitch = f"A licensed {lender_name} loan officer can review your current mortgage options."
-    elif is_competitor:
-        subject = f"{offer} opportunity for your property"
-        location = f" in {city_state}" if city_state else ""
-        intro = f"Based on public-record mortgage signals{location}, you may qualify for {offer}."
-        pitch = why_now or "The current lien and equity profile suggests a timely review."
-    else:
-        subject = f"{offer} opportunity for your property"
-        location = f" in {city_state}" if city_state else ""
-        intro = f"Your property profile{location} may qualify for {offer}."
-        pitch = why_now or "A licensed officer can review whether the current profile fits."
-
-    body = (
-        f"Hello,\n\n"
-        f"{intro} {pitch}\n\n"
-        "Reply to this note and a licensed officer will follow up. "
-        "This draft is for human review only; no outreach has been sent.\n\n"
-        f"{disclosure.body}"
-    )
-    return subject, body
 
 
 def _compose_reject_rationale(code: str, note: str | None) -> str:
