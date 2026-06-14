@@ -438,6 +438,8 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
       .filter({ hasText: /\d[\d,]* ranked borrowers/ })
       .first();
     await expect(rankedHeader).toBeVisible({ timeout: 30_000 });
+
+    await clickSegmentCard(page, 'In the Money');
     await expect(rankedHeader).toContainText(/segment filter: In the Money/);
 
     const isAllModeSegmentResponse = (url: string, path: string) => {
@@ -470,7 +472,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
   test('segment map drill preserves segment filters through county ZIP and Lead Queue', async ({ page, request }) => {
     await page.goto('/segment-intelligence');
 
-    const selectedSegments = ['Home Equity Candidate'];
+    const selectedSegments = ['In the Money', 'Home Equity Candidate'];
     const target = await discoverMapDrillTarget(request, ['itm', 'equity']);
     for (const label of selectedSegments) {
       await clickSegmentCard(page, label);
@@ -1088,8 +1090,8 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
 
     await page.goto(`/borrower-360/${target}`);
 
-    // Unique-to-route: the "Why we recommend this" surface with ITM chip.
-    await expect(page.getByText(/Why we recommend this/i)).toBeVisible({ timeout: 30_000 });
+    // Unique-to-route: the refi economics surface with ITM/rate-spread chips.
+    await expect(page.getByText(/Refi economics check/i)).toBeVisible({ timeout: 30_000 });
 
     // Real data: the borrower dossier surface shows masked property and owner
     // graph refs. Raw Cotality identifiers must not appear in the UI.
@@ -1098,9 +1100,9 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     await expect(c360).toContainText(/Property ref/i);
     await expect(c360).toContainText(/clip_ref_|clip_demo_/i);
 
-    const why = page.locator('.surface', { hasText: /Why we recommend this/i }).first();
-    await assertSourceDrawer(page, why, 'Market rate comparison', 'Market rate comparison');
-    await assertSourceDrawer(page, why, 'In-the-money rule', 'In-the-Money logic');
+    const economics = page.locator('.surface', { hasText: /Refi economics check/i }).first();
+    await assertSourceDrawer(page, economics, 'Market rate comparison', 'Market rate comparison');
+    await assertSourceDrawer(page, economics, 'In-the-money rule', 'In-the-Money logic');
 
     const timeline = page.locator('.surface', { hasText: /Trigger timeline/i }).first();
     await assertSourceDrawer(page, timeline, 'Rate spread evidence', 'Rate spread evidence');

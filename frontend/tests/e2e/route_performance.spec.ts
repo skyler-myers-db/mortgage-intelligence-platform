@@ -22,7 +22,7 @@ const ROUTES: RouteProbe[] = [
   { label: 'Portfolio', path: '/portfolio-builder', ready: /Build a borrower population/i, maxLoadMs: 4_000 },
   { label: 'Segments', path: '/segment-intelligence', ready: /borrower segments/i, maxLoadMs: 5_000 },
   { label: 'Lead Queue', path: '/lead-queue', ready: /Ranked borrowers|Lead queue/i, maxLoadMs: 6_000 },
-  { label: 'Borrower 360', path: liveBorrowerPath('/borrower-360'), ready: /Customer 360|Why we recommend/i, maxLoadMs: 7_000 },
+  { label: 'Borrower 360', path: liveBorrowerPath('/borrower-360'), ready: /Borrower dossier|Refi economics check/i, maxLoadMs: 7_000 },
   { label: 'Offer', path: liveBorrowerPath('/offer-orchestrator'), ready: /Draft outreach|Recommended offer/i, maxLoadMs: 7_000 },
   { label: 'Ask Genie', path: '/ask-genie', ready: /Ask Genie|Ready for governed analysis/i, maxLoadMs: 4_000 },
   { label: 'Admin', path: '/admin-config', ready: /Offer rules|Audit explorer|Admin/i, maxLoadMs: 4_000 },
@@ -260,7 +260,7 @@ test.describe('route performance and layout canaries', () => {
     }, { timeout: 30_000 });
     await page.getByRole('link', { name: /Open Borrower 360/i }).first().click();
     await navigationResponse;
-    await expect(page.getByText(/Customer 360|Why we recommend/i).first()).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText(/Borrower dossier|Refi economics check/i).first()).toBeVisible({ timeout: 30_000 });
     await page.waitForTimeout(500);
     expect(
       borrowerReads,

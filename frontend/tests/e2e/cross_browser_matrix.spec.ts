@@ -52,7 +52,7 @@ const ROUTES: RouteProbe[] = [
   {
     label: 'Borrower 360',
     path: liveBorrowerPath('/borrower-360'),
-    ready: /Customer 360|Why we recommend/i,
+    ready: /Borrower dossier|Refi economics check/i,
   },
   {
     label: 'Offer',

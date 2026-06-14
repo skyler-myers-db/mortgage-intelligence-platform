@@ -3645,7 +3645,7 @@ kbd {
 .layoutA-grid > * {
   min-width: 0;
 }
-.layoutA-grid--segment-workbench {
+.layoutA-grid.layoutA-grid--segment-workbench {
   grid-template-columns: minmax(0, 1fr);
 }
 
