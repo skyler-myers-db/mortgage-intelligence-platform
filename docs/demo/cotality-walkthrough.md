@@ -39,11 +39,11 @@ Most demos blur "where the data comes from" into a single black box. We don't. T
 | Lane | What it is | What it gives us | Status today |
 |---|---|---|---|
 | **First-party lender data** | The lender's own LOS, servicing, CRM, marketing, interactions, product balances | Knowing if a borrower is a current customer, a former customer, what touches happened, what products they hold | **Summit Mortgage synthetic** today (clearly labeled `demo synthetic`); becomes real lender feeds in production |
-| **Cotality and market enrichment** | Property master, current lien + rate, mortgage event history, mastered property identifier (**CLIP**), owner graph (**Owner Link**), AVM/valuation, market rate feed (MORTGAGE30US) | The *universe* of borrowers and the public-record signals (rate, equity, ownership, transactions) — Module 0's economic engine | **Live: 7 datasets** (lien, mortgage events, CLIP, Owner Link, valuation, market rate). **Pending: 2 datasets** — MLS listings + Building Permits Delta Shares |
+| **Cotality and market enrichment** | Property master, current lien + rate, mortgage event history, mastered property identifier (**CLIP**), owner graph (**Owner Link**), AVM/valuation, market rate feed (MORTGAGE30US), MLS listing activity, HELOC/refi propensity scores | The *universe* of borrowers and the public-record signals (rate, equity, ownership, transactions, listing intent, modeled credit appetite) — Module 0's economic engine | **Live:** core public-record assets, MLS listing activity, HELOC propensity, and refi propensity. **Pending:** filed Building Permits Delta Share |
 | **Databricks governed AI layer** | Unity Catalog gold tables, metric views, Genie space, Lakebase Postgres for app state | Governance, lineage, query engine, conversational analytics, durable audit log | **Live** |
 | **Entrada transformations** | Mortgage-specific joins, scoring SQL functions (`fn_lead_score`, `fn_in_the_money`, `fn_next_best_offer`, `fn_rate_spread`), offer rules, redaction, the app itself | The "mortgage knowledge layer" that turns public-record signals into a usable product | **Live** |
 
-**Why this matters for the Cotality conversation**: their data is the *engine* of Module 0 economics. Without Cotality public records, lien data, AVM, and Owner Link, the product can't even ask "is this borrower in the money?" The two pending overlays (MLS + Permits) unlock the next two segments — Listed for Sale and Permit Activity — which is the natural commercial expansion conversation.
+**Why this matters for the Cotality conversation**: their data is the *engine* of Module 0 economics. Without Cotality public records, lien data, AVM, Owner Link, MLS listings, and propensity scores, the product can't ask "is this borrower in the money, why now, and with what offer?" Filed building permits remain the next commercial expansion conversation, and the app keeps that distinction explicit.
 
 ### 3. The two terms you must own
 
@@ -62,10 +62,10 @@ Segments are the core product vocabulary. Each is a *testable, explainable defin
 | **Home Equity Candidate** | Strong equity (≥ 35%) **and** no active second-position lien. Good HELOC or cash-out conversation. | **Live · 4,005** |
 | **Investor / Multi-Property** | Owner Link shows the same owner across 2+ properties or repeat transaction behavior. | **Live · 1,468** |
 | **Retention Risk** | Current customer with rate spread above the retention threshold. Lower bar than In the Money so we can reach out before they shop competitors. | **Live · 9** under current filters (small because few synthetic-Summit current customers cross the threshold; this number grows when the lender's real servicing book lands) |
-| **Listed for Sale** | Home is actively on the market — purchase mortgage opportunity on the *next* home. | **Pending — Cotality MLS Delta Share** |
-| **Permit Activity** | Recent high-value building permit pulled — classic HELOC/cash-out renovation trigger. | **Pending — Cotality Building Permits Delta Share** |
+| **Listed for Sale** | Home is actively on the market — purchase mortgage opportunity on the *next* home. | **Live — Cotality MLS listing activity** |
+| **HELOC Intent** | Cotality HELOC propensity indicates modeled renovation/cash-out appetite; filed permits remain a separate pending source. | **Live — Cotality HELOC propensity; filed permits pending** |
 
-The two pending segments are the *commercial story* for Cotality. We've built the segment cards, the UI, the scoring path — we're waiting on the Delta Share. They unlock two of the most valuable triggers in lending.
+The expanded segments are the *commercial story* for Cotality: MLS listing activity is now live, HELOC intent is modeled from Cotality propensity data, and filed permits remain a high-value next overlay once that partner feed is approved.
 
 ### 5. The non-negotiable trust posture
 
@@ -152,7 +152,7 @@ The scenarios are designed to take ~10 minutes each, with 5 minutes for setup/in
 2. Point at the **four KPI cards** along the top: Marketable Population 5.16M, High-Intent 135K, Top-Tier 4,351, Offers Recommended 4.47M.
 3. Click the small source chip under "Marketable Population" — `cotality.public_records` — and let them register it.
 4. Scroll to **AI data estate under the hood**. Read the four lane headers out loud: First-party lender, Cotality and market enrichment, Databricks governed AI layer, Entrada transformations.
-5. Point at the `demo synthetic` chip on First-party. Then point at the `7 live · 2 roadmap` chip on Cotality. Then point at the two callout chips at the bottom: "Cotality MLS/Listings Delta Share is pending" and "Cotality Building Permits Delta Share is pending."
+5. Point at the `demo synthetic` chip on First-party. Then point at the Cotality live-source chip and the source-readiness rows for MLS Listings, Cotality HELOC Propensity, Cotality Refi Propensity, and Building Permits.
 
 #### What to say
 
@@ -162,7 +162,7 @@ The scenarios are designed to take ~10 minutes each, with 5 minutes for setup/in
 >
 > **"Four lanes. First-party is the lender's own LOS, servicing, CRM, interactions, and product balances. Today this is Summit Mortgage synthetic data — clearly labeled demo synthetic — because we don't have a real lender book in the demo. In production it's their real feeds, governed in their workspace."**
 
-> **"The Cotality lane is the engine. Property master, current lien + rate, mortgage event history, CLIP, Owner Link, AVM, market rate feed — seven live datasets today. The two roadmap items are MLS Listings and Building Permits, both pending Delta Share. Those two unlock two of the highest-intent triggers in the entire funnel."**
+> **"The Cotality lane is the engine. Property master, current lien + rate, mortgage event history, CLIP, Owner Link, AVM, market rate feed, MLS listings, and propensity scores are all visible in the governed data estate. The filed Building Permits feed is still pending, and the app says that explicitly instead of inferring permits from a proxy."**
 
 > **"The Databricks lane is governance: Unity Catalog gold tables, metric views, Genie, Lakebase for state, and the deployment runtime. The Entrada lane is the mortgage knowledge: scoring SQL functions, offer rules, the redaction layer, and the app itself."**
 
@@ -196,7 +196,7 @@ You've just told them: (a) you can see the pipe, (b) we don't hide what's missin
 6. Click **Run build** (it's already implicit, but the click is the moment).
 7. Navigate to **Segment Intelligence**.
 8. Show the **six segment cards** at the top — In the Money is selected by default at 6,235. Read each segment definition aloud.
-9. Point at **Listed for Sale (AWAITING FEED)** and **Permit Activity (AWAITING FEED)**. This is the Cotality moment. *Pause.*
+9. Point at **Listed for Sale** and **HELOC Intent**. This is the Cotality moment: one is a live MLS trigger, the other is modeled propensity, and filed permits are still called out as pending. *Pause.*
 10. Below the cards, **the table populates with the top 500 ranked borrowers of 6,235** for the In the Money segment. Three borrowers visible — point at the first: `B-102FL7THC6Q3L`, Calumet City IL, Competitor lien, Summit LO 01, In the Money + Investor + 1.
 11. Show the **US map on the right** — geography drill-down across the currently refreshed source coverage.
 
@@ -214,9 +214,9 @@ You've just told them: (a) you can see the pipe, (b) we don't hide what's missin
 
 > **"Now we slice that universe into segments — and this is where the product gets defensible. Each segment is a testable definition, not an audience label. In the Money is rate spread of at least 75 basis points AND equity of at least 15 percent. Not 'high-intent' as a vibe — those exact thresholds, applied to those exact gold-table columns, every night."**
 
-> *Point at Listed for Sale and Permit Activity.*
+> *Point at Listed for Sale and HELOC Intent.*
 
-> **"These two cards are deliberately honest. The UI is built, the scoring path is built, the Lead Queue knows how to filter on them. We're holding the segment counts at AWAITING FEED until Cotality MLS Delta Share and Cotality Building Permits Delta Share land. The two highest-intent triggers in lending — a borrower who just listed their house, and a borrower who just pulled a high-value permit — are one commercial conversation away from being live."**
+> **"These cards are deliberately honest. Listed for Sale is now live from Cotality MLS activity. HELOC Intent is live from Cotality propensity scoring. Filed building permits are still a pending source, so the app does not pretend a modeled HELOC propensity score is the same thing as a permit record."**
 
 > *Point at the table.*
 
@@ -245,7 +245,7 @@ You've shown them the journey from 5.16M to a named borrower in three clicks —
 1. From the Segments table, click row `B-102FL7THC6Q3L`. Or navigate directly to `/borrower-360/B-102FL7THC6Q3L`.
 2. Let them look at the page for a beat. The opportunity score (88), confidence (85%), Approval Approved chip, Outreach Actioned chip are all in the upper right.
 3. Walk the left column: **Customer 360**. Read aloud: Property ref `clip_ref_39d931a7bed1` (that's the masked CLIP), Owner graph ref (masked Owner Link), Property address Calumet City IL 60409 (city + ZIP only — no street), AVM $168,163, Current lien $15,000 at **10.27%** (the very high rate is the story), LTV 9% (i.e. 91% equity), **346 related properties via owner graph**, Metro/loan type 16980 / CNV.
-4. Read the relationship flags: **Competitor lien** (with a competitor today), Non-owner occupied, **Investor**, Absentee owner, Corporate owner, "Listing feed pending" / "Permit feed pending" / "No 2nd lien".
+4. Read the relationship flags: **Competitor lien** (with a competitor today), Non-owner occupied, **Investor**, Absentee owner, Corporate owner, listing/HELOC intent state, filed-permit caveat where applicable, and "No 2nd lien".
 5. Read the segments: In the Money, Investor / Multi-Property, Home Equity Candidate.
 6. Move to the right column: **Why we recommend this**. "In-the-money · **+391 bps** vs. par 6.360%". Read the rationale aloud: *"Current rate sits well above market rates and the home has 91% equity — both refinance triggers are met."*
 7. Point at the three **evidence chips**: Market rate comparison, In-the-money rule, Borrower dossier. (You can click any of them to open the source drawer — but don't unless asked.)
@@ -379,7 +379,7 @@ You have three closing options depending on the room's energy.
 
 ### Closer A — The commercial close (use if Cotality leans forward)
 
-> **"Module 0 today is built on seven live Cotality datasets and two pending Delta Shares. Every segment that's live works against your data. The two segments that aren't live — Listed for Sale and Permit Activity — are the highest-intent triggers in lending. We have the UI, the scoring path, the audit trail, all ready. We're one Delta Share conversation away from doubling the trigger surface."**
+> **"Module 0 today is built on live Cotality public-record, MLS, valuation, and propensity datasets. Listed for Sale is a live purchase trigger, HELOC Intent is live modeled intent, and filed Building Permits remain the next expansion source. The app keeps every one of those claims traceable to source rows, scoring logic, and audit state."**
 
 > **"And this is Module 0. There are four more modules — pipeline pull-through, LO workbench, underwriting support, portfolio risk — that all build on this foundation. Every one of them gets richer the more Cotality coverage is connected."**
 

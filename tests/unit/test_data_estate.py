@@ -23,7 +23,9 @@ def test_data_estate_separates_first_party_from_live_cotality() -> None:
             SourceRow("Cotality Public Records", "live", 10, "2026-05-06", "ok"),
             SourceRow("Voluntary Lien", "live", 20, "2026-05-06", "ok"),
             SourceRow("First-party LOS / Applications", "not_configured", 0, None, "not connected"),
-            SourceRow("MLS", "roadmap", None, None, "pending"),
+            SourceRow("MLS Listings", "live", 1200, "2026-06-12", "live"),
+            SourceRow("Cotality HELOC Propensity", "live", 900, "2026-06-12", "live"),
+            SourceRow("Cotality Refi Propensity", "live", 850, "2026-06-12", "live"),
             SourceRow("Building Permits", "roadmap", None, None, "pending"),
         )
     )
@@ -34,7 +36,8 @@ def test_data_estate_separates_first_party_from_live_cotality() -> None:
     assert first_party.status == "not_configured"
     assert any(asset.uc_object == "mip.first_party.loan_applications" for asset in first_party.assets)
     assert cotality.status == "roadmap"
-    assert "Cotality MLS/Listings Delta Share is pending." in estate.known_data_gaps
+    assert "Cotality MLS/Listings Delta Share is pending." not in estate.known_data_gaps
+    assert "Cotality Building Permits Delta Share is pending." in estate.known_data_gaps
     assert estate.public_demo_masking is True
 
 

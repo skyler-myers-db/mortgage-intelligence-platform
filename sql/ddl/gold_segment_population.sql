@@ -29,16 +29,16 @@
 --   investor    : related_property_count >= 2 OR is_corporate_owner OR
 --                 is_absentee.
 --   retention   : is_current_customer = TRUE AND (rate_spread_bps >= 50 OR
---                 is_competitor_lien OR listed_for_sale). listed_for_sale is
---                 BLOCKED -> FALSE. In the current CLIP-grain refresh path,
+--                 is_competitor_lien OR listed_for_sale). In the current CLIP-grain refresh path,
 --                 is_current_customer and is_competitor_lien are mutually
 --                 exclusive current-servicer flags, so this behaves as
 --                 customer AND spread >= 50 until a portfolio-history
 --                 recapture join lands.
---   listed      : listed_for_sale = TRUE. BLOCKED -> zero-count rows on
---                 real data (data-contract §9).
---   permit      : has_permit = TRUE. BLOCKED -> zero-count rows on real
---                 data (data-contract §9).
+--   listed      : listed_for_sale = TRUE from current active/under-contract
+--                 Cotality MLS rows.
+--   permit      : backward-compatible code for customer-facing HELOC Intent:
+--                 has_permit OR has_heloc_propensity_trigger. has_permit
+--                 remains FALSE until true filed permit rows land.
 --
 -- `delta_vs_prior` requires a prior-period snapshot. The transformation
 -- file maintains a mip.gold.segment_population_prior Delta table
@@ -50,7 +50,7 @@
 -- =============================================================================
 
 CREATE TABLE IF NOT EXISTS mip.gold.segment_population (
-  segment_code    STRING    NOT NULL COMMENT 'itm / listed / permit / investor / equity / retention. Matches SegmentCode Literal exactly.',
+  segment_code    STRING    NOT NULL COMMENT 'itm / listed / permit / investor / equity / retention. Matches SegmentCode Literal exactly; permit is the backward-compatible code for customer-facing HELOC Intent.',
   state           STRING    NOT NULL COMMENT '2-char state code from refreshed source coverage or "_ALL" for national rollup.',
   name            STRING    NOT NULL COMMENT 'Static label per segment_code (e.g., "In the Money").',
   count           INT       NOT NULL COMMENT 'Member count for this (segment, state) cell.',
@@ -62,7 +62,7 @@ CREATE TABLE IF NOT EXISTS mip.gold.segment_population (
 )
 USING DELTA
 CLUSTER BY (segment_code)
-COMMENT 'Per-segment aggregate counts with state and "_ALL" rollup. Feeds the Segment Intelligence route + Executive Dashboard. listed + permit segments materialize zero counts on real data per data-contract §9. See docs/data-contract-module0.md §3.6.'
+COMMENT 'Per-segment aggregate counts with state and "_ALL" rollup. Feeds the Segment Intelligence route + Executive Dashboard. listed is live from MLS; permit is the backward-compatible code for HELOC Intent while true building-permit filings remain pending. See docs/data-contract-module0.md §3.6.'
 TBLPROPERTIES (
   'delta.enableChangeDataFeed' = 'false',
   'delta.autoOptimize.optimizeWrite' = 'true',

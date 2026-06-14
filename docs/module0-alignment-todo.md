@@ -107,6 +107,7 @@ Scope: Close the gaps found when comparing the Module 0 requirements document an
 
 ## Scope Limitations Still Explicit
 
-- [ ] Cotality MLS/Listings Delta Share is still pending, so `Listed for Sale` remains an awaiting-feed segment.
-- [ ] Cotality Building Permits Delta Share is still pending, so `Permit Activity` remains an awaiting-feed segment.
+- [x] Cotality MLS/Listings is connected through `mip.silver.listing_activity`, so `Listed for Sale` is a live segment once deployed.
+- [x] Cotality HELOC propensity is connected and the legacy `permit` segment code now displays as `HELOC Intent`.
+- [ ] Cotality Building Permits Delta Share is still pending, so filed permit activity remains unavailable and must not be inferred.
 - [ ] No finite test suite can prove every possible future free-form Genie prompt. The live gate covers the scripted executive workflows, source/proof/action paths, ZIP cohort action, policy-blocked/degraded states, and value-level identifier masking. New high-value prompts should be added to the Genie semantic regression matrix before client use.

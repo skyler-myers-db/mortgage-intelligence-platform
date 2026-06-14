@@ -14,8 +14,8 @@ export const mockPortfolio: PortfolioPreview = {
 
 export const mockSegments: SegmentSummary[] = [
   { code: 'itm', name: 'In the Money', count: 12840, delta: '+18%', avg_score: 82, description: 'Lien rate ≥ 75 bps above par and equity ≥ 15%.', color: 'var(--seg-itm)' },
-  { code: 'listed', name: 'Listed for Sale', count: 0, delta: 'pending', avg_score: 0, description: 'Pending Cotality MLS share; blocked false until landed.', color: 'var(--seg-listed)' },
-  { code: 'permit', name: 'Permit Activity', count: 0, delta: 'pending', avg_score: 0, description: 'Pending Cotality Building Permits share; blocked false until landed.', color: 'var(--seg-permit)' },
+  { code: 'listed', name: 'Listed for Sale', count: 1840, delta: '+9%', avg_score: 77, description: 'Current active or under-contract Cotality MLS listing.', color: 'var(--seg-listed)' },
+  { code: 'permit', name: 'HELOC Intent', count: 2405, delta: '+11%', avg_score: 80, description: 'Cotality HELOC propensity score indicates equity-credit demand.', color: 'var(--seg-permit)' },
   { code: 'investor', name: 'Investor / Multi-Property', count: 1892, delta: '+6%', avg_score: 79, description: 'Owner Link shows 2+ properties or repeat behavior.', color: 'var(--seg-investor)' },
   { code: 'equity', name: 'Home Equity Candidate', count: 6320, delta: '+14%', avg_score: 76, description: 'Strong equity and prior cash-out/HELOC propensity.', color: 'var(--seg-equity)' },
   { code: 'retention', name: 'Retention Risk', count: 3471, delta: '+4%', avg_score: 88, description: 'Current customer with rate spread above the retention threshold; listing and competitor overlays join only when live evidence exists.', color: 'var(--seg-retention)' }
@@ -53,8 +53,9 @@ export const mockBorrowers: Borrower360[] = [
   {
     borrower_id: 'B-48294', clip: 'clip_demo_48294', display_name: 'Owner 48294', city: 'Chicago', state: 'IL', zip: '60647',
     segment_codes: ['permit', 'equity'], equity_estimate: 218000, rate_spread_bps: 188, opportunity_score: 87, confidence: 82,
-    recommended_offer: 'HELOC', why_now: 'Recent high-value permit and strong equity position indicate renovation financing need.', evidence_ids: ['ev-002'], approval_status: 'pending',
+    recommended_offer: 'HELOC', why_now: 'Cotality HELOC propensity and strong equity position indicate equity-credit demand.', evidence_ids: ['ev-002'], approval_status: 'pending',
     clip_id: 'clip_demo_48294', owner_link_id: 'ol_demo_48294', subject_property: 'Synthetic property · Chicago, IL 60647', avm_value: 560000, current_lien_balance: 342000, current_rate: 6.75, ltv: 61, related_property_count: 1,
+    has_heloc_propensity_trigger: true, heloc_propensity_score: 812, heloc_propensity_run_date: '2026-06-09',
     trigger_timeline: evidence.slice(1), evidence_events: evidence.slice(1),
     why_panel: { rate_spread_bps: 188, market_rate: 0.04875, equity_pct: 39, in_the_money: true, in_the_money_reason: '+188 bps spread (>= 75) AND 39% equity (>= 15%)', min_spread_bps: 75, min_equity_pct: 15, sources: ['mip.gold.fn_rate_spread', 'mip.gold.fn_in_the_money'] }
   },
@@ -63,6 +64,7 @@ export const mockBorrowers: Borrower360[] = [
     segment_codes: ['listed', 'retention'], equity_estimate: 405000, rate_spread_bps: 162, opportunity_score: 82, confidence: 79,
     recommended_offer: 'Purchase Mortgage', why_now: 'Listed-for-sale trigger suggests a purchase mortgage opportunity.', evidence_ids: ['ev-003'], approval_status: 'pending',
     clip_id: 'clip_demo_48295', owner_link_id: 'ol_demo_48295', subject_property: 'Synthetic property · Chicago, IL 60613', avm_value: 725000, current_lien_balance: 320000, current_rate: 6.50, ltv: 44, related_property_count: 1,
+    listed_for_sale: true, listing_status_category: 'A', listing_status_description: 'Active', listing_price: 725000, listing_days_on_market: 18,
     trigger_timeline: evidence.slice(2), evidence_events: evidence.slice(2),
     why_panel: { rate_spread_bps: 162, market_rate: 0.04875, equity_pct: 56, in_the_money: true, in_the_money_reason: '+162 bps spread (>= 75) AND 56% equity (>= 15%)', min_spread_bps: 75, min_equity_pct: 15, sources: ['mip.gold.fn_rate_spread', 'mip.gold.fn_in_the_money'] }
   }
@@ -72,7 +74,7 @@ export const mockBorrowers: Borrower360[] = [
 export const triggerTimeline = [
   { when: '2d ago',  what: 'Voluntary lien rate ≥ 75 bps above par',    why: 'Current lien 7.125% vs. par 6.250% on AVM-backed value $712k',  source: 'Mortgage Market Analytics' },
   { when: '11d ago', what: 'Equity threshold crossed (≥ 15%)',           why: 'AVM refresh brought LTV to 52%',                                source: 'CLIP-AVM v2026.03' },
-  { when: '34d ago', what: 'Building permit filed ($48k kitchen remodel)', why: 'Signal strongly correlates with HELOC / cash-out demand',   source: 'Cotality Building Permits' },
+  { when: '34d ago', what: 'HELOC propensity score crossed threshold', why: 'Signal strongly correlates with equity-credit demand',          source: 'Cotality HELOC Propensity' },
   { when: '90d ago', what: 'Owner Link match: second property identified', why: 'Investor / multi-property pattern',                        source: 'Owner Link' },
 ];
 
@@ -132,17 +134,17 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
     updatedAt: '2026-04-20 06:12 UTC',
   },
   permit: {
-    title: 'Permit signal',
-    short: 'permits.building',
-    description: 'Cotality Building Permits share is pending; permit signals are blocked false until the feed lands.',
+    title: 'Building permit signal',
+    short: 'Building Permits - pending',
+    description: 'True filed building-permit rows remain pending. HELOC intent is represented separately by Cotality HELOC propensity.',
     lineage: [
       { layer: 'SOURCE',   name: 'cotality.permits.building', meta: 'Delta Share · pending' },
-      { layer: 'JOIN',     name: 'join.permit_to_clip',       meta: 'pending feed arrival' },
-      { layer: 'SEMANTIC', name: 'metrics.permit_signal',     meta: 'blocked false until landed' },
+      { layer: 'JOIN',     name: 'join.permit_to_clip',       meta: 'pending true permit source' },
+      { layer: 'GOLD',     name: 'borrower_360.has_permit',   meta: 'filed permit only' },
     ],
     signals: [
       { label: 'Readiness',     source: 'admin.sources',    value: 'roadmap' },
-      { label: 'has_permit',    source: 'borrower_360',     value: 'blocked false' },
+      { label: 'has_permit',    source: 'borrower_360',     value: 'filed permit only' },
       { label: 'Permit rows',   source: 'permits.building', value: 'pending share' },
     ],
     updatedAt: '2026-04-20 06:12 UTC',

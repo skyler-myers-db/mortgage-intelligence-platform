@@ -270,30 +270,67 @@ source_rows AS (
 
   SELECT
     13 AS sort_order,
-    'MLS' AS source_name,
-    'roadmap' AS status,
-    CAST(NULL AS BIGINT) AS row_count,
-    CAST(NULL AS TIMESTAMP) AS last_updated,
-    'Contracted · pending Cotality share' AS note,
-    CAST(NULL AS STRING) AS source_table,
+    'MLS Listings' AS source_name,
+    CASE WHEN COUNT(*) > 0 THEN 'live' ELSE 'configured_empty' END AS status,
+    COUNT(*) AS row_count,
+    MAX(COALESCE(source_updated_at, ingest_ts)) AS last_updated,
+    CASE WHEN COUNT(*) > 0
+      THEN 'Cotality MLS listing feed · current active/under-contract rows drive listed_for_sale'
+      ELSE 'Cotality MLS listing table is configured but empty'
+    END AS note,
+    'mip.silver.listing_activity' AS source_table,
     FALSE AS synthetic_demo
+  FROM mip.silver.listing_activity
 
   UNION ALL
 
   SELECT
     14 AS sort_order,
+    'Cotality HELOC Propensity' AS source_name,
+    CASE WHEN COUNT(*) > 0 THEN 'live' ELSE 'configured_empty' END AS status,
+    COUNT(*) AS row_count,
+    MAX(COALESCE(source_updated_at, ingest_ts)) AS last_updated,
+    CASE WHEN COUNT(*) > 0
+      THEN 'Cotality HELOC propensity model feed · drives HELOC Intent; not a permit filing source'
+      ELSE 'Cotality HELOC propensity table is configured but empty'
+    END AS note,
+    'mip.silver.heloc_propensity' AS source_table,
+    FALSE AS synthetic_demo
+  FROM mip.silver.heloc_propensity
+
+  UNION ALL
+
+  SELECT
+    15 AS sort_order,
+    'Cotality Refi Propensity' AS source_name,
+    CASE WHEN COUNT(*) > 0 THEN 'live' ELSE 'configured_empty' END AS status,
+    COUNT(*) AS row_count,
+    MAX(COALESCE(source_updated_at, ingest_ts)) AS last_updated,
+    CASE WHEN COUNT(*) > 0
+      THEN 'Cotality refinance propensity model feed · adds intent score context'
+      ELSE 'Cotality refinance propensity table is configured but empty'
+    END AS note,
+    'mip.silver.refi_propensity' AS source_table,
+    FALSE AS synthetic_demo
+  FROM mip.silver.refi_propensity
+
+  UNION ALL
+
+  SELECT
+    16 AS sort_order,
     'Building Permits' AS source_name,
     'roadmap' AS status,
     CAST(NULL AS BIGINT) AS row_count,
     CAST(NULL AS TIMESTAMP) AS last_updated,
-    'Contracted · pending Cotality share' AS note,
+    'Pending: no true filed building-permit table or permit filing columns found in cotality_mortgage_data.corelogic. Do not claim permit filings live.'
+      AS note,
     CAST(NULL AS STRING) AS source_table,
     FALSE AS synthetic_demo
 
   UNION ALL
 
   SELECT
-    15 AS sort_order,
+    17 AS sort_order,
     'UC Gold Borrower 360' AS source_name,
     CASE WHEN COUNT(*) > 0 THEN 'live' ELSE 'configured_empty' END AS status,
     COUNT(*) AS row_count,
@@ -309,7 +346,7 @@ source_rows AS (
   UNION ALL
 
   SELECT
-    16 AS sort_order,
+    18 AS sort_order,
     'UC Gold Lead Scores' AS source_name,
     CASE WHEN COUNT(*) > 0 THEN 'live' ELSE 'configured_empty' END AS status,
     COUNT(*) AS row_count,
@@ -325,7 +362,7 @@ source_rows AS (
   UNION ALL
 
   SELECT
-    17 AS sort_order,
+    19 AS sort_order,
     'UC Gold Lead Population' AS source_name,
     CASE WHEN COUNT(*) > 0 THEN 'live' ELSE 'configured_empty' END AS status,
     COUNT(*) AS row_count,
@@ -341,7 +378,7 @@ source_rows AS (
   UNION ALL
 
   SELECT
-    18 AS sort_order,
+    20 AS sort_order,
     'UC Gold Segment Population' AS source_name,
     CASE WHEN COUNT(*) > 0 THEN 'live' ELSE 'configured_empty' END AS status,
     COUNT(*) AS row_count,
@@ -357,7 +394,7 @@ source_rows AS (
   UNION ALL
 
   SELECT
-    19 AS sort_order,
+    21 AS sort_order,
     'UC Gold Borrower Dossier' AS source_name,
     CASE WHEN COUNT(*) > 0 THEN 'live' ELSE 'configured_empty' END AS status,
     COUNT(*) AS row_count,

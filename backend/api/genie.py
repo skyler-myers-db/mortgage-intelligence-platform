@@ -379,9 +379,9 @@ def _source_gap_answer(question: str, source_gap_match: str) -> str:
             f"zero demand. Source: {source}."
         )
     return (
-        "Cotality MLS/listing and Building Permits feeds are pending and "
-        "are not live in this workspace yet. I will not count the missing "
-        f"feed as zero demand. Source: {source}."
+        "Cotality Building Permits records are not live in this workspace yet. "
+        "Cotality MLS/listing rows are live, but I will not infer filed permit "
+        f"activity from listing or propensity signals. Source: {source}."
     )
 
 

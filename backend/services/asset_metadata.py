@@ -138,6 +138,37 @@ _DESCRIPTORS: tuple[AssetDescriptor, ...] = (
         ),
     ),
     _descriptor(
+        "silver",
+        "listing_activity",
+        title="Silver MLS Listing Activity",
+        description=(
+            "CLIP-keyed Cotality MLS listing lift. Excludes raw street address, "
+            "public remarks, agent/contact, and lockbox fields; active/current "
+            "rows drive listed-for-sale triggers."
+        ),
+        readiness_source_name="MLS Listings",
+        aliases=("mls_listing", "listings"),
+    ),
+    _descriptor(
+        "silver",
+        "heloc_propensity",
+        title="Silver HELOC Propensity",
+        description=(
+            "CLIP-keyed Cotality HELOC propensity model scores. This is a "
+            "model propensity feed, not a filed building-permit source."
+        ),
+        readiness_source_name="Cotality HELOC Propensity",
+        aliases=("heloc_intent",),
+    ),
+    _descriptor(
+        "silver",
+        "refi_propensity",
+        title="Silver Refi Propensity",
+        description="CLIP-keyed Cotality refinance propensity model scores.",
+        readiness_source_name="Cotality Refi Propensity",
+        aliases=("refinance_propensity",),
+    ),
+    _descriptor(
         "gold",
         "lockin_cohort",
         title="Gold Lock-in Cohort",

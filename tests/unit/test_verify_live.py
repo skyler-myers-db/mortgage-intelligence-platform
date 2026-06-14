@@ -35,6 +35,9 @@ def _clean_source_rows() -> list[dict[str, object]]:
         "Owner Link",
         "AVM",
         "FRED Market Rates",
+        "MLS Listings",
+        "Cotality HELOC Propensity",
+        "Cotality Refi Propensity",
         "UC Gold Borrower 360",
         "UC Gold Lead Scores",
         "UC Gold Lead Population",
@@ -52,7 +55,6 @@ def _clean_source_rows() -> list[dict[str, object]]:
         [_source_row(name) for name in core]
         + [_source_row(name, status="demo_synthetic", synthetic_demo=True) for name in first_party]
         + [
-            _source_row("MLS", status="roadmap", rows=None, last_updated=None),
             _source_row("Building Permits", status="roadmap", rows=None, last_updated=None),
         ]
     )
@@ -133,7 +135,7 @@ def test_verify_live_checks_admin_source_readiness_contract() -> None:
     rows[0]["checked_at"] = None
     rows[1]["status"] = "error"
     rows[2]["checked_at"] = "2000-01-01 00:00:00"
-    rows[-2]["status"] = "live"
+    rows[-1]["status"] = "live"
 
     flags = collect_red_flags(
         [
@@ -151,7 +153,7 @@ def test_verify_live_checks_admin_source_readiness_contract() -> None:
     assert "admin.sources: Cotality Public Records missing checked_at" in flags
     assert "admin.sources: Voluntary Lien status=error expected live" in flags
     assert "admin.sources: MMA Mortgage Analytics checked_at is stale" in flags
-    assert "admin.sources: MLS cannot be live until the feed is loaded" in flags
+    assert "admin.sources: Building Permits cannot be live until the feed is loaded" in flags
 
 
 def test_verify_live_accepts_clean_admin_source_readiness_contract() -> None:

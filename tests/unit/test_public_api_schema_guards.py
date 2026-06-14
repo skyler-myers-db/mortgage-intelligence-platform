@@ -58,6 +58,14 @@ def test_lead_summary_exposes_module0_relationship_flags() -> None:
         is_competitor_lien=False,
         has_permit=False,
         listed_for_sale=False,
+        listing_status_category="A",
+        listing_status_description="Active",
+        listing_price=725000,
+        listing_days_on_market=18,
+        has_heloc_propensity_trigger=True,
+        heloc_propensity_score=812,
+        has_refi_propensity_trigger=True,
+        refi_propensity_score=760,
         second_pos_amount=125000,
     )
 
@@ -70,6 +78,10 @@ def test_lead_summary_exposes_module0_relationship_flags() -> None:
     assert parsed.is_competitor_lien is False
     assert parsed.has_permit is False
     assert parsed.listed_for_sale is False
+    assert parsed.listing_status_category == "A"
+    assert parsed.has_heloc_propensity_trigger is True
+    assert parsed.heloc_propensity_score == 812
+    assert parsed.has_refi_propensity_trigger is True
     assert parsed.second_pos_amount == 125000
 
 
@@ -84,6 +96,19 @@ def test_borrower_360_projection_selects_module0_flags() -> None:
         "is_competitor_lien",
         "has_permit",
         "listed_for_sale",
+        "listing_status_category",
+        "listing_status_description",
+        "listing_date",
+        "listing_status_date",
+        "listing_price",
+        "listing_days_on_market",
+        "listing_service",
+        "heloc_propensity_score",
+        "heloc_propensity_run_date",
+        "has_heloc_propensity_trigger",
+        "refi_propensity_score",
+        "refi_propensity_run_date",
+        "has_refi_propensity_trigger",
         "second_pos_amount",
         "situs_cbsa_code",
         "first_pos_loan_type",
@@ -149,6 +174,19 @@ def test_lead_population_projection_selects_module0_flags() -> None:
         "is_competitor_lien",
         "has_permit",
         "listed_for_sale",
+        "listing_status_category",
+        "listing_status_description",
+        "listing_date",
+        "listing_status_date",
+        "listing_price",
+        "listing_days_on_market",
+        "listing_service",
+        "heloc_propensity_score",
+        "heloc_propensity_run_date",
+        "has_heloc_propensity_trigger",
+        "refi_propensity_score",
+        "refi_propensity_run_date",
+        "has_refi_propensity_trigger",
         "second_pos_amount",
     ):
         assert column in _LEAD_POPULATION_COLUMNS

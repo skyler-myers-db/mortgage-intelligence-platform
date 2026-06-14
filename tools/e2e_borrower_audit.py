@@ -369,15 +369,45 @@ def fetch_raw_inputs(
         "FROM mip.silver.lien_current "
         "WHERE clip = :clip LIMIT 1"
     )
+    stmt_silver_listing = (
+        "SELECT clip, listing_status_category, listing_status_description, "
+        "       listing_date, listing_status_date, listing_price, "
+        "       days_on_market AS listing_days_on_market, listing_service, "
+        "       is_active_listing "
+        "FROM mip.silver.listing_activity "
+        "WHERE clip = :clip AND is_current_listing = TRUE "
+        "QUALIFY ROW_NUMBER() OVER ("
+        "  PARTITION BY clip "
+        "  ORDER BY is_active_listing DESC, "
+        "           COALESCE(listing_status_date, listing_date, DATE(source_updated_at), DATE(ingest_ts)) DESC"
+        ") = 1 "
+        "LIMIT 1"
+    )
+    stmt_silver_heloc = (
+        "SELECT clip, heloc_propensity_score, heloc_propensity_run_date "
+        "FROM mip.silver.heloc_propensity "
+        "WHERE clip = :clip LIMIT 1"
+    )
+    stmt_silver_refi = (
+        "SELECT clip, refi_propensity_score, refi_propensity_run_date "
+        "FROM mip.silver.refi_propensity "
+        "WHERE clip = :clip LIMIT 1"
+    )
     lien = client.execute_one(stmt_lien, {"clip": clip}) or {}
     prop = client.execute_one(stmt_prop, {"clip": clip}) or {}
     silver_pm = client.execute_one(stmt_silver_pm, {"clip": clip}) or {}
     silver_lc = client.execute_one(stmt_silver_lc, {"clip": clip}) or {}
+    silver_listing = client.execute_one(stmt_silver_listing, {"clip": clip}) or {}
+    silver_heloc = client.execute_one(stmt_silver_heloc, {"clip": clip}) or {}
+    silver_refi = client.execute_one(stmt_silver_refi, {"clip": clip}) or {}
     return {
         "lien": lien,
         "property": prop,
         "silver_lien": silver_lc,
         "silver_property": silver_pm,
+        "silver_listing": silver_listing,
+        "silver_heloc_propensity": silver_heloc,
+        "silver_refi_propensity": silver_refi,
     }
 
 
@@ -437,6 +467,10 @@ def fetch_gold_row(
         "  avm_value, current_lien_balance, current_rate, ltv, "
         "  related_property_count, is_owner_occupied, is_absentee, "
         "  is_corporate_owner, has_permit, listed_for_sale, is_investor, "
+        "  listing_status_category, listing_status_description, listing_date, "
+        "  listing_status_date, listing_price, listing_days_on_market, listing_service, "
+        "  heloc_propensity_score, heloc_propensity_run_date, has_heloc_propensity_trigger, "
+        "  refi_propensity_score, refi_propensity_run_date, has_refi_propensity_trigger, "
         "  is_current_customer, is_competitor_lien, second_pos_amount, "
         "  first_pos_loan_type, min_spread_bps_applied, "
         "  min_equity_pct_applied, in_the_money "
@@ -492,6 +526,9 @@ def recompute_from_raw(
     """
     silver_lc = raw.get("silver_lien") or {}
     silver_pm = raw.get("silver_property") or {}
+    silver_listing = raw.get("silver_listing") or {}
+    silver_heloc = raw.get("silver_heloc_propensity") or {}
+    silver_refi = raw.get("silver_refi_propensity") or {}
 
     avm_value = _safe_int(silver_lc.get("avm_value"))
     lien_bal = _safe_int(silver_lc.get("total_open_lien_balance"))
@@ -547,7 +584,14 @@ def recompute_from_raw(
         lender_current != "" and "SUMMIT" not in lender_current.upper()
     )
     has_permit = False
-    listed_for_sale = False
+    listed_for_sale = bool(silver_listing.get("is_active_listing"))
+    heloc_propensity_score = silver_heloc.get("heloc_propensity_score")
+    refi_propensity_score = silver_refi.get("refi_propensity_score")
+    heloc_score = _safe_int(heloc_propensity_score)
+    refi_score = _safe_int(refi_propensity_score)
+    has_heloc_propensity_trigger = heloc_propensity_score is not None and heloc_score >= 700
+    has_refi_propensity_trigger = refi_propensity_score is not None and refi_score >= 700
+    has_heloc_intent = has_permit or has_heloc_propensity_trigger
 
     # In the Money.
     itm = in_the_money(spread, equity_pct, DEFAULT_MIN_SPREAD_BPS, DEFAULT_MIN_EQUITY_PCT)
@@ -556,7 +600,7 @@ def recompute_from_raw(
     offer_code = next_best_offer(
         spread,
         equity_pct,
-        has_permit,
+        has_heloc_intent,
         listed_for_sale,
         is_investor,
         is_current_customer,
@@ -574,7 +618,7 @@ def recompute_from_raw(
         segments.append("itm")
     if listed_for_sale:
         segments.append("listed")
-    if has_permit:
+    if has_heloc_intent:
         segments.append("permit")
     if is_investor:
         segments.append("investor")
@@ -599,7 +643,17 @@ def recompute_from_raw(
     else:
         economic_incentive = 30
 
-    intent_trigger = min(100, 15 * (1 if is_competitor_lien else 0))
+    intent_trigger = min(
+        100,
+        15 * (1 if is_competitor_lien else 0)
+        + min(20, related_property_count * 4)
+        + (20 if spread >= DEFAULT_MIN_SPREAD_BPS else 0)
+        + (15 if equity_pct >= 35 else 0)
+        + (10 if is_current_customer else 0)
+        + (18 if listed_for_sale else 0)
+        + (min(18, round(heloc_score / 50.0)) if has_heloc_propensity_trigger else 0)
+        + (min(12, round(refi_score / 85.0)) if has_refi_propensity_trigger else 0),
+    )
 
     if is_owner_occupied and loan_type in ("CONV", "FHA", "VA"):
         fit_raw = 85 - (55 - min(55, bedrooms * 10 + int(bathrooms) * 5))
@@ -654,6 +708,19 @@ def recompute_from_raw(
         "is_competitor_lien": is_competitor_lien,
         "has_permit": has_permit,
         "listed_for_sale": listed_for_sale,
+        "listing_status_category": silver_listing.get("listing_status_category"),
+        "listing_status_description": silver_listing.get("listing_status_description"),
+        "listing_date": silver_listing.get("listing_date"),
+        "listing_status_date": silver_listing.get("listing_status_date"),
+        "listing_price": _safe_int(silver_listing.get("listing_price")) if silver_listing.get("listing_price") is not None else None,
+        "listing_days_on_market": _safe_int(silver_listing.get("listing_days_on_market")) if silver_listing.get("listing_days_on_market") is not None else None,
+        "listing_service": silver_listing.get("listing_service"),
+        "heloc_propensity_score": heloc_score if heloc_propensity_score is not None else None,
+        "heloc_propensity_run_date": silver_heloc.get("heloc_propensity_run_date"),
+        "has_heloc_propensity_trigger": has_heloc_propensity_trigger,
+        "refi_propensity_score": refi_score if refi_propensity_score is not None else None,
+        "refi_propensity_run_date": silver_refi.get("refi_propensity_run_date"),
+        "has_refi_propensity_trigger": has_refi_propensity_trigger,
         "in_the_money": itm,
         "recommended_offer_code": offer_code,
         "recommended_offer": recommended_offer,
@@ -674,12 +741,13 @@ def recompute_from_raw(
 def fetch_evidence_count(client: DatabricksSqlClient, clip: str) -> int:
     """Count evidence rows that contribute to the ``evidence`` sub-score.
 
-    Matches the filter in ``gold_borrower_360.sql``: LIVE signals only
-    (``permit`` and ``listing`` are BLOCKED).
+    Matches the filter in ``gold_borrower_360.sql``: live evidence signals
+    contribute, while true filed permits remain disabled until a source lands
+    and loan_type_fit is an explanatory row rather than a source trigger.
     """
     row = client.execute_one(
         "SELECT COUNT(*) AS n FROM mip.gold.evidence_events "
-        "WHERE clip = :clip AND signal_type NOT IN ('permit','listing')",
+        "WHERE clip = :clip AND signal_type NOT IN ('permit','loan_type_fit')",
         {"clip": clip},
     )
     return int((row or {}).get("n") or 0)
@@ -839,6 +907,45 @@ def compare_raw_vs_gold(audit: ClipAudit) -> list[Mismatch]:
     _add("in_the_money", rec["in_the_money"], bool(gold.get("in_the_money")))
     _add("has_permit", rec["has_permit"], bool(gold.get("has_permit")))
     _add("listed_for_sale", rec["listed_for_sale"], bool(gold.get("listed_for_sale")))
+    _add(
+        "has_heloc_propensity_trigger",
+        rec["has_heloc_propensity_trigger"],
+        bool(gold.get("has_heloc_propensity_trigger")),
+    )
+    _add(
+        "has_refi_propensity_trigger",
+        rec["has_refi_propensity_trigger"],
+        bool(gold.get("has_refi_propensity_trigger")),
+    )
+
+    # Listing and propensity source attributes.
+    _add("listing_status_category", rec["listing_status_category"], gold.get("listing_status_category"))
+    _add("listing_status_description", rec["listing_status_description"], gold.get("listing_status_description"))
+    _add("listing_date", rec["listing_date"], gold.get("listing_date"))
+    _add("listing_status_date", rec["listing_status_date"], gold.get("listing_status_date"))
+    _add(
+        "listing_price",
+        rec["listing_price"],
+        None if gold.get("listing_price") is None else _safe_int(gold.get("listing_price")),
+    )
+    _add(
+        "listing_days_on_market",
+        rec["listing_days_on_market"],
+        None if gold.get("listing_days_on_market") is None else _safe_int(gold.get("listing_days_on_market")),
+    )
+    _add("listing_service", rec["listing_service"], gold.get("listing_service"))
+    _add(
+        "heloc_propensity_score",
+        rec["heloc_propensity_score"],
+        None if gold.get("heloc_propensity_score") is None else _safe_int(gold.get("heloc_propensity_score")),
+    )
+    _add("heloc_propensity_run_date", rec["heloc_propensity_run_date"], gold.get("heloc_propensity_run_date"))
+    _add(
+        "refi_propensity_score",
+        rec["refi_propensity_score"],
+        None if gold.get("refi_propensity_score") is None else _safe_int(gold.get("refi_propensity_score")),
+    )
+    _add("refi_propensity_run_date", rec["refi_propensity_run_date"], gold.get("refi_propensity_run_date"))
 
     # Derived strings / labels.
     _add("recommended_offer_code", rec["recommended_offer_code"], gold.get("recommended_offer_code"))

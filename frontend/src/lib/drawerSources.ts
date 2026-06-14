@@ -12,6 +12,9 @@ const ASSET_KEYS_BY_SOURCE: Record<string, string> = {
   'mip.gold.funnel_snapshot_daily': 'funnel_snapshot_daily',
   'mip.gold.county_rollup': 'county_rollup',
   'mip.gold.zip_rollup': 'zip_rollup',
+  'mip.silver.listing_activity': 'listing_activity',
+  'mip.silver.heloc_propensity': 'heloc_propensity',
+  'mip.silver.refi_propensity': 'refi_propensity',
   'mip.semantics.lead_generation_metric_view': 'lead_generation_metric_view',
   'mip.semantics.segment_performance_metric_view': 'segment_performance_metric_view',
   'mip.semantics.borrower_opportunity_metric_view': 'borrower_opportunity_metric_view',
@@ -91,6 +94,8 @@ export function drawerForAsset(rawSource: string): DrawerSource | null {
   if (key.includes('owner_transfer_events') || key.includes('owner_transfer')) return DRAWER_SOURCES.ownerTransfer;
   if (key.includes('avm')) return DRAWER_SOURCES.avm;
   if (key.includes('lien_current') || key.includes('voluntary_lien')) return DRAWER_SOURCES.lien;
+  if (key.includes('heloc_propensity')) return enrichAsset(DRAWER_SOURCES.helocPropensity);
+  if (key.includes('refi_propensity')) return enrichAsset(DRAWER_SOURCES.refiPropensity);
   if (key.includes('mls') || key.includes('listing')) return DRAWER_SOURCES.mls;
   if (key.includes('permit')) return DRAWER_SOURCES.permit;
   if (key.includes('population') || key.includes('public_records')) return DRAWER_SOURCES.population;
@@ -155,6 +160,12 @@ export function descriptorForEvidence(event: {
   }
   if (product.includes('owner transfer') || signal.includes('recent_sale')) {
     return withEventDate(DRAWER_SOURCES.ownerTransfer, event.timestamp);
+  }
+  if (signal.includes('heloc_propensity') || product.includes('heloc propensity')) {
+    return withEventDate(DRAWER_SOURCES.helocPropensity, event.timestamp);
+  }
+  if (signal.includes('refi_propensity') || product.includes('refi propensity')) {
+    return withEventDate(DRAWER_SOURCES.refiPropensity, event.timestamp);
   }
   if (signal.includes('listing') || product.includes('mls')) return withEventDate(DRAWER_SOURCES.mls, event.timestamp);
   if (signal.includes('permit') || product.includes('permit')) return withEventDate(DRAWER_SOURCES.permit, event.timestamp);
@@ -231,7 +242,8 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
     signals: [
       { label: 'Segment count', source: 'segment_population.count', value: 'borrowers matching predicate' },
       { label: 'Average score', source: 'segment_population.avg_score', value: 'population average' },
-      { label: 'Blocked feeds', source: 'listed / permit', value: '0 until Cotality shares land' },
+      { label: 'Listing segment', source: 'borrower_360.listed_for_sale', value: 'live from Cotality MLS' },
+      { label: 'HELOC intent segment', source: 'borrower_360.has_heloc_propensity_trigger', value: 'live from Cotality propensity' },
     ],
   },
 
@@ -421,7 +433,11 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
       { layer: 'GOLD', name: 'mip.gold.evidence_events', meta: 'sanitized evidence stream' },
     ],
     signals: [
-      { label: 'Controlled vocab', source: 'evidence_events.signal_type', value: 'no permit/listing until shares land' },
+      {
+        label: 'Controlled vocab',
+        source: 'evidence_events.signal_type',
+        value: 'listing, HELOC propensity, refi propensity live; permit reserved',
+      },
       { label: 'Display text', source: 'evidence_events.display_text', value: 'deterministic, no PII' },
       { label: 'Evidence confidence', source: 'evidence_events.confidence', value: '0..1 per signal' },
     ],
@@ -437,8 +453,10 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
       'Non-PII readiness ledger showing which Cotality, FRED, first-party, and gold assets are live, synthetic-demo, pending, empty, or blocked. Used for governed data-gap answers so missing feeds are not treated as zero demand.',
     lineage: [
       { layer: 'GOLD', name: 'mip.gold.source_readiness', meta: 'source status summary' },
-      { layer: 'SOURCE', name: 'Cotality MLS/Listings', meta: 'pending Delta Share' },
-      { layer: 'SOURCE', name: 'Cotality Building Permits', meta: 'pending Delta Share' },
+      { layer: 'SOURCE', name: 'Cotality MLS/Listings', meta: 'live Delta Share' },
+      { layer: 'SOURCE', name: 'Cotality HELOC Propensity', meta: 'live model score feed' },
+      { layer: 'SOURCE', name: 'Cotality Refi Propensity', meta: 'live model score feed' },
+      { layer: 'SOURCE', name: 'Cotality Building Permits', meta: 'roadmap: true filed permits not yet present' },
       { layer: 'SOURCE', name: 'FRED MORTGAGE30US', meta: 'weekly market-rate feed' },
       { layer: 'FIRST PARTY', name: 'Summit demo feeds', meta: 'synthetic-demo lender data' },
     ],
@@ -537,7 +555,7 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
     assetPath: 'mip.semantics.segment_performance_metric_view',
     usedIn: ['Analytics segments', 'Genie'],
     description:
-      'Curated semantic view for segment comparison questions. It uses the same segment predicates as the app and preserves pending-feed behavior for MLS and permit segments.',
+      'Curated semantic view for segment comparison questions. It uses the same segment predicates as the app, including live MLS listing rows and Cotality HELOC propensity for intent.',
     lineage: [
       { layer: 'GOLD', name: 'mip.gold.segment_population', meta: 'segment counts and averages' },
       { layer: 'GOLD', name: 'mip.gold.borrower_360', meta: 'segment predicate source' },
@@ -546,7 +564,8 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
     signals: [
       { label: 'Segment', source: 'segment_population.segment_code', value: 'controlled Module 0 vocab' },
       { label: 'Borrowers', source: 'segment_population.count', value: 'predicate count' },
-      { label: 'Pending feeds', source: 'listed / permit', value: 'blocked false today' },
+      { label: 'Listed for Sale', source: 'borrower_360.listed_for_sale', value: 'current MLS row' },
+      { label: 'HELOC Intent', source: 'borrower_360.has_heloc_propensity_trigger', value: 'score >= 700' },
     ],
   },
 
@@ -629,7 +648,8 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
     signals: [
       { label: 'Input', source: 'borrower_360.rate_spread_bps', value: 'rate_spread_bps' },
       { label: 'Input', source: 'borrower_360.equity_pct', value: 'equity_pct' },
-      { label: 'Input', source: 'borrower_360.has_permit', value: 'has_permit' },
+      { label: 'Input', source: 'borrower_360.has_heloc_propensity_trigger', value: 'HELOC intent' },
+      { label: 'Input', source: 'borrower_360.has_permit', value: 'filed permit only' },
       { label: 'Input', source: 'borrower_360.listed_for_sale', value: 'listed_for_sale' },
       { label: 'Input', source: 'borrower_360.is_investor', value: 'is_investor' },
       { label: 'Input', source: 'borrower_360.is_current_customer', value: 'is_current_customer' },
@@ -637,37 +657,80 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
     ],
   },
 
-  permit: {
-    title: 'Permit signal',
-    short: 'Building Permits - pending',
+  helocPropensity: {
+    title: 'HELOC propensity signal',
+    short: 'HELOC propensity',
+    assetKey: 'heloc_propensity',
+    assetPath: 'mip.silver.heloc_propensity',
     description:
-      'Cotality Building Permits share is pending. The signal is modeled but blocked false until the feed lands, so permit-sourced borrower counts remain 0 today.',
+      'Cotality HELOC propensity score feed used as the live HELOC-intent overlay. This is a model propensity signal, not a filed building permit.',
     lineage: [
-      { layer: 'SOURCE', name: 'cotality.permits.building', meta: 'Delta Share - pending' },
-      { layer: 'JOIN', name: 'join.permit_to_clip', meta: 'pending feed arrival' },
-      { layer: 'SEMANTIC', name: 'metrics.permit_signal', meta: 'blocked false until landed' },
+      { layer: 'SOURCE', name: 'cotality_mortgage_data.corelogic.entrada_eval_heloc_propensity_score_v1', meta: 'Cotality HELOC propensity' },
+      { layer: 'SILVER', name: 'mip.silver.heloc_propensity', meta: 'latest score by CLIP' },
+      { layer: 'GOLD', name: 'mip.gold.borrower_360', meta: 'has_heloc_propensity_trigger = score >= 700' },
+      { layer: 'GOLD', name: 'mip.gold.evidence_events', meta: 'heloc_propensity evidence rows' },
     ],
     signals: [
-      { label: 'Readiness', source: 'admin.sources', value: 'roadmap' },
-      { label: 'has_permit', source: 'mip.gold.borrower_360', value: 'blocked false' },
-      { label: 'Permit rows', source: 'cotality.permits.building', value: 'pending share' },
+      { label: 'Score', source: 'heloc_propensity_score', value: '0-999' },
+      { label: 'Trigger', source: 'has_heloc_propensity_trigger', value: '>= 700' },
+      { label: 'Run date', source: 'heloc_propensity_run_date', value: 'model run date' },
+    ],
+  },
+
+  refiPropensity: {
+    title: 'Refi propensity signal',
+    short: 'Refi propensity',
+    assetKey: 'refi_propensity',
+    assetPath: 'mip.silver.refi_propensity',
+    description:
+      'Cotality refinance propensity score feed. It supplements the deterministic in-the-money economics without replacing the rate-spread threshold.',
+    lineage: [
+      { layer: 'SOURCE', name: 'cotality_mortgage_data.corelogic.entrada_eval_refi_propensity_score_v1', meta: 'Cotality refinance propensity' },
+      { layer: 'SILVER', name: 'mip.silver.refi_propensity', meta: 'latest score by CLIP' },
+      { layer: 'GOLD', name: 'mip.gold.borrower_360', meta: 'has_refi_propensity_trigger = score >= 700' },
+      { layer: 'GOLD', name: 'mip.gold.evidence_events', meta: 'refi_propensity evidence rows' },
+    ],
+    signals: [
+      { label: 'Score', source: 'refi_propensity_score', value: '0-999' },
+      { label: 'Trigger', source: 'has_refi_propensity_trigger', value: '>= 700' },
+      { label: 'Run date', source: 'refi_propensity_run_date', value: 'model run date' },
+    ],
+  },
+
+  permit: {
+    title: 'Building permit signal',
+    short: 'Building Permits - pending',
+    description:
+      'True filed building-permit rows are still pending. The app keeps has_permit false until a governed permit table with filing date, type, value, and source record ID is present.',
+    lineage: [
+      { layer: 'SOURCE', name: 'cotality.permits.building', meta: 'Delta Share - pending' },
+      { layer: 'JOIN', name: 'join.permit_to_clip', meta: 'pending true permit source' },
+      { layer: 'GOLD', name: 'mip.gold.borrower_360.has_permit', meta: 'false until filed-permit evidence exists' },
+    ],
+    signals: [
+      { label: 'Readiness', source: 'mip.gold.source_readiness', value: 'roadmap' },
+      { label: 'has_permit', source: 'mip.gold.borrower_360', value: 'filed permit only' },
+      { label: 'HELOC intent substitute', source: 'mip.silver.heloc_propensity', value: 'separate signal' },
     ],
   },
 
   mls: {
     title: 'MLS listing signal',
-    short: 'MLS - pending',
+    short: 'MLS listing',
+    assetKey: 'listing_activity',
+    assetPath: 'mip.silver.listing_activity',
     description:
-      'Cotality MLS listing share is pending. Listed-for-sale predicates are blocked false until the Delta Share lands, so listing chips read as a source-dependency state rather than live listing evidence.',
+      'Cotality MLS listing activity joined to CLIP. Active and under-contract current rows drive listed_for_sale, purchase-intent segmentation, and listing evidence.',
     lineage: [
-      { layer: 'SOURCE', name: 'cotality.mls.listings', meta: 'Delta Share - pending' },
-      { layer: 'JOIN', name: 'join.listing_to_clip', meta: 'pending feed arrival' },
-      { layer: 'SEMANTIC', name: 'metrics.listed_for_sale_flag', meta: 'blocked false until landed' },
+      { layer: 'SOURCE', name: 'cotality_mortgage_data.corelogic.entrada_eval_mls_listing_v1', meta: 'Cotality MLS listing feed' },
+      { layer: 'SILVER', name: 'mip.silver.listing_activity', meta: 'current listing row by CLIP' },
+      { layer: 'GOLD', name: 'mip.gold.borrower_360', meta: 'listed_for_sale flag and listing attributes' },
+      { layer: 'GOLD', name: 'mip.gold.evidence_events', meta: 'listing evidence rows' },
     ],
     signals: [
-      { label: 'Readiness', source: 'admin.sources', value: 'roadmap' },
-      { label: 'listed_for_sale', source: 'mip.gold.borrower_360', value: 'blocked false' },
-      { label: 'Listing rows', source: 'cotality.mls.listings', value: 'pending share' },
+      { label: 'Readiness', source: 'mip.gold.source_readiness', value: 'live' },
+      { label: 'listed_for_sale', source: 'mip.gold.borrower_360', value: 'active or under contract' },
+      { label: 'Listing evidence', source: 'mip.gold.evidence_events', value: 'signal_type = listing' },
     ],
   },
 

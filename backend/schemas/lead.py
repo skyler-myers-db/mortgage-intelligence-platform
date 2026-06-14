@@ -58,11 +58,11 @@ class LeadSummary(BaseModel):
     # gold.borrower_360 through gold.lead_population so the
     # /segment-intelligence page can run real client-side predicates
     # against occupancy, owner-link (related properties), lien state, and
-    # purchase intent. All default to safe "unknown" values so older
+    # purchase intent and propensity overlays. All default to safe "unknown" values so older
     # cached rows + the Borrower360-driven in-process test fixture keep
-    # validating. `has_permit` / `listed_for_sale` are BLOCKED FALSE in
-    # gold until Cotality Building Permits + MLS Delta shares land --
-    # the UI surfaces a "data-dependency pending" note for that filter.
+    # validating. `listed_for_sale` is live from Cotality MLS. `has_permit`
+    # remains FALSE until a true filed-permit source exists; HELOC
+    # propensity is exposed separately and must not be described as a permit.
     is_owner_occupied: bool = False
     is_investor: bool = False
     is_current_customer: bool = False
@@ -73,6 +73,19 @@ class LeadSummary(BaseModel):
     second_pos_amount: int = 0
     has_permit: bool = False
     listed_for_sale: bool = False
+    listing_status_category: str | None = None
+    listing_status_description: str | None = None
+    listing_date: str | None = None
+    listing_status_date: str | None = None
+    listing_price: int | None = None
+    listing_days_on_market: int | None = None
+    listing_service: str | None = None
+    heloc_propensity_score: int | None = None
+    heloc_propensity_run_date: str | None = None
+    has_heloc_propensity_trigger: bool = False
+    refi_propensity_score: int | None = None
+    refi_propensity_run_date: str | None = None
+    has_refi_propensity_trigger: bool = False
     current_lender_ref: str | None = None
     # Marketing-contactability fields. These are sourced from first-party
     # CRM/campaign membership, not Cotality, and intentionally carry only

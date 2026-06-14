@@ -53,8 +53,10 @@
 --        a permit is on file.
 --
 --   3. has_permit AND equity_pct >= heloc_equity_min
---        The pure HELOC lane. A recent permit is the classic renovation
---        trigger; strong equity makes the HELOC viable. Fires only when
+--        The pure HELOC lane. `has_permit` is the legacy boolean slot for
+--        HELOC-intent evidence; callers may pass filed permits OR a governed
+--        HELOC-propensity trigger, while preserving separate source fields.
+--        Strong equity makes the HELOC viable. Fires only when
 --        refi economics are NOT strong enough to combine (branch 2 failed),
 --        so this is specifically the "permit, no refi need" story.
 --

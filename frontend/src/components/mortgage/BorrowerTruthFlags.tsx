@@ -17,6 +17,8 @@ type TruthFlagView = {
 export function truthFlagLabels(borrower: LeadSummary, compact = false): TruthFlagView[] {
   const hasAbsenteeSignal = 'is_absentee' in borrower;
   const hasCorporateSignal = 'is_corporate_owner' in borrower;
+  const hasFiledPermit = borrower.has_permit === true;
+  const hasHelocIntent = hasFiledPermit || borrower.has_heloc_propensity_trigger === true;
   const flags: TruthFlag[] = [
     {
       label: 'current customer',
@@ -79,14 +81,14 @@ export function truthFlagLabels(borrower: LeadSummary, compact = false): TruthFl
       label: 'listing',
       active: borrower.listed_for_sale === true,
       activeLabel: 'Listed for sale',
-      inactiveLabel: 'Listing feed pending',
+      inactiveLabel: 'No listing trigger',
       activeVariant: 'warning',
     },
     {
-      label: 'permit',
-      active: borrower.has_permit === true,
-      activeLabel: 'Permit activity',
-      inactiveLabel: 'Permit feed pending',
+      label: 'heloc intent',
+      active: hasHelocIntent,
+      activeLabel: hasFiledPermit ? 'Permit activity' : 'HELOC intent',
+      inactiveLabel: 'No HELOC intent',
       activeVariant: 'warning',
     },
     {

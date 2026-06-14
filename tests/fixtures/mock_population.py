@@ -62,7 +62,7 @@ EVIDENCE = [
     EvidenceEvent(evidence_id="ev-001", source_product="Voluntary Lien", source_table="cotality.liens.voluntary_lien", signal_type="rate_spread", signal_value="+88 bps", display_text="Current lien rate is 87.5 bps above par.", confidence=0.92, timestamp="2026-04-20T06:12:00Z"),
     EvidenceEvent(evidence_id="ev-002", source_product="AVM", source_table="cotality.avm.current", signal_type="equity", signal_value="$285K", display_text="Estimated equity is above HELOC threshold.", confidence=0.88, timestamp="2026-04-20T06:12:00Z"),
     EvidenceEvent(evidence_id="ev-003", source_product="Mortgage Market Analytics", source_table="cotality.mma.refi_activity", signal_type="market_trend", signal_value="+28% QoQ", display_text="Local refi activity is up 28% quarter over quarter.", confidence=0.84, timestamp="2026-04-20T06:12:00Z"),
-    EvidenceEvent(evidence_id="ev-004", source_product="Permits", source_table="cotality.permits.recent", signal_type="permit", signal_value="$72K kitchen", display_text="High-value remodel permit filed in the last 90 days.", confidence=0.90, timestamp="2026-04-18T14:03:00Z"),
+    EvidenceEvent(evidence_id="ev-004", source_product="Cotality HELOC Propensity", source_table="mip.silver.heloc_propensity", signal_type="heloc_propensity", signal_value="812/999", display_text="Cotality HELOC propensity score is 812/999.", confidence=0.90, timestamp="2026-04-18T14:03:00Z"),
     EvidenceEvent(evidence_id="ev-005", source_product="AVM Refresh", source_table="cotality.avm.refresh", signal_type="equity_delta", signal_value="+14% YoY", display_text="AVM refresh lifted estimated value materially over 12 months.", confidence=0.86, timestamp="2026-04-15T09:41:00Z"),
     EvidenceEvent(evidence_id="ev-006", source_product="Owner Link", source_table="cotality.ownerlink.related_properties", signal_type="multi_property", signal_value="3 properties", display_text="Owner Link identifies three related properties under the same entity.", confidence=0.81, timestamp="2026-04-12T18:22:00Z"),
     EvidenceEvent(evidence_id="ev-007", source_product="Voluntary Lien", source_table="cotality.liens.voluntary_lien", signal_type="competitor_lien", signal_value="competitor refi", display_text="Competitor lien recorded on Owner Link relationship within 60 days.", confidence=0.89, timestamp="2026-04-10T07:55:00Z"),
@@ -83,8 +83,8 @@ def _pick_evidence(ids: list[str]) -> list[EvidenceEvent]:
 # ---------------------------------------------------------------------------
 SEGMENTS = [
     SegmentSummary(code="itm", name="In the Money", count=12840, delta="+18%", avg_score=82, description="Lien rate >= 75 bps above par and equity >= 15%.", color="#5CE1E6"),
-    SegmentSummary(code="listed", name="Listed for Sale", count=0, delta="pending", avg_score=0, description="Pending Cotality MLS share; blocked false until landed.", color="#F59E0B"),
-    SegmentSummary(code="permit", name="Permit Activity", count=0, delta="pending", avg_score=0, description="Pending Cotality Building Permits share; blocked false until landed.", color="#A78BFA"),
+    SegmentSummary(code="listed", name="Listed for Sale", count=1840, delta="+9%", avg_score=77, description="Current active or under-contract Cotality MLS listing.", color="#F59E0B"),
+    SegmentSummary(code="permit", name="HELOC Intent", count=2405, delta="+11%", avg_score=80, description="Cotality HELOC propensity score indicates equity-credit demand.", color="#A78BFA"),
     SegmentSummary(code="investor", name="Investor / Multi-Property", count=1892, delta="+6%", avg_score=79, description="Owner Link shows 2+ properties or repeat behavior.", color="#F472B6"),
     SegmentSummary(code="equity", name="Home Equity Candidate", count=6320, delta="+14%", avg_score=76, description="Strong equity and prior cash-out/HELOC propensity.", color="#66C5FF"),
     SegmentSummary(code="retention", name="Retention Risk", count=3471, delta="+4%", avg_score=88, description="Current customer with rate spread above the retention threshold; listing and competitor overlays join only when live evidence exists.", color="#34D399"),
@@ -105,7 +105,10 @@ SEGMENTS = [
 #   current_rate   : current lien rate (percent, e.g. 6.25)
 #   avm            : AVM value (int USD)
 #   lien           : current lien balance (int USD)
-#   permit/listed/investor/customer/comp_lien : fn_next_best_offer booleans
+#   permit/listed/investor/customer/comp_lien : fn_next_best_offer booleans.
+#       `permit` is the legacy test fixture name for live HELOC intent; the
+#       generated API object keeps has_permit false unless `filed_permit` is
+#       explicitly set.
 #   components     : 5-tuple of lead_score inputs (eco, intent, fit, rel, ev)
 #   why_now        : one-sentence orchestrator hook
 #   evidence_ids   : which rows from EVIDENCE back this borrower
@@ -166,19 +169,19 @@ _BORROWER_SPECS: list[dict] = [
      "segs": ["permit", "equity"], "current_rate": 5.25, "avm": 810000, "lien": 420000,
      "permit": True, "listed": False, "investor": False, "customer": False, "comp_lien": False,
      "components": {"economic_incentive": 60, "intent_trigger": 85, "fit": 78, "relationship": 60, "evidence": 80},
-     "why_now": "$72K remodel permit plus 48% equity — permit-driven HELOC opportunity.",
+     "why_now": "Cotality HELOC propensity plus 48% equity — HELOC opportunity.",
      "evidence_ids": ["ev-002", "ev-004"], "related_props": 1},
     {"bid": "B-57041", "name": "Jennifer Walsh", "city": "Seattle", "state": "WA", "zip": "98115",
      "segs": ["permit", "equity"], "current_rate": 5.00, "avm": 675000, "lien": 325000,
      "permit": True, "listed": False, "investor": False, "customer": False, "comp_lien": False,
      "components": {"economic_incentive": 55, "intent_trigger": 82, "fit": 76, "relationship": 60, "evidence": 78},
-     "why_now": "Kitchen/bath permit filed with 52% equity — HELOC is the right lane.",
+     "why_now": "Cotality HELOC propensity with 52% equity — HELOC is the right lane.",
      "evidence_ids": ["ev-004", "ev-005"], "related_props": 1},
     {"bid": "B-53987", "name": "Michael & Jessica Hoffmann", "city": "Chicago", "state": "IL", "zip": "60614",
      "segs": ["permit", "equity"], "current_rate": 5.25, "avm": 595000, "lien": 275000,
      "permit": True, "listed": False, "investor": False, "customer": False, "comp_lien": False,
      "components": {"economic_incentive": 58, "intent_trigger": 80, "fit": 75, "relationship": 62, "evidence": 78},
-     "why_now": "Recent permit with 54% equity points to HELOC demand.",
+     "why_now": "Cotality HELOC propensity with 54% equity points to HELOC demand.",
      "evidence_ids": ["ev-002", "ev-004"], "related_props": 1},
 
     # --- refi (spread>=75 AND 15<=equity<35): 3 total ---
@@ -294,9 +297,12 @@ def _build_borrower(spec: dict) -> tuple[Borrower360, dict]:
     equity = round(100 * (1 - lien / avm))
     ltv = round(100 * lien / avm)
 
+    has_heloc_intent = bool(spec.get("heloc_intent", spec["permit"]))
+    has_filed_permit = bool(spec.get("filed_permit", False))
+
     code = next_best_offer(
         spread, equity,
-        spec["permit"], spec["listed"], spec["investor"],
+        has_heloc_intent, spec["listed"], spec["investor"],
         spec["customer"], spec["comp_lien"],
         _MIN_SP, _MIN_EQ, _HELOC_MIN, _CASHOUT_MIN, _RETENTION_MIN,
     )
@@ -347,8 +353,14 @@ def _build_borrower(spec: dict) -> tuple[Borrower360, dict]:
         is_investor=bool(spec["investor"]),
         is_current_customer=bool(spec["customer"]),
         is_competitor_lien=bool(spec["comp_lien"]),
-        has_permit=bool(spec["permit"]),
+        has_permit=has_filed_permit,
         listed_for_sale=bool(spec["listed"]),
+        heloc_propensity_score=812 if has_heloc_intent else None,
+        heloc_propensity_run_date="2026-06-09" if has_heloc_intent else None,
+        has_heloc_propensity_trigger=has_heloc_intent,
+        refi_propensity_score=760 if itm else None,
+        refi_propensity_run_date="2026-06-09" if itm else None,
+        has_refi_propensity_trigger=itm,
         second_pos_amount=0,
         clip_id=clip_demo,
         owner_link_id=f"ol_demo_{spec['bid'].replace('B-', '')}",
@@ -367,7 +379,11 @@ def _build_borrower(spec: dict) -> tuple[Borrower360, dict]:
     offer_inputs = {
         "rate_spread_bps": spread,
         "equity_pct": equity,
-        "has_permit": spec["permit"],
+        "has_permit": has_filed_permit,
+        "has_heloc_propensity_trigger": has_heloc_intent,
+        "heloc_propensity_score": 812 if has_heloc_intent else None,
+        "has_refi_propensity_trigger": itm,
+        "refi_propensity_score": 760 if itm else None,
         "listed_for_sale": spec["listed"],
         "is_investor": spec["investor"],
         "is_current_customer": spec["customer"],

@@ -7,7 +7,7 @@ question:
     actually match what the raw Cotality Delta Share contains for the
     refreshed source coverage?
 
-For each of the five UNBLOCKED segments:
+For each segment:
 
     * ``itm``       -- rate_spread_bps >= 75 AND equity_pct >= 15
     * ``investor``  -- related_property_count >= 2 OR owner_is_corporate
@@ -17,7 +17,10 @@ For each of the five UNBLOCKED segments:
                        OR is_competitor_lien OR listed_for_sale), where
                        current-customer can come from the lender dictionary
                        or the optional first-party servicing feed.
-    * ``listed`` / ``permit``   -- BLOCKED per data-contract §9; must be 0.
+    * ``listed``   -- current active/under-contract Cotality MLS listing
+    * ``permit``   -- legacy segment code displayed as HELOC Intent; backed
+                      by Cotality HELOC propensity >= 700. True filed
+                      building permits remain separate and pending.
 
 we compute a segment count per discovered source state from TWO independent
 paths:
@@ -31,9 +34,6 @@ paths:
        fresh; otherwise the test would become stale every weekly FRED publish.
     2. GOLD      -- ``SELECT state, COUNT(*) FROM mip.gold.borrower_360
                      WHERE array_contains(segment_codes, '<segment>')``.
-
-For the BLOCKED segments (listed, permit) the reference value is a hard
-``0`` per the data-contract and we assert gold emits exactly 0.
 
 Parity tolerance: a segment count must match within 0.5% per state per
 segment, OR be exactly equal when count < 1000 (avoids a 1-row
@@ -374,17 +374,66 @@ def _retention_reference_sql(mortgage30us_fraction: float) -> str:
         tenant-driven while validating the lender-owned feed contract.
       * is_competitor_lien: servicer known AND not current-customer, matching
         gold_borrower_360. This makes is_current_customer and
-        is_competitor_lien mutually exclusive by construction. With
-        listed_for_sale BLOCKED -> FALSE, the OR branch collapses to
-        current-customer AND rate_spread_bps >= 50.
+        is_competitor_lien mutually exclusive by construction.
+      * listed_for_sale: current active/under-contract MLS row, independently
+        derived from the raw listing table.
     """
     return f"""
-    WITH servicing AS (
+    WITH lien AS (
+      SELECT
+        clip,
+        situs_state,
+        first_position_currently_assigned_lender_company_name,
+        CASE
+          WHEN first_position_mortgage_interest_rate IS NULL THEN NULL
+          WHEN CAST(first_position_mortgage_interest_rate AS DOUBLE) < 1 THEN NULL
+          WHEN CAST(first_position_mortgage_interest_rate AS DOUBLE) > 15 THEN 0.15
+          ELSE CAST(first_position_mortgage_interest_rate AS DOUBLE) / 100.0
+        END AS first_pos_rate,
+        TRY_TO_DATE(NULLIF(CAST(value_as_of_date_mktg AS STRING), '0'), 'yyyyMMdd')
+          AS avm_as_of_date,
+        TRY_TO_DATE(CAST(NULLIF(first_position_mortgage_date, 0) AS STRING), 'yyyyMMdd')
+          AS first_pos_date,
+        CAST(total_amount_of_open_mortgage_liens AS BIGINT) AS total_open_lien_balance
+      FROM cotality_mortgage_data.corelogic.entrada_eval_voluntary_lien_status_marketing_v2
+      WHERE situs_state IS NOT NULL AND clip IS NOT NULL
+      QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY clip
+        ORDER BY avm_as_of_date DESC, first_pos_date DESC, total_open_lien_balance DESC
+      ) = 1
+    ),
+    servicing AS (
       SELECT
         borrower_id,
         COUNT_IF(servicing_status = 'active') > 0 AS has_active_servicing
       FROM mip.first_party.servicing_portfolio
       GROUP BY borrower_id
+    ),
+    listing AS (
+      SELECT
+        clip,
+        (
+          UPPER(TRIM(COALESCE(most_recent_listing_indicator_derived, 'N'))) = 'Y'
+          AND listing_status_category_code_standardized IN ('A', 'U')
+        ) AS is_active_listing
+      FROM cotality_mortgage_data.corelogic.entrada_eval_mls_listing_v1
+      WHERE clip IS NOT NULL
+        AND composite_listing_id_derived IS NOT NULL
+        AND UPPER(TRIM(COALESCE(situs_state, listing_address_state))) RLIKE '^[A-Z]{{2}}$'
+        AND UPPER(TRIM(COALESCE(most_recent_listing_indicator_derived, 'N'))) = 'Y'
+      QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY clip
+        ORDER BY
+          CASE WHEN listing_status_category_code_standardized IN ('A', 'U') THEN 1 ELSE 0 END DESC,
+          TRY_TO_TIMESTAMP(CAST(COALESCE(
+            status_change_date_and_time_standardized,
+            last_status_change_date,
+            last_listing_date_and_time_standardized,
+            listing_date,
+            original_listing_date
+          ) AS STRING)) DESC,
+          COALESCE(updated_at, _meta_loaded_at) DESC
+      ) = 1
     ),
     calc AS (
       SELECT
@@ -395,23 +444,108 @@ def _retention_reference_sql(mortgage30us_fraction: float) -> str:
           OR COALESCE(s.has_active_servicing, FALSE)
         ) AS is_current_customer,
         CAST(ROUND((
-          CASE
-            WHEN l.first_position_mortgage_interest_rate IS NULL THEN NULL
-            WHEN CAST(l.first_position_mortgage_interest_rate AS DOUBLE) <= 0 THEN NULL
-            ELSE CAST(l.first_position_mortgage_interest_rate AS DOUBLE) / 100.0
-          END - {mortgage30us_fraction}) * 10000.0
-        ) AS INT) AS spread_bps
-      FROM cotality_mortgage_data.corelogic.entrada_eval_voluntary_lien_status_marketing_v2 l
+          l.first_pos_rate - {mortgage30us_fraction}) * 10000.0
+        ) AS INT) AS spread_bps,
+        COALESCE(mls.is_active_listing, FALSE) AS listed_for_sale
+      FROM lien l
       LEFT JOIN mip.ref.lender_dictionary lr
         ON UPPER(TRIM(lr.raw_key)) = UPPER(TRIM(l.first_position_currently_assigned_lender_company_name))
       LEFT JOIN servicing s
         ON s.borrower_id = CONCAT('B-', LPAD(UPPER(CONV(CAST(ABS(XXHASH64(l.clip)) AS STRING), 10, 36)), 13, '0'))
+      LEFT JOIN listing mls
+        ON mls.clip = l.clip
       WHERE l.situs_state IS NOT NULL AND l.clip IS NOT NULL
     )
     SELECT state, COUNT(*) AS n
     FROM calc
-    WHERE is_current_customer AND spread_bps >= {RETENTION_MIN_SPREAD}
+    WHERE is_current_customer
+      AND (spread_bps >= {RETENTION_MIN_SPREAD} OR listed_for_sale)
     GROUP BY state ORDER BY state
+    """
+
+
+def _listed_reference_sql() -> str:
+    """Reference listed-for-sale count per state from raw Cotality MLS rows."""
+    return """
+    WITH spine AS (
+      SELECT clip, situs_state AS state
+      FROM cotality_mortgage_data.corelogic.entrada_eval_voluntary_lien_status_marketing_v2
+      WHERE situs_state IS NOT NULL AND clip IS NOT NULL
+      QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY clip
+        ORDER BY
+          TRY_TO_DATE(NULLIF(CAST(value_as_of_date_mktg AS STRING), '0'), 'yyyyMMdd') DESC,
+          TRY_TO_DATE(CAST(NULLIF(first_position_mortgage_date, 0) AS STRING), 'yyyyMMdd') DESC,
+          CAST(total_amount_of_open_mortgage_liens AS BIGINT) DESC
+      ) = 1
+    ),
+    listing AS (
+      SELECT
+        clip,
+        (
+          UPPER(TRIM(COALESCE(most_recent_listing_indicator_derived, 'N'))) = 'Y'
+          AND listing_status_category_code_standardized IN ('A', 'U')
+        ) AS is_active_listing
+      FROM cotality_mortgage_data.corelogic.entrada_eval_mls_listing_v1
+      WHERE clip IS NOT NULL
+        AND composite_listing_id_derived IS NOT NULL
+        AND UPPER(TRIM(COALESCE(situs_state, listing_address_state))) RLIKE '^[A-Z]{2}$'
+        AND UPPER(TRIM(COALESCE(most_recent_listing_indicator_derived, 'N'))) = 'Y'
+      QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY clip
+        ORDER BY
+          CASE WHEN listing_status_category_code_standardized IN ('A', 'U') THEN 1 ELSE 0 END DESC,
+          TRY_TO_TIMESTAMP(CAST(COALESCE(
+            status_change_date_and_time_standardized,
+            last_status_change_date,
+            last_listing_date_and_time_standardized,
+            listing_date,
+            original_listing_date
+          ) AS STRING)) DESC,
+          COALESCE(updated_at, _meta_loaded_at) DESC
+      ) = 1
+    )
+    SELECT s.state, COUNT(*) AS n
+    FROM spine s
+    JOIN listing l ON l.clip = s.clip
+    WHERE l.is_active_listing
+    GROUP BY s.state ORDER BY s.state
+    """
+
+
+def _heloc_intent_reference_sql() -> str:
+    """Reference HELOC-intent count per state from raw HELOC propensity rows."""
+    return """
+    WITH spine AS (
+      SELECT clip, situs_state AS state
+      FROM cotality_mortgage_data.corelogic.entrada_eval_voluntary_lien_status_marketing_v2
+      WHERE situs_state IS NOT NULL AND clip IS NOT NULL
+      QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY clip
+        ORDER BY
+          TRY_TO_DATE(NULLIF(CAST(value_as_of_date_mktg AS STRING), '0'), 'yyyyMMdd') DESC,
+          TRY_TO_DATE(CAST(NULLIF(first_position_mortgage_date, 0) AS STRING), 'yyyyMMdd') DESC,
+          CAST(total_amount_of_open_mortgage_liens AS BIGINT) DESC
+      ) = 1
+    ),
+    heloc AS (
+      SELECT
+        clip,
+        CAST(heloc_model_propensity_score AS INT) AS score
+      FROM cotality_mortgage_data.corelogic.entrada_eval_heloc_propensity_score_v1
+      WHERE clip IS NOT NULL
+        AND UPPER(TRIM(situs_state)) RLIKE '^[A-Z]{2}$'
+      QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY clip
+        ORDER BY heloc_model_propensity_score_run_date DESC NULLS LAST,
+                 _meta_loaded_at DESC NULLS LAST
+      ) = 1
+    )
+    SELECT s.state, COUNT(*) AS n
+    FROM spine s
+    JOIN heloc h ON h.clip = s.clip
+    WHERE h.score >= 700
+    GROUP BY s.state ORDER BY s.state
     """
 
 
@@ -539,9 +673,8 @@ def counts(warehouse: tuple[str, str, str]) -> dict[str, dict[str, dict[str, int
     """Returns ``counts[segment][path][state] -> int``.
 
     path is 'ref' or 'gold'. States are discovered from the refreshed source
-    coverage.
-    BLOCKED segments (listed, permit) have ref = {state: 0, ...} and
-    gold = whatever the warehouse emits (should also be all zero).
+    coverage. The legacy ``permit`` segment code is expected to represent
+    HELOC Intent until true filed-permit rows are available.
     """
     host, token, wh = warehouse
     mortgage30us_fraction = _latest_mortgage30us_fraction(host, token, wh)
@@ -551,7 +684,8 @@ def counts(warehouse: tuple[str, str, str]) -> dict[str, dict[str, dict[str, int
         "equity": _equity_reference_sql(),
         "investor": _investor_reference_sql(),
         "retention": _retention_reference_sql(mortgage30us_fraction),
-        # BLOCKED segments: reference is definitionally 0 per data-contract §9.
+        "listed": _listed_reference_sql(),
+        "permit": _heloc_intent_reference_sql(),
     }
 
     out: dict[str, dict[str, dict[str, int]]] = {}
@@ -582,15 +716,6 @@ def test_segment_count_parity(
     for segment in SEGMENTS:
         ref_map = counts[segment]["ref"]
         gold_map = counts[segment]["gold"]
-
-        # BLOCKED segments: gold must emit zero rows anywhere. Reference is
-        # definitionally empty until the corresponding Cotality feeds arrive.
-        if segment in ("listed", "permit"):
-            assert not gold_map, (
-                f"{segment}: gold emitted rows for blocked segment: {gold_map}. "
-                "Check gold_borrower_360.sql has_permit/listed_for_sale contract."
-            )
-            continue
 
         for state in sorted(set(ref_map) | set(gold_map)):
             ref_n = ref_map.get(state, 0)

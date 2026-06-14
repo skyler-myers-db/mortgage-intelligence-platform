@@ -771,11 +771,11 @@ def build_preview_predicates(
     purchase_intent = (criteria.purchase_intent or "").strip().lower()
     if purchase_intent == "listed for sale":
         clauses.append("listed_for_sale = TRUE")
-    elif purchase_intent == "recent permit activity":
-        clauses.append("has_permit = TRUE")
+    elif purchase_intent in {"recent permit activity", "heloc intent"}:
+        clauses.append("(has_permit = TRUE OR has_heloc_propensity_trigger = TRUE)")
     elif purchase_intent == "both":
         clauses.append("listed_for_sale = TRUE")
-        clauses.append("has_permit = TRUE")
+        clauses.append("(has_permit = TRUE OR has_heloc_propensity_trigger = TRUE)")
 
     relationship = (criteria.lender_relationship or "").strip().lower()
     if relationship == "current customer":

@@ -189,13 +189,9 @@ def _known_data_gaps(question: str, assets: list[str]) -> list[str]:
 def _pending_feed_gaps_from_material(material: str) -> list[str]:
     material = material.lower()
     gaps: list[str] = []
-    if any(token in material for token in ("permit", "building permit", "has_permit")):
+    if any(token in material for token in ("permit", "building permit", "has_permit")) and "heloc_propensity" not in material:
         gaps.append(
-            "Cotality Building Permits feed is pending; permit flags are blocked false today."
-        )
-    if any(token in material for token in ("listing", "listed", "mls", "listed_for_sale")):
-        gaps.append(
-            "Cotality MLS/listing feed is pending; listed-for-sale flags are blocked false today."
+            "Cotality Building Permits feed is pending; filed permit flags remain false until a true permit source is present."
         )
     return gaps
 

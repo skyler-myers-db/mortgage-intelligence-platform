@@ -116,7 +116,7 @@ export interface StateFacts {
 export const SEGMENT_CODE_TO_NAME: Record<string, string> = {
   itm: 'In the Money',
   listed: 'Listed',
-  permit: 'Permit Activity',
+  permit: 'HELOC Intent',
   investor: 'Investor',
   equity: 'Home Equity',
   retention: 'Retention',

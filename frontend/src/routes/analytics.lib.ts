@@ -27,7 +27,7 @@ export const SEGMENT_FILTERS = [
   ['Investor / Multi-Property', 'investor'],
   ['Retention Risk', 'retention'],
   ['Listed for Sale', 'listed'],
-  ['Permit Activity', 'permit'],
+  ['HELOC Intent', 'permit'],
 ] as const satisfies ReadonlyArray<readonly [string, SegmentCode | null]>;
 export const SEGMENT_CODE_TO_OPTION = Object.fromEntries(
   SEGMENT_FILTERS.filter(([, value]) => value !== null).map(([label, value]) => [value, label]),
@@ -48,6 +48,9 @@ export const SIGNAL_FILTERS = [
   ['Recent payoff', 'recent_payoff'],
   ['Recent refi', 'recent_refi'],
   ['Foreclosure stage', 'foreclosure_stage'],
+  ['Listing', 'listing'],
+  ['HELOC propensity', 'heloc_propensity'],
+  ['Refi propensity', 'refi_propensity'],
 ] as const satisfies ReadonlyArray<readonly [string, string | null]>;
 export const SIGNAL_TYPE_TO_OPTION = Object.fromEntries(
   SIGNAL_FILTERS.filter(([, value]) => value !== null).map(([label, value]) => [value, label]),
@@ -239,7 +242,9 @@ export function segmentClass(value: string): string {
   if (text.includes('money') || text === 'itm') return 'analytics-segment--itm';
   if (text.includes('investor')) return 'analytics-segment--investor';
   if (text.includes('listed')) return 'analytics-segment--listed';
-  if (text.includes('permit')) return 'analytics-segment--permit';
+  if (text.includes('permit') || text.includes('heloc') || text.includes('propensity')) {
+    return 'analytics-segment--permit';
+  }
   if (text.includes('retention')) return 'analytics-segment--retention';
   return 'analytics-segment--none';
 }

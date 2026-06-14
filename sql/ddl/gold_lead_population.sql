@@ -62,10 +62,10 @@ CREATE TABLE IF NOT EXISTS mip.gold.lead_population (
   current_lender_ref        STRING             COMMENT 'Public-demo-safe current-servicer reference from borrower_360. Never the raw Cotality lender string.',
   -- Secondary-filter fields (2026-04-23). Carried through from
   -- gold.borrower_360 so /segment-intelligence can run real client-side
-  -- predicates against occupancy, owner-link, lien state, and purchase
-  -- intent. All are NOT NULL because borrower_360 already emits them NOT
-  -- NULL (with BLOCKED FALSE defaults for the permit / listing columns
-  -- until the Cotality Building Permits + MLS Delta shares land).
+  -- predicates against occupancy, owner-link, lien state, purchase intent,
+  -- and HELOC/refi propensity. All booleans are NOT NULL because borrower_360
+  -- already emits them NOT NULL; has_permit remains FALSE until true filed
+  -- permit records land.
   is_owner_occupied         BOOLEAN   NOT NULL COMMENT 'From gold.borrower_360; drives /segment-intelligence DEMOGRAPHICS filter.',
   is_investor               BOOLEAN   NOT NULL COMMENT 'Carried from gold.borrower_360 (derived: multi-property OR corporate OR absentee).',
   is_current_customer       BOOLEAN   NOT NULL COMMENT 'From gold.borrower_360; current servicer or first-party servicing relationship to the tenant lender.',
@@ -74,8 +74,21 @@ CREATE TABLE IF NOT EXISTS mip.gold.lead_population (
   related_property_count    INT       NOT NULL COMMENT 'From gold.borrower_360; drives /segment-intelligence OWNER LINK filter.',
   current_lien_balance      BIGINT    NOT NULL COMMENT 'From gold.borrower_360; drives /segment-intelligence LIEN filter.',
   second_pos_amount         BIGINT             COMMENT 'From gold.borrower_360; nullable (no second-position lien).',
-  has_permit                BOOLEAN   NOT NULL COMMENT 'BLOCKED: FALSE until Cotality Building Permits Delta share lands.',
-  listed_for_sale           BOOLEAN   NOT NULL COMMENT 'BLOCKED: FALSE until Cotality MLS Listings Delta share lands.',
+  has_permit                BOOLEAN   NOT NULL COMMENT 'Filed building-permit flag. FALSE until a true Cotality Building Permits source table is present.',
+  listed_for_sale           BOOLEAN   NOT NULL COMMENT 'TRUE when borrower_360 has a current active/under-contract Cotality MLS listing row.',
+  listing_status_category   STRING             COMMENT 'Cotality standardized MLS listing status category.',
+  listing_status_description STRING            COMMENT 'Display-safe Cotality MLS status description. No address, remarks, agent, phone, or email.',
+  listing_date              DATE               COMMENT 'MLS listing date.',
+  listing_status_date       DATE               COMMENT 'Most recent MLS status/change date.',
+  listing_price             BIGINT             COMMENT 'Current MLS listing price in USD, when supplied.',
+  listing_days_on_market    INT                COMMENT 'MLS days-on-market value, when supplied.',
+  listing_service           STRING             COMMENT 'MLS/listing service label when supplied.',
+  heloc_propensity_score    INT                COMMENT 'Cotality HELOC propensity score, 0..999 in the current feed. Model signal, not a permit filing.',
+  heloc_propensity_run_date DATE               COMMENT 'Cotality HELOC propensity model run date.',
+  has_heloc_propensity_trigger BOOLEAN NOT NULL COMMENT 'TRUE when heloc_propensity_score >= 700. Drives HELOC Intent without setting has_permit.',
+  refi_propensity_score     INT                COMMENT 'Cotality refinance propensity score, 0..999 in the current feed.',
+  refi_propensity_run_date  DATE               COMMENT 'Cotality refinance propensity model run date.',
+  has_refi_propensity_trigger BOOLEAN NOT NULL COMMENT 'TRUE when refi_propensity_score >= 700. Adds intent score context.',
   marketing_eligible        BOOLEAN   NOT NULL COMMENT 'From gold.borrower_360; TRUE only when consent, suppression, and frequency-cap gates are clear.',
   consent_status            STRING    NOT NULL COMMENT 'From gold.borrower_360; opt_in / opt_out / unknown.',
   suppression_reason        STRING             COMMENT 'From gold.borrower_360; controlled suppression reason.',

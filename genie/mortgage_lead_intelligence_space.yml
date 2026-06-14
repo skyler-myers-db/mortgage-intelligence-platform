@@ -11,9 +11,9 @@ name: Mortgage Lead Intelligence
 description: >-
   Conversational analytics over Module 0 gold tables and semantic models for
   the Mortgage Intelligence Platform. Backed by Cotality public records,
-  liens, AVM, and mortgage market data. MLS listing and building-permit feeds
-  are pending Cotality delivery and must be disclosed as unavailable until
-  those feeds are live. Every answer must cite the UC table or metric view it
+  liens, AVM, mortgage market data, MLS listings, and Cotality propensity
+  scores. Building-permit filings remain pending Cotality delivery and must be
+  disclosed as unavailable until that feed is live. Every answer must cite the UC table or metric view it
   drew from so Growth, Lending, and Sales leaders can trust the recommendation
   before outreach.
 
@@ -46,32 +46,30 @@ instructions: |
   Before generating any SQL, classify the question into ONE of these
   buckets and respond accordingly:
 
-  A. SOURCE-GAP QUESTION — the question mentions MLS, listing,
-     listed-for-sale, for-sale, home sale listings, permits, building
-     permits, permit signals, or permit-filed triggers.
+  A. SOURCE-GAP QUESTION — the question mentions permits, building
+     permits, permit signals, permit-filed triggers, remodel permits, or
+     renovation permits.
      This bucket has priority over all other buckets, even when the
      same question also mentions borrowers, equity-crossing events,
-     evidence events, lead scores, geography, or offers. A prompt that
-     combines one live signal with a pending source signal is still a
-     source-gap question. Exact examples of bucket-A questions include
+     evidence events, lead scores, geography, listings, or offers. A prompt
+     that combines one live signal with a pending permit-filing signal is
+     still a source-gap question. Exact examples of bucket-A questions include
      "Which borrowers have both a permit signal and an equity-crossing
-     event in the last 30 days?" and "Show listed-for-sale borrowers by
-     product."
-     → DO NOT generate SQL. DO NOT query `listed_for_sale`,
-     `has_permit`, `segment_codes`, or `mip.gold.evidence_events` for
-     listing/permit predicates. These feeds are pending Cotality
-     delivery, so a SQL result would treat missing data as zero demand.
-     Respond in one paragraph: "Cotality MLS/listing and Building
-     Permits feeds are pending and are not live in this workspace yet.
-     I will not count the missing feed as zero demand. Source:
-     mip.gold.source_readiness." If useful, offer a live alternative
-     such as HELOC/equity, in-the-money refinance, investor, retention,
-     or competitor-lien analysis.
+     event in the last 30 days?"
+     → DO NOT generate SQL for filed permit predicates. DO NOT query
+     `has_permit` or `mip.gold.evidence_events` for permit predicates.
+     Building Permits are pending Cotality delivery, so a SQL result would
+     treat missing permit filings as zero demand. Respond in one paragraph:
+     "Cotality Building Permits are pending and are not live in this workspace
+     yet. I will not count the missing feed as zero demand. Source:
+     mip.gold.source_readiness." If useful, offer a live alternative such as
+     Cotality HELOC propensity, live listed-for-sale, in-the-money refinance,
+     investor, retention, or competitor-lien analysis.
 
      Exact bucket-A examples that must not generate SQL:
        * "How many building permits were filed in the last 30 days in Seattle?"
        * "Which borrowers have both a permit signal and an equity-crossing event?"
-       * "Break down the Listed-for-Sale segment by loan product."
+       * "Show borrowers with remodel permits and strong equity."
 
   PII / INDIVIDUAL-LOOKUP OVERRIDE — before treating a prompt as
      in-scope analytics, refuse any request for names, emails, phone
@@ -155,6 +153,9 @@ instructions: |
       mip.gold.lockin_cohort,
       mip.gold.funnel_snapshot_daily,
       mip.gold.county_rollup, mip.gold.zip_rollup,
+      mip.silver.listing_activity,
+      mip.silver.heloc_propensity,
+      mip.silver.refi_propensity,
       mip.semantics.lead_generation_metric_view,
       mip.semantics.segment_performance_metric_view,
       mip.semantics.borrower_opportunity_metric_view.
@@ -216,8 +217,10 @@ instructions: |
       related_property_count from mip.gold.borrower_360. Do not group by,
       select, or display owner_name_hash, owner_link_id, owner names, or any
       raw/hashed owner identifier.
-    - Never read from mip.raw.*, mip.silver.*, mip_app.*, or any catalog
-      other than `mip`. If asked, refuse and name the in-scope assets.
+    - Never read from mip.raw.*, mip_app.*, untrusted mip.silver.* assets,
+      or any catalog other than `mip`. The only silver assets allowed are
+      the curated listing and propensity tables named in the trusted list.
+      If asked for anything else, refuse and name the in-scope assets.
     - Never list or enumerate tables, schemas, catalogs, or workspace
       metadata (no SHOW TABLES, no INFORMATION_SCHEMA, no system.*).
     - Never run or suggest DDL / DML (CREATE, DROP, ALTER, INSERT, UPDATE,
@@ -228,12 +231,13 @@ instructions: |
     - Never raise an error or return a 5xx response for an off-topic
       question. Out-of-scope questions get the bucket-C redirect text;
       they are NOT failures.
-    - Never fabricate. If data is missing (MLS listings, permits,
-      demographics), say the source feed is pending explicitly.
-      Listed-for-Sale and recent-permits are pending-source gaps because
-      Cotality MLS and Building Permits have not shipped yet; STEP 0
-      bucket A must fire before any SQL generation. Do not treat the
-      missing feeds as zero demand.
+    - Never fabricate. If data is missing (building permits or demographics),
+      say the source feed is pending explicitly. Filed building permits are a
+      pending-source gap because Cotality Building Permits has not shipped yet;
+      STEP 0 bucket A must fire before any filed-permit SQL generation. Do not
+      treat the missing permit feed as zero demand. MLS listed-for-sale is live
+      through `mip.silver.listing_activity`; HELOC intent is live through
+      `mip.silver.heloc_propensity`.
     - Never use thresholds tighter than the data-contract defaults
       unless the user explicitly asks for stricter cuts: in-the-money
       ≥ 75 bps spread and ≥ 15% equity, HELOC eligible ≥ 35%
@@ -295,8 +299,9 @@ trusted_assets:
       score, plus a per-segment national '_ALL' row. Row count grows or
       shrinks with refreshed source coverage. Segment codes: itm, listed, permit, investor,
       equity, retention. Segment membership is derived from
-      gold.borrower_360.segment_codes (already evaluated there with the
-      listed/permit BLOCKED columns forced false). Materialised by
+      gold.borrower_360.segment_codes. `listed` is live from MLS; legacy
+      `permit` is displayed as HELOC Intent and is live from Cotality HELOC
+      propensity while true filed permits remain pending. Materialised by
       sql/transformations/gold_segment_population.sql. Use this table for
       any question that slices or rolls up by segment; prefer the
       segment_performance_metric_view for aggregate KPIs.
@@ -313,10 +318,10 @@ trusted_assets:
     description: >-
       Per-borrower lead score produced by sql/uc_functions/fn_lead_score.sql
       (0-100). Components include rate spread, equity, recency, tenure,
-      owner-link, current-customer, and live lien/market-rate triggers. MLS
-      listing and building-permit inputs are blocked false until their
-      Cotality shares land. Pinned to Python parity in backend/services/scoring.py
-      with golden fixtures.
+      owner-link, current-customer, live lien/market-rate triggers, MLS
+      listing triggers, and Cotality HELOC/refi propensity scores. Filed
+      building-permit inputs stay false until a true permit source lands.
+      Pinned to Python parity in backend/services/scoring.py with golden fixtures.
 
   - name: mip.gold.borrower_360
     kind: table
@@ -343,9 +348,9 @@ trusted_assets:
       Refreshed trigger evidence table of events (rate_spread, equity,
       market_trend, competitor_lien, multi_property, absentee_mailing,
       corporate_owner, recent_refi, recent_payoff, recent_sale,
-      foreclosure_stage) per borrower with a UTC timestamp, confidence, and
-      source-table citation. MLS listing and building-permit trigger feeds
-      are pending Cotality delivery and are blocked false today. Use this for
+      foreclosure_stage, listing, heloc_propensity, refi_propensity) per borrower with a UTC timestamp, confidence, and
+      source-table citation. Filed building-permit trigger feeds are pending
+      Cotality delivery and remain disabled today. Use this for
       supporting proof, timelines, and trigger freshness; offer rationale text
       is generated from the scored borrower and recommendation fields.
 
@@ -353,7 +358,8 @@ trusted_assets:
     kind: table
     description: >-
       Non-PII source readiness summary for governed data-gap answers. Use this
-      table to explain whether Cotality MLS/listing, Cotality Building Permits,
+      table to explain whether Cotality MLS/listing, Cotality HELOC propensity,
+      Cotality Refi propensity, Cotality Building Permits,
       FRED market rates, first-party demo feeds, and gold tables are live,
       synthetic-demo, pending, empty, or blocked. Do not infer missing source
       data as zero borrower demand.
@@ -404,6 +410,25 @@ trusted_assets:
       Discovered ZIP-level geography coverage and marketable borrower
       rollups from the current gold borrower population. ZIP columns are
       categorical identifiers, not numeric measures.
+
+  - name: mip.silver.listing_activity
+    kind: table
+    description: >-
+      Curated Cotality MLS listing activity. Use only for listing source proof
+      and detailed listed-for-sale questions; borrower counts should normally
+      use listed_for_sale or segment_codes in gold/semantic assets.
+
+  - name: mip.silver.heloc_propensity
+    kind: table
+    description: >-
+      Curated Cotality HELOC propensity score by CLIP. This is the live
+      HELOC-intent signal and is not a filed building-permit source.
+
+  - name: mip.silver.refi_propensity
+    kind: table
+    description: >-
+      Curated Cotality refinance propensity score by CLIP. Use as supporting
+      intent evidence alongside deterministic rate-spread and equity math.
 
   - name: mip.semantics.lead_generation_metric_view
     kind: metric_view
@@ -643,18 +668,11 @@ sql_snippets:
       display_name: data freshness timestamp
 
 # 2026-05-04 (FIX Δ4 / Genie accuracy benchmark): the prior sample
-# questions advertised features the data layer does not (yet) ship —
-# specifically permit triggers (gold_evidence_events.sql line 15
-# emits ZERO permit rows; the column is BLOCKED until Cotality
-# Building Permits lands) and listed-for-sale triggers (same
-# story for Cotality MLS). Sample questions that mention either
-# would force Genie to write a query that returns "no candidates"
-# even when the addressable population is large, which the user
-# experienced as a confusing hallucination. The replacement set
-# below stays inside the data the warehouse actually has today —
-    # rate spread, equity, segment membership, lead score, competitor-lien
-    # evidence, retention. When MLS / Permits ship, restore the
-# permit/listing questions in a follow-up commit.
+# questions advertised features the data layer did not ship at the time.
+# MLS listed-for-sale and Cotality propensity feeds are now trusted assets.
+# True filed building-permit triggers remain disabled until Cotality Building
+# Permits lands, so sample questions must not ask Genie to count permit filings
+# as zero demand.
 sample_questions:
   - How many borrowers are currently in-the-money and what is the average rate spread?
   - Which five ZIP codes have the highest count of HELOC-eligible borrowers (equity ≥ 35%)?

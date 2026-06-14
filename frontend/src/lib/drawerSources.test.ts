@@ -72,6 +72,30 @@ describe('descriptorFor', () => {
         signal_type: 'recent_sale',
       }),
     ).toBe(DRAWER_SOURCES.ownerTransfer);
+
+    expect(
+      descriptorForEvidence({
+        source_product: 'MLS',
+        source_table: 'mip.silver.listing_activity',
+        signal_type: 'listing',
+      }),
+    ).toBe(DRAWER_SOURCES.mls);
+
+    expect(
+      descriptorForEvidence({
+        source_product: 'Cotality HELOC Propensity',
+        source_table: 'mip.silver.heloc_propensity',
+        signal_type: 'heloc_propensity',
+      }),
+    ).toBe(DRAWER_SOURCES.helocPropensity);
+
+    expect(
+      descriptorForEvidence({
+        source_product: 'Cotality Refi Propensity',
+        source_table: 'mip.silver.refi_propensity',
+        signal_type: 'refi_propensity',
+      }),
+    ).toBe(DRAWER_SOURCES.refiPropensity);
   });
 
   it('maps Genie trusted assets to specific curated drawers', () => {
@@ -88,12 +112,17 @@ describe('descriptorFor', () => {
     expect(drawerForAsset('mip.semantics.lead_generation_metric_view')).toBe(DRAWER_SOURCES.leadGenerationView);
     expect(drawerForAsset('mip.semantics.segment_performance_metric_view')).toBe(DRAWER_SOURCES.segmentPerformanceView);
     expect(drawerForAsset('mip.semantics.borrower_opportunity_metric_view')).toBe(DRAWER_SOURCES.borrowerOpportunityView);
+    expect(drawerForAsset('mip.silver.listing_activity')).toBe(DRAWER_SOURCES.mls);
+    expect(drawerForAsset('mip.silver.heloc_propensity')).toBe(DRAWER_SOURCES.helocPropensity);
+    expect(drawerForAsset('mip.silver.refi_propensity')).toBe(DRAWER_SOURCES.refiPropensity);
     expect(drawerForAsset('mip_app.action_audit')).toBeNull();
   });
 
   it('maps only trusted app proof assets to in-app asset detail routes', () => {
     expect(assetKeyForSource('mip.gold.lead_population')).toBe('lead_population');
     expect(assetHrefForSource('mip.semantics.borrower_opportunity_metric_view')).toBe('/data-estate/assets/borrower_opportunity_metric_view');
+    expect(assetKeyForSource('mip.silver.listing_activity')).toBe('listing_activity');
+    expect(assetHrefForSource('mip.silver.heloc_propensity')).toBe('/data-estate/assets/heloc_propensity');
     expect(assetKeyForSource('mip.silver.lien_current')).toBeNull();
     expect(assetHrefForSource('mip.first_party.loan_applications')).toBeNull();
   });
@@ -131,6 +160,9 @@ describe('descriptorFor', () => {
       DRAWER_SOURCES.marketRate,
       DRAWER_SOURCES.leadScore,
       DRAWER_SOURCES.nbo,
+      DRAWER_SOURCES.mls,
+      DRAWER_SOURCES.helocPropensity,
+      DRAWER_SOURCES.refiPropensity,
       DRAWER_SOURCES.leadGenerationView,
       DRAWER_SOURCES.segmentPerformanceView,
       DRAWER_SOURCES.borrowerOpportunityView,

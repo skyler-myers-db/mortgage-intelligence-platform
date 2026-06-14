@@ -152,27 +152,35 @@ def _talk_track_pending_claims(path: Path) -> Evidence:
         return Evidence(
             status="unknown",
             evidence=f"{_display_path(path)} was not found.",
-            claim="The demo talk track was not checked for pending MLS/permit disclaimers.",
+            claim="The demo talk track was not checked for MLS/permit source-readiness guardrails.",
         )
 
     text = path.read_text(encoding="utf-8").lower()
-    has_mls_pending = "mls" in text and "pending" in text and "listed-for-sale" in text
+    has_mls_available = (
+        "mls" in text
+        and "listed-for-sale" in text
+        and any(token in text for token in ("live", "available", "connected"))
+    )
     has_permit_pending = "building permits" in text and "pending" in text
-    has_no_claim_guard = "do not call mls or permit overlays implemented" in text
-    if has_mls_pending and has_permit_pending and has_no_claim_guard:
+    has_no_claim_guard = (
+        "do not call building permits implemented" in text
+        or "do not claim building permits" in text
+        or "do not claim permit filings" in text
+    )
+    if has_mls_available and has_permit_pending and has_no_claim_guard:
         return Evidence(
             status="passed",
-            evidence=f"{_display_path(path)} names MLS/listing and building-permit dependencies as pending.",
-            claim="The talk track includes explicit pending-feed guardrails.",
+            evidence=f"{_display_path(path)} names MLS/listing as live and building permits as pending.",
+            claim="The talk track includes explicit source-readiness guardrails.",
         )
 
     return Evidence(
         status="failed",
         evidence=(
             f"{_display_path(path)} is missing one or more explicit pending-feed guardrails "
-            "for MLS/listing or building permits."
+            "for live MLS/listing and pending building permits."
         ),
-        claim="The demo talk track does not adequately prevent feed overclaims.",
+        claim="The demo talk track does not adequately prevent source overclaims.",
     )
 
 

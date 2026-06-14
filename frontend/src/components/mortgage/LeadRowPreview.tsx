@@ -87,6 +87,12 @@ export function RowPreview({ lead, approval }: { lead: LeadSummary; approval?: s
           {lead.has_permit === true && (
             <EvidenceChip source={DRAWER_SOURCES.permit}>{DRAWER_SOURCES.permit.title}</EvidenceChip>
           )}
+          {lead.has_heloc_propensity_trigger === true && (
+            <EvidenceChip source={DRAWER_SOURCES.helocPropensity}>{DRAWER_SOURCES.helocPropensity.title}</EvidenceChip>
+          )}
+          {lead.has_refi_propensity_trigger === true && (
+            <EvidenceChip source={DRAWER_SOURCES.refiPropensity}>{DRAWER_SOURCES.refiPropensity.title}</EvidenceChip>
+          )}
           {lead.listed_for_sale === true && (
             <EvidenceChip source={DRAWER_SOURCES.mls}>{DRAWER_SOURCES.mls.title}</EvidenceChip>
           )}

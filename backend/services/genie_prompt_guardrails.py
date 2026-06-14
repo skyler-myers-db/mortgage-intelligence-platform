@@ -57,10 +57,6 @@ _PII_PROMPT_PATTERNS: tuple[re.Pattern[str], ...] = (
 
 _SOURCE_GAP_PROMPT_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(
-        r"\b(?:mls|listing|listed-for-sale|for-sale|home\s+sale\s+listings?)\b",
-        re.IGNORECASE,
-    ),
-    re.compile(
         r"\b(?:permits?|building\s+permits?|permit-filed|permit\s+signals?)\b",
         re.IGNORECASE,
     ),

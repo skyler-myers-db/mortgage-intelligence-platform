@@ -215,16 +215,20 @@ def test_manifest_references_every_gold_table() -> None:
     )
 
 
-def test_borrower_360_declares_blocked_columns() -> None:
-    """Data-contract §9: has_permit and listed_for_sale are BLOCKED FALSE
-    until Cotality Permits + MLS land. The columns must still exist on
-    gold.borrower_360 so the scoring layer can read a stable value."""
+def test_borrower_360_declares_listing_permit_and_propensity_columns() -> None:
+    """Cotality MLS is live, true filed permits remain fail-closed, and
+    propensity model signals must stay separate from filed-permit facts."""
     text = (DDL_DIR / "gold_borrower_360.sql").read_text(encoding="utf-8")
     blocks = _create_table_blocks(text)
     assert blocks
     declared = _declared_column_names_in_block(blocks[0])
-    assert "has_permit" in declared, "gold.borrower_360 must declare has_permit (BLOCKED FALSE per §9)."
-    assert "listed_for_sale" in declared, "gold.borrower_360 must declare listed_for_sale (BLOCKED FALSE per §9)."
+    assert "has_permit" in declared, "gold.borrower_360 must declare filed-permit status."
+    assert "listed_for_sale" in declared, "gold.borrower_360 must declare the live MLS listing flag."
+    assert "listing_status_category" in declared
+    assert "listing_price" in declared
+    assert "has_heloc_propensity_trigger" in declared
+    assert "heloc_propensity_score" in declared
+    assert "has_refi_propensity_trigger" in declared
     assert "is_former_customer" in declared, (
         "gold.borrower_360 must declare is_former_customer so Portfolio "
         "Builder does not alias Former customer to competitor-lien."
@@ -250,18 +254,22 @@ def test_transformation_exists_and_idempotent(name: str) -> None:
     )
 
 
-def test_borrower_360_transformation_forces_blocked_false() -> None:
-    """Data-contract §9: the CTAS for borrower_360 must hardcode
-    has_permit and listed_for_sale to FALSE on real data (Cotality Permits
-    + MLS not yet licensed). Match the literal pattern so a future edit
-    that wires real columns silently is flagged."""
+def test_borrower_360_transformation_keeps_permits_fail_closed_but_wires_listing() -> None:
+    """The CTAS must keep true filed permits false until a real permit table
+    lands, while MLS and HELOC propensity are live sourced signals."""
     text = (TRANSFORM_DIR / "gold_borrower_360.sql").read_text(encoding="utf-8")
     assert re.search(
         r"CAST\(FALSE\s+AS\s+BOOLEAN\)\s+AS\s+has_permit", text, re.IGNORECASE
-    ), "gold.borrower_360 CTAS must hardcode has_permit = FALSE (data-contract §9)."
+    ), "gold.borrower_360 CTAS must hardcode filed has_permit = FALSE until a true permit table exists."
     assert re.search(
-        r"CAST\(FALSE\s+AS\s+BOOLEAN\)\s+AS\s+listed_for_sale", text, re.IGNORECASE
-    ), "gold.borrower_360 CTAS must hardcode listed_for_sale = FALSE (data-contract §9)."
+        r"mip\.silver\.listing_activity", text, re.IGNORECASE
+    ), "gold.borrower_360 CTAS must source listed_for_sale from silver.listing_activity."
+    assert re.search(
+        r"COALESCE\(cl\.is_active_listing,\s*FALSE\)\s+AS\s+listed_for_sale", text, re.IGNORECASE
+    ), "gold.borrower_360 CTAS must derive listed_for_sale from current active MLS rows."
+    assert re.search(
+        r"mip\.silver\.heloc_propensity", text, re.IGNORECASE
+    ), "gold.borrower_360 CTAS must source HELOC intent from silver.heloc_propensity."
 
 
 def test_source_readiness_core_input_lanes_are_fail_closed() -> None:
@@ -514,25 +522,18 @@ def test_downstream_ctas_depend_on_sentinel() -> None:
     )
 
 
-def test_evidence_events_excludes_blocked_signal_types() -> None:
-    """gold.evidence_events must never emit 'permit' or 'listing' rows on
-    real data per data-contract §9."""
+def test_evidence_events_emits_listing_and_propensity_but_not_filed_permits() -> None:
+    """gold.evidence_events must emit live MLS/propensity evidence while
+    keeping filed-permit evidence disabled until a true permit source lands."""
     text = (TRANSFORM_DIR / "gold_evidence_events.sql").read_text(encoding="utf-8")
-    # Accept the controlled vocab being documented in the header, but the
-    # critical assertion is that no row-producing CTE emits those literals
-    # as signal_type. We conservatively forbid the string literals
-    # `'permit'` and `'listing'` as VALUES (emission), tolerating them in
-    # EXCLUSION clauses (`NOT IN (...)`).
     emitted_permit = re.search(r"'permit'\s+AS\s+signal_type", text, re.IGNORECASE)
-    emitted_listing = re.search(r"'listing'\s+AS\s+signal_type", text, re.IGNORECASE)
     assert not emitted_permit, (
         "gold.evidence_events emits a 'permit' signal_type row. Permit is "
-        "BLOCKED until Cotality Permits lands (data-contract §9)."
+        "disabled until a true filed-permit Cotality source lands."
     )
-    assert not emitted_listing, (
-        "gold.evidence_events emits a 'listing' signal_type row. Listing is "
-        "BLOCKED until Cotality MLS lands (data-contract §9)."
-    )
+    assert re.search(r"'listing'\s+AS\s+signal_type", text, re.IGNORECASE)
+    assert re.search(r"'heloc_propensity'\s+AS\s+signal_type", text, re.IGNORECASE)
+    assert re.search(r"'refi_propensity'\s+AS\s+signal_type", text, re.IGNORECASE)
 
 
 def test_evidence_events_uses_silver_lien_spine_not_borrower_360() -> None:
@@ -661,8 +662,8 @@ def test_fit_loan_type_parity_and_explainability_contract() -> None:
     assert re.search(parity_pattern, lead_scores_sql)
     assert "'loan_type_fit'                                  AS signal_type" in evidence_sql
     assert "first_pos_loan_type IN ('CONV','FHA','VA')" in evidence_sql
-    assert "signal_type NOT IN ('permit', 'listing', 'loan_type_fit')" in borrower_sql
-    assert "signal_type NOT IN ('permit', 'listing', 'loan_type_fit')" in lead_scores_sql
+    assert "signal_type NOT IN ('permit', 'loan_type_fit')" in borrower_sql
+    assert "signal_type NOT IN ('permit', 'loan_type_fit')" in lead_scores_sql
     assert "CONV/FHA/VA parity is a contract" in docs
     assert "customer compliance team should explicitly review" in re.sub(r"\s+", " ", docs)
 

@@ -68,9 +68,10 @@ WITH ranked AS (
     -- Secondary-filter fields (2026-04-23). Carried through from
     -- gold.borrower_360 so /segment-intelligence runs real client-side
     -- predicates against occupancy, owner-link (related properties),
-    -- lien state, and purchase intent. Permit + listing columns remain
-    -- BLOCKED FALSE until the Cotality Delta shares land; the UI surfaces
-    -- a "data-dependency pending" note on that filter.
+    -- lien state, purchase intent, and HELOC propensity. listed_for_sale is
+    -- live from Cotality MLS rows. has_permit remains FALSE until a true
+    -- filed-permit source lands; Cotality HELOC propensity is carried as a
+    -- separate model signal.
     b.is_owner_occupied,
     b.is_investor,
     b.is_current_customer,
@@ -81,6 +82,19 @@ WITH ranked AS (
     b.second_pos_amount,
     b.has_permit,
     b.listed_for_sale,
+    b.listing_status_category,
+    b.listing_status_description,
+    b.listing_date,
+    b.listing_status_date,
+    b.listing_price,
+    b.listing_days_on_market,
+    b.listing_service,
+    b.heloc_propensity_score,
+    b.heloc_propensity_run_date,
+    b.has_heloc_propensity_trigger,
+    b.refi_propensity_score,
+    b.refi_propensity_run_date,
+    b.has_refi_propensity_trigger,
     b.marketing_eligible,
     b.consent_status,
     b.suppression_reason,
@@ -122,6 +136,19 @@ SELECT
   second_pos_amount,
   has_permit,
   listed_for_sale,
+  listing_status_category,
+  listing_status_description,
+  listing_date,
+  listing_status_date,
+  listing_price,
+  listing_days_on_market,
+  listing_service,
+  heloc_propensity_score,
+  heloc_propensity_run_date,
+  has_heloc_propensity_trigger,
+  refi_propensity_score,
+  refi_propensity_run_date,
+  has_refi_propensity_trigger,
   marketing_eligible,
   consent_status,
   suppression_reason,
@@ -171,8 +198,21 @@ COMMENT ON COLUMN mip.gold.lead_population.is_competitor_lien IS 'From gold.borr
 COMMENT ON COLUMN mip.gold.lead_population.related_property_count IS 'From gold.borrower_360; drives /segment-intelligence OWNER LINK filter.';
 COMMENT ON COLUMN mip.gold.lead_population.current_lien_balance IS 'From gold.borrower_360; drives /segment-intelligence LIEN filter.';
 COMMENT ON COLUMN mip.gold.lead_population.second_pos_amount IS 'From gold.borrower_360; nullable (no second-position lien).';
-COMMENT ON COLUMN mip.gold.lead_population.has_permit IS 'BLOCKED: FALSE until Cotality Building Permits Delta share lands.';
-COMMENT ON COLUMN mip.gold.lead_population.listed_for_sale IS 'BLOCKED: FALSE until Cotality MLS Listings Delta share lands.';
+COMMENT ON COLUMN mip.gold.lead_population.has_permit IS 'Filed building-permit flag. FALSE until a true Cotality Building Permits source table is present.';
+COMMENT ON COLUMN mip.gold.lead_population.listed_for_sale IS 'TRUE when borrower_360 has a current active/under-contract Cotality MLS listing row.';
+COMMENT ON COLUMN mip.gold.lead_population.listing_status_category IS 'Cotality standardized MLS listing status category.';
+COMMENT ON COLUMN mip.gold.lead_population.listing_status_description IS 'Display-safe Cotality MLS status description. No address, remarks, agent, phone, or email.';
+COMMENT ON COLUMN mip.gold.lead_population.listing_date IS 'MLS listing date.';
+COMMENT ON COLUMN mip.gold.lead_population.listing_status_date IS 'Most recent MLS status/change date.';
+COMMENT ON COLUMN mip.gold.lead_population.listing_price IS 'Current MLS listing price in USD, when supplied.';
+COMMENT ON COLUMN mip.gold.lead_population.listing_days_on_market IS 'MLS days-on-market value, when supplied.';
+COMMENT ON COLUMN mip.gold.lead_population.listing_service IS 'MLS/listing service label when supplied.';
+COMMENT ON COLUMN mip.gold.lead_population.heloc_propensity_score IS 'Cotality HELOC propensity score, 0..999 in the current feed. Model signal, not a permit filing.';
+COMMENT ON COLUMN mip.gold.lead_population.heloc_propensity_run_date IS 'Cotality HELOC propensity model run date.';
+COMMENT ON COLUMN mip.gold.lead_population.has_heloc_propensity_trigger IS 'TRUE when heloc_propensity_score >= 700. Drives HELOC Intent without setting has_permit.';
+COMMENT ON COLUMN mip.gold.lead_population.refi_propensity_score IS 'Cotality refinance propensity score, 0..999 in the current feed.';
+COMMENT ON COLUMN mip.gold.lead_population.refi_propensity_run_date IS 'Cotality refinance propensity model run date.';
+COMMENT ON COLUMN mip.gold.lead_population.has_refi_propensity_trigger IS 'TRUE when refi_propensity_score >= 700. Adds intent score context.';
 COMMENT ON COLUMN mip.gold.lead_population.marketing_eligible IS 'From gold.borrower_360; TRUE only when consent, suppression, and frequency-cap gates are clear.';
 COMMENT ON COLUMN mip.gold.lead_population.consent_status IS 'From gold.borrower_360; opt_in / opt_out / unknown.';
 COMMENT ON COLUMN mip.gold.lead_population.suppression_reason IS 'From gold.borrower_360; controlled suppression reason.';

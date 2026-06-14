@@ -55,8 +55,9 @@ Positioning:
 Trust frame:
 
 > "Every number has a source chip or proof drawer. If a source is unavailable,
-> the UI says so. MLS listings and building permits are visible as pending
-> Cotality data dependencies; their segment counts are not fabricated."
+> the UI says so. MLS listings are now a live Cotality signal, HELOC intent is
+> backed by Cotality propensity scoring, and filed building-permit records remain
+> visible as a pending data dependency instead of being inferred or fabricated."
 
 > "The important thing for a reviewer is that this is not a dashboard mockup.
 > The UI is only the presentation layer. Underneath it are Delta Share inputs,
@@ -159,16 +160,17 @@ Talk track:
 > churn label. Those definitions are testable and can be debated with a credit,
 > sales, or compliance team."
 
-> "The two pending cards are equally important. Listed for Sale and Permit
-> Activity are the overlays Cotality identified as valuable, but this workspace
-> does not yet have those Delta Share products. So the UI says pending. That is
-> the posture we want in front of Databricks and Cotality reviewers: strong where
-> the data is live, explicit where a data dependency is still open."
+> "Listed for Sale is now live from Cotality MLS/Listings, so it behaves like
+> the other evidence-backed segments. The remaining source gap is true filed
+> Building Permits. We do not infer permit activity from the HELOC propensity
+> model; the app labels that separately as HELOC Intent and keeps Building
+> Permits in roadmap status until the real feed lands."
 
 Show:
 
 - In-the-money definition from the source chip.
-- Pending MLS and permit cards as explicit data gaps.
+- Listed for Sale as a live MLS-backed segment.
+- Building Permits as the explicit remaining data gap.
 - PII suppressed badge.
 
 ## Beat 4: Genie as Control Layer
@@ -265,19 +267,23 @@ expected.
 > outreach draft, and approval audit all sit on the same Databricks-backed
 > implementation path."
 
-> "The immediate path forward is clear. MLS listings and building permits unlock
-> two high-intent trigger overlays. First-party lender feeds refine relationship
-> and suppression. The same architecture then extends into pipeline pull-through,
-> loan officer workflow, underwriting support, and portfolio risk. But the
-> foundation starts here: build the right lead population from governed data,
-> explain the ranking, and turn a trusted answer into an auditable action."
+> "The immediate path forward is clear. MLS listings already unlock a purchase
+> trigger, Cotality propensity scores enrich HELOC and refinance intent, and
+> filed building permits remain the next high-intent overlay once that feed is
+> approved. First-party lender feeds refine relationship and suppression. The
+> same architecture then extends into pipeline pull-through, loan officer
+> workflow, underwriting support, and portfolio risk. But the foundation starts
+> here: build the right lead population from governed data, explain the ranking,
+> and turn a trusted answer into an auditable action."
 
 ## Known Data Dependencies
 
-- Cotality MLS/Listings Delta Share is required before the listed-for-sale
-  overlay can become live.
-- Cotality Building Permits Delta Share is required before permit-driven HELOC
-  or remodel triggers can become live.
+- Cotality MLS/Listings is connected through `mip.silver.listing_activity` and
+  powers the live Listed for Sale segment.
+- Cotality HELOC and Refi propensity scores are connected through curated silver
+  tables and power HELOC/refi intent evidence.
+- Cotality Building Permits Delta Share is still required before filed-permit
+  remodel triggers can become live. Do not describe propensity as a filed permit.
 - The Summit Mortgage first-party lane is synthetic demo data by design. Set
   `MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS=0` before connecting real customer feeds.
 

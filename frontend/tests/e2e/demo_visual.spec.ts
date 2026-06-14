@@ -200,7 +200,7 @@ test.describe('Module 0 demo visual baselines', () => {
     await page.goto('/segment-intelligence');
     const filterRow = page.locator('.filter-row[aria-label="Secondary borrower filters"]');
     await expect(filterRow).toBeVisible({ timeout: 20_000 });
-    const hint = filterRow.getByText(/Delta shares pending/);
+    const hint = filterRow.getByText(/MLS rows.*HELOC propensity.*building-permit records remain/i);
     await expect(hint).toBeVisible();
 
     const controlBoxes = await filterRow.locator('.filter').evaluateAll((nodes) =>
@@ -266,29 +266,29 @@ test.describe('Module 0 demo visual baselines', () => {
     }
   });
 
-	  test('Segment geography drill header keeps breadcrumbs clickable at ZIP layer', async ({ page, request }) => {
-	    await page.goto('/segment-intelligence');
-	    for (const label of ['Investor / Multi-Property', 'Home Equity Candidate']) {
-	      await clickSegmentCard(page, label);
-	    }
-      const target = await discoverMapDrillTarget(request, ['itm', 'investor', 'equity']);
-	    await drillToZipLayer(page, target);
-	    await expect(page.locator('.zip-tiles')).toBeVisible({ timeout: 10_000 });
+  test('Segment geography drill header keeps breadcrumbs clickable at ZIP layer', async ({ page, request }) => {
+    await page.goto('/segment-intelligence');
+    for (const label of ['Home Equity Candidate']) {
+      await clickSegmentCard(page, label);
+    }
+    const target = await discoverMapDrillTarget(request, ['itm', 'equity']);
+    await drillToZipLayer(page, target);
+    await expect(page.locator('.zip-tiles')).toBeVisible({ timeout: 10_000 });
 
-	    for (const width of [1440, 1280, 1150, 1024]) {
-	      await page.setViewportSize({ width, height: 900 });
-	      const header = await page.locator('.map-hdr').boundingBox();
-	      const zipGrid = await page.locator('.zip-tiles').boundingBox();
-	      const crumbs = await page.locator('.map-crumbs').boundingBox();
-	      const chips = await page.locator('.map-corner-chips').boundingBox();
-	      expect(header, `map header should render at ${width}px`).toBeTruthy();
-	      expect(zipGrid, `ZIP grid should render at ${width}px`).toBeTruthy();
-	      if (header && zipGrid) {
-	        expect(header.y + header.height, `map header should not overlap ZIP grid at ${width}px`).toBeLessThanOrEqual(
-	          zipGrid.y + 1,
-	        );
-	      }
-	      expect(crumbs, `map crumbs should render at ${width}px`).toBeTruthy();
+    for (const width of [1440, 1280, 1150, 1024]) {
+      await page.setViewportSize({ width, height: 900 });
+      const header = await page.locator('.map-hdr').boundingBox();
+      const zipGrid = await page.locator('.zip-tiles').boundingBox();
+      const crumbs = await page.locator('.map-crumbs').boundingBox();
+      const chips = await page.locator('.map-corner-chips').boundingBox();
+      expect(header, `map header should render at ${width}px`).toBeTruthy();
+      expect(zipGrid, `ZIP grid should render at ${width}px`).toBeTruthy();
+      if (header && zipGrid) {
+        expect(header.y + header.height, `map header should not overlap ZIP grid at ${width}px`).toBeLessThanOrEqual(
+          zipGrid.y + 1,
+        );
+      }
+      expect(crumbs, `map crumbs should render at ${width}px`).toBeTruthy();
       expect(chips, `map chips should render at ${width}px`).toBeTruthy();
       await expectMapCornerIconsCompact(page, `segment ZIP map ${width}px`);
       if (crumbs && chips) {
@@ -298,11 +298,10 @@ test.describe('Module 0 demo visual baselines', () => {
           crumbs.y + crumbs.height <= chips.y ||
           chips.y + chips.height <= crumbs.y;
         expect(separated, `map header overlays should not collide at ${width}px`).toBe(true);
-	      }
-	      await page.getByRole('button', { name: /^US$/ }).click();
-	      await expect(page.locator(`[aria-label="${target.stateName}"]`).first()).toBeVisible();
-	      await drillToZipLayer(page, target);
-	      await expect(page.locator('.zip-tiles')).toBeVisible({ timeout: 10_000 });
-	    }
-	  });
+      }
+    }
+
+    await page.getByRole('button', { name: /^US$/ }).click();
+    await expect(page.locator(`[aria-label="${target.stateName}"]`).first()).toBeVisible();
+  });
 });

@@ -96,6 +96,9 @@ SOURCE_DISPLAY_LABELS: dict[str, str] = {
     "mip.gold.lead_scores":         "Lead scores",
     "mip.gold.evidence_events":     "Evidence stream",
     "mip.gold.property_owner_bridge": "Owner Link bridge",
+    "mip.silver.listing_activity":  "MLS listing activity",
+    "mip.silver.heloc_propensity":  "HELOC propensity",
+    "mip.silver.refi_propensity":   "Refi propensity",
     # Short aliases used on RowPreview and app proof chips.
     "fn_rate_spread":               "Market rate comparison",
     "fn_in_the_money":              "In-the-money rule",
@@ -104,6 +107,9 @@ SOURCE_DISPLAY_LABELS: dict[str, str] = {
     "rules.itm_v3":                 "In-the-Money logic",
     "mlflow.mtg_nbo_v3":            "Next-best-offer model v3",
     "permits.building":             "Building permit signal",
+    "listing_activity":             "MLS listing activity",
+    "heloc_propensity":             "HELOC propensity",
+    "refi_propensity":              "Refi propensity",
     "borrower_dossier":             "Borrower dossier",
 }
 
@@ -234,8 +240,11 @@ def next_best_offer(
     Mirrors ``mip.gold.fn_next_best_offer``. First match wins across
     the priority-ordered decision tree documented in the SQL header:
     listed -> refi_plus_heloc -> heloc -> refi -> cash_out -> investor
-    -> retention -> nurture. Borrower-signal ``None`` coerces to 0/FALSE,
-    but threshold ``None`` returns ``'nurture'`` before the tree runs.
+    -> retention -> nurture. The ``has_permit`` argument is the legacy
+    slot for HELOC-intent evidence; callers may pass filed permits OR a
+    governed HELOC-propensity trigger, but the API must keep those source
+    facts separate. Borrower-signal ``None`` coerces to 0/FALSE, but
+    threshold ``None`` returns ``'nurture'`` before the tree runs.
     A missing threshold is a configuration failure, not permission to
     treat 0 >= 0 as a positive eligibility signal.
     """
@@ -250,7 +259,7 @@ def next_best_offer(
 
     spread = rate_spread_bps or 0
     equity = equity_pct or 0
-    permit = bool(has_permit)
+    heloc_intent = bool(has_permit)
     listed = bool(listed_for_sale)
     investor = bool(is_investor)
     customer = bool(is_current_customer)
@@ -265,7 +274,7 @@ def next_best_offer(
         return "purchase"
     if spread >= min_sp and equity >= heloc_min:
         return "refi_plus_heloc"
-    if permit and equity >= heloc_min:
+    if heloc_intent and equity >= heloc_min:
         return "heloc"
     if spread >= min_sp and equity >= min_eq:
         return "refi"

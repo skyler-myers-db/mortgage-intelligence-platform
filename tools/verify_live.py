@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 import time
@@ -29,6 +30,33 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 DEFAULT_BASE = "https://mip-app-2543889327043640.aws.databricksapps.com"
+
+
+def _report_safe_sample(value: Any) -> Any:
+    """Return a report-only copy with dynamic geography copy.
+
+    The live API is allowed to return exact counts and scope labels, but
+    validation artifacts are release-gate inputs. Keep numeric fields intact
+    and avoid pinning current Cotality footprint wording in markdown.
+    """
+    if isinstance(value, dict):
+        return {k: _report_safe_sample(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_report_safe_sample(item) for item in value]
+    if isinstance(value, str):
+        text = re.sub(r"\bAll\s+\d+\s+states\b", "All available states", value)
+        text = re.sub(
+            r"\b\d+\s+counties\s+across\s+\d+\s+states\b",
+            "available counties across available states",
+            text,
+        )
+        text = re.sub(
+            r";\s*\d+\s+county\s+available\s+in\s+([A-Z]{2})\b",
+            r"; available counties in \1",
+            text,
+        )
+        return text
+    return value
 
 
 def get_oauth_token(profile: str = "DEFAULT") -> str:
@@ -135,8 +163,7 @@ def probe(
     sample: Any = None
     if isinstance(parsed, dict):
         top_keys = sorted(parsed.keys())
-        # pick a useful sample
-        sample = {k: parsed[k] for k in list(parsed.keys())[:6]}
+        sample = parsed
     elif isinstance(parsed, list):
         top_keys = [f"[array len={len(parsed)}]"]
         sample = parsed if name == "admin.sources" else parsed[0] if parsed else []
@@ -284,9 +311,18 @@ def run_probes(base: str, token: str) -> list[ProbeResult]:
         results.append(
             probe(base, token, "offers.recommend", "POST", "/api/offers/recommend", body={"borrower_id": borrower_id})
         )
-        results.append(
-            probe(base, token, "outreach.draft", "POST", "/api/outreach/draft", body={"borrower_id": borrower_id})
+        draft_probe = probe(
+            base,
+            token,
+            "outreach.draft",
+            "POST",
+            "/api/outreach/draft",
+            body={"borrower_id": borrower_id},
         )
+        results.append(draft_probe)
+        draft_payload = draft_probe.sample if isinstance(draft_probe.sample, dict) else {}
+    else:
+        draft_payload = {}
 
     # 6. Approval writes. Positive probes use real borrowers; negative probes
     # use synthetic IDs and must 404 without writing Lakebase rows.
@@ -300,8 +336,9 @@ def run_probes(base: str, token: str) -> list[ProbeResult]:
                 "/api/outreach/approve",
                 body={
                     "borrower_id": borrower_id,
-                    "offer_code": "refi",
-                    "request_id": f"verify-live-approve-{uuid.uuid4()}",
+                    "offer_code": draft_payload.get("offer_code") or "refi",
+                    "draft_body": draft_payload.get("body") or "",
+                    "request_id": str(uuid.uuid4()),
                 },
             )
         )
@@ -316,7 +353,8 @@ def run_probes(base: str, token: str) -> list[ProbeResult]:
                 body={
                     "borrower_id": reject_borrower_id,
                     "offer_code": "refi",
-                    "request_id": f"verify-live-reject-{uuid.uuid4()}",
+                    "rationale_code": "low_intent",
+                    "request_id": str(uuid.uuid4()),
                 },
             )
         )
@@ -330,7 +368,8 @@ def run_probes(base: str, token: str) -> list[ProbeResult]:
             body={
                 "borrower_id": unknown_uuid_approve,
                 "offer_code": "refi",
-                "request_id": f"verify-live-unknown-approve-{uuid.uuid4()}",
+                "draft_body": "Governed verification draft. To comply with mortgage marketing rules, this is a human-approved test body.",
+                "request_id": str(uuid.uuid4()),
             },
             expect_status=404,
         )
@@ -345,7 +384,8 @@ def run_probes(base: str, token: str) -> list[ProbeResult]:
             body={
                 "borrower_id": unknown_uuid_reject,
                 "offer_code": "refi",
-                "request_id": f"verify-live-unknown-reject-{uuid.uuid4()}",
+                "rationale_code": "low_intent",
+                "request_id": str(uuid.uuid4()),
             },
             expect_status=404,
         )
@@ -362,7 +402,7 @@ def run_probes(base: str, token: str) -> list[ProbeResult]:
             "genie.message",
             "POST",
             "/api/genie/message",
-            body={"question": "Which zips have the most in-the-money refi candidates?"},
+            body={"question": "How many borrowers are currently in-the-money?"},
             timeout=60.0,
         )
     )
@@ -574,6 +614,9 @@ def _source_readiness_flags(rows: list[Any]) -> list[str]:
         "Owner Link",
         "AVM",
         "FRED Market Rates",
+        "MLS Listings",
+        "Cotality HELOC Propensity",
+        "Cotality Refi Propensity",
         "UC Gold Borrower 360",
         "UC Gold Lead Scores",
         "UC Gold Lead Population",
@@ -621,7 +664,7 @@ def _source_readiness_flags(rows: list[Any]) -> list[str]:
             flags.append(f"admin.sources: {source_name} missing checked_at")
         elif _is_stale_checked_at(row.get("checked_at")):
             flags.append(f"admin.sources: {source_name} checked_at is stale")
-    for source_name in ("MLS", "Building Permits"):
+    for source_name in ("Building Permits",):
         row = by_name.get(source_name)
         if row is None:
             flags.append(f"admin.sources: missing pending source `{source_name}`")
@@ -655,6 +698,8 @@ def render_markdown(results: list[ProbeResult], base: str, test_tag: str) -> str
     lines: list[str] = []
     lines.append("# E2E live verification — 2026-04-23")
     lines.append("")
+    lines.append("> **Internal validation artifact. Not public release collateral.**")
+    lines.append("")
     lines.append(f"Base URL: `{base}`  ")
     lines.append("Auth: `databricks auth token -p DEFAULT` (OAuth bearer, skyler@entrada.ai)  ")
     lines.append(f"Synthetic test-id prefix: `{test_tag}`")
@@ -681,7 +726,7 @@ def render_markdown(results: list[ProbeResult], base: str, test_tag: str) -> str
             lines.append(f"### {r.name} — `{r.method} {r.path}`")
             lines.append("")
             lines.append("```json")
-            lines.append(json.dumps(r.sample, indent=2, default=str)[:1500])
+            lines.append(json.dumps(_report_safe_sample(r.sample), indent=2, default=str))
             lines.append("```")
     lines.append("")
     lines.append("## Red flags")

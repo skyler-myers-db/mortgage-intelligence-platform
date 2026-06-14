@@ -31,14 +31,14 @@ export const SEGMENT_DEFINITIONS: readonly SegmentDefinition[] = [
     code: 'listed',
     name: 'Listed for Sale',
     color: 'var(--seg-listed)',
-    description: 'Active listing, likely purchase mortgage opportunity.',
+    description: 'Current active or under-contract Cotality MLS listing.',
     icon: 'tag',
   },
   {
     code: 'permit',
-    name: 'Permit Activity',
+    name: 'HELOC Intent',
     color: 'var(--seg-permit)',
-    description: 'Recent high-value permits indicate HELOC/cash-out demand.',
+    description: 'Cotality HELOC propensity score indicates equity-credit demand.',
     icon: 'permit',
   },
   {

@@ -1,9 +1,12 @@
 """Lakeflow (Delta Live Tables) pipeline for Module 0 silver tables.
 
-Declares the five silver tables lifted from `cotality_mortgage_data.corelogic`:
+Declares the silver tables lifted from `cotality_mortgage_data.corelogic`:
 
     * silver.property_master          (CLIP-grain, 1:1 from property_domain_v3)
     * silver.lien_current             (CLIP-grain, 1:1 from voluntary_lien)   -- THE SPINE
+    * silver.listing_activity         (CLIP/listing-grain from MLS Listings)
+    * silver.heloc_propensity         (CLIP-grain from HELOC propensity score)
+    * silver.refi_propensity          (CLIP-grain from refinance propensity score)
     * silver.mortgage_events          (event-grain from mortgage_domain_v1)
     * silver.owner_transfer_events    (event-grain from owner_transfer_domain_v1)
     * silver.owner_property_bridge    (Owner-Link rollup from silver.property_master + lien_current)
@@ -87,6 +90,9 @@ _PII_SALT_KEY = "pii-salt-v1"
 _SHARE_CATALOG = "cotality_mortgage_data.corelogic"
 _SHARE_PROPERTY_V3 = f"{_SHARE_CATALOG}.entrada_eval_property_domain_v3"
 _SHARE_VOLUNTARY_LIEN = f"{_SHARE_CATALOG}.entrada_eval_voluntary_lien_status_marketing_v2"
+_SHARE_MLS_LISTING = f"{_SHARE_CATALOG}.entrada_eval_mls_listing_v1"
+_SHARE_HELOC_PROPENSITY = f"{_SHARE_CATALOG}.entrada_eval_heloc_propensity_score_v1"
+_SHARE_REFI_PROPENSITY = f"{_SHARE_CATALOG}.entrada_eval_refi_propensity_score_v1"
 _SHARE_MORTGAGE_DOMAIN = f"{_SHARE_CATALOG}.entrada_eval_mortgage_domain_v1"
 _SHARE_OWNER_TRANSFER = f"{_SHARE_CATALOG}.entrada_eval_owner_transfer_domain_v1"
 
@@ -145,10 +151,11 @@ def _y_flag(col_name: str):  # pragma: no cover -- Databricks-runtime only
     ) == F.lit("Y")
 
 
-def _zip5(col_name: str, state_col: str = "situs_state"):  # pragma: no cover -- Databricks-runtime only
+def _zip5(col_name, state_col: str = "situs_state"):  # pragma: no cover -- Databricks-runtime only
     """Normalize Cotality ZIP/ZIP+4 strings to the Module 0 ZIP5 contract."""
+    source_col = F.col(col_name) if isinstance(col_name, str) else col_name
     digits = F.regexp_replace(
-        F.coalesce(F.col(col_name).cast("string"), F.lit("")),
+        F.coalesce(source_col.cast("string"), F.lit("")),
         "[^0-9]",
         "",
     )
@@ -336,6 +343,164 @@ def silver_lien_current() -> DataFrame:  # pragma: no cover
             F.col("second_position_mortgage_purpose_code").alias("second_pos_purpose"),
             F.col("second_position_lender_company_name").alias("second_pos_lender"),
             F.current_timestamp().alias("ingest_ts"),
+            F.lit(None).cast("string").alias("_meta_batch_id"),
+        )
+    )
+
+
+# ---------------------------------------------------------------------------
+# silver.listing_activity
+# ---------------------------------------------------------------------------
+
+
+@dlt.table(  # pragma: no cover
+    name="listing_activity",
+    comment=(
+        "CLIP/listing-grain Cotality MLS lift. Raw street address, public "
+        "remarks, agent/contact, and lockbox fields are excluded."
+    ),
+    table_properties={
+        "quality": "silver",
+        "pipelines.pii.level": "none",
+        "delta.autoOptimize.optimizeWrite": "true",
+        "delta.autoOptimize.autoCompact": "true",
+    },
+    cluster_by=["situs_state", "clip"],
+)
+@dlt.expect_or_fail("valid_clip", "clip IS NOT NULL")
+@dlt.expect_or_fail("valid_listing_record", "listing_record_id IS NOT NULL")
+@dlt.expect("valid_state", "situs_state RLIKE '^[A-Z]{2}$'")
+@dlt.expect("zip_is_zip5_or_null", "situs_zip_code IS NULL OR length(situs_zip_code) = 5")
+def silver_listing_activity() -> DataFrame:  # pragma: no cover
+    src = _read_share_table(_SHARE_MLS_LISTING)
+    state_expr = F.upper(F.trim(F.coalesce(F.col("situs_state"), F.col("listing_address_state"))))
+    zip_expr = F.coalesce(F.col("situs_zip_code"), F.col("listing_address_zip_code"))
+    status_ts = F.coalesce(
+        F.to_timestamp(F.col("status_change_date_and_time_standardized").cast("string")),
+        F.to_timestamp(F.col("last_status_change_date").cast("string")),
+        F.to_timestamp(F.col("last_listing_date_and_time_standardized").cast("string")),
+        F.to_timestamp(F.col("listing_date").cast("string")),
+        F.to_timestamp(F.col("original_listing_date").cast("string")),
+    )
+    current_flag = (
+        F.upper(F.trim(F.coalesce(F.col("most_recent_listing_indicator_derived"), F.lit("N"))))
+        == F.lit("Y")
+    )
+    active_flag = current_flag & F.col("listing_status_category_code_standardized").isin("A", "U")
+    return (
+        src.filter(state_expr.rlike("^[A-Z]{2}$"))
+        .filter(F.col("clip").isNotNull())
+        .filter(F.col("composite_listing_id_derived").isNotNull())
+        .select(
+            F.col("clip"),
+            state_expr.alias("situs_state"),
+            _zip5(zip_expr).alias("situs_zip_code"),
+            F.col("composite_listing_id_derived").alias("listing_record_id"),
+            F.col("listing_status_code_standardized").alias("listing_status_code"),
+            F.col("listing_status_category_code_standardized").alias("listing_status_category"),
+            F.col("listing_status_description"),
+            F.col("listing_type"),
+            F.to_date(F.col("listing_date").cast("string")).alias("listing_date"),
+            F.to_date(status_ts).alias("listing_status_date"),
+            F.col("current_listing_price").cast("bigint").alias("listing_price"),
+            F.col("original_listing_price").cast("bigint").alias("original_listing_price"),
+            F.coalesce(
+                F.col("days_on_market_dom_derived"),
+                F.col("days_on_market_dom"),
+                F.col("days_on_market_dom_cumulative"),
+            ).cast("int").alias("days_on_market"),
+            F.coalesce(
+                F.col("listing_service_name_abbrev_standardized"),
+                F.col("listing_service_name_standardized"),
+            ).alias("listing_service"),
+            current_flag.alias("is_current_listing"),
+            active_flag.alias("is_active_listing"),
+            F.coalesce(F.col("updated_at"), F.col("_meta_loaded_at")).alias("source_updated_at"),
+            F.current_timestamp().alias("ingest_ts"),
+            F.col("_meta_source_file_name"),
+            F.lit(None).cast("string").alias("_meta_batch_id"),
+        )
+    )
+
+
+# ---------------------------------------------------------------------------
+# silver.heloc_propensity
+# ---------------------------------------------------------------------------
+
+
+@dlt.table(  # pragma: no cover
+    name="heloc_propensity",
+    comment=(
+        "CLIP-grain Cotality HELOC propensity score. This is a model signal, "
+        "not a building-permit filing feed."
+    ),
+    table_properties={
+        "quality": "silver",
+        "pipelines.pii.level": "none",
+        "delta.autoOptimize.optimizeWrite": "true",
+        "delta.autoOptimize.autoCompact": "true",
+    },
+    cluster_by=["situs_state", "clip"],
+)
+@dlt.expect_or_fail("valid_clip", "clip IS NOT NULL")
+@dlt.expect("valid_state", "situs_state RLIKE '^[A-Z]{2}$'")
+@dlt.expect("zip_is_zip5_or_null", "situs_zip_code IS NULL OR length(situs_zip_code) = 5")
+def silver_heloc_propensity() -> DataFrame:  # pragma: no cover
+    src = _read_share_table(_SHARE_HELOC_PROPENSITY)
+    return (
+        src.filter(_valid_state(F.col("situs_state")))
+        .filter(F.col("clip").isNotNull())
+        .select(
+            F.col("clip"),
+            F.upper(F.trim(F.col("situs_state"))).alias("situs_state"),
+            _zip5("situs_zip_code").alias("situs_zip_code"),
+            F.col("heloc_model_propensity_score").cast("int").alias("heloc_propensity_score"),
+            F.expr(
+                "try_to_date(cast(nullif(heloc_model_propensity_score_run_date, 0) as string), 'yyyyMMdd')"
+            ).alias("heloc_propensity_run_date"),
+            F.col("_meta_loaded_at").alias("source_updated_at"),
+            F.current_timestamp().alias("ingest_ts"),
+            F.col("_meta_source_file_name"),
+            F.lit(None).cast("string").alias("_meta_batch_id"),
+        )
+    )
+
+
+# ---------------------------------------------------------------------------
+# silver.refi_propensity
+# ---------------------------------------------------------------------------
+
+
+@dlt.table(  # pragma: no cover
+    name="refi_propensity",
+    comment="CLIP-grain Cotality refinance propensity score.",
+    table_properties={
+        "quality": "silver",
+        "pipelines.pii.level": "none",
+        "delta.autoOptimize.optimizeWrite": "true",
+        "delta.autoOptimize.autoCompact": "true",
+    },
+    cluster_by=["situs_state", "clip"],
+)
+@dlt.expect_or_fail("valid_clip", "clip IS NOT NULL")
+@dlt.expect("valid_state", "situs_state RLIKE '^[A-Z]{2}$'")
+@dlt.expect("zip_is_zip5_or_null", "situs_zip_code IS NULL OR length(situs_zip_code) = 5")
+def silver_refi_propensity() -> DataFrame:  # pragma: no cover
+    src = _read_share_table(_SHARE_REFI_PROPENSITY)
+    return (
+        src.filter(_valid_state(F.col("situs_state")))
+        .filter(F.col("clip").isNotNull())
+        .select(
+            F.col("clip"),
+            F.upper(F.trim(F.col("situs_state"))).alias("situs_state"),
+            _zip5("situs_zip_code").alias("situs_zip_code"),
+            F.col("refinance_model_propensity_score").cast("int").alias("refi_propensity_score"),
+            F.expr(
+                "try_to_date(cast(nullif(refinance_model_propensity_score_run_date, 0) as string), 'yyyyMMdd')"
+            ).alias("refi_propensity_run_date"),
+            F.col("_meta_loaded_at").alias("source_updated_at"),
+            F.current_timestamp().alias("ingest_ts"),
+            F.col("_meta_source_file_name"),
             F.lit(None).cast("string").alias("_meta_batch_id"),
         )
     )

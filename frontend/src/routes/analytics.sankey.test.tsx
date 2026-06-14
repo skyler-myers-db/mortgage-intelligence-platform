@@ -13,6 +13,7 @@ import {
   SANKEY_VIEW,
   buildFunnelSankeyModel,
   formatConversionPct,
+  segmentClass,
 } from './analytics.lib';
 
 const STAGES: FunnelStage[] = [
@@ -99,6 +100,14 @@ describe('buildFunnelSankeyModel (pure geometry)', () => {
     expect(formatConversionPct(8 / 61_500)).toBe('<0.1%'); // 0.013%
     expect(formatConversionPct(0.0004)).toBe('<0.1%'); // 0.04%
     expect(formatConversionPct(0.0005)).toBe('0.1%'); // 0.05% still rounds to a real 0.1%
+  });
+});
+
+describe('segmentClass', () => {
+  it('maps HELOC Intent display labels to the HELOC/permit segment color', () => {
+    expect(segmentClass('HELOC Intent')).toBe('analytics-segment--permit');
+    expect(segmentClass('heloc_propensity')).toBe('analytics-segment--permit');
+    expect(segmentClass('permit')).toBe('analytics-segment--permit');
   });
 });
 

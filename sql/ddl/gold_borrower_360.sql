@@ -40,12 +40,11 @@
 --     router strips it before `/api/*` emission. It lives here so the
 --     evidence drawer can correlate rows without joining back to silver.
 --
--- BLOCKED columns (data-contract §9, hardcoded FALSE until Cotality Building
--- Permits + MLS Listings land):
---   - `has_permit`       : FALSE. `intent_trigger` permit term is 0.
---   - `listed_for_sale`  : FALSE. `fn_next_best_offer` 'purchase' branch
---                          never fires on real data. Mock-mode retains the
---                          the listed-for-sale fixture dossier.
+-- Live intent overlays:
+--   - `listed_for_sale` comes from Cotality MLS rows in silver.listing_activity.
+--   - `has_permit` remains FALSE until a true filed-permit source exists.
+--   - Cotality HELOC/refi propensity feeds are model signals, not permit
+--     filings, and are exposed through separate *_propensity fields.
 --
 -- Threshold columns: carried alongside the score columns so the WhyPanel
 -- can show WHICH thresholds produced the current ITM flag, without a
@@ -95,8 +94,21 @@ CREATE TABLE IF NOT EXISTS mip.gold.borrower_360 (
   is_owner_occupied         BOOLEAN   NOT NULL COMMENT 'owner_occupancy_code = "O". Feeds fit sub-score.',
   is_absentee               BOOLEAN   NOT NULL COMMENT 'property_master.is_absentee. Feeds investor branch.',
   is_corporate_owner        BOOLEAN   NOT NULL COMMENT 'property_master.owner_is_corporate. Feeds investor branch.',
-  has_permit                BOOLEAN   NOT NULL COMMENT 'BLOCKED (data-contract §9) -- hardcoded FALSE until Cotality Building Permits product lands. intent_trigger permit term is 0.',
-  listed_for_sale           BOOLEAN   NOT NULL COMMENT 'BLOCKED (data-contract §9) -- hardcoded FALSE until Cotality MLS Listings lands. fn_next_best_offer purchase branch never fires on real data.',
+  has_permit                BOOLEAN   NOT NULL COMMENT 'Filed building-permit flag. FALSE until a true Cotality Building Permits source table is present.',
+  listed_for_sale           BOOLEAN   NOT NULL COMMENT 'TRUE when silver.listing_activity has a current active/under-contract Cotality MLS row for this CLIP.',
+  listing_status_category   STRING             COMMENT 'Cotality standardized MLS listing status category.',
+  listing_status_description STRING            COMMENT 'Display-safe Cotality MLS status description. No address, remarks, agent, phone, or email.',
+  listing_date              DATE               COMMENT 'MLS listing date.',
+  listing_status_date       DATE               COMMENT 'Most recent MLS status/change date.',
+  listing_price             BIGINT             COMMENT 'Current MLS listing price in USD, when supplied.',
+  listing_days_on_market    INT                COMMENT 'MLS days-on-market value, when supplied.',
+  listing_service           STRING             COMMENT 'MLS/listing service label when supplied. No agent or consumer contact data.',
+  heloc_propensity_score    INT                COMMENT 'Cotality HELOC propensity score, 0..999 in the current feed. Model signal, not a permit filing.',
+  heloc_propensity_run_date DATE               COMMENT 'Cotality HELOC propensity model run date.',
+  has_heloc_propensity_trigger BOOLEAN NOT NULL COMMENT 'TRUE when heloc_propensity_score >= 700. Drives HELOC Intent without setting has_permit.',
+  refi_propensity_score     INT                COMMENT 'Cotality refinance propensity score, 0..999 in the current feed.',
+  refi_propensity_run_date  DATE               COMMENT 'Cotality refinance propensity model run date.',
+  has_refi_propensity_trigger BOOLEAN NOT NULL COMMENT 'TRUE when refi_propensity_score >= 700. Adds intent score context.',
   is_investor               BOOLEAN   NOT NULL COMMENT 'Derived: related_property_count >= 2 OR is_corporate_owner OR is_absentee.',
   is_current_customer       BOOLEAN   NOT NULL COMMENT 'Current-servicer relationship to tenant: governed lender_dictionary says non-competitor.',
   is_former_customer        BOOLEAN   NOT NULL COMMENT 'Historical tenant-lender Owner Link relationship with no current tenant-serviced lien.',
@@ -126,7 +138,7 @@ CREATE TABLE IF NOT EXISTS mip.gold.borrower_360 (
 )
 USING DELTA
 CLUSTER BY (state, clip)
-COMMENT 'CLIP-grain borrower projection that backs every Module 0 UI surface. Joins silver.lien_current (spine) + silver.property_master + gold.property_owner_bridge + silver.market_rates_weekly(is_latest). Synthesized display_name, no raw PII, has_permit + listed_for_sale BLOCKED. See docs/data-contract-module0.md §3.2 + docs/governance-real-data-review.md §1.'
+COMMENT 'CLIP-grain borrower projection that backs every Module 0 UI surface. Joins silver.lien_current (spine) + silver.property_master + gold.property_owner_bridge + silver.market_rates_weekly(is_latest) + live MLS/propensity overlays. Synthesized display_name, no raw PII; has_permit stays false until true permit filings land. See docs/data-contract-module0.md §3.2 + docs/governance-real-data-review.md §1.'
 TBLPROPERTIES (
   'delta.enableChangeDataFeed' = 'false',
   'delta.autoOptimize.optimizeWrite' = 'true',

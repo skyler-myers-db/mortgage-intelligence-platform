@@ -282,8 +282,13 @@ test.describe('route performance and layout canaries', () => {
       }
     });
 
+    const initialAuditRequest = page
+      .waitForRequest((request) => normalizedApiPath(request.url()).startsWith('/api/audit'), { timeout: 5_000 })
+      .catch(() => null);
+
     await page.goto('/');
     await expect(page.getByText(/Who should we contact, why now, and with what offer/i).first()).toBeVisible({ timeout: 10_000 });
+    await initialAuditRequest;
     protectedReads.length = 0;
 
     for (const name of [/^Portfolio$/i, /^Segments$/i, /^Leads$/i, /^Borrower 360$/i, /^Offer$/i, /^Ask Genie$/i, /^Admin$/i]) {

@@ -23,7 +23,7 @@
 -- app-facing scoring surfaces is a data-truth failure.
 --
 -- evidence sub-score: 10 * live scoring evidence rows plus bounded
--- second-position balance tail. BLOCKED signal types and compliance-only
+-- second-position balance tail. Filed permit placeholders and compliance-only
 -- rationale rows are excluded so explainability additions do not retune scores.
 --
 -- Threshold convention matches borrower_360.sql: thresholds are read from
@@ -49,7 +49,7 @@ AS
 WITH evidence_counts AS (
   SELECT clip, COUNT(*) AS evidence_event_count
   FROM mip.gold.evidence_events
-  WHERE signal_type NOT IN ('permit', 'listing', 'loan_type_fit')
+  WHERE signal_type NOT IN ('permit', 'loan_type_fit')
   GROUP BY clip
 ),
 -- Historical tenant-lender relationships per owner_link_id for the
@@ -93,6 +93,10 @@ base AS (
     b.equity_pct,
     b.has_permit,
     b.listed_for_sale,
+    b.heloc_propensity_score,
+    b.has_heloc_propensity_trigger,
+    b.refi_propensity_score,
+    b.has_refi_propensity_trigger,
     b.is_investor,
     b.is_current_customer,
     b.is_former_customer,
@@ -138,15 +142,25 @@ subscores AS (
         LEAST(55, CAST(ROUND(3 * sqrt(GREATEST(0, b.rate_spread_bps))) AS INT))
       + LEAST(50, CAST(ROUND(0.5 * LEAST(100, GREATEST(0, b.equity_pct))) AS INT))
     )) AS INT) AS economic_incentive,
-    -- intent_trigger: exact mirror of gold_borrower_360. BLOCKED signals
-    -- (permit, listing, avm uplift) stay 0 until the Cotality shares land.
-    -- Sqrt on the rate-drift term keeps the top tail separable.
+    -- intent_trigger: exact mirror of gold_borrower_360. Current MLS
+    -- listing, Cotality HELOC propensity, and Cotality refinance propensity
+    -- add live intent weight. Filed permits remain 0 until a true permit
+    -- source lands. Sqrt on the rate-drift term keeps the top tail separable.
     CAST(LEAST(100, GREATEST(0,
         20 * CASE WHEN b.is_competitor_lien THEN 1 ELSE 0 END
       + LEAST(25, GREATEST(0, (COALESCE(b.related_property_count, 1) - 1) * 10))
       + LEAST(30, CAST(ROUND(2 * sqrt(GREATEST(0, b.rate_spread_bps))) AS INT))
       + LEAST(10, GREATEST(0, CAST(b.equity_pct / 10 AS INT)))
       + CASE WHEN b.is_current_customer THEN 8 ELSE 0 END
+      + CASE WHEN b.listed_for_sale THEN 18 ELSE 0 END
+      + CASE WHEN b.has_heloc_propensity_trigger
+          THEN LEAST(18, CAST(ROUND(COALESCE(b.heloc_propensity_score, 0) / 50.0) AS INT))
+          ELSE 0
+        END
+      + CASE WHEN b.has_refi_propensity_trigger
+          THEN LEAST(12, CAST(ROUND(COALESCE(b.refi_propensity_score, 0) / 85.0) AS INT))
+          ELSE 0
+        END
     )) AS INT) AS intent_trigger,
     -- fit: exact mirror of gold_borrower_360. Bedrooms/bathrooms come
     -- from the same silver property master row used by borrower_360.
@@ -213,7 +227,7 @@ SELECT
   mip.gold.fn_next_best_offer(
     s.rate_spread_bps,
     s.equity_pct,
-    s.has_permit,
+    (s.has_permit OR s.has_heloc_propensity_trigger),
     s.listed_for_sale,
     s.is_investor,
     s.is_current_customer,
@@ -228,6 +242,10 @@ SELECT
   s.equity_pct,
   s.has_permit,
   s.listed_for_sale,
+  s.heloc_propensity_score,
+  s.has_heloc_propensity_trigger,
+  s.refi_propensity_score,
+  s.has_refi_propensity_trigger,
   s.is_investor,
   s.is_current_customer,
   s.is_former_customer,
@@ -264,8 +282,12 @@ COMMENT ON COLUMN mip.gold.lead_scores.in_the_money IS 'mip.gold.fn_in_the_money
 COMMENT ON COLUMN mip.gold.lead_scores.recommended_offer_code IS 'mip.gold.fn_next_best_offer(...) lowercase code.';
 COMMENT ON COLUMN mip.gold.lead_scores.rate_spread_bps IS 'Input to fn_in_the_money / fn_next_best_offer. Carried here so the table is self-contained for parity testing.';
 COMMENT ON COLUMN mip.gold.lead_scores.equity_pct IS 'Input to fn_in_the_money / fn_next_best_offer.';
-COMMENT ON COLUMN mip.gold.lead_scores.has_permit IS 'BLOCKED -> FALSE; carried for parity test transparency.';
-COMMENT ON COLUMN mip.gold.lead_scores.listed_for_sale IS 'BLOCKED -> FALSE; carried for parity test transparency.';
+COMMENT ON COLUMN mip.gold.lead_scores.has_permit IS 'Filed building-permit flag. FALSE until a true Cotality Building Permits source table is present.';
+COMMENT ON COLUMN mip.gold.lead_scores.listed_for_sale IS 'TRUE when borrower_360 has a current active/under-contract Cotality MLS listing row.';
+COMMENT ON COLUMN mip.gold.lead_scores.heloc_propensity_score IS 'Cotality HELOC propensity score carried from borrower_360. Model signal, not a permit filing.';
+COMMENT ON COLUMN mip.gold.lead_scores.has_heloc_propensity_trigger IS 'TRUE when heloc_propensity_score >= 700. Used as the HELOC-intent input without setting has_permit.';
+COMMENT ON COLUMN mip.gold.lead_scores.refi_propensity_score IS 'Cotality refinance propensity score carried from borrower_360.';
+COMMENT ON COLUMN mip.gold.lead_scores.has_refi_propensity_trigger IS 'TRUE when refi_propensity_score >= 700. Adds intent-trigger weight.';
 COMMENT ON COLUMN mip.gold.lead_scores.is_investor IS 'Carried from borrower_360.';
 COMMENT ON COLUMN mip.gold.lead_scores.is_current_customer IS 'Carried from borrower_360.';
 COMMENT ON COLUMN mip.gold.lead_scores.is_former_customer IS 'Carried from borrower_360. Distinct from competitor lien; requires historical tenant relationship and no current tenant lien.';

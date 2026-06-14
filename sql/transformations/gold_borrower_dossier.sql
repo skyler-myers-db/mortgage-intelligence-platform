@@ -28,13 +28,10 @@
 --     No per-client grants beyond the ones already baked in for gold.
 --
 -- Evidence cap (20 rows per CLIP):
---   The gold.evidence_events controlled vocabulary has 13 live signal types
---   (permit / listing are BLOCKED); a single CLIP in the live warehouse
---   carries up to ~7–10 rows today. 20 is a comfortable ceiling that
---   covers all conceivable live signals per borrower with headroom for
---   Permits + MLS unblocking (+4 more) without forcing another schema
---   change. At the same time, 20 caps avg row size so a 5.16 M-row
---   rebuild lands in the same minutes-on-Photon regime as lead_population.
+--   The gold.evidence_events controlled vocabulary includes live MLS listing
+--   and Cotality propensity model rows. Filed permit evidence remains blocked
+--   until a true source table lands. 20 is a comfortable ceiling for the live
+--   signals plus future permit rows without forcing another schema change.
 --
 -- PII posture: identical to gold.borrower_360 — synthesized display_name,
 -- no street / owner name / raw lender. Every column originates from
@@ -103,7 +100,7 @@ WITH evidence_full AS (
       ) AS ev,
       ROW_NUMBER() OVER (PARTITION BY clip ORDER BY signal_rank, evidence_id) AS rn
     FROM mip.gold.evidence_events
-    WHERE signal_type NOT IN ('permit', 'listing')
+    WHERE signal_type <> 'permit'
   ) ranked
   WHERE rn <= 20
   GROUP BY clip
@@ -140,7 +137,7 @@ evidence_top3 AS (
       ) AS ev,
       ROW_NUMBER() OVER (PARTITION BY clip ORDER BY signal_rank, evidence_id) AS rn
     FROM mip.gold.evidence_events
-    WHERE signal_type NOT IN ('permit', 'listing')
+    WHERE signal_type <> 'permit'
   ) ranked
   WHERE rn <= 3
   GROUP BY clip
@@ -181,6 +178,19 @@ SELECT
   b.is_corporate_owner,
   b.has_permit,
   b.listed_for_sale,
+  b.listing_status_category,
+  b.listing_status_description,
+  b.listing_date,
+  b.listing_status_date,
+  b.listing_price,
+  b.listing_days_on_market,
+  b.listing_service,
+  b.heloc_propensity_score,
+  b.heloc_propensity_run_date,
+  b.has_heloc_propensity_trigger,
+  b.refi_propensity_score,
+  b.refi_propensity_run_date,
+  b.has_refi_propensity_trigger,
   b.is_investor,
   b.is_current_customer,
   b.is_former_customer,
@@ -250,8 +260,21 @@ COMMENT ON COLUMN mip.gold.borrower_dossier.related_property_count IS 'From gold
 COMMENT ON COLUMN mip.gold.borrower_dossier.is_owner_occupied IS 'owner_occupancy_code = "O".';
 COMMENT ON COLUMN mip.gold.borrower_dossier.is_absentee IS 'From silver.property_master.';
 COMMENT ON COLUMN mip.gold.borrower_dossier.is_corporate_owner IS 'From silver.property_master.';
-COMMENT ON COLUMN mip.gold.borrower_dossier.has_permit IS 'BLOCKED: FALSE until Cotality Building Permits lands.';
-COMMENT ON COLUMN mip.gold.borrower_dossier.listed_for_sale IS 'BLOCKED: FALSE until Cotality MLS Listings lands.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.has_permit IS 'Filed building-permit flag. FALSE until a true Cotality Building Permits source table is present.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.listed_for_sale IS 'TRUE when borrower_360 has a current active/under-contract Cotality MLS listing row.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.listing_status_category IS 'Cotality standardized MLS listing status category.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.listing_status_description IS 'Display-safe Cotality MLS status description.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.listing_date IS 'MLS listing date.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.listing_status_date IS 'Most recent MLS status/change date.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.listing_price IS 'Current MLS listing price in USD, when supplied.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.listing_days_on_market IS 'MLS days-on-market value, when supplied.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.listing_service IS 'MLS/listing service label when supplied.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.heloc_propensity_score IS 'Cotality HELOC propensity score, 0..999 in the current feed. Model signal, not a permit filing.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.heloc_propensity_run_date IS 'Cotality HELOC propensity model run date.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.has_heloc_propensity_trigger IS 'TRUE when heloc_propensity_score >= 700. Drives HELOC Intent without setting has_permit.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.refi_propensity_score IS 'Cotality refinance propensity score, 0..999 in the current feed.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.refi_propensity_run_date IS 'Cotality refinance propensity model run date.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.has_refi_propensity_trigger IS 'TRUE when refi_propensity_score >= 700. Adds intent score context.';
 COMMENT ON COLUMN mip.gold.borrower_dossier.is_investor IS 'Derived: multi-property OR corporate OR absentee.';
 COMMENT ON COLUMN mip.gold.borrower_dossier.is_current_customer IS 'Current servicer is a tenant-lender alias in ref.lender_dictionary.';
 COMMENT ON COLUMN mip.gold.borrower_dossier.is_former_customer IS 'Historical tenant-lender relationship with no current tenant lien.';

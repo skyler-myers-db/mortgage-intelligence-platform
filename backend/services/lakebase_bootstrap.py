@@ -106,6 +106,37 @@ _SALES_WORKFLOW_REQUEST_ID_DDL: tuple[str, ...] = (
         "ON mip_app.call_dispositions (request_id) WHERE request_id IS NOT NULL"
     ),
 )
+_SALES_WORKFLOW_REQUEST_ID_PREFLIGHT_SQL = """
+SELECT
+  EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'mip_app'
+      AND table_name = 'lead_assignments'
+      AND column_name = 'request_id'
+  ) AS has_assignment_request_id_column,
+  EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'mip_app'
+      AND table_name = 'call_dispositions'
+      AND column_name = 'request_id'
+  ) AS has_disposition_request_id_column,
+  EXISTS (
+    SELECT 1
+    FROM pg_indexes
+    WHERE schemaname = 'mip_app'
+      AND tablename = 'lead_assignments'
+      AND indexname = 'idx_lead_assignments_request_borrower'
+  ) AS has_assignment_request_id_index,
+  EXISTS (
+    SELECT 1
+    FROM pg_indexes
+    WHERE schemaname = 'mip_app'
+      AND tablename = 'call_dispositions'
+      AND indexname = 'idx_call_dispositions_request_id'
+  ) AS has_disposition_request_id_index
+"""
 _SALES_WORKFLOW_REQUEST_ID_KEY: str = "mip_bootstrap_sales_workflow_request_id"
 
 # Feature C DDL -- loan-officer assignment + follow-up reminder columns on
@@ -120,6 +151,23 @@ _APPROVAL_FOLLOWUP_DDL: tuple[str, ...] = (
     "ALTER TABLE mip_app.approvals ADD COLUMN IF NOT EXISTS assigned_to_email TEXT",
     "ALTER TABLE mip_app.approvals ADD COLUMN IF NOT EXISTS follow_up_at TIMESTAMPTZ",
 )
+_APPROVAL_FOLLOWUP_PREFLIGHT_SQL = """
+SELECT
+  EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'mip_app'
+      AND table_name = 'approvals'
+      AND column_name = 'assigned_to_email'
+  ) AS has_assigned_to_email_column,
+  EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'mip_app'
+      AND table_name = 'approvals'
+      AND column_name = 'follow_up_at'
+  ) AS has_follow_up_at_column
+"""
 _APPROVAL_FOLLOWUP_KEY: str = "mip_bootstrap_approvals_followup"
 
 
@@ -241,6 +289,14 @@ def ensure_sales_workflow_request_id_columns(client: LakebaseClient) -> None:
             return
         lock_acquired = False
         try:
+            if _sales_workflow_request_id_already_applied(client):
+                emit(
+                    log,
+                    "lakebase_bootstrap_already_applied",
+                    migration="sales_workflow_request_id",
+                )
+                _SALES_WORKFLOW_REQUEST_ID_BOOTSTRAPPED = True
+                return
             client.execute(
                 "SELECT pg_advisory_lock(hashtext(%(key)s))",
                 {"key": _SALES_WORKFLOW_REQUEST_ID_KEY},
@@ -303,6 +359,14 @@ def ensure_approval_followup_columns(client: LakebaseClient) -> None:
             return
         lock_acquired = False
         try:
+            if _approval_followup_already_applied(client):
+                emit(
+                    log,
+                    "lakebase_bootstrap_already_applied",
+                    migration="approvals_followup",
+                )
+                _APPROVAL_FOLLOWUP_BOOTSTRAPPED = True
+                return
             client.execute(
                 "SELECT pg_advisory_lock(hashtext(%(key)s))",
                 {"key": _APPROVAL_FOLLOWUP_KEY},
@@ -368,6 +432,48 @@ def _approval_request_id_already_applied(client: LakebaseClient) -> bool:
     )
 
 
+def _sales_workflow_request_id_already_applied(client: LakebaseClient) -> bool:
+    """Return True when the sales workflow request-id schema exists.
+
+    Databricks App runtime principals commonly have DML on ``mip_app`` but
+    not table ownership. After the deploy-time migration has applied the
+    columns and indexes, a read-only preflight avoids owner-only ``ALTER`` /
+    ``DROP INDEX`` / ``CREATE INDEX`` attempts on the first sales-manager
+    route hit.
+    """
+    fetchone = getattr(client, "fetchone", None)
+    if not callable(fetchone):
+        return False
+    row = fetchone(_SALES_WORKFLOW_REQUEST_ID_PREFLIGHT_SQL)
+    if not row:
+        return False
+    return (
+        bool(row.get("has_assignment_request_id_column"))
+        and bool(row.get("has_disposition_request_id_column"))
+        and bool(row.get("has_assignment_request_id_index"))
+        and bool(row.get("has_disposition_request_id_index"))
+    )
+
+
+def _approval_followup_already_applied(client: LakebaseClient) -> bool:
+    """Return True when the approval assignment/follow-up columns exist.
+
+    The deploy migration owns this DDL. Runtime bootstrap is only a
+    backstop for locally owned or partially migrated databases, so the app
+    should skip ``ALTER TABLE`` when a read-only catalog check proves the
+    shape is already present.
+    """
+    fetchone = getattr(client, "fetchone", None)
+    if not callable(fetchone):
+        return False
+    row = fetchone(_APPROVAL_FOLLOWUP_PREFLIGHT_SQL)
+    if not row:
+        return False
+    return bool(row.get("has_assigned_to_email_column")) and bool(
+        row.get("has_follow_up_at_column")
+    )
+
+
 def _release_advisory_lock(client: LakebaseClient, acquired: bool) -> None:
     """Best-effort ``pg_advisory_unlock`` of the bootstrap key.
 
@@ -417,4 +523,5 @@ def _bootstrap_state_for_tests() -> dict[str, Any]:
     return {
         "request_id_bootstrapped": _APPROVAL_REQUEST_ID_BOOTSTRAPPED,
         "sales_workflow_request_id_bootstrapped": _SALES_WORKFLOW_REQUEST_ID_BOOTSTRAPPED,
+        "approval_followup_bootstrapped": _APPROVAL_FOLLOWUP_BOOTSTRAPPED,
     }

@@ -26,6 +26,7 @@ from backend.schemas.common import (
     validate_public_campaign_label,
     validate_public_opaque_id,
 )
+from backend.services.audit_decision_inputs import DECISION_INPUT_KEYS
 from backend.services.audit_metadata_value_policy import (
     validate_row_count,
     validate_source_assets,
@@ -298,9 +299,7 @@ _ALLOWED_RESULT_FILTER_KEYS: frozenset[str] = frozenset(
 )
 _MAX_RESULT_FILTER_VALUES = 500
 _MAX_RESULT_FILTER_STATES = 56
-_DECISION_INPUT_KEYS: frozenset[str] = frozenset(
-    {"rate_spread_bps", "equity_pct", "has_permit", "listed_for_sale", "is_investor", "is_current_customer", "is_competitor_lien"}
-)
+_DECISION_INPUT_KEYS: frozenset[str] = frozenset(DECISION_INPUT_KEYS)
 
 _ALLOWED_SEGMENT_CODES: frozenset[str] = frozenset({"itm", "listed", "permit", "investor", "equity", "retention"})
 _FORCED_DEGRADED_DEPENDENCIES: frozenset[str] = frozenset({"warehouse", "lakebase", "genie", "all"})
@@ -774,7 +773,7 @@ def _assert_decision_inputs_value_policy(value: Any) -> None:
         if extra:
             detail.append("unreviewed " + ", ".join(sorted(extra)))
         raise AuditMetadataValueViolation("decision_inputs", "; ".join(detail))
-    for field in ("rate_spread_bps", "equity_pct"):
+    for field in ("rate_spread_bps", "equity_pct", "heloc_propensity_score", "refi_propensity_score"):
         item = value[field]
         if isinstance(item, bool) or not isinstance(item, int):
             raise AuditMetadataValueViolation(f"decision_inputs.{field}", "must be an integer")
@@ -786,6 +785,8 @@ def _assert_decision_inputs_value_policy(value: Any) -> None:
         )
     for field in (
         "has_permit",
+        "has_heloc_propensity_trigger",
+        "has_refi_propensity_trigger",
         "listed_for_sale",
         "is_investor",
         "is_current_customer",

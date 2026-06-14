@@ -134,8 +134,8 @@ def _portfolio_criteria_from_question(question: str) -> dict[str, Any]:
 
     if "listed for sale" in q:
         criteria["purchase_intent"] = "Listed for sale"
-    elif "permit" in q:
-        criteria["purchase_intent"] = "Recent permit activity"
+    elif "heloc intent" in q or "heloc propensity" in q or "permit" in q:
+        criteria["purchase_intent"] = "HELOC intent"
 
     if "cash-out" in q or "cash out" in q:
         criteria["product"] = "Cash-out"
@@ -211,13 +211,16 @@ def _portfolio_criteria_from_sql(sql_query: str | None) -> dict[str, Any]:
         criteria["owner_link"] = "Portfolio investor (5+)"
 
     has_listing = bool(re.search(r"\blisted_for_sale\s*=\s*true\b", sql))
-    has_permit = bool(re.search(r"\bhas_permit\s*=\s*true\b", sql))
-    if has_listing and has_permit:
+    has_heloc_intent = bool(
+        re.search(r"\bhas_permit\s*=\s*true\b", sql)
+        or re.search(r"\bhas_heloc_propensity_trigger\s*=\s*true\b", sql)
+    )
+    if has_listing and has_heloc_intent:
         criteria["purchase_intent"] = "Both"
     elif has_listing:
         criteria["purchase_intent"] = "Listed for sale"
-    elif has_permit:
-        criteria["purchase_intent"] = "Recent permit activity"
+    elif has_heloc_intent:
+        criteria["purchase_intent"] = "HELOC intent"
 
     if re.search(r"\bis_current_customer\s*=\s*true\b", sql):
         criteria["lender_relationship"] = "Current customer"

@@ -89,6 +89,15 @@ lead_rows AS (
     lp.opportunity_score,
     lp.equity_estimate,
     lp.rate_spread_bps,
+    lp.has_permit,
+    lp.listed_for_sale,
+    lp.listing_status_category,
+    lp.listing_price,
+    lp.listing_days_on_market,
+    lp.heloc_propensity_score,
+    lp.has_heloc_propensity_trigger,
+    lp.refi_propensity_score,
+    lp.has_refi_propensity_trigger,
     lp.population_version,
     lp.refreshed_at,
     COALESCE(ls.approval_status, 'pending') AS approval_status,
@@ -109,6 +118,15 @@ SELECT
   l.opportunity_score,
   l.equity_estimate,
   l.rate_spread_bps,
+  l.has_permit,
+  l.listed_for_sale,
+  l.listing_status_category,
+  l.listing_price,
+  l.listing_days_on_market,
+  l.heloc_propensity_score,
+  l.has_heloc_propensity_trigger,
+  l.refi_propensity_score,
+  l.has_refi_propensity_trigger,
   l.population_version,
   l.refreshed_at,
   l.approval_status,
@@ -143,4 +161,4 @@ LEFT JOIN today AS t ON t.state = l.state AND t.segment_code = '_ALL'
 LEFT JOIN prior AS p ON p.state = l.state AND p.segment_code = '_ALL';
 
 COMMENT ON VIEW mip.semantics.lead_generation_metric_view IS
-  'Genie + dashboard borrower-grain metric view over gold.lead_population + gold.borrower_lifecycle_state + gold.funnel_snapshot_daily (one row per clip in the ranked cut). Exposed columns: clip, state, segment_codes, primary_segment, rank_bucket, rank_overall, rank_within_state, opportunity_score, equity_estimate, rate_spread_bps, population_version, refreshed_at, approval_status, outreach_status, approval_rate, outreach_rate, delta_vs_prior_count. approval_rate / outreach_rate / delta_vs_prior_count ARE materialized columns (state-partitioned windows, so they repeat per borrower row in a state). count_top10 / count_top100 / sum_marketable_population are NOT columns — they are read-time aggregations the dashboard or Genie computes over the exposed columns (and must COUNT(DISTINCT clip)). See docs/data-contract-module0.md §3.5 + docs/validation/metric-views.md.';
+  'Genie + dashboard borrower-grain metric view over gold.lead_population + gold.borrower_lifecycle_state + gold.funnel_snapshot_daily (one row per clip in the ranked cut). Exposed columns: clip, state, segment_codes, primary_segment, rank_bucket, rank_overall, rank_within_state, opportunity_score, equity_estimate, rate_spread_bps, has_permit, listed_for_sale, listing_status_category, listing_price, listing_days_on_market, heloc_propensity_score, has_heloc_propensity_trigger, refi_propensity_score, has_refi_propensity_trigger, population_version, refreshed_at, approval_status, outreach_status, approval_rate, outreach_rate, delta_vs_prior_count. approval_rate / outreach_rate / delta_vs_prior_count ARE materialized columns (state-partitioned windows, so they repeat per borrower row in a state). count_top10 / count_top100 / sum_marketable_population are NOT columns — they are read-time aggregations the dashboard or Genie computes over the exposed columns (and must COUNT(DISTINCT clip)). See docs/data-contract-module0.md §3.5 + docs/validation/metric-views.md.';

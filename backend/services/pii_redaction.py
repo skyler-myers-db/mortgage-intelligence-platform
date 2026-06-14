@@ -322,6 +322,22 @@ def _consent_status(raw: Any) -> str:
     return value if value in _CONSENT_STATUS_VALUES else "unknown"
 
 
+def _optional_int(raw: Any) -> int | None:
+    if raw is None or raw == "":
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _optional_str(raw: Any) -> str | None:
+    if raw is None:
+        return None
+    value = str(raw).strip()
+    return value or None
+
+
 def expose_raw_cotality_ids() -> bool:
     """Return TRUE only for explicit internal debugging.
 
@@ -494,6 +510,23 @@ def redact_borrower_row(row: dict[str, Any]) -> dict[str, Any]:
         "second_pos_amount": int(row.get("second_pos_amount") or 0),
         "has_permit": bool(row.get("has_permit") or False),
         "listed_for_sale": bool(row.get("listed_for_sale") or False),
+        "listing_status_category": _optional_str(row.get("listing_status_category")),
+        "listing_status_description": _optional_str(row.get("listing_status_description")),
+        "listing_date": _optional_str(row.get("listing_date")),
+        "listing_status_date": _optional_str(row.get("listing_status_date")),
+        "listing_price": _optional_int(row.get("listing_price")),
+        "listing_days_on_market": _optional_int(row.get("listing_days_on_market")),
+        "listing_service": _optional_str(row.get("listing_service")),
+        "heloc_propensity_score": _optional_int(row.get("heloc_propensity_score")),
+        "heloc_propensity_run_date": _optional_str(row.get("heloc_propensity_run_date")),
+        "has_heloc_propensity_trigger": bool(
+            row.get("has_heloc_propensity_trigger") or False
+        ),
+        "refi_propensity_score": _optional_int(row.get("refi_propensity_score")),
+        "refi_propensity_run_date": _optional_str(row.get("refi_propensity_run_date")),
+        "has_refi_propensity_trigger": bool(
+            row.get("has_refi_propensity_trigger") or False
+        ),
         "has_first_party_relationship": bool(
             row.get("has_first_party_relationship") or False
         ),
@@ -581,6 +614,23 @@ def redact_lead_row(row: dict[str, Any]) -> dict[str, Any]:
         "second_pos_amount": int(row.get("second_pos_amount") or 0),
         "has_permit": bool(row.get("has_permit") or False),
         "listed_for_sale": bool(row.get("listed_for_sale") or False),
+        "listing_status_category": _optional_str(row.get("listing_status_category")),
+        "listing_status_description": _optional_str(row.get("listing_status_description")),
+        "listing_date": _optional_str(row.get("listing_date")),
+        "listing_status_date": _optional_str(row.get("listing_status_date")),
+        "listing_price": _optional_int(row.get("listing_price")),
+        "listing_days_on_market": _optional_int(row.get("listing_days_on_market")),
+        "listing_service": _optional_str(row.get("listing_service")),
+        "heloc_propensity_score": _optional_int(row.get("heloc_propensity_score")),
+        "heloc_propensity_run_date": _optional_str(row.get("heloc_propensity_run_date")),
+        "has_heloc_propensity_trigger": bool(
+            row.get("has_heloc_propensity_trigger") or False
+        ),
+        "refi_propensity_score": _optional_int(row.get("refi_propensity_score")),
+        "refi_propensity_run_date": _optional_str(row.get("refi_propensity_run_date")),
+        "has_refi_propensity_trigger": bool(
+            row.get("has_refi_propensity_trigger") or False
+        ),
         # Fail closed when source columns are missing/null.
         "marketing_eligible": bool(row.get("marketing_eligible") is True),
         "consent_status": _consent_status(row.get("consent_status")),

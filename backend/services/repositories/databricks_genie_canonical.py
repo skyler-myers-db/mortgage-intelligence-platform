@@ -47,6 +47,21 @@ ORDER BY in_the_money_borrowers DESC, avg_score DESC, zip ASC
 LIMIT 10
 """.strip()
 
+_CANONICAL_ITM_BY_STATE_SQL = f"""
+SELECT state
+     , COUNT(*) AS in_the_money_borrowers
+     , CAST(ROUND(AVG(rate_spread_bps), 1) AS DOUBLE) AS avg_rate_spread_bps
+     , CAST(ROUND(AVG(opportunity_score), 1) AS DOUBLE) AS avg_score
+     , MAX(refreshed_at) AS refreshed_at
+FROM {_BORROWER_360}
+WHERE in_the_money = TRUE
+  AND state IS NOT NULL
+  AND TRIM(state) <> ''
+GROUP BY state
+ORDER BY in_the_money_borrowers DESC, avg_score DESC, state ASC
+LIMIT 20
+""".strip()
+
 _CANONICAL_HELOC_TOP_ZIPS_SQL = f"""
 SELECT zip
      , state
@@ -464,6 +479,17 @@ def _canonical_itm_zip_scope(question: str) -> bool:
         and any(term in q for term in rank_terms)
         and any(term in q for term in refi_terms)
         and any(term in q for term in ("borrower", "lead", "candidate"))
+    )
+
+
+def _canonical_itm_state_breakdown_scope(question: str) -> bool:
+    q = re.sub(r"[^a-z0-9\s-]+", " ", question.lower())
+    q = re.sub(r"\s+", " ", q).strip()
+    return (
+        any(term in q for term in ("in-the-money", "in the money", "itm", "refi", "refinance"))
+        and any(term in q for term in ("borrower", "lead", "candidate"))
+        and "state" in q
+        and any(term in q for term in ("break down", "breakdown", "by state", "state by state", "table"))
     )
 
 

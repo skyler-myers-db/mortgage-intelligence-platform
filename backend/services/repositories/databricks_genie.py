@@ -50,6 +50,9 @@ from backend.services.repositories.databricks_genie_canonical import (
     _retention_competitor_lien_list_question,
     _retention_risk_question,
 )
+from backend.services.repositories.databricks_genie_direct import (
+    direct_canonical_response,
+)
 from backend.services.repositories.databricks_genie_numeric import (
     _numeric_claim_blocked_response,
     _unsupported_answer_numeric_claims,
@@ -136,6 +139,9 @@ class DatabricksGenieRepository:
         question: str,
         conversation_id: str | None = None,
     ) -> GenieMessageResponse:
+        direct_canonical = direct_canonical_response(question, self._sql_client)
+        if direct_canonical is not None:
+            return direct_canonical
         breaker_state = self._genie.resilient.breaker.state
         if breaker_state == "open":
             return self._degraded(question)

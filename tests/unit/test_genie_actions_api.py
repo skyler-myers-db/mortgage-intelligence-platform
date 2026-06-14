@@ -413,6 +413,10 @@ def test_pre_genie_guardrail_detectors_match_known_adversarial_prompts(
     assert matcher(question) is not None
 
 
+def test_mls_listing_prompt_is_not_treated_as_source_gap() -> None:
+    assert _source_gap_prompt_match("Which borrowers are listed for sale in the MLS?") is None
+
+
 @pytest.mark.parametrize(
     ("question", "expected_source", "expected_reason"),
     [

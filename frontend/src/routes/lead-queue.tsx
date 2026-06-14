@@ -151,7 +151,7 @@ const PORTFOLIO_FILTER_VALUE_SETS: Partial<Record<PortfolioFilterKey, Set<string
   product: new Set(['All products', 'Refi', 'HELOC', 'Cash-out', 'Purchase', 'Retention']),
   min_equity_pct_label: new Set(['Any', '≥ 15%', '≥ 25%', '≥ 40%']),
   owner_link: new Set(['All', 'Single-property owner', 'Multi-property (2-4)', 'Portfolio investor (5+)']),
-  purchase_intent: new Set(['All', 'Listed for sale', 'Recent permit activity', 'Both']),
+  purchase_intent: new Set(['All', 'Listed for sale', 'HELOC intent', 'Recent permit activity', 'Both']),
   marketing_eligibility: new Set(['Eligible only', 'Any', 'Suppressed only']),
   consent_status: new Set(['Any', 'Opt-in', 'Opt-out', 'Unknown']),
   recency: new Set(['Any', 'Untouched 30d', 'Untouched 60d', 'Untouched 90d']),

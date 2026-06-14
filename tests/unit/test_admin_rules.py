@@ -133,13 +133,12 @@ def test_get_sources_returns_live_plus_roadmap_split() -> None:
     rows = response.json()
 
     assert isinstance(rows, list)
-    assert len(rows) == 14
+    assert len(rows) == 16
 
     by_name = {r["name"]: r for r in rows}
-    assert by_name["MLS"]["status"] == "roadmap"
-    assert by_name["MLS"]["rows"] is None
-    assert by_name["MLS"]["last_updated"] is None
     assert by_name["Building Permits"]["status"] == "roadmap"
+    assert by_name["Building Permits"]["rows"] is None
+    assert by_name["Building Permits"]["last_updated"] is None
 
     # Live sources have row counts + last_updated timestamps.
     for live_name in (
@@ -150,6 +149,9 @@ def test_get_sources_returns_live_plus_roadmap_split() -> None:
         "Owner Link",
         "AVM",
         "FRED Market Rates",
+        "MLS Listings",
+        "Cotality HELOC Propensity",
+        "Cotality Refi Propensity",
     ):
         r = by_name[live_name]
         assert r["status"] == "live", r
@@ -196,7 +198,9 @@ def test_get_sources_prefers_gold_source_readiness_summary() -> None:
                     "First-party CRM / Campaigns",
                     "First-party Customer Interactions",
                     "First-party Product Balances",
-                    "MLS",
+                    "MLS Listings",
+                    "Cotality HELOC Propensity",
+                    "Cotality Refi Propensity",
                     "Building Permits",
                     "UC Gold Borrower 360",
                     "UC Gold Lead Scores",
@@ -208,19 +212,19 @@ def test_get_sources_prefers_gold_source_readiness_summary() -> None:
                     {
                         "source_name": name,
                         "status": "roadmap"
-                        if name in {"MLS", "Building Permits"}
+                        if name == "Building Permits"
                         else "demo_synthetic"
                         if name == "First-party LOS / Applications"
                         else "live",
                         "row_count": None
-                        if name in {"MLS", "Building Permits"}
+                        if name == "Building Permits"
                         else 1000 + idx,
                         "last_updated": None
-                        if name in {"MLS", "Building Permits"}
+                        if name == "Building Permits"
                         else "2026-05-04 19:45:13",
                         "checked_at": "2026-05-04 20:00:00",
                         "note": "Contracted · pending Cotality share"
-                        if name in {"MLS", "Building Permits"}
+                        if name == "Building Permits"
                         else (
                             "Summit Mortgage synthetic LOS/application feed · connected"
                             if name == "First-party LOS / Applications"
@@ -237,12 +241,14 @@ def test_get_sources_prefers_gold_source_readiness_summary() -> None:
     service = AdminRulesService(fake)
     rows = service.get_sources()
 
-    assert len(rows) == 19
+    assert len(rows) == 21
     assert rows[0].name == "Cotality Public Records"
     assert rows[0].status == "live"
     assert rows[0].checked_at == "2026-05-04 20:00:00"
-    assert rows[13].name == "Building Permits"
-    assert rows[13].status == "roadmap"
+    assert rows[12].name == "MLS Listings"
+    assert rows[12].status == "live"
+    assert rows[15].name == "Building Permits"
+    assert rows[15].status == "roadmap"
     assert rows[-1].name == "UC Gold Borrower Dossier"
     assert rows[-1].status == "live"
     assert rows[7].name == "First-party LOS / Applications"
@@ -423,7 +429,7 @@ def test_get_sources_two_failing_sources_do_not_cascade() -> None:
     a single (or multi-source) failure still returns a populated payload
     for every other source. This test wires a client that fails only on
     two specific silver tables and asserts the remaining six rows still
-    land with ``status='live'`` (or ``'roadmap'`` for MLS / Permits).
+    land with ``status='live'`` (or ``'roadmap'`` for filed permits).
     """
 
     FAILING_TABLES = ("silver.lien_current", "silver.mortgage_events")
@@ -475,8 +481,10 @@ def test_get_sources_two_failing_sources_do_not_cascade() -> None:
             r = by_name[still_live]
             assert r["status"] == "live", r
             assert r["rows"] == 4242, r
-        # Roadmap rows pass through untouched.
-        assert by_name["MLS"]["status"] == "roadmap"
+        # Live overlays still render; filed-permit roadmap row passes through untouched.
+        assert by_name["MLS Listings"]["status"] == "live"
+        assert by_name["Cotality HELOC Propensity"]["status"] == "live"
+        assert by_name["Cotality Refi Propensity"]["status"] == "live"
         assert by_name["Building Permits"]["status"] == "roadmap"
     finally:
         if previous is None:

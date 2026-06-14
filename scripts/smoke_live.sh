@@ -285,13 +285,13 @@ if probe_admin_or_forbidden "source readiness" "$API_PREFIX/admin/sources"; then
     . as $rows
     |
     length > 0
-    and (["Cotality Public Records","Voluntary Lien","MMA Mortgage Analytics","CLIP","Owner Link","AVM","FRED Market Rates","UC Gold Borrower 360","UC Gold Lead Scores","UC Gold Lead Population","UC Gold Segment Population","UC Gold Borrower Dossier"] as $core
+    and (["Cotality Public Records","Voluntary Lien","MMA Mortgage Analytics","CLIP","Owner Link","AVM","FRED Market Rates","MLS Listings","Cotality HELOC Propensity","Cotality Refi Propensity","UC Gold Borrower 360","UC Gold Lead Scores","UC Gold Lead Population","UC Gold Segment Population","UC Gold Borrower Dossier"] as $core
       | all($core[]; . as $name
         | any($rows[]; .name == $name and .status == "live" and (.rows // 0) > 0 and (.last_updated // "") != "" and (.checked_at // "") != "")))
     and (["First-party LOS / Applications","First-party Servicing Portfolio","First-party CRM / Campaigns","First-party Customer Interactions","First-party Product Balances"] as $firstparty
       | all($firstparty[]; . as $name
         | any($rows[]; .name == $name and (.status == "live" or .status == "demo_synthetic") and (.rows // 0) > 0 and (.last_updated // "") != "" and (.checked_at // "") != "")))
-    and all($rows[]; if (.name == "MLS" or .name == "Building Permits") then .status != "live" else true end)
+    and all($rows[]; if .name == "Building Permits" then .status != "live" else true end)
     and all($rows[]; if .synthetic_demo == true then .status == "demo_synthetic" else true end)
   ' /tmp/mip-smoke-out.json >/dev/null; then
     echo "[smoke] source readiness failed core-live/synthetic-disclosure checks" >&2
@@ -357,7 +357,7 @@ fi
 
 if [[ "$SKIP_GENIE" == "0" ]]; then
   probe "genie message" "$API_PREFIX/genie/message" POST \
-    '{"question":"How many borrowers across current refreshed coverage are currently in-the-money?"}'
+    '{"question":"How many borrowers are currently in-the-money?"}'
   if ! jq -e '(.source == "genie" or .source == "trusted_sql") and (.proof.trusted == true) and ((.proof.source_assets // []) | length > 0) and ((.sql_query // "") | length > 0)' /tmp/mip-smoke-out.json >/dev/null; then
     echo "[smoke] Genie endpoint did not return a trusted governed answer with SQL/source proof" >&2
     cat /tmp/mip-smoke-out.json >&2 || true

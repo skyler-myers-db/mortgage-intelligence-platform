@@ -24,6 +24,7 @@ from backend.services.lakebase import LakebaseError
 from backend.services.lakebase_bootstrap import (
     _bootstrap_state_for_tests,
     _reset_bootstrap_for_tests,
+    ensure_approval_followup_columns,
     ensure_approval_idempotency_column,
     ensure_sales_workflow_request_id_columns,
 )
@@ -242,6 +243,37 @@ def test_sales_workflow_bootstrap_runs_expected_ddl_under_lock() -> None:
     assert "idx_call_dispositions_request_id" in ddl_blob
 
 
+def test_sales_workflow_bootstrap_preflight_latches_when_schema_already_exists() -> None:
+    """Runtime app principal should not issue sales-workflow owner-only DDL.
+
+    The deploy-time Lakebase migration owns the table shape. Once the
+    request-id columns and indexes exist, the first sales route hit must
+    latch success from read-only metadata instead of trying ALTER/DROP/CREATE
+    as the Databricks App principal.
+    """
+
+    class _AlreadyApplied(_FakeClient):
+        def fetchone(self, stmt: str, params: Any = None) -> dict[str, bool]:
+            _ = params
+            self.calls.append(stmt)
+            return {
+                "has_assignment_request_id_column": True,
+                "has_disposition_request_id_column": True,
+                "has_assignment_request_id_index": True,
+                "has_disposition_request_id_index": True,
+            }
+
+    client = _AlreadyApplied()
+    ensure_sales_workflow_request_id_columns(client)  # type: ignore[arg-type]
+
+    assert _bootstrap_state_for_tests()["sales_workflow_request_id_bootstrapped"] is True
+    assert len(client.calls) == 1
+    assert "information_schema.columns" in client.calls[0]
+    assert not any("ALTER TABLE" in call for call in client.calls)
+    assert not any("DROP INDEX" in call for call in client.calls)
+    assert not any("CREATE UNIQUE INDEX" in call for call in client.calls)
+
+
 def test_sales_workflow_bootstrap_retries_after_lakebase_error() -> None:
     """A Sales DDL failure must not latch success; the next request retries."""
 
@@ -270,4 +302,81 @@ def test_sales_workflow_bootstrap_second_call_after_success_is_noop() -> None:
     ensure_sales_workflow_request_id_columns(second)  # type: ignore[arg-type]
 
     assert _bootstrap_state_for_tests()["sales_workflow_request_id_bootstrapped"] is True
+    assert second.calls == []
+
+
+# ---------------------------------------------------------------------------
+# Approval assignment/follow-up bootstrap
+# ---------------------------------------------------------------------------
+
+
+def test_approval_followup_bootstrap_runs_expected_ddl_under_lock() -> None:
+    """Local/owned Lakebase runtimes still get the idempotent DDL backstop."""
+
+    client = _FakeClient()
+
+    ensure_approval_followup_columns(client)  # type: ignore[arg-type]
+
+    assert _bootstrap_state_for_tests()["approval_followup_bootstrapped"] is True
+    assert len(client.calls) == len(lakebase_bootstrap._APPROVAL_FOLLOWUP_DDL) + 2
+    assert "pg_advisory_lock" in client.calls[0]
+    assert "pg_advisory_unlock" in client.calls[-1]
+    assert client.calls[1:-1] == list(lakebase_bootstrap._APPROVAL_FOLLOWUP_DDL)
+
+
+def test_approval_followup_bootstrap_preflight_latches_when_schema_already_exists() -> None:
+    """Do not ALTER ``mip_app.approvals`` when deploy migration already ran.
+
+    This pins the live smoke failure: the Databricks App principal can insert
+    into ``approvals`` but is not table owner, so owner-only DDL must be skipped
+    when the follow-up columns are present.
+    """
+
+    class _AlreadyApplied(_FakeClient):
+        def fetchone(self, stmt: str, params: Any = None) -> dict[str, bool]:
+            _ = params
+            self.calls.append(stmt)
+            return {
+                "has_assigned_to_email_column": True,
+                "has_follow_up_at_column": True,
+            }
+
+    client = _AlreadyApplied()
+
+    ensure_approval_followup_columns(client)  # type: ignore[arg-type]
+
+    assert _bootstrap_state_for_tests()["approval_followup_bootstrapped"] is True
+    assert len(client.calls) == 1
+    assert "information_schema.columns" in client.calls[0]
+    assert not any("ALTER TABLE" in call for call in client.calls)
+
+
+def test_approval_followup_bootstrap_retries_after_lakebase_error() -> None:
+    """A follow-up DDL failure must not latch success; the next request retries."""
+
+    failing = _FakeClient(raise_on_call=[False, True])
+
+    ensure_approval_followup_columns(failing)  # type: ignore[arg-type]
+
+    assert _bootstrap_state_for_tests()["approval_followup_bootstrapped"] is False
+    assert "pg_advisory_unlock" in failing.calls[-1]
+
+    clean = _FakeClient()
+    ensure_approval_followup_columns(clean)  # type: ignore[arg-type]
+
+    assert _bootstrap_state_for_tests()["approval_followup_bootstrapped"] is True
+    assert len(clean.calls) == len(lakebase_bootstrap._APPROVAL_FOLLOWUP_DDL) + 2
+
+
+def test_approval_followup_bootstrap_second_call_after_success_is_noop() -> None:
+    """Successful follow-up bootstrap should not re-run DDL."""
+
+    first = _FakeClient()
+    ensure_approval_followup_columns(first)  # type: ignore[arg-type]
+    assert _bootstrap_state_for_tests()["approval_followup_bootstrapped"] is True
+
+    second = _FakeClient()
+    ensure_approval_followup_columns(second)  # type: ignore[arg-type]
+
+    assert _bootstrap_state_for_tests()["approval_followup_bootstrapped"] is True
     assert second.calls == []

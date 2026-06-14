@@ -55,9 +55,6 @@ class _SourceDescriptor:
     name: str
     note: str
     uc_table: str | None  # None => roadmap
-    # Slice-13 admin-sources follow-up: when we add an MLS / permits
-    # ingest, wire the table here and status flips to LIVE automatically
-    # once the row count > 0.
 
 
 # Ordering mirrors the admin panel's prior literal list so the UI visual
@@ -124,9 +121,19 @@ _SOURCES: tuple[_SourceDescriptor, ...] = (
         uc_table=qualify("first_party", "product_balances"),
     ),
     _SourceDescriptor(
-        name="MLS",
-        note="Contracted · pending load",
-        uc_table=None,
+        name="MLS Listings",
+        note="Cotality MLS listing feed · current active/under-contract rows drive listed_for_sale",
+        uc_table=qualify("silver", "listing_activity"),
+    ),
+    _SourceDescriptor(
+        name="Cotality HELOC Propensity",
+        note="Cotality HELOC propensity model feed · drives HELOC Intent; not a permit filing source",
+        uc_table=qualify("silver", "heloc_propensity"),
+    ),
+    _SourceDescriptor(
+        name="Cotality Refi Propensity",
+        note="Cotality refinance propensity model feed · enriches refi timing evidence",
+        uc_table=qualify("silver", "refi_propensity"),
     ),
     _SourceDescriptor(
         name="Building Permits",

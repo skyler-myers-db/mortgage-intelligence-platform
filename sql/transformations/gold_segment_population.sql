@@ -14,10 +14,11 @@
 -- Slice:     module0-real-data-slice3.
 -- Data contract: docs/data-contract-module0.md §3.4 + §3.6.
 --
--- Segment membership is computed from gold.borrower_360.segment_codes
--- (already derived there with the listed/permit BLOCKED columns forced
--- false). Using the pre-computed array keeps this transformation a pure
--- aggregate rather than re-deriving predicates.
+-- Segment membership is computed from gold.borrower_360.segment_codes.
+-- The `listed` segment is live from Cotality MLS rows. The legacy `permit`
+-- segment code is retained for API compatibility but is displayed as HELOC
+-- Intent and is currently driven by Cotality HELOC propensity; the filed
+-- Building Permits feed remains pending until a true permit source table lands.
 --
 -- delta_vs_prior:
 --   * Pull prior count from gold.segment_population_prior for snapshot_date =
@@ -161,12 +162,16 @@ prior AS (
 -- emits a row per (segment_code, state) including states + the _ALL
 -- aggregate, so the API can never silently drop a segment whose predicate
 -- matched zero borrowers.
+--
+-- 2026-06-13 update: MLS/listing is live. The legacy permit segment code now
+-- describes HELOC Intent from Cotality HELOC propensity while filed Building
+-- Permits remain a separate pending source-readiness row.
 meta AS (
   SELECT * FROM (
     VALUES
       ('itm',       'In the Money',             'Lien rate >= 75 bps above par and equity >= 15%.',                                      '#5CE1E6'),
-      ('listed',    'Listed for Sale',          'Pending Cotality MLS share; listed-for-sale predicates are blocked false until the feed lands.', '#F59E0B'),
-      ('permit',    'Permit Activity',          'Pending Cotality Building Permits share; permit predicates are blocked false until the feed lands.', '#A78BFA'),
+      ('listed',    'Listed for Sale',          'Current active or under-contract Cotality MLS listing tied to CLIP.', '#F59E0B'),
+      ('permit',    'HELOC Intent',             'Cotality HELOC propensity >= 700 with equity context. Filed Building Permits remain pending until a true permit source lands.', '#A78BFA'),
       ('investor',  'Investor / Multi-Property','Owner Link shows 2+ properties or repeat behavior.',                                    '#F472B6'),
       ('equity',    'Home Equity Candidate',    'Strong equity and no active second-position balance.',                                  '#66C5FF'),
       ('retention', 'Retention Risk',           'Current customer with rate spread above the retention threshold; live listing and competitor overlays join only when source evidence is present.', '#34D399')
@@ -220,7 +225,7 @@ LEFT JOIN prior     AS p USING (segment_code, state);
 -- live, run 2026-06-11). COMMENT ON COLUMN keeps the Genie grounding /
 -- asset-page comments refresh-stable; the SQL file task executes the
 -- statements in order.
-COMMENT ON COLUMN mip.gold.segment_population.segment_code IS 'itm / listed / permit / investor / equity / retention. Matches SegmentCode Literal exactly.';
+COMMENT ON COLUMN mip.gold.segment_population.segment_code IS 'itm / listed / permit / investor / equity / retention. Matches SegmentCode Literal exactly; permit is the backward-compatible code for customer-facing HELOC Intent.';
 COMMENT ON COLUMN mip.gold.segment_population.state IS '2-char state code from refreshed source coverage or "_ALL" for national rollup.';
 COMMENT ON COLUMN mip.gold.segment_population.name IS 'Static label per segment_code (e.g., "In the Money").';
 COMMENT ON COLUMN mip.gold.segment_population.count IS 'Member count for this (segment, state) cell.';

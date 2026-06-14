@@ -58,7 +58,7 @@ def _rationale_for(
     code: str,
     spread: int,
     equity: int,
-    permit: bool,
+    heloc_intent: bool,
     listed: bool,
     investor: bool,
     customer: bool,
@@ -114,8 +114,9 @@ def _rationale_for(
             "a strong candidate for a refinance with a HELOC alongside it."
         )
     if code == "heloc":
+        intent_phrase = "Cotality HELOC propensity" if heloc_intent else "HELOC intent"
         return (
-            f"Recent remodel activity paired with {_equity_phrase()} supports a "
+            f"{intent_phrase} paired with {_equity_phrase()} supports a "
             "HELOC conversation; the rate isn't compelling enough for a full refinance."
         )
     if code == "refi":
@@ -155,11 +156,15 @@ def _sources_for(code: str) -> list[str]:
     from backend.services.databricks_sql_helpers import qualify
 
     base = [qualify("gold", "fn_next_best_offer")]
+    if code == "purchase":
+        base.append(qualify("silver", "listing_activity"))
     if code in {"refi_plus_heloc", "refi", "retention"}:
         base.append(qualify("gold", "fn_rate_spread"))
         base.append(qualify("gold", "fn_in_the_money"))
     if code in {"heloc", "cash_out", "refi_plus_heloc"}:
         base.append(qualify("gold", "fn_rate_spread"))
+    if code == "heloc":
+        base.append(qualify("silver", "heloc_propensity"))
     # fn_lead_score is always cited — the orchestrator shows confidence
     # on every recommendation and that confidence rolls up from the
     # lead_score weighted bundle.
@@ -177,7 +182,7 @@ def _sources_for(code: str) -> list[str]:
 def _alternatives_for(
     code: str,
     equity: int,
-    permit: bool,
+    heloc_intent: bool,
     heloc_min: int,
 ) -> list[OfferAlternative]:
     """Deterministic 1–2 runners-up per branch. Rules are fixed so the
@@ -195,7 +200,7 @@ def _alternatives_for(
                 product_label=NBO_PRODUCT_LABELS["heloc"],
                 reason_not_chosen=(
                     "Refi rate economics also qualify, so the refi+HELOC cross-sell beats a pure HELOC."
-                    if not permit
+                    if not heloc_intent
                     else "Refi rate economics also qualify, so cross-sell captures both products in one outreach."
                 ),
             ),
@@ -213,12 +218,12 @@ def _alternatives_for(
             OfferAlternative(
                 offer_code="refi",
                 product_label=NBO_PRODUCT_LABELS["refi"],
-                reason_not_chosen="Rate spread is below the refi minimum; HELOC is the permit-driven lane.",
+                reason_not_chosen="Rate spread is below the refi minimum; HELOC is the HELOC-intent lane.",
             ),
             OfferAlternative(
                 offer_code="cash_out",
                 product_label=NBO_PRODUCT_LABELS["cash_out"],
-                reason_not_chosen="Permit signal steers to HELOC (cheaper capital than cash-out).",
+                reason_not_chosen="HELOC intent steers to HELOC (cheaper capital than cash-out).",
             ),
         ]
     if code == "refi":
@@ -234,7 +239,7 @@ def _alternatives_for(
             OfferAlternative(
                 offer_code="heloc",
                 product_label=NBO_PRODUCT_LABELS["heloc"],
-                reason_not_chosen="No permit trigger on file and equity is below HELOC threshold — cash-out is the fit.",
+                reason_not_chosen="No HELOC-intent trigger is active and equity is below the HELOC threshold; cash-out is the fit.",
             ),
         ]
     if code == "investor":
@@ -321,7 +326,10 @@ def recommend_offer(
             code,
             spread=cast(int, inputs["rate_spread_bps"]),
             equity=cast(int, inputs["equity_pct"]),
-            permit=cast(bool, inputs["has_permit"]),
+            heloc_intent=(
+                cast(bool, inputs["has_permit"])
+                or cast(bool, inputs.get("has_heloc_propensity_trigger", False))
+            ),
             listed=cast(bool, inputs["listed_for_sale"]),
             investor=cast(bool, inputs["is_investor"]),
             customer=cast(bool, inputs["is_current_customer"]),
@@ -338,7 +346,10 @@ def recommend_offer(
         alternatives=_alternatives_for(
             code,
             equity=cast(int, inputs["equity_pct"]),
-            permit=cast(bool, inputs["has_permit"]),
+            heloc_intent=(
+                cast(bool, inputs["has_permit"])
+                or cast(bool, inputs.get("has_heloc_propensity_trigger", False))
+            ),
             heloc_min=thresholds_applied["heloc_equity_min_pct"],
         ),
         thresholds_applied=thresholds_applied,

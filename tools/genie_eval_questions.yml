@@ -159,7 +159,6 @@ questions:
       - mip.gold
     forbid_keywords:
       - permit candidates
-      - listed candidates
     require_keywords:
       - segment
       - state

@@ -16,6 +16,10 @@ DECISION_INPUT_KEYS: tuple[str, ...] = (
     "rate_spread_bps",
     "equity_pct",
     "has_permit",
+    "has_heloc_propensity_trigger",
+    "heloc_propensity_score",
+    "has_refi_propensity_trigger",
+    "refi_propensity_score",
     "listed_for_sale",
     "is_investor",
     "is_current_customer",
@@ -41,12 +45,20 @@ def _coerce_bool(value: Any) -> bool:
 def decision_inputs_from_offer_inputs(
     inputs: Mapping[str, object],
 ) -> dict[str, DecisionInputValue]:
-    """Return the seven scoring signals used by ``fn_next_best_offer``."""
+    """Return the scoring signals used by ``fn_next_best_offer`` and audit."""
 
     return {
         "rate_spread_bps": _coerce_int(inputs.get("rate_spread_bps")),
         "equity_pct": _coerce_int(inputs.get("equity_pct")),
         "has_permit": _coerce_bool(inputs.get("has_permit")),
+        "has_heloc_propensity_trigger": _coerce_bool(
+            inputs.get("has_heloc_propensity_trigger")
+        ),
+        "heloc_propensity_score": _coerce_int(inputs.get("heloc_propensity_score")),
+        "has_refi_propensity_trigger": _coerce_bool(
+            inputs.get("has_refi_propensity_trigger")
+        ),
+        "refi_propensity_score": _coerce_int(inputs.get("refi_propensity_score")),
         "listed_for_sale": _coerce_bool(inputs.get("listed_for_sale")),
         "is_investor": _coerce_bool(inputs.get("is_investor")),
         "is_current_customer": _coerce_bool(inputs.get("is_current_customer")),
@@ -62,6 +74,18 @@ def decision_inputs_from_borrower(borrower: object) -> dict[str, DecisionInputVa
         "rate_spread_bps": _coerce_int(getattr(borrower, "rate_spread_bps", 0)),
         "equity_pct": _coerce_int(getattr(why_panel, "equity_pct", 0)),
         "has_permit": _coerce_bool(getattr(borrower, "has_permit", False)),
+        "has_heloc_propensity_trigger": _coerce_bool(
+            getattr(borrower, "has_heloc_propensity_trigger", False)
+        ),
+        "heloc_propensity_score": _coerce_int(
+            getattr(borrower, "heloc_propensity_score", 0)
+        ),
+        "has_refi_propensity_trigger": _coerce_bool(
+            getattr(borrower, "has_refi_propensity_trigger", False)
+        ),
+        "refi_propensity_score": _coerce_int(
+            getattr(borrower, "refi_propensity_score", 0)
+        ),
         "listed_for_sale": _coerce_bool(getattr(borrower, "listed_for_sale", False)),
         "is_investor": _coerce_bool(getattr(borrower, "is_investor", False)),
         "is_current_customer": _coerce_bool(

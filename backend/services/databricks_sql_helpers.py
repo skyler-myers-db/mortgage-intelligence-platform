@@ -57,10 +57,13 @@ _ALLOWED_RELATIONS: frozenset[tuple[str, str]] = frozenset(
         ("semantics", "lead_generation_metric_view"),
         ("semantics", "segment_performance_metric_view"),
         ("silver", "lien_current"),
+        ("silver", "listing_activity"),
+        ("silver", "heloc_propensity"),
         ("silver", "market_rates_weekly"),
         ("silver", "mortgage_events"),
         ("silver", "owner_property_bridge"),
         ("silver", "property_master"),
+        ("silver", "refi_propensity"),
     }
 )
 

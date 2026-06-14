@@ -35,13 +35,14 @@
 --   - owner_name_hash is carried for internal correlation; router strips
 --     before /api/* emission.
 --
--- BLOCKED columns (data-contract §9):
---   - has_permit      = FALSE.
---   - listed_for_sale = FALSE.
--- Both hardcoded here so the scoring layer (gold.lead_scores + fn_next_best_
--- offer) sees stable false values on real data. When Cotality Permits + MLS
--- land, the `BLOCKED` literals become real joins and this comment block is
--- the only place to update.
+-- Live intent overlays:
+--   - listed_for_sale comes from silver.listing_activity active/current
+--     Cotality MLS rows. It drives the Listed segment, listing evidence, and
+--     the purchase branch in fn_next_best_offer.
+--   - has_permit remains FALSE until a filed building-permit source is
+--     present in cotality_mortgage_data.corelogic. Cotality HELOC propensity
+--     is integrated as its own governed model signal and never represented
+--     as a filed permit.
 --
 -- Threshold convention: default thresholds live in data-contract §5 + UDF headers
 -- and are seeded into mip.ref.offer_rules_config. The CTAS reads that governed
@@ -173,6 +174,52 @@ base AS (
   -- tenant/demo state seed.
   WHERE lc.situs_state IS NOT NULL
     AND lc.clip IS NOT NULL
+),
+latest_listing AS (
+  SELECT *
+  FROM (
+    SELECT
+      la.*,
+      ROW_NUMBER() OVER (
+        PARTITION BY la.clip
+        ORDER BY
+          CASE WHEN la.is_active_listing THEN 0 ELSE 1 END,
+          COALESCE(la.listing_status_date, la.listing_date, DATE(la.source_updated_at), DATE(la.ingest_ts)) DESC,
+          la.listing_record_id
+      ) AS rn
+    FROM mip.silver.listing_activity AS la
+    WHERE la.clip IS NOT NULL
+      AND la.is_current_listing = TRUE
+  ) ranked
+  WHERE rn = 1
+),
+latest_heloc_propensity AS (
+  SELECT *
+  FROM (
+    SELECT
+      hp.*,
+      ROW_NUMBER() OVER (
+        PARTITION BY hp.clip
+        ORDER BY COALESCE(hp.heloc_propensity_run_date, DATE(hp.source_updated_at), DATE(hp.ingest_ts)) DESC
+      ) AS rn
+    FROM mip.silver.heloc_propensity AS hp
+    WHERE hp.clip IS NOT NULL
+  ) ranked
+  WHERE rn = 1
+),
+latest_refi_propensity AS (
+  SELECT *
+  FROM (
+    SELECT
+      rp.*,
+      ROW_NUMBER() OVER (
+        PARTITION BY rp.clip
+        ORDER BY COALESCE(rp.refi_propensity_run_date, DATE(rp.source_updated_at), DATE(rp.ingest_ts)) DESC
+      ) AS rn
+    FROM mip.silver.refi_propensity AS rp
+    WHERE rp.clip IS NOT NULL
+  ) ranked
+  WHERE rn = 1
 ),
 -- Current-customer detection is dictionary-driven, not hardcoded to a
 -- brand token. mip.ref.lender_dictionary is the tenant override point:
@@ -397,14 +444,36 @@ enriched AS (
       ELSE COALESCE(lr.display_name, 'Competitor Other')
     END AS current_lender_ref,
     (COALESCE(b.owner_occupancy_code, '') = 'O') AS is_owner_occupied,
-    -- BLOCKED columns -- hardcoded FALSE until Cotality Permits + MLS land.
+    -- Filed building permits are still not present as a Cotality source
+    -- table. Keep the literal false separate from Cotality's model
+    -- propensity signals so the app never claims a permit was filed when
+    -- only a propensity score exists.
     CAST(FALSE AS BOOLEAN) AS has_permit,
-    CAST(FALSE AS BOOLEAN) AS listed_for_sale
+    COALESCE(cl.is_active_listing, FALSE) AS listed_for_sale,
+    cl.listing_status_category,
+    cl.listing_status_description,
+    cl.listing_date,
+    cl.listing_status_date,
+    cl.listing_price,
+    cl.days_on_market AS listing_days_on_market,
+    cl.listing_service,
+    hp.heloc_propensity_score,
+    hp.heloc_propensity_run_date,
+    COALESCE(hp.heloc_propensity_score, 0) >= 700 AS has_heloc_propensity_trigger,
+    rp.refi_propensity_score,
+    rp.refi_propensity_run_date,
+    COALESCE(rp.refi_propensity_score, 0) >= 700 AS has_refi_propensity_trigger
   FROM base AS b
   CROSS JOIN market AS m
   CROSS JOIN tenant_display AS td
   LEFT JOIN lender_ref AS lr
     ON lr.raw_key = b.lender_raw_key
+  LEFT JOIN latest_listing AS cl
+    ON cl.clip = b.clip
+  LEFT JOIN latest_heloc_propensity AS hp
+    ON hp.clip = b.clip
+  LEFT JOIN latest_refi_propensity AS rp
+    ON rp.clip = b.clip
   LEFT JOIN historical_tenant AS ht
     ON ht.owner_link_id = b.owner_link_id
   LEFT JOIN first_party_servicing AS fps
@@ -434,7 +503,7 @@ scored AS (
     mip.gold.fn_next_best_offer(
       e.rate_spread_bps,
       e.equity_pct,
-      e.has_permit,
+      (e.has_permit OR e.has_heloc_propensity_trigger),
       e.listed_for_sale,
       e.is_investor,
       e.is_current_customer,
@@ -456,7 +525,8 @@ with_segments AS (
       ARRAY(
         CASE WHEN s.in_the_money                            THEN 'itm'       END,
         CASE WHEN s.listed_for_sale                         THEN 'listed'    END,
-        CASE WHEN s.has_permit                              THEN 'permit'    END,
+        CASE WHEN (s.has_permit OR s.has_heloc_propensity_trigger)
+                                                            THEN 'permit'    END,
         CASE WHEN s.is_investor                             THEN 'investor'  END,
         -- Cotality can express "no second-position balance" as NULL or 0.
         CASE WHEN s.equity_pct >= s.heloc_equity_min_applied AND COALESCE(s.second_pos_amount, 0) = 0
@@ -477,7 +547,7 @@ with_segments AS (
 evidence_counts AS (
   SELECT clip, COUNT(*) AS evidence_event_count
   FROM mip.gold.evidence_events
-  WHERE signal_type NOT IN ('permit', 'listing', 'loan_type_fit')
+  WHERE signal_type NOT IN ('permit', 'loan_type_fit')
   GROUP BY clip
 ),
 -- Top-3 evidence timeline per CLIP, pre-materialized as JSON to avoid
@@ -503,7 +573,7 @@ timeline AS (
       ) AS ev,
       ROW_NUMBER() OVER (PARTITION BY clip ORDER BY signal_rank, evidence_id) AS rn
     FROM mip.gold.evidence_events
-    WHERE signal_type NOT IN ('permit', 'listing')
+    WHERE signal_type <> 'permit'
   ) ranked
   WHERE rn <= 3
   GROUP BY clip
@@ -553,10 +623,11 @@ subscores AS (
         LEAST(55, CAST(ROUND(3 * sqrt(GREATEST(0, w.rate_spread_bps))) AS INT))
       + LEAST(50, CAST(ROUND(0.5 * LEAST(100, GREATEST(0, w.equity_pct))) AS INT))
     )) AS INT) AS economic_incentive,
-    -- intent_trigger: BLOCKED terms (permit, listing, avm_uplift) stay 0
-    -- on real data until Cotality Permits + MLS land. Continuous
-    -- contributions from always-live signals. Sum cap is ~85 for a
-    -- hypothetical maxed-out row so even top-tier borrowers rarely
+    -- intent_trigger: live intent overlays now include current MLS listing,
+    -- Cotality HELOC propensity, and Cotality refinance propensity. Filed
+    -- building permits remain 0 until a true permit source lands. Continuous
+    -- contributions from always-live signals. Sum cap is above 100 but the
+    -- outer LEAST keeps the score bounded, so even top-tier borrowers rarely
     -- saturate -- separation in the top tail is the whole point of
     -- the 2026-04-22 fix.
     --   * 20 if is_competitor_lien (recapture trigger)
@@ -571,6 +642,15 @@ subscores AS (
       + LEAST(30, CAST(ROUND(2 * sqrt(GREATEST(0, w.rate_spread_bps))) AS INT))
       + LEAST(10, GREATEST(0, CAST(w.equity_pct / 10 AS INT)))
       + CASE WHEN w.is_current_customer THEN 8 ELSE 0 END
+      + CASE WHEN w.listed_for_sale THEN 18 ELSE 0 END
+      + CASE WHEN w.has_heloc_propensity_trigger
+          THEN LEAST(18, CAST(ROUND(COALESCE(w.heloc_propensity_score, 0) / 50.0) AS INT))
+          ELSE 0
+        END
+      + CASE WHEN w.has_refi_propensity_trigger
+          THEN LEAST(12, CAST(ROUND(COALESCE(w.refi_propensity_score, 0) / 85.0) AS INT))
+          ELSE 0
+        END
     )) AS INT) AS intent_trigger,
     -- fit: continuous over property-size features. Monotonic
     -- (owner-occupant + CONV/FHA/VA with many bedrooms beats everything).
@@ -685,7 +765,7 @@ SELECT
     WHEN 'refi_plus_heloc' THEN
       'Current rate sits meaningfully above market and the home carries strong equity -- a refinance with a HELOC cross-sell fits.'
     WHEN 'heloc' THEN
-      'Recent remodel activity plus strong home equity points to a HELOC conversation.'
+      'Cotality HELOC propensity plus strong home equity points to a HELOC conversation.'
     WHEN 'refi' THEN
       'Current rate is well above market, and equity clears the refi cushion (below the HELOC bar) -- lead with a refinance.'
     WHEN 'cash_out' THEN
@@ -719,6 +799,19 @@ SELECT
   COALESCE(w.owner_is_corporate, FALSE)                                              AS is_corporate_owner,
   w.has_permit,
   w.listed_for_sale,
+  w.listing_status_category,
+  w.listing_status_description,
+  w.listing_date,
+  w.listing_status_date,
+  w.listing_price,
+  w.listing_days_on_market,
+  w.listing_service,
+  w.heloc_propensity_score,
+  w.heloc_propensity_run_date,
+  w.has_heloc_propensity_trigger,
+  w.refi_propensity_score,
+  w.refi_propensity_run_date,
+  w.has_refi_propensity_trigger,
   w.is_investor,
   w.is_current_customer,
   w.is_former_customer,
@@ -788,8 +881,21 @@ COMMENT ON COLUMN mip.gold.borrower_360.related_property_count IS 'COALESCE(prop
 COMMENT ON COLUMN mip.gold.borrower_360.is_owner_occupied IS 'owner_occupancy_code = "O". Feeds fit sub-score.';
 COMMENT ON COLUMN mip.gold.borrower_360.is_absentee IS 'property_master.is_absentee. Feeds investor branch.';
 COMMENT ON COLUMN mip.gold.borrower_360.is_corporate_owner IS 'property_master.owner_is_corporate. Feeds investor branch.';
-COMMENT ON COLUMN mip.gold.borrower_360.has_permit IS 'BLOCKED (data-contract §9) -- hardcoded FALSE until Cotality Building Permits product lands. intent_trigger permit term is 0.';
-COMMENT ON COLUMN mip.gold.borrower_360.listed_for_sale IS 'BLOCKED (data-contract §9) -- hardcoded FALSE until Cotality MLS Listings lands. fn_next_best_offer purchase branch never fires on real data.';
+COMMENT ON COLUMN mip.gold.borrower_360.has_permit IS 'Filed building-permit flag. FALSE until a true Cotality Building Permits source table is present.';
+COMMENT ON COLUMN mip.gold.borrower_360.listed_for_sale IS 'TRUE when silver.listing_activity has a current active/under-contract Cotality MLS row for this CLIP.';
+COMMENT ON COLUMN mip.gold.borrower_360.listing_status_category IS 'Cotality standardized MLS listing status category.';
+COMMENT ON COLUMN mip.gold.borrower_360.listing_status_description IS 'Display-safe Cotality MLS status description. No address, remarks, agent, phone, or email.';
+COMMENT ON COLUMN mip.gold.borrower_360.listing_date IS 'MLS listing date.';
+COMMENT ON COLUMN mip.gold.borrower_360.listing_status_date IS 'Most recent MLS status/change date.';
+COMMENT ON COLUMN mip.gold.borrower_360.listing_price IS 'Current MLS listing price in USD, when supplied.';
+COMMENT ON COLUMN mip.gold.borrower_360.listing_days_on_market IS 'MLS days-on-market value, when supplied.';
+COMMENT ON COLUMN mip.gold.borrower_360.listing_service IS 'MLS/listing service label when supplied. No agent or consumer contact data.';
+COMMENT ON COLUMN mip.gold.borrower_360.heloc_propensity_score IS 'Cotality HELOC propensity score, 0..999 in the current feed. Model signal, not a permit filing.';
+COMMENT ON COLUMN mip.gold.borrower_360.heloc_propensity_run_date IS 'Cotality HELOC propensity model run date.';
+COMMENT ON COLUMN mip.gold.borrower_360.has_heloc_propensity_trigger IS 'TRUE when heloc_propensity_score >= 700. Drives HELOC Intent without setting has_permit.';
+COMMENT ON COLUMN mip.gold.borrower_360.refi_propensity_score IS 'Cotality refinance propensity score, 0..999 in the current feed.';
+COMMENT ON COLUMN mip.gold.borrower_360.refi_propensity_run_date IS 'Cotality refinance propensity model run date.';
+COMMENT ON COLUMN mip.gold.borrower_360.has_refi_propensity_trigger IS 'TRUE when refi_propensity_score >= 700. Adds intent score context.';
 COMMENT ON COLUMN mip.gold.borrower_360.is_investor IS 'Derived: related_property_count >= 2 OR is_corporate_owner OR is_absentee.';
 COMMENT ON COLUMN mip.gold.borrower_360.is_current_customer IS 'Current-servicer relationship to tenant: governed lender_dictionary says non-competitor.';
 COMMENT ON COLUMN mip.gold.borrower_360.is_former_customer IS 'Historical tenant-lender Owner Link relationship with no current tenant-serviced lien.';

@@ -19,10 +19,10 @@
 -- Sub-score semantics (each 0..100, formula per data-contract §5):
 --   economic_incentive : continuous sqrt/linear blend of rate_spread_bps +
 --                        equity_pct.
---   intent_trigger     : recent refi/payoff counts + competitor-lien,
---                        investor, rate-drift, equity, and current-customer
---                        terms. listed_for_sale and has_permit are BLOCKED
---                        -> 0 on the current real-data path.
+--   intent_trigger     : competitor-lien, investor, rate-drift, equity,
+--                        current-customer, live MLS listing, and Cotality
+--                        HELOC/refi propensity terms. Filed permits remain
+--                        0 until a true permit source lands.
 --   fit                : owner-occupancy + loan_type + corporate/investor fit
 --                        using fields carried on borrower_360.
 --   relationship       : current/former customer, competitor, investor, owner-
@@ -78,8 +78,12 @@ CREATE TABLE IF NOT EXISTS mip.gold.lead_scores (
   recommended_offer_code   STRING    NOT NULL COMMENT 'mip.gold.fn_next_best_offer(...) lowercase code.',
   rate_spread_bps          INT       NOT NULL COMMENT 'Input to fn_in_the_money / fn_next_best_offer. Carried here so the table is self-contained for parity testing.',
   equity_pct               INT       NOT NULL COMMENT 'Input to fn_in_the_money / fn_next_best_offer.',
-  has_permit               BOOLEAN   NOT NULL COMMENT 'BLOCKED -> FALSE; carried for parity test transparency.',
-  listed_for_sale          BOOLEAN   NOT NULL COMMENT 'BLOCKED -> FALSE; carried for parity test transparency.',
+  has_permit               BOOLEAN   NOT NULL COMMENT 'Filed building-permit flag. FALSE until a true Cotality Building Permits source table is present.',
+  listed_for_sale          BOOLEAN   NOT NULL COMMENT 'TRUE when borrower_360 has a current active/under-contract Cotality MLS listing row.',
+  heloc_propensity_score   INT                COMMENT 'Cotality HELOC propensity score carried from borrower_360. Model signal, not a permit filing.',
+  has_heloc_propensity_trigger BOOLEAN NOT NULL COMMENT 'TRUE when heloc_propensity_score >= 700. Used as the HELOC-intent input without setting has_permit.',
+  refi_propensity_score    INT                COMMENT 'Cotality refinance propensity score carried from borrower_360.',
+  has_refi_propensity_trigger BOOLEAN NOT NULL COMMENT 'TRUE when refi_propensity_score >= 700. Adds intent-trigger weight.',
   is_investor              BOOLEAN   NOT NULL COMMENT 'Carried from borrower_360.',
   is_current_customer      BOOLEAN   NOT NULL COMMENT 'Carried from borrower_360.',
   is_former_customer       BOOLEAN   NOT NULL COMMENT 'Carried from borrower_360. Distinct from competitor lien; requires historical tenant relationship and no current tenant lien.',

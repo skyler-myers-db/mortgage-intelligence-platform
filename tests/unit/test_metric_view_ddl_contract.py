@@ -184,6 +184,20 @@ class TestLeadGenerationMetricView:
                 f"lead_generation_metric_view must expose `{col}` column"
             )
 
+    def test_publishes_listing_and_propensity_columns(self) -> None:
+        _, sql_nc = _read_sql(self.view_path)
+        for col in (
+            "listed_for_sale",
+            "listing_status_category",
+            "listing_price",
+            "listing_days_on_market",
+            "has_heloc_propensity_trigger",
+            "heloc_propensity_score",
+            "has_refi_propensity_trigger",
+            "refi_propensity_score",
+        ):
+            assert col in sql_nc, f"lead_generation_metric_view must expose `{col}`"
+
     def test_preserves_borrower_grain_without_segment_explode(self) -> None:
         _, sql_nc = _read_sql(self.view_path)
         assert "LATERAL VIEW EXPLODE" not in sql_nc.upper()
@@ -233,9 +247,31 @@ class TestBorrowerOpportunityMetricView:
         for col in ("is_current_customer", "is_former_customer", "is_competitor_lien", "current_lender_ref"):
             assert col in sql_nc, f"borrower opportunity view must expose `{col}`"
 
+    def test_publishes_listing_and_propensity_dimensions(self) -> None:
+        _, sql_nc = _read_sql(self.view_path)
+        for col in (
+            "has_permit",
+            "listed_for_sale",
+            "listing_status_category",
+            "listing_price",
+            "listing_days_on_market",
+            "has_heloc_propensity_trigger",
+            "heloc_propensity_score",
+            "has_refi_propensity_trigger",
+            "refi_propensity_score",
+        ):
+            assert col in sql_nc, f"borrower opportunity view must expose `{col}`"
+
     def test_deploy_manifest_stays_in_sync_for_lender_overlay_dimensions(self) -> None:
         raw, _ = _read_sql(DDL_DIR / "005_semantics_views.sql")
-        for col in ("b.is_former_customer", "b.is_competitor_lien", "b.current_lender_ref"):
+        for col in (
+            "b.is_former_customer",
+            "b.is_competitor_lien",
+            "b.current_lender_ref",
+            "b.listed_for_sale",
+            "b.has_heloc_propensity_trigger",
+            "b.refi_propensity_score",
+        ):
             assert col in raw, f"005_semantics_views.sql missing `{col}`"
 
 

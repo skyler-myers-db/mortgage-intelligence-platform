@@ -103,7 +103,7 @@ test.describe('Module 0 — golden path', () => {
     for (const name of [
       'In the Money',
       'Listed for Sale',
-      'Permit Activity',
+      'HELOC Intent',
       'Investor / Multi-Property',
       'Home Equity Candidate',
       'Retention Risk',

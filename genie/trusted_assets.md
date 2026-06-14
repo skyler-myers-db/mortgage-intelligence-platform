@@ -24,6 +24,9 @@ serverless SQL warehouse referenced in `databricks.yml`.
 | `mip.gold.funnel_snapshot_daily` | table | state × segment × snapshot date | Daily scored-population, approval, and outreach snapshots. Use for trends over time instead of inventing trend lines from current borrower rows. |
 | `mip.gold.county_rollup` | table | county geography rollup | Current discovered county coverage and marketable borrower rollups. |
 | `mip.gold.zip_rollup` | table | ZIP geography rollup | Current discovered ZIP coverage and marketable borrower rollups; ZIPs are identifiers, not measures. |
+| `mip.silver.listing_activity` | table | one row per Cotality listing record | Live MLS listing activity used for listed_for_sale, the Listed segment, listing evidence, and purchase-mortgage NBO paths. |
+| `mip.silver.heloc_propensity` | table | one row per CLIP | Live Cotality HELOC propensity score used for the HELOC Intent segment and HELOC NBO paths. Not a filed permit source. |
+| `mip.silver.refi_propensity` | table | one row per CLIP | Live Cotality refinance propensity score used as an additional intent signal alongside deterministic rate/equity math. |
 | `mip.semantics.lead_generation_metric_view` | metric view | one row per eligible borrower | Executive + Head-of-Growth funnel KPIs over the ranked lead queue. Segment filters must use `array_contains(segment_codes, '<segment_code>')`; aggregate counts must use `COUNT(DISTINCT clip)`. |
 | `mip.semantics.segment_performance_metric_view` | metric view | segment | Segment strategy and A/B decisions: mean score, rate spread, equity, approval rate, outreach rate. |
 | `mip.semantics.borrower_opportunity_metric_view` | metric view | state × product × trigger | Territory planning and campaign-budget allocation. Use `mip.gold.borrower_360.situs_cbsa_code` for MSA/CBSA questions. |
@@ -40,7 +43,9 @@ Per-(segment_code, state) rollup of borrower counts + mean lead score +
 QoQ delta, plus a per-segment national `_ALL` row. Segment codes:
 `itm`, `listed`, `permit`, `investor`, `equity`, `retention`. Segment
 membership is evaluated once in `gold.borrower_360.segment_codes` (the
-`BLOCKED` predicates for listed/permit are forced false there); this
+`listed` predicate is live from MLS and the legacy `permit` code is displayed
+as HELOC Intent from Cotality HELOC propensity; true filed permits remain a
+separate pending source); this
 table is a straight aggregate over the resulting array so a Head of
 Growth can answer "how big is each segment by coverage state" without a runtime
 EXPLODE. The rules themselves live in
@@ -67,11 +72,11 @@ in the UI that shows "why now" reads from this table through the borrower
 dossier and evidence repository paths. Governed trigger `signal_type` values
 are `rate_spread`, `equity`, `market_trend`, `competitor_lien`,
 `multi_property`, `absentee_mailing`, `corporate_owner`, `recent_refi`,
-`recent_payoff`, `recent_sale`, and `foreclosure_stage`. Competitor-lien
-evidence is always `signal_type = 'competitor_lien'`; no alias is valid. MLS
-listing and building-permit trigger feeds are pending Cotality delivery and are
-blocked false today; answers must disclose that gap instead of treating missing
-feed data as zero demand. Each row carries a `source_table` citation back to the
+`recent_payoff`, `recent_sale`, `foreclosure_stage`, `listing`,
+`heloc_propensity`, and `refi_propensity`. Competitor-lien
+evidence is always `signal_type = 'competitor_lien'`; no alias is valid. Filed
+building-permit trigger feeds remain pending Cotality delivery and must be
+disclosed instead of treating missing permit data as zero demand. Each row carries a `source_table` citation back to the
 Cotality silver layer.
 
 ### `gold.borrower_dossier`

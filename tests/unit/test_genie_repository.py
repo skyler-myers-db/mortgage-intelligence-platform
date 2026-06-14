@@ -665,7 +665,7 @@ def test_data_question_without_query_gets_generic_sql_repair() -> None:
     assert result.table_rows[0]["zip"] == 60617
 
 
-def test_top_zip_question_uses_canonical_gold_sql_when_genie_repair_lacks_proof() -> None:
+def test_top_zip_question_uses_direct_canonical_gold_sql_without_genie_call() -> None:
     text_only = GenieResponse(
         answer_text="The top ZIP is 60617.",
         sql_query=None,
@@ -704,8 +704,8 @@ def test_top_zip_question_uses_canonical_gold_sql_when_genie_repair_lacks_proof(
     result = repo.respond("Which zips have the most in-the-money refi candidates?")
 
     assert result.source == "trusted_sql"
-    assert len(stub.ask_calls) == 2
-    assert result.conversation_id == "stale-conv"
+    assert stub.ask_calls == []
+    assert result.conversation_id == ""
     assert result.sql_query is not None
     assert "FROM mip.gold.borrower_360" in result.sql_query
     assert "GROUP BY zip, state" in result.sql_query
@@ -1006,7 +1006,7 @@ def test_untrusted_sql_is_policy_blocked_and_not_rendered() -> None:
     assert "mip_app.action_audit" in result.trusted_assets
 
 
-def test_canonical_zip_question_does_not_mask_untrusted_live_sql() -> None:
+def test_canonical_zip_question_prefers_direct_trusted_sql_over_untrusted_genie_sql() -> None:
     live = GenieResponse(
         answer_text="ZIP 60617 has the most in-the-money borrowers.",
         sql_query=(
@@ -1024,10 +1024,13 @@ def test_canonical_zip_question_does_not_mask_untrusted_live_sql() -> None:
 
     result = repo.respond("Which ZIPs have the most in-the-money refinance candidates?")
 
-    assert result.source == "policy_blocked"
-    assert result.table_rows == []
-    assert result.sql_query is None
-    assert sql.statements == []
+    assert result.source == "trusted_sql"
+    assert stub.ask_calls == []
+    assert result.table_rows == [{"zip": "60617", "state": "IL", "in_the_money_borrowers": 1503}]
+    assert result.sql_query is not None
+    assert "FROM mip.gold.borrower_360" in result.sql_query
+    assert "mip_app.action_audit" not in result.sql_query
+    assert sql.statements == [result.sql_query]
 
 
 def test_string_literal_asset_spoof_is_policy_blocked() -> None:
@@ -1733,7 +1736,7 @@ def test_pending_feed_columns_are_blocked_even_when_question_does_not_say_permit
     assert any("Building Permits" in gap for gap in result.proof.known_data_gaps)
 
 
-def test_trusted_sql_is_replayed_when_genie_query_rows_are_missing() -> None:
+def test_state_breakdown_uses_direct_canonical_gold_sql_without_genie_call() -> None:
     live = GenieResponse(
         answer_text="IL has the most in-the-money borrowers.",
         sql_query=(
@@ -1745,19 +1748,20 @@ def test_trusted_sql_is_replayed_when_genie_query_rows_are_missing() -> None:
         message_id="msg-replay",
     )
     stub = _StubClient(_make_breaker("closed"), response=live)
-    sql = _StubSqlClient([{"state": "IL", "borrowers": 70939}])
+    sql = _StubSqlClient([{"state": "IL", "in_the_money_borrowers": 70939}])
     repo = DatabricksGenieRepository(stub, sql)  # type: ignore[arg-type]
 
     result = repo.respond("break down in-the-money borrowers by state")
 
-    assert result.source == "genie"
-    assert result.table_rows == [{"state": "IL", "borrowers": 70939}]
+    assert result.source == "trusted_sql"
+    assert stub.ask_calls == []
+    assert result.table_rows == [{"state": "IL", "in_the_money_borrowers": 70939}]
     assert result.row_count == 1
     assert result.proof is not None
     assert result.proof.trusted is True
-    assert sql.statements
-    assert sql.statements[0].startswith("SELECT * FROM (")
-    assert "LIMIT 500" in sql.statements[0]
+    assert sql.statements == [result.sql_query]
+    assert result.sql_query is not None
+    assert "FROM mip.gold.borrower_360" in result.sql_query
 
 
 def test_in_the_money_count_uses_canonical_gold_grain() -> None:
@@ -1803,6 +1807,37 @@ def test_in_the_money_count_uses_canonical_gold_grain() -> None:
         "FROM mip.gold.borrower_360\n"
         "WHERE in_the_money = TRUE"
     )
+
+
+def test_in_the_money_count_direct_canonical_bypasses_genie_breaker() -> None:
+    """Canonical count questions should not depend on Genie API availability.
+
+    The answer still comes from live governed SQL via the repository SQL client,
+    with ``source=trusted_sql`` and proof. This prevents basic metric questions
+    from tripping Genie rate limits during deploy smoke while preserving the
+    no-mock posture.
+    """
+
+    stub = _StubClient(
+        _make_breaker("open"),
+        response=GenieClientError("HTTP 429 from Genie API", status_code=429),
+    )
+    sql = _StubSqlClient([
+        {
+            "in_the_money_borrowers": 147742,
+            "refreshed_at": "2026-05-04T22:08:34.662Z",
+        }
+    ])
+    repo = DatabricksGenieRepository(stub, sql)  # type: ignore[arg-type]
+
+    result = repo.respond("How many borrowers are currently in-the-money?")
+
+    assert result.source == "trusted_sql"
+    assert result.proof is not None
+    assert result.proof.trusted is True
+    assert result.trusted_assets == ["mip.gold.borrower_360"]
+    assert result.metric_value == "147,742"
+    assert stub.ask_calls == []
     assert result.trusted_assets == ["mip.gold.borrower_360"]
     assert result.proof is not None
     assert result.proof.trusted is True
@@ -1811,6 +1846,78 @@ def test_in_the_money_count_uses_canonical_gold_grain() -> None:
     assert result.proof.data_freshness[0].refreshed_at == "2026-05-04T22:08:34.662Z"
     assert sql.statements == [result.sql_query]
     assert sql.parameters == [None]
+
+
+def test_in_the_money_zip_direct_canonical_bypasses_genie_breaker() -> None:
+    stub = _StubClient(
+        _make_breaker("open"),
+        response=GenieClientError("HTTP 429 from Genie API", status_code=429),
+    )
+    rows = [
+        {
+            "zip": "60617",
+            "state": "IL",
+            "in_the_money_borrowers": 1200,
+            "avg_score": 81.5,
+            "refreshed_at": "2026-05-04T22:08:34.662Z",
+        },
+        {
+            "zip": "60628",
+            "state": "IL",
+            "in_the_money_borrowers": 900,
+            "avg_score": 79.2,
+            "refreshed_at": "2026-05-04T22:08:34.662Z",
+        },
+    ]
+    sql = _StubSqlClient(rows)
+    repo = DatabricksGenieRepository(stub, sql)  # type: ignore[arg-type]
+
+    result = repo.respond("Which ZIPs have the most in-the-money refinance candidates?")
+
+    assert result.source == "trusted_sql"
+    assert result.trusted_assets == ["mip.gold.borrower_360"]
+    assert result.table_rows == rows
+    assert result.visualization is not None
+    assert result.visualization.kind == "bar"
+    assert any(action.id == "open-cohort" for action in result.actions)
+    assert stub.ask_calls == []
+    assert "GROUP BY zip, state" in (result.sql_query or "")
+
+
+def test_in_the_money_state_breakdown_direct_canonical_bypasses_genie_breaker() -> None:
+    stub = _StubClient(
+        _make_breaker("open"),
+        response=GenieClientError("HTTP 429 from Genie API", status_code=429),
+    )
+    rows = [
+        {
+            "state": "IL",
+            "in_the_money_borrowers": 4000,
+            "avg_rate_spread_bps": 184.2,
+            "avg_score": 83.0,
+            "refreshed_at": "2026-05-04T22:08:34.662Z",
+        },
+        {
+            "state": "CA",
+            "in_the_money_borrowers": 3500,
+            "avg_rate_spread_bps": 177.0,
+            "avg_score": 82.1,
+            "refreshed_at": "2026-05-04T22:08:34.662Z",
+        },
+    ]
+    sql = _StubSqlClient(rows)
+    repo = DatabricksGenieRepository(stub, sql)  # type: ignore[arg-type]
+
+    result = repo.respond("Break down in-the-money borrowers by state and return the count as a table.")
+
+    assert result.source == "trusted_sql"
+    assert result.trusted_assets == ["mip.gold.borrower_360"]
+    assert result.table_rows == rows
+    assert result.visualization is not None
+    assert result.visualization.kind == "bar"
+    assert any(action.id == "create-campaign-draft" for action in result.actions)
+    assert stub.ask_calls == []
+    assert "GROUP BY state" in (result.sql_query or "")
 
 
 def test_in_the_money_count_applies_state_scope_when_present() -> None:

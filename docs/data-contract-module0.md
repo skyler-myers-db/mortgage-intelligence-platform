@@ -366,8 +366,8 @@ All gold tables: Delta, managed, partition/cluster tuned for the Module 0 querie
 | `is_owner_occupied` | BOOLEAN | N | `owner_occupancy_code = 'O'` | — | Feeds `fit`. |
 | `is_absentee` | BOOLEAN | N | `property_master.is_absentee` | — | Feeds investor branch. |
 | `is_corporate_owner` | BOOLEAN | N | `property_master.owner_is_corporate` | — | Feeds investor branch. |
-| `has_permit` | BOOLEAN | N | `FALSE` (**BLOCKED — Permits not in share**) | — | See §9. |
-| `listed_for_sale` | BOOLEAN | N | `FALSE` (**BLOCKED — MLS not in share**) | — | See §9. |
+| `has_permit` | BOOLEAN | N | `FALSE` (**BLOCKED — true filed permits not in share**) | — | See §9. |
+| `listed_for_sale` | BOOLEAN | N | `silver.listing_activity.is_active_listing` | — | Live Cotality MLS/Listings overlay. TRUE when a current active/under-contract listing row resolves to the borrower CLIP. |
 | `is_investor` | BOOLEAN | N | `related_property_count >= 2 OR is_corporate_owner OR is_absentee` | — | Derived; feeds `fn_next_best_offer`. |
 | `is_current_customer` | BOOLEAN | N | `lender_dictionary tenant match OR first_party.servicing_portfolio active row` | — | Current relationship to the configured tenant lender. The governed lender dictionary and optional first-party servicing feed are the source of truth; no brand-token substring fallback is allowed. |
 | `is_former_customer` | BOOLEAN | N | `(historical_tenant_distinct_clips > 0 OR closed first-party servicing OR funded first-party application) AND NOT is_current_customer` | — | Historical tenant-financed/serviced relationship with no current tenant-serviced lien. Distinct from competitor-lien. |
@@ -426,7 +426,7 @@ All gold tables: Delta, managed, partition/cluster tuned for the Module 0 querie
 ### 3.4 `mip.gold.evidence_events`
 
 - **Grain:** one row per (`clip`, `evidence_id`) — each row IS an `EvidenceEvent`.
-- **Source:** unioned from `silver.lien_current` (rate_spread, equity, loan_type_fit, competitor_lien), `silver.market_rates_weekly` (market_trend), `silver.mortgage_events` (last refi/payoff), `silver.owner_transfer_events` (last sale), `gold.property_owner_bridge` (multi-property). Permit and listing signal types are blocked pending-feed states only; no permit/listing evidence rows are emitted until the Cotality Building Permits and MLS/Listings Delta Shares land.
+- **Source:** unioned from `silver.lien_current` (rate_spread, equity, loan_type_fit, competitor_lien), `silver.market_rates_weekly` (market_trend), `silver.mortgage_events` (last refi/payoff), `silver.owner_transfer_events` (last sale), `gold.property_owner_bridge` (multi-property), `silver.listing_activity` (MLS listing), `silver.heloc_propensity` (HELOC propensity), and `silver.refi_propensity` (refi propensity). True filed-permit signal types await a Cotality Building Permits feed; no `permit` evidence rows are emitted.
 - **PK:** `(clip, evidence_id)`.
 - **Clustering:** liquid on `clip`; timeline ordering is by `signal_rank` / timestamp in the query layer.
 - **Refresh:** daily.
@@ -436,9 +436,9 @@ All gold tables: Delta, managed, partition/cluster tuned for the Module 0 querie
 |---|---|---|---|---|---|
 | `clip` | STRING | N | source tables | — | Not in `EvidenceEvent` but required for join / filter. |
 | `evidence_id` | STRING | N | `CONCAT('ev-', SUBSTR(sha2(CONCAT(clip, '\|', signal_type, '\|', timestamp), 256), 1, 12))` | `evidence_id` | Stable across refreshes — decoupled from row order so `Borrower360.evidence_ids` lists stay stable. |
-| `source_product` | STRING | N | literal per source (`'Voluntary Lien'`, `'AVM'`, `'Owner Link'`, `'Property'`, `'Mortgage Domain'`, `'Owner Transfer'`, `'Market Rates'`) | `source_product` | |
+| `source_product` | STRING | N | literal per source (`'Voluntary Lien'`, `'AVM'`, `'Owner Link'`, `'Property'`, `'Mortgage Domain'`, `'Owner Transfer'`, `'Market Rates'`, `'MLS Listings'`, `'HELOC Propensity'`, `'Refi Propensity'`) | `source_product` | |
 | `source_table` | STRING | N | literal UC path (e.g. `'mip.silver.lien_current'`) | `source_table` | **Must be a real UC path** — the EvidenceDrawer shows it. |
-| `signal_type` | STRING | N | controlled vocab: `rate_spread`, `equity`, `loan_type_fit`, `competitor_lien`, `multi_property`, `absentee_mailing`, `corporate_owner`, `foreclosure_stage`, `recent_refi`, `recent_payoff`, `recent_sale`, `permit` (BLOCKED), `listing` (BLOCKED), `market_trend` | `signal_type` | `loan_type_fit` is compliance-visible rationale for the symmetric CONV/FHA/VA fit branch and is excluded from the evidence sub-score. |
+| `signal_type` | STRING | N | controlled vocab includes live `listing`, live `heloc_propensity`, live `refi_propensity`, and reserved `permit` alongside `rate_spread`, `equity`, `loan_type_fit`, `competitor_lien`, `multi_property`, `absentee_mailing`, `corporate_owner`, `foreclosure_stage`, `recent_refi`, `recent_payoff`, `recent_sale`, and `market_trend` | `signal_type` | `loan_type_fit` is compliance-visible rationale for the symmetric CONV/FHA/VA fit branch and is excluded from the evidence sub-score. `listing`, `heloc_propensity`, and `refi_propensity` are live; `permit` is reserved for true filed-permit data and remains un-emitted. |
 | `signal_value` | STRING | N | string-cast of the computed value (`'+88 bps'`, `'$285K'`, `'3 properties'`, `'competitor refi'`) | `signal_value` | Human-readable and deterministic. |
 | `display_text` | STRING | N | one-sentence template per `signal_type` | `display_text` | Deterministic; no PII. |
 | `confidence` | DOUBLE | N | per-signal: AVM `confidence_score_mktg`; rate_spread and market_trend `0.92`; Owner-Link derived `0.85`; recent events and competitor/foreclosure signals `0.89`. | `confidence` | 0..1 per `EvidenceEvent` constraint. |
@@ -494,11 +494,11 @@ Segment codes match `Literal["itm", "listed", "permit", "investor", "equity", "r
 | `itm` | `in_the_money = TRUE` where `in_the_money` uses `min_spread_bps_applied` and `min_equity_pct_applied` | Yes |
 | `equity` | `equity_pct >= heloc_equity_min_applied AND COALESCE(second_pos_amount, 0) = 0` (clean 1st-lien, HELOC-grade equity) | Yes |
 | `investor` | `related_property_count >= 2 OR is_corporate_owner OR is_absentee` | Yes |
-| `retention` | `is_current_customer = TRUE AND (rate_spread_bps >= retention_min_spread_applied OR is_competitor_lien OR listed_for_sale)` | Yes (customer-flag side) / Partial (listed) |
-| `listed` | `listed_for_sale = TRUE` | **BLOCKED — needs MLS** (§9) |
-| `permit` | `has_permit = TRUE` | **BLOCKED — needs Permits** (§9) |
+| `retention` | `is_current_customer = TRUE AND (rate_spread_bps >= retention_min_spread_applied OR is_competitor_lien OR listed_for_sale)` | Yes |
+| `listed` | `listed_for_sale = TRUE` from live `mip.silver.listing_activity` rows | Yes |
+| `permit` | `has_permit = TRUE` | **BLOCKED — needs true filed Building Permits** (§9) |
 
-Under the current share, `listed` and `permit` predicates materialize no borrower memberships. `gold.segment_population` still emits canonical zero-count rows for both blocked segments so the UI can show an honest pending data-dependency state rather than silently dropping a contracted segment.
+Under the current share, `listed` materializes from live MLS rows in `mip.silver.listing_activity`. The legacy `permit` segment code is now the UI-compatible **HELOC Intent** segment backed by Cotality HELOC propensity rows; true filed building-permit predicates remain false until a permit feed lands. `gold.segment_population` still emits canonical segment rows so unavailable data dependencies are disclosed instead of silently dropped.
 
 Current-customer and competitor-lien flags are CLIP-grain current-servicer signals resolved through `mip.ref.lender_dictionary`. `is_former_customer` is an owner-level historical tenant-lender relationship with no current tenant-serviced lien; it powers Portfolio Builder's "Former customer" filter and the relationship score, but the contracted `retention` segment remains current-customer retention until a lender-approved recapture segment is added.
 
@@ -516,7 +516,7 @@ CAST(LEAST(100, GREATEST(0,
 )) AS INT)
 ```
 
-**intent_trigger** (weight 0.30): deterministic current-state signal mix from competitor lien, related-property count, rate-spread, equity, and current-customer flags. MLS/listing and permit inputs remain blocked false until the corresponding Cotality shares arrive.
+**intent_trigger** (weight 0.30): deterministic current-state signal mix from competitor lien, related-property count, rate-spread, equity, current-customer flags, live MLS listing activity, and Cotality HELOC/refi propensity scores. Filed building-permit inputs remain hard-false until the corresponding Cotality share arrives.
 ```
 LEAST(100, GREATEST(0,
     20 * CAST(is_competitor_lien AS INT)
@@ -524,6 +524,9 @@ LEAST(100, GREATEST(0,
   + LEAST(30, CAST(ROUND(2 * sqrt(GREATEST(0, rate_spread_bps))) AS INT))
   + LEAST(10, GREATEST(0, CAST(equity_pct / 10 AS INT)))
   + 8 * CAST(is_current_customer AS INT)
+  + 18 * CAST(listed_for_sale AS INT)
+  + LEAST(18, CAST(ROUND(heloc_propensity_score / 50.0) AS INT))
+  + LEAST(12, CAST(ROUND(refi_propensity_score / 85.0) AS INT))
 )
 ```
 
@@ -575,7 +578,7 @@ recent application activity. The historical count is distinct CLIPs per
 `owner_link_id`, not repeat mortgage events on one property, and the tenant
 lender comes from `mip.ref.lender_dictionary`.
 
-**evidence** (weight 0.10): direct count of scoring evidence rows in `gold.evidence_events` plus a bounded second-lien evidence tail. `permit`, `listing`, and `loan_type_fit` rows are excluded from this count; the first two are blocked feed placeholders and `loan_type_fit` is explainability-only.
+**evidence** (weight 0.10): direct count of scoring evidence rows in `gold.evidence_events` plus a bounded second-lien evidence tail. `permit` rows are excluded because true filed permits remain a pending feed, and `loan_type_fit` is explainability-only. Live `listing`, `heloc_propensity`, and `refi_propensity` evidence rows contribute to the count.
 ```
 LEAST(100, GREATEST(0,
   10 * evidence_event_count

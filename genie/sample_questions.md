@@ -136,8 +136,9 @@ Each entry has:
 13. **How many evidence events were recorded yesterday, grouped by trigger type?**
     Intent: operational sanity check — signal freshness and data ingestion health.
     Expected skeleton: one row per live trigger type currently emitted by
-    `mip.gold.evidence_events`; do not expect permit or listed-for-sale
-    rows until source readiness marks those feeds live.
+    `mip.gold.evidence_events`; listing, HELOC propensity, and refi propensity
+    rows are live when present. Do not expect filed-permit rows until source
+    readiness marks Building Permits live.
     SQL hint: ``WHERE to_date(`timestamp`) = current_date - interval '1 day' GROUP BY signal_type``.
     Source: `mip.gold.evidence_events`.
 
@@ -197,12 +198,10 @@ Each entry has:
     Source: `mip.gold.borrower_360`.
 
 20. **Break down the Listed-for-Sale segment by loan product and average current rate.**
-    Intent: purchase-mortgage opportunity sizing by product mix. Note: MLS data is on
-    the Cotality roadmap and must be treated as a data gap until the MLS product lands.
-    Expected skeleton: explicit acknowledgment that MLS data is not yet live; no SQL answer
-    that treats blocked-false listing flags as zero purchase demand.
-    SQL hint: none until `mip.gold.source_readiness` reports the MLS feed live.
-    Source: `mip.gold.source_readiness`.
+    Intent: purchase-mortgage opportunity sizing by product mix from live MLS listing rows.
+    Expected skeleton: grouped rows for listed borrowers with loan product/current-rate context.
+    SQL hint: `SELECT first_pos_loan_type, COUNT(*) AS listed_borrowers, ROUND(AVG(current_rate), 2) AS avg_current_rate FROM mip.gold.borrower_360 WHERE listed_for_sale = TRUE GROUP BY first_pos_loan_type ORDER BY listed_borrowers DESC`.
+    Source: `mip.gold.borrower_360`.
 
 ---
 

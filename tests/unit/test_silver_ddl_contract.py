@@ -1,4 +1,4 @@
-"""Slice-2 contract test for the five silver DDL files.
+"""Contract tests for the silver DDL files.
 
 Parses every `sql/ddl/silver_*.sql` file (plus the paired transformation
 file under `sql/transformations/silver_*.sql`) and asserts:
@@ -31,16 +31,17 @@ DDL_DIR = REPO_ROOT / "sql" / "ddl"
 TRANSFORM_DIR = REPO_ROOT / "sql" / "transformations"
 PIPELINE_PATH = REPO_ROOT / "pipelines" / "lakeflow" / "mip_feature_pipeline.py"
 
-# The five silver tables landed by Slice 2. `silver_market_rates_weekly`
-# belongs to Slice 1 (FRED ingest) and is covered by its own tests; we
-# deliberately exclude it here so this file tracks the Slice-2 contract
-# independently.
+# CLIP/event-grain Cotality silver lifts. `silver_market_rates_weekly`
+# belongs to the FRED ingest path and is covered by its own tests.
 SILVER_DDL_FILES: tuple[str, ...] = (
     "silver_property_master.sql",
     "silver_lien_current.sql",
     "silver_mortgage_events.sql",
     "silver_owner_transfer_events.sql",
     "silver_owner_property_bridge.sql",
+    "silver_listing_activity.sql",
+    "silver_heloc_propensity.sql",
+    "silver_refi_propensity.sql",
 )
 
 # Expected PK-grain column per table. The contract check asserts the column
@@ -52,6 +53,9 @@ PK_EXPECTATIONS: dict[str, tuple[str, ...]] = {
     "silver_mortgage_events.sql":      ("mortgage_txn_id", "clip"),
     "silver_owner_transfer_events.sql": ("transfer_txn_id", "clip"),
     "silver_owner_property_bridge.sql": ("owner_link_id",),
+    "silver_listing_activity.sql":     ("clip",),
+    "silver_heloc_propensity.sql":     ("clip",),
+    "silver_refi_propensity.sql":      ("clip",),
 }
 
 # Forbidden raw-PII column names. If any of these appear in a silver DDL
@@ -204,8 +208,13 @@ def test_silver_transformations_do_not_hardcode_demo_state_filter(name: str) -> 
         "silver_owner_property_bridge.sql",
     }:
         assert "situs_state IS NOT NULL" in transform_text
-    else:
+    elif name in {
+        "silver_mortgage_events.sql",
+        "silver_owner_transfer_events.sql",
+    }:
         assert "deed_situs_state_static IS NOT NULL" in transform_text
+    else:
+        assert "RLIKE '^[A-Z]{2}$'" in transform_text
 
 
 def _declared_column_names(body: str) -> list[str]:

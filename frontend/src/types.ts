@@ -62,9 +62,9 @@ export interface LeadSummary {
    *  through gold.lead_population so /segment-intelligence can run real
    *  client-side predicates against occupancy, owner-link, lien state,
    *  and purchase intent. All optional with safe defaults so older cached
-   *  payloads still parse. `has_permit` / `listed_for_sale` are BLOCKED
-   *  FALSE in gold until Cotality Building Permits + MLS Delta Shares
-   *  are live — the UI surfaces a "data-dependency pending" note. */
+   *  payloads still parse. `listed_for_sale` is live from Cotality MLS.
+   *  `has_permit` remains a filed-building-permit flag and must not be
+   *  inferred from propensity models; HELOC intent is carried separately. */
   is_owner_occupied?: boolean;
   is_investor?: boolean;
   is_current_customer?: boolean;
@@ -75,6 +75,19 @@ export interface LeadSummary {
   second_pos_amount?: number;
   has_permit?: boolean;
   listed_for_sale?: boolean;
+  listing_status_category?: string | null;
+  listing_status_description?: string | null;
+  listing_date?: string | null;
+  listing_status_date?: string | null;
+  listing_price?: number | null;
+  listing_days_on_market?: number | null;
+  listing_service?: string | null;
+  heloc_propensity_score?: number | null;
+  heloc_propensity_run_date?: string | null;
+  has_heloc_propensity_trigger?: boolean;
+  refi_propensity_score?: number | null;
+  refi_propensity_run_date?: string | null;
+  has_refi_propensity_trigger?: boolean;
   /** Public-demo-safe lender alias for the current open lien holder. */
   current_lender_ref?: string | null;
   marketing_eligible?: boolean;

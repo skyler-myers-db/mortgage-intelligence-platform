@@ -152,7 +152,27 @@ def build_data_estate_response(
         _source_asset(by_name.get("Owner Link"), name="Owner Link", label="Owner-property graph", uc_object=qualify("silver", "owner_property_bridge", catalog="mip")),
         _source_asset(by_name.get("AVM"), name="AVM", label="Valuation and equity", uc_object=qualify("silver", "lien_current", catalog="mip")),
         _source_asset(by_name.get("FRED Market Rates"), name="FRED Market Rates", label="MORTGAGE30US market rate", uc_object=qualify("silver", "market_rates_weekly", catalog="mip")),
-        _source_asset(by_name.get("MLS"), name="MLS", label="Listings overlay", uc_object=None, fallback_status="roadmap"),
+        _source_asset(
+            by_name.get("MLS Listings"),
+            name="MLS Listings",
+            label="Listings overlay",
+            uc_object=qualify("silver", "listing_activity", catalog="mip"),
+            fallback_status="roadmap",
+        ),
+        _source_asset(
+            by_name.get("Cotality HELOC Propensity"),
+            name="Cotality HELOC Propensity",
+            label="HELOC-intent overlay",
+            uc_object=qualify("silver", "heloc_propensity", catalog="mip"),
+            fallback_status="roadmap",
+        ),
+        _source_asset(
+            by_name.get("Cotality Refi Propensity"),
+            name="Cotality Refi Propensity",
+            label="Refi propensity overlay",
+            uc_object=qualify("silver", "refi_propensity", catalog="mip"),
+            fallback_status="roadmap",
+        ),
         _source_asset(by_name.get("Building Permits"), name="Building Permits", label="Permit overlay", uc_object=None, fallback_status="roadmap"),
     ]
     databricks_assets = [
@@ -253,7 +273,10 @@ def build_data_estate_response(
         gaps.append("First-party lender feeds are synthetic Summit Mortgage demo feeds, not real customer data.")
     if any(asset.status not in {"live", "demo_synthetic"} for asset in first_party_assets):
         gaps.append("Customer first-party data feeds are not connected in this demo workspace.")
-    if by_name.get("MLS") is None or by_name.get("MLS", SourceRow("MLS", "roadmap", None, None, "")).status != "live":
+    if (
+        by_name.get("MLS Listings") is None
+        or by_name.get("MLS Listings", SourceRow("MLS Listings", "roadmap", None, None, "")).status != "live"
+    ):
         gaps.append("Cotality MLS/Listings Delta Share is pending.")
     if by_name.get("Building Permits") is None or by_name.get("Building Permits", SourceRow("Building Permits", "roadmap", None, None, "")).status != "live":
         gaps.append("Cotality Building Permits Delta Share is pending.")

@@ -11,7 +11,6 @@
     "frontend/src/components/mortgage/USChoroplethMap.tsx": "2026-06-21",
     "frontend/src/design-system/components.css": "2026-06-21",
     "frontend/src/lib/api.ts": "2026-06-21",
-    "frontend/src/routes/analytics.tsx": "2026-06-21",
     "tools/e2e_borrower_audit.py": "2026-06-21"
   },
   "_policy": "2026-06-11 audit P3: the 2026-06-21 expiry is DELIBERATE - it lands right after Data+AI Summit week (Jun 15-18) as the forcing function for the post-Summit split/refactor slice (router-layer drift, 'use no memo' removal). Do not bump-to-green; split the files or re-date in the same commit as a documented schedule decision."

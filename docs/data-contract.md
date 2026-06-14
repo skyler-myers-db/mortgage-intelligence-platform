@@ -9,6 +9,9 @@ reviewers should use this document as the stable entry point.
 - `mip.silver.property_master`
 - `mip.silver.lien_current`
 - `mip.silver.mortgage_events`
+- `mip.silver.listing_activity`
+- `mip.silver.heloc_propensity`
+- `mip.silver.refi_propensity`
 - `mip.gold.borrower_360`
 - `mip.gold.lead_scores`
 - `mip.gold.lead_population`
@@ -19,8 +22,8 @@ reviewers should use this document as the stable entry point.
 
 ## Contracted Pending Assets
 
-- MLS/Listings: pending Cotality Delta Share.
-- Building Permits: pending Cotality Delta Share.
+- Building Permits: pending Cotality Delta Share. Filed permit activity must not
+  be inferred from HELOC propensity or property condition fields.
 
 ## First-Party Demo Feed
 

@@ -30,7 +30,7 @@ _OWNER_LINK_LABELS: frozenset[str] = frozenset(
     {"All", "Single-property owner", "Multi-property (2-4)", "Portfolio investor (5+)"}
 )
 _PURCHASE_INTENT_LABELS: frozenset[str] = frozenset(
-    {"All", "Listed for sale", "Recent permit activity", "Both"}
+    {"All", "Listed for sale", "HELOC intent", "Recent permit activity", "Both"}
 )
 _MARKETING_ELIGIBILITY_LABELS: frozenset[str] = frozenset(
     {"Eligible only", "Any", "Suppressed only"}
@@ -425,7 +425,7 @@ class PortfolioCriteria(BaseModel):
         if owner_link in {"single-property owner", "multi-property (2-4)", "portfolio investor (5+)"}:
             return True
         purchase_intent = (self.purchase_intent or "").strip().lower()
-        if purchase_intent in {"listed for sale", "recent permit activity", "both"}:
+        if purchase_intent in {"listed for sale", "heloc intent", "recent permit activity", "both"}:
             return True
         relationship = (self.lender_relationship or "").strip().lower()
         if relationship in {"current customer", "former customer", "competitor customer", "competitor"}:

@@ -62,6 +62,8 @@ type LeadRow = {
   current_lien_balance?: number;
   evidence_ids?: string[];
   approval_status?: string;
+  marketing_eligible?: boolean;
+  consent_status?: string;
   recommended_offer?: string;
 };
 
@@ -106,6 +108,30 @@ async function fetchLeads(request: APIRequestContext, limit = 10): Promise<LeadR
   });
   expect(resp.status(), 'GET /api/leads returned non-200').toBe(200);
   return (await resp.json()) as LeadRow[];
+}
+
+async function fetchActionablePendingLead(request: APIRequestContext): Promise<LeadRow> {
+  const resp = await request.get(`${API_URL}/api/leads?limit=100&approval_status=pending`, {
+    headers: AUTH_HEADERS,
+  });
+  expect(resp.status(), 'GET /api/leads?approval_status=pending returned non-200').toBe(200);
+  const leads = (await resp.json()) as LeadRow[];
+  const candidates = leads.filter((row) =>
+    row.approval_status === 'pending' &&
+    row.marketing_eligible !== false &&
+    (row.consent_status ?? 'opt_in') === 'opt_in',
+  );
+  for (const lead of candidates) {
+    const borrower = await fetchBorrower(request, lead.borrower_id);
+    if (
+      borrower.approval_status === 'pending' &&
+      borrower.marketing_eligible !== false &&
+      (borrower.consent_status ?? 'opt_in') === 'opt_in'
+    ) {
+      return lead;
+    }
+  }
+  throw new Error('No actionable pending lead available for live approval test.');
 }
 
 async function fetchBorrower(request: APIRequestContext, borrowerId: string): Promise<BorrowerDossier> {
@@ -670,9 +696,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
   });
 
   test('approve outreach writes a new audit row visible in /api/audit within 5s', async ({ page, request }) => {
-    const leads = await fetchLeads(request);
-    expect(leads.length).toBeGreaterThan(0);
-    const target = leads[0].borrower_id;
+    const target = (await fetchActionablePendingLead(request)).borrower_id;
 
     const before = await fetchAuditEvents(request, 100);
     if (before === null) {
@@ -1125,9 +1149,20 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
 
     const primaryOffer = page.locator('.surface', { hasText: /Primary offer/i }).first();
     await assertSourceDrawer(page, primaryOffer, 'Next-best-offer model', 'Next-Best-Offer logic');
-    await assertSourceDrawer(page, primaryOffer, 'Market rate comparison', 'Market rate comparison');
-    await assertSourceDrawer(page, primaryOffer, 'In-the-money rule', 'In-the-Money logic');
     await assertSourceDrawer(page, primaryOffer, 'Lead score model', 'Lead score model');
+    const sourceLabels = await primaryOffer
+      .locator('.evidence-chip')
+      .evaluateAll((nodes) => nodes.map((node) => node.textContent?.trim() ?? ''));
+    if (sourceLabels.includes('Market rate comparison')) {
+      await assertSourceDrawer(page, primaryOffer, 'Market rate comparison', 'Market rate comparison');
+      await assertSourceDrawer(page, primaryOffer, 'In-the-money rule', 'In-the-Money logic');
+    } else if (sourceLabels.includes('MLS listing activity')) {
+      await assertSourceDrawer(page, primaryOffer, 'MLS listing activity', 'MLS listing');
+    } else if (sourceLabels.includes('HELOC propensity')) {
+      await assertSourceDrawer(page, primaryOffer, 'HELOC propensity', 'HELOC propensity signal');
+    } else {
+      throw new Error(`Primary offer did not expose a recognized offer-driver source: ${sourceLabels.join(', ')}`);
+    }
   });
 
   test('ask-genie: standalone page (not the FAB) renders + primary CTA works', async ({ page }) => {

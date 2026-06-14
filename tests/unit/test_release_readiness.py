@@ -11,9 +11,9 @@ def _write_talk_track(path: Path) -> None:
     path.write_text(
         "\n".join(
             [
-                "MLS listed-for-sale feed is pending.",
+                "MLS listed-for-sale feed is live and connected.",
                 "Building Permits Delta Share is pending.",
-                "Do not call MLS or permit overlays implemented until those shares are connected.",
+                "Do not claim building permits or permit filings are implemented until that share is connected.",
             ]
         ),
         encoding="utf-8",
@@ -62,7 +62,7 @@ def test_writes_json_and_markdown_with_supplied_evidence(tmp_path: Path) -> None
             "--source-readiness",
             "passed",
             "--mls-listing-status",
-            "pending",
+            "available",
             "--building-permit-status",
             "pending",
         ]
@@ -75,8 +75,9 @@ def test_writes_json_and_markdown_with_supplied_evidence(tmp_path: Path) -> None
     assert report["app_url"] == "https://example.invalid"
     assert report["checks"]["package_hygiene"]["status"] == "passed"
     assert report["checks"]["bundle_validate"]["evidence"] == "databricks bundle validate -t dev"
-    assert report["checks"]["mls_listing_status"]["status"] == "pending"
-    assert "Cannot claim MLS/listing or listed-for-sale triggers are live" in markdown
+    assert report["checks"]["mls_listing_status"]["status"] == "available"
+    assert "Cannot claim MLS/listing or listed-for-sale triggers are live" not in markdown
+    assert "Cannot claim building-permit or renovation-trigger segments are live" in markdown
     assert "| Databricks bundle validate | `passed` | databricks bundle validate -t dev" in markdown
 
 

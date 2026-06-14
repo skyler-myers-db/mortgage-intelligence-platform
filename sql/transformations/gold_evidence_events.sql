@@ -12,10 +12,9 @@
 -- Data contract: docs/data-contract-module0.md §3.4.
 --
 -- BLOCKED signal types (data-contract §9):
---   - 'permit'  : NEVER emitted until the Cotality Building Permits Delta
---                 Share lands.
---   - 'listing' : NEVER emitted until the Cotality MLS/Listings Delta Share
---                 lands.
+--   - 'permit'  : NEVER emitted until a true Cotality Building Permits
+--                 source table is present. HELOC propensity is a model
+--                 signal and must not be described as a filed permit.
 --
 -- Confidence values (data-contract §3.4):
 --   - AVM-backed (equity): from silver confidence_score_mktg.
@@ -26,18 +25,21 @@
 --   - Recent-event signals + FC stage : 0.89 (deterministic).
 --
 -- Signal priority (signal_rank), smaller = higher priority:
+--   0  listing
 --   1  rate_spread
 --   2  equity
 --   3  market_trend
---   4  loan_type_fit
---   5  competitor_lien
---   6  multi_property
---   7  absentee_mailing
---   8  corporate_owner
---   9  recent_refi
---  10  recent_payoff
---  11  recent_sale
---  12  foreclosure_stage
+--   4  heloc_propensity
+--   5  refi_propensity
+--   6  loan_type_fit
+--   7  competitor_lien
+--   8  multi_property
+--   9  absentee_mailing
+--  10  corporate_owner
+--  11  recent_refi
+--  12  recent_payoff
+--  13  recent_sale
+--  14  foreclosure_stage
 --
 -- display_text is deterministic per signal_type and interpolates only
 -- numeric values, never PII. ISO-8601 timestamp strings come from upstream
@@ -49,6 +51,9 @@
 --   mip.silver.mortgage_events
 --   mip.silver.owner_transfer_events
 --   mip.silver.market_rates_weekly
+--   mip.silver.listing_activity
+--   mip.silver.heloc_propensity
+--   mip.silver.refi_propensity
 --   mip.gold.property_owner_bridge
 --
 -- 2026-06-11 audit P2-8: CTAS re-declares clustering/comments/properties
@@ -167,7 +172,86 @@ market_trend_rows AS (
   CROSS JOIN market AS m
   WHERE lc.situs_state IS NOT NULL
 ),
--- 4. loan_type_fit: compliance-visible explanation for the fit sub-score's
+-- 4. listing: current active/under-contract MLS listing per CLIP.
+listing_rows AS (
+  SELECT
+    la.clip,
+    'MLS Listings'                                   AS source_product,
+    'mip.silver.listing_activity'                    AS source_table,
+    'listing'                                        AS signal_type,
+    COALESCE(la.listing_status_description, la.listing_status_category, 'active listing') AS signal_value,
+    CONCAT(
+      'Current MLS status is ',
+      COALESCE(la.listing_status_description, la.listing_status_category, 'active'),
+      CASE
+        WHEN la.listing_price IS NOT NULL THEN CONCAT(' at $', CAST(la.listing_price AS STRING), ' list price')
+        ELSE ''
+      END,
+      CASE
+        WHEN la.days_on_market IS NOT NULL THEN CONCAT(' after ', CAST(la.days_on_market AS STRING), ' days on market')
+        ELSE ''
+      END,
+      '.'
+    )                                                AS display_text,
+    0.94                                             AS confidence,
+    CAST(COALESCE(la.listing_status_date, la.listing_date, DATE(la.source_updated_at), DATE(la.ingest_ts)) AS STRING) AS `timestamp`,
+    0                                                AS signal_rank
+  FROM (
+    SELECT
+      src.*,
+      ROW_NUMBER() OVER (
+        PARTITION BY src.clip
+        ORDER BY
+          COALESCE(src.listing_status_date, src.listing_date, DATE(src.source_updated_at), DATE(src.ingest_ts)) DESC,
+          src.listing_record_id
+      ) AS rn
+    FROM mip.silver.listing_activity AS src
+    WHERE src.is_active_listing = TRUE
+      AND src.clip IS NOT NULL
+  ) la
+  WHERE la.rn = 1
+),
+-- 5. heloc_propensity: high Cotality HELOC propensity model score.
+heloc_propensity_rows AS (
+  SELECT
+    hp.clip,
+    'HELOC Propensity'                               AS source_product,
+    'mip.silver.heloc_propensity'                    AS source_table,
+    'heloc_propensity'                               AS signal_type,
+    CONCAT(CAST(hp.heloc_propensity_score AS STRING), '/999') AS signal_value,
+    CONCAT(
+      'Cotality HELOC propensity score is ',
+      CAST(hp.heloc_propensity_score AS STRING),
+      ' out of 999.'
+    )                                                AS display_text,
+    LEAST(0.95, GREATEST(0.65, hp.heloc_propensity_score / 1000.0)) AS confidence,
+    CAST(COALESCE(hp.heloc_propensity_run_date, DATE(hp.source_updated_at), DATE(hp.ingest_ts)) AS STRING) AS `timestamp`,
+    4                                                AS signal_rank
+  FROM mip.silver.heloc_propensity AS hp
+  WHERE hp.clip IS NOT NULL
+    AND hp.heloc_propensity_score >= 700
+),
+-- 6. refi_propensity: high Cotality refinance propensity model score.
+refi_propensity_rows AS (
+  SELECT
+    rp.clip,
+    'Refi Propensity'                                AS source_product,
+    'mip.silver.refi_propensity'                     AS source_table,
+    'refi_propensity'                                AS signal_type,
+    CONCAT(CAST(rp.refi_propensity_score AS STRING), '/999') AS signal_value,
+    CONCAT(
+      'Cotality refinance propensity score is ',
+      CAST(rp.refi_propensity_score AS STRING),
+      ' out of 999.'
+    )                                                AS display_text,
+    LEAST(0.95, GREATEST(0.65, rp.refi_propensity_score / 1000.0)) AS confidence,
+    CAST(COALESCE(rp.refi_propensity_run_date, DATE(rp.source_updated_at), DATE(rp.ingest_ts)) AS STRING) AS `timestamp`,
+    5                                                AS signal_rank
+  FROM mip.silver.refi_propensity AS rp
+  WHERE rp.clip IS NOT NULL
+    AND rp.refi_propensity_score >= 700
+),
+-- 7. loan_type_fit: compliance-visible explanation for the fit sub-score's
 --    symmetric CONV/FHA/VA owner-occupant boost. This row is intentionally
 --    excluded from the evidence sub-score in borrower_360/lead_scores so adding
 --    rationale does not retune opportunity scores.
@@ -181,13 +265,13 @@ loan_type_fit_rows AS (
     'Owner-occupied CONV/FHA/VA loan type receives symmetric product-fit treatment.' AS display_text,
     0.89                                             AS confidence,
     CAST(lc.ingest_ts AS STRING)                     AS `timestamp`,
-    4                                                AS signal_rank
+    6                                                AS signal_rank
   FROM mip.silver.lien_current AS lc
   WHERE COALESCE(lc.owner_occupancy_code, '') = 'O'
     AND lc.first_pos_loan_type IN ('CONV','FHA','VA')
     AND lc.situs_state IS NOT NULL
 ),
--- 5. competitor_lien: current servicer known and not a tenant-lender alias.
+-- 8. competitor_lien: current servicer known and not a tenant-lender alias.
 competitor_lien_rows AS (
   SELECT
     lc.clip,
@@ -198,7 +282,7 @@ competitor_lien_rows AS (
     'Current servicer is not the lender of record.'  AS display_text,
     0.89                                             AS confidence,
     CAST(lc.ingest_ts AS STRING)                     AS `timestamp`,
-    5                                                AS signal_rank
+    7                                                AS signal_rank
   FROM mip.silver.lien_current AS lc
   LEFT JOIN mip.ref.lender_dictionary AS lr
     ON UPPER(TRIM(lr.raw_key)) = UPPER(TRIM(lc.first_pos_lender_current))
@@ -206,7 +290,7 @@ competitor_lien_rows AS (
     AND NOT COALESCE(NOT lr.is_competitor, FALSE)
     AND lc.situs_state IS NOT NULL
 ),
--- 5. multi_property: Owner-Link rollup says >= 2 related properties.
+-- 9. multi_property: Owner-Link rollup says >= 2 related properties.
 multi_property_rows AS (
   SELECT
     pm.clip,
@@ -217,14 +301,14 @@ multi_property_rows AS (
     'Owner Link identifies related properties under the same entity.' AS display_text,
     0.85                                             AS confidence,
     CAST(pob.refreshed_at AS STRING)                 AS `timestamp`,
-    6                                                AS signal_rank
+    8                                                AS signal_rank
   FROM mip.silver.property_master AS pm
   JOIN mip.gold.property_owner_bridge AS pob
     ON pob.owner_link_id = pm.owner_link_id
   WHERE pob.related_property_count >= 2
     AND pm.situs_state IS NOT NULL
 ),
--- 6. absentee_mailing: mailing state != situs state.
+-- 10. absentee_mailing: mailing state != situs state.
 absentee_rows AS (
   SELECT
     pm.clip,
@@ -235,12 +319,12 @@ absentee_rows AS (
     'Owner mailing address is out of state from situs.'               AS display_text,
     0.85                                             AS confidence,
     CAST(pm.ingest_ts AS STRING)                     AS `timestamp`,
-    7                                                AS signal_rank
+    9                                                AS signal_rank
   FROM mip.silver.property_master AS pm
   WHERE pm.is_absentee = TRUE
     AND pm.situs_state IS NOT NULL
 ),
--- 7. corporate_owner: ownership flagged corporate.
+-- 11. corporate_owner: ownership flagged corporate.
 corporate_owner_rows AS (
   SELECT
     pm.clip,
@@ -251,12 +335,12 @@ corporate_owner_rows AS (
     'Owner of record is a corporate entity.'         AS display_text,
     0.85                                             AS confidence,
     CAST(pm.ingest_ts AS STRING)                     AS `timestamp`,
-    8                                                AS signal_rank
+    10                                               AS signal_rank
   FROM mip.silver.property_master AS pm
   WHERE pm.owner_is_corporate = TRUE
     AND pm.situs_state IS NOT NULL
 ),
--- 8. recent_refi: last refi event per CLIP in the last 365 days.
+-- 12. recent_refi: last refi event per CLIP in the last 365 days.
 recent_refi_rows AS (
   SELECT
     me.clip,
@@ -267,7 +351,7 @@ recent_refi_rows AS (
     'Refi event recorded within the last 12 months.' AS display_text,
     0.89                                             AS confidence,
     CAST(me.event_date AS STRING)                    AS `timestamp`,
-    9                                                AS signal_rank
+    11                                               AS signal_rank
   FROM (
     SELECT
       clip, event_date,
@@ -280,7 +364,7 @@ recent_refi_rows AS (
   ) me
   WHERE me.rn = 1
 ),
--- 9. recent_payoff: last payoff / release event per CLIP in last 365 days.
+-- 13. recent_payoff: last payoff / release event per CLIP in last 365 days.
 recent_payoff_rows AS (
   SELECT
     me.clip,
@@ -291,7 +375,7 @@ recent_payoff_rows AS (
     'Mortgage release recorded within the last 12 months.' AS display_text,
     0.89                                             AS confidence,
     CAST(me.release_date AS STRING)                  AS `timestamp`,
-    10                                               AS signal_rank
+    12                                               AS signal_rank
   FROM (
     SELECT
       clip, release_date,
@@ -303,7 +387,7 @@ recent_payoff_rows AS (
   ) me
   WHERE me.rn = 1
 ),
--- 10. recent_sale: last transfer per CLIP in last 365 days.
+-- 14. recent_sale: last transfer per CLIP in last 365 days.
 recent_sale_rows AS (
   SELECT
     ot.clip,
@@ -314,7 +398,7 @@ recent_sale_rows AS (
     'Transfer of ownership recorded within the last 12 months.' AS display_text,
     0.89                                             AS confidence,
     CAST(ot.sale_date AS STRING)                     AS `timestamp`,
-    11                                               AS signal_rank
+    13                                               AS signal_rank
   FROM (
     SELECT
       clip, sale_date,
@@ -326,7 +410,7 @@ recent_sale_rows AS (
   ) ot
   WHERE ot.rn = 1
 ),
--- 11. foreclosure_stage: current distress snapshot from property_master.
+-- 15. foreclosure_stage: current distress snapshot from property_master.
 foreclosure_stage_rows AS (
   SELECT
     pm.clip,
@@ -337,7 +421,7 @@ foreclosure_stage_rows AS (
     'Foreclosure stage snapshot from property master.' AS display_text,
     0.89                                             AS confidence,
     CAST(COALESCE(pm.last_foreclosure_date, DATE(pm.ingest_ts)) AS STRING) AS `timestamp`,
-    12                                               AS signal_rank
+    14                                               AS signal_rank
   FROM mip.silver.property_master AS pm
   WHERE pm.foreclosure_stage_code IS NOT NULL
     AND pm.situs_state IS NOT NULL
@@ -346,6 +430,9 @@ unioned AS (
   SELECT * FROM rate_spread_rows      UNION ALL
   SELECT * FROM equity_rows           UNION ALL
   SELECT * FROM market_trend_rows     UNION ALL
+  SELECT * FROM listing_rows          UNION ALL
+  SELECT * FROM heloc_propensity_rows UNION ALL
+  SELECT * FROM refi_propensity_rows  UNION ALL
   SELECT * FROM loan_type_fit_rows    UNION ALL
   SELECT * FROM competitor_lien_rows  UNION ALL
   SELECT * FROM multi_property_rows   UNION ALL
@@ -379,11 +466,11 @@ JOIN borrower_spine AS bs
 -- statements in order.
 COMMENT ON COLUMN mip.gold.evidence_events.clip IS 'Cotality CLIP. Not in Pydantic EvidenceEvent (router strips); used for join / filter.';
 COMMENT ON COLUMN mip.gold.evidence_events.evidence_id IS 'Deterministic: "ev-" || substr(sha2(clip || signal_type || timestamp, 256), 1, 12). Stable across refreshes so Borrower360.evidence_ids stays consistent.';
-COMMENT ON COLUMN mip.gold.evidence_events.source_product IS 'Human label: Voluntary Lien / AVM / Owner Link / Property / Mortgage Domain / Owner Transfer / Market Rates.';
+COMMENT ON COLUMN mip.gold.evidence_events.source_product IS 'Human label: Voluntary Lien / AVM / Owner Link / Property / Mortgage Domain / Owner Transfer / Market Rates / MLS Listings / HELOC Propensity / Refi Propensity.';
 COMMENT ON COLUMN mip.gold.evidence_events.source_table IS 'Real UC path. Shown verbatim in EvidenceDrawer -- must be a resolvable mip.silver.* or mip.gold.* path.';
-COMMENT ON COLUMN mip.gold.evidence_events.signal_type IS 'Controlled vocab: rate_spread / equity / loan_type_fit / competitor_lien / multi_property / absentee_mailing / corporate_owner / foreclosure_stage / recent_refi / recent_payoff / recent_sale / market_trend. BLOCKED vocab (permit, listing) NEVER emitted.';
+COMMENT ON COLUMN mip.gold.evidence_events.signal_type IS 'Controlled vocab: listing / rate_spread / equity / market_trend / heloc_propensity / refi_propensity / loan_type_fit / competitor_lien / multi_property / absentee_mailing / corporate_owner / foreclosure_stage / recent_refi / recent_payoff / recent_sale. BLOCKED vocab permit is NEVER emitted without a true permit source.';
 COMMENT ON COLUMN mip.gold.evidence_events.signal_value IS 'Human-readable value: "+88 bps", "$285K", "3 properties", "competitor refi".';
 COMMENT ON COLUMN mip.gold.evidence_events.display_text IS 'One-sentence deterministic template per signal_type. No PII.';
 COMMENT ON COLUMN mip.gold.evidence_events.confidence IS '0..1. Per-signal: AVM uses upstream confidence_score_mktg; count-based rows 0.85-0.92 (see header).';
 COMMENT ON COLUMN mip.gold.evidence_events.`timestamp` IS 'ISO-8601 STRING (matches Pydantic EvidenceEvent.timestamp: str).';
-COMMENT ON COLUMN mip.gold.evidence_events.signal_rank IS 'Deterministic priority order for Borrower360.evidence_ids: rate_spread=1, equity=2, market_trend=3, etc. Smaller = higher priority. Gold-only.';
+COMMENT ON COLUMN mip.gold.evidence_events.signal_rank IS 'Deterministic priority order for Borrower360.evidence_ids: listing=0, rate_spread=1, equity=2, market_trend=3, etc. Smaller = higher priority. Gold-only.';

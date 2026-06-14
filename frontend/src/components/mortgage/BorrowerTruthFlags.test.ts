@@ -43,13 +43,25 @@ describe('truthFlagLabels', () => {
     expect(labels).toContain('Competitor lien');
   });
 
-  it('does not claim pending listing and permit feeds are confirmed negatives', () => {
+  it('shows confirmed negatives for live listing and HELOC-intent signals', () => {
     const labels = truthFlagLabels(baseBorrower).map((flag) => flag.label);
 
-    expect(labels).toContain('Listing feed pending');
-    expect(labels).toContain('Permit feed pending');
-    expect(labels).not.toContain('No listing trigger');
-    expect(labels).not.toContain('No permit trigger');
+    expect(labels).toContain('No listing trigger');
+    expect(labels).toContain('No HELOC intent');
+    expect(labels).not.toContain('Listing feed pending');
+    expect(labels).not.toContain('Permit feed pending');
+  });
+
+  it('surfaces HELOC propensity separately from filed permits', () => {
+    const labels = truthFlagLabels({
+      ...baseBorrower,
+      has_permit: false,
+      has_heloc_propensity_trigger: true,
+      heloc_propensity_score: 812,
+    }).map((flag) => flag.label);
+
+    expect(labels).toContain('HELOC intent');
+    expect(labels).not.toContain('Permit activity');
   });
 
   it('surfaces borrower-dossier absentee and corporate-owner signals when present', () => {

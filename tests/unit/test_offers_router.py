@@ -1,7 +1,10 @@
 from fastapi.testclient import TestClient
 
 from backend.main import app
-from backend.services.audit_decision_inputs import DECISION_INPUT_KEYS
+from backend.services.audit_decision_inputs import (
+    DECISION_INPUT_KEYS,
+    decision_inputs_from_offer_inputs,
+)
 from backend.services.audit_store import get_audit_store
 from backend.services.repositories import get_offer_repository
 from tests.fixtures import mock_population
@@ -88,6 +91,4 @@ def test_recommend_offer_audit_captures_decision_inputs() -> None:
     assert events[0].correlation_id == response.headers["X-Correlation-ID"]
     assert set(metadata["decision_inputs"]) == set(DECISION_INPUT_KEYS)
     expected = mock_population.BORROWER_OFFER_INPUTS["B-48291"]
-    assert metadata["decision_inputs"] == {
-        key: expected[key] for key in DECISION_INPUT_KEYS
-    }
+    assert metadata["decision_inputs"] == decision_inputs_from_offer_inputs(expected)

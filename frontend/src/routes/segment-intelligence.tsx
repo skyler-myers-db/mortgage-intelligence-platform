@@ -52,10 +52,10 @@ const LIEN_OPTIONS = ['Any', 'Open 1st lien only', 'Open 2nd lien / HELOC', 'Fre
 // portfolios (single / small / large).
 const OWNER_LINK_OPTIONS = ['All', 'Single-property owner', 'Multi-property (2-4)', 'Portfolio investor (5+)'] as const;
 
-// PURCHASE INTENT: wired predicates that intentionally return zero rows
-// until Cotality Building Permits + MLS Delta Shares are live. Copy on
-// the filter calls this out to the presenter.
-const PURCHASE_OPTIONS = ['All', 'Listed for sale', 'Recent permit activity', 'Both'] as const;
+// PURCHASE / EQUITY-CREDIT INTENT: MLS listing is a live purchase trigger.
+// HELOC intent is a live Cotality propensity model signal; true filed
+// building-permit activity remains a separate pending source.
+const PURCHASE_OPTIONS = ['All', 'Listed for sale', 'HELOC intent', 'Both'] as const;
 const CONTACTABILITY_OPTIONS = ['Eligible only', 'Any', 'Suppressed only'] as const;
 const CONSENT_OPTIONS = ['Any', 'Opt-in', 'Opt-out', 'Unknown'] as const;
 const RECENCY_OPTIONS = ['Any', 'Untouched 30d', 'Untouched 60d', 'Untouched 90d'] as const;
@@ -334,16 +334,20 @@ export default function SegmentIntelligence() {
     } else if (chipFilters.ownerLink === 'Portfolio investor (5+)') {
       out = out.filter((l) => (l.related_property_count ?? 1) >= 5);
     }
-    // PURCHASE INTENT -> listed_for_sale + has_permit. Both flags are
-    // BLOCKED FALSE in gold until Cotality Building Permits + MLS Delta
-    // Shares are live, so these predicates return 0 rows today. The
-    // filter label carries a muted note explaining the data dependency.
+    // PURCHASE INTENT -> listed_for_sale + HELOC intent. `has_permit` stays
+    // a true filed-permit flag; Cotality HELOC propensity is separate and
+    // can activate the HELOC intent path without implying a permit filing.
+    const hasHelocIntent = (l: LeadSummary) =>
+      l.has_permit === true || l.has_heloc_propensity_trigger === true;
     if (chipFilters.purchase === 'Listed for sale') {
       out = out.filter((l) => l.listed_for_sale === true);
-    } else if (chipFilters.purchase === 'Recent permit activity') {
-      out = out.filter((l) => l.has_permit === true);
+    } else if (
+      chipFilters.purchase === 'HELOC intent' ||
+      chipFilters.purchase === 'Recent permit activity'
+    ) {
+      out = out.filter((l) => hasHelocIntent(l));
     } else if (chipFilters.purchase === 'Both') {
-      out = out.filter((l) => l.listed_for_sale === true && l.has_permit === true);
+      out = out.filter((l) => l.listed_for_sale === true && hasHelocIntent(l));
     }
     // Cash-out equity floor.
     const floor = EQUITY_FLOOR_USD[chipFilters.cashout] ?? 0;
@@ -546,9 +550,9 @@ export default function SegmentIntelligence() {
         <div
           className="filter-row__hint filter-row__hint--full muted"
         >
-          Delta shares pending: listed-for-sale and permit predicates are
-          blocked false until Cotality MLS and Building Permits Delta Shares are
-          live; these options return no rows today.
+          Listed-for-sale is backed by live Cotality MLS rows. HELOC intent is
+          backed by Cotality HELOC propensity; filed building-permit records
+          remain a separate pending source.
         </div>
       </div>
 

@@ -103,6 +103,10 @@ _SCORE_FIELDS: dict[str, list[str]] = {
         "is_current_customer",
         "has_permit",
         "listed_for_sale",
+        "has_heloc_propensity_trigger",
+        "heloc_propensity_score",
+        "has_refi_propensity_trigger",
+        "refi_propensity_score",
     ],
     "fit": ["is_owner_occupied", "first_pos_loan_type", "is_corporate_owner", "is_investor"],
     "relationship": [
@@ -169,7 +173,9 @@ class DatabricksBorrowerRepository:
         "  b.avm_value, b.current_lien_balance, b.current_rate, b.ltv, "
         "  b.related_property_count, b.is_owner_occupied, b.is_absentee, "
         "  b.is_corporate_owner, b.is_investor, b.is_current_customer, b.is_former_customer, "
-        "  b.is_competitor_lien, b.has_permit, b.listed_for_sale, b.second_pos_amount, "
+        "  b.is_competitor_lien, b.has_permit, b.listed_for_sale, "
+        "  b.heloc_propensity_score, b.has_heloc_propensity_trigger, "
+        "  b.refi_propensity_score, b.has_refi_propensity_trigger, b.second_pos_amount, "
         "  b.has_first_party_relationship, b.first_party_relationship_depth, "
         "  b.first_party_recent_interactions, b.first_party_recent_application, "
         "  b.min_spread_bps_applied, b.min_equity_pct_applied, "
@@ -203,6 +209,10 @@ class DatabricksBorrowerRepository:
         "  b.is_owner_occupied, b.is_investor, b.is_current_customer, "
         "  b.is_former_customer, b.is_competitor_lien, b.related_property_count, "
         "  b.current_lien_balance, b.second_pos_amount, b.has_permit, b.listed_for_sale, "
+        "  b.listing_status_category, b.listing_status_description, b.listing_date, "
+        "  b.listing_status_date, b.listing_price, b.listing_days_on_market, b.listing_service, "
+        "  b.heloc_propensity_score, b.heloc_propensity_run_date, b.has_heloc_propensity_trigger, "
+        "  b.refi_propensity_score, b.refi_propensity_run_date, b.has_refi_propensity_trigger, "
         "  b.marketing_eligible, b.consent_status, b.suppression_reason, b.last_touch_at, "
         "  b.eligible_recontact_at "
         f"FROM {qualify('gold', 'borrower_360')} AS b "
@@ -522,6 +532,7 @@ def _offer_branches(row: dict[str, Any], selected_code: str) -> list[ProofOfferB
     cashout_min = _int_value(row, "cashout_equity_min_applied", 25)
     retention_min = _int_value(row, "retention_min_spread_applied", 50)
     has_permit = _coerce_bool(row.get("has_permit"))
+    has_heloc_intent = has_permit or _coerce_bool(row.get("has_heloc_propensity_trigger"))
     listed = _coerce_bool(row.get("listed_for_sale"))
     investor = _coerce_bool(row.get("is_investor"))
     customer = _coerce_bool(row.get("is_current_customer"))
@@ -534,7 +545,11 @@ def _offer_branches(row: dict[str, Any], selected_code: str) -> list[ProofOfferB
             spread >= min_spread and equity >= heloc_min,
             f"Rate spread {spread} bps >= {min_spread} and equity {equity}% >= {heloc_min}%.",
         ),
-        ("heloc", has_permit and equity >= heloc_min, f"Permit signal is {has_permit} and equity {equity}% >= {heloc_min}%."),
+        (
+            "heloc",
+            has_heloc_intent and equity >= heloc_min,
+            f"HELOC-intent signal is {has_heloc_intent} and equity {equity}% >= {heloc_min}%.",
+        ),
         (
             "refi",
             spread >= min_spread and equity >= min_equity,
@@ -575,7 +590,7 @@ def _recomputed_offer_code(row: dict[str, Any]) -> str:
     return next_best_offer(
         _int_value(row, "rate_spread_bps"),
         _int_value(row, "equity_pct"),
-        _coerce_bool(row.get("has_permit")),
+        _coerce_bool(row.get("has_permit")) or _coerce_bool(row.get("has_heloc_propensity_trigger")),
         _coerce_bool(row.get("listed_for_sale")),
         _coerce_bool(row.get("is_investor")),
         _coerce_bool(row.get("is_current_customer")),
@@ -634,10 +649,12 @@ def _proof_sql_templates() -> list[ProofReproduceQuery]:
             "Decision inputs",
             (
                 "SELECT borrower_id, recommended_offer_code, recommended_offer, rate_spread_bps, equity_pct,"
-                " has_permit, listed_for_sale, is_investor, is_current_customer, is_competitor_lien,"
+                " has_permit, has_heloc_propensity_trigger, heloc_propensity_score, listed_for_sale,"
+                " is_investor, is_current_customer, is_competitor_lien,"
                 " min_spread_bps_applied, min_equity_pct_applied, heloc_equity_min_applied,"
                 " cashout_equity_min_applied, retention_min_spread_applied,"
-                f" {qualify('gold', 'fn_next_best_offer')}(rate_spread_bps, equity_pct, has_permit,"
+                f" {qualify('gold', 'fn_next_best_offer')}(rate_spread_bps, equity_pct,"
+                " (has_permit OR has_heloc_propensity_trigger),"
                 " listed_for_sale, is_investor, is_current_customer, is_competitor_lien,"
                 " min_spread_bps_applied, min_equity_pct_applied, heloc_equity_min_applied,"
                 " cashout_equity_min_applied, retention_min_spread_applied) AS recomputed_offer_code"
@@ -819,7 +836,9 @@ class DatabricksOfferRepository:
 
     _SQL = (
         "SELECT "
-        "  rate_spread_bps, equity_pct, has_permit, listed_for_sale, "
+        "  rate_spread_bps, equity_pct, has_permit, has_heloc_propensity_trigger, "
+        "  heloc_propensity_score, has_refi_propensity_trigger, refi_propensity_score, "
+        "  listed_for_sale, "
         "  is_investor, is_current_customer, is_competitor_lien, "
         "  recommended_offer_code, min_spread_bps_applied, min_equity_pct_applied, "
         "  heloc_equity_min_applied, cashout_equity_min_applied, "
@@ -842,6 +861,14 @@ class DatabricksOfferRepository:
             "rate_spread_bps": int(row.get("rate_spread_bps") or 0),
             "equity_pct": int(row.get("equity_pct") or 0),
             "has_permit": _coerce_bool(row.get("has_permit")),
+            "has_heloc_propensity_trigger": _coerce_bool(
+                row.get("has_heloc_propensity_trigger")
+            ),
+            "heloc_propensity_score": int(row.get("heloc_propensity_score") or 0),
+            "has_refi_propensity_trigger": _coerce_bool(
+                row.get("has_refi_propensity_trigger")
+            ),
+            "refi_propensity_score": int(row.get("refi_propensity_score") or 0),
             "listed_for_sale": _coerce_bool(row.get("listed_for_sale")),
             "is_investor": _coerce_bool(row.get("is_investor")),
             "is_current_customer": _coerce_bool(row.get("is_current_customer")),
