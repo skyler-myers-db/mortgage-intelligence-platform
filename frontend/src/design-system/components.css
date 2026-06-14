@@ -1096,14 +1096,9 @@ kbd {
 .lead-table__col-approval { width: 164px; }
 .lead-table__approval-header,
 .lead-table__table .tbl-cell--approval {
-  position: sticky;
-  right: 0;
-  z-index: 1;
   background: var(--bg-1);
-  box-shadow: calc(-1 * var(--sp-1)) 0 var(--sp-2) color-mix(in oklab, var(--bg-0) 70%, transparent);
 }
 .lead-table__approval-header {
-  z-index: 2;
   background: var(--bg-2);
 }
 .lead-table__borrower,
@@ -3651,12 +3646,6 @@ kbd {
 .layoutA-grid.layoutA-grid--segment-workbench {
   grid-template-columns: minmax(0, 1fr);
 }
-.layoutA-grid--segment-workbench .lead-table__approval-header,
-.layoutA-grid--segment-workbench .lead-table__table .tbl-cell--approval {
-  position: static;
-  box-shadow: none;
-}
-
 /* Table wrappers — on narrow containers the table gains horizontal
    scroll so cells stay readable. On wide containers nothing changes
    (design target still holds). Applied to the .surface that wraps a

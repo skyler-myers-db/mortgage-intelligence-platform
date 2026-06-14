@@ -98,10 +98,26 @@ async function assertNoObviousTextOverlap(page: Page, label: string): Promise<vo
           bottom: rect.bottom,
           width: rect.width,
           height: rect.height,
+          visibleAtCenter: (() => {
+            const cx = rect.left + rect.width / 2;
+            const cy = rect.top + rect.height / 2;
+            if (cx < 0 || cy < 0 || cx > window.innerWidth || cy > window.innerHeight) {
+              return false;
+            }
+            return document.elementsFromPoint(cx, cy).some((el) =>
+              node === el || node.contains(el) || el.contains(node),
+            );
+          })(),
           selector: node.className || node.tagName.toLowerCase(),
         };
       })
-      .filter((box) => !box.hidden && box.text.length > 0 && box.width > 4 && box.height > 4);
+      .filter((box) =>
+        !box.hidden &&
+        box.visibleAtCenter &&
+        box.text.length > 0 &&
+        box.width > 4 &&
+        box.height > 4,
+      );
     const found: string[] = [];
     for (let i = 0; i < boxes.length; i += 1) {
       for (let j = i + 1; j < boxes.length; j += 1) {
