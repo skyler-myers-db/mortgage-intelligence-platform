@@ -245,8 +245,8 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         "forced_state",
         "forced_dependency",
         "ttl_s",
-        "proof_scope",
-        "job_key", "job_name", "job_id", "run_id", "cooldown_seconds",
+        "proof_scope", "job_key", "job_name", "job_id", "run_id", "cooldown_seconds",
+        "lifecycle_sync_mode", "lakebase_row_count", "mirrored_row_count", "funnel_snapshot_row_count",
         # Governed customer activation / writeback outbox.
         "activation_id", "destination_key", "destination_type", "activation_status",
     }

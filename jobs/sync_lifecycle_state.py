@@ -40,7 +40,7 @@ import os
 import re
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 _UC_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -126,7 +126,10 @@ def _resolve_connection() -> dict:
             )
             sys.exit(3)
 
-        inst = w.api_client.do("GET", f"/api/2.0/database/instances/{instance_name}")
+        inst = cast(
+            dict[str, Any],
+            w.api_client.do("GET", f"/api/2.0/database/instances/{instance_name}"),
+        )
         resolved_host = host or inst.get("read_write_dns")
         if not resolved_host:
             print(
@@ -136,16 +139,19 @@ def _resolve_connection() -> dict:
             )
             sys.exit(3)
 
-        cred = w.api_client.do(
-            "POST",
-            "/api/2.0/database/credentials",
-            body={
-                "request_id": (
-                    f"mip-sync-lifecycle-"
-                    f"{os.environ.get('DATABRICKS_JOB_RUN_ID','local')}"
-                ),
-                "instance_names": [instance_name],
-            },
+        cred = cast(
+            dict[str, Any],
+            w.api_client.do(
+                "POST",
+                "/api/2.0/database/credentials",
+                body={
+                    "request_id": (
+                        f"mip-sync-lifecycle-"
+                        f"{os.environ.get('DATABRICKS_JOB_RUN_ID','local')}"
+                    ),
+                    "instance_names": [instance_name],
+                },
+            ),
         )
         cred_token = cred.get("token")
         if not cred_token:
@@ -226,7 +232,7 @@ def _fetch_lakebase_rows(conn_kwargs: dict) -> list[dict[str, Any]]:
 def _get_spark() -> Any:
     """Return the active SparkSession. Exits 4 when unavailable."""
     try:
-        from pyspark.sql import SparkSession  # type: ignore[import-not-found]
+        from pyspark.sql import SparkSession
     except ImportError:
         print("[sync-lifecycle] pyspark unavailable; must run on Databricks.", file=sys.stderr)
         sys.exit(4)
@@ -252,7 +258,7 @@ def _write_gold(rows: list[dict[str, Any]], *, catalog: str) -> None:
     lifecycle_table = _qualified_uc_table(catalog, "gold", "borrower_lifecycle_state")
     # Local imports: pyspark isn't available off-Databricks; keep import out of
     # module scope so the file remains importable by lint/tests.
-    from pyspark.sql import Row  # type: ignore[import-not-found]
+    from pyspark.sql import Row
 
     # Build the Lakebase-side DataFrame.
     lakebase_rows = [

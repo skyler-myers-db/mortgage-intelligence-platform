@@ -43,6 +43,7 @@ from backend.services.audit_store import AuditStore, get_audit_store
 from backend.services.databricks_jobs import (
     DatabricksJobOperations,
     JobAlreadyRunningError,
+    JobLaunch,
     JobOperationError,
     ManagedJobRun,
     ManagedJobStatus,
@@ -373,7 +374,27 @@ def post_operation_run(
         ) from exc
 
     try:
-        launch = jobs.run_now(payload.job_key)
+        if payload.job_key == "lifecycle_sync":
+            from backend.services.lifecycle_sync import sync_lifecycle_state_via_warehouse
+
+            result = sync_lifecycle_state_via_warehouse()
+            launch = JobLaunch(
+                key="lifecycle_sync",
+                label="Sync workflow state",
+                job_name="warehouse_lifecycle_sync",
+                job_id=0,
+                run_id=None,
+                run_page_url=None,
+            )
+            lifecycle_extra: dict[str, object] = {
+                "lifecycle_sync_mode": "warehouse",
+                "lakebase_row_count": result.lakebase_rows,
+                "mirrored_row_count": result.mirrored_rows,
+                "funnel_snapshot_row_count": result.funnel_snapshot_rows,
+            }
+        else:
+            launch = jobs.run_now(payload.job_key)
+            lifecycle_extra = {}
     except JobAlreadyRunningError as exc:
         try:
             _write_operation_audit(
@@ -398,6 +419,35 @@ def post_operation_run(
                 "job_key": exc.job_key,
                 "run_id": exc.run_id,
             },
+        ) from exc
+    except (LakebaseError, DatabricksSqlError, DependencyDownError) as exc:
+        try:
+            _write_operation_audit(
+                audit,
+                actor=_actor,
+                payload=payload,
+                action="admin.operation.failed",
+                event_type="ADMIN_OPERATION_FAILED",
+            )
+        except LakebaseError:
+            emit(
+                log,
+                "admin_operation_failure_audit_dropped",
+                level=logging.WARNING,
+                job_key=payload.job_key,
+            )
+        dependency = "lakebase" if isinstance(exc, LakebaseError) else "warehouse"
+        emit(
+            log,
+            "admin_operation_lifecycle_sync_error",
+            level=logging.WARNING,
+            job_key=payload.job_key,
+            dependency=dependency,
+            exc_type=type(exc).__name__,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail=safe_dependency_detail(dependency),
         ) from exc
     except JobOperationError as exc:
         try:
@@ -438,6 +488,7 @@ def post_operation_run(
                 "job_name": launch.job_name,
                 "job_id": launch.job_id,
                 "run_id": launch.run_id,
+                **lifecycle_extra,
             },
         )
     except LakebaseError:

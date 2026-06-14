@@ -983,7 +983,7 @@ def compare_raw_vs_gold(audit: ClipAudit) -> list[Mismatch]:
     # stays in [0, 100] because it feeds scoring and offer gating.
     ltv_g = _safe_int(gold.get("ltv"))
     eq_g = _safe_int(gold.get("equity_pct"))
-    if not (0 <= ltv_g):
+    if ltv_g < 0:
         mismatches.append(Mismatch(
             clip=audit.clip, borrower_id=audit.borrower_id,
             surface_a="raw_recomputed", surface_b="gold",

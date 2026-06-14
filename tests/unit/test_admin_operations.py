@@ -231,13 +231,50 @@ def test_run_operation_conflict_when_job_already_active() -> None:
     try:
         response = client.post(
             "/api/admin/operations/run",
-            json={"job_key": "lifecycle_sync", "confirm": True},
+            json={"job_key": "fred_rates", "confirm": True},
         )
     finally:
         _clear_jobs_override()
 
     assert response.status_code == 409
     assert response.json()["detail"]["run_id"] == 444
+
+
+def test_lifecycle_operation_uses_warehouse_sync(monkeypatch) -> None:
+    from backend.services import lifecycle_sync
+    from backend.services.lifecycle_sync import LifecycleSyncResult
+
+    fake = _FakeOps()
+    _override_jobs(fake)
+    calls: list[str] = []
+
+    def _fake_sync() -> LifecycleSyncResult:
+        calls.append("sync")
+        return LifecycleSyncResult(
+            lakebase_rows=3,
+            mirrored_rows=100,
+            funnel_snapshot_rows=9,
+        )
+
+    monkeypatch.setattr(lifecycle_sync, "sync_lifecycle_state_via_warehouse", _fake_sync)
+    try:
+        response = client.post(
+            "/api/admin/operations/run",
+            json={
+                "job_key": "lifecycle_sync",
+                "confirm": True,
+                "request_id": "44444444-4444-4444-8444-444444444444",
+            },
+        )
+    finally:
+        _clear_jobs_override()
+
+    assert response.status_code == 202, response.text
+    body = response.json()
+    assert body["job_name"] == "warehouse_lifecycle_sync"
+    assert body["run_id"] is None
+    assert fake.run_calls == []
+    assert calls == ["sync"]
 
 
 def test_run_operation_cooldown_prevents_repeat_expensive_trigger() -> None:

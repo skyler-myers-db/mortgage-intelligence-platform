@@ -1,14 +1,12 @@
 """Unit tests for the ``backend.services.job_trigger`` module.
 
-Covers three invariants called out in the 2026-04-22 lifecycle-sync
-rework:
+Covers the default warehouse lifecycle sync and the legacy Databricks Jobs
+rollback mode.
 
-* ``trigger_lifecycle_sync`` calls ``WorkspaceClient.jobs.run_now``
-  exactly once per approval (when outside the debounce window).
-* A burst of approvals inside the debounce window coalesces into a
-  single ``run_now`` call.
-* Any exception raised by the SDK (auth error, network error, missing
-  job) is swallowed — the caller never sees it.
+The job-mode tests still pin the bounded job-id cache and failure swallowing
+logic because ``MIP_LIFECYCLE_SYNC_MODE=job`` remains an explicit rollback
+path. The product default is warehouse-backed sync so approvals do not launch
+a serverless Python cluster.
 
 We also assert that the approval HTTP path schedules the trigger via
 ``BackgroundTasks`` so the HTTP 200 response ships before the trigger
@@ -50,8 +48,9 @@ def _install_fake_sdk(monkeypatch: pytest.MonkeyPatch, ws: Any) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _reset_trigger_state() -> None:
+def _reset_trigger_state(monkeypatch: pytest.MonkeyPatch) -> None:
     """Clear the module-level debounce + job-id cache between tests."""
+    monkeypatch.setenv("MIP_LIFECYCLE_SYNC_MODE", "job")
     job_trigger._reset_for_tests()
 
 
@@ -74,6 +73,29 @@ def _stub_workspace(run_id: int = 12345, job_id: int = 42) -> MagicMock:
     run.run_id = run_id
     ws.jobs.run_now.return_value = run
     return ws
+
+
+def test_default_trigger_uses_warehouse_sync(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Default product mode runs the warehouse-backed mirror, not a job."""
+    from backend.services import lifecycle_sync
+    from backend.services.lifecycle_sync import LifecycleSyncResult
+
+    monkeypatch.setenv("MIP_LIFECYCLE_SYNC_MODE", "warehouse")
+    calls: list[str] = []
+
+    def _fake_sync() -> LifecycleSyncResult:
+        calls.append("sync")
+        return LifecycleSyncResult(
+            lakebase_rows=2,
+            mirrored_rows=10,
+            funnel_snapshot_rows=7,
+        )
+
+    monkeypatch.setattr(lifecycle_sync, "sync_lifecycle_state_via_warehouse", _fake_sync)
+
+    job_trigger.trigger_lifecycle_sync(reason="approval")
+
+    assert calls == ["sync"]
 
 
 def test_trigger_fires_run_now_once(monkeypatch: pytest.MonkeyPatch) -> None:

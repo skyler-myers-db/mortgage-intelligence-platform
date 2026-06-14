@@ -1,4 +1,4 @@
-"""Fire-and-forget Databricks Jobs trigger for lifecycle sync.
+"""Fire-and-forget lifecycle sync trigger.
 
 Module 0 mirrors lifecycle state through on-demand event triggers from
 the backend approval/rejection paths and through explicit Admin Data
@@ -18,11 +18,10 @@ silently dropped. We deliberately accept this:
    :func:`enqueue_lifecycle_trigger` so dropped invocations leave an
    audit breadcrumb (the approval_id in Lakebase correlates with the
    absence of a later ``job_trigger_fired`` log).
-2. Operators can launch ``mip_sync_lifecycle_state`` from Admin Data
-   operations if a trigger is dropped or freshness needs to be repaired.
-   A scheduled fallback is only active after an explicit customer cadence
-   decision, so the default product posture does not assume unattended
-   cron recovery.
+2. Operators can launch Admin Data operations if a trigger is dropped or
+   freshness needs to be repaired. A scheduled fallback is only active after
+   an explicit customer cadence decision, so the default product posture does
+   not assume unattended cron recovery.
 
 A proper drain would require moving to starlette's lifespan-managed
 task queue or an external queue (RQ/Celery); both are materially
@@ -38,7 +37,9 @@ lead_generation) resolve ``approval_rate`` / ``outreach_rate`` without
 a federated runtime join. Data only changes when an operator approves
 or dispatches outreach, so a fixed-interval schedule against an idle
 workspace was burning Serverless compute for nothing (observed
-2026-04-22).
+2026-04-22). A later release-hardening pass also removed the default
+Databricks Jobs launch from this path because a tiny Lakebase mirror could
+spend many minutes waiting for serverless Python cluster provisioning.
 
 Commercial posture
 ------------------
@@ -239,16 +240,16 @@ def _should_trigger(now: float) -> bool:
 
 
 def trigger_lifecycle_sync(*, reason: str = "approval") -> None:
-    """Fire ``mip_sync_lifecycle_state`` non-blocking.
+    """Run the lifecycle mirror after an approval/reject response.
 
     Safe to call from any FastAPI handler via ``BackgroundTasks``:
-    never raises, never blocks on the job run, swallows every error
-    class. Operators can still launch the same sync from Admin Data
-    operations; bundle-declared fallback schedules ship paused until a
-    customer-approved cadence is configured.
+    never raises and swallows every error class. The default mode mirrors
+    Lakebase through the already-provisioned SQL Warehouse. Set
+    ``MIP_LIFECYCLE_SYNC_MODE=job`` only as a rollback path to launch the
+    legacy Databricks Job.
 
     ``reason`` is stamped into the structured log line so an operator
-    grepping ``job_trigger_fired`` sees which endpoint initiated the
+    grepping lifecycle sync events sees which endpoint initiated the
     run (approval, outreach dispatch, etc).
     """
     now = time.monotonic()
@@ -263,6 +264,41 @@ def trigger_lifecycle_sync(*, reason: str = "approval") -> None:
             )
             return
 
+    if os.environ.get("MIP_LIFECYCLE_SYNC_MODE", "warehouse").strip().lower() == "job":
+        _trigger_lifecycle_sync_job(reason=reason)
+        return
+
+    try:
+        from backend.services.lifecycle_sync import sync_lifecycle_state_via_warehouse
+
+        result = sync_lifecycle_state_via_warehouse()
+        emit(
+            _log,
+            "lifecycle_sync_completed",
+            mode="warehouse",
+            reason=reason,
+            lakebase_rows=result.lakebase_rows,
+            mirrored_rows=result.mirrored_rows,
+            funnel_snapshot_rows=result.funnel_snapshot_rows,
+        )
+    except Exception as exc:  # noqa: BLE001 -- must never raise to caller
+        emit(
+            _log,
+            "lifecycle_sync_error",
+            level=logging.WARNING,
+            mode="warehouse",
+            reason=reason,
+            exc_type=type(exc).__name__,
+            exc_msg=str(exc)[:500],
+        )
+
+
+def _trigger_lifecycle_sync_job(*, reason: str = "approval") -> None:
+    """Launch the legacy Databricks lifecycle job.
+
+    Kept as an explicit rollback mode and for the unit tests that pin
+    bounded job-id caching. The default product path should not call this.
+    """
     # Outside the lock: the WorkspaceClient constructor + network call
     # can be slow; we do NOT want to serialise unrelated trigger
     # callers behind each other.

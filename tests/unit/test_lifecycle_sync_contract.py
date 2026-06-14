@@ -58,3 +58,27 @@ def test_lifecycle_sync_rejects_unsafe_catalog_identifier() -> None:
         assert exc.code == 3
     else:  # pragma: no cover - defensive assertion style
         raise AssertionError("unsafe catalog identifier was accepted")
+
+
+def test_warehouse_lifecycle_sync_keeps_same_filter_contract() -> None:
+    from backend.services.lifecycle_sync import _build_lifecycle_ctas
+
+    sql = _build_lifecycle_ctas(
+        [
+            {
+                "borrower_id": "B-123",
+                "approval_status": "approved",
+                "outreach_status": "queued",
+                "offer_code": "refi",
+                "approved_at": None,
+                "outreach_at": None,
+            }
+        ],
+        catalog="mip",
+    )
+
+    assert "INNER JOIN `mip`.`gold`.`borrower_360` AS b" in sql
+    assert "FROM lifecycle_valid AS l" in sql
+    assert "LEFT ANTI JOIN lifecycle_valid AS l" in sql
+    assert "CURRENT_TIMESTAMP() AS mirror_refreshed_at" in sql
+    assert "AS refreshed_at" in sql

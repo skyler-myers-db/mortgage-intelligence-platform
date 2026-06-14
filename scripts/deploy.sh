@@ -574,7 +574,7 @@ run databricks bundle run mip_refresh_scores -t "$TARGET"
 # Step 9: lifecycle sync + funnel snapshot (approval / outreach rates)
 # -----------------------------------------------------------------------------
 step "sync lifecycle state from Lakebase + record daily funnel snapshot"
-run databricks bundle run mip_sync_lifecycle_state -t "$TARGET"
+run "$PYTHON" tools/sync_lifecycle_warehouse.py --catalog "${MIP_DEFAULT_CATALOG:-mip}"
 
 # -----------------------------------------------------------------------------
 # Step 10: rebind the Genie space after gold/semantic assets exist
