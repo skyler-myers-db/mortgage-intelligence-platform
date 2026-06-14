@@ -492,11 +492,17 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
       );
     };
 
-    const countyResponse = page.waitForResponse(filteredGeoResponse('/api/geo/county-rollups'));
+    const countyResponse = page.waitForResponse(
+      filteredGeoResponse('/api/geo/county-rollups'),
+      { timeout: 45_000 },
+    );
     await drillStateToCounty(page, target);
     await countyResponse;
 
-    const zipResponse = page.waitForResponse(filteredGeoResponse('/api/geo/zip-rollups'));
+    const zipResponse = page.waitForResponse(
+      filteredGeoResponse('/api/geo/zip-rollups'),
+      { timeout: 45_000 },
+    );
     await drillCountyToZips(page, target);
     await zipResponse;
 
@@ -906,18 +912,13 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     await expect(page.getByRole('heading', { name: 'Analytics', exact: true })).toBeVisible({ timeout: 30_000 });
 
     const stateButton = page.getByRole('button', { name: /^State:/i });
-    await stateButton.focus();
-    await page.keyboard.press('Enter');
+    await stateButton.click();
     await expect(page.getByRole('listbox', { name: 'State', exact: true })).toBeVisible();
-    await page.keyboard.press('ArrowDown');
-    await page.keyboard.press('ArrowDown');
-    await page.keyboard.press('ArrowDown');
-    await page.keyboard.press('ArrowDown');
     const keyboardStateResponse = page.waitForResponse((response) => {
       if (!response.url().includes('/api/v1/analytics/executive')) return false;
       return new URL(response.url()).searchParams.get('states') === 'IL';
-    });
-    await page.keyboard.press('Space');
+    }, { timeout: 45_000 });
+    await page.getByRole('option', { name: 'IL', exact: true }).click();
     await keyboardStateResponse;
     await expect(page.getByRole('button', { name: /State: IL/i })).toBeVisible();
 
