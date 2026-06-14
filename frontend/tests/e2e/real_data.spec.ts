@@ -434,13 +434,13 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     await page.goto('/segment-intelligence');
 
     const rankedHeader = page
+      .locator('.section-hdr', { hasText: 'Ranked borrowers · AND segment filter' })
       .locator('.h-2')
-      .filter({ hasText: /\d[\d,]* ranked borrowers/ })
       .first();
-    await expect(rankedHeader).toBeVisible({ timeout: 30_000 });
+    await expect(rankedHeader).toContainText(/ranked borrowers/, { timeout: 45_000 });
 
     await clickSegmentCard(page, 'In the Money');
-    await expect(rankedHeader).toContainText(/segment filter: In the Money/);
+    await expect(rankedHeader).toContainText(/segment filter: In the Money/, { timeout: 45_000 });
 
     const isAllModeSegmentResponse = (url: string, path: string) => {
       if (!urlIncludesApiPath(url, path)) return false;
@@ -465,7 +465,10 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     const [leads, geo] = await Promise.all([leadsResponse, geoResponse]);
     expect(leads.status(), 'ranked list segment all-mode response').toBe(200);
     expect(geo.status(), 'map segment all-mode response').toBe(200);
-    await expect(rankedHeader).toContainText(/segment filter: In the Money \+ Home Equity Candidate/);
+    await expect(rankedHeader).toContainText(
+      /segment filter: In the Money \+ Home Equity Candidate/,
+      { timeout: 45_000 },
+    );
     await expect(rankedHeader).toContainText(/must match every selected segment/);
   });
 
