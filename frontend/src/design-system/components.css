@@ -164,7 +164,9 @@
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
-  padding: 1px 6px;
+  justify-content: center;
+  min-block-size: var(--sp-6);
+  padding: 0 var(--sp-2);
   border: 1px solid var(--line-2, var(--line-1));
   border-bottom-width: 2px;
   border-radius: var(--r-sm, 4px);
@@ -2483,6 +2485,7 @@ kbd {
 }
 .filter-row--stacked {
   flex-direction: column;
+  flex-wrap: nowrap;
   align-items: stretch;
 }
 .filter-row--spaced { margin-top: var(--gap-grid); }
@@ -3647,6 +3650,11 @@ kbd {
 }
 .layoutA-grid.layoutA-grid--segment-workbench {
   grid-template-columns: minmax(0, 1fr);
+}
+.layoutA-grid--segment-workbench .lead-table__approval-header,
+.layoutA-grid--segment-workbench .lead-table__table .tbl-cell--approval {
+  position: static;
+  box-shadow: none;
 }
 
 /* Table wrappers — on narrow containers the table gains horizontal
