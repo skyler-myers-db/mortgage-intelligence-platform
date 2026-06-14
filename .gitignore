@@ -36,6 +36,8 @@ genie/space_id.txt
 sql/_rendered/
 
 # Claude local
+.claude/
+frontend/.claude/
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
 .mcp.json

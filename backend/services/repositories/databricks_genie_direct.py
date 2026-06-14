@@ -156,8 +156,15 @@ def direct_canonical_response(
     except DatabricksSqlError as exc:
         _emit_genie_warning("direct_canonical_genie_metric_failed", exc=exc)
         return None
+    raw_count = row.get("in_the_money_borrowers")
+    if raw_count is None:
+        _emit_genie_warning(
+            "direct_canonical_genie_metric_bad_count",
+            value_type="NoneType",
+        )
+        return None
     try:
-        count_int = int(row.get("in_the_money_borrowers"))
+        count_int = int(raw_count)
     except (TypeError, ValueError):
         _emit_genie_warning(
             "direct_canonical_genie_metric_bad_count",
@@ -165,11 +172,11 @@ def direct_canonical_response(
         )
         return None
 
-    rows: list[dict[str, Any]] = [
+    count_rows: list[dict[str, Any]] = [
         {"in_the_money_borrowers": count_int, "refreshed_at": row.get("refreshed_at")}
     ]
     if state_scope:
-        rows[0]["state"] = state_scope[1]
+        count_rows[0]["state"] = state_scope[1]
     geo_text = f" in {state_scope[0]} ({state_scope[1]})" if state_scope else ""
     answer = (
         f"There are {count_int:,} borrowers currently in-the-money{geo_text}. "
@@ -180,7 +187,7 @@ def direct_canonical_response(
         question=question,
         sql_query=sql_query,
         trusted_assets=trusted_assets,
-        rows=rows,
+        rows=count_rows,
         answer=answer,
         metric_value=f"{count_int:,}",
     )

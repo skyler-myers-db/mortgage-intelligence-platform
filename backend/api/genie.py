@@ -18,6 +18,7 @@ from uuid import uuid4
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from pydantic import BaseModel
 
+from backend.api import genie_guardrails as prompt_guardrails
 from backend.config.settings import settings
 from backend.services.audit_store import (
     AuditStore,
@@ -36,30 +37,6 @@ from backend.services.genie_answers import (
     load_sample_questions,
 )
 from backend.services.genie_client import GenieClientError
-from backend.services.genie_prompt_guardrails import (
-    cross_lender_prompt_match as _cross_lender_prompt_match,
-)
-from backend.services.genie_prompt_guardrails import (
-    footprint_metadata_gap_match as _footprint_metadata_gap_match,
-)
-from backend.services.genie_prompt_guardrails import (
-    instruction_override_prompt_match as _instruction_override_prompt_match,
-)
-from backend.services.genie_prompt_guardrails import (
-    off_topic_prompt_match as _off_topic_prompt_match,
-)
-from backend.services.genie_prompt_guardrails import (
-    outside_footprint_match as _outside_footprint_match,
-)
-from backend.services.genie_prompt_guardrails import (
-    pii_prompt_match as _pii_prompt_match,
-)
-from backend.services.genie_prompt_guardrails import (
-    scope_bypass_prompt_match as _scope_bypass_prompt_match,
-)
-from backend.services.genie_prompt_guardrails import (
-    source_gap_prompt_match as _source_gap_prompt_match,
-)
 from backend.services.genie_sales_ops import sales_ops_genie_response
 from backend.services.genie_trusted_assets import trusted_assets
 from backend.services.lakebase import LakebaseClient, LakebaseError, get_lakebase_client
@@ -80,6 +57,15 @@ AuditDep = Annotated[AuditStore, Depends(get_audit_store)]
 LakebaseDep = Annotated[LakebaseClient, Depends(get_lakebase_client)]
 WorkspaceDep = Annotated[WorkspaceStore, Depends(get_workspace_store)]
 BorrowerRepoDep = Annotated[BorrowerRepository, Depends(get_borrower_repository)]
+
+_cross_lender_prompt_match = prompt_guardrails.cross_lender_prompt_match
+_footprint_metadata_gap_match = prompt_guardrails.footprint_metadata_gap_match
+_instruction_override_prompt_match = prompt_guardrails.instruction_override_prompt_match
+_off_topic_prompt_match = prompt_guardrails.off_topic_prompt_match
+_outside_footprint_match = prompt_guardrails.outside_footprint_match
+_pii_prompt_match = prompt_guardrails.pii_prompt_match
+_scope_bypass_prompt_match = prompt_guardrails.scope_bypass_prompt_match
+_source_gap_prompt_match = prompt_guardrails.source_gap_prompt_match
 
 
 class GenieMessageRequest(BaseModel):
@@ -465,7 +451,7 @@ def genie_message(
             ),
         )
         return _finalize_genie_response(lakebase, actor=actor, response=response)
-    override_match = _instruction_override_prompt_match(payload.question)
+    override_match = prompt_guardrails.instruction_override_prompt_match(payload.question)
     if override_match:
         question_hash = hashlib.sha256(payload.question.encode("utf-8")).hexdigest()[:16]
         _ = background
@@ -544,7 +530,7 @@ def genie_message(
             table_rows=[],
         )
         return _finalize_genie_response(lakebase, actor=actor, response=response)
-    pii_match = _pii_prompt_match(payload.question)
+    pii_match = prompt_guardrails.pii_prompt_match(payload.question)
     if pii_match:
         question_hash = hashlib.sha256(payload.question.encode("utf-8")).hexdigest()[:16]
         _ = background
@@ -578,7 +564,7 @@ def genie_message(
             known_gap=f"prompt refused before Genie execution due PII request pattern: {pii_match}",
         )
         return _finalize_genie_response(lakebase, actor=actor, response=response)
-    scope_bypass_match = _scope_bypass_prompt_match(payload.question)
+    scope_bypass_match = prompt_guardrails.scope_bypass_prompt_match(payload.question)
     if scope_bypass_match:
         question_hash = hashlib.sha256(payload.question.encode("utf-8")).hexdigest()[:16]
         _ = background
@@ -615,7 +601,7 @@ def genie_message(
             ),
         )
         return _finalize_genie_response(lakebase, actor=actor, response=response)
-    source_gap_match = _source_gap_prompt_match(payload.question)
+    source_gap_match = prompt_guardrails.source_gap_prompt_match(payload.question)
     if source_gap_match:
         question_hash = hashlib.sha256(payload.question.encode("utf-8")).hexdigest()[:16]
         source_readiness_asset = _source_readiness_asset()
@@ -659,7 +645,7 @@ def genie_message(
             table_rows=[],
         )
         return _finalize_genie_response(lakebase, actor=actor, response=response)
-    off_topic_match = _off_topic_prompt_match(payload.question)
+    off_topic_match = prompt_guardrails.off_topic_prompt_match(payload.question)
     if off_topic_match:
         question_hash = hashlib.sha256(payload.question.encode("utf-8")).hexdigest()[:16]
         _ = background
@@ -692,7 +678,7 @@ def genie_message(
             known_gap=f"prompt refused before Genie execution due off-topic pattern: {off_topic_match}",
         )
         return _finalize_genie_response(lakebase, actor=actor, response=response)
-    cross_lender_match = _cross_lender_prompt_match(payload.question)
+    cross_lender_match = prompt_guardrails.cross_lender_prompt_match(payload.question)
     if cross_lender_match:
         question_hash = hashlib.sha256(payload.question.encode("utf-8")).hexdigest()[:16]
         _ = background
@@ -760,7 +746,7 @@ def genie_message(
             event_type="RUN_GENIE",
         )
         return _finalize_genie_response(lakebase, actor=actor, response=sales_ops_response)
-    metadata_gap = _footprint_metadata_gap_match(payload.question)
+    metadata_gap = prompt_guardrails.footprint_metadata_gap_match(payload.question)
     if metadata_gap is not None:
         state_name, state_code = metadata_gap
         question_hash = hashlib.sha256(payload.question.encode("utf-8")).hexdigest()[:16]
@@ -810,7 +796,7 @@ def genie_message(
             table_rows=[],
         )
         return _finalize_genie_response(lakebase, actor=actor, response=response)
-    outside_footprint = _outside_footprint_match(payload.question)
+    outside_footprint = prompt_guardrails.outside_footprint_match(payload.question)
     if outside_footprint is not None:
         state_name, state_code, footprint_codes = outside_footprint
         question_hash = hashlib.sha256(payload.question.encode("utf-8")).hexdigest()[:16]

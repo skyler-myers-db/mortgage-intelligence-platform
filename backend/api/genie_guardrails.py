@@ -1,0 +1,12 @@
+"""Prompt guardrail matchers used by the Genie router."""
+
+from backend.services import genie_prompt_guardrails as _guardrails
+
+cross_lender_prompt_match = _guardrails.cross_lender_prompt_match
+footprint_metadata_gap_match = _guardrails.footprint_metadata_gap_match
+instruction_override_prompt_match = _guardrails.instruction_override_prompt_match
+off_topic_prompt_match = _guardrails.off_topic_prompt_match
+outside_footprint_match = _guardrails.outside_footprint_match
+pii_prompt_match = _guardrails.pii_prompt_match
+scope_bypass_prompt_match = _guardrails.scope_bypass_prompt_match
+source_gap_prompt_match = _guardrails.source_gap_prompt_match
