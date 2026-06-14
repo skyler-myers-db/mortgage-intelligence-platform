@@ -62,4 +62,11 @@ describe('command palette action registry', () => {
   it('is case-insensitive', () => {
     expect(filterCommandActions('GENIE').length).toBeGreaterThan(0);
   });
+
+  it('keeps the Ask Genie route distinct from the floating panel command', () => {
+    const genieLabels = COMMAND_ACTIONS
+      .filter((action) => action.id === 'nav-genie' || action.id === 'cmd-genie')
+      .map((action) => action.label);
+    expect(genieLabels).toEqual(['Ask Genie', 'Open Genie panel']);
+  });
 });

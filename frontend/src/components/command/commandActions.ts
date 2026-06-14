@@ -48,7 +48,7 @@ export const COMMAND_ACTIONS: readonly CommandAction[] = [
   { id: 'nav-admin', label: 'Admin', hint: '/admin-config', icon: 'settings', group: 'Navigate',
     keywords: ['config', 'audit log', 'offer rules', 'governance'], target: { kind: 'route', to: '/admin-config' } },
   // --- Workspace commands ---
-  { id: 'cmd-genie', label: 'Ask Genie', hint: 'Open Genie panel', icon: 'sparkle', group: 'Workspace',
+  { id: 'cmd-genie', label: 'Open Genie panel', hint: 'Floating assistant', icon: 'sparkle', group: 'Workspace',
     keywords: ['ai', 'assistant', 'chat'], target: { kind: 'command', command: 'open-genie' } },
   { id: 'cmd-theme', label: 'Toggle theme', hint: 'Light / dark', icon: 'moon', group: 'Workspace',
     keywords: ['dark', 'light', 'appearance'], target: { kind: 'command', command: 'toggle-theme' } },

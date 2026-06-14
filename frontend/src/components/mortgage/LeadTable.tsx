@@ -882,7 +882,7 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
               <th>Next-best-offer</th>
               {renderSortHeader('score', 'Score', 'tbl-cell--right')}
               {renderSortHeader('confidence', 'Signal')}
-              <th>Approval</th>
+              <th className="tbl-cell--approval lead-table__approval-header">Approval</th>
             </tr>
           </thead>
           <tbody>

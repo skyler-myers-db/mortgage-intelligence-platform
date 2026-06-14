@@ -255,7 +255,7 @@ COMMENT ON COLUMN mip.gold.borrower_dossier.subject_property IS 'Synthetic city/
 COMMENT ON COLUMN mip.gold.borrower_dossier.avm_value IS 'AVM value; 0 when missing.';
 COMMENT ON COLUMN mip.gold.borrower_dossier.current_lien_balance IS 'Total open lien balance.';
 COMMENT ON COLUMN mip.gold.borrower_dossier.current_rate IS 'Percent form (5.75).';
-COMMENT ON COLUMN mip.gold.borrower_dossier.ltv IS '0..100.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.ltv IS 'Display LTV int; underwater borrowers may exceed 100.';
 COMMENT ON COLUMN mip.gold.borrower_dossier.related_property_count IS 'From gold.property_owner_bridge.';
 COMMENT ON COLUMN mip.gold.borrower_dossier.is_owner_occupied IS 'owner_occupancy_code = "O".';
 COMMENT ON COLUMN mip.gold.borrower_dossier.is_absentee IS 'From silver.property_master.';

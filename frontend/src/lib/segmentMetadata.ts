@@ -39,7 +39,7 @@ export const SEGMENT_DEFINITIONS: readonly SegmentDefinition[] = [
     name: 'HELOC Intent',
     color: 'var(--seg-permit)',
     description: 'Cotality HELOC propensity score indicates equity-credit demand.',
-    icon: 'permit',
+    icon: 'equity',
   },
   {
     code: 'investor',
@@ -52,7 +52,7 @@ export const SEGMENT_DEFINITIONS: readonly SegmentDefinition[] = [
     code: 'equity',
     name: 'Home Equity Candidate',
     color: 'var(--seg-equity)',
-    description: 'Strong equity and prior cash-out/HELOC propensity.',
+    description: 'Strong available equity without an active second-position balance.',
     icon: 'equity',
   },
   {

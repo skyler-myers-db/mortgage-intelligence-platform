@@ -149,6 +149,16 @@ export function leadQueueHrefForFunnelStage(
   return leadQueueHref({ funnel_stage: stage ?? 'addressable', ...leadParams });
 }
 
+export function isOfferRecommendedStage(row: Pick<FunnelStage, 'stage' | 'stage_order'>): boolean {
+  return row.stage_order === 4 || row.stage.trim().toLowerCase() === 'offer recommended';
+}
+
+export function activationFunnelStages(stages: ReadonlyArray<FunnelStage>): FunnelStage[] {
+  return stages
+    .filter((stage) => !isOfferRecommendedStage(stage))
+    .sort((a, b) => a.stage_order - b.stage_order);
+}
+
 export function makeTicks(min: number, max: number, count = 5): number[] {
   if (!Number.isFinite(min) || !Number.isFinite(max)) return [];
   if (max === min) return [min];
@@ -356,13 +366,11 @@ export function buildFunnelSankeyModel(
     const h = Math.max(minBarH, (count / maxCount) * maxBarH);
     const prev = i > 0 ? Math.max(0, ordered[i - 1].borrower_count) : null;
     // Conversion is defined only as a narrowing from a non-empty prior
-    // stage. First stage → null; prev=0 → null (undefined, not a fake 0%).
-    // A stage that GREW vs its predecessor (the real funnel is
-    // non-monotonic — offer_recommended is computed across the whole
-    // addressable base, so it balloons past high_opportunity) keeps its raw
-    // ratio here; the formatter suppresses the >100% label rather than
-    // printing a nonsensical "115000%". Node height still honestly reflects
-    // the count.
+    // stage. First stage -> null; prev=0 -> null (undefined, not a fake 0%).
+    // A stage that grew keeps its raw ratio here; the formatter suppresses
+    // the >100% label. The Executive view filters non-narrowing NBO coverage
+    // out of the main activation funnel, while this generic model remains
+    // honest for any stage array passed to it.
     const conversion = i === 0 ? null : prev && prev > 0 ? count / prev : null;
     return {
       stage: s.stage,

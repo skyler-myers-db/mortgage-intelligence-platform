@@ -291,7 +291,7 @@ source_rows AS (
     COUNT(*) AS row_count,
     MAX(COALESCE(source_updated_at, ingest_ts)) AS last_updated,
     CASE WHEN COUNT(*) > 0
-      THEN 'Cotality HELOC propensity model feed · drives HELOC Intent; not a permit filing source'
+      THEN 'Cotality HELOC propensity model feed · drives HELOC Intent; not a permit filing source. Covers the same scored CLIP universe as the refi model.'
       ELSE 'Cotality HELOC propensity table is configured but empty'
     END AS note,
     'mip.silver.heloc_propensity' AS source_table,
@@ -307,7 +307,7 @@ source_rows AS (
     COUNT(*) AS row_count,
     MAX(COALESCE(source_updated_at, ingest_ts)) AS last_updated,
     CASE WHEN COUNT(*) > 0
-      THEN 'Cotality refinance propensity model feed · adds intent score context'
+      THEN 'Cotality refinance propensity model feed · adds intent score context. Covers the same scored CLIP universe as the HELOC model.'
       ELSE 'Cotality refinance propensity table is configured but empty'
     END AS note,
     'mip.silver.refi_propensity' AS source_table,

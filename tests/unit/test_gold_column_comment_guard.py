@@ -8,9 +8,8 @@ demo first-party feeds). These tests pin, for every rebuild surface:
 
 * transformation/job comments == DDL comments, byte-identical, BOTH
   directions (a comment edited in only one place fails loudly);
-* the equity/ltv complement construction in borrower_360 (re-audit:
-  independent half-up rounding rendered equity + ltv = 101 on exact-.5
-  CLTV).
+* the display-LTV / capped-equity split in borrower_360 (underwater borrowers
+  can show LTV > 100, while equity_pct remains fail-closed for scoring).
 """
 
 from __future__ import annotations
@@ -192,13 +191,38 @@ def test_lifecycle_job_comments_match_ddl() -> None:
     )
 
 
-def test_borrower_360_equity_is_complement_of_ltv() -> None:
-    """Pin the complement-by-construction shape (equity = 100 - rounded
-    ltv) so independent rounding cannot regress to equity + ltv = 101."""
+def test_borrower_360_display_ltv_can_exceed_100_while_equity_clamps() -> None:
+    """Pin the split between display LTV and scoring equity.
+
+    Underwater borrowers should show true LTV (>100) while equity_pct stays
+    fail-closed at 0 for scoring and offer routing.
+    """
     text = (TRANSFORMS / "gold_borrower_360.sql").read_text(encoding="utf-8")
     assert re.search(
-        r"THEN 100 - GREATEST\(0, LEAST\(100, CASE", text
-    ), "equity_pct no longer derived as the complement of the clamped ltv"
+        r"THEN GREATEST\(0, LEAST\(100, 100 - GREATEST\(0, CASE", text
+    ), "equity_pct no longer clamps available equity while preserving underwater zero"
+    assert re.search(
+        r"AS INT\) AS ltv",
+        text,
+    )
+    assert "GREATEST(0, LEAST(100, CASE" not in re.search(
+        r"-- LTV: display truth\..*?AS INT\) AS ltv",
+        text,
+        re.DOTALL,
+    ).group(0), "display LTV is upper-capped again"
     assert "ROUND(100 - b.estimated_cltv)" not in text, (
         "independent equity rounding reintroduced (exact-.5 CLTV sums to 101)"
     )
+
+
+def test_listing_price_evidence_is_plausibility_guarded() -> None:
+    borrower_sql = (TRANSFORMS / "gold_borrower_360.sql").read_text(encoding="utf-8")
+    evidence_sql = (TRANSFORMS / "gold_evidence_events.sql").read_text(encoding="utf-8")
+
+    for text in (borrower_sql, evidence_sql):
+        assert "listing_price < 25000" in text
+        assert "listing_price < " in text and "* 0.15" in text
+        assert "listing_price > " in text and "* 5.0" in text
+
+    assert "plausible_listing_price" in evidence_sql
+    assert "WHEN la.listing_price IS NOT NULL THEN CONCAT(' at $'" not in evidence_sql

@@ -37,6 +37,7 @@ export function SegmentCard({ segment, selected, onClick }: SegmentCardProps) {
     segment.delta.trim() === '0%' ||
     segment.delta.trim() === '+0.0%' ||
     segment.delta.trim() === '0.0%';
+  const hasNoBorrowers = segment.count === 0;
 
   useEffect(() => {
     // Fire emanation only on deselected → selected transition.
@@ -64,14 +65,16 @@ export function SegmentCard({ segment, selected, onClick }: SegmentCardProps) {
       <div className="seg-card__count num">{segment.count.toLocaleString()}</div>
       <div className="seg-card__sub">{segment.description}</div>
       <div className="seg-card__meta">
-        {deltaIsFirstSnapshot ? (
+        {hasNoBorrowers ? (
+          <span>no borrowers in current view</span>
+        ) : deltaIsFirstSnapshot ? (
           <span>first snapshot · deltas pending</span>
         ) : (
           <span className={segment.delta.startsWith('-') ? 'down' : 'up'}>
             {segment.delta.startsWith('-') ? '▼' : '▲'} {segment.delta}
           </span>
         )}
-        <span>avg {segment.avg_score}</span>
+        {!hasNoBorrowers && <span>avg {segment.avg_score}</span>}
       </div>
     </button>
   );

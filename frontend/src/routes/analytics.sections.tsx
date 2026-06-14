@@ -26,6 +26,7 @@ import type {
 } from '../types';
 import {
   analyticsHref,
+  activationFunnelStages,
   borrowerDisplay,
   buildDailyEvidenceTotals,
   fmt,
@@ -60,11 +61,18 @@ export function ExecutiveView({ data, leadParams }: { data: ExecutiveAnalyticsRe
       </div>
       <section className="surface analytics-section">
         <div className="surface__hdr surface__hdr--split">
-          <h2 className="h-3">Pipeline funnel</h2>
+          <div>
+            <h2 className="h-3">Activation funnel</h2>
+            <p className="analytics-panel-note">
+              Narrowing path from addressable borrower to actioned outreach.
+              Offer coverage remains in Pipeline Metrics because nearly every
+              borrower has a governed next-best-offer branch.
+            </p>
+          </div>
           <Link className="btn btn--sm" to={leadQueueHref(leadParams)}>Open queue</Link>
         </div>
         <div className="surface__body">
-          <FunnelSankey stages={data.stages} leadParams={leadParams} />
+          <FunnelSankey stages={activationFunnelStages(data.stages)} leadParams={leadParams} />
         </div>
       </section>
       <div className="layoutA-grid analytics-grid">

@@ -361,7 +361,7 @@ All gold tables: Delta, managed, partition/cluster tuned for the Module 0 querie
 | `avm_value` | BIGINT | N | `COALESCE(lien_current.avm_value, 0)` | `avm_value` | 0 when AVM coverage gap. |
 | `current_lien_balance` | BIGINT | N | `COALESCE(lien_current.total_open_lien_balance, 0)` | `current_lien_balance` | |
 | `current_rate` | DOUBLE | N | `COALESCE(first_pos_rate * 100, 0.0)` | `current_rate` | **Percent form** (5.75, not 0.0575) — matches Pydantic `current_rate: float` and `mock_data` convention. |
-| `ltv` | INT | N | `CASE WHEN avm_value>0 THEN CAST(ROUND(100.0 * total_open_lien_balance / avm_value) AS INT) ELSE 0 END` | `ltv` | |
+| `ltv` | INT | N | `CASE WHEN estimated_cltv > 0 THEN ROUND(estimated_cltv) WHEN avm_value>0 THEN ROUND(100.0 * total_open_lien_balance / avm_value) ELSE 0 END` | `ltv` | Display LTV is not upper-capped; underwater borrowers may exceed 100 while `equity_pct` remains capped for scoring. |
 | `related_property_count` | INT | N | `COALESCE(property_owner_bridge.related_property_count, 1)` | `related_property_count` | |
 | `is_owner_occupied` | BOOLEAN | N | `owner_occupancy_code = 'O'` | — | Feeds `fit`. |
 | `is_absentee` | BOOLEAN | N | `property_master.is_absentee` | — | Feeds investor branch. |
@@ -653,7 +653,7 @@ Rules:
 
 The scoring UDF golden fixtures (`tests/fixtures/*.json`, `sql/fixtures/*_validation.sql`) are **input-space** fixtures — they pin the function contract, not specific CLIPs. They do not need to change.
 
-What we need is a **real-data integration fixture**: canonical CLIPs picked from the share that exercise the unblocked `refi_plus_heloc`, `refi`, `cash_out`, `investor`, `retention`, and `nurture` branches of `fn_next_best_offer`. The `purchase` and permit-driven pure `heloc` branches remain input-space fixture cases only until MLS Listings and Building Permits land.
+What we need is a **real-data integration fixture**: canonical CLIPs picked from the share that exercise the unblocked `purchase`, `refi_plus_heloc`, `refi`, `cash_out`, `investor`, `retention`, and `nurture` branches of `fn_next_best_offer`. The filed-permit branch remains an input-space fixture case until Building Permits land; HELOC Intent is currently backed by Cotality HELOC propensity plus equity thresholds.
 
 ### Selection procedure (run once, check fixtures into repo)
 
@@ -661,7 +661,7 @@ What we need is a **real-data integration fixture**: canonical CLIPs picked from
    - `CLIP_REFI_PLUS_HELOC`: `first_pos_rate >= 0.0625 AND estimated_cltv <= 55 AND equity_pct >= 40 AND foreclosure_stage_code IS NULL AND owner_occupancy_code = 'O' AND situs_state = <chosen demo state>`
    - `CLIP_CASH_OUT`: high equity with rate spread below the refi floor, no active second-position lien.
    - `CLIP_RETENTION`: current Summit-serviced loan with `rate_spread_bps >= 50`.
-   - `CLIP_PURCHASE`: deferred until MLS joins; there is no real-data proxy in the current share.
+   - `CLIP_PURCHASE`: live MLS-listed borrower whose winning branch is purchase.
 2. For each chosen CLIP, snapshot the input tuple to `tests/fixtures/real_clip_integration.json`:
    ```json
    {
@@ -691,11 +691,11 @@ This gives us the same contract stability as the input-space fixtures, with a "t
 | Column | Blocked by | Gold behavior until unblocked |
 |---|---|---|
 | `borrower_360.has_permit` | Cotality **Building Permits** product not yet licensed (P0 request per gap analysis §8). | Hardcoded `FALSE`. `permit` segment returns zero count. `intent_trigger.permit` term always 0. |
-| `borrower_360.listed_for_sale` | Cotality **MLS Listings** product not yet licensed (P0 request). | Hardcoded `FALSE`. `listed` segment returns zero count. `purchase` branch of `fn_next_best_offer` never fires on real data. |
 | `evidence_events` rows of `signal_type='permit'` | Permits blocker. | Never emitted on the real-data path until the Cotality Permits share lands. |
-| `evidence_events` rows of `signal_type='listing'` | MLS blocker. | Never emitted on the real-data path until the Cotality MLS share lands. |
 | Pre-foreclosure leading indicators (NOD/NTS) | Cotality **Pre-Foreclosure** product (P2 ask, not a walkthrough blocker). | Fall back to `property_master.foreclosure_stage_code` snapshot. Adequate per gap analysis §2 segment 7. |
 | 15-year offer lane (`fn_next_best_offer` refinement) | Public `MORTGAGE15US` ingestion not yet wired (optional per gap analysis §5). | Single 30-year market rate is good enough for Module 0. |
+
+MLS Listings are no longer blocked: `borrower_360.listed_for_sale` materializes from `mip.silver.listing_activity`, `evidence_events.signal_type='listing'` emits display-safe listing evidence, and the `purchase` branch can fire on real data. Filed Building Permits remain the explicit blocked source.
 
 ---
 

@@ -131,6 +131,7 @@ const ROUTE_CRUMBS: Record<string, string> = {
   '/borrower-360':           'Borrower 360',
   '/offer-orchestrator':     'Offer Orchestrator',
   '/ask-genie':              'Ask Genie',
+  '/glossary':               'Glossary',
   '/admin-config':           'Admin',
 };
 

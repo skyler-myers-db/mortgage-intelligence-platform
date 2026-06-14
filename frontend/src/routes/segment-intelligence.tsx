@@ -88,6 +88,8 @@ const INITIAL_FILTERS: ChipFilters = {
   recency: 'Any',
 };
 
+export const INITIAL_ACTIVE_SEGMENTS: SegmentCode[] = [];
+
 export function lenderFiltersFromSearch(
   searchParams: URLSearchParams,
   targetLenderOptions: readonly string[] = [],
@@ -138,7 +140,7 @@ export default function SegmentIntelligence() {
     ),
     [footprint.ready, footprint.states, footprint.usingFallback],
   );
-  const [activeSegs, setActiveSegs] = useState<SegmentCode[]>(['itm']);
+  const [activeSegs, setActiveSegs] = useState<SegmentCode[]>(INITIAL_ACTIVE_SEGMENTS);
   const [chipFilters, setChipFilters] = useState<ChipFilters>(() => ({
     ...INITIAL_FILTERS,
     ...lenderFiltersFromSearch(searchParams, targetLenderOptions),
@@ -232,14 +234,14 @@ export default function SegmentIntelligence() {
     (signal) =>
       api.segments(
         signal,
-        activeSegs.length > 0 ? activeSegs : undefined,
+        undefined,
         'all',
         secondaryPortfolioCriteria,
       ),
-    [activeSegsKey, secondaryPortfolioCriteria],
+    [secondaryPortfolioCriteria],
     {
       queryKey: queryKeys.segments([
-        activeSegsKey,
+        'standalone',
         JSON.stringify(secondaryPortfolioCriteria),
       ]),
     },
@@ -408,10 +410,10 @@ export default function SegmentIntelligence() {
       eyebrow="Segments"
       title={
         segments.length > 0
-          ? `${segments.length} borrower ${segments.length === 1 ? 'segment' : 'segments'} · multi-select AND`
-          : 'Borrower segments · multi-select uses AND'
+          ? `${segments.length} borrower ${segments.length === 1 ? 'segment' : 'segments'} · standalone counts`
+          : 'Borrower segments · standalone counts'
       }
-      lede="Segment cards are a multi-select AND filter: each added card narrows the ranked table to borrowers matching every selected segment. Secondary filters narrow by location, occupancy, lien, owner link, purchase intent, and equity. Counts refresh nightly."
+      lede="Cards show each segment's standalone marketable count after the secondary borrower filters. Selecting cards narrows the ranked table with AND semantics, so each added segment must also match."
       heroRight={
         filtersDirty ? (
           <Button size="sm" variant="ghost" icon="cross" onClick={clearAll}>
@@ -546,7 +548,9 @@ export default function SegmentIntelligence() {
         <div
           className="filter-row__hint filter-row__hint--full muted"
         >
-          Listed-for-sale is backed by live Cotality MLS rows. HELOC intent is
+          Segment card counts are standalone after secondary filters; selected
+          cards only narrow the ranked borrower table below. Listed-for-sale is
+          backed by live Cotality MLS rows. HELOC intent is
           backed by Cotality HELOC propensity; filed building-permit records
           remain a separate pending source.
         </div>
@@ -576,8 +580,9 @@ export default function SegmentIntelligence() {
           </div>
           {!leadsRefreshing && truncatedAt && (
             <div className="muted fs-14">
-              Showing the highest-ranked returned rows; segment cards and map
-              show the same eligible marketable population for the active filters.
+              Showing the highest-ranked returned rows; segment cards remain
+              standalone counts, while the table and map apply selected segment
+              filters and geography drill-downs.
             </div>
           )}
           {(mapSelection.state || mapSelection.county || mapSelection.zip) && (
@@ -614,7 +619,7 @@ export default function SegmentIntelligence() {
         </Link>
       </div>
 
-      <div className="layoutA-grid">
+      <div className="layoutA-grid layoutA-grid--segment-workbench">
         <LeadTable
           leads={filtered}
           totalMatching={totalMatching}

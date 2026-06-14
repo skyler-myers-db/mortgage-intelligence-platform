@@ -565,11 +565,32 @@ def recompute_from_raw(
     # equity_estimate = GREATEST(0, avm - liens).
     equity_estimate = max(0, avm_value - lien_bal)
 
-    # ltv -- mirror the CTAS: 100 * liens/avm rounded. Note this is
-    # computed independently of equity_pct (from lien/avm, not
-    # 100-estimated_cltv), which is why (ltv + equity_pct) can drift
-    # from 100 by at most 1 bp.
-    ltv = int(round(100.0 * lien_bal / avm_value)) if avm_value and avm_value > 0 else 0
+    # ltv -- display truth. Mirror gold CTAS source preference: estimated
+    # CLTV first, lien/AVM fallback. Do not upper-cap; underwater borrowers
+    # can exceed 100 while equity_pct stays clamped for scoring.
+    if estimated_cltv is not None and float(estimated_cltv) > 0:
+        ltv = int(max(0, round(float(estimated_cltv))))
+    elif avm_value and avm_value > 0:
+        ltv = int(max(0, round(100.0 * lien_bal / avm_value)))
+    else:
+        ltv = 0
+
+    listing_price_raw = (
+        _safe_int(silver_listing.get("listing_price"))
+        if silver_listing.get("listing_price") is not None
+        else None
+    )
+    if (
+        listing_price_raw is None
+        or listing_price_raw < 25_000
+        or (avm_value and avm_value > 0 and (
+            listing_price_raw < avm_value * 0.15
+            or listing_price_raw > avm_value * 5.0
+        ))
+    ):
+        listing_price = None
+    else:
+        listing_price = listing_price_raw
 
     # Boolean features.
     is_investor = (
@@ -712,7 +733,7 @@ def recompute_from_raw(
         "listing_status_description": silver_listing.get("listing_status_description"),
         "listing_date": silver_listing.get("listing_date"),
         "listing_status_date": silver_listing.get("listing_status_date"),
-        "listing_price": _safe_int(silver_listing.get("listing_price")) if silver_listing.get("listing_price") is not None else None,
+        "listing_price": listing_price,
         "listing_days_on_market": _safe_int(silver_listing.get("listing_days_on_market")) if silver_listing.get("listing_days_on_market") is not None else None,
         "listing_service": silver_listing.get("listing_service"),
         "heloc_propensity_score": heloc_score if heloc_propensity_score is not None else None,
@@ -958,18 +979,16 @@ def compare_raw_vs_gold(audit: ClipAudit) -> list[Mismatch]:
     _add("opportunity_score", rec["opportunity_score"], _safe_int(gold.get("opportunity_score")))
     _add("confidence", rec["confidence"], _safe_int(gold.get("confidence")))
 
-    # Sanity: LTV + equity_pct should sum to 100 (±1 rounding) under
-    # the lien/avm fallback branch, but the CTAS uses estimated_cltv
-    # when available so the two can drift more. We check the weaker
-    # invariant here: they must each be in [0, 100].
+    # Sanity: display LTV can exceed 100 for underwater borrowers. Equity_pct
+    # stays in [0, 100] because it feeds scoring and offer gating.
     ltv_g = _safe_int(gold.get("ltv"))
     eq_g = _safe_int(gold.get("equity_pct"))
-    if not (0 <= ltv_g <= 100):
+    if not (0 <= ltv_g):
         mismatches.append(Mismatch(
             clip=audit.clip, borrower_id=audit.borrower_id,
             surface_a="raw_recomputed", surface_b="gold",
-            field="ltv_range", expected="[0..100]", actual=ltv_g,
-            notes="gold ltv outside valid range",
+            field="ltv_range", expected=">=0", actual=ltv_g,
+            notes="gold display ltv outside valid range",
         ))
     if not (0 <= eq_g <= 100):
         mismatches.append(Mismatch(

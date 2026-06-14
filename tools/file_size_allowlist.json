@@ -1,17 +1,17 @@
 {
   "expires": {
-    "backend/api/outreach.py": "2026-06-21",
-    "backend/services/audit_store.py": "2026-06-21",
-    "backend/services/genie_actions.py": "2026-06-21",
-    "backend/services/repositories/databricks_genie.py": "2026-06-21",
-    "backend/services/repositories/databricks_portfolio.py": "2026-06-21",
-    "backend/services/resilience.py": "2026-06-21",
-    "backend/services/sales_state.py": "2026-06-21",
-    "frontend/src/components/mortgage/LeadTable.tsx": "2026-06-21",
-    "frontend/src/components/mortgage/USChoroplethMap.tsx": "2026-06-21",
-    "frontend/src/design-system/components.css": "2026-06-21",
-    "frontend/src/lib/api.ts": "2026-06-21",
-    "tools/e2e_borrower_audit.py": "2026-06-21"
+    "backend/api/outreach.py": "2026-07-31",
+    "backend/services/audit_store.py": "2026-07-31",
+    "backend/services/genie_actions.py": "2026-07-31",
+    "backend/services/repositories/databricks_genie.py": "2026-07-31",
+    "backend/services/repositories/databricks_portfolio.py": "2026-07-31",
+    "backend/services/resilience.py": "2026-07-31",
+    "backend/services/sales_state.py": "2026-07-31",
+    "frontend/src/components/mortgage/LeadTable.tsx": "2026-07-31",
+    "frontend/src/components/mortgage/USChoroplethMap.tsx": "2026-07-31",
+    "frontend/src/design-system/components.css": "2026-07-31",
+    "frontend/src/lib/api.ts": "2026-07-31",
+    "tools/e2e_borrower_audit.py": "2026-07-31"
   },
-  "_policy": "2026-06-11 audit P3: the 2026-06-21 expiry is DELIBERATE - it lands right after Data+AI Summit week (Jun 15-18) as the forcing function for the post-Summit split/refactor slice (router-layer drift, 'use no memo' removal). Do not bump-to-green; split the files or re-date in the same commit as a documented schedule decision."
+  "_policy": "2026-06-14 schedule decision: allowlist expiry moved from 2026-06-21 to 2026-07-31 because listed-for-sale/HELOC evidence hardening took priority before Data+AI Summit. See docs/maintenance/file-size-refactor-plan.md. Do not extend again without either splitting files or updating that documented schedule."
 }

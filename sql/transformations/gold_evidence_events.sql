@@ -184,7 +184,8 @@ listing_rows AS (
       'Current MLS status is ',
       COALESCE(la.listing_status_description, la.listing_status_category, 'active'),
       CASE
-        WHEN la.listing_price IS NOT NULL THEN CONCAT(' at $', CAST(la.listing_price AS STRING), ' list price')
+        WHEN la.plausible_listing_price IS NOT NULL
+          THEN CONCAT(' at $', CAST(la.plausible_listing_price AS STRING), ' list price')
         ELSE ''
       END,
       CASE
@@ -199,6 +200,13 @@ listing_rows AS (
   FROM (
     SELECT
       src.*,
+      CASE
+        WHEN src.listing_price IS NULL THEN NULL
+        WHEN src.listing_price < 25000 THEN NULL
+        WHEN lc.avm_value IS NOT NULL AND lc.avm_value > 0
+          AND (src.listing_price < lc.avm_value * 0.15 OR src.listing_price > lc.avm_value * 5.0) THEN NULL
+        ELSE src.listing_price
+      END AS plausible_listing_price,
       ROW_NUMBER() OVER (
         PARTITION BY src.clip
         ORDER BY
@@ -206,6 +214,8 @@ listing_rows AS (
           src.listing_record_id
       ) AS rn
     FROM mip.silver.listing_activity AS src
+    LEFT JOIN mip.silver.lien_current AS lc
+      ON lc.clip = src.clip
     WHERE src.is_active_listing = TRUE
       AND src.clip IS NOT NULL
   ) la

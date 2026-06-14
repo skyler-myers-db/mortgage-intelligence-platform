@@ -89,7 +89,7 @@ test.describe('Module 0 — golden path', () => {
     await expect(page).toHaveURL(/\/segment-intelligence$/);
   });
 
-  test('segment intelligence: six cards, ITM preselected, toggle + clear', async ({ page }) => {
+  test('segment intelligence: six cards, standalone counts, toggle + clear', async ({ page }) => {
     const segmentRequests: string[] = [];
     page.on('request', (request) => {
       const url = request.url();
@@ -115,12 +115,13 @@ test.describe('Module 0 — golden path', () => {
     // footer + sample Genie questions that also say "N borrowers").
     const rankedHeader = page.locator('.h-2').filter({ hasText: /borrowers/ }).first();
     await expect(rankedHeader).toBeVisible();
-    await expect(rankedHeader).toContainText(/segment filter: In the Money/);
+    await expect(rankedHeader).not.toContainText(/segment filter:/);
 
     await page.getByText('Listed for Sale', { exact: true }).click();
-    await expect(rankedHeader).toContainText(/segment filter: In the Money \+ Listed for Sale/);
+    await expect(rankedHeader).toContainText(/segment filter: Listed for Sale/);
 
     await page.getByText('Home Equity Candidate', { exact: true }).click();
+    await expect(rankedHeader).toContainText(/segment filter: Listed for Sale \+ Home Equity Candidate/);
     await expect(rankedHeader).toContainText(/must match every selected segment/);
     await expect
       .poll(() =>
@@ -144,7 +145,7 @@ test.describe('Module 0 — golden path', () => {
       .toBe(true);
 
     await page.getByRole('button', { name: /Clear filters/ }).click();
-    await expect(rankedHeader).not.toContainText(/filtered by/);
+    await expect(rankedHeader).not.toContainText(/segment filter:/);
   });
 
   test('lead queue: 23 rows, headers, B-48291 canonical row', async ({ page }) => {

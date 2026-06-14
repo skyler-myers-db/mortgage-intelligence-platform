@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { lenderFiltersFromSearch } from './segment-intelligence';
+import { INITIAL_ACTIVE_SEGMENTS, lenderFiltersFromSearch } from './segment-intelligence';
 
 describe('segment intelligence lender overlay URL state', () => {
+  it('starts without a selected segment so cards render standalone counts', () => {
+    expect(INITIAL_ACTIVE_SEGMENTS).toEqual([]);
+  });
+
   it('hydrates public-safe lender overlay filters from the URL', () => {
     const filters = lenderFiltersFromSearch(
       new URLSearchParams({

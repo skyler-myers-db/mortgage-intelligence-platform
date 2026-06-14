@@ -51,8 +51,8 @@ export const mortgageGlossary = {
     aliases: ['loan-to-value'],
     category: 'mortgage',
     short: 'Loan-to-value: current lien balance divided by AVM.',
-    appContext: 'Lower LTV usually means more available equity.',
-    proof: 'Proof shows current lien divided by AVM.',
+    appContext: 'Lower LTV usually means more available equity; underwater borrowers can show LTV above 100%.',
+    proof: 'Proof shows current lien divided by AVM. Equity scoring clamps underwater values to 0.',
   },
   heloc: {
     id: 'heloc',
@@ -60,8 +60,8 @@ export const mortgageGlossary = {
     aliases: ['home equity line of credit'],
     category: 'mortgage',
     short: 'Home equity line of credit.',
-    appContext: 'A HELOC lane appears when estimated equity clears the branch threshold.',
-    proof: 'Proof shows the equity threshold used for the HELOC branch.',
+    appContext: 'HELOC Intent appears when the governed Cotality HELOC propensity trigger and equity branch support an equity-credit conversation.',
+    proof: 'Proof shows HELOC propensity and branch thresholds; filed building permits remain a separate pending source.',
   },
   inTheMoney: {
     id: 'in-the-money',
@@ -69,7 +69,7 @@ export const mortgageGlossary = {
     aliases: ['ITM'],
     category: 'scoring',
     short: 'A borrower appears to have enough economic incentive for outreach.',
-    appContext: 'Module 0 defaults to rate spread >= 75 bps and equity >= 15%.',
+    appContext: 'Module 0 defaults to rate spread >= 75 bps and equity >= 15%; lead surfaces can additionally apply marketability/contactability filters.',
     proof: 'Proof compares rate spread and equity to those thresholds.',
   },
   nextBestOffer: {

@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FunnelStage } from '../types';
 import {
   SANKEY_VIEW,
+  activationFunnelStages,
   buildFunnelSankeyModel,
   formatConversionPct,
   segmentClass,
@@ -26,6 +27,19 @@ const STAGES: FunnelStage[] = [
 ];
 
 describe('buildFunnelSankeyModel (pure geometry)', () => {
+  it('keeps offer coverage out of the strict activation funnel', () => {
+    expect(activationFunnelStages(STAGES).map((stage) => stage.stage)).toEqual([
+      'Addressable',
+      'In the Money',
+      'High Opportunity',
+      'Approved',
+      'Actioned',
+    ]);
+    const model = buildFunnelSankeyModel(activationFunnelStages(STAGES));
+    expect(model.nodes.map((n) => n.count)).toEqual([5_156_184, 117_189, 3_990, 35, 3]);
+    expect(model.nodes.every((node, idx, nodes) => idx === 0 || node.count <= nodes[idx - 1].count)).toBe(true);
+  });
+
   it('produces one node per stage in stage_order, with N-1 ribbons', () => {
     const shuffled = [STAGES[3], STAGES[0], STAGES[5], STAGES[1], STAGES[4], STAGES[2]];
     const model = buildFunnelSankeyModel(shuffled);

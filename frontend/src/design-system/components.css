@@ -1091,7 +1091,19 @@ kbd {
 .lead-table__col-offer { width: 174px; }
 .lead-table__col-score { width: 64px; }
 .lead-table__col-confidence { width: 78px; }
-.lead-table__col-approval { width: 148px; }
+.lead-table__col-approval { width: 164px; }
+.lead-table__approval-header,
+.lead-table__table .tbl-cell--approval {
+  position: sticky;
+  right: 0;
+  z-index: 1;
+  background: var(--bg-1);
+  box-shadow: calc(-1 * var(--sp-1)) 0 var(--sp-2) color-mix(in oklab, var(--bg-0) 70%, transparent);
+}
+.lead-table__approval-header {
+  z-index: 2;
+  background: var(--bg-2);
+}
 .lead-table__borrower,
 .lead-table__clip,
 .lead-table__zip {
@@ -3629,6 +3641,12 @@ kbd {
   display: grid;
   grid-template-columns: 1.4fr 1fr;
   gap: var(--gap-grid);
+}
+.layoutA-grid > * {
+  min-width: 0;
+}
+.layoutA-grid--segment-workbench {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 /* Table wrappers — on narrow containers the table gains horizontal

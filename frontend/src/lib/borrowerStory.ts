@@ -37,7 +37,7 @@ function fmtCurrencyK(n: number): string {
   return `$${Math.round(n)}`;
 }
 
-/** Equity % from LTV when AVM is available (LTV + equity = 100 by construction). */
+/** Available equity % from display LTV; underwater LTV clamps the story to 0% equity. */
 function equityPct(b: Borrower360): number | null {
   const hasAvm = typeof b.avm_value === 'number' && b.avm_value > 0;
   if (!hasAvm || typeof b.ltv !== 'number') return null;

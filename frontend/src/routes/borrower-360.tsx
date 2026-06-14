@@ -428,7 +428,7 @@ export default function Borrower360() {
           <div className="surface">
             <div className="surface__hdr">
               <Icon name="shield" size={14} className="icon-accent" />
-              <div className="h-4">Why we recommend this</div>
+              <div className="h-4">Refi economics check</div>
             </div>
             <div className="surface__body">
               <div className="chip-row mb-3">
@@ -443,7 +443,7 @@ export default function Borrower360() {
                 </span>
               </div>
               <div className="rationale-box">
-                <span className="text-1 fw-500">Rationale.</span>{' '}
+                <span className="text-1 fw-500">Economic check.</span>{' '}
                 {b.why_panel.in_the_money_reason}
               </div>
               <div className="chip-row mt-3">
