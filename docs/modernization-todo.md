@@ -1085,3 +1085,56 @@ destination flipped to `connected`; otherwise it honestly stays staged.
 - Honesty posture held throughout: deterministic summary not claimed as AI;
   persist-only (no reminder send); Salesforce never claims a delivery it didn't
   make.
+
+## Demo-feedback polish + auto-offer program (2026-06-13)
+
+### UI fixes (deployed, live 2/2)
+- Home spacing: the "Your book today" summary now uses the standard
+  inter-section gap (was crammed against the KPI row).
+- Topbar search shows a clickable, platform-aware ⌘K / Ctrl K chip that opens
+  the command palette (the hotkey was undiscoverable).
+- Borrower 360 "The story" renders automatically (removed the click gate).
+- Delta colors confirmed correct (materiality-gated: green >+0.5%, red <−0.5%,
+  neutral within ±0.5%) — the greys were sub-threshold noise, not a bug.
+
+### Provenance (answered for customer honesty)
+- "Target lien holder" (Competitor A/B/C…) = REAL Cotality lien-holder names,
+  shown under masked aliases for the demo.
+- Loan officers (lo01..lo06@summit.example) + "190 daily capacity" = seeded
+  demo data, replaced by the lender's real roster on deployment.
+
+### Auto-offer program ("automate the offer itself" — the Cotality/Scott ask)
+The real click-to-accept pre-approval is a regulated Module 1 program
+(FCRA firm-offer + ECOA + TILA/RESPA) needing legal sign-off — explicitly NOT
+built. What shipped (each with the full signoff loop):
+- **Slice 1** (merge 9116cea): M1 roadmap reframed to "Pre-Qualified Offer &
+  Self-Serve Accept"; a watermarked, banner-labelled, legal-disclaimered
+  borrower-offer PROTOTYPE mock (the "click yes" vision) launched from the
+  offer orchestrator — wired to nothing, no PII, no TILA trigger terms, accept
+  confirms nothing was submitted. Unanimous 5/5.
+- **Slice 2 (rescoped):** a standalone indicative-offer card was redundant (the
+  orchestrator already shows product/rationale/alternatives/thresholds), so the
+  mock instead shows a qualitative, figure-free "why you may qualify" reason.
+- **Slice 3** (merge 3ea1c50): personalized + compelling outreach DRAFT copy —
+  a safe qualitative `_personalization_hook` + proof-backed `why_now` + a clear
+  low-effort CTA per channel; still human-approved, no send. TILA/fair-lending
+  safe and STRUCTURALLY guarded: `_figure_safe_reason` drops any `why_now`
+  carrying a %/$/bps/rate before it reaches copy. Copy cluster extracted to
+  `backend/services/outreach_copy.py` (kept outreach.py under the 1000-line
+  monolith threshold).
+
+### Signoff caught real issues (both fixed before merge)
+- QA BLOCK #1: figure-bearing `why_now` could leak a TILA trigger term into
+  borrower copy; the test was rigged with clean input. → structural
+  `_figure_safe_reason` guard + adversarial test (real fixture string).
+- QA BLOCK #2: the change tripped the 1000-line monolith architecture test. →
+  copy cluster extracted to a service module (1019 → 835 lines).
+
+### Validation + deployed evidence
+- Backend **1581 pytest** (incl. architecture-boundary + figure-leak tests),
+  ruff clean; frontend **392 vitest**, lint/build/budget green (CSS budget
+  re-baselined 116→124 / 21→22 for the auto-offer epic, actual 118.25/20.59).
+- Deploy exit 0; smoke PASS; **live 9/9 PASS** (`buyer_wow_live.spec.ts`):
+  briefing-gone guard, "Your book today" + ⌘K chip, Slice 1 prototype mock,
+  Feature C routing, map, auto-render story, Genie pin, refusal, deep-dive pin.
+  Deployed == HEAD.
