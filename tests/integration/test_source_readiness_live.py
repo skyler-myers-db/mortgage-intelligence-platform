@@ -32,7 +32,9 @@ EXPECTED_SOURCE_NAMES = {
     "First-party CRM / Campaigns",
     "First-party Customer Interactions",
     "First-party Product Balances",
-    "MLS",
+    "MLS Listings",
+    "Cotality HELOC Propensity",
+    "Cotality Refi Propensity",
     "Building Permits",
     "UC Gold Borrower 360",
     "UC Gold Lead Scores",
@@ -49,6 +51,9 @@ CORE_LIVE_SOURCES = {
     "Owner Link",
     "AVM",
     "FRED Market Rates",
+    "MLS Listings",
+    "Cotality HELOC Propensity",
+    "Cotality Refi Propensity",
     "UC Gold Borrower 360",
     "UC Gold Lead Scores",
     "UC Gold Lead Population",
@@ -64,7 +69,7 @@ FIRST_PARTY_SOURCES = {
     "First-party Product Balances",
 }
 
-ROADMAP_SOURCES = {"MLS", "Building Permits"}
+ROADMAP_SOURCES = {"Building Permits"}
 
 ALLOWED_STATUSES = {
     "live",

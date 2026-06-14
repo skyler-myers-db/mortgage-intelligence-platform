@@ -334,17 +334,13 @@ export default function SegmentIntelligence() {
     } else if (chipFilters.ownerLink === 'Portfolio investor (5+)') {
       out = out.filter((l) => (l.related_property_count ?? 1) >= 5);
     }
-    // PURCHASE INTENT -> listed_for_sale + HELOC intent. `has_permit` stays
-    // a true filed-permit flag; Cotality HELOC propensity is separate and
-    // can activate the HELOC intent path without implying a permit filing.
-    const hasHelocIntent = (l: LeadSummary) =>
-      l.has_permit === true || l.has_heloc_propensity_trigger === true;
+    // PURCHASE INTENT -> listed_for_sale + Cotality HELOC propensity. True
+    // filed building permits remain a separate pending source and must not
+    // be inferred from the propensity model.
+    const hasHelocIntent = (l: LeadSummary) => l.has_heloc_propensity_trigger === true;
     if (chipFilters.purchase === 'Listed for sale') {
       out = out.filter((l) => l.listed_for_sale === true);
-    } else if (
-      chipFilters.purchase === 'HELOC intent' ||
-      chipFilters.purchase === 'Recent permit activity'
-    ) {
+    } else if (chipFilters.purchase === 'HELOC intent') {
       out = out.filter((l) => hasHelocIntent(l));
     } else if (chipFilters.purchase === 'Both') {
       out = out.filter((l) => l.listed_for_sale === true && hasHelocIntent(l));

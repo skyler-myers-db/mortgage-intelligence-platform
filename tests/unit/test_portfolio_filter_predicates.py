@@ -120,6 +120,37 @@ def test_target_lender_ref_all_is_not_a_predicate() -> None:
     assert params == {}
 
 
+def test_heloc_intent_uses_propensity_without_permit_filing_predicate() -> None:
+    where, params = _where_for(
+        _any_contactability(purchase_intent="HELOC intent"),
+    )
+
+    assert where == "WHERE has_heloc_propensity_trigger = TRUE"
+    assert "has_permit" not in where
+    assert params == {}
+
+
+def test_legacy_recent_permit_activity_normalizes_to_heloc_intent() -> None:
+    criteria = _any_contactability(purchase_intent="Recent permit activity")
+
+    assert criteria.purchase_intent == "HELOC intent"
+    where, params = _where_for(criteria)
+
+    assert where == "WHERE has_heloc_propensity_trigger = TRUE"
+    assert "has_permit" not in where
+    assert params == {}
+
+
+def test_combined_purchase_intent_uses_listing_and_heloc_propensity_only() -> None:
+    where, params = _where_for(
+        _any_contactability(purchase_intent="Both"),
+    )
+
+    assert where == "WHERE listed_for_sale = TRUE AND has_heloc_propensity_trigger = TRUE"
+    assert "has_permit" not in where
+    assert params == {}
+
+
 def test_marketing_contactability_predicates_are_specific() -> None:
     where, params = _where_for(
         PortfolioCriteria(

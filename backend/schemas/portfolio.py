@@ -29,9 +29,12 @@ _EQUITY_LABELS: frozenset[str] = frozenset({"≥ 15%", "≥ 25%", "≥ 40%", "An
 _OWNER_LINK_LABELS: frozenset[str] = frozenset(
     {"All", "Single-property owner", "Multi-property (2-4)", "Portfolio investor (5+)"}
 )
-_PURCHASE_INTENT_LABELS: frozenset[str] = frozenset(
-    {"All", "Listed for sale", "HELOC intent", "Recent permit activity", "Both"}
-)
+_PURCHASE_INTENT_LABELS: frozenset[str] = frozenset({"All", "Listed for sale", "HELOC intent", "Both"})
+_PURCHASE_INTENT_ALIASES: dict[str, str] = {
+    # Legacy deep links used this label before Cotality delivered the HELOC
+    # propensity feed. Normalize it so no active surface claims filed permits.
+    "recent_permit_activity": "HELOC intent",
+}
 _MARKETING_ELIGIBILITY_LABELS: frozenset[str] = frozenset(
     {"Eligible only", "Any", "Suppressed only"}
 )
@@ -346,9 +349,10 @@ class PortfolioCriteria(BaseModel):
     @field_validator("purchase_intent")
     @classmethod
     def _purchase_intent_is_reviewed_label(cls, value: str | None) -> str | None:
-        return _validate_optional_label(
+        return _normalise_reviewed_alias(
             value,
             allowed=_PURCHASE_INTENT_LABELS,
+            aliases=_PURCHASE_INTENT_ALIASES,
             field_name="purchase_intent",
         )
 
@@ -425,7 +429,7 @@ class PortfolioCriteria(BaseModel):
         if owner_link in {"single-property owner", "multi-property (2-4)", "portfolio investor (5+)"}:
             return True
         purchase_intent = (self.purchase_intent or "").strip().lower()
-        if purchase_intent in {"listed for sale", "heloc intent", "recent permit activity", "both"}:
+        if purchase_intent in {"listed for sale", "heloc intent", "both"}:
             return True
         relationship = (self.lender_relationship or "").strip().lower()
         if relationship in {"current customer", "former customer", "competitor customer", "competitor"}:

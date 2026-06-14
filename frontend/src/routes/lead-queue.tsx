@@ -144,6 +144,10 @@ function parseTargetLenderRef(raw: string | null, allowedLenderRefs: readonly st
   return isPublicLenderRef(value, allowedLenderRefs) ? value : undefined;
 }
 
+function normalizePurchaseIntent(value: string): string {
+  return value === 'Recent permit activity' ? 'HELOC intent' : value;
+}
+
 const PORTFOLIO_FILTER_VALUE_SETS: Partial<Record<PortfolioFilterKey, Set<string>>> = {
   occupancy: new Set(['Owner-occupied', 'Non-owner-occupied', 'All']),
   lien_status: new Set(['Any', 'Open 1st lien', 'Open first lien', 'Open HELOC', 'Free & clear', 'Free and clear']),
@@ -151,7 +155,7 @@ const PORTFOLIO_FILTER_VALUE_SETS: Partial<Record<PortfolioFilterKey, Set<string
   product: new Set(['All products', 'Refi', 'HELOC', 'Cash-out', 'Purchase', 'Retention']),
   min_equity_pct_label: new Set(['Any', '≥ 15%', '≥ 25%', '≥ 40%']),
   owner_link: new Set(['All', 'Single-property owner', 'Multi-property (2-4)', 'Portfolio investor (5+)']),
-  purchase_intent: new Set(['All', 'Listed for sale', 'HELOC intent', 'Recent permit activity', 'Both']),
+  purchase_intent: new Set(['All', 'Listed for sale', 'HELOC intent', 'Both']),
   marketing_eligibility: new Set(['Eligible only', 'Any', 'Suppressed only']),
   consent_status: new Set(['Any', 'Opt-in', 'Opt-out', 'Unknown']),
   recency: new Set(['Any', 'Untouched 30d', 'Untouched 60d', 'Untouched 90d']),
@@ -163,7 +167,9 @@ function sanitizePortfolioCriteria(
 ): Record<string, string> | undefined {
   const criteria: Record<string, string> = {};
   for (const key of PORTFOLIO_FILTER_KEYS) {
-    const value = raw[key]?.trim();
+    const value = key === 'purchase_intent'
+      ? normalizePurchaseIntent(raw[key]?.trim() ?? '')
+      : raw[key]?.trim();
     if (!value) continue;
     if (key === 'target_lender_ref' && !isPublicLenderRef(value, allowedLenderRefs)) continue;
     const allowedValues = PORTFOLIO_FILTER_VALUE_SETS[key];

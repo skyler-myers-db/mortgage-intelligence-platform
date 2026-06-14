@@ -55,6 +55,27 @@ describe('buildLeadQueueExportFilters', () => {
     expect(filters).not.toContain('Smith');
     expect(filters).not.toContain('123+Main');
   });
+
+  it('normalizes the legacy permit-activity deep link to HELOC intent', () => {
+    const filters = buildLeadQueueExportFilters({
+      portfolioCriteria: {
+        purchase_intent: 'Recent permit activity',
+      },
+    });
+
+    expect(filters).toContain('purchase_intent=HELOC+intent');
+    expect(filters).not.toContain('Recent+permit+activity');
+  });
+
+  it('drops unsupported permit-like purchase intent labels', () => {
+    const filters = buildLeadQueueExportFilters({
+      portfolioCriteria: {
+        purchase_intent: 'Filed permit activity',
+      },
+    });
+
+    expect(filters).toBe('none');
+  });
 });
 
 describe('formatLeadQueueLoadError', () => {
