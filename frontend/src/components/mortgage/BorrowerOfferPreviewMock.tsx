@@ -18,6 +18,28 @@ import { useFocusTrap } from '../../hooks/useFocusTrap';
  * app), explicitly NOT built here. No APR/payment/"trigger terms" are shown,
  * so it makes no advertising/TILA claim.
  */
+/**
+ * A single, borrower-friendly, QUALITATIVE reason this profile may qualify —
+ * grounded in the dossier's strongest public-record signal. Deliberately no
+ * figures (no rate/APR/payment/$ → no TILA trigger term) and no protected-class
+ * or demographic language (fair-lending). Returns '' when no signal is
+ * confidently present, so the mock never fabricates a reason.
+ */
+function borrowerReason(b: Borrower360): string {
+  if (b.is_competitor_lien) return 'Your mortgage is currently with another lender — you may have options.';
+  if (typeof b.rate_spread_bps === 'number' && b.rate_spread_bps > 0) {
+    return 'Your current rate may be higher than today’s market.';
+  }
+  const hasEquity =
+    (typeof b.ltv === 'number' && b.ltv > 0 && b.ltv < 80) ||
+    (typeof b.equity_estimate === 'number' && b.equity_estimate > 0);
+  if (hasEquity) return 'Your estimated home equity may open up new options.';
+  if (b.is_investor && (b.related_property_count ?? 0) > 1) {
+    return 'Your property portfolio may qualify for tailored options.';
+  }
+  return '';
+}
+
 export function BorrowerOfferPreviewMock({
   borrower,
   onClose,
@@ -29,6 +51,7 @@ export function BorrowerOfferPreviewMock({
   const [accepted, setAccepted] = useState(false);
   const product = (borrower.recommended_offer || 'a mortgage option').trim();
   const lenderName = (lender || 'Your lender').trim();
+  const reason = borrowerReason(borrower);
   const panelRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   // Modal focus trap + Escape-to-close + focus restoration (mirrors the
@@ -60,6 +83,7 @@ export function BorrowerOfferPreviewMock({
           <div className="offer-mock__card">
             <div className="offer-mock__brand">{lenderName}</div>
             <h2 className="offer-mock__headline">You may be pre-qualified for {product}.</h2>
+            {reason && <p className="offer-mock__reason">{reason}</p>}
             <p className="offer-mock__sub">
               Based on your property and mortgage profile, {lenderName} has an option that may
               fit. Tell us if you&apos;re interested — a licensed loan officer follows up, with no

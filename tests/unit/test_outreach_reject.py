@@ -355,8 +355,9 @@ def test_draft_outreach_is_relationship_and_channel_aware() -> None:
     )
     assert current.status_code == 200, current.text
     current_body = current.json()["body"]
-    assert "As a customer of Summit Mortgage" in current_body
-    assert "public-record signals" not in current_body
+    assert "Summit Mortgage customer" in current_body
+    assert "public-record" not in current_body
+    assert "may qualify" not in current_body
     assert "[first name]" not in current_body
     assert "NMLS #123456" in current_body
     assert "Equal Housing" in current_body
@@ -389,9 +390,9 @@ def test_draft_outreach_uses_configured_lender_name(
 
     assert response.status_code == 200, response.text
     body = response.json()["body"]
-    assert response.json()["subject"].startswith("Review your Acme Mortgage")
-    assert "As a customer of Acme Mortgage" in body
-    assert "As a customer of Summit Mortgage" not in body
+    assert "Acme Mortgage relationship" in response.json()["subject"]
+    assert "Acme Mortgage customer" in body
+    assert "Summit Mortgage customer" not in body
 
 
 def test_atomic_decision_rolls_back_if_audit_insert_fails(
