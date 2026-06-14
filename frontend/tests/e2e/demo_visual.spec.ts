@@ -13,7 +13,9 @@ const AUTH_HEADERS: Record<string, string> = BEARER
 test.use({ baseURL: APP_URL, extraHTTPHeaders: AUTH_HEADERS });
 
 type MapDrillTarget = {
+  state: string;
   stateName: string;
+  countyFips: string;
   countyName: string;
 };
 
@@ -74,7 +76,9 @@ async function discoverMapDrillTarget(
   expect(county, 'county rollups should expose a populated county').toBeTruthy();
   const rawCountyName = String(county.county_name || county.fips_5);
   return {
+    state: stateRollup.state,
     stateName,
+    countyFips: county.fips_5,
     countyName: rawCountyName.toLowerCase().endsWith('county')
       ? rawCountyName
       : `${rawCountyName} County`,
@@ -121,17 +125,13 @@ async function clickSvgRegion(page: Page, target: Locator, label: string) {
 async function drillToZipLayer(page: Page, target: MapDrillTarget) {
   const map = page.locator('.map-wrap').first();
   await bringMapIntoViewport(page);
-  const state = map.locator(
-    `svg.map-svg-stage [role="button"][aria-label="${target.stateName}"]`,
-  ).first();
+  const state = map.getByRole('button', { name: new RegExp(`^${escapeRegExp(target.stateName)}$`) }).first();
   await clickSvgRegion(page, state, target.stateName);
 
   await bringMapIntoViewport(page);
-  const county = map.locator(
-    `svg.map-svg-stage [role="button"][aria-label="${target.countyName}"]`,
-  ).first();
+  const county = map.getByRole('button', { name: new RegExp(escapeRegExp(target.countyName), 'i') }).first();
   await expect(county).toBeVisible({ timeout: 10_000 });
-  await county.click({ force: true });
+  await clickSvgRegion(page, county, target.countyName);
 }
 
 async function bringMapIntoViewport(page: Page) {
