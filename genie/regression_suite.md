@@ -160,11 +160,11 @@ at e.g. `S17` maps to "offer mix for In-the-Money segment".
 **Expected:** N rows `B-[0-9A-Z]{13}`, no PII, cites `mip.gold.borrower_360` (filter `recommended_offer_code IN ('heloc','refi_plus_heloc')`).
 **Why it matters:** Surface the HELOC queue for the sales lead without assuming a fixed state.
 
-## S20 — Listed-for-Sale by loan product (MLS gap)
+## S20 — Listed-for-Sale by loan product (MLS live)
 
 **Prompt:** "Break down the Listed-for-Sale segment by loan product and average current rate."
-**Expected:** Explicit MLS data-gap answer; no SQL answer that treats blocked-false listing flags as zero demand.
-**Why it matters:** Proves the space is honest about the Cotality MLS gap.
+**Expected:** Grouped answer backed by governed `mip.gold.borrower_360` rows filtered to listed borrowers (`listed_for_sale = TRUE` or canonical `segment_codes` contains `listed`); no PII, and filed Building Permits must not be inferred from this MLS signal.
+**Why it matters:** Proves the space uses the live Cotality MLS/listing overlay without reviving the old blocked-false gap behavior.
 
 ## S21 — Lock-in cohort size
 

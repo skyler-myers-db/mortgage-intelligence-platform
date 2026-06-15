@@ -257,8 +257,9 @@ def get_sources(service: ServiceDep, _actor: AdminDep) -> list[dict[str, Any]]:
           ...
         ]
 
-    ``rows`` and ``last_updated`` are null for roadmap sources (MLS,
-    Building Permits). Preferred production path reads
+    ``rows`` and ``last_updated`` are null for roadmap sources such as
+    Building Permits. MLS/Listings is live when
+    ``mip.gold.source_readiness`` reports rows for that feed. Preferred production path reads
     ``mip.gold.source_readiness`` so the running app principal does not
     need direct silver grants.
     """
