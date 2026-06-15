@@ -30,10 +30,10 @@ import { LeadQueueTableSkeleton } from './lead-queue.skeleton';
  */
 
 const SEGMENT_CODES = new Set<SegmentCode>(['itm', 'listed', 'permit', 'investor', 'equity', 'retention']);
-const SEGMENT_FILTER_OPTIONS = ['All segments', 'In the Money', 'Investor / Multi-Property', 'Home Equity Candidate', 'Retention Risk'] as const;
+const SEGMENT_FILTER_OPTIONS = ['All segments', 'Prime Refi Candidates', 'Investor / Multi-Property', 'Home Equity Candidate', 'Retention Risk'] as const;
 const SEGMENT_OPTION_TO_CODE: Record<string, SegmentCode | null> = {
   'All segments': null,
-  'In the Money': 'itm',
+  'Prime Refi Candidates': 'itm',
   'Investor / Multi-Property': 'investor',
   'Home Equity Candidate': 'equity',
   'Retention Risk': 'retention',

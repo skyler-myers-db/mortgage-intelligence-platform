@@ -65,7 +65,7 @@ space. Each row will be filled in by the first nightly (or manual
 | S4 | Top 10 cash-out candidates across current coverage | PENDING | — | — | — | Must not leak name/street |
 | S5 | 2020-22 sub-3% lock-in cohort size | PENDING | — | — | — | Retention sizing |
 | S6 | Retention list with recent competitor lien | PENDING | — | — | — | Recapture |
-| S7 | Listed-for-Sale segment breakdown | PENDING | — | — | — | **Data gap required** (MLS gap) |
+| S7 | Listed-for-Sale segment breakdown | PENDING | — | — | — | MLS/listing activity now live; should cite listing-backed gold/semantic assets |
 | S8 | Investors >= 2 props, cash-out across current coverage | PENDING | — | — | — | Investor segment |
 | S9 | Mean lead score by current coverage state | PENDING | — | — | — | Heatmap |
 | S10 | Evidence events yesterday by trigger | PENDING | — | — | — | Ops signal |

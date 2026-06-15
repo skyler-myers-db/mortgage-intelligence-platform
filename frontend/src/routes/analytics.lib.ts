@@ -22,7 +22,7 @@ export const TABS: Array<{ id: AnalyticsTab; label: string; icon: 'flow' | 'map'
 
 export const SEGMENT_FILTERS = [
   ['All segments', null],
-  ['In the Money', 'itm'],
+  ['Prime Refi Candidates', 'itm'],
   ['Home Equity Candidate', 'equity'],
   ['Investor / Multi-Property', 'investor'],
   ['Retention Risk', 'retention'],

@@ -204,6 +204,22 @@ test.describe('Module 0 demo visual baselines', () => {
         secondSurface.y + 1,
       );
     }
+
+    const longPrompt = Array.from(
+      { length: 20 },
+      () => 'Compare prime refi candidates, HELOC candidates, listings, evidence provenance, and lender overlays for the current filtered population.',
+    ).join(' ');
+    const questionBox = page.locator('textarea[aria-label="Ask Genie — question"]');
+    await questionBox.fill(longPrompt);
+    await expect(page.getByRole('button', { name: /^Ask Genie$/i }).first()).toBeVisible();
+    const mobileTextAreaBox = await questionBox.boundingBox();
+    expect(mobileTextAreaBox, 'Ask Genie textarea should have a mobile layout box').toBeTruthy();
+    expect(mobileTextAreaBox!.height, 'long Ask Genie prompts should stay capped on mobile').toBeLessThanOrEqual(220);
+
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const desktopTextAreaBox = await questionBox.boundingBox();
+    expect(desktopTextAreaBox, 'Ask Genie textarea should have a desktop layout box').toBeTruthy();
+    expect(desktopTextAreaBox!.height, 'long Ask Genie prompts should stay capped on desktop').toBeLessThanOrEqual(220);
   });
 
   test('Segment filter row keeps aligned controls and honest pending-source copy', async ({ page }) => {

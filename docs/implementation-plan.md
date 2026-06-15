@@ -17,7 +17,7 @@ Service adapters
   ├─ Genie resource/API → conversational analytics
   └─ Cotality CLIP-MCP / Agent Bricks → optional production dossier tools
   ↓
-Cotality Delta Share live feeds + pending MLS/Permits feeds → silver/gold tables
+Cotality Delta Share live feeds, including MLS listings + pending Building Permits feed → silver/gold tables
 ```
 
 ## Phase 0 — Agentic environment setup
@@ -105,7 +105,7 @@ Create SQL models:
 1. `property_master`: mastered CLIP/property fields.
 2. `owner_property_bridge`: Owner Link to properties.
 3. `lien_current`: open lien summary.
-4. `property_trigger_features`: equity and AVM-derived features; listing/permit placeholders stay blocked until Cotality shares those feeds.
+4. `property_trigger_features`: equity and AVM-derived features; listing signals are live when MLS rows are present; filed Building Permits stay pending until Cotality/partner shares that feed.
 5. `lead_population`: ranked filtered universe.
 6. `segment_population`: segment rollups (one row per segment_code/state + national `_ALL`).
 7. `lead_scores`: deterministic score components.
@@ -115,8 +115,8 @@ Create SQL models:
 11. `lockin_cohort`: 2020-2022 sub-3% originations — retention/HELOC/cash-out addressable cohort.
 
 Data-source request to Cotality:
-- P0: MLS Listings Delta Share, keyed to CLIP and listing status/date.
-- P0: Building Permits Delta Share, keyed to CLIP with permit value/date/type.
+- Landed: MLS Listings Delta Share, keyed to CLIP and listing status/date.
+- Remaining P0: Building Permits Delta Share, keyed to CLIP with permit value/date/type.
 - Optional accelerator: Customer 360 and persona/segment samples if Cotality wants to provide precomputed examples, but Module 0 should not depend on those samples.
 
 Validation SQL examples:
@@ -198,7 +198,7 @@ Run the talk track (dry-run):
 
 1. “These numbers show where to act before pipeline begins.”
 2. Build portfolio.
-3. Click In the Money.
+3. Click Prime Refi Candidates.
 4. Drill map county → ZIP → borrower.
 5. Open borrower 360.
 6. Explain evidence and score.

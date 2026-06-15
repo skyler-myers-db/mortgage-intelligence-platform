@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import type { SegmentSummary } from '../../types';
 import { Icon } from '../Icon';
-import { segmentIcon } from '../../lib/segmentMetadata';
+import { segmentByCode, segmentIcon } from '../../lib/segmentMetadata';
 
 /**
  * SegmentCard — prototype `.seg-card` BEM: badge + title + count + sub + meta row.
@@ -29,6 +29,10 @@ interface SegmentCardProps {
 
 export function SegmentCard({ segment, selected, onClick }: SegmentCardProps) {
   const icon = segmentIcon(segment.code);
+  const presentation = segmentByCode(segment.code);
+  const displayName = presentation?.name ?? segment.name;
+  const displayDescription = presentation?.description ?? segment.description;
+  const displayColor = presentation?.color ?? segment.color;
   const prev = useRef<boolean | undefined>(selected);
   const [emanateKey, setEmanateKey] = useState<number>(selected ? 1 : 0);
 
@@ -51,7 +55,7 @@ export function SegmentCard({ segment, selected, onClick }: SegmentCardProps) {
     <button
       type="button"
       className={`seg-card ${selected ? 'is-selected' : ''}`}
-      style={{ '--seg-color': segment.color } as CSSProperties}
+      style={{ '--seg-color': displayColor } as CSSProperties}
       onClick={onClick}
       aria-pressed={selected}
     >
@@ -60,10 +64,10 @@ export function SegmentCard({ segment, selected, onClick }: SegmentCardProps) {
       )}
       <div className="seg-card__hdr">
         <div className="seg-card__badge"><Icon name={icon} size={14} /></div>
-        <div className="seg-card__title">{segment.name}</div>
+        <div className="seg-card__title">{displayName}</div>
       </div>
       <div className="seg-card__count num">{segment.count.toLocaleString()}</div>
-      <div className="seg-card__sub">{segment.description}</div>
+      <div className="seg-card__sub">{displayDescription}</div>
       <div className="seg-card__meta">
         {hasNoBorrowers ? (
           <span>no borrowers in current view</span>

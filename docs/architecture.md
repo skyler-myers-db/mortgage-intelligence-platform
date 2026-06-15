@@ -1,6 +1,6 @@
 # Mortgage Intelligence Platform Architecture
 
-Last updated: 2026-05-06
+Last updated: 2026-06-15
 
 Module 0 is a Databricks-native top-of-funnel mortgage lead-generation product. The runtime contract is:
 
@@ -17,7 +17,7 @@ The app exposes the data estate in four lanes so a reviewer can see what is live
 | Lane | Live implementation | Notes |
 |---|---|---|
 | First-party lender data | `mip.first_party.*` tables for LOS applications, servicing, CRM/campaigns, interactions, and product balances | In the Summit Mortgage demo, these tables are populated by an explicit `feed_mode='demo_synthetic'` seed so reviewers can see the lender-owned ingestion lane. Customer/prod deploys set `MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS=0` before SQL render/deploy and remain `not_configured` until real customer feeds are connected. |
-| Cotality enrichment | `mip.silver.property_master`, `mip.silver.lien_current`, `mip.silver.mortgage_events`, Owner Link bridge, AVM fields, CLIP-keyed joins | MLS/Listings and Building Permits are intentionally shown as pending until Cotality delivers those Delta Shares. |
+| Cotality enrichment | `mip.silver.property_master`, `mip.silver.lien_current`, `mip.silver.mortgage_events`, `mip.silver.listing_activity`, Owner Link bridge, AVM fields, CLIP-keyed joins | MLS/listing activity is live when rows are present. Filed Building Permits remain visibly pending until Cotality/partner approval delivers that Delta Share. |
 | Databricks governed AI layer | Unity Catalog gold tables, semantic views, Genie, Lakebase, Databricks Apps direct deployment | Genie answers are accepted only when they cite trusted assets and proof; state-changing actions require confirmation. |
 | Entrada transformations | SQL transformations, scoring functions, next-best-offer logic, redaction, React/FastAPI workflows | Deterministic SQL functions are the score and offer source of truth. No ML score placeholder is used. |
 
@@ -49,4 +49,4 @@ Genie is not just a chat response surface. Confirmed actions write governed stat
 
 ## Known External Dependencies
 
-Two transcript requirements remain externally blocked: Cotality MLS/Listings and Cotality Building Permits. The app keeps the corresponding segment cards visible as pending-source segments because hiding them would conceal a real roadmap dependency, while treating missing data as zero demand would be false.
+One transcript data requirement remains externally blocked: Cotality filed Building Permits. MLS/listing activity is connected through `mip.silver.listing_activity`; the Permit segment remains visible as a pending-source segment because hiding it would conceal a real roadmap dependency, while treating missing data as zero demand would be false.

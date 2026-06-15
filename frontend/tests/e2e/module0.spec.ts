@@ -101,7 +101,7 @@ test.describe('Module 0 — golden path', () => {
     await page.goto('/segment-intelligence');
 
     for (const name of [
-      'In the Money',
+      'Prime Refi Candidates',
       'Listed for Sale',
       'HELOC Intent',
       'Investor / Multi-Property',
@@ -146,6 +146,16 @@ test.describe('Module 0 — golden path', () => {
 
     await page.getByRole('button', { name: /Clear filters/ }).click();
     await expect(rankedHeader).not.toContainText(/segment filter:/);
+  });
+
+  test('unknown routes render a 404 surface without silently redirecting home', async ({ page }) => {
+    await page.goto('/this-route-does-not-exist');
+
+    await expect(page).toHaveURL(/\/this-route-does-not-exist$/);
+    await expect(page.getByRole('heading', { name: 'Page not found' })).toBeVisible();
+    await expect(page.getByText('/this-route-does-not-exist')).toBeVisible();
+    await expect(page.getByRole('banner').locator('.cur')).toHaveText('Not Found');
+    await expect(page.getByRole('link', { name: /Open lead queue/i })).toHaveAttribute('href', '/lead-queue');
   });
 
   test('lead queue: 23 rows, headers, B-48291 canonical row', async ({ page }) => {
@@ -251,6 +261,7 @@ test.describe('Module 0 — golden path', () => {
 
     const panel = page.getByRole('dialog', { name: 'Genie chat' });
     await expect(panel).toBeVisible();
+    await expect(panel).not.toHaveAttribute('aria-modal', 'true');
     await expect(panel.getByText(/I'm Genie/i)).toBeVisible();
 
     await panel.getByLabel('Ask Genie').fill('How many HELOC candidates?');

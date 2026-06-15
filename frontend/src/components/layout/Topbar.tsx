@@ -125,6 +125,7 @@ function SystemStatusPill({ health }: { health: HealthPayload | null }) {
 const ROUTE_CRUMBS: Record<string, string> = {
   '/':                       'Home',
   '/analytics':              'Analytics',
+  '/data-estate/assets':      'Data Estate',
   '/portfolio-builder':      'Portfolio Builder',
   '/segment-intelligence':   'Segment Intelligence',
   '/lead-queue':             'Lead Queue',
@@ -135,10 +136,15 @@ const ROUTE_CRUMBS: Record<string, string> = {
   '/admin-config':           'Admin',
 };
 
-function currentCrumb(path: string): string {
-  if (path.startsWith('/borrower-360')) return 'Borrower 360';
-  if (path.startsWith('/offer-orchestrator')) return 'Offer Orchestrator';
-  return ROUTE_CRUMBS[path] ?? 'Home';
+function matchesRoutePrefix(path: string, prefix: string): boolean {
+  return path === prefix || path.startsWith(`${prefix}/`);
+}
+
+export function currentCrumb(path: string): string {
+  if (matchesRoutePrefix(path, '/data-estate/assets')) return 'Data Estate';
+  if (matchesRoutePrefix(path, '/borrower-360')) return 'Borrower 360';
+  if (matchesRoutePrefix(path, '/offer-orchestrator')) return 'Offer Orchestrator';
+  return ROUTE_CRUMBS[path] ?? 'Not Found';
 }
 
 export function Topbar() {

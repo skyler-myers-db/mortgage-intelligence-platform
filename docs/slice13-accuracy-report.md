@@ -310,18 +310,18 @@ Artefacts in `tools/load_test/results/20260422T004739Z_*.csv` + `.html`.
 Things we did NOT fully close this slice. Each is tagged with owner +
 follow-up route.
 
-### 3.1 Cotality data gaps — still blocked upstream
+### 3.1 Cotality data gaps — current posture
 
-Two segments return zero by design today because the source shares have
-not landed yet:
+At the time of Slice 13, two segments returned zero by design because source
+shares had not landed. Current posture:
 
-- **`listed` (Listed-for-Sale)** — requires Cotality MLS share.
+- **`listed` (Listed-for-Sale)** — now materializes from live MLS/listing activity.
 - **`permit` (Renovation Permits)** — requires Cotality Permits share.
 
-The pipeline, SQL, and UI all render the zero honestly (no hallucination).
-`docs/data-sources-gap-analysis.md` tracks status. These are NOT failures
-of the MIP stack; they are input-data gaps and were deliberately scoped
-out of Slice 13.
+The pipeline, SQL, and UI render the remaining permit gap honestly (no
+hallucination). `docs/data-sources-gap-analysis.md` tracks current status. The
+remaining permit dependency is not a failure of the MIP stack; it is an
+input-data gap and was deliberately scoped out of Slice 13.
 
 ### 3.2 Playwright real-UC spec blocked on deployed-app URL
 

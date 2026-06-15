@@ -410,7 +410,7 @@ TBLPROPERTIES (
 CREATE TABLE IF NOT EXISTS mip.gold.segment_population (
   segment_code    STRING    NOT NULL COMMENT 'itm / listed / permit / investor / equity / retention. Matches SegmentCode Literal exactly; permit is the backward-compatible code for customer-facing HELOC Intent.',
   state           STRING    NOT NULL COMMENT '2-char state code from refreshed source coverage or "_ALL" for national rollup.',
-  name            STRING    NOT NULL COMMENT 'Static label per segment_code (e.g., "In the Money").',
+  name            STRING    NOT NULL COMMENT 'Static label per segment_code (e.g., "Prime Refi Candidates").',
   count           INT       NOT NULL COMMENT 'Member count for this (segment, state) cell.',
   delta_vs_prior  STRING    NOT NULL COMMENT 'Quarter-over-quarter delta as "+NN%" / "-NN%". Router maps to SegmentSummary.delta. "+0%" on first refresh.',
   avg_score       INT       NOT NULL COMMENT 'CAST(ROUND(AVG(opportunity_score)) AS INT) over the segment cell.',

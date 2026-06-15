@@ -351,28 +351,50 @@ def _assert_marketing_eligible(borrower: Any) -> None:
         )
 
 
-def _approval_evidence_ids(payload_ids: list[str], borrower: Any) -> list[str]:
-    """Resolve the non-empty evidence list required for approval audit rows.
-
-    New clients pass the evidence refs the approver saw. Legacy clients may
-    omit them even though the canonical borrower row carries UC evidence; in
-    that case we fall back to borrower evidence. If neither path has proof, the
-    endpoint fails before writing an approval decision.
-    """
-    ids = [str(value).strip() for value in payload_ids if str(value).strip()]
-    if not ids:
-        ids = [
+def _borrower_evidence_ids(borrower: Any) -> list[str]:
+    return list(
+        dict.fromkeys(
             str(value).strip()
             for value in (getattr(borrower, "evidence_ids", None) or [])
             if str(value).strip()
-        ]
-    deduped = list(dict.fromkeys(ids))
-    if not deduped:
+        )
+    )
+
+
+def _decision_evidence_ids(
+    payload_ids: list[str],
+    borrower: Any,
+    *,
+    action_label: str,
+) -> list[str]:
+    """Resolve borrower-owned evidence IDs for an outreach decision.
+
+    Clients may pass the evidence refs the approver saw, but the API must not
+    let the client invent audit provenance. If the payload supplies IDs, every
+    one must belong to the canonical borrower evidence list. Legacy clients can
+    omit the list and the endpoint will audit all borrower evidence instead.
+    """
+    borrower_ids = _borrower_evidence_ids(borrower)
+    if not borrower_ids:
         raise HTTPException(
             status_code=422,
-            detail="Approval requires at least one evidence_id; refresh the borrower recommendation before approving.",
+            detail=f"{action_label} requires borrower evidence; refresh the borrower recommendation before deciding.",
         )
-    return deduped
+
+    ids = list(
+        dict.fromkeys(str(value).strip() for value in payload_ids if str(value).strip())
+    )
+    if not ids:
+        return borrower_ids
+
+    allowed = set(borrower_ids)
+    invalid = [value for value in ids if value not in allowed]
+    if invalid:
+        raise HTTPException(
+            status_code=422,
+            detail=f"{action_label} evidence_ids must belong to the borrower recommendation.",
+        )
+    return ids
 
 
 def _marketing_audit_payload(borrower: Any) -> dict[str, Any]:
@@ -583,7 +605,11 @@ def approve_outreach(
         disclosure=disclosure,
         channel=payload.channel,
     )
-    audit_evidence_ids = _approval_evidence_ids(payload.evidence_ids, borrower)
+    audit_evidence_ids = _decision_evidence_ids(
+        payload.evidence_ids,
+        borrower,
+        action_label="Approval",
+    )
     # lakebase/schema.sql §approvals: approval_id is UUID, not an
     # `apr-<hex12>` synthetic. Passing the raw UUID string satisfies
     # Postgres's UUID cast; truncating it to 12 hex chars produced
@@ -781,6 +807,11 @@ def reject_outreach(
         )
     approval_id = str(uuid4())
     safe_rationale = _compose_reject_rationale(payload.rationale_code, payload.rationale)
+    audit_evidence_ids = _decision_evidence_ids(
+        payload.evidence_ids,
+        borrower,
+        action_label="Rejection",
+    )
     audit_payload: dict[str, Any] = {
         "approval_id": approval_id,
         "offer_code": offer_code,
@@ -808,7 +839,7 @@ def reject_outreach(
                 rationale=safe_rationale,
                 request_id=effective_request_id,
                 audit_payload=audit_payload,
-                evidence_ids=payload.evidence_ids,
+                evidence_ids=audit_evidence_ids,
                 event_action="outreach.reject",
                 event_type="OUTREACH_REJECT",
                 audit_request_id=payload.request_id,
@@ -838,7 +869,7 @@ def reject_outreach(
                 entity_type="approval",
                 entity_id=approval_id,
                 payload_json=audit_payload,
-                evidence_ids=payload.evidence_ids,
+                evidence_ids=audit_evidence_ids,
                 event_type="OUTREACH_REJECT",
                 subject_clip=borrower.clip_id,
                 request_id=payload.request_id,

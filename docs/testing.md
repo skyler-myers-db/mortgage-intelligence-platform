@@ -23,7 +23,7 @@ Playwright path:
 
 1. Open home.
 2. Build portfolio.
-3. Select In the Money segment.
+3. Select Prime Refi Candidates segment.
 4. Open lead queue.
 5. Expand borrower.
 6. Open Borrower 360.

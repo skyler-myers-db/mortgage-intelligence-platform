@@ -486,8 +486,9 @@ export function GenieChat() {
     if (bodyRef.current) bodyRef.current.scrollTop = bodyRef.current.scrollHeight;
   }, [msgs, typing, genieOpen]);
 
-  // R5-12: ESC closes + initial focus + focus restore + lightweight
-  // focus trap via Tab cycling within the panel.
+  // R5-12: ESC closes + initial focus + focus restore. Deliberately do
+  // NOT trap Tab: the floating Genie panel is a non-modal dialog, and the
+  // rest of the workspace stays interactive while it is open.
   useEffect(() => {
     if (genieOpen) {
       lastFocusedRef.current = document.activeElement as HTMLElement | null;
@@ -497,25 +498,6 @@ export function GenieChat() {
           e.preventDefault();
           setGenieOpen(false);
           return;
-        }
-        if (e.key === 'Tab' && panelRef.current) {
-          // Trap focus inside the panel. Query focusable descendants
-          // fresh on every Tab so late-rendered sample question
-          // buttons are part of the cycle.
-          const focusables = panelRef.current.querySelectorAll<HTMLElement>(
-            'button:not([disabled]), [href], input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
-          );
-          if (focusables.length === 0) return;
-          const first = focusables[0];
-          const last = focusables[focusables.length - 1];
-          const active = document.activeElement as HTMLElement | null;
-          if (e.shiftKey && active === first) {
-            e.preventDefault();
-            last.focus();
-          } else if (!e.shiftKey && active === last) {
-            e.preventDefault();
-            first.focus();
-          }
         }
       };
       window.addEventListener('keydown', onKey);

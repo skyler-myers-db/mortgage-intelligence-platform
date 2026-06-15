@@ -12,6 +12,7 @@ import {
   GlossaryRoute,
   HomeRoute,
   LeadQueueRoute,
+  NotFoundRoute,
   OfferOrchestratorRoute,
   PortfolioBuilderRoute,
   SegmentIntelligenceRoute,
@@ -64,9 +65,7 @@ function RouteTransition() {
               so a visitor never lands on a blank shell. */}
           <Route path="/outreach-composer" element={<Navigate to="/lead-queue" replace />} />
           <Route path="/outreach-composer/:id" element={<Navigate to="/lead-queue" replace />} />
-          {/* Catch-all: unknown paths redirect to Home instead of rendering
-              an empty <main>. */}
-          <Route path="*" element={<Navigate to="/" replace />} />
+          <Route path="*" element={<NotFoundRoute />} />
         </Routes>
       </Suspense>
     </div>

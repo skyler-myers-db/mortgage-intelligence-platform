@@ -4448,6 +4448,7 @@ kbd {
 .route-textarea {
   width: 100%;
   min-height: 90px;
+  max-height: 12lh;
   background: var(--bg-1);
   color: var(--text-1);
   border: 1px solid var(--line-1);
@@ -4456,11 +4457,41 @@ kbd {
   font-family: var(--font-sans);
   font-size: var(--fs-14);
   resize: vertical;
+  overflow: auto;
+}
+.route-textarea--genie {
+  min-height: calc(var(--sp-12) + var(--sp-16));
+  max-height: 10lh;
 }
 .route-textarea--outreach {
   min-height: 180px;
   font-size: var(--fs-13);
   line-height: 1.6;
+}
+.not-found__body {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--sp-4);
+}
+.not-found__icon {
+  display: grid;
+  place-items: center;
+  width: var(--sp-10);
+  height: var(--sp-10);
+  border-radius: var(--r-md);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.not-found__copy {
+  min-width: 0;
+}
+.not-found__copy .mono {
+  overflow-wrap: anywhere;
+}
+.not-found__actions {
+  justify-content: flex-end;
+  margin-top: 0;
 }
 .threshold-grid {
   display: grid;

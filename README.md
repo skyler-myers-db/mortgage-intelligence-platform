@@ -6,7 +6,7 @@ Module 0 answers the lender's first question before LOS/CRM pipeline optimizatio
 
 > **Who should we contact, why now, and with what offer?**
 
-The app uses live Cotality public-record, lien, ownership, valuation, and mortgage market intelligence data through Databricks to build lead populations, score borrower opportunity, explain source evidence, draft next-best-offer outreach, and require human approval before action. MLS listing and Building Permit overlays are visible as blocked/pending segments until Cotality shares those Delta Share products.
+The app uses live Cotality public-record, lien, ownership, valuation, MLS listing, HELOC propensity, refi propensity, and mortgage market intelligence data through Databricks to build lead populations, score borrower opportunity, explain source evidence, draft next-best-offer outreach, and require human approval before action. Filed Building Permits remain an explicit pending source-readiness gap; the app does not infer permit filings from HELOC propensity.
 
 ## Product flow
 

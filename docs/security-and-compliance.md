@@ -20,7 +20,8 @@ pending or failed state; it must not claim success.
 ## Source Truth
 
 Numbers shown to reviewers must trace to Unity Catalog tables, functions, or
-metric views. Pending Cotality feeds, especially MLS/Listings and Building
+metric views. MLS/listing activity is connected through Unity Catalog and must
+remain evidence-backed. Pending Cotality feeds, currently filed Building
 Permits, remain visible as data gaps until the corresponding Delta Shares are
 connected and refreshed.
 

@@ -39,7 +39,7 @@ when the behavior is visible in the app.
 | Segment and Lead Queue workflows | Multi-select AND semantics, secondary filters, ZIP/county/state deep links, export, approve/reject, Borrower 360 and Offer navigation. | auditing | fixed-clean |
 | Genie answers | Stateful conversation, no broad deterministic answer masking, identifier-aware chart planning, proof/source/freshness display, governed refusal/degraded states. | auditing | fixed-clean |
 | Genie actions | Open cohort in Lead Queue, save borrowers, draft campaign, compare offer strategies, and route persistence all use Lakebase/audit-backed state and preserve exact filters. Generic demo-export actions are intentionally unsupported until a real artifact writer exists. | auditing | fixed-clean |
-| Data truth and source readiness | Cotality live sources, pending MLS/permit truth, first-party synthetic feed disclosure, FRED freshness, no mock fallback in runtime. | auditing | fixed-clean |
+| Data truth and source readiness | Cotality live sources, live/pending source truth, first-party synthetic feed disclosure, FRED freshness, no mock fallback in runtime. | auditing | fixed-clean |
 | PII and public-demo safety | Raw CLIP/Owner Link/property identifiers masked by default in API/UI/CSV/audit; public-demo mode is easy to verify and disable only intentionally. | auditing | fixed-clean |
 | Audit and Lakebase state | Approvals, rejections, Genie actions, saved cohorts/drafts/inbox state write safe audit rows with evidence IDs and no PII. | auditing | fixed-clean |
 | Visual polish and accessibility | Prototype-aligned layout, no overlapping text, polished empty/loading/degraded states, responsive demo viewport coverage. | auditing | fixed-clean |

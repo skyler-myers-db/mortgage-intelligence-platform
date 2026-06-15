@@ -3,9 +3,9 @@
 **Audience:** Internal implementation note. Not approved for public release or external recording without Cotality review.
 
 **Scope:** Track the remaining data-source gaps for the Unity-Catalog-backed Module 0 app.
-**Status:** The Cotality Delta Share `cotality_mortgage_data.corelogic`, FRED market-rate ingestion, silver/gold DDL, scoring UDFs, and Module 0 SQL transformations are implemented in-repo. This document now records the remaining data-source blockers and the minimum Cotality request needed to close them.
+**Status:** The Cotality Delta Share `cotality_mortgage_data.corelogic`, MLS/listing normalization, FRED market-rate ingestion, silver/gold DDL, scoring UDFs, and Module 0 SQL transformations are implemented in-repo. This document now records the remaining data-source blocker and the minimum Cotality request needed to close it.
 
-**TL;DR:** We can model the core refi, cash-out/equity, investor, current-customer retention, and distress-lite use-cases from the current share plus FRED. Cotality's suggestion to add **MLS Listings** and **Building Permits** is correct: MLS unlocks the blocked `listed` segment and purchase branch; Permits upgrade HELOC from equity-only to intent-driven. Everything else on the marketplace board is a future-module enhancement, not a Module 0 blocker.
+**TL;DR:** We can model the core refi, cash-out/equity, investor, current-customer retention, listed-for-sale purchase, and distress-lite use-cases from the current share plus FRED. MLS/listing activity now backs the `listed` segment and purchase branch. **Building Permits** remains the missing Cotality/partner feed that upgrades HELOC from equity-only to intent-driven. Everything else on the marketplace board is a future-module enhancement, not a Module 0 blocker.
 
 ---
 
@@ -77,23 +77,23 @@ From `CLAUDE.md`, the seven canonical borrower segments and what each needs:
 | 3 | **HELOC / 2nd-lien candidates** | High equity, clean 1st-lien, renovation/life-event intent | ⚠️ **Partial** — equity-only segment ships; renovation intent blocked without Building Permits | voluntary_lien equity + `COALESCE(second_position_mortgage_amount, 0) = 0`; **gap: Permits** |
 | 4 | **Investor / multi-property** | Owner Link with ≥N properties OR corporate owner OR absentee mailing | ✅ **Yes** | property_v3 `owner_1_identifier` aggregation + `*_corporate_indicator` + mailing vs. situs |
 | 5 | **Retention / recapture** | Current customer retention now; former-customer recapture from historical Summit-financed Owner Link relationships | ✅ **Current-customer side yes** / ✅ **Former-customer filter yes, subject to historical Summit coverage** | voluntary_lien `first_position_currently_assigned_lender_company_name` + governed `mip.ref.lender_dictionary`; `is_former_customer` is backed by owner-level historical Summit CLIP history with no current Summit-serviced lien |
-| 6 | **Listed for sale (purchase mortgage)** | Active MLS listing | ❌ **Blocked** — not in current share, Cotality MLS required | **gap: MLS Listings** |
+| 6 | **Listed for sale (purchase mortgage)** | Active MLS listing | ✅ **Yes, with live listing activity** | `mip.silver.listing_activity` |
 | 7 | **Distress / pre-foreclosure** | NOD/NTS filings, late-stage foreclosure | ⚠️ **Partial** — have `foreclosure_stage_code` snapshot (29K properties) + REO sale history (1.2M); **missing pre-NOD leading indicators** | property_v3 + owner_transfer; **nice-to-have: Pre-Foreclosure product** |
 
 **Counting segments that ship today vs. require more data:**
-- **Ship now:** Rate-&-term refi, Cash-out/equity, Investor/Multi-property, current-customer Retention, Distress-lite (current foreclosure stage + REO history only).
-- **Blocked:** Listed-for-Sale (needs MLS), permit-driven HELOC intent (needs Building Permits).
+- **Ship now:** Rate-&-term refi, Cash-out/equity, Investor/Multi-property, current-customer Retention, Listed-for-Sale purchase, Distress-lite (current foreclosure stage + REO history only).
+- **Blocked:** permit-driven HELOC intent (needs Building Permits).
 - **Upgradeable (1):** Distress becomes much stronger with Pre-Foreclosure product.
 
 ---
 
 ## 3. Answer to Cotality's claim: "MLS and Building Permits round out the use-cases"
 
-**Confirmed.** This is a correct and minimal request list for Module 0. Rationale per product:
+**Confirmed, with MLS/listing now landed.** This was the correct minimal request list for Module 0. The remaining source request is filed Building Permits. Rationale per product:
 
-### MLS Listings — **CRITICAL for segment 6**
+### MLS Listings — **LANDED for segment 6**
 - **Why:** "Listed for sale = purchase mortgage opportunity" is named in `CLAUDE.md` as a core segment. There is no proxy in the 5 shared tables — by definition, a pre-sale listing doesn't yet generate a deed or a mortgage event, so neither `owner_transfer_domain_v1` nor `mortgage_domain_v1` can see it.
-- **What it adds to the demo:** the "purchase mortgage" talk-track branch (going from rate-hold funnels to move-up buyer funnels), DOM/price-reduction offer triggers, competitive landscape per metro.
+- **What it adds to the product:** the "purchase mortgage" branch (going from rate-hold funnels to move-up buyer funnels), listing recency/status triggers, and evidence-backed listed-for-sale segmentation.
 - **Marketplace product:** **MLS Listings** ("80% of active listings nationally"). Also **MLS Market Analytics** for market-level KPIs on the landing page.
 
 ### Building Permits — **ELEVATES segment 3 from "equity-only" to "intent-driven"**
@@ -224,7 +224,7 @@ mip.gold.lead_population         -- filtered ranked top-N for demo surface
 
 ### Component score definitions (feeds `fn_lead_score`)
 - **economic_incentive (0.35):** continuous blend from rate_spread_bps and equity_pct using the frozen `fn_rate_spread` / `fn_in_the_money` contract.
-- **intent_trigger (0.30):** today, from recent refi/payoff events, competitor-lien signal, investor signal, rate drift, equity proxy, and current-customer bump. **Upgrades dramatically with Permits + MLS.**
+- **intent_trigger (0.30):** today, from recent refi/payoff events, competitor-lien signal, investor signal, rate drift, equity proxy, listing activity, and current-customer bump. **Upgrades further with Building Permits.**
 - **fit (0.15):** from loan_type_code, owner_occupancy_code, property type, geography match to lender LO coverage.
 - **relationship (0.10):** from current-servicer Summit relationship, former-customer relationship, competitor-lien flag, owner-link breadth, and owner-level historical Summit distinct-CLIP count.
 - **evidence (0.10):** count of distinct Cotality source rows plus bounded second-position evidence tail (used for the evidence-drawer confidence UI).
@@ -234,7 +234,7 @@ mip.gold.lead_population         -- filtered ranked top-N for demo surface
 ## 7. Remaining implementation and data-source work
 
 1. **Keep the implemented UC path refreshed**: FRED `MORTGAGE30US`, silver lifts, gold CTAS, metric views, and `sql/_rendered` output are the repo-backed data path.
-2. **Request MLS Listings + Building Permits from Cotality**: these unblock the `listed` segment and convert HELOC from equity-only to intent-driven.
+2. **Request Building Permits from Cotality/partner approval**: the remaining feed converts HELOC from equity-only to intent-driven.
 3. **Refresh and validate former-customer recapture live**: `is_former_customer` now uses a distinct historical-Summit Owner Link predicate, but live UC counts are only certified after the next gold refresh and parity check.
 4. **Optional post-demo enrichment**: HPI forecast / Pre-Foreclosure / CLIP MCP remain later asks, not prerequisites for Module 0 truth.
 
@@ -244,7 +244,7 @@ mip.gold.lead_population         -- filtered ranked top-N for demo surface
 
 | Priority | Product | Why | Blocks what |
 |---|---|---|---|
-| **P0** | **MLS Listings** | Only source for "listed for sale" signal | Segment 6 (purchase mortgage opportunity) |
+| Landed | MLS Listings | Source for "listed for sale" signal | Segment 6 (purchase mortgage opportunity) |
 | **P0** | **Building Permits** | Only source for renovation-intent trigger | Segment 3 upgrade (HELOC intent, not just equity) |
 | P2 | HPI Forecast | Per-CBSA 12mo appreciation forecast for Geography drill-down | Nice-to-have polish; public FHFA HPI covers the must-have |
 | P2 | Pre-Foreclosure | NOD/NTS leading indicator | Segment 7 upgrade; we have enough for demo without it |
