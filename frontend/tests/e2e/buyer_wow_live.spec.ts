@@ -32,6 +32,28 @@ async function firstBorrowerId(request: APIRequestContext): Promise<string> {
   return rows[0].borrower_id;
 }
 
+type ActionableLead = {
+  borrower_id: string;
+  approval_status?: string;
+  marketing_eligible?: boolean;
+  consent_status?: string;
+};
+
+async function firstActionablePendingBorrowerId(request: APIRequestContext): Promise<string> {
+  const resp = await request.get(`${API_URL}/api/leads?limit=100&approval_status=pending`, {
+    headers: AUTH_HEADERS,
+  });
+  expect(resp.status(), 'GET /api/leads?approval_status=pending returned non-200').toBe(200);
+  const rows = (await resp.json()) as ActionableLead[];
+  const candidates = rows.filter((row) =>
+    row.approval_status === 'pending' &&
+    row.marketing_eligible !== false &&
+    (row.consent_status ?? 'opt_in') === 'opt_in',
+  );
+  expect(candidates.length, 'need a pending marketing-eligible borrower for routing controls').toBeGreaterThan(0);
+  return candidates[0].borrower_id;
+}
+
 // US state code → full name, to translate the in-footprint rollup codes into
 // the map region's accessible name. Static (does not change); the COVERAGE is
 // still discovered dynamically from /api/geo/state-rollups.
@@ -114,7 +136,7 @@ test.describe('Buyer-Wow live inspection @desktop', () => {
   });
 
   test('Feature C: offer orchestrator exposes the LO-assignment + follow-up routing controls', async ({ page, request }) => {
-    const id = await firstBorrowerId(request);
+    const id = await firstActionablePendingBorrowerId(request);
     await page.goto(`/offer-orchestrator/${id}`, { waitUntil: 'domcontentloaded' });
     const routing = page.locator('[data-testid="outreach-routing"]');
     await expect(routing).toBeVisible({ timeout: 30_000 });
