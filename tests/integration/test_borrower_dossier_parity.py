@@ -249,7 +249,9 @@ def test_dossier_top3_matches_evidence_events_top3(
     """The dossier's trigger_timeline (top-3) AND the head of
     evidence_events[:3] must equal gold.evidence_events for the same
     CLIP ordered by (signal_rank ASC, evidence_id ASC), filtered to
-    live signal types (excluding permit/listing per data-contract §9)."""
+    live signal types (excluding only blocked permit rows per data-contract
+    §9). MLS listing is now a live signal and must be part of the parity
+    comparison."""
     host, token, wh = warehouse
     for bid in sample_borrower_ids:
         clip_rows = _run_sql(
@@ -270,7 +272,7 @@ def test_dossier_top3_matches_evidence_events_top3(
             "SELECT evidence_id, signal_type, signal_rank "
             "FROM mip.gold.evidence_events "
             f"WHERE clip = '{_sanitize(str(clip))}' "
-            "AND signal_type NOT IN ('permit', 'listing') "
+            "AND signal_type <> 'permit' "
             "ORDER BY signal_rank ASC, evidence_id ASC "
             "LIMIT 3",
         )
