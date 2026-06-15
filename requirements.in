@@ -1,5 +1,5 @@
 fastapi==0.136.1
-starlette==1.0.1  # security floor for PYSEC-2026-161; FastAPI only sets a lower bound
+starlette==1.3.1  # security floor for GHSA-wqp7-x3pw-xc5r/GHSA-x746-7m8f-x49c/GHSA-82w8-qh3p-5jfq/GHSA-jp82-jpqv-5vv3; FastAPI only sets a lower bound
 uvicorn[standard]==0.47.0
 pydantic==2.10.4
 pydantic-settings==2.7.1
@@ -7,6 +7,7 @@ python-dotenv==1.2.2
 httpx==0.28.1
 databricks-sdk==0.103.0
 databricks-sql-connector==4.2.6
+cryptography==48.0.1  # security floor for GHSA-537c-gmf6-5ccf via google-auth
 # Security floor for PYSEC-2026-175/PYSEC-2026-177/PYSEC-2026-178/PYSEC-2026-179.
 # databricks-sql-connector depends on PyJWT; keep the transitive pin explicit
 # so pip-audit failures have a first-party dependency contract to resolve.
