@@ -116,13 +116,17 @@ async function assertShellHealthy(page: Page, label: string) {
   expect(brokenRuntimeToken, `${label}: no broken runtime text`).toBeNull();
 }
 
+async function expectMainReady(page: Page, ready: RegExp, timeout = 30_000) {
+  await expect(page.locator('#main-content').getByText(ready).first()).toBeVisible({ timeout });
+}
+
 test.describe('cross-browser/device shell matrix', () => {
   for (const route of ROUTES) {
     test(`${route.label} renders with stable shell @desktop`, async ({ page, request }, testInfo) => {
       test.skip(isDeviceProject(testInfo.project.name), 'Full route matrix runs on desktop browser engines.');
       const path = await resolvePath(request, route);
       await page.goto(path);
-      await expect(page.getByText(route.ready).first()).toBeVisible({ timeout: 30_000 });
+      await expectMainReady(page, route.ready);
       await route.assertReady?.(page);
       await assertShellHealthy(page, `${testInfo.project.name} ${route.label}`);
     });
@@ -139,7 +143,7 @@ test.describe('cross-browser/device shell matrix', () => {
       }
       const path = await resolvePath(request, route);
       await page.goto(path);
-      await expect(page.getByText(route.ready).first()).toBeVisible({ timeout: 35_000 });
+      await expectMainReady(page, route.ready, 35_000);
       await route.assertReady?.(page);
       await assertShellHealthy(page, `${testInfo.project.name} ${route.label}`);
     });
@@ -148,11 +152,11 @@ test.describe('cross-browser/device shell matrix', () => {
   test('primary navigation links route cleanly across browser engines @desktop', async ({ page }, testInfo) => {
     test.skip(isDeviceProject(testInfo.project.name), 'Full nav sequence runs on desktop browser engines.');
     await page.goto('/');
-    await expect(page.getByText(NAV_SEQUENCE[0].ready).first()).toBeVisible({ timeout: 30_000 });
+    await expectMainReady(page, NAV_SEQUENCE[0].ready);
 
     for (const item of NAV_SEQUENCE) {
       await page.getByRole('link', { name: item.name }).click();
-      await expect(page.getByText(item.ready).first()).toBeVisible({ timeout: 30_000 });
+      await expectMainReady(page, item.ready);
       await assertShellHealthy(page, `${testInfo.project.name} nav ${item.name}`);
     }
   });

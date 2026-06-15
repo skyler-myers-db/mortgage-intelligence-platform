@@ -134,7 +134,7 @@ class OutreachApproveRequest(BaseModel):
     campaign_id: str | None = Field(default=None, max_length=64)
     variant_name: str | None = Field(default=None, max_length=64)
     actor: str = "anonymous"
-    evidence_ids: list[str] = []
+    evidence_ids: list[str] = Field(default_factory=list)
     rationale: str | None = Field(default=None, max_length=500)
     bulk_id: str | None = Field(default=None, max_length=64)
     bulk_rationale: str | None = Field(default=None, max_length=500)
@@ -231,7 +231,7 @@ class OutreachRejectRequest(BaseModel):
     campaign_id: str | None = Field(default=None, max_length=64)
     variant_name: str | None = Field(default=None, max_length=64)
     actor: str = "anonymous"
-    evidence_ids: list[str] = []
+    evidence_ids: list[str] = Field(default_factory=list)
     rationale_code: Literal[
         "out_of_footprint",
         "do_not_call",

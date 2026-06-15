@@ -351,6 +351,30 @@ def _assert_marketing_eligible(borrower: Any) -> None:
         )
 
 
+def _approval_evidence_ids(payload_ids: list[str], borrower: Any) -> list[str]:
+    """Resolve the non-empty evidence list required for approval audit rows.
+
+    New clients pass the evidence refs the approver saw. Legacy clients may
+    omit them even though the canonical borrower row carries UC evidence; in
+    that case we fall back to borrower evidence. If neither path has proof, the
+    endpoint fails before writing an approval decision.
+    """
+    ids = [str(value).strip() for value in payload_ids if str(value).strip()]
+    if not ids:
+        ids = [
+            str(value).strip()
+            for value in (getattr(borrower, "evidence_ids", None) or [])
+            if str(value).strip()
+        ]
+    deduped = list(dict.fromkeys(ids))
+    if not deduped:
+        raise HTTPException(
+            status_code=422,
+            detail="Approval requires at least one evidence_id; refresh the borrower recommendation before approving.",
+        )
+    return deduped
+
+
 def _marketing_audit_payload(borrower: Any) -> dict[str, Any]:
     last_touch_at = _coerce_datetime(getattr(borrower, "last_touch_at", None))
     eligible_recontact_at = _coerce_datetime(
@@ -559,6 +583,7 @@ def approve_outreach(
         disclosure=disclosure,
         channel=payload.channel,
     )
+    audit_evidence_ids = _approval_evidence_ids(payload.evidence_ids, borrower)
     # lakebase/schema.sql §approvals: approval_id is UUID, not an
     # `apr-<hex12>` synthetic. Passing the raw UUID string satisfies
     # Postgres's UUID cast; truncating it to 12 hex chars produced
@@ -624,7 +649,7 @@ def approve_outreach(
                 rationale=approval_rationale,
                 request_id=effective_request_id,
                 audit_payload=audit_payload,
-                evidence_ids=payload.evidence_ids,
+                evidence_ids=audit_evidence_ids,
                 event_action="outreach.approve",
                 event_type="APPROVE",
                 audit_request_id=payload.request_id,
@@ -654,7 +679,7 @@ def approve_outreach(
                 entity_type="approval",
                 entity_id=approval_id,
                 payload_json=audit_payload,
-                evidence_ids=payload.evidence_ids,
+                evidence_ids=audit_evidence_ids,
                 event_type="APPROVE",
                 subject_clip=borrower.clip_id,
                 request_id=payload.request_id,

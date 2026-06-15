@@ -148,3 +148,4 @@ def test_approve_outreach_writes_approvals_row_and_audit_event() -> None:
     assert e.entity_type == "approval"
     assert e.payload_json.get("borrower_id") == "B-48291"
     assert e.payload_json.get("offer_code") == "refi"
+    assert e.evidence_ids == ["ev-001", "ev-002", "ev-003"]
