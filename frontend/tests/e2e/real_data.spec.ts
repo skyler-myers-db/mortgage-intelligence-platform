@@ -1048,17 +1048,15 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     }
     const beforeIds = new Set(before.map((e) => e.event_id).filter(Boolean));
 
-    await page.goto('/lead-queue');
-    const approveButton = page.locator('[data-testid^="lead-approve-"]').first();
+    const target = await fetchActionablePendingLead(request);
+    await page.goto(`/lead-queue?approval_status=pending&borrower_ids=${encodeURIComponent(target.borrower_id)}`);
+    const approveButton = page.getByTestId(`lead-approve-${target.borrower_id}`);
     await expect(approveButton).toBeVisible({ timeout: 45_000 });
     const testId = await approveButton.getAttribute('data-testid');
     const borrowerId = testId?.replace(/^lead-approve-/, '');
     expect(borrowerId, 'need a visible approvable borrower').toBeTruthy();
 
-    const leads = await fetchLeads(request, 100);
-    const target = leads.find((lead) => lead.borrower_id === borrowerId);
-    expect(target, `need API evidence ids for visible borrower ${borrowerId}`).toBeTruthy();
-    expect(target!.evidence_ids?.length ?? 0, `need evidence ids for ${borrowerId}`).toBeGreaterThan(0);
+    expect(target.evidence_ids?.length ?? 0, `need evidence ids for ${borrowerId}`).toBeGreaterThan(0);
 
     const row = page.locator('table.tbl tbody tr', { hasText: borrowerId! }).first();
     await expect(row).toBeVisible({ timeout: 45_000 });
