@@ -224,39 +224,49 @@ async function chooseFilter(page: Page, label: string, value: string) {
 }
 
 async function clickSvgRegion(page: Page, target: Locator, label: string) {
-  await expect(target, `${label} SVG region should be visible`).toBeVisible({ timeout: 10_000 });
-  await target.scrollIntoViewIfNeeded();
-  const point = await target.evaluate((node) => {
-    const rect = node.getBoundingClientRect();
-    if (!(node instanceof SVGGeometryElement) || !node.ownerSVGElement) {
-      return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
-    }
-
-    const bbox = node.getBBox();
-    const ctm = node.getScreenCTM();
-    const svgPoint = node.ownerSVGElement.createSVGPoint();
-    if (!ctm || bbox.width === 0 || bbox.height === 0) {
-      return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
-    }
-
-    // SVG geography paths are irregular. Playwright's default path click
-    // targets the bounding-box center, which can be outside the painted
-    // state/county shape. Sample the path box and click a painted point.
-    for (const xStep of [0.5, 0.35, 0.65, 0.2, 0.8]) {
-      for (const yStep of [0.5, 0.35, 0.65, 0.2, 0.8]) {
-        svgPoint.x = bbox.x + bbox.width * xStep;
-        svgPoint.y = bbox.y + bbox.height * yStep;
-        if (node.isPointInFill(svgPoint) || node.isPointInStroke(svgPoint)) {
-          const clientPoint = svgPoint.matrixTransform(ctm);
-          return { x: clientPoint.x, y: clientPoint.y };
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      await expect(target, `${label} SVG region should be visible`).toBeVisible({ timeout: 10_000 });
+      await target.scrollIntoViewIfNeeded({ timeout: 5_000 });
+      const point = await target.evaluate((node) => {
+        const rect = node.getBoundingClientRect();
+        if (!(node instanceof SVGGeometryElement) || !node.ownerSVGElement) {
+          return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
         }
-      }
-    }
 
-    const pathPoint = node.getPointAtLength(node.getTotalLength() / 2).matrixTransform(ctm);
-    return { x: pathPoint.x, y: pathPoint.y };
-  });
-  await page.mouse.click(point.x, point.y);
+        const bbox = node.getBBox();
+        const ctm = node.getScreenCTM();
+        const svgPoint = node.ownerSVGElement.createSVGPoint();
+        if (!ctm || bbox.width === 0 || bbox.height === 0) {
+          return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+        }
+
+        // SVG geography paths are irregular. Playwright's default path click
+        // targets the bounding-box center, which can be outside the painted
+        // state/county shape. Sample the path box and click a painted point.
+        for (const xStep of [0.5, 0.35, 0.65, 0.2, 0.8]) {
+          for (const yStep of [0.5, 0.35, 0.65, 0.2, 0.8]) {
+            svgPoint.x = bbox.x + bbox.width * xStep;
+            svgPoint.y = bbox.y + bbox.height * yStep;
+            if (node.isPointInFill(svgPoint) || node.isPointInStroke(svgPoint)) {
+              const clientPoint = svgPoint.matrixTransform(ctm);
+              return { x: clientPoint.x, y: clientPoint.y };
+            }
+          }
+        }
+
+        const pathPoint = node.getPointAtLength(node.getTotalLength() / 2).matrixTransform(ctm);
+        return { x: pathPoint.x, y: pathPoint.y };
+      });
+      await page.mouse.click(point.x, point.y);
+      return;
+    } catch (error) {
+      lastError = error;
+      await page.waitForTimeout(250);
+    }
+  }
+  throw lastError;
 }
 
 async function discoverMapDrillTarget(
@@ -268,6 +278,7 @@ async function discoverMapDrillTarget(
     params.set('segment_codes', segmentCodes.join(','));
     params.set('segment_mode', 'all');
   }
+  params.set('marketing_eligibility', 'Eligible only');
   const suffix = params.toString() ? `?${params.toString()}` : '';
   const statesResp = await request.get(`${API_URL}/api/geo/state-rollups${suffix}`, {
     headers: AUTH_HEADERS,
@@ -323,7 +334,7 @@ async function drillCountyToZips(page: Page, target: MapDrillTarget) {
   await bringMapIntoViewport(page);
   const county = map.getByRole('button', { name: new RegExp(escapeRegExp(target.countyName), 'i') }).first();
   await expect(county).toBeVisible({ timeout: 10_000 });
-  await county.click({ force: true });
+  await clickSvgRegion(page, county, target.countyName);
 }
 
 async function bringMapIntoViewport(page: Page) {
@@ -477,10 +488,6 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
 
     const selectedSegments = ['In the Money', 'Home Equity Candidate'];
     const target = await discoverMapDrillTarget(request, ['itm', 'equity']);
-    for (const label of selectedSegments) {
-      await clickSegmentCard(page, label);
-    }
-
     const filteredGeoResponse = (path: string) => (response: { url: () => string; status: () => number }) => {
       if (response.status() !== 200 || !urlIncludesApiPath(response.url(), path)) return false;
       const parsed = new URL(response.url());
@@ -491,6 +498,15 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
         codes.includes('equity')
       );
     };
+
+    const filteredStateResponse = page.waitForResponse(
+      filteredGeoResponse('/api/geo/state-rollups'),
+      { timeout: 45_000 },
+    );
+    for (const label of selectedSegments) {
+      await clickSegmentCard(page, label);
+    }
+    await filteredStateResponse;
 
     const countyResponse = page.waitForResponse(
       filteredGeoResponse('/api/geo/county-rollups'),
