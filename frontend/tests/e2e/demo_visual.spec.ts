@@ -268,10 +268,11 @@ test.describe('Module 0 demo visual baselines', () => {
 
   test('Segment geography drill header keeps breadcrumbs clickable at ZIP layer', async ({ page, request }) => {
     await page.goto('/segment-intelligence');
+    const segmentCodes = ['equity'];
     for (const label of ['Home Equity Candidate']) {
       await clickSegmentCard(page, label);
     }
-    const target = await discoverMapDrillTarget(request, ['itm', 'equity']);
+    const target = await discoverMapDrillTarget(request, segmentCodes);
     await drillToZipLayer(page, target);
     await expect(page.locator('.zip-tiles')).toBeVisible({ timeout: 10_000 });
 
