@@ -36,6 +36,7 @@ from backend.services.genie_answers import (
     GenieStartResponse,
     load_sample_questions,
 )
+from backend.services.genie_audit import genie_audit_entity_id
 from backend.services.genie_client import GenieClientError
 from backend.services.genie_sales_ops import sales_ops_genie_response
 from backend.services.genie_trusted_assets import trusted_assets
@@ -866,7 +867,7 @@ def genie_message(
         actor=actor,
         action="genie.run_query",
         entity_type="genie_message",
-        entity_id=result.message_id or result.conversation_id,
+        entity_id=genie_audit_entity_id(result),
         payload_json={
             "conversation_id": result.conversation_id,
             "message_id": result.message_id,

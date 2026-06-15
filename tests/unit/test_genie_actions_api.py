@@ -177,6 +177,59 @@ def test_genie_message_honors_conversation_id() -> None:
     assert res.json()["conversation_id"] == "conv-test"
 
 
+def test_genie_degraded_message_audits_with_question_hash_entity_id() -> None:
+    class _CaptureAudit:
+        def __init__(self) -> None:
+            self.rows: list[dict[str, object]] = []
+
+        def write(self, **kwargs: object) -> None:
+            self.rows.append(kwargs)
+
+    class _Repo:
+        def respond(
+            self,
+            question: str,
+            conversation_id: str | None = None,
+        ) -> GenieMessageResponse:
+            _ = conversation_id
+            return GenieMessageResponse(
+                conversation_id="",
+                message_id=None,
+                question=question,
+                question_hash="hash-degraded",
+                answer="Genie is warming up.",
+                source="degraded",
+                trusted_assets=[],
+                row_count=0,
+                table_rows=[],
+            )
+
+    audit = _CaptureAudit()
+    prior_repo = app.dependency_overrides.get(get_genie_answer_repository)
+    prior_audit = app.dependency_overrides.get(get_audit_store)
+    app.dependency_overrides[get_genie_answer_repository] = lambda: _Repo()
+    app.dependency_overrides[get_audit_store] = lambda: audit
+    try:
+        res = client.post(
+            "/api/genie/message",
+            json={"question": "Summarize the current Module 0 opportunity."},
+            headers=ACTOR_HEADERS,
+        )
+    finally:
+        if prior_repo is None:
+            app.dependency_overrides.pop(get_genie_answer_repository, None)
+        else:
+            app.dependency_overrides[get_genie_answer_repository] = prior_repo
+        if prior_audit is None:
+            app.dependency_overrides.pop(get_audit_store, None)
+        else:
+            app.dependency_overrides[get_audit_store] = prior_audit
+
+    assert res.status_code == 200
+    assert res.json()["source"] == "degraded"
+    assert audit.rows[0]["entity_id"] == "hash-degraded"
+
+
 def test_genie_message_rejects_unowned_conversation_id() -> None:
     class _UnownedSessionLakebase:
         def fetchone(
