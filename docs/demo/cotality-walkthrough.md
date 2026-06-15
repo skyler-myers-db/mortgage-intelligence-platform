@@ -58,10 +58,10 @@ Segments are the core product vocabulary. Each is a *testable, explainable defin
 
 | Segment | Plain English | Status |
 |---|---|---|
-| **In the Money** | Rate spread ≥ 75 bps **and** equity ≥ 15%. The borrower is paying noticeably above market and has enough home equity to support a refi. | **Live · 6,235 borrowers** under the default eligible-and-contactable filter set |
+| **Prime Refi Candidates** | Rate spread ≥ 75 bps **and** equity ≥ 15%. The borrower is paying noticeably above market and has enough home equity to support a refi. | **Live · 6,235 borrowers** under the default eligible-and-contactable filter set |
 | **Home Equity Candidate** | Strong equity (≥ 35%) **and** no active second-position lien. Good HELOC or cash-out conversation. | **Live · 4,005** |
 | **Investor / Multi-Property** | Owner Link shows the same owner across 2+ properties or repeat transaction behavior. | **Live · 1,468** |
-| **Retention Risk** | Current customer with rate spread above the retention threshold. Lower bar than In the Money so we can reach out before they shop competitors. | **Live · 9** under current filters (small because few synthetic-Summit current customers cross the threshold; this number grows when the lender's real servicing book lands) |
+| **Retention Risk** | Current customer with rate spread above the retention threshold. Lower bar than Prime Refi Candidates so we can reach out before they shop competitors. | **Live · 9** under current filters (small because few synthetic-Summit current customers cross the threshold; this number grows when the lender's real servicing book lands) |
 | **Listed for Sale** | Home is actively on the market — purchase mortgage opportunity on the *next* home. | **Live — Cotality MLS listing activity** |
 | **HELOC Intent** | Cotality HELOC propensity indicates modeled renovation/cash-out appetite; filed permits remain a separate pending source. | **Live — Cotality HELOC propensity; filed permits pending** |
 
@@ -176,7 +176,7 @@ You've just told them: (a) you can see the pipe, (b) we don't hide what's missin
 
 - **"Why is the first-party data synthetic?"** — Because we don't have a real Summit Mortgage book to demo. The synthetic data has the right *shape* — the same columns and relationships a real lender feed has — so the scoring and relationship logic exercises end to end. In a customer engagement we'd swap synthetic for real on day one.
 - **"How are you ingesting the Cotality data?"** — Delta Sharing. Their share lands in our workspace as a UC catalog, our silver job normalizes it into stable column shapes, and the gold layer joins it with everything else.
-- **"What's the MLS / Permits timeline?"** — That's the conversation we want to have with them. The product is ready; we're blocked on the share.
+- **"What's left on source coverage?"** — MLS/listing activity is connected and evidence-backed in the app. Filed Building Permits are the remaining Cotality/partner approval dependency, and the app keeps that segment visibly pending until the share lands.
 
 ---
 
@@ -195,9 +195,9 @@ You've just told them: (a) you can see the pipe, (b) we don't hide what's missin
 5. Scroll to **Campaign setup** — Subject A/B + Body Angle A/B + eligible-only suppression + 30-day cap. Don't dwell; just acknowledge it exists.
 6. Click **Run build** (it's already implicit, but the click is the moment).
 7. Navigate to **Segment Intelligence**.
-8. Show the **six segment cards** at the top — In the Money is selected by default at 6,235. Read each segment definition aloud.
+8. Show the **six segment cards** at the top — Prime Refi Candidates is selected at 6,235 when you click it. Read each segment definition aloud.
 9. Point at **Listed for Sale** and **HELOC Intent**. This is the Cotality moment: one is a live MLS trigger, the other is modeled propensity, and filed permits are still called out as pending. *Pause.*
-10. Below the cards, **the table populates with the top 500 ranked borrowers of 6,235** for the In the Money segment. Three borrowers visible — point at the first: `B-102FL7THC6Q3L`, Calumet City IL, Competitor lien, Summit LO 01, In the Money + Investor + 1.
+10. Below the cards, **the table populates with the top 500 ranked borrowers of 6,235** for the Prime Refi Candidates segment. Three borrowers visible — point at the first: `B-102FL7THC6Q3L`, Calumet City IL, Competitor lien, Summit LO 01, Prime Refi Candidates + Investor + 1.
 11. Show the **US map on the right** — geography drill-down across the currently refreshed source coverage.
 
 #### What to say
@@ -212,7 +212,7 @@ You've just told them: (a) you can see the pipe, (b) we don't hide what's missin
 
 > *Navigate to Segments.*
 
-> **"Now we slice that universe into segments — and this is where the product gets defensible. Each segment is a testable definition, not an audience label. In the Money is rate spread of at least 75 basis points AND equity of at least 15 percent. Not 'high-intent' as a vibe — those exact thresholds, applied to those exact gold-table columns, every night."**
+> **"Now we slice that universe into segments — and this is where the product gets defensible. Each segment is a testable definition, not an audience label. Prime Refi Candidates is rate spread of at least 75 basis points AND equity of at least 15 percent. Not 'high-intent' as a vibe — those exact thresholds, applied to those exact gold-table columns, every night."**
 
 > *Point at Listed for Sale and HELOC Intent.*
 
@@ -220,11 +220,11 @@ You've just told them: (a) you can see the pipe, (b) we don't hide what's missin
 
 > *Point at the table.*
 
-> **"Below the cards, the same filtered population becomes a ranked queue. Top 500 of 6,235 In the Money borrowers. The first row is our hero — borrower B-102FL7THC6Q3L, Calumet City, Illinois. Competitor lien, which means they're currently with a competitor — a recapture opportunity. In the Money plus Investor segment, which means Owner Link has tied them to other properties. Already assigned to Summit LO 01. Let's open the dossier."**
+> **"Below the cards, the same filtered population becomes a ranked queue. Top 500 of 6,235 Prime Refi Candidates. The first row is our hero — borrower B-102FL7THC6Q3L, Calumet City, Illinois. Competitor lien, which means they're currently with a competitor — a recapture opportunity. Prime Refi Candidates plus Investor segment, which means Owner Link has tied them to other properties. Already assigned to Summit LO 01. Let's open the dossier."**
 
 #### Why this matters
 
-You've shown them the journey from 5.16M to a named borrower in three clicks — and the journey is *defensible at every step*. Every number has a source. Every segment has a definition. The two pending segments are explicit, not buried.
+You've shown them the journey from 5.16M to a named borrower in three clicks — and the journey is *defensible at every step*. Every number has a source. Every segment has a definition. MLS listing activity is live; filed Building Permits remain explicit, not buried.
 
 #### If they ask…
 
@@ -246,7 +246,7 @@ You've shown them the journey from 5.16M to a named borrower in three clicks —
 2. Let them look at the page for a beat. The opportunity score (88), confidence (85%), Approval Approved chip, Outreach Actioned chip are all in the upper right.
 3. Walk the left column: **Customer 360**. Read aloud: Property ref `clip_ref_39d931a7bed1` (that's the masked CLIP), Owner graph ref (masked Owner Link), Property address Calumet City IL 60409 (city + ZIP only — no street), AVM $168,163, Current lien $15,000 at **10.27%** (the very high rate is the story), LTV 9% (i.e. 91% equity), **346 related properties via owner graph**, Metro/loan type 16980 / CNV.
 4. Read the relationship flags: **Competitor lien** (with a competitor today), Non-owner occupied, **Investor**, Absentee owner, Corporate owner, listing/HELOC intent state, filed-permit caveat where applicable, and "No 2nd lien".
-5. Read the segments: In the Money, Investor / Multi-Property, Home Equity Candidate.
+5. Read the segments: Prime Refi Candidates, Investor / Multi-Property, Home Equity Candidate.
 6. Move to the right column: **Why we recommend this**. "In-the-money · **+391 bps** vs. par 6.360%". Read the rationale aloud: *"Current rate sits well above market rates and the home has 91% equity — both refinance triggers are met."*
 7. Point at the three **evidence chips**: Market rate comparison, In-the-money rule, Borrower dossier. (You can click any of them to open the source drawer — but don't unless asked.)
 8. Show the **Next-best-offer card**: Refinance + HELOC, score 88, two buttons (Build outreach draft, Saved).
@@ -389,7 +389,7 @@ You have three closing options depending on the room's energy.
 
 ### Closer C — The "what's next" close (use if they want a roadmap conversation)
 
-> **"Three things on our next-30-day list. One, the two pending Delta Shares — MLS and Permits — light up two segments and unlock the listed-for-sale and renovation-permit triggers. Two, a real lender pilot — Summit Mortgage is the synthetic placeholder for that conversation, and the moment we point those first-party feeds at a real LOS the relationship and suppression layers start earning. Three, Module 1 — the pipeline pull-through layer that picks up where Module 0 hands off. We'd love to talk about all three."**
+> **"Three things on our next-30-day list. One, filed Building Permits remain the next Cotality source expansion, while MLS listings and HELOC/refi propensity are already live. Two, a real lender pilot — Summit Mortgage is the synthetic placeholder for that conversation, and the moment we point those first-party feeds at a real LOS the relationship and suppression layers start earning. Three, Module 1 — the pipeline pull-through layer that picks up where Module 0 hands off. We'd love to talk about all three."**
 
 ---
 
@@ -407,7 +407,7 @@ You have three closing options depending on the room's energy.
 
 ## Part 7 — Things to NOT say (the don't-step-on-this list)
 
-- **Don't say "we have MLS data"** — the segment card explicitly says AWAITING FEED. The audience will read it.
+- **Don't say "permit filings are live"** — HELOC Intent is a Cotality propensity signal, not filed Building Permit activity. The audience will read the source-readiness row.
 - **Don't say "the lender data is real"** — it's `demo synthetic`. The badge is visible on every first-party row.
 - **Don't say "every borrower in the country"** — the universe is whatever Cotality's current live coverage refresh returns under the active default filters.
 - **Don't read borrower IDs out loud as if they're real names** — they're masked. "Borrower B-102…" or "the Calumet City borrower" is the right register.

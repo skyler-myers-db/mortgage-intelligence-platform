@@ -236,7 +236,7 @@ Latest browser-gate collection:
 
 Remaining open items before declaring the whole modernization tracker closed:
 
-- None in repo. Customer durable log retention, Cotality MLS/Permits, and per-release customer evidence are external/environment gates tracked in `docs/observability.md`, `docs/data-sources-gap-analysis.md`, and `docs/enterprise-readiness-checklist.md`.
+- None in repo. Customer durable log retention, Cotality filed Building Permits, and per-release customer evidence are external/environment gates tracked in `docs/observability.md`, `docs/data-sources-gap-analysis.md`, and `docs/enterprise-readiness-checklist.md`; MLS/listing activity is now connected in the dev target.
 
 ## 2026-06-11 Full-Stack Audit Response (independent validation + remediation)
 

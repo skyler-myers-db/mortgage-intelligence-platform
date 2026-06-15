@@ -84,9 +84,9 @@ multi-cell shape.
 A 30-day refresh-date line chart of evidence events by `signal_type` over
 `mip.gold.evidence_events`, and a horizontal bar of evidence counts by
 `signal_type` colored by `source_product`. Demonstrates operational
-freshness and signal mix. **Screenshot:** the bar chart makes the
-"permit and listing are blocked until Cotality licenses MLS and Permits"
-story visible — those bars are absent from real data.
+freshness and signal mix. **Screenshot:** the bar chart makes live listing
+evidence visible while keeping filed Building Permits absent until that source
+lands.
 
 ## Metric-view column gaps (follow-up)
 

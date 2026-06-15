@@ -225,7 +225,27 @@ def test_outreach_approve_requires_auditable_evidence() -> None:
         _restore_override(get_outreach_repository, prior)
 
     assert response.status_code == 422
-    assert "at least one evidence_id" in response.json()["detail"]
+    assert "requires borrower evidence" in response.json()["detail"]
+
+
+def test_outreach_approve_rejects_evidence_ids_not_owned_by_borrower() -> None:
+    borrower = mock_population.BORROWERS[0]
+    prior = _with_outreach_repo(_SingleBorrowerOutreachRepo(borrower))
+    try:
+        response = TestClient(app).post(
+            "/api/outreach/approve",
+            json={
+                "borrower_id": borrower.borrower_id,
+                "offer_code": "refi",
+                "evidence_ids": ["ev-001", "ev-other-borrower"],
+                "draft_body": "Governed approval body. Summit Mortgage, NMLS #123456. Equal Housing Lender. Reply unsubscribe to opt out.",
+            },
+        )
+    finally:
+        _restore_override(get_outreach_repository, prior)
+
+    assert response.status_code == 422
+    assert "must belong to the borrower recommendation" in response.json()["detail"]
 
 
 def test_outreach_campaign_metadata_ids_are_public_safe() -> None:

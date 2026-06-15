@@ -27,7 +27,7 @@ Scope: Close the gaps found when comparing the Module 0 requirements document an
 
 - [x] Correct public/product copy that overclaims pending feeds.
   - Current state: README says listing, permit, and HPI are used in the app.
-  - Required outcome: copy distinguishes live sources from pending MLS/listing, Building Permits, optional HPI/CLIP-MCP.
+  - Required outcome: copy distinguishes live MLS/listing activity from pending Building Permits and optional HPI/CLIP-MCP.
 
 - [x] Reconcile `docs/data-contract-module0.md` with current scoring SQL.
   - Current state: sub-score section still documents old piecewise scoring.
@@ -95,7 +95,7 @@ Scope: Close the gaps found when comparing the Module 0 requirements document an
 - [x] Refresh deployed source, downstream gold tables, and source-readiness rows after these code/SQL changes.
   - Verified deployed: Databricks App deployment `01f14d00b90b15bba16e412e31a8edbd`, updated 2026-05-11T06:19:06Z. Enhanced DAB upload succeeded; Databricks still blocks the resource update call with `PERMISSION_DENIED`, so the active app was started with direct snapshot deploy from the refreshed workspace source path.
   - Verified jobs: FRED refresh run `1125872647053071`, silver refresh run `927414118382839`, Lakebase migration run `803051005237713`, gold refresh run `189210446175254`, lifecycle sync run `50010806203638`.
-  - Verified API/SQL: `/api/data-estate` labels Summit first-party feeds as `demo_synthetic`; Cotality MLS/Listings and Building Permits remain pending with no live rows.
+  - Verified API/SQL: `/api/data-estate` labels Summit first-party feeds as `demo_synthetic`; listing activity is connected through `mip.silver.listing_activity`, while filed Building Permits remain pending with no live rows.
 - [x] Run local backend/frontend tests after these code/SQL changes.
   - Verified: unit suite, focused live-SQL integration suite, `ruff`, frontend lint, frontend unit tests, frontend build, scaffold verification, and `git diff --check` all passed.
 - [x] Run live smoke/API checks after deploying this exact pass.

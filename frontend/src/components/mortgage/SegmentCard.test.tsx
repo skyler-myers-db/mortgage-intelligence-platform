@@ -13,6 +13,13 @@ describe('Segment definitions', () => {
     expect(SEGMENT_DEFINITIONS.some((s) => s.code === 'itm')).toBe(true);
   });
 
+  it('uses a distinct presentation label for the strict refi-ready segment', () => {
+    const refiReady = SEGMENT_DEFINITIONS.find((s) => s.code === 'itm');
+    expect(refiReady?.name).toBe('Prime Refi Candidates');
+    expect(refiReady?.description).toContain('75 bps');
+    expect(refiReady?.description).toContain('15%');
+  });
+
   it('uses equity-credit presentation for the HELOC Intent legacy segment code', () => {
     const helocIntent = SEGMENT_DEFINITIONS.find((s) => s.code === 'permit');
     expect(helocIntent?.name).toBe('HELOC Intent');
@@ -54,5 +61,18 @@ describe('SegmentCard', () => {
     expect(container.textContent).toContain('no borrowers in current view');
     expect(container.textContent).not.toContain('+42%');
     expect(container.textContent).not.toContain('avg 0');
+  });
+
+  it('prefers canonical presentation copy over stale backend labels', () => {
+    render({
+      code: 'itm',
+      name: 'In the Money',
+      description: 'Legacy backend label.',
+      count: 12,
+      color: '#000000',
+    });
+    expect(container.textContent).toContain('Prime Refi Candidates');
+    expect(container.textContent).toContain('Lien rate ≥ 75 bps above par and equity ≥ 15%.');
+    expect(container.textContent).not.toContain('Legacy backend label.');
   });
 });

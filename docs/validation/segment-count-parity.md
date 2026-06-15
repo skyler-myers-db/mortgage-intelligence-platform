@@ -9,7 +9,9 @@
 **Warehouse:** `da02d15a9490650b` (serverless).
 **Catalog:** `mip`.
 **Share:** `cotality_mortgage_data.corelogic` (last updated 2026-10-29 per gap analysis).
-**Pass/fail summary:** Live gate compares all unblocked segments across every refreshed coverage state discovered from gold rollups. BLOCKED segments (`listed`, `permit`) correctly return 0 on both sides until their Cotality feeds arrive.
+**Pass/fail summary:** Live gate compares all unblocked segments across every refreshed coverage state discovered from gold rollups. In this 2026-04-21 run, `listed` and `permit` were still source-blocked and correctly returned 0 on both sides.
+
+**2026-06-15 source update:** `listed` now materializes from live MLS/listing activity through `mip.silver.listing_activity`. `permit` remains the source-blocked segment until the filed Building Permits feed lands.
 
 **2026-05-15 remediation note:** A live parity failure on `itm/CA`
 (`ref=16706`, `gold=16544`) was traced to a stale gold refresh, not predicate
@@ -86,7 +88,7 @@ keeping the Cotality segment predicates independent of gold outputs.
 - Segment count < 1,000 → **exact match required** (relative-tolerance
   is misleading at small N; some retention-state cells are single
   digits).
-- BLOCKED segments → both sides must be exactly **0**.
+- Source-blocked segments → both sides must be exactly **0** until the source is wired and evidence-backed.
 
 All 30 unblocked cells matched **exactly** (delta = 0). The tolerance
 was not needed on this run; it's there so a small, explainable rounding
@@ -233,14 +235,14 @@ OR-branch inside the segment rule collapses to
 `is_current_customer AND rate_spread_bps >= 50` once `listed_for_sale`
 is held at FALSE (BLOCKED).
 
-### 2.5 `listed`, `permit` — BLOCKED
+### 2.5 `listed`, `permit` — source-dependent
 
-Per [docs/data-contract-module0.md](../data-contract-module0.md) §9
-these are hardcoded `FALSE` in `gold.borrower_360` until Cotality's MLS
-Listings and Building Permits shares land. Reference value is
-definitionally `0`; gold must also be `0`. The test enforces both
-directions so a regression here (removing the `CAST(FALSE AS BOOLEAN)
-AS listed_for_sale` literal without wiring MLS first) fails loudly.
+Per [docs/data-contract-module0.md](../data-contract-module0.md) §9, these
+signals must stay either source-backed or explicitly pending. In the 2026-04-21
+run, both were hardcoded `FALSE`, so the reference value was definitionally `0`
+and gold also had to be `0`. Current posture: `listed` is now source-backed by
+`mip.silver.listing_activity`; `permit` remains hardcoded false until filed
+Building Permits are wired.
 
 ---
 
@@ -279,7 +281,7 @@ AS listed_for_sale` literal without wiring MLS first) fails loudly.
 | `retention` | WA | 36 | 36 | 0 | PASS |
 | **retention total** | | **749** | **749** | 0 | PASS |
 
-### 3.2 BLOCKED segments — all 0 on both sides
+### 3.2 Source-blocked segments in the 2026-04-21 run — all 0 on both sides
 
 | Segment  | State | Reference (contract) | Gold | Verdict |
 |----------|:-----:|:---:|:---:|:---:|
@@ -301,7 +303,7 @@ are rows outside the current refreshed coverage scope.
 
 ## 4. Gap analysis — nothing to fix for segment counts
 
-**No SQL fixes applied.** All five unblocked segment counts match the
+**No SQL fixes applied.** All unblocked segment counts match the
 raw share byte-for-byte per state. That means:
 
 - `silver_lien_current.sql` filters and rate-conversion are consistent

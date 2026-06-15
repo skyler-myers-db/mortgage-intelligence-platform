@@ -1,31 +1,22 @@
 # Cotality Data Request — Module 0
 
-**Objective:** request only the Cotality products required to close Module 0's remaining data gaps. The current Delta Share already supports the refi, cash-out/equity, investor, current-customer retention, and distress-lite use-cases. Do not expand this request to broader marketplace products unless Module 0 scope changes.
+**Objective:** request only the Cotality products required to close Module 0's remaining data gaps. The current Delta Share already supports the refi, cash-out/equity, investor, current-customer retention, listed-for-sale purchase, and distress-lite use-cases. Do not expand this request to broader marketplace products unless Module 0 scope changes.
 
 ## P0 Request
 
 | Priority | Cotality product | Module 0 contract it unlocks | Required grain/key | Required freshness |
 |---|---|---|---|---|
-| P0 | MLS Listings | `borrower_360.listed_for_sale`, `listed` segment, and `fn_next_best_offer` `purchase` branch | CLIP-keyed listing row, or listing row mappable to CLIP | Daily or better |
 | P0 | Building Permits | Permit-driven HELOC intent, `borrower_360.has_permit`, `permit` segment, and permit evidence rows | CLIP-keyed permit row, or permit row mappable to CLIP | Daily/weekly; include permit issue date |
 
-## Why These Two
+## Landed Source
 
-**MLS Listings** is the only honest source for active listed-for-sale intent. The existing mortgage, owner-transfer, property, and voluntary-lien tables observe historical transactions or current lien/property state; they cannot infer an active listing before a sale closes.
+**MLS Listings** has landed and now feeds `borrower_360.listed_for_sale`, the `listed` segment, listing evidence rows, and the `fn_next_best_offer` `purchase` branch through `mip.silver.listing_activity`.
+
+## Why This Remaining Request
 
 **Building Permits** is the missing intent trigger for HELOC. The current app can rank equity-only HELOC candidates from AVM/equity and no active second-position balance, but it cannot claim renovation intent until permit rows exist.
 
 ## Minimum Fields Needed
-
-### MLS Listings
-
-- `clip` or Cotality-supported fields required to resolve to CLIP.
-- Listing status: active, pending, off-market/cancelled if available.
-- Listing date, status date, days on market.
-- List price and price-change date/amount if available.
-- Property state/ZIP/CBSA or enough geography to validate the configured
-  Module 0 state set and discovered county/ZIP coverage.
-- Listing source/provenance and refresh timestamp.
 
 ### Building Permits
 
@@ -50,4 +41,4 @@ Defer HPI Forecast, Pre-Foreclosure, CLIP MCP, climate, neighborhood, demographi
 - The app must continue to surface synthetic borrower labels only; no raw names, street addresses, emails, or phone numbers are requested.
 - New rows should land in Unity Catalog and feed `mip.silver.*` / `mip.gold.*` transformations, not a runtime API fallback.
 - Evidence rows must cite real source table paths and source timestamps.
-- The current `listed` and `permit` segments stay zero-count until these sources are licensed, delivered, and wired.
+- The current `permit` segment stays source-pending until Building Permits are licensed, delivered, and wired. The `listed` segment must remain backed by real MLS/listing evidence rather than inferred from sale history.

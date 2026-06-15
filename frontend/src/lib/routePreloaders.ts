@@ -9,6 +9,7 @@ export const SegmentIntelligenceRoute = lazyWithPreload(() => import('../routes/
 export const LeadQueueRoute = lazyWithPreload(() => import('../routes/lead-queue'));
 export const Borrower360Route = lazyWithPreload(() => import('../routes/borrower-360'));
 export const GlossaryRoute = lazyWithPreload(() => import('../routes/glossary'));
+export const NotFoundRoute = lazyWithPreload(() => import('../routes/not-found'));
 export const OfferOrchestratorRoute = lazyWithPreload(() => import('../routes/offer-orchestrator'));
 export const AskGenieRoute = lazyWithPreload(() => import('../routes/ask-genie'));
 export const AdminConfigRoute = lazyWithPreload(() => import('../routes/admin-config'));

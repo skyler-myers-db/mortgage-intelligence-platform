@@ -246,7 +246,7 @@ def test_reject_writes_approval_and_audit_rows(override_deps) -> None:
         json={
             "borrower_id": "B-48291",
             "offer_code": "heloc",
-            "evidence_ids": ["ev-1", "ev-2"],
+            "evidence_ids": ["ev-001", "ev-002"],
             "rationale_code": "opt_out",
             "rationale": "Borrower opted out",
         },
@@ -280,12 +280,35 @@ def test_reject_writes_approval_and_audit_rows(override_deps) -> None:
     assert evt.entity_type == "approval"
     assert evt.entity_id == body["approval_id"]
     assert evt.actor == "lo@example.com"
-    assert evt.evidence_ids == ["ev-1", "ev-2"]
+    assert evt.evidence_ids == ["ev-001", "ev-002"]
     assert evt.subject_clip is not None
     assert evt.payload_json["borrower_id"] == "B-48291"
     assert evt.payload_json["offer_code"] == "heloc"
     assert evt.payload_json["rationale_code"] == "opt_out"
     assert evt.payload_json["rationale"] == "opt out: Borrower opted out"
+
+
+def test_reject_rejects_evidence_ids_not_owned_by_borrower(override_deps) -> None:
+    audit = InMemoryAuditStore()
+    fake_lakebase = MagicMock()
+    fake_lakebase.fetchone.side_effect = _fetchone_none_or_disclosure
+    override_deps(audit=audit, lakebase=fake_lakebase)
+
+    response = TestClient(app).post(
+        "/api/outreach/reject",
+        json={
+            "borrower_id": "B-48291",
+            "offer_code": "heloc",
+            "evidence_ids": ["ev-001", "ev-other-borrower"],
+            "rationale_code": "low_intent",
+        },
+        headers={"X-Forwarded-Email": "lo@example.com"},
+    )
+
+    assert response.status_code == 422, response.text
+    assert "must belong to the borrower recommendation" in response.json()["detail"]
+    fake_lakebase.execute.assert_not_called()
+    assert audit.list(limit=10) == []
 
 
 def test_approve_reject_unknown_borrower_fail_closed_before_lakebase(override_deps) -> None:

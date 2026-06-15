@@ -1,6 +1,6 @@
 # Partner Review Checklist
 
-Last updated: 2026-05-07
+Last updated: 2026-06-15
 
 Use this checklist before recording or presenting Module 0 with Databricks or Cotality reviewers.
 
@@ -15,7 +15,7 @@ Use this checklist before recording or presenting Module 0 with Databricks or Co
 
 - [x] Cotality public-record, lien, mortgage-event, CLIP, Owner Link, and AVM-derived fields are represented as live source lanes when Unity Catalog readiness confirms rows.
 - [x] First-party lender tables exist as ingestion contracts under `mip.first_party`; the Summit Mortgage demo feed is live only when explicitly seeded and is labeled `demo_synthetic`, not real customer data.
-- [x] MLS/Listings and Building Permits are explicitly labeled pending; the app does not treat them as zero demand.
+- [x] MLS/listing activity is connected and evidence-backed when UC readiness confirms rows; filed Building Permits are explicitly labeled pending and are not treated as zero demand.
 - [x] FRED `MORTGAGE30US` refresh is required before public shipment and must show `source='fred'` for the latest rate row.
 
 ## Public Recording Safety

@@ -84,15 +84,16 @@ WHEN NOT MATCHED THEN INSERT (
 -- 2026-05-04 fix (prototype-parity-audit P0-2): the prior implementation
 -- aggregated FROM gold.borrower_360.segment_codes via LATERAL VIEW EXPLODE,
 -- which means a segment with zero matching borrowers produced ZERO ROWS in
--- the rollup. The `listed` and `permit` predicates are blocked-FALSE in
--- gold.borrower_360 pending the Cotality MLS + Building-Permits Delta Share
--- arrival, so /api/segments was returning only 4 of the contracted 6
--- segments and the frontend was rendering "4 borrower segments" instead of
--- the prototype's 6. The fix is to drive the rollup off the `meta` VALUES
--- table (the canonical 6-segment registry) and LEFT JOIN exploded counts
--- onto it -- segments with no matching borrowers now appear as count=0 /
--- avg_score=0 and the FE can render them in a "Awaiting Cotality MLS /
--- Permits Delta Share" pending state instead of disappearing entirely.
+-- the rollup. At the time, `listed` and `permit` were both blocked-FALSE in
+-- gold.borrower_360 pending source arrival, so /api/segments was returning
+-- only 4 of the contracted 6 segments and the frontend was rendering "4
+-- borrower segments" instead of the prototype's 6. MLS/listing activity now
+-- flows through `mip.silver.listing_activity`; filed Building Permits remain
+-- the pending predicate. The fix is to drive the rollup off the `meta` VALUES
+-- table (the canonical 6-segment registry) and LEFT JOIN exploded counts onto
+-- it -- segments with no matching borrowers now appear as count=0 / avg_score=0
+-- and the FE can render any genuinely unavailable source in a pending state
+-- instead of disappearing entirely.
 -- Honest UX: zero counts mean zero counts, but the segment is still
 -- visible so the demo narrative ("you'll see 6 segments") holds.
 --
@@ -169,7 +170,7 @@ prior AS (
 meta AS (
   SELECT * FROM (
     VALUES
-      ('itm',       'In the Money',             'Lien rate >= 75 bps above par and equity >= 15%.',                                      '#5CE1E6'),
+      ('itm',       'Prime Refi Candidates',    'Lien rate >= 75 bps above par and equity >= 15%.',                                      '#5CE1E6'),
       ('listed',    'Listed for Sale',          'Current active or under-contract Cotality MLS listing tied to CLIP.', '#F59E0B'),
       ('permit',    'HELOC Intent',             'Cotality HELOC propensity >= 700 with equity context. Filed Building Permits remain pending until a true permit source lands.', '#A78BFA'),
       ('investor',  'Investor / Multi-Property','Owner Link shows 2+ properties or repeat behavior.',                                    '#F472B6'),
@@ -227,7 +228,7 @@ LEFT JOIN prior     AS p USING (segment_code, state);
 -- statements in order.
 COMMENT ON COLUMN mip.gold.segment_population.segment_code IS 'itm / listed / permit / investor / equity / retention. Matches SegmentCode Literal exactly; permit is the backward-compatible code for customer-facing HELOC Intent.';
 COMMENT ON COLUMN mip.gold.segment_population.state IS '2-char state code from refreshed source coverage or "_ALL" for national rollup.';
-COMMENT ON COLUMN mip.gold.segment_population.name IS 'Static label per segment_code (e.g., "In the Money").';
+COMMENT ON COLUMN mip.gold.segment_population.name IS 'Static label per segment_code (e.g., "Prime Refi Candidates").';
 COMMENT ON COLUMN mip.gold.segment_population.count IS 'Member count for this (segment, state) cell.';
 COMMENT ON COLUMN mip.gold.segment_population.delta_vs_prior IS 'Quarter-over-quarter delta as "+NN%" / "-NN%". Router maps to SegmentSummary.delta. "+0%" on first refresh.';
 COMMENT ON COLUMN mip.gold.segment_population.avg_score IS 'CAST(ROUND(AVG(opportunity_score)) AS INT) over the segment cell.';

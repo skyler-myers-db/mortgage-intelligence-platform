@@ -197,6 +197,57 @@ test.describe('Module 0 — theme / density / narrow canaries', () => {
     expect(segCols, 'expected .seg-grid to render 6 columns at 1440px').toBe(6);
   });
 
+  test('segment-intelligence phone viewport stacks segment cards without document clipping', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto('/segment-intelligence');
+
+    const grid = page.locator('.seg-grid').first();
+    await expect(grid).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText('Prime Refi Candidates', { exact: true }).first()).toBeVisible();
+
+    const segCols = await grid.evaluate((el) => {
+      return getComputedStyle(el).gridTemplateColumns
+        .split(' ')
+        .filter((x) => x.trim().length > 0).length;
+    });
+    expect(segCols, 'phone segment cards should stack to one column').toBe(1);
+
+    const overflow = await page.evaluate(() => {
+      return document.documentElement.scrollWidth - document.documentElement.clientWidth;
+    });
+    expect(overflow, 'segment intelligence should not create document-level horizontal scroll').toBeLessThanOrEqual(2);
+  });
+
+  test('lead queue phone viewport keeps approval column reachable inside table scroller', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto('/lead-queue');
+
+    const wrapper = page.locator('.tbl-wrap').first();
+    await expect(wrapper).toBeVisible({ timeout: 30_000 });
+    await expect(page.locator('.lead-table__approval-header')).toBeVisible();
+
+    const metrics = await page.evaluate(() => {
+      const wrap = document.querySelector('.tbl-wrap') as HTMLElement | null;
+      const header = document.querySelector('.lead-table__approval-header') as HTMLElement | null;
+      if (!wrap || !header) return null;
+      wrap.scrollLeft = wrap.scrollWidth;
+      const wrapRect = wrap.getBoundingClientRect();
+      const headerRect = header.getBoundingClientRect();
+      return {
+        documentOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        wrapLeft: wrapRect.left,
+        wrapRight: wrapRect.right,
+        headerLeft: headerRect.left,
+        headerRight: headerRect.right,
+      };
+    });
+
+    expect(metrics, 'lead queue table and approval header should render').toBeTruthy();
+    expect(metrics!.documentOverflow, 'lead queue should not create document-level horizontal scroll').toBeLessThanOrEqual(2);
+    expect(metrics!.headerLeft, 'approval header should be reachable at table scroll end').toBeGreaterThanOrEqual(metrics!.wrapLeft - 2);
+    expect(metrics!.headerRight, 'approval header should stay inside the table viewport at scroll end').toBeLessThanOrEqual(metrics!.wrapRight + 2);
+  });
+
   test('admin-config phone viewport stacks admin operations without clipping', async ({ page }) => {
     test.skip(!ADMIN_BEARER, 'Requires MIP_ADMIN_BEARER_TOKEN for admin-only phone clipping canary.');
 

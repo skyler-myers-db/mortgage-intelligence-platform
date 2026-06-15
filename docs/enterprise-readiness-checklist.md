@@ -29,7 +29,7 @@ This checklist separates implemented controls from the validation evidence that 
 - [ ] Frontend build and component tests pass.
 - [ ] Live Playwright walkthrough passes against the deployed Databricks App URL.
 - [ ] Genie semantic regression passes the release threshold and includes ZIP/FIPS/identifier chart checks.
-- [ ] Source-readiness page shows live Cotality assets, explicit pending MLS/permit feeds, and truthful first-party status.
+- [ ] Source-readiness page shows live Cotality assets, live MLS/listing activity, explicit pending filed Building Permits, and truthful first-party status.
 
 ## Customer-Specific Items
 

@@ -304,7 +304,7 @@ export default function AskGenie() {
                   }
                 }
               }}
-              className="route-textarea"
+              className="route-textarea route-textarea--genie"
             />
             {composerSampleQuestions.length > 0 && (
               <div className="genie-composer__samples" aria-label="Suggested Genie questions">

@@ -82,7 +82,7 @@ def _pick_evidence(ids: list[str]) -> list[EvidenceEvent]:
 # these populations. Keep aligned with frontend/src/mocks/fixtureData.ts.
 # ---------------------------------------------------------------------------
 SEGMENTS = [
-    SegmentSummary(code="itm", name="In the Money", count=12840, delta="+18%", avg_score=82, description="Lien rate >= 75 bps above par and equity >= 15%.", color="#5CE1E6"),
+    SegmentSummary(code="itm", name="Prime Refi Candidates", count=12840, delta="+18%", avg_score=82, description="Lien rate >= 75 bps above par and equity >= 15%.", color="#5CE1E6"),
     SegmentSummary(code="listed", name="Listed for Sale", count=1840, delta="+9%", avg_score=77, description="Current active or under-contract Cotality MLS listing.", color="#F59E0B"),
     SegmentSummary(code="permit", name="HELOC Intent", count=2405, delta="+11%", avg_score=80, description="Cotality HELOC propensity score indicates equity-credit demand.", color="#A78BFA"),
     SegmentSummary(code="investor", name="Investor / Multi-Property", count=1892, delta="+6%", avg_score=79, description="Owner Link shows 2+ properties or repeat behavior.", color="#F472B6"),

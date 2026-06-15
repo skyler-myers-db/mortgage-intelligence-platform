@@ -37,19 +37,14 @@ const KiB = 1024;
 // tools/precompress_assets.mjs + backend/services/static_assets.py).
 // ---------------------------------------------------------------------------
 const budgets = {
-  // Bumped 2026-06-12 (re-audit #6): raw initial JS actual reached 268.16 after
-  // the Buyer-Wow epic, leaving the 270 ceiling at only ~0.7% headroom — below
-  // this file's own ~5% policy in the tight direction, so the next small dep
-  // bump would trip CI mid demo-week. Restore ~5% on the measured actual.
-  initialJsBytes: 282 * KiB, // actual 268.16 (was 270 @ ~0.7% headroom)
-  // Bumped 2026-06-12 (re-audit #5 remediation). The Buyer-Wow epic (⌘K
-  // palette command module, pinned-insights store eagerly reachable from the
-  // initial chunk via actorScopedBrowserState, Sankey/briefing wiring) grew
-  // initial JS gzip from the 2026-06-10 baseline (79.03) to 82.99 — already at
-  // the 83 ceiling. The re-audit #5 markdown-sanitized pin summary (toPlain
-  // /truncateAtWord in pinnedInsights, initial chunk) tipped it to 83.15.
-  // Restore ~5% headroom on the new measured actual.
-  initialJsGzipBytes: 87 * KiB, // actual 83.15 (was 83 @ 79.03 baseline)
+  // Bumped 2026-06-15 for the frontend security patch:
+  // @babel/core 7.29.7, vite 8.0.16, and happy-dom 20.10.3 clear the npm audit
+  // gate. Vite 8.0.16 folds the prior shared initial runtime/icon chunk into
+  // index instead of emitting it separately, so index raw/gzip increases while
+  // total JS remains below the existing total budget. Re-baseline index with
+  // ~5% headroom on the measured post-patch actual.
+  initialJsBytes: 393 * KiB, // actual 373.76
+  initialJsGzipBytes: 122 * KiB, // actual 115.43
   // Bumped 2026-06-11 for the re-audit #4 Buyer-Wow tranche: ⌘K command
   // palette (.cmdk*), portal evidence hover-card (.evidence-hovercard*),
   // sleek one-time KPI entrance (.kpi__value--enter / .spark__line--draw),

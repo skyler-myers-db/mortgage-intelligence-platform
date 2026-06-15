@@ -450,8 +450,8 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
       .first();
     await expect(rankedHeader).toContainText(/ranked borrowers/, { timeout: 45_000 });
 
-    await clickSegmentCard(page, 'In the Money');
-    await expect(rankedHeader).toContainText(/segment filter: In the Money/, { timeout: 45_000 });
+    await clickSegmentCard(page, 'Prime Refi Candidates');
+    await expect(rankedHeader).toContainText(/segment filter: Prime Refi Candidates/, { timeout: 45_000 });
 
     const isAllModeSegmentResponse = (url: string, path: string) => {
       if (!urlIncludesApiPath(url, path)) return false;
@@ -477,7 +477,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     expect(leads.status(), 'ranked list segment all-mode response').toBe(200);
     expect(geo.status(), 'map segment all-mode response').toBe(200);
     await expect(rankedHeader).toContainText(
-      /segment filter: In the Money \+ Home Equity Candidate/,
+      /segment filter: Prime Refi Candidates \+ Home Equity Candidate/,
       { timeout: 45_000 },
     );
     await expect(rankedHeader).toContainText(/must match every selected segment/);
@@ -486,7 +486,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
   test('segment map drill preserves segment filters through county ZIP and Lead Queue', async ({ page, request }) => {
     await page.goto('/segment-intelligence');
 
-    const selectedSegments = ['In the Money', 'Home Equity Candidate'];
+    const selectedSegments = ['Prime Refi Candidates', 'Home Equity Candidate'];
     const target = await discoverMapDrillTarget(request, ['itm', 'equity']);
     const filteredGeoResponse = (path: string) => (response: { url: () => string; status: () => number }) => {
       if (response.status() !== 200 || !urlIncludesApiPath(response.url(), path)) return false;
@@ -949,7 +949,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     await expect(page.getByRole('button', { name: /State: 2 selected/i })).toBeVisible();
 
     await page.getByRole('button', { name: /^Segment:/i }).click();
-    await page.getByRole('option', { name: 'In the Money', exact: true }).click();
+    await page.getByRole('option', { name: 'Prime Refi Candidates', exact: true }).click();
     const segmentResponse = page.waitForResponse((response) => {
       if (!response.url().includes('/api/v1/analytics/executive')) return false;
       const params = new URL(response.url()).searchParams;
