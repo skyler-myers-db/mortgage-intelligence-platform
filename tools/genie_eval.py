@@ -31,6 +31,7 @@ Use ``--soft`` only for exploratory runs where writing the report is enough.
 from __future__ import annotations
 
 import argparse
+import email.message
 import json
 import logging
 import os
@@ -52,6 +53,10 @@ BASELINE_PATH = REPORT_DIR / "baseline.json"
 LATEST_PATH = REPORT_DIR / "latest.json"
 REGRESSION_THRESHOLD = 10.0  # points
 DEFAULT_CATALOG = "mip"
+DEFAULT_ATTEMPTS = int(os.environ.get("MIP_GENIE_EVAL_ATTEMPTS", "4"))
+DEFAULT_RETRY_BACKOFF_S = float(os.environ.get("MIP_GENIE_EVAL_RETRY_BACKOFF_S", "20"))
+DEFAULT_PACE_S = float(os.environ.get("MIP_GENIE_EVAL_PACE_S", "2"))
+_RETRYABLE_HTTP_CODES = {429, 502, 503, 504}
 
 log = logging.getLogger("genie_eval")
 
@@ -125,28 +130,137 @@ def _render_catalog_templates(value: Any, *, catalog: str) -> Any:
     return value
 
 
-def _ask(base: str, token: str | None, question: str, timeout_s: int) -> tuple[
-    dict[str, Any], float
-]:
-    """Hit /api/genie/message; return (response_json, elapsed_s)."""
+def _request_payload(base: str, token: str | None, question: str) -> urllib.request.Request:
     url = f"{base.rstrip('/')}/api/genie/message"
     body = json.dumps({"question": question}).encode("utf-8")
     headers = {"Content-Type": "application/json"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    req = urllib.request.Request(url, data=body, method="POST", headers=headers)
-    start = time.monotonic()
+    return urllib.request.Request(url, data=body, method="POST", headers=headers)
+
+
+def _http_error_payload(exc: urllib.error.HTTPError) -> dict[str, Any]:
     try:
-        with urllib.request.urlopen(req, timeout=timeout_s) as resp:  # noqa: S310 -- internal API
-            payload = json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        elapsed = time.monotonic() - start
-        return ({"error": f"HTTP {e.code}: {e.reason}"}, elapsed)
-    except urllib.error.URLError as e:
-        elapsed = time.monotonic() - start
-        return ({"error": f"URLError: {e.reason}"}, elapsed)
+        raw = exc.read()
+    except Exception:  # noqa: BLE001 -- best effort diagnostic only
+        raw = b""
+    if not raw:
+        return {}
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except Exception:  # noqa: BLE001 -- non-JSON error bodies are valid
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _retry_after_s(
+    *,
+    code: int,
+    headers: email.message.Message,
+    payload: dict[str, Any],
+    attempt: int,
+    retry_backoff_s: float,
+) -> float:
+    retry_after = headers.get("Retry-After")
+    if retry_after:
+        try:
+            return max(0.0, float(retry_after))
+        except ValueError:
+            pass
+
+    for key in ("retry_after_seconds", "retry_after_s"):
+        value = payload.get(key)
+        if isinstance(value, int | float):
+            return max(0.0, float(value))
+    detail = payload.get("detail")
+    if isinstance(detail, dict):
+        for key in ("retry_after_seconds", "retry_after_s"):
+            value = detail.get(key)
+            if isinstance(value, int | float):
+                return max(0.0, float(value))
+
+    # Genie's app-side breaker cools down after 20s. Respect that by default
+    # so the eval can run immediately after the live Genie regression suite.
+    multiplier = max(1, attempt)
+    if code == 429:
+        multiplier += 1
+    return max(0.0, retry_backoff_s * multiplier)
+
+
+def _ask(
+    base: str,
+    token: str | None,
+    question: str,
+    timeout_s: int,
+    *,
+    attempts: int = DEFAULT_ATTEMPTS,
+    retry_backoff_s: float = DEFAULT_RETRY_BACKOFF_S,
+    sleep: Any = time.sleep,
+) -> tuple[dict[str, Any], float]:
+    """Hit /api/genie/message; return (response_json, elapsed_s).
+
+    The eval often runs immediately after the live Genie regression suite.
+    That can leave the deployed app's Genie breaker half-open or cooling down.
+    Retry only clearly transient HTTP failures; policy/refusal failures still
+    score normally through the returned response body.
+    """
+    attempts = max(1, attempts)
+    start = time.monotonic()
+    last_error: dict[str, Any] | None = None
+    for attempt in range(1, attempts + 1):
+        req = _request_payload(base, token, question)
+        try:
+            with urllib.request.urlopen(req, timeout=timeout_s) as resp:  # noqa: S310 -- internal API
+                payload = json.loads(resp.read().decode("utf-8"))
+            elapsed = time.monotonic() - start
+            return payload, elapsed
+        except urllib.error.HTTPError as exc:
+            payload = _http_error_payload(exc)
+            retryable = exc.code in _RETRYABLE_HTTP_CODES and attempt < attempts
+            last_error = {
+                "error": f"HTTP {exc.code}: {exc.reason}",
+                "http_status": exc.code,
+                "attempts": attempt,
+            }
+            if retryable:
+                delay_s = _retry_after_s(
+                    code=exc.code,
+                    headers=exc.headers,
+                    payload=payload,
+                    attempt=attempt,
+                    retry_backoff_s=retry_backoff_s,
+                )
+                log.warning(
+                    "  transient HTTP %s from Genie eval; retrying in %.1fs (%d/%d)",
+                    exc.code,
+                    delay_s,
+                    attempt + 1,
+                    attempts,
+                )
+                sleep(delay_s)
+                continue
+            elapsed = time.monotonic() - start
+            return last_error, elapsed
+        except urllib.error.URLError as exc:
+            retryable = attempt < attempts
+            last_error = {
+                "error": f"URLError: {exc.reason}",
+                "attempts": attempt,
+            }
+            if retryable:
+                delay_s = retry_backoff_s * attempt
+                log.warning(
+                    "  transient URL error from Genie eval; retrying in %.1fs (%d/%d)",
+                    delay_s,
+                    attempt + 1,
+                    attempts,
+                )
+                sleep(delay_s)
+                continue
+            elapsed = time.monotonic() - start
+            return last_error, elapsed
     elapsed = time.monotonic() - start
-    return payload, elapsed
+    return last_error or {"error": "unknown Genie eval request failure"}, elapsed
 
 
 def _warehouse_creds() -> tuple[str, str, str] | None:
@@ -489,6 +603,9 @@ def main() -> int:
     parser.add_argument("--base", required=True, help="Base URL for the MIP API")
     parser.add_argument("--token", default=os.environ.get("DATABRICKS_TOKEN"))
     parser.add_argument("--timeout", type=int, default=60)
+    parser.add_argument("--attempts", type=int, default=DEFAULT_ATTEMPTS)
+    parser.add_argument("--retry-backoff-s", type=float, default=DEFAULT_RETRY_BACKOFF_S)
+    parser.add_argument("--pace-s", type=float, default=DEFAULT_PACE_S)
     parser.add_argument("--report-dir", default=str(REPORT_DIR))
     parser.add_argument("--update-baseline", action="store_true",
                         help="Treat this run's overall score as the new floor")
@@ -504,9 +621,16 @@ def main() -> int:
     log.info("genie_eval: loaded %d questions", len(questions))
 
     scores: list[QuestionScore] = []
-    for q in questions:
+    for idx, q in enumerate(questions):
         log.info("ask %s: %s", q["id"], q["question"][:60])
-        response, elapsed_s = _ask(args.base, args.token, q["question"], args.timeout)
+        response, elapsed_s = _ask(
+            args.base,
+            args.token,
+            q["question"],
+            args.timeout,
+            attempts=args.attempts,
+            retry_backoff_s=args.retry_backoff_s,
+        )
         s = _score_question(q, response, elapsed_s)
         log.info(
             "  → score %.0f (latency %.1fs, %s)",
@@ -514,6 +638,8 @@ def main() -> int:
             "PASS" if s.passed else "FAIL: " + "; ".join(s.notes),
         )
         scores.append(s)
+        if args.pace_s > 0 and idx < len(questions) - 1:
+            time.sleep(args.pace_s)
 
     stamp = datetime.now(UTC).strftime("%Y-%m-%dT%H-%M-%SZ")
     Path(args.report_dir).mkdir(parents=True, exist_ok=True)

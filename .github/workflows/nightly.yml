@@ -371,7 +371,21 @@ jobs:
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
           DATABRICKS_WAREHOUSE_ID: ${{ secrets.DATABRICKS_WAREHOUSE_ID }}
           GENIE_SPACE_ID: ${{ secrets.GENIE_SPACE_ID }}
-        run: python tools/genie_eval.py --base "$MIP_APP_URL" --token "$MIP_BEARER_TOKEN" --timeout 120
+        run: |
+          python tools/wait_app_ready.py \
+            --base "$MIP_APP_URL" \
+            --token "$MIP_BEARER_TOKEN" \
+            --timeout-s 600 \
+            --interval-s 20 \
+            --breakers warehouse,lakebase,genie \
+            --genie-probe-question "Summarize the current Module 0 mortgage lead opportunity and cite the trusted assets."
+          python tools/genie_eval.py \
+            --base "$MIP_APP_URL" \
+            --token "$MIP_BEARER_TOKEN" \
+            --timeout 120 \
+            --attempts 4 \
+            --retry-backoff-s 20 \
+            --pace-s 2
       - name: Run real-UC Playwright specs
         # Config + specs both live under `frontend/` so `@playwright/test`
         # imports resolve against frontend/node_modules. E2E_LIVE-gated

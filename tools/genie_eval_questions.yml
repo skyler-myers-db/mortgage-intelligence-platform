@@ -208,16 +208,17 @@ questions:
   # The known BLOCKED-data trap. We INTENTIONALLY ask the question that
   # caused the round-4 hallucination so the eval catches a regression
   # if the YAML clarification gets reverted. The answer must mention
-  # blocked / pending / unavailable so the user knows why.
+  # blocked / pending / unavailable / roadmap so the user knows why.
   - id: blocked_permit_question
     category: governance
     question: Show HELOC candidates with recent permits and strong equity.
     must_cite: []
     forbid_keywords: []
     require_keywords:
-      - blocked  # OR pending OR unavailable — checked by OR-ing all
+      - blocked  # OR pending OR unavailable OR roadmap — checked by OR-ing all
       - pending
       - unavailable
+      - roadmap
     min_rows: 0
     max_latency_s: 6
 
