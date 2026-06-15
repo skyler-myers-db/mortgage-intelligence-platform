@@ -89,7 +89,7 @@ the authoritative live status is the output of the nightly run (see
 | Widget | Type | Dataset | Purpose | Verdict |
 |---|---|---|---|---|
 | `chart_evidence_daily` | line | `ds_evidence_daily` | 30-day refresh-date evidence-event volume, colored by `signal_type`. | 🟢 |
-| `chart_evidence_by_signal` | bar | `ds_evidence_by_signal` | Evidence counts by `signal_type`, colored by `source_product`. Demonstrates the `permit` / `listing` gap until those Cotality products are licensed. | 🟢 |
+| `chart_evidence_by_signal` | bar | `ds_evidence_by_signal` | Evidence counts by `signal_type`, colored by `source_product`. Demonstrates live MLS/listing evidence while keeping filed Building Permits visibly pending until that Cotality source is licensed. | 🟢 |
 
 ---
 
