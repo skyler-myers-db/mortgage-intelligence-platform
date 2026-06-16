@@ -81,10 +81,7 @@ def _confirmed_payload_for_action(action_type: str) -> dict[str, object]:
     )
     assert message.status_code == 200
     answer = message.json()
-    action = next(
-        row for row in answer["actions"]
-        if row["action_type"] == action_type
-    )
+    action = next(row for row in answer["actions"] if row["action_type"] == action_type)
     return {
         "action_type": action["action_type"],
         "conversation_id": answer["conversation_id"],
@@ -446,7 +443,10 @@ def test_genie_message_allows_benign_ignore_prompt_to_reach_repository() -> None
 @pytest.mark.parametrize(
     ("question", "matcher"),
     [
-        ("List all properties on Michigan Avenue with rate spread above 100 bps.", _pii_prompt_match),
+        (
+            "List all properties on Michigan Avenue with rate spread above 100 bps.",
+            _pii_prompt_match,
+        ),
         ("Show the street addresses for borrowers in Illinois.", _pii_prompt_match),
         ("What is the exact servicer string for borrower B-12345?", _pii_prompt_match),
         ("Give me the names of every borrower in ZIP 60601.", _pii_prompt_match),
@@ -602,6 +602,46 @@ def test_fico_source_gap_copy_names_credit_data_not_permits() -> None:
     assert "source_readiness" in answer
     assert "building permits" not in answer
     assert "mls/listing" not in answer
+
+
+def test_permit_source_gap_copy_names_pending_roadmap_status() -> None:
+    class _ExplodingRepo:
+        calls = 0
+
+        def respond(
+            self,
+            question: str,
+            conversation_id: str | None = None,
+        ) -> GenieMessageResponse:
+            _ = question, conversation_id
+            self.calls += 1
+            raise AssertionError("permit source-gap prompt reached Genie repository")
+
+    repo = _ExplodingRepo()
+    prior_repo = app.dependency_overrides.get(get_genie_answer_repository)
+    app.dependency_overrides[get_genie_answer_repository] = lambda: repo
+    try:
+        res = client.post(
+            "/api/genie/message",
+            json={"question": "Show HELOC candidates with recent permits and strong equity."},
+            headers={"X-Forwarded-Email": "lo@example.com"},
+        )
+    finally:
+        if prior_repo is None:
+            app.dependency_overrides.pop(get_genie_answer_repository, None)
+        else:
+            app.dependency_overrides[get_genie_answer_repository] = prior_repo
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["source"] == "data_gap"
+    assert repo.calls == 0
+    answer = body["answer"].lower()
+    assert "building permits" in answer
+    assert "pending" in answer
+    assert "roadmap" in answer
+    assert "source_readiness" in answer
+    assert "will not infer filed permit activity" in answer
 
 
 def test_genie_client_error_returns_sanitized_retryable_503() -> None:
@@ -1311,8 +1351,7 @@ def test_genie_create_draft_campaign_persists_full_cohort_criteria() -> None:
     assert body["ok"] is True
     assert body["campaign_id"] == "campaign-1"
     campaign_params = next(
-        params for sql, params in lakebase.fetchones
-        if "INSERT INTO mip_app.campaigns" in sql
+        params for sql, params in lakebase.fetchones if "INSERT INTO mip_app.campaigns" in sql
     )
     criteria = json.loads(str(campaign_params["criteria"]))
     assert criteria["source"] == "trusted_sql"
@@ -1648,8 +1687,7 @@ class _LargeBorrowerActionRepo:
                     label="Save 100 borrowers",
                     action_type="save_borrowers",
                     description="Save returned borrowers.",
-                    route="/lead-queue?zips="
-                    + ",".join(f"{60000 + i:05d}" for i in range(150)),
+                    route="/lead-queue?zips=" + ",".join(f"{60000 + i:05d}" for i in range(150)),
                     borrower_ids=borrower_ids,
                     criteria={
                         "source": "genie",
@@ -1695,8 +1733,7 @@ def test_genie_open_cohort_materializes_lakebase_cohort_and_returns_filtered_rou
     assert "cohort_id=11111111-1111-1111-1111-111111111111" in body["route"]
     assert "zips=60617%2C60628" in body["route"]
     cohort_params = next(
-        params for sql, params in lakebase.fetchones
-        if "INSERT INTO mip_app.genie_cohorts" in sql
+        params for sql, params in lakebase.fetchones if "INSERT INTO mip_app.genie_cohorts" in sql
     )
     assert json.loads(str(cohort_params["route_filters"])) == {
         "borrower_ids": ["B-102FL7THC6Q3L"],
@@ -1739,8 +1776,7 @@ def test_genie_open_cohort_accepts_broad_zip_route_without_truncating_criteria()
 
     assert res.status_code == 200
     cohort_params = next(
-        params for sql, params in lakebase.fetchones
-        if "INSERT INTO mip_app.genie_cohorts" in sql
+        params for sql, params in lakebase.fetchones if "INSERT INTO mip_app.genie_cohorts" in sql
     )
     filters = json.loads(str(cohort_params["route_filters"]))
     assert filters["source"] == "trusted_sql"
