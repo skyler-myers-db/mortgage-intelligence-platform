@@ -10,6 +10,7 @@ Prior to the 2026-04-22 real-data walkthrough this router could bypass the
 live Genie path. That regression has been corrected; production modules now
 serve only live Genie/trusted-SQL answers or an explicit degraded-state message.
 """
+
 import hashlib
 import re
 from typing import Annotated, Any
@@ -39,6 +40,7 @@ from backend.services.genie_answers import (
 from backend.services.genie_audit import genie_audit_entity_id
 from backend.services.genie_client import GenieClientError
 from backend.services.genie_sales_ops import sales_ops_genie_response
+from backend.services.genie_source_gaps import source_gap_answer
 from backend.services.genie_trusted_assets import trusted_assets
 from backend.services.lakebase import LakebaseClient, LakebaseError, get_lakebase_client
 from backend.services.repositories import BorrowerRepository, GenieAnswerRepository
@@ -239,9 +241,9 @@ def _record_genie_session(
         return
     if response.source in {"degraded", "policy_blocked", "refused", "data_gap", "out_of_footprint"}:
         return
-    question_hash = response.question_hash or hashlib.sha256(
-        response.question.encode("utf-8")
-    ).hexdigest()[:16]
+    question_hash = (
+        response.question_hash or hashlib.sha256(response.question.encode("utf-8")).hexdigest()[:16]
+    )
     message_id = response.message_id or f"{response.source}-{question_hash}"
     params = {
         "actor_email": actor,
@@ -347,29 +349,8 @@ def _refused_genie_response(
     )
 
 
-_CREDIT_SOURCE_GAP_RE = re.compile(
-    r"\b(?:fico|credit\s+scores?|credit[-\s]+bureau|tri[-\s]+merge|vantage\s*score)\b",
-    re.IGNORECASE,
-)
-
-
 def _source_readiness_asset() -> str:
     return qualify("gold", "source_readiness")
-
-
-def _source_gap_answer(question: str, source_gap_match: str) -> str:
-    source = _source_readiness_asset()
-    if _CREDIT_SOURCE_GAP_RE.search(question) or _CREDIT_SOURCE_GAP_RE.search(source_gap_match):
-        return (
-            "Credit-bureau and FICO score feeds are not live in this workspace yet. "
-            "I will not infer credit-score eligibility or count the missing feed as "
-            f"zero demand. Source: {source}."
-        )
-    return (
-        "Cotality Building Permits records are not live in this workspace yet. "
-        "Cotality MLS/listing rows are live, but I will not infer filed permit "
-        f"activity from listing or propensity signals. Source: {source}."
-    )
 
 
 def _is_outreach_writer_request(question: str) -> bool:
@@ -381,7 +362,6 @@ def _is_outreach_writer_request(question: str) -> bool:
         r"\bdraft\b.*\b(email|sms|text|message|letter)\b",
     )
     return any(re.search(pattern, q) for pattern in patterns)
-
 
 
 @router.post("/start", response_model=GenieStartResponse)
@@ -627,7 +607,11 @@ def genie_message(
         response = GenieMessageResponse(
             conversation_id=payload.conversation_id or "",
             question=payload.question,
-            answer=_source_gap_answer(payload.question, source_gap_match),
+            answer=source_gap_answer(
+                payload.question,
+                source_gap_match,
+                source=source_readiness_asset,
+            ),
             source="data_gap",
             trusted_assets=[source_readiness_asset],
             question_hash=question_hash,
@@ -734,7 +718,9 @@ def genie_message(
             actor=actor,
             action="genie.sales_ops_query",
             entity_type="genie_message",
-            entity_id=sales_ops_response.message_id or sales_ops_response.question_hash or "sales_ops",
+            entity_id=sales_ops_response.message_id
+            or sales_ops_response.question_hash
+            or "sales_ops",
             payload_json={
                 "conversation_id": sales_ops_response.conversation_id,
                 "message_id": sales_ops_response.message_id,
@@ -803,7 +789,11 @@ def genie_message(
         question_hash = hashlib.sha256(payload.question.encode("utf-8")).hexdigest()[:16]
         _ = background
         footprint_label = ", ".join(footprint_codes)
-        footprint_view = f"full {len(footprint_codes)}-state coverage view" if footprint_codes else "full coverage view"
+        footprint_view = (
+            f"full {len(footprint_codes)}-state coverage view"
+            if footprint_codes
+            else "full coverage view"
+        )
         _required_audit_write(
             audit,
             actor=actor,
