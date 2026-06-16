@@ -212,6 +212,16 @@ def _ask(
         try:
             with urllib.request.urlopen(req, timeout=timeout_s) as resp:  # noqa: S310 -- internal API
                 payload = json.loads(resp.read().decode("utf-8"))
+            if payload.get("source") == "degraded" and attempt < attempts:
+                delay_s = retry_backoff_s * attempt
+                log.warning(
+                    "  transient degraded Genie response; retrying in %.1fs (%d/%d)",
+                    delay_s,
+                    attempt + 1,
+                    attempts,
+                )
+                sleep(delay_s)
+                continue
             elapsed = time.monotonic() - start
             return payload, elapsed
         except urllib.error.HTTPError as exc:

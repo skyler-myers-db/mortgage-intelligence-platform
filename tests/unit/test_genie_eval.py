@@ -63,6 +63,33 @@ def test_ask_retries_transient_503(monkeypatch) -> None:
     assert sleeps == [0.01]
 
 
+def test_ask_retries_degraded_response_body(monkeypatch) -> None:
+    calls: list[int] = []
+    sleeps: list[float] = []
+
+    def fake_urlopen(req, timeout):  # noqa: ANN001
+        calls.append(timeout)
+        if len(calls) == 1:
+            return _Response({"source": "degraded", "answer": "warming"})
+        return _Response({"source": "genie", "answer": "ok"})
+
+    monkeypatch.setattr(genie_eval.urllib.request, "urlopen", fake_urlopen)
+
+    payload, _elapsed = genie_eval._ask(
+        "https://example.invalid",
+        "token",
+        "question",
+        30,
+        attempts=2,
+        retry_backoff_s=20,
+        sleep=sleeps.append,
+    )
+
+    assert payload == {"source": "genie", "answer": "ok"}
+    assert calls == [30, 30]
+    assert sleeps == [20]
+
+
 def test_ask_does_not_retry_non_transient_http_error(monkeypatch) -> None:
     calls = 0
 
