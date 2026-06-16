@@ -36,7 +36,7 @@ describe('buildBorrowerStory', () => {
     expect(prose).toContain('10.04%'); // current rate
     expect(prose).toContain('356 bps above market');
     expect(prose).toContain('93% equity'); // 100 - ltv(7)
-    expect(prose).toContain('Refinance + HELOC is the next-best move');
+    expect(prose).toContain('Primary offer: Refinance + home-equity review.');
   });
 
   it('verifies every numeric claim against its source field', () => {
@@ -57,13 +57,13 @@ describe('buildBorrowerStory', () => {
     const story = buildBorrowerStory(dossier({ recommended_offer: 'Refi to 5/1 ARM' }));
     expect(story.unverifiedTokens).toEqual([]);
     expect(story.allVerified).toBe(true);
-    expect(story.sentences.join(' ')).toContain('Refi to 5/1 ARM is the next-best move');
+    expect(story.sentences.join(' ')).toContain('Primary offer: Refi to 5/1 ARM.');
   });
 
   it('gates the equity claim when AVM is unavailable (no fabricated equity)', () => {
     const story = buildBorrowerStory(dossier({ avm_value: 0 }));
     expect(story.claims.some((c) => c.field === 'ltv')).toBe(false); // no equity claim
-    expect(story.sentences.join(' ')).not.toContain('equity');
+    expect(story.sentences.join(' ')).not.toContain('93% equity');
     expect(story.allVerified).toBe(true); // remaining claims still verify
   });
 

@@ -1,5 +1,6 @@
 import type { LeadSummary } from '../../types';
 import type { LeadExportContext } from './LeadTable.types';
+import { offerDisplayLabel } from '../../lib/offerLanguage';
 
 function csvEscape(raw: string): string {
   const v = /^[=+\-@]/.test(raw) ? `'${raw}` : raw;
@@ -29,7 +30,7 @@ export function buildLeadCsv(
     'rate_spread_bps',
     'opportunity_score',
     'confidence',
-    'recommended_offer',
+    'primary_offer',
     'approval_status',
     'outreach_status',
     'approved_at',
@@ -48,7 +49,7 @@ export function buildLeadCsv(
     'current_lender_ref',
     'current_lien_balance',
     'second_pos_amount',
-    'has_permit',
+    'filed_permit_signal',
     'listed_for_sale',
     'related_property_count',
     'marketing_eligible',
@@ -77,7 +78,7 @@ export function buildLeadCsv(
       l.rate_spread_bps,
       l.opportunity_score,
       l.confidence,
-      l.recommended_offer,
+      offerDisplayLabel(l.recommended_offer_code, l.recommended_offer),
       approvals[l.borrower_id] ?? l.approval_status ?? 'pending',
       l.outreach_status ?? 'none',
       l.approved_at ?? '',
@@ -110,4 +111,3 @@ export function buildLeadCsv(
   );
   return [...metadata, header.join(','), ...rows].join('\n');
 }
-

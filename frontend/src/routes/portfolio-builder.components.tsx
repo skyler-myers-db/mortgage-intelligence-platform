@@ -86,7 +86,7 @@ export function StateMultiSelect({
 
 /**
  * Campaign ROI projector (re-audit #4 Buyer-Wow #7) — turns the build's
- * high-intent lead count into a board-room revenue headline with fully
+ * refinance-economics lead count into a board-room revenue headline with fully
  * visible, operator-tunable assumptions. Pure client-side; recomputes
  * instantly; never calls the network. The headline answers the CFO
  * question ("what is this build worth?") without hiding the math.
@@ -127,7 +127,7 @@ export function RoiProjector({ leads }: { leads: number }) {
           <div className="roi-projector__headline-label">
             projected origination revenue
             <span className="muted">
-              {' '}from {Math.round(leads).toLocaleString()} high-intent leads
+              {' '}from {Math.round(leads).toLocaleString()} refi-economics leads
             </span>
           </div>
         </div>

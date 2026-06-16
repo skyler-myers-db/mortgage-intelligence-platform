@@ -39,6 +39,7 @@ from backend.schemas.analytics import (
 from backend.services.databricks_sql import DatabricksSqlClient
 from backend.services.databricks_sql_helpers import qualify
 from backend.services.resilience import TTLCache
+from backend.services.scoring import source_display_label
 
 
 def _date_text(value: object) -> str | None:
@@ -89,6 +90,12 @@ def _confidence_source(signal_type: str) -> str:
         "AVG(mip.gold.evidence_events.confidence); this signal uses the governed "
         "deterministic confidence assigned in gold_evidence_events.sql."
     )
+
+
+def _confidence_label(signal_type: str) -> str:
+    if signal_type == "equity":
+        return "Mean evidence confidence, using AVM confidence when available."
+    return "Mean governed evidence confidence."
 
 
 class DatabricksAnalyticsRepository:
@@ -281,7 +288,7 @@ class DatabricksAnalyticsRepository:
         "  CASE "
         "    WHEN SIZE(b.segment_codes) = 0 THEN 'None / Unsegmented' "
         "    WHEN b.segment_codes[0] = 'equity' THEN 'Home Equity Candidate' "
-        "    WHEN b.segment_codes[0] = 'itm' THEN 'In the Money' "
+        "    WHEN b.segment_codes[0] = 'itm' THEN 'Prime Refi Candidates' "
         "    WHEN b.segment_codes[0] = 'investor' THEN 'Investor / Multi-Property' "
         "    WHEN b.segment_codes[0] = 'listed' THEN 'Listed for Sale' "
         "    WHEN b.segment_codes[0] = 'permit' THEN 'HELOC Intent' "
@@ -322,7 +329,7 @@ class DatabricksAnalyticsRepository:
     _SEGMENT_OVERVIEW_SQL = (
         "WITH segment_dim AS ( "
         "  SELECT * FROM VALUES "
-        "    ('itm', 'In the Money', 'Borrowers meeting rate-spread and equity thresholds.'), "
+        "    ('itm', 'Prime Refi Candidates', 'Borrowers passing the refinance economics screen.'), "
         "    ('equity', 'Home Equity Candidate', 'Borrowers with clean equity capacity.'), "
         "    ('investor', 'Investor / Multi-Property', 'Borrowers linked to investor or multi-property signals.'), "
         "    ('retention', 'Retention Risk', 'Current-customer retention opportunities.'), "
@@ -385,7 +392,7 @@ class DatabricksAnalyticsRepository:
         "  state AS state, "
         "  segment_code AS segment_code, "
         "  CASE "
-        "    WHEN segment_code = 'itm' THEN 'In the Money' "
+        "    WHEN segment_code = 'itm' THEN 'Prime Refi Candidates' "
         "    WHEN segment_code = 'equity' THEN 'Home Equity Candidate' "
         "    WHEN segment_code = 'investor' THEN 'Investor / Multi-Property' "
         "    WHEN segment_code = 'retention' THEN 'Retention Risk' "
@@ -418,7 +425,7 @@ class DatabricksAnalyticsRepository:
         "    state, "
         "    segment_code, "
         "    CASE "
-        "      WHEN segment_code = 'itm' THEN 'In the Money' "
+        "      WHEN segment_code = 'itm' THEN 'Prime Refi Candidates' "
         "      WHEN segment_code = 'equity' THEN 'Home Equity Candidate' "
         "      WHEN segment_code = 'investor' THEN 'Investor / Multi-Property' "
         "      WHEN segment_code = 'retention' THEN 'Retention Risk' "
@@ -534,9 +541,9 @@ class DatabricksAnalyticsRepository:
             )
             stages = [
                 FunnelStage(stage="Addressable", stage_order=1, borrower_count=totals.addressable_borrowers),
-                FunnelStage(stage="In the Money", stage_order=2, borrower_count=totals.in_the_money_borrowers),
-                FunnelStage(stage="High Opportunity", stage_order=3, borrower_count=totals.high_opportunity_borrowers),
-                FunnelStage(stage="Offer Recommended", stage_order=4, borrower_count=totals.offer_recommended_borrowers),
+                FunnelStage(stage="Refi Economics", stage_order=2, borrower_count=totals.in_the_money_borrowers),
+                FunnelStage(stage="Opportunity Score 75+", stage_order=3, borrower_count=totals.high_opportunity_borrowers),
+                FunnelStage(stage="Primary Offer Selected", stage_order=4, borrower_count=totals.offer_recommended_borrowers),
                 FunnelStage(stage="Approved", stage_order=5, borrower_count=totals.approved_borrowers),
                 FunnelStage(stage="Actioned", stage_order=6, borrower_count=totals.actioned_borrowers),
             ]
@@ -753,9 +760,11 @@ class DatabricksAnalyticsRepository:
                         signal_type=str(row.get("signal_type") or ""),
                         source_product=str(row.get("source_product") or ""),
                         source_table=str(row.get("source_table") or "mip.gold.evidence_events"),
+                        source_label=source_display_label(str(row.get("source_table") or "mip.gold.evidence_events")),
                         event_count=_int(row.get("event_count")),
                         mean_confidence=_float_or_none(row.get("mean_confidence")),
                         confidence_source=_confidence_source(str(row.get("signal_type") or "")),
+                        confidence_label=_confidence_label(str(row.get("signal_type") or "")),
                     )
                     for row in self._execute_signal_template(self._EVIDENCE_BY_SIGNAL_SQL, analytics_filters)
                 ],

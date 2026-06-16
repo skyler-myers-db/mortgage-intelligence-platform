@@ -222,6 +222,11 @@ describe('buildLeadCsv', () => {
     expect(csv).toContain(
       'approval_status,outreach_status,approved_at,outreach_at,assigned_to_email,assigned_at,latest_disposition_outcome',
     );
+    expect(csv).toContain('primary_offer');
+    expect(csv).toContain('filed_permit_signal');
+    expect(csv).toContain('Refinance + home-equity review');
+    expect(csv).not.toContain('recommended_offer');
+    expect(csv).not.toContain('has_permit');
     expect(csv).toContain(
       'aging_days,is_owner_occupied,is_investor,is_current_customer,is_former_customer,is_competitor_lien,current_lender_ref',
     );

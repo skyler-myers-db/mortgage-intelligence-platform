@@ -64,7 +64,7 @@ def test_offers_router_uses_refresh_applied_thresholds_from_offer_inputs() -> No
     }
     assert body["offer_code"] == "refi"
     assert body["alternatives"][0]["reason_not_chosen"] == (
-        "Equity 39% is below the HELOC threshold (42%); cross-sell would not underwrite."
+        "Equity 39% is below the HELOC threshold (42%), so the primary review stays refinance-only."
     )
 
 

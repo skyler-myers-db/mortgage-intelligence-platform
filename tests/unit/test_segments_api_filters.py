@@ -16,7 +16,7 @@ class _CaptureSegmentRepo:
         return [
             SegmentSummary(
                 code="itm",
-                name="In the Money",
+                name="Prime Refi Candidates",
                 count=1,
                 delta="+0%",
                 avg_score=80,

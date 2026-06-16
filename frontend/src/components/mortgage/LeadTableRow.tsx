@@ -1,6 +1,7 @@
 import { Fragment, type CSSProperties, type MouseEvent as ReactMouseEvent } from 'react';
 import type { LeadSummary } from '../../types';
 import { DRAWER_SOURCES } from '../../lib/drawerSources';
+import { offerDisplayLabel } from '../../lib/offerLanguage';
 import { segmentColor, segmentName } from '../../lib/segmentMetadata';
 import { Icon } from '../Icon';
 import { Button, Chip, EvidenceChip } from '../Primitives';
@@ -180,7 +181,9 @@ export function LeadTableRow({
           +{lead.rate_spread_bps}
         </td>
         <td>
-          <span className="mono fs-12 text-1">{lead.recommended_offer}</span>{' '}
+          <span className="mono fs-12 text-1">
+            {offerDisplayLabel(lead.recommended_offer_code, lead.recommended_offer)}
+          </span>{' '}
           <EvidenceChip source={DRAWER_SOURCES.nbo}>{DRAWER_SOURCES.nbo.title}</EvidenceChip>
         </td>
         <td className="tbl-cell--right">

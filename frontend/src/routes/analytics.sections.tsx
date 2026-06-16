@@ -7,6 +7,7 @@ import { Link } from 'react-router-dom';
 import { Icon } from '../components/Icon';
 import { GlossaryTerm } from '../components/GlossaryTerm';
 import { KpiCard } from '../components/mortgage/KpiCard';
+import { offerDisplayLabel } from '../lib/offerLanguage';
 import type {
   EconomicsAnalyticsResponse,
   EvidenceBySignalRow,
@@ -55,8 +56,8 @@ export function ExecutiveView({ data, leadParams }: { data: ExecutiveAnalyticsRe
     <>
       <div className="kpi-row">
         <KpiCard label="Addressable Borrowers" value={fmt(data.totals.addressable_borrowers)} delta={data.totals.snapshot_date ?? undefined} deltaDir="flat" />
-        <KpiCard label="In the Money" value={fmt(data.totals.in_the_money_borrowers)} delta={`${fmt(data.totals.high_opportunity_borrowers)} high score`} deltaDir="up" />
-        <KpiCard label="Offers Recommended" value={fmt(data.totals.offer_recommended_borrowers)} delta="Next-best-offer ready" deltaDir="up" />
+        <KpiCard label="Refi Economics" value={fmt(data.totals.in_the_money_borrowers)} delta={`${fmt(data.totals.high_opportunity_borrowers)} score 75+`} deltaDir="up" />
+        <KpiCard label="Primary Offer Paths" value={fmt(data.totals.offer_recommended_borrowers)} delta="Offer path assigned" deltaDir="up" />
         <KpiCard label="Approved Outreach" value={fmt(data.totals.approved_borrowers)} delta={`${fmt(data.totals.actioned_borrowers)} actioned`} deltaDir="flat" />
       </div>
       <section className="surface analytics-section">
@@ -65,8 +66,8 @@ export function ExecutiveView({ data, leadParams }: { data: ExecutiveAnalyticsRe
             <h2 className="h-3">Activation funnel</h2>
             <p className="analytics-panel-note">
               Narrowing path from addressable borrower to actioned outreach.
-              Offer coverage remains in Pipeline Metrics because nearly every
-              borrower has a governed next-best-offer branch.
+              Offer-path coverage remains in Pipeline Metrics because nearly every
+              borrower receives a governed branch, including nurture.
             </p>
           </div>
           <Link className="btn btn--sm" to={leadQueueHref(leadParams)}>Open queue</Link>
@@ -136,7 +137,7 @@ export function GeographyView({ data, leadParams }: { data: GeographyAnalyticsRe
         </section>
       </div>
       <section className="surface analytics-section">
-        <div className="surface__hdr"><h2 className="h-3">Top ZIPs in the Money</h2></div>
+        <div className="surface__hdr"><h2 className="h-3">Top ZIPs by Refi Economics</h2></div>
         <div className="surface__body">
           <DataTable<TopZipOpportunityRow>
             rows={data.top_zips}
@@ -144,9 +145,9 @@ export function GeographyView({ data, leadParams }: { data: GeographyAnalyticsRe
             columns={[
               { key: 'zip', label: 'ZIP', render: (row) => <Link to={leadQueueHref({ state: row.state, zip: row.zip, ...leadParams })}>{row.zip}</Link> },
               { key: 'place', label: 'Market', render: (row) => `${row.city ?? 'Unknown'}, ${row.state}` },
-              { key: 'itm', label: 'In the Money', render: (row) => fmt(row.in_the_money_borrowers) },
-              { key: 'score', label: 'ITM Avg Score', render: (row) => row.mean_opportunity_score },
-              { key: 'spread', label: 'ITM Avg Spread', render: (row) => `${row.mean_rate_spread_bps} bps` },
+              { key: 'itm', label: 'Refi economics', render: (row) => fmt(row.in_the_money_borrowers) },
+              { key: 'score', label: 'Avg opportunity score', render: (row) => row.mean_opportunity_score },
+              { key: 'spread', label: 'Avg rate spread', render: (row) => `${row.mean_rate_spread_bps} bps` },
             ]}
           />
         </div>
@@ -193,7 +194,7 @@ export function EconomicsView({ data }: { data: EconomicsAnalyticsResponse }) {
                 { key: 'borrower', label: 'Borrower', render: (row) => <Link to={`/borrower-360/${row.borrower_id}`}>{borrowerDisplay(row)}</Link> },
                 { key: 'score', label: 'Score', render: (row) => row.opportunity_score },
                 { key: 'spread', label: 'Spread', render: (row) => `${row.rate_spread_bps} bps` },
-                { key: 'offer', label: 'Offer', render: (row) => row.recommended_offer },
+                { key: 'offer', label: 'Offer', render: (row) => offerDisplayLabel(null, row.recommended_offer) },
               ]}
             />
           </div>
@@ -228,7 +229,7 @@ export function SegmentsView({ data, leadParams }: { data: SegmentAnalyticsRespo
               { key: 'segment', label: 'Segment', render: (row) => <Link to={leadQueueHref({ segment_codes: row.segment_code, segment_mode: 'all', ...leadParams })}>{row.name}</Link> },
               { key: 'borrowers', label: 'Borrowers', render: (row) => fmt(row.borrower_count) },
               { key: 'score', label: 'Avg Score', render: (row) => row.mean_opportunity_score },
-              { key: 'itm', label: 'In the Money', render: (row) => fmt(row.in_the_money_borrowers) },
+              { key: 'itm', label: 'Refi economics', render: (row) => fmt(row.in_the_money_borrowers) },
               { key: 'approval', label: 'Approval', render: (row) => row.approval_rate === null || row.approval_rate === undefined ? '—' : `${row.approval_rate.toFixed(1)}%` },
             ]}
           />
@@ -538,7 +539,7 @@ export function SignalsView({
             rows={data.evidence_by_signal}
             value={(row) => row.event_count}
             label={(row) => signalLabel(row.signal_type)}
-            sublabel={(row) => `${row.source_product} · ${row.source_table} · ${row.mean_confidence === null || row.mean_confidence === undefined ? '—' : row.mean_confidence.toFixed(3)} mean evidence confidence`}
+            sublabel={(row) => `${row.source_product} · ${row.source_label ?? row.source_table} · ${row.mean_confidence === null || row.mean_confidence === undefined ? '—' : row.mean_confidence.toFixed(3)} ${row.confidence_label ?? 'mean evidence confidence'}`}
             href={(row) => analyticsHref({
               states: filterParams.states,
               segment_codes: filterParams.segmentCodes,

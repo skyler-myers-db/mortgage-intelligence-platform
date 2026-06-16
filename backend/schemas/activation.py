@@ -41,7 +41,7 @@ def _offer_code(value: str | None) -> str | None:
     if not code:
         return None
     if code not in _OFFER_CODES:
-        raise ValueError("offer_code must be a governed next-best-offer code")
+        raise ValueError("offer_code must be a supported primary offer code")
     return code
 
 

@@ -879,7 +879,7 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
               <th>Segments</th>
               {renderSortHeader('equity', 'Equity', 'tbl-cell--right')}
               {renderSortHeader('rate', 'Rate Δ (bps)', 'tbl-cell--right')}
-              <th>Next-best-offer</th>
+              <th>Primary offer</th>
               {renderSortHeader('score', 'Score', 'tbl-cell--right')}
               {renderSortHeader('confidence', 'Signal')}
               <th className="tbl-cell--approval lead-table__approval-header">Approval</th>

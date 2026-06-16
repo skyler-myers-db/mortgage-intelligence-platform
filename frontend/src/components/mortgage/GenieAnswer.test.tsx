@@ -3,6 +3,7 @@ import { describe, it, expect } from 'vitest';
 // unit test reads the design-system CSS text under Vitest only.
 import { readFileSync } from 'node:fs';
 import { stripQuestionRestatement } from './GenieAnswer';
+import { normalizeGenieAnswerLanguage } from '../../lib/genieAnswerLanguage';
 import { inferChartFromRows } from './GenieAnswer.logic';
 import {
   shouldPersistConversation,
@@ -77,6 +78,16 @@ describe('stripQuestionRestatement', () => {
     // return the original — never render an empty bubble.
     const input = 'You want to see the data.';
     expect(stripQuestionRestatement(input)).toBe('You want to see the data.');
+  });
+});
+
+describe('normalizeGenieAnswerLanguage', () => {
+  it('replaces refinance jargon with the product term users see elsewhere', () => {
+    const out = normalizeGenieAnswerLanguage(
+      'There are 55,037 in-the-money borrowers. The top ZIPs have in-the-money refinance candidates.',
+    );
+    expect(out).toContain('borrowers passing the refinance-economics screen');
+    expect(out).not.toContain('in-the-money');
   });
 });
 

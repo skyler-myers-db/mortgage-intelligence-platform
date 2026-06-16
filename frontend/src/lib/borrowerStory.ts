@@ -1,4 +1,5 @@
 import type { Borrower360 } from '../types';
+import { offerDisplayLabel } from './offerLanguage';
 
 /**
  * "Tell the story" — the borrower narrative (re-audit Buyer-Wow #3). The
@@ -115,9 +116,10 @@ export function buildBorrowerStory(b: Borrower360): BorrowerStory {
   }
 
   // Sentence 3 — the recommendation (no number to verify; the offer is text).
+  const offer = offerDisplayLabel(b.recommended_offer_code, b.recommended_offer);
   const s3 = b.recommended_offer
-    ? `${b.recommended_offer} is the next-best move.`
-    : 'Reviewed for the next-best offer.';
+    ? `Primary offer: ${offer}.`
+    : 'Reviewed for a primary offer path.';
 
   const sentences = [s1, s2, s3].filter((s) => s && s.trim().length > 1);
 

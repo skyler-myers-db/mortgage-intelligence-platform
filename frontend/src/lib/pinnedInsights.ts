@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from 'react';
 import type { GenieAnswer as GenieAnswerShape } from '../types';
+import { normalizeGenieAnswerLanguage } from './genieAnswerLanguage';
 
 /**
  * Pinned insights (re-audit Buyer-Wow #9) — "pin to Home" closes the loop
@@ -131,7 +132,7 @@ export function usePinnedInsights() {
  * breaks. Mirrors the inline grammar of MarkdownAnswer (GenieAnswer.markdown).
  */
 function toPlainSummary(s: string): string {
-  return s
+  return normalizeGenieAnswerLanguage(s)
     .replace(/`([^`]+?)`/g, '$1') // inline code
     .replace(/\*\*([^*]+?)\*\*/g, '$1') // bold
     .replace(/^\s*[-*•]\s+/gm, '') // leading bullet markers

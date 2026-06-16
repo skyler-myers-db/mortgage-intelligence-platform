@@ -9,6 +9,7 @@ import { Skeleton } from '../components/ui/Skeleton';
 import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 import { Reveal } from '../components/fx/Reveal';
 import { descriptorFor } from '../lib/drawerSources';
+import { offerDisplayLabel, offerShortDescription } from '../lib/offerLanguage';
 import {
   OUTREACH_CHANNELS,
   REJECT_REASONS,
@@ -32,8 +33,8 @@ export function OfferOrchestratorEmptyState() {
           <Chip variant="neutral" icon="check">Human approval gate</Chip>
         </div>
         <p className="body muted flush">
-          Every draft writes an audit row before it enters the outreach
-          queue. No outreach sends automatically.
+          The app selects one primary offer path, shows the alternatives it
+          ruled out, and keeps outreach in human review.
         </p>
       </div>
     </div>
@@ -236,6 +237,11 @@ function PrimaryOfferPanel({
           </div>
           {borrower && <ScoreBadge value={borrower.opportunity_score} />}
         </div>
+        {recommendation && (
+          <p className="muted fs-12 mt-1 flush">
+            {offerShortDescription(recommendation.offer_code)}
+          </p>
+        )}
         {recommendation ? (
           <p className="body mt-2">
             {recommendation.rationale ?? borrower?.why_now}
@@ -463,7 +469,9 @@ function AlternativesPanel({ recommendation }: OfferDetailsRowsProps) {
                 className="alt-card"
               >
                 <div className="split-row">
-                  <div className="fw-600 text-1">{alt.product_label}</div>
+                  <div className="fw-600 text-1">
+                    {offerDisplayLabel(alt.offer_code, alt.product_label)}
+                  </div>
                   <Chip variant="neutral" className="mono">{alt.offer_code}</Chip>
                 </div>
                 <p className="body muted flush">{alt.reason_not_chosen}</p>

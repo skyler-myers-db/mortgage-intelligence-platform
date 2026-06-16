@@ -20,6 +20,22 @@ from backend.services.repositories.databricks_genie_trust import (
 from backend.services.repositories.databricks_genie_visualization import (
     _plan_genie_visualization,
 )
+from backend.services.scoring import offer_display_label
+
+
+_SEGMENT_DISPLAY_LABELS = {
+    "itm": "Prime Refi Candidates",
+    "equity": "Home Equity Candidate",
+    "investor": "Investor / Multi-Property",
+    "retention": "Retention Risk",
+    "listed": "Listed for Sale",
+    "permit": "HELOC Intent",
+}
+
+
+def _segment_display_label(value: object) -> str:
+    raw = str(value or "").strip()
+    return _SEGMENT_DISPLAY_LABELS.get(raw, raw or "all segments")
 
 
 def _canonical_strategy_board_answer(
@@ -62,13 +78,17 @@ def _canonical_strategy_board_answer(
     )
     if rows:
         top = rows[0]
+        top_segment = _segment_display_label(top.get("segment_code"))
+        top_offer = offer_display_label(
+            str(top.get("leading_offer_code") or ""),
+            str(top.get("leading_recommended_offer") or ""),
+        )
         answer = (
             f"Use {borrower_asset} to prioritize the next 10,000 outreach touches "
             "by state, segment, and offer. "
-            f"The top lane is state {top.get('state')}, segment "
-            f"{top.get('segment_code')}, with "
+            f"The top lane is state {top.get('state')}, {top_segment}, with "
             f"{int(top.get('marketable_borrowers') or 0):,} marketable borrowers "
-            f"and leading offer {top.get('leading_recommended_offer') or top.get('leading_offer_code')}. "
+            f"and primary offer {top_offer}. "
             "The table ranks the remaining state-segment-offer lanes by average "
             "opportunity score and marketable borrower volume."
         )

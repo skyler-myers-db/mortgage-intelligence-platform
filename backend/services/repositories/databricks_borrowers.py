@@ -48,6 +48,7 @@ from backend.services.repositories.databricks_shared import (
 from backend.services.resilience import TTLCache
 from backend.services.scoring import (
     NBO_PRODUCT_LABELS,
+    offer_display_label,
     in_the_money,
     lead_score,
     next_best_offer,
@@ -120,18 +121,15 @@ _SCORE_FIELDS: dict[str, list[str]] = {
 }
 
 _FIT_FAIR_LENDING_NOTE = (
-    "Fit is surfaced for audit transparency. The CONV/FHA/VA treatment is parity-scored "
-    "in the data contract; customer compliance should review any future asymmetric change."
+    "Audit note: this signal supports marketing prioritization, not credit eligibility."
 )
 
 _RELATIONSHIP_FAIR_LENDING_NOTE = (
-    "Relationship status is a marketing prioritization signal, not credit eligibility. "
-    "Customer compliance should review retention treatment before production use."
+    "Audit note: relationship status supports marketing prioritization, not credit eligibility."
 )
 
 _INVESTOR_FAIR_LENDING_NOTE = (
-    "Investor, absentee, and corporate-owner attributes describe property/ownership posture, "
-    "not protected-class identity. They are exposed so compliance can review proxy risk."
+    "Audit note: ownership posture supports routing; it is not used for credit eligibility."
 )
 
 
@@ -567,7 +565,7 @@ def _offer_branches(row: dict[str, Any], selected_code: str) -> list[ProofOfferB
     branches = [
         ProofOfferBranch(
             code=code,
-            label=NBO_PRODUCT_LABELS[code],
+            label=offer_display_label(code, NBO_PRODUCT_LABELS[code]),
             passed=passed,
             selected=selected_code == code,
             reason=reason,
@@ -577,7 +575,7 @@ def _offer_branches(row: dict[str, Any], selected_code: str) -> list[ProofOfferB
     branches.append(
         ProofOfferBranch(
             code="nurture",
-            label=NBO_PRODUCT_LABELS["nurture"],
+            label=offer_display_label("nurture", NBO_PRODUCT_LABELS["nurture"]),
             passed=not positive_branch_passed,
             selected=selected_code == "nurture",
             reason="Fallback lane when no positive outreach branch is selected.",
@@ -661,7 +659,7 @@ def _proof_sql_templates() -> list[ProofReproduceQuery]:
                 f" FROM {borrower_dossier}"
                 " WHERE borrower_id = :borrower_id"
             ),
-            "Recomputes next-best-offer from the exact public inputs and thresholds.",
+            "Recomputes the primary offer from the exact public inputs and thresholds.",
         ),
         (
             "Evidence rows",
@@ -693,11 +691,11 @@ def _build_borrower_proof(row: dict[str, Any]) -> BorrowerProof:
     selected_code = str(row.get("recommended_offer_code") or "nurture")
     if selected_code not in NBO_PRODUCT_LABELS:
         selected_code = "nurture"
-        gaps.append("recommended_offer_code was outside the governed next-best-offer vocabulary.")
+        gaps.append("recommended_offer_code was outside the governed primary-offer vocabulary.")
     recomputed_offer = _recomputed_offer_code(row)
     if recomputed_offer != selected_code:
         gaps.append(
-            "Recomputed next-best-offer does not match the borrower dossier displayed offer; "
+            "Recomputed primary offer does not match the borrower dossier displayed offer; "
             f"recomputed {recomputed_offer}, dossier {selected_code}."
         )
 
@@ -820,7 +818,7 @@ def _build_borrower_proof(row: dict[str, Any]) -> BorrowerProof:
             source=qualify("gold", "borrower_dossier"),
         ),
         offer_code=selected_code,
-        offer_label=NBO_PRODUCT_LABELS[selected_code],
+        offer_label=offer_display_label(selected_code, NBO_PRODUCT_LABELS[selected_code]),
         offer_branches=_offer_branches(row, selected_code),
         evidence_rows=_proof_evidence_rows(row.get("evidence_events") or []),
         source_assets=borrower_proof_assets(),

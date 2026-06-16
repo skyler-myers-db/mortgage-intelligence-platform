@@ -220,7 +220,7 @@ describe('BorrowerProofDrawer', () => {
     });
 
     expect(document.body.textContent).toContain('mip.gold.borrower_dossier');
-    expect(document.body.textContent).toContain('licensed raw Cotality source paths are not exposed');
+    expect(document.body.textContent).toContain('Raw identifiers and street addresses stay out of this view');
 
     await act(async () => {
       buttonByText('Reproduce').click();
@@ -287,7 +287,7 @@ describe('BorrowerProofDrawer', () => {
       ...PROOF,
       trusted: false,
       known_data_gaps: [
-        'Recomputed next-best-offer does not match the borrower dossier displayed offer.',
+        'Recomputed primary offer does not match the borrower dossier displayed offer.',
       ],
     });
 
@@ -295,7 +295,7 @@ describe('BorrowerProofDrawer', () => {
     await settle();
 
     expect(document.body.textContent).toContain('Proof has gaps');
-    expect(document.body.textContent).toContain('Recomputed next-best-offer');
+    expect(document.body.textContent).toContain('Recomputed primary offer');
     expect(document.body.textContent).not.toContain('source_table');
   });
 });

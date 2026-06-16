@@ -184,9 +184,11 @@ class EvidenceBySignalRow(BaseModel):
     signal_type: str
     source_product: str
     source_table: str
+    source_label: str | None = None
     event_count: int = Field(ge=0)
     mean_confidence: float | None = None
     confidence_source: str
+    confidence_label: str | None = None
 
 
 class SignalEvidenceExample(BaseModel):

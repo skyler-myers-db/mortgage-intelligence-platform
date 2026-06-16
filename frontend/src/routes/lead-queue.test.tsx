@@ -76,6 +76,22 @@ describe('buildLeadQueueExportFilters', () => {
 
     expect(filters).toBe('none');
   });
+
+  it('exports plural county drilldowns and drops no-op Any portfolio values', () => {
+    const filters = buildLeadQueueExportFilters({
+      countyFilters: ['12011', '17031'],
+      segment: 'itm',
+      portfolioCriteria: {
+        consent_status: 'Any',
+        recency: 'Any',
+      },
+    });
+
+    expect(filters).toContain('counties=12011%2C17031');
+    expect(filters).toContain('segment=itm');
+    expect(filters).not.toContain('consent_status');
+    expect(filters).not.toContain('recency');
+  });
 });
 
 describe('formatLeadQueueLoadError', () => {

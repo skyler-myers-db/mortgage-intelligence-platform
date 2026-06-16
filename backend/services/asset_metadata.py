@@ -101,7 +101,7 @@ _DESCRIPTORS: tuple[AssetDescriptor, ...] = (
         title="Gold Lead Scores",
         description=(
             "Deterministic score table with the five scoring sub-scores, "
-            "opportunity score, in-the-money flag, and next-best-offer code."
+            "opportunity score, refinance-economics flag, and primary offer code."
         ),
         readiness_source_name="UC Gold Lead Scores",
     ),
@@ -221,7 +221,7 @@ _DESCRIPTORS: tuple[AssetDescriptor, ...] = (
         "ref",
         "offer_rules_config",
         title="Offer Rules Configuration",
-        description="Governed threshold table for in-the-money and next-best-offer rules.",
+        description="Governed threshold table for refinance-economics and primary offer rules.",
         aliases=("offer_rules",),
     ),
     _descriptor(

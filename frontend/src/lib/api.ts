@@ -843,7 +843,7 @@ export const api = {
   leadsPage: (
     segment?: string,
     signal?: AbortSignal,
-    geo?: { state?: string; zip?: string; county?: string; states?: string[]; zips?: string[]; borrowerIds?: string[] },
+    geo?: { state?: string; zip?: string; county?: string; counties?: string[]; states?: string[]; zips?: string[]; borrowerIds?: string[] },
     opts: LeadQueryOptions = {},
   ) => {
     // 2026-05-04 FIX β: forward state + zip to the API so the backend
@@ -862,6 +862,7 @@ export const api = {
     if (geo?.state) params.set('state', geo.state);
     if (geo?.zip) params.set('zip', geo.zip);
     if (geo?.county) params.set('county', geo.county);
+    if (geo?.counties && geo.counties.length > 0) params.set('counties', geo.counties.join(','));
     if (geo?.states && geo.states.length > 0) params.set('states', geo.states.join(','));
     if (geo?.zips && geo.zips.length > 0) params.set('zips', geo.zips.join(','));
     if (geo?.borrowerIds && geo.borrowerIds.length > 0) params.set('borrower_ids', geo.borrowerIds.join(','));
@@ -893,7 +894,7 @@ export const api = {
   leads: (
     segment?: string,
     signal?: AbortSignal,
-    geo?: { state?: string; zip?: string; county?: string; states?: string[]; zips?: string[]; borrowerIds?: string[] },
+    geo?: { state?: string; zip?: string; county?: string; counties?: string[]; states?: string[]; zips?: string[]; borrowerIds?: string[] },
     opts: LeadQueryOptions = {},
   ) => api.leadsPage(segment, signal, geo, opts).then((page) => page.leads),
 

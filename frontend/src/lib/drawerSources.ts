@@ -211,7 +211,7 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
     usedIn: ['Lead Queue', 'Borrower 360', 'Offer workflow', 'Analytics'],
     notExposed: 'Raw CLIP, owner names, street addresses, source-table paths, and lender raw strings.',
     description:
-      'Gold Lead Queue population: the ranked, quality-filtered subset of borrower_360 where opportunity_score is at least 50. It carries borrower-safe display fields, segment codes, evidence IDs, recommended offer, rank, and approval state for outreach workflows.',
+      'Gold Lead Queue population: the ranked, quality-filtered subset of borrower_360 where opportunity_score is at least 50. It carries borrower-safe display fields, segment codes, evidence IDs, primary offer path, rank, and approval state for outreach workflows.',
     lineage: [
       { layer: 'FEATURES', name: 'mip.gold.borrower_360', meta: 'borrower-grain Cotality + first-party features' },
       { layer: 'SCORE', name: 'mip.gold.lead_scores', meta: 'opportunity_score and signal-strength components' },
@@ -471,7 +471,7 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
     title: 'AVM equity',
     short: 'AVM equity',
     description:
-      'AVM-backed property value and lien-balance math used to estimate borrower equity, CLTV/LTV, and the equity leg of In-the-Money and HELOC eligibility.',
+      'AVM-backed property value and lien-balance math used to estimate borrower equity, CLTV/LTV, and the equity leg of refinance and HELOC eligibility.',
     lineage: [
       { layer: 'SOURCE', name: 'cotality.lien_status_marketing.avm_fields', meta: 'estimated value and confidence fields' },
       { layer: 'SILVER', name: 'mip.silver.lien_current', meta: 'avm_value, confidence, as-of date, open-lien balance' },
@@ -486,15 +486,15 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
   },
 
   itm: {
-    title: 'In-the-Money logic',
-    short: 'In-the-Money logic',
+    title: 'Refinance economics screen',
+    short: 'Rate + equity screen',
     // Governed anchor (2026-06-11): the high-intent KPI sums the
     // in_the_money column on mip.gold.borrower_360 — same rationale as
     // the population entry above.
     assetKey: 'borrower_360',
     assetPath: 'mip.gold.borrower_360',
     description:
-      'Flags a borrower when lien rate is at least 75 bps above par refi rate and equity is at least 15%. Deterministic UC SQL function, parity-pinned to backend/services/scoring.py.',
+      'Checks whether a borrower appears to have enough refinance incentive: current lien rate at least 75 bps above the market reference rate and equity at least 15%. This is only the refi-economics screen, not the full lead score.',
     lineage: [
       { layer: 'SOURCE', name: 'mip.silver.market_rates_weekly', meta: 'FRED MORTGAGE30US weekly snapshot' },
       { layer: 'SOURCE', name: 'cotality.avm.current', meta: 'Property value snapshot' },
@@ -514,7 +514,7 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
     title: 'Market rate comparison',
     short: 'Market rate comparison',
     description:
-      "Computes the basis-point spread between a borrower's current lien rate and the market par-refinance rate. Output feeds In-the-Money logic and is also surfaced standalone.",
+      "Computes the basis-point spread between a borrower's current lien rate and the market refinance reference rate. Positive spread means the current rate appears above market.",
     lineage: [
       { layer: 'SOURCE', name: 'fred.MORTGAGE30US', meta: 'FRED 30y conforming par-refi rate' },
       { layer: 'SOURCE', name: 'mip.silver.market_rates_weekly', meta: 'FRED MORTGAGE30US weekly snapshot' },
@@ -576,7 +576,7 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
     assetPath: 'mip.semantics.borrower_opportunity_metric_view',
     usedIn: ['Analytics economics', 'Geography drilldowns', 'Genie'],
     description:
-      'Curated borrower-level semantic view used by Genie for drill-down questions about cohorts, geographies, scores, and next-best-offer rationale.',
+      'Curated borrower-level semantic view used by Genie for drill-down questions about cohorts, geographies, scores, and selected offer rationale.',
     lineage: [
       { layer: 'FEATURES', name: 'mip.gold.borrower_360', meta: 'borrower-level feature set' },
       { layer: 'GOLD', name: 'mip.gold.lead_scores', meta: 'score components and offer code' },
@@ -584,19 +584,19 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
     ],
     signals: [
       { label: 'Borrower grain', source: 'borrower_360.borrower_id', value: 'masked demo-safe id' },
-      { label: 'Offer code', source: 'borrower_360.recommended_offer_code', value: 'NBO output' },
+      { label: 'Primary offer', source: 'borrower_360.recommended_offer_code', value: 'selected offer path' },
       { label: 'Evidence ids', source: 'borrower_360.evidence_ids', value: 'ordered evidence refs' },
     ],
   },
 
   leadScore: {
-    title: 'Lead score model',
-    short: 'Lead score model',
+    title: 'Opportunity score',
+    short: 'Opportunity score',
     assetKey: 'lead_scores',
     assetPath: 'mip.gold.lead_scores',
     usedIn: ['Opportunity score', 'Signal strength', 'Borrower proof'],
     description:
-      'Canonical 0-100 opportunity score. The score is a deterministic weighted blend of five sub-scores and is parity-pinned between UC SQL, backend scoring, and golden fixtures.',
+      'Ranks how strong a borrower is for review on a 0-100 scale. The score blends refinance economics, intent, product fit, relationship, and evidence quality.',
     lineage: [
       { layer: 'FEATURES', name: 'mip.gold.lead_scores', meta: 'CLIP-grain component scores + final opportunity_score' },
       { layer: 'PRIMITIVE', name: 'mip.gold.fn_lead_score', meta: 'UC SQL weighted blend' },
@@ -633,27 +633,27 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
   },
 
   nbo: {
-    title: 'Next-Best-Offer logic',
-    short: 'Next-Best-Offer logic',
+    title: 'Primary offer rules',
+    short: 'How the offer path was selected',
     assetKey: 'borrower_360',
     assetPath: 'mip.gold.borrower_360',
-    usedIn: ['Next-best-offer', 'Outreach approvals', 'Borrower proof'],
+    usedIn: ['Primary offer', 'Outreach approvals', 'Borrower proof'],
     description:
-      'Deterministic decision tree over Cotality-derived signals. Output is a categorical product code. No ML model - the logic is transparent and auditable in sql/uc_functions/fn_next_best_offer.sql.',
+      'Chooses one offer path from the strongest current signals. Listings route to next-home purchase financing; refinance economics route to refi or refi plus equity review; weak signals stay in nurture.',
     lineage: [
       { layer: 'FEATURES', name: 'mip.gold.borrower_360', meta: 'Cotality public records + Owner Link + lien history' },
       { layer: 'PRIMITIVE', name: 'mip.gold.fn_next_best_offer', meta: 'UC SQL decision tree' },
       { layer: 'PARITY', name: 'backend/services/scoring.py', meta: 'Pinned to golden cases' },
     ],
     signals: [
-      { label: 'Input', source: 'borrower_360.rate_spread_bps', value: 'rate_spread_bps' },
-      { label: 'Input', source: 'borrower_360.equity_pct', value: 'equity_pct' },
-      { label: 'Input', source: 'borrower_360.has_heloc_propensity_trigger', value: 'HELOC intent' },
-      { label: 'Input', source: 'borrower_360.has_permit', value: 'filed permit only' },
-      { label: 'Input', source: 'borrower_360.listed_for_sale', value: 'listed_for_sale' },
-      { label: 'Input', source: 'borrower_360.is_investor', value: 'is_investor' },
-      { label: 'Input', source: 'borrower_360.is_current_customer', value: 'is_current_customer' },
-      { label: 'Input', source: 'borrower_360.is_competitor_lien', value: 'is_competitor_lien' },
+      { label: 'Rate spread', source: 'borrower_360.rate_spread_bps', value: 'refi economics' },
+      { label: 'Equity', source: 'borrower_360.equity_pct', value: 'equity product fit' },
+      { label: 'HELOC intent', source: 'borrower_360.has_heloc_propensity_trigger', value: 'propensity trigger' },
+      { label: 'Permit activity', source: 'borrower_360.has_permit', value: 'filed permit only' },
+      { label: 'Listing activity', source: 'borrower_360.listed_for_sale', value: 'next-home purchase path' },
+      { label: 'Investor profile', source: 'borrower_360.is_investor', value: 'portfolio lending path' },
+      { label: 'Current customer', source: 'borrower_360.is_current_customer', value: 'relationship path' },
+      { label: 'Competitor lien', source: 'borrower_360.is_competitor_lien', value: 'recapture path' },
     ],
   },
 
@@ -683,7 +683,7 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
     assetKey: 'refi_propensity',
     assetPath: 'mip.silver.refi_propensity',
     description:
-      'Cotality refinance propensity score feed. It supplements the deterministic in-the-money economics without replacing the rate-spread threshold.',
+      'Cotality refinance propensity score feed. It supplements the deterministic refinance-economics screen without replacing the rate-spread threshold.',
     lineage: [
       { layer: 'SOURCE', name: 'cotality_mortgage_data.corelogic.entrada_eval_refi_propensity_score_v1', meta: 'Cotality refinance propensity' },
       { layer: 'SILVER', name: 'mip.silver.refi_propensity', meta: 'latest score by CLIP' },
@@ -709,7 +709,7 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
     ],
     signals: [
       { label: 'Readiness', source: 'mip.gold.source_readiness', value: 'roadmap' },
-      { label: 'has_permit', source: 'mip.gold.borrower_360', value: 'filed permit only' },
+      { label: 'Filed permit flag', source: 'mip.gold.borrower_360.has_permit', value: 'filed permit only' },
       { label: 'HELOC intent substitute', source: 'mip.silver.heloc_propensity', value: 'separate signal' },
     ],
   },

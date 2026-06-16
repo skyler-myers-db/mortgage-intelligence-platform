@@ -14,6 +14,7 @@ import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 import { useApp } from '../components/AppContext';
 import { ActivationLoopPanel } from '../components/activation/ActivationLoopPanel';
 import { invalidateOperationalQueries } from '../lib/queryKeys';
+import { offerDisplayLabel } from '../lib/offerLanguage';
 import { BORROWER_CACHE, clearBorrowerCache, readBorrowerCache } from './offer-orchestrator.cache';
 import { DEFAULT_REJECT_REASON, type OutreachChannel, type RejectReasonCode } from './offer-orchestrator.constants';
 import {
@@ -333,7 +334,7 @@ export default function OfferOrchestrator() {
       <PageShell
         eyebrow="Offer Orchestrator"
         title="Choose a borrower to compose an offer"
-        lede="Offer Orchestrator drafts a tailored recommendation — HELOC / Cash-Out / Rate-Term Refi / Retention — from the borrower's score + equity + rate spread, then routes through human approval before any outreach goes out. Pick a borrower to begin."
+        lede="Offer Orchestrator explains the selected offer path, considered alternatives, and borrower-facing draft before any outreach can be approved. Pick a borrower to begin."
         heroRight={<OfferOrchestratorEmptyHero to="/lead-queue" />}
       >
         <OfferOrchestratorEmptyState />
@@ -341,7 +342,10 @@ export default function OfferOrchestrator() {
     );
   }
 
-  const productLabel = rec?.product_label ?? b?.recommended_offer ?? '…';
+  const productLabel = offerDisplayLabel(
+    rec?.offer_code ?? b?.recommended_offer_code,
+    rec?.product_label ?? b?.recommended_offer ?? '...',
+  );
   const effectiveApproval = resolveOfferApprovalStatus(
     approval,
     lifecycle?.approval_status,
@@ -359,7 +363,7 @@ export default function OfferOrchestrator() {
       city: b.city,
       state: b.state,
       zip: b.zip,
-      recommended_offer: rec?.product_label ?? b.recommended_offer,
+      recommended_offer: productLabel,
       opportunity_score: b.opportunity_score,
       confidence: b.confidence,
     });
@@ -534,7 +538,7 @@ export default function OfferOrchestrator() {
     <PageShell
       eyebrow="Offer & Outreach"
       title="Review and approve outreach"
-      lede="Review the recommended offer, alternatives considered, thresholds applied, and the draft message. Approve to place the decision in the governed internal queue; reject to drop the borrower."
+      lede="Review the selected offer path, alternatives considered, thresholds applied, and borrower-facing draft. Approve to place the decision in the governed internal queue; reject to drop the borrower."
       heroRight={
         b && (
           <>

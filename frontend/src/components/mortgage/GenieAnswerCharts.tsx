@@ -9,6 +9,29 @@ import {
 } from './GenieAnswer.logic';
 import { loadUsaStateMap } from './USStateMapData';
 import type { UsaSvgMap } from './USChoroplethMap.utils';
+import { offerDisplayLabel } from '../../lib/offerLanguage';
+
+const GENIE_SEGMENT_LABELS: Record<string, string> = {
+  itm: 'Prime Refi Candidates',
+  equity: 'Home Equity Candidate',
+  investor: 'Investor / Multi-Property',
+  retention: 'Retention Risk',
+  listed: 'Listed for Sale',
+  permit: 'HELOC Intent',
+};
+
+function strategySegmentLabel(value: unknown): string | null {
+  if (value === null || value === undefined || value === '') return null;
+  const raw = String(value);
+  return GENIE_SEGMENT_LABELS[raw] ?? raw;
+}
+
+function strategyOfferLabel(row: Record<string, unknown>): string | null {
+  const code = row.leading_offer_code ?? row.offer_code ?? row.recommended_offer_code;
+  const fallback = row.leading_recommended_offer ?? row.recommended_offer ?? row.product_label;
+  if (!code && !fallback) return null;
+  return offerDisplayLabel(code ? String(code) : null, fallback ? String(fallback) : null);
+}
 
 /**
  * Inline horizontal bar chart. Dependency-free SVG so we don't pull
@@ -257,8 +280,8 @@ export function GenieStrategyBoard({
         {rows.slice(0, 6).map((row, i) => {
           const title = formatCell(label, row[label]);
           const metric = coerceNumber(row[value]);
-          const offer = row.recommended_offer ?? row.offer_code ?? row.product_label;
-          const segment = row.segment ?? row.segment_code ?? row.top_segment;
+          const offer = strategyOfferLabel(row);
+          const segment = strategySegmentLabel(row.segment ?? row.segment_code ?? row.top_segment);
           return (
             <div key={`${title}-${i}`} className="genie-board__card">
               <div className="genie-board__title">{title}</div>

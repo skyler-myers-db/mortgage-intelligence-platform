@@ -362,7 +362,7 @@ export function isDayZero(preview: PortfolioPreview | null): boolean {
  * math is unit-pinnable.
  */
 export interface RoiAssumptionInputs {
-  /** Addressable high-intent leads from the current build. */
+  /** Addressable borrowers passing the refinance-economics screen in the current build. */
   leads: number;
   /** Expected response/funding rate, as a percent (e.g. 4.0). */
   responseRatePct: string;

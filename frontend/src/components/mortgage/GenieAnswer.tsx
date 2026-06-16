@@ -15,6 +15,7 @@ import {
   GenieStrategyBoard,
 } from './GenieAnswerCharts';
 import { MarkdownAnswer, stripQuestionRestatement } from './GenieAnswer.markdown';
+import { normalizeGenieAnswerLanguage } from '../../lib/genieAnswerLanguage';
 import { GenieProofPanel } from './GenieAnswerProof';
 import {
   buildFallbackFollowUps,
@@ -88,7 +89,7 @@ export function GenieAnswer({
   const hiddenRows = Math.max(0, rows.length - MAX_TABLE_ROWS);
   const columns = visibleRows[0] ? Object.keys(visibleRows[0]).slice(0, MAX_TABLE_COLS) : [];
   const chartColumns = rows[0] ? Object.keys(rows[0]) : [];
-  const cleanedAnswer = answer ? stripQuestionRestatement(answer) : '';
+  const cleanedAnswer = answer ? normalizeGenieAnswerLanguage(stripQuestionRestatement(answer)) : '';
   // "Pin to Home" (Buyer-Wow #9): only a genuine, trusted data answer is
   // pinnable — never a degraded/policy-blocked caveat. Trust is the app's
   // denylist (`isTrustedGenieSource`), so canonical `trusted_sql`/`sales_ops`

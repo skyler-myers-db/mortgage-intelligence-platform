@@ -49,6 +49,22 @@ from backend.services.repositories.databricks_genie_trust import (
 from backend.services.repositories.databricks_genie_visualization import (
     _plan_genie_visualization,
 )
+from backend.services.scoring import offer_display_label
+
+
+_SEGMENT_DISPLAY_LABELS = {
+    "itm": "Prime Refi Candidates",
+    "equity": "Home Equity Candidate",
+    "investor": "Investor / Multi-Property",
+    "retention": "Retention Risk",
+    "listed": "Listed for Sale",
+    "permit": "HELOC Intent",
+}
+
+
+def _segment_display_label(value: object) -> str:
+    raw = str(value or "").strip()
+    return _SEGMENT_DISPLAY_LABELS.get(raw, raw or "all segments")
 
 
 def _trusted_sql_response(
@@ -190,13 +206,17 @@ def direct_canonical_response(
             return None
         if rows:
             top = rows[0]
+            top_segment = _segment_display_label(top.get("segment_code"))
+            top_offer = offer_display_label(
+                str(top.get("leading_offer_code") or ""),
+                str(top.get("leading_recommended_offer") or ""),
+            )
             answer = (
                 f"Use {borrower_asset} to prioritize the next 10,000 outreach touches "
                 "by state, segment, and offer. "
-                f"The top lane is state {top.get('state')}, segment "
-                f"{top.get('segment_code')}, with "
+                f"The top lane is state {top.get('state')}, {top_segment}, with "
                 f"{int(top.get('marketable_borrowers') or 0):,} marketable borrowers "
-                f"and leading offer {top.get('leading_recommended_offer') or top.get('leading_offer_code')}. "
+                f"and primary offer {top_offer}. "
                 "The table ranks the remaining state-segment-offer lanes by average "
                 "opportunity score and marketable borrower volume."
             )
@@ -226,8 +246,9 @@ def direct_canonical_response(
             metric_value = f"{count_int:,}"
             answer = (
                 f"{top.get('state')} has the most cash-out opportunity right now "
-                f"with {count_int:,} borrowers. This uses recommended_offer_code = "
-                f"'cash_out' at the unique borrower grain from {borrower_asset}."
+                f"with {count_int:,} borrowers. This counts borrowers whose "
+                f"primary offer is a cash-out refinance review at the unique "
+                f"borrower grain from {borrower_asset}."
             )
         else:
             answer = (
@@ -362,15 +383,15 @@ def direct_canonical_response(
         if rows:
             top = rows[0]
             answer = (
-                "I ranked ZIP codes by unique borrowers currently in-the-money "
-                f"for refinance from {borrower_asset}. "
+                "I ranked ZIP codes by unique borrowers passing the refinance-economics screen "
+                f"from {borrower_asset}. "
                 f"The current leader is ZIP {top.get('zip')} ({top.get('state')}) "
                 f"with {int(top.get('in_the_money_borrowers') or 0):,} borrowers; "
                 "the cohort action below carries these ZIP filters into Lead Queue."
             )
         else:
             answer = (
-                "The trusted borrower table returned no in-the-money ZIP rows for "
+                "The trusted borrower table returned no refinance-economics ZIP rows for "
                 "the current refreshed data coverage."
             )
         return _trusted_sql_response(
@@ -390,14 +411,14 @@ def direct_canonical_response(
         if rows:
             top = rows[0]
             answer = (
-                "I broke down in-the-money refinance candidates by state from "
+                "I broke down borrowers passing the refinance-economics screen by state from "
                 f"{borrower_asset}. "
                 f"{top.get('state')} currently leads with "
                 f"{int(top.get('in_the_money_borrowers') or 0):,} borrowers."
             )
         else:
             answer = (
-                "The trusted borrower table returned no in-the-money state rows "
+                "The trusted borrower table returned no refinance-economics state rows "
                 "for the current refreshed data coverage."
             )
         return _trusted_sql_response(
@@ -472,7 +493,7 @@ def direct_canonical_response(
             }
         ]
         answer = (
-            f"There are {count_int:,} borrowers currently in-the-money in {city_scope} "
+            f"There are {count_int:,} borrowers passing the refinance-economics screen in {city_scope} "
             f"within the current gold evaluation-share scope from {borrower_asset}. "
             "This is a city-scoped unique borrower count, not the overall share total."
         )
@@ -516,7 +537,7 @@ def direct_canonical_response(
         count_rows[0]["state"] = state_scope[1]
     geo_text = f" in {state_scope[0]} ({state_scope[1]})" if state_scope else ""
     answer = (
-        f"There are {count_int:,} borrowers currently in-the-money{geo_text}. "
+        f"There are {count_int:,} borrowers passing the refinance-economics screen{geo_text}. "
         f"This is a unique borrower count from {borrower_asset} at the "
         "gold borrower grain, so multi-segment borrowers are counted once."
     )

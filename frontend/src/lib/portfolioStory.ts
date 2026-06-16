@@ -2,8 +2,8 @@ import type { PortfolioPreview } from '../types';
 
 /**
  * "Your book today" — a current-state portfolio summary for Home. A plain-
- * English orientation of the lender's book RIGHT NOW (scale, in-the-money
- * share, top-tier opportunities, offers ready), NOT a day-over-day delta (the
+ * English orientation of the lender's book RIGHT NOW (scale, refinance
+ * economics, score-75+ count, offer paths), NOT a day-over-day delta (the
  * morning-briefing delta card was removed because the snapshot data carries no
  * honest "what changed" signal).
  *
@@ -83,8 +83,8 @@ export function buildPortfolioStory(preview: PortfolioPreview | null | undefined
     return token;
   };
 
-  // Derived in-the-money share of the book — an insight the bare KPI cards
-  // don't show. Grounded in marketable + high-intent, verified against the
+  // Derived refinance-economics share of the book -- an insight the bare KPI
+  // cards don't show. Grounded in marketable + refi-economics count, verified against the
   // computed ratio.
   const pct = (highIntent / marketable) * 100;
   const pctToken = `${pct.toFixed(pct < 10 ? 1 : 0)}%`;
@@ -96,19 +96,19 @@ export function buildPortfolioStory(preview: PortfolioPreview | null | undefined
     marketable,
   )} borrowers.`;
 
-  let s2 = `${register(intToken(highIntent), 'In-the-money leads', 'itm', highIntent)} are in the money — ${register(
+  let s2 = `${register(intToken(highIntent), 'Refi-economics screen', 'itm', highIntent)} pass the refinance-economics screen -- ${register(
     pctToken,
-    'In-the-money share',
+    'Refi-economics share',
     'itm',
     pct,
   )} of the book`;
   if (preview.top_tier_opportunities != null && preview.top_tier_opportunities > 0) {
     s2 += `, and ${register(
       intToken(preview.top_tier_opportunities),
-      'Top-tier opportunities',
+      'Opportunity score 75+ count',
       'leadScore',
       preview.top_tier_opportunities,
-    )} clear the top-tier opportunity bar`;
+    )} meet the strongest opportunity-score tier`;
   }
   s2 += '.';
 
@@ -116,10 +116,10 @@ export function buildPortfolioStory(preview: PortfolioPreview | null | undefined
     preview.offers_recommended != null && preview.offers_recommended > 0
       ? `${register(
           intToken(preview.offers_recommended),
-          'Offers recommended',
+          'Primary offer paths',
           'nbo',
           preview.offers_recommended,
-        )} already carry a recommended next-best offer.`
+        )} have a primary offer path assigned.`
       : '';
 
   const sentences = [s1, s2, s3].filter((s) => s && s.trim().length > 1);

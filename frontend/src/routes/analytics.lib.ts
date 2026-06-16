@@ -140,13 +140,29 @@ export function leadQueueHrefForFunnelStage(
   const byLabel: Record<string, LeadFunnelStage> = {
     addressable: 'addressable',
     'in the money': 'in_the_money',
+    'refi economics': 'in_the_money',
     'high opportunity': 'high_opportunity',
+    'opportunity score 75+': 'high_opportunity',
+    'top-tier score': 'high_opportunity',
     'offer recommended': 'offer_recommended',
+    'primary offer selected': 'offer_recommended',
     approved: 'approved',
     actioned: 'actioned',
   };
   const stage = byOrder[row.stage_order] ?? byLabel[row.stage.trim().toLowerCase()];
   return leadQueueHref({ funnel_stage: stage ?? 'addressable', ...leadParams });
+}
+
+export function funnelStageDisplayLabel(row: Pick<FunnelStage, 'stage' | 'stage_order'>): string {
+  const byOrder: Record<number, string> = {
+    1: 'Addressable',
+    2: 'Refi economics',
+    3: 'Opportunity score 75+',
+    4: 'Primary offer selected',
+    5: 'Approved',
+    6: 'Actioned',
+  };
+  return byOrder[row.stage_order] ?? row.stage;
 }
 
 export function isOfferRecommendedStage(row: Pick<FunnelStage, 'stage' | 'stage_order'>): boolean {

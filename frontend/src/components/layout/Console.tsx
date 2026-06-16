@@ -2,6 +2,7 @@ import { Link } from 'react-router-dom';
 import { useApp, type Accent, type Density, type Theme } from '../AppContext';
 import { Icon } from '../Icon';
 import { Chip } from '../Primitives';
+import { offerDisplayLabel } from '../../lib/offerLanguage';
 
 /**
  * Console — the right-side tweaks panel from the prototype. Theme, accent,
@@ -146,7 +147,7 @@ export function Console() {
                 <Icon name="tag" size={12} />
                 <span className="saved-workspace__body">
                   <span className="mono">{lead.borrower_id}</span>
-                  <span>{lead.city}, {lead.state} · {lead.recommended_offer}</span>
+                  <span>{lead.city}, {lead.state} · {offerDisplayLabel(null, lead.recommended_offer)}</span>
                 </span>
               </Link>
             ))}

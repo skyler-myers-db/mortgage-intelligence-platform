@@ -120,4 +120,3 @@ export function MarkdownAnswer({ text }: { text: string }) {
     </>
   );
 }
-

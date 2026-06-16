@@ -413,7 +413,7 @@ def test_draft_outreach_uses_configured_lender_name(
 
     assert response.status_code == 200, response.text
     body = response.json()["body"]
-    assert "Acme Mortgage relationship" in response.json()["subject"]
+    assert response.json()["subject"] == "A quick mortgage review from Acme Mortgage"
     assert "Acme Mortgage customer" in body
     assert "Summit Mortgage customer" not in body
 

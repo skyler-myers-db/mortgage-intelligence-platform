@@ -46,7 +46,7 @@ describe('BorrowerOfferPreviewMock', () => {
     // The honest legal line: not a firm offer / credit decision / application.
     expect(mock.textContent).toContain('not a firm offer of credit');
     // Real (qualitative) product label, no fabricated APR/payment figures.
-    expect(mock.textContent).toContain('Refinance + HELOC');
+    expect(mock.textContent).toContain('Refinance + home-equity review');
     expect(mock.textContent).toContain('Summit Mortgage');
     // No TILA "trigger terms" of any shape (APR/rate/$/payment) — Slice 1 shows
     // only a qualitative product label. (Slice 2's indicative preview will

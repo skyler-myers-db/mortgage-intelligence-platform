@@ -522,7 +522,7 @@ export default function PortfolioBuilder() {
               source={DRAWER_SOURCES.leadScore}
             />
             <KpiCard
-              label="Top-tier opportunities"
+              label="Opportunity score 75+"
               valueAnimated={dayZeroSafe(preview, preview?.top_tier_opportunities)}
               trend={preview?.trends?.top_tier_opportunities?.series}
               delta={formatDelta(preview?.trends?.top_tier_opportunities)}
@@ -532,7 +532,7 @@ export default function PortfolioBuilder() {
               source={DRAWER_SOURCES.leadScore}
             />
             <KpiCard
-              label="Offers recommended"
+              label="Primary offer paths"
               valueAnimated={dayZeroSafe(preview, preview?.offers_recommended)}
               trend={preview?.trends?.offers_recommended?.series}
               delta={formatDelta(preview?.trends?.offers_recommended)}
@@ -546,7 +546,7 @@ export default function PortfolioBuilder() {
       </div>
 
       {/* Projected economics (re-audit #4 Buyer-Wow #7): only once a real
-          build with high-intent leads exists — never on day-zero or an
+          build with refinance-economics leads exists — never on day-zero or an
           empty cohort, where a dollar headline would be misleading. */}
       {!isDayZero(preview) && (preview?.high_intent_leads ?? 0) > 0 && (
         <RoiProjector leads={preview!.high_intent_leads} />
@@ -729,8 +729,8 @@ export default function PortfolioBuilder() {
         <div className="lead-cta">
           <div className="lead-cta__body">
             <div className="lead-cta__title">
-              {preview.high_intent_leads.toLocaleString()} high-intent borrower
-              {preview.high_intent_leads === 1 ? '' : 's'} match the current filters.
+              {preview.high_intent_leads.toLocaleString()} borrower
+              {preview.high_intent_leads === 1 ? '' : 's'} pass the refinance-economics screen for the current filters.
             </div>
             <div className="lead-cta__sub">
               Open the lead queue to review evidence and approve outreach per borrower.

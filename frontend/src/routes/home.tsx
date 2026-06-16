@@ -24,7 +24,7 @@ import type { DataEstateResponse, KpiTrend, PortfolioPreview } from '../types';
 
 const FUTURE_MODULES = [
   { code: 'M1', title: 'Pre-Qualified Offer & Self-Serve Accept', desc: 'Borrower-facing pre-qualified offer with one-click accept → compliant application handoff (FCRA firm-offer + RESPA timing).' },
-  { code: 'M2', title: 'LO Workbench',          desc: 'Officer assist with explainable next-best-action.' },
+  { code: 'M2', title: 'LO Workbench',          desc: 'Officer assist with explainable borrower guidance.' },
   { code: 'M3', title: 'Underwriting Copilot',  desc: 'Condition handling and exception triage.' },
   { code: 'M4', title: 'Risk & Retention',      desc: 'Portfolio-level retention and recapture.' },
 ];
@@ -234,7 +234,7 @@ export default function Home() {
             source={DRAWER_SOURCES.population}
           />
           <KpiCard
-            label="High-intent leads"
+            label="Refi economics screen"
             valueAnimated={preview?.high_intent_leads ?? null}
             trend={preview?.trends?.high_intent_leads?.series}
             delta={formatDelta(preview?.trends?.high_intent_leads)}
@@ -243,8 +243,8 @@ export default function Home() {
             loading={kpisLoading}
             source={DRAWER_SOURCES.itm}
           />
-          <KpiCard
-            label="Top-tier opportunities"
+            <KpiCard
+              label="Opportunity score 75+"
             valueAnimated={preview?.top_tier_opportunities ?? null}
             trend={preview?.trends?.top_tier_opportunities?.series}
             delta={formatDelta(preview?.trends?.top_tier_opportunities)}
@@ -253,8 +253,8 @@ export default function Home() {
             loading={kpisLoading}
             source={DRAWER_SOURCES.leadScore}
           />
-          <KpiCard
-            label="Offers recommended"
+            <KpiCard
+              label="Primary offer paths"
             valueAnimated={preview?.offers_recommended ?? null}
             trend={preview?.trends?.offers_recommended?.series}
             delta={formatDelta(preview?.trends?.offers_recommended)}
@@ -284,12 +284,12 @@ export default function Home() {
           <div className="approval__title">Approval queue</div>
           <div className="approval__sub">
             {queued !== null
-              ? `${queued.toLocaleString()} high-intent borrowers ready for loan-officer review. ${(
+              ? `${queued.toLocaleString()} borrowers pass the refinance-economics screen. ${(
                   preview?.approved_count ?? 0
                 ).toLocaleString()} approved and ${(
                   preview?.in_outreach_count ?? 0
                 ).toLocaleString()} in outreach in ${APPROVAL_QUEUE_STATE_LABEL}.`
-              : 'High-intent borrowers ready for loan-officer review.'}
+              : 'Borrowers passing the refinance-economics screen are ready for loan-officer review.'}
           </div>
         </div>
         <Link to="/lead-queue?segment=itm" className="btn btn--sm btn--primary">

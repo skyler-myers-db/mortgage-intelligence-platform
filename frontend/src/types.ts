@@ -798,9 +798,11 @@ export interface EvidenceBySignalRow {
   signal_type: string;
   source_product: string;
   source_table: string;
+  source_label?: string | null;
   event_count: number;
   mean_confidence?: number | null;
   confidence_source: string;
+  confidence_label?: string | null;
 }
 
 export interface SignalEvidenceExample {

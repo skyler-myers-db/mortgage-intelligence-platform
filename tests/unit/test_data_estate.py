@@ -103,8 +103,5 @@ def test_data_estate_discloses_synthetic_first_party_demo_feeds() -> None:
     assert first_party.status == "demo_synthetic"
     assert all(asset.synthetic_demo for asset in first_party.assets)
     assert {asset.status for asset in first_party.assets} == {"demo_synthetic"}
-    assert (
-        "First-party lender feeds are synthetic Summit Mortgage demo feeds, "
-        "not real customer data."
-    ) in estate.known_data_gaps
+    assert "First-party lender feeds use demo/synthetic rows in this workspace." in estate.known_data_gaps
     assert "Customer first-party data feeds are not connected in this demo workspace." not in estate.known_data_gaps

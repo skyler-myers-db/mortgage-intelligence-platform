@@ -51,7 +51,7 @@ def test_hook_priority_competitor_lien_wins() -> None:
         is_investor=True,
         related_property_count=4,
     )
-    assert _personalization_hook(borrower) == "your current mortgage with another servicer"
+    assert _personalization_hook(borrower) == "your current mortgage"
 
 
 def test_hook_rate_spread_then_equity_then_portfolio() -> None:
@@ -113,10 +113,32 @@ def test_competitor_lien_email_has_hook_reason_cta_disclosure() -> None:
         borrower=borrower, channel="email", disclosure=_DISCLOSURE
     )
     assert subject
-    assert "your current mortgage with another servicer" in body
-    assert "Permit filed and equity is building" in body
+    assert "your current mortgage" in body
+    assert "compare your current mortgage with today's options" in body
+    assert "Permit filed and equity is building" not in body
     assert "Reply YES and a licensed loan officer will follow up -- no obligation." in body
     assert _DISCLOSURE.body in body
+
+
+def test_purchase_email_reads_like_borrower_next_home_financing() -> None:
+    borrower = _borrower(
+        recommended_offer_code="purchase",
+        recommended_offer="Purchase Mortgage",
+        listed_for_sale=True,
+        is_current_customer=False,
+        is_competitor_lien=True,
+        why_now="The home is actively listed -- a purchase mortgage on the next home is the right offer.",
+    )
+    subject, body = _compose_outreach_body(
+        borrower=borrower, channel="email", disclosure=_DISCLOSURE
+    )
+    assert subject == "Planning your next move?"
+    assert "next-home financing" not in body.lower()
+    assert "financing options for your next home" in body
+    assert "right offer" not in body.lower()
+    assert "public-record" not in body.lower()
+    assert "algorithm" not in body.lower()
+    assert "current loan is paid off at closing" in body
 
 
 # ---------------------------------------------------------------------------
@@ -221,5 +243,5 @@ def test_figure_bearing_why_now_is_suppressed_from_authored_copy(channel) -> Non
     assert "138" not in authored
     assert "bps" not in authored.lower()
     # Personalization still lands via the qualitative hook; disclosure retained.
-    assert "your current mortgage with another servicer" in authored
+    assert "your current mortgage" in authored
     assert _DISCLOSURE.body in body

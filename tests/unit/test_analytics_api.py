@@ -84,7 +84,7 @@ class _AnalyticsSqlClient:
             return [{
                 "borrower_id": "B-48291",
                 "display_name": "Borrower 48291",
-                "segment": "In the Money",
+                "segment": "Prime Refi Candidates",
                 "state": "IL",
                 "equity_pct": 42,
                 "rate_spread_bps": 88,
@@ -93,11 +93,11 @@ class _AnalyticsSqlClient:
         if "ROW_NUMBER() OVER (ORDER BY b.opportunity_score DESC, b.clip)" in statement:
             return [{"borrower_id": "B-48291", "display_name": "Owner anon", "state": "IL", "city": "Chicago", "opportunity_score": 91, "rate_spread_bps": 88, "equity_pct": 42, "recommended_offer": "Refi", "rank_overall": 1}]
         if "segment_dim AS" in statement:
-            return [{"segment_code": "itm", "name": "In the Money", "borrower_count": 10, "mean_opportunity_score": 81, "delta_vs_prior_label": "+1%", "description": "test", "approval_rate": 1.2, "outreach_rate": 0.5, "mean_rate_spread_bps": 90, "mean_equity_pct": 40, "in_the_money_borrowers": 8}]
+            return [{"segment_code": "itm", "name": "Prime Refi Candidates", "borrower_count": 10, "mean_opportunity_score": 81, "delta_vs_prior_label": "+1%", "description": "test", "approval_rate": 1.2, "outreach_rate": 0.5, "mean_rate_spread_bps": 90, "mean_equity_pct": 40, "in_the_money_borrowers": 8}]
         if "COUNT(*) AS borrower_count" in statement and "GROUP BY state, segment_code" in statement:
-            return [{"state": "IL", "segment_code": "itm", "segment_name": "In the Money", "borrower_count": 10}]
+            return [{"state": "IL", "segment_code": "itm", "segment_name": "Prime Refi Candidates", "borrower_count": 10}]
         if "ROW_NUMBER() OVER (PARTITION BY state" in statement:
-            return [{"state": "IL", "segment_code": "itm", "segment_name": "In the Money", "borrower_count": 10, "state_rank": 1}]
+            return [{"state": "IL", "segment_code": "itm", "segment_name": "Prime Refi Candidates", "borrower_count": 10, "state_rank": 1}]
         if "e.signal_value AS signal_value" in statement:
             return [{
                 "borrower_id": "B-48291",
@@ -131,6 +131,8 @@ def test_analytics_repository_uses_governed_gold_and_semantic_sql() -> None:
     assert "marketable-lead filters" in repo.segments().scope.description
     assert repo.signals().evidence_by_signal[0].source_product == "Voluntary Lien"
     assert repo.signals().evidence_by_signal[0].source_table == "mip.silver.lien_current"
+    assert repo.signals().evidence_by_signal[0].source_label == "lien_current"
+    assert repo.signals().evidence_by_signal[0].confidence_label == "Mean governed evidence confidence."
     assert repo.signals().evidence_examples[0].borrower_id == "B-48291"
 
     assert client.statements

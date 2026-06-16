@@ -24,7 +24,7 @@ describe('buildPortfolioStory', () => {
     const s = buildPortfolioStory(preview());
     expect(s.available).toBe(true);
     const prose = s.sentences.join(' ');
-    // Locale-grouped counts and the derived in-the-money share all appear.
+    // Locale-grouped counts and the derived refinance-economics share all appear.
     expect(prose).toContain('5,156,184');
     expect(prose).toContain('111,726');
     expect(prose).toContain('2.2%'); // 111,726 / 5,156,184 = 2.167% → 2.2%
@@ -40,10 +40,10 @@ describe('buildPortfolioStory', () => {
     const s = buildPortfolioStory(preview());
     const byLabel = Object.fromEntries(s.claims.map((c) => [c.label, c.sourceKey]));
     expect(byLabel['Marketable population']).toBe('population');
-    expect(byLabel['In-the-money leads']).toBe('itm');
-    expect(byLabel['In-the-money share']).toBe('itm');
-    expect(byLabel['Top-tier opportunities']).toBe('leadScore');
-    expect(byLabel['Offers recommended']).toBe('nbo');
+    expect(byLabel['Refi-economics screen']).toBe('itm');
+    expect(byLabel['Refi-economics share']).toBe('itm');
+    expect(byLabel['Opportunity score 75+ count']).toBe('leadScore');
+    expect(byLabel['Primary offer paths']).toBe('nbo');
     expect(s.claims.every((c) => c.verified)).toBe(true);
   });
 
@@ -53,16 +53,16 @@ describe('buildPortfolioStory', () => {
     expect(s.allVerified).toBe(true);
   });
 
-  it('omits the top-tier clause when that count is null, still fully verified', () => {
+  it('omits the score-75+ clause when that count is null, still fully verified', () => {
     const s = buildPortfolioStory(preview({ top_tier_opportunities: null }));
-    expect(s.sentences.join(' ')).not.toContain('top-tier opportunity bar');
-    expect(s.claims.find((c) => c.label === 'Top-tier opportunities')).toBeUndefined();
+    expect(s.sentences.join(' ')).not.toContain('strongest opportunity-score tier');
+    expect(s.claims.find((c) => c.label === 'Opportunity score 75+ count')).toBeUndefined();
     expect(s.allVerified).toBe(true);
   });
 
   it('omits the offers sentence when offers_recommended is null', () => {
     const s = buildPortfolioStory(preview({ offers_recommended: null }));
-    expect(s.sentences.join(' ')).not.toContain('recommended next-best offer');
+    expect(s.sentences.join(' ')).not.toContain('primary offer path assigned');
     expect(s.sentences).toHaveLength(2);
   });
 

@@ -154,9 +154,9 @@ class InProcessMockAnalyticsRepository:
         )
         stages = [
             FunnelStage(stage="Addressable", stage_order=1, borrower_count=addressable),
-            FunnelStage(stage="In the Money", stage_order=2, borrower_count=itm),
-            FunnelStage(stage="High Opportunity", stage_order=3, borrower_count=high),
-            FunnelStage(stage="Offer Recommended", stage_order=4, borrower_count=recommended),
+            FunnelStage(stage="Refi Economics", stage_order=2, borrower_count=itm),
+            FunnelStage(stage="Top-tier Score", stage_order=3, borrower_count=high),
+            FunnelStage(stage="Primary Offer Selected", stage_order=4, borrower_count=recommended),
             FunnelStage(stage="Approved", stage_order=5, borrower_count=0),
             FunnelStage(stage="Actioned", stage_order=6, borrower_count=0),
         ]
@@ -353,12 +353,14 @@ class InProcessMockAnalyticsRepository:
                     signal_type=signal,
                     source_product=source,
                     source_table="mip.gold.evidence_events",
+                    source_label="Evidence stream",
                     event_count=len(values),
                     mean_confidence=round(sum(values) / len(values), 3) if values else None,
                     confidence_source=(
                         "AVG(mip.gold.evidence_events.confidence); synthetic fixture mirrors "
                         "gold_evidence_events.sql confidence semantics."
                     ),
+                    confidence_label="Mean governed evidence confidence.",
                 )
                 for (signal, source), values in sorted(signal_counts.items())
             ],

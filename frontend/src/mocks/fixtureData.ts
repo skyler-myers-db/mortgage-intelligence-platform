@@ -62,7 +62,7 @@ export const mockBorrowers: Borrower360[] = [
   {
     borrower_id: 'B-48295', clip: 'clip_demo_48295', display_name: 'Owner 48295', city: 'Chicago', state: 'IL', zip: '60613',
     segment_codes: ['listed', 'retention'], equity_estimate: 405000, rate_spread_bps: 162, opportunity_score: 82, confidence: 79,
-    recommended_offer: 'Purchase Mortgage', why_now: 'Listed-for-sale trigger suggests a purchase mortgage opportunity.', evidence_ids: ['ev-003'], approval_status: 'pending',
+    recommended_offer: 'Next-home purchase loan', why_now: 'The active listing makes next-home financing more useful than refinancing the current loan.', evidence_ids: ['ev-003'], approval_status: 'pending',
     clip_id: 'clip_demo_48295', owner_link_id: 'ol_demo_48295', subject_property: 'Synthetic property · Chicago, IL 60613', avm_value: 725000, current_lien_balance: 320000, current_rate: 6.50, ltv: 44, related_property_count: 1,
     listed_for_sale: true, listing_status_category: 'A', listing_status_description: 'Active', listing_price: 725000, listing_days_on_market: 18,
     trigger_timeline: evidence.slice(2), evidence_events: evidence.slice(2),
@@ -118,7 +118,7 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
     updatedAt: '2026-04-20 06:12 UTC',
   },
   nbo: {
-    title: 'Next-Best-Offer model',
+    title: 'Primary offer rules',
     short: 'mlflow · mtg_nbo_v3',
     description: 'MLflow model mtg_nbo_v3 — gradient-boosted tree; output = product ∈ {refi, heloc, cashout, purchase, retention} with calibrated propensity.',
     lineage: [

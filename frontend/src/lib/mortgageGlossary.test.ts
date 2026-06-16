@@ -9,6 +9,7 @@ const REQUIRED_TERMS = [
   'heloc',
   'inTheMoney',
   'nextBestOffer',
+  'opportunityScore',
   'ownerLink',
   'signalStrength',
   'evidenceConfidence',
@@ -29,6 +30,13 @@ describe('mortgage glossary', () => {
     expect(mortgageGlossary.signalStrength.appContext).toMatch(/not a statistical confidence interval/i);
     expect(mortgageGlossary.evidenceConfidence.short).toMatch(/row-level confidence/i);
     expect(mortgageGlossary.evidenceConfidence.appContext).toMatch(/separate from signal strength/i);
+  });
+
+  it('distinguishes refinance economics from opportunity score and primary offer', () => {
+    expect(mortgageGlossary.inTheMoney.short).toMatch(/refinance-only economics screen/i);
+    expect(mortgageGlossary.inTheMoney.appContext).toMatch(/not the same as a high-quality lead/i);
+    expect(mortgageGlossary.opportunityScore.appContext).toMatch(/broader than refinance economics/i);
+    expect(mortgageGlossary.nextBestOffer.term).toBe('Primary offer');
   });
 
   it('has stable unique anchors for every entry', () => {

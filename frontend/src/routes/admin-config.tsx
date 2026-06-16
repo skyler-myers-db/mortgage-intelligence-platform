@@ -283,7 +283,7 @@ export default function AdminConfig() {
           </div>
           <div className="surface__body admin-panel-body">
             <p className="body flush">
-              Thresholds for in-the-money spread, equity, LTV, and retention scoring. Stored in Unity Catalog (<span className="mono fs-11">mip.ref.offer_rules_config</span>).
+              Thresholds for the refinance-economics screen, equity, LTV, and retention scoring. Stored in Unity Catalog (<span className="mono fs-11">mip.ref.offer_rules_config</span>).
             </p>
             {rulesWarming && (
               <WarmingUpBlock state={rulesWarming} title="Offer rules loading" compact />

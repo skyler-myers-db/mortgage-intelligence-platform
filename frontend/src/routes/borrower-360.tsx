@@ -17,6 +17,7 @@ import { Skeleton } from '../components/ui/Skeleton';
 import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 import { Reveal } from '../components/fx/Reveal';
 import { descriptorFor, descriptorForEvidence } from '../lib/drawerSources';
+import { offerDisplayLabel, offerShortDescription } from '../lib/offerLanguage';
 import { segmentByCode } from '../lib/segmentMetadata';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
 import { queryKeys } from '../lib/queryKeys';
@@ -97,7 +98,7 @@ export default function Borrower360() {
       <PageShell
         eyebrow="Borrower 360"
         title="Choose a borrower to inspect"
-        lede="Borrower 360 shows a single borrower's full dossier — masked property ref, equity estimate, rate spread, trigger timeline, recommended offer, and every evidence chip that justifies the score. Pick a borrower from the Lead Queue to open it here."
+        lede="Borrower 360 shows a single borrower's full dossier — masked property ref, equity estimate, rate spread, trigger timeline, primary offer, and every evidence chip that justifies the score. Pick a borrower from the Lead Queue to open it here."
         heroRight={
           <Link className="btn btn--primary" to="/lead-queue">
             Browse lead queue
@@ -262,11 +263,14 @@ export default function Borrower360() {
     });
   };
 
+  const offerLabel = offerDisplayLabel(b.recommended_offer_code, b.recommended_offer);
+  const offerDescription = offerShortDescription(b.recommended_offer_code);
+
   return (
     <PageShell
       eyebrow="Borrower 360"
       title={`Borrower ${b.borrower_id}`}
-      lede={`${b.city}, ${b.state} ${b.zip} · ${b.recommended_offer}`}
+      lede={`${b.city}, ${b.state} ${b.zip} · ${offerLabel}`}
       heroRight={
         <>
           <ScoreBadge value={b.opportunity_score} />
@@ -433,7 +437,7 @@ export default function Borrower360() {
             <div className="surface__body">
               <div className="chip-row mb-3">
                 <Chip variant={b.why_panel.in_the_money ? 'success' : 'warning'}>
-                  {b.why_panel.in_the_money ? <GlossaryTerm term="inTheMoney">In-the-money</GlossaryTerm> : 'Not in the money'}
+                  {b.why_panel.in_the_money ? <GlossaryTerm term="inTheMoney">Passes refi screen</GlossaryTerm> : 'Below refi screen'}
                 </Chip>
                 <span className="mono num text-1">
                   +{b.why_panel.rate_spread_bps} bps
@@ -443,7 +447,7 @@ export default function Borrower360() {
                 </span>
               </div>
               <div className="rationale-box">
-                <span className="text-1 fw-500">Economic check.</span>{' '}
+                <span className="text-1 fw-500">Refinance economics.</span>{' '}
                 {b.why_panel.in_the_money_reason}
               </div>
               <div className="chip-row mt-3">
@@ -479,14 +483,15 @@ export default function Borrower360() {
           <div className="surface">
             <div className="surface__hdr">
               <Icon name="bolt" size={14} className="icon-accent" />
-              <div className="h-4"><GlossaryTerm term="nextBestOffer">Next-best-offer</GlossaryTerm></div>
+              <div className="h-4"><GlossaryTerm term="nextBestOffer">Primary offer</GlossaryTerm></div>
             </div>
             <div className="surface__body">
               <div className="split-row">
-                <div className="offer-title">{b.recommended_offer}</div>
+                <div className="offer-title">{offerLabel}</div>
                 <ScoreBadge value={b.opportunity_score} />
               </div>
-              <p className="body mt-2">{b.why_now}</p>
+              <p className="body mt-2">{offerDescription}</p>
+              <p className="muted fs-12 mt-1">{b.why_now}</p>
               <div className="chip-row mt-3">
                 <Link
                   className="btn btn--primary"

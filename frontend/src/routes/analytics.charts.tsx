@@ -24,6 +24,7 @@ import {
   buildFunnelSankeyModel,
   categoricalTickIndexes,
   fmt,
+  funnelStageDisplayLabel,
   formatAxisTick,
   formatConversionPct,
   formatShortDate,
@@ -155,7 +156,7 @@ export function FunnelBars({ stages, leadParams = {} }: { stages: FunnelStage[];
     <Bars
       rows={[...stages].sort((a, b) => a.stage_order - b.stage_order)}
       value={(row) => row.borrower_count}
-      label={(row) => row.stage}
+      label={(row) => funnelStageDisplayLabel(row)}
       href={(row) => leadQueueHrefForFunnelStage(row, leadParams)}
     />
   );
@@ -229,13 +230,14 @@ export function FunnelSankey({
       ))}
       {model.nodes.map((node) => {
         const conv = formatConversionPct(node.conversion);
+        const stageLabel = funnelStageDisplayLabel({ stage: node.stage, stage_order: node.stageOrder });
         return (
           <g
             key={node.stageOrder}
             className="funnel-sankey__node"
             role="link"
             tabIndex={0}
-            aria-label={`${node.stage}: ${fmt(node.count)} borrowers${conv ? `, ${conv} from previous stage` : ''}. Open in lead queue.`}
+            aria-label={`${stageLabel}: ${fmt(node.count)} borrowers${conv ? `, ${conv} from previous stage` : ''}. Open in lead queue.`}
             onClick={() => go(node)}
             onKeyDown={onKey(node)}
           >
@@ -256,7 +258,7 @@ export function FunnelSankey({
               </text>
             )}
             <text className="funnel-sankey__label" x={node.xCenter} y={node.yBottom + 18} textAnchor="middle">
-              {node.stage}
+              {stageLabel}
             </text>
           </g>
         );

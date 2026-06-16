@@ -16,7 +16,7 @@ from backend.schemas.lead import Borrower360
 from backend.services.audit_lakebase_store import write_audit_event_in_transaction
 from backend.services.audit_store import AuditMetadataViolation, AuditPIIError
 from backend.services.lakebase import LakebaseClient, LakebaseError, get_lakebase_client
-from backend.services.scoring import NBO_PRODUCT_LABELS
+from backend.services.scoring import NBO_PRODUCT_LABELS, offer_display_label
 
 _ACTIVATION_OFFER_CODES = set(NBO_PRODUCT_LABELS) | {"recapture"}
 
@@ -203,7 +203,7 @@ def _offer_label(offer_code: str, borrower: Borrower360) -> str:
         return borrower.recommended_offer
     if offer_code == "recapture":
         return "Recapture"
-    return NBO_PRODUCT_LABELS.get(offer_code, borrower.recommended_offer)
+    return offer_display_label(offer_code, borrower.recommended_offer)
 
 
 def _approved_campaign_id(approved_decision: dict[str, Any]) -> str | None:

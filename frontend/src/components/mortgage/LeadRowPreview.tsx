@@ -2,6 +2,7 @@ import type { CSSProperties } from 'react';
 import { Link } from 'react-router-dom';
 import type { LeadSummary } from '../../types';
 import { DRAWER_SOURCES } from '../../lib/drawerSources';
+import { offerDisplayLabel, offerShortDescription } from '../../lib/offerLanguage';
 import { segmentColor, segmentName } from '../../lib/segmentMetadata';
 import { useApp } from '../AppContext';
 import { Button, EvidenceChip } from '../Primitives';
@@ -100,12 +101,17 @@ export function RowPreview({ lead, approval }: { lead: LeadSummary; approval?: s
       </div>
 
       <div>
-        <div className="eyebrow mb-2">Next-best-offer</div>
+        <div className="eyebrow mb-2">Primary offer</div>
         <div className="surface preview-offer-card">
           <div className="split-row">
-            <div className="offer-title">{lead.recommended_offer}</div>
+            <div className="offer-title">
+              {offerDisplayLabel(lead.recommended_offer_code, lead.recommended_offer)}
+            </div>
             <ScoreBadge value={lead.opportunity_score} />
           </div>
+          <p className="muted fs-12 mt-1 flush">
+            {offerShortDescription(lead.recommended_offer_code)}
+          </p>
           <div className="muted fs-12 mt-1">
             Signal <ConfidenceMeter value={lead.confidence} compact />
           </div>

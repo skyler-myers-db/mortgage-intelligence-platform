@@ -49,10 +49,10 @@ _LEAD_SCORE_WEIGHTS = (
 )
 _DECIMAL_ONE = Decimal("1")
 
-# Human labels for the eight offer_codes. Source of truth for the
-# OfferRecommendation.product_label rendered at the API boundary; tests assert
-# parity with ``tests/fixtures/next_best_offer_golden.json`` without requiring
-# production code to import from test fixtures at module load.
+# Canonical SQL-parity labels for the eight offer_codes. These mirror the
+# governed fixture and are intentionally stable for scoring/audit contracts.
+# User-facing APIs should call ``offer_display_label`` so legacy labels such as
+# "Purchase Mortgage" do not leak into screens or outreach review.
 NBO_PRODUCT_LABELS: dict[str, str] = {
     "purchase": "Purchase Mortgage",
     "refi_plus_heloc": "Refinance + HELOC",
@@ -63,6 +63,24 @@ NBO_PRODUCT_LABELS: dict[str, str] = {
     "retention": "Retention",
     "nurture": "Nurture",
 }
+
+OFFER_DISPLAY_LABELS: dict[str, str] = {
+    "purchase": "Next-home purchase loan",
+    "refi_plus_heloc": "Refinance + home-equity review",
+    "heloc": "Home-equity line review",
+    "refi": "Refinance review",
+    "cash_out": "Cash-out refinance review",
+    "investor": "Investor financing review",
+    "retention": "Customer retention review",
+    "nurture": "Monitor for later",
+}
+
+
+def offer_display_label(code: str | None, fallback: str | None = None) -> str:
+    normalized = str(code or "").strip().lower()
+    if normalized in OFFER_DISPLAY_LABELS:
+        return OFFER_DISPLAY_LABELS[normalized]
+    return fallback or "Mortgage review"
 
 
 # ---------------------------------------------------------------------------
@@ -78,7 +96,7 @@ NBO_PRODUCT_LABELS: dict[str, str] = {
 #
 #     from backend.services.scoring import source_display_label
 #     label = source_display_label("mip.gold.fn_in_the_money")
-#     # -> "In-the-money rule"
+#     # -> "Refinance economics screen"
 #
 # Unknown entries fall back to the last dotted segment (the pre-existing
 # `shortSourceLabel` behaviour) so adding a new UC object is non-breaking.
@@ -86,9 +104,9 @@ NBO_PRODUCT_LABELS: dict[str, str] = {
 SOURCE_DISPLAY_LABELS: dict[str, str] = {
     # UC function evidence
     "mip.gold.fn_rate_spread":      "Market rate comparison",
-    "mip.gold.fn_in_the_money":     "In-the-money rule",
-    "mip.gold.fn_next_best_offer":  "Next-best-offer model",
-    "mip.gold.fn_lead_score":       "Lead score model",
+    "mip.gold.fn_in_the_money":     "Refinance economics screen",
+    "mip.gold.fn_next_best_offer":  "Primary offer rules",
+    "mip.gold.fn_lead_score":       "Opportunity score",
     # UC table evidence
     "mip.gold.borrower_360":        "Borrower dossier",
     "mip.gold.borrower_dossier":    "Borrower dossier",
@@ -101,11 +119,11 @@ SOURCE_DISPLAY_LABELS: dict[str, str] = {
     "mip.silver.refi_propensity":   "Refi propensity",
     # Short aliases used on RowPreview and app proof chips.
     "fn_rate_spread":               "Market rate comparison",
-    "fn_in_the_money":              "In-the-money rule",
-    "fn_next_best_offer":           "Next-best-offer model",
-    "fn_lead_score":                "Lead score model",
-    "rules.itm_v3":                 "In-the-Money logic",
-    "mlflow.mtg_nbo_v3":            "Next-best-offer model v3",
+    "fn_in_the_money":              "Refinance economics screen",
+    "fn_next_best_offer":           "Primary offer rules",
+    "fn_lead_score":                "Opportunity score",
+    "rules.itm_v3":                 "Refinance economics screen",
+    "mlflow.mtg_nbo_v3":            "Primary offer rules v3",
     "permits.building":             "Building permit signal",
     "listing_activity":             "MLS listing activity",
     "heloc_propensity":             "HELOC propensity",

@@ -499,6 +499,7 @@ describe('lead queue API client', () => {
       undefined,
       {
         states: ['IL', 'TX'],
+        counties: ['17031', '48201'],
         zips: ['60617', '75217'],
         borrowerIds: ['B-11111', 'B-22222'],
       },
@@ -522,6 +523,7 @@ describe('lead queue API client', () => {
     const url = new URL(calls[0].path, 'http://localhost');
     expect(url.pathname).toBe('/api/v1/leads');
     expect(url.searchParams.get('states')).toBe('IL,TX');
+    expect(url.searchParams.get('counties')).toBe('17031,48201');
     expect(url.searchParams.get('zips')).toBe('60617,75217');
     expect(url.searchParams.get('borrower_ids')).toBe('B-11111,B-22222');
     expect(url.searchParams.get('segment_codes')).toBe('itm,equity');

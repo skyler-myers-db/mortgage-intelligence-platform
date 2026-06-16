@@ -4,6 +4,7 @@ import type { Borrower360 } from '../../types';
 import { Icon } from '../Icon';
 import { useApp } from '../AppContext';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
+import { offerDisplayLabel } from '../../lib/offerLanguage';
 
 /**
  * Borrower-facing offer experience — PROTOTYPE (auto-offer program, Module 1).
@@ -49,7 +50,7 @@ export function BorrowerOfferPreviewMock({
 }) {
   const { lender } = useApp();
   const [accepted, setAccepted] = useState(false);
-  const product = (borrower.recommended_offer || 'a mortgage option').trim();
+  const product = offerDisplayLabel(borrower.recommended_offer_code, borrower.recommended_offer || 'a mortgage option');
   const lenderName = (lender || 'Your lender').trim();
   const reason = borrowerReason(borrower);
   const panelRef = useRef<HTMLDivElement>(null);

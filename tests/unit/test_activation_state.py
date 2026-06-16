@@ -252,7 +252,7 @@ def test_stage_borrower_derives_offer_and_campaign_from_approved_decision() -> N
     assert client.conn.insert_params["campaign_id"] == campaign_id
     payload = json.loads(str(client.conn.insert_params["payload_json"]))
     assert payload["offer_code"] == "heloc"
-    assert payload["recommended_offer"] == "HELOC"
+    assert payload["recommended_offer"] == "Home-equity line review"
 
 
 def test_stage_borrower_rejects_client_offer_that_differs_from_approval() -> None:

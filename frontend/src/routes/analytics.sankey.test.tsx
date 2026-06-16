@@ -19,9 +19,9 @@ import {
 
 const STAGES: FunnelStage[] = [
   { stage: 'Addressable', stage_order: 1, borrower_count: 5_156_184 },
-  { stage: 'In the Money', stage_order: 2, borrower_count: 117_189 },
-  { stage: 'High Opportunity', stage_order: 3, borrower_count: 3_990 },
-  { stage: 'Offer Recommended', stage_order: 4, borrower_count: 4_467_395 },
+  { stage: 'Refi Economics', stage_order: 2, borrower_count: 117_189 },
+  { stage: 'Opportunity Score 75+', stage_order: 3, borrower_count: 3_990 },
+  { stage: 'Primary Offer Selected', stage_order: 4, borrower_count: 4_467_395 },
   { stage: 'Approved', stage_order: 5, borrower_count: 35 },
   { stage: 'Actioned', stage_order: 6, borrower_count: 3 },
 ];
@@ -30,8 +30,8 @@ describe('buildFunnelSankeyModel (pure geometry)', () => {
   it('keeps offer coverage out of the strict activation funnel', () => {
     expect(activationFunnelStages(STAGES).map((stage) => stage.stage)).toEqual([
       'Addressable',
-      'In the Money',
-      'High Opportunity',
+      'Refi Economics',
+      'Opportunity Score 75+',
       'Approved',
       'Actioned',
     ]);

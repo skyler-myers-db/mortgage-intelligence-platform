@@ -647,15 +647,15 @@ def _canonical_genie_answer(
         if rows:
             top = rows[0]
             answer = (
-                "I ranked ZIP codes by unique borrowers currently in-the-money "
-                f"for refinance from {borrower_asset}. "
+                "I ranked ZIP codes by unique borrowers passing the refinance-economics screen "
+                f"from {borrower_asset}. "
                 f"The current leader is ZIP {top.get('zip')} ({top.get('state')}) "
                 f"with {int(top.get('in_the_money_borrowers') or 0):,} borrowers; "
                 "the cohort action below carries these ZIP filters into Lead Queue."
             )
         else:
             answer = (
-                "The trusted borrower table returned no in-the-money ZIP rows for "
+                "The trusted borrower table returned no refinance-economics ZIP rows for "
                 "the current refreshed data coverage."
             )
         return GenieMessageResponse(
@@ -771,8 +771,9 @@ def _canonical_genie_answer(
             count_int = int(top.get("cash_out_borrowers") or 0)
             answer = (
                 f"{top.get('state')} has the most cash-out opportunity right now "
-                f"with {count_int:,} borrowers. This uses recommended_offer_code = "
-                f"'cash_out' at the unique borrower grain from {borrower_asset}."
+                f"with {count_int:,} borrowers. This counts borrowers whose "
+                f"primary offer is a cash-out refinance review at the unique "
+                f"borrower grain from {borrower_asset}."
             )
             metric_value = f"{count_int:,}"
         else:
@@ -910,7 +911,7 @@ def _canonical_genie_answer(
             source="trusted_sql",
         )
         answer = (
-            f"There are {count_int:,} borrowers currently in-the-money in {city_scope} "
+            f"There are {count_int:,} borrowers passing the refinance-economics screen in {city_scope} "
             f"within the current {_current_footprint_label()} evaluation-share scope. "
             f"This is a city-scoped unique borrower count from {borrower_asset}; "
             "it is not the overall share total."
@@ -975,7 +976,7 @@ def _canonical_genie_answer(
     )
     geo_text = f" in {state_scope[0]} ({state_scope[1]})" if state_scope else ""
     answer = (
-        f"There are {count_int:,} borrowers currently in-the-money{geo_text}. "
+        f"There are {count_int:,} borrowers passing the refinance-economics screen{geo_text}. "
         f"This is a unique borrower count from {borrower_asset} at the "
         "gold borrower grain, so multi-segment borrowers are counted once."
     )

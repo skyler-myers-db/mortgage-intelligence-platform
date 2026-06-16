@@ -71,7 +71,7 @@ export function DataEstatePanel({ estate }: { estate: DataEstateResponse }) {
             <Icon name="layers" size={14} />
           </div>
           <div>
-            <div className="h-4">AI data estate under the hood</div>
+            <div className="h-4">Data estate under the hood</div>
             <div className="muted fs-12">
               First-party data, Cotality enrichment, Databricks governance, and Entrada transformations.
             </div>
@@ -252,7 +252,7 @@ export function DataEstatePanelSkeleton() {
             <Icon name="layers" size={14} />
           </div>
           <div>
-            <div className="h-4">AI data estate under the hood</div>
+            <div className="h-4">Data estate under the hood</div>
             <div className="muted fs-12">
               Loading source readiness, freshness, and governed lineage proof…
             </div>

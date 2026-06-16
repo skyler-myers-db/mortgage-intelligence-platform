@@ -26,7 +26,7 @@ interface ModuleItem {
 const MODULES: ModuleItem[] = [
   { id: 0, name: 'Top-of-Funnel',        icon: 'target', desc: 'Lead generation + borrower segmentation (ships today).' },
   { id: 1, name: 'Pipeline Optimization', icon: 'flow',   desc: 'Lead → app → approval throughput and stalls (on roadmap).' },
-  { id: 2, name: 'LO Workbench',          icon: 'money',  desc: 'Officer assist with explainable next-best-action (on roadmap).' },
+  { id: 2, name: 'LO Workbench',          icon: 'money',  desc: 'Officer assist with explainable borrower guidance (on roadmap).' },
   { id: 3, name: 'Underwriting Copilot',  icon: 'shield', desc: 'Condition handling and exception triage (on roadmap).' },
   { id: 4, name: 'Risk & Retention',      icon: 'audit',  desc: 'Portfolio-level retention and recapture (on roadmap).' },
 ];

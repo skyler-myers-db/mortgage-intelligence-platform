@@ -4,6 +4,8 @@ import { useQuery } from '@tanstack/react-query';
 import { api } from '../../lib/api';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { queryKeys } from '../../lib/queryKeys';
+import { formatTimestamp } from '../../lib/time';
+import { offerDisplayLabel } from '../../lib/offerLanguage';
 import type { BorrowerProof, ProofFormulaLine, ProofReproduceQuery } from '../../types';
 import { Button, Chip } from '../Primitives';
 import { Icon } from '../Icon';
@@ -197,7 +199,7 @@ export function BorrowerProofDrawer({ borrowerId, open, onClose }: BorrowerProof
                       </div>
                     ))}
                   </div>
-                  <div className="eyebrow">Next-best-offer branch</div>
+                  <div className="eyebrow">Primary offer branch</div>
                   <div className="proof-branches">
                     {proof.offer_branches.map((branch) => (
                       <div
@@ -205,7 +207,9 @@ export function BorrowerProofDrawer({ borrowerId, open, onClose }: BorrowerProof
                         className={`proof-branch ${branch.selected ? 'is-selected' : ''} ${branch.passed ? 'is-passed' : ''}`}
                       >
                         <div className="split-row">
-                          <span className="proof-branch__label">{branch.label}</span>
+                          <span className="proof-branch__label">
+                            {offerDisplayLabel(branch.code, branch.label)}
+                          </span>
                           <Chip variant={branch.selected ? 'success' : branch.passed ? 'neutral' : 'warning'}>
                             {branch.selected ? 'Selected' : branch.passed ? 'Passed' : 'Did not pass'}
                           </Chip>
@@ -234,7 +238,7 @@ export function BorrowerProofDrawer({ borrowerId, open, onClose }: BorrowerProof
                       <div className="proof-evidence-row__meta">
                         <span className="mono">{row.signal_type}</span>
                         <span className="mono num">{row.confidence.toFixed(3)} evidence confidence</span>
-                        <span className="mono">{row.timestamp}</span>
+                        <span className="mono">{formatTimestamp(row.timestamp, { withYear: false })}</span>
                       </div>
                     </div>
                   ))}
@@ -247,7 +251,7 @@ export function BorrowerProofDrawer({ borrowerId, open, onClose }: BorrowerProof
                     <div className="eyebrow">Generated from</div>
                     <p className="body flush">{proof.generated_from}</p>
                     {proof.source_refresh_at && (
-                      <p className="muted fs-12 flush">Source refresh: {proof.source_refresh_at}</p>
+                      <p className="muted fs-12 flush">Source refresh: {formatTimestamp(proof.source_refresh_at)}</p>
                     )}
                   </div>
                   <div className="eyebrow">Governed Unity Catalog assets</div>
@@ -260,8 +264,7 @@ export function BorrowerProofDrawer({ borrowerId, open, onClose }: BorrowerProof
                     ))}
                   </div>
                   <div className="proof-callout proof-callout--subtle">
-                    Raw CLIP, owner names, street address, and licensed raw Cotality source paths are not
-                    exposed through this drawer. Reproduction runs against governed, masked gold tables.
+                    Reproduction runs against governed, masked gold tables. Raw identifiers and street addresses stay out of this view.
                   </div>
                 </div>
               )}

@@ -24,7 +24,7 @@ from backend.services.repositories import (
     get_borrower_repository,
     get_offer_repository,
 )
-from backend.services.scoring import NBO_PRODUCT_LABELS, source_display_label
+from backend.services.scoring import NBO_PRODUCT_LABELS, offer_display_label, source_display_label
 
 log = logging.getLogger(__name__)
 
@@ -105,44 +105,44 @@ def _rationale_for(
 
     if code == "purchase":
         return (
-            "Home is actively listed for sale -- present a purchase mortgage on "
-            "the next home before the current lien pays off at close."
+            "The active listing signal means the useful conversation is likely "
+            "about financing the next home, not refinancing the current one."
         )
     if code == "refi_plus_heloc":
         return (
             f"Rate is {_spread_phrase()} and the home has {_equity_phrase()} -- "
-            "a strong candidate for a refinance with a HELOC alongside it."
+            "review the first mortgage and home-equity options together."
         )
     if code == "heloc":
         intent_phrase = "Cotality HELOC propensity" if heloc_intent else "HELOC intent"
         return (
             f"{intent_phrase} paired with {_equity_phrase()} supports a "
-            "HELOC conversation; the rate isn't compelling enough for a full refinance."
+            "home-equity line conversation; refinance economics are not strong enough for a full refinance."
         )
     if code == "refi":
         return (
             f"Rate is {_spread_phrase()} with {_equity_phrase()} -- a straight "
-            "refinance fits (equity sits below the HELOC cushion)."
+            "refinance review is the clearest offer path."
         )
     if code == "cash_out":
         return (
-            "Rate isn't high enough to drive a plain refinance, but "
-            f"{_equity_phrase()} supports a cash-out conversation."
+            "The rate signal is not strong enough for a plain refinance, but "
+            f"{_equity_phrase()} supports a cash-out refinance review."
         )
     if code == "investor":
         return (
             "Owner Link ties multiple properties to this owner -- owner-occupant "
-            "economics do not apply; route to the investor desk."
+            "refinance economics are not the right frame; route to investor lending."
         )
     if code == "retention":
         if competitor_lien:
             return (
                 "Current customer with a competitor lien recorded on the Owner "
-                "Link -- reach out before the recapture opportunity closes."
+                "Link -- review the relationship before the borrower moves more business away."
             )
         return (
             "Current customer whose rate has drifted above our retention bar -- "
-            "reach out before they shop a competitor."
+            "review whether the current loan still fits before they shop elsewhere."
         )
     return (
         "No active trigger on this borrower right now -- keep in nurture until "
@@ -192,16 +192,19 @@ def _alternatives_for(
         return [
             OfferAlternative(
                 offer_code="refi",
-                product_label=NBO_PRODUCT_LABELS["refi"],
-                reason_not_chosen=f"Equity {equity}% is above the HELOC threshold ({heloc_min}%); cross-sell wins over refi-alone.",
+                product_label=offer_display_label("refi"),
+                reason_not_chosen=(
+                    f"Equity {equity}% is above the HELOC threshold ({heloc_min}%), "
+                    "so the review should include home-equity options instead of refinance alone."
+                ),
             ),
             OfferAlternative(
                 offer_code="heloc",
-                product_label=NBO_PRODUCT_LABELS["heloc"],
+                product_label=offer_display_label("heloc"),
                 reason_not_chosen=(
-                    "Refi rate economics also qualify, so the refi+HELOC cross-sell beats a pure HELOC."
+                    "Refinance economics also qualify, so a combined first-mortgage and equity review is more complete than HELOC alone."
                     if not heloc_intent
-                    else "Refi rate economics also qualify, so cross-sell captures both products in one outreach."
+                    else "Refinance economics also qualify, so the borrower should review both the first mortgage and equity options."
                 ),
             ),
         ]
@@ -209,53 +212,53 @@ def _alternatives_for(
         return [
             OfferAlternative(
                 offer_code="refi_plus_heloc",
-                product_label=NBO_PRODUCT_LABELS["refi_plus_heloc"],
-                reason_not_chosen="Active listing — the current lien is about to be paid off at close; refi loses to purchase.",
+                product_label=offer_display_label("refi_plus_heloc"),
+                reason_not_chosen="Because the property is listed, preparing financing for the next purchase is more useful than refinancing the current loan.",
             ),
         ]
     if code == "heloc":
         return [
             OfferAlternative(
                 offer_code="refi",
-                product_label=NBO_PRODUCT_LABELS["refi"],
-                reason_not_chosen="Rate spread is below the refi minimum; HELOC is the HELOC-intent lane.",
+                product_label=offer_display_label("refi"),
+                reason_not_chosen="Rate spread is below the refinance minimum; the active equity signal points to HELOC instead.",
             ),
             OfferAlternative(
                 offer_code="cash_out",
-                product_label=NBO_PRODUCT_LABELS["cash_out"],
-                reason_not_chosen="HELOC intent steers to HELOC (cheaper capital than cash-out).",
+                product_label=offer_display_label("cash_out"),
+                reason_not_chosen="HELOC intent points to a home-equity line before a cash-out refinance review.",
             ),
         ]
     if code == "refi":
         return [
             OfferAlternative(
                 offer_code="refi_plus_heloc",
-                product_label=NBO_PRODUCT_LABELS["refi_plus_heloc"],
-                reason_not_chosen=f"Equity {equity}% is below the HELOC threshold ({heloc_min}%); cross-sell would not underwrite.",
+                product_label=offer_display_label("refi_plus_heloc"),
+                reason_not_chosen=f"Equity {equity}% is below the HELOC threshold ({heloc_min}%), so the primary review stays refinance-only.",
             ),
         ]
     if code == "cash_out":
         return [
             OfferAlternative(
                 offer_code="heloc",
-                product_label=NBO_PRODUCT_LABELS["heloc"],
-                reason_not_chosen="No HELOC-intent trigger is active and equity is below the HELOC threshold; cash-out is the fit.",
+                product_label=offer_display_label("heloc"),
+                reason_not_chosen="No HELOC-intent trigger is active, so the equity conversation is better framed as cash-out refinance.",
             ),
         ]
     if code == "investor":
         return [
             OfferAlternative(
                 offer_code="nurture",
-                product_label=NBO_PRODUCT_LABELS["nurture"],
-                reason_not_chosen="Multi-property signal beats nurture even without owner-occupant equity.",
+                product_label=offer_display_label("nurture"),
+                reason_not_chosen="The multi-property signal is strong enough for investor-lending review instead of nurture.",
             ),
         ]
     if code == "retention":
         return [
             OfferAlternative(
                 offer_code="nurture",
-                product_label=NBO_PRODUCT_LABELS["nurture"],
-                reason_not_chosen="Customer relationship plus recapture signal crosses the retention bar.",
+                product_label=offer_display_label("nurture"),
+                reason_not_chosen="The customer relationship and recapture signal justify a retention review instead of nurture.",
             ),
         ]
     return []
@@ -281,7 +284,7 @@ def recommend_offer(
     code = cast(str, inputs["offer_code"])
     if code not in _VALID_OFFER_TYPES:
         # Defense in depth: scoring contract violation would surface here.
-        raise HTTPException(status_code=500, detail=f"Invalid offer_code '{code}' from next_best_offer")
+        raise HTTPException(status_code=500, detail=f"Invalid primary offer code '{code}'")
 
     thresholds_applied = {
         "min_spread_bps": cast(int, inputs["min_spread_bps"]),
@@ -320,7 +323,7 @@ def recommend_offer(
         borrower_id=borrower.borrower_id,
         offer_code=code,
         offer_type=cast(OfferType, code),
-        product_label=NBO_PRODUCT_LABELS[code],
+        product_label=offer_display_label(code, NBO_PRODUCT_LABELS[code]),
         confidence=borrower.confidence,
         rationale=_rationale_for(
             code,

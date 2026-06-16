@@ -96,7 +96,7 @@ def build_data_estate_response(
     *,
     runtime_statuses: dict[str, bool] | None = None,
 ) -> DataEstateResponse:
-    """Build the Apr-30 "AI data estate" proof surface.
+    """Build the Apr-30 data-estate proof surface.
 
     This is intentionally a metadata surface, not another data source. It
     reads the same non-PII source-readiness rows the Admin panel consumes and
@@ -215,7 +215,7 @@ def build_data_estate_response(
         _source_asset(
             by_name.get("UC Gold Lead Scores"),
             name="Entrada scoring primitives",
-            label="Lead score and next-best-offer SQL functions",
+            label="Opportunity score and primary-offer SQL functions",
             uc_object=qualify("gold", "lead_scores", catalog="mip"),
             fallback_status="not_configured",
             fallback_note="Scoring table refresh has not been validated.",
@@ -255,7 +255,7 @@ def build_data_estate_response(
         ),
         DataEstateLane(
             id="databricks",
-            title="Databricks governed AI layer",
+            title="Databricks governance layer",
             description="Unity Catalog, semantic views, Genie, Lakebase state, and auditability.",
             status=_lane_status(databricks_assets),  # type: ignore[arg-type]
             assets=databricks_assets,
@@ -270,7 +270,7 @@ def build_data_estate_response(
     ]
     gaps: list[str] = []
     if any(asset.synthetic_demo for asset in first_party_assets):
-        gaps.append("First-party lender feeds are synthetic Summit Mortgage demo feeds, not real customer data.")
+        gaps.append("First-party lender feeds use demo/synthetic rows in this workspace.")
     if any(asset.status not in {"live", "demo_synthetic"} for asset in first_party_assets):
         gaps.append("Customer first-party data feeds are not connected in this demo workspace.")
     if (

@@ -216,7 +216,7 @@ export function EvidenceDrawer() {
                       >
                         <div className="lineage-node__label">{n.direction}</div>
                         <div className="lineage-node__name">{n.label}</div>
-                        {n.event_time && <div className="lineage-node__meta">{n.event_time}</div>}
+                        {n.event_time && <div className="lineage-node__meta">{formatTimestamp(n.event_time, { withYear: false })}</div>}
                       </Link>
                     );
                   })}
@@ -237,17 +237,6 @@ export function EvidenceDrawer() {
                   ))}
                 </>
               )}
-
-              {/* Disclosure, not an ACL denial: this card describes what the
-                  proof view deliberately omits for EVERY viewer. The prior
-                  heading ("Not exposed here") read like a permissions error
-                  to workspace admins (operator report, 2026-06-11). */}
-              <div className="source-card source-card--subtle">
-                <div className="eyebrow mb-1">Privacy by design</div>
-                <p className="muted flush">
-                  {d.notExposed ?? 'By design — and regardless of your workspace permissions — this proof view never displays raw identities, owner names, street addresses, credentials, grants, storage locations, or raw source paths. They stay behind governed Unity Catalog boundaries.'}
-                </p>
-              </div>
 
               <div className="drawer__actions">
                 {assetHref && (
@@ -271,7 +260,7 @@ export function EvidenceDrawer() {
 
               {d.eventDate && (
                 <div className="drawer__updated">
-                  Evidence event date: {d.eventDate}
+                  Evidence event date: {formatTimestamp(d.eventDate)}
                 </div>
               )}
               {metadata?.last_updated && (

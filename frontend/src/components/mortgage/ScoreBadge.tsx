@@ -8,8 +8,8 @@ export function ScoreBadge({ value }: { value: number }) {
   return (
     <span
       className={`score score--${tier}`}
-      title="Opportunity score combines rate spread, equity, intent triggers, relationship, and offer fit. 75+ is top tier."
-      aria-label={`Opportunity score ${value}. 75 or higher is top tier.`}
+      title="Opportunity score ranks lead strength on a 0-100 scale. Scores of 75+ are the strongest review candidates and include economics, intent, fit, relationship, and evidence."
+      aria-label={`Opportunity score ${value}. Scores of 75 or higher are the strongest review candidates.`}
     >
       <span className="score__dot" />
       {value}

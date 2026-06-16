@@ -126,7 +126,7 @@ def test_borrower_proof_flags_next_best_offer_drift() -> None:
     proof = _build_borrower_proof(row)
 
     assert proof.trusted is False
-    assert any("next-best-offer" in gap for gap in proof.known_data_gaps)
+    assert any("primary offer" in gap for gap in proof.known_data_gaps)
     nurture = next(branch for branch in proof.offer_branches if branch.code == "nurture")
     assert nurture.selected is True
     assert nurture.passed is False

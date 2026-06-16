@@ -50,7 +50,7 @@ describe('RoiProjector', () => {
     mount(1200);
     // 1,200 × 4% × $340k × 1.5% = $244,800 → "$245K".
     expect(gross()).toBe('$245K');
-    expect(container.textContent).toContain('1,200 high-intent leads');
+    expect(container.textContent).toContain('1,200 refi-economics leads');
   });
 
   it('recomputes the headline live when an assumption changes', () => {
