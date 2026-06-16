@@ -1,4 +1,5 @@
 """Canonical SQL and question-scope helpers for Databricks Genie answers."""
+
 from __future__ import annotations
 
 import re
@@ -8,6 +9,7 @@ from backend.services.databricks_sql_helpers import qualify
 _BORROWER_360 = qualify("gold", "borrower_360")
 _EVIDENCE_EVENTS = qualify("gold", "evidence_events")
 _LEAD_POPULATION = qualify("gold", "lead_population")
+_SEGMENT_POPULATION = qualify("gold", "segment_population")
 
 _CANONICAL_ITM_COUNT_SQL = f"""
 SELECT COUNT(*) AS in_the_money_borrowers
@@ -270,28 +272,77 @@ ORDER BY ms.borrowers DESC, ms.avg_score DESC, ms.msa_cbsa_code ASC
 LIMIT 5
 """.strip()
 
+_CANONICAL_INVESTOR_SEGMENT_BY_STATE_SQL = f"""
+SELECT segment_code
+     , state
+     , count AS investor_borrowers
+     , avg_score
+     , delta_vs_prior
+     , refreshed_at
+FROM {_SEGMENT_POPULATION}
+WHERE segment_code = 'investor'
+  AND state <> '_ALL'
+  AND count > 0
+ORDER BY count DESC, avg_score DESC, state ASC
+LIMIT 20
+""".strip()
+
 _US_STATE_FILTERS: tuple[tuple[str, str], ...] = (
-    ("alabama", "AL"), ("alaska", "AK"), ("arizona", "AZ"), ("arkansas", "AR"),
-    ("california", "CA"), ("colorado", "CO"), ("connecticut", "CT"), ("delaware", "DE"),
-    ("florida", "FL"), ("georgia", "GA"), ("hawaii", "HI"), ("idaho", "ID"),
-    ("illinois", "IL"), ("indiana", "IN"), ("iowa", "IA"), ("kansas", "KS"),
-    ("kentucky", "KY"), ("louisiana", "LA"), ("maine", "ME"), ("maryland", "MD"),
-    ("massachusetts", "MA"), ("michigan", "MI"), ("minnesota", "MN"),
-    ("mississippi", "MS"), ("missouri", "MO"), ("montana", "MT"), ("nebraska", "NE"),
-    ("nevada", "NV"), ("new hampshire", "NH"), ("new jersey", "NJ"),
-    ("new mexico", "NM"), ("new york", "NY"), ("north carolina", "NC"),
-    ("north dakota", "ND"), ("ohio", "OH"), ("oklahoma", "OK"), ("oregon", "OR"),
-    ("pennsylvania", "PA"), ("rhode island", "RI"), ("south carolina", "SC"),
-    ("south dakota", "SD"), ("tennessee", "TN"), ("texas", "TX"), ("utah", "UT"),
-    ("vermont", "VT"), ("virginia", "VA"), ("washington", "WA"),
-    ("west virginia", "WV"), ("wisconsin", "WI"), ("wyoming", "WY"),
+    ("alabama", "AL"),
+    ("alaska", "AK"),
+    ("arizona", "AZ"),
+    ("arkansas", "AR"),
+    ("california", "CA"),
+    ("colorado", "CO"),
+    ("connecticut", "CT"),
+    ("delaware", "DE"),
+    ("florida", "FL"),
+    ("georgia", "GA"),
+    ("hawaii", "HI"),
+    ("idaho", "ID"),
+    ("illinois", "IL"),
+    ("indiana", "IN"),
+    ("iowa", "IA"),
+    ("kansas", "KS"),
+    ("kentucky", "KY"),
+    ("louisiana", "LA"),
+    ("maine", "ME"),
+    ("maryland", "MD"),
+    ("massachusetts", "MA"),
+    ("michigan", "MI"),
+    ("minnesota", "MN"),
+    ("mississippi", "MS"),
+    ("missouri", "MO"),
+    ("montana", "MT"),
+    ("nebraska", "NE"),
+    ("nevada", "NV"),
+    ("new hampshire", "NH"),
+    ("new jersey", "NJ"),
+    ("new mexico", "NM"),
+    ("new york", "NY"),
+    ("north carolina", "NC"),
+    ("north dakota", "ND"),
+    ("ohio", "OH"),
+    ("oklahoma", "OK"),
+    ("oregon", "OR"),
+    ("pennsylvania", "PA"),
+    ("rhode island", "RI"),
+    ("south carolina", "SC"),
+    ("south dakota", "SD"),
+    ("tennessee", "TN"),
+    ("texas", "TX"),
+    ("utah", "UT"),
+    ("vermont", "VT"),
+    ("virginia", "VA"),
+    ("washington", "WA"),
+    ("west virginia", "WV"),
+    ("wisconsin", "WI"),
+    ("wyoming", "WY"),
 )
 _AMBIGUOUS_STATE_CODES: frozenset[str] = frozenset({"HI", "ID", "IN", "ME", "OH", "OK", "OR"})
 
 
-def _ambiguous_state_code_match_is_contextual(
-    question: str, match: re.Match[str]
-) -> bool:
+def _ambiguous_state_code_match_is_contextual(question: str, match: re.Match[str]) -> bool:
     before = question[: match.start()]
     after = question[match.end() :]
     has_geo_preface = bool(
@@ -489,7 +540,9 @@ def _canonical_itm_state_breakdown_scope(question: str) -> bool:
         any(term in q for term in ("in-the-money", "in the money", "itm", "refi", "refinance"))
         and any(term in q for term in ("borrower", "lead", "candidate"))
         and "state" in q
-        and any(term in q for term in ("break down", "breakdown", "by state", "state by state", "table"))
+        and any(
+            term in q for term in ("break down", "breakdown", "by state", "state by state", "table")
+        )
     )
 
 
@@ -533,6 +586,24 @@ def _canonical_strategy_board_scope(question: str) -> bool:
         any(term in q for term in spend_terms)
         and any(term in q for term in touch_terms)
         and (has_touch_count or any(term in q for term in strategy_terms))
+    )
+
+
+def _canonical_investor_segment_by_state_scope(question: str) -> bool:
+    q = re.sub(r"[^a-z0-9\s/-]+", " ", question.lower())
+    q = re.sub(r"\s+", " ", q).strip()
+    investor_terms = (
+        "investor",
+        "multi property",
+        "multi-property",
+        "multi property segment",
+        "multi-property segment",
+    )
+    state_terms = ("state", "by state", "broken down", "breakdown", "break down")
+    return (
+        any(term in q for term in investor_terms)
+        and "segment" in q
+        and any(term in q for term in state_terms)
     )
 
 

@@ -14,6 +14,7 @@ Contract under test:
 5. ``GenieClientError`` from the live client (401, 500, malformed JSON)
    is re-raised -- it is NOT silently masked by a catalog answer.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -651,7 +652,9 @@ def test_data_question_without_query_gets_generic_sql_repair() -> None:
     assert len(stub.ask_calls) == 2
     assert stub.ask_conversation_ids == ["stale-conv", "stale-conv"]
     assert stub.ask_calls[0] == "Which zips have the most in-the-money refi candidates?"
-    assert "Regenerate the following Mortgage Intelligence Platform data question" in stub.ask_calls[1]
+    assert (
+        "Regenerate the following Mortgage Intelligence Platform data question" in stub.ask_calls[1]
+    )
     assert result.sql_query is not None
     assert "FROM mip.gold.borrower_360" in result.sql_query
     assert "GROUP BY zip, state" in result.sql_query
@@ -722,6 +725,163 @@ def test_top_zip_question_uses_direct_canonical_gold_sql_without_genie_call() ->
         "segment_codes": ["itm"],
         "segment_mode": "any",
     }
+    assert result.proof is not None
+    assert result.proof.trusted is True
+
+
+@pytest.mark.parametrize(
+    ("question", "rows", "asset", "sql_marker", "expected_phrase"),
+    [
+        (
+            "Show me the top 10 borrowers by lead score in Illinois.",
+            [
+                {
+                    "borrower_id": "B-IL-1",
+                    "display_name": "Borrower IL-1",
+                    "city": "Chicago",
+                    "state": "IL",
+                    "zip": "60617",
+                    "lead_score": 98,
+                    "recommended_offer_code": "refi",
+                    "recommended_offer": "Rate refinance",
+                    "rank_within_state": 1,
+                    "refreshed_at": "2026-06-15T00:00:00Z",
+                }
+            ],
+            "mip.gold.lead_population",
+            "FROM mip.gold.lead_population",
+            "ranked the top",
+        ),
+        (
+            "Top 5 ZIP codes by HELOC-eligible borrowers (equity >= 35%).",
+            [
+                {
+                    "zip": "60617",
+                    "state": "IL",
+                    "heloc_eligible_borrowers": 321,
+                    "avg_equity_pct": 48.2,
+                    "avg_score": 78.4,
+                    "refreshed_at": "2026-06-15T00:00:00Z",
+                }
+            ],
+            "mip.gold.borrower_360",
+            "equity_pct >= 35",
+            "HELOC-eligible borrowers",
+        ),
+        (
+            "Where should the configured tenant lender spend its next 10000 outreach touches this week, and why?",
+            [
+                {
+                    "state": "IL",
+                    "segment_code": "itm",
+                    "marketable_borrowers": 1200,
+                    "avg_score": 91.2,
+                    "leading_offer_code": "refi",
+                    "leading_recommended_offer": "Rate refinance",
+                    "leading_offer_borrowers": 1180,
+                    "refreshed_at": "2026-06-15T00:00:00Z",
+                }
+            ],
+            "mip.gold.borrower_360",
+            "exploded_segments",
+            "state, segment, and offer",
+        ),
+        (
+            "Which state has the most cash-out opportunity right now?",
+            [
+                {
+                    "state": "FL",
+                    "cash_out_borrowers": 456,
+                    "refreshed_at": "2026-06-15T00:00:00Z",
+                }
+            ],
+            "mip.gold.borrower_360",
+            "recommended_offer_code = 'cash_out'",
+            "cash-out opportunity",
+        ),
+        (
+            "Show the Investor / Multi-Property segment broken down by state.",
+            [
+                {
+                    "segment_code": "investor",
+                    "state": "CA",
+                    "investor_borrowers": 789,
+                    "avg_score": 76,
+                    "delta_vs_prior": "+2%",
+                    "refreshed_at": "2026-06-15T00:00:00Z",
+                }
+            ],
+            "mip.gold.segment_population",
+            "segment_code = 'investor'",
+            "Investor / Multi-Property segment",
+        ),
+        (
+            "Compare mean lead score by MSA for our top five markets.",
+            [
+                {
+                    "market": "Chicago, IL (CBSA 16980)",
+                    "msa_cbsa_code": "16980",
+                    "borrowers": 5000,
+                    "avg_score": 82.1,
+                    "refreshed_at": "2026-06-15T00:00:00Z",
+                }
+            ],
+            "mip.gold.borrower_360",
+            "situs_cbsa_code",
+            "situs_cbsa_code",
+        ),
+    ],
+)
+def test_eval_canonical_questions_use_direct_trusted_sql_without_genie_call(
+    question: str,
+    rows: list[dict[str, Any]],
+    asset: str,
+    sql_marker: str,
+    expected_phrase: str,
+) -> None:
+    stub = _StubClient(
+        _make_breaker("closed"),
+        response=DependencyDownError("genie", reason="test should not call Genie"),
+    )
+    sql = _StubSqlClient(rows)
+    repo = DatabricksGenieRepository(stub, sql)  # type: ignore[arg-type]
+
+    result = repo.respond(question)
+
+    assert result.source == "trusted_sql"
+    assert stub.ask_calls == []
+    assert result.trusted_assets == [asset] or asset in result.trusted_assets
+    assert result.sql_query is not None
+    assert sql_marker in result.sql_query
+    assert expected_phrase in result.answer
+    assert result.table_rows == rows
+    assert result.proof is not None
+    assert result.proof.trusted is True
+
+
+def test_city_count_question_uses_direct_trusted_sql_without_genie_call() -> None:
+    stub = _StubClient(
+        _make_breaker("closed"),
+        response=DependencyDownError("genie", reason="test should not call Genie"),
+    )
+    sql = _StubSqlClient(
+        [
+            {
+                "in_the_money_borrowers": 17,
+                "refreshed_at": "2026-06-15T00:00:00Z",
+            }
+        ]
+    )
+    repo = DatabricksGenieRepository(stub, sql)  # type: ignore[arg-type]
+
+    result = repo.respond("How many in-the-money borrowers in Chicago?")
+
+    assert result.source == "trusted_sql"
+    assert stub.ask_calls == []
+    assert result.metric_value == "17"
+    assert result.sql_query is not None
+    assert "LOWER(city) = LOWER(:city)" in result.sql_query
+    assert sql.parameters == [{"city": "Chicago"}]
     assert result.proof is not None
     assert result.proof.trusted is True
 
@@ -983,10 +1143,7 @@ def test_conversation_id_is_forwarded_to_live_genie() -> None:
 def test_untrusted_sql_is_policy_blocked_and_not_rendered() -> None:
     live = GenieResponse(
         answer_text="Audit users by state.",
-        sql_query=(
-            "SELECT count(*) FROM mip.gold.lead_scores "
-            "JOIN mip_app.action_audit ON 1=1"
-        ),
+        sql_query=("SELECT count(*) FROM mip.gold.lead_scores " "JOIN mip_app.action_audit ON 1=1"),
         sql_result_rows=[{"count": 1}],
         conversation_id="conv-policy",
         message_id="msg-policy",
@@ -1056,8 +1213,7 @@ def test_comment_spoof_is_policy_blocked() -> None:
     live = GenieResponse(
         answer_text="Counts from the silver table.",
         sql_query=(
-            "SELECT count(*) FROM mip.silver.mortgage_events "
-            "/* mip.gold.borrower_360 */"
+            "SELECT count(*) FROM mip.silver.mortgage_events " "/* mip.gold.borrower_360 */"
         ),
         sql_result_rows=[{"count": 1}],
         conversation_id="conv-comment-spoof",
@@ -1311,9 +1467,7 @@ def test_trusted_genie_numeric_check_accepts_rounded_percent_claim() -> None:
 def test_trusted_genie_numeric_check_accepts_sum_across_rows() -> None:
     live = GenieResponse(
         answer_text="The two returned states contain 300 borrowers.",
-        sql_query=(
-            "SELECT state, borrowers FROM mip.gold.borrower_360 GROUP BY state, borrowers"
-        ),
+        sql_query=("SELECT state, borrowers FROM mip.gold.borrower_360 GROUP BY state, borrowers"),
         sql_result_rows=[
             {"state": "IL", "borrowers": 100},
             {"state": "CA", "borrowers": 200},
@@ -1475,12 +1629,8 @@ def test_trusted_genie_numeric_check_rejects_unscaled_word_suffix_claims() -> No
 
 def test_trusted_genie_numeric_check_ignores_identifier_dates_and_query_limits() -> None:
     live = GenieResponse(
-        answer_text=(
-            "Top 10 ZIP 60617 refreshed in 2026 has 123 borrowers."
-        ),
-        sql_query=(
-            "SELECT zip, refreshed_at, borrowers FROM mip.gold.borrower_360 LIMIT 10"
-        ),
+        answer_text=("Top 10 ZIP 60617 refreshed in 2026 has 123 borrowers."),
+        sql_query=("SELECT zip, refreshed_at, borrowers FROM mip.gold.borrower_360 LIMIT 10"),
         sql_result_rows=[
             {"zip": "60617", "refreshed_at": "2026-05-16T01:00:00Z", "borrowers": 123}
         ],
@@ -1780,12 +1930,14 @@ def test_in_the_money_count_uses_canonical_gold_grain() -> None:
         message_id="msg-itm-count",
     )
     stub = _StubClient(_make_breaker("closed"), response=live)
-    sql = _StubSqlClient([
-        {
-            "in_the_money_borrowers": 147742,
-            "refreshed_at": "2026-05-04T22:08:34.662Z",
-        }
-    ])
+    sql = _StubSqlClient(
+        [
+            {
+                "in_the_money_borrowers": 147742,
+                "refreshed_at": "2026-05-04T22:08:34.662Z",
+            }
+        ]
+    )
     repo = DatabricksGenieRepository(stub, sql)  # type: ignore[arg-type]
 
     result = repo.respond("How many borrowers are currently in-the-money?")
@@ -1822,12 +1974,14 @@ def test_in_the_money_count_direct_canonical_bypasses_genie_breaker() -> None:
         _make_breaker("open"),
         response=GenieClientError("HTTP 429 from Genie API", status_code=429),
     )
-    sql = _StubSqlClient([
-        {
-            "in_the_money_borrowers": 147742,
-            "refreshed_at": "2026-05-04T22:08:34.662Z",
-        }
-    ])
+    sql = _StubSqlClient(
+        [
+            {
+                "in_the_money_borrowers": 147742,
+                "refreshed_at": "2026-05-04T22:08:34.662Z",
+            }
+        ]
+    )
     repo = DatabricksGenieRepository(stub, sql)  # type: ignore[arg-type]
 
     result = repo.respond("How many borrowers are currently in-the-money?")
@@ -1908,7 +2062,9 @@ def test_in_the_money_state_breakdown_direct_canonical_bypasses_genie_breaker() 
     sql = _StubSqlClient(rows)
     repo = DatabricksGenieRepository(stub, sql)  # type: ignore[arg-type]
 
-    result = repo.respond("Break down in-the-money borrowers by state and return the count as a table.")
+    result = repo.respond(
+        "Break down in-the-money borrowers by state and return the count as a table."
+    )
 
     assert result.source == "trusted_sql"
     assert result.trusted_assets == ["mip.gold.borrower_360"]
@@ -1933,12 +2089,14 @@ def test_in_the_money_count_applies_state_scope_when_present() -> None:
         message_id="msg-itm-state",
     )
     stub = _StubClient(_make_breaker("closed"), response=live)
-    sql = _StubSqlClient([
-        {
-            "in_the_money_borrowers": 70939,
-            "refreshed_at": "2026-05-04T22:08:34.662Z",
-        }
-    ])
+    sql = _StubSqlClient(
+        [
+            {
+                "in_the_money_borrowers": 70939,
+                "refreshed_at": "2026-05-04T22:08:34.662Z",
+            }
+        ]
+    )
     repo = DatabricksGenieRepository(stub, sql)  # type: ignore[arg-type]
 
     result = repo.respond("How many borrowers in Illinois are in the money?")
@@ -1971,12 +2129,14 @@ def test_in_the_money_count_applies_lowercase_ambiguous_state_code_when_contextu
         message_id="msg-itm-ok",
     )
     stub = _StubClient(_make_breaker("closed"), response=live)
-    sql = _StubSqlClient([
-        {
-            "in_the_money_borrowers": 12,
-            "refreshed_at": "2026-05-04T22:08:34.662Z",
-        }
-    ])
+    sql = _StubSqlClient(
+        [
+            {
+                "in_the_money_borrowers": 12,
+                "refreshed_at": "2026-05-04T22:08:34.662Z",
+            }
+        ]
+    )
     repo = DatabricksGenieRepository(stub, sql)  # type: ignore[arg-type]
 
     result = repo.respond("How many borrowers in ok are in the money?")
@@ -1995,12 +2155,14 @@ def test_in_the_money_count_does_not_scope_common_words_as_state_codes() -> None
         message_id="msg-itm-no-false-state",
     )
     stub = _StubClient(_make_breaker("closed"), response=live)
-    sql = _StubSqlClient([
-        {
-            "in_the_money_borrowers": 147742,
-            "refreshed_at": "2026-05-04T22:08:34.662Z",
-        }
-    ])
+    sql = _StubSqlClient(
+        [
+            {
+                "in_the_money_borrowers": 147742,
+                "refreshed_at": "2026-05-04T22:08:34.662Z",
+            }
+        ]
+    )
     repo = DatabricksGenieRepository(stub, sql)  # type: ignore[arg-type]
 
     result = repo.respond("Hi, how many borrowers are in the money?")
@@ -2026,20 +2188,21 @@ def test_in_the_money_count_applies_city_scope_when_present(
     live = GenieResponse(
         answer_text="Genie returned the all-footprint count: 147,742.",
         sql_query=(
-            "SELECT COUNT(*) AS borrowers FROM mip.gold.borrower_360 "
-            "WHERE in_the_money = true"
+            "SELECT COUNT(*) AS borrowers FROM mip.gold.borrower_360 " "WHERE in_the_money = true"
         ),
         sql_result_rows=[{"borrowers": 147742}],
         conversation_id="conv-itm-chicago",
         message_id="msg-itm-chicago",
     )
     stub = _StubClient(_make_breaker("closed"), response=live)
-    sql = _StubSqlClient([
-        {
-            "in_the_money_borrowers": count,
-            "refreshed_at": "2026-05-04T22:08:34.662Z",
-        }
-    ])
+    sql = _StubSqlClient(
+        [
+            {
+                "in_the_money_borrowers": count,
+                "refreshed_at": "2026-05-04T22:08:34.662Z",
+            }
+        ]
+    )
     repo = DatabricksGenieRepository(stub, sql)  # type: ignore[arg-type]
 
     result = repo.respond(question)
@@ -2065,7 +2228,7 @@ def test_in_the_money_count_applies_city_scope_when_present(
     assert sql.parameters == [{"city": city}]
 
 
-def test_mean_lead_score_by_msa_blocks_untrusted_live_sql_instead_of_masking() -> None:
+def test_mean_lead_score_by_msa_uses_direct_sql_before_genie() -> None:
     live = GenieResponse(
         answer_text="Genie tried to use an unsupported MSA lookup.",
         sql_query="SELECT count(*) FROM mip_app.saved_leads",
@@ -2116,16 +2279,16 @@ def test_mean_lead_score_by_msa_blocks_untrusted_live_sql_instead_of_masking() -
 
     result = repo.respond("Compare mean lead score by MSA for our top five markets.")
 
-    assert result.source == "policy_blocked"
-    assert result.table_rows == []
-    assert result.row_count == 0
-    assert "trusted SQL" in result.answer
-    assert "mip.gold.borrower_360" not in result.trusted_assets
-    assert result.sql_query is None
+    assert result.source == "trusted_sql"
+    assert result.table_rows == rows
+    assert result.trusted_assets == ["mip.gold.borrower_360"]
+    assert result.sql_query is not None
+    assert "situs_cbsa_code" in result.sql_query
+    assert "mip_app.saved_leads" not in result.sql_query
     assert result.proof is not None
-    assert result.proof.trusted is False
-    assert result.visualization is None
-    assert sql.statements == []
+    assert result.proof.trusted is True
+    assert stub.ask_calls == []
+    assert sql.statements == [result.sql_query]
 
 
 def test_mean_lead_score_by_msa_uses_canonical_cbsa_query_when_live_turn_is_not_unsafe() -> None:
