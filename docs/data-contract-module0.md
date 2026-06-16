@@ -620,14 +620,14 @@ Deterministic, no PII. Populated at gold to avoid per-request string work.
 
 | `recommended_offer_code` | Template |
 |---|---|
-| `refi_plus_heloc` | `Current rate sits meaningfully above market and the home carries strong equity -- a refinance with a HELOC cross-sell fits.` |
-| `heloc` | `Recent remodel activity plus strong home equity points to a HELOC conversation.` |
-| `refi` | `Current rate is well above market, and equity clears the refi cushion (below the HELOC bar) -- lead with a refinance.` |
-| `cash_out` | `Current rate is near market, but strong home equity supports a cash-out refinance conversation.` |
-| `purchase` | `The home is actively listed -- a purchase mortgage on the next home is the right offer.` |
-| `investor` | `Owner Link ties {related_property_count} related properties -- route to the investor desk.` |
-| `retention` | `Current customer rate spread is above the retention threshold -- prioritize audited retention outreach before the borrower shops alternatives.` |
-| `nurture` | `No active trigger yet -- keep in nurture until a signal fires.` |
+| `refi_plus_heloc` | `The current mortgage appears meaningfully above today's market reference rate, and the property has enough equity to review refinance and home-equity options together.` |
+| `heloc` | `Home-equity signals suggest a conversation about available equity may be useful without replacing the first mortgage.` |
+| `refi` | `The current mortgage appears above today's market reference rate, and the property has enough equity to review refinance options.` |
+| `cash_out` | `The borrower appears to have available equity, so a licensed loan officer can review whether a cash-out refinance would fit their goals.` |
+| `purchase` | `The property is listed for sale, so the useful conversation is likely about financing the next home before closing.` |
+| `investor` | `Owner Link ties {related_property_count} related properties, so route the review to an investor-lending specialist.` |
+| `retention` | `This current-customer relationship has signals worth reviewing, so prioritize a service-focused check-in before the borrower shops alternatives.` |
+| `nurture` | `No strong borrower benefit is active yet, so keep this borrower in nurture until a clearer signal appears.` |
 
 ---
 

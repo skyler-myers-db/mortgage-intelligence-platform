@@ -283,7 +283,6 @@ _FORBIDDEN_OUTPUT_KEYS: frozenset[str] = frozenset(
 
 
 _STREET_NUMBER_PATTERN = re.compile(r"\d")
-_TRUE_ENV_VALUES: frozenset[str] = frozenset({"1", "true", "yes", "y", "on"})
 _ID_MASK_NAMESPACE = "mip-cotality-id-mask-v1"
 _CONSENT_STATUS_VALUES: frozenset[str] = frozenset({"opt_in", "opt_out", "unknown"})
 
@@ -338,23 +337,14 @@ def _optional_str(raw: Any) -> str | None:
     return value or None
 
 
-def expose_raw_cotality_ids() -> bool:
-    """Return TRUE only for explicit internal debugging.
-
-    Public-demo/customer deployments must leave this unset so every API,
-    CSV, and audit surface receives stable non-reversible refs instead of
-    raw Cotality CLIP / Owner Link identifiers.
-    """
-    return os.environ.get("MIP_EXPOSE_RAW_COTALITY_IDS", "").strip().lower() in _TRUE_ENV_VALUES
-
-
 def mask_cotality_id(kind: str, raw: Any) -> str:
     """Return a stable display-safe surrogate for a Cotality identifier.
 
     ``kind`` is ``"clip"`` or ``"owner_link"``. Existing synthetic demo
     IDs and already-masked refs pass through so fixtures remain readable.
-    The public default is masked; setting ``MIP_EXPOSE_RAW_COTALITY_IDS=1``
-    is the intentional internal escape hatch.
+    Raw Cotality IDs are never exposed through app, CSV, or audit surfaces.
+    Internal debugging that needs raw CLIP / Owner Link values must use
+    governed Unity Catalog access, not an app-runtime escape hatch.
     """
     value = str(raw or "").strip()
     if not value:
@@ -370,9 +360,6 @@ def mask_cotality_id(kind: str, raw: Any) -> str:
         prefix = "owner_link_ref"
     else:
         raise ValueError(f"unknown Cotality id kind: {kind!r}")
-
-    if expose_raw_cotality_ids():
-        return value
 
     secret = (
         os.environ.get("MIP_COTALITY_ID_MASK_SECRET")
@@ -582,9 +569,8 @@ def redact_lead_row(row: dict[str, Any]) -> dict[str, Any]:
         "city": city,
         "state": state,
         "zip": zip5,
-        # Display-safe Cotality property ref on the list row. Raw CLIP is
-        # masked by default; set MIP_EXPOSE_RAW_COTALITY_IDS=1 only for
-        # internal debugging on trusted deployments.
+        # Display-safe Cotality property ref on the list row. Raw CLIP never
+        # leaves governed data stores through app, CSV, or audit surfaces.
         "clip": mask_cotality_id("clip", row.get("clip")),
         "segment_codes": row.get("segment_codes") or [],
         "equity_estimate": int(row.get("equity_estimate") or 0),
@@ -728,7 +714,6 @@ __all__ = [
     "LenderRefResolver",
     "generalize_lender",
     "get_lender_resolver",
-    "expose_raw_cotality_ids",
     "mask_cotality_id",
     "normalize_public_lender_ref",
     "redact_borrower_row",

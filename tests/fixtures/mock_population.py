@@ -87,7 +87,7 @@ SEGMENTS = [
     SegmentSummary(code="permit", name="HELOC Intent", count=2405, delta="+11%", avg_score=80, description="Cotality HELOC propensity score indicates equity-credit demand.", color="#A78BFA"),
     SegmentSummary(code="investor", name="Investor / Multi-Property", count=1892, delta="+6%", avg_score=79, description="Owner Link shows 2+ properties or repeat behavior.", color="#F472B6"),
     SegmentSummary(code="equity", name="Home Equity Candidate", count=6320, delta="+14%", avg_score=76, description="Strong equity and prior cash-out/HELOC propensity.", color="#66C5FF"),
-    SegmentSummary(code="retention", name="Retention Risk", count=3471, delta="+4%", avg_score=88, description="Current customer with rate spread above the retention threshold; listing and competitor overlays join only when live evidence exists.", color="#34D399"),
+    SegmentSummary(code="retention", name="Retention Risk", count=3471, delta="+4%", avg_score=88, description="Current-customer or recapture signals worth reviewing before the borrower shops alternatives.", color="#34D399"),
 ]
 
 
@@ -135,7 +135,7 @@ _BORROWER_SPECS: list[dict] = [
      "segs": ["permit", "equity"], "current_rate": 6.75, "avm": 560000, "lien": 342000,
      "permit": True, "listed": False, "investor": False, "customer": False, "comp_lien": False,
      "components": {"economic_incentive": 85, "intent_trigger": 92, "fit": 85, "relationship": 80, "evidence": 85},
-     "why_now": "Rate spread clears par and equity clears the HELOC threshold — refi + HELOC cross-sell.",
+     "why_now": "The current mortgage appears meaningfully above today's market reference rate, and the property has enough equity to review refinance and home-equity options together.",
      "evidence_ids": ["ev-002", "ev-004"], "related_props": 1},
     {"bid": "B-48295", "name": "Lisa Thompson", "city": "Chicago", "state": "IL", "zip": "60613",
      "segs": ["listed", "retention"], "current_rate": 6.50, "avm": 725000, "lien": 320000,
@@ -149,7 +149,7 @@ _BORROWER_SPECS: list[dict] = [
      "segs": ["itm", "equity"], "current_rate": 6.25, "avm": 780000, "lien": 395000,
      "permit": False, "listed": False, "investor": False, "customer": False, "comp_lien": False,
      "components": {"economic_incentive": 92, "intent_trigger": 80, "fit": 88, "relationship": 70, "evidence": 88},
-     "why_now": "138 bps spread and 49% equity make refi + HELOC a clean cross-sell.",
+     "why_now": "The current mortgage appears meaningfully above today's market reference rate, and the property has enough equity to review refinance and home-equity options together.",
      "evidence_ids": ["ev-001", "ev-002", "ev-005"], "related_props": 1},
     {"bid": "B-54103", "name": "Maria & Carlos Rivera", "city": "San Francisco", "state": "CA", "zip": "94110",
      "segs": ["itm", "equity"], "current_rate": 6.00, "avm": 1450000, "lien": 720000,

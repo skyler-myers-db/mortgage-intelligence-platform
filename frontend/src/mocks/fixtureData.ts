@@ -18,7 +18,7 @@ export const mockSegments: SegmentSummary[] = [
   { code: 'permit', name: 'HELOC Intent', count: 2405, delta: '+11%', avg_score: 80, description: 'Cotality HELOC propensity score indicates equity-credit demand.', color: 'var(--seg-permit)' },
   { code: 'investor', name: 'Investor / Multi-Property', count: 1892, delta: '+6%', avg_score: 79, description: 'Owner Link shows 2+ properties or repeat behavior.', color: 'var(--seg-investor)' },
   { code: 'equity', name: 'Home Equity Candidate', count: 6320, delta: '+14%', avg_score: 76, description: 'Strong equity and prior cash-out/HELOC propensity.', color: 'var(--seg-equity)' },
-  { code: 'retention', name: 'Retention Risk', count: 3471, delta: '+4%', avg_score: 88, description: 'Current customer with rate spread above the retention threshold; listing and competitor overlays join only when live evidence exists.', color: 'var(--seg-retention)' }
+  { code: 'retention', name: 'Retention Risk', count: 3471, delta: '+4%', avg_score: 88, description: 'Current-customer or recapture signals worth reviewing before the borrower shops alternatives.', color: 'var(--seg-retention)' }
 ];
 
 // icon keyed by segment code — matches the prototype's SEGMENTS icon column

@@ -5,7 +5,7 @@ import {
   outreachFilterDisplayValue,
   segmentDisplayLabel,
   segmentFilterDisplayValue,
-} from './lead-queue';
+} from './lead-queue.filters';
 
 describe('lead queue effective workflow filters', () => {
   it('shows Approved when the approved funnel stage is driving the filter', () => {

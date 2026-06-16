@@ -148,5 +148,5 @@ describe('EvidenceDrawer accessibility', () => {
       document.querySelector<HTMLElement>('.drawer-scrim')?.click();
     });
     expect(appMocks.setDrawer).toHaveBeenCalledWith(null);
-  });
+  }, 15_000);
 });

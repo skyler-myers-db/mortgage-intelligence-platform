@@ -51,7 +51,6 @@ from backend.services.repositories.databricks_genie_visualization import (
 )
 from backend.services.scoring import offer_display_label
 
-
 _SEGMENT_DISPLAY_LABELS = {
     "itm": "Prime Refi Candidates",
     "equity": "Home Equity Candidate",

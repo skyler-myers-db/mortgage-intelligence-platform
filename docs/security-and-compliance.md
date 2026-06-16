@@ -4,9 +4,10 @@ Module 0 is designed to fail closed and remain public-demo safe.
 
 ## Public Demo Masking
 
-The application defaults to masked output unless `MIP_EXPOSE_RAW_COTALITY_IDS`
-is explicitly enabled in a governed, non-public environment. Public recordings
-must keep masking on. Masking covers raw CLIP, Owner Link, addresses, names,
+The application always emits masked output on app, CSV, and audit surfaces.
+Raw CLIP and Owner Link values remain in governed Unity Catalog tables for
+authorized joins and debugging, but there is no runtime flag that exposes them
+through the product. Masking covers raw CLIP, Owner Link, addresses, names,
 phones, emails, and competitor servicer names.
 
 ## Governed State Changes

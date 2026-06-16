@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ApiError } from '../lib/api';
-import { buildLeadQueueExportFilters, formatLeadQueueLoadError } from './lead-queue';
+import { buildLeadQueueExportFilters, formatLeadQueueLoadError } from './lead-queue.filters';
 
 describe('buildLeadQueueExportFilters', () => {
   it('exports only normalized allowlisted filters', () => {

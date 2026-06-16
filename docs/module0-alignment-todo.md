@@ -64,8 +64,8 @@ Scope: Close the gaps found when comparing the Module 0 requirements document an
   - Verified SQL on 2026-05-07: `mip.silver.market_rates_weekly` has exactly one latest `MORTGAGE30US` row: week 2026-05-04, rate 6.37, source `fred`.
 
 - [x] Public-demo raw CLIP and Owner Link masking.
-  - Fixed: API/UI/CSV/audit surfaces emit `clip_ref_*` and `owner_link_ref_*` display refs by default.
-  - Internal escape hatch: `MIP_EXPOSE_RAW_COTALITY_IDS=1`; leave unset for demos/customers.
+  - Fixed: API/UI/CSV/audit surfaces always emit `clip_ref_*` and `owner_link_ref_*` display refs.
+  - There is no runtime escape hatch for raw Cotality IDs; governed debugging uses Unity Catalog directly.
   - Verified deployed: `/api/leads` and a dynamically selected `/api/borrowers/{borrower_id}` payload return `clip_ref_*` and `owner_link_ref_*` display refs.
   - Raw IDs remain below the repository boundary in Unity Catalog for governed joins/auditability.
 

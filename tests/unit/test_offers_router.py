@@ -1,16 +1,40 @@
 from fastapi.testclient import TestClient
 
+from backend.api import offers
 from backend.main import app
 from backend.services.audit_decision_inputs import (
     DECISION_INPUT_KEYS,
     decision_inputs_from_offer_inputs,
 )
 from backend.services.audit_store import get_audit_store
+from backend.services.lakebase import LakebaseError
 from backend.services.repositories import get_offer_repository
 from tests.fixtures import mock_population
 from tests.fixtures.in_memory_audit_store import InMemoryAuditStore
 
 client = TestClient(app)
+
+
+def test_safe_offer_audit_log_omits_raw_exception_message(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class FailingAuditStore:
+        def write(self, **kwargs: object) -> None:
+            raise LakebaseError("SQL failed for subject_clip=1234567890 with host=db.internal")
+
+    def capture_emit(log, event: str, **kwargs: object) -> None:
+        captured["event"] = event
+        captured.update(kwargs)
+
+    monkeypatch.setattr(offers, "emit", capture_emit)
+
+    offers._safe_audit_write(FailingAuditStore(), event_type="RECOMMEND_OFFER")
+
+    assert captured["event"] == "audit_write_dropped"
+    assert captured["dependency"] == "lakebase"
+    assert captured["outcome"] == "error"
+    assert captured["exc_type"] == "LakebaseError"
+    assert "exc_msg" not in captured
 
 
 def test_offers_router_recommends_governed_offer() -> None:

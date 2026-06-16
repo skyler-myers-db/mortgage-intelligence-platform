@@ -175,7 +175,7 @@ meta AS (
       ('permit',    'HELOC Intent',             'Cotality HELOC propensity >= 700 with equity context. Filed Building Permits remain pending until a true permit source lands.', '#A78BFA'),
       ('investor',  'Investor / Multi-Property','Owner Link shows 2+ properties or repeat behavior.',                                    '#F472B6'),
       ('equity',    'Home Equity Candidate',    'Strong equity and no active second-position balance.',                                  '#66C5FF'),
-      ('retention', 'Retention Risk',           'Current customer with rate spread above the retention threshold; live listing and competitor overlays join only when source evidence is present.', '#34D399')
+      ('retention', 'Retention Risk',           'Current-customer or recapture signals worth reviewing before the borrower shops alternatives.', '#34D399')
   ) AS t(segment_code, name, description, color)
 ),
 -- Build the full (segment_code, state) grid up front so segments with zero

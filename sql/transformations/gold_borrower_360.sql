@@ -768,22 +768,22 @@ SELECT
   -- to drop '+XXX bps (>= YY)' rule-engine phrasing.
   CASE w.recommended_offer_code
     WHEN 'refi_plus_heloc' THEN
-      'Current rate sits meaningfully above market and the home carries strong equity -- a refinance with a HELOC cross-sell fits.'
+      'The current mortgage appears meaningfully above today''s market reference rate, and the property has enough equity to review refinance and home-equity options together.'
     WHEN 'heloc' THEN
-      'Cotality HELOC propensity plus strong home equity points to a HELOC conversation.'
+      'Home-equity signals suggest a conversation about available equity may be useful without replacing the first mortgage.'
     WHEN 'refi' THEN
-      'Current rate is well above market, and equity clears the refi cushion (below the HELOC bar) -- lead with a refinance.'
+      'The current mortgage appears above today''s market reference rate, and the property has enough equity to review refinance options.'
     WHEN 'cash_out' THEN
-      'Current rate is near market, but strong home equity supports a cash-out refinance conversation.'
+      'The borrower appears to have available equity, so a licensed loan officer can review whether a cash-out refinance would fit their goals.'
     WHEN 'purchase' THEN
-      'The home is actively listed -- a purchase mortgage on the next home is the right offer.'
+      'The property is listed for sale, so the useful conversation is likely about financing the next home before closing.'
     WHEN 'investor' THEN
       CONCAT('Owner Link ties ', CAST(w.related_property_count AS STRING),
-             ' related properties -- route to the investor desk.')
+             ' related properties, so route the review to an investor-lending specialist.')
     WHEN 'retention' THEN
-      'Current customer rate spread is above the retention threshold -- prioritize audited retention outreach before the borrower shops alternatives.'
+      'This current-customer relationship has signals worth reviewing, so prioritize a service-focused check-in before the borrower shops alternatives.'
     ELSE
-      'No active trigger yet -- keep in nurture until a signal fires.'
+      'No strong borrower benefit is active yet, so keep this borrower in nurture until a clearer signal appears.'
   END                                                                                AS why_now,
   COALESCE(tl.evidence_ids, ARRAY())                                                 AS evidence_ids,
   'pending'                                                                          AS approval_status,

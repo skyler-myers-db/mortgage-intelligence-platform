@@ -8,7 +8,6 @@ from backend.config.settings import settings
 from backend.schemas.data_estate import DataEstateAsset, DataEstateLane, DataEstateResponse
 from backend.services.admin_rules import SourceRow
 from backend.services.databricks_sql_helpers import qualify
-from backend.services.pii_redaction import expose_raw_cotality_ids
 
 
 def _status_rank(status: str) -> int:
@@ -291,7 +290,7 @@ def build_data_estate_response(
     return DataEstateResponse(
         generated_at=datetime.now(UTC),
         lender_name=settings.mip_lender_name,
-        public_demo_masking=not expose_raw_cotality_ids(),
+        public_demo_masking=True,
         lanes=lanes,
         known_data_gaps=gaps,
         proof_assets=proof_assets,

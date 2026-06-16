@@ -17,7 +17,7 @@ import { Skeleton } from '../components/ui/Skeleton';
 import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 import { Reveal } from '../components/fx/Reveal';
 import { descriptorFor, descriptorForEvidence } from '../lib/drawerSources';
-import { offerDisplayLabel, offerShortDescription } from '../lib/offerLanguage';
+import { offerDisplayLabel, offerRationale, offerShortDescription } from '../lib/offerLanguage';
 import { segmentByCode } from '../lib/segmentMetadata';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
 import { queryKeys } from '../lib/queryKeys';
@@ -491,7 +491,7 @@ export default function Borrower360() {
                 <ScoreBadge value={b.opportunity_score} />
               </div>
               <p className="body mt-2">{offerDescription}</p>
-              <p className="muted fs-12 mt-1">{b.why_now}</p>
+              <p className="muted fs-12 mt-1">{offerRationale(b.recommended_offer_code, b.why_now)}</p>
               <div className="chip-row mt-3">
                 <Link
                   className="btn btn--primary"

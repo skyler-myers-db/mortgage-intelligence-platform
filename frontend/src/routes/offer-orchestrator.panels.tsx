@@ -9,7 +9,7 @@ import { Skeleton } from '../components/ui/Skeleton';
 import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 import { Reveal } from '../components/fx/Reveal';
 import { descriptorFor } from '../lib/drawerSources';
-import { offerDisplayLabel, offerShortDescription } from '../lib/offerLanguage';
+import { offerDisplayLabel, offerRationale, offerShortDescription } from '../lib/offerLanguage';
 import {
   OUTREACH_CHANNELS,
   REJECT_REASONS,
@@ -244,7 +244,7 @@ function PrimaryOfferPanel({
         )}
         {recommendation ? (
           <p className="body mt-2">
-            {recommendation.rationale ?? borrower?.why_now}
+            {recommendation.rationale ?? offerRationale(recommendation.offer_code, borrower?.why_now)}
           </p>
         ) : (
           <div className="stack-sm mt-2">

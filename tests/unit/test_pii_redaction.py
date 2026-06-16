@@ -209,10 +209,13 @@ def test_mask_cotality_id_preserves_synthetic_demo_refs() -> None:
     assert mask_cotality_id("owner_link", "ol_demo_48291") == "ol_demo_48291"
 
 
-def test_mask_cotality_id_internal_escape_hatch(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_mask_cotality_id_ignores_legacy_raw_id_escape_hatch(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MIP_EXPOSE_RAW_COTALITY_IDS", "1")
-    assert mask_cotality_id("clip", "1234567890") == "1234567890"
-    assert mask_cotality_id("owner_link", "9876543210") == "9876543210"
+    assert re.fullmatch(r"clip_ref_[0-9a-f]{12}", mask_cotality_id("clip", "1234567890"))
+    assert re.fullmatch(
+        r"owner_link_ref_[0-9a-f]{12}",
+        mask_cotality_id("owner_link", "9876543210"),
+    )
 
 
 def test_redact_borrower_row_synthesizes_display_name() -> None:

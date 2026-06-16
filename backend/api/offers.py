@@ -46,7 +46,6 @@ def _safe_audit_write(store: AuditStore, **kwargs: object) -> None:
             dependency="lakebase",
             outcome="error",
             exc_type=type(exc).__name__,
-            exc_msg=str(exc)[:500],
         )
 
 # The eight codes ``fn_next_best_offer`` returns are all valid OfferType

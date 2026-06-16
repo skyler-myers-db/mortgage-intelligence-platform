@@ -2,7 +2,7 @@ import type { CSSProperties } from 'react';
 import { Link } from 'react-router-dom';
 import type { LeadSummary } from '../../types';
 import { DRAWER_SOURCES } from '../../lib/drawerSources';
-import { offerDisplayLabel, offerShortDescription } from '../../lib/offerLanguage';
+import { offerDisplayLabel, offerRationale, offerShortDescription } from '../../lib/offerLanguage';
 import { segmentColor, segmentName } from '../../lib/segmentMetadata';
 import { useApp } from '../AppContext';
 import { Button, EvidenceChip } from '../Primitives';
@@ -72,7 +72,7 @@ export function RowPreview({ lead, approval }: { lead: LeadSummary; approval?: s
 
       <div>
         <div className="eyebrow mb-2">Why now</div>
-        <p className="body flush">{lead.why_now}</p>
+        <p className="body flush">{offerRationale(lead.recommended_offer_code, lead.why_now)}</p>
         <div className="chip-row mt-3">
           <span className="muted fs-11">Decision inputs:</span>
           <EvidenceChip source={DRAWER_SOURCES.itm}>{DRAWER_SOURCES.itm.title}</EvidenceChip>

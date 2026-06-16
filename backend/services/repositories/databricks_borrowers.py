@@ -48,10 +48,10 @@ from backend.services.repositories.databricks_shared import (
 from backend.services.resilience import TTLCache
 from backend.services.scoring import (
     NBO_PRODUCT_LABELS,
-    offer_display_label,
     in_the_money,
     lead_score,
     next_best_offer,
+    offer_display_label,
     source_display_label,
 )
 
