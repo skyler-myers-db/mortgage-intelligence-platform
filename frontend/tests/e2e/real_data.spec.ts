@@ -1053,7 +1053,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     await assertDrawer('Property + owner graph', 'Property + owner graph');
     await assertDrawer('AVM equity', 'AVM equity');
     await assertDrawer('Voluntary lien', 'Voluntary lien');
-    await assertDrawer('Lead score model', 'Lead score model');
+    await assertDrawer('Opportunity score', 'Opportunity score');
   });
 
   test('lead-queue: inline approval writes selected evidence ids to audit', async ({ page, request }) => {
@@ -1120,7 +1120,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
 
     const economics = page.locator('.surface', { hasText: /Refi economics check/i }).first();
     await assertSourceDrawer(page, economics, 'Market rate comparison', 'Market rate comparison');
-    await assertSourceDrawer(page, economics, 'In-the-money rule', 'In-the-Money logic');
+    await assertSourceDrawer(page, economics, 'Refinance economics screen', 'Rate + equity screen');
 
     const timeline = page.locator('.surface', { hasText: /Trigger timeline/i }).first();
     await assertSourceDrawer(page, timeline, 'Rate spread evidence', 'Rate spread evidence');
@@ -1168,14 +1168,14 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     await expect(page.getByText(/Considered alternatives/i)).toBeVisible();
 
     const primaryOffer = page.locator('.surface', { hasText: /Primary offer/i }).first();
-    await assertSourceDrawer(page, primaryOffer, 'Next-best-offer model', 'Next-Best-Offer logic');
-    await assertSourceDrawer(page, primaryOffer, 'Lead score model', 'Lead score model');
+    await assertSourceDrawer(page, primaryOffer, 'Primary offer rules', 'How the offer path was selected');
+    await assertSourceDrawer(page, primaryOffer, 'Opportunity score', 'Opportunity score');
     const sourceLabels = await primaryOffer
       .locator('.evidence-chip')
       .evaluateAll((nodes) => nodes.map((node) => node.textContent?.trim() ?? ''));
     if (sourceLabels.includes('Market rate comparison')) {
       await assertSourceDrawer(page, primaryOffer, 'Market rate comparison', 'Market rate comparison');
-      await assertSourceDrawer(page, primaryOffer, 'In-the-money rule', 'In-the-Money logic');
+      await assertSourceDrawer(page, primaryOffer, 'Refinance economics screen', 'Rate + equity screen');
     } else if (sourceLabels.includes('MLS listing activity')) {
       await assertSourceDrawer(page, primaryOffer, 'MLS listing activity', 'MLS listing');
     } else if (sourceLabels.includes('HELOC propensity')) {
@@ -1313,7 +1313,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     await expect(page).toHaveURL(/\/lead-queue\?.*zips=/, { timeout: 20_000 });
     await expect(page).toHaveURL(/segment=itm/, { timeout: 20_000 });
     await expect(page.getByText(/zips = \d+ selected/i)).toBeVisible({ timeout: 20_000 });
-    await expect(page.getByText(/segment = itm/i)).toBeVisible();
+    await expect(page.getByText(/segment = Prime Refi Candidates/i)).toBeVisible();
     await expect(page.getByText(/Loading leads/i)).toBeHidden({ timeout: 45_000 });
     await expect(page.locator('.lead-table__zip').first()).toBeVisible({ timeout: 45_000 });
 
