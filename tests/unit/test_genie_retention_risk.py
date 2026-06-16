@@ -210,7 +210,9 @@ def test_genie_repairs_retention_risk_phrase_without_current_customer_wording() 
 
 
 def test_genie_retention_list_uses_canonical_row_lookup_not_count_metric() -> None:
-    question = "Which borrowers on our retention list have a competitor lien filed in the last 30 days?"
+    question = (
+        "Which borrowers on our retention list have a competitor lien filed in the last 30 days?"
+    )
     result = GenieResponse(
         answer_text="Rows.",
         sql_query=(
@@ -249,7 +251,9 @@ def test_genie_retention_list_uses_canonical_row_lookup_not_count_metric() -> No
 
 
 def test_genie_retention_list_uses_canonical_competitor_lien_signal() -> None:
-    question = "Which borrowers on our retention list have a competitor lien filed in the last 30 days?"
+    question = (
+        "Which borrowers on our retention list have a competitor lien filed in the last 30 days?"
+    )
     result = GenieResponse(
         answer_text="No rows.",
         sql_query=(
@@ -308,8 +312,7 @@ def test_genie_retention_list_uses_canonical_competitor_lien_signal() -> None:
     assert sql.executed_sql == response.sql_query
     assert response.metric_value == "304"
     assert "There are 304 retention-list borrowers" in response.answer
-    assert len(client.questions) == 2
-    assert "competitor-lien evidence is signal_type = 'competitor_lien'" in client.questions[1]
+    assert client.questions == []
     cohort_action = next(action for action in response.actions if action.id == "open-cohort")
     assert "borrower_ids=B-102FL7THC6Q3L" in (cohort_action.route or "")
     assert "lender_relationship=Competitor" not in (cohort_action.route or "")
@@ -329,8 +332,7 @@ def test_genie_repairs_and_blocks_stale_evidence_signal_enums() -> None:
     result = GenieResponse(
         answer_text="Rows.",
         sql_query=(
-            f"SELECT borrower_id FROM {EVIDENCE_EVENTS} "
-            "WHERE signal_type = 'lien-change'"
+            f"SELECT borrower_id FROM {EVIDENCE_EVENTS} " "WHERE signal_type = 'lien-change'"
         ),
         sql_result_rows=[{"borrower_id": "B-102FL7THC6Q3L"}],
         trusted_assets=[EVIDENCE_EVENTS],
@@ -399,5 +401,4 @@ def test_genie_retention_risk_repairs_wrong_evidence_enums() -> None:
     assert response.proof is not None
     assert response.proof.trusted is True
     assert sql.sql == response.sql_query
-    assert len(client.questions) == 2
-    assert "competitor-lien evidence is signal_type = 'competitor_lien'" in client.questions[1]
+    assert client.questions == []
