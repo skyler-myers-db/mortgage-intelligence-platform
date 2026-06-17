@@ -37,7 +37,7 @@ from backend.services.genie_answers import (
     GenieStartResponse,
     load_sample_questions,
 )
-from backend.services.genie_audit import genie_audit_entity_id
+from backend.services.genie_audit import genie_audit_entity_id, genie_audit_entity_id_from_parts
 from backend.services.genie_client import GenieClientError
 from backend.services.genie_sales_ops import sales_ops_genie_response
 from backend.services.genie_source_gaps import source_gap_answer
@@ -74,6 +74,22 @@ _source_gap_prompt_match = prompt_guardrails.source_gap_prompt_match
 class GenieMessageRequest(BaseModel):
     question: str
     conversation_id: str | None = None
+
+
+def _safe_genie_audit_entity_id(
+    payload: GenieMessageRequest,
+    *,
+    question_hash: str,
+    message_id: str | None = None,
+    fallback: str = "genie",
+) -> str:
+    return genie_audit_entity_id_from_parts(
+        question=payload.question,
+        conversation_id=payload.conversation_id,
+        message_id=message_id,
+        question_hash=question_hash,
+        fallback=fallback,
+    )
 
 
 _PROTECTED_PROMPT_TERMS = (
@@ -404,7 +420,7 @@ def genie_message(
             actor=actor,
             action="genie.refused_prompt",
             entity_type="genie_message",
-            entity_id=payload.conversation_id or question_hash,
+            entity_id=_safe_genie_audit_entity_id(payload, question_hash=question_hash),
             payload_json={
                 "conversation_id": payload.conversation_id,
                 "message_id": None,
@@ -441,7 +457,7 @@ def genie_message(
             actor=actor,
             action="genie.refused_prompt",
             entity_type="genie_message",
-            entity_id=payload.conversation_id or question_hash,
+            entity_id=_safe_genie_audit_entity_id(payload, question_hash=question_hash),
             payload_json={
                 "conversation_id": payload.conversation_id,
                 "message_id": None,
@@ -473,7 +489,7 @@ def genie_message(
             actor=actor,
             action="genie.outreach_guardrail",
             entity_type="genie_message",
-            entity_id=payload.conversation_id or question_hash,
+            entity_id=_safe_genie_audit_entity_id(payload, question_hash=question_hash),
             payload_json={
                 "conversation_id": payload.conversation_id,
                 "message_id": None,
@@ -520,7 +536,7 @@ def genie_message(
             actor=actor,
             action="genie.refused_prompt",
             entity_type="genie_message",
-            entity_id=payload.conversation_id or question_hash,
+            entity_id=_safe_genie_audit_entity_id(payload, question_hash=question_hash),
             payload_json={
                 "conversation_id": payload.conversation_id,
                 "message_id": None,
@@ -554,7 +570,7 @@ def genie_message(
             actor=actor,
             action="genie.refused_prompt",
             entity_type="genie_message",
-            entity_id=payload.conversation_id or question_hash,
+            entity_id=_safe_genie_audit_entity_id(payload, question_hash=question_hash),
             payload_json={
                 "conversation_id": payload.conversation_id,
                 "message_id": None,
@@ -592,7 +608,7 @@ def genie_message(
             actor=actor,
             action="genie.source_gap",
             entity_type="genie_message",
-            entity_id=payload.conversation_id or question_hash,
+            entity_id=_safe_genie_audit_entity_id(payload, question_hash=question_hash),
             payload_json={
                 "conversation_id": payload.conversation_id,
                 "message_id": None,
@@ -639,7 +655,7 @@ def genie_message(
             actor=actor,
             action="genie.refused_prompt",
             entity_type="genie_message",
-            entity_id=payload.conversation_id or question_hash,
+            entity_id=_safe_genie_audit_entity_id(payload, question_hash=question_hash),
             payload_json={
                 "conversation_id": payload.conversation_id,
                 "message_id": None,
@@ -672,7 +688,7 @@ def genie_message(
             actor=actor,
             action="genie.refused_prompt",
             entity_type="genie_message",
-            entity_id=payload.conversation_id or question_hash,
+            entity_id=_safe_genie_audit_entity_id(payload, question_hash=question_hash),
             payload_json={
                 "conversation_id": payload.conversation_id,
                 "message_id": None,
@@ -718,9 +734,7 @@ def genie_message(
             actor=actor,
             action="genie.sales_ops_query",
             entity_type="genie_message",
-            entity_id=sales_ops_response.message_id
-            or sales_ops_response.question_hash
-            or "sales_ops",
+            entity_id=genie_audit_entity_id(sales_ops_response),
             payload_json={
                 "conversation_id": sales_ops_response.conversation_id,
                 "message_id": sales_ops_response.message_id,
@@ -743,7 +757,7 @@ def genie_message(
             actor=actor,
             action="genie.footprint_metadata_gap",
             entity_type="genie_message",
-            entity_id=payload.conversation_id or question_hash,
+            entity_id=_safe_genie_audit_entity_id(payload, question_hash=question_hash),
             payload_json={
                 "conversation_id": payload.conversation_id,
                 "message_id": None,
@@ -799,7 +813,7 @@ def genie_message(
             actor=actor,
             action="genie.outside_footprint",
             entity_type="genie_message",
-            entity_id=payload.conversation_id or question_hash,
+            entity_id=_safe_genie_audit_entity_id(payload, question_hash=question_hash),
             payload_json={
                 "conversation_id": payload.conversation_id,
                 "message_id": None,

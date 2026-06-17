@@ -37,9 +37,10 @@ _PII_PROMPT_PATTERNS: tuple[re.Pattern[str], ...] = (
         re.IGNORECASE,
     ),
     re.compile(
-        r"\b(?:street|mailing|situs|site|property|home|exact)\s+addresses?\b|"
-        r"\baddresses?\b.{0,80}\b(?:borrowers?|owners?|properties)\b|"
-        r"\b(?:borrowers?|owners?|properties)\b.{0,80}\baddresses?\b",
+        r"\b(?:street|mailing|situs|site|property|home|exact)\s+address(?:es)?\b|"
+        r"\b(?:exact|full|raw)?\s*(?:property|home|street|mailing|situs|site)\s+address(?:es)?\b|"
+        r"\baddress(?:es)?\b.{0,80}\b(?:borrowers?|owners?|properties)\b|"
+        r"\b(?:borrowers?|owners?|properties)\b.{0,80}\baddress(?:es)?\b",
         re.IGNORECASE | re.DOTALL,
     ),
     re.compile(

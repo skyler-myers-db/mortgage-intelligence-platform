@@ -117,6 +117,96 @@ ORDER BY cash_out_borrowers DESC, state ASC
 LIMIT 1
 """.strip()
 
+_CANONICAL_LISTED_PURCHASE_TOP_SQL = f"""
+SELECT borrower_id
+     , display_name
+     , city
+     , state
+     , zip
+     , opportunity_score
+     , recommended_offer_code
+     , recommended_offer
+     , first_pos_loan_type
+     , current_rate
+     , listing_status_category
+     , refreshed_at
+FROM {_BORROWER_360}
+WHERE listed_for_sale = TRUE
+  AND marketing_eligible = TRUE
+  AND consent_status = 'opt_in'
+ORDER BY opportunity_score DESC, borrower_id ASC
+LIMIT 10
+""".strip()
+
+_CANONICAL_REFI_EQUITY_SIGNAL_COMPARE_SQL = f"""
+SELECT CAST(COUNT(*) AS BIGINT) AS marketable_borrowers
+     , CAST(COUNT_IF(recommended_offer_code IN ('refi', 'refi_plus_heloc')) AS BIGINT)
+         AS refinance_candidates
+     , CAST(COUNT_IF(recommended_offer_code IN ('heloc', 'cash_out', 'refi_plus_heloc')) AS BIGINT)
+         AS home_equity_candidates
+     , CAST(COUNT_IF(recommended_offer_code = 'refi_plus_heloc') AS BIGINT)
+         AS refi_plus_home_equity_candidates
+     , CAST(ROUND(AVG(
+         CASE WHEN recommended_offer_code IN ('refi', 'refi_plus_heloc')
+              THEN rate_spread_bps END
+       ), 1) AS DOUBLE) AS avg_refi_rate_spread_bps
+     , CAST(ROUND(AVG(
+         CASE WHEN recommended_offer_code IN ('heloc', 'cash_out', 'refi_plus_heloc')
+              THEN equity_pct END
+       ), 1) AS DOUBLE) AS avg_home_equity_pct
+     , CAST(ROUND(AVG(
+         CASE WHEN recommended_offer_code IN ('heloc', 'cash_out', 'refi_plus_heloc')
+              THEN heloc_propensity_score END
+       ), 1) AS DOUBLE) AS avg_heloc_propensity_score
+     , CAST(COUNT_IF(has_refi_propensity_trigger = TRUE) AS BIGINT) AS refi_propensity_triggers
+     , CAST(COUNT_IF(has_heloc_propensity_trigger = TRUE) AS BIGINT) AS heloc_propensity_triggers
+     , MAX(refreshed_at) AS refreshed_at
+FROM {_BORROWER_360}
+WHERE marketing_eligible = TRUE
+  AND consent_status = 'opt_in'
+""".strip()
+
+_CANONICAL_REFI_DRIVER_SQL = f"""
+SELECT e.signal_type
+     , CAST(COUNT(DISTINCT b.borrower_id) AS BIGINT) AS borrowers
+     , CAST(ROUND(AVG(e.confidence), 3) AS DOUBLE) AS avg_confidence
+     , MAX(to_timestamp(e.`timestamp`)) AS latest_evidence_at
+FROM {_BORROWER_360} AS b
+JOIN {_EVIDENCE_EVENTS} AS e
+  ON e.clip = b.clip
+WHERE b.marketing_eligible = TRUE
+  AND b.consent_status = 'opt_in'
+  AND b.recommended_offer_code IN ('refi', 'refi_plus_heloc')
+  AND e.signal_type IN (
+    'rate_spread',
+    'equity',
+    'market_trend',
+    'refi_propensity',
+    'heloc_propensity',
+    'recent_refi',
+    'recent_payoff'
+  )
+GROUP BY e.signal_type
+ORDER BY borrowers DESC, avg_confidence DESC, signal_type ASC
+LIMIT 8
+""".strip()
+
+_CANONICAL_ITM_TOP_TIER_COMPARE_SQL = f"""
+SELECT CAST(COUNT(*) AS BIGINT) AS marketable_borrowers
+     , CAST(COUNT_IF(in_the_money = TRUE) AS BIGINT) AS in_the_money_borrowers
+     , CAST(COUNT_IF(opportunity_score >= 75) AS BIGINT) AS top_tier_borrowers
+     , CAST(COUNT_IF(in_the_money = TRUE AND opportunity_score >= 75) AS BIGINT)
+         AS overlap_borrowers
+     , CAST(ROUND(AVG(CASE WHEN in_the_money = TRUE THEN rate_spread_bps END), 1) AS DOUBLE)
+         AS avg_in_the_money_rate_spread_bps
+     , CAST(ROUND(AVG(CASE WHEN opportunity_score >= 75 THEN opportunity_score END), 1) AS DOUBLE)
+         AS avg_top_tier_score
+     , MAX(refreshed_at) AS refreshed_at
+FROM {_BORROWER_360}
+WHERE marketing_eligible = TRUE
+  AND consent_status = 'opt_in'
+""".strip()
+
 _CANONICAL_STRATEGY_BOARD_SQL = f"""
 WITH exploded_segments AS (
   SELECT state
@@ -489,6 +579,18 @@ def _canonical_in_the_money_count_scope(question: str) -> tuple[str, str] | None
 
 def _normalized_question(question: str) -> str:
     q = re.sub(r"[^a-z0-9\s%.-]+", " ", question.lower())
+    q = re.sub(r"\s+", " ", q).strip()
+    replacements = {
+        "borower": "borrower",
+        "borowers": "borrowers",
+        "borrowr": "borrower",
+        "borrowrs": "borrowers",
+        " in teh money": " in the money",
+        " rn ": " right now ",
+        "avg": "average",
+    }
+    for needle, replacement in replacements.items():
+        q = q.replace(needle, replacement)
     return re.sub(r"\s+", " ", q).strip()
 
 
@@ -503,8 +605,10 @@ def _has_global_coverage_scope(q: str) -> bool:
             "current refreshed coverage",
             "across coverage",
             "across the coverage",
+            "currently",
             "overall",
             "national",
+            "right now",
         )
     )
 
@@ -551,7 +655,7 @@ def _canonical_itm_count_avg_spread_scope(question: str) -> bool:
     has_itm = any(term in q for term in ("in-the-money", "in the money", "itm"))
     asks_count = any(term in q for term in ("how many", "count", "number of", "total"))
     asks_spread = (
-        "rate spread" in q
+        ("rate spread" in q or "spread" in q)
         and any(term in q for term in ("average", "avg", "mean"))
     )
     return has_itm and "borrower" in q and asks_count and asks_spread
@@ -656,8 +760,7 @@ def _canonical_msa_score_scope(question: str) -> bool:
 
 
 def _canonical_itm_zip_scope(question: str) -> bool:
-    q = re.sub(r"[^a-z0-9\s-]+", " ", question.lower())
-    q = re.sub(r"\s+", " ", q).strip()
+    q = _normalized_question(question)
     zip_terms = ("zip", "zips", "zipcode", "zipcodes", "zip code", "zip codes", "postal")
     rank_terms = (
         "top",
@@ -676,7 +779,7 @@ def _canonical_itm_zip_scope(question: str) -> bool:
         any(term in q for term in zip_terms)
         and any(term in q for term in rank_terms)
         and any(term in q for term in refi_terms)
-        and any(term in q for term in ("borrower", "lead", "candidate"))
+        and any(term in q for term in ("borrower", "lead", "candidate", "loan officer", "savings"))
     )
 
 
@@ -711,8 +814,7 @@ def _canonical_heloc_zip_scope(question: str) -> bool:
 
 
 def _canonical_cash_out_state_scope(question: str) -> bool:
-    q = re.sub(r"[^a-z0-9\s-]+", " ", question.lower())
-    q = re.sub(r"\s+", " ", q).strip()
+    q = _normalized_question(question)
     cash_out_terms = ("cash-out", "cash out", "cashout")
     rank_terms = ("top", "most", "highest", "rank", "ranked", "which", "show")
     return (
@@ -720,6 +822,94 @@ def _canonical_cash_out_state_scope(question: str) -> bool:
         and "state" in q
         and any(term in q for term in rank_terms)
     )
+
+
+def _canonical_listed_purchase_scope(question: str) -> bool:
+    q = _normalized_question(question)
+    listed_terms = ("listed for sale", "listing", "listings", "mls", "for-sale")
+    purchase_terms = (
+        "purchase",
+        "purchase financing",
+        "next home",
+        "buy next",
+        "homebuy",
+        "financing help",
+    )
+    rank_terms = ("top", "rank", "ranked", "which", "show", "list", "first", "prioritize")
+    return (
+        any(term in q for term in listed_terms)
+        and any(term in q for term in purchase_terms)
+        and any(term in q for term in rank_terms)
+    )
+
+
+def _canonical_refi_equity_signal_compare_scope(question: str) -> bool:
+    q = _normalized_question(question)
+    refi_terms = ("refi", "refinance", "rate-and-term", "rate and term")
+    equity_terms = (
+        "home equity",
+        "heloc",
+        "equity line",
+        "cash-out",
+        "cash out",
+        "equity outreach",
+    )
+    comparison_terms = (
+        "compare",
+        "choose",
+        "choosing",
+        "decide",
+        "deciding",
+        "between",
+        "which signals",
+        "what signals",
+        "signals should",
+    )
+    return (
+        any(term in q for term in refi_terms)
+        and any(term in q for term in equity_terms)
+        and any(term in q for term in comparison_terms)
+    )
+
+
+def _canonical_refi_driver_scope(question: str) -> bool:
+    q = _normalized_question(question)
+    refi_terms = ("refi", "refinance", "rate refinance", "rate-and-term")
+    driver_terms = (
+        "driver",
+        "drivers",
+        "signal",
+        "signals",
+        "strongest",
+        "why",
+        "rationale",
+        "what is driving",
+        "what drives",
+    )
+    return (
+        any(term in q for term in refi_terms)
+        and any(term in q for term in driver_terms)
+        and any(term in q for term in ("opportunity", "candidate", "borrower", "outreach", "right now"))
+    )
+
+
+def _canonical_itm_top_tier_compare_scope(question: str) -> bool:
+    q = _normalized_question(question)
+    has_itm = any(term in q for term in ("in-the-money", "in the money", "itm"))
+    has_top_tier = any(
+        term in q
+        for term in (
+            "top tier",
+            "top-tier",
+            "opportunity score",
+            "score 75",
+            "75+",
+            "high intent",
+            "high-intent",
+        )
+    )
+    compare_terms = ("versus", "vs", "difference", "different", "same", "compare", "mean")
+    return has_itm and has_top_tier and any(term in q for term in compare_terms)
 
 
 def _canonical_strategy_board_scope(question: str) -> bool:

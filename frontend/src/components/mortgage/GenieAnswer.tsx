@@ -123,6 +123,19 @@ export function GenieAnswer({
   // Answer prose is never parsed into visualization data.
   const plan = withChart ? pickPlan(payload, rows, chartColumns) : { kind: 'none', chart: null, viz: null };
   const chart = plan.chart;
+  const proofToggle = payload.proof ? (
+    <div className="genie-proof-toggle">
+      <button type="button" className="btn btn--ghost btn--sm" onClick={() => setShowProof((cur) => !cur)}>
+        <Icon name="audit" size={12} />
+        {showProof ? 'Hide proof' : 'Show proof'}
+      </button>
+      {payload.proof.trusted !== undefined && (
+        <span className={payload.proof.trusted ? 'chip chip--success' : 'chip chip--warning'}>
+          {payload.proof.trusted ? 'trusted' : 'review'}
+        </span>
+      )}
+    </div>
+  ) : null;
 
   useFocusTrap({
     open: showProof,
@@ -140,6 +153,7 @@ export function GenieAnswer({
           {metric_value}
         </div>
       )}
+      {proofToggle}
       {cleanedAnswer && <MarkdownAnswer text={cleanedAnswer} />}
       {/* FIX Δ3: chart renders BEFORE the underlying table so the user
           sees the visual summary first; the table stays as the
@@ -193,19 +207,6 @@ export function GenieAnswer({
             <div className="genie-answer__more">+{hiddenRows} more row{hiddenRows === 1 ? '' : 's'}</div>
           )}
         </>
-      )}
-      {payload.proof && (
-        <div className="genie-proof-toggle">
-          <button type="button" className="btn btn--ghost btn--sm" onClick={() => setShowProof((cur) => !cur)}>
-            <Icon name="audit" size={12} />
-            {showProof ? 'Hide proof' : 'Show proof'}
-          </button>
-          {payload.proof.trusted !== undefined && (
-            <span className={payload.proof.trusted ? 'chip chip--success' : 'chip chip--warning'}>
-              {payload.proof.trusted ? 'trusted' : 'review'}
-            </span>
-          )}
-        </div>
       )}
       {payload.proof && showProof && typeof document !== 'undefined' && createPortal(
         <>

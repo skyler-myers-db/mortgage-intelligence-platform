@@ -6,6 +6,13 @@ trusted-asset citations + forbidden-keyword + required-keyword +
 table-row-shape contracts encoded in
 [`tools/genie_eval_questions.yml`](../../tools/genie_eval_questions.yml).
 
+There are two packs:
+
+- `tools/genie_eval_questions.yml` — lightweight canonical release gate.
+- `tools/genie_stress_questions.yml` — broader app-boundary stress matrix for
+  free-form phrasing, source gaps, PII, prompt injection, off-topic questions,
+  cross-lender requests, and SQL/schema-sniffing attempts.
+
 ## Run it
 
 ```bash
@@ -16,6 +23,13 @@ python tools/genie_eval.py --base http://localhost:8000
 python tools/genie_eval.py \
   --base https://mip-app-2543889327043640.aws.databricksapps.com \
   --token "$(databricks auth token --host $DATABRICKS_HOST | jq -r .access_token)"
+
+# deployed app stress pack
+python tools/genie_eval.py \
+  --base "$MIP_APP_URL" \
+  --token "$MIP_BEARER_TOKEN" \
+  --questions tools/genie_stress_questions.yml \
+  --report-dir /tmp/mip-genie-stress
 ```
 
 Each run writes:
@@ -50,6 +64,9 @@ git commit -m "chore(genie-eval): bump baseline to N.N"
   (`require_keywords`)
 - Answer-shape regressions: top-N questions must return at least
   N rows (`min_rows`)
+- Unsafe guardrail regressions: refusal/source-gap questions must return
+  allowed response sources, no SQL, no rows, and known-gap/refusal proof
+  when the question pack requests those checks
 - Latency regressions: per-question soft budgets that surface in
   the scorecard but don't fail the run
 

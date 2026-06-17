@@ -390,18 +390,8 @@ export default function AskGenie() {
                 className="surface surface--inset mt-4"
               >
                 <div className="surface__body">
-                  {/* withChart=true: opt this deep-dive view in to the
-                      auto-detected bar chart for top-N / per-state-style
-                      table_rows payloads. The floating bubble does NOT
-                      pass this prop, so its compact form is unchanged. */}
-                  <GenieAnswer payload={payload} question={submittedQuestion ?? undefined} onFollowUp={ask} onAction={runAction} withChart />
-                  {actionStatus && (
-                    <div className="status-callout status-callout--info mt-3">
-                      {actionStatus}
-                    </div>
-                  )}
                   {sourceChip && (
-                    <div className="chip-row mt-3">
+                    <div className="chip-row mb-3">
                       <span className="muted fs-11">Source:</span>
                       {sourceChipVariant === 'warning' ? (
                         // Degraded: warning chip with tooltip so the user
@@ -424,6 +414,16 @@ export default function AskGenie() {
                           {sourceChip}
                         </Chip>
                       )}
+                    </div>
+                  )}
+                  {/* withChart=true: opt this deep-dive view in to the
+                      auto-detected bar chart for top-N / per-state-style
+                      table_rows payloads. The floating bubble does NOT
+                      pass this prop, so its compact form is unchanged. */}
+                  <GenieAnswer payload={payload} question={submittedQuestion ?? undefined} onFollowUp={ask} onAction={runAction} withChart />
+                  {actionStatus && (
+                    <div className="status-callout status-callout--info mt-3">
+                      {actionStatus}
                     </div>
                   )}
                 </div>

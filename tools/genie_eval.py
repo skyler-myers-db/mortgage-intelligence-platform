@@ -1,10 +1,9 @@
 #!/usr/bin/env python
-"""Genie eval — score live answers against tools/genie_eval_questions.yml.
+"""Genie eval — score live answers against a YAML question pack.
 
-Hits POST /api/genie/message for each question in the YAML, scores
-the response on four checks (must_cite, forbid_keywords,
-require_keywords, min_rows), records latency, and emits a markdown
-report.
+Hits POST /api/genie/message for each question in the YAML, scores the
+response on trusted-source, citation, guardrail, SQL, shape, and optional
+canonical-value checks, records latency, and emits a markdown report.
 
 Designed to run BOTH:
 
@@ -71,6 +70,7 @@ class QuestionScore:
     category: str
     question: str
     answer: str
+    source: str = ""
     score: float = 0.0
     cite_ok: bool = True
     forbid_ok: bool = True
@@ -82,6 +82,8 @@ class QuestionScore:
     sql_ok: bool = True
     freshness_ok: bool = True
     canonical_ok: bool = True
+    source_ok: bool = True
+    guardrail_ok: bool = True
     latency_s: float = 0.0
     notes: list[str] = field(default_factory=list)
 
@@ -97,15 +99,17 @@ class QuestionScore:
             and self.sql_ok
             and self.freshness_ok
             and self.canonical_ok
+            and self.source_ok
+            and self.guardrail_ok
         )
 
 
-def _load_questions() -> list[dict[str, Any]]:
-    with QUESTIONS_PATH.open() as f:
+def _load_questions(path: Path = QUESTIONS_PATH) -> list[dict[str, Any]]:
+    with path.open() as f:
         data = yaml.safe_load(f)
     questions = data.get("questions") or []
     if not isinstance(questions, list):
-        raise ValueError(f"{QUESTIONS_PATH} 'questions' must be a list")
+        raise ValueError(f"{path} 'questions' must be a list")
     return _render_catalog_templates(questions, catalog=_configured_catalog())
 
 
@@ -336,11 +340,13 @@ def _score_question(spec: dict[str, Any], response: dict[str, Any], elapsed_s: f
     table_rows = response.get("table_rows") or []
     proof = response.get("proof") or {}
     sql_query = response.get("sql_query") or proof.get("sql_query")
+    source = str(response.get("source") or "")
     score = QuestionScore(
         id=qid,
         category=spec.get("category", "uncategorised"),
         question=spec["question"],
         answer=answer,
+        source=source,
         latency_s=round(elapsed_s, 2),
     )
     if "error" in response:
@@ -365,7 +371,7 @@ def _score_question(spec: dict[str, Any], response: dict[str, Any], elapsed_s: f
     ).lower()
 
     # 1. must_cite
-    must_cite = spec.get("must_cite") or []
+    must_cite = _as_text_list(spec.get("must_cite") or [])
     if must_cite:
         cite_hits = [c for c in must_cite if c.lower() in citation_text]
         score.cite_ok = bool(cite_hits)
@@ -375,14 +381,14 @@ def _score_question(spec: dict[str, Any], response: dict[str, Any], elapsed_s: f
             )
 
     # 2. forbid_keywords
-    forbid = spec.get("forbid_keywords") or []
+    forbid = _as_text_list(spec.get("forbid_keywords") or [])
     forbidden_hits = [k for k in forbid if k.lower() in answer_lc]
     score.forbid_ok = not forbidden_hits
     if forbidden_hits:
         score.notes.append(f"forbidden phrase present: {forbidden_hits!r}")
 
     # 3. require_keywords (OR semantics — any one match satisfies)
-    require = spec.get("require_keywords") or []
+    require = _as_text_list(spec.get("require_keywords") or [])
     if require:
         score.require_ok = any(k.lower() in answer_lc for k in require)
         if not score.require_ok:
@@ -392,13 +398,18 @@ def _score_question(spec: dict[str, Any], response: dict[str, Any], elapsed_s: f
 
     # 4. min_rows
     min_rows = int(spec.get("min_rows") or 0)
+    row_count = _response_row_count(response, table_rows)
     if min_rows > 0:
-        actual = len(table_rows) if isinstance(table_rows, list) else 0
-        score.rows_ok = actual >= min_rows
+        score.rows_ok = row_count >= min_rows
         if not score.rows_ok:
             score.notes.append(
-                f"too few rows: got {actual}, expected >= {min_rows}"
+                f"too few rows: got {row_count}, expected >= {min_rows}"
             )
+    if "max_rows" in spec:
+        max_rows = int(spec.get("max_rows") or 0)
+        if row_count > max_rows:
+            score.rows_ok = False
+            score.notes.append(f"too many rows: got {row_count}, expected <= {max_rows}")
 
     expected_range = spec.get("expected_numeric_range") or {}
     if expected_range:
@@ -421,13 +432,23 @@ def _score_question(spec: dict[str, Any], response: dict[str, Any], elapsed_s: f
         score.sql_ok = sql_text.startswith("select") or sql_text.startswith("with")
         if not score.sql_ok:
             score.notes.append("missing SELECT-only generated SQL")
-    required_sql = [str(v).lower() for v in spec.get("required_sql_contains") or []]
+    if spec.get("require_no_sql") and str(sql_query or "").strip():
+        score.sql_ok = False
+        score.notes.append("SQL was returned for a no-SQL guardrail question")
+    required_sql = [v.lower() for v in _as_text_list(spec.get("required_sql_contains") or [])]
     if required_sql:
         sql_text = str(sql_query or "").lower()
         missing = [needle for needle in required_sql if needle not in sql_text]
         if missing:
             score.sql_ok = False
             score.notes.append(f"generated SQL missing required text: {missing!r}")
+    forbidden_sql = [v.lower() for v in _as_text_list(spec.get("forbid_sql_contains") or [])]
+    if forbidden_sql:
+        sql_text = str(sql_query or "").lower()
+        hits = [needle for needle in forbidden_sql if needle in sql_text]
+        if hits:
+            score.sql_ok = False
+            score.notes.append(f"generated SQL contained forbidden text: {hits!r}")
 
     if spec.get("require_freshness"):
         freshness = proof.get("data_freshness") if isinstance(proof, dict) else None
@@ -437,6 +458,24 @@ def _score_question(spec: dict[str, Any], response: dict[str, Any], elapsed_s: f
         )
         if not score.freshness_ok:
             score.notes.append("proof.data_freshness did not include refreshed_at")
+    if spec.get("require_known_gap"):
+        known_gaps = proof.get("known_data_gaps") if isinstance(proof, dict) else None
+        score.guardrail_ok = any(str(gap).strip() for gap in known_gaps or [])
+        if not score.guardrail_ok:
+            score.notes.append("proof.known_data_gaps was empty")
+
+    allowed_sources = _as_text_list(spec.get("allowed_sources") or [])
+    if allowed_sources:
+        expected = {str(value) for value in allowed_sources}
+        score.source_ok = source in expected
+        if not score.source_ok:
+            score.notes.append(
+                f"unexpected response source {source!r}; expected one of {allowed_sources!r}"
+            )
+    forbid_sources = _as_text_list(spec.get("forbid_sources") or [])
+    if forbid_sources and source in {str(value) for value in forbid_sources}:
+        score.source_ok = False
+        score.notes.append(f"forbidden response source returned: {source!r}")
 
     canonical_sql = spec.get("canonical_sql")
     canonical_column = spec.get("canonical_column")
@@ -476,9 +515,26 @@ def _score_question(spec: dict[str, Any], response: dict[str, Any], elapsed_s: f
         score.sql_ok,
         score.freshness_ok,
         score.canonical_ok,
+        score.source_ok,
+        score.guardrail_ok,
     ]
     score.score = round(100.0 * sum(checks) / len(checks), 1)
     return score
+
+
+def _response_row_count(response: dict[str, Any], table_rows: Any) -> int:
+    value = response.get("row_count")
+    if isinstance(value, int | float):
+        return int(value)
+    if isinstance(table_rows, list):
+        return len(table_rows)
+    return 0
+
+
+def _as_text_list(values: Any) -> list[str]:
+    if not isinstance(values, list):
+        return [str(values)]
+    return [str(value) for value in values]
 
 
 def _extract_numeric_values(answer: str, table_rows: Any) -> list[float]:
@@ -547,14 +603,14 @@ def _emit_markdown(scores: list[QuestionScore], stamp: str, base: str) -> str:
             lines.append("")
     lines.append("## Per-question detail")
     lines.append("")
-    lines.append("| id | category | score | latency | reconcile | proof | passed |")
-    lines.append("|---|---|---:|---:|:---:|:---:|:---:|")
+    lines.append("| id | category | source | score | latency | reconcile | proof | passed |")
+    lines.append("|---|---|---|---:|---:|:---:|:---:|:---:|")
     for s in scores:
         ok = "✅" if s.passed else "❌"
         canonical = "✅" if s.canonical_ok else "❌"
-        proof = "✅" if all([s.trusted_ok, s.sql_ok, s.freshness_ok]) else "❌"
+        proof = "✅" if all([s.trusted_ok, s.sql_ok, s.freshness_ok, s.source_ok, s.guardrail_ok]) else "❌"
         lines.append(
-            f"| `{s.id}` | {s.category} | {s.score:.0f} | {s.latency_s:.1f}s | {canonical} | {proof} | {ok} |"
+            f"| `{s.id}` | {s.category} | {s.source or '-'} | {s.score:.0f} | {s.latency_s:.1f}s | {canonical} | {proof} | {ok} |"
         )
     return "\n".join(lines) + "\n"
 
@@ -574,6 +630,7 @@ def _write_json_summary(scores: list[QuestionScore], stamp: str, base: str) -> d
                 "score": s.score,
                 "passed": s.passed,
                 "latency_s": s.latency_s,
+                "source": s.source,
                 "checks": {
                     "citations": s.cite_ok,
                     "forbidden_terms": s.forbid_ok,
@@ -584,6 +641,8 @@ def _write_json_summary(scores: list[QuestionScore], stamp: str, base: str) -> d
                     "sql": s.sql_ok,
                     "freshness": s.freshness_ok,
                     "canonical_sql": s.canonical_ok,
+                    "source": s.source_ok,
+                    "guardrail": s.guardrail_ok,
                 },
                 "notes": s.notes,
             }
@@ -611,6 +670,11 @@ def _check_regression(latest_overall: float) -> tuple[bool, float | None]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base", required=True, help="Base URL for the MIP API")
+    parser.add_argument(
+        "--questions",
+        default=str(QUESTIONS_PATH),
+        help="YAML question pack to send to /api/genie/message.",
+    )
     parser.add_argument("--token", default=os.environ.get("DATABRICKS_TOKEN"))
     parser.add_argument("--timeout", type=int, default=60)
     parser.add_argument("--attempts", type=int, default=DEFAULT_ATTEMPTS)
@@ -627,8 +691,9 @@ def main() -> int:
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    questions = _load_questions()
-    log.info("genie_eval: loaded %d questions", len(questions))
+    question_path = Path(args.questions)
+    questions = _load_questions(question_path)
+    log.info("genie_eval: loaded %d questions from %s", len(questions), question_path)
 
     scores: list[QuestionScore] = []
     for idx, q in enumerate(questions):
@@ -657,9 +722,10 @@ def main() -> int:
     md_path = Path(args.report_dir) / f"{stamp}.md"
     md_path.write_text(md)
     summary = _write_json_summary(scores, stamp, args.base)
-    LATEST_PATH.write_text(json.dumps(summary, indent=2) + "\n")
+    latest_path = Path(args.report_dir) / "latest.json"
+    latest_path.write_text(json.dumps(summary, indent=2) + "\n")
     log.info("report: %s", md_path)
-    log.info("summary: %s", LATEST_PATH)
+    log.info("summary: %s", latest_path)
 
     if args.update_baseline:
         BASELINE_PATH.write_text(json.dumps(summary, indent=2) + "\n")

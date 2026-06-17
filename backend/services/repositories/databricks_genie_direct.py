@@ -6,7 +6,11 @@ from typing import Any
 
 from backend.services.databricks_sql import DatabricksSqlClient, DatabricksSqlError
 from backend.services.databricks_sql_helpers import qualify
-from backend.services.genie_answers import GenieMessageResponse
+from backend.services.genie_answers import (
+    GenieMessageResponse,
+    GenieProof,
+    default_follow_up_questions,
+)
 from backend.services.repositories.databricks_genie_actions import (
     _suggest_genie_actions,
     _total_matching_from_rows,
@@ -23,8 +27,12 @@ from backend.services.repositories.databricks_genie_canonical import (
     _CANONICAL_ITM_COUNT_BY_CITY_SQL,
     _CANONICAL_ITM_COUNT_BY_STATE_SQL,
     _CANONICAL_ITM_COUNT_SQL,
+    _CANONICAL_ITM_TOP_TIER_COMPARE_SQL,
     _CANONICAL_ITM_TOP_ZIPS_SQL,
+    _CANONICAL_LISTED_PURCHASE_TOP_SQL,
     _CANONICAL_MSA_SCORE_SQL,
+    _CANONICAL_REFI_DRIVER_SQL,
+    _CANONICAL_REFI_EQUITY_SIGNAL_COMPARE_SQL,
     _CANONICAL_RETENTION_COMPETITOR_LIEN_LIST_SQL,
     _CANONICAL_STRATEGY_BOARD_SQL,
     _CANONICAL_TOP_BORROWERS_BY_STATE_SQL,
@@ -37,8 +45,12 @@ from backend.services.repositories.databricks_genie_canonical import (
     _canonical_itm_city_scope,
     _canonical_itm_count_avg_spread_scope,
     _canonical_itm_state_breakdown_scope,
+    _canonical_itm_top_tier_compare_scope,
     _canonical_itm_zip_scope,
+    _canonical_listed_purchase_scope,
     _canonical_msa_score_scope,
+    _canonical_refi_driver_scope,
+    _canonical_refi_equity_signal_compare_scope,
     _canonical_strategy_board_scope,
     _canonical_top_borrowers_state_scope,
     _retention_competitor_lien_list_question,
@@ -123,11 +135,59 @@ def _trusted_sql_response(
     )
 
 
+def _guide_response(question: str) -> GenieMessageResponse | None:
+    q = " ".join(question.lower().split())
+    if not (
+        any(term in q for term in ("what can i ask", "what should i ask", "help me ask"))
+        or ("question" in q and "can i ask" in q)
+        or (
+            "question" in q
+            and any(term in q for term in ("example", "examples", "suggest", "suggestion"))
+        )
+    ):
+        return None
+    question_hash = _genie_question_hash(question)
+    follow_ups = default_follow_up_questions(limit=5)
+    answer = (
+        "Ask about borrower segments, ranked leads, geography, trigger evidence, "
+        "recommended offers, or governed data gaps. Good questions usually name the "
+        "cohort, the decision you are trying to make, and the proof you need. For example: "
+        "\"Which ZIPs should a loan officer work first for refinance savings?\" or "
+        "\"Which borrower signals should I compare before choosing between refinance "
+        "and home-equity outreach?\""
+    )
+    return GenieMessageResponse(
+        conversation_id="",
+        message_id=f"guide-{question_hash}",
+        elapsed_ms=0,
+        question_hash=question_hash,
+        question=question,
+        answer=answer,
+        source="guide",
+        trusted_assets=[],
+        row_count=0,
+        proof=GenieProof(
+            source_assets=[],
+            row_count=0,
+            trusted=False,
+            filters=[],
+            known_data_gaps=[],
+            conversation_id=None,
+            message_id=f"guide-{question_hash}",
+        ),
+        follow_up_questions=follow_ups,
+        table_rows=[],
+    )
+
+
 def direct_canonical_response(
     question: str,
     sql_client: DatabricksSqlClient | None,
 ) -> GenieMessageResponse | None:
     """Return live trusted-SQL proof for narrow gold-grain count prompts."""
+    guide = _guide_response(question)
+    if guide is not None:
+        return guide
     if sql_client is None:
         return None
     borrower_asset = qualify("gold", "borrower_360")
@@ -412,6 +472,149 @@ def direct_canonical_response(
             rows=rows,
             answer=answer,
             metric_value=metric_value,
+        )
+
+    if _canonical_listed_purchase_scope(question):
+        try:
+            rows = (
+                _redact_genie_rows(sql_client.execute(_CANONICAL_LISTED_PURCHASE_TOP_SQL))
+                or []
+            )
+        except DatabricksSqlError as exc:
+            _emit_genie_warning("direct_canonical_genie_listed_purchase_failed", exc=exc)
+            return None
+        listed_assets = [borrower_asset]
+        if rows:
+            top = rows[0]
+            top_offer = offer_display_label(
+                str(top.get("recommended_offer_code") or ""),
+                str(top.get("recommended_offer") or ""),
+            )
+            answer = (
+                f"I ranked the top {len(rows)} marketing-eligible listed-for-sale borrowers "
+                f"from {borrower_asset}. The current first borrower is masked "
+                f"{top.get('borrower_id')} in {top.get('city')}, {top.get('state')} "
+                f"with opportunity score {int(top.get('opportunity_score') or 0):,}. "
+                f"Lead with {top_offer} only after review in the governed outreach workflow."
+            )
+        else:
+            answer = (
+                "The trusted borrower table returned no marketing-eligible listed-for-sale "
+                "borrowers for the current refreshed coverage."
+            )
+        return _trusted_sql_response(
+            question=question,
+            sql_query=_CANONICAL_LISTED_PURCHASE_TOP_SQL,
+            trusted_assets=listed_assets,
+            rows=rows,
+            answer=answer,
+        )
+
+    if _canonical_refi_equity_signal_compare_scope(question):
+        try:
+            row = sql_client.execute_one(_CANONICAL_REFI_EQUITY_SIGNAL_COMPARE_SQL) or {}
+        except DatabricksSqlError as exc:
+            _emit_genie_warning("direct_canonical_genie_refi_equity_compare_failed", exc=exc)
+            return None
+        rows = [
+            {
+                "marketable_borrowers": int(row.get("marketable_borrowers") or 0),
+                "refinance_candidates": int(row.get("refinance_candidates") or 0),
+                "home_equity_candidates": int(row.get("home_equity_candidates") or 0),
+                "refi_plus_home_equity_candidates": int(
+                    row.get("refi_plus_home_equity_candidates") or 0
+                ),
+                "avg_refi_rate_spread_bps": row.get("avg_refi_rate_spread_bps"),
+                "avg_home_equity_pct": row.get("avg_home_equity_pct"),
+                "avg_heloc_propensity_score": row.get("avg_heloc_propensity_score"),
+                "refi_propensity_triggers": int(row.get("refi_propensity_triggers") or 0),
+                "heloc_propensity_triggers": int(row.get("heloc_propensity_triggers") or 0),
+                "refreshed_at": row.get("refreshed_at"),
+            }
+        ]
+        answer = (
+            "Compare refinance and home-equity outreach on four signals: rate spread, "
+            "available equity, Cotality propensity, and the winning offer branch. "
+            f"In the current marketable borrower set, {rows[0]['refinance_candidates']:,} "
+            f"borrowers are in a refinance lane and {rows[0]['home_equity_candidates']:,} "
+            "are in a home-equity extraction lane. The overlap to review first is "
+            f"{rows[0]['refi_plus_home_equity_candidates']:,} borrowers where the rule selected "
+            "Refinance + HELOC. Use rate spread to justify refinance, equity percentage and "
+            "HELOC propensity to justify home-equity, and keep filed building permits separate "
+            "because that source is not the live HELOC signal."
+        )
+        return _trusted_sql_response(
+            question=question,
+            sql_query=_CANONICAL_REFI_EQUITY_SIGNAL_COMPARE_SQL,
+            trusted_assets=trusted_assets,
+            rows=rows,
+            answer=answer,
+        )
+
+    if _canonical_refi_driver_scope(question):
+        try:
+            rows = _redact_genie_rows(sql_client.execute(_CANONICAL_REFI_DRIVER_SQL)) or []
+        except DatabricksSqlError as exc:
+            _emit_genie_warning("direct_canonical_genie_refi_driver_failed", exc=exc)
+            return None
+        if rows:
+            top = rows[0]
+            answer = (
+                "The refinance lane is driven by governed evidence, not a generic model summary. "
+                f"The leading current signal is `{top.get('signal_type')}`, present for "
+                f"{int(top.get('borrowers') or 0):,} marketing-eligible borrowers in refinance "
+                f"or refinance-plus-HELOC offer lanes. Review the table by signal type: rate "
+                "spread is the economic reason to refinance, equity supports cross-sell, and "
+                "refi propensity adds Cotality intent context."
+            )
+        else:
+            answer = (
+                "The governed evidence table returned no refinance-driver rows for the current "
+                "marketable refinance lanes. That means I will not invent a driver ranking."
+            )
+        return _trusted_sql_response(
+            question=question,
+            sql_query=_CANONICAL_REFI_DRIVER_SQL,
+            trusted_assets=[borrower_asset, evidence_asset],
+            rows=rows,
+            answer=answer,
+        )
+
+    if _canonical_itm_top_tier_compare_scope(question):
+        try:
+            row = sql_client.execute_one(_CANONICAL_ITM_TOP_TIER_COMPARE_SQL) or {}
+        except DatabricksSqlError as exc:
+            _emit_genie_warning("direct_canonical_genie_itm_top_tier_failed", exc=exc)
+            return None
+        rows = [
+            {
+                "marketable_borrowers": int(row.get("marketable_borrowers") or 0),
+                "in_the_money_borrowers": int(row.get("in_the_money_borrowers") or 0),
+                "top_tier_borrowers": int(row.get("top_tier_borrowers") or 0),
+                "overlap_borrowers": int(row.get("overlap_borrowers") or 0),
+                "avg_in_the_money_rate_spread_bps": row.get(
+                    "avg_in_the_money_rate_spread_bps"
+                ),
+                "avg_top_tier_score": row.get("avg_top_tier_score"),
+                "refreshed_at": row.get("refreshed_at"),
+            }
+        ]
+        answer = (
+            "They are related but not the same. In-the-money is a refinance-economics "
+            "screen: the borrower clears the configured rate-spread and equity thresholds. "
+            "Top-tier opportunity means opportunity_score >= 75, which blends economics, "
+            "intent, fit, relationship, and evidence. In the current marketable set, "
+            f"{rows[0]['in_the_money_borrowers']:,} borrowers are in-the-money, "
+            f"{rows[0]['top_tier_borrowers']:,} are top-tier, and "
+            f"{rows[0]['overlap_borrowers']:,} are both. Use the overlap for the cleanest "
+            "refinance story; use top-tier outside in-the-money when another offer lane is stronger."
+        )
+        return _trusted_sql_response(
+            question=question,
+            sql_query=_CANONICAL_ITM_TOP_TIER_COMPARE_SQL,
+            trusted_assets=trusted_assets,
+            rows=rows,
+            answer=answer,
         )
 
     if _canonical_investor_segment_by_state_scope(question):

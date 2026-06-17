@@ -2067,6 +2067,168 @@ def test_state_breakdown_uses_direct_canonical_gold_sql_without_genie_call() -> 
     assert "FROM mip.gold.borrower_360" in result.sql_query
 
 
+def test_in_the_money_typo_avg_spread_uses_direct_canonical_sql() -> None:
+    stub = _StubClient(_make_breaker("open"), response=AssertionError("Genie should not be called"))
+    sql = _StubSqlClient(
+        [
+            {
+                "in_the_money_borrowers": 147742,
+                "avg_rate_spread_bps": 118.4,
+                "refreshed_at": "2026-06-17T01:00:00Z",
+            }
+        ]
+    )
+    repo = DatabricksGenieRepository(stub, sql)  # type: ignore[arg-type]
+
+    result = repo.respond("How many borowers are in teh money rn and avg spread?")
+
+    assert result.source == "trusted_sql"
+    assert stub.ask_calls == []
+    assert result.metric_value == "147,742"
+    assert "average rate spread is 118.4 bps" in result.answer
+    assert result.sql_query is not None
+    assert "WHERE in_the_money = TRUE" in result.sql_query
+
+
+def test_listed_purchase_question_uses_direct_canonical_sql() -> None:
+    stub = _StubClient(_make_breaker("closed"), response=AssertionError("Genie should not be called"))
+    sql = _StubSqlClient(
+        [
+            {
+                "borrower_id": "B-LISTED1",
+                "display_name": "Borrower B-LISTED1",
+                "city": "Bellwood",
+                "state": "IL",
+                "zip": "60104",
+                "opportunity_score": 867,
+                "recommended_offer_code": "purchase",
+                "recommended_offer": "Purchase Mortgage",
+                "first_pos_loan_type": "CONV",
+                "current_rate": 6.75,
+                "listing_status_category": "active",
+                "refreshed_at": "2026-06-17T01:00:00Z",
+            }
+        ]
+    )
+    repo = DatabricksGenieRepository(stub, sql)  # type: ignore[arg-type]
+
+    result = repo.respond("Which listed-for-sale borrowers should get purchase financing help first?")
+
+    assert result.source == "trusted_sql"
+    assert stub.ask_calls == []
+    assert result.table_rows[0]["borrower_id"] == "B-LISTED1"
+    assert result.proof is not None
+    assert result.proof.trusted is True
+    assert result.sql_query is not None
+    assert "listed_for_sale = TRUE" in result.sql_query
+    assert "marketing_eligible = TRUE" in result.sql_query
+    assert "Next-home purchase loan" in result.answer
+
+
+@pytest.mark.parametrize(
+    ("question", "rows", "sql_marker", "answer_phrase"),
+    [
+        (
+            "Which borrower signals should I compare before choosing between refinance and home-equity outreach?",
+            [
+                {
+                    "marketable_borrowers": 1000,
+                    "refinance_candidates": 320,
+                    "home_equity_candidates": 280,
+                    "refi_plus_home_equity_candidates": 115,
+                    "avg_refi_rate_spread_bps": 188.5,
+                    "avg_home_equity_pct": 52.1,
+                    "avg_heloc_propensity_score": 741.2,
+                    "refi_propensity_triggers": 410,
+                    "heloc_propensity_triggers": 225,
+                    "refreshed_at": "2026-06-15T00:00:00Z",
+                }
+            ],
+            "refi_plus_home_equity_candidates",
+            "Compare refinance and home-equity outreach",
+        ),
+        (
+            "What are the strongest refinance opportunity drivers right now?",
+            [
+                {
+                    "signal_type": "rate_spread",
+                    "borrowers": 1200,
+                    "avg_confidence": 0.91,
+                    "latest_evidence_at": "2026-06-15T00:00:00Z",
+                },
+                {
+                    "signal_type": "equity",
+                    "borrowers": 950,
+                    "avg_confidence": 0.88,
+                    "latest_evidence_at": "2026-06-15T00:00:00Z",
+                },
+            ],
+            "e.signal_type",
+            "The refinance lane is driven by governed evidence",
+        ),
+        (
+            "How should I think about in-the-money versus top-tier opportunity?",
+            [
+                {
+                    "marketable_borrowers": 1000,
+                    "in_the_money_borrowers": 260,
+                    "top_tier_borrowers": 180,
+                    "overlap_borrowers": 150,
+                    "avg_in_the_money_rate_spread_bps": 188.5,
+                    "avg_top_tier_score": 83.7,
+                    "refreshed_at": "2026-06-15T00:00:00Z",
+                }
+            ],
+            "opportunity_score >= 75",
+            "They are related but not the same",
+        ),
+    ],
+)
+def test_broad_module0_free_text_uses_trusted_sql_when_genie_is_unavailable(
+    question: str,
+    rows: list[dict[str, Any]],
+    sql_marker: str,
+    answer_phrase: str,
+) -> None:
+    stub = _StubClient(
+        _make_breaker("closed"),
+        response=DependencyDownError("genie", reason="raw Genie should not be called"),
+    )
+    sql = _StubSqlClient(rows)
+    repo = DatabricksGenieRepository(stub, sql)  # type: ignore[arg-type]
+
+    result = repo.respond(question)
+
+    assert result.source == "trusted_sql"
+    assert stub.ask_calls == []
+    assert result.sql_query is not None
+    assert sql_marker in result.sql_query
+    assert answer_phrase in result.answer
+    assert result.table_rows == rows
+    assert result.proof is not None
+    assert result.proof.trusted is True
+
+
+def test_genie_help_question_returns_guide_without_calling_raw_genie() -> None:
+    stub = _StubClient(
+        _make_breaker("closed"),
+        response=DependencyDownError("genie", reason="raw Genie should not be called"),
+    )
+    repo = DatabricksGenieRepository(stub)  # type: ignore[arg-type]
+
+    result = repo.respond("What random borrower strategy question can I ask if I want good outreach this week?")
+
+    assert result.source == "guide"
+    assert stub.ask_calls == []
+    assert "Ask about borrower segments" in result.answer
+    assert "Which ZIPs should a loan officer work first" in result.answer
+    assert result.sql_query is None
+    assert result.row_count == 0
+    assert result.follow_up_questions
+    assert result.proof is not None
+    assert result.proof.trusted is False
+
+
 def test_in_the_money_count_uses_canonical_gold_grain() -> None:
     live = GenieResponse(
         answer_text=(
