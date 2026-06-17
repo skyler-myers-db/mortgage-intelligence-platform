@@ -1303,8 +1303,12 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
       .fill('Which ZIPs have the most in-the-money refinance candidates?');
     await page.getByRole('button', { name: /^Ask Genie$/i }).first().click();
 
-    const zipTableText = await page.locator('.genie-answer__table').first().textContent({ timeout: 60_000 });
-    expect(zipTableText ?? '').toMatch(/\b\d{5}\b/);
+    const zipCells = page.locator('.genie-answer__table').first().locator('tbody tr td:first-child');
+    await expect(zipCells.first()).toBeVisible({ timeout: 60_000 });
+    const answerZips = await zipCells.evaluateAll((nodes) =>
+      nodes.map((node) => node.textContent?.trim() ?? '').filter(Boolean),
+    );
+    expect(answerZips.some((zip) => /^\d{5}$/.test(zip))).toBeTruthy();
     const cohortAction = page.locator('.genie-action', { hasText: /Open this cohort in Lead Queue/i }).first();
     await expect(cohortAction).toBeVisible();
     await cohortAction.getByRole('button', { name: /Run/i }).click();
