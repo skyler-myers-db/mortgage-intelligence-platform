@@ -418,7 +418,7 @@ def test_heloc_zip_text_only_answer_uses_equity_canonical_trusted_sql() -> None:
         {
             "zip": "60617",
             "state": "IL",
-            "heloc_eligible_borrowers": 1000,
+            "equity_capacity_borrowers": 1000,
             "avg_equity_pct": 42.0,
             "avg_score": 71.1,
             "refreshed_at": "2026-05-21T00:00:00Z",
@@ -426,7 +426,7 @@ def test_heloc_zip_text_only_answer_uses_equity_canonical_trusted_sql() -> None:
         {
             "zip": "60628",
             "state": "IL",
-            "heloc_eligible_borrowers": 900,
+            "equity_capacity_borrowers": 900,
             "avg_equity_pct": 40.5,
             "avg_score": 70.2,
             "refreshed_at": "2026-05-21T00:00:00Z",
@@ -434,7 +434,7 @@ def test_heloc_zip_text_only_answer_uses_equity_canonical_trusted_sql() -> None:
         {
             "zip": "60629",
             "state": "IL",
-            "heloc_eligible_borrowers": 800,
+            "equity_capacity_borrowers": 800,
             "avg_equity_pct": 39.7,
             "avg_score": 69.8,
             "refreshed_at": "2026-05-21T00:00:00Z",
@@ -442,7 +442,7 @@ def test_heloc_zip_text_only_answer_uses_equity_canonical_trusted_sql() -> None:
         {
             "zip": "77084",
             "state": "TX",
-            "heloc_eligible_borrowers": 700,
+            "equity_capacity_borrowers": 700,
             "avg_equity_pct": 38.4,
             "avg_score": 68.9,
             "refreshed_at": "2026-05-21T00:00:00Z",
@@ -450,7 +450,7 @@ def test_heloc_zip_text_only_answer_uses_equity_canonical_trusted_sql() -> None:
         {
             "zip": "33186",
             "state": "FL",
-            "heloc_eligible_borrowers": 600,
+            "equity_capacity_borrowers": 600,
             "avg_equity_pct": 37.2,
             "avg_score": 67.5,
             "refreshed_at": "2026-05-21T00:00:00Z",
@@ -459,7 +459,7 @@ def test_heloc_zip_text_only_answer_uses_equity_canonical_trusted_sql() -> None:
     sql = _StubSqlClient(rows)
     repo = DatabricksGenieRepository(stub, sql_client=sql)  # type: ignore[arg-type]
 
-    result = repo.respond("Which ZIPs have the most HELOC-eligible borrowers with equity >= 35%?")
+    result = repo.respond("Which ZIPs have the most borrowers with modeled equity >= 35%?")
 
     assert result.source == "trusted_sql"
     assert result.proof is not None
@@ -469,7 +469,7 @@ def test_heloc_zip_text_only_answer_uses_equity_canonical_trusted_sql() -> None:
     assert "GROUP BY zip, state" in result.sql_query
     assert result.row_count == 5
     assert result.table_rows == rows
-    assert "Building Permits signals remain pending" in result.answer
+    assert "not a filed-permit or HELOC-intent count" in result.answer
 
 
 def test_numeric_zip_rows_are_padded_before_cohort_routing() -> None:
@@ -765,12 +765,12 @@ def test_top_zip_question_uses_direct_canonical_gold_sql_without_genie_call() ->
             "ranked the top",
         ),
         (
-            "Top 5 ZIP codes by HELOC-eligible borrowers (equity >= 35%).",
+            "Top 5 ZIP codes by borrowers with modeled equity >= 35%.",
             [
                 {
                     "zip": "60617",
                     "state": "IL",
-                    "heloc_eligible_borrowers": 321,
+                    "equity_capacity_borrowers": 321,
                     "avg_equity_pct": 48.2,
                     "avg_score": 78.4,
                     "refreshed_at": "2026-06-15T00:00:00Z",
@@ -778,7 +778,7 @@ def test_top_zip_question_uses_direct_canonical_gold_sql_without_genie_call() ->
             ],
             "mip.gold.borrower_360",
             "equity_pct >= 35",
-            "HELOC-eligible borrowers",
+            "borrowers with modeled equity at or above 35%",
         ),
         (
             "Where should the configured tenant lender spend its next 10000 outreach touches this week, and why?",
@@ -869,6 +869,146 @@ def test_eval_canonical_questions_use_direct_trusted_sql_without_genie_call(
     assert result.table_rows == rows
     assert result.proof is not None
     assert result.proof.trusted is True
+
+
+@pytest.mark.parametrize(
+    ("question", "rows", "expected_sql_marker", "expected_phrase"),
+    [
+        (
+            "How many borrowers across the current Cotality data coverage are currently in-the-money, and what is the average rate spread?",
+            [
+                {
+                    "in_the_money_borrowers": 4867,
+                    "avg_rate_spread_bps": 186.4,
+                    "refreshed_at": "2026-06-15T00:00:00Z",
+                }
+            ],
+            "AVG(rate_spread_bps)",
+            "average rate spread is 186.4 bps",
+        ),
+        (
+            "How many borrowers have more than 35% modeled equity across the current Cotality data coverage?",
+            [
+                {
+                    "equity_capacity_borrowers": 2075,
+                    "avg_equity_pct": 52.3,
+                    "refreshed_at": "2026-06-15T00:00:00Z",
+                }
+            ],
+            "equity_pct > 35",
+            "borrowers with more than 35% modeled home equity",
+        ),
+        (
+            "How many HELOC candidates have more than 35% equity across the current Cotality data coverage?",
+            [
+                {
+                    "equity_capacity_borrowers": 2075,
+                    "avg_equity_pct": 52.3,
+                    "refreshed_at": "2026-06-15T00:00:00Z",
+                }
+            ],
+            "equity_pct > 35",
+            "This is not a filed-permit or HELOC-intent count",
+        ),
+        (
+            "What is the addressable market size — how many eligible borrowers across the current Cotality data coverage?",
+            [
+                {
+                    "eligible_borrowers": 79730,
+                    "refreshed_at": "2026-06-15T00:00:00Z",
+                }
+            ],
+            "FROM mip.gold.lead_population",
+            "marketing-eligible, opt-in borrowers",
+        ),
+        (
+            "How many eligible borrowers do we have across the current Cotality data coverage?",
+            [
+                {
+                    "eligible_borrowers": 79730,
+                    "refreshed_at": "2026-06-15T00:00:00Z",
+                }
+            ],
+            "FROM mip.gold.lead_population",
+            "marketing-eligible, opt-in borrowers",
+        ),
+    ],
+)
+def test_visible_ask_genie_samples_use_direct_trusted_sql_without_genie_call(
+    question: str,
+    rows: list[dict[str, Any]],
+    expected_sql_marker: str,
+    expected_phrase: str,
+) -> None:
+    stub = _StubClient(
+        _make_breaker("open"),
+        response=GenieClientError("Genie message terminated in state FAILED"),
+    )
+    sql = _StubSqlClient(rows)
+    repo = DatabricksGenieRepository(stub, sql)  # type: ignore[arg-type]
+
+    result = repo.respond(question)
+
+    assert result.source == "trusted_sql"
+    assert stub.ask_calls == []
+    assert result.sql_query is not None
+    assert expected_sql_marker in result.sql_query
+    assert expected_phrase in result.answer
+    assert result.table_rows
+    assert result.proof is not None
+    assert result.proof.trusted is True
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "How many in-the-money borrowers are in California, and what is the average rate spread?",
+        "How many HELOC candidates have more than 35% equity in California?",
+        "How many eligible borrowers are in California?",
+        "How many eligible borrowers are in Chicago?",
+        (
+            "How many borrowers across the current Cotality data coverage are "
+            "currently in-the-money in 60617, and what is the average rate spread?"
+        ),
+        (
+            "How many borrowers across the current Cotality data coverage are "
+            "currently in-the-money for 31080, and what is the average rate spread?"
+        ),
+        (
+            "How many borrowers have more than 35% modeled equity across the "
+            "current Cotality data coverage in 60617?"
+        ),
+        "What is the addressable market size across the current Cotality data coverage in 31080?",
+    ],
+)
+def test_global_direct_sample_routes_do_not_answer_geography_scoped_questions(
+    question: str,
+) -> None:
+    live = GenieResponse(
+        answer_text="Live Genie should handle scoped questions.",
+        sql_query=None,
+        sql_result_rows=[],
+        conversation_id="conv-scoped",
+        message_id="msg-scoped",
+    )
+    stub = _StubClient(_make_breaker("closed"), response=live)
+    sql = _StubSqlClient(
+        [
+            {
+                "in_the_money_borrowers": 4867,
+                "avg_rate_spread_bps": 186.4,
+                "equity_capacity_borrowers": 2075,
+                "eligible_borrowers": 79730,
+                "refreshed_at": "2026-06-15T00:00:00Z",
+            }
+        ]
+    )
+    repo = DatabricksGenieRepository(stub, sql)  # type: ignore[arg-type]
+
+    result = repo.respond(question)
+
+    assert result.source != "trusted_sql"
+    assert sql.statements == []
 
 
 def test_city_count_question_uses_direct_trusted_sql_without_genie_call() -> None:

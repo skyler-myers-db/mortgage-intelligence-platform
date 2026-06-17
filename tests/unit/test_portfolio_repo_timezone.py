@@ -447,7 +447,7 @@ def test_trend_delta_uses_exact_snapshot_date_and_drops_bootstrap_zero():
     assert trend.note == "Comparison starts on 2026-04-23 because earlier snapshots predate this metric."
 
 
-def test_trend_step_change_adds_presenter_caution_note():
+def test_trend_step_change_adds_source_backed_context_note():
     trend_rows = [
         _trend_row(
             "2026-05-08T19:48:14",
@@ -472,7 +472,9 @@ def test_trend_step_change_adds_presenter_caution_note():
     trend = preview.trends["top_tier_opportunities"]
 
     assert trend.note is not None
-    assert "Material step change on 2026-05-07" in trend.note
+    assert "coverage or rules update on 2026-05-07" in trend.note
+    assert "counts remain source-backed" in trend.note
+    assert "verify rules" not in trend.note
 
 
 def test_filtered_preview_suppresses_national_trends():

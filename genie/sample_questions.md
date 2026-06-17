@@ -47,13 +47,13 @@ Each entry has:
    SQL hint: `WHERE in_the_money = true GROUP BY state ORDER BY count(*) DESC`.
    Source: `mip.gold.lead_scores`.
 
-3. **How many HELOC candidates have more than 35% equity across the current Cotality data coverage?**
-   Intent: right-size the HELOC campaign based on equity gate.
+3. **How many borrowers have more than 35% modeled equity across the current Cotality data coverage?**
+   Intent: size the equity-capacity pool before applying HELOC intent or campaign filters.
    Expected skeleton: one integer ≥ 0, ≤ `borrower_360` row count.
    (The count is over the current Cotality data coverage — `borrower_360` — not the
    score-filtered `lead_population` subset. Equity-segment membership
    is orthogonal to the `opportunity_score >= 50` gate.)
-   SQL hint: `SELECT count(*) FROM mip.gold.borrower_360 WHERE array_contains(segment_codes, 'equity') AND equity_pct > 35`.
+   SQL hint: `SELECT count(*) FROM mip.gold.borrower_360 WHERE equity_pct > 35`.
    Source: `mip.gold.borrower_360`.
 
 4. **What is the addressable market size — how many eligible borrowers across the current Cotality data coverage?**

@@ -567,6 +567,7 @@ export interface DataEstateAsset {
   label: string;
   status: DataEstateStatus;
   uc_object?: string | null;
+  catalog_explorer_url?: string | null;
   row_count?: number | null;
   last_updated?: string | null;
   note: string;

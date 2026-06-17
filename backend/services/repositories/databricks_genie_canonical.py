@@ -18,6 +18,30 @@ FROM {_BORROWER_360}
 WHERE in_the_money = TRUE
 """.strip()
 
+_CANONICAL_ITM_COUNT_AVG_SPREAD_SQL = f"""
+SELECT COUNT(*) AS in_the_money_borrowers
+     , CAST(ROUND(AVG(rate_spread_bps), 1) AS DOUBLE) AS avg_rate_spread_bps
+     , MAX(refreshed_at) AS refreshed_at
+FROM {_BORROWER_360}
+WHERE in_the_money = TRUE
+""".strip()
+
+_CANONICAL_HELOC_COUNT_SQL = f"""
+SELECT COUNT(*) AS equity_capacity_borrowers
+     , CAST(ROUND(AVG(equity_pct), 1) AS DOUBLE) AS avg_equity_pct
+     , MAX(refreshed_at) AS refreshed_at
+FROM {_BORROWER_360}
+WHERE equity_pct > 35
+""".strip()
+
+_CANONICAL_ADDRESSABLE_MARKET_SQL = f"""
+SELECT COUNT(*) AS eligible_borrowers
+     , MAX(refreshed_at) AS refreshed_at
+FROM {_LEAD_POPULATION}
+WHERE marketing_eligible = TRUE
+  AND consent_status = 'opt_in'
+""".strip()
+
 _CANONICAL_ITM_COUNT_BY_STATE_SQL = f"""
 SELECT COUNT(*) AS in_the_money_borrowers
      , MAX(refreshed_at) AS refreshed_at
@@ -69,7 +93,7 @@ LIMIT 20
 _CANONICAL_HELOC_TOP_ZIPS_SQL = f"""
 SELECT zip
      , state
-     , COUNT(*) AS heloc_eligible_borrowers
+     , COUNT(*) AS equity_capacity_borrowers
      , CAST(ROUND(AVG(equity_pct), 1) AS DOUBLE) AS avg_equity_pct
      , CAST(ROUND(AVG(opportunity_score), 1) AS DOUBLE) AS avg_score
      , MAX(refreshed_at) AS refreshed_at
@@ -78,7 +102,7 @@ WHERE equity_pct >= 35
   AND zip IS NOT NULL
   AND TRIM(zip) <> ''
 GROUP BY zip, state
-ORDER BY heloc_eligible_borrowers DESC, avg_equity_pct DESC, zip ASC
+ORDER BY equity_capacity_borrowers DESC, avg_equity_pct DESC, zip ASC
 LIMIT 5
 """.strip()
 
@@ -463,6 +487,122 @@ def _canonical_in_the_money_count_scope(question: str) -> tuple[str, str] | None
     return True
 
 
+def _normalized_question(question: str) -> str:
+    q = re.sub(r"[^a-z0-9\s%.-]+", " ", question.lower())
+    return re.sub(r"\s+", " ", q).strip()
+
+
+def _has_global_coverage_scope(q: str) -> bool:
+    return any(
+        term in q
+        for term in (
+            "current cotality data coverage",
+            "current cotality coverage",
+            "current data coverage",
+            "current coverage",
+            "current refreshed coverage",
+            "across coverage",
+            "across the coverage",
+            "overall",
+            "national",
+        )
+    )
+
+
+def _has_unsupported_geo_scope(question: str, q: str) -> bool:
+    if _canonical_itm_state_scope(question) is not None:
+        return True
+    geo_terms = (
+        "zip",
+        "zips",
+        "zipcode",
+        "zip code",
+        "postal",
+        "county",
+        "msa",
+        "cbsa",
+        "metro",
+        "state by state",
+        "by state",
+        "break down",
+        "breakdown",
+    )
+    if any(term in q for term in geo_terms):
+        return True
+    if re.search(
+        r"\b(?:in|for|near|around|within)\s+(?:zip\s*)?\d{3,5}(?:-\d{4})?\b",
+        q,
+    ):
+        return True
+    return bool(
+        re.search(
+            r"\b(?:in|for|near|around|within)\s+"
+            r"(?!the\b|the-money\b|current\b|all\b|overall\b|national\b|coverage\b)"
+            r"[a-z][a-z0-9 .-]{1,40}\b",
+            q,
+        )
+    )
+
+
+def _canonical_itm_count_avg_spread_scope(question: str) -> bool:
+    q = _normalized_question(question)
+    if not _has_global_coverage_scope(q) or _has_unsupported_geo_scope(question, q):
+        return False
+    has_itm = any(term in q for term in ("in-the-money", "in the money", "itm"))
+    asks_count = any(term in q for term in ("how many", "count", "number of", "total"))
+    asks_spread = (
+        "rate spread" in q
+        and any(term in q for term in ("average", "avg", "mean"))
+    )
+    return has_itm and "borrower" in q and asks_count and asks_spread
+
+
+def _canonical_heloc_count_scope(question: str) -> bool:
+    q = _normalized_question(question)
+    if not _has_global_coverage_scope(q) or _has_unsupported_geo_scope(question, q):
+        return False
+    has_equity_capacity = any(
+        term in q
+        for term in ("heloc", "home equity", "equity line", "modeled equity", "equity capacity")
+    ) or "borrower" in q
+    asks_count = any(term in q for term in ("how many", "count", "number of", "total"))
+    has_equity_threshold = "35" in q and "equity" in q
+    return has_equity_capacity and asks_count and has_equity_threshold
+
+
+def _canonical_addressable_market_scope(question: str) -> bool:
+    q = _normalized_question(question)
+    if not _has_global_coverage_scope(q) or _has_unsupported_geo_scope(question, q):
+        return False
+    product_terms = (
+        "heloc",
+        "home equity",
+        "in-the-money",
+        "in the money",
+        "refi",
+        "refinance",
+        "cash-out",
+        "cash out",
+        "listed",
+        "listing",
+        "permit",
+        "investor",
+        "retention",
+    )
+    return (
+        "borrower" in q
+        and (
+            "addressable market" in q
+            or "market size" in q
+            or "marketable population" in q
+            or (
+                "eligible borrower" in q
+                and not any(term in q for term in product_terms)
+            )
+        )
+    )
+
+
 def _canonical_itm_city_scope(question: str) -> str | None:
     q = re.sub(r"[^a-z0-9\s-]+", " ", question.lower())
     q = re.sub(r"[-]+", " ", q)
@@ -479,12 +619,17 @@ def _canonical_itm_city_scope(question: str) -> str | None:
     city = city.strip()
     if not city:
         return None
+    if re.match(r"\d", city):
+        return None
     blocked_geo_terms = {"state", "states", "zip", "zips", "msa", "market", "markets", "county"}
     if any(term in city.split() for term in blocked_geo_terms):
         return None
     state_names = {name for name, _code in _US_STATE_FILTERS}
     state_codes = {code.lower() for _name, code in _US_STATE_FILTERS}
+    city_terms = set(city.split())
     if city in state_names or city.lower() in state_codes:
+        return None
+    if city_terms & state_names or city_terms & state_codes:
         return None
     return " ".join(part.capitalize() for part in city.split())
 
@@ -555,7 +700,7 @@ def _canonical_heloc_zip_scope(question: str) -> bool:
         return False
     zip_terms = ("zip", "zips", "zipcode", "zipcodes", "zip code", "zip codes", "postal")
     rank_terms = ("top", "most", "highest", "rank", "ranked", "which", "show", "list", "by zip")
-    heloc_terms = ("heloc", "home equity", "equity line")
+    heloc_terms = ("heloc", "home equity", "equity line", "modeled equity", "equity capacity")
     equity_terms = ("equity", "eligible", "eligibility", "candidate", "borrower", "lead")
     return (
         any(term in q for term in heloc_terms)

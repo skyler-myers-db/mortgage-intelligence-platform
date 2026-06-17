@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type {
   GenieActionSuggestion,
@@ -31,6 +31,7 @@ import {
   MAX_TABLE_ROWS,
   pickPlan,
 } from './GenieAnswer.logic';
+import { useFocusTrap } from '../../hooks/useFocusTrap';
 
 export { stripQuestionRestatement } from './GenieAnswer.markdown';
 export { inferChartFromRows } from './GenieAnswer.logic';
@@ -84,6 +85,8 @@ export function GenieAnswer({
   const { setDrawer } = useApp();
   const { pins, pin, unpin } = usePinnedInsights();
   const [showProof, setShowProof] = useState(false);
+  const proofDrawerRef = useRef<HTMLElement | null>(null);
+  const proofCloseRef = useRef<HTMLButtonElement | null>(null);
   const rows = Array.isArray(table_rows) ? table_rows : [];
   const visibleRows = rows.slice(0, MAX_TABLE_ROWS);
   const hiddenRows = Math.max(0, rows.length - MAX_TABLE_ROWS);
@@ -120,6 +123,13 @@ export function GenieAnswer({
   // Answer prose is never parsed into visualization data.
   const plan = withChart ? pickPlan(payload, rows, chartColumns) : { kind: 'none', chart: null, viz: null };
   const chart = plan.chart;
+
+  useFocusTrap({
+    open: showProof,
+    containerRef: proofDrawerRef,
+    initialFocusRef: proofCloseRef,
+    onClose: () => setShowProof(false),
+  });
 
   return (
     <div>
@@ -205,6 +215,7 @@ export function GenieAnswer({
             aria-hidden="true"
           />
           <aside
+            ref={proofDrawerRef}
             className="drawer genie-proof-drawer is-open"
             role="dialog"
             aria-modal="true"
@@ -219,6 +230,7 @@ export function GenieAnswer({
                 <div className="drawer__subtitle">{payload.question_hash ?? payload.message_id ?? 'Genie result'}</div>
               </div>
               <button
+                ref={proofCloseRef}
                 className="drawer__close"
                 onClick={() => setShowProof(false)}
                 aria-label="Close Genie proof"

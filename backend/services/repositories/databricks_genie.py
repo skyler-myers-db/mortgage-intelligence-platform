@@ -707,18 +707,19 @@ def _canonical_genie_answer(
         if rows:
             top = rows[0]
             answer = (
-                "I ranked ZIP codes by HELOC-eligible borrowers with equity_pct "
-                f"at or above 35% from {borrower_asset}. "
+                "I ranked ZIP codes by borrowers with modeled equity at or above "
+                f"35% from {borrower_asset}. "
                 f"The current leader is ZIP {top.get('zip')} ({top.get('state')}) "
-                f"with {int(top.get('heloc_eligible_borrowers') or 0):,} borrowers. "
-                "This is an equity-only HELOC eligibility view; Building Permits "
-                "signals remain pending and are not used as triggers here."
+                f"with {int(top.get('equity_capacity_borrowers') or 0):,} borrowers. "
+                "This is an equity-capacity view, not a filed-permit or HELOC-intent "
+                "count; Building Permits are only used when that source is live."
             )
         else:
             answer = (
-                "The trusted borrower table returned no equity-only HELOC ZIP rows "
-                "for the current refreshed data coverage. Building Permits signals "
-                "remain pending and are not treated as zero demand."
+                "The trusted borrower table returned no ZIP rows with modeled "
+                "equity at or above 35% for the current refreshed data coverage. "
+                "Building Permits signals remain pending and are not treated as "
+                "zero demand."
             )
         return GenieMessageResponse(
             conversation_id=result.conversation_id,

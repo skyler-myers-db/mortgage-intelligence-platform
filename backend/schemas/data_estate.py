@@ -23,6 +23,7 @@ class DataEstateAsset(BaseModel):
     label: str
     status: DataEstateStatus
     uc_object: str | None = None
+    catalog_explorer_url: str | None = None
     row_count: int | None = None
     last_updated: str | None = None
     note: str = ""

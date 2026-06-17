@@ -139,6 +139,47 @@ describe('GenieAnswer pin + fallback', () => {
     expect(chips.some((t) => t?.includes('Break this down by state'))).toBe(true);
   });
 
+  it('closes the Genie proof drawer on Escape and restores focus to the proof toggle', async () => {
+    await act(async () => {
+      root.render(
+        <GenieAnswer
+          payload={payload({
+            proof: {
+              trusted: true,
+              source_assets: ['mip.gold.borrower_360'],
+              row_count: 1,
+              sql_query: 'SELECT COUNT(*) FROM mip.gold.borrower_360',
+            },
+          })}
+          question="How many borrowers?"
+          onFollowUp={() => {}}
+        />,
+      );
+    });
+    const proofToggle = Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find((button) =>
+      button.textContent?.includes('Show proof'),
+    );
+    expect(proofToggle).toBeTruthy();
+    proofToggle!.focus();
+
+    await act(async () => {
+      proofToggle!.click();
+      await Promise.resolve();
+    });
+
+    const drawer = document.body.querySelector<HTMLElement>('[aria-label="Genie answer proof"]');
+    expect(drawer).toBeTruthy();
+    expect(document.activeElement?.getAttribute('aria-label')).toBe('Close Genie proof');
+
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+      await Promise.resolve();
+    });
+
+    expect(document.body.querySelector('[aria-label="Genie answer proof"]')).toBeNull();
+    expect(document.activeElement).toBe(proofToggle);
+  });
+
   it('does NOT synthesize fallback follow-ups on a governed refusal', () => {
     // A fabricated "Which segments drive this?" under a fair-lending refusal
     // reads as the product ignoring its own guardrail — the fallback is gated

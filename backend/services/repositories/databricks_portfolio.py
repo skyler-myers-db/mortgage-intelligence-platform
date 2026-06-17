@@ -865,7 +865,7 @@ def build_kpi_trend(points: list[tuple[str, float]]) -> KpiTrend:
         step_pct = abs((current - previous) / previous) * 100.0
         if step_pct >= 8.0:
             notes.append(
-                f"Material step change on {points[index][0]}; verify rules or refresh context before presenting this as market movement."
+                f"Trend includes a coverage or rules update on {points[index][0]}; counts remain source-backed and the comparison is shown for context."
             )
             break
     delta_pct = ((series[-1] - series[0]) / series[0]) * 100.0

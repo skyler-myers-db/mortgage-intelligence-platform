@@ -12,11 +12,14 @@ from backend.services.repositories.databricks_genie_actions import (
     _total_matching_from_rows,
 )
 from backend.services.repositories.databricks_genie_canonical import (
+    _CANONICAL_ADDRESSABLE_MARKET_SQL,
     _CANONICAL_CASH_OUT_TOP_STATE_SQL,
     _CANONICAL_CURRENT_CUSTOMER_RETENTION_RISK_SQL,
+    _CANONICAL_HELOC_COUNT_SQL,
     _CANONICAL_HELOC_TOP_ZIPS_SQL,
     _CANONICAL_INVESTOR_SEGMENT_BY_STATE_SQL,
     _CANONICAL_ITM_BY_STATE_SQL,
+    _CANONICAL_ITM_COUNT_AVG_SPREAD_SQL,
     _CANONICAL_ITM_COUNT_BY_CITY_SQL,
     _CANONICAL_ITM_COUNT_BY_STATE_SQL,
     _CANONICAL_ITM_COUNT_SQL,
@@ -25,11 +28,14 @@ from backend.services.repositories.databricks_genie_canonical import (
     _CANONICAL_RETENTION_COMPETITOR_LIEN_LIST_SQL,
     _CANONICAL_STRATEGY_BOARD_SQL,
     _CANONICAL_TOP_BORROWERS_BY_STATE_SQL,
+    _canonical_addressable_market_scope,
     _canonical_cash_out_state_scope,
+    _canonical_heloc_count_scope,
     _canonical_heloc_zip_scope,
     _canonical_in_the_money_count_scope,
     _canonical_investor_segment_by_state_scope,
     _canonical_itm_city_scope,
+    _canonical_itm_count_avg_spread_scope,
     _canonical_itm_state_breakdown_scope,
     _canonical_itm_zip_scope,
     _canonical_msa_score_scope,
@@ -130,6 +136,150 @@ def direct_canonical_response(
     segment_population_asset = qualify("gold", "segment_population")
     trusted_assets = [borrower_asset]
 
+    if _canonical_itm_count_avg_spread_scope(question):
+        try:
+            row = sql_client.execute_one(_CANONICAL_ITM_COUNT_AVG_SPREAD_SQL) or {}
+        except DatabricksSqlError as exc:
+            _emit_genie_warning("direct_canonical_genie_itm_avg_spread_failed", exc=exc)
+            return None
+        raw_count = row.get("in_the_money_borrowers")
+        if raw_count is None:
+            _emit_genie_warning(
+                "direct_canonical_genie_itm_avg_spread_bad_count",
+                value_type="NoneType",
+            )
+            return None
+        try:
+            count_int = int(raw_count)
+        except (TypeError, ValueError):
+            _emit_genie_warning(
+                "direct_canonical_genie_itm_avg_spread_bad_count",
+                value_type=type(raw_count).__name__,
+            )
+            return None
+        avg_spread = row.get("avg_rate_spread_bps")
+        try:
+            avg_spread_float = float(avg_spread) if avg_spread is not None else None
+        except (TypeError, ValueError):
+            avg_spread_float = None
+        rows = [
+            {
+                "in_the_money_borrowers": count_int,
+                "avg_rate_spread_bps": avg_spread_float,
+                "refreshed_at": row.get("refreshed_at"),
+            }
+        ]
+        spread_text = (
+            f"{avg_spread_float:,.1f} bps" if avg_spread_float is not None else "not available"
+        )
+        answer = (
+            f"Across the current Cotality coverage, {count_int:,} borrowers pass the "
+            f"refinance-economics screen. Their average rate spread is {spread_text}. "
+            f"This is calculated at the unique borrower grain from {borrower_asset}."
+        )
+        return _trusted_sql_response(
+            question=question,
+            sql_query=_CANONICAL_ITM_COUNT_AVG_SPREAD_SQL,
+            trusted_assets=trusted_assets,
+            rows=rows,
+            answer=answer,
+            metric_value=f"{count_int:,}",
+        )
+
+    if _canonical_heloc_count_scope(question):
+        try:
+            row = sql_client.execute_one(_CANONICAL_HELOC_COUNT_SQL) or {}
+        except DatabricksSqlError as exc:
+            _emit_genie_warning("direct_canonical_genie_heloc_count_failed", exc=exc)
+            return None
+        raw_count = row.get("equity_capacity_borrowers")
+        if raw_count is None:
+            _emit_genie_warning(
+                "direct_canonical_genie_heloc_count_bad_count",
+                value_type="NoneType",
+            )
+            return None
+        try:
+            count_int = int(raw_count)
+        except (TypeError, ValueError):
+            _emit_genie_warning(
+                "direct_canonical_genie_heloc_count_bad_count",
+                value_type=type(raw_count).__name__,
+            )
+            return None
+        avg_equity = row.get("avg_equity_pct")
+        try:
+            avg_equity_float = float(avg_equity) if avg_equity is not None else None
+        except (TypeError, ValueError):
+            avg_equity_float = None
+        rows = [
+            {
+                "equity_capacity_borrowers": count_int,
+                "avg_equity_pct": avg_equity_float,
+                "refreshed_at": row.get("refreshed_at"),
+            }
+        ]
+        equity_text = (
+            f"{avg_equity_float:,.1f}%" if avg_equity_float is not None else "not available"
+        )
+        answer = (
+            f"Interpreting this as an equity-capacity screen, there are {count_int:,} "
+            f"borrowers with more than 35% modeled home equity. Their average equity "
+            f"is {equity_text}. This is not a filed-permit or HELOC-intent count; "
+            f"it comes from {borrower_asset} and Building Permits are only used when "
+            "that source is live."
+        )
+        return _trusted_sql_response(
+            question=question,
+            sql_query=_CANONICAL_HELOC_COUNT_SQL,
+            trusted_assets=trusted_assets,
+            rows=rows,
+            answer=answer,
+            metric_value=f"{count_int:,}",
+        )
+
+    if _canonical_addressable_market_scope(question):
+        try:
+            row = sql_client.execute_one(_CANONICAL_ADDRESSABLE_MARKET_SQL) or {}
+        except DatabricksSqlError as exc:
+            _emit_genie_warning("direct_canonical_genie_addressable_market_failed", exc=exc)
+            return None
+        raw_count = row.get("eligible_borrowers")
+        if raw_count is None:
+            _emit_genie_warning(
+                "direct_canonical_genie_addressable_market_bad_count",
+                value_type="NoneType",
+            )
+            return None
+        try:
+            count_int = int(raw_count)
+        except (TypeError, ValueError):
+            _emit_genie_warning(
+                "direct_canonical_genie_addressable_market_bad_count",
+                value_type=type(raw_count).__name__,
+            )
+            return None
+        rows = [
+            {
+                "eligible_borrowers": count_int,
+                "refreshed_at": row.get("refreshed_at"),
+            }
+        ]
+        answer = (
+            f"The current addressable market is {count_int:,} marketing-eligible, "
+            f"opt-in borrowers in {lead_population_asset}. This is the action-ready "
+            "lead population after suppression and consent filters, not the raw "
+            "public-record universe."
+        )
+        return _trusted_sql_response(
+            question=question,
+            sql_query=_CANONICAL_ADDRESSABLE_MARKET_SQL,
+            trusted_assets=[lead_population_asset],
+            rows=rows,
+            answer=answer,
+            metric_value=f"{count_int:,}",
+        )
+
     top_borrower_state_scope = _canonical_top_borrowers_state_scope(question)
     if top_borrower_state_scope is not None:
         state_name, state_code = top_borrower_state_scope
@@ -176,18 +326,19 @@ def direct_canonical_response(
         if rows:
             top = rows[0]
             answer = (
-                "I ranked ZIP codes by HELOC-eligible borrowers with equity_pct "
-                f"at or above 35% from {borrower_asset}. "
+                "I ranked ZIP codes by borrowers with modeled equity at or above "
+                f"35% from {borrower_asset}. "
                 f"The current leader is ZIP {top.get('zip')} ({top.get('state')}) "
-                f"with {int(top.get('heloc_eligible_borrowers') or 0):,} borrowers. "
-                "This is an equity-only HELOC eligibility view; Building Permits "
-                "signals remain pending and are not used as triggers here."
+                f"with {int(top.get('equity_capacity_borrowers') or 0):,} borrowers. "
+                "This is an equity-capacity view, not a filed-permit or HELOC-intent "
+                "count; Building Permits are only used when that source is live."
             )
         else:
             answer = (
-                "The trusted borrower table returned no equity-only HELOC ZIP rows "
-                "for the current refreshed data coverage. Building Permits signals "
-                "remain pending and are not treated as zero demand."
+                "The trusted borrower table returned no ZIP rows with modeled "
+                "equity at or above 35% for the current refreshed data coverage. "
+                "Building Permits signals remain pending and are not treated as "
+                "zero demand."
             )
         return _trusted_sql_response(
             question=question,

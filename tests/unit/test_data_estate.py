@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
+from backend.config.settings import settings
 from backend.main import app
 from backend.services.admin_rules import SourceRow
 from backend.services.data_estate import build_data_estate_response
@@ -105,3 +106,24 @@ def test_data_estate_discloses_synthetic_first_party_demo_feeds() -> None:
     assert {asset.status for asset in first_party.assets} == {"demo_synthetic"}
     assert "First-party lender feeds use demo/synthetic rows in this workspace." in estate.known_data_gaps
     assert "Customer first-party data feeds are not connected in this demo workspace." not in estate.known_data_gaps
+
+
+def test_data_estate_assets_include_catalog_explorer_links(monkeypatch):
+    monkeypatch.setattr(settings, "databricks_host", "https://dbc-test.cloud.databricks.com")
+
+    estate = build_data_estate_response(
+        (
+            SourceRow("UC Gold Lead Population", "live", 100, "2026-06-15", "ok"),
+        )
+    )
+
+    databricks_lane = next(lane for lane in estate.lanes if lane.id == "databricks")
+    lead_population = next(
+        asset for asset in databricks_lane.assets if asset.uc_object == "mip.gold.lead_population"
+    )
+    lakebase = next(asset for asset in databricks_lane.assets if asset.uc_object == "mip_app.*")
+
+    assert lead_population.catalog_explorer_url == (
+        "https://dbc-test.cloud.databricks.com/explore/data/mip/gold/lead_population"
+    )
+    assert lakebase.catalog_explorer_url is None

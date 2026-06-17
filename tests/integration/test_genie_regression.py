@@ -247,7 +247,7 @@ SAMPLE_PROMPTS: list[Prompt] = [
     Prompt(
         pid="S3",
         question=(
-            "How many HELOC candidates have more than 35% equity across the "
+            "How many borrowers have more than 35% modeled equity across the "
             "current Cotality data coverage?"
         ),
         cohort="sample",

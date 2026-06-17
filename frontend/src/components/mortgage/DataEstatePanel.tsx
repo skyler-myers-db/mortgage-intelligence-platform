@@ -59,6 +59,14 @@ function laneStatusSummary(status: DataEstateStatus, assets: { status: DataEstat
   return parts.length > 1 ? parts.join(' · ') : statusLabel(status);
 }
 
+function assetDomId(laneId: string, assetName: string, index: number): string {
+  const slug = `${laneId}-${assetName}`
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return `data-estate-asset-${index}-${slug || 'asset'}`;
+}
+
 export function DataEstatePanel({ estate }: { estate: DataEstateResponse }) {
   const { setDrawer } = useApp();
   const [expandedAssetKey, setExpandedAssetKey] = useState<string | null>(null);
@@ -142,8 +150,9 @@ function DataEstateLaneCard({
         </button>
       </div>
       <div className="data-estate__assets">
-        {lane.assets.map((asset) => {
+        {lane.assets.map((asset, index) => {
           const assetKey = `${lane.id}-${asset.name}`;
+          const detailId = assetDomId(lane.id, asset.name, index);
           const assetExpanded = expandedAssetKey === assetKey;
           return (
             <div key={assetKey} className={`data-estate__asset-wrap ${assetExpanded ? 'is-expanded' : ''}`}>
@@ -154,7 +163,7 @@ function DataEstateLaneCard({
                   setExpandedAssetKey(assetExpanded ? null : assetKey);
                 }}
                 aria-expanded={assetExpanded}
-                aria-controls={`data-estate-asset-${assetKey}`}
+                aria-controls={detailId}
                 title={`Show contract details for ${asset.label}`}
               >
                 <div className="data-estate__asset-main">
@@ -169,10 +178,22 @@ function DataEstateLaneCard({
                   <Icon name={assetExpanded ? 'up' : 'down'} size={12} />
                 </div>
               </button>
+              {asset.catalog_explorer_url && (
+                <a
+                  className="data-estate__asset-catalog"
+                  href={asset.catalog_explorer_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  aria-label={`Open ${asset.label} in Catalog Explorer`}
+                >
+                  <Icon name="export" size={12} />
+                  Catalog Explorer
+                </a>
+              )}
               {assetExpanded && (
                 <AssetDetail
                   asset={asset}
-                  assetKey={assetKey}
+                  detailId={detailId}
                   proofAssets={proofAssets}
                   setDrawer={setDrawer}
                 />
@@ -187,12 +208,12 @@ function DataEstateLaneCard({
 
 function AssetDetail({
   asset,
-  assetKey,
+  detailId,
   proofAssets,
   setDrawer,
 }: {
   asset: DataEstateAsset;
-  assetKey: string;
+  detailId: string;
   proofAssets: string[];
   setDrawer: ReturnType<typeof useApp>['setDrawer'];
 }) {
@@ -200,7 +221,7 @@ function AssetDetail({
   const assetHref = assetHrefForSource(asset.uc_object);
 
   return (
-    <div className="data-estate__asset-detail" id={`data-estate-asset-${assetKey}`}>
+    <div className="data-estate__asset-detail" id={detailId}>
       <div className="data-estate__detail-grid">
         <div className="data-estate__detail-item">
           <span className="data-estate__detail-label">Status</span>
@@ -234,6 +255,17 @@ function AssetDetail({
             <Icon name="db" size={12} />
             Asset details
           </Link>
+        )}
+        {asset.catalog_explorer_url && (
+          <a
+            className="btn btn--ghost btn--sm"
+            href={asset.catalog_explorer_url}
+            target="_blank"
+            rel="noreferrer"
+          >
+            <Icon name="export" size={12} />
+            Catalog Explorer
+          </a>
         )}
         <span className={`chip chip--${proofed ? 'success' : 'neutral'}`}>
           {proofed ? 'Proof asset' : 'No proof asset'}

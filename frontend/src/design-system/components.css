@@ -4351,6 +4351,25 @@ kbd {
 .data-estate__asset-wrap.is-expanded .data-estate__asset {
   background: var(--bg-3);
 }
+.data-estate__asset-catalog {
+  display: inline-flex;
+  align-items: center;
+  justify-self: start;
+  gap: var(--sp-1);
+  min-height: calc(var(--sp-5) + var(--sp-2));
+  padding: 0 var(--sp-2);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-sm);
+  color: var(--text-2);
+  font-size: var(--fs-11);
+  text-decoration: none;
+}
+.data-estate__asset-catalog:hover,
+.data-estate__asset-catalog:focus-visible {
+  color: var(--text-1);
+  border-color: var(--line-3);
+  background: var(--bg-3);
+}
 .data-estate__asset--skeleton {
   pointer-events: none;
   cursor: default;

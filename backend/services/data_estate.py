@@ -3,11 +3,30 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from urllib.parse import quote
 
 from backend.config.settings import settings
 from backend.schemas.data_estate import DataEstateAsset, DataEstateLane, DataEstateResponse
 from backend.services.admin_rules import SourceRow
 from backend.services.databricks_sql_helpers import qualify
+
+
+def _catalog_explorer_url(uc_object: str | None) -> str | None:
+    if not uc_object or uc_object.endswith(".*"):
+        return None
+    parts = uc_object.split(".")
+    if len(parts) != 3:
+        return None
+    host = (settings.databricks_host or "").strip()
+    if not host:
+        return None
+    if not host.startswith("http"):
+        host = f"https://{host}"
+    catalog, schema_name, object_name = parts
+    return (
+        f"{host.rstrip('/')}/explore/data/"
+        f"{quote(catalog)}/{quote(schema_name)}/{quote(object_name)}"
+    )
 
 
 def _status_rank(status: str) -> int:
@@ -44,6 +63,7 @@ def _source_asset(
             label=label,
             status=fallback_status,  # type: ignore[arg-type]
             uc_object=uc_object,
+            catalog_explorer_url=_catalog_explorer_url(uc_object),
             note=fallback_note,
             synthetic_demo=False,
         )
@@ -53,6 +73,7 @@ def _source_asset(
         label=label,
         status=status,  # type: ignore[arg-type]
         uc_object=uc_object,
+        catalog_explorer_url=_catalog_explorer_url(uc_object),
         row_count=row.rows,
         last_updated=row.last_updated,
         note=row.note,
@@ -76,6 +97,7 @@ def _runtime_asset(
             label=label,
             status="not_configured",
             uc_object=uc_object,
+            catalog_explorer_url=_catalog_explorer_url(uc_object),
             note="Runtime health was not checked for this proof response.",
             synthetic_demo=False,
         )
@@ -85,6 +107,7 @@ def _runtime_asset(
         label=label,
         status="live" if is_up else "error",
         uc_object=uc_object,
+        catalog_explorer_url=_catalog_explorer_url(uc_object),
         note=live_note if is_up else down_note,
         synthetic_demo=False,
     )
