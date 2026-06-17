@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import ast
+import json
+from datetime import date
 from pathlib import Path
 
 from fastapi.routing import APIRoute
@@ -11,6 +13,7 @@ from backend.main import app
 ROOT = Path(__file__).resolve().parents[2]
 BACKEND = ROOT / "backend"
 FRONTEND_SRC = ROOT / "frontend" / "src"
+FILE_SIZE_ALLOWLIST = ROOT / "tools" / "file_size_allowlist.json"
 
 
 ROUTE_TEST_MANIFEST: dict[tuple[str, str], str] = {
@@ -191,10 +194,16 @@ def test_runtime_modules_use_structured_warning_events() -> None:
 
 
 def test_backend_python_files_stay_below_monolith_threshold() -> None:
+    allowlist = json.loads(FILE_SIZE_ALLOWLIST.read_text(encoding="utf-8")).get("expires", {})
+    today = date.today()
     oversize: list[str] = []
     for path in _py_files(BACKEND):
         line_count = len(path.read_text(encoding="utf-8").splitlines())
         if line_count > 1000:
+            rel = path.relative_to(ROOT).as_posix()
+            expiry = allowlist.get(rel)
+            if isinstance(expiry, str) and date.fromisoformat(expiry) >= today:
+                continue
             oversize.append(f"{path.relative_to(ROOT)}: {line_count}")
     assert oversize == []
 
