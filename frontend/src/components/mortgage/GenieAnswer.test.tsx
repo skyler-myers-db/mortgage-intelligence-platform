@@ -119,6 +119,22 @@ describe('inferChartFromRows', () => {
     expect(chart?.rows.map((row) => row.value)).toEqual([42, 39]);
   });
 
+  it('uses borrower-facing segment labels in chart rows', () => {
+    const rows = [
+      { segment_code: 'permit', borrowers: 450790 },
+      { segment_code: 'itm', borrowers: 111726 },
+    ];
+
+    const chart = inferChartFromRows(rows, ['segment_code', 'borrowers']);
+
+    expect(chart?.labelCol).toBe('segment_code');
+    expect(chart?.valueCol).toBe('borrowers');
+    expect(chart?.rows.map((row) => row.label)).toEqual([
+      'HELOC Intent',
+      'Prime Refi Candidates',
+    ]);
+  });
+
   it.each([
     ['zip', 2139, '02139'],
     ['zip_code', 2139, '02139'],

@@ -139,7 +139,7 @@ function chartFromColumns(
   for (const r of rows) {
     const vv = coerceMeasure(r[valueCol], valueCol);
     if (vv === null) continue;
-    projected.push({ label: formatIdentifier(labelCol, r[labelCol]), value: vv });
+    projected.push({ label: formatCell(labelCol, r[labelCol]), value: vv });
   }
   if (projected.length < 2) return null;
   return { rows: projected, labelCol, valueCol, source: 'table_rows' };

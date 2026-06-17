@@ -195,3 +195,20 @@ def test_direct_ranked_lead_population_rejects_non_numeric_count() -> None:
     response = direct_canonical_response("How many ranked leads are in the Lead Queue?", cast(Any, client))
 
     assert response is None
+
+
+def test_direct_top_cohorts_uses_borrower_facing_heloc_intent_language() -> None:
+    client = _UniversalSqlClient(
+        {
+            "segment_code": "permit",
+            "name": "HELOC Intent",
+            "borrowers": 450790,
+        }
+    )
+
+    response = direct_canonical_response("Show the top cohorts.", cast(Any, client))
+
+    assert response is not None
+    assert "HELOC Intent cohort" in response.answer
+    assert "permit segment code" not in response.answer
+    assert "`permit`" not in response.answer

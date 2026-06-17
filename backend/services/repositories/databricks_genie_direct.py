@@ -1210,8 +1210,8 @@ def direct_canonical_response(
                 str(row.get("segment_code") or "").lower() == "permit" for row in rows
             )
             permit_note = (
-                " The legacy `permit` segment code is displayed as HELOC Intent from "
-                "Cotality HELOC propensity; it is not filed building-permit data."
+                " The HELOC Intent cohort comes from Cotality HELOC propensity; "
+                "it is not filed building-permit data."
                 if has_legacy_permit_segment
                 else ""
             )
