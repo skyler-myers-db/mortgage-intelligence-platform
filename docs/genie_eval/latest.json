@@ -1,5 +1,5 @@
 {
-  "stamp": "2026-06-05T23-54-45Z",
+  "stamp": "2026-06-17T02-23-43Z",
   "base": "https://mip-app-2543889327043640.aws.databricksapps.com",
   "overall_score": 100.0,
   "passed": 16,
@@ -10,7 +10,7 @@
       "category": "top-N",
       "score": 100.0,
       "passed": true,
-      "latency_s": 21.33,
+      "latency_s": 1.11,
       "checks": {
         "citations": true,
         "forbidden_terms": true,
@@ -22,16 +22,14 @@
         "freshness": true,
         "canonical_sql": true
       },
-      "notes": [
-        "latency 21.3s > target 8.0s"
-      ]
+      "notes": []
     },
     {
       "id": "heloc_by_zip",
       "category": "top-N",
       "score": 100.0,
       "passed": true,
-      "latency_s": 12.59,
+      "latency_s": 1.04,
       "checks": {
         "citations": true,
         "forbidden_terms": true,
@@ -43,16 +41,14 @@
         "freshness": true,
         "canonical_sql": true
       },
-      "notes": [
-        "latency 12.6s > target 8.0s"
-      ]
+      "notes": []
     },
     {
       "id": "zip_identifier_not_measure",
       "category": "chart-planner",
       "score": 100.0,
       "passed": true,
-      "latency_s": 12.67,
+      "latency_s": 1.1,
       "checks": {
         "citations": true,
         "forbidden_terms": true,
@@ -64,16 +60,14 @@
         "freshness": true,
         "canonical_sql": true
       },
-      "notes": [
-        "latency 12.7s > target 8.0s"
-      ]
+      "notes": []
     },
     {
       "id": "in_the_money_count",
       "category": "aggregate",
       "score": 100.0,
       "passed": true,
-      "latency_s": 10.54,
+      "latency_s": 1.09,
       "checks": {
         "citations": true,
         "forbidden_terms": true,
@@ -85,16 +79,14 @@
         "freshness": true,
         "canonical_sql": true
       },
-      "notes": [
-        "latency 10.5s > target 6.0s"
-      ]
+      "notes": []
     },
     {
       "id": "in_the_money_count_illinois",
       "category": "aggregate",
       "score": 100.0,
       "passed": true,
-      "latency_s": 12.78,
+      "latency_s": 1.12,
       "checks": {
         "citations": true,
         "forbidden_terms": true,
@@ -106,16 +98,14 @@
         "freshness": true,
         "canonical_sql": true
       },
-      "notes": [
-        "latency 12.8s > target 6.0s"
-      ]
+      "notes": []
     },
     {
       "id": "in_the_money_count_chicago_city_scope",
       "category": "aggregate",
       "score": 100.0,
       "passed": true,
-      "latency_s": 13.72,
+      "latency_s": 1.08,
       "checks": {
         "citations": true,
         "forbidden_terms": true,
@@ -127,16 +117,14 @@
         "freshness": true,
         "canonical_sql": true
       },
-      "notes": [
-        "latency 13.7s > target 8.0s"
-      ]
+      "notes": []
     },
     {
       "id": "in_the_money_count_boston_city_scope",
       "category": "aggregate",
       "score": 100.0,
       "passed": true,
-      "latency_s": 0.98,
+      "latency_s": 0.6,
       "checks": {
         "citations": true,
         "forbidden_terms": true,
@@ -155,7 +143,7 @@
       "category": "strategy",
       "score": 100.0,
       "passed": true,
-      "latency_s": 19.0,
+      "latency_s": 1.0,
       "checks": {
         "citations": true,
         "forbidden_terms": true,
@@ -167,16 +155,14 @@
         "freshness": true,
         "canonical_sql": true
       },
-      "notes": [
-        "latency 19.0s > target 10.0s"
-      ]
+      "notes": []
     },
     {
       "id": "cash_out_state_strategy",
       "category": "strategy",
       "score": 100.0,
       "passed": true,
-      "latency_s": 12.62,
+      "latency_s": 1.05,
       "checks": {
         "citations": true,
         "forbidden_terms": true,
@@ -188,16 +174,14 @@
         "freshness": true,
         "canonical_sql": true
       },
-      "notes": [
-        "latency 12.6s > target 10.0s"
-      ]
+      "notes": []
     },
     {
       "id": "investor_segment",
       "category": "segment",
       "score": 100.0,
       "passed": true,
-      "latency_s": 14.43,
+      "latency_s": 1.03,
       "checks": {
         "citations": true,
         "forbidden_terms": true,
@@ -209,16 +193,14 @@
         "freshness": true,
         "canonical_sql": true
       },
-      "notes": [
-        "latency 14.4s > target 8.0s"
-      ]
+      "notes": []
     },
     {
       "id": "blocked_permit_question",
       "category": "governance",
       "score": 100.0,
       "passed": true,
-      "latency_s": 0.8,
+      "latency_s": 0.61,
       "checks": {
         "citations": true,
         "forbidden_terms": true,
@@ -237,7 +219,7 @@
       "category": "trigger",
       "score": 100.0,
       "passed": true,
-      "latency_s": 22.67,
+      "latency_s": 1.89,
       "checks": {
         "citations": true,
         "forbidden_terms": true,
@@ -249,16 +231,14 @@
         "freshness": true,
         "canonical_sql": true
       },
-      "notes": [
-        "latency 22.7s > target 8.0s"
-      ]
+      "notes": []
     },
     {
       "id": "state_geo_outside_footprint",
       "category": "governance",
       "score": 100.0,
       "passed": true,
-      "latency_s": 0.97,
+      "latency_s": 0.57,
       "checks": {
         "citations": true,
         "forbidden_terms": true,
@@ -277,7 +257,7 @@
       "category": "governance",
       "score": 100.0,
       "passed": true,
-      "latency_s": 0.86,
+      "latency_s": 0.55,
       "checks": {
         "citations": true,
         "forbidden_terms": true,
@@ -296,7 +276,7 @@
       "category": "governance",
       "score": 100.0,
       "passed": true,
-      "latency_s": 0.85,
+      "latency_s": 0.71,
       "checks": {
         "citations": true,
         "forbidden_terms": true,
@@ -315,7 +295,7 @@
       "category": "aggregate",
       "score": 100.0,
       "passed": true,
-      "latency_s": 16.96,
+      "latency_s": 1.1,
       "checks": {
         "citations": true,
         "forbidden_terms": true,
@@ -327,9 +307,7 @@
         "freshness": true,
         "canonical_sql": true
       },
-      "notes": [
-        "latency 17.0s > target 8.0s"
-      ]
+      "notes": []
     }
   ]
 }
