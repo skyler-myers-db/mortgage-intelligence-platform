@@ -279,11 +279,12 @@ expected.
 ## Known Data Dependencies
 
 - Cotality MLS/Listings is connected through `mip.silver.listing_activity` and
-  powers the live Listed for Sale segment.
+  powers the live Listed for Sale segment; this is the listed-for-sale overlay.
 - Cotality HELOC and Refi propensity scores are connected through curated silver
   tables and power HELOC/refi intent evidence.
-- Cotality Building Permits Delta Share is still required before filed-permit
-  remodel triggers can become live. Do not describe propensity as a filed permit.
+- Cotality Building Permits Delta Share is still pending and required before
+  filed-permit remodel triggers can become live. Do not describe propensity as a
+  filed permit.
 - The Summit Mortgage first-party lane is synthetic demo data by design. Set
   `MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS=0` before connecting real customer feeds.
 
@@ -297,3 +298,6 @@ expected.
   and matches the source answer.
 - Do not call MLS or permit overlays implemented until those Cotality shares are
   connected and the corresponding segment counts come from live tables.
+- Do not claim building permits, permit filings, or renovation-trigger segments
+  are live until the Building Permits share is connected and source readiness
+  shows live row counts.
