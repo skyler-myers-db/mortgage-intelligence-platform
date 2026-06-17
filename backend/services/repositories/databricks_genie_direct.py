@@ -379,24 +379,25 @@ def direct_canonical_response(
         except DatabricksSqlError as exc:
             _emit_genie_warning("direct_canonical_genie_itm_zips_failed", exc=exc)
             return None
+        zip_trusted_assets = [lead_population_asset]
         if rows:
             top = rows[0]
             answer = (
                 "I ranked ZIP codes by unique borrowers passing the refinance-economics screen "
-                f"from {borrower_asset}. "
+                f"from {lead_population_asset}. "
                 f"The current leader is ZIP {top.get('zip')} ({top.get('state')}) "
                 f"with {int(top.get('in_the_money_borrowers') or 0):,} borrowers; "
                 "the cohort action below carries these ZIP filters into Lead Queue."
             )
         else:
             answer = (
-                "The trusted borrower table returned no refinance-economics ZIP rows for "
-                "the current refreshed data coverage."
+                "The ranked lead population returned no refinance-economics ZIP rows for "
+                "the current refreshed, marketing-eligible coverage."
             )
         return _trusted_sql_response(
             question=question,
             sql_query=_CANONICAL_ITM_TOP_ZIPS_SQL,
-            trusted_assets=trusted_assets,
+            trusted_assets=zip_trusted_assets,
             rows=rows,
             answer=answer,
         )

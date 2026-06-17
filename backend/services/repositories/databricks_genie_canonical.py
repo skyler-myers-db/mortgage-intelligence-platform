@@ -40,8 +40,10 @@ SELECT zip
      , COUNT(*) AS in_the_money_borrowers
      , CAST(ROUND(AVG(opportunity_score), 1) AS DOUBLE) AS avg_score
      , MAX(refreshed_at) AS refreshed_at
-FROM {_BORROWER_360}
-WHERE in_the_money = TRUE
+FROM {_LEAD_POPULATION}
+WHERE array_contains(segment_codes, 'itm')
+  AND marketing_eligible = TRUE
+  AND consent_status = 'opt_in'
   AND zip IS NOT NULL
   AND TRIM(zip) <> ''
 GROUP BY zip, state

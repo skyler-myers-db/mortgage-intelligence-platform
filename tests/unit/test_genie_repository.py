@@ -23,6 +23,9 @@ import pytest
 
 from backend.services.genie_answers import GenieMessageResponse
 from backend.services.genie_client import GenieClientError, GenieResponse
+from backend.services.repositories.databricks_genie_canonical import (
+    _CANONICAL_ITM_TOP_ZIPS_SQL,
+)
 from backend.services.repositories.databricks_repo import (
     DatabricksGenieRepository,
 )
@@ -222,6 +225,14 @@ def test_zip_rollup_open_cohort_action_routes_to_filtered_lead_queue() -> None:
         "segment_mode": "any",
     }
     assert action.criteria["sql_hash"]
+
+
+def test_canonical_itm_zip_cohort_uses_lead_queue_visible_population() -> None:
+    assert "FROM mip.gold.lead_population" in _CANONICAL_ITM_TOP_ZIPS_SQL
+    assert "array_contains(segment_codes, 'itm')" in _CANONICAL_ITM_TOP_ZIPS_SQL
+    assert "marketing_eligible = TRUE" in _CANONICAL_ITM_TOP_ZIPS_SQL
+    assert "consent_status = 'opt_in'" in _CANONICAL_ITM_TOP_ZIPS_SQL
+    assert "FROM mip.gold.borrower_360" not in _CANONICAL_ITM_TOP_ZIPS_SQL
 
 
 def test_open_cohort_action_preserves_sql_derived_portfolio_predicates() -> None:
@@ -710,7 +721,8 @@ def test_top_zip_question_uses_direct_canonical_gold_sql_without_genie_call() ->
     assert stub.ask_calls == []
     assert result.conversation_id == ""
     assert result.sql_query is not None
-    assert "FROM mip.gold.borrower_360" in result.sql_query
+    assert "FROM mip.gold.lead_population" in result.sql_query
+    assert "marketing_eligible = TRUE" in result.sql_query
     assert "GROUP BY zip, state" in result.sql_query
     assert sql.statements == [result.sql_query]
     assert result.table_rows is not None
@@ -1185,7 +1197,8 @@ def test_canonical_zip_question_prefers_direct_trusted_sql_over_untrusted_genie_
     assert stub.ask_calls == []
     assert result.table_rows == [{"zip": "60617", "state": "IL", "in_the_money_borrowers": 1503}]
     assert result.sql_query is not None
-    assert "FROM mip.gold.borrower_360" in result.sql_query
+    assert "FROM mip.gold.lead_population" in result.sql_query
+    assert "marketing_eligible = TRUE" in result.sql_query
     assert "mip_app.action_audit" not in result.sql_query
     assert sql.statements == [result.sql_query]
 
@@ -2029,13 +2042,14 @@ def test_in_the_money_zip_direct_canonical_bypasses_genie_breaker() -> None:
     result = repo.respond("Which ZIPs have the most in-the-money refinance candidates?")
 
     assert result.source == "trusted_sql"
-    assert result.trusted_assets == ["mip.gold.borrower_360"]
+    assert result.trusted_assets == ["mip.gold.lead_population"]
     assert result.table_rows == rows
     assert result.visualization is not None
     assert result.visualization.kind == "bar"
     assert any(action.id == "open-cohort" for action in result.actions)
     assert stub.ask_calls == []
     assert "GROUP BY zip, state" in (result.sql_query or "")
+    assert "FROM mip.gold.lead_population" in (result.sql_query or "")
 
 
 def test_in_the_money_state_breakdown_direct_canonical_bypasses_genie_breaker() -> None:
