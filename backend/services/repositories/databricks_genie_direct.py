@@ -426,9 +426,15 @@ def direct_canonical_response(
             _emit_genie_warning("direct_canonical_genie_ranked_lead_population_failed", exc=exc)
             return None
         raw_count = row.get("ranked_leads")
+        if not isinstance(raw_count, int | float | str):
+            _emit_genie_warning(
+                "direct_canonical_genie_ranked_lead_population_bad_count",
+                value_type=type(raw_count).__name__,
+            )
+            return None
         try:
             count_int = int(raw_count)
-        except (TypeError, ValueError):
+        except ValueError:
             _emit_genie_warning(
                 "direct_canonical_genie_ranked_lead_population_bad_count",
                 value_type=type(raw_count).__name__,
