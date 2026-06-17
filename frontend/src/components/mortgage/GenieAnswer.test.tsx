@@ -4,7 +4,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { stripQuestionRestatement } from './GenieAnswer';
 import { normalizeGenieAnswerLanguage } from '../../lib/genieAnswerLanguage';
-import { inferChartFromRows } from './GenieAnswer.logic';
+import { formatCell, humanizeKey, inferChartFromRows } from './GenieAnswer.logic';
 import {
   shouldPersistConversation,
   shouldRenderGenieSourceAssets,
@@ -141,6 +141,16 @@ describe('inferChartFromRows', () => {
     expect(chart?.labelCol).toBe(column);
     expect(chart?.valueCol).toBe('borrowers');
     expect(chart?.rows[0]).toEqual({ label: expectedLabel, value: 42 });
+  });
+});
+
+describe('Genie table display labels', () => {
+  it('renders internal segment codes as borrower-facing cohort labels', () => {
+    expect(humanizeKey('segment_code')).toBe('Cohort');
+    expect(humanizeKey('segment_codes')).toBe('Cohorts');
+    expect(formatCell('segment_code', 'permit')).toBe('HELOC Intent');
+    expect(formatCell('segment_code', 'itm')).toBe('Prime Refi Candidates');
+    expect(formatCell('segment_codes', ['permit', 'equity'])).toBe('HELOC Intent, Home Equity Candidate');
   });
 });
 

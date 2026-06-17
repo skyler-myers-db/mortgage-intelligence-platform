@@ -62,6 +62,21 @@ const VALUE_COLUMN_PRIORITY = [
   'equity_pct',
 ];
 
+const SEGMENT_LABELS: Record<string, string> = {
+  itm: 'Prime Refi Candidates',
+  equity: 'Home Equity Candidate',
+  investor: 'Investor / Multi-Property',
+  retention: 'Retention Risk',
+  listed: 'Listed for Sale',
+  permit: 'HELOC Intent',
+};
+
+const HUMANIZED_KEY_LABELS: Record<string, string> = {
+  segment_code: 'Cohort',
+  top_segment: 'Top Cohort',
+  segment_codes: 'Cohorts',
+};
+
 export function isIdentifierColumn(column: string): boolean {
   return IDENTIFIER_COLUMN_PATTERNS.some((pattern) => pattern.test(column));
 }
@@ -94,6 +109,15 @@ export function formatIdentifier(column: string, value: unknown): string {
     if (digits.length > 0 && digits.length <= 5) return digits.padStart(5, '0');
   }
   return raw;
+}
+
+function formatSegmentValue(value: unknown): string {
+  if (Array.isArray(value)) {
+    return value.map(formatSegmentValue).join(', ');
+  }
+  const raw = String(value ?? '').trim();
+  if (!raw) return '—';
+  return SEGMENT_LABELS[raw.toLowerCase()] ?? raw;
 }
 
 function chooseValueColumn(columns: string[], types: Record<string, 'str' | 'num' | 'mixed'>): string | null {
@@ -226,11 +250,14 @@ function inferChart(
 }
 
 export function humanizeKey(k: string): string {
+  const override = HUMANIZED_KEY_LABELS[k.toLowerCase()];
+  if (override) return override;
   return k.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 export function formatCell(column: string, v: unknown): string {
   if (v === null || v === undefined) return '—';
+  if (/^(segment|segment_code|top_segment|segment_codes)$/i.test(column)) return formatSegmentValue(v);
   if (isIdentifierColumn(column)) return formatIdentifier(column, v);
   if (typeof v === 'number') return Number.isInteger(v) ? v.toLocaleString() : v.toFixed(2);
   return String(v);
