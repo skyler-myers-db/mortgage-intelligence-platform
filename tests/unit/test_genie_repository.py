@@ -21,13 +21,15 @@ from typing import Any
 
 import pytest
 
-from backend.services.genie_answers import GenieMessageResponse
+from backend.services.genie_answers import GenieMessageResponse, load_sample_questions
 from backend.services.genie_client import GenieClientError, GenieResponse
 from backend.services.repositories.databricks_genie_canonical import (
+    _CANONICAL_ITM_TOP_LEAD_QUEUE_ZIPS_SQL,
     _CANONICAL_ITM_TOP_ZIPS_SQL,
 )
 from backend.services.repositories.databricks_repo import (
     DatabricksGenieRepository,
+    _adapt_genie_response,
 )
 from backend.services.resilience import (
     CircuitBreaker,
@@ -86,6 +88,230 @@ class _StubSqlClient:
         self.statements.append(statement)
         self.parameters.append(parameters)
         return self.rows[0] if self.rows else None
+
+
+class _SmartGenieSampleSqlClient:
+    def __init__(self) -> None:
+        self.statements: list[str] = []
+        self.parameters: list[Any] = []
+
+    def execute(self, statement: str, parameters: Any = None) -> list[dict[str, Any]]:  # noqa: ARG002
+        self.statements.append(statement)
+        self.parameters.append(parameters)
+        sql = statement.lower()
+        if "rank_overall" in sql:
+            return [
+                {
+                    "borrower_id": f"B-00000000000{i}",
+                    "display_name": f"Borrower {i}",
+                    "city": "Chicago",
+                    "state": "IL",
+                    "zip": f"6061{i}",
+                    "lead_score": 90 - i,
+                    "recommended_offer_code": "refi",
+                    "recommended_offer": "Rate refinance",
+                    "rank_overall": i + 1,
+                    "refreshed_at": "2026-06-17T00:00:00Z",
+                }
+                for i in range(10)
+            ]
+        if "group by zip, state" in sql:
+            key = "in_the_money_leads" if "lead_population" in sql else "in_the_money_borrowers"
+            return [
+                {
+                    "zip": f"6061{i}",
+                    "state": "IL",
+                    key: 100 - i,
+                    "avg_score": 80 - i,
+                    "refreshed_at": "2026-06-17T00:00:00Z",
+                }
+                for i in range(5)
+            ]
+        if "equity_estimate" in sql and "order by equity_estimate" in sql:
+            return [
+                {
+                    "borrower_id": "B-000000000001",
+                    "display_name": "Borrower 1",
+                    "city": "Chicago",
+                    "state": "IL",
+                    "zip": "60617",
+                    "equity_estimate": 450000,
+                    "equity_pct": 62,
+                    "opportunity_score": 88,
+                    "recommended_offer_code": "cash_out",
+                    "recommended_offer": "Cash-out refinance",
+                    "refreshed_at": "2026-06-17T00:00:00Z",
+                }
+            ]
+        if "related_property_count" in sql:
+            return [
+                {
+                    "borrower_id": "B-000000000002",
+                    "display_name": "Borrower 2",
+                    "city": "Chicago",
+                    "state": "IL",
+                    "zip": "60628",
+                    "related_property_count": 5,
+                    "opportunity_score": 84,
+                    "recommended_offer_code": "investor",
+                    "recommended_offer": "Investor financing",
+                    "refreshed_at": "2026-06-17T00:00:00Z",
+                }
+            ]
+        if "avg(rate_spread_bps)" in sql and "lateral view explode" in sql:
+            return [
+                {
+                    "segment_code": "itm",
+                    "borrowers": 1000,
+                    "avg_rate_spread_bps": 188.5,
+                    "refreshed_at": "2026-06-17T00:00:00Z",
+                }
+            ]
+        if "segment_performance_metric_view" in sql:
+            return [
+                {
+                    "segment_code": "itm",
+                    "name": "Prime Refi Candidates",
+                    "segment_borrowers": 1000,
+                    "approval_rate": 12.5,
+                    "outreach_rate": 20.0,
+                    "avg_score": 81,
+                    "refreshed_at": "2026-06-17T00:00:00Z",
+                }
+            ]
+        if "avg(opportunity_score)" in sql and "group by state" in sql:
+            return [
+                {
+                    "state": "IL",
+                    "borrowers": 1000,
+                    "avg_lead_score": 43.1,
+                    "refreshed_at": "2026-06-17T00:00:00Z",
+                }
+            ]
+        if "evidence_events" in sql:
+            return [
+                {
+                    "signal_type": "rate_spread",
+                    "evidence_events": 10,
+                    "latest_evidence_at": "2026-06-17T00:00:00Z",
+                }
+            ]
+        if "funnel_snapshot_daily" in sql and "approved_borrowers as approvals" in sql:
+            return [
+                {
+                    "snapshot_date": "2026-06-17",
+                    "approvals": 5,
+                    "actioned_borrowers": 3,
+                    "addressable_borrowers": 100,
+                    "snapshot_at": "2026-06-17T00:00:00Z",
+                }
+            ]
+        if "funnel_snapshot_daily" in sql:
+            return [
+                {
+                    "week_start": "2026-06-15T00:00:00Z",
+                    "snapshot_rows": 1,
+                    "addressable_borrowers": 100,
+                    "avg_opportunity_score": 42.5,
+                    "high_opportunity_borrowers": 10,
+                    "snapshot_at": "2026-06-17T00:00:00Z",
+                },
+                {
+                    "week_start": "2026-06-08T00:00:00Z",
+                    "snapshot_rows": 1,
+                    "addressable_borrowers": 90,
+                    "avg_opportunity_score": 41.5,
+                    "high_opportunity_borrowers": 8,
+                    "snapshot_at": "2026-06-10T00:00:00Z",
+                },
+            ]
+        if "recommended_offer_code" in sql and "array_contains(segment_codes, 'itm')" in sql:
+            return [
+                {
+                    "recommended_offer_code": "refi",
+                    "recommended_offer": "Rate refinance",
+                    "borrowers": 1000,
+                    "avg_score": 81.0,
+                    "refreshed_at": "2026-06-17T00:00:00Z",
+                }
+            ]
+        if "recommended_offer_code in ('heloc', 'refi_plus_heloc')" in sql:
+            return [
+                {
+                    "borrower_id": "B-000000000003",
+                    "display_name": "Borrower 3",
+                    "city": "Chicago",
+                    "state": "IL",
+                    "zip": "60617",
+                    "recommended_offer_code": "heloc",
+                    "recommended_offer": "Home equity line",
+                    "equity_estimate": 250000,
+                    "equity_pct": 55,
+                    "heloc_propensity_score": 801,
+                    "opportunity_score": 82,
+                    "refreshed_at": "2026-06-17T00:00:00Z",
+                }
+            ]
+        if "listed_for_sale = true" in sql:
+            return [
+                {
+                    "first_pos_loan_type": "CONV",
+                    "listed_borrowers": 20,
+                    "avg_current_rate": 6.25,
+                    "refreshed_at": "2026-06-17T00:00:00Z",
+                }
+            ]
+        if "lockin_cohort" in sql and "group by state" in sql:
+            return [
+                {
+                    "state": "IL",
+                    "lockin_borrowers": 100,
+                    "avg_score": 42.0,
+                    "refreshed_at": "2026-06-17T00:00:00Z",
+                }
+            ]
+        if "segment_population" in sql:
+            return [
+                {
+                    "segment_code": "permit",
+                    "name": "HELOC Intent",
+                    "borrowers": 100,
+                    "avg_score": 72,
+                    "refreshed_at": "2026-06-17T00:00:00Z",
+                }
+            ]
+        return [{"state": "IL", "in_the_money_borrowers": 100, "avg_rate_spread_bps": 188.5}]
+
+    def execute_one(self, statement: str, parameters: Any = None) -> dict[str, Any] | None:  # noqa: ARG002
+        self.statements.append(statement)
+        self.parameters.append(parameters)
+        sql = statement.lower()
+        if "avg(rate_spread_bps)" in sql:
+            return {
+                "in_the_money_borrowers": 1000,
+                "avg_rate_spread_bps": 188.5,
+                "refreshed_at": "2026-06-17T00:00:00Z",
+            }
+        if "equity_capacity_borrowers" in sql:
+            return {
+                "equity_capacity_borrowers": 2000,
+                "avg_equity_pct": 52.3,
+                "refreshed_at": "2026-06-17T00:00:00Z",
+            }
+        if "marketable_population" in sql:
+            return {
+                "marketable_population": 79730,
+                "refreshed_at": "2026-06-17T00:00:00Z",
+            }
+        if "lockin_cohort" in sql and "percentile_approx" in sql:
+            return {
+                "median_rate_pct": 2.75,
+                "lockin_borrowers": 100,
+                "refreshed_at": "2026-06-17T00:00:00Z",
+            }
+        if "lockin_cohort" in sql:
+            return {"lockin_borrowers": 100, "refreshed_at": "2026-06-17T00:00:00Z"}
+        return {"in_the_money_borrowers": 100, "refreshed_at": "2026-06-17T00:00:00Z"}
 
 
 def _make_breaker(state: str = "closed") -> CircuitBreaker:
@@ -227,12 +453,56 @@ def test_zip_rollup_open_cohort_action_routes_to_filtered_lead_queue() -> None:
     assert action.criteria["sql_hash"]
 
 
-def test_canonical_itm_zip_cohort_uses_lead_queue_visible_population() -> None:
-    assert "FROM mip.gold.lead_population" in _CANONICAL_ITM_TOP_ZIPS_SQL
-    assert "array_contains(segment_codes, 'itm')" in _CANONICAL_ITM_TOP_ZIPS_SQL
-    assert "marketing_eligible = TRUE" in _CANONICAL_ITM_TOP_ZIPS_SQL
-    assert "consent_status = 'opt_in'" in _CANONICAL_ITM_TOP_ZIPS_SQL
-    assert "FROM mip.gold.borrower_360" not in _CANONICAL_ITM_TOP_ZIPS_SQL
+def test_canonical_itm_zip_coverage_and_lead_queue_grains_are_separate() -> None:
+    assert "FROM mip.gold.borrower_360" in _CANONICAL_ITM_TOP_ZIPS_SQL
+    assert "in_the_money = TRUE" in _CANONICAL_ITM_TOP_ZIPS_SQL
+    assert "FROM mip.gold.lead_population" not in _CANONICAL_ITM_TOP_ZIPS_SQL
+
+    assert "FROM mip.gold.lead_population" in _CANONICAL_ITM_TOP_LEAD_QUEUE_ZIPS_SQL
+    assert "array_contains(segment_codes, 'itm')" in _CANONICAL_ITM_TOP_LEAD_QUEUE_ZIPS_SQL
+    assert "marketing_eligible = TRUE" in _CANONICAL_ITM_TOP_LEAD_QUEUE_ZIPS_SQL
+    assert "consent_status = 'opt_in'" in _CANONICAL_ITM_TOP_LEAD_QUEUE_ZIPS_SQL
+
+
+def test_legacy_canonical_itm_zip_fallback_cites_borrower_360_grain() -> None:
+    """Compatibility fallback must not label borrower_360 SQL as lead_population.
+
+    The direct canonical path handles this prompt during normal repository
+    calls. This test targets the older repair/fallback path directly because
+    it still protects text-only Genie turns.
+    """
+    live = GenieResponse(
+        answer_text="ZIP 60617 has the most in-the-money borrowers.",
+        sql_query=None,
+        sql_result_rows=[],
+        conversation_id="conv-fallback-zip",
+        message_id="msg-fallback-zip",
+    )
+    sql = _StubSqlClient(
+        [
+            {
+                "zip": "60617",
+                "state": "IL",
+                "in_the_money_borrowers": 1503,
+                "avg_score": 60.3,
+                "refreshed_at": "2026-06-17T00:00:00Z",
+            }
+        ]
+    )
+
+    result = _adapt_genie_response(
+        "Which zips have the most in-the-money refi candidates?",
+        live,
+        sql_client=sql,  # type: ignore[arg-type]
+    )
+
+    assert result.source == "trusted_sql"
+    assert result.trusted_assets == ["mip.gold.borrower_360"]
+    assert result.proof is not None
+    assert result.proof.source_assets == ["mip.gold.borrower_360"]
+    assert "FROM mip.gold.borrower_360" in (result.sql_query or "")
+    assert "mip.gold.borrower_360" in result.answer
+    assert "from mip.gold.lead_population" not in result.answer
 
 
 def test_open_cohort_action_preserves_sql_derived_portfolio_predicates() -> None:
@@ -721,8 +991,7 @@ def test_top_zip_question_uses_direct_canonical_gold_sql_without_genie_call() ->
     assert stub.ask_calls == []
     assert result.conversation_id == ""
     assert result.sql_query is not None
-    assert "FROM mip.gold.lead_population" in result.sql_query
-    assert "marketing_eligible = TRUE" in result.sql_query
+    assert "FROM mip.gold.borrower_360" in result.sql_query
     assert "GROUP BY zip, state" in result.sql_query
     assert sql.statements == [result.sql_query]
     assert result.table_rows is not None
@@ -887,7 +1156,7 @@ def test_eval_canonical_questions_use_direct_trusted_sql_without_genie_call(
             "average rate spread is 186.4 bps",
         ),
         (
-            "How many borrowers have more than 35% modeled equity across the current Cotality data coverage?",
+            "How many borrowers have at least 35% modeled equity across the current Cotality data coverage?",
             [
                 {
                     "equity_capacity_borrowers": 2075,
@@ -895,8 +1164,8 @@ def test_eval_canonical_questions_use_direct_trusted_sql_without_genie_call(
                     "refreshed_at": "2026-06-15T00:00:00Z",
                 }
             ],
-            "equity_pct > 35",
-            "borrowers with more than 35% modeled home equity",
+            "equity_pct >= 35",
+            "borrowers with at least 35% modeled home equity",
         ),
         (
             "How many HELOC candidates have more than 35% equity across the current Cotality data coverage?",
@@ -907,30 +1176,30 @@ def test_eval_canonical_questions_use_direct_trusted_sql_without_genie_call(
                     "refreshed_at": "2026-06-15T00:00:00Z",
                 }
             ],
-            "equity_pct > 35",
+            "equity_pct >= 35",
             "This is not a filed-permit or HELOC-intent count",
         ),
         (
             "What is the addressable market size — how many eligible borrowers across the current Cotality data coverage?",
             [
                 {
-                    "eligible_borrowers": 79730,
+                    "marketable_population": 79730,
                     "refreshed_at": "2026-06-15T00:00:00Z",
                 }
             ],
-            "FROM mip.gold.lead_population",
-            "marketing-eligible, opt-in borrowers",
+            "FROM mip.gold.borrower_360",
+            "Portfolio Builder denominator",
         ),
         (
             "How many eligible borrowers do we have across the current Cotality data coverage?",
             [
                 {
-                    "eligible_borrowers": 79730,
+                    "marketable_population": 79730,
                     "refreshed_at": "2026-06-15T00:00:00Z",
                 }
             ],
-            "FROM mip.gold.lead_population",
-            "marketing-eligible, opt-in borrowers",
+            "FROM mip.gold.borrower_360",
+            "Portfolio Builder denominator",
         ),
     ],
 )
@@ -957,6 +1226,64 @@ def test_visible_ask_genie_samples_use_direct_trusted_sql_without_genie_call(
     assert result.table_rows
     assert result.proof is not None
     assert result.proof.trusted is True
+
+
+def test_addressable_market_matches_portfolio_builder_default_equity_floor() -> None:
+    stub = _StubClient(
+        _make_breaker("open"),
+        response=GenieClientError("Genie message terminated in state FAILED"),
+    )
+    sql = _StubSqlClient([
+        {
+            "marketable_population": 79730,
+            "refreshed_at": "2026-06-17T00:00:00Z",
+        }
+    ])
+    repo = DatabricksGenieRepository(stub, sql)  # type: ignore[arg-type]
+
+    result = repo.respond(
+        "What is the addressable market size — how many eligible borrowers across the current Cotality data coverage?"
+    )
+
+    assert result.source == "trusted_sql"
+    assert result.metric_value == "79,730"
+    assert result.trusted_assets == ["mip.gold.borrower_360"]
+    assert result.sql_query is not None
+    assert "equity_pct >= 15" in result.sql_query
+    assert "at least 15% modeled equity" in result.answer
+    assert "mip.gold.lead_population" in result.answer
+    assert "narrower ranked Lead Queue subset" in result.answer
+
+
+def test_databricks_sample_questions_do_not_depend_on_raw_genie() -> None:
+    samples = load_sample_questions()
+    databricks_samples = samples[:24]
+    assert len(databricks_samples) == 24
+
+    stub = _StubClient(
+        _make_breaker("open"),
+        response=GenieClientError("Genie message terminated in state FAILED"),
+    )
+    sql = _SmartGenieSampleSqlClient()
+    repo = DatabricksGenieRepository(stub, sql)  # type: ignore[arg-type]
+
+    degraded: list[str] = []
+    raw_calls: list[str] = []
+    for question in databricks_samples:
+        result = repo.respond(question)
+        if result.source == "degraded":
+            degraded.append(question)
+        if stub.ask_calls:
+            raw_calls.extend(stub.ask_calls)
+            stub.ask_calls.clear()
+        assert result.source in {"trusted_sql", "data_gap"}, question
+        if result.source == "trusted_sql":
+            assert result.proof is not None
+            assert result.proof.trusted is True
+            assert result.sql_query is not None
+
+    assert degraded == []
+    assert raw_calls == []
 
 
 @pytest.mark.parametrize(
@@ -1337,8 +1664,7 @@ def test_canonical_zip_question_prefers_direct_trusted_sql_over_untrusted_genie_
     assert stub.ask_calls == []
     assert result.table_rows == [{"zip": "60617", "state": "IL", "in_the_money_borrowers": 1503}]
     assert result.sql_query is not None
-    assert "FROM mip.gold.lead_population" in result.sql_query
-    assert "marketing_eligible = TRUE" in result.sql_query
+    assert "FROM mip.gold.borrower_360" in result.sql_query
     assert "mip_app.action_audit" not in result.sql_query
     assert sql.statements == [result.sql_query]
 
@@ -2344,14 +2670,42 @@ def test_in_the_money_zip_direct_canonical_bypasses_genie_breaker() -> None:
     result = repo.respond("Which ZIPs have the most in-the-money refinance candidates?")
 
     assert result.source == "trusted_sql"
-    assert result.trusted_assets == ["mip.gold.lead_population"]
+    assert result.trusted_assets == ["mip.gold.borrower_360"]
     assert result.table_rows == rows
     assert result.visualization is not None
     assert result.visualization.kind == "bar"
     assert any(action.id == "open-cohort" for action in result.actions)
     assert stub.ask_calls == []
     assert "GROUP BY zip, state" in (result.sql_query or "")
+    assert "FROM mip.gold.borrower_360" in (result.sql_query or "")
+
+
+def test_in_the_money_zip_lead_queue_wording_uses_ranked_lead_subset() -> None:
+    stub = _StubClient(
+        _make_breaker("open"),
+        response=GenieClientError("HTTP 429 from Genie API", status_code=429),
+    )
+    rows = [
+        {
+            "zip": "60617",
+            "state": "IL",
+            "in_the_money_leads": 120,
+            "avg_score": 81.5,
+            "refreshed_at": "2026-05-04T22:08:34.662Z",
+        }
+    ]
+    sql = _StubSqlClient(rows)
+    repo = DatabricksGenieRepository(stub, sql)  # type: ignore[arg-type]
+
+    result = repo.respond("Which ZIPs should a loan officer work first for refinance savings?")
+
+    assert result.source == "trusted_sql"
+    assert result.trusted_assets == ["mip.gold.lead_population"]
+    assert result.table_rows == rows
+    assert "ranked Lead Queue subset" in result.answer
     assert "FROM mip.gold.lead_population" in (result.sql_query or "")
+    assert "marketing_eligible = TRUE" in (result.sql_query or "")
+    assert stub.ask_calls == []
 
 
 def test_in_the_money_state_breakdown_direct_canonical_bypasses_genie_breaker() -> None:

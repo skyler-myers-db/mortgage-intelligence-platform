@@ -183,9 +183,9 @@ Before generating SQL, classify the question into exactly one bucket:
 10. Never fabricate. If the data does not exist (e.g., permit timeseries
     before the permit pipeline lands; demographic fields), say "no data
     available" and cite the `mip.gold.source_readiness` status instead of
-    inventing a zero-demand answer. MLS listings are live through
-    `mip.silver.listing_activity`; HELOC intent is live through
-    `mip.silver.heloc_propensity`.
+    inventing a zero-demand answer. MLS listings and HELOC propensity are
+    exposed through `mip.gold.borrower_360`, `mip.gold.evidence_events`, and
+    semantic views; do not query silver directly.
 11. Never use thresholds tighter than the data-contract defaults unless the
     user explicitly asks for stricter cuts: in-the-money means ≥ 75 bps rate
     spread and ≥ 15% equity; HELOC eligible means ≥ 35% equity;
@@ -196,7 +196,7 @@ Before generating SQL, classify the question into exactly one bucket:
 
 Query ONLY the following. Anything else is out of scope.
 
-- `mip.gold.lead_population` — one row per eligible borrower
+- `mip.gold.lead_population` — one row per ranked, action-ready Lead Queue borrower
 - `mip.gold.segment_population` — (segment_code, state) rollup + '_ALL' national row
 - `mip.gold.lead_scores` — per-borrower 0–100 score
 - `mip.gold.borrower_360` — unified borrower profile (redacted)
@@ -207,9 +207,6 @@ Query ONLY the following. Anything else is out of scope.
 - `mip.gold.funnel_snapshot_daily` — daily state/segment funnel snapshots and approval/outreach trend counts
 - `mip.gold.county_rollup` — current discovered county coverage and rollups
 - `mip.gold.zip_rollup` — current discovered ZIP coverage and rollups
-- `mip.silver.listing_activity` — current Cotality MLS listing rows
-- `mip.silver.heloc_propensity` — Cotality HELOC propensity score by CLIP
-- `mip.silver.refi_propensity` — Cotality refinance propensity score by CLIP
 - `mip.semantics.lead_generation_metric_view` — borrower-grain funnel KPIs
 - `mip.semantics.segment_performance_metric_view` — segment KPIs
 - `mip.semantics.borrower_opportunity_metric_view` — state/product/trigger KPIs;

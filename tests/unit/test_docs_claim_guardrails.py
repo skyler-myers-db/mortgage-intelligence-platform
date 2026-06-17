@@ -9,6 +9,7 @@ longer provides.
 from __future__ import annotations
 
 import re
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -367,10 +368,14 @@ def test_public_and_genie_docs_do_not_link_internal_inventory_docs(relative_path
 
 
 def test_validation_notes_are_explicitly_internal_artifacts() -> None:
-    internal_docs = [
-        *sorted((REPO / "docs/validation").glob("*.md")),
-        *sorted((REPO / "docs/audits").rglob("*.md")),
-    ]
+    tracked = subprocess.run(
+        ["git", "ls-files", "docs/validation/*.md", "docs/audits/*.md", "docs/audits/**/*.md"],
+        cwd=REPO,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    internal_docs = [REPO / line for line in tracked.stdout.splitlines() if line.endswith(".md")]
     assert internal_docs
     for path in internal_docs:
         text = path.read_text(encoding="utf-8")

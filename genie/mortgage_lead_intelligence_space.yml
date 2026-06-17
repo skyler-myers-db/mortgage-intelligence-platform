@@ -153,9 +153,6 @@ instructions: |
       mip.gold.lockin_cohort,
       mip.gold.funnel_snapshot_daily,
       mip.gold.county_rollup, mip.gold.zip_rollup,
-      mip.silver.listing_activity,
-      mip.silver.heloc_propensity,
-      mip.silver.refi_propensity,
       mip.semantics.lead_generation_metric_view,
       mip.semantics.segment_performance_metric_view,
       mip.semantics.borrower_opportunity_metric_view.
@@ -217,10 +214,10 @@ instructions: |
       related_property_count from mip.gold.borrower_360. Do not group by,
       select, or display owner_name_hash, owner_link_id, owner names, or any
       raw/hashed owner identifier.
-    - Never read from mip.raw.*, mip_app.*, untrusted mip.silver.* assets,
-      or any catalog other than `mip`. The only silver assets allowed are
-      the curated listing and propensity tables named in the trusted list.
-      If asked for anything else, refuse and name the in-scope assets.
+    - Never read from mip.raw.*, mip.silver.*, mip_app.*, or any catalog
+      other than `mip`. Listing and propensity signals are exposed through
+      trusted gold/semantic assets. If asked for anything else, refuse and
+      name the in-scope assets.
     - Never list or enumerate tables, schemas, catalogs, or workspace
       metadata (no SHOW TABLES, no INFORMATION_SCHEMA, no system.*).
     - Never run or suggest DDL / DML (CREATE, DROP, ALTER, INSERT, UPDATE,
@@ -235,9 +232,9 @@ instructions: |
       say the source feed is pending explicitly. Filed building permits are a
       pending-source gap because Cotality Building Permits has not shipped yet;
       STEP 0 bucket A must fire before any filed-permit SQL generation. Do not
-      treat the missing permit feed as zero demand. MLS listed-for-sale is live
-      through `mip.silver.listing_activity`; HELOC intent is live through
-      `mip.silver.heloc_propensity`.
+      treat the missing permit feed as zero demand. MLS listed-for-sale and
+      HELOC propensity are exposed through gold/semantic assets; do not query
+      silver directly.
     - Never use thresholds tighter than the data-contract defaults
       unless the user explicitly asks for stricter cuts: in-the-money
       ≥ 75 bps spread and ≥ 15% equity, HELOC eligible ≥ 35%
@@ -275,10 +272,10 @@ trusted_assets:
   - name: mip.gold.lead_population
     kind: table
     description: >-
-      One row per eligible borrower in the lender's addressable market for
-      Module 0. Joins Cotality-mastered property (CLIP) and owner (Owner
-      Link) identifiers with current mortgage state (rate, balance, term,
-      origination date) and property economics (AVM, LTV, equity).
+      One row per ranked, action-ready Lead Queue borrower for Module 0.
+      Use this for operational top-N lead lists. Use mip.gold.borrower_360
+      with explicit filters for broader Portfolio Builder addressable-market
+      denominators.
     column_configs:
       - column_name: state
         get_example_values: true
@@ -411,31 +408,12 @@ trusted_assets:
       rollups from the current gold borrower population. ZIP columns are
       categorical identifiers, not numeric measures.
 
-  - name: mip.silver.listing_activity
-    kind: table
-    description: >-
-      Curated Cotality MLS listing activity. Use only for listing source proof
-      and detailed listed-for-sale questions; borrower counts should normally
-      use listed_for_sale or segment_codes in gold/semantic assets.
-
-  - name: mip.silver.heloc_propensity
-    kind: table
-    description: >-
-      Curated Cotality HELOC propensity score by CLIP. This is the live
-      HELOC-intent signal and is not a filed building-permit source.
-
-  - name: mip.silver.refi_propensity
-    kind: table
-    description: >-
-      Curated Cotality refinance propensity score by CLIP. Use as supporting
-      intent evidence alongside deterministic rate-spread and equity math.
-
   - name: mip.semantics.lead_generation_metric_view
     kind: metric_view
     description: >-
-      Funnel metrics for lead generation: addressable market size,
-      eligible population, scored leads, approved recommendations,
-      actioned outreach. Use for executive and Head-of-Growth questions.
+      Funnel metrics for the ranked lead queue: eligible lead population,
+      scored leads, approved recommendations, and actioned outreach. Use
+      borrower_360 for broader Portfolio Builder market sizing.
 
   - name: mip.semantics.segment_performance_metric_view
     kind: metric_view

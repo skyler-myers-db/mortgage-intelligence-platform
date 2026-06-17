@@ -23,7 +23,7 @@ describe('trustedAssetsForCatalog', () => {
       'acme_mip.semantics.lead_generation_metric_view',
     ]);
 
-    expect(assets.find((asset) => asset.label === 'Borrower population')?.path)
+    expect(assets.find((asset) => asset.label === 'Ranked lead population')?.path)
       .toBe('acme_mip.gold.lead_population');
     expect(assets.find((asset) => asset.label === 'Lead-generation metric view')?.path)
       .toBe('acme_mip.semantics.lead_generation_metric_view');

@@ -58,10 +58,10 @@ at e.g. `S17` maps to "offer mix for In-the-Money segment".
 **Expected:** One row per refreshed state, ordered by count descending; cites `mip.gold.lead_scores`.
 **Why it matters:** Single-state sizing without assuming a fixed footprint.
 
-## S3 — Borrowers with >35% modeled equity
+## S3 — Borrowers with ≥35% modeled equity
 
-**Prompt:** "How many borrowers have more than 35% modeled equity across the current Cotality data coverage?"
-**Expected:** One integer ≥ 0; cites `mip.gold.borrower_360` (filter by `equity_pct > 35`).
+**Prompt:** "How many borrowers have at least 35% modeled equity across the current Cotality data coverage?"
+**Expected:** One integer ≥ 0; cites `mip.gold.borrower_360` (filter by `equity_pct >= 35`).
 **Why it matters:** Sizes the equity-capacity pool before applying HELOC intent or campaign filters.
 
 ## S4 — Addressable market size

@@ -475,6 +475,17 @@ def test_genie_sales_manager_samples_route_to_sales_ops_adapter() -> None:
         assert response.source == "sales_ops"
 
 
+def test_genie_lo_queue_answer_avoids_contact_field_language() -> None:
+    response = _sales_ops_response("Top borrowers in an LO queue ranked by aging and score.")
+
+    assert response is not None
+    answer = response.answer.lower()
+    assert "email" not in answer
+    assert "phone" not in answer
+    assert "street address" not in answer
+    assert "selected loan officer" in answer
+
+
 def test_sales_audit_metadata_is_strictly_validated() -> None:
     store = InMemoryAuditStore()
     base = {

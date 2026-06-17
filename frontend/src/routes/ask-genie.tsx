@@ -34,7 +34,7 @@ import { queryKeys } from '../lib/queryKeys';
 // Friendly name + catalog-relative suffix. The backend returns the concrete
 // catalog-qualified paths for this deployment on /api/genie/start.
 const TRUSTED_ASSET_DEFS: Array<{ label: string; suffix: string }> = [
-  { label: 'Borrower population',          suffix: 'gold.lead_population' },
+  { label: 'Ranked lead population',       suffix: 'gold.lead_population' },
   { label: 'Segment rollups',              suffix: 'gold.segment_population' },
   { label: 'Opportunity scores',           suffix: 'gold.lead_scores' },
   { label: 'Borrower 360 profile',         suffix: 'gold.borrower_360' },

@@ -1,0 +1,312 @@
+# Live regression pack for every visible question in genie/sample_questions.md.
+# These are product-surface prompts, so they must not fall through to raw Genie
+# warming/degraded answers. Each must resolve to trusted SQL, governed Sales Ops,
+# or an explicit data-gap response.
+
+questions:
+  - id: sample_01_itm_count_avg_spread
+    category: sample-population
+    question: How many borrowers across the current Cotality data coverage are currently in-the-money, and what is the average rate spread?
+    allowed_sources: [trusted_sql]
+    must_cite: [mip.gold.borrower_360]
+    require_trusted_proof: true
+    require_select_sql: true
+    require_freshness: true
+    required_sql_contains: [mip.gold.borrower_360, in_the_money = true, avg(rate_spread_bps)]
+
+  - id: sample_02_itm_by_state
+    category: sample-population
+    question: Break down in-the-money borrowers by current coverage state; which state leads?
+    allowed_sources: [trusted_sql]
+    must_cite: [mip.gold.borrower_360]
+    require_trusted_proof: true
+    require_select_sql: true
+    required_sql_contains: [mip.gold.borrower_360, group by state]
+    min_rows: 1
+
+  - id: sample_03_equity_capacity
+    category: sample-population
+    question: How many borrowers have at least 35% modeled equity across the current Cotality data coverage?
+    allowed_sources: [trusted_sql]
+    must_cite: [mip.gold.borrower_360]
+    require_trusted_proof: true
+    require_select_sql: true
+    require_freshness: true
+    required_sql_contains: [mip.gold.borrower_360, equity_pct >= 35]
+
+  - id: sample_04_addressable_market
+    category: sample-population
+    question: What is the addressable market size — how many eligible borrowers across the current Cotality data coverage?
+    allowed_sources: [trusted_sql]
+    must_cite: [mip.gold.borrower_360]
+    require_keywords: [Portfolio Builder denominator, open first lien, marketing eligible, 15% modeled equity]
+    forbid_keywords: [mip.gold.lead_population. This is the action-ready]
+    require_trusted_proof: true
+    require_select_sql: true
+    require_freshness: true
+    required_sql_contains:
+      - mip.gold.borrower_360
+      - marketing_eligible = true
+      - is_owner_occupied = true
+      - current_lien_balance > 0
+      - coalesce(second_pos_amount, 0) = 0
+      - equity_pct >= 15
+    forbid_sql_contains: [mip.gold.lead_population]
+    canonical_column: marketable_population
+    canonical_sql: |
+      SELECT COUNT(*) AS marketable_population
+      FROM mip.gold.borrower_360
+      WHERE marketing_eligible = TRUE
+        AND is_owner_occupied = TRUE
+        AND current_lien_balance > 0
+        AND COALESCE(second_pos_amount, 0) = 0
+        AND equity_pct >= 15
+
+  - id: sample_05_top_borrowers_global
+    category: sample-ranked
+    question: Show the top 10 borrowers by lead score across the current Cotality data coverage.
+    allowed_sources: [trusted_sql]
+    must_cite: [mip.gold.lead_population]
+    require_trusted_proof: true
+    require_select_sql: true
+    required_sql_contains: [mip.gold.lead_population, order by opportunity_score desc]
+    min_rows: 10
+
+  - id: sample_06_top_itm_zips_coverage
+    category: sample-ranked
+    question: Which 5 ZIP codes have the most in-the-money borrowers across the current Cotality data coverage?
+    allowed_sources: [trusted_sql]
+    must_cite: [mip.gold.borrower_360]
+    require_trusted_proof: true
+    require_select_sql: true
+    required_sql_contains: [mip.gold.borrower_360, group by zip, state, in_the_money = true]
+    forbid_sql_contains: [mip.gold.lead_population]
+    min_rows: 5
+
+  - id: sample_07_top_cash_out_equity
+    category: sample-ranked
+    question: Show the top 10 cash-out candidates by estimated equity across the current Cotality data coverage.
+    allowed_sources: [trusted_sql]
+    must_cite: [mip.gold.borrower_360]
+    require_trusted_proof: true
+    require_select_sql: true
+    required_sql_contains: [equity_estimate, recommended_offer_code in, order by equity_estimate desc]
+    min_rows: 1
+
+  - id: sample_08_top_investors
+    category: sample-ranked
+    question: Show the top 20 masked borrower IDs in the Investor/Multi-Property segment by related property count.
+    allowed_sources: [trusted_sql]
+    must_cite: [mip.gold.borrower_360]
+    forbid_keywords: [owner_link_id, owner_name_hash, owner name]
+    require_trusted_proof: true
+    require_select_sql: true
+    required_sql_contains:
+      - array_contains(segment_codes, 'investor')
+      - related_property_count
+    min_rows: 1
+
+  - id: sample_09_itm_segment_by_state
+    category: sample-segment
+    question: Break down the In-the-Money segment by state.
+    allowed_sources: [trusted_sql]
+    must_cite: [mip.gold.borrower_360]
+    require_trusted_proof: true
+    require_select_sql: true
+    required_sql_contains: [mip.gold.borrower_360, group by state]
+    min_rows: 1
+
+  - id: sample_10_mean_rate_spread_by_segment
+    category: sample-segment
+    question: What is the mean rate spread by segment across the current Cotality data coverage?
+    allowed_sources: [trusted_sql]
+    must_cite: [mip.gold.borrower_360]
+    require_trusted_proof: true
+    require_select_sql: true
+    required_sql_contains:
+      - lateral view explode(segment_codes)
+      - avg(rate_spread_bps)
+    min_rows: 1
+
+  - id: sample_11_segments_approval_rate
+    category: sample-segment
+    question: Which segments have the highest approval rate?
+    allowed_sources: [trusted_sql]
+    must_cite: [mip.semantics.segment_performance_metric_view]
+    require_trusted_proof: true
+    require_select_sql: true
+    required_sql_contains: [mip.semantics.segment_performance_metric_view, approval_rate]
+    min_rows: 1
+
+  - id: sample_12_mean_score_by_state
+    category: sample-segment
+    question: Compare mean lead score by current coverage state.
+    allowed_sources: [trusted_sql]
+    must_cite: [mip.gold.borrower_360]
+    require_trusted_proof: true
+    require_select_sql: true
+    required_sql_contains:
+      - mip.gold.borrower_360
+      - avg(opportunity_score)
+      - group by state
+    min_rows: 1
+
+  - id: sample_13_evidence_yesterday
+    category: sample-temporal
+    question: How many evidence events were recorded yesterday, grouped by trigger type?
+    allowed_sources: [trusted_sql]
+    must_cite: [mip.gold.evidence_events]
+    require_trusted_proof: true
+    require_select_sql: true
+    required_sql_contains: [mip.gold.evidence_events, to_timestamp, signal_type]
+
+  - id: sample_14_weekly_score_distribution
+    category: sample-temporal
+    question: Compare this week's lead score distribution to last week's.
+    allowed_sources: [trusted_sql]
+    must_cite: [mip.gold.funnel_snapshot_daily]
+    require_trusted_proof: true
+    require_select_sql: true
+    required_sql_contains: [mip.gold.funnel_snapshot_daily, avg_opportunity_score, date_trunc]
+
+  - id: sample_15_approval_trend
+    category: sample-temporal
+    question: What is the approval trend over the last 30 days?
+    allowed_sources: [trusted_sql]
+    must_cite: [mip.gold.funnel_snapshot_daily]
+    require_trusted_proof: true
+    require_select_sql: true
+    required_sql_contains: [mip.gold.funnel_snapshot_daily, approved_borrowers]
+
+  - id: sample_16_evidence_quarter
+    category: sample-temporal
+    question: How many new evidence events have fired this quarter, grouped by trigger type?
+    allowed_sources: [trusted_sql]
+    must_cite: [mip.gold.evidence_events]
+    require_trusted_proof: true
+    require_select_sql: true
+    required_sql_contains:
+      - mip.gold.evidence_events
+      - date_trunc('quarter'
+      - signal_type
+
+  - id: sample_17_itm_offer_mix
+    category: sample-offer
+    question: What offer mix is recommended for the In-the-Money segment?
+    allowed_sources: [trusted_sql]
+    must_cite: [mip.gold.borrower_360]
+    require_trusted_proof: true
+    require_select_sql: true
+    required_sql_contains:
+      - recommended_offer_code
+      - array_contains(segment_codes, 'itm')
+    min_rows: 1
+
+  - id: sample_18_projected_savings_gap
+    category: sample-offer
+    question: Which trusted asset contains projected monthly savings for approved refis?
+    allowed_sources: [data_gap]
+    must_cite: [mip.gold.source_readiness]
+    require_no_sql: true
+    require_known_gap: true
+    require_keywords: [projected monthly savings, not present, must not substitute]
+
+  - id: sample_19_heloc_recommendations
+    category: sample-offer
+    question: Which borrowers got a HELOC recommendation across the current Cotality data coverage?
+    allowed_sources: [trusted_sql]
+    must_cite: [mip.gold.borrower_360]
+    forbid_keywords: [owner name, phone, email, street]
+    require_trusted_proof: true
+    require_select_sql: true
+    required_sql_contains:
+      - recommended_offer_code in ('heloc', 'refi_plus_heloc')
+    min_rows: 1
+
+  - id: sample_20_listed_product_rate
+    category: sample-offer
+    question: Break down the Listed-for-Sale segment by loan product and average current rate.
+    allowed_sources: [trusted_sql]
+    must_cite: [mip.gold.borrower_360]
+    require_trusted_proof: true
+    require_select_sql: true
+    required_sql_contains: [listed_for_sale = true, first_pos_loan_type, avg(current_rate)]
+
+  - id: sample_21_lockin_size
+    category: sample-lockin
+    question: How big is the 2020–2022 sub-3% lock-in cohort across the current Cotality data coverage?
+    allowed_sources: [trusted_sql]
+    must_cite: [mip.gold.lockin_cohort]
+    require_trusted_proof: true
+    require_select_sql: true
+    require_freshness: true
+    required_sql_contains: [mip.gold.lockin_cohort, count(*)]
+
+  - id: sample_22_lockin_median_rate
+    category: sample-lockin
+    question: What is the median rate of the lock-in cohort?
+    allowed_sources: [trusted_sql]
+    must_cite: [mip.gold.lockin_cohort]
+    require_trusted_proof: true
+    require_select_sql: true
+    required_sql_contains: [mip.gold.lockin_cohort, percentile_approx]
+
+  - id: sample_23_lockin_by_state
+    category: sample-lockin
+    question: Break down the lock-in cohort by state.
+    allowed_sources: [trusted_sql]
+    must_cite: [mip.gold.lockin_cohort]
+    require_trusted_proof: true
+    require_select_sql: true
+    required_sql_contains: [mip.gold.lockin_cohort, group by state]
+    min_rows: 1
+
+  - id: sample_24_retention_competitor_lien
+    category: sample-cross-asset
+    question: Which borrowers on our retention list have a competitor lien filed in the last 30 days?
+    allowed_sources: [trusted_sql]
+    must_cite: [mip.gold.borrower_360, mip.gold.evidence_events]
+    forbid_keywords: [lien-change, lien_change]
+    require_trusted_proof: true
+    require_select_sql: true
+    required_sql_contains: [signal_type = 'competitor_lien', to_timestamp]
+
+  - id: sample_25_permit_equity_gap
+    category: sample-cross-asset
+    question: Which borrowers have both a permit signal and an equity-crossing event in the last 30 days?
+    allowed_sources: [data_gap]
+    must_cite: [mip.gold.source_readiness]
+    require_no_sql: true
+    require_known_gap: true
+    require_keywords: [Building Permits, pending]
+    forbid_keywords: [zero borrowers, no borrowers]
+
+  - id: sample_26_lo_app_start_rate
+    category: sample-sales-ops
+    question: Which LO had the highest application-start rate this week?
+    allowed_sources: [sales_ops]
+    require_select_sql: true
+
+  - id: sample_27_lo_calls_yesterday
+    category: sample-sales-ops
+    question: How many calls did each LO make yesterday?
+    allowed_sources: [sales_ops]
+    require_select_sql: true
+
+  - id: sample_28_approved_untouched
+    category: sample-sales-ops
+    question: Show approved leads that have not been touched in 7 days.
+    allowed_sources: [sales_ops]
+    require_select_sql: true
+
+  - id: sample_29_lo_queue_aging
+    category: sample-sales-ops
+    question: Top borrowers in an LO queue ranked by aging and score.
+    allowed_sources: [sales_ops]
+    forbid_keywords: [phone, email, street address]
+
+  - id: sample_30_approved_to_app_started
+    category: sample-sales-ops
+    question: How many leads went from approved to application started this week?
+    allowed_sources: [sales_ops]
+    require_select_sql: true

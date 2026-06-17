@@ -17,42 +17,81 @@ from backend.services.repositories.databricks_genie_actions import (
 )
 from backend.services.repositories.databricks_genie_canonical import (
     _CANONICAL_ADDRESSABLE_MARKET_SQL,
+    _CANONICAL_APPROVAL_TREND_30D_SQL,
     _CANONICAL_CASH_OUT_TOP_STATE_SQL,
     _CANONICAL_CURRENT_CUSTOMER_RETENTION_RISK_SQL,
+    _CANONICAL_EVIDENCE_EVENTS_THIS_QUARTER_SQL,
+    _CANONICAL_EVIDENCE_EVENTS_YESTERDAY_SQL,
     _CANONICAL_HELOC_COUNT_SQL,
+    _CANONICAL_HELOC_RECOMMENDATION_BORROWERS_SQL,
     _CANONICAL_HELOC_TOP_ZIPS_SQL,
     _CANONICAL_INVESTOR_SEGMENT_BY_STATE_SQL,
+    _CANONICAL_INVESTOR_TOP_BY_RELATED_PROPERTY_SQL,
     _CANONICAL_ITM_BY_STATE_SQL,
     _CANONICAL_ITM_COUNT_AVG_SPREAD_SQL,
     _CANONICAL_ITM_COUNT_BY_CITY_SQL,
     _CANONICAL_ITM_COUNT_BY_STATE_SQL,
     _CANONICAL_ITM_COUNT_SQL,
+    _CANONICAL_ITM_OFFER_MIX_SQL,
+    _CANONICAL_ITM_TOP_LEAD_QUEUE_ZIPS_SQL,
     _CANONICAL_ITM_TOP_TIER_COMPARE_SQL,
     _CANONICAL_ITM_TOP_ZIPS_SQL,
+    _CANONICAL_LEAD_SCORE_WEEKLY_DISTRIBUTION_SQL,
+    _CANONICAL_LISTED_BY_PRODUCT_RATE_SQL,
     _CANONICAL_LISTED_PURCHASE_TOP_SQL,
+    _CANONICAL_LOCKIN_BY_STATE_SQL,
+    _CANONICAL_LOCKIN_COHORT_SIZE_SQL,
+    _CANONICAL_LOCKIN_MEDIAN_RATE_SQL,
+    _CANONICAL_MEAN_LEAD_SCORE_BY_STATE_SQL,
+    _CANONICAL_MEAN_RATE_SPREAD_BY_SEGMENT_SQL,
     _CANONICAL_MSA_SCORE_SQL,
+    _CANONICAL_RANKED_LEAD_POPULATION_SQL,
     _CANONICAL_REFI_DRIVER_SQL,
     _CANONICAL_REFI_EQUITY_SIGNAL_COMPARE_SQL,
     _CANONICAL_RETENTION_COMPETITOR_LIEN_LIST_SQL,
+    _CANONICAL_SEGMENT_APPROVAL_RATE_SQL,
     _CANONICAL_STRATEGY_BOARD_SQL,
     _CANONICAL_TOP_BORROWERS_BY_STATE_SQL,
+    _CANONICAL_TOP_BORROWERS_GLOBAL_SQL,
+    _CANONICAL_TOP_CASH_OUT_BY_EQUITY_SQL,
+    _CANONICAL_TOP_COHORTS_SQL,
     _canonical_addressable_market_scope,
+    _canonical_approval_trend_30d_scope,
     _canonical_cash_out_state_scope,
+    _canonical_evidence_events_quarter_scope,
+    _canonical_evidence_events_yesterday_scope,
     _canonical_heloc_count_scope,
+    _canonical_heloc_recommendation_borrowers_scope,
     _canonical_heloc_zip_scope,
     _canonical_in_the_money_count_scope,
     _canonical_investor_segment_by_state_scope,
+    _canonical_investor_top_by_related_property_scope,
     _canonical_itm_city_scope,
     _canonical_itm_count_avg_spread_scope,
+    _canonical_itm_lead_queue_zip_scope,
+    _canonical_itm_offer_mix_scope,
     _canonical_itm_state_breakdown_scope,
     _canonical_itm_top_tier_compare_scope,
     _canonical_itm_zip_scope,
+    _canonical_lead_score_weekly_distribution_scope,
+    _canonical_listed_by_product_rate_scope,
     _canonical_listed_purchase_scope,
+    _canonical_lockin_by_state_scope,
+    _canonical_lockin_median_rate_scope,
+    _canonical_lockin_size_scope,
+    _canonical_mean_lead_score_by_state_scope,
+    _canonical_mean_rate_spread_by_segment_scope,
     _canonical_msa_score_scope,
+    _canonical_ranked_lead_population_scope,
     _canonical_refi_driver_scope,
     _canonical_refi_equity_signal_compare_scope,
+    _canonical_segment_approval_rate_scope,
     _canonical_strategy_board_scope,
+    _canonical_top_borrowers_global_scope,
     _canonical_top_borrowers_state_scope,
+    _canonical_top_cash_out_by_equity_scope,
+    _canonical_top_cohorts_scope,
+    _projected_monthly_savings_gap_scope,
     _retention_competitor_lien_list_question,
     _retention_risk_question,
 )
@@ -135,6 +174,37 @@ def _trusted_sql_response(
     )
 
 
+def _data_gap_response(
+    *,
+    question: str,
+    answer: str,
+    trusted_assets: list[str],
+    known_data_gaps: list[str],
+) -> GenieMessageResponse:
+    question_hash = _genie_question_hash(question)
+    message_id = f"data-gap-{question_hash}"
+    return GenieMessageResponse(
+        conversation_id="",
+        message_id=message_id,
+        elapsed_ms=0,
+        question_hash=question_hash,
+        question=question,
+        answer=answer,
+        source="data_gap",
+        trusted_assets=trusted_assets,
+        row_count=0,
+        proof=GenieProof(
+            source_assets=trusted_assets,
+            row_count=0,
+            trusted=False,
+            known_data_gaps=known_data_gaps,
+            conversation_id=None,
+            message_id=message_id,
+        ),
+        table_rows=[],
+    )
+
+
 def _guide_response(question: str) -> GenieMessageResponse | None:
     q = " ".join(question.lower().split())
     if not (
@@ -192,8 +262,12 @@ def direct_canonical_response(
         return None
     borrower_asset = qualify("gold", "borrower_360")
     evidence_asset = qualify("gold", "evidence_events")
+    funnel_asset = qualify("gold", "funnel_snapshot_daily")
     lead_population_asset = qualify("gold", "lead_population")
+    lockin_asset = qualify("gold", "lockin_cohort")
     segment_population_asset = qualify("gold", "segment_population")
+    segment_performance_asset = qualify("semantics", "segment_performance_metric_view")
+    source_readiness_asset = qualify("gold", "source_readiness")
     trusted_assets = [borrower_asset]
 
     if _canonical_itm_count_avg_spread_scope(question):
@@ -284,7 +358,7 @@ def direct_canonical_response(
         )
         answer = (
             f"Interpreting this as an equity-capacity screen, there are {count_int:,} "
-            f"borrowers with more than 35% modeled home equity. Their average equity "
+            f"borrowers with at least 35% modeled home equity. Their average equity "
             f"is {equity_text}. This is not a filed-permit or HELOC-intent count; "
             f"it comes from {borrower_asset} and Building Permits are only used when "
             "that source is live."
@@ -304,7 +378,7 @@ def direct_canonical_response(
         except DatabricksSqlError as exc:
             _emit_genie_warning("direct_canonical_genie_addressable_market_failed", exc=exc)
             return None
-        raw_count = row.get("eligible_borrowers")
+        raw_count = row.get("marketable_population")
         if raw_count is None:
             _emit_genie_warning(
                 "direct_canonical_genie_addressable_market_bad_count",
@@ -321,19 +395,55 @@ def direct_canonical_response(
             return None
         rows = [
             {
-                "eligible_borrowers": count_int,
+                "marketable_population": count_int,
+                "definition": (
+                    "Portfolio Builder default: owner-occupied, open first lien, "
+                    "marketing eligible, at least 15% modeled equity"
+                ),
                 "refreshed_at": row.get("refreshed_at"),
             }
         ]
         answer = (
-            f"The current addressable market is {count_int:,} marketing-eligible, "
-            f"opt-in borrowers in {lead_population_asset}. This is the action-ready "
-            "lead population after suppression and consent filters, not the raw "
-            "public-record universe."
+            f"The current addressable market is {count_int:,} borrowers at the "
+            f"Portfolio Builder grain in {borrower_asset}. This matches the default "
+            "Portfolio Builder denominator: owner-occupied properties, open first "
+            "lien, marketing eligible, and at least 15% modeled equity. It is not "
+            f"the narrower ranked Lead Queue subset in {lead_population_asset}."
         )
         return _trusted_sql_response(
             question=question,
             sql_query=_CANONICAL_ADDRESSABLE_MARKET_SQL,
+            trusted_assets=[borrower_asset],
+            rows=rows,
+            answer=answer,
+            metric_value=f"{count_int:,}",
+        )
+
+    if _canonical_ranked_lead_population_scope(question):
+        try:
+            row = sql_client.execute_one(_CANONICAL_RANKED_LEAD_POPULATION_SQL) or {}
+        except DatabricksSqlError as exc:
+            _emit_genie_warning("direct_canonical_genie_ranked_lead_population_failed", exc=exc)
+            return None
+        raw_count = row.get("ranked_leads")
+        try:
+            count_int = int(raw_count)
+        except (TypeError, ValueError):
+            _emit_genie_warning(
+                "direct_canonical_genie_ranked_lead_population_bad_count",
+                value_type=type(raw_count).__name__,
+            )
+            return None
+        rows = [{"ranked_leads": count_int, "refreshed_at": row.get("refreshed_at")}]
+        answer = (
+            f"The ranked Lead Queue subset has {count_int:,} marketing-eligible "
+            f"leads in {lead_population_asset}. Use this number for operational "
+            "queue sizing; use the addressable-market answer for the broader "
+            "Portfolio Builder denominator."
+        )
+        return _trusted_sql_response(
+            question=question,
+            sql_query=_CANONICAL_RANKED_LEAD_POPULATION_SQL,
             trusted_assets=[lead_population_asset],
             rows=rows,
             answer=answer,
@@ -372,6 +482,35 @@ def direct_canonical_response(
         return _trusted_sql_response(
             question=question,
             sql_query=_CANONICAL_TOP_BORROWERS_BY_STATE_SQL,
+            trusted_assets=[lead_population_asset],
+            rows=rows,
+            answer=answer,
+        )
+
+    if _canonical_top_borrowers_global_scope(question):
+        try:
+            rows = (
+                _redact_genie_rows(sql_client.execute(_CANONICAL_TOP_BORROWERS_GLOBAL_SQL))
+                or []
+            )
+        except DatabricksSqlError as exc:
+            _emit_genie_warning("direct_canonical_genie_top_borrowers_global_failed", exc=exc)
+            return None
+        if rows:
+            top = rows[0]
+            answer = (
+                f"I ranked the top {len(rows)} marketing-eligible borrowers by lead score "
+                f"from {lead_population_asset}. The current first borrower is masked "
+                f"{top.get('borrower_id')} with lead score {int(top.get('lead_score') or 0):,}."
+            )
+        else:
+            answer = (
+                "The ranked lead population returned no marketing-eligible borrower rows "
+                "for the current refreshed coverage."
+            )
+        return _trusted_sql_response(
+            question=question,
+            sql_query=_CANONICAL_TOP_BORROWERS_GLOBAL_SQL,
             trusted_assets=[lead_population_asset],
             rows=rows,
             answer=answer,
@@ -474,6 +613,36 @@ def direct_canonical_response(
             metric_value=metric_value,
         )
 
+    if _canonical_top_cash_out_by_equity_scope(question):
+        try:
+            rows = (
+                _redact_genie_rows(sql_client.execute(_CANONICAL_TOP_CASH_OUT_BY_EQUITY_SQL))
+                or []
+            )
+        except DatabricksSqlError as exc:
+            _emit_genie_warning("direct_canonical_genie_top_cash_out_by_equity_failed", exc=exc)
+            return None
+        if rows:
+            top = rows[0]
+            answer = (
+                f"I ranked the top {len(rows)} cash-out or home-equity candidates by "
+                f"estimated equity from {borrower_asset}. The first masked borrower is "
+                f"{top.get('borrower_id')} with ${int(top.get('equity_estimate') or 0):,} "
+                "estimated equity."
+            )
+        else:
+            answer = (
+                "The trusted borrower table returned no marketing-eligible cash-out or "
+                "home-equity candidates for the current refreshed coverage."
+            )
+        return _trusted_sql_response(
+            question=question,
+            sql_query=_CANONICAL_TOP_CASH_OUT_BY_EQUITY_SQL,
+            trusted_assets=[borrower_asset],
+            rows=rows,
+            answer=answer,
+        )
+
     if _canonical_listed_purchase_scope(question):
         try:
             rows = (
@@ -506,6 +675,38 @@ def direct_canonical_response(
             question=question,
             sql_query=_CANONICAL_LISTED_PURCHASE_TOP_SQL,
             trusted_assets=listed_assets,
+            rows=rows,
+            answer=answer,
+        )
+
+    if _canonical_investor_top_by_related_property_scope(question):
+        try:
+            rows = (
+                _redact_genie_rows(
+                    sql_client.execute(_CANONICAL_INVESTOR_TOP_BY_RELATED_PROPERTY_SQL)
+                )
+                or []
+            )
+        except DatabricksSqlError as exc:
+            _emit_genie_warning("direct_canonical_genie_investor_top_properties_failed", exc=exc)
+            return None
+        if rows:
+            top = rows[0]
+            answer = (
+                f"I ranked the top {len(rows)} Investor / Multi-Property borrowers by related "
+                f"property count from {borrower_asset}. The first masked borrower is "
+                f"{top.get('borrower_id')} with {int(top.get('related_property_count') or 0):,} "
+                "related properties."
+            )
+        else:
+            answer = (
+                "The trusted borrower table returned no marketing-eligible Investor / "
+                "Multi-Property rows with related property count >= 2."
+            )
+        return _trusted_sql_response(
+            question=question,
+            sql_query=_CANONICAL_INVESTOR_TOP_BY_RELATED_PROPERTY_SQL,
+            trusted_assets=[borrower_asset],
             rows=rows,
             answer=answer,
         )
@@ -647,6 +848,382 @@ def direct_canonical_response(
             answer=answer,
         )
 
+    if _canonical_mean_rate_spread_by_segment_scope(question):
+        try:
+            rows = (
+                _redact_genie_rows(sql_client.execute(_CANONICAL_MEAN_RATE_SPREAD_BY_SEGMENT_SQL))
+                or []
+            )
+        except DatabricksSqlError as exc:
+            _emit_genie_warning("direct_canonical_genie_mean_spread_segment_failed", exc=exc)
+            return None
+        answer = (
+            f"I calculated mean rate spread by segment from {borrower_asset}. "
+            "Positive spread means the first-position rate is above the current market rate."
+            if rows
+            else "The trusted borrower table returned no segment rows with rate-spread values."
+        )
+        return _trusted_sql_response(
+            question=question,
+            sql_query=_CANONICAL_MEAN_RATE_SPREAD_BY_SEGMENT_SQL,
+            trusted_assets=[borrower_asset],
+            rows=rows,
+            answer=answer,
+        )
+
+    if _canonical_segment_approval_rate_scope(question):
+        try:
+            rows = (
+                _redact_genie_rows(sql_client.execute(_CANONICAL_SEGMENT_APPROVAL_RATE_SQL))
+                or []
+            )
+        except DatabricksSqlError as exc:
+            _emit_genie_warning("direct_canonical_genie_segment_approval_rate_failed", exc=exc)
+            return None
+        if rows:
+            top = rows[0]
+            rate = top.get("approval_rate")
+            answer = (
+                f"I ranked segment approval rate from {segment_performance_asset}. "
+                f"The current leader is {_segment_display_label(top.get('segment_code'))} "
+                f"with approval rate {float(rate or 0):,.1f}%."
+            )
+        else:
+            answer = (
+                "The segment performance view returned no national approval-rate rows for "
+                "the current refreshed coverage."
+            )
+        return _trusted_sql_response(
+            question=question,
+            sql_query=_CANONICAL_SEGMENT_APPROVAL_RATE_SQL,
+            trusted_assets=[segment_performance_asset],
+            rows=rows,
+            answer=answer,
+        )
+
+    if _canonical_mean_lead_score_by_state_scope(question):
+        try:
+            rows = (
+                _redact_genie_rows(sql_client.execute(_CANONICAL_MEAN_LEAD_SCORE_BY_STATE_SQL))
+                or []
+            )
+        except DatabricksSqlError as exc:
+            _emit_genie_warning("direct_canonical_genie_mean_score_state_failed", exc=exc)
+            return None
+        if rows:
+            top = rows[0]
+            answer = (
+                f"I compared mean lead score by state from {borrower_asset}. "
+                f"{top.get('state')} currently leads with average score "
+                f"{float(top.get('avg_lead_score') or 0):,.1f}."
+            )
+        else:
+            answer = "The trusted borrower table returned no state rows for lead-score comparison."
+        return _trusted_sql_response(
+            question=question,
+            sql_query=_CANONICAL_MEAN_LEAD_SCORE_BY_STATE_SQL,
+            trusted_assets=[borrower_asset],
+            rows=rows,
+            answer=answer,
+        )
+
+    if _canonical_evidence_events_yesterday_scope(question):
+        try:
+            rows = (
+                _redact_genie_rows(sql_client.execute(_CANONICAL_EVIDENCE_EVENTS_YESTERDAY_SQL))
+                or []
+            )
+        except DatabricksSqlError as exc:
+            _emit_genie_warning("direct_canonical_genie_evidence_yesterday_failed", exc=exc)
+            return None
+        answer = (
+            f"I grouped yesterday's evidence events by trigger type from {evidence_asset}."
+            if rows
+            else f"{evidence_asset} recorded no evidence events yesterday; I am not treating "
+            "that as zero borrower demand, only as a trigger-volume readout for that date."
+        )
+        return _trusted_sql_response(
+            question=question,
+            sql_query=_CANONICAL_EVIDENCE_EVENTS_YESTERDAY_SQL,
+            trusted_assets=[evidence_asset],
+            rows=rows,
+            answer=answer,
+        )
+
+    if _canonical_lead_score_weekly_distribution_scope(question):
+        try:
+            rows = (
+                _redact_genie_rows(
+                    sql_client.execute(_CANONICAL_LEAD_SCORE_WEEKLY_DISTRIBUTION_SQL)
+                )
+                or []
+            )
+        except DatabricksSqlError as exc:
+            _emit_genie_warning("direct_canonical_genie_weekly_score_distribution_failed", exc=exc)
+            return None
+        if len(rows) >= 2:
+            answer = (
+                f"I compared this week's and last week's average opportunity score from "
+                f"{funnel_asset}. Review the table for the two weekly buckets."
+            )
+        else:
+            answer = (
+                f"{funnel_asset} does not yet have two weekly national snapshots in the "
+                "last 14 days, so I cannot make a week-over-week distribution claim."
+            )
+        return _trusted_sql_response(
+            question=question,
+            sql_query=_CANONICAL_LEAD_SCORE_WEEKLY_DISTRIBUTION_SQL,
+            trusted_assets=[funnel_asset],
+            rows=rows,
+            answer=answer,
+        )
+
+    if _canonical_approval_trend_30d_scope(question):
+        try:
+            rows = (
+                _redact_genie_rows(sql_client.execute(_CANONICAL_APPROVAL_TREND_30D_SQL))
+                or []
+            )
+        except DatabricksSqlError as exc:
+            _emit_genie_warning("direct_canonical_genie_approval_trend_failed", exc=exc)
+            return None
+        if rows:
+            answer = (
+                f"I pulled the approval trend from {funnel_asset} for the last 30 days. "
+                "The table shows daily approvals at the national funnel grain."
+            )
+        else:
+            answer = f"{funnel_asset} returned no national approval snapshots in the last 30 days."
+        return _trusted_sql_response(
+            question=question,
+            sql_query=_CANONICAL_APPROVAL_TREND_30D_SQL,
+            trusted_assets=[funnel_asset],
+            rows=rows,
+            answer=answer,
+        )
+
+    if _canonical_evidence_events_quarter_scope(question):
+        try:
+            rows = (
+                _redact_genie_rows(
+                    sql_client.execute(_CANONICAL_EVIDENCE_EVENTS_THIS_QUARTER_SQL)
+                )
+                or []
+            )
+        except DatabricksSqlError as exc:
+            _emit_genie_warning("direct_canonical_genie_evidence_quarter_failed", exc=exc)
+            return None
+        answer = (
+            f"I grouped quarter-to-date evidence events by trigger type from {evidence_asset}."
+            if rows
+            else f"{evidence_asset} returned no quarter-to-date evidence events."
+        )
+        return _trusted_sql_response(
+            question=question,
+            sql_query=_CANONICAL_EVIDENCE_EVENTS_THIS_QUARTER_SQL,
+            trusted_assets=[evidence_asset],
+            rows=rows,
+            answer=answer,
+        )
+
+    if _canonical_itm_offer_mix_scope(question):
+        try:
+            rows = _redact_genie_rows(sql_client.execute(_CANONICAL_ITM_OFFER_MIX_SQL)) or []
+        except DatabricksSqlError as exc:
+            _emit_genie_warning("direct_canonical_genie_itm_offer_mix_failed", exc=exc)
+            return None
+        if rows:
+            top = rows[0]
+            top_offer = offer_display_label(
+                str(top.get("recommended_offer_code") or ""),
+                str(top.get("recommended_offer") or ""),
+            )
+            answer = (
+                f"I grouped the In-the-Money segment by recommended offer from {borrower_asset}. "
+                f"The largest current offer lane is {top_offer} with "
+                f"{int(top.get('borrowers') or 0):,} borrowers."
+            )
+        else:
+            answer = "The trusted borrower table returned no In-the-Money offer-mix rows."
+        return _trusted_sql_response(
+            question=question,
+            sql_query=_CANONICAL_ITM_OFFER_MIX_SQL,
+            trusted_assets=[borrower_asset],
+            rows=rows,
+            answer=answer,
+        )
+
+    if _projected_monthly_savings_gap_scope(question):
+        answer = (
+            "No trusted asset currently contains projected monthly savings for approved refis. "
+            "The app can cite rate spread, current rate, market rate, offer code, and approval "
+            "state, but it must not substitute those as a savings estimate until a governed "
+            "`projected_monthly_savings_usd` measure is added."
+        )
+        return _data_gap_response(
+            question=question,
+            answer=answer,
+            trusted_assets=[source_readiness_asset],
+            known_data_gaps=[
+                "projected_monthly_savings_usd is not present in the trusted Module 0 asset inventory"
+            ],
+        )
+
+    if _canonical_heloc_recommendation_borrowers_scope(question):
+        try:
+            rows = (
+                _redact_genie_rows(
+                    sql_client.execute(_CANONICAL_HELOC_RECOMMENDATION_BORROWERS_SQL)
+                )
+                or []
+            )
+        except DatabricksSqlError as exc:
+            _emit_genie_warning("direct_canonical_genie_heloc_recommendations_failed", exc=exc)
+            return None
+        if rows:
+            answer = (
+                f"I listed up to {len(rows)} marketing-eligible borrowers whose recommended "
+                f"offer is HELOC or Refinance + HELOC from {borrower_asset}. These are "
+                "masked borrower IDs only, not names or contact details."
+            )
+        else:
+            answer = (
+                "The trusted borrower table returned no marketing-eligible HELOC recommendation "
+                "rows for the current refreshed coverage."
+            )
+        return _trusted_sql_response(
+            question=question,
+            sql_query=_CANONICAL_HELOC_RECOMMENDATION_BORROWERS_SQL,
+            trusted_assets=[borrower_asset],
+            rows=rows,
+            answer=answer,
+        )
+
+    if _canonical_listed_by_product_rate_scope(question):
+        try:
+            rows = (
+                _redact_genie_rows(sql_client.execute(_CANONICAL_LISTED_BY_PRODUCT_RATE_SQL))
+                or []
+            )
+        except DatabricksSqlError as exc:
+            _emit_genie_warning("direct_canonical_genie_listed_product_rate_failed", exc=exc)
+            return None
+        answer = (
+            f"I broke the Listed-for-Sale segment down by loan product and average current "
+            f"rate from {borrower_asset}."
+            if rows
+            else "The trusted borrower table returned no listed-for-sale rows for this breakdown."
+        )
+        return _trusted_sql_response(
+            question=question,
+            sql_query=_CANONICAL_LISTED_BY_PRODUCT_RATE_SQL,
+            trusted_assets=[borrower_asset],
+            rows=rows,
+            answer=answer,
+        )
+
+    if _canonical_lockin_size_scope(question):
+        try:
+            row = sql_client.execute_one(_CANONICAL_LOCKIN_COHORT_SIZE_SQL) or {}
+        except DatabricksSqlError as exc:
+            _emit_genie_warning("direct_canonical_genie_lockin_size_failed", exc=exc)
+            return None
+        count_int = int(row.get("lockin_borrowers") or 0)
+        rows = [{"lockin_borrowers": count_int, "refreshed_at": row.get("refreshed_at")}]
+        answer = (
+            f"The 2020-2022 sub-3% lock-in cohort has {count_int:,} borrowers in "
+            f"{lockin_asset}."
+        )
+        return _trusted_sql_response(
+            question=question,
+            sql_query=_CANONICAL_LOCKIN_COHORT_SIZE_SQL,
+            trusted_assets=[lockin_asset],
+            rows=rows,
+            answer=answer,
+            metric_value=f"{count_int:,}",
+        )
+
+    if _canonical_lockin_median_rate_scope(question):
+        try:
+            row = sql_client.execute_one(_CANONICAL_LOCKIN_MEDIAN_RATE_SQL) or {}
+        except DatabricksSqlError as exc:
+            _emit_genie_warning("direct_canonical_genie_lockin_median_failed", exc=exc)
+            return None
+        median = row.get("median_rate_pct")
+        rows = [
+            {
+                "median_rate_pct": median,
+                "lockin_borrowers": int(row.get("lockin_borrowers") or 0),
+                "refreshed_at": row.get("refreshed_at"),
+            }
+        ]
+        median_text = f"{float(median):,.3f}%" if median is not None else "not available"
+        answer = f"The median origination rate in {lockin_asset} is {median_text}."
+        return _trusted_sql_response(
+            question=question,
+            sql_query=_CANONICAL_LOCKIN_MEDIAN_RATE_SQL,
+            trusted_assets=[lockin_asset],
+            rows=rows,
+            answer=answer,
+            metric_value=median_text,
+        )
+
+    if _canonical_lockin_by_state_scope(question):
+        try:
+            rows = _redact_genie_rows(sql_client.execute(_CANONICAL_LOCKIN_BY_STATE_SQL)) or []
+        except DatabricksSqlError as exc:
+            _emit_genie_warning("direct_canonical_genie_lockin_by_state_failed", exc=exc)
+            return None
+        if rows:
+            top = rows[0]
+            answer = (
+                f"I broke down the lock-in cohort by state from {lockin_asset}. "
+                f"{top.get('state')} currently leads with "
+                f"{int(top.get('lockin_borrowers') or 0):,} borrowers."
+            )
+        else:
+            answer = f"{lockin_asset} returned no state rows for the current refreshed coverage."
+        return _trusted_sql_response(
+            question=question,
+            sql_query=_CANONICAL_LOCKIN_BY_STATE_SQL,
+            trusted_assets=[lockin_asset],
+            rows=rows,
+            answer=answer,
+        )
+
+    if _canonical_top_cohorts_scope(question):
+        try:
+            rows = _redact_genie_rows(sql_client.execute(_CANONICAL_TOP_COHORTS_SQL)) or []
+        except DatabricksSqlError as exc:
+            _emit_genie_warning("direct_canonical_genie_top_cohorts_failed", exc=exc)
+            return None
+        if rows:
+            top = rows[0]
+            has_legacy_permit_segment = any(
+                str(row.get("segment_code") or "").lower() == "permit" for row in rows
+            )
+            permit_note = (
+                " The legacy `permit` segment code is displayed as HELOC Intent from "
+                "Cotality HELOC propensity; it is not filed building-permit data."
+                if has_legacy_permit_segment
+                else ""
+            )
+            answer = (
+                f"I ranked the top cohorts from {segment_population_asset}. "
+                f"The largest current cohort is {_segment_display_label(top.get('segment_code'))} "
+                f"with {int(top.get('borrowers') or 0):,} borrowers.{permit_note}"
+            )
+        else:
+            answer = f"{segment_population_asset} returned no national cohort rows."
+        return _trusted_sql_response(
+            question=question,
+            sql_query=_CANONICAL_TOP_COHORTS_SQL,
+            trusted_assets=[segment_population_asset],
+            rows=rows,
+            answer=answer,
+        )
+
     if _retention_competitor_lien_list_question(question):
         try:
             rows = (
@@ -728,29 +1305,41 @@ def direct_canonical_response(
         )
 
     if _canonical_itm_zip_scope(question):
+        lead_queue_scope = _canonical_itm_lead_queue_zip_scope(question)
+        zip_sql = (
+            _CANONICAL_ITM_TOP_LEAD_QUEUE_ZIPS_SQL
+            if lead_queue_scope
+            else _CANONICAL_ITM_TOP_ZIPS_SQL
+        )
         try:
-            rows = _redact_genie_rows(sql_client.execute(_CANONICAL_ITM_TOP_ZIPS_SQL)) or []
+            rows = _redact_genie_rows(sql_client.execute(zip_sql)) or []
         except DatabricksSqlError as exc:
             _emit_genie_warning("direct_canonical_genie_itm_zips_failed", exc=exc)
             return None
-        zip_trusted_assets = [lead_population_asset]
+        zip_trusted_assets = [lead_population_asset] if lead_queue_scope else [borrower_asset]
         if rows:
             top = rows[0]
+            count_key = "in_the_money_leads" if lead_queue_scope else "in_the_money_borrowers"
+            grain_text = (
+                f"the ranked Lead Queue subset in {lead_population_asset}"
+                if lead_queue_scope
+                else f"the current borrower coverage in {borrower_asset}"
+            )
             answer = (
-                "I ranked ZIP codes by unique borrowers passing the refinance-economics screen "
-                f"from {lead_population_asset}. "
+                "I ranked ZIP codes by unique records passing the refinance-economics screen "
+                f"from {grain_text}. "
                 f"The current leader is ZIP {top.get('zip')} ({top.get('state')}) "
-                f"with {int(top.get('in_the_money_borrowers') or 0):,} borrowers; "
-                "the cohort action below carries these ZIP filters into Lead Queue."
+                f"with {int(top.get(count_key) or 0):,} "
+                f"{'leads' if lead_queue_scope else 'borrowers'}."
             )
         else:
             answer = (
-                "The ranked lead population returned no refinance-economics ZIP rows for "
-                "the current refreshed, marketing-eligible coverage."
+                "The trusted population returned no refinance-economics ZIP rows for "
+                "the requested grain."
             )
         return _trusted_sql_response(
             question=question,
-            sql_query=_CANONICAL_ITM_TOP_ZIPS_SQL,
+            sql_query=zip_sql,
             trusted_assets=zip_trusted_assets,
             rows=rows,
             answer=answer,

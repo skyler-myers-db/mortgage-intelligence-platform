@@ -67,7 +67,7 @@ questions:
     category: chart-planner
     question: Which zips have the most in-the-money refi candidates?
     must_cite:
-      - mip.gold.lead_population
+      - mip.gold.borrower_360
     forbid_keywords:
       - no borrowers
       - no candidates

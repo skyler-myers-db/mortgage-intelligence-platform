@@ -14,7 +14,7 @@ coverage can expand or contract as Cotality shares are connected.
 The 30 prompts below are grouped into 8 categories that mirror the
 shapes a lender will actually throw at the space:
 
-1. **Population sizing** — absolute counts over the addressable market.
+1. **Population sizing** — absolute counts over borrower coverage and the lead queue.
 2. **Ranked queries** — top-N borrowers / ZIPs / investors.
 3. **Segment drill-downs** — segment-level aggregates and breakdowns.
 4. **Temporal queries** — "today / yesterday / last 30 days / vs. last week".
@@ -47,20 +47,22 @@ Each entry has:
    SQL hint: `WHERE in_the_money = true GROUP BY state ORDER BY count(*) DESC`.
    Source: `mip.gold.lead_scores`.
 
-3. **How many borrowers have more than 35% modeled equity across the current Cotality data coverage?**
+3. **How many borrowers have at least 35% modeled equity across the current Cotality data coverage?**
    Intent: size the equity-capacity pool before applying HELOC intent or campaign filters.
    Expected skeleton: one integer ≥ 0, ≤ `borrower_360` row count.
    (The count is over the current Cotality data coverage — `borrower_360` — not the
    score-filtered `lead_population` subset. Equity-segment membership
    is orthogonal to the `opportunity_score >= 50` gate.)
-   SQL hint: `SELECT count(*) FROM mip.gold.borrower_360 WHERE equity_pct > 35`.
+   SQL hint: `SELECT count(*) FROM mip.gold.borrower_360 WHERE equity_pct >= 35`.
    Source: `mip.gold.borrower_360`.
 
 4. **What is the addressable market size — how many eligible borrowers across the current Cotality data coverage?**
-   Intent: denominator for every funnel metric.
-   Expected skeleton: one integer within `[100_000, 4_000_000]`.
-   SQL hint: `SELECT count(*) FROM mip.gold.lead_population`.
-   Source: `mip.gold.lead_population`, `mip.semantics.lead_generation_metric_view`.
+   Intent: Portfolio Builder denominator for the default marketable borrower population.
+   Expected skeleton: one integer ≥ 0 and ≤ `borrower_360` row count.
+   SQL hint: `SELECT count(*) FROM mip.gold.borrower_360 WHERE marketing_eligible = TRUE AND is_owner_occupied = TRUE AND current_lien_balance > 0 AND COALESCE(second_pos_amount, 0) = 0 AND equity_pct >= 15`.
+   Source: `mip.gold.borrower_360`.
+   Note: `mip.gold.lead_population` is the narrower ranked Lead Queue subset,
+   not the Portfolio Builder addressable-market denominator.
 
 ---
 
@@ -300,9 +302,9 @@ reported as governed Sales Ops state rather than a Unity Catalog asset.
 
 29. **Top borrowers in an LO queue ranked by aging and score.**
     Intent: daily call-list prioritization for a named LO.
-    Expected skeleton: if an LO email is supplied, route to Lead Queue with
-    `assigned_to=<email>&approval_status=approved`; otherwise ask for the LO
-    email. No names, no phone numbers, no street addresses.
+    Expected skeleton: route to Lead Queue with the selected loan officer,
+    approved status, and queued outreach filters; otherwise ask which loan
+    officer to review. No names, phone numbers, or street addresses.
     SQL hint: operational assignment comes from `mip_app.lead_assignments`;
     borrower score comes from `mip.gold.borrower_360` through the app API.
     Source: governed Sales Ops adapter plus Lead Queue.

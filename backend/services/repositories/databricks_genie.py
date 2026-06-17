@@ -624,7 +624,7 @@ def _canonical_genie_answer(
             _emit_genie_warning("canonical_genie_itm_zips_failed", exc=exc)
             return None
         rows = _redact_genie_rows(rows) or []
-        trusted_assets = [lead_population_asset]
+        trusted_assets = [borrower_asset]
         question_hash = _genie_question_hash(question)
         proof = _build_genie_proof(
             sql_query=_CANONICAL_ITM_TOP_ZIPS_SQL,
@@ -651,7 +651,7 @@ def _canonical_genie_answer(
             top = rows[0]
             answer = (
                 "I ranked ZIP codes by unique borrowers passing the refinance-economics screen "
-                f"from {lead_population_asset}. "
+                f"from {borrower_asset}. "
                 f"The current leader is ZIP {top.get('zip')} ({top.get('state')}) "
                 f"with {int(top.get('in_the_money_borrowers') or 0):,} borrowers; "
                 "the cohort action below carries these ZIP filters into Lead Queue."

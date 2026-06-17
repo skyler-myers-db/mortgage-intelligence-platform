@@ -181,15 +181,15 @@ LIMIT 10
         rows = [
             {
                 "borrower_id": row.get("borrower_id"),
-                "assigned_to_email": row.get("assigned_to_email"),
+                "assigned_to": "assigned LO" if row.get("assigned_to_email") else None,
                 "assigned_at": str(row.get("assigned_at") or ""),
             }
             for row in lakebase.fetchall(sql_query, {"lo_emails": sorted(visible_lo_emails or [])}, limit=10)
         ]
         answer = (
-            "Open Lead Queue with `assigned_to=<lo email>&approval_status=approved&outreach_status=queued` "
-            "to rank an LO's current queue by aging, score, and equity. The backend keeps assignment state "
-            f"in Lakebase and borrower rank in `{borrower_asset}`."
+            "Open Lead Queue with the selected loan officer, approval status, and queued outreach filters "
+            "to rank the current queue by aging, score, and equity. Assignment state stays in Lakebase; "
+            f"borrower rank comes from `{borrower_asset}`."
         )
     else:
         source_assets = ["mip_app.approvals", "mip_app.lead_assignments", "mip_app.call_dispositions"]

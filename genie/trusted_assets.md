@@ -6,14 +6,14 @@ returns must cite one of the tables or metric views below. Nothing else
 is in scope for this space.
 
 These assets are authored and refreshed by the Databricks bundle:
-raw Cotality shares land in `mip.raw.*`, silver features in
-`mip.silver.*`, and the trusted gold + semantic assets below are
-materialized by `pipelines/lakeflow/*` and exposed to the app via the
+raw Cotality shares land in `mip.raw.*`, intermediate features land in
+`mip.silver.*`, and only the trusted gold + semantic assets below are
+materialized for Genie by `pipelines/lakeflow/*` and exposed via the
 serverless SQL warehouse referenced in `databricks.yml`.
 
 | Asset | Kind | Grain | Why Module 0 cares |
 |---|---|---|---|
-| `mip.gold.lead_population` | table | one row per eligible borrower | Defines the addressable market; the denominator for every funnel metric. |
+| `mip.gold.lead_population` | table | one row per ranked, action-ready lead | Defines the Lead Queue subset after ranking and contactability filters. Do not use this as the broader Portfolio Builder denominator. |
 | `mip.gold.segment_population` | table | (segment_code, state) + '_ALL' national rollup | Powers the Segment Intelligence route's segment rows — count + mean score per (segment, state). |
 | `mip.gold.lead_scores` | table | one row per borrower | Canonical lead score — parity-pinned between `fn_lead_score.sql` and `backend/services/scoring.py`. |
 | `mip.gold.borrower_360` | table | one row per borrower | Feeds the Borrower 360 route, the Evidence Drawer, and the dossier preview rail. |
@@ -24,19 +24,18 @@ serverless SQL warehouse referenced in `databricks.yml`.
 | `mip.gold.funnel_snapshot_daily` | table | state × segment × snapshot date | Daily scored-population, approval, and outreach snapshots. Use for trends over time instead of inventing trend lines from current borrower rows. |
 | `mip.gold.county_rollup` | table | county geography rollup | Current discovered county coverage and marketable borrower rollups. |
 | `mip.gold.zip_rollup` | table | ZIP geography rollup | Current discovered ZIP coverage and marketable borrower rollups; ZIPs are identifiers, not measures. |
-| `mip.silver.listing_activity` | table | one row per Cotality listing record | Live MLS listing activity used for listed_for_sale, the Listed segment, listing evidence, and purchase-mortgage NBO paths. |
-| `mip.silver.heloc_propensity` | table | one row per CLIP | Live Cotality HELOC propensity score used for the HELOC Intent segment and HELOC NBO paths. Not a filed permit source. |
-| `mip.silver.refi_propensity` | table | one row per CLIP | Live Cotality refinance propensity score used as an additional intent signal alongside deterministic rate/equity math. |
-| `mip.semantics.lead_generation_metric_view` | metric view | one row per eligible borrower | Executive + Head-of-Growth funnel KPIs over the ranked lead queue. Segment filters must use `array_contains(segment_codes, '<segment_code>')`; aggregate counts must use `COUNT(DISTINCT clip)`. |
+| `mip.semantics.lead_generation_metric_view` | metric view | one row per ranked lead | Executive + Head-of-Growth funnel KPIs over the ranked lead queue. Segment filters must use `array_contains(segment_codes, '<segment_code>')`; aggregate counts must use `COUNT(DISTINCT clip)`. |
 | `mip.semantics.segment_performance_metric_view` | metric view | segment | Segment strategy and A/B decisions: mean score, rate spread, equity, approval rate, outreach rate. |
 | `mip.semantics.borrower_opportunity_metric_view` | metric view | state × product × trigger | Territory planning and campaign-budget allocation. Use `mip.gold.borrower_360.situs_cbsa_code` for MSA/CBSA questions. |
 
 ## Why each asset matters for Module 0
 
 ### `gold.lead_population`
-The addressable market. Every other gold asset joins back to this row set
-on `borrower_id`. Without it, the funnel has no denominator and the
-executive dashboard has no "how big is the pond" KPI.
+The ranked Lead Queue population. This is the action-ready subset used for
+operational lead lists and top-N lead prioritization after the gold borrower
+profile has been scored and filtered for contactability. It is not the same
+as the broader Portfolio Builder marketable population, which is computed
+from `gold.borrower_360` with the selected portfolio criteria.
 
 ### `gold.segment_population`
 Per-(segment_code, state) rollup of borrower counts + mean lead score +
@@ -76,8 +75,10 @@ are `rate_spread`, `equity`, `market_trend`, `competitor_lien`,
 `heloc_propensity`, and `refi_propensity`. Competitor-lien
 evidence is always `signal_type = 'competitor_lien'`; no alias is valid. Filed
 building-permit trigger feeds remain pending Cotality delivery and must be
-disclosed instead of treating missing permit data as zero demand. Each row carries a `source_table` citation back to the
-Cotality silver layer.
+disclosed instead of treating missing permit data as zero demand. Each row
+carries a `source_table` citation back to the Cotality-derived intermediate
+layer, but Genie should query this gold evidence table rather than reading
+silver tables directly.
 
 ### `gold.borrower_dossier`
 One row per `borrower_id` pre-joined with everything the
@@ -133,7 +134,9 @@ Anything outside the trusted assets listed above is
 - `mip.raw.*` — Cotality-share raw tables. Too wide, too noisy for
   conversational Q&A.
 - `mip.silver.*` — intermediate features. Mixed grain and not
-  governed with the same care as gold.
+  governed with the same care as gold. Listing, HELOC-propensity, and
+  refi-propensity signals are exposed through `gold.borrower_360`,
+  `gold.evidence_events`, and semantic views instead.
 - `mip_app.*` (Lakebase) — operational state (approvals, audit, sessions).
   Routed through the backend, not Genie.
 - Any other catalog on the workspace.
