@@ -1,41 +1,48 @@
 # Trusted Assets — Mortgage Lead Intelligence Genie Space
 
 The Mortgage Lead Intelligence Genie Space is grounded on a curated set of
-Unity Catalog assets from the `mip` catalog. Every answer Genie
-returns must cite one of the tables or metric views below. Nothing else
-is in scope for this space.
+Unity Catalog assets. The logical asset names below use the default `mip`
+catalog; customer deployments may render the same trusted assets into a
+different configured catalog. Every in-scope analytic answer Genie returns
+must cite one of the tables or metric views below. Refusals, source-gap
+answers, and off-topic redirects may cite no analytic table. Nothing else is
+in scope for this space.
 
 These assets are authored and refreshed by the Databricks bundle:
-raw Cotality shares land in `mip.raw.*`, intermediate features land in
-`mip.silver.*`, and only the trusted gold + semantic assets below are
-materialized for Genie by `pipelines/lakeflow/*` and exposed via the
-serverless SQL warehouse referenced in `databricks.yml`.
+source Delta Share tables are lifted from `cotality_mortgage_data.corelogic`,
+intermediate features land in `mip.silver.*`, gold tables are rebuilt by the
+`mip_refresh_scores` SQL task chain, and semantic views are applied from
+`sql/metric_views/*`. Genie is bound only to the trusted gold + semantic
+assets below through the serverless SQL warehouse referenced in
+`databricks.yml`.
 
 | Asset | Kind | Grain | Why Module 0 cares |
 |---|---|---|---|
-| `mip.gold.lead_population` | table | one row per ranked, action-ready lead | Defines the Lead Queue subset after ranking and contactability filters. Do not use this as the broader Portfolio Builder denominator. |
+| `mip.gold.lead_population` | table | one row per score-qualified ranked lead | Defines the Lead Queue ranking universe after the opportunity-score floor. API/UI filters such as marketing eligibility and consent make a row action-ready. Do not use this as the broader Portfolio Builder denominator. |
 | `mip.gold.segment_population` | table | (segment_code, state) + '_ALL' national rollup | Powers the Segment Intelligence route's segment rows — count + mean score per (segment, state). |
-| `mip.gold.lead_scores` | table | one row per borrower | Canonical lead score — parity-pinned between `fn_lead_score.sql` and `backend/services/scoring.py`. |
-| `mip.gold.borrower_360` | table | one row per borrower | Feeds the Borrower 360 route, the Evidence Drawer, and the dossier preview rail. |
+| `mip.gold.lead_scores` | table | one row per CLIP / borrower record | Canonical lead score — parity-pinned between `fn_lead_score.sql` and `backend/services/scoring.py`. |
+| `mip.gold.borrower_360` | table | one row per CLIP / borrower record | Feeds the Borrower 360 route, the Evidence Drawer, and the dossier preview rail. |
 | `mip.gold.borrower_dossier` | table | one row per borrower (denormalised) | Pre-joined single-row payload for `/api/borrowers/{id}`; carries an ARRAY<STRUCT> of up to 20 recent evidence events + top-3 trigger timeline. |
-| `mip.gold.evidence_events` | table | refreshed trigger evidence table | The "why now" signal — trigger events with UTC timestamps, confidence, and source citations. |
-| `mip.gold.source_readiness` | table | one row per source/feed | Non-PII readiness ledger for explaining live, pending, empty, synthetic-demo, and blocked feeds; use for data-gap answers instead of returning fake zero demand. |
+| `mip.gold.evidence_events` | table | refreshed trigger evidence table | The "why now" signal — trigger events with business/source timestamps, confidence, and source citations. |
+| `mip.gold.source_readiness` | table | one row per source/feed | Non-PII readiness ledger for explaining live, configured-empty, not-configured, roadmap, error, and synthetic-demo feeds; use for data-gap answers instead of returning fake zero demand. |
 | `mip.gold.lockin_cohort` | table | one row per borrower in the sub-3% 2020–2022 cohort | Size + composition of the rate-lock-in cohort that is retention / HELOC / cash-out addressable but will not rate-and-term refi. |
 | `mip.gold.funnel_snapshot_daily` | table | state × segment × snapshot date | Daily scored-population, approval, and outreach snapshots. Use for trends over time instead of inventing trend lines from current borrower rows. |
 | `mip.gold.county_rollup` | table | county geography rollup | Current discovered county coverage and marketable borrower rollups. |
 | `mip.gold.zip_rollup` | table | ZIP geography rollup | Current discovered ZIP coverage and marketable borrower rollups; ZIPs are identifiers, not measures. |
 | `mip.semantics.lead_generation_metric_view` | metric view | one row per ranked lead | Executive + Head-of-Growth funnel KPIs over the ranked lead queue. Segment filters must use `array_contains(segment_codes, '<segment_code>')`; aggregate counts must use `COUNT(DISTINCT clip)`. |
-| `mip.semantics.segment_performance_metric_view` | metric view | segment | Segment strategy and A/B decisions: mean score, rate spread, equity, approval rate, outreach rate. |
-| `mip.semantics.borrower_opportunity_metric_view` | metric view | state × product × trigger | Territory planning and campaign-budget allocation. Use `mip.gold.borrower_360.situs_cbsa_code` for MSA/CBSA questions. |
+| `mip.semantics.segment_performance_metric_view` | metric view | segment × state plus '_ALL' national rollup | Segment strategy and A/B decisions: count, mean opportunity score, approval rate, outreach rate, and snapshot deltas. Segment economics such as mean rate spread or mean equity come from borrower-grain assets. |
+| `mip.semantics.borrower_opportunity_metric_view` | metric view | one row per CLIP / borrower record | Borrower-grain opportunity surface with state, product, trigger, rate-spread, equity, and offer fields for read-time aggregation. Use `mip.gold.borrower_360.situs_cbsa_code` for MSA/CBSA questions. |
 
 ## Why each asset matters for Module 0
 
 ### `gold.lead_population`
-The ranked Lead Queue population. This is the action-ready subset used for
-operational lead lists and top-N lead prioritization after the gold borrower
-profile has been scored and filtered for contactability. It is not the same
-as the broader Portfolio Builder marketable population, which is computed
-from `gold.borrower_360` with the selected portfolio criteria.
+The ranked Lead Queue population. This is the score-qualified subset used for
+operational lead lists and top-N prioritization after the gold borrower
+profile has been scored. It carries marketing eligibility, consent, and
+suppression fields, but the row becomes action-ready only when API/UI filters
+or explicit SQL predicates keep eligible borrowers. It is not the same as the
+broader Portfolio Builder marketable population, which is computed from
+`gold.borrower_360` with the selected portfolio criteria.
 
 ### `gold.segment_population`
 Per-(segment_code, state) rollup of borrower counts + mean lead score +
@@ -50,6 +57,11 @@ Growth can answer "how big is each segment by coverage state" without a runtime
 EXPLODE. The rules themselves live in
 `sql/transformations/gold_borrower_360.sql` and
 `sql/uc_functions/fn_in_the_money.sql`.
+
+Listing-only questions must be answered from the live MLS/listing fields in
+`gold.borrower_360` or the `listed` segment membership. Do not pair those
+answers with Building Permit caveats unless the user explicitly asks about
+filed permits.
 
 ### `gold.lead_scores`
 The 0–100 lead score is the ranking used by the Lead Queue and Borrower 360
@@ -66,9 +78,9 @@ for unique borrower counts such as "how many borrowers are currently
 in-the-money?"
 
 ### `gold.evidence_events`
-Refreshed trigger evidence table rebuilt by the gold refresh job. Every card
-in the UI that shows "why now" reads from this table through the borrower
-dossier and evidence repository paths. Governed trigger `signal_type` values
+Refreshed trigger evidence table rebuilt by the gold refresh job. Borrower
+and offer surfaces that show "why now" read from this table through the
+borrower dossier and evidence repository paths. Governed trigger `signal_type` values
 are `rate_spread`, `equity`, `market_trend`, `competitor_lien`,
 `multi_property`, `absentee_mailing`, `corporate_owner`, `recent_refi`,
 `recent_payoff`, `recent_sale`, `foreclosure_stage`, `listing`,
@@ -116,27 +128,32 @@ resolve to. Defines the canonical funnel stages so every surface (app,
 dashboard, Genie) reports the same numbers.
 
 ### `semantics.segment_performance_metric_view`
-Segment-level KPIs: count, mean lead score, mean rate spread, mean equity,
-approval rate, outreach rate. Powers the Segment Intelligence cards and
-answers "which segment should I invest in next quarter".
+Segment-level KPIs: count, mean opportunity score, approval rate, outreach
+rate, and snapshot deltas. Powers the Segment Intelligence cards and answers
+"which segment should I invest in next quarter." It does **not** expose
+rate-spread or equity columns; questions about those economics should aggregate
+`gold.borrower_360` or `semantics.borrower_opportunity_metric_view`.
 
 ### `semantics.borrower_opportunity_metric_view`
-Borrower-opportunity rollups sliced by state, product, and trigger type.
-Powers territory-planning questions. MSA/CBSA and ZIP questions should use
-`mip.gold.borrower_360` directly because `situs_cbsa_code` and `zip` live on
-the gold borrower profile.
+Borrower-grain opportunity view over `gold.borrower_360`. It exposes state,
+segment membership, loan/product proxy, relationship flags, listing/propensity
+triggers, current-lender alias, rate spread, equity, in-the-money, balance,
+and opportunity score. Aggregate questions compute rollups at read time with
+`COUNT(DISTINCT clip)`, `AVG(rate_spread_bps)`, `AVG(equity_pct)`, and similar
+expressions. MSA/CBSA and ZIP questions should use `mip.gold.borrower_360`
+directly because `situs_cbsa_code` and `zip` live on the gold borrower profile.
 
 ## Out of scope for this space
 
 Anything outside the trusted assets listed above is
 **not** trusted for this space, specifically:
 
-- `mip.raw.*` — Cotality-share raw tables. Too wide, too noisy for
-  conversational Q&A.
+- `cotality_mortgage_data.corelogic.*` and `mip.raw.*` — raw/source-share
+  tables. Too wide, too noisy for conversational Q&A.
 - `mip.silver.*` — intermediate features. Mixed grain and not
   governed with the same care as gold. Listing, HELOC-propensity, and
   refi-propensity signals are exposed through `gold.borrower_360`,
   `gold.evidence_events`, and semantic views instead.
 - `mip_app.*` (Lakebase) — operational state (approvals, audit, sessions).
   Routed through the backend, not Genie.
-- Any other catalog on the workspace.
+- Any other catalog on the workspace outside the configured deployment catalog.

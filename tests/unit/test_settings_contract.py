@@ -137,3 +137,44 @@ def test_security_sensitive_defaults_are_fail_closed() -> None:
     assert settings.admin_emails == ""
     assert "entrada.ai" not in settings.admin_emails
     assert settings.mip_rum_enabled is False
+
+
+@pytest.mark.parametrize(
+    ("host", "token", "warehouse_id"),
+    [
+        (
+            "https://<workspace-host>.cloud.databricks.com",
+            "valid-token",
+            "da02d15a9490650b",
+        ),
+        (
+            "https://dbc-valid.cloud.databricks.com",
+            "<pat-or-leave-unset-for-oauth>",
+            "da02d15a9490650b",
+        ),
+        (
+            "https://dbc-valid.cloud.databricks.com",
+            "valid-token",
+            "<sql-warehouse-id>",
+        ),
+        (
+            "https://dbc.example",
+            "valid-token",
+            "da02d15a9490650b",
+        ),
+    ],
+)
+def test_databricks_placeholder_values_fail_startup_preflight(
+    host: str,
+    token: str,
+    warehouse_id: str,
+) -> None:
+    settings = Settings(
+        _env_file=None,
+        databricks_host=host,
+        databricks_token=token,
+        databricks_warehouse_id=warehouse_id,
+    )
+
+    with pytest.raises(RuntimeError, match="refuses to start"):
+        settings.require_databricks_creds()

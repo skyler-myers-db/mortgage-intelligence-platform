@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from backend.services.databricks_sql import DatabricksSqlClient, DatabricksSqlError
@@ -25,6 +26,7 @@ from backend.services.repositories.databricks_genie_canonical import (
     _CANONICAL_HELOC_COUNT_SQL,
     _CANONICAL_HELOC_RECOMMENDATION_BORROWERS_SQL,
     _CANONICAL_HELOC_TOP_ZIPS_SQL,
+    _CANONICAL_HOME_EQUITY_DISTRIBUTION_SQL,
     _CANONICAL_INVESTOR_SEGMENT_BY_STATE_SQL,
     _CANONICAL_INVESTOR_TOP_BY_RELATED_PROPERTY_SQL,
     _CANONICAL_ITM_BY_STATE_SQL,
@@ -38,6 +40,7 @@ from backend.services.repositories.databricks_genie_canonical import (
     _CANONICAL_ITM_TOP_ZIPS_SQL,
     _CANONICAL_LEAD_SCORE_WEEKLY_DISTRIBUTION_SQL,
     _CANONICAL_LISTED_BY_PRODUCT_RATE_SQL,
+    _CANONICAL_LISTED_DAYS_ON_MARKET_BY_STATE_SQL,
     _CANONICAL_LISTED_PURCHASE_TOP_SQL,
     _CANONICAL_LOCKIN_BY_STATE_SQL,
     _CANONICAL_LOCKIN_COHORT_SIZE_SQL,
@@ -63,6 +66,7 @@ from backend.services.repositories.databricks_genie_canonical import (
     _canonical_heloc_count_scope,
     _canonical_heloc_recommendation_borrowers_scope,
     _canonical_heloc_zip_scope,
+    _canonical_home_equity_distribution_scope,
     _canonical_in_the_money_count_scope,
     _canonical_investor_segment_by_state_scope,
     _canonical_investor_top_by_related_property_scope,
@@ -75,6 +79,7 @@ from backend.services.repositories.databricks_genie_canonical import (
     _canonical_itm_zip_scope,
     _canonical_lead_score_weekly_distribution_scope,
     _canonical_listed_by_product_rate_scope,
+    _canonical_listed_days_on_market_by_state_scope,
     _canonical_listed_purchase_scope,
     _canonical_lockin_by_state_scope,
     _canonical_lockin_median_rate_scope,
@@ -131,9 +136,11 @@ def _trusted_sql_response(
     rows: list[dict[str, Any]],
     answer: str,
     metric_value: str | None = None,
+    started_at: float | None = None,
 ) -> GenieMessageResponse:
     question_hash = _genie_question_hash(question)
     message_id = f"trusted-sql-{question_hash}"
+    elapsed_ms = int((time.monotonic() - started_at) * 1000) if started_at is not None else 0
     proof = _build_genie_proof(
         sql_query=sql_query,
         trusted_assets=trusted_assets,
@@ -141,7 +148,7 @@ def _trusted_sql_response(
         question=question,
         conversation_id="",
         message_id=message_id,
-        elapsed_ms=0,
+        elapsed_ms=elapsed_ms,
     )
     visualization = _plan_genie_visualization(question, rows)
     actions = _suggest_genie_actions(
@@ -158,7 +165,7 @@ def _trusted_sql_response(
     return GenieMessageResponse(
         conversation_id="",
         message_id=message_id,
-        elapsed_ms=0,
+        elapsed_ms=elapsed_ms,
         question_hash=question_hash,
         question=question,
         answer=answer,
@@ -255,6 +262,11 @@ def direct_canonical_response(
     sql_client: DatabricksSqlClient | None,
 ) -> GenieMessageResponse | None:
     """Return live trusted-SQL proof for narrow gold-grain count prompts."""
+    started_at = time.monotonic()
+
+    def trusted_response(**kwargs: Any) -> GenieMessageResponse:
+        return _trusted_sql_response(started_at=started_at, **kwargs)
+
     guide = _guide_response(question)
     if guide is not None:
         return guide
@@ -309,9 +321,11 @@ def direct_canonical_response(
         answer = (
             f"Across the current Cotality coverage, {count_int:,} borrowers pass the "
             f"refinance-economics screen. Their average rate spread is {spread_text}. "
-            f"This is calculated at the unique borrower grain from {borrower_asset}."
+            f"This is calculated at the unique borrower grain from {borrower_asset}; "
+            "it is broader than the marketing-eligible Lead Queue or any eligible-only "
+            "Segment page filter."
         )
-        return _trusted_sql_response(
+        return trusted_response(
             question=question,
             sql_query=_CANONICAL_ITM_COUNT_AVG_SPREAD_SQL,
             trusted_assets=trusted_assets,
@@ -363,13 +377,47 @@ def direct_canonical_response(
             f"it comes from {borrower_asset} and Building Permits are only used when "
             "that source is live."
         )
-        return _trusted_sql_response(
+        return trusted_response(
             question=question,
             sql_query=_CANONICAL_HELOC_COUNT_SQL,
             trusted_assets=trusted_assets,
             rows=rows,
             answer=answer,
             metric_value=f"{count_int:,}",
+        )
+
+    if _canonical_home_equity_distribution_scope(question):
+        try:
+            rows = _redact_genie_rows(
+                sql_client.execute(_CANONICAL_HOME_EQUITY_DISTRIBUTION_SQL)
+            ) or []
+        except DatabricksSqlError as exc:
+            _emit_genie_warning("direct_canonical_genie_equity_distribution_failed", exc=exc)
+            return None
+        if rows:
+            strongest = next(
+                (row for row in rows if str(row.get("equity_band") or "") == "75%+"),
+                rows[-1],
+            )
+            answer = (
+                f"I grouped borrowers from {borrower_asset} into modeled home-equity bands. "
+                "The 15% threshold is the baseline Portfolio Builder equity screen; "
+                "35% and higher is the home-equity capacity screen used for HELOC/cash-out "
+                "analysis. "
+                f"The strongest-equity band shown is {strongest.get('equity_band')} with "
+                f"{int(strongest.get('borrowers') or 0):,} borrowers."
+            )
+        else:
+            answer = (
+                f"{borrower_asset} returned no home-equity distribution rows for the "
+                "current refreshed coverage."
+            )
+        return trusted_response(
+            question=question,
+            sql_query=_CANONICAL_HOME_EQUITY_DISTRIBUTION_SQL,
+            trusted_assets=trusted_assets,
+            rows=rows,
+            answer=answer,
         )
 
     if _canonical_addressable_market_scope(question):
@@ -410,7 +458,7 @@ def direct_canonical_response(
             "lien, marketing eligible, and at least 15% modeled equity. It is not "
             f"the narrower ranked Lead Queue subset in {lead_population_asset}."
         )
-        return _trusted_sql_response(
+        return trusted_response(
             question=question,
             sql_query=_CANONICAL_ADDRESSABLE_MARKET_SQL,
             trusted_assets=[borrower_asset],
@@ -447,7 +495,7 @@ def direct_canonical_response(
             "queue sizing; use the addressable-market answer for the broader "
             "Portfolio Builder denominator."
         )
-        return _trusted_sql_response(
+        return trusted_response(
             question=question,
             sql_query=_CANONICAL_RANKED_LEAD_POPULATION_SQL,
             trusted_assets=[lead_population_asset],
@@ -485,7 +533,7 @@ def direct_canonical_response(
                 f"The trusted lead population returned no {state_name} ({state_code}) "
                 "borrowers for the current refreshed data coverage."
             )
-        return _trusted_sql_response(
+        return trusted_response(
             question=question,
             sql_query=_CANONICAL_TOP_BORROWERS_BY_STATE_SQL,
             trusted_assets=[lead_population_asset],
@@ -514,7 +562,7 @@ def direct_canonical_response(
                 "The ranked lead population returned no marketing-eligible borrower rows "
                 "for the current refreshed coverage."
             )
-        return _trusted_sql_response(
+        return trusted_response(
             question=question,
             sql_query=_CANONICAL_TOP_BORROWERS_GLOBAL_SQL,
             trusted_assets=[lead_population_asset],
@@ -545,7 +593,7 @@ def direct_canonical_response(
                 "Building Permits signals remain pending and are not treated as "
                 "zero demand."
             )
-        return _trusted_sql_response(
+        return trusted_response(
             question=question,
             sql_query=_CANONICAL_HELOC_TOP_ZIPS_SQL,
             trusted_assets=trusted_assets,
@@ -580,7 +628,7 @@ def direct_canonical_response(
                 "The trusted borrower table returned no opt-in, marketing-eligible "
                 "state-segment-offer lanes for the current refreshed data coverage."
             )
-        return _trusted_sql_response(
+        return trusted_response(
             question=question,
             sql_query=_CANONICAL_STRATEGY_BOARD_SQL,
             trusted_assets=trusted_assets,
@@ -610,7 +658,7 @@ def direct_canonical_response(
                 "The trusted borrower table returned no cash-out state rows for "
                 "the current refreshed data coverage."
             )
-        return _trusted_sql_response(
+        return trusted_response(
             question=question,
             sql_query=_CANONICAL_CASH_OUT_TOP_STATE_SQL,
             trusted_assets=trusted_assets,
@@ -641,7 +689,7 @@ def direct_canonical_response(
                 "The trusted borrower table returned no marketing-eligible cash-out or "
                 "home-equity candidates for the current refreshed coverage."
             )
-        return _trusted_sql_response(
+        return trusted_response(
             question=question,
             sql_query=_CANONICAL_TOP_CASH_OUT_BY_EQUITY_SQL,
             trusted_assets=[borrower_asset],
@@ -677,7 +725,7 @@ def direct_canonical_response(
                 "The trusted borrower table returned no marketing-eligible listed-for-sale "
                 "borrowers for the current refreshed coverage."
             )
-        return _trusted_sql_response(
+        return trusted_response(
             question=question,
             sql_query=_CANONICAL_LISTED_PURCHASE_TOP_SQL,
             trusted_assets=listed_assets,
@@ -709,7 +757,7 @@ def direct_canonical_response(
                 "The trusted borrower table returned no marketing-eligible Investor / "
                 "Multi-Property rows with related property count >= 2."
             )
-        return _trusted_sql_response(
+        return trusted_response(
             question=question,
             sql_query=_CANONICAL_INVESTOR_TOP_BY_RELATED_PROPERTY_SQL,
             trusted_assets=[borrower_asset],
@@ -750,7 +798,7 @@ def direct_canonical_response(
             "HELOC propensity to justify home-equity, and keep filed building permits separate "
             "because that source is not the live HELOC signal."
         )
-        return _trusted_sql_response(
+        return trusted_response(
             question=question,
             sql_query=_CANONICAL_REFI_EQUITY_SIGNAL_COMPARE_SQL,
             trusted_assets=trusted_assets,
@@ -779,7 +827,7 @@ def direct_canonical_response(
                 "The governed evidence table returned no refinance-driver rows for the current "
                 "marketable refinance lanes. That means I will not invent a driver ranking."
             )
-        return _trusted_sql_response(
+        return trusted_response(
             question=question,
             sql_query=_CANONICAL_REFI_DRIVER_SQL,
             trusted_assets=[borrower_asset, evidence_asset],
@@ -816,7 +864,7 @@ def direct_canonical_response(
             f"{rows[0]['overlap_borrowers']:,} are both. Use the overlap for the cleanest "
             "refinance story; use top-tier outside in-the-money when another offer lane is stronger."
         )
-        return _trusted_sql_response(
+        return trusted_response(
             question=question,
             sql_query=_CANONICAL_ITM_TOP_TIER_COMPARE_SQL,
             trusted_assets=trusted_assets,
@@ -846,7 +894,7 @@ def direct_canonical_response(
                 "The trusted segment population returned no Investor / Multi-Property "
                 "state rows for the current refreshed data coverage."
             )
-        return _trusted_sql_response(
+        return trusted_response(
             question=question,
             sql_query=_CANONICAL_INVESTOR_SEGMENT_BY_STATE_SQL,
             trusted_assets=[segment_population_asset],
@@ -869,7 +917,7 @@ def direct_canonical_response(
             if rows
             else "The trusted borrower table returned no segment rows with rate-spread values."
         )
-        return _trusted_sql_response(
+        return trusted_response(
             question=question,
             sql_query=_CANONICAL_MEAN_RATE_SPREAD_BY_SEGMENT_SQL,
             trusted_assets=[borrower_asset],
@@ -899,7 +947,7 @@ def direct_canonical_response(
                 "The segment performance view returned no national approval-rate rows for "
                 "the current refreshed coverage."
             )
-        return _trusted_sql_response(
+        return trusted_response(
             question=question,
             sql_query=_CANONICAL_SEGMENT_APPROVAL_RATE_SQL,
             trusted_assets=[segment_performance_asset],
@@ -925,7 +973,7 @@ def direct_canonical_response(
             )
         else:
             answer = "The trusted borrower table returned no state rows for lead-score comparison."
-        return _trusted_sql_response(
+        return trusted_response(
             question=question,
             sql_query=_CANONICAL_MEAN_LEAD_SCORE_BY_STATE_SQL,
             trusted_assets=[borrower_asset],
@@ -948,7 +996,7 @@ def direct_canonical_response(
             else f"{evidence_asset} recorded no evidence events yesterday; I am not treating "
             "that as zero borrower demand, only as a trigger-volume readout for that date."
         )
-        return _trusted_sql_response(
+        return trusted_response(
             question=question,
             sql_query=_CANONICAL_EVIDENCE_EVENTS_YESTERDAY_SQL,
             trusted_assets=[evidence_asset],
@@ -977,7 +1025,7 @@ def direct_canonical_response(
                 f"{funnel_asset} does not yet have two weekly national snapshots in the "
                 "last 14 days, so I cannot make a week-over-week distribution claim."
             )
-        return _trusted_sql_response(
+        return trusted_response(
             question=question,
             sql_query=_CANONICAL_LEAD_SCORE_WEEKLY_DISTRIBUTION_SQL,
             trusted_assets=[funnel_asset],
@@ -1001,7 +1049,7 @@ def direct_canonical_response(
             )
         else:
             answer = f"{funnel_asset} returned no national approval snapshots in the last 30 days."
-        return _trusted_sql_response(
+        return trusted_response(
             question=question,
             sql_query=_CANONICAL_APPROVAL_TREND_30D_SQL,
             trusted_assets=[funnel_asset],
@@ -1025,7 +1073,7 @@ def direct_canonical_response(
             if rows
             else f"{evidence_asset} returned no quarter-to-date evidence events."
         )
-        return _trusted_sql_response(
+        return trusted_response(
             question=question,
             sql_query=_CANONICAL_EVIDENCE_EVENTS_THIS_QUARTER_SQL,
             trusted_assets=[evidence_asset],
@@ -1052,7 +1100,7 @@ def direct_canonical_response(
             )
         else:
             answer = "The trusted borrower table returned no In-the-Money offer-mix rows."
-        return _trusted_sql_response(
+        return trusted_response(
             question=question,
             sql_query=_CANONICAL_ITM_OFFER_MIX_SQL,
             trusted_assets=[borrower_asset],
@@ -1098,7 +1146,7 @@ def direct_canonical_response(
                 "The trusted borrower table returned no marketing-eligible HELOC recommendation "
                 "rows for the current refreshed coverage."
             )
-        return _trusted_sql_response(
+        return trusted_response(
             question=question,
             sql_query=_CANONICAL_HELOC_RECOMMENDATION_BORROWERS_SQL,
             trusted_assets=[borrower_asset],
@@ -1121,9 +1169,43 @@ def direct_canonical_response(
             if rows
             else "The trusted borrower table returned no listed-for-sale rows for this breakdown."
         )
-        return _trusted_sql_response(
+        return trusted_response(
             question=question,
             sql_query=_CANONICAL_LISTED_BY_PRODUCT_RATE_SQL,
+            trusted_assets=[borrower_asset],
+            rows=rows,
+            answer=answer,
+        )
+
+    if _canonical_listed_days_on_market_by_state_scope(question):
+        try:
+            rows = (
+                _redact_genie_rows(
+                    sql_client.execute(_CANONICAL_LISTED_DAYS_ON_MARKET_BY_STATE_SQL)
+                )
+                or []
+            )
+        except DatabricksSqlError as exc:
+            _emit_genie_warning("direct_canonical_genie_listed_days_by_state_failed", exc=exc)
+            return None
+        if rows:
+            top = rows[0]
+            avg_dom = top.get("avg_listing_days_on_market")
+            avg_dom_text = f"{float(avg_dom):.1f}" if avg_dom is not None else "unknown"
+            answer = (
+                f"I grouped the live Listed-for-Sale segment by state from {borrower_asset}. "
+                f"The top state by listed borrower count is {top.get('state')} with "
+                f"{int(top.get('listed_borrowers') or 0):,} listed borrowers and "
+                f"{avg_dom_text} average listing days on market."
+            )
+        else:
+            answer = (
+                "The trusted borrower table returned no listed-for-sale rows with state "
+                "coverage for this days-on-market breakdown."
+            )
+        return trusted_response(
+            question=question,
+            sql_query=_CANONICAL_LISTED_DAYS_ON_MARKET_BY_STATE_SQL,
             trusted_assets=[borrower_asset],
             rows=rows,
             answer=answer,
@@ -1141,7 +1223,7 @@ def direct_canonical_response(
             f"The 2020-2022 sub-3% lock-in cohort has {count_int:,} borrowers in "
             f"{lockin_asset}."
         )
-        return _trusted_sql_response(
+        return trusted_response(
             question=question,
             sql_query=_CANONICAL_LOCKIN_COHORT_SIZE_SQL,
             trusted_assets=[lockin_asset],
@@ -1166,7 +1248,7 @@ def direct_canonical_response(
         ]
         median_text = f"{float(median):,.3f}%" if median is not None else "not available"
         answer = f"The median origination rate in {lockin_asset} is {median_text}."
-        return _trusted_sql_response(
+        return trusted_response(
             question=question,
             sql_query=_CANONICAL_LOCKIN_MEDIAN_RATE_SQL,
             trusted_assets=[lockin_asset],
@@ -1190,7 +1272,7 @@ def direct_canonical_response(
             )
         else:
             answer = f"{lockin_asset} returned no state rows for the current refreshed coverage."
-        return _trusted_sql_response(
+        return trusted_response(
             question=question,
             sql_query=_CANONICAL_LOCKIN_BY_STATE_SQL,
             trusted_assets=[lockin_asset],
@@ -1222,7 +1304,7 @@ def direct_canonical_response(
             )
         else:
             answer = f"{segment_population_asset} returned no national cohort rows."
-        return _trusted_sql_response(
+        return trusted_response(
             question=question,
             sql_query=_CANONICAL_TOP_COHORTS_SQL,
             trusted_assets=[segment_population_asset],
@@ -1261,7 +1343,7 @@ def direct_canonical_response(
                 "in the last 30 days. This is a live result from the modeled "
                 "`competitor_lien` signal_type, not a stale `lien-change` alias."
             )
-        return _trusted_sql_response(
+        return trusted_response(
             question=question,
             sql_query=_CANONICAL_RETENTION_COMPETITOR_LIEN_LIST_SQL,
             trusted_assets=[borrower_asset, evidence_asset],
@@ -1301,7 +1383,7 @@ def direct_canonical_response(
             f"There are {count_int:,} current customers in the retention-risk cohort. "
             f"This uses the modeled retention signal in {borrower_asset}."
         )
-        return _trusted_sql_response(
+        return trusted_response(
             question=question,
             sql_query=_CANONICAL_CURRENT_CUSTOMER_RETENTION_RISK_SQL,
             trusted_assets=trusted_assets,
@@ -1343,7 +1425,7 @@ def direct_canonical_response(
                 "The trusted population returned no refinance-economics ZIP rows for "
                 "the requested grain."
             )
-        return _trusted_sql_response(
+        return trusted_response(
             question=question,
             sql_query=zip_sql,
             trusted_assets=zip_trusted_assets,
@@ -1370,7 +1452,7 @@ def direct_canonical_response(
                 "The trusted borrower table returned no refinance-economics state rows "
                 "for the current refreshed data coverage."
             )
-        return _trusted_sql_response(
+        return trusted_response(
             question=question,
             sql_query=_CANONICAL_ITM_BY_STATE_SQL,
             trusted_assets=trusted_assets,
@@ -1400,7 +1482,7 @@ def direct_canonical_response(
                         "market rows. Module 0 has `situs_cbsa_code` for MSA-style "
                         "grouping, but no separate MSA-name lookup is loaded."
                     )
-                return _trusted_sql_response(
+                return trusted_response(
                     question=question,
                     sql_query=_CANONICAL_MSA_SCORE_SQL,
                     trusted_assets=trusted_assets,
@@ -1446,7 +1528,7 @@ def direct_canonical_response(
             f"within the current gold evaluation-share scope from {borrower_asset}. "
             "This is a city-scoped unique borrower count, not the overall share total."
         )
-        return _trusted_sql_response(
+        return trusted_response(
             question=question,
             sql_query=_CANONICAL_ITM_COUNT_BY_CITY_SQL,
             trusted_assets=trusted_assets,
@@ -1488,9 +1570,10 @@ def direct_canonical_response(
     answer = (
         f"There are {count_int:,} borrowers passing the refinance-economics screen{geo_text}. "
         f"This is a unique borrower count from {borrower_asset} at the "
-        "gold borrower grain, so multi-segment borrowers are counted once."
+        "gold borrower grain, so multi-segment borrowers are counted once. It is broader "
+        "than the marketing-eligible Lead Queue or any eligible-only Segment page filter."
     )
-    return _trusted_sql_response(
+    return trusted_response(
         question=question,
         sql_query=sql_query,
         trusted_assets=trusted_assets,

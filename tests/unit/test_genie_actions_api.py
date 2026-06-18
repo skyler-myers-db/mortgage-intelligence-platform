@@ -256,6 +256,34 @@ def test_genie_message_rejects_unowned_conversation_id() -> None:
     assert res.json()["detail"] == "conversation_id is not owned by the current actor"
 
 
+@pytest.mark.parametrize("question", ["", "   ", "\n\n"])
+def test_genie_message_rejects_blank_questions_before_repository(question: str) -> None:
+    class _ExplodingRepo:
+        def respond(
+            self,
+            question: str,
+            conversation_id: str | None = None,
+        ) -> GenieMessageResponse:
+            _ = question, conversation_id
+            raise AssertionError("blank Genie question reached repository")
+
+    prior_repo = app.dependency_overrides.get(get_genie_answer_repository)
+    app.dependency_overrides[get_genie_answer_repository] = lambda: _ExplodingRepo()
+    try:
+        res = client.post(
+            "/api/genie/message",
+            json={"question": question},
+            headers=ACTOR_HEADERS,
+        )
+    finally:
+        if prior_repo is None:
+            app.dependency_overrides.pop(get_genie_answer_repository, None)
+        else:
+            app.dependency_overrides[get_genie_answer_repository] = prior_repo
+
+    assert res.status_code == 422
+
+
 def test_genie_message_refuses_protected_class_prompts() -> None:
     res = client.post(
         "/api/genie/message",
@@ -771,6 +799,38 @@ def test_genie_message_flags_known_city_outside_footprint_geography() -> None:
     body = res.json()
     assert body["source"] == "out_of_footprint"
     assert "Atlanta, Georgia" in body["answer"]
+    assert body["row_count"] == 0
+    assert body["table_rows"] == []
+
+
+@pytest.mark.parametrize(
+    ("question", "expected_label"),
+    [
+        ("How many borrowers in Tokyo are currently in the money?", "Tokyo, Japan"),
+        ("How many borrowers are in London?", "London, United Kingdom"),
+        ("Break down Canadian borrowers by ZIP.", "Canada"),
+        ("How many borrowers in Mexico City have refinance economics?", "Mexico City, Mexico"),
+        ("How many borrowers in Vancouver have HELOC intent?", "Vancouver, Canada"),
+    ],
+)
+def test_genie_message_flags_common_foreign_geographies_outside_footprint(
+    question: str,
+    expected_label: str,
+) -> None:
+    _install_footprint(_TEST_COVERAGE)
+    try:
+        res = client.post(
+            "/api/genie/message",
+            json={"question": question},
+            headers=ACTOR_HEADERS,
+        )
+    finally:
+        _reset_state_footprint_resolver_for_tests(None)
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["source"] == "out_of_footprint"
+    assert expected_label in body["answer"]
     assert body["row_count"] == 0
     assert body["table_rows"] == []
 

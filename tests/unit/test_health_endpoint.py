@@ -101,7 +101,28 @@ def test_health_reports_open_breaker_state(monkeypatch: pytest.MonkeyPatch) -> N
 
     res = client.get("/api/admin/health", headers=ADMIN_HEADERS)
     payload = res.json()
+    assert payload["status"] == "degraded"
+    assert payload["dependencies"]["warehouse"] == "down"
     assert payload["circuit_breakers"]["warehouse"] == "open"
+
+
+def test_authenticated_health_degrades_when_genie_breaker_open(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(health_probes, "probe_warehouse", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_lakebase", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_genie", lambda: True)
+
+    cb = resilience.get_breaker("genie", failure_threshold=1, cooldown_s=60)
+    cb.record_failure()
+    assert cb.state == "open"
+
+    res = client.get("/api/health", headers={"X-Forwarded-Email": "ops@example.com"})
+    assert res.status_code == 200
+    payload = res.json()
+    assert payload["status"] == "degraded"
+    assert payload["dependencies"]["genie"] == "down"
+    assert payload["circuit_breakers"]["genie"] == "open"
 
 
 def test_health_reports_genie_down_and_degrades_status(

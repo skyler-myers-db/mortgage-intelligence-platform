@@ -59,6 +59,8 @@ from typing import Any
 
 import pytest
 
+from backend.config.settings import is_placeholder_databricks_config
+
 logger = logging.getLogger(__name__)
 
 # Segment thresholds (must match docs/data-contract-module0.md §5 +
@@ -128,7 +130,7 @@ def _cli_token() -> tuple[str, str, str] | None:
                     host = v
                 elif not wh and k == "DATABRICKS_WAREHOUSE_ID":
                     wh = v
-    if not host or not wh:
+    if not host or not wh or is_placeholder_databricks_config(host=host, warehouse_id=wh):
         return None
     return host, token, wh
 
@@ -140,6 +142,8 @@ def _creds() -> tuple[str, str, str] | None:
     token = os.environ.get("DATABRICKS_TOKEN")
     wh = os.environ.get("DATABRICKS_WAREHOUSE_ID")
     if host and token and wh:
+        if is_placeholder_databricks_config(host=host, warehouse_id=wh, token=token):
+            return None
         if not host.startswith("http"):
             host = "https://" + host
         return host.rstrip("/"), token, wh
@@ -148,9 +152,21 @@ def _creds() -> tuple[str, str, str] | None:
     if fallback is None:
         return None
     host, token, wh = fallback
+    if is_placeholder_databricks_config(host=host, warehouse_id=wh, token=token):
+        return None
     if not host.startswith("http"):
         host = "https://" + host
     return host.rstrip("/"), token, wh
+
+
+def test_placeholder_databricks_env_values_skip_live_parity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DATABRICKS_HOST", "https://<workspace-host>.cloud.databricks.com")
+    monkeypatch.setenv("DATABRICKS_TOKEN", "<pat-or-leave-unset-for-oauth>")
+    monkeypatch.setenv("DATABRICKS_WAREHOUSE_ID", "<sql-warehouse-id>")
+
+    assert _creds() is None
 
 
 # ---------------------------------------------------------------------------

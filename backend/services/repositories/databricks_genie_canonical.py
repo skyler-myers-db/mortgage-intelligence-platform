@@ -37,6 +37,41 @@ FROM {_BORROWER_360}
 WHERE equity_pct >= 35
 """.strip()
 
+_CANONICAL_HOME_EQUITY_DISTRIBUTION_SQL = f"""
+WITH banded AS (
+  SELECT CASE
+           WHEN equity_pct IS NULL THEN 'Unknown'
+           WHEN equity_pct < 0 THEN '< 0%'
+           WHEN equity_pct < 15 THEN '0-14%'
+           WHEN equity_pct < 35 THEN '15-34%'
+           WHEN equity_pct < 50 THEN '35-49%'
+           WHEN equity_pct < 75 THEN '50-74%'
+           ELSE '75%+'
+         END AS equity_band
+       , CASE
+           WHEN equity_pct IS NULL THEN 99
+           WHEN equity_pct < 0 THEN 0
+           WHEN equity_pct < 15 THEN 1
+           WHEN equity_pct < 35 THEN 2
+           WHEN equity_pct < 50 THEN 3
+           WHEN equity_pct < 75 THEN 4
+           ELSE 5
+         END AS sort_order
+       , equity_pct
+       , refreshed_at
+  FROM {_BORROWER_360}
+)
+SELECT equity_band
+     , CAST(COUNT(*) AS BIGINT) AS borrowers
+     , CAST(ROUND(100.0 * COUNT(*) / SUM(COUNT(*)) OVER (), 1) AS DOUBLE)
+         AS borrower_share_pct
+     , CAST(ROUND(AVG(equity_pct), 1) AS DOUBLE) AS avg_equity_pct
+     , MAX(refreshed_at) AS refreshed_at
+FROM banded
+GROUP BY equity_band, sort_order
+ORDER BY sort_order
+""".strip()
+
 _CANONICAL_ADDRESSABLE_MARKET_SQL = f"""
 SELECT COUNT(*) AS marketable_population
      , MAX(refreshed_at) AS refreshed_at
@@ -499,6 +534,22 @@ GROUP BY COALESCE(NULLIF(first_pos_loan_type, ''), 'Unknown')
 ORDER BY listed_borrowers DESC, first_pos_loan_type ASC
 """.strip()
 
+_CANONICAL_LISTED_DAYS_ON_MARKET_BY_STATE_SQL = f"""
+SELECT state
+     , COUNT(*) AS listed_borrowers
+     , CAST(ROUND(AVG(listing_days_on_market), 1) AS DOUBLE)
+         AS avg_listing_days_on_market
+     , CAST(ROUND(AVG(listing_price), 0) AS BIGINT) AS avg_listing_price
+     , MAX(refreshed_at) AS refreshed_at
+FROM {_BORROWER_360}
+WHERE listed_for_sale = TRUE
+  AND state IS NOT NULL
+  AND TRIM(state) <> ''
+GROUP BY state
+ORDER BY listed_borrowers DESC, avg_listing_days_on_market ASC, state ASC
+LIMIT 5
+""".strip()
+
 _CANONICAL_LOCKIN_COHORT_SIZE_SQL = f"""
 SELECT COUNT(*) AS lockin_borrowers
      , MAX(refreshed_at) AS refreshed_at
@@ -884,8 +935,6 @@ def _has_unsupported_geo_scope(question: str, q: str) -> bool:
         "metro",
         "state by state",
         "by state",
-        "break down",
-        "breakdown",
     )
     if any(term in q for term in geo_terms):
         return True
@@ -928,6 +977,40 @@ def _canonical_heloc_count_scope(question: str) -> bool:
     asks_count = any(term in q for term in ("how many", "count", "number of", "total"))
     has_equity_threshold = "35" in q and "equity" in q
     return has_equity_capacity and asks_count and has_equity_threshold
+
+
+def _canonical_home_equity_distribution_scope(question: str) -> bool:
+    q = _normalized_question(question)
+    if _has_unsupported_geo_scope(question, q):
+        return False
+    equity_terms = (
+        "home equity",
+        "modeled equity",
+        "equity pct",
+        "equity percent",
+        "equity percentage",
+        "equity distribution",
+    )
+    distribution_terms = (
+        "distribution",
+        "histogram",
+        "bucket",
+        "buckets",
+        "band",
+        "bands",
+        "break down",
+        "breakdown",
+        "by equity",
+        "by home equity",
+    )
+    return (
+        ("equity" in q or any(term in q for term in equity_terms))
+        and any(term in q for term in distribution_terms)
+        and (
+            any(term in q for term in ("borrower", "borrowers", "coverage", "portfolio", "population", "show"))
+            or any(term in q for term in ("modeled equity", "home equity", "equity band", "equity bands"))
+        )
+    )
 
 
 def _canonical_addressable_market_scope(question: str) -> bool:
@@ -1372,6 +1455,38 @@ def _canonical_listed_by_product_rate_scope(question: str) -> bool:
         and any(term in q for term in ("loan product", "product"))
         and any(term in q for term in ("average current rate", "avg current rate", "current rate"))
         and any(term in q for term in ("break down", "breakdown", "by"))
+    )
+
+
+def _canonical_listed_days_on_market_by_state_scope(question: str) -> bool:
+    q = _normalized_question(question)
+    listed_terms = ("listed-for-sale", "listed for sale", "listing", "listings", "mls")
+    days_terms = (
+        "days on market",
+        "day on market",
+        "listing days",
+        "market days",
+        "dom",
+    )
+    state_terms = ("by state", "state", "states")
+    ranking_terms = (
+        "top",
+        "leading",
+        "lead",
+        "highest",
+        "largest",
+        "most",
+        "break down",
+        "breakdown",
+    )
+    return (
+        any(term in q for term in listed_terms)
+        and any(term in q for term in days_terms)
+        and any(term in q for term in state_terms)
+        and (
+            any(term in q for term in ("average", "avg", "mean"))
+            or any(term in q for term in ranking_terms)
+        )
     )
 
 

@@ -5,7 +5,8 @@
 # genie/trusted_assets.md (prose) and genie/sample_questions.md (talk track).
 #
 # The space sits on top of Module 0 gold tables + semantic models. Every
-# answer must cite the Unity Catalog table or metric view it drew from.
+# in-scope analytic answer must cite the Unity Catalog table or metric view
+# it drew from; refusals and data-gap redirects may have no analytic source.
 
 name: Mortgage Lead Intelligence
 description: >-
@@ -13,9 +14,11 @@ description: >-
   the Mortgage Intelligence Platform. Backed by Cotality public records,
   liens, AVM, mortgage market data, MLS listings, and Cotality propensity
   scores. Building-permit filings remain pending Cotality delivery and must be
-  disclosed as unavailable until that feed is live. Every answer must cite the UC table or metric view it
-  drew from so Growth, Lending, and Sales leaders can trust the recommendation
-  before outreach.
+  disclosed as unavailable until that feed is live. Every in-scope analytic
+  answer must cite the UC table or metric view it drew from so Growth,
+  Lending, and Sales leaders can trust the recommendation before outreach.
+  Refusals, source-gap answers, and off-topic redirects may cite no analytic
+  table.
 
 catalog: "{catalog}"
 schema: gold
@@ -88,6 +91,14 @@ instructions: |
      scores, evidence, geography (within refreshed gold data coverage),
      offers, conversions, or any metric the trusted assets cover.
      → Proceed to SQL generation per the ALWAYS / NEVER rules below.
+
+     MLS/listing guard inside bucket B: if a prompt mentions MLS,
+     listings, listed-for-sale, or for-sale segment activity and does not
+     ask about filed building permits, treat it as a live bucket-B analytics
+     question. Use `mip.gold.borrower_360.listed_for_sale` or
+     `array_contains(segment_codes, 'listed')`. Do not add Building Permit,
+     pending-feed, data-gap, or source-readiness caveats to listing-only
+     answers.
 
      Geography guard inside bucket B: when a named city, state, ZIP,
      county, territory, or country returns zero rows or a zero count,
@@ -234,7 +245,9 @@ instructions: |
       STEP 0 bucket A must fire before any filed-permit SQL generation. Do not
       treat the missing permit feed as zero demand. MLS listed-for-sale and
       HELOC propensity are exposed through gold/semantic assets; do not query
-      silver directly.
+      silver directly. For listing-only prompts, answer from the live
+      MLS/listing gold fields directly and do not volunteer permit or
+      source-gap caveats.
     - Never use thresholds tighter than the data-contract defaults
       unless the user explicitly asks for stricter cuts: in-the-money
       ≥ 75 bps spread and ≥ 15% equity, HELOC eligible ≥ 35%
@@ -272,8 +285,10 @@ trusted_assets:
   - name: mip.gold.lead_population
     kind: table
     description: >-
-      One row per ranked, action-ready Lead Queue borrower for Module 0.
-      Use this for operational top-N lead lists. Use mip.gold.borrower_360
+      One row per score-qualified ranked Lead Queue borrower for Module 0.
+      Use this for operational top-N lead ranking. A row is action-ready only
+      when marketing eligibility, consent, and suppression predicates are
+      explicitly applied by SQL or by the app API/UI. Use mip.gold.borrower_360
       with explicit filters for broader Portfolio Builder addressable-market
       denominators.
     column_configs:
@@ -418,16 +433,23 @@ trusted_assets:
   - name: mip.semantics.segment_performance_metric_view
     kind: metric_view
     description: >-
-      Segment-level KPIs: count, mean lead score, mean rate spread,
-      mean equity, approval rate, outreach rate. Use for segment
-      strategy and A/B decisions.
+      Segment-level KPIs at segment/state and national '_ALL' grains:
+      count, mean opportunity score, approval rate, outreach rate, and
+      snapshot deltas. Use for segment strategy and A/B decisions. It does
+      not expose borrower economics columns such as rate_spread_bps or
+      equity_pct; aggregate those from mip.gold.borrower_360 or
+      mip.semantics.borrower_opportunity_metric_view.
 
   - name: mip.semantics.borrower_opportunity_metric_view
     kind: metric_view
     description: >-
-      Borrower-grain opportunity scoring by region, product, and trigger
-      fields. Use array_contains(segment_codes, '<segment_code>') for
-      segment membership questions so counts remain unique at CLIP grain.
+      Borrower-grain opportunity surface over gold.borrower_360. It exposes
+      region, segment membership, product proxy, trigger flags, relationship
+      flags, current-lender alias, rate_spread_bps, equity_pct, in_the_money,
+      current_lien_balance, and opportunity_score as plain row columns. Use
+      read-time aggregations such as COUNT(DISTINCT clip), AVG(rate_spread_bps),
+      and AVG(equity_pct); use array_contains(segment_codes, '<segment_code>')
+      for segment membership questions so counts remain unique at CLIP grain.
 
 example_question_sqls:
   - question: How many borrowers are currently in-the-money?
@@ -590,6 +612,35 @@ example_question_sqls:
           AND array_contains(segment_codes, 'equity')
         GROUP BY state
         ORDER BY borrowers DESC
+  - question: Break down the Listed-for-Sale segment by loan product and average current rate.
+    sql:
+      - |
+        SELECT
+          first_pos_loan_type,
+          COUNT(*) AS listed_borrowers,
+          ROUND(AVG(current_rate), 2) AS avg_current_rate,
+          MAX(refreshed_at) AS refreshed_at
+        FROM mip.gold.borrower_360
+        WHERE listed_for_sale = TRUE
+          AND first_pos_loan_type IS NOT NULL
+          AND current_rate IS NOT NULL
+        GROUP BY first_pos_loan_type
+        ORDER BY listed_borrowers DESC
+  - question: Among listed-for-sale borrowers, what is the average listing days on market by state for the top five states?
+    sql:
+      - |
+        SELECT
+          state,
+          COUNT(*) AS listed_borrowers,
+          ROUND(AVG(listing_days_on_market), 1) AS avg_listing_days_on_market,
+          ROUND(AVG(listing_price), 0) AS avg_listing_price,
+          MAX(refreshed_at) AS refreshed_at
+        FROM mip.gold.borrower_360
+        WHERE listed_for_sale = TRUE
+          AND state IS NOT NULL
+        GROUP BY state
+        ORDER BY listed_borrowers DESC, avg_listing_days_on_market ASC, state ASC
+        LIMIT 5
   - question: Simulate a stricter top-tier threshold by state.
     sql:
       - |

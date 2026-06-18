@@ -834,3 +834,30 @@ def _isolate_fastapi_dependency_state() -> Iterator[None]:
         app.dependency_overrides.update(_BASE_DEPENDENCY_OVERRIDES)
         _reset_fake_dependency_state_for_tests()
         _reset_runtime_singletons_for_tests()
+
+
+@pytest.fixture(autouse=True)
+def _disable_outreach_lifecycle_sync_for_unit_routes(
+    monkeypatch: pytest.MonkeyPatch,
+    request: pytest.FixtureRequest,
+) -> None:
+    """Keep route-level unit tests hermetic when approval endpoints enqueue sync.
+
+    The lifecycle trigger implementation has dedicated coverage in
+    ``tests/unit/test_job_trigger.py``. Unit tests that exercise approve/reject
+    through ``TestClient`` should not reach the Databricks warehouse from a
+    background task, because Starlette waits for that task before returning.
+    Individual tests can still monkeypatch ``backend.api.outreach`` again when
+    they need to assert enqueue behavior.
+    """
+    test_path = str(request.node.path)
+    if test_path.endswith("tests/unit/test_job_trigger.py"):
+        return
+
+    from backend.api import outreach as outreach_mod
+
+    monkeypatch.setattr(
+        outreach_mod,
+        "enqueue_lifecycle_trigger",
+        lambda background, *, reason="approval": None,
+    )

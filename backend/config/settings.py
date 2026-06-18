@@ -34,6 +34,60 @@ _MISSING_CREDS_MSG = (
 )
 
 
+_PLACEHOLDER_TOKEN_VALUES = {
+    "<pat-or-leave-unset-for-oauth>",
+    "<token>",
+    "your-token",
+    "your-databricks-token",
+}
+_PLACEHOLDER_WAREHOUSE_VALUES = {
+    "<sql-warehouse-id>",
+    "<warehouse-id>",
+    "sql-warehouse-id",
+    "warehouse-id",
+    "your-warehouse-id",
+}
+_PLACEHOLDER_HOSTS = {
+    "<workspace-host>.cloud.databricks.com",
+    "dbc.example",
+    "example.cloud.databricks.com",
+}
+
+
+def _has_angle_bracket_placeholder(value: str | None) -> bool:
+    text = (value or "").strip()
+    return "<" in text and ">" in text
+
+
+def _normalized_databricks_host(value: str | None) -> str:
+    text = (value or "").strip().lower()
+    text = re.sub(r"^https?://", "", text)
+    return text.rstrip("/")
+
+
+def is_placeholder_databricks_config(
+    *,
+    host: str | None = None,
+    warehouse_id: str | None = None,
+    token: str | None = None,
+) -> bool:
+    """Return True for documented/example Databricks config values."""
+    normalized_host = _normalized_databricks_host(host)
+    normalized_warehouse = (warehouse_id or "").strip().lower()
+    normalized_token = (token or "").strip().lower()
+    return (
+        _has_angle_bracket_placeholder(host)
+        or _has_angle_bracket_placeholder(warehouse_id)
+        or _has_angle_bracket_placeholder(token)
+        or normalized_host in _PLACEHOLDER_HOSTS
+        or normalized_host.endswith(".example")
+        or normalized_host.endswith(".example.com")
+        or normalized_host.endswith(".example.invalid")
+        or normalized_warehouse in _PLACEHOLDER_WAREHOUSE_VALUES
+        or normalized_token in _PLACEHOLDER_TOKEN_VALUES
+    )
+
+
 def _running_under_pytest() -> bool:
     """True when the current process was launched by pytest.
 
@@ -375,7 +429,7 @@ class Settings(BaseSettings):
         """
         host = self.databricks_host
         warehouse = self.databricks_warehouse_id
-        if not host or not warehouse:
+        if not host or not warehouse or is_placeholder_databricks_config(host=host, warehouse_id=warehouse):
             raise RuntimeError(_MISSING_CREDS_MSG)
         # Normalise host shape: strip trailing slash, ensure scheme.
         if not host.startswith("http"):
@@ -384,6 +438,8 @@ class Settings(BaseSettings):
 
         if self.databricks_token is not None:
             literal = self.databricks_token.get_secret_value()
+            if is_placeholder_databricks_config(token=literal):
+                raise RuntimeError(_MISSING_CREDS_MSG)
             return host, (lambda: literal), warehouse
 
         sdk_provider = _build_workspace_identity_provider(host)

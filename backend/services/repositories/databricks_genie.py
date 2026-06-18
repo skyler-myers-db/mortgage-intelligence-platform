@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 
 from backend.config.settings import settings
@@ -113,6 +114,10 @@ from backend.services.repositories.databricks_genie_visualization import (
 from backend.services.resilience import DependencyDownError
 from backend.services.scoring import offer_display_label
 
+_SOURCE_LINE_RE = re.compile(
+    r"(?im)^\s*source\s*:\s*`?[A-Za-z_][\w-]*\.[A-Za-z_]\w*\.[A-Za-z_]\w*`?\.?\s*$"
+)
+
 
 class DatabricksGenieRepository:
     """Real Genie, then an honest warming-up message when the breaker opens.
@@ -123,10 +128,20 @@ class DatabricksGenieRepository:
     response rather than silently replaying analytic content.
     """
 
-    _WARMING_MESSAGE = (
-        "Genie is warming up — try that question again in a few seconds. "
-        "Live answers come straight from the Mortgage Lead Intelligence "
-        "Genie space once the connection is ready."
+    _CONNECTING_MESSAGE = (
+        "Genie is connecting to the live Mortgage Lead Intelligence space. "
+        "Try again in a few seconds once the connection is ready. No data was "
+        "generated for this question."
+    )
+    _BREAKER_OPEN_MESSAGE = (
+        "Genie is temporarily unavailable because the answer-path circuit "
+        "breaker is open after recent failures. Wait for the cooldown or check "
+        "health before retrying. No data was generated for this question."
+    )
+    _RETRIES_EXHAUSTED_MESSAGE = (
+        "Genie could not return a governed answer after exhausting the retry "
+        "budget. Check the Databricks Genie connection and retry after health "
+        "recovers. No data was generated for this question."
     )
 
     def __init__(
@@ -147,7 +162,10 @@ class DatabricksGenieRepository:
             return direct_canonical
         breaker_state = self._genie.resilient.breaker.state
         if breaker_state == "open":
-            return self._degraded(question)
+            return self._degraded(
+                question,
+                kind=DependencyDownError.KIND_BREAKER_OPEN,
+            )
         try:
             result = self._genie.ask(question, conversation_id=conversation_id)
             if _needs_genie_sql_repair(question, result):
@@ -156,8 +174,8 @@ class DatabricksGenieRepository:
                     original=result,
                     conversation_id=conversation_id,
                 )
-        except DependencyDownError:
-            return self._degraded(question)
+        except DependencyDownError as exc:
+            return self._degraded(question, kind=exc.kind)
         except GenieClientError:
             # Underlying Genie surfaced an unrecoverable response (401,
             # 500, malformed JSON). Re-raise so the router translates
@@ -196,17 +214,28 @@ class DatabricksGenieRepository:
     # Internals
     # ------------------------------------------------------------------
 
-    def _degraded(self, question: str) -> GenieMessageResponse:
-        """Honest "Genie is warming up" message with no fabricated content.
+    def _degraded(
+        self,
+        question: str,
+        *,
+        kind: str = DependencyDownError.KIND_WARMING_UP,
+    ) -> GenieMessageResponse:
+        """Honest dependency-down message with no fabricated content.
 
         Prompt suggestions are questions only. The degraded path does not
         inspect local analytics and cannot return rows, counts, or
         borrower examples.
         """
+        if kind == DependencyDownError.KIND_BREAKER_OPEN:
+            answer = self._BREAKER_OPEN_MESSAGE
+        elif kind == DependencyDownError.KIND_RETRIES_EXHAUSTED:
+            answer = self._RETRIES_EXHAUSTED_MESSAGE
+        else:
+            answer = self._CONNECTING_MESSAGE
         return GenieMessageResponse(
             conversation_id="",
             question=question,
-            answer=self._WARMING_MESSAGE,
+            answer=answer,
             source="degraded",
             trusted_assets=[],
             question_hash=_genie_question_hash(question),
@@ -304,13 +333,13 @@ def _adapt_genie_response(
             blocked_answer = f"{blocked_answer} Known data gap: {' '.join(gaps)}"
         proof = _build_genie_proof(
             sql_query=None,
-            trusted_assets=trusted_assets,
+            trusted_assets=[],
             rows=[],
             question=question,
             conversation_id=result.conversation_id,
             message_id=result.message_id,
             elapsed_ms=result.elapsed_ms,
-            reasoning_trace=result.thoughts,
+            reasoning_trace=[],
         )
         if gaps:
             proof = proof.model_copy(update={"known_data_gaps": gaps})
@@ -322,7 +351,7 @@ def _adapt_genie_response(
             question=question,
             answer=blocked_answer,
             source="policy_blocked",
-            trusted_assets=trusted_assets,
+            trusted_assets=[],
             sql_query=None,
             row_count=0,
             proof=proof,
@@ -343,7 +372,7 @@ def _adapt_genie_response(
             question_hash=question_hash,
             question=question,
             trusted_assets=trusted_assets,
-            reasoning_trace=result.thoughts,
+            reasoning_trace=[],
         )
     proof = _build_genie_proof(
         sql_query=result.sql_query,
@@ -372,7 +401,7 @@ def _adapt_genie_response(
         elapsed_ms=result.elapsed_ms,
         question_hash=question_hash,
         question=question,
-        answer=result.answer_text or "",
+        answer=_ensure_answer_cites_source(result.answer_text, trusted_assets),
         source="genie",
         trusted_assets=trusted_assets,
         sql_query=result.sql_query,
@@ -382,6 +411,18 @@ def _adapt_genie_response(
         actions=actions,
         table_rows=rows,
     )
+
+
+def _ensure_answer_cites_source(answer: str | None, trusted_assets: list[str]) -> str:
+    """Append a source line when trusted live Genie text omits one."""
+
+    text = (answer or "").strip()
+    if not trusted_assets or _SOURCE_LINE_RE.search(text):
+        return text
+    source = trusted_assets[0]
+    if not text:
+        return f"Source: {source}"
+    return f"{text}\n\nSource: {source}"
 
 
 def _canonical_genie_answer(

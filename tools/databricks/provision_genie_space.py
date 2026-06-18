@@ -95,12 +95,22 @@ def _load_env_local() -> None:
     chokes on.
     """
     try:
-        from dotenv import load_dotenv
+        from dotenv import dotenv_values
     except ImportError:  # pragma: no cover — dotenv is pinned in requirements.txt
         return
     env_local = REPO_ROOT / ".env.local"
     if env_local.exists():
-        load_dotenv(env_local, override=False)
+        for key, value in dotenv_values(env_local).items():
+            if value is None or key in os.environ:
+                continue
+            # Catalog routing is a deployment control, not a local default.
+            # A stale .env.local MIP_DEFAULT_CATALOG can update the live Genie
+            # space with zero bound tables; scripts/deploy.sh exports the
+            # intended catalog before invoking this tool. Standalone operators
+            # should use --catalog or an explicit exported env var.
+            if key in {"MIP_DEFAULT_CATALOG", "MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS"}:
+                continue
+            os.environ[key] = value
 
 DEFAULT_SPACE_NAME = "Mortgage Lead Intelligence"
 DEFAULT_PROFILE = "DEFAULT"
@@ -364,6 +374,15 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="SQL warehouse to bind the space to (required when creating).",
     )
     parser.add_argument(
+        "--catalog",
+        default=None,
+        help=(
+            "Unity Catalog catalog for trusted assets. Defaults to explicitly "
+            "exported MIP_DEFAULT_CATALOG, otherwise mip; .env.local catalog "
+            "values are intentionally ignored."
+        ),
+    )
+    parser.add_argument(
         "--spec",
         default=str(SPACE_YAML),
         help="Path to the space YAML (default: genie/mortgage_lead_intelligence_space.yml).",
@@ -554,42 +573,50 @@ def _verify_round_trip(client: Any, space_id: str) -> dict[str, Any]:
 def _run_smoke_test(client: Any, space_id: str) -> bool:
     """Ask the space a deterministic warm-up question.
 
-    If the space is still initializing (common on a freshly-created space
-    with empty tables), we surface a friendly note rather than failing —
-    the space itself is still correctly provisioned.
+    The SDK's ``start_conversation_and_wait`` object can expose the original
+    prompt as ``content`` even when no answer attachment was produced. Use the
+    same stdlib client the FastAPI app uses and reject an exact question echo
+    so this check cannot become a false-positive "Genie works" signal.
     """
     print()
     print(f"smoke-test: asking Genie {DEFAULT_SMOKE_QUESTION!r} (timeout {SMOKE_TIMEOUT_SECONDS}s)...")
     try:
-        # SDK 0.103 start_conversation_and_wait does NOT accept a timeout
-        # kwarg in all versions; pass only the documented positional args.
-        msg = client.genie.start_conversation_and_wait(space_id, DEFAULT_SMOKE_QUESTION)
+        if str(REPO_ROOT) not in sys.path:
+            sys.path.insert(0, str(REPO_ROOT))
+        from backend.services.genie_client import GenieClient
+
+        host = getattr(client.config, "host", None)
+        auth_header = (client.config.authenticate() or {}).get("Authorization") or ""
+        token = auth_header.removeprefix("Bearer ").strip()
+        if not host or not token:
+            print("  smoke-test failed: could not resolve host/token from SDK auth", file=sys.stderr)
+            return False
+        response = GenieClient(
+            host=host,
+            token=token,
+            space_id=space_id,
+            timeout_s=SMOKE_TIMEOUT_SECONDS,
+        ).ask(DEFAULT_SMOKE_QUESTION)
     except Exception as exc:  # noqa: BLE001
         print(
             f"  smoke-test failed: {exc}",
             file=sys.stderr,
         )
         return False
-    # Genie responses are composed of attachments; print the first text answer
-    # we can find without over-interpreting the shape.
-    printed = False
-    for attr in ("content", "text", "message"):
-        text = getattr(msg, attr, None)
-        if text:
-            print(f"  answer ({attr}): {text}")
-            printed = True
-            break
-    if not printed and hasattr(msg, "as_dict"):
-        d = msg.as_dict()
-        print(f"  response keys: {sorted(d.keys())}")
-        # Best-effort: pull the first attachment text if present
-        atts = d.get("attachments") or []
-        if atts and isinstance(atts, list):
-            print(f"  first attachment: {json.dumps(atts[0], indent=2)[:800]}")
+    answer = (response.answer_text or "").strip()
+    if not answer or answer.casefold() == DEFAULT_SMOKE_QUESTION.casefold():
+        print("  smoke-test failed: Genie returned no answer beyond the prompt echo", file=sys.stderr)
+        return False
+    print(f"  answer: {answer[:800]}")
+    if response.sql_query:
+        print(f"  sql:    {response.sql_query[:800]}")
     return True
 
 
 def run(args: argparse.Namespace) -> int:
+    if args.catalog:
+        os.environ["MIP_DEFAULT_CATALOG"] = args.catalog
+
     spec_path = Path(args.spec)
     if not spec_path.exists():
         print(f"error: spec not found at {spec_path}", file=sys.stderr)
@@ -603,6 +630,7 @@ def run(args: argparse.Namespace) -> int:
     print(f"  target name:   {target_name}")
     print(f"  trusted assets:{len(spec.trusted_assets)}")
     print(f"  sample qs:     {len(spec.sample_questions)}")
+    print(f"  catalog:       {spec.catalog}")
     print(f"  profile:       {args.profile}")
     print(f"  dry-run:       {args.dry_run}")
 

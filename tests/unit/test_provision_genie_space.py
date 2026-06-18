@@ -23,8 +23,10 @@ from __future__ import annotations
 
 import importlib
 import json
+import os
 import re
 import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -71,6 +73,54 @@ def _default_catalog(
     monkeypatch.setattr(settings, "mip_default_catalog", "mip")
 
 
+def test_env_local_does_not_override_catalog_routing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("MIP_DEFAULT_CATALOG", raising=False)
+    monkeypatch.delenv("DATABRICKS_HOST", raising=False)
+    monkeypatch.setattr(pgs, "REPO_ROOT", tmp_path)
+    (tmp_path / ".env.local").write_text(
+        "MIP_DEFAULT_CATALOG=mip_demo\n"
+        "DATABRICKS_HOST=https://dbc.example\n",
+        encoding="utf-8",
+    )
+
+    pgs._load_env_local()
+
+    assert "MIP_DEFAULT_CATALOG" not in os.environ
+    assert os.environ["DATABRICKS_HOST"] == "https://dbc.example"
+
+
+def test_smoke_test_rejects_prompt_echo(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    class _FakeConfig:
+        host = "https://dbc.example"
+
+        def authenticate(self) -> dict[str, str]:
+            return {"Authorization": "Bearer token"}
+
+    class _FakeWorkspaceClient:
+        config = _FakeConfig()
+
+    class _EchoGenieClient:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        def ask(self, question: str) -> types.SimpleNamespace:
+            return types.SimpleNamespace(answer_text=question, sql_query=None)
+
+    import backend.services.genie_client as genie_client_mod
+
+    monkeypatch.setattr(genie_client_mod, "GenieClient", _EchoGenieClient)
+
+    assert pgs._run_smoke_test(_FakeWorkspaceClient(), "space-id") is False
+    err = capsys.readouterr().err
+    assert "prompt echo" in err
+
+
 def test_spec_loads_all_trusted_assets_and_questions() -> None:
     spec = pgs.SpaceSpec.load(pgs.SPACE_YAML)
     assert spec.name == "Mortgage Lead Intelligence"
@@ -89,6 +139,40 @@ def test_genie_allowlist_docs_match_provisioned_assets() -> None:
     for asset in _expected_assets():
         assert asset in instructions
         assert asset in trusted_assets_doc
+
+
+def test_genie_asset_descriptions_match_current_metric_contracts() -> None:
+    spec = pgs.SpaceSpec.load(pgs.SPACE_YAML)
+    by_name = {str(asset["name"]): str(asset["description"]) for asset in spec.trusted_assets}
+    trusted_assets_doc = (REPO_ROOT / "genie" / "trusted_assets.md").read_text(encoding="utf-8")
+    instructions = (REPO_ROOT / "genie" / "instructions.md").read_text(encoding="utf-8")
+    bootstrap_ddl = (REPO_ROOT / "sql" / "ddl" / "005_semantics_views.sql").read_text(
+        encoding="utf-8"
+    )
+
+    assert "Every in-scope analytic answer Genie returns" in trusted_assets_doc
+    assert "Every answer Genie\nreturns must cite" not in trusted_assets_doc
+    assert "raw Cotality shares land in `mip.raw.*`" not in trusted_assets_doc
+
+    lead_description = by_name["mip.gold.lead_population"]
+    assert "score-qualified ranked Lead Queue borrower" in lead_description
+    assert "action-ready only when marketing eligibility" in lead_description
+    assert "after ranking and contactability filters" not in trusted_assets_doc
+    assert "score-qualified ranked Lead Queue borrower" in instructions
+
+    segment_description = by_name["mip.semantics.segment_performance_metric_view"]
+    assert "count, mean opportunity score, approval rate, outreach rate" in segment_description
+    assert "does not expose borrower economics columns" in segment_description
+    assert "mean lead score, mean rate spread" not in segment_description
+    assert "mean score, rate spread, equity" not in trusted_assets_doc
+
+    opportunity_description = by_name["mip.semantics.borrower_opportunity_metric_view"]
+    assert "Borrower-grain opportunity surface" in opportunity_description
+    assert "plain row columns" in opportunity_description
+    assert "COUNT(DISTINCT clip)" in opportunity_description
+    assert "state × product × trigger" not in trusted_assets_doc
+    assert "one row per CLIP / borrower record" in trusted_assets_doc
+    assert "plain columns, not materialized measure columns" in bootstrap_ddl
 
 
 def test_backend_genie_allowlists_match_provisioned_assets() -> None:

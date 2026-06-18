@@ -204,6 +204,8 @@ Each entry has:
     Expected skeleton: grouped rows for listed borrowers with loan product/current-rate context.
     SQL hint: `SELECT first_pos_loan_type, COUNT(*) AS listed_borrowers, ROUND(AVG(current_rate), 2) AS avg_current_rate FROM mip.gold.borrower_360 WHERE listed_for_sale = TRUE GROUP BY first_pos_loan_type ORDER BY listed_borrowers DESC`.
     Source: `mip.gold.borrower_360`.
+    Related state-planning prompt: **Among listed-for-sale borrowers, what is the average listing days on market by state for the top five states?**
+    Expected skeleton: top states by listed borrower count with average MLS days-on-market and optional average listing price, sourced from `mip.gold.borrower_360`.
 
 ---
 

@@ -1,6 +1,6 @@
 """Live Genie regression + adversarial suite — gated on creds.
 
-Runs the 25 curated sample questions from ``genie/sample_questions.md``
+Runs the 26 curated sample questions from ``genie/sample_questions.md``
 and the 25 adversarial prompts catalogued in ``genie/regression_suite.md``
 against the live ``mortgage_lead_intelligence`` Genie Space.
 
@@ -30,7 +30,7 @@ Grading:
 
 No state is mutated; conversations auto-expire on the workspace side.
 
-At 5s pacing the 50-prompt suite runs in ~4.2 minutes of wall-clock
+At 5s pacing the 51-prompt suite runs in ~4.3 minutes of wall-clock
 Genie time plus cold-start; the 65s 429 backoff only fires if the
 warehouse has been hammered by another run.
 """
@@ -219,8 +219,9 @@ class Prompt:
 
 
 # ---------------------------------------------------------------------------
-# Sample cohort — 25 curated prompts grouped by the 7 categories in
-# ``genie/sample_questions.md``. Numbering (S1..S25) matches that file.
+# Sample cohort — 26 curated prompts grouped by the 7 categories in
+# ``genie/sample_questions.md``. S20B covers the listing days-on-market
+# app-regression prompt without renumbering the established S21..S25 IDs.
 # ---------------------------------------------------------------------------
 
 SAMPLE_PROMPTS: list[Prompt] = [
@@ -409,6 +410,16 @@ SAMPLE_PROMPTS: list[Prompt] = [
         cohort="sample",
         expect_answer=True,
         tags=["mls-live", "listed-for-sale"],
+    ),
+    Prompt(
+        pid="S20B",
+        question=(
+            "Among listed-for-sale borrowers, what is the average listing days "
+            "on market by state for the top five states?"
+        ),
+        cohort="sample",
+        expect_answer=True,
+        tags=["mls-live", "listed-for-sale", "days-on-market", "state"],
     ),
     # 1.6 Lock-in cohort
     Prompt(
@@ -712,13 +723,13 @@ def live_genie_client() -> GenieClient:
         )
     host, token, space_id = creds
     # Cold-start can take 5-15s; allow a generous timeout since the
-    # suite fires 50 prompts sequentially.
+    # suite fires 51 prompts sequentially.
     return GenieClient(host=host, token=token, space_id=space_id, timeout_s=120)
 
 
 # Genie API rate limits (observed Apr 2026): ~15 requests per minute per
 # space; beyond that `HTTP 429 REQUEST_LIMIT_EXCEEDED: retry after 60s`.
-# 50 prompts at 5s pacing -> 250s of pacing + ~5s/call backend time
+# 51 prompts at 5s pacing -> 255s of pacing + ~5s/call backend time
 # ~= ~8.5 min total, well under the 30-min nightly job budget. A repeated
 # 429 still fails once the published cooldown has been honored twice.
 _GENIE_PROMPT_PACING_S: float = 5.0
@@ -731,7 +742,7 @@ def _pace_genie_requests() -> Any:
     """Autouse fixture that sleeps `_GENIE_PROMPT_PACING_S` between live
     calls inside this module. Zero-cost on cred-free smoke tests (the
     `live_genie_client` fixture hasn't run, so there's no client to
-    pace) but keeps the full 50-prompt cohort under the rate limit.
+    pace) but keeps the full 51-prompt cohort under the rate limit.
     """
     import time as _time
     yield
@@ -971,15 +982,12 @@ def _grade(prompt: Prompt, response: GenieResponse) -> Verdict:
                 elapsed_ms=elapsed,
             )
         if "mls-live" in prompt.tags:
-            missing_terms = [
-                term
-                for term in (
-                    "mip.gold.borrower_360",
-                    "first_pos_loan_type",
-                    "current_rate",
-                )
-                if term not in sql.lower()
-            ]
+            expected_terms = ["mip.gold.borrower_360"]
+            if "days-on-market" in prompt.tags:
+                expected_terms.extend(["listing_days_on_market", "state"])
+            else:
+                expected_terms.extend(["first_pos_loan_type", "current_rate"])
+            missing_terms = [term for term in expected_terms if term not in sql.lower()]
             has_listed_predicate = (
                 "listed_for_sale" in sql.lower()
                 or ("segment_codes" in sql.lower() and "'listed'" in sql.lower())
@@ -1295,15 +1303,15 @@ def test_registry_size_matches_regression_suite_md() -> None:
     the nightly becomes a lie.
     """
     # Expected cohort sizes per the markdown registry.
-    assert len(SAMPLE_PROMPTS) == 25, (
-        f"SAMPLE_PROMPTS has {len(SAMPLE_PROMPTS)}; expected 25 to match "
-        "genie/regression_suite.md §1 (25 curated prompts)"
+    assert len(SAMPLE_PROMPTS) == 26, (
+        f"SAMPLE_PROMPTS has {len(SAMPLE_PROMPTS)}; expected 26 to match "
+        "genie/regression_suite.md §1 (26 curated prompts)"
     )
     assert len(ADVERSARIAL_PROMPTS) == 25, (
         f"ADVERSARIAL_PROMPTS has {len(ADVERSARIAL_PROMPTS)}; expected 25 "
         "to match genie/regression_suite.md §2 (25 adversarial prompts)"
     )
-    assert len(ALL_PROMPTS) == 50
+    assert len(ALL_PROMPTS) == 51
 
 
 def test_prompt_ids_are_unique() -> None:
@@ -1554,6 +1562,43 @@ def test_grading_rubric_accepts_live_listed_segment_code_sql() -> None:
     )
     verdict = _grade(prompt, clean)  # type: ignore[arg-type]
     assert verdict.verdict == "pass", verdict
+
+
+def test_grading_rubric_accepts_live_listed_days_on_market_sql() -> None:
+    prompt = next(p for p in SAMPLE_PROMPTS if p.pid == "S20B")
+    clean = _FakeResponse(
+        answer=(
+            "Listed borrowers are grouped by state with average listing days "
+            "on market. Source: mip.gold.borrower_360."
+        ),
+        sql=(
+            "SELECT state, COUNT(*) AS listed_borrowers, "
+            "ROUND(AVG(listing_days_on_market), 1) AS avg_listing_days_on_market "
+            "FROM mip.gold.borrower_360 "
+            "WHERE listed_for_sale = TRUE "
+            "GROUP BY state"
+        ),
+        rows=[{"state": "CA", "listed_borrowers": 10, "avg_listing_days_on_market": 41.9}],
+    )
+    verdict = _grade(prompt, clean)  # type: ignore[arg-type]
+    assert verdict.verdict == "pass", verdict
+
+
+def test_grading_rubric_rejects_listed_days_on_market_without_dom_sql() -> None:
+    prompt = next(p for p in SAMPLE_PROMPTS if p.pid == "S20B")
+    wrong_shape = _FakeResponse(
+        answer="Listed borrowers by state. Source: mip.gold.borrower_360.",
+        sql=(
+            "SELECT state, COUNT(*) AS listed_borrowers "
+            "FROM mip.gold.borrower_360 "
+            "WHERE listed_for_sale = TRUE "
+            "GROUP BY state"
+        ),
+        rows=[{"state": "CA", "listed_borrowers": 10}],
+    )
+    verdict = _grade(prompt, wrong_shape)  # type: ignore[arg-type]
+    assert verdict.verdict == "fail", verdict
+    assert "listing_days_on_market" in verdict.rationale
 
 
 def test_percentile_helper_behaves_on_empty_and_short_inputs() -> None:

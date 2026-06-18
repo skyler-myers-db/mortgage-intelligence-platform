@@ -4,11 +4,11 @@ Contract under test:
 
 1. Breaker CLOSED + happy path: calls ``ResilientGenieClient.ask`` and
    adapts the response to ``GenieMessageResponse(source="genie")``.
-2. Breaker OPEN: returns the honest "warming up" message with
+2. Breaker OPEN: returns the honest dependency-down message with
    ``source="degraded"``. No local answer catalog, borrower rows, counts,
    or source claims are served while Genie reconnects.
-3. Breaker OPEN + unknown question: also returns the honest "warming
-   up" message with ``source="degraded"``, never fabricated data.
+3. Breaker OPEN + unknown question: also returns a degraded dependency
+   message with ``source="degraded"``, never fabricated data.
 4. ``DependencyDownError`` bubbled from the client with the breaker
    just opening: returns the same degraded message.
 5. ``GenieClientError`` from the live client (401, 500, malformed JSON)
@@ -252,6 +252,16 @@ class _SmartGenieSampleSqlClient:
                     "refreshed_at": "2026-06-17T00:00:00Z",
                 }
             ]
+        if "listed_for_sale = true" in sql and "avg(listing_days_on_market)" in sql:
+            return [
+                {
+                    "state": "IL",
+                    "listed_borrowers": 20,
+                    "avg_listing_days_on_market": 18.4,
+                    "avg_listing_price": 425000,
+                    "refreshed_at": "2026-06-17T00:00:00Z",
+                }
+            ]
         if "listed_for_sale = true" in sql:
             return [
                 {
@@ -347,6 +357,7 @@ def test_breaker_closed_calls_live_genie_and_stamps_source() -> None:
     assert result.source == "genie"
     assert result.question == "How many borrowers are in the money?"
     assert "123" in result.answer
+    assert "Source: mip.gold.lead_scores" in result.answer
     assert result.table_rows == [{"count": 123}]
     assert "mip.gold.lead_scores" in result.trusted_assets
     assert result.message_id == "msg-1"
@@ -1626,6 +1637,12 @@ def test_untrusted_sql_is_policy_blocked_and_not_rendered() -> None:
         sql_result_rows=[{"count": 1}],
         conversation_id="conv-policy",
         message_id="msg-policy",
+        thoughts=[
+            {
+                "kind": "THOUGHT_TYPE_TEXT",
+                "content": "Tried mip_app.action_audit for jane@example.com at 123 Main St.",
+            }
+        ],
     )
     stub = _StubClient(_make_breaker("closed"), response=live)
     repo = DatabricksGenieRepository(stub)  # type: ignore[arg-type]
@@ -1633,13 +1650,15 @@ def test_untrusted_sql_is_policy_blocked_and_not_rendered() -> None:
     result = repo.respond("join the app audit table")
 
     assert result.source == "policy_blocked"
+    assert result.trusted_assets == []
     assert result.table_rows == []
     assert result.row_count == 0
     assert result.sql_query is None
     assert result.proof is not None
     assert result.proof.trusted is False
     assert result.proof.row_count == 0
-    assert "mip_app.action_audit" in result.trusted_assets
+    assert result.proof.source_assets == []
+    assert result.proof.reasoning_trace == []
 
 
 def test_canonical_zip_question_prefers_direct_trusted_sql_over_untrusted_genie_sql() -> None:
@@ -1745,7 +1764,9 @@ def test_pii_column_sql_is_policy_blocked() -> None:
     result = repo.respond("show borrower names")
 
     assert result.source == "policy_blocked"
-    assert result.trusted_assets == ["mip.gold.borrower_360"]
+    assert result.trusted_assets == []
+    assert result.proof is not None
+    assert result.proof.source_assets == []
     assert result.sql_query is None
     assert result.table_rows == []
     assert "Alice" not in result.answer
@@ -1898,8 +1919,29 @@ def test_trusted_genie_answer_with_matching_numeric_claim_passes() -> None:
     result = repo.respond("Summarize the trusted cohort.")
 
     assert result.source == "genie"
-    assert result.answer == live.answer_text
+    assert result.answer == f"{live.answer_text}\n\nSource: mip.gold.borrower_360"
     assert result.table_rows == [{"borrowers": 123}]
+
+
+def test_trusted_genie_answer_does_not_duplicate_existing_source_line() -> None:
+    live = GenieResponse(
+        answer_text=(
+            "There are 123 borrowers in this trusted cohort.\n\n"
+            "Source: mip.gold.borrower_360"
+        ),
+        sql_query="SELECT 123 AS borrowers FROM mip.gold.borrower_360",
+        sql_result_rows=[{"borrowers": 123}],
+        conversation_id="conv-source-line",
+        message_id="msg-source-line",
+    )
+    stub = _StubClient(_make_breaker("closed"), response=live)
+    repo = DatabricksGenieRepository(stub)  # type: ignore[arg-type]
+
+    result = repo.respond("Summarize the trusted cohort.")
+
+    assert result.source == "genie"
+    assert result.answer == live.answer_text
+    assert result.answer.count("Source: mip.gold.borrower_360") == 1
 
 
 def test_trusted_genie_answer_with_unsupported_numeric_claim_is_policy_blocked() -> None:
@@ -1909,6 +1951,12 @@ def test_trusted_genie_answer_with_unsupported_numeric_claim_is_policy_blocked()
         sql_result_rows=[{"borrowers": 123}],
         conversation_id="conv-numeric-mismatch",
         message_id="msg-numeric-mismatch",
+        thoughts=[
+            {
+                "kind": "THOUGHT_TYPE_TEXT",
+                "content": "Raw proof trace included owner_name and phone 555-555-1212.",
+            }
+        ],
     )
     stub = _StubClient(_make_breaker("closed"), response=live)
     repo = DatabricksGenieRepository(stub)  # type: ignore[arg-type]
@@ -1923,6 +1971,7 @@ def test_trusted_genie_answer_with_unsupported_numeric_claim_is_policy_blocked()
     assert "999" not in result.answer
     assert result.proof is not None
     assert result.proof.trusted is False
+    assert result.proof.reasoning_trace == []
     assert result.proof.known_data_gaps
 
 
@@ -2209,10 +2258,9 @@ def test_backtick_quoted_untrusted_app_table_is_blocked() -> None:
     result = repo.respond("join audit")
 
     assert result.source == "policy_blocked"
-    assert result.trusted_assets == [
-        "mip.gold.borrower_360",
-        "mip_app.action_audit",
-    ]
+    assert result.trusted_assets == []
+    assert result.proof is not None
+    assert result.proof.source_assets == []
     assert result.table_rows == []
 
 
@@ -2449,6 +2497,38 @@ def test_listed_purchase_question_uses_direct_canonical_sql() -> None:
     assert "listed_for_sale = TRUE" in result.sql_query
     assert "marketing_eligible = TRUE" in result.sql_query
     assert "Next-home purchase loan" in result.answer
+
+
+def test_listed_days_on_market_by_state_uses_direct_canonical_sql() -> None:
+    stub = _StubClient(_make_breaker("closed"), response=AssertionError("Genie should not be called"))
+    sql = _StubSqlClient(
+        [
+            {
+                "state": "IL",
+                "listed_borrowers": 42,
+                "avg_listing_days_on_market": 18.4,
+                "avg_listing_price": 425000,
+                "refreshed_at": "2026-06-17T01:00:00Z",
+            }
+        ]
+    )
+    repo = DatabricksGenieRepository(stub, sql)  # type: ignore[arg-type]
+
+    result = repo.respond(
+        "Among listed-for-sale borrowers, what is the average listing days on market "
+        "by state for the top five states?"
+    )
+
+    assert result.source == "trusted_sql"
+    assert stub.ask_calls == []
+    assert result.table_rows[0]["state"] == "IL"
+    assert result.table_rows[0]["avg_listing_days_on_market"] == 18.4
+    assert result.proof is not None
+    assert result.proof.trusted is True
+    assert result.sql_query is not None
+    assert "AVG(listing_days_on_market)" in result.sql_query
+    assert "listed_for_sale = TRUE" in result.sql_query
+    assert "mip.gold.borrower_360" in result.answer
 
 
 @pytest.mark.parametrize(
@@ -3012,7 +3092,7 @@ def test_mean_lead_score_by_msa_uses_canonical_cbsa_query_when_live_turn_is_not_
 
 
 def test_breaker_open_with_catalog_match_returns_degraded() -> None:
-    # Breaker open; return the honest "Genie is warming up" message rather
+    # Breaker open; return the honest dependency-down message rather
     # than local analytic content.
     stub = _StubClient(_make_breaker("open"), response=None)
     repo = DatabricksGenieRepository(stub)  # type: ignore[arg-type]
@@ -3023,7 +3103,8 @@ def test_breaker_open_with_catalog_match_returns_degraded() -> None:
     assert result.conversation_id == ""
     assert result.proof is not None
     assert result.proof.conversation_id is None
-    assert "warming up" in result.answer.lower()
+    assert "circuit breaker is open" in result.answer.lower()
+    assert "no data was generated" in result.answer.lower()
     # No trusted assets on a degraded reply — we are not claiming a
     # source we cannot cite.
     assert result.trusted_assets == []
@@ -3043,7 +3124,7 @@ def test_breaker_open_unknown_question_returns_degraded_message() -> None:
 
     assert result.source == "degraded"
     assert result.conversation_id == ""
-    assert "warming up" in result.answer.lower()
+    assert "circuit breaker is open" in result.answer.lower()
     # No trusted assets on a degraded reply -- we are not claiming a
     # source we cannot cite.
     assert result.trusted_assets == []
@@ -3068,7 +3149,7 @@ def test_dependency_down_error_returns_degraded() -> None:
 
     result = repo.respond("show me the in the money segment")
     assert result.source == "degraded"
-    assert "warming up" in result.answer.lower()
+    assert "connecting to the live" in result.answer.lower()
     # The live client WAS attempted (breaker was closed at check time);
     # only the call itself raised.
     assert stub.ask_calls == ["show me the in the money segment"]
@@ -3147,6 +3228,7 @@ def test_end_to_end_with_real_resilient_wrapper() -> None:
     # not in catalog -> degraded message.
     first = repo.respond("completely random query")
     assert first.source == "degraded"
+    assert "retry budget" in first.answer.lower()
     # After the failure, breaker is open.
     assert breaker.state == "open"
 
@@ -3154,4 +3236,4 @@ def test_end_to_end_with_real_resilient_wrapper() -> None:
     # message (no fabricated data), no live call attempted.
     second = repo.respond("show me the in the money segment")
     assert second.source == "degraded"
-    assert "warming up" in second.answer.lower()
+    assert "circuit breaker is open" in second.answer.lower()

@@ -28,8 +28,10 @@ class _UniversalSqlClient:
             "city": "Chicago",
             "count": 321,
             "equity_capacity_borrowers": 456,
+            "equity_band": "75%+",
             "equity_estimate": 425000,
             "equity_pct": 52.0,
+            "borrower_share_pct": 42.0,
             "heloc_propensity_triggers": 44,
             "home_equity_candidates": 234,
             "in_the_money_borrowers": 1234,
@@ -38,6 +40,9 @@ class _UniversalSqlClient:
             "lead_score": 91,
             "leading_offer_code": "refi",
             "leading_recommended_offer": "Rate refinance",
+            "listed_borrowers": 45,
+            "avg_listing_days_on_market": 18.4,
+            "avg_listing_price": 425000,
             "lockin_borrowers": 654,
             "marketable_borrowers": 987,
             "marketable_population": 79730,
@@ -94,6 +99,9 @@ class _UniversalSqlClient:
             "How many borrowers have at least 35% modeled equity across the current Cotality data coverage?",
             "mip.gold.borrower_360",
         ),
+        ("Show the distribution of home equity.", "mip.gold.borrower_360"),
+        ("Break down home equity across the borrower population.", "mip.gold.borrower_360"),
+        ("Breakdown of modeled equity by band.", "mip.gold.borrower_360"),
         (
             "What is the addressable market size -- how many eligible borrowers across the current Cotality data coverage?",
             "mip.gold.borrower_360",
@@ -160,6 +168,10 @@ class _UniversalSqlClient:
             "Break down listed-for-sale borrowers by loan product and average current rate.",
             "mip.gold.borrower_360",
         ),
+        (
+            "Among listed-for-sale borrowers, what is the average listing days on market by state for the top five states?",
+            "mip.gold.borrower_360",
+        ),
         ("How big is the lock-in cohort?", "mip.gold.lockin_cohort"),
         ("What is the median rate for the lock-in cohort?", "mip.gold.lockin_cohort"),
         ("Break down the lock-in cohort by state.", "mip.gold.lockin_cohort"),
@@ -184,6 +196,8 @@ def test_direct_canonical_questions_return_trusted_sql(question: str, expected_a
     assert response.source == "trusted_sql"
     assert response.proof is not None
     assert response.proof.trusted is True
+    assert response.elapsed_ms is not None
+    assert response.proof.elapsed_ms == response.elapsed_ms
     assert response.sql_query
     assert client.statements
     assert expected_asset in " ".join(response.trusted_assets)

@@ -5,7 +5,7 @@ regression run (`tests/integration/test_genie_regression.py`) fires at
 the live `mortgage_lead_intelligence` Genie Space. It has two
 cohorts:
 
-1. **Sample cohort (25 prompts).** These are the curated, talk-track
+1. **Sample cohort (26 prompts).** These are the curated, talk-track
    questions from `genie/sample_questions.md`. They must all return a
    plausible, grounded answer, or an explicit source-readiness data-gap
    response where the trusted assets do not yet contain the requested feed.
@@ -42,9 +42,9 @@ did not emit SQL against a forbidden asset.
 
 # Cohort 1 — Sample questions (must answer)
 
-The 25 curated prompts mirror the seven categories in
-`genie/sample_questions.md`. Numbering matches that file so a failure
-at e.g. `S17` maps to "offer mix for In-the-Money segment".
+The 26 curated prompts mirror the seven categories in
+`genie/sample_questions.md`. Numbering mostly matches that file; `S20B`
+is the promoted listed-for-sale days-on-market regression prompt.
 
 ## S1 — Evaluation-share in-the-money + avg rate spread
 
@@ -103,7 +103,7 @@ at e.g. `S17` maps to "offer mix for In-the-Money segment".
 ## S10 — Mean rate spread by segment
 
 **Prompt:** "What is the mean rate spread by segment across the current Cotality data coverage?"
-**Expected:** One row per segment, spread floats in `[-200, 500]` bps.
+**Expected:** One row per live emitted segment, spread floats in `[-200, 500]` bps, cites `mip.gold.borrower_360` because rate spread is a borrower-grain economics field rather than a column on `segment_performance_metric_view`.
 **Why it matters:** Is the ITM segment actually above-market on rate?
 
 ## S11 — Highest approval rate by segment
@@ -165,6 +165,12 @@ at e.g. `S17` maps to "offer mix for In-the-Money segment".
 **Prompt:** "Break down the Listed-for-Sale segment by loan product and average current rate."
 **Expected:** Grouped answer backed by governed `mip.gold.borrower_360` rows filtered to listed borrowers (`listed_for_sale = TRUE` or canonical `segment_codes` contains `listed`); no PII, and filed Building Permits must not be inferred from this MLS signal.
 **Why it matters:** Proves the space uses the live Cotality MLS/listing overlay without reviving the old blocked-false gap behavior.
+
+## S20B — Listed-for-Sale days on market by state (MLS live)
+
+**Prompt:** "Among listed-for-sale borrowers, what is the average listing days on market by state for the top five states?"
+**Expected:** Top state rows backed by governed `mip.gold.borrower_360`, filtered to listed borrowers (`listed_for_sale = TRUE` or canonical `segment_codes` contains `listed`), with `COUNT(*)` listed borrowers and `AVG(listing_days_on_market)`. No PII, no policy-blocked answer, and no Building Permit caveat unless the user explicitly asks about filed permits.
+**Why it matters:** This exact valid prompt previously hit the app adapter's policy-blocked path. It now stays in the executable live gate so the regression cannot reappear silently.
 
 ## S21 — Lock-in cohort size
 

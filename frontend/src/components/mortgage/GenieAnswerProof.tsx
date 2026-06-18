@@ -30,7 +30,9 @@ export function GenieProofPanel({
         </div>
         <div className="genie-proof__metric">
           <div className="eyebrow">Latency</div>
-          <div className="genie-proof__value">{proof.elapsed_ms ? `${proof.elapsed_ms} ms` : '—'}</div>
+          <div className="genie-proof__value">
+            {proof.elapsed_ms !== null && proof.elapsed_ms !== undefined ? `${proof.elapsed_ms} ms` : '—'}
+          </div>
         </div>
       </div>
       {assets.length > 0 && (
@@ -75,7 +77,7 @@ export function GenieProofPanel({
           {proof.known_data_gaps.map((gap) => <div key={gap} className="genie-proof__gap">{gap}</div>)}
         </div>
       )}
-      {proof.reasoning_trace && proof.reasoning_trace.length > 0 && (
+      {proof.trusted && proof.reasoning_trace && proof.reasoning_trace.length > 0 && (
         <div className="genie-proof__section">
           <div className="eyebrow">Genie query trace</div>
           <div className="genie-proof__trace">

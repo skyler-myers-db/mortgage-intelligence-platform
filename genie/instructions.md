@@ -62,6 +62,11 @@ Before generating SQL, classify the question into exactly one bucket:
 - **B. In-scope analytics:** the question is about borrowers, segments,
   scores, evidence, refreshed geography coverage, offers, conversions, or
   metrics covered by the trusted assets. Proceed to the Always/Never rules.
+  A prompt that mentions MLS, listings, listed-for-sale, or for-sale segment
+  activity without asking about filed building permits is bucket B, not a
+  source-gap question. Use `mip.gold.borrower_360.listed_for_sale` or
+  `array_contains(segment_codes, 'listed')` and do not add permit/data-gap
+  caveats unless the user explicitly asks for permit filings.
   If a named city, state, ZIP, county, territory, or country returns zero
   rows or a zero count, do **not** generate a gold-count SQL query just to
   prove zero and do **not** phrase that as zero borrower demand. Say the
@@ -186,6 +191,9 @@ Before generating SQL, classify the question into exactly one bucket:
     inventing a zero-demand answer. MLS listings and HELOC propensity are
     exposed through `mip.gold.borrower_360`, `mip.gold.evidence_events`, and
     semantic views; do not query silver directly.
+    For listing-only prompts, do not volunteer filed-permit caveats or
+    source-gap language; answer the live MLS/listing question directly from
+    the governed gold assets.
 11. Never use thresholds tighter than the data-contract defaults unless the
     user explicitly asks for stricter cuts: in-the-money means ≥ 75 bps rate
     spread and ≥ 15% equity; HELOC eligible means ≥ 35% equity;
@@ -196,7 +204,7 @@ Before generating SQL, classify the question into exactly one bucket:
 
 Query ONLY the following. Anything else is out of scope.
 
-- `mip.gold.lead_population` — one row per ranked, action-ready Lead Queue borrower
+- `mip.gold.lead_population` — one row per score-qualified ranked Lead Queue borrower; apply eligibility/consent predicates for action-ready rows
 - `mip.gold.segment_population` — (segment_code, state) rollup + '_ALL' national row
 - `mip.gold.lead_scores` — per-borrower 0–100 score
 - `mip.gold.borrower_360` — unified borrower profile (redacted)
@@ -208,8 +216,10 @@ Query ONLY the following. Anything else is out of scope.
 - `mip.gold.county_rollup` — current discovered county coverage and rollups
 - `mip.gold.zip_rollup` — current discovered ZIP coverage and rollups
 - `mip.semantics.lead_generation_metric_view` — borrower-grain funnel KPIs
-- `mip.semantics.segment_performance_metric_view` — segment KPIs
-- `mip.semantics.borrower_opportunity_metric_view` — state/product/trigger KPIs;
+- `mip.semantics.segment_performance_metric_view` — segment/state counts,
+  mean opportunity score, approval/outreach rates, and snapshot deltas
+- `mip.semantics.borrower_opportunity_metric_view` — borrower-grain
+  opportunity columns for read-time state/product/trigger/economics rollups;
   use `mip.gold.borrower_360.situs_cbsa_code` for MSA/CBSA questions
 
 `mip.ref.state_footprint` is app fallback metadata only. Do not query or cite it

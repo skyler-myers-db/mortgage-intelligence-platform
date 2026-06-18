@@ -26,7 +26,7 @@ import { queryKeys } from '../lib/queryKeys';
  * prompt suggestions.
  * The floating GenieChat in the AppShell is the "ask anywhere" entry point;
  * this route is the curated walkthrough for stakeholders who want to see
- * which UC metric views Genie is grounded on. Answer rendering is delegated
+ * which trusted UC assets Genie is grounded on. Answer rendering is delegated
  * to the shared <GenieAnswer> so metric_value / table_rows / follow_ups
  * surface identically here and in the floating chat.
  */
@@ -247,7 +247,7 @@ export default function AskGenie() {
           : 'Policy blocked'
       : payload?.trusted_assets?.[0] || sourceLabel || '';
   const sourceChipTitle = isDegraded
-    ? 'The Genie space is warming up. Live answers will resume shortly.'
+    ? 'The Genie answer path is temporarily unavailable. Live answers will resume after health recovers.'
     : isBlocked
       ? 'The answer was not displayed because it did not meet the governed Genie policy.'
     : undefined;
@@ -265,7 +265,7 @@ export default function AskGenie() {
     <PageShell
       eyebrow="Ask Genie"
       title="Ask Genie about segments, borrowers, and triggers"
-      lede="Type a question or pick a suggestion. Answers cite the metric view that produced them; tap a source chip to open lineage."
+      lede="Type a question or pick a suggestion. Answers cite the trusted Unity Catalog assets that produced them; tap a source chip to open lineage."
       heroRight={<Chip variant="neutral" icon="sparkle">Databricks Genie API</Chip>}
     >
       <div className="layoutA-grid">

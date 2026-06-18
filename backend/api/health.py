@@ -102,6 +102,25 @@ def _apply_browser_forced_degraded(
     return next_status, next_deps, forced_degraded_payload(snapshot)
 
 
+def _apply_breaker_degraded(
+    status: str,
+    deps: dict[str, str],
+    breakers: dict[str, str] | None = None,
+) -> tuple[str, dict[str, str]]:
+    """Make health fail visibly when a dependency breaker is not closed."""
+
+    states = breakers or breaker_states()
+    next_status = status
+    next_deps = dict(deps)
+    for dependency, state in states.items():
+        if state == "closed":
+            continue
+        if dependency in next_deps:
+            next_deps[dependency] = "down"
+        next_status = "degraded"
+    return next_status, next_deps
+
+
 def _diagnostic_body(
     status: str,
     deps: dict[str, str],
@@ -201,6 +220,8 @@ def health(request: Request) -> dict[str, Any]:
     so the LB probe contract (degraded != unhealthy) is preserved.
     """
     status, deps = probe_snapshot()
+    breakers = breaker_states()
+    status, deps = _apply_breaker_degraded(status, deps, breakers)
 
     # Anonymous caller (LB / external probe): minimal body only. Use the
     # same trust boundary as audit actor resolution without calling
@@ -219,7 +240,7 @@ def health(request: Request) -> dict[str, Any]:
         # Keep the topbar / degraded-state UI useful for authenticated
         # workspace users without exposing admin-only diagnostics such as
         # warehouse ids, app_env, log exporter posture, or fallback counters.
-        "circuit_breakers": breaker_states(),
+        "circuit_breakers": breakers,
         "actor_cache_key": _actor_cache_key(actor_email or ""),
     }
     if forced_degraded is not None:
@@ -231,5 +252,6 @@ def health(request: Request) -> dict[str, Any]:
 def admin_health(request: Request, _actor: AdminDep) -> dict[str, Any]:
     """Return ops diagnostics behind admin RBAC."""
     status, deps = probe_snapshot()
+    status, deps = _apply_breaker_degraded(status, deps)
     status, deps, forced_degraded = _apply_browser_forced_degraded(request, status, deps)
     return _diagnostic_body(status, deps, _actor, forced_degraded)

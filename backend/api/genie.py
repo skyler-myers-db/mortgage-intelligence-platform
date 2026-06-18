@@ -17,7 +17,7 @@ from typing import Annotated, Any
 from uuid import uuid4
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 from backend.api import genie_guardrails as prompt_guardrails
 from backend.config.settings import settings
@@ -72,8 +72,16 @@ _source_gap_prompt_match = prompt_guardrails.source_gap_prompt_match
 
 
 class GenieMessageRequest(BaseModel):
-    question: str
+    question: str = Field(min_length=1)
     conversation_id: str | None = None
+
+    @field_validator("question")
+    @classmethod
+    def _question_must_contain_text(cls, value: str) -> str:
+        normalized = re.sub(r"\s+", " ", value).strip()
+        if not normalized:
+            raise ValueError("question is required")
+        return normalized
 
 
 def _safe_genie_audit_entity_id(

@@ -1224,6 +1224,39 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     );
   });
 
+  test('ask-genie: listed days-on-market prompt returns trusted app proof', async ({ page }) => {
+    test.setTimeout(120_000);
+
+    await page.goto('/ask-genie');
+
+    await page
+      .locator('textarea[aria-label="Ask Genie — question"]')
+      .fill(
+        'Among listed-for-sale borrowers, what is the average listing days on market by state for the top five states?',
+      );
+    await page.getByRole('button', { name: /^Ask Genie$/i }).first().click();
+
+    const answerSurface = page
+      .locator('.surface', { hasText: /top state by listed borrower count/i })
+      .first();
+    await expect(answerSurface).toBeVisible({ timeout: 90_000 });
+    await expect(answerSurface).toContainText(/mip\.gold\.borrower_360/);
+    await expect(answerSurface).toContainText(/average listing days on market/i);
+    await expect(answerSurface.locator('.genie-answer__table tbody tr').first()).toBeVisible({
+      timeout: 10_000,
+    });
+
+    await answerSurface.getByRole('button', { name: /Show proof/i }).click();
+    const proofDrawer = page.getByRole('dialog', { name: /Genie answer proof/i });
+    await expect(proofDrawer).toBeVisible();
+    await expect(proofDrawer.getByText(/Trusted SELECT on curated assets/i)).toBeVisible();
+    await expect(proofDrawer.locator('.evidence-chip', { hasText: /mip\.gold\.borrower_360/ })).toBeVisible();
+    await expect(proofDrawer.getByText(/AVG\(listing_days_on_market\)/)).toBeVisible();
+    await expect(
+      proofDrawer.locator('pre.genie-proof__sql', { hasText: /listed_for_sale = TRUE/ }),
+    ).toBeVisible();
+  });
+
   test('ask-genie: shows governed progress while a live request is pending', async ({ page }) => {
     await page.route('**/api/genie/message', async (route) => {
       await new Promise((resolve) => setTimeout(resolve, 1500));

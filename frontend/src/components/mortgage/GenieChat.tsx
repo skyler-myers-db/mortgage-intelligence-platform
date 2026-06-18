@@ -707,7 +707,7 @@ export function GenieChat() {
           <div className="genie-chat__drag-title">
             <div className="genie__title">Ask Genie</div>
             <div className="genie__sub">
-              Unity Catalog metric views · {lender}
+              Trusted Unity Catalog assets · {lender}
               {pos ? ' · undocked' : ''}
             </div>
           </div>
@@ -769,7 +769,7 @@ export function GenieChat() {
                       icon="info"
                       title={
                         m.payload.source === 'degraded'
-                          ? 'The Genie space is warming up. Live answers will resume shortly.'
+                          ? 'The Genie answer path is temporarily unavailable. Live answers will resume after health recovers.'
                           : 'This answer intentionally stopped before displaying a live result.'
                       }
                     >
