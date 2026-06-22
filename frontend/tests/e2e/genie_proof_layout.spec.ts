@@ -6,6 +6,13 @@ const AUTH_HEADERS: Record<string, string> = BEARER
   ? { Authorization: `Bearer ${BEARER}` }
   : {};
 
+const LIVE = process.env.E2E_LIVE === '1';
+const MOCKED_LAYOUT_CANARY = process.env.GENIE_PROOF_LAYOUT_MOCKED === '1';
+test.skip(
+  LIVE && !MOCKED_LAYOUT_CANARY,
+  'genie_proof_layout.spec.ts route-fulfills Genie; run with GENIE_PROOF_LAYOUT_MOCKED=1 when counted as mocked layout coverage',
+);
+
 test.use({ baseURL: APP_URL, extraHTTPHeaders: AUTH_HEADERS });
 
 type Box = NonNullable<Awaited<ReturnType<Locator['boundingBox']>>>;

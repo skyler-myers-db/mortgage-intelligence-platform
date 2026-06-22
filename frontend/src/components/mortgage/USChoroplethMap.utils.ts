@@ -113,15 +113,6 @@ export interface StateFacts {
   topSegment?: string;
 }
 
-export const SEGMENT_CODE_TO_NAME: Record<string, string> = {
-  itm: 'Prime Refi Candidates',
-  listed: 'Listed for Sale',
-  permit: 'HELOC Intent',
-  investor: 'Investor / Multi-Property',
-  equity: 'Home Equity Candidate',
-  retention: 'Retention Risk',
-};
-
 export function countyDisplayName(rollup: CountyRollup): string {
   const raw = rollup.county_name?.trim();
   if (raw) {

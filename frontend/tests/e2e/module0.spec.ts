@@ -12,6 +12,8 @@ import { expectKpiValue } from './helpers';
  */
 
 test.describe('Module 0 — golden path', () => {
+  test.skip(process.env.E2E_LIVE === '1', 'module0.spec.ts pins offline fixture data; use real_data.spec.ts for live app validation');
+
   const consoleErrors: string[] = [];
 
   test.beforeEach(async ({ page }) => {

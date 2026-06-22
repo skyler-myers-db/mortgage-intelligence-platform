@@ -162,12 +162,7 @@ async function drillToZipLayer(page: Page, target: MapDrillTarget, segmentCodes:
 
   await bringMapIntoViewport(page);
   const county = map.getByRole('button', { name: new RegExp(escapeRegExp(target.countyName), 'i') }).first();
-  try {
-    await expect(county).toBeVisible({ timeout: 10_000 });
-  } catch (error) {
-    await state.press('Enter');
-    await expect(county, `${target.countyName} should appear after keyboard fallback`).toBeVisible({ timeout: 10_000 });
-  }
+  await expect(county, `${target.stateName} pointer click should drill into counties`).toBeVisible({ timeout: 10_000 });
   const countyResult = await countyResponse;
   if (countyResult instanceof Error) throw countyResult;
 
@@ -175,12 +170,8 @@ async function drillToZipLayer(page: Page, target: MapDrillTarget, segmentCodes:
     .waitForResponse(filteredGeoResponse(segmentCodes, '/api/geo/zip-rollups'), { timeout: 45_000 })
     .catch((error: Error) => error);
   await clickSvgRegion(page, county, target.countyName);
-  try {
-    await expect(page.locator('.map-crumbs')).toContainText(target.countyName, { timeout: 5_000 });
-  } catch (error) {
-    await county.press('Enter');
-    await expect(page.locator('.map-crumbs')).toContainText(target.countyName, { timeout: 10_000 });
-  }
+  await expect(page.locator('.map-crumbs'), `${target.countyName} pointer click should drill into ZIPs`)
+    .toContainText(target.countyName, { timeout: 5_000 });
   const zipResult = await zipResponse;
   if (zipResult instanceof Error) throw zipResult;
 }

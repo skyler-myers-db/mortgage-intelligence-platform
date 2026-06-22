@@ -217,6 +217,57 @@ describe('USChoroplethMap county visual states', () => {
     expect(dupageLoaded.classList.contains('lvl-1')).toBe(false);
   });
 
+  it('drills geography with keyboard Enter and Space separately from pointer tests', async () => {
+    await act(async () => {
+      root.render(
+        <MemoryRouter>
+          <USChoroplethMap countyTopologyLoader={loadCountyTopology} />
+        </MemoryRouter>,
+      );
+    });
+
+    const illinois = await waitForSelector<SVGPathElement>('path[aria-label="Illinois"]');
+    expect(illinois).toBeTruthy();
+    for (let i = 0; i < 80 && !illinois?.classList.contains('has-data'); i += 1) {
+      await settle();
+      await new Promise((resolve) => window.setTimeout(resolve, 5));
+    }
+
+    await act(async () => {
+      illinois?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    });
+
+    const cook = await waitForSelector<SVGPathElement>('path[aria-label="Cook County"]');
+    expect(cook).toBeTruthy();
+
+    await act(async () => {
+      countyRollups.resolve({
+        rollups: [
+          {
+            fips_5: '17031',
+            state: 'IL',
+            county_name: 'Cook',
+            addressable_borrowers: 1,
+            in_the_money_borrowers: 1,
+            high_opportunity_borrowers: 1,
+            avg_opportunity_score: 79,
+            top_segment_code: 'itm',
+          },
+        ],
+        state: 'IL',
+        snapshot_date: '2026-06-19',
+      });
+    });
+    await settle();
+
+    await act(async () => {
+      cook?.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true }));
+    });
+    await settle();
+
+    expect(document.querySelector('.map-crumbs')?.textContent).toContain('Cook County');
+  });
+
   it('does not expose raw unknown segment filters in the map caption', async () => {
     await act(async () => {
       root.render(

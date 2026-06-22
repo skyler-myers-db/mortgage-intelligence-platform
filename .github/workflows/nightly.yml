@@ -400,8 +400,18 @@ jobs:
             tests/e2e/demo_visual.spec.ts \
             tests/e2e/accessibility.spec.ts \
             tests/e2e/responsive.spec.ts \
-            tests/e2e/genie_proof_layout.spec.ts \
             tests/e2e/route_performance.spec.ts \
+            --reporter=list --workers=1
+      - name: Run mocked Genie proof layout canary
+        # This spec route-fulfills Genie responses to stress proof-drawer
+        # layout with dense trusted-SQL evidence. Keep it separate from the
+        # real-UC live gate so it is never counted as live Genie proof.
+        working-directory: frontend
+        env:
+          GENIE_PROOF_LAYOUT_MOCKED: '1'
+        run: |
+          npx playwright test \
+            tests/e2e/genie_proof_layout.spec.ts \
             --reporter=list --workers=1
       - name: Run procurement accessibility and browser/device matrix
         # Separate from the golden path so the standard live suite stays

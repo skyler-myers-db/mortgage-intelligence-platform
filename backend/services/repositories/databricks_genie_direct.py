@@ -106,6 +106,7 @@ from backend.services.repositories.databricks_genie_canonical import (
     _canonical_top_cohorts_scope,
     _projected_monthly_savings_gap_scope,
     _retention_competitor_lien_list_question,
+    _retention_eligibility_fallback_from_summary,
     _retention_risk_question,
     _specific_top_borrower_intent_label,
     _specific_top_borrower_intent_note,
@@ -550,6 +551,7 @@ def direct_canonical_response(
             response_rows = rows
             suppress_actions = False
             response_metric_value = None
+            retention_fallback = None
             if intent == "retention":
                 try:
                     summary_rows = (
@@ -567,23 +569,17 @@ def direct_canonical_response(
                         exc=exc,
                     )
                     summary_rows = []
-                if summary_rows:
-                    summary = summary_rows[0]
-                    retention_count = int(summary.get("retention_segment_borrowers") or 0)
-                    marketing_count = int(summary.get("marketing_eligible_retention_borrowers") or 0)
-                    action_ready_count = int(summary.get("action_ready_retention_borrowers") or 0)
-                    answer = (
-                        f"{state_name} ({state_code}) has {retention_count:,} borrowers in the "
-                        "Retention Risk segment, but none qualify for the action-ready best-retention "
-                        f"queue after marketing-eligibility and opt-in consent filters "
-                        f"({marketing_count:,} marketing-eligible; {action_ready_count:,} opt-in). "
-                        "Competitor-lien evidence questions use a separate evidence workflow and may "
-                        "return borrowers that are not action-ready for outreach."
-                    )
-                    response_sql_query = _CANONICAL_RETENTION_ELIGIBILITY_SUMMARY_BY_STATE_SQL
-                    response_rows = summary_rows
-                    suppress_actions = True
-                    response_metric_value = f"{action_ready_count:,}"
+                retention_fallback = _retention_eligibility_fallback_from_summary(
+                    summary_rows,
+                    state_name=state_name,
+                    state_code=state_code,
+                )
+                if retention_fallback is not None:
+                    answer = retention_fallback.answer
+                    response_sql_query = retention_fallback.sql_query
+                    response_rows = retention_fallback.rows
+                    suppress_actions = retention_fallback.suppress_actions
+                    response_metric_value = retention_fallback.metric_value
                 else:
                     answer = (
                         f"The trusted borrower table returned no marketing-eligible "
@@ -640,6 +636,7 @@ def direct_canonical_response(
             response_rows = rows
             suppress_actions = False
             response_metric_value = None
+            retention_fallback = None
             if intent == "retention":
                 try:
                     summary_rows = (
@@ -654,23 +651,13 @@ def direct_canonical_response(
                         exc=exc,
                     )
                     summary_rows = []
-                if summary_rows:
-                    summary = summary_rows[0]
-                    retention_count = int(summary.get("retention_segment_borrowers") or 0)
-                    marketing_count = int(summary.get("marketing_eligible_retention_borrowers") or 0)
-                    action_ready_count = int(summary.get("action_ready_retention_borrowers") or 0)
-                    answer = (
-                        f"The current coverage has {retention_count:,} borrowers in the Retention "
-                        "Risk segment, but none qualify for the action-ready best-retention queue "
-                        f"after marketing-eligibility and opt-in consent filters "
-                        f"({marketing_count:,} marketing-eligible; {action_ready_count:,} opt-in). "
-                        "Competitor-lien evidence questions use a separate evidence workflow and may "
-                        "return borrowers that are not action-ready for outreach."
-                    )
-                    response_sql_query = _CANONICAL_RETENTION_ELIGIBILITY_SUMMARY_GLOBAL_SQL
-                    response_rows = summary_rows
-                    suppress_actions = True
-                    response_metric_value = f"{action_ready_count:,}"
+                retention_fallback = _retention_eligibility_fallback_from_summary(summary_rows)
+                if retention_fallback is not None:
+                    answer = retention_fallback.answer
+                    response_sql_query = retention_fallback.sql_query
+                    response_rows = retention_fallback.rows
+                    suppress_actions = retention_fallback.suppress_actions
+                    response_metric_value = retention_fallback.metric_value
                 else:
                     answer = (
                         f"The trusted borrower table returned no marketing-eligible "

@@ -3,8 +3,62 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
+from typing import Any
 
 from backend.services.databricks_sql_helpers import qualify
+
+
+@dataclass(frozen=True)
+class CanonicalRetentionEligibilityFallback:
+    sql_query: str
+    rows: list[dict[str, Any]]
+    answer: str
+    metric_value: str
+    suppress_actions: bool = True
+
+
+def _retention_eligibility_fallback_from_summary(
+    summary_rows: list[dict[str, Any]] | None,
+    *,
+    state_name: str | None = None,
+    state_code: str | None = None,
+) -> CanonicalRetentionEligibilityFallback | None:
+    if not summary_rows:
+        return None
+
+    summary = summary_rows[0]
+    retention_count = int(summary.get("retention_segment_borrowers") or 0)
+    marketing_count = int(summary.get("marketing_eligible_retention_borrowers") or 0)
+    action_ready_count = int(summary.get("action_ready_retention_borrowers") or 0)
+
+    if state_name and state_code:
+        answer = (
+            f"{state_name} ({state_code}) has {retention_count:,} borrowers in the "
+            "Retention Risk segment, but none qualify for the action-ready best-retention "
+            f"queue after marketing-eligibility and opt-in consent filters "
+            f"({marketing_count:,} marketing-eligible; {action_ready_count:,} opt-in). "
+            "Competitor-lien evidence questions use a separate evidence workflow and may "
+            "return borrowers that are not action-ready for outreach."
+        )
+        sql_query = _CANONICAL_RETENTION_ELIGIBILITY_SUMMARY_BY_STATE_SQL
+    else:
+        answer = (
+            f"The current coverage has {retention_count:,} borrowers in the Retention "
+            "Risk segment, but none qualify for the action-ready best-retention queue "
+            f"after marketing-eligibility and opt-in consent filters "
+            f"({marketing_count:,} marketing-eligible; {action_ready_count:,} opt-in). "
+            "Competitor-lien evidence questions use a separate evidence workflow and may "
+            "return borrowers that are not action-ready for outreach."
+        )
+        sql_query = _CANONICAL_RETENTION_ELIGIBILITY_SUMMARY_GLOBAL_SQL
+
+    return CanonicalRetentionEligibilityFallback(
+        sql_query=sql_query,
+        rows=summary_rows,
+        answer=answer,
+        metric_value=f"{action_ready_count:,}",
+    )
 
 _BORROWER_360 = qualify("gold", "borrower_360")
 _EVIDENCE_EVENTS = qualify("gold", "evidence_events")
