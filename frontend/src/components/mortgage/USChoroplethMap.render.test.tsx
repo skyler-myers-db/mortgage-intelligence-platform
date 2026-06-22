@@ -48,10 +48,11 @@ async function settle(): Promise<void> {
 
 async function waitForSelector<T extends Element>(selector: string): Promise<T | null> {
   let node: T | null = null;
-  for (let i = 0; i < 20; i += 1) {
+  for (let i = 0; i < 80; i += 1) {
     await settle();
     node = document.querySelector(selector) as T | null;
     if (node) return node;
+    await new Promise((resolve) => window.setTimeout(resolve, 5));
   }
   return node;
 }
@@ -77,17 +78,12 @@ const COUNTY_TOPOLOGY = {
 describe('USChoroplethMap county visual states', () => {
   let root: Root;
   let countyRollups: ReturnType<typeof deferred<CountyRollupResponse>>;
-  let originalFetch: typeof globalThis.fetch;
+  const loadCountyTopology = () => Promise.resolve(COUNTY_TOPOLOGY);
 
   beforeEach(() => {
     document.body.innerHTML = '<div id="root"></div>';
     root = createRoot(document.getElementById('root') as HTMLElement);
     countyRollups = deferred<CountyRollupResponse>();
-    originalFetch = globalThis.fetch;
-    globalThis.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve(COUNTY_TOPOLOGY),
-    }) as unknown as typeof fetch;
     apiMocks.stateRollups.mockResolvedValue({
       rollups: [
         {
@@ -107,7 +103,6 @@ describe('USChoroplethMap county visual states', () => {
 
   afterEach(() => {
     act(() => root.unmount());
-    globalThis.fetch = originalFetch;
     document.body.innerHTML = '';
     vi.clearAllMocks();
   });
@@ -116,7 +111,11 @@ describe('USChoroplethMap county visual states', () => {
     await act(async () => {
       root.render(
         <MemoryRouter>
-          <USChoroplethMap segmentFilter={['itm', 'equity']} segmentFilterMode="any" />
+          <USChoroplethMap
+            segmentFilter={['itm', 'equity']}
+            segmentFilterMode="any"
+            countyTopologyLoader={loadCountyTopology}
+          />
         </MemoryRouter>,
       );
     });

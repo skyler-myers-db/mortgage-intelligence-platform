@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { FeatureCollection } from 'geojson';
+import type { GeometryCollection, Topology } from 'topojson-specification';
 import { Icon } from '../Icon';
 import { Chip } from '../Primitives';
 import { api } from '../../lib/api';
@@ -51,6 +52,8 @@ import { USChoroplethMapTooltip } from './USChoroplethMapTooltip';
 
 // ---------- Live per-state facts ----------
 
+type CountyTopology = Topology<{ counties: GeometryCollection }>;
+
 /** Selection payload emitted on every state/county/ZIP click. State is
  *  2-char uppercase USPS code so consumers can run predicates against
  *  `LeadSummary.state` directly. `county` is the 5-digit FIPS; `zip` is
@@ -78,6 +81,14 @@ interface USChoroplethMapProps {
    *  filter the LeadTable). `"navigate"` deep-links to
    *  `/lead-queue?state=XX` so the home-page map acts as a teaser. */
   drillBehavior?: 'filter' | 'navigate';
+  /** Test injection for county TopoJSON; production loads /us-counties.json. */
+  countyTopologyLoader?: () => Promise<unknown>;
+}
+
+async function defaultCountyTopologyLoader(): Promise<unknown> {
+  const topoRes = await fetch('/us-counties.json');
+  if (!topoRes.ok) throw new Error(`topology fetch ${topoRes.status}`);
+  return topoRes.json();
 }
 
 /**
@@ -91,6 +102,7 @@ export function USChoroplethMap({
   portfolioCriteria,
   onSelectionChange,
   drillBehavior = 'filter',
+  countyTopologyLoader = defaultCountyTopologyLoader,
 }: USChoroplethMapProps) {
   const [level, setLevel] = useState<Level>('state');
   const [selected, setSelected] = useState<Selected | null>(null);
@@ -304,10 +316,9 @@ export function USChoroplethMap({
       try {
         const [topoClient, topoRes] = await Promise.all([
           import('topojson-client'),
-          fetch('/us-counties.json'),
+          countyTopologyLoader(),
         ]);
-        if (!topoRes.ok) throw new Error(`topology fetch ${topoRes.status}`);
-        const topology = await topoRes.json();
+        const topology = topoRes as CountyTopology;
         // topojson-client's feature() returns a GeoJSON FeatureCollection when
         // the object is a GeometryCollection.
         // topojson-client's `feature()` typing narrows to Feature for a
@@ -340,7 +351,7 @@ export function USChoroplethMap({
     return () => {
       cancelled = true;
     };
-  }, [level, countyStateId, countiesByState, supportedCountyStates]);
+  }, [level, countyStateId, countiesByState, supportedCountyStates, countyTopologyLoader]);
 
   const activeSegNames = useMemo(() => {
     if (!segmentFilter || segmentFilter.length === 0) return null;
