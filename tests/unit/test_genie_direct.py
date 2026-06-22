@@ -347,6 +347,25 @@ def test_direct_best_retention_empty_answer_explains_eligibility_gate() -> None:
     assert "Competitor-lien evidence questions use a separate evidence workflow" in response.answer
 
 
+def test_direct_global_best_retention_empty_answer_explains_eligibility_gate() -> None:
+    client = _RetentionEligibilitySqlClient()
+
+    response = direct_canonical_response(
+        "best retention borrowers across the current Cotality coverage",
+        cast(Any, client),
+    )
+
+    assert response is not None
+    assert response.source == "trusted_sql"
+    assert response.sql_query is not None
+    assert "action_ready_retention_borrowers" in response.sql_query
+    assert client.parameters[-1] is None
+    assert response.metric_value == "0"
+    assert response.actions == []
+    assert "current coverage has 16,557 borrowers in the Retention Risk segment" in response.answer
+    assert "marketing-eligibility and opt-in consent filters" in response.answer
+
+
 def test_direct_equity_line_hyphen_routes_to_heloc_intent() -> None:
     client = _UniversalSqlClient()
 

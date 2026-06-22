@@ -538,6 +538,111 @@ def test_legacy_canonical_itm_zip_fallback_cites_borrower_360_grain() -> None:
     assert "from mip.gold.lead_population" not in result.answer
 
 
+def test_text_only_specific_intent_state_fallback_uses_borrower_360_not_generic_leads() -> None:
+    live = GenieResponse(
+        answer_text="Texas cash-out candidates are available.",
+        sql_query=None,
+        sql_result_rows=[],
+        conversation_id="conv-specific-state",
+        message_id="msg-specific-state",
+    )
+    sql = _StubSqlClient(
+        [
+            {
+                "borrower_id": "B-000000000001",
+                "display_name": "Borrower 1",
+                "city": "Austin",
+                "state": "TX",
+                "zip": "78701",
+                "equity_estimate": 450000,
+                "equity_pct": 62,
+                "opportunity_score": 88,
+                "recommended_offer_code": "cash_out",
+                "recommended_offer": "Cash-out refinance",
+                "refreshed_at": "2026-06-17T00:00:00Z",
+            }
+        ]
+    )
+
+    result = _adapt_genie_response(
+        "best cash-out borrowers in Texas",
+        live,
+        sql_client=sql,  # type: ignore[arg-type]
+    )
+
+    assert result.source == "trusted_sql"
+    assert result.trusted_assets == ["mip.gold.borrower_360"]
+    assert result.sql_query is not None
+    assert "FROM mip.gold.lead_population" not in result.sql_query
+    assert "recommended_offer_code = 'cash_out'" in result.sql_query
+    assert sql.parameters[-1] == {"state": "TX"}
+    assert "Texas (TX) cash-out refinance borrowers" in result.answer
+
+
+def test_text_only_multi_intent_fallback_discloses_primary_ranking_lens() -> None:
+    live = GenieResponse(
+        answer_text="Texas borrowers are available.",
+        sql_query=None,
+        sql_result_rows=[],
+        conversation_id="conv-multi-intent",
+        message_id="msg-multi-intent",
+    )
+    sql = _StubSqlClient(
+        [
+            {
+                "borrower_id": "B-000000000001",
+                "display_name": "Borrower 1",
+                "city": "Austin",
+                "state": "TX",
+                "zip": "78701",
+                "equity_estimate": 450000,
+                "equity_pct": 62,
+                "opportunity_score": 88,
+                "recommended_offer_code": "cash_out",
+                "recommended_offer": "Cash-out refinance",
+                "refreshed_at": "2026-06-17T00:00:00Z",
+            }
+        ]
+    )
+
+    result = _adapt_genie_response(
+        "best HELOC and cash-out borrowers in Texas",
+        live,
+        sql_client=sql,  # type: ignore[arg-type]
+    )
+
+    assert result.source == "trusted_sql"
+    assert result.sql_query is not None
+    assert "recommended_offer_code = 'cash_out'" in result.sql_query
+    assert "I detected additional intent language (home-equity / HELOC)" in result.answer
+    assert "ask for a combined segment if you want an intersection" in result.answer
+
+
+def test_text_only_global_retention_empty_fallback_explains_eligibility_gate() -> None:
+    live = GenieResponse(
+        answer_text="No retention borrowers found.",
+        sql_query=None,
+        sql_result_rows=[],
+        conversation_id="conv-retention-empty-global",
+        message_id="msg-retention-empty-global",
+    )
+    sql = _RetentionEligibilitySqlClient()
+
+    result = _adapt_genie_response(
+        "best retention borrowers across the current Cotality coverage",
+        live,
+        sql_client=sql,  # type: ignore[arg-type]
+    )
+
+    assert result.source == "trusted_sql"
+    assert result.sql_query is not None
+    assert "action_ready_retention_borrowers" in result.sql_query
+    assert result.metric_value == "0"
+    assert result.actions == []
+    assert "current coverage has 16,557 borrowers in the Retention Risk segment" in result.answer
+    assert "marketing-eligibility and opt-in consent filters" in result.answer
+
+
 def test_open_cohort_action_preserves_sql_derived_portfolio_predicates() -> None:
     live = GenieResponse(
         answer_text="ZIP 60617 has the most borrowers.",
