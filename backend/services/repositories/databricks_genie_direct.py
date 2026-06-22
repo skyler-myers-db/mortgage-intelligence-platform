@@ -544,12 +544,12 @@ def direct_canonical_response(
             response_sql_query = sql_query
             response_rows = rows
             suppress_actions = False
-            metric_value = None
+            response_metric_value = None
         else:
             response_sql_query = sql_query
             response_rows = rows
             suppress_actions = False
-            metric_value = None
+            response_metric_value = None
             if intent == "retention":
                 try:
                     summary_rows = (
@@ -583,7 +583,7 @@ def direct_canonical_response(
                     response_sql_query = _CANONICAL_RETENTION_ELIGIBILITY_SUMMARY_BY_STATE_SQL
                     response_rows = summary_rows
                     suppress_actions = True
-                    metric_value = f"{action_ready_count:,}"
+                    response_metric_value = f"{action_ready_count:,}"
                 else:
                     answer = (
                         f"The trusted borrower table returned no marketing-eligible "
@@ -602,7 +602,7 @@ def direct_canonical_response(
             trusted_assets=[borrower_asset],
             rows=response_rows,
             answer=answer,
-            metric_value=metric_value,
+            metric_value=response_metric_value,
             suppress_actions=suppress_actions,
         )
 
@@ -634,12 +634,12 @@ def direct_canonical_response(
             response_sql_query = sql_query
             response_rows = rows
             suppress_actions = False
-            metric_value = None
+            response_metric_value = None
         else:
             response_sql_query = sql_query
             response_rows = rows
             suppress_actions = False
-            metric_value = None
+            response_metric_value = None
             if intent == "retention":
                 try:
                     summary_rows = (
@@ -670,7 +670,7 @@ def direct_canonical_response(
                     response_sql_query = _CANONICAL_RETENTION_ELIGIBILITY_SUMMARY_GLOBAL_SQL
                     response_rows = summary_rows
                     suppress_actions = True
-                    metric_value = f"{action_ready_count:,}"
+                    response_metric_value = f"{action_ready_count:,}"
                 else:
                     answer = (
                         f"The trusted borrower table returned no marketing-eligible "
@@ -687,7 +687,7 @@ def direct_canonical_response(
             trusted_assets=[borrower_asset],
             rows=response_rows,
             answer=answer,
-            metric_value=metric_value,
+            metric_value=response_metric_value,
             suppress_actions=suppress_actions,
         )
 
