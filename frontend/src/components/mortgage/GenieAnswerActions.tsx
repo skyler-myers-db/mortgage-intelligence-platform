@@ -1,17 +1,10 @@
 import { useState } from 'react';
 import type { GenieActionSuggestion } from '../../types';
-import { segmentName } from '../../lib/segmentMetadata';
+import { safeSegmentName } from '../../lib/segmentMetadata';
 import { Icon } from '../Icon';
 
 function segmentPreviewLabel(value: unknown): string | null {
-  if (typeof value !== 'string') return null;
-  const raw = value.trim();
-  if (!raw) return null;
-  const code = raw.toLowerCase().replace(/[\s_]+/g, '-');
-  if (code === 'heloc' || code === 'heloc-intent' || code === 'permit-activity') {
-    return segmentName('permit');
-  }
-  return segmentName(code);
+  return safeSegmentName(value);
 }
 
 export function actionPreview(action: GenieActionSuggestion): string[] {

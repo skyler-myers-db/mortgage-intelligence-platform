@@ -47,6 +47,23 @@ describe('actionPreview', () => {
     expect(preview).toEqual(['Segments: HELOC Intent (any selected segment)']);
   });
 
+  it('does not render raw unknown segment codes in governed action chips', () => {
+    const preview = actionPreview({
+      id: 'act-unknown',
+      label: 'Open cohort',
+      action_type: 'open_lead_queue',
+      description: 'Open a governed lead list.',
+      criteria: {
+        result_filters: {
+          segment_codes: ['retention-risk', 'made_up'],
+          segment_mode: 'any',
+        },
+      },
+    });
+
+    expect(preview).toEqual([]);
+  });
+
   it('ignores malformed filter payloads and still reports row count', () => {
     const preview = actionPreview({
       id: 'act-2',

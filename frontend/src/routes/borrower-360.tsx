@@ -18,7 +18,7 @@ import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 import { Reveal } from '../components/fx/Reveal';
 import { descriptorFor, descriptorForEvidence } from '../lib/drawerSources';
 import { offerDisplayLabel, offerRationale, offerShortDescription } from '../lib/offerLanguage';
-import { segmentByCode } from '../lib/segmentMetadata';
+import { safeSegmentName, segmentByCode } from '../lib/segmentMetadata';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
 import { queryKeys } from '../lib/queryKeys';
 import { useApp } from '../components/AppContext';
@@ -388,6 +388,7 @@ export default function Borrower360() {
                     {b.segment_codes.map((sid) => {
                       const s = segmentByCode(sid);
                       const color = s?.color ?? 'var(--accent)';
+                      const label = safeSegmentName(sid) ?? 'Unknown segment';
                       // Expose the segment hue via a CSS var so the stylesheet
                       // can pick the right text color per theme. Dark theme:
                       // segment hue is the text. Light theme: darker navy text
@@ -404,7 +405,7 @@ export default function Borrower360() {
                             } as CSSProperties
                           }
                         >
-                          {s?.name ?? sid}
+                          {label}
                         </span>
                       );
                     })}

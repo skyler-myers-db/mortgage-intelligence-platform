@@ -245,11 +245,15 @@ export default function AnalyticsRoute() {
             />
           </>
         )}
-        {filtersActive && (
-          <button type="button" className="btn btn--sm" onClick={() => setSearchParams(new URLSearchParams())}>
-            Clear filters
-          </button>
-        )}
+        <button
+          type="button"
+          className="btn btn--sm"
+          disabled={!filtersActive}
+          aria-disabled={!filtersActive}
+          onClick={() => setSearchParams(new URLSearchParams())}
+        >
+          Clear filters
+        </button>
       </div>
 
       {tab === 'executive' && (

@@ -2,7 +2,7 @@ import { Fragment, type CSSProperties, type MouseEvent as ReactMouseEvent } from
 import type { LeadSummary } from '../../types';
 import { DRAWER_SOURCES } from '../../lib/drawerSources';
 import { offerDisplayLabel } from '../../lib/offerLanguage';
-import { segmentColor, segmentName } from '../../lib/segmentMetadata';
+import { safeSegmentName, segmentColor } from '../../lib/segmentMetadata';
 import { Icon } from '../Icon';
 import { Button, Chip, EvidenceChip } from '../Primitives';
 import { ConfidenceMeter } from './ConfidenceMeter';
@@ -157,13 +157,14 @@ export function LeadTableRow({
           <div className="lead-table__segments">
             {lead.segment_codes.slice(0, 2).map((sid) => {
               const color = segmentColor(sid);
+              const label = safeSegmentName(sid) ?? 'Unknown segment';
               return (
                 <span
                   key={sid}
                   className="chip chip--segment chip--compact"
                   style={{ '--chip-hue': color } as CSSProperties}
                 >
-                  <span className="chip__label">{segmentName(sid)}</span>
+                  <span className="chip__label">{label}</span>
                 </span>
               );
             })}

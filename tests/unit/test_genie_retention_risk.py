@@ -18,6 +18,7 @@ class _SqlClient:
     def __init__(self) -> None:
         self.sql: str | None = None
         self.executed_sql: str | None = None
+        self.executed_params: dict[str, object] | None = None
 
     def execute_one(
         self,
@@ -36,8 +37,8 @@ class _SqlClient:
         sql: str,
         params: dict[str, object] | None = None,
     ) -> list[dict[str, object]]:
-        _ = params
         self.executed_sql = sql
+        self.executed_params = params
         if "exploded_segments" in sql:
             return [
                 {
@@ -251,9 +252,7 @@ def test_genie_retention_list_uses_canonical_row_lookup_not_count_metric() -> No
 
 
 def test_genie_retention_list_uses_canonical_competitor_lien_signal() -> None:
-    question = (
-        "Which borrowers on our retention list have a competitor lien filed in the last 30 days?"
-    )
+    question = "retention borrowers with competitor-lien evidence in Illinois"
     result = GenieResponse(
         answer_text="No rows.",
         sql_query=(
@@ -304,6 +303,8 @@ def test_genie_retention_list_uses_canonical_competitor_lien_signal() -> None:
         }
     ]
     assert "signal_type = 'competitor_lien'" in (response.sql_query or "")
+    assert "b.state = :state" in (response.sql_query or "")
+    assert sql.executed_params == {"state": "IL"}
     assert "lien-change" not in (response.sql_query or "")
     assert "signal_value = 'competitor'" not in (response.sql_query or "")
     assert "to_timestamp(e.`timestamp`)" in (response.sql_query or "")
@@ -311,6 +312,7 @@ def test_genie_retention_list_uses_canonical_competitor_lien_signal() -> None:
     assert response.proof.trusted is True
     assert sql.executed_sql == response.sql_query
     assert response.metric_value == "304"
+    assert "in illinois" in response.answer.lower()
     assert "There are 304 retention-list borrowers" in response.answer
     assert client.questions == []
     cohort_action = next(action for action in response.actions if action.id == "open-cohort")

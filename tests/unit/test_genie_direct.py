@@ -88,6 +88,25 @@ class _UniversalSqlClient:
         return [first, second]
 
 
+class _RetentionEligibilitySqlClient(_UniversalSqlClient):
+    def execute(self, statement: str, parameters: Any = None) -> list[dict[str, Any]]:
+        self.statements.append(statement)
+        self.parameters.append(parameters)
+        sql = statement.lower()
+        if "action_ready_retention_borrowers" in sql:
+            return [
+                {
+                    "retention_segment_borrowers": 16557,
+                    "marketing_eligible_retention_borrowers": 0,
+                    "action_ready_retention_borrowers": 0,
+                    "refreshed_at": "2026-06-17T14:33:04.239Z",
+                }
+            ]
+        if "array_contains(segment_codes, 'retention')" in sql:
+            return []
+        return super().execute(statement, parameters)
+
+
 @pytest.mark.parametrize(
     ("question", "expected_asset"),
     [
@@ -298,7 +317,7 @@ def test_direct_retention_competitor_lien_prompt_is_not_front_run_by_top_borrowe
     client = _UniversalSqlClient()
 
     response = direct_canonical_response(
-        "List top retention borrowers with competitor lien evidence in Illinois by opportunity score.",
+        "retention borrowers with competitor-lien evidence in Illinois",
         cast(Any, client),
     )
 
@@ -309,6 +328,50 @@ def test_direct_retention_competitor_lien_prompt_is_not_front_run_by_top_borrowe
     assert "signal_type = 'competitor_lien'" in response.sql_query
     assert client.parameters[-1] == {"state": "IL"}
     assert "mip.gold.evidence_events" in response.trusted_assets
+
+
+def test_direct_best_retention_empty_answer_explains_eligibility_gate() -> None:
+    client = _RetentionEligibilitySqlClient()
+
+    response = direct_canonical_response("best retention borrowers in Illinois", cast(Any, client))
+
+    assert response is not None
+    assert response.source == "trusted_sql"
+    assert response.sql_query is not None
+    assert "action_ready_retention_borrowers" in response.sql_query
+    assert client.parameters[-1] == {"state": "IL"}
+    assert response.metric_value == "0"
+    assert response.actions == []
+    assert "16,557 borrowers in the Retention Risk segment" in response.answer
+    assert "marketing-eligibility and opt-in consent filters" in response.answer
+    assert "Competitor-lien evidence questions use a separate evidence workflow" in response.answer
+
+
+def test_direct_equity_line_hyphen_routes_to_heloc_intent() -> None:
+    client = _UniversalSqlClient()
+
+    response = direct_canonical_response("highest equity-line borrowers in Texas", cast(Any, client))
+
+    assert response is not None
+    assert response.source == "trusted_sql"
+    assert response.trusted_assets == ["mip.gold.borrower_360"]
+    assert response.sql_query is not None
+    assert "has_heloc_propensity_trigger = TRUE" in response.sql_query
+    assert client.parameters[-1] == {"state": "TX"}
+    assert "home-equity / HELOC borrowers" in response.answer
+
+
+def test_direct_multi_intent_answer_discloses_primary_ranking_lens() -> None:
+    client = _UniversalSqlClient()
+
+    response = direct_canonical_response("best HELOC and cash-out borrowers in Texas", cast(Any, client))
+
+    assert response is not None
+    assert response.source == "trusted_sql"
+    assert response.sql_query is not None
+    assert "recommended_offer_code = 'cash_out'" in response.sql_query
+    assert "I detected additional intent language (home-equity / HELOC)" in response.answer
+    assert "ask for a combined segment if you want an intersection" in response.answer
 
 
 def test_direct_ranked_lead_population_rejects_non_numeric_count() -> None:

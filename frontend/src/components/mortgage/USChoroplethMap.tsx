@@ -8,7 +8,6 @@ import { api } from '../../lib/api';
 import { useOptionalFootprint } from '../FootprintProvider';
 import type { CountyRollup, StateRollup, ZipRollup } from '../../types';
 import {
-  SEGMENT_CODE_TO_NAME,
   USCODE_TO_FIPS,
   buildCountiesPayload,
   buildLeadQueuePath,
@@ -24,6 +23,7 @@ import {
 } from './USChoroplethMap.utils';
 import { loadUsaStateMap } from './USStateMapData';
 import { USChoroplethMapTooltip } from './USChoroplethMapTooltip';
+import { safeSegmentName } from '../../lib/segmentMetadata';
 
 // Slice13-accuracy-validation: county + ZIP hover numbers now come from
 // /api/geo/county-rollups + /api/geo/zip-rollups (backed by
@@ -356,7 +356,7 @@ export function USChoroplethMap({
   const activeSegNames = useMemo(() => {
     if (!segmentFilter || segmentFilter.length === 0) return null;
     return new Set(
-      segmentFilter.map((c) => SEGMENT_CODE_TO_NAME[c]).filter((n): n is string => Boolean(n)),
+      segmentFilter.map((c) => safeSegmentName(c)).filter((n): n is string => Boolean(n)),
     );
   }, [segmentFilter]);
 
@@ -379,7 +379,7 @@ export function USChoroplethMap({
     return (uscode: string): StateFacts | undefined => {
       const live = liveStateFacts?.[uscode];
       const liveTopSegment = live?.top_segment_code
-        ? (SEGMENT_CODE_TO_NAME[live.top_segment_code] ?? '')
+        ? (safeSegmentName(live.top_segment_code) ?? '')
         : '';
       if (live) {
         return {
@@ -532,7 +532,8 @@ export function USChoroplethMap({
   ]);
   const segmentCaption = useMemo(() => {
     if (!segmentFilter || segmentFilter.length === 0) return 'marketable population';
-    return `opportunity within ${segmentFilter.map((code) => SEGMENT_CODE_TO_NAME[code] ?? code).join(', ')}`;
+    const labels = segmentFilter.map((code) => safeSegmentName(code) ?? 'Unknown segment');
+    return `opportunity within ${labels.join(', ')}`;
   }, [segmentFilter]);
 
   // ----- STATE level: real US paths via us-atlas ---------------------------
@@ -751,7 +752,7 @@ export function USChoroplethMap({
           const count = liveFacts?.addressable_borrowers ?? null;
           const avgScore = liveFacts?.avg_opportunity_score ?? null;
           const topSegCode = liveFacts?.top_segment_code ?? null;
-          const topSegment = topSegCode ? (SEGMENT_CODE_TO_NAME[topSegCode] ?? undefined) : undefined;
+          const topSegment = topSegCode ? (safeSegmentName(topSegCode) ?? undefined) : undefined;
           const hasPositiveCount = count !== null && count > 0;
           const lvl = hasPositiveCount ? countyBucketer(count) : null;
           const classes = [
@@ -878,7 +879,7 @@ export function USChoroplethMap({
           const count = rollup.addressable_borrowers ?? null;
           const avgScore = rollup.avg_opportunity_score ?? null;
           const topSegCode = rollup.top_segment_code ?? null;
-          const topSegment = topSegCode ? SEGMENT_CODE_TO_NAME[topSegCode] : undefined;
+          const topSegment = topSegCode ? (safeSegmentName(topSegCode) ?? undefined) : undefined;
           const lvl = zipBucketer(count);
           const isSelected =
             selected?.level === 'zip' && selected.id === rollup.zip;

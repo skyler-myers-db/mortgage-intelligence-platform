@@ -165,6 +165,11 @@ describe('USChoroplethMap county visual states', () => {
       (await waitForSelector<SVGPathElement>('path[aria-label="Illinois"]'))
       ?? (await waitForSelector<SVGPathElement>('path[aria-label="IL"]'));
     expect(illinois).toBeTruthy();
+    for (let i = 0; i < 80 && !illinois?.classList.contains('has-data'); i += 1) {
+      await settle();
+      await new Promise((resolve) => window.setTimeout(resolve, 5));
+    }
+    expect(illinois?.classList.contains('has-data')).toBe(true);
     await act(async () => {
       illinois?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
@@ -210,6 +215,24 @@ describe('USChoroplethMap county visual states', () => {
     expect(cookLoaded.classList.contains('lvl-1')).toBe(true);
     expect(dupageLoaded.classList.contains('is-empty')).toBe(true);
     expect(dupageLoaded.classList.contains('lvl-1')).toBe(false);
+  });
+
+  it('does not expose raw unknown segment filters in the map caption', async () => {
+    await act(async () => {
+      root.render(
+        <MemoryRouter>
+          <USChoroplethMap
+            segmentFilter={['permit', 'retention-risk']}
+            segmentFilterMode="any"
+            countyTopologyLoader={loadCountyTopology}
+          />
+        </MemoryRouter>,
+      );
+    });
+    await settle();
+
+    expect(document.body.textContent).toContain('opportunity within HELOC Intent, Unknown segment');
+    expect(document.body.textContent).not.toContain('retention-risk');
   });
 
   it('keeps county geography busy while county shapes are still loading', async () => {

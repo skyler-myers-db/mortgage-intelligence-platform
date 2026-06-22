@@ -8,8 +8,8 @@ import type { SegmentCode } from '../types';
  * runtime (never hard-coded here).
  *
  * Safe to import from production code — no fake borrower attributes live
- * in this module. If the backend hands back a segment code that is not
- * in this table, callers should fall back to the code string itself.
+ * in this module. Use `safeSegmentName()` for user-visible API payloads
+ * where an unknown code should be hidden rather than echoed back verbatim.
  */
 export interface SegmentDefinition {
   code: SegmentCode;
@@ -74,6 +74,25 @@ export function segmentColor(code: string): string {
 
 export function segmentName(code: string): string {
   return segmentByCode(code)?.name ?? code;
+}
+
+const SEGMENT_ALIASES: Record<string, SegmentCode> = {
+  heloc: 'permit',
+  'heloc-intent': 'permit',
+  'permit-activity': 'permit',
+};
+
+export function normalizeSegmentCode(value: unknown): SegmentCode | null {
+  if (typeof value !== 'string') return null;
+  const code = value.trim().toLowerCase().replace(/[\s_]+/g, '-');
+  if (!code) return null;
+  const normalized = SEGMENT_ALIASES[code] ?? code;
+  return segmentByCode(normalized) ? normalized as SegmentCode : null;
+}
+
+export function safeSegmentName(value: unknown): string | null {
+  const code = normalizeSegmentCode(value);
+  return code ? segmentName(code) : null;
 }
 
 export function segmentIcon(code: string): IconName {

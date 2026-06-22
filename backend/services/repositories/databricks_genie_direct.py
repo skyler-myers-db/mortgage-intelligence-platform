@@ -53,6 +53,8 @@ from backend.services.repositories.databricks_genie_canonical import (
     _CANONICAL_REFI_EQUITY_SIGNAL_COMPARE_SQL,
     _CANONICAL_RETENTION_COMPETITOR_LIEN_LIST_BY_STATE_SQL,
     _CANONICAL_RETENTION_COMPETITOR_LIEN_LIST_SQL,
+    _CANONICAL_RETENTION_ELIGIBILITY_SUMMARY_BY_STATE_SQL,
+    _CANONICAL_RETENTION_ELIGIBILITY_SUMMARY_GLOBAL_SQL,
     _CANONICAL_SEGMENT_APPROVAL_RATE_SQL,
     _CANONICAL_STRATEGY_BOARD_SQL,
     _CANONICAL_TOP_BORROWERS_BY_STATE_INTENT_SQL,
@@ -106,6 +108,7 @@ from backend.services.repositories.databricks_genie_canonical import (
     _retention_competitor_lien_list_question,
     _retention_risk_question,
     _specific_top_borrower_intent_label,
+    _specific_top_borrower_intent_note,
     _specific_top_borrower_sort_label,
 )
 from backend.services.repositories.databricks_genie_policy_helpers import (
@@ -145,6 +148,7 @@ def _trusted_sql_response(
     answer: str,
     metric_value: str | None = None,
     started_at: float | None = None,
+    suppress_actions: bool = False,
 ) -> GenieMessageResponse:
     question_hash = _genie_question_hash(question)
     message_id = f"trusted-sql-{question_hash}"
@@ -159,7 +163,7 @@ def _trusted_sql_response(
         elapsed_ms=elapsed_ms,
     )
     visualization = _plan_genie_visualization(question, rows)
-    actions = _suggest_genie_actions(
+    actions = [] if suppress_actions else _suggest_genie_actions(
         question=question,
         rows=rows,
         trusted_assets=trusted_assets,
@@ -529,25 +533,77 @@ def direct_canonical_response(
             return None
         if rows:
             top = rows[0]
+            intent_note = _specific_top_borrower_intent_note(question, intent)
             answer = (
                 f"I ranked the top {len(rows)} {state_name} ({state_code}) "
                 f"{intent_label} borrowers from {borrower_asset}, ordered by "
                 f"{sort_label}. The current first borrower is masked "
                 f"{top.get('borrower_id')} with opportunity score "
-                f"{int(top.get('opportunity_score') or 0):,}."
+                f"{int(top.get('opportunity_score') or 0):,}.{intent_note}"
             )
+            response_sql_query = sql_query
+            response_rows = rows
+            suppress_actions = False
+            metric_value = None
         else:
-            answer = (
-                f"The trusted borrower table returned no marketing-eligible "
-                f"{intent_label} borrowers in {state_name} ({state_code}) for "
-                "the current refreshed coverage."
-            )
+            response_sql_query = sql_query
+            response_rows = rows
+            suppress_actions = False
+            metric_value = None
+            if intent == "retention":
+                try:
+                    summary_rows = (
+                        _redact_genie_rows(
+                            sql_client.execute(
+                                _CANONICAL_RETENTION_ELIGIBILITY_SUMMARY_BY_STATE_SQL,
+                                {"state": state_code},
+                            )
+                        )
+                        or []
+                    )
+                except DatabricksSqlError as exc:
+                    _emit_genie_warning(
+                        "direct_canonical_genie_retention_eligibility_summary_state_failed",
+                        exc=exc,
+                    )
+                    summary_rows = []
+                if summary_rows:
+                    summary = summary_rows[0]
+                    retention_count = int(summary.get("retention_segment_borrowers") or 0)
+                    marketing_count = int(summary.get("marketing_eligible_retention_borrowers") or 0)
+                    action_ready_count = int(summary.get("action_ready_retention_borrowers") or 0)
+                    answer = (
+                        f"{state_name} ({state_code}) has {retention_count:,} borrowers in the "
+                        "Retention Risk segment, but none qualify for the action-ready best-retention "
+                        f"queue after marketing-eligibility and opt-in consent filters "
+                        f"({marketing_count:,} marketing-eligible; {action_ready_count:,} opt-in). "
+                        "Competitor-lien evidence questions use a separate evidence workflow and may "
+                        "return borrowers that are not action-ready for outreach."
+                    )
+                    response_sql_query = _CANONICAL_RETENTION_ELIGIBILITY_SUMMARY_BY_STATE_SQL
+                    response_rows = summary_rows
+                    suppress_actions = True
+                    metric_value = f"{action_ready_count:,}"
+                else:
+                    answer = (
+                        f"The trusted borrower table returned no marketing-eligible "
+                        f"{intent_label} borrowers in {state_name} ({state_code}) for "
+                        "the current refreshed coverage."
+                    )
+            else:
+                answer = (
+                    f"The trusted borrower table returned no marketing-eligible "
+                    f"{intent_label} borrowers in {state_name} ({state_code}) for "
+                    "the current refreshed coverage."
+                )
         return trusted_response(
             question=question,
-            sql_query=sql_query,
+            sql_query=response_sql_query,
             trusted_assets=[borrower_asset],
-            rows=rows,
+            rows=response_rows,
             answer=answer,
+            metric_value=metric_value,
+            suppress_actions=suppress_actions,
         )
 
     specific_top_borrowers_global_scope = _canonical_specific_top_borrowers_global_scope(question)
@@ -567,24 +623,72 @@ def direct_canonical_response(
             return None
         if rows:
             top = rows[0]
+            intent_note = _specific_top_borrower_intent_note(question, intent)
             answer = (
                 f"I ranked the top {len(rows)} {intent_label} borrowers across the "
                 f"current refreshed coverage from {borrower_asset}, ordered by "
                 f"{sort_label}. The current first borrower is masked "
                 f"{top.get('borrower_id')} with opportunity score "
-                f"{int(top.get('opportunity_score') or 0):,}."
+                f"{int(top.get('opportunity_score') or 0):,}.{intent_note}"
             )
+            response_sql_query = sql_query
+            response_rows = rows
+            suppress_actions = False
+            metric_value = None
         else:
-            answer = (
-                f"The trusted borrower table returned no marketing-eligible "
-                f"{intent_label} borrowers for the current refreshed coverage."
-            )
+            response_sql_query = sql_query
+            response_rows = rows
+            suppress_actions = False
+            metric_value = None
+            if intent == "retention":
+                try:
+                    summary_rows = (
+                        _redact_genie_rows(
+                            sql_client.execute(_CANONICAL_RETENTION_ELIGIBILITY_SUMMARY_GLOBAL_SQL)
+                        )
+                        or []
+                    )
+                except DatabricksSqlError as exc:
+                    _emit_genie_warning(
+                        "direct_canonical_genie_retention_eligibility_summary_global_failed",
+                        exc=exc,
+                    )
+                    summary_rows = []
+                if summary_rows:
+                    summary = summary_rows[0]
+                    retention_count = int(summary.get("retention_segment_borrowers") or 0)
+                    marketing_count = int(summary.get("marketing_eligible_retention_borrowers") or 0)
+                    action_ready_count = int(summary.get("action_ready_retention_borrowers") or 0)
+                    answer = (
+                        f"The current coverage has {retention_count:,} borrowers in the Retention "
+                        "Risk segment, but none qualify for the action-ready best-retention queue "
+                        f"after marketing-eligibility and opt-in consent filters "
+                        f"({marketing_count:,} marketing-eligible; {action_ready_count:,} opt-in). "
+                        "Competitor-lien evidence questions use a separate evidence workflow and may "
+                        "return borrowers that are not action-ready for outreach."
+                    )
+                    response_sql_query = _CANONICAL_RETENTION_ELIGIBILITY_SUMMARY_GLOBAL_SQL
+                    response_rows = summary_rows
+                    suppress_actions = True
+                    metric_value = f"{action_ready_count:,}"
+                else:
+                    answer = (
+                        f"The trusted borrower table returned no marketing-eligible "
+                        f"{intent_label} borrowers for the current refreshed coverage."
+                    )
+            else:
+                answer = (
+                    f"The trusted borrower table returned no marketing-eligible "
+                    f"{intent_label} borrowers for the current refreshed coverage."
+                )
         return trusted_response(
             question=question,
-            sql_query=sql_query,
+            sql_query=response_sql_query,
             trusted_assets=[borrower_asset],
-            rows=rows,
+            rows=response_rows,
             answer=answer,
+            metric_value=metric_value,
+            suppress_actions=suppress_actions,
         )
 
     top_borrower_state_scope = _canonical_top_borrowers_state_scope(question)

@@ -10,20 +10,11 @@ import {
 import { loadUsaStateMap } from './USStateMapData';
 import type { UsaSvgMap } from './USChoroplethMap.utils';
 import { offerDisplayLabel } from '../../lib/offerLanguage';
+import { safeSegmentName } from '../../lib/segmentMetadata';
 
-const GENIE_SEGMENT_LABELS: Record<string, string> = {
-  itm: 'Prime Refi Candidates',
-  equity: 'Home Equity Candidate',
-  investor: 'Investor / Multi-Property',
-  retention: 'Retention Risk',
-  listed: 'Listed for Sale',
-  permit: 'HELOC Intent',
-};
-
-function strategySegmentLabel(value: unknown): string | null {
+export function strategySegmentLabel(value: unknown): string | null {
   if (value === null || value === undefined || value === '') return null;
-  const raw = String(value);
-  return GENIE_SEGMENT_LABELS[raw] ?? raw;
+  return safeSegmentName(value) ?? 'Unknown segment';
 }
 
 function strategyOfferLabel(row: Record<string, unknown>): string | null {

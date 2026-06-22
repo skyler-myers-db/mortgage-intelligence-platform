@@ -490,6 +490,21 @@ ORDER BY opportunity_score DESC, rate_spread_bps DESC, borrower_id ASC
 LIMIT 10
 """.strip()
 
+_CANONICAL_RETENTION_ELIGIBILITY_SUMMARY_BY_STATE_SQL = f"""
+SELECT CAST(COUNT_IF(array_contains(segment_codes, 'retention')) AS BIGINT)
+         AS retention_segment_borrowers
+     , CAST(COUNT_IF(array_contains(segment_codes, 'retention') AND marketing_eligible = TRUE) AS BIGINT)
+         AS marketing_eligible_retention_borrowers
+     , CAST(COUNT_IF(
+         array_contains(segment_codes, 'retention')
+         AND marketing_eligible = TRUE
+         AND consent_status = 'opt_in'
+       ) AS BIGINT) AS action_ready_retention_borrowers
+     , MAX(refreshed_at) AS refreshed_at
+FROM {_BORROWER_360}
+WHERE state = :state
+""".strip()
+
 _CANONICAL_TOP_BORROWERS_BY_STATE_INTENT_SQL = {
     "refi": _CANONICAL_TOP_REFI_BORROWERS_BY_STATE_SQL,
     "cash_out": _CANONICAL_TOP_CASH_OUT_BORROWERS_BY_STATE_SQL,
@@ -619,6 +634,20 @@ WHERE array_contains(segment_codes, 'retention')
   AND consent_status = 'opt_in'
 ORDER BY opportunity_score DESC, rate_spread_bps DESC, borrower_id ASC
 LIMIT 10
+""".strip()
+
+_CANONICAL_RETENTION_ELIGIBILITY_SUMMARY_GLOBAL_SQL = f"""
+SELECT CAST(COUNT_IF(array_contains(segment_codes, 'retention')) AS BIGINT)
+         AS retention_segment_borrowers
+     , CAST(COUNT_IF(array_contains(segment_codes, 'retention') AND marketing_eligible = TRUE) AS BIGINT)
+         AS marketing_eligible_retention_borrowers
+     , CAST(COUNT_IF(
+         array_contains(segment_codes, 'retention')
+         AND marketing_eligible = TRUE
+         AND consent_status = 'opt_in'
+       ) AS BIGINT) AS action_ready_retention_borrowers
+     , MAX(refreshed_at) AS refreshed_at
+FROM {_BORROWER_360}
 """.strip()
 
 _CANONICAL_TOP_BORROWERS_GLOBAL_INTENT_SQL = {
@@ -1106,8 +1135,12 @@ def _current_footprint_label() -> str:
 def _retention_competitor_lien_list_question(question: str) -> bool:
     q = question.lower()
     asks_for_rows = bool(
-        re.search(r"\b(which|show|list|find|who are|give me)\b", q)
-        and re.search(r"\bborrowers?\b", q)
+        re.search(r"\bborrowers?\b", q)
+        and (
+            re.search(r"\b(which|show|list|find|who are|give me)\b", q)
+            or re.search(r"\bretention(?:[-\s]risk)?\s+borrowers?\b", q)
+            or re.search(r"\bborrowers?\s+with\b", q)
+        )
     )
     retention_scope = bool(
         re.search(
@@ -1671,23 +1704,56 @@ def _canonical_top_borrowers_global_scope(question: str) -> bool:
 
 def _specific_top_borrower_intent(q: str) -> str | None:
     """Return an explicit borrower intent that must not be answered generically."""
+    intents = _specific_top_borrower_intents(q)
+    return intents[0] if intents else None
+
+
+def _specific_top_borrower_intents(q: str) -> list[str]:
+    """Return explicit borrower intents in the deterministic ranking order."""
+    intents: list[str] = []
+
+    def add(intent: str, predicate: bool) -> None:
+        if predicate and intent not in intents:
+            intents.append(intent)
+
     if any(term in q for term in ("cash-out", "cash out", "cashout")):
-        return "cash_out"
-    if any(term in q for term in ("heloc", "home equity", "equity line", "equity-credit")):
-        return "heloc"
-    if any(term in q for term in ("listed for sale", "listed-for-sale", "listing", "listings", "mls", "for sale")):
-        return "listed"
-    if re.search(r"\blisted\s+(borrowers?|leads?|candidates?)\b", q):
-        return "listed"
-    if any(term in q for term in ("investor", "multi-property", "multi property", "related property")):
-        return "investor"
-    if any(term in q for term in ("retention", "recapture", "current customer", "former customer")):
-        return "retention"
-    if any(term in q for term in ("in-the-money", "in the money", "itm", "prime refi", "refi", "refinance")):
-        return "refi"
-    if any(term in q for term in ("permit", "permits")):
-        return "heloc"
-    return None
+        add("cash_out", True)
+    add(
+        "heloc",
+        any(
+            term in q
+            for term in (
+                "heloc",
+                "home equity",
+                "equity line",
+                "equity-line",
+                "equity-credit",
+                "permit",
+                "permits",
+            )
+        ),
+    )
+    add(
+        "listed",
+        any(
+            term in q
+            for term in ("listed for sale", "listed-for-sale", "listing", "listings", "mls", "for sale")
+        )
+        or bool(re.search(r"\blisted\s+(borrowers?|leads?|candidates?)\b", q)),
+    )
+    add(
+        "investor",
+        any(term in q for term in ("investor", "multi-property", "multi property", "related property")),
+    )
+    add(
+        "retention",
+        any(term in q for term in ("retention", "recapture", "current customer", "former customer")),
+    )
+    add(
+        "refi",
+        any(term in q for term in ("in-the-money", "in the money", "itm", "prime refi", "refi", "refinance")),
+    )
+    return intents
 
 
 def _specific_top_borrower_intent_label(intent: str) -> str:
@@ -1710,6 +1776,19 @@ def _specific_top_borrower_sort_label(intent: str) -> str:
         "retention": "opportunity score, then rate spread",
         "refi": "opportunity score, then rate-spread economics",
     }.get(intent, "the governed borrower ranking")
+
+
+def _specific_top_borrower_intent_note(question: str, selected_intent: str) -> str:
+    intents = _specific_top_borrower_intents(_normalized_question(question))
+    other_intents = [intent for intent in intents if intent != selected_intent]
+    if not other_intents:
+        return ""
+    labels = ", ".join(_specific_top_borrower_intent_label(intent) for intent in other_intents)
+    return (
+        f" I detected additional intent language ({labels}) and used "
+        f"{_specific_top_borrower_intent_label(selected_intent)} as the primary ranking lens; "
+        "ask for a combined segment if you want an intersection."
+    )
 
 
 def _canonical_specific_top_borrowers_state_scope(question: str) -> tuple[str, str, str] | None:

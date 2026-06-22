@@ -2,6 +2,7 @@ import type {
   GenieAnswer as GenieAnswerShape,
   GenieVisualization,
 } from '../../types';
+import { safeSegmentName } from '../../lib/segmentMetadata';
 
 export const MAX_TABLE_ROWS = 10;
 export const MAX_TABLE_COLS = 4;
@@ -62,15 +63,6 @@ const VALUE_COLUMN_PRIORITY = [
   'equity_pct',
 ];
 
-const SEGMENT_LABELS: Record<string, string> = {
-  itm: 'Prime Refi Candidates',
-  equity: 'Home Equity Candidate',
-  investor: 'Investor / Multi-Property',
-  retention: 'Retention Risk',
-  listed: 'Listed for Sale',
-  permit: 'HELOC Intent',
-};
-
 const HUMANIZED_KEY_LABELS: Record<string, string> = {
   segment_code: 'Cohort',
   top_segment: 'Top Cohort',
@@ -113,11 +105,14 @@ export function formatIdentifier(column: string, value: unknown): string {
 
 function formatSegmentValue(value: unknown): string {
   if (Array.isArray(value)) {
-    return value.map(formatSegmentValue).join(', ');
+    const labels = value
+      .map((item) => safeSegmentName(item))
+      .filter((label): label is string => Boolean(label));
+    return labels.length > 0 ? labels.join(', ') : 'Unknown segment';
   }
   const raw = String(value ?? '').trim();
   if (!raw) return '—';
-  return SEGMENT_LABELS[raw.toLowerCase()] ?? raw;
+  return safeSegmentName(raw) ?? 'Unknown segment';
 }
 
 function chooseValueColumn(columns: string[], types: Record<string, 'str' | 'num' | 'mixed'>): string | null {

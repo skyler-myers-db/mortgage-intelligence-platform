@@ -270,18 +270,19 @@ describe('LeadQueue filter state', () => {
     await settle();
 
     expect(document.querySelector('button[aria-label="STATE: 2 states selected"]')).toBeTruthy();
-    expect(document.querySelector('button[aria-label="SEGMENT: 2 segments selected"]')).toBeTruthy();
+    expect(document.querySelector('button[aria-label="SEGMENT: 2 segments selected (any selected)"]')).toBeTruthy();
+    expect(document.body.textContent).toContain('segments = Prime Refi Candidates, Home Equity Candidate (any selected)');
     expect(document.querySelector('button[aria-label="RELATIONSHIP: Competitor customer"]')).toBeTruthy();
     expect(document.querySelector('button[aria-label="PRODUCT: HELOC"]')).toBeTruthy();
     expect(document.querySelector('button[aria-label="CONTACTABILITY: Eligible only"]')).toBeTruthy();
     expect(document.querySelector('button[aria-label="CONSENT: Any"]')).toBeTruthy();
 
-    const segmentButton = document.querySelector('button[aria-label="SEGMENT: 2 segments selected"]') as HTMLButtonElement;
+    const segmentButton = document.querySelector('button[aria-label="SEGMENT: 2 segments selected (any selected)"]') as HTMLButtonElement;
     await act(async () => {
       segmentButton.click();
     });
     const selected = [...document.querySelectorAll('[role="option"][aria-selected="true"]')]
       .map((node) => node.textContent ?? '');
-    expect(selected.some((text) => text.includes('2 segments selected'))).toBe(true);
+    expect(selected.some((text) => text.includes('2 segments selected (any selected)'))).toBe(true);
   });
 });

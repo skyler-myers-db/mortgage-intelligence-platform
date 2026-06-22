@@ -41,7 +41,9 @@ describe('lead queue drilldown display labels', () => {
     expect(segmentDisplayLabel('permit')).toBe('HELOC Intent');
     expect(segmentFilterDisplayValue('listed')).toBe('Listed for Sale');
     expect(segmentFilterDisplayValue('permit')).toBe('HELOC Intent');
-    expect(segmentFilterDisplayValue(undefined, ['itm', 'equity'])).toBe('2 segments selected');
+    expect(segmentFilterDisplayValue(undefined, ['itm', 'equity'])).toBe('2 segments selected (any selected)');
+    expect(segmentFilterDisplayValue(undefined, ['itm', 'equity'], 'all')).toBe('2 segments selected (all selected)');
+    expect(segmentDisplayLabel('retention-risk')).toBe('Unknown segment');
     expect(segmentFilterDisplayValue()).toBe('All segments');
   });
 });

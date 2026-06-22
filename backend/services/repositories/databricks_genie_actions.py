@@ -90,7 +90,7 @@ def _segment_codes_from_question(question: str) -> list[str]:
     codes: list[str] = []
     if re.search(r"\b(in[-\s]?the[-\s]?money|itm|refi|refinance)\b", q):
         codes.append("itm")
-    if re.search(r"\b(heloc|equity line|equity-credit)\b", q):
+    if re.search(r"\b(heloc|equity[-\s]line|equity-credit)\b", q):
         codes.append("permit")
     elif "home equity" in q:
         codes.append("equity")
@@ -293,9 +293,9 @@ def _route_from_answer_rows(
             params["segment"] = segment_codes[0]
         else:
             params["segment_codes"] = ",".join(segment_codes)
-            params["segment_mode"] = "all"
+            params["segment_mode"] = "any"
         filter_criteria["segment_codes"] = segment_codes
-        filter_criteria["segment_mode"] = "all" if len(segment_codes) > 1 else "any"
+        filter_criteria["segment_mode"] = "any"
 
     if portfolio_criteria:
         filter_criteria["portfolio_criteria"] = portfolio_criteria

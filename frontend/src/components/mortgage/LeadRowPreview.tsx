@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import type { LeadSummary } from '../../types';
 import { DRAWER_SOURCES } from '../../lib/drawerSources';
 import { offerDisplayLabel, offerRationale, offerShortDescription } from '../../lib/offerLanguage';
-import { segmentColor, segmentName } from '../../lib/segmentMetadata';
+import { safeSegmentName, segmentColor } from '../../lib/segmentMetadata';
 import { useApp } from '../AppContext';
 import { Button, EvidenceChip } from '../Primitives';
 import { ConfidenceMeter } from './ConfidenceMeter';
@@ -57,13 +57,14 @@ export function RowPreview({ lead, approval }: { lead: LeadSummary; approval?: s
         <div className="chip-row">
           {lead.segment_codes.map((sid) => {
             const color = segmentColor(sid);
+            const label = safeSegmentName(sid) ?? 'Unknown segment';
             return (
               <span
                 key={sid}
                 className="chip chip--segment"
                 style={{ '--chip-hue': color } as CSSProperties}
               >
-                <span className="chip__label">{segmentName(sid)}</span>
+                <span className="chip__label">{label}</span>
               </span>
             );
           })}

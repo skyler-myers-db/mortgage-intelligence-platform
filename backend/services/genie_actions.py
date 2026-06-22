@@ -427,26 +427,36 @@ def issue_response_action_tokens(
     *,
     actor: str,
 ) -> None:
+    signed_actions = []
     for action in response.actions:
         expires_at = int(time.time()) + _ACTION_TOKEN_TTL_S
         request_id = action.request_id or f"genie-action-{uuid4()}"
         action.request_id = request_id
         key_id, _secret = _current_action_token_key()
-        claims = _action_token_claims(
-            actor=actor,
-            action_type=action.action_type,
-            borrower_ids=borrower_ids(action.borrower_ids),
-            criteria=action.criteria,
-            route=action.route,
-            conversation_id=response.conversation_id,
-            message_id=response.message_id,
-            question_hash=response.question_hash,
-            request_id=request_id,
-            expires_at=expires_at,
-            nonce=secrets.token_urlsafe(12),
-            key_id=key_id,
-        )
+        try:
+            claims = _action_token_claims(
+                actor=actor,
+                action_type=action.action_type,
+                borrower_ids=borrower_ids(action.borrower_ids),
+                criteria=action.criteria,
+                route=action.route,
+                conversation_id=response.conversation_id,
+                message_id=response.message_id,
+                question_hash=response.question_hash,
+                request_id=request_id,
+                expires_at=expires_at,
+                nonce=secrets.token_urlsafe(12),
+                key_id=key_id,
+            )
+        except HTTPException:
+            # Response actions are optional affordances. If a raw Genie answer
+            # returns an oversized or unsafe replay action, preserve the answer
+            # and proof but omit the unsafe confirmation path. Confirmed action
+            # requests still use the strict validators below.
+            continue
         action.confirmation_token = _sign_action_claims(claims)
+        signed_actions.append(action)
+    response.actions = signed_actions
 
 
 def _decode_action_token(token: str) -> dict[str, Any]:

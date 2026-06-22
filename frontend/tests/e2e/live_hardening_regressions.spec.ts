@@ -136,6 +136,42 @@ async function clickSegment(page: Page, label: string): Promise<void> {
   await card.click();
 }
 
+async function expectClearFiltersState(page: Page, disabled: boolean): Promise<void> {
+  const clear = page.getByRole('button', { name: /^Clear filters$/ }).first();
+  await expect(clear).toBeVisible({ timeout: 30_000 });
+  if (disabled) {
+    await expect(clear).toBeDisabled();
+  } else {
+    await expect(clear).toBeEnabled();
+  }
+}
+
+test('Clear filters is visible, disabled when clean, and clears active filters on core routes', async ({ page }) => {
+  await page.goto('/lead-queue');
+  await expectClearFiltersState(page, true);
+  await page.goto('/lead-queue?states=IL&segment_codes=itm,equity&segment_mode=any');
+  await expectClearFiltersState(page, false);
+  await page.getByRole('button', { name: /^Clear filters$/ }).first().click();
+  await expect(page).toHaveURL(/\/lead-queue$/);
+  await expectClearFiltersState(page, true);
+
+  await page.goto('/analytics');
+  await expectClearFiltersState(page, true);
+  await page.goto('/analytics?states=IL&segment_codes=itm&signal_types=listing');
+  await expectClearFiltersState(page, false);
+  await page.getByRole('button', { name: /^Clear filters$/ }).first().click();
+  await expect(page).toHaveURL(/\/analytics$/);
+  await expectClearFiltersState(page, true);
+
+  await page.goto('/segment-intelligence');
+  await expectClearFiltersState(page, true);
+  await clickSegment(page, 'Prime Refi Candidates');
+  await expectClearFiltersState(page, false);
+  await page.getByRole('button', { name: /^Clear filters$/ }).first().click();
+  await expectClearFiltersState(page, true);
+  await expect(page.getByText(/matches any selected segment/i)).toHaveCount(0);
+});
+
 test('Segment Intelligence stacks selected segments into an any-match cohort and replays controls', async ({ page }) => {
   await page.goto('/segment-intelligence');
   await clickSegment(page, 'Prime Refi Candidates');

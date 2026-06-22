@@ -1494,6 +1494,25 @@ def test_heloc_genie_action_routes_to_heloc_intent_segment() -> None:
     assert filters["segment_mode"] == "any"
 
 
+def test_multi_segment_genie_action_uses_any_mode_like_segment_intelligence() -> None:
+    route, filters = _route_from_answer_rows(
+        question="best in-the-money home equity borrowers in Illinois",
+        rows=[{"state": "IL"}],
+        borrower_ids=[],
+        sql_query=(
+            "SELECT * FROM mip.gold.borrower_360 "
+            "WHERE array_contains(segment_codes, 'itm') "
+            "AND array_contains(segment_codes, 'equity')"
+        ),
+    )
+
+    params = parse_qs(urlsplit(route).query)
+    assert params["segment_codes"] == ["itm,equity"]
+    assert params["segment_mode"] == ["any"]
+    assert filters["segment_codes"] == ["itm", "equity"]
+    assert filters["segment_mode"] == "any"
+
+
 class _OpenCohortRepo:
     def respond(
         self,
@@ -1827,6 +1846,75 @@ class _LargeBorrowerActionRepo:
                 )
             ],
         )
+
+
+class _OversizedResponseActionRepo:
+    def respond(
+        self,
+        question: str,
+        conversation_id: str | None = None,
+    ) -> GenieMessageResponse:
+        _ = question
+        borrower_ids = [f"B-{10000 + i:05d}" for i in range(501)]
+        return GenieMessageResponse(
+            conversation_id=conversation_id or "conv-oversized-action",
+            message_id="msg-oversized-action",
+            question="Show a very large governed cohort.",
+            question_hash="hash-oversized-action",
+            answer="The governed answer still renders even when the replay action is too large.",
+            source="trusted_sql",
+            trusted_assets=["mip.gold.borrower_360"],
+            row_count=len(borrower_ids),
+            table_rows=[{"borrower_id": borrower_id, "score": 80} for borrower_id in borrower_ids[:10]],
+            actions=[
+                GenieActionSuggestion(
+                    id="open-large-cohort",
+                    label="Open large cohort",
+                    action_type="open_cohort",
+                    description="Open a large governed cohort in Lead Queue.",
+                    route="/lead-queue?segment=itm",
+                    borrower_ids=borrower_ids,
+                    criteria={
+                        "source": "trusted_sql",
+                        "source_assets": ["mip.gold.borrower_360"],
+                        "visualization_kind": "table",
+                        "row_count": len(borrower_ids),
+                        "result_filters": {"borrower_ids": borrower_ids},
+                    },
+                )
+            ],
+        )
+
+
+def test_genie_message_omits_oversized_response_actions_without_failing_answer() -> None:
+    lakebase = _RecordingLakebase()
+    prior_repo = app.dependency_overrides.get(get_genie_answer_repository)
+    prior_lakebase = app.dependency_overrides.get(get_lakebase_client)
+    app.dependency_overrides[get_genie_answer_repository] = _OversizedResponseActionRepo
+    app.dependency_overrides[get_lakebase_client] = lambda: lakebase
+    try:
+        res = client.post(
+            "/api/genie/message",
+            json={"question": "Show a very large governed cohort."},
+            headers=ACTOR_HEADERS,
+        )
+    finally:
+        if prior_repo is None:
+            app.dependency_overrides.pop(get_genie_answer_repository, None)
+        else:
+            app.dependency_overrides[get_genie_answer_repository] = prior_repo
+        if prior_lakebase is None:
+            app.dependency_overrides.pop(get_lakebase_client, None)
+        else:
+            app.dependency_overrides[get_lakebase_client] = prior_lakebase
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["source"] == "trusted_sql"
+    assert body["row_count"] == 501
+    assert "governed answer still renders" in body["answer"]
+    assert body["actions"] == []
+    assert any("INSERT INTO mip_app.genie_sessions" in sql for sql, _ in lakebase.executes)
 
 
 def test_genie_open_cohort_materializes_lakebase_cohort_and_returns_filtered_route() -> None:

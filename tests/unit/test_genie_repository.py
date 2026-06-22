@@ -90,6 +90,28 @@ class _StubSqlClient:
         return self.rows[0] if self.rows else None
 
 
+class _RetentionEligibilitySqlClient(_StubSqlClient):
+    def __init__(self) -> None:
+        super().__init__([])
+
+    def execute(self, statement: str, parameters: Any = None) -> list[dict[str, Any]]:
+        self.statements.append(statement)
+        self.parameters.append(parameters)
+        sql = statement.lower()
+        if "action_ready_retention_borrowers" in sql:
+            return [
+                {
+                    "retention_segment_borrowers": 16557,
+                    "marketing_eligible_retention_borrowers": 0,
+                    "action_ready_retention_borrowers": 0,
+                    "refreshed_at": "2026-06-17T14:33:04.239Z",
+                }
+            ]
+        if "array_contains(segment_codes, 'retention')" in sql:
+            return []
+        return []
+
+
 class _SmartGenieSampleSqlClient:
     def __init__(self) -> None:
         self.statements: list[str] = []
@@ -684,6 +706,31 @@ def test_top_borrowers_by_state_uses_canonical_lead_population_rows() -> None:
     assert result.row_count == 10
     assert result.table_rows == rows
     assert "masked borrower B-IL000" in result.answer
+
+
+def test_text_only_best_retention_empty_answer_explains_eligibility_gate() -> None:
+    live = GenieResponse(
+        answer_text="No retention borrowers found.",
+        sql_query=None,
+        sql_result_rows=[],
+        conversation_id="conv-retention-empty",
+        message_id="msg-retention-empty",
+    )
+    stub = _StubClient(_make_breaker("closed"), response=[live, live])
+    sql = _RetentionEligibilitySqlClient()
+    repo = DatabricksGenieRepository(stub, sql_client=sql)  # type: ignore[arg-type]
+
+    result = repo.respond("best retention borrowers in Illinois")
+
+    assert result.source == "trusted_sql"
+    assert result.sql_query is not None
+    assert "action_ready_retention_borrowers" in result.sql_query
+    assert sql.parameters[-1] == {"state": "IL"}
+    assert result.metric_value == "0"
+    assert result.actions == []
+    assert "16,557 borrowers in the Retention Risk segment" in result.answer
+    assert "marketing-eligibility and opt-in consent filters" in result.answer
+    assert "Competitor-lien evidence questions use a separate evidence workflow" in result.answer
 
 
 def test_heloc_zip_text_only_answer_uses_equity_canonical_trusted_sql() -> None:

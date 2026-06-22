@@ -141,14 +141,20 @@ export function funnelStageDisplayValue(stage: LeadFunnelStage): string {
   return FUNNEL_STAGE_LABELS[stage];
 }
 
-export function segmentDisplayLabel(code: SegmentCode): string {
-  return SEGMENT_CODE_LABELS[code];
+export function segmentDisplayLabel(code: SegmentCode | string): string {
+  return SEGMENT_CODE_LABELS[code as SegmentCode] ?? 'Unknown segment';
 }
 
-export function segmentFilterDisplayValue(segment?: SegmentCode, segmentCodes: SegmentCode[] = []): string {
+export function segmentFilterDisplayValue(
+  segment?: SegmentCode,
+  segmentCodes: SegmentCode[] = [],
+  segmentMode: 'any' | 'all' = 'any',
+): string {
   if (segment) return segmentDisplayLabel(segment);
   if (segmentCodes.length === 1) return segmentDisplayLabel(segmentCodes[0]);
-  if (segmentCodes.length > 1) return `${segmentCodes.length} segments selected`;
+  if (segmentCodes.length > 1) {
+    return `${segmentCodes.length} segments selected (${segmentMode === 'all' ? 'all selected' : 'any selected'})`;
+  }
   return 'All segments';
 }
 

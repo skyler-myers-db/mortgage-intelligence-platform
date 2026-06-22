@@ -175,7 +175,7 @@ export default function LeadQueue() {
   const conversion = salesOpsQuery.data?.conversion ?? null;
   const salesTeamError = salesTeamQuery.error instanceof Error ? salesTeamQuery.error.message : null;
   const salesOpsError = salesOpsQuery.error instanceof Error ? salesOpsQuery.error.message : null;
-  const segmentFilter = segmentFilterDisplayValue(segment, segmentCodes);
+  const segmentFilter = segmentFilterDisplayValue(segment, segmentCodes, segmentMode);
   const segmentFilterOptions = optionsWithCurrentValue(SEGMENT_FILTER_OPTIONS, segmentFilter);
   const stateFilterDisplay = stateFilter
     ?? (stateFilters.length === 1
@@ -404,7 +404,12 @@ export default function LeadQueue() {
     segment || segmentCodes.length > 0 || stateFilter || zipFilter || stateFilters.length > 0 || zipFilters.length > 0 || borrowerIdFilters.length > 0 || countyFilter || countyFilters.length > 0 || targetLenderRef || portfolioCriteria || cohortId || funnelStage || approvalStatus !== 'any' || outreachStatus !== 'any' || assignedTo || agedDays ? (
           <>
             {segment && <Chip variant="neutral">segment = {segmentDisplayLabel(segment)}</Chip>}
-            {segmentCodes.length > 0 && <Chip variant="neutral">segments = {segmentCodes.map(segmentDisplayLabel).join(', ')}</Chip>}
+            {segmentCodes.length > 0 && (
+              <Chip variant="neutral">
+                segments = {segmentCodes.map(segmentDisplayLabel).join(', ')}
+                {' '}({segmentMode === 'all' ? 'all selected' : 'any selected'})
+              </Chip>
+            )}
             {stateFilter && <Chip variant="neutral">state = {stateFilter}</Chip>}
             {zipFilter && <Chip variant="neutral">zip = {zipFilter}</Chip>}
             {stateFilters.length > 0 && <Chip variant="neutral">states = {stateFilters.join(', ')}</Chip>}

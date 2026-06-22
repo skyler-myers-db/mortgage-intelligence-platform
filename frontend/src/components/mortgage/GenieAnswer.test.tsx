@@ -3,6 +3,7 @@ import { describe, it, expect } from 'vitest';
 // unit test reads the design-system CSS text under Vitest only.
 import { readFileSync } from 'node:fs';
 import { stripQuestionRestatement } from './GenieAnswer';
+import { strategySegmentLabel } from './GenieAnswerCharts';
 import { normalizeGenieAnswerLanguage } from '../../lib/genieAnswerLanguage';
 import { formatCell, humanizeKey, inferChartFromRows } from './GenieAnswer.logic';
 import {
@@ -167,6 +168,14 @@ describe('Genie table display labels', () => {
     expect(formatCell('segment_code', 'permit')).toBe('HELOC Intent');
     expect(formatCell('segment_code', 'itm')).toBe('Prime Refi Candidates');
     expect(formatCell('segment_codes', ['permit', 'equity'])).toBe('HELOC Intent, Home Equity Candidate');
+    expect(formatCell('segment_code', 'retention-risk')).toBe('Unknown segment');
+    expect(formatCell('segment_codes', ['retention-risk', 'made_up'])).toBe('Unknown segment');
+  });
+
+  it('does not leak raw unknown segment tokens in strategy board metadata', () => {
+    expect(strategySegmentLabel('permit')).toBe('HELOC Intent');
+    expect(strategySegmentLabel('retention-risk')).toBe('Unknown segment');
+    expect(strategySegmentLabel('made_up')).toBe('Unknown segment');
   });
 });
 

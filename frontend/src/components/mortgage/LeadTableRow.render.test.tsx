@@ -129,4 +129,38 @@ describe('LeadTableRow display fallbacks', () => {
     expect(document.body.textContent).toContain('Property ref unavailable');
     expect(document.body.textContent).not.toContain('property_ref_unavailable');
   });
+
+  it('does not expose raw unknown segment codes in table or preview chips', () => {
+    const weirdLead = {
+      ...lead,
+      segment_codes: ['retention-risk', 'made_up'],
+    } as unknown as LeadSummary;
+
+    act(() => {
+      root.render(
+        <LeadTableRow
+          lead={weirdLead}
+          virtualIndex={0}
+          isOpen
+          approval={undefined}
+          isSelected={false}
+          isSelectable
+          isApprovalEligible
+          bulkApproving={false}
+          salesBusy={false}
+          salesTeamCount={1}
+          pendingApproval={false}
+          onToggleRow={noop}
+          onToggleSelect={noop}
+          onApprove={noop}
+          onReject={noop}
+          onOpenDisposition={noop}
+        />,
+      );
+    });
+
+    expect(document.body.textContent).toContain('Unknown segment');
+    expect(document.body.textContent).not.toContain('retention-risk');
+    expect(document.body.textContent).not.toContain('made_up');
+  });
 });

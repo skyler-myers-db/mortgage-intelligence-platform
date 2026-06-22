@@ -225,6 +225,7 @@ describe('buildLeadCsv', () => {
     expect(csv).toContain('primary_offer');
     expect(csv).toContain('filed_permit_signal');
     expect(csv).toContain('Refinance + home-equity review');
+    expect(csv).toContain('Prime Refi Candidates');
     expect(csv).not.toContain('recommended_offer');
     expect(csv).not.toContain('has_permit');
     expect(csv).toContain(
@@ -246,5 +247,17 @@ describe('buildLeadCsv', () => {
 
     expect(csv).toContain('"North, ""West""\nSide"');
     expect(csv).toContain(",'=unsafe,");
+  });
+
+  it('does not export raw unknown segment tokens', () => {
+    const csv = buildLeadCsv([
+      sampleLead({
+        segment_codes: ['retention-risk', 'made_up'] as unknown as LeadSummary['segment_codes'],
+      }),
+    ]);
+
+    expect(csv).toContain('Unknown segment|Unknown segment');
+    expect(csv).not.toContain('retention-risk');
+    expect(csv).not.toContain('made_up');
   });
 });

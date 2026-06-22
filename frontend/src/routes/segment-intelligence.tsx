@@ -420,11 +420,16 @@ export default function SegmentIntelligence() {
       }
       lede="Cards show each segment's standalone marketable count after the secondary borrower filters. Selecting cards stacks them into one de-duplicated ranked cohort, so borrowers can match any selected segment."
       heroRight={
-        filtersDirty ? (
-          <Button size="sm" variant="ghost" icon="cross" onClick={clearAll}>
-            Clear filters
-          </Button>
-        ) : undefined
+        <Button
+          size="sm"
+          variant="ghost"
+          icon="cross"
+          disabled={!filtersDirty}
+          aria-disabled={!filtersDirty}
+          onClick={clearAll}
+        >
+          Clear filters
+        </Button>
       }
     >
       {segmentsWarming && (
