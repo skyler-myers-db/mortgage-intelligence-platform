@@ -297,7 +297,7 @@ def test_genie_routes_sales_manager_lo_conversion_to_sales_ops_adapter() -> None
     assert response.status_code == 200
     body = response.json()
     assert body["source"] == "sales_ops"
-    assert body["proof"]["trusted"] is True
+    assert body["proof"]["trusted"] is False
     assert "mip_app.call_dispositions" in body["trusted_assets"]
     assert any(row["lo_email"] == "lo02@summit.example" for row in body["table_rows"])
 

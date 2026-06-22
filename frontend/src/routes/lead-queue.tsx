@@ -85,6 +85,7 @@ interface AdminRulesSummary {
 
 export default function LeadQueue() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const filtersActive = searchParams.toString().length > 0;
   const footprint = useFootprint();
   const segment = (searchParams.get('segment') as SegmentCode | null) ?? undefined;
   const segmentCodes = useMemo(
@@ -438,6 +439,8 @@ export default function LeadQueue() {
           <button
             type="button"
             className="btn btn--ghost btn--sm"
+            disabled={!filtersActive}
+            aria-disabled={!filtersActive}
             onClick={() => setSearchParams(new URLSearchParams())}
           >
             Clear filters

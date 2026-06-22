@@ -252,7 +252,7 @@ LIMIT 100
             sql_query=sql_query.strip(),
             source_assets=source_assets,
             row_count=len(rows),
-            trusted=True,
+            trusted=False,
             filters=[f"sales_ops_kind = {kind}"],
             conversation_id=conversation_id,
             message_id=message_id,

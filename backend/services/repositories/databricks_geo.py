@@ -672,7 +672,7 @@ class DatabricksGeoRepository:
                 state=normalised,
                 rollups=rollups,
                 snapshot_date=snapshot_date,
-                scope_note=scope_note if rollups else None,
+                scope_note=scope_note,
             )
 
         # Single-flight + stale-if-error: county drill is the hottest map

@@ -328,7 +328,7 @@ You've covered three of the highest-trust beats: *redaction* (PII never leaks), 
 8. Point at the **data table** below: state · in-the-money borrowers · avg opportunity score · refreshed at. Read the refresh timestamp aloud.
 9. Scroll down. Show the **"Show proof"** button and the **trusted** chip next to it.
 10. Show the two **Governed actions**:
-    - **"Open this cohort in Lead Queue"** — chips show `States: IL · Segments: itm (any) · 6 result rows`.
+    - **"Open this cohort in Lead Queue"** — chips show `States: IL · Segments: Prime Refi Candidates (any selected segment) · 6 result rows`.
     - **"Create draft campaign"** — same chips.
 11. Show the **Source chip** at the bottom: `mip.gold.borrower_360`.
 

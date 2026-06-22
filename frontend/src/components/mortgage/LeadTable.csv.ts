@@ -1,6 +1,7 @@
 import type { LeadSummary } from '../../types';
 import type { LeadExportContext } from './LeadTable.types';
 import { offerDisplayLabel } from '../../lib/offerLanguage';
+import { segmentName } from '../../lib/segmentMetadata';
 
 function csvEscape(raw: string): string {
   const v = /^[=+\-@]/.test(raw) ? `'${raw}` : raw;
@@ -73,7 +74,7 @@ export function buildLeadCsv(
       l.city,
       l.state,
       l.zip,
-      l.segment_codes.join('|'),
+      l.segment_codes.map((code) => segmentName(code)).join('|'),
       l.equity_estimate,
       l.rate_spread_bps,
       l.opportunity_score,

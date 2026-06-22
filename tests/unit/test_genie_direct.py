@@ -207,6 +207,110 @@ def test_direct_canonical_questions_return_trusted_sql(question: str, expected_a
     assert expected_asset in " ".join(response.trusted_assets)
 
 
+@pytest.mark.parametrize(
+    ("question", "expected_state", "expected_sql_fragment", "expected_answer_fragment"),
+    [
+        (
+            "best cash-out borrowers in Texas",
+            "TX",
+            "recommended_offer_code = 'cash_out'",
+            "cash-out refinance borrowers",
+        ),
+        (
+            "best HELOC borrowers in California",
+            "CA",
+            "has_heloc_propensity_trigger = TRUE",
+            "home-equity / HELOC borrowers",
+        ),
+        (
+            "best listed borrowers in Texas",
+            "TX",
+            "listed_for_sale = TRUE",
+            "listed-for-sale purchase borrowers",
+        ),
+        (
+            "best investor borrowers in Florida",
+            "FL",
+            "array_contains(segment_codes, 'investor')",
+            "Investor / Multi-Property borrowers",
+        ),
+        (
+            "best retention borrowers in Illinois",
+            "IL",
+            "array_contains(segment_codes, 'retention')",
+            "retention-risk borrowers",
+        ),
+        (
+            "best in-the-money borrowers in Illinois",
+            "IL",
+            "in_the_money = TRUE",
+            "Prime Refi Candidate borrowers",
+        ),
+    ],
+)
+def test_direct_specific_intent_state_top_borrowers_do_not_use_generic_lead_population(
+    question: str,
+    expected_state: str,
+    expected_sql_fragment: str,
+    expected_answer_fragment: str,
+) -> None:
+    client = _UniversalSqlClient()
+
+    response = direct_canonical_response(question, cast(Any, client))
+
+    assert response is not None
+    assert response.source == "trusted_sql"
+    assert response.trusted_assets == ["mip.gold.borrower_360"]
+    assert response.sql_query is not None
+    assert "mip.gold.lead_population" not in response.sql_query
+    assert "state = :state" in response.sql_query
+    assert expected_sql_fragment in response.sql_query
+    assert client.parameters[-1] == {"state": expected_state}
+    assert expected_answer_fragment in response.answer
+
+
+@pytest.mark.parametrize(
+    ("question", "expected_sql_fragment"),
+    [
+        ("best cash-out candidates across the current Cotality coverage", "recommended_offer_code = 'cash_out'"),
+        ("best HELOC candidates across the current Cotality coverage", "has_heloc_propensity_trigger = TRUE"),
+        ("best listed borrowers across the current Cotality coverage", "listed_for_sale = TRUE"),
+        ("best investor borrowers across the current Cotality coverage", "array_contains(segment_codes, 'investor')"),
+    ],
+)
+def test_direct_specific_intent_global_top_borrowers_do_not_use_generic_lead_population(
+    question: str,
+    expected_sql_fragment: str,
+) -> None:
+    client = _UniversalSqlClient()
+
+    response = direct_canonical_response(question, cast(Any, client))
+
+    assert response is not None
+    assert response.trusted_assets == ["mip.gold.borrower_360"]
+    assert response.sql_query is not None
+    assert "mip.gold.lead_population" not in response.sql_query
+    assert "state = :state" not in response.sql_query
+    assert expected_sql_fragment in response.sql_query
+
+
+def test_direct_retention_competitor_lien_prompt_is_not_front_run_by_top_borrowers() -> None:
+    client = _UniversalSqlClient()
+
+    response = direct_canonical_response(
+        "List top retention borrowers with competitor lien evidence in Illinois by opportunity score.",
+        cast(Any, client),
+    )
+
+    assert response is not None
+    assert response.sql_query is not None
+    assert "mip.gold.lead_population" not in response.sql_query
+    assert "b.state = :state" in response.sql_query
+    assert "signal_type = 'competitor_lien'" in response.sql_query
+    assert client.parameters[-1] == {"state": "IL"}
+    assert "mip.gold.evidence_events" in response.trusted_assets
+
+
 def test_direct_ranked_lead_population_rejects_non_numeric_count() -> None:
     client = _UniversalSqlClient({"ranked_leads": None})
 

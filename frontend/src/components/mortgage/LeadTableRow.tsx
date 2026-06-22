@@ -92,7 +92,7 @@ export function LeadTableRow({
           >
             <span className="mono lead-table__borrower">{lead.borrower_id}</span>
             <span className="mono muted lead-table__clip">
-              {lead.clip && lead.clip.length > 0 ? lead.clip : 'property_ref_unavailable'}
+              {lead.clip && lead.clip.length > 0 ? lead.clip : 'Property ref unavailable'}
             </span>
           </button>
         </td>

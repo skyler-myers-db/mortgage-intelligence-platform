@@ -287,7 +287,11 @@ export default function SegmentIntelligence() {
     [segments],
   );
   const selectedSegmentLabel = useMemo(
-    () => activeSegs.map((code) => segmentLabelByCode.get(code) ?? code).join(' + '),
+    () => {
+      const labels = activeSegs.map((code) => segmentLabelByCode.get(code) ?? code);
+      if (labels.length <= 2) return labels.join(' or ');
+      return `${labels.slice(0, -1).join(', ')}, or ${labels[labels.length - 1]}`;
+    },
     [activeSegs, segmentLabelByCode],
   );
   const leadsRefreshing = leadsData === null && !leadsWarming && !leadsError;

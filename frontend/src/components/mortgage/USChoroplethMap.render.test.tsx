@@ -107,6 +107,48 @@ describe('USChoroplethMap county visual states', () => {
     vi.clearAllMocks();
   });
 
+  it('marks state rollups as loading and announces map load state', async () => {
+    const stateRollups = deferred<StateRollupResponse>();
+    apiMocks.stateRollups.mockReturnValueOnce(stateRollups.promise);
+    await act(async () => {
+      root.render(
+        <MemoryRouter>
+          <USChoroplethMap countyTopologyLoader={loadCountyTopology} />
+        </MemoryRouter>,
+      );
+    });
+
+    const illinois = await waitForSelector<SVGPathElement>('path[aria-label="Illinois"]');
+    const levels = document.querySelector('.map-levels');
+    expect(illinois).toBeTruthy();
+    expect(illinois?.classList.contains('is-loading')).toBe(true);
+    expect(illinois?.classList.contains('lvl-1')).toBe(false);
+    expect(levels?.getAttribute('aria-busy')).toBe('true');
+    expect(document.querySelector('[role="status"]')?.textContent).toContain('Loading state borrower rollups');
+
+    await act(async () => {
+      stateRollups.resolve({
+        rollups: [
+          {
+            state: 'IL',
+            addressable: 10,
+            in_the_money: 4,
+            top_tier_opportunities: 2,
+            avg_score: 78,
+            top_segment_code: 'itm',
+          },
+        ],
+        snapshot_date: '2026-06-19',
+      });
+    });
+    await settle();
+
+    expect(illinois?.classList.contains('is-loading')).toBe(false);
+    expect(illinois?.classList.contains('has-data')).toBe(true);
+    expect(levels?.getAttribute('aria-busy')).toBe('false');
+    expect(document.querySelector('[role="status"]')?.textContent).toContain('Geography rollups loaded');
+  });
+
   it('distinguishes county rollup loading, positive data, and empty counties', async () => {
     await act(async () => {
       root.render(
@@ -168,5 +210,41 @@ describe('USChoroplethMap county visual states', () => {
     expect(cookLoaded.classList.contains('lvl-1')).toBe(true);
     expect(dupageLoaded.classList.contains('is-empty')).toBe(true);
     expect(dupageLoaded.classList.contains('lvl-1')).toBe(false);
+  });
+
+  it('keeps county geography busy while county shapes are still loading', async () => {
+    const topology = deferred<typeof COUNTY_TOPOLOGY>();
+    apiMocks.countyRollups.mockResolvedValueOnce({
+      rollups: [],
+      state: 'IL',
+      snapshot_date: '2026-06-19',
+    });
+    await act(async () => {
+      root.render(
+        <MemoryRouter>
+          <USChoroplethMap countyTopologyLoader={() => topology.promise} />
+        </MemoryRouter>,
+      );
+    });
+
+    const illinois = await waitForSelector<SVGPathElement>('path[aria-label="Illinois"]');
+    await act(async () => {
+      illinois?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await settle();
+
+    const levels = document.querySelector('.map-levels');
+    expect(levels?.getAttribute('aria-busy')).toBe('true');
+    expect(document.querySelector('[role="status"]')?.textContent).toContain(
+      'Loading county map shapes for Illinois',
+    );
+
+    await act(async () => {
+      topology.resolve(COUNTY_TOPOLOGY);
+    });
+    await settle();
+
+    expect(levels?.getAttribute('aria-busy')).toBe('false');
+    expect(document.querySelector('[role="status"]')?.textContent).toContain('Geography rollups loaded');
   });
 });

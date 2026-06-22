@@ -90,7 +90,9 @@ def _segment_codes_from_question(question: str) -> list[str]:
     codes: list[str] = []
     if re.search(r"\b(in[-\s]?the[-\s]?money|itm|refi|refinance)\b", q):
         codes.append("itm")
-    if "home equity" in q or "heloc" in q:
+    if re.search(r"\b(heloc|equity line|equity-credit)\b", q):
+        codes.append("permit")
+    elif "home equity" in q:
         codes.append("equity")
     if "investor" in q or "multi-property" in q or "multi property" in q:
         codes.append("investor")

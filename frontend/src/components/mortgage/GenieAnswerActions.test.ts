@@ -14,7 +14,7 @@ describe('actionPreview', () => {
         result_filters: {
           zips: ['60610', '60611', '60612', '60613', '60614', '60615'],
           states: ['IL'],
-          segment_codes: ['ITM', 'HELOC'],
+          segment_codes: ['itm', 'heloc'],
           segment_mode: 'all',
           target_lender_ref: 'Summit Mortgage',
         },
@@ -24,11 +24,27 @@ describe('actionPreview', () => {
     expect(preview).toEqual([
       '6 ZIPs: 60610, 60611, 60612, 60613, 60614…',
       'States: IL',
-      'Segments: ITM, HELOC (all)',
+      'Segments: Prime Refi Candidates, HELOC Intent (all selected segments)',
       'Target lien holder: Summit Mortgage',
       '2 borrowers bound by ID',
       '1,250 result rows',
     ]);
+  });
+
+  it('uses borrower-facing HELOC Intent labels for segment aliases and default any mode', () => {
+    const preview = actionPreview({
+      id: 'act-heloc',
+      label: 'Open cohort',
+      action_type: 'open_lead_queue',
+      description: 'Open a governed lead list.',
+      criteria: {
+        result_filters: {
+          segment_codes: ['HELOC', 'heloc-intent', 'permit-activity'],
+        },
+      },
+    });
+
+    expect(preview).toEqual(['Segments: HELOC Intent (any selected segment)']);
   });
 
   it('ignores malformed filter payloads and still reports row count', () => {

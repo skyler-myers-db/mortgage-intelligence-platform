@@ -51,10 +51,13 @@ from backend.services.repositories.databricks_genie_canonical import (
     _CANONICAL_RANKED_LEAD_POPULATION_SQL,
     _CANONICAL_REFI_DRIVER_SQL,
     _CANONICAL_REFI_EQUITY_SIGNAL_COMPARE_SQL,
+    _CANONICAL_RETENTION_COMPETITOR_LIEN_LIST_BY_STATE_SQL,
     _CANONICAL_RETENTION_COMPETITOR_LIEN_LIST_SQL,
     _CANONICAL_SEGMENT_APPROVAL_RATE_SQL,
     _CANONICAL_STRATEGY_BOARD_SQL,
+    _CANONICAL_TOP_BORROWERS_BY_STATE_INTENT_SQL,
     _CANONICAL_TOP_BORROWERS_BY_STATE_SQL,
+    _CANONICAL_TOP_BORROWERS_GLOBAL_INTENT_SQL,
     _CANONICAL_TOP_BORROWERS_GLOBAL_SQL,
     _CANONICAL_TOP_CASH_OUT_BY_EQUITY_SQL,
     _CANONICAL_TOP_COHORTS_SQL,
@@ -75,6 +78,7 @@ from backend.services.repositories.databricks_genie_canonical import (
     _canonical_itm_lead_queue_zip_scope,
     _canonical_itm_offer_mix_scope,
     _canonical_itm_state_breakdown_scope,
+    _canonical_itm_state_scope,
     _canonical_itm_top_tier_compare_scope,
     _canonical_itm_zip_scope,
     _canonical_lead_score_weekly_distribution_scope,
@@ -91,6 +95,8 @@ from backend.services.repositories.databricks_genie_canonical import (
     _canonical_refi_driver_scope,
     _canonical_refi_equity_signal_compare_scope,
     _canonical_segment_approval_rate_scope,
+    _canonical_specific_top_borrowers_global_scope,
+    _canonical_specific_top_borrowers_state_scope,
     _canonical_strategy_board_scope,
     _canonical_top_borrowers_global_scope,
     _canonical_top_borrowers_state_scope,
@@ -99,6 +105,8 @@ from backend.services.repositories.databricks_genie_canonical import (
     _projected_monthly_savings_gap_scope,
     _retention_competitor_lien_list_question,
     _retention_risk_question,
+    _specific_top_borrower_intent_label,
+    _specific_top_borrower_sort_label,
 )
 from backend.services.repositories.databricks_genie_policy_helpers import (
     _emit_genie_warning,
@@ -502,6 +510,81 @@ def direct_canonical_response(
             rows=rows,
             answer=answer,
             metric_value=f"{count_int:,}",
+        )
+
+    specific_top_borrowers_state_scope = _canonical_specific_top_borrowers_state_scope(question)
+    if specific_top_borrowers_state_scope is not None:
+        intent, state_name, state_code = specific_top_borrowers_state_scope
+        sql_query = _CANONICAL_TOP_BORROWERS_BY_STATE_INTENT_SQL[intent]
+        intent_label = _specific_top_borrower_intent_label(intent)
+        sort_label = _specific_top_borrower_sort_label(intent)
+        try:
+            rows = _redact_genie_rows(sql_client.execute(sql_query, {"state": state_code})) or []
+        except DatabricksSqlError as exc:
+            _emit_genie_warning(
+                "direct_canonical_genie_specific_top_borrowers_state_failed",
+                intent=intent,
+                exc=exc,
+            )
+            return None
+        if rows:
+            top = rows[0]
+            answer = (
+                f"I ranked the top {len(rows)} {state_name} ({state_code}) "
+                f"{intent_label} borrowers from {borrower_asset}, ordered by "
+                f"{sort_label}. The current first borrower is masked "
+                f"{top.get('borrower_id')} with opportunity score "
+                f"{int(top.get('opportunity_score') or 0):,}."
+            )
+        else:
+            answer = (
+                f"The trusted borrower table returned no marketing-eligible "
+                f"{intent_label} borrowers in {state_name} ({state_code}) for "
+                "the current refreshed coverage."
+            )
+        return trusted_response(
+            question=question,
+            sql_query=sql_query,
+            trusted_assets=[borrower_asset],
+            rows=rows,
+            answer=answer,
+        )
+
+    specific_top_borrowers_global_scope = _canonical_specific_top_borrowers_global_scope(question)
+    if specific_top_borrowers_global_scope is not None:
+        intent = specific_top_borrowers_global_scope
+        sql_query = _CANONICAL_TOP_BORROWERS_GLOBAL_INTENT_SQL[intent]
+        intent_label = _specific_top_borrower_intent_label(intent)
+        sort_label = _specific_top_borrower_sort_label(intent)
+        try:
+            rows = _redact_genie_rows(sql_client.execute(sql_query)) or []
+        except DatabricksSqlError as exc:
+            _emit_genie_warning(
+                "direct_canonical_genie_specific_top_borrowers_global_failed",
+                intent=intent,
+                exc=exc,
+            )
+            return None
+        if rows:
+            top = rows[0]
+            answer = (
+                f"I ranked the top {len(rows)} {intent_label} borrowers across the "
+                f"current refreshed coverage from {borrower_asset}, ordered by "
+                f"{sort_label}. The current first borrower is masked "
+                f"{top.get('borrower_id')} with opportunity score "
+                f"{int(top.get('opportunity_score') or 0):,}."
+            )
+        else:
+            answer = (
+                f"The trusted borrower table returned no marketing-eligible "
+                f"{intent_label} borrowers for the current refreshed coverage."
+            )
+        return trusted_response(
+            question=question,
+            sql_query=sql_query,
+            trusted_assets=[borrower_asset],
+            rows=rows,
+            answer=answer,
         )
 
     top_borrower_state_scope = _canonical_top_borrowers_state_scope(question)
@@ -1313,10 +1396,18 @@ def direct_canonical_response(
         )
 
     if _retention_competitor_lien_list_question(question):
+        state_scope = _canonical_itm_state_scope(question)
+        sql_query = (
+            _CANONICAL_RETENTION_COMPETITOR_LIEN_LIST_BY_STATE_SQL
+            if state_scope is not None
+            else _CANONICAL_RETENTION_COMPETITOR_LIEN_LIST_SQL
+        )
+        parameters = {"state": state_scope[1]} if state_scope is not None else None
+        scope_phrase = f" in {state_scope[0]}" if state_scope is not None else ""
         try:
             rows = (
                 _redact_genie_rows(
-                    sql_client.execute(_CANONICAL_RETENTION_COMPETITOR_LIEN_LIST_SQL)
+                    sql_client.execute(sql_query, parameters)
                 )
                 or []
             )
@@ -1327,25 +1418,25 @@ def direct_canonical_response(
         shown_count = len(rows)
         if rows and total_matching > shown_count:
             answer = (
-                f"There are {total_matching:,} retention-list borrowers with "
+                f"There are {total_matching:,} retention-list borrowers{scope_phrase} with "
                 f"competitor-lien evidence in the last 30 days; showing the first "
                 f"{shown_count:,} by latest evidence timestamp and opportunity score. "
                 f"The result uses the governed `competitor_lien` signal_type from {evidence_asset}."
             )
         elif rows:
             answer = (
-                f"I found {shown_count:,} retention-list borrowers with competitor-lien "
+                f"I found {shown_count:,} retention-list borrowers{scope_phrase} with competitor-lien "
                 f"evidence in the last 30 days from {evidence_asset}."
             )
         else:
             answer = (
-                "No retention-list borrowers have governed competitor-lien evidence "
+                f"No retention-list borrowers{scope_phrase} have governed competitor-lien evidence "
                 "in the last 30 days. This is a live result from the modeled "
                 "`competitor_lien` signal_type, not a stale `lien-change` alias."
             )
         return trusted_response(
             question=question,
-            sql_query=_CANONICAL_RETENTION_COMPETITOR_LIEN_LIST_SQL,
+            sql_query=sql_query,
             trusted_assets=[borrower_asset, evidence_asset],
             rows=rows,
             answer=answer,

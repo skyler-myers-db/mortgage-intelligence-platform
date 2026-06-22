@@ -362,6 +362,274 @@ ORDER BY opportunity_score DESC, rank_overall ASC, borrower_id ASC
 LIMIT 10
 """.strip()
 
+_CANONICAL_TOP_REFI_BORROWERS_BY_STATE_SQL = f"""
+SELECT borrower_id
+     , display_name
+     , city
+     , state
+     , zip
+     , rate_spread_bps
+     , equity_pct
+     , opportunity_score
+     , recommended_offer_code
+     , recommended_offer
+     , refreshed_at
+FROM {_BORROWER_360}
+WHERE state = :state
+  AND in_the_money = TRUE
+  AND marketing_eligible = TRUE
+  AND consent_status = 'opt_in'
+ORDER BY opportunity_score DESC, rate_spread_bps DESC, borrower_id ASC
+LIMIT 10
+""".strip()
+
+_CANONICAL_TOP_CASH_OUT_BORROWERS_BY_STATE_SQL = f"""
+SELECT borrower_id
+     , display_name
+     , city
+     , state
+     , zip
+     , equity_estimate
+     , equity_pct
+     , opportunity_score
+     , recommended_offer_code
+     , recommended_offer
+     , refreshed_at
+FROM {_BORROWER_360}
+WHERE state = :state
+  AND recommended_offer_code = 'cash_out'
+  AND marketing_eligible = TRUE
+  AND consent_status = 'opt_in'
+ORDER BY equity_estimate DESC, opportunity_score DESC, borrower_id ASC
+LIMIT 10
+""".strip()
+
+_CANONICAL_TOP_HELOC_BORROWERS_BY_STATE_SQL = f"""
+SELECT borrower_id
+     , display_name
+     , city
+     , state
+     , zip
+     , equity_estimate
+     , equity_pct
+     , heloc_propensity_score
+     , opportunity_score
+     , recommended_offer_code
+     , recommended_offer
+     , refreshed_at
+FROM {_BORROWER_360}
+WHERE state = :state
+  AND (
+    recommended_offer_code IN ('heloc', 'refi_plus_heloc')
+    OR has_heloc_propensity_trigger = TRUE
+    OR array_contains(segment_codes, 'permit')
+  )
+  AND marketing_eligible = TRUE
+  AND consent_status = 'opt_in'
+ORDER BY heloc_propensity_score DESC NULLS LAST, equity_estimate DESC, opportunity_score DESC, borrower_id ASC
+LIMIT 10
+""".strip()
+
+_CANONICAL_TOP_LISTED_BORROWERS_BY_STATE_SQL = f"""
+SELECT borrower_id
+     , display_name
+     , city
+     , state
+     , zip
+     , opportunity_score
+     , recommended_offer_code
+     , recommended_offer
+     , listing_status_category
+     , refreshed_at
+FROM {_BORROWER_360}
+WHERE state = :state
+  AND listed_for_sale = TRUE
+  AND marketing_eligible = TRUE
+  AND consent_status = 'opt_in'
+ORDER BY opportunity_score DESC, borrower_id ASC
+LIMIT 10
+""".strip()
+
+_CANONICAL_TOP_INVESTOR_BORROWERS_BY_STATE_SQL = f"""
+SELECT borrower_id
+     , display_name
+     , city
+     , state
+     , zip
+     , related_property_count
+     , opportunity_score
+     , recommended_offer_code
+     , recommended_offer
+     , refreshed_at
+FROM {_BORROWER_360}
+WHERE state = :state
+  AND (array_contains(segment_codes, 'investor') OR is_investor = TRUE)
+  AND marketing_eligible = TRUE
+  AND consent_status = 'opt_in'
+ORDER BY related_property_count DESC NULLS LAST, opportunity_score DESC, borrower_id ASC
+LIMIT 10
+""".strip()
+
+_CANONICAL_TOP_RETENTION_BORROWERS_BY_STATE_SQL = f"""
+SELECT borrower_id
+     , display_name
+     , city
+     , state
+     , zip
+     , rate_spread_bps
+     , opportunity_score
+     , recommended_offer_code
+     , recommended_offer
+     , refreshed_at
+FROM {_BORROWER_360}
+WHERE state = :state
+  AND array_contains(segment_codes, 'retention')
+  AND marketing_eligible = TRUE
+  AND consent_status = 'opt_in'
+ORDER BY opportunity_score DESC, rate_spread_bps DESC, borrower_id ASC
+LIMIT 10
+""".strip()
+
+_CANONICAL_TOP_BORROWERS_BY_STATE_INTENT_SQL = {
+    "refi": _CANONICAL_TOP_REFI_BORROWERS_BY_STATE_SQL,
+    "cash_out": _CANONICAL_TOP_CASH_OUT_BORROWERS_BY_STATE_SQL,
+    "heloc": _CANONICAL_TOP_HELOC_BORROWERS_BY_STATE_SQL,
+    "listed": _CANONICAL_TOP_LISTED_BORROWERS_BY_STATE_SQL,
+    "investor": _CANONICAL_TOP_INVESTOR_BORROWERS_BY_STATE_SQL,
+    "retention": _CANONICAL_TOP_RETENTION_BORROWERS_BY_STATE_SQL,
+}
+
+_CANONICAL_TOP_REFI_BORROWERS_GLOBAL_SQL = f"""
+SELECT borrower_id
+     , display_name
+     , city
+     , state
+     , zip
+     , rate_spread_bps
+     , equity_pct
+     , opportunity_score
+     , recommended_offer_code
+     , recommended_offer
+     , refreshed_at
+FROM {_BORROWER_360}
+WHERE in_the_money = TRUE
+  AND marketing_eligible = TRUE
+  AND consent_status = 'opt_in'
+ORDER BY opportunity_score DESC, rate_spread_bps DESC, borrower_id ASC
+LIMIT 10
+""".strip()
+
+_CANONICAL_TOP_CASH_OUT_BORROWERS_GLOBAL_SQL = f"""
+SELECT borrower_id
+     , display_name
+     , city
+     , state
+     , zip
+     , equity_estimate
+     , equity_pct
+     , opportunity_score
+     , recommended_offer_code
+     , recommended_offer
+     , refreshed_at
+FROM {_BORROWER_360}
+WHERE recommended_offer_code = 'cash_out'
+  AND marketing_eligible = TRUE
+  AND consent_status = 'opt_in'
+ORDER BY equity_estimate DESC, opportunity_score DESC, borrower_id ASC
+LIMIT 10
+""".strip()
+
+_CANONICAL_TOP_HELOC_BORROWERS_GLOBAL_SQL = f"""
+SELECT borrower_id
+     , display_name
+     , city
+     , state
+     , zip
+     , equity_estimate
+     , equity_pct
+     , heloc_propensity_score
+     , opportunity_score
+     , recommended_offer_code
+     , recommended_offer
+     , refreshed_at
+FROM {_BORROWER_360}
+WHERE (
+    recommended_offer_code IN ('heloc', 'refi_plus_heloc')
+    OR has_heloc_propensity_trigger = TRUE
+    OR array_contains(segment_codes, 'permit')
+  )
+  AND marketing_eligible = TRUE
+  AND consent_status = 'opt_in'
+ORDER BY heloc_propensity_score DESC NULLS LAST, equity_estimate DESC, opportunity_score DESC, borrower_id ASC
+LIMIT 10
+""".strip()
+
+_CANONICAL_TOP_LISTED_BORROWERS_GLOBAL_SQL = f"""
+SELECT borrower_id
+     , display_name
+     , city
+     , state
+     , zip
+     , opportunity_score
+     , recommended_offer_code
+     , recommended_offer
+     , listing_status_category
+     , refreshed_at
+FROM {_BORROWER_360}
+WHERE listed_for_sale = TRUE
+  AND marketing_eligible = TRUE
+  AND consent_status = 'opt_in'
+ORDER BY opportunity_score DESC, borrower_id ASC
+LIMIT 10
+""".strip()
+
+_CANONICAL_TOP_INVESTOR_BORROWERS_GLOBAL_SQL = f"""
+SELECT borrower_id
+     , display_name
+     , city
+     , state
+     , zip
+     , related_property_count
+     , opportunity_score
+     , recommended_offer_code
+     , recommended_offer
+     , refreshed_at
+FROM {_BORROWER_360}
+WHERE (array_contains(segment_codes, 'investor') OR is_investor = TRUE)
+  AND marketing_eligible = TRUE
+  AND consent_status = 'opt_in'
+ORDER BY related_property_count DESC NULLS LAST, opportunity_score DESC, borrower_id ASC
+LIMIT 10
+""".strip()
+
+_CANONICAL_TOP_RETENTION_BORROWERS_GLOBAL_SQL = f"""
+SELECT borrower_id
+     , display_name
+     , city
+     , state
+     , zip
+     , rate_spread_bps
+     , opportunity_score
+     , recommended_offer_code
+     , recommended_offer
+     , refreshed_at
+FROM {_BORROWER_360}
+WHERE array_contains(segment_codes, 'retention')
+  AND marketing_eligible = TRUE
+  AND consent_status = 'opt_in'
+ORDER BY opportunity_score DESC, rate_spread_bps DESC, borrower_id ASC
+LIMIT 10
+""".strip()
+
+_CANONICAL_TOP_BORROWERS_GLOBAL_INTENT_SQL = {
+    "refi": _CANONICAL_TOP_REFI_BORROWERS_GLOBAL_SQL,
+    "cash_out": _CANONICAL_TOP_CASH_OUT_BORROWERS_GLOBAL_SQL,
+    "heloc": _CANONICAL_TOP_HELOC_BORROWERS_GLOBAL_SQL,
+    "listed": _CANONICAL_TOP_LISTED_BORROWERS_GLOBAL_SQL,
+    "investor": _CANONICAL_TOP_INVESTOR_BORROWERS_GLOBAL_SQL,
+    "retention": _CANONICAL_TOP_RETENTION_BORROWERS_GLOBAL_SQL,
+}
+
 _CANONICAL_TOP_CASH_OUT_BY_EQUITY_SQL = f"""
 SELECT borrower_id
      , display_name
@@ -644,6 +912,51 @@ ORDER BY latest_competitor_lien_at DESC
 LIMIT 50
 """.strip()
 
+_CANONICAL_RETENTION_COMPETITOR_LIEN_LIST_BY_STATE_SQL = f"""
+WITH matches AS (
+  SELECT b.borrower_id
+       , b.city
+       , b.state
+       , b.recommended_offer_code
+       , b.opportunity_score
+       , MAX(to_timestamp(e.`timestamp`)) AS latest_competitor_lien_at
+  FROM {_BORROWER_360} AS b
+  JOIN {_EVIDENCE_EVENTS} AS e
+    ON e.clip = b.clip
+  WHERE b.state = :state
+    AND array_contains(b.segment_codes, 'retention')
+    AND e.signal_type = 'competitor_lien'
+    AND to_timestamp(e.`timestamp`) >= current_timestamp() - interval 30 days
+  GROUP BY b.borrower_id
+         , b.city
+         , b.state
+         , b.recommended_offer_code
+         , b.opportunity_score
+),
+ranked AS (
+  SELECT borrower_id
+       , city
+       , state
+       , recommended_offer_code
+       , opportunity_score
+       , latest_competitor_lien_at
+       , COUNT(*) OVER () AS total_matching_borrowers
+  FROM matches
+)
+SELECT borrower_id
+     , city
+     , state
+     , recommended_offer_code
+     , opportunity_score
+     , latest_competitor_lien_at
+     , total_matching_borrowers
+FROM ranked
+ORDER BY latest_competitor_lien_at DESC
+       , opportunity_score DESC
+       , borrower_id ASC
+LIMIT 50
+""".strip()
+
 _CANONICAL_MSA_SCORE_SQL = f"""
 WITH borrower_markets AS (
   SELECT situs_cbsa_code
@@ -798,7 +1111,7 @@ def _retention_competitor_lien_list_question(question: str) -> bool:
     )
     retention_scope = bool(
         re.search(
-            r"\b(retention list|retention cohort|retention-risk|retention risk|recapture)\b",
+            r"\b(retention(?: list| cohort| borrowers?| leads?| candidates?)?|retention-risk|retention risk|recapture)\b",
             q,
         )
     )
@@ -1320,6 +1633,10 @@ def _canonical_investor_segment_by_state_scope(question: str) -> bool:
 def _canonical_top_borrowers_state_scope(question: str) -> tuple[str, str] | None:
     q = re.sub(r"[^a-z0-9\s-]+", " ", question.lower())
     q = re.sub(r"\s+", " ", q).strip()
+    if _retention_competitor_lien_list_question(question):
+        return None
+    if _specific_top_borrower_intent(q) is not None:
+        return None
     if not any(term in q for term in ("top", "highest", "rank", "ranked", "show", "list", "best")):
         return None
     if not any(term in q for term in ("borrower", "borrowers", "lead", "leads")):
@@ -1334,9 +1651,13 @@ def _canonical_top_borrowers_state_scope(question: str) -> tuple[str, str] | Non
 
 def _canonical_top_borrowers_global_scope(question: str) -> bool:
     q = _normalized_question(question)
+    if _retention_competitor_lien_list_question(question):
+        return False
     if not _has_global_coverage_scope(q):
         return False
     if _canonical_itm_state_scope(question) is not None:
+        return False
+    if _specific_top_borrower_intent(q) is not None:
         return False
     return (
         any(term in q for term in ("top", "highest", "rank", "ranked", "show", "list", "best"))
@@ -1346,6 +1667,86 @@ def _canonical_top_borrowers_global_scope(question: str) -> bool:
             or "best" in q
         )
     )
+
+
+def _specific_top_borrower_intent(q: str) -> str | None:
+    """Return an explicit borrower intent that must not be answered generically."""
+    if any(term in q for term in ("cash-out", "cash out", "cashout")):
+        return "cash_out"
+    if any(term in q for term in ("heloc", "home equity", "equity line", "equity-credit")):
+        return "heloc"
+    if any(term in q for term in ("listed for sale", "listed-for-sale", "listing", "listings", "mls", "for sale")):
+        return "listed"
+    if re.search(r"\blisted\s+(borrowers?|leads?|candidates?)\b", q):
+        return "listed"
+    if any(term in q for term in ("investor", "multi-property", "multi property", "related property")):
+        return "investor"
+    if any(term in q for term in ("retention", "recapture", "current customer", "former customer")):
+        return "retention"
+    if any(term in q for term in ("in-the-money", "in the money", "itm", "prime refi", "refi", "refinance")):
+        return "refi"
+    if any(term in q for term in ("permit", "permits")):
+        return "heloc"
+    return None
+
+
+def _specific_top_borrower_intent_label(intent: str) -> str:
+    return {
+        "cash_out": "cash-out refinance",
+        "heloc": "home-equity / HELOC",
+        "listed": "listed-for-sale purchase",
+        "investor": "Investor / Multi-Property",
+        "retention": "retention-risk",
+        "refi": "Prime Refi Candidate",
+    }.get(intent, "specific-intent")
+
+
+def _specific_top_borrower_sort_label(intent: str) -> str:
+    return {
+        "cash_out": "estimated equity, then opportunity score",
+        "heloc": "HELOC propensity, estimated equity, then opportunity score",
+        "listed": "opportunity score among active listing signals",
+        "investor": "related-property count, then opportunity score",
+        "retention": "opportunity score, then rate spread",
+        "refi": "opportunity score, then rate-spread economics",
+    }.get(intent, "the governed borrower ranking")
+
+
+def _canonical_specific_top_borrowers_state_scope(question: str) -> tuple[str, str, str] | None:
+    q = _normalized_question(question)
+    if _retention_competitor_lien_list_question(question):
+        return None
+    if _canonical_listed_purchase_scope(question):
+        return None
+    if not any(term in q for term in ("top", "highest", "rank", "ranked", "show", "list", "best")):
+        return None
+    if not any(term in q for term in ("borrower", "borrowers", "lead", "leads", "candidate", "candidates")):
+        return None
+    intent = _specific_top_borrower_intent(q)
+    if intent is None:
+        return None
+    state_scope = _canonical_itm_state_scope(question)
+    if state_scope is None:
+        return None
+    state_name, state_code = state_scope
+    return intent, state_name, state_code
+
+
+def _canonical_specific_top_borrowers_global_scope(question: str) -> str | None:
+    q = _normalized_question(question)
+    if _retention_competitor_lien_list_question(question):
+        return None
+    if _canonical_listed_purchase_scope(question):
+        return None
+    if not any(term in q for term in ("top", "highest", "rank", "ranked", "show", "list", "best")):
+        return None
+    if not any(term in q for term in ("borrower", "borrowers", "lead", "leads", "candidate", "candidates")):
+        return None
+    if _canonical_itm_state_scope(question) is not None:
+        return None
+    if any(term in q for term in ("which state", "what state", "by state", "state by state", "state has", "states have")):
+        return None
+    return _specific_top_borrower_intent(q)
 
 
 def _canonical_top_cash_out_by_equity_scope(question: str) -> bool:

@@ -1,6 +1,18 @@
 import { useState } from 'react';
 import type { GenieActionSuggestion } from '../../types';
+import { segmentName } from '../../lib/segmentMetadata';
 import { Icon } from '../Icon';
+
+function segmentPreviewLabel(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const raw = value.trim();
+  if (!raw) return null;
+  const code = raw.toLowerCase().replace(/[\s_]+/g, '-');
+  if (code === 'heloc' || code === 'heloc-intent' || code === 'permit-activity') {
+    return segmentName('permit');
+  }
+  return segmentName(code);
+}
 
 export function actionPreview(action: GenieActionSuggestion): string[] {
   const criteria = action.criteria ?? {};
@@ -13,7 +25,17 @@ export function actionPreview(action: GenieActionSuggestion): string[] {
   const states = Array.isArray(filters.states) ? filters.states : [];
   if (states.length > 0) preview.push(`States: ${states.join(', ')}`);
   const segments = Array.isArray(filters.segment_codes) ? filters.segment_codes : [];
-  if (segments.length > 0) preview.push(`Segments: ${segments.join(', ')} (${filters.segment_mode === 'all' ? 'all' : 'any'})`);
+  if (segments.length > 0) {
+    const labels = segments
+      .map(segmentPreviewLabel)
+      .filter((label): label is string => Boolean(label));
+    const uniqueLabels = [...new Set(labels)];
+    if (uniqueLabels.length > 0) {
+      preview.push(
+        `Segments: ${uniqueLabels.join(', ')} (${filters.segment_mode === 'all' ? 'all selected segments' : 'any selected segment'})`,
+      );
+    }
+  }
   if (typeof filters.target_lender_ref === 'string' && filters.target_lender_ref.length > 0) {
     preview.push(`Target lien holder: ${filters.target_lender_ref}`);
   }
@@ -60,6 +82,7 @@ export function GenieActions({
                   type="button"
                   className="btn btn--primary btn--sm"
                   disabled={Boolean(pendingActionId)}
+                  aria-label={`Confirm ${action.label}`}
                   onClick={async () => {
                     setPendingActionId(action.id);
                     setConfirmActionId(null);
@@ -72,12 +95,24 @@ export function GenieActions({
                 >
                   {pending ? 'Recording…' : 'Confirm'}
                 </button>
-                <button type="button" className="btn btn--ghost btn--sm" disabled={Boolean(pendingActionId)} onClick={() => setConfirmActionId(null)}>
+                <button
+                  type="button"
+                  className="btn btn--ghost btn--sm"
+                  disabled={Boolean(pendingActionId)}
+                  aria-label={`Cancel ${action.label}`}
+                  onClick={() => setConfirmActionId(null)}
+                >
                   Cancel
                 </button>
               </div>
             ) : (
-              <button type="button" className="btn btn--ghost btn--sm" disabled={Boolean(pendingActionId)} onClick={() => setConfirmActionId(action.id)}>
+              <button
+                type="button"
+                className="btn btn--ghost btn--sm"
+                disabled={Boolean(pendingActionId)}
+                aria-label={`Run ${action.label}`}
+                onClick={() => setConfirmActionId(action.id)}
+              >
                 <Icon name="play" size={12} />
                 {pending ? 'Recording…' : 'Run'}
               </button>

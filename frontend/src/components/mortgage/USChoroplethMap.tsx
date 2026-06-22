@@ -196,9 +196,9 @@ export function USChoroplethMap({
   // changes so the per-state counts (and the choropleth bucketer
   // derived from them) reflect the active segment selection. Without
   // a filter we use the cross-segment _ALL row; with a filter we hit
-  // the segment-aware path. Segment Intelligence passes mode="all" so
-  // selecting another card narrows the population instead of expanding
-  // to borrowers in either segment.
+  // the segment-aware path. Segment Intelligence passes mode="any" so
+  // selected segment cards stack into one de-duplicated cohort; callers
+  // that need narrowing can still pass segmentFilterMode="all".
   useEffect(() => {
     let cancelled = false;
     setHover(null);
@@ -461,6 +461,79 @@ export function USChoroplethMap({
     }
     return 0;
   }, [level, countyStateId, selected, liveStateFacts, liveCountyFacts, liveZipFacts]);
+  const mapBusy = useMemo(() => {
+    if (!usaMap || liveStateFacts === null) return true;
+    if (level === 'county') {
+      const stateUC = countyStateId?.toUpperCase() ?? '';
+      const rollupsPending = Boolean(countyStateId && liveCountyFacts[stateUC] === undefined);
+      const topologyPending = Boolean(
+        countyStateId
+        && supportedCountyStates[countyStateId]
+        && !countiesByState[countyStateId]
+        && !countyLoadError,
+      );
+      return rollupsPending || topologyPending;
+    }
+    if (level === 'zip') {
+      const fips = selected?.level === 'county' ? selected.id : '';
+      return Boolean(fips && liveZipFacts[fips] === undefined);
+    }
+    return false;
+  }, [
+    countiesByState,
+    countyLoadError,
+    countyStateId,
+    level,
+    liveCountyFacts,
+    liveStateFacts,
+    liveZipFacts,
+    selected,
+    supportedCountyStates,
+    usaMap,
+  ]);
+  const mapStatus = useMemo(() => {
+    if (!usaMap) return 'Loading geography.';
+    if (liveStateFacts === null) return 'Loading state borrower rollups.';
+    if (level === 'county') {
+      const stateName = countyStateId
+        ? usaMap.locations.find((l) => l.id === countyStateId)?.name ?? countyStateId.toUpperCase()
+        : 'state';
+      const stateUC = countyStateId?.toUpperCase() ?? '';
+      if (countyStateId && liveCountyFacts[stateUC] === undefined) {
+        return `Loading county rollups for ${stateName}.`;
+      }
+      if (
+        countyStateId
+        && supportedCountyStates[countyStateId]
+        && !countiesByState[countyStateId]
+        && !countyLoadError
+      ) {
+        return `Loading county map shapes for ${stateName}.`;
+      }
+    }
+    if (level === 'zip') {
+      const fips = selected?.level === 'county' ? selected.id : '';
+      if (fips && liveZipFacts[fips] === undefined) {
+        return `Loading ZIP rollups for ${selected?.name ?? 'county'}.`;
+      }
+    }
+    return 'Geography rollups loaded.';
+  }, [
+    countiesByState,
+    countyLoadError,
+    countyStateId,
+    level,
+    liveCountyFacts,
+    liveStateFacts,
+    liveZipFacts,
+    selected,
+    supportedCountyStates,
+    usaMap,
+  ]);
+  const segmentCaption = useMemo(() => {
+    if (!segmentFilter || segmentFilter.length === 0) return 'marketable population';
+    return `opportunity within ${segmentFilter.map((code) => SEGMENT_CODE_TO_NAME[code] ?? code).join(', ')}`;
+  }, [segmentFilter]);
 
   // ----- STATE level: real US paths via us-atlas ---------------------------
   const renderStateLevel = () => {
@@ -480,11 +553,15 @@ export function USChoroplethMap({
       {usaMap.locations.map((loc) => {
         const facts = factsFor(loc.id);
         const inFootprint = Boolean(supportedCountyStates[loc.id]);
+        const stateFactsLoading = liveStateFacts === null;
         const lvl = facts?.lvl ?? 1;
         const dim =
           activeSegNames !== null && facts && facts.topSegment && !activeSegNames.has(facts.topSegment);
         const classes = [
           'map-region',
+          stateFactsLoading ? 'is-loading' : '',
+          !stateFactsLoading && facts ? 'has-data' : '',
+          !stateFactsLoading && !facts ? 'is-empty' : '',
           facts ? `lvl-${lvl}` : '',
           selected?.level === 'state' && selected.id === loc.id ? 'is-selected' : '',
         ]
@@ -934,7 +1011,10 @@ export function USChoroplethMap({
           and its child stage fills it — so the wrapper never collapses the
           map. Reduced-motion disables the animation. The drill state machine
           (level + the three renderers) is untouched. */}
-      <div className="map-levels" key={level}>
+      <div className="map-levels" key={level} aria-busy={mapBusy}>
+        <div className="map-status" role="status" aria-live="polite">
+          {mapStatus}
+        </div>
         {level === 'state' && renderStateLevel()}
         {level === 'county' && renderCountyLevel()}
         {level === 'zip' && renderZipLevel()}
@@ -968,9 +1048,7 @@ export function USChoroplethMap({
         <div className="map-legend__caption">
           Colored by:{' '}
           <span className="text-2">
-            {segmentFilter && segmentFilter.length > 0
-              ? `opportunity within ${segmentFilter.join(', ')}`
-              : 'marketable population'}
+            {segmentCaption}
           </span>
         </div>
         {/* Keyboard affordance: always in the DOM for screen readers,

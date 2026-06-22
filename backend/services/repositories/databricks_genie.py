@@ -39,19 +39,27 @@ from backend.services.repositories.databricks_genie_canonical import (
     _CANONICAL_ITM_TOP_ZIPS_SQL,
     _CANONICAL_LISTED_PURCHASE_TOP_SQL,
     _CANONICAL_MSA_SCORE_SQL,
+    _CANONICAL_RETENTION_COMPETITOR_LIEN_LIST_BY_STATE_SQL,
     _CANONICAL_RETENTION_COMPETITOR_LIEN_LIST_SQL,
+    _CANONICAL_TOP_BORROWERS_BY_STATE_INTENT_SQL,
     _CANONICAL_TOP_BORROWERS_BY_STATE_SQL,
+    _CANONICAL_TOP_BORROWERS_GLOBAL_INTENT_SQL,
     _canonical_cash_out_state_scope,
     _canonical_heloc_zip_scope,
     _canonical_in_the_money_count_scope,
     _canonical_itm_city_scope,
+    _canonical_itm_state_scope,
     _canonical_itm_zip_scope,
     _canonical_listed_purchase_scope,
     _canonical_msa_score_scope,
+    _canonical_specific_top_borrowers_global_scope,
+    _canonical_specific_top_borrowers_state_scope,
     _canonical_top_borrowers_state_scope,
     _current_footprint_label,
     _retention_competitor_lien_list_question,
     _retention_risk_question,
+    _specific_top_borrower_intent_label,
+    _specific_top_borrower_sort_label,
 )
 from backend.services.repositories.databricks_genie_direct import (
     direct_canonical_response,
@@ -453,6 +461,145 @@ def _canonical_genie_answer(
     )
     if strategy_answer is not None:
         return strategy_answer
+    specific_top_borrowers_state_scope = _canonical_specific_top_borrowers_state_scope(question)
+    if specific_top_borrowers_state_scope is not None:
+        intent, state_name, state_code = specific_top_borrowers_state_scope
+        sql_query = _CANONICAL_TOP_BORROWERS_BY_STATE_INTENT_SQL[intent]
+        intent_label = _specific_top_borrower_intent_label(intent)
+        sort_label = _specific_top_borrower_sort_label(intent)
+        try:
+            rows = sql_client.execute(sql_query, {"state": state_code})
+        except DatabricksSqlError as exc:
+            _emit_genie_warning(
+                "canonical_genie_specific_top_borrowers_state_failed",
+                intent=intent,
+                exc=exc,
+            )
+            return None
+        rows = _redact_genie_rows(rows) or []
+        trusted_assets = [borrower_asset]
+        question_hash = _genie_question_hash(question)
+        proof = _build_genie_proof(
+            sql_query=sql_query,
+            trusted_assets=trusted_assets,
+            rows=rows,
+            question=question,
+            conversation_id=result.conversation_id,
+            message_id=result.message_id,
+            elapsed_ms=result.elapsed_ms,
+        )
+        visualization = _plan_genie_visualization(question, rows)
+        actions = _suggest_genie_actions(
+            question=question,
+            rows=rows,
+            trusted_assets=trusted_assets,
+            visualization=visualization,
+            conversation_id=result.conversation_id,
+            message_id=result.message_id,
+            question_hash=question_hash,
+            sql_query=sql_query,
+            source="trusted_sql",
+        )
+        if rows:
+            top = rows[0]
+            answer = (
+                f"I ranked the top {len(rows)} {state_name} ({state_code}) "
+                f"{intent_label} borrowers from {borrower_asset}, ordered by "
+                f"{sort_label}. The current first borrower is masked "
+                f"{top.get('borrower_id')} with opportunity score "
+                f"{int(top.get('opportunity_score') or 0):,}."
+            )
+        else:
+            answer = (
+                f"The trusted borrower table returned no marketing-eligible "
+                f"{intent_label} borrowers in {state_name} ({state_code}) for "
+                "the current refreshed coverage."
+            )
+        return GenieMessageResponse(
+            conversation_id=result.conversation_id,
+            message_id=result.message_id,
+            elapsed_ms=result.elapsed_ms,
+            question_hash=question_hash,
+            question=question,
+            answer=answer,
+            source="trusted_sql",
+            trusted_assets=trusted_assets,
+            sql_query=sql_query,
+            row_count=len(rows),
+            proof=proof,
+            visualization=visualization,
+            actions=actions,
+            table_rows=rows,
+        )
+    specific_top_borrowers_global_scope = _canonical_specific_top_borrowers_global_scope(question)
+    if specific_top_borrowers_global_scope is not None:
+        intent = specific_top_borrowers_global_scope
+        sql_query = _CANONICAL_TOP_BORROWERS_GLOBAL_INTENT_SQL[intent]
+        intent_label = _specific_top_borrower_intent_label(intent)
+        sort_label = _specific_top_borrower_sort_label(intent)
+        try:
+            rows = sql_client.execute(sql_query)
+        except DatabricksSqlError as exc:
+            _emit_genie_warning(
+                "canonical_genie_specific_top_borrowers_global_failed",
+                intent=intent,
+                exc=exc,
+            )
+            return None
+        rows = _redact_genie_rows(rows) or []
+        trusted_assets = [borrower_asset]
+        question_hash = _genie_question_hash(question)
+        proof = _build_genie_proof(
+            sql_query=sql_query,
+            trusted_assets=trusted_assets,
+            rows=rows,
+            question=question,
+            conversation_id=result.conversation_id,
+            message_id=result.message_id,
+            elapsed_ms=result.elapsed_ms,
+        )
+        visualization = _plan_genie_visualization(question, rows)
+        actions = _suggest_genie_actions(
+            question=question,
+            rows=rows,
+            trusted_assets=trusted_assets,
+            visualization=visualization,
+            conversation_id=result.conversation_id,
+            message_id=result.message_id,
+            question_hash=question_hash,
+            sql_query=sql_query,
+            source="trusted_sql",
+        )
+        if rows:
+            top = rows[0]
+            answer = (
+                f"I ranked the top {len(rows)} {intent_label} borrowers across the "
+                f"current refreshed coverage from {borrower_asset}, ordered by "
+                f"{sort_label}. The current first borrower is masked "
+                f"{top.get('borrower_id')} with opportunity score "
+                f"{int(top.get('opportunity_score') or 0):,}."
+            )
+        else:
+            answer = (
+                f"The trusted borrower table returned no marketing-eligible "
+                f"{intent_label} borrowers for the current refreshed coverage."
+            )
+        return GenieMessageResponse(
+            conversation_id=result.conversation_id,
+            message_id=result.message_id,
+            elapsed_ms=result.elapsed_ms,
+            question_hash=question_hash,
+            question=question,
+            answer=answer,
+            source="trusted_sql",
+            trusted_assets=trusted_assets,
+            sql_query=sql_query,
+            row_count=len(rows),
+            proof=proof,
+            visualization=visualization,
+            actions=actions,
+            table_rows=rows,
+        )
     top_borrower_state_scope = _canonical_top_borrowers_state_scope(question)
     if top_borrower_state_scope is not None:
         state_name, state_code = top_borrower_state_scope
@@ -518,10 +665,18 @@ def _canonical_genie_answer(
             table_rows=rows,
         )
     if _retention_competitor_lien_list_question(question):
+        state_scope = _canonical_itm_state_scope(question)
+        sql_query = (
+            _CANONICAL_RETENTION_COMPETITOR_LIEN_LIST_BY_STATE_SQL
+            if state_scope is not None
+            else _CANONICAL_RETENTION_COMPETITOR_LIEN_LIST_SQL
+        )
+        parameters = {"state": state_scope[1]} if state_scope is not None else None
+        scope_phrase = f" in {state_scope[0]}" if state_scope is not None else ""
         try:
             rows = (
                 _redact_genie_rows(
-                    sql_client.execute(_CANONICAL_RETENTION_COMPETITOR_LIEN_LIST_SQL)
+                    sql_client.execute(sql_query, parameters)
                 )
                 or []
             )
@@ -534,7 +689,7 @@ def _canonical_genie_answer(
         ]
         question_hash = _genie_question_hash(question)
         proof = _build_genie_proof(
-            sql_query=_CANONICAL_RETENTION_COMPETITOR_LIEN_LIST_SQL,
+            sql_query=sql_query,
             trusted_assets=trusted_assets,
             rows=rows,
             question=question,
@@ -551,7 +706,7 @@ def _canonical_genie_answer(
             conversation_id=result.conversation_id,
             message_id=result.message_id,
             question_hash=question_hash,
-            sql_query=_CANONICAL_RETENTION_COMPETITOR_LIEN_LIST_SQL,
+            sql_query=sql_query,
             source="trusted_sql",
         )
         total_matching = _total_matching_from_rows(rows)
@@ -559,7 +714,7 @@ def _canonical_genie_answer(
         if rows:
             if total_matching > shown_count:
                 answer = (
-                    f"There are {total_matching:,} retention-list borrowers with "
+                    f"There are {total_matching:,} retention-list borrowers{scope_phrase} with "
                     f"competitor-lien evidence in the last 30 days; showing the first "
                     f"{shown_count:,} by latest evidence timestamp and opportunity score. "
                     "The result uses the governed `competitor_lien` signal_type from "
@@ -567,13 +722,13 @@ def _canonical_genie_answer(
                 )
             else:
                 answer = (
-                    f"I found {shown_count:,} retention-list borrowers with competitor-lien "
+                    f"I found {shown_count:,} retention-list borrowers{scope_phrase} with competitor-lien "
                     "evidence in the last 30 days. The result uses the governed "
                     f"`competitor_lien` signal_type from {evidence_asset}."
                 )
         else:
             answer = (
-                "No retention-list borrowers have governed competitor-lien evidence "
+                f"No retention-list borrowers{scope_phrase} have governed competitor-lien evidence "
                 "in the last 30 days. This is a live result from the modeled "
                 "`competitor_lien` signal_type, not a stale `lien-change` alias."
             )
@@ -586,7 +741,7 @@ def _canonical_genie_answer(
             answer=answer,
             source="trusted_sql",
             trusted_assets=trusted_assets,
-            sql_query=_CANONICAL_RETENTION_COMPETITOR_LIEN_LIST_SQL,
+            sql_query=sql_query,
             row_count=len(rows),
             proof=proof,
             visualization=visualization,

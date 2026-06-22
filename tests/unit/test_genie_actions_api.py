@@ -38,6 +38,7 @@ from backend.services.genie_answers import (
 from backend.services.genie_client import GenieClientError
 from backend.services.lakebase import LakebaseError, get_lakebase_client
 from backend.services.repositories import get_genie_answer_repository
+from backend.services.repositories.databricks_genie_actions import _route_from_answer_rows
 from backend.services.state_footprint import (
     FootprintState,
     StateFootprintResolver,
@@ -1471,6 +1472,26 @@ def test_route_with_cohort_drops_stale_replay_filters_and_flattens_reviewed_filt
     assert params["occupancy"] == ["Owner-occupied"]
     assert params["min_equity_pct_label"] == ["≥ 25%"]
     assert params["cohort_id"] == ["11111111-1111-1111-1111-111111111111"]
+
+
+def test_heloc_genie_action_routes_to_heloc_intent_segment() -> None:
+    route, filters = _route_from_answer_rows(
+        question="best HELOC borrowers in California",
+        rows=[{"state": "CA"}],
+        borrower_ids=[],
+        sql_query=(
+            "SELECT * FROM mip.gold.borrower_360 "
+            "WHERE has_heloc_propensity_trigger = TRUE AND state = :state"
+        ),
+    )
+
+    params = parse_qs(urlsplit(route).query)
+    assert params["segment"] == ["permit"]
+    assert params["states"] == ["CA"]
+    assert params["purchase_intent"] == ["HELOC intent"]
+    assert params["product"] == ["HELOC"]
+    assert filters["segment_codes"] == ["permit"]
+    assert filters["segment_mode"] == "any"
 
 
 class _OpenCohortRepo:

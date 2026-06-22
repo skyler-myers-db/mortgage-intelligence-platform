@@ -24,7 +24,7 @@ export function RowPreview({ lead, approval }: { lead: LeadSummary; approval?: s
   // backend. Raw CLIP is masked server-side for public demo safety.
   const propertyRef = lead.clip && lead.clip.length > 0
     ? lead.clip
-    : 'property_ref_unavailable';
+    : 'Property ref unavailable';
   const saved = isLeadSaved(lead.borrower_id);
   const saveCurrentLead = () => {
     saveLead({

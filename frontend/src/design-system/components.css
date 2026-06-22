@@ -2818,6 +2818,15 @@ kbd {
 @media (prefers-reduced-motion: reduce) {
   .map-region.is-loading { animation: none; }
 }
+.map-status {
+  position: absolute;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  overflow: hidden;
+  white-space: nowrap;
+  width: 1px;
+  height: 1px;
+}
 /* WCAG 2.4.7 Focus Visible (Level AA): map paths are keyboard-reachable
    (role="button", tabIndex=0) and keyboard-actionable (Enter/Space handlers),
    so they need a visible focus indicator. Default UA outlines on SVG are
