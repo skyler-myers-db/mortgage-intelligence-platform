@@ -23,6 +23,25 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+function urlIncludesApiPath(url: string, path: string): boolean {
+  const normalized = path.startsWith('/') ? path : `/${path}`;
+  return url.includes(normalized) || url.includes(normalized.replace('/api/', '/api/v1/'));
+}
+
+function filteredGeoResponse(segmentCodes: string[], path: string) {
+  return (response: { url: () => string; status: () => number }) => {
+    if (response.status() !== 200 || !urlIncludesApiPath(response.url(), path)) return false;
+    const parsed = new URL(response.url());
+    const codes = parsed.searchParams.get('segment_codes') ?? '';
+    return (
+      parsed.searchParams.get('marketing_eligibility') === 'Eligible only' &&
+      (segmentCodes.length === 0 ||
+        (parsed.searchParams.get('segment_mode') === 'any' &&
+          segmentCodes.every((code) => codes.includes(code))))
+    );
+  };
+}
+
 async function discoverMapDrillTarget(
   request: APIRequestContext,
   segmentCodes: string[] = [],
@@ -132,16 +151,38 @@ async function clickSvgRegion(page: Page, target: Locator, label: string) {
   throw lastError;
 }
 
-async function drillToZipLayer(page: Page, target: MapDrillTarget) {
+async function drillToZipLayer(page: Page, target: MapDrillTarget, segmentCodes: string[] = []) {
   const map = page.locator('.map-wrap').first();
   await bringMapIntoViewport(page);
   const state = map.getByRole('button', { name: new RegExp(`^${escapeRegExp(target.stateName)}$`) }).first();
+  const countyResponse = page
+    .waitForResponse(filteredGeoResponse(segmentCodes, '/api/geo/county-rollups'), { timeout: 45_000 })
+    .catch((error: Error) => error);
   await clickSvgRegion(page, state, target.stateName);
 
   await bringMapIntoViewport(page);
   const county = map.getByRole('button', { name: new RegExp(escapeRegExp(target.countyName), 'i') }).first();
-  await expect(county).toBeVisible({ timeout: 10_000 });
+  try {
+    await expect(county).toBeVisible({ timeout: 10_000 });
+  } catch (error) {
+    await state.press('Enter');
+    await expect(county, `${target.countyName} should appear after keyboard fallback`).toBeVisible({ timeout: 10_000 });
+  }
+  const countyResult = await countyResponse;
+  if (countyResult instanceof Error) throw countyResult;
+
+  const zipResponse = page
+    .waitForResponse(filteredGeoResponse(segmentCodes, '/api/geo/zip-rollups'), { timeout: 45_000 })
+    .catch((error: Error) => error);
   await clickSvgRegion(page, county, target.countyName);
+  try {
+    await expect(page.locator('.map-crumbs')).toContainText(target.countyName, { timeout: 5_000 });
+  } catch (error) {
+    await county.press('Enter');
+    await expect(page.locator('.map-crumbs')).toContainText(target.countyName, { timeout: 10_000 });
+  }
+  const zipResult = await zipResponse;
+  if (zipResult instanceof Error) throw zipResult;
 }
 
 async function bringMapIntoViewport(page: Page) {
@@ -295,11 +336,16 @@ test.describe('Module 0 demo visual baselines', () => {
   test('Segment geography drill header keeps breadcrumbs clickable at ZIP layer', async ({ page, request }) => {
     await page.goto('/segment-intelligence');
     const segmentCodes = ['equity'];
+    const stateResponse = page.waitForResponse(
+      filteredGeoResponse(segmentCodes, '/api/geo/state-rollups'),
+      { timeout: 45_000 },
+    );
     for (const label of ['Home Equity Candidate']) {
       await clickSegmentCard(page, label);
     }
+    await stateResponse;
     const target = await discoverMapDrillTarget(request, segmentCodes);
-    await drillToZipLayer(page, target);
+    await drillToZipLayer(page, target, segmentCodes);
     await expect(page.locator('.zip-tiles')).toBeVisible({ timeout: 10_000 });
 
     for (const width of [1440, 1280, 1150, 1024]) {
