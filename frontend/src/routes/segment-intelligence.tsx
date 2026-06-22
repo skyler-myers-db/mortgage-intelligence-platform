@@ -263,9 +263,10 @@ export default function SegmentIntelligence() {
     (signal) =>
       api.leadsPage(undefined, signal, serverGeo, {
         segmentCodes: activeSegs.length > 0 ? activeSegs : undefined,
-        // Multi-select uses AND semantics: borrowers must match every
-        // selected segment. The page copy mirrors this exact contract.
-        segmentMode: 'all',
+        // Multi-select uses OR semantics so selected segment cards stack into
+        // one de-duplicated ranked cohort. Borrowers with either selected
+        // signal belong in the combined work queue.
+        segmentMode: 'any',
         portfolioCriteria: secondaryPortfolioCriteria,
       }),
     [activeSegsKey, secondaryPortfolioCriteria, serverGeo.state, serverGeo.county, serverGeo.zip],
@@ -382,7 +383,7 @@ export default function SegmentIntelligence() {
       params.set('segment', activeSegs[0]);
     } else if (activeSegs.length > 1) {
       params.set('segment_codes', activeSegs.join(','));
-      params.set('segment_mode', 'all');
+      params.set('segment_mode', 'any');
     }
     if (mapSelection.zip) {
       params.set('zip', mapSelection.zip);
@@ -413,7 +414,7 @@ export default function SegmentIntelligence() {
           ? `${segments.length} borrower ${segments.length === 1 ? 'segment' : 'segments'} · standalone counts`
           : 'Borrower segments · standalone counts'
       }
-      lede="Cards show each segment's standalone marketable count after the secondary borrower filters. Selecting cards narrows the ranked table with AND semantics, so each added segment must also match."
+      lede="Cards show each segment's standalone marketable count after the secondary borrower filters. Selecting cards stacks them into one de-duplicated ranked cohort, so borrowers can match any selected segment."
       heroRight={
         filtersDirty ? (
           <Button size="sm" variant="ghost" icon="cross" onClick={clearAll}>
@@ -549,7 +550,8 @@ export default function SegmentIntelligence() {
           className="filter-row__hint filter-row__hint--full muted"
         >
           Segment card counts are standalone after secondary filters; selected
-          cards only narrow the ranked borrower table below. Listed-for-sale is
+          cards stack into one de-duplicated ranked borrower table below.
+          Listed-for-sale is
           backed by live Cotality MLS rows. HELOC intent is
           backed by Cotality HELOC propensity; filed building-permit records
           remain a separate pending source.
@@ -558,7 +560,7 @@ export default function SegmentIntelligence() {
 
       <div className="section-hdr">
         <div>
-          <div className="eyebrow">Ranked borrowers · AND segment filter</div>
+          <div className="eyebrow">Ranked borrowers · selected segment cohort</div>
           <div className="h-2">
             {leadsRefreshing ? (
               'Refreshing ranked borrowers'
@@ -572,7 +574,7 @@ export default function SegmentIntelligence() {
                 {activeSegs.length > 0 && (
                   <span className="muted fs-14">
                     · segment filter: {selectedSegmentLabel}
-                    {activeSegs.length > 1 ? ' · must match every selected segment' : ''}
+                    {activeSegs.length > 1 ? ' · matches any selected segment' : ''}
                   </span>
                 )}
               </>
@@ -581,8 +583,8 @@ export default function SegmentIntelligence() {
           {!leadsRefreshing && truncatedAt && (
             <div className="muted fs-14">
               Showing the highest-ranked returned rows; segment cards remain
-              standalone counts, while the table and map apply selected segment
-              filters and geography drill-downs.
+              standalone counts, while the table and map show the de-duplicated
+              selected segment cohort and geography drill-downs.
             </div>
           )}
           {(mapSelection.state || mapSelection.county || mapSelection.zip) && (
@@ -628,7 +630,7 @@ export default function SegmentIntelligence() {
         <USChoroplethMap
           height={520}
           segmentFilter={activeSegs}
-          segmentFilterMode="all"
+          segmentFilterMode="any"
           portfolioCriteria={secondaryPortfolioCriteria}
           onSelectionChange={handleMapSelection}
         />

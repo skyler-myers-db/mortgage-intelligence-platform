@@ -1,0 +1,173 @@
+/**
+ * @vitest-environment happy-dom
+ */
+
+import { act } from 'react';
+import { createRoot, type Root } from 'react-dom/client';
+import { MemoryRouter } from 'react-router-dom';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { USChoroplethMap } from './USChoroplethMap';
+import type { CountyRollupResponse, StateRollupResponse } from '../../types';
+
+(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
+const apiMocks = vi.hoisted(() => ({
+  stateRollups: vi.fn(),
+  countyRollups: vi.fn(),
+  zipRollups: vi.fn(),
+}));
+
+vi.mock('../../lib/api', () => ({
+  api: apiMocks,
+}));
+
+vi.mock('./USStateMapData', () => ({
+  loadUsaStateMap: () => Promise.resolve({
+    label: 'United States',
+    viewBox: '0 0 100 100',
+    locations: [
+      { id: 'il', name: 'Illinois', path: 'M0,0L20,0L20,20L0,0Z' },
+    ],
+  }),
+}));
+
+async function settle(): Promise<void> {
+  await act(async () => {
+    await Promise.resolve();
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+  });
+}
+
+async function waitForSelector<T extends Element>(selector: string): Promise<T | null> {
+  let node: T | null = null;
+  for (let i = 0; i < 20; i += 1) {
+    await settle();
+    node = document.querySelector(selector) as T | null;
+    if (node) return node;
+  }
+  return node;
+}
+
+const COUNTY_TOPOLOGY = {
+  type: 'Topology',
+  transform: { scale: [1, 1], translate: [0, 0] },
+  objects: {
+    counties: {
+      type: 'GeometryCollection',
+      geometries: [
+        { type: 'Polygon', id: '17031', properties: { name: 'Cook' }, arcs: [[0]] },
+        { type: 'Polygon', id: '17043', properties: { name: 'DuPage' }, arcs: [[1]] },
+      ],
+    },
+  },
+  arcs: [
+    [[0, 0], [10, 0], [0, 10], [-10, -10]],
+    [[20, 0], [10, 0], [0, 10], [-10, -10]],
+  ],
+};
+
+describe('USChoroplethMap county visual states', () => {
+  let root: Root;
+  let countyRollups: ReturnType<typeof deferred<CountyRollupResponse>>;
+  let originalFetch: typeof globalThis.fetch;
+
+  beforeEach(() => {
+    document.body.innerHTML = '<div id="root"></div>';
+    root = createRoot(document.getElementById('root') as HTMLElement);
+    countyRollups = deferred<CountyRollupResponse>();
+    originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve(COUNTY_TOPOLOGY),
+    }) as unknown as typeof fetch;
+    apiMocks.stateRollups.mockResolvedValue({
+      rollups: [
+        {
+          state: 'IL',
+          addressable: 10,
+          in_the_money: 4,
+          top_tier_opportunities: 2,
+          avg_score: 78,
+          top_segment_code: 'itm',
+        },
+      ],
+      snapshot_date: '2026-06-19',
+    } satisfies StateRollupResponse);
+    apiMocks.countyRollups.mockReturnValue(countyRollups.promise);
+    apiMocks.zipRollups.mockResolvedValue({ rollups: [], refreshed_at: null });
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    globalThis.fetch = originalFetch;
+    document.body.innerHTML = '';
+    vi.clearAllMocks();
+  });
+
+  it('distinguishes county rollup loading, positive data, and empty counties', async () => {
+    await act(async () => {
+      root.render(
+        <MemoryRouter>
+          <USChoroplethMap segmentFilter={['itm', 'equity']} segmentFilterMode="any" />
+        </MemoryRouter>,
+      );
+    });
+    const illinois =
+      (await waitForSelector<SVGPathElement>('path[aria-label="Illinois"]'))
+      ?? (await waitForSelector<SVGPathElement>('path[aria-label="IL"]'));
+    expect(illinois).toBeTruthy();
+    await act(async () => {
+      illinois?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    const cookLoading = await waitForSelector<SVGPathElement>('path[aria-label="Cook County"]');
+    expect(cookLoading).toBeTruthy();
+    expect(cookLoading?.classList.contains('is-loading')).toBe(true);
+    expect(cookLoading?.classList.contains('lvl-1')).toBe(false);
+
+    await act(async () => {
+      countyRollups.resolve({
+        rollups: [
+          {
+            fips_5: '17031',
+            state: 'IL',
+            county_name: 'Cook',
+            addressable_borrowers: 1,
+            in_the_money_borrowers: 1,
+            high_opportunity_borrowers: 1,
+            avg_opportunity_score: 79,
+            top_segment_code: 'itm',
+          },
+          {
+            fips_5: '17043',
+            state: 'IL',
+            county_name: 'DuPage',
+            addressable_borrowers: 0,
+            in_the_money_borrowers: 0,
+            high_opportunity_borrowers: 0,
+            avg_opportunity_score: 0,
+            top_segment_code: null,
+          },
+        ],
+        state: 'IL',
+        snapshot_date: '2026-06-19',
+      });
+    });
+    await settle();
+
+    const cookLoaded = document.querySelector('path[aria-label="Cook County"]') as SVGPathElement;
+    const dupageLoaded = document.querySelector('path[aria-label="DuPage County"]') as SVGPathElement;
+    expect(cookLoaded.classList.contains('is-loading')).toBe(false);
+    expect(cookLoaded.classList.contains('has-data')).toBe(true);
+    expect(cookLoaded.classList.contains('lvl-1')).toBe(true);
+    expect(dupageLoaded.classList.contains('is-empty')).toBe(true);
+    expect(dupageLoaded.classList.contains('lvl-1')).toBe(false);
+  });
+});

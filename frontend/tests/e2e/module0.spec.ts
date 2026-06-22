@@ -122,14 +122,14 @@ test.describe('Module 0 — golden path', () => {
 
     await page.getByText('Home Equity Candidate', { exact: true }).click();
     await expect(rankedHeader).toContainText(/segment filter: Listed for Sale \+ Home Equity Candidate/);
-    await expect(rankedHeader).toContainText(/must match every selected segment/);
+    await expect(rankedHeader).toContainText(/matches any selected segment/);
     await expect
       .poll(() =>
         segmentRequests.some(
           (url) =>
             url.includes('/api/leads') &&
             url.includes('segment_codes=') &&
-            url.includes('segment_mode=all'),
+            url.includes('segment_mode=any'),
         ),
       )
       .toBe(true);
@@ -139,7 +139,7 @@ test.describe('Module 0 — golden path', () => {
           (url) =>
             url.includes('/api/geo/state-rollups') &&
             url.includes('segment_codes=') &&
-            url.includes('segment_mode=all'),
+            url.includes('segment_mode=any'),
         ),
       )
       .toBe(true);

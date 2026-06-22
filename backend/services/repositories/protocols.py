@@ -174,9 +174,10 @@ class LeadRepository(Protocol):
         (the existing top-of-queue behaviour).
 
         ``segment_codes`` extends the legacy single ``segment`` query
-        for the Segments page. ``segment_mode="all"`` means a borrower
-        must carry every selected segment code, matching card clicks as
-        narrowing filters; ``"any"`` preserves the old overlap behavior.
+        for the Segments page. ``segment_mode="any"`` stacks selected
+        cards into one de-duplicated cohort; ``"all"`` remains supported
+        for analytic intersection filters where a borrower must carry
+        every selected segment code.
 
         ``portfolio_criteria`` replays Portfolio Builder predicates when
         the CTA opens Lead Queue, so the queue reflects the built population

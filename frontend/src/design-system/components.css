@@ -2796,11 +2796,28 @@ kbd {
   filter: drop-shadow(0 0 8px color-mix(in oklab, var(--accent) 40%, transparent));
 }
 .map-region:hover { paint-order: stroke fill; }
+.map-region.is-loading {
+  fill: color-mix(in oklab, var(--accent) 12%, var(--bg-3));
+  opacity: 0.72;
+  animation: map-region-pulse 1.2s var(--ease) infinite;
+}
+.map-region.is-empty {
+  fill: var(--map-region-fill);
+  opacity: 0.46;
+}
+.map-region.has-data.lvl-1 { fill: color-mix(in oklab, var(--accent) 24%, var(--bg-3)); }
 .map-region.lvl-1 { fill: color-mix(in oklab, var(--accent) 15%, var(--bg-3)); }
 .map-region.lvl-2 { fill: color-mix(in oklab, var(--accent) 30%, var(--bg-3)); }
 .map-region.lvl-3 { fill: color-mix(in oklab, var(--accent) 50%, var(--bg-3)); }
 .map-region.lvl-4 { fill: color-mix(in oklab, var(--accent) 70%, var(--bg-3)); }
 .map-region.is-selected { fill: var(--accent); stroke: var(--text-1); stroke-width: 1; }
+@keyframes map-region-pulse {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 0.85; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .map-region.is-loading { animation: none; }
+}
 /* WCAG 2.4.7 Focus Visible (Level AA): map paths are keyboard-reachable
    (role="button", tabIndex=0) and keyboard-actionable (Enter/Space handlers),
    so they need a visible focus indicator. Default UA outlines on SVG are

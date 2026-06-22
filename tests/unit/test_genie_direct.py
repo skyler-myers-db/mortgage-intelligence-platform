@@ -111,6 +111,10 @@ class _UniversalSqlClient:
             "Show the top 10 borrowers by lead score across the current Cotality data coverage.",
             "mip.gold.lead_population",
         ),
+        (
+            "What are the overall best borrowers for any offer?",
+            "mip.gold.lead_population",
+        ),
         ("Show me the top 10 borrowers by lead score in Illinois.", "mip.gold.lead_population"),
         (
             "Top 5 ZIP codes by HELOC-eligible borrowers with equity at least 35%.",

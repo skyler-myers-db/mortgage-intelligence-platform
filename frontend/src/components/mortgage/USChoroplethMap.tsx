@@ -567,6 +567,7 @@ export function USChoroplethMap({
       : '';
     const stateUC = countyStateId?.toUpperCase() ?? '';
     const countyFactsForState = liveCountyFacts[stateUC];
+    const countyFactsLoading = countyFactsForState === undefined;
     const primaryCounty = countyFactsForState
       ? Object.values(countyFactsForState).sort(
         (a, b) => (b.addressable_borrowers ?? 0) - (a.addressable_borrowers ?? 0),
@@ -658,16 +659,19 @@ export function USChoroplethMap({
         className="map-svg-stage"
       >
         {payload.features.map((f) => {
-          const stateUC = countyStateId?.toUpperCase() ?? '';
-          const liveFacts = liveCountyFacts[stateUC]?.[f.id];
+          const liveFacts = countyFactsForState?.[f.id];
           const count = liveFacts?.addressable_borrowers ?? null;
           const avgScore = liveFacts?.avg_opportunity_score ?? null;
           const topSegCode = liveFacts?.top_segment_code ?? null;
           const topSegment = topSegCode ? (SEGMENT_CODE_TO_NAME[topSegCode] ?? undefined) : undefined;
-          const lvl = countyBucketer(count);
+          const hasPositiveCount = count !== null && count > 0;
+          const lvl = hasPositiveCount ? countyBucketer(count) : null;
           const classes = [
             'map-region',
-            `lvl-${lvl}`,
+            countyFactsLoading ? 'is-loading' : '',
+            !countyFactsLoading && hasPositiveCount ? 'has-data' : '',
+            !countyFactsLoading && !hasPositiveCount ? 'is-empty' : '',
+            lvl ? `lvl-${lvl}` : '',
             selected?.level === 'county' && selected.id === f.id ? 'is-selected' : '',
           ]
             .filter(Boolean)
@@ -687,9 +691,9 @@ export function USChoroplethMap({
                   x: e.clientX,
                   y: e.clientY,
                   name: `${f.name} County, ${stateName}`,
-                  // Honest null when the live payload hasn't returned a
-                  // row for this county (either pre-fetch or the CTAS
-                  // excluded it as out-of-footprint). Tooltip renders "—".
+                  // Honest null while the live payload is loading or when it
+                  // did not return a row for this county. The visual class
+                  // distinguishes loading/empty from a small positive count.
                   count,
                   avgScore,
                   topSegment,

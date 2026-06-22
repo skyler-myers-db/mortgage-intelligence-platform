@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from fastapi import HTTPException
@@ -25,6 +26,7 @@ from backend.services.genie_actions import (
     _CAMPAIGN_INSERT_SQL,
     _cohort_route_filters,
     _decode_action_token,
+    _route_with_cohort,
     _sign_action_claims,
     borrower_ids,
 )
@@ -1436,6 +1438,41 @@ def test_genie_campaign_sql_keeps_action_audit_append_only() -> None:
     assert "insert into mip_app.action_audit" in sql
 
 
+def test_route_with_cohort_drops_stale_replay_filters_and_flattens_reviewed_filters() -> None:
+    route = _route_with_cohort(
+        "/lead-queue?segment=equity&segment_codes=equity&segment_mode=all&state=WA"
+        "&approval_status=approved&funnel_stage=approved&aged_days=7"
+        "&marketing_eligibility=Suppressed+only&consent_status=Opt-in&tab=ranked",
+        cohort_id="11111111-1111-1111-1111-111111111111",
+        filters={
+            "states": ["IL"],
+            "segment_codes": ["itm"],
+            "segment_mode": "any",
+            "portfolio_criteria": {
+                "occupancy": "Owner-occupied",
+                "min_equity_pct_label": "≥ 25%",
+                "marketing_eligibility": "Eligible only",
+                "consent_status": "Any",
+            },
+        },
+    )
+
+    params = parse_qs(urlsplit(route).query)
+    assert params["tab"] == ["ranked"]
+    assert params["state"] == ["IL"]
+    assert params["segment"] == ["itm"]
+    assert "segment_codes" not in params
+    assert "segment_mode" not in params
+    assert "approval_status" not in params
+    assert "funnel_stage" not in params
+    assert "aged_days" not in params
+    assert "marketing_eligibility" not in params
+    assert "consent_status" not in params
+    assert params["occupancy"] == ["Owner-occupied"]
+    assert params["min_equity_pct_label"] == ["≥ 25%"]
+    assert params["cohort_id"] == ["11111111-1111-1111-1111-111111111111"]
+
+
 class _OpenCohortRepo:
     def respond(
         self,
@@ -1800,6 +1837,12 @@ def test_genie_open_cohort_materializes_lakebase_cohort_and_returns_filtered_rou
     assert body["route"].startswith("/lead-queue?")
     assert "cohort_id=11111111-1111-1111-1111-111111111111" in body["route"]
     assert "zips=60617%2C60628" in body["route"]
+    route_params = parse_qs(urlsplit(body["route"]).query)
+    assert route_params["segment"] == ["itm"]
+    assert "segment_codes" not in route_params
+    assert "segment_mode" not in route_params
+    assert route_params["occupancy"] == ["Owner-occupied"]
+    assert route_params["min_equity_pct_label"] == ["≥ 25%"]
     cohort_params = next(
         params for sql, params in lakebase.fetchones if "INSERT INTO mip_app.genie_cohorts" in sql
     )
@@ -1945,6 +1988,48 @@ def test_genie_cohort_filters_reject_invalid_scalar_values() -> None:
             [],
         )
     assert "invalid segment mode" in str(invalid_mode.value)
+
+
+def test_genie_cohort_filters_reject_unsupported_compliance_predicates() -> None:
+    with pytest.raises(HTTPException) as suppressed_only:
+        _cohort_route_filters(
+            GenieActionRequest(
+                action_type="open_cohort",
+                criteria={
+                    "source": "genie",
+                    "result_filters": {
+                        "states": ["IL"],
+                        "portfolio_criteria": {
+                            "occupancy": "Owner-occupied",
+                            "marketing_eligibility": "Suppressed only",
+                        },
+                    },
+                },
+                confirmed=True,
+            ),
+            [],
+        )
+    assert "unsupported marketing eligibility filter" in str(suppressed_only.value)
+
+    with pytest.raises(HTTPException) as consent_filter:
+        _cohort_route_filters(
+            GenieActionRequest(
+                action_type="open_cohort",
+                criteria={
+                    "source": "genie",
+                    "result_filters": {
+                        "states": ["IL"],
+                        "portfolio_criteria": {
+                            "occupancy": "Owner-occupied",
+                            "consent_status": "Opt-in",
+                        },
+                    },
+                },
+                confirmed=True,
+            ),
+            [],
+        )
+    assert "unsupported consent filter" in str(consent_filter.value)
 
 
 @pytest.mark.parametrize(

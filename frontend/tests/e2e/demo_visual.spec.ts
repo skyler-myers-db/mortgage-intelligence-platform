@@ -30,7 +30,7 @@ async function discoverMapDrillTarget(
   const params = new URLSearchParams();
   if (segmentCodes.length > 0) {
     params.set('segment_codes', segmentCodes.join(','));
-    params.set('segment_mode', 'all');
+    params.set('segment_mode', 'any');
   }
   params.set('marketing_eligibility', 'Eligible only');
   const suffix = params.toString() ? `?${params.toString()}` : '';

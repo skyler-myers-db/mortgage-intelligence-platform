@@ -73,6 +73,12 @@ function weekStartIsoDate(): string {
   return isoDate(date);
 }
 
+function optionsWithCurrentValue(options: readonly string[], value: string): string[] {
+  if (options.includes(value)) return [...options];
+  if (options.length === 0) return [value];
+  return [options[0], value, ...options.slice(1)];
+}
+
 interface AdminRulesSummary {
   offer_rules_version?: string | null;
 }
@@ -169,6 +175,12 @@ export default function LeadQueue() {
   const salesTeamError = salesTeamQuery.error instanceof Error ? salesTeamQuery.error.message : null;
   const salesOpsError = salesOpsQuery.error instanceof Error ? salesOpsQuery.error.message : null;
   const segmentFilter = segmentFilterDisplayValue(segment, segmentCodes);
+  const segmentFilterOptions = optionsWithCurrentValue(SEGMENT_FILTER_OPTIONS, segmentFilter);
+  const stateFilterDisplay = stateFilter
+    ?? (stateFilters.length === 1
+      ? stateFilters[0]
+      : stateFilters.length > 1 ? `${stateFilters.length} states selected` : 'All states');
+  const stateFilterOptions = optionsWithCurrentValue(stateOptions, stateFilterDisplay);
 
   const updateParam = (key: string, value: string | null) => {
     const next = new URLSearchParams(searchParams);
@@ -458,9 +470,12 @@ export default function LeadQueue() {
           <div className="filter-row">
             <FilterSelect
               label="STATE"
-              value={stateFilter ?? 'All states'}
-              options={stateOptions}
-              onChange={(v) => updateParam('state', v === 'All states' ? null : v)}
+              value={stateFilterDisplay}
+              options={stateFilterOptions}
+              onChange={(v) => {
+                if (v === stateFilterDisplay && stateFilters.length > 0) return;
+                updateParam('state', v === 'All states' ? null : v);
+              }}
             />
             <FilterSelect
               label="RELATIONSHIP"
@@ -477,8 +492,9 @@ export default function LeadQueue() {
             <FilterSelect
               label="SEGMENT"
               value={segmentFilter}
-              options={[...SEGMENT_FILTER_OPTIONS]}
+              options={segmentFilterOptions}
               onChange={(v) => {
+                if (v === segmentFilter && segmentCodes.length > 0) return;
                 const code = SEGMENT_OPTION_TO_CODE[v];
                 updateParam('segment', code);
               }}

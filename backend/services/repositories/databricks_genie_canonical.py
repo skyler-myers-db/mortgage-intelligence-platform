@@ -1320,11 +1320,14 @@ def _canonical_investor_segment_by_state_scope(question: str) -> bool:
 def _canonical_top_borrowers_state_scope(question: str) -> tuple[str, str] | None:
     q = re.sub(r"[^a-z0-9\s-]+", " ", question.lower())
     q = re.sub(r"\s+", " ", q).strip()
-    if not any(term in q for term in ("top", "highest", "rank", "ranked", "show", "list")):
+    if not any(term in q for term in ("top", "highest", "rank", "ranked", "show", "list", "best")):
         return None
     if not any(term in q for term in ("borrower", "borrowers", "lead", "leads")):
         return None
-    if not any(term in q for term in ("lead score", "opportunity score", "score")):
+    if not (
+        any(term in q for term in ("lead score", "opportunity score", "score", "offer", "any offer"))
+        or "best" in q
+    ):
         return None
     return _canonical_itm_state_scope(question)
 
@@ -1336,9 +1339,12 @@ def _canonical_top_borrowers_global_scope(question: str) -> bool:
     if _canonical_itm_state_scope(question) is not None:
         return False
     return (
-        any(term in q for term in ("top", "highest", "rank", "ranked", "show", "list"))
+        any(term in q for term in ("top", "highest", "rank", "ranked", "show", "list", "best"))
         and any(term in q for term in ("borrower", "borrowers", "lead", "leads"))
-        and any(term in q for term in ("lead score", "opportunity score", "score"))
+        and (
+            any(term in q for term in ("lead score", "opportunity score", "score", "offer", "any offer"))
+            or "best" in q
+        )
     )
 
 

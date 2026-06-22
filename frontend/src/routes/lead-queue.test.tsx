@@ -1,6 +1,102 @@
-import { describe, expect, it } from 'vitest';
+/**
+ * @vitest-environment happy-dom
+ */
+
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { act } from 'react';
+import { createRoot, type Root } from 'react-dom/client';
+import { MemoryRouter } from 'react-router-dom';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../lib/api';
 import { buildLeadQueueExportFilters, formatLeadQueueLoadError } from './lead-queue.filters';
+
+(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+const retryMocks = vi.hoisted(() => ({
+  state: {
+    data: {
+      leads: [],
+      totalMatching: 0,
+      returnedRows: 0,
+      truncatedAt: null,
+    },
+    warmingUp: null,
+    error: null,
+    manualRetry: vi.fn(),
+  },
+}));
+
+const apiMocks = vi.hoisted(() => ({
+  salesTeam: vi.fn(),
+  salesAging: vi.fn(),
+  salesStandup: vi.fn(),
+  salesConversion: vi.fn(),
+  portfolioPreview: vi.fn(),
+  adminRules: vi.fn(),
+}));
+
+vi.mock('../lib/useWarmingUpRetry', () => ({
+  useWarmingUpRetry: () => retryMocks.state,
+}));
+
+vi.mock('../lib/configOptionsQuery', () => {
+  const STABLE = {
+    data: {
+      target_lender_refs: ['All', 'Competitor B'],
+    },
+    isError: false,
+  };
+  return { useConfigOptionsQuery: () => STABLE };
+});
+
+vi.mock('../components/FootprintProvider', () => {
+  const STABLE = {
+    ready: true,
+    usingFallback: false,
+    states: [
+      { state_code: 'IL', state_name: 'Illinois', display_order: 1, is_default_state: true },
+      { state_code: 'TX', state_name: 'Texas', display_order: 2, is_default_state: false },
+    ],
+  };
+  return { useFootprint: () => STABLE };
+});
+
+vi.mock('../components/mortgage/LeadTable', () => ({
+  LeadTable: () => <div data-testid="lead-table" />,
+}));
+
+vi.mock('../lib/api', () => ({
+  ApiError: class ApiError extends Error {
+    path: string;
+    status: number | null;
+    validationIssues: Array<{ field: string; message: string; location: string[] }>;
+
+    constructor(
+      message: string,
+      opts: {
+        path: string;
+        status?: number | null;
+        validationIssues?: Array<{ field: string; message: string; location: string[] }>;
+      } = { path: '' },
+    ) {
+      super(message);
+      this.name = 'ApiError';
+      this.path = opts.path;
+      this.status = opts.status ?? null;
+      this.validationIssues = opts.validationIssues ?? [];
+    }
+  },
+  api: apiMocks,
+}));
+
+import LeadQueue from './lead-queue';
+
+async function settle(): Promise<void> {
+  await act(async () => {
+    await Promise.resolve();
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+  });
+}
 
 describe('buildLeadQueueExportFilters', () => {
   it('exports only normalized allowlisted filters', () => {
@@ -122,5 +218,70 @@ describe('formatLeadQueueLoadError', () => {
 
     expect(state.invalidFilters).toBe(false);
     expect(state.message).toBe("Couldn't load leads: Warehouse unavailable");
+  });
+});
+
+describe('LeadQueue filter state', () => {
+  let root: Root;
+  let queryClient: QueryClient;
+
+  beforeEach(() => {
+    document.body.innerHTML = '<div id="root"></div>';
+    root = createRoot(document.getElementById('root') as HTMLElement);
+    queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: Infinity } },
+    });
+    apiMocks.salesTeam.mockResolvedValue([]);
+    apiMocks.salesAging.mockResolvedValue([]);
+    apiMocks.salesStandup.mockResolvedValue({
+      calls_logged: 0,
+      contacts_reached: 0,
+      callbacks_scheduled: 0,
+      applications_started: 0,
+    });
+    apiMocks.salesConversion.mockResolvedValue({ rows: [] });
+    apiMocks.portfolioPreview.mockResolvedValue({ data_refreshed_at: null });
+    apiMocks.adminRules.mockResolvedValue({ offer_rules_version: null });
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    queryClient.clear();
+    document.body.innerHTML = '';
+    vi.clearAllMocks();
+  });
+
+  it('shows Genie cohort multi-value route filters in dropdown controls', async () => {
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter
+            initialEntries={[
+              '/lead-queue?states=IL,TX&segment_codes=itm,equity&segment_mode=any'
+              + '&cohort_id=11111111-1111-1111-1111-111111111111'
+              + '&lender_relationship=Competitor+customer&product=HELOC',
+            ]}
+          >
+            <LeadQueue />
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+    });
+    await settle();
+
+    expect(document.querySelector('button[aria-label="STATE: 2 states selected"]')).toBeTruthy();
+    expect(document.querySelector('button[aria-label="SEGMENT: 2 segments selected"]')).toBeTruthy();
+    expect(document.querySelector('button[aria-label="RELATIONSHIP: Competitor customer"]')).toBeTruthy();
+    expect(document.querySelector('button[aria-label="PRODUCT: HELOC"]')).toBeTruthy();
+    expect(document.querySelector('button[aria-label="CONTACTABILITY: Eligible only"]')).toBeTruthy();
+    expect(document.querySelector('button[aria-label="CONSENT: Any"]')).toBeTruthy();
+
+    const segmentButton = document.querySelector('button[aria-label="SEGMENT: 2 segments selected"]') as HTMLButtonElement;
+    await act(async () => {
+      segmentButton.click();
+    });
+    const selected = [...document.querySelectorAll('[role="option"][aria-selected="true"]')]
+      .map((node) => node.textContent ?? '');
+    expect(selected.some((text) => text.includes('2 segments selected'))).toBe(true);
   });
 });

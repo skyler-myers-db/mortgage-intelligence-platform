@@ -276,7 +276,7 @@ async function discoverMapDrillTarget(
   const params = new URLSearchParams();
   if (segmentCodes.length > 0) {
     params.set('segment_codes', segmentCodes.join(','));
-    params.set('segment_mode', 'all');
+    params.set('segment_mode', 'any');
   }
   params.set('marketing_eligibility', 'Eligible only');
   const suffix = params.toString() ? `?${params.toString()}` : '';
@@ -441,11 +441,11 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     expect(hasPositive, `no segment card had a positive count: ${rendered.join(' | ')}`).toBe(true);
   });
 
-  test('segment multi-select re-queries ranked list and map in all-mode', async ({ page }) => {
+  test('segment multi-select re-queries ranked list and map in any-mode', async ({ page }) => {
     await page.goto('/segment-intelligence');
 
     const rankedHeader = page
-      .locator('.section-hdr', { hasText: 'Ranked borrowers · AND segment filter' })
+      .locator('.section-hdr', { hasText: 'Ranked borrowers · selected segment cohort' })
       .locator('.h-2')
       .first();
     await expect(rankedHeader).toContainText(/ranked borrowers/, { timeout: 45_000 });
@@ -453,34 +453,34 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     await clickSegmentCard(page, 'Prime Refi Candidates');
     await expect(rankedHeader).toContainText(/segment filter: Prime Refi Candidates/, { timeout: 45_000 });
 
-    const isAllModeSegmentResponse = (url: string, path: string) => {
+    const isAnyModeSegmentResponse = (url: string, path: string) => {
       if (!urlIncludesApiPath(url, path)) return false;
       const parsed = new URL(url);
       const codes = parsed.searchParams.get('segment_codes') ?? '';
       return (
-        parsed.searchParams.get('segment_mode') === 'all' &&
+        parsed.searchParams.get('segment_mode') === 'any' &&
         codes.includes('itm') &&
         codes.includes('equity')
       );
     };
 
     const leadsResponse = page.waitForResponse((response) =>
-      isAllModeSegmentResponse(response.url(), '/api/leads'),
+      isAnyModeSegmentResponse(response.url(), '/api/leads'),
     );
     const geoResponse = page.waitForResponse((response) =>
-      isAllModeSegmentResponse(response.url(), '/api/geo/state-rollups'),
+      isAnyModeSegmentResponse(response.url(), '/api/geo/state-rollups'),
     );
 
     await clickSegmentCard(page, 'Home Equity Candidate');
 
     const [leads, geo] = await Promise.all([leadsResponse, geoResponse]);
-    expect(leads.status(), 'ranked list segment all-mode response').toBe(200);
-    expect(geo.status(), 'map segment all-mode response').toBe(200);
+    expect(leads.status(), 'ranked list segment any-mode response').toBe(200);
+    expect(geo.status(), 'map segment any-mode response').toBe(200);
     await expect(rankedHeader).toContainText(
       /segment filter: Prime Refi Candidates \+ Home Equity Candidate/,
       { timeout: 45_000 },
     );
-    await expect(rankedHeader).toContainText(/must match every selected segment/);
+    await expect(rankedHeader).toContainText(/matches any selected segment/);
   });
 
   test('segment map drill preserves segment filters through county ZIP and Lead Queue', async ({ page, request }) => {
@@ -493,7 +493,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
       const parsed = new URL(response.url());
       const codes = parsed.searchParams.get('segment_codes') ?? '';
       return (
-        parsed.searchParams.get('segment_mode') === 'all' &&
+        parsed.searchParams.get('segment_mode') === 'any' &&
         codes.includes('itm') &&
         codes.includes('equity')
       );
@@ -554,7 +554,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
 	    expect(url.pathname).toBe('/lead-queue');
     expect(url.searchParams.get('state')).toBe(target.state);
     expect(url.searchParams.get('county')).toBe(target.countyFips);
-    expect(url.searchParams.get('segment_mode')).toBe('all');
+    expect(url.searchParams.get('segment_mode')).toBe('any');
     expect(url.searchParams.get('segment_codes')).toContain('equity');
     expect(url.searchParams.get('zip')).toMatch(/^\d{5}$/);
   });

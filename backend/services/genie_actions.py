@@ -49,6 +49,52 @@ _ACTION_TOKEN_TTL_S = 2 * 60 * 60
 _PROCESS_ACTION_SECRET = secrets.token_urlsafe(32)
 _MAX_ACTION_FILTER_VALUES = 500
 _MAX_ACTION_STATE_VALUES = 56
+_LEAD_QUEUE_REPLAY_KEYS = frozenset(
+    {
+        "state",
+        "states",
+        "zip",
+        "zips",
+        "county",
+        "counties",
+        "borrower_ids",
+        "segment",
+        "segment_codes",
+        "segment_mode",
+        "target_lender_ref",
+        "cohort_id",
+        "funnel_stage",
+        "approval_status",
+        "outreach_status",
+        "assigned_to",
+        "aged_days",
+        "limit",
+        "geography",
+        "occupancy",
+        "lien_status",
+        "lender_relationship",
+        "product",
+        "min_equity_pct_label",
+        "owner_link",
+        "purchase_intent",
+        "marketing_eligibility",
+        "consent_status",
+        "recency",
+    }
+)
+_LEAD_QUEUE_PORTFOLIO_QUERY_KEYS = frozenset(
+    {
+        "geography",
+        "occupancy",
+        "lien_status",
+        "lender_relationship",
+        "product",
+        "min_equity_pct_label",
+        "owner_link",
+        "purchase_intent",
+        "recency",
+    }
+)
 
 _CAMPAIGN_INSERT_SQL = """
 WITH existing_audit AS (
@@ -704,12 +750,24 @@ def _cohort_route_filters(payload: GenieActionRequest, payload_borrower_ids: lis
                 status_code=400,
                 detail="Genie cohort includes unreviewed portfolio criteria",
             ) from exc
+        if portfolio_model.marketing_eligibility not in {None, "Eligible only"}:
+            raise HTTPException(
+                status_code=400,
+                detail="Genie cohort includes unsupported marketing eligibility filter",
+            )
+        if portfolio_model.consent_status not in {None, "Any"}:
+            raise HTTPException(
+                status_code=400,
+                detail="Genie cohort includes unsupported consent filter",
+            )
         if not portfolio_model.has_effective_predicate(count_default_marketing=False):
             raise HTTPException(
                 status_code=400,
                 detail="Genie cohort includes unreviewed portfolio criteria",
             )
         portfolio_criteria = portfolio_model.model_dump(exclude_none=True)
+        portfolio_criteria["marketing_eligibility"] = "Eligible only"
+        portfolio_criteria.pop("consent_status", None)
         if portfolio_criteria:
             out["portfolio_criteria"] = portfolio_criteria
 
@@ -733,17 +791,45 @@ def _route_with_cohort(
     path = parts.path or "/lead-queue"
     if path != "/lead-queue":
         path = "/lead-queue"
-    query = dict(parse_qsl(parts.query, keep_blank_values=False))
-    for key in ("zips", "states", "counties", "segment_codes", "borrower_ids"):
-        values = filters.get(key)
-        if isinstance(values, list) and values:
-            query[key] = ",".join(str(v) for v in values)
+    query = {
+        key: value
+        for key, value in parse_qsl(parts.query, keep_blank_values=False)
+        if key not in _LEAD_QUEUE_REPLAY_KEYS
+    }
+
+    def set_one_or_many(*, singular: str, plural: str, values: object) -> None:
+        if not isinstance(values, list) or not values:
+            return
+        if len(values) == 1:
+            query[singular] = str(values[0])
+        else:
+            query[plural] = ",".join(str(v) for v in values)
+
+    set_one_or_many(singular="zip", plural="zips", values=filters.get("zips"))
+    set_one_or_many(singular="state", plural="states", values=filters.get("states"))
+    set_one_or_many(singular="county", plural="counties", values=filters.get("counties"))
+    borrower_ids = filters.get("borrower_ids")
+    if isinstance(borrower_ids, list) and borrower_ids:
+        query["borrower_ids"] = ",".join(str(v) for v in borrower_ids)
     if "county" in filters:
         query["county"] = str(filters["county"])
-    if "segment_mode" in filters:
-        query["segment_mode"] = str(filters["segment_mode"])
+
+    segment_codes = filters.get("segment_codes")
+    if isinstance(segment_codes, list) and segment_codes:
+        if len(segment_codes) == 1:
+            query["segment"] = str(segment_codes[0])
+        else:
+            query["segment_codes"] = ",".join(str(v) for v in segment_codes)
+            query["segment_mode"] = str(filters.get("segment_mode") or "any")
+
     if "target_lender_ref" in filters:
         query["target_lender_ref"] = str(filters["target_lender_ref"])
+    portfolio_criteria = filters.get("portfolio_criteria")
+    if isinstance(portfolio_criteria, dict):
+        for key in sorted(_LEAD_QUEUE_PORTFOLIO_QUERY_KEYS):
+            value = portfolio_criteria.get(key)
+            if value is not None and value != "":
+                query[key] = str(value)
     query["cohort_id"] = cohort_id
     return urlunsplit(("", "", path, urlencode(query), ""))
 
