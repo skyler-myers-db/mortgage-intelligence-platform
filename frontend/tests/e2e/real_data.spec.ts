@@ -477,7 +477,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     expect(leads.status(), 'ranked list segment any-mode response').toBe(200);
     expect(geo.status(), 'map segment any-mode response').toBe(200);
     await expect(rankedHeader).toContainText(
-      /segment filter: Prime Refi Candidates \+ Home Equity Candidate/,
+      /segment filter: Prime Refi Candidates or Home Equity Candidate/,
       { timeout: 45_000 },
     );
     await expect(rankedHeader).toContainText(/matches any selected segment/);
