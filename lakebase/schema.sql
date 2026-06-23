@@ -409,12 +409,31 @@ CREATE TABLE IF NOT EXISTS mip_app.lead_outcomes (
     payload_json            JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_by              TEXT NOT NULL,
     created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
-    audit_event_id          UUID
+    audit_event_id          UUID,
+    CONSTRAINT ck_lead_outcomes_idempotency_key CHECK (
+        request_id IS NOT NULL OR source_record_ref IS NOT NULL
+    )
 );
 COMMENT ON TABLE mip_app.lead_outcomes IS
     'PII-safe closed-loop lead outcomes imported from customer CRM/LOS/POS/servicing systems.';
 COMMENT ON COLUMN mip_app.lead_outcomes.payload_json IS
     'Reviewed, non-PII context only. Raw borrower contact data and account numbers are forbidden.';
+UPDATE mip_app.lead_outcomes
+SET request_id = 'auto-' || md5(outcome_id::text)
+WHERE request_id IS NULL
+  AND source_record_ref IS NULL;
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'ck_lead_outcomes_idempotency_key'
+          AND conrelid = 'mip_app.lead_outcomes'::regclass
+    ) THEN
+        ALTER TABLE mip_app.lead_outcomes
+            ADD CONSTRAINT ck_lead_outcomes_idempotency_key
+            CHECK (request_id IS NOT NULL OR source_record_ref IS NOT NULL);
+    END IF;
+END $$;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_lead_outcomes_request_id
     ON mip_app.lead_outcomes (request_id)
     WHERE request_id IS NOT NULL;

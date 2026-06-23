@@ -933,6 +933,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
       'OCCUPANCY',
       'LIEN STATUS',
       'RELATIONSHIP',
+      'TARGET LIEN HOLDER',
       'OWNER LINK',
       'PURCHASE INTENT',
       'PRODUCT',
@@ -947,6 +948,8 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     await dataOperationsLink.click();
     await expect(page).toHaveURL(/\/admin-config#data-operations$/);
     await expect(page.locator('#data-operations')).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByLabel('Data freshness snapshot')).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText('Latest refresh')).toBeVisible();
     await page.goto('/portfolio-builder');
 
     // Primary CTA per prototype (design_files/Module 0 Prototype.html line

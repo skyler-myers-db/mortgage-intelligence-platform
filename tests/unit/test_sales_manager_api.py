@@ -234,6 +234,16 @@ def test_sales_outcome_rejects_unconfigured_customer_sources(fake_lakebase_clien
     borrower_id = mock_data.BORROWERS[2].borrower_id
     _approve_for_sales(borrower_id)
 
+    missing_key = client.post(
+        f"/api/leads/{borrower_id}/outcome",
+        json={
+            "outcome_type": "application_submitted",
+            "source_system": "manual_import",
+        },
+    )
+    assert missing_key.status_code == 422
+    assert "request_id or source_record_ref is required" in str(missing_key.json())
+
     blocked = client.post(
         f"/api/leads/{borrower_id}/outcome",
         json={
@@ -312,6 +322,35 @@ def test_sales_outcome_idempotency_replay_is_strict(fake_lakebase_client) -> Non
     )
     assert replay_by_source_record.status_code == 200
     assert replay_by_source_record.json()["outcome"]["outcome_id"] == first.json()["outcome"]["outcome_id"]
+
+    fake_lakebase_client.activation_destinations[2]["status"] = "disabled"
+    replay_after_disable = client.post(
+        f"/api/leads/{borrower_id}/outcome",
+        json={
+            "outcome_type": "closed_funded",
+            "source_system": "los_pos",
+            "source_record_ref": "los_file_123",
+            "assigned_to_email": "lo01@summit.example",
+            "loan_amount": 525000,
+            "request_id": request_id,
+        },
+    )
+    assert replay_after_disable.status_code == 200
+    assert replay_after_disable.json()["outcome"]["outcome_id"] == first.json()["outcome"]["outcome_id"]
+
+    unauthorized_replay = client.post(
+        f"/api/leads/{borrower_id}/outcome",
+        headers={"X-Forwarded-Email": "lo01@summit.example"},
+        json={
+            "outcome_type": "closed_funded",
+            "source_system": "los_pos",
+            "source_record_ref": "los_file_123",
+            "assigned_to_email": "lo01@summit.example",
+            "loan_amount": 525000,
+            "request_id": request_id,
+        },
+    )
+    assert unauthorized_replay.status_code == 403
 
     wrong_borrower = client.post(
         f"/api/leads/{other_id}/outcome",

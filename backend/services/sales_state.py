@@ -875,7 +875,6 @@ class SalesStateStore:
         self.require_manager_actor(actor)
         if assigned_to_email is not None:
             self.require_visible_assignee(actor=actor, assigned_to_email=assigned_to_email)
-        self._require_configured_outcome_source(source_system)
 
         def _matches_existing(existing: LeadOutcome) -> bool:
             return (
@@ -902,6 +901,8 @@ class SalesStateStore:
             if not _matches_existing(existing):
                 raise ValueError("source_record_ref already belongs to a different lead outcome")
             return existing, existing.audit_event_id or ""
+
+        self._require_configured_outcome_source(source_system)
         with self._client.transaction() as conn, conn.cursor() as cur:
             cur.execute(
                 """

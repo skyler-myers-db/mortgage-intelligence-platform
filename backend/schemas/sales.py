@@ -267,6 +267,8 @@ class LeadOutcomeRequest(BaseModel):
 
     @model_validator(mode="after")
     def _lost_requires_competitor(self) -> LeadOutcomeRequest:
+        if not self.request_id and not self.source_record_ref:
+            raise ValueError("request_id or source_record_ref is required for idempotent outcome ingestion")
         if self.outcome_type == "lost_to_competitor" and not self.competitor_lender_label:
             raise ValueError("competitor_lender_label is required for lost_to_competitor")
         return self
