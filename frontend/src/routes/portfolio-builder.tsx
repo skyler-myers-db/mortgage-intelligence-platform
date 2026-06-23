@@ -671,6 +671,7 @@ export default function PortfolioBuilder() {
           <div className="campaign-setup__meta">
             <span>Email → SMS after 3 days → direct mail after 10 days</span>
             <span>Staged cadence only; customer-system delivery requires a connected activation destination.</span>
+            <span><Link to="/admin-config#data-operations">Admin Data Operations</Link> shows refresh status.</span>
             <span>Tue-Thu · borrower local time</span>
           </div>
         </div>

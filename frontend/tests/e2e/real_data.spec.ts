@@ -27,6 +27,7 @@
  *   * Resilient selectors (getByRole, getByText, aria-label) matching the
  *     prototype's BEM class names; no brittle xpath.
  */
+import { randomUUID } from 'node:crypto';
 import { test, expect, type APIRequestContext, type Locator, type Page } from '@playwright/test';
 
 // Gate: skip everything unless E2E_LIVE=1 is set by the nightly workflow.
@@ -305,10 +306,28 @@ async function discoverMapDrillTarget(
   );
   expect(countyResp.status(), 'county rollups target discovery').toBe(200);
   const countyPayload = await countyResp.json();
-  const county = countyPayload.rollups.find((row: { fips_5?: string; addressable_borrowers?: number }) =>
-    row.fips_5 && Number(row.addressable_borrowers ?? 0) > 0,
-  );
+  let county:
+    | { fips_5?: string; county_name?: string; addressable_borrowers?: number }
+    | undefined;
+  for (const row of countyPayload.rollups as Array<{
+    fips_5?: string;
+    county_name?: string;
+    addressable_borrowers?: number;
+  }>) {
+    if (!row.fips_5 || Number(row.addressable_borrowers ?? 0) <= 0) continue;
+    const zipResp = await request.get(
+      `${API_URL}/api/geo/zip-rollups?county_fips=${row.fips_5}${params.toString() ? `&${params.toString()}` : ''}`,
+      { headers: AUTH_HEADERS },
+    );
+    if (zipResp.status() !== 200) continue;
+    const zipPayload = await zipResp.json();
+    if (Array.isArray(zipPayload.rollups) && zipPayload.rollups.length > 0) {
+      county = row;
+      break;
+    }
+  }
   expect(county, 'county rollups should expose at least one populated county').toBeTruthy();
+  if (!county) throw new Error('No populated county with ZIP rollups was found');
   const rawCountyName = String(county.county_name || county.fips_5);
   const countyName = rawCountyName.toLowerCase().endsWith('county')
     ? rawCountyName
@@ -324,17 +343,50 @@ async function discoverMapDrillTarget(
 
 async function drillStateToCounty(page: Page, target: MapDrillTarget) {
   const map = page.locator('.map-wrap').first();
-  await bringMapIntoViewport(page);
   const state = map.getByRole('button', { name: new RegExp(`^${escapeRegExp(target.stateName)}$`) }).first();
-  await clickSvgRegion(page, state, target.stateName);
+  const county = map.getByRole('button', { name: new RegExp(escapeRegExp(target.countyName), 'i') }).first();
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    await bringMapIntoViewport(page);
+    await expectMapIdle(page, 'state');
+    await clickSvgRegion(page, state, target.stateName);
+    try {
+      await expect(
+        county,
+        `${target.stateName} pointer click should drill into counties`,
+      ).toBeVisible({ timeout: 5_000 });
+      return;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError;
 }
 
 async function drillCountyToZips(page: Page, target: MapDrillTarget) {
   const map = page.locator('.map-wrap').first();
-  await bringMapIntoViewport(page);
   const county = map.getByRole('button', { name: new RegExp(escapeRegExp(target.countyName), 'i') }).first();
-  await expect(county).toBeVisible({ timeout: 10_000 });
-  await clickSvgRegion(page, county, target.countyName);
+  const zipTiles = page.locator('.zip-tiles');
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    await bringMapIntoViewport(page);
+    await expectMapIdle(page, 'county');
+    await expect(county).toBeVisible({ timeout: 10_000 });
+    await clickSvgRegion(page, county, target.countyName);
+    try {
+      await expect(
+        zipTiles,
+        `${target.countyName} pointer click should drill into ZIPs`,
+      ).toBeVisible({ timeout: 5_000 });
+      await expect(page.locator('.map-crumbs')).toContainText(target.countyName, {
+        timeout: 5_000,
+      });
+      return;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError;
 }
 
 async function bringMapIntoViewport(page: Page) {
@@ -343,6 +395,13 @@ async function bringMapIntoViewport(page: Page) {
     const map = document.querySelector('.map-wrap') as HTMLElement | null;
     if (scroller && map) scroller.scrollTop = Math.max(0, map.offsetTop - 120);
   });
+}
+
+async function expectMapIdle(page: Page, label: string) {
+  await expect(
+    page.locator('.map-levels').first(),
+    `${label} map should finish loading before drill`,
+  ).toHaveAttribute('aria-busy', 'false', { timeout: 15_000 });
 }
 
 async function expectMapCornerIconsCompact(page: import('@playwright/test').Page, label: string) {
@@ -867,10 +926,28 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
   test('portfolio-builder: filters + CTA + KPIs come from /api/portfolio/preview', async ({ page }) => {
     await page.goto('/portfolio-builder');
 
-    // Unique-to-route: all six filter buttons render with the prototype BEM.
-    for (const label of ['GEO', 'OCCUPANCY', 'LIEN STATUS', 'RELATIONSHIP', 'PRODUCT', 'EQUITY']) {
+    // Unique-to-route: the lender-conversation filter set renders with the
+    // prototype BEM, including Owner Link and purchase-intent overlays.
+    for (const label of [
+      'GEO',
+      'OCCUPANCY',
+      'LIEN STATUS',
+      'RELATIONSHIP',
+      'OWNER LINK',
+      'PURCHASE INTENT',
+      'PRODUCT',
+      'EQUITY',
+    ]) {
       await expect(page.getByRole('button', { name: new RegExp(`^${label}:`) })).toBeVisible();
     }
+    await expect(page.getByText(/Owner Link, purchase-intent, product, and equity filters/i)).toBeVisible();
+    await expect(page.getByText(/staged cadence only/i)).toBeVisible();
+    const dataOperationsLink = page.getByRole('link', { name: /Admin Data Operations/i });
+    await expect(dataOperationsLink).toBeVisible();
+    await dataOperationsLink.click();
+    await expect(page).toHaveURL(/\/admin-config#data-operations$/);
+    await expect(page.locator('#data-operations')).toBeVisible({ timeout: 10_000 });
+    await page.goto('/portfolio-builder');
 
     // Primary CTA per prototype (design_files/Module 0 Prototype.html line
     // 1780): the "Run build" button in the filter row. Not a forward-nav;
@@ -919,6 +996,58 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     // Forward nav CTA (secondary, but the product's intended progression).
     await page.getByRole('link', { name: /Next: (?:segment intelligence|segments)/i }).click();
     await expect(page).toHaveURL(/\/segment-intelligence$/);
+  });
+
+  test('sales outcomes: live manual import writes Lakebase ledger and Lead Queue explains status', async ({ page, request }) => {
+    const today = new Date();
+    const from = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const fromDate = from.toISOString().slice(0, 10);
+    const toDate = today.toISOString().slice(0, 10);
+    const summaryUrl = `${API_URL}/api/sales/outcomes/summary?from=${fromDate}&to=${toDate}`;
+
+    const beforeResp = await request.get(summaryUrl, { headers: AUTH_HEADERS });
+    expect(beforeResp.status(), 'sales outcome summary should be manager-visible').toBe(200);
+    const before = await beforeResp.json();
+    expect(Array.isArray(before.source_statuses), 'outcome source statuses should render').toBe(true);
+    const manual = before.source_statuses.find((row: { source_system?: string }) =>
+      row.source_system === 'manual_import',
+    );
+    expect(manual?.configured, 'manual imports remain available for governed backfill').toBe(true);
+
+    const lead = (await fetchLeads(request, 1))[0];
+    expect(lead?.borrower_id, 'need a live borrower for outcome ingestion').toBeTruthy();
+    const requestId = randomUUID();
+    const outcomeResp = await request.post(`${API_URL}/api/leads/${lead.borrower_id}/outcome`, {
+      headers: AUTH_HEADERS,
+      data: {
+        outcome_type: 'application_submitted',
+        source_system: 'manual_import',
+        source_record_ref: requestId,
+        request_id: requestId,
+      },
+    });
+    expect(outcomeResp.status(), 'manual-import lead outcome write').toBe(200);
+    const outcomeBody = await outcomeResp.json();
+    expect(outcomeBody.audit_event_id, 'outcome write should create server-owned audit event').toBeTruthy();
+    expect(outcomeBody.outcome.borrower_id).toBe(lead.borrower_id);
+    expect(outcomeBody.outcome.source_system).toBe('manual_import');
+
+    await expect
+      .poll(
+        async () => {
+          const resp = await request.get(summaryUrl, { headers: AUTH_HEADERS });
+          if (resp.status() !== 200) return -1;
+          const body = await resp.json();
+          return Number(body.applications_submitted ?? 0);
+        },
+        { timeout: 10_000 },
+      )
+      .toBeGreaterThanOrEqual(Number(before.applications_submitted ?? 0) + 1);
+
+    await page.goto('/lead-queue');
+    await expect(page.getByText('Closed-loop outcomes')).toBeVisible({ timeout: 45_000 });
+    await expect(page.getByText(/Imported, read-only outcome ledger/i)).toBeVisible();
+    await expect(page.getByText(/does not write back to customer systems/i)).toBeVisible();
   });
 
   test('analytics: multi-select filters drive API queries and URL state', async ({ page }) => {
