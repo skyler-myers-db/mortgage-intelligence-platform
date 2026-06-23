@@ -28,6 +28,8 @@ MIP_LENDER_NAME="Acme Mortgage"
 # Optional; defaults from MIP_LENDER_NAME when unset.
 MIP_TENANT_ID="acme_mortgage"
 MIP_DEFAULT_CATALOG="acme_mip"
+# Required for customer/non-dev targets; dev warns when omitted.
+MIP_COTALITY_ID_MASK_SECRET="<deployment-scoped-random-secret>"
 ```
 
    See [`docs/se-onboarding.md`](se-onboarding.md) for the full

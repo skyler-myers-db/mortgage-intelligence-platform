@@ -21,12 +21,15 @@ from backend.services.repositories.databricks_genie_canonical import (
     _CANONICAL_APPROVAL_TREND_30D_SQL,
     _CANONICAL_CASH_OUT_TOP_STATE_SQL,
     _CANONICAL_CURRENT_CUSTOMER_RETENTION_RISK_SQL,
+    _CANONICAL_EQUITY_THRESHOLD_COUNT_SQL,
+    _CANONICAL_EQUITY_THRESHOLD_STRICT_COUNT_SQL,
     _CANONICAL_EVIDENCE_EVENTS_THIS_QUARTER_SQL,
     _CANONICAL_EVIDENCE_EVENTS_YESTERDAY_SQL,
     _CANONICAL_HELOC_COUNT_SQL,
     _CANONICAL_HELOC_RECOMMENDATION_BORROWERS_SQL,
     _CANONICAL_HELOC_TOP_ZIPS_SQL,
     _CANONICAL_HOME_EQUITY_DISTRIBUTION_SQL,
+    _CANONICAL_INVESTOR_COUNT_SQL,
     _CANONICAL_INVESTOR_SEGMENT_BY_STATE_SQL,
     _CANONICAL_INVESTOR_TOP_BY_RELATED_PROPERTY_SQL,
     _CANONICAL_ITM_BY_STATE_SQL,
@@ -35,11 +38,14 @@ from backend.services.repositories.databricks_genie_canonical import (
     _CANONICAL_ITM_COUNT_BY_STATE_SQL,
     _CANONICAL_ITM_COUNT_SQL,
     _CANONICAL_ITM_OFFER_MIX_SQL,
+    _CANONICAL_ITM_SHARE_SQL,
     _CANONICAL_ITM_TOP_LEAD_QUEUE_ZIPS_SQL,
     _CANONICAL_ITM_TOP_TIER_COMPARE_SQL,
     _CANONICAL_ITM_TOP_ZIPS_SQL,
     _CANONICAL_LEAD_SCORE_WEEKLY_DISTRIBUTION_SQL,
     _CANONICAL_LISTED_BY_PRODUCT_RATE_SQL,
+    _CANONICAL_LISTED_COUNT_BY_STATE_SQL,
+    _CANONICAL_LISTED_COUNT_SQL,
     _CANONICAL_LISTED_DAYS_ON_MARKET_BY_STATE_SQL,
     _CANONICAL_LISTED_PURCHASE_TOP_SQL,
     _CANONICAL_LOCKIN_BY_STATE_SQL,
@@ -66,6 +72,7 @@ from backend.services.repositories.databricks_genie_canonical import (
     _canonical_addressable_market_scope,
     _canonical_approval_trend_30d_scope,
     _canonical_cash_out_state_scope,
+    _canonical_equity_threshold_scope,
     _canonical_evidence_events_quarter_scope,
     _canonical_evidence_events_yesterday_scope,
     _canonical_heloc_count_scope,
@@ -73,18 +80,21 @@ from backend.services.repositories.databricks_genie_canonical import (
     _canonical_heloc_zip_scope,
     _canonical_home_equity_distribution_scope,
     _canonical_in_the_money_count_scope,
+    _canonical_investor_count_scope,
     _canonical_investor_segment_by_state_scope,
     _canonical_investor_top_by_related_property_scope,
     _canonical_itm_city_scope,
     _canonical_itm_count_avg_spread_scope,
     _canonical_itm_lead_queue_zip_scope,
     _canonical_itm_offer_mix_scope,
+    _canonical_itm_share_scope,
     _canonical_itm_state_breakdown_scope,
     _canonical_itm_state_scope,
     _canonical_itm_top_tier_compare_scope,
     _canonical_itm_zip_scope,
     _canonical_lead_score_weekly_distribution_scope,
     _canonical_listed_by_product_rate_scope,
+    _canonical_listed_count_scope,
     _canonical_listed_days_on_market_by_state_scope,
     _canonical_listed_purchase_scope,
     _canonical_lockin_by_state_scope,
@@ -341,6 +351,223 @@ def direct_canonical_response(
         return trusted_response(
             question=question,
             sql_query=_CANONICAL_ITM_COUNT_AVG_SPREAD_SQL,
+            trusted_assets=trusted_assets,
+            rows=rows,
+            answer=answer,
+            metric_value=f"{count_int:,}",
+        )
+
+    if _canonical_itm_share_scope(question):
+        try:
+            row = sql_client.execute_one(_CANONICAL_ITM_SHARE_SQL) or {}
+        except DatabricksSqlError as exc:
+            _emit_genie_warning("direct_canonical_genie_itm_share_failed", exc=exc)
+            return None
+        raw_count = row.get("in_the_money_borrowers")
+        raw_total = row.get("total_borrowers")
+        if raw_count is None or raw_total is None:
+            _emit_genie_warning("direct_canonical_genie_itm_share_bad_count")
+            return None
+        try:
+            count_int = int(raw_count)
+            total_int = int(raw_total)
+        except (TypeError, ValueError):
+            _emit_genie_warning("direct_canonical_genie_itm_share_bad_count")
+            return None
+        raw_share = row.get("borrower_share_pct")
+        if raw_share is None:
+            share_float = None
+        else:
+            try:
+                share_float = float(raw_share)
+            except (TypeError, ValueError):
+                share_float = None
+        rows = [
+            {
+                "in_the_money_borrowers": count_int,
+                "total_borrowers": total_int,
+                "borrower_share_pct": share_float,
+                "refreshed_at": row.get("refreshed_at"),
+            }
+        ]
+        share_text = f"{share_float:,.2f}%" if share_float is not None else "not available"
+        answer = (
+            f"{count_int:,} of {total_int:,} borrowers pass the refinance-economics "
+            f"screen, or {share_text} of the current borrower coverage. This uses "
+            f"{borrower_asset} at unique borrower grain and is broader than the "
+            "marketing-eligible Lead Queue subset."
+        )
+        return trusted_response(
+            question=question,
+            sql_query=_CANONICAL_ITM_SHARE_SQL,
+            trusted_assets=trusted_assets,
+            rows=rows,
+            answer=answer,
+            metric_value=share_text,
+        )
+
+    equity_scope = _canonical_equity_threshold_scope(question)
+    if equity_scope is not None:
+        sql_query = (
+            _CANONICAL_EQUITY_THRESHOLD_STRICT_COUNT_SQL
+            if equity_scope.strict_greater
+            else _CANONICAL_EQUITY_THRESHOLD_COUNT_SQL
+        )
+        equity_params = {"min_equity_pct": equity_scope.threshold_pct}
+        try:
+            row = sql_client.execute_one(sql_query, equity_params) or {}
+        except DatabricksSqlError as exc:
+            _emit_genie_warning("direct_canonical_genie_equity_threshold_failed", exc=exc)
+            return None
+        raw_count = row.get("equity_capacity_borrowers")
+        if raw_count is None:
+            _emit_genie_warning("direct_canonical_genie_equity_threshold_bad_count")
+            return None
+        try:
+            count_int = int(raw_count)
+            total_int = int(row.get("total_borrowers") or 0)
+        except (TypeError, ValueError):
+            _emit_genie_warning(
+                "direct_canonical_genie_equity_threshold_bad_count",
+                value_type=type(raw_count).__name__,
+            )
+            return None
+        raw_share = row.get("borrower_share_pct")
+        if raw_share is None:
+            share_float = None
+        else:
+            try:
+                share_float = float(raw_share)
+            except (TypeError, ValueError):
+                share_float = None
+        raw_avg_equity = row.get("avg_equity_pct")
+        try:
+            avg_equity_float = float(raw_avg_equity) if raw_avg_equity is not None else None
+        except (TypeError, ValueError):
+            avg_equity_float = None
+        rows = [
+            {
+                "equity_capacity_borrowers": count_int,
+                "total_borrowers": total_int,
+                "borrower_share_pct": share_float,
+                "avg_equity_pct": avg_equity_float,
+                "min_equity_pct": equity_scope.threshold_pct,
+                "comparison": ">" if equity_scope.strict_greater else ">=",
+                "refreshed_at": row.get("refreshed_at"),
+            }
+        ]
+        comparison_text = "more than" if equity_scope.strict_greater else "at least"
+        share_text = f"{share_float:,.2f}%" if share_float is not None else "not available"
+        avg_equity_text = (
+            f"{avg_equity_float:,.1f}%" if avg_equity_float is not None else "not available"
+        )
+        equity_metric_value = share_text if equity_scope.asks_share else f"{count_int:,}"
+        population_text = (
+            f" ({share_text} of {total_int:,} borrowers)" if total_int > 0 else ""
+        )
+        answer = (
+            f"{count_int:,} borrowers have {comparison_text} "
+            f"{equity_scope.threshold_pct}% modeled home equity"
+            f"{population_text}. Their average modeled equity is "
+            f"{avg_equity_text}. This is an equity-capacity screen from {borrower_asset}, "
+            "not a filed-permit count."
+        )
+        return trusted_response(
+            question=question,
+            sql_query=sql_query,
+            trusted_assets=trusted_assets,
+            rows=rows,
+            answer=answer,
+            metric_value=equity_metric_value,
+        )
+
+    listed_count_scope = _canonical_listed_count_scope(question)
+    if listed_count_scope is not None:
+        sql_query = (
+            _CANONICAL_LISTED_COUNT_BY_STATE_SQL
+            if listed_count_scope.state_code
+            else _CANONICAL_LISTED_COUNT_SQL
+        )
+        listed_params = (
+            {"state": listed_count_scope.state_code}
+            if listed_count_scope.state_code
+            else None
+        )
+        try:
+            row = sql_client.execute_one(sql_query, listed_params) or {}
+        except DatabricksSqlError as exc:
+            _emit_genie_warning("direct_canonical_genie_listed_count_failed", exc=exc)
+            return None
+        raw_count = row.get("listed_borrowers")
+        if raw_count is None:
+            _emit_genie_warning("direct_canonical_genie_listed_count_bad_count")
+            return None
+        try:
+            count_int = int(raw_count)
+        except (TypeError, ValueError):
+            _emit_genie_warning(
+                "direct_canonical_genie_listed_count_bad_count",
+                value_type=type(raw_count).__name__,
+            )
+            return None
+        scope_text = (
+            f" in {listed_count_scope.state_name} ({listed_count_scope.state_code})"
+            if listed_count_scope.state_code and listed_count_scope.state_name
+            else ""
+        )
+        rows = [
+            {
+                "listed_borrowers": count_int,
+                "state": listed_count_scope.state_code,
+                "refreshed_at": row.get("refreshed_at"),
+            }
+        ]
+        answer = (
+            f"{count_int:,} borrowers{scope_text} currently have a live listed-for-sale "
+            f"signal in {borrower_asset}. This is the broad MLS/listing trigger count; "
+            "Lead Queue actions may be smaller after marketing-eligibility and consent filters."
+        )
+        return trusted_response(
+            question=question,
+            sql_query=sql_query,
+            trusted_assets=trusted_assets,
+            rows=rows,
+            answer=answer,
+            metric_value=f"{count_int:,}",
+        )
+
+    if _canonical_investor_count_scope(question):
+        try:
+            row = sql_client.execute_one(_CANONICAL_INVESTOR_COUNT_SQL) or {}
+        except DatabricksSqlError as exc:
+            _emit_genie_warning("direct_canonical_genie_investor_count_failed", exc=exc)
+            return None
+        raw_count = row.get("investor_borrowers")
+        if raw_count is None:
+            _emit_genie_warning("direct_canonical_genie_investor_count_bad_count")
+            return None
+        try:
+            count_int = int(raw_count)
+        except (TypeError, ValueError):
+            _emit_genie_warning(
+                "direct_canonical_genie_investor_count_bad_count",
+                value_type=type(raw_count).__name__,
+            )
+            return None
+        rows = [
+            {
+                "investor_borrowers": count_int,
+                "refreshed_at": row.get("refreshed_at"),
+            }
+        ]
+        answer = (
+            f"{count_int:,} borrowers are in the Investor / Multi-Property segment "
+            f"from {borrower_asset}. This uses Owner Link-derived segment membership "
+            "at unique borrower grain."
+        )
+        return trusted_response(
+            question=question,
+            sql_query=_CANONICAL_INVESTOR_COUNT_SQL,
             trusted_assets=trusted_assets,
             rows=rows,
             answer=answer,
@@ -1623,11 +1850,16 @@ def direct_canonical_response(
             return None
         if rows:
             top = rows[0]
+            broad_total = sum(int(row.get("in_the_money_borrowers") or 0) for row in rows)
+            lead_queue_total = sum(int(row.get("lead_queue_borrowers") or 0) for row in rows)
             answer = (
                 "I broke down borrowers passing the refinance-economics screen by state from "
                 f"{borrower_asset}. "
                 f"{top.get('state')} currently leads with "
-                f"{int(top.get('in_the_money_borrowers') or 0):,} borrowers."
+                f"{int(top.get('in_the_money_borrowers') or 0):,} borrowers. "
+                f"Across the returned states, {broad_total:,} borrowers pass the broad "
+                f"economic screen; the Lead Queue action opens the {lead_queue_total:,} "
+                "marketing-eligible subset after operational eligibility filters."
             )
         else:
             answer = (

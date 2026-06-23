@@ -339,6 +339,36 @@ class SalesStateStore:
             return lo
         raise PermissionError("cannot log a disposition for another loan officer")
 
+    def require_outcome_scope(
+        self,
+        *,
+        actor: str,
+        borrower_id: str,
+        assigned_to_email: str | None,
+    ) -> SalesTeamMember | None:
+        actor_member = self.require_manager_actor(actor)
+        supplied_assignee = (
+            self.require_visible_assignee(actor=actor, assigned_to_email=assigned_to_email)
+            if assigned_to_email is not None
+            else None
+        )
+        if actor_member.role == "admin":
+            return supplied_assignee
+
+        assignment = self.active_assignment_for(borrower_id)
+        if assignment is None:
+            raise PermissionError(
+                "lead outcome requires an in-scope active assignment"
+            )
+
+        active_assignee = self.require_visible_assignee(
+            actor=actor,
+            assigned_to_email=assignment.assigned_to_email,
+        )
+        if supplied_assignee is not None and supplied_assignee.email != active_assignee.email:
+            raise PermissionError("lead outcome assigned_to must match the active assignment")
+        return active_assignee
+
     def visible_lo_emails(self, *, actor: str) -> set[str] | None:
         """Return LO emails visible to actor; None means admin/all."""
         cache_key = f"sales_state:visible_lo_emails:{actor.lower()}"

@@ -11,7 +11,7 @@ from backend.services.audit_store import AuditMetadataValueViolation, get_audit_
 from backend.services.genie_sales_ops import sales_ops_genie_response
 from backend.services.lakebase import get_lakebase_client
 from backend.services.repositories import get_borrower_repository
-from backend.services.sales_state import get_sales_state_store
+from backend.services.sales_state import clear_sales_state_cache, get_sales_state_store
 from tests.fixtures import mock_population as mock_data
 from tests.fixtures.in_memory_audit_store import InMemoryAuditStore
 
@@ -482,6 +482,140 @@ def test_sales_outcome_idempotency_replay_is_strict(fake_lakebase_client) -> Non
         },
     )
     assert changed_timestamp.status_code == 409
+
+
+def test_sales_manager_outcome_requires_in_scope_assignment(fake_lakebase_client) -> None:
+    manager_email = "manager-scope@summit.example"
+    managed_lo_email = "lo-managed-scope@summit.example"
+    alternate_lo_email = "lo-managed-scope-alt@summit.example"
+    managed_emails = {manager_email, managed_lo_email, alternate_lo_email}
+    fake_lakebase_client.sales_team = [
+        row for row in fake_lakebase_client.sales_team if row.get("email") not in managed_emails
+    ]
+    fake_lakebase_client.sales_team.extend(
+        [
+            {
+                "email": manager_email,
+                "display_label": "Summit Manager",
+                "role": "sales_manager",
+                "manager_email": None,
+                "region": "IL",
+                "capacity_per_day": 0,
+                "active": True,
+            },
+            {
+                "email": managed_lo_email,
+                "display_label": "Managed LO",
+                "role": "loan_officer",
+                "manager_email": manager_email,
+                "region": "IL",
+                "capacity_per_day": 20,
+                "active": True,
+            },
+            {
+                "email": alternate_lo_email,
+                "display_label": "Managed Alt LO",
+                "role": "loan_officer",
+                "manager_email": manager_email,
+                "region": "IL",
+                "capacity_per_day": 20,
+                "active": True,
+            },
+        ]
+    )
+    borrower_id = mock_data.BORROWERS[10].borrower_id
+    other_id = mock_data.BORROWERS[11].borrower_id
+    fake_lakebase_client.assignments = [
+        row
+        for row in fake_lakebase_client.assignments
+        if row.get("borrower_id") not in {borrower_id, other_id}
+    ]
+    clear_sales_state_cache()
+    _approve_for_sales(borrower_id)
+    _approve_for_sales(other_id)
+
+    manager_client = TestClient(app)
+    manager_client.headers.update({"X-Forwarded-Email": manager_email})
+
+    unscoped = manager_client.post(
+        f"/api/leads/{borrower_id}/outcome",
+        json={
+            "outcome_type": "closed_funded",
+            "source_system": "manual_import",
+            "source_record_ref": f"manual-unscoped-{uuid4().hex}",
+            "loan_amount": 525000,
+            "request_id": str(uuid4()),
+        },
+    )
+    assert unscoped.status_code == 403
+
+    assigned = client.post(
+        f"/api/leads/{borrower_id}/assign",
+        json={
+            "assigned_to_email": managed_lo_email,
+            "strategy": "manual",
+            "request_id": str(uuid4()),
+        },
+    )
+    assert assigned.status_code == 200
+
+    scoped = manager_client.post(
+        f"/api/leads/{borrower_id}/outcome",
+        json={
+            "outcome_type": "closed_funded",
+            "source_system": "manual_import",
+            "source_record_ref": f"manual-scoped-{uuid4().hex}",
+            "assigned_to_email": managed_lo_email,
+            "loan_amount": 525000,
+            "request_id": str(uuid4()),
+        },
+    )
+    assert scoped.status_code == 200, scoped.text
+
+    scoped_without_payload_assignee = manager_client.post(
+        f"/api/leads/{borrower_id}/outcome",
+        json={
+            "outcome_type": "application_submitted",
+            "source_system": "manual_import",
+            "source_record_ref": f"manual-scoped-inferred-{uuid4().hex}",
+            "loan_amount": 525000,
+            "request_id": str(uuid4()),
+        },
+    )
+    assert scoped_without_payload_assignee.status_code == 200, scoped_without_payload_assignee.text
+    assert scoped_without_payload_assignee.json()["outcome"]["assigned_to_email"] == (
+        managed_lo_email
+    )
+
+    wrong_assignee = manager_client.post(
+        f"/api/leads/{borrower_id}/outcome",
+            json={
+            "outcome_type": "closed_funded",
+            "source_system": "manual_import",
+            "source_record_ref": f"manual-wrong-assignee-{uuid4().hex}",
+            "assigned_to_email": alternate_lo_email,
+            "loan_amount": 525000,
+            "request_id": str(uuid4()),
+        },
+    )
+    assert wrong_assignee.status_code == 403, wrong_assignee.text
+
+    fake_lakebase_client.assignments = [
+        row for row in fake_lakebase_client.assignments if row.get("borrower_id") != other_id
+    ]
+    clear_sales_state_cache()
+    in_scope_unassigned = manager_client.post(
+        f"/api/leads/{other_id}/outcome",
+        json={
+            "outcome_type": "closed_funded",
+            "source_system": "manual_import",
+            "source_record_ref": f"manual-unassigned-in-scope-{uuid4().hex}",
+            "assigned_to_email": managed_lo_email,
+            "loan_amount": 425000,
+            "request_id": str(uuid4()),
+        },
+    )
+    assert in_scope_unassigned.status_code == 403, in_scope_unassigned.text
 
 
 def test_sales_outcome_rejects_future_occurred_at() -> None:

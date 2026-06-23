@@ -18,6 +18,19 @@ class CanonicalRetentionEligibilityFallback:
     suppress_actions: bool = True
 
 
+@dataclass(frozen=True)
+class CanonicalEquityThresholdScope:
+    threshold_pct: int
+    strict_greater: bool
+    asks_share: bool
+
+
+@dataclass(frozen=True)
+class CanonicalListedCountScope:
+    state_name: str | None = None
+    state_code: str | None = None
+
+
 def _retention_eligibility_fallback_from_summary(
     summary_rows: list[dict[str, Any]] | None,
     *,
@@ -89,6 +102,32 @@ SELECT COUNT(*) AS equity_capacity_borrowers
      , MAX(refreshed_at) AS refreshed_at
 FROM {_BORROWER_360}
 WHERE equity_pct >= 35
+""".strip()
+
+_CANONICAL_EQUITY_THRESHOLD_COUNT_SQL = f"""
+SELECT CAST(COUNT_IF(equity_pct >= :min_equity_pct) AS BIGINT)
+         AS equity_capacity_borrowers
+     , CAST(COUNT(*) AS BIGINT) AS total_borrowers
+     , CAST(ROUND(
+         100.0 * COUNT_IF(equity_pct >= :min_equity_pct) / NULLIF(COUNT(*), 0)
+       , 2) AS DOUBLE) AS borrower_share_pct
+     , CAST(ROUND(AVG(CASE WHEN equity_pct >= :min_equity_pct THEN equity_pct END), 1)
+         AS DOUBLE) AS avg_equity_pct
+     , MAX(refreshed_at) AS refreshed_at
+FROM {_BORROWER_360}
+""".strip()
+
+_CANONICAL_EQUITY_THRESHOLD_STRICT_COUNT_SQL = f"""
+SELECT CAST(COUNT_IF(equity_pct > :min_equity_pct) AS BIGINT)
+         AS equity_capacity_borrowers
+     , CAST(COUNT(*) AS BIGINT) AS total_borrowers
+     , CAST(ROUND(
+         100.0 * COUNT_IF(equity_pct > :min_equity_pct) / NULLIF(COUNT(*), 0)
+       , 2) AS DOUBLE) AS borrower_share_pct
+     , CAST(ROUND(AVG(CASE WHEN equity_pct > :min_equity_pct THEN equity_pct END), 1)
+         AS DOUBLE) AS avg_equity_pct
+     , MAX(refreshed_at) AS refreshed_at
+FROM {_BORROWER_360}
 """.strip()
 
 _CANONICAL_HOME_EQUITY_DISTRIBUTION_SQL = f"""
@@ -193,17 +232,37 @@ LIMIT 10
 """.strip()
 
 _CANONICAL_ITM_BY_STATE_SQL = f"""
-SELECT state
-     , COUNT(*) AS in_the_money_borrowers
-     , CAST(ROUND(AVG(rate_spread_bps), 1) AS DOUBLE) AS avg_rate_spread_bps
-     , CAST(ROUND(AVG(opportunity_score), 1) AS DOUBLE) AS avg_score
-     , MAX(refreshed_at) AS refreshed_at
-FROM {_BORROWER_360}
-WHERE in_the_money = TRUE
-  AND state IS NOT NULL
-  AND TRIM(state) <> ''
-GROUP BY state
-ORDER BY in_the_money_borrowers DESC, avg_score DESC, state ASC
+WITH broad AS (
+  SELECT state
+       , COUNT(*) AS in_the_money_borrowers
+       , CAST(ROUND(AVG(rate_spread_bps), 1) AS DOUBLE) AS avg_rate_spread_bps
+       , CAST(ROUND(AVG(opportunity_score), 1) AS DOUBLE) AS avg_score
+       , MAX(refreshed_at) AS refreshed_at
+  FROM {_BORROWER_360}
+  WHERE in_the_money = TRUE
+    AND state IS NOT NULL
+    AND TRIM(state) <> ''
+  GROUP BY state
+),
+lead_queue AS (
+  SELECT state
+       , COUNT(*) AS lead_queue_borrowers
+  FROM {_BORROWER_360}
+  WHERE array_contains(segment_codes, 'itm')
+    AND marketing_eligible = TRUE
+    AND state IS NOT NULL
+    AND TRIM(state) <> ''
+  GROUP BY state
+)
+SELECT b.state
+     , b.in_the_money_borrowers
+     , COALESCE(l.lead_queue_borrowers, 0) AS lead_queue_borrowers
+     , b.avg_rate_spread_bps
+     , b.avg_score
+     , b.refreshed_at
+FROM broad b
+LEFT JOIN lead_queue l ON l.state = b.state
+ORDER BY b.in_the_money_borrowers DESC, b.avg_score DESC, b.state ASC
 LIMIT 20
 """.strip()
 
@@ -253,6 +312,38 @@ WHERE listed_for_sale = TRUE
   AND consent_status = 'opt_in'
 ORDER BY opportunity_score DESC, borrower_id ASC
 LIMIT 10
+""".strip()
+
+_CANONICAL_LISTED_COUNT_SQL = f"""
+SELECT CAST(COUNT(*) AS BIGINT) AS listed_borrowers
+     , MAX(refreshed_at) AS refreshed_at
+FROM {_BORROWER_360}
+WHERE listed_for_sale = TRUE
+""".strip()
+
+_CANONICAL_LISTED_COUNT_BY_STATE_SQL = f"""
+SELECT CAST(COUNT(*) AS BIGINT) AS listed_borrowers
+     , MAX(refreshed_at) AS refreshed_at
+FROM {_BORROWER_360}
+WHERE listed_for_sale = TRUE
+  AND state = :state
+""".strip()
+
+_CANONICAL_INVESTOR_COUNT_SQL = f"""
+SELECT CAST(COUNT(*) AS BIGINT) AS investor_borrowers
+     , MAX(refreshed_at) AS refreshed_at
+FROM {_BORROWER_360}
+WHERE array_contains(segment_codes, 'investor')
+""".strip()
+
+_CANONICAL_ITM_SHARE_SQL = f"""
+SELECT CAST(COUNT_IF(in_the_money = TRUE) AS BIGINT) AS in_the_money_borrowers
+     , CAST(COUNT(*) AS BIGINT) AS total_borrowers
+     , CAST(ROUND(
+         100.0 * COUNT_IF(in_the_money = TRUE) / NULLIF(COUNT(*), 0)
+       , 2) AS DOUBLE) AS borrower_share_pct
+     , MAX(refreshed_at) AS refreshed_at
+FROM {_BORROWER_360}
 """.strip()
 
 _CANONICAL_REFI_EQUITY_SIGNAL_COMPARE_SQL = f"""
@@ -1242,13 +1333,12 @@ def _canonical_itm_state_scope(question: str) -> tuple[str, str] | None:
 
 
 def _canonical_in_the_money_count_scope(question: str) -> tuple[str, str] | None | bool:
-    q = re.sub(r"[^a-z0-9\s-]+", " ", question.lower())
-    q = re.sub(r"\s+", " ", q).strip()
-    if not any(phrase in q for phrase in ("in-the-money", "in the money")):
+    q = _normalized_question(question)
+    if not _has_itm_intent(q):
         return False
     if "borrower" not in q:
         return False
-    if not any(term in q for term in ("how many", "count", "total number", "number of")):
+    if not _has_count_intent(q):
         return False
     breakdown_terms = (
         " by ",
@@ -1259,7 +1349,6 @@ def _canonical_in_the_money_count_scope(question: str) -> tuple[str, str] | None
         "state by state",
         "top ",
         "rank",
-        "list",
         "zip",
         "county",
         "msa",
@@ -1268,7 +1357,7 @@ def _canonical_in_the_money_count_scope(question: str) -> tuple[str, str] | None
         "avg",
         "mean",
     )
-    if any(term in q for term in breakdown_terms):
+    if any(term in q for term in breakdown_terms) or re.search(r"\blist\b", q):
         return None
     state_scope = _canonical_itm_state_scope(question)
     if state_scope is not None:
@@ -1299,6 +1388,48 @@ def _normalized_question(question: str) -> str:
     for needle, replacement in replacements.items():
         q = q.replace(needle, replacement)
     return re.sub(r"\s+", " ", q).strip()
+
+
+def _has_count_intent(q: str) -> bool:
+    return bool(
+        re.search(
+            r"\b(how many|count|count of|number of|total|total number|size of|how big)\b",
+            q,
+        )
+    )
+
+
+def _has_share_intent(q: str) -> bool:
+    return bool(re.search(r"\b(share|percent|percentage|ratio|what portion)\b", q))
+
+
+def _has_rank_intent(q: str) -> bool:
+    return bool(
+        re.search(
+            r"\b(top|highest|rank|ranked|ranking|show|list|best|first|prioritize)\b",
+            q,
+        )
+    )
+
+
+def _has_itm_intent(q: str) -> bool:
+    return any(
+        term in q
+        for term in (
+            "in-the-money",
+            "in the money",
+            "itm",
+            "prime refi",
+            "refi economic",
+            "refinance economic",
+            "refinance incentive",
+            "refi incentive",
+            "economic incentive",
+            "rate incentive",
+            "refinance opportunity",
+            "refi opportunity",
+        )
+    )
 
 
 def _has_global_coverage_scope(q: str) -> bool:
@@ -1357,13 +1488,60 @@ def _canonical_itm_count_avg_spread_scope(question: str) -> bool:
     q = _normalized_question(question)
     if not _has_global_coverage_scope(q) or _has_unsupported_geo_scope(question, q):
         return False
-    has_itm = any(term in q for term in ("in-the-money", "in the money", "itm"))
-    asks_count = any(term in q for term in ("how many", "count", "number of", "total"))
+    has_itm = _has_itm_intent(q)
+    asks_count = _has_count_intent(q)
     asks_spread = (
         ("rate spread" in q or "spread" in q)
         and any(term in q for term in ("average", "avg", "mean"))
     )
     return has_itm and "borrower" in q and asks_count and asks_spread
+
+
+def _canonical_equity_threshold_scope(question: str) -> CanonicalEquityThresholdScope | None:
+    q = _normalized_question(question)
+    if _has_unsupported_geo_scope(question, q):
+        return None
+    equity_terms = (
+        "home equity",
+        "modeled equity",
+        "equity pct",
+        "equity percent",
+        "equity percentage",
+        "equity capacity",
+        "high equity",
+        "strong equity",
+        "equity",
+    )
+    if not any(term in q for term in equity_terms):
+        return None
+    if not (_has_count_intent(q) or _has_share_intent(q)):
+        return None
+    if any(term in q for term in ("distribution", "histogram", "bucket", "band", "break down", "breakdown")):
+        return None
+    threshold = 35
+    strict_greater = False
+    threshold_match = re.search(
+        r"\b(?P<op>at least|>=|over|more than|above|greater than|greater than or equal to)"
+        r"\s*(?P<threshold>\d{1,3})\s*%?",
+        q,
+    )
+    if threshold_match:
+        threshold = int(threshold_match.group("threshold"))
+        strict_greater = threshold_match.group("op") in {
+            "over",
+            "more than",
+            "above",
+            "greater than",
+        }
+    elif "high equity" not in q and "strong equity" not in q:
+        return None
+    if threshold < 0 or threshold > 100:
+        return None
+    return CanonicalEquityThresholdScope(
+        threshold_pct=threshold,
+        strict_greater=strict_greater,
+        asks_share=_has_share_intent(q),
+    )
 
 
 def _canonical_heloc_count_scope(question: str) -> bool:
@@ -1374,9 +1552,57 @@ def _canonical_heloc_count_scope(question: str) -> bool:
         term in q
         for term in ("heloc", "home equity", "equity line", "modeled equity", "equity capacity")
     ) or "borrower" in q
-    asks_count = any(term in q for term in ("how many", "count", "number of", "total"))
+    asks_count = _has_count_intent(q)
     has_equity_threshold = "35" in q and "equity" in q
     return has_equity_capacity and asks_count and has_equity_threshold
+
+
+def _canonical_listed_count_scope(question: str) -> CanonicalListedCountScope | None:
+    q = _normalized_question(question)
+    listed_terms = (
+        "listed for sale",
+        "listed-for-sale",
+        "listed borrower",
+        "listed borrowers",
+        "listing",
+        "listings",
+        "mls",
+        "for sale",
+    )
+    if not any(term in q for term in listed_terms):
+        return None
+    if not _has_count_intent(q):
+        return None
+    if any(term in q for term in ("loan product", "days on market", "current rate", "average rate")):
+        return None
+    state_scope = _canonical_itm_state_scope(question)
+    if state_scope is not None:
+        return CanonicalListedCountScope(
+            state_name=state_scope[0],
+            state_code=state_scope[1],
+        )
+    if any(term in q for term in ("zip", "zipcode", "zip code", "county", "msa", "cbsa", "metro")):
+        return None
+    return CanonicalListedCountScope()
+
+
+def _canonical_investor_count_scope(question: str) -> bool:
+    q = _normalized_question(question)
+    if _has_unsupported_geo_scope(question, q):
+        return False
+    investor_terms = ("investor", "investors", "multi-property", "multi property")
+    if not any(term in q for term in investor_terms):
+        return False
+    if not _has_count_intent(q):
+        return False
+    return not _has_rank_intent(q)
+
+
+def _canonical_itm_share_scope(question: str) -> bool:
+    q = _normalized_question(question)
+    if _has_unsupported_geo_scope(question, q):
+        return False
+    return _has_itm_intent(q) and "borrower" in q and _has_share_intent(q)
 
 
 def _canonical_home_equity_distribution_scope(question: str) -> bool:
@@ -1557,10 +1783,9 @@ def _canonical_itm_lead_queue_zip_scope(question: str) -> bool:
 
 
 def _canonical_itm_state_breakdown_scope(question: str) -> bool:
-    q = re.sub(r"[^a-z0-9\s-]+", " ", question.lower())
-    q = re.sub(r"\s+", " ", q).strip()
+    q = _normalized_question(question)
     return (
-        any(term in q for term in ("in-the-money", "in the money", "itm", "refi", "refinance"))
+        _has_itm_intent(q)
         and any(term in q for term in ("borrower", "lead", "candidate", "segment"))
         and "state" in q
         and any(
@@ -1608,11 +1833,10 @@ def _canonical_listed_purchase_scope(question: str) -> bool:
         "homebuy",
         "financing help",
     )
-    rank_terms = ("top", "rank", "ranked", "which", "show", "list", "first", "prioritize")
     return (
         any(term in q for term in listed_terms)
         and any(term in q for term in purchase_terms)
-        and any(term in q for term in rank_terms)
+        and _has_rank_intent(q)
     )
 
 
@@ -1724,7 +1948,7 @@ def _canonical_top_borrowers_state_scope(question: str) -> tuple[str, str] | Non
         return None
     if _specific_top_borrower_intent(q) is not None:
         return None
-    if not any(term in q for term in ("top", "highest", "rank", "ranked", "show", "list", "best")):
+    if not _has_rank_intent(q):
         return None
     if not any(term in q for term in ("borrower", "borrowers", "lead", "leads")):
         return None
@@ -1747,7 +1971,7 @@ def _canonical_top_borrowers_global_scope(question: str) -> bool:
     if _specific_top_borrower_intent(q) is not None:
         return False
     return (
-        any(term in q for term in ("top", "highest", "rank", "ranked", "show", "list", "best"))
+        _has_rank_intent(q)
         and any(term in q for term in ("borrower", "borrowers", "lead", "leads"))
         and (
             any(term in q for term in ("lead score", "opportunity score", "score", "offer", "any offer"))
@@ -1805,7 +2029,7 @@ def _specific_top_borrower_intents(q: str) -> list[str]:
     )
     add(
         "refi",
-        any(term in q for term in ("in-the-money", "in the money", "itm", "prime refi", "refi", "refinance")),
+        _has_itm_intent(q) or any(term in q for term in ("refi", "refinance")),
     )
     return intents
 
@@ -1851,7 +2075,7 @@ def _canonical_specific_top_borrowers_state_scope(question: str) -> tuple[str, s
         return None
     if _canonical_listed_purchase_scope(question):
         return None
-    if not any(term in q for term in ("top", "highest", "rank", "ranked", "show", "list", "best")):
+    if not _has_rank_intent(q):
         return None
     if not any(term in q for term in ("borrower", "borrowers", "lead", "leads", "candidate", "candidates")):
         return None
@@ -1871,7 +2095,7 @@ def _canonical_specific_top_borrowers_global_scope(question: str) -> str | None:
         return None
     if _canonical_listed_purchase_scope(question):
         return None
-    if not any(term in q for term in ("top", "highest", "rank", "ranked", "show", "list", "best")):
+    if not _has_rank_intent(q):
         return None
     if not any(term in q for term in ("borrower", "borrowers", "lead", "leads", "candidate", "candidates")):
         return None

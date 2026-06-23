@@ -41,6 +41,7 @@ class _UniversalSqlClient:
             "leading_offer_code": "refi",
             "leading_recommended_offer": "Rate refinance",
             "listed_borrowers": 45,
+            "lead_queue_borrowers": 120,
             "avg_listing_days_on_market": 18.4,
             "avg_listing_price": 425000,
             "lockin_borrowers": 654,
@@ -63,6 +64,7 @@ class _UniversalSqlClient:
             "signal_type": "rate_spread",
             "state": "IL",
             "total_matching": 3,
+            "total_borrowers": 1000,
             "top_tier_borrowers": 222,
             "week_bucket": "current",
             "zip": "60617",
@@ -118,6 +120,19 @@ class _RetentionEligibilitySqlClient(_UniversalSqlClient):
             "How many borrowers have at least 35% modeled equity across the current Cotality data coverage?",
             "mip.gold.borrower_360",
         ),
+        ("How many borrowers have at least 35% modeled equity?", "mip.gold.borrower_360"),
+        ("Count the borrowers with more than 50% home equity.", "mip.gold.borrower_360"),
+        ("How many borrowers have high equity?", "mip.gold.borrower_360"),
+        ("What share of borrowers have at least 35% equity?", "mip.gold.borrower_360"),
+        ("How many borrowers are listed for sale?", "mip.gold.borrower_360"),
+        ("Give me the count of listed-for-sale borrowers.", "mip.gold.borrower_360"),
+        ("How many listed borrowers are there?", "mip.gold.borrower_360"),
+        ("How many investors are in the current Cotality coverage?", "mip.gold.borrower_360"),
+        (
+            "How many borrowers currently have refinance economic incentive?",
+            "mip.gold.borrower_360",
+        ),
+        ("What percent of borrowers are in the money?", "mip.gold.borrower_360"),
         ("Show the distribution of home equity.", "mip.gold.borrower_360"),
         ("Break down home equity across the borrower population.", "mip.gold.borrower_360"),
         ("Breakdown of modeled equity by band.", "mip.gold.borrower_360"),
@@ -224,6 +239,135 @@ def test_direct_canonical_questions_return_trusted_sql(question: str, expected_a
     assert response.sql_query
     assert client.statements
     assert expected_asset in " ".join(response.trusted_assets)
+
+
+def test_direct_equity_threshold_supports_buyer_phrasings() -> None:
+    client = _UniversalSqlClient(
+        {
+            "equity_capacity_borrowers": 3386169,
+            "total_borrowers": 5156184,
+            "borrower_share_pct": 65.67,
+            "avg_equity_pct": 61.4,
+        }
+    )
+
+    response = direct_canonical_response(
+        "Count the borrowers with more than 50% home equity.",
+        cast(Any, client),
+    )
+
+    assert response is not None
+    assert response.source == "trusted_sql"
+    assert response.sql_query is not None
+    assert "equity_pct > :min_equity_pct" in response.sql_query
+    assert client.parameters[-1] == {"min_equity_pct": 50}
+    assert response.metric_value == "3,386,169"
+    assert "more than 50% modeled home equity" in response.answer
+
+
+def test_direct_equity_threshold_share_uses_share_metric() -> None:
+    client = _UniversalSqlClient(
+        {
+            "equity_capacity_borrowers": 3386169,
+            "total_borrowers": 5156184,
+            "borrower_share_pct": 65.67,
+            "avg_equity_pct": 61.4,
+        }
+    )
+
+    response = direct_canonical_response(
+        "What share of borrowers have at least 35% equity?",
+        cast(Any, client),
+    )
+
+    assert response is not None
+    assert response.source == "trusted_sql"
+    assert response.sql_query is not None
+    assert "equity_pct >= :min_equity_pct" in response.sql_query
+    assert client.parameters[-1] == {"min_equity_pct": 35}
+    assert response.metric_value == "65.67%"
+    assert "65.67% of 5,156,184 borrowers" in response.answer
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "Give me the count of listed-for-sale borrowers.",
+        "How many listed borrowers are there?",
+    ],
+)
+def test_direct_listed_count_intent_is_not_ranked_list(question: str) -> None:
+    client = _UniversalSqlClient({"listed_borrowers": 95951})
+
+    response = direct_canonical_response(
+        question,
+        cast(Any, client),
+    )
+
+    assert response is not None
+    assert response.source == "trusted_sql"
+    assert response.sql_query is not None
+    assert "COUNT(*)" in response.sql_query
+    assert "ORDER BY opportunity_score" not in response.sql_query
+    assert response.metric_value == "95,951"
+    assert "live listed-for-sale signal" in response.answer
+
+
+def test_direct_investor_count_and_refi_economic_synonyms_stay_canonical() -> None:
+    investor = direct_canonical_response(
+        "How many investors are in the current Cotality coverage?",
+        cast(Any, _UniversalSqlClient({"investor_borrowers": 1749208})),
+    )
+    refi = direct_canonical_response(
+        "How many borrowers currently have refinance economic incentive?",
+        cast(Any, _UniversalSqlClient({"in_the_money_borrowers": 117404})),
+    )
+    percent = direct_canonical_response(
+        "What percent of borrowers are in the money?",
+        cast(Any, _UniversalSqlClient(
+            {
+                "in_the_money_borrowers": 117404,
+                "total_borrowers": 5156184,
+                "borrower_share_pct": 2.28,
+            }
+        )),
+    )
+
+    assert investor is not None and investor.source == "trusted_sql"
+    assert investor.sql_query is not None
+    assert "array_contains(segment_codes, 'investor')" in investor.sql_query
+    assert investor.metric_value == "1,749,208"
+    assert refi is not None and refi.source == "trusted_sql"
+    assert refi.metric_value == "117,404"
+    assert percent is not None and percent.source == "trusted_sql"
+    assert percent.metric_value == "2.28%"
+
+
+def test_direct_itm_state_breakdown_reconciles_lead_queue_action_subset() -> None:
+    client = _UniversalSqlClient(
+        {
+            "in_the_money_borrowers": 58484,
+            "lead_queue_borrowers": 2697,
+            "avg_rate_spread_bps": 187.9,
+        }
+    )
+
+    response = direct_canonical_response(
+        "Break down in-the-money borrowers by current coverage state; which state leads?",
+        cast(Any, client),
+    )
+
+    assert response is not None
+    assert response.source == "trusted_sql"
+    assert response.sql_query is not None
+    assert "lead_queue_borrowers" in response.sql_query
+    assert "116,968 borrowers pass the broad economic screen" in response.answer
+    assert "Lead Queue action opens the 5,394 marketing-eligible subset" in response.answer
+    open_action = next(action for action in response.actions if action.id == "open-cohort")
+    assert open_action.label == "Open eligible Lead Queue subset (5,394)"
+    assert open_action.criteria["actionable_total"] == 5394
+    assert open_action.route is not None
+    assert "segment=itm" in open_action.route
 
 
 @pytest.mark.parametrize(

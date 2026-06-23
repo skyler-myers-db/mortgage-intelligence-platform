@@ -164,6 +164,6 @@ test('Movement filters survive Portfolio to Segment to Lead Queue browser flow',
   await expect(page).toHaveURL(/\/lead-queue\?/);
   await expect(page.getByRole('button', { name: /OWNER LINK: Portfolio investor \(5\+\)/i })).toBeVisible({ timeout: 30_000 });
   await expect(page.getByRole('button', { name: /PURCHASE INTENT: HELOC intent/i })).toBeVisible();
-  await expect(page.getByText(/withdrawn/i)).toBeVisible({ timeout: 45_000 });
-  await expect(page.getByText(/not qualified/i)).toBeVisible();
+  await expect(page.getByText('withdrawn', { exact: true })).toBeVisible({ timeout: 45_000 });
+  await expect(page.getByText('not qualified', { exact: true })).toBeVisible();
 });

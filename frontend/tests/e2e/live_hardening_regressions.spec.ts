@@ -130,6 +130,39 @@ async function askGenie(request: APIRequestContext, question: string): Promise<G
   return payload;
 }
 
+async function executeOpenCohortAction(
+  request: APIRequestContext,
+  answer: GenieAnswer,
+  action: GenieAction,
+): Promise<GenieActionResult> {
+  const resp = await request.post(`${API_URL}/api/genie/actions`, {
+    headers: AUTH_HEADERS,
+    data: {
+      action_type: action.action_type,
+      conversation_id: answer.conversation_id ?? null,
+      message_id: answer.message_id ?? null,
+      question_hash: answer.question_hash ?? null,
+      borrower_ids: action.borrower_ids ?? [],
+      criteria: action.criteria ?? {},
+      route: action.route ?? null,
+      request_id: action.request_id,
+      confirmed: true,
+      confirmation_token: action.confirmation_token ?? null,
+    },
+    timeout: 90_000,
+  });
+  expect(resp.status(), 'open-cohort action should succeed').toBe(200);
+  const result = await resp.json() as GenieActionResult;
+  expect(result.ok).toBe(true);
+  expect(result.route, 'open-cohort result should include a lead queue route').toMatch(/^\/lead-queue\?/);
+  return result;
+}
+
+function leadQueueApiPathFromRoute(route: string): string {
+  const routeUrl = new URL(route, APP_URL);
+  return `/api/leads?${routeUrl.searchParams.toString()}`;
+}
+
 async function clickSegment(page: Page, label: string): Promise<void> {
   const card = page.locator('.seg-card', { hasText: label }).first();
   await expect(card, `segment card ${label}`).toBeVisible({ timeout: 45_000 });
@@ -252,31 +285,39 @@ test('Genie answers valid recommended and free-form questions without policy-blo
   await expect(page.getByText(/mip\.gold\.lead_population/i).first()).toBeVisible({ timeout: 60_000 });
 });
 
+test('Genie state-breakdown action reconciles broad answer with eligible Lead Queue subset', async ({ request }) => {
+  const answer = await askGenie(
+    request,
+    'Break down in-the-money borrowers by current coverage state; which state leads?',
+  );
+  expect(answer.source).toBe('trusted_sql');
+  expect(answer.answer ?? '').toMatch(/broad economic screen/i);
+  expect(answer.answer ?? '').toMatch(/Lead Queue action opens/i);
+
+  const action = answer.actions?.find((candidate) => candidate.action_type === 'open_cohort');
+  expect(action, 'Genie should return an open-cohort action for the state breakdown').toBeTruthy();
+  expect(action!.label).toMatch(/^Open eligible Lead Queue subset \([\d,]+\)$/);
+  expect(action!.description ?? '').toMatch(/marketing-eligible Lead Queue subset/i);
+  const actionableTotal = Number(action!.criteria?.actionable_total);
+  expect(Number.isFinite(actionableTotal), 'action should carry actionable_total').toBeTruthy();
+  expect(actionableTotal).toBeGreaterThan(0);
+
+  const result = await executeOpenCohortAction(request, answer, action!);
+  const leadsResp = await request.get(`${API_URL}${leadQueueApiPathFromRoute(result.route!)}`, {
+    headers: AUTH_HEADERS,
+    timeout: 90_000,
+  });
+  expect(leadsResp.status(), 'Lead Queue API should accept the governed cohort route').toBe(200);
+  const totalMatching = Number(leadsResp.headers()['x-total-matching']);
+  expect(totalMatching, 'Lead Queue total must equal Genie actionable_total').toBe(actionableTotal);
+});
+
 test('Genie open-cohort action, Lead Queue URL, dropdowns, and rows agree', async ({ page, request }) => {
   const answer = await askGenie(request, 'Which ZIPs have the most in-the-money refinance candidates?');
   const action = answer.actions?.find((candidate) => candidate.action_type === 'open_cohort');
   expect(action, 'Genie should return an open-cohort action for a ZIP-ranked answer').toBeTruthy();
 
-  const resp = await request.post(`${API_URL}/api/genie/actions`, {
-    headers: AUTH_HEADERS,
-    data: {
-      action_type: action!.action_type,
-      conversation_id: answer.conversation_id ?? null,
-      message_id: answer.message_id ?? null,
-      question_hash: answer.question_hash ?? null,
-      borrower_ids: action!.borrower_ids ?? [],
-      criteria: action!.criteria ?? {},
-      route: action!.route ?? null,
-      request_id: action!.request_id,
-      confirmed: true,
-      confirmation_token: action!.confirmation_token ?? null,
-    },
-    timeout: 90_000,
-  });
-  expect(resp.status(), 'open-cohort action should succeed').toBe(200);
-  const result = await resp.json() as GenieActionResult;
-  expect(result.ok).toBe(true);
-  expect(result.route, 'open-cohort result should include a lead queue route').toMatch(/^\/lead-queue\?/);
+  const result = await executeOpenCohortAction(request, answer, action!);
 
   await page.goto(result.route!);
   await expect(page.getByText(/Genie cohort/i)).toBeVisible({ timeout: 30_000 });

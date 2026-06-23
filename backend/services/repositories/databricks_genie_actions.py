@@ -55,6 +55,30 @@ def _total_matching_from_rows(rows: list[dict[str, Any]] | None) -> int:
     return len(rows or [])
 
 
+def _actionable_total_from_rows(rows: list[dict[str, Any]] | None) -> int | None:
+    for column in (
+        "lead_queue_borrowers",
+        "lead_queue_leads",
+        "action_ready_borrowers",
+        "actionable_borrowers",
+        "marketing_eligible_borrowers",
+    ):
+        total = 0
+        found = False
+        for row in rows or []:
+            raw = row.get(column)
+            if raw is None:
+                continue
+            try:
+                total += max(0, int(raw))
+                found = True
+            except (TypeError, ValueError):
+                continue
+        if found:
+            return total
+    return None
+
+
 def _row_values(
     rows: list[dict[str, Any]] | None,
     *columns: str,
@@ -263,7 +287,11 @@ def _route_from_answer_rows(
     zips = _row_values(rows, "zip", "zip_code", "zipcode", "postal_code", digits=5)
     counties = _row_values(rows, "county_fips_5", "county_fips", "fips_5", "fips", digits=5)
     states = _row_values(rows, "state", "state_code", upper=True)
-    if states and re.search(r"\bwhich\s+state\b|\bwhat\s+state\b", question.lower()):
+    if (
+        states
+        and re.search(r"\bwhich\s+state\b|\bwhat\s+state\b", question.lower())
+        and _actionable_total_from_rows(rows) is None
+    ):
         states = states[:1]
     segment_codes = _segment_codes_from_question(question)
     portfolio_criteria = {
@@ -351,6 +379,9 @@ def _suggest_genie_actions(
     )
     if result_filters:
         base_criteria["result_filters"] = result_filters
+    actionable_total = _actionable_total_from_rows(rows)
+    if actionable_total is not None:
+        base_criteria["actionable_total"] = actionable_total
     if borrower_ids:
         criteria = dict(base_criteria)
         actions.append(
@@ -378,12 +409,20 @@ def _suggest_genie_actions(
         )
     if row_count > 0 and result_filters:
         criteria = dict(base_criteria)
+        open_label = "Open this cohort in Lead Queue"
+        open_description = "Navigate into the lead queue with this Genie result audited."
+        if actionable_total is not None:
+            open_label = f"Open eligible Lead Queue subset ({actionable_total:,})"
+            open_description = (
+                "Navigate into the marketing-eligible Lead Queue subset for this Genie result; "
+                "the analytic count above may be broader."
+            )
         actions.append(
             GenieActionSuggestion(
                 id="open-cohort",
-                label="Open this cohort in Lead Queue",
+                label=open_label,
                 action_type="open_cohort",
-                description="Navigate into the lead queue with this Genie result audited.",
+                description=open_description,
                 route=lead_queue_route,
                 borrower_ids=borrower_ids,
                 criteria=criteria,

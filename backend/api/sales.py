@@ -266,13 +266,19 @@ def record_lead_outcome(
         raise HTTPException(status_code=404, detail=f"Borrower {borrower_id} not found")
     actor = resolve_actor(request)
     try:
+        scoped_assignee = store.require_outcome_scope(
+            actor=actor,
+            borrower_id=borrower_id,
+            assigned_to_email=payload.assigned_to_email,
+        )
         outcome, audit_event_id = store.record_outcome(
             borrower_id=borrower_id,
             actor=actor,
             outcome_type=payload.outcome_type,
             source_system=payload.source_system,
             source_record_ref=payload.source_record_ref,
-            assigned_to_email=payload.assigned_to_email,
+            assigned_to_email=payload.assigned_to_email
+            or (scoped_assignee.email if scoped_assignee is not None else None),
             campaign_id=payload.campaign_id,
             loan_amount=payload.loan_amount,
             competitor_lender_label=payload.competitor_lender_label,

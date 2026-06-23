@@ -258,20 +258,25 @@ fi
 # MIP_COTALITY_ID_MASK_SECRET is unset, backend/services/pii_redaction.py
 # falls back to a source-committed constant — masked IDs are still stable,
 # but anyone with repo access can recompute the mapping. Fine for the
-# synthetic-data sandbox; never acceptable for a customer deploy. Warn,
-# don't block (mirrors the MIP_ADMIN_EMAILS posture above).
+# synthetic-data sandbox; never acceptable for a customer deploy. Dev keeps
+# the warning path; non-dev/customer targets fail before mutating the app.
 _ID_MASK_RESOLVED="${MIP_COTALITY_ID_MASK_SECRET:-$("$PYTHON" - <<'PYEOF'
 from pathlib import Path
 try:
     from dotenv import dotenv_values
     values = dotenv_values(Path(".env.local"))
-    print((values.get("MIP_COTALITY_ID_MASK_SECRET")
-           or values.get("MIP_GENIE_ACTION_SECRET") or "").strip())
+    print((values.get("MIP_COTALITY_ID_MASK_SECRET") or "").strip())
 except Exception:
     print("")
 PYEOF
 )}"
 if [[ -z "$_ID_MASK_RESOLVED" ]]; then
+  if [[ "$TARGET" != "dev" ]]; then
+    echo "${RED}[deploy] ERROR: MIP_COTALITY_ID_MASK_SECRET is required for target '$TARGET'.${RST}" >&2
+    echo "${RED}  Customer/non-dev deployments must use a deployment-scoped HMAC secret;${RST}" >&2
+    echo "${RED}  the source-committed fallback is allowed only for the dev sandbox.${RST}" >&2
+    exit 1
+  fi
   echo "${YLW}[deploy] WARNING: MIP_COTALITY_ID_MASK_SECRET is not set (env or .env.local).${RST}" >&2
   echo "${YLW}  Cotality ID masking will use the source-committed fallback constant —${RST}" >&2
   echo "${YLW}  acceptable for the synthetic-data sandbox, NOT for customer deploys.${RST}" >&2

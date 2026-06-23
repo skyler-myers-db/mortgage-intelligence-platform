@@ -578,6 +578,15 @@ recent application activity. The historical count is distinct CLIPs per
 `owner_link_id`, not repeat mortgage events on one property, and the tenant
 lender comes from `mip.ref.lender_dictionary`.
 
+Closed-loop outcome ingestion uses a public-safe competitor vocabulary:
+`competitor_lender_label` accepts only `Competitor A` through `Competitor Z`
+or `Competitor Other`. Raw lender brands, tenant lender names, and person names
+are intentionally rejected at the API, audit, and Lakebase constraint layers.
+Operators who need real competitor intelligence should keep the alias-to-lender
+mapping in the governed `mip.ref.lender_dictionary` deployment configuration
+or an internal CRM system; Module 0 surfaces only the alias in API responses,
+Genie answers, and audit metadata.
+
 **evidence** (weight 0.10): direct count of scoring evidence rows in `gold.evidence_events` plus a bounded second-lien evidence tail. `permit` rows are excluded because true filed permits remain a pending feed, and `loan_type_fit` is explainability-only. Live `listing`, `heloc_propensity`, and `refi_propensity` evidence rows contribute to the count.
 ```
 LEAST(100, GREATEST(0,

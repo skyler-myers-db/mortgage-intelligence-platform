@@ -1327,8 +1327,8 @@ def test_eval_canonical_questions_use_direct_trusted_sql_without_genie_call(
                     "refreshed_at": "2026-06-15T00:00:00Z",
                 }
             ],
-            "equity_pct >= 35",
-            "borrowers with at least 35% modeled home equity",
+            "equity_pct >= :min_equity_pct",
+            "borrowers have at least 35% modeled home equity",
         ),
         (
             "How many HELOC candidates have more than 35% equity across the current Cotality data coverage?",
@@ -1339,8 +1339,8 @@ def test_eval_canonical_questions_use_direct_trusted_sql_without_genie_call(
                     "refreshed_at": "2026-06-15T00:00:00Z",
                 }
             ],
-            "equity_pct >= 35",
-            "This is not a filed-permit or HELOC-intent count",
+            "equity_pct > :min_equity_pct",
+            "borrowers have more than 35% modeled home equity",
         ),
         (
             "What is the addressable market size — how many eligible borrowers across the current Cotality data coverage?",
