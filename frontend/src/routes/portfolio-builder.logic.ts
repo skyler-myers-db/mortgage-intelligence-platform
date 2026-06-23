@@ -220,6 +220,12 @@ export function buildSegmentIntelligenceUrlFromFilters(
   ) {
     sp.set('target_lender_ref', target);
   }
+  for (const key of ['owner_link', 'purchase_intent'] as const) {
+    const value = filters[key];
+    if (value && value !== BASE_DEFAULT_FILTERS[key]) {
+      sp.set(key, value);
+    }
+  }
   const query = sp.toString();
   return query ? `/segment-intelligence?${query}` : '/segment-intelligence';
 }

@@ -203,6 +203,17 @@ def test_audit_target_lender_ref_accepts_public_alias() -> None:
     _assert_public_safe_values({"target_lender_ref": "Competitor B"})
 
 
+def test_audit_competitor_lender_label_rejects_person_names_and_raw_brands() -> None:
+    with pytest.raises(AuditMetadataValueViolation):
+        _assert_public_safe_values({"competitor_lender_label": "John Smith"})
+    with pytest.raises(AuditMetadataValueViolation):
+        _assert_public_safe_values({"competitor_lender_label": "Rocket Mortgage"})
+
+
+def test_audit_competitor_lender_label_accepts_public_alias() -> None:
+    _assert_public_safe_values({"competitor_lender_label": "Competitor D"})
+
+
 def test_audit_proof_metadata_accepts_reviewed_assets_hash_and_row_count() -> None:
     _assert_allowlisted(
         {

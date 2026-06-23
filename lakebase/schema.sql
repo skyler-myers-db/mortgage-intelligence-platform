@@ -132,8 +132,34 @@ CREATE TABLE IF NOT EXISTS mip_app.lead_assignments (
     released_at       TIMESTAMPTZ,
     strategy          TEXT NOT NULL DEFAULT 'manual'
                       CHECK (strategy IN ('manual','round_robin','score_balanced')),
-    request_id        TEXT
+    request_id        TEXT,
+    assignment_scope  TEXT NOT NULL DEFAULT 'single'
+                      CHECK (assignment_scope IN ('single','distribution'))
 );
+ALTER TABLE mip_app.lead_assignments
+    ADD COLUMN IF NOT EXISTS assignment_scope TEXT NOT NULL DEFAULT 'single';
+UPDATE mip_app.lead_assignments
+SET assignment_scope = 'distribution'
+WHERE request_id IS NOT NULL
+  AND request_id IN (
+      SELECT request_id
+      FROM mip_app.lead_assignments
+      WHERE request_id IS NOT NULL
+      GROUP BY request_id
+      HAVING COUNT(*) > 1
+  );
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'ck_lead_assignments_assignment_scope'
+          AND conrelid = 'mip_app.lead_assignments'::regclass
+    ) THEN
+        ALTER TABLE mip_app.lead_assignments
+            ADD CONSTRAINT ck_lead_assignments_assignment_scope
+            CHECK (assignment_scope IN ('single','distribution'));
+    END IF;
+END $$;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_lead_assignments_active_borrower
     ON mip_app.lead_assignments (borrower_id)
     WHERE released_at IS NULL;
@@ -144,6 +170,9 @@ DROP INDEX IF EXISTS mip_app.idx_lead_assignments_request_id;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_lead_assignments_request_borrower
     ON mip_app.lead_assignments (request_id, borrower_id)
     WHERE request_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_lead_assignments_single_request_id
+    ON mip_app.lead_assignments (request_id)
+    WHERE request_id IS NOT NULL AND assignment_scope = 'single';
 
 CREATE TABLE IF NOT EXISTS mip_app.call_dispositions (
     disposition_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -419,6 +448,10 @@ COMMENT ON TABLE mip_app.lead_outcomes IS
 COMMENT ON COLUMN mip_app.lead_outcomes.payload_json IS
     'Reviewed, non-PII context only. Raw borrower contact data and account numbers are forbidden.';
 UPDATE mip_app.lead_outcomes
+SET competitor_lender_label = 'Competitor Other'
+WHERE competitor_lender_label IS NOT NULL
+  AND competitor_lender_label !~ '^Competitor ([A-Z]|Other)$';
+UPDATE mip_app.lead_outcomes
 SET request_id = 'auto-' || md5(outcome_id::text)
 WHERE request_id IS NULL
   AND source_record_ref IS NULL;
@@ -432,6 +465,21 @@ BEGIN
         ALTER TABLE mip_app.lead_outcomes
             ADD CONSTRAINT ck_lead_outcomes_idempotency_key
             CHECK (request_id IS NOT NULL OR source_record_ref IS NOT NULL);
+    END IF;
+END $$;
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'ck_lead_outcomes_competitor_label'
+          AND conrelid = 'mip_app.lead_outcomes'::regclass
+    ) THEN
+        ALTER TABLE mip_app.lead_outcomes
+            ADD CONSTRAINT ck_lead_outcomes_competitor_label
+            CHECK (
+                competitor_lender_label IS NULL
+                OR competitor_lender_label ~ '^Competitor ([A-Z]|Other)$'
+            );
     END IF;
 END $$;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_lead_outcomes_request_id

@@ -132,6 +132,76 @@ def test_disposition_requires_callback_time_and_updates_lifecycle() -> None:
     assert body["latest_disposition"]["outcome"] == "callback_scheduled"
 
 
+def test_disposition_request_id_replays_without_duplicate_or_breaker(fake_lakebase_client) -> None:
+    borrower_id = mock_data.BORROWERS[1].borrower_id
+    _approve_for_sales(borrower_id)
+    client.post(
+        f"/api/leads/{borrower_id}/assign",
+        json={"assigned_to_email": "lo01@summit.example", "strategy": "manual"},
+    )
+    request_id = str(uuid4())
+    payload = {
+        "lo_email": "lo01@summit.example",
+        "outcome": "connected",
+        "notes": "Reviewed scenario and next steps.",
+        "request_id": request_id,
+    }
+
+    first = client.post(f"/api/leads/{borrower_id}/disposition", json=payload)
+    assert first.status_code == 200
+
+    replay = client.post(f"/api/leads/{borrower_id}/disposition", json=payload)
+    assert replay.status_code == 200
+    assert replay.json()["disposition"]["disposition_id"] == first.json()["disposition"]["disposition_id"]
+    assert len([
+        row for row in fake_lakebase_client.dispositions
+        if row.get("request_id") == request_id
+    ]) == 1
+
+    mismatch = client.post(
+        f"/api/leads/{borrower_id}/disposition",
+        json={**payload, "outcome": "not_now"},
+    )
+    assert mismatch.status_code == 409
+
+
+def test_disposition_rejects_future_and_backwards_callback() -> None:
+    borrower_id = mock_data.BORROWERS[1].borrower_id
+    future = (datetime.now(UTC) + timedelta(days=1)).isoformat()
+    past = (datetime.now(UTC) - timedelta(hours=1)).isoformat()
+
+    future_disposition = client.post(
+        f"/api/leads/{borrower_id}/disposition",
+        json={
+            "lo_email": "lo01@summit.example",
+            "outcome": "connected",
+            "occurred_at": future,
+        },
+    )
+    assert future_disposition.status_code == 422
+
+    backwards_callback = client.post(
+        f"/api/leads/{borrower_id}/disposition",
+        json={
+            "lo_email": "lo01@summit.example",
+            "outcome": "callback_scheduled",
+            "occurred_at": datetime.now(UTC).isoformat(),
+            "callback_at": past,
+        },
+    )
+    assert backwards_callback.status_code == 422
+
+    implicit_now_backwards_callback = client.post(
+        f"/api/leads/{borrower_id}/disposition",
+        json={
+            "lo_email": "lo01@summit.example",
+            "outcome": "callback_scheduled",
+            "callback_at": past,
+        },
+    )
+    assert implicit_now_backwards_callback.status_code == 422
+
+
 def test_sales_standup_aging_and_conversion_surfaces() -> None:
     borrower_id = mock_data.BORROWERS[1].borrower_id
     _approve_for_sales(borrower_id)
@@ -181,7 +251,7 @@ def test_sales_closed_loop_outcomes_are_recorded_and_summarized(fake_lakebase_cl
             "source_record_ref": "sf_case_123",
             "assigned_to_email": "lo01@summit.example",
             "loan_amount": 425000,
-            "competitor_lender_label": "Rocket Mortgage",
+            "competitor_lender_label": "Competitor D",
             "request_id": request_id,
         },
     )
@@ -199,7 +269,7 @@ def test_sales_closed_loop_outcomes_are_recorded_and_summarized(fake_lakebase_cl
             "source_record_ref": "sf_case_123",
             "assigned_to_email": "lo01@summit.example",
             "loan_amount": 425000,
-            "competitor_lender_label": "Rocket Mortgage",
+            "competitor_lender_label": "Competitor D",
             "request_id": request_id,
         },
     )
@@ -211,7 +281,7 @@ def test_sales_closed_loop_outcomes_are_recorded_and_summarized(fake_lakebase_cl
     assert summary.status_code == 200
     data = summary.json()
     assert data["lost_to_competitor"] >= 1
-    assert data["top_competitors"][0]["competitor_lender_label"] == "Rocket Mortgage"
+    assert data["top_competitors"][0]["competitor_lender_label"] == "Competitor D"
     salesforce_status = next(
         row for row in data["source_statuses"] if row["source_system"] == "salesforce"
     )
@@ -228,6 +298,28 @@ def test_sales_closed_loop_outcomes_are_recorded_and_summarized(fake_lakebase_cl
         },
     )
     assert unsafe.status_code == 422
+
+    person_name = client.post(
+        f"/api/leads/{borrower_id}/outcome",
+        json={
+            "outcome_type": "lost_to_competitor",
+            "source_system": "salesforce",
+            "source_record_ref": "sf_case_1000",
+            "competitor_lender_label": "John Smith",
+        },
+    )
+    assert person_name.status_code == 422
+
+    raw_brand = client.post(
+        f"/api/leads/{borrower_id}/outcome",
+        json={
+            "outcome_type": "lost_to_competitor",
+            "source_system": "salesforce",
+            "source_record_ref": "sf_case_1001",
+            "competitor_lender_label": "Rocket Mortgage",
+        },
+    )
+    assert raw_brand.status_code == 422
 
 
 def test_sales_outcome_rejects_unconfigured_customer_sources(fake_lakebase_client) -> None:
@@ -376,6 +468,36 @@ def test_sales_outcome_idempotency_replay_is_strict(fake_lakebase_client) -> Non
         },
     )
     assert wrong_payload.status_code == 409
+
+    changed_timestamp = client.post(
+        f"/api/leads/{borrower_id}/outcome",
+        json={
+            "outcome_type": "closed_funded",
+            "source_system": "los_pos",
+            "source_record_ref": "los_file_123",
+            "assigned_to_email": "lo01@summit.example",
+            "loan_amount": 525000,
+            "request_id": request_id,
+            "occurred_at": (datetime.now(UTC) - timedelta(days=1)).isoformat(),
+        },
+    )
+    assert changed_timestamp.status_code == 409
+
+
+def test_sales_outcome_rejects_future_occurred_at() -> None:
+    borrower_id = mock_data.BORROWERS[2].borrower_id
+    _approve_for_sales(borrower_id)
+
+    future = client.post(
+        f"/api/leads/{borrower_id}/outcome",
+        json={
+            "outcome_type": "application_submitted",
+            "source_system": "manual_import",
+            "source_record_ref": "manual_future",
+            "occurred_at": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
+        },
+    )
+    assert future.status_code == 422
 
 
 def test_sales_distribute_requires_approved_borrowers() -> None:
@@ -646,6 +768,54 @@ def test_sales_assignment_request_id_replay_is_strict() -> None:
     assert retry.json()["assignment"]["borrower_id"] == borrower_id
     assert retry.json()["audit_event_id"] == ""
 
+    changed_strategy = client.post(
+        f"/api/leads/{borrower_id}/assign",
+        json={
+            "assigned_to_email": "lo01@summit.example",
+            "strategy": "score_balanced",
+            "request_id": request_id,
+        },
+    )
+    assert changed_strategy.status_code == 403
+
+    changed_expiry = client.post(
+        f"/api/leads/{borrower_id}/assign",
+        json={
+            "assigned_to_email": "lo01@summit.example",
+            "strategy": "manual",
+            "expires_in_hours": 48,
+            "request_id": request_id,
+        },
+    )
+    assert changed_expiry.status_code == 403
+
+    still_active = client.get(f"/api/leads/{borrower_id}/assignment")
+    assert still_active.status_code == 200
+    assert still_active.json()["assigned_to_email"] == "lo01@summit.example"
+
+    reassigned = client.post(
+        f"/api/leads/{borrower_id}/assign",
+        json={
+            "assigned_to_email": "lo02@summit.example",
+            "strategy": "manual",
+            "request_id": str(uuid4()),
+        },
+    )
+    assert reassigned.status_code == 200
+
+    replay_after_release = client.post(
+        f"/api/leads/{borrower_id}/assign",
+        json={
+            "assigned_to_email": "lo01@summit.example",
+            "strategy": "manual",
+            "request_id": request_id,
+        },
+    )
+    assert replay_after_release.status_code == 200
+    assert replay_after_release.json()["assignment"]["assigned_to_email"] == "lo01@summit.example"
+    assert replay_after_release.json()["assignment"]["released_at"] is not None
+    assert replay_after_release.json()["audit_event_id"] == ""
+
     collision = client.post(
         f"/api/leads/{other_id}/assign",
         json={
@@ -655,6 +825,46 @@ def test_sales_assignment_request_id_replay_is_strict() -> None:
         },
     )
     assert collision.status_code == 403
+
+
+def test_sales_distribution_request_id_replay_is_strict() -> None:
+    borrower_ids = [mock_data.BORROWERS[8].borrower_id, mock_data.BORROWERS[9].borrower_id]
+    for borrower_id in borrower_ids:
+        _approve_for_sales(borrower_id)
+    request_id = str(uuid4())
+    payload = {
+        "borrower_ids": borrower_ids,
+        "lo_emails": ["lo01@summit.example", "lo02@summit.example"],
+        "strategy": "round_robin",
+        "expires_in_hours": 24,
+        "request_id": request_id,
+    }
+
+    first = client.post("/api/sales/distribute", json=payload)
+    assert first.status_code == 200
+    assert first.json()["assigned_count"] == 2
+
+    replay = client.post("/api/sales/distribute", json=payload)
+    assert replay.status_code == 200
+    assert replay.json()["assigned_count"] == 2
+    assert replay.json()["audit_event_id"] == ""
+
+    changed_allocation = client.post(
+        "/api/sales/distribute",
+        json={**payload, "lo_emails": ["lo02@summit.example", "lo01@summit.example"]},
+    )
+    assert changed_allocation.status_code == 403
+
+    changed_strategy = client.post(
+        "/api/sales/distribute",
+        json={**payload, "strategy": "score_balanced"},
+    )
+    assert changed_strategy.status_code == 403
+
+    for borrower_id, expected_lo in zip(borrower_ids, payload["lo_emails"], strict=True):
+        assignment = client.get(f"/api/leads/{borrower_id}/assignment")
+        assert assignment.status_code == 200
+        assert assignment.json()["assigned_to_email"] == expected_lo
 
 
 def test_non_sales_actor_does_not_receive_sales_hydration() -> None:

@@ -93,7 +93,7 @@ export const INITIAL_ACTIVE_SEGMENTS: SegmentCode[] = [];
 export function lenderFiltersFromSearch(
   searchParams: URLSearchParams,
   targetLenderOptions: readonly string[] = [],
-): Pick<ChipFilters, 'lenderRelationship' | 'targetLenderRef'> {
+): Pick<ChipFilters, 'lenderRelationship' | 'targetLenderRef' | 'ownerLink' | 'purchase'> {
   const relationship = searchParams.get('lender_relationship');
   const lenderRelationship = LENDER_RELATIONSHIP_OPTIONS.includes(
     relationship as (typeof LENDER_RELATIONSHIP_OPTIONS)[number],
@@ -102,7 +102,18 @@ export function lenderFiltersFromSearch(
     : 'All';
   const target = searchParams.get('target_lender_ref');
   const targetLenderRef = isPublicLenderRef(target, targetLenderOptions) ? target! : 'All';
-  return { lenderRelationship, targetLenderRef };
+  const ownerLink = searchParams.get('owner_link');
+  const purchase = searchParams.get('purchase_intent');
+  return {
+    lenderRelationship,
+    targetLenderRef,
+    ownerLink: OWNER_LINK_OPTIONS.includes(ownerLink as (typeof OWNER_LINK_OPTIONS)[number])
+      ? ownerLink!
+      : 'All',
+    purchase: PURCHASE_OPTIONS.includes(purchase as (typeof PURCHASE_OPTIONS)[number])
+      ? purchase!
+      : 'All',
+  };
 }
 
 /**
@@ -150,6 +161,8 @@ export default function SegmentIntelligence() {
     setChipFilters((current) => (
       current.lenderRelationship === next.lenderRelationship
       && current.targetLenderRef === next.targetLenderRef
+      && current.ownerLink === next.ownerLink
+      && current.purchase === next.purchase
         ? current
         : { ...current, ...next }
     ));
@@ -378,6 +391,8 @@ export default function SegmentIntelligence() {
     const next = new URLSearchParams(searchParams);
     next.delete('lender_relationship');
     next.delete('target_lender_ref');
+    next.delete('owner_link');
+    next.delete('purchase_intent');
     setSearchParams(next);
   };
 

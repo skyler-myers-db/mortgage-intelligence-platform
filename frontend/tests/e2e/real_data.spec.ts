@@ -995,10 +995,19 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     await expect(page.getByText(/equity = ≥ 15%/i)).toBeVisible();
     await expect(page.locator('table.tbl')).toBeVisible({ timeout: 45_000 });
 
-    await page.goto('/portfolio-builder');
+    await page.goto('/portfolio-builder?owner_link=Portfolio+investor+%285%2B%29&purchase_intent=HELOC+intent');
+    const segmentResponse = page.waitForResponse((response) => {
+      if (response.status() !== 200 || !urlIncludesApiPath(response.url(), '/api/segments')) return false;
+      const parsed = new URL(response.url());
+      return parsed.searchParams.get('owner_link') === 'Portfolio investor (5+)'
+        && parsed.searchParams.get('purchase_intent') === 'HELOC intent';
+    });
     // Forward nav CTA (secondary, but the product's intended progression).
     await page.getByRole('link', { name: /Next: (?:segment intelligence|segments)/i }).click();
-    await expect(page).toHaveURL(/\/segment-intelligence$/);
+    await segmentResponse;
+    await expect(page).toHaveURL(/\/segment-intelligence\?/);
+    await expect(page.getByRole('button', { name: /OWNER LINK: Portfolio investor \(5\+\)/i })).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByRole('button', { name: /PURCHASE INTENT: HELOC intent/i })).toBeVisible();
   });
 
   test('sales outcomes: live manual import writes Lakebase ledger and Lead Queue explains status', async ({ page, request }) => {

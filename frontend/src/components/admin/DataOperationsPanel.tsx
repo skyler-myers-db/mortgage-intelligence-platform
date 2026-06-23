@@ -143,6 +143,9 @@ function sourceFreshnessStats(sources: SourceSummary[] | undefined) {
     }))
     .filter((source) => Number.isFinite(source.ts))
     .sort((a, b) => b.ts - a.ts);
+  const missingTimestampRows = liveRows.filter((source) => (
+    !Number.isFinite(parseBackendTimestamp(source.last_updated)?.getTime() ?? Number.NaN)
+  ));
   const latest = dated[0] ?? null;
   const now = Date.now();
   const staleRows = dated.filter((source) => now - source.ts > 7 * 24 * 60 * 60 * 1000);
@@ -152,6 +155,7 @@ function sourceFreshnessStats(sources: SourceSummary[] | undefined) {
     pendingCount: pendingRows.length,
     errorCount: errorRows.length,
     staleCount: staleRows.length,
+    missingTimestampCount: missingTimestampRows.length,
     latest,
   };
 }
@@ -195,6 +199,24 @@ export function DataOperationsPanel({ sources, sourcesLoading = false, sourcesEr
     ? operations.jobs.filter((job) => job.latest_run?.active).length
     : 0;
   const freshnessStats = sourceFreshnessStats(sources);
+  const freshnessAttentionCount = freshnessStats.pendingCount
+    + freshnessStats.staleCount
+    + freshnessStats.errorCount
+    + freshnessStats.missingTimestampCount;
+  const operationsChipVariant = operationsError || sourcesError || freshnessAttentionCount > 0
+    ? 'warning'
+    : activeOperationCount > 0 ? 'success' : 'neutral';
+  const operationsChipLabel = operationsError
+    ? 'unavailable'
+    : sourcesError
+      ? 'freshness unavailable'
+      : operationsLoading
+        ? 'loading...'
+        : activeOperationCount > 0
+          ? `${activeOperationCount} running`
+          : freshnessAttentionCount > 0
+            ? `${freshnessAttentionCount} attention`
+            : 'ready';
 
   const runOperation = async (job: OperationJobStatus) => {
     if (!job.configured || operationRunningKey) return;
@@ -231,15 +253,7 @@ export function DataOperationsPanel({ sources, sourcesLoading = false, sourcesEr
             Governed refresh jobs for rates, source features, scoring snapshots, and workflow state.
           </div>
         </div>
-        <Chip variant={operationsError ? 'warning' : activeOperationCount > 0 ? 'success' : 'neutral'}>
-          {operationsError
-              ? 'unavailable'
-              : operationsLoading
-                ? 'loading...'
-                : activeOperationCount > 0
-                  ? `${activeOperationCount} running`
-                  : 'ready'}
-              </Chip>
+        <Chip variant={operationsChipVariant}>{operationsChipLabel}</Chip>
       </div>
       <div className="surface__body surface__body--stack-sm">
         {operationsLoading && (
@@ -275,7 +289,7 @@ export function DataOperationsPanel({ sources, sourcesLoading = false, sourcesEr
               </div>
               <div className="admin-rollup">
                 <span className="admin-rollup__label">Attention</span>
-                <strong>{sourcesLoading ? '...' : freshnessStats.pendingCount + freshnessStats.staleCount + freshnessStats.errorCount}</strong>
+                <strong>{sourcesLoading ? '...' : freshnessAttentionCount}</strong>
               </div>
               <div className="admin-rollup">
                 <span className="admin-rollup__label">Latest refresh</span>

@@ -96,12 +96,14 @@ describe('portfolio builder URL helpers', () => {
         ...BASE_DEFAULT_FILTERS,
         lender_relationship: 'Competitor customer',
         target_lender_ref: 'Competitor B',
+        owner_link: 'Portfolio investor (5+)',
+        purchase_intent: 'HELOC intent',
         product: 'Retention',
       },
       ['All', 'Competitor B'],
     );
 
-    expect(url).toBe('/segment-intelligence?lender_relationship=Competitor+customer&target_lender_ref=Competitor+B');
+    expect(url).toBe('/segment-intelligence?lender_relationship=Competitor+customer&target_lender_ref=Competitor+B&owner_link=Portfolio+investor+%285%2B%29&purchase_intent=HELOC+intent');
   });
 
   it('collapses all selected states to the whole-footprint default', () => {

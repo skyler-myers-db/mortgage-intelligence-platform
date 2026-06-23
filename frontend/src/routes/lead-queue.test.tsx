@@ -287,7 +287,8 @@ describe('LeadQueue filter state', () => {
             initialEntries={[
               '/lead-queue?states=IL,TX&segment_codes=itm,equity&segment_mode=any'
               + '&cohort_id=11111111-1111-1111-1111-111111111111'
-              + '&lender_relationship=Competitor+customer&product=HELOC',
+              + '&lender_relationship=Competitor+customer&product=HELOC'
+              + '&owner_link=Portfolio+investor+%285%2B%29&purchase_intent=HELOC+intent',
             ]}
           >
             <LeadQueue />
@@ -302,6 +303,8 @@ describe('LeadQueue filter state', () => {
     expect(document.body.textContent).toContain('segments = Prime Refi Candidates, Home Equity Candidate (any selected)');
     expect(document.querySelector('button[aria-label="RELATIONSHIP: Competitor customer"]')).toBeTruthy();
     expect(document.querySelector('button[aria-label="PRODUCT: HELOC"]')).toBeTruthy();
+    expect(document.querySelector('button[aria-label="OWNER LINK: Portfolio investor (5+)"]')).toBeTruthy();
+    expect(document.querySelector('button[aria-label="PURCHASE INTENT: HELOC intent"]')).toBeTruthy();
     expect(document.querySelector('button[aria-label="CONTACTABILITY: Eligible only"]')).toBeTruthy();
     expect(document.querySelector('button[aria-label="CONSENT: Any"]')).toBeTruthy();
     expect(document.body.textContent).toContain('Closed-loop outcomes');
@@ -319,12 +322,12 @@ describe('LeadQueue filter state', () => {
 
   it('shows connected outcome counts and top competitors', async () => {
     apiMocks.salesOutcomeSummary.mockResolvedValueOnce({
-      total_outcomes: 4,
+      total_outcomes: 5,
       applications_submitted: 2,
       closed_funded: 1,
       lost_to_competitor: 1,
-      withdrawn: 0,
-      not_qualified: 0,
+      withdrawn: 1,
+      not_qualified: 1,
       by_source_system: [],
       source_statuses: [
         {
@@ -332,12 +335,12 @@ describe('LeadQueue filter state', () => {
           display_name: 'LOS / POS',
           status: 'connected',
           configured: true,
-          outcome_count: 4,
+          outcome_count: 5,
         },
       ],
       by_lo: [],
       top_competitors: [
-        { competitor_lender_label: 'Rocket Mortgage', lost_to_competitor: 1 },
+        { competitor_lender_label: 'Competitor D', lost_to_competitor: 1 },
       ],
     });
 
@@ -354,8 +357,130 @@ describe('LeadQueue filter state', () => {
 
     expect(document.body.textContent).toContain('Closed-loop outcomes');
     expect(document.body.textContent).toContain('2 submitted');
-    expect(document.body.textContent).toContain('1 lost elsewhere this week');
-    expect(document.body.textContent).toContain('Rocket Mortgage');
+    expect(document.body.textContent).toContain('1 lost elsewhere');
+    expect(document.body.textContent).toContain('1 withdrawn');
+    expect(document.body.textContent).toContain('1 not qualified');
+    expect(document.body.textContent).toContain('Competitor D');
+  });
+
+  it('does not describe dry-run outcome feeds as live', async () => {
+    apiMocks.salesOutcomeSummary.mockResolvedValueOnce({
+      total_outcomes: 0,
+      applications_submitted: 0,
+      closed_funded: 0,
+      lost_to_competitor: 0,
+      withdrawn: 0,
+      not_qualified: 0,
+      by_source_system: [],
+      source_statuses: [
+        {
+          source_system: 'salesforce',
+          display_name: 'Salesforce CRM',
+          status: 'dry_run',
+          configured: true,
+          outcome_count: 0,
+        },
+      ],
+      by_lo: [],
+      top_competitors: [],
+    });
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter initialEntries={['/lead-queue']}>
+            <LeadQueue />
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+    });
+    await settle();
+
+    expect(document.body.textContent).toContain('Outcome feeds are configured in dry run');
+    expect(document.body.textContent).not.toContain('Connected outcome feeds are live');
+  });
+
+  it('labels non-zero dry-run outcome rows as rehearsal data', async () => {
+    apiMocks.salesOutcomeSummary.mockResolvedValueOnce({
+      total_outcomes: 3,
+      applications_submitted: 2,
+      closed_funded: 1,
+      lost_to_competitor: 0,
+      withdrawn: 0,
+      not_qualified: 0,
+      by_source_system: [],
+      source_statuses: [
+        {
+          source_system: 'salesforce',
+          display_name: 'Salesforce CRM',
+          status: 'dry_run',
+          configured: true,
+          outcome_count: 3,
+        },
+      ],
+      by_lo: [],
+      top_competitors: [],
+    });
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter initialEntries={['/lead-queue']}>
+            <LeadQueue />
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+    });
+    await settle();
+
+    expect(document.body.textContent).toContain('Outcome ledger · includes dry run');
+    expect(document.body.textContent).toContain('Dry-run connector rows are included for reconciliation only');
+    expect(document.body.textContent).not.toContain('Connected outcome feeds are live');
+  });
+
+  it('labels mixed connected and dry-run outcome rows as blended', async () => {
+    apiMocks.salesOutcomeSummary.mockResolvedValueOnce({
+      total_outcomes: 4,
+      applications_submitted: 2,
+      closed_funded: 1,
+      lost_to_competitor: 1,
+      withdrawn: 0,
+      not_qualified: 0,
+      by_source_system: [],
+      source_statuses: [
+        {
+          source_system: 'salesforce',
+          display_name: 'Salesforce CRM',
+          status: 'connected',
+          configured: true,
+          outcome_count: 2,
+        },
+        {
+          source_system: 'los_pos',
+          display_name: 'LOS / POS',
+          status: 'dry_run',
+          configured: true,
+          outcome_count: 2,
+        },
+      ],
+      by_lo: [],
+      top_competitors: [],
+    });
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter initialEntries={['/lead-queue']}>
+            <LeadQueue />
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+    });
+    await settle();
+
+    expect(document.body.textContent).toContain('Outcome ledger · includes dry run');
+    expect(document.body.textContent).toContain('Dry-run connector rows are included for reconciliation only');
+    expect(document.body.textContent).not.toContain('Connected outcome feeds are live');
   });
 
   it('does not blank sales ops cards when the outcome summary is unavailable', async () => {

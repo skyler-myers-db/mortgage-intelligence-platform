@@ -235,6 +235,12 @@ class _FakeLakebaseClient:
                 "outreach_at": disposition.get("occurred_at") if disposition else None,
                 "synced_at": datetime.now(UTC),
             }
+        if "FROM mip_app.call_dispositions" in sql and "WHERE request_id" in sql:
+            request_id = (params or {}).get("request_id")
+            for row in self.dispositions:
+                if row.get("request_id") == request_id:
+                    return dict(row)
+            return None
         if "FROM mip_app.call_dispositions" in sql and "ORDER BY occurred_at DESC" in sql:
             borrower_id = (params or {}).get("borrower_id")
             rows = [r for r in self.dispositions if r["borrower_id"] == borrower_id]
@@ -324,7 +330,7 @@ class _FakeLakebaseClient:
                 request_id = (params or {}).get("request_id")
                 out = []
                 for row in self.assignments:
-                    if row.get("request_id") == request_id and row.get("released_at") is None:
+                    if row.get("request_id") == request_id:
                         team = next((t for t in self.sales_team if t["email"] == row["assigned_to_email"]), {})
                         out.append({**row, "assigned_to_label": team.get("display_label")})
                 return out[:limit]
@@ -539,6 +545,29 @@ class _FakeLakebaseClient:
                     client.approvals.append(row)
                     self._last = {"approval_id": row["approval_id"]}
                 elif "INSERT INTO mip_app.lead_assignments" in sql:
+                    request_id = params.get("request_id")
+                    assignment_scope = str(params.get("assignment_scope") or "single")
+                    if request_id:
+                        duplicate = next(
+                            (
+                                row
+                                for row in client.assignments
+                                if row.get("request_id") == request_id
+                                and (
+                                    (
+                                        assignment_scope == "single"
+                                        and row.get("assignment_scope", "single") == "single"
+                                    )
+                                    or row.get("borrower_id") == params.get("borrower_id")
+                                )
+                            ),
+                            None,
+                        )
+                        if duplicate is not None:
+                            if "ON CONFLICT" in sql:
+                                self._last = None
+                                return
+                            raise RuntimeError("duplicate lead_assignments idempotency key")
                     row = {
                         "assignment_id": uuid4(),
                         "borrower_id": params["borrower_id"],
@@ -552,7 +581,8 @@ class _FakeLakebaseClient:
                         ),
                         "released_at": None,
                         "strategy": params.get("strategy") or "manual",
-                        "request_id": params.get("request_id"),
+                        "request_id": request_id,
+                        "assignment_scope": assignment_scope,
                     }
                     client.assignments.append(row)
                     self._last = row
@@ -561,6 +591,17 @@ class _FakeLakebaseClient:
                     attempts = [r["attempt_number"] for r in client.dispositions if r["borrower_id"] == borrower_id]
                     self._last = {"next_attempt": (max(attempts) if attempts else 0) + 1}
                 elif "INSERT INTO mip_app.call_dispositions" in sql:
+                    request_id = params.get("request_id")
+                    if request_id:
+                        duplicate = next(
+                            (row for row in client.dispositions if row.get("request_id") == request_id),
+                            None,
+                        )
+                        if duplicate is not None:
+                            if "ON CONFLICT" in sql:
+                                self._last = None
+                                return
+                            raise RuntimeError("duplicate call_dispositions.request_id")
                     row = {
                         "disposition_id": uuid4(),
                         "borrower_id": params["borrower_id"],
@@ -577,6 +618,27 @@ class _FakeLakebaseClient:
                     client.dispositions.append(row)
                     self._last = row
                 elif "INSERT INTO mip_app.lead_outcomes" in sql:
+                    request_id = params.get("request_id")
+                    source_system = params.get("source_system")
+                    source_record_ref = params.get("source_record_ref")
+                    duplicate = next(
+                        (
+                            row
+                            for row in client.outcomes
+                            if (request_id and row.get("request_id") == request_id)
+                            or (
+                                source_record_ref
+                                and row.get("source_system") == source_system
+                                and row.get("source_record_ref") == source_record_ref
+                            )
+                        ),
+                        None,
+                    )
+                    if duplicate is not None:
+                        if "ON CONFLICT" in sql:
+                            self._last = None
+                            return
+                        raise RuntimeError("duplicate lead_outcomes idempotency key")
                     row = {
                         "outcome_id": uuid4(),
                         "borrower_id": params["borrower_id"],

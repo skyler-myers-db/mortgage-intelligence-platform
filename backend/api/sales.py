@@ -246,6 +246,8 @@ def log_disposition(
         if "assigned to another" in str(exc):
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         raise _forbidden(exc) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except LakebaseError as exc:
         raise _lakebase_503(exc) from exc
 

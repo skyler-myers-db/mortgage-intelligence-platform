@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from backend.schemas._validators import normalize_public_lender_ref
 from backend.schemas.common import (
     contains_pii_marker,
     validate_internal_staff_email,
@@ -48,7 +49,39 @@ _NOTE_UNSAFE_TEXT_PATTERN = re.compile(
     r"\b[A-Z][a-z]{1,30}\s+(?:[A-Z]\s+)?[A-Z][a-z]{1,30}\b|"
     r"\[(?:first|last|full)[_\s-]?[Nn]ame\]|\{(?:first|last|full)[_\s-]?[Nn]ame\}",
 )
-_PUBLIC_COMPETITOR_LABEL_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 &.,:+-]{0,79}$")
+_PUBLIC_COMPETITOR_LABEL_PATTERN = re.compile(r"^Competitor ([A-Z]|Other)$")
+_MAX_CLIENT_CLOCK_SKEW = timedelta(minutes=5)
+
+
+def _datetime_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+def _not_future(value: datetime | None, field_name: str) -> datetime | None:
+    if value is None:
+        return None
+    if _datetime_utc(value) > datetime.now(UTC) + _MAX_CLIENT_CLOCK_SKEW:
+        raise ValueError(f"{field_name} cannot be in the future")
+    return value
+
+
+def _public_competitor_label(value: str | None) -> str | None:
+    if value is None:
+        return None
+    clean = re.sub(r"\s+", " ", value.strip())
+    if not clean:
+        return None
+    if contains_pii_marker(clean):
+        raise ValueError("competitor_lender_label must not contain borrower PII")
+    try:
+        normalized = normalize_public_lender_ref(clean)
+    except ValueError as exc:
+        raise ValueError("competitor_lender_label must be a governed competitor alias") from exc
+    if normalized is None or not _PUBLIC_COMPETITOR_LABEL_PATTERN.fullmatch(normalized):
+        raise ValueError("competitor_lender_label must be a governed competitor alias")
+    return normalized
 
 
 class SalesTeamMember(BaseModel):
@@ -99,7 +132,6 @@ class AssignLeadRequest(BaseModel):
         if value is None:
             return None
         return validate_public_opaque_id(value)
-
 
 class AssignmentResponse(BaseModel):
     assignment: LeadAssignment
@@ -188,10 +220,21 @@ class DispositionRequest(BaseModel):
             return None
         return validate_public_opaque_id(value)
 
+    @field_validator("occurred_at")
+    @classmethod
+    def _occurred_at(cls, value: datetime | None) -> datetime | None:
+        return _not_future(value, "occurred_at")
+
     @model_validator(mode="after")
     def _callback_required(self) -> DispositionRequest:
         if self.outcome == "callback_scheduled" and self.callback_at is None:
             raise ValueError("callback_at is required for callback_scheduled")
+        effective_occurred_at = self.occurred_at or datetime.now(UTC)
+        if (
+            self.callback_at is not None
+            and _datetime_utc(self.callback_at) <= _datetime_utc(effective_occurred_at)
+        ):
+            raise ValueError("callback_at must be after occurred_at")
         return self
 
 
@@ -256,14 +299,12 @@ class LeadOutcomeRequest(BaseModel):
     @field_validator("competitor_lender_label")
     @classmethod
     def _competitor_lender_label(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        clean = re.sub(r"\s+", " ", value.strip())
-        if not clean:
-            return None
-        if contains_pii_marker(clean) or not _PUBLIC_COMPETITOR_LABEL_PATTERN.fullmatch(clean):
-            raise ValueError("competitor_lender_label must not contain borrower PII")
-        return clean
+        return _public_competitor_label(value)
+
+    @field_validator("occurred_at")
+    @classmethod
+    def _occurred_at(cls, value: datetime | None) -> datetime | None:
+        return _not_future(value, "occurred_at")
 
     @model_validator(mode="after")
     def _lost_requires_competitor(self) -> LeadOutcomeRequest:

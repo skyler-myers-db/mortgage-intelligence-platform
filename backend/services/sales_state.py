@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import re
 from collections import Counter
 from copy import deepcopy
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 from uuid import uuid4
 
@@ -24,7 +25,7 @@ from backend.schemas.sales import (
 )
 from backend.services.audit_lakebase_store import _build_insert_params
 from backend.services.lakebase import LakebaseClient, LakebaseError, get_lakebase_client
-from backend.services.pii_redaction import scrub_free_text
+from backend.services.pii_redaction import normalize_public_lender_ref, scrub_free_text
 from backend.services.resilience import TTLCache
 
 _SALES_STATE_CACHE = TTLCache(max_entries=1024)
@@ -46,6 +47,7 @@ _OUTCOME_SOURCE_LABELS: dict[str, str] = {
     "manual_import": "Manual import",
 }
 _CONFIGURED_OUTCOME_SOURCE_STATUSES: frozenset[str] = frozenset({"connected", "dry_run"})
+_PUBLIC_COMPETITOR_LABEL_RE = re.compile(r"^Competitor ([A-Z]|Other)$")
 
 _OUTCOME_SOURCE_STATUS_BY_TYPE = """
 SELECT destination_type AS source_system, display_name, status
@@ -141,6 +143,32 @@ def _iso_or_none(value: Any) -> str | None:
     return str(value)
 
 
+def _datetime_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+def _datetimes_equal(left: datetime | None, right: datetime | None) -> bool:
+    if left is None or right is None:
+        return left is right
+    return _datetime_utc(left) == _datetime_utc(right)
+
+
+def _public_competitor_label(value: str | None) -> str | None:
+    if value is None:
+        return None
+    try:
+        normalized = normalize_public_lender_ref(str(value))
+    except ValueError:
+        return "Competitor Other"
+    if normalized is None:
+        return None
+    if not _PUBLIC_COMPETITOR_LABEL_RE.fullmatch(normalized):
+        return "Competitor Other"
+    return normalized
+
+
 def _assignment_from_row(row: dict[str, Any] | None) -> LeadAssignment | None:
     if not row:
         return None
@@ -155,6 +183,19 @@ def _assignment_from_row(row: dict[str, Any] | None) -> LeadAssignment | None:
         released_at=row.get("released_at"),
         strategy=row.get("strategy") or "manual",
     )
+
+
+def _assignment_duration_matches(
+    assignment: LeadAssignment,
+    expires_in_hours: int | None,
+) -> bool:
+    if expires_in_hours is None:
+        return assignment.expires_at is None
+    if assignment.expires_at is None:
+        return False
+    expected = _datetime_utc(assignment.assigned_at) + timedelta(hours=expires_in_hours)
+    actual = _datetime_utc(assignment.expires_at)
+    return abs((actual - expected).total_seconds()) <= 1
 
 
 def _disposition_from_row(row: dict[str, Any] | None) -> CallDisposition | None:
@@ -429,27 +470,45 @@ class SalesStateStore:
         return {k: v.model_copy(deep=True) for k, v in result.items()}
 
     def assignments_for_request(self, request_id: str | None) -> list[LeadAssignment]:
+        return [
+            assignment
+            for row in self.assignment_rows_for_request(request_id)
+            if (assignment := _assignment_from_row(row)) is not None
+        ]
+
+    def assignment_rows_for_request(self, request_id: str | None) -> list[dict[str, Any]]:
         if not request_id:
             return []
-        rows = self._client.fetchall(
+        return self._client.fetchall(
             """
             SELECT a.assignment_id, a.borrower_id, a.assigned_to_email,
                    t.display_label AS assigned_to_label, a.assigned_by,
-                   a.assigned_at, a.expires_at, a.released_at, a.strategy
+                   a.assigned_at, a.expires_at, a.released_at, a.strategy,
+                   COALESCE(a.assignment_scope, 'single') AS assignment_scope
             FROM mip_app.lead_assignments a
             LEFT JOIN mip_app.sales_team t ON t.email = a.assigned_to_email
             WHERE a.request_id = %(request_id)s
-              AND a.released_at IS NULL
             ORDER BY a.assigned_at ASC
             """,
             {"request_id": request_id},
             limit=500,
         )
-        return [
-            assignment
-            for assignment in (_assignment_from_row(row) for row in rows)
-            if assignment is not None
-        ]
+
+    def disposition_for_request(self, request_id: str | None) -> CallDisposition | None:
+        if not request_id:
+            return None
+        return _disposition_from_row(
+            self._client.fetchone(
+                """
+                SELECT disposition_id, borrower_id, lo_email, outcome, attempt_number,
+                       occurred_at, callback_at, notes, audit_event_id
+                FROM mip_app.call_dispositions
+                WHERE request_id = %(request_id)s
+                LIMIT 1
+                """,
+                {"request_id": request_id},
+            )
+        )
 
     def outcome_for_request(self, request_id: str | None) -> LeadOutcome | None:
         if not request_id:
@@ -604,17 +663,41 @@ class SalesStateStore:
             actor=assigned_by,
             assigned_to_email=assigned_to_email,
         )
-        existing = self.assignments_for_request(request_id)
-        if existing:
+
+        def _matches_existing(existing_rows: list[dict[str, Any]]) -> LeadAssignment | None:
+            if len(existing_rows) != 1:
+                return None
+            row = existing_rows[0]
+            assignment = _assignment_from_row(row)
+            if assignment is None:
+                return None
             if (
-                len(existing) == 1
-                and existing[0].borrower_id == borrower_id
-                and existing[0].assigned_by == assigned_by.lower()
-                and existing[0].assigned_to_email == assignee.email
+                str(row.get("assignment_scope") or "single") == "single"
+                and assignment.borrower_id == borrower_id
+                and assignment.assigned_by == assigned_by.lower()
+                and assignment.assigned_to_email == assignee.email
+                and assignment.strategy == strategy
+                and _assignment_duration_matches(assignment, expires_in_hours)
             ):
-                return existing[0], ""
+                return assignment
+            return None
+
+        existing_rows = self.assignment_rows_for_request(request_id)
+        if existing_rows:
+            if assignment := _matches_existing(existing_rows):
+                return assignment, ""
             raise PermissionError("request_id already belongs to a different assignment")
         with self._client.transaction() as conn, conn.cursor() as cur:
+            if request_id:
+                cur.execute(
+                    "SELECT pg_advisory_xact_lock(hashtext(%(lock_key)s))",
+                    {"lock_key": f"lead_assignment:{request_id}"},
+                )
+                existing_rows = self.assignment_rows_for_request(request_id)
+                if existing_rows:
+                    if assignment := _matches_existing(existing_rows):
+                        return assignment, ""
+                    raise PermissionError("request_id already belongs to a different assignment")
             cur.execute(
                 """
                 UPDATE mip_app.lead_assignments
@@ -628,7 +711,7 @@ class SalesStateStore:
                 """
                 INSERT INTO mip_app.lead_assignments (
                     borrower_id, assigned_to_email, assigned_by,
-                    expires_at, strategy, request_id
+                    expires_at, strategy, request_id, assignment_scope
                 )
                 VALUES (
                     %(borrower_id)s, %(assigned_to_email)s, %(assigned_by)s,
@@ -636,8 +719,11 @@ class SalesStateStore:
                         WHEN %(expires_in_hours)s IS NULL THEN NULL
                         ELSE now() + (%(expires_in_hours)s::int * interval '1 hour')
                     END,
-                    %(strategy)s, %(request_id)s
+                    %(strategy)s, %(request_id)s, %(assignment_scope)s
                 )
+                ON CONFLICT (request_id)
+                    WHERE request_id IS NOT NULL AND assignment_scope = 'single'
+                    DO NOTHING
                 RETURNING assignment_id, borrower_id, assigned_to_email,
                           assigned_by, assigned_at, expires_at, released_at, strategy
                 """,
@@ -648,11 +734,17 @@ class SalesStateStore:
                     "expires_in_hours": expires_in_hours,
                     "strategy": strategy,
                     "request_id": request_id,
+                    "assignment_scope": "single",
                 },
             )
             row = dict(cur.fetchone() or {})
             assignment = _assignment_from_row({**row, "assigned_to_label": assignee.display_label})
             if assignment is None:
+                existing_after_conflict = self.assignment_rows_for_request(request_id)
+                if assignment := _matches_existing(existing_after_conflict):
+                    return assignment, ""
+                if existing_after_conflict:
+                    raise PermissionError("request_id already belongs to a different assignment")
                 raise LakebaseError("assignment insert returned no row")
             audit_event_id = self._insert_audit_event(
                 cur,
@@ -690,21 +782,58 @@ class SalesStateStore:
             self.require_assignee_in_scope(actor=assigned_by, assigned_to_email=email)
             for email in lo_emails
         ]
-        existing = self.assignments_for_request(request_id)
-        if existing:
-            existing_borrowers = [assignment.borrower_id for assignment in existing]
-            if (
-                set(existing_borrowers) == set(borrower_ids)
-                and all(assignment.assigned_by == assigned_by.lower() for assignment in existing)
-            ):
-                return existing, ""
-            raise PermissionError("request_id already belongs to a different distribution")
         assignments: list[LeadAssignment] = []
         if not borrower_ids:
             return assignments, ""
+
+        expected_by_borrower: dict[str, str] = {
+            borrower_id: assignees[idx % len(assignees)].email
+            for idx, borrower_id in enumerate(borrower_ids)
+        }
+
+        def _matches_existing(existing_rows: list[dict[str, Any]]) -> list[LeadAssignment] | None:
+            existing = [
+                assignment
+                for row in existing_rows
+                if (assignment := _assignment_from_row(row)) is not None
+            ]
+            if not existing:
+                return None
+            existing_by_borrower = {assignment.borrower_id: assignment for assignment in existing}
+            if set(existing_by_borrower) != set(expected_by_borrower):
+                return None
+            for row in existing_rows:
+                assignment = _assignment_from_row(row)
+                if assignment is None:
+                    return None
+                if (
+                    str(row.get("assignment_scope") or "single") != "distribution"
+                    or assignment.assigned_by != assigned_by.lower()
+                    or assignment.assigned_to_email != expected_by_borrower.get(assignment.borrower_id)
+                    or assignment.strategy != strategy
+                    or not _assignment_duration_matches(assignment, expires_in_hours)
+                ):
+                    return None
+            return existing
+
+        existing_rows = self.assignment_rows_for_request(request_id)
+        if existing_rows:
+            if existing := _matches_existing(existing_rows):
+                return existing, ""
+            raise PermissionError("request_id already belongs to a different distribution")
         # Score balancing happens before this store in the caller by ordering
         # borrower_ids. The durable state write stays deterministic.
         with self._client.transaction() as conn, conn.cursor() as cur:
+            if request_id:
+                cur.execute(
+                    "SELECT pg_advisory_xact_lock(hashtext(%(lock_key)s))",
+                    {"lock_key": f"lead_assignment:{request_id}"},
+                )
+                existing_rows = self.assignment_rows_for_request(request_id)
+                if existing_rows:
+                    if existing := _matches_existing(existing_rows):
+                        return existing, ""
+                    raise PermissionError("request_id already belongs to a different distribution")
             for idx, borrower_id in enumerate(borrower_ids):
                 assignee = assignees[idx % len(assignees)]
                 cur.execute(
@@ -720,7 +849,7 @@ class SalesStateStore:
                     """
                     INSERT INTO mip_app.lead_assignments (
                         borrower_id, assigned_to_email, assigned_by,
-                        expires_at, strategy, request_id
+                        expires_at, strategy, request_id, assignment_scope
                     )
                     VALUES (
                         %(borrower_id)s, %(assigned_to_email)s, %(assigned_by)s,
@@ -728,8 +857,11 @@ class SalesStateStore:
                             WHEN %(expires_in_hours)s IS NULL THEN NULL
                             ELSE now() + (%(expires_in_hours)s::int * interval '1 hour')
                         END,
-                        %(strategy)s, %(request_id)s
+                        %(strategy)s, %(request_id)s, %(assignment_scope)s
                     )
+                    ON CONFLICT (request_id, borrower_id)
+                        WHERE request_id IS NOT NULL
+                        DO NOTHING
                     RETURNING assignment_id, borrower_id, assigned_to_email,
                               assigned_by, assigned_at, expires_at, released_at, strategy
                     """,
@@ -740,12 +872,18 @@ class SalesStateStore:
                         "expires_in_hours": expires_in_hours,
                         "strategy": strategy,
                         "request_id": request_id,
+                        "assignment_scope": "distribution",
                     },
                 )
                 assignment = _assignment_from_row(
                     {**dict(cur.fetchone() or {}), "assigned_to_label": assignee.display_label}
                 )
                 if assignment is None:
+                    existing_after_conflict = self.assignment_rows_for_request(request_id)
+                    if existing := _matches_existing(existing_after_conflict):
+                        return existing, ""
+                    if existing_after_conflict:
+                        raise PermissionError("request_id already belongs to a different distribution")
                     raise LakebaseError("assignment insert returned no row")
                 assignments.append(assignment)
             counts = Counter(a.assigned_to_email for a in assignments)
@@ -786,6 +924,24 @@ class SalesStateStore:
         if assignment is not None and assignment.assigned_to_email != lo.email:
             raise PermissionError("borrower is assigned to another loan officer")
         clean_notes = scrub_free_text(notes) if notes else None
+
+        def _matches_existing(existing: CallDisposition) -> bool:
+            occurred_matches = True if occurred_at is None else _datetimes_equal(existing.occurred_at, occurred_at)
+            return (
+                existing.borrower_id == borrower_id
+                and existing.lo_email == lo.email
+                and existing.outcome == outcome
+                and existing.notes == clean_notes
+                and _datetimes_equal(existing.callback_at, callback_at)
+                and occurred_matches
+            )
+
+        existing = self.disposition_for_request(request_id)
+        if existing is not None:
+            if not _matches_existing(existing):
+                raise ValueError("request_id already belongs to a different call disposition")
+            return existing, existing.audit_event_id or ""
+
         with self._client.transaction() as conn, conn.cursor() as cur:
             cur.execute(
                 """
@@ -806,6 +962,7 @@ class SalesStateStore:
                     %(borrower_id)s, %(lo_email)s, %(outcome)s, %(attempt_number)s,
                     COALESCE(%(occurred_at)s, now()), %(callback_at)s, %(notes)s, %(request_id)s
                 )
+                ON CONFLICT (request_id) WHERE request_id IS NOT NULL DO NOTHING
                 RETURNING disposition_id, borrower_id, lo_email, outcome,
                           attempt_number, occurred_at, callback_at, notes,
                           audit_event_id
@@ -824,7 +981,12 @@ class SalesStateStore:
             row = dict(cur.fetchone() or {})
             disposition = _disposition_from_row(row)
             if disposition is None:
-                raise LakebaseError("disposition insert returned no row")
+                disposition = self.disposition_for_request(request_id)
+                if disposition is None:
+                    raise LakebaseError("disposition insert returned no row")
+                if not _matches_existing(disposition):
+                    raise ValueError("request_id already belongs to a different call disposition")
+                return disposition, disposition.audit_event_id or ""
             audit_event_id = self._insert_audit_event(
                 cur,
                 actor=actor,
@@ -886,6 +1048,7 @@ class SalesStateStore:
                 and existing.campaign_id == campaign_id
                 and existing.loan_amount == loan_amount
                 and existing.competitor_lender_label == competitor_lender_label
+                and (occurred_at is None or _datetimes_equal(existing.occurred_at, occurred_at))
             )
 
         existing = self.outcome_for_request(request_id)
@@ -920,6 +1083,7 @@ class SalesStateStore:
                     COALESCE(%(occurred_at)s, now()), %(request_id)s,
                     %(created_by)s, '{}'::jsonb
                 )
+                ON CONFLICT DO NOTHING
                 RETURNING outcome_id, borrower_id, outcome_type, source_system,
                           source_record_ref, assigned_to_email, campaign_id,
                           loan_amount, competitor_lender_label, occurred_at,
@@ -941,7 +1105,19 @@ class SalesStateStore:
             )
             outcome = _outcome_from_row(dict(cur.fetchone() or {}))
             if outcome is None:
-                raise LakebaseError("lead outcome insert returned no row")
+                outcome = self.outcome_for_request(request_id)
+                if outcome is None:
+                    outcome = self.outcome_for_source_record(
+                        source_system=source_system,
+                        source_record_ref=source_record_ref,
+                    )
+                if outcome is None:
+                    raise LakebaseError("lead outcome insert returned no row")
+                if not _matches_existing(outcome):
+                    if request_id and outcome.request_id == request_id:
+                        raise ValueError("request_id already belongs to a different lead outcome")
+                    raise ValueError("source_record_ref already belongs to a different lead outcome")
+                return outcome, outcome.audit_event_id or ""
             audit_event_id = self._insert_audit_event(
                 cur,
                 actor=actor,
@@ -1183,7 +1359,7 @@ class SalesStateStore:
             outcome_type = str(row.get("outcome_type") or "")
             source_system = str(row.get("source_system") or "unknown")
             lo_email = str(row.get("assigned_to_email") or "unassigned")
-            competitor = str(row.get("competitor_lender_label") or "")
+            competitor = _public_competitor_label(row.get("competitor_lender_label"))
             n = int(row.get("n") or 0)
             totals[outcome_type] += n
             by_source.setdefault(source_system, Counter())[outcome_type] += n

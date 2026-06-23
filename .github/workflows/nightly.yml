@@ -397,6 +397,7 @@ jobs:
         run: |
           npx playwright test \
             tests/e2e/real_data.spec.ts \
+            tests/e2e/movement_closed_loop_regressions.spec.ts \
             tests/e2e/demo_visual.spec.ts \
             tests/e2e/accessibility.spec.ts \
             tests/e2e/responsive.spec.ts \

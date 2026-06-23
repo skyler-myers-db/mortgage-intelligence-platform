@@ -30,6 +30,8 @@ export const SEGMENT_OPTION_TO_CODE: Record<string, SegmentCode | null> = {
   [SEGMENT_CODE_LABELS.retention]: 'retention',
 };
 export const PRODUCT_FILTER_OPTIONS = ['All products', 'Refi', 'HELOC', 'Cash-out', 'Purchase', 'Retention'] as const;
+export const OWNER_LINK_FILTER_OPTIONS = ['All', 'Single-property owner', 'Multi-property (2-4)', 'Portfolio investor (5+)'] as const;
+export const PURCHASE_INTENT_FILTER_OPTIONS = ['All', 'Listed for sale', 'HELOC intent', 'Both'] as const;
 export const CONTACTABILITY_FILTER_OPTIONS = ['Eligible only', 'Any', 'Suppressed only'] as const;
 export const CONSENT_FILTER_OPTIONS = ['Any', 'Opt-in', 'Opt-out', 'Unknown'] as const;
 export const RECENCY_FILTER_OPTIONS = ['Any', 'Untouched 30d', 'Untouched 60d', 'Untouched 90d'] as const;
@@ -164,8 +166,8 @@ const PORTFOLIO_FILTER_VALUE_SETS: Partial<Record<PortfolioFilterKey, Set<string
   lender_relationship: new Set([...LENDER_RELATIONSHIP_OPTIONS, 'Competitor']),
   product: new Set(['All products', 'Refi', 'HELOC', 'Cash-out', 'Purchase', 'Retention']),
   min_equity_pct_label: new Set(['Any', '>= 15%', '>= 25%', '>= 40%', '≥ 15%', '≥ 25%', '≥ 40%']),
-  owner_link: new Set(['All', 'Single-property owner', 'Multi-property (2-4)', 'Portfolio investor (5+)']),
-  purchase_intent: new Set(['All', 'Listed for sale', 'HELOC intent', 'Both']),
+  owner_link: new Set(OWNER_LINK_FILTER_OPTIONS),
+  purchase_intent: new Set(PURCHASE_INTENT_FILTER_OPTIONS),
   marketing_eligibility: new Set(['Eligible only', 'Any', 'Suppressed only']),
   consent_status: new Set(['Any', 'Opt-in', 'Opt-out', 'Unknown']),
   recency: new Set(['Any', 'Untouched 30d', 'Untouched 60d', 'Untouched 90d']),

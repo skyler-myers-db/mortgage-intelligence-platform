@@ -20,8 +20,10 @@ import {
   CONTACTABILITY_FILTER_OPTIONS,
   CONSENT_FILTER_OPTIONS,
   FUNNEL_STAGE_LABELS,
+  OWNER_LINK_FILTER_OPTIONS,
   OUTREACH_FILTER_OPTIONS,
   PRODUCT_FILTER_OPTIONS,
+  PURCHASE_INTENT_FILTER_OPTIONS,
   RECENCY_FILTER_OPTIONS,
   SEGMENT_FILTER_OPTIONS,
   SEGMENT_OPTION_TO_CODE,
@@ -138,6 +140,8 @@ export default function LeadQueue() {
   }, [footprint.ready, footprint.states, footprint.usingFallback]);
   const relationshipFilter = portfolioCriteria?.lender_relationship ?? 'All';
   const productFilter = portfolioCriteria?.product ?? 'All products';
+  const ownerLinkFilter = portfolioCriteria?.owner_link ?? 'All';
+  const purchaseIntentFilter = portfolioCriteria?.purchase_intent ?? 'All';
   const contactabilityFilter = portfolioCriteria?.marketing_eligibility ?? 'Eligible only';
   const consentFilter = portfolioCriteria?.consent_status ?? 'Any';
   const recencyFilter = portfolioCriteria?.recency ?? 'Any';
@@ -189,9 +193,17 @@ export default function LeadQueue() {
   const conversion = salesOpsQuery.data?.conversion ?? null;
   const outcomes = salesOpsQuery.data?.outcomes ?? null;
   const outcomesError = salesOpsQuery.data?.outcomesError ?? null;
-  const configuredOutcomeSources = outcomes?.source_statuses
-    .filter((source) => source.source_system !== 'manual_import' && source.configured)
+  const connectedOutcomeSources = outcomes?.source_statuses
+    .filter((source) => source.source_system !== 'manual_import' && source.status === 'connected')
     ?? [];
+  const dryRunOutcomeSources = outcomes?.source_statuses
+    .filter((source) => source.source_system !== 'manual_import' && source.status === 'dry_run')
+    ?? [];
+  const dryRunOutcomeCount = dryRunOutcomeSources.reduce(
+    (sum, source) => sum + (Number(source.outcome_count) || 0),
+    0,
+  );
+  const hasDryRunOutcomeRows = dryRunOutcomeCount > 0;
   const salesTeamError = salesTeamQuery.error instanceof Error ? salesTeamQuery.error.message : null;
   const salesOpsError = salesOpsQuery.error instanceof Error ? salesOpsQuery.error.message : null;
   const segmentFilter = segmentFilterDisplayValue(segment, segmentCodes, segmentMode);
@@ -201,6 +213,15 @@ export default function LeadQueue() {
       ? stateFilters[0]
       : stateFilters.length > 1 ? `${stateFilters.length} states selected` : 'All states');
   const stateFilterOptions = optionsWithCurrentValue(stateOptions, stateFilterDisplay);
+  const outcomeDistribution = outcomes
+    ? [
+      { label: 'submitted', value: outcomes.applications_submitted },
+      { label: 'funded', value: outcomes.closed_funded },
+      { label: 'lost elsewhere', value: outcomes.lost_to_competitor },
+      { label: 'withdrawn', value: outcomes.withdrawn },
+      { label: 'not qualified', value: outcomes.not_qualified },
+    ]
+    : [];
 
   const updateParam = (key: string, value: string | null) => {
     const next = new URLSearchParams(searchParams);
@@ -364,55 +385,31 @@ export default function LeadQueue() {
   }, [leadsData]);
 
   const countyLoading = Boolean(countyFilter) && countyZips === null;
-  const exportContext = useMemo(() => {
-    return {
-      filters: buildLeadQueueExportFilters({
-        segment,
-        segmentCodes,
-        segmentMode,
-        stateFilter,
-        zipFilter,
-        stateFilters,
-        zipFilters,
-        borrowerIdFilters,
-        countyFilter,
-        countyFilters,
-        targetLenderRef,
-        targetLenderRefs: targetLenderOptions,
-        portfolioCriteria,
-        approvalStatus: approvalStatus === 'any' ? undefined : approvalStatus,
-        outreachStatus: outreachStatus === 'any' ? undefined : outreachStatus,
-        assignedTo,
-        agedDays,
-        cohortId,
-        funnelStage,
-      }),
-      refreshedAt: exportRefreshedAt,
-      rulesVersion,
-    };
-  }, [
-    borrowerIdFilters,
-    cohortId,
-    funnelStage,
-    countyFilter,
-    countyFilters,
-    exportRefreshedAt,
-    portfolioCriteria,
+  const exportContext = {
+    filters: buildLeadQueueExportFilters({
+      segment,
+      segmentCodes,
+      segmentMode,
+      stateFilter,
+      zipFilter,
+      stateFilters,
+      zipFilters,
+      borrowerIdFilters,
+      countyFilter,
+      countyFilters,
+      targetLenderRef,
+      targetLenderRefs: targetLenderOptions,
+      portfolioCriteria,
+      approvalStatus: approvalStatus === 'any' ? undefined : approvalStatus,
+      outreachStatus: outreachStatus === 'any' ? undefined : outreachStatus,
+      assignedTo,
+      agedDays,
+      cohortId,
+      funnelStage,
+    }),
+    refreshedAt: exportRefreshedAt,
     rulesVersion,
-    segment,
-    segmentCodes,
-    segmentMode,
-    stateFilter,
-    stateFilters,
-    targetLenderRef,
-    targetLenderOptions,
-    approvalStatus,
-    outreachStatus,
-    assignedTo,
-    agedDays,
-    zipFilter,
-    zipFilters,
-  ]);
+  };
 
   return (
     <PageShell
@@ -515,6 +512,18 @@ export default function LeadQueue() {
               value={targetLenderRef ?? 'All'}
               options={targetLenderOptions}
               onChange={(v) => updateParam('target_lender_ref', v)}
+            />
+            <FilterSelect
+              label="OWNER LINK"
+              value={ownerLinkFilter}
+              options={[...OWNER_LINK_FILTER_OPTIONS]}
+              onChange={(v) => updateParam('owner_link', v)}
+            />
+            <FilterSelect
+              label="PURCHASE INTENT"
+              value={purchaseIntentFilter}
+              options={[...PURCHASE_INTENT_FILTER_OPTIONS]}
+              onChange={(v) => updateParam('purchase_intent', v)}
             />
             <FilterSelect
               label="SEGMENT"
@@ -650,16 +659,23 @@ export default function LeadQueue() {
               </div>
             </div>
             <div className="sales-ops-card">
-              <div className="eyebrow">Closed-loop outcomes</div>
+              <div className="eyebrow">
+                {hasDryRunOutcomeRows ? 'Outcome ledger · includes dry run' : 'Closed-loop outcomes'}
+              </div>
               <div className="kpi__value">{outcomesError ? '--' : (outcomes?.closed_funded ?? 0).toLocaleString()}</div>
               <div className="muted fs-12">
                 {outcomesError
                   ? 'Customer-system outcome counts are unavailable.'
-                  : `${(outcomes?.applications_submitted ?? 0).toLocaleString()} submitted · ${(outcomes?.lost_to_competitor ?? 0).toLocaleString()} lost elsewhere this week.`}
+                  : `${(outcomes?.applications_submitted ?? 0).toLocaleString()} submitted · ${(outcomes?.lost_to_competitor ?? 0).toLocaleString()} lost elsewhere · ${(outcomes?.withdrawn ?? 0).toLocaleString()} withdrawn · ${(outcomes?.not_qualified ?? 0).toLocaleString()} not qualified this week.`}
               </div>
               <div className="muted fs-12 mt-1">
                 Imported, read-only outcome ledger; this card does not write back to customer systems.
               </div>
+              {hasDryRunOutcomeRows ? (
+                <div className="muted fs-12 mt-1">
+                  Dry-run connector rows are included for reconciliation only; connected feeds are the live customer-system counts.
+                </div>
+              ) : null}
               {outcomesError ? (
                 <div className="muted fs-12 mt-2">
                   Outcome summary unavailable: {outcomesError}
@@ -667,6 +683,12 @@ export default function LeadQueue() {
               ) : null}
               {!outcomesError && (outcomes?.total_outcomes ?? 0) > 0 ? (
                 <div className="sales-ops-list mt-2">
+                  {outcomeDistribution.map((row) => (
+                    <div key={row.label} className="split-row">
+                      <span className="mono fs-12">{row.label}</span>
+                      <span className="mono num">{row.value.toLocaleString()}</span>
+                    </div>
+                  ))}
                   {(outcomes?.top_competitors ?? []).slice(0, 2).map((row) => (
                     <div key={row.competitor_lender_label} className="split-row">
                       <span className="mono fs-12">{row.competitor_lender_label}</span>
@@ -676,8 +698,10 @@ export default function LeadQueue() {
                 </div>
               ) : !outcomesError ? (
                 <div className="muted fs-12 mt-2">
-                  {configuredOutcomeSources.length > 0
+                  {connectedOutcomeSources.length > 0
                     ? 'Connected outcome feeds are live; no funded or lost loans have been reported this week.'
+                    : dryRunOutcomeSources.length > 0
+                      ? 'Outcome feeds are configured in dry run; no customer-system outcomes are being counted as live yet.'
                     : 'Customer CRM/LOS/POS outcome feeds are not configured yet; manual imports remain available for governed backfill.'}
                 </div>
               ) : null}

@@ -295,6 +295,7 @@ _LEAD_OUTCOME_SOURCE_SYSTEMS: frozenset[str] = frozenset(
     {"salesforce", "crm_cdp", "los_pos", "servicing", "webhook", "manual_import"}
 )
 _PUBLIC_BUSINESS_LABEL_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 &.,:+-]{0,79}$")
+_PUBLIC_COMPETITOR_LABEL_PATTERN = re.compile(r"^Competitor ([A-Z]|Other)$")
 _GENIE_REFUSAL_REASONS: frozenset[str] = frozenset({"protected_class", "instruction_override", "pii_request", "scope_bypass", "out_of_scope"})
 
 _ALLOWED_OFFER_CODES: frozenset[str] = frozenset(NBO_PRODUCT_LABELS) | {"recapture"}
@@ -565,8 +566,14 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
         if value is None:
             continue
         text = str(value)
-        if contains_pii_marker(text) or not _PUBLIC_BUSINESS_LABEL_PATTERN.fullmatch(text):
-            raise AuditMetadataValueViolation(field, "must be a public-safe business label")
+        if contains_pii_marker(text):
+            raise AuditMetadataValueViolation(field, "must be a governed competitor alias")
+        try:
+            normalized = normalize_public_lender_ref(text)
+        except ValueError as exc:
+            raise AuditMetadataValueViolation(field, "must be a governed competitor alias") from exc
+        if normalized is None or not _PUBLIC_COMPETITOR_LABEL_PATTERN.fullmatch(normalized):
+            raise AuditMetadataValueViolation(field, "must be a governed competitor alias")
     for field, value in _metadata_values_for(metadata, {"refusal_reason"}):
         if value is not None and str(value) not in _GENIE_REFUSAL_REASONS:
             raise AuditMetadataValueViolation(field, "must be a governed Genie refusal reason")

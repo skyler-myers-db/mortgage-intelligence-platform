@@ -236,9 +236,12 @@ def test_sales_workflow_bootstrap_runs_expected_ddl_under_lock() -> None:
     assert client.calls[1:-1] == list(lakebase_bootstrap._SALES_WORKFLOW_REQUEST_ID_DDL)
     ddl_blob = "\n".join(client.calls[1:-1])
     assert "ALTER TABLE mip_app.lead_assignments ADD COLUMN IF NOT EXISTS request_id TEXT" in ddl_blob
+    assert "ALTER TABLE mip_app.lead_assignments ADD COLUMN IF NOT EXISTS assignment_scope TEXT" in ddl_blob
     assert "DROP INDEX IF EXISTS mip_app.idx_lead_assignments_request_id" in ddl_blob
     assert "idx_lead_assignments_request_borrower" in ddl_blob
     assert "ON mip_app.lead_assignments (request_id, borrower_id)" in ddl_blob
+    assert "idx_lead_assignments_single_request_id" in ddl_blob
+    assert "assignment_scope = 'single'" in ddl_blob
     assert "ALTER TABLE mip_app.call_dispositions ADD COLUMN IF NOT EXISTS request_id TEXT" in ddl_blob
     assert "idx_call_dispositions_request_id" in ddl_blob
 
@@ -258,8 +261,10 @@ def test_sales_workflow_bootstrap_preflight_latches_when_schema_already_exists()
             self.calls.append(stmt)
             return {
                 "has_assignment_request_id_column": True,
+                "has_assignment_scope_column": True,
                 "has_disposition_request_id_column": True,
                 "has_assignment_request_id_index": True,
+                "has_assignment_single_request_id_index": True,
                 "has_disposition_request_id_index": True,
             }
 

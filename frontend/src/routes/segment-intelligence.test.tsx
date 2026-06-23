@@ -11,6 +11,8 @@ describe('segment intelligence lender overlay URL state', () => {
       new URLSearchParams({
         lender_relationship: 'Competitor customer',
         target_lender_ref: 'Competitor B',
+        owner_link: 'Portfolio investor (5+)',
+        purchase_intent: 'HELOC intent',
       }),
       ['All', 'Competitor B'],
     );
@@ -18,6 +20,8 @@ describe('segment intelligence lender overlay URL state', () => {
     expect(filters).toEqual({
       lenderRelationship: 'Competitor customer',
       targetLenderRef: 'Competitor B',
+      ownerLink: 'Portfolio investor (5+)',
+      purchase: 'HELOC intent',
     });
   });
 
@@ -26,6 +30,8 @@ describe('segment intelligence lender overlay URL state', () => {
       new URLSearchParams({
         lender_relationship: 'Wholesale partner',
         target_lender_ref: 'Wells Fargo Bank',
+        owner_link: 'Five-property owner',
+        purchase_intent: 'Filed permit activity',
       }),
       ['All', 'Competitor B'],
     );
@@ -33,6 +39,8 @@ describe('segment intelligence lender overlay URL state', () => {
     expect(filters).toEqual({
       lenderRelationship: 'All',
       targetLenderRef: 'All',
+      ownerLink: 'All',
+      purchase: 'All',
     });
   });
 });

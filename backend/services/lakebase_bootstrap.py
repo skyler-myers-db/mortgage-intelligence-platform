@@ -95,10 +95,42 @@ SELECT
 _APPROVAL_REQUEST_ID_KEY: str = "mip_bootstrap_approvals_request_id"
 _SALES_WORKFLOW_REQUEST_ID_DDL: tuple[str, ...] = (
     "ALTER TABLE mip_app.lead_assignments ADD COLUMN IF NOT EXISTS request_id TEXT",
+    "ALTER TABLE mip_app.lead_assignments ADD COLUMN IF NOT EXISTS assignment_scope TEXT NOT NULL DEFAULT 'single'",
+    """
+    UPDATE mip_app.lead_assignments
+    SET assignment_scope = 'distribution'
+    WHERE request_id IS NOT NULL
+      AND request_id IN (
+          SELECT request_id
+          FROM mip_app.lead_assignments
+          WHERE request_id IS NOT NULL
+          GROUP BY request_id
+          HAVING COUNT(*) > 1
+      )
+    """,
+    """
+    DO $$
+    BEGIN
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_constraint
+            WHERE conname = 'ck_lead_assignments_assignment_scope'
+              AND conrelid = 'mip_app.lead_assignments'::regclass
+        ) THEN
+            ALTER TABLE mip_app.lead_assignments
+                ADD CONSTRAINT ck_lead_assignments_assignment_scope
+                CHECK (assignment_scope IN ('single','distribution'));
+        END IF;
+    END $$
+    """,
     "DROP INDEX IF EXISTS mip_app.idx_lead_assignments_request_id",
     (
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_lead_assignments_request_borrower "
         "ON mip_app.lead_assignments (request_id, borrower_id) WHERE request_id IS NOT NULL"
+    ),
+    (
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_lead_assignments_single_request_id "
+        "ON mip_app.lead_assignments (request_id) "
+        "WHERE request_id IS NOT NULL AND assignment_scope = 'single'"
     ),
     "ALTER TABLE mip_app.call_dispositions ADD COLUMN IF NOT EXISTS request_id TEXT",
     (
@@ -119,6 +151,13 @@ SELECT
     SELECT 1
     FROM information_schema.columns
     WHERE table_schema = 'mip_app'
+      AND table_name = 'lead_assignments'
+      AND column_name = 'assignment_scope'
+  ) AS has_assignment_scope_column,
+  EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'mip_app'
       AND table_name = 'call_dispositions'
       AND column_name = 'request_id'
   ) AS has_disposition_request_id_column,
@@ -129,6 +168,13 @@ SELECT
       AND tablename = 'lead_assignments'
       AND indexname = 'idx_lead_assignments_request_borrower'
   ) AS has_assignment_request_id_index,
+  EXISTS (
+    SELECT 1
+    FROM pg_indexes
+    WHERE schemaname = 'mip_app'
+      AND tablename = 'lead_assignments'
+      AND indexname = 'idx_lead_assignments_single_request_id'
+  ) AS has_assignment_single_request_id_index,
   EXISTS (
     SELECT 1
     FROM pg_indexes
@@ -449,8 +495,10 @@ def _sales_workflow_request_id_already_applied(client: LakebaseClient) -> bool:
         return False
     return (
         bool(row.get("has_assignment_request_id_column"))
+        and bool(row.get("has_assignment_scope_column"))
         and bool(row.get("has_disposition_request_id_column"))
         and bool(row.get("has_assignment_request_id_index"))
+        and bool(row.get("has_assignment_single_request_id_index"))
         and bool(row.get("has_disposition_request_id_index"))
     )
 
