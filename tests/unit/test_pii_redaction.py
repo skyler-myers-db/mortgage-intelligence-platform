@@ -14,6 +14,7 @@ import re
 
 import pytest
 
+from backend.config.settings import settings
 from backend.services.pii_redaction import (
     _FORBIDDEN_OUTPUT_KEYS,
     _LENDER_REF_MAP,
@@ -216,6 +217,43 @@ def test_mask_cotality_id_ignores_legacy_raw_id_escape_hatch(monkeypatch: pytest
         r"owner_link_ref_[0-9a-f]{12}",
         mask_cotality_id("owner_link", "9876543210"),
     )
+
+
+def test_mask_cotality_id_requires_secret_outside_sandbox(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("MIP_COTALITY_ID_MASK_SECRET", raising=False)
+    monkeypatch.delenv("MIP_GENIE_ACTION_SECRET", raising=False)
+    monkeypatch.setattr(settings, "app_env", "customer")
+
+    with pytest.raises(RuntimeError, match="MIP_COTALITY_ID_MASK_SECRET"):
+        mask_cotality_id("clip", "1234567890")
+
+
+def test_mask_cotality_id_ignores_genie_action_secret_for_masking(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("MIP_COTALITY_ID_MASK_SECRET", raising=False)
+    monkeypatch.setenv("MIP_GENIE_ACTION_SECRET", "not-a-mask-secret")
+    monkeypatch.setattr(settings, "app_env", "customer")
+
+    with pytest.raises(RuntimeError, match="MIP_COTALITY_ID_MASK_SECRET"):
+        mask_cotality_id("clip", "1234567890")
+
+
+def test_mask_cotality_id_rejects_placeholder_secret_outside_sandbox(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MIP_COTALITY_ID_MASK_SECRET", "REDACTED")
+    monkeypatch.setattr(settings, "app_env", "customer")
+
+    with pytest.raises(RuntimeError, match="MIP_COTALITY_ID_MASK_SECRET"):
+        mask_cotality_id("clip", "1234567890")
+
+
+def test_mask_cotality_id_accepts_customer_mask_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MIP_COTALITY_ID_MASK_SECRET", "customer-mask-secret")
+    monkeypatch.setattr(settings, "app_env", "customer")
+
+    assert re.fullmatch(r"clip_ref_[0-9a-f]{12}", mask_cotality_id("clip", "1234567890"))
 
 
 def test_redact_borrower_row_synthesizes_display_name() -> None:

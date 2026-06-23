@@ -245,12 +245,18 @@ class SalesStateStore:
     def __init__(self, client: LakebaseClient | None = None) -> None:
         self._client = client or get_sales_lakebase()
 
-    def list_team(self, *, actor: str | None = None) -> list[SalesTeamMember]:
+    def list_team(
+        self,
+        *,
+        actor: str | None = None,
+        use_cache: bool = False,
+    ) -> list[SalesTeamMember]:
         cache_key = f"sales_state:list_team:{actor or '_all'}"
-        cached = _cache_get(cache_key)
-        if isinstance(cached, list) and all(isinstance(member, SalesTeamMember) for member in cached):
-            return [member.model_copy(deep=True) for member in cached]
-        actor_member = self.require_active_team_member(actor) if actor else None
+        if use_cache:
+            cached = _cache_get(cache_key)
+            if isinstance(cached, list) and all(isinstance(member, SalesTeamMember) for member in cached):
+                return [member.model_copy(deep=True) for member in cached]
+        actor_member = self.require_active_team_member(actor, use_cache=use_cache) if actor else None
         rows = self._client.fetchall(
             """
             SELECT email, display_label, role, region, manager_email, capacity_per_day, active
@@ -271,17 +277,19 @@ class SalesStateStore:
             ]
         else:
             out = [member for member in members if member.email == actor_member.email]
-        _cache_set(cache_key, out)
+        if use_cache:
+            _cache_set(cache_key, out)
         return [member.model_copy(deep=True) for member in out]
 
-    def require_active_team_member(self, email: str) -> SalesTeamMember:
+    def require_active_team_member(self, email: str, *, use_cache: bool = False) -> SalesTeamMember:
         normalized_email = email.lower()
         cache_key = f"sales_state:team_member:{normalized_email}"
-        cached = _cache_get(cache_key)
-        if cached == "__missing__":
-            raise KeyError(email)
-        if isinstance(cached, SalesTeamMember):
-            return _copy_member(cached)
+        if use_cache:
+            cached = _cache_get(cache_key)
+            if cached == "__missing__":
+                raise KeyError(email)
+            if isinstance(cached, SalesTeamMember):
+                return _copy_member(cached)
         row = self._client.fetchone(
             """
             SELECT email, display_label, role, region, manager_email, capacity_per_day, active
@@ -292,30 +300,44 @@ class SalesStateStore:
             {"email": normalized_email},
         )
         if row is None:
-            _cache_set(cache_key, "__missing__")
+            if use_cache:
+                _cache_set(cache_key, "__missing__")
             raise KeyError(email)
         member = SalesTeamMember(**row)
-        _cache_set(cache_key, member)
+        if use_cache:
+            _cache_set(cache_key, member)
         return _copy_member(member)
 
-    def require_manager_actor(self, actor: str) -> SalesTeamMember:
-        member = self.require_active_team_member(actor)
+    def require_manager_actor(self, actor: str, *, use_cache: bool = False) -> SalesTeamMember:
+        member = self.require_active_team_member(actor, use_cache=use_cache)
         if member.role not in {"admin", "sales_manager"}:
             raise PermissionError("sales manager or admin access required")
         return member
 
-    def require_assignee_in_scope(self, *, actor: str, assigned_to_email: str) -> SalesTeamMember:
-        actor_member = self.require_manager_actor(actor)
-        assignee = self.require_active_team_member(assigned_to_email)
+    def require_assignee_in_scope(
+        self,
+        *,
+        actor: str,
+        assigned_to_email: str,
+        use_cache: bool = False,
+    ) -> SalesTeamMember:
+        actor_member = self.require_manager_actor(actor, use_cache=use_cache)
+        assignee = self.require_active_team_member(assigned_to_email, use_cache=use_cache)
         if assignee.role != "loan_officer":
             raise KeyError(assigned_to_email)
         if actor_member.role != "admin" and assignee.manager_email != actor_member.email:
             raise PermissionError("loan officer is outside the manager scope")
         return assignee
 
-    def require_visible_assignee(self, *, actor: str, assigned_to_email: str) -> SalesTeamMember:
-        actor_member = self.require_active_team_member(actor)
-        assignee = self.require_active_team_member(assigned_to_email)
+    def require_visible_assignee(
+        self,
+        *,
+        actor: str,
+        assigned_to_email: str,
+        use_cache: bool = False,
+    ) -> SalesTeamMember:
+        actor_member = self.require_active_team_member(actor, use_cache=use_cache)
+        assignee = self.require_active_team_member(assigned_to_email, use_cache=use_cache)
         if assignee.role != "loan_officer":
             raise KeyError(assigned_to_email)
         if actor_member.role == "admin":
@@ -326,9 +348,15 @@ class SalesStateStore:
             return assignee
         raise PermissionError("assigned_to is outside the actor scope")
 
-    def require_disposition_scope(self, *, actor: str, lo_email: str) -> SalesTeamMember:
-        actor_member = self.require_active_team_member(actor)
-        lo = self.require_active_team_member(lo_email)
+    def require_disposition_scope(
+        self,
+        *,
+        actor: str,
+        lo_email: str,
+        use_cache: bool = False,
+    ) -> SalesTeamMember:
+        actor_member = self.require_active_team_member(actor, use_cache=use_cache)
+        lo = self.require_active_team_member(lo_email, use_cache=use_cache)
         if lo.role != "loan_officer":
             raise KeyError(lo_email)
         if actor_member.role == "admin":
@@ -346,48 +374,62 @@ class SalesStateStore:
         borrower_id: str,
         assigned_to_email: str | None,
     ) -> SalesTeamMember | None:
-        actor_member = self.require_manager_actor(actor)
+        actor_member = self.require_manager_actor(actor, use_cache=False)
         supplied_assignee = (
-            self.require_visible_assignee(actor=actor, assigned_to_email=assigned_to_email)
+            self.require_visible_assignee(
+                actor=actor,
+                assigned_to_email=assigned_to_email,
+                use_cache=False,
+            )
             if assigned_to_email is not None
             else None
         )
         if actor_member.role == "admin":
             return supplied_assignee
 
-        assignment = self.active_assignment_for(borrower_id)
+        assignment = self.active_assignment_for(borrower_id, use_cache=False)
         if assignment is None:
             raise PermissionError(
                 "lead outcome requires an in-scope active assignment"
             )
 
-        active_assignee = self.require_visible_assignee(
-            actor=actor,
-            assigned_to_email=assignment.assigned_to_email,
-        )
+        try:
+            active_assignee = self.require_visible_assignee(
+                actor=actor,
+                assigned_to_email=assignment.assigned_to_email,
+                use_cache=False,
+            )
+        except KeyError as exc:
+            raise PermissionError(
+                "lead outcome active assignment is no longer assigned to an active loan officer"
+            ) from exc
         if supplied_assignee is not None and supplied_assignee.email != active_assignee.email:
             raise PermissionError("lead outcome assigned_to must match the active assignment")
         return active_assignee
 
-    def visible_lo_emails(self, *, actor: str) -> set[str] | None:
+    def visible_lo_emails(self, *, actor: str, use_cache: bool = False) -> set[str] | None:
         """Return LO emails visible to actor; None means admin/all."""
         cache_key = f"sales_state:visible_lo_emails:{actor.lower()}"
-        cached = _cache_get(cache_key)
-        if cached == "__all__":
-            return None
-        if isinstance(cached, set):
-            return set(cached)
-        actor_member = self.require_active_team_member(actor)
+        if use_cache:
+            cached = _cache_get(cache_key)
+            if cached == "__all__":
+                return None
+            if isinstance(cached, set):
+                return set(cached)
+        actor_member = self.require_active_team_member(actor, use_cache=use_cache)
         if actor_member.role == "admin":
-            _cache_set(cache_key, "__all__")
+            if use_cache:
+                _cache_set(cache_key, "__all__")
             return None
         if actor_member.role == "loan_officer":
             out = {actor_member.email}
-            _cache_set(cache_key, out)
+            if use_cache:
+                _cache_set(cache_key, out)
             return set(out)
-        members = self.list_team(actor=actor)
+        members = self.list_team(actor=actor, use_cache=use_cache)
         out = {member.email for member in members if member.role == "loan_officer"}
-        _cache_set(cache_key, out)
+        if use_cache:
+            _cache_set(cache_key, out)
         return set(out)
 
     def _insert_audit_event(
@@ -420,13 +462,14 @@ class SalesStateStore:
             raise LakebaseError("sales audit insert returned no row")
         return str(audit_id)
 
-    def active_assignment_for(self, borrower_id: str) -> LeadAssignment | None:
+    def active_assignment_for(self, borrower_id: str, *, use_cache: bool = False) -> LeadAssignment | None:
         cache_key = f"sales_state:active_assignment:{borrower_id}"
-        cached = _cache_get(cache_key)
-        if cached == "__none__":
-            return None
-        if isinstance(cached, LeadAssignment):
-            return cached.model_copy(deep=True)
+        if use_cache:
+            cached = _cache_get(cache_key)
+            if cached == "__none__":
+                return None
+            if isinstance(cached, LeadAssignment):
+                return cached.model_copy(deep=True)
         assignment = _assignment_from_row(
             self._client.fetchone(
                 """
@@ -443,7 +486,8 @@ class SalesStateStore:
                 {"borrower_id": borrower_id},
             )
         )
-        _cache_set(cache_key, assignment if assignment is not None else "__none__")
+        if use_cache:
+            _cache_set(cache_key, assignment if assignment is not None else "__none__")
         return _copy_assignment(assignment)
 
     def latest_disposition_for(self, borrower_id: str) -> CallDisposition | None:
@@ -692,6 +736,7 @@ class SalesStateStore:
         assignee = self.require_assignee_in_scope(
             actor=assigned_by,
             assigned_to_email=assigned_to_email,
+            use_cache=False,
         )
 
         def _matches_existing(existing_rows: list[dict[str, Any]]) -> LeadAssignment | None:
@@ -809,7 +854,11 @@ class SalesStateStore:
         request_id: str | None = None,
     ) -> tuple[list[LeadAssignment], str]:
         assignees = [
-            self.require_assignee_in_scope(actor=assigned_by, assigned_to_email=email)
+            self.require_assignee_in_scope(
+                actor=assigned_by,
+                assigned_to_email=email,
+                use_cache=False,
+            )
             for email in lo_emails
         ]
         assignments: list[LeadAssignment] = []
@@ -949,8 +998,8 @@ class SalesStateStore:
         subject_clip: str | None = None,
         request_id: str | None = None,
     ) -> tuple[CallDisposition, str]:
-        lo = self.require_disposition_scope(actor=actor, lo_email=lo_email)
-        assignment = self.active_assignment_for(borrower_id)
+        lo = self.require_disposition_scope(actor=actor, lo_email=lo_email, use_cache=False)
+        assignment = self.active_assignment_for(borrower_id, use_cache=False)
         if assignment is not None and assignment.assigned_to_email != lo.email:
             raise PermissionError("borrower is assigned to another loan officer")
         clean_notes = scrub_free_text(notes) if notes else None
@@ -1181,11 +1230,12 @@ class SalesStateStore:
         clear_sales_state_cache()
         return outcome.model_copy(update={"audit_event_id": audit_event_id}), audit_event_id
 
-    def lifecycle_for(self, borrower_id: str) -> dict[str, Any]:
+    def lifecycle_for(self, borrower_id: str, *, use_cache: bool = False) -> dict[str, Any]:
         cache_key = f"sales_state:lifecycle:{borrower_id}"
-        cached = _cache_get(cache_key)
-        if isinstance(cached, dict):
-            return deepcopy(cached)
+        if use_cache:
+            cached = _cache_get(cache_key)
+            if isinstance(cached, dict):
+                return deepcopy(cached)
         row = self._client.fetchone(
             """
             WITH latest_approval AS (
@@ -1234,7 +1284,8 @@ class SalesStateStore:
             "assignment": self.active_assignment_for(borrower_id),
             "latest_disposition": self.latest_disposition_for(borrower_id),
         }
-        _cache_set(cache_key, result)
+        if use_cache:
+            _cache_set(cache_key, result)
         return deepcopy(result)
 
     def aging(self, *, older_than_days: int, limit: int = 50) -> list[dict[str, Any]]:

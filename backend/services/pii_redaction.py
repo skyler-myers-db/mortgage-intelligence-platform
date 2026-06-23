@@ -284,6 +284,20 @@ _FORBIDDEN_OUTPUT_KEYS: frozenset[str] = frozenset(
 
 _STREET_NUMBER_PATTERN = re.compile(r"\d")
 _ID_MASK_NAMESPACE = "mip-cotality-id-mask-v1"
+_ID_MASK_FALLBACK_APP_ENVS = frozenset({"local", "dev", "sandbox"})
+_ID_MASK_PLACEHOLDER_SECRETS = frozenset(
+    {
+        "redacted",
+        "changeme",
+        "change-me",
+        "change_me",
+        "placeholder",
+        "example",
+        "your-secret",
+        "your_secret",
+        "mip-cotality-id-mask-v1",
+    }
+)
 _CONSENT_STATUS_VALUES: frozenset[str] = frozenset({"opt_in", "opt_out", "unknown"})
 
 
@@ -337,6 +351,27 @@ def _optional_str(raw: Any) -> str | None:
     return value or None
 
 
+def _id_mask_secret() -> str:
+    configured = (os.environ.get("MIP_COTALITY_ID_MASK_SECRET") or "").strip()
+    normalized = configured.lower()
+    is_placeholder = (
+        normalized in _ID_MASK_PLACEHOLDER_SECRETS
+        or (normalized.startswith("<") and normalized.endswith(">"))
+    )
+    if configured and not is_placeholder:
+        return configured
+
+    from backend.config.settings import settings
+
+    app_env = (settings.app_env or "local").strip().lower()
+    if app_env in _ID_MASK_FALLBACK_APP_ENVS:
+        return _ID_MASK_NAMESPACE
+
+    raise RuntimeError(
+        "MIP_COTALITY_ID_MASK_SECRET is required outside local/dev/sandbox app environments"
+    )
+
+
 def mask_cotality_id(kind: str, raw: Any) -> str:
     """Return a stable display-safe surrogate for a Cotality identifier.
 
@@ -361,11 +396,7 @@ def mask_cotality_id(kind: str, raw: Any) -> str:
     else:
         raise ValueError(f"unknown Cotality id kind: {kind!r}")
 
-    secret = (
-        os.environ.get("MIP_COTALITY_ID_MASK_SECRET")
-        or os.environ.get("MIP_GENIE_ACTION_SECRET")
-        or _ID_MASK_NAMESPACE
-    )
+    secret = _id_mask_secret()
     digest = hmac.new(
         secret.encode("utf-8"),
         f"{kind}:{value}".encode(),

@@ -22,6 +22,8 @@ def _hermetic_operator_config(monkeypatch, tmp_path):
     )
     for name in app_deploy_payload.NON_SECRET_OPERATOR_VARS:
         monkeypatch.delenv(name, raising=False)
+    for name in app_deploy_payload.SECRET_OPERATOR_VARS:
+        monkeypatch.delenv(name, raising=False)
 
 
 def _env_map(payload: dict[str, object]) -> dict[str, dict[str, str]]:
@@ -113,3 +115,29 @@ def test_payload_includes_explicit_admin_operator_vars(monkeypatch) -> None:
 
     assert env["MIP_ADMIN_EMAILS"]["value"] == "admin@example.com"
     assert env["MIP_ADMIN_GROUP_NAME"]["value"] == "risk-admin"
+
+
+def test_payload_includes_cotality_mask_secret(monkeypatch) -> None:
+    monkeypatch.setenv("MIP_COTALITY_ID_MASK_SECRET", "customer-mask-secret")
+
+    payload = build_payload(
+        source_code_path="/Workspace/app/files",
+        target="prod",
+        app_env="prod",
+    )
+    env = _env_map(payload)
+
+    assert env["APP_ENV"]["value"] == "prod"
+    assert env["MIP_COTALITY_ID_MASK_SECRET"]["value"] == "customer-mask-secret"
+
+
+def test_payload_omits_placeholder_cotality_mask_secret(monkeypatch) -> None:
+    monkeypatch.setenv("MIP_COTALITY_ID_MASK_SECRET", "REDACTED")
+
+    payload = build_payload(
+        source_code_path="/Workspace/app/files",
+        target="prod",
+        app_env="prod",
+    )
+
+    assert "MIP_COTALITY_ID_MASK_SECRET" not in _env_map(payload)

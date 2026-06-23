@@ -144,11 +144,15 @@ def lead_assignment(
     _ensure_borrower(repo, borrower_id)
     actor = resolve_actor(request)
     try:
-        store.require_active_team_member(actor)
-        assignment = store.active_assignment_for(borrower_id)
+        store.require_active_team_member(actor, use_cache=False)
+        assignment = store.active_assignment_for(borrower_id, use_cache=False)
         if assignment is None:
             raise HTTPException(status_code=404, detail=f"No active assignment for borrower {borrower_id}")
-        store.require_visible_assignee(actor=actor, assigned_to_email=assignment.assigned_to_email)
+        store.require_visible_assignee(
+            actor=actor,
+            assigned_to_email=assignment.assigned_to_email,
+            use_cache=False,
+        )
         return assignment
     except HTTPException:
         raise
@@ -182,7 +186,7 @@ def distribute_leads(
         borrower_ids = [lead.borrower_id for lead in leads]
     try:
         ensure_sales_workflow_request_id_columns(store._client)
-        store.require_manager_actor(actor)
+        store.require_manager_actor(actor, use_cache=False)
         for borrower_id in borrower_ids[: payload.limit]:
             borrower = borrower_repo.get(borrower_id)
             if borrower is None:

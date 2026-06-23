@@ -149,8 +149,12 @@ else
 fi
 
 RESTORE_RENDERED_SQL_FAIL_CLOSED=0
+APP_DEPLOY_PAYLOAD=""
 
 restore_rendered_sql_fail_closed() {
+  if [[ -n "${APP_DEPLOY_PAYLOAD:-}" ]]; then
+    rm -f "$APP_DEPLOY_PAYLOAD"
+  fi
   if [[ "$DRY_RUN" -eq 1 || "$RESTORE_RENDERED_SQL_FAIL_CLOSED" -ne 1 ]]; then
     return 0
   fi
@@ -254,12 +258,22 @@ else
   echo "  admin allowlist: configured (MIP_ADMIN_EMAILS set)"
 fi
 
+APP_RUNTIME_ENV="${APP_ENV:-}"
+if [[ -z "$APP_RUNTIME_ENV" ]]; then
+  if [[ "$TARGET" == "dev" ]]; then
+    APP_RUNTIME_ENV="sandbox"
+  else
+    APP_RUNTIME_ENV="$TARGET"
+  fi
+fi
+
 # Cotality ID-mask HMAC visibility check (audit P3, 2026-06-11). When
 # MIP_COTALITY_ID_MASK_SECRET is unset, backend/services/pii_redaction.py
 # falls back to a source-committed constant — masked IDs are still stable,
 # but anyone with repo access can recompute the mapping. Fine for the
-# synthetic-data sandbox; never acceptable for a customer deploy. Dev keeps
-# the warning path; non-dev/customer targets fail before mutating the app.
+# synthetic-data sandbox; never acceptable for a customer deploy. Runtime
+# local/dev/sandbox keeps the warning path; customer/prod runtime envs fail
+# before mutating the app.
 _ID_MASK_RESOLVED="${MIP_COTALITY_ID_MASK_SECRET:-$("$PYTHON" - <<'PYEOF'
 from pathlib import Path
 try:
@@ -270,10 +284,19 @@ except Exception:
     print("")
 PYEOF
 )}"
+_ID_MASK_NORMALIZED="$(printf '%s' "$_ID_MASK_RESOLVED" | tr '[:upper:]' '[:lower:]')"
+case "$_ID_MASK_NORMALIZED" in
+  ""|redacted|changeme|change-me|change_me|placeholder|example|your-secret|your_secret|mip-cotality-id-mask-v1)
+    _ID_MASK_RESOLVED=""
+    ;;
+esac
+if [[ "$_ID_MASK_NORMALIZED" == \<*\> ]]; then
+  _ID_MASK_RESOLVED=""
+fi
 if [[ -z "$_ID_MASK_RESOLVED" ]]; then
-  if [[ "$TARGET" != "dev" ]]; then
-    echo "${RED}[deploy] ERROR: MIP_COTALITY_ID_MASK_SECRET is required for target '$TARGET'.${RST}" >&2
-    echo "${RED}  Customer/non-dev deployments must use a deployment-scoped HMAC secret;${RST}" >&2
+  if [[ "$APP_RUNTIME_ENV" != "local" && "$APP_RUNTIME_ENV" != "dev" && "$APP_RUNTIME_ENV" != "sandbox" ]]; then
+    echo "${RED}[deploy] ERROR: MIP_COTALITY_ID_MASK_SECRET is required for target '$TARGET' (APP_ENV=${APP_RUNTIME_ENV}).${RST}" >&2
+    echo "${RED}  Customer/non-sandbox runtime deployments must use a deployment-scoped HMAC secret;${RST}" >&2
     echo "${RED}  the source-committed fallback is allowed only for the dev sandbox.${RST}" >&2
     exit 1
   fi
@@ -534,12 +557,13 @@ APP_DEPLOY_PAYLOAD="$(mktemp -t mip-app-deploy.XXXXXX.json)"
   --source-code-path "$APP_SOURCE_PATH" \
   --target "$TARGET" \
   --current-user-email "$APP_CURRENT_USER" \
-  --app-env sandbox \
+  --app-env "$APP_RUNTIME_ENV" \
   --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
   --schema "${MIP_DEFAULT_SCHEMA:-gold}" \
   > "$APP_DEPLOY_PAYLOAD"
 run databricks apps deploy "$APP_NAME" --json "@$APP_DEPLOY_PAYLOAD" --timeout 20m
 rm -f "$APP_DEPLOY_PAYLOAD"
+APP_DEPLOY_PAYLOAD=""
 
 if [[ "$DRY_RUN" -eq 0 && -z "${MIP_APP_URL:-}" ]]; then
   DEPLOYED_APP_URL="$(databricks apps get "$APP_NAME" -o json | "$PYTHON" -c 'import json,sys; print(json.load(sys.stdin).get("url",""))')"

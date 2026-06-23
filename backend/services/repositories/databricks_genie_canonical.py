@@ -20,7 +20,7 @@ class CanonicalRetentionEligibilityFallback:
 
 @dataclass(frozen=True)
 class CanonicalEquityThresholdScope:
-    threshold_pct: int
+    threshold_pct: float
     strict_greater: bool
     asks_share: bool
 
@@ -1403,6 +1403,31 @@ def _has_share_intent(q: str) -> bool:
     return bool(re.search(r"\b(share|percent|percentage|ratio|what portion)\b", q))
 
 
+def _has_strong_rank_intent(q: str) -> bool:
+    return bool(
+        re.search(
+            r"\b(top|highest|rank|ranked|ranking|best|first|prioritize)\b",
+            q,
+        )
+    )
+
+
+def _has_equity_share_result_intent(q: str) -> bool:
+    """Return True when the user asks for a share, not just a percent threshold."""
+
+    return bool(
+        re.search(
+            r"\b(share|percentage|ratio|what portion|what percent|percent of borrowers|"
+            r"percentage of borrowers)\b",
+            q,
+        )
+    )
+
+
+def _format_pct_threshold(value: float) -> str:
+    return f"{value:g}"
+
+
 def _has_rank_intent(q: str) -> bool:
     return bool(
         re.search(
@@ -1518,15 +1543,15 @@ def _canonical_equity_threshold_scope(question: str) -> CanonicalEquityThreshold
         return None
     if any(term in q for term in ("distribution", "histogram", "bucket", "band", "break down", "breakdown")):
         return None
-    threshold = 35
+    threshold: float = 35.0
     strict_greater = False
     threshold_match = re.search(
         r"\b(?P<op>at least|>=|over|more than|above|greater than|greater than or equal to)"
-        r"\s*(?P<threshold>\d{1,3})\s*%?",
+        r"\s*(?P<threshold>\d{1,3}(?:\.\d+)?)\s*(?:%|percent|percentage)?",
         q,
     )
     if threshold_match:
-        threshold = int(threshold_match.group("threshold"))
+        threshold = float(threshold_match.group("threshold"))
         strict_greater = threshold_match.group("op") in {
             "over",
             "more than",
@@ -1535,12 +1560,12 @@ def _canonical_equity_threshold_scope(question: str) -> CanonicalEquityThreshold
         }
     elif "high equity" not in q and "strong equity" not in q:
         return None
-    if threshold < 0 or threshold > 100:
+    if threshold < 0:
         return None
     return CanonicalEquityThresholdScope(
         threshold_pct=threshold,
         strict_greater=strict_greater,
-        asks_share=_has_share_intent(q),
+        asks_share=_has_equity_share_result_intent(q),
     )
 
 
@@ -1573,6 +1598,8 @@ def _canonical_listed_count_scope(question: str) -> CanonicalListedCountScope | 
         return None
     if not _has_count_intent(q):
         return None
+    if _has_strong_rank_intent(q):
+        return None
     if any(term in q for term in ("loan product", "days on market", "current rate", "average rate")):
         return None
     state_scope = _canonical_itm_state_scope(question)
@@ -1595,7 +1622,7 @@ def _canonical_investor_count_scope(question: str) -> bool:
         return False
     if not _has_count_intent(q):
         return False
-    return not _has_rank_intent(q)
+    return not _has_strong_rank_intent(q)
 
 
 def _canonical_itm_share_scope(question: str) -> bool:

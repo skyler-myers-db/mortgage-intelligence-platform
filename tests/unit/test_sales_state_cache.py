@@ -78,7 +78,7 @@ def test_sales_state_cache_clear_exposes_new_lakebase_rows() -> None:
     clear_sales_state_cache()
 
 
-def test_missing_sales_team_actor_is_negative_cached() -> None:
+def test_missing_sales_team_actor_is_fresh_by_default() -> None:
     clear_sales_state_cache()
     client = _Client()
     store = SalesStateStore(client)  # type: ignore[arg-type]
@@ -86,6 +86,19 @@ def test_missing_sales_team_actor_is_negative_cached() -> None:
     for _ in range(2):
         with contextlib.suppress(KeyError):
             store.visible_lo_emails(actor="outside@example.com")
+
+    assert client.fetchone_calls == 2
+    clear_sales_state_cache()
+
+
+def test_missing_sales_team_actor_can_be_negative_cached_when_explicit() -> None:
+    clear_sales_state_cache()
+    client = _Client()
+    store = SalesStateStore(client)  # type: ignore[arg-type]
+
+    for _ in range(2):
+        with contextlib.suppress(KeyError):
+            store.visible_lo_emails(actor="outside@example.com", use_cache=True)
 
     assert client.fetchone_calls == 1
     clear_sales_state_cache()

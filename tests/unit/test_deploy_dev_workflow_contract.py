@@ -67,7 +67,7 @@ def test_deploy_dev_requires_explicit_admin_rbac_and_mints_app_bearer() -> None:
 def test_deploy_script_requires_cotality_mask_secret_for_non_dev_targets(tmp_path: Path) -> None:
     text = DEPLOY_SCRIPT.read_text(encoding="utf-8")
 
-    assert 'if [[ "$TARGET" != "dev" ]]; then' in text
+    assert 'APP_RUNTIME_ENV="${APP_ENV:-}"' in text
     assert "MIP_COTALITY_ID_MASK_SECRET is required for target" in text
     assert "source-committed fallback is allowed only for the dev sandbox" in text
 
@@ -104,8 +104,56 @@ def test_deploy_script_requires_cotality_mask_secret_for_non_dev_targets(tmp_pat
     )
 
     assert result.returncode == 1
-    assert "MIP_COTALITY_ID_MASK_SECRET is required for target 'customer'" in result.stderr
+    assert (
+        "MIP_COTALITY_ID_MASK_SECRET is required for target 'customer' (APP_ENV=customer)"
+        in result.stderr
+    )
     assert "step 1: preflight" in result.stdout
+    assert "step 2:" not in result.stdout
+
+
+def test_deploy_script_requires_cotality_mask_secret_for_customer_runtime_env(
+    tmp_path: Path,
+) -> None:
+    text = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+
+    repo = tmp_path / "repo"
+    script_dir = repo / "scripts"
+    bin_dir = tmp_path / "bin"
+    script_dir.mkdir(parents=True)
+    bin_dir.mkdir()
+    deploy_copy = script_dir / "deploy.sh"
+    deploy_copy.write_text(text, encoding="utf-8")
+    deploy_copy.chmod(0o755)
+    (repo / ".env.local").write_text(
+        "DATABRICKS_HOST=https://example.cloud.databricks.com\n"
+        "DATABRICKS_WAREHOUSE_ID=abc123\n",
+        encoding="utf-8",
+    )
+    fake_databricks = bin_dir / "databricks"
+    fake_databricks.write_text("#!/usr/bin/env bash\necho databricks fake\n", encoding="utf-8")
+    fake_databricks.chmod(0o755)
+
+    env = {
+        **os.environ,
+        "APP_ENV": "customer",
+        "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
+    }
+    env.pop("MIP_COTALITY_ID_MASK_SECRET", None)
+    result = subprocess.run(
+        ["bash", str(deploy_copy), "-t", "dev", "--dry-run", "--no-confirm"],
+        cwd=repo,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert (
+        "MIP_COTALITY_ID_MASK_SECRET is required for target 'dev' (APP_ENV=customer)"
+        in result.stderr
+    )
     assert "step 2:" not in result.stdout
 
 
@@ -145,6 +193,52 @@ def test_deploy_script_rejects_legacy_genie_secret_as_mask_secret(tmp_path: Path
     )
 
     assert result.returncode == 1
-    assert "MIP_COTALITY_ID_MASK_SECRET is required for target 'customer'" in result.stderr
+    assert (
+        "MIP_COTALITY_ID_MASK_SECRET is required for target 'customer' (APP_ENV=customer)"
+        in result.stderr
+    )
+    assert "cotality id-mask secret: configured" not in result.stdout
+    assert "step 2:" not in result.stdout
+
+
+def test_deploy_script_rejects_placeholder_cotality_mask_secret(tmp_path: Path) -> None:
+    text = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+
+    repo = tmp_path / "repo"
+    script_dir = repo / "scripts"
+    bin_dir = tmp_path / "bin"
+    script_dir.mkdir(parents=True)
+    bin_dir.mkdir()
+    deploy_copy = script_dir / "deploy.sh"
+    deploy_copy.write_text(text, encoding="utf-8")
+    deploy_copy.chmod(0o755)
+    (repo / ".env.local").write_text(
+        "DATABRICKS_HOST=https://example.cloud.databricks.com\n"
+        "DATABRICKS_WAREHOUSE_ID=abc123\n"
+        "MIP_COTALITY_ID_MASK_SECRET=REDACTED\n",
+        encoding="utf-8",
+    )
+    fake_databricks = bin_dir / "databricks"
+    fake_databricks.write_text("#!/usr/bin/env bash\necho databricks fake\n", encoding="utf-8")
+    fake_databricks.chmod(0o755)
+
+    env = {
+        **os.environ,
+        "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
+    }
+    result = subprocess.run(
+        ["bash", str(deploy_copy), "-t", "customer", "--dry-run", "--no-confirm"],
+        cwd=repo,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert (
+        "MIP_COTALITY_ID_MASK_SECRET is required for target 'customer' (APP_ENV=customer)"
+        in result.stderr
+    )
     assert "cotality id-mask secret: configured" not in result.stdout
     assert "step 2:" not in result.stdout

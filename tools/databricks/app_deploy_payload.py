@@ -2,9 +2,9 @@
 
 Databricks Apps treats deployment ``env_vars`` as a full replacement for the
 ``app.yaml`` env list. This helper keeps the source-controlled safe baseline
-and overlays non-secret operator settings from the process environment /
-``.env.local`` so customer-specific configuration reaches the app runtime
-without baking unsafe defaults into code.
+and overlays operator settings from the process environment / ``.env.local``
+so customer-specific configuration reaches the app runtime without baking
+unsafe defaults into code.
 """
 
 from __future__ import annotations
@@ -53,6 +53,22 @@ NON_SECRET_OPERATOR_VARS = (
     "DATABRICKS_TIMEOUT_S",
 )
 
+SECRET_OPERATOR_VARS = (
+    "MIP_COTALITY_ID_MASK_SECRET",
+)
+
+PLACEHOLDER_SECRET_VALUES = {
+    "redacted",
+    "changeme",
+    "change-me",
+    "change_me",
+    "placeholder",
+    "example",
+    "your-secret",
+    "your_secret",
+    "mip-cotality-id-mask-v1",
+}
+
 
 def _dotenv_overlay() -> dict[str, str]:
     values: dict[str, str] = {}
@@ -70,6 +86,16 @@ def _env_value(key: str, dotenv: dict[str, str]) -> str:
 def _append_value(env_vars: list[dict[str, str]], name: str, value: str) -> None:
     if value != "":
         env_vars.append({"name": name, "value": value})
+
+
+def _secret_value(key: str, dotenv: dict[str, str]) -> str:
+    value = _env_value(key, dotenv)
+    normalized = value.lower()
+    if normalized in PLACEHOLDER_SECRET_VALUES:
+        return ""
+    if normalized.startswith("<") and normalized.endswith(">"):
+        return ""
+    return value
 
 
 def build_payload(
@@ -99,6 +125,8 @@ def build_payload(
 
     for name in NON_SECRET_OPERATOR_VARS:
         _append_value(env_vars, name, _env_value(name, dotenv))
+    for name in SECRET_OPERATOR_VARS:
+        _append_value(env_vars, name, _secret_value(name, dotenv))
 
     return {
         "source_code_path": source_code_path,

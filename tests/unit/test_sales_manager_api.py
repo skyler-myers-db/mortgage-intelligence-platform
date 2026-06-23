@@ -11,7 +11,11 @@ from backend.services.audit_store import AuditMetadataValueViolation, get_audit_
 from backend.services.genie_sales_ops import sales_ops_genie_response
 from backend.services.lakebase import get_lakebase_client
 from backend.services.repositories import get_borrower_repository
-from backend.services.sales_state import clear_sales_state_cache, get_sales_state_store
+from backend.services.sales_state import (
+    SalesStateStore,
+    clear_sales_state_cache,
+    get_sales_state_store,
+)
 from tests.fixtures import mock_population as mock_data
 from tests.fixtures.in_memory_audit_store import InMemoryAuditStore
 
@@ -163,6 +167,280 @@ def test_disposition_request_id_replays_without_duplicate_or_breaker(fake_lakeba
         json={**payload, "outcome": "not_now"},
     )
     assert mismatch.status_code == 409
+
+
+def test_disposition_deactivated_cached_lo_is_rejected(fake_lakebase_client) -> None:
+    manager_email = "manager-dispo-cache@summit.example"
+    stale_lo_email = "lo-dispo-cache@summit.example"
+    fake_lakebase_client.sales_team = [
+        row
+        for row in fake_lakebase_client.sales_team
+        if row.get("email") not in {manager_email, stale_lo_email}
+    ]
+    fake_lakebase_client.sales_team.extend(
+        [
+            {
+                "email": manager_email,
+                "display_label": "Disposition Cache Manager",
+                "role": "sales_manager",
+                "manager_email": None,
+                "region": "IL",
+                "capacity_per_day": 0,
+                "active": True,
+            },
+            {
+                "email": stale_lo_email,
+                "display_label": "Disposition Cache LO",
+                "role": "loan_officer",
+                "manager_email": manager_email,
+                "region": "IL",
+                "capacity_per_day": 20,
+                "active": True,
+            },
+        ]
+    )
+    borrower_id = mock_data.BORROWERS[14].borrower_id
+    _approve_for_sales(borrower_id)
+    assigned = client.post(
+        f"/api/leads/{borrower_id}/assign",
+        json={
+            "assigned_to_email": stale_lo_email,
+            "strategy": "manual",
+            "request_id": str(uuid4()),
+        },
+    )
+    assert assigned.status_code == 200, assigned.text
+
+    store = SalesStateStore(fake_lakebase_client)
+    assert store.require_disposition_scope(
+        actor=manager_email,
+        lo_email=stale_lo_email,
+        use_cache=True,
+    ).email == stale_lo_email
+    next(row for row in fake_lakebase_client.sales_team if row["email"] == stale_lo_email)[
+        "active"
+    ] = False
+
+    manager_client = TestClient(app)
+    manager_client.headers.update({"X-Forwarded-Email": manager_email})
+    response = manager_client.post(
+        f"/api/leads/{borrower_id}/disposition",
+        json={
+            "lo_email": stale_lo_email,
+            "outcome": "connected",
+            "notes": "This should not persist.",
+            "request_id": str(uuid4()),
+        },
+    )
+
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"] == "lo_email is not an active loan officer"
+    assert not [
+        row
+        for row in fake_lakebase_client.dispositions
+        if row.get("borrower_id") == borrower_id and row.get("lo_email") == stale_lo_email
+    ]
+
+
+def test_assignment_deactivated_cached_lo_is_rejected(fake_lakebase_client) -> None:
+    manager_email = "manager-assign-cache@summit.example"
+    stale_lo_email = "lo-assign-cache@summit.example"
+    fake_lakebase_client.sales_team = [
+        row
+        for row in fake_lakebase_client.sales_team
+        if row.get("email") not in {manager_email, stale_lo_email}
+    ]
+    fake_lakebase_client.sales_team.extend(
+        [
+            {
+                "email": manager_email,
+                "display_label": "Assignment Cache Manager",
+                "role": "sales_manager",
+                "manager_email": None,
+                "region": "IL",
+                "capacity_per_day": 0,
+                "active": True,
+            },
+            {
+                "email": stale_lo_email,
+                "display_label": "Assignment Cache LO",
+                "role": "loan_officer",
+                "manager_email": manager_email,
+                "region": "IL",
+                "capacity_per_day": 20,
+                "active": True,
+            },
+        ]
+    )
+    borrower_id = mock_data.BORROWERS[15].borrower_id
+    _approve_for_sales(borrower_id)
+
+    store = SalesStateStore(fake_lakebase_client)
+    assert store.require_assignee_in_scope(
+        actor=manager_email,
+        assigned_to_email=stale_lo_email,
+        use_cache=True,
+    ).email == stale_lo_email
+    next(row for row in fake_lakebase_client.sales_team if row["email"] == stale_lo_email)[
+        "active"
+    ] = False
+
+    manager_client = TestClient(app)
+    manager_client.headers.update({"X-Forwarded-Email": manager_email})
+    response = manager_client.post(
+        f"/api/leads/{borrower_id}/assign",
+        json={
+            "assigned_to_email": stale_lo_email,
+            "strategy": "manual",
+            "request_id": str(uuid4()),
+        },
+    )
+
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"] == "assigned_to_email is not an active loan officer"
+    assert not [
+        row
+        for row in fake_lakebase_client.assignments
+        if row.get("borrower_id") == borrower_id and row.get("assigned_to_email") == stale_lo_email
+    ]
+
+
+def test_distribute_deactivated_cached_lo_is_rejected(fake_lakebase_client) -> None:
+    manager_email = "manager-distribute-cache@summit.example"
+    stale_lo_email = "lo-distribute-cache@summit.example"
+    fake_lakebase_client.sales_team = [
+        row
+        for row in fake_lakebase_client.sales_team
+        if row.get("email") not in {manager_email, stale_lo_email}
+    ]
+    fake_lakebase_client.sales_team.extend(
+        [
+            {
+                "email": manager_email,
+                "display_label": "Distribution Cache Manager",
+                "role": "sales_manager",
+                "manager_email": None,
+                "region": "IL",
+                "capacity_per_day": 0,
+                "active": True,
+            },
+            {
+                "email": stale_lo_email,
+                "display_label": "Distribution Cache LO",
+                "role": "loan_officer",
+                "manager_email": manager_email,
+                "region": "IL",
+                "capacity_per_day": 20,
+                "active": True,
+            },
+        ]
+    )
+    borrower_id = mock_data.BORROWERS[16].borrower_id
+    _approve_for_sales(borrower_id)
+
+    store = SalesStateStore(fake_lakebase_client)
+    assert store.require_assignee_in_scope(
+        actor=manager_email,
+        assigned_to_email=stale_lo_email,
+        use_cache=True,
+    ).email == stale_lo_email
+    next(row for row in fake_lakebase_client.sales_team if row["email"] == stale_lo_email)[
+        "active"
+    ] = False
+
+    manager_client = TestClient(app)
+    manager_client.headers.update({"X-Forwarded-Email": manager_email})
+    response = manager_client.post(
+        "/api/sales/distribute",
+        json={
+            "borrower_ids": [borrower_id],
+            "lo_emails": [stale_lo_email],
+            "strategy": "round_robin",
+            "request_id": str(uuid4()),
+        },
+    )
+
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"] == "lo_emails must all be active loan officers"
+    assert not [
+        row
+        for row in fake_lakebase_client.assignments
+        if row.get("borrower_id") == borrower_id and row.get("assigned_to_email") == stale_lo_email
+    ]
+
+
+def test_assignment_read_released_cached_assignment_is_not_visible(
+    fake_lakebase_client,
+) -> None:
+    borrower_id = mock_data.BORROWERS[17].borrower_id
+    _approve_for_sales(borrower_id)
+    assigned = client.post(
+        f"/api/leads/{borrower_id}/assign",
+        json={
+            "assigned_to_email": "lo01@summit.example",
+            "strategy": "manual",
+            "request_id": str(uuid4()),
+        },
+    )
+    assert assigned.status_code == 200, assigned.text
+
+    store = SalesStateStore(fake_lakebase_client)
+    assert store.active_assignment_for(borrower_id, use_cache=True) is not None
+    for row in fake_lakebase_client.assignments:
+        if row.get("borrower_id") == borrower_id and row.get("released_at") is None:
+            row["released_at"] = datetime.now(UTC)
+
+    response = client.get(f"/api/leads/{borrower_id}/assignment")
+
+    assert response.status_code == 404, response.text
+
+
+def test_sales_reports_deactivated_cached_manager_is_forbidden(
+    fake_lakebase_client,
+) -> None:
+    manager_email = "manager-report-cache@summit.example"
+    managed_lo_email = "lo-report-cache@summit.example"
+    fake_lakebase_client.sales_team = [
+        row
+        for row in fake_lakebase_client.sales_team
+        if row.get("email") not in {manager_email, managed_lo_email}
+    ]
+    fake_lakebase_client.sales_team.extend(
+        [
+            {
+                "email": manager_email,
+                "display_label": "Report Cache Manager",
+                "role": "sales_manager",
+                "manager_email": None,
+                "region": "IL",
+                "capacity_per_day": 0,
+                "active": True,
+            },
+            {
+                "email": managed_lo_email,
+                "display_label": "Report Cache LO",
+                "role": "loan_officer",
+                "manager_email": manager_email,
+                "region": "IL",
+                "capacity_per_day": 20,
+                "active": True,
+            },
+        ]
+    )
+
+    store = SalesStateStore(fake_lakebase_client)
+    assert store.require_manager_actor(manager_email, use_cache=True).email == manager_email
+    assert store.visible_lo_emails(actor=manager_email, use_cache=True) == {managed_lo_email}
+    next(row for row in fake_lakebase_client.sales_team if row["email"] == manager_email)[
+        "active"
+    ] = False
+
+    manager_client = TestClient(app)
+    manager_client.headers.update({"X-Forwarded-Email": manager_email})
+    today = datetime.now(UTC).date().isoformat()
+    standup = manager_client.get(f"/api/sales/standup?date={today}")
+
+    assert standup.status_code == 403, standup.text
 
 
 def test_disposition_rejects_future_and_backwards_callback() -> None:
@@ -542,7 +820,7 @@ def test_sales_manager_outcome_requires_in_scope_assignment(fake_lakebase_client
         json={
             "outcome_type": "closed_funded",
             "source_system": "manual_import",
-            "source_record_ref": f"manual-unscoped-{uuid4().hex}",
+            "source_record_ref": "manual_unscoped_alpha",
             "loan_amount": 525000,
             "request_id": str(uuid4()),
         },
@@ -564,7 +842,7 @@ def test_sales_manager_outcome_requires_in_scope_assignment(fake_lakebase_client
         json={
             "outcome_type": "closed_funded",
             "source_system": "manual_import",
-            "source_record_ref": f"manual-scoped-{uuid4().hex}",
+            "source_record_ref": "manual_scoped_alpha",
             "assigned_to_email": managed_lo_email,
             "loan_amount": 525000,
             "request_id": str(uuid4()),
@@ -577,7 +855,7 @@ def test_sales_manager_outcome_requires_in_scope_assignment(fake_lakebase_client
         json={
             "outcome_type": "application_submitted",
             "source_system": "manual_import",
-            "source_record_ref": f"manual-scoped-inferred-{uuid4().hex}",
+            "source_record_ref": "manual_scoped_inferred_alpha",
             "loan_amount": 525000,
             "request_id": str(uuid4()),
         },
@@ -592,7 +870,7 @@ def test_sales_manager_outcome_requires_in_scope_assignment(fake_lakebase_client
             json={
             "outcome_type": "closed_funded",
             "source_system": "manual_import",
-            "source_record_ref": f"manual-wrong-assignee-{uuid4().hex}",
+            "source_record_ref": "manual_wrong_assignee_alpha",
             "assigned_to_email": alternate_lo_email,
             "loan_amount": 525000,
             "request_id": str(uuid4()),
@@ -609,13 +887,157 @@ def test_sales_manager_outcome_requires_in_scope_assignment(fake_lakebase_client
         json={
             "outcome_type": "closed_funded",
             "source_system": "manual_import",
-            "source_record_ref": f"manual-unassigned-in-scope-{uuid4().hex}",
+            "source_record_ref": "manual_unassigned_in_scope_alpha",
             "assigned_to_email": managed_lo_email,
             "loan_amount": 425000,
             "request_id": str(uuid4()),
         },
     )
     assert in_scope_unassigned.status_code == 403, in_scope_unassigned.text
+
+
+def test_sales_manager_outcome_stale_active_assignment_is_forbidden(
+    fake_lakebase_client,
+) -> None:
+    manager_email = "manager-stale@summit.example"
+    stale_lo_email = "lo-stale@summit.example"
+    fake_lakebase_client.sales_team = [
+        row
+        for row in fake_lakebase_client.sales_team
+        if row.get("email") not in {manager_email, stale_lo_email}
+    ]
+    fake_lakebase_client.sales_team.extend(
+        [
+            {
+                "email": manager_email,
+                "display_label": "Stale Manager",
+                "role": "sales_manager",
+                "manager_email": None,
+                "region": "IL",
+                "capacity_per_day": 0,
+                "active": True,
+            },
+            {
+                "email": stale_lo_email,
+                "display_label": "Stale LO",
+                "role": "loan_officer",
+                "manager_email": manager_email,
+                "region": "IL",
+                "capacity_per_day": 20,
+                "active": True,
+            },
+        ]
+    )
+    borrower_id = mock_data.BORROWERS[12].borrower_id
+    _approve_for_sales(borrower_id)
+    clear_sales_state_cache()
+
+    assigned = client.post(
+        f"/api/leads/{borrower_id}/assign",
+        json={
+            "assigned_to_email": stale_lo_email,
+            "strategy": "manual",
+            "request_id": str(uuid4()),
+        },
+    )
+    assert assigned.status_code == 200, assigned.text
+
+    next(row for row in fake_lakebase_client.sales_team if row["email"] == stale_lo_email)[
+        "active"
+    ] = False
+
+    manager_client = TestClient(app)
+    manager_client.headers.update({"X-Forwarded-Email": manager_email})
+    response = manager_client.post(
+        f"/api/leads/{borrower_id}/outcome",
+        json={
+            "outcome_type": "application_submitted",
+            "source_system": "manual_import",
+            "source_record_ref": "manual_stale_assignment_alpha",
+            "loan_amount": 425000,
+            "request_id": str(uuid4()),
+        },
+    )
+
+    assert response.status_code == 403, response.text
+    assert response.json()["detail"] == "sales operation is outside the actor scope"
+    assert not [
+        row
+        for row in fake_lakebase_client.outcomes
+        if str(row.get("source_record_ref") or "").startswith("manual_stale_assignment_")
+    ]
+
+
+def test_sales_manager_outcome_released_cached_assignment_is_forbidden(
+    fake_lakebase_client,
+) -> None:
+    manager_email = "manager-released@summit.example"
+    released_lo_email = "lo-released@summit.example"
+    fake_lakebase_client.sales_team = [
+        row
+        for row in fake_lakebase_client.sales_team
+        if row.get("email") not in {manager_email, released_lo_email}
+    ]
+    fake_lakebase_client.sales_team.extend(
+        [
+            {
+                "email": manager_email,
+                "display_label": "Released Manager",
+                "role": "sales_manager",
+                "manager_email": None,
+                "region": "IL",
+                "capacity_per_day": 0,
+                "active": True,
+            },
+            {
+                "email": released_lo_email,
+                "display_label": "Released LO",
+                "role": "loan_officer",
+                "manager_email": manager_email,
+                "region": "IL",
+                "capacity_per_day": 20,
+                "active": True,
+            },
+        ]
+    )
+    borrower_id = mock_data.BORROWERS[13].borrower_id
+    _approve_for_sales(borrower_id)
+
+    assigned = client.post(
+        f"/api/leads/{borrower_id}/assign",
+        json={
+            "assigned_to_email": released_lo_email,
+            "strategy": "manual",
+            "request_id": str(uuid4()),
+        },
+    )
+    assert assigned.status_code == 200, assigned.text
+
+    store = SalesStateStore(fake_lakebase_client)
+    assert store.active_assignment_for(borrower_id, use_cache=True) is not None
+    for row in fake_lakebase_client.assignments:
+        if row.get("borrower_id") == borrower_id and row.get("released_at") is None:
+            row["released_at"] = datetime.now(UTC)
+
+    manager_client = TestClient(app)
+    manager_client.headers.update({"X-Forwarded-Email": manager_email})
+    response = manager_client.post(
+        f"/api/leads/{borrower_id}/outcome",
+        json={
+            "outcome_type": "application_submitted",
+            "source_system": "manual_import",
+            "source_record_ref": "manual_released_assignment_alpha",
+            "loan_amount": 425000,
+            "request_id": str(uuid4()),
+        },
+    )
+
+    assert response.status_code == 403, response.text
+    assert not [
+        row
+        for row in fake_lakebase_client.outcomes
+        if row.get("source_record_ref") == "manual_released_assignment_alpha"
+    ]
 
 
 def test_sales_outcome_rejects_future_occurred_at() -> None:

@@ -114,6 +114,7 @@ from backend.services.repositories.databricks_genie_canonical import (
     _canonical_top_borrowers_state_scope,
     _canonical_top_cash_out_by_equity_scope,
     _canonical_top_cohorts_scope,
+    _format_pct_threshold,
     _projected_monthly_savings_gap_scope,
     _retention_competitor_lien_list_question,
     _retention_eligibility_fallback_from_summary,
@@ -465,9 +466,10 @@ def direct_canonical_response(
         population_text = (
             f" ({share_text} of {total_int:,} borrowers)" if total_int > 0 else ""
         )
+        threshold_text = _format_pct_threshold(equity_scope.threshold_pct)
         answer = (
             f"{count_int:,} borrowers have {comparison_text} "
-            f"{equity_scope.threshold_pct}% modeled home equity"
+            f"{threshold_text}% modeled home equity"
             f"{population_text}. Their average modeled equity is "
             f"{avg_equity_text}. This is an equity-capacity screen from {borrower_asset}, "
             "not a filed-permit count."

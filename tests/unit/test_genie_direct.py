@@ -265,6 +265,50 @@ def test_direct_equity_threshold_supports_buyer_phrasings() -> None:
     assert "more than 50% modeled home equity" in response.answer
 
 
+def test_direct_equity_threshold_preserves_decimal_threshold() -> None:
+    client = _UniversalSqlClient(
+        {
+            "equity_capacity_borrowers": 123456,
+            "total_borrowers": 5156184,
+            "borrower_share_pct": 2.39,
+            "avg_equity_pct": 62.8,
+        }
+    )
+
+    response = direct_canonical_response(
+        "How many borrowers have at least 35.5% equity?",
+        cast(Any, client),
+    )
+
+    assert response is not None
+    assert response.source == "trusted_sql"
+    assert client.parameters[-1] == {"min_equity_pct": 35.5}
+    assert response.metric_value == "123,456"
+    assert "at least 35.5% modeled home equity" in response.answer
+
+
+def test_direct_equity_threshold_percent_unit_keeps_count_metric() -> None:
+    client = _UniversalSqlClient(
+        {
+            "equity_capacity_borrowers": 3386169,
+            "total_borrowers": 5156184,
+            "borrower_share_pct": 65.67,
+            "avg_equity_pct": 61.4,
+        }
+    )
+
+    response = direct_canonical_response(
+        "How many borrowers have at least 35 percent home equity?",
+        cast(Any, client),
+    )
+
+    assert response is not None
+    assert response.source == "trusted_sql"
+    assert client.parameters[-1] == {"min_equity_pct": 35.0}
+    assert response.metric_value == "3,386,169"
+    assert "65.67% of 5,156,184 borrowers" in response.answer
+
+
 def test_direct_equity_threshold_share_uses_share_metric() -> None:
     client = _UniversalSqlClient(
         {
@@ -294,6 +338,8 @@ def test_direct_equity_threshold_share_uses_share_metric() -> None:
     [
         "Give me the count of listed-for-sale borrowers.",
         "How many listed borrowers are there?",
+        "Show the count of listed-for-sale borrowers.",
+        "List the count of listed-for-sale borrowers.",
     ],
 )
 def test_direct_listed_count_intent_is_not_ranked_list(question: str) -> None:
@@ -313,9 +359,33 @@ def test_direct_listed_count_intent_is_not_ranked_list(question: str) -> None:
     assert "live listed-for-sale signal" in response.answer
 
 
+def test_direct_best_listed_count_wording_preserves_rank_intent() -> None:
+    client = _UniversalSqlClient()
+
+    response = direct_canonical_response(
+        "How many of the best listed borrowers should I call?",
+        cast(Any, client),
+    )
+
+    assert response is not None
+    assert response.source == "trusted_sql"
+    assert response.sql_query is not None
+    assert "COUNT(*)" not in response.sql_query
+    assert "listed_for_sale = TRUE" in response.sql_query
+    assert "ORDER BY" in response.sql_query
+
+
 def test_direct_investor_count_and_refi_economic_synonyms_stay_canonical() -> None:
     investor = direct_canonical_response(
         "How many investors are in the current Cotality coverage?",
+        cast(Any, _UniversalSqlClient({"investor_borrowers": 1749208})),
+    )
+    investor_display_verb = direct_canonical_response(
+        "Show the count of investor borrowers.",
+        cast(Any, _UniversalSqlClient({"investor_borrowers": 1749208})),
+    )
+    investor_list_count = direct_canonical_response(
+        "List the count of investor borrowers.",
         cast(Any, _UniversalSqlClient({"investor_borrowers": 1749208})),
     )
     refi = direct_canonical_response(
@@ -337,6 +407,16 @@ def test_direct_investor_count_and_refi_economic_synonyms_stay_canonical() -> No
     assert investor.sql_query is not None
     assert "array_contains(segment_codes, 'investor')" in investor.sql_query
     assert investor.metric_value == "1,749,208"
+    assert investor_display_verb is not None and investor_display_verb.source == "trusted_sql"
+    assert investor_display_verb.sql_query is not None
+    assert "COUNT(*)" in investor_display_verb.sql_query
+    assert "ORDER BY" not in investor_display_verb.sql_query
+    assert investor_display_verb.metric_value == "1,749,208"
+    assert investor_list_count is not None and investor_list_count.source == "trusted_sql"
+    assert investor_list_count.sql_query is not None
+    assert "COUNT(*)" in investor_list_count.sql_query
+    assert "ORDER BY" not in investor_list_count.sql_query
+    assert investor_list_count.metric_value == "1,749,208"
     assert refi is not None and refi.source == "trusted_sql"
     assert refi.metric_value == "117,404"
     assert percent is not None and percent.source == "trusted_sql"
