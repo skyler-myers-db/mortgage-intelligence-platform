@@ -16,6 +16,7 @@ from fastapi import Request
 from backend.config.settings import settings
 from backend.schemas.audit import AuditEvent
 from backend.schemas.common import (
+    contains_pii_marker,
     validate_internal_staff_email,
     validate_public_audit_action,
     validate_public_audit_entity_type,
@@ -210,6 +211,12 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         "occurred_at",
         "callback_at",
         "notes",
+        "lead_outcome_id",
+        "lead_outcome_type",
+        "source_system",
+        "source_record_ref",
+        "loan_amount",
+        "competitor_lender_label",
         # Genie control-layer actions
         "action_type",
         "refusal_reason",
@@ -270,6 +277,7 @@ _OPAQUE_ID_METADATA_KEYS: frozenset[str] = frozenset(
         "request_id",
         "assignment_id",
         "disposition_id",
+        "lead_outcome_id",
         "activation_id",
     }
 )
@@ -280,6 +288,13 @@ _SALES_STRATEGIES: frozenset[str] = frozenset({"manual", "round_robin", "score_b
 _SALES_DISPOSITION_OUTCOMES: frozenset[str] = frozenset(
     {"called_no_answer", "called_left_voicemail", "connected", "callback_scheduled", "application_started", "not_interested", "not_now", "dead"}
 )
+_LEAD_OUTCOME_TYPES: frozenset[str] = frozenset(
+    {"application_submitted", "closed_funded", "lost_to_competitor", "withdrawn", "not_qualified"}
+)
+_LEAD_OUTCOME_SOURCE_SYSTEMS: frozenset[str] = frozenset(
+    {"salesforce", "crm_cdp", "los_pos", "servicing", "webhook", "manual_import"}
+)
+_PUBLIC_BUSINESS_LABEL_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 &.,:+-]{0,79}$")
 _GENIE_REFUSAL_REASONS: frozenset[str] = frozenset({"protected_class", "instruction_override", "pii_request", "scope_bypass", "out_of_scope"})
 
 _ALLOWED_OFFER_CODES: frozenset[str] = frozenset(NBO_PRODUCT_LABELS) | {"recapture"}
@@ -528,6 +543,30 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
     for field, value in _metadata_values_for(metadata, {"outcome"}):
         if value is not None and str(value) not in _SALES_DISPOSITION_OUTCOMES:
             raise AuditMetadataValueViolation(field, "must be a governed call disposition outcome")
+    for field, value in _metadata_values_for(metadata, {"lead_outcome_type"}):
+        if value is not None and str(value) not in _LEAD_OUTCOME_TYPES:
+            raise AuditMetadataValueViolation(field, "must be a governed lead outcome type")
+    for field, value in _metadata_values_for(metadata, {"source_system"}):
+        if value is not None and str(value) not in _LEAD_OUTCOME_SOURCE_SYSTEMS:
+            raise AuditMetadataValueViolation(field, "must be a governed outcome source system")
+    for field, value in _metadata_values_for(metadata, {"source_record_ref"}):
+        if value is None:
+            continue
+        try:
+            validate_public_audit_identifier_or_none(str(value))
+        except ValueError as exc:
+            raise AuditMetadataValueViolation(field, "must be a public-safe source record reference") from exc
+    for field, value in _metadata_values_for(metadata, {"loan_amount"}):
+        if value is None:
+            continue
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0 or value > 100_000_000:
+            raise AuditMetadataValueViolation(field, "must be a bounded non-negative integer")
+    for field, value in _metadata_values_for(metadata, {"competitor_lender_label"}):
+        if value is None:
+            continue
+        text = str(value)
+        if contains_pii_marker(text) or not _PUBLIC_BUSINESS_LABEL_PATTERN.fullmatch(text):
+            raise AuditMetadataValueViolation(field, "must be a public-safe business label")
     for field, value in _metadata_values_for(metadata, {"refusal_reason"}):
         if value is not None and str(value) not in _GENIE_REFUSAL_REASONS:
             raise AuditMetadataValueViolation(field, "must be a governed Genie refusal reason")

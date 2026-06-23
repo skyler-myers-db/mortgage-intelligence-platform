@@ -309,7 +309,7 @@ export default function PortfolioBuilder() {
     <PageShell
       eyebrow="Portfolio Builder"
       title="Build a borrower population"
-      lede="Apply geography, occupancy, lien, relationship, product, and equity filters, then run the build. The KPI grid shows size, average score, and projected conversion."
+      lede="Apply geography, occupancy, lien, relationship, Owner Link, purchase-intent, product, and equity filters, then run the build. The KPI grid shows size, average score, and projected conversion."
     >
       <div className="surface">
         <div className="surface__hdr surface__hdr--split">
@@ -484,11 +484,9 @@ export default function PortfolioBuilder() {
               className="status-callout status-callout--day-zero mt-4"
             >
               <strong>First data refresh pending.</strong>{' '}
-              Unity Catalog gold tables are empty. Run{' '}
-              <code className="callout-code">
-                databricks bundle run mip_refresh_scores -t dev
-              </code>{' '}
-              to populate them.
+              Unity Catalog gold tables are empty. Open{' '}
+              <Link to="/admin-config#data-operations">Admin Data Operations</Link>
+              {' '}and run the governed scoring refresh after the source-feature refresh completes.
             </div>
           )}
           {!isDayZero(preview) && preview?.trend_note && (
@@ -672,6 +670,7 @@ export default function PortfolioBuilder() {
           </div>
           <div className="campaign-setup__meta">
             <span>Email → SMS after 3 days → direct mail after 10 days</span>
+            <span>Staged cadence only; customer-system delivery requires a connected activation destination.</span>
             <span>Tue-Thu · borrower local time</span>
           </div>
         </div>

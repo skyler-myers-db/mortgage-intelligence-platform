@@ -23,6 +23,8 @@ export const NON_GEO_FILTER_GROUPS: FilterGroup[] = [
   { label: 'OCCUPANCY',    key: 'occupancy',            options: ['Owner-occupied', 'Non-owner-occupied', 'All'] },
   { label: 'LIEN STATUS',  key: 'lien_status',          options: ['Open 1st lien', 'Open HELOC', 'Free & clear', 'Any'] },
   { label: 'RELATIONSHIP', key: 'lender_relationship',  options: [...LENDER_RELATIONSHIP_OPTIONS] },
+  { label: 'OWNER LINK',   key: 'owner_link',           options: ['All', 'Single-property owner', 'Multi-property (2-4)', 'Portfolio investor (5+)'] },
+  { label: 'PURCHASE INTENT', key: 'purchase_intent',   options: ['All', 'Listed for sale', 'HELOC intent', 'Both'] },
   { label: 'PRODUCT',      key: 'product',              options: ['All products', 'Refi', 'HELOC', 'Cash-out', 'Purchase', 'Retention'] },
   { label: 'EQUITY',       key: 'min_equity_pct_label', options: ['≥ 15%', '≥ 25%', '≥ 40%', 'Any'] },
   { label: 'CONTACTABILITY', key: 'marketing_eligibility', options: ['Eligible only', 'Any', 'Suppressed only'] },
@@ -38,6 +40,8 @@ export const BASE_DEFAULT_FILTERS: Record<string, string> = {
   lien_status: 'Open 1st lien',
   lender_relationship: 'All',
   target_lender_ref: 'All',
+  owner_link: 'All',
+  purchase_intent: 'All',
   product: 'All products',
   min_equity_pct_label: '≥ 15%',
   marketing_eligibility: 'Eligible only',
@@ -58,6 +62,8 @@ export const URL_FILTER_KEYS = [
   'lien_status',
   'lender_relationship',
   'target_lender_ref',
+  'owner_link',
+  'purchase_intent',
   'product',
   'min_equity_pct_label',
   'marketing_eligibility',
@@ -223,7 +229,7 @@ export function campaignCriteriaSummary(campaign: CampaignSummary): string {
   const parts: string[] = [];
   const states = Array.isArray(criteria.states) ? criteria.states.map(String).filter(Boolean) : [];
   if (states.length > 0) parts.push(states.join(', '));
-  for (const key of ['lender_relationship', 'target_lender_ref', 'product', 'marketing_eligibility', 'consent_status', 'recency']) {
+  for (const key of ['lender_relationship', 'target_lender_ref', 'owner_link', 'purchase_intent', 'product', 'marketing_eligibility', 'consent_status', 'recency']) {
     const value = criteria[key];
     if (typeof value === 'string' && value && value !== 'All' && value !== 'Any') {
       parts.push(value);

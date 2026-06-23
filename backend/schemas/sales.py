@@ -9,7 +9,9 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from backend.schemas.common import (
+    contains_pii_marker,
     validate_internal_staff_email,
+    validate_public_audit_identifier_or_none,
     validate_public_borrower_id,
     validate_public_opaque_id,
 )
@@ -26,11 +28,27 @@ CallDispositionOutcome = Literal[
     "not_now",
     "dead",
 ]
+LeadOutcomeType = Literal[
+    "application_submitted",
+    "closed_funded",
+    "lost_to_competitor",
+    "withdrawn",
+    "not_qualified",
+]
+LeadOutcomeSourceSystem = Literal[
+    "salesforce",
+    "crm_cdp",
+    "los_pos",
+    "servicing",
+    "webhook",
+    "manual_import",
+]
 
 _NOTE_UNSAFE_TEXT_PATTERN = re.compile(
     r"\b[A-Z][a-z]{1,30}\s+(?:[A-Z]\s+)?[A-Z][a-z]{1,30}\b|"
     r"\[(?:first|last|full)[_\s-]?[Nn]ame\]|\{(?:first|last|full)[_\s-]?[Nn]ame\}",
 )
+_PUBLIC_COMPETITOR_LABEL_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 &.,:+-]{0,79}$")
 
 
 class SalesTeamMember(BaseModel):
@@ -194,6 +212,87 @@ class DispositionResponse(BaseModel):
     audit_event_id: str | None = None
 
 
+class LeadOutcomeRequest(BaseModel):
+    """PII-safe closed-loop outcome event from CRM/LOS/POS/servicing."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    outcome_type: LeadOutcomeType
+    source_system: LeadOutcomeSourceSystem
+    source_record_ref: str | None = Field(default=None, max_length=128)
+    assigned_to_email: str | None = None
+    campaign_id: str | None = None
+    loan_amount: int | None = Field(default=None, ge=0, le=100_000_000)
+    competitor_lender_label: str | None = Field(default=None, max_length=80)
+    occurred_at: datetime | None = None
+    request_id: str | None = None
+
+    @field_validator("source_record_ref")
+    @classmethod
+    def _source_record_ref(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        clean = value.strip()
+        if not clean:
+            return None
+        if contains_pii_marker(clean):
+            raise ValueError("source_record_ref must not contain PII")
+        return validate_public_audit_identifier_or_none(clean)
+
+    @field_validator("assigned_to_email")
+    @classmethod
+    def _assigned_to_email(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return validate_internal_staff_email(value)
+
+    @field_validator("campaign_id", "request_id")
+    @classmethod
+    def _opaque_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return validate_public_opaque_id(value)
+
+    @field_validator("competitor_lender_label")
+    @classmethod
+    def _competitor_lender_label(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        clean = re.sub(r"\s+", " ", value.strip())
+        if not clean:
+            return None
+        if contains_pii_marker(clean) or not _PUBLIC_COMPETITOR_LABEL_PATTERN.fullmatch(clean):
+            raise ValueError("competitor_lender_label must not contain borrower PII")
+        return clean
+
+    @model_validator(mode="after")
+    def _lost_requires_competitor(self) -> LeadOutcomeRequest:
+        if self.outcome_type == "lost_to_competitor" and not self.competitor_lender_label:
+            raise ValueError("competitor_lender_label is required for lost_to_competitor")
+        return self
+
+
+class LeadOutcome(BaseModel):
+    outcome_id: str
+    borrower_id: str
+    outcome_type: LeadOutcomeType
+    source_system: LeadOutcomeSourceSystem
+    source_record_ref: str | None = None
+    assigned_to_email: str | None = None
+    campaign_id: str | None = None
+    loan_amount: int | None = None
+    competitor_lender_label: str | None = None
+    occurred_at: datetime
+    request_id: str | None = None
+    audit_event_id: str | None = None
+    created_at: datetime | None = None
+
+
+class LeadOutcomeResponse(BaseModel):
+    outcome: LeadOutcome
+    audit_event_id: str | None = None
+
+
 class BorrowerLifecycleResponse(BaseModel):
     borrower_id: str
     approval_status: Literal["pending", "approved", "rejected", "hold"] = "pending"
@@ -233,3 +332,18 @@ class SalesConversionResponse(BaseModel):
     to_date: str
     group_by: Literal["lo", "cohort"]
     rows: list[dict[str, object]]
+
+
+class SalesOutcomeSummaryResponse(BaseModel):
+    from_date: str
+    to_date: str
+    total_outcomes: int
+    applications_submitted: int
+    closed_funded: int
+    lost_to_competitor: int
+    withdrawn: int
+    not_qualified: int
+    by_source_system: list[dict[str, object]]
+    source_statuses: list[dict[str, object]]
+    by_lo: list[dict[str, object]]
+    top_competitors: list[dict[str, object]]

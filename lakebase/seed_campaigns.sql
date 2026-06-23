@@ -62,10 +62,10 @@ VALUES
     ),
     (
         '33333333-3333-4333-8333-333333333333',
-        'Summit Mortgage HELOC — Permit-Triggered',
+        'Summit Mortgage HELOC — Equity/Propensity Intent',
         'skyler@entrada.ai',
         'active',
-        '{"segment": "heloc", "heloc_equity_min_pct": 35, "requires_permit": true, "marketing_eligibility": "Eligible only", "consent_status": "Opt-in", "recency": "Untouched 30d"}'::jsonb,
+        '{"segment": "heloc", "heloc_equity_min_pct": 35, "heloc_propensity_min": 700, "intent_signal": "cotality_heloc_propensity", "filed_permits": "pending_not_inferred", "marketing_eligibility": "Eligible only", "consent_status": "Opt-in", "recency": "Untouched 30d"}'::jsonb,
         '{"default": "eligible_only", "require_marketing_eligible": true, "frequency_cap_days": 30}'::jsonb,
         '[{"step": 1, "channel": "email"}, {"step": 2, "channel": "sms", "after_days": 3}]'::jsonb,
         '{"days": ["Tuesday", "Wednesday", "Thursday"], "timezone": "borrower_local", "start_local": "09:00", "end_local": "16:00"}'::jsonb,
@@ -73,6 +73,7 @@ VALUES
     )
 ON CONFLICT (campaign_id)
 DO UPDATE SET
+    name = EXCLUDED.name,
     criteria = EXCLUDED.criteria,
     suppression_policy = EXCLUDED.suppression_policy,
     channel_cascade = EXCLUDED.channel_cascade,

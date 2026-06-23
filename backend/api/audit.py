@@ -47,6 +47,7 @@ _ROUTER_OWNED_EVENT_TYPES: frozenset[str] = frozenset(
         "CALL_DISPOSITION",
         "LEAD_ASSIGN",
         "LEAD_DISTRIBUTE",
+        "LEAD_OUTCOME",
         "VIEW_BORROWER",
         "VIEW_LEADS",
     }
@@ -131,7 +132,8 @@ def audit_rollups(
     clauses = [
         "event_type IN ("
         "'APPROVE', 'OUTREACH_APPROVE', 'OUTREACH_REJECT', "
-        "'CALL_DISPOSITION', 'LEAD_ASSIGN', 'LEAD_DISTRIBUTE'"
+        "'CALL_DISPOSITION', 'LEAD_ASSIGN', 'LEAD_DISTRIBUTE', "
+        "'LEAD_OUTCOME'"
         ")"
     ]
     params: dict[str, object] = {"period": period}

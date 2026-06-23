@@ -369,6 +369,66 @@ CREATE INDEX IF NOT EXISTS idx_activation_outbox_borrower
 CREATE INDEX IF NOT EXISTS idx_activation_outbox_destination
     ON mip_app.activation_outbox (destination_key, status, created_at DESC);
 
+-- Closed-loop outcome ingestion --------------------------------------
+-- Customer LOS/POS/CRM/servicing systems can report what happened after a
+-- lead was approved, assigned, and activated. This is the governed
+-- scorekeeper table discussed in the Movement walkthrough: which leads
+-- submitted an application, closed/funded, withdrew, failed qualification, or
+-- were lost to a competitor. Keep it public-id only. Raw borrower names,
+-- contact fields, street addresses, account numbers, full external payloads,
+-- and raw CLIPs do not belong here.
+CREATE TABLE IF NOT EXISTS mip_app.lead_outcomes (
+    outcome_id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    borrower_id             TEXT NOT NULL,
+    outcome_type            TEXT NOT NULL CHECK (
+        outcome_type IN (
+            'application_submitted',
+            'closed_funded',
+            'lost_to_competitor',
+            'withdrawn',
+            'not_qualified'
+        )
+    ),
+    source_system           TEXT NOT NULL CHECK (
+        source_system IN (
+            'salesforce',
+            'crm_cdp',
+            'los_pos',
+            'servicing',
+            'webhook',
+            'manual_import'
+        )
+    ),
+    source_record_ref       TEXT,
+    assigned_to_email       TEXT REFERENCES mip_app.sales_team(email),
+    campaign_id             UUID REFERENCES mip_app.campaigns(campaign_id) ON DELETE SET NULL,
+    loan_amount             INTEGER CHECK (loan_amount IS NULL OR loan_amount BETWEEN 0 AND 100000000),
+    competitor_lender_label TEXT,
+    occurred_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+    request_id              TEXT,
+    payload_json            JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_by              TEXT NOT NULL,
+    created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+    audit_event_id          UUID
+);
+COMMENT ON TABLE mip_app.lead_outcomes IS
+    'PII-safe closed-loop lead outcomes imported from customer CRM/LOS/POS/servicing systems.';
+COMMENT ON COLUMN mip_app.lead_outcomes.payload_json IS
+    'Reviewed, non-PII context only. Raw borrower contact data and account numbers are forbidden.';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_lead_outcomes_request_id
+    ON mip_app.lead_outcomes (request_id)
+    WHERE request_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_lead_outcomes_source_record
+    ON mip_app.lead_outcomes (source_system, source_record_ref)
+    WHERE source_record_ref IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_lead_outcomes_borrower
+    ON mip_app.lead_outcomes (borrower_id, occurred_at DESC);
+CREATE INDEX IF NOT EXISTS idx_lead_outcomes_lo
+    ON mip_app.lead_outcomes (assigned_to_email, occurred_at DESC)
+    WHERE assigned_to_email IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_lead_outcomes_type
+    ON mip_app.lead_outcomes (outcome_type, occurred_at DESC);
+
 -- Action audit --------------------------------------------------------
 -- The append-only ledger governance §4 requires. `event_type` is the
 -- canonical verb: VIEW_BORROWER, VIEW_LEADS, APPROVE, DRAFT_OUTREACH,

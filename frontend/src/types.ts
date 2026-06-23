@@ -199,6 +199,38 @@ export interface SalesConversionResponse {
   }>;
 }
 
+export interface SalesOutcomeSummaryResponse {
+  from_date: string;
+  to_date: string;
+  total_outcomes: number;
+  applications_submitted: number;
+  closed_funded: number;
+  lost_to_competitor: number;
+  withdrawn: number;
+  not_qualified: number;
+  by_source_system: Array<{
+    source_system: string;
+    outcomes: Record<string, number>;
+    total: number;
+  }>;
+  source_statuses: Array<{
+    source_system: string;
+    display_name: string;
+    status: string;
+    configured: boolean;
+    outcome_count: number;
+  }>;
+  by_lo: Array<{
+    lo_email: string;
+    outcomes: Record<string, number>;
+    total: number;
+  }>;
+  top_competitors: Array<{
+    competitor_lender_label: string;
+    lost_to_competitor: number;
+  }>;
+}
+
 export interface SavedLead {
   borrower_id: string;
   city?: string | null;

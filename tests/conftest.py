@@ -141,6 +141,33 @@ class _FakeLakebaseClient:
         self.fetchalls: list[tuple[str, dict[str, Any], int]] = []
         self.assignments: list[dict[str, Any]] = []
         self.dispositions: list[dict[str, Any]] = []
+        self.outcomes: list[dict[str, Any]] = []
+        self.activation_destinations: list[dict[str, Any]] = [
+            {
+                "source_system": "salesforce",
+                "destination_type": "salesforce",
+                "display_name": "Salesforce CRM",
+                "status": "not_configured",
+            },
+            {
+                "source_system": "crm_cdp",
+                "destination_type": "crm_cdp",
+                "display_name": "Customer CRM / CDP",
+                "status": "not_configured",
+            },
+            {
+                "source_system": "los_pos",
+                "destination_type": "los_pos",
+                "display_name": "LOS / POS",
+                "status": "not_configured",
+            },
+            {
+                "source_system": "servicing",
+                "destination_type": "servicing",
+                "display_name": "Servicing platform",
+                "status": "not_configured",
+            },
+        ]
         self.approvals: list[dict[str, Any]] = []
         self.audit_events: list[dict[str, Any]] = []
 
@@ -212,6 +239,38 @@ class _FakeLakebaseClient:
             borrower_id = (params or {}).get("borrower_id")
             rows = [r for r in self.dispositions if r["borrower_id"] == borrower_id]
             return dict(rows[-1]) if rows else None
+        if "FROM mip_app.lead_outcomes" in sql and "WHERE request_id" in sql:
+            request_id = (params or {}).get("request_id")
+            for row in self.outcomes:
+                if row.get("request_id") == request_id:
+                    return dict(row)
+            return None
+        if "FROM mip_app.lead_outcomes" in sql and "WHERE source_system" in sql:
+            source_system = (params or {}).get("source_system")
+            source_record_ref = (params or {}).get("source_record_ref")
+            for row in self.outcomes:
+                if (
+                    row.get("source_system") == source_system
+                    and row.get("source_record_ref") == source_record_ref
+                ):
+                    return dict(row)
+            return None
+        if "FROM mip_app.activation_destinations" in sql and "WHERE destination_type" in sql:
+            source_system = (params or {}).get("source_system")
+            rows = [
+                row
+                for row in self.activation_destinations
+                if row.get("destination_type") == source_system
+            ]
+            rows.sort(
+                key=lambda row: {
+                    "connected": 1,
+                    "dry_run": 2,
+                    "not_configured": 3,
+                    "disabled": 4,
+                }.get(str(row.get("status")), 5)
+            )
+            return dict(rows[0]) if rows else None
         if "FROM mip_app.approvals" in sql and "request_id" in sql:
             return None
         if "FROM mip_app.tenant_disclosures" in sql:
@@ -346,6 +405,29 @@ class _FakeLakebaseClient:
                 {"group_key": lo_email, **counts}
                 for lo_email, counts in sorted(by_lo.items())
             ][:limit]
+        if "FROM mip_app.lead_outcomes" in sql and "GROUP BY outcome_type" in sql:
+            counts: dict[tuple[str, str, str | None, str], int] = {}
+            for row in self.outcomes:
+                key = (
+                    str(row["outcome_type"]),
+                    str(row["source_system"]),
+                    row.get("assigned_to_email"),
+                    str(row.get("competitor_lender_label") or ""),
+                )
+                counts[key] = counts.get(key, 0) + 1
+            return [
+                {
+                    "outcome_type": outcome_type,
+                    "source_system": source_system,
+                    "assigned_to_email": assigned_to_email,
+                    "competitor_lender_label": competitor_lender_label,
+                    "n": n,
+                }
+                for (outcome_type, source_system, assigned_to_email, competitor_lender_label), n
+                in sorted(counts.items())
+            ][:limit]
+        if "FROM mip_app.activation_destinations" in sql and "destination_type IN" in sql:
+            return [dict(row) for row in self.activation_destinations][:limit]
         if "WITH latest_approval" in sql and "age_days" in sql:
             older_than_days = int((params or {}).get("older_than_days") or 7)
             now = datetime.now(UTC)
@@ -494,6 +576,24 @@ class _FakeLakebaseClient:
                     }
                     client.dispositions.append(row)
                     self._last = row
+                elif "INSERT INTO mip_app.lead_outcomes" in sql:
+                    row = {
+                        "outcome_id": uuid4(),
+                        "borrower_id": params["borrower_id"],
+                        "outcome_type": params["outcome_type"],
+                        "source_system": params["source_system"],
+                        "source_record_ref": params.get("source_record_ref"),
+                        "assigned_to_email": params.get("assigned_to_email"),
+                        "campaign_id": params.get("campaign_id"),
+                        "loan_amount": params.get("loan_amount"),
+                        "competitor_lender_label": params.get("competitor_lender_label"),
+                        "occurred_at": params.get("occurred_at") or now,
+                        "request_id": params.get("request_id"),
+                        "audit_event_id": None,
+                        "created_at": now,
+                    }
+                    client.outcomes.append(row)
+                    self._last = row
                 elif "INSERT INTO mip_app.action_audit" in sql:
                     row = {
                         "audit_id": uuid4(),
@@ -505,6 +605,11 @@ class _FakeLakebaseClient:
                 elif "UPDATE mip_app.call_dispositions" in sql:
                     for row in client.dispositions:
                         if str(row["disposition_id"]) == str(params.get("disposition_id")):
+                            row["audit_event_id"] = params.get("audit_event_id")
+                    self._last = None
+                elif "UPDATE mip_app.lead_outcomes" in sql:
+                    for row in client.outcomes:
+                        if str(row["outcome_id"]) == str(params.get("outcome_id")):
                             row["audit_event_id"] = params.get("audit_event_id")
                     self._last = None
                 else:

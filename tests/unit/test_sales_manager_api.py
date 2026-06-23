@@ -163,6 +163,182 @@ def test_sales_standup_aging_and_conversion_surfaces() -> None:
     assert isinstance(aging.json(), list)
 
 
+def test_sales_closed_loop_outcomes_are_recorded_and_summarized(fake_lakebase_client) -> None:
+    borrower_id = mock_data.BORROWERS[2].borrower_id
+    request_id = str(uuid4())
+    fake_lakebase_client.activation_destinations[0]["status"] = "connected"
+    _approve_for_sales(borrower_id)
+    client.post(
+        f"/api/leads/{borrower_id}/assign",
+        json={"assigned_to_email": "lo01@summit.example", "strategy": "manual"},
+    )
+
+    recorded = client.post(
+        f"/api/leads/{borrower_id}/outcome",
+        json={
+            "outcome_type": "lost_to_competitor",
+            "source_system": "salesforce",
+            "source_record_ref": "sf_case_123",
+            "assigned_to_email": "lo01@summit.example",
+            "loan_amount": 425000,
+            "competitor_lender_label": "Rocket Mortgage",
+            "request_id": request_id,
+        },
+    )
+    assert recorded.status_code == 200
+    body = recorded.json()
+    assert body["outcome"]["borrower_id"] == borrower_id
+    assert body["outcome"]["outcome_type"] == "lost_to_competitor"
+    assert body["outcome"]["audit_event_id"]
+
+    replay = client.post(
+        f"/api/leads/{borrower_id}/outcome",
+        json={
+            "outcome_type": "lost_to_competitor",
+            "source_system": "salesforce",
+            "source_record_ref": "sf_case_123",
+            "assigned_to_email": "lo01@summit.example",
+            "loan_amount": 425000,
+            "competitor_lender_label": "Rocket Mortgage",
+            "request_id": request_id,
+        },
+    )
+    assert replay.status_code == 200
+    assert replay.json()["outcome"]["outcome_id"] == body["outcome"]["outcome_id"]
+
+    today = datetime.now(UTC).date().isoformat()
+    summary = client.get(f"/api/sales/outcomes/summary?from={today}&to={today}")
+    assert summary.status_code == 200
+    data = summary.json()
+    assert data["lost_to_competitor"] >= 1
+    assert data["top_competitors"][0]["competitor_lender_label"] == "Rocket Mortgage"
+    salesforce_status = next(
+        row for row in data["source_statuses"] if row["source_system"] == "salesforce"
+    )
+    assert salesforce_status["configured"] is True
+    assert salesforce_status["status"] == "connected"
+
+    unsafe = client.post(
+        f"/api/leads/{borrower_id}/outcome",
+        json={
+            "outcome_type": "lost_to_competitor",
+            "source_system": "salesforce",
+            "source_record_ref": "sf_case_999",
+            "competitor_lender_label": "555-123-4567",
+        },
+    )
+    assert unsafe.status_code == 422
+
+
+def test_sales_outcome_rejects_unconfigured_customer_sources(fake_lakebase_client) -> None:
+    borrower_id = mock_data.BORROWERS[2].borrower_id
+    _approve_for_sales(borrower_id)
+
+    blocked = client.post(
+        f"/api/leads/{borrower_id}/outcome",
+        json={
+            "outcome_type": "application_submitted",
+            "source_system": "salesforce",
+            "source_record_ref": "sf_case_pending",
+        },
+    )
+    assert blocked.status_code == 409
+    assert "not configured" in blocked.json()["detail"]
+
+    manual = client.post(
+        f"/api/leads/{borrower_id}/outcome",
+        json={
+            "outcome_type": "application_submitted",
+            "source_system": "manual_import",
+            "source_record_ref": "manual_upload_1",
+        },
+    )
+    assert manual.status_code == 200
+    assert manual.json()["outcome"]["source_system"] == "manual_import"
+
+    summary = client.get(
+        f"/api/sales/outcomes/summary?from={datetime.now(UTC).date().isoformat()}"
+        f"&to={datetime.now(UTC).date().isoformat()}"
+    )
+    statuses = summary.json()["source_statuses"]
+    assert next(row for row in statuses if row["source_system"] == "salesforce")["configured"] is False
+    assert next(row for row in statuses if row["source_system"] == "manual_import")["configured"] is True
+
+
+def test_sales_outcome_idempotency_replay_is_strict(fake_lakebase_client) -> None:
+    borrower_id = mock_data.BORROWERS[2].borrower_id
+    other_id = mock_data.BORROWERS[3].borrower_id
+    request_id = str(uuid4())
+    fake_lakebase_client.activation_destinations[2]["status"] = "connected"
+    _approve_for_sales(borrower_id)
+    _approve_for_sales(other_id)
+
+    first = client.post(
+        f"/api/leads/{borrower_id}/outcome",
+        json={
+            "outcome_type": "closed_funded",
+            "source_system": "los_pos",
+            "source_record_ref": "los_file_123",
+            "assigned_to_email": "lo01@summit.example",
+            "loan_amount": 525000,
+            "request_id": request_id,
+        },
+    )
+    assert first.status_code == 200
+
+    replay_by_request = client.post(
+        f"/api/leads/{borrower_id}/outcome",
+        json={
+            "outcome_type": "closed_funded",
+            "source_system": "los_pos",
+            "source_record_ref": "los_file_123",
+            "assigned_to_email": "lo01@summit.example",
+            "loan_amount": 525000,
+            "request_id": request_id,
+        },
+    )
+    assert replay_by_request.status_code == 200
+    assert replay_by_request.json()["outcome"]["outcome_id"] == first.json()["outcome"]["outcome_id"]
+
+    replay_by_source_record = client.post(
+        f"/api/leads/{borrower_id}/outcome",
+        json={
+            "outcome_type": "closed_funded",
+            "source_system": "los_pos",
+            "source_record_ref": "los_file_123",
+            "assigned_to_email": "lo01@summit.example",
+            "loan_amount": 525000,
+        },
+    )
+    assert replay_by_source_record.status_code == 200
+    assert replay_by_source_record.json()["outcome"]["outcome_id"] == first.json()["outcome"]["outcome_id"]
+
+    wrong_borrower = client.post(
+        f"/api/leads/{other_id}/outcome",
+        json={
+            "outcome_type": "closed_funded",
+            "source_system": "los_pos",
+            "source_record_ref": "los_file_123",
+            "assigned_to_email": "lo01@summit.example",
+            "loan_amount": 525000,
+            "request_id": request_id,
+        },
+    )
+    assert wrong_borrower.status_code == 409
+
+    wrong_payload = client.post(
+        f"/api/leads/{borrower_id}/outcome",
+        json={
+            "outcome_type": "application_submitted",
+            "source_system": "los_pos",
+            "source_record_ref": "los_file_123",
+            "assigned_to_email": "lo01@summit.example",
+            "loan_amount": 525000,
+        },
+    )
+    assert wrong_payload.status_code == 409
+
+
 def test_sales_distribute_requires_approved_borrowers() -> None:
     borrower_id = mock_data.BORROWERS[2].borrower_id
 
@@ -530,6 +706,41 @@ def test_sales_audit_metadata_is_strictly_validated() -> None:
                 "strategy": "round_robin",
             },
         )
+    with pytest.raises(AuditMetadataValueViolation):
+        store.write(
+            actor="skyler@entrada.ai",
+            action="lead.outcome",
+            entity_type="borrower",
+            entity_id=_borrower_id(),
+            event_type="LEAD_OUTCOME",
+            payload_json={
+                "borrower_id": _borrower_id(),
+                "lead_outcome_id": str(uuid4()),
+                "lead_outcome_type": "lost_to_competitor",
+                "source_system": "salesforce",
+                "competitor_lender_label": "555-123-4567",
+            },
+        )
+
+
+def test_lead_outcome_audit_event_is_server_owned() -> None:
+    response = client.post(
+        "/api/audit/event",
+        json={
+            "actor": "skyler@entrada.ai",
+            "action": "lead.outcome",
+            "entity_type": "borrower",
+            "entity_id": _borrower_id(),
+            "event_type": "LEAD_OUTCOME",
+            "payload_json": {
+                "borrower_id": _borrower_id(),
+                "lead_outcome_type": "closed_funded",
+                "source_system": "los_pos",
+            },
+        },
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "event type is owned by a governed server route"
 
 
 def test_audit_rollups_group_by_is_validated() -> None:

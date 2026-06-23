@@ -19,8 +19,11 @@ from backend.schemas.sales import (
     DistributeLeadsRequest,
     DistributeLeadsResponse,
     LeadAssignment,
+    LeadOutcomeRequest,
+    LeadOutcomeResponse,
     SalesAgingLead,
     SalesConversionResponse,
+    SalesOutcomeSummaryResponse,
     SalesStandupResponse,
     SalesTeamMember,
 )
@@ -122,6 +125,8 @@ def assign_lead(
         return AssignmentResponse(assignment=assignment, audit_event_id=audit_event_id)
     except KeyError as exc:
         raise HTTPException(status_code=422, detail="assigned_to_email is not an active loan officer") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except PermissionError as exc:
         raise _forbidden(exc) from exc
     except LakebaseError as exc:
@@ -245,6 +250,45 @@ def log_disposition(
         raise _lakebase_503(exc) from exc
 
 
+@router.post("/leads/{borrower_id}/outcome", response_model=LeadOutcomeResponse)
+def record_lead_outcome(
+    borrower_id: str,
+    payload: LeadOutcomeRequest,
+    request: Request,
+    repo: BorrowerRepoDep,
+    store: SalesStateDep,
+) -> LeadOutcomeResponse:
+    borrower_id = _borrower_id(borrower_id)
+    borrower = repo.get(borrower_id)
+    if borrower is None:
+        raise HTTPException(status_code=404, detail=f"Borrower {borrower_id} not found")
+    actor = resolve_actor(request)
+    try:
+        outcome, audit_event_id = store.record_outcome(
+            borrower_id=borrower_id,
+            actor=actor,
+            outcome_type=payload.outcome_type,
+            source_system=payload.source_system,
+            source_record_ref=payload.source_record_ref,
+            assigned_to_email=payload.assigned_to_email,
+            campaign_id=payload.campaign_id,
+            loan_amount=payload.loan_amount,
+            competitor_lender_label=payload.competitor_lender_label,
+            occurred_at=payload.occurred_at,
+            subject_clip=borrower.clip,
+            request_id=payload.request_id,
+        )
+        return LeadOutcomeResponse(outcome=outcome, audit_event_id=audit_event_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=422, detail="assigned_to_email is not an active loan officer") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise _forbidden(exc) from exc
+    except LakebaseError as exc:
+        raise _lakebase_503(exc) from exc
+
+
 @router.get("/borrowers/{borrower_id}/lifecycle", response_model=BorrowerLifecycleResponse)
 def borrower_lifecycle(
     borrower_id: str,
@@ -345,6 +389,30 @@ def sales_conversion(
             group_by=group_by,
             rows=rows,
         )
+    except (KeyError, PermissionError) as exc:
+        raise _forbidden(exc) from exc
+    except LakebaseError as exc:
+        raise _lakebase_503(exc) from exc
+
+
+@router.get("/sales/outcomes/summary", response_model=SalesOutcomeSummaryResponse)
+def sales_outcome_summary(
+    request: Request,
+    store: SalesStateDep,
+    from_date: Annotated[date, Query(alias="from")],
+    to_date: Annotated[date, Query(alias="to")],
+) -> SalesOutcomeSummaryResponse:
+    if to_date < from_date:
+        raise HTTPException(status_code=422, detail="to must be on or after from")
+    actor = resolve_actor(request)
+    try:
+        store.require_manager_actor(actor)
+        summary = store.outcome_summary(
+            from_date=from_date.isoformat(),
+            to_date=to_date.isoformat(),
+            visible_lo_emails=store.visible_lo_emails(actor=actor),
+        )
+        return SalesOutcomeSummaryResponse(**summary)
     except (KeyError, PermissionError) as exc:
         raise _forbidden(exc) from exc
     except LakebaseError as exc:

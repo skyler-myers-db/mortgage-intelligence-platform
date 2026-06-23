@@ -17,6 +17,9 @@ from backend.schemas.sales import (
     CallDisposition,
     CallDispositionOutcome,
     LeadAssignment,
+    LeadOutcome,
+    LeadOutcomeSourceSystem,
+    LeadOutcomeType,
     SalesTeamMember,
 )
 from backend.services.audit_lakebase_store import _build_insert_params
@@ -25,6 +28,53 @@ from backend.services.pii_redaction import scrub_free_text
 from backend.services.resilience import TTLCache
 
 _SALES_STATE_CACHE = TTLCache(max_entries=1024)
+
+_OUTCOME_SOURCE_SYSTEMS: tuple[str, ...] = (
+    "salesforce",
+    "crm_cdp",
+    "los_pos",
+    "servicing",
+    "webhook",
+    "manual_import",
+)
+_OUTCOME_SOURCE_LABELS: dict[str, str] = {
+    "salesforce": "Salesforce CRM",
+    "crm_cdp": "Customer CRM / CDP",
+    "los_pos": "LOS / POS",
+    "servicing": "Servicing platform",
+    "webhook": "Customer webhook",
+    "manual_import": "Manual import",
+}
+_CONFIGURED_OUTCOME_SOURCE_STATUSES: frozenset[str] = frozenset({"connected", "dry_run"})
+
+_OUTCOME_SOURCE_STATUS_BY_TYPE = """
+SELECT destination_type AS source_system, display_name, status
+FROM mip_app.activation_destinations
+WHERE destination_type = %(source_system)s
+ORDER BY
+  CASE status
+    WHEN 'connected' THEN 1
+    WHEN 'dry_run' THEN 2
+    WHEN 'not_configured' THEN 3
+    ELSE 4
+  END,
+  updated_at DESC
+LIMIT 1
+"""
+
+_OUTCOME_SOURCE_STATUS_LIST = """
+SELECT destination_type AS source_system, display_name, status
+FROM mip_app.activation_destinations
+WHERE destination_type IN ('salesforce','crm_cdp','los_pos','servicing','webhook')
+ORDER BY
+  CASE status
+    WHEN 'connected' THEN 1
+    WHEN 'dry_run' THEN 2
+    WHEN 'not_configured' THEN 3
+    ELSE 4
+  END,
+  display_name ASC
+"""
 
 _SALES_AUDIT_INSERT_SQL = """
 INSERT INTO mip_app.action_audit (
@@ -120,6 +170,26 @@ def _disposition_from_row(row: dict[str, Any] | None) -> CallDisposition | None:
         callback_at=row.get("callback_at"),
         notes=row.get("notes"),
         audit_event_id=str(row["audit_event_id"]) if row.get("audit_event_id") else None,
+    )
+
+
+def _outcome_from_row(row: dict[str, Any] | None) -> LeadOutcome | None:
+    if not row:
+        return None
+    return LeadOutcome(
+        outcome_id=str(row["outcome_id"]),
+        borrower_id=str(row["borrower_id"]),
+        outcome_type=row["outcome_type"],
+        source_system=row["source_system"],
+        source_record_ref=row.get("source_record_ref"),
+        assigned_to_email=row.get("assigned_to_email"),
+        campaign_id=str(row["campaign_id"]) if row.get("campaign_id") else None,
+        loan_amount=row.get("loan_amount"),
+        competitor_lender_label=row.get("competitor_lender_label"),
+        occurred_at=row["occurred_at"],
+        request_id=row.get("request_id"),
+        audit_event_id=str(row["audit_event_id"]) if row.get("audit_event_id") else None,
+        created_at=row.get("created_at"),
     )
 
 
@@ -380,6 +450,98 @@ class SalesStateStore:
             for assignment in (_assignment_from_row(row) for row in rows)
             if assignment is not None
         ]
+
+    def outcome_for_request(self, request_id: str | None) -> LeadOutcome | None:
+        if not request_id:
+            return None
+        return _outcome_from_row(
+            self._client.fetchone(
+                """
+                SELECT outcome_id, borrower_id, outcome_type, source_system,
+                       source_record_ref, assigned_to_email, campaign_id,
+                       loan_amount, competitor_lender_label, occurred_at,
+                       request_id, audit_event_id, created_at
+                FROM mip_app.lead_outcomes
+                WHERE request_id = %(request_id)s
+                LIMIT 1
+                """,
+                {"request_id": request_id},
+            )
+        )
+
+    def outcome_for_source_record(
+        self,
+        *,
+        source_system: LeadOutcomeSourceSystem,
+        source_record_ref: str | None,
+    ) -> LeadOutcome | None:
+        if not source_record_ref:
+            return None
+        return _outcome_from_row(
+            self._client.fetchone(
+                """
+                SELECT outcome_id, borrower_id, outcome_type, source_system,
+                       source_record_ref, assigned_to_email, campaign_id,
+                       loan_amount, competitor_lender_label, occurred_at,
+                       request_id, audit_event_id, created_at
+                FROM mip_app.lead_outcomes
+                WHERE source_system = %(source_system)s
+                  AND source_record_ref = %(source_record_ref)s
+                LIMIT 1
+                """,
+                {"source_system": source_system, "source_record_ref": source_record_ref},
+            )
+        )
+
+    def outcome_source_status(self, source_system: LeadOutcomeSourceSystem) -> dict[str, Any]:
+        if source_system == "manual_import":
+            return {
+                "source_system": source_system,
+                "display_name": _OUTCOME_SOURCE_LABELS[source_system],
+                "status": "available",
+                "configured": True,
+            }
+        row = self._client.fetchone(_OUTCOME_SOURCE_STATUS_BY_TYPE, {"source_system": source_system})
+        status = str(row.get("status") if row else "not_configured")
+        return {
+            "source_system": source_system,
+            "display_name": str(row.get("display_name") if row else _OUTCOME_SOURCE_LABELS.get(source_system, source_system)),
+            "status": status,
+            "configured": status in _CONFIGURED_OUTCOME_SOURCE_STATUSES,
+        }
+
+    def outcome_source_statuses(self) -> list[dict[str, Any]]:
+        rows = self._client.fetchall(_OUTCOME_SOURCE_STATUS_LIST, limit=25)
+        by_source = {str(row.get("source_system")): dict(row) for row in rows}
+        out: list[dict[str, Any]] = []
+        for source_system in _OUTCOME_SOURCE_SYSTEMS:
+            if source_system == "manual_import":
+                out.append(
+                    {
+                        "source_system": source_system,
+                        "display_name": _OUTCOME_SOURCE_LABELS[source_system],
+                        "status": "available",
+                        "configured": True,
+                    }
+                )
+                continue
+            row = by_source.get(source_system)
+            status = str(row.get("status") if row else "not_configured")
+            out.append(
+                {
+                    "source_system": source_system,
+                    "display_name": str(row.get("display_name") if row else _OUTCOME_SOURCE_LABELS.get(source_system, source_system)),
+                    "status": status,
+                    "configured": status in _CONFIGURED_OUTCOME_SOURCE_STATUSES,
+                }
+            )
+        return out
+
+    def _require_configured_outcome_source(self, source_system: LeadOutcomeSourceSystem) -> dict[str, Any]:
+        status = self.outcome_source_status(source_system)
+        if not status["configured"]:
+            raise ValueError(f"{status['display_name']} outcome feed is not configured")
+        return status
 
     def latest_dispositions_for(self, borrower_ids: list[str]) -> dict[str, CallDisposition]:
         if not borrower_ids:
@@ -694,6 +856,124 @@ class SalesStateStore:
         clear_sales_state_cache()
         return disposition.model_copy(update={"audit_event_id": audit_event_id}), audit_event_id
 
+    def record_outcome(
+        self,
+        *,
+        borrower_id: str,
+        actor: str,
+        outcome_type: LeadOutcomeType,
+        source_system: LeadOutcomeSourceSystem,
+        source_record_ref: str | None,
+        assigned_to_email: str | None,
+        campaign_id: str | None,
+        loan_amount: int | None,
+        competitor_lender_label: str | None,
+        occurred_at: datetime | None,
+        subject_clip: str | None = None,
+        request_id: str | None = None,
+    ) -> tuple[LeadOutcome, str]:
+        self.require_manager_actor(actor)
+        if assigned_to_email is not None:
+            self.require_visible_assignee(actor=actor, assigned_to_email=assigned_to_email)
+        self._require_configured_outcome_source(source_system)
+
+        def _matches_existing(existing: LeadOutcome) -> bool:
+            return (
+                existing.borrower_id == borrower_id
+                and existing.outcome_type == outcome_type
+                and existing.source_system == source_system
+                and existing.source_record_ref == source_record_ref
+                and existing.assigned_to_email == assigned_to_email
+                and existing.campaign_id == campaign_id
+                and existing.loan_amount == loan_amount
+                and existing.competitor_lender_label == competitor_lender_label
+            )
+
+        existing = self.outcome_for_request(request_id)
+        if existing is not None:
+            if not _matches_existing(existing):
+                raise ValueError("request_id already belongs to a different lead outcome")
+            return existing, existing.audit_event_id or ""
+        existing = self.outcome_for_source_record(
+            source_system=source_system,
+            source_record_ref=source_record_ref,
+        )
+        if existing is not None:
+            if not _matches_existing(existing):
+                raise ValueError("source_record_ref already belongs to a different lead outcome")
+            return existing, existing.audit_event_id or ""
+        with self._client.transaction() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO mip_app.lead_outcomes (
+                    borrower_id, outcome_type, source_system, source_record_ref,
+                    assigned_to_email, campaign_id, loan_amount,
+                    competitor_lender_label, occurred_at, request_id,
+                    created_by, payload_json
+                )
+                VALUES (
+                    %(borrower_id)s, %(outcome_type)s, %(source_system)s,
+                    %(source_record_ref)s, %(assigned_to_email)s,
+                    %(campaign_id)s::uuid, %(loan_amount)s,
+                    %(competitor_lender_label)s,
+                    COALESCE(%(occurred_at)s, now()), %(request_id)s,
+                    %(created_by)s, '{}'::jsonb
+                )
+                RETURNING outcome_id, borrower_id, outcome_type, source_system,
+                          source_record_ref, assigned_to_email, campaign_id,
+                          loan_amount, competitor_lender_label, occurred_at,
+                          request_id, audit_event_id, created_at
+                """,
+                {
+                    "borrower_id": borrower_id,
+                    "outcome_type": outcome_type,
+                    "source_system": source_system,
+                    "source_record_ref": source_record_ref,
+                    "assigned_to_email": assigned_to_email,
+                    "campaign_id": campaign_id,
+                    "loan_amount": loan_amount,
+                    "competitor_lender_label": competitor_lender_label,
+                    "occurred_at": occurred_at,
+                    "request_id": request_id,
+                    "created_by": actor.lower(),
+                },
+            )
+            outcome = _outcome_from_row(dict(cur.fetchone() or {}))
+            if outcome is None:
+                raise LakebaseError("lead outcome insert returned no row")
+            audit_event_id = self._insert_audit_event(
+                cur,
+                actor=actor,
+                action="lead.outcome",
+                entity_type="borrower",
+                entity_id=borrower_id,
+                payload_json={
+                    "borrower_id": borrower_id,
+                    "lead_outcome_id": outcome.outcome_id,
+                    "lead_outcome_type": outcome.outcome_type,
+                    "source_system": outcome.source_system,
+                    "source_record_ref": outcome.source_record_ref,
+                    "assigned_to_email": outcome.assigned_to_email,
+                    "campaign_id": outcome.campaign_id,
+                    "loan_amount": outcome.loan_amount,
+                    "competitor_lender_label": outcome.competitor_lender_label,
+                    "occurred_at": outcome.occurred_at.isoformat(),
+                },
+                event_type="LEAD_OUTCOME",
+                subject_clip=subject_clip,
+                request_id=request_id,
+            )
+            cur.execute(
+                """
+                UPDATE mip_app.lead_outcomes
+                SET audit_event_id = %(audit_event_id)s::uuid
+                WHERE outcome_id = %(outcome_id)s::uuid
+                """,
+                {"audit_event_id": audit_event_id, "outcome_id": outcome.outcome_id},
+            )
+        clear_sales_state_cache()
+        return outcome.model_copy(update={"audit_event_id": audit_event_id}), audit_event_id
+
     def lifecycle_for(self, borrower_id: str) -> dict[str, Any]:
         cache_key = f"sales_state:lifecycle:{borrower_id}"
         cached = _cache_get(cache_key)
@@ -869,6 +1149,76 @@ class SalesStateStore:
                 }
             )
         return out
+
+    def outcome_summary(
+        self,
+        *,
+        from_date: str,
+        to_date: str,
+        visible_lo_emails: set[str] | None = None,
+    ) -> dict[str, Any]:
+        lo_filter = "AND assigned_to_email = ANY(%(lo_emails)s)" if visible_lo_emails is not None else ""
+        rows = self._client.fetchall(
+            f"""
+            SELECT outcome_type, source_system, assigned_to_email,
+                   COALESCE(competitor_lender_label, '') AS competitor_lender_label,
+                   COUNT(*) AS n
+            FROM mip_app.lead_outcomes
+            WHERE occurred_at >= %(from_date)s::date
+              AND occurred_at < (%(to_date)s::date + interval '1 day')
+              {lo_filter}
+            GROUP BY outcome_type, source_system, assigned_to_email, competitor_lender_label
+            ORDER BY n DESC
+            LIMIT 1000
+            """,
+            {"from_date": from_date, "to_date": to_date, "lo_emails": sorted(visible_lo_emails or [])},
+            limit=1000,
+        )
+        totals: Counter[str] = Counter()
+        by_source: dict[str, Counter[str]] = {}
+        by_lo: dict[str, Counter[str]] = {}
+        competitors: Counter[str] = Counter()
+        for row in rows:
+            outcome_type = str(row.get("outcome_type") or "")
+            source_system = str(row.get("source_system") or "unknown")
+            lo_email = str(row.get("assigned_to_email") or "unassigned")
+            competitor = str(row.get("competitor_lender_label") or "")
+            n = int(row.get("n") or 0)
+            totals[outcome_type] += n
+            by_source.setdefault(source_system, Counter())[outcome_type] += n
+            by_lo.setdefault(lo_email, Counter())[outcome_type] += n
+            if outcome_type == "lost_to_competitor" and competitor:
+                competitors[competitor] += n
+        source_statuses = self.outcome_source_statuses()
+        return {
+            "from_date": from_date,
+            "to_date": to_date,
+            "total_outcomes": sum(totals.values()),
+            "applications_submitted": totals["application_submitted"],
+            "closed_funded": totals["closed_funded"],
+            "lost_to_competitor": totals["lost_to_competitor"],
+            "withdrawn": totals["withdrawn"],
+            "not_qualified": totals["not_qualified"],
+            "by_source_system": [
+                {"source_system": key, "outcomes": dict(counts), "total": sum(counts.values())}
+                for key, counts in sorted(by_source.items())
+            ],
+            "source_statuses": [
+                {
+                    **status,
+                    "outcome_count": sum(by_source.get(str(status["source_system"]), Counter()).values()),
+                }
+                for status in source_statuses
+            ],
+            "by_lo": [
+                {"lo_email": key, "outcomes": dict(counts), "total": sum(counts.values())}
+                for key, counts in sorted(by_lo.items())
+            ],
+            "top_competitors": [
+                {"competitor_lender_label": key, "lost_to_competitor": count}
+                for key, count in competitors.most_common(5)
+            ],
+        }
 
 
 def hydrate_leads_with_sales_state(

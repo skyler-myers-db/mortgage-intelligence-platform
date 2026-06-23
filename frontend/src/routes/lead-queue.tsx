@@ -4,7 +4,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { api, type LeadsPageResult } from '../lib/api';
 import { useConfigOptionsQuery } from '../lib/configOptionsQuery';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
-import type { PortfolioPreview, SalesAgingLead, SalesConversionResponse, SalesStandupResponse, SalesTeamMember, SegmentCode } from '../types';
+import type { PortfolioPreview, SalesAgingLead, SalesConversionResponse, SalesOutcomeSummaryResponse, SalesStandupResponse, SalesTeamMember, SegmentCode } from '../types';
 import { PageShell } from '../components/layout/PageShell';
 import { LeadTable } from '../components/mortgage/LeadTable';
 import { Chip } from '../components/Primitives';
@@ -157,6 +157,8 @@ export default function LeadQueue() {
     staleLeads: SalesAgingLead[];
     standup: SalesStandupResponse;
     conversion: SalesConversionResponse;
+    outcomes: SalesOutcomeSummaryResponse | null;
+    outcomesError: string | null;
   }>({
     queryKey: queryKeys.salesOps(),
     queryFn: async ({ signal }) => {
@@ -165,7 +167,19 @@ export default function LeadQueue() {
         api.salesStandup(yesterday, signal),
         api.salesConversion(weekStart, today, 'lo', signal),
       ]);
-      return { staleLeads: agingRows, standup: standupRows, conversion: conversionRows };
+      const outcomeResult = await api.salesOutcomeSummary(weekStart, today, signal)
+        .then((data) => ({ data, error: null as string | null }))
+        .catch((error: unknown) => ({
+          data: null,
+          error: error instanceof Error ? error.message : 'Outcome summary unavailable',
+        }));
+      return {
+        staleLeads: agingRows,
+        standup: standupRows,
+        conversion: conversionRows,
+        outcomes: outcomeResult.data,
+        outcomesError: outcomeResult.error,
+      };
     },
     staleTime: 30_000,
   });
@@ -173,6 +187,11 @@ export default function LeadQueue() {
   const staleLeads = salesOpsQuery.data?.staleLeads ?? [];
   const standup = salesOpsQuery.data?.standup ?? null;
   const conversion = salesOpsQuery.data?.conversion ?? null;
+  const outcomes = salesOpsQuery.data?.outcomes ?? null;
+  const outcomesError = salesOpsQuery.data?.outcomesError ?? null;
+  const configuredOutcomeSources = outcomes?.source_statuses
+    .filter((source) => source.source_system !== 'manual_import' && source.configured)
+    ?? [];
   const salesTeamError = salesTeamQuery.error instanceof Error ? salesTeamQuery.error.message : null;
   const salesOpsError = salesOpsQuery.error instanceof Error ? salesOpsQuery.error.message : null;
   const segmentFilter = segmentFilterDisplayValue(segment, segmentCodes, segmentMode);
@@ -569,7 +588,7 @@ export default function LeadQueue() {
           <div className="surface__hdr-main">
             <div className="h-4">Sales ops snapshot</div>
             <div className="muted fs-12">
-              Shift capacity, stale approvals, yesterday's activity, and week-to-date LO conversion.
+              Shift capacity, stale approvals, yesterday's activity, and imported customer-system outcomes.
             </div>
           </div>
           <div className="chip-row">
@@ -629,6 +648,39 @@ export default function LeadQueue() {
                   <div className="muted fs-12">No LO dispositions logged this week.</div>
                 )}
               </div>
+            </div>
+            <div className="sales-ops-card">
+              <div className="eyebrow">Closed-loop outcomes</div>
+              <div className="kpi__value">{outcomesError ? '--' : (outcomes?.closed_funded ?? 0).toLocaleString()}</div>
+              <div className="muted fs-12">
+                {outcomesError
+                  ? 'Customer-system outcome counts are unavailable.'
+                  : `${(outcomes?.applications_submitted ?? 0).toLocaleString()} submitted · ${(outcomes?.lost_to_competitor ?? 0).toLocaleString()} lost elsewhere this week.`}
+              </div>
+              <div className="muted fs-12 mt-1">
+                Imported, read-only outcome ledger; this card does not write back to customer systems.
+              </div>
+              {outcomesError ? (
+                <div className="muted fs-12 mt-2">
+                  Outcome summary unavailable: {outcomesError}
+                </div>
+              ) : null}
+              {!outcomesError && (outcomes?.total_outcomes ?? 0) > 0 ? (
+                <div className="sales-ops-list mt-2">
+                  {(outcomes?.top_competitors ?? []).slice(0, 2).map((row) => (
+                    <div key={row.competitor_lender_label} className="split-row">
+                      <span className="mono fs-12">{row.competitor_lender_label}</span>
+                      <span className="mono num">{row.lost_to_competitor}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : !outcomesError ? (
+                <div className="muted fs-12 mt-2">
+                  {configuredOutcomeSources.length > 0
+                    ? 'Connected outcome feeds are live; no funded or lost loans have been reported this week.'
+                    : 'Customer CRM/LOS/POS outcome feeds are not configured yet; manual imports remain available for governed backfill.'}
+                </div>
+              ) : null}
             </div>
           </div>
         </div>

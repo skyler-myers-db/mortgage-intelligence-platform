@@ -76,6 +76,8 @@ describe('portfolio builder URL helpers', () => {
         ...BASE_DEFAULT_FILTERS,
         target_lender_ref: 'Competitor A',
         product: 'Retention',
+        owner_link: 'Portfolio investor (5+)',
+        purchase_intent: 'HELOC intent',
       },
       ['IL'],
     );
@@ -84,6 +86,8 @@ describe('portfolio builder URL helpers', () => {
     expect(url).toContain('states=IL');
     expect(url).toContain('target_lender_ref=Competitor+A');
     expect(url).toContain('product=Retention');
+    expect(url).toContain('owner_link=Portfolio+investor+%285%2B%29');
+    expect(url).toContain('purchase_intent=HELOC+intent');
   });
 
   it('builds segment intelligence links from committed lender overlay filters', () => {
@@ -141,10 +145,26 @@ describe('portfolio campaign config', () => {
       criteria: {
         lender_relationship: 'Competitor customer',
         target_lender_ref: 'Competitor B',
+        owner_link: 'Multi-property (2-4)',
+        purchase_intent: 'Listed for sale',
         marketing_eligibility: 'Eligible only',
       },
       suppression_policy: { default: 'eligible_only' },
     } as never)).toContain('Competitor B');
+    expect(campaignCriteriaSummary({
+      criteria: {
+        owner_link: 'Multi-property (2-4)',
+        purchase_intent: 'Listed for sale',
+      },
+      suppression_policy: { default: 'eligible_only' },
+    } as never)).toContain('Multi-property (2-4)');
+    expect(campaignCriteriaSummary({
+      criteria: {
+        owner_link: 'Multi-property (2-4)',
+        purchase_intent: 'Listed for sale',
+      },
+      suppression_policy: { default: 'eligible_only' },
+    } as never)).toContain('Listed for sale');
   });
 });
 

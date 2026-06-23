@@ -223,7 +223,7 @@ export function DataOperationsPanel({ sources, sourcesLoading = false, sourcesEr
   };
 
   return (
-    <div className="surface mt-grid">
+    <div id="data-operations" className="surface mt-grid">
       <div className="surface__hdr surface__hdr--split">
         <div>
           <div className="h-4">Data operations</div>

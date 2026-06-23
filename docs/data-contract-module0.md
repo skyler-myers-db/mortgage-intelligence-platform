@@ -487,7 +487,7 @@ Columns = exact superset of what `LeadSummary` needs, plus `rank_overall` and `r
 
 ## 4. Segment Membership (SQL definitions)
 
-Segment codes match `Literal["itm", "listed", "permit", "investor", "equity", "retention"]` exactly. A borrower belongs to a segment if the predicate is TRUE — non-exclusive.
+Segment codes match `Literal["itm", "listed", "permit", "investor", "equity", "retention"]` exactly. A borrower belongs to a segment if the predicate is TRUE — non-exclusive. The legacy `permit` code is retained for API/backward-compatibility, but the borrower-facing label is **HELOC Intent**.
 
 | `segment_code` | Predicate (SQL, evaluated on `gold.borrower_360`) | Shippable now? |
 |---|---|---|
@@ -496,9 +496,9 @@ Segment codes match `Literal["itm", "listed", "permit", "investor", "equity", "r
 | `investor` | `related_property_count >= 2 OR is_corporate_owner OR is_absentee` | Yes |
 | `retention` | `is_current_customer = TRUE AND (rate_spread_bps >= retention_min_spread_applied OR is_competitor_lien OR listed_for_sale)` | Yes |
 | `listed` | `listed_for_sale = TRUE` from live `mip.silver.listing_activity` rows | Yes |
-| `permit` | `has_permit = TRUE` | **BLOCKED — needs true filed Building Permits** (§9) |
+| `permit` | `has_permit = TRUE OR has_heloc_propensity_trigger = TRUE` | **HELOC Intent** is live from Cotality HELOC propensity; true filed Building Permits remain pending and do not set `has_permit` (§9). |
 
-Under the current share, `listed` materializes from live MLS rows in `mip.silver.listing_activity`. The legacy `permit` segment code is now the UI-compatible **HELOC Intent** segment backed by Cotality HELOC propensity rows; true filed building-permit predicates remain false until a permit feed lands. `gold.segment_population` still emits canonical segment rows so unavailable data dependencies are disclosed instead of silently dropped.
+Under the current share, `listed` materializes from live MLS rows in `mip.silver.listing_activity`. The legacy `permit` segment code is now the UI-compatible **HELOC Intent** segment backed by Cotality HELOC propensity rows; true filed building-permit predicates remain false until a permit feed lands. `gold.segment_population` still emits canonical segment rows so live HELOC intent is visible while unavailable permit dependencies are disclosed instead of silently inferred.
 
 Current-customer and competitor-lien flags are CLIP-grain current-servicer signals resolved through `mip.ref.lender_dictionary`. `is_former_customer` is an owner-level historical tenant-lender relationship with no current tenant-serviced lien; it powers Portfolio Builder's "Former customer" filter and the relationship score, but the contracted `retention` segment remains current-customer retention until a lender-approved recapture segment is added.
 
@@ -690,7 +690,7 @@ This gives us the same contract stability as the input-space fixtures, with a "t
 
 | Column | Blocked by | Gold behavior until unblocked |
 |---|---|---|
-| `borrower_360.has_permit` | Cotality **Building Permits** product not yet licensed (P0 request per gap analysis §8). | Hardcoded `FALSE`. `permit` segment returns zero count. `intent_trigger.permit` term always 0. |
+| `borrower_360.has_permit` | Cotality **Building Permits** product not yet licensed (P0 request per gap analysis §8). | Hardcoded `FALSE`; no filed-permit evidence emits. The legacy `permit` segment code now represents borrower-facing HELOC Intent when `has_heloc_propensity_trigger=TRUE`; filed permits remain separate and pending. |
 | `evidence_events` rows of `signal_type='permit'` | Permits blocker. | Never emitted on the real-data path until the Cotality Permits share lands. |
 | Pre-foreclosure leading indicators (NOD/NTS) | Cotality **Pre-Foreclosure** product (P2 ask, not a walkthrough blocker). | Fall back to `property_master.foreclosure_stage_code` snapshot. Adequate per gap analysis §2 segment 7. |
 | 15-year offer lane (`fn_next_best_offer` refinement) | Public `MORTGAGE15US` ingestion not yet wired (optional per gap analysis §5). | Single 30-year market rate is good enough for Module 0. |

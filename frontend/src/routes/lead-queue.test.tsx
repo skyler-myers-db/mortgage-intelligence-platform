@@ -31,6 +31,7 @@ const apiMocks = vi.hoisted(() => ({
   salesAging: vi.fn(),
   salesStandup: vi.fn(),
   salesConversion: vi.fn(),
+  salesOutcomeSummary: vi.fn(),
   portfolioPreview: vi.fn(),
   adminRules: vi.fn(),
 }));
@@ -240,6 +241,33 @@ describe('LeadQueue filter state', () => {
       applications_started: 0,
     });
     apiMocks.salesConversion.mockResolvedValue({ rows: [] });
+    apiMocks.salesOutcomeSummary.mockResolvedValue({
+      total_outcomes: 0,
+      applications_submitted: 0,
+      closed_funded: 0,
+      lost_to_competitor: 0,
+      withdrawn: 0,
+      not_qualified: 0,
+      by_source_system: [],
+      source_statuses: [
+        {
+          source_system: 'salesforce',
+          display_name: 'Salesforce CRM',
+          status: 'not_configured',
+          configured: false,
+          outcome_count: 0,
+        },
+        {
+          source_system: 'manual_import',
+          display_name: 'Manual import',
+          status: 'available',
+          configured: true,
+          outcome_count: 0,
+        },
+      ],
+      by_lo: [],
+      top_competitors: [],
+    });
     apiMocks.portfolioPreview.mockResolvedValue({ data_refreshed_at: null });
     apiMocks.adminRules.mockResolvedValue({ offer_rules_version: null });
   });
@@ -276,6 +304,9 @@ describe('LeadQueue filter state', () => {
     expect(document.querySelector('button[aria-label="PRODUCT: HELOC"]')).toBeTruthy();
     expect(document.querySelector('button[aria-label="CONTACTABILITY: Eligible only"]')).toBeTruthy();
     expect(document.querySelector('button[aria-label="CONSENT: Any"]')).toBeTruthy();
+    expect(document.body.textContent).toContain('Closed-loop outcomes');
+    expect(document.body.textContent).toContain('Customer CRM/LOS/POS outcome feeds are not configured yet');
+    expect(document.body.textContent).toContain('Imported, read-only outcome ledger');
 
     const segmentButton = document.querySelector('button[aria-label="SEGMENT: 2 segments selected (any selected)"]') as HTMLButtonElement;
     await act(async () => {
@@ -284,5 +315,67 @@ describe('LeadQueue filter state', () => {
     const selected = [...document.querySelectorAll('[role="option"][aria-selected="true"]')]
       .map((node) => node.textContent ?? '');
     expect(selected.some((text) => text.includes('2 segments selected (any selected)'))).toBe(true);
+  });
+
+  it('shows connected outcome counts and top competitors', async () => {
+    apiMocks.salesOutcomeSummary.mockResolvedValueOnce({
+      total_outcomes: 4,
+      applications_submitted: 2,
+      closed_funded: 1,
+      lost_to_competitor: 1,
+      withdrawn: 0,
+      not_qualified: 0,
+      by_source_system: [],
+      source_statuses: [
+        {
+          source_system: 'los_pos',
+          display_name: 'LOS / POS',
+          status: 'connected',
+          configured: true,
+          outcome_count: 4,
+        },
+      ],
+      by_lo: [],
+      top_competitors: [
+        { competitor_lender_label: 'Rocket Mortgage', lost_to_competitor: 1 },
+      ],
+    });
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter initialEntries={['/lead-queue']}>
+            <LeadQueue />
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+    });
+    await settle();
+
+    expect(document.body.textContent).toContain('Closed-loop outcomes');
+    expect(document.body.textContent).toContain('2 submitted');
+    expect(document.body.textContent).toContain('1 lost elsewhere this week');
+    expect(document.body.textContent).toContain('Rocket Mortgage');
+  });
+
+  it('does not blank sales ops cards when the outcome summary is unavailable', async () => {
+    apiMocks.salesOutcomeSummary.mockRejectedValueOnce(new Error('Lakebase unavailable'));
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter initialEntries={['/lead-queue']}>
+            <LeadQueue />
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+    });
+    await settle();
+
+    expect(document.body.textContent).toContain('Sales ops snapshot');
+    expect(document.body.textContent).toContain('Stale approved');
+    expect(document.body.textContent).toContain('Customer-system outcome counts are unavailable.');
+    expect(document.body.textContent).toContain('Outcome summary unavailable: Lakebase unavailable');
+    expect(document.body.textContent).not.toContain('Customer CRM/LOS/POS outcome feeds are not configured yet');
   });
 });

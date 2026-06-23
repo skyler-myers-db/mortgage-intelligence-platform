@@ -26,6 +26,7 @@ import type {
   SalesTeamMember,
   SalesAgingLead,
   SalesConversionResponse,
+  SalesOutcomeSummaryResponse,
   SalesStandupResponse,
   SegmentAnalyticsResponse,
   StateRollupResponse,
@@ -148,8 +149,9 @@ export interface AuditEventRow {
 
 /**
  * Segment multi-select semantics forwarded to /api/leads and geo rollups.
- * `any` = OR, `all` = AND. Segment Intelligence uses `all` so each
- * additional selected card narrows the ranked borrowers and map.
+ * `any` = OR, `all` = AND. Segment Intelligence uses `any` so selected
+ * cards stack into one de-duplicated cohort; drilldowns that require
+ * intersection semantics can still pass `all` explicitly.
  */
 export type SegmentFilterMode = 'any' | 'all';
 export type LeadFunnelStage =
@@ -1158,6 +1160,17 @@ export const api = {
     params.set('to', toDate);
     params.set('groupBy', groupBy);
     return getJson<SalesConversionResponse>(`/api/sales/conversion?${params.toString()}`, signal);
+  },
+
+  salesOutcomeSummary: (
+    fromDate: string,
+    toDate: string,
+    signal?: AbortSignal,
+  ) => {
+    const params = new URLSearchParams();
+    params.set('from', fromDate);
+    params.set('to', toDate);
+    return getJson<SalesOutcomeSummaryResponse>(`/api/sales/outcomes/summary?${params.toString()}`, signal);
   },
 
   activationSummary: (signal?: AbortSignal) =>
