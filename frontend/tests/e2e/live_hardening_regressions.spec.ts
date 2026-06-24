@@ -10,6 +10,11 @@ const AUTH_HEADERS: Record<string, string> = BEARER ? { Authorization: `Bearer $
 
 test.use({ baseURL: APP_URL, extraHTTPHeaders: AUTH_HEADERS });
 
+async function gotoApp(page: Page, path: string): Promise<void> {
+  await page.goto(path, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+  await expect(page.locator('main')).toBeVisible({ timeout: 30_000 });
+}
+
 type StateRollup = {
   state: string;
   addressable?: number;
@@ -111,6 +116,11 @@ function countValue(row: StateRollup | CountyRollup): number {
   return Number(row.addressable_borrowers ?? row.marketable_borrowers ?? ('addressable' in row ? row.addressable : 0) ?? 0);
 }
 
+function urlIncludesApiPath(url: string, path: string): boolean {
+  const normalized = path.startsWith('/') ? path : `/${path}`;
+  return url.includes(normalized) || url.includes(normalized.replace('/api/', '/api/v1/'));
+}
+
 async function getJson<T>(request: APIRequestContext, path: string): Promise<T> {
   const resp = await request.get(`${API_URL}${path}`, { headers: AUTH_HEADERS });
   expect(resp.status(), `GET ${path}`).toBe(200);
@@ -128,6 +138,14 @@ async function askGenie(request: APIRequestContext, question: string): Promise<G
   expect(payload.source, `Genie should not block valid question: ${question}`).not.toMatch(/policy|refused|degraded|reconnecting/i);
   expect(payload.answer ?? '', `Genie returned an empty answer: ${question}`).not.toHaveLength(0);
   return payload;
+}
+
+async function leadTotal(request: APIRequestContext, query: string): Promise<number> {
+  const resp = await request.get(`${API_URL}/api/leads?limit=1&${query}`, { headers: AUTH_HEADERS });
+  expect(resp.status(), `GET /api/leads?${query}`).toBe(200);
+  const header = resp.headers()['x-total-matching'];
+  expect(header, `GET /api/leads?${query} should include x-total-matching`).toBeTruthy();
+  return Number(header);
 }
 
 async function executeOpenCohortAction(
@@ -180,23 +198,23 @@ async function expectClearFiltersState(page: Page, disabled: boolean): Promise<v
 }
 
 test('Clear filters is visible, disabled when clean, and clears active filters on core routes', async ({ page }) => {
-  await page.goto('/lead-queue');
+  await gotoApp(page, '/lead-queue');
   await expectClearFiltersState(page, true);
-  await page.goto('/lead-queue?states=IL&segment_codes=itm,equity&segment_mode=any');
+  await gotoApp(page, '/lead-queue?states=IL&segment_codes=itm,equity&segment_mode=any');
   await expectClearFiltersState(page, false);
   await page.getByRole('button', { name: /^Clear filters$/ }).first().click();
   await expect(page).toHaveURL(/\/lead-queue$/);
   await expectClearFiltersState(page, true);
 
-  await page.goto('/analytics');
+  await gotoApp(page, '/analytics');
   await expectClearFiltersState(page, true);
-  await page.goto('/analytics?states=IL&segment_codes=itm&signal_types=listing');
+  await gotoApp(page, '/analytics?states=IL&segment_codes=itm&signal_types=listing');
   await expectClearFiltersState(page, false);
   await page.getByRole('button', { name: /^Clear filters$/ }).first().click();
   await expect(page).toHaveURL(/\/analytics$/);
   await expectClearFiltersState(page, true);
 
-  await page.goto('/segment-intelligence');
+  await gotoApp(page, '/segment-intelligence');
   await expectClearFiltersState(page, true);
   await clickSegment(page, 'Prime Refi Candidates');
   await expectClearFiltersState(page, false);
@@ -206,21 +224,56 @@ test('Clear filters is visible, disabled when clean, and clears active filters o
 });
 
 test('Segment Intelligence stacks selected segments into an any-match cohort and replays controls', async ({ page }) => {
-  await page.goto('/segment-intelligence');
+  await gotoApp(page, '/segment-intelligence');
+  await expect(page.getByRole('button', { name: /Match any/i })).toHaveAttribute('aria-pressed', 'true');
   await clickSegment(page, 'Prime Refi Candidates');
   await clickSegment(page, 'Listed for Sale');
 
   await expect(page.getByText(/matches any selected segment/i)).toBeVisible({ timeout: 20_000 });
   await expect(page.getByText(/must match every selected segment/i)).toHaveCount(0);
 
+  const allModeResponse = page.waitForResponse((response) => {
+    if (response.status() !== 200 || !urlIncludesApiPath(response.url(), '/api/leads')) return false;
+    const parsed = new URL(response.url());
+    const codes = parsed.searchParams.get('segment_codes') ?? '';
+    return parsed.searchParams.get('segment_mode') === 'all' && codes.includes('itm') && codes.includes('listed');
+  });
+  const allModeStateRollupResponse = page.waitForResponse((response) => {
+    if (response.status() !== 200 || !urlIncludesApiPath(response.url(), '/api/geo/state-rollups')) return false;
+    const parsed = new URL(response.url());
+    const codes = parsed.searchParams.get('segment_codes') ?? '';
+    return parsed.searchParams.get('segment_mode') === 'all' && codes.includes('itm') && codes.includes('listed');
+  });
+  await page.getByRole('button', { name: /Match all/i }).click();
+  const [, stateRollupResponse] = await Promise.all([allModeResponse, allModeStateRollupResponse]);
+  const stateRollups = await stateRollupResponse.json();
+  expect(Array.isArray(stateRollups.rollups)).toBe(true);
+  await expect(page.getByRole('button', { name: /Match all/i })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByText(/must match every selected segment/i)).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText(/matches any selected segment/i)).toHaveCount(0);
+
   await page.getByRole('link', { name: /Deep-dive lead queue/i }).click();
   await expect(page).toHaveURL(/\/lead-queue\?/, { timeout: 20_000 });
 
   const url = new URL(page.url());
-  expect(url.searchParams.get('segment_mode')).toBe('any');
+  expect(url.searchParams.get('segment_mode')).toBe('all');
   expect(url.searchParams.get('segment_codes') ?? url.searchParams.get('segments')).toMatch(/itm/);
   expect(url.searchParams.get('segment_codes') ?? url.searchParams.get('segments')).toMatch(/listed/);
-  await expect(page.getByRole('button', { name: /SEGMENT:\s*2 segments selected/i })).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByRole('button', { name: /SEGMENT:\s*2 segments selected \(all selected\)/i })).toBeVisible({ timeout: 20_000 });
+});
+
+test('segment any/all API counts are de-duplicated and intersection-safe', async ({ request }) => {
+  const [itm, equity, anyMode, allMode] = await Promise.all([
+    leadTotal(request, 'segment=itm'),
+    leadTotal(request, 'segment=equity'),
+    leadTotal(request, 'segment_codes=itm,equity&segment_mode=any'),
+    leadTotal(request, 'segment_codes=itm,equity&segment_mode=all'),
+  ]);
+
+  expect(anyMode, 'OR count must equal A + B - overlap; summed duplicate memberships would fail this').toBe(itm + equity - allMode);
+  expect(anyMode, 'OR count should include at least the larger individual segment').toBeGreaterThanOrEqual(Math.max(itm, equity));
+  expect(allMode, 'AND count must be no larger than either individual segment').toBeLessThanOrEqual(Math.min(itm, equity));
+  expect(allMode, 'intersection count should be non-negative').toBeGreaterThanOrEqual(0);
 });
 
 test('county drilldown distinguishes loading counties from loaded positive and empty counties', async ({ page, request }) => {
@@ -251,7 +304,7 @@ test('county drilldown distinguishes loading counties from loaded positive and e
 
   expect(selected, 'expected a live county with borrowers for the selected segments').not.toBeNull();
 
-  await page.goto('/segment-intelligence');
+  await gotoApp(page, '/segment-intelligence');
   await clickSegment(page, 'Prime Refi Candidates');
   await clickSegment(page, 'Listed for Sale');
   await page.locator('path.map-region', { hasText: '' }).first().waitFor({ state: 'visible', timeout: 45_000 });
@@ -278,7 +331,7 @@ test('Genie answers valid recommended and free-form questions without policy-blo
     expect(answer.trusted_assets?.length ?? 0, `Genie answer should cite trusted assets: ${question}`).toBeGreaterThan(0);
   }
 
-  await page.goto('/ask-genie');
+  await gotoApp(page, '/ask-genie');
   await page.locator('textarea[aria-label="Ask Genie — question"]').fill(questions[0]);
   await page.getByRole('button', { name: /^Ask Genie$/i }).first().click();
   await expect(page.getByText(/Policy blocked|Genie reconnecting|Genie is warming up/i)).toHaveCount(0, { timeout: 60_000 });
@@ -319,7 +372,7 @@ test('Genie open-cohort action, Lead Queue URL, dropdowns, and rows agree', asyn
 
   const result = await executeOpenCohortAction(request, answer, action!);
 
-  await page.goto(result.route!);
+  await gotoApp(page, result.route!);
   await expect(page.getByText(/Genie cohort/i)).toBeVisible({ timeout: 30_000 });
   await expect(page.getByText(/Loading leads/i)).toBeHidden({ timeout: 60_000 });
 

@@ -149,9 +149,9 @@ export interface AuditEventRow {
 
 /**
  * Segment multi-select semantics forwarded to /api/leads and geo rollups.
- * `any` = OR, `all` = AND. Segment Intelligence uses `any` so selected
- * cards stack into one de-duplicated cohort; drilldowns that require
- * intersection semantics can still pass `all` explicitly.
+ * `any` = de-duplicated OR, `all` = AND intersection. Segment Intelligence
+ * exposes both modes; Genie cohorts and drilldowns pass the mode explicitly
+ * so the Lead Queue, map, and backend count the same cohort.
  */
 export type SegmentFilterMode = 'any' | 'all';
 export type LeadFunnelStage =

@@ -329,6 +329,34 @@ def test_leads_route_segment_mode_any_vs_all_changes_membership() -> None:
     captured_modes: list[str] = []
 
     class _SegmentModeRepo:
+        rows = [
+            _lead("B-ITM", segment_codes=["itm"]),
+            _lead("B-EQ", segment_codes=["equity"]),
+            _lead("B-BOTH", segment_codes=["itm", "equity"]),
+        ]
+
+        @classmethod
+        def _filter(
+            cls,
+            segment: str | None,
+            segment_codes: list[str] | None,
+            segment_mode: str,
+        ) -> list[LeadSummary]:
+            requested = set(segment_codes or ([segment] if segment else []))
+            if not requested:
+                return cls.rows
+            if segment_mode == "all":
+                return [
+                    row
+                    for row in cls.rows
+                    if requested.issubset(set(row.segment_codes))
+                ]
+            return [
+                row
+                for row in cls.rows
+                if bool(requested.intersection(set(row.segment_codes)))
+            ]
+
         def list(
             self,
             segment: str | None,
@@ -362,23 +390,39 @@ def test_leads_route_segment_mode_any_vs_all_changes_membership() -> None:
                 _kwargs,
             )
             captured_modes.append(segment_mode)
-            rows = [
-                _lead("B-ITM", segment_codes=["itm"]),
-                _lead("B-EQ", segment_codes=["equity"]),
-                _lead("B-BOTH", segment_codes=["itm", "equity"]),
-            ]
-            requested = set(segment_codes or [])
-            if segment_mode == "all":
-                return [
-                    row
-                    for row in rows
-                    if requested.issubset(set(row.segment_codes))
-                ]
-            return [
-                row
-                for row in rows
-                if bool(requested.intersection(set(row.segment_codes)))
-            ]
+            return self._filter(segment, segment_codes, segment_mode)
+
+        def count(
+            self,
+            segment: str | None,
+            portfolio_id: str | None,
+            state: str | None = None,
+            zip_code: str | None = None,
+            county_fips: str | None = None,
+            state_codes: list[str] | None = None,
+            zip_codes: list[str] | None = None,
+            borrower_ids: list[str] | None = None,
+            segment_codes: list[str] | None = None,
+            segment_mode: str = "any",
+            target_lender_ref: str | None = None,
+            cohort_id: str | None = None,
+            portfolio_criteria: object | None = None,
+            **_kwargs: object,
+        ) -> int:
+            _ = (
+                portfolio_id,
+                state,
+                zip_code,
+                county_fips,
+                state_codes,
+                zip_codes,
+                borrower_ids,
+                target_lender_ref,
+                cohort_id,
+                portfolio_criteria,
+                _kwargs,
+            )
+            return len(self._filter(segment, segment_codes, segment_mode))
 
     prior = app.dependency_overrides.get(get_lead_repository)
     app.dependency_overrides[get_lead_repository] = _SegmentModeRepo
@@ -391,6 +435,8 @@ def test_leads_route_segment_mode_any_vs_all_changes_membership() -> None:
         all_response = client.get(
             "/api/leads?segment_codes=itm,equity&segment_mode=all&limit=5000"
         )
+        itm_response = client.get("/api/leads?segment=itm&limit=5000")
+        equity_response = client.get("/api/leads?segment=equity&limit=5000")
     finally:
         if prior is None:
             app.dependency_overrides.pop(get_lead_repository, None)
@@ -399,9 +445,19 @@ def test_leads_route_segment_mode_any_vs_all_changes_membership() -> None:
 
     assert any_response.status_code == 200
     assert all_response.status_code == 200
-    assert captured_modes == ["any", "all"]
+    assert itm_response.status_code == 200
+    assert equity_response.status_code == 200
+    assert captured_modes == ["any", "all", "any", "any"]
     any_rows = any_response.json()
     all_rows = all_response.json()
+    any_total = int(any_response.headers["X-Total-Matching"])
+    all_total = int(all_response.headers["X-Total-Matching"])
+    itm_total = int(itm_response.headers["X-Total-Matching"])
+    equity_total = int(equity_response.headers["X-Total-Matching"])
+    assert (itm_total, equity_total, any_total, all_total) == (2, 2, 3, 1)
+    assert any_total == itm_total + equity_total - all_total
+    assert len(any_rows) == any_total
+    assert len(all_rows) == all_total
     assert len(any_rows) > len(all_rows)
     assert all(
         {"itm", "equity"}.issubset(set(row["segment_codes"]))

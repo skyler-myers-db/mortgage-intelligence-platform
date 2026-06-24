@@ -2512,6 +2512,53 @@ kbd {
   min-inline-size: 100%;
   max-inline-size: 100%;
 }
+.segment-mode-control {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  inline-size: 100%;
+  padding: var(--sp-3);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-md);
+  background: var(--bg-2);
+}
+.segment-mode-control .segmented {
+  display: flex;
+  background: var(--bg-1);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-md);
+  padding: var(--sp-1);
+  gap: var(--sp-1);
+}
+.segment-mode-control .segmented button {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  background: transparent;
+  border: 0;
+  color: var(--text-2);
+  cursor: pointer;
+  border-radius: var(--r-sm);
+  font-family: var(--font-sans);
+  font-size: var(--fs-12);
+  font-weight: 650;
+  padding: var(--sp-2) var(--sp-3);
+}
+.segment-mode-control .segmented button.is-active {
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+.segment-mode-control .segmented__meta {
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+  font-weight: 500;
+}
+.segment-mode-control .segmented button.is-active .segmented__meta {
+  color: currentColor;
+}
 /* Inline "Save build" naming form. Re-audit #3 P1 (2026-06-12): replaces
    window.prompt(), whose synchronous native dialog froze the renderer
    under automation and broke the enterprise-product posture. */

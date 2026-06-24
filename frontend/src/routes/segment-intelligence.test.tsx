@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { INITIAL_ACTIVE_SEGMENTS, lenderFiltersFromSearch } from './segment-intelligence';
+import {
+  INITIAL_ACTIVE_SEGMENTS,
+  formatSelectedSegmentLabel,
+  lenderFiltersFromSearch,
+  segmentModeFromSearch,
+} from './segment-intelligence';
 
 describe('segment intelligence lender overlay URL state', () => {
   it('starts without a selected segment so cards render standalone counts', () => {
@@ -42,5 +47,23 @@ describe('segment intelligence lender overlay URL state', () => {
       ownerLink: 'All',
       purchase: 'All',
     });
+  });
+
+  it('hydrates segment match mode from public URL state', () => {
+    expect(segmentModeFromSearch(new URLSearchParams('segment_mode=all'))).toBe('all');
+    expect(segmentModeFromSearch(new URLSearchParams('segment_mode=any'))).toBe('any');
+    expect(segmentModeFromSearch(new URLSearchParams('segment_mode=drop_table'))).toBe('any');
+  });
+
+  it('formats selected segment labels with mode-specific conjunctions', () => {
+    expect(formatSelectedSegmentLabel(['Prime Refi Candidates'], 'any')).toBe('Prime Refi Candidates');
+    expect(formatSelectedSegmentLabel(['Prime Refi Candidates', 'Listed for Sale'], 'any')).toBe(
+      'Prime Refi Candidates or Listed for Sale',
+    );
+    expect(formatSelectedSegmentLabel(['Prime Refi Candidates', 'Listed for Sale'], 'all')).toBe(
+      'Prime Refi Candidates and Listed for Sale',
+    );
+    expect(formatSelectedSegmentLabel(['A', 'B', 'C'], 'any')).toBe('A, B, or C');
+    expect(formatSelectedSegmentLabel(['A', 'B', 'C'], 'all')).toBe('A, B, and C');
   });
 });

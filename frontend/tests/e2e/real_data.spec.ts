@@ -56,6 +56,11 @@ const AUTH_HEADERS: Record<string, string> = BEARER
 
 test.use({ baseURL: APP_URL, extraHTTPHeaders: AUTH_HEADERS });
 
+async function gotoApp(page: Page, path: string): Promise<void> {
+  await page.goto(path, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+  await expect(page.locator('main')).toBeVisible({ timeout: 30_000 });
+}
+
 type LeadRow = {
   borrower_id: string;
   clip?: string;
@@ -489,7 +494,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     // Segment cards live on /segment-intelligence, not the home dashboard.
     // Home is a narrative/launchpad; segments (.seg-card__count BEM class)
     // are the Segment Intelligence route's primary surface.
-    await page.goto('/segment-intelligence');
+    await gotoApp(page, '/segment-intelligence');
     const counts = page.locator('.seg-card__count');
     await expect(counts.first()).toBeVisible({ timeout: 20_000 });
     const rendered = await counts.allTextContents();
@@ -501,7 +506,8 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
   });
 
   test('segment multi-select re-queries ranked list and map in any-mode', async ({ page }) => {
-    await page.goto('/segment-intelligence');
+    await gotoApp(page, '/segment-intelligence');
+    await expect(page.getByRole('button', { name: /Match any/i })).toHaveAttribute('aria-pressed', 'true');
 
     const rankedHeader = page
       .locator('.section-hdr', { hasText: 'Ranked borrowers · selected segment cohort' })
@@ -542,8 +548,48 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     await expect(rankedHeader).toContainText(/matches any selected segment/);
   });
 
+  test('segment match-all mode narrows to borrowers in every selected segment', async ({ page }) => {
+    await gotoApp(page, '/segment-intelligence');
+
+    const rankedHeader = page
+      .locator('.section-hdr', { hasText: 'Ranked borrowers · selected segment cohort' })
+      .locator('.h-2')
+      .first();
+    await expect(rankedHeader).toContainText(/ranked borrowers/, { timeout: 45_000 });
+
+    await clickSegmentCard(page, 'Prime Refi Candidates');
+    await clickSegmentCard(page, 'Home Equity Candidate');
+
+    const allModeLeads = page.waitForResponse((response) => {
+      if (response.status() !== 200 || !urlIncludesApiPath(response.url(), '/api/leads')) return false;
+      const parsed = new URL(response.url());
+      const codes = parsed.searchParams.get('segment_codes') ?? '';
+      return (
+        parsed.searchParams.get('segment_mode') === 'all' &&
+        codes.includes('itm') &&
+        codes.includes('equity')
+      );
+    });
+    await page.getByRole('button', { name: /Match all/i }).click();
+    await allModeLeads;
+
+    await expect(rankedHeader).toContainText(
+      /segment filter: Prime Refi Candidates and Home Equity Candidate/,
+      { timeout: 45_000 },
+    );
+    await expect(rankedHeader).toContainText(/must match every selected segment/);
+
+    await page.getByRole('link', { name: /Deep-dive lead queue/i }).click();
+    await expect(page).toHaveURL(/\/lead-queue\?/, { timeout: 20_000 });
+    const url = new URL(page.url());
+    expect(url.searchParams.get('segment_mode')).toBe('all');
+    expect(url.searchParams.get('segment_codes')).toContain('itm');
+    expect(url.searchParams.get('segment_codes')).toContain('equity');
+    await expect(page.getByRole('button', { name: /SEGMENT:\s*2 segments selected \(all selected\)/i })).toBeVisible({ timeout: 20_000 });
+  });
+
   test('segment map drill preserves segment filters through county ZIP and Lead Queue', async ({ page, request }) => {
-    await page.goto('/segment-intelligence');
+    await gotoApp(page, '/segment-intelligence');
 
     const selectedSegments = ['Prime Refi Candidates', 'Home Equity Candidate'];
     const target = await discoverMapDrillTarget(request, ['itm', 'equity']);
@@ -619,18 +665,13 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
   });
 
   test('segment secondary filters are forwarded to live geo rollups', async ({ page }) => {
-    await page.goto('/segment-intelligence');
+    await gotoApp(page, '/segment-intelligence');
 
-    const filteredGeoResponse = page.waitForResponse((response) => {
-      if (response.status() !== 200 || !urlIncludesApiPath(response.url(), '/api/geo/state-rollups')) return false;
-      const parsed = new URL(response.url());
-      return (
-        parsed.searchParams.get('occupancy') === 'Owner-occupied' &&
-        parsed.searchParams.get('lien_status') === 'Open 1st lien' &&
-        parsed.searchParams.get('owner_link') === 'Multi-property (2-4)' &&
-        parsed.searchParams.get('purchase_intent') === 'Listed for sale' &&
-        parsed.searchParams.get('min_equity_pct_label') === '≥ 25%'
-      );
+    const seenStateRollups = new Set<string>();
+    page.on('response', (response) => {
+      if (response.status() === 200 && urlIncludesApiPath(response.url(), '/api/geo/state-rollups')) {
+        seenStateRollups.add(response.url());
+      }
     });
 
     await chooseFilter(page, 'OCCUPANCY', 'Owner-occupied');
@@ -639,11 +680,26 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     await chooseFilter(page, 'PURCHASE INTENT', 'Listed for sale');
     await chooseFilter(page, 'CASH-OUT', 'Equity ≥ 25%');
 
-    await filteredGeoResponse;
+    await expect
+      .poll(
+        () =>
+          [...seenStateRollups].some((url) => {
+            const parsed = new URL(url);
+            return (
+              parsed.searchParams.get('occupancy') === 'Owner-occupied' &&
+              parsed.searchParams.get('lien_status') === 'Open 1st lien' &&
+              parsed.searchParams.get('owner_link') === 'Multi-property (2-4)' &&
+              parsed.searchParams.get('purchase_intent') === 'Listed for sale' &&
+              parsed.searchParams.get('min_equity_pct_label') === '≥ 25%'
+            );
+          }),
+        { timeout: 60_000 },
+      )
+      .toBe(true);
   });
 
   test('home map drills to ZIP layer and deep-links without overlay collisions', async ({ page, request }) => {
-    await page.goto('/');
+    await gotoApp(page, '/');
     const target = await discoverMapDrillTarget(request);
 
     const map = page.locator('.map-wrap').first();
@@ -695,7 +751,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     // Pick the first real borrower id; navigate directly to the dossier so we
     // don't depend on row-click target rewriting.
     const target = leads[0].borrower_id;
-    await page.goto(`/borrower-360/${target}`);
+    await gotoApp(page, `/borrower-360/${target}`);
 
     // Evidence drawer lives as `.drawer` per the prototype BEM. The evidence
     // list renders rows with a `.trig` / trigger-timeline class; we accept
@@ -707,7 +763,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
   });
 
   test('genie FAB returns a non-empty answer and source chip opens lineage', async ({ page }) => {
-    await page.goto('/');
+    await gotoApp(page, '/');
 
     await openGeniePanel(page);
     const panel = page.getByRole('dialog', { name: 'Genie chat' });
@@ -743,7 +799,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
   });
 
   test('brand favicon and Genie dock chrome do not regress', async ({ page, request }) => {
-    await page.goto('/');
+    await gotoApp(page, '/');
 
     const iconHref = await page
       .locator('link[rel~="icon"][type="image/png"]')
@@ -791,7 +847,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     }
     const beforeIds = new Set(before.map((e) => e.event_id).filter(Boolean));
 
-    await page.goto(`/offer-orchestrator/${target}`);
+    await gotoApp(page, `/offer-orchestrator/${target}`);
     // The ApprovalBanner primary button — same selector as module0.spec.ts.
     await page
       .getByRole('button', { name: /^Approve$|approve outreach/i })
@@ -862,7 +918,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
       }, { apiUrl: API_URL });
 
     try {
-      await page.goto('/');
+      await gotoApp(page, '/');
       await flip('on');
       await page.reload({ waitUntil: 'domcontentloaded' });
       await expect
@@ -924,7 +980,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
   //     warm and fast (p95 ~1300 ms for /api/leads).
 
   test('portfolio-builder: filters + CTA + KPIs come from /api/portfolio/preview', async ({ page }) => {
-    await page.goto('/portfolio-builder');
+    await gotoApp(page, '/portfolio-builder');
 
     // Unique-to-route: the lender-conversation filter set renders with the
     // prototype BEM, including Owner Link and purchase-intent overlays.
@@ -950,7 +1006,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     await expect(page.locator('#data-operations')).toBeVisible({ timeout: 10_000 });
     await expect(page.getByLabel('Data freshness snapshot')).toBeVisible({ timeout: 30_000 });
     await expect(page.getByText('Latest refresh')).toBeVisible();
-    await page.goto('/portfolio-builder');
+    await gotoApp(page, '/portfolio-builder');
 
     // Primary CTA per prototype (design_files/Module 0 Prototype.html line
     // 1780): the "Run build" button in the filter row. Not a forward-nav;
@@ -995,7 +1051,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     await expect(page.getByText(/equity = ≥ 15%/i)).toBeVisible();
     await expect(page.locator('table.tbl')).toBeVisible({ timeout: 45_000 });
 
-    await page.goto('/portfolio-builder?owner_link=Portfolio+investor+%285%2B%29&purchase_intent=HELOC+intent');
+    await gotoApp(page, '/portfolio-builder?owner_link=Portfolio+investor+%285%2B%29&purchase_intent=HELOC+intent');
     const segmentResponse = page.waitForResponse((response) => {
       if (response.status() !== 200 || !urlIncludesApiPath(response.url(), '/api/segments')) return false;
       const parsed = new URL(response.url());
@@ -1056,7 +1112,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
       )
       .toBeGreaterThanOrEqual(Number(before.applications_submitted ?? 0) + 1);
 
-    await page.goto('/lead-queue');
+    await gotoApp(page, '/lead-queue');
     await expect(page.getByText('Closed-loop outcomes')).toBeVisible({ timeout: 45_000 });
     await expect(page.getByText(/Imported, read-only outcome ledger/i)).toBeVisible();
     await expect(page.getByText(/does not write back to customer systems/i)).toBeVisible();
@@ -1065,7 +1121,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
   test('analytics: multi-select filters drive API queries and URL state', async ({ page }) => {
     test.setTimeout(90_000);
 
-    await page.goto('/analytics');
+    await gotoApp(page, '/analytics');
     await expect(page.getByRole('heading', { name: 'Analytics', exact: true })).toBeVisible({ timeout: 30_000 });
 
     const stateButton = page.getByRole('button', { name: /^State:/i });
@@ -1138,7 +1194,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
   });
 
   test('lead-queue: rows render, row expand opens inline dossier preview', async ({ page }) => {
-    await page.goto('/lead-queue');
+    await gotoApp(page, '/lead-queue');
 
     // Unique-to-route: the table has the prototype BEM `table.tbl`.
     const table = page.locator('table.tbl');
@@ -1169,7 +1225,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     );
     expect(target, 'need a lead carrying both AVM/equity and lien evidence').toBeTruthy();
 
-    await page.goto('/lead-queue');
+    await gotoApp(page, '/lead-queue');
     const table = page.locator('table.tbl');
     await expect(table).toBeVisible({ timeout: 30_000 });
 
@@ -1206,7 +1262,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     const beforeIds = new Set(before.map((e) => e.event_id).filter(Boolean));
 
     const target = await fetchActionablePendingLead(request);
-    await page.goto(`/lead-queue?approval_status=pending&borrower_ids=${encodeURIComponent(target.borrower_id)}`);
+    await gotoApp(page, `/lead-queue?approval_status=pending&borrower_ids=${encodeURIComponent(target.borrower_id)}`);
     const approveButton = page.getByTestId(`lead-approve-${target.borrower_id}`);
     await expect(approveButton).toBeVisible({ timeout: 45_000 });
     const testId = await approveButton.getAttribute('data-testid');
@@ -1247,7 +1303,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     ]);
     const target = borrower.borrower_id;
 
-    await page.goto(`/borrower-360/${target}`);
+    await gotoApp(page, `/borrower-360/${target}`);
 
     // Unique-to-route: the refi economics surface with ITM/rate-spread chips.
     await expect(page.getByText(/Refi economics check/i)).toBeVisible({ timeout: 30_000 });
@@ -1283,7 +1339,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     expect(leads.length).toBeGreaterThan(0);
     const target = leads[0].borrower_id;
 
-    await page.goto(`/offer-orchestrator/${target}`);
+    await gotoApp(page, `/offer-orchestrator/${target}`);
 
     // Unique-to-route: the "Draft outreach · review only, never auto-sent"
     // heading on the right surface. Copy is a verbatim prototype string
@@ -1329,7 +1385,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
   test('ask-genie: standalone page (not the FAB) renders + primary CTA works', async ({ page }) => {
     test.setTimeout(120_000);
 
-    await page.goto('/ask-genie');
+    await gotoApp(page, '/ask-genie');
 
     // Unique-to-route: the "Trusted assets" surface listing UC metric
     // views. Only the standalone /ask-genie page has this; the floating
@@ -1368,7 +1424,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
   test('ask-genie: listed days-on-market prompt returns trusted app proof', async ({ page }) => {
     test.setTimeout(120_000);
 
-    await page.goto('/ask-genie');
+    await gotoApp(page, '/ask-genie');
 
     await page
       .locator('textarea[aria-label="Ask Genie — question"]')
@@ -1403,7 +1459,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
       await new Promise((resolve) => setTimeout(resolve, 1500));
       await route.continue();
     });
-    await page.goto('/ask-genie');
+    await gotoApp(page, '/ask-genie');
 
     await page
       .locator('textarea[aria-label="Ask Genie — question"]')
@@ -1418,7 +1474,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
   test('ask-genie: dynamic chart, proof drawer, and governed action confirmation', async ({ page }) => {
     test.setTimeout(90_000);
 
-    await page.goto('/ask-genie');
+    await gotoApp(page, '/ask-genie');
 
     await page
       .locator('textarea[aria-label="Ask Genie — question"]')
@@ -1470,7 +1526,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
   test('ask-genie: open cohort action carries ZIP answer filters into Lead Queue', async ({ page }) => {
     test.setTimeout(120_000);
 
-    await page.goto('/ask-genie');
+    await gotoApp(page, '/ask-genie');
 
     await page
       .locator('textarea[aria-label="Ask Genie — question"]')
@@ -1507,7 +1563,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
   });
 
   test('admin-config: presentation controls flip theme + density', async ({ page }) => {
-    await page.goto('/admin-config');
+    await gotoApp(page, '/admin-config');
 
     // Unique-to-route: the source-readiness and per-user appearance surfaces.
     await expect(page.getByText('Data source readiness', { exact: true })).toBeVisible({ timeout: 5_000 });

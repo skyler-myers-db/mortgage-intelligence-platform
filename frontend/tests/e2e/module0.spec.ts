@@ -123,7 +123,7 @@ test.describe('Module 0 — golden path', () => {
     await expect(rankedHeader).toContainText(/segment filter: Listed for Sale/);
 
     await page.getByText('Home Equity Candidate', { exact: true }).click();
-    await expect(rankedHeader).toContainText(/segment filter: Listed for Sale \+ Home Equity Candidate/);
+    await expect(rankedHeader).toContainText(/segment filter: Listed for Sale or Home Equity Candidate/);
     await expect(rankedHeader).toContainText(/matches any selected segment/);
     await expect
       .poll(() =>
@@ -142,6 +142,20 @@ test.describe('Module 0 — golden path', () => {
             url.includes('/api/geo/state-rollups') &&
             url.includes('segment_codes=') &&
             url.includes('segment_mode=any'),
+        ),
+      )
+      .toBe(true);
+
+    await page.getByRole('button', { name: /Match all/ }).click();
+    await expect(rankedHeader).toContainText(/segment filter: Listed for Sale and Home Equity Candidate/);
+    await expect(rankedHeader).toContainText(/must match every selected segment/);
+    await expect
+      .poll(() =>
+        segmentRequests.some(
+          (url) =>
+            url.includes('/api/leads') &&
+            url.includes('segment_codes=') &&
+            url.includes('segment_mode=all'),
         ),
       )
       .toBe(true);

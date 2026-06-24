@@ -26,6 +26,11 @@ class CanonicalEquityThresholdScope:
 
 
 @dataclass(frozen=True)
+class CanonicalNegativeEquityScope:
+    asks_share: bool
+
+
+@dataclass(frozen=True)
 class CanonicalListedCountScope:
     state_name: str | None = None
     state_code: str | None = None
@@ -130,11 +135,24 @@ SELECT CAST(COUNT_IF(equity_pct > :min_equity_pct) AS BIGINT)
 FROM {_BORROWER_360}
 """.strip()
 
+_CANONICAL_NEGATIVE_EQUITY_COUNT_SQL = f"""
+SELECT CAST(COUNT_IF(ltv > 100) AS BIGINT) AS underwater_borrowers
+     , CAST(COUNT(*) AS BIGINT) AS total_borrowers
+     , CAST(ROUND(
+         100.0 * COUNT_IF(ltv > 100) / NULLIF(COUNT(*), 0)
+       , 2) AS DOUBLE) AS borrower_share_pct
+     , CAST(ROUND(PERCENTILE_APPROX(CASE WHEN ltv > 100 THEN ltv END, 0.5), 1)
+         AS DOUBLE) AS median_underwater_ltv_pct
+     , CAST(COUNT_IF(ltv > 500) AS BIGINT) AS high_ltv_tail_borrowers
+     , MAX(refreshed_at) AS refreshed_at
+FROM {_BORROWER_360}
+""".strip()
+
 _CANONICAL_HOME_EQUITY_DISTRIBUTION_SQL = f"""
 WITH banded AS (
   SELECT CASE
            WHEN equity_pct IS NULL THEN 'Unknown'
-           WHEN equity_pct < 0 THEN '< 0%'
+           WHEN ltv > 100 THEN 'Underwater (LTV > 100)'
            WHEN equity_pct < 15 THEN '0-14%'
            WHEN equity_pct < 35 THEN '15-34%'
            WHEN equity_pct < 50 THEN '35-49%'
@@ -143,7 +161,7 @@ WITH banded AS (
          END AS equity_band
        , CASE
            WHEN equity_pct IS NULL THEN 99
-           WHEN equity_pct < 0 THEN 0
+           WHEN ltv > 100 THEN 0
            WHEN equity_pct < 15 THEN 1
            WHEN equity_pct < 35 THEN 2
            WHEN equity_pct < 50 THEN 3
@@ -1381,6 +1399,9 @@ def _normalized_question(question: str) -> str:
         "borowers": "borrowers",
         "borrowr": "borrower",
         "borrowrs": "borrowers",
+        " equty": " equity",
+        " equiy": " equity",
+        " equit ": " equity ",
         " in teh money": " in the money",
         " rn ": " right now ",
         "avg": "average",
@@ -1565,7 +1586,31 @@ def _canonical_equity_threshold_scope(question: str) -> CanonicalEquityThreshold
     return CanonicalEquityThresholdScope(
         threshold_pct=threshold,
         strict_greater=strict_greater,
-        asks_share=_has_equity_share_result_intent(q),
+        asks_share=_has_equity_share_result_intent(q) and not _has_count_intent(q),
+    )
+
+
+def _canonical_negative_equity_scope(question: str) -> CanonicalNegativeEquityScope | None:
+    q = _normalized_question(question)
+    if _has_unsupported_geo_scope(question, q):
+        return None
+    negative_terms = (
+        "negative equity",
+        "underwater",
+        "equity below 0",
+        "equity below zero",
+        "below zero equity",
+        "less than 0% equity",
+        "less than 0 percent equity",
+        "under 0% equity",
+        "under 0 percent equity",
+    )
+    if not any(term in q for term in negative_terms):
+        return None
+    if not (_has_count_intent(q) or _has_share_intent(q) or "borrower" in q):
+        return None
+    return CanonicalNegativeEquityScope(
+        asks_share=_has_equity_share_result_intent(q) and not _has_count_intent(q),
     )
 
 

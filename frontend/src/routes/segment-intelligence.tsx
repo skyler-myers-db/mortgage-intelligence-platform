@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { api, type LeadsPageResult } from '../lib/api';
+import { api, type LeadsPageResult, type SegmentFilterMode } from '../lib/api';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
 import type { LeadSummary, SegmentCode, SegmentSummary } from '../types';
 import { PageShell } from '../components/layout/PageShell';
@@ -59,6 +59,22 @@ const PURCHASE_OPTIONS = ['All', 'Listed for sale', 'HELOC intent', 'Both'] as c
 const CONTACTABILITY_OPTIONS = ['Eligible only', 'Any', 'Suppressed only'] as const;
 const CONSENT_OPTIONS = ['Any', 'Opt-in', 'Opt-out', 'Unknown'] as const;
 const RECENCY_OPTIONS = ['Any', 'Untouched 30d', 'Untouched 60d', 'Untouched 90d'] as const;
+const SEGMENT_MODE_OPTIONS: Array<{
+  mode: SegmentFilterMode;
+  label: string;
+  description: string;
+}> = [
+  {
+    mode: 'any',
+    label: 'Match any',
+    description: 'OR',
+  },
+  {
+    mode: 'all',
+    label: 'Match all',
+    description: 'AND',
+  },
+];
 
 interface ChipFilters {
   location: string;
@@ -89,6 +105,20 @@ const INITIAL_FILTERS: ChipFilters = {
 };
 
 export const INITIAL_ACTIVE_SEGMENTS: SegmentCode[] = [];
+
+export function segmentModeFromSearch(searchParams: URLSearchParams): SegmentFilterMode {
+  return searchParams.get('segment_mode') === 'all' ? 'all' : 'any';
+}
+
+export function formatSelectedSegmentLabel(
+  labels: string[],
+  segmentMode: SegmentFilterMode,
+): string {
+  if (labels.length <= 1) return labels.join('');
+  const conjunction = segmentMode === 'all' ? 'and' : 'or';
+  if (labels.length === 2) return `${labels[0]} ${conjunction} ${labels[1]}`;
+  return `${labels.slice(0, -1).join(', ')}, ${conjunction} ${labels[labels.length - 1]}`;
+}
 
 export function lenderFiltersFromSearch(
   searchParams: URLSearchParams,
@@ -152,6 +182,7 @@ export default function SegmentIntelligence() {
     [footprint.ready, footprint.states, footprint.usingFallback],
   );
   const [activeSegs, setActiveSegs] = useState<SegmentCode[]>(INITIAL_ACTIVE_SEGMENTS);
+  const [segmentMode, setSegmentMode] = useState<SegmentFilterMode>(() => segmentModeFromSearch(searchParams));
   const [chipFilters, setChipFilters] = useState<ChipFilters>(() => ({
     ...INITIAL_FILTERS,
     ...lenderFiltersFromSearch(searchParams, targetLenderOptions),
@@ -276,17 +307,15 @@ export default function SegmentIntelligence() {
     (signal) =>
       api.leadsPage(undefined, signal, serverGeo, {
         segmentCodes: activeSegs.length > 0 ? activeSegs : undefined,
-        // Multi-select uses OR semantics so selected segment cards stack into
-        // one de-duplicated ranked cohort. Borrowers with either selected
-        // signal belong in the combined work queue.
-        segmentMode: 'any',
+        segmentMode,
         portfolioCriteria: secondaryPortfolioCriteria,
       }),
-    [activeSegsKey, secondaryPortfolioCriteria, serverGeo.state, serverGeo.county, serverGeo.zip],
+    [activeSegsKey, segmentMode, secondaryPortfolioCriteria, serverGeo.state, serverGeo.county, serverGeo.zip],
     {
       queryKey: queryKeys.leads([
         'segment-intelligence',
         activeSegsKey,
+        segmentMode,
         JSON.stringify(secondaryPortfolioCriteria),
         serverGeo.state ?? '',
         serverGeo.county ?? '',
@@ -302,10 +331,9 @@ export default function SegmentIntelligence() {
   const selectedSegmentLabel = useMemo(
     () => {
       const labels = activeSegs.map((code) => segmentLabelByCode.get(code) ?? code);
-      if (labels.length <= 2) return labels.join(' or ');
-      return `${labels.slice(0, -1).join(', ')}, or ${labels[labels.length - 1]}`;
+      return formatSelectedSegmentLabel(labels, segmentMode);
     },
-    [activeSegs, segmentLabelByCode],
+    [activeSegs, segmentLabelByCode, segmentMode],
   );
   const leadsRefreshing = leadsData === null && !leadsWarming && !leadsError;
   const leads = useMemo(() => leadsData?.leads ?? [], [leadsData]);
@@ -379,6 +407,7 @@ export default function SegmentIntelligence() {
 
   const filtersDirty =
     activeSegs.length > 0 ||
+    segmentMode !== 'any' ||
     JSON.stringify(chipFilters) !== JSON.stringify(INITIAL_FILTERS) ||
     mapSelection.state !== null ||
     mapSelection.county !== null ||
@@ -386,6 +415,7 @@ export default function SegmentIntelligence() {
 
   const clearAll = () => {
     setActiveSegs([]);
+    setSegmentMode('any');
     setChipFilters(INITIAL_FILTERS);
     setMapSelection({ state: null, county: null, zip: null });
     const next = new URLSearchParams(searchParams);
@@ -393,6 +423,7 @@ export default function SegmentIntelligence() {
     next.delete('target_lender_ref');
     next.delete('owner_link');
     next.delete('purchase_intent');
+    next.delete('segment_mode');
     setSearchParams(next);
   };
 
@@ -402,7 +433,7 @@ export default function SegmentIntelligence() {
       params.set('segment', activeSegs[0]);
     } else if (activeSegs.length > 1) {
       params.set('segment_codes', activeSegs.join(','));
-      params.set('segment_mode', 'any');
+      params.set('segment_mode', segmentMode);
     }
     if (mapSelection.zip) {
       params.set('zip', mapSelection.zip);
@@ -418,6 +449,7 @@ export default function SegmentIntelligence() {
     return query ? `/lead-queue?${query}` : '/lead-queue';
   }, [
     activeSegs,
+    segmentMode,
     mapSelection.zip,
     mapSelection.county,
     mapSelection.state,
@@ -433,7 +465,7 @@ export default function SegmentIntelligence() {
           ? `${segments.length} borrower ${segments.length === 1 ? 'segment' : 'segments'} · standalone counts`
           : 'Borrower segments · standalone counts'
       }
-      lede="Cards show each segment's standalone marketable count after the secondary borrower filters. Selecting cards stacks them into one de-duplicated ranked cohort, so borrowers can match any selected segment."
+      lede="Cards show standalone marketable counts after secondary borrower filters. Select cards, then choose Match any for a de-duplicated union or Match all for borrowers in every selected segment."
       heroRight={
         <Button
           size="sm"
@@ -502,6 +534,28 @@ export default function SegmentIntelligence() {
         className="filter-row filter-row--spaced filter-row--stacked"
         aria-label="Secondary borrower filters"
       >
+        <div className="segment-mode-control" aria-label="Selected segment match mode">
+          <div>
+            <div className="eyebrow">Selected segments</div>
+            <div className="muted fs-12">
+              Counts stay de-duplicated. Use Match all for the exclusive intersection.
+            </div>
+          </div>
+          <div className="segmented segmented--inline" role="group" aria-label="Segment match mode">
+            {SEGMENT_MODE_OPTIONS.map((option) => (
+              <button
+                key={option.mode}
+                type="button"
+                className={segmentMode === option.mode ? 'is-active' : ''}
+                aria-pressed={segmentMode === option.mode}
+                onClick={() => setSegmentMode(option.mode)}
+              >
+                <span>{option.label}</span>
+                <span className="segmented__meta">{option.description}</span>
+              </button>
+            ))}
+          </div>
+        </div>
         <div className="filter-row__controls">
           <FilterSelect
             label="LOCATION"
@@ -574,7 +628,7 @@ export default function SegmentIntelligence() {
           className="filter-row__hint filter-row__hint--full muted"
         >
           Segment card counts are standalone after secondary filters; selected
-          cards stack into one de-duplicated ranked borrower table below.
+          cards {segmentMode === 'all' ? 'must all match the same borrower' : 'stack into one de-duplicated ranked borrower table below'}.
           Listed-for-sale is
           backed by live Cotality MLS rows. HELOC intent is
           backed by Cotality HELOC propensity; filed building-permit records
@@ -598,7 +652,11 @@ export default function SegmentIntelligence() {
                 {activeSegs.length > 0 && (
                   <span className="muted fs-14">
                     · segment filter: {selectedSegmentLabel}
-                    {activeSegs.length > 1 ? ' · matches any selected segment' : ''}
+                    {activeSegs.length > 1
+                      ? segmentMode === 'all'
+                        ? ' · must match every selected segment'
+                        : ' · matches any selected segment'
+                      : ''}
                   </span>
                 )}
               </>
@@ -654,7 +712,7 @@ export default function SegmentIntelligence() {
         <USChoroplethMap
           height={520}
           segmentFilter={activeSegs}
-          segmentFilterMode="any"
+          segmentFilterMode={segmentMode}
           portfolioCriteria={secondaryPortfolioCriteria}
           onSelectionChange={handleMapSelection}
         />

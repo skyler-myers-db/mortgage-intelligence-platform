@@ -48,6 +48,9 @@ class _UniversalSqlClient:
             "marketable_borrowers": 987,
             "marketable_population": 79730,
             "median_rate_pct": 2.625,
+            "underwater_borrowers": 7,
+            "median_underwater_ltv_pct": 126.0,
+            "high_ltv_tail_borrowers": 2,
             "opportunity_score": 88,
             "overlap_borrowers": 111,
             "rank_overall": 1,
@@ -123,6 +126,8 @@ class _RetentionEligibilitySqlClient(_UniversalSqlClient):
         ("How many borrowers have at least 35% modeled equity?", "mip.gold.borrower_360"),
         ("Count the borrowers with more than 50% home equity.", "mip.gold.borrower_360"),
         ("How many borrowers have high equity?", "mip.gold.borrower_360"),
+        ("How many borrowers have at least 35% equty?", "mip.gold.borrower_360"),
+        ("How many borrowers have negative equity?", "mip.gold.borrower_360"),
         ("What share of borrowers have at least 35% equity?", "mip.gold.borrower_360"),
         ("How many borrowers are listed for sale?", "mip.gold.borrower_360"),
         ("Give me the count of listed-for-sale borrowers.", "mip.gold.borrower_360"),
@@ -309,6 +314,27 @@ def test_direct_equity_threshold_percent_unit_keeps_count_metric() -> None:
     assert "65.67% of 5,156,184 borrowers" in response.answer
 
 
+def test_direct_equity_threshold_count_and_percentage_keeps_count_metric() -> None:
+    client = _UniversalSqlClient(
+        {
+            "equity_capacity_borrowers": 3386169,
+            "total_borrowers": 5156184,
+            "borrower_share_pct": 65.67,
+            "avg_equity_pct": 61.4,
+        }
+    )
+
+    response = direct_canonical_response(
+        "What are the count and percentage of borrowers with at least 35% equity?",
+        cast(Any, client),
+    )
+
+    assert response is not None
+    assert response.source == "trusted_sql"
+    assert response.metric_value == "3,386,169"
+    assert "65.67% of 5,156,184 borrowers" in response.answer
+
+
 def test_direct_equity_threshold_share_uses_share_metric() -> None:
     client = _UniversalSqlClient(
         {
@@ -331,6 +357,78 @@ def test_direct_equity_threshold_share_uses_share_metric() -> None:
     assert client.parameters[-1] == {"min_equity_pct": 35}
     assert response.metric_value == "65.67%"
     assert "65.67% of 5,156,184 borrowers" in response.answer
+
+
+def test_direct_equity_typo_stays_on_governed_threshold_scope() -> None:
+    client = _UniversalSqlClient(
+        {
+            "equity_capacity_borrowers": 3386169,
+            "total_borrowers": 5156184,
+            "borrower_share_pct": 65.67,
+            "avg_equity_pct": 61.4,
+        }
+    )
+
+    response = direct_canonical_response(
+        "How many borrowers have at least 35% equty?",
+        cast(Any, client),
+    )
+
+    assert response is not None
+    assert response.source == "trusted_sql"
+    assert response.metric_value == "3,386,169"
+    assert client.parameters[-1] == {"min_equity_pct": 35.0}
+
+
+def test_direct_negative_equity_count_scope() -> None:
+    client = _UniversalSqlClient(
+        {
+            "underwater_borrowers": 271,
+            "total_borrowers": 5156184,
+            "borrower_share_pct": 0.01,
+            "median_underwater_ltv_pct": 126.0,
+            "high_ltv_tail_borrowers": 12,
+        }
+    )
+
+    response = direct_canonical_response(
+        "How many borrowers have negative equity?",
+        cast(Any, client),
+    )
+
+    assert response is not None
+    assert response.source == "trusted_sql"
+    assert response.sql_query is not None
+    assert "ltv > 100" in response.sql_query
+    assert "equity_pct < 0" not in response.sql_query
+    assert response.metric_value == "271"
+    assert "0.01% of 5,156,184 borrowers" in response.answer
+    assert "modeled LTV above 100%" in response.answer
+    assert "median modeled LTV" in response.answer
+    assert "126.0%" in response.answer
+    assert "12 records exceed 500% modeled LTV" in response.answer
+    assert "portfolio-risk screen" in response.answer
+
+
+def test_direct_negative_equity_share_scope() -> None:
+    client = _UniversalSqlClient(
+        {
+            "underwater_borrowers": 271,
+            "total_borrowers": 5156184,
+            "borrower_share_pct": 0.01,
+            "median_underwater_ltv_pct": 126.0,
+            "high_ltv_tail_borrowers": 12,
+        }
+    )
+
+    response = direct_canonical_response(
+        "What share of borrowers are underwater?",
+        cast(Any, client),
+    )
+
+    assert response is not None
+    assert response.source == "trusted_sql"
+    assert response.metric_value == "0.01%"
 
 
 @pytest.mark.parametrize(

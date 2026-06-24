@@ -196,9 +196,9 @@ export function USChoroplethMap({
   // changes so the per-state counts (and the choropleth bucketer
   // derived from them) reflect the active segment selection. Without
   // a filter we use the cross-segment _ALL row; with a filter we hit
-  // the segment-aware path. Segment Intelligence passes mode="any" so
-  // selected segment cards stack into one de-duplicated cohort; callers
-  // that need narrowing can still pass segmentFilterMode="all".
+  // the segment-aware path. `segmentFilterMode="any"` counts a
+  // de-duplicated OR cohort; `segmentFilterMode="all"` counts borrowers
+  // that match every selected segment.
   useEffect(() => {
     let cancelled = false;
     setHover(null);

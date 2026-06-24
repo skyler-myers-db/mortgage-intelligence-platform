@@ -54,6 +54,7 @@ from backend.services.repositories.databricks_genie_canonical import (
     _CANONICAL_MEAN_LEAD_SCORE_BY_STATE_SQL,
     _CANONICAL_MEAN_RATE_SPREAD_BY_SEGMENT_SQL,
     _CANONICAL_MSA_SCORE_SQL,
+    _CANONICAL_NEGATIVE_EQUITY_COUNT_SQL,
     _CANONICAL_RANKED_LEAD_POPULATION_SQL,
     _CANONICAL_REFI_DRIVER_SQL,
     _CANONICAL_REFI_EQUITY_SIGNAL_COMPARE_SQL,
@@ -103,6 +104,7 @@ from backend.services.repositories.databricks_genie_canonical import (
     _canonical_mean_lead_score_by_state_scope,
     _canonical_mean_rate_spread_by_segment_scope,
     _canonical_msa_score_scope,
+    _canonical_negative_equity_scope,
     _canonical_ranked_lead_population_scope,
     _canonical_refi_driver_scope,
     _canonical_refi_equity_signal_compare_scope,
@@ -481,6 +483,78 @@ def direct_canonical_response(
             rows=rows,
             answer=answer,
             metric_value=equity_metric_value,
+        )
+
+    negative_equity_scope = _canonical_negative_equity_scope(question)
+    if negative_equity_scope is not None:
+        try:
+            row = sql_client.execute_one(_CANONICAL_NEGATIVE_EQUITY_COUNT_SQL) or {}
+        except DatabricksSqlError as exc:
+            _emit_genie_warning("direct_canonical_genie_negative_equity_failed", exc=exc)
+            return None
+        raw_count = row.get("underwater_borrowers")
+        if raw_count is None:
+            _emit_genie_warning("direct_canonical_genie_negative_equity_bad_count")
+            return None
+        try:
+            count_int = int(raw_count)
+            total_int = int(row.get("total_borrowers") or 0)
+        except (TypeError, ValueError):
+            _emit_genie_warning(
+                "direct_canonical_genie_negative_equity_bad_count",
+                value_type=type(raw_count).__name__,
+            )
+            return None
+        raw_share = row.get("borrower_share_pct")
+        try:
+            share_float = float(raw_share) if raw_share is not None else None
+        except (TypeError, ValueError):
+            share_float = None
+        raw_median_ltv = row.get("median_underwater_ltv_pct")
+        try:
+            median_ltv_float = float(raw_median_ltv) if raw_median_ltv is not None else None
+        except (TypeError, ValueError):
+            median_ltv_float = None
+        raw_high_tail = row.get("high_ltv_tail_borrowers")
+        try:
+            high_tail_int = int(raw_high_tail) if raw_high_tail is not None else None
+        except (TypeError, ValueError):
+            high_tail_int = None
+        share_text = f"{share_float:,.2f}%" if share_float is not None else "not available"
+        median_ltv_text = (
+            f"{median_ltv_float:,.1f}%" if median_ltv_float is not None else "not available"
+        )
+        tail_text = (
+            f" {high_tail_int:,} records exceed 500% modeled LTV, so I am showing the median rather than an average over the long tail."
+            if high_tail_int and high_tail_int > 0
+            else ""
+        )
+        rows = [
+            {
+                "underwater_borrowers": count_int,
+                "total_borrowers": total_int,
+                "borrower_share_pct": share_float,
+                "median_underwater_ltv_pct": median_ltv_float,
+                "high_ltv_tail_borrowers": high_tail_int,
+                "refreshed_at": row.get("refreshed_at"),
+            }
+        ]
+        population_text = (
+            f" ({share_text} of {total_int:,} borrowers)" if total_int > 0 else ""
+        )
+        answer = (
+            f"{count_int:,} borrowers are underwater with modeled LTV above 100%"
+            f"{population_text}. The median modeled LTV for those borrowers is "
+            f"{median_ltv_text}.{tail_text} This uses {borrower_asset} at borrower "
+            "grain; it is a portfolio-risk screen, not an outreach-ready Lead Queue count."
+        )
+        return trusted_response(
+            question=question,
+            sql_query=_CANONICAL_NEGATIVE_EQUITY_COUNT_SQL,
+            trusted_assets=trusted_assets,
+            rows=rows,
+            answer=answer,
+            metric_value=share_text if negative_equity_scope.asks_share else f"{count_int:,}",
         )
 
     listed_count_scope = _canonical_listed_count_scope(question)
