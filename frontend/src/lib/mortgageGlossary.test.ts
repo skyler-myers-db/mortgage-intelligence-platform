@@ -44,6 +44,7 @@ describe('mortgage glossary', () => {
   });
 
   it('separates live listings, HELOC intent, and pending filed permits', () => {
+    expect(mortgageGlossary.buildingPermits.term).toBe('Building Permits');
     expect(mortgageGlossary.listedForSale.appContext).toMatch(/purchase-intent trigger/i);
     expect(mortgageGlossary.mlsListings.appContext).toMatch(/separate from permits/i);
     expect(mortgageGlossary.helocIntent.short).toMatch(/HELOC propensity/i);

@@ -92,7 +92,7 @@ export const mortgageGlossary = {
   },
   buildingPermits: {
     id: 'building-permits',
-    term: 'Building permits',
+    term: 'Building Permits',
     aliases: ['filed permits', 'permit activity'],
     category: 'evidence',
     short: 'Filed permit records for property work or renovation.',
