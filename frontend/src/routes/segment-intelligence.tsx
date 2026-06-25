@@ -66,15 +66,17 @@ const SEGMENT_MODE_OPTIONS: Array<{
 }> = [
   {
     mode: 'any',
-    label: 'Match any',
-    description: 'OR',
+    label: 'Any selected',
+    description: 'OR · de-duped',
   },
   {
     mode: 'all',
-    label: 'Match all',
-    description: 'AND',
+    label: 'All selected',
+    description: 'AND · intersection',
   },
 ];
+const VALID_SEGMENT_CODES: readonly SegmentCode[] = ['itm', 'listed', 'permit', 'investor', 'equity', 'retention'];
+const VALID_SEGMENT_CODE_SET = new Set<string>(VALID_SEGMENT_CODES);
 
 interface ChipFilters {
   location: string;
@@ -106,8 +108,47 @@ const INITIAL_FILTERS: ChipFilters = {
 
 export const INITIAL_ACTIVE_SEGMENTS: SegmentCode[] = [];
 
+export function activeSegmentsFromSearch(searchParams: URLSearchParams): SegmentCode[] {
+  const raw = [
+    searchParams.get('segment'),
+    searchParams.get('segments'),
+    searchParams.get('segment_codes'),
+  ]
+    .filter(Boolean)
+    .join(',');
+  const selected: SegmentCode[] = [];
+  for (const value of raw.split(',')) {
+    const code = value.trim();
+    if (!VALID_SEGMENT_CODE_SET.has(code) || selected.includes(code as SegmentCode)) continue;
+    selected.push(code as SegmentCode);
+  }
+  return selected;
+}
+
 export function segmentModeFromSearch(searchParams: URLSearchParams): SegmentFilterMode {
   return searchParams.get('segment_mode') === 'all' ? 'all' : 'any';
+}
+
+export function segmentSearchParamsForState(
+  searchParams: URLSearchParams,
+  segments: SegmentCode[],
+  mode: SegmentFilterMode,
+): URLSearchParams {
+  const next = new URLSearchParams(searchParams);
+  next.delete('segment');
+  next.delete('segments');
+  next.delete('segment_codes');
+  if (segments.length === 1) {
+    next.set('segment', segments[0]);
+  } else if (segments.length > 1) {
+    next.set('segment_codes', segments.join(','));
+  }
+  if (segments.length > 1) {
+    next.set('segment_mode', mode);
+  } else {
+    next.delete('segment_mode');
+  }
+  return next;
 }
 
 export function formatSelectedSegmentLabel(
@@ -181,7 +222,7 @@ export default function SegmentIntelligence() {
     ),
     [footprint.ready, footprint.states, footprint.usingFallback],
   );
-  const [activeSegs, setActiveSegs] = useState<SegmentCode[]>(INITIAL_ACTIVE_SEGMENTS);
+  const [activeSegs, setActiveSegs] = useState<SegmentCode[]>(() => activeSegmentsFromSearch(searchParams));
   const [segmentMode, setSegmentMode] = useState<SegmentFilterMode>(() => segmentModeFromSearch(searchParams));
   const [chipFilters, setChipFilters] = useState<ChipFilters>(() => ({
     ...INITIAL_FILTERS,
@@ -198,6 +239,14 @@ export default function SegmentIntelligence() {
         : { ...current, ...next }
     ));
   }, [searchParams, targetLenderOptions]);
+  useEffect(() => {
+    const nextSegments = activeSegmentsFromSearch(searchParams);
+    setActiveSegs((current) => (
+      current.join(',') === nextSegments.join(',') ? current : nextSegments
+    ));
+    const nextMode = segmentModeFromSearch(searchParams);
+    setSegmentMode((current) => (current === nextMode ? current : nextMode));
+  }, [searchParams]);
   // Geography drill state emitted by USChoroplethMap. State is the 2-char
   // USPS code; null = US level (no geography filter). County/ZIP are pushed
   // down to /api/leads so the ranked table follows the same state → county
@@ -401,8 +450,19 @@ export default function SegmentIntelligence() {
     return out;
   }, [leads, chipFilters]);
 
+  const writeSegmentSearchParams = useCallback(
+    (segments: SegmentCode[], mode: SegmentFilterMode) => {
+      setSearchParams(segmentSearchParamsForState(searchParams, segments, mode));
+    },
+    [searchParams, setSearchParams],
+  );
+
   const toggleSeg = (code: SegmentCode) => {
-    setActiveSegs((cur) => (cur.includes(code) ? cur.filter((s) => s !== code) : [...cur, code]));
+    const next = activeSegs.includes(code)
+      ? activeSegs.filter((s) => s !== code)
+      : [...activeSegs, code];
+    setActiveSegs(next);
+    writeSegmentSearchParams(next, segmentMode);
   };
 
   const filtersDirty =
@@ -423,6 +483,9 @@ export default function SegmentIntelligence() {
     next.delete('target_lender_ref');
     next.delete('owner_link');
     next.delete('purchase_intent');
+    next.delete('segment');
+    next.delete('segments');
+    next.delete('segment_codes');
     next.delete('segment_mode');
     setSearchParams(next);
   };
@@ -465,7 +528,7 @@ export default function SegmentIntelligence() {
           ? `${segments.length} borrower ${segments.length === 1 ? 'segment' : 'segments'} · standalone counts`
           : 'Borrower segments · standalone counts'
       }
-      lede="Cards show standalone marketable counts after secondary borrower filters. Select cards, then choose Match any for a de-duplicated union or Match all for borrowers in every selected segment."
+      lede="Cards show standalone marketable counts after secondary borrower filters. Select cards, then choose Any selected for a de-duplicated OR cohort or All selected for borrowers in every selected segment."
       heroRight={
         <Button
           size="sm"
@@ -538,7 +601,7 @@ export default function SegmentIntelligence() {
           <div>
             <div className="eyebrow">Selected segments</div>
             <div className="muted fs-12">
-              Counts stay de-duplicated. Use Match all for the exclusive intersection.
+              Any selected is a de-duplicated OR cohort. All selected is the AND intersection where each borrower must appear in every selected segment.
             </div>
           </div>
           <div className="segmented segmented--inline" role="group" aria-label="Segment match mode">
@@ -548,7 +611,10 @@ export default function SegmentIntelligence() {
                 type="button"
                 className={segmentMode === option.mode ? 'is-active' : ''}
                 aria-pressed={segmentMode === option.mode}
-                onClick={() => setSegmentMode(option.mode)}
+                onClick={() => {
+                  setSegmentMode(option.mode);
+                  writeSegmentSearchParams(activeSegs, option.mode);
+                }}
               >
                 <span>{option.label}</span>
                 <span className="segmented__meta">{option.description}</span>
@@ -627,8 +693,8 @@ export default function SegmentIntelligence() {
         <div
           className="filter-row__hint filter-row__hint--full muted"
         >
-          Segment card counts are standalone after secondary filters; selected
-          cards {segmentMode === 'all' ? 'must all match the same borrower' : 'stack into one de-duplicated ranked borrower table below'}.
+          Segment card counts are standalone and should not be added together.
+          Selected cards {segmentMode === 'all' ? 'must all match the same borrower' : 'stack into one de-duplicated OR cohort'} for the table, map, and lead-queue drilldown.
           Listed-for-sale is
           backed by live Cotality MLS rows. HELOC intent is
           backed by Cotality HELOC propensity; filed building-permit records
@@ -654,8 +720,8 @@ export default function SegmentIntelligence() {
                     · segment filter: {selectedSegmentLabel}
                     {activeSegs.length > 1
                       ? segmentMode === 'all'
-                        ? ' · must match every selected segment'
-                        : ' · matches any selected segment'
+                        ? ' · all selected segments'
+                        : ' · any selected segment, de-duplicated'
                       : ''}
                   </span>
                 )}
@@ -665,8 +731,8 @@ export default function SegmentIntelligence() {
           {!leadsRefreshing && truncatedAt && (
             <div className="muted fs-14">
               Showing the highest-ranked returned rows; segment cards remain
-              standalone counts, while the table and map show the de-duplicated
-              selected segment cohort and geography drill-downs.
+              standalone counts, while the table and map show the selected,
+              de-duplicated segment cohort and geography drill-downs.
             </div>
           )}
           {(mapSelection.state || mapSelection.county || mapSelection.zip) && (

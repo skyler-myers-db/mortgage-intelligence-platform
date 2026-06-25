@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   INITIAL_ACTIVE_SEGMENTS,
+  activeSegmentsFromSearch,
   formatSelectedSegmentLabel,
   lenderFiltersFromSearch,
   segmentModeFromSearch,
+  segmentSearchParamsForState,
 } from './segment-intelligence';
 
 describe('segment intelligence lender overlay URL state', () => {
@@ -53,6 +55,43 @@ describe('segment intelligence lender overlay URL state', () => {
     expect(segmentModeFromSearch(new URLSearchParams('segment_mode=all'))).toBe('all');
     expect(segmentModeFromSearch(new URLSearchParams('segment_mode=any'))).toBe('any');
     expect(segmentModeFromSearch(new URLSearchParams('segment_mode=drop_table'))).toBe('any');
+  });
+
+  it('hydrates selected segments from public URL state and rejects unknown codes', () => {
+    expect(activeSegmentsFromSearch(new URLSearchParams('segment=itm'))).toEqual(['itm']);
+    expect(activeSegmentsFromSearch(new URLSearchParams('segment_codes=itm,equity,listed'))).toEqual([
+      'itm',
+      'equity',
+      'listed',
+    ]);
+    expect(activeSegmentsFromSearch(new URLSearchParams('segments=itm,drop_table,equity,itm'))).toEqual([
+      'itm',
+      'equity',
+    ]);
+  });
+
+  it('serializes selected segment cards into shareable route state', () => {
+    const base = new URLSearchParams({
+      owner_link: 'Portfolio investor (5+)',
+      segment: 'retention',
+      segment_mode: 'all',
+    });
+
+    const any = segmentSearchParamsForState(base, ['itm', 'equity'], 'any');
+    expect(any.get('owner_link')).toBe('Portfolio investor (5+)');
+    expect(any.get('segment')).toBeNull();
+    expect(any.get('segment_codes')).toBe('itm,equity');
+    expect(any.get('segment_mode')).toBe('any');
+
+    const single = segmentSearchParamsForState(any, ['listed'], 'any');
+    expect(single.get('segment')).toBe('listed');
+    expect(single.get('segment_codes')).toBeNull();
+    expect(single.get('segment_mode')).toBeNull();
+
+    const emptyIntersection = segmentSearchParamsForState(single, [], 'all');
+    expect(emptyIntersection.get('segment')).toBeNull();
+    expect(emptyIntersection.get('segment_codes')).toBeNull();
+    expect(emptyIntersection.get('segment_mode')).toBeNull();
   });
 
   it('formats selected segment labels with mode-specific conjunctions', () => {

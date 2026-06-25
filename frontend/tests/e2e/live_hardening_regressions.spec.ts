@@ -220,17 +220,26 @@ test('Clear filters is visible, disabled when clean, and clears active filters o
   await expectClearFiltersState(page, false);
   await page.getByRole('button', { name: /^Clear filters$/ }).first().click();
   await expectClearFiltersState(page, true);
-  await expect(page.getByText(/matches any selected segment/i)).toHaveCount(0);
+  await expect(page.getByText(/any selected segment, de-duplicated/i)).toHaveCount(0);
 });
 
 test('Segment Intelligence stacks selected segments into an any-match cohort and replays controls', async ({ page }) => {
+  await gotoApp(page, '/segment-intelligence?segment_codes=itm,listed&segment_mode=all');
+  await expect(page.getByRole('button', { name: /All selected/i })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('button', { name: /Prime Refi Candidates/i })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('button', { name: /Listed for Sale/i })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByText(/all selected segments/i)).toBeVisible({ timeout: 20_000 });
+
   await gotoApp(page, '/segment-intelligence');
-  await expect(page.getByRole('button', { name: /Match any/i })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('button', { name: /Any selected/i })).toHaveAttribute('aria-pressed', 'true');
   await clickSegment(page, 'Prime Refi Candidates');
   await clickSegment(page, 'Listed for Sale');
+  const anyUrl = new URL(page.url());
+  expect((anyUrl.searchParams.get('segment_codes') ?? '').split(',').sort()).toEqual(['itm', 'listed']);
+  expect(anyUrl.searchParams.get('segment_mode')).toBe('any');
 
-  await expect(page.getByText(/matches any selected segment/i)).toBeVisible({ timeout: 20_000 });
-  await expect(page.getByText(/must match every selected segment/i)).toHaveCount(0);
+  await expect(page.getByText(/any selected segment, de-duplicated/i)).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText(/all selected segments/i)).toHaveCount(0);
 
   const allModeResponse = page.waitForResponse((response) => {
     if (response.status() !== 200 || !urlIncludesApiPath(response.url(), '/api/leads')) return false;
@@ -244,13 +253,16 @@ test('Segment Intelligence stacks selected segments into an any-match cohort and
     const codes = parsed.searchParams.get('segment_codes') ?? '';
     return parsed.searchParams.get('segment_mode') === 'all' && codes.includes('itm') && codes.includes('listed');
   });
-  await page.getByRole('button', { name: /Match all/i }).click();
+  await page.getByRole('button', { name: /All selected/i }).click();
   const [, stateRollupResponse] = await Promise.all([allModeResponse, allModeStateRollupResponse]);
   const stateRollups = await stateRollupResponse.json();
   expect(Array.isArray(stateRollups.rollups)).toBe(true);
-  await expect(page.getByRole('button', { name: /Match all/i })).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.getByText(/must match every selected segment/i)).toBeVisible({ timeout: 20_000 });
-  await expect(page.getByText(/matches any selected segment/i)).toHaveCount(0);
+  const allUrl = new URL(page.url());
+  expect((allUrl.searchParams.get('segment_codes') ?? '').split(',').sort()).toEqual(['itm', 'listed']);
+  expect(allUrl.searchParams.get('segment_mode')).toBe('all');
+  await expect(page.getByRole('button', { name: /All selected/i })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByText(/all selected segments/i)).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText(/any selected segment, de-duplicated/i)).toHaveCount(0);
 
   await page.getByRole('link', { name: /Deep-dive lead queue/i }).click();
   await expect(page).toHaveURL(/\/lead-queue\?/, { timeout: 20_000 });

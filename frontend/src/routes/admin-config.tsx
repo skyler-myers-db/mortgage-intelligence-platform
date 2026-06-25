@@ -7,6 +7,7 @@ import { Chip } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { EntradaWordmark } from '../components/brand/Entrada';
 import { DataOperationsPanel } from '../components/admin/DataOperationsPanel';
+import { BuyerReadinessPanel } from '../components/admin/BuyerReadinessPanel';
 import { ActivationOperationsPanel } from '../components/activation/ActivationLoopPanel';
 import { api } from '../lib/api';
 import { formatTimestamp, parseBackendTimestamp, TIMESTAMP_UNAVAILABLE } from '../lib/time';
@@ -463,6 +464,12 @@ export default function AdminConfig() {
       </div>
 
       <DataOperationsPanel
+        sources={sources ?? undefined}
+        sourcesLoading={sourcesLoading || Boolean(sourcesWarming)}
+        sourcesError={Boolean(sourcesError)}
+      />
+
+      <BuyerReadinessPanel
         sources={sources ?? undefined}
         sourcesLoading={sourcesLoading || Boolean(sourcesWarming)}
         sourcesError={Boolean(sourcesError)}

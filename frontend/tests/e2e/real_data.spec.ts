@@ -507,7 +507,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
 
   test('segment multi-select re-queries ranked list and map in any-mode', async ({ page }) => {
     await gotoApp(page, '/segment-intelligence');
-    await expect(page.getByRole('button', { name: /Match any/i })).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByRole('button', { name: /Any selected/i })).toHaveAttribute('aria-pressed', 'true');
 
     const rankedHeader = page
       .locator('.section-hdr', { hasText: 'Ranked borrowers · selected segment cohort' })
@@ -541,11 +541,14 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     const [leads, geo] = await Promise.all([leadsResponse, geoResponse]);
     expect(leads.status(), 'ranked list segment any-mode response').toBe(200);
     expect(geo.status(), 'map segment any-mode response').toBe(200);
+    const segmentUrl = new URL(page.url());
+    expect((segmentUrl.searchParams.get('segment_codes') ?? '').split(',').sort()).toEqual(['equity', 'itm']);
+    expect(segmentUrl.searchParams.get('segment_mode')).toBe('any');
     await expect(rankedHeader).toContainText(
       /segment filter: Prime Refi Candidates or Home Equity Candidate/,
       { timeout: 45_000 },
     );
-    await expect(rankedHeader).toContainText(/matches any selected segment/);
+    await expect(rankedHeader).toContainText(/any selected segment, de-duplicated/);
   });
 
   test('segment match-all mode narrows to borrowers in every selected segment', async ({ page }) => {
@@ -570,14 +573,17 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
         codes.includes('equity')
       );
     });
-    await page.getByRole('button', { name: /Match all/i }).click();
+    await page.getByRole('button', { name: /All selected/i }).click();
     await allModeLeads;
+    const segmentUrl = new URL(page.url());
+    expect((segmentUrl.searchParams.get('segment_codes') ?? '').split(',').sort()).toEqual(['equity', 'itm']);
+    expect(segmentUrl.searchParams.get('segment_mode')).toBe('all');
 
     await expect(rankedHeader).toContainText(
       /segment filter: Prime Refi Candidates and Home Equity Candidate/,
       { timeout: 45_000 },
     );
-    await expect(rankedHeader).toContainText(/must match every selected segment/);
+    await expect(rankedHeader).toContainText(/all selected segments/);
 
     await page.getByRole('link', { name: /Deep-dive lead queue/i }).click();
     await expect(page).toHaveURL(/\/lead-queue\?/, { timeout: 20_000 });

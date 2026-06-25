@@ -1,10 +1,10 @@
 # Cotality preview — archived zero-to-hero walkthrough
 
 > **Archived rehearsal snapshot — do not use as the live demo teleprompter.**
-> This file was prepared 2026-05-18 against deployment
-> `01f1532b4e1314e7964cb093feade193`. The fixed borrower IDs, counts, rates,
-> scores, and Genie answers below are historical evidence from that rehearsal
-> only. For any customer/demo conversation, use `docs/module0-talk-track.md`,
+> This file was prepared 2026-05-18 against a historical deployment. Fixed
+> borrower IDs, counts, rates, scores, and Genie answers from that rehearsal
+> have been removed from the operator script. For any customer/demo
+> conversation, use `docs/module0-talk-track.md`,
 > `docs/module0-rehearsal-checklist.md`, and the current release-readiness
 > artifact instead. Re-read live app values immediately before presenting.
 
@@ -52,16 +52,16 @@ Most demos blur "where the data comes from" into a single black box. We don't. T
 
 You'll point at these terms repeatedly. Practice the words out loud: "**clip**" (one syllable, like the office supply) and "**owner link**" (two words).
 
-### 4. The six segments (memorize these)
+### 4. The six segments (refresh these live)
 
 Segments are the core product vocabulary. Each is a *testable, explainable definition*, not a fuzzy audience label:
 
 | Segment | Plain English | Status |
 |---|---|---|
-| **Prime Refi Candidates** | Rate spread ≥ 75 bps **and** equity ≥ 15%. The borrower is paying noticeably above market and has enough home equity to support a refi. | **Live · 6,235 borrowers** under the default eligible-and-contactable filter set |
-| **Home Equity Candidate** | Strong equity (≥ 35%) **and** no active second-position lien. Good HELOC or cash-out conversation. | **Live · 4,005** |
-| **Investor / Multi-Property** | Owner Link shows the same owner across 2+ properties or repeat transaction behavior. | **Live · 1,468** |
-| **Retention Risk** | Current customer with rate spread above the retention threshold. Lower bar than Prime Refi Candidates so we can reach out before they shop competitors. | **Live · 9** under current filters (small because few synthetic-Summit current customers cross the threshold; this number grows when the lender's real servicing book lands) |
+| **Prime Refi Candidates** | Rate spread ≥ 75 bps **and** equity ≥ 15%. The borrower is paying noticeably above market and has enough home equity to support a refi. | **Live when source readiness is green. Refresh the card count in the app.** |
+| **Home Equity Candidate** | Strong equity (≥ 35%) **and** no active second-position lien. Good HELOC or cash-out conversation. | **Live when source readiness is green. Refresh the card count in the app.** |
+| **Investor / Multi-Property** | Owner Link shows the same owner across 2+ properties or repeat transaction behavior. | **Live when source readiness is green. Refresh the card count in the app.** |
+| **Retention Risk** | Current customer with rate spread above the retention threshold. Lower bar than Prime Refi Candidates so we can reach out before they shop competitors. | **Synthetic-Summit dependent in this demo. Refresh the current count in the app.** |
 | **Listed for Sale** | Home is actively on the market — purchase mortgage opportunity on the *next* home. | **Live — Cotality MLS listing activity** |
 | **HELOC Intent** | Cotality HELOC propensity indicates modeled renovation/cash-out appetite; filed permits remain a separate pending source. | **Live — Cotality HELOC propensity; filed permits pending** |
 
@@ -85,11 +85,11 @@ When a Cotality skeptic asks "is this just a marketing dashboard?" the answer is
 
 | | |
 |---|---|
-| **Demo URL** | Historical target: https://mip-app-2543889327043640.aws.databricksapps.com |
-| **Hero borrower** | Historical snapshot: `B-102FL7THC6Q3L` — Calumet City, IL · score **88** · Refinance + HELOC · 91% equity · 391 bps spread · 346 related properties via Owner Link · Competitor lien |
-| **Backup borrower** | Historical snapshot: `B-1AT5CXZZ1NI2N` — North Lauderdale, FL · same segments |
-| **Headline KPIs (Home)** | Historical snapshot: Marketable population: **5,156,184** · High-intent leads: **135,520** · Top-tier: **4,351** · Offers recommended: **4,472,667** |
-| **Genie suggested prompt** | Historical snapshot: "Break down in-the-money borrowers by current coverage state; which state leads?" → answer was **IL: 67,858** leading, FL/TX/CA/WA/CO follow |
+| **Demo URL** | Use the current release-readiness artifact; historical deployment URLs are intentionally omitted from this archive. |
+| **Hero borrower** | Historical snapshots were removed from the operator script. Use the current top-ranked live borrower from `/lead-queue` and verify Borrower 360 before presenting. |
+| **Backup borrower** | Choose a second current live row from `/lead-queue`; do not rehearse from a fixed borrower ID. |
+| **Headline KPIs (Home)** | Historical values intentionally omitted. Open the Home source chips and quote the current app values only. |
+| **Genie suggested prompt** | Ask the current suggested prompt live and quote only the answer returned by the deployed Genie space. |
 | **Top-tier source chip** | Historical snapshot: `mip.gold.lead_scores` |
 | **Hero numbers to drop** | **Do not drop these numbers unless refreshed live.** |
 
@@ -149,7 +149,7 @@ The scenarios are designed to take ~10 minutes each, with 5 minutes for setup/in
 #### What you do
 
 1. Open the app at the Home route. Don't even talk for a beat — let them see the layout.
-2. Point at the **four KPI cards** along the top: Marketable Population 5.16M, High-Intent 135K, Top-Tier 4,351, Offers Recommended 4.47M.
+2. Point at the **four KPI cards** along the top and read the current values from the app after opening each source chip.
 3. Click the small source chip under "Marketable Population" — `cotality.public_records` — and let them register it.
 4. Scroll to **AI data estate under the hood**. Read the four lane headers out loud: First-party lender, Cotality and market enrichment, Databricks governed AI layer, Entrada transformations.
 5. Point at the `demo synthetic` chip on First-party. Then point at the Cotality live-source chip and the source-readiness rows for MLS Listings, Cotality HELOC Propensity, Cotality Refi Propensity, and Building Permits.
@@ -182,7 +182,7 @@ You've just told them: (a) you can see the pipe, (b) we don't hide what's missin
 
 ### Scenario 2 — Build a portfolio and ask a real business question (10–12 min)
 
-**Persona:** Head of Growth at a regional lender ("Summit Mortgage"). They want to know: *out of 5.16M potential borrowers, how many should we actually contact next week, and where do we focus?*
+**Persona:** Head of Growth at a regional lender ("Summit Mortgage"). They want to know: *out of the current Cotality-covered borrower universe, how many should we actually contact next week, and where do we focus?*
 
 **Route:** `/portfolio-builder` → `/segment-intelligence`
 
@@ -195,16 +195,16 @@ You've just told them: (a) you can see the pipe, (b) we don't hide what's missin
 5. Scroll to **Campaign setup** — Subject A/B + Body Angle A/B + eligible-only suppression + 30-day cap. Don't dwell; just acknowledge it exists.
 6. Click **Run build** (it's already implicit, but the click is the moment).
 7. Navigate to **Segment Intelligence**.
-8. Show the **six segment cards** at the top — Prime Refi Candidates is selected at 6,235 when you click it. Read each segment definition aloud.
+8. Show the **six segment cards** at the top. Click Prime Refi Candidates and read the current live count from the card/table, not from this archive.
 9. Point at **Listed for Sale** and **HELOC Intent**. This is the Cotality moment: one is a live MLS trigger, the other is modeled propensity, and filed permits are still called out as pending. *Pause.*
-10. Below the cards, **the table populates with the top 500 ranked borrowers of 6,235** for the Prime Refi Candidates segment. Three borrowers visible — point at the first: `B-102FL7THC6Q3L`, Calumet City IL, Competitor lien, Summit LO 01, Prime Refi Candidates + Investor + 1.
+10. Below the cards, **the table populates with the top-ranked returned borrowers** for the selected segment. Point at the first current row only after confirming it opens in Borrower 360.
 11. Show the **US map on the right** — geography drill-down across the currently refreshed source coverage.
 
 #### What to say
 
 > **"This is the top-of-funnel moment Cotality named in the working sessions. A growth leader walks in Monday morning and says: out of millions of properties Cotality is showing us, who should we actually call this week?"**
 
-> **"They start broad. Six states, owner-occupied, equity above 15%. The app returns a marketable population of 5.16 million. That's the universe."**
+> **"They start broad. The app returns the current marketable population for the live data coverage. That's the universe for this run."**
 
 > *Drop equity to 30%, KPIs change.*
 
@@ -220,11 +220,11 @@ You've just told them: (a) you can see the pipe, (b) we don't hide what's missin
 
 > *Point at the table.*
 
-> **"Below the cards, the same filtered population becomes a ranked queue. Top 500 of 6,235 Prime Refi Candidates. The first row is our hero — borrower B-102FL7THC6Q3L, Calumet City, Illinois. Competitor lien, which means they're currently with a competitor — a recapture opportunity. Prime Refi Candidates plus Investor segment, which means Owner Link has tied them to other properties. Already assigned to Summit LO 01. Let's open the dossier."**
+> **"Below the cards, the same filtered population becomes a ranked queue. The first live row is the hero for this run. If the row shows competitor lien, Owner Link, listing, or HELOC intent signals, we can open the dossier and prove each one from the source drawer."**
 
 #### Why this matters
 
-You've shown them the journey from 5.16M to a named borrower in three clicks — and the journey is *defensible at every step*. Every number has a source. Every segment has a definition. MLS listing activity is live; filed Building Permits remain explicit, not buried.
+You've shown them the journey from the current marketable universe to a ranked borrower in three clicks — and the journey is *defensible at every step*. Every number has a source. Every segment has a definition. MLS listing activity is live; filed Building Permits remain explicit, not buried.
 
 #### If they ask…
 
@@ -238,24 +238,24 @@ You've shown them the journey from 5.16M to a named borrower in three clicks —
 
 **Persona:** Loan Officer Manager at Summit Mortgage. *"Tell me which specific person to call, why, and what to say — and let me approve before anything leaves the building."*
 
-**Route:** `/borrower-360/B-102FL7THC6Q3L` → `/offer-orchestrator/B-102FL7THC6Q3L`
+**Route:** `/borrower-360/{current-live-borrower}` → `/offer-orchestrator/{current-live-borrower}`
 
 #### What you do
 
-1. From the Segments table, click row `B-102FL7THC6Q3L`. Or navigate directly to `/borrower-360/B-102FL7THC6Q3L`.
-2. Let them look at the page for a beat. The opportunity score (88), confidence (85%), Approval Approved chip, Outreach Actioned chip are all in the upper right.
-3. Walk the left column: **Customer 360**. Read aloud: Property ref `clip_ref_39d931a7bed1` (that's the masked CLIP), Owner graph ref (masked Owner Link), Property address Calumet City IL 60409 (city + ZIP only — no street), AVM $168,163, Current lien $15,000 at **10.27%** (the very high rate is the story), LTV 9% (i.e. 91% equity), **346 related properties via owner graph**, Metro/loan type 16980 / CNV.
-4. Read the relationship flags: **Competitor lien** (with a competitor today), Non-owner occupied, **Investor**, Absentee owner, Corporate owner, listing/HELOC intent state, filed-permit caveat where applicable, and "No 2nd lien".
-5. Read the segments: Prime Refi Candidates, Investor / Multi-Property, Home Equity Candidate.
-6. Move to the right column: **Why we recommend this**. "In-the-money · **+391 bps** vs. par 6.360%". Read the rationale aloud: *"Current rate sits well above market rates and the home has 91% equity — both refinance triggers are met."*
+1. From the Segments table, click the current top-ranked live row. Or navigate directly to the current borrower route copied from the live app.
+2. Let them look at the page for a beat. Read the current opportunity score, confidence, approval, and outreach chips from the live dossier.
+3. Walk the left column: **Customer 360**. Read aloud the masked property ref, masked owner graph ref, city/ZIP, AVM, current lien, rate, LTV, equity, related-property count, and loan context exactly as the live dossier shows them.
+4. Read the relationship flags exactly as shown: current/former/competitor relationship, occupancy, investor, absentee/corporate-owner, listing/HELOC intent state, filed-permit caveat where applicable, and second-lien state.
+5. Read the current segment chips visible for this borrower.
+6. Move to the right column: **Why we recommend this**. Read the current rate-spread, equity, and threshold rationale from the live page.
 7. Point at the three **evidence chips**: Market rate comparison, In-the-money rule, Borrower dossier. (You can click any of them to open the source drawer — but don't unless asked.)
-8. Show the **Next-best-offer card**: Refinance + HELOC, score 88, two buttons (Build outreach draft, Saved).
+8. Show the **Primary offer card**: read the current offer path and score; then use Build outreach draft only after confirming the page has loaded the live borrower.
 9. Scroll down to **Supporting evidence** — 7+ chips covering Voluntary Lien + Market Rates, AVM, Market Rates (FRED), Voluntary Lien (current servicer not lender), Owner Link, Property (mailing out of state), Property (corporate owner).
-10. Click **Build outreach draft** → navigates to `/offer-orchestrator/B-102FL7THC6Q3L`.
+10. Click **Build outreach draft** → navigates to the offer-orchestrator route for the current live borrower.
 11. In Offer Orchestrator, walk through the four panels:
-    - **Primary offer** (Refinance + HELOC) with four source chips and all borrower flags.
+    - **Primary offer** with source chips and all borrower flags.
     - **Draft outreach · review only** — read the *governed* draft body aloud. Notice the EMAIL/SMS/Direct mail channel selector, "LO call follow-up within 5 days", and the **Disclosure summit-demo-2026-05-vi · _ALL** chip.
-    - **Considered alternatives** — point at "Refinance" ruled out: *"Equity 91% is above the HELOC threshold (35%); cross-sell wins over refi-alone."* And "HELOC" ruled out: *"Refi rate economics also qualify, so the refi+HELOC cross-sell beats a pure HELOC."*
+    - **Considered alternatives** — read the current rule reasons from the page instead of reciting an archived borrower example.
     - **Thresholds applied** — the five numbers from admin config at decision time: 75 / 15 / 35 / 25 / 50.
 12. Point at the **bottom banner**: "Human approval required before outreach — Reject / Approve outreach". **Do not click Approve unless you've practiced and you're in a dedicated demo workspace.** It writes a real audit row to Lakebase.
 
@@ -265,15 +265,15 @@ You've shown them the journey from 5.16M to a named borrower in three clicks —
 
 > *Point at the masked refs.*
 
-> **"Property ref starts with `clip_ref_` — that's a redacted version of the Cotality CLIP. Owner ref is the same for Owner Link. Address is city plus ZIP — no street. In a customer's workspace, with their licensed Cotality boundary, they see the raw CLIP and Owner Link and can join back to the full record. In a public demo we mask. That's the redaction layer."**
+> **"Property ref starts with `clip_ref_` — that's a redacted version of the Cotality CLIP. Owner ref is the same for Owner Link. Address is city plus ZIP — no street. Raw identifiers stay behind governed Unity Catalog boundaries; the app view remains masked by design. That's the redaction layer."**
 
 > *Point at the lien and AVM.*
 
-> **"Borrower's current lien is $15,000 — they're paying it down — at 10.27 percent. AVM puts the property at $168,163. LTV is 9 percent. So they have $153,163 of equity and they're paying 391 basis points above today's market rate. **That is the entire In-the-Money story in one row.**"**
+> **"Read the current lien, note rate, AVM, LTV, equity, and rate spread from the dossier. That is the in-the-money story in one row: economic incentive plus enough equity to support the conversation."**
 
-> *Point at "346 related properties via owner graph."*
+> *Point at the related-property count via owner graph.*
 
-> **"This is Owner Link earning its keep. The same owner — through the Cotality mastered owner identifier — is associated with 346 related properties. That's the Investor / Multi-Property segment. Without Owner Link we'd see 346 unrelated leads. With it we see one investor and a portfolio decision."**
+> **"This is Owner Link earning its keep. The same owner — through the Cotality mastered owner identifier — can be associated with multiple properties. That's the Investor / Multi-Property segment. Without Owner Link we'd see separate property records; with it we see a portfolio decision."**
 
 > *Move to "Why we recommend this".*
 
@@ -281,7 +281,7 @@ You've shown them the journey from 5.16M to a named borrower in three clicks —
 
 > *Click Build outreach draft.*
 
-> **"Next-best-offer is also a deterministic decision tree, not a free-form model. The function `fn_next_best_offer` has eight branches in priority order — listed, refi+HELOC, HELOC, refi, cash-out, investor, retention, nurture. For this borrower, branch two fires: spread above the floor AND equity above the HELOC cushion. So the recommendation is Refinance plus HELOC cross-sell, not a pure refi and not a pure HELOC."**
+> **"Primary offer is also a deterministic decision tree, not a free-form model. The function `fn_next_best_offer` evaluates governed borrower signals in priority order and records which branch fired. Read the selected branch from the live offer card before naming the product."**
 
 > *Show the two ruled-out alternatives.*
 
@@ -319,16 +319,16 @@ You've covered three of the highest-trust beats: *redaction* (PII never leaks), 
 #### What you do
 
 1. Navigate to **Ask Genie**.
-2. Read the page header aloud: *"Type a question or pick a suggestion. Answers cite the metric view that produced them; tap a source chip to open lineage."*
+2. Read the page header aloud: *"Type a question or pick a suggestion. Answers cite the trusted Unity Catalog assets that produced them; tap a source chip to open lineage."*
 3. Point at the right rail — **Trusted assets**. Read 4 or 5 of the table names: `mip.gold.lead_population`, `mip.gold.segment_population`, `mip.gold.lead_scores`, `mip.gold.borrower_360`, `mip.gold.evidence_events`. **This is the allowlist** — Genie can only query these governed assets.
 4. Click the suggested question: **"Break down in-the-money borrowers by current coverage state; which state leads?"**
 5. The button changes to "Asking…", a progress chip shows: *"Opening a governed Genie turn"* → *"Planning the answer view"* → answer renders.
-6. Read the natural-language answer aloud: **"Illinois (IL) leads with the highest number of in-the-money borrowers at 67,858. Other states with notable counts include Florida (19,010), Texas (16,986), California (16,706), Washington (13,881), and Colorado (1,079). Illinois has the largest in-the-money borrower population by a significant margin, while Washington shows the highest average opportunity score among these states. Source: mip.gold.borrower_360."**
+6. Read the natural-language answer aloud from the live Genie response. Do not reuse historical state counts.
 7. Point at the **bar chart** — states on the y-axis (as labels, not numbers — important!), counts on the x-axis.
 8. Point at the **data table** below: state · in-the-money borrowers · avg opportunity score · refreshed at. Read the refresh timestamp aloud.
 9. Scroll down. Show the **"Show proof"** button and the **trusted** chip next to it.
 10. Show the two **Governed actions**:
-    - **"Open this cohort in Lead Queue"** — chips show `States: IL · Segments: Prime Refi Candidates (any selected segment) · 6 result rows`.
+    - **"Open this cohort in Lead Queue"** — chips show the current states, segment mode, and reconciled eligible-subset count from the live answer.
     - **"Create draft campaign"** — same chips.
 11. Show the **Source chip** at the bottom: `mip.gold.borrower_360`.
 
@@ -348,9 +348,9 @@ You've covered three of the highest-trust beats: *redaction* (PII never leaks), 
 
 > **"Three things to notice. One — the answer is a natural-language summary plus a chart plus a table. Two — the chart treats state codes as categorical labels, not numeric values. You can't accidentally average ZIP codes here. Three — the answer is sourced. It says mip.gold.borrower_360 at the bottom, and the trusted chip means the planner used a known-good asset."**
 
-> *Point at IL · 67,858.*
+> *Point at the current leading state row from Genie.*
 
-> **"And the actual answer is interesting. Illinois leads the in-the-money universe at 67,858. Florida and Texas are tied for second tier around 17–19 thousand. Washington has the highest average opportunity score per borrower. That's the kind of question a growth leader actually asks on a Tuesday morning."**
+> **"The actual answer is interesting because it shows where the economics concentrate right now, and it can open the eligible Lead Queue subset with the action count reconciled. That's the kind of question a growth leader actually asks on a Tuesday morning."**
 
 > *Point at the governed actions.*
 
@@ -398,7 +398,7 @@ You have three closing options depending on the room's energy.
 1. **Open the app fresh, in an incognito window.** Cold-load is faster than warm-load with stale data.
 2. **Hit `/api/v1/health`** in another tab. Confirm `status: ok`.
 3. **Hit the live URL once more** to warm the data-estate panel (it caches for 5 minutes).
-4. **Confirm `B-102FL7THC6Q3L` exists** — navigate to `/borrower-360/B-102FL7THC6Q3L` and confirm the dossier loads. If it doesn't, fall back to `B-1AT5CXZZ1NI2N`.
+4. **Choose a current hero borrower** — open `/lead-queue`, expand the top ranked eligible row, then open Borrower 360 and confirm the dossier loads. Pick a backup from the same live queue.
 5. **Run the Genie prompt once** before the demo so the Genie space is warmed up. Cold Genie can take 20–30 seconds; warm Genie is 5–10.
 6. **Tab order**: Home → Portfolio Builder → Segments → Borrower 360 → Offer → Genie. Open them in that order in separate tabs so you can switch with Cmd-1 through Cmd-5 instead of waiting for navigation.
 7. **Pull a screenshot** of each of the six routes onto your laptop wallpaper as a backup. If the live app hiccups mid-demo, you can keep narrating with the screenshot.

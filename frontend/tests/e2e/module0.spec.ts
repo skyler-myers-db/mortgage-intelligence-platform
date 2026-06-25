@@ -124,7 +124,10 @@ test.describe('Module 0 — golden path', () => {
 
     await page.getByText('Home Equity Candidate', { exact: true }).click();
     await expect(rankedHeader).toContainText(/segment filter: Listed for Sale or Home Equity Candidate/);
-    await expect(rankedHeader).toContainText(/matches any selected segment/);
+    await expect(rankedHeader).toContainText(/any selected segment, de-duplicated/);
+    const anyUrl = new URL(page.url());
+    expect((anyUrl.searchParams.get('segment_codes') ?? '').split(',').sort()).toEqual(['equity', 'listed']);
+    expect(anyUrl.searchParams.get('segment_mode')).toBe('any');
     await expect
       .poll(() =>
         segmentRequests.some(
@@ -146,9 +149,12 @@ test.describe('Module 0 — golden path', () => {
       )
       .toBe(true);
 
-    await page.getByRole('button', { name: /Match all/ }).click();
+    await page.getByRole('button', { name: /All selected/ }).click();
+    const allUrl = new URL(page.url());
+    expect((allUrl.searchParams.get('segment_codes') ?? '').split(',').sort()).toEqual(['equity', 'listed']);
+    expect(allUrl.searchParams.get('segment_mode')).toBe('all');
     await expect(rankedHeader).toContainText(/segment filter: Listed for Sale and Home Equity Candidate/);
-    await expect(rankedHeader).toContainText(/must match every selected segment/);
+    await expect(rankedHeader).toContainText(/all selected segments/);
     await expect
       .poll(() =>
         segmentRequests.some(

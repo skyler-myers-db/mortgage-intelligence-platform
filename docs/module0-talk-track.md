@@ -34,6 +34,35 @@ Capture those values from the deployed app and API immediately before recording.
    or API response during the run and quote that current value. Do not reuse
    historical counts from older dry runs.
 
+## Claim boundaries
+
+Use these phrases in public or buyer-facing demos:
+
+- **CRM / Salesforce:** "MIP stages approved work and can deliver through
+  configured destinations." Do not claim live Salesforce, CRM/CDP, LOS/POS, or
+  servicing writeback unless Admin → Buyer readiness shows the destination as
+  connected and delivered rows exist.
+- **Outreach:** "MIP drafts, approves, audits, and stages." Do not claim the app
+  auto-sends email or SMS. External delivery requires a connected customer
+  destination and approval.
+- **Segments:** "Any selected is a de-duplicated OR cohort; All selected is an
+  AND intersection." Do not add standalone segment card counts together.
+- **Custom segments:** "Portfolio and segment filters create governed cohorts."
+  Do not claim arbitrary custom segment definitions unless a named customer
+  segment has been configured and validated in the app.
+- **Scoring / offers:** "Deterministic UC/Python rules plus governed Cotality
+  propensity signals." Do not call primary-offer selection a trained MIP ML
+  model unless a model card and deployment evidence exist.
+- **Compliance:** "Governed controls, masking, approvals, and audit ledger."
+  Do not claim HITRUST or any certification without a customer-approved
+  certificate.
+- **Audit:** "Approvals, rejections, activation staging, outcomes, and governed
+  Genie actions are audited." Do not claim every click, filter change, or page
+  view is audited.
+- **Data sources:** "MLS/Listings and Cotality propensity signals are distinct
+  from filed Building Permits." Do not infer filed permit activity from HELOC
+  intent.
+
 ## Story
 
 Opening line:

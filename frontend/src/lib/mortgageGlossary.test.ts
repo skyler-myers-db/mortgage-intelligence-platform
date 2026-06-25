@@ -7,6 +7,10 @@ const REQUIRED_TERMS = [
   'clip',
   'ltv',
   'heloc',
+  'helocIntent',
+  'mlsListings',
+  'listedForSale',
+  'buildingPermits',
   'inTheMoney',
   'nextBestOffer',
   'opportunityScore',
@@ -37,6 +41,13 @@ describe('mortgage glossary', () => {
     expect(mortgageGlossary.inTheMoney.appContext).toMatch(/not the same as a high-quality lead/i);
     expect(mortgageGlossary.opportunityScore.appContext).toMatch(/broader than refinance economics/i);
     expect(mortgageGlossary.nextBestOffer.term).toBe('Primary offer');
+  });
+
+  it('separates live listings, HELOC intent, and pending filed permits', () => {
+    expect(mortgageGlossary.listedForSale.appContext).toMatch(/purchase-intent trigger/i);
+    expect(mortgageGlossary.mlsListings.appContext).toMatch(/separate from permits/i);
+    expect(mortgageGlossary.helocIntent.short).toMatch(/HELOC propensity/i);
+    expect(mortgageGlossary.buildingPermits.appContext).toMatch(/Do not infer filed permits/i);
   });
 
   it('has stable unique anchors for every entry', () => {

@@ -6,12 +6,13 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ActivationLoopPanel } from './ActivationLoopPanel';
+import { ActivationLoopPanel, ActivationOperationsPanel } from './ActivationLoopPanel';
 import type { ActivationDestination, ActivationOutboxItem } from '../../types';
 
 const apiMocks = vi.hoisted(() => ({
   activationDestinations: vi.fn(),
   activationOutbox: vi.fn(),
+  activationSummary: vi.fn(),
   stageActivation: vi.fn(),
 }));
 
@@ -23,6 +24,7 @@ vi.mock('../../lib/api', async () => {
       ...actual.api,
       activationDestinations: apiMocks.activationDestinations,
       activationOutbox: apiMocks.activationOutbox,
+      activationSummary: apiMocks.activationSummary,
       stageActivation: apiMocks.stageActivation,
     },
   };
@@ -82,6 +84,10 @@ describe('ActivationLoopPanel', () => {
     });
     apiMocks.activationDestinations.mockResolvedValue([DESTINATION]);
     apiMocks.activationOutbox.mockResolvedValue([]);
+    apiMocks.activationSummary.mockResolvedValue({
+      destinations: [DESTINATION],
+      recent_outbox: [],
+    });
     apiMocks.stageActivation.mockResolvedValue({
       staged: true,
       activation: outboxItem({ activation_id: '44444444-4444-4444-8444-444444444444' }),
@@ -155,5 +161,23 @@ describe('ActivationLoopPanel', () => {
     expect(button.disabled).toBe(true);
     expect(button.textContent).toContain('Staged');
     expect(apiMocks.stageActivation).not.toHaveBeenCalled();
+  });
+
+  it('marks activation operations unavailable when the registry cannot be read', async () => {
+    apiMocks.activationSummary.mockRejectedValue(new Error('registry down'));
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <ActivationOperationsPanel />
+        </QueryClientProvider>,
+      );
+    });
+    await settle();
+
+    expect(document.body.textContent).toContain('Activation destinations');
+    expect(document.body.textContent).toContain('unavailable');
+    expect(document.body.textContent).toContain('Activation status unavailable: registry down');
+    expect(document.body.textContent).not.toContain('loading');
   });
 });

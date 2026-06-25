@@ -327,6 +327,34 @@ def test_public_talk_track_does_not_pin_fixture_borrowers_or_urls() -> None:
         assert phrase not in text
 
 
+def test_archived_cotality_walkthrough_cannot_be_used_as_live_teleprompter() -> None:
+    text = (REPO / "docs/demo/cotality-walkthrough.md").read_text(encoding="utf-8")
+
+    assert "Archived rehearsal snapshot" in text
+    assert "do not use as the live demo teleprompter" in text
+    forbidden_operator_values = (
+        "01f1532b4e1314e7964cb093feade193",
+        "https://mip-app-2543889327043640.aws.databricksapps.com",
+        "B-102FL7THC6Q3L",
+        "B-1AT5CXZZ1NI2N",
+        "5.16M",
+        "5,156,184",
+        "135,520",
+        "4,351",
+        "4,472,667",
+        "67,858",
+        "6,235",
+        "top 500",
+        "10.27%",
+        "91% equity",
+        "346 related",
+        "+391 bps",
+        "6 result rows",
+    )
+    for phrase in forbidden_operator_values:
+        assert phrase not in text
+
+
 @pytest.mark.parametrize("relative_path", INTERNAL_DOCS)
 def test_internal_cotality_inventory_docs_are_not_public(relative_path: str) -> None:
     text = (REPO / relative_path).read_text(encoding="utf-8")

@@ -251,7 +251,7 @@ export function ActivationOperationsPanel() {
           </div>
         </div>
         <Chip variant={connectedCount > 0 ? 'success' : 'warning'}>
-          {data ? `${connectedCount} connected` : 'loading'}
+          {error ? 'unavailable' : data ? `${connectedCount} connected` : 'loading'}
         </Chip>
       </div>
       <div className="surface__body surface__body--stack-sm">

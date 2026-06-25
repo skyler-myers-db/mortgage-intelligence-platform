@@ -146,7 +146,8 @@ select * from mip.gold.evidence_events where borrower_id is null limit 10;
 
 Validation:
 - Ask: “Which zips have the most in-the-money borrowers?”
-- Ask: “Show HELOC candidates with more than $150K equity and recent permits.”
+- Ask: “Show HELOC-intent candidates with more than $150K equity, and explain
+  whether filed Building Permits are live or pending.”
 - Confirm SQL references only approved gold/metric-view objects.
 
 ## Phase 5 — Lakebase state and audit
@@ -172,7 +173,9 @@ For the Module 0 walkthrough, present these as optional production adapters:
 
 - Property Intelligence Agent: calls CLIP-MCP for property dossier.
 - Segment Analyst Agent: uses metric views and Genie.
-- Offer Strategy Agent: calls deterministic UC functions / MLflow model.
+- Offer Strategy Agent: calls deterministic UC functions and governed propensity
+  signals. Do not describe Module 0 offer selection as a trained MLflow model
+  unless a customer-specific model card and deployment evidence exist.
 - Outreach Writer Agent: drafts content, never sends automatically.
 - Supervisor Agent: coordinates workflow and writes audit context.
 
