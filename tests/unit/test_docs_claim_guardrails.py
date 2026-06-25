@@ -327,6 +327,25 @@ def test_public_talk_track_does_not_pin_fixture_borrowers_or_urls() -> None:
         assert phrase not in text
 
 
+def test_public_talk_track_pins_claim_boundaries() -> None:
+    text = " ".join(
+        (REPO / "docs/module0-talk-track.md").read_text(encoding="utf-8").split()
+    )
+
+    required = (
+        "Do not claim live Salesforce, CRM/CDP, LOS/POS, or servicing writeback",
+        "Do not claim the app auto-sends email or SMS",
+        "Do not add standalone segment card counts together",
+        "Do not claim arbitrary custom segment definitions",
+        "Do not call primary-offer selection a trained MIP ML model",
+        "Do not claim HITRUST or any certification",
+        "Do not claim every click, filter change, or page view is audited",
+        "Do not infer filed permit activity from HELOC intent",
+    )
+    for phrase in required:
+        assert phrase in text
+
+
 def test_archived_cotality_walkthrough_cannot_be_used_as_live_teleprompter() -> None:
     text = (REPO / "docs/demo/cotality-walkthrough.md").read_text(encoding="utf-8")
 

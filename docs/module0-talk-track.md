@@ -39,9 +39,9 @@ Capture those values from the deployed app and API immediately before recording.
 Use these phrases in public or buyer-facing demos:
 
 - **CRM / Salesforce:** "MIP stages approved work and can deliver through
-  configured destinations." Do not claim live Salesforce, CRM/CDP, LOS/POS, or
-  servicing writeback unless Admin → Buyer readiness shows the destination as
-  connected and delivered rows exist.
+  configured destinations." Do not claim live Salesforce, CRM/CDP, LOS/POS, or servicing writeback
+  unless Admin → Buyer readiness shows the destination as connected and
+  delivered rows exist.
 - **Outreach:** "MIP drafts, approves, audits, and stages." Do not claim the app
   auto-sends email or SMS. External delivery requires a connected customer
   destination and approval.

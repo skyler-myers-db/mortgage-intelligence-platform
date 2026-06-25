@@ -45,7 +45,7 @@ function destinationSummary(
       value: 'Unknown',
       status: 'registry unavailable',
       tone: 'warning',
-      detail: 'Registry unavailable. Do not claim live CRM/Salesforce delivery until it reconnects.',
+      detail: 'Registry unavailable. Do not claim live CRM/Salesforce delivery.',
     };
   }
   if (loading) {
@@ -54,7 +54,7 @@ function destinationSummary(
       value: 'Checking',
       status: 'probing registry',
       tone: 'neutral',
-      detail: 'Reading the destination registry. Delivery claims stay unverified until this resolves.',
+      detail: 'Reading destinations. Delivery claims stay unverified.',
     };
   }
   const rows = destinations ?? [];
@@ -68,7 +68,7 @@ function destinationSummary(
       value: 'Connected destination',
       status: 'connected',
       tone: 'success',
-      detail: 'Approved work is delivered through configured Salesforce.',
+      detail: 'Salesforce destination is connected; claim delivery only when Activation / outreach shows delivered rows.',
     };
   }
   if (dryRun.length > 0 || connected.length > 0) {
@@ -77,7 +77,7 @@ function destinationSummary(
       value: connected.length > 0 ? `${connected.length} connected destination${connected.length === 1 ? '' : 's'}` : 'Dry run only',
       status: connected.length > 0 ? 'partially connected' : 'dry run',
       tone: connected.length > 0 ? 'success' : 'warning',
-      detail: 'MIP stages approved work. Claim Salesforce delivery only when connected rows show delivered.',
+      detail: 'Claim live delivery only for connected destinations with delivered rows.',
     };
   }
   return {
@@ -109,7 +109,7 @@ function outboxSummary(
       value: 'Checking',
       status: 'probing outbox',
       tone: 'neutral',
-      detail: 'Reading recent activation rows before claiming delivery or staging status.',
+      detail: 'Reading activation rows before delivery claims.',
     };
   }
   const outbox = rows ?? [];
@@ -151,7 +151,7 @@ function sourceSummary(sources: SourceSummary[] | undefined, loading = false, er
     value: `${live} live · ${synthetic} synthetic · ${pending} pending`,
     status: pending > 0 ? 'partial' : 'ready',
     tone: pending > 0 ? 'warning' : 'success',
-    detail: 'Live, synthetic, and pending feeds stay separated; demos cannot imply everything is live.',
+    detail: 'Live, synthetic, and pending feeds stay separated.',
   };
 }
 
@@ -175,6 +175,13 @@ export function buyerReadinessItems(
       detail: 'Governed SQL/Python rules plus Cotality propensity. Do not call them a trained MIP ML model.',
     },
     {
+      label: 'Custom segments',
+      value: 'Governed cohorts',
+      status: 'configured only',
+      tone: 'neutral',
+      detail: 'Do not claim arbitrary named segment authoring unless a customer segment is configured.',
+    },
+    {
       label: 'Compliance posture',
       value: 'Governed controls',
       status: 'no certification claim',
@@ -186,7 +193,7 @@ export function buyerReadinessItems(
       value: 'Decision ledger',
       status: 'key actions audited',
       tone: 'success',
-      detail: 'Approvals, rejections, staging, outcomes, and governed Genie actions are audited. Do not claim every click.',
+      detail: 'Approvals, staging, outcomes, and governed Genie actions are audited. Do not claim every click.',
     },
   ];
 }
@@ -208,7 +215,7 @@ export function BuyerReadinessPanel({ sources, sourcesLoading = false, sourcesEr
       sourcesLoading,
       sourcesError,
       Boolean(error),
-      data === undefined && !error,
+      data === null && !error,
     ),
     [data, error, sources, sourcesError, sourcesLoading],
   );

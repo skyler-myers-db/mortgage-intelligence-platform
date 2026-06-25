@@ -90,7 +90,7 @@ When a Cotality skeptic asks "is this just a marketing dashboard?" the answer is
 | **Backup borrower** | Choose a second current live row from `/lead-queue`; do not rehearse from a fixed borrower ID. |
 | **Headline KPIs (Home)** | Historical values intentionally omitted. Open the Home source chips and quote the current app values only. |
 | **Genie suggested prompt** | Ask the current suggested prompt live and quote only the answer returned by the deployed Genie space. |
-| **Top-tier source chip** | Historical snapshot: `mip.gold.lead_scores` |
+| **Top-tier source chip** | Stable source asset: `mip.gold.lead_scores`. Confirm the chip opens in the current app before presenting. |
 | **Hero numbers to drop** | **Do not drop these numbers unless refreshed live.** |
 
 ---

@@ -1,11 +1,40 @@
-import { describe, expect, it } from 'vitest';
-import { buyerReadinessItems } from './BuyerReadinessPanel';
+/**
+ * @vitest-environment happy-dom
+ */
+
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { act } from 'react';
+import { createRoot, type Root } from 'react-dom/client';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { BuyerReadinessPanel, buyerReadinessItems } from './BuyerReadinessPanel';
 import type { ActivationSummary } from '../../types';
+
+const apiMocks = vi.hoisted(() => ({
+  activationSummary: vi.fn(),
+}));
+
+vi.mock('../../lib/api', async () => {
+  const actual = await vi.importActual<typeof import('../../lib/api')>('../../lib/api');
+  return {
+    ...actual,
+    api: {
+      ...actual.api,
+      activationSummary: apiMocks.activationSummary,
+    },
+  };
+});
 
 function itemByLabel(items: ReturnType<typeof buyerReadinessItems>, label: string) {
   const item = items.find((entry) => entry.label === label);
   if (!item) throw new Error(`Missing readiness item ${label}`);
   return item;
+}
+
+async function settle(): Promise<void> {
+  await act(async () => {
+    await Promise.resolve();
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+  });
 }
 
 describe('buyerReadinessItems', () => {
@@ -72,9 +101,37 @@ describe('buyerReadinessItems', () => {
 
     expect(crm.value).toBe('Connected destination');
     expect(crm.status).toBe('connected');
-    expect(crm.detail).toContain('configured Salesforce');
+    expect(crm.detail).toContain('claim delivery only when Activation / outreach shows delivered rows');
     expect(activationItem.value).toBe('1 delivered row');
     expect(activationItem.status).toBe('delivery observed');
+  });
+
+  it('does not imply Salesforce delivery when only another destination is connected', () => {
+    const activation: ActivationSummary = {
+      destinations: [
+        {
+          destination_key: 'crm_cdp',
+          destination_type: 'crm_cdp',
+          display_name: 'CRM / CDP',
+          status: 'connected',
+          allowed_actions: ['stage_activation'],
+        },
+        {
+          destination_key: 'salesforce',
+          destination_type: 'salesforce',
+          display_name: 'Salesforce',
+          status: 'not_configured',
+          allowed_actions: [],
+        },
+      ],
+      recent_outbox: [],
+    };
+
+    const crm = itemByLabel(buyerReadinessItems(activation, []), 'CRM / Salesforce handoff');
+
+    expect(crm.value).toBe('1 connected destination');
+    expect(crm.detail).toContain('connected destinations with delivered rows');
+    expect(crm.detail).not.toContain('Salesforce delivery');
   });
 
   it('separates live, synthetic, and pending source-readiness claims', () => {
@@ -90,7 +147,7 @@ describe('buyerReadinessItems', () => {
 
     expect(source.value).toBe('1 live · 1 synthetic · 1 pending');
     expect(source.status).toBe('partial');
-    expect(source.detail).toContain('cannot imply everything is live');
+    expect(source.detail).toContain('Live, synthetic, and pending feeds stay separated');
   });
 
   it('keeps data-source claims in loading state while source readiness is still probing', () => {
@@ -121,7 +178,7 @@ describe('buyerReadinessItems', () => {
 
     expect(crm.value).toBe('Checking');
     expect(crm.status).toBe('probing registry');
-    expect(crm.detail).toContain('unverified until this resolves');
+    expect(crm.detail).toContain('Delivery claims stay unverified');
     expect(activationItem.value).toBe('Checking');
     expect(activationItem.status).toBe('probing outbox');
   });
@@ -131,7 +188,67 @@ describe('buyerReadinessItems', () => {
 
     expect(itemByLabel(items, 'Scoring / recommendations').status).toBe('not trained ML');
     expect(itemByLabel(items, 'Scoring / recommendations').detail).toContain('Do not call them a trained MIP ML model');
+    expect(itemByLabel(items, 'Custom segments').status).toBe('configured only');
+    expect(itemByLabel(items, 'Custom segments').detail).toContain('Do not claim arbitrary named segment authoring');
     expect(itemByLabel(items, 'Compliance posture').status).toBe('no certification claim');
     expect(itemByLabel(items, 'Audit coverage').detail).toContain('Do not claim every click');
+  });
+});
+
+describe('BuyerReadinessPanel', () => {
+  let root: Root;
+  let queryClient: QueryClient;
+
+  beforeEach(() => {
+    document.body.innerHTML = '<div id="root"></div>';
+    root = createRoot(document.getElementById('root') as HTMLElement);
+    queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: Infinity } },
+    });
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    queryClient.clear();
+    document.body.innerHTML = '';
+    vi.clearAllMocks();
+  });
+
+  async function renderPanel(): Promise<void> {
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <BuyerReadinessPanel
+            sources={[
+              { name: 'Cotality Public Records', status: 'live', rows: 10, last_updated: null, note: '' },
+              { name: 'Building Permits', status: 'not_configured', rows: null, last_updated: null, note: '' },
+            ]}
+          />
+        </QueryClientProvider>,
+      );
+    });
+  }
+
+  it('renders loading claim boundaries before the activation registry resolves', async () => {
+    apiMocks.activationSummary.mockImplementation(() => new Promise(() => undefined));
+
+    await renderPanel();
+
+    expect(document.body.textContent).toContain('Buyer readiness');
+    expect(document.body.textContent).toContain('Checking');
+    expect(document.body.textContent).toContain('probing registry');
+    expect(document.body.textContent).not.toContain('No destination registry');
+  });
+
+  it('renders registry unavailable claim boundaries when activation summary fails', async () => {
+    apiMocks.activationSummary.mockRejectedValue(new Error('registry down'));
+
+    await renderPanel();
+    await settle();
+
+    expect(document.body.textContent).toContain('activation unknown');
+    expect(document.body.textContent).toContain('Activation status unavailable; connector claims are unverified.');
+    expect(document.body.textContent).toContain('registry unavailable');
+    expect(document.body.textContent).not.toContain('No destination registry');
   });
 });
