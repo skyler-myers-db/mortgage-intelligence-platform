@@ -126,7 +126,7 @@ export function activeSegmentsFromSearch(searchParams: URLSearchParams): Segment
 }
 
 export function segmentModeFromSearch(searchParams: URLSearchParams): SegmentFilterMode {
-  return searchParams.get('segment_mode') === 'all' ? 'all' : 'any';
+  return searchParams.get('segment_mode')?.toLowerCase() === 'all' ? 'all' : 'any';
 }
 
 export function segmentSearchParamsForState(
@@ -528,7 +528,7 @@ export default function SegmentIntelligence() {
           ? `${segments.length} borrower ${segments.length === 1 ? 'segment' : 'segments'} · standalone counts`
           : 'Borrower segments · standalone counts'
       }
-      lede="Cards show standalone marketable counts after secondary borrower filters. Select cards, then choose Any selected for a de-duplicated OR cohort or All selected for borrowers in every selected segment."
+      lede="Cards show standalone counts after filters. Select cards, then choose Any selected for a de-duplicated OR cohort or All selected for borrowers in every selected segment."
       heroRight={
         <Button
           size="sm"

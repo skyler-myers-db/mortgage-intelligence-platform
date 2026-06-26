@@ -53,6 +53,7 @@ describe('segment intelligence lender overlay URL state', () => {
 
   it('hydrates segment match mode from public URL state', () => {
     expect(segmentModeFromSearch(new URLSearchParams('segment_mode=all'))).toBe('all');
+    expect(segmentModeFromSearch(new URLSearchParams('segment_mode=ALL'))).toBe('all');
     expect(segmentModeFromSearch(new URLSearchParams('segment_mode=any'))).toBe('any');
     expect(segmentModeFromSearch(new URLSearchParams('segment_mode=drop_table'))).toBe('any');
   });
