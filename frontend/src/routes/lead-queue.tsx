@@ -94,7 +94,7 @@ export default function LeadQueue() {
     () => parseSegmentCodes(searchParams.get('segment_codes')),
     [searchParams],
   );
-  const segmentMode = searchParams.get('segment_mode') === 'all' ? 'all' : 'any';
+  const segmentMode = searchParams.get('segment_mode')?.trim().toLowerCase() === 'all' ? 'all' : 'any';
   // 2-char state code (e.g. `?state=IL`) from the home-map deep-link.
   // Uppercased defensively so `/lead-queue?state=il` still works.
   const stateFilter = (searchParams.get('state') ?? '').toUpperCase() || undefined;

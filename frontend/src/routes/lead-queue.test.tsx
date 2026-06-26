@@ -320,6 +320,22 @@ describe('LeadQueue filter state', () => {
     expect(selected.some((text) => text.includes('2 segments selected (any selected)'))).toBe(true);
   });
 
+  it('normalizes mixed-case segment mode values in route filters', async () => {
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter initialEntries={['/lead-queue?segment_codes=ITM,Equity&segment_mode=ALL']}>
+            <LeadQueue />
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+    });
+    await settle();
+
+    expect(document.querySelector('button[aria-label="SEGMENT: 2 segments selected (all selected)"]')).toBeTruthy();
+    expect(document.body.textContent).toContain('segments = Prime Refi Candidates, Home Equity Candidate (all selected)');
+  });
+
   it('shows connected outcome counts and top competitors', async () => {
     apiMocks.salesOutcomeSummary.mockResolvedValueOnce({
       total_outcomes: 5,
