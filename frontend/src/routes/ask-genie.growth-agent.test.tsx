@@ -20,6 +20,7 @@ const genie = vi.fn();
 const genieAction = vi.fn();
 const runGrowthAgentWorkflow = vi.fn();
 const runCustomGrowthAgentWorkflow = vi.fn();
+const runMortgageGrowthAgent = vi.fn();
 const navigate = vi.fn();
 const setDrawer = vi.fn();
 const refreshWorkspace = vi.fn();
@@ -32,6 +33,7 @@ vi.mock('../lib/api', () => ({
     genieAction: (...args: unknown[]) => genieAction(...args),
     runGrowthAgentWorkflow: (...args: unknown[]) => runGrowthAgentWorkflow(...args),
     runCustomGrowthAgentWorkflow: (...args: unknown[]) => runCustomGrowthAgentWorkflow(...args),
+    runMortgageGrowthAgent: (...args: unknown[]) => runMortgageGrowthAgent(...args),
   },
   ApiError: class ApiError extends Error {
     status = 500;
@@ -76,8 +78,27 @@ const WORKFLOW: GrowthAgentWorkflow = {
   cadence_options: ['daily', 'weekly'],
 };
 
+const BORROWER_DOSSIER_WORKFLOW: GrowthAgentWorkflow = {
+  id: 'borrower_dossier_review',
+  title: 'Borrower Dossier Review',
+  objective: 'Prepare the top-opportunity borrower story queue for human review.',
+  trigger_label: 'Top opportunity dossier signals',
+  action_label: 'Open top-opportunity dossier queue',
+  source_assets: [
+    'mip.gold.borrower_360',
+    'mip.gold.borrower_dossier',
+    'mip.gold.evidence_events',
+  ],
+  default_route: '/lead-queue?funnel_stage=high_opportunity&marketing_eligibility=Eligible+only',
+  proof_points: [
+    'Dossier evidence comes from governed borrower assets.',
+    'The handoff uses the high-opportunity Lead Queue stage.',
+  ],
+  cadence_options: ['daily', 'weekly'],
+};
+
 const HOME: GrowthAgentHomeResponse = {
-  workflows: [WORKFLOW],
+  workflows: [WORKFLOW, BORROWER_DOSSIER_WORKFLOW],
   monitors: [],
 };
 
@@ -90,6 +111,11 @@ const START: GenieStartResult = {
 const RUN: GrowthAgentRunResponse = {
   workflow: WORKFLOW,
   run_id: '11111111-1111-4111-8111-111111111111',
+  specialist_agent: 'structured_data_agent',
+  trace_id: 'agent-trace-11111111-1111-4111-8111-111111111111',
+  tool_result_hash: 'a'.repeat(64),
+  broad_label: 'Broad opportunity',
+  actionable_label: 'Eligible subset',
   broad_total: 117404,
   actionable_total: 5394,
   broad_avg_score: 64.2,
@@ -111,6 +137,8 @@ const RUN: GrowthAgentRunResponse = {
       status: 'completed',
       detail: 'Found 117,404 borrowers in the broad opportunity screen.',
       source_asset: 'mip.gold.borrower_360',
+      tool_name: 'fn_build_cohort',
+      result_hash: 'a'.repeat(64),
     },
   ],
   policy_checks: [
@@ -120,6 +148,15 @@ const RUN: GrowthAgentRunResponse = {
       detail: '117,404 broad opportunities reconcile to 5,394 eligible leads.',
     },
   ],
+  governance_chips: [
+    {
+      label: 'PII-safe output',
+      status: 'passed',
+      detail: 'The run returns counts and route filters only.',
+      evidence_ref: 'agent-trace-11111111-1111-4111-8111-111111111111',
+    },
+  ],
+  interpreted_intent: 'Structured Data Agent selected the daily refi opportunity brief.',
 };
 
 function setNativeValue(el: HTMLInputElement | HTMLSelectElement, value: string) {
@@ -144,6 +181,7 @@ describe('AskGenie Growth Agent route panel', () => {
     genie.mockResolvedValue(null);
     genieAction.mockResolvedValue(null);
     runGrowthAgentWorkflow.mockResolvedValue(RUN);
+    runMortgageGrowthAgent.mockResolvedValue(RUN);
     runCustomGrowthAgentWorkflow.mockResolvedValue({
       ...RUN,
       workflow: {
@@ -153,6 +191,7 @@ describe('AskGenie Growth Agent route panel', () => {
         trigger_label: 'Prime Refi Candidates or Listed for Sale segment screen',
         action_label: 'Open eligible custom subset',
       },
+      specialist_agent: 'campaign_agent',
       route: '/lead-queue?segment_codes=itm%2Clisted&segment_mode=any&marketing_eligibility=Eligible+only&states=IL%2CTX',
       criteria: {
         states: ['IL', 'TX'],
@@ -168,6 +207,7 @@ describe('AskGenie Growth Agent route panel', () => {
           detail: 'Custom workflow criteria are reviewed segment codes and explicit Any/All mode only.',
         },
       ],
+      interpreted_intent: 'Campaign Agent built a custom ANY segment workflow.',
     });
     container = document.createElement('div');
     document.body.appendChild(container);
@@ -227,6 +267,7 @@ describe('AskGenie Growth Agent route panel', () => {
     await waitUntil(() => container.textContent?.includes('Daily Refi Opportunity Brief') ?? false);
 
     expect(container.textContent).toContain('Mortgage Growth Agent');
+    expect(container.textContent).toContain('Borrower Dossier Review');
     expect(container.textContent).toContain('No auto-send');
     expect(container.textContent).toContain('Audited Lakebase run');
 
@@ -236,6 +277,175 @@ describe('AskGenie Growth Agent route panel', () => {
     expect(button(/^Run$/).disabled).toBe(true);
     expect(runGrowthAgentWorkflow).not.toHaveBeenCalled();
     expect(runCustomGrowthAgentWorkflow).not.toHaveBeenCalled();
+    expect(runMortgageGrowthAgent).not.toHaveBeenCalled();
+  });
+
+  it('routes a natural-language agent objective through reviewed workflows', async () => {
+    mount();
+    await waitUntil(() => container.textContent?.includes('Agent objective') ?? false);
+
+    const prompt = container.querySelector<HTMLTextAreaElement>(
+      'textarea[aria-label="Mortgage Growth Agent prompt"]',
+    );
+    if (!prompt) throw new Error('agent prompt not rendered');
+    act(() => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+      setter?.call(prompt, 'Find refi and listed borrowers in IL before the branch review.');
+      prompt.dispatchEvent(new Event('input', { bubbles: true }));
+      prompt.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    act(() => setNativeValue(stateInput(), 'IL'));
+    act(() => button(/^Plan and run$/).click());
+
+    await waitUntil(() => runMortgageGrowthAgent.mock.calls.length === 1);
+    expect(runMortgageGrowthAgent.mock.calls[0][0]).toEqual({
+      prompt: 'Find refi and listed borrowers in IL before the branch review.',
+      states: ['IL'],
+      save_monitor: false,
+      cadence: 'daily',
+      monitor_name: null,
+    });
+    await waitUntil(() => container.textContent?.includes('Structured Data Agent') ?? false);
+    expect(container.textContent).toContain('Trace 111111111111');
+    expect(container.textContent).toContain('Hash aaaaaaaaaaaa');
+    expect(container.textContent).toContain('PII-safe output');
+    expect(container.textContent).toContain('fn_build_cohort');
+  });
+
+  it('saves natural-language monitors with reviewed filters only', async () => {
+    const savedMonitor = {
+      monitor_id: '22222222-2222-4222-8222-222222222222',
+      workflow_id: 'daily_refi_brief' as const,
+      name: 'Mortgage Growth Agent - IL',
+      cadence: 'weekly' as const,
+      status: 'active' as const,
+      criteria: {
+        states: ['IL'],
+        lead_queue_filters: {
+          segment_codes: ['itm'],
+          segment_mode: 'any',
+        },
+      },
+      route: RUN.route,
+      actionable_total: RUN.actionable_total,
+      source_assets: RUN.source_assets,
+      last_run_id: RUN.run_id,
+    };
+    growthAgent
+      .mockResolvedValueOnce(HOME)
+      .mockResolvedValueOnce({ ...HOME, monitors: [savedMonitor] });
+    runMortgageGrowthAgent.mockResolvedValueOnce({
+      ...RUN,
+      monitor: savedMonitor,
+    });
+    mount();
+    await waitUntil(() => container.textContent?.includes('Agent objective') ?? false);
+
+    const prompt = container.querySelector<HTMLTextAreaElement>(
+      'textarea[aria-label="Mortgage Growth Agent prompt"]',
+    );
+    if (!prompt) throw new Error('agent prompt not rendered');
+    act(() => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+      setter?.call(prompt, 'Find refinance opportunities for branch follow-up.');
+      prompt.dispatchEvent(new Event('input', { bubbles: true }));
+      prompt.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    act(() => setNativeValue(stateInput(), 'IL'));
+    const cadence = container.querySelector<HTMLSelectElement>(
+      'select[aria-label="Growth Agent monitor cadence"]',
+    );
+    if (!cadence) throw new Error('monitor cadence select not rendered');
+    act(() => setNativeValue(cadence, 'weekly'));
+    act(() => button(/^Plan and save monitor$/).click());
+
+    await waitUntil(() => runMortgageGrowthAgent.mock.calls.length === 1);
+    expect(runMortgageGrowthAgent.mock.calls[0][0]).toEqual({
+      prompt: 'Find refinance opportunities for branch follow-up.',
+      states: ['IL'],
+      save_monitor: true,
+      cadence: 'weekly',
+      monitor_name: 'Mortgage Growth Agent - IL',
+    });
+    await waitUntil(() => container.textContent?.includes('Mortgage Growth Agent - IL') ?? false);
+    expect(container.textContent).toContain('Saved monitors');
+    expect(container.textContent).toContain('5,394');
+  });
+
+  it('does not imply a state scope in the default prompt', async () => {
+    mount();
+    await waitUntil(() => container.textContent?.includes('Agent objective') ?? false);
+
+    const prompt = container.querySelector<HTMLTextAreaElement>(
+      'textarea[aria-label="Mortgage Growth Agent prompt"]',
+    );
+    if (!prompt) throw new Error('agent prompt not rendered');
+    expect(prompt.value).toContain('current coverage');
+    expect(prompt.value).not.toContain('Illinois');
+
+    act(() => button(/^Plan and run$/).click());
+    await waitUntil(() => runMortgageGrowthAgent.mock.calls.length === 1);
+    expect(runMortgageGrowthAgent.mock.calls[0][0]).toEqual({
+      prompt: 'Find prime refinance and listed-for-sale opportunities across current coverage.',
+      states: [],
+      save_monitor: false,
+      cadence: 'daily',
+      monitor_name: null,
+    });
+  });
+
+  it('renders non-passed governance caveats visibly', async () => {
+    runMortgageGrowthAgent.mockResolvedValueOnce({
+      ...RUN,
+      governance_chips: [
+        ...RUN.governance_chips,
+        {
+          label: 'Preview integration',
+          status: 'not_provisioned',
+          detail: 'This Databricks preview feature is not provisioned in the workspace.',
+          evidence_ref: 'capability:not_provisioned',
+        },
+      ],
+    });
+    mount();
+    await waitUntil(() => container.textContent?.includes('Agent objective') ?? false);
+
+    act(() => button(/^Plan and run$/).click());
+    await waitUntil(() => container.textContent?.includes('Preview integration') ?? false);
+
+    expect(container.textContent).toContain('Not provisioned');
+    expect(container.textContent).toContain('This Databricks preview feature is not provisioned in the workspace.');
+  });
+
+  it('renders blocked tool and policy states as blocked, not completed or review-only', async () => {
+    runMortgageGrowthAgent.mockResolvedValueOnce({
+      ...RUN,
+      tool_steps: [
+        {
+          label: 'Approval gate',
+          status: 'blocked',
+          detail: 'Human approval is required before activation.',
+          tool_name: 'fn_lead_queue_url',
+          result_hash: 'b'.repeat(64),
+        },
+      ],
+      policy_checks: [
+        {
+          label: 'Activation policy',
+          status: 'blocked',
+          detail: 'The agent cannot send outreach automatically.',
+        },
+      ],
+    });
+    mount();
+    await waitUntil(() => container.textContent?.includes('Agent objective') ?? false);
+
+    act(() => button(/^Plan and run$/).click());
+    await waitUntil(() => container.textContent?.includes('Activation policy') ?? false);
+
+    expect(container.querySelector('.growth-agent-step--blocked')).not.toBeNull();
+    expect(container.textContent).toContain('Blocked');
+    expect(container.textContent).not.toContain('Approval gatePassed');
   });
 
   it('runs and opens the reconciled eligible Lead Queue subset', async () => {

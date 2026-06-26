@@ -29,7 +29,9 @@ import {
 } from '../lib/genieConversation';
 import { isGenieFollowUpQuestion } from '../lib/genieSession';
 import { queryKeys } from '../lib/queryKeys';
+import { GrowthAgentRunCard, formatGrowthAgentCount } from './ask-genie.growth-run-card';
 
+export { formatGrowthAgentCount };
 /**
  * Ask Genie — deep-dive view with trusted-asset list and backend-provided
  * prompt suggestions.
@@ -99,19 +101,19 @@ export function parseGrowthAgentStateInput(value: string): { states: string[]; i
   return { states, invalid };
 }
 
-export function formatGrowthAgentCount(value: number | null | undefined): string {
-  return new Intl.NumberFormat('en-US').format(Math.max(0, Number(value ?? 0)));
-}
-
 function sourceAssetLabel(asset: string): string {
   const parts = asset.split('.').filter(Boolean);
   return parts.slice(-2).join('.') || asset;
 }
 
 function workflowIcon(workflowId: GrowthAgentWorkflowId) {
+  if (workflowId === 'borrower_dossier_review') return 'doc';
   if (workflowId === 'listing_watch') return 'tag';
   if (workflowId === 'competitor_recapture_monitor') return 'target';
   if (workflowId === 'high_equity_heloc_watch') return 'equity';
+  if (workflowId === 'branch_capacity_review') return 'user';
+  if (workflowId === 'source_freshness_sentinel') return 'db';
+  if (workflowId === 'custom_segment_watch') return 'filter';
   return 'money';
 }
 
@@ -144,6 +146,11 @@ export default function AskGenie() {
   const [conversationId, setConversationId] = useState<string | null>(() => readGenieConversationId());
   const [agentStateText, setAgentStateText] = useState('');
   const [agentCadence, setAgentCadence] = useState<GrowthAgentCadence>('daily');
+  const [agentPrompt, setAgentPrompt] = useState(
+    'Find prime refinance and listed-for-sale opportunities across current coverage.',
+  );
+  const [promptAgentPending, setPromptAgentPending] = useState(false);
+  const [promptAgentPendingAction, setPromptAgentPendingAction] = useState<'run' | 'save' | null>(null);
   const [growthAgentPending, setGrowthAgentPending] = useState<GrowthAgentWorkflowId | null>(null);
   const [customAgentPendingAction, setCustomAgentPendingAction] = useState<'run' | 'save' | null>(null);
   const [growthAgentError, setGrowthAgentError] = useState<string | null>(null);
@@ -293,6 +300,41 @@ export default function AskGenie() {
     }
   }
 
+  async function runMortgageGrowthAgentPrompt(saveMonitor: boolean) {
+    const parsed = parseGrowthAgentStateInput(agentStateText);
+    const prompt = agentPrompt.trim();
+    if (parsed.invalid.length > 0) {
+      setGrowthAgentError(`Use two-letter state codes only: ${parsed.invalid.join(', ')}`);
+      return;
+    }
+    if (prompt.length < 3) {
+      setGrowthAgentError('Enter a borrower-growth objective for the agent.');
+      return;
+    }
+    setPromptAgentPending(true);
+    setPromptAgentPendingAction(saveMonitor ? 'save' : 'run');
+    setGrowthAgentError(null);
+    try {
+      const stateSuffix = parsed.states.length > 0 ? ` - ${parsed.states.join(', ')}` : '';
+      const result = await api.runMortgageGrowthAgent({
+        prompt,
+        states: parsed.states,
+        save_monitor: saveMonitor,
+        cadence: agentCadence,
+        monitor_name: saveMonitor ? `Mortgage Growth Agent${stateSuffix}` : null,
+      });
+      setLatestGrowthRun(result);
+      if (saveMonitor) {
+        await growthAgentQuery.refetch();
+      }
+    } catch (err) {
+      setGrowthAgentError(err instanceof Error ? err.message : 'Mortgage Growth Agent failed.');
+    } finally {
+      setPromptAgentPending(false);
+      setPromptAgentPendingAction(null);
+    }
+  }
+
   async function runCustomGrowthAgentWorkflow(saveMonitor: boolean) {
     const parsed = parseGrowthAgentStateInput(agentStateText);
     if (parsed.invalid.length > 0) {
@@ -417,7 +459,7 @@ export default function AskGenie() {
       lede="Run governed agent workflows, review the exact eligible Lead Queue subset, then ask Genie follow-up questions against trusted Unity Catalog assets."
       heroRight={<Chip variant="neutral" icon="sparkle">Databricks Genie + SQL</Chip>}
     >
-      <div className="surface growth-agent" aria-busy={growthAgentPending !== null}>
+      <div className="surface growth-agent" aria-busy={growthAgentPending !== null || promptAgentPending}>
         <div className="surface__hdr">
           <Icon name="bolt" size={14} className="icon-accent" />
           <div>
@@ -429,6 +471,43 @@ export default function AskGenie() {
           <Chip variant="neutral" icon="audit">Audited Lakebase run</Chip>
         </div>
         <div className="surface__body">
+          <section className="growth-agent-command" aria-label="Mortgage Growth Agent command center">
+            <div className="growth-agent-command__main">
+              <label className="growth-agent__field">
+                <span>Agent objective</span>
+                <textarea
+                  className="route-textarea growth-agent-command__prompt"
+                  aria-label="Mortgage Growth Agent prompt"
+                  value={agentPrompt}
+                  onChange={(event) => setAgentPrompt(event.target.value)}
+                />
+                <span className="growth-agent__hint">
+                  The agent selects reviewed tools only; raw borrower identifiers and PII are rejected.
+                </span>
+              </label>
+            </div>
+            <div className="growth-agent-command__actions">
+              <Button
+                variant="primary"
+                size="sm"
+                icon="sparkle"
+                onClick={() => runMortgageGrowthAgentPrompt(false)}
+                disabled={growthAgentPending !== null || promptAgentPending || stateParsePreview.invalid.length > 0}
+              >
+                {promptAgentPending && promptAgentPendingAction === 'run' ? 'Planning…' : 'Plan and run'}
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                icon="bell"
+                onClick={() => runMortgageGrowthAgentPrompt(true)}
+                disabled={growthAgentPending !== null || promptAgentPending || stateParsePreview.invalid.length > 0}
+              >
+                {promptAgentPending && promptAgentPendingAction === 'save' ? 'Saving…' : 'Plan and save monitor'}
+              </Button>
+            </div>
+          </section>
+
           <div className="growth-agent__controls">
             <label className="growth-agent__field">
               <span>State scope</span>
@@ -505,7 +584,7 @@ export default function AskGenie() {
                       size="sm"
                       icon="play"
                       onClick={() => runGrowthAgentWorkflow(workflow, false)}
-                      disabled={growthAgentPending !== null || stateParsePreview.invalid.length > 0}
+                      disabled={growthAgentPending !== null || promptAgentPending || stateParsePreview.invalid.length > 0}
                     >
                       {pending ? 'Running…' : 'Run'}
                     </Button>
@@ -514,7 +593,7 @@ export default function AskGenie() {
                       size="sm"
                       icon="bell"
                       onClick={() => runGrowthAgentWorkflow(workflow, true)}
-                      disabled={growthAgentPending !== null || stateParsePreview.invalid.length > 0}
+                      disabled={growthAgentPending !== null || promptAgentPending || stateParsePreview.invalid.length > 0}
                     >
                       Save monitor
                     </Button>
@@ -579,7 +658,7 @@ export default function AskGenie() {
                   size="sm"
                   icon="play"
                   onClick={() => runCustomGrowthAgentWorkflow(false)}
-                  disabled={growthAgentPending !== null || customSegments.length === 0 || stateParsePreview.invalid.length > 0}
+                  disabled={growthAgentPending !== null || promptAgentPending || customSegments.length === 0 || stateParsePreview.invalid.length > 0}
                 >
                   {growthAgentPending === 'custom_segment_watch' && customAgentPendingAction === 'run' ? 'Running…' : 'Run custom'}
                 </Button>
@@ -588,7 +667,7 @@ export default function AskGenie() {
                   size="sm"
                   icon="bell"
                   onClick={() => runCustomGrowthAgentWorkflow(true)}
-                  disabled={growthAgentPending !== null || customSegments.length === 0 || stateParsePreview.invalid.length > 0}
+                  disabled={growthAgentPending !== null || promptAgentPending || customSegments.length === 0 || stateParsePreview.invalid.length > 0}
                 >
                   {growthAgentPending === 'custom_segment_watch' && customAgentPendingAction === 'save' ? 'Saving…' : 'Save custom monitor'}
                 </Button>
@@ -597,70 +676,11 @@ export default function AskGenie() {
           </div>
 
           {latestGrowthRun && (
-            <div className="growth-agent-run" aria-label="Latest Growth Agent run">
-              <div className="growth-agent-run__head">
-                <div>
-                  <div className="eyebrow">Latest run</div>
-                  <div className="h-4">{latestGrowthRun.workflow.title}</div>
-                </div>
-                <Button
-                  variant="success"
-                  icon="chevright"
-                  onClick={() => navigate(latestGrowthRun.route)}
-                >
-                  {latestGrowthRun.workflow.action_label}
-                </Button>
-              </div>
-              <div className="growth-agent-run__metrics">
-                <div>
-                  <span>Broad opportunity</span>
-                  <strong>{formatGrowthAgentCount(latestGrowthRun.broad_total)}</strong>
-                </div>
-                <div>
-                  <span>Eligible subset</span>
-                  <strong>{formatGrowthAgentCount(latestGrowthRun.actionable_total)}</strong>
-                </div>
-                <div>
-                  <span>Avg score</span>
-                  <strong>{latestGrowthRun.actionable_avg_score ?? '—'}</strong>
-                </div>
-              </div>
-              <div className="growth-agent-run__body">
-                <div className="growth-agent-run__section">
-                  <div className="eyebrow">Tool timeline</div>
-                  <div className="growth-agent-timeline">
-                    {latestGrowthRun.tool_steps.map((step) => (
-                      <div key={step.label} className={`growth-agent-step growth-agent-step--${step.status}`}>
-                        <Icon name={step.status === 'review_required' ? 'audit' : 'check'} size={12} />
-                        <div>
-                          <div className="growth-agent-step__title">{step.label}</div>
-                          <div className="growth-agent-step__detail">{step.detail}</div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-                <div className="growth-agent-run__section">
-                  <div className="eyebrow">Policy checks</div>
-                  <div className="growth-agent-policy-list">
-                    {latestGrowthRun.policy_checks.map((check) => (
-                      <div key={check.label} className="growth-agent-policy">
-                        <Chip variant={check.status === 'passed' ? 'success' : 'warning'} icon="shield">
-                          {check.status === 'passed' ? 'Passed' : 'Review'}
-                        </Chip>
-                        <div>
-                          <div className="growth-agent-step__title">{check.label}</div>
-                          <div className="growth-agent-step__detail">{check.detail}</div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-              <div className="chip-row growth-agent-run__assets">
-                {latestGrowthRun.source_assets.map((asset) => renderSourceAssetChip(asset))}
-              </div>
-            </div>
+            <GrowthAgentRunCard
+              run={latestGrowthRun}
+              onOpenRoute={(route) => navigate(route)}
+              renderSourceAssetChip={renderSourceAssetChip}
+            />
           )}
 
           {monitors.length > 0 && (

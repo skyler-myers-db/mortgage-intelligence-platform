@@ -164,6 +164,7 @@ _MUTATION_AUDIT_EXPECTATIONS: dict[str, tuple[str, ...]] = {
     "genie_action": ("handle_genie_action(",),
     "run_growth_agent_workflow": ("_run_workflow(",),
     "run_custom_growth_agent_workflow": ("_run_workflow(",),
+    "run_mortgage_growth_agent": ("_planned_workflow(", "_run_workflow("),
     "log_event": ("store.write(",),
     "save_lead": ("store.save_lead(",),
     "delete_lead": ("store.delete_lead(",),
@@ -365,11 +366,28 @@ def test_growth_agent_audit_metadata_is_allowlisted_and_value_checked() -> None:
                 "portfolio_criteria": {"marketing_eligibility": "Eligible only"},
             },
             "source_assets": ["mip.gold.borrower_360", "mip.gold.lead_population"],
+            "trace_id": "agent-trace-11111111-1111-4111-8111-111111111111",
+            "tool_result_hash": "a" * 64,
+            "specialist_agent": "structured_data_agent",
             "tool_steps": [
-                {"label": "Apply actionability gates", "status": "completed", "detail": "No identities returned."},
+                {
+                    "label": "Apply actionability gates",
+                    "status": "completed",
+                    "detail": "No identities returned.",
+                    "tool_name": "fn_segment_counts",
+                    "result_hash": "a" * 64,
+                },
             ],
             "policy_checks": [
                 {"label": "No outbound activation", "status": "passed", "detail": "Human review remains required."},
+            ],
+            "governance_chips": [
+                {
+                    "label": "PII-safe output",
+                    "status": "passed",
+                    "detail": "Counts and route filters only.",
+                    "evidence_ref": "agent-trace-11111111-1111-4111-8111-111111111111",
+                }
             ],
         },
         action="growth_agent.run",
@@ -377,6 +395,10 @@ def test_growth_agent_audit_metadata_is_allowlisted_and_value_checked() -> None:
 
     assert metadata["workflow_id"] == "daily_refi_brief"
     assert metadata["actionable_total"] == 5394
+    assert metadata["trace_id"].startswith("agent-trace-")
+    assert metadata["tool_result_hash"] == "a" * 64
+    assert metadata["specialist_agent"] == "structured_data_agent"
+    assert metadata["governance_chips"][0]["label"] == "PII-safe output"
     assert metadata["result_filters"]["portfolio_criteria"]["marketing_eligibility"] == "Eligible only"
 
 
@@ -423,13 +445,91 @@ def test_custom_growth_agent_audit_metadata_is_governed() -> None:
     assert metadata["result_filters"]["segment_mode"] == "all"
 
 
+def test_borrower_dossier_growth_agent_audit_metadata_is_governed() -> None:
+    metadata = build_safe_audit_metadata(
+        {
+            "workflow_id": "borrower_dossier_review",
+            "workflow_title": "Borrower Dossier Review",
+            "run_status": "completed",
+            "broad_total": 100,
+            "actionable_total": 12,
+            "route": "/lead-queue?funnel_stage=high_opportunity",
+            "result_filters": {
+                "source": "trusted_sql",
+                "funnel_stage": "high_opportunity",
+                "portfolio_criteria": {"marketing_eligibility": "Eligible only"},
+            },
+            "source_assets": ["mip.gold.borrower_360", "mip.gold.borrower_dossier"],
+            "tool_steps": [
+                {
+                    "label": "Summarize dossier evidence",
+                    "status": "completed",
+                    "detail": "No identities returned.",
+                    "tool_name": "fn_borrower_dossier_evidence",
+                    "source_asset": "mip.gold.borrower_dossier",
+                    "result_hash": "b" * 64,
+                },
+            ],
+            "policy_checks": [
+                {"label": "Dossier privacy", "status": "passed", "detail": "Queue handoff only."},
+            ],
+        },
+        action="growth_agent.run",
+    )
+
+    assert metadata["workflow_id"] == "borrower_dossier_review"
+    assert metadata["result_filters"]["funnel_stage"] == "high_opportunity"
+
+
+def test_growth_agent_audit_metadata_rejects_unreviewed_funnel_stage() -> None:
+    with pytest.raises(AuditMetadataValueViolation):
+        build_safe_audit_metadata(
+            {
+                "workflow_id": "borrower_dossier_review",
+                "workflow_title": "Borrower Dossier Review",
+                "run_status": "completed",
+                "result_filters": {"source": "trusted_sql", "funnel_stage": "raw_sql"},
+            },
+            action="growth_agent.run",
+        )
+
+
+def test_growth_agent_audit_metadata_rejects_unreviewed_tool_name() -> None:
+    with pytest.raises(AuditMetadataValueViolation):
+        build_safe_audit_metadata(
+            {
+                "workflow_id": "daily_refi_brief",
+                "workflow_title": "Daily Refi Opportunity Brief",
+                "run_status": "completed",
+                "tool_steps": [
+                    {
+                        "label": "Execute unsafe tool",
+                        "status": "completed",
+                        "detail": "No identities returned.",
+                        "tool_name": "run_arbitrary_sql",
+                    }
+                ],
+            },
+            action="growth_agent.run",
+        )
+
+
 def test_custom_growth_agent_lakebase_schema_contract_is_migrated() -> None:
     schema_sql = Path("lakebase/schema.sql").read_text(encoding="utf-8")
 
     assert "custom_segment_watch" in schema_sql
+    assert "borrower_dossier_review" in schema_sql
+    assert "branch_capacity_review" in schema_sql
+    assert "source_freshness_sentinel" in schema_sql
+    assert "ADD COLUMN IF NOT EXISTS trace_id TEXT" in schema_sql
+    assert "ADD COLUMN IF NOT EXISTS tool_result_hash TEXT" in schema_sql
+    assert "ADD COLUMN IF NOT EXISTS specialist_agent TEXT" in schema_sql
+    assert "ADD COLUMN IF NOT EXISTS governance_chips JSONB" in schema_sql
     assert "ck_growth_agent_runs_workflow_id" in schema_sql
     assert "ck_growth_agent_monitors_workflow_id" in schema_sql
+    assert "2026_06_26_growth_agent_borrower_dossier_review" in schema_sql
     assert "2026_06_26_growth_agent_custom_segment_watch" in schema_sql
+    assert "2026_06_26_agentic_growth_trace" in schema_sql
 
 
 def test_in_memory_store_is_a_drop_in_for_the_protocol() -> None:

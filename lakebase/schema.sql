@@ -691,9 +691,12 @@ CREATE TABLE IF NOT EXISTS mip_app.growth_agent_runs (
     workflow_id      TEXT NOT NULL
                      CHECK (workflow_id IN (
                        'daily_refi_brief',
+                       'borrower_dossier_review',
                        'listing_watch',
                        'competitor_recapture_monitor',
                        'high_equity_heloc_watch',
+                       'branch_capacity_review',
+                       'source_freshness_sentinel',
                        'custom_segment_watch'
                      )),
     workflow_title   TEXT NOT NULL,
@@ -710,6 +713,10 @@ CREATE TABLE IF NOT EXISTS mip_app.growth_agent_runs (
     source_assets    TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
     tool_steps       JSONB NOT NULL DEFAULT '[]'::jsonb,
     policy_checks    JSONB NOT NULL DEFAULT '[]'::jsonb,
+    trace_id         TEXT,
+    tool_result_hash TEXT,
+    specialist_agent TEXT,
+    governance_chips JSONB NOT NULL DEFAULT '[]'::jsonb,
     audit_event_id   UUID REFERENCES mip_app.action_audit(audit_id),
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -723,6 +730,14 @@ ALTER TABLE mip_app.growth_agent_runs
     ADD COLUMN IF NOT EXISTS avg_rate_spread_bps DOUBLE PRECISION;
 ALTER TABLE mip_app.growth_agent_runs
     ADD COLUMN IF NOT EXISTS avg_equity_pct DOUBLE PRECISION;
+ALTER TABLE mip_app.growth_agent_runs
+    ADD COLUMN IF NOT EXISTS trace_id TEXT;
+ALTER TABLE mip_app.growth_agent_runs
+    ADD COLUMN IF NOT EXISTS tool_result_hash TEXT;
+ALTER TABLE mip_app.growth_agent_runs
+    ADD COLUMN IF NOT EXISTS specialist_agent TEXT;
+ALTER TABLE mip_app.growth_agent_runs
+    ADD COLUMN IF NOT EXISTS governance_chips JSONB NOT NULL DEFAULT '[]'::jsonb;
 CREATE INDEX IF NOT EXISTS idx_growth_agent_runs_actor_created
     ON mip_app.growth_agent_runs (actor_email, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_growth_agent_runs_workflow_created
@@ -741,9 +756,12 @@ BEGIN
         ADD CONSTRAINT ck_growth_agent_runs_workflow_id
         CHECK (workflow_id IN (
           'daily_refi_brief',
+          'borrower_dossier_review',
           'listing_watch',
           'competitor_recapture_monitor',
           'high_equity_heloc_watch',
+          'branch_capacity_review',
+          'source_freshness_sentinel',
           'custom_segment_watch'
         ));
 END $$;
@@ -758,10 +776,13 @@ CREATE TABLE IF NOT EXISTS mip_app.growth_agent_monitors (
     workflow_id      TEXT NOT NULL
                      CHECK (workflow_id IN (
                        'daily_refi_brief',
-                       'listing_watch',
-                       'competitor_recapture_monitor',
-                       'high_equity_heloc_watch',
-                       'custom_segment_watch'
+                      'borrower_dossier_review',
+                      'listing_watch',
+                      'competitor_recapture_monitor',
+                      'high_equity_heloc_watch',
+                      'branch_capacity_review',
+                      'source_freshness_sentinel',
+                      'custom_segment_watch'
                      )),
     name             TEXT NOT NULL,
     cadence          TEXT NOT NULL CHECK (cadence IN ('daily','weekly')),
@@ -789,17 +810,34 @@ BEGIN
         ADD CONSTRAINT ck_growth_agent_monitors_workflow_id
         CHECK (workflow_id IN (
           'daily_refi_brief',
+          'borrower_dossier_review',
           'listing_watch',
           'competitor_recapture_monitor',
           'high_equity_heloc_watch',
+          'branch_capacity_review',
+          'source_freshness_sentinel',
           'custom_segment_watch'
         ));
 END $$;
 
 INSERT INTO mip_app.schema_migrations (version, description)
 VALUES (
+    '2026_06_26_growth_agent_borrower_dossier_review',
+    'Allow borrower dossier review Growth Agent runs and monitors'
+)
+ON CONFLICT (version) DO NOTHING;
+
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
     '2026_06_26_growth_agent_custom_segment_watch',
     'Allow governed custom segment Growth Agent runs and monitors'
+)
+ON CONFLICT (version) DO NOTHING;
+
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_06_26_agentic_growth_trace',
+    'Add specialist workflow ids and trace/hash governance fields to Growth Agent runs'
 )
 ON CONFLICT (version) DO NOTHING;
 

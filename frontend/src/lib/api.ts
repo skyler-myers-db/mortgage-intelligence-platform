@@ -41,6 +41,7 @@ import type {
   GrowthAgentHomeResponse,
   GrowthAgentMonitor,
   GrowthAgentCustomRunRequest,
+  GrowthAgentPromptRunRequest,
   GrowthAgentRunRequest,
   GrowthAgentRunResponse,
   GrowthAgentWorkflowId,
@@ -1321,6 +1322,21 @@ export const api = {
     };
     return postJson<GrowthAgentRunResponse, GrowthAgentCustomRunRequest>(
       '/api/growth-agent/custom/run',
+      body,
+      signal,
+    );
+  },
+
+  runMortgageGrowthAgent: (
+    payload: GrowthAgentPromptRunRequest,
+    signal?: AbortSignal,
+  ) => {
+    const body: GrowthAgentPromptRunRequest = {
+      ...payload,
+      request_id: payload.request_id ?? _newRequestId(),
+    };
+    return postJson<GrowthAgentRunResponse, GrowthAgentPromptRunRequest>(
+      '/api/growth-agent/agent/run',
       body,
       signal,
     );

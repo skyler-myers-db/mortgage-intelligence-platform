@@ -27,6 +27,7 @@ from backend.schemas.common import (
     validate_public_campaign_label,
     validate_public_opaque_id,
 )
+from backend.services.agent_tools import registered_agent_tool_names
 from backend.services.audit_decision_inputs import DECISION_INPUT_KEYS
 from backend.services.audit_metadata_value_policy import (
     validate_row_count,
@@ -244,8 +245,12 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         "run_status",
         "broad_total",
         "actionable_total",
+        "trace_id",
+        "tool_result_hash",
+        "specialist_agent",
         "tool_steps",
         "policy_checks",
+        "governance_chips",
         # Offers
         "thresholds_applied",
         "decision_inputs",
@@ -321,13 +326,38 @@ def _metadata_values_for(
     return [(key, value) for key, value in metadata.items() if key.lower() in lowered]
 
 _ALLOWED_RESULT_FILTER_KEYS: frozenset[str] = frozenset(
-    {"zips", "states", "county", "counties", "segment_codes", "segment_mode", "target_lender_ref", "borrower_ids", "portfolio_criteria", "source"}
+    {
+        "zips",
+        "states",
+        "county",
+        "counties",
+        "segment_codes",
+        "segment_mode",
+        "funnel_stage",
+        "target_lender_ref",
+        "borrower_ids",
+        "portfolio_criteria",
+        "source",
+        "approval_status",
+        "outreach_status",
+        "aged_days",
+    }
 )
 _MAX_RESULT_FILTER_VALUES = 500
 _MAX_RESULT_FILTER_STATES = 56
 _DECISION_INPUT_KEYS: frozenset[str] = frozenset(DECISION_INPUT_KEYS)
 
 _ALLOWED_SEGMENT_CODES: frozenset[str] = frozenset({"itm", "listed", "permit", "investor", "equity", "retention"})
+_ALLOWED_FUNNEL_STAGES: frozenset[str] = frozenset(
+    {
+        "addressable",
+        "in_the_money",
+        "high_opportunity",
+        "offer_recommended",
+        "approved",
+        "actioned",
+    }
+)
 _FORCED_DEGRADED_DEPENDENCIES: frozenset[str] = frozenset({"warehouse", "lakebase", "genie", "all"})
 _ACTIVATION_DESTINATION_TYPES: frozenset[str] = frozenset({"salesforce", "crm_cdp", "los_pos", "servicing", "webhook"})
 _ACTIVATION_STATUSES: frozenset[str] = frozenset({"dry_run", "staged", "delivered", "failed", "cancelled"})
@@ -335,22 +365,39 @@ _ACTIVATION_DESTINATION_KEY_PATTERN = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
 _GROWTH_AGENT_WORKFLOWS: frozenset[str] = frozenset(
     {
         "daily_refi_brief",
+        "borrower_dossier_review",
         "listing_watch",
         "competitor_recapture_monitor",
         "high_equity_heloc_watch",
+        "branch_capacity_review",
+        "source_freshness_sentinel",
         "custom_segment_watch",
     }
 )
 _GROWTH_AGENT_TITLES: frozenset[str] = frozenset(
     {
         "Daily Refi Opportunity Brief",
+        "Borrower Dossier Review",
         "Listed-for-Sale Purchase Watch",
         "Competitor Recapture Monitor",
         "High-Equity / HELOC Watch",
+        "Branch Manager Capacity Review",
+        "Source/Freshness Sentinel",
         "Custom Segment Workflow",
     }
 )
 _GROWTH_AGENT_RUN_STATUSES: frozenset[str] = frozenset({"completed"})
+_GROWTH_AGENT_SPECIALISTS: frozenset[str] = frozenset(
+    {
+        "structured_data_agent",
+        "borrower_dossier_agent",
+        "offer_agent",
+        "compliance_agent",
+        "campaign_agent",
+        "data_ops_agent",
+    }
+)
+_GROWTH_AGENT_TOOL_NAMES: frozenset[str] = frozenset(registered_agent_tool_names())
 
 
 class AuditPIIError(RuntimeError):
@@ -631,6 +678,19 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
     for field, value in _metadata_values_for(metadata, {"run_status"}):
         if value is not None and str(value) not in _GROWTH_AGENT_RUN_STATUSES:
             raise AuditMetadataValueViolation(field, "must be a governed growth-agent run status")
+    for field, value in _metadata_values_for(metadata, {"trace_id"}):
+        if value is not None and not re.fullmatch(r"agent-trace-[0-9a-fA-F-]{36}", str(value)):
+            raise AuditMetadataValueViolation(field, "must be a governed agent trace id")
+    for field, value in _metadata_values_for(metadata, {"tool_result_hash"}):
+        if value is None:
+            continue
+        try:
+            validate_sql_hash(value)
+        except ValueError as exc:
+            raise AuditMetadataValueViolation(field, str(exc)) from exc
+    for field, value in _metadata_values_for(metadata, {"specialist_agent"}):
+        if value is not None and str(value) not in _GROWTH_AGENT_SPECIALISTS:
+            raise AuditMetadataValueViolation(field, "must be a governed specialist id")
     for field, value in _metadata_values_for(metadata, {"broad_total", "actionable_total"}):
         if value is None:
             continue
@@ -638,7 +698,7 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
             validate_row_count(value)
         except ValueError as exc:
             raise AuditMetadataValueViolation(field, str(exc)) from exc
-    for field, value in _metadata_values_for(metadata, {"tool_steps", "policy_checks"}):
+    for field, value in _metadata_values_for(metadata, {"tool_steps", "policy_checks", "governance_chips"}):
         if value is None:
             continue
         if not isinstance(value, list) or len(value) > 12:
@@ -646,8 +706,37 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
         for item in value:
             if not isinstance(item, dict):
                 raise AuditMetadataValueViolation(field, "must contain reviewed objects")
-            if any(contains_pii_marker(str(v)) for v in item.values()):
-                raise AuditMetadataValueViolation(field, "must not contain PII-shaped values")
+            for key, nested_value in item.items():
+                if key == "tool_name" and nested_value is not None:
+                    if str(nested_value) not in _GROWTH_AGENT_TOOL_NAMES:
+                        raise AuditMetadataValueViolation(field, "must reference a reviewed growth-agent tool")
+                    continue
+                if key == "result_hash" and nested_value is not None:
+                    try:
+                        validate_sql_hash(nested_value)
+                    except ValueError as exc:
+                        raise AuditMetadataValueViolation(field, str(exc)) from exc
+                    continue
+                if key == "source_asset" and nested_value is not None:
+                    try:
+                        validate_source_assets([str(nested_value)])
+                    except ValueError as exc:
+                        raise AuditMetadataValueViolation(field, str(exc)) from exc
+                    continue
+                if key == "evidence_ref" and nested_value is not None:
+                    evidence_ref = str(nested_value)
+                    if evidence_ref.startswith("agent-trace-"):
+                        if not re.fullmatch(r"agent-trace-[0-9a-fA-F-]{36}", evidence_ref):
+                            raise AuditMetadataValueViolation(field, "must be a governed agent trace id")
+                        continue
+                    if evidence_ref.startswith("mip."):
+                        try:
+                            validate_source_assets([evidence_ref])
+                        except ValueError as exc:
+                            raise AuditMetadataValueViolation(field, str(exc)) from exc
+                        continue
+                if contains_pii_marker(str(nested_value)):
+                    raise AuditMetadataValueViolation(field, "must not contain PII-shaped values")
     strict_sql_hash = str(metadata.get("action") or "") == "view_borrower_proof"
     for field, value in _metadata_values_for(metadata, {"sql_hash"}):
         if value is not None and strict_sql_hash:
@@ -827,6 +916,11 @@ def _assert_result_filters_value_policy(value: Any) -> None:
         )
     if "segment_mode" in value and str(value["segment_mode"]) not in {"any", "all"}:
         raise AuditMetadataValueViolation("result_filters.segment_mode", "must be any or all")
+    if "funnel_stage" in value and str(value["funnel_stage"]) not in _ALLOWED_FUNNEL_STAGES:
+        raise AuditMetadataValueViolation(
+            "result_filters.funnel_stage",
+            "must be a reviewed funnel stage",
+        )
     if "target_lender_ref" in value:
         try:
             normalize_public_lender_ref(str(value["target_lender_ref"]), allow_all=True)
@@ -856,6 +950,30 @@ def _assert_result_filters_value_policy(value: Any) -> None:
         _assert_portfolio_criteria_value_policy(value["portfolio_criteria"])
     if "source" in value and str(value["source"]) not in {"genie", "trusted_sql"}:
         raise AuditMetadataValueViolation("result_filters.source", "must be genie or trusted_sql")
+    if "approval_status" in value and str(value["approval_status"]) not in {"pending", "approved", "rejected", "hold"}:
+        raise AuditMetadataValueViolation(
+            "result_filters.approval_status",
+            "must be a reviewed approval status",
+        )
+    if "outreach_status" in value and str(value["outreach_status"]) not in {
+        "none",
+        "queued",
+        "actioned",
+        "sent",
+        "bounced",
+        "replied",
+    }:
+        raise AuditMetadataValueViolation(
+            "result_filters.outreach_status",
+            "must be a reviewed outreach status",
+        )
+    if "aged_days" in value:
+        try:
+            aged_days = int(value["aged_days"])
+        except (TypeError, ValueError) as exc:
+            raise AuditMetadataValueViolation("result_filters.aged_days", "must be 1 to 90") from exc
+        if aged_days < 1 or aged_days > 90:
+            raise AuditMetadataValueViolation("result_filters.aged_days", "must be 1 to 90")
 
 
 def _assert_decision_inputs_value_policy(value: Any) -> None:
