@@ -678,6 +678,70 @@ CREATE TABLE IF NOT EXISTS mip_app.agent_sessions (
 CREATE INDEX IF NOT EXISTS idx_agent_sessions_actor
     ON mip_app.agent_sessions (actor_email, started_at DESC);
 
+-- Mortgage Growth Agent runs -----------------------------------------
+-- Durable run ledger for governed growth-agent workflows. Rows contain
+-- reviewed workflow ids, public route filters, source assets, and counts
+-- only; no raw Genie prompts, raw CLIPs, owner names, addresses, phones, or
+-- emails. The append-only action_audit row is still the compliance ledger;
+-- audit_event_id links the product-facing run to that immutable proof.
+CREATE TABLE IF NOT EXISTS mip_app.growth_agent_runs (
+    run_id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    actor_email      TEXT NOT NULL,
+    workflow_id      TEXT NOT NULL
+                     CHECK (workflow_id IN (
+                       'daily_refi_brief',
+                       'listing_watch',
+                       'competitor_recapture_monitor',
+                       'high_equity_heloc_watch'
+                     )),
+    workflow_title   TEXT NOT NULL,
+    status           TEXT NOT NULL DEFAULT 'completed'
+                     CHECK (status IN ('completed','failed')),
+    criteria         JSONB NOT NULL DEFAULT '{}'::jsonb,
+    broad_total      INTEGER NOT NULL DEFAULT 0 CHECK (broad_total >= 0),
+    actionable_total INTEGER NOT NULL DEFAULT 0 CHECK (actionable_total >= 0),
+    route            TEXT NOT NULL,
+    source_assets    TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+    tool_steps       JSONB NOT NULL DEFAULT '[]'::jsonb,
+    policy_checks    JSONB NOT NULL DEFAULT '[]'::jsonb,
+    audit_event_id   UUID REFERENCES mip_app.action_audit(audit_id),
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_growth_agent_runs_actor_created
+    ON mip_app.growth_agent_runs (actor_email, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_growth_agent_runs_workflow_created
+    ON mip_app.growth_agent_runs (workflow_id, created_at DESC);
+
+-- Mortgage Growth Agent monitors -------------------------------------
+-- Saved scheduled-monitor definitions. Scheduling/orchestration can read
+-- these rows later, but each saved monitor remains a reviewed filter set,
+-- not an outbound activation or auto-send instruction.
+CREATE TABLE IF NOT EXISTS mip_app.growth_agent_monitors (
+    monitor_id       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    actor_email      TEXT NOT NULL,
+    workflow_id      TEXT NOT NULL
+                     CHECK (workflow_id IN (
+                       'daily_refi_brief',
+                       'listing_watch',
+                       'competitor_recapture_monitor',
+                       'high_equity_heloc_watch'
+                     )),
+    name             TEXT NOT NULL,
+    cadence          TEXT NOT NULL CHECK (cadence IN ('daily','weekly')),
+    status           TEXT NOT NULL DEFAULT 'active'
+                     CHECK (status IN ('active','paused','disabled')),
+    criteria         JSONB NOT NULL DEFAULT '{}'::jsonb,
+    route            TEXT NOT NULL,
+    actionable_total INTEGER NOT NULL DEFAULT 0 CHECK (actionable_total >= 0),
+    source_assets    TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+    last_run_id      UUID REFERENCES mip_app.growth_agent_runs(run_id),
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (actor_email, workflow_id, name)
+);
+CREATE INDEX IF NOT EXISTS idx_growth_agent_monitors_actor_updated
+    ON mip_app.growth_agent_monitors (actor_email, updated_at DESC);
+
 -- Feedback ------------------------------------------------------------
 -- Thumbs-up / thumbs-down + free-text from the in-app feedback control.
 CREATE TABLE IF NOT EXISTS mip_app.feedback (

@@ -59,14 +59,21 @@ const budgets = {
   // CSS to 118.04 / gzip 20.56; slices 2-3 (indicative offer, personalized
   // copy) add more. Headroom raised so same-epic CSS doesn't trip mid-stream;
   // ratchet back down after the epic settles.
-  initialCssBytes: 124 * KiB, // actual 118.04
+  // Bumped 2026-06-26 for the Mortgage Growth Agent route surface: governed
+  // workflow cards, broad-vs-actionable reconciliation, tool timeline,
+  // policy checks, and saved-monitor affordances. Measured post-feature
+  // actual: CSS 125.45 / gzip 21.63; reset raw with ~5% headroom.
+  initialCssBytes: 132 * KiB, // actual 125.45
   initialCssGzipBytes: 22 * KiB, // actual 20.56
   // Re-baselined 2026-06-12: the Buyer-Wow epic + "Your book today" summary
   // (Feature A) + LO-assignment/follow-up routing (Feature C) grew total JS
   // from the stale 832.42 baseline to 875.99 / gzip 288.42, tipping the old
   // 875/288 gate. Reset to the measured actual + ~5% per this file's policy.
-  totalJsBytes: 920 * KiB, // actual 875.99
-  totalJsGzipBytes: 303 * KiB, // actual 288.42
+  // Bumped 2026-06-26 for the Mortgage Growth Agent route/API/types and run
+  // presentation. Measured post-feature actual: total JS 927.79 / gzip 303.79;
+  // reset to measured actual + ~5% per this file's policy.
+  totalJsBytes: 975 * KiB, // actual 927.79
+  totalJsGzipBytes: 319 * KiB, // actual 303.79
   maxLazyJsBytes: 104 * KiB, // actual 98.40 (was 160 -- tightened)
   maxLazyJsGzipBytes: 34 * KiB, // actual 32.06 (was 60 -- tightened)
   fontAssetCount: 14, // exact by policy

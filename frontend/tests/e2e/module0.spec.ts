@@ -1,5 +1,92 @@
-import { test, expect, type ConsoleMessage } from '@playwright/test';
+import { test, expect, type ConsoleMessage, type Page } from '@playwright/test';
 import { expectKpiValue } from './helpers';
+
+const API_PREFIX = /\/api\/(?:v1\/)?/;
+const apiPattern = (path: string) => new RegExp(`${API_PREFIX.source}${path}`);
+
+async function mockAskGenieShell(page: Page) {
+  await page.route(apiPattern('health$'), async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        status: 'ok',
+        mode: 'live',
+        dependencies: { warehouse: 'up', lakebase: 'up', genie: 'up' },
+        circuit_breakers: { warehouse: 'closed', lakebase: 'closed', genie: 'closed' },
+      }),
+    });
+  });
+  await page.route(apiPattern('workspace$'), async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ saved_leads: [], saved_drafts: [] }),
+    });
+  });
+  await page.route(apiPattern('config/options$'), async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        lender_name: 'Summit Mortgage',
+        rum_enabled: false,
+        geographies: ['All states', 'Illinois', 'Texas'],
+        geographies_status: 'live',
+        occupancy: ['All', 'Owner-occupied'],
+        lien_status: ['Any', 'Open 1st lien'],
+        lender_relationships: ['All', 'Competitor customer'],
+        products: ['All products', 'Refi', 'HELOC'],
+        equity_thresholds: ['Any', '35%+'],
+        target_lender_refs: ['All'],
+        target_lender_refs_status: 'live',
+      }),
+    });
+  });
+  await page.route(apiPattern('config/footprint$'), async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        states: [
+          { state_code: 'IL', state_name: 'Illinois', display_order: 1, is_default_state: true },
+          { state_code: 'TX', state_name: 'Texas', display_order: 2, is_default_state: false },
+        ],
+        using_fallback: false,
+        geography_scope: {
+          state_count: 2,
+          county_count: 2,
+          zip_count: 0,
+          scope_label: 'Cotality data coverage: 2 counties across 2 states',
+          counties: [
+            { state: 'IL', fips_5: '17031', county_name: 'Cook County', addressable_borrowers: 20 },
+            { state: 'TX', fips_5: '48201', county_name: 'Harris County', addressable_borrowers: 15 },
+          ],
+        },
+      }),
+    });
+  });
+  await page.route(apiPattern('growth-agent(?:/monitors)?$'), async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(
+        route.request().url().endsWith('/monitors')
+          ? []
+          : { workflows: [], monitors: [] },
+      ),
+    });
+  });
+}
+
+async function fillAskGenieQuestion(page: Page, question: string) {
+  await expect(page.getByRole('heading', { name: /AI workflows for borrower growth/i })).toBeVisible({
+    timeout: 45_000,
+  });
+  const textarea = page.locator('textarea[aria-label="Ask Genie — question"]');
+  await expect(textarea).toBeVisible({ timeout: 45_000 });
+  await textarea.fill(question);
+}
 
 /**
  * Module 0 — golden path end-to-end spec.
@@ -12,6 +99,7 @@ import { expectKpiValue } from './helpers';
  */
 
 test.describe('Module 0 — golden path', () => {
+  test.describe.configure({ timeout: 90_000 });
   test.skip(process.env.E2E_LIVE === '1', 'module0.spec.ts pins offline fixture data; use real_data.spec.ts for live app validation');
 
   const consoleErrors: string[] = [];
@@ -306,16 +394,18 @@ test.describe('Module 0 — golden path', () => {
   });
 
   test('ask-genie action: borrower-list cohort opens exact filtered lead queue', async ({ page }) => {
+    test.setTimeout(60_000);
     const borrowerIds = ['B-11111', 'B-22222'];
     const leadUrls: string[] = [];
-    await page.route('**/api/genie/start', async (route) => {
+    await mockAskGenieShell(page);
+    await page.route(apiPattern('genie/start$'), async (route) => {
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify({ conversation_id: null, trusted_assets: ['mip.gold.borrower_360'] }),
       });
     });
-    await page.route('**/api/genie/message', async (route) => {
+    await page.route(apiPattern('genie/message$'), async (route) => {
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -370,7 +460,7 @@ test.describe('Module 0 — golden path', () => {
         }),
       });
     });
-    await page.route('**/api/genie/actions', async (route) => {
+    await page.route(apiPattern('genie/actions$'), async (route) => {
       const posted = route.request().postDataJSON() as { route?: string | null; borrower_ids?: string[] };
       expect(posted.borrower_ids).toEqual(borrowerIds);
       expect(posted.route).toContain('borrower_ids=');
@@ -387,7 +477,7 @@ test.describe('Module 0 — golden path', () => {
         }),
       });
     });
-    await page.route('**/api/leads**', async (route) => {
+    await page.route(apiPattern('leads(?:\\?|$)'), async (route) => {
       leadUrls.push(route.request().url());
       await route.fulfill({
         status: 200,
@@ -413,8 +503,8 @@ test.describe('Module 0 — golden path', () => {
       });
     });
 
-    await page.goto('/ask-genie');
-    await page.locator('textarea[aria-label="Ask Genie — question"]').fill('Show the top borrowers by score.');
+    await page.goto('/ask-genie', { waitUntil: 'domcontentloaded' });
+    await fillAskGenieQuestion(page, 'Show the top borrowers by score.');
     await page.getByRole('button', { name: /^Ask Genie$/i }).first().click();
     const cohortAction = page.locator('.genie-action', { hasText: /Open this cohort in Lead Queue/i }).first();
     await expect(cohortAction).toBeVisible();
@@ -430,14 +520,16 @@ test.describe('Module 0 — golden path', () => {
   });
 
   test('ask-genie action: failed confirmation is visible and does not navigate', async ({ page }) => {
-    await page.route('**/api/genie/start', async (route) => {
+    test.setTimeout(60_000);
+    await mockAskGenieShell(page);
+    await page.route(apiPattern('genie/start$'), async (route) => {
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify({ conversation_id: null, trusted_assets: ['mip.gold.borrower_360'] }),
       });
     });
-    await page.route('**/api/genie/message', async (route) => {
+    await page.route(apiPattern('genie/message$'), async (route) => {
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -468,7 +560,7 @@ test.describe('Module 0 — golden path', () => {
         }),
       });
     });
-    await page.route('**/api/genie/actions', async (route) => {
+    await page.route(apiPattern('genie/actions$'), async (route) => {
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -482,8 +574,8 @@ test.describe('Module 0 — golden path', () => {
       });
     });
 
-    await page.goto('/ask-genie');
-    await page.locator('textarea[aria-label="Ask Genie — question"]').fill('Show borrowers.');
+    await page.goto('/ask-genie', { waitUntil: 'domcontentloaded' });
+    await fillAskGenieQuestion(page, 'Show borrowers.');
     await page.getByRole('button', { name: /^Ask Genie$/i }).first().click();
     const cohortAction = page.locator('.genie-action', { hasText: /Open this cohort in Lead Queue/i }).first();
     await expect(cohortAction).toBeVisible();

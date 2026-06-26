@@ -154,7 +154,7 @@ def write_audit_event_in_transaction(
         subject_segment=subject_segment,
         request_id=request_id,
     )
-    row = conn.execute(_INSERT_SQL, params).fetchone()
+    row = _execute_returning_one(conn, _INSERT_SQL, params)
     if row is None:
         raise RuntimeError("Lakebase INSERT returned no row")
     return _audit_event_from_row(
@@ -171,6 +171,21 @@ def write_audit_event_in_transaction(
         request_id=request_id,
         correlation_id=params["correlation_id"],
     )
+
+
+def _execute_returning_one(
+    conn: Any,
+    sql: str,
+    params: dict[str, Any],
+) -> dict[str, Any] | None:
+    execute = getattr(conn, "execute", None)
+    if callable(execute):
+        row = execute(sql, params).fetchone()
+        return dict(row) if row is not None else None
+    with conn.cursor() as cur:
+        cur.execute(sql, params)
+        row = cur.fetchone()
+        return dict(row) if row is not None else None
 
 
 class LakebaseAuditStore:

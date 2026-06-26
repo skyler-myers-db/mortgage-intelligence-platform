@@ -55,6 +55,9 @@ ROUTE_TEST_MANIFEST: dict[tuple[str, str], str] = {
     ("GET", "/api/geo/county-rollups"): "tests/unit/test_geo_state_rollups.py",
     ("GET", "/api/geo/state-rollups"): "tests/unit/test_geo_state_rollups.py",
     ("GET", "/api/geo/zip-rollups"): "tests/unit/test_geo_state_rollups.py",
+    ("GET", "/api/growth-agent"): "tests/unit/test_growth_agent_api.py",
+    ("GET", "/api/growth-agent/monitors"): "tests/unit/test_growth_agent_api.py",
+    ("POST", "/api/growth-agent/workflows/{workflow_id}/run"): "tests/unit/test_growth_agent_api.py",
     ("GET", "/api/health"): "tests/unit/test_health_endpoint.py",
     ("GET", "/api/leads"): "tests/unit/test_api_routes.py",
     ("POST", "/api/leads/{borrower_id}/assign"): "tests/unit/test_sales_manager_api.py",
@@ -124,6 +127,7 @@ def _route_literal_candidates(path_template: str) -> set[str]:
         "{campaign_id}": "11111111-1111-4111-8111-111111111111",
         "{portfolio_id}": "11111111-1111-4111-8111-111111111111",
         "{asset_key}": "lead_population",
+        "{workflow_id}": "daily_refi_brief",
     }
     concrete = path_template
     for placeholder, value in replacements.items():

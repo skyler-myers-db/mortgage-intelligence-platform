@@ -34,8 +34,10 @@ from backend.services import audit_lakebase_store as lakebase_audit_mod
 from backend.services import audit_store as audit_mod
 from backend.services.audit_lakebase_store import LakebaseAuditStore
 from backend.services.audit_store import (
+    AuditMetadataValueViolation,
     _coerce_event_type,
     _reset_fallback_counter_for_tests,
+    build_safe_audit_metadata,
     get_fallback_identity_count,
     resolve_actor,
 )
@@ -160,6 +162,7 @@ _MUTATION_AUDIT_EXPECTATIONS: dict[str, tuple[str, ...]] = {
     "record_lead_outcome": ("store.record_outcome(",),
     "genie_message": ("_required_audit_write",),
     "genie_action": ("handle_genie_action(",),
+    "run_growth_agent_workflow": ("write_audit_event_in_transaction(", "GROWTH_AGENT_RUN"),
     "log_event": ("store.write(",),
     "save_lead": ("store.save_lead(",),
     "delete_lead": ("store.delete_lead(",),
@@ -335,6 +338,49 @@ def test_coerce_event_type_derives_from_action_when_missing() -> None:
     # Governance §4 wants upper snake-case canonical verbs.
     assert _coerce_event_type(None, "outreach.approve") == "OUTREACH_APPROVE"
     assert _coerce_event_type(None, "view-borrower-360") == "VIEW_BORROWER_360"
+
+
+def test_growth_agent_audit_metadata_is_allowlisted_and_value_checked() -> None:
+    metadata = build_safe_audit_metadata(
+        {
+            "workflow_id": "daily_refi_brief",
+            "workflow_title": "Daily Refi Opportunity Brief",
+            "run_status": "completed",
+            "broad_total": 117404,
+            "actionable_total": 5394,
+            "route": "/lead-queue?segment=itm",
+            "result_filters": {
+                "source": "trusted_sql",
+                "segment_codes": ["itm"],
+                "segment_mode": "any",
+                "portfolio_criteria": {"marketing_eligibility": "Eligible only"},
+            },
+            "source_assets": ["mip.gold.borrower_360", "mip.gold.lead_population"],
+            "tool_steps": [
+                {"label": "Apply actionability gates", "status": "completed", "detail": "No identities returned."},
+            ],
+            "policy_checks": [
+                {"label": "No outbound activation", "status": "passed", "detail": "Human review remains required."},
+            ],
+        },
+        action="growth_agent.run",
+    )
+
+    assert metadata["workflow_id"] == "daily_refi_brief"
+    assert metadata["actionable_total"] == 5394
+    assert metadata["result_filters"]["portfolio_criteria"]["marketing_eligibility"] == "Eligible only"
+
+
+def test_growth_agent_audit_metadata_rejects_unknown_workflows() -> None:
+    with pytest.raises(AuditMetadataValueViolation):
+        build_safe_audit_metadata(
+            {
+                "workflow_id": "freeform_workflow",
+                "workflow_title": "Daily Refi Opportunity Brief",
+                "run_status": "completed",
+            },
+            action="growth_agent.run",
+        )
 
 
 def test_in_memory_store_is_a_drop_in_for_the_protocol() -> None:

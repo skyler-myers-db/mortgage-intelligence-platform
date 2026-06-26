@@ -236,6 +236,16 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         "sql_hash",
         "requested_state",
         "footprint_states",
+        # Mortgage Growth Agent read/monitor workflows. These are
+        # reviewed workflow ids, counts, route filters, and proof-step
+        # summaries only -- no raw prompt text or borrower identities.
+        "workflow_id",
+        "workflow_title",
+        "run_status",
+        "broad_total",
+        "actionable_total",
+        "tool_steps",
+        "policy_checks",
         # Offers
         "thresholds_applied",
         "decision_inputs",
@@ -322,6 +332,23 @@ _FORCED_DEGRADED_DEPENDENCIES: frozenset[str] = frozenset({"warehouse", "lakebas
 _ACTIVATION_DESTINATION_TYPES: frozenset[str] = frozenset({"salesforce", "crm_cdp", "los_pos", "servicing", "webhook"})
 _ACTIVATION_STATUSES: frozenset[str] = frozenset({"dry_run", "staged", "delivered", "failed", "cancelled"})
 _ACTIVATION_DESTINATION_KEY_PATTERN = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
+_GROWTH_AGENT_WORKFLOWS: frozenset[str] = frozenset(
+    {
+        "daily_refi_brief",
+        "listing_watch",
+        "competitor_recapture_monitor",
+        "high_equity_heloc_watch",
+    }
+)
+_GROWTH_AGENT_TITLES: frozenset[str] = frozenset(
+    {
+        "Daily Refi Opportunity Brief",
+        "Listed-for-Sale Purchase Watch",
+        "Competitor Recapture Monitor",
+        "High-Equity / HELOC Watch",
+    }
+)
+_GROWTH_AGENT_RUN_STATUSES: frozenset[str] = frozenset({"completed"})
 
 
 class AuditPIIError(RuntimeError):
@@ -593,6 +620,32 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
     for field, value in _metadata_values_for(metadata, {"activation_status"}):
         if value is not None and str(value) not in _ACTIVATION_STATUSES:
             raise AuditMetadataValueViolation(field, "must be a governed activation outbox status")
+    for field, value in _metadata_values_for(metadata, {"workflow_id"}):
+        if value is not None and str(value) not in _GROWTH_AGENT_WORKFLOWS:
+            raise AuditMetadataValueViolation(field, "must be a governed growth-agent workflow id")
+    for field, value in _metadata_values_for(metadata, {"workflow_title"}):
+        if value is not None and str(value) not in _GROWTH_AGENT_TITLES:
+            raise AuditMetadataValueViolation(field, "must be a governed growth-agent workflow title")
+    for field, value in _metadata_values_for(metadata, {"run_status"}):
+        if value is not None and str(value) not in _GROWTH_AGENT_RUN_STATUSES:
+            raise AuditMetadataValueViolation(field, "must be a governed growth-agent run status")
+    for field, value in _metadata_values_for(metadata, {"broad_total", "actionable_total"}):
+        if value is None:
+            continue
+        try:
+            validate_row_count(value)
+        except ValueError as exc:
+            raise AuditMetadataValueViolation(field, str(exc)) from exc
+    for field, value in _metadata_values_for(metadata, {"tool_steps", "policy_checks"}):
+        if value is None:
+            continue
+        if not isinstance(value, list) or len(value) > 12:
+            raise AuditMetadataValueViolation(field, "must be a bounded reviewed list")
+        for item in value:
+            if not isinstance(item, dict):
+                raise AuditMetadataValueViolation(field, "must contain reviewed objects")
+            if any(contains_pii_marker(str(v)) for v in item.values()):
+                raise AuditMetadataValueViolation(field, "must not contain PII-shaped values")
     strict_sql_hash = str(metadata.get("action") or "") == "view_borrower_proof"
     for field, value in _metadata_values_for(metadata, {"sql_hash"}):
         if value is not None and strict_sql_hash:

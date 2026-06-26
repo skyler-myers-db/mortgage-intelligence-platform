@@ -38,6 +38,11 @@ import type {
   GenieActionResult,
   GenieActionSuggestion,
   GenieStartResult,
+  GrowthAgentHomeResponse,
+  GrowthAgentMonitor,
+  GrowthAgentRunRequest,
+  GrowthAgentRunResponse,
+  GrowthAgentWorkflowId,
   ZipRollupResponse,
   WorkspaceMutationResult,
   WorkspaceState,
@@ -1280,6 +1285,23 @@ export const api = {
         confirmed: true,
         confirmation_token: action.confirmation_token ?? null,
       },
+      signal,
+    ),
+
+  growthAgent: (signal?: AbortSignal) =>
+    getJson<GrowthAgentHomeResponse>('/api/growth-agent', signal),
+
+  growthAgentMonitors: (signal?: AbortSignal) =>
+    getJson<GrowthAgentMonitor[]>('/api/growth-agent/monitors', signal),
+
+  runGrowthAgentWorkflow: (
+    workflowId: GrowthAgentWorkflowId,
+    payload: GrowthAgentRunRequest = {},
+    signal?: AbortSignal,
+  ) =>
+    postJson<GrowthAgentRunResponse, GrowthAgentRunRequest>(
+      `/api/growth-agent/workflows/${workflowId}/run`,
+      payload,
       signal,
     ),
 

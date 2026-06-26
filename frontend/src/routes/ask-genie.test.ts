@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { buildTrustedAssetQuestion, trustedAssetsForCatalog } from './ask-genie';
+import {
+  buildTrustedAssetQuestion,
+  formatGrowthAgentCount,
+  parseGrowthAgentStateInput,
+  trustedAssetsForCatalog,
+} from './ask-genie';
 
 describe('buildTrustedAssetQuestion', () => {
   it('uses the exact trusted UC path and business label without adding backend-only wording', () => {
@@ -37,5 +42,28 @@ describe('trustedAssetsForCatalog', () => {
     expect(assets.map((asset) => asset.path)).not.toContain('mip.gold.borrower_360');
     expect(assets.find((asset) => asset.label === 'Borrower 360 profile')?.path)
       .toBe('gold.borrower_360');
+  });
+});
+
+describe('parseGrowthAgentStateInput', () => {
+  it('normalizes, de-duplicates, and preserves order for state scopes', () => {
+    expect(parseGrowthAgentStateInput(' il, TX ca IL ')).toEqual({
+      states: ['IL', 'TX', 'CA'],
+      invalid: [],
+    });
+  });
+
+  it('fails closed on non-USPS-shaped tokens', () => {
+    expect(parseGrowthAgentStateInput('IL illinois 123')).toEqual({
+      states: ['IL'],
+      invalid: ['illinois', '123'],
+    });
+  });
+});
+
+describe('formatGrowthAgentCount', () => {
+  it('formats null-safe positive counts for run cards', () => {
+    expect(formatGrowthAgentCount(5394)).toBe('5,394');
+    expect(formatGrowthAgentCount(null)).toBe('0');
   });
 });

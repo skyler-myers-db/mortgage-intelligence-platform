@@ -3,7 +3,14 @@ import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { ApiError, api } from '../lib/api';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
-import type { GenieActionSuggestion, GenieAnswer as GenieAnswerShape } from '../types';
+import type {
+  GenieActionSuggestion,
+  GenieAnswer as GenieAnswerShape,
+  GrowthAgentCadence,
+  GrowthAgentRunResponse,
+  GrowthAgentWorkflow,
+  GrowthAgentWorkflowId,
+} from '../types';
 import { useApp } from '../components/AppContext';
 import { PageShell } from '../components/layout/PageShell';
 import { Button, Chip, EvidenceChip } from '../components/Primitives';
@@ -61,6 +68,49 @@ export function buildTrustedAssetQuestion(asset: { label: string; path: string }
   return `Using ${asset.path}, summarize what this trusted asset can answer for Module 0 and show the most useful fields for ${asset.label.toLowerCase()}.`;
 }
 
+const STATE_TOKEN_RE = /^[A-Za-z]{2}$/;
+
+export function parseGrowthAgentStateInput(value: string): { states: string[]; invalid: string[] } {
+  const tokens = value
+    .split(/[,\s]+/)
+    .map((token) => token.trim())
+    .filter(Boolean);
+  const states: string[] = [];
+  const invalid: string[] = [];
+  tokens.forEach((token) => {
+    if (!STATE_TOKEN_RE.test(token)) {
+      invalid.push(token);
+      return;
+    }
+    const state = token.toUpperCase();
+    if (!states.includes(state)) states.push(state);
+  });
+  return { states, invalid };
+}
+
+export function formatGrowthAgentCount(value: number | null | undefined): string {
+  return new Intl.NumberFormat('en-US').format(Math.max(0, Number(value ?? 0)));
+}
+
+function sourceAssetLabel(asset: string): string {
+  const parts = asset.split('.').filter(Boolean);
+  return parts.slice(-2).join('.') || asset;
+}
+
+function workflowIcon(workflowId: GrowthAgentWorkflowId) {
+  if (workflowId === 'listing_watch') return 'tag';
+  if (workflowId === 'competitor_recapture_monitor') return 'target';
+  if (workflowId === 'high_equity_heloc_watch') return 'equity';
+  return 'money';
+}
+
+function renderSourceAssetChip(asset: string) {
+  const source = drawerForAsset(asset);
+  const label = sourceAssetLabel(asset);
+  if (source) return <EvidenceChip key={asset} source={source}>{label}</EvidenceChip>;
+  return <Chip key={asset} variant="neutral" icon="db">{label}</Chip>;
+}
+
 const NON_PERSISTABLE_SOURCES = new Set([
   'degraded',
   'policy_blocked',
@@ -81,6 +131,18 @@ export default function AskGenie() {
   const [sampleQuestions, setSampleQuestions] = useState<string[]>([]);
   const [activeAssetPath, setActiveAssetPath] = useState<string | null>(null);
   const [conversationId, setConversationId] = useState<string | null>(() => readGenieConversationId());
+  const [agentStateText, setAgentStateText] = useState('');
+  const [agentCadence, setAgentCadence] = useState<GrowthAgentCadence>('daily');
+  const [growthAgentPending, setGrowthAgentPending] = useState<GrowthAgentWorkflowId | null>(null);
+  const [growthAgentError, setGrowthAgentError] = useState<string | null>(null);
+  const [latestGrowthRun, setLatestGrowthRun] = useState<GrowthAgentRunResponse | null>(null);
+
+  const growthAgentQuery = useQuery({
+    queryKey: queryKeys.growthAgent(),
+    queryFn: ({ signal }) => api.growthAgent(signal),
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
+  });
 
   const genieStartQuery = useQuery({
     queryKey: queryKeys.genieStart(),
@@ -190,6 +252,33 @@ export default function AskGenie() {
     questionRef.current?.focus();
   }
 
+  async function runGrowthAgentWorkflow(workflow: GrowthAgentWorkflow, saveMonitor: boolean) {
+    const parsed = parseGrowthAgentStateInput(agentStateText);
+    if (parsed.invalid.length > 0) {
+      setGrowthAgentError(`Use two-letter state codes only: ${parsed.invalid.join(', ')}`);
+      return;
+    }
+    setGrowthAgentPending(workflow.id);
+    setGrowthAgentError(null);
+    try {
+      const stateSuffix = parsed.states.length > 0 ? ` - ${parsed.states.join(', ')}` : '';
+      const result = await api.runGrowthAgentWorkflow(workflow.id, {
+        states: parsed.states,
+        save_monitor: saveMonitor,
+        cadence: agentCadence,
+        monitor_name: saveMonitor ? `${workflow.title}${stateSuffix}` : null,
+      });
+      setLatestGrowthRun(result);
+      if (saveMonitor) {
+        await growthAgentQuery.refetch();
+      }
+    } catch (err) {
+      setGrowthAgentError(err instanceof Error ? err.message : 'Growth Agent workflow failed.');
+    } finally {
+      setGrowthAgentPending(null);
+    }
+  }
+
   useEffect(() => {
     if (!payload?.conversation_id || !shouldPersistConversation(payload)) return;
     const nextConversationId = payload.conversation_id;
@@ -260,14 +349,218 @@ export default function AskGenie() {
   // chips also render inert (the chip text is the explanation).
   const drawerForSource = sourceChip ? drawerForAsset(sourceChip) : null;
   const composerSampleQuestions = sampleQuestions.slice(0, 4);
+  const stateParsePreview = parseGrowthAgentStateInput(agentStateText);
+  const workflows = growthAgentQuery.data?.workflows ?? [];
+  const monitors = growthAgentQuery.data?.monitors ?? [];
 
   return (
     <PageShell
-      eyebrow="Ask Genie"
-      title="Ask Genie about segments, borrowers, and triggers"
-      lede="Type a question or pick a suggestion. Answers cite the trusted Unity Catalog assets that produced them; tap a source chip to open lineage."
-      heroRight={<Chip variant="neutral" icon="sparkle">Databricks Genie API</Chip>}
+      eyebrow="Mortgage Growth Agent"
+      title="AI workflows for borrower growth"
+      lede="Run governed agent workflows, review the exact eligible Lead Queue subset, then ask Genie follow-up questions against trusted Unity Catalog assets."
+      heroRight={<Chip variant="neutral" icon="sparkle">Databricks Genie + SQL</Chip>}
     >
+      <div className="surface growth-agent" aria-busy={growthAgentPending !== null}>
+        <div className="surface__hdr">
+          <Icon name="bolt" size={14} className="icon-accent" />
+          <div>
+            <div className="h-4">Mortgage Growth Agent</div>
+            <div className="muted fs-12">Governed workflow runs, saved monitors, and human-review Lead Queue handoffs.</div>
+          </div>
+          <div className="spacer" />
+          <Chip variant="success" icon="shield">No auto-send</Chip>
+          <Chip variant="neutral" icon="audit">Audited Lakebase run</Chip>
+        </div>
+        <div className="surface__body">
+          <div className="growth-agent__controls">
+            <label className="growth-agent__field">
+              <span>State scope</span>
+              <input
+                className="form-input"
+                aria-label="Growth Agent state scope"
+                placeholder="All states or IL, TX, CA"
+                value={agentStateText}
+                onChange={(event) => setAgentStateText(event.target.value)}
+              />
+              <span className="growth-agent__hint">
+                {stateParsePreview.invalid.length > 0
+                  ? `Invalid: ${stateParsePreview.invalid.join(', ')}`
+                  : stateParsePreview.states.length > 0
+                    ? `Scoped to ${stateParsePreview.states.join(', ')}`
+                    : 'No state scope; the workflow uses the current coverage footprint.'}
+              </span>
+            </label>
+            <label className="growth-agent__field growth-agent__field--compact">
+              <span>Monitor cadence</span>
+              <select
+                className="form-input"
+                aria-label="Growth Agent monitor cadence"
+                value={agentCadence}
+                onChange={(event) => setAgentCadence(event.target.value as GrowthAgentCadence)}
+              >
+                <option value="daily">Daily</option>
+                <option value="weekly">Weekly</option>
+              </select>
+              <span className="growth-agent__hint">Saving a monitor stores reviewed filters only.</span>
+            </label>
+          </div>
+
+          {growthAgentError && (
+            <div className="status-callout status-callout--danger mt-3" role="alert">
+              {growthAgentError}
+            </div>
+          )}
+          {growthAgentQuery.error && (
+            <div className="status-callout status-callout--danger mt-3" role="alert">
+              Could not load Growth Agent workflows.
+            </div>
+          )}
+
+          <div className="growth-agent__cards" aria-label="Governed Growth Agent workflows">
+            {workflows.map((workflow) => {
+              const pending = growthAgentPending === workflow.id;
+              return (
+                <article key={workflow.id} className="growth-agent-card">
+                  <div className="growth-agent-card__head">
+                    <span className="growth-agent-card__icon">
+                      <Icon name={workflowIcon(workflow.id)} size={16} />
+                    </span>
+                    <div>
+                      <div className="growth-agent-card__title">{workflow.title}</div>
+                      <div className="growth-agent-card__trigger">{workflow.trigger_label}</div>
+                    </div>
+                  </div>
+                  <p className="growth-agent-card__copy">{workflow.objective}</p>
+                  <div className="growth-agent-card__proof">
+                    {workflow.proof_points.slice(0, 3).map((point) => (
+                      <div key={point} className="growth-agent-card__proof-line">
+                        <Icon name="check" size={11} />
+                        <span>{point}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="chip-row growth-agent-card__assets">
+                    {workflow.source_assets.slice(0, 3).map((asset) => renderSourceAssetChip(asset))}
+                  </div>
+                  <div className="growth-agent-card__actions">
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      icon="play"
+                      onClick={() => runGrowthAgentWorkflow(workflow, false)}
+                      disabled={growthAgentPending !== null || stateParsePreview.invalid.length > 0}
+                    >
+                      {pending ? 'Running…' : 'Run'}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      icon="bell"
+                      onClick={() => runGrowthAgentWorkflow(workflow, true)}
+                      disabled={growthAgentPending !== null || stateParsePreview.invalid.length > 0}
+                    >
+                      Save monitor
+                    </Button>
+                  </div>
+                </article>
+              );
+            })}
+            {growthAgentQuery.isPending && (
+              <div className="surface surface--inset growth-agent-card growth-agent-card--loading">
+                <div className="surface__body">Loading governed workflows…</div>
+              </div>
+            )}
+          </div>
+
+          {latestGrowthRun && (
+            <div className="growth-agent-run" aria-label="Latest Growth Agent run">
+              <div className="growth-agent-run__head">
+                <div>
+                  <div className="eyebrow">Latest run</div>
+                  <div className="h-4">{latestGrowthRun.workflow.title}</div>
+                </div>
+                <Button
+                  variant="success"
+                  icon="chevright"
+                  onClick={() => navigate(latestGrowthRun.route)}
+                >
+                  Open eligible Lead Queue subset
+                </Button>
+              </div>
+              <div className="growth-agent-run__metrics">
+                <div>
+                  <span>Broad opportunity</span>
+                  <strong>{formatGrowthAgentCount(latestGrowthRun.broad_total)}</strong>
+                </div>
+                <div>
+                  <span>Eligible subset</span>
+                  <strong>{formatGrowthAgentCount(latestGrowthRun.actionable_total)}</strong>
+                </div>
+                <div>
+                  <span>Avg score</span>
+                  <strong>{latestGrowthRun.actionable_avg_score ?? '—'}</strong>
+                </div>
+              </div>
+              <div className="growth-agent-run__body">
+                <div className="growth-agent-run__section">
+                  <div className="eyebrow">Tool timeline</div>
+                  <div className="growth-agent-timeline">
+                    {latestGrowthRun.tool_steps.map((step) => (
+                      <div key={step.label} className={`growth-agent-step growth-agent-step--${step.status}`}>
+                        <Icon name={step.status === 'review_required' ? 'audit' : 'check'} size={12} />
+                        <div>
+                          <div className="growth-agent-step__title">{step.label}</div>
+                          <div className="growth-agent-step__detail">{step.detail}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div className="growth-agent-run__section">
+                  <div className="eyebrow">Policy checks</div>
+                  <div className="growth-agent-policy-list">
+                    {latestGrowthRun.policy_checks.map((check) => (
+                      <div key={check.label} className="growth-agent-policy">
+                        <Chip variant={check.status === 'passed' ? 'success' : 'warning'} icon="shield">
+                          {check.status === 'passed' ? 'Passed' : 'Review'}
+                        </Chip>
+                        <div>
+                          <div className="growth-agent-step__title">{check.label}</div>
+                          <div className="growth-agent-step__detail">{check.detail}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+              <div className="chip-row growth-agent-run__assets">
+                {latestGrowthRun.source_assets.map((asset) => renderSourceAssetChip(asset))}
+              </div>
+            </div>
+          )}
+
+          {monitors.length > 0 && (
+            <div className="growth-agent-monitors" aria-label="Saved Growth Agent monitors">
+              <div className="eyebrow">Saved monitors</div>
+              <div className="growth-agent-monitor-list">
+                {monitors.map((monitor) => (
+                  <button
+                    key={monitor.monitor_id}
+                    type="button"
+                    className="growth-agent-monitor"
+                    onClick={() => navigate(monitor.route)}
+                  >
+                    <span>{monitor.name}</span>
+                    <span>{monitor.cadence}</span>
+                    <strong>{formatGrowthAgentCount(monitor.actionable_total)}</strong>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
       <div className="layoutA-grid">
         <div className="surface">
           <div className="surface__hdr">
