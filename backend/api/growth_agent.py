@@ -274,7 +274,7 @@ def run_growth_agent_workflow(
                 )
                 if existing_row is not None:
                     _assert_run_matches(existing_row, workflow=workflow, criteria=criteria)
-                    monitor_row = (
+                    replay_monitor_row = (
                         _upsert_monitor(
                             conn,
                             actor=actor,
@@ -289,7 +289,7 @@ def run_growth_agent_workflow(
                     return _run_response_from_row(
                         workflow=workflow,
                         run_row=existing_row,
-                        monitor_row=monitor_row,
+                        monitor_row=replay_monitor_row,
                     )
         except HTTPException:
             raise
