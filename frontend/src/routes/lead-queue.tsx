@@ -4,7 +4,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { api, type LeadsPageResult } from '../lib/api';
 import { useConfigOptionsQuery } from '../lib/configOptionsQuery';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
-import type { PortfolioPreview, SalesAgingLead, SalesConversionResponse, SalesOutcomeSummaryResponse, SalesStandupResponse, SalesTeamMember, SegmentCode } from '../types';
+import type { PortfolioPreview, SalesAgingLead, SalesConversionResponse, SalesOutcomeSummaryResponse, SalesStandupResponse, SalesTeamMember } from '../types';
 import { PageShell } from '../components/layout/PageShell';
 import { LeadTable } from '../components/mortgage/LeadTable';
 import { Chip } from '../components/Primitives';
@@ -89,7 +89,7 @@ export default function LeadQueue() {
   const [searchParams, setSearchParams] = useSearchParams();
   const filtersActive = searchParams.toString().length > 0;
   const footprint = useFootprint();
-  const segment = (searchParams.get('segment') as SegmentCode | null) ?? undefined;
+  const segment = parseSegmentCodes(searchParams.get('segment'))[0];
   const segmentCodes = useMemo(
     () => parseSegmentCodes(searchParams.get('segment_codes')),
     [searchParams],

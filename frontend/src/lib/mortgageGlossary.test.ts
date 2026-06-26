@@ -17,14 +17,19 @@ const REQUIRED_TERMS = [
   'ownerLink',
   'signalStrength',
   'evidenceConfidence',
+  'rateSpread',
   'supportingEvidence',
+  'unityCatalog',
 ] as const;
 
 describe('mortgage glossary', () => {
   it('covers the borrower-facing acronyms and proof terms', () => {
-    for (const key of REQUIRED_TERMS) {
+    const allKeys = Object.keys(mortgageGlossary).sort() as Array<keyof typeof mortgageGlossary>;
+    expect([...REQUIRED_TERMS].sort()).toEqual(allKeys);
+    for (const key of allKeys) {
       expect(mortgageGlossary[key].short.length).toBeGreaterThan(20);
       expect(mortgageGlossary[key].appContext.length).toBeGreaterThan(30);
+      expect(mortgageGlossary[key].proof.length).toBeGreaterThan(20);
       expect(glossaryAnchor(key)).toBe(`/glossary#${mortgageGlossary[key].id}`);
     }
   });
@@ -53,7 +58,9 @@ describe('mortgage glossary', () => {
 
   it('has stable unique anchors for every entry', () => {
     const ids = glossaryEntries.map((entry) => entry.id);
+    const terms = glossaryEntries.map((entry) => entry.term.trim().toLowerCase());
     expect(new Set(ids).size).toBe(ids.length);
+    expect(new Set(terms).size).toBe(terms.length);
     expect(ids.every((id) => /^[a-z0-9-]+$/.test(id))).toBe(true);
   });
 });

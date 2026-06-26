@@ -58,8 +58,8 @@ describe('segment intelligence lender overlay URL state', () => {
   });
 
   it('hydrates selected segments from public URL state and rejects unknown codes', () => {
-    expect(activeSegmentsFromSearch(new URLSearchParams('segment=itm'))).toEqual(['itm']);
-    expect(activeSegmentsFromSearch(new URLSearchParams('segment_codes=itm,equity,listed'))).toEqual([
+    expect(activeSegmentsFromSearch(new URLSearchParams('segment=ITM'))).toEqual(['itm']);
+    expect(activeSegmentsFromSearch(new URLSearchParams('segment_codes=itm,EQUITY,listed'))).toEqual([
       'itm',
       'equity',
       'listed',

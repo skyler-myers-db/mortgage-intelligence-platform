@@ -18,18 +18,17 @@ import type {
   ExecutiveAnalyticsResponse,
   GeographyAnalyticsResponse,
   SegmentAnalyticsResponse,
-  SegmentCode,
   SignalAnalyticsResponse,
 } from '../types';
 import {
   EVIDENCE_WINDOW_OPTIONS,
   EVIDENCE_WINDOW_TO_DAYS,
   parseCsvParam,
-  SEGMENT_CODE_TO_OPTION,
   SEGMENT_MULTI_OPTIONS,
   SIGNAL_MULTI_OPTIONS,
   SIGNAL_TYPE_TO_OPTION,
   TABS,
+  normalizeAnalyticsSegmentCodes,
   type AnalyticsTab,
 } from './analytics.lib';
 import { LoadState } from './analytics.charts';
@@ -47,7 +46,9 @@ import {
 export {
   buildDailyEvidenceTotals,
   compactScatterRows,
+  leadQueueHref,
   leadQueueHrefForFunnelStage,
+  normalizeAnalyticsSegmentCodes,
   segmentIntelligenceHref,
 } from './analytics.lib';
 export { DailyEvidenceLineChart, LineChart, ScatterPlot } from './analytics.charts';
@@ -64,8 +65,7 @@ export default function AnalyticsRoute() {
   const states = parseCsvParam(searchParams.get('states') ?? searchParams.get('state'))
     .map((value) => value.toUpperCase())
     .filter((value, idx, all) => /^[A-Z]{2}$/.test(value) && all.indexOf(value) === idx);
-  const segmentCodes = parseCsvParam(searchParams.get('segment_codes'))
-    .filter((value, idx, all): value is SegmentCode => Boolean(SEGMENT_CODE_TO_OPTION[value as SegmentCode]) && all.indexOf(value) === idx);
+  const segmentCodes = normalizeAnalyticsSegmentCodes(parseCsvParam(searchParams.get('segment_codes')));
   const lenderRelationship = LENDER_RELATIONSHIP_OPTIONS.includes(searchParams.get('lender_relationship') as (typeof LENDER_RELATIONSHIP_OPTIONS)[number])
     ? searchParams.get('lender_relationship')!
     : 'All';

@@ -108,7 +108,9 @@ export function pct(n: number, total: number): number {
   return Math.max(0, Math.min(100, (n / total) * 100));
 }
 
-function routeHref(route: '/lead-queue' | '/segment-intelligence', params: Record<string, string | number | null | undefined>): string {
+type RouteParamValue = string | number | null | undefined;
+
+function routeHref(route: '/lead-queue' | '/segment-intelligence', params: Record<string, RouteParamValue>): string {
   const qs = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
     if (value !== null && value !== undefined && value !== '') qs.set(key, String(value));
@@ -117,12 +119,22 @@ function routeHref(route: '/lead-queue' | '/segment-intelligence', params: Recor
   return encoded ? `${route}?${encoded}` : route;
 }
 
-export function leadQueueHref(params: Record<string, string | number | null | undefined>): string {
+export function leadQueueHref(params: Record<string, RouteParamValue>): string {
   return routeHref('/lead-queue', params);
 }
 
-export function segmentIntelligenceHref(params: Record<string, string | number | null | undefined>): string {
+export function segmentIntelligenceHref(params: Record<string, RouteParamValue>): string {
   return routeHref('/segment-intelligence', params);
+}
+
+export function normalizeAnalyticsSegmentCodes(values: readonly string[]): SegmentCode[] {
+  const out: SegmentCode[] = [];
+  for (const value of values) {
+    const code = value.toLowerCase();
+    if (!SEGMENT_CODE_TO_OPTION[code as SegmentCode] || out.includes(code as SegmentCode)) continue;
+    out.push(code as SegmentCode);
+  }
+  return out;
 }
 
 export function leadQueueHrefForFunnelStage(
@@ -316,15 +328,13 @@ export function prepareScatterPoints(rows: EquitySpreadPoint[], minSpread: numbe
   return points;
 }
 
-export function analyticsHref(params: Record<string, string | number | readonly string[] | null | undefined>): string {
+export function analyticsHref(params: Record<string, RouteParamValue>): string {
   const qs = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
-    if (Array.isArray(value)) {
-      if (value.length > 0) qs.set(key, value.join(','));
-    } else if (value !== null && value !== undefined && value !== '') qs.set(key, String(value));
+    if (value !== null && value !== undefined && value !== '') qs.set(key, String(value));
   }
   const encoded = qs.toString();
-  return encoded ? `/analytics?${encoded}` : '/analytics';
+  return `/analytics${encoded ? `?${encoded}` : ''}`;
 }
 
 // ---------------------------------------------------------------------------

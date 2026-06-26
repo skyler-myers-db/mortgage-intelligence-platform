@@ -74,10 +74,11 @@ def _parse_states(raw: str | None) -> list[str]:
 def _parse_segment_codes(raw: str | None) -> list[SegmentCode]:
     out: list[SegmentCode] = []
     for value in _parse_csv(raw):
-        if value not in _ALLOWED_SEGMENTS:
+        normalised = value.lower()
+        if normalised not in _ALLOWED_SEGMENTS:
             raise HTTPException(status_code=422, detail="segment_codes contains an unknown segment")
-        if value not in out:
-            out.append(value)  # type: ignore[arg-type]
+        if normalised not in out:
+            out.append(normalised)  # type: ignore[arg-type]
     return out
 
 
@@ -163,7 +164,7 @@ def _analytics_filters(
     return AnalyticsFilters(
         states=parsed_states,
         segment_codes=_parse_segment_codes(segment_codes),
-        segment_mode="all" if segment_mode == "all" else "any",
+        segment_mode="all" if segment_mode.lower() == "all" else "any",
         lender_relationship=_parse_lender_relationship(lender_relationship),
         target_lender_ref=_parse_target_lender_ref(target_lender_ref),
         signal_types=parsed_signals,

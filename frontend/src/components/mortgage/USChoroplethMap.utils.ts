@@ -171,8 +171,12 @@ export function buildLeadQueuePath({
   if (geo.county) params.set('county', geo.county);
   if (geo.zip) params.set('zip', geo.zip);
   if (segmentFilter && segmentFilter.length > 0) {
-    params.set('segment_codes', segmentFilter.join(','));
-    params.set('segment_mode', segmentFilterMode);
+    if (segmentFilter.length === 1) {
+      params.set('segment', segmentFilter[0]);
+    } else {
+      params.set('segment_codes', segmentFilter.join(','));
+      params.set('segment_mode', segmentFilterMode);
+    }
   }
   Object.entries(portfolioCriteria ?? {}).forEach(([key, value]) => {
     if (value === undefined || value === null || value === '') return;

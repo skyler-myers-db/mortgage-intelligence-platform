@@ -14,7 +14,7 @@ export interface GlossaryEntry {
   category: GlossaryCategory;
   short: string;
   appContext: string;
-  proof?: string;
+  proof: string;
 }
 
 export const mortgageGlossary = {

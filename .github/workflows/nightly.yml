@@ -32,6 +32,10 @@ on:
         description: "Run the 200-example/family deep Genie fuzz suite"
         type: boolean
         default: false
+      skip_admin_degraded_proof:
+        description: "Explicitly skip the bounded admin degraded-banner proof and record it as a release caveat"
+        type: boolean
+        default: false
 
 concurrency:
   group: live-validation-${{ github.ref }}
@@ -298,6 +302,7 @@ jobs:
           DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
           DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
           ADMIN_BEARER: ${{ secrets.MIP_ADMIN_BEARER_TOKEN }}
+          SKIP_ADMIN_DEGRADED_PROOF: ${{ inputs.skip_admin_degraded_proof }}
         run: |
           set -euo pipefail
           missing=""
@@ -321,7 +326,12 @@ jobs:
             echo "MIP_ADMIN_BEARER_TOKEN=$ADMIN_BEARER" >> "$GITHUB_ENV"
             echo "::notice::Using explicit app-admin Bearer for the bounded degraded-banner drill."
           else
-            echo "::notice::MIP_ADMIN_BEARER_TOKEN is not set; the bounded admin degraded-banner Playwright case will skip."
+            if [ "${SKIP_ADMIN_DEGRADED_PROOF:-false}" = "true" ]; then
+              echo "::warning::MIP_ADMIN_BEARER_TOKEN is not set; bounded admin degraded-banner proof explicitly skipped by workflow input."
+            else
+              echo "::error::Missing MIP_ADMIN_BEARER_TOKEN. Set it for release validation, or rerun with skip_admin_degraded_proof=true and record the caveat."
+              exit 1
+            fi
           fi
           {
             echo "MIP_NON_ADMIN_BEARER_TOKEN=$BEARER"

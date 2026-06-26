@@ -8,6 +8,8 @@ import {
   buildDailyEvidenceTotals,
   compactScatterRows,
   leadQueueHrefForFunnelStage,
+  leadQueueHref,
+  normalizeAnalyticsSegmentCodes,
   segmentIntelligenceHref,
 } from './analytics';
 
@@ -40,6 +42,22 @@ describe('analytics drilldown links', () => {
       lender_relationship: 'Competitor customer',
       target_lender_ref: 'Competitor B',
     })).toBe('/segment-intelligence?lender_relationship=Competitor+customer&target_lender_ref=Competitor+B');
+  });
+
+  it('builds one-segment lead queue drilldowns with segment and no match mode', () => {
+    expect(leadQueueHref({ state: 'IL', segment: 'itm' })).toBe(
+      '/lead-queue?state=IL&segment=itm',
+    );
+    expect(leadQueueHref({ state: 'IL', segment_codes: 'itm,equity', segment_mode: 'all' })).toBe(
+      '/lead-queue?state=IL&segment_codes=itm%2Cequity&segment_mode=all',
+    );
+  });
+
+  it('normalizes mixed-case analytics segment URL state before querying', () => {
+    expect(normalizeAnalyticsSegmentCodes(['ITM', 'Equity', 'itm', 'drop_table'])).toEqual([
+      'itm',
+      'equity',
+    ]);
   });
 });
 

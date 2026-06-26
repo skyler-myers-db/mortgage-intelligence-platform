@@ -1494,7 +1494,7 @@ def test_heloc_genie_action_routes_to_heloc_intent_segment() -> None:
     assert filters["segment_mode"] == "any"
 
 
-def test_multi_segment_genie_action_uses_any_mode_like_segment_intelligence() -> None:
+def test_multi_segment_genie_action_preserves_sql_intersection_mode() -> None:
     route, filters = _route_from_answer_rows(
         question="best in-the-money home equity borrowers in Illinois",
         rows=[{"state": "IL"}],
@@ -1503,6 +1503,25 @@ def test_multi_segment_genie_action_uses_any_mode_like_segment_intelligence() ->
             "SELECT * FROM mip.gold.borrower_360 "
             "WHERE array_contains(segment_codes, 'itm') "
             "AND array_contains(segment_codes, 'equity')"
+        ),
+    )
+
+    params = parse_qs(urlsplit(route).query)
+    assert params["segment_codes"] == ["itm,equity"]
+    assert params["segment_mode"] == ["all"]
+    assert filters["segment_codes"] == ["itm", "equity"]
+    assert filters["segment_mode"] == "all"
+
+
+def test_multi_segment_genie_action_preserves_sql_union_mode() -> None:
+    route, filters = _route_from_answer_rows(
+        question="best in-the-money home equity borrowers in Illinois",
+        rows=[{"state": "IL"}],
+        borrower_ids=[],
+        sql_query=(
+            "SELECT * FROM mip.gold.borrower_360 "
+            "WHERE array_contains(segment_codes, 'itm') "
+            "OR array_contains(segment_codes, 'equity')"
         ),
     )
 
@@ -2097,6 +2116,28 @@ def test_genie_cohort_filters_reject_invalid_scalar_values() -> None:
             [],
         )
     assert "invalid segment mode" in str(invalid_mode.value)
+
+
+def test_genie_cohort_filters_normalize_segment_code_case_and_mode() -> None:
+    filters = _cohort_route_filters(
+        GenieActionRequest(
+            action_type="open_cohort",
+            criteria={
+                "source": "trusted_sql",
+                "result_filters": {
+                    "states": ["il"],
+                    "segment_codes": ["ITM", "itm", "Equity"],
+                    "segment_mode": "ALL",
+                },
+            },
+            confirmed=True,
+        ),
+        [],
+    )
+
+    assert filters["states"] == ["IL"]
+    assert filters["segment_codes"] == ["itm", "equity"]
+    assert filters["segment_mode"] == "all"
 
 
 def test_genie_cohort_filters_reject_unsupported_compliance_predicates() -> None:

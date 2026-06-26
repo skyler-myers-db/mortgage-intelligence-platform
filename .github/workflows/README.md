@@ -66,7 +66,7 @@ app-admin access to the Databricks PAT owner.
 | Secret | What it enables | Notes |
 |---|---|---|
 | `MIP_APP_URL` | Explicit deployed Databricks App URL for live Playwright and real-infra drill jobs. | If unset for Playwright, the workflow resolves `mip-app` through the Databricks Apps API. The opt-in real-infra drill still requires this secret. |
-| `MIP_ADMIN_BEARER_TOKEN` | Enables the bounded `/api/admin/force-degraded` Playwright proof in GitHub Actions. | Must belong to an app-admin principal. If unset, that one admin-drill browser case skips; the drill must be run from an authenticated admin workstation before release signoff. |
+| `MIP_ADMIN_BEARER_TOKEN` | Enables the bounded `/api/admin/force-degraded` Playwright proof in GitHub Actions. | Must belong to an app-admin principal. Live validation fails closed when unset unless the operator explicitly runs `skip_admin_degraded_proof=true` and records that release caveat. |
 | `LAKEBASE_DATABASE` | Lakebase database the `mip_app` schema lives in. | Defaults to `mip_app_state`; the app and live tests use workspace-identity Lakebase credentials, not static Lakebase password secrets. |
 
 ## No-secret jobs (run on every PR)

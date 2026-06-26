@@ -226,7 +226,7 @@ export function SegmentsView({ data, leadParams }: { data: SegmentAnalyticsRespo
             rows={data.overview}
             getKey={(row) => row.segment_code}
             columns={[
-              { key: 'segment', label: 'Segment', render: (row) => <Link to={leadQueueHref({ segment_codes: row.segment_code, segment_mode: 'all', ...leadParams })}>{row.name}</Link> },
+              { key: 'segment', label: 'Segment', render: (row) => <Link to={leadQueueHref({ segment: row.segment_code, ...leadParams })}>{row.name}</Link> },
               { key: 'borrowers', label: 'Borrowers', render: (row) => fmt(row.borrower_count) },
               { key: 'score', label: 'Avg Score', render: (row) => row.mean_opportunity_score },
               { key: 'itm', label: 'Refi economics', render: (row) => fmt(row.in_the_money_borrowers) },
@@ -246,7 +246,7 @@ export function SegmentsView({ data, leadParams }: { data: SegmentAnalyticsRespo
               rows={data.counts}
               value={(row) => row.value}
               label={(row) => row.segment_name}
-              href={(row) => leadQueueHref({ segment_codes: row.segment_code, segment_mode: 'all', ...leadParams })}
+              href={(row) => leadQueueHref({ segment: row.segment_code, ...leadParams })}
             />
           </div>
         </section>
@@ -260,7 +260,7 @@ export function SegmentsView({ data, leadParams }: { data: SegmentAnalyticsRespo
               rows={data.average_scores}
               value={(row) => row.value}
               label={(row) => row.segment_name}
-              href={(row) => leadQueueHref({ segment_codes: row.segment_code, segment_mode: 'all', ...leadParams })}
+              href={(row) => leadQueueHref({ segment: row.segment_code, ...leadParams })}
             />
           </div>
         </section>
@@ -275,7 +275,7 @@ export function SegmentsView({ data, leadParams }: { data: SegmentAnalyticsRespo
             rows={topStates}
             value={(row) => row.borrower_count}
             label={(row) => `${row.state} · ${row.segment_name}`}
-            href={(row) => leadQueueHref({ state: row.state, segment_codes: row.segment_code, segment_mode: 'all', ...leadParams })}
+            href={(row) => leadQueueHref({ state: row.state, segment: row.segment_code, ...leadParams })}
           />
         </div>
       </section>
@@ -532,7 +532,7 @@ export function SignalsView({
               {' '}is the mean of <span className="mono">confidence</span> in the same gold table.
             </p>
           </div>
-          <ScopeChip title="Grouped from mip.gold.evidence_events">mip.gold.evidence_events</ScopeChip>
+          <ScopeChip>mip.gold.evidence_events</ScopeChip>
         </div>
         <div className="surface__body">
           <Bars<EvidenceBySignalRow>
@@ -541,9 +541,8 @@ export function SignalsView({
             label={(row) => signalLabel(row.signal_type)}
             sublabel={(row) => `${row.source_product} · ${row.source_label ?? row.source_table} · ${row.mean_confidence === null || row.mean_confidence === undefined ? '—' : row.mean_confidence.toFixed(3)} ${row.confidence_label ?? 'mean evidence confidence'}`}
             href={(row) => analyticsHref({
-              states: filterParams.states,
-              segment_codes: filterParams.segmentCodes,
-              segment_mode: filterParams.segmentCodes.length ? 'any' : null,
+              states: filterParams.states.join(',') || null,
+              segment_codes: filterParams.segmentCodes.join(',') || null,
               lender_relationship: filterParams.lender_relationship,
               target_lender_ref: filterParams.target_lender_ref,
               days: filterParams.days === 30 ? null : filterParams.days,

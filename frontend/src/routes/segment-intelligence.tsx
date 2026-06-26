@@ -118,7 +118,7 @@ export function activeSegmentsFromSearch(searchParams: URLSearchParams): Segment
     .join(',');
   const selected: SegmentCode[] = [];
   for (const value of raw.split(',')) {
-    const code = value.trim();
+    const code = value.trim().toLowerCase();
     if (!VALID_SEGMENT_CODE_SET.has(code) || selected.includes(code as SegmentCode)) continue;
     selected.push(code as SegmentCode);
   }

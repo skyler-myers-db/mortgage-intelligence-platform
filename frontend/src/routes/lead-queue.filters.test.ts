@@ -3,6 +3,7 @@ import {
   approvalFilterDisplayValue,
   funnelStageDisplayValue,
   outreachFilterDisplayValue,
+  parseSegmentCodes,
   segmentDisplayLabel,
   segmentFilterDisplayValue,
 } from './lead-queue.filters';
@@ -45,5 +46,10 @@ describe('lead queue drilldown display labels', () => {
     expect(segmentFilterDisplayValue(undefined, ['itm', 'equity'], 'all')).toBe('2 segments selected (all selected)');
     expect(segmentDisplayLabel('retention-risk')).toBe('Unknown segment');
     expect(segmentFilterDisplayValue()).toBe('All segments');
+  });
+
+  it('normalizes mixed-case segment URL codes', () => {
+    expect(parseSegmentCodes('ITM')).toEqual(['itm']);
+    expect(parseSegmentCodes('ITM,Equity,itm,drop_table')).toEqual(['itm', 'equity']);
   });
 });

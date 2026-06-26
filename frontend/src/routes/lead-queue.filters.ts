@@ -84,7 +84,7 @@ export function parseSegmentCodes(raw: string | null): SegmentCode[] {
   if (!raw) return [];
   const out: SegmentCode[] = [];
   for (const value of raw.split(',')) {
-    const code = value.trim() as SegmentCode;
+    const code = value.trim().toLowerCase() as SegmentCode;
     if (!SEGMENT_CODES.has(code) || out.includes(code)) continue;
     out.push(code);
   }

@@ -85,6 +85,16 @@ describe('USChoroplethMap geography helpers', () => {
     ).toBe('/lead-queue?state=IL&county=17031&zip=60626&segment_codes=itm%2Cequity&segment_mode=all&min_score=78&approval_status=hold');
   });
 
+  it('uses the canonical single-segment lead queue URL shape', () => {
+    expect(
+      buildLeadQueuePath({
+        geo: { state: 'IL', county: '17031' },
+        segmentFilter: ['itm'],
+        segmentFilterMode: 'all',
+      }),
+    ).toBe('/lead-queue?state=IL&county=17031&segment=itm');
+  });
+
   it('builds county payloads from a national FeatureCollection without blank viewboxes', () => {
     const fc: FeatureCollection = {
       type: 'FeatureCollection',

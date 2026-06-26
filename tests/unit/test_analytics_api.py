@@ -6,6 +6,8 @@ from pydantic import ValidationError
 
 from backend.main import app
 from backend.schemas.analytics import AnalyticsFilters
+from backend.schemas.analytics import SignalAnalyticsResponse
+from backend.services.repositories import get_analytics_repository
 from backend.services.repositories.databricks_analytics import DatabricksAnalyticsRepository
 
 
@@ -45,11 +47,47 @@ def test_native_analytics_routes_return_typed_app_payloads() -> None:
     )
     assert filtered.status_code == 200
 
+    mixed_case = client.get(
+        "/api/v1/analytics/signals?segment_codes=ITM,Equity&signal_types=RATE_SPREAD",
+    )
+    assert mixed_case.status_code == 200
+
     legacy = client.get("/api/v1/analytics/signals?state=IL&signal_type=equity")
     assert legacy.status_code == 200
 
     invalid = client.get("/api/v1/analytics/signals?signal_types=owner_name")
     assert invalid.status_code == 422
+
+
+def test_analytics_route_normalizes_segment_codes_and_mode_case() -> None:
+    captured: dict[str, AnalyticsFilters | None] = {"filters": None}
+
+    class _CaptureAnalyticsRepo:
+        def signals(self, filters: AnalyticsFilters | None = None) -> SignalAnalyticsResponse:
+            captured["filters"] = filters
+            return SignalAnalyticsResponse(
+                evidence_daily=[],
+                evidence_by_signal=[],
+                evidence_examples=[],
+            )
+
+    prior = app.dependency_overrides.get(get_analytics_repository)
+    app.dependency_overrides[get_analytics_repository] = lambda: _CaptureAnalyticsRepo()
+    try:
+        response = TestClient(app).get(
+            "/api/v1/analytics/signals?segment_codes=ITM,Equity,itm&segment_mode=all&signal_types=RATE_SPREAD",
+        )
+    finally:
+        if prior is None:
+            app.dependency_overrides.pop(get_analytics_repository, None)
+        else:
+            app.dependency_overrides[get_analytics_repository] = prior
+
+    assert response.status_code == 200
+    assert captured["filters"] is not None
+    assert captured["filters"].segment_codes == ["itm", "equity"]
+    assert captured["filters"].segment_mode == "all"
+    assert captured["filters"].signal_types == ["rate_spread"]
 
 
 class _AnalyticsSqlClient:

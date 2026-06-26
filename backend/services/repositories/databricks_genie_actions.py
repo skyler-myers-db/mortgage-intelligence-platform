@@ -275,6 +275,32 @@ def _portfolio_criteria_from_sql(sql_query: str | None) -> dict[str, Any]:
     return criteria
 
 
+def _segment_mode_from_sql(sql_query: str | None, segment_codes: list[str]) -> str:
+    if not sql_query or len(segment_codes) <= 1:
+        return "any"
+    sql = re.sub(r"\s+", " ", sql_query.strip().lower())
+    if not sql:
+        return "any"
+
+    positions: list[tuple[int, int, str]] = []
+    for code in segment_codes:
+        match = re.search(
+            rf"array_contains\(\s*(?:\w+\.)?segment_codes\s*,\s*['\"]{re.escape(code)}['\"]\s*\)",
+            sql,
+        )
+        if not match:
+            return "any"
+        positions.append((match.start(), match.end(), code))
+    positions.sort()
+    between_conditions = [
+        sql[positions[idx][1]:positions[idx + 1][0]]
+        for idx in range(len(positions) - 1)
+    ]
+    if between_conditions and all(re.search(r"\band\b", between) and not re.search(r"\bor\b", between) for between in between_conditions):
+        return "all"
+    return "any"
+
+
 def _route_from_answer_rows(
     *,
     question: str,
@@ -317,13 +343,14 @@ def _route_from_answer_rows(
         filter_criteria["states"] = states
 
     if segment_codes:
+        segment_mode = _segment_mode_from_sql(sql_query, segment_codes)
         if len(segment_codes) == 1:
             params["segment"] = segment_codes[0]
         else:
             params["segment_codes"] = ",".join(segment_codes)
-            params["segment_mode"] = "any"
+            params["segment_mode"] = segment_mode
         filter_criteria["segment_codes"] = segment_codes
-        filter_criteria["segment_mode"] = "any"
+        filter_criteria["segment_mode"] = segment_mode
 
     if portfolio_criteria:
         filter_criteria["portfolio_criteria"] = portfolio_criteria
